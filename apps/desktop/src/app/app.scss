@@ -18,3 +18,9 @@
   flex: 1 1 auto;
   min-width: 0;
 }
+
+.inbox {
+  flex: 0 0 20rem;
+  overflow-y: auto;
+  border-left: 0.0625rem solid #e5e7eb;
+}
