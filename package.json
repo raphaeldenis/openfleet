@@ -1,0 +1,25 @@
+{
+  "name": "openfleet",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "packageManager": "pnpm@12.5.1",
+  "engines": {
+    "node": ">=26"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "pnpm -r --filter './packages/*' exec tsc --noEmit",
+    "dev:core": "pnpm --filter @openfleet/core dev",
+    "dev:desktop": "pnpm --filter @openfleet/desktop tauri dev",
+    "dev": "concurrently -k \"pnpm dev:core\" \"pnpm dev:desktop\"",
+    "e2e": "pnpm --filter @openfleet/desktop exec playwright test",
+    "postinstall": "pnpm --filter @openfleet/core run fix-node-pty-permissions"
+  },
+  "devDependencies": {
+    "@types/node": "^26.0.0",
+    "concurrently": "^10.0.5",
+    "typescript": "^5.9.0",
+    "vitest": "^4.0.0"
+  }
+}
