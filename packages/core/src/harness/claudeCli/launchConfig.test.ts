@@ -32,4 +32,11 @@ describe('buildClaudeLaunchConfig', () => {
     const { mcpConfig } = buildClaudeLaunchConfig(launch);
     expect(mcpConfig).toEqual({ mcpServers: { openfleet: { type: 'http', url: launch.mcpUrl, headers: { Authorization: 'Bearer tok-mcp' } } } });
   });
+
+  it('places the seeded prompt before --mcp-config so the CLI does not swallow it as a config value', () => {
+    const config = buildClaudeLaunchConfig({ ...launch, seededPrompt: 'Say hello and stop.' });
+    const promptIndex = config.args.indexOf('Say hello and stop.');
+    expect(promptIndex).toBeGreaterThan(-1);
+    expect(promptIndex).toBeLessThan(config.args.indexOf('--mcp-config'));
+  });
 });

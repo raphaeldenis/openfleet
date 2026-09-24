@@ -17,14 +17,16 @@ export function buildClaudeLaunchConfig(launch: HarnessLaunch): ClaudeLaunchConf
       openfleet: { type: 'http', url: launch.mcpUrl, headers: { Authorization: `Bearer ${launch.mcpToken}` } },
     },
   };
+  // The positional prompt must come before --mcp-config: that flag is
+  // variadic ("<configs...>") and greedily swallows every following
+  // non-flag argument, including a trailing prompt, as another config value.
   const args = [
     '--session-id', launch.sessionId,
     '--name', launch.displayName,
-    '--settings', JSON.stringify(settings),
-    '--mcp-config', JSON.stringify(mcpConfig),
   ];
   if (launch.model) args.push('--model', launch.model);
   if (launch.seededPrompt) args.push(launch.seededPrompt);
+  args.push('--settings', JSON.stringify(settings), '--mcp-config', JSON.stringify(mcpConfig));
   return { command: 'claude', args, settings, mcpConfig };
 }
 

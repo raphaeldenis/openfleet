@@ -33,6 +33,9 @@ export class SessionRepository {
   setClosed(id: string, exitCode: number | undefined, at: string): void {
     this.db.prepare(`UPDATE sessions SET state = 'closed', state_since = ?, exit_code = ?, closed_at = ? WHERE id = ?`).run(at, exitCode ?? null, at, id);
   }
+  closeAllOpen(at: string): void {
+    this.db.prepare(`UPDATE sessions SET state = 'closed', state_since = ?, closed_at = ? WHERE state <> 'closed'`).run(at, at);
+  }
   byHookToken(token: string): Session | undefined {
     const row = this.db.prepare('SELECT * FROM sessions WHERE hook_token = ?').get(token) as Row | undefined;
     return row ? toSession(row) : undefined;

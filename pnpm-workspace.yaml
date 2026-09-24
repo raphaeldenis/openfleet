@@ -2,6 +2,7 @@ packages:
   - packages/*
   - apps/*
 allowBuilds:
+  esbuild: true
   node-pty: true
 minimumReleaseAgeExclude:
   - '@modelcontextprotocol/sdk@1.30.1'

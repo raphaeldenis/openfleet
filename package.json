@@ -8,7 +8,8 @@
   "scripts": {
     "test": "vitest run",
     "typecheck": "pnpm -r --filter './packages/*' exec tsc --noEmit",
-    "dev:core": "pnpm --filter @openfleet/core dev"
+    "dev:core": "pnpm --filter @openfleet/core dev",
+    "postinstall": "pnpm --filter @openfleet/core run fix-node-pty-permissions"
   },
   "devDependencies": {
     "typescript": "^5.9.0",
