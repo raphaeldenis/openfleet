@@ -39,4 +39,31 @@ describe('buildClaudeLaunchConfig', () => {
     expect(promptIndex).toBeGreaterThan(-1);
     expect(promptIndex).toBeLessThan(config.args.indexOf('--mcp-config'));
   });
+
+  it('passes --permission-mode when the launch specifies one', () => {
+    const config = buildClaudeLaunchConfig({ ...launch, permissionMode: 'acceptEdits' });
+    const flagIndex = config.args.indexOf('--permission-mode');
+    expect(flagIndex).toBeGreaterThan(-1);
+    expect(config.args[flagIndex + 1]).toBe('acceptEdits');
+  });
+
+  it('omits --permission-mode entirely when none is given, so the CLI keeps the user default', () => {
+    const config = buildClaudeLaunchConfig(launch);
+    expect(config.args).not.toContain('--permission-mode');
+  });
+
+  it('resuming a session passes --resume <id> and drops --session-id, --name, --model and the prompt', () => {
+    const config = buildClaudeLaunchConfig({ ...launch, resuming: true });
+    expect(config.args.slice(0, 2)).toEqual(['--resume', launch.sessionId]);
+    expect(config.args).not.toContain('--session-id');
+    expect(config.args).not.toContain('--name');
+    expect(config.args).not.toContain('--model');
+    expect(config.args).not.toContain(launch.displayName);
+  });
+
+  it('resuming still carries --settings and --mcp-config, so the same daemon hooks apply', () => {
+    const config = buildClaudeLaunchConfig({ ...launch, resuming: true });
+    expect(config.args.indexOf('--settings')).toBeGreaterThan(-1);
+    expect(config.args.indexOf('--mcp-config')).toBeGreaterThan(-1);
+  });
 });
