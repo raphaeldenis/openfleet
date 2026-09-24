@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import type { PermissionMode } from '@openfleet/shared';
 import { buildClaudeLaunchConfig } from './launchConfig.js';
+
+// manual/dontAsk are the CLI's documented modes (Amendment A1) but are not yet in
+// PermissionMode's union — that lands in P2-T06b. Cast through unknown so this suite
+// pins the runtime pass-through today without waiting on that task.
+const DOCUMENTED_PERMISSION_MODES = ['acceptEdits', 'auto', 'bypassPermissions', 'manual', 'dontAsk', 'plan'] as const;
 
 const launch = {
   sessionId: '11111111-1111-4111-8111-111111111111',
@@ -65,5 +71,62 @@ describe('buildClaudeLaunchConfig', () => {
     const config = buildClaudeLaunchConfig({ ...launch, resuming: true });
     expect(config.args.indexOf('--settings')).toBeGreaterThan(-1);
     expect(config.args.indexOf('--mcp-config')).toBeGreaterThan(-1);
+  });
+
+  it('keeps the seeded prompt before --permission-mode and --permission-mode before --mcp-config on a first run', () => {
+    const config = buildClaudeLaunchConfig({ ...launch, seededPrompt: 'Say hello and stop.', permissionMode: 'acceptEdits' });
+    const promptIndex = config.args.indexOf('Say hello and stop.');
+    const permissionModeIndex = config.args.indexOf('--permission-mode');
+    const mcpConfigIndex = config.args.indexOf('--mcp-config');
+    expect(promptIndex).toBeGreaterThan(-1);
+    expect(promptIndex).toBeLessThan(permissionModeIndex);
+    expect(permissionModeIndex).toBeLessThan(mcpConfigIndex);
+  });
+
+  it('resuming with a seeded prompt drops the prompt, so it is never swallowed by --mcp-config nor rejected by --resume', () => {
+    const config = buildClaudeLaunchConfig({ ...launch, resuming: true, seededPrompt: 'Say hello and stop.' });
+    expect(config.args).not.toContain('Say hello and stop.');
+    expect(config.args).not.toContain('--model');
+    expect(config.args).not.toContain(launch.model);
+  });
+
+  it('resuming with a permission mode still passes --permission-mode after --resume <id>', () => {
+    const config = buildClaudeLaunchConfig({ ...launch, resuming: true, permissionMode: 'acceptEdits' });
+    const resumeIndex = config.args.indexOf('--resume');
+    const flagIndex = config.args.indexOf('--permission-mode');
+    expect(flagIndex).toBeGreaterThan(resumeIndex);
+    expect(config.args[flagIndex + 1]).toBe('acceptEdits');
+  });
+
+  it.each(DOCUMENTED_PERMISSION_MODES)('passes --permission-mode %s through unchanged', (mode) => {
+    const config = buildClaudeLaunchConfig({ ...launch, permissionMode: mode as unknown as PermissionMode });
+    const flagIndex = config.args.indexOf('--permission-mode');
+    expect(config.args[flagIndex + 1]).toBe(mode);
+  });
+
+  it('never repeats --settings or --mcp-config on a first run', () => {
+    const config = buildClaudeLaunchConfig(launch);
+    expect(config.args.filter((arg) => arg === '--settings')).toHaveLength(1);
+    expect(config.args.filter((arg) => arg === '--mcp-config')).toHaveLength(1);
+  });
+
+  it('never repeats --settings or --mcp-config while resuming', () => {
+    const config = buildClaudeLaunchConfig({ ...launch, resuming: true });
+    expect(config.args.filter((arg) => arg === '--settings')).toHaveLength(1);
+    expect(config.args.filter((arg) => arg === '--mcp-config')).toHaveLength(1);
+  });
+
+  it('returns the same settings and mcp config whether the launch resumes or starts fresh, so daemon hooks and tokens do not drift on resume', () => {
+    const firstRun = buildClaudeLaunchConfig(launch);
+    const resumed = buildClaudeLaunchConfig({ ...launch, resuming: true });
+    expect(resumed.settings).toEqual(firstRun.settings);
+    expect(resumed.mcpConfig).toEqual(firstRun.mcpConfig);
+  });
+
+  it('passes a display name with spaces and a leading dash as one argv element after --name', () => {
+    const hostileName = '-⚔️ Gimli - CCM 1';
+    const config = buildClaudeLaunchConfig({ ...launch, displayName: hostileName });
+    const nameIndex = config.args.indexOf('--name');
+    expect(config.args[nameIndex + 1]).toBe(hostileName);
   });
 });
