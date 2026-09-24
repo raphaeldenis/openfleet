@@ -1,9 +1,9 @@
-import { describe, expect, it, beforeEach, vi } from 'vitest';
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { openDatabase } from '../db/database.js';
 import { FakeHandle, FakeHarness } from '../harness/fakeHarness.js';
 import type { Harness, HarnessHandle, HarnessLaunch } from '../harness/harness.js';
 import { EventBus } from '../events/eventBus.js';
-import { RESUME_TIMEOUT_EXIT_CODE, SessionService } from './sessionService.js';
+import { DEFAULT_CLOSE_ESCALATE_MS, RESUME_LAUNCH_FAILED_EXIT_CODE, RESUME_TIMEOUT_EXIT_CODE, SessionService } from './sessionService.js';
 import { SessionRepository } from './sessionRepository.js';
 import type { ServerEvent } from '@openfleet/shared';
 
@@ -131,6 +131,12 @@ describe('SessionService', () => {
 });
 
 describe('SessionService resume', () => {
+  // Every test here arms a resume timeout (default 15s, or a small resumeTimeoutMs). Fake timers ensure
+  // an un-advanced timer is discarded at teardown instead of firing for real seconds after the test ends,
+  // against an in-memory db the test has already moved on from.
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
   it('relaunches every non-closed session with --resume, the same tokens, and marks it starting', async () => {
     const db = openDatabase(':memory:');
     const bus = new EventBus();
@@ -141,7 +147,7 @@ describe('SessionService resume', () => {
 
     // A daemon restart constructs a fresh SessionService over the same, already-populated database.
     const restartHarness = new FakeHarness();
-    const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+    const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt', resumeTimeoutMs: 50 });
     await restarted.resumeAll();
 
     expect(restartHarness.launches[0]!.resuming).toBe(true);
@@ -176,7 +182,7 @@ describe('SessionService resume', () => {
     const staleHandle = firstRunHarness.handles[0]!;
 
     const restartHarness = new FakeHarness();
-    const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+    const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt', resumeTimeoutMs: 50 });
     await restarted.resumeAll();
 
     // The pre-restart process's PTY (never actually killed by this test setup — a real daemon crash
@@ -187,47 +193,76 @@ describe('SessionService resume', () => {
   });
 
   it('marks a session closed with RESUME_TIMEOUT_EXIT_CODE if no hook arrives before the resume times out', async () => {
-    vi.useFakeTimers();
-    try {
-      const db = openDatabase(':memory:');
-      const bus = new EventBus();
-      const firstRunHarness = new FakeHarness();
-      const original = new SessionService({ db, bus, harnesses: [firstRunHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
-      const session = await original.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    const db = openDatabase(':memory:');
+    const bus = new EventBus();
+    const firstRunHarness = new FakeHarness();
+    const original = new SessionService({ db, bus, harnesses: [firstRunHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+    const session = await original.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
 
-      const restartHarness = new FakeHarness();
-      const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt', resumeTimeoutMs: 50 });
-      await restarted.resumeAll();
+    const restartHarness = new FakeHarness();
+    const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt', resumeTimeoutMs: 50 });
+    await restarted.resumeAll();
 
-      vi.advanceTimersByTime(51);
+    // The timeout handler now awaits the same kill-with-escalation path close() uses, so advancing
+    // must flush the microtasks that chain off it, not just fire the setTimeout callback.
+    await vi.advanceTimersByTimeAsync(51);
 
-      expect(restarted.get(session.id)!.state).toBe('closed');
-      expect(restarted.get(session.id)!.exitCode).toBe(RESUME_TIMEOUT_EXIT_CODE);
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(restarted.get(session.id)!.state).toBe('closed');
+    expect(restarted.get(session.id)!.exitCode).toBe(RESUME_TIMEOUT_EXIT_CODE);
   });
 
   it('a SessionStart hook after resume cancels the resume timeout, so the session is not later closed', async () => {
-    vi.useFakeTimers();
-    try {
-      const db = openDatabase(':memory:');
-      const bus = new EventBus();
-      const firstRunHarness = new FakeHarness();
-      const original = new SessionService({ db, bus, harnesses: [firstRunHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
-      const session = await original.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    const db = openDatabase(':memory:');
+    const bus = new EventBus();
+    const firstRunHarness = new FakeHarness();
+    const original = new SessionService({ db, bus, harnesses: [firstRunHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+    const session = await original.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
 
-      const restartHarness = new FakeHarness();
-      const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt', resumeTimeoutMs: 50 });
-      await restarted.resumeAll();
-      restarted.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+    const restartHarness = new FakeHarness();
+    const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt', resumeTimeoutMs: 50 });
+    await restarted.resumeAll();
+    restarted.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
 
-      vi.advanceTimersByTime(51);
+    vi.advanceTimersByTime(51);
 
-      expect(restarted.get(session.id)!.state).toBe('idle');
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(restarted.get(session.id)!.state).toBe('idle');
+  });
+
+  it('a Notification hook with an unrecognized type does not cancel the resume timeout, since the session never left "starting"', async () => {
+    const db = openDatabase(':memory:');
+    const bus = new EventBus();
+    const firstRunHarness = new FakeHarness();
+    const original = new SessionService({ db, bus, harnesses: [firstRunHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+    const session = await original.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+
+    const restartHarness = new FakeHarness();
+    const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt', resumeTimeoutMs: 50 });
+    await restarted.resumeAll();
+    restarted.applyInput(session.id, hook(session.id, { hook_event_name: 'Notification', notification_type: 'some_unrecognized_type' }));
+
+    await vi.advanceTimersByTimeAsync(51);
+
+    expect(restarted.get(session.id)!.state).toBe('closed');
+    expect(restarted.get(session.id)!.exitCode).toBe(RESUME_TIMEOUT_EXIT_CODE);
+  });
+
+  it('a resume timeout escalates to a force kill when the process ignores the graceful signal, before closing the session', async () => {
+    const db = openDatabase(':memory:');
+    const bus = new EventBus();
+    const firstRunHarness = new FakeHarness();
+    const original = new SessionService({ db, bus, harnesses: [firstRunHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+    const session = await original.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+
+    const restartHarness = new FakeHarness();
+    const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt', resumeTimeoutMs: 50 });
+    await restarted.resumeAll();
+    restartHarness.handles[0]!.ignoresGracefulKill = true;
+
+    await vi.advanceTimersByTimeAsync(50 + DEFAULT_CLOSE_ESCALATE_MS + 1);
+
+    expect(restartHarness.handles[0]!.forceKilled).toBe(true);
+    expect(restarted.get(session.id)!.state).toBe('closed');
+    expect(restarted.get(session.id)!.exitCode).toBe(RESUME_TIMEOUT_EXIT_CODE);
   });
 
   it('a session resumes with the model that was changed via SessionRepository.setModel after it was created', async () => {
@@ -239,7 +274,7 @@ describe('SessionService resume', () => {
     new SessionRepository(db).setModel(session.id, 'claude-opus-5-5');
 
     const restartHarness = new FakeHarness();
-    const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+    const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt', resumeTimeoutMs: 50 });
     await restarted.resumeAll();
 
     expect(restartHarness.launches[0]!.model).toBe('claude-opus-5-5');
@@ -263,10 +298,34 @@ describe('SessionService resume', () => {
       }
     }
     const restartHarness = new ThrowingOnceHarness();
-    const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+    const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt', resumeTimeoutMs: 50 });
     await restarted.resumeAll();
 
     expect(restarted.get(badSession.id)!.state).toBe('closed');
+    expect(restarted.get(goodSession.id)!.state).toBe('starting');
+  });
+
+  it('a repo.setState failure while resuming one session does not stop the next session from resuming', async () => {
+    const db = openDatabase(':memory:');
+    const bus = new EventBus();
+    const firstRunHarness = new FakeHarness();
+    const original = new SessionService({ db, bus, harnesses: [firstRunHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+    const badSession = await original.create({ directory: '/tmp', name: 'Bad', harness: 'fake', emoji: '💥' });
+    const goodSession = await original.create({ directory: '/tmp', name: 'Good', harness: 'fake', emoji: '✅' });
+
+    const originalSetState = SessionRepository.prototype.setState;
+    const setStateSpy = vi.spyOn(SessionRepository.prototype, 'setState').mockImplementation(function (this: SessionRepository, id, state, since) {
+      if (id === badSession.id) throw new Error('setState boom');
+      return originalSetState.call(this, id, state, since);
+    });
+
+    const restartHarness = new FakeHarness();
+    const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt', resumeTimeoutMs: 50 });
+    await restarted.resumeAll();
+    setStateSpy.mockRestore();
+
+    expect(restarted.get(badSession.id)!.state).toBe('closed');
+    expect(restarted.get(badSession.id)!.exitCode).toBe(RESUME_LAUNCH_FAILED_EXIT_CODE);
     expect(restarted.get(goodSession.id)!.state).toBe('starting');
   });
 
@@ -278,7 +337,7 @@ describe('SessionService resume', () => {
     await original.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖', permissionMode: 'default' });
 
     const restartHarness = new FakeHarness();
-    const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+    const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt', resumeTimeoutMs: 50 });
     await restarted.resumeAll();
 
     expect(restartHarness.launches[0]!.permissionMode).toBe('manual');
@@ -294,7 +353,7 @@ describe('SessionService resume', () => {
 
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const restartHarness = new FakeHarness();
-    const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+    const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt', resumeTimeoutMs: 50 });
     await restarted.resumeAll();
 
     expect(restartHarness.launches[0]!.permissionMode).toBeUndefined();
@@ -310,7 +369,7 @@ describe('SessionService resume', () => {
     await original.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖', permissionMode: 'plan' });
 
     const restartHarness = new FakeHarness();
-    const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+    const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt', resumeTimeoutMs: 50 });
     await restarted.resumeAll();
 
     expect(restartHarness.launches[0]!.permissionMode).toBe('plan');
@@ -331,7 +390,7 @@ describe('SessionService resume', () => {
 
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const restartHarness = new FakeHarness();
-    const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+    const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt', resumeTimeoutMs: 50 });
     await restarted.resumeAll();
 
     expect(restartHarness.launches[0]!.permissionMode).toBe('manual');
@@ -340,25 +399,20 @@ describe('SessionService resume', () => {
   });
 
   it('a non-SessionStart hook event after resume still cancels the resume timeout, since any hook proves the process is alive', async () => {
-    vi.useFakeTimers();
-    try {
-      const db = openDatabase(':memory:');
-      const bus = new EventBus();
-      const firstRunHarness = new FakeHarness();
-      const original = new SessionService({ db, bus, harnesses: [firstRunHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
-      const session = await original.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    const db = openDatabase(':memory:');
+    const bus = new EventBus();
+    const firstRunHarness = new FakeHarness();
+    const original = new SessionService({ db, bus, harnesses: [firstRunHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+    const session = await original.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
 
-      const restartHarness = new FakeHarness();
-      const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt', resumeTimeoutMs: 50 });
-      await restarted.resumeAll();
-      restarted.applyInput(session.id, hook(session.id, { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: {} }));
+    const restartHarness = new FakeHarness();
+    const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt', resumeTimeoutMs: 50 });
+    await restarted.resumeAll();
+    restarted.applyInput(session.id, hook(session.id, { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: {} }));
 
-      vi.advanceTimersByTime(51);
+    vi.advanceTimersByTime(51);
 
-      expect(restarted.get(session.id)!.state).not.toBe('closed');
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(restarted.get(session.id)!.state).not.toBe('closed');
   });
 
   it('closeAll after a successful resume kills the resumed handle, not the stale pre-restart one', async () => {
@@ -386,7 +440,7 @@ describe('SessionService resume', () => {
     await original.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
 
     const restartHarness = new FakeHarness();
-    const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+    const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt', resumeTimeoutMs: 50 });
     await restarted.resumeAll();
     await restarted.resumeAll();
 

@@ -15,10 +15,12 @@ const baseUrl = `http://${config.host}:${config.port}`;
 const sessions = new SessionService({ db, bus, harnesses: [new ClaudeCliHarness(), new FakeHarness()], baseUrl, worktreesRoot: config.worktreesRoot });
 const approvals = new ApprovalService({ db, bus });
 
-await sessions.resumeAll();
-
+// The server must be listening before any resumed CLI can POST its first hook — resuming first risks a
+// fast process hitting a port nothing is serving yet.
 const server = await startServer({ ...config, sessions, approvals, bus, mcp: createMcpHandler({ sessions, worktreesRoot: config.worktreesRoot }) });
 console.log(`openfleet core listening on ${server.url} (home: ${config.home})`);
+
+await sessions.resumeAll();
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, async () => {

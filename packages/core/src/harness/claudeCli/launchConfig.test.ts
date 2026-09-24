@@ -68,7 +68,9 @@ describe('buildClaudeLaunchConfig', () => {
   });
 
   it('accepts an uppercase UUID on resume, since --resume is case-insensitive', () => {
-    const uppercase = launch.sessionId.toUpperCase();
+    // Must contain a-f letters, or .toUpperCase() is a no-op and the assertion below proves nothing.
+    const lowercaseWithLetters = 'ab12cd34-5678-4abc-8def-abcdef123456';
+    const uppercase = lowercaseWithLetters.toUpperCase();
     expect(() => buildClaudeLaunchConfig({ ...launch, resuming: true, sessionId: uppercase })).not.toThrow();
     const config = buildClaudeLaunchConfig({ ...launch, resuming: true, sessionId: uppercase });
     expect(config.args.slice(0, 2)).toEqual(['--resume', uppercase]);

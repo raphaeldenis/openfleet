@@ -11,7 +11,7 @@ import { canDeliverNow, nextState, type SessionInput } from './stateMachine.js';
 export interface SessionServiceDeps { db: DatabaseSync; bus: EventBus; harnesses: Harness[]; baseUrl: string; worktreesRoot: string; resumeTimeoutMs?: number }
 
 const OUTPUT_BUFFER_LIMIT = 200 * 1024;
-const DEFAULT_CLOSE_ESCALATE_MS = 5000;
+export const DEFAULT_CLOSE_ESCALATE_MS = 5000;
 const DEFAULT_RESUME_TIMEOUT_MS = 15_000;
 export const RESUME_TIMEOUT_EXIT_CODE = -1;
 export const RESUME_LAUNCH_FAILED_EXIT_CODE = -2;
@@ -103,9 +103,11 @@ export class SessionService {
 
   applyInput(sessionId: string, input: SessionInput): void {
     const session = this.require(sessionId);
-    this.clearResumeTimer(sessionId);
     const state = nextState(session.state, input);
     if (state === session.state) return;
+    // Only a real state transition proves the (resumed) process is alive; an unrecognized Notification
+    // that leaves the session in 'starting' must not cancel the safety net that would otherwise close it.
+    this.clearResumeTimer(sessionId);
     if (state === 'closed') {
       // harness_exit means the process already died — markClosed only records it. Any other path to
       // closed (SessionEnd, etc.) is not proof the process actually exited, so it must go through the
@@ -129,7 +131,10 @@ export class SessionService {
   async close(sessionId: string, options?: { escalateAfterMs?: number }): Promise<void> {
     const handle = this.handles.get(sessionId);
     if (!handle) return;
-    const escalateAfterMs = options?.escalateAfterMs ?? DEFAULT_CLOSE_ESCALATE_MS;
+    await this.killWithEscalation(handle, options?.escalateAfterMs ?? DEFAULT_CLOSE_ESCALATE_MS);
+  }
+
+  private async killWithEscalation(handle: HarnessHandle, escalateAfterMs: number): Promise<void> {
     const exited = waitForExit(handle);
     handle.kill();
     const exitedGracefully = await Promise.race([exited.then(() => true), delay(escalateAfterMs).then(() => false)]);
@@ -152,7 +157,13 @@ export class SessionService {
     for (const session of this.repo.list()) {
       if (session.state === 'closed') continue;
       if (this.handles.has(session.id)) continue; // already resumed by an earlier resumeAll() on this instance
-      this.resumeOne(session);
+      try {
+        this.resumeOne(session);
+      } catch {
+        // A failure anywhere past the launch itself (e.g. the state-machine DB write) must not abort
+        // resuming the rest of the fleet — close this one row and move on to the next session.
+        this.markClosed(session.id, RESUME_LAUNCH_FAILED_EXIT_CODE);
+      }
     }
   }
 
@@ -212,7 +223,6 @@ export class SessionService {
     }
     this.handles.set(session.id, handle);
     activeHandleBySessionId.set(session.id, handle);
-    this.repo.setState(session.id, 'starting', new Date().toISOString());
     handle.onData((data) => {
       this.appendOutput(session.id, data);
       this.deps.bus.emit({ type: 'session.output', sessionId: session.id, data });
@@ -222,6 +232,9 @@ export class SessionService {
       this.markClosed(session.id, exitCode);
     });
     this.armResumeTimeout(session.id, handle);
+    // The DB write is last: if it throws, the handle is already fully wired (onExit + resume timeout),
+    // so resumeAll's catch can close this row via markClosed without leaving an untracked process behind.
+    this.repo.setState(session.id, 'starting', new Date().toISOString());
   }
 
   private resolveResumePermissionMode(session: Session): PermissionMode | undefined {
@@ -236,8 +249,12 @@ export class SessionService {
   private armResumeTimeout(sessionId: string, handle: HarnessHandle): void {
     const timer = setTimeout(() => {
       if (activeHandleBySessionId.get(sessionId) !== handle) return; // already replaced or closed by something else
-      this.markClosed(sessionId, RESUME_TIMEOUT_EXIT_CODE);
-      handle.kill();
+      // Detach first so the handle's own onExit (fired by killWithEscalation below) can't race this
+      // timeout's own RESUME_TIMEOUT_EXIT_CODE with whatever exit code the harness happens to report.
+      activeHandleBySessionId.delete(sessionId);
+      void this.killWithEscalation(handle, DEFAULT_CLOSE_ESCALATE_MS).then(() => {
+        this.markClosed(sessionId, RESUME_TIMEOUT_EXIT_CODE);
+      });
     }, this.deps.resumeTimeoutMs ?? DEFAULT_RESUME_TIMEOUT_MS);
     this.resumeTimers.set(sessionId, timer);
   }
