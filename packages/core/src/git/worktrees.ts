@@ -11,7 +11,7 @@ export class WorktreeError extends Error {
   }
 }
 
-const SAFE_BRANCH = /^[A-Za-z0-9._\/-]+$/;
+const SAFE_BRANCH = /^[A-Za-z0-9._][A-Za-z0-9._\/-]*$/;
 
 export async function createWorktree(input: { repoPath: string; branchName: string; worktreesRoot: string }): Promise<{ path: string; branch: string }> {
   const isValidBranch = SAFE_BRANCH.test(input.branchName) && !input.branchName.includes('..');
@@ -22,8 +22,8 @@ export async function createWorktree(input: { repoPath: string; branchName: stri
 
   const branchExists = await gitSucceeds(input.repoPath, ['rev-parse', '--verify', `refs/heads/${input.branchName}`]);
   const args = branchExists
-    ? ['worktree', 'add', worktreePath, input.branchName]
-    : ['worktree', 'add', '-b', input.branchName, worktreePath];
+    ? ['worktree', 'add', '--', worktreePath, input.branchName]
+    : ['worktree', 'add', '-b', input.branchName, '--', worktreePath];
   try {
     await run('git', args, { cwd: input.repoPath });
   } catch (error) {

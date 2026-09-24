@@ -34,4 +34,10 @@ describe('createWorktree', () => {
     await createWorktree({ repoPath, branchName: 'x', worktreesRoot });
     await expect(createWorktree({ repoPath, branchName: 'x', worktreesRoot })).rejects.toBeInstanceOf(WorktreeError);
   });
+
+  it('rejects a branch name starting with a dash instead of passing it to git as a flag', async () => {
+    const repoPath = makeRepo();
+    const worktreesRoot = mkdtempSync(join(tmpdir(), 'of-wt-'));
+    await expect(createWorktree({ repoPath, branchName: '--upload-pack', worktreesRoot })).rejects.toMatchObject({ code: 'invalid_branch' });
+  });
 });
