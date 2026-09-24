@@ -1,6 +1,8 @@
-import { existsSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs';
 
 interface ClaudeConfig { projects?: Record<string, { hasTrustDialogAccepted?: boolean } & Record<string, unknown>> }
+
+const NEW_FILE_MODE = 0o600;
 
 export function markDirectoryTrusted(configPath: string, directory: string): void {
   const realDirectory = existsSync(directory) ? realpathSync(directory) : directory;
@@ -14,8 +16,10 @@ export function markDirectoryTrusted(configPath: string, directory: string): voi
   config.projects ??= {};
   config.projects[realDirectory] = { ...config.projects[realDirectory], hasTrustDialogAccepted: true };
 
+  const originalMode = existsSync(configPath) ? statSync(configPath).mode & 0o777 : NEW_FILE_MODE;
   const tempPath = `${configPath}.${process.pid}.tmp`;
   writeFileSync(tempPath, JSON.stringify(config, null, 2));
+  chmodSync(tempPath, originalMode);
   renameSync(tempPath, configPath);
 }
 

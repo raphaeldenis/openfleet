@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -70,5 +70,27 @@ describe('markDirectoryTrusted', () => {
     expect(statSync(configPath).ino).not.toBe(inodeBefore);
     const config = JSON.parse(readFileSync(configPath, 'utf8'));
     expect(config.projects[realDirectory].hasTrustDialogAccepted).toBe(true);
+  });
+
+  it('preserves the original file mode across the atomic rewrite', () => {
+    const home = mkdtempSync(join(tmpdir(), 'of-claude-home-'));
+    const configPath = join(home, '.claude.json');
+    const directory = mkdtempSync(join(tmpdir(), 'of-project-'));
+    writeFileSync(configPath, JSON.stringify({ projects: {} }));
+    chmodSync(configPath, 0o600);
+
+    markDirectoryTrusted(configPath, directory);
+
+    expect(statSync(configPath).mode & 0o777).toBe(0o600);
+  });
+
+  it('creates a brand new trust file with mode 0600', () => {
+    const home = mkdtempSync(join(tmpdir(), 'of-claude-home-'));
+    const configPath = join(home, '.claude.json');
+    const directory = mkdtempSync(join(tmpdir(), 'of-project-'));
+
+    markDirectoryTrusted(configPath, directory);
+
+    expect(statSync(configPath).mode & 0o777).toBe(0o600);
   });
 });
