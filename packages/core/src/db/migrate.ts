@@ -29,6 +29,7 @@ export function applyMigrations(db: DatabaseSync, sources: MigrationSource[] = r
       db.exec(sql);
       db.prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)').run(version, new Date().toISOString());
       db.exec('COMMIT');
+      applied.add(version);
     } catch (error) {
       db.exec('ROLLBACK');
       throw error;

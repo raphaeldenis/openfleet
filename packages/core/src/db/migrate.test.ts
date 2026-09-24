@@ -81,19 +81,17 @@ describe('applyMigrations hostile cases', () => {
     expect(recordedVersion).toBeUndefined();
   });
 
-  it('rejects a duplicate version within the same batch instead of recording it twice', () => {
+  it('skips a duplicate version within the same batch instead of re-attempting its SQL', () => {
     const db = openDatabase(':memory:');
     const duplicateVersionBatch = [
       { version: '999_dup', sql: 'CREATE TABLE dup_a (id TEXT) STRICT;' },
-      { version: '999_dup', sql: 'CREATE TABLE dup_b (id TEXT) STRICT;' },
+      { version: '999_dup', sql: 'NOT VALID SQL AT ALL;' },
     ];
 
-    expect(() => applyMigrations(db, duplicateVersionBatch)).toThrow();
+    expect(() => applyMigrations(db, duplicateVersionBatch)).not.toThrow();
 
     const dupA = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'dup_a'`).all();
     expect(dupA).toHaveLength(1);
-    const dupB = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'dup_b'`).all();
-    expect(dupB).toHaveLength(0);
 
     const recorded = db.prepare('SELECT count(*) AS n FROM schema_migrations WHERE version = ?').get('999_dup');
     expect(recorded).toEqual({ n: 1 });
