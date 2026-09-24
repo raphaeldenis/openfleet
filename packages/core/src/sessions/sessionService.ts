@@ -74,6 +74,9 @@ export class SessionService {
   }
 
   recentOutput(sessionId: string): string { return this.outputBuffers.get(sessionId) ?? ''; }
+  tokens(sessionId: string): { hookToken: string; mcpToken: string } | undefined { return this.repo.tokens(sessionId); }
+  // ponytail: exposes the raw harness handle to the REST edge for test-only routes (fake-output); scope down if the daemon leaves localhost
+  harnessHandle(sessionId: string): HarnessHandle | undefined { return this.handles.get(sessionId); }
   writeRaw(sessionId: string, data: string): void { this.handles.get(sessionId)?.write(data); }
   resize(sessionId: string, cols: number, rows: number): void { this.handles.get(sessionId)?.resize(cols, rows); }
   close(sessionId: string): void { this.handles.get(sessionId)?.kill(); }

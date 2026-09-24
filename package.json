@@ -13,6 +13,7 @@
     "dev:core": "pnpm --filter @openfleet/core dev",
     "dev:desktop": "pnpm --filter @openfleet/desktop tauri dev",
     "dev": "concurrently -k \"pnpm dev:core\" \"pnpm dev:desktop\"",
+    "e2e": "pnpm --filter @openfleet/desktop exec playwright test",
     "postinstall": "pnpm --filter @openfleet/core run fix-node-pty-permissions"
   },
   "devDependencies": {

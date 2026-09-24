@@ -2,7 +2,7 @@
 
 Open-source desktop workspace for fleets of AI coding agents: sessions in git worktrees, manager agents with a pulse, mission notes, tables, triggers and human governance.
 
-Status: phase 1 (foundation). See `docs/` once it exists; design lives in the author's superpowers folder for now.
+Status: phase 1 (foundation). See `docs/` for the phase smoke checklist; design lives in the author's superpowers folder for now.
 
 ## Dev
 
@@ -10,4 +10,10 @@ Requires Node >=26 — `nvm use` in this repo picks up Homebrew's Node via `.nvm
 
     pnpm install
     pnpm test
-    pnpm dev:core        # daemon on 127.0.0.1:7331
+    pnpm typecheck
+    pnpm --filter @openfleet/desktop test
+    pnpm e2e              # headless Playwright, fake harness, no Claude cost
+    pnpm dev:core          # daemon on 127.0.0.1:7331
+    pnpm dev               # daemon + Tauri window
+
+Live smoke checklist (needs a real `claude` subscription, not run in CI): `docs/phase1-smoke.md`.

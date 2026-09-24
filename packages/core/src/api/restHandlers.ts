@@ -1,6 +1,7 @@
 import { SessionSpecSchema } from '@openfleet/shared';
 import { z } from 'zod';
 import { ApprovalError, type ApprovalService } from '../governance/approvalService.js';
+import type { FakeHandle } from '../harness/fakeHarness.js';
 import type { SessionService } from '../sessions/sessionService.js';
 import { json, Router } from './router.js';
 
@@ -40,6 +41,21 @@ export function registerRestRoutes(router: Router, deps: { sessions: SessionServ
   router.add('GET', '/api/sessions/:id/output', ({ res, params }) => {
     if (!deps.sessions.get(params.id!)) return json(res, 404, { error: 'not_found' });
     json(res, 200, { output: deps.sessions.recentOutput(params.id!) });
+  });
+
+  // ponytail: exposes the hook token to the operator UI/e2e; scope it down when the daemon leaves localhost
+  router.add('GET', '/api/sessions/:id/tokens', ({ res, params }) => {
+    const tokens = deps.sessions.tokens(params.id!);
+    if (!tokens) return json(res, 404, { error: 'not_found' });
+    json(res, 200, { hookToken: tokens.hookToken });
+  });
+
+  router.add('POST', '/api/sessions/:id/fake-output', ({ res, params, body }) => {
+    const session = deps.sessions.get(params.id!);
+    if (!session || session.harness !== 'fake') return json(res, 404, { error: 'not_found' });
+    const { data } = z.object({ data: z.string() }).parse(body);
+    (deps.sessions.harnessHandle(params.id!) as FakeHandle | undefined)?.emitData(data);
+    json(res, 200, {});
   });
 
   router.add('POST', '/api/sessions/:id/close', ({ res, params }) => {

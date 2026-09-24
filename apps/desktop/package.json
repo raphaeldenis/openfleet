@@ -29,6 +29,7 @@
     "@angular/build": "^22.1.8",
     "@angular/cli": "^22.1.8",
     "@angular/compiler-cli": "^22.1.0",
+    "@playwright/test": "^1.63.0",
     "@tauri-apps/cli": "^2.11.5",
     "@testing-library/angular": "^19.5.0",
     "@testing-library/jest-dom": "^7.0.1",
