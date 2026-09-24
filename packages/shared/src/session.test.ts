@@ -27,6 +27,11 @@ describe('SessionSpecSchema', () => {
     expect(() => SessionSpecSchema.parse({ directory: '/tmp/x', name: 'G', permissionMode: 'yolo' })).toThrow();
   });
 
+  it('accepts a permission mode and preserves it', () => {
+    const spec = SessionSpecSchema.parse({ directory: '/tmp/x', name: 'Gimli', permissionMode: 'acceptEdits' });
+    expect(spec.permissionMode).toBe('acceptEdits');
+  });
+
   it('exposes the five permission modes in the order the CLI accepts them', () => {
     expect(PERMISSION_MODES).toEqual(['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions']);
   });
