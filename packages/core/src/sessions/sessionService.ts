@@ -11,6 +11,17 @@ import { canDeliverNow, nextState, type SessionInput } from './stateMachine.js';
 export interface SessionServiceDeps { db: DatabaseSync; bus: EventBus; harnesses: Harness[]; baseUrl: string; worktreesRoot: string }
 
 const OUTPUT_BUFFER_LIMIT = 200 * 1024;
+const DEFAULT_CLOSE_ESCALATE_MS = 5000;
+
+function waitForExit(handle: HarnessHandle): Promise<void> {
+  return new Promise((resolve) => {
+    const unsubscribe = handle.onExit(() => { unsubscribe(); resolve(); });
+  });
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 export class SessionService {
   private readonly repo: SessionRepository;
@@ -79,7 +90,23 @@ export class SessionService {
   harnessHandle(sessionId: string): HarnessHandle | undefined { return this.handles.get(sessionId); }
   writeRaw(sessionId: string, data: string): void { this.handles.get(sessionId)?.write(data); }
   resize(sessionId: string, cols: number, rows: number): void { this.handles.get(sessionId)?.resize(cols, rows); }
-  close(sessionId: string): void { this.handles.get(sessionId)?.kill(); }
+  async close(sessionId: string, options?: { escalateAfterMs?: number }): Promise<void> {
+    const handle = this.handles.get(sessionId);
+    if (!handle) return;
+    const escalateAfterMs = options?.escalateAfterMs ?? DEFAULT_CLOSE_ESCALATE_MS;
+    const exited = waitForExit(handle);
+    handle.kill();
+    const exitedGracefully = await Promise.race([exited.then(() => true), delay(escalateAfterMs).then(() => false)]);
+    if (exitedGracefully) return;
+    const exitedAfterForce = waitForExit(handle);
+    handle.kill({ force: true });
+    await exitedAfterForce;
+  }
+
+  async closeAll(): Promise<void> {
+    const openSessionIds = [...this.handles.keys()];
+    await Promise.all(openSessionIds.map((id) => this.close(id)));
+  }
   get(id: string): Session | undefined { return this.repo.get(id); }
   list(): Session[] { return this.repo.list(); }
   byHookToken(token: string): Session | undefined { return this.repo.byHookToken(token); }

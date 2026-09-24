@@ -21,5 +21,9 @@ const server = await startServer({ ...config, sessions, approvals, bus, mcp: cre
 console.log(`openfleet core listening on ${server.url} (home: ${config.home})`);
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
-  process.on(signal, async () => { await server.close(); process.exit(0); });
+  process.on(signal, async () => {
+    await sessions.closeAll();
+    await server.close();
+    process.exit(0);
+  });
 }

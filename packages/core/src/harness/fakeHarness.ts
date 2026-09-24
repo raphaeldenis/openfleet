@@ -5,10 +5,18 @@ export class FakeHandle implements HarnessHandle {
   private dataListeners: ((d: string) => void)[] = [];
   private exitListeners: ((c: number) => void)[] = [];
   killed = false;
+  forceKilled = false;
+  // Test-only: simulates a process that doesn't react to a graceful kill, to exercise the SIGKILL escalation.
+  ignoresGracefulKill = false;
 
   write(data: string): void { this.written.push(data); }
   resize(): void {}
-  kill(): void { this.killed = true; this.emitExit(137); }
+  kill(options?: { force?: boolean }): void {
+    this.killed = true;
+    if (options?.force) this.forceKilled = true;
+    if (this.ignoresGracefulKill && !options?.force) return;
+    this.emitExit(137);
+  }
   onData(listener: (d: string) => void): () => void {
     this.dataListeners.push(listener);
     return () => { this.dataListeners = this.dataListeners.filter((l) => l !== listener); };

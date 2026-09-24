@@ -25,7 +25,7 @@ export class ClaudeCliHarness implements Harness {
     return {
       write: (data) => process.write(data),
       resize: (cols, rows) => process.resize(cols, rows),
-      kill: () => process.kill(),
+      kill: (options) => process.kill(options?.force ? 'SIGKILL' : 'SIGTERM'),
       onData: (listener) => process.onData(listener).dispose,
       onExit: (listener) => process.onExit(({ exitCode }) => listener(exitCode)).dispose,
     };

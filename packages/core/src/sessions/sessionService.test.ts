@@ -81,4 +81,30 @@ describe('SessionService', () => {
     expect(buffer.length).toBe(200 * 1024);
     expect(buffer.endsWith('b'.repeat(10))).toBe(true);
   });
+
+  it('close awaits the harness exiting before resolving, without escalating when it exits promptly', async () => {
+    const { service, harness } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    await service.close(session.id);
+    expect(harness.handles[0]!.forceKilled).toBe(false);
+    expect(service.get(session.id)?.state).toBe('closed');
+  });
+
+  it('close escalates to a force kill when the harness ignores the first signal', async () => {
+    const { service, harness } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    harness.handles[0]!.ignoresGracefulKill = true;
+    await service.close(session.id, { escalateAfterMs: 10 });
+    expect(harness.handles[0]!.forceKilled).toBe(true);
+    expect(service.get(session.id)?.state).toBe('closed');
+  });
+
+  it('closeAll kills every live handle and waits for them to exit', async () => {
+    const { service, harness } = setup();
+    await service.create({ directory: '/tmp', name: 'A', harness: 'fake', emoji: '🤖' });
+    await service.create({ directory: '/tmp', name: 'B', harness: 'fake', emoji: '🤖' });
+    await service.closeAll();
+    expect(harness.handles.every((h) => h.killed)).toBe(true);
+    expect(service.list().every((s) => s.state === 'closed')).toBe(true);
+  });
 });

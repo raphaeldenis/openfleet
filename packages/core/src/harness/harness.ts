@@ -14,7 +14,7 @@ export interface HarnessLaunch {
 export interface HarnessHandle {
   write(data: string): void;
   resize(cols: number, rows: number): void;
-  kill(): void;
+  kill(options?: { force?: boolean }): void;
   onData(listener: (data: string) => void): () => void;
   onExit(listener: (exitCode: number) => void): () => void;
 }
