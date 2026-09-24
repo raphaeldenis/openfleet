@@ -49,7 +49,8 @@ export class SessionService {
     const mcpToken = newToken();
     const now = new Date().toISOString();
     this.repo.insert({ id, name: spec.name, emoji: spec.emoji, directory: spec.directory, worktree: null, model: spec.model ?? null,
-      parent_id: spec.parentId ?? null, role: spec.role ?? null, harness: spec.harness, state: 'starting', state_since: now, hook_token: hookToken, mcp_token: mcpToken, created_at: now });
+      parent_id: spec.parentId ?? null, role: spec.role ?? null, harness: spec.harness, state: 'starting', state_since: now, hook_token: hookToken, mcp_token: mcpToken,
+      permission_mode: null, created_at: now });
     const harness = this.harnessFor(spec.harness);
     const handle = harness.start({
       sessionId: id, directory: spec.directory, model: spec.model, seededPrompt: spec.seededPrompt,
