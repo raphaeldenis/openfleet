@@ -1,4 +1,4 @@
-import type { HarnessId } from '@openfleet/shared';
+import type { HarnessId, PermissionMode } from '@openfleet/shared';
 
 export interface HarnessLaunch {
   sessionId: string;
@@ -9,6 +9,8 @@ export interface HarnessLaunch {
   mcpUrl: string;
   mcpToken: string;
   displayName: string;
+  permissionMode?: PermissionMode;
+  resuming?: boolean;
 }
 
 export interface HarnessHandle {

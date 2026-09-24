@@ -17,15 +17,20 @@ export function buildClaudeLaunchConfig(launch: HarnessLaunch): ClaudeLaunchConf
       openfleet: { type: 'http', url: launch.mcpUrl, headers: { Authorization: `Bearer ${launch.mcpToken}` } },
     },
   };
+  // A resume reattaches to a UUID the CLI already knows: --session-id, --name
+  // and the seeded prompt are first-run-only flags the CLI rejects or ignores
+  // on --resume. --model is passed on both paths — `claude --help` documents
+  // no conflict with --resume, and the CLI's own transcript-based model
+  // restore has decline paths that could silently drop the operator's choice.
+  const resumeArgs = ['--resume', launch.sessionId];
+  const firstRunArgs = ['--session-id', launch.sessionId, '--name', launch.displayName];
+  const args = launch.resuming ? resumeArgs : firstRunArgs;
+  if (launch.model) args.push('--model', launch.model);
+  if (!launch.resuming && launch.seededPrompt) args.push(launch.seededPrompt);
+  if (launch.permissionMode) args.push('--permission-mode', launch.permissionMode);
   // The positional prompt must come before --mcp-config: that flag is
   // variadic ("<configs...>") and greedily swallows every following
   // non-flag argument, including a trailing prompt, as another config value.
-  const args = [
-    '--session-id', launch.sessionId,
-    '--name', launch.displayName,
-  ];
-  if (launch.model) args.push('--model', launch.model);
-  if (launch.seededPrompt) args.push(launch.seededPrompt);
   args.push('--settings', JSON.stringify(settings), '--mcp-config', JSON.stringify(mcpConfig));
   return { command: 'claude', args, settings, mcpConfig };
 }
