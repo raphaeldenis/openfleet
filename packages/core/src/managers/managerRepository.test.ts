@@ -59,12 +59,21 @@ describe('ManagerRepository', () => {
     expect(() => repo.insert({ sessionId: 's1', pulseSeconds: 90, childrenCap: 2, missionText: 'b', createdAt: 't1' })).toThrow();
   });
 
-  it('rejects a non-integer pulse_seconds under the STRICT table', () => {
+  it('rejects a non-numeric pulse_seconds under the STRICT table', () => {
     const db = openDatabase(':memory:');
     insertSession(db, 's1');
     const repo = new ManagerRepository(db);
     expect(() =>
       repo.insert({ sessionId: 's1', pulseSeconds: 'soon' as never, childrenCap: 1, missionText: 'a', createdAt: 't0' }),
+    ).toThrow();
+  });
+
+  it('rejects a fractional pulse_seconds under the STRICT table', () => {
+    const db = openDatabase(':memory:');
+    insertSession(db, 's1');
+    const repo = new ManagerRepository(db);
+    expect(() =>
+      repo.insert({ sessionId: 's1', pulseSeconds: 1.5 as never, childrenCap: 1, missionText: 'a', createdAt: 't0' }),
     ).toThrow();
   });
 
