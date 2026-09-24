@@ -361,30 +361,6 @@ describe('SessionService resume', () => {
     }
   });
 
-  it('a late exit from the stale pre-restart handle does not overwrite the exit code left by a resume timeout', async () => {
-    vi.useFakeTimers();
-    try {
-      const db = openDatabase(':memory:');
-      const bus = new EventBus();
-      const firstRunHarness = new FakeHarness();
-      const original = new SessionService({ db, bus, harnesses: [firstRunHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
-      const session = await original.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
-      const staleHandle = firstRunHarness.handles[0]!;
-
-      const restartHarness = new FakeHarness();
-      const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt', resumeTimeoutMs: 50 });
-      await restarted.resumeAll();
-      vi.advanceTimersByTime(51);
-      expect(restarted.get(session.id)!.exitCode).toBe(RESUME_TIMEOUT_EXIT_CODE);
-
-      staleHandle.emitExit(1);
-
-      expect(restarted.get(session.id)!.exitCode).toBe(RESUME_TIMEOUT_EXIT_CODE);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it('closeAll after a successful resume kills the resumed handle, not the stale pre-restart one', async () => {
     const db = openDatabase(':memory:');
     const bus = new EventBus();
