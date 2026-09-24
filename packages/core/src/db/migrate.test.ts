@@ -83,4 +83,54 @@ describe('applyMigrations hostile cases', () => {
     const recorded = db.prepare('SELECT count(*) AS n FROM schema_migrations WHERE version = ?').get('999_dup');
     expect(recorded).toEqual({ n: 1 });
   });
+
+  it('rejects a migration whose SQL contains a bare COMMIT, leaving no trace', () => {
+    const db = openDatabase(':memory:');
+    const commitEscapeMigration = [{ version: '999_commit_escape', sql: 'CREATE TABLE probe (id TEXT); COMMIT; INVALID' }];
+
+    expect(() => applyMigrations(db, commitEscapeMigration)).toThrow();
+
+    const probeTable = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'probe'`).all();
+    expect(probeTable).toHaveLength(0);
+
+    const recordedVersion = db.prepare('SELECT version FROM schema_migrations WHERE version = ?').get('999_commit_escape');
+    expect(recordedVersion).toBeUndefined();
+  });
+
+  it('surfaces the original failure instead of a rollback error once the transaction has already ended', () => {
+    const db = openDatabase(':memory:');
+    const denyRecordingTrigger = [
+      {
+        version: '999_trigger',
+        sql: `CREATE TRIGGER deny_recording BEFORE INSERT ON schema_migrations
+              WHEN NEW.version != '999_trigger'
+              BEGIN SELECT RAISE(ROLLBACK, 'record denied'); END;`,
+      },
+    ];
+    applyMigrations(db, denyRecordingTrigger);
+
+    const deniedMigration = [{ version: '999_denied', sql: 'CREATE TABLE denied_probe (id TEXT) STRICT;' }];
+
+    expect(() => applyMigrations(db, deniedMigration)).toThrow('record denied');
+  });
+
+  it('skips a version already recorded by another process instead of re-executing its SQL', () => {
+    const db = openDatabase(':memory:');
+    const raceWithAnotherProcess = [
+      {
+        version: '999_race_a',
+        sql: `CREATE TABLE race_a (id TEXT) STRICT;
+              INSERT INTO schema_migrations (version, applied_at) VALUES ('999_race_b', 'recorded-by-another-process');`,
+      },
+      { version: '999_race_b', sql: 'NOT VALID SQL AT ALL;' },
+    ];
+
+    expect(() => applyMigrations(db, raceWithAnotherProcess)).not.toThrow();
+
+    const raceA = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'race_a'`).all();
+    expect(raceA).toHaveLength(1);
+
+    const recordedB = db.prepare('SELECT applied_at FROM schema_migrations WHERE version = ?').get('999_race_b');
+    expect(recordedB).toEqual({ applied_at: 'recorded-by-another-process' });
+  });
 });

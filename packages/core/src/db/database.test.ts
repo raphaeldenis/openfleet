@@ -18,4 +18,10 @@ describe('openDatabase', () => {
 
     expect(db.prepare('SELECT count(*) AS n FROM schema_migrations').get()).toEqual({ n: 2 });
   });
+
+  it('sets a busy_timeout so a second writer waits instead of failing immediately', () => {
+    const db = openDatabase(':memory:');
+
+    expect(db.prepare('PRAGMA busy_timeout').get()).toEqual({ timeout: 5000 });
+  });
 });
