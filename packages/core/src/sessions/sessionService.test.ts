@@ -57,6 +57,14 @@ describe('SessionService', () => {
     expect(service.get(session.id)?.exitCode).toBe(1);
   });
 
+  it('kills the harness on SessionEnd even if the process has not exited on its own', async () => {
+    const { service, harness } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    harness.handles[0]!.ignoresGracefulKill = true;
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionEnd' }));
+    expect(harness.handles[0]!.killed).toBe(true);
+  });
+
   it('emits session.output for pty data', async () => {
     const { service, harness, events } = setup();
     const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });

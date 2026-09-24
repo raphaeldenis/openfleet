@@ -77,7 +77,14 @@ export class SessionService {
     const session = this.require(sessionId);
     const state = nextState(session.state, input);
     if (state === session.state) return;
-    if (state === 'closed') { this.markClosed(sessionId, undefined); return; }
+    if (state === 'closed') {
+      // harness_exit means the process already died — markClosed only records it. Any other path to
+      // closed (SessionEnd, etc.) is not proof the process actually exited, so it must go through the
+      // real close() (kill, await exit, escalate to SIGKILL) or the PTY is orphaned.
+      if (input.kind === 'harness_exit') this.markClosed(sessionId, undefined);
+      else void this.close(sessionId);
+      return;
+    }
     const since = new Date().toISOString();
     this.repo.setState(sessionId, state, since);
     this.deps.bus.emit({ type: 'session.state', sessionId, state, stateSince: since });
