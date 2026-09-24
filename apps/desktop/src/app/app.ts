@@ -1,9 +1,10 @@
 import { Component, inject, signal } from '@angular/core';
 import { FleetEventsService } from './core/fleet-events.service';
 import { SessionListComponent } from './sessions/session-list.component';
+import { TerminalComponent } from './sessions/terminal.component';
 
 @Component({
-  imports: [SessionListComponent],
+  imports: [SessionListComponent, TerminalComponent],
   selector: 'app-root',
   styleUrl: './app.scss',
   templateUrl: './app.html',

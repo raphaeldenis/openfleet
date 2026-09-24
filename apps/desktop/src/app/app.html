@@ -1,2 +1,10 @@
-<of-session-list (selected)="selectedId.set($event)" />
-<p>{{ selectedId() }}</p>
+<div class="layout">
+  <aside class="sidebar">
+    <of-session-list (selected)="selectedId.set($event)" />
+  </aside>
+  <main class="workspace">
+    @if (selectedId(); as id) {
+      <of-terminal [sessionId]="id" />
+    }
+  </main>
+</div>

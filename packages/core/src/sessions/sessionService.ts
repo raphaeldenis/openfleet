@@ -10,10 +10,13 @@ import { canDeliverNow, nextState, type SessionInput } from './stateMachine.js';
 
 export interface SessionServiceDeps { db: DatabaseSync; bus: EventBus; harnesses: Harness[]; baseUrl: string; worktreesRoot: string }
 
+const OUTPUT_BUFFER_LIMIT = 200 * 1024;
+
 export class SessionService {
   private readonly repo: SessionRepository;
   private readonly queue: MessageQueue;
   private readonly handles = new Map<string, HarnessHandle>();
+  private readonly outputBuffers = new Map<string, string>();
 
   constructor(private readonly deps: SessionServiceDeps) {
     this.repo = new SessionRepository(deps.db);
@@ -33,7 +36,10 @@ export class SessionService {
       hookUrl: `${this.deps.baseUrl}/hooks/${hookToken}`, mcpUrl: `${this.deps.baseUrl}/mcp`, mcpToken, displayName: `${spec.emoji} ${spec.name}`,
     });
     this.handles.set(id, handle);
-    handle.onData((data) => this.deps.bus.emit({ type: 'session.output', sessionId: id, data }));
+    handle.onData((data) => {
+      this.appendOutput(id, data);
+      this.deps.bus.emit({ type: 'session.output', sessionId: id, data });
+    });
     handle.onExit((exitCode) => this.markClosed(id, exitCode));
     const session = this.repo.get(id)!;
     this.deps.bus.emit({ type: 'session.created', session });
@@ -67,6 +73,7 @@ export class SessionService {
     if (canDeliverNow(state)) this.flushOne(sessionId);
   }
 
+  recentOutput(sessionId: string): string { return this.outputBuffers.get(sessionId) ?? ''; }
   writeRaw(sessionId: string, data: string): void { this.handles.get(sessionId)?.write(data); }
   resize(sessionId: string, cols: number, rows: number): void { this.handles.get(sessionId)?.resize(cols, rows); }
   close(sessionId: string): void { this.handles.get(sessionId)?.kill(); }
@@ -74,6 +81,13 @@ export class SessionService {
   list(): Session[] { return this.repo.list(); }
   byHookToken(token: string): Session | undefined { return this.repo.byHookToken(token); }
   byMcpToken(token: string): Session | undefined { return this.repo.byMcpToken(token); }
+
+  // ponytail: 200 KB ring buffer, persist scrollback to disk if replays matter more
+  private appendOutput(sessionId: string, data: string): void {
+    const combined = (this.outputBuffers.get(sessionId) ?? '') + data;
+    const tail = combined.length > OUTPUT_BUFFER_LIMIT ? combined.slice(combined.length - OUTPUT_BUFFER_LIMIT) : combined;
+    this.outputBuffers.set(sessionId, tail);
+  }
 
   // ponytail: one message per turn; batch delivery if queues grow
   private flushOne(sessionId: string): void {

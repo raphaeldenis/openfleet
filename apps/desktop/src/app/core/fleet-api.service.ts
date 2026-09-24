@@ -16,6 +16,7 @@ export class FleetApiService {
   private post<T>(path: string, body: unknown): Promise<T> { return this.call<T>(path, { method: 'POST', body: JSON.stringify(body) }); }
 
   listSessions() { return this.call<Session[]>('/api/sessions'); }
+  recentOutput(id: string) { return this.call<{ output: string }>(`/api/sessions/${id}/output`); }
   createSession(spec: Partial<SessionSpec> & { directory: string; name: string; repoPath?: string; branchName?: string }) { return this.post<Session>('/api/sessions', spec); }
   sendMessage(id: string, body: string) { return this.post<{ status: string }>(`/api/sessions/${id}/messages`, { body }); }
   sendInput(id: string, data: string) { return this.post(`/api/sessions/${id}/input`, { data }); }

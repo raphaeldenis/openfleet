@@ -41,6 +41,14 @@ describe('REST', () => {
     expect(harness.handles[0]!.written).toEqual(['y']);
   });
 
+  it('returns recent output for a session', async () => {
+    const session = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
+    harness.handles[0]!.emitData('hello ');
+    harness.handles[0]!.emitData('world');
+    const res = await api(`/api/sessions/${session.id}/output`);
+    expect(await res.json()).toEqual({ output: 'hello world' });
+  });
+
   it('returns 404 for a missing session', async () => {
     const res = await api('/api/sessions/nope/messages', { method: 'POST', body: JSON.stringify({ body: 'x' }) });
     expect(res.status).toBe(404);

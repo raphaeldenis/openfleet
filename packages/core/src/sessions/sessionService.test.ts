@@ -63,4 +63,22 @@ describe('SessionService', () => {
     harness.handles[0]!.emitData('hi');
     expect(events).toContainEqual({ type: 'session.output', sessionId: session.id, data: 'hi' });
   });
+
+  it('keeps a ring buffer of recent output for a terminal attaching late', async () => {
+    const { service, harness } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    harness.handles[0]!.emitData('hello ');
+    harness.handles[0]!.emitData('world');
+    expect(service.recentOutput(session.id)).toBe('hello world');
+  });
+
+  it('caps the recent output buffer at 200 KB, keeping the tail', async () => {
+    const { service, harness } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    harness.handles[0]!.emitData('a'.repeat(200 * 1024));
+    harness.handles[0]!.emitData('b'.repeat(10));
+    const buffer = service.recentOutput(session.id);
+    expect(buffer.length).toBe(200 * 1024);
+    expect(buffer.endsWith('b'.repeat(10))).toBe(true);
+  });
 });

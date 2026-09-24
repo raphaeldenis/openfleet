@@ -37,6 +37,11 @@ export function registerRestRoutes(router: Router, deps: { sessions: SessionServ
     json(res, 200, {});
   });
 
+  router.add('GET', '/api/sessions/:id/output', ({ res, params }) => {
+    if (!deps.sessions.get(params.id!)) return json(res, 404, { error: 'not_found' });
+    json(res, 200, { output: deps.sessions.recentOutput(params.id!) });
+  });
+
   router.add('POST', '/api/sessions/:id/close', ({ res, params }) => {
     deps.sessions.close(params.id!);
     json(res, 200, {});
