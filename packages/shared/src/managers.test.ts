@@ -19,3 +19,31 @@ describe('MANAGER_ROLE', () => {
     expect(MANAGER_ROLE).toBe('manager');
   });
 });
+
+describe('ManagerSpecSchema hostile inputs', () => {
+  it('rejects a fractional pulseSeconds', () => {
+    expect(() => ManagerSpecSchema.parse({ pulseSeconds: 1.5, childrenCap: 1, mission: 'x' })).toThrow();
+  });
+
+  it('rejects a negative pulseSeconds', () => {
+    expect(() => ManagerSpecSchema.parse({ pulseSeconds: -60, childrenCap: 1, mission: 'x' })).toThrow();
+  });
+
+  it('rejects a fractional childrenCap', () => {
+    expect(() => ManagerSpecSchema.parse({ pulseSeconds: 60, childrenCap: 1.5, mission: 'x' })).toThrow();
+  });
+
+  it('rejects a spec missing pulseSeconds', () => {
+    expect(() => ManagerSpecSchema.parse({ childrenCap: 1, mission: 'x' })).toThrow();
+  });
+
+  it('strips a spec of keys it does not declare', () => {
+    const spec = ManagerSpecSchema.parse({ pulseSeconds: 60, childrenCap: 1, mission: 'x', extra: 'unexpected' });
+    expect(spec).toEqual({ pulseSeconds: 60, childrenCap: 1, mission: 'x' });
+  });
+
+  it('accepts a whitespace-only mission — min(1) counts characters, not trimmed length', () => {
+    const spec = ManagerSpecSchema.parse({ pulseSeconds: 60, childrenCap: 1, mission: '   ' });
+    expect(spec.mission).toBe('   ');
+  });
+});
