@@ -67,6 +67,18 @@ describe('buildClaudeLaunchConfig', () => {
     expect(() => buildClaudeLaunchConfig({ ...launch, resuming: true, sessionId: 'not-a-uuid' })).toThrow();
   });
 
+  it('accepts an uppercase UUID on resume, since --resume is case-insensitive', () => {
+    const uppercase = launch.sessionId.toUpperCase();
+    expect(() => buildClaudeLaunchConfig({ ...launch, resuming: true, sessionId: uppercase })).not.toThrow();
+    const config = buildClaudeLaunchConfig({ ...launch, resuming: true, sessionId: uppercase });
+    expect(config.args.slice(0, 2)).toEqual(['--resume', uppercase]);
+  });
+
+  it('does not guard a first-run (non-resuming) launch against a non-UUID session id — only resume is guarded', () => {
+    expect(() => buildClaudeLaunchConfig({ ...launch, resuming: false, sessionId: 'not-a-uuid' })).not.toThrow();
+    expect(() => buildClaudeLaunchConfig({ ...launch, sessionId: '' })).not.toThrow();
+  });
+
   it('resuming a session passes --resume <id> and drops --session-id, --name and the prompt', () => {
     const config = buildClaudeLaunchConfig({ ...launch, resuming: true });
     expect(config.args.slice(0, 2)).toEqual(['--resume', launch.sessionId]);

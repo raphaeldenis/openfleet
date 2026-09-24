@@ -301,4 +301,160 @@ describe('SessionService resume', () => {
     expect(warn).toHaveBeenCalledTimes(1);
     warn.mockRestore();
   });
+
+  it('resumes an already-valid stored permission_mode unchanged (not just the legacy "default" alias)', async () => {
+    const db = openDatabase(':memory:');
+    const bus = new EventBus();
+    const firstRunHarness = new FakeHarness();
+    const original = new SessionService({ db, bus, harnesses: [firstRunHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+    await original.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖', permissionMode: 'plan' });
+
+    const restartHarness = new FakeHarness();
+    const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+    await restarted.resumeAll();
+
+    expect(restartHarness.launches[0]!.permissionMode).toBe('plan');
+  });
+
+  // HOSTILE — PERMISSION_MODES (packages/shared/src/session.ts) does not include 'manual' yet (P2-T06b,
+  // Amendment A1, has not landed on this branch). A row already carrying the literal 'manual' — which is
+  // exactly what a session will look like the moment P2-T06b lands and writes 'manual' as the default —
+  // is unreachable through the typed public API, so this reaches into the DB directly the way the
+  // "unrecognized" test above already does. Pins current (surprising) behaviour; see QE report finding.
+  it('HOSTILE: a stored "manual" permission_mode is currently treated as unrecognized, not preserved', async () => {
+    const db = openDatabase(':memory:');
+    const bus = new EventBus();
+    const firstRunHarness = new FakeHarness();
+    const original = new SessionService({ db, bus, harnesses: [firstRunHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+    const session = await original.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    db.prepare('UPDATE sessions SET permission_mode = ? WHERE id = ?').run('manual', session.id);
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const restartHarness = new FakeHarness();
+    const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+    await restarted.resumeAll();
+
+    // Pinning the current defect: a 'manual' row is silently downgraded to no --permission-mode at all,
+    // with a console.warn, instead of resuming with 'manual' as intended by Amendment A2 item 2.
+    expect(restartHarness.launches[0]!.permissionMode).toBeUndefined();
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
+  it('a non-SessionStart hook event after resume still cancels the resume timeout, since any hook proves the process is alive', async () => {
+    vi.useFakeTimers();
+    try {
+      const db = openDatabase(':memory:');
+      const bus = new EventBus();
+      const firstRunHarness = new FakeHarness();
+      const original = new SessionService({ db, bus, harnesses: [firstRunHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+      const session = await original.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+
+      const restartHarness = new FakeHarness();
+      const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt', resumeTimeoutMs: 50 });
+      await restarted.resumeAll();
+      restarted.applyInput(session.id, hook(session.id, { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: {} }));
+
+      vi.advanceTimersByTime(51);
+
+      expect(restarted.get(session.id)!.state).not.toBe('closed');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a late exit from the stale pre-restart handle does not overwrite the exit code left by a resume timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      const db = openDatabase(':memory:');
+      const bus = new EventBus();
+      const firstRunHarness = new FakeHarness();
+      const original = new SessionService({ db, bus, harnesses: [firstRunHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+      const session = await original.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+      const staleHandle = firstRunHarness.handles[0]!;
+
+      const restartHarness = new FakeHarness();
+      const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt', resumeTimeoutMs: 50 });
+      await restarted.resumeAll();
+      vi.advanceTimersByTime(51);
+      expect(restarted.get(session.id)!.exitCode).toBe(RESUME_TIMEOUT_EXIT_CODE);
+
+      staleHandle.emitExit(1);
+
+      expect(restarted.get(session.id)!.exitCode).toBe(RESUME_TIMEOUT_EXIT_CODE);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('closeAll after a successful resume kills the resumed handle, not the stale pre-restart one', async () => {
+    const db = openDatabase(':memory:');
+    const bus = new EventBus();
+    const firstRunHarness = new FakeHarness();
+    const original = new SessionService({ db, bus, harnesses: [firstRunHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+    await original.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    const staleHandle = firstRunHarness.handles[0]!;
+
+    const restartHarness = new FakeHarness();
+    const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+    await restarted.resumeAll();
+    await restarted.closeAll();
+
+    expect(restartHarness.handles[0]!.killed).toBe(true);
+    expect(staleHandle.killed).toBe(false);
+  });
+
+  // HOSTILE — Review Focus #2 and the plan's own "stale process" test only ever call resumeAll() once
+  // per instance. Nothing guards against calling it twice on the SAME instance (e.g. a daemon boot path
+  // that accidentally awaits resumeAll() from two different init branches), which is exactly the "spawn
+  // two claude processes per session" scenario the QE brief calls out as a major severity risk if it
+  // reproduces. Pins actual behaviour; see QE report finding.
+  it('HOSTILE: calling resumeAll twice on the same instance double-launches a still-starting session', async () => {
+    const db = openDatabase(':memory:');
+    const bus = new EventBus();
+    const firstRunHarness = new FakeHarness();
+    const original = new SessionService({ db, bus, harnesses: [firstRunHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+    await original.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+
+    const restartHarness = new FakeHarness();
+    const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+    await restarted.resumeAll();
+    await restarted.resumeAll();
+
+    // Documents the current defect: a second resumeAll() call finds the same session still 'starting'
+    // (not 'closed') and launches a second harness process for it instead of skipping an in-flight resume.
+    expect(restartHarness.launches).toHaveLength(2);
+  });
+
+  it('a message queued before the restart, while the session was not deliverable, is delivered to the resumed handle once it goes idle again', async () => {
+    const db = openDatabase(':memory:');
+    const bus = new EventBus();
+    const firstRunHarness = new FakeHarness();
+    const original = new SessionService({ db, bus, harnesses: [firstRunHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+    const session = await original.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    original.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+    original.applyInput(session.id, hook(session.id, { hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: {} }));
+    const queued = original.sendMessage({ sessionId: session.id, body: 'queued before crash' });
+    expect(queued.status).toBe('queued');
+
+    const restartHarness = new FakeHarness();
+    const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+    await restarted.resumeAll();
+    restarted.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+
+    expect(restartHarness.handles[0]!.written).toEqual(['queued before crash\r']);
+  });
+
+  it('after close, a fresh session created on the same service is unaffected by the closed session and closeAll only kills the live one', async () => {
+    const { service, harness } = setup();
+    const closedSession = await service.create({ directory: '/tmp', name: 'Old', harness: 'fake', emoji: '🤖' });
+    await service.close(closedSession.id);
+
+    const freshSession = await service.create({ directory: '/tmp', name: 'New', harness: 'fake', emoji: '🤖' });
+    await service.closeAll();
+
+    expect(service.get(closedSession.id)!.state).toBe('closed');
+    expect(harness.handles[1]!.killed).toBe(true);
+    expect(service.get(freshSession.id)!.state).toBe('closed');
+  });
 });
