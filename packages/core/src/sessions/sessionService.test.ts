@@ -226,7 +226,7 @@ describe('SessionService resume', () => {
     await restarted.resumeAll();
     restarted.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
 
-    vi.advanceTimersByTime(51);
+    await vi.advanceTimersByTimeAsync(51);
 
     expect(restarted.get(session.id)!.state).toBe('idle');
   });
@@ -327,9 +327,42 @@ describe('SessionService resume', () => {
     await restarted.resumeAll();
     setStateSpy.mockRestore();
 
+    expect(restartHarness.handles[0]!.killed).toBe(true);
     expect(restarted.get(badSession.id)!.state).toBe('closed');
     expect(restarted.get(badSession.id)!.exitCode).toBe(RESUME_LAUNCH_FAILED_EXIT_CODE);
     expect(restarted.get(goodSession.id)!.state).toBe('starting');
+  });
+
+  it('a repo.setState failure whose own cleanup (setClosed) also fails still lets the next session resume', async () => {
+    const db = openDatabase(':memory:');
+    const bus = new EventBus();
+    const firstRunHarness = new FakeHarness();
+    const original = new SessionService({ db, bus, harnesses: [firstRunHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+    const badSession = await original.create({ directory: '/tmp', name: 'Bad', harness: 'fake', emoji: '💥' });
+    const goodSession = await original.create({ directory: '/tmp', name: 'Good', harness: 'fake', emoji: '✅' });
+
+    const originalSetState = SessionRepository.prototype.setState;
+    const setStateSpy = vi.spyOn(SessionRepository.prototype, 'setState').mockImplementation(function (this: SessionRepository, id, state, since) {
+      if (id === badSession.id) throw new Error('setState boom');
+      return originalSetState.call(this, id, state, since);
+    });
+    const originalSetClosed = SessionRepository.prototype.setClosed;
+    const setClosedSpy = vi.spyOn(SessionRepository.prototype, 'setClosed').mockImplementation(function (this: SessionRepository, id, exitCode, at) {
+      if (id === badSession.id) throw new Error('setClosed boom');
+      return originalSetClosed.call(this, id, exitCode, at);
+    });
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const restartHarness = new FakeHarness();
+    const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt', resumeTimeoutMs: 50 });
+    await restarted.resumeAll();
+    setStateSpy.mockRestore();
+    setClosedSpy.mockRestore();
+
+    expect(restartHarness.handles[0]!.killed).toBe(true);
+    expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+    expect(restarted.get(goodSession.id)!.state).toBe('starting');
+    consoleErrorSpy.mockRestore();
   });
 
   it('resumes a legacy "default" permission_mode as manual', async () => {
@@ -413,7 +446,7 @@ describe('SessionService resume', () => {
     await restarted.resumeAll();
     restarted.applyInput(session.id, hook(session.id, { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: {} }));
 
-    vi.advanceTimersByTime(51);
+    await vi.advanceTimersByTimeAsync(51);
 
     expect(restarted.get(session.id)!.state).not.toBe('closed');
   });

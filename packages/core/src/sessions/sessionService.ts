@@ -31,10 +31,6 @@ function waitForExit(handle: HarnessHandle): Promise<void> {
   });
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 const LOW_SURROGATE_RANGE = { min: 0xdc00, max: 0xdfff };
 
 function trimToTail(text: string, maxLength: number): string {
@@ -137,7 +133,12 @@ export class SessionService {
   private async killWithEscalation(handle: HarnessHandle, escalateAfterMs: number): Promise<void> {
     const exited = waitForExit(handle);
     handle.kill();
-    const exitedGracefully = await Promise.race([exited.then(() => true), delay(escalateAfterMs).then(() => false)]);
+    let escalateTimer: ReturnType<typeof setTimeout>;
+    const gracePeriodExpired = new Promise<false>((resolve) => {
+      escalateTimer = setTimeout(() => resolve(false), escalateAfterMs);
+    });
+    const exitedGracefully = await Promise.race([exited.then(() => true as const), gracePeriodExpired]);
+    clearTimeout(escalateTimer!);
     if (exitedGracefully) return;
     const exitedAfterForce = waitForExit(handle);
     handle.kill({ force: true });
@@ -161,9 +162,25 @@ export class SessionService {
         this.resumeOne(session);
       } catch {
         // A failure anywhere past the launch itself (e.g. the state-machine DB write) must not abort
-        // resuming the rest of the fleet — close this one row and move on to the next session.
-        this.markClosed(session.id, RESUME_LAUNCH_FAILED_EXIT_CODE);
+        // resuming the rest of the fleet — kill the process we already launched and move on.
+        await this.failResume(session.id);
       }
+    }
+  }
+
+  private async failResume(sessionId: string): Promise<void> {
+    const handle = this.handles.get(sessionId);
+    if (handle) {
+      // Detach first, same reasoning as armResumeTimeout: the handle's own onExit must not record
+      // whatever exit code the harness reports over RESUME_LAUNCH_FAILED_EXIT_CODE below.
+      activeHandleBySessionId.delete(sessionId);
+      await this.killWithEscalation(handle, DEFAULT_CLOSE_ESCALATE_MS);
+    }
+    try {
+      this.markClosed(sessionId, RESUME_LAUNCH_FAILED_EXIT_CODE);
+    } catch (err) {
+      // markClosed's own DB write can itself fail; one bad row's cleanup must not stop the rest of the fleet.
+      console.error(`resumeAll: failed to close session ${sessionId} after a resume error`, err);
     }
   }
 
@@ -261,6 +278,11 @@ export class SessionService {
       // timeout's own RESUME_TIMEOUT_EXIT_CODE with whatever exit code the harness happens to report.
       activeHandleBySessionId.delete(sessionId);
       void this.killWithEscalation(handle, DEFAULT_CLOSE_ESCALATE_MS).then(() => {
+        // Re-check: killWithEscalation can run for up to DEFAULT_CLOSE_ESCALATE_MS, long enough for another
+        // instance sharing this db (a second daemon restart mid-escalation) to resume this same session
+        // under a new handle. Our own deletion above already left this slot empty — that's the expected,
+        // common case and must still proceed to markClosed; only a handle claimed by someone else means skip.
+        if (activeHandleBySessionId.has(sessionId)) return;
         this.markClosed(sessionId, RESUME_TIMEOUT_EXIT_CODE);
       });
     }, this.deps.resumeTimeoutMs ?? DEFAULT_RESUME_TIMEOUT_MS);
