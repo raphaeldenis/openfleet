@@ -2,7 +2,10 @@ packages:
   - packages/*
   - apps/*
 allowBuilds:
+  '@parcel/watcher': true
   esbuild: true
+  lmdb: true
+  msgpackr-extract: true
   node-pty: true
 minimumReleaseAgeExclude:
   - '@modelcontextprotocol/sdk@1.30.1'
