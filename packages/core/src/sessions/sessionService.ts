@@ -23,6 +23,15 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+const LOW_SURROGATE_RANGE = { min: 0xdc00, max: 0xdfff };
+
+function trimToTail(text: string, maxLength: number): string {
+  if (text.length <= maxLength) return text;
+  const start = text.length - maxLength;
+  const startsMidSurrogatePair = text.charCodeAt(start) >= LOW_SURROGATE_RANGE.min && text.charCodeAt(start) <= LOW_SURROGATE_RANGE.max;
+  return text.slice(startsMidSurrogatePair ? start + 1 : start);
+}
+
 export class SessionService {
   private readonly repo: SessionRepository;
   private readonly queue: MessageQueue;
@@ -122,8 +131,7 @@ export class SessionService {
   // ponytail: 200 KB ring buffer, persist scrollback to disk if replays matter more
   private appendOutput(sessionId: string, data: string): void {
     const combined = (this.outputBuffers.get(sessionId) ?? '') + data;
-    const tail = combined.length > OUTPUT_BUFFER_LIMIT ? combined.slice(combined.length - OUTPUT_BUFFER_LIMIT) : combined;
-    this.outputBuffers.set(sessionId, tail);
+    this.outputBuffers.set(sessionId, trimToTail(combined, OUTPUT_BUFFER_LIMIT));
   }
 
   // ponytail: one message per turn; batch delivery if queues grow

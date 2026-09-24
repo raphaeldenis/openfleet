@@ -90,6 +90,17 @@ describe('SessionService', () => {
     expect(buffer.endsWith('b'.repeat(10))).toBe(true);
   });
 
+  it('drops a whole surrogate pair rather than splitting it when trimming the ring buffer', async () => {
+    const { service, harness } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    const emoji = '😀'; // U+1F600 — a high + low UTF-16 surrogate pair
+    harness.handles[0]!.emitData(emoji);
+    harness.handles[0]!.emitData('b'.repeat(200 * 1024 - 1));
+    const buffer = service.recentOutput(session.id);
+    expect(buffer).not.toMatch(/^[\uDC00-\uDFFF]/);
+    expect(buffer).toBe('b'.repeat(200 * 1024 - 1));
+  });
+
   it('close awaits the harness exiting before resolving, without escalating when it exits promptly', async () => {
     const { service, harness } = setup();
     const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
