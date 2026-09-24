@@ -4,6 +4,17 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import type { EventBus } from '../events/eventBus.js';
 import type { SessionService } from '../sessions/sessionService.js';
 
+interface ClientMessage { type: string; sessionId: string; data?: string; cols?: number; rows?: number }
+
+function parseClientMessage(raw: unknown): ClientMessage | undefined {
+  try {
+    return JSON.parse(String(raw)) as ClientMessage;
+  } catch {
+    console.error('ws: ignoring malformed client frame');
+    return undefined;
+  }
+}
+
 export function createWsHandler(deps: { bus: EventBus; sessions: SessionService; adminToken: string }) {
   const wss = new WebSocketServer({ noServer: true });
   deps.bus.subscribe((event) => {
@@ -12,7 +23,8 @@ export function createWsHandler(deps: { bus: EventBus; sessions: SessionService;
   });
   wss.on('connection', (socket: WebSocket) => {
     socket.on('message', (raw) => {
-      const message = JSON.parse(String(raw)) as { type: string; sessionId: string; data?: string; cols?: number; rows?: number };
+      const message = parseClientMessage(raw);
+      if (!message) return;
       if (message.type === 'input' && message.data !== undefined) deps.sessions.writeRaw(message.sessionId, message.data);
       if (message.type === 'resize' && message.cols && message.rows) deps.sessions.resize(message.sessionId, message.cols, message.rows);
     });

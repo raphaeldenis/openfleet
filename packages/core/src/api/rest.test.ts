@@ -114,4 +114,14 @@ describe('REST', () => {
     expect(JSON.parse(await first).type).toBe('session.created');
     ws.close();
   });
+
+  it('ignores a malformed websocket frame instead of crashing the daemon', async () => {
+    const ws = new WebSocket(`${server.url.replace('http', 'ws')}/ws?token=admin`);
+    await new Promise((r) => ws.addEventListener('open', r, { once: true }));
+    ws.send('not json');
+    await new Promise((r) => setTimeout(r, 50));
+    const res = await api('/api/sessions');
+    expect(res.status).toBe(200);
+    ws.close();
+  });
 });
