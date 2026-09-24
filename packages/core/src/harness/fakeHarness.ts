@@ -2,6 +2,7 @@ import type { Harness, HarnessHandle, HarnessLaunch } from './harness.js';
 
 export class FakeHandle implements HarnessHandle {
   readonly written: string[] = [];
+  readonly resizes: { cols: number; rows: number }[] = [];
   private dataListeners: ((d: string) => void)[] = [];
   private exitListeners: ((c: number) => void)[] = [];
   killed = false;
@@ -10,7 +11,7 @@ export class FakeHandle implements HarnessHandle {
   ignoresGracefulKill = false;
 
   write(data: string): void { this.written.push(data); }
-  resize(): void {}
+  resize(cols: number, rows: number): void { this.resizes.push({ cols, rows }); }
   kill(options?: { force?: boolean }): void {
     this.killed = true;
     if (options?.force) this.forceKilled = true;

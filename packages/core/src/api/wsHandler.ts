@@ -1,16 +1,27 @@
 import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import type { ServerEvent } from '@openfleet/shared';
+import { z } from 'zod';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { ApprovalService } from '../governance/approvalService.js';
 import type { EventBus } from '../events/eventBus.js';
 import type { SessionService } from '../sessions/sessionService.js';
 
-interface ClientMessage { type: string; sessionId: string; data?: string; cols?: number; rows?: number }
+const ClientMessageSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('input'), sessionId: z.string(), data: z.string() }),
+  z.object({ type: z.literal('resize'), sessionId: z.string(), cols: z.number().int().positive(), rows: z.number().int().positive() }),
+  z.object({ type: z.literal('attach'), sessionId: z.string() }),
+]);
+type ClientMessage = z.infer<typeof ClientMessageSchema>;
 
 function parseClientMessage(raw: unknown): ClientMessage | undefined {
   try {
-    return JSON.parse(String(raw)) as ClientMessage;
+    const parsed = ClientMessageSchema.safeParse(JSON.parse(String(raw)));
+    if (!parsed.success) {
+      console.error('ws: ignoring invalid client message', parsed.error.message);
+      return undefined;
+    }
+    return parsed.data;
   } catch {
     console.error('ws: ignoring malformed client frame');
     return undefined;
@@ -19,6 +30,14 @@ function parseClientMessage(raw: unknown): ClientMessage | undefined {
 
 function send(socket: WebSocket, event: ServerEvent): void {
   socket.send(JSON.stringify(event));
+}
+
+function handleClientMessage(socket: WebSocket, message: ClientMessage, deps: { sessions: SessionService }): void {
+  switch (message.type) {
+    case 'input': return deps.sessions.writeRaw(message.sessionId, message.data);
+    case 'resize': return deps.sessions.resize(message.sessionId, message.cols, message.rows);
+    case 'attach': return send(socket, { type: 'session.replay', sessionId: message.sessionId, data: deps.sessions.recentOutput(message.sessionId) });
+  }
 }
 
 export function createWsHandler(deps: { bus: EventBus; sessions: SessionService; approvals: ApprovalService; adminToken: string }) {
@@ -34,9 +53,11 @@ export function createWsHandler(deps: { bus: EventBus; sessions: SessionService;
     socket.on('message', (raw) => {
       const message = parseClientMessage(raw);
       if (!message) return;
-      if (message.type === 'input' && message.data !== undefined) deps.sessions.writeRaw(message.sessionId, message.data);
-      if (message.type === 'resize' && message.cols && message.rows) deps.sessions.resize(message.sessionId, message.cols, message.rows);
-      if (message.type === 'attach') send(socket, { type: 'session.replay', sessionId: message.sessionId, data: deps.sessions.recentOutput(message.sessionId) });
+      try {
+        handleClientMessage(socket, message, deps);
+      } catch (error) {
+        console.error('ws: error handling client message', error);
+      }
     });
   });
 

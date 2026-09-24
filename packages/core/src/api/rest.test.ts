@@ -167,4 +167,26 @@ describe('REST', () => {
     expect(res.status).toBe(200);
     ws.close();
   });
+
+  it('ignores a resize message with non-positive dimensions instead of applying it', async () => {
+    const session = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
+    const ws = new WebSocket(`${server.url.replace('http', 'ws')}/ws?token=admin`);
+    await new Promise((r) => ws.addEventListener('message', r, { once: true })); // wait past the snapshot
+    ws.send(JSON.stringify({ type: 'resize', sessionId: session.id, cols: -1, rows: 10 }));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(harness.handles[0]!.resizes).toEqual([]);
+    const res = await api('/api/sessions');
+    expect(res.status).toBe(200);
+    ws.close();
+  });
+
+  it('ignores an attach message with a missing sessionId instead of crashing', async () => {
+    const ws = new WebSocket(`${server.url.replace('http', 'ws')}/ws?token=admin`);
+    await new Promise((r) => ws.addEventListener('message', r, { once: true })); // wait past the snapshot
+    ws.send(JSON.stringify({ type: 'attach' }));
+    await new Promise((r) => setTimeout(r, 50));
+    const res = await api('/api/sessions');
+    expect(res.status).toBe(200);
+    ws.close();
+  });
 });
