@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
 const run = promisify(execFile);
@@ -38,5 +38,19 @@ async function gitSucceeds(cwd: string, args: string[]): Promise<boolean> {
     return true;
   } catch {
     return false;
+  }
+}
+
+export async function sameGitRepository(pathA: string, pathB: string): Promise<boolean> {
+  const [commonDirA, commonDirB] = await Promise.all([gitCommonDir(pathA), gitCommonDir(pathB)]);
+  return commonDirA !== undefined && commonDirA === commonDirB;
+}
+
+async function gitCommonDir(cwd: string): Promise<string | undefined> {
+  try {
+    const { stdout } = await run('git', ['rev-parse', '--git-common-dir'], { cwd });
+    return resolve(cwd, stdout.trim());
+  } catch {
+    return undefined;
   }
 }

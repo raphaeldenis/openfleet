@@ -3,7 +3,7 @@ import { mkdtempSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { createWorktree, WorktreeError } from './worktrees.js';
+import { createWorktree, sameGitRepository, WorktreeError } from './worktrees.js';
 
 function makeRepo(): string {
   const dir = mkdtempSync(join(tmpdir(), 'of-repo-'));
@@ -39,5 +39,26 @@ describe('createWorktree', () => {
     const repoPath = makeRepo();
     const worktreesRoot = mkdtempSync(join(tmpdir(), 'of-wt-'));
     await expect(createWorktree({ repoPath, branchName: '--upload-pack', worktreesRoot })).rejects.toMatchObject({ code: 'invalid_branch' });
+  });
+});
+
+describe('sameGitRepository', () => {
+  it('is true for two directories inside the same repository', async () => {
+    const repoPath = makeRepo();
+    const subdir = join(repoPath, 'sub');
+    execFileSync('mkdir', [subdir]);
+    await expect(sameGitRepository(repoPath, subdir)).resolves.toBe(true);
+  });
+
+  it('is false for two unrelated repositories', async () => {
+    const repoA = makeRepo();
+    const repoB = makeRepo();
+    await expect(sameGitRepository(repoA, repoB)).resolves.toBe(false);
+  });
+
+  it('is false when either path is not a git repository', async () => {
+    const repoPath = makeRepo();
+    const notARepo = mkdtempSync(join(tmpdir(), 'of-not-a-repo-'));
+    await expect(sameGitRepository(repoPath, notARepo)).resolves.toBe(false);
   });
 });

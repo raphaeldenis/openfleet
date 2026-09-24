@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { Session } from '@openfleet/shared';
 import { z } from 'zod';
-import { createWorktree } from '../git/worktrees.js';
+import { createWorktree, sameGitRepository } from '../git/worktrees.js';
 import type { SessionService } from '../sessions/sessionService.js';
 
 const ok = (payload: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(payload) }] });
@@ -34,6 +34,8 @@ export function registerTools(server: McpServer, deps: { sessions: SessionServic
 
   server.registerTool('create_worktree', { description: 'Create an isolated git worktree for a task', inputSchema: { repo_path: z.string(), branch_name: z.string() } }, async ({ repo_path, branch_name }) => {
     try {
+      const isCallersOwnRepo = await sameGitRepository(caller.directory, repo_path);
+      if (!isCallersOwnRepo) return fail('repo_path must be the git repository of your own session directory');
       return ok(await createWorktree({ repoPath: repo_path, branchName: branch_name, worktreesRoot: deps.worktreesRoot }));
     } catch (error) {
       return fail((error as Error).message);

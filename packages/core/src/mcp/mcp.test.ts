@@ -1,5 +1,10 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { startServer } from '../api/server.js';
 import { openDatabase } from '../db/database.js';
@@ -8,6 +13,13 @@ import { ApprovalService } from '../governance/approvalService.js';
 import { FakeHarness } from '../harness/fakeHarness.js';
 import { SessionService } from '../sessions/sessionService.js';
 import { createMcpHandler } from './mcpServer.js';
+
+function makeRepo(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'of-repo-'));
+  execFileSync('git', ['init', '-b', 'main'], { cwd: dir });
+  execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '--allow-empty', '-m', 'init'], { cwd: dir });
+  return dir;
+}
 
 let server: Awaited<ReturnType<typeof startServer>>;
 let sessions: SessionService;
@@ -74,5 +86,28 @@ describe('MCP', () => {
     const parent = await connect(parentToken);
     const result = await parent.callTool({ name: 'send_session_message', arguments: { target_uuid: stranger.id, body: 'hi' } });
     expect(result.isError).toBe(true);
+  });
+
+  it('create_worktree rejects a repo_path outside the caller\'s own repository', async () => {
+    const ownRepo = makeRepo();
+    const foreignRepo = makeRepo();
+    const parent = await connect(parentToken);
+    text(await parent.callTool({ name: 'create_session', arguments: { directory: ownRepo, name: 'Builder' } }));
+    const builderToken = harness.launches[1]!.mcpToken;
+    const builder = await connect(builderToken);
+
+    const rejected = await builder.callTool({ name: 'create_worktree', arguments: { repo_path: foreignRepo, branch_name: `task/${randomUUID()}` } });
+    expect(rejected.isError).toBe(true);
+  });
+
+  it('create_worktree allows a repo_path inside the caller\'s own repository', async () => {
+    const ownRepo = makeRepo();
+    const parent = await connect(parentToken);
+    text(await parent.callTool({ name: 'create_session', arguments: { directory: ownRepo, name: 'Builder' } }));
+    const builderToken = harness.launches[1]!.mcpToken;
+    const builder = await connect(builderToken);
+
+    const allowed = await builder.callTool({ name: 'create_worktree', arguments: { repo_path: ownRepo, branch_name: `task/${randomUUID()}` } });
+    expect(allowed.isError).toBeFalsy();
   });
 });
