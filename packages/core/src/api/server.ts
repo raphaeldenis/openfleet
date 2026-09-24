@@ -15,9 +15,14 @@ export interface ServerDeps {
   mcp?: (req: IncomingMessage, res: ServerResponse, body: unknown) => Promise<void>;
 }
 
+// The desktop shell's own origins: the Angular dev server (also the e2e baseURL), and the Tauri webview
+// in both its dev and packaged forms. Any other Origin gets no CORS headers, so a page in Raphaël's
+// everyday browser can't use his admin token even if it somehow read it.
+const ALLOWED_ORIGINS = new Set(['http://localhost:1420', 'tauri://localhost', 'http://tauri.localhost']);
+
 function applyCorsHeaders(req: IncomingMessage, res: ServerResponse): void {
   const origin = req.headers.origin;
-  if (!origin) return;
+  if (!origin || !ALLOWED_ORIGINS.has(origin)) return;
   res.setHeader('Access-Control-Allow-Origin', origin);
   res.setHeader('Access-Control-Allow-Headers', 'authorization, content-type');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');

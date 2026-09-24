@@ -38,9 +38,14 @@ describe('REST', () => {
     expect(res.headers.get('access-control-allow-headers')).toContain('authorization');
   });
 
-  it('echoes the request origin on real responses so the browser accepts the fetch', async () => {
+  it('allows the desktop shell origin on real responses so the browser accepts the fetch', async () => {
     const res = await fetch(`${server.url}/api/sessions`, { headers: { authorization: 'Bearer admin', origin: 'http://localhost:1420' } });
     expect(res.headers.get('access-control-allow-origin')).toBe('http://localhost:1420');
+  });
+
+  it('sends no CORS headers for an origin outside the allowlist', async () => {
+    const res = await fetch(`${server.url}/api/sessions`, { headers: { authorization: 'Bearer admin', origin: 'http://evil.example' } });
+    expect(res.headers.get('access-control-allow-origin')).toBeNull();
   });
 
   it('rejects a missing bearer token', async () => {
