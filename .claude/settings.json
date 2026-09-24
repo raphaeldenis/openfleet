@@ -14,5 +14,19 @@
       "mcp__playwright-qa__*",
       "mcp__repowise__*"
     ]
+  },
+  "hooks": {
+    "PermissionRequest": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/auto-approve.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
   }
 }
