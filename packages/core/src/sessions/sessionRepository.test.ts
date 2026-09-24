@@ -38,4 +38,32 @@ describe('SessionRepository', () => {
     repo.setModel('s1', 'claude-opus-5-5');
     expect(repo.get('s1')!.model).toBe('claude-opus-5-5');
   });
+
+  it('does nothing when updating the model of an unknown session', () => {
+    const db = openDatabase(':memory:');
+    const repo = new SessionRepository(db);
+    repo.insert(baseRow);
+
+    expect(() => repo.setModel('nope', 'claude-opus-5-5')).not.toThrow();
+
+    expect(repo.get('s1')!.model).toBeUndefined();
+  });
+
+  it('returns permissionMode for every session in list(), not just get()', () => {
+    const db = openDatabase(':memory:');
+    const repo = new SessionRepository(db);
+    repo.insert({ ...baseRow, permission_mode: 'plan' });
+
+    const [session] = repo.list();
+
+    expect(session!.permissionMode).toBe('plan');
+  });
+
+  it('reads back whatever string was stored, even one outside the known permission modes', () => {
+    const db = openDatabase(':memory:');
+    const repo = new SessionRepository(db);
+    repo.insert({ ...baseRow, permission_mode: 'not-a-real-mode' as never });
+
+    expect(repo.get('s1')!.permissionMode).toBe('not-a-real-mode');
+  });
 });

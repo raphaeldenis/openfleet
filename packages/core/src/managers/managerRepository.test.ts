@@ -39,4 +39,43 @@ describe('ManagerRepository', () => {
     repo.setLastPulseAt('s1', 't1');
     expect(repo.get('s1')!.lastPulseAt).toBe('t1');
   });
+
+  it('returns an empty array when no manager exists', () => {
+    const db = openDatabase(':memory:');
+    expect(new ManagerRepository(db).list()).toEqual([]);
+  });
+
+  it('rejects a manager record for a session that does not exist', () => {
+    const db = openDatabase(':memory:');
+    const repo = new ManagerRepository(db);
+    expect(() => repo.insert({ sessionId: 'ghost', pulseSeconds: 60, childrenCap: 1, missionText: 'a', createdAt: 't0' })).toThrow();
+  });
+
+  it('rejects a second manager record for the same session', () => {
+    const db = openDatabase(':memory:');
+    insertSession(db, 's1');
+    const repo = new ManagerRepository(db);
+    repo.insert({ sessionId: 's1', pulseSeconds: 60, childrenCap: 1, missionText: 'a', createdAt: 't0' });
+    expect(() => repo.insert({ sessionId: 's1', pulseSeconds: 90, childrenCap: 2, missionText: 'b', createdAt: 't1' })).toThrow();
+  });
+
+  it('rejects a non-integer pulse_seconds under the STRICT table', () => {
+    const db = openDatabase(':memory:');
+    insertSession(db, 's1');
+    const repo = new ManagerRepository(db);
+    expect(() =>
+      repo.insert({ sessionId: 's1', pulseSeconds: 'soon' as never, childrenCap: 1, missionText: 'a', createdAt: 't0' }),
+    ).toThrow();
+  });
+
+  it('does nothing when setting the last pulse time on an unknown session', () => {
+    const db = openDatabase(':memory:');
+    insertSession(db, 's1');
+    const repo = new ManagerRepository(db);
+    repo.insert({ sessionId: 's1', pulseSeconds: 60, childrenCap: 1, missionText: 'a', createdAt: 't0' });
+
+    expect(() => repo.setLastPulseAt('nope', 't1')).not.toThrow();
+
+    expect(repo.get('s1')!.lastPulseAt).toBeUndefined();
+  });
 });

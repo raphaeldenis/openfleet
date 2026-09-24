@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { openDatabase } from './database.js';
+import { applyMigrations } from './migrate.js';
 
 describe('openDatabase', () => {
   it('creates the schema and records applied migrations', () => {
@@ -13,6 +14,14 @@ describe('openDatabase', () => {
   it('is idempotent', () => {
     const db = openDatabase(':memory:');
     expect(() => openDatabase(':memory:')).not.toThrow();
+    expect(db.prepare('SELECT count(*) AS n FROM schema_migrations').get()).toEqual({ n: 2 });
+  });
+
+  it('does not re-apply an already-applied migration to the same connection', () => {
+    const db = openDatabase(':memory:');
+
+    expect(() => applyMigrations(db)).not.toThrow();
+
     expect(db.prepare('SELECT count(*) AS n FROM schema_migrations').get()).toEqual({ n: 2 });
   });
 });
