@@ -5,7 +5,7 @@ import type { DatabaseSync } from 'node:sqlite';
 
 const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), 'migrations');
 
-export interface MigrationSource {
+interface MigrationSource {
   version: string;
   sql: string;
 }
@@ -17,8 +17,8 @@ function readMigrationSources(dir: string): MigrationSource[] {
     .map((file) => ({ version: file.replace(/\.sql$/, ''), sql: readFileSync(join(dir, file), 'utf8') }));
 }
 
-// ponytail: sources defaults to the real migrations directory; tests inject a list directly to
-// exercise a failing statement without writing fixture files to disk.
+// ponytail: `sources` exists only so tests can inject a broken migration; the default reads
+// migrations/*.sql. Upgrade: a MigrationSource provider if a second real source ever appears.
 export function applyMigrations(db: DatabaseSync, sources: MigrationSource[] = readMigrationSources(migrationsDir)): void {
   db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY, applied_at TEXT NOT NULL)`);
   const applied = new Set((db.prepare('SELECT version FROM schema_migrations').all() as { version: string }[]).map((r) => r.version));

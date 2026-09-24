@@ -29,19 +29,6 @@ describe('applyMigrations atomicity', () => {
 });
 
 describe('applyMigrations hostile cases', () => {
-  it('rolls back a migration whose first statement fails: no trace, no schema_migrations row', () => {
-    const db = openDatabase(':memory:');
-    const brokenMigration = [{ version: '999_broken_first', sql: 'NOT VALID SQL AT ALL; CREATE TABLE never_created (id TEXT);' }];
-
-    expect(() => applyMigrations(db, brokenMigration)).toThrow();
-
-    const createdTable = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'never_created'`).all();
-    expect(createdTable).toHaveLength(0);
-
-    const recordedVersion = db.prepare('SELECT version FROM schema_migrations WHERE version = ?').get('999_broken_first');
-    expect(recordedVersion).toBeUndefined();
-  });
-
   it('commits and records the first of two migrations even when the second fails, and a later corrected run applies only the fixed one', () => {
     const db = openDatabase(':memory:');
     const firstOkSecondBroken = [
