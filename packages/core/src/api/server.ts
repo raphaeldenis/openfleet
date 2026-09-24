@@ -39,6 +39,9 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; clos
   const port = typeof address === 'object' && address ? address.port : deps.port;
   return {
     url: `http://${deps.host}:${port}`,
-    close: () => new Promise((resolve) => server.close(() => resolve())),
+    close: () => {
+      server.closeAllConnections();
+      return new Promise((resolve) => server.close(() => resolve()));
+    },
   };
 }
