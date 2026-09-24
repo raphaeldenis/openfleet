@@ -49,7 +49,8 @@ export function createWsHandler(deps: { bus: EventBus; sessions: SessionService;
   wss.on('connection', (socket: WebSocket) => {
     // Sent synchronously, before any broadcast event can reach this socket, so the client always has a
     // baseline to upsert onto — a session created in the connect/open race just arrives twice, harmlessly.
-    send(socket, { type: 'snapshot', sessions: deps.sessions.list(), approvals: deps.approvals.listPending() });
+    // ponytail: empty until ManagerService lands (phase 2 Task 6)
+    send(socket, { type: 'snapshot', sessions: deps.sessions.list(), approvals: deps.approvals.listPending(), managers: [] });
     socket.on('message', (raw) => {
       const message = parseClientMessage(raw);
       if (!message) return;
