@@ -7,12 +7,12 @@ describe('openDatabase', () => {
     const tables = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' ORDER BY name`).all() as { name: string }[];
     expect(tables.map((t) => t.name)).toEqual(expect.arrayContaining(['sessions', 'message_queue', 'approvals', 'schema_migrations']));
     const applied = db.prepare('SELECT version FROM schema_migrations').all();
-    expect(applied).toHaveLength(1);
+    expect(applied).toHaveLength(2);
   });
 
   it('is idempotent', () => {
     const db = openDatabase(':memory:');
     expect(() => openDatabase(':memory:')).not.toThrow();
-    expect(db.prepare('SELECT count(*) AS n FROM schema_migrations').get()).toEqual({ n: 1 });
+    expect(db.prepare('SELECT count(*) AS n FROM schema_migrations').get()).toEqual({ n: 2 });
   });
 });
