@@ -316,12 +316,12 @@ describe('SessionService resume', () => {
     expect(restartHarness.launches[0]!.permissionMode).toBe('plan');
   });
 
-  // HOSTILE — PERMISSION_MODES (packages/shared/src/session.ts) does not include 'manual' yet (P2-T06b,
-  // Amendment A1, has not landed on this branch). A row already carrying the literal 'manual' — which is
-  // exactly what a session will look like the moment P2-T06b lands and writes 'manual' as the default —
-  // is unreachable through the typed public API, so this reaches into the DB directly the way the
-  // "unrecognized" test above already does. Pins current (surprising) behaviour; see QE report finding.
-  it('HOSTILE: a stored "manual" permission_mode is currently treated as unrecognized, not preserved', async () => {
+  // PERMISSION_MODES (packages/shared/src/session.ts) does not include 'manual' yet (P2-T06b, Amendment
+  // A1, has not landed on this branch). A row already carrying the literal 'manual' — which is exactly
+  // what a session will look like the moment P2-T06b lands and writes 'manual' as the default — is
+  // unreachable through the typed public API, so this reaches into the DB directly the way the
+  // "unrecognized" test above already does.
+  it('a stored "manual" permission_mode resumes as "manual"', async () => {
     const db = openDatabase(':memory:');
     const bus = new EventBus();
     const firstRunHarness = new FakeHarness();
@@ -334,10 +334,8 @@ describe('SessionService resume', () => {
     const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
     await restarted.resumeAll();
 
-    // Pinning the current defect: a 'manual' row is silently downgraded to no --permission-mode at all,
-    // with a console.warn, instead of resuming with 'manual' as intended by Amendment A2 item 2.
-    expect(restartHarness.launches[0]!.permissionMode).toBeUndefined();
-    expect(warn).toHaveBeenCalledTimes(1);
+    expect(restartHarness.launches[0]!.permissionMode).toBe('manual');
+    expect(warn).not.toHaveBeenCalled();
     warn.mockRestore();
   });
 
@@ -404,12 +402,7 @@ describe('SessionService resume', () => {
     expect(staleHandle.killed).toBe(false);
   });
 
-  // HOSTILE — Review Focus #2 and the plan's own "stale process" test only ever call resumeAll() once
-  // per instance. Nothing guards against calling it twice on the SAME instance (e.g. a daemon boot path
-  // that accidentally awaits resumeAll() from two different init branches), which is exactly the "spawn
-  // two claude processes per session" scenario the QE brief calls out as a major severity risk if it
-  // reproduces. Pins actual behaviour; see QE report finding.
-  it('HOSTILE: calling resumeAll twice on the same instance double-launches a still-starting session', async () => {
+  it('calling resumeAll twice launches each session once', async () => {
     const db = openDatabase(':memory:');
     const bus = new EventBus();
     const firstRunHarness = new FakeHarness();
@@ -421,9 +414,7 @@ describe('SessionService resume', () => {
     await restarted.resumeAll();
     await restarted.resumeAll();
 
-    // Documents the current defect: a second resumeAll() call finds the same session still 'starting'
-    // (not 'closed') and launches a second harness process for it instead of skipping an in-flight resume.
-    expect(restartHarness.launches).toHaveLength(2);
+    expect(restartHarness.launches).toHaveLength(1);
   });
 
   it('a message queued before the restart, while the session was not deliverable, is delivered to the resumed handle once it goes idle again', async () => {

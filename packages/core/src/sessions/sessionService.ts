@@ -16,6 +16,9 @@ const DEFAULT_RESUME_TIMEOUT_MS = 15_000;
 export const RESUME_TIMEOUT_EXIT_CODE = -1;
 export const RESUME_LAUNCH_FAILED_EXIT_CODE = -2;
 
+// ponytail: 'manual' joins the shared enum in P2-T06b; drop the union then.
+const RESUMABLE_PERMISSION_MODES = new Set<string>([...PERMISSION_MODES, 'manual']);
+
 // ponytail: main.ts constructs exactly one SessionService per real daemon process — this module-level
 // map (rather than an instance field) is what lets a freshly resumed handle outrank a stale pre-restart
 // process's onExit even when a test briefly runs two instances over the same db to simulate the restart
@@ -148,6 +151,7 @@ export class SessionService {
   async resumeAll(): Promise<void> {
     for (const session of this.repo.list()) {
       if (session.state === 'closed') continue;
+      if (this.handles.has(session.id)) continue; // already resumed by an earlier resumeAll() on this instance
       this.resumeOne(session);
     }
   }
@@ -223,13 +227,8 @@ export class SessionService {
   private resolveResumePermissionMode(session: Session): PermissionMode | undefined {
     const stored = session.permissionMode;
     if (stored === undefined) return undefined;
-    if (stored === 'default') {
-      // ponytail: 'manual' is the ask-before-acting mode Amendment A1 (P2-T06b) renames 'default' to;
-      // until PERMISSION_MODES includes it, this cast is the only way to carry that intent through a
-      // resume — remove the cast once P2-T06b lands.
-      return 'manual' as PermissionMode;
-    }
-    if ((PERMISSION_MODES as readonly string[]).includes(stored)) return stored;
+    if (stored === 'default') return 'manual' as PermissionMode;
+    if (RESUMABLE_PERMISSION_MODES.has(stored)) return stored as PermissionMode;
     console.warn(`resumeOne: session ${session.id} has an unrecognized permission_mode "${stored}", resuming without --permission-mode`);
     return undefined;
   }
