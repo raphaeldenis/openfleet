@@ -2,7 +2,6 @@ import { Component, effect, ElementRef, inject, input, OnDestroy, viewChild } fr
 import { FitAddon } from '@xterm/addon-fit';
 import { Terminal } from '@xterm/xterm';
 import type { Subscription } from 'rxjs';
-import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
 
 @Component({
@@ -14,7 +13,6 @@ export class TerminalComponent implements OnDestroy {
   readonly sessionId = input.required<string>();
   private readonly host = viewChild.required<ElementRef<HTMLDivElement>>('host');
   private readonly events = inject(FleetEventsService);
-  private readonly api = inject(FleetApiService);
   terminal?: Terminal;
   private outputSub?: Subscription;
   private readonly fit = new FitAddon();
@@ -36,13 +34,16 @@ export class TerminalComponent implements OnDestroy {
     this.terminal = terminal;
     this.resizeObserver.observe(this.host().nativeElement);
     this.refit();
-    void this.replayRecentOutput(sessionId, terminal);
-  }
 
-  private async replayRecentOutput(sessionId: string, terminal: Terminal): Promise<void> {
-    const { output } = await this.api.recentOutput(sessionId);
-    if (output) terminal.write(output);
-    this.outputSub = this.events.output(sessionId).subscribe((data) => terminal.write(data));
+    // Subscribe before requesting attach: the daemon answers on the same ordered channel as live
+    // output (replay first, then live), so subscribing first guarantees nothing is missed — no async
+    // gap where a session switch could interleave and leave two subscriptions or write to a disposed
+    // terminal (the bug this replaced: a REST fetch for replay, raced against the effect re-running).
+    this.outputSub = this.events.output(sessionId).subscribe((data) => {
+      if (this.sessionId() !== sessionId) return;
+      terminal.write(data);
+    });
+    this.events.sendAttach(sessionId);
   }
 
   private refit(): void {

@@ -117,13 +117,45 @@ describe('REST', () => {
     expect(res.status).toBe(404);
   });
 
-  it('streams events over websocket', async () => {
+  it('sends a snapshot first, then streams live events', async () => {
     const ws = new WebSocket(`${server.url.replace('http', 'ws')}/ws?token=admin`);
-    const first = new Promise<string>((resolve) => ws.addEventListener('message', (m) => resolve(String(m.data)), { once: true }));
-    await new Promise((r) => ws.addEventListener('open', r, { once: true }));
+    const nextMessage = () => new Promise<string>((resolve) => ws.addEventListener('message', (m) => resolve(String(m.data)), { once: true }));
+
+    expect(JSON.parse(await nextMessage())).toEqual({ type: 'snapshot', sessions: [], approvals: [] });
+
+    const secondMessage = nextMessage();
     await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) });
-    expect(JSON.parse(await first).type).toBe('session.created');
+    expect(JSON.parse(await secondMessage).type).toBe('session.created');
     ws.close();
+  });
+
+  it('snapshot reflects sessions and approvals that already existed before connecting', async () => {
+    const created = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
+    const ws = new WebSocket(`${server.url.replace('http', 'ws')}/ws?token=admin`);
+    const snapshot = JSON.parse(await new Promise<string>((resolve) => ws.addEventListener('message', (m) => resolve(String(m.data)), { once: true })));
+    expect(snapshot.sessions.map((s: { id: string }) => s.id)).toEqual([created.id]);
+    ws.close();
+  });
+
+  it('answers attach with a replay of recent output, addressed only to the requesting socket', async () => {
+    const session = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
+    harness.handles[0]!.emitData('hello from pty');
+
+    const requester = new WebSocket(`${server.url.replace('http', 'ws')}/ws?token=admin`);
+    const bystander = new WebSocket(`${server.url.replace('http', 'ws')}/ws?token=admin`);
+    await Promise.all([requester, bystander].map((ws) => new Promise((r) => ws.addEventListener('message', r, { once: true })))); // wait past each socket's snapshot
+
+    const bystanderSawReplay = new Promise<boolean>((resolve) => {
+      bystander.addEventListener('message', (m) => resolve(JSON.parse(String(m.data)).type === 'session.replay'));
+    });
+    const replay = new Promise<string>((resolve) => requester.addEventListener('message', (m) => resolve(String(m.data)), { once: true }));
+    requester.send(JSON.stringify({ type: 'attach', sessionId: session.id }));
+
+    expect(JSON.parse(await replay)).toEqual({ type: 'session.replay', sessionId: session.id, data: 'hello from pty' });
+    const raceResult = await Promise.race([bystanderSawReplay, new Promise((r) => setTimeout(() => r('no-message'), 100))]);
+    expect(raceResult).not.toBe(true);
+    requester.close();
+    bystander.close();
   });
 
   it('ignores a malformed websocket frame instead of crashing the daemon', async () => {

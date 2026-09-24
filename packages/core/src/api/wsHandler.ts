@@ -1,6 +1,8 @@
 import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
+import type { ServerEvent } from '@openfleet/shared';
 import { WebSocketServer, type WebSocket } from 'ws';
+import type { ApprovalService } from '../governance/approvalService.js';
 import type { EventBus } from '../events/eventBus.js';
 import type { SessionService } from '../sessions/sessionService.js';
 
@@ -15,18 +17,26 @@ function parseClientMessage(raw: unknown): ClientMessage | undefined {
   }
 }
 
-export function createWsHandler(deps: { bus: EventBus; sessions: SessionService; adminToken: string }) {
+function send(socket: WebSocket, event: ServerEvent): void {
+  socket.send(JSON.stringify(event));
+}
+
+export function createWsHandler(deps: { bus: EventBus; sessions: SessionService; approvals: ApprovalService; adminToken: string }) {
   const wss = new WebSocketServer({ noServer: true });
   deps.bus.subscribe((event) => {
     const payload = JSON.stringify(event);
     for (const client of wss.clients) if (client.readyState === client.OPEN) client.send(payload);
   });
   wss.on('connection', (socket: WebSocket) => {
+    // Sent synchronously, before any broadcast event can reach this socket, so the client always has a
+    // baseline to upsert onto — a session created in the connect/open race just arrives twice, harmlessly.
+    send(socket, { type: 'snapshot', sessions: deps.sessions.list(), approvals: deps.approvals.listPending() });
     socket.on('message', (raw) => {
       const message = parseClientMessage(raw);
       if (!message) return;
       if (message.type === 'input' && message.data !== undefined) deps.sessions.writeRaw(message.sessionId, message.data);
       if (message.type === 'resize' && message.cols && message.rows) deps.sessions.resize(message.sessionId, message.cols, message.rows);
+      if (message.type === 'attach') send(socket, { type: 'session.replay', sessionId: message.sessionId, data: deps.sessions.recentOutput(message.sessionId) });
     });
   });
 
