@@ -37,6 +37,19 @@ describe('POST /hooks/:token', () => {
     expect(await res.json()).toEqual({});
   });
 
+  it('answers an unknown token without reading the body, even when it is huge', async () => {
+    const oversizedBody = { session_id: 'c', hook_event_name: 'Stop', pad: 'x'.repeat(2 * 1024 * 1024) };
+    const res = await post('/hooks/nope', oversizedBody);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({});
+  });
+
+  it('rejects a body over 1 MiB for a known token with 413', async () => {
+    const oversizedBody = { session_id: 'c', hook_event_name: 'Stop', pad: 'x'.repeat(2 * 1024 * 1024) };
+    const res = await post(`/hooks/${hookToken}`, oversizedBody);
+    expect(res.status).toBe(413);
+  });
+
   it('PermissionRequest waits for the decision and answers allow', async () => {
     const pending = post(`/hooks/${hookToken}`, { session_id: 'c', hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'ls' } });
     await new Promise((r) => setTimeout(r, 20));

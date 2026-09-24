@@ -45,6 +45,18 @@ describe('MCP', () => {
     await expect(connect('nope')).rejects.toThrow();
   });
 
+  it('rejects an unauthorized request without reading the body, even when it is huge', async () => {
+    const oversizedBody = JSON.stringify({ jsonrpc: '2.0', method: 'x', params: { pad: 'x'.repeat(2 * 1024 * 1024) }, id: 1 });
+    const res = await fetch(`${server.url}/mcp`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer nope' }, body: oversizedBody });
+    expect(res.status).toBe(401);
+  });
+
+  it('rejects an authorized request body over 1 MiB with 413', async () => {
+    const oversizedBody = JSON.stringify({ jsonrpc: '2.0', method: 'x', params: { pad: 'x'.repeat(2 * 1024 * 1024) }, id: 1 });
+    const res = await fetch(`${server.url}/mcp`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${parentToken}` }, body: oversizedBody });
+    expect(res.status).toBe(413);
+  });
+
   it('creates a child that inherits harness and can message its parent', async () => {
     const parent = await connect(parentToken);
     const created = text(await parent.callTool({ name: 'create_session', arguments: { directory: '/tmp', name: 'Gimli', emoji: '⚔️' } }));

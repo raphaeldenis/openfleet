@@ -48,6 +48,12 @@ describe('REST', () => {
     expect(res.status).toBe(401);
   });
 
+  it('rejects a body over 1 MiB on a protected route with 413', async () => {
+    const oversizedBody = JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake', pad: 'x'.repeat(2 * 1024 * 1024) });
+    const res = await api('/api/sessions', { method: 'POST', body: oversizedBody });
+    expect(res.status).toBe(413);
+  });
+
   it('creates and lists sessions', async () => {
     const created = await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'Gimli', harness: 'fake' }) });
     expect(created.status).toBe(201);
