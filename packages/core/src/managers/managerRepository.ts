@@ -24,11 +24,8 @@ export class ManagerRepository {
   }
 
   insert(record: ManagerRecord): void {
-    this.db.prepare(`INSERT INTO managers (session_id, pulse_seconds, children_cap, mission_text, last_pulse_at, created_at)
-      VALUES (@session_id, @pulse_seconds, @children_cap, @mission_text, @last_pulse_at, @created_at)`).run({
-      session_id: record.sessionId, pulse_seconds: record.pulseSeconds, children_cap: record.childrenCap,
-      mission_text: record.missionText, last_pulse_at: record.lastPulseAt ?? null, created_at: record.createdAt,
-    } as never);
+    this.db.prepare('INSERT INTO managers (session_id, pulse_seconds, children_cap, mission_text, last_pulse_at, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(record.sessionId, record.pulseSeconds, record.childrenCap, record.missionText, record.lastPulseAt ?? null, record.createdAt);
   }
   get(sessionId: string): ManagerRecord | undefined {
     const row = this.db.prepare('SELECT * FROM managers WHERE session_id = ?').get(sessionId) as Row | undefined;

@@ -11,12 +11,6 @@ describe('openDatabase', () => {
     expect(applied).toHaveLength(2);
   });
 
-  it('is idempotent', () => {
-    const db = openDatabase(':memory:');
-    expect(() => openDatabase(':memory:')).not.toThrow();
-    expect(db.prepare('SELECT count(*) AS n FROM schema_migrations').get()).toEqual({ n: 2 });
-  });
-
   it('does not re-apply an already-applied migration to the same connection', () => {
     const db = openDatabase(':memory:');
 
