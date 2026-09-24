@@ -15,6 +15,13 @@ describe('nextState', () => {
     ['idle', hook({ hook_event_name: 'Notification', notification_type: 'idle_prompt' }), 'idle'],
     ['generating', { kind: 'harness_exit' }, 'closed'],
     ['closed', hook({ hook_event_name: 'Stop' }), 'closed'],
+    // A stray idle_prompt while a human decision is pending must not clear that pending state —
+    // observed live: Claude Code fires it during a long-open permission dialog, and the daemon was
+    // wrongly showing the session as idle while an approval sat waiting in the inbox.
+    ['waiting_permission', hook({ hook_event_name: 'Notification', notification_type: 'idle_prompt' }), 'waiting_permission'],
+    ['waiting_input', hook({ hook_event_name: 'Notification', notification_type: 'idle_prompt' }), 'waiting_input'],
+    ['waiting_permission', hook({ hook_event_name: 'Stop' }), 'idle'],
+    ['waiting_permission', hook({ hook_event_name: 'UserPromptSubmit' }), 'generating'],
   ] as const)('%s + %o → %s', (from, input, expected) => {
     expect(nextState(from, input)).toBe(expected);
   });

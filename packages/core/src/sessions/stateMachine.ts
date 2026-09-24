@@ -28,8 +28,12 @@ function stateAfterHook(current: SessionState, event: ClaudeHookEvent): SessionS
 function stateAfterNotification(current: SessionState, notificationType: string): SessionState {
   if (notificationType === 'permission_prompt') return 'waiting_permission';
   if (notificationType === 'agent_needs_input') return 'waiting_input';
-  if (notificationType === 'idle_prompt') return 'idle';
+  if (notificationType === 'idle_prompt') return isWaitingOnHuman(current) ? current : 'idle';
   return current;
+}
+
+function isWaitingOnHuman(state: SessionState): boolean {
+  return state === 'waiting_permission' || state === 'waiting_input';
 }
 
 export function canDeliverNow(state: SessionState): boolean {
