@@ -1,4 +1,7 @@
 <div class="layout">
+  @if (!events.connected()) {
+    <div class="connection-lost" data-testid="connection-lost">Disconnected from the daemon — reconnecting…</div>
+  }
   <aside class="sidebar">
     <of-session-list (selected)="selectedId.set($event)" />
   </aside>

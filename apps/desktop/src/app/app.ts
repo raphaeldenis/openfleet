@@ -11,7 +11,7 @@ import { TerminalComponent } from './sessions/terminal.component';
   templateUrl: './app.html',
 })
 export class App {
-  private readonly events = inject(FleetEventsService);
+  protected readonly events = inject(FleetEventsService);
   protected readonly selectedId = signal<string | null>(null);
 
   constructor() {

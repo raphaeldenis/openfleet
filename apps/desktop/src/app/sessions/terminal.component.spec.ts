@@ -14,7 +14,7 @@ function fakeEventsService() {
     subjects.set(sessionId, subject);
     return subject;
   };
-  return { output, sendInput: vi.fn(), sendResize: vi.fn(), sendAttach: vi.fn(), sessions: signal([]), approvals: signal([]) };
+  return { output, sendInput: vi.fn(), sendResize: vi.fn(), sendAttach: vi.fn(), sessions: signal([]), approvals: signal([]), connected: signal(true), reconnectCount: signal(0) };
 }
 
 describe('TerminalComponent', () => {
@@ -75,5 +75,22 @@ describe('TerminalComponent', () => {
     await fixture.whenStable();
     expect(currentWriteSpy).toHaveBeenCalledTimes(1);
     expect(currentWriteSpy).toHaveBeenCalledWith('current live');
+  });
+
+  it('clears the terminal and re-attaches to the current session on reconnect', async () => {
+    const fake = fakeEventsService();
+    const { fixture } = await render(TerminalComponent, {
+      bindings: [inputBinding('sessionId', () => 's1')],
+      providers: [{ provide: FleetEventsService, useValue: fake }],
+    });
+    expect(fake.sendAttach).toHaveBeenCalledTimes(1);
+    const clearSpy = vi.spyOn(fixture.componentInstance.terminal!, 'clear');
+
+    fake.reconnectCount.set(1);
+    await fixture.whenStable();
+
+    expect(clearSpy).toHaveBeenCalledTimes(1);
+    expect(fake.sendAttach).toHaveBeenCalledTimes(2);
+    expect(fake.sendAttach).toHaveBeenLastCalledWith('s1');
   });
 });

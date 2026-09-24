@@ -3,17 +3,44 @@ import type { Approval, ServerEvent, Session } from '@openfleet/shared';
 import { Subject } from 'rxjs';
 import { environment } from '../../environments/environment';
 
+const INITIAL_RECONNECT_DELAY_MS = 1000;
+const MAX_RECONNECT_DELAY_MS = 10_000;
+
 @Injectable({ providedIn: 'root' })
 export class FleetEventsService {
   readonly sessions = signal<Session[]>([]);
   readonly approvals = signal<Approval[]>([]);
+  readonly connected = signal(false);
+  // Increments on every reconnect (not the first connect) — a fresh snapshot already resyncs
+  // sessions/approvals on its own; this tells an attached terminal to re-request its replay too.
+  readonly reconnectCount = signal(0);
   private readonly outputBySession = new Map<string, Subject<string>>();
   private socket?: WebSocket;
+  private reconnectDelayMs = INITIAL_RECONNECT_DELAY_MS;
+  private hasConnectedBefore = false;
 
   connect(): void {
+    this.openSocket();
+  }
+
+  private openSocket(): void {
     const wsUrl = `${environment.apiUrl.replace(/^http/, 'ws')}/ws?token=${encodeURIComponent(environment.adminToken)}`;
-    this.socket = new WebSocket(wsUrl);
-    this.socket.addEventListener('message', (m) => this.reduce(JSON.parse(String(m.data)) as ServerEvent));
+    const socket = new WebSocket(wsUrl);
+    this.socket = socket;
+    socket.addEventListener('open', () => {
+      this.connected.set(true);
+      this.reconnectDelayMs = INITIAL_RECONNECT_DELAY_MS;
+      if (this.hasConnectedBefore) this.reconnectCount.update((n) => n + 1);
+      this.hasConnectedBefore = true;
+    });
+    socket.addEventListener('message', (m) => this.reduce(JSON.parse(String(m.data)) as ServerEvent));
+    socket.addEventListener('close', () => this.scheduleReconnect());
+  }
+
+  private scheduleReconnect(): void {
+    this.connected.set(false);
+    setTimeout(() => this.openSocket(), this.reconnectDelayMs);
+    this.reconnectDelayMs = Math.min(this.reconnectDelayMs * 2, MAX_RECONNECT_DELAY_MS);
   }
 
   output(sessionId: string): Subject<string> {

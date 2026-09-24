@@ -1,4 +1,4 @@
-import { Component, effect, ElementRef, inject, input, OnDestroy, viewChild } from '@angular/core';
+import { Component, effect, ElementRef, inject, input, OnDestroy, untracked, viewChild } from '@angular/core';
 import { FitAddon } from '@xterm/addon-fit';
 import { Terminal } from '@xterm/xterm';
 import type { Subscription } from 'rxjs';
@@ -23,6 +23,17 @@ export class TerminalComponent implements OnDestroy {
       const sessionId = this.sessionId();
       this.attach(sessionId);
       onCleanup(() => this.detach());
+    });
+
+    // A reconnect means the connection (and whatever we last saw) may be stale — clear and re-request
+    // a fresh replay for whatever session is current right now, without re-running on every session switch.
+    effect(() => {
+      const reconnectCount = this.events.reconnectCount();
+      if (reconnectCount === 0) return;
+      untracked(() => {
+        this.terminal?.clear();
+        this.events.sendAttach(this.sessionId());
+      });
     });
   }
 

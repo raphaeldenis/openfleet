@@ -24,3 +24,17 @@
   overflow-y: auto;
   border-left: 0.0625rem solid #e5e7eb;
 }
+
+.connection-lost {
+  position: fixed;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  margin-top: 0.5rem;
+  padding: 0.3rem 0.8rem;
+  border-radius: 999px;
+  background: #dc2626;
+  color: white;
+  font-size: 0.8rem;
+}
