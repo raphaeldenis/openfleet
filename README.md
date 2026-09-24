@@ -6,6 +6,8 @@ Status: phase 1 (foundation). See `docs/` once it exists; design lives in the au
 
 ## Dev
 
+Requires Node >=26 — `nvm use` in this repo picks up Homebrew's Node via `.nvmrc` (`system`); on a shell where nvm's `default` alias points elsewhere, prefix commands with `PATH="/opt/homebrew/bin:$PATH"` instead of changing the global alias.
+
     pnpm install
     pnpm test
     pnpm dev:core        # daemon on 127.0.0.1:7331
