@@ -1,0 +1,110 @@
+import type { DatabaseSync } from 'node:sqlite';
+import type { Session, SessionSpec } from '@openfleet/shared';
+import { EventBus } from '../events/eventBus.js';
+import { createWorktree } from '../git/worktrees.js';
+import type { Harness, HarnessHandle } from '../harness/harness.js';
+import { newId, newToken } from '../ids.js';
+import { MessageQueue } from './messageQueue.js';
+import { SessionRepository } from './sessionRepository.js';
+import { canDeliverNow, nextState, type SessionInput } from './stateMachine.js';
+
+export interface SessionServiceDeps { db: DatabaseSync; bus: EventBus; harnesses: Harness[]; baseUrl: string; worktreesRoot: string }
+
+export class SessionService {
+  private readonly repo: SessionRepository;
+  private readonly queue: MessageQueue;
+  private readonly handles = new Map<string, HarnessHandle>();
+
+  constructor(private readonly deps: SessionServiceDeps) {
+    this.repo = new SessionRepository(deps.db);
+    this.queue = new MessageQueue(deps.db);
+  }
+
+  async create(spec: SessionSpec): Promise<Session> {
+    const id = newId();
+    const hookToken = newToken();
+    const mcpToken = newToken();
+    const now = new Date().toISOString();
+    this.repo.insert({ id, name: spec.name, emoji: spec.emoji, directory: spec.directory, worktree: null, model: spec.model ?? null,
+      parent_id: spec.parentId ?? null, role: spec.role ?? null, harness: spec.harness, state: 'starting', state_since: now, hook_token: hookToken, mcp_token: mcpToken, created_at: now });
+    const harness = this.harnessFor(spec.harness);
+    const handle = harness.start({
+      sessionId: id, directory: spec.directory, model: spec.model, seededPrompt: spec.seededPrompt,
+      hookUrl: `${this.deps.baseUrl}/hooks/${hookToken}`, mcpUrl: `${this.deps.baseUrl}/mcp`, mcpToken, displayName: `${spec.emoji} ${spec.name}`,
+    });
+    this.handles.set(id, handle);
+    handle.onData((data) => this.deps.bus.emit({ type: 'session.output', sessionId: id, data }));
+    handle.onExit((exitCode) => this.markClosed(id, exitCode));
+    const session = this.repo.get(id)!;
+    this.deps.bus.emit({ type: 'session.created', session });
+    return session;
+  }
+
+  async createInWorktree(spec: SessionSpec & { repoPath: string; branchName: string }): Promise<Session> {
+    const worktree = await createWorktree({ repoPath: spec.repoPath, branchName: spec.branchName, worktreesRoot: this.deps.worktreesRoot });
+    return this.create({ ...spec, directory: worktree.path });
+  }
+
+  sendMessage(input: { sessionId: string; body: string; fromSessionId?: string }): { status: 'delivered' | 'queued'; messageId: string } {
+    const session = this.require(input.sessionId);
+    const message = this.queue.enqueue(input);
+    if (!canDeliverNow(session.state)) {
+      this.deps.bus.emit({ type: 'message.queued', sessionId: session.id, messageId: message.id });
+      return { status: 'queued', messageId: message.id };
+    }
+    this.deliver(session.id, message.id, message.body);
+    return { status: 'delivered', messageId: message.id };
+  }
+
+  applyInput(sessionId: string, input: SessionInput): void {
+    const session = this.require(sessionId);
+    const state = nextState(session.state, input);
+    if (state === session.state) return;
+    if (state === 'closed') { this.markClosed(sessionId, undefined); return; }
+    const since = new Date().toISOString();
+    this.repo.setState(sessionId, state, since);
+    this.deps.bus.emit({ type: 'session.state', sessionId, state, stateSince: since });
+    if (canDeliverNow(state)) this.flushOne(sessionId);
+  }
+
+  writeRaw(sessionId: string, data: string): void { this.handles.get(sessionId)?.write(data); }
+  resize(sessionId: string, cols: number, rows: number): void { this.handles.get(sessionId)?.resize(cols, rows); }
+  close(sessionId: string): void { this.handles.get(sessionId)?.kill(); }
+  get(id: string): Session | undefined { return this.repo.get(id); }
+  list(): Session[] { return this.repo.list(); }
+  byHookToken(token: string): Session | undefined { return this.repo.byHookToken(token); }
+  byMcpToken(token: string): Session | undefined { return this.repo.byMcpToken(token); }
+
+  // ponytail: one message per turn; batch delivery if queues grow
+  private flushOne(sessionId: string): void {
+    const pending = this.queue.nextPending(sessionId);
+    if (!pending) return;
+    this.deliver(sessionId, pending.id, pending.body);
+  }
+
+  private deliver(sessionId: string, messageId: string, body: string): void {
+    this.handles.get(sessionId)?.write(`${body}\r`);
+    this.queue.markDelivered(messageId);
+    this.deps.bus.emit({ type: 'message.delivered', sessionId, messageId });
+  }
+
+  private markClosed(sessionId: string, exitCode: number | undefined): void {
+    const session = this.repo.get(sessionId);
+    if (!session || session.state === 'closed') return;
+    this.repo.setClosed(sessionId, exitCode, new Date().toISOString());
+    this.handles.delete(sessionId);
+    this.deps.bus.emit({ type: 'session.closed', sessionId, exitCode });
+  }
+
+  private harnessFor(id: string): Harness {
+    const harness = this.deps.harnesses.find((h) => h.id === id);
+    if (!harness) throw new Error(`unknown harness: ${id}`);
+    return harness;
+  }
+
+  private require(id: string): Session {
+    const session = this.repo.get(id);
+    if (!session) throw new Error(`unknown session: ${id}`);
+    return session;
+  }
+}
