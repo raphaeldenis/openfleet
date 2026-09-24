@@ -47,18 +47,31 @@ describe('buildClaudeLaunchConfig', () => {
     expect(config.args[flagIndex + 1]).toBe('acceptEdits');
   });
 
+  it('passes --permission-mode plan when the launch specifies the plan mode', () => {
+    const config = buildClaudeLaunchConfig({ ...launch, permissionMode: 'plan' });
+    const flagIndex = config.args.indexOf('--permission-mode');
+    expect(flagIndex).toBeGreaterThan(-1);
+    expect(config.args[flagIndex + 1]).toBe('plan');
+  });
+
   it('omits --permission-mode entirely when none is given, so the CLI keeps the user default', () => {
     const config = buildClaudeLaunchConfig(launch);
     expect(config.args).not.toContain('--permission-mode');
   });
 
-  it('resuming a session passes --resume <id> and drops --session-id, --name, --model and the prompt', () => {
+  it('resuming a session passes --resume <id> and drops --session-id, --name and the prompt', () => {
     const config = buildClaudeLaunchConfig({ ...launch, resuming: true });
     expect(config.args.slice(0, 2)).toEqual(['--resume', launch.sessionId]);
     expect(config.args).not.toContain('--session-id');
     expect(config.args).not.toContain('--name');
-    expect(config.args).not.toContain('--model');
     expect(config.args).not.toContain(launch.displayName);
+  });
+
+  it('resuming a session keeps --model when the session has one', () => {
+    const config = buildClaudeLaunchConfig({ ...launch, resuming: true });
+    const flagIndex = config.args.indexOf('--model');
+    expect(flagIndex).toBeGreaterThan(-1);
+    expect(config.args[flagIndex + 1]).toBe(launch.model);
   });
 
   it('resuming still carries --settings and --mcp-config, so the same daemon hooks apply', () => {
@@ -79,8 +92,6 @@ describe('buildClaudeLaunchConfig', () => {
   it('resuming with a seeded prompt drops the prompt, so it is never swallowed by --mcp-config nor rejected by --resume', () => {
     const config = buildClaudeLaunchConfig({ ...launch, resuming: true, seededPrompt: 'Say hello and stop.' });
     expect(config.args).not.toContain('Say hello and stop.');
-    expect(config.args).not.toContain('--model');
-    expect(config.args).not.toContain(launch.model);
   });
 
   it('resuming with a permission mode still passes --permission-mode after --resume <id>', () => {
