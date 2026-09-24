@@ -26,7 +26,6 @@ export const HOOK_EVENT_NAMES: ClaudeHookEventName[] = [
 export interface PermissionRequestHookOutput {
   hookSpecificOutput: {
     hookEventName: 'PermissionRequest';
-    decision: 'allow' | 'deny' | 'ask';
-    decisionReason?: string;
+    decision: { behavior: 'allow' | 'deny'; message?: string };
   };
 }

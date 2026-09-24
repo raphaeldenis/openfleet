@@ -16,7 +16,8 @@ export function hooksHandler(deps: { sessions: SessionService; approvals: Approv
 
     const decision = await deps.approvals.request({ sessionId: session.id, toolName: event.tool_name, toolInput: event.tool_input });
     deps.sessions.applyInput(session.id, { kind: 'permission_resolved' });
-    const decisionReason = decision === 'ask' ? 'no decision in OpenFleet; falling back to terminal prompt' : `${decision === 'allow' ? 'approved' : 'denied'} in OpenFleet`;
-    return json(res, 200, { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision, decisionReason } });
+    if (decision === 'ask') return json(res, 200, {});
+    const message = decision === 'deny' ? 'denied in OpenFleet' : undefined;
+    return json(res, 200, { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: decision, message } } });
   };
 }

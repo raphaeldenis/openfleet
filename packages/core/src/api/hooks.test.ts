@@ -43,12 +43,21 @@ describe('POST /hooks/:token', () => {
     const approval = approvals.listPending()[0]!;
     approvals.decide({ approvalId: approval.id, behavior: 'allow' });
     const body = await (await pending).json();
-    expect(body).toEqual({ hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: 'allow', decisionReason: 'approved in OpenFleet' } });
+    expect(body).toEqual({ hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } } });
     expect(sessions.list()[0]!.state).toBe('generating');
   });
 
-  it('PermissionRequest answers ask when nobody decides in time', async () => {
+  it('PermissionRequest answers deny with a message', async () => {
+    const pending = post(`/hooks/${hookToken}`, { session_id: 'c', hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'rm -rf /' } });
+    await new Promise((r) => setTimeout(r, 20));
+    const approval = approvals.listPending()[0]!;
+    approvals.decide({ approvalId: approval.id, behavior: 'deny' });
+    const body = await (await pending).json();
+    expect(body).toEqual({ hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'deny', message: 'denied in OpenFleet' } } });
+  });
+
+  it('PermissionRequest answers with an empty body when nobody decides in time, falling back to the CLI prompt', async () => {
     const res = await post(`/hooks/${hookToken}`, { session_id: 'c', hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: {} });
-    expect((await res.json()).hookSpecificOutput.decision).toBe('ask');
+    expect(await res.json()).toEqual({});
   });
 });
