@@ -137,7 +137,7 @@ describe('SessionService resume', () => {
   beforeEach(() => { vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });
 
-  it('relaunches every non-closed session with --resume, the same tokens, and marks it starting', async () => {
+  it('relaunches every non-closed session with --resume, fresh tokens matching the rotated DB row, and marks it starting', async () => {
     const db = openDatabase(':memory:');
     const bus = new EventBus();
     const firstRunHarness = new FakeHarness();
@@ -150,10 +150,13 @@ describe('SessionService resume', () => {
     const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt', resumeTimeoutMs: 50 });
     await restarted.resumeAll();
 
+    const rotated = restarted.tokens(session.id)!;
     expect(restartHarness.launches[0]!.resuming).toBe(true);
     expect(restartHarness.launches[0]!.sessionId).toBe(session.id);
-    expect(restartHarness.launches[0]!.hookUrl).toBe(originalTokens.hookUrl);
-    expect(restartHarness.launches[0]!.mcpToken).toBe(originalTokens.mcpToken);
+    expect(restartHarness.launches[0]!.hookUrl).not.toBe(originalTokens.hookUrl);
+    expect(restartHarness.launches[0]!.mcpToken).not.toBe(originalTokens.mcpToken);
+    expect(restartHarness.launches[0]!.hookUrl).toBe(`http://127.0.0.1:7331/hooks/${rotated.hookToken}`);
+    expect(restartHarness.launches[0]!.mcpToken).toBe(rotated.mcpToken);
     expect(restarted.get(session.id)!.state).toBe('starting');
   });
 

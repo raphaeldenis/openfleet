@@ -201,15 +201,23 @@ export class SessionService {
     if (!tokens) return; // defensive: every session row carries its tokens, but never resume without them
     const harness = this.harnessFor(session.harness);
     const permissionMode = this.resolveResumePermissionMode(session);
+    // A daemon crash can leave the pre-restart process alive for a moment in its orphaned PTY (ponytail:
+    // it can still touch files on disk until it actually exits — persisting the PTY pid and killing its
+    // process group on resume would close that window, but the DB row has no pid column yet). Rotating
+    // both tokens before launch means its late hooks 404/no-op and its MCP bearer gets 401 immediately,
+    // rather than letting it act as the resumed session.
+    const hookToken = newToken();
+    const mcpToken = newToken();
+    this.repo.setTokens(session.id, hookToken, mcpToken);
     let handle: HarnessHandle;
     try {
       handle = harness.start({
         sessionId: session.id,
         directory: session.directory,
         model: session.model,
-        hookUrl: `${this.deps.baseUrl}/hooks/${tokens.hookToken}`,
+        hookUrl: `${this.deps.baseUrl}/hooks/${hookToken}`,
         mcpUrl: `${this.deps.baseUrl}/mcp`,
-        mcpToken: tokens.mcpToken,
+        mcpToken,
         displayName: `${session.emoji} ${session.name}`,
         permissionMode,
         resuming: true,

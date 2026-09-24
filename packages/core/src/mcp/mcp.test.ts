@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { startServer } from '../api/server.js';
 import { openDatabase } from '../db/database.js';
@@ -22,14 +23,16 @@ function makeRepo(): string {
 }
 
 let server: Awaited<ReturnType<typeof startServer>>;
+let db: DatabaseSync;
+let bus: EventBus;
 let sessions: SessionService;
 let harness: FakeHarness;
 let parentToken: string;
 let parentId: string;
 
 beforeEach(async () => {
-  const db = openDatabase(':memory:');
-  const bus = new EventBus();
+  db = openDatabase(':memory:');
+  bus = new EventBus();
   harness = new FakeHarness();
   sessions = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt' });
   server = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals: new ApprovalService({ db, bus }), bus, mcp: createMcpHandler({ sessions }) });
@@ -55,6 +58,17 @@ describe('MCP', () => {
 
   it('rejects a bad token', async () => {
     await expect(connect('nope')).rejects.toThrow();
+  });
+
+  it('rejects the pre-restart mcp bearer once resume has rotated it', async () => {
+    const staleToken = parentToken;
+    const restartHarness = new FakeHarness();
+    const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt', resumeTimeoutMs: 5000 });
+    await restarted.resumeAll();
+
+    await expect(connect(staleToken)).rejects.toThrow();
+
+    await restarted.closeAll();
   });
 
   it('rejects an unauthorized request without reading the body, even when it is huge', async () => {

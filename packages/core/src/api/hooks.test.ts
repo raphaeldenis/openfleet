@@ -1,3 +1,4 @@
+import type { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
@@ -7,13 +8,15 @@ import { SessionService } from '../sessions/sessionService.js';
 import { startServer } from './server.js';
 
 let server: Awaited<ReturnType<typeof startServer>>;
+let db: DatabaseSync;
+let bus: EventBus;
 let sessions: SessionService;
 let approvals: ApprovalService;
 let hookToken: string;
 
 beforeEach(async () => {
-  const db = openDatabase(':memory:');
-  const bus = new EventBus();
+  db = openDatabase(':memory:');
+  bus = new EventBus();
   sessions = new SessionService({ db, bus, harnesses: [new FakeHarness()], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt' });
   approvals = new ApprovalService({ db, bus, timeoutMs: 100 });
   server = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, bus });
@@ -72,5 +75,19 @@ describe('POST /hooks/:token', () => {
   it('PermissionRequest answers with an empty body when nobody decides in time, falling back to the CLI prompt', async () => {
     const res = await post(`/hooks/${hookToken}`, { session_id: 'c', hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: {} });
     expect(await res.json()).toEqual({});
+  });
+
+  it('a hook posted with the pre-restart hook token is a no-op once resume has rotated it', async () => {
+    const staleHookToken = hookToken;
+    const restartHarness = new FakeHarness();
+    const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt', resumeTimeoutMs: 5000 });
+    await restarted.resumeAll();
+
+    const res = await post(`/hooks/${staleHookToken}`, { session_id: 'c', hook_event_name: 'SessionStart' });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({});
+    expect(sessions.list()[0]!.state).not.toBe('idle');
+    await restarted.closeAll();
   });
 });

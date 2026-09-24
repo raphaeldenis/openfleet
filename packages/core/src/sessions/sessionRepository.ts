@@ -49,6 +49,9 @@ export class SessionRepository {
     const row = this.db.prepare('SELECT * FROM sessions WHERE mcp_token = ?').get(token) as Row | undefined;
     return row ? toSession(row) : undefined;
   }
+  setTokens(id: string, hookToken: string, mcpToken: string): void {
+    this.db.prepare('UPDATE sessions SET hook_token = ?, mcp_token = ? WHERE id = ?').run(hookToken, mcpToken, id);
+  }
   tokens(id: string): { hookToken: string; mcpToken: string } | undefined {
     const row = this.db.prepare('SELECT hook_token, mcp_token FROM sessions WHERE id = ?').get(id) as { hook_token: string; mcp_token: string } | undefined;
     return row ? { hookToken: row.hook_token, mcpToken: row.mcp_token } : undefined;
