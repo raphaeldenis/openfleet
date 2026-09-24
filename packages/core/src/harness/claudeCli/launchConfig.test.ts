@@ -59,6 +59,14 @@ describe('buildClaudeLaunchConfig', () => {
     expect(config.args).not.toContain('--permission-mode');
   });
 
+  it('refuses to resume with an empty session id, so the CLI never opens its interactive picker inside the PTY', () => {
+    expect(() => buildClaudeLaunchConfig({ ...launch, resuming: true, sessionId: '' })).toThrow();
+  });
+
+  it('refuses to resume with a non-UUID session id, so the CLI never opens its interactive picker inside the PTY', () => {
+    expect(() => buildClaudeLaunchConfig({ ...launch, resuming: true, sessionId: 'not-a-uuid' })).toThrow();
+  });
+
   it('resuming a session passes --resume <id> and drops --session-id, --name and the prompt', () => {
     const config = buildClaudeLaunchConfig({ ...launch, resuming: true });
     expect(config.args.slice(0, 2)).toEqual(['--resume', launch.sessionId]);

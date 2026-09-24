@@ -6,16 +6,16 @@ import { ApprovalService } from './governance/approvalService.js';
 import { ClaudeCliHarness } from './harness/claudeCli/claudeCliHarness.js';
 import { FakeHarness } from './harness/fakeHarness.js';
 import { createMcpHandler } from './mcp/mcpServer.js';
-import { SessionRepository } from './sessions/sessionRepository.js';
 import { SessionService } from './sessions/sessionService.js';
 
 const config = loadConfig();
 const db = openDatabase(config.dbPath);
-new SessionRepository(db).closeAllOpen(new Date().toISOString());
 const bus = new EventBus();
 const baseUrl = `http://${config.host}:${config.port}`;
 const sessions = new SessionService({ db, bus, harnesses: [new ClaudeCliHarness(), new FakeHarness()], baseUrl, worktreesRoot: config.worktreesRoot });
 const approvals = new ApprovalService({ db, bus });
+
+await sessions.resumeAll();
 
 const server = await startServer({ ...config, sessions, approvals, bus, mcp: createMcpHandler({ sessions, worktreesRoot: config.worktreesRoot }) });
 console.log(`openfleet core listening on ${server.url} (home: ${config.home})`);

@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
-import type { Session, SessionSpec } from '@openfleet/shared';
+import { PERMISSION_MODES, type PermissionMode, type Session, type SessionSpec } from '@openfleet/shared';
 import { EventBus } from '../events/eventBus.js';
 import { createWorktree } from '../git/worktrees.js';
 import type { Harness, HarnessHandle } from '../harness/harness.js';
@@ -8,10 +8,19 @@ import { MessageQueue } from './messageQueue.js';
 import { SessionRepository } from './sessionRepository.js';
 import { canDeliverNow, nextState, type SessionInput } from './stateMachine.js';
 
-export interface SessionServiceDeps { db: DatabaseSync; bus: EventBus; harnesses: Harness[]; baseUrl: string; worktreesRoot: string }
+export interface SessionServiceDeps { db: DatabaseSync; bus: EventBus; harnesses: Harness[]; baseUrl: string; worktreesRoot: string; resumeTimeoutMs?: number }
 
 const OUTPUT_BUFFER_LIMIT = 200 * 1024;
 const DEFAULT_CLOSE_ESCALATE_MS = 5000;
+const DEFAULT_RESUME_TIMEOUT_MS = 15_000;
+export const RESUME_TIMEOUT_EXIT_CODE = -1;
+export const RESUME_LAUNCH_FAILED_EXIT_CODE = -2;
+
+// ponytail: main.ts constructs exactly one SessionService per real daemon process — this module-level
+// map (rather than an instance field) is what lets a freshly resumed handle outrank a stale pre-restart
+// process's onExit even when a test briefly runs two instances over the same db to simulate the restart
+// boundary (Review Focus #2). A multi-daemon future would need a durable, cross-process marker instead.
+const activeHandleBySessionId = new Map<string, HarnessHandle>();
 
 function waitForExit(handle: HarnessHandle): Promise<void> {
   return new Promise((resolve) => {
@@ -37,6 +46,7 @@ export class SessionService {
   private readonly queue: MessageQueue;
   private readonly handles = new Map<string, HarnessHandle>();
   private readonly outputBuffers = new Map<string, string>();
+  private readonly resumeTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(private readonly deps: SessionServiceDeps) {
     this.repo = new SessionRepository(deps.db);
@@ -50,18 +60,23 @@ export class SessionService {
     const now = new Date().toISOString();
     this.repo.insert({ id, name: spec.name, emoji: spec.emoji, directory: spec.directory, worktree: null, model: spec.model ?? null,
       parent_id: spec.parentId ?? null, role: spec.role ?? null, harness: spec.harness, state: 'starting', state_since: now, hook_token: hookToken, mcp_token: mcpToken,
-      permission_mode: null, created_at: now });
+      permission_mode: spec.permissionMode ?? null, created_at: now });
     const harness = this.harnessFor(spec.harness);
     const handle = harness.start({
       sessionId: id, directory: spec.directory, model: spec.model, seededPrompt: spec.seededPrompt,
       hookUrl: `${this.deps.baseUrl}/hooks/${hookToken}`, mcpUrl: `${this.deps.baseUrl}/mcp`, mcpToken, displayName: `${spec.emoji} ${spec.name}`,
+      permissionMode: spec.permissionMode,
     });
     this.handles.set(id, handle);
+    activeHandleBySessionId.set(id, handle);
     handle.onData((data) => {
       this.appendOutput(id, data);
       this.deps.bus.emit({ type: 'session.output', sessionId: id, data });
     });
-    handle.onExit((exitCode) => this.markClosed(id, exitCode));
+    handle.onExit((exitCode) => {
+      if (activeHandleBySessionId.get(id) !== handle) return; // a stale process we already replaced (e.g. by a resume)
+      this.markClosed(id, exitCode);
+    });
     const session = this.repo.get(id)!;
     this.deps.bus.emit({ type: 'session.created', session });
     return session;
@@ -85,6 +100,7 @@ export class SessionService {
 
   applyInput(sessionId: string, input: SessionInput): void {
     const session = this.require(sessionId);
+    this.clearResumeTimer(sessionId);
     const state = nextState(session.state, input);
     if (state === session.state) return;
     if (state === 'closed') {
@@ -129,6 +145,13 @@ export class SessionService {
   byHookToken(token: string): Session | undefined { return this.repo.byHookToken(token); }
   byMcpToken(token: string): Session | undefined { return this.repo.byMcpToken(token); }
 
+  async resumeAll(): Promise<void> {
+    for (const session of this.repo.list()) {
+      if (session.state === 'closed') continue;
+      this.resumeOne(session);
+    }
+  }
+
   // ponytail: 200 KB ring buffer, persist scrollback to disk if replays matter more
   private appendOutput(sessionId: string, data: string): void {
     const combined = (this.outputBuffers.get(sessionId) ?? '') + data;
@@ -149,11 +172,81 @@ export class SessionService {
   }
 
   private markClosed(sessionId: string, exitCode: number | undefined): void {
+    this.clearResumeTimer(sessionId);
     const session = this.repo.get(sessionId);
     if (!session || session.state === 'closed') return;
     this.repo.setClosed(sessionId, exitCode, new Date().toISOString());
     this.handles.delete(sessionId);
+    activeHandleBySessionId.delete(sessionId);
     this.deps.bus.emit({ type: 'session.closed', sessionId, exitCode });
+  }
+
+  private resumeOne(session: Session): void {
+    const tokens = this.repo.tokens(session.id);
+    if (!tokens) return; // defensive: every session row carries its tokens, but never resume without them
+    const harness = this.harnessFor(session.harness);
+    const permissionMode = this.resolveResumePermissionMode(session);
+    let handle: HarnessHandle;
+    try {
+      handle = harness.start({
+        sessionId: session.id,
+        directory: session.directory,
+        model: session.model,
+        hookUrl: `${this.deps.baseUrl}/hooks/${tokens.hookToken}`,
+        mcpUrl: `${this.deps.baseUrl}/mcp`,
+        mcpToken: tokens.mcpToken,
+        displayName: `${session.emoji} ${session.name}`,
+        permissionMode,
+        resuming: true,
+      });
+    } catch {
+      // The launch builder refuses to resume with a missing/invalid session id (it would otherwise open
+      // the CLI's interactive picker inside the PTY) — close this one row and keep resuming the rest of
+      // the fleet rather than letting one bad row abort resumeAll for every other session.
+      this.markClosed(session.id, RESUME_LAUNCH_FAILED_EXIT_CODE);
+      return;
+    }
+    this.handles.set(session.id, handle);
+    activeHandleBySessionId.set(session.id, handle);
+    this.repo.setState(session.id, 'starting', new Date().toISOString());
+    handle.onData((data) => {
+      this.appendOutput(session.id, data);
+      this.deps.bus.emit({ type: 'session.output', sessionId: session.id, data });
+    });
+    handle.onExit((exitCode) => {
+      if (activeHandleBySessionId.get(session.id) !== handle) return; // a stale process we already replaced
+      this.markClosed(session.id, exitCode);
+    });
+    this.armResumeTimeout(session.id, handle);
+  }
+
+  private resolveResumePermissionMode(session: Session): PermissionMode | undefined {
+    const stored = session.permissionMode;
+    if (stored === undefined) return undefined;
+    if (stored === 'default') {
+      // ponytail: 'manual' is the ask-before-acting mode Amendment A1 (P2-T06b) renames 'default' to;
+      // until PERMISSION_MODES includes it, this cast is the only way to carry that intent through a
+      // resume — remove the cast once P2-T06b lands.
+      return 'manual' as PermissionMode;
+    }
+    if ((PERMISSION_MODES as readonly string[]).includes(stored)) return stored;
+    console.warn(`resumeOne: session ${session.id} has an unrecognized permission_mode "${stored}", resuming without --permission-mode`);
+    return undefined;
+  }
+
+  private armResumeTimeout(sessionId: string, handle: HarnessHandle): void {
+    const timer = setTimeout(() => {
+      if (activeHandleBySessionId.get(sessionId) !== handle) return; // already replaced or closed by something else
+      this.markClosed(sessionId, RESUME_TIMEOUT_EXIT_CODE);
+      handle.kill();
+    }, this.deps.resumeTimeoutMs ?? DEFAULT_RESUME_TIMEOUT_MS);
+    this.resumeTimers.set(sessionId, timer);
+  }
+
+  private clearResumeTimer(sessionId: string): void {
+    const timer = this.resumeTimers.get(sessionId);
+    if (timer) clearTimeout(timer);
+    this.resumeTimers.delete(sessionId);
   }
 
   private harnessFor(id: string): Harness {
