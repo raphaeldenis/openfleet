@@ -2,6 +2,12 @@ import { Injectable } from '@angular/core';
 import type { Approval, Session, SessionSpec } from '@openfleet/shared';
 import { environment } from '../../environments/environment';
 
+export class ApiError extends Error {
+  constructor(public readonly status: number, message: string) {
+    super(message);
+  }
+}
+
 @Injectable({ providedIn: 'root' })
 export class FleetApiService {
   // ponytail: fetch over HttpClient — no interceptors needed yet
@@ -10,7 +16,7 @@ export class FleetApiService {
       ...init,
       headers: { 'content-type': 'application/json', authorization: `Bearer ${environment.adminToken}`, ...(init.headers ?? {}) },
     });
-    if (!response.ok) throw new Error(`${init.method ?? 'GET'} ${path} → ${response.status}`);
+    if (!response.ok) throw new ApiError(response.status, `${init.method ?? 'GET'} ${path} → ${response.status}`);
     return (await response.json()) as T;
   }
   private post<T>(path: string, body: unknown): Promise<T> { return this.call<T>(path, { method: 'POST', body: JSON.stringify(body) }); }
