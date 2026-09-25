@@ -66,4 +66,17 @@ describe('SessionRepository', () => {
 
     expect(repo.get('s1')!.permissionMode).toBe('not-a-real-mode');
   });
+
+  it('rotates the hook and mcp tokens, replacing the ones set at creation', () => {
+    const db = openDatabase(':memory:');
+    const repo = new SessionRepository(db);
+    repo.insert(baseRow);
+
+    repo.setTokens('s1', 'fresh-hook', 'fresh-mcp');
+
+    expect(repo.tokens('s1')).toEqual({ hookToken: 'fresh-hook', mcpToken: 'fresh-mcp' });
+    expect(repo.byHookToken('h')).toBeUndefined();
+    expect(repo.byMcpToken('m')).toBeUndefined();
+    expect(repo.byHookToken('fresh-hook')?.id).toBe('s1');
+  });
 });

@@ -2,6 +2,7 @@ import { HOOK_EVENT_NAMES } from '@openfleet/shared';
 import type { HarnessLaunch } from '../harness.js';
 
 const HOOK_TIMEOUT_SECONDS = 600;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface ClaudeLaunchConfig {
   command: 'claude';
@@ -11,6 +12,11 @@ export interface ClaudeLaunchConfig {
 }
 
 export function buildClaudeLaunchConfig(launch: HarnessLaunch): ClaudeLaunchConfig {
+  // --resume takes an optional value: a missing or non-UUID session id makes the CLI fall back to its
+  // interactive picker, which would hang forever inside a PTY nothing is watching.
+  if (launch.resuming && !UUID_PATTERN.test(launch.sessionId)) {
+    throw new Error(`cannot resume with a missing or non-UUID session id: "${launch.sessionId}"`);
+  }
   const settings = { hooks: buildHooks(launch.hookUrl) };
   const mcpConfig = {
     mcpServers: {
