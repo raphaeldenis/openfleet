@@ -81,4 +81,17 @@ describe('ensureAdminTokenInStorage', () => {
 
     expect(localStorage.getItem('openfleet.adminToken')).toBe('token-with-trailing-newline\n');
   });
+
+  it('still resolves when storing the token fails', async () => {
+    (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    invokeMock.mockResolvedValue('secret-token');
+    const setItemSpy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('QuotaExceededError');
+    });
+    const ensureAdminTokenInStorage = await importFresh();
+
+    await expect(ensureAdminTokenInStorage()).resolves.toBeUndefined();
+
+    setItemSpy.mockRestore();
+  });
 });
