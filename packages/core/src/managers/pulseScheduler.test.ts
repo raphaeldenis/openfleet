@@ -3,6 +3,7 @@ import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
 import { FakeHarness } from '../harness/fakeHarness.js';
 import { ManagerRepository } from './managerRepository.js';
+import { toManagerView } from './managerView.js';
 import { PulseScheduler, PULSE_MESSAGE } from './pulseScheduler.js';
 import { SessionService } from '../sessions/sessionService.js';
 
@@ -293,5 +294,60 @@ describe('PulseScheduler — hostile cases', () => {
     const restarted = new PulseScheduler({ managers, sessions, bus });
     restarted.start(); // the manager record is still on disk, but its session is closed
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('a manager overdue by several cadences pulses exactly once at start(), then waits a full cadence for the next one', async () => {
+    const { db, bus } = setup();
+    const harness = new FakeHarness();
+    const sessions = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+    const manager = await sessions.create({ directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake' });
+    sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'SessionStart' }));
+    const managers = new ManagerRepository(db);
+    const fiveCadencesAgo = new Date(Date.now() - 5_000).toISOString(); // pulseSeconds=1 → 5 cadences overdue
+    managers.insert({ sessionId: manager.id, pulseSeconds: 1, childrenCap: 1, missionText: 'x', lastPulseAt: fiveCadencesAgo, createdAt: fiveCadencesAgo });
+    const scheduler = new PulseScheduler({ managers, sessions, bus });
+
+    scheduler.start();
+    vi.advanceTimersByTime(0);
+    expect(harness.handles[0]!.written).toHaveLength(1); // catches up with exactly one pulse, not five
+
+    vi.advanceTimersByTime(999);
+    expect(harness.handles[0]!.written).toHaveLength(1);
+    vi.advanceTimersByTime(1);
+    expect(harness.handles[0]!.written).toHaveLength(2); // the next one waits a full cadence from the catch-up pulse
+  });
+
+  it('nextPulseAt in the view matches the real armed deadline across coalesced cycles, and a restart resumes from it', async () => {
+    const { db, bus } = setup();
+    const harness = new FakeHarness();
+    let sessions = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+    const manager = await sessions.create({ directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake' });
+    sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'SessionStart' }));
+    sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: {} }));
+    const managers = new ManagerRepository(db);
+    managers.insert({ sessionId: manager.id, pulseSeconds: 1, childrenCap: 1, missionText: 'x', createdAt: new Date().toISOString() });
+    let scheduler = new PulseScheduler({ managers, sessions, bus });
+    scheduler.onManagerCreated(managers.get(manager.id)!);
+
+    vi.advanceTimersByTime(1000); // cycle 1: enqueues the pulse (gated, so it stays queued)
+    const afterCycle1 = managers.get(manager.id)!.lastPulseAt!;
+    vi.advanceTimersByTime(1000); // cycle 2: coalesced (still queued from cycle 1)
+    const afterCycle2 = managers.get(manager.id)!.lastPulseAt!;
+    expect(afterCycle2).not.toBe(afterCycle1); // lastPulseAt still advances on a coalesced cycle
+
+    const view = toManagerView(managers.get(manager.id)!, 0);
+    expect(view.nextPulseAt).toBe(new Date(new Date(afterCycle2).getTime() + 1000).toISOString());
+
+    // Restart: rebuild SessionService on the same db and confirm the cadence resumes from the persisted lastPulseAt.
+    scheduler.stop();
+    sessions = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+    await sessions.resumeAll();
+    scheduler = new PulseScheduler({ managers, sessions, bus });
+    scheduler.start();
+
+    vi.advanceTimersByTime(999);
+    expect(managers.get(manager.id)!.lastPulseAt).toBe(afterCycle2); // not due yet
+    vi.advanceTimersByTime(1);
+    expect(managers.get(manager.id)!.lastPulseAt).not.toBe(afterCycle2); // fires exactly at the persisted deadline
   });
 });

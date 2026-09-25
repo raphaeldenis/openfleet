@@ -207,6 +207,28 @@ describe('REST', () => {
     expect(harness.handles[0]!.written).toEqual(['[pulse] Re-read your mission and continue: check your children, unblock them, record what you did.\r']);
   });
 
+  it('answers a manual pulse honestly when one is already queued: pulsed false, coalesced true', async () => {
+    const created = await (await api('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake', manager: { pulseSeconds: 3600, childrenCap: 1, mission: 'x' } }),
+    })).json();
+    const { hookToken } = await (await api(`/api/sessions/${created.id}/tokens`)).json();
+    const sendHook = (event: object) => fetch(`${server.url}/hooks/${hookToken}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ session_id: created.id, ...event }) });
+    await sendHook({ hook_event_name: 'SessionStart' });
+    // A Notification/permission_prompt gates delivery the same way a real PermissionRequest would, without
+    // going through ApprovalService.request() — a PermissionRequest hook would block this fetch until a
+    // human/automated decision resolves it, which never happens in this test.
+    await sendHook({ hook_event_name: 'Notification', notification_type: 'permission_prompt' });
+
+    const first = await api(`/api/managers/${created.id}/pulse`, { method: 'POST' });
+    expect(first.status).toBe(200);
+    expect(await first.json()).toEqual({ pulsed: true });
+
+    const second = await api(`/api/managers/${created.id}/pulse`, { method: 'POST' });
+    expect(second.status).toBe(200);
+    expect(await second.json()).toEqual({ pulsed: false, coalesced: true });
+  });
+
   it('404s a pulse request for a session id with no manager record', async () => {
     const created = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
     const res = await api(`/api/managers/${created.id}/pulse`, { method: 'POST' });

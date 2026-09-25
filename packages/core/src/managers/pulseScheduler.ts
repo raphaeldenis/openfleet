@@ -30,13 +30,12 @@ export class PulseScheduler {
     this.arm(record);
   }
 
-  pulseNow(sessionId: string): ManagerRecord | undefined {
+  pulseNow(sessionId: string): { coalesced: boolean } | undefined {
     const record = this.deps.managers.get(sessionId);
     if (!record) return undefined;
     if (!this.isManagerAlive(sessionId)) return undefined; // a closed manager is never pulsed
     this.clearTimer(sessionId);
-    this.fire(record, new Date().toISOString());
-    return this.deps.managers.get(sessionId);
+    return this.fire(record);
   }
 
   stop(): void {
@@ -44,18 +43,17 @@ export class PulseScheduler {
     this.timers.clear();
   }
 
-  private arm(record: ManagerRecord, scheduledFor?: string): void {
+  private arm(record: ManagerRecord): void {
     this.clearTimer(record.sessionId);
-    const dueAt = scheduledFor ?? nextPulseAt(record);
-    const delayMs = Math.max(0, new Date(dueAt).getTime() - Date.now());
-    this.timers.set(record.sessionId, setTimeout(() => this.tick(record.sessionId, dueAt), delayMs));
+    const delayMs = Math.max(0, new Date(nextPulseAt(record)).getTime() - Date.now());
+    this.timers.set(record.sessionId, setTimeout(() => this.tick(record.sessionId), delayMs));
   }
 
-  private tick(sessionId: string, dueAt: string): void {
+  private tick(sessionId: string): void {
     const record = this.deps.managers.get(sessionId);
     if (!record) return; // manager record removed
     if (!this.isManagerAlive(sessionId)) { this.clearTimer(sessionId); return; } // a closed manager never reschedules itself
-    this.fire(record, dueAt);
+    this.fire(record);
   }
 
   private isManagerAlive(sessionId: string): boolean {
@@ -63,25 +61,22 @@ export class PulseScheduler {
     return session !== undefined && session.state !== 'closed';
   }
 
-  private fire(record: ManagerRecord, scheduledFor: string): void {
+  // A pulse cycle happens every pulseSeconds: lastPulseAt always advances to now and manager.pulsed always
+  // fires, whether or not the [pulse] message itself gets enqueued — a manager stuck gated for many cycles
+  // must not pile up queued pulses, but its cadence (and the next armed deadline) still moves forward.
+  private fire(record: ManagerRecord): { coalesced: boolean } {
     // Goes through the ordinary message queue, exactly like a message from a parent or sibling: if the
     // manager is mid-turn or waiting on a human, the pulse queues and is flushed on its next idle turn —
     // it never interrupts a running tool or answers a permission prompt.
-    const pulseAlreadyQueued = this.deps.sessions.hasQueuedMessage(record.sessionId, PULSE_MESSAGE);
-    let latest = record;
-    if (!pulseAlreadyQueued) {
-      this.deps.sessions.sendMessage({ sessionId: record.sessionId, body: PULSE_MESSAGE });
-      const pulsedAt = new Date().toISOString();
-      this.deps.managers.setLastPulseAt(record.sessionId, pulsedAt);
-      latest = { ...record, lastPulseAt: pulsedAt };
-      const childrenCount = this.deps.sessions.list().filter((s) => s.parentId === record.sessionId && s.state !== 'closed').length;
-      this.deps.bus.emit({ type: 'manager.pulsed', manager: toManagerView(latest, childrenCount) });
-    }
-    // The cadence keeps advancing pulseSeconds at a time from the moment this fire was due, regardless of
-    // whether it actually enqueued a message — a coalesced (already-queued) pulse must not stall the timer
-    // at a zero delay by rescheduling from a lastPulseAt that never moved.
-    const nextDueAt = new Date(new Date(scheduledFor).getTime() + record.pulseSeconds * 1000).toISOString();
-    this.arm(latest, nextDueAt);
+    const coalesced = this.deps.sessions.hasQueuedMessage(record.sessionId, PULSE_MESSAGE);
+    if (!coalesced) this.deps.sessions.sendMessage({ sessionId: record.sessionId, body: PULSE_MESSAGE });
+    const pulsedAt = new Date().toISOString();
+    this.deps.managers.setLastPulseAt(record.sessionId, pulsedAt);
+    const updated: ManagerRecord = { ...record, lastPulseAt: pulsedAt };
+    const childrenCount = this.deps.sessions.list().filter((s) => s.parentId === record.sessionId && s.state !== 'closed').length;
+    this.deps.bus.emit({ type: 'manager.pulsed', manager: toManagerView(updated, childrenCount) });
+    this.arm(updated);
+    return { coalesced };
   }
 
   private clearTimer(sessionId: string): void {

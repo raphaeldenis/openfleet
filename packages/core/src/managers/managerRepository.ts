@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { ManagerSpecSchema } from '@openfleet/shared';
 
 export interface ManagerRecord {
   sessionId: string;
@@ -32,7 +33,14 @@ export class ManagerRepository {
     return row ? toManager(row) : undefined;
   }
   list(): ManagerRecord[] {
-    return (this.db.prepare('SELECT * FROM managers').all() as unknown as Row[]).map(toManager);
+    return (this.db.prepare('SELECT * FROM managers').all() as unknown as Row[]).map(toManager).filter((record) => this.isWithinBounds(record));
+  }
+
+  private isWithinBounds(record: ManagerRecord): boolean {
+    const validation = ManagerSpecSchema.safeParse({ pulseSeconds: record.pulseSeconds, childrenCap: record.childrenCap, mission: record.missionText });
+    if (validation.success) return true;
+    console.warn(`ManagerRepository: skipping manager row for session ${record.sessionId} — out of bounds`);
+    return false;
   }
   setLastPulseAt(sessionId: string, at: string): void {
     this.db.prepare('UPDATE managers SET last_pulse_at = ? WHERE session_id = ?').run(at, sessionId);
