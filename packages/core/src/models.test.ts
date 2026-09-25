@@ -63,6 +63,10 @@ describe('resolveModel', () => {
     expect(resolveModel(DEFAULT_MODEL_TABLE, 'Opus')).toBe(DEFAULT_MODEL_TABLE.opus);
   });
 
+  it('resolves an all-caps rung name from the table', () => {
+    expect(resolveModel(DEFAULT_MODEL_TABLE, 'FABLE')).toBe(DEFAULT_MODEL_TABLE.fable);
+  });
+
   it('passes an exact model id with mixed case through unchanged rather than lower-casing it', () => {
     expect(resolveModel(DEFAULT_MODEL_TABLE, 'Claude-Sonnet-5-Custom')).toBe('Claude-Sonnet-5-Custom');
   });
