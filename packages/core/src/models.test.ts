@@ -19,27 +19,26 @@ describe('loadModelTable', () => {
     expect(table.haiku).toBe(DEFAULT_MODEL_TABLE.haiku);
   });
 
-  it('throws instead of booting the daemon on malformed JSON in the config file', () => {
+  it('throws instead of booting the daemon on malformed JSON in the config file, naming the path', () => {
     const home = mkdtempSync(join(tmpdir(), 'of-models-'));
     const configPath = join(home, 'config.json');
     writeFileSync(configPath, '{ not json');
-    expect(() => loadModelTable(configPath)).toThrow();
+    expect(() => loadModelTable(configPath)).toThrow(configPath);
   });
 
-  it('lets a rung name unknown to ModelTable spill into the loaded table unvalidated', () => {
+  it('strips a rung name unknown to ModelTable rather than letting it spill into the loaded table', () => {
     const home = mkdtempSync(join(tmpdir(), 'of-models-'));
     const configPath = join(home, 'config.json');
     writeFileSync(configPath, JSON.stringify({ models: { gpt: 'gpt-4' } }));
     const table = loadModelTable(configPath) as unknown as Record<string, string>;
-    expect(table.gpt).toBe('gpt-4');
+    expect(table.gpt).toBeUndefined();
   });
 
-  it('lets a non-string rung value violate the string contract of ModelTable unvalidated', () => {
+  it('throws when a rung value in the config file is not a string', () => {
     const home = mkdtempSync(join(tmpdir(), 'of-models-'));
     const configPath = join(home, 'config.json');
     writeFileSync(configPath, JSON.stringify({ models: { sonnet: 123 } }));
-    const table = loadModelTable(configPath) as unknown as Record<string, unknown>;
-    expect(table.sonnet).toBe(123);
+    expect(() => loadModelTable(configPath)).toThrow(configPath);
   });
 });
 
@@ -64,9 +63,7 @@ describe('resolveModel', () => {
     expect(resolveModel(DEFAULT_MODEL_TABLE, 'gpt-4')).toBe('gpt-4');
   });
 
-  it('returns an inherited Object.prototype member instead of the id for a rung named after one', () => {
-    const result = resolveModel(DEFAULT_MODEL_TABLE, 'constructor');
-    expect(typeof result).toBe('function');
-    expect(result).not.toBe('constructor');
+  it('passes "constructor" through unchanged rather than returning the inherited Object.prototype member', () => {
+    expect(resolveModel(DEFAULT_MODEL_TABLE, 'constructor')).toBe('constructor');
   });
 });

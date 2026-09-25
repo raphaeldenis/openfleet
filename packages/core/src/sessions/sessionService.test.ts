@@ -564,17 +564,15 @@ describe('SessionService.updateModel', () => {
     expect(harness.handles[0]!.written).toEqual(['/model claude-opus-5-5\r', '/model claude-haiku-4-5\r']);
   });
 
-  it('keeps reporting queued forever for a model switch on a session that has already closed', async () => {
+  it('rejects a model switch on a session that has already closed', async () => {
     const { service, harness } = setup();
     const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
     service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
     harness.handles[0]!.emitExit(0);
     expect(service.get(session.id)!.state).toBe('closed');
 
-    const result = service.updateModel(session.id, 'claude-opus-5-5');
-
-    expect(result.status).toBe('queued');
-    expect(service.get(session.id)!.model).toBe('claude-opus-5-5');
+    expect(() => service.updateModel(session.id, 'claude-opus-5-5')).toThrow();
+    expect(service.get(session.id)!.model).toBeUndefined();
     expect(harness.handles[0]!.written).toEqual([]);
   });
 });

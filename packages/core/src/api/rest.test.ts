@@ -130,6 +130,13 @@ describe('REST', () => {
     expect(res.status).toBe(404);
   });
 
+  it('409s a model change on a session that has already closed', async () => {
+    const created = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
+    await api(`/api/sessions/${created.id}/close`, { method: 'POST' });
+    const res = await api(`/api/sessions/${created.id}/model`, { method: 'POST', body: JSON.stringify({ model: 'sonnet' }) });
+    expect(res.status).toBe(409);
+  });
+
   it('resolves a rung name to its configured model id before recording it on the session', async () => {
     const created = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
     await api(`/api/sessions/${created.id}/model`, { method: 'POST', body: JSON.stringify({ model: 'sonnet' }) });

@@ -10,6 +10,14 @@ import { canDeliverNow, nextState, type SessionInput } from './stateMachine.js';
 
 export interface SessionServiceDeps { db: DatabaseSync; bus: EventBus; harnesses: Harness[]; baseUrl: string; worktreesRoot: string; resumeTimeoutMs?: number }
 
+export class SessionClosedError extends Error {
+  readonly sessionId: string;
+  constructor(sessionId: string) {
+    super(`session ${sessionId} is closed`);
+    this.sessionId = sessionId;
+  }
+}
+
 const OUTPUT_BUFFER_LIMIT = 200 * 1024;
 export const DEFAULT_CLOSE_ESCALATE_MS = 5000;
 const DEFAULT_RESUME_TIMEOUT_MS = 15_000;
@@ -98,7 +106,8 @@ export class SessionService {
   }
 
   updateModel(sessionId: string, model: string): { status: 'delivered' | 'queued'; messageId: string } {
-    this.require(sessionId);
+    const session = this.require(sessionId);
+    if (session.state === 'closed') throw new SessionClosedError(sessionId);
     this.repo.setModel(sessionId, model);
     this.deps.bus.emit({ type: 'session.model_changed', sessionId, model });
     return this.sendMessage({ sessionId, body: `/model ${model}` });
