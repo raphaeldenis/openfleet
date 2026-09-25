@@ -17,15 +17,84 @@ function readMigrationSources(dir: string): MigrationSource[] {
     .map((file) => ({ version: file.replace(/\.sql$/, ''), sql: readFileSync(join(dir, file), 'utf8') }));
 }
 
-const TRANSACTION_CONTROL_STATEMENT = /^\s*(BEGIN|COMMIT|END|ROLLBACK|SAVEPOINT|RELEASE)\b/i;
+// ponytail: comments and quoted literals are the only ways SQLite lets a statement hide or fake a
+// token, so a single left-to-right pass that blanks them out (keeping delimiters, so positions and
+// statement counts stay sane) is enough to make a later `;`-split safe to scan for keywords.
+function stripCommentsAndStrings(sql: string): string {
+  let stripped = '';
+  let i = 0;
+  while (i < sql.length) {
+    const twoChars = sql.slice(i, i + 2);
+    if (twoChars === '--') {
+      while (i < sql.length && sql[i] !== '\n') i++;
+      stripped += ' ';
+      continue;
+    }
+    if (twoChars === '/*') {
+      const end = sql.indexOf('*/', i + 2);
+      i = end === -1 ? sql.length : end + 2;
+      stripped += ' ';
+      continue;
+    }
 
-// ponytail: strips CREATE TRIGGER/VIEW bodies (BEGIN…END blocks) before scanning for bare
-// transaction-control statements, so a trigger's own BEGIN/END doesn't false-positive. Ceiling:
-// a regex, not a real parser — an oddly nested body can still slip through; upgrade to a proper
-// SQL statement splitter if that ever bites.
+    const quoteChar = sql[i];
+    const closingChar = quoteChar === '[' ? ']' : quoteChar;
+    if (quoteChar === "'" || quoteChar === '"' || quoteChar === '`' || quoteChar === '[') {
+      i++;
+      while (i < sql.length) {
+        if (sql[i] === closingChar && sql[i + 1] === closingChar && closingChar !== ']') {
+          i += 2;
+          continue;
+        }
+        if (sql[i] === closingChar) {
+          i++;
+          break;
+        }
+        i++;
+      }
+      stripped += quoteChar === '[' ? '[]' : `${quoteChar}${quoteChar}`;
+      continue;
+    }
+
+    stripped += sql[i];
+    i++;
+  }
+  return stripped;
+}
+
+const TRANSACTION_CONTROL_KEYWORDS = ['BEGIN', 'COMMIT', 'END', 'ROLLBACK', 'SAVEPOINT', 'RELEASE'];
+const CREATE_TRIGGER_STATEMENT = /^CREATE\s+(?:TEMP|TEMPORARY\s+)?TRIGGER\b/;
+
+function isTransactionControlStatement(statement: string): boolean {
+  return TRANSACTION_CONTROL_KEYWORDS.some((keyword) => statement === keyword || statement.startsWith(`${keyword} `));
+}
+
+function closesTriggerBody(statement: string): boolean {
+  return statement === 'END' || statement.startsWith('END ');
+}
+
+// ponytail: migrations own no transaction control — applyMigrations owns the BEGIN IMMEDIATE/COMMIT
+// boundary — so once comments and literals are stripped, no top-level statement may start with one
+// of these keywords. A CREATE TRIGGER's own BEGIN…END body is tracked and skipped, not scanned.
 function containsTransactionControl(sql: string): boolean {
-  const withoutTriggerBodies = sql.replace(/\bBEGIN\b[\s\S]*?\bEND\b/gi, '');
-  return withoutTriggerBodies.split(';').some((statement) => TRANSACTION_CONTROL_STATEMENT.test(statement));
+  const statements = stripCommentsAndStrings(sql)
+    .split(';')
+    .map((statement) => statement.trim().toUpperCase())
+    .filter((statement) => statement.length > 0);
+
+  let insideTriggerBody = false;
+  for (const statement of statements) {
+    if (insideTriggerBody) {
+      if (closesTriggerBody(statement)) insideTriggerBody = false;
+      continue;
+    }
+    if (CREATE_TRIGGER_STATEMENT.test(statement) && statement.includes(' BEGIN')) {
+      insideTriggerBody = true;
+      continue;
+    }
+    if (isTransactionControlStatement(statement)) return true;
+  }
+  return false;
 }
 
 // ponytail: `sources` exists only so tests can inject a broken migration; the default reads

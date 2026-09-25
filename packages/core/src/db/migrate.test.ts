@@ -134,3 +134,145 @@ describe('applyMigrations hostile cases', () => {
     expect(recordedB).toEqual({ applied_at: 'recorded-by-another-process' });
   });
 });
+
+describe('applyMigrations transaction-control guard', () => {
+  it('rejects a migration whose SQL hides a COMMIT inside a block comment', () => {
+    const db = openDatabase(':memory:');
+    const blockCommentEscape = [{ version: '999_block_comment_escape', sql: 'CREATE TABLE block_comment_probe (id TEXT); /* sneaky */ COMMIT; INVALID' }];
+
+    expect(() => applyMigrations(db, blockCommentEscape)).toThrow();
+
+    const probeTable = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'block_comment_probe'`).all();
+    expect(probeTable).toHaveLength(0);
+    expect(db.prepare('SELECT version FROM schema_migrations WHERE version = ?').get('999_block_comment_escape')).toBeUndefined();
+  });
+
+  it('rejects a migration whose SQL hides a COMMIT inside a line comment ending in CRLF', () => {
+    const db = openDatabase(':memory:');
+    const lineCommentEscape = [{ version: '999_line_comment_escape', sql: 'CREATE TABLE line_comment_probe (id TEXT); -- sneaky\r\nCOMMIT; INVALID' }];
+
+    expect(() => applyMigrations(db, lineCommentEscape)).toThrow();
+
+    const probeTable = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'line_comment_probe'`).all();
+    expect(probeTable).toHaveLength(0);
+    expect(db.prepare('SELECT version FROM schema_migrations WHERE version = ?').get('999_line_comment_escape')).toBeUndefined();
+  });
+
+  it('rejects a COMMIT-then-BEGIN sequence that would otherwise fool the isTransaction belt', () => {
+    const db = openDatabase(':memory:');
+    const commitThenReopen = [{ version: '999_commit_reopen', sql: "CREATE TABLE reopen_probe (id TEXT) STRICT; COMMIT; BEGIN; SELECT 'END';" }];
+
+    expect(() => applyMigrations(db, commitThenReopen)).toThrow();
+
+    const probeTable = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'reopen_probe'`).all();
+    expect(probeTable).toHaveLength(0);
+    expect(db.prepare('SELECT version FROM schema_migrations WHERE version = ?').get('999_commit_reopen')).toBeUndefined();
+  });
+
+  it('accepts a migration that merely selects a string literal containing a semicolon and the word COMMIT', () => {
+    const db = openDatabase(':memory:');
+    const semicolonInsideString = [{ version: '999_semicolon_literal', sql: "SELECT ';COMMIT';" }];
+
+    expect(() => applyMigrations(db, semicolonInsideString)).not.toThrow();
+
+    expect(db.prepare('SELECT count(*) AS n FROM schema_migrations WHERE version = ?').get('999_semicolon_literal')).toEqual({ n: 1 });
+  });
+
+  it("accepts a trigger whose body selects the string literal 'END'", () => {
+    const db = openDatabase(':memory:');
+    const triggerWithEndLiteral = [
+      {
+        version: '999_trigger_end_literal',
+        sql: `CREATE TRIGGER logs_something AFTER INSERT ON schema_migrations
+              BEGIN SELECT 'END'; END;`,
+      },
+    ];
+
+    expect(() => applyMigrations(db, triggerWithEndLiteral)).not.toThrow();
+
+    expect(db.prepare('SELECT count(*) AS n FROM schema_migrations WHERE version = ?').get('999_trigger_end_literal')).toEqual({ n: 1 });
+  });
+
+  it('rejects a migration whose SQL contains END TRANSACTION', () => {
+    const db = openDatabase(':memory:');
+    const endTransaction = [{ version: '999_end_transaction', sql: 'CREATE TABLE end_txn_probe (id TEXT); END TRANSACTION; INVALID' }];
+
+    expect(() => applyMigrations(db, endTransaction)).toThrow();
+
+    const probeTable = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'end_txn_probe'`).all();
+    expect(probeTable).toHaveLength(0);
+  });
+
+  it('rejects a migration whose SQL contains a lowercase commit', () => {
+    const db = openDatabase(':memory:');
+    const lowercaseCommit = [{ version: '999_lowercase_commit', sql: 'create table lowercase_probe (id text); commit; invalid' }];
+
+    expect(() => applyMigrations(db, lowercaseCommit)).toThrow();
+
+    const probeTable = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'lowercase_probe'`).all();
+    expect(probeTable).toHaveLength(0);
+  });
+
+  it('rejects a COMMIT statement preceded by leading newlines', () => {
+    const db = openDatabase(':memory:');
+    const leadingNewlines = [{ version: '999_leading_newlines', sql: 'CREATE TABLE newline_probe (id TEXT);\n\n  COMMIT;\nINVALID' }];
+
+    expect(() => applyMigrations(db, leadingNewlines)).toThrow();
+
+    const probeTable = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'newline_probe'`).all();
+    expect(probeTable).toHaveLength(0);
+  });
+
+  it('accepts table and column names that start with a transaction-control word', () => {
+    const db = openDatabase(':memory:');
+    const keywordLikeIdentifiers = [
+      { version: '999_release_notes', sql: 'CREATE TABLE release_notes (id TEXT) STRICT;' },
+      { version: '999_commit_sha', sql: 'ALTER TABLE release_notes ADD COLUMN commit_sha TEXT;' },
+    ];
+
+    expect(() => applyMigrations(db, keywordLikeIdentifiers)).not.toThrow();
+
+    const recorded = (db.prepare('SELECT version FROM schema_migrations WHERE version LIKE ?').all('999_%') as { version: string }[]).map((r) => r.version).sort();
+    expect(recorded).toEqual(['999_commit_sha', '999_release_notes']);
+  });
+
+  it('rejects a bare ROLLBACK statement', () => {
+    const db = openDatabase(':memory:');
+    const bareRollback = [{ version: '999_bare_rollback', sql: 'CREATE TABLE rollback_probe (id TEXT); ROLLBACK; INVALID' }];
+
+    expect(() => applyMigrations(db, bareRollback)).toThrow();
+
+    const probeTable = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'rollback_probe'`).all();
+    expect(probeTable).toHaveLength(0);
+  });
+
+  it('rejects a bare SAVEPOINT statement', () => {
+    const db = openDatabase(':memory:');
+    const bareSavepoint = [{ version: '999_bare_savepoint', sql: 'CREATE TABLE savepoint_probe (id TEXT); SAVEPOINT sp1; INVALID' }];
+
+    expect(() => applyMigrations(db, bareSavepoint)).toThrow();
+
+    const probeTable = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'savepoint_probe'`).all();
+    expect(probeTable).toHaveLength(0);
+  });
+
+  it('rejects a bare RELEASE statement', () => {
+    const db = openDatabase(':memory:');
+    const bareRelease = [{ version: '999_bare_release', sql: 'CREATE TABLE release_probe (id TEXT); RELEASE sp1; INVALID' }];
+
+    expect(() => applyMigrations(db, bareRelease)).toThrow();
+
+    const probeTable = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'release_probe'`).all();
+    expect(probeTable).toHaveLength(0);
+  });
+
+  it('rejects a bare END statement', () => {
+    const db = openDatabase(':memory:');
+    const bareEnd = [{ version: '999_bare_end', sql: 'CREATE TABLE end_probe (id TEXT); END; INVALID' }];
+
+    expect(() => applyMigrations(db, bareEnd)).toThrow();
+
+    const probeTable = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'end_probe'`).all();
+    expect(probeTable).toHaveLength(0);
+  });
+});

@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { DatabaseSync } from 'node:sqlite';
 import { openDatabase } from './database.js';
 import { applyMigrations } from './migrate.js';
 
@@ -23,5 +24,17 @@ describe('openDatabase', () => {
     const db = openDatabase(':memory:');
 
     expect(db.prepare('PRAGMA busy_timeout').get()).toEqual({ timeout: 5000 });
+  });
+
+  it('sets busy_timeout before journal_mode so a locked boot waits instead of failing immediately', () => {
+    const execSpy = vi.spyOn(DatabaseSync.prototype, 'exec');
+
+    openDatabase(':memory:');
+
+    const pragmaBatch = execSpy.mock.calls[0]?.[0] as string;
+    expect(pragmaBatch.indexOf('busy_timeout')).toBeGreaterThanOrEqual(0);
+    expect(pragmaBatch.indexOf('busy_timeout')).toBeLessThan(pragmaBatch.indexOf('journal_mode'));
+
+    execSpy.mockRestore();
   });
 });
