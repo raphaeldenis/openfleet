@@ -543,4 +543,38 @@ describe('SessionService.updateModel', () => {
     service.applyInput(session.id, hook(session.id, { hook_event_name: 'Stop' }));
     expect(harness.handles[0]!.written).toEqual(['/model claude-opus-5-5\r']);
   });
+
+  it('delivers only the first of two model switches queued while generating, one per idle turn', async () => {
+    const { service, harness } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit' }));
+
+    service.updateModel(session.id, 'claude-opus-5-5');
+    const second = service.updateModel(session.id, 'claude-haiku-4-5');
+
+    expect(second.status).toBe('queued');
+    expect(service.get(session.id)!.model).toBe('claude-haiku-4-5');
+
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'Stop' }));
+    expect(harness.handles[0]!.written).toEqual(['/model claude-opus-5-5\r']);
+
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit' }));
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'Stop' }));
+    expect(harness.handles[0]!.written).toEqual(['/model claude-opus-5-5\r', '/model claude-haiku-4-5\r']);
+  });
+
+  it('keeps reporting queued forever for a model switch on a session that has already closed', async () => {
+    const { service, harness } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+    harness.handles[0]!.emitExit(0);
+    expect(service.get(session.id)!.state).toBe('closed');
+
+    const result = service.updateModel(session.id, 'claude-opus-5-5');
+
+    expect(result.status).toBe('queued');
+    expect(service.get(session.id)!.model).toBe('claude-opus-5-5');
+    expect(harness.handles[0]!.written).toEqual([]);
+  });
 });

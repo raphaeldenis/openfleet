@@ -130,6 +130,34 @@ describe('REST', () => {
     expect(res.status).toBe(404);
   });
 
+  it('resolves a rung name to its configured model id before recording it on the session', async () => {
+    const created = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
+    await api(`/api/sessions/${created.id}/model`, { method: 'POST', body: JSON.stringify({ model: 'sonnet' }) });
+    const sessions = await (await api('/api/sessions')).json();
+    const updated = sessions.find((s: { id: string }) => s.id === created.id);
+    expect(updated.model).toBe(DEFAULT_MODEL_TABLE.sonnet);
+  });
+
+  it('passes an unrecognized rung name straight through to the session record', async () => {
+    const created = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
+    await api(`/api/sessions/${created.id}/model`, { method: 'POST', body: JSON.stringify({ model: 'gpt-4' }) });
+    const sessions = await (await api('/api/sessions')).json();
+    const updated = sessions.find((s: { id: string }) => s.id === created.id);
+    expect(updated.model).toBe('gpt-4');
+  });
+
+  it('400s a model change with an empty model string', async () => {
+    const created = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
+    const res = await api(`/api/sessions/${created.id}/model`, { method: 'POST', body: JSON.stringify({ model: '' }) });
+    expect(res.status).toBe(400);
+  });
+
+  it('answers a non-JSON model body with a server error rather than a silent 200', async () => {
+    const created = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
+    const res = await api(`/api/sessions/${created.id}/model`, { method: 'POST', body: 'not json' });
+    expect(res.status).toBe(500);
+  });
+
   it('sends a snapshot first, then streams live events', async () => {
     const ws = new WebSocket(`${server.url.replace('http', 'ws')}/ws?token=admin`);
     const nextMessage = () => new Promise<string>((resolve) => ws.addEventListener('message', (m) => resolve(String(m.data)), { once: true }));
