@@ -81,32 +81,50 @@ describe('PulseScheduler', () => {
     const { scheduler, sessions, managers, harness } = setup();
     const manager = await sessions.create({ directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake' });
     sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'SessionStart' }));
-    managers.insert({ sessionId: manager.id, pulseSeconds: 1000, childrenCap: 1, missionText: 'x', createdAt: new Date().toISOString() });
+    managers.insert({ sessionId: manager.id, pulseSeconds: 1, childrenCap: 1, missionText: 'x', createdAt: new Date().toISOString() });
     scheduler.onManagerCreated(managers.get(manager.id)!);
 
     const record = scheduler.pulseNow(manager.id);
 
     expect(record).toBeDefined();
     expect(harness.handles[0]!.written).toEqual([`${PULSE_MESSAGE}\r`]);
+
+    // The re-arm is anchored to the manual pulse's own moment, not the original schedule: the next
+    // pulse lands a full pulseSeconds after pulseNow, not after whatever the original cadence expected.
+    vi.advanceTimersByTime(999);
+    expect(harness.handles[0]!.written).toHaveLength(1);
+    vi.advanceTimersByTime(1);
+    expect(harness.handles[0]!.written).toEqual([`${PULSE_MESSAGE}\r`, `${PULSE_MESSAGE}\r`]);
   });
 
-  it('start() re-arms every persisted manager, honoring elapsed time since its last pulse', async () => {
+  it('restarting the scheduler on the same db resumes cadence from the persisted lastPulseAt', async () => {
     const { db, bus } = setup();
     const harness = new FakeHarness();
-    const sessions = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+    let sessions = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
     const manager = await sessions.create({ directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake' });
     sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'SessionStart' }));
     const managers = new ManagerRepository(db);
-    const almostDue = new Date(Date.now() - 900 * 1000).toISOString(); // pulsed 900s ago, pulseSeconds=1000 → 100s left
-    managers.insert({ sessionId: manager.id, pulseSeconds: 1000, childrenCap: 1, missionText: 'x', lastPulseAt: almostDue, createdAt: almostDue });
+    managers.insert({ sessionId: manager.id, pulseSeconds: 100, childrenCap: 1, missionText: 'x', createdAt: new Date().toISOString() });
 
-    const scheduler = new PulseScheduler({ managers, sessions, bus });
+    let scheduler = new PulseScheduler({ managers, sessions, bus });
+    scheduler.onManagerCreated(managers.get(manager.id)!);
+    vi.advanceTimersByTime(100_000); // a real pulse, persisting lastPulseAt for real this time
+    expect(harness.handles[0]!.written).toHaveLength(1);
+
+    // Simulate a daemon restart: tear down this scheduler and rebuild SessionService on the same db —
+    // resumeAll() is what a real restart does to reattach a harness handle to every open session.
+    scheduler.stop();
+    sessions = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+    await sessions.resumeAll();
+    sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'SessionStart' }));
+    scheduler = new PulseScheduler({ managers, sessions, bus });
+
     scheduler.start();
 
     vi.advanceTimersByTime(99_000);
-    expect(harness.handles[0]!.written).toEqual([]);
+    expect(harness.handles[1]!.written).toEqual([]); // not yet due again
     vi.advanceTimersByTime(1_000);
-    expect(harness.handles[0]!.written).toEqual([`${PULSE_MESSAGE}\r`]);
+    expect(harness.handles[1]!.written).toEqual([`${PULSE_MESSAGE}\r`]); // cadence resumed from the persisted lastPulseAt
   });
 });
 
@@ -141,9 +159,7 @@ describe('PulseScheduler — hostile cases', () => {
     expect(managers.get(manager.id)!.lastPulseAt).toBeUndefined();
     expect(events).toEqual([]);
     expect(harness.handles[0]!.written).toEqual([]);
-
-    vi.advanceTimersByTime(10_000);
-    expect(harness.handles[0]!.written).toEqual([]); // no timer got armed by the no-op pulseNow
+    expect(vi.getTimerCount()).toBe(0); // no timer got armed by the no-op pulseNow
   });
 
   it('a manual pulseNow right after the timer already pulsed, while still idle, delivers a second pulse rather than being deduplicated', async () => {
@@ -242,5 +258,40 @@ describe('PulseScheduler — hostile cases', () => {
     expect(harness.handles[0]!.written).toEqual([]);
     vi.advanceTimersByTime(1);
     expect(harness.handles[0]!.written).toEqual([`${PULSE_MESSAGE}\r`]);
+  });
+
+  it('coalesces repeated cadence ticks and manual pulses into a single queued pulse while the manager is gated', async () => {
+    const { scheduler, sessions, managers, db } = setup();
+    const manager = await sessions.create({ directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake' });
+    sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'SessionStart' }));
+    sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: {} }));
+    managers.insert({ sessionId: manager.id, pulseSeconds: 1, childrenCap: 1, missionText: 'x', createdAt: new Date().toISOString() });
+    scheduler.onManagerCreated(managers.get(manager.id)!);
+
+    vi.advanceTimersByTime(3000); // 3 cadences while waiting_permission
+    scheduler.pulseNow(manager.id);
+    scheduler.pulseNow(manager.id);
+
+    const queuedCount = (db.prepare(`SELECT COUNT(*) as c FROM message_queue WHERE session_id = ? AND status = 'queued'`).get(manager.id) as { c: number }).c;
+    expect(queuedCount).toBe(1); // not five: one undelivered [pulse] already queued means don't enqueue another
+  });
+
+  it('drops a dead manager\'s armed timer on tick, and start() never arms a timer for a closed manager', async () => {
+    const { scheduler, sessions, managers, harness, bus } = setup();
+    const manager = await sessions.create({ directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake' });
+    sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'SessionStart' }));
+    managers.insert({ sessionId: manager.id, pulseSeconds: 1, childrenCap: 1, missionText: 'x', createdAt: new Date().toISOString() });
+    scheduler.onManagerCreated(managers.get(manager.id)!);
+    harness.handles[0]!.emitExit(0); // close before the armed tick fires
+
+    vi.advanceTimersByTime(1000); // the armed tick fires and finds the manager already dead
+    expect(vi.getTimerCount()).toBe(0);
+
+    scheduler.stop();
+    expect(vi.getTimerCount()).toBe(0);
+
+    const restarted = new PulseScheduler({ managers, sessions, bus });
+    restarted.start(); // the manager record is still on disk, but its session is closed
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

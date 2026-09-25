@@ -1,3 +1,7 @@
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
@@ -5,6 +9,13 @@ import { FakeHarness } from '../harness/fakeHarness.js';
 import { ManagerRepository } from './managerRepository.js';
 import { ManagerService } from './managerService.js';
 import { SessionService } from '../sessions/sessionService.js';
+
+function makeRepo(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'of-repo-'));
+  execFileSync('git', ['init', '-b', 'main'], { cwd: dir });
+  execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '--allow-empty', '-m', 'init'], { cwd: dir });
+  return dir;
+}
 
 function setup() {
   const db = openDatabase(':memory:');
@@ -38,6 +49,27 @@ describe('ManagerService.createManagerSession', () => {
       manager: { pulseSeconds: 60, childrenCap: 1, mission: 'x' },
     } as never);
     expect(events).toContainEqual({ type: 'manager.created', manager: expect.objectContaining({ sessionId: session.id, childrenCount: 0, childrenCap: 1 }) });
+  });
+});
+
+describe('ManagerService.createManagerSession — worktrees', () => {
+  it('creates the worktree first, exactly as the non-manager path does, and launches the manager inside it', async () => {
+    const repoPath = makeRepo();
+    const worktreesRoot = mkdtempSync(join(tmpdir(), 'of-wt-'));
+    const db = openDatabase(':memory:');
+    const bus = new EventBus();
+    const sessions = new SessionService({ db, bus, harnesses: [new FakeHarness()], baseUrl: 'http://127.0.0.1:7331', worktreesRoot });
+    const managerRepo = new ManagerRepository(db);
+    const scheduler = { onManagerCreated: vi.fn(), pulseNow: vi.fn(), start: vi.fn(), stop: vi.fn() };
+    const service = new ManagerService({ managers: managerRepo, sessions, bus, scheduler });
+
+    const session = await service.createManagerSession({
+      directory: repoPath, name: 'Lead', emoji: '🧭', harness: 'fake', repoPath, branchName: 'task/CCM-6',
+      manager: { pulseSeconds: 60, childrenCap: 1, mission: 'Ship it' },
+    } as never);
+
+    expect(session.directory).toBe(join(worktreesRoot, 'task-CCM-6'));
+    expect(session.role).toBe('manager');
   });
 });
 

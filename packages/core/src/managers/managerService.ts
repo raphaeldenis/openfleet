@@ -22,12 +22,12 @@ export class ManagerService {
     this.deps = deps;
   }
 
-  async createManagerSession(spec: SessionSpec & { manager: ManagerSpec }): Promise<Session> {
-    const session = await this.deps.sessions.create({
-      ...spec,
-      role: MANAGER_ROLE,
-      seededPrompt: spec.seededPrompt ?? spec.manager.mission,
-    });
+  async createManagerSession(spec: SessionSpec & { manager: ManagerSpec; repoPath?: string; branchName?: string }): Promise<Session> {
+    const managerSpec = { ...spec, role: MANAGER_ROLE, seededPrompt: spec.seededPrompt ?? spec.manager.mission };
+    const hasRepo = spec.repoPath !== undefined && spec.branchName !== undefined;
+    const session = hasRepo
+      ? await this.deps.sessions.createInWorktree({ ...managerSpec, repoPath: spec.repoPath!, branchName: spec.branchName! })
+      : await this.deps.sessions.create(managerSpec);
     const record: ManagerRecord = {
       sessionId: session.id,
       pulseSeconds: spec.manager.pulseSeconds,
