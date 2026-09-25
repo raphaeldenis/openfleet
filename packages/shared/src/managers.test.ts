@@ -38,3 +38,32 @@ describe('ManagerSpecSchema hostile inputs', () => {
     expect(spec.mission).toBe('   ');
   });
 });
+
+describe('ManagerSpecSchema trust-boundary bounds', () => {
+  const validSpec = { pulseSeconds: 60, childrenCap: 1, mission: 'x' };
+
+  it('rejects a pulseSeconds one second past the one-day cap', () => {
+    expect(() => ManagerSpecSchema.parse({ ...validSpec, pulseSeconds: 86401 })).toThrow();
+  });
+
+  it('accepts a pulseSeconds of exactly one day', () => {
+    expect(ManagerSpecSchema.parse({ ...validSpec, pulseSeconds: 86400 }).pulseSeconds).toBe(86400);
+  });
+
+  it('rejects a pulseSeconds so large that setTimeout would clamp it to a tight pulse loop', () => {
+    expect(() => ManagerSpecSchema.parse({ ...validSpec, pulseSeconds: 2147484 })).toThrow();
+  });
+
+  it('rejects a pulseSeconds so large it turns nextPulseAt into an Invalid Date', () => {
+    expect(() => ManagerSpecSchema.parse({ ...validSpec, pulseSeconds: 9000000000000 })).toThrow();
+  });
+
+  it('rejects a childrenCap past the 64 cap', () => {
+    expect(() => ManagerSpecSchema.parse({ ...validSpec, childrenCap: 65 })).toThrow();
+  });
+
+  it('rejects a mission over 64 KiB', () => {
+    const oversizedMission = 'x'.repeat(65 * 1024);
+    expect(() => ManagerSpecSchema.parse({ ...validSpec, mission: oversizedMission })).toThrow();
+  });
+});
