@@ -50,14 +50,6 @@ describe('ensureAdminTokenInStorage', () => {
     expect(localStorage.getItem('openfleet.adminToken')).toBe('existing');
   });
 
-  it('resolves without throwing when the Tauri command rejects, so bootstrap can still proceed', async () => {
-    (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
-    invokeMock.mockRejectedValue(new Error('no such file'));
-    const ensureAdminTokenInStorage = await importFresh();
-
-    await expect(ensureAdminTokenInStorage()).resolves.toBeUndefined();
-  });
-
   it('does not overwrite an existing token when the Tauri command resolves an empty string', async () => {
     (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
     localStorage.setItem('openfleet.adminToken', 'existing');

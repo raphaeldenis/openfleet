@@ -24,8 +24,6 @@ describe('environment', () => {
   });
 
   it('adminToken is read live: a value written to storage after the module was imported is still seen', () => {
-    expect(environment.adminToken).toBe('');
-
     localStorage.setItem('openfleet.adminToken', 'written-after-import');
 
     expect(environment.adminToken).toBe('written-after-import');

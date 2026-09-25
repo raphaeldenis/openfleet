@@ -18,27 +18,10 @@ globalThis.matchMedia ??= (query: string) =>
     dispatchEvent: () => false,
   }) as MediaQueryList;
 
-// ponytail: Node's own experimental localStorage global (gated behind --localstorage-file) shadows
-// jsdom's working implementation and resolves to undefined; a real localStorage.spec would drop this.
-class InMemoryStorage implements Storage {
-  private readonly entries = new Map<string, string>();
-  get length(): number {
-    return this.entries.size;
-  }
-  clear(): void {
-    this.entries.clear();
-  }
-  getItem(key: string): string | null {
-    return this.entries.has(key) ? this.entries.get(key)! : null;
-  }
-  key(index: number): string | null {
-    return Array.from(this.entries.keys())[index] ?? null;
-  }
-  removeItem(key: string): void {
-    this.entries.delete(key);
-  }
-  setItem(key: string, value: string): void {
-    this.entries.set(key, value);
-  }
-}
-globalThis.localStorage ??= new InMemoryStorage();
+// ponytail: Node's own experimental localStorage global (gated behind --localstorage-file) makes
+// vitest skip copying jsdom's working one onto globalThis; reuse jsdom's own instance instead of
+// hand-rolling a Storage. Depends on vitest's jsdom env exposing the JSDOM instance as the
+// undocumented `globalThis.jsdom` — a vitest upgrade that drops it fails the admin-token/environment
+// specs loudly.
+globalThis.localStorage ??= (globalThis as { jsdom?: { window: { localStorage: Storage } } }).jsdom
+  ?.window.localStorage as Storage;
