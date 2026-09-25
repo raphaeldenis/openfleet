@@ -12,6 +12,7 @@ import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
 import { ApprovalService } from '../governance/approvalService.js';
 import { FakeHarness } from '../harness/fakeHarness.js';
+import { DEFAULT_MODEL_TABLE } from '../models.js';
 import { SessionService } from '../sessions/sessionService.js';
 import { createMcpHandler } from './mcpServer.js';
 
@@ -35,7 +36,7 @@ beforeEach(async () => {
   bus = new EventBus();
   harness = new FakeHarness();
   sessions = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt' });
-  server = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals: new ApprovalService({ db, bus }), bus, mcp: createMcpHandler({ sessions }) });
+  server = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals: new ApprovalService({ db, bus }), bus, modelTable: DEFAULT_MODEL_TABLE, mcp: createMcpHandler({ sessions }) });
   const parent = await sessions.create({ directory: '/tmp', name: 'Lead', harness: 'fake', emoji: '🧭' });
   parentId = parent.id;
   parentToken = harness.launches[0]!.mcpToken;

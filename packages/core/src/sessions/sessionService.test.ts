@@ -515,3 +515,64 @@ describe('SessionService resume', () => {
     expect(service.get(freshSession.id)!.state).toBe('closed');
   });
 });
+
+describe('SessionService.updateModel', () => {
+  it('applies the model immediately when idle, and records it', async () => {
+    const { service, harness, events } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+    const result = service.updateModel(session.id, 'claude-opus-5-5');
+    expect(result.status).toBe('delivered');
+    expect(harness.handles[0]!.written).toEqual(['/model claude-opus-5-5\r']);
+    expect(service.get(session.id)!.model).toBe('claude-opus-5-5');
+    expect(events).toContainEqual({ type: 'session.model_changed', sessionId: session.id, model: 'claude-opus-5-5' });
+  });
+
+  it('queues the model switch while the session is generating, and still records the target model immediately', async () => {
+    const { service, harness } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit' }));
+
+    const result = service.updateModel(session.id, 'claude-opus-5-5');
+
+    expect(result.status).toBe('queued');
+    expect(harness.handles[0]!.written).toEqual([]);
+    expect(service.get(session.id)!.model).toBe('claude-opus-5-5');
+
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'Stop' }));
+    expect(harness.handles[0]!.written).toEqual(['/model claude-opus-5-5\r']);
+  });
+
+  it('delivers only the first of two model switches queued while generating, one per idle turn', async () => {
+    const { service, harness } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit' }));
+
+    service.updateModel(session.id, 'claude-opus-5-5');
+    const second = service.updateModel(session.id, 'claude-haiku-4-5');
+
+    expect(second.status).toBe('queued');
+    expect(service.get(session.id)!.model).toBe('claude-haiku-4-5');
+
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'Stop' }));
+    expect(harness.handles[0]!.written).toEqual(['/model claude-opus-5-5\r']);
+
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit' }));
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'Stop' }));
+    expect(harness.handles[0]!.written).toEqual(['/model claude-opus-5-5\r', '/model claude-haiku-4-5\r']);
+  });
+
+  it('rejects a model switch on a session that has already closed', async () => {
+    const { service, harness } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+    harness.handles[0]!.emitExit(0);
+    expect(service.get(session.id)!.state).toBe('closed');
+
+    expect(() => service.updateModel(session.id, 'claude-opus-5-5')).toThrow();
+    expect(service.get(session.id)!.model).toBeUndefined();
+    expect(harness.handles[0]!.written).toEqual([]);
+  });
+});
