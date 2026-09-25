@@ -11,10 +11,8 @@ import { canDeliverNow, nextState, type SessionInput } from './stateMachine.js';
 export interface SessionServiceDeps { db: DatabaseSync; bus: EventBus; harnesses: Harness[]; baseUrl: string; worktreesRoot: string; resumeTimeoutMs?: number }
 
 export class SessionClosedError extends Error {
-  readonly sessionId: string;
   constructor(sessionId: string) {
     super(`session ${sessionId} is closed`);
-    this.sessionId = sessionId;
   }
 }
 

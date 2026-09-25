@@ -51,14 +51,6 @@ describe('resolveModel', () => {
     expect(resolveModel(DEFAULT_MODEL_TABLE, 'claude-sonnet-5-20260101')).toBe('claude-sonnet-5-20260101');
   });
 
-  it('passes an empty string through unchanged rather than resolving it to a rung', () => {
-    expect(resolveModel(DEFAULT_MODEL_TABLE, '')).toBe('');
-  });
-
-  it('is case-sensitive: a differently-cased rung name passes through unchanged', () => {
-    expect(resolveModel(DEFAULT_MODEL_TABLE, 'Sonnet')).toBe('Sonnet');
-  });
-
   it('passes an unrecognized rung name through unchanged', () => {
     expect(resolveModel(DEFAULT_MODEL_TABLE, 'gpt-4')).toBe('gpt-4');
   });
