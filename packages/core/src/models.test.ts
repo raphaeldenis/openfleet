@@ -58,4 +58,12 @@ describe('resolveModel', () => {
   it('passes "constructor" through unchanged rather than returning the inherited Object.prototype member', () => {
     expect(resolveModel(DEFAULT_MODEL_TABLE, 'constructor')).toBe('constructor');
   });
+
+  it('resolves a mixed-case rung name from the table', () => {
+    expect(resolveModel(DEFAULT_MODEL_TABLE, 'Opus')).toBe(DEFAULT_MODEL_TABLE.opus);
+  });
+
+  it('passes "Constructor" through unchanged rather than matching the inherited Object.prototype member', () => {
+    expect(resolveModel(DEFAULT_MODEL_TABLE, 'Constructor')).toBe('Constructor');
+  });
 });
