@@ -3,6 +3,7 @@ import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
 import { FakeHarness } from '../harness/fakeHarness.js';
 import { ApprovalService } from '../governance/approvalService.js';
+import { DEFAULT_MODEL_TABLE } from '../models.js';
 import { SessionService } from '../sessions/sessionService.js';
 import { startServer } from './server.js';
 
@@ -15,7 +16,7 @@ beforeEach(async () => {
   harness = new FakeHarness();
   const sessions = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt' });
   const approvals = new ApprovalService({ db, bus });
-  server = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, bus });
+  server = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, bus, modelTable: DEFAULT_MODEL_TABLE });
 });
 afterEach(() => server.close());
 
@@ -103,7 +104,7 @@ describe('REST', () => {
     const stubHarnessBus = new EventBus();
     const stubHarnessSessions = new SessionService({ db: stubHarnessDb, bus: stubHarnessBus, harnesses: [harness, claudeCliStub], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt' });
     const stubHarnessApprovals = new ApprovalService({ db: stubHarnessDb, bus: stubHarnessBus });
-    const stubHarnessServer = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions: stubHarnessSessions, approvals: stubHarnessApprovals, bus: stubHarnessBus });
+    const stubHarnessServer = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions: stubHarnessSessions, approvals: stubHarnessApprovals, bus: stubHarnessBus, modelTable: DEFAULT_MODEL_TABLE });
     const stubHarnessApi = (path: string, init: RequestInit = {}) =>
       fetch(`${stubHarnessServer.url}${path}`, { ...init, headers: { 'content-type': 'application/json', authorization: 'Bearer admin', ...(init.headers ?? {}) } });
     const session = await (await stubHarnessApi('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'claude-cli' }) })).json();
@@ -114,6 +115,18 @@ describe('REST', () => {
 
   it('returns 404 for a missing session', async () => {
     const res = await api('/api/sessions/nope/messages', { method: 'POST', body: JSON.stringify({ body: 'x' }) });
+    expect(res.status).toBe(404);
+  });
+
+  it('changes a session model and reports delivered or queued', async () => {
+    const created = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
+    const res = await api(`/api/sessions/${created.id}/model`, { method: 'POST', body: JSON.stringify({ model: 'claude-opus-5-5' }) });
+    expect(res.status).toBe(200);
+    expect((await res.json()).status).toBe('queued'); // still 'starting' — the fake session never received SessionStart
+  });
+
+  it('404s a model change for an unknown session', async () => {
+    const res = await api('/api/sessions/nope/model', { method: 'POST', body: JSON.stringify({ model: 'sonnet' }) });
     expect(res.status).toBe(404);
   });
 

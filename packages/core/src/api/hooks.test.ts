@@ -4,6 +4,7 @@ import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
 import { FakeHarness } from '../harness/fakeHarness.js';
 import { ApprovalService } from '../governance/approvalService.js';
+import { DEFAULT_MODEL_TABLE } from '../models.js';
 import { SessionService } from '../sessions/sessionService.js';
 import { startServer } from './server.js';
 
@@ -19,7 +20,7 @@ beforeEach(async () => {
   bus = new EventBus();
   sessions = new SessionService({ db, bus, harnesses: [new FakeHarness()], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt' });
   approvals = new ApprovalService({ db, bus, timeoutMs: 100 });
-  server = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, bus });
+  server = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, bus, modelTable: DEFAULT_MODEL_TABLE });
   const session = await sessions.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
   hookToken = (db.prepare('SELECT hook_token FROM sessions WHERE id = ?').get(session.id) as { hook_token: string }).hook_token;
 });

@@ -2,12 +2,13 @@ import { SessionSpecSchema } from '@openfleet/shared';
 import { z } from 'zod';
 import { ApprovalError, type ApprovalService } from '../governance/approvalService.js';
 import type { FakeHandle } from '../harness/fakeHarness.js';
+import { resolveModel, type ModelTable } from '../models.js';
 import type { SessionService } from '../sessions/sessionService.js';
 import { json, Router } from './router.js';
 
 const CreateSessionSchema = SessionSpecSchema.extend({ repoPath: z.string().optional(), branchName: z.string().optional() });
 
-export function registerRestRoutes(router: Router, deps: { sessions: SessionService; approvals: ApprovalService }): void {
+export function registerRestRoutes(router: Router, deps: { sessions: SessionService; approvals: ApprovalService; modelTable: ModelTable }): void {
   router.add('GET', '/api/sessions', ({ res }) => json(res, 200, deps.sessions.list()));
 
   router.add('POST', '/api/sessions', async ({ res, body }) => {
@@ -30,6 +31,12 @@ export function registerRestRoutes(router: Router, deps: { sessions: SessionServ
     const { data } = z.object({ data: z.string() }).parse(body);
     deps.sessions.writeRaw(params.id!, data);
     json(res, 200, {});
+  });
+
+  router.add('POST', '/api/sessions/:id/model', ({ res, params, body }) => {
+    if (!deps.sessions.get(params.id!)) return json(res, 404, { error: 'not_found' });
+    const { model } = z.object({ model: z.string().min(1) }).parse(body);
+    json(res, 200, deps.sessions.updateModel(params.id!, resolveModel(deps.modelTable, model)));
   });
 
   router.add('POST', '/api/sessions/:id/resize', ({ res, params, body }) => {

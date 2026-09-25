@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { EventBus } from '../events/eventBus.js';
 import type { ApprovalService } from '../governance/approvalService.js';
+import type { ModelTable } from '../models.js';
 import type { SessionService } from '../sessions/sessionService.js';
 import { hooksHandler } from './hooksHandler.js';
 import { registerRestRoutes } from './restHandlers.js';
@@ -11,7 +12,7 @@ const HOOK_PATH = /^\/hooks\/([^/]+)$/;
 
 export interface ServerDeps {
   host: string; port: number; adminToken: string;
-  sessions: SessionService; approvals: ApprovalService; bus: EventBus;
+  sessions: SessionService; approvals: ApprovalService; bus: EventBus; modelTable: ModelTable;
   mcp?: (req: IncomingMessage, res: ServerResponse, body: unknown) => Promise<void>;
 }
 

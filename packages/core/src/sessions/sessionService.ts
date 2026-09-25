@@ -97,6 +97,13 @@ export class SessionService {
     return { status: 'delivered', messageId: message.id };
   }
 
+  updateModel(sessionId: string, model: string): { status: 'delivered' | 'queued'; messageId: string } {
+    this.require(sessionId);
+    this.repo.setModel(sessionId, model);
+    this.deps.bus.emit({ type: 'session.model_changed', sessionId, model });
+    return this.sendMessage({ sessionId, body: `/model ${model}` });
+  }
+
   applyInput(sessionId: string, input: SessionInput): void {
     const session = this.require(sessionId);
     const state = nextState(session.state, input);

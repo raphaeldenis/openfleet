@@ -10,3 +10,4 @@ src-tauri/target
 .mcp.json
 test-results/
 playwright-report/
+.scratch/
