@@ -45,10 +45,6 @@ export class ManagerService {
     return this.deps.managers.get(sessionId);
   }
 
-  listRecords(): ManagerRecord[] {
-    return this.deps.managers.list();
-  }
-
   listViews(): ManagerView[] {
     return this.deps.managers.list().map((record) => this.view(record));
   }

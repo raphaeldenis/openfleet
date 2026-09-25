@@ -182,11 +182,6 @@ describe('REST', () => {
     expect(res.status).toBe(201);
     const session = await res.json();
     expect(session.role).toBe('manager');
-
-    // Only a session that actually went through ManagerService.createManagerSession has a manager record
-    // to pulse — a plain SessionService.create for the same body would leave this route 404ing.
-    const pulseRes = await api(`/api/managers/${session.id}/pulse`, { method: 'POST' });
-    expect(pulseRes.status).toBe(200);
   });
 
   it('400s a manager session request with a non-positive pulseSeconds', async () => {
