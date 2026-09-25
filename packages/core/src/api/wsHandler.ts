@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { ApprovalService } from '../governance/approvalService.js';
 import type { EventBus } from '../events/eventBus.js';
+import type { ManagerService } from '../managers/managerService.js';
 import type { SessionService } from '../sessions/sessionService.js';
 
 const ClientMessageSchema = z.discriminatedUnion('type', [
@@ -40,7 +41,7 @@ function handleClientMessage(socket: WebSocket, message: ClientMessage, deps: { 
   }
 }
 
-export function createWsHandler(deps: { bus: EventBus; sessions: SessionService; approvals: ApprovalService; adminToken: string }) {
+export function createWsHandler(deps: { bus: EventBus; sessions: SessionService; approvals: ApprovalService; managers: ManagerService; adminToken: string }) {
   const wss = new WebSocketServer({ noServer: true });
   deps.bus.subscribe((event) => {
     const payload = JSON.stringify(event);
@@ -49,8 +50,7 @@ export function createWsHandler(deps: { bus: EventBus; sessions: SessionService;
   wss.on('connection', (socket: WebSocket) => {
     // Sent synchronously, before any broadcast event can reach this socket, so the client always has a
     // baseline to upsert onto — a session created in the connect/open race just arrives twice, harmlessly.
-    // ponytail: empty until ManagerService lands (phase 2 Task 6)
-    send(socket, { type: 'snapshot', sessions: deps.sessions.list(), approvals: deps.approvals.listPending(), managers: [] });
+    send(socket, { type: 'snapshot', sessions: deps.sessions.list(), approvals: deps.approvals.listPending(), managers: deps.managers.listViews() });
     socket.on('message', (raw) => {
       const message = parseClientMessage(raw);
       if (!message) return;
