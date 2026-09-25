@@ -223,6 +223,19 @@ describe('REST', () => {
     expect(res.status).toBe(404);
   });
 
+  it('409s a pulse request for a manager whose session has already closed', async () => {
+    const created = await (await api('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake', manager: { pulseSeconds: 3600, childrenCap: 1, mission: 'x' } }),
+    })).json();
+    await api(`/api/sessions/${created.id}/close`, { method: 'POST' });
+
+    const res = await api(`/api/managers/${created.id}/pulse`, { method: 'POST' });
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: 'session_closed' });
+  });
+
   it('rejects a pulse request with no bearer token, same as every other /api/ route', async () => {
     const created = await (await api('/api/sessions', {
       method: 'POST',

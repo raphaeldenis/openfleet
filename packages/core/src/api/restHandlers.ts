@@ -27,7 +27,8 @@ export function registerRestRoutes(router: Router, deps: { sessions: SessionServ
 
   router.add('POST', '/api/managers/:id/pulse', ({ res, params }) => {
     if (!deps.managers.get(params.id!)) return json(res, 404, { error: 'not_found' });
-    deps.pulseScheduler.pulseNow(params.id!);
+    const pulsed = deps.pulseScheduler.pulseNow(params.id!);
+    if (!pulsed) return json(res, 409, { error: 'session_closed' });
     json(res, 200, { pulsed: true });
   });
 

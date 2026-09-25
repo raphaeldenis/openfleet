@@ -31,6 +31,7 @@ export class PulseScheduler {
   pulseNow(sessionId: string): ManagerRecord | undefined {
     const record = this.deps.managers.get(sessionId);
     if (!record) return undefined;
+    if (!this.isManagerAlive(sessionId)) return undefined; // a closed manager is never pulsed
     this.clearTimer(sessionId);
     this.fire(record);
     return this.deps.managers.get(sessionId);
@@ -50,10 +51,13 @@ export class PulseScheduler {
   private tick(sessionId: string): void {
     const record = this.deps.managers.get(sessionId);
     if (!record) return; // manager record removed
-    const session = this.deps.sessions.get(sessionId);
-    const isManagerAlive = session !== undefined && session.state !== 'closed';
-    if (!isManagerAlive) return; // a closed manager never reschedules itself
+    if (!this.isManagerAlive(sessionId)) return; // a closed manager never reschedules itself
     this.fire(record);
+  }
+
+  private isManagerAlive(sessionId: string): boolean {
+    const session = this.deps.sessions.get(sessionId);
+    return session !== undefined && session.state !== 'closed';
   }
 
   private fire(record: ManagerRecord): void {

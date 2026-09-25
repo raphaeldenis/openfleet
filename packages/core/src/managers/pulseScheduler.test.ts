@@ -122,28 +122,28 @@ describe('PulseScheduler — hostile cases', () => {
     expect(scheduler.pulseNow(plainChild.id)).toBeUndefined();
   });
 
-  it('pulseNow on a manager whose session already closed still reports a record and a manager.pulsed broadcast, but writes nothing to the dead pty', async () => {
+  it('pulseNow on a manager whose session already closed writes nothing, broadcasts nothing, and arms no timer', async () => {
     const { scheduler, sessions, managers, harness, bus } = setup();
     const manager = await sessions.create({ directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake' });
     sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'SessionStart' }));
     managers.insert({ sessionId: manager.id, pulseSeconds: 1000, childrenCap: 1, missionText: 'x', createdAt: new Date().toISOString() });
-    scheduler.onManagerCreated(managers.get(manager.id)!);
     harness.handles[0]!.emitExit(0);
     expect(sessions.get(manager.id)!.state).toBe('closed');
 
     const events: unknown[] = [];
     bus.subscribe((e) => events.push(e));
 
+    // A closed manager is never pulsed: pulseNow shares the same aliveness check tick() uses, so a
+    // manual pulse on a dead session is a no-op rather than a misleading record/broadcast.
     const record = scheduler.pulseNow(manager.id);
 
-    // Unlike the timer path (tick()), pulseNow()/fire() never checks whether the session is still alive
-    // before firing — surfacing this via the manager's own record and broadcast is misleading for a
-    // manager whose process is already dead. Production defect, handed back; this test pins the current
-    // behaviour so a fix can be verified against it.
-    expect(record).toBeDefined();
-    expect(record!.lastPulseAt).toBeDefined();
-    expect(events).toContainEqual({ type: 'manager.pulsed', manager: expect.objectContaining({ sessionId: manager.id }) });
+    expect(record).toBeUndefined();
+    expect(managers.get(manager.id)!.lastPulseAt).toBeUndefined();
+    expect(events).toEqual([]);
     expect(harness.handles[0]!.written).toEqual([]);
+
+    vi.advanceTimersByTime(10_000);
+    expect(harness.handles[0]!.written).toEqual([]); // no timer got armed by the no-op pulseNow
   });
 
   it('a manual pulseNow right after the timer already pulsed, while still idle, delivers a second pulse rather than being deduplicated', async () => {
