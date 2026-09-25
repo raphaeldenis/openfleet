@@ -49,4 +49,44 @@ describe('ensureAdminTokenInStorage', () => {
 
     expect(localStorage.getItem('openfleet.adminToken')).toBe('existing');
   });
+
+  it('resolves without throwing when the Tauri command rejects, so bootstrap can still proceed', async () => {
+    (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    invokeMock.mockRejectedValue(new Error('no such file'));
+    const ensureAdminTokenInStorage = await importFresh();
+
+    await expect(ensureAdminTokenInStorage()).resolves.toBeUndefined();
+  });
+
+  it('does not overwrite an existing token when the Tauri command resolves an empty string', async () => {
+    (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    localStorage.setItem('openfleet.adminToken', 'existing');
+    invokeMock.mockResolvedValue('');
+    const ensureAdminTokenInStorage = await importFresh();
+
+    await ensureAdminTokenInStorage();
+
+    expect(localStorage.getItem('openfleet.adminToken')).toBe('existing');
+  });
+
+  it('overwrites a stale token already in storage with the freshly read one', async () => {
+    (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    localStorage.setItem('openfleet.adminToken', 'stale-token');
+    invokeMock.mockResolvedValue('fresh-token');
+    const ensureAdminTokenInStorage = await importFresh();
+
+    await ensureAdminTokenInStorage();
+
+    expect(localStorage.getItem('openfleet.adminToken')).toBe('fresh-token');
+  });
+
+  it('stores whatever the Tauri command resolves verbatim, trailing whitespace included', async () => {
+    (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    invokeMock.mockResolvedValue('token-with-trailing-newline\n');
+    const ensureAdminTokenInStorage = await importFresh();
+
+    await ensureAdminTokenInStorage();
+
+    expect(localStorage.getItem('openfleet.adminToken')).toBe('token-with-trailing-newline\n');
+  });
 });
