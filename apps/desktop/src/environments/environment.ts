@@ -1,4 +1,8 @@
 export const environment = {
-  apiUrl: globalThis.localStorage?.getItem('openfleet.apiUrl') ?? 'http://127.0.0.1:7331',
-  adminToken: (globalThis as { OPENFLEET_ADMIN_TOKEN?: string }).OPENFLEET_ADMIN_TOKEN ?? '',
+  get apiUrl(): string {
+    return globalThis.localStorage?.getItem('openfleet.apiUrl') ?? 'http://127.0.0.1:7331';
+  },
+  get adminToken(): string {
+    return globalThis.localStorage?.getItem('openfleet.adminToken') ?? '';
+  },
 };
