@@ -174,6 +174,64 @@ describe('REST', () => {
     expect(res.status).toBe(500);
   });
 
+  it('a POST /api/sessions carrying a manager block creates a role=manager session routed through ManagerService, not a plain session', async () => {
+    const res = await api('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake', manager: { pulseSeconds: 60, childrenCap: 2, mission: 'Ship it' } }),
+    });
+    expect(res.status).toBe(201);
+    const session = await res.json();
+    expect(session.role).toBe('manager');
+
+    // Only a session that actually went through ManagerService.createManagerSession has a manager record
+    // to pulse — a plain SessionService.create for the same body would leave this route 404ing.
+    const pulseRes = await api(`/api/managers/${session.id}/pulse`, { method: 'POST' });
+    expect(pulseRes.status).toBe(200);
+  });
+
+  it('400s a manager session request with a non-positive pulseSeconds', async () => {
+    const res = await api('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake', manager: { pulseSeconds: 0, childrenCap: 2, mission: 'x' } }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('pulses a manager session on demand and writes the pulse straight to its pty when it is idle', async () => {
+    const created = await (await api('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake', manager: { pulseSeconds: 3600, childrenCap: 1, mission: 'x' } }),
+    })).json();
+    const { hookToken } = await (await api(`/api/sessions/${created.id}/tokens`)).json();
+    await fetch(`${server.url}/hooks/${hookToken}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ session_id: created.id, hook_event_name: 'SessionStart' }) });
+
+    const res = await api(`/api/managers/${created.id}/pulse`, { method: 'POST' });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ pulsed: true });
+    expect(harness.handles[0]!.written).toEqual(['[pulse] Re-read your mission and continue: check your children, unblock them, record what you did.\r']);
+  });
+
+  it('404s a pulse request for a session id with no manager record', async () => {
+    const created = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
+    const res = await api(`/api/managers/${created.id}/pulse`, { method: 'POST' });
+    expect(res.status).toBe(404);
+  });
+
+  it('404s a pulse request for an id that is not a session at all', async () => {
+    const res = await api('/api/managers/nope/pulse', { method: 'POST' });
+    expect(res.status).toBe(404);
+  });
+
+  it('rejects a pulse request with no bearer token, same as every other /api/ route', async () => {
+    const created = await (await api('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake', manager: { pulseSeconds: 60, childrenCap: 1, mission: 'x' } }),
+    })).json();
+    const res = await fetch(`${server.url}/api/managers/${created.id}/pulse`, { method: 'POST' });
+    expect(res.status).toBe(401);
+  });
+
   it('sends a snapshot first, then streams live events', async () => {
     const ws = new WebSocket(`${server.url.replace('http', 'ws')}/ws?token=admin`);
     const nextMessage = () => new Promise<string>((resolve) => ws.addEventListener('message', (m) => resolve(String(m.data)), { once: true }));

@@ -109,3 +109,138 @@ describe('PulseScheduler', () => {
     expect(harness.handles[0]!.written).toEqual([`${PULSE_MESSAGE}\r`]);
   });
 });
+
+describe('PulseScheduler — hostile cases', () => {
+  it('pulseNow returns undefined for an id with no manager record at all', () => {
+    const { scheduler } = setup();
+    expect(scheduler.pulseNow('no-such-session')).toBeUndefined();
+  });
+
+  it('pulseNow returns undefined for a real, non-manager session', async () => {
+    const { scheduler, sessions } = setup();
+    const plainChild = await sessions.create({ directory: '/tmp', name: 'Gimli', emoji: '⚔️', harness: 'fake' });
+    expect(scheduler.pulseNow(plainChild.id)).toBeUndefined();
+  });
+
+  it('pulseNow on a manager whose session already closed still reports a record and a manager.pulsed broadcast, but writes nothing to the dead pty', async () => {
+    const { scheduler, sessions, managers, harness, bus } = setup();
+    const manager = await sessions.create({ directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake' });
+    sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'SessionStart' }));
+    managers.insert({ sessionId: manager.id, pulseSeconds: 1000, childrenCap: 1, missionText: 'x', createdAt: new Date().toISOString() });
+    scheduler.onManagerCreated(managers.get(manager.id)!);
+    harness.handles[0]!.emitExit(0);
+    expect(sessions.get(manager.id)!.state).toBe('closed');
+
+    const events: unknown[] = [];
+    bus.subscribe((e) => events.push(e));
+
+    const record = scheduler.pulseNow(manager.id);
+
+    // Unlike the timer path (tick()), pulseNow()/fire() never checks whether the session is still alive
+    // before firing — surfacing this via the manager's own record and broadcast is misleading for a
+    // manager whose process is already dead. Production defect, handed back; this test pins the current
+    // behaviour so a fix can be verified against it.
+    expect(record).toBeDefined();
+    expect(record!.lastPulseAt).toBeDefined();
+    expect(events).toContainEqual({ type: 'manager.pulsed', manager: expect.objectContaining({ sessionId: manager.id }) });
+    expect(harness.handles[0]!.written).toEqual([]);
+  });
+
+  it('a manual pulseNow right after the timer already pulsed, while still idle, delivers a second pulse rather than being deduplicated', async () => {
+    const { scheduler, sessions, managers, harness } = setup();
+    const manager = await sessions.create({ directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake' });
+    sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'SessionStart' }));
+    managers.insert({ sessionId: manager.id, pulseSeconds: 1, childrenCap: 1, missionText: 'x', createdAt: new Date().toISOString() });
+    scheduler.onManagerCreated(managers.get(manager.id)!);
+    vi.advanceTimersByTime(1000);
+    expect(harness.handles[0]!.written).toHaveLength(1); // the timer's own pulse
+
+    scheduler.pulseNow(manager.id);
+
+    // The manager is still idle (nothing consumed the first pulse's turn), so the manual pulse is
+    // delivered immediately too — two [pulse] messages land back to back for what a human would read
+    // as "one" due pulse. Pin this so a debounce, if one gets added, changes this expectation on purpose.
+    expect(harness.handles[0]!.written).toEqual([`${PULSE_MESSAGE}\r`, `${PULSE_MESSAGE}\r`]);
+  });
+
+  it('emits manager.pulsed with the updated lastPulseAt and current childrenCount, not the record from before the pulse', async () => {
+    const { scheduler, sessions, managers, harness, bus } = setup();
+    const manager = await sessions.create({ directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake' });
+    sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'SessionStart' }));
+    managers.insert({ sessionId: manager.id, pulseSeconds: 1, childrenCap: 5, missionText: 'ship it', createdAt: new Date().toISOString() });
+    scheduler.onManagerCreated(managers.get(manager.id)!);
+    await sessions.create({ directory: '/tmp', name: 'Gimli', emoji: '⚔️', harness: 'fake', parentId: manager.id });
+
+    const events: unknown[] = [];
+    bus.subscribe((e) => events.push(e));
+    vi.advanceTimersByTime(1000);
+
+    expect(harness.handles[0]!.written).toHaveLength(1);
+    expect(events).toContainEqual({
+      type: 'manager.pulsed',
+      manager: expect.objectContaining({ sessionId: manager.id, missionText: 'ship it', childrenCount: 1, lastPulseAt: expect.any(String) }),
+    });
+  });
+
+  it('stop() cancels every armed timer so no manager pulses again', async () => {
+    const { scheduler, sessions, managers, harness } = setup();
+    const manager = await sessions.create({ directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake' });
+    sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'SessionStart' }));
+    managers.insert({ sessionId: manager.id, pulseSeconds: 1, childrenCap: 1, missionText: 'x', createdAt: new Date().toISOString() });
+    scheduler.onManagerCreated(managers.get(manager.id)!);
+
+    scheduler.stop();
+    vi.advanceTimersByTime(60_000);
+
+    expect(harness.handles[0]!.written).toEqual([]);
+  });
+
+  it('calling start() twice does not double-fire a manager due at boot', async () => {
+    const { db, bus } = setup();
+    const harness = new FakeHarness();
+    const sessions = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+    const manager = await sessions.create({ directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake' });
+    sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'SessionStart' }));
+    const managers = new ManagerRepository(db);
+    const alreadyDue = new Date(Date.now() - 2000).toISOString();
+    managers.insert({ sessionId: manager.id, pulseSeconds: 1, childrenCap: 1, missionText: 'x', lastPulseAt: alreadyDue, createdAt: alreadyDue });
+    const scheduler = new PulseScheduler({ managers, sessions, bus });
+
+    scheduler.start();
+    scheduler.start();
+    vi.advanceTimersByTime(0);
+
+    expect(harness.handles[0]!.written).toHaveLength(1);
+  });
+
+  it('a manager already overdue at boot pulses on the very next tick instead of waiting a full pulseSeconds', async () => {
+    const { db, bus } = setup();
+    const harness = new FakeHarness();
+    const sessions = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+    const manager = await sessions.create({ directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake' });
+    sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'SessionStart' }));
+    const managers = new ManagerRepository(db);
+    const wayOverdue = new Date(Date.now() - 5_000_000).toISOString();
+    managers.insert({ sessionId: manager.id, pulseSeconds: 1000, childrenCap: 1, missionText: 'x', lastPulseAt: wayOverdue, createdAt: wayOverdue });
+    const scheduler = new PulseScheduler({ managers, sessions, bus });
+
+    scheduler.start();
+    vi.advanceTimersByTime(0);
+
+    expect(harness.handles[0]!.written).toEqual([`${PULSE_MESSAGE}\r`]);
+  });
+
+  it('a manager record with lastPulseAt in the future (clock skew) waits the full remaining delay instead of firing immediately', async () => {
+    const { scheduler, sessions, managers, harness } = setup();
+    const manager = await sessions.create({ directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake' });
+    sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'SessionStart' }));
+    const inTheFuture = new Date(Date.now() + 10_000).toISOString();
+    managers.insert({ sessionId: manager.id, pulseSeconds: 1, childrenCap: 1, missionText: 'x', lastPulseAt: inTheFuture, createdAt: new Date().toISOString() });
+
+    scheduler.onManagerCreated(managers.get(manager.id)!);
+    vi.advanceTimersByTime(10_999);
+    expect(harness.handles[0]!.written).toEqual([]);
+    vi.advanceTimersByTime(1);
+    expect(harness.handles[0]!.written).toEqual([`${PULSE_MESSAGE}\r`]);
+  });
+});
