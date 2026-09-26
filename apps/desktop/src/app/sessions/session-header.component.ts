@@ -3,6 +3,7 @@ import type { Session } from '@openfleet/shared';
 import { StateChipComponent } from '../design/state-chip.component';
 import { ModelSelectorComponent } from './model-selector.component';
 import { PermissionModePickerComponent } from './permission-mode-picker.component';
+import { exitCodeLabel } from './session-close-status';
 
 @Component({
   selector: 'of-session-header',
@@ -14,7 +15,7 @@ import { PermissionModePickerComponent } from './permission-mode-picker.componen
       <span class="name" data-testid="session-name" title="Renaming isn't available yet — no backend route to update a session's name">{{ session().name }}</span>
       <of-state-chip [state]="session().state" />
       @if (session().state === 'closed') {
-        <span class="exit-code" data-testid="session-exit-code">closed · exit {{ session().exitCode ?? 0 }}</span>
+        <span class="exit-code" data-testid="session-exit-code">{{ exitCodeLabel(session().exitCode) }}</span>
       }
       <span class="harness" data-testid="session-harness" title="Harness">{{ session().harness }}</span>
       <of-model-selector [sessionId]="session().id" />
@@ -38,4 +39,5 @@ import { PermissionModePickerComponent } from './permission-mode-picker.componen
 })
 export class SessionHeaderComponent {
   readonly session = input.required<Session>();
+  protected readonly exitCodeLabel = exitCodeLabel;
 }

@@ -75,15 +75,16 @@ describe('SessionViewComponent', () => {
   });
 
   it('agrees with the header about an undefined exit code instead of showing it as both a clean and a failed close', async () => {
-    // Arrange — the header (session-header.component.ts) defaults a missing exitCode to 0 ("closed · exit 0"),
-    // so the banner right below it must not simultaneously call the same close an error.
+    // Arrange — an undefined exitCode is neither known-clean nor known-failed, so the header
+    // (session-header.component.ts) shows a bare "closed" and the banner must not call it an error.
     await render(SessionViewComponent, {
       bindings: [inputBinding('sessionId', () => 's1')],
       providers: [{ provide: FleetApiService, useValue: fakeApi() }, { provide: FleetEventsService, useValue: fakeEvents([session({ state: 'closed', exitCode: undefined })]) }],
     });
 
-    // Assert
-    expect(screen.getByTestId('session-exit-code')).toHaveTextContent('closed · exit 0');
+    // Assert — neither a clean nor a failed close: the header shows no exit number, the banner stays non-error
+    expect(screen.getByTestId('session-exit-code')).toHaveTextContent('closed');
+    expect(screen.getByTestId('session-exit-code')).not.toHaveTextContent('exit');
     expect(screen.getByTestId('banner')).toHaveAttribute('data-variant', 'done');
   });
 

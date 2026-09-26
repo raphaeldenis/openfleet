@@ -1,9 +1,10 @@
 import { ChangeDetectionStrategy, Component, computed, inject, input } from '@angular/core';
 import type { Session } from '@openfleet/shared';
 import { FleetEventsService } from '../core/fleet-events.service';
-import { BannerComponent } from '../design/banner.component';
+import { BannerComponent, BannerVariant } from '../design/banner.component';
 import { ComposerComponent } from './composer.component';
 import { PermissionGateCardComponent } from './permission-gate-card.component';
+import { closeStatusFor } from './session-close-status';
 import { SessionHeaderComponent } from './session-header.component';
 import { TerminalComponent } from './terminal.component';
 
@@ -28,7 +29,7 @@ const RESUME_TOOLTIP = "Resuming a closed session isn't available yet — no bac
         </div>
         @if (s.state === 'closed') {
           <div class="closed-footer" data-testid="session-closed-footer">
-            <of-banner [variant]="s.exitCode === 0 ? 'done' : 'error'" [title]="closedTitle(s)" [description]="closedDescription(s)" />
+            <of-banner [variant]="closedVariant(s)" [title]="closedTitle(s)" [description]="closedDescription(s)" />
             <button type="button" class="of-btn of-btn--secondary" data-testid="resume-session" disabled [title]="resumeTooltip">
               ↻ Resume
             </button>
@@ -60,12 +61,20 @@ export class SessionViewComponent {
     return this.events.approvals().find((a) => a.sessionId === session.id && a.status === 'pending');
   });
 
+  protected closedVariant(session: Session): BannerVariant {
+    return closeStatusFor(session.exitCode).kind === 'failed' ? 'error' : 'done';
+  }
+
   protected closedTitle(session: Session): string {
-    return session.exitCode === 0 ? '■ Closed · exit 0' : `■ Closed · exit ${session.exitCode ?? 1}`;
+    const status = closeStatusFor(session.exitCode);
+    if (status.kind === 'unknown') return '■ Session closed';
+    return status.kind === 'clean' ? '■ Closed · exit 0' : `■ Closed · exit ${status.exitCode}`;
   }
 
   protected closedDescription(session: Session): string {
-    return session.exitCode === 0
+    const status = closeStatusFor(session.exitCode);
+    if (status.kind === 'unknown') return 'Session closed · worktree kept · transcript is read-only.';
+    return status.kind === 'clean'
       ? 'Closed · worktree kept · transcript is read-only.'
       : 'The session exited with an error · worktree kept · transcript is read-only.';
   }

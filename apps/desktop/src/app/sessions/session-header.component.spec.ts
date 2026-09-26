@@ -42,10 +42,11 @@ describe('SessionHeaderComponent', () => {
     expect(screen.getByTestId('session-exit-code')).toHaveTextContent('closed · exit 1');
   });
 
-  it('defaults the exit code to 0 when the daemon omits it on a clean close', async () => {
+  it('shows a bare "closed" with no exit number when the daemon omits the exit code', async () => {
     const session = baseSession({ state: 'closed' });
     await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
-    expect(screen.getByTestId('session-exit-code')).toHaveTextContent('closed · exit 0');
+    expect(screen.getByTestId('session-exit-code')).toHaveTextContent('closed');
+    expect(screen.getByTestId('session-exit-code')).not.toHaveTextContent('exit');
   });
 
   it('renders the worktree directory', async () => {
