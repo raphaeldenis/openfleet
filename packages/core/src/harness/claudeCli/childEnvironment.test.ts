@@ -39,6 +39,8 @@ describe('childEnvironment', () => {
       CLAUDE_CODE_OAUTH_TOKEN: 'tok',
       CLAUDE_CODE_MAX_OUTPUT_TOKENS: '4096',
       CLAUDE_CODE_API_KEY_HELPER_TTL_MS: '3600000',
+      CLAUDE_CODE_SUBAGENT_MODEL: 'haiku',
+      CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
     };
 
     expect(childEnvironment(parentEnv)).toEqual(parentEnv);
@@ -49,8 +51,7 @@ describe('childEnvironment', () => {
       CLAUDE_JOB_DIR: '/tmp/job',
       CLAUDE_CODE_SESSION_ATTENDED: '1',
       CLAUDE_CODE_EXECPATH: '/usr/local/bin/claude',
-      CLAUDE_CODE_SUBAGENT_MODEL: 'haiku',
-      CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
+      CLAUDE_CODE_SESSION_KIND: 'daemon',
       CLAUDE_CODE_SSE_PORT: '1234',
       PATH: '/usr/bin',
     };
