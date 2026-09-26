@@ -3,7 +3,7 @@ import { openDatabase } from '../db/database.js';
 import { FakeHandle, FakeHarness } from '../harness/fakeHarness.js';
 import type { Harness, HarnessHandle, HarnessLaunch } from '../harness/harness.js';
 import { EventBus } from '../events/eventBus.js';
-import { DEFAULT_CLOSE_ESCALATE_MS, RESUME_LAUNCH_FAILED_EXIT_CODE, RESUME_TIMEOUT_EXIT_CODE, SessionService, SUBMIT_KEYSTROKE_DELAY_MS } from './sessionService.js';
+import { DEFAULT_CLOSE_ESCALATE_MS, RESUME_LAUNCH_FAILED_EXIT_CODE, RESUME_TIMEOUT_EXIT_CODE, SessionService, SUBMIT_KEYSTROKE_DELAY_MS, TURN_START_TIMEOUT_MS } from './sessionService.js';
 import { SessionRepository } from './sessionRepository.js';
 import type { ServerEvent } from '@openfleet/shared';
 
@@ -711,7 +711,7 @@ describe('SessionService submit-keystroke hostile cases', () => {
     expect(harness.handles[0]!.written).toEqual([longBody, '\r']);
   });
 
-  it('writes the delayed submit keystroke even if the session has moved to "generating" before the delay elapses', async () => {
+  it('drops the delayed submit keystroke if the session has moved to "generating" before the delay elapses, retrying once idle again', async () => {
     vi.useFakeTimers();
     const { service, harness, events } = setup();
     const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
@@ -723,10 +723,137 @@ describe('SessionService submit-keystroke hostile cases', () => {
 
     await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
 
-    // Pinning actual behaviour: deliver()'s timer only checks handle identity, never the session's
-    // current state, so the '\r' still lands and the message is still marked delivered.
-    expect(harness.handles[0]!.written).toEqual(['first', '\r']);
+    // Writing '\r' into a session that has already moved on would submit into the wrong turn — the
+    // timer drops it and leaves the message queued for the next idle flush instead (Review Focus #1).
+    expect(harness.handles[0]!.written).toEqual(['first']);
+    expect(events.filter((e) => e.type === 'message.delivered')).toHaveLength(0);
+    expect(service.hasQueuedMessage(session.id, 'first')).toBe(true);
+
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'Stop' })); // generating -> idle: retries the flush
+    expect(harness.handles[0]!.written).toEqual(['first', 'first']);
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
+    expect(harness.handles[0]!.written).toEqual(['first', 'first', '\r']);
     expect(events.filter((e) => e.type === 'message.delivered')).toHaveLength(1);
+  });
+
+  it('drops the delayed submit keystroke and leaves the message queued if a permission prompt interrupts mid-delay, instead of accidentally answering the prompt', async () => {
+    vi.useFakeTimers();
+    const { service, harness, events } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+
+    service.sendMessage({ sessionId: session.id, body: 'do X' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: {} }));
+    expect(service.get(session.id)!.state).toBe('waiting_permission');
+
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
+
+    expect(harness.handles[0]!.written).toEqual(['do X']); // the '\r' must never land on the permission prompt itself
+    expect(events.filter((e) => e.type === 'message.delivered')).toHaveLength(0);
+    expect(service.hasQueuedMessage(session.id, 'do X')).toBe(true);
+
+    service.applyInput(session.id, { kind: 'permission_resolved' }); // -> generating
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'Stop' })); // -> idle: retries the flush
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
+    expect(events.filter((e) => e.type === 'message.delivered')).toHaveLength(1);
+    expect(service.hasQueuedMessage(session.id, 'do X')).toBe(false);
+  });
+
+  it('does not crash the daemon when the pty write for the delayed submit keystroke throws, leaving the message queued for a later retry', async () => {
+    vi.useFakeTimers();
+    const { service, harness, events } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+
+    const handle = harness.handles[0]!;
+    const originalWrite = handle.write.bind(handle);
+    handle.write = (data: string) => {
+      if (data === '\r') throw new Error('pty write failed');
+      originalWrite(data);
+    };
+
+    const result = service.sendMessage({ sessionId: session.id, body: 'do X' });
+    expect(result.status).toBe('delivered'); // the body itself reached the terminal; only the '\r' write fails below
+
+    let threw = false;
+    try {
+      await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
+    } catch {
+      threw = true;
+    }
+    expect(threw).toBe(false); // a throwing pty write must not crash the daemon as an uncaught exception
+
+    expect(handle.written).toEqual(['do X']); // the '\r' write threw and never landed
+    expect(events.filter((e) => e.type === 'message.delivered')).toHaveLength(0);
+    expect(service.hasQueuedMessage(session.id, 'do X')).toBe(true);
+  });
+
+  it('clears the pending submit keystroke immediately on close(), before the graceful-kill escalation window elapses', async () => {
+    vi.useFakeTimers();
+    const { service, harness } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+    const handle = harness.handles[0]!;
+    handle.ignoresGracefulKill = true;
+
+    service.sendMessage({ sessionId: session.id, body: 'do X' }); // leaves the submit keystroke pending
+
+    const closePromise = service.close(session.id);
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS); // the delay elapses mid-teardown, well before the escalation window
+    expect(handle.written).toEqual(['do X']); // no stray '\r' lands on the dying pty
+
+    await vi.advanceTimersByTimeAsync(DEFAULT_CLOSE_ESCALATE_MS); // escalation window elapses, force-kill fires
+    await closePromise;
+    expect(handle.written).toEqual(['do X']); // still no '\r', even after the process is gone
+  });
+
+  it('a send arriving in the post-\\r gap before the next hook queues behind an earlier queued message, preserving FIFO order', async () => {
+    vi.useFakeTimers();
+    const { service, harness } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+
+    service.sendMessage({ sessionId: session.id, body: 'A' }); // delivered immediately
+    const b = service.sendMessage({ sessionId: session.id, body: 'B' }); // queued: A's submit keystroke is pending
+    expect(b.status).toBe('queued');
+
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS); // A's '\r' lands, but no hook has confirmed the turn yet
+    expect(harness.handles[0]!.written).toEqual(['A', '\r']);
+
+    // C arrives in the gap between A's '\r' landing and the CLI's own hook confirming the turn started —
+    // it must not jump ahead of B, which has been sitting queued the whole time.
+    const c = service.sendMessage({ sessionId: session.id, body: 'C' });
+    expect(c.status).toBe('queued');
+    expect(harness.handles[0]!.written).toEqual(['A', '\r']);
+
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit' }));
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'Stop' }));
+    expect(harness.handles[0]!.written).toEqual(['A', '\r', 'B']); // B flushed first, not C
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
+    expect(harness.handles[0]!.written).toEqual(['A', '\r', 'B', '\r']);
+
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit' }));
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'Stop' }));
+    expect(harness.handles[0]!.written).toEqual(['A', '\r', 'B', '\r', 'C']);
+  });
+
+  it('flushes a queued message after the turn-start timeout even if no hook ever confirms the turn began', async () => {
+    vi.useFakeTimers();
+    const { service, harness } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+
+    service.sendMessage({ sessionId: session.id, body: 'A' });
+    const b = service.sendMessage({ sessionId: session.id, body: 'B' });
+    expect(b.status).toBe('queued');
+
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS); // A's '\r' lands
+    expect(harness.handles[0]!.written).toEqual(['A', '\r']);
+
+    // No hook ever arrives to confirm the turn started (e.g. the CLI silently drops the keystroke) — the
+    // turn-start timeout must still flush B rather than stranding it forever.
+    await vi.advanceTimersByTimeAsync(TURN_START_TIMEOUT_MS);
+    expect(harness.handles[0]!.written).toEqual(['A', '\r', 'B']);
   });
 
   it('a daemon restart mid-delay drops the stale instance\'s pending submit keystroke and delivers the message exactly once, to the resumed handle', async () => {
