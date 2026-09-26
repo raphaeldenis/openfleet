@@ -20,42 +20,84 @@ function utf8ByteLength(text: string): number {
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [FormsModule],
   template: `
-    <form (ngSubmit)="submit()">
+    <form (ngSubmit)="submit()" class="of-form">
       <h3>New manager</h3>
-      <input data-testid="manager-directory" name="managerDirectory" [(ngModel)]="directory" placeholder="/path/to/worktree" required />
-      <input data-testid="manager-name" name="managerName" [ngModel]="name()" (ngModelChange)="name.set($event)" placeholder="Name" required />
-      <input data-testid="manager-emoji" name="managerEmoji" [(ngModel)]="emoji" size="2" aria-label="Emoji" />
-      <select data-testid="manager-model" name="managerModel" [(ngModel)]="model" aria-label="Model">
-        @for (rung of modelRungs; track rung) {
-          <option [value]="rung">{{ rung }}</option>
+
+      <div class="of-section-title">Workspace</div>
+      <label class="of-field">
+        <span class="of-label">Repository</span>
+        <input class="of-input" data-testid="manager-directory" name="managerDirectory" [(ngModel)]="directory" placeholder="/path/to/worktree" required />
+      </label>
+
+      <div class="of-section-title">Agent</div>
+      <label class="of-field">
+        <span class="of-label">Model</span>
+        <select class="of-input" data-testid="manager-model" name="managerModel" [(ngModel)]="model">
+          @for (rung of modelRungs; track rung) {
+            <option [value]="rung">{{ rung }}</option>
+          }
+        </select>
+      </label>
+
+      <div class="of-section-title">Identity</div>
+      <div class="of-row">
+        <label class="of-field of-field--emoji">
+          <span class="of-label">Emoji</span>
+          <input class="of-input" data-testid="manager-emoji" name="managerEmoji" [(ngModel)]="emoji" size="2" />
+        </label>
+        <label class="of-field of-field--grow">
+          <span class="of-label">Name</span>
+          <input class="of-input" data-testid="manager-name" name="managerName" [ngModel]="name()" (ngModelChange)="name.set($event)" placeholder="Name" required />
+        </label>
+      </div>
+
+      <div class="of-section-title">Manager</div>
+      <div class="of-row">
+        <label class="of-field">
+          <span class="of-label">Pulse seconds</span>
+          <input
+            class="of-input" data-testid="manager-pulse-seconds" name="pulseSeconds" type="number" [(ngModel)]="pulseSeconds"
+            placeholder="Pulse seconds" [attr.min]="pulseSecondsBounds.min" [attr.max]="pulseSecondsBounds.max"
+            [attr.aria-invalid]="pulseSecondsError ? 'true' : null" required
+          />
+          @if (pulseSecondsError) {
+            <span role="alert" data-testid="manager-pulse-seconds-error" class="of-error">✕ {{ pulseSecondsError }}</span>
+          }
+        </label>
+        <label class="of-field">
+          <span class="of-label">Children cap</span>
+          <input
+            class="of-input" data-testid="manager-children-cap" name="childrenCap" type="number" [(ngModel)]="childrenCap"
+            placeholder="Children cap" [attr.min]="childrenCapBounds.min" [attr.max]="childrenCapBounds.max"
+            [attr.aria-invalid]="childrenCapError ? 'true' : null" required
+          />
+          @if (childrenCapError) {
+            <span role="alert" data-testid="manager-children-cap-error" class="of-error">✕ {{ childrenCapError }}</span>
+          }
+        </label>
+      </div>
+      <label class="of-field">
+        <span class="of-label">Mission</span>
+        <textarea
+          class="of-input of-input--textarea" data-testid="manager-mission" name="mission" [ngModel]="mission()"
+          (ngModelChange)="mission.set($event)" placeholder="Mission" [attr.aria-invalid]="missionError ? 'true' : null" required
+        ></textarea>
+        @if (missionError) {
+          <span role="alert" data-testid="manager-mission-error" class="of-error">✕ {{ missionError }}</span>
         }
-      </select>
-      <input
-        data-testid="manager-pulse-seconds" name="pulseSeconds" type="number" [(ngModel)]="pulseSeconds"
-        placeholder="Pulse seconds" [attr.min]="pulseSecondsBounds.min" [attr.max]="pulseSecondsBounds.max" required
-      />
-      @if (pulseSecondsError) {
-        <span role="alert" data-testid="manager-pulse-seconds-error">{{ pulseSecondsError }}</span>
-      }
-      <input
-        data-testid="manager-children-cap" name="childrenCap" type="number" [(ngModel)]="childrenCap"
-        placeholder="Children cap" [attr.min]="childrenCapBounds.min" [attr.max]="childrenCapBounds.max" required
-      />
-      @if (childrenCapError) {
-        <span role="alert" data-testid="manager-children-cap-error">{{ childrenCapError }}</span>
-      }
-      <textarea data-testid="manager-mission" name="mission" [ngModel]="mission()" (ngModelChange)="mission.set($event)" placeholder="Mission" required></textarea>
-      @if (missionError) {
-        <span role="alert" data-testid="manager-mission-error">{{ missionError }}</span>
-      }
+      </label>
+
       <button type="submit" class="of-btn of-btn--primary" data-testid="create-manager" [disabled]="pending()">+ New manager</button>
       @if (serverError(); as error) {
-        <p role="alert" data-testid="manager-form-error">{{ error }}</p>
+        <p role="alert" data-testid="manager-form-error" class="of-error">✕ {{ error }}</p>
       }
     </form>
   `,
   styles: `
-    form { display: flex; flex-direction: column; gap: .4rem; padding: .6rem }
+    .of-form { display: flex; flex-direction: column; gap: .625rem; padding: .875rem }
+    .of-row { display: flex; gap: 1rem }
+    .of-row .of-field { flex: 1 }
+    .of-field--emoji { flex: none; width: 3.5rem }
   `,
 })
 export class NewManagerFormComponent {

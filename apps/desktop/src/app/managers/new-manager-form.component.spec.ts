@@ -89,4 +89,31 @@ describe('NewManagerFormComponent', () => {
     expect(screen.getByRole('textbox', { name: /emoji/i })).toBeTruthy();
     expect(screen.getByRole('combobox', { name: /model/i })).toBeTruthy();
   });
+
+  it('marks an invalid field with the ✕ icon and the error color token, not just plain text', async () => {
+    const api = { createManagerSession: vi.fn().mockResolvedValue({}) };
+    await render(NewManagerFormComponent, { providers: [{ provide: FleetApiService, useValue: api }] });
+    await fillMinimalValidForm();
+
+    await userEvent.clear(screen.getByTestId('manager-pulse-seconds'));
+    await userEvent.type(screen.getByTestId('manager-pulse-seconds'), '0');
+    await userEvent.click(screen.getByTestId('create-manager'));
+
+    const error = screen.getByTestId('manager-pulse-seconds-error');
+    expect(error).toHaveTextContent('✕');
+    expect(error).toHaveAttribute('role', 'alert');
+    expect(error.className).toContain('of-error');
+  });
+
+  it('marks the invalid input itself with aria-invalid so assistive tech and styling agree with the error message', async () => {
+    const api = { createManagerSession: vi.fn().mockResolvedValue({}) };
+    await render(NewManagerFormComponent, { providers: [{ provide: FleetApiService, useValue: api }] });
+    await fillMinimalValidForm();
+
+    await userEvent.clear(screen.getByTestId('manager-children-cap'));
+    await userEvent.type(screen.getByTestId('manager-children-cap'), '0');
+    await userEvent.click(screen.getByTestId('create-manager'));
+
+    expect(screen.getByTestId('manager-children-cap')).toHaveAttribute('aria-invalid', 'true');
+  });
 });

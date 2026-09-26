@@ -1,6 +1,6 @@
 import { ChangeDetectionStrategy, Component, DestroyRef, computed, effect, inject, signal } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
-import { ActivatedRoute } from '@angular/router';
+import { ActivatedRoute, Router } from '@angular/router';
 import { map } from 'rxjs';
 import { MANAGER_ROLE, type ManagerView, type Session } from '@openfleet/shared';
 import { FleetApiService } from '../core/fleet-api.service';
@@ -27,11 +27,23 @@ import { PulseNowAction } from './pulse-now';
               <span class="role-badge">manager</span>
               <of-state-chip [state]="session.state" />
             </div>
+            <div class="meta-line mono" data-testid="manager-dashboard-meta">
+              <span>{{ session.harness }}</span>
+              <span> · </span>
+              <span>{{ session.model || '—' }}</span>
+              <span> · </span>
+              <span title="Cost tracking is not implemented yet">—</span>
+            </div>
           </div>
           @if (manager(); as manager) {
             <div class="cap" title="Children cap headroom">
               <span>Children</span>
               <span data-testid="manager-dashboard-cap" class="mono">{{ children().length }}/{{ manager.childrenCap }}</span>
+              <div
+                class="cap-bar" role="meter"
+                [attr.aria-valuenow]="children().length" [attr.aria-valuemin]="0" [attr.aria-valuemax]="manager.childrenCap"
+                [attr.aria-label]="children().length + ' of ' + manager.childrenCap + ' children'"
+              ><div class="cap-bar-fill" [style.width.%]="capacityPercent()"></div></div>
             </div>
             <div class="pulse">
               <of-pulse-ring [fractionElapsed]="fractionElapsed()" label="Next pulse" />
@@ -45,6 +57,12 @@ import { PulseNowAction } from './pulse-now';
             [disabled]="pulse.pending() || isSessionClosed()"
             (click)="pulseNow()"
           >Pulse now</button>
+          <button
+            type="button"
+            class="of-btn of-btn--secondary"
+            data-testid="manager-dashboard-terminal"
+            (click)="openTerminal()"
+          >Terminal</button>
           @if (displayedPulseMessage(); as message) {
             <span
               data-testid="manager-dashboard-pulse-message"
@@ -92,7 +110,10 @@ import { PulseNowAction } from './pulse-now';
     .name-row { display: flex; align-items: center; gap: .5rem }
     .name { font-size: 1rem; font-weight: 600 }
     .role-badge { font-size: .6875rem; padding: 0 .375rem; border: 1px solid var(--line-2); border-radius: .25rem; color: var(--mut) }
+    .meta-line { font-size: .75rem; color: var(--mut) }
     .cap { display: flex; flex-direction: column; gap: .25rem; width: 8rem; font-size: .6875rem; color: var(--mut) }
+    .cap-bar { height: .375rem; border-radius: .25rem; background: var(--sunk); overflow: hidden }
+    .cap-bar-fill { height: 100%; background: var(--accent) }
     .pulse { display: flex; align-items: center; gap: .5rem; font-size: .6875rem }
     .mono { font-family: var(--mono) }
     .children { margin: 1.25rem; border: 1px solid var(--line); border-radius: .625rem; background: var(--panel) }
@@ -112,6 +133,7 @@ import { PulseNowAction } from './pulse-now';
 export class ManagerDashboardComponent {
   protected readonly managerRole = MANAGER_ROLE;
   private readonly route = inject(ActivatedRoute);
+  private readonly router = inject(Router);
   private readonly events = inject(FleetEventsService);
   protected readonly pulse = new PulseNowAction(inject(FleetApiService));
   private readonly managerId = toSignal(this.route.paramMap.pipe(map((params) => params.get('id') ?? '')), { initialValue: '' });
@@ -162,7 +184,17 @@ export class ManagerDashboardComponent {
     return Math.min(1, Math.max(0, 1 - secondsRemaining / manager.pulseSeconds));
   });
 
+  protected readonly capacityPercent = computed(() => {
+    const manager = this.manager();
+    if (!manager || manager.childrenCap <= 0) return 0;
+    return Math.min(100, (this.children().length / manager.childrenCap) * 100);
+  });
+
   pulseNow(): void {
     void this.pulse.run(this.managerId());
+  }
+
+  openTerminal(): void {
+    void this.router.navigate(['/'], { queryParams: { session: this.managerId() } });
   }
 }

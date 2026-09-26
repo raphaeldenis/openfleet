@@ -113,7 +113,7 @@ describe('SessionListComponent', () => {
     expect(screen.getByTestId('session-c1')).toBeTruthy();
   });
 
-  it('renders nothing for a grandchild (a session whose parent is itself a child), pinning the documented one-level-only nesting', async () => {
+  it('renders a grandchild (a session whose parent is itself a child) indented under its own parent, not hidden', async () => {
     const fake = fakeEvents({
       sessions: [
         { id: 'm1', name: 'Lead', emoji: '🧭', role: 'manager', state: 'idle' },
@@ -123,8 +123,45 @@ describe('SessionListComponent', () => {
     });
     await render(SessionListComponent, { providers: [provideRouter([]), { provide: FleetEventsService, useValue: fake }] });
 
-    expect(screen.getByTestId('session-c1')).toBeTruthy();
-    expect(screen.queryByTestId('session-g1')).toBeNull();
+    const grandchildRow = screen.getByTestId('session-g1');
+    expect(grandchildRow).toBeTruthy();
+    expect(grandchildRow.className).toContain('child');
+    const innermostChildrenList = grandchildRow.closest('.children');
+    const outermostChildrenList = innermostChildrenList?.parentElement?.closest('.children');
+    expect(outermostChildrenList).toBeTruthy();
+  });
+
+  it('renders a great-grandchild the same way, so lineage depth is not artificially capped', async () => {
+    const fake = fakeEvents({
+      sessions: [
+        { id: 'm1', name: 'Lead', emoji: '🧭', role: 'manager', state: 'idle' },
+        { id: 'c1', name: 'Gimli', emoji: '⚔️', parentId: 'm1', state: 'idle' },
+        { id: 'g1', name: 'Legolas', emoji: '🏹', parentId: 'c1', state: 'idle' },
+        { id: 'gg1', name: 'Frodo', emoji: '💍', parentId: 'g1', state: 'idle' },
+      ],
+    });
+    await render(SessionListComponent, { providers: [provideRouter([]), { provide: FleetEventsService, useValue: fake }] });
+
+    expect(screen.getByTestId('session-gg1')).toBeTruthy();
+  });
+
+  it('shows the model rung and a not-implemented cost placeholder on a session row, like the dashboard table', async () => {
+    const fake = fakeEvents({ sessions: [{ id: 's1', name: 'Gimli', emoji: '⚔️', state: 'idle', model: 'sonnet' }] });
+    await render(SessionListComponent, { providers: [provideRouter([]), { provide: FleetEventsService, useValue: fake }] });
+
+    const row = screen.getByTestId('session-s1');
+    expect(row).toHaveTextContent('sonnet');
+    const cost = row.querySelector('[title="Cost tracking is not implemented yet"]');
+    expect(cost).toHaveTextContent('—');
+  });
+
+  it('keeps a long session name on a single line with the full name available in the title attribute', async () => {
+    const longName = 'A very long manager session name that would otherwise wrap across two lines';
+    const fake = fakeEvents({ sessions: [{ id: 's1', name: longName, emoji: '⚔️', state: 'idle' }] });
+    await render(SessionListComponent, { providers: [provideRouter([]), { provide: FleetEventsService, useValue: fake }] });
+
+    const nameEl = screen.getByTestId('session-s1').querySelector('.name');
+    expect(nameEl).toHaveAttribute('title', longName);
   });
 
   it('lets a keyboard-only user Tab to a session row and open it with Enter', async () => {
