@@ -42,7 +42,10 @@ const LOOK: Record<ChipState, ChipLook> = {
   `,
 })
 export class StateChipComponent {
-  readonly state = input.required<ChipState>();
+  readonly state = input.required<string>();
   readonly stale = input(false);
-  protected readonly look = computed(() => LOOK[this.state()]);
+  protected readonly look = computed((): ChipLook => {
+    const state = this.state();
+    return LOOK[state as ChipState] ?? { icon: '?', label: state, colorVar: '--state-closed', live: false, errBlink: false };
+  });
 }

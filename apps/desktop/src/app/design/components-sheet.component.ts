@@ -18,7 +18,7 @@ const BANNERS: { variant: BannerVariant; title: string; description: string }[] 
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [StateChipComponent, KindBadgeComponent, BannerComponent, PulseRingComponent],
   template: `
-    <div class="sheet">
+    <div class="sheet" data-testid="components-sheet">
       <h1>Component sheet</h1>
       <section class="row">
         @for (state of states; track state) { <of-state-chip [state]="state" /> }
