@@ -8,6 +8,8 @@ const ALWAYS_ALLOW_TOOLTIP = 'Always-allow lists for a session are a later phase
 @Component({
   selector: 'of-permission-gate-card',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  // Keeps its natural height as a flex sibling of the terminal instead of being shrunk with it.
+  host: { style: 'display: block; flex: none;' },
   template: `
     <div class="gate-card" data-testid="permission-gate-card">
       <div class="gate-header">

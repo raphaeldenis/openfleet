@@ -11,6 +11,15 @@ function approval(patch: Partial<Approval> = {}): Approval {
 }
 
 describe('PermissionGateCardComponent', () => {
+  it('does not shrink when the terminal beside it does, so it stays fully visible above the composer', async () => {
+    // Structure/CSS-only: the real layout regression (card pushed below the viewport) is only visible in a browser.
+    const { fixture } = await render(PermissionGateCardComponent, {
+      bindings: [inputBinding('approval', () => approval())],
+      providers: [{ provide: FleetApiService, useValue: { decide: vi.fn() } }],
+    });
+    expect(fixture.nativeElement).toHaveStyle({ flex: 'none' });
+  });
+
   it('renders the tool name and its arguments as formatted JSON', async () => {
     await render(PermissionGateCardComponent, {
       bindings: [inputBinding('approval', () => approval())],
