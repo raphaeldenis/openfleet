@@ -1,3 +1,4 @@
+import { PERMISSION_MODES } from '@openfleet/shared';
 import { describe, expect, it } from 'vitest';
 import { buildClaudeLaunchConfig } from './launchConfig.js';
 
@@ -72,18 +73,19 @@ describe('buildClaudeLaunchConfig', () => {
     expect(promptIndex).toBeLessThan(config.args.indexOf('--mcp-config'));
   });
 
-  it('passes --permission-mode when the launch specifies one', () => {
-    const config = buildClaudeLaunchConfig({ ...launch, permissionMode: 'acceptEdits' });
+  it.each(PERMISSION_MODES)('passes --permission-mode %s on a first run, exactly the documented CLI choice', (mode) => {
+    const config = buildClaudeLaunchConfig({ ...launch, permissionMode: mode });
     const flagIndex = config.args.indexOf('--permission-mode');
     expect(flagIndex).toBeGreaterThan(-1);
-    expect(config.args[flagIndex + 1]).toBe('acceptEdits');
+    expect(config.args[flagIndex + 1]).toBe(mode);
   });
 
-  it('passes --permission-mode plan when the launch specifies the plan mode', () => {
-    const config = buildClaudeLaunchConfig({ ...launch, permissionMode: 'plan' });
+  it.each(PERMISSION_MODES)('passes --permission-mode %s on resume too, after --resume <id>', (mode) => {
+    const config = buildClaudeLaunchConfig({ ...launch, resuming: true, permissionMode: mode });
+    const resumeIndex = config.args.indexOf('--resume');
     const flagIndex = config.args.indexOf('--permission-mode');
-    expect(flagIndex).toBeGreaterThan(-1);
-    expect(config.args[flagIndex + 1]).toBe('plan');
+    expect(flagIndex).toBeGreaterThan(resumeIndex);
+    expect(config.args[flagIndex + 1]).toBe(mode);
   });
 
   it('omits --permission-mode entirely when none is given, so the CLI keeps the user default', () => {

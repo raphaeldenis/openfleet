@@ -29,9 +29,9 @@ describe('ServerEvent', () => {
 });
 
 describe('Session', () => {
-  it('exposes an optional permissionMode typed as one of the five known modes', () => {
+  it('exposes an optional permissionMode typed as one of the six documented CLI modes', () => {
     expectTypeOf<Session['permissionMode']>().toEqualTypeOf<
-      'default' | 'acceptEdits' | 'plan' | 'auto' | 'bypassPermissions' | undefined
+      'manual' | 'acceptEdits' | 'plan' | 'auto' | 'bypassPermissions' | 'dontAsk' | undefined
     >();
   });
 });

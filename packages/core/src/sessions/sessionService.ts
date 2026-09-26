@@ -1,11 +1,11 @@
 import type { DatabaseSync } from 'node:sqlite';
-import { PERMISSION_MODES, type PermissionMode, type Session, type SessionSpec } from '@openfleet/shared';
+import type { PermissionMode, Session, SessionSpec } from '@openfleet/shared';
 import { EventBus } from '../events/eventBus.js';
 import { createWorktree } from '../git/worktrees.js';
 import type { Harness, HarnessHandle } from '../harness/harness.js';
 import { newId, newToken } from '../ids.js';
 import { MessageQueue } from './messageQueue.js';
-import { SessionRepository } from './sessionRepository.js';
+import { normalizePermissionMode, SessionRepository } from './sessionRepository.js';
 import { canDeliverNow, nextState, provesTurnEnded, type SessionInput } from './stateMachine.js';
 
 export interface SessionServiceDeps { db: DatabaseSync; bus: EventBus; harnesses: Harness[]; baseUrl: string; worktreesRoot: string; resumeTimeoutMs?: number; submitKeystrokeDelayMs?: number }
@@ -36,9 +36,6 @@ export const MAX_DELIVERY_RETRIES = 3;
 export const PARKED_RETRY_MS = 60_000;
 export const RESUME_TIMEOUT_EXIT_CODE = -1;
 export const RESUME_LAUNCH_FAILED_EXIT_CODE = -2;
-
-// ponytail: 'manual' joins the shared enum in P2-T06b; drop the union then.
-const RESUMABLE_PERMISSION_MODES = new Set<string>([...PERMISSION_MODES, 'manual']);
 
 // ponytail: main.ts constructs exactly one SessionService per real daemon process — this module-level
 // map (rather than an instance field) is what lets a freshly resumed handle outrank a stale pre-restart
@@ -519,12 +516,13 @@ export class SessionService {
   }
 
   private resolveResumePermissionMode(session: Session): PermissionMode | undefined {
-    const stored = session.permissionMode;
-    if (stored === undefined) return undefined;
-    if (stored === 'default') return 'manual' as PermissionMode;
-    if (RESUMABLE_PERMISSION_MODES.has(stored)) return stored as PermissionMode;
-    console.warn(`resumeOne: session ${session.id} has an unrecognized permission_mode "${stored}", resuming without --permission-mode`);
-    return undefined;
+    // session.permissionMode already went through normalizePermissionMode() once in the repository
+    // mapper, which discards whether the raw column value was recognized — re-read the raw column here
+    // so the resume path can still warn on an unrecognized value the repository silently turned into undefined.
+    const raw = this.repo.rawPermissionMode(session.id);
+    const { mode, wasRecognized } = normalizePermissionMode(raw);
+    if (!wasRecognized) console.warn(`resumeOne: session ${session.id} has an unrecognized permission_mode "${raw}", resuming without --permission-mode`);
+    return mode;
   }
 
   private armResumeTimeout(sessionId: string, handle: HarnessHandle): void {
