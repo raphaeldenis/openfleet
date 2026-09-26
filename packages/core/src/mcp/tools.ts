@@ -1,5 +1,6 @@
 import { MANAGER_ROLE, PERMISSION_MODES, type Approval, type ManagerSpec, type Session } from '@openfleet/shared';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { existsSync, realpathSync } from 'node:fs';
 import { z } from 'zod';
 import { createWorktree, isPathWithin, sameGitRepository } from '../git/worktrees.js';
 import { resolveModel, type ModelTable } from '../models.js';
@@ -84,13 +85,27 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     // A parentless caller is a human-launched root session (Raphaël's own Lead/Capitaine), always trusted to
     // bootstrap a manager; an MCP-spawned child needs the manager role itself — see Task 7 report deviation.
     const isRootSession = caller.parentId === undefined;
-    const canCreateManager = isRootSession || caller.role === MANAGER_ROLE;
+    // The same trust boundary gates both spawning a manager and overriding the gated default permission
+    // mode: a plain MCP-spawned child gets neither privilege.
+    const isTrustedOrchestrator = isRootSession || caller.role === MANAGER_ROLE;
     const resolvedTargetRole = input.manager ? MANAGER_ROLE : input.role;
     if (resolvedTargetRole === MANAGER_ROLE && !input.manager) return fail('role "manager" requires a manager spec');
-    if (input.manager && !canCreateManager) return fail('only an existing manager may create another manager');
+    if (input.manager && !isTrustedOrchestrator) return fail('only an existing manager may create another manager');
 
-    const isWithinWorktreesRoot = isPathWithin(input.directory, deps.worktreesRoot);
-    const isCallersOwnRepo = await sameGitRepository(caller.directory, input.directory);
+    if (input.permission_mode !== undefined) {
+      if (!isTrustedOrchestrator) return fail('only a manager or a root session may set permission_mode; a plain caller\'s children always get manual');
+      if (input.permission_mode === 'bypassPermissions') return fail('bypassPermissions cannot be set through MCP');
+    }
+
+    // The directory must already exist: without this, a symlinked "..' segment could be lexically
+    // collapsed back inside the root by path.resolve() while the OS actually opened somewhere else, and
+    // a genuinely missing directory used to reach the harness, which then died with exit 1 instead of
+    // failing this tool call cleanly.
+    if (!existsSync(input.directory)) return fail(`directory does not exist: ${input.directory}`);
+    const realDirectory = realpathSync(input.directory);
+
+    const isWithinWorktreesRoot = isPathWithin(realDirectory, deps.worktreesRoot);
+    const isCallersOwnRepo = await sameGitRepository(caller.directory, realDirectory);
     if (!isWithinWorktreesRoot && !isCallersOwnRepo) return fail('directory must be inside the worktrees root or inside your own git repository');
 
     if (caller.role === MANAGER_ROLE) {
@@ -114,7 +129,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     const permissionMode = input.permission_mode ?? 'manual';
 
     const spec = {
-      directory: input.directory, name: input.name, emoji: input.emoji ?? '🤖', model: resolvedModel,
+      directory: realDirectory, name: input.name, emoji: input.emoji ?? '🤖', model: resolvedModel,
       seededPrompt: input.seeded_prompt, role: input.role, parentId: caller.id, harness: caller.harness, permissionMode,
     };
 
@@ -147,7 +162,10 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
   server.registerTool('pulse_now', { description: 'Trigger an immediate pulse for a manager (yourself, or a manager you are the parent of)', inputSchema: { session_id: z.string().optional() } }, async ({ session_id }) => {
     const targetId = session_id ?? caller.id;
     const target = sessions.get(targetId);
-    if (!target || !isInLineage(target) || target.role !== MANAGER_ROLE) return fail('target is not a manager in your lineage');
+    // Narrower than isInLineage: a manager may pulse itself or a manager it is the direct parent of, but
+    // never its own parent — pulsing your manager is not "yours to trigger" even though you can message it.
+    const isSelfOrOwnManagedChild = target !== undefined && (target.id === caller.id || target.parentId === caller.id);
+    if (!target || !isSelfOrOwnManagedChild || target.role !== MANAGER_ROLE) return fail('target is not a manager in your lineage');
     const record = pulseScheduler.pulseNow(targetId);
     if (!record) return fail('manager record not found');
     return ok({ pulsed: true });

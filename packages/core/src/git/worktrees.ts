@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { existsSync, realpathSync } from 'node:fs';
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 
 const run = promisify(execFile);
@@ -49,23 +49,25 @@ export async function sameGitRepository(pathA: string, pathB: string): Promise<b
 async function gitCommonDir(cwd: string): Promise<string | undefined> {
   try {
     const { stdout } = await run('git', ['rev-parse', '--git-common-dir'], { cwd });
-    return resolve(cwd, stdout.trim());
+    // realpathSync canonicalizes the result so two spellings of the same cwd (e.g. a raw session
+    // directory vs. its realpath'd form) still compare equal — otherwise a caller stored with one
+    // spelling could never match a repo_path/directory given with the other.
+    return realpathSync(resolve(cwd, stdout.trim()));
   } catch {
     return undefined;
   }
 }
 
-// Resolves symlinks on the longest existing prefix of `path`, then re-appends whatever tail does not
-// exist yet — so a not-yet-created worktree directory still resolves consistently with its parents.
-function resolveRealPath(path: string): string {
-  const absolute = resolve(path);
-  if (existsSync(absolute)) return realpathSync(absolute);
-  const parent = dirname(absolute);
-  if (parent === absolute) return absolute;
-  return join(resolveRealPath(parent), relative(parent, absolute));
-}
-
+// Both paths must exist: fs.realpathSync resolves symlinks and ".." components as the OS does, in the
+// order they appear, which a lexical path.resolve() cannot — that gap let a candidate like
+// "root/link/.." escape through a symlinked "link" while still looking like it stayed under root.
 export function isPathWithin(candidate: string, root: string): boolean {
-  const relativePath = relative(resolveRealPath(root), resolveRealPath(candidate));
-  return relativePath !== '' && !relativePath.startsWith('..') && !isAbsolute(relativePath);
+  try {
+    const realRoot = realpathSync(resolve(root));
+    const realCandidate = realpathSync(resolve(candidate));
+    const relativePath = relative(realRoot, realCandidate);
+    return relativePath === '' || (relativePath !== '..' && !relativePath.startsWith(`..${sep}`) && !isAbsolute(relativePath));
+  } catch {
+    return false;
+  }
 }
