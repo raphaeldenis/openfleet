@@ -1,5 +1,5 @@
 import { Injectable, signal } from '@angular/core';
-import type { Approval, ServerEvent, Session } from '@openfleet/shared';
+import type { Approval, ManagerView, ServerEvent, Session } from '@openfleet/shared';
 import { Subject } from 'rxjs';
 import { environment } from '../../environments/environment';
 
@@ -10,7 +10,11 @@ const MAX_RECONNECT_DELAY_MS = 10_000;
 export class FleetEventsService {
   readonly sessions = signal<Session[]>([]);
   readonly approvals = signal<Approval[]>([]);
+  readonly managers = signal<ManagerView[]>([]);
   readonly connected = signal(false);
+  // A direct load of a route that never mounts App (e.g. /manager/:id) still needs to know
+  // whether the first snapshot has arrived, so it can show a loading state instead of "not found".
+  readonly snapshotReceived = signal(false);
   // Increments on every reconnect (not the first connect) — a fresh snapshot already resyncs
   // sessions/approvals on its own; this tells an attached terminal to re-request its replay too.
   readonly reconnectCount = signal(0);
@@ -63,6 +67,8 @@ export class FleetEventsService {
       case 'snapshot':
         this.sessions.set(event.sessions);
         this.approvals.set(event.approvals);
+        this.managers.set(event.managers ?? []);
+        this.snapshotReceived.set(true);
         return;
       case 'session.created': return this.upsertSession(event.session);
       case 'session.state': return this.patchSession(event.sessionId, { state: event.state, stateSince: event.stateSince });
@@ -71,6 +77,8 @@ export class FleetEventsService {
       case 'session.replay': return this.output(event.sessionId).next(event.data);
       case 'approval.created': return this.upsertApproval(event.approval);
       case 'approval.resolved': return this.approvals.update((all) => all.filter((a) => a.id !== event.approval.id));
+      case 'manager.created': return this.upsertManager(event.manager);
+      case 'manager.pulsed': return this.upsertManager(event.manager);
       default: return;
     }
   }
@@ -81,6 +89,10 @@ export class FleetEventsService {
 
   private upsertApproval(approval: Approval): void {
     this.approvals.update((all) => (all.some((a) => a.id === approval.id) ? all.map((a) => (a.id === approval.id ? approval : a)) : [...all, approval]));
+  }
+
+  private upsertManager(manager: ManagerView): void {
+    this.managers.update((all) => (all.some((m) => m.sessionId === manager.sessionId) ? all.map((m) => (m.sessionId === manager.sessionId ? manager : m)) : [...all, manager]));
   }
 
   private patchSession(id: string, patch: Partial<Session>): void {

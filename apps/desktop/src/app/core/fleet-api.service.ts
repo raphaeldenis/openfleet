@@ -22,6 +22,13 @@ export class FleetApiService {
   private post<T>(path: string, body: unknown): Promise<T> { return this.call<T>(path, { method: 'POST', body: JSON.stringify(body) }); }
 
   createSession(spec: Partial<SessionSpec> & { directory: string; name: string; repoPath?: string; branchName?: string }) { return this.post<Session>('/api/sessions', spec); }
+  createManagerSession(spec: { directory: string; name: string; emoji?: string; model?: string; pulseSeconds: number; childrenCap: number; mission: string }) {
+    return this.post<Session>('/api/sessions', {
+      directory: spec.directory, name: spec.name, emoji: spec.emoji, model: spec.model,
+      manager: { pulseSeconds: spec.pulseSeconds, childrenCap: spec.childrenCap, mission: spec.mission },
+    });
+  }
+  pulseNow(sessionId: string) { return this.post<{ pulsed: boolean; coalesced?: boolean }>(`/api/managers/${sessionId}/pulse`, {}); }
   sendMessage(id: string, body: string) { return this.post<{ status: string }>(`/api/sessions/${id}/messages`, { body }); }
   sendInput(id: string, data: string) { return this.post(`/api/sessions/${id}/input`, { data }); }
   resize(id: string, cols: number, rows: number) { return this.post(`/api/sessions/${id}/resize`, { cols, rows }); }

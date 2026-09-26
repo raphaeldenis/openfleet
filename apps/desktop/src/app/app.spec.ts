@@ -1,4 +1,5 @@
 import { TestBed } from '@angular/core/testing';
+import { provideRouter } from '@angular/router';
 import { App } from './app';
 import { FleetEventsService } from './core/fleet-events.service';
 import { signal } from '@angular/core';
@@ -6,7 +7,10 @@ import { signal } from '@angular/core';
 function configureTestBed(connected = true) {
   return TestBed.configureTestingModule({
     imports: [App],
-    providers: [{ provide: FleetEventsService, useValue: { sessions: signal([]), approvals: signal([]), connect: () => {}, connected: signal(connected) } }],
+    providers: [
+      provideRouter([]),
+      { provide: FleetEventsService, useValue: { sessions: signal([]), approvals: signal([]), managers: signal([]), connect: () => {}, connected: signal(connected) } },
+    ],
   }).compileComponents();
 }
 
