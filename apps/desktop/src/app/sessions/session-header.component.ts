@@ -13,7 +13,7 @@ import { exitCodeLabel } from './session-close-status';
     <header class="session-header" data-testid="session-header">
       <span class="emoji" data-testid="session-emoji" title="Change emoji — not available yet">{{ session().emoji }}</span>
       <span class="name" data-testid="session-name" title="Renaming isn't available yet — no backend route to update a session's name">{{ session().name }}</span>
-      <of-state-chip [state]="session().state" />
+      <of-state-chip [state]="session().state" [since]="session().stateSince" />
       @if (session().state === 'closed') {
         <span class="exit-code" data-testid="session-exit-code">{{ exitCodeLabel(session().exitCode) }}</span>
       }

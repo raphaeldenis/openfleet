@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/angular/zoneless';
 import { inputBinding, signal } from '@angular/core';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Session } from '@openfleet/shared';
 import { SessionHeaderComponent } from './session-header.component';
 import { FleetApiService } from '../core/fleet-api.service';
@@ -71,5 +71,17 @@ describe('SessionHeaderComponent', () => {
     const session = baseSession();
     await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
     expect(screen.getByTestId('permission-mode')).toHaveTextContent('manual');
+  });
+
+  describe('elapsed time', () => {
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => vi.useRealTimers());
+
+    it('shows the time elapsed since the state last changed, next to the state chip', async () => {
+      vi.setSystemTime(new Date('2026-09-26T10:00:40.000Z'));
+      const session = baseSession({ stateSince: '2026-09-26T10:00:00.000Z' });
+      await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
+      expect(screen.getByTestId('state-chip-elapsed')).toHaveTextContent('0:40');
+    });
   });
 });
