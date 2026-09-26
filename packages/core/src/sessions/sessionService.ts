@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
-import { PERMISSION_MODES, type PermissionMode, type Session, type SessionSpec, type SessionState } from '@openfleet/shared';
+import { PERMISSION_MODES, type PermissionMode, type Session, type SessionSpec } from '@openfleet/shared';
 import { EventBus } from '../events/eventBus.js';
 import { createWorktree } from '../git/worktrees.js';
 import type { Harness, HarnessHandle } from '../harness/harness.js';
@@ -23,9 +23,15 @@ const DEFAULT_RESUME_TIMEOUT_MS = 15_000;
 // paste and never submits); upgrade path is a per-harness submit strategy, e.g. bracketed paste mode.
 export const SUBMIT_KEYSTROKE_DELAY_MS = 150;
 // ponytail: fallback for a hook that never confirms the turn started (a dropped webhook, or a CLI that
-// silently discards the keystroke); the common path clears this immediately on the next real state
-// transition observed in applyInput, so 5s only matters once hooks are already broken.
+// silently discards the keystroke); the common path ends the wait on the next real state transition.
+// Ceiling: a UserPromptSubmit hook later than this leaves the DB saying idle while the CLI generates, so
+// the next body is typed mid-turn (Claude Code buffers it in the composer). Upgrade path: confirm the turn
+// from the pty output instead of trusting the DB state.
 export const TURN_START_TIMEOUT_MS = 5000;
+// ponytail: fixed retry for a throwing delivery step, bounded so a pty that keeps throwing parks the machine
+// until the next state transition instead of retrying forever; add backoff if pty writes fail transiently.
+export const DELIVERY_RETRY_MS = 5000;
+export const MAX_DELIVERY_RETRIES = 3;
 export const RESUME_TIMEOUT_EXIT_CODE = -1;
 export const RESUME_LAUNCH_FAILED_EXIT_CODE = -2;
 
@@ -37,6 +43,23 @@ const RESUMABLE_PERMISSION_MODES = new Set<string>([...PERMISSION_MODES, 'manual
 // process's onExit even when a test briefly runs two instances over the same db to simulate the restart
 // boundary (Review Focus #2). A multi-daemon future would need a durable, cross-process marker instead.
 const activeHandleBySessionId = new Map<string, HarnessHandle>();
+
+// One delivery at a time per session: ready -> typing -> typed -> submitted -> ready, or closing until exit.
+interface TypedPhase { name: 'typed'; messageId: string; handle: HarnessHandle }
+type DeliveryPhase =
+  | { name: 'ready' }
+  | { name: 'typing'; messageId: string; handle: HarnessHandle }
+  // ponytail: typed trusts the composer still holds the body and only ever adds the '\r' — if something
+  // wiped the composer first, the empty submit is a no-op in the CLI and the message is counted delivered
+  // but lost. Retyping would risk a doubled body, and Ctrl+U clears only one line of a multi-line body;
+  // upgrade path is reading the composer back from the pty output before submitting.
+  | TypedPhase
+  | { name: 'submitted'; messageId: string }
+  | { name: 'closing' };
+
+interface Delivery { phase: DeliveryPhase; timer?: ReturnType<typeof setTimeout>; failedAttempts: number }
+
+const READY: DeliveryPhase = { name: 'ready' };
 
 function waitForExit(handle: HarnessHandle): Promise<void> {
   return new Promise((resolve) => {
@@ -59,14 +82,7 @@ export class SessionService {
   private readonly handles = new Map<string, HarnessHandle>();
   private readonly outputBuffers = new Map<string, string>();
   private readonly resumeTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  // Presence of a sessionId here means its message body has been typed but the separate submit keystroke
-  // hasn't landed yet — the session is not deliverable in the meantime, so a second queued message can't
-  // interleave with the pending one's \r (see deliver()).
-  private readonly pendingSubmitTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  // Presence of a sessionId here means its '\r' has landed but no state transition has yet confirmed the
-  // CLI actually started that turn — the session stays non-deliverable so a later send can't be typed
-  // into a terminal about to start running it (see armAwaitingTurn/isDeliverable/deliver()).
-  private readonly awaitingTurnTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly deliveries = new Map<string, Delivery>();
 
   constructor(private readonly deps: SessionServiceDeps) {
     this.repo = new SessionRepository(deps.db);
@@ -113,17 +129,13 @@ export class SessionService {
 
   sendMessage(input: { sessionId: string; body: string; fromSessionId?: string }): { status: 'delivered' | 'queued'; messageId: string } {
     const session = this.require(input.sessionId);
-    // An older message already sitting queued must be flushed first — otherwise this one could jump the
-    // queue while isDeliverable briefly reads true (e.g. right after the older one's '\r' lands but before
-    // its turn is confirmed), stranding the older message out of order.
-    const anotherMessageAlreadyQueued = this.queue.nextPending(session.id) !== undefined;
     const message = this.queue.enqueue(input);
-    if (anotherMessageAlreadyQueued || !this.isDeliverable(session.id, session.state)) {
-      this.deps.bus.emit({ type: 'message.queued', sessionId: session.id, messageId: message.id });
-      return { status: 'queued', messageId: message.id };
-    }
-    this.deliver(session.id, message.id, message.body);
-    return { status: 'delivered', messageId: message.id };
+    this.guarded(session.id, () => this.advance(session.id));
+    const { phase } = this.deliveryOf(session.id);
+    const isHandedToTerminal = phase.name === 'typing' && phase.messageId === message.id;
+    if (isHandedToTerminal) return { status: 'delivered', messageId: message.id };
+    this.deps.bus.emit({ type: 'message.queued', sessionId: session.id, messageId: message.id });
+    return { status: 'queued', messageId: message.id };
   }
 
   updateModel(sessionId: string, model: string): { status: 'delivered' | 'queued'; messageId: string } {
@@ -141,7 +153,8 @@ export class SessionService {
     // Only a real state transition proves the (resumed) process is alive; an unrecognized Notification
     // that leaves the session in 'starting' must not cancel the safety net that would otherwise close it.
     this.clearResumeTimer(sessionId);
-    this.clearAwaitingTurn(sessionId); // any real transition proves the previous turn started; stop waiting for it
+    const isAwaitingTurnStart = this.deliveryOf(sessionId).phase.name === 'submitted';
+    if (isAwaitingTurnStart) this.enter(sessionId, READY); // any real transition proves the submitted turn started
     if (state === 'closed') {
       // harness_exit means the process already died — markClosed only records it. Any other path to
       // closed (SessionEnd, etc.) is not proof the process actually exited, so it must go through the
@@ -153,7 +166,7 @@ export class SessionService {
     const since = new Date().toISOString();
     this.repo.setState(sessionId, state, since);
     this.deps.bus.emit({ type: 'session.state', sessionId, state, stateSince: since });
-    if (this.isDeliverable(sessionId, state)) this.flushOne(sessionId);
+    this.guarded(sessionId, () => this.advance(sessionId));
   }
 
   recentOutput(sessionId: string): string { return this.outputBuffers.get(sessionId) ?? ''; }
@@ -165,10 +178,8 @@ export class SessionService {
   async close(sessionId: string, options?: { escalateAfterMs?: number }): Promise<void> {
     const handle = this.handles.get(sessionId);
     if (!handle) return;
-    // markClosed only clears this once the process actually exits, up to the escalation window later —
-    // a pending '\r' must not land on a pty that's already mid-teardown.
-    this.clearPendingSubmitTimer(sessionId);
-    this.clearAwaitingTurn(sessionId);
+    // The process may take the whole escalation window to exit: nothing is typed or submitted into it meanwhile.
+    this.enter(sessionId, { name: 'closing' });
     await this.killWithEscalation(handle, options?.escalateAfterMs ?? DEFAULT_CLOSE_ESCALATE_MS);
   }
 
@@ -232,78 +243,108 @@ export class SessionService {
     this.outputBuffers.set(sessionId, trimToTail(combined, OUTPUT_BUFFER_LIMIT));
   }
 
+  // Moves the session's delivery as far as it can go right now. Nothing is typed or submitted unless the
+  // session is deliverable (idle, or waiting_input: the CLI waits on its composer) — never into a running
+  // turn (Review Focus #4) nor onto a permission prompt (Review Focus #1).
+  private advance(sessionId: string): void {
+    const session = this.repo.get(sessionId);
+    const isDeliverable = session !== undefined && canDeliverNow(session.state);
+    if (!isDeliverable) return;
+    const { phase } = this.deliveryOf(sessionId);
+    if (phase.name === 'ready') this.typeNextMessage(sessionId);
+    if (phase.name === 'typed') this.submit(sessionId, phase);
+  }
+
   // ponytail: one message per turn; batch delivery if queues grow
-  private flushOne(sessionId: string): void {
-    const pending = this.queue.nextPending(sessionId);
-    if (!pending) return;
-    this.deliver(sessionId, pending.id, pending.body);
-  }
-
-  private isDeliverable(sessionId: string, state: SessionState): boolean {
-    return canDeliverNow(state) && !this.pendingSubmitTimers.has(sessionId) && !this.awaitingTurnTimers.has(sessionId);
-  }
-
-  // A message must not be typed into a terminal that's merely about to start running the previous one's
-  // turn (Review Focus #4) — the guard holds the session non-deliverable from the '\r' until a real state
-  // transition in applyInput confirms the turn actually began, or (if the CLI's hook never arrives) until
-  // this timeout fires and rescues whatever's still queued.
-  private armAwaitingTurn(sessionId: string): void {
-    this.clearAwaitingTurn(sessionId);
-    const timer = setTimeout(() => {
-      this.awaitingTurnTimers.delete(sessionId);
-      const session = this.repo.get(sessionId);
-      if (session && this.isDeliverable(sessionId, session.state)) this.flushOne(sessionId);
-    }, TURN_START_TIMEOUT_MS);
-    this.awaitingTurnTimers.set(sessionId, timer);
-  }
-
-  private clearAwaitingTurn(sessionId: string): void {
-    const timer = this.awaitingTurnTimers.get(sessionId);
-    if (timer) clearTimeout(timer);
-    this.awaitingTurnTimers.delete(sessionId);
-  }
-
-  // The composer treats one multi-character pty write as a paste and won't submit it, so the body and
-  // the submit keystroke land as two separate writes. Until the delayed \r lands, this session is not
-  // deliverable (see isDeliverable), so a second queued message can't interleave with this one's \r.
-  private deliver(sessionId: string, messageId: string, body: string): void {
-    const handle = this.handles.get(sessionId);
+  private typeNextMessage(sessionId: string): void {
+    const handle = this.liveHandle(sessionId);
     if (!handle) return;
-    handle.write(body);
-    const timer = setTimeout(() => {
-      this.pendingSubmitTimers.delete(sessionId);
-      // activeHandleBySessionId (not this.handles) is the cross-instance source of truth: a resume on a
-      // fresh SessionService instance retires this handle there even though the stale instance's own
-      // handles map never learns about it (see the module-level map's ponytail comment above).
-      if (activeHandleBySessionId.get(sessionId) !== handle) return; // session closed or resumed under a new handle: drop the submit keystroke
-      const session = this.repo.get(sessionId);
-      // Writing '\r' outside a deliverable state would submit into whatever turn is now running, or
-      // answer a permission prompt instead of the composer (Review Focus #1) — drop it and leave the
-      // row queued so the next idle flush retries it.
-      if (!session || !canDeliverNow(session.state)) return;
-      try {
-        handle.write('\r');
-        this.queue.markDelivered(messageId);
-        this.deps.bus.emit({ type: 'message.delivered', sessionId, messageId });
-      } catch (err) {
-        console.error(`deliver: submit keystroke failed for session ${sessionId}, message ${messageId}`, err);
-        return;
-      }
-      this.armAwaitingTurn(sessionId);
-    }, this.deps.submitKeystrokeDelayMs ?? SUBMIT_KEYSTROKE_DELAY_MS);
-    this.pendingSubmitTimers.set(sessionId, timer);
+    const message = this.queue.nextPending(sessionId);
+    if (!message) return;
+    handle.write(message.body);
+    // The composer reads a body and its '\r' in one write as a paste and never submits it: the '\r' waits.
+    const submitDelayMs = this.deps.submitKeystrokeDelayMs ?? SUBMIT_KEYSTROKE_DELAY_MS;
+    const submitDelay = this.schedule(sessionId, submitDelayMs, () => this.finishTyping(sessionId));
+    this.enter(sessionId, { name: 'typing', messageId: message.id, handle }, submitDelay);
   }
 
-  private clearPendingSubmitTimer(sessionId: string): void {
-    const timer = this.pendingSubmitTimers.get(sessionId);
-    if (timer) clearTimeout(timer);
-    this.pendingSubmitTimers.delete(sessionId);
+  private finishTyping(sessionId: string): void {
+    const { phase } = this.deliveryOf(sessionId);
+    if (phase.name !== 'typing') return;
+    this.enter(sessionId, { ...phase, name: 'typed' });
+    this.advance(sessionId);
+  }
+
+  private submit(sessionId: string, phase: TypedPhase): void {
+    // A new handle's pty starts with an empty composer: the message is typed there from scratch.
+    const isHandleReplaced = this.liveHandle(sessionId) !== phase.handle;
+    if (isHandleReplaced) {
+      this.enter(sessionId, READY);
+      return;
+    }
+    phase.handle.write('\r');
+    this.queue.markDelivered(phase.messageId);
+    this.deps.bus.emit({ type: 'message.delivered', sessionId, messageId: phase.messageId });
+    const turnStartTimeout = this.schedule(sessionId, TURN_START_TIMEOUT_MS, () => this.stopAwaitingTurnStart(sessionId));
+    this.enter(sessionId, { name: 'submitted', messageId: phase.messageId }, turnStartTimeout);
+  }
+
+  private stopAwaitingTurnStart(sessionId: string): void {
+    this.enter(sessionId, READY);
+    this.advance(sessionId);
+  }
+
+  // activeHandleBySessionId (not this.handles) is the cross-instance source of truth: a resume on a fresh
+  // SessionService retires this instance's handle there, even though this.handles never learns about it.
+  private liveHandle(sessionId: string): HarnessHandle | undefined {
+    const handle = this.handles.get(sessionId);
+    const isLive = handle !== undefined && activeHandleBySessionId.get(sessionId) === handle;
+    return isLive ? handle : undefined;
+  }
+
+  private deliveryOf(sessionId: string): Delivery {
+    return this.deliveries.get(sessionId) ?? { phase: READY, failedAttempts: 0 };
+  }
+
+  // The only place a delivery timer is replaced, so a session never has more than one.
+  private enter(sessionId: string, phase: DeliveryPhase, timer?: ReturnType<typeof setTimeout>): void {
+    clearTimeout(this.deliveries.get(sessionId)?.timer);
+    this.deliveries.set(sessionId, { phase, timer, failedAttempts: 0 });
+  }
+
+  private stopDelivery(sessionId: string): void {
+    clearTimeout(this.deliveries.get(sessionId)?.timer);
+    this.deliveries.delete(sessionId);
+  }
+
+  private schedule(sessionId: string, delayMs: number, step: () => void): ReturnType<typeof setTimeout> {
+    return setTimeout(() => this.guarded(sessionId, step), delayMs);
+  }
+
+  // The one error boundary of delivery: a throwing step keeps its phase and its message queued.
+  private guarded(sessionId: string, step: () => void): void {
+    try {
+      step();
+    } catch (err) {
+      this.retryAfterFailure(sessionId, err);
+    }
+  }
+
+  private retryAfterFailure(sessionId: string, err: unknown): void {
+    const delivery = this.deliveryOf(sessionId);
+    const failedAttempts = delivery.failedAttempts + 1;
+    const isNewFailureStreak = failedAttempts === 1;
+    if (isNewFailureStreak) console.error(`delivery: session ${sessionId} failed, its message stays queued`, err);
+    // Past the last retry the machine parks with no timer; the next state transition advances it again.
+    const canRetry = failedAttempts <= MAX_DELIVERY_RETRIES && this.handles.has(sessionId);
+    const retry = canRetry ? this.schedule(sessionId, DELIVERY_RETRY_MS, () => this.advance(sessionId)) : undefined;
+    clearTimeout(delivery.timer);
+    this.deliveries.set(sessionId, { ...delivery, timer: retry, failedAttempts });
   }
 
   private markClosed(sessionId: string, exitCode: number | undefined): void {
     this.clearResumeTimer(sessionId);
-    this.clearPendingSubmitTimer(sessionId);
-    this.clearAwaitingTurn(sessionId);
+    this.stopDelivery(sessionId);
     const session = this.repo.get(sessionId);
     if (!session || session.state === 'closed') return;
     this.repo.setClosed(sessionId, exitCode, new Date().toISOString());
