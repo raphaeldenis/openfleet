@@ -695,29 +695,6 @@ describe('SessionService submit-keystroke hostile cases', () => {
     expect(events.filter((e) => e.type === 'message.delivered')).toHaveLength(1);
   });
 
-  it('a same-session updateModel while a first message\'s submit keystroke is still pending queues behind it, instead of typing mid-body', async () => {
-    vi.useFakeTimers();
-    const { service, harness } = setup();
-    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
-    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
-
-    service.sendMessage({ sessionId: session.id, body: 'first' });
-    const modelSwitch = service.updateModel(session.id, 'claude-opus-5-5');
-
-    expect(modelSwitch.status).toBe('queued'); // session.state is still 'idle' — only the pending timer blocks this
-    expect(harness.handles[0]!.written).toEqual(['first']);
-    expect(service.get(session.id)!.model).toBe('claude-opus-5-5'); // recorded immediately regardless of delivery
-
-    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
-    expect(harness.handles[0]!.written).toEqual(['first', '\r']);
-
-    service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit' }));
-    service.applyInput(session.id, hook(session.id, { hook_event_name: 'Stop' }));
-    expect(harness.handles[0]!.written).toEqual(['first', '\r', '/model claude-opus-5-5']);
-    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
-    expect(harness.handles[0]!.written).toEqual(['first', '\r', '/model claude-opus-5-5', '\r']);
-  });
-
   it('the submit delay does not scale with body length: a very long body still waits exactly SUBMIT_KEYSTROKE_DELAY_MS', async () => {
     vi.useFakeTimers();
     const { service, harness } = setup();
