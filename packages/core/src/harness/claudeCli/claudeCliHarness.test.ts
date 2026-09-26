@@ -52,4 +52,22 @@ describe('ClaudeCliHarness', () => {
       process.env = parentSnapshot;
     }
   });
+
+  it('overrides an inherited TERM and keeps CLAUDE_CONFIG_DIR, which is not a session marker', async () => {
+    const parentSnapshot = { ...process.env };
+    Object.assign(process.env, { TERM: 'dumb', CLAUDE_CONFIG_DIR: '/home/user/.claude' });
+
+    try {
+      const { ClaudeCliHarness } = await import('./claudeCliHarness.js');
+      new ClaudeCliHarness().start(launch);
+
+      const [, , options] = spawn.mock.calls[0]!;
+      const childEnv = options.env as Record<string, string>;
+
+      expect(childEnv.TERM).toBe('xterm-256color');
+      expect(childEnv.CLAUDE_CONFIG_DIR).toBe('/home/user/.claude');
+    } finally {
+      process.env = parentSnapshot;
+    }
+  });
 });
