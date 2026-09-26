@@ -85,6 +85,8 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     // bootstrap a manager; an MCP-spawned child needs the manager role itself — see Task 7 report deviation.
     const isRootSession = caller.parentId === undefined;
     const canCreateManager = isRootSession || caller.role === MANAGER_ROLE;
+    const resolvedTargetRole = input.manager ? MANAGER_ROLE : input.role;
+    if (resolvedTargetRole === MANAGER_ROLE && !input.manager) return fail('role "manager" requires a manager spec');
     if (input.manager && !canCreateManager) return fail('only an existing manager may create another manager');
 
     const isWithinWorktreesRoot = isPathWithin(input.directory, deps.worktreesRoot);
@@ -98,7 +100,10 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
       // callback into this handler before that insert happens, so two concurrent create_session calls
       // can never both pass this check before either session exists — see Review Focus #3.
       const activeChildren = sessions.list().filter((s) => s.parentId === caller.id && s.state !== 'closed').length;
-      if (record && activeChildren >= record.childrenCap) return fail(`children cap reached (${activeChildren}/${record.childrenCap})`);
+      // A manager-role caller with no ManagerRecord (legacy data, a role forged before this guard existed,
+      // a deleted record) is capped at 0 rather than treated as unlimited — defence in depth.
+      const childrenCap = record ? record.childrenCap : 0;
+      if (activeChildren >= childrenCap) return fail(`children cap reached (${activeChildren}/${childrenCap})`);
     }
 
     const resolvedModel = input.model ? resolveModel(modelTable, input.model) : undefined;

@@ -1,3 +1,4 @@
+import { MANAGER_ROLE } from '@openfleet/shared';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { execFileSync } from 'node:child_process';
@@ -190,14 +191,14 @@ describe('create_session guardrails', () => {
     const midChildClient = await connect(midChildToken);
     const result = await midChildClient.callTool({ name: 'create_session', arguments: { directory: '/tmp/of-wt/fake-manager', name: 'FakeManager', role: 'manager' } });
     expect(result.isError).toBe(true);
+    expect((result.content as { text: string }[])[0]!.text).toMatch(/manager.*spec/i);
   });
 
   it('a session with a role of manager but no manager record is still capped when creating children', async () => {
-    const parent = await connect(parentToken);
-    const midChild = text(await parent.callTool({ name: 'create_session', arguments: { directory: '/tmp/of-wt/mid-child-2', name: 'Gimli' } }));
-    const midChildToken = harness.launches.find((l) => l.sessionId === midChild.id)!.mcpToken;
-    const midChildClient = await connect(midChildToken);
-    const forged = text(await midChildClient.callTool({ name: 'create_session', arguments: { directory: '/tmp/of-wt/fake-manager-2', name: 'FakeManager', role: 'manager' } }));
+    // Bypasses the create_session MCP guard on purpose: decision 1 closes the role-forgery path (see the
+    // previous test), so this simulates legacy/corrupted data — a session whose role is already 'manager'
+    // with no matching ManagerRecord — to exercise decision 2's defence-in-depth on the cap check.
+    const forged = await sessions.create({ directory: '/tmp/of-wt/fake-manager-2', name: 'FakeManager', harness: 'fake', emoji: '🤖', role: MANAGER_ROLE });
     const forgedToken = harness.launches.find((l) => l.sessionId === forged.id)!.mcpToken;
     const forgedClient = await connect(forgedToken);
     const kid1 = await forgedClient.callTool({ name: 'create_session', arguments: { directory: '/tmp/of-wt/forged-kid-1', name: 'Kid1' } });
