@@ -3,7 +3,7 @@ import { openDatabase } from '../db/database.js';
 import { FakeHandle, FakeHarness } from '../harness/fakeHarness.js';
 import type { Harness, HarnessHandle, HarnessLaunch } from '../harness/harness.js';
 import { EventBus } from '../events/eventBus.js';
-import { DEFAULT_CLOSE_ESCALATE_MS, RESUME_LAUNCH_FAILED_EXIT_CODE, RESUME_TIMEOUT_EXIT_CODE, SessionService } from './sessionService.js';
+import { DEFAULT_CLOSE_ESCALATE_MS, RESUME_LAUNCH_FAILED_EXIT_CODE, RESUME_TIMEOUT_EXIT_CODE, SessionService, SUBMIT_KEYSTROKE_DELAY_MS } from './sessionService.js';
 import { SessionRepository } from './sessionRepository.js';
 import type { ServerEvent } from '@openfleet/shared';
 
@@ -18,6 +18,10 @@ function setup() {
 }
 const hook = (session_id: string, event: object) => ({ kind: 'hook' as const, event: { session_id, ...event } as never });
 
+// A handful of tests below opt into fake timers to advance past SUBMIT_KEYSTROKE_DELAY_MS; reset to real
+// timers after every test so that doesn't leak into a test that didn't ask for it.
+afterEach(() => vi.useRealTimers());
+
 describe('SessionService', () => {
   it('creates a session in starting state and launches the harness with hook/mcp urls', async () => {
     const { service, harness } = setup();
@@ -27,16 +31,20 @@ describe('SessionService', () => {
     expect(harness.launches[0]!.displayName).toBe('⚔️ Gimli');
   });
 
-  it('delivers a message immediately when idle, writing body + CR to the pty', async () => {
+  it('delivers a message immediately when idle, writing the body then the submit keystroke as a separate write after the delay', async () => {
+    vi.useFakeTimers();
     const { service, harness } = setup();
     const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
     service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
     const result = service.sendMessage({ sessionId: session.id, body: 'do X' });
     expect(result.status).toBe('delivered');
-    expect(harness.handles[0]!.written).toEqual(['do X\r']);
+    expect(harness.handles[0]!.written).toEqual(['do X']);
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
+    expect(harness.handles[0]!.written).toEqual(['do X', '\r']);
   });
 
   it('queues while waiting_permission and flushes on idle', async () => {
+    vi.useFakeTimers();
     const { service, harness, events } = setup();
     const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
     service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
@@ -46,8 +54,51 @@ describe('SessionService', () => {
     expect(harness.handles[0]!.written).toEqual([]);
     service.applyInput(session.id, { kind: 'permission_resolved' });
     service.applyInput(session.id, hook(session.id, { hook_event_name: 'Stop' }));
-    expect(harness.handles[0]!.written).toEqual(['later\r']);
+    expect(harness.handles[0]!.written).toEqual(['later']);
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
+    expect(harness.handles[0]!.written).toEqual(['later', '\r']);
     expect(events.some((e) => e.type === 'message.delivered')).toBe(true);
+  });
+
+  it('does not interleave two sends on an idle session: the second queues until the first submit keystroke lands and the session goes idle again', async () => {
+    vi.useFakeTimers();
+    const { service, harness } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+
+    const first = service.sendMessage({ sessionId: session.id, body: 'first' });
+    const second = service.sendMessage({ sessionId: session.id, body: 'second' });
+    expect(first.status).toBe('delivered');
+    expect(second.status).toBe('queued');
+    expect(harness.handles[0]!.written).toEqual(['first']);
+
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
+    expect(harness.handles[0]!.written).toEqual(['first', '\r']); // 'second' must not appear before 'first's \r
+
+    // The real Claude Code CLI now processes 'first': generating, then idle again — that's what flushes 'second'.
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit' }));
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'Stop' }));
+    expect(harness.handles[0]!.written).toEqual(['first', '\r', 'second']);
+
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
+    expect(harness.handles[0]!.written).toEqual(['first', '\r', 'second', '\r']);
+  });
+
+  it('drops the pending submit keystroke silently if the session closes during the delay, without leaking the timer', async () => {
+    vi.useFakeTimers();
+    const { service, harness } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+
+    service.sendMessage({ sessionId: session.id, body: 'do X' });
+    expect(harness.handles[0]!.written).toEqual(['do X']);
+
+    expect(() => harness.handles[0]!.emitExit(0)).not.toThrow();
+    expect(service.get(session.id)?.state).toBe('closed');
+    expect(vi.getTimerCount()).toBe(0);
+
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
+    expect(harness.handles[0]!.written).toEqual(['do X']); // '\r' never gets written to the dead handle
   });
 
   it('marks session closed on harness exit and keeps the queue', async () => {
@@ -499,7 +550,9 @@ describe('SessionService resume', () => {
     await restarted.resumeAll();
     restarted.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
 
-    expect(restartHarness.handles[0]!.written).toEqual(['queued before crash\r']);
+    expect(restartHarness.handles[0]!.written).toEqual(['queued before crash']);
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
+    expect(restartHarness.handles[0]!.written).toEqual(['queued before crash', '\r']);
   });
 
   it('after close, a fresh session created on the same service is unaffected by the closed session and closeAll only kills the live one', async () => {
@@ -518,17 +571,21 @@ describe('SessionService resume', () => {
 
 describe('SessionService.updateModel', () => {
   it('applies the model immediately when idle, and records it', async () => {
+    vi.useFakeTimers();
     const { service, harness, events } = setup();
     const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
     service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
     const result = service.updateModel(session.id, 'claude-opus-5-5');
     expect(result.status).toBe('delivered');
-    expect(harness.handles[0]!.written).toEqual(['/model claude-opus-5-5\r']);
+    expect(harness.handles[0]!.written).toEqual(['/model claude-opus-5-5']);
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
+    expect(harness.handles[0]!.written).toEqual(['/model claude-opus-5-5', '\r']);
     expect(service.get(session.id)!.model).toBe('claude-opus-5-5');
     expect(events).toContainEqual({ type: 'session.model_changed', sessionId: session.id, model: 'claude-opus-5-5' });
   });
 
   it('queues the model switch while the session is generating, and still records the target model immediately', async () => {
+    vi.useFakeTimers();
     const { service, harness } = setup();
     const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
     service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
@@ -541,10 +598,13 @@ describe('SessionService.updateModel', () => {
     expect(service.get(session.id)!.model).toBe('claude-opus-5-5');
 
     service.applyInput(session.id, hook(session.id, { hook_event_name: 'Stop' }));
-    expect(harness.handles[0]!.written).toEqual(['/model claude-opus-5-5\r']);
+    expect(harness.handles[0]!.written).toEqual(['/model claude-opus-5-5']);
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
+    expect(harness.handles[0]!.written).toEqual(['/model claude-opus-5-5', '\r']);
   });
 
   it('delivers only the first of two model switches queued while generating, one per idle turn', async () => {
+    vi.useFakeTimers();
     const { service, harness } = setup();
     const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
     service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
@@ -557,11 +617,15 @@ describe('SessionService.updateModel', () => {
     expect(service.get(session.id)!.model).toBe('claude-haiku-4-5');
 
     service.applyInput(session.id, hook(session.id, { hook_event_name: 'Stop' }));
-    expect(harness.handles[0]!.written).toEqual(['/model claude-opus-5-5\r']);
+    expect(harness.handles[0]!.written).toEqual(['/model claude-opus-5-5']);
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
+    expect(harness.handles[0]!.written).toEqual(['/model claude-opus-5-5', '\r']);
 
     service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit' }));
     service.applyInput(session.id, hook(session.id, { hook_event_name: 'Stop' }));
-    expect(harness.handles[0]!.written).toEqual(['/model claude-opus-5-5\r', '/model claude-haiku-4-5\r']);
+    expect(harness.handles[0]!.written).toEqual(['/model claude-opus-5-5', '\r', '/model claude-haiku-4-5']);
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
+    expect(harness.handles[0]!.written).toEqual(['/model claude-opus-5-5', '\r', '/model claude-haiku-4-5', '\r']);
   });
 
   it('rejects a model switch on a session that has already closed', async () => {

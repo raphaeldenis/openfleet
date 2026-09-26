@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
-import { PERMISSION_MODES, type PermissionMode, type Session, type SessionSpec } from '@openfleet/shared';
+import { PERMISSION_MODES, type PermissionMode, type Session, type SessionSpec, type SessionState } from '@openfleet/shared';
 import { EventBus } from '../events/eventBus.js';
 import { createWorktree } from '../git/worktrees.js';
 import type { Harness, HarnessHandle } from '../harness/harness.js';
@@ -8,7 +8,7 @@ import { MessageQueue } from './messageQueue.js';
 import { SessionRepository } from './sessionRepository.js';
 import { canDeliverNow, nextState, type SessionInput } from './stateMachine.js';
 
-export interface SessionServiceDeps { db: DatabaseSync; bus: EventBus; harnesses: Harness[]; baseUrl: string; worktreesRoot: string; resumeTimeoutMs?: number }
+export interface SessionServiceDeps { db: DatabaseSync; bus: EventBus; harnesses: Harness[]; baseUrl: string; worktreesRoot: string; resumeTimeoutMs?: number; submitKeystrokeDelayMs?: number }
 
 export class SessionClosedError extends Error {
   constructor(sessionId: string) {
@@ -19,6 +19,9 @@ export class SessionClosedError extends Error {
 const OUTPUT_BUFFER_LIMIT = 200 * 1024;
 export const DEFAULT_CLOSE_ESCALATE_MS = 5000;
 const DEFAULT_RESUME_TIMEOUT_MS = 15_000;
+// ponytail: fixed delay tuned for Claude Code's paste detection (a multi-char single write reads as a
+// paste and never submits); upgrade path is a per-harness submit strategy, e.g. bracketed paste mode.
+export const SUBMIT_KEYSTROKE_DELAY_MS = 150;
 export const RESUME_TIMEOUT_EXIT_CODE = -1;
 export const RESUME_LAUNCH_FAILED_EXIT_CODE = -2;
 
@@ -52,6 +55,10 @@ export class SessionService {
   private readonly handles = new Map<string, HarnessHandle>();
   private readonly outputBuffers = new Map<string, string>();
   private readonly resumeTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  // Presence of a sessionId here means its message body has been typed but the separate submit keystroke
+  // hasn't landed yet — the session is not deliverable in the meantime, so a second queued message can't
+  // interleave with the pending one's \r (see deliver()).
+  private readonly pendingSubmitTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(private readonly deps: SessionServiceDeps) {
     this.repo = new SessionRepository(deps.db);
@@ -99,7 +106,7 @@ export class SessionService {
   sendMessage(input: { sessionId: string; body: string; fromSessionId?: string }): { status: 'delivered' | 'queued'; messageId: string } {
     const session = this.require(input.sessionId);
     const message = this.queue.enqueue(input);
-    if (!canDeliverNow(session.state)) {
+    if (!this.isDeliverable(session.id, session.state)) {
       this.deps.bus.emit({ type: 'message.queued', sessionId: session.id, messageId: message.id });
       return { status: 'queued', messageId: message.id };
     }
@@ -133,7 +140,7 @@ export class SessionService {
     const since = new Date().toISOString();
     this.repo.setState(sessionId, state, since);
     this.deps.bus.emit({ type: 'session.state', sessionId, state, stateSince: since });
-    if (canDeliverNow(state)) this.flushOne(sessionId);
+    if (this.isDeliverable(sessionId, state)) this.flushOne(sessionId);
   }
 
   recentOutput(sessionId: string): string { return this.outputBuffers.get(sessionId) ?? ''; }
@@ -215,14 +222,36 @@ export class SessionService {
     this.deliver(sessionId, pending.id, pending.body);
   }
 
+  private isDeliverable(sessionId: string, state: SessionState): boolean {
+    return canDeliverNow(state) && !this.pendingSubmitTimers.has(sessionId);
+  }
+
+  // The composer treats one multi-character pty write as a paste and won't submit it, so the body and
+  // the submit keystroke land as two separate writes. Until the delayed \r lands, this session is not
+  // deliverable (see isDeliverable), so a second queued message can't interleave with this one's \r.
   private deliver(sessionId: string, messageId: string, body: string): void {
-    this.handles.get(sessionId)?.write(`${body}\r`);
-    this.queue.markDelivered(messageId);
-    this.deps.bus.emit({ type: 'message.delivered', sessionId, messageId });
+    const handle = this.handles.get(sessionId);
+    if (!handle) return;
+    handle.write(body);
+    const timer = setTimeout(() => {
+      this.pendingSubmitTimers.delete(sessionId);
+      if (this.handles.get(sessionId) !== handle) return; // session closed or resumed under a new handle: drop the submit keystroke
+      handle.write('\r');
+      this.queue.markDelivered(messageId);
+      this.deps.bus.emit({ type: 'message.delivered', sessionId, messageId });
+    }, this.deps.submitKeystrokeDelayMs ?? SUBMIT_KEYSTROKE_DELAY_MS);
+    this.pendingSubmitTimers.set(sessionId, timer);
+  }
+
+  private clearPendingSubmitTimer(sessionId: string): void {
+    const timer = this.pendingSubmitTimers.get(sessionId);
+    if (timer) clearTimeout(timer);
+    this.pendingSubmitTimers.delete(sessionId);
   }
 
   private markClosed(sessionId: string, exitCode: number | undefined): void {
     this.clearResumeTimer(sessionId);
+    this.clearPendingSubmitTimer(sessionId);
     const session = this.repo.get(sessionId);
     if (!session || session.state === 'closed') return;
     this.repo.setClosed(sessionId, exitCode, new Date().toISOString());

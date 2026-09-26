@@ -38,7 +38,7 @@ beforeEach(async () => {
   db = openDatabase(':memory:');
   bus = new EventBus();
   harness = new FakeHarness();
-  sessions = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt' });
+  sessions = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt', submitKeystrokeDelayMs: 0 });
   const managerRepo = new ManagerRepository(db);
   const pulseScheduler = new PulseScheduler({ managers: managerRepo, sessions, bus });
   const managers = new ManagerService({ managers: managerRepo, sessions, bus, scheduler: pulseScheduler });
@@ -99,7 +99,8 @@ describe('MCP', () => {
     sessions.applyInput(parentId, { kind: 'hook', event: { session_id: 'x', hook_event_name: 'SessionStart' } });
     const sent = text(await child.callTool({ name: 'message_parent', arguments: { body: 'done' } }));
     expect(sent.status).toBe('delivered');
-    expect(harness.handles[0]!.written).toEqual(['done\r']);
+    await new Promise((resolve) => setTimeout(resolve, 0)); // let the (0ms) submit-keystroke timer fire
+    expect(harness.handles[0]!.written).toEqual(['done', '\r']);
   });
 
   it('refuses to message a session outside the caller lineage', async () => {
