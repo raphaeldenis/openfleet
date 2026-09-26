@@ -523,8 +523,9 @@ export class SessionService {
     const stored = session.permissionMode as string | undefined;
     if (stored === undefined) return undefined;
     // ponytail: 'default' was PERMISSION_MODES' entry before Amendment A1 renamed it to 'manual'; a dev
-    // database can still hold rows written under the old name. Drop this guard in phase 3, once every
-    // pre-A1 row has resumed at least once (each resume rewrites the column via setState's normal path).
+    // database can still hold rows written under the old name. The column is only ever set at INSERT,
+    // so a legacy 'default' row stays 'default' forever; drop this guard only alongside a phase 3
+    // migration that rewrites stored 'default' values to 'manual'.
     if (stored === 'default') return 'manual';
     if (RESUMABLE_PERMISSION_MODES.has(stored)) return stored as PermissionMode;
     console.warn(`resumeOne: session ${session.id} has an unrecognized permission_mode "${stored}", resuming without --permission-mode`);
