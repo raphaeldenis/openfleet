@@ -145,6 +145,14 @@ describe('REST', () => {
     expect(updated.model).toBe(DEFAULT_MODEL_TABLE.sonnet);
   });
 
+  it('resolves a mixed-case rung name to its configured model id before recording it on the session', async () => {
+    const created = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
+    await api(`/api/sessions/${created.id}/model`, { method: 'POST', body: JSON.stringify({ model: 'Sonnet' }) });
+    const sessions = await (await api('/api/sessions')).json();
+    const updated = sessions.find((s: { id: string }) => s.id === created.id);
+    expect(updated.model).toBe(DEFAULT_MODEL_TABLE.sonnet);
+  });
+
   it('passes an unrecognized rung name straight through to the session record', async () => {
     const created = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
     await api(`/api/sessions/${created.id}/model`, { method: 'POST', body: JSON.stringify({ model: 'gpt-4' }) });

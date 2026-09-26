@@ -58,4 +58,20 @@ describe('resolveModel', () => {
   it('passes "constructor" through unchanged rather than returning the inherited Object.prototype member', () => {
     expect(resolveModel(DEFAULT_MODEL_TABLE, 'constructor')).toBe('constructor');
   });
+
+  it('resolves a mixed-case rung name from the table', () => {
+    expect(resolveModel(DEFAULT_MODEL_TABLE, 'Opus')).toBe(DEFAULT_MODEL_TABLE.opus);
+  });
+
+  it('resolves an all-caps rung name from the table', () => {
+    expect(resolveModel(DEFAULT_MODEL_TABLE, 'FABLE')).toBe(DEFAULT_MODEL_TABLE.fable);
+  });
+
+  it('passes an exact model id with mixed case through unchanged rather than lower-casing it', () => {
+    expect(resolveModel(DEFAULT_MODEL_TABLE, 'Claude-Sonnet-5-Custom')).toBe('Claude-Sonnet-5-Custom');
+  });
+
+  it('does not trim a whitespace-padded rung name, so it passes through unchanged instead of resolving', () => {
+    expect(resolveModel(DEFAULT_MODEL_TABLE, ' opus ')).toBe(' opus ');
+  });
 });

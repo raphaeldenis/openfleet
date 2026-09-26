@@ -26,9 +26,11 @@ export function loadModelTable(configPath: string): ModelTable {
   }
 }
 
-// A caller passes either a rung name (looked up here) or an exact model id, passed through unchanged.
-// Object.hasOwn (not `in`) so a rung named after an inherited Object.prototype member (e.g. "constructor")
-// passes through as a plain string instead of returning that inherited function.
+// A caller passes either a rung name (looked up here, case-insensitively) or an exact model id, passed
+// through unchanged with its original casing. Object.hasOwn (not `in`) so a rung named after an inherited
+// Object.prototype member (e.g. "constructor") passes through as a plain string instead of returning that
+// inherited function.
 export function resolveModel(table: ModelTable, rungOrId: string): string {
-  return Object.hasOwn(table, rungOrId) ? table[rungOrId as keyof ModelTable] : rungOrId;
+  const rung = rungOrId.toLowerCase();
+  return Object.hasOwn(table, rung) ? table[rung as keyof ModelTable] : rungOrId;
 }
