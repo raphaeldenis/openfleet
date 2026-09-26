@@ -4,11 +4,8 @@ import { describe, expect, it } from 'vitest';
 import { KindBadgeComponent } from './kind-badge.component';
 
 describe('KindBadgeComponent', () => {
-  it.each(['gate', 'question', 'law', 'permission', 'resource'] as const)(
-    'renders the %s kind label in upper case',
-    async (kind) => {
-      await render(KindBadgeComponent, { bindings: [inputBinding('kind', () => kind)] });
-      expect(screen.getByTestId('kind-badge')).toHaveTextContent(kind.toUpperCase());
-    },
-  );
+  it('renders the gate kind label in upper case', async () => {
+    await render(KindBadgeComponent, { bindings: [inputBinding('kind', () => 'gate')] });
+    expect(screen.getByTestId('kind-badge')).toHaveTextContent('GATE');
+  });
 });

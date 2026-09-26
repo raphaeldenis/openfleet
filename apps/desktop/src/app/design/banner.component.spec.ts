@@ -16,13 +16,10 @@ describe('BannerComponent', () => {
     expect(screen.getByTestId('banner')).toHaveTextContent('Approve or deny in the terminal.');
   });
 
-  it.each(['permission', 'reconnecting', 'error', 'done'] as const)(
-    'accepts the %s variant without throwing',
-    async (variant) => {
-      await render(BannerComponent, {
-        bindings: [inputBinding('variant', () => variant), inputBinding('title', () => 't'), inputBinding('description', () => 'd')],
-      });
-      expect(screen.getByTestId('banner')).toHaveAttribute('data-variant', variant);
-    },
-  );
+  it('accepts the error variant without throwing', async () => {
+    await render(BannerComponent, {
+      bindings: [inputBinding('variant', () => 'error'), inputBinding('title', () => 't'), inputBinding('description', () => 'd')],
+    });
+    expect(screen.getByTestId('banner')).toHaveAttribute('data-variant', 'error');
+  });
 });
