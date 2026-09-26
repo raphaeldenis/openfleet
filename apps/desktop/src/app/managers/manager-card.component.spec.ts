@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
 import { inputBinding } from '@angular/core';
 import { describe, expect, it, vi } from 'vitest';
-import type { ManagerView } from '@openfleet/shared';
+import type { ManagerView, Session } from '@openfleet/shared';
 import { ManagerCardComponent } from './manager-card.component';
 import { FleetApiService, ApiError } from '../core/fleet-api.service';
 
@@ -18,15 +18,43 @@ function manager(patch: Partial<ManagerView> = {}): ManagerView {
   };
 }
 
+function session(patch: Partial<Session> = {}): Session {
+  return {
+    id: 'm1',
+    name: 'Lead',
+    emoji: '🧭',
+    directory: '/tmp/wt',
+    role: 'manager',
+    harness: 'claude-cli',
+    state: 'idle',
+    stateSince: new Date().toISOString(),
+    createdAt: new Date().toISOString(),
+    ...patch,
+  };
+}
+
 describe('ManagerCardComponent', () => {
   it('shows children count over cap', async () => {
     await render(ManagerCardComponent, { bindings: [inputBinding('manager', () => manager({ childrenCount: 1, childrenCap: 2 }))] });
     expect(screen.getByTestId('manager-m1-children')).toHaveTextContent('1/2');
   });
 
-  it('shows a live countdown to the next pulse', async () => {
-    await render(ManagerCardComponent, { bindings: [inputBinding('manager', () => manager())] });
-    expect(screen.getByTestId('manager-m1-countdown').textContent).toMatch(/\d+s/);
+  it('shows a live countdown to the next pulse that advances as time passes, not a value frozen at render', async () => {
+    // Fake only the ticker's own timers — leave setTimeout/rAF real so Angular's zoneless scheduler can still flush.
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
+    try {
+      const { fixture } = await render(ManagerCardComponent, {
+        bindings: [inputBinding('manager', () => manager({ nextPulseAt: new Date(Date.now() + 42_000).toISOString() }))],
+      });
+      const before = screen.getByTestId('manager-m1-countdown').textContent;
+
+      await vi.advanceTimersByTimeAsync(5000);
+      await fixture.whenStable();
+
+      expect(screen.getByTestId('manager-m1-countdown').textContent).not.toBe(before);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('renders the pulse-ring progress indicator', async () => {
@@ -113,6 +141,16 @@ describe('ManagerCardComponent', () => {
     await userEvent.keyboard('{Enter}');
 
     expect(api.pulseNow).toHaveBeenCalledWith('m1');
+  });
+
+  it('stops the countdown and disables "Pulse now", with a reason, once its session is closed', async () => {
+    await render(ManagerCardComponent, {
+      bindings: [inputBinding('manager', () => manager()), inputBinding('session', () => session({ state: 'closed' }))],
+    });
+
+    expect(screen.getByTestId('manager-m1-countdown')).toHaveTextContent(/closed|—/i);
+    expect(screen.getByTestId('manager-m1-pulse')).toBeDisabled();
+    expect(screen.getByTestId('manager-m1-pulse-message')).toHaveTextContent(/closed/i);
   });
 
   it('cleans up its 1s countdown ticker on destroy, leaving no dangling timer', async () => {

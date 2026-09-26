@@ -13,8 +13,4 @@ import { TerminalComponent } from './sessions/terminal.component';
 export class App {
   protected readonly events = inject(FleetEventsService);
   protected readonly selectedId = signal<string | null>(null);
-
-  constructor() {
-    void this.events.connect();
-  }
 }

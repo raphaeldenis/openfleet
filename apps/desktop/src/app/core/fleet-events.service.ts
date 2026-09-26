@@ -12,6 +12,9 @@ export class FleetEventsService {
   readonly approvals = signal<Approval[]>([]);
   readonly managers = signal<ManagerView[]>([]);
   readonly connected = signal(false);
+  // A direct load of a route that never mounts App (e.g. /manager/:id) still needs to know
+  // whether the first snapshot has arrived, so it can show a loading state instead of "not found".
+  readonly snapshotReceived = signal(false);
   // Increments on every reconnect (not the first connect) — a fresh snapshot already resyncs
   // sessions/approvals on its own; this tells an attached terminal to re-request its replay too.
   readonly reconnectCount = signal(0);
@@ -65,6 +68,7 @@ export class FleetEventsService {
         this.sessions.set(event.sessions);
         this.approvals.set(event.approvals);
         this.managers.set(event.managers ?? []);
+        this.snapshotReceived.set(true);
         return;
       case 'session.created': return this.upsertSession(event.session);
       case 'session.state': return this.patchSession(event.sessionId, { state: event.state, stateSince: event.stateSince });

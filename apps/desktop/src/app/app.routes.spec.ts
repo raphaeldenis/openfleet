@@ -10,7 +10,7 @@ function configureTestBed() {
   return TestBed.configureTestingModule({
     providers: [
       provideRouter(routes),
-      { provide: FleetEventsService, useValue: { sessions: signal([managerSession]), approvals: signal([]), managers: signal([]), connect: () => {}, connected: signal(true) } },
+      { provide: FleetEventsService, useValue: { sessions: signal([managerSession]), approvals: signal([]), managers: signal([]), connect: () => {}, connected: signal(true), snapshotReceived: signal(true) } },
     ],
   }).compileComponents();
 }

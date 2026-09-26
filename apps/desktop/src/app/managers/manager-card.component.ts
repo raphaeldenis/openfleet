@@ -1,5 +1,5 @@
 import { ChangeDetectionStrategy, Component, DestroyRef, computed, inject, input, signal } from '@angular/core';
-import type { ManagerView } from '@openfleet/shared';
+import type { ManagerView, Session } from '@openfleet/shared';
 import { FleetApiService } from '../core/fleet-api.service';
 import { PulseRingComponent } from '../design/pulse-ring.component';
 import { countdownLabel, countdownSecondsUntil } from './manager-countdown';
@@ -18,10 +18,10 @@ import { PulseNowAction } from './pulse-now';
         type="button"
         class="of-btn of-btn--secondary"
         [attr.data-testid]="'manager-' + manager().sessionId + '-pulse'"
-        [disabled]="pulse.pending()"
+        [disabled]="pulse.pending() || isSessionClosed()"
         (click)="pulseNow()"
       >Pulse now</button>
-      @if (pulse.message(); as message) {
+      @if (displayedMessage(); as message) {
         <span
           [attr.data-testid]="'manager-' + manager().sessionId + '-pulse-message'"
           [attr.role]="message.kind === 'error' ? 'alert' : 'status'"
@@ -38,6 +38,7 @@ import { PulseNowAction } from './pulse-now';
 })
 export class ManagerCardComponent {
   readonly manager = input.required<ManagerView>();
+  readonly session = input<Session | undefined>(undefined);
   protected readonly pulse = new PulseNowAction(inject(FleetApiService));
   private readonly now = signal(Date.now());
 
@@ -46,9 +47,15 @@ export class ManagerCardComponent {
     inject(DestroyRef).onDestroy(() => clearInterval(tick));
   }
 
+  protected readonly isSessionClosed = computed(() => this.session()?.state === 'closed');
+
   protected readonly countdownSeconds = computed(() => countdownSecondsUntil(this.manager().nextPulseAt, this.now()));
 
-  protected readonly countdownDisplay = computed(() => countdownLabel(this.countdownSeconds()));
+  protected readonly countdownDisplay = computed(() => (this.isSessionClosed() ? 'closed' : countdownLabel(this.countdownSeconds())));
+
+  protected readonly displayedMessage = computed(() =>
+    this.pulse.message() ?? (this.isSessionClosed() ? { text: 'This session is closed', kind: 'info' as const } : null),
+  );
 
   protected readonly fractionElapsed = computed(() => {
     const pulseSeconds = this.manager().pulseSeconds;

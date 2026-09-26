@@ -44,7 +44,7 @@ describe('SessionListComponent', () => {
     expect(childRow.className).toContain('child');
   });
 
-  it('shows children count/cap and a pulse countdown on a manager card, and pulses on click', async () => {
+  it('renders a manager card and pulses on click', async () => {
     const api = fakeApi();
     const nextPulseAt = new Date(Date.now() + 42_000).toISOString();
     const fake = fakeEvents({
@@ -52,10 +52,18 @@ describe('SessionListComponent', () => {
       managers: [{ sessionId: 'm1', pulseSeconds: 1800, childrenCap: 2, missionText: 'x', nextPulseAt, childrenCount: 1 }],
     });
     await render(SessionListComponent, { providers: [provideRouter([]), { provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: fake }] });
-    expect(screen.getByTestId('manager-m1-children')).toHaveTextContent('1/2');
-    expect(screen.getByTestId('manager-m1-countdown').textContent).toMatch(/\d+s/);
+    expect(screen.getByTestId('manager-m1-card')).toBeTruthy();
     await userEvent.click(screen.getByTestId('manager-m1-pulse'));
     expect(api.pulseNow).toHaveBeenCalledWith('m1');
+  });
+
+  it('wraps the manager card in its own <li> so the sidebar list stays valid markup', async () => {
+    const fake = fakeEvents({
+      sessions: [{ id: 'm1', name: 'Lead', emoji: '🧭', role: 'manager', state: 'idle' }],
+      managers: [{ sessionId: 'm1', pulseSeconds: 1800, childrenCap: 2, missionText: 'x', nextPulseAt: new Date().toISOString(), childrenCount: 0 }],
+    });
+    await render(SessionListComponent, { providers: [provideRouter([]), { provide: FleetEventsService, useValue: fake }] });
+    expect(screen.getByTestId('manager-m1-card').closest('li')).toBeTruthy();
   });
 
   it('navigates to the manager dashboard when a root manager row is clicked, instead of opening its terminal', async () => {
@@ -67,6 +75,22 @@ describe('SessionListComponent', () => {
     await userEvent.click(screen.getByTestId('session-m1'));
 
     expect(navigateSpy).toHaveBeenCalledWith(['/manager', 'm1']);
+  });
+
+  it('navigates to its dashboard when a child session that is itself a manager is clicked, instead of opening a terminal', async () => {
+    const fake = fakeEvents({
+      sessions: [
+        { id: 'm1', name: 'Lead', emoji: '🧭', role: 'manager', state: 'idle' },
+        { id: 'm2', name: 'Nested', emoji: '🧭', role: 'manager', parentId: 'm1', state: 'idle' },
+      ],
+    });
+    const { fixture } = await render(SessionListComponent, { providers: [provideRouter([]), { provide: FleetEventsService, useValue: fake }] });
+    const router = fixture.debugElement.injector.get(Router);
+    const navigateSpy = vi.spyOn(router, 'navigate').mockResolvedValue(true);
+
+    await userEvent.click(screen.getByTestId('session-m2'));
+
+    expect(navigateSpy).toHaveBeenCalledWith(['/manager', 'm2']);
   });
 
   it('opens the terminal (does not navigate) when a plain root session is clicked', async () => {

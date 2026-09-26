@@ -15,6 +15,11 @@ export class PulseNowAction {
 
   constructor(private readonly api: FleetApiService) {}
 
+  reset(): void {
+    this.pending.set(false);
+    this.message.set(null);
+  }
+
   async run(sessionId: string): Promise<void> {
     if (this.pending()) return;
     this.pending.set(true);

@@ -20,7 +20,7 @@ import { NewManagerFormComponent } from '../managers/new-manager-form.component'
             class="row"
             [attr.data-testid]="'session-' + session.id"
             [attr.aria-label]="session.name + ' — ' + session.state"
-            (click)="onRootClick(session)"
+            (click)="onSessionClick(session)"
             [class.closed]="session.state === 'closed'"
           >
             <span class="name">{{ session.emoji }} {{ session.name }}</span>
@@ -28,7 +28,7 @@ import { NewManagerFormComponent } from '../managers/new-manager-form.component'
           </button>
         </li>
         @if (managerOf(session.id); as manager) {
-          <of-manager-card [manager]="manager" />
+          <li><of-manager-card [manager]="manager" [session]="session" /></li>
         }
         @for (child of childrenOf(session.id); track child.id) {
           <li>
@@ -37,7 +37,7 @@ import { NewManagerFormComponent } from '../managers/new-manager-form.component'
               class="row child"
               [attr.data-testid]="'session-' + child.id"
               [attr.aria-label]="child.name + ' — ' + child.state"
-              (click)="selected.emit(child.id)"
+              (click)="onSessionClick(child)"
               [class.closed]="child.state === 'closed'"
             >
               <span class="name">{{ child.emoji }} {{ child.name }}</span>
@@ -45,7 +45,7 @@ import { NewManagerFormComponent } from '../managers/new-manager-form.component'
             </button>
           </li>
           @if (managerOf(child.id); as childManager) {
-            <of-manager-card [manager]="childManager" />
+            <li><of-manager-card [manager]="childManager" [session]="child" /></li>
           }
         }
       }
@@ -97,7 +97,7 @@ export class SessionListComponent {
     return this.events.managers().find((m) => m.sessionId === sessionId);
   }
 
-  onRootClick(session: Session): void {
+  onSessionClick(session: Session): void {
     if (session.role === MANAGER_ROLE) {
       void this.router.navigate(['/manager', session.id]);
       return;

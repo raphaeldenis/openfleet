@@ -101,6 +101,23 @@ describe('FleetEventsService', () => {
 
     expect(FakeWebSocket.instances).toHaveLength(1);
   });
+
+  it('has not received a snapshot yet right after connecting, so a direct route load can show a loading state', () => {
+    const service = new FleetEventsService();
+    service.connect();
+
+    expect(service.snapshotReceived()).toBe(false);
+  });
+
+  it('marks the snapshot as received once the first snapshot event arrives', () => {
+    const service = new FleetEventsService();
+    service.connect();
+    const socket = FakeWebSocket.instances[0]!;
+
+    socket.dispatchMessage({ type: 'snapshot', sessions: [], approvals: [] });
+
+    expect(service.snapshotReceived()).toBe(true);
+  });
 });
 
 describe('FleetEventsService managers', () => {

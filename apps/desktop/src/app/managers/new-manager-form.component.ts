@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, inject } from '@angular/core';
+import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
 
@@ -23,9 +23,9 @@ function utf8ByteLength(text: string): number {
     <form (ngSubmit)="submit()">
       <h3>New manager</h3>
       <input data-testid="manager-directory" name="managerDirectory" [(ngModel)]="directory" placeholder="/path/to/worktree" required />
-      <input data-testid="manager-name" name="managerName" [(ngModel)]="name" placeholder="Name" required />
-      <input data-testid="manager-emoji" name="managerEmoji" [(ngModel)]="emoji" size="2" />
-      <select data-testid="manager-model" name="managerModel" [(ngModel)]="model">
+      <input data-testid="manager-name" name="managerName" [ngModel]="name()" (ngModelChange)="name.set($event)" placeholder="Name" required />
+      <input data-testid="manager-emoji" name="managerEmoji" [(ngModel)]="emoji" size="2" aria-label="Emoji" />
+      <select data-testid="manager-model" name="managerModel" [(ngModel)]="model" aria-label="Model">
         @for (rung of modelRungs; track rung) {
           <option [value]="rung">{{ rung }}</option>
         }
@@ -44,13 +44,13 @@ function utf8ByteLength(text: string): number {
       @if (childrenCapError) {
         <span role="alert" data-testid="manager-children-cap-error">{{ childrenCapError }}</span>
       }
-      <textarea data-testid="manager-mission" name="mission" [(ngModel)]="mission" placeholder="Mission" required></textarea>
+      <textarea data-testid="manager-mission" name="mission" [ngModel]="mission()" (ngModelChange)="mission.set($event)" placeholder="Mission" required></textarea>
       @if (missionError) {
         <span role="alert" data-testid="manager-mission-error">{{ missionError }}</span>
       }
-      <button type="submit" class="of-btn of-btn--primary" data-testid="create-manager">+ New manager</button>
-      @if (serverError) {
-        <p role="alert" data-testid="manager-form-error">{{ serverError }}</p>
+      <button type="submit" class="of-btn of-btn--primary" data-testid="create-manager" [disabled]="pending()">+ New manager</button>
+      @if (serverError(); as error) {
+        <p role="alert" data-testid="manager-form-error">{{ error }}</p>
       }
     </form>
   `,
@@ -64,41 +64,46 @@ export class NewManagerFormComponent {
   protected readonly pulseSecondsBounds = PULSE_SECONDS_BOUNDS;
   protected readonly childrenCapBounds = CHILDREN_CAP_BOUNDS;
   directory = '';
-  name = '';
+  readonly name = signal('');
   emoji = '🧭';
   model: string = 'sonnet';
   pulseSeconds = 1800;
   childrenCap = 2;
-  mission = '';
+  readonly mission = signal('');
   pulseSecondsError = '';
   childrenCapError = '';
   missionError = '';
-  serverError = '';
+  readonly serverError = signal('');
+  readonly pending = signal(false);
 
   async submit(): Promise<void> {
-    this.serverError = '';
+    if (this.pending()) return;
+    this.serverError.set('');
     if (!this.validate()) return;
+    this.pending.set(true);
     try {
       await this.api.createManagerSession({
         directory: this.directory,
-        name: this.name,
+        name: this.name(),
         emoji: this.emoji,
         model: this.model,
         pulseSeconds: this.pulseSeconds,
         childrenCap: this.childrenCap,
-        mission: this.mission,
+        mission: this.mission(),
       });
-      this.name = '';
-      this.mission = '';
+      this.name.set('');
+      this.mission.set('');
     } catch (error) {
-      this.serverError = error instanceof ApiError ? error.message : 'Could not create the manager — check your connection';
+      this.serverError.set(error instanceof ApiError ? error.message : 'Could not create the manager — check your connection');
+    } finally {
+      this.pending.set(false);
     }
   }
 
   private validate(): boolean {
     const isPulseSecondsValid = isIntegerWithinBounds(this.pulseSeconds, PULSE_SECONDS_BOUNDS);
     const isChildrenCapValid = isIntegerWithinBounds(this.childrenCap, CHILDREN_CAP_BOUNDS);
-    const isMissionWithinByteLimit = utf8ByteLength(this.mission) <= MISSION_MAX_BYTES;
+    const isMissionWithinByteLimit = utf8ByteLength(this.mission()) <= MISSION_MAX_BYTES;
 
     this.pulseSecondsError = isPulseSecondsValid
       ? ''

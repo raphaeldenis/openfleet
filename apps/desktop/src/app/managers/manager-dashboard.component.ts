@@ -1,8 +1,8 @@
-import { ChangeDetectionStrategy, Component, DestroyRef, computed, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, DestroyRef, computed, effect, inject, signal } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { ActivatedRoute } from '@angular/router';
 import { map } from 'rxjs';
-import type { ManagerView, Session } from '@openfleet/shared';
+import { MANAGER_ROLE, type ManagerView, type Session } from '@openfleet/shared';
 import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { StateChipComponent } from '../design/state-chip.component';
@@ -15,66 +15,74 @@ import { PulseNowAction } from './pulse-now';
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [StateChipComponent, PulseRingComponent],
   template: `
-    @if (session(); as session) {
-      <header class="header" data-testid="manager-dashboard">
-        <span class="emoji">{{ session.emoji }}</span>
-        <div class="identity">
-          <div class="name-row">
-            <span data-testid="manager-dashboard-name" class="name">{{ session.name }}</span>
-            <span class="role-badge">manager</span>
-            <of-state-chip [state]="session.state" />
-          </div>
-        </div>
-        @if (manager(); as manager) {
-          <div class="cap" title="Children cap headroom">
-            <span>Children</span>
-            <span data-testid="manager-dashboard-cap" class="mono">{{ manager.childrenCount }}/{{ manager.childrenCap }}</span>
-          </div>
-          <div class="pulse">
-            <of-pulse-ring [fractionElapsed]="fractionElapsed()" label="Next pulse" />
-            <span data-testid="manager-dashboard-countdown" class="mono">{{ countdownDisplay() }}</span>
-          </div>
-        }
-        <button
-          type="button"
-          class="of-btn of-btn--primary"
-          data-testid="manager-dashboard-pulse"
-          [disabled]="pulse.pending()"
-          (click)="pulseNow()"
-        >Pulse now</button>
-        @if (pulse.message(); as message) {
-          <span
-            data-testid="manager-dashboard-pulse-message"
-            [attr.role]="message.kind === 'error' ? 'alert' : 'status'"
-          >{{ message.text }}</span>
-        }
-      </header>
-
-      <section class="children">
-        <div class="section-head">
-          <span class="title">Children</span>
-        </div>
-        @if (children().length > 0) {
-          <div class="table">
-            <div class="row head">
-              <span class="col-name">Name</span>
-              <span class="col-state">State</span>
-              <span class="col-cost">Cost</span>
+    @if (!hasSnapshot()) {
+      <p class="state-message" data-testid="manager-dashboard-loading">Loading…</p>
+    } @else if (session(); as session) {
+      @if (session.role === managerRole) {
+        <header class="header" data-testid="manager-dashboard">
+          <span class="emoji">{{ session.emoji }}</span>
+          <div class="identity">
+            <div class="name-row">
+              <span data-testid="manager-dashboard-name" class="name">{{ session.name }}</span>
+              <span class="role-badge">manager</span>
+              <of-state-chip [state]="session.state" />
             </div>
-            @for (child of children(); track child.id) {
-              <div class="row" [attr.data-testid]="'manager-dashboard-child-' + child.id">
-                <span class="col-name">{{ child.emoji }} {{ child.name }}</span>
-                <span class="col-state"><of-state-chip [state]="child.state" /></span>
-                <span class="col-cost mono" title="Cost tracking is not implemented yet">—</span>
-              </div>
-            }
           </div>
-        } @else {
-          <p class="empty">No children yet — the manager spawns workers on its next pulse.</p>
-        }
-      </section>
+          @if (manager(); as manager) {
+            <div class="cap" title="Children cap headroom">
+              <span>Children</span>
+              <span data-testid="manager-dashboard-cap" class="mono">{{ children().length }}/{{ manager.childrenCap }}</span>
+            </div>
+            <div class="pulse">
+              <of-pulse-ring [fractionElapsed]="fractionElapsed()" label="Next pulse" />
+              <span data-testid="manager-dashboard-countdown" class="mono">{{ countdownDisplay() }}</span>
+            </div>
+          }
+          <button
+            type="button"
+            class="of-btn of-btn--primary"
+            data-testid="manager-dashboard-pulse"
+            [disabled]="pulse.pending() || isSessionClosed()"
+            (click)="pulseNow()"
+          >Pulse now</button>
+          @if (displayedPulseMessage(); as message) {
+            <span
+              data-testid="manager-dashboard-pulse-message"
+              [attr.role]="message.kind === 'error' ? 'alert' : 'status'"
+            >{{ message.text }}</span>
+          }
+        </header>
 
-      <p class="notice" data-testid="manager-dashboard-governance-notice">Journal and proposals are coming once notes/governance land.</p>
+        <section class="children">
+          <div class="section-head">
+            <span class="title">Children</span>
+          </div>
+          @if (children().length > 0) {
+            <div class="table">
+              <div class="row head">
+                <span class="col-name">Name</span>
+                <span class="col-state">State</span>
+                <span class="col-cost">Cost</span>
+              </div>
+              @for (child of children(); track child.id) {
+                <div class="row" [attr.data-testid]="'manager-dashboard-child-' + child.id">
+                  <span class="col-name">{{ child.emoji }} {{ child.name }}</span>
+                  <span class="col-state"><of-state-chip [state]="child.state" /></span>
+                  <span class="col-cost mono" title="Cost tracking is not implemented yet">—</span>
+                </div>
+              }
+            </div>
+          } @else {
+            <p class="empty">No children yet — the manager spawns workers on its next pulse.</p>
+          }
+        </section>
+
+        <p class="notice" data-testid="manager-dashboard-governance-notice">Journal and proposals are coming once notes/governance land.</p>
+      } @else {
+        <p class="state-message" data-testid="manager-dashboard-not-manager">This session is not a manager.</p>
+      }
+    } @else {
+      <p class="state-message" data-testid="manager-dashboard-not-found">Session not found.</p>
     }
   `,
   styles: `
@@ -98,9 +106,11 @@ import { PulseNowAction } from './pulse-now';
     .col-cost { width: 4rem; text-align: right }
     .empty { padding: 2rem; text-align: center; color: var(--mut) }
     .notice { margin: 0 1.25rem 1.25rem; color: var(--mut); font-size: .8125rem }
+    .state-message { padding: 2rem; text-align: center; color: var(--mut) }
   `,
 })
 export class ManagerDashboardComponent {
+  protected readonly managerRole = MANAGER_ROLE;
   private readonly route = inject(ActivatedRoute);
   private readonly events = inject(FleetEventsService);
   protected readonly pulse = new PulseNowAction(inject(FleetApiService));
@@ -110,7 +120,15 @@ export class ManagerDashboardComponent {
   constructor() {
     const tick = setInterval(() => this.now.set(Date.now()), 1000);
     inject(DestroyRef).onDestroy(() => clearInterval(tick));
+    // A card's PulseNowAction is created once per component instance; navigating from one
+    // manager to another reuses that instance, so its pending/message state must reset by hand.
+    effect(() => {
+      this.managerId();
+      this.pulse.reset();
+    });
   }
+
+  protected readonly hasSnapshot = computed(() => this.events.snapshotReceived());
 
   protected readonly session = computed<Session | undefined>(() =>
     this.events.sessions().find((s) => s.id === this.managerId()),
@@ -129,7 +147,13 @@ export class ManagerDashboardComponent {
     return manager ? countdownSecondsUntil(manager.nextPulseAt, this.now()) : null;
   });
 
-  protected readonly countdownDisplay = computed(() => countdownLabel(this.countdownSeconds()));
+  protected readonly isSessionClosed = computed(() => this.session()?.state === 'closed');
+
+  protected readonly countdownDisplay = computed(() => (this.isSessionClosed() ? 'closed' : countdownLabel(this.countdownSeconds())));
+
+  protected readonly displayedPulseMessage = computed(() =>
+    this.pulse.message() ?? (this.isSessionClosed() ? { text: 'This session is closed', kind: 'info' as const } : null),
+  );
 
   protected readonly fractionElapsed = computed(() => {
     const manager = this.manager();

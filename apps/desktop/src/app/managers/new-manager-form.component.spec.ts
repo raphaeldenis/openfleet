@@ -68,4 +68,25 @@ describe('NewManagerFormComponent', () => {
 
     expect(screen.getByTestId('manager-form-error')).toHaveTextContent('mission must be at most 65536 bytes');
   });
+
+  it('disables the submit button while a create request is pending, so a double click cannot post twice', async () => {
+    let resolveCreate!: () => void;
+    const api = { createManagerSession: vi.fn(() => new Promise<void>((resolve) => { resolveCreate = resolve; })) };
+    await render(NewManagerFormComponent, { providers: [{ provide: FleetApiService, useValue: api }] });
+    await fillMinimalValidForm();
+
+    await userEvent.click(screen.getByTestId('create-manager'));
+    expect(screen.getByTestId('create-manager')).toBeDisabled();
+    await userEvent.click(screen.getByTestId('create-manager'));
+
+    expect(api.createManagerSession).toHaveBeenCalledTimes(1);
+    resolveCreate();
+  });
+
+  it('gives the emoji field and model select an accessible name for screen reader users', async () => {
+    await render(NewManagerFormComponent, { providers: [{ provide: FleetApiService, useValue: { createManagerSession: vi.fn() } }] });
+
+    expect(screen.getByRole('textbox', { name: /emoji/i })).toBeTruthy();
+    expect(screen.getByRole('combobox', { name: /model/i })).toBeTruthy();
+  });
 });
