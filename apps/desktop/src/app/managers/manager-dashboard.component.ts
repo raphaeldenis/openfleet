@@ -97,10 +97,18 @@ import { PulseNowAction } from './pulse-now';
 
         <p class="notice" data-testid="manager-dashboard-governance-notice">Journal and proposals are coming once notes/governance land.</p>
       } @else {
-        <p class="state-message" data-testid="manager-dashboard-not-manager">This session is not a manager.</p>
+        <div class="state-block" data-testid="manager-dashboard-not-manager">
+          <span class="state-headline">This session is not a manager</span>
+          <span class="state-detail">It has no pulse, mission or children.</span>
+          <button type="button" class="of-btn of-btn--primary" data-testid="manager-dashboard-not-manager-terminal" (click)="openTerminal()">Open its terminal</button>
+        </div>
       }
     } @else {
-      <p class="state-message" data-testid="manager-dashboard-not-found">Session not found.</p>
+      <div class="state-block" data-testid="manager-dashboard-not-found">
+        <span class="state-headline">Session not found</span>
+        <span class="state-detail">This manager session no longer exists on this daemon.</span>
+        <button type="button" class="of-btn of-btn--secondary" data-testid="manager-dashboard-not-found-back" (click)="backToSessions()">Back to sessions</button>
+      </div>
     }
   `,
   styles: `
@@ -128,6 +136,9 @@ import { PulseNowAction } from './pulse-now';
     .empty { padding: 2rem; text-align: center; color: var(--mut) }
     .notice { margin: 0 1.25rem 1.25rem; color: var(--mut); font-size: .8125rem }
     .state-message { padding: 2rem; text-align: center; color: var(--mut) }
+    .state-block { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .375rem; padding: 4rem 1rem; text-align: center; color: var(--mut) }
+    .state-headline { color: var(--fg); font-weight: 600 }
+    .state-block .of-btn { margin-top: .5rem }
   `,
 })
 export class ManagerDashboardComponent {
@@ -196,5 +207,9 @@ export class ManagerDashboardComponent {
 
   openTerminal(): void {
     void this.router.navigate(['/'], { queryParams: { session: this.managerId() } });
+  }
+
+  backToSessions(): void {
+    void this.router.navigate(['/']);
   }
 }

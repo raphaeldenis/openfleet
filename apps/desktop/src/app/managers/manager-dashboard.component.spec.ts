@@ -52,6 +52,21 @@ describe('ManagerDashboardComponent', () => {
     expect(screen.getByTestId('manager-dashboard-not-found')).toBeTruthy();
   });
 
+  it('offers a "Back to sessions" action on "session not found", instead of a dead end', async () => {
+    const fake = fakeEvents({ sessions: [], snapshotReceived: true });
+    const { fixture } = await render(ManagerDashboardComponent, {
+      providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('missing-id') }, { provide: FleetEventsService, useValue: fake }],
+    });
+    const router = fixture.debugElement.injector.get(Router);
+    const navigateSpy = vi.spyOn(router, 'navigate').mockResolvedValue(true);
+
+    const notFound = screen.getByTestId('manager-dashboard-not-found');
+    expect(notFound).toHaveTextContent('Session not found');
+    await userEvent.click(screen.getByTestId('manager-dashboard-not-found-back'));
+
+    expect(navigateSpy).toHaveBeenCalledWith(['/']);
+  });
+
   it('shows "not a manager" instead of full manager chrome when the session at this id is not a manager', async () => {
     const plainSession = { id: 's1', name: 'Gimli', emoji: '⚔️', state: 'idle', harness: 'claude-cli' };
     const fake = fakeEvents({ sessions: [plainSession] });
@@ -60,6 +75,22 @@ describe('ManagerDashboardComponent', () => {
     });
     expect(screen.getByTestId('manager-dashboard-not-manager')).toBeTruthy();
     expect(screen.queryByTestId('manager-dashboard-governance-notice')).toBeNull();
+  });
+
+  it('offers to open its terminal on "not a manager", instead of a dead end', async () => {
+    const plainSession = { id: 's1', name: 'Gimli', emoji: '⚔️', state: 'idle', harness: 'claude-cli' };
+    const fake = fakeEvents({ sessions: [plainSession] });
+    const { fixture } = await render(ManagerDashboardComponent, {
+      providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('s1') }, { provide: FleetEventsService, useValue: fake }],
+    });
+    const router = fixture.debugElement.injector.get(Router);
+    const navigateSpy = vi.spyOn(router, 'navigate').mockResolvedValue(true);
+
+    const notManager = screen.getByTestId('manager-dashboard-not-manager');
+    expect(notManager).toHaveTextContent('This session is not a manager');
+    await userEvent.click(screen.getByTestId('manager-dashboard-not-manager-terminal'));
+
+    expect(navigateSpy).toHaveBeenCalledWith(['/'], { queryParams: { session: 's1' } });
   });
 
   it('derives the children header count from the live session list, updating immediately when a child is created', async () => {
@@ -221,6 +252,15 @@ describe('ManagerDashboardComponent', () => {
     await userEvent.click(screen.getByTestId('manager-dashboard-terminal'));
 
     expect(navigateSpy).toHaveBeenCalledWith(['/'], { queryParams: { session: 'm1' } });
+  });
+
+  it('shows the countdown as m:ss instead of raw seconds', async () => {
+    const managerView = { ...MANAGER_VIEW, nextPulseAt: new Date(Date.now() + 580_000).toISOString() };
+    const fake = fakeEvents({ sessions: [MANAGER_SESSION], managers: [managerView] });
+    await render(ManagerDashboardComponent, {
+      providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('m1') }, { provide: FleetEventsService, useValue: fake }],
+    });
+    expect(screen.getByTestId('manager-dashboard-countdown')).toHaveTextContent('9:40');
   });
 
   it('shows the children cap as a mini capacity meter next to the N/cap count', async () => {

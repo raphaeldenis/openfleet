@@ -39,6 +39,12 @@ describe('ManagerCardComponent', () => {
     expect(screen.getByTestId('manager-m1-children')).toHaveTextContent('1/2');
   });
 
+  it('shows the countdown as m:ss instead of raw seconds', async () => {
+    const nextPulseAt = new Date(Date.now() + 580_000).toISOString();
+    await render(ManagerCardComponent, { bindings: [inputBinding('manager', () => manager({ nextPulseAt }))] });
+    expect(screen.getByTestId('manager-m1-countdown')).toHaveTextContent('9:40');
+  });
+
   it('shows a live countdown to the next pulse that advances as time passes, not a value frozen at render', async () => {
     // Fake only the ticker's own timers — leave setTimeout/rAF real so Angular's zoneless scheduler can still flush.
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
@@ -78,7 +84,7 @@ describe('ManagerCardComponent', () => {
     const pastPulseAt = new Date(Date.now() - 10_000).toISOString();
     await render(ManagerCardComponent, { bindings: [inputBinding('manager', () => manager({ nextPulseAt: pastPulseAt }))] });
 
-    expect(screen.getByTestId('manager-m1-countdown')).toHaveTextContent('0s');
+    expect(screen.getByTestId('manager-m1-countdown')).toHaveTextContent('0:00');
   });
 
   it('does not render "NaNs" when nextPulseAt is an unparsable value from a malformed server payload', async () => {
