@@ -30,6 +30,34 @@ describe('childEnvironment', () => {
     expect(childEnvironment(parentEnv)).toEqual({ CLAUDE_CONFIG_DIR: '/home/user/.claude' });
   });
 
+  it('keeps legitimate CLAUDE_CODE_ configuration variables, which are not session markers', () => {
+    const parentEnv = {
+      CLAUDE_CODE_USE_BEDROCK: '1',
+      CLAUDE_CODE_USE_VERTEX: '1',
+      CLAUDE_CODE_CLIENT_CERT: '/path/cert.pem',
+      CLAUDE_CODE_CLIENT_KEY: '/path/key.pem',
+      CLAUDE_CODE_OAUTH_TOKEN: 'tok',
+      CLAUDE_CODE_MAX_OUTPUT_TOKENS: '4096',
+      CLAUDE_CODE_API_KEY_HELPER_TTL_MS: '3600000',
+    };
+
+    expect(childEnvironment(parentEnv)).toEqual(parentEnv);
+  });
+
+  it('drops every marker in the session/nesting Set, including ones not covered by the first test', () => {
+    const parentEnv = {
+      CLAUDE_JOB_DIR: '/tmp/job',
+      CLAUDE_CODE_SESSION_ATTENDED: '1',
+      CLAUDE_CODE_EXECPATH: '/usr/local/bin/claude',
+      CLAUDE_CODE_SUBAGENT_MODEL: 'haiku',
+      CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
+      CLAUDE_CODE_SSE_PORT: '1234',
+      PATH: '/usr/bin',
+    };
+
+    expect(childEnvironment(parentEnv)).toEqual({ PATH: '/usr/bin' });
+  });
+
   it('keeps both ANTHROPIC_API_KEY and ANTHROPIC_BASE_URL', () => {
     const parentEnv = { ANTHROPIC_API_KEY: 'sk-test', ANTHROPIC_BASE_URL: 'https://api.example.com' };
 
@@ -42,13 +70,12 @@ describe('childEnvironment', () => {
     expect(childEnvironment(parentEnv)).toEqual(parentEnv);
   });
 
-  it('keeps a key whose value is undefined without throwing', () => {
+  it('drops a key whose value is undefined, since node-pty would spawn it as the literal string "NAME=undefined"', () => {
     const parentEnv = { OPTIONAL_VAR: undefined, PATH: '/usr/bin' };
 
     const result = childEnvironment(parentEnv);
 
-    expect(Object.prototype.hasOwnProperty.call(result, 'OPTIONAL_VAR')).toBe(true);
-    expect(result.OPTIONAL_VAR).toBeUndefined();
+    expect(Object.prototype.hasOwnProperty.call(result, 'OPTIONAL_VAR')).toBe(false);
     expect(result.PATH).toBe('/usr/bin');
   });
 
