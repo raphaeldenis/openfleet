@@ -1,9 +1,8 @@
 import { Component, computed, inject, signal } from '@angular/core';
 import { JsonPipe } from '@angular/common';
-import { ApiError, FleetApiService } from '../core/fleet-api.service';
+import { decideApproval } from '../core/decide-approval';
+import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
-
-const GENERIC_DECISION_ERROR = 'Could not send decision — try again.';
 
 @Component({
   selector: 'of-inbox',
@@ -52,15 +51,10 @@ export class InboxComponent {
     if (this.pendingIds().has(id)) return;
     this.setPending(id, true);
     this.clearError(id);
-    try {
-      await this.api.decide(id, behavior);
-    } catch (error) {
-      const isAlreadyResolved = error instanceof ApiError && error.status === 409;
-      if (isAlreadyResolved) return this.dismiss(id);
-      this.setError(id, GENERIC_DECISION_ERROR);
-    } finally {
-      this.setPending(id, false);
-    }
+    const result = await decideApproval(this.api, id, behavior);
+    if (result.outcome === 'already-resolved') this.dismiss(id);
+    else if (result.outcome === 'failed') this.setError(id, result.message);
+    this.setPending(id, false);
   }
 
   private setPending(id: string, isPending: boolean): void {

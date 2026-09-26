@@ -1,7 +1,9 @@
-import { ChangeDetectionStrategy, Component, inject, input, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, effect, inject, input, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
+
+const MODEL_SWITCH_ERROR = 'Could not switch model — try again.';
 
 const MODEL_RUNGS = ['haiku', 'sonnet', 'opus', 'fable'] as const;
 
@@ -26,6 +28,9 @@ const SWITCH_STATUS_LABEL: Record<'relaunching' | 'deferred', string> = {
       @if (switchStatus(); as status) {
         <span class="switch-status" data-testid="model-switch-status">{{ statusLabel(status) }}</span>
       }
+      @if (switchError(); as error) {
+        <span role="alert" data-testid="model-switch-error" class="of-error">✕ {{ error }}</span>
+      }
     </div>
   `,
   styles: `
@@ -42,6 +47,19 @@ export class ModelSelectorComponent {
   chosenRung: (typeof MODEL_RUNGS)[number] = 'sonnet';
   readonly applying = signal(false);
   readonly switchStatus = signal<'relaunching' | 'deferred' | null>(null);
+  readonly switchError = signal<string | null>(null);
+
+  constructor() {
+    // A route param change reuses this component instance, so a session switch must not leak
+    // the previous session's in-flight state or result into the one now shown.
+    effect(() => {
+      this.sessionId();
+      this.chosenRung = 'sonnet';
+      this.applying.set(false);
+      this.switchStatus.set(null);
+      this.switchError.set(null);
+    });
+  }
 
   session() {
     return this.events.sessions().find((s) => s.id === this.sessionId());
@@ -52,10 +70,14 @@ export class ModelSelectorComponent {
   }
 
   async apply(): Promise<void> {
+    if (this.applying()) return;
     this.applying.set(true);
+    this.switchError.set(null);
     try {
       const result = await this.api.updateModel(this.sessionId(), this.chosenRung);
       this.switchStatus.set(result.status);
+    } catch {
+      this.switchError.set(MODEL_SWITCH_ERROR);
     } finally {
       this.applying.set(false);
     }
