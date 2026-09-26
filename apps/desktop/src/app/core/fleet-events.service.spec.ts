@@ -41,6 +41,10 @@ function session(id: string, patch: Partial<{ name: string; state: string }> = {
   return { id, name: patch.name ?? 'Gimli', emoji: '⚔️', directory: '/tmp', harness: 'fake', state: patch.state ?? 'idle', stateSince: 't', createdAt: 't' };
 }
 
+function manager(sessionId: string, patch: Partial<{ childrenCount: number; nextPulseAt: string }> = {}) {
+  return { sessionId, pulseSeconds: 1800, childrenCap: 2, missionText: 'x', nextPulseAt: patch.nextPulseAt ?? 'later', childrenCount: patch.childrenCount ?? 0 };
+}
+
 describe('FleetEventsService', () => {
   beforeEach(() => {
     FakeWebSocket.instances = [];
@@ -96,6 +100,47 @@ describe('FleetEventsService', () => {
     service.connect();
 
     expect(FakeWebSocket.instances).toHaveLength(1);
+  });
+});
+
+describe('FleetEventsService managers', () => {
+  beforeEach(() => {
+    FakeWebSocket.instances = [];
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+  });
+
+  it('seeds managers from the snapshot event', () => {
+    const service = new FleetEventsService();
+    service.connect();
+    const socket = FakeWebSocket.instances[0]!;
+    socket.dispatchMessage({ type: 'snapshot', sessions: [], approvals: [], managers: [manager('m1')] });
+    expect(service.managers()).toEqual([manager('m1')]);
+  });
+
+  it('defaults managers to empty when a snapshot omits the field, so older daemons do not crash the reducer', () => {
+    const service = new FleetEventsService();
+    service.connect();
+    const socket = FakeWebSocket.instances[0]!;
+    socket.dispatchMessage({ type: 'snapshot', sessions: [], approvals: [] });
+    expect(service.managers()).toEqual([]);
+  });
+
+  it('upserts on manager.created', () => {
+    const service = new FleetEventsService();
+    service.connect();
+    const socket = FakeWebSocket.instances[0]!;
+    socket.dispatchMessage({ type: 'snapshot', sessions: [], approvals: [], managers: [] });
+    socket.dispatchMessage({ type: 'manager.created', manager: manager('m1') });
+    expect(service.managers()).toEqual([manager('m1')]);
+  });
+
+  it('upserts (not duplicates) on manager.pulsed, refreshing its nextPulseAt and childrenCount', () => {
+    const service = new FleetEventsService();
+    service.connect();
+    const socket = FakeWebSocket.instances[0]!;
+    socket.dispatchMessage({ type: 'snapshot', sessions: [], approvals: [], managers: [manager('m1', { nextPulseAt: 'soon' })] });
+    socket.dispatchMessage({ type: 'manager.pulsed', manager: manager('m1', { nextPulseAt: 'later', childrenCount: 1 }) });
+    expect(service.managers()).toEqual([manager('m1', { nextPulseAt: 'later', childrenCount: 1 })]);
   });
 });
 
