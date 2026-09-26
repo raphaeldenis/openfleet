@@ -3,7 +3,7 @@ import { mkdtempSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { createWorktree, sameGitRepository, WorktreeError } from './worktrees.js';
+import { createWorktree, isPathWithin, sameGitRepository, WorktreeError } from './worktrees.js';
 
 function makeRepo(): string {
   const dir = mkdtempSync(join(tmpdir(), 'of-repo-'));
@@ -60,5 +60,23 @@ describe('sameGitRepository', () => {
     const repoPath = makeRepo();
     const notARepo = mkdtempSync(join(tmpdir(), 'of-not-a-repo-'));
     await expect(sameGitRepository(repoPath, notARepo)).resolves.toBe(false);
+  });
+});
+
+describe('isPathWithin', () => {
+  it('is true for a direct child path', () => {
+    expect(isPathWithin('/tmp/of-wt/task-1', '/tmp/of-wt')).toBe(true);
+  });
+
+  it('is false for the root itself', () => {
+    expect(isPathWithin('/tmp/of-wt', '/tmp/of-wt')).toBe(false);
+  });
+
+  it('is false for a sibling directory whose name merely starts with the root\'s name', () => {
+    expect(isPathWithin('/tmp/of-wt-evil/task-1', '/tmp/of-wt')).toBe(false);
+  });
+
+  it('is false for a parent directory', () => {
+    expect(isPathWithin('/tmp', '/tmp/of-wt')).toBe(false);
   });
 });

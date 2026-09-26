@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
 const run = promisify(execFile);
@@ -53,4 +53,9 @@ async function gitCommonDir(cwd: string): Promise<string | undefined> {
   } catch {
     return undefined;
   }
+}
+
+export function isPathWithin(candidate: string, root: string): boolean {
+  const relativePath = relative(resolve(root), resolve(candidate));
+  return relativePath !== '' && !relativePath.startsWith('..') && !isAbsolute(relativePath);
 }
