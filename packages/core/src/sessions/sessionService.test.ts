@@ -422,7 +422,10 @@ describe('SessionService resume', () => {
     const bus = new EventBus();
     const firstRunHarness = new FakeHarness();
     const original = new SessionService({ db, bus, harnesses: [firstRunHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
-    await original.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖', permissionMode: 'default' });
+    const session = await original.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    // 'default' predates PERMISSION_MODES excluding it (Amendment A1) and can only reach the DB from a
+    // pre-existing row, never from SessionSpec, so it is written directly rather than through create().
+    db.prepare('UPDATE sessions SET permission_mode = ? WHERE id = ?').run('default', session.id);
 
     const restartHarness = new FakeHarness();
     const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt', resumeTimeoutMs: 50 });

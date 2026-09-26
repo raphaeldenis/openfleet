@@ -27,13 +27,17 @@ describe('SessionSpecSchema', () => {
     expect(() => SessionSpecSchema.parse({ directory: '/tmp/x', name: 'G', permissionMode: 'yolo' })).toThrow();
   });
 
-  it('accepts a permission mode and preserves it', () => {
-    const spec = SessionSpecSchema.parse({ directory: '/tmp/x', name: 'Gimli', permissionMode: 'acceptEdits' });
-    expect(spec.permissionMode).toBe('acceptEdits');
+  it('rejects the undocumented "default" alias', () => {
+    expect(() => SessionSpecSchema.parse({ directory: '/tmp/x', name: 'G', permissionMode: 'default' })).toThrow();
   });
 
-  it('exposes the five permission modes in the order the CLI accepts them', () => {
-    expect(PERMISSION_MODES).toEqual(['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions']);
+  it.each(PERMISSION_MODES)('accepts the documented permission mode "%s" and preserves it', (mode) => {
+    const spec = SessionSpecSchema.parse({ directory: '/tmp/x', name: 'Gimli', permissionMode: mode });
+    expect(spec.permissionMode).toBe(mode);
+  });
+
+  it('exposes the six permission modes the CLI documents, manual first as the ask-before-acting default', () => {
+    expect(PERMISSION_MODES).toEqual(['manual', 'acceptEdits', 'plan', 'auto', 'bypassPermissions', 'dontAsk']);
   });
 
   it('rejects a manager block missing childrenCap', () => {

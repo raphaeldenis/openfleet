@@ -7,7 +7,7 @@ export type SessionState = (typeof SESSION_STATES)[number];
 export const HARNESSES = ['claude-cli', 'fake'] as const;
 export type HarnessId = (typeof HARNESSES)[number];
 
-export const PERMISSION_MODES = ['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions'] as const;
+export const PERMISSION_MODES = ['manual', 'acceptEdits', 'plan', 'auto', 'bypassPermissions', 'dontAsk'] as const;
 export type PermissionMode = (typeof PERMISSION_MODES)[number];
 
 export const SessionSpecSchema = z.object({

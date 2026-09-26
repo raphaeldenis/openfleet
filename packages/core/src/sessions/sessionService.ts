@@ -37,8 +37,7 @@ export const PARKED_RETRY_MS = 60_000;
 export const RESUME_TIMEOUT_EXIT_CODE = -1;
 export const RESUME_LAUNCH_FAILED_EXIT_CODE = -2;
 
-// ponytail: 'manual' joins the shared enum in P2-T06b; drop the union then.
-const RESUMABLE_PERMISSION_MODES = new Set<string>([...PERMISSION_MODES, 'manual']);
+const RESUMABLE_PERMISSION_MODES = new Set<string>(PERMISSION_MODES);
 
 // ponytail: main.ts constructs exactly one SessionService per real daemon process — this module-level
 // map (rather than an instance field) is what lets a freshly resumed handle outrank a stale pre-restart
@@ -519,9 +518,14 @@ export class SessionService {
   }
 
   private resolveResumePermissionMode(session: Session): PermissionMode | undefined {
-    const stored = session.permissionMode;
+    // The DB column is an untrusted string, not a validated PermissionMode: a row written before
+    // Amendment A1, or by hand, can hold a value PERMISSION_MODES no longer (or never did) recognize.
+    const stored = session.permissionMode as string | undefined;
     if (stored === undefined) return undefined;
-    if (stored === 'default') return 'manual' as PermissionMode;
+    // ponytail: 'default' was PERMISSION_MODES' entry before Amendment A1 renamed it to 'manual'; a dev
+    // database can still hold rows written under the old name. Drop this guard in phase 3, once every
+    // pre-A1 row has resumed at least once (each resume rewrites the column via setState's normal path).
+    if (stored === 'default') return 'manual';
     if (RESUMABLE_PERMISSION_MODES.has(stored)) return stored as PermissionMode;
     console.warn(`resumeOne: session ${session.id} has an unrecognized permission_mode "${stored}", resuming without --permission-mode`);
     return undefined;
