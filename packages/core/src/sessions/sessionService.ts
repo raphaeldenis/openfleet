@@ -28,10 +28,12 @@ export const SUBMIT_KEYSTROKE_DELAY_MS = 150;
 // the next body is typed mid-turn (Claude Code buffers it in the composer). Upgrade path: confirm the turn
 // from the pty output instead of trusting the DB state.
 export const TURN_START_TIMEOUT_MS = 5000;
-// ponytail: fixed retry for a throwing delivery step, bounded so a pty that keeps throwing parks the machine
-// until the next state transition instead of retrying forever; add backoff if pty writes fail transiently.
+// ponytail: fixed retry for a throwing delivery step, then a slow parked retry so a wedged-not-exited pty
+// (which may never produce a state transition) is still retried without a tight loop; add exponential
+// backoff if pty writes fail transiently often enough to matter.
 export const DELIVERY_RETRY_MS = 5000;
 export const MAX_DELIVERY_RETRIES = 3;
+export const PARKED_RETRY_MS = 60_000;
 export const RESUME_TIMEOUT_EXIT_CODE = -1;
 export const RESUME_LAUNCH_FAILED_EXIT_CODE = -2;
 
@@ -261,6 +263,7 @@ export class SessionService {
     if (!handle) return;
     const message = this.queue.nextPending(sessionId);
     if (!message) return;
+    // Assumes HarnessHandle.write throws only when no bytes reached the pty: a failed body is retyped from 'ready'.
     handle.write(message.body);
     // The composer reads a body and its '\r' in one write as a paste and never submits it: the '\r' waits.
     const submitDelayMs = this.deps.submitKeystrokeDelayMs ?? SUBMIT_KEYSTROKE_DELAY_MS;
@@ -283,10 +286,20 @@ export class SessionService {
       return;
     }
     phase.handle.write('\r');
-    this.queue.markDelivered(phase.messageId);
-    this.deps.bus.emit({ type: 'message.delivered', sessionId, messageId: phase.messageId });
+    // The '\r' reached the pty: the delivery is committed, so nothing past this line may lead to a second '\r'.
     const turnStartTimeout = this.schedule(sessionId, TURN_START_TIMEOUT_MS, () => this.stopAwaitingTurnStart(sessionId));
     this.enter(sessionId, { name: 'submitted', messageId: phase.messageId }, turnStartTimeout);
+    this.queue.markDelivered(phase.messageId);
+    this.announceDelivered(sessionId, phase.messageId);
+  }
+
+  // A failing listener (e.g. a WS client on a closing socket) is not a delivery failure: it never feeds the retry.
+  private announceDelivered(sessionId: string, messageId: string): void {
+    try {
+      this.deps.bus.emit({ type: 'message.delivered', sessionId, messageId });
+    } catch (err) {
+      console.error(`delivery: session ${sessionId} delivered message ${messageId}, but a message.delivered listener failed`, err);
+    }
   }
 
   private stopAwaitingTurnStart(sessionId: string): void {
@@ -335,9 +348,10 @@ export class SessionService {
     const failedAttempts = delivery.failedAttempts + 1;
     const isNewFailureStreak = failedAttempts === 1;
     if (isNewFailureStreak) console.error(`delivery: session ${sessionId} failed, its message stays queued`, err);
-    // Past the last retry the machine parks with no timer; the next state transition advances it again.
-    const canRetry = failedAttempts <= MAX_DELIVERY_RETRIES && this.handles.has(sessionId);
-    const retry = canRetry ? this.schedule(sessionId, DELIVERY_RETRY_MS, () => this.advance(sessionId)) : undefined;
+    // Past the last fast retry the machine parks on the slow PARKED_RETRY_MS; a state transition advances it sooner.
+    const isParked = failedAttempts > MAX_DELIVERY_RETRIES;
+    const retryDelayMs = isParked ? PARKED_RETRY_MS : DELIVERY_RETRY_MS;
+    const retry = this.handles.has(sessionId) ? this.schedule(sessionId, retryDelayMs, () => this.advance(sessionId)) : undefined;
     clearTimeout(delivery.timer);
     this.deliveries.set(sessionId, { ...delivery, timer: retry, failedAttempts });
   }

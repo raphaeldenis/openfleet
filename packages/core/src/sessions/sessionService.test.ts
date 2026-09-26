@@ -3,7 +3,7 @@ import { openDatabase } from '../db/database.js';
 import { FakeHandle, FakeHarness } from '../harness/fakeHarness.js';
 import type { Harness, HarnessHandle, HarnessLaunch } from '../harness/harness.js';
 import { EventBus } from '../events/eventBus.js';
-import { DEFAULT_CLOSE_ESCALATE_MS, DELIVERY_RETRY_MS, MAX_DELIVERY_RETRIES, RESUME_LAUNCH_FAILED_EXIT_CODE, RESUME_TIMEOUT_EXIT_CODE, SessionService, SUBMIT_KEYSTROKE_DELAY_MS, TURN_START_TIMEOUT_MS } from './sessionService.js';
+import { DEFAULT_CLOSE_ESCALATE_MS, DELIVERY_RETRY_MS, MAX_DELIVERY_RETRIES, PARKED_RETRY_MS, RESUME_LAUNCH_FAILED_EXIT_CODE, RESUME_TIMEOUT_EXIT_CODE, SessionService, SUBMIT_KEYSTROKE_DELAY_MS, TURN_START_TIMEOUT_MS } from './sessionService.js';
 import { SessionRepository } from './sessionRepository.js';
 import type { ServerEvent } from '@openfleet/shared';
 
@@ -798,7 +798,7 @@ describe('SessionService submit-keystroke hostile cases', () => {
     consoleErrorSpy.mockRestore();
   });
 
-  it('stops retrying a submit keystroke that keeps failing after MAX_DELIVERY_RETRIES, then resumes on the next deliverable transition', async () => {
+  it('parks a submit keystroke that keeps failing after MAX_DELIVERY_RETRIES fast retries, then resumes on the next deliverable transition', async () => {
     vi.useFakeTimers();
     const { service, harness, events } = setup();
     const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
@@ -818,7 +818,7 @@ describe('SessionService submit-keystroke hostile cases', () => {
     await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS + DELIVERY_RETRY_MS * (MAX_DELIVERY_RETRIES + 2));
 
     expect(submitAttempts).toBe(1 + MAX_DELIVERY_RETRIES);
-    expect(vi.getTimerCount()).toBe(0);
+    expect(vi.getTimerCount()).toBe(1); // parked: only the long parked retry remains
     expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
     expect(service.hasQueuedMessage(session.id, 'do X')).toBe(true);
 
@@ -828,6 +828,64 @@ describe('SessionService submit-keystroke hostile cases', () => {
     expect(handle.written).toEqual(['do X', '\r']);
     expect(events.filter((e) => e.type === 'message.delivered')).toHaveLength(1);
     consoleErrorSpy.mockRestore();
+  });
+
+  it('keeps retrying a parked delivery every PARKED_RETRY_MS with no state transition, logging once per failure streak', async () => {
+    vi.useFakeTimers();
+    const { service, harness, events } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+    const handle = harness.handles[0]!;
+    const originalWrite = handle.write.bind(handle);
+    let isPtyBroken = true;
+    let submitAttempts = 0;
+    handle.write = (data: string) => {
+      if (data === '\r') submitAttempts += 1;
+      if (data === '\r' && isPtyBroken) throw new Error('pty write failed');
+      originalWrite(data);
+    };
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    service.sendMessage({ sessionId: session.id, body: 'do X' });
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS + DELIVERY_RETRY_MS * MAX_DELIVERY_RETRIES);
+    expect(submitAttempts).toBe(1 + MAX_DELIVERY_RETRIES);
+    expect(vi.getTimerCount()).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(PARKED_RETRY_MS);
+    expect(submitAttempts).toBe(2 + MAX_DELIVERY_RETRIES);
+    expect(vi.getTimerCount()).toBe(1);
+    expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+
+    isPtyBroken = false;
+    await vi.advanceTimersByTimeAsync(PARKED_RETRY_MS);
+    expect(handle.written).toEqual(['do X', '\r']);
+    expect(events.filter((e) => e.type === 'message.delivered')).toHaveLength(1);
+    expect(service.hasQueuedMessage(session.id, 'do X')).toBe(false);
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('commits a submitted delivery even when a message.delivered listener throws: one \\r, one event, no retry', async () => {
+    vi.useFakeTimers();
+    const { service, harness, bus, events } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+    bus.subscribe((e) => { if (e.type === 'message.delivered') throw new Error('socket closing'); });
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    service.sendMessage({ sessionId: session.id, body: 'do X' });
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
+    const listenerFailureLogs = consoleErrorSpy.mock.calls.length;
+    consoleErrorSpy.mockRestore();
+    const secondSend = service.sendMessage({ sessionId: session.id, body: 'do Y' });
+    const timersWhileSubmitted = vi.getTimerCount();
+    await vi.advanceTimersByTimeAsync(TURN_START_TIMEOUT_MS); // the turn-start fallback, not a retry, frees the machine
+
+    expect(secondSend.status).toBe('queued'); // submitted: awaiting the turn start
+    expect(timersWhileSubmitted).toBe(1); // only the turn-start timeout, no retry timer
+    expect(harness.handles[0]!.written).toEqual(['do X', '\r', 'do Y']);
+    expect(events.filter((e) => e.type === 'message.delivered')).toHaveLength(1);
+    expect(service.hasQueuedMessage(session.id, 'do X')).toBe(false);
+    expect(listenerFailureLogs).toBe(1);
   });
 
   it('does not crash the daemon when typing the body throws, and types it once the retry delay elapses', async () => {

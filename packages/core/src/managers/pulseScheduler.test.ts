@@ -5,7 +5,7 @@ import { FakeHarness } from '../harness/fakeHarness.js';
 import { ManagerRepository } from './managerRepository.js';
 import { toManagerView } from './managerView.js';
 import { PulseScheduler, PULSE_MESSAGE } from './pulseScheduler.js';
-import { SessionService, SUBMIT_KEYSTROKE_DELAY_MS } from '../sessions/sessionService.js';
+import { DELIVERY_RETRY_MS, MAX_DELIVERY_RETRIES, PARKED_RETRY_MS, SessionService, SUBMIT_KEYSTROKE_DELAY_MS, TURN_START_TIMEOUT_MS } from '../sessions/sessionService.js';
 
 function setup() {
   const db = openDatabase(':memory:');
@@ -386,5 +386,32 @@ describe('PulseScheduler — hostile cases', () => {
     expect(managers.get(manager.id)!.lastPulseAt).toBe(afterCycle2); // not due yet
     vi.advanceTimersByTime(1);
     expect(managers.get(manager.id)!.lastPulseAt).not.toBe(afterCycle2); // fires exactly at the persisted deadline
+  });
+
+  it('eventually delivers a pulse after a transient submit write failure, with no hook transition at all', async () => {
+    const { scheduler, sessions, managers, harness } = setup();
+    const manager = await sessions.create({ directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake' });
+    sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'SessionStart' }));
+    managers.insert({ sessionId: manager.id, pulseSeconds: 3600, childrenCap: 1, missionText: 'x', createdAt: new Date().toISOString() });
+    const handle = harness.handles[0]!;
+    const originalWrite = handle.write.bind(handle);
+    let isPtyBroken = true;
+    handle.write = (data: string) => {
+      if (data === '\r' && isPtyBroken) throw new Error('pty write failed');
+      originalWrite(data);
+    };
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    scheduler.pulseNow(manager.id);
+    vi.advanceTimersByTime(SUBMIT_KEYSTROKE_DELAY_MS + DELIVERY_RETRY_MS * MAX_DELIVERY_RETRIES);
+    expect(scheduler.pulseNow(manager.id)).toEqual({ coalesced: true });
+
+    isPtyBroken = false;
+    vi.advanceTimersByTime(PARKED_RETRY_MS);
+    expect(handle.written).toEqual([PULSE_MESSAGE, '\r']);
+    vi.advanceTimersByTime(TURN_START_TIMEOUT_MS);
+
+    expect(scheduler.pulseNow(manager.id)).toEqual({ coalesced: false });
+    consoleErrorSpy.mockRestore();
   });
 });
