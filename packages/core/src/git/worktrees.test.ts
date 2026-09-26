@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, existsSync } from 'node:fs';
+import { mkdtempSync, existsSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -78,5 +78,21 @@ describe('isPathWithin', () => {
 
   it('is false for a parent directory', () => {
     expect(isPathWithin('/tmp', '/tmp/of-wt')).toBe(false);
+  });
+
+  it('is false for a symlink inside the root whose target actually resolves outside it', () => {
+    const root = mkdtempSync(join(tmpdir(), 'of-wt-'));
+    const outside = mkdtempSync(join(tmpdir(), 'of-outside-'));
+    const escapeLink = join(root, 'escape');
+    symlinkSync(outside, escapeLink);
+    expect(isPathWithin(escapeLink, root)).toBe(false);
+  });
+
+  it('is true for a trailing-slash child path', () => {
+    expect(isPathWithin('/tmp/of-wt/task-1/', '/tmp/of-wt')).toBe(true);
+  });
+
+  it('resolves a relative candidate against the current working directory, not silently accepting it', () => {
+    expect(isPathWithin('some/relative/path', '/definitely/not/cwd')).toBe(false);
   });
 });

@@ -183,6 +183,29 @@ describe('create_session guardrails', () => {
     expect(result.isError).toBe(true);
   });
 
+  it('a plain child cannot forge a manager role by setting role directly instead of the manager spec', async () => {
+    const parent = await connect(parentToken);
+    const midChild = text(await parent.callTool({ name: 'create_session', arguments: { directory: '/tmp/of-wt/mid-child', name: 'Gimli' } }));
+    const midChildToken = harness.launches.find((l) => l.sessionId === midChild.id)!.mcpToken;
+    const midChildClient = await connect(midChildToken);
+    const result = await midChildClient.callTool({ name: 'create_session', arguments: { directory: '/tmp/of-wt/fake-manager', name: 'FakeManager', role: 'manager' } });
+    expect(result.isError).toBe(true);
+  });
+
+  it('a session with a role of manager but no manager record is still capped when creating children', async () => {
+    const parent = await connect(parentToken);
+    const midChild = text(await parent.callTool({ name: 'create_session', arguments: { directory: '/tmp/of-wt/mid-child-2', name: 'Gimli' } }));
+    const midChildToken = harness.launches.find((l) => l.sessionId === midChild.id)!.mcpToken;
+    const midChildClient = await connect(midChildToken);
+    const forged = text(await midChildClient.callTool({ name: 'create_session', arguments: { directory: '/tmp/of-wt/fake-manager-2', name: 'FakeManager', role: 'manager' } }));
+    const forgedToken = harness.launches.find((l) => l.sessionId === forged.id)!.mcpToken;
+    const forgedClient = await connect(forgedToken);
+    const kid1 = await forgedClient.callTool({ name: 'create_session', arguments: { directory: '/tmp/of-wt/forged-kid-1', name: 'Kid1' } });
+    const kid2 = await forgedClient.callTool({ name: 'create_session', arguments: { directory: '/tmp/of-wt/forged-kid-2', name: 'Kid2' } });
+    const kid3 = await forgedClient.callTool({ name: 'create_session', arguments: { directory: '/tmp/of-wt/forged-kid-3', name: 'Kid3' } });
+    expect([kid1, kid2, kid3].some((r) => r.isError)).toBe(true);
+  });
+
   it('enforces the caller\'s children cap', async () => {
     const managerClient = await connect(parentToken);
     // parentToken belongs to a plain session in beforeEach — spawn an actual manager to test the cap.
@@ -214,7 +237,9 @@ describe('update_session', () => {
   it('changes its own model', async () => {
     const client = await connect(parentToken);
     const result = text(await client.callTool({ name: 'update_session', arguments: { model: 'sonnet' } }));
-    expect(result.status).toBeDefined();
+    // The caller is 'starting' in beforeEach (no SessionStart hook applied yet), so the relaunch cannot
+    // fire immediately (Amendment A4 item 2: only idle/waiting_input sessions relaunch right away).
+    expect(result.status).toBe('deferred');
   });
 
   it('changes a child\'s model but not an unrelated session\'s', async () => {
