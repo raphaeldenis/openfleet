@@ -5,7 +5,7 @@ import { FakeHarness } from '../harness/fakeHarness.js';
 import { ManagerRepository } from './managerRepository.js';
 import { toManagerView } from './managerView.js';
 import { PulseScheduler, PULSE_MESSAGE } from './pulseScheduler.js';
-import { SessionService } from '../sessions/sessionService.js';
+import { DELIVERY_RETRY_MS, MAX_DELIVERY_RETRIES, PARKED_RETRY_MS, SessionService, SUBMIT_KEYSTROKE_DELAY_MS, TURN_START_TIMEOUT_MS } from '../sessions/sessionService.js';
 
 function setup() {
   const db = openDatabase(':memory:');
@@ -17,6 +17,9 @@ function setup() {
   return { db, bus, harness, sessions, managers, scheduler };
 }
 const hook = (session_id: string, event: object) => ({ kind: 'hook' as const, event: { session_id, ...event } as never });
+// Counts pulses that have at least started (their body write landed), regardless of whether their
+// separate submit keystroke has fired yet — what these cadence tests actually care about.
+const pulseCount = (written: string[]) => written.filter((entry) => entry === PULSE_MESSAGE).length;
 
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
@@ -30,8 +33,9 @@ describe('PulseScheduler', () => {
 
     scheduler.onManagerCreated(managers.get(manager.id)!);
     vi.advanceTimersByTime(1000);
+    vi.advanceTimersByTime(SUBMIT_KEYSTROKE_DELAY_MS);
 
-    expect(harness.handles[0]!.written).toEqual([`${PULSE_MESSAGE}\r`]);
+    expect(harness.handles[0]!.written).toEqual([PULSE_MESSAGE, '\r']);
   });
 
   it('queues the pulse instead of delivering it while the manager is waiting_permission', async () => {
@@ -48,7 +52,8 @@ describe('PulseScheduler', () => {
 
     sessions.applyInput(manager.id, { kind: 'permission_resolved' });
     sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'Stop' }));
-    expect(harness.handles[0]!.written).toEqual([`${PULSE_MESSAGE}\r`]);
+    vi.advanceTimersByTime(SUBMIT_KEYSTROKE_DELAY_MS);
+    expect(harness.handles[0]!.written).toEqual([PULSE_MESSAGE, '\r']);
   });
 
   it('reschedules the next pulse pulseSeconds after the one it just sent', async () => {
@@ -59,11 +64,18 @@ describe('PulseScheduler', () => {
 
     scheduler.onManagerCreated(managers.get(manager.id)!);
     vi.advanceTimersByTime(1000);
-    expect(harness.handles[0]!.written).toHaveLength(1);
-    vi.advanceTimersByTime(999);
-    expect(harness.handles[0]!.written).toHaveLength(1);
+    expect(pulseCount(harness.handles[0]!.written)).toBe(1);
+
+    vi.advanceTimersByTime(SUBMIT_KEYSTROKE_DELAY_MS); // the pulse's own submit keystroke lands
+    // On the real CLI this is what actually confirms the pulse's turn started and ended, clearing the
+    // turn-start guard — without a real turn (or its timeout) the next pulse would stay held behind it.
+    sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'UserPromptSubmit' }));
+    sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'Stop' }));
+
+    vi.advanceTimersByTime(999 - SUBMIT_KEYSTROKE_DELAY_MS);
+    expect(pulseCount(harness.handles[0]!.written)).toBe(1);
     vi.advanceTimersByTime(1);
-    expect(harness.handles[0]!.written).toHaveLength(2);
+    expect(pulseCount(harness.handles[0]!.written)).toBe(2);
   });
 
   it('never reschedules a manager whose session has closed', async () => {
@@ -88,14 +100,21 @@ describe('PulseScheduler', () => {
     const record = scheduler.pulseNow(manager.id);
 
     expect(record).toBeDefined();
-    expect(harness.handles[0]!.written).toEqual([`${PULSE_MESSAGE}\r`]);
+    expect(harness.handles[0]!.written).toEqual([PULSE_MESSAGE]);
+
+    vi.advanceTimersByTime(SUBMIT_KEYSTROKE_DELAY_MS); // the first pulse's own submit keystroke lands
+    expect(harness.handles[0]!.written).toEqual([PULSE_MESSAGE, '\r']);
+    // A real turn confirms the pulse landed and clears the turn-start guard, so the next scheduled pulse
+    // isn't held behind it.
+    sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'UserPromptSubmit' }));
+    sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'Stop' }));
 
     // The re-arm is anchored to the manual pulse's own moment, not the original schedule: the next
     // pulse lands a full pulseSeconds after pulseNow, not after whatever the original cadence expected.
-    vi.advanceTimersByTime(999);
-    expect(harness.handles[0]!.written).toHaveLength(1);
+    vi.advanceTimersByTime(999 - SUBMIT_KEYSTROKE_DELAY_MS);
+    expect(harness.handles[0]!.written).toEqual([PULSE_MESSAGE, '\r']); // still only one pulse started
     vi.advanceTimersByTime(1);
-    expect(harness.handles[0]!.written).toEqual([`${PULSE_MESSAGE}\r`, `${PULSE_MESSAGE}\r`]);
+    expect(harness.handles[0]!.written).toEqual([PULSE_MESSAGE, '\r', PULSE_MESSAGE]);
   });
 
   it('restarting the scheduler on the same db resumes cadence from the persisted lastPulseAt', async () => {
@@ -111,6 +130,7 @@ describe('PulseScheduler', () => {
     scheduler.onManagerCreated(managers.get(manager.id)!);
     vi.advanceTimersByTime(100_000); // a real pulse, persisting lastPulseAt for real this time
     expect(harness.handles[0]!.written).toHaveLength(1);
+    vi.advanceTimersByTime(SUBMIT_KEYSTROKE_DELAY_MS); // let that pulse's submit keystroke land and mark it delivered before the crash below
 
     // Simulate a daemon restart: tear down this scheduler and rebuild SessionService on the same db —
     // resumeAll() is what a real restart does to reattach a harness handle to every open session.
@@ -125,7 +145,8 @@ describe('PulseScheduler', () => {
     vi.advanceTimersByTime(99_000);
     expect(harness.handles[1]!.written).toEqual([]); // not yet due again
     vi.advanceTimersByTime(1_000);
-    expect(harness.handles[1]!.written).toEqual([`${PULSE_MESSAGE}\r`]); // cadence resumed from the persisted lastPulseAt
+    vi.advanceTimersByTime(SUBMIT_KEYSTROKE_DELAY_MS);
+    expect(harness.handles[1]!.written).toEqual([PULSE_MESSAGE, '\r']); // cadence resumed from the persisted lastPulseAt
   });
 });
 
@@ -163,21 +184,31 @@ describe('PulseScheduler — hostile cases', () => {
     expect(vi.getTimerCount()).toBe(0); // no timer got armed by the no-op pulseNow
   });
 
-  it('a manual pulseNow right after the timer already pulsed, while still idle, delivers a second pulse rather than being deduplicated', async () => {
+  it('a manual pulseNow right after the timer already pulsed queues behind it instead of typing into the still-unconfirmed turn, and still delivers once that turn is confirmed', async () => {
     const { scheduler, sessions, managers, harness } = setup();
     const manager = await sessions.create({ directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake' });
     sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'SessionStart' }));
     managers.insert({ sessionId: manager.id, pulseSeconds: 1, childrenCap: 1, missionText: 'x', createdAt: new Date().toISOString() });
     scheduler.onManagerCreated(managers.get(manager.id)!);
     vi.advanceTimersByTime(1000);
-    expect(harness.handles[0]!.written).toHaveLength(1); // the timer's own pulse
+    vi.advanceTimersByTime(SUBMIT_KEYSTROKE_DELAY_MS); // let the timer's own pulse fully land before the manual one
+    expect(harness.handles[0]!.written).toEqual([PULSE_MESSAGE, '\r']);
 
-    scheduler.pulseNow(manager.id);
+    const result = scheduler.pulseNow(manager.id);
 
-    // The manager is still idle (nothing consumed the first pulse's turn), so the manual pulse is
-    // delivered immediately too — two [pulse] messages land back to back for what a human would read
-    // as "one" due pulse. Pin this so a debounce, if one gets added, changes this expectation on purpose.
-    expect(harness.handles[0]!.written).toEqual([`${PULSE_MESSAGE}\r`, `${PULSE_MESSAGE}\r`]);
+    // The manager is still idle, but no hook has yet confirmed the first pulse's turn actually started —
+    // typing the manual pulse now would land in a terminal about to run that turn (Review Focus #4), so
+    // it queues behind it instead of being dropped or deduplicated (still not "coalesced": that flag is
+    // about an already-queued [pulse] body, and nothing was queued yet when this one was sent).
+    expect(result).toEqual({ coalesced: false });
+    expect(harness.handles[0]!.written).toEqual([PULSE_MESSAGE, '\r']);
+
+    // Once a real turn starts and ends, the queued manual pulse is delivered — not silently lost.
+    sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'UserPromptSubmit' }));
+    sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'Stop' }));
+    expect(harness.handles[0]!.written).toEqual([PULSE_MESSAGE, '\r', PULSE_MESSAGE]);
+    vi.advanceTimersByTime(SUBMIT_KEYSTROKE_DELAY_MS);
+    expect(harness.handles[0]!.written).toEqual([PULSE_MESSAGE, '\r', PULSE_MESSAGE, '\r']);
   });
 
   it('emits manager.pulsed with the updated lastPulseAt and current childrenCount, not the record from before the pulse', async () => {
@@ -243,8 +274,9 @@ describe('PulseScheduler — hostile cases', () => {
 
     scheduler.start();
     vi.advanceTimersByTime(0);
+    vi.advanceTimersByTime(SUBMIT_KEYSTROKE_DELAY_MS);
 
-    expect(harness.handles[0]!.written).toEqual([`${PULSE_MESSAGE}\r`]);
+    expect(harness.handles[0]!.written).toEqual([PULSE_MESSAGE, '\r']);
   });
 
   it('a manager record with lastPulseAt in the future (clock skew) waits the full remaining delay instead of firing immediately', async () => {
@@ -258,7 +290,8 @@ describe('PulseScheduler — hostile cases', () => {
     vi.advanceTimersByTime(10_999);
     expect(harness.handles[0]!.written).toEqual([]);
     vi.advanceTimersByTime(1);
-    expect(harness.handles[0]!.written).toEqual([`${PULSE_MESSAGE}\r`]);
+    vi.advanceTimersByTime(SUBMIT_KEYSTROKE_DELAY_MS);
+    expect(harness.handles[0]!.written).toEqual([PULSE_MESSAGE, '\r']);
   });
 
   it('coalesces repeated cadence ticks and manual pulses into a single queued pulse while the manager is gated', async () => {
@@ -309,12 +342,16 @@ describe('PulseScheduler — hostile cases', () => {
 
     scheduler.start();
     vi.advanceTimersByTime(0);
-    expect(harness.handles[0]!.written).toHaveLength(1); // catches up with exactly one pulse, not five
+    expect(pulseCount(harness.handles[0]!.written)).toBe(1); // catches up with exactly one pulse, not five
 
-    vi.advanceTimersByTime(999);
-    expect(harness.handles[0]!.written).toHaveLength(1);
+    vi.advanceTimersByTime(SUBMIT_KEYSTROKE_DELAY_MS); // the catch-up pulse's own submit keystroke lands
+    sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'UserPromptSubmit' }));
+    sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'Stop' })); // confirms the turn, clearing the turn-start guard
+
+    vi.advanceTimersByTime(999 - SUBMIT_KEYSTROKE_DELAY_MS);
+    expect(pulseCount(harness.handles[0]!.written)).toBe(1);
     vi.advanceTimersByTime(1);
-    expect(harness.handles[0]!.written).toHaveLength(2); // the next one waits a full cadence from the catch-up pulse
+    expect(pulseCount(harness.handles[0]!.written)).toBe(2); // the next one waits a full cadence from the catch-up pulse
   });
 
   it('nextPulseAt in the view matches the real armed deadline across coalesced cycles, and a restart resumes from it', async () => {
@@ -349,5 +386,32 @@ describe('PulseScheduler — hostile cases', () => {
     expect(managers.get(manager.id)!.lastPulseAt).toBe(afterCycle2); // not due yet
     vi.advanceTimersByTime(1);
     expect(managers.get(manager.id)!.lastPulseAt).not.toBe(afterCycle2); // fires exactly at the persisted deadline
+  });
+
+  it('eventually delivers a pulse after a transient submit write failure, with no hook transition at all', async () => {
+    const { scheduler, sessions, managers, harness } = setup();
+    const manager = await sessions.create({ directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake' });
+    sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'SessionStart' }));
+    managers.insert({ sessionId: manager.id, pulseSeconds: 3600, childrenCap: 1, missionText: 'x', createdAt: new Date().toISOString() });
+    const handle = harness.handles[0]!;
+    const originalWrite = handle.write.bind(handle);
+    let isPtyBroken = true;
+    handle.write = (data: string) => {
+      if (data === '\r' && isPtyBroken) throw new Error('pty write failed');
+      originalWrite(data);
+    };
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    scheduler.pulseNow(manager.id);
+    vi.advanceTimersByTime(SUBMIT_KEYSTROKE_DELAY_MS + DELIVERY_RETRY_MS * MAX_DELIVERY_RETRIES);
+    expect(scheduler.pulseNow(manager.id)).toEqual({ coalesced: true });
+
+    isPtyBroken = false;
+    vi.advanceTimersByTime(PARKED_RETRY_MS);
+    expect(handle.written).toEqual([PULSE_MESSAGE, '\r']);
+    vi.advanceTimersByTime(TURN_START_TIMEOUT_MS);
+
+    expect(scheduler.pulseNow(manager.id)).toEqual({ coalesced: false });
+    consoleErrorSpy.mockRestore();
   });
 });

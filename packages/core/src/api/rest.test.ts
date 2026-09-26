@@ -17,7 +17,7 @@ beforeEach(async () => {
   const db = openDatabase(':memory:');
   const bus = new EventBus();
   harness = new FakeHarness();
-  const sessions = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt' });
+  const sessions = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt', submitKeystrokeDelayMs: 0 });
   const approvals = new ApprovalService({ db, bus });
   const managerRepo = new ManagerRepository(db);
   const pulseScheduler = new PulseScheduler({ managers: managerRepo, sessions, bus });
@@ -212,7 +212,8 @@ describe('REST', () => {
 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ pulsed: true });
-    expect(harness.handles[0]!.written).toEqual(['[pulse] Re-read your mission and continue: check your children, unblock them, record what you did.\r']);
+    await new Promise((resolve) => setTimeout(resolve, 0)); // let the (0ms) submit-keystroke timer fire
+    expect(harness.handles[0]!.written).toEqual(['[pulse] Re-read your mission and continue: check your children, unblock them, record what you did.', '\r']);
   });
 
   it('answers a manual pulse honestly when one is already queued: pulsed false, coalesced true', async () => {
