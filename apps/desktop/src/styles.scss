@@ -1,1 +1,67 @@
-/* You can add global styles to this file, and also import other style files */
+:root {
+  --sans: 'Helvetica Neue', Helvetica, 'Nimbus Sans', sans-serif;
+  --mono: 'IBM Plex Mono', ui-monospace, monospace;
+  --term-margin: .5rem .5rem 0;
+  --term-radius: .625rem;
+  --term-shadow: inset 0 1px 3px rgba(0, 0, 0, .45), 0 0 0 1px rgba(0, 0, 0, .18);
+
+  // — light theme (default) —
+  --bg: #ebeae6; --panel: #f5f4f1; --side: #e3e2dd; --sunk: #e7e6e1;
+  --hover: #dcdbd5; --active: #d2d1ca; --line: #d5d3cd; --line-2: #bab8b1;
+  --fg: #1d1d1b; --mut: #5b5a55; --faint: #85837d;
+  --accent: oklch(0.64 0.18 45); --accent-bg: oklch(0.93 0.04 50); --on-accent: #fff;
+  --term-bg: #1c1c1a; --term-fg: #e8e5dc; --term-mut: #8f8c84;
+  --state-generating: oklch(0.5 0.07 240); --state-thinking: oklch(0.5 0.07 240);
+  --state-waiting-permission: oklch(0.62 0.18 45); --state-waiting-input: oklch(0.62 0.18 45);
+  --state-idle: oklch(0.52 0.11 145); --state-error: oklch(0.54 0.17 28); --state-closed: #85837d;
+  --shadow: 0 10px 30px rgba(30, 28, 20, .16);
+}
+
+:root[data-theme='dark'] {
+  --bg: #1a1a19; --panel: #222220; --side: #1d1d1c; --sunk: #272725;
+  --hover: #2d2d2b; --active: #363633; --line: #31312e; --line-2: #474642;
+  --fg: #ecebe6; --mut: #a3a19a; --faint: #76746e;
+  --accent: oklch(0.7 0.17 48); --accent-bg: oklch(0.32 0.06 48); --on-accent: #141413;
+  --term-bg: #111110; --term-fg: #e8e5dc; --term-mut: #8f8c84;
+  --state-generating: oklch(0.74 0.07 240); --state-thinking: oklch(0.74 0.07 240);
+  --state-waiting-permission: oklch(0.72 0.16 50); --state-waiting-input: oklch(0.72 0.16 50);
+  --state-idle: oklch(0.76 0.12 145); --state-error: oklch(0.7 0.15 28); --state-closed: #8f8c84;
+  --shadow: 0 12px 40px rgba(0, 0, 0, .5);
+}
+
+// The terminal is always a dark recessed screen, even under the light theme —
+// state colors need the dark theme's brighter values to stay legible there.
+[data-term] {
+  --state-generating: oklch(0.74 0.07 240); --state-thinking: oklch(0.74 0.07 240);
+  --state-waiting-permission: oklch(0.72 0.16 50); --state-waiting-input: oklch(0.72 0.16 50);
+  --state-idle: oklch(0.76 0.12 145); --state-error: oklch(0.7 0.15 28);
+}
+
+@keyframes of-live { 0%, 100% { opacity: 1 } 50% { opacity: .45 } }
+@keyframes of-err { 0%, 49% { opacity: 1 } 50%, 100% { opacity: .25 } }
+@media (prefers-reduced-motion: reduce) {
+  [data-live], [data-errblink] { animation: none !important }
+}
+[data-live] { animation: of-live 1.6s ease-in-out infinite }
+[data-errblink] { animation: of-err 1s steps(1) infinite }
+[data-stale] { opacity: .7; outline: 1px dashed var(--line-2); outline-offset: -1px; border-radius: .375rem }
+
+html, body { margin: 0; height: 100%; }
+body {
+  font-family: var(--sans);
+  background: var(--bg);
+  color: var(--fg);
+  font-size: .8125rem;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+* { box-sizing: border-box; }
+
+.of-btn {
+  height: 1.875rem; padding: 0 .875rem; border-radius: .375rem; font-weight: 500; cursor: pointer;
+  font-family: var(--sans); font-size: .8125rem;
+}
+.of-btn--primary { border: 1px solid var(--accent); background: var(--accent); color: var(--on-accent); }
+.of-btn--secondary { border: 1px solid var(--line-2); background: var(--panel); color: var(--fg); }
+.of-btn--link { border: 0; background: transparent; color: var(--accent); padding: 0; }
+.of-btn:disabled { border-color: var(--line); background: var(--sunk); color: var(--faint); cursor: not-allowed; }
