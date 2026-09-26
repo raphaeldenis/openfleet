@@ -56,7 +56,8 @@ function utf8ByteLength(text: string): number {
         <label class="of-field">
           <span class="of-label">Pulse seconds</span>
           <input
-            class="of-input" data-testid="manager-pulse-seconds" name="pulseSeconds" type="number" [(ngModel)]="pulseSeconds"
+            class="of-input" data-testid="manager-pulse-seconds" name="pulseSeconds" type="number"
+            [ngModel]="pulseSeconds" (ngModelChange)="onPulseSecondsChange($event)" (blur)="validatePulseSeconds()"
             placeholder="Pulse seconds" [attr.min]="pulseSecondsBounds.min" [attr.max]="pulseSecondsBounds.max"
             [attr.aria-invalid]="pulseSecondsError ? 'true' : null" required
           />
@@ -67,7 +68,8 @@ function utf8ByteLength(text: string): number {
         <label class="of-field">
           <span class="of-label">Children cap</span>
           <input
-            class="of-input" data-testid="manager-children-cap" name="childrenCap" type="number" [(ngModel)]="childrenCap"
+            class="of-input" data-testid="manager-children-cap" name="childrenCap" type="number"
+            [ngModel]="childrenCap" (ngModelChange)="onChildrenCapChange($event)" (blur)="validateChildrenCap()"
             placeholder="Children cap" [attr.min]="childrenCapBounds.min" [attr.max]="childrenCapBounds.max"
             [attr.aria-invalid]="childrenCapError ? 'true' : null" required
           />
@@ -142,19 +144,36 @@ export class NewManagerFormComponent {
     }
   }
 
-  private validate(): boolean {
-    const isPulseSecondsValid = isIntegerWithinBounds(this.pulseSeconds, PULSE_SECONDS_BOUNDS);
-    const isChildrenCapValid = isIntegerWithinBounds(this.childrenCap, CHILDREN_CAP_BOUNDS);
-    const isMissionWithinByteLimit = utf8ByteLength(this.mission()) <= MISSION_MAX_BYTES;
+  onPulseSecondsChange(value: number): void {
+    this.pulseSeconds = value;
+    this.validatePulseSeconds();
+  }
 
+  onChildrenCapChange(value: number): void {
+    this.childrenCap = value;
+    this.validateChildrenCap();
+  }
+
+  validatePulseSeconds(): void {
+    const isPulseSecondsValid = isIntegerWithinBounds(this.pulseSeconds, PULSE_SECONDS_BOUNDS);
     this.pulseSecondsError = isPulseSecondsValid
       ? ''
       : `Pulse seconds must be a whole number between ${PULSE_SECONDS_BOUNDS.min} and ${PULSE_SECONDS_BOUNDS.max}`;
+  }
+
+  validateChildrenCap(): void {
+    const isChildrenCapValid = isIntegerWithinBounds(this.childrenCap, CHILDREN_CAP_BOUNDS);
     this.childrenCapError = isChildrenCapValid
       ? ''
       : `Children cap must be a whole number between ${CHILDREN_CAP_BOUNDS.min} and ${CHILDREN_CAP_BOUNDS.max}`;
+  }
+
+  private validate(): boolean {
+    this.validatePulseSeconds();
+    this.validateChildrenCap();
+    const isMissionWithinByteLimit = utf8ByteLength(this.mission()) <= MISSION_MAX_BYTES;
     this.missionError = isMissionWithinByteLimit ? '' : `Mission must be at most ${MISSION_MAX_BYTES} bytes`;
 
-    return isPulseSecondsValid && isChildrenCapValid && isMissionWithinByteLimit;
+    return !this.pulseSecondsError && !this.childrenCapError && isMissionWithinByteLimit;
   }
 }

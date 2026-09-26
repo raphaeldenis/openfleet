@@ -90,6 +90,44 @@ describe('NewManagerFormComponent', () => {
     expect(screen.getByRole('combobox', { name: /model/i })).toBeTruthy();
   });
 
+  it('shows the pulse-seconds error as soon as the field is left, without waiting for submit', async () => {
+    const api = { createManagerSession: vi.fn() };
+    await render(NewManagerFormComponent, { providers: [{ provide: FleetApiService, useValue: api }] });
+
+    await userEvent.clear(screen.getByTestId('manager-pulse-seconds'));
+    await userEvent.type(screen.getByTestId('manager-pulse-seconds'), '0');
+    await userEvent.tab();
+
+    expect(screen.getByTestId('manager-pulse-seconds-error')).toBeTruthy();
+    expect(api.createManagerSession).not.toHaveBeenCalled();
+  });
+
+  it('shows the children-cap error as soon as the field is left, without waiting for submit', async () => {
+    const api = { createManagerSession: vi.fn() };
+    await render(NewManagerFormComponent, { providers: [{ provide: FleetApiService, useValue: api }] });
+
+    await userEvent.clear(screen.getByTestId('manager-children-cap'));
+    await userEvent.type(screen.getByTestId('manager-children-cap'), '65');
+    await userEvent.tab();
+
+    expect(screen.getByTestId('manager-children-cap-error')).toBeTruthy();
+    expect(api.createManagerSession).not.toHaveBeenCalled();
+  });
+
+  it('clears the pulse-seconds error live once the value is corrected, before submit', async () => {
+    await render(NewManagerFormComponent, { providers: [{ provide: FleetApiService, useValue: { createManagerSession: vi.fn() } }] });
+    const input = screen.getByTestId('manager-pulse-seconds');
+    await userEvent.clear(input);
+    await userEvent.type(input, '0');
+    await userEvent.tab();
+    expect(screen.getByTestId('manager-pulse-seconds-error')).toBeTruthy();
+
+    await userEvent.clear(input);
+    await userEvent.type(input, '1800');
+
+    expect(screen.queryByTestId('manager-pulse-seconds-error')).toBeNull();
+  });
+
   it('marks an invalid field with the ✕ icon and the error color token, not just plain text', async () => {
     const api = { createManagerSession: vi.fn().mockResolvedValue({}) };
     await render(NewManagerFormComponent, { providers: [{ provide: FleetApiService, useValue: api }] });
