@@ -16,4 +16,11 @@ describe('PulseRingComponent', () => {
     const [drawn, total] = circle.getAttribute('stroke-dasharray')!.split(/[ ,]/).map(Number);
     expect(drawn).toBeCloseTo(total, 1);
   });
+
+  it('draws a half-filled ring at the midpoint between pulses', async () => {
+    await render(PulseRingComponent, { bindings: [inputBinding('fractionElapsed', () => 0.5)] });
+    const circle = screen.getByTestId('pulse-ring-progress');
+    const [drawn, total] = circle.getAttribute('stroke-dasharray')!.split(/[ ,]/).map(Number);
+    expect(drawn).toBeCloseTo(total / 2, 0);
+  });
 });

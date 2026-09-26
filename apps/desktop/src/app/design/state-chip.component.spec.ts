@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/angular/zoneless';
 import { inputBinding } from '@angular/core';
 import { describe, expect, it } from 'vitest';
-import { StateChipComponent } from './state-chip.component';
+import { StateChipComponent, type ChipState } from './state-chip.component';
 
 describe('StateChipComponent', () => {
   it.each([
@@ -44,5 +44,11 @@ describe('StateChipComponent', () => {
       bindings: [inputBinding('state', () => 'idle'), inputBinding('stale', () => true)],
     });
     expect(screen.getByTestId('state-chip')).toHaveAttribute('data-stale', '1');
+  });
+
+  it('does not throw for a state string outside the known ChipState union (a future backend state the frontend has not learned yet)', async () => {
+    const unknownFutureState = 'reviewing' as unknown as ChipState;
+    await render(StateChipComponent, { bindings: [inputBinding('state', () => unknownFutureState)] });
+    expect(screen.getByTestId('state-chip')).toBeInTheDocument();
   });
 });
