@@ -28,15 +28,14 @@ const LOOK: Record<ChipState, ChipLook> = {
       [attr.data-live]="look().live ? '1' : null"
       [attr.data-errblink]="look().errBlink ? '1' : null"
       [attr.data-stale]="stale() ? '1' : null"
-      [style.color]="'var(' + look().colorVar + ')'"
+      [style.background]="'color-mix(in oklch, var(' + look().colorVar + ') 14%, transparent)'"
       class="chip"
-    >{{ look().icon }}{{ look().label }}</span>
+    ><span [style.color]="'var(' + look().colorVar + ')'">{{ look().icon }}</span><span data-testid="state-chip-label" style="color: var(--fg)">{{ look().label }}</span></span>
   `,
   styles: `
     .chip {
       display: inline-flex; align-items: center; gap: .375rem;
       height: 1.5rem; padding: 0 .5rem; border-radius: .375rem;
-      background: color-mix(in oklch, currentColor 14%, transparent);
       font-family: var(--mono); font-size: .75rem; font-weight: 500;
     }
   `,

@@ -51,4 +51,12 @@ describe('StateChipComponent', () => {
     await render(StateChipComponent, { bindings: [inputBinding('state', () => unknownFutureState)] });
     expect(screen.getByTestId('state-chip')).toBeInTheDocument();
   });
+
+  it.each([
+    'starting', 'generating', 'thinking', 'waiting_permission',
+    'waiting_input', 'idle', 'closed', 'error',
+  ] as const)('renders the %s label in the foreground token, not the state color, so it stays readable on the tinted chip background', async (state) => {
+    await render(StateChipComponent, { bindings: [inputBinding('state', () => state)] });
+    expect(screen.getByTestId('state-chip-label')).toHaveStyle({ color: 'var(--fg)' });
+  });
 });
