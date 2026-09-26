@@ -65,7 +65,14 @@ describe('PulseScheduler', () => {
     scheduler.onManagerCreated(managers.get(manager.id)!);
     vi.advanceTimersByTime(1000);
     expect(pulseCount(harness.handles[0]!.written)).toBe(1);
-    vi.advanceTimersByTime(999);
+
+    vi.advanceTimersByTime(SUBMIT_KEYSTROKE_DELAY_MS); // the pulse's own submit keystroke lands
+    // On the real CLI this is what actually confirms the pulse's turn started and ended, clearing the
+    // turn-start guard — without a real turn (or its timeout) the next pulse would stay held behind it.
+    sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'UserPromptSubmit' }));
+    sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'Stop' }));
+
+    vi.advanceTimersByTime(999 - SUBMIT_KEYSTROKE_DELAY_MS);
     expect(pulseCount(harness.handles[0]!.written)).toBe(1);
     vi.advanceTimersByTime(1);
     expect(pulseCount(harness.handles[0]!.written)).toBe(2);
@@ -95,10 +102,17 @@ describe('PulseScheduler', () => {
     expect(record).toBeDefined();
     expect(harness.handles[0]!.written).toEqual([PULSE_MESSAGE]);
 
+    vi.advanceTimersByTime(SUBMIT_KEYSTROKE_DELAY_MS); // the first pulse's own submit keystroke lands
+    expect(harness.handles[0]!.written).toEqual([PULSE_MESSAGE, '\r']);
+    // A real turn confirms the pulse landed and clears the turn-start guard, so the next scheduled pulse
+    // isn't held behind it.
+    sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'UserPromptSubmit' }));
+    sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'Stop' }));
+
     // The re-arm is anchored to the manual pulse's own moment, not the original schedule: the next
     // pulse lands a full pulseSeconds after pulseNow, not after whatever the original cadence expected.
-    vi.advanceTimersByTime(999);
-    expect(harness.handles[0]!.written).toEqual([PULSE_MESSAGE, '\r']); // the first pulse's own submit keystroke, still only one pulse started
+    vi.advanceTimersByTime(999 - SUBMIT_KEYSTROKE_DELAY_MS);
+    expect(harness.handles[0]!.written).toEqual([PULSE_MESSAGE, '\r']); // still only one pulse started
     vi.advanceTimersByTime(1);
     expect(harness.handles[0]!.written).toEqual([PULSE_MESSAGE, '\r', PULSE_MESSAGE]);
   });
@@ -170,7 +184,7 @@ describe('PulseScheduler — hostile cases', () => {
     expect(vi.getTimerCount()).toBe(0); // no timer got armed by the no-op pulseNow
   });
 
-  it('a manual pulseNow right after the timer already pulsed, while still idle, delivers a second pulse rather than being deduplicated', async () => {
+  it('a manual pulseNow right after the timer already pulsed queues behind it instead of typing into the still-unconfirmed turn, and still delivers once that turn is confirmed', async () => {
     const { scheduler, sessions, managers, harness } = setup();
     const manager = await sessions.create({ directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake' });
     sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'SessionStart' }));
@@ -180,12 +194,20 @@ describe('PulseScheduler — hostile cases', () => {
     vi.advanceTimersByTime(SUBMIT_KEYSTROKE_DELAY_MS); // let the timer's own pulse fully land before the manual one
     expect(harness.handles[0]!.written).toEqual([PULSE_MESSAGE, '\r']);
 
-    scheduler.pulseNow(manager.id);
-    vi.advanceTimersByTime(SUBMIT_KEYSTROKE_DELAY_MS);
+    const result = scheduler.pulseNow(manager.id);
 
-    // The manager is still idle (nothing consumed the first pulse's turn), so the manual pulse is
-    // delivered immediately too — two [pulse] messages land back to back for what a human would read
-    // as "one" due pulse. Pin this so a debounce, if one gets added, changes this expectation on purpose.
+    // The manager is still idle, but no hook has yet confirmed the first pulse's turn actually started —
+    // typing the manual pulse now would land in a terminal about to run that turn (Review Focus #4), so
+    // it queues behind it instead of being dropped or deduplicated (still not "coalesced": that flag is
+    // about an already-queued [pulse] body, and nothing was queued yet when this one was sent).
+    expect(result).toEqual({ coalesced: false });
+    expect(harness.handles[0]!.written).toEqual([PULSE_MESSAGE, '\r']);
+
+    // Once a real turn starts and ends, the queued manual pulse is delivered — not silently lost.
+    sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'UserPromptSubmit' }));
+    sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'Stop' }));
+    expect(harness.handles[0]!.written).toEqual([PULSE_MESSAGE, '\r', PULSE_MESSAGE]);
+    vi.advanceTimersByTime(SUBMIT_KEYSTROKE_DELAY_MS);
     expect(harness.handles[0]!.written).toEqual([PULSE_MESSAGE, '\r', PULSE_MESSAGE, '\r']);
   });
 
@@ -322,7 +344,11 @@ describe('PulseScheduler — hostile cases', () => {
     vi.advanceTimersByTime(0);
     expect(pulseCount(harness.handles[0]!.written)).toBe(1); // catches up with exactly one pulse, not five
 
-    vi.advanceTimersByTime(999);
+    vi.advanceTimersByTime(SUBMIT_KEYSTROKE_DELAY_MS); // the catch-up pulse's own submit keystroke lands
+    sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'UserPromptSubmit' }));
+    sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'Stop' })); // confirms the turn, clearing the turn-start guard
+
+    vi.advanceTimersByTime(999 - SUBMIT_KEYSTROKE_DELAY_MS);
     expect(pulseCount(harness.handles[0]!.written)).toBe(1);
     vi.advanceTimersByTime(1);
     expect(pulseCount(harness.handles[0]!.written)).toBe(2); // the next one waits a full cadence from the catch-up pulse

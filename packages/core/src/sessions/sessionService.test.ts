@@ -856,6 +856,46 @@ describe('SessionService submit-keystroke hostile cases', () => {
     expect(harness.handles[0]!.written).toEqual(['A', '\r', 'B']);
   });
 
+  it('queues a send that arrives in the post-\\r gap, with nothing else queued, instead of typing into the terminal before the turn is confirmed', async () => {
+    vi.useFakeTimers();
+    const { service, harness } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+
+    service.sendMessage({ sessionId: session.id, body: 'A' }); // delivered immediately
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS); // A's '\r' lands
+    expect(harness.handles[0]!.written).toEqual(['A', '\r']);
+
+    // C arrives before the CLI's own UserPromptSubmit hook has confirmed A's turn actually started —
+    // typing it now would land in a terminal about to start running A (Review Focus #4).
+    const c = service.sendMessage({ sessionId: session.id, body: 'C' });
+    expect(c.status).toBe('queued');
+    expect(harness.handles[0]!.written).toEqual(['A', '\r']);
+
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit' }));
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'Stop' }));
+    expect(harness.handles[0]!.written).toEqual(['A', '\r', 'C']);
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
+    expect(harness.handles[0]!.written).toEqual(['A', '\r', 'C', '\r']);
+  });
+
+  it('delivers a send that arrived in the post-\\r gap after the turn-start timeout, when no hook ever confirms the turn', async () => {
+    vi.useFakeTimers();
+    const { service, harness } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+
+    service.sendMessage({ sessionId: session.id, body: 'A' });
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
+    expect(harness.handles[0]!.written).toEqual(['A', '\r']);
+
+    const c = service.sendMessage({ sessionId: session.id, body: 'C' });
+    expect(c.status).toBe('queued');
+
+    await vi.advanceTimersByTimeAsync(TURN_START_TIMEOUT_MS);
+    expect(harness.handles[0]!.written).toEqual(['A', '\r', 'C']);
+  });
+
   it('a daemon restart mid-delay drops the stale instance\'s pending submit keystroke and delivers the message exactly once, to the resumed handle', async () => {
     vi.useFakeTimers();
     const db = openDatabase(':memory:');

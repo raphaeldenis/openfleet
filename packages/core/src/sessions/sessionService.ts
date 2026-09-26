@@ -64,8 +64,8 @@ export class SessionService {
   // interleave with the pending one's \r (see deliver()).
   private readonly pendingSubmitTimers = new Map<string, ReturnType<typeof setTimeout>>();
   // Presence of a sessionId here means its '\r' has landed but no state transition has yet confirmed the
-  // CLI actually started that turn — a rescue flush for whatever's still queued once this fires, in case
-  // the hook that would normally trigger it never arrives (see armAwaitingTurn/deliver()).
+  // CLI actually started that turn — the session stays non-deliverable so a later send can't be typed
+  // into a terminal about to start running it (see armAwaitingTurn/isDeliverable/deliver()).
   private readonly awaitingTurnTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(private readonly deps: SessionServiceDeps) {
@@ -240,12 +240,13 @@ export class SessionService {
   }
 
   private isDeliverable(sessionId: string, state: SessionState): boolean {
-    return canDeliverNow(state) && !this.pendingSubmitTimers.has(sessionId);
+    return canDeliverNow(state) && !this.pendingSubmitTimers.has(sessionId) && !this.awaitingTurnTimers.has(sessionId);
   }
 
-  // Rescues a message that would otherwise sit queued forever: sendMessage's own FIFO check (see there)
-  // already stops a later send from jumping this one, but only a real transition or this timeout ever
-  // triggers the flush that actually delivers it once the CLI's hook goes missing.
+  // A message must not be typed into a terminal that's merely about to start running the previous one's
+  // turn (Review Focus #4) — the guard holds the session non-deliverable from the '\r' until a real state
+  // transition in applyInput confirms the turn actually began, or (if the CLI's hook never arrives) until
+  // this timeout fires and rescues whatever's still queued.
   private armAwaitingTurn(sessionId: string): void {
     this.clearAwaitingTurn(sessionId);
     const timer = setTimeout(() => {
