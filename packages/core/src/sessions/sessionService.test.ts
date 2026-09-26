@@ -692,6 +692,135 @@ describe('SessionService.updateModel', () => {
   });
 });
 
+describe('SessionService.updateModel hostile cases', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('two model switches requested while generating produce exactly one relaunch, launched with the last model requested', async () => {
+    vi.useFakeTimers();
+    const { service, harness } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit' }));
+
+    const first = service.updateModel(session.id, 'claude-opus-5-5');
+    const second = service.updateModel(session.id, 'claude-haiku-4-5');
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(first.status).toBe('deferred');
+    expect(second.status).toBe('deferred');
+    expect(service.get(session.id)!.model).toBe('claude-haiku-4-5');
+    expect(harness.launches).toHaveLength(1); // still generating, no relaunch yet
+
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'Stop' }));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(harness.launches).toHaveLength(2); // exactly one relaunch, not two
+    expect(harness.launches[1]!.model).toBe('claude-haiku-4-5'); // the second call's model wins, not the first
+  });
+
+  it('a model switch requested while already relaunching is deferred, and forces a second, redundant relaunch once the resumed session goes idle', async () => {
+    vi.useFakeTimers();
+    const { service, harness } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+    harness.handles[0]!.ignoresGracefulKill = true; // keeps the first relaunch's kill escalation in flight
+
+    const first = service.updateModel(session.id, 'claude-opus-5-5');
+    expect(first.status).toBe('relaunching');
+    expect(harness.launches).toHaveLength(1); // kill escalation hasn't resolved yet
+
+    const second = service.updateModel(session.id, 'claude-haiku-4-5');
+    expect(second.status).toBe('deferred'); // the 'relaunching' phase is never treated as 'ready'
+    expect(service.get(session.id)!.model).toBe('claude-haiku-4-5');
+
+    await vi.advanceTimersByTimeAsync(DEFAULT_CLOSE_ESCALATE_MS + 1); // force-kills the old process, first relaunch completes
+    expect(harness.launches).toHaveLength(2);
+    expect(harness.launches[1]!.model).toBe('claude-haiku-4-5'); // already picked up the second call's model
+    expect(service.get(session.id)!.state).toBe('starting'); // not deliverable yet: the deferred second relaunch has not fired
+
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Surprise: the second call landed on the same model the first relaunch already resumed under, but the
+    // deferred flag survives the first relaunch's completion and fires a THIRD launch regardless, as soon as
+    // the resumed session becomes deliverable again — a redundant CLI restart, not a correctness bug.
+    expect(harness.launches).toHaveLength(3);
+    expect(harness.launches[2]!.model).toBe('claude-haiku-4-5');
+  });
+
+  it('when the resumed process never reports back, the relaunch times out to closed, still recording the new model and leaving queued messages queued', async () => {
+    vi.useFakeTimers();
+    const db = openDatabase(':memory:');
+    const bus = new EventBus();
+    const harness = new FakeHarness();
+    const service = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt', resumeTimeoutMs: 50 });
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit' }));
+    service.sendMessage({ sessionId: session.id, body: 'still pending' });
+
+    service.updateModel(session.id, 'claude-opus-5-5');
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'Stop' }));
+    await vi.advanceTimersByTimeAsync(0); // relaunch fires, second handle starts waiting for SessionStart
+
+    expect(harness.launches).toHaveLength(2);
+
+    // The resumed process never sends SessionStart (or any hook): the resume timeout fires and closes it.
+    await vi.advanceTimersByTimeAsync(51);
+
+    expect(service.get(session.id)!.state).toBe('closed');
+    expect(service.get(session.id)!.exitCode).toBe(RESUME_TIMEOUT_EXIT_CODE);
+    expect(service.get(session.id)!.model).toBe('claude-opus-5-5'); // recorded even though the process resumed under it never actually ran
+    expect(service.hasQueuedMessage(session.id, 'still pending')).toBe(true); // the queue is untouched by markClosed
+  });
+
+  it('a relaunch escalates to a force kill when the old process ignores the graceful signal, leaving exactly one live handle', async () => {
+    vi.useFakeTimers();
+    const { service, harness } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+    harness.handles[0]!.ignoresGracefulKill = true;
+
+    service.updateModel(session.id, 'claude-opus-5-5');
+    await vi.advanceTimersByTimeAsync(DEFAULT_CLOSE_ESCALATE_MS + 1);
+
+    expect(harness.handles[0]!.forceKilled).toBe(true);
+    expect(harness.launches).toHaveLength(2);
+    expect(service.harnessHandle(session.id)).toBe(harness.handles[1]);
+
+    // A stray, late exit event from the already force-killed old process must not affect the resumed session.
+    harness.handles[0]!.emitExit(1);
+    expect(service.get(session.id)!.state).not.toBe('closed');
+  });
+
+  it('a model switch requested while a message is mid-delivery (already typed into the composer) waits for that submit to complete before relaunching', async () => {
+    vi.useFakeTimers();
+    const { service, harness } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+
+    service.sendMessage({ sessionId: session.id, body: 'do X' });
+    expect(harness.handles[0]!.written).toEqual(['do X']); // typed, '\r' not sent yet
+
+    const result = service.updateModel(session.id, 'claude-opus-5-5');
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(result.status).toBe('deferred');
+    expect(harness.launches).toHaveLength(1); // no relaunch while the composer holds an unsent body
+
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
+    expect(harness.handles[0]!.written).toEqual(['do X', '\r']); // the in-flight message still submits, untouched
+    expect(harness.launches).toHaveLength(1); // still no relaunch: the session is now 'submitted', awaiting turn start
+
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit' }));
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'Stop' }));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(harness.launches).toHaveLength(2); // only now, once idle again, does the deferred relaunch fire
+    expect(harness.launches[1]!.model).toBe('claude-opus-5-5');
+  });
+});
+
 describe('SessionService submit-keystroke hostile cases', () => {
   afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
