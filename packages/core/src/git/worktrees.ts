@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { existsSync, realpathSync } from 'node:fs';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
 const run = promisify(execFile);
@@ -55,7 +55,17 @@ async function gitCommonDir(cwd: string): Promise<string | undefined> {
   }
 }
 
+// Resolves symlinks on the longest existing prefix of `path`, then re-appends whatever tail does not
+// exist yet — so a not-yet-created worktree directory still resolves consistently with its parents.
+function resolveRealPath(path: string): string {
+  const absolute = resolve(path);
+  if (existsSync(absolute)) return realpathSync(absolute);
+  const parent = dirname(absolute);
+  if (parent === absolute) return absolute;
+  return join(resolveRealPath(parent), relative(parent, absolute));
+}
+
 export function isPathWithin(candidate: string, root: string): boolean {
-  const relativePath = relative(resolve(root), resolve(candidate));
+  const relativePath = relative(resolveRealPath(root), resolveRealPath(candidate));
   return relativePath !== '' && !relativePath.startsWith('..') && !isAbsolute(relativePath);
 }
