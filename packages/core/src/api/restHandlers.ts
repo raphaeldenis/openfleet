@@ -1,23 +1,35 @@
+import type { ManagerSpec, SessionSpec } from '@openfleet/shared';
 import { SessionSpecSchema } from '@openfleet/shared';
 import { z } from 'zod';
 import { ApprovalError, type ApprovalService } from '../governance/approvalService.js';
 import type { FakeHandle } from '../harness/fakeHarness.js';
+import type { ManagerService } from '../managers/managerService.js';
+import type { PulseScheduler } from '../managers/pulseScheduler.js';
 import { resolveModel, type ModelTable } from '../models.js';
 import { SessionClosedError, type SessionService } from '../sessions/sessionService.js';
 import { json, Router } from './router.js';
 
 const CreateSessionSchema = SessionSpecSchema.extend({ repoPath: z.string().optional(), branchName: z.string().optional() });
 
-export function registerRestRoutes(router: Router, deps: { sessions: SessionService; approvals: ApprovalService; modelTable: ModelTable }): void {
+export function registerRestRoutes(router: Router, deps: { sessions: SessionService; approvals: ApprovalService; modelTable: ModelTable; managers: ManagerService; pulseScheduler: PulseScheduler }): void {
   router.add('GET', '/api/sessions', ({ res }) => json(res, 200, deps.sessions.list()));
 
   router.add('POST', '/api/sessions', async ({ res, body }) => {
     const spec = CreateSessionSchema.parse(body);
     const hasRepo = spec.repoPath !== undefined && spec.branchName !== undefined;
-    const session = hasRepo
-      ? await deps.sessions.createInWorktree({ ...spec, repoPath: spec.repoPath!, branchName: spec.branchName! })
-      : await deps.sessions.create(spec);
+    const session = spec.manager
+      ? await deps.managers.createManagerSession(spec as SessionSpec & { manager: ManagerSpec })
+      : hasRepo
+        ? await deps.sessions.createInWorktree({ ...spec, repoPath: spec.repoPath!, branchName: spec.branchName! })
+        : await deps.sessions.create(spec);
     json(res, 201, session);
+  });
+
+  router.add('POST', '/api/managers/:id/pulse', ({ res, params }) => {
+    if (!deps.managers.get(params.id!)) return json(res, 404, { error: 'not_found' });
+    const result = deps.pulseScheduler.pulseNow(params.id!);
+    if (!result) return json(res, 409, { error: 'session_closed' });
+    json(res, 200, result.coalesced ? { pulsed: false, coalesced: true } : { pulsed: true });
   });
 
   router.add('POST', '/api/sessions/:id/messages', ({ res, params, body }) => {

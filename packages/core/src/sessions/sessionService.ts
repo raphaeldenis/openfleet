@@ -92,6 +92,10 @@ export class SessionService {
     return this.create({ ...spec, directory: worktree.path });
   }
 
+  hasQueuedMessage(sessionId: string, body: string): boolean {
+    return this.queue.hasQueued(sessionId, body);
+  }
+
   sendMessage(input: { sessionId: string; body: string; fromSessionId?: string }): { status: 'delivered' | 'queued'; messageId: string } {
     const session = this.require(input.sessionId);
     const message = this.queue.enqueue(input);

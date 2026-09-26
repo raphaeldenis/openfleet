@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { openDatabase } from '../db/database.js';
 import { ManagerRepository } from './managerRepository.js';
 
@@ -86,5 +86,22 @@ describe('ManagerRepository', () => {
     expect(() => repo.setLastPulseAt('nope', 't1')).not.toThrow();
 
     expect(repo.get('s1')!.lastPulseAt).toBeUndefined();
+  });
+
+  it('skips a stored row outside the schema bounds on list(), warning once with its session id, and keeps every valid manager working', () => {
+    const db = openDatabase(':memory:');
+    insertSession(db, 'good');
+    insertSession(db, 'poisoned');
+    const repo = new ManagerRepository(db);
+    repo.insert({ sessionId: 'good', pulseSeconds: 60, childrenCap: 1, missionText: 'a', createdAt: 't0' });
+    // Bypasses the app-level ManagerSpecSchema the way a hand-edited row or an older schema version would.
+    repo.insert({ sessionId: 'poisoned', pulseSeconds: 9000000000000, childrenCap: 0, missionText: 'x', createdAt: 't0' });
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const records = repo.list();
+
+    expect(records.map((m) => m.sessionId)).toEqual(['good']);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('poisoned'));
+    warnSpy.mockRestore();
   });
 });

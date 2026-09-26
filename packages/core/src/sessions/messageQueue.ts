@@ -11,6 +11,10 @@ export class MessageQueue {
       .run(message.id, message.sessionId, message.fromSessionId ?? null, message.body, message.status, message.createdAt);
     return message;
   }
+  hasQueued(sessionId: string, body: string): boolean {
+    const row = this.db.prepare(`SELECT 1 FROM message_queue WHERE session_id = ? AND status = 'queued' AND body = ? LIMIT 1`).get(sessionId, body);
+    return row !== undefined;
+  }
   nextPending(sessionId: string): QueuedMessage | undefined {
     const row = this.db.prepare(`SELECT id, session_id, from_session_id, body, status, created_at FROM message_queue WHERE session_id = ? AND status = 'queued' ORDER BY created_at LIMIT 1`).get(sessionId) as
       { id: string; session_id: string; from_session_id: string | null; body: string; status: 'queued'; created_at: string } | undefined;

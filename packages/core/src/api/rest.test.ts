@@ -3,6 +3,9 @@ import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
 import { FakeHarness } from '../harness/fakeHarness.js';
 import { ApprovalService } from '../governance/approvalService.js';
+import { ManagerRepository } from '../managers/managerRepository.js';
+import { ManagerService } from '../managers/managerService.js';
+import { PulseScheduler } from '../managers/pulseScheduler.js';
 import { DEFAULT_MODEL_TABLE } from '../models.js';
 import { SessionService } from '../sessions/sessionService.js';
 import { startServer } from './server.js';
@@ -16,7 +19,10 @@ beforeEach(async () => {
   harness = new FakeHarness();
   const sessions = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt' });
   const approvals = new ApprovalService({ db, bus });
-  server = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, bus, modelTable: DEFAULT_MODEL_TABLE });
+  const managerRepo = new ManagerRepository(db);
+  const pulseScheduler = new PulseScheduler({ managers: managerRepo, sessions, bus });
+  const managers = new ManagerService({ managers: managerRepo, sessions, bus, scheduler: pulseScheduler });
+  server = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable: DEFAULT_MODEL_TABLE });
 });
 afterEach(() => server.close());
 
@@ -104,7 +110,10 @@ describe('REST', () => {
     const stubHarnessBus = new EventBus();
     const stubHarnessSessions = new SessionService({ db: stubHarnessDb, bus: stubHarnessBus, harnesses: [harness, claudeCliStub], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt' });
     const stubHarnessApprovals = new ApprovalService({ db: stubHarnessDb, bus: stubHarnessBus });
-    const stubHarnessServer = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions: stubHarnessSessions, approvals: stubHarnessApprovals, bus: stubHarnessBus, modelTable: DEFAULT_MODEL_TABLE });
+    const stubHarnessManagerRepo = new ManagerRepository(stubHarnessDb);
+    const stubHarnessScheduler = new PulseScheduler({ managers: stubHarnessManagerRepo, sessions: stubHarnessSessions, bus: stubHarnessBus });
+    const stubHarnessManagers = new ManagerService({ managers: stubHarnessManagerRepo, sessions: stubHarnessSessions, bus: stubHarnessBus, scheduler: stubHarnessScheduler });
+    const stubHarnessServer = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions: stubHarnessSessions, approvals: stubHarnessApprovals, managers: stubHarnessManagers, pulseScheduler: stubHarnessScheduler, bus: stubHarnessBus, modelTable: DEFAULT_MODEL_TABLE });
     const stubHarnessApi = (path: string, init: RequestInit = {}) =>
       fetch(`${stubHarnessServer.url}${path}`, { ...init, headers: { 'content-type': 'application/json', authorization: 'Bearer admin', ...(init.headers ?? {}) } });
     const session = await (await stubHarnessApi('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'claude-cli' }) })).json();
@@ -171,6 +180,94 @@ describe('REST', () => {
     const created = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
     const res = await api(`/api/sessions/${created.id}/model`, { method: 'POST', body: 'not json' });
     expect(res.status).toBe(500);
+  });
+
+  it('a POST /api/sessions carrying a manager block creates a role=manager session routed through ManagerService, not a plain session', async () => {
+    const res = await api('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake', manager: { pulseSeconds: 60, childrenCap: 2, mission: 'Ship it' } }),
+    });
+    expect(res.status).toBe(201);
+    const session = await res.json();
+    expect(session.role).toBe('manager');
+  });
+
+  it('400s a manager session request with a non-positive pulseSeconds', async () => {
+    const res = await api('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake', manager: { pulseSeconds: 0, childrenCap: 2, mission: 'x' } }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('pulses a manager session on demand and writes the pulse straight to its pty when it is idle', async () => {
+    const created = await (await api('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake', manager: { pulseSeconds: 3600, childrenCap: 1, mission: 'x' } }),
+    })).json();
+    const { hookToken } = await (await api(`/api/sessions/${created.id}/tokens`)).json();
+    await fetch(`${server.url}/hooks/${hookToken}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ session_id: created.id, hook_event_name: 'SessionStart' }) });
+
+    const res = await api(`/api/managers/${created.id}/pulse`, { method: 'POST' });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ pulsed: true });
+    expect(harness.handles[0]!.written).toEqual(['[pulse] Re-read your mission and continue: check your children, unblock them, record what you did.\r']);
+  });
+
+  it('answers a manual pulse honestly when one is already queued: pulsed false, coalesced true', async () => {
+    const created = await (await api('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake', manager: { pulseSeconds: 3600, childrenCap: 1, mission: 'x' } }),
+    })).json();
+    const { hookToken } = await (await api(`/api/sessions/${created.id}/tokens`)).json();
+    const sendHook = (event: object) => fetch(`${server.url}/hooks/${hookToken}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ session_id: created.id, ...event }) });
+    await sendHook({ hook_event_name: 'SessionStart' });
+    // A Notification/permission_prompt gates delivery the same way a real PermissionRequest would, without
+    // going through ApprovalService.request() — a PermissionRequest hook would block this fetch until a
+    // human/automated decision resolves it, which never happens in this test.
+    await sendHook({ hook_event_name: 'Notification', notification_type: 'permission_prompt' });
+
+    const first = await api(`/api/managers/${created.id}/pulse`, { method: 'POST' });
+    expect(first.status).toBe(200);
+    expect(await first.json()).toEqual({ pulsed: true });
+
+    const second = await api(`/api/managers/${created.id}/pulse`, { method: 'POST' });
+    expect(second.status).toBe(200);
+    expect(await second.json()).toEqual({ pulsed: false, coalesced: true });
+  });
+
+  it('404s a pulse request for a session id with no manager record', async () => {
+    const created = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
+    const res = await api(`/api/managers/${created.id}/pulse`, { method: 'POST' });
+    expect(res.status).toBe(404);
+  });
+
+  it('404s a pulse request for an id that is not a session at all', async () => {
+    const res = await api('/api/managers/nope/pulse', { method: 'POST' });
+    expect(res.status).toBe(404);
+  });
+
+  it('409s a pulse request for a manager whose session has already closed', async () => {
+    const created = await (await api('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake', manager: { pulseSeconds: 3600, childrenCap: 1, mission: 'x' } }),
+    })).json();
+    await api(`/api/sessions/${created.id}/close`, { method: 'POST' });
+
+    const res = await api(`/api/managers/${created.id}/pulse`, { method: 'POST' });
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: 'session_closed' });
+  });
+
+  it('rejects a pulse request with no bearer token, same as every other /api/ route', async () => {
+    const created = await (await api('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake', manager: { pulseSeconds: 60, childrenCap: 1, mission: 'x' } }),
+    })).json();
+    const res = await fetch(`${server.url}/api/managers/${created.id}/pulse`, { method: 'POST' });
+    expect(res.status).toBe(401);
   });
 
   it('sends a snapshot first, then streams live events', async () => {
