@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
-import type { HarnessId, PermissionMode, Session, SessionState } from '@openfleet/shared';
+import { PERMISSION_MODES, type HarnessId, type PermissionMode, type Session, type SessionState } from '@openfleet/shared';
 
 interface Row {
   id: string; name: string; emoji: string; directory: string; worktree: string | null; model: string | null;
@@ -7,11 +7,28 @@ interface Row {
   exit_code: number | null; hook_token: string; mcp_token: string; permission_mode: string | null; created_at: string; closed_at: string | null;
 }
 
+export interface NormalizedPermissionMode { mode: PermissionMode | undefined; wasRecognized: boolean }
+
+// The DB column is an untrusted string, not a validated PermissionMode: a row written before Amendment A1,
+// or by hand, can hold a value PERMISSION_MODES no longer (or never did) recognize. Both the repository
+// mapper (every read) and the resume path (which additionally needs to know whether to warn) go through
+// this single function so the two never drift.
+export function normalizePermissionMode(stored: string | null | undefined): NormalizedPermissionMode {
+  if (stored == null) return { mode: undefined, wasRecognized: true };
+  // ponytail: 'default' was PERMISSION_MODES' entry before Amendment A1 renamed it to 'manual'; a dev
+  // database can still hold rows written under the old name. The column is only ever set at INSERT,
+  // so a legacy 'default' row stays 'default' forever; drop this guard only alongside a phase 3
+  // migration that rewrites stored 'default' values to 'manual'.
+  if (stored === 'default') return { mode: 'manual', wasRecognized: true };
+  if ((PERMISSION_MODES as readonly string[]).includes(stored)) return { mode: stored as PermissionMode, wasRecognized: true };
+  return { mode: undefined, wasRecognized: false };
+}
+
 const toSession = (r: Row): Session => ({
   id: r.id, name: r.name, emoji: r.emoji, directory: r.directory, worktree: r.worktree ?? undefined,
   model: r.model ?? undefined, parentId: r.parent_id ?? undefined, role: r.role ?? undefined, harness: r.harness,
   state: r.state, stateSince: r.state_since, exitCode: r.exit_code ?? undefined,
-  permissionMode: (r.permission_mode ?? undefined) as PermissionMode | undefined,
+  permissionMode: normalizePermissionMode(r.permission_mode).mode,
   createdAt: r.created_at, closedAt: r.closed_at ?? undefined,
 });
 
@@ -55,5 +72,11 @@ export class SessionRepository {
   tokens(id: string): { hookToken: string; mcpToken: string } | undefined {
     const row = this.db.prepare('SELECT hook_token, mcp_token FROM sessions WHERE id = ?').get(id) as { hook_token: string; mcp_token: string } | undefined;
     return row ? { hookToken: row.hook_token, mcpToken: row.mcp_token } : undefined;
+  }
+  // The raw, unnormalized column — for resolveResumePermissionMode, which needs to know whether the
+  // stored value was recognized, not just its normalized Session.permissionMode.
+  rawPermissionMode(id: string): string | null | undefined {
+    const row = this.db.prepare('SELECT permission_mode FROM sessions WHERE id = ?').get(id) as { permission_mode: string | null } | undefined;
+    return row?.permission_mode;
   }
 }

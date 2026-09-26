@@ -20,8 +20,26 @@ describe('SessionRepository', () => {
   it('persists and returns permissionMode', () => {
     const db = openDatabase(':memory:');
     const repo = new SessionRepository(db);
+    repo.insert({ ...baseRow, permission_mode: 'plan' });
+    expect(repo.get('s1')!.permissionMode).toBe('plan');
+  });
+
+  it('reads a legacy stored "default" permission_mode as "manual", both from get() and list()', () => {
+    const db = openDatabase(':memory:');
+    const repo = new SessionRepository(db);
     repo.insert({ ...baseRow, permission_mode: 'default' });
-    expect(repo.get('s1')!.permissionMode).toBe('default');
+
+    expect(repo.get('s1')!.permissionMode).toBe('manual');
+    expect(repo.list()[0]!.permissionMode).toBe('manual');
+  });
+
+  it('reads an unrecognized stored permission_mode as undefined, both from get() and list()', () => {
+    const db = openDatabase(':memory:');
+    const repo = new SessionRepository(db);
+    repo.insert({ ...baseRow, permission_mode: 'bogus' });
+
+    expect(repo.get('s1')!.permissionMode).toBeUndefined();
+    expect(repo.list()[0]!.permissionMode).toBeUndefined();
   });
 
   it('leaves permissionMode undefined when none was given', () => {
@@ -57,14 +75,6 @@ describe('SessionRepository', () => {
     const [session] = repo.list();
 
     expect(session!.permissionMode).toBe('plan');
-  });
-
-  it('reads back whatever string was stored, even one outside the known permission modes', () => {
-    const db = openDatabase(':memory:');
-    const repo = new SessionRepository(db);
-    repo.insert({ ...baseRow, permission_mode: 'not-a-real-mode' as never });
-
-    expect(repo.get('s1')!.permissionMode).toBe('not-a-real-mode');
   });
 
   it('rotates the hook and mcp tokens, replacing the ones set at creation', () => {
