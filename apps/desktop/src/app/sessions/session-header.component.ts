@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, input } from '@angular/core';
+import { ChangeDetectionStrategy, Component, input, signal } from '@angular/core';
 import type { Session } from '@openfleet/shared';
 import { StateChipComponent } from '../design/state-chip.component';
 import { ModelSelectorComponent } from './model-selector.component';
@@ -19,12 +19,17 @@ import { exitCodeLabel } from './session-close-status';
         <span class="exit-code" data-testid="session-exit-code">{{ exitCodeLabel(session().exitCode) }}</span>
       }
       <span class="harness" data-testid="session-harness" title="Harness">{{ session().harness }}</span>
-      <of-model-selector [sessionId]="session().id" />
+      <of-model-selector [sessionId]="session().id" (pendingModelSwitch)="modelSwitchPending.set($event)" />
       <of-permission-mode-picker [sessionId]="session().id" [currentMode]="session().permissionMode" />
       <span class="directory" data-testid="session-directory" [attr.title]="session().directory">{{ session().directory }}</span>
       <span class="cost" data-testid="session-cost" title="Cost tracking is not implemented yet">—</span>
       <span class="spacer"></span>
-      <of-session-actions [sessionId]="session().id" [state]="session().state" />
+      <of-session-actions
+        [sessionId]="session().id"
+        [state]="session().state"
+        [sessionName]="session().name"
+        [modelSwitchPending]="modelSwitchPending()"
+      />
     </header>
   `,
   styles: `
@@ -44,4 +49,5 @@ import { exitCodeLabel } from './session-close-status';
 export class SessionHeaderComponent {
   readonly session = input.required<Session>();
   protected readonly exitCodeLabel = exitCodeLabel;
+  protected readonly modelSwitchPending = signal(false);
 }

@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, effect, inject, input, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, effect, inject, input, output, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
@@ -41,6 +41,7 @@ const SWITCH_STATUS_LABEL: Record<'relaunching' | 'deferred', string> = {
 })
 export class ModelSelectorComponent {
   readonly sessionId = input.required<string>();
+  readonly pendingModelSwitch = output<boolean>();
   private readonly events = inject(FleetEventsService);
   private readonly api = inject(FleetApiService);
   readonly rungs = MODEL_RUNGS;
@@ -58,6 +59,7 @@ export class ModelSelectorComponent {
       this.applying.set(false);
       this.switchStatus.set(null);
       this.switchError.set(null);
+      this.pendingModelSwitch.emit(false);
     });
   }
 
@@ -76,6 +78,7 @@ export class ModelSelectorComponent {
     try {
       const result = await this.api.updateModel(this.sessionId(), this.chosenRung);
       this.switchStatus.set(result.status);
+      this.pendingModelSwitch.emit(result.status === 'deferred');
     } catch {
       this.switchError.set(MODEL_SWITCH_ERROR);
     } finally {

@@ -1,6 +1,6 @@
 import { render, screen, waitFor, fireEvent } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
-import { inputBinding, signal } from '@angular/core';
+import { inputBinding, outputBinding, signal } from '@angular/core';
 import { describe, expect, it, vi } from 'vitest';
 import { ModelSelectorComponent } from './model-selector.component';
 import { FleetApiService } from '../core/fleet-api.service';
@@ -121,6 +121,32 @@ describe('ModelSelectorComponent', () => {
 
     // Assert
     await waitFor(() => expect(screen.queryByTestId('model-switch-status')).toBeNull());
+  });
+
+  it('emits pendingModelSwitch(true) when the switch waits for the turn to end', async () => {
+    const api = { updateModel: vi.fn().mockResolvedValue({ status: 'deferred' }) };
+    const pendingModelSwitch = vi.fn();
+    await render(ModelSelectorComponent, {
+      bindings: [inputBinding('sessionId', () => 's1'), outputBinding('pendingModelSwitch', pendingModelSwitch)],
+      providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: fakeEvents('claude-sonnet-5') }],
+    });
+
+    await userEvent.click(screen.getByTestId('apply-model'));
+
+    await waitFor(() => expect(pendingModelSwitch).toHaveBeenLastCalledWith(true));
+  });
+
+  it('emits pendingModelSwitch(false) once the switch relaunches immediately instead of waiting', async () => {
+    const api = { updateModel: vi.fn().mockResolvedValue({ status: 'relaunching' }) };
+    const pendingModelSwitch = vi.fn();
+    await render(ModelSelectorComponent, {
+      bindings: [inputBinding('sessionId', () => 's1'), outputBinding('pendingModelSwitch', pendingModelSwitch)],
+      providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: fakeEvents('claude-sonnet-5') }],
+    });
+
+    await userEvent.click(screen.getByTestId('apply-model'));
+
+    await waitFor(() => expect(pendingModelSwitch).toHaveBeenLastCalledWith(false));
   });
 
   it('never types a slash-model command into the UI', async () => {

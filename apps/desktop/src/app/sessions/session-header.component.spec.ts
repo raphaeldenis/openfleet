@@ -1,4 +1,5 @@
-import { render, screen } from '@testing-library/angular/zoneless';
+import { render, screen, waitFor } from '@testing-library/angular/zoneless';
+import userEvent from '@testing-library/user-event';
 import { inputBinding, signal } from '@angular/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Session } from '@openfleet/shared';
@@ -77,6 +78,19 @@ describe('SessionHeaderComponent', () => {
     const session = baseSession();
     await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
     expect(screen.getByTestId('session-close')).toBeTruthy();
+  });
+
+  it('warns the close-confirm dialog of a pending model switch reported by the model selector', async () => {
+    const session = baseSession();
+    await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
+
+    await userEvent.selectOptions(screen.getByTestId('model-select'), 'opus');
+    await userEvent.click(screen.getByTestId('apply-model'));
+    await waitFor(() => expect(screen.getByTestId('model-switch-status')).toHaveTextContent('switch pending'));
+
+    await userEvent.click(screen.getByTestId('session-close'));
+
+    expect(screen.getByTestId('close-confirm-pending-switch')).toBeTruthy();
   });
 
   describe('elapsed time', () => {

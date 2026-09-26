@@ -1,13 +1,19 @@
 import { render, screen, waitFor, fireEvent } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
 import { inputBinding } from '@angular/core';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { SessionState } from '@openfleet/shared';
 import { SessionActionsComponent } from './session-actions.component';
 import { FleetApiService } from '../core/fleet-api.service';
 
-function bindingsFor(state: SessionState) {
-  return [inputBinding('sessionId', () => 's1'), inputBinding('state', () => state)];
+function bindingsFor(state: SessionState, options: { sessionName?: string; modelSwitchPending?: boolean } = {}) {
+  const { sessionName = 'Gimli · T6', modelSwitchPending = false } = options;
+  return [
+    inputBinding('sessionId', () => 's1'),
+    inputBinding('state', () => state),
+    inputBinding('sessionName', () => sessionName),
+    inputBinding('modelSwitchPending', () => modelSwitchPending),
+  ];
 }
 
 describe('SessionActionsComponent', () => {
@@ -38,39 +44,107 @@ describe('SessionActionsComponent', () => {
   });
 
   describe('Close', () => {
-    beforeEach(() => vi.spyOn(window, 'confirm'));
-    afterEach(() => vi.restoreAllMocks());
-
-    it('asks for confirmation, then closes the session', async () => {
-      vi.spyOn(window, 'confirm').mockReturnValue(true);
-      const api = { closeSession: vi.fn().mockResolvedValue({}), sendInput: vi.fn() };
-      await render(SessionActionsComponent, { bindings: bindingsFor('idle'), providers: [{ provide: FleetApiService, useValue: api }] });
+    it('opens an in-app confirmation dialog naming the session, instead of window.confirm', async () => {
+      const confirmSpy = vi.spyOn(window, 'confirm');
+      const api = { closeSession: vi.fn(), sendInput: vi.fn() };
+      await render(SessionActionsComponent, {
+        bindings: bindingsFor('idle', { sessionName: 'Gimli · T6' }),
+        providers: [{ provide: FleetApiService, useValue: api }],
+      });
 
       await userEvent.click(screen.getByTestId('session-close'));
 
-      expect(window.confirm).toHaveBeenCalled();
-      expect(api.closeSession).toHaveBeenCalledWith('s1');
+      expect(confirmSpy).not.toHaveBeenCalled();
+      const dialog = screen.getByTestId('close-confirm-dialog');
+      expect(dialog).toHaveAttribute('role', 'dialog');
+      expect(dialog).toHaveAttribute('aria-modal', 'true');
+      expect(dialog).toHaveTextContent('Close Gimli · T6?');
+      confirmSpy.mockRestore();
     });
 
-    it('does not close when the confirmation is declined', async () => {
-      vi.spyOn(window, 'confirm').mockReturnValue(false);
+    it('labels the dialog by its title and focuses Cancel by default', async () => {
       const api = { closeSession: vi.fn(), sendInput: vi.fn() };
       await render(SessionActionsComponent, { bindings: bindingsFor('idle'), providers: [{ provide: FleetApiService, useValue: api }] });
 
       await userEvent.click(screen.getByTestId('session-close'));
 
-      expect(api.closeSession).not.toHaveBeenCalled();
+      const dialog = screen.getByTestId('close-confirm-dialog');
+      const labelId = dialog.getAttribute('aria-labelledby');
+      expect(labelId).toBeTruthy();
+      expect(document.getElementById(labelId!)).toHaveTextContent('Close Gimli · T6?');
+      await waitFor(() => expect(screen.getByTestId('close-confirm-cancel')).toHaveFocus());
     });
 
-    it('sends only one close request when clicked twice before the request resolves', async () => {
-      vi.spyOn(window, 'confirm').mockReturnValue(true);
+    it('shows the pending model-switch warning only when a switch is pending', async () => {
+      const api = { closeSession: vi.fn(), sendInput: vi.fn() };
+      await render(SessionActionsComponent, {
+        bindings: bindingsFor('idle', { modelSwitchPending: true }),
+        providers: [{ provide: FleetApiService, useValue: api }],
+      });
+
+      await userEvent.click(screen.getByTestId('session-close'));
+
+      expect(screen.getByTestId('close-confirm-pending-switch')).toHaveTextContent('Closing cancels the pending model switch.');
+    });
+
+    it('hides the pending model-switch warning when no switch is pending', async () => {
+      const api = { closeSession: vi.fn(), sendInput: vi.fn() };
+      await render(SessionActionsComponent, {
+        bindings: bindingsFor('idle', { modelSwitchPending: false }),
+        providers: [{ provide: FleetApiService, useValue: api }],
+      });
+
+      await userEvent.click(screen.getByTestId('session-close'));
+
+      expect(screen.queryByTestId('close-confirm-pending-switch')).toBeNull();
+    });
+
+    it('sends no request and returns focus to Close when Cancel is clicked', async () => {
+      const api = { closeSession: vi.fn(), sendInput: vi.fn() };
+      await render(SessionActionsComponent, { bindings: bindingsFor('idle'), providers: [{ provide: FleetApiService, useValue: api }] });
+      const closeButton = screen.getByTestId('session-close');
+
+      await userEvent.click(closeButton);
+      await userEvent.click(screen.getByTestId('close-confirm-cancel'));
+
+      expect(api.closeSession).not.toHaveBeenCalled();
+      expect(screen.queryByTestId('close-confirm-dialog')).toBeNull();
+      await waitFor(() => expect(closeButton).toHaveFocus());
+    });
+
+    it('sends no request and returns focus to Close when Escape is pressed', async () => {
+      const api = { closeSession: vi.fn(), sendInput: vi.fn() };
+      await render(SessionActionsComponent, { bindings: bindingsFor('idle'), providers: [{ provide: FleetApiService, useValue: api }] });
+      const closeButton = screen.getByTestId('session-close');
+
+      await userEvent.click(closeButton);
+      await userEvent.keyboard('{Escape}');
+
+      expect(api.closeSession).not.toHaveBeenCalled();
+      expect(screen.queryByTestId('close-confirm-dialog')).toBeNull();
+      await waitFor(() => expect(closeButton).toHaveFocus());
+    });
+
+    it('sends one close request when "Close session" is confirmed', async () => {
+      const api = { closeSession: vi.fn().mockResolvedValue({}), sendInput: vi.fn() };
+      await render(SessionActionsComponent, { bindings: bindingsFor('idle'), providers: [{ provide: FleetApiService, useValue: api }] });
+
+      await userEvent.click(screen.getByTestId('session-close'));
+      await userEvent.click(screen.getByTestId('close-confirm-submit'));
+
+      expect(api.closeSession).toHaveBeenCalledWith('s1');
+      expect(screen.queryByTestId('close-confirm-dialog')).toBeNull();
+    });
+
+    it('sends only one close request when the confirm button is clicked twice before the request resolves', async () => {
       let resolveClose: (value: unknown) => void = () => {};
       const api = { closeSession: vi.fn(() => new Promise((resolve) => { resolveClose = resolve; })), sendInput: vi.fn() };
       await render(SessionActionsComponent, { bindings: bindingsFor('idle'), providers: [{ provide: FleetApiService, useValue: api }] });
-      const closeButton = screen.getByTestId('session-close') as HTMLButtonElement;
+      await userEvent.click(screen.getByTestId('session-close'));
+      const confirmButton = screen.getByTestId('close-confirm-submit') as HTMLButtonElement;
 
-      fireEvent.click(closeButton);
-      fireEvent.click(closeButton);
+      fireEvent.click(confirmButton);
+      fireEvent.click(confirmButton);
       resolveClose({});
       await waitFor(() => expect(api.closeSession).toHaveBeenCalled());
 
@@ -78,11 +152,11 @@ describe('SessionActionsComponent', () => {
     });
 
     it('shows an inline error when closing fails', async () => {
-      vi.spyOn(window, 'confirm').mockReturnValue(true);
       const api = { closeSession: vi.fn().mockRejectedValue(new Error('boom')), sendInput: vi.fn() };
       await render(SessionActionsComponent, { bindings: bindingsFor('idle'), providers: [{ provide: FleetApiService, useValue: api }] });
 
       await userEvent.click(screen.getByTestId('session-close'));
+      await userEvent.click(screen.getByTestId('close-confirm-submit'));
 
       await waitFor(() => expect(screen.getByTestId('session-action-error')).toHaveTextContent(/could not close/i));
     });
