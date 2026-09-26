@@ -1,0 +1,74 @@
+import { render, screen } from '@testing-library/angular/zoneless';
+import { inputBinding, signal } from '@angular/core';
+import { describe, expect, it, vi } from 'vitest';
+import type { Session } from '@openfleet/shared';
+import { SessionHeaderComponent } from './session-header.component';
+import { FleetApiService } from '../core/fleet-api.service';
+import { FleetEventsService } from '../core/fleet-events.service';
+
+function baseSession(patch: Partial<Session> = {}): Session {
+  return {
+    id: 's1', name: 'Gimli · T6', emoji: '⛏️', directory: '/repo/.worktrees/t6', model: 'claude-sonnet-5',
+    harness: 'claude-cli', state: 'idle', stateSince: '2026-09-26T10:00:00.000Z', permissionMode: 'manual',
+    createdAt: '2026-09-26T09:00:00.000Z', ...patch,
+  } as Session;
+}
+
+function providersFor(session: Session) {
+  return [
+    { provide: FleetApiService, useValue: { updateModel: vi.fn().mockResolvedValue({ status: 'deferred' }) } },
+    { provide: FleetEventsService, useValue: { sessions: signal([session]), approvals: signal([]), managers: signal([]) } },
+  ];
+}
+
+describe('SessionHeaderComponent', () => {
+  it('renders the session name, state and harness', async () => {
+    const session = baseSession();
+    await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
+    expect(screen.getByTestId('session-name')).toHaveTextContent('Gimli · T6');
+    expect(screen.getByTestId('state-chip')).toHaveTextContent('idle');
+    expect(screen.getByTestId('session-harness')).toHaveTextContent('claude-cli');
+  });
+
+  it('renders the name read-only, since no rename API route exists yet', async () => {
+    const session = baseSession();
+    await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
+    expect(screen.getByTestId('session-name').tagName).not.toBe('INPUT');
+  });
+
+  it('shows the exit code next to the chip once the session is closed', async () => {
+    const session = baseSession({ state: 'closed', exitCode: 1 });
+    await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
+    expect(screen.getByTestId('session-exit-code')).toHaveTextContent('closed · exit 1');
+  });
+
+  it('defaults the exit code to 0 when the daemon omits it on a clean close', async () => {
+    const session = baseSession({ state: 'closed' });
+    await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
+    expect(screen.getByTestId('session-exit-code')).toHaveTextContent('closed · exit 0');
+  });
+
+  it('renders the worktree directory', async () => {
+    const session = baseSession();
+    await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
+    expect(screen.getByTestId('session-directory')).toHaveTextContent('/repo/.worktrees/t6');
+  });
+
+  it('shows the italic "not tracked" cost placeholder', async () => {
+    const session = baseSession();
+    await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
+    expect(screen.getByTestId('session-cost')).toHaveAttribute('title', 'Cost tracking is not implemented yet');
+  });
+
+  it('renders the model selector for this session', async () => {
+    const session = baseSession();
+    await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
+    expect(screen.getByTestId('current-model')).toHaveTextContent('claude-sonnet-5');
+  });
+
+  it('renders the permission mode, read-only', async () => {
+    const session = baseSession();
+    await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
+    expect(screen.getByTestId('permission-mode')).toHaveTextContent('manual');
+  });
+});

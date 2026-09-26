@@ -18,6 +18,9 @@ export class FleetEventsService {
   // Increments on every reconnect (not the first connect) — a fresh snapshot already resyncs
   // sessions/approvals on its own; this tells an attached terminal to re-request its replay too.
   readonly reconnectCount = signal(0);
+  // messageIds whose message.delivered event has already arrived — a composer showing "queued" for its
+  // own messageId flips to "sent" once that id lands here.
+  readonly deliveredMessageIds = signal<ReadonlySet<string>>(new Set());
   private readonly outputBySession = new Map<string, Subject<string>>();
   private socket?: WebSocket;
   private reconnectDelayMs = INITIAL_RECONNECT_DELAY_MS;
@@ -75,6 +78,8 @@ export class FleetEventsService {
       case 'session.closed': return this.patchSession(event.sessionId, { state: 'closed', exitCode: event.exitCode });
       case 'session.output': return this.output(event.sessionId).next(event.data);
       case 'session.replay': return this.output(event.sessionId).next(event.data);
+      case 'session.model_changed': return this.patchSession(event.sessionId, { model: event.model });
+      case 'message.delivered': return this.markMessageDelivered(event.messageId);
       case 'approval.created': return this.upsertApproval(event.approval);
       case 'approval.resolved': return this.approvals.update((all) => all.filter((a) => a.id !== event.approval.id));
       case 'manager.created': return this.upsertManager(event.manager);
@@ -97,5 +102,9 @@ export class FleetEventsService {
 
   private patchSession(id: string, patch: Partial<Session>): void {
     this.sessions.update((all) => all.map((s) => (s.id === id ? { ...s, ...patch } : s)));
+  }
+
+  private markMessageDelivered(messageId: string): void {
+    this.deliveredMessageIds.update((ids) => new Set(ids).add(messageId));
   }
 }
