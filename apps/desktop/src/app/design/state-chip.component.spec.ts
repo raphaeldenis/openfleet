@@ -46,10 +46,26 @@ describe('StateChipComponent', () => {
     expect(screen.getByTestId('state-chip')).toHaveAttribute('data-stale', '1');
   });
 
+  it('stops the live pulse animation when a live state goes stale, but keeps the stale look', async () => {
+    await render(StateChipComponent, {
+      bindings: [inputBinding('state', () => 'generating'), inputBinding('stale', () => true)],
+    });
+    const chip = screen.getByTestId('state-chip');
+    expect(chip).not.toHaveAttribute('data-live');
+    expect(chip).toHaveAttribute('data-stale', '1');
+  });
+
   it('does not throw for a state string outside the known ChipState union (a future backend state the frontend has not learned yet)', async () => {
     const unknownFutureState = 'reviewing' as unknown as ChipState;
     await render(StateChipComponent, { bindings: [inputBinding('state', () => unknownFutureState)] });
-    expect(screen.getByTestId('state-chip')).toBeInTheDocument();
+    const chip = screen.getByTestId('state-chip');
+    expect(chip).toHaveTextContent(`?${unknownFutureState}`);
+  });
+
+  it('does not fall back to an inherited Object property for a state named like one ("constructor")', async () => {
+    const prototypePollutingState = 'constructor' as unknown as ChipState;
+    await render(StateChipComponent, { bindings: [inputBinding('state', () => prototypePollutingState)] });
+    expect(screen.getByTestId('state-chip')).toHaveTextContent('?constructor');
   });
 
   it('renders the idle label in the foreground token, not the state color, so it stays readable on the tinted chip background', async () => {

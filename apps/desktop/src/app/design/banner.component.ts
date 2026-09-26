@@ -9,11 +9,25 @@ const COLOR_VAR: Record<BannerVariant, string> = {
   done: '--state-idle',
 };
 
+const ANNOUNCE_ROLE: Record<BannerVariant, 'alert' | 'status'> = {
+  permission: 'alert',
+  error: 'alert',
+  reconnecting: 'status',
+  done: 'status',
+};
+
 @Component({
   selector: 'of-banner',
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <div data-testid="banner" [attr.data-variant]="variant()" [style.--banner-color]="'var(' + colorVar() + ')'" class="banner">
+    <div
+      data-testid="banner"
+      [attr.data-variant]="variant()"
+      [attr.role]="role()"
+      [attr.aria-live]="role() === 'status' ? 'polite' : null"
+      [style.--banner-color]="'var(' + colorVar() + ')'"
+      class="banner"
+    >
       <span class="title">{{ title() }}</span>
       <span>{{ description() }}</span>
     </div>
@@ -32,4 +46,5 @@ export class BannerComponent {
   readonly title = input.required<string>();
   readonly description = input.required<string>();
   protected readonly colorVar = computed(() => COLOR_VAR[this.variant()]);
+  protected readonly role = computed(() => ANNOUNCE_ROLE[this.variant()]);
 }

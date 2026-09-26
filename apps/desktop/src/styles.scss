@@ -42,7 +42,7 @@
 @media (prefers-reduced-motion: reduce) {
   [data-live], [data-errblink] { animation: none !important }
 }
-[data-live] { animation: of-live 1.6s ease-in-out infinite }
+[data-live]:not([data-stale]) { animation: of-live 1.6s ease-in-out infinite }
 [data-errblink] { animation: of-err 1s steps(1) infinite }
 [data-stale] { opacity: .7; outline: 1px dashed var(--line-2); outline-offset: -1px; border-radius: .375rem }
 

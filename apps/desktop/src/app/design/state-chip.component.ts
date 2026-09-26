@@ -25,7 +25,7 @@ const LOOK: Record<ChipState, ChipLook> = {
     <span
       data-testid="state-chip"
       [attr.data-state]="state()"
-      [attr.data-live]="look().live ? '1' : null"
+      [attr.data-live]="look().live && !stale() ? '1' : null"
       [attr.data-errblink]="look().errBlink ? '1' : null"
       [attr.data-stale]="stale() ? '1' : null"
       [style.background]="'color-mix(in oklch, var(' + look().colorVar + ') 14%, transparent)'"
@@ -45,6 +45,8 @@ export class StateChipComponent {
   readonly stale = input(false);
   protected readonly look = computed((): ChipLook => {
     const state = this.state();
-    return LOOK[state as ChipState] ?? { icon: '?', label: state, colorVar: '--state-closed', live: false, errBlink: false };
+    return Object.hasOwn(LOOK, state)
+      ? LOOK[state as ChipState]
+      : { icon: '?', label: state, colorVar: '--state-closed', live: false, errBlink: false };
   });
 }

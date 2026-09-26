@@ -3,8 +3,12 @@ import { FleetEventsService } from './fleet-events.service';
 
 class FakeWebSocket {
   static instances: FakeWebSocket[] = [];
+  static readonly CONNECTING = 0;
+  static readonly OPEN = 1;
+  static readonly CLOSED = 3;
   private readonly listeners: Record<string, ((event: { data: string }) => void)[]> = {};
   readonly sent: string[] = [];
+  readyState = FakeWebSocket.CONNECTING;
 
   constructor(readonly url: string) {
     FakeWebSocket.instances.push(this);
@@ -23,10 +27,12 @@ class FakeWebSocket {
   }
 
   dispatchOpen(): void {
+    this.readyState = FakeWebSocket.OPEN;
     for (const listener of this.listeners['open'] ?? []) listener({} as { data: string });
   }
 
   dispatchClose(): void {
+    this.readyState = FakeWebSocket.CLOSED;
     for (const listener of this.listeners['close'] ?? []) listener({} as { data: string });
   }
 }
@@ -71,6 +77,25 @@ describe('FleetEventsService', () => {
     socket.dispatchMessage({ type: 'session.created', session: session('s2') });
 
     expect(service.sessions().map((s) => s.id)).toEqual(['s1', 's2']);
+  });
+
+  it('does not open a second socket when connect is called again while one is already open', () => {
+    const service = new FleetEventsService();
+    service.connect();
+    FakeWebSocket.instances[0]!.dispatchOpen();
+
+    service.connect();
+
+    expect(FakeWebSocket.instances).toHaveLength(1);
+  });
+
+  it('does not open a second socket when connect is called again while one is still connecting', () => {
+    const service = new FleetEventsService();
+    service.connect();
+
+    service.connect();
+
+    expect(FakeWebSocket.instances).toHaveLength(1);
   });
 });
 
