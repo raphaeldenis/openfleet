@@ -752,7 +752,7 @@ describe('SessionService submit-keystroke hostile cases', () => {
     expect(events.filter((e) => e.type === 'message.delivered')).toHaveLength(1);
   });
 
-  it('PRODUCTION DEFECT (see report): a daemon restart mid-delay double-delivers the same message and double-emits message.delivered, because deliver()\'s stale-handle guard checks the instance-local handles map instead of the module-level activeHandleBySessionId map the exit path already uses for this exact race', async () => {
+  it('a daemon restart mid-delay drops the stale instance\'s pending submit keystroke and delivers the message exactly once, to the resumed handle', async () => {
     vi.useFakeTimers();
     const db = openDatabase(':memory:');
     const bus = new EventBus();
@@ -780,11 +780,11 @@ describe('SessionService submit-keystroke hostile cases', () => {
 
     await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
 
-    // Both the dead process's stale handle AND the resumed handle receive the submit keystroke for
-    // the SAME messageId, and message.delivered fires twice for one message.
-    expect(staleHandle.written).toEqual(['orphaned', '\r']);
+    // Only the resumed handle receives the submit keystroke; the stale instance's timer sees the
+    // module-level activeHandleBySessionId has moved on and drops its own pending '\r'.
+    expect(staleHandle.written).toEqual(['orphaned']);
     expect(resumedHandle.written).toEqual(['orphaned', '\r']);
     const deliveredForThisMessage = events.filter((e) => e.type === 'message.delivered' && e.messageId === messageId);
-    expect(deliveredForThisMessage).toHaveLength(2);
+    expect(deliveredForThisMessage).toHaveLength(1);
   });
 });

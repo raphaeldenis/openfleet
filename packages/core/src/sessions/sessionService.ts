@@ -235,7 +235,10 @@ export class SessionService {
     handle.write(body);
     const timer = setTimeout(() => {
       this.pendingSubmitTimers.delete(sessionId);
-      if (this.handles.get(sessionId) !== handle) return; // session closed or resumed under a new handle: drop the submit keystroke
+      // activeHandleBySessionId (not this.handles) is the cross-instance source of truth: a resume on a
+      // fresh SessionService instance retires this handle there even though the stale instance's own
+      // handles map never learns about it (see the module-level map's ponytail comment above).
+      if (activeHandleBySessionId.get(sessionId) !== handle) return; // session closed or resumed under a new handle: drop the submit keystroke
       handle.write('\r');
       this.queue.markDelivered(messageId);
       this.deps.bus.emit({ type: 'message.delivered', sessionId, messageId });
