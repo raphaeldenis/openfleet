@@ -6,7 +6,7 @@ import { TerminalComponent } from './sessions/terminal.component';
 
 @Component({
   imports: [SessionListComponent, TerminalComponent, InboxComponent],
-  selector: 'app-root',
+  selector: 'of-app-shell',
   styleUrl: './app.scss',
   templateUrl: './app.html',
 })

@@ -1,8 +1,8 @@
 import { bootstrapApplication } from '@angular/platform-browser';
 import { appConfig } from './app/app.config';
-import { App } from './app/app';
+import { AppRoot } from './app/app-root';
 import { ensureAdminTokenInStorage } from './app/core/tauri-admin-token';
 
 ensureAdminTokenInStorage()
-  .then(() => bootstrapApplication(App, appConfig))
+  .then(() => bootstrapApplication(AppRoot, appConfig))
   .catch((err) => console.error(err));

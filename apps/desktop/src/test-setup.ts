@@ -1,3 +1,5 @@
+import '@testing-library/jest-dom/vitest';
+
 // xterm needs a ResizeObserver in jsdom, which doesn't implement one.
 globalThis.ResizeObserver ??= class {
   observe(): void {}

@@ -20,6 +20,9 @@ export class FleetEventsService {
   private hasConnectedBefore = false;
 
   connect(): void {
+    const isAlreadyConnectingOrOpen =
+      this.socket !== undefined && (this.socket.readyState === WebSocket.CONNECTING || this.socket.readyState === WebSocket.OPEN);
+    if (isAlreadyConnectingOrOpen) return;
     this.openSocket();
   }
 
