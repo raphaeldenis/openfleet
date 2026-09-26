@@ -127,11 +127,11 @@ describe('REST', () => {
     expect(res.status).toBe(404);
   });
 
-  it('changes a session model and reports delivered or queued', async () => {
+  it('changes a session model and reports relaunching or deferred', async () => {
     const created = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
     const res = await api(`/api/sessions/${created.id}/model`, { method: 'POST', body: JSON.stringify({ model: 'claude-opus-5-5' }) });
     expect(res.status).toBe(200);
-    expect((await res.json()).status).toBe('queued'); // still 'starting' — the fake session never received SessionStart
+    expect((await res.json()).status).toBe('deferred'); // still 'starting' — the fake session never received SessionStart
   });
 
   it('404s a model change for an unknown session', async () => {

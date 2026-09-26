@@ -41,6 +41,18 @@ describe('POST /hooks/:token', () => {
     expect(sessions.list()[0]!.state).toBe('idle');
   });
 
+  it('accepts the CLI stdin payload the SessionStart command hook forwards, including its source', async () => {
+    const res = await post(`/hooks/${hookToken}`, { session_id: 'c', transcript_path: '/t.jsonl', cwd: '/tmp', hook_event_name: 'SessionStart', source: 'startup' });
+    expect(res.status).toBe(200);
+    expect(sessions.list()[0]!.state).toBe('idle');
+  });
+
+  it('leaves the session state alone on a SessionStart fired by a context compaction', async () => {
+    const res = await post(`/hooks/${hookToken}`, { session_id: 'c', transcript_path: '/t.jsonl', cwd: '/tmp', hook_event_name: 'SessionStart', source: 'compact' });
+    expect(res.status).toBe(200);
+    expect(sessions.list()[0]!.state).toBe('starting');
+  });
+
   it('unknown token is a no-op 200', async () => {
     const res = await post('/hooks/nope', { session_id: 'c', hook_event_name: 'Stop' });
     expect(res.status).toBe(200);

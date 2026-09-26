@@ -20,12 +20,44 @@ describe('buildClaudeLaunchConfig', () => {
     expect(config.args.indexOf('--mcp-config')).toBeGreaterThan(-1);
   });
 
-  it('registers an http hook for every tracked event pointing at hookUrl', () => {
+  it('registers an http hook for every tracked event but SessionStart, pointing at hookUrl', () => {
     const { settings } = buildClaudeLaunchConfig(launch);
     const hooks = settings.hooks as Record<string, { hooks: { type: string; url: string }[] }[]>;
-    for (const name of ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PermissionRequest', 'Notification', 'Stop', 'SessionEnd']) {
+    for (const name of ['UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PermissionRequest', 'Notification', 'Stop', 'SessionEnd']) {
       expect(hooks[name]?.[0]?.hooks[0]).toEqual({ type: 'http', url: launch.hookUrl, timeout: 600 });
     }
+  });
+
+  it('registers SessionStart as a command hook forwarding its stdin to the same hook URL, since the CLI silently drops http hooks for that event', () => {
+    const { settings } = buildClaudeLaunchConfig(launch);
+    const hooks = settings.hooks as Record<string, { hooks: { type: string; command?: string; url?: string }[] }[]>;
+    const sessionStartHook = hooks.SessionStart?.[0]?.hooks[0]!;
+    expect(sessionStartHook.type).toBe('command');
+    expect(sessionStartHook.url).toBeUndefined();
+    expect(sessionStartHook.command).toContain(launch.hookUrl);
+    expect(sessionStartHook.command).toContain('--data-binary @-');
+  });
+
+  it('single-quotes the hook URL in the SessionStart command and never interpolates the session directory or seeded prompt', () => {
+    const dangerousLaunch = {
+      ...launch,
+      hookUrl: 'http://127.0.0.1:7331/hooks/abcDEF123-_xyz',
+      directory: "/tmp/wt with a space and a ' quote",
+      seededPrompt: "'; rm -rf / #",
+    };
+    const { settings } = buildClaudeLaunchConfig(dangerousLaunch);
+    const hooks = settings.hooks as Record<string, { hooks: { type: string; command?: string }[] }[]>;
+    const command = hooks.SessionStart?.[0]?.hooks[0]!.command!;
+
+    expect(command).toBe(`curl -sS --connect-timeout 2 --max-time 10 -X POST -H 'Content-Type: application/json' --data-binary @- '${dangerousLaunch.hookUrl}'`);
+    expect(command).not.toContain(dangerousLaunch.directory);
+    expect(command).not.toContain(dangerousLaunch.seededPrompt);
+  });
+
+  it('gives the SessionStart command hook the same timeout as every other hook, so a stalled forward does not hang the CLI indefinitely', () => {
+    const { settings } = buildClaudeLaunchConfig(launch);
+    const hooks = settings.hooks as Record<string, { hooks: { timeout: number }[] }[]>;
+    expect(hooks.SessionStart?.[0]?.hooks[0]!.timeout).toBe(hooks.Stop?.[0]?.hooks[0]!.timeout);
   });
 
   it('configures the openfleet MCP server with the bearer token', () => {
