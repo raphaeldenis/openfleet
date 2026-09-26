@@ -3,12 +3,13 @@ import type { Session } from '@openfleet/shared';
 import { StateChipComponent } from '../design/state-chip.component';
 import { ModelSelectorComponent } from './model-selector.component';
 import { PermissionModePickerComponent } from './permission-mode-picker.component';
+import { SessionActionsComponent } from './session-actions.component';
 import { exitCodeLabel } from './session-close-status';
 
 @Component({
   selector: 'of-session-header',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [StateChipComponent, ModelSelectorComponent, PermissionModePickerComponent],
+  imports: [StateChipComponent, ModelSelectorComponent, PermissionModePickerComponent, SessionActionsComponent],
   template: `
     <header class="session-header" data-testid="session-header">
       <span class="emoji" data-testid="session-emoji" title="Change emoji — not available yet">{{ session().emoji }}</span>
@@ -22,6 +23,8 @@ import { exitCodeLabel } from './session-close-status';
       <of-permission-mode-picker [sessionId]="session().id" [currentMode]="session().permissionMode" />
       <span class="directory" data-testid="session-directory" [attr.title]="session().directory">{{ session().directory }}</span>
       <span class="cost" data-testid="session-cost" title="Cost tracking is not implemented yet">—</span>
+      <span class="spacer"></span>
+      <of-session-actions [sessionId]="session().id" [state]="session().state" />
     </header>
   `,
   styles: `
@@ -35,6 +38,7 @@ import { exitCodeLabel } from './session-close-status';
     .harness { font-size: .75rem; color: var(--mut); border: 1px solid var(--line); border-radius: .375rem; padding: 0 .5rem; }
     .directory { font-family: var(--mono); font-size: .6875rem; color: var(--mut); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 16rem; }
     .cost { font-style: italic; color: var(--faint); font-size: .75rem; }
+    .spacer { flex: 1; min-width: .5rem; }
   `,
 })
 export class SessionHeaderComponent {

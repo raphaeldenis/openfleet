@@ -5,6 +5,9 @@ import { BannerComponent } from '../design/banner.component';
 
 interface PendingMessage { id: string; deliveredImmediately: boolean }
 
+const IDLE_PLACEHOLDER = 'Message this session…';
+const BUSY_PLACEHOLDER = 'This session is busy — your message is delivered on the next idle turn';
+
 @Component({
   selector: 'of-composer',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -19,9 +22,9 @@ interface PendingMessage { id: string; deliveredImmediately: boolean }
           data-testid="composer-input"
           [value]="draft()"
           (input)="onInput($event)"
-          placeholder="Message this session…"
+          [placeholder]="placeholder()"
         ></textarea>
-        <button type="button" class="of-btn of-btn--primary" data-testid="composer-send" (click)="send()">Send</button>
+        <button type="button" class="of-btn of-btn--primary" data-testid="composer-send" (click)="send()">{{ sendLabel() }}</button>
         @if (status(); as status) {
           <span class="status" data-testid="composer-status">{{ status }}</span>
         }
@@ -29,18 +32,21 @@ interface PendingMessage { id: string; deliveredImmediately: boolean }
     }
   `,
   styles: `
-    .composer { display: flex; align-items: flex-end; gap: .625rem; }
+    .composer { display: flex; align-items: flex-end; flex-wrap: wrap; gap: .625rem; padding: .5rem .75rem; }
     .of-input--textarea { flex: 1; }
-    .status { font-size: .6875rem; color: var(--mut); }
+    .status { font-size: .6875rem; color: var(--mut); flex: 0 1 auto; min-width: 0; }
   `,
 })
 export class ComposerComponent {
   readonly sessionId = input.required<string>();
   readonly disabledReason = input<string | null>(null);
+  readonly busy = input<boolean>(false);
   private readonly api = inject(FleetApiService);
   private readonly events = inject(FleetEventsService);
   protected readonly draft = signal('');
   private readonly pending = signal<PendingMessage | null>(null);
+  protected readonly sendLabel = computed(() => (this.busy() ? 'Queue' : 'Send'));
+  protected readonly placeholder = computed(() => (this.busy() ? BUSY_PLACEHOLDER : IDLE_PLACEHOLDER));
 
   constructor() {
     // A route param change reuses this component instance, so a session switch must not leak

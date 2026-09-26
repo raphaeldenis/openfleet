@@ -16,7 +16,7 @@ function baseSession(patch: Partial<Session> = {}): Session {
 
 function providersFor(session: Session) {
   return [
-    { provide: FleetApiService, useValue: { updateModel: vi.fn().mockResolvedValue({ status: 'deferred' }) } },
+    { provide: FleetApiService, useValue: { updateModel: vi.fn().mockResolvedValue({ status: 'deferred' }), closeSession: vi.fn(), sendInput: vi.fn() } },
     { provide: FleetEventsService, useValue: { sessions: signal([session]), approvals: signal([]), managers: signal([]) } },
   ];
 }
@@ -71,6 +71,12 @@ describe('SessionHeaderComponent', () => {
     const session = baseSession();
     await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
     expect(screen.getByTestId('permission-mode')).toHaveTextContent('manual');
+  });
+
+  it('offers a Close action for an open session', async () => {
+    const session = baseSession();
+    await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
+    expect(screen.getByTestId('session-close')).toBeTruthy();
   });
 
   describe('elapsed time', () => {

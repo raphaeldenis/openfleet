@@ -35,7 +35,7 @@ const RESUME_TOOLTIP = "Resuming a closed session isn't available yet — no bac
             </button>
           </div>
         } @else {
-          <of-composer [sessionId]="s.id" />
+          <of-composer [sessionId]="s.id" [busy]="s.state === 'generating'" />
         }
       </div>
     } @else {

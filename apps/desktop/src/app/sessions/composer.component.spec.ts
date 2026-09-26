@@ -73,6 +73,26 @@ describe('ComposerComponent', () => {
     expect(api.sendMessage).not.toHaveBeenCalled();
   });
 
+  it('reads "Send" and shows the default placeholder when the session is idle', async () => {
+    const api = { sendMessage: vi.fn() };
+    await render(ComposerComponent, {
+      bindings: [inputBinding('sessionId', () => 's1')],
+      providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: fakeEvents() }],
+    });
+    expect(screen.getByTestId('composer-send')).toHaveTextContent('Send');
+    expect(screen.getByTestId('composer-input')).toHaveAttribute('placeholder', 'Message this session…');
+  });
+
+  it('reads "Queue" and explains the message queues for the next idle turn while the session is busy', async () => {
+    const api = { sendMessage: vi.fn() };
+    await render(ComposerComponent, {
+      bindings: [inputBinding('sessionId', () => 's1'), inputBinding('busy', () => true)],
+      providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: fakeEvents() }],
+    });
+    expect(screen.getByTestId('composer-send')).toHaveTextContent('Queue');
+    expect(screen.getByTestId('composer-input')).toHaveAttribute('placeholder', expect.stringMatching(/busy.*next idle turn/i));
+  });
+
   it('does not leak a typed draft into the next session shown in the same composer slot after navigating', async () => {
     // Arrange — Angular's default route reuse strategy keeps this component instance alive across a
     // `session/:sessionId` param change, so only the `sessionId` input updates reactively; nothing

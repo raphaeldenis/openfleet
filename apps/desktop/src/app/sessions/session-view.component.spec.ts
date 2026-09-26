@@ -31,6 +31,8 @@ function fakeApi() {
     updateModel: vi.fn().mockResolvedValue({ status: 'deferred' }),
     decide: vi.fn().mockResolvedValue({}),
     sendMessage: vi.fn().mockResolvedValue({ status: 'delivered', messageId: 'm1' }),
+    closeSession: vi.fn().mockResolvedValue({}),
+    sendInput: vi.fn().mockResolvedValue({}),
   };
 }
 
@@ -94,6 +96,22 @@ describe('SessionViewComponent', () => {
       providers: [{ provide: FleetApiService, useValue: fakeApi() }, { provide: FleetEventsService, useValue: fakeEvents([session()]) }],
     });
     expect(screen.getByTestId('composer-input')).toBeTruthy();
+  });
+
+  it('tells the composer the session is busy while it is generating, so it queues instead of sending', async () => {
+    await render(SessionViewComponent, {
+      bindings: [inputBinding('sessionId', () => 's1')],
+      providers: [{ provide: FleetApiService, useValue: fakeApi() }, { provide: FleetEventsService, useValue: fakeEvents([session({ state: 'generating' })]) }],
+    });
+    expect(screen.getByTestId('composer-send')).toHaveTextContent('Queue');
+  });
+
+  it('offers Interrupt in the header while the session is generating', async () => {
+    await render(SessionViewComponent, {
+      bindings: [inputBinding('sessionId', () => 's1')],
+      providers: [{ provide: FleetApiService, useValue: fakeApi() }, { provide: FleetEventsService, useValue: fakeEvents([session({ state: 'generating' })]) }],
+    });
+    expect(screen.getByTestId('session-interrupt')).toBeTruthy();
   });
 
   it('shows a not-found message when the session id matches nothing in the snapshot', async () => {
