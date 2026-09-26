@@ -65,3 +65,19 @@ body {
 .of-btn--secondary { border: 1px solid var(--line-2); background: var(--panel); color: var(--fg); }
 .of-btn--link { border: 0; background: transparent; color: var(--accent); padding: 0; }
 .of-btn:disabled { border-color: var(--line); background: var(--sunk); color: var(--faint); cursor: not-allowed; }
+.of-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+.of-section-title {
+  font-size: .6875rem; font-weight: 600; color: var(--faint);
+  text-transform: uppercase; letter-spacing: .05em;
+}
+.of-field { display: flex; flex-direction: column; gap: .375rem; }
+.of-label { font-weight: 500; }
+.of-input {
+  height: 2rem; padding: 0 .625rem; border: 1px solid var(--line); border-radius: .375rem;
+  background: var(--sunk); color: var(--fg); font: inherit; outline: 0;
+}
+.of-input:focus { border-color: var(--accent); }
+.of-input[aria-invalid='true'] { border-color: var(--state-error); }
+.of-input--textarea { height: auto; min-height: 5rem; padding: .5rem .625rem; resize: vertical; font-family: inherit; }
+.of-error { font-size: .75rem; color: var(--state-error); }
