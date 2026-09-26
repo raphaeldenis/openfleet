@@ -49,7 +49,7 @@ describe('buildClaudeLaunchConfig', () => {
     const hooks = settings.hooks as Record<string, { hooks: { type: string; command?: string }[] }[]>;
     const command = hooks.SessionStart?.[0]?.hooks[0]!.command!;
 
-    expect(command).toBe(`curl -sS -X POST -H 'Content-Type: application/json' --data-binary @- '${dangerousLaunch.hookUrl}'`);
+    expect(command).toBe(`curl -sS --connect-timeout 2 --max-time 10 -X POST -H 'Content-Type: application/json' --data-binary @- '${dangerousLaunch.hookUrl}'`);
     expect(command).not.toContain(dangerousLaunch.directory);
     expect(command).not.toContain(dangerousLaunch.seededPrompt);
   });

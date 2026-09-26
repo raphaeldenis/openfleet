@@ -50,8 +50,9 @@ function buildHooks(hookUrl: string): Record<string, unknown> {
 // ponytail: Claude Code 2.1.281 silently drops `type: "http"` hooks for SessionStart only (confirmed with
 // --debug: "HTTP hooks are not supported for SessionStart"); every other event still arrives over HTTP.
 // A command hook that forwards its own stdin to the same URL works around it. hookUrl is daemon-built from
-// a base64url token (no shell metacharacters), so single-quoting it is enough. Drop this once the CLI
+// a base64url token (no shell metacharacters), so single-quoting it is enough. The timeouts keep a hung
+// daemon from stalling the CLI's startup on this hook. Drop this once the CLI
 // delivers SessionStart over http like the rest of the hook events.
 function forwardStdinToHookUrl(hookUrl: string): string {
-  return `curl -sS -X POST -H 'Content-Type: application/json' --data-binary @- '${hookUrl}'`;
+  return `curl -sS --connect-timeout 2 --max-time 10 -X POST -H 'Content-Type: application/json' --data-binary @- '${hookUrl}'`;
 }

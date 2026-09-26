@@ -6,7 +6,7 @@ import type { Harness, HarnessHandle } from '../harness/harness.js';
 import { newId, newToken } from '../ids.js';
 import { MessageQueue } from './messageQueue.js';
 import { SessionRepository } from './sessionRepository.js';
-import { canDeliverNow, nextState, type SessionInput } from './stateMachine.js';
+import { canDeliverNow, nextState, provesTurnEnded, type SessionInput } from './stateMachine.js';
 
 export interface SessionServiceDeps { db: DatabaseSync; bus: EventBus; harnesses: Harness[]; baseUrl: string; worktreesRoot: string; resumeTimeoutMs?: number; submitKeystrokeDelayMs?: number }
 
@@ -91,6 +91,11 @@ export class SessionService {
   // Sessions whose updateModel() could not relaunch immediately (a turn, a permission prompt, or an
   // in-flight delivery was in the way); advance() consumes this the next time the session is deliverable.
   private readonly pendingRelaunches = new Set<string>();
+  // ponytail: sessions whose last submitted turn was never seen ending. Only a hook from the idle CLI clears
+  // it, never TURN_START_TIMEOUT_MS, so a relaunch cannot kill a CLI that may be generating. Ceiling: with
+  // every hook lost, a pending relaunch (and the queue behind it) waits for the next Stop.
+  private readonly unfinishedTurns = new Set<string>();
+  private readonly relaunches = new Map<string, Promise<void>>();
 
   constructor(private readonly deps: SessionServiceDeps) {
     this.repo = new SessionRepository(deps.db);
@@ -154,9 +159,8 @@ export class SessionService {
     if (session.state === 'closed') throw new SessionClosedError(sessionId);
     this.repo.setModel(sessionId, model);
     this.deps.bus.emit({ type: 'session.model_changed', sessionId, model });
-    const { phase } = this.deliveryOf(sessionId);
-    const canRelaunchNow = canDeliverNow(session.state) && phase.name === 'ready';
-    if (!canRelaunchNow) {
+    const isIdleConfirmed = canDeliverNow(session.state) && this.deliveryOf(sessionId).phase.name === 'ready' && !this.unfinishedTurns.has(sessionId);
+    if (!isIdleConfirmed) {
       this.pendingRelaunches.add(sessionId);
       return { status: 'deferred' };
     }
@@ -170,33 +174,51 @@ export class SessionService {
   private startRelaunch(sessionId: string): void {
     this.pendingRelaunches.delete(sessionId);
     this.enter(sessionId, { name: 'relaunching' });
-    this.performRelaunch(sessionId).catch((err) => {
-      console.error(`relaunch: session ${sessionId} failed to relaunch after a model change`, err);
-    });
+    const relaunch = this.performRelaunch(sessionId)
+      .catch((err) => console.error(`relaunch: session ${sessionId} could not be closed after a failed relaunch`, err))
+      .finally(() => this.relaunches.delete(sessionId));
+    this.relaunches.set(sessionId, relaunch);
   }
 
   private async performRelaunch(sessionId: string): Promise<void> {
-    const handle = this.handles.get(sessionId);
-    if (handle) {
-      // Detach first, same reasoning as armResumeTimeout: the closing process's own exit must not trip
-      // markClosed — the user needs this session to come back as itself, not go through 'closed'.
-      activeHandleBySessionId.delete(sessionId);
-      await this.killWithEscalation(handle, DEFAULT_CLOSE_ESCALATE_MS);
-    }
-    const session = this.repo.get(sessionId);
-    if (!session || session.state === 'closed') return; // closed by something else while the relaunch was in flight
     try {
+      await this.retireForRelaunch(sessionId);
+      const session = this.repo.get(sessionId);
+      if (!session || session.state === 'closed') return; // closed by something else while the relaunch was in flight
+      const isCloseRequested = this.deliveryOf(sessionId).phase.name === 'closing';
+      if (isCloseRequested) {
+        this.markClosed(sessionId, undefined);
+        return;
+      }
       this.resumeOne(session);
       this.enter(sessionId, READY);
-    } catch {
+    } catch (err) {
+      console.error(`relaunch: session ${sessionId} failed to relaunch after a model change`, err);
       await this.failResume(sessionId);
     }
   }
 
+  // Revokes the old tokens first so the dying process's late hooks and MCP calls reach no session, then
+  // forgets its handle before killing it: its exit must not trip markClosed, and nothing may kill it twice.
+  private async retireForRelaunch(sessionId: string): Promise<void> {
+    this.repo.setTokens(sessionId, newToken(), newToken());
+    const handle = this.handles.get(sessionId);
+    if (!handle) return;
+    this.handles.delete(sessionId);
+    activeHandleBySessionId.delete(sessionId);
+    await this.killWithEscalation(handle, DEFAULT_CLOSE_ESCALATE_MS);
+  }
+
   applyInput(sessionId: string, input: SessionInput): void {
     const session = this.require(sessionId);
+    const endsUnfinishedTurn = provesTurnEnded(input) && this.unfinishedTurns.has(sessionId);
+    if (endsUnfinishedTurn) this.unfinishedTurns.delete(sessionId);
     const state = nextState(session.state, input);
-    if (state === session.state) return;
+    if (state === session.state) {
+      // The turn's start was never reported, but its end still releases a relaunch held behind it.
+      if (endsUnfinishedTurn) this.guarded(sessionId, () => this.advance(sessionId));
+      return;
+    }
     // Only a real state transition proves the (resumed) process is alive; an unrecognized Notification
     // that leaves the session in 'starting' must not cancel the safety net that would otherwise close it.
     this.clearResumeTimer(sessionId);
@@ -223,6 +245,12 @@ export class SessionService {
   writeRaw(sessionId: string, data: string): void { this.handles.get(sessionId)?.write(data); }
   resize(sessionId: string, cols: number, rows: number): void { this.handles.get(sessionId)?.resize(cols, rows); }
   async close(sessionId: string, options?: { escalateAfterMs?: number }): Promise<void> {
+    const relaunch = this.relaunches.get(sessionId);
+    if (relaunch) {
+      // The relaunch is already killing the process: it sees 'closing' once it exits and stops there.
+      this.enter(sessionId, { name: 'closing' });
+      return relaunch;
+    }
     const handle = this.handles.get(sessionId);
     if (!handle) return;
     // The process may take the whole escalation window to exit: nothing is typed or submitted into it meanwhile.
@@ -246,8 +274,8 @@ export class SessionService {
   }
 
   async closeAll(): Promise<void> {
-    const openSessionIds = [...this.handles.keys()];
-    await Promise.all(openSessionIds.map((id) => this.close(id)));
+    const openSessionIds = new Set([...this.handles.keys(), ...this.relaunches.keys()]);
+    await Promise.all([...openSessionIds].map((id) => this.close(id)));
   }
   get(id: string): Session | undefined { return this.repo.get(id); }
   list(): Session[] { return this.repo.list(); }
@@ -298,11 +326,15 @@ export class SessionService {
     const isDeliverable = session !== undefined && canDeliverNow(session.state);
     if (!isDeliverable) return;
     const { phase } = this.deliveryOf(sessionId);
+    if (phase.name === 'typed') this.submit(sessionId, phase);
+    if (phase.name !== 'ready') return;
     // A deferred relaunch always wins over the next queued message: it was requested first, and typing
     // into a handle we're about to kill would just be retyped into the resumed one anyway.
-    if (phase.name === 'ready' && this.pendingRelaunches.has(sessionId)) { this.startRelaunch(sessionId); return; }
-    if (phase.name === 'ready') this.typeNextMessage(sessionId);
-    if (phase.name === 'typed') this.submit(sessionId, phase);
+    const isRelaunchPending = this.pendingRelaunches.has(sessionId);
+    const isTurnUnfinished = this.unfinishedTurns.has(sessionId);
+    if (isRelaunchPending && isTurnUnfinished) return;
+    if (isRelaunchPending) this.startRelaunch(sessionId);
+    else this.typeNextMessage(sessionId);
   }
 
   // ponytail: one message per turn; batch delivery if queues grow
@@ -337,6 +369,7 @@ export class SessionService {
     phase.handle.write('\r');
     // The '\r' reached the pty: the delivery is committed, so nothing past this line may lead to a second '\r'.
     this.unrecordedDeliveries.set(sessionId, phase.messageId);
+    this.unfinishedTurns.add(sessionId);
     const turnStartTimeout = this.schedule(sessionId, TURN_START_TIMEOUT_MS, () => this.stopAwaitingTurnStart(sessionId));
     this.enter(sessionId, { name: 'submitted', messageId: phase.messageId }, turnStartTimeout);
     try {
@@ -422,6 +455,7 @@ export class SessionService {
     this.clearResumeTimer(sessionId);
     this.stopDelivery(sessionId);
     this.pendingRelaunches.delete(sessionId);
+    this.unfinishedTurns.delete(sessionId);
     const session = this.repo.get(sessionId);
     if (!session || session.state === 'closed') return;
     this.repo.setClosed(sessionId, exitCode, new Date().toISOString());

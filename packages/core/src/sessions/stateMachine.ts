@@ -36,6 +36,16 @@ function isWaitingOnHuman(state: SessionState): boolean {
   return state === 'waiting_permission' || state === 'waiting_input';
 }
 
+// A hook that only fires while the CLI waits on its composer proves the last turn is over, even when the
+// recorded state already says idle because that turn's UserPromptSubmit never arrived.
+export function provesTurnEnded(input: SessionInput): boolean {
+  if (input.kind !== 'hook') return false;
+  const { event } = input;
+  if (event.hook_event_name === 'Stop' || event.hook_event_name === 'SessionStart') return true;
+  if (event.hook_event_name !== 'Notification') return false;
+  return event.notification_type === 'idle_prompt' || event.notification_type === 'agent_needs_input';
+}
+
 export function canDeliverNow(state: SessionState): boolean {
   return state === 'idle' || state === 'waiting_input';
 }

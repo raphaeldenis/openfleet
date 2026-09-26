@@ -821,6 +821,124 @@ describe('SessionService.updateModel hostile cases', () => {
   });
 });
 
+describe('SessionService relaunch against the delivery machine', () => {
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+
+  async function idleSession() {
+    const context = setup();
+    const session = await context.service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    context.service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+    return { ...context, session };
+  }
+
+  it('never relaunches on the turn-start timeout alone: a submitted turn with no hooks at all holds the relaunch until a real Stop', async () => {
+    vi.useFakeTimers();
+    const { service, harness, session } = await idleSession();
+    service.sendMessage({ sessionId: session.id, body: 'do X' });
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
+
+    const result = service.updateModel(session.id, 'claude-opus-5-5');
+    await vi.advanceTimersByTimeAsync(TURN_START_TIMEOUT_MS + 1);
+
+    expect(result.status).toBe('deferred');
+    expect(harness.launches).toHaveLength(1);
+    expect(harness.handles[0]!.killed).toBe(false);
+
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'Stop' }));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(harness.launches).toHaveLength(2);
+  });
+
+  it('defers a switch requested after the turn-start timeout expired when the submitted turn was never seen ending', async () => {
+    vi.useFakeTimers();
+    const { service, harness, session } = await idleSession();
+    service.sendMessage({ sessionId: session.id, body: 'do X' });
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS + TURN_START_TIMEOUT_MS + 1);
+
+    const result = service.updateModel(session.id, 'claude-opus-5-5');
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(result.status).toBe('deferred');
+    expect(harness.launches).toHaveLength(1);
+  });
+
+  it('lets close win over an in-flight relaunch: the session ends closed and is never resumed', async () => {
+    vi.useFakeTimers();
+    const { service, harness, events, session } = await idleSession();
+    harness.handles[0]!.ignoresGracefulKill = true;
+    service.updateModel(session.id, 'claude-opus-5-5');
+
+    const closing = service.close(session.id);
+    await vi.advanceTimersByTimeAsync(DEFAULT_CLOSE_ESCALATE_MS + 1);
+    await closing;
+
+    expect(harness.launches).toHaveLength(1);
+    expect(service.get(session.id)!.state).toBe('closed');
+    expect(events.filter((e) => e.type === 'session.closed')).toHaveLength(1);
+  });
+
+  it('lets closeAll win over an in-flight relaunch', async () => {
+    vi.useFakeTimers();
+    const { service, harness, session } = await idleSession();
+    harness.handles[0]!.ignoresGracefulKill = true;
+    service.updateModel(session.id, 'claude-opus-5-5');
+
+    const closingAll = service.closeAll();
+    await vi.advanceTimersByTimeAsync(DEFAULT_CLOSE_ESCALATE_MS + 1);
+    await closingAll;
+
+    expect(harness.launches).toHaveLength(1);
+    expect(service.get(session.id)!.state).toBe('closed');
+  });
+
+  it('revokes the dying process tokens before killing it, so its late hooks and MCP calls reach no session', async () => {
+    vi.useFakeTimers();
+    const { service, harness, session } = await idleSession();
+    const oldTokens = service.tokens(session.id)!;
+    harness.handles[0]!.ignoresGracefulKill = true;
+
+    service.updateModel(session.id, 'claude-opus-5-5');
+
+    expect(service.byHookToken(oldTokens.hookToken)).toBeUndefined();
+    expect(service.byMcpToken(oldTokens.mcpToken)).toBeUndefined();
+  });
+
+  it('closes the session with a clear exit code when killing the old process throws, logging once', async () => {
+    vi.useFakeTimers();
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { service, harness, session } = await idleSession();
+    harness.handles[0]!.kill = () => { throw new Error('EPERM'); };
+
+    service.updateModel(session.id, 'claude-opus-5-5');
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(service.get(session.id)!.state).toBe('closed');
+    expect(service.get(session.id)!.exitCode).toBe(RESUME_LAUNCH_FAILED_EXIT_CODE);
+    expect(errors).toHaveBeenCalledTimes(1);
+  });
+
+  it('never kills the exited old process again when the resume fails before registering its new handle', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { service, harness, session } = await idleSession();
+    const oldHandle = harness.handles[0]!;
+    let hasExited = false;
+    oldHandle.kill = () => {
+      if (hasExited) return; // a real pty reports its exit only once
+      hasExited = true;
+      oldHandle.emitExit(0);
+    };
+    vi.spyOn(SessionRepository.prototype, 'tokens').mockImplementation(() => { throw new Error('db locked'); });
+
+    service.updateModel(session.id, 'claude-opus-5-5');
+    await vi.advanceTimersByTimeAsync(2 * DEFAULT_CLOSE_ESCALATE_MS + 1);
+
+    expect(service.get(session.id)!.state).toBe('closed');
+    expect(service.get(session.id)!.exitCode).toBe(RESUME_LAUNCH_FAILED_EXIT_CODE);
+  });
+});
+
 describe('SessionService submit-keystroke hostile cases', () => {
   afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
