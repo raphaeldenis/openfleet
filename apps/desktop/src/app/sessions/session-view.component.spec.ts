@@ -74,6 +74,19 @@ describe('SessionViewComponent', () => {
     expect(screen.getByTestId('banner')).toHaveAttribute('data-variant', 'error');
   });
 
+  it('agrees with the header about an undefined exit code instead of showing it as both a clean and a failed close', async () => {
+    // Arrange — the header (session-header.component.ts) defaults a missing exitCode to 0 ("closed · exit 0"),
+    // so the banner right below it must not simultaneously call the same close an error.
+    await render(SessionViewComponent, {
+      bindings: [inputBinding('sessionId', () => 's1')],
+      providers: [{ provide: FleetApiService, useValue: fakeApi() }, { provide: FleetEventsService, useValue: fakeEvents([session({ state: 'closed', exitCode: undefined })]) }],
+    });
+
+    // Assert
+    expect(screen.getByTestId('session-exit-code')).toHaveTextContent('closed · exit 0');
+    expect(screen.getByTestId('banner')).toHaveAttribute('data-variant', 'done');
+  });
+
   it('shows the composer for an open, non-gated session', async () => {
     await render(SessionViewComponent, {
       bindings: [inputBinding('sessionId', () => 's1')],
