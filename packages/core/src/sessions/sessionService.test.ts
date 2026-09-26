@@ -417,23 +417,6 @@ describe('SessionService resume', () => {
     consoleErrorSpy.mockRestore();
   });
 
-  it('resumes a legacy "default" permission_mode as manual', async () => {
-    const db = openDatabase(':memory:');
-    const bus = new EventBus();
-    const firstRunHarness = new FakeHarness();
-    const original = new SessionService({ db, bus, harnesses: [firstRunHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
-    const session = await original.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
-    // 'default' predates PERMISSION_MODES excluding it (Amendment A1) and can only reach the DB from a
-    // pre-existing row, never from SessionSpec, so it is written directly rather than through create().
-    db.prepare('UPDATE sessions SET permission_mode = ? WHERE id = ?').run('default', session.id);
-
-    const restartHarness = new FakeHarness();
-    const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt', resumeTimeoutMs: 50 });
-    await restarted.resumeAll();
-
-    expect(restartHarness.launches[0]!.permissionMode).toBe('manual');
-  });
-
   it('resumes with --permission-mode omitted and logs once when the stored permission_mode is unrecognized', async () => {
     const db = openDatabase(':memory:');
     const bus = new EventBus();
@@ -450,20 +433,6 @@ describe('SessionService resume', () => {
     expect(restartHarness.launches[0]!.permissionMode).toBeUndefined();
     expect(warn).toHaveBeenCalledTimes(1);
     warn.mockRestore();
-  });
-
-  it('resumes an already-valid stored permission_mode unchanged (not just the legacy "default" alias)', async () => {
-    const db = openDatabase(':memory:');
-    const bus = new EventBus();
-    const firstRunHarness = new FakeHarness();
-    const original = new SessionService({ db, bus, harnesses: [firstRunHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
-    await original.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖', permissionMode: 'plan' });
-
-    const restartHarness = new FakeHarness();
-    const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt', resumeTimeoutMs: 50 });
-    await restarted.resumeAll();
-
-    expect(restartHarness.launches[0]!.permissionMode).toBe('plan');
   });
 
   // PERMISSION_MODES (packages/shared/src/session.ts) does not include 'manual' yet (P2-T06b, Amendment

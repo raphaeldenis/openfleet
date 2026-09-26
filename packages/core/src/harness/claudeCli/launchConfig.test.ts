@@ -73,20 +73,6 @@ describe('buildClaudeLaunchConfig', () => {
     expect(promptIndex).toBeLessThan(config.args.indexOf('--mcp-config'));
   });
 
-  it('passes --permission-mode when the launch specifies one', () => {
-    const config = buildClaudeLaunchConfig({ ...launch, permissionMode: 'acceptEdits' });
-    const flagIndex = config.args.indexOf('--permission-mode');
-    expect(flagIndex).toBeGreaterThan(-1);
-    expect(config.args[flagIndex + 1]).toBe('acceptEdits');
-  });
-
-  it('passes --permission-mode plan when the launch specifies the plan mode', () => {
-    const config = buildClaudeLaunchConfig({ ...launch, permissionMode: 'plan' });
-    const flagIndex = config.args.indexOf('--permission-mode');
-    expect(flagIndex).toBeGreaterThan(-1);
-    expect(config.args[flagIndex + 1]).toBe('plan');
-  });
-
   it.each(PERMISSION_MODES)('passes --permission-mode %s on a first run, exactly the documented CLI choice', (mode) => {
     const config = buildClaudeLaunchConfig({ ...launch, permissionMode: mode });
     const flagIndex = config.args.indexOf('--permission-mode');
