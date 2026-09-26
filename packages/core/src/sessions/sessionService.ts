@@ -302,7 +302,12 @@ export class SessionService {
       // Detach first, same reasoning as armResumeTimeout: the handle's own onExit must not record
       // whatever exit code the harness reports over RESUME_LAUNCH_FAILED_EXIT_CODE below.
       activeHandleBySessionId.delete(sessionId);
-      await this.killWithEscalation(handle, DEFAULT_CLOSE_ESCALATE_MS);
+      try {
+        await this.killWithEscalation(handle, DEFAULT_CLOSE_ESCALATE_MS);
+      } catch (err) {
+        // A kill that throws must not leave the session wedged: it is closed below all the same.
+        console.error(`resume: session ${sessionId} could not kill its process after a resume error`, err);
+      }
     }
     try {
       this.markClosed(sessionId, RESUME_LAUNCH_FAILED_EXIT_CODE);

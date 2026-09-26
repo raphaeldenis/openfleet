@@ -937,6 +937,80 @@ describe('SessionService relaunch against the delivery machine', () => {
     expect(service.get(session.id)!.state).toBe('closed');
     expect(service.get(session.id)!.exitCode).toBe(RESUME_LAUNCH_FAILED_EXIT_CODE);
   });
+
+  it('never relaunches on a mid-turn compaction SessionStart: the state stays generating until a real Stop', async () => {
+    vi.useFakeTimers();
+    const { service, harness, session } = await idleSession();
+    service.sendMessage({ sessionId: session.id, body: 'do X' });
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit' }));
+    service.updateModel(session.id, 'claude-opus-5-5');
+
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart', source: 'compact' }));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(harness.launches).toHaveLength(1);
+    expect(service.get(session.id)!.state).toBe('generating');
+
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'Stop' }));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(harness.launches).toHaveLength(2);
+  });
+
+  it('keeps a turn whose start was never reported unfinished across a compaction SessionStart', async () => {
+    vi.useFakeTimers();
+    const { service, harness, session } = await idleSession();
+    service.sendMessage({ sessionId: session.id, body: 'do X' });
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS + TURN_START_TIMEOUT_MS + 1);
+    service.updateModel(session.id, 'claude-opus-5-5');
+
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart', source: 'compact' }));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(harness.launches).toHaveLength(1);
+    expect(harness.handles[0]!.killed).toBe(false);
+
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'Stop' }));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(harness.launches).toHaveLength(2);
+  });
+
+  it('brings a relaunched session to idle on the resumed process SessionStart{source:"resume"}', async () => {
+    vi.useFakeTimers();
+    const { service, session } = await idleSession();
+    service.updateModel(session.id, 'claude-opus-5-5');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(service.get(session.id)!.state).toBe('starting');
+
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart', source: 'resume' }));
+
+    expect(service.get(session.id)!.state).toBe('idle');
+  });
+
+  it('closes the session and leaves no timer when the resume fails after registering its handle and killing that handle throws too', async () => {
+    vi.useFakeTimers();
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { service, harness, session } = await idleSession();
+    const startHandle = harness.start.bind(harness);
+    harness.start = (launch) => {
+      const handle = startHandle(launch) as FakeHandle;
+      handle.kill = () => { throw new Error('EPERM'); };
+      return handle;
+    };
+    vi.spyOn(SessionRepository.prototype, 'setState').mockImplementation(() => { throw new Error('db locked'); });
+
+    service.updateModel(session.id, 'claude-opus-5-5');
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(harness.launches).toHaveLength(2);
+    expect(service.get(session.id)!.state).toBe('closed');
+    expect(service.get(session.id)!.exitCode).toBe(RESUME_LAUNCH_FAILED_EXIT_CODE);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(errors).toHaveBeenCalledTimes(2); // the resume failure, then the kill failure: once each
+    await expect(service.close(session.id)).resolves.toBeUndefined();
+  });
 });
 
 describe('SessionService submit-keystroke hostile cases', () => {

@@ -14,7 +14,7 @@ export function nextState(current: SessionState, input: SessionInput): SessionSt
 
 function stateAfterHook(current: SessionState, event: ClaudeHookEvent): SessionState {
   switch (event.hook_event_name) {
-    case 'SessionStart': return 'idle';
+    case 'SessionStart': return isCompaction(event) ? current : 'idle';
     case 'SessionEnd': return 'closed';
     case 'UserPromptSubmit': return 'generating';
     case 'PreToolUse':
@@ -36,12 +36,18 @@ function isWaitingOnHuman(state: SessionState): boolean {
   return state === 'waiting_permission' || state === 'waiting_input';
 }
 
+// Claude Code compacts its context on its own, possibly mid-turn, and reports it as a SessionStart.
+function isCompaction(event: ClaudeHookEvent): boolean {
+  return event.hook_event_name === 'SessionStart' && event.source === 'compact';
+}
+
 // A hook that only fires while the CLI waits on its composer proves the last turn is over, even when the
 // recorded state already says idle because that turn's UserPromptSubmit never arrived.
 export function provesTurnEnded(input: SessionInput): boolean {
   if (input.kind !== 'hook') return false;
   const { event } = input;
-  if (event.hook_event_name === 'Stop' || event.hook_event_name === 'SessionStart') return true;
+  if (event.hook_event_name === 'Stop') return true;
+  if (event.hook_event_name === 'SessionStart') return !isCompaction(event);
   if (event.hook_event_name !== 'Notification') return false;
   return event.notification_type === 'idle_prompt' || event.notification_type === 'agent_needs_input';
 }

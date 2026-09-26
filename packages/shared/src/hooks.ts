@@ -7,7 +7,8 @@ const base = {
 };
 
 export const ClaudeHookEventSchema = z.discriminatedUnion('hook_event_name', [
-  z.object({ ...base, hook_event_name: z.literal('SessionStart') }),
+  // source is 'startup' | 'resume' | 'clear' | 'compact' today; a string keeps a future value from failing the hook.
+  z.object({ ...base, hook_event_name: z.literal('SessionStart'), source: z.string().optional() }),
   z.object({ ...base, hook_event_name: z.literal('SessionEnd') }),
   z.object({ ...base, hook_event_name: z.literal('UserPromptSubmit'), user_prompt: z.string().optional() }),
   z.object({ ...base, hook_event_name: z.literal('PreToolUse'), tool_name: z.string(), tool_input: z.unknown(), tool_use_id: z.string().optional() }),
