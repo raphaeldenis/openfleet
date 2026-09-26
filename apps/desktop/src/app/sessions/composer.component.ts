@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, inject, input, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, effect, inject, input, signal } from '@angular/core';
 import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { BannerComponent } from '../design/banner.component';
@@ -41,6 +41,16 @@ export class ComposerComponent {
   private readonly events = inject(FleetEventsService);
   protected readonly draft = signal('');
   private readonly pending = signal<PendingMessage | null>(null);
+
+  constructor() {
+    // A route param change reuses this component instance, so a session switch must not leak
+    // the previous session's unsent draft or delivery status into the one now shown.
+    effect(() => {
+      this.sessionId();
+      this.draft.set('');
+      this.pending.set(null);
+    });
+  }
 
   protected readonly status = computed(() => {
     const pending = this.pending();
