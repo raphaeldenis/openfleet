@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { PERMISSION_MODES } from '@openfleet/shared';
 import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
 import { FakeHarness } from '../harness/fakeHarness.js';
@@ -72,6 +73,22 @@ describe('REST', () => {
     const list = await (await api('/api/sessions')).json();
     expect(list).toHaveLength(1);
     expect(list[0].name).toBe('Gimli');
+  });
+
+  it('400s a session create carrying the undocumented "default" permission mode alias, not a 500', async () => {
+    const res = await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake', permissionMode: 'default' }) });
+    expect(res.status).toBe(400);
+  });
+
+  it('400s a session create carrying a bogus permission mode, not a 500', async () => {
+    const res = await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake', permissionMode: 'yolo' }) });
+    expect(res.status).toBe(400);
+  });
+
+  it.each(PERMISSION_MODES)('201s a session create carrying the documented permission mode "%s" and passes it through to the harness launch', async (mode) => {
+    const res = await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake', permissionMode: mode }) });
+    expect(res.status).toBe(201);
+    expect(harness.launches[0]!.permissionMode).toBe(mode);
   });
 
   it('sends raw input to the pty', async () => {

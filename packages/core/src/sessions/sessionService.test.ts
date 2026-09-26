@@ -6,7 +6,7 @@ import { EventBus } from '../events/eventBus.js';
 import { DEFAULT_CLOSE_ESCALATE_MS, DELIVERY_RETRY_MS, MAX_DELIVERY_RETRIES, PARKED_RETRY_MS, RESUME_LAUNCH_FAILED_EXIT_CODE, RESUME_TIMEOUT_EXIT_CODE, SessionService, SUBMIT_KEYSTROKE_DELAY_MS, TURN_START_TIMEOUT_MS } from './sessionService.js';
 import { MessageQueue } from './messageQueue.js';
 import { SessionRepository } from './sessionRepository.js';
-import type { ServerEvent } from '@openfleet/shared';
+import { PERMISSION_MODES, type ServerEvent } from '@openfleet/shared';
 
 function setup() {
   const db = openDatabase(':memory:');
@@ -487,6 +487,81 @@ describe('SessionService resume', () => {
     expect(restartHarness.launches[0]!.permissionMode).toBe('manual');
     expect(warn).not.toHaveBeenCalled();
     warn.mockRestore();
+  });
+
+  it.each(PERMISSION_MODES)('creates and resumes with permission mode "%s" reaching the harness launch on both runs', async (mode) => {
+    const db = openDatabase(':memory:');
+    const bus = new EventBus();
+    const firstRunHarness = new FakeHarness();
+    const original = new SessionService({ db, bus, harnesses: [firstRunHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+    await original.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖', permissionMode: mode });
+    expect(firstRunHarness.launches[0]!.permissionMode).toBe(mode);
+
+    const restartHarness = new FakeHarness();
+    const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt', resumeTimeoutMs: 50 });
+    await restarted.resumeAll();
+
+    expect(restartHarness.launches[0]!.permissionMode).toBe(mode);
+  });
+
+  it.each(['Manual', ' manual', 'MANUAL', 'manual '])('resumes with --permission-mode omitted and warns once for the odd-cased/whitespace stored value "%s", instead of matching it loosely', async (storedValue) => {
+    const db = openDatabase(':memory:');
+    const bus = new EventBus();
+    const firstRunHarness = new FakeHarness();
+    const original = new SessionService({ db, bus, harnesses: [firstRunHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+    const session = await original.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    db.prepare('UPDATE sessions SET permission_mode = ? WHERE id = ?').run(storedValue, session.id);
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const restartHarness = new FakeHarness();
+    const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt', resumeTimeoutMs: 50 });
+    await restarted.resumeAll();
+
+    expect(restartHarness.launches[0]!.permissionMode).toBeUndefined();
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
+  it('warns exactly once per resume, not zero and not accumulating, across two separate daemon restarts of the same unrecognized permission_mode', async () => {
+    const db = openDatabase(':memory:');
+    const bus = new EventBus();
+    const firstRunHarness = new FakeHarness();
+    const original = new SessionService({ db, bus, harnesses: [firstRunHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+    const session = await original.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    db.prepare('UPDATE sessions SET permission_mode = ? WHERE id = ?').run('garbage', session.id);
+
+    const firstRestartWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const firstRestartHarness = new FakeHarness();
+    const firstRestart = new SessionService({ db, bus, harnesses: [firstRestartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt', resumeTimeoutMs: 50 });
+    await firstRestart.resumeAll();
+    expect(firstRestartWarn).toHaveBeenCalledTimes(1);
+    firstRestartWarn.mockRestore();
+
+    // The column is never rewritten by a resume (setState only touches state/state_since), so a second
+    // daemon restart reads the same unrecognized "garbage" value and must warn again, independently.
+    const secondRestartWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const secondRestartHarness = new FakeHarness();
+    const secondRestart = new SessionService({ db, bus, harnesses: [secondRestartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt', resumeTimeoutMs: 50 });
+    await secondRestart.resumeAll();
+    expect(secondRestartWarn).toHaveBeenCalledTimes(1);
+    secondRestartWarn.mockRestore();
+  });
+
+  it('never rewrites a legacy "default" permission_mode in the DB on resume, so a second restart maps it from "default" again rather than finding it already healed to "manual"', async () => {
+    const db = openDatabase(':memory:');
+    const bus = new EventBus();
+    const firstRunHarness = new FakeHarness();
+    const original = new SessionService({ db, bus, harnesses: [firstRunHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+    const session = await original.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    db.prepare('UPDATE sessions SET permission_mode = ? WHERE id = ?').run('default', session.id);
+
+    const restartHarness = new FakeHarness();
+    const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt', resumeTimeoutMs: 50 });
+    await restarted.resumeAll();
+    expect(restartHarness.launches[0]!.permissionMode).toBe('manual');
+
+    const row = db.prepare('SELECT permission_mode FROM sessions WHERE id = ?').get(session.id) as { permission_mode: string };
+    expect(row.permission_mode).toBe('default');
   });
 
   it('a non-SessionStart hook event after resume still cancels the resume timeout, since any hook proves the process is alive', async () => {
