@@ -78,6 +78,7 @@ body {
   background: var(--sunk); color: var(--fg); font: inherit; outline: 0;
 }
 .of-input:focus { border-color: var(--accent); }
+.of-input:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .of-input[aria-invalid='true'] { border-color: var(--state-error); }
 .of-input--textarea { height: auto; min-height: 5rem; padding: .5rem .625rem; resize: vertical; font-family: inherit; }
 .of-error { font-size: .75rem; color: var(--state-error); }
