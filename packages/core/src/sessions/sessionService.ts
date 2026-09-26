@@ -57,7 +57,8 @@ type DeliveryPhase =
   // upgrade path is reading the composer back from the pty output before submitting.
   | TypedPhase
   | { name: 'submitted'; messageId: string }
-  | { name: 'closing' };
+  | { name: 'closing' }
+  | { name: 'relaunching' };
 
 interface Delivery { phase: DeliveryPhase; timer?: ReturnType<typeof setTimeout>; failedAttempts: number }
 
@@ -87,6 +88,9 @@ export class SessionService {
   private readonly deliveries = new Map<string, Delivery>();
   // Message ids whose '\r' reached the pty but whose markDelivered has not succeeded yet.
   private readonly unrecordedDeliveries = new Map<string, string>();
+  // Sessions whose updateModel() could not relaunch immediately (a turn, a permission prompt, or an
+  // in-flight delivery was in the way); advance() consumes this the next time the session is deliverable.
+  private readonly pendingRelaunches = new Set<string>();
 
   constructor(private readonly deps: SessionServiceDeps) {
     this.repo = new SessionRepository(deps.db);
@@ -142,12 +146,51 @@ export class SessionService {
     return { status: 'queued', messageId: message.id };
   }
 
-  updateModel(sessionId: string, model: string): { status: 'delivered' | 'queued'; messageId: string } {
+  // ponytail: a relaunch costs a CLI restart (~2s) and drops the TUI's in-memory state that never made it
+  // into the transcript; acceptable because the transcript carries the conversation. Upgrade path: drive
+  // this through a session-scoped model switch if Claude Code ever offers one, instead of a full restart.
+  updateModel(sessionId: string, model: string): { status: 'relaunching' | 'deferred' } {
     const session = this.require(sessionId);
     if (session.state === 'closed') throw new SessionClosedError(sessionId);
     this.repo.setModel(sessionId, model);
     this.deps.bus.emit({ type: 'session.model_changed', sessionId, model });
-    return this.sendMessage({ sessionId, body: `/model ${model}` });
+    const { phase } = this.deliveryOf(sessionId);
+    const canRelaunchNow = canDeliverNow(session.state) && phase.name === 'ready';
+    if (!canRelaunchNow) {
+      this.pendingRelaunches.add(sessionId);
+      return { status: 'deferred' };
+    }
+    this.startRelaunch(sessionId);
+    return { status: 'relaunching' };
+  }
+
+  // Closes the running process without telling the user the session is closed, then resumes it under the
+  // model already written to the DB by updateModel — the same --resume/--model/fresh-tokens path a daemon
+  // restart uses (Amendments A2/A3), never a typed '/model' (Amendment A4).
+  private startRelaunch(sessionId: string): void {
+    this.pendingRelaunches.delete(sessionId);
+    this.enter(sessionId, { name: 'relaunching' });
+    this.performRelaunch(sessionId).catch((err) => {
+      console.error(`relaunch: session ${sessionId} failed to relaunch after a model change`, err);
+    });
+  }
+
+  private async performRelaunch(sessionId: string): Promise<void> {
+    const handle = this.handles.get(sessionId);
+    if (handle) {
+      // Detach first, same reasoning as armResumeTimeout: the closing process's own exit must not trip
+      // markClosed — the user needs this session to come back as itself, not go through 'closed'.
+      activeHandleBySessionId.delete(sessionId);
+      await this.killWithEscalation(handle, DEFAULT_CLOSE_ESCALATE_MS);
+    }
+    const session = this.repo.get(sessionId);
+    if (!session || session.state === 'closed') return; // closed by something else while the relaunch was in flight
+    try {
+      this.resumeOne(session);
+      this.enter(sessionId, READY);
+    } catch {
+      await this.failResume(sessionId);
+    }
   }
 
   applyInput(sessionId: string, input: SessionInput): void {
@@ -255,6 +298,9 @@ export class SessionService {
     const isDeliverable = session !== undefined && canDeliverNow(session.state);
     if (!isDeliverable) return;
     const { phase } = this.deliveryOf(sessionId);
+    // A deferred relaunch always wins over the next queued message: it was requested first, and typing
+    // into a handle we're about to kill would just be retyped into the resumed one anyway.
+    if (phase.name === 'ready' && this.pendingRelaunches.has(sessionId)) { this.startRelaunch(sessionId); return; }
     if (phase.name === 'ready') this.typeNextMessage(sessionId);
     if (phase.name === 'typed') this.submit(sessionId, phase);
   }
@@ -375,6 +421,7 @@ export class SessionService {
   private markClosed(sessionId: string, exitCode: number | undefined): void {
     this.clearResumeTimer(sessionId);
     this.stopDelivery(sessionId);
+    this.pendingRelaunches.delete(sessionId);
     const session = this.repo.get(sessionId);
     if (!session || session.state === 'closed') return;
     this.repo.setClosed(sessionId, exitCode, new Date().toISOString());

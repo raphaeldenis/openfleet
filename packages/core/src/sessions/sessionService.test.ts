@@ -571,21 +571,35 @@ describe('SessionService resume', () => {
 });
 
 describe('SessionService.updateModel', () => {
-  it('applies the model immediately when idle, and records it', async () => {
+  it('relaunches an idle session with --resume and the new model instead of typing /model, rotating tokens', async () => {
     vi.useFakeTimers();
     const { service, harness, events } = setup();
     const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
     service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+    const originalTokens = service.tokens(session.id)!;
+
     const result = service.updateModel(session.id, 'claude-opus-5-5');
-    expect(result.status).toBe('delivered');
-    expect(harness.handles[0]!.written).toEqual(['/model claude-opus-5-5']);
-    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
-    expect(harness.handles[0]!.written).toEqual(['/model claude-opus-5-5', '\r']);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(result.status).toBe('relaunching');
     expect(service.get(session.id)!.model).toBe('claude-opus-5-5');
     expect(events).toContainEqual({ type: 'session.model_changed', sessionId: session.id, model: 'claude-opus-5-5' });
+    expect(harness.handles[0]!.written).toEqual([]); // never typed '/model' into the old handle
+    expect(harness.handles[0]!.killed).toBe(true);
+    expect(harness.launches[1]!.resuming).toBe(true);
+    expect(harness.launches[1]!.sessionId).toBe(session.id);
+    expect(harness.launches[1]!.model).toBe('claude-opus-5-5');
+    const rotated = service.tokens(session.id)!;
+    expect(rotated.hookToken).not.toBe(originalTokens.hookToken);
+    expect(rotated.mcpToken).not.toBe(originalTokens.mcpToken);
+    expect(service.get(session.id)!.state).toBe('starting');
+
+    // The relaunched process reports SessionStart exactly like a fresh resume: same path, same landing state.
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+    expect(service.get(session.id)!.state).toBe('idle');
   });
 
-  it('queues the model switch while the session is generating, and still records the target model immediately', async () => {
+  it('defers a model switch while generating, still records the target model, and relaunches only after Stop makes the session idle again', async () => {
     vi.useFakeTimers();
     const { service, harness } = setup();
     const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
@@ -593,40 +607,76 @@ describe('SessionService.updateModel', () => {
     service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit' }));
 
     const result = service.updateModel(session.id, 'claude-opus-5-5');
+    await vi.advanceTimersByTimeAsync(0);
 
-    expect(result.status).toBe('queued');
-    expect(harness.handles[0]!.written).toEqual([]);
+    expect(result.status).toBe('deferred');
     expect(service.get(session.id)!.model).toBe('claude-opus-5-5');
+    expect(harness.launches).toHaveLength(1); // no relaunch yet
+    expect(harness.handles[0]!.written).toEqual([]);
 
     service.applyInput(session.id, hook(session.id, { hook_event_name: 'Stop' }));
-    expect(harness.handles[0]!.written).toEqual(['/model claude-opus-5-5']);
-    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
-    expect(harness.handles[0]!.written).toEqual(['/model claude-opus-5-5', '\r']);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(harness.launches).toHaveLength(2);
+    expect(harness.launches[1]!.resuming).toBe(true);
+    expect(harness.launches[1]!.model).toBe('claude-opus-5-5');
+    expect(harness.handles[0]!.written).toEqual([]);
   });
 
-  it('delivers only the first of two model switches queued while generating, one per idle turn', async () => {
+  it('defers a model switch while waiting on a permission prompt, relaunching only once resolved and idle again', async () => {
+    vi.useFakeTimers();
+    const { service, harness } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: {} }));
+
+    const result = service.updateModel(session.id, 'claude-opus-5-5');
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(result.status).toBe('deferred');
+    expect(harness.launches).toHaveLength(1);
+
+    service.applyInput(session.id, { kind: 'permission_resolved' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(harness.launches).toHaveLength(1); // resolved goes to 'generating', still not deliverable
+
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'Stop' }));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(harness.launches).toHaveLength(2);
+    expect(harness.launches[1]!.model).toBe('claude-opus-5-5');
+  });
+
+  it('delivers a message queued before a model switch exactly once, after the relaunch completes', async () => {
     vi.useFakeTimers();
     const { service, harness } = setup();
     const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
     service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
     service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit' }));
 
+    const queued = service.sendMessage({ sessionId: session.id, body: 'do X' });
+    expect(queued.status).toBe('queued');
     service.updateModel(session.id, 'claude-opus-5-5');
-    const second = service.updateModel(session.id, 'claude-haiku-4-5');
-
-    expect(second.status).toBe('queued');
-    expect(service.get(session.id)!.model).toBe('claude-haiku-4-5');
+    await vi.advanceTimersByTimeAsync(0);
 
     service.applyInput(session.id, hook(session.id, { hook_event_name: 'Stop' }));
-    expect(harness.handles[0]!.written).toEqual(['/model claude-opus-5-5']);
-    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
-    expect(harness.handles[0]!.written).toEqual(['/model claude-opus-5-5', '\r']);
+    await vi.advanceTimersByTimeAsync(0);
 
+    // The relaunch fires first: the queued message is not typed into the old (now-dead) handle.
+    expect(harness.launches).toHaveLength(2);
+    expect(harness.handles[0]!.written).toEqual([]);
+    expect(harness.handles[1]!.written).toEqual([]);
+
+    // The resumed process reports SessionStart, going idle again — only now is the queued message delivered.
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+    expect(harness.handles[1]!.written).toEqual(['do X']);
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
+    expect(harness.handles[1]!.written).toEqual(['do X', '\r']);
+
+    // Exactly once: a further idle round must not retype it.
     service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit' }));
     service.applyInput(session.id, hook(session.id, { hook_event_name: 'Stop' }));
-    expect(harness.handles[0]!.written).toEqual(['/model claude-opus-5-5', '\r', '/model claude-haiku-4-5']);
-    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
-    expect(harness.handles[0]!.written).toEqual(['/model claude-opus-5-5', '\r', '/model claude-haiku-4-5', '\r']);
+    expect(harness.handles[1]!.written).toEqual(['do X', '\r']);
   });
 
   it('rejects a model switch on a session that has already closed', async () => {

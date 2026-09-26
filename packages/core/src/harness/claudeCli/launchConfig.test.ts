@@ -20,12 +20,22 @@ describe('buildClaudeLaunchConfig', () => {
     expect(config.args.indexOf('--mcp-config')).toBeGreaterThan(-1);
   });
 
-  it('registers an http hook for every tracked event pointing at hookUrl', () => {
+  it('registers an http hook for every tracked event but SessionStart, pointing at hookUrl', () => {
     const { settings } = buildClaudeLaunchConfig(launch);
     const hooks = settings.hooks as Record<string, { hooks: { type: string; url: string }[] }[]>;
-    for (const name of ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PermissionRequest', 'Notification', 'Stop', 'SessionEnd']) {
+    for (const name of ['UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PermissionRequest', 'Notification', 'Stop', 'SessionEnd']) {
       expect(hooks[name]?.[0]?.hooks[0]).toEqual({ type: 'http', url: launch.hookUrl, timeout: 600 });
     }
+  });
+
+  it('registers SessionStart as a command hook forwarding its stdin to the same hook URL, since the CLI silently drops http hooks for that event', () => {
+    const { settings } = buildClaudeLaunchConfig(launch);
+    const hooks = settings.hooks as Record<string, { hooks: { type: string; command?: string; url?: string }[] }[]>;
+    const sessionStartHook = hooks.SessionStart?.[0]?.hooks[0]!;
+    expect(sessionStartHook.type).toBe('command');
+    expect(sessionStartHook.url).toBeUndefined();
+    expect(sessionStartHook.command).toContain(launch.hookUrl);
+    expect(sessionStartHook.command).toContain('--data-binary @-');
   });
 
   it('configures the openfleet MCP server with the bearer token', () => {
