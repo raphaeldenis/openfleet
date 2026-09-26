@@ -14,26 +14,35 @@ import { NewManagerFormComponent } from '../managers/new-manager-form.component'
   template: `
     <ul class="sessions">
       @for (session of roots(); track session.id) {
-        <li
-          [attr.data-testid]="'session-' + session.id"
-          (click)="onRootClick(session)"
-          [class.closed]="session.state === 'closed'"
-        >
-          <span class="name">{{ session.emoji }} {{ session.name }}</span>
-          <of-state-chip [state]="session.state" />
+        <li>
+          <button
+            type="button"
+            class="row"
+            [attr.data-testid]="'session-' + session.id"
+            [attr.aria-label]="session.name + ' — ' + session.state"
+            (click)="onRootClick(session)"
+            [class.closed]="session.state === 'closed'"
+          >
+            <span class="name">{{ session.emoji }} {{ session.name }}</span>
+            <of-state-chip [state]="session.state" />
+          </button>
         </li>
         @if (managerOf(session.id); as manager) {
           <of-manager-card [manager]="manager" />
         }
         @for (child of childrenOf(session.id); track child.id) {
-          <li
-            class="child"
-            [attr.data-testid]="'session-' + child.id"
-            (click)="selected.emit(child.id)"
-            [class.closed]="child.state === 'closed'"
-          >
-            <span class="name">{{ child.emoji }} {{ child.name }}</span>
-            <of-state-chip [state]="child.state" />
+          <li>
+            <button
+              type="button"
+              class="row child"
+              [attr.data-testid]="'session-' + child.id"
+              [attr.aria-label]="child.name + ' — ' + child.state"
+              (click)="selected.emit(child.id)"
+              [class.closed]="child.state === 'closed'"
+            >
+              <span class="name">{{ child.emoji }} {{ child.name }}</span>
+              <of-state-chip [state]="child.state" />
+            </button>
           </li>
           @if (managerOf(child.id); as childManager) {
             <of-manager-card [manager]="childManager" />
@@ -51,9 +60,14 @@ import { NewManagerFormComponent } from '../managers/new-manager-form.component'
   `,
   styles: `
     .sessions { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column }
-    li { display: flex; align-items: center; justify-content: space-between; gap: .5rem; padding: .4rem .6rem; cursor: pointer }
-    li.closed { opacity: .5 }
-    li.child { padding-left: 1.6rem; margin-left: .75rem; border-left: 1px solid var(--line-2) }
+    .row {
+      display: flex; align-items: center; justify-content: space-between; gap: .5rem;
+      padding: .4rem .6rem; cursor: pointer; width: 100%; border: none; background: none;
+      font: inherit; color: inherit; text-align: left;
+    }
+    .row.closed { opacity: .5 }
+    .row.child { padding-left: 1.6rem; margin-left: .75rem; border-left: 1px solid var(--line-2) }
+    .row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
     form { display: flex; flex-direction: column; gap: .4rem; padding: .6rem }
   `,
 })
@@ -68,7 +82,11 @@ export class SessionListComponent {
 
   // ponytail: one level of indentation (manager -> direct children); recursive grouping if managers-of-managers ships
   roots(): Session[] {
-    return this.events.sessions().filter((s) => !s.parentId);
+    const sessions = this.events.sessions();
+    const sessionIds = new Set(sessions.map((s) => s.id));
+    const hasNoParent = (session: Session) => !session.parentId;
+    const isOrphanedChild = (session: Session) => !!session.parentId && !sessionIds.has(session.parentId);
+    return sessions.filter((session) => hasNoParent(session) || isOrphanedChild(session));
   }
 
   childrenOf(parentId: string): Session[] {

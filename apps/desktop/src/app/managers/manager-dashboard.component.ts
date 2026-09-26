@@ -7,6 +7,8 @@ import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { StateChipComponent } from '../design/state-chip.component';
 import { PulseRingComponent } from '../design/pulse-ring.component';
+import { countdownLabel, countdownSecondsUntil } from './manager-countdown';
+import { PulseNowAction } from './pulse-now';
 
 @Component({
   selector: 'of-manager-dashboard',
@@ -30,10 +32,22 @@ import { PulseRingComponent } from '../design/pulse-ring.component';
           </div>
           <div class="pulse">
             <of-pulse-ring [fractionElapsed]="fractionElapsed()" label="Next pulse" />
-            <span data-testid="manager-dashboard-countdown" class="mono">{{ countdownSeconds() }}s</span>
+            <span data-testid="manager-dashboard-countdown" class="mono">{{ countdownDisplay() }}</span>
           </div>
         }
-        <button type="button" class="of-btn of-btn--primary" data-testid="manager-dashboard-pulse" (click)="pulseNow()">Pulse now</button>
+        <button
+          type="button"
+          class="of-btn of-btn--primary"
+          data-testid="manager-dashboard-pulse"
+          [disabled]="pulse.pending()"
+          (click)="pulseNow()"
+        >Pulse now</button>
+        @if (pulse.message(); as message) {
+          <span
+            data-testid="manager-dashboard-pulse-message"
+            [attr.role]="message.kind === 'error' ? 'alert' : 'status'"
+          >{{ message.text }}</span>
+        }
       </header>
 
       <section class="children">
@@ -89,7 +103,7 @@ import { PulseRingComponent } from '../design/pulse-ring.component';
 export class ManagerDashboardComponent {
   private readonly route = inject(ActivatedRoute);
   private readonly events = inject(FleetEventsService);
-  private readonly api = inject(FleetApiService);
+  protected readonly pulse = new PulseNowAction(inject(FleetApiService));
   private readonly managerId = toSignal(this.route.paramMap.pipe(map((params) => params.get('id') ?? '')), { initialValue: '' });
   private readonly now = signal(Date.now());
 
@@ -112,17 +126,19 @@ export class ManagerDashboardComponent {
 
   protected readonly countdownSeconds = computed(() => {
     const manager = this.manager();
-    if (!manager) return 0;
-    return Math.max(0, Math.round((new Date(manager.nextPulseAt).getTime() - this.now()) / 1000));
+    return manager ? countdownSecondsUntil(manager.nextPulseAt, this.now()) : null;
   });
+
+  protected readonly countdownDisplay = computed(() => countdownLabel(this.countdownSeconds()));
 
   protected readonly fractionElapsed = computed(() => {
     const manager = this.manager();
-    if (!manager || manager.pulseSeconds <= 0) return 0;
-    return Math.min(1, Math.max(0, 1 - this.countdownSeconds() / manager.pulseSeconds));
+    const secondsRemaining = this.countdownSeconds();
+    if (!manager || manager.pulseSeconds <= 0 || secondsRemaining === null) return 0;
+    return Math.min(1, Math.max(0, 1 - secondsRemaining / manager.pulseSeconds));
   });
 
   pulseNow(): void {
-    void this.api.pulseNow(this.managerId());
+    void this.pulse.run(this.managerId());
   }
 }

@@ -80,13 +80,13 @@ describe('SessionListComponent', () => {
     expect(selected).toHaveBeenCalledWith('s1');
   });
 
-  it('renders nothing for a child whose parent is missing from the session list (orphan), so it silently disappears from the sidebar', async () => {
+  it('renders a child whose parent is missing from the session list (orphan) at the root level instead of hiding it', async () => {
     const fake = fakeEvents({
       sessions: [{ id: 'c1', name: 'Gimli', emoji: '⚔️', parentId: 'missing-parent', state: 'idle' }],
     });
     await render(SessionListComponent, { providers: [provideRouter([]), { provide: FleetEventsService, useValue: fake }] });
 
-    expect(screen.queryByTestId('session-c1')).toBeNull();
+    expect(screen.getByTestId('session-c1')).toBeTruthy();
   });
 
   it('renders nothing for a grandchild (a session whose parent is itself a child), pinning the documented one-level-only nesting', async () => {
