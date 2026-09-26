@@ -85,6 +85,8 @@ export class SessionService {
   private readonly outputBuffers = new Map<string, string>();
   private readonly resumeTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly deliveries = new Map<string, Delivery>();
+  // Message ids whose '\r' reached the pty but whose markDelivered has not succeeded yet.
+  private readonly unrecordedDeliveries = new Map<string, string>();
 
   constructor(private readonly deps: SessionServiceDeps) {
     this.repo = new SessionRepository(deps.db);
@@ -259,6 +261,7 @@ export class SessionService {
 
   // ponytail: one message per turn; batch delivery if queues grow
   private typeNextMessage(sessionId: string): void {
+    this.recordDelivery(sessionId);
     const handle = this.liveHandle(sessionId);
     if (!handle) return;
     const message = this.queue.nextPending(sessionId);
@@ -287,10 +290,23 @@ export class SessionService {
     }
     phase.handle.write('\r');
     // The '\r' reached the pty: the delivery is committed, so nothing past this line may lead to a second '\r'.
+    this.unrecordedDeliveries.set(sessionId, phase.messageId);
     const turnStartTimeout = this.schedule(sessionId, TURN_START_TIMEOUT_MS, () => this.stopAwaitingTurnStart(sessionId));
     this.enter(sessionId, { name: 'submitted', messageId: phase.messageId }, turnStartTimeout);
-    this.queue.markDelivered(phase.messageId);
-    this.announceDelivered(sessionId, phase.messageId);
+    try {
+      this.recordDelivery(sessionId);
+    } catch (err) {
+      console.error(`delivery: session ${sessionId} submitted message ${phase.messageId}, recording it failed and is retried before the next message`, err);
+    }
+  }
+
+  // Throws while the db refuses the write; typeNextMessage retries it first, so the submitted body is never retyped.
+  private recordDelivery(sessionId: string): void {
+    const messageId = this.unrecordedDeliveries.get(sessionId);
+    if (messageId === undefined) return;
+    this.queue.markDelivered(messageId);
+    this.unrecordedDeliveries.delete(sessionId);
+    this.announceDelivered(sessionId, messageId);
   }
 
   // A failing listener (e.g. a WS client on a closing socket) is not a delivery failure: it never feeds the retry.

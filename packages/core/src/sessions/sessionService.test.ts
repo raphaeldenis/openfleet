@@ -4,6 +4,7 @@ import { FakeHandle, FakeHarness } from '../harness/fakeHarness.js';
 import type { Harness, HarnessHandle, HarnessLaunch } from '../harness/harness.js';
 import { EventBus } from '../events/eventBus.js';
 import { DEFAULT_CLOSE_ESCALATE_MS, DELIVERY_RETRY_MS, MAX_DELIVERY_RETRIES, PARKED_RETRY_MS, RESUME_LAUNCH_FAILED_EXIT_CODE, RESUME_TIMEOUT_EXIT_CODE, SessionService, SUBMIT_KEYSTROKE_DELAY_MS, TURN_START_TIMEOUT_MS } from './sessionService.js';
+import { MessageQueue } from './messageQueue.js';
 import { SessionRepository } from './sessionRepository.js';
 import type { ServerEvent } from '@openfleet/shared';
 
@@ -642,7 +643,7 @@ describe('SessionService.updateModel', () => {
 });
 
 describe('SessionService submit-keystroke hostile cases', () => {
-  afterEach(() => vi.useRealTimers());
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
   it('a send to a different session is not blocked by another session\'s pending submit keystroke', async () => {
     vi.useFakeTimers();
@@ -886,6 +887,61 @@ describe('SessionService submit-keystroke hostile cases', () => {
     expect(events.filter((e) => e.type === 'message.delivered')).toHaveLength(1);
     expect(service.hasQueuedMessage(session.id, 'do X')).toBe(false);
     expect(listenerFailureLogs).toBe(1);
+  });
+
+  it('never retypes a submitted message whose delivery record fails once: the record is retried, then the queue flows on', async () => {
+    vi.useFakeTimers();
+    const { service, harness, events } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+    const originalMarkDelivered = MessageQueue.prototype.markDelivered;
+    let recordsToFail = 1;
+    const markDeliveredSpy = vi.spyOn(MessageQueue.prototype, 'markDelivered').mockImplementation(function (this: MessageQueue, id) {
+      if (recordsToFail > 0) { recordsToFail -= 1; throw new Error('SQLITE_BUSY'); }
+      originalMarkDelivered.call(this, id);
+    });
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const first = service.sendMessage({ sessionId: session.id, body: 'do X' });
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
+    const second = service.sendMessage({ sessionId: session.id, body: 'do Y' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit' }));
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'Stop' }));
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
+
+    const deliveredIds = events.flatMap((e) => (e.type === 'message.delivered' ? [e.messageId] : []));
+    expect(harness.handles[0]!.written).toEqual(['do X', '\r', 'do Y', '\r']);
+    expect(deliveredIds).toEqual([first.messageId, second.messageId]);
+    expect(service.hasQueuedMessage(session.id, 'do X')).toBe(false);
+    markDeliveredSpy.mockRestore();
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('never retypes a submitted message whose delivery record keeps failing: the session parks on a timer with bounded logs, then flows once the db heals', async () => {
+    vi.useFakeTimers();
+    const { service, harness, events } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+    const markDeliveredSpy = vi.spyOn(MessageQueue.prototype, 'markDelivered').mockImplementation(() => { throw new Error('SQLITE_BUSY'); });
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    service.sendMessage({ sessionId: session.id, body: 'do X' });
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
+    service.sendMessage({ sessionId: session.id, body: 'do Y' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit' }));
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'Stop' }));
+    await vi.advanceTimersByTimeAsync(DELIVERY_RETRY_MS * (MAX_DELIVERY_RETRIES + 2) + PARKED_RETRY_MS * 2);
+
+    expect(harness.handles[0]!.written).toEqual(['do X', '\r']);
+    expect(events.filter((e) => e.type === 'message.delivered')).toHaveLength(0);
+    expect(vi.getTimerCount()).toBe(1); // parked, not stuck
+    expect(consoleErrorSpy).toHaveBeenCalledTimes(2); // the failed record, then one failure streak
+
+    markDeliveredSpy.mockRestore();
+    await vi.advanceTimersByTimeAsync(PARKED_RETRY_MS + SUBMIT_KEYSTROKE_DELAY_MS);
+    expect(harness.handles[0]!.written).toEqual(['do X', '\r', 'do Y', '\r']);
+    expect(events.filter((e) => e.type === 'message.delivered')).toHaveLength(2);
+    consoleErrorSpy.mockRestore();
   });
 
   it('does not crash the daemon when typing the body throws, and types it once the retry delay elapses', async () => {
