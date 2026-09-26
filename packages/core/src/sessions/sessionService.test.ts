@@ -640,3 +640,151 @@ describe('SessionService.updateModel', () => {
     expect(harness.handles[0]!.written).toEqual([]);
   });
 });
+
+describe('SessionService submit-keystroke hostile cases', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('a send to a different session is not blocked by another session\'s pending submit keystroke', async () => {
+    vi.useFakeTimers();
+    const { service, harness } = setup();
+    const sessionA = await service.create({ directory: '/tmp', name: 'A', harness: 'fake', emoji: '🅰️' });
+    const sessionB = await service.create({ directory: '/tmp', name: 'B', harness: 'fake', emoji: '🅱️' });
+    service.applyInput(sessionA.id, hook(sessionA.id, { hook_event_name: 'SessionStart' }));
+    service.applyInput(sessionB.id, hook(sessionB.id, { hook_event_name: 'SessionStart' }));
+
+    service.sendMessage({ sessionId: sessionA.id, body: 'first' }); // leaves A's submit keystroke pending
+    const resultB = service.sendMessage({ sessionId: sessionB.id, body: 'second' });
+
+    expect(resultB.status).toBe('delivered');
+    expect(harness.handles[1]!.written).toEqual(['second']);
+  });
+
+  it('a raw write during the pending delay (e.g. an Escape interrupt) does not cancel the delayed submit keystroke, which still lands after whatever the raw write left behind', async () => {
+    vi.useFakeTimers();
+    const { service, harness, events } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+
+    service.sendMessage({ sessionId: session.id, body: 'do X' });
+    service.writeRaw(session.id, '\x1b'); // human presses Escape mid-delay
+    expect(harness.handles[0]!.written).toEqual(['do X', '\x1b']);
+
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
+
+    // Pinning actual behaviour: the delayed '\r' is unconditional on what happened to the composer in
+    // between, so it lands right after the Escape and the message is still reported delivered.
+    expect(harness.handles[0]!.written).toEqual(['do X', '\x1b', '\r']);
+    expect(events.filter((e) => e.type === 'message.delivered')).toHaveLength(1);
+  });
+
+  it('a raw \\r from the human (e.g. POST /api/sessions/:id/input, double-pressing Enter) during the delay lands as its own keystroke, so the later delayed submit double-submits', async () => {
+    vi.useFakeTimers();
+    const { service, harness, events } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+
+    service.sendMessage({ sessionId: session.id, body: 'do X' });
+    service.writeRaw(session.id, '\r'); // restHandlers.ts POST /input forwards raw bytes straight to writeRaw
+    expect(harness.handles[0]!.written).toEqual(['do X', '\r']);
+
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
+
+    // Pinning actual behaviour: two '\r' writes reach the pty for one logical message. The queue
+    // bookkeeping itself stays correct (delivered exactly once) even though the pty sees a double-submit.
+    expect(harness.handles[0]!.written).toEqual(['do X', '\r', '\r']);
+    expect(events.filter((e) => e.type === 'message.delivered')).toHaveLength(1);
+  });
+
+  it('a same-session updateModel while a first message\'s submit keystroke is still pending queues behind it, instead of typing mid-body', async () => {
+    vi.useFakeTimers();
+    const { service, harness } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+
+    service.sendMessage({ sessionId: session.id, body: 'first' });
+    const modelSwitch = service.updateModel(session.id, 'claude-opus-5-5');
+
+    expect(modelSwitch.status).toBe('queued'); // session.state is still 'idle' — only the pending timer blocks this
+    expect(harness.handles[0]!.written).toEqual(['first']);
+    expect(service.get(session.id)!.model).toBe('claude-opus-5-5'); // recorded immediately regardless of delivery
+
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
+    expect(harness.handles[0]!.written).toEqual(['first', '\r']);
+
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit' }));
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'Stop' }));
+    expect(harness.handles[0]!.written).toEqual(['first', '\r', '/model claude-opus-5-5']);
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
+    expect(harness.handles[0]!.written).toEqual(['first', '\r', '/model claude-opus-5-5', '\r']);
+  });
+
+  it('the submit delay does not scale with body length: a very long body still waits exactly SUBMIT_KEYSTROKE_DELAY_MS', async () => {
+    vi.useFakeTimers();
+    const { service, harness } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+
+    const longBody = 'x'.repeat(50_000);
+    service.sendMessage({ sessionId: session.id, body: longBody });
+
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS - 1);
+    expect(harness.handles[0]!.written).toEqual([longBody]); // '\r' not due yet, however long the body
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(harness.handles[0]!.written).toEqual([longBody, '\r']);
+  });
+
+  it('writes the delayed submit keystroke even if the session has moved to "generating" before the delay elapses', async () => {
+    vi.useFakeTimers();
+    const { service, harness, events } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+
+    service.sendMessage({ sessionId: session.id, body: 'first' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit' })); // e.g. a stray/duplicated hook
+    expect(service.get(session.id)!.state).toBe('generating');
+
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
+
+    // Pinning actual behaviour: deliver()'s timer only checks handle identity, never the session's
+    // current state, so the '\r' still lands and the message is still marked delivered.
+    expect(harness.handles[0]!.written).toEqual(['first', '\r']);
+    expect(events.filter((e) => e.type === 'message.delivered')).toHaveLength(1);
+  });
+
+  it('PRODUCTION DEFECT (see report): a daemon restart mid-delay double-delivers the same message and double-emits message.delivered, because deliver()\'s stale-handle guard checks the instance-local handles map instead of the module-level activeHandleBySessionId map the exit path already uses for this exact race', async () => {
+    vi.useFakeTimers();
+    const db = openDatabase(':memory:');
+    const bus = new EventBus();
+    const events: ServerEvent[] = [];
+    bus.subscribe((e) => events.push(e));
+    const firstRunHarness = new FakeHarness();
+    const original = new SessionService({ db, bus, harnesses: [firstRunHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+    const session = await original.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    original.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+    const { messageId } = original.sendMessage({ sessionId: session.id, body: 'orphaned' });
+    const staleHandle = firstRunHarness.handles[0]!;
+    expect(staleHandle.written).toEqual(['orphaned']);
+
+    // Daemon restarts before the stale process's own delayed '\r' has fired — the exact race the
+    // resume tests above already model by keeping both instances alive over the same db.
+    const restartHarness = new FakeHarness();
+    const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+    await restarted.resumeAll();
+    restarted.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+
+    // The message row is still 'queued' (the stale timer hasn't marked it delivered yet), so the
+    // resumed instance's own flush redelivers the same body to the fresh handle immediately.
+    const resumedHandle = restartHarness.handles[0]!;
+    expect(resumedHandle.written).toEqual(['orphaned']);
+
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
+
+    // Both the dead process's stale handle AND the resumed handle receive the submit keystroke for
+    // the SAME messageId, and message.delivered fires twice for one message.
+    expect(staleHandle.written).toEqual(['orphaned', '\r']);
+    expect(resumedHandle.written).toEqual(['orphaned', '\r']);
+    const deliveredForThisMessage = events.filter((e) => e.type === 'message.delivered' && e.messageId === messageId);
+    expect(deliveredForThisMessage).toHaveLength(2);
+  });
+});
