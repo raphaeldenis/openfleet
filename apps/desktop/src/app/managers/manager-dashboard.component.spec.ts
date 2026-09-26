@@ -67,4 +67,56 @@ describe('ManagerDashboardComponent', () => {
     });
     expect(screen.getByTestId('manager-dashboard-governance-notice')).toHaveTextContent('coming');
   });
+
+  it('disables "Pulse now" while a pulse request is pending, so a slow response cannot be double-fired', async () => {
+    let resolvePulse!: () => void;
+    const api = { pulseNow: vi.fn(() => new Promise<void>((resolve) => { resolvePulse = resolve; })) };
+    const fake = fakeEvents({ sessions: [MANAGER_SESSION], managers: [MANAGER_VIEW] });
+    await render(ManagerDashboardComponent, {
+      providers: [
+        { provide: ActivatedRoute, useValue: activatedRouteFor('m1') },
+        { provide: FleetApiService, useValue: api },
+        { provide: FleetEventsService, useValue: fake },
+      ],
+    });
+
+    await userEvent.click(screen.getByTestId('manager-dashboard-pulse'));
+    expect(screen.getByTestId('manager-dashboard-pulse')).toBeDisabled();
+
+    resolvePulse();
+  });
+
+  it('shows an error message, not a silent failure, when the pulse request is rejected (e.g. a closed session)', async () => {
+    const api = { pulseNow: vi.fn().mockRejectedValue(new Error('POST /api/managers/m1/pulse → 409')) };
+    const fake = fakeEvents({ sessions: [MANAGER_SESSION], managers: [MANAGER_VIEW] });
+    await render(ManagerDashboardComponent, {
+      providers: [
+        { provide: ActivatedRoute, useValue: activatedRouteFor('m1') },
+        { provide: FleetApiService, useValue: api },
+        { provide: FleetEventsService, useValue: fake },
+      ],
+    });
+
+    await userEvent.click(screen.getByTestId('manager-dashboard-pulse'));
+
+    expect(screen.getByTestId('manager-dashboard-pulse-message')).toBeTruthy();
+  });
+
+  it('lets a keyboard-only user Tab to "Pulse now" and activate it with Enter', async () => {
+    const api = { pulseNow: vi.fn().mockResolvedValue({}) };
+    const fake = fakeEvents({ sessions: [MANAGER_SESSION], managers: [MANAGER_VIEW] });
+    await render(ManagerDashboardComponent, {
+      providers: [
+        { provide: ActivatedRoute, useValue: activatedRouteFor('m1') },
+        { provide: FleetApiService, useValue: api },
+        { provide: FleetEventsService, useValue: fake },
+      ],
+    });
+
+    await userEvent.tab();
+    expect(screen.getByTestId('manager-dashboard-pulse')).toHaveFocus();
+    await userEvent.keyboard('{Enter}');
+
+    expect(api.pulseNow).toHaveBeenCalledWith('m1');
+  });
 });

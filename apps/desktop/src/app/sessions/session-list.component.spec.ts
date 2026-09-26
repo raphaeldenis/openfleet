@@ -79,4 +79,40 @@ describe('SessionListComponent', () => {
 
     expect(selected).toHaveBeenCalledWith('s1');
   });
+
+  it('renders nothing for a child whose parent is missing from the session list (orphan), so it silently disappears from the sidebar', async () => {
+    const fake = fakeEvents({
+      sessions: [{ id: 'c1', name: 'Gimli', emoji: '⚔️', parentId: 'missing-parent', state: 'idle' }],
+    });
+    await render(SessionListComponent, { providers: [provideRouter([]), { provide: FleetEventsService, useValue: fake }] });
+
+    expect(screen.queryByTestId('session-c1')).toBeNull();
+  });
+
+  it('renders nothing for a grandchild (a session whose parent is itself a child), pinning the documented one-level-only nesting', async () => {
+    const fake = fakeEvents({
+      sessions: [
+        { id: 'm1', name: 'Lead', emoji: '🧭', role: 'manager', state: 'idle' },
+        { id: 'c1', name: 'Gimli', emoji: '⚔️', parentId: 'm1', state: 'idle' },
+        { id: 'g1', name: 'Legolas', emoji: '🏹', parentId: 'c1', state: 'idle' },
+      ],
+    });
+    await render(SessionListComponent, { providers: [provideRouter([]), { provide: FleetEventsService, useValue: fake }] });
+
+    expect(screen.getByTestId('session-c1')).toBeTruthy();
+    expect(screen.queryByTestId('session-g1')).toBeNull();
+  });
+
+  it('lets a keyboard-only user Tab to a session row and open it with Enter', async () => {
+    const fake = fakeEvents({ sessions: [{ id: 's1', name: 'Gimli', emoji: '⚔️', state: 'idle' }] });
+    const { fixture } = await render(SessionListComponent, { providers: [provideRouter([]), { provide: FleetEventsService, useValue: fake }] });
+    const selected = vi.fn();
+    fixture.componentInstance.selected.subscribe(selected);
+
+    await userEvent.tab();
+    expect(screen.getByTestId('session-s1')).toHaveFocus();
+    await userEvent.keyboard('{Enter}');
+
+    expect(selected).toHaveBeenCalledWith('s1');
+  });
 });

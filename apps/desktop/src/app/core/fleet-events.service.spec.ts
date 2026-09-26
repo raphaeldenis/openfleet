@@ -142,6 +142,15 @@ describe('FleetEventsService managers', () => {
     socket.dispatchMessage({ type: 'manager.pulsed', manager: manager('m1', { nextPulseAt: 'later', childrenCount: 1 }) });
     expect(service.managers()).toEqual([manager('m1', { nextPulseAt: 'later', childrenCount: 1 })]);
   });
+
+  it('adds a manager announced by manager.pulsed that the client has not seen before, instead of dropping the event', () => {
+    const service = new FleetEventsService();
+    service.connect();
+    const socket = FakeWebSocket.instances[0]!;
+    socket.dispatchMessage({ type: 'snapshot', sessions: [], approvals: [], managers: [] });
+    socket.dispatchMessage({ type: 'manager.pulsed', manager: manager('unseen') });
+    expect(service.managers()).toEqual([manager('unseen')]);
+  });
 });
 
 describe('FleetEventsService reconnect', () => {
