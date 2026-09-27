@@ -1,7 +1,6 @@
-import { ChangeDetectionStrategy, Component, effect, inject, input, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, effect, inject, input, signal, type WritableSignal } from '@angular/core';
 import type { Session } from '@openfleet/shared';
 import { FleetApiService } from '../core/fleet-api.service';
-import { runGuarded } from '../core/run-guarded';
 import { StateChipComponent } from '../design/state-chip.component';
 import { ModelSelectorComponent } from './model-selector.component';
 import { PermissionModePickerComponent } from './permission-mode-picker.component';
@@ -81,7 +80,10 @@ export class SessionHeaderComponent {
   private readonly api = inject(FleetApiService);
   protected readonly exitCodeLabel = exitCodeLabel;
   protected readonly modelSwitchPending = signal(false);
-  protected readonly renaming = signal(false);
+  // Separate busy flags: a name edit and an emoji edit are independent requests, so one in flight
+  // must not guard-block the other.
+  protected readonly renamingName = signal(false);
+  protected readonly renamingEmoji = signal(false);
   protected readonly renameError = signal<string | null>(null);
   // `session` carries a fresh object on every field update (state, model, …), not only on a real
   // session switch — tracking the last-seen id keeps the reset below from firing on every one of
@@ -95,7 +97,8 @@ export class SessionHeaderComponent {
       const id = this.session().id;
       if (id === this.lastSessionId) return;
       this.lastSessionId = id;
-      this.renaming.set(false);
+      this.renamingName.set(false);
+      this.renamingEmoji.set(false);
       this.renameError.set(null);
     });
   }
@@ -103,13 +106,13 @@ export class SessionHeaderComponent {
   renameName(value: string): void {
     const trimmed = value.trim();
     if (!trimmed || trimmed === this.session().name) return;
-    void this.rename({ name: trimmed });
+    void this.rename({ name: trimmed }, this.renamingName);
   }
 
   renameEmoji(value: string): void {
     const trimmed = value.trim();
     if (!trimmed || trimmed === this.session().emoji) return;
-    void this.rename({ emoji: trimmed });
+    void this.rename({ emoji: trimmed }, this.renamingEmoji);
   }
 
   protected cancelNameEdit(input: HTMLInputElement): void {
@@ -122,10 +125,24 @@ export class SessionHeaderComponent {
     input.blur();
   }
 
-  private async rename(patch: { name?: string; emoji?: string }): Promise<void> {
+  // Ignores a rename response for a session the user has since navigated away from: no error shown, and
+  // (unlike runGuarded) no busy-flag reset — this component instance is reused across a route param
+  // change, so `busy`/`renameError` already belong to whichever session is current by the time this
+  // settles, and a stale settle must not touch state that may now belong to that session's own in-flight rename.
+  private async rename(patch: { name?: string; emoji?: string }, busy: WritableSignal<boolean>): Promise<void> {
+    if (busy()) return;
     const sessionId = this.session().id;
-    await runGuarded(this.renaming, this.renameError, RENAME_ERROR, async () => {
+    busy.set(true);
+    this.renameError.set(null);
+    try {
       await this.api.renameSession(sessionId, patch);
-    });
+    } catch {
+      if (this.session().id !== sessionId) return;
+      this.renameError.set(RENAME_ERROR);
+      busy.set(false);
+      return;
+    }
+    if (this.session().id !== sessionId) return;
+    busy.set(false);
   }
 }

@@ -219,6 +219,61 @@ describe('SessionHeaderComponent', () => {
     await waitFor(() => expect(screen.getByTestId('session-rename-error')).toHaveTextContent(/could not rename/i));
   });
 
+  it('a rename request for a previous session settling late does not surface its error on the new session, nor release the new session\'s own busy flag', async () => {
+    const sessionA = baseSession({ id: 's1', name: 'Gimli' });
+    const sessionB = baseSession({ id: 's2', name: 'Legolas' });
+    const currentSession = signal<Session>(sessionA);
+    let rejectA: (reason?: unknown) => void = () => {};
+    let resolveB: (value: unknown) => void = () => {};
+    const renameSession = vi.fn()
+      .mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectA = reject; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveB = resolve; }));
+    const api = fakeApi({ renameSession });
+    const { fixture } = await render(SessionHeaderComponent, { bindings: [inputBinding('session', currentSession)], providers: providersFor(sessionA, api) });
+    const nameInput = screen.getByTestId('session-name-input') as HTMLInputElement;
+
+    fireEvent.change(nameInput, { target: { value: 'Gimli renamed' } }); // session A's rename is now in flight, unresolved
+
+    currentSession.set(sessionB);
+    await waitFor(() => expect((screen.getByTestId('session-name-input') as HTMLInputElement).value).toBe('Legolas'));
+
+    fireEvent.change(nameInput, { target: { value: 'Legolas renamed' } }); // session B's own rename, also in flight
+    await waitFor(() => expect(renameSession).toHaveBeenCalledTimes(2));
+
+    rejectA(new Error('boom'));
+    // Let session A's rejected promise unwind through every `await` hop before asserting.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await fixture.whenStable();
+
+    expect(screen.queryByTestId('session-rename-error')).toBeNull();
+
+    // B's own in-flight request must still be tracked as busy: a second commit is guarded, not sent.
+    fireEvent.change(nameInput, { target: { value: 'Legolas renamed again' } });
+    expect(renameSession).toHaveBeenCalledTimes(2);
+
+    resolveB({});
+  });
+
+  it('renaming the name field does not block a concurrent emoji edit — separate busy flags', async () => {
+    let resolveNameRename: (value: unknown) => void = () => {};
+    const renameSession = vi.fn(() => new Promise((resolve) => { resolveNameRename = resolve; }));
+    const api = fakeApi({ renameSession });
+    const session = baseSession();
+    await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session, api) });
+    const nameInput = screen.getByTestId('session-name-input') as HTMLInputElement;
+    const emojiInput = screen.getByTestId('session-emoji-input') as HTMLInputElement;
+
+    fireEvent.change(nameInput, { target: { value: 'Gimli renamed' } }); // name rename in flight, unresolved
+
+    fireEvent.change(emojiInput, { target: { value: '🦉' } }); // must still go through on its own busy flag
+
+    await waitFor(() => expect(renameSession).toHaveBeenCalledTimes(2));
+    expect(renameSession).toHaveBeenCalledWith('s1', { name: 'Gimli renamed' });
+    expect(renameSession).toHaveBeenCalledWith('s1', { emoji: '🦉' });
+
+    resolveNameRename({});
+  });
+
   it('shows the exit code next to the chip once the session is closed', async () => {
     const session = baseSession({ state: 'closed', exitCode: 1 });
     await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });

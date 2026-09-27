@@ -125,6 +125,48 @@ describe('SessionViewComponent', () => {
     await waitFor(() => expect(screen.queryByTestId('resume-error')).toBeNull());
   });
 
+  it('a resume request for a previous session settling late does not surface its error on the new session, nor release the new session\'s own busy flag', async () => {
+    const sessionId = signal('s1');
+    let rejectA: (reason?: unknown) => void = () => {};
+    let resolveB: (value: unknown) => void = () => {};
+    const api = fakeApi();
+    api.reopenSession = vi.fn()
+      .mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectA = reject; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveB = resolve; }));
+    const { fixture } = await render(SessionViewComponent, {
+      bindings: [inputBinding('sessionId', sessionId)],
+      providers: [
+        { provide: FleetApiService, useValue: api },
+        {
+          provide: FleetEventsService,
+          useValue: fakeEvents([session({ id: 's1', state: 'closed', exitCode: 0 }), session({ id: 's2', name: 'Legolas', state: 'closed', exitCode: 0 })]),
+        },
+      ],
+    });
+
+    await userEvent.click(screen.getByTestId('resume-session')); // session A's resume is now in flight, unresolved
+
+    sessionId.set('s2');
+    await fixture.whenStable();
+    const resumeButton = screen.getByTestId('resume-session') as HTMLButtonElement;
+    expect(resumeButton.disabled).toBe(false);
+
+    await userEvent.click(resumeButton); // session B's own resume, also in flight
+    expect(resumeButton.disabled).toBe(true);
+
+    rejectA(new ApiError(409, 'boom', 'not_closed'));
+    // Let session A's rejected promise unwind through every `await` hop (action → runGuarded → resume)
+    // before asserting — a single microtask flush is not enough to reach the catch/finally.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await fixture.whenStable();
+
+    expect(screen.queryByTestId('resume-error')).toBeNull();
+    expect(resumeButton.disabled).toBe(true); // B's own in-flight request must still be tracked as busy
+
+    resolveB({});
+    await waitFor(() => expect(resumeButton.disabled).toBe(false));
+  });
+
   it.each([
     ['not_closed', 'This session is not closed — nothing to resume.'],
     ['directory_missing', "This session's directory no longer exists — nothing to resume into."],
