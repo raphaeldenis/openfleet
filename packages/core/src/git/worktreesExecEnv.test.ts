@@ -34,4 +34,23 @@ describe('git subprocess environment', () => {
       expect(options.env?.PATH).toBe(process.env.PATH);
     }
   });
+
+  it('runs every git subprocess with an env scrubbed of repository-location vars, keeping PATH', async () => {
+    process.env.GIT_DIR = '/decoy/.git';
+    process.env.GIT_WORK_TREE = '/decoy';
+    try {
+      await createWorktree({ repoPath: '/repo', branchName: 'feature/y', worktreesRoot: '/worktrees-does-not-exist' });
+    } finally {
+      delete process.env.GIT_DIR;
+      delete process.env.GIT_WORK_TREE;
+    }
+
+    expect(execFileCalls.length).toBeGreaterThan(0);
+    for (const { options } of execFileCalls) {
+      expect(options.env).toBeDefined();
+      expect(options.env?.GIT_DIR).toBeUndefined();
+      expect(options.env?.GIT_WORK_TREE).toBeUndefined();
+      expect(options.env?.PATH).toBe(process.env.PATH);
+    }
+  });
 });

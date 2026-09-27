@@ -17,13 +17,15 @@ import { ManagerRepository } from '../managers/managerRepository.js';
 import { ManagerService } from '../managers/managerService.js';
 import { PulseScheduler } from '../managers/pulseScheduler.js';
 import { DEFAULT_MODEL_TABLE } from '../models.js';
+import { childEnvironment } from '../process/childEnvironment.js';
 import { SessionService } from '../sessions/sessionService.js';
 import { createMcpHandler } from './mcpServer.js';
 
 function makeRepo(): string {
   const dir = mkdtempSync(join(tmpdir(), 'of-repo-'));
-  execFileSync('git', ['init', '-b', 'main'], { cwd: dir });
-  execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '--allow-empty', '-m', 'init'], { cwd: dir });
+  const env = childEnvironment(process.env);
+  execFileSync('git', ['init', '-b', 'main'], { cwd: dir, env });
+  execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '--allow-empty', '-m', 'init'], { cwd: dir, env });
   return dir;
 }
 

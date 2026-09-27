@@ -110,6 +110,29 @@ describe('childEnvironment', () => {
     expect(childEnvironment(parentEnv)).toEqual({ SCAPE_THEME: 'dark' });
   });
 
+  it('drops every git repository-location var, so a git child cannot be redirected to another repo', () => {
+    const parentEnv = {
+      GIT_DIR: '/some/other/repo/.git',
+      GIT_WORK_TREE: '/some/other/repo',
+      GIT_INDEX_FILE: '/some/other/repo/.git/index',
+      GIT_COMMON_DIR: '/some/other/repo/.git',
+      GIT_OBJECT_DIRECTORY: '/some/other/repo/.git/objects',
+      GIT_ALTERNATE_OBJECT_DIRECTORIES: '/some/other/repo/.git/objects',
+      GIT_NAMESPACE: 'ns',
+      GIT_CEILING_DIRECTORIES: '/some',
+      GIT_PREFIX: 'sub/',
+      PATH: '/usr/bin',
+    };
+
+    expect(childEnvironment(parentEnv)).toEqual({ PATH: '/usr/bin' });
+  });
+
+  it('keeps git configuration vars, which are not repository-location vars', () => {
+    const parentEnv = { GIT_SSH_COMMAND: 'ssh -i key', GIT_AUTHOR_NAME: 'a', GIT_AUTHOR_EMAIL: 'a@a', GIT_EDITOR: 'vim' };
+
+    expect(childEnvironment(parentEnv)).toEqual(parentEnv);
+  });
+
   it('drops every marker from both the Claude Code and Scape families in one call, while keeping near-miss and case-variant names', () => {
     const parentEnv = {
       CLAUDECODE: '1',

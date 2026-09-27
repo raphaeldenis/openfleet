@@ -3,12 +3,14 @@ import { chmodSync, mkdirSync, mkdtempSync, existsSync, readFileSync, symlinkSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { childEnvironment } from '../process/childEnvironment.js';
 import { createWorktree, isPathWithin, sameGitRepository, WorktreeError } from './worktrees.js';
 
 function makeRepo(): string {
   const dir = mkdtempSync(join(tmpdir(), 'of-repo-'));
-  execFileSync('git', ['init', '-b', 'main'], { cwd: dir });
-  execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '--allow-empty', '-m', 'init'], { cwd: dir });
+  const env = childEnvironment(process.env);
+  execFileSync('git', ['init', '-b', 'main'], { cwd: dir, env });
+  execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '--allow-empty', '-m', 'init'], { cwd: dir, env });
   return dir;
 }
 
@@ -62,6 +64,22 @@ describe('createWorktree', () => {
     expect(hookEnv).not.toContain('SCAPE_EDIT_CAP');
     expect(hookEnv).not.toContain('CLAUDECODE');
     expect(hookEnv).toContain('PATH=');
+  });
+
+  it('creating a fresh temp repo through the test helper does not redirect a decoy repo named by the caller\'s GIT_DIR/GIT_WORK_TREE', () => {
+    const decoyRepo = makeRepo();
+    process.env.GIT_DIR = join(decoyRepo, '.git');
+    process.env.GIT_WORK_TREE = mkdtempSync(join(tmpdir(), 'of-decoy-worktree-'));
+    let targetRepo: string;
+    try {
+      targetRepo = makeRepo();
+    } finally {
+      delete process.env.GIT_DIR;
+      delete process.env.GIT_WORK_TREE;
+    }
+
+    expect(() => execFileSync('git', ['config', '--get', 'core.worktree'], { cwd: decoyRepo })).toThrow();
+    expect(existsSync(join(targetRepo, '.git'))).toBe(true);
   });
 });
 

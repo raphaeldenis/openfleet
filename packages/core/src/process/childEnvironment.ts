@@ -29,8 +29,26 @@ const SESSION_MARKERS = new Set([
   'SCAPE_APP',
 ]);
 
+// ponytail: a git subprocess started with one of these set operates on the repository they name
+// instead of the one implied by its own cwd argument — that's how a test's throwaway `git init`
+// once redirected a shared checkout's worktree (see git/worktrees.test.ts). Location only, never
+// configuration a git child should keep (GIT_SSH_COMMAND, GIT_AUTHOR_*, GIT_EDITOR, …).
+const GIT_REPOSITORY_LOCATION_VARS = new Set([
+  'GIT_DIR',
+  'GIT_WORK_TREE',
+  'GIT_INDEX_FILE',
+  'GIT_COMMON_DIR',
+  'GIT_OBJECT_DIRECTORY',
+  'GIT_ALTERNATE_OBJECT_DIRECTORIES',
+  'GIT_NAMESPACE',
+  'GIT_CEILING_DIRECTORIES',
+  'GIT_PREFIX',
+]);
+
 export function childEnvironment(parentEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return Object.fromEntries(
-    Object.entries(parentEnv).filter(([name, value]) => value !== undefined && !SESSION_MARKERS.has(name)),
+    Object.entries(parentEnv).filter(
+      ([name, value]) => value !== undefined && !SESSION_MARKERS.has(name) && !GIT_REPOSITORY_LOCATION_VARS.has(name),
+    ),
   );
 }
