@@ -1,6 +1,6 @@
 import { accessSync, constants, existsSync, lstatSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, sep } from 'node:path';
+import { dirname, join, sep } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import type { PermissionMode, Session, SessionSpec } from '@openfleet/shared';
 import { EventBus } from '../events/eventBus.js';
@@ -131,14 +131,17 @@ function claudeProjectsDir(): string {
 
 // A session's own hook payload names its own transcript_path — a prompt-injected or hostile CLI could
 // report any file there (e.g. /etc/hosts) and have the daemon start tailing it. Trust only a path that
-// ends in .jsonl and resolves, symlinks included, under the Claude projects directory the daemon's own
-// environment implies. Never throws: a missing file or missing projects directory is just "untrusted".
+// ends in .jsonl and whose directory resolves, symlinks included, under the Claude projects directory
+// the daemon's own environment implies. The transcript file itself need not exist yet: the CLI's own
+// UserPromptSubmit hook can report transcript_path before it has created that file, and realpath-ing
+// the file (rather than its directory) would reject a legitimate path just because it's early. Never
+// throws: a missing file, missing directory, or missing projects directory is just "untrusted".
 function isTrustedTranscriptPath(path: string): boolean {
   if (!path.endsWith('.jsonl')) return false;
   try {
-    const resolvedPath = realpathSync(path);
+    const resolvedDir = realpathSync(dirname(path));
     const resolvedProjectsDir = realpathSync(claudeProjectsDir());
-    return resolvedPath.startsWith(resolvedProjectsDir + sep);
+    return resolvedDir === resolvedProjectsDir || resolvedDir.startsWith(resolvedProjectsDir + sep);
   } catch {
     return false;
   }
@@ -525,11 +528,14 @@ export class SessionService {
     if (!session || session.state !== 'generating') return;
     const transcriptPath = this.transcriptPaths.get(sessionId);
     if (!transcriptPath) return;
-    let offset: number;
+    // A trusted transcript_path can still name a file the CLI hasn't created yet (its own UserPromptSubmit
+    // hook can fire before the write) — start the offset at 0 so the first poll picks up the whole file
+    // once it exists, rather than refusing to arm at all.
+    let offset = 0;
     try {
       offset = statSync(transcriptPath).size;
     } catch {
-      return; // no transcript file yet to tail
+      // no transcript file yet; poll from offset 0 once it's created
     }
     const timer = setInterval(() => this.pollInterruptWatch(sessionId), TRANSCRIPT_INTERRUPT_POLL_MS);
     const timeout = setTimeout(() => this.disarmInterruptWatch(sessionId), TRANSCRIPT_INTERRUPT_TIMEOUT_MS);

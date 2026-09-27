@@ -1561,6 +1561,68 @@ describe('SessionService submit-keystroke hostile cases', () => {
       expect(vi.getTimerCount()).toBe(timersBeforeEsc); // the untrusted path was never remembered, so nothing armed
     });
 
+    // A real CLI's own UserPromptSubmit hook can report its transcript_path before the CLI has created that
+    // file — the daemon must trust the path by its directory, not by realpath-ing a file that doesn't exist yet.
+    function reservedTranscriptPath(): string {
+      const configDir = mkdtempSync(join(tmpdir(), 'of-claude-config-'));
+      process.env.CLAUDE_CONFIG_DIR = configDir;
+      const projectDir = join(configDir, 'projects', 'proj');
+      mkdirSync(projectDir, { recursive: true });
+      return join(projectDir, 'transcript.jsonl'); // path is reserved, no file created here
+    }
+
+    it('arms the watch on a transcript_path whose file does not exist yet, and catches the marker once the CLI creates it', async () => {
+      vi.useFakeTimers();
+      const { service } = setup();
+      const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+      const transcriptPath = reservedTranscriptPath();
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: transcriptPath }));
+      expect(service.get(session.id)!.state).toBe('generating');
+
+      service.writeRaw(session.id, '\x1b');
+      writeFileSync(transcriptPath, interruptedLine()); // the CLI creates the file only now, after the ESC
+      await vi.advanceTimersByTimeAsync(TRANSCRIPT_INTERRUPT_POLL_MS);
+
+      expect(service.get(session.id)!.state).toBe('idle');
+    });
+
+    it('does not remember a transcript_path whose directory escapes the Claude projects directory via ".."', async () => {
+      vi.useFakeTimers();
+      const { service } = setup();
+      const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+      const configDir = mkdtempSync(join(tmpdir(), 'of-claude-config-'));
+      process.env.CLAUDE_CONFIG_DIR = configDir;
+      mkdirSync(join(configDir, 'projects'), { recursive: true });
+      const escapedPath = join(configDir, 'projects', '..', 'escaped', 'transcript.jsonl');
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: escapedPath }));
+      expect(service.get(session.id)!.state).toBe('generating');
+      const timersBeforeEsc = vi.getTimerCount();
+
+      service.writeRaw(session.id, '\x1b');
+
+      expect(vi.getTimerCount()).toBe(timersBeforeEsc); // the escaped path was never remembered, so nothing armed
+    });
+
+    it('does not remember a transcript_path whose directory is a symlink pointing outside the Claude projects directory', async () => {
+      vi.useFakeTimers();
+      const { service } = setup();
+      const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+      const configDir = mkdtempSync(join(tmpdir(), 'of-claude-config-'));
+      process.env.CLAUDE_CONFIG_DIR = configDir;
+      mkdirSync(join(configDir, 'projects'), { recursive: true });
+      const elsewhereDir = mkdtempSync(join(tmpdir(), 'of-elsewhere-'));
+      const linkedProjectDir = join(configDir, 'projects', 'proj');
+      symlinkSync(elsewhereDir, linkedProjectDir);
+      const escapedPath = join(linkedProjectDir, 'transcript.jsonl');
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: escapedPath }));
+      expect(service.get(session.id)!.state).toBe('generating');
+      const timersBeforeEsc = vi.getTimerCount();
+
+      service.writeRaw(session.id, '\x1b');
+
+      expect(vi.getTimerCount()).toBe(timersBeforeEsc); // the symlinked-out path was never remembered, so nothing armed
+    });
+
     it('still detects the interrupt marker when the CLI\'s write to the transcript straddles two polls (a torn write), by carrying the partial line to the next poll', async () => {
       vi.useFakeTimers();
       const { service } = setup();
