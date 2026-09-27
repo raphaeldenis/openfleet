@@ -1,7 +1,7 @@
 import { TestBed } from '@angular/core/testing';
 import { RouterTestingHarness } from '@angular/router/testing';
 import { Component, signal } from '@angular/core';
-import { provideRouter, withComponentInputBinding, type Routes } from '@angular/router';
+import { provideRouter, withComponentInputBinding, Router, type Routes } from '@angular/router';
 import { describe, expect, it } from 'vitest';
 import { AppShellComponent } from './app-shell.component';
 import { FleetEventsService } from '../core/fleet-events.service';
@@ -185,5 +185,49 @@ describe('AppShellComponent', () => {
     await harness.fixture.whenStable();
 
     expect(root.querySelector('[data-testid="command-palette"]')).toBeFalsy();
+  });
+
+  it('closes the palette when ⌘K is pressed again while it is already open', async () => {
+    const { harness, root } = await setUp();
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }));
+    await harness.fixture.whenStable();
+    expect(root.querySelector('[data-testid="command-palette"]')).toBeTruthy();
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }));
+    await harness.fixture.whenStable();
+
+    expect(root.querySelector('[data-testid="command-palette"]')).toBeFalsy();
+  });
+
+  it('moves focus into the command palette when it opens and returns it to the search slot when it closes, so a keyboard-only user is never dropped', async () => {
+    const { harness, root } = await setUp();
+    const trigger = root.querySelector('[data-testid="open-palette"]') as HTMLElement;
+    trigger.focus();
+
+    trigger.click();
+    await harness.fixture.whenStable();
+
+    const palette = root.querySelector('[data-testid="command-palette"]') as HTMLElement;
+    expect(palette.contains(document.activeElement)).toBe(true);
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await harness.fixture.whenStable();
+
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it('never lets a disabled nav item navigate, by click or by keyboard, since it renders as inert text rather than a link', async () => {
+    const { harness, root } = await setUp();
+    const router = TestBed.inject(Router);
+    const notes = root.querySelector('[data-testid="nav-notes"]') as HTMLElement;
+
+    expect(notes.tagName).toBe('SPAN');
+    expect(notes).not.toHaveAttribute('tabindex');
+    expect(notes.getAttribute('href')).toBeNull();
+
+    notes.click();
+    await harness.fixture.whenStable();
+
+    expect(router.url).toBe('/');
   });
 });

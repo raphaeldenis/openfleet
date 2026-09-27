@@ -8,13 +8,14 @@ import { FleetEventsService } from './core/fleet-events.service';
 function configureTestBed() {
   const managerSession = { id: 'm1', name: 'Lead', emoji: '🧭', role: 'manager', state: 'idle', harness: 'claude-cli' };
   const workerSession = { id: 's1', name: 'Gimli', emoji: '⛏️', state: 'idle', harness: 'claude-cli', directory: '/repo' };
+  const secondWorkerSession = { id: 's2', name: 'Legolas', emoji: '🏹', state: 'idle', harness: 'claude-cli', directory: '/repo' };
   return TestBed.configureTestingModule({
     providers: [
       provideRouter(routes, withComponentInputBinding()),
       {
         provide: FleetEventsService,
         useValue: {
-          sessions: signal([managerSession, workerSession]),
+          sessions: signal([managerSession, workerSession, secondWorkerSession]),
           approvals: signal([]),
           managers: signal([]),
           connect: () => {},
@@ -68,5 +69,22 @@ describe('app.routes', () => {
     expect(harness.routeNativeElement?.querySelector('[data-testid="app-shell"]')).toBeTruthy();
     expect(harness.routeNativeElement?.querySelector('[data-testid="app-nav"]')).toBeTruthy();
     expect(harness.routeNativeElement?.querySelector('[data-testid="session-view"]')).toBeTruthy();
+  });
+
+  it('user picking a different session while already on a session view sees the new session, not the old one (zoneless router-input-binding regression)', async () => {
+    await configureTestBed();
+    const harness = await RouterTestingHarness.create('/session/s1');
+    expect(harness.routeNativeElement?.querySelector('[data-testid="session-name"]')).toHaveTextContent('Gimli');
+
+    await harness.navigateByUrl('/session/s2');
+
+    expect(harness.routeNativeElement?.querySelector('[data-testid="session-name"]')).toHaveTextContent('Legolas');
+  });
+
+  it('user visiting an unknown path still lands inside the app shell instead of a blank page', async () => {
+    await configureTestBed();
+    const harness = await RouterTestingHarness.create('/this-page-does-not-exist');
+
+    expect(harness.routeNativeElement?.querySelector('[data-testid="app-shell"]')).toBeTruthy();
   });
 });
