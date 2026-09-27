@@ -1,6 +1,6 @@
 import { accessSync, constants, existsSync, lstatSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, normalize, sep } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import type { PermissionMode, Session, SessionSpec } from '@openfleet/shared';
 import { EventBus } from '../events/eventBus.js';
@@ -129,18 +129,40 @@ function claudeProjectsDir(): string {
   return join(configDir, 'projects');
 }
 
+// Walks up from `path` to the nearest ancestor that already exists on disk, returning that ancestor
+// alongside the path segments below it that don't exist yet (outermost first). The first session ever run
+// in a new directory reports a transcript_path whose whole per-directory project subfolder is still
+// unborn — not just the file — so realpath-ing the immediate parent (which doesn't exist) would throw.
+function nearestExistingAncestor(path: string): { existingAncestor: string; unbornSegments: string[] } {
+  const unbornSegments: string[] = [];
+  let current = path;
+  while (!existsSync(current)) {
+    const parent = dirname(current);
+    if (parent === current) break; // reached the filesystem root; it always exists, so this never actually returns
+    unbornSegments.unshift(basename(current));
+    current = parent;
+  }
+  return { existingAncestor: current, unbornSegments };
+}
+
 // A session's own hook payload names its own transcript_path — a prompt-injected or hostile CLI could
 // report any file there (e.g. /etc/hosts) and have the daemon start tailing it. Trust only a path that
-// ends in .jsonl and whose directory resolves, symlinks included, under the Claude projects directory
-// the daemon's own environment implies. The transcript file itself need not exist yet: the CLI's own
-// UserPromptSubmit hook can report transcript_path before it has created that file, and realpath-ing
-// the file (rather than its directory) would reject a legitimate path just because it's early. Never
-// throws: a missing file, missing directory, or missing projects directory is just "untrusted".
+// ends in .jsonl, is an absolute path with no ".."/"."/doubled-separator segments, and whose directory
+// resolves, symlinks included, under the Claude projects directory the daemon's own environment implies.
+// Neither the transcript file nor its per-directory project subfolder need exist yet: the CLI's own
+// UserPromptSubmit hook can report transcript_path before it has created either, and realpath-ing a
+// dirname that doesn't exist yet would reject a legitimate path just because it's early — so this walks up
+// to the nearest existing ancestor and resolves the still-unborn segments against that ancestor's realpath
+// instead. Never throws: a missing file, missing directory, or missing projects directory is just
+// "untrusted".
 function isTrustedTranscriptPath(path: string): boolean {
   if (!path.endsWith('.jsonl')) return false;
+  if (!isAbsolute(path) || normalize(path) !== path) return false;
   try {
-    const resolvedDir = realpathSync(dirname(path));
     const resolvedProjectsDir = realpathSync(claudeProjectsDir());
+    const { existingAncestor, unbornSegments } = nearestExistingAncestor(dirname(path));
+    const resolvedAncestor = realpathSync(existingAncestor);
+    const resolvedDir = unbornSegments.length === 0 ? resolvedAncestor : join(resolvedAncestor, ...unbornSegments);
     return resolvedDir === resolvedProjectsDir || resolvedDir.startsWith(resolvedProjectsDir + sep);
   } catch {
     return false;

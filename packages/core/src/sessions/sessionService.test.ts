@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, rmdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { openDatabase } from '../db/database.js';
 import { FakeHandle, FakeHarness } from '../harness/fakeHarness.js';
@@ -1584,6 +1584,50 @@ describe('SessionService submit-keystroke hostile cases', () => {
       await vi.advanceTimersByTimeAsync(TRANSCRIPT_INTERRUPT_POLL_MS);
 
       expect(service.get(session.id)!.state).toBe('idle');
+    });
+
+    // The FIRST session ever run in a new directory has no <projects>/<encoded-cwd>/ subfolder yet: the CLI
+    // only creates it lazily, along with the transcript file, once it actually writes. The trust check must
+    // walk up to the nearest existing ancestor (here, the projects dir itself) rather than realpath-ing a
+    // dirname that doesn't exist yet.
+    function unbornProjectTranscriptPath(): string {
+      const configDir = mkdtempSync(join(tmpdir(), 'of-claude-config-'));
+      process.env.CLAUDE_CONFIG_DIR = configDir;
+      mkdirSync(join(configDir, 'projects'), { recursive: true }); // projects dir exists; its 'proj' subfolder does not
+      return join(configDir, 'projects', 'proj', 'transcript.jsonl');
+    }
+
+    it('arms the watch on a transcript_path whose project subfolder does not exist yet (first session in a new directory), and catches the marker once the CLI creates the folder and file', async () => {
+      vi.useFakeTimers();
+      const { service } = setup();
+      const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+      const transcriptPath = unbornProjectTranscriptPath();
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: transcriptPath }));
+      expect(service.get(session.id)!.state).toBe('generating');
+
+      service.writeRaw(session.id, '\x1b');
+      mkdirSync(dirname(transcriptPath), { recursive: true }); // the CLI creates the project folder only now, after the ESC
+      writeFileSync(transcriptPath, interruptedLine()); // ...and the transcript file
+      await vi.advanceTimersByTimeAsync(TRANSCRIPT_INTERRUPT_POLL_MS);
+
+      expect(service.get(session.id)!.state).toBe('idle');
+    });
+
+    it('does not remember a transcript_path when the Claude projects directory itself does not exist, and does not crash', async () => {
+      vi.useFakeTimers();
+      const { service } = setup();
+      const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+      const configDir = mkdtempSync(join(tmpdir(), 'of-claude-config-'));
+      process.env.CLAUDE_CONFIG_DIR = configDir; // 'projects' subfolder is never created
+      const transcriptPath = join(configDir, 'projects', 'proj', 'transcript.jsonl');
+
+      expect(() => service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: transcriptPath }))).not.toThrow();
+      expect(service.get(session.id)!.state).toBe('generating');
+      const timersBeforeEsc = vi.getTimerCount();
+
+      expect(() => service.writeRaw(session.id, '\x1b')).not.toThrow();
+
+      expect(vi.getTimerCount()).toBe(timersBeforeEsc); // the untrusted path was never remembered, so nothing armed
     });
 
     it('does not remember a transcript_path whose directory escapes the Claude projects directory via ".."', async () => {
