@@ -71,8 +71,8 @@ export class CommandPaletteComponent {
     }
   }
 
-  go(route: string): void {
-    void this.router.navigate([route]);
+  async go(route: string): Promise<void> {
+    await this.router.navigate([route]);
     this.closed.emit();
   }
 

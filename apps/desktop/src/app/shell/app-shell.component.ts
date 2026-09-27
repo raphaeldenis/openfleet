@@ -16,7 +16,7 @@ const RUNNING_STATES = new Set(['generating', 'starting']);
   imports: [RouterLink, RouterLinkActive, RouterOutlet, SessionListComponent, DaemonStatusComponent, CommandPaletteComponent, BannerComponent],
   template: `
     <div class="shell" data-testid="app-shell">
-      <div class="body">
+      <div class="body" [attr.inert]="paletteOpen() ? '' : null">
         <nav class="sidebar" data-testid="app-nav">
           <div class="brand">OpenFleet</div>
           <section class="sessions">
@@ -65,7 +65,7 @@ const RUNNING_STATES = new Set(['generating', 'starting']);
           </main>
         </div>
       </div>
-      <footer class="statusbar" data-testid="app-statusbar">
+      <footer class="statusbar" data-testid="app-statusbar" [attr.inert]="paletteOpen() ? '' : null">
         <of-daemon-status [connected]="events.connected()" />
         <span class="mono">{{ daemonAddress }}</span>
         <span class="spacer"></span>
@@ -129,7 +129,9 @@ export class AppShellComponent {
   }
 
   openPalette(): void {
-    this.paletteOpener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const active = document.activeElement;
+    const hasFocusedOpener = active instanceof HTMLElement && active !== document.body;
+    this.paletteOpener = hasFocusedOpener ? active : null;
     this.paletteOpen.set(true);
   }
 

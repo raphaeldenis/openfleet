@@ -338,6 +338,24 @@ describe('AppShellComponent', () => {
     expect(document.activeElement).toBe(trigger);
   });
 
+  it('makes the rest of the shell inert to assistive tech while the palette is open, and reachable again once it closes', async () => {
+    const { harness, root } = await setUp();
+
+    (root.querySelector('[data-testid="open-palette"]') as HTMLElement).click();
+    await harness.fixture.whenStable();
+
+    const body = root.querySelector('.body') as HTMLElement;
+    const statusBar = root.querySelector('[data-testid="app-statusbar"]') as HTMLElement;
+    expect(body).toHaveAttribute('inert');
+    expect(statusBar).toHaveAttribute('inert');
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await harness.fixture.whenStable();
+
+    expect(body).not.toHaveAttribute('inert');
+    expect(statusBar).not.toHaveAttribute('inert');
+  });
+
   it('never lets a disabled nav item navigate, by click or by keyboard, since it renders as inert text rather than a link', async () => {
     const { harness, root } = await setUp();
     const router = TestBed.inject(Router);
