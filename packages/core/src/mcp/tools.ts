@@ -13,8 +13,18 @@ import { SessionClosedError, type SessionService } from '../sessions/sessionServ
 const ok = (payload: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(payload) }] });
 const fail = (message: string) => ({ content: [{ type: 'text' as const, text: message }], isError: true });
 
+// A long body written in one pty handle.write can arrive at the CLI in several chunks and submit early
+// (Task 6f fix loop 2, decision 1). Lowered in the mini-loop so the wrapped envelope (header + markers +
+// body, ~212 bytes of overhead) always fits inside a single 4096-byte pty write.
+const MAX_MESSAGE_BODY_BYTES = 3584;
+function tooLongMessage(body: string): string | undefined {
+  const byteLength = Buffer.byteLength(body, 'utf8');
+  return byteLength > MAX_MESSAGE_BODY_BYTES ? `message too long: ${byteLength} bytes, max ${MAX_MESSAGE_BODY_BYTES}` : undefined;
+}
+
 // Shared by send_session_message and message_parent: both just pick a different target session for the
-// same delivery call and need the same closed-target tool error.
+// same delivery call and need the same closed-target tool error. Any other thrown error (e.g. a colliding
+// message_id) is left to propagate — the MCP SDK turns it into isError itself.
 function trySendMessage(send: () => { status: 'delivered' | 'queued'; messageId: string }) {
   try {
     const result = send();
@@ -66,15 +76,19 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     ok(sessions.list().filter((s) => s.id === caller.id || isDescendant(s))),
   );
 
-  server.registerTool('send_session_message', { description: 'Send a message to a child (or your parent). Queued if it is busy, delivered on its next idle turn.', inputSchema: { target_uuid: z.string(), body: z.string().min(1) } }, async ({ target_uuid, body }) => {
+  server.registerTool('send_session_message', { description: 'Send a message to a child (or your parent). Queued if it is busy, delivered on its next idle turn. Pass back a previous message_id to retry idempotently.', inputSchema: { target_uuid: z.string(), body: z.string().min(1), message_id: z.uuid().optional() } }, async ({ target_uuid, body, message_id }) => {
+    const tooLong = tooLongMessage(body);
+    if (tooLong) return fail(tooLong);
     const target = sessions.get(target_uuid);
     if (!target || !isInLineage(target) || target.id === caller.id) return fail('target not found or outside your lineage');
-    return trySendMessage(() => sessions.sendMessage({ sessionId: target.id, body, fromSessionId: caller.id }));
+    return trySendMessage(() => sessions.sendMessage({ sessionId: target.id, body, fromSessionId: caller.id, messageId: message_id }));
   });
 
-  server.registerTool('message_parent', { description: 'Report to the manager that spawned you', inputSchema: { body: z.string().min(1) } }, async ({ body }) => {
+  server.registerTool('message_parent', { description: 'Report to the manager that spawned you. Pass back a previous message_id to retry idempotently.', inputSchema: { body: z.string().min(1), message_id: z.uuid().optional() } }, async ({ body, message_id }) => {
+    const tooLong = tooLongMessage(body);
+    if (tooLong) return fail(tooLong);
     if (!caller.parentId) return fail('this session has no parent');
-    return trySendMessage(() => sessions.sendMessage({ sessionId: caller.parentId!, body, fromSessionId: caller.id }));
+    return trySendMessage(() => sessions.sendMessage({ sessionId: caller.parentId!, body, fromSessionId: caller.id, messageId: message_id }));
   });
 
   server.registerTool('create_worktree', { description: 'Create an isolated git worktree for a task', inputSchema: { repo_path: z.string(), branch_name: z.string() } }, async ({ repo_path, branch_name }) => {

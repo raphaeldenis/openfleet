@@ -6,6 +6,7 @@ import { createWorktree } from '../git/worktrees.js';
 import type { Harness, HarnessHandle } from '../harness/harness.js';
 import { newId, newToken } from '../ids.js';
 import { MessageQueue } from './messageQueue.js';
+import { wrapAgentMessage } from './messageEnvelope.js';
 import { normalizePermissionMode, SessionRepository } from './sessionRepository.js';
 import { canDeliverNow, nextState, provesTurnEnded, type SessionInput } from './stateMachine.js';
 
@@ -14,6 +15,16 @@ export interface SessionServiceDeps { db: DatabaseSync; bus: EventBus; harnesses
 export class SessionClosedError extends Error {
   constructor(sessionId: string) {
     super(`session ${sessionId} is closed`);
+  }
+}
+
+// message_id is caller-chosen and never namespaced by sender, so two unrelated callers (or one caller
+// resending a corrected body) can collide on the same id. Idempotent replay is only safe when the replay
+// is provably the same send (same sender, same target, same resulting body); any other collision must
+// fail loudly rather than silently return another send's status or drop the new one.
+export class MessageIdAlreadyUsedError extends Error {
+  constructor(messageId: string) {
+    super(`message_id already used: ${messageId}`);
   }
 }
 
@@ -161,15 +172,45 @@ export class SessionService {
     return this.queue.countPending(sessionId);
   }
 
-  sendMessage(input: { sessionId: string; body: string; fromSessionId?: string }): { status: 'delivered' | 'queued'; messageId: string } {
+  // A messageId lets the caller retry a delivery attempt idempotently: resending the same id to the same
+  // target returns the already-enqueued message's current status instead of enqueuing a second copy.
+  // requireOpen runs first: a closed target is refused outright, before any envelope wrapping, idempotency
+  // lookup, or enqueue — a dead session must never end up with something queued behind it (Task 12).
+  sendMessage(input: { sessionId: string; body: string; fromSessionId?: string; messageId?: string }): { status: 'delivered' | 'queued'; messageId: string } {
     const session = this.requireOpen(input.sessionId);
-    const message = this.queue.enqueue(input);
+    const messageId = input.messageId ?? newId();
+    // Agent-to-agent messages (message_parent, send_session_message) always carry fromSessionId; a human
+    // REST call and a manager's pulse never do, so its presence alone tells apart what needs the untrusted
+    // envelope from what keeps its own shape (Task 6f).
+    const body = input.fromSessionId
+      ? wrapAgentMessage({ fromSessionId: input.fromSessionId, fromBranch: this.senderBranchOf(input.fromSessionId), messageId, body: input.body })
+      : input.body;
+    if (input.messageId) {
+      const existing = this.queue.getById(input.messageId);
+      if (existing) {
+        // message_id carries no namespace of its own: it is only a safe idempotency key for a replay of
+        // this exact send (same sender, same target, same resulting body). Anything else reusing it is a
+        // collision, not a retry, and must fail loudly — never return a stranger's status, never drop the
+        // new send on the floor.
+        const isSameSend = existing.sessionId === session.id && existing.fromSessionId === input.fromSessionId && existing.body === body;
+        if (isSameSend) return { status: existing.status, messageId: existing.id };
+        throw new MessageIdAlreadyUsedError(input.messageId);
+      }
+    }
+    const message = this.queue.enqueue({ id: messageId, sessionId: session.id, fromSessionId: input.fromSessionId, body });
     this.guarded(session.id, () => this.advance(session.id));
     const { phase } = this.deliveryOf(session.id);
     const isHandedToTerminal = phase.name === 'typing' && phase.messageId === message.id;
     if (isHandedToTerminal) return { status: 'delivered', messageId: message.id };
     this.deps.bus.emit({ type: 'message.queued', sessionId: session.id, messageId: message.id });
     return { status: 'queued', messageId: message.id };
+  }
+
+  // ponytail: Session carries no branch field yet (only a worktree path), so the daemon has nothing to
+  // read here and every envelope shows '?' — add a branch column once a session records the one it runs
+  // on, rather than shelling out to git for it.
+  private senderBranchOf(_fromSessionId: string): string | undefined {
+    return undefined;
   }
 
   // ponytail: a relaunch costs a CLI restart (~2s) and drops the TUI's in-memory state that never made it

@@ -5,11 +5,17 @@ import { newId } from '../ids.js';
 export class MessageQueue {
   constructor(private readonly db: DatabaseSync) {}
 
-  enqueue(input: { sessionId: string; fromSessionId?: string; body: string }): QueuedMessage {
-    const message: QueuedMessage = { id: newId(), sessionId: input.sessionId, fromSessionId: input.fromSessionId, body: input.body, status: 'queued', createdAt: new Date().toISOString() };
+  enqueue(input: { id?: string; sessionId: string; fromSessionId?: string; body: string }): QueuedMessage {
+    const message: QueuedMessage = { id: input.id ?? newId(), sessionId: input.sessionId, fromSessionId: input.fromSessionId, body: input.body, status: 'queued', createdAt: new Date().toISOString() };
     this.db.prepare('INSERT INTO message_queue (id, session_id, from_session_id, body, status, created_at) VALUES (?, ?, ?, ?, ?, ?)')
       .run(message.id, message.sessionId, message.fromSessionId ?? null, message.body, message.status, message.createdAt);
     return message;
+  }
+  getById(id: string): QueuedMessage | undefined {
+    const row = this.db.prepare(`SELECT id, session_id, from_session_id, body, status, created_at, delivered_at FROM message_queue WHERE id = ?`).get(id) as
+      { id: string; session_id: string; from_session_id: string | null; body: string; status: 'queued' | 'delivered'; created_at: string; delivered_at: string | null } | undefined;
+    if (!row) return undefined;
+    return { id: row.id, sessionId: row.session_id, fromSessionId: row.from_session_id ?? undefined, body: row.body, status: row.status, createdAt: row.created_at, deliveredAt: row.delivered_at ?? undefined };
   }
   hasQueued(sessionId: string, body: string): boolean {
     const row = this.db.prepare(`SELECT 1 FROM message_queue WHERE session_id = ? AND status = 'queued' AND body = ? LIMIT 1`).get(sessionId, body);
