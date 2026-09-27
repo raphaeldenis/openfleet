@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, inject, input, output } from '@angular/core';
+import { afterRenderEffect, ChangeDetectionStrategy, Component, ElementRef, inject, input, output, viewChild } from '@angular/core';
 import { Router } from '@angular/router';
 import { PALETTE_PAGES } from './nav-items';
 
@@ -7,8 +7,8 @@ import { PALETTE_PAGES } from './nav-items';
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     @if (open()) {
-      <div data-testid="command-palette" class="backdrop" (click)="closed.emit()">
-        <div class="panel" (click)="stopPropagation($event)">
+      <div data-testid="command-palette" class="backdrop" (click)="closed.emit()" (keydown)="trapTab($event)">
+        <div class="panel" #panel (click)="stopPropagation($event)">
           <div class="search-row"><span>⌕</span><span class="placeholder">Jump to a page</span><span class="hint">esc</span></div>
           <div class="group-label">Pages</div>
           <ul class="items">
@@ -42,6 +42,34 @@ export class CommandPaletteComponent {
   readonly closed = output<void>();
   private readonly router = inject(Router);
   protected readonly pages = PALETTE_PAGES;
+  private readonly panel = viewChild<ElementRef<HTMLElement>>('panel');
+
+  constructor() {
+    afterRenderEffect(() => {
+      if (this.open()) this.focusFirstItem();
+    });
+  }
+
+  focusFirstItem(): void {
+    this.focusableElements()[0]?.focus();
+  }
+
+  trapTab(event: KeyboardEvent): void {
+    if (event.key !== 'Tab') return;
+    const focusables = this.focusableElements();
+    if (focusables.length === 0) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    const isShiftTabOnFirst = event.shiftKey && document.activeElement === first;
+    const isTabOnLast = !event.shiftKey && document.activeElement === last;
+    if (isShiftTabOnFirst) {
+      event.preventDefault();
+      last.focus();
+    } else if (isTabOnLast) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
 
   go(route: string): void {
     void this.router.navigate([route]);
@@ -50,5 +78,11 @@ export class CommandPaletteComponent {
 
   stopPropagation(event: Event): void {
     event.stopPropagation();
+  }
+
+  private focusableElements(): HTMLElement[] {
+    const panel = this.panel()?.nativeElement;
+    if (!panel) return [];
+    return Array.from(panel.querySelectorAll<HTMLElement>('button, [href], input, [tabindex]:not([tabindex="-1"])'));
   }
 }

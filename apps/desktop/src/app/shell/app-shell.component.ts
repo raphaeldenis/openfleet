@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, HostListener, computed, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, ElementRef, HostListener, computed, inject, signal, viewChild } from '@angular/core';
 import { Router, RouterLink, RouterOutlet } from '@angular/router';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { BannerComponent } from '../design/banner.component';
@@ -43,7 +43,7 @@ const RUNNING_STATES = new Set(['generating', 'starting']);
         <div class="main-column">
           <header class="topbar" data-testid="app-topbar">
             <span class="brand-mark">OpenFleet</span>
-            <button type="button" class="of-input search-trigger" data-testid="open-palette" (click)="openPalette()">
+            <button type="button" class="of-input search-trigger" data-testid="open-palette" #paletteTrigger (click)="openPalette()">
               <span>⌕</span><span class="placeholder">Search or run a command…</span><span class="shortcut mono">⌘K</span>
             </button>
             <span class="spacer"></span>
@@ -116,6 +116,7 @@ export class AppShellComponent {
   protected readonly daemonAddress = DAEMON_ADDRESS;
   protected readonly paletteOpen = signal(false);
   protected readonly runningCount = computed(() => this.events.sessions().filter((s) => RUNNING_STATES.has(s.state)).length);
+  private readonly paletteTrigger = viewChild.required<ElementRef<HTMLButtonElement>>('paletteTrigger');
 
   onSessionSelected(sessionId: string): void {
     void this.router.navigate(['/session', sessionId]);
@@ -127,6 +128,7 @@ export class AppShellComponent {
 
   closePalette(): void {
     this.paletteOpen.set(false);
+    this.paletteTrigger().nativeElement.focus();
   }
 
   @HostListener('document:keydown', ['$event'])
@@ -134,11 +136,12 @@ export class AppShellComponent {
     const isCommandOrCtrlK = (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k';
     if (isCommandOrCtrlK) {
       event.preventDefault();
-      this.paletteOpen.update((open) => !open);
+      if (this.paletteOpen()) this.closePalette();
+      else this.openPalette();
       return;
     }
     if (event.key === 'Escape' && this.paletteOpen()) {
-      this.paletteOpen.set(false);
+      this.closePalette();
     }
   }
 }
