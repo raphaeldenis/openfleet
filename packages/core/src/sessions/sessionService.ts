@@ -509,23 +509,22 @@ export class SessionService {
   private finishTyping(sessionId: string): void {
     const { phase } = this.deliveryOf(sessionId);
     if (phase.name !== 'typing') return;
+    // The phase leaves 'typing' before the deliverability read below, which can itself throw (a db hiccup):
+    // the retry logic (advance(), driven by guarded()'s retryAfterFailure) only knows how to move a 'ready'
+    // or 'typed' phase forward, so a throwing read must never strand the session in 'typing' forever (task 6i).
+    this.enter(sessionId, { ...phase, name: 'typed' });
     const session = this.repo.get(sessionId);
     const isDeliverable = session !== undefined && canDeliverNow(session.state);
     // Raw input deferred behind this Enter targets the busy state it was pressed against (e.g. Interrupt
     // stops the running turn) — holding it for the eventual submit would misfire it onto whatever runs
     // next, so a non-deliverable session flushes it here, in arrival order, and the 'typed' phase carries
     // nothing. A deliverable session is unchanged: it still flushes right after the Enter, in submit().
-    if (isDeliverable) {
-      this.enter(sessionId, { ...phase, name: 'typed' });
-    } else {
-      // The phase leaves 'typing' before the flush below even runs: a throwing write must never leave the
-      // retry logic staring at a 'typing' phase it has no idea how to advance (Review Focus, task 6i).
+    if (!isDeliverable) {
       const isHandleReplaced = this.liveHandle(sessionId) !== phase.handle;
-      const deferredRaw = phase.deferredRaw;
       this.enter(sessionId, { ...phase, name: 'typed', deferredRaw: [] });
       // Mirrors submit()'s own guard: a handle a resume already replaced must never receive this, same as
       // the eventual '\r' never would.
-      if (!isHandleReplaced) this.flushDeferredRaw(sessionId, phase.handle, deferredRaw);
+      if (!isHandleReplaced) this.flushDeferredRaw(sessionId, phase.handle, phase.deferredRaw);
     }
     this.advance(sessionId);
   }
@@ -558,6 +557,8 @@ export class SessionService {
   // Deferred raw input is best-effort keystrokes, never part of a delivery's commit: a throwing write stops
   // the flush and drops whatever was still queued behind it — there is no caller left to report it to, so
   // it is only logged, the same way delivery already reports a write failure elsewhere in this file.
+  // Never rethrowing here is load-bearing: a rethrow reaches retryAfterFailure via guarded(), whose
+  // clearTimeout would cancel the turn-start timeout submit() just armed, wedging the session in 'submitted'.
   private flushDeferredRaw(sessionId: string, handle: HarnessHandle, deferredRaw: string[]): void {
     for (const raw of deferredRaw) {
       try {
