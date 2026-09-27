@@ -149,6 +149,82 @@ describe('ModelSelectorComponent', () => {
     await waitFor(() => expect(pendingModelSwitch).toHaveBeenLastCalledWith(false));
   });
 
+  it('never emits a stale pendingModelSwitch for a session already navigated away from', async () => {
+    // Arrange
+    const sessionId = signal('s1');
+    let resolveUpdate: (value: unknown) => void = () => {};
+    const api = { updateModel: vi.fn(() => new Promise((resolve) => { resolveUpdate = resolve; })) };
+    const pendingModelSwitch = vi.fn();
+    const events = { sessions: signal([{ id: 's1', name: 'Gimli', emoji: '⚔️', model: 'claude-sonnet-5', state: 'idle' }, { id: 's2', name: 'Legolas', emoji: '🏹', model: 'claude-haiku-4-5', state: 'idle' }]), approvals: signal([]), managers: signal([]) };
+    await render(ModelSelectorComponent, {
+      bindings: [inputBinding('sessionId', sessionId), outputBinding('pendingModelSwitch', pendingModelSwitch)],
+      providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: events }],
+    });
+    await userEvent.click(screen.getByTestId('apply-model'));
+    // Only the initial mount's own reset (emit(false)) has fired so far — the switch is still in flight.
+    expect(pendingModelSwitch).toHaveBeenCalledTimes(1);
+
+    // Act — navigate away before the switch resolves. Wait for a SECOND emit(false): proof the
+    // route-reuse reset for the session change itself has actually run (not just the mount's own),
+    // which is only possible once the component's sessionId input genuinely reads 's2'.
+    sessionId.set('s2');
+    await waitFor(() => expect(pendingModelSwitch).toHaveBeenCalledTimes(2));
+    expect(pendingModelSwitch).toHaveBeenLastCalledWith(false);
+    pendingModelSwitch.mockClear();
+
+    // ...then let s1's stale "deferred" response arrive well after that reset already ran
+    resolveUpdate({ status: 'deferred' });
+    await waitFor(() => expect(api.updateModel).toHaveBeenCalled());
+
+    // Assert — s2's header never sees a pending-switch warning meant for s1
+    expect(pendingModelSwitch).not.toHaveBeenCalled();
+  });
+
+  it('clears "restarting…" once session.model_changed reports the model actually changed', async () => {
+    const api = { updateModel: vi.fn().mockResolvedValue({ status: 'relaunching' }) };
+    const events = { sessions: signal([{ id: 's1', name: 'Gimli', emoji: '⚔️', model: 'claude-sonnet-5', state: 'starting' }]), approvals: signal([]), managers: signal([]) };
+    await render(ModelSelectorComponent, {
+      bindings: [inputBinding('sessionId', () => 's1')],
+      providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: events }],
+    });
+    await userEvent.click(screen.getByTestId('apply-model'));
+    await waitFor(() => expect(screen.getByTestId('model-switch-status')).toHaveTextContent('restarting…'));
+
+    events.sessions.set([{ id: 's1', name: 'Gimli', emoji: '⚔️', model: 'claude-opus-5-5', state: 'starting' }]);
+
+    await waitFor(() => expect(screen.queryByTestId('model-switch-status')).toBeNull());
+  });
+
+  it('clears "switch pending" once the session reaches idle', async () => {
+    const api = { updateModel: vi.fn().mockResolvedValue({ status: 'deferred' }) };
+    const events = { sessions: signal([{ id: 's1', name: 'Gimli', emoji: '⚔️', model: 'claude-sonnet-5', state: 'generating' }]), approvals: signal([]), managers: signal([]) };
+    await render(ModelSelectorComponent, {
+      bindings: [inputBinding('sessionId', () => 's1')],
+      providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: events }],
+    });
+    await userEvent.click(screen.getByTestId('apply-model'));
+    await waitFor(() => expect(screen.getByTestId('model-switch-status')).toHaveTextContent('switch pending'));
+
+    events.sessions.set([{ id: 's1', name: 'Gimli', emoji: '⚔️', model: 'claude-sonnet-5', state: 'idle' }]);
+
+    await waitFor(() => expect(screen.queryByTestId('model-switch-status')).toBeNull());
+  });
+
+  it('clears the switch status once the session closes', async () => {
+    const api = { updateModel: vi.fn().mockResolvedValue({ status: 'relaunching' }) };
+    const events = { sessions: signal([{ id: 's1', name: 'Gimli', emoji: '⚔️', model: 'claude-sonnet-5', state: 'starting' }]), approvals: signal([]), managers: signal([]) };
+    await render(ModelSelectorComponent, {
+      bindings: [inputBinding('sessionId', () => 's1')],
+      providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: events }],
+    });
+    await userEvent.click(screen.getByTestId('apply-model'));
+    await waitFor(() => expect(screen.getByTestId('model-switch-status')).toHaveTextContent('restarting…'));
+
+    events.sessions.set([{ id: 's1', name: 'Gimli', emoji: '⚔️', model: 'claude-sonnet-5', state: 'closed' }]);
+
+    await waitFor(() => expect(screen.queryByTestId('model-switch-status')).toBeNull());
+  });
+
   it('never types a slash-model command into the UI', async () => {
     await render(ModelSelectorComponent, {
       bindings: [inputBinding('sessionId', () => 's1')],

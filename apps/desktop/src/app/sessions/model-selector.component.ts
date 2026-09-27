@@ -1,5 +1,6 @@
 import { ChangeDetectionStrategy, Component, effect, inject, input, output, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import type { SessionState } from '@openfleet/shared';
 import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
 
@@ -49,6 +50,10 @@ export class ModelSelectorComponent {
   readonly applying = signal(false);
   readonly switchStatus = signal<'relaunching' | 'deferred' | null>(null);
   readonly switchError = signal<string | null>(null);
+  // The model and state in effect when the current switch was requested — as long as neither has
+  // moved on, the switch is still in flight. `undefined` means no switch is being tracked.
+  private readonly modelBeforeSwitch = signal<string | null | undefined>(undefined);
+  private readonly stateBeforeSwitch = signal<SessionState | undefined>(undefined);
 
   constructor() {
     // A route param change reuses this component instance, so a session switch must not leak
@@ -59,7 +64,26 @@ export class ModelSelectorComponent {
       this.applying.set(false);
       this.switchStatus.set(null);
       this.switchError.set(null);
+      this.modelBeforeSwitch.set(undefined);
+      this.stateBeforeSwitch.set(undefined);
       this.pendingModelSwitch.emit(false);
+    });
+
+    // Clears "restarting…" / "switch pending" once the switch it describes has actually landed
+    // (the model changed) or the session moved on to idle/closed since the request, so the note
+    // never sits there forever. A session already idle when the switch was requested must still
+    // observe a real transition, not just its already-idle starting state.
+    effect(() => {
+      const requestedFrom = this.modelBeforeSwitch();
+      if (requestedFrom === undefined) return;
+      const session = this.session();
+      if (!session) return;
+      const switchLanded = (session.model ?? null) !== requestedFrom;
+      const settledSinceRequest = (session.state === 'idle' || session.state === 'closed') && session.state !== this.stateBeforeSwitch();
+      if (!switchLanded && !settledSinceRequest) return;
+      this.switchStatus.set(null);
+      this.modelBeforeSwitch.set(undefined);
+      this.stateBeforeSwitch.set(undefined);
     });
   }
 
@@ -75,14 +99,21 @@ export class ModelSelectorComponent {
     if (this.applying()) return;
     this.applying.set(true);
     this.switchError.set(null);
+    const sessionIdAtApply = this.sessionId();
+    const modelAtApply = this.session()?.model ?? null;
+    const stateAtApply = this.session()?.state;
     try {
-      const result = await this.api.updateModel(this.sessionId(), this.chosenRung);
+      const result = await this.api.updateModel(sessionIdAtApply, this.chosenRung);
+      if (this.sessionId() !== sessionIdAtApply) return;
+      this.modelBeforeSwitch.set(modelAtApply);
+      this.stateBeforeSwitch.set(stateAtApply);
       this.switchStatus.set(result.status);
       this.pendingModelSwitch.emit(result.status === 'deferred');
     } catch {
+      if (this.sessionId() !== sessionIdAtApply) return;
       this.switchError.set(MODEL_SWITCH_ERROR);
     } finally {
-      this.applying.set(false);
+      if (this.sessionId() === sessionIdAtApply) this.applying.set(false);
     }
   }
 }
