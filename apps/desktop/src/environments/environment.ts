@@ -5,4 +5,7 @@ export const environment = {
   get adminToken(): string {
     return globalThis.localStorage?.getItem('openfleet.adminToken') ?? '';
   },
+  get daemonAddress(): string {
+    return this.apiUrl.replace(/^\w+:\/\//, '');
+  },
 };

@@ -90,7 +90,7 @@ describe('ManagerDashboardComponent', () => {
     expect(notManager).toHaveTextContent('This session is not a manager');
     await userEvent.click(screen.getByTestId('manager-dashboard-not-manager-terminal'));
 
-    expect(navigateSpy).toHaveBeenCalledWith(['/'], { queryParams: { session: 's1' } });
+    expect(navigateSpy).toHaveBeenCalledWith(['/session', 's1']);
   });
 
   it('derives the children header count from the live session list, updating immediately when a child is created', async () => {
@@ -251,7 +251,7 @@ describe('ManagerDashboardComponent', () => {
 
     await userEvent.click(screen.getByTestId('manager-dashboard-terminal'));
 
-    expect(navigateSpy).toHaveBeenCalledWith(['/'], { queryParams: { session: 'm1' } });
+    expect(navigateSpy).toHaveBeenCalledWith(['/session', 'm1']);
   });
 
   it('shows the countdown as m:ss instead of raw seconds', async () => {
