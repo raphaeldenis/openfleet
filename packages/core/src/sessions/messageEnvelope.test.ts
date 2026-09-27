@@ -77,12 +77,6 @@ describe('wrapAgentMessage', () => {
     expect(lines.at(-1)).toBe(AGENT_MESSAGE_END);
   });
 
-  it('keeps a 3584-byte body\'s wrapped envelope within one 4096-byte pty write', () => {
-    const body = 'x'.repeat(3584);
-    const wrapped = wrapAgentMessage({ fromSessionId: '12345678-0000-0000-0000-000000000000', messageId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', body });
-    expect(Buffer.byteLength(wrapped, 'utf8')).toBeLessThanOrEqual(4096);
-  });
-
   it('wraps an 8192-byte body full of marker lines without truncating, even though neutralization pushes it past the old 4096-byte pty-write bound', () => {
     // One body-sized line per marker keeps each line's neutralization backslash counted exactly once;
     // sized so the raw body itself sits at the new cap, before header/marker overhead is even added.
