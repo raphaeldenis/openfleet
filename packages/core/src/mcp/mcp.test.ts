@@ -193,6 +193,30 @@ describe('MCP', () => {
     expect(result.isError).toBe(true);
   });
 
+  it('send_session_message to a closed child still reports success instead of refusing, unlike the REST /messages route\'s 409 — the caller believes delivery is still possible', async () => {
+    const parent = await connect(parentToken);
+    const created = text(await parent.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('closed-target'), name: 'Gimli', emoji: '⚔️' } }));
+    await parent.callTool({ name: 'close_session', arguments: { session_id: created.id } });
+    expect(sessions.get(created.id)!.state).toBe('closed');
+
+    const result = await parent.callTool({ name: 'send_session_message', arguments: { target_uuid: created.id, body: 'hello' } });
+
+    expect(result.isError).toBe(true); // must refuse like the REST route does, not silently queue behind a dead session
+  });
+
+  it('message_parent to a closed parent still reports success instead of refusing, unlike the REST /messages route\'s 409 — the child believes its report was delivered', async () => {
+    const parent = await connect(parentToken);
+    await parent.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('closed-parent-target'), name: 'Gimli', emoji: '⚔️' } });
+    const childToken = harness.launches[1]!.mcpToken;
+    const child = await connect(childToken);
+    await sessions.close(parentId);
+    expect(sessions.get(parentId)!.state).toBe('closed');
+
+    const result = await child.callTool({ name: 'message_parent', arguments: { body: 'done' } });
+
+    expect(result.isError).toBe(true); // must refuse like the REST route does, not silently queue behind a dead session
+  });
+
   it('create_worktree rejects a repo_path outside the caller\'s own repository', async () => {
     const ownRepo = makeRepo();
     const foreignRepo = makeRepo();

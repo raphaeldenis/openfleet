@@ -1,5 +1,6 @@
-import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
+import { ChangeDetectionStrategy, Component, DestroyRef, computed, inject, input, signal } from '@angular/core';
 import type { SessionState } from '@openfleet/shared';
+import { elapsedLabel, elapsedSecondsSince } from './elapsed-time';
 
 // 'thinking' and 'error' are not in SESSION_STATES yet (see the plan's "Known
 // backend gaps" section) — the chip must still render them sensibly.
@@ -30,7 +31,7 @@ const LOOK: Record<ChipState, ChipLook> = {
       [attr.data-stale]="stale() ? '1' : null"
       [style.background]="'color-mix(in oklch, var(' + look().colorVar + ') 14%, transparent)'"
       class="chip"
-    ><span [style.color]="'var(' + look().colorVar + ')'">{{ look().icon }}</span><span data-testid="state-chip-label" style="color: var(--fg)">{{ look().label }}</span></span>
+    ><span [style.color]="'var(' + look().colorVar + ')'">{{ look().icon }}</span><span data-testid="state-chip-label" style="color: var(--fg)">{{ look().label }}</span>@if (elapsedDisplay(); as elapsed) {<span data-testid="state-chip-elapsed" class="elapsed">{{ elapsed }}</span>}</span>
   `,
   styles: `
     .chip {
@@ -38,15 +39,29 @@ const LOOK: Record<ChipState, ChipLook> = {
       height: 1.5rem; padding: 0 .5rem; border-radius: .375rem;
       font-family: var(--mono); font-size: .75rem; font-weight: 500;
     }
+    .elapsed { color: var(--mut); }
   `,
 })
 export class StateChipComponent {
   readonly state = input.required<string>();
   readonly stale = input(false);
+  readonly since = input<string | undefined>(undefined);
+  private readonly now = signal(Date.now());
+
+  constructor() {
+    const tick = setInterval(() => this.now.set(Date.now()), 1000);
+    inject(DestroyRef).onDestroy(() => clearInterval(tick));
+  }
+
   protected readonly look = computed((): ChipLook => {
     const state = this.state();
     return Object.hasOwn(LOOK, state)
       ? LOOK[state as ChipState]
       : { icon: '?', label: state, colorVar: '--state-closed', live: false, errBlink: false };
+  });
+
+  protected readonly elapsedDisplay = computed(() => {
+    const since = this.since();
+    return since ? elapsedLabel(elapsedSecondsSince(since, this.now())) : null;
   });
 }

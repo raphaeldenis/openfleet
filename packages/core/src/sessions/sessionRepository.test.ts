@@ -6,7 +6,7 @@ describe('SessionRepository.closeAllOpen', () => {
   it('closes every session left in a non-closed state', () => {
     const db = openDatabase(':memory:');
     const repo = new SessionRepository(db);
-    repo.insert({ id: 's1', name: 'G', emoji: '🤖', directory: '/tmp', worktree: null, model: null, parent_id: null, role: null, harness: 'fake', state: 'idle', state_since: 't', hook_token: 'h', mcp_token: 'm', permission_mode: null, created_at: 't' });
+    repo.insert({ id: 's1', name: 'G', emoji: '🤖', directory: '/tmp', worktree: null, model: null, parent_id: null, role: null, harness: 'fake', state: 'idle', state_since: 't', hook_token: 'h', mcp_token: 'm', permission_mode: null, branch: null, created_at: 't' });
 
     repo.closeAllOpen(new Date().toISOString());
 
@@ -14,7 +14,7 @@ describe('SessionRepository.closeAllOpen', () => {
   });
 });
 
-const baseRow = { id: 's1', name: 'G', emoji: '🤖', directory: '/tmp', worktree: null, model: null, parent_id: null, role: null, harness: 'fake' as const, state: 'starting' as const, state_since: 't0', hook_token: 'h', mcp_token: 'm', created_at: 't0', permission_mode: null };
+const baseRow = { id: 's1', name: 'G', emoji: '🤖', directory: '/tmp', worktree: null, model: null, parent_id: null, role: null, harness: 'fake' as const, state: 'starting' as const, state_since: 't0', hook_token: 'h', mcp_token: 'm', created_at: 't0', permission_mode: null, branch: null };
 
 describe('SessionRepository', () => {
   it('persists and returns permissionMode', () => {
@@ -88,5 +88,53 @@ describe('SessionRepository', () => {
     expect(repo.byHookToken('h')).toBeUndefined();
     expect(repo.byMcpToken('m')).toBeUndefined();
     expect(repo.byHookToken('fresh-hook')?.id).toBe('s1');
+  });
+
+  it('persists and returns the worktree branch a session was created on', () => {
+    const db = openDatabase(':memory:');
+    const repo = new SessionRepository(db);
+    repo.insert({ ...baseRow, branch: 'phase2/task-12-session-lifecycle-routes' });
+    expect(repo.get('s1')!.branch).toBe('phase2/task-12-session-lifecycle-routes');
+  });
+
+  it('leaves branch undefined for a session created outside a worktree', () => {
+    const db = openDatabase(':memory:');
+    const repo = new SessionRepository(db);
+    repo.insert(baseRow);
+    expect(repo.get('s1')!.branch).toBeUndefined();
+  });
+
+  it('renames a session, updating both name and emoji', () => {
+    const db = openDatabase(':memory:');
+    const repo = new SessionRepository(db);
+    repo.insert(baseRow);
+
+    repo.setNameAndEmoji('s1', { name: 'Legolas', emoji: '🏹' });
+
+    const session = repo.get('s1')!;
+    expect(session.name).toBe('Legolas');
+    expect(session.emoji).toBe('🏹');
+  });
+
+  it('renames only the field given, leaving the other untouched', () => {
+    const db = openDatabase(':memory:');
+    const repo = new SessionRepository(db);
+    repo.insert(baseRow);
+
+    repo.setNameAndEmoji('s1', { name: 'Legolas' });
+
+    const session = repo.get('s1')!;
+    expect(session.name).toBe('Legolas');
+    expect(session.emoji).toBe('🤖');
+  });
+
+  it('sets the permission mode on an existing session', () => {
+    const db = openDatabase(':memory:');
+    const repo = new SessionRepository(db);
+    repo.insert(baseRow);
+
+    repo.setPermissionMode('s1', 'bypassPermissions');
+
+    expect(repo.get('s1')!.permissionMode).toBe('bypassPermissions');
   });
 });

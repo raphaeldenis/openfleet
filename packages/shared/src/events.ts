@@ -9,6 +9,8 @@ export type ServerEvent =
   | { type: 'session.output'; sessionId: string; data: string }
   | { type: 'session.replay'; sessionId: string; data: string }
   | { type: 'session.model_changed'; sessionId: string; model: string }
+  | { type: 'session.updated'; session: Session }
+  | { type: 'session.reopened'; sessionId: string }
   | { type: 'message.queued'; sessionId: string; messageId: string }
   | { type: 'message.delivered'; sessionId: string; messageId: string }
   | { type: 'approval.created'; approval: Approval }
