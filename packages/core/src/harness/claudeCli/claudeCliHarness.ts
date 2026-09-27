@@ -2,7 +2,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import * as pty from 'node-pty';
 import type { Harness, HarnessHandle, HarnessLaunch } from '../harness.js';
-import { childEnvironment } from '../../process/childEnvironment.js';
+import { childEnvironmentForClaudeCli } from '../../process/childEnvironment.js';
 import { frameForPaste } from './bracketedPaste.js';
 import { buildClaudeLaunchConfig } from './launchConfig.js';
 import { markDirectoryTrusted } from './trustDirectory.js';
@@ -22,7 +22,7 @@ export class ClaudeCliHarness implements Harness {
       cols: 120,
       rows: 40,
       cwd: launch.directory,
-      env: { ...childEnvironment(globalThis.process.env), TERM: 'xterm-256color' },
+      env: { ...childEnvironmentForClaudeCli(globalThis.process.env), TERM: 'xterm-256color' },
     });
     return {
       write: (data) => process.write(data),
