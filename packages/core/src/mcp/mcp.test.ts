@@ -125,11 +125,12 @@ describe('MCP', () => {
     const child = await connect(childToken);
     sessions.applyInput(parentId, { kind: 'hook', event: { session_id: 'x', hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: {} } }); // keep the parent non-deliverable
 
-    const first = text(await child.callTool({ name: 'message_parent', arguments: { body: 'retry me', message_id: 'fixed-mcp-id' } }));
-    const second = text(await child.callTool({ name: 'message_parent', arguments: { body: 'retry me', message_id: 'fixed-mcp-id' } }));
+    const fixedMcpId = '22222222-2222-4222-8222-222222222222';
+    const first = text(await child.callTool({ name: 'message_parent', arguments: { body: 'retry me', message_id: fixedMcpId } }));
+    const second = text(await child.callTool({ name: 'message_parent', arguments: { body: 'retry me', message_id: fixedMcpId } }));
 
-    expect(first.message_id).toBe('fixed-mcp-id');
-    expect(second.message_id).toBe('fixed-mcp-id');
+    expect(first.message_id).toBe(fixedMcpId);
+    expect(second.message_id).toBe(fixedMcpId);
     expect(second.status).toBe(first.status);
     expect(sessions.queuedMessageCount(parentId)).toBe(1);
   });
@@ -144,15 +145,17 @@ describe('MCP', () => {
     const childB = await connect(childBToken);
     sessions.applyInput(parentId, { kind: 'hook', event: { session_id: 'x', hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: {} } }); // keep the parent non-deliverable
 
-    const fromA = text(await childA.callTool({ name: 'message_parent', arguments: { body: 'A is done', message_id: 'collide' } }));
-    const fromB = text(await childB.callTool({ name: 'message_parent', arguments: { body: 'B needs help urgently', message_id: 'collide' } }));
+    const collidingMessageId = '11111111-1111-4111-8111-111111111111';
+    const fromA = await childA.callTool({ name: 'message_parent', arguments: { body: 'A is done', message_id: collidingMessageId } });
+    const fromB = await childB.callTool({ name: 'message_parent', arguments: { body: 'B needs help urgently', message_id: collidingMessageId } });
 
     // Two unrelated children, each reporting to the same parent, happened to pick the same message_id (no
-    // format is enforced on it). B is told its own report went through, but only one message ever reaches
-    // the parent's queue: B's own report is never enqueued at all.
-    expect(fromA.message_id).toBe('collide');
-    expect(fromB.message_id).toBe('collide');
-    expect(sessions.queuedMessageCount(parentId)).toBe(2);
+    // uniqueness is enforced across senders). A's send goes through; B's collides with a different
+    // sender's id and must fail loudly rather than silently return A's status while dropping B's report.
+    expect(fromA.isError).toBeFalsy();
+    expect(text(fromA).message_id).toBe(collidingMessageId);
+    expect(fromB.isError).toBe(true);
+    expect(sessions.queuedMessageCount(parentId)).toBe(1);
   });
 
   it('refuses to message a session outside the caller lineage', async () => {

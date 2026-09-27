@@ -17,6 +17,16 @@ export class SessionClosedError extends Error {
   }
 }
 
+// message_id is caller-chosen and never namespaced by sender, so two unrelated callers (or one caller
+// resending a corrected body) can collide on the same id. Idempotent replay is only safe when the replay
+// is provably the same send (same sender, same target, same resulting body); any other collision must
+// fail loudly rather than silently return another send's status or drop the new one.
+export class MessageIdAlreadyUsedError extends Error {
+  constructor(messageId: string) {
+    super(`message_id already used: ${messageId}`);
+  }
+}
+
 const OUTPUT_BUFFER_LIMIT = 200 * 1024;
 export const DEFAULT_CLOSE_ESCALATE_MS = 5000;
 const DEFAULT_RESUME_TIMEOUT_MS = 15_000;
@@ -146,10 +156,6 @@ export class SessionService {
   // target returns the already-enqueued message's current status instead of enqueuing a second copy.
   sendMessage(input: { sessionId: string; body: string; fromSessionId?: string; messageId?: string }): { status: 'delivered' | 'queued'; messageId: string } {
     const session = this.require(input.sessionId);
-    if (input.messageId) {
-      const existing = this.queue.getById(input.messageId);
-      if (existing) return { status: existing.status, messageId: existing.id };
-    }
     const messageId = input.messageId ?? newId();
     // Agent-to-agent messages (message_parent, send_session_message) always carry fromSessionId; a human
     // REST call and a manager's pulse never do, so its presence alone tells apart what needs the untrusted
@@ -157,6 +163,18 @@ export class SessionService {
     const body = input.fromSessionId
       ? wrapAgentMessage({ fromSessionId: input.fromSessionId, fromBranch: this.senderBranchOf(input.fromSessionId), messageId, body: input.body })
       : input.body;
+    if (input.messageId) {
+      const existing = this.queue.getById(input.messageId);
+      if (existing) {
+        // message_id carries no namespace of its own: it is only a safe idempotency key for a replay of
+        // this exact send (same sender, same target, same resulting body). Anything else reusing it is a
+        // collision, not a retry, and must fail loudly — never return a stranger's status, never drop the
+        // new send on the floor.
+        const isSameSend = existing.sessionId === session.id && existing.fromSessionId === input.fromSessionId && existing.body === body;
+        if (isSameSend) return { status: existing.status, messageId: existing.id };
+        throw new MessageIdAlreadyUsedError(input.messageId);
+      }
+    }
     const message = this.queue.enqueue({ id: messageId, sessionId: session.id, fromSessionId: input.fromSessionId, body });
     this.guarded(session.id, () => this.advance(session.id));
     const { phase } = this.deliveryOf(session.id);

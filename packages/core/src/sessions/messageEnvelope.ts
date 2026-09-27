@@ -12,9 +12,23 @@ function neutralizeEnvelopeMarkers(body: string): string {
     .join('\n');
 }
 
+// Header fields (message_id today, sender id and branch too once those carry caller-controlled values)
+// are caller-supplied and unvalidated by the time they reach here — the MCP layer's own validation is the
+// first line of defence, this is the second. A literal newline would otherwise let a hostile field open
+// extra "header" lines before BEGIN even exists, where a reader has no untrusted-content cue at all. Only
+// the first line is safe to show as part of the header; anything after the first newline is demoted to
+// untrusted spillover and neutralized exactly like the body, then placed after BEGIN.
+function splitHeaderField(value: string): { displayValue: string; spillover: string | undefined } {
+  const [displayValue, ...rest] = value.split('\n');
+  return { displayValue: displayValue!, spillover: rest.length > 0 ? rest.join('\n') : undefined };
+}
+
 export function wrapAgentMessage(input: { fromSessionId: string; fromBranch?: string; messageId: string; body: string }): string {
-  const senderIdShort = input.fromSessionId.slice(0, SENDER_ID_DISPLAY_LENGTH);
-  const branch = input.fromBranch ?? '?';
-  const header = `[from agent · session ${senderIdShort} · branch ${branch} · msg ${input.messageId}]`;
-  return [header, AGENT_MESSAGE_BEGIN, neutralizeEnvelopeMarkers(input.body), AGENT_MESSAGE_END].join('\n');
+  const senderId = splitHeaderField(input.fromSessionId.slice(0, SENDER_ID_DISPLAY_LENGTH));
+  const branch = splitHeaderField(input.fromBranch ?? '?');
+  const messageId = splitHeaderField(input.messageId);
+  const header = `[from agent · session ${senderId.displayValue} · branch ${branch.displayValue} · msg ${messageId.displayValue}]`;
+  const spillover = [senderId.spillover, branch.spillover, messageId.spillover].filter((part): part is string => part !== undefined);
+  const bodyWithSpillover = [...spillover, input.body].join('\n');
+  return [header, AGENT_MESSAGE_BEGIN, neutralizeEnvelopeMarkers(bodyWithSpillover), AGENT_MESSAGE_END].join('\n');
 }

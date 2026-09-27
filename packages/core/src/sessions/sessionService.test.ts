@@ -253,7 +253,7 @@ describe('SessionService agent message envelope', () => {
     expect(harness.handles[1]!.written).toEqual([expect.any(String), '\r']); // no second write
   });
 
-  it('reusing a message_id already used for a different target drops the new send instead of delivering it', async () => {
+  it('reusing a message_id already used for a different target fails loudly instead of dropping the new send', async () => {
     vi.useFakeTimers();
     const { service } = setup();
     const sender = await service.create({ directory: '/tmp', name: 'Sender', harness: 'fake', emoji: '🤖' });
@@ -263,15 +263,15 @@ describe('SessionService agent message envelope', () => {
     service.applyInput(targetB.id, hook(targetB.id, { hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: {} }));
 
     service.sendMessage({ sessionId: targetA.id, body: 'to A', fromSessionId: sender.id, messageId: 'reused-id' });
-    const toB = service.sendMessage({ sessionId: targetB.id, body: 'to B', fromSessionId: sender.id, messageId: 'reused-id' });
 
-    // getById() looks up the message_id alone, with no check that it belongs to this target: the send to
-    // B returns A's cached status without ever enqueuing anything for B. B's message is lost.
-    expect(toB.messageId).toBe('reused-id');
-    expect(service.queuedMessageCount(targetB.id)).toBe(1);
+    // getById() used to look up the message_id alone, with no check that it belongs to this target: the
+    // send to B silently returned A's cached status and enqueued nothing for B. Now it must fail loudly
+    // instead, so the caller knows to retry with a fresh id rather than believing a send that never happened.
+    expect(() => service.sendMessage({ sessionId: targetB.id, body: 'to B', fromSessionId: sender.id, messageId: 'reused-id' })).toThrow('message_id already used');
+    expect(service.queuedMessageCount(targetB.id)).toBe(0);
   });
 
-  it('reusing a message_id from a different sender reports a delivered status for a message that was never typed', async () => {
+  it('reusing a message_id from a different sender fails loudly instead of reporting a delivered status for a message that was never typed', async () => {
     vi.useFakeTimers();
     const { service, harness } = setup();
     const senderA = await service.create({ directory: '/tmp', name: 'SenderA', harness: 'fake', emoji: '🤖' });
@@ -283,15 +283,14 @@ describe('SessionService agent message envelope', () => {
     expect(fromA.status).toBe('delivered');
     await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
 
-    const fromB = service.sendMessage({ sessionId: target.id, body: 'B talking, unrelated to A', fromSessionId: senderB.id, messageId: 'shared-id' });
-
-    // B is told its report was delivered, but the terminal never received B's body at all: only A's.
-    expect(fromB.status).toBe('delivered');
+    // B used to be told its report was delivered, even though the terminal never received B's body at
+    // all: only A's. Now the collision must surface as an explicit error, not a false "delivered".
+    expect(() => service.sendMessage({ sessionId: target.id, body: 'B talking, unrelated to A', fromSessionId: senderB.id, messageId: 'shared-id' })).toThrow('message_id already used');
     const everythingTyped = harness.handles[2]!.written.join('');
-    expect(everythingTyped).toContain('B talking');
+    expect(everythingTyped).not.toContain('B talking');
   });
 
-  it('resending the same message_id with a different body never delivers the new body', async () => {
+  it('resending the same message_id with a different body fails loudly instead of silently swallowing the retry', async () => {
     vi.useFakeTimers();
     const { service, harness } = setup();
     const sender = await service.create({ directory: '/tmp', name: 'Sender', harness: 'fake', emoji: '🤖' });
@@ -303,13 +302,14 @@ describe('SessionService agent message envelope', () => {
     service.applyInput(target.id, hook(target.id, { hook_event_name: 'UserPromptSubmit' }));
     service.applyInput(target.id, hook(target.id, { hook_event_name: 'Stop' })); // back to idle
 
-    service.sendMessage({ sessionId: target.id, body: 'corrected retry, not the first attempt', fromSessionId: sender.id, messageId: 'fixed-id' });
+    // A corrected retry reusing the same message_id used to be silently swallowed: the caller saw a
+    // success status but the corrected text was never typed anywhere. Now the id collision must surface
+    // as an explicit error, telling the caller to resend under a fresh id rather than believe a no-op.
+    expect(() => service.sendMessage({ sessionId: target.id, body: 'corrected retry, not the first attempt', fromSessionId: sender.id, messageId: 'fixed-id' })).toThrow('message_id already used');
     await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
 
-    // A legitimate resend with a corrected body is silently swallowed: the caller sees a success status
-    // but the corrected text is never typed anywhere.
     const everythingTyped = harness.handles[1]!.written.join('');
-    expect(everythingTyped).toContain('corrected retry');
+    expect(everythingTyped).not.toContain('corrected retry');
   });
 });
 

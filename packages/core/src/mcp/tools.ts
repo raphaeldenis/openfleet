@@ -54,14 +54,14 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     ok(sessions.list().filter((s) => s.id === caller.id || isDescendant(s))),
   );
 
-  server.registerTool('send_session_message', { description: 'Send a message to a child (or your parent). Queued if it is busy, delivered on its next idle turn. Pass back a previous message_id to retry idempotently.', inputSchema: { target_uuid: z.string(), body: z.string().min(1), message_id: z.string().optional() } }, async ({ target_uuid, body, message_id }) => {
+  server.registerTool('send_session_message', { description: 'Send a message to a child (or your parent). Queued if it is busy, delivered on its next idle turn. Pass back a previous message_id to retry idempotently.', inputSchema: { target_uuid: z.string(), body: z.string().min(1), message_id: z.uuid().optional() } }, async ({ target_uuid, body, message_id }) => {
     const target = sessions.get(target_uuid);
     if (!target || !isInLineage(target) || target.id === caller.id) return fail('target not found or outside your lineage');
     const result = sessions.sendMessage({ sessionId: target.id, body, fromSessionId: caller.id, messageId: message_id });
     return ok({ status: result.status, message_id: result.messageId });
   });
 
-  server.registerTool('message_parent', { description: 'Report to the manager that spawned you. Pass back a previous message_id to retry idempotently.', inputSchema: { body: z.string().min(1), message_id: z.string().optional() } }, async ({ body, message_id }) => {
+  server.registerTool('message_parent', { description: 'Report to the manager that spawned you. Pass back a previous message_id to retry idempotently.', inputSchema: { body: z.string().min(1), message_id: z.uuid().optional() } }, async ({ body, message_id }) => {
     if (!caller.parentId) return fail('this session has no parent');
     const result = sessions.sendMessage({ sessionId: caller.parentId, body, fromSessionId: caller.id, messageId: message_id });
     return ok({ status: result.status, message_id: result.messageId });
