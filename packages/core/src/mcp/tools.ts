@@ -13,10 +13,10 @@ import { SessionClosedError, type SessionService } from '../sessions/sessionServ
 const ok = (payload: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(payload) }] });
 const fail = (message: string) => ({ content: [{ type: 'text' as const, text: message }], isError: true });
 
-// A long body written in one pty handle.write can arrive at the CLI in several chunks and submit early
-// (Task 6f fix loop 2, decision 1). Lowered in the mini-loop so the wrapped envelope (header + markers +
-// body, ~212 bytes of overhead) always fits inside a single 4096-byte pty write.
-const MAX_MESSAGE_BODY_BYTES = 3584;
+// No longer a pty-write constraint (Task 6h moved delivery to bracketed-paste typing, which handles
+// arbitrarily long bodies) — this is a sane upper bound for agent-to-agent messages, matching the cap
+// Scape applies to the same tools.
+const MAX_MESSAGE_BODY_BYTES = 8192;
 function tooLongMessage(body: string): string | undefined {
   const byteLength = Buffer.byteLength(body, 'utf8');
   return byteLength > MAX_MESSAGE_BODY_BYTES ? `message too long: ${byteLength} bytes, max ${MAX_MESSAGE_BODY_BYTES}` : undefined;
