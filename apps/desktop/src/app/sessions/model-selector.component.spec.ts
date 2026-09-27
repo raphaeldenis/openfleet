@@ -250,4 +250,12 @@ describe('ModelSelectorComponent', () => {
     });
     expect(document.body.textContent).not.toContain('/model');
   });
+
+  it('gives the rung select an accessible name', async () => {
+    await render(ModelSelectorComponent, {
+      bindings: [inputBinding('sessionId', () => 's1')],
+      providers: [{ provide: FleetApiService, useValue: { updateModel: vi.fn() } }, { provide: FleetEventsService, useValue: fakeEvents('claude-sonnet-5') }],
+    });
+    expect(screen.getByRole('combobox', { name: 'Model' })).toBeTruthy();
+  });
 });

@@ -21,7 +21,7 @@ const SWITCH_STATUS_LABEL: Record<'relaunching' | 'deferred', string> = {
   template: `
     <div class="model-selector" data-testid="model-selector">
       <span class="current" data-testid="current-model">{{ session()?.model ?? 'default' }}</span>
-      <select data-testid="model-select" [(ngModel)]="chosenRung">
+      <select data-testid="model-select" aria-label="Model" [(ngModel)]="chosenRung">
         @for (rung of rungs; track rung) {
           <option [value]="rung">{{ rung }}</option>
         }

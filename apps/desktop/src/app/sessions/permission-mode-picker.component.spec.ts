@@ -211,6 +211,54 @@ describe('PermissionModePickerComponent', () => {
     await waitFor(() => expect(applyButton.disabled).toBe(false));
   });
 
+  it('keeps a newly picked mode selected when an earlier pending switch lands, without touching it', async () => {
+    const api = { updatePermissionMode: vi.fn().mockResolvedValue({ status: 'deferred' }) };
+    const currentMode = signal<'manual' | 'acceptEdits' | undefined>('manual');
+    await render(PermissionModePickerComponent, {
+      bindings: [inputBinding('sessionId', () => 's1'), inputBinding('currentMode', currentMode)],
+      providers: providersWith(api),
+    });
+    const select = screen.getByTestId('permission-mode-select') as HTMLSelectElement;
+
+    await userEvent.selectOptions(select, 'acceptEdits');
+    await userEvent.click(screen.getByTestId('apply-permission-mode'));
+    await waitFor(() => expect(screen.getByTestId('permission-mode-switch-status')).toHaveTextContent('switch pending'));
+
+    await userEvent.selectOptions(select, 'plan');
+    currentMode.set('acceptEdits');
+
+    // Force the currentMode update to actually flush before asserting: it clears the switch-status
+    // note either way (buggy full reset, or the fix's "switch landed" detection), so waiting for that
+    // guards against asserting on a stale DOM snapshot taken before the signal update propagated.
+    await waitFor(() => expect(screen.queryByTestId('permission-mode-switch-status')).toBeNull());
+    expect(select.value).toBe('plan');
+  });
+
+  it('resets the picker to the new session\'s mode on a session switch, even mid pending-switch', async () => {
+    const api = { updatePermissionMode: vi.fn().mockResolvedValue({ status: 'deferred' }) };
+    const sessionId = signal('s1');
+    const currentMode = signal<'manual' | 'acceptEdits' | undefined>('manual');
+    await render(PermissionModePickerComponent, {
+      bindings: [inputBinding('sessionId', sessionId), inputBinding('currentMode', currentMode)],
+      providers: providersWith(api),
+    });
+    const select = screen.getByTestId('permission-mode-select') as HTMLSelectElement;
+    await userEvent.selectOptions(select, 'plan');
+
+    sessionId.set('s2');
+    currentMode.set('acceptEdits');
+
+    await waitFor(() => expect(select.value).toBe('acceptEdits'));
+  });
+
+  it('gives the mode select an accessible name', async () => {
+    await render(PermissionModePickerComponent, {
+      bindings: [inputBinding('sessionId', () => 's1'), inputBinding('currentMode', () => 'manual' as const)],
+      providers: providersWith({ updatePermissionMode: vi.fn() }),
+    });
+    expect(screen.getByRole('combobox', { name: 'Permission mode' })).toBeTruthy();
+  });
+
   it('sends only one updatePermissionMode call when Apply is double-clicked before the request resolves', async () => {
     let resolveUpdate: (value: unknown) => void = () => {};
     const api = { updatePermissionMode: vi.fn(() => new Promise((resolve) => { resolveUpdate = resolve; })) };

@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, effect, inject, input, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, effect, inject, input, signal, untracked } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { PERMISSION_MODES, type PermissionMode, type SessionState } from '@openfleet/shared';
 import { FleetApiService } from '../core/fleet-api.service';
@@ -30,7 +30,7 @@ const SWITCH_STATUS_LABEL: Record<'relaunching' | 'deferred', string> = {
     <div class="permission-mode-picker" data-testid="permission-mode-picker">
       <span class="mode" data-testid="permission-mode" [attr.data-warning]="isDangerous() ? '1' : null">🛡 {{ label() }}</span>
       <span class="explanation" data-testid="permission-mode-explanation">{{ explanation() }}</span>
-      <select data-testid="permission-mode-select" [(ngModel)]="chosenMode">
+      <select data-testid="permission-mode-select" aria-label="Permission mode" [(ngModel)]="chosenMode">
         @for (mode of modes; track mode) { <option [value]="mode">{{ mode }}</option> }
       </select>
       <button type="button" class="of-btn of-btn--secondary" data-testid="apply-permission-mode" [disabled]="applying()" (click)="onApplyClick()">
@@ -89,7 +89,7 @@ export class PermissionModePickerComponent {
   constructor() {
     effect(() => {
       this.sessionId();
-      this.chosenMode = this.currentMode() ?? 'manual';
+      this.chosenMode = untracked(this.currentMode) ?? 'manual';
       this.confirmedMode = this.chosenMode;
       this.applying.set(false);
       this.confirmingBypass.set(false);
