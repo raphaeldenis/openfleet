@@ -1332,6 +1332,47 @@ describe('SessionService submit-keystroke hostile cases', () => {
       expect(service.get(session.id)!.state).toBe('generating'); // turn 2 must not be flipped idle by turn 1's stale marker
     });
 
+    it('loses a still-running turn\'s own interrupt marker when a stray/duplicated UserPromptSubmit hook fires for that same turn (applyInput cannot tell a duplicate hook from a genuine new turn)', async () => {
+      vi.useFakeTimers();
+      const { service } = setup();
+      const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+      const transcriptPath = makeTranscriptFile();
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: transcriptPath }));
+      expect(service.get(session.id)!.state).toBe('generating');
+
+      service.writeRaw(session.id, '\x1b'); // human presses Escape, meaning to stop THIS still-running turn
+      // A stray/duplicated hook re-reports the SAME turn's UserPromptSubmit — already an accepted
+      // possibility elsewhere in this file (e.g. "writes a deferred Escape immediately when typing ends
+      // into 'generating' mid-delay", which labels this exact shape "a stray/duplicated hook") — rather
+      // than a genuine new prompt. applyInput has no way to distinguish the two and disarms either way.
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: transcriptPath }));
+      appendFileSync(transcriptPath, interruptedLine()); // the CLI's real reaction to the human's ESC above
+
+      await vi.advanceTimersByTimeAsync(TRANSCRIPT_INTERRUPT_POLL_MS);
+
+      // The human's ESC against the still-running turn is silently swallowed: the duplicate hook tore
+      // down the only watch that could have caught it, and the session is stuck 'generating' forever.
+      expect(service.get(session.id)!.state).toBe('idle');
+    });
+
+    it('re-arms on a second Escape pressed against the new turn, and that fresh watch still catches the new turn\'s own interrupt marker', async () => {
+      vi.useFakeTimers();
+      const { service } = setup();
+      const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+      const transcriptPath = makeTranscriptFile();
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: transcriptPath }));
+
+      service.writeRaw(session.id, '\x1b'); // ESC pressed against turn 1, arms watch #1
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: transcriptPath })); // genuine turn 2: disarms watch #1
+      expect(service.get(session.id)!.state).toBe('generating');
+
+      service.writeRaw(session.id, '\x1b'); // human presses Escape again, now against turn 2: must arm a fresh watch #2
+      appendFileSync(transcriptPath, interruptedLine()); // turn 2's own interrupt marker
+      await vi.advanceTimersByTimeAsync(TRANSCRIPT_INTERRUPT_POLL_MS);
+
+      expect(service.get(session.id)!.state).toBe('idle'); // watch #2 caught turn 2's own marker
+    });
+
     it('does nothing if no hook has ever reported a transcript_path for the session', async () => {
       vi.useFakeTimers();
       const { service } = setup();
