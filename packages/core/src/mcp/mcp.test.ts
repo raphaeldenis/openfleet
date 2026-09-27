@@ -134,6 +134,27 @@ describe('MCP', () => {
     expect(sessions.queuedMessageCount(parentId)).toBe(1);
   });
 
+  it('a message_id chosen by one child swallows a sibling child\'s report to the same parent', async () => {
+    const parent = await connect(parentToken);
+    await parent.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('gimli2'), name: 'Gimli2', emoji: '⚔️' } });
+    const childAToken = harness.launches[1]!.mcpToken;
+    await parent.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('legolas2'), name: 'Legolas2', emoji: '🏹' } });
+    const childBToken = harness.launches[2]!.mcpToken;
+    const childA = await connect(childAToken);
+    const childB = await connect(childBToken);
+    sessions.applyInput(parentId, { kind: 'hook', event: { session_id: 'x', hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: {} } }); // keep the parent non-deliverable
+
+    const fromA = text(await childA.callTool({ name: 'message_parent', arguments: { body: 'A is done', message_id: 'collide' } }));
+    const fromB = text(await childB.callTool({ name: 'message_parent', arguments: { body: 'B needs help urgently', message_id: 'collide' } }));
+
+    // Two unrelated children, each reporting to the same parent, happened to pick the same message_id (no
+    // format is enforced on it). B is told its own report went through, but only one message ever reaches
+    // the parent's queue: B's own report is never enqueued at all.
+    expect(fromA.message_id).toBe('collide');
+    expect(fromB.message_id).toBe('collide');
+    expect(sessions.queuedMessageCount(parentId)).toBe(2);
+  });
+
   it('refuses to message a session outside the caller lineage', async () => {
     const stranger = await sessions.create({ directory: '/tmp', name: 'S', harness: 'fake', emoji: '👤' });
     const parent = await connect(parentToken);

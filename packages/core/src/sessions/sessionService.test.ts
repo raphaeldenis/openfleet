@@ -252,6 +252,65 @@ describe('SessionService agent message envelope', () => {
     expect(retry).toEqual({ status: 'delivered', messageId: 'fixed-message-id' });
     expect(harness.handles[1]!.written).toEqual([expect.any(String), '\r']); // no second write
   });
+
+  it('reusing a message_id already used for a different target drops the new send instead of delivering it', async () => {
+    vi.useFakeTimers();
+    const { service } = setup();
+    const sender = await service.create({ directory: '/tmp', name: 'Sender', harness: 'fake', emoji: '🤖' });
+    const targetA = await service.create({ directory: '/tmp', name: 'TargetA', harness: 'fake', emoji: '🤖' });
+    const targetB = await service.create({ directory: '/tmp', name: 'TargetB', harness: 'fake', emoji: '🤖' });
+    service.applyInput(targetA.id, hook(targetA.id, { hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: {} })); // keep both non-deliverable
+    service.applyInput(targetB.id, hook(targetB.id, { hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: {} }));
+
+    service.sendMessage({ sessionId: targetA.id, body: 'to A', fromSessionId: sender.id, messageId: 'reused-id' });
+    const toB = service.sendMessage({ sessionId: targetB.id, body: 'to B', fromSessionId: sender.id, messageId: 'reused-id' });
+
+    // getById() looks up the message_id alone, with no check that it belongs to this target: the send to
+    // B returns A's cached status without ever enqueuing anything for B. B's message is lost.
+    expect(toB.messageId).toBe('reused-id');
+    expect(service.queuedMessageCount(targetB.id)).toBe(1);
+  });
+
+  it('reusing a message_id from a different sender reports a delivered status for a message that was never typed', async () => {
+    vi.useFakeTimers();
+    const { service, harness } = setup();
+    const senderA = await service.create({ directory: '/tmp', name: 'SenderA', harness: 'fake', emoji: '🤖' });
+    const senderB = await service.create({ directory: '/tmp', name: 'SenderB', harness: 'fake', emoji: '🤖' });
+    const target = await service.create({ directory: '/tmp', name: 'Target', harness: 'fake', emoji: '🤖' });
+    service.applyInput(target.id, hook(target.id, { hook_event_name: 'SessionStart' }));
+
+    const fromA = service.sendMessage({ sessionId: target.id, body: 'A talking', fromSessionId: senderA.id, messageId: 'shared-id' });
+    expect(fromA.status).toBe('delivered');
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
+
+    const fromB = service.sendMessage({ sessionId: target.id, body: 'B talking, unrelated to A', fromSessionId: senderB.id, messageId: 'shared-id' });
+
+    // B is told its report was delivered, but the terminal never received B's body at all: only A's.
+    expect(fromB.status).toBe('delivered');
+    const everythingTyped = harness.handles[2]!.written.join('');
+    expect(everythingTyped).toContain('B talking');
+  });
+
+  it('resending the same message_id with a different body never delivers the new body', async () => {
+    vi.useFakeTimers();
+    const { service, harness } = setup();
+    const sender = await service.create({ directory: '/tmp', name: 'Sender', harness: 'fake', emoji: '🤖' });
+    const target = await service.create({ directory: '/tmp', name: 'Target', harness: 'fake', emoji: '🤖' });
+    service.applyInput(target.id, hook(target.id, { hook_event_name: 'SessionStart' }));
+
+    service.sendMessage({ sessionId: target.id, body: 'first attempt', fromSessionId: sender.id, messageId: 'fixed-id' });
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
+    service.applyInput(target.id, hook(target.id, { hook_event_name: 'UserPromptSubmit' }));
+    service.applyInput(target.id, hook(target.id, { hook_event_name: 'Stop' })); // back to idle
+
+    service.sendMessage({ sessionId: target.id, body: 'corrected retry, not the first attempt', fromSessionId: sender.id, messageId: 'fixed-id' });
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
+
+    // A legitimate resend with a corrected body is silently swallowed: the caller sees a success status
+    // but the corrected text is never typed anywhere.
+    const everythingTyped = harness.handles[1]!.written.join('');
+    expect(everythingTyped).toContain('corrected retry');
+  });
 });
 
 describe('SessionService resume', () => {
