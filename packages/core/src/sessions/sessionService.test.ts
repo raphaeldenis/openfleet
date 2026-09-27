@@ -1313,6 +1313,25 @@ describe('SessionService submit-keystroke hostile cases', () => {
       expect(service.get(session.id)!.state).toBe('idle');
     });
 
+    it('keeps a new turn generating when its UserPromptSubmit arrives before the previous turn\'s interrupt line is written (no disarm on a no-op state transition)', async () => {
+      vi.useFakeTimers();
+      const { service } = setup();
+      const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+      const transcriptPath = makeTranscriptFile();
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: transcriptPath }));
+      expect(service.get(session.id)!.state).toBe('generating');
+
+      service.writeRaw(session.id, '\x1b'); // human presses Escape while the CLI is generating turn 1
+      // The user submits a new prompt before the CLI's own reaction to the ESC is written to the
+      // transcript and before the next poll: UserPromptSubmit while already 'generating' is a no-op
+      // state transition, which must still disarm the watch armed for the turn that just ended.
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: transcriptPath }));
+      appendFileSync(transcriptPath, interruptedLine()); // turn 1's interrupt marker, only now written by the CLI
+      await vi.advanceTimersByTimeAsync(TRANSCRIPT_INTERRUPT_POLL_MS);
+
+      expect(service.get(session.id)!.state).toBe('generating'); // turn 2 must not be flipped idle by turn 1's stale marker
+    });
+
     it('does nothing if no hook has ever reported a transcript_path for the session', async () => {
       vi.useFakeTimers();
       const { service } = setup();
@@ -1623,21 +1642,24 @@ describe('SessionService submit-keystroke hostile cases', () => {
       expect(vi.getTimerCount()).toBe(timersBeforeEsc); // the untrusted path was never remembered, so nothing armed
     });
 
-    it('does not remember a transcript_path whose directory escapes the Claude projects directory via ".."', async () => {
+    it('does not remember a transcript_path containing a literal ".." segment, even one that resolves back inside the Claude projects directory', async () => {
       vi.useFakeTimers();
       const { service } = setup();
       const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
-      const configDir = mkdtempSync(join(tmpdir(), 'of-claude-config-'));
-      process.env.CLAUDE_CONFIG_DIR = configDir;
-      mkdirSync(join(configDir, 'projects'), { recursive: true });
-      const escapedPath = join(configDir, 'projects', '..', 'escaped', 'transcript.jsonl');
-      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: escapedPath }));
+      const transcriptPath = makeTranscriptFile(); // <configDir>/projects/proj/transcript.jsonl, file exists
+      const projectDir = dirname(transcriptPath);
+      // path.join would silently normalize a '..' segment away before isTrustedTranscriptPath ever saw
+      // it (join(dir, '..', 'proj', 'file') === join(dir, 'proj', 'file')), so build the raw string by
+      // hand instead. This path resolves to a real, existing file under the projects dir — only the
+      // normalize(path) !== path guard rejects it; isUnderProjectsDir alone would accept it.
+      const rawPathWithDotDot = `${projectDir}/../proj/transcript.jsonl`;
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: rawPathWithDotDot }));
       expect(service.get(session.id)!.state).toBe('generating');
       const timersBeforeEsc = vi.getTimerCount();
 
       service.writeRaw(session.id, '\x1b');
 
-      expect(vi.getTimerCount()).toBe(timersBeforeEsc); // the escaped path was never remembered, so nothing armed
+      expect(vi.getTimerCount()).toBe(timersBeforeEsc); // rejected by the normalize guard alone, even though it resolves inside
     });
 
     it('does not remember a transcript_path whose directory is a symlink pointing outside the Claude projects directory', async () => {
