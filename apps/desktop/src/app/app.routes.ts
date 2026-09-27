@@ -2,6 +2,9 @@ import type { Routes } from '@angular/router';
 import { ComponentsSheetComponent } from './design/components-sheet.component';
 
 export const routes: Routes = [
+  // Tried before the shell's own wildcard — stays outside the shell chrome, a dev-only
+  // style/component sheet rather than a product screen.
+  { path: 'components', component: ComponentsSheetComponent },
   {
     path: '',
     loadComponent: () => import('./shell/app-shell.component').then((m) => m.AppShellComponent),
@@ -10,8 +13,7 @@ export const routes: Routes = [
       { path: 'inbox', loadComponent: () => import('./inbox/inbox.component').then((m) => m.InboxComponent) },
       { path: 'manager/:id', loadComponent: () => import('./managers/manager-dashboard.component').then((m) => m.ManagerDashboardComponent) },
       { path: 'session/:sessionId', loadComponent: () => import('./sessions/session-view.component').then((m) => m.SessionViewComponent) },
+      { path: '**', loadComponent: () => import('./shell/not-found.component').then((m) => m.NotFoundComponent) },
     ],
   },
-  // Stays outside the shell chrome — a dev-only style/component sheet, not a product screen.
-  { path: 'components', component: ComponentsSheetComponent },
 ];
