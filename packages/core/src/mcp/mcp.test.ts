@@ -257,7 +257,7 @@ describe('create_session guardrails', () => {
     expect(result.isError).toBeFalsy();
   });
 
-  it('rejects a directory that escapes the worktrees root through a symlink plus a ".." segment', async () => {
+  it('rejects a directory that escapes the worktrees root through a symlink plus a ".." segment, even with a decoy at the lexically-collapsed path', async () => {
     const outside = mkdtempSync(join(tmpdir(), 'of-outside-'));
     const deep = join(outside, 'deep');
     mkdirSync(deep);
@@ -266,7 +266,10 @@ describe('create_session guardrails', () => {
     const linkName = `escape-link-${randomUUID()}`;
     symlinkSync(deep, join('/tmp/of-wt', linkName));
     // path.resolve() would lexically collapse this back to "/tmp/of-wt/target" (looks inside); the OS
-    // actually opens "outside/target" once the symlink is followed — the escape decision 1 closes.
+    // actually opens "outside/target" once the symlink is followed — the escape decision 1 closes. The
+    // decoy directory genuinely existing at the lexically-collapsed path is what exposes a resolve()-first
+    // regression: without it, a broken guard would merely throw ENOENT and fail safe by accident.
+    mkdirSync(join('/tmp/of-wt', 'target'), { recursive: true });
     const escapingDirectory = `/tmp/of-wt/${linkName}/../target`;
     const client = await connect(parentToken);
     const result = await client.callTool({ name: 'create_session', arguments: { directory: escapingDirectory, name: 'Escapee' } });
@@ -394,9 +397,18 @@ describe('get_argus_status, list_sessions, pulse_now', () => {
   });
 
   it('pulse_now refuses a target outside the caller\'s lineage', async () => {
-    // Gives the stranger the manager role so the rejection can only come from the lineage check, not from
-    // the role check that would reject any plain stranger regardless of lineage.
-    const stranger = await sessions.create({ directory: '/tmp', name: 'Stranger', harness: 'fake', emoji: '👤', role: MANAGER_ROLE });
+    // The stranger needs a real ManagerRecord, created through the manager path from an unrelated root
+    // session — a forged role with no record would let this test pass on "manager record not found" alone,
+    // even with the lineage check removed, since pulseNow would still fail for that unrelated reason.
+    const strangerRoot = await sessions.create({ directory: '/tmp', name: 'StrangerRoot', harness: 'fake', emoji: '👤' });
+    const strangerRootToken = harness.launches.find((l) => l.sessionId === strangerRoot.id)!.mcpToken;
+    const strangerRootClient = await connect(strangerRootToken);
+    const stranger = text(
+      await strangerRootClient.callTool({
+        name: 'create_session',
+        arguments: { directory: existingWorktreeDir('stranger-lead'), name: 'StrangerLead', manager: { pulse_seconds: 3600, children_cap: 1, mission: 'x' } },
+      }),
+    );
     const client = await connect(parentToken);
     const result = await client.callTool({ name: 'pulse_now', arguments: { session_id: stranger.id } });
     expect(result.isError).toBe(true);
