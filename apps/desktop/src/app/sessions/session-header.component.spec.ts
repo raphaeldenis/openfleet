@@ -157,6 +157,40 @@ describe('SessionHeaderComponent', () => {
     expect(api.renameSession).not.toHaveBeenCalled();
   });
 
+  it('still commits the next real rename after an Escape cancels a previous edit', async () => {
+    const session = baseSession();
+    const api = fakeApi();
+    await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session, api) });
+    const nameInput = screen.getByTestId('session-name-input') as HTMLInputElement;
+
+    await userEvent.clear(nameInput);
+    await userEvent.type(nameInput, 'Uncommitted name');
+    await userEvent.keyboard('{Escape}');
+    expect(api.renameSession).not.toHaveBeenCalled();
+
+    nameInput.focus();
+    fireEvent.change(nameInput, { target: { value: 'Gimli · T7' } });
+
+    await waitFor(() => expect(api.renameSession).toHaveBeenCalledWith('s1', { name: 'Gimli · T7' }));
+  });
+
+  it('still commits the next real emoji change after an Escape cancels a previous edit', async () => {
+    const session = baseSession();
+    const api = fakeApi();
+    await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session, api) });
+    const emojiInput = screen.getByTestId('session-emoji-input') as HTMLInputElement;
+
+    await userEvent.clear(emojiInput);
+    await userEvent.type(emojiInput, '🦉');
+    await userEvent.keyboard('{Escape}');
+    expect(api.renameSession).not.toHaveBeenCalled();
+
+    emojiInput.focus();
+    fireEvent.change(emojiInput, { target: { value: '🐉' } });
+
+    await waitFor(() => expect(api.renameSession).toHaveBeenCalledWith('s1', { emoji: '🐉' }));
+  });
+
   it('discards an uncommitted name edit instead of committing it when the session switches', async () => {
     const sessionA = baseSession({ id: 's1', name: 'Gimli' });
     const sessionB = baseSession({ id: 's2', name: 'Legolas' });
