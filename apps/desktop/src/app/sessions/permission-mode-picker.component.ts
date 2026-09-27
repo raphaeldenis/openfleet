@@ -14,13 +14,14 @@ const EXPLANATION: Record<PermissionMode, string> = {
   bypassPermissions: 'Everything runs. Only for throwaway worktrees; audited and flagged red.',
 };
 
-const DEFAULT_MODE: PermissionMode = 'manual';
+const INHERITED_LABEL = 'inherited';
+const INHERITED_EXPLANATION = 'No mode set: the CLI uses your own default (Claude settings)';
 
 @Component({
   selector: 'of-permission-mode-picker',
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <span class="mode" data-testid="permission-mode" [attr.data-warning]="isDangerous() ? '1' : null">🛡 {{ mode() }}</span>
+    <span class="mode" data-testid="permission-mode" [attr.data-warning]="isDangerous() ? '1' : null">🛡 {{ label() }}</span>
     <span class="explanation" data-testid="permission-mode-explanation">{{ explanation() }}</span>
   `,
   styles: `
@@ -32,7 +33,10 @@ const DEFAULT_MODE: PermissionMode = 'manual';
 export class PermissionModePickerComponent {
   readonly sessionId = input.required<string>();
   readonly currentMode = input<PermissionMode>();
-  protected readonly mode = computed(() => this.currentMode() ?? DEFAULT_MODE);
-  protected readonly isDangerous = computed(() => this.mode() === 'bypassPermissions');
-  protected readonly explanation = computed(() => EXPLANATION[this.mode()]);
+  protected readonly label = computed(() => this.currentMode() ?? INHERITED_LABEL);
+  protected readonly isDangerous = computed(() => this.currentMode() === 'bypassPermissions');
+  protected readonly explanation = computed(() => {
+    const mode = this.currentMode();
+    return mode ? EXPLANATION[mode] : INHERITED_EXPLANATION;
+  });
 }

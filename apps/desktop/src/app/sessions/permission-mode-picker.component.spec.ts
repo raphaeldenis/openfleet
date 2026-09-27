@@ -41,10 +41,20 @@ describe('PermissionModePickerComponent', () => {
     expect(screen.getByTestId('permission-mode')).not.toHaveAttribute('data-warning');
   });
 
-  it('defaults to manual when the session carries no permission mode', async () => {
+  it('shows "inherited" when the session carries no permission mode, never claiming a mode that was not set', async () => {
     await render(PermissionModePickerComponent, {
       bindings: [inputBinding('sessionId', () => 's1'), inputBinding('currentMode', () => undefined)],
     });
-    expect(screen.getByTestId('permission-mode')).toHaveTextContent('manual');
+    expect(screen.getByTestId('permission-mode')).toHaveTextContent('inherited');
+    expect(screen.getByTestId('permission-mode-explanation')).toHaveTextContent(
+      'No mode set: the CLI uses your own default (Claude settings)',
+    );
+  });
+
+  it('does not warn for the inherited (no mode set) state', async () => {
+    await render(PermissionModePickerComponent, {
+      bindings: [inputBinding('sessionId', () => 's1'), inputBinding('currentMode', () => undefined)],
+    });
+    expect(screen.getByTestId('permission-mode')).not.toHaveAttribute('data-warning');
   });
 });
