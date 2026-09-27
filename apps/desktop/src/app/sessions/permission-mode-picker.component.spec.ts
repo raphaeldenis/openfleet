@@ -104,6 +104,53 @@ describe('PermissionModePickerComponent', () => {
     await waitFor(() => expect(screen.getByTestId('permission-mode-switch-status')).toHaveTextContent('switch pending: happens when this turn ends'));
   });
 
+  it('keeps "restarting…" visible when the daemon reports the mode change before the relaunch settles', async () => {
+    const api = { updatePermissionMode: vi.fn().mockResolvedValue({ status: 'relaunching' }) };
+    const currentMode = signal<'manual' | 'acceptEdits'>('manual');
+    const sessionState = signal<'idle' | 'starting' | 'generating'>('idle');
+    const { fixture } = await render(PermissionModePickerComponent, {
+      bindings: [inputBinding('sessionId', () => 's1'), inputBinding('currentMode', currentMode), inputBinding('sessionState', sessionState)],
+      providers: providersWith(api),
+    });
+
+    await userEvent.selectOptions(screen.getByTestId('permission-mode-select'), 'acceptEdits');
+    await userEvent.click(screen.getByTestId('apply-permission-mode'));
+    await waitFor(() => expect(screen.getByTestId('permission-mode-switch-status')).toHaveTextContent('restarting…'));
+
+    // The daemon persists the mode and emits permission_mode_changed right away, before/while the relaunch starts.
+    currentMode.set('acceptEdits');
+    await fixture.whenStable();
+    expect(screen.getByTestId('permission-mode-switch-status')).toHaveTextContent('restarting…');
+
+    sessionState.set('starting');
+    await fixture.whenStable();
+    expect(screen.getByTestId('permission-mode-switch-status')).toHaveTextContent('restarting…');
+
+    sessionState.set('idle');
+    await waitFor(() => expect(screen.queryByTestId('permission-mode-switch-status')).toBeNull());
+  });
+
+  it('keeps "switch pending" visible until the turn ends, even once the mode itself has landed', async () => {
+    const api = { updatePermissionMode: vi.fn().mockResolvedValue({ status: 'deferred' }) };
+    const currentMode = signal<'manual' | 'acceptEdits'>('manual');
+    const sessionState = signal<'generating' | 'idle'>('generating');
+    const { fixture } = await render(PermissionModePickerComponent, {
+      bindings: [inputBinding('sessionId', () => 's1'), inputBinding('currentMode', currentMode), inputBinding('sessionState', sessionState)],
+      providers: providersWith(api),
+    });
+
+    await userEvent.selectOptions(screen.getByTestId('permission-mode-select'), 'acceptEdits');
+    await userEvent.click(screen.getByTestId('apply-permission-mode'));
+    await waitFor(() => expect(screen.getByTestId('permission-mode-switch-status')).toHaveTextContent('switch pending'));
+
+    currentMode.set('acceptEdits');
+    await fixture.whenStable();
+    expect(screen.getByTestId('permission-mode-switch-status')).toHaveTextContent('switch pending');
+
+    sessionState.set('idle');
+    await waitFor(() => expect(screen.queryByTestId('permission-mode-switch-status')).toBeNull());
+  });
+
   it('clears the switch status once the session reaches idle', async () => {
     const api = { updatePermissionMode: vi.fn().mockResolvedValue({ status: 'deferred' }) };
     const sessionState = signal<'generating' | 'idle'>('generating');
@@ -244,8 +291,9 @@ describe('PermissionModePickerComponent', () => {
   it('keeps a newly picked mode selected when an earlier pending switch lands, without touching it', async () => {
     const api = { updatePermissionMode: vi.fn().mockResolvedValue({ status: 'deferred' }) };
     const currentMode = signal<'manual' | 'acceptEdits' | undefined>('manual');
+    const sessionState = signal<'generating' | 'idle'>('generating');
     await render(PermissionModePickerComponent, {
-      bindings: [inputBinding('sessionId', () => 's1'), inputBinding('currentMode', currentMode)],
+      bindings: [inputBinding('sessionId', () => 's1'), inputBinding('currentMode', currentMode), inputBinding('sessionState', sessionState)],
       providers: providersWith(api),
     });
     const select = screen.getByTestId('permission-mode-select') as HTMLSelectElement;
@@ -255,11 +303,10 @@ describe('PermissionModePickerComponent', () => {
     await waitFor(() => expect(screen.getByTestId('permission-mode-switch-status')).toHaveTextContent('switch pending'));
 
     await userEvent.selectOptions(select, 'plan');
+    // The earlier switch lands: the daemon confirms the mode, then the turn ends (state settles to idle).
     currentMode.set('acceptEdits');
+    sessionState.set('idle');
 
-    // Force the currentMode update to actually flush before asserting: it clears the switch-status
-    // note either way (buggy full reset, or the fix's "switch landed" detection), so waiting for that
-    // guards against asserting on a stale DOM snapshot taken before the signal update propagated.
     await waitFor(() => expect(screen.queryByTestId('permission-mode-switch-status')).toBeNull());
     expect(select.value).toBe('plan');
   });

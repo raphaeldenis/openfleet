@@ -81,12 +81,15 @@ export class PermissionModePickerComponent {
   readonly confirmingBypass = signal(false);
   readonly switchStatus = signal<'relaunching' | 'deferred' | null>(null);
   readonly switchError = signal<string | null>(null);
-  // The mode and state in effect when the current switch was requested — mirrors ModelSelectorComponent's
-  // own landed/settled detection so the "restarting…"/"switch pending" note clears the same way.
-  // `null` (not `undefined`) records an inherited starting mode, since `undefined` is the "no switch
-  // pending" sentinel below — collapsing the two left a switch from an inherited mode untracked forever.
+  // The mode and state in effect when the current switch was requested — `null` (not `undefined`)
+  // records an inherited starting mode, since `undefined` is the "no switch pending" sentinel below —
+  // collapsing the two left a switch from an inherited mode untracked forever.
   private readonly modeBeforeSwitch = signal<PermissionMode | null | undefined>(undefined);
   private readonly stateBeforeSwitch = signal<SessionState | undefined>(undefined);
+  // The daemon persists the mode (and emits permission_mode_changed) before or while the relaunch it
+  // triggers is still starting, so the mode alone landing is not proof the switch is done — only the
+  // relaunch's own state transition (leaving 'starting') or the turn ending (idle/closed) is.
+  private readonly sawStartingSinceSwitch = signal(false);
 
   constructor() {
     effect(() => {
@@ -99,19 +102,24 @@ export class PermissionModePickerComponent {
       this.switchError.set(null);
       this.modeBeforeSwitch.set(undefined);
       this.stateBeforeSwitch.set(undefined);
+      this.sawStartingSinceSwitch.set(false);
     });
 
     effect(() => {
       const requestedFrom = this.modeBeforeSwitch();
       if (requestedFrom === undefined) return;
-      const currentMode = this.currentMode();
       const state = this.sessionState();
-      const switchLanded = (currentMode ?? null) !== requestedFrom;
-      const settledSinceRequest = (state === 'idle' || state === 'closed') && state !== this.stateBeforeSwitch();
-      if (!switchLanded && !settledSinceRequest) return;
+      if (state === 'starting') {
+        this.sawStartingSinceSwitch.set(true);
+        return;
+      }
+      const relaunchSettled = this.sawStartingSinceSwitch();
+      const turnEndSettled = (state === 'idle' || state === 'closed') && state !== this.stateBeforeSwitch();
+      if (!relaunchSettled && !turnEndSettled) return;
       this.switchStatus.set(null);
       this.modeBeforeSwitch.set(undefined);
       this.stateBeforeSwitch.set(undefined);
+      this.sawStartingSinceSwitch.set(false);
     });
   }
 
