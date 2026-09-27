@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmdirSync, symlinkSync } from 'node:fs';
+import { chmodSync, mkdtempSync, rmdirSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
@@ -2205,6 +2205,30 @@ describe('SessionService.reopen', () => {
     expect((caught as SessionReopenError).code).toBe('directory_changed');
     expect(harness.launches).toHaveLength(1);
     expect(service.get(session.id)!.state).toBe('closed');
+  });
+
+  it.runIf(process.getuid?.() !== 0)('rejects reopening a closed session whose directory is unreadable, launching nothing', async () => {
+    const { service, harness, events } = setup();
+    const sessionDir = mkdtempSync(join(tmpdir(), 'of-unreadable-'));
+    const session = await service.create({ directory: sessionDir, name: 'G', harness: 'fake', emoji: '🤖' });
+    harness.handles[0]!.emitExit(0);
+
+    chmodSync(sessionDir, 0o000);
+    try {
+      let caught: unknown;
+      try {
+        service.reopen(session.id);
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(SessionReopenError);
+      expect((caught as SessionReopenError).code).toBe('directory_unreadable');
+      expect(harness.launches).toHaveLength(1);
+      expect(service.get(session.id)!.state).toBe('closed');
+      expect(events.some((e) => e.type === 'session.reopened')).toBe(false);
+    } finally {
+      chmodSync(sessionDir, 0o755);
+    }
   });
 
   it('rejects reopening a session whose harness fails to launch, leaving it closed without emitting session.reopened', async () => {
