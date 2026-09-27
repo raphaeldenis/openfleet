@@ -43,11 +43,14 @@ export function registerRestRoutes(router: Router, deps: { sessions: SessionServ
   });
 
   router.add('POST', '/api/sessions/:id/messages', ({ res, params, body }) => {
-    const session = deps.sessions.get(params.id!);
-    if (!session) return json(res, 404, { error: 'not_found' });
-    if (session.state === 'closed') return json(res, 409, { error: 'session_closed' });
+    if (!deps.sessions.get(params.id!)) return json(res, 404, { error: 'not_found' });
     const { body: text } = z.object({ body: z.string().min(1) }).parse(body);
-    json(res, 200, deps.sessions.sendMessage({ sessionId: params.id!, body: text }));
+    try {
+      json(res, 200, deps.sessions.sendMessage({ sessionId: params.id!, body: text }));
+    } catch (error) {
+      if (!(error instanceof SessionClosedError)) throw error;
+      json(res, 409, { error: 'session_closed' });
+    }
   });
 
   router.add('POST', '/api/sessions/:id/reopen', ({ res, params }) => {

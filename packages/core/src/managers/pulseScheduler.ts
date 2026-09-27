@@ -18,6 +18,11 @@ export class PulseScheduler {
 
   constructor(deps: PulseSchedulerDeps) {
     this.deps = deps;
+    // A daemon restart re-arms every manager through start(); a reopened session has no equivalent
+    // boot hook of its own, so it re-arms here off the same event SessionService.reopen() emits.
+    this.deps.bus.subscribe((event) => {
+      if (event.type === 'session.reopened') this.onSessionReopened(event.sessionId);
+    });
   }
 
   start(): void {
@@ -27,6 +32,12 @@ export class PulseScheduler {
   }
 
   onManagerCreated(record: ManagerRecord): void {
+    this.arm(record);
+  }
+
+  private onSessionReopened(sessionId: string): void {
+    const record = this.deps.managers.get(sessionId);
+    if (!record) return; // not a manager: nothing to re-arm
     this.arm(record);
   }
 

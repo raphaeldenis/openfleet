@@ -149,7 +149,7 @@ export class SessionService {
   }
 
   sendMessage(input: { sessionId: string; body: string; fromSessionId?: string }): { status: 'delivered' | 'queued'; messageId: string } {
-    const session = this.require(input.sessionId);
+    const session = this.requireOpen(input.sessionId);
     const message = this.queue.enqueue(input);
     this.guarded(session.id, () => this.advance(session.id));
     const { phase } = this.deliveryOf(session.id);
@@ -210,6 +210,7 @@ export class SessionService {
     if (session.state !== 'closed') throw new SessionReopenError('not_closed', `session ${sessionId} is not closed`);
     if (!existsSync(session.directory)) throw new SessionReopenError('directory_missing', `session ${sessionId} directory no longer exists: ${session.directory}`);
     this.resumeOne(session);
+    this.deps.bus.emit({ type: 'session.reopened', sessionId });
     return this.repo.get(sessionId)!;
   }
 
