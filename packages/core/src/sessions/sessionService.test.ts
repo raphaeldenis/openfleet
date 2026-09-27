@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { appendFileSync, chmodSync, mkdtempSync, rmdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, rmdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
@@ -1282,9 +1282,22 @@ describe('SessionService submit-keystroke hostile cases', () => {
   });
 
   describe('idle after an Escape interrupt (no Stop hook fires)', () => {
+    // The trust-boundary check (below) only remembers a transcript_path that resolves under
+    // <CLAUDE_CONFIG_DIR>/projects/, so every test in this file that wants its transcript file armed has
+    // to point CLAUDE_CONFIG_DIR at a fake config dir containing it. Restored after each test so it never
+    // leaks into another test file (or, worse, a machine's real ~/.claude).
+    const originalConfigDir = process.env.CLAUDE_CONFIG_DIR;
+    afterEach(() => {
+      if (originalConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = originalConfigDir;
+    });
+
     function makeTranscriptFile(): string {
-      const dir = mkdtempSync(join(tmpdir(), 'of-transcript-'));
-      const path = join(dir, 'transcript.jsonl');
+      const configDir = mkdtempSync(join(tmpdir(), 'of-claude-config-'));
+      process.env.CLAUDE_CONFIG_DIR = configDir;
+      const projectDir = join(configDir, 'projects', 'proj');
+      mkdirSync(projectDir, { recursive: true });
+      const path = join(projectDir, 'transcript.jsonl');
       writeFileSync(path, '');
       return path;
     }
@@ -1445,9 +1458,22 @@ describe('SessionService submit-keystroke hostile cases', () => {
       service.writeRaw(session.id, '\x1b');
       expect(vi.getTimerCount()).toBeGreaterThan(timersBeforeArm);
 
-      await service.close(session.id);
+      // Ignores the graceful kill so it never exits on its own: the old test passed even without close()
+      // disarming anything, because the default FakeHandle exits synchronously on kill() and that exit
+      // races markClosed (which already disarmed) ahead of any assertion. With the process never exiting,
+      // only close() disarming the watch itself — before it even awaits the kill/escalation race — can
+      // account for the watch's timers disappearing here.
+      const handle = service.harnessHandle(session.id) as FakeHandle;
+      handle.ignoresGracefulKill = true;
+      const closePromise = service.close(session.id);
 
-      expect(vi.getTimerCount()).toBe(timersBeforeArm);
+      // close() runs synchronously up to its first await: by the time this line runs, the watch is already
+      // disarmed even though the fake process has not exited and the escalation timer has not fired yet
+      // (that escalation timer is the +1: it is close()'s own, unrelated to the interrupt watch).
+      expect(vi.getTimerCount()).toBe(timersBeforeArm + 1);
+
+      handle.emitExit(137); // let close() settle so no timer or pending promise leaks into the next test
+      await closePromise;
     });
 
     it('ignores an interrupt marker already sitting in the transcript before the watch armed (an earlier, already-resolved interrupt)', async () => {
@@ -1496,6 +1522,43 @@ describe('SessionService submit-keystroke hostile cases', () => {
       await vi.advanceTimersByTimeAsync(TRANSCRIPT_INTERRUPT_POLL_MS);
 
       expect(service.get(session.id)!.state).toBe('idle'); // an arrow key alone armed the watch, same as a bare Escape
+    });
+
+    it.each([
+      ['a bare JSON null', 'null'],
+      ['a bare JSON number', '42'],
+      ['a user entry whose message is null', JSON.stringify({ type: 'user', message: null })],
+      ['a user entry whose content array holds a null block', JSON.stringify({ type: 'user', message: { content: [null] } })],
+    ])('does not crash the poll on a JSON-valid but non-matching transcript line (%s), and still catches a later real marker', async (_label, malformedLine) => {
+      vi.useFakeTimers();
+      const { service } = setup();
+      const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+      const transcriptPath = makeTranscriptFile();
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: transcriptPath }));
+
+      service.writeRaw(session.id, '\x1b');
+      appendFileSync(transcriptPath, `${malformedLine}\n`);
+      await vi.advanceTimersByTimeAsync(TRANSCRIPT_INTERRUPT_POLL_MS); // would throw inside the setInterval callback and crash the daemon if the predicate isn't total
+
+      expect(service.get(session.id)!.state).toBe('generating'); // the watch survived the malformed line and is still armed
+
+      appendFileSync(transcriptPath, interruptedLine());
+      await vi.advanceTimersByTimeAsync(TRANSCRIPT_INTERRUPT_POLL_MS);
+
+      expect(service.get(session.id)!.state).toBe('idle'); // a later real marker still flips it
+    });
+
+    it('does not remember a transcript_path outside the Claude projects directory, so a watch never arms on it', async () => {
+      vi.useFakeTimers();
+      const { service } = setup();
+      const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: '/etc/hosts' }));
+      expect(service.get(session.id)!.state).toBe('generating');
+      const timersBeforeEsc = vi.getTimerCount();
+
+      service.writeRaw(session.id, '\x1b');
+
+      expect(vi.getTimerCount()).toBe(timersBeforeEsc); // the untrusted path was never remembered, so nothing armed
     });
 
     it('still detects the interrupt marker when the CLI\'s write to the transcript straddles two polls (a torn write), by carrying the partial line to the next poll', async () => {
