@@ -68,10 +68,13 @@ export const RESUME_LAUNCH_FAILED_EXIT_CODE = -2;
 const activeHandleBySessionId = new Map<string, HarnessHandle>();
 
 // One delivery at a time per session: ready -> typing -> typed -> submitted -> ready, or closing until exit.
-interface TypedPhase { name: 'typed'; messageId: string; handle: HarnessHandle }
+// deferredRaw holds raw input (writeRaw) that arrived while the composer already held this message's body,
+// so it can never land ahead of the Enter that submits it. It rides on the phase object itself: closing or
+// relaunching replaces the phase wholesale, so a dead or replaced pty never receives it.
+interface TypedPhase { name: 'typed'; messageId: string; handle: HarnessHandle; deferredRaw: string[] }
 type DeliveryPhase =
   | { name: 'ready' }
-  | { name: 'typing'; messageId: string; handle: HarnessHandle }
+  | { name: 'typing'; messageId: string; handle: HarnessHandle; deferredRaw: string[] }
   // ponytail: typed trusts the composer still holds the body and only ever adds the '\r' — if something
   // wiped the composer first, the empty submit is a no-op in the CLI and the message is counted delivered
   // but lost. Retyping would risk a doubled body, and Ctrl+U clears only one line of a multi-line body;
@@ -372,7 +375,17 @@ export class SessionService {
   tokens(sessionId: string): { hookToken: string; mcpToken: string } | undefined { return this.repo.tokens(sessionId); }
   // ponytail: exposes the raw harness handle to the REST edge for test-only routes (fake-output); scope down if the daemon leaves localhost
   harnessHandle(sessionId: string): HarnessHandle | undefined { return this.handles.get(sessionId); }
-  writeRaw(sessionId: string, data: string): void { this.handles.get(sessionId)?.write(data); }
+  // While the composer holds a message's body awaiting its Enter ('typing'), raw input is deferred onto
+  // that phase instead of writing straight through — otherwise it could land between the body and the '\r'
+  // that submits it. Outside that window it still writes straight through, as before.
+  writeRaw(sessionId: string, data: string): void {
+    const { phase } = this.deliveryOf(sessionId);
+    if (phase.name === 'typing') {
+      phase.deferredRaw.push(data);
+      return;
+    }
+    this.handles.get(sessionId)?.write(data);
+  }
   resize(sessionId: string, cols: number, rows: number): void { this.handles.get(sessionId)?.resize(cols, rows); }
   async close(sessionId: string, options?: { escalateAfterMs?: number }): Promise<void> {
     const relaunch = this.relaunches.get(sessionId);
@@ -487,7 +500,7 @@ export class SessionService {
     // The composer reads a body and its '\r' in one write as a paste and never submits it: the '\r' waits.
     const submitDelayMs = this.deps.submitKeystrokeDelayMs ?? SUBMIT_KEYSTROKE_DELAY_MS;
     const submitDelay = this.schedule(sessionId, submitDelayMs, () => this.finishTyping(sessionId));
-    this.enter(sessionId, { name: 'typing', messageId: message.id, handle }, submitDelay);
+    this.enter(sessionId, { name: 'typing', messageId: message.id, handle, deferredRaw: [] }, submitDelay);
   }
 
   private finishTyping(sessionId: string): void {
@@ -505,6 +518,9 @@ export class SessionService {
       return;
     }
     phase.handle.write('\r');
+    // Flushed right after the Enter, in arrival order: whatever was deferred behind this message now goes
+    // straight through, on the same handle that just received the Enter.
+    for (const raw of phase.deferredRaw) phase.handle.write(raw);
     // The '\r' reached the pty: the delivery is committed, so nothing past this line may lead to a second '\r'.
     this.unrecordedDeliveries.set(sessionId, phase.messageId);
     this.unfinishedTurns.add(sessionId);

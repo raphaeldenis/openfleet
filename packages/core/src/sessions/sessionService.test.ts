@@ -1204,7 +1204,7 @@ describe('SessionService submit-keystroke hostile cases', () => {
     expect(harness.handles[1]!.written).toEqual(['second']);
   });
 
-  it('a raw write during the pending delay (e.g. an Escape interrupt) does not cancel the delayed submit keystroke, which still lands after whatever the raw write left behind', async () => {
+  it('defers a raw write during the pending delay (e.g. an Escape interrupt) behind the delayed submit keystroke, then writes it right after in arrival order', async () => {
     vi.useFakeTimers();
     const { service, harness, events } = setup();
     const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
@@ -1212,17 +1212,17 @@ describe('SessionService submit-keystroke hostile cases', () => {
 
     service.sendMessage({ sessionId: session.id, body: 'do X' });
     service.writeRaw(session.id, '\x1b'); // human presses Escape mid-delay
-    expect(harness.handles[0]!.written).toEqual(['do X', '\x1b']);
+    expect(harness.handles[0]!.written).toEqual(['do X']); // deferred: not written to the pty yet
 
     await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
 
-    // Pinning actual behaviour: the delayed '\r' is unconditional on what happened to the composer in
-    // between, so it lands right after the Escape and the message is still reported delivered.
-    expect(harness.handles[0]!.written).toEqual(['do X', '\x1b', '\r']);
+    // The Enter that submits 'do X' must reach the pty before the deferred Escape, so the composer
+    // never sees the Escape while it still holds 'do X'.
+    expect(harness.handles[0]!.written).toEqual(['do X', '\r', '\x1b']);
     expect(events.filter((e) => e.type === 'message.delivered')).toHaveLength(1);
   });
 
-  it('a raw \\r from the human (e.g. POST /api/sessions/:id/input, double-pressing Enter) during the delay lands as its own keystroke, so the later delayed submit double-submits', async () => {
+  it('defers a raw \\r from the human (e.g. POST /api/sessions/:id/input, double-pressing Enter) behind the delayed submit keystroke, so only one Enter reaches the composer while it holds the message', async () => {
     vi.useFakeTimers();
     const { service, harness, events } = setup();
     const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
@@ -1230,14 +1230,33 @@ describe('SessionService submit-keystroke hostile cases', () => {
 
     service.sendMessage({ sessionId: session.id, body: 'do X' });
     service.writeRaw(session.id, '\r'); // restHandlers.ts POST /input forwards raw bytes straight to writeRaw
-    expect(harness.handles[0]!.written).toEqual(['do X', '\r']);
+    expect(harness.handles[0]!.written).toEqual(['do X']); // deferred: not written to the pty yet
 
     await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
 
-    // Pinning actual behaviour: two '\r' writes reach the pty for one logical message. The queue
-    // bookkeeping itself stays correct (delivered exactly once) even though the pty sees a double-submit.
+    // The queued message's own Enter lands first, then the deferred human Enter — both still reach the
+    // pty (the queue bookkeeping stays correct, delivered exactly once) but never interleaved.
     expect(harness.handles[0]!.written).toEqual(['do X', '\r', '\r']);
     expect(events.filter((e) => e.type === 'message.delivered')).toHaveLength(1);
+  });
+
+  it('drops a raw write deferred during the pending delay when the session closes before the delayed submit keystroke fires, instead of writing it to the dead pty', async () => {
+    vi.useFakeTimers();
+    const { service, harness } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+
+    service.sendMessage({ sessionId: session.id, body: 'do X' });
+    service.writeRaw(session.id, '\x1b'); // deferred behind the pending Enter
+    expect(harness.handles[0]!.written).toEqual(['do X']);
+
+    await service.close(session.id); // kills the pty before the delayed Enter ever fires
+
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
+
+    // Neither the pending Enter nor the deferred Escape ever reaches the now-dead pty.
+    expect(harness.handles[0]!.written).toEqual(['do X']);
+    expect(service.get(session.id)!.state).toBe('closed');
   });
 
   it('the submit delay does not scale with body length: a very long body still waits exactly SUBMIT_KEYSTROKE_DELAY_MS', async () => {
