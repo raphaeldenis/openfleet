@@ -86,5 +86,6 @@ describe('app.routes', () => {
     const harness = await RouterTestingHarness.create('/this-page-does-not-exist');
 
     expect(harness.routeNativeElement?.querySelector('[data-testid="app-shell"]')).toBeTruthy();
+    expect(harness.routeNativeElement?.querySelector('[data-testid="not-found"]')).toBeTruthy();
   });
 });

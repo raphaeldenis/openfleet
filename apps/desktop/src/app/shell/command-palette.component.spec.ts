@@ -54,4 +54,26 @@ describe('CommandPaletteComponent', () => {
 
     expect(closed).toHaveBeenCalled();
   });
+
+  it('wraps focus from the last item back to the first on Tab', async () => {
+    await render(CommandPaletteComponent, { bindings: [inputBinding('open', () => true)], providers: [provideRouter(routes())] });
+    const first = screen.getByTestId('palette-item-sessions');
+    const last = screen.getByTestId('palette-item-components');
+    last.focus();
+
+    await userEvent.tab();
+
+    expect(document.activeElement).toBe(first);
+  });
+
+  it('wraps focus from the first item back to the last on Shift+Tab', async () => {
+    await render(CommandPaletteComponent, { bindings: [inputBinding('open', () => true)], providers: [provideRouter(routes())] });
+    const first = screen.getByTestId('palette-item-sessions');
+    const last = screen.getByTestId('palette-item-components');
+    first.focus();
+
+    await userEvent.tab({ shift: true });
+
+    expect(document.activeElement).toBe(last);
+  });
 });
