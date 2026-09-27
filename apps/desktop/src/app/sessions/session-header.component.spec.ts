@@ -37,6 +37,17 @@ describe('SessionHeaderComponent', () => {
     expect(screen.getByTestId('session-name').tagName).not.toBe('INPUT');
   });
 
+  it('gives an unbroken long session name a tooltip and lets it wrap instead of being clipped', async () => {
+    const longName = 'B'.repeat(80);
+    const session = baseSession({ name: longName });
+    await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
+
+    const name = screen.getByTestId('session-name');
+
+    expect(name).toHaveAttribute('title', longName);
+    expect(getComputedStyle(name).overflowWrap).toBe('anywhere');
+  });
+
   it('shows the exit code next to the chip once the session is closed', async () => {
     const session = baseSession({ state: 'closed', exitCode: 1 });
     await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
