@@ -3,12 +3,16 @@ import type { ClaudeHookEvent, SessionState } from '@openfleet/shared';
 export type SessionInput =
   | { kind: 'hook'; event: ClaudeHookEvent }
   | { kind: 'permission_resolved' }
-  | { kind: 'harness_exit' };
+  | { kind: 'harness_exit' }
+  // Proven by a transcript-tailing watch, not by a hook: Claude Code fires no Stop when Escape cancels a
+  // turn, so nothing else ever ends it.
+  | { kind: 'transcript_interrupted' };
 
 export function nextState(current: SessionState, input: SessionInput): SessionState {
   if (current === 'closed') return 'closed';
   if (input.kind === 'harness_exit') return 'closed';
   if (input.kind === 'permission_resolved') return 'generating';
+  if (input.kind === 'transcript_interrupted') return 'idle';
   return stateAfterHook(current, input.event);
 }
 
@@ -44,6 +48,7 @@ function isCompaction(event: ClaudeHookEvent): boolean {
 // A hook that only fires while the CLI waits on its composer proves the last turn is over, even when the
 // recorded state already says idle because that turn's UserPromptSubmit never arrived.
 export function provesTurnEnded(input: SessionInput): boolean {
+  if (input.kind === 'transcript_interrupted') return true;
   if (input.kind !== 'hook') return false;
   const { event } = input;
   if (event.hook_event_name === 'Stop') return true;

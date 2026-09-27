@@ -1,13 +1,13 @@
-import { chmodSync, mkdtempSync, rmdirSync, symlinkSync } from 'node:fs';
+import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, rmdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { openDatabase } from '../db/database.js';
 import { FakeHandle, FakeHarness } from '../harness/fakeHarness.js';
 import type { Harness, HarnessHandle, HarnessLaunch } from '../harness/harness.js';
 import { EventBus } from '../events/eventBus.js';
 import { makeRepo } from '../git/testRepo.js';
-import { DaemonShuttingDownError, DEFAULT_CLOSE_ESCALATE_MS, DELIVERY_RETRY_MS, MAX_DELIVERY_RETRIES, PARKED_RETRY_MS, RESUME_LAUNCH_FAILED_EXIT_CODE, RESUME_TIMEOUT_EXIT_CODE, SessionReopenError, SessionService, SUBMIT_KEYSTROKE_DELAY_MS, TURN_START_TIMEOUT_MS } from './sessionService.js';
+import { DaemonShuttingDownError, DEFAULT_CLOSE_ESCALATE_MS, DELIVERY_RETRY_MS, MAX_DELIVERY_RETRIES, PARKED_RETRY_MS, RESUME_LAUNCH_FAILED_EXIT_CODE, RESUME_TIMEOUT_EXIT_CODE, SessionReopenError, SessionService, SUBMIT_KEYSTROKE_DELAY_MS, TRANSCRIPT_INTERRUPT_POLL_MS, TRANSCRIPT_INTERRUPT_TIMEOUT_MS, TURN_START_TIMEOUT_MS } from './sessionService.js';
 import { MessageQueue } from './messageQueue.js';
 import { SessionRepository } from './sessionRepository.js';
 import { PERMISSION_MODES, type ServerEvent } from '@openfleet/shared';
@@ -1272,6 +1272,501 @@ describe('SessionService submit-keystroke hostile cases', () => {
     // pty (the queue bookkeeping stays correct, delivered exactly once) but never interleaved.
     expect(harness.handles[0]!.written).toEqual(['do X', '\r', '\r']);
     expect(events.filter((e) => e.type === 'message.delivered')).toHaveLength(1);
+  });
+
+  describe('idle after an Escape interrupt (no Stop hook fires)', () => {
+    // The trust-boundary check (below) only remembers a transcript_path that resolves under
+    // <CLAUDE_CONFIG_DIR>/projects/, so every test in this file that wants its transcript file armed has
+    // to point CLAUDE_CONFIG_DIR at a fake config dir containing it. Restored after each test so it never
+    // leaks into another test file (or, worse, a machine's real ~/.claude).
+    const originalConfigDir = process.env.CLAUDE_CONFIG_DIR;
+    afterEach(() => {
+      if (originalConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = originalConfigDir;
+    });
+
+    function makeTranscriptFile(): string {
+      const configDir = mkdtempSync(join(tmpdir(), 'of-claude-config-'));
+      process.env.CLAUDE_CONFIG_DIR = configDir;
+      const projectDir = join(configDir, 'projects', 'proj');
+      mkdirSync(projectDir, { recursive: true });
+      const path = join(projectDir, 'transcript.jsonl');
+      writeFileSync(path, '');
+      return path;
+    }
+
+    const interruptedLine = () =>
+      `${JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: '[Request interrupted by user]' }] } })}\n`;
+
+    it('moves generating -> idle once the CLI writes the interrupt marker to the transcript an ESC armed', async () => {
+      vi.useFakeTimers();
+      const { service } = setup();
+      const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+      const transcriptPath = makeTranscriptFile();
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: transcriptPath }));
+      expect(service.get(session.id)!.state).toBe('generating');
+
+      service.writeRaw(session.id, '\x1b'); // human presses Escape while the CLI is generating
+      appendFileSync(transcriptPath, interruptedLine());
+      await vi.advanceTimersByTimeAsync(TRANSCRIPT_INTERRUPT_POLL_MS);
+
+      expect(service.get(session.id)!.state).toBe('idle');
+    });
+
+    it('does nothing if no hook has ever reported a transcript_path for the session', async () => {
+      vi.useFakeTimers();
+      const { service } = setup();
+      const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit' })); // no transcript_path
+      expect(service.get(session.id)!.state).toBe('generating');
+
+      expect(() => service.writeRaw(session.id, '\x1b')).not.toThrow();
+      await vi.advanceTimersByTimeAsync(TRANSCRIPT_INTERRUPT_TIMEOUT_MS);
+
+      expect(service.get(session.id)!.state).toBe('generating');
+    });
+
+    it('disarms on a PermissionRequest so a later interrupt line does not wrongly clear the pending prompt', async () => {
+      vi.useFakeTimers();
+      const { service } = setup();
+      const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+      const transcriptPath = makeTranscriptFile();
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: transcriptPath }));
+
+      service.writeRaw(session.id, '\x1b');
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: {} }));
+      expect(service.get(session.id)!.state).toBe('waiting_permission');
+
+      appendFileSync(transcriptPath, interruptedLine());
+      await vi.advanceTimersByTimeAsync(TRANSCRIPT_INTERRUPT_POLL_MS);
+
+      expect(service.get(session.id)!.state).toBe('waiting_permission'); // never wrongly cleared by the stale watch
+    });
+
+    it('disarms after the timeout so a very late interrupt line no longer flips the state', async () => {
+      vi.useFakeTimers();
+      const { service } = setup();
+      const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+      const transcriptPath = makeTranscriptFile();
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: transcriptPath }));
+
+      service.writeRaw(session.id, '\x1b');
+      await vi.advanceTimersByTimeAsync(TRANSCRIPT_INTERRUPT_TIMEOUT_MS);
+      appendFileSync(transcriptPath, interruptedLine());
+      await vi.advanceTimersByTimeAsync(TRANSCRIPT_INTERRUPT_POLL_MS);
+
+      expect(service.get(session.id)!.state).toBe('generating'); // the watch gave up before this line ever appeared
+    });
+
+    // The four tests above assert only on the resulting session state. A build that never implements the
+    // watch at all leaves the state unchanged in exactly the same way, so "state didn't change" alone is
+    // not proof that anything was armed or disarmed. These tests instead assert on vi.getTimerCount(): a
+    // build with no watch mechanism schedules no timer on writeRaw and so fails these immediately.
+    it('arming actually schedules timers (a poll interval and a timeout), not just eventually a state change', async () => {
+      vi.useFakeTimers();
+      const { service } = setup();
+      const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+      const transcriptPath = makeTranscriptFile();
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: transcriptPath }));
+      const timersBeforeArm = vi.getTimerCount();
+
+      service.writeRaw(session.id, '\x1b');
+
+      expect(vi.getTimerCount()).toBeGreaterThan(timersBeforeArm);
+    });
+
+    it('schedules no timer at all when no hook has ever reported a transcript_path, not just "state never changes"', async () => {
+      vi.useFakeTimers();
+      const { service } = setup();
+      const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit' })); // no transcript_path
+      const timersBefore = vi.getTimerCount();
+
+      service.writeRaw(session.id, '\x1b');
+
+      expect(vi.getTimerCount()).toBe(timersBefore);
+    });
+
+    it('does not arm when the CLI is not generating (e.g. already idle)', async () => {
+      vi.useFakeTimers();
+      const { service } = setup();
+      const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+      const transcriptPath = makeTranscriptFile();
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: transcriptPath }));
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'Stop' })); // now idle
+      const timersBefore = vi.getTimerCount();
+
+      service.writeRaw(session.id, '\x1b');
+
+      expect(vi.getTimerCount()).toBe(timersBefore);
+    });
+
+    it('a second Escape while a watch is already armed schedules no second interval (no leaked timer per repeated ESC)', async () => {
+      vi.useFakeTimers();
+      const { service } = setup();
+      const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+      const transcriptPath = makeTranscriptFile();
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: transcriptPath }));
+
+      service.writeRaw(session.id, '\x1b');
+      const timersAfterFirstEsc = vi.getTimerCount();
+      service.writeRaw(session.id, '\x1b');
+
+      expect(vi.getTimerCount()).toBe(timersAfterFirstEsc);
+    });
+
+    it.each([
+      ['Stop', { hook_event_name: 'Stop' as const }],
+      ['a PermissionRequest', { hook_event_name: 'PermissionRequest' as const, tool_name: 'Bash', tool_input: {} }],
+      ['an idle_prompt Notification', { hook_event_name: 'Notification' as const, notification_type: 'idle_prompt' }],
+      ['SessionEnd', { hook_event_name: 'SessionEnd' as const }],
+    ])('disarms the watch\'s own timers on %s (not only relying on the outcome matching by coincidence)', async (_label, event) => {
+      vi.useFakeTimers();
+      const { service } = setup();
+      const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+      const transcriptPath = makeTranscriptFile();
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: transcriptPath }));
+      const timersBeforeArm = vi.getTimerCount();
+
+      service.writeRaw(session.id, '\x1b');
+      expect(vi.getTimerCount()).toBeGreaterThan(timersBeforeArm);
+
+      service.applyInput(session.id, hook(session.id, event));
+      // SessionEnd additionally starts an async close() with its own escalation timer, unrelated to the
+      // interrupt watch; let that settle (it clears itself once the fake handle's kill() resolves) before
+      // asserting only the interrupt watch's own timers are gone.
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(vi.getTimerCount()).toBe(timersBeforeArm);
+    });
+
+    it('disarms the watch\'s own timers on close(), not only by racing the harness exit', async () => {
+      vi.useFakeTimers();
+      const { service } = setup();
+      const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+      const transcriptPath = makeTranscriptFile();
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: transcriptPath }));
+      const timersBeforeArm = vi.getTimerCount();
+
+      service.writeRaw(session.id, '\x1b');
+      expect(vi.getTimerCount()).toBeGreaterThan(timersBeforeArm);
+
+      // Ignores the graceful kill so it never exits on its own: the old test passed even without close()
+      // disarming anything, because the default FakeHandle exits synchronously on kill() and that exit
+      // races markClosed (which already disarmed) ahead of any assertion. With the process never exiting,
+      // only close() disarming the watch itself — before it even awaits the kill/escalation race — can
+      // account for the watch's timers disappearing here.
+      const handle = service.harnessHandle(session.id) as FakeHandle;
+      handle.ignoresGracefulKill = true;
+      const closePromise = service.close(session.id);
+
+      // close() runs synchronously up to its first await: by the time this line runs, the watch is already
+      // disarmed even though the fake process has not exited and the escalation timer has not fired yet
+      // (that escalation timer is the +1: it is close()'s own, unrelated to the interrupt watch).
+      expect(vi.getTimerCount()).toBe(timersBeforeArm + 1);
+
+      handle.emitExit(137); // let close() settle so no timer or pending promise leaks into the next test
+      await closePromise;
+    });
+
+    it('ignores an interrupt marker already sitting in the transcript before the watch armed (an earlier, already-resolved interrupt)', async () => {
+      vi.useFakeTimers();
+      const { service } = setup();
+      const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+      const transcriptPath = makeTranscriptFile();
+      appendFileSync(transcriptPath, interruptedLine()); // stale marker from a previous, already-resolved interrupt
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: transcriptPath }));
+
+      service.writeRaw(session.id, '\x1b');
+      // A poll that finds nothing new appended returns before ever reading the file, so it alone would
+      // pass even if a poll re-read the whole file from byte 0 instead of from the armed offset. Appending
+      // an unrelated line forces a real read; only reading from the armed offset (not from 0) keeps the
+      // stale marker above out of that read.
+      appendFileSync(transcriptPath, `${JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'still working' }] } })}\n`);
+      await vi.advanceTimersByTimeAsync(TRANSCRIPT_INTERRUPT_POLL_MS);
+
+      expect(service.get(session.id)!.state).toBe('generating');
+    });
+
+    it('still catches the interrupt marker appended after a large pre-existing transcript', async () => {
+      vi.useFakeTimers();
+      const { service } = setup();
+      const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+      const transcriptPath = makeTranscriptFile();
+      appendFileSync(transcriptPath, `${JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'x'.repeat(500_000) }] } })}\n`);
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: transcriptPath }));
+
+      service.writeRaw(session.id, '\x1b');
+      appendFileSync(transcriptPath, interruptedLine());
+      await vi.advanceTimersByTimeAsync(TRANSCRIPT_INTERRUPT_POLL_MS);
+
+      expect(service.get(session.id)!.state).toBe('idle');
+    });
+
+    it('documents current behaviour: any raw write containing the ESC byte arms the watch, not only a bare Escape keypress (e.g. an arrow key\'s CSI sequence)', async () => {
+      vi.useFakeTimers();
+      const { service } = setup();
+      const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+      const transcriptPath = makeTranscriptFile();
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: transcriptPath }));
+
+      service.writeRaw(session.id, '\x1b[A'); // up-arrow: a CSI sequence, also starts with the ESC byte
+      appendFileSync(transcriptPath, interruptedLine());
+      await vi.advanceTimersByTimeAsync(TRANSCRIPT_INTERRUPT_POLL_MS);
+
+      expect(service.get(session.id)!.state).toBe('idle'); // an arrow key alone armed the watch, same as a bare Escape
+    });
+
+    it.each([
+      ['a bare JSON null', 'null'],
+      ['a bare JSON number', '42'],
+      ['a user entry whose message is null', JSON.stringify({ type: 'user', message: null })],
+      ['a user entry whose content array holds a null block', JSON.stringify({ type: 'user', message: { content: [null] } })],
+    ])('does not crash the poll on a JSON-valid but non-matching transcript line (%s), and still catches a later real marker', async (_label, malformedLine) => {
+      vi.useFakeTimers();
+      const { service } = setup();
+      const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+      const transcriptPath = makeTranscriptFile();
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: transcriptPath }));
+
+      service.writeRaw(session.id, '\x1b');
+      appendFileSync(transcriptPath, `${malformedLine}\n`);
+      await vi.advanceTimersByTimeAsync(TRANSCRIPT_INTERRUPT_POLL_MS); // would throw inside the setInterval callback and crash the daemon if the predicate isn't total
+
+      expect(service.get(session.id)!.state).toBe('generating'); // the watch survived the malformed line and is still armed
+
+      appendFileSync(transcriptPath, interruptedLine());
+      await vi.advanceTimersByTimeAsync(TRANSCRIPT_INTERRUPT_POLL_MS);
+
+      expect(service.get(session.id)!.state).toBe('idle'); // a later real marker still flips it
+    });
+
+    it('does not remember a transcript_path outside the Claude projects directory, so a watch never arms on it', async () => {
+      vi.useFakeTimers();
+      const { service } = setup();
+      const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: '/etc/hosts' }));
+      expect(service.get(session.id)!.state).toBe('generating');
+      const timersBeforeEsc = vi.getTimerCount();
+
+      service.writeRaw(session.id, '\x1b');
+
+      expect(vi.getTimerCount()).toBe(timersBeforeEsc); // the untrusted path was never remembered, so nothing armed
+    });
+
+    // A real CLI's own UserPromptSubmit hook can report its transcript_path before the CLI has created that
+    // file — the daemon must trust the path by its directory, not by realpath-ing a file that doesn't exist yet.
+    function reservedTranscriptPath(): string {
+      const configDir = mkdtempSync(join(tmpdir(), 'of-claude-config-'));
+      process.env.CLAUDE_CONFIG_DIR = configDir;
+      const projectDir = join(configDir, 'projects', 'proj');
+      mkdirSync(projectDir, { recursive: true });
+      return join(projectDir, 'transcript.jsonl'); // path is reserved, no file created here
+    }
+
+    it('arms the watch on a transcript_path whose file does not exist yet, and catches the marker once the CLI creates it', async () => {
+      vi.useFakeTimers();
+      const { service } = setup();
+      const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+      const transcriptPath = reservedTranscriptPath();
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: transcriptPath }));
+      expect(service.get(session.id)!.state).toBe('generating');
+
+      service.writeRaw(session.id, '\x1b');
+      writeFileSync(transcriptPath, interruptedLine()); // the CLI creates the file only now, after the ESC
+      await vi.advanceTimersByTimeAsync(TRANSCRIPT_INTERRUPT_POLL_MS);
+
+      expect(service.get(session.id)!.state).toBe('idle');
+    });
+
+    // The FIRST session ever run in a new directory has no <projects>/<encoded-cwd>/ subfolder yet: the CLI
+    // only creates it lazily, along with the transcript file, once it actually writes. The trust check must
+    // walk up to the nearest existing ancestor (here, the projects dir itself) rather than realpath-ing a
+    // dirname that doesn't exist yet.
+    function unbornProjectTranscriptPath(): string {
+      const configDir = mkdtempSync(join(tmpdir(), 'of-claude-config-'));
+      process.env.CLAUDE_CONFIG_DIR = configDir;
+      mkdirSync(join(configDir, 'projects'), { recursive: true }); // projects dir exists; its 'proj' subfolder does not
+      return join(configDir, 'projects', 'proj', 'transcript.jsonl');
+    }
+
+    it('arms the watch on a transcript_path whose project subfolder does not exist yet (first session in a new directory), and catches the marker once the CLI creates the folder and file', async () => {
+      vi.useFakeTimers();
+      const { service } = setup();
+      const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+      const transcriptPath = unbornProjectTranscriptPath();
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: transcriptPath }));
+      expect(service.get(session.id)!.state).toBe('generating');
+
+      service.writeRaw(session.id, '\x1b');
+      mkdirSync(dirname(transcriptPath), { recursive: true }); // the CLI creates the project folder only now, after the ESC
+      writeFileSync(transcriptPath, interruptedLine()); // ...and the transcript file
+      await vi.advanceTimersByTimeAsync(TRANSCRIPT_INTERRUPT_POLL_MS);
+
+      expect(service.get(session.id)!.state).toBe('idle');
+    });
+
+    it('does not remember a transcript_path when the Claude projects directory itself does not exist, and does not crash', async () => {
+      vi.useFakeTimers();
+      const { service } = setup();
+      const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+      const configDir = mkdtempSync(join(tmpdir(), 'of-claude-config-'));
+      process.env.CLAUDE_CONFIG_DIR = configDir; // 'projects' subfolder is never created
+      const transcriptPath = join(configDir, 'projects', 'proj', 'transcript.jsonl');
+
+      expect(() => service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: transcriptPath }))).not.toThrow();
+      expect(service.get(session.id)!.state).toBe('generating');
+      const timersBeforeEsc = vi.getTimerCount();
+
+      expect(() => service.writeRaw(session.id, '\x1b')).not.toThrow();
+
+      expect(vi.getTimerCount()).toBe(timersBeforeEsc); // the untrusted path was never remembered, so nothing armed
+    });
+
+    it('does not remember a transcript_path whose directory escapes the Claude projects directory via ".."', async () => {
+      vi.useFakeTimers();
+      const { service } = setup();
+      const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+      const configDir = mkdtempSync(join(tmpdir(), 'of-claude-config-'));
+      process.env.CLAUDE_CONFIG_DIR = configDir;
+      mkdirSync(join(configDir, 'projects'), { recursive: true });
+      const escapedPath = join(configDir, 'projects', '..', 'escaped', 'transcript.jsonl');
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: escapedPath }));
+      expect(service.get(session.id)!.state).toBe('generating');
+      const timersBeforeEsc = vi.getTimerCount();
+
+      service.writeRaw(session.id, '\x1b');
+
+      expect(vi.getTimerCount()).toBe(timersBeforeEsc); // the escaped path was never remembered, so nothing armed
+    });
+
+    it('does not remember a transcript_path whose directory is a symlink pointing outside the Claude projects directory', async () => {
+      vi.useFakeTimers();
+      const { service } = setup();
+      const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+      const configDir = mkdtempSync(join(tmpdir(), 'of-claude-config-'));
+      process.env.CLAUDE_CONFIG_DIR = configDir;
+      mkdirSync(join(configDir, 'projects'), { recursive: true });
+      const elsewhereDir = mkdtempSync(join(tmpdir(), 'of-elsewhere-'));
+      const linkedProjectDir = join(configDir, 'projects', 'proj');
+      symlinkSync(elsewhereDir, linkedProjectDir);
+      const escapedPath = join(linkedProjectDir, 'transcript.jsonl');
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: escapedPath }));
+      expect(service.get(session.id)!.state).toBe('generating');
+      const timersBeforeEsc = vi.getTimerCount();
+
+      service.writeRaw(session.id, '\x1b');
+
+      expect(vi.getTimerCount()).toBe(timersBeforeEsc); // the symlinked-out path was never remembered, so nothing armed
+    });
+
+    it('still detects the interrupt marker when the CLI\'s write to the transcript straddles two polls (a torn write), by carrying the partial line to the next poll', async () => {
+      vi.useFakeTimers();
+      const { service } = setup();
+      const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+      const transcriptPath = makeTranscriptFile();
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: transcriptPath }));
+
+      service.writeRaw(session.id, '\x1b');
+      const line = interruptedLine();
+      const splitPoint = Math.floor(line.length / 2);
+      appendFileSync(transcriptPath, line.slice(0, splitPoint)); // first half only: not yet valid JSON, no trailing newline
+      await vi.advanceTimersByTimeAsync(TRANSCRIPT_INTERRUPT_POLL_MS);
+      appendFileSync(transcriptPath, line.slice(splitPoint)); // completes the line
+      await vi.advanceTimersByTimeAsync(TRANSCRIPT_INTERRUPT_POLL_MS);
+
+      expect(service.get(session.id)!.state).toBe('idle');
+    });
+
+    it.skipIf(process.getuid?.() === 0)('swallows (instead of propagating) an fs error thrown mid-poll: an unreadable transcript file is treated as nothing this tick, and the watch keeps polling', async () => {
+      vi.useFakeTimers();
+      const { service } = setup();
+      const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+      const transcriptPath = makeTranscriptFile();
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: transcriptPath }));
+
+      service.writeRaw(session.id, '\x1b');
+      appendFileSync(transcriptPath, interruptedLine());
+      chmodSync(transcriptPath, 0o000); // statSync still succeeds (stat needs no read permission); readFileSync does not
+
+      try {
+        await expect(vi.advanceTimersByTimeAsync(TRANSCRIPT_INTERRUPT_POLL_MS)).resolves.not.toThrow();
+        expect(service.get(session.id)!.state).toBe('generating'); // the read error was swallowed, not propagated
+      } finally {
+        chmodSync(transcriptPath, 0o600);
+      }
+
+      // Once readable again, the watch is still armed and still catches the marker it couldn't read before.
+      await vi.advanceTimersByTimeAsync(TRANSCRIPT_INTERRUPT_POLL_MS);
+      expect(service.get(session.id)!.state).toBe('idle');
+    });
+
+    it('arms from a deferred Escape only once flushDeferredRaw actually writes it into a "generating" session, and resolves to idle on the interrupt marker', async () => {
+      vi.useFakeTimers();
+      const { service, harness } = setup();
+      const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+      const transcriptPath = makeTranscriptFile();
+
+      service.sendMessage({ sessionId: session.id, body: 'do X' }); // delivery phase 'typing', Enter still pending
+      service.writeRaw(session.id, '\x1b'); // human's Escape, deferred behind the pending Enter — not yet at the pty
+      // A stray/duplicated hook reports the turn already running, same as the "typing ends into generating
+      // mid-delay" test above, but this time with a transcript_path so the eventual flush has something to arm against.
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: transcriptPath }));
+      expect(service.get(session.id)!.state).toBe('generating');
+
+      await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS); // finishTyping flushes the deferred Escape into the pty
+      expect(harness.handles[0]!.written).toEqual(['do X', '\x1b']);
+
+      appendFileSync(transcriptPath, interruptedLine());
+      await vi.advanceTimersByTimeAsync(TRANSCRIPT_INTERRUPT_POLL_MS);
+
+      expect(service.get(session.id)!.state).toBe('idle'); // the flush armed the watch; the marker resolved it
+    });
+
+    it('does not remember a transcript_path whose leaf already exists as a symlink pointing outside the Claude projects directory', async () => {
+      vi.useFakeTimers();
+      const { service } = setup();
+      const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+      const configDir = mkdtempSync(join(tmpdir(), 'of-claude-config-'));
+      process.env.CLAUDE_CONFIG_DIR = configDir;
+      const projectDir = join(configDir, 'projects', 'proj'); // a legitimate, already-existing project folder
+      mkdirSync(projectDir, { recursive: true });
+      const elsewhereDir = mkdtempSync(join(tmpdir(), 'of-elsewhere-'));
+      const secretFile = join(elsewhereDir, 'secret.jsonl');
+      writeFileSync(secretFile, 'secret\n');
+      const maliciousLeaf = join(projectDir, 'transcript.jsonl');
+      symlinkSync(secretFile, maliciousLeaf); // only the leaf is a symlink; its directory resolves cleanly under projects
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: maliciousLeaf }));
+      expect(service.get(session.id)!.state).toBe('generating');
+      const timersBeforeEsc = vi.getTimerCount();
+
+      service.writeRaw(session.id, '\x1b');
+
+      expect(vi.getTimerCount()).toBe(timersBeforeEsc); // the leaf-symlink escape was never remembered, so nothing armed
+    });
+
+    it.skipIf(process.getuid?.() === 0)('does not arm the watch when statSync fails for a reason other than the file not existing yet', async () => {
+      vi.useFakeTimers();
+      const { service } = setup();
+      const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+      const transcriptPath = makeTranscriptFile();
+      appendFileSync(transcriptPath, interruptedLine()); // an earlier interrupt line already sits in the file
+      const projectDir = dirname(transcriptPath);
+      chmodSync(projectDir, 0o000); // statSync(transcriptPath) now throws EACCES, not ENOENT
+
+      try {
+        service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: transcriptPath }));
+        expect(service.get(session.id)!.state).toBe('generating');
+        const timersBeforeEsc = vi.getTimerCount();
+
+        service.writeRaw(session.id, '\x1b');
+
+        expect(vi.getTimerCount()).toBe(timersBeforeEsc); // stat failed for a reason other than ENOENT, so it must not arm
+      } finally {
+        chmodSync(projectDir, 0o755);
+      }
+    });
   });
 
   it('drops a raw write deferred during the pending delay when the session closes before the delayed submit keystroke fires, instead of writing it to the dead pty', async () => {

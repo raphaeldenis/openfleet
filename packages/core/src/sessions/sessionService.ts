@@ -1,4 +1,6 @@
-import { accessSync, constants, existsSync, lstatSync, realpathSync } from 'node:fs';
+import { accessSync, constants, existsSync, lstatSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { basename, dirname, isAbsolute, join, normalize, sep } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import type { PermissionMode, Session, SessionSpec } from '@openfleet/shared';
 import { EventBus } from '../events/eventBus.js';
@@ -61,6 +63,125 @@ export const MAX_DELIVERY_RETRIES = 3;
 export const PARKED_RETRY_MS = 60_000;
 export const RESUME_TIMEOUT_EXIT_CODE = -1;
 export const RESUME_LAUNCH_FAILED_EXIT_CODE = -2;
+// ponytail: fixed-interval poll on the transcript file's size instead of fs.watch — fs.watch coalesces or
+// drops events on some platforms (notably network/tmpfs mounts) and this only ever needs to catch one
+// appended line within the timeout below; upgrade to fs.watch (or tailing over the hook channel) if the
+// poll interval's latency ever matters.
+export const TRANSCRIPT_INTERRUPT_POLL_MS = 200;
+export const TRANSCRIPT_INTERRUPT_TIMEOUT_MS = 30_000;
+const INTERRUPTED_TRANSCRIPT_MARKER = '[Request interrupted by user]';
+
+// ponytail: a watch keeps the transcriptPath and offset it armed with for its whole life — a mid-turn
+// transcript_path change (a later hook naming a different file) is not followed, and the CLI truncating
+// or replacing the file while armed is not detected; both leave the watch tailing something stale.
+// Upgrade path: re-read the current transcriptPaths value each poll and re-arm on a mismatch or a size
+// that shrank.
+interface InterruptWatch {
+  transcriptPath: string;
+  offset: number;
+  // A line split across two polls (the CLI's write straddling the poll boundary) would otherwise be
+  // dropped for good: the tail end read on its own poll is not valid JSON. Carried over and prepended to
+  // the next poll's read, like tail -f line buffering.
+  pendingPartialLine: string;
+  timer: ReturnType<typeof setInterval>;
+  timeout: ReturnType<typeof setTimeout>;
+}
+
+// Claude Code fires no Stop hook when Escape cancels a turn, but it does append this line to the
+// session's own transcript JSONL (confirmed in T06h's real-CLI QA evidence) — the one place the daemon
+// can see the turn actually ended.
+// ponytail: matches the marker's exact literal text, so a real user turn typed through raw passthrough
+// while a watch happens to be armed and containing this exact sentence would false-positive as an
+// interrupt. Upgrade path: only trust a marker appended within a short window right after the ESC that
+// armed the watch, or corroborate with a harness-native turn-end signal if one ever exists.
+//
+// Runs inside a setInterval callback with nothing above it to catch a throw, on a line the session's own
+// (or a compromised) CLI process fully controls — it must return false for any shape it doesn't recognize,
+// never throw, no matter how the JSON parses.
+function isInterruptedTranscriptLine(line: string): boolean {
+  const trimmedLine = line.trim();
+  if (!trimmedLine) return false;
+  let entry: unknown;
+  try {
+    entry = JSON.parse(trimmedLine);
+  } catch {
+    return false;
+  }
+  if (typeof entry !== 'object' || entry === null) return false;
+  const record = entry as { type?: unknown; message?: unknown };
+  if (record.type !== 'user') return false;
+  const message = record.message;
+  if (typeof message !== 'object' || message === null) return false;
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) return false;
+  return content.some((block) => {
+    if (typeof block !== 'object' || block === null) return false;
+    const textBlock = block as { type?: unknown; text?: unknown };
+    return textBlock.type === 'text' && textBlock.text === INTERRUPTED_TRANSCRIPT_MARKER;
+  });
+}
+
+// The daemon's own env is what the harness passes through to the CLI child (childEnvironment.ts keeps
+// CLAUDE_CONFIG_DIR — it's user configuration, not a session marker), so it is also the daemon's own
+// source of truth for where that CLI writes transcripts.
+function claudeProjectsDir(): string {
+  const configDir = process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude');
+  return join(configDir, 'projects');
+}
+
+// Walks up from `path` to the nearest ancestor that already exists on disk, returning that ancestor
+// alongside the path segments below it that don't exist yet (outermost first). The first session ever run
+// in a new directory reports a transcript_path whose whole per-directory project subfolder is still
+// unborn — not just the file — so realpath-ing the immediate parent (which doesn't exist) would throw.
+function nearestExistingAncestor(path: string): { existingAncestor: string; unbornSegments: string[] } {
+  const unbornSegments: string[] = [];
+  let current = path;
+  while (!existsSync(current)) {
+    const parent = dirname(current);
+    if (parent === current) break; // reached the filesystem root; it always exists, so this never actually returns
+    unbornSegments.unshift(basename(current));
+    current = parent;
+  }
+  return { existingAncestor: current, unbornSegments };
+}
+
+// A session's own hook payload names its own transcript_path — a prompt-injected or hostile CLI could
+// report any file there (e.g. /etc/hosts) and have the daemon start tailing it. Trust only a path that
+// ends in .jsonl, is an absolute path with no ".."/"."/doubled-separator segments, and whose directory
+// resolves, symlinks included, under the Claude projects directory the daemon's own environment implies.
+// Neither the transcript file nor its per-directory project subfolder need exist yet: the CLI's own
+// UserPromptSubmit hook can report transcript_path before it has created either, and realpath-ing a
+// dirname that doesn't exist yet would reject a legitimate path just because it's early — so this walks up
+// to the nearest existing ancestor and resolves the still-unborn segments against that ancestor's realpath
+// instead. Never throws: a missing file, missing directory, or missing projects directory is just
+// "untrusted".
+function isTrustedTranscriptPath(path: string): boolean {
+  if (!path.endsWith('.jsonl')) return false;
+  if (!isAbsolute(path) || normalize(path) !== path) return false;
+  try {
+    const resolvedProjectsDir = realpathSync(claudeProjectsDir());
+    const isUnderProjectsDir = (resolved: string) => resolved === resolvedProjectsDir || resolved.startsWith(resolvedProjectsDir + sep);
+    // The leaf itself can already exist as a symlink (planted by a hostile CLI) pointing outside the
+    // projects tree even though its containing directory resolves cleanly inside it — realpath-ing only
+    // the directory would miss that. Once the leaf exists (lstat succeeds, even for a symlink whose
+    // target is missing), resolve and trust the full path itself instead of just its directory.
+    const leafExists = (() => {
+      try {
+        lstatSync(path);
+        return true;
+      } catch {
+        return false;
+      }
+    })();
+    if (leafExists) return isUnderProjectsDir(realpathSync(path));
+    const { existingAncestor, unbornSegments } = nearestExistingAncestor(dirname(path));
+    const resolvedAncestor = realpathSync(existingAncestor);
+    const resolvedDir = unbornSegments.length === 0 ? resolvedAncestor : join(resolvedAncestor, ...unbornSegments);
+    return isUnderProjectsDir(resolvedDir);
+  } catch {
+    return false;
+  }
+}
 
 // ponytail: main.ts constructs exactly one SessionService per real daemon process — this module-level
 // map (rather than an instance field) is what lets a freshly resumed handle outrank a stale pre-restart
@@ -121,6 +242,10 @@ export class SessionService {
   // every hook lost, a pending relaunch (and the queue behind it) waits for the next Stop.
   private readonly unfinishedTurns = new Set<string>();
   private readonly relaunches = new Map<string, Promise<void>>();
+  // Last transcript_path any hook reported for this session — the only way an ESC-armed watch below
+  // knows which file to tail.
+  private readonly transcriptPaths = new Map<string, string>();
+  private readonly interruptWatches = new Map<string, InterruptWatch>();
   // Set once closeAll() starts; refuses any new launch (create, reopen, resumeOne, a relaunch) so it can
   // never spawn a process outside closeAll's own snapshot and survive daemon shutdown.
   private shuttingDown = false;
@@ -351,6 +476,8 @@ export class SessionService {
   // Revokes the old tokens first so the dying process's late hooks and MCP calls reach no session, then
   // forgets its handle before killing it: its exit must not trip markClosed, and nothing may kill it twice.
   private async retireForRelaunch(sessionId: string): Promise<void> {
+    this.disarmInterruptWatch(sessionId);
+    this.transcriptPaths.delete(sessionId);
     this.repo.setTokens(sessionId, newToken(), newToken());
     const handle = this.handles.get(sessionId);
     if (!handle) return;
@@ -361,6 +488,9 @@ export class SessionService {
 
   applyInput(sessionId: string, input: SessionInput): void {
     const session = this.require(sessionId);
+    if (input.kind === 'hook' && input.event.transcript_path && isTrustedTranscriptPath(input.event.transcript_path)) {
+      this.transcriptPaths.set(sessionId, input.event.transcript_path);
+    }
     const endsUnfinishedTurn = provesTurnEnded(input) && this.unfinishedTurns.has(sessionId);
     if (endsUnfinishedTurn) this.unfinishedTurns.delete(sessionId);
     const state = nextState(session.state, input);
@@ -372,6 +502,9 @@ export class SessionService {
     // Only a real state transition proves the (resumed) process is alive; an unrecognized Notification
     // that leaves the session in 'starting' must not cancel the safety net that would otherwise close it.
     this.clearResumeTimer(sessionId);
+    // Any real transition away from 'generating' (Stop, a permission prompt, the idle_prompt self-heal,
+    // the session closing) makes an armed interrupt watch moot — never let a late-firing one override it.
+    this.disarmInterruptWatch(sessionId);
     const isAwaitingTurnStart = this.deliveryOf(sessionId).phase.name === 'submitted';
     if (isAwaitingTurnStart) this.enter(sessionId, READY); // any real transition proves the submitted turn started
     if (state === 'closed') {
@@ -394,17 +527,117 @@ export class SessionService {
   harnessHandle(sessionId: string): HarnessHandle | undefined { return this.handles.get(sessionId); }
   // While the composer holds a message's body awaiting its Enter ('typing'), raw input is deferred onto
   // that phase instead of writing straight through — otherwise it could land between the body and the '\r'
-  // that submits it. Outside that window it still writes straight through, as before.
+  // that submits it. Outside that window it still writes straight through, as before, and either way the
+  // arming check below runs where the bytes actually reach the pty, not here.
   writeRaw(sessionId: string, data: string): void {
     const { phase } = this.deliveryOf(sessionId);
     if (phase.name === 'typing') {
       phase.deferredRaw.push(data);
       return;
     }
-    this.handles.get(sessionId)?.write(data);
+    const handle = this.handles.get(sessionId);
+    if (!handle) return;
+    this.writeRawChunkAndArm(sessionId, handle, data);
   }
+
+  // Single place a raw chunk reaches the pty, whether written straight through or flushed out of
+  // deferredRaw: arming on ESC has to happen here, at the point the bytes actually land, not at writeRaw's
+  // call site — a deferred ESC only means the CLI is generating (and so worth watching) once it's actually
+  // flushed, which can be well after the write() call that queued it. Arming (which samples the
+  // transcript's current size as the watch's offset) runs before handle.write, not after: arming after the
+  // write would let the CLI's own reaction to the ESC append the interrupt marker in between, so the watch
+  // would start past it and never see it. Free defense-in-depth, not a full guarantee against that race.
+  private writeRawChunkAndArm(sessionId: string, handle: HarnessHandle, data: string): void {
+    if (data.includes('\x1b')) this.armInterruptWatchIfGenerating(sessionId);
+    handle.write(data);
+  }
+
+  // Arms a one-shot watch the moment a raw write containing the ESC byte lands while the CLI is
+  // generating — the only signal the daemon has that the human meant to cancel the running turn. An
+  // arrow key's CSI sequence also starts with ESC and arms it too; harmless, since arming costs at most
+  // one poll interval running for up to TRANSCRIPT_INTERRUPT_TIMEOUT_MS. No-ops (per the manager's rule)
+  // when a watch is already armed, the session isn't generating, or no hook has ever reported a
+  // transcript_path for it.
+  private armInterruptWatchIfGenerating(sessionId: string): void {
+    if (this.interruptWatches.has(sessionId)) return;
+    const session = this.repo.get(sessionId);
+    if (!session || session.state !== 'generating') return;
+    const transcriptPath = this.transcriptPaths.get(sessionId);
+    if (!transcriptPath) return;
+    // A trusted transcript_path can still name a file the CLI hasn't created yet (its own UserPromptSubmit
+    // hook can fire before the write) — start the offset at 0 so the first poll picks up the whole file
+    // once it exists, rather than refusing to arm at all. Any other stat failure (e.g. a permission error)
+    // is not "file doesn't exist yet": arming at offset 0 there would replay whatever the file already
+    // held — including a stale interrupt line from an earlier turn — as soon as the error clears, so the
+    // watch must not arm at all.
+    let offset: number;
+    try {
+      offset = statSync(transcriptPath).size;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return;
+      offset = 0; // no transcript file yet; poll from offset 0 once it's created
+    }
+    const timer = setInterval(() => this.pollInterruptWatch(sessionId), TRANSCRIPT_INTERRUPT_POLL_MS);
+    const timeout = setTimeout(() => this.disarmInterruptWatch(sessionId), TRANSCRIPT_INTERRUPT_TIMEOUT_MS);
+    this.interruptWatches.set(sessionId, { transcriptPath, offset, pendingPartialLine: '', timer, timeout });
+  }
+
+  // Reads only the bytes appended since the watch armed (or since the last poll), never re-scanning the
+  // whole transcript. A byte offset (not a string index) keeps a multi-byte character straddling a poll
+  // boundary from ever being read.
+  //
+  // This is a setInterval callback with nothing above it to catch a throw — an uncaught exception here
+  // would crash the whole daemon, taking down every other session's watch with it. isInterruptedTranscriptLine
+  // is itself total, but the try/catch is the backstop for anything else in the parse-and-match step
+  // (e.g. a future change to it, or to this method) that might not be.
+  private pollInterruptWatch(sessionId: string): void {
+    try {
+      this.pollInterruptWatchUnsafe(sessionId);
+    } catch (err) {
+      console.error(`interrupt watch: session ${sessionId} poll failed unexpectedly`, err);
+    }
+  }
+
+  private pollInterruptWatchUnsafe(sessionId: string): void {
+    const watch = this.interruptWatches.get(sessionId);
+    if (!watch) return;
+    let size: number;
+    try {
+      size = statSync(watch.transcriptPath).size;
+    } catch {
+      return; // e.g. the transcript file vanished this tick; treat as nothing this tick, keep polling until the timeout
+    }
+    if (size <= watch.offset) return;
+    let appended: string;
+    try {
+      appended = readFileSync(watch.transcriptPath).subarray(watch.offset, size).toString('utf8');
+    } catch {
+      return; // e.g. a transient permission/read error; treat as nothing this tick, keep polling until the timeout
+    }
+    watch.offset = size;
+    const lines = (watch.pendingPartialLine + appended).split('\n');
+    watch.pendingPartialLine = lines.pop() ?? '';
+    const sawInterruptMarker = lines.some(isInterruptedTranscriptLine);
+    if (!sawInterruptMarker) return;
+    this.disarmInterruptWatch(sessionId);
+    this.applyInput(sessionId, { kind: 'transcript_interrupted' });
+  }
+
+  private disarmInterruptWatch(sessionId: string): void {
+    const watch = this.interruptWatches.get(sessionId);
+    if (!watch) return;
+    clearInterval(watch.timer);
+    clearTimeout(watch.timeout);
+    this.interruptWatches.delete(sessionId);
+  }
+
+
   resize(sessionId: string, cols: number, rows: number): void { this.handles.get(sessionId)?.resize(cols, rows); }
   async close(sessionId: string, options?: { escalateAfterMs?: number }): Promise<void> {
+    // Disarmed eagerly, like retireForRelaunch, before the SIGTERM->SIGKILL grace window even starts: a
+    // watch left armed through that window could still see a marker and flip session state while the
+    // process is on its way out (or wedged and never exiting at all).
+    this.disarmInterruptWatch(sessionId);
     const relaunch = this.relaunches.get(sessionId);
     if (relaunch) {
       // The relaunch is already killing the process: it sees 'closing' once it exits and stops there.
@@ -578,7 +811,7 @@ export class SessionService {
   private flushDeferredRaw(sessionId: string, handle: HarnessHandle, deferredRaw: string[]): void {
     for (const raw of deferredRaw) {
       try {
-        handle.write(raw);
+        this.writeRawChunkAndArm(sessionId, handle, raw);
       } catch (err) {
         console.error(`delivery: session ${sessionId} failed to flush deferred raw input, dropping what's left`, err);
         return;
@@ -660,6 +893,8 @@ export class SessionService {
 
   private markClosed(sessionId: string, exitCode: number | undefined): void {
     this.clearResumeTimer(sessionId);
+    this.disarmInterruptWatch(sessionId);
+    this.transcriptPaths.delete(sessionId);
     this.stopDelivery(sessionId);
     this.pendingRelaunches.delete(sessionId);
     this.unfinishedTurns.delete(sessionId);
