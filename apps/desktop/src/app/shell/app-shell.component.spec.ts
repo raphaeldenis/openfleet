@@ -6,7 +6,10 @@ import { describe, expect, it } from 'vitest';
 import { AppShellComponent } from './app-shell.component';
 import { FleetEventsService } from '../core/fleet-events.service';
 
-@Component({ selector: 'stub-home', template: '<span data-testid="stub-home">home</span>' })
+@Component({
+  selector: 'stub-home',
+  template: '<span data-testid="stub-home">home</span><button data-testid="stub-home-opener" type="button">Open from page</button>',
+})
 class StubHomeComponent {}
 @Component({ selector: 'stub-inbox', template: '<span data-testid="stub-inbox">inbox</span>' })
 class StubInboxComponent {}
@@ -300,6 +303,34 @@ describe('AppShellComponent', () => {
 
     inbox.remove();
 
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await harness.fixture.whenStable();
+
+    const trigger = root.querySelector('[data-testid="open-palette"]') as HTMLElement;
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it('falls back to the search trigger when picking a palette item destroys the outlet opener via navigation', async () => {
+    const { harness, root } = await setUp();
+    const opener = root.querySelector('[data-testid="stub-home-opener"]') as HTMLElement;
+    opener.focus();
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }));
+    await harness.fixture.whenStable();
+    (root.querySelector('[data-testid="palette-item-inbox"]') as HTMLElement).click();
+    await harness.fixture.whenStable();
+
+    const trigger = root.querySelector('[data-testid="open-palette"]') as HTMLElement;
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it('falls back to the search trigger when ⌘K opens the palette with nothing focused beforehand', async () => {
+    const { harness, root } = await setUp();
+    (document.activeElement as HTMLElement | null)?.blur();
+    expect(document.activeElement).toBe(document.body);
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }));
+    await harness.fixture.whenStable();
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     await harness.fixture.whenStable();
 
