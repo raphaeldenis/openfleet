@@ -230,17 +230,35 @@ describe('ModelSelectorComponent', () => {
     const api = { updateModel: vi.fn().mockRejectedValue(new Error('session_closed')) };
     await render(ModelSelectorComponent, {
       bindings: [inputBinding('sessionId', () => 's1')],
-      providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: fakeEvents('claude-sonnet-5') }],
+      providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: fakeEvents('claude-opus-5-5') }],
     });
     const select = screen.getByTestId('model-select') as HTMLSelectElement;
 
     // Act
-    await userEvent.selectOptions(select, 'opus');
+    await userEvent.selectOptions(select, 'sonnet');
     await userEvent.click(screen.getByTestId('apply-model'));
     await waitFor(() => expect(screen.queryByTestId('model-switch-error')).toBeTruthy());
 
-    // Assert
-    expect(select.value).toBe('sonnet');
+    // Assert — reverts to the session's actual model, not a hardcoded 'sonnet'
+    expect(select.value).toBe('claude-opus-5-5');
+  });
+
+  it('initialises the select to the session\'s actual model instead of a hardcoded "sonnet" default', async () => {
+    await render(ModelSelectorComponent, {
+      bindings: [inputBinding('sessionId', () => 's1')],
+      providers: [{ provide: FleetApiService, useValue: { updateModel: vi.fn() } }, { provide: FleetEventsService, useValue: fakeEvents('claude-opus-5-5') }],
+    });
+    const select = screen.getByTestId('model-select') as HTMLSelectElement;
+    expect(select.value).toBe('claude-opus-5-5');
+  });
+
+  it('shows a model not among the fixed rungs as an extra option instead of silently mismatching it', async () => {
+    await render(ModelSelectorComponent, {
+      bindings: [inputBinding('sessionId', () => 's1')],
+      providers: [{ provide: FleetApiService, useValue: { updateModel: vi.fn() } }, { provide: FleetEventsService, useValue: fakeEvents('claude-opus-5-5') }],
+    });
+    const options = screen.getAllByRole('option').map((o) => (o as HTMLOptionElement).value);
+    expect(options).toEqual(['haiku', 'sonnet', 'opus', 'fable', 'claude-opus-5-5']);
   });
 
   it('never types a slash-model command into the UI', async () => {

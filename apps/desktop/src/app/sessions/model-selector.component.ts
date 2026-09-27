@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, effect, inject, input, output, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, effect, inject, input, output, signal, untracked } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import type { SessionState } from '@openfleet/shared';
 import { FleetApiService } from '../core/fleet-api.service';
@@ -22,7 +22,7 @@ const SWITCH_STATUS_LABEL: Record<'relaunching' | 'deferred', string> = {
     <div class="model-selector" data-testid="model-selector">
       <span class="current" data-testid="current-model">{{ session()?.model ?? 'default' }}</span>
       <select data-testid="model-select" aria-label="Model" [(ngModel)]="chosenRung">
-        @for (rung of rungs; track rung) {
+        @for (rung of rungs(); track rung) {
           <option [value]="rung">{{ rung }}</option>
         }
       </select>
@@ -46,11 +46,17 @@ export class ModelSelectorComponent {
   readonly pendingModelSwitch = output<boolean>();
   private readonly events = inject(FleetEventsService);
   private readonly api = inject(FleetApiService);
-  readonly rungs = MODEL_RUNGS;
-  chosenRung: (typeof MODEL_RUNGS)[number] = 'sonnet';
-  // The last rung a switch actually confirmed (or the initial default) — a failed switch reverts
-  // `chosenRung` here instead of leaving the select showing the rejected choice.
-  private confirmedRung: (typeof MODEL_RUNGS)[number] = 'sonnet';
+  // The session's current model rarely matches one of the fixed rungs exactly (it is a full model id,
+  // e.g. 'claude-opus-5-5', not the short alias 'opus') — add it as its own option instead of forcing
+  // the select onto a rung that would silently apply a different model.
+  readonly rungs = computed(() => {
+    const model = this.session()?.model;
+    return model && !(MODEL_RUNGS as readonly string[]).includes(model) ? [...MODEL_RUNGS, model] : MODEL_RUNGS;
+  });
+  chosenRung = 'sonnet';
+  // The last value a switch actually confirmed (or the session's model at mount) — a failed switch
+  // reverts `chosenRung` here instead of leaving the select showing the rejected choice.
+  private confirmedRung = 'sonnet';
   readonly applying = signal(false);
   readonly switchStatus = signal<'relaunching' | 'deferred' | null>(null);
   readonly switchError = signal<string | null>(null);
@@ -64,8 +70,9 @@ export class ModelSelectorComponent {
     // the previous session's in-flight state or result into the one now shown.
     effect(() => {
       this.sessionId();
-      this.chosenRung = 'sonnet';
-      this.confirmedRung = 'sonnet';
+      const currentModel = untracked(() => this.session()?.model) ?? 'sonnet';
+      this.chosenRung = currentModel;
+      this.confirmedRung = currentModel;
       this.applying.set(false);
       this.switchStatus.set(null);
       this.switchError.set(null);
