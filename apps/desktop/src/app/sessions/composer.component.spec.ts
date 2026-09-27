@@ -57,6 +57,50 @@ describe('ComposerComponent', () => {
     expect(screen.queryByTestId('composer-input')).toBeNull();
   });
 
+  it('keeps the draft and shows an inline error when sending fails, instead of clearing it optimistically', async () => {
+    // Arrange
+    const api = { sendMessage: vi.fn().mockRejectedValue(new Error('boom')) };
+    await render(ComposerComponent, {
+      bindings: [inputBinding('sessionId', () => 's1')],
+      providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: fakeEvents() }],
+    });
+
+    // Act
+    await userEvent.type(screen.getByTestId('composer-input'), 'go');
+    await userEvent.click(screen.getByTestId('composer-send'));
+
+    // Assert
+    await waitFor(() => expect(screen.getByTestId('composer-send-error')).toHaveTextContent(/could not send.*message is kept/i));
+    expect(screen.getByTestId('composer-input')).toHaveValue('go');
+  });
+
+  it('drops a send response for a session the composer has since navigated away from', async () => {
+    // Arrange
+    const sessionId = signal('s1');
+    let resolveSend: (value: unknown) => void = () => {};
+    const api = { sendMessage: vi.fn(() => new Promise((resolve) => { resolveSend = resolve; })) };
+    await render(ComposerComponent, {
+      bindings: [inputBinding('sessionId', sessionId)],
+      providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: fakeEvents() }],
+    });
+    await userEvent.type(screen.getByTestId('composer-input'), 'leftover for s1');
+    await userEvent.click(screen.getByTestId('composer-send'));
+
+    // Act — navigate away before the send resolves. Wait for proof the route-reuse reset for s2
+    // has actually run (s1's leftover draft is cleared), meaning the component's sessionId input
+    // genuinely reads 's2' by the time the stale response below is delivered.
+    sessionId.set('s2');
+    await waitFor(() => expect(screen.getByTestId('composer-input')).toHaveValue(''));
+
+    resolveSend({ status: 'delivered', messageId: 'm1' });
+    await waitFor(() => expect(api.sendMessage).toHaveBeenCalledTimes(1));
+    // Give the resumed send() continuation a real tick to run and (if unguarded) reach the DOM.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // Assert — s2's composer shows no delivery status meant for s1
+    expect(screen.queryByTestId('composer-status')).toBeNull();
+  });
+
   it('does not send a whitespace-only draft', async () => {
     // Arrange
     const api = { sendMessage: vi.fn() };

@@ -7,6 +7,7 @@ interface PendingMessage { id: string; deliveredImmediately: boolean }
 
 const IDLE_PLACEHOLDER = 'Message this session…';
 const BUSY_PLACEHOLDER = 'This session is busy — your message is delivered on the next idle turn';
+const SEND_ERROR = 'Could not send — your message is kept.';
 
 @Component({
   selector: 'of-composer',
@@ -28,6 +29,9 @@ const BUSY_PLACEHOLDER = 'This session is busy — your message is delivered on 
         @if (status(); as status) {
           <span class="status" data-testid="composer-status">{{ status }}</span>
         }
+        @if (sendError(); as error) {
+          <span role="alert" data-testid="composer-send-error" class="of-error">✕ {{ error }}</span>
+        }
       </div>
     }
   `,
@@ -45,16 +49,18 @@ export class ComposerComponent {
   private readonly events = inject(FleetEventsService);
   protected readonly draft = signal('');
   private readonly pending = signal<PendingMessage | null>(null);
+  protected readonly sendError = signal<string | null>(null);
   protected readonly sendLabel = computed(() => (this.busy() ? 'Queue' : 'Send'));
   protected readonly placeholder = computed(() => (this.busy() ? BUSY_PLACEHOLDER : IDLE_PLACEHOLDER));
 
   constructor() {
     // A route param change reuses this component instance, so a session switch must not leak
-    // the previous session's unsent draft or delivery status into the one now shown.
+    // the previous session's unsent draft, delivery status or send error into the one now shown.
     effect(() => {
       this.sessionId();
       this.draft.set('');
       this.pending.set(null);
+      this.sendError.set(null);
     });
   }
 
@@ -72,8 +78,16 @@ export class ComposerComponent {
   async send(): Promise<void> {
     const body = this.draft().trim();
     if (!body) return;
-    this.draft.set('');
-    const result = await this.api.sendMessage(this.sessionId(), body);
-    this.pending.set({ id: result.messageId, deliveredImmediately: result.status === 'delivered' });
+    const sessionIdAtSend = this.sessionId();
+    this.sendError.set(null);
+    try {
+      const result = await this.api.sendMessage(sessionIdAtSend, body);
+      if (this.sessionId() !== sessionIdAtSend) return;
+      this.draft.set('');
+      this.pending.set({ id: result.messageId, deliveredImmediately: result.status === 'delivered' });
+    } catch {
+      if (this.sessionId() !== sessionIdAtSend) return;
+      this.sendError.set(SEND_ERROR);
+    }
   }
 }
