@@ -66,6 +66,86 @@ describe('createWorktree', () => {
     expect(hookEnv).toContain('PATH=');
   });
 
+  it('does not let the caller\'s GIT_CONFIG_COUNT/KEY_0/VALUE_0 inject core.hooksPath and run an attacker hook on worktree add', async () => {
+    const repoPath = makeRepo();
+    const worktreesRoot = mkdtempSync(join(tmpdir(), 'of-wt-'));
+    const attackerHooksDir = mkdtempSync(join(tmpdir(), 'of-attacker-hooks-'));
+    const marker = join(attackerHooksDir, 'FIRED');
+    writeFileSync(join(attackerHooksDir, 'post-checkout'), `#!/bin/sh\ntouch "${marker}"\n`);
+    chmodSync(join(attackerHooksDir, 'post-checkout'), 0o755);
+
+    process.env.GIT_CONFIG_COUNT = '1';
+    process.env.GIT_CONFIG_KEY_0 = 'core.hooksPath';
+    process.env.GIT_CONFIG_VALUE_0 = attackerHooksDir;
+    try {
+      await createWorktree({ repoPath, branchName: 'task/config-count', worktreesRoot });
+    } finally {
+      delete process.env.GIT_CONFIG_COUNT;
+      delete process.env.GIT_CONFIG_KEY_0;
+      delete process.env.GIT_CONFIG_VALUE_0;
+    }
+
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it('does not let the caller\'s GIT_CONFIG_PARAMETERS inject core.hooksPath and run an attacker hook on worktree add', async () => {
+    const repoPath = makeRepo();
+    const worktreesRoot = mkdtempSync(join(tmpdir(), 'of-wt-'));
+    const attackerHooksDir = mkdtempSync(join(tmpdir(), 'of-attacker-hooks-'));
+    const marker = join(attackerHooksDir, 'FIRED');
+    writeFileSync(join(attackerHooksDir, 'post-checkout'), `#!/bin/sh\ntouch "${marker}"\n`);
+    chmodSync(join(attackerHooksDir, 'post-checkout'), 0o755);
+
+    process.env.GIT_CONFIG_PARAMETERS = `'core.hooksPath=${attackerHooksDir}'`;
+    try {
+      await createWorktree({ repoPath, branchName: 'task/config-params', worktreesRoot });
+    } finally {
+      delete process.env.GIT_CONFIG_PARAMETERS;
+    }
+
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it('does not let the caller\'s GIT_CONFIG_GLOBAL redirect to an attacker file that injects core.hooksPath', async () => {
+    const repoPath = makeRepo();
+    const worktreesRoot = mkdtempSync(join(tmpdir(), 'of-wt-'));
+    const attackerHooksDir = mkdtempSync(join(tmpdir(), 'of-attacker-hooks-'));
+    const marker = join(attackerHooksDir, 'FIRED');
+    writeFileSync(join(attackerHooksDir, 'post-checkout'), `#!/bin/sh\ntouch "${marker}"\n`);
+    chmodSync(join(attackerHooksDir, 'post-checkout'), 0o755);
+    const fakeGlobalConfig = join(mkdtempSync(join(tmpdir(), 'of-fake-global-')), '.gitconfig');
+    writeFileSync(fakeGlobalConfig, `[core]\n\thooksPath = ${attackerHooksDir}\n`);
+
+    process.env.GIT_CONFIG_GLOBAL = fakeGlobalConfig;
+    try {
+      await createWorktree({ repoPath, branchName: 'task/config-global', worktreesRoot });
+    } finally {
+      delete process.env.GIT_CONFIG_GLOBAL;
+    }
+
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it('does not let the caller\'s GIT_CONFIG_SYSTEM redirect to an attacker file that injects core.hooksPath', async () => {
+    const repoPath = makeRepo();
+    const worktreesRoot = mkdtempSync(join(tmpdir(), 'of-wt-'));
+    const attackerHooksDir = mkdtempSync(join(tmpdir(), 'of-attacker-hooks-'));
+    const marker = join(attackerHooksDir, 'FIRED');
+    writeFileSync(join(attackerHooksDir, 'post-checkout'), `#!/bin/sh\ntouch "${marker}"\n`);
+    chmodSync(join(attackerHooksDir, 'post-checkout'), 0o755);
+    const fakeSystemConfig = join(mkdtempSync(join(tmpdir(), 'of-fake-system-')), 'gitconfig');
+    writeFileSync(fakeSystemConfig, `[core]\n\thooksPath = ${attackerHooksDir}\n`);
+
+    process.env.GIT_CONFIG_SYSTEM = fakeSystemConfig;
+    try {
+      await createWorktree({ repoPath, branchName: 'task/config-system', worktreesRoot });
+    } finally {
+      delete process.env.GIT_CONFIG_SYSTEM;
+    }
+
+    expect(existsSync(marker)).toBe(false);
+  });
+
   it('creating a fresh temp repo through the test helper does not redirect a decoy repo named by the caller\'s GIT_DIR/GIT_WORK_TREE', () => {
     const decoyRepo = makeRepo();
     process.env.GIT_DIR = join(decoyRepo, '.git');
