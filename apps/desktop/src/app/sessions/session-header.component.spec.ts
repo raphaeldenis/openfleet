@@ -74,6 +74,59 @@ describe('SessionHeaderComponent', () => {
     expect(api.renameSession).not.toHaveBeenCalled();
   });
 
+  it('does not send a request when the name field is committed as whitespace only', async () => {
+    const session = baseSession();
+    const api = fakeApi();
+    await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session, api) });
+
+    const nameInput = screen.getByTestId('session-name-input') as HTMLInputElement;
+    fireEvent.change(nameInput, { target: { value: '   ' } });
+
+    expect(api.renameSession).not.toHaveBeenCalled();
+  });
+
+  it('does not send a request when the emoji field is committed as whitespace only', async () => {
+    const session = baseSession();
+    const api = fakeApi();
+    await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session, api) });
+
+    const emojiInput = screen.getByTestId('session-emoji-input') as HTMLInputElement;
+    fireEvent.change(emojiInput, { target: { value: '  ' } });
+
+    expect(api.renameSession).not.toHaveBeenCalled();
+  });
+
+  it('sends only one rename request when the name field commits twice (Enter then blur) before the first request resolves', async () => {
+    let resolveRename: (value: unknown) => void = () => {};
+    const api = fakeApi({ renameSession: vi.fn(() => new Promise((resolve) => { resolveRename = resolve; })) });
+    const session = baseSession();
+    await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session, api) });
+
+    const nameInput = screen.getByTestId('session-name-input') as HTMLInputElement;
+    fireEvent.change(nameInput, { target: { value: 'Gimli · T7' } });
+    fireEvent.change(nameInput, { target: { value: 'Gimli · T7' } });
+    resolveRename({ ...session, name: 'Gimli · T7' });
+
+    await waitFor(() => expect(api.renameSession).toHaveBeenCalled());
+    expect(api.renameSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears a previous rename error when the session switches, instead of leaking it onto the next session', async () => {
+    const sessionA = baseSession({ id: 's1', name: 'Gimli' });
+    const sessionB = baseSession({ id: 's2', name: 'Legolas' });
+    const currentSession = signal<Session>(sessionA);
+    const api = fakeApi({ renameSession: vi.fn().mockRejectedValue(new Error('boom')) });
+    await render(SessionHeaderComponent, { bindings: [inputBinding('session', currentSession)], providers: providersFor(sessionA, api) });
+
+    const nameInput = screen.getByTestId('session-name-input') as HTMLInputElement;
+    fireEvent.change(nameInput, { target: { value: 'Gimli renamed' } });
+    await waitFor(() => expect(screen.getByTestId('session-rename-error')).toBeTruthy());
+
+    currentSession.set(sessionB);
+
+    await waitFor(() => expect(screen.queryByTestId('session-rename-error')).toBeNull());
+  });
+
   it('shows an inline error when renaming fails', async () => {
     const session = baseSession();
     const api = fakeApi({ renameSession: vi.fn().mockRejectedValue(new Error('boom')) });

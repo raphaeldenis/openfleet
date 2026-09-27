@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/angular/zoneless';
+import { render, screen, waitFor, fireEvent } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
 import { inputBinding, signal } from '@angular/core';
 import { Subject } from 'rxjs';
@@ -84,10 +84,52 @@ describe('SessionViewComponent', () => {
     expect(api.reopenSession).toHaveBeenCalledWith('s1');
   });
 
+  it('sends only one reopen request when Resume is double-clicked before the request resolves', async () => {
+    let resolveReopen: (value: unknown) => void = () => {};
+    const api = fakeApi();
+    api.reopenSession = vi.fn(() => new Promise((resolve) => { resolveReopen = resolve; }));
+    await render(SessionViewComponent, {
+      bindings: [inputBinding('sessionId', () => 's1')],
+      providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: fakeEvents([session({ state: 'closed', exitCode: 0 })]) }],
+    });
+    const resumeButton = screen.getByTestId('resume-session') as HTMLButtonElement;
+
+    fireEvent.click(resumeButton);
+    fireEvent.click(resumeButton);
+    resolveReopen({});
+    await waitFor(() => expect(resumeButton.disabled).toBe(false));
+
+    expect(api.reopenSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears a previous session\'s resume error when navigating to a different session', async () => {
+    const sessionId = signal('s1');
+    const api = fakeApi();
+    api.reopenSession = vi.fn().mockRejectedValue(new ApiError(409, 'boom', 'not_closed'));
+    await render(SessionViewComponent, {
+      bindings: [inputBinding('sessionId', sessionId)],
+      providers: [
+        { provide: FleetApiService, useValue: api },
+        {
+          provide: FleetEventsService,
+          useValue: fakeEvents([session({ id: 's1', state: 'closed', exitCode: 0 }), session({ id: 's2', name: 'Legolas', state: 'closed', exitCode: 0 })]),
+        },
+      ],
+    });
+
+    await userEvent.click(screen.getByTestId('resume-session'));
+    await waitFor(() => expect(screen.getByTestId('resume-error')).toBeTruthy());
+
+    sessionId.set('s2');
+
+    await waitFor(() => expect(screen.queryByTestId('resume-error')).toBeNull());
+  });
+
   it.each([
     ['not_closed', 'This session is not closed — nothing to resume.'],
     ['directory_missing', "This session's directory no longer exists — nothing to resume into."],
     ['directory_changed', "This session's directory changed since it closed — resume refused for safety."],
+    ['directory_unreadable', "This session's directory can't be read — check its permissions."],
     ['launch_failed', 'The harness failed to relaunch — try again.'],
   ] as const)('shows a readable error for a %s reopen failure', async (code, message) => {
     const api = fakeApi();
