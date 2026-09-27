@@ -2,7 +2,8 @@ import { ChangeDetectionStrategy, Component, ElementRef, computed, effect, injec
 import type { SessionState } from '@openfleet/shared';
 import { FleetApiService } from '../core/fleet-api.service';
 
-const CLOSE_CONFIRM_BODY = "The session's process stops; the worktree and transcript are kept.";
+const CLOSE_CONFIRM_BODY =
+  'The process stops. The worktree, branch and transcript are kept; you can reopen it later with its history.';
 const CLOSE_CONFIRM_PENDING_SWITCH_WARNING = 'Closing cancels the pending model switch.';
 const CLOSE_ERROR = 'Could not close the session — try again.';
 const INTERRUPT_ERROR = 'Could not interrupt the session — try again.';
@@ -12,7 +13,7 @@ const ESCAPE_KEY = '\x1b';
   selector: 'of-session-actions',
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <div class="session-actions" data-testid="session-actions">
+    <div class="session-actions" data-testid="session-actions" [attr.inert]="confirmingClose() ? '' : null">
       @if (!closed()) {
         @if (busy()) {
           <button type="button" class="of-btn of-btn--secondary" data-testid="session-interrupt" [disabled]="interrupting()" (click)="interrupt()">
@@ -28,7 +29,7 @@ const ESCAPE_KEY = '\x1b';
       }
     </div>
     @if (confirmingClose()) {
-      <div class="close-confirm-overlay" data-testid="close-confirm-overlay" (keydown.escape)="cancelClose()">
+      <div class="close-confirm-overlay" data-testid="close-confirm-overlay" (keydown.escape)="cancelClose()" (keydown)="trapTabFocus($event)">
         <div class="close-confirm" role="dialog" aria-modal="true" aria-labelledby="close-confirm-title" data-testid="close-confirm-dialog">
           <span id="close-confirm-title" class="close-confirm-title">Close {{ sessionName() }}?</span>
           <p class="close-confirm-body">{{ closeConfirmBody }}</p>
@@ -39,7 +40,7 @@ const ESCAPE_KEY = '\x1b';
             <button #cancelButton type="button" class="of-btn of-btn--secondary" data-testid="close-confirm-cancel" (click)="cancelClose()">
               Cancel
             </button>
-            <button type="button" class="of-btn of-btn--danger" data-testid="close-confirm-submit" [disabled]="closing()" (click)="confirmClose()">
+            <button #submitButton type="button" class="of-btn of-btn--danger" data-testid="close-confirm-submit" [disabled]="closing()" (click)="confirmClose()">
               Close session
             </button>
           </div>
@@ -83,15 +84,25 @@ export class SessionActionsComponent {
 
   private readonly closeTrigger = viewChild<ElementRef<HTMLButtonElement>>('closeTrigger');
   private readonly cancelButton = viewChild<ElementRef<HTMLButtonElement>>('cancelButton');
+  private readonly submitButton = viewChild<ElementRef<HTMLButtonElement>>('submitButton');
+  private closingSessionId = '';
 
   constructor() {
     effect(() => {
       if (this.confirmingClose()) this.cancelButton()?.nativeElement.focus();
     });
+    // A route param change reuses this component instance, so a session switch must not leave a
+    // stale confirm dialog (or a previous session's close error) showing over the new session.
+    effect(() => {
+      this.sessionId();
+      this.confirmingClose.set(false);
+      this.error.set(null);
+    });
   }
 
   requestClose(): void {
     if (this.closing()) return;
+    this.closingSessionId = this.sessionId();
     this.confirmingClose.set(true);
   }
 
@@ -102,15 +113,29 @@ export class SessionActionsComponent {
 
   confirmClose(): void {
     this.confirmingClose.set(false);
-    void this.close();
+    void this.close(this.closingSessionId);
   }
 
-  private async close(): Promise<void> {
+  /** Keeps Tab cycling between Cancel and Close session only, so focus never reaches what's behind the dialog. */
+  trapTabFocus(event: KeyboardEvent): void {
+    if (event.key !== 'Tab') return;
+    const focusable = [this.cancelButton()?.nativeElement, this.submitButton()?.nativeElement].filter(
+      (el): el is HTMLButtonElement => el !== undefined,
+    );
+    if (focusable.length === 0) return;
+    event.preventDefault();
+    const currentIndex = focusable.indexOf(document.activeElement as HTMLButtonElement);
+    const step = event.shiftKey ? -1 : 1;
+    const nextIndex = (currentIndex + step + focusable.length) % focusable.length;
+    focusable[nextIndex]!.focus();
+  }
+
+  private async close(sessionId: string): Promise<void> {
     if (this.closing()) return;
     this.closing.set(true);
     this.error.set(null);
     try {
-      await this.api.closeSession(this.sessionId());
+      await this.api.closeSession(sessionId);
     } catch {
       this.error.set(CLOSE_ERROR);
     } finally {

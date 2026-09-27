@@ -1,6 +1,6 @@
 import { render, screen, waitFor, fireEvent } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
-import { inputBinding } from '@angular/core';
+import { inputBinding, signal } from '@angular/core';
 import { describe, expect, it, vi } from 'vitest';
 import type { SessionState } from '@openfleet/shared';
 import { SessionActionsComponent } from './session-actions.component';
@@ -111,6 +111,94 @@ describe('SessionActionsComponent', () => {
       expect(screen.queryByTestId('close-confirm-dialog')).toBeNull();
       await waitFor(() => expect(closeButton).toHaveFocus());
     });
+
+    it('states that the process stops while the worktree, branch and transcript are kept for later', async () => {
+      const api = { closeSession: vi.fn(), sendInput: vi.fn() };
+      await render(SessionActionsComponent, { bindings: bindingsFor('idle'), providers: [{ provide: FleetApiService, useValue: api }] });
+
+      await userEvent.click(screen.getByTestId('session-close'));
+
+      expect(screen.getByTestId('close-confirm-dialog')).toHaveTextContent(
+        'The process stops. The worktree, branch and transcript are kept; you can reopen it later with its history.',
+      );
+    });
+
+    it('traps Tab focus between Cancel and Close session while the dialog is open', async () => {
+      const api = { closeSession: vi.fn(), sendInput: vi.fn() };
+      await render(SessionActionsComponent, { bindings: bindingsFor('idle'), providers: [{ provide: FleetApiService, useValue: api }] });
+
+      await userEvent.click(screen.getByTestId('session-close'));
+      const cancel = screen.getByTestId('close-confirm-cancel');
+      const submit = screen.getByTestId('close-confirm-submit');
+      await waitFor(() => expect(cancel).toHaveFocus());
+
+      await userEvent.tab();
+      expect(submit).toHaveFocus();
+
+      await userEvent.tab();
+      expect(cancel).toHaveFocus();
+
+      await userEvent.tab({ shift: true });
+      expect(submit).toHaveFocus();
+    });
+
+    it('makes the trigger buttons inert while the confirm dialog is open, and interactive again once it closes', async () => {
+      const api = { closeSession: vi.fn(), sendInput: vi.fn() };
+      await render(SessionActionsComponent, { bindings: bindingsFor('idle'), providers: [{ provide: FleetApiService, useValue: api }] });
+      const actions = screen.getByTestId('session-actions');
+      expect(actions).not.toHaveAttribute('inert');
+
+      await userEvent.click(screen.getByTestId('session-close'));
+      expect(actions).toHaveAttribute('inert');
+
+      await userEvent.click(screen.getByTestId('close-confirm-cancel'));
+      expect(actions).not.toHaveAttribute('inert');
+    });
+
+    it('closes the confirm dialog automatically when sessionId changes while it is open', async () => {
+      const sessionId = signal('s1');
+      const api = { closeSession: vi.fn(), sendInput: vi.fn() };
+      await render(SessionActionsComponent, {
+        bindings: [
+          inputBinding('sessionId', sessionId),
+          inputBinding('state', () => 'idle' as const),
+          inputBinding('sessionName', () => 'Gimli · T6'),
+          inputBinding('modelSwitchPending', () => false),
+        ],
+        providers: [{ provide: FleetApiService, useValue: api }],
+      });
+
+      await userEvent.click(screen.getByTestId('session-close'));
+      expect(screen.getByTestId('close-confirm-dialog')).toBeTruthy();
+
+      sessionId.set('s2');
+
+      await waitFor(() => expect(screen.queryByTestId('close-confirm-dialog')).toBeNull());
+      expect(api.closeSession).not.toHaveBeenCalled();
+    });
+
+    it('clears a previous close error when sessionId changes', async () => {
+      const sessionId = signal('s1');
+      const api = { closeSession: vi.fn().mockRejectedValue(new Error('boom')), sendInput: vi.fn() };
+      await render(SessionActionsComponent, {
+        bindings: [
+          inputBinding('sessionId', sessionId),
+          inputBinding('state', () => 'idle' as const),
+          inputBinding('sessionName', () => 'Gimli · T6'),
+          inputBinding('modelSwitchPending', () => false),
+        ],
+        providers: [{ provide: FleetApiService, useValue: api }],
+      });
+
+      await userEvent.click(screen.getByTestId('session-close'));
+      await userEvent.click(screen.getByTestId('close-confirm-submit'));
+      await waitFor(() => expect(screen.getByTestId('session-action-error')).toBeTruthy());
+
+      sessionId.set('s2');
+
+      await waitFor(() => expect(screen.queryByTestId('session-action-error')).toBeNull());
+    });
+
 
     it('sends no request and returns focus to Close when Escape is pressed', async () => {
       const api = { closeSession: vi.fn(), sendInput: vi.fn() };
