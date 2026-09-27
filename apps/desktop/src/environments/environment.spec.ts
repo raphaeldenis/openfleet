@@ -76,14 +76,26 @@ describe('environment', () => {
     expect(environment.daemonAddress).toBe('[::1]:7331');
   });
 
-  it.fails('apiUrl falls back to the default when a whitespace-only stored value normalizes to nothing', () => {
+  it('apiUrl falls back to the default when a whitespace-only stored value normalizes to nothing', () => {
     localStorage.setItem('openfleet.apiUrl', '   ');
 
     expect(environment.apiUrl).toBe('http://127.0.0.1:7331');
   });
 
-  it.fails('apiUrl falls back to the default when a slashes-only stored value normalizes to nothing', () => {
+  it('apiUrl falls back to the default when a slashes-only stored value normalizes to nothing', () => {
     localStorage.setItem('openfleet.apiUrl', '/');
+
+    expect(environment.apiUrl).toBe('http://127.0.0.1:7331');
+  });
+
+  it('apiUrl falls back to the default when the stored value has no http(s) scheme', () => {
+    localStorage.setItem('openfleet.apiUrl', '127.0.0.1:7331');
+
+    expect(environment.apiUrl).toBe('http://127.0.0.1:7331');
+  });
+
+  it('apiUrl falls back to the default when the stored value uses an unsupported scheme', () => {
+    localStorage.setItem('openfleet.apiUrl', 'ftp://h');
 
     expect(environment.apiUrl).toBe('http://127.0.0.1:7331');
   });
