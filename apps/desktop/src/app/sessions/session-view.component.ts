@@ -1,17 +1,13 @@
-import { ChangeDetectionStrategy, Component, computed, inject, input } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, effect, inject, input, signal } from '@angular/core';
 import type { Session } from '@openfleet/shared';
+import { ApiError, FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { BannerComponent, BannerVariant } from '../design/banner.component';
 import { ComposerComponent } from './composer.component';
 import { PermissionGateCardComponent } from './permission-gate-card.component';
-import { closeStatusFor } from './session-close-status';
+import { closeStatusFor, reopenErrorMessage } from './session-close-status';
 import { SessionHeaderComponent } from './session-header.component';
 import { TerminalComponent } from './terminal.component';
-
-// Resuming a closed session has no REST route yet (checked against packages/core/src/api/restHandlers.ts
-// on 2026-09-26 — only /close exists, nothing re-launches a closed one). The Resume action renders
-// disabled with this explanation until that route exists.
-const RESUME_TOOLTIP = "Resuming a closed session isn't available yet — no backend route for it.";
 
 @Component({
   selector: 'of-session-view',
@@ -30,9 +26,12 @@ const RESUME_TOOLTIP = "Resuming a closed session isn't available yet — no bac
         @if (s.state === 'closed') {
           <div class="closed-footer" data-testid="session-closed-footer">
             <of-banner [variant]="closedVariant(s)" [title]="closedTitle(s)" [description]="closedDescription(s)" />
-            <button type="button" class="of-btn of-btn--secondary" data-testid="resume-session" disabled [title]="resumeTooltip">
+            <button type="button" class="of-btn of-btn--secondary" data-testid="resume-session" [disabled]="resuming()" (click)="resume(s.id)">
               ↻ Resume
             </button>
+            @if (resumeError(); as error) {
+              <span role="alert" data-testid="resume-error" class="of-error">✕ {{ error }}</span>
+            }
           </div>
         } @else {
           <of-composer [sessionId]="s.id" [busy]="s.state === 'generating'" />
@@ -51,7 +50,9 @@ const RESUME_TOOLTIP = "Resuming a closed session isn't available yet — no bac
 export class SessionViewComponent {
   readonly sessionId = input.required<string>();
   private readonly events = inject(FleetEventsService);
-  protected readonly resumeTooltip = RESUME_TOOLTIP;
+  private readonly api = inject(FleetApiService);
+  protected readonly resuming = signal(false);
+  protected readonly resumeError = signal<string | null>(null);
 
   protected readonly session = computed(() => this.events.sessions().find((s) => s.id === this.sessionId()));
 
@@ -60,6 +61,30 @@ export class SessionViewComponent {
     if (!session || session.state !== 'waiting_permission') return undefined;
     return this.events.approvals().find((a) => a.sessionId === session.id && a.status === 'pending');
   });
+
+  constructor() {
+    // A route param change reuses this component instance, so a session switch must not leak the
+    // previous session's in-flight resume or resume error into the one now shown.
+    effect(() => {
+      this.sessionId();
+      this.resuming.set(false);
+      this.resumeError.set(null);
+    });
+  }
+
+  async resume(sessionId: string): Promise<void> {
+    if (this.resuming()) return;
+    this.resuming.set(true);
+    this.resumeError.set(null);
+    try {
+      await this.api.reopenSession(sessionId);
+    } catch (error) {
+      const code = error instanceof ApiError ? error.code : undefined;
+      this.resumeError.set(reopenErrorMessage(code));
+    } finally {
+      this.resuming.set(false);
+    }
+  }
 
   protected closedVariant(session: Session): BannerVariant {
     return closeStatusFor(session.exitCode).kind === 'failed' ? 'error' : 'done';
