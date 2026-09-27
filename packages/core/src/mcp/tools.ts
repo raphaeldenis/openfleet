@@ -8,10 +8,22 @@ import type { ApprovalService } from '../governance/approvalService.js';
 import type { ManagerService } from '../managers/managerService.js';
 import { toManagerView } from '../managers/managerView.js';
 import type { PulseScheduler } from '../managers/pulseScheduler.js';
-import type { SessionService } from '../sessions/sessionService.js';
+import { SessionClosedError, type SessionService } from '../sessions/sessionService.js';
 
 const ok = (payload: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(payload) }] });
 const fail = (message: string) => ({ content: [{ type: 'text' as const, text: message }], isError: true });
+
+// Shared by send_session_message and message_parent: both just pick a different target session for the
+// same delivery call and need the same closed-target tool error.
+function trySendMessage(send: () => { status: 'delivered' | 'queued'; messageId: string }) {
+  try {
+    const result = send();
+    return ok({ status: result.status, message_id: result.messageId });
+  } catch (error) {
+    if (!(error instanceof SessionClosedError)) throw error;
+    return fail('target session is closed');
+  }
+}
 
 export interface RegisterToolsDeps {
   sessions: SessionService;
@@ -57,14 +69,12 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
   server.registerTool('send_session_message', { description: 'Send a message to a child (or your parent). Queued if it is busy, delivered on its next idle turn.', inputSchema: { target_uuid: z.string(), body: z.string().min(1) } }, async ({ target_uuid, body }) => {
     const target = sessions.get(target_uuid);
     if (!target || !isInLineage(target) || target.id === caller.id) return fail('target not found or outside your lineage');
-    const result = sessions.sendMessage({ sessionId: target.id, body, fromSessionId: caller.id });
-    return ok({ status: result.status, message_id: result.messageId });
+    return trySendMessage(() => sessions.sendMessage({ sessionId: target.id, body, fromSessionId: caller.id }));
   });
 
   server.registerTool('message_parent', { description: 'Report to the manager that spawned you', inputSchema: { body: z.string().min(1) } }, async ({ body }) => {
     if (!caller.parentId) return fail('this session has no parent');
-    const result = sessions.sendMessage({ sessionId: caller.parentId, body, fromSessionId: caller.id });
-    return ok({ status: result.status, message_id: result.messageId });
+    return trySendMessage(() => sessions.sendMessage({ sessionId: caller.parentId!, body, fromSessionId: caller.id }));
   });
 
   server.registerTool('create_worktree', { description: 'Create an isolated git worktree for a task', inputSchema: { repo_path: z.string(), branch_name: z.string() } }, async ({ repo_path, branch_name }) => {

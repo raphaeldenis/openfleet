@@ -329,6 +329,28 @@ describe('PulseScheduler — hostile cases', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it('reopening a closed manager resumes its pulse cadence instead of leaving it dead until the next daemon restart', async () => {
+    const { scheduler, sessions, managers, harness } = setup();
+    const manager = await sessions.create({ directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake' });
+    sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'SessionStart' }));
+    managers.insert({ sessionId: manager.id, pulseSeconds: 1, childrenCap: 1, missionText: 'x', createdAt: new Date().toISOString() });
+    scheduler.onManagerCreated(managers.get(manager.id)!);
+    harness.handles[0]!.emitExit(0); // manager closes
+    vi.advanceTimersByTime(1000); // the armed tick fires, finds it dead, and clears itself
+    expect(vi.getTimerCount()).toBe(0);
+
+    sessions.reopen(manager.id); // the REST /reopen route's underlying call: state goes back to 'starting'
+    expect(sessions.get(manager.id)!.state).not.toBe('closed');
+    sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'SessionStart' }));
+
+    // A manager brought back via reopen is alive again and should resume pulsing on its own cadence,
+    // the same way one revived by a daemon restart does (PulseScheduler.start()) — but reopen() has no
+    // equivalent hook, so nothing ever re-arms it.
+    vi.advanceTimersByTime(1000); // one full cadence
+    vi.advanceTimersByTime(SUBMIT_KEYSTROKE_DELAY_MS);
+    expect(pulseCount(harness.handles[1]!.written)).toBe(1);
+  });
+
   it('a manager overdue by several cadences pulses exactly once at start(), then waits a full cadence for the next one', async () => {
     const { db, bus } = setup();
     const harness = new FakeHarness();

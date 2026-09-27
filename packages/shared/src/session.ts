@@ -30,6 +30,7 @@ export interface Session {
   emoji: string;
   directory: string;
   worktree?: string;
+  branch?: string;
   model?: string;
   parentId?: string;
   role?: string;
