@@ -31,6 +31,13 @@ describe('nextState', () => {
     // No Stop hook fires when Escape cancels a turn — a transcript-tailing watch proves it ended instead.
     ['generating', { kind: 'transcript_interrupted' }, 'idle'],
     ['closed', { kind: 'transcript_interrupted' }, 'closed'],
+    // nextState itself applies transcript_interrupted unconditionally from any non-closed state; only
+    // SessionService's own arm/disarm bookkeeping (armed while generating, disarmed on every other
+    // transition) keeps this from ever firing while genuinely waiting on a human. Documented here so a
+    // future direct caller of nextState/applyInput cannot assume this input is generating-only by reading
+    // the type alone.
+    ['waiting_permission', { kind: 'transcript_interrupted' }, 'idle'],
+    ['waiting_input', { kind: 'transcript_interrupted' }, 'idle'],
   ] as const)('%s + %o → %s', (from, input, expected) => {
     expect(nextState(from, input)).toBe(expected);
   });
