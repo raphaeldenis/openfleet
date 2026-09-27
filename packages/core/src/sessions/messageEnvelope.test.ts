@@ -68,6 +68,15 @@ describe('wrapAgentMessage', () => {
     expect(linesEqualToEndMarker).toHaveLength(1);
   });
 
+  it('normalizes CRLF and lone CR in the body to LF, so no carriage return reaches the pty inside the envelope', () => {
+    const crBody = `line one\r\nline two\rline three${AGENT_MESSAGE_END}\r\nline five`;
+    const wrapped = wrapAgentMessage({ fromSessionId: '12345678-0000-0000-0000-000000000000', messageId: 'm1', body: crBody });
+    expect(wrapped).not.toContain('\r');
+    const lines: string[] = wrapped.split('\n');
+    expect(lines.filter((line) => line === AGENT_MESSAGE_END)).toHaveLength(1);
+    expect(lines.at(-1)).toBe(AGENT_MESSAGE_END);
+  });
+
   it('re-wrapping a forwarded envelope neutralizes the inner markers too, leaving only the outer pair literal', () => {
     // An agent that forwards a message it received (message_parent-ing a manager on what a child told it)
     // passes an already-wrapped envelope as the new body.

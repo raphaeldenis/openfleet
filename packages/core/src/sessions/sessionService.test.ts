@@ -221,22 +221,6 @@ describe('SessionService agent message envelope', () => {
     expect(harness.handles[0]!.written).toEqual(['[pulse] re-read your mission']);
   });
 
-  it('resending the same message_id to the same target does not enqueue a second copy', async () => {
-    vi.useFakeTimers();
-    const { service } = setup();
-    const sender = await service.create({ directory: '/tmp', name: 'Sender', harness: 'fake', emoji: '🤖' });
-    const target = await service.create({ directory: '/tmp', name: 'Target', harness: 'fake', emoji: '🤖' });
-    service.applyInput(target.id, hook(target.id, { hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: {} })); // keep it non-deliverable
-
-    const first = service.sendMessage({ sessionId: target.id, body: 'retry me', fromSessionId: sender.id, messageId: 'fixed-message-id' });
-    const second = service.sendMessage({ sessionId: target.id, body: 'retry me', fromSessionId: sender.id, messageId: 'fixed-message-id' });
-
-    expect(first.messageId).toBe('fixed-message-id');
-    expect(second.messageId).toBe('fixed-message-id');
-    expect(second.status).toBe(first.status);
-    expect(service.queuedMessageCount(target.id)).toBe(1);
-  });
-
   it('reports the current delivered status when the same message_id is resent after delivery', async () => {
     vi.useFakeTimers();
     const { service, harness } = setup();

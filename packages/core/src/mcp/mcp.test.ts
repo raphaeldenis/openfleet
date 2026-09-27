@@ -158,6 +158,26 @@ describe('MCP', () => {
     expect(sessions.queuedMessageCount(parentId)).toBe(1);
   });
 
+  it('refuses a body over the 16 KiB cap through send_session_message', async () => {
+    const parent = await connect(parentToken);
+    const created = text(await parent.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('cap-send'), name: 'Gimli' } }));
+    const oversizedBody = 'x'.repeat(16 * 1024 + 1);
+    const result = await parent.callTool({ name: 'send_session_message', arguments: { target_uuid: created.id, body: oversizedBody } });
+    expect(result.isError).toBe(true);
+    expect((result.content as { text: string }[])[0]!.text).toBe('message too long: 16385 bytes, max 16384');
+  });
+
+  it('refuses a body over the 16 KiB cap through message_parent', async () => {
+    const parent = await connect(parentToken);
+    const created = text(await parent.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('cap-parent'), name: 'Gimli' } }));
+    const childToken = harness.launches.find((l) => l.sessionId === created.id)!.mcpToken;
+    const child = await connect(childToken);
+    const oversizedBody = 'x'.repeat(16 * 1024 + 1);
+    const result = await child.callTool({ name: 'message_parent', arguments: { body: oversizedBody } });
+    expect(result.isError).toBe(true);
+    expect((result.content as { text: string }[])[0]!.text).toBe('message too long: 16385 bytes, max 16384');
+  });
+
   it('refuses to message a session outside the caller lineage', async () => {
     const stranger = await sessions.create({ directory: '/tmp', name: 'S', harness: 'fake', emoji: '👤' });
     const parent = await connect(parentToken);
