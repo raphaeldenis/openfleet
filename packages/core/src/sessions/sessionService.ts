@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, lstatSync, realpathSync } from 'node:fs';
 import type { DatabaseSync } from 'node:sqlite';
 import type { PermissionMode, Session, SessionSpec } from '@openfleet/shared';
 import { EventBus } from '../events/eventBus.js';
@@ -18,8 +18,14 @@ export class SessionClosedError extends Error {
 }
 
 export class SessionReopenError extends Error {
-  constructor(public readonly code: 'not_closed' | 'directory_missing', message: string) {
+  constructor(public readonly code: 'not_closed' | 'directory_missing' | 'directory_changed' | 'launch_failed', message: string) {
     super(message);
+  }
+}
+
+export class DaemonShuttingDownError extends Error {
+  constructor() {
+    super('daemon is shutting down');
   }
 }
 
@@ -100,6 +106,9 @@ export class SessionService {
   // every hook lost, a pending relaunch (and the queue behind it) waits for the next Stop.
   private readonly unfinishedTurns = new Set<string>();
   private readonly relaunches = new Map<string, Promise<void>>();
+  // Set once closeAll() starts; refuses any new launch (create, reopen, resumeOne, a relaunch) so it can
+  // never spawn a process outside closeAll's own snapshot and survive daemon shutdown.
+  private shuttingDown = false;
 
   constructor(private readonly deps: SessionServiceDeps) {
     this.repo = new SessionRepository(deps.db);
@@ -107,6 +116,7 @@ export class SessionService {
   }
 
   async create(spec: SessionSpec, options?: { branch?: string }): Promise<Session> {
+    this.assertNotShuttingDown();
     const id = newId();
     const hookToken = newToken();
     const mcpToken = newToken();
@@ -114,6 +124,9 @@ export class SessionService {
     this.repo.insert({ id, name: spec.name, emoji: spec.emoji, directory: spec.directory, worktree: null, model: spec.model ?? null,
       parent_id: spec.parentId ?? null, role: spec.role ?? null, harness: spec.harness, state: 'starting', state_since: now, hook_token: hookToken, mcp_token: mcpToken,
       permission_mode: spec.permissionMode ?? null, branch: options?.branch ?? null, created_at: now });
+    // Captured now so a later reopen can tell a directory that still resolves the same way apart from an
+    // in-between symlink swap from one whose path never resolved to a real directory at all.
+    if (existsSync(spec.directory)) this.repo.setDirectoryRealpath(id, realpathSync.native(spec.directory));
     const harness = this.harnessFor(spec.harness);
     const handle = harness.start({
       sessionId: id, directory: spec.directory, model: spec.model, seededPrompt: spec.seededPrompt,
@@ -163,6 +176,7 @@ export class SessionService {
   // into the transcript; acceptable because the transcript carries the conversation. Upgrade path: drive
   // this through a session-scoped model switch if Claude Code ever offers one, instead of a full restart.
   updateModel(sessionId: string, model: string): { status: 'relaunching' | 'deferred' } {
+    this.assertNotShuttingDown();
     const session = this.requireOpen(sessionId);
     this.repo.setModel(sessionId, model);
     this.deps.bus.emit({ type: 'session.model_changed', sessionId, model });
@@ -172,6 +186,7 @@ export class SessionService {
   // Same relaunch machinery as updateModel: the mode is only picked up on the next --resume launch
   // (resolveResumePermissionMode), never typed into the terminal, so a busy session defers it instead.
   updatePermissionMode(sessionId: string, mode: PermissionMode): { status: 'relaunching' | 'deferred' } {
+    this.assertNotShuttingDown();
     const session = this.requireOpen(sessionId);
     this.repo.setPermissionMode(sessionId, mode);
     return this.relaunchOrDefer(sessionId, session.state);
@@ -183,6 +198,11 @@ export class SessionService {
     return session;
   }
 
+  // ponytail: a permission-mode change arriving while a model-change relaunch for the same session is
+  // already in flight defers behind pendingRelaunches and then fires its own extra relaunch once the first
+  // one lands, even though the first relaunch already picked up both the new model and the new mode — one
+  // redundant restart with already-correct settings. Upgrade path: collapse a pending relaunch request into
+  // one already in flight instead of always queuing a second one.
   private relaunchOrDefer(sessionId: string, state: Session['state']): { status: 'relaunching' | 'deferred' } {
     const isIdleConfirmed = canDeliverNow(state) && this.deliveryOf(sessionId).phase.name === 'ready' && !this.unfinishedTurns.has(sessionId);
     if (!isIdleConfirmed) {
@@ -203,21 +223,42 @@ export class SessionService {
   }
 
   // Resumes a closed session through the same --resume path a daemon restart uses (resumeOne): fresh
-  // tokens, same model, same directory. Refuses a session that is not closed, or whose directory has
-  // since been removed (e.g. its worktree was cleaned up) rather than launching into a missing cwd.
+  // tokens, same model, same directory. Refuses a session that is not closed, whose directory has since
+  // been removed (e.g. its worktree was cleaned up) rather than launching into a missing cwd, whose
+  // directory now resolves somewhere else than it did when the session was created, or whose harness fails
+  // to launch — the last leaves the session closed rather than reporting a fake success.
   reopen(sessionId: string): Session {
+    this.assertNotShuttingDown();
     const session = this.require(sessionId);
     if (session.state !== 'closed') throw new SessionReopenError('not_closed', `session ${sessionId} is not closed`);
     if (!existsSync(session.directory)) throw new SessionReopenError('directory_missing', `session ${sessionId} directory no longer exists: ${session.directory}`);
-    this.resumeOne(session);
+    this.assertDirectoryUnchanged(session);
+    const outcome = this.resumeOne(session);
+    if (!outcome.launched) throw new SessionReopenError('launch_failed', `session ${sessionId} failed to relaunch: ${outcome.reason}`);
     this.deps.bus.emit({ type: 'session.reopened', sessionId });
     return this.repo.get(sessionId)!;
+  }
+
+  // A directory that resolved somewhere at creation and resolves somewhere else now had a path segment
+  // swapped for a symlink while the session sat closed; a session created before this check existed (or
+  // whose directory didn't exist yet at creation) has no recorded realpath, so the fallback at least
+  // refuses a directory that is itself a symlink rather than a real one.
+  private assertDirectoryUnchanged(session: Session): void {
+    const currentRealpath = realpathSync.native(session.directory);
+    const realpathAtCreation = this.repo.directoryRealpath(session.id);
+    const isTrustworthy = realpathAtCreation ? currentRealpath === realpathAtCreation : lstatSync(session.directory).isDirectory();
+    if (!isTrustworthy) throw new SessionReopenError('directory_changed', `session ${session.id} directory changed since it closed: ${session.directory}`);
+  }
+
+  private assertNotShuttingDown(): void {
+    if (this.shuttingDown) throw new DaemonShuttingDownError();
   }
 
   // Closes the running process without telling the user the session is closed, then resumes it under the
   // model already written to the DB by updateModel — the same --resume/--model/fresh-tokens path a daemon
   // restart uses (Amendments A2/A3), never a typed '/model' (Amendment A4).
   private startRelaunch(sessionId: string): void {
+    this.assertNotShuttingDown();
     this.pendingRelaunches.delete(sessionId);
     this.enter(sessionId, { name: 'relaunching' });
     const relaunch = this.performRelaunch(sessionId)
@@ -236,8 +277,10 @@ export class SessionService {
         this.markClosed(sessionId, undefined);
         return;
       }
-      this.resumeOne(session);
-      this.enter(sessionId, READY);
+      const outcome = this.resumeOne(session);
+      // A failed launch already marked the session closed (and stopped its delivery) inside resumeOne:
+      // entering READY here would resurrect a delivery record for a session that is no longer open.
+      if (outcome.launched) this.enter(sessionId, READY);
     } catch (err) {
       console.error(`relaunch: session ${sessionId} failed to relaunch after a model change`, err);
       await this.failResume(sessionId);
@@ -320,6 +363,9 @@ export class SessionService {
   }
 
   async closeAll(): Promise<void> {
+    // Set before the snapshot below is even taken: refusing every new launch from this point on is what
+    // guarantees the snapshot stays complete for the rest of this method.
+    this.shuttingDown = true;
     const openSessionIds = new Set([...this.handles.keys(), ...this.relaunches.keys()]);
     await Promise.all([...openSessionIds].map((id) => this.close(id)));
   }
@@ -515,9 +561,12 @@ export class SessionService {
     this.deps.bus.emit({ type: 'session.closed', sessionId, exitCode });
   }
 
-  private resumeOne(session: Session): void {
+  // Boot resume and reopen both call this, but only reopen acts on the outcome: boot resume keeps its
+  // existing "log and mark closed" behaviour for one bad row so the rest of the fleet still comes up.
+  private resumeOne(session: Session): { launched: true } | { launched: false; reason: string } {
+    this.assertNotShuttingDown();
     const tokens = this.repo.tokens(session.id);
-    if (!tokens) return; // defensive: every session row carries its tokens, but never resume without them
+    if (!tokens) return { launched: false, reason: 'session has no stored tokens' }; // defensive: every session row carries its tokens
     const harness = this.harnessFor(session.harness);
     const permissionMode = this.resolveResumePermissionMode(session);
     // A daemon crash can leave the pre-restart process alive for a moment in its orphaned PTY (ponytail:
@@ -541,12 +590,13 @@ export class SessionService {
         permissionMode,
         resuming: true,
       });
-    } catch {
+    } catch (err) {
       // The launch builder refuses to resume with a missing/invalid session id (it would otherwise open
       // the CLI's interactive picker inside the PTY) — close this one row and keep resuming the rest of
       // the fleet rather than letting one bad row abort resumeAll for every other session.
+      console.error(`resumeOne: session ${session.id} failed to launch`, err);
       this.markClosed(session.id, RESUME_LAUNCH_FAILED_EXIT_CODE);
-      return;
+      return { launched: false, reason: (err as Error).message };
     }
     this.handles.set(session.id, handle);
     activeHandleBySessionId.set(session.id, handle);
@@ -562,6 +612,7 @@ export class SessionService {
     // The DB write is last: if it throws, the handle is already fully wired (onExit + resume timeout),
     // so resumeAll's catch can close this row via markClosed without leaving an untracked process behind.
     this.repo.setState(session.id, 'starting', new Date().toISOString());
+    return { launched: true };
   }
 
   private resolveResumePermissionMode(session: Session): PermissionMode | undefined {

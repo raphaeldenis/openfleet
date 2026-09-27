@@ -58,12 +58,7 @@ export class SessionRepository {
     this.db.prepare('UPDATE sessions SET permission_mode = ? WHERE id = ?').run(mode, id);
   }
   setNameAndEmoji(id: string, patch: { name?: string; emoji?: string }): void {
-    const assignments: string[] = [];
-    const values: string[] = [];
-    if (patch.name !== undefined) { assignments.push('name = ?'); values.push(patch.name); }
-    if (patch.emoji !== undefined) { assignments.push('emoji = ?'); values.push(patch.emoji); }
-    if (assignments.length === 0) return;
-    this.db.prepare(`UPDATE sessions SET ${assignments.join(', ')} WHERE id = ?`).run(...values, id);
+    this.db.prepare('UPDATE sessions SET name = COALESCE(?, name), emoji = COALESCE(?, emoji) WHERE id = ?').run(patch.name ?? null, patch.emoji ?? null, id);
   }
   setClosed(id: string, exitCode: number | undefined, at: string): void {
     this.db.prepare(`UPDATE sessions SET state = 'closed', state_since = ?, exit_code = ?, closed_at = ? WHERE id = ?`).run(at, exitCode ?? null, at, id);
@@ -91,5 +86,14 @@ export class SessionRepository {
   rawPermissionMode(id: string): string | null | undefined {
     const row = this.db.prepare('SELECT permission_mode FROM sessions WHERE id = ?').get(id) as { permission_mode: string | null } | undefined;
     return row?.permission_mode;
+  }
+  // Not part of Session: only reopen's directory-swap guard reads it, so it lives outside the mapped
+  // columns like rawPermissionMode does.
+  setDirectoryRealpath(id: string, realpath: string | null): void {
+    this.db.prepare('UPDATE sessions SET directory_realpath = ? WHERE id = ?').run(realpath, id);
+  }
+  directoryRealpath(id: string): string | null | undefined {
+    const row = this.db.prepare('SELECT directory_realpath FROM sessions WHERE id = ?').get(id) as { directory_realpath: string | null } | undefined;
+    return row?.directory_realpath;
   }
 }

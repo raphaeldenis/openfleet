@@ -3,6 +3,7 @@ import { PERMISSION_MODES } from '@openfleet/shared';
 import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
 import { FakeHarness } from '../harness/fakeHarness.js';
+import type { Harness, HarnessHandle, HarnessLaunch } from '../harness/harness.js';
 import { ApprovalService } from '../governance/approvalService.js';
 import { ManagerRepository } from '../managers/managerRepository.js';
 import { ManagerService } from '../managers/managerService.js';
@@ -13,12 +14,13 @@ import { startServer } from './server.js';
 
 let server: Awaited<ReturnType<typeof startServer>>;
 let harness: FakeHarness;
+let sessions: SessionService;
 
 beforeEach(async () => {
   const db = openDatabase(':memory:');
   const bus = new EventBus();
   harness = new FakeHarness();
-  const sessions = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt', submitKeystrokeDelayMs: 0 });
+  sessions = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt', submitKeystrokeDelayMs: 0 });
   const approvals = new ApprovalService({ db, bus });
   const managerRepo = new ManagerRepository(db);
   const pulseScheduler = new PulseScheduler({ managers: managerRepo, sessions, bus });
@@ -156,6 +158,15 @@ describe('REST', () => {
     expect(res.status).toBe(404);
   });
 
+  it('503s a model change while the daemon is shutting down', async () => {
+    const created = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
+    const closing = sessions.closeAll();
+    const res = await api(`/api/sessions/${created.id}/model`, { method: 'POST', body: JSON.stringify({ model: 'sonnet' }) });
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: 'daemon_shutting_down' });
+    await closing;
+  });
+
   it('409s a model change on a session that has already closed', async () => {
     const created = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
     await api(`/api/sessions/${created.id}/close`, { method: 'POST' });
@@ -274,6 +285,15 @@ describe('REST', () => {
     expect(res.status).toBe(400);
   });
 
+  it('503s a permission-mode change while the daemon is shutting down', async () => {
+    const created = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
+    const closing = sessions.closeAll();
+    const res = await api(`/api/sessions/${created.id}/permission-mode`, { method: 'POST', body: JSON.stringify({ mode: 'plan' }) });
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: 'daemon_shutting_down' });
+    await closing;
+  });
+
   it('409s a permission-mode change on a session that has already closed', async () => {
     const created = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
     await api(`/api/sessions/${created.id}/close`, { method: 'POST' });
@@ -305,6 +325,44 @@ describe('REST', () => {
     await api(`/api/sessions/${created.id}/close`, { method: 'POST' });
     const res = await api(`/api/sessions/${created.id}/reopen`, { method: 'POST' });
     expect(res.status).toBe(409);
+  });
+
+  it('500s reopening a session whose harness fails to relaunch, not a fake 200', async () => {
+    const created = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
+    await api(`/api/sessions/${created.id}/close`, { method: 'POST' });
+
+    class FailingHarness implements Harness {
+      readonly id = 'fake' as const;
+      start(_launch: HarnessLaunch): HarnessHandle {
+        throw new Error('pty spawn ENOENT');
+      }
+    }
+    // Swaps the running daemon's own harness registration for this session's harness id, so the very next
+    // reopen call the running server handles goes through a harness that throws on start.
+    (sessions as unknown as { harnessFor: (id: string) => Harness }).harnessFor = () => new FailingHarness();
+
+    const res = await api(`/api/sessions/${created.id}/reopen`, { method: 'POST' });
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: 'launch_failed' });
+  });
+
+  it('503s creating a session while the daemon is shutting down', async () => {
+    const closing = sessions.closeAll();
+    const res = await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) });
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: 'daemon_shutting_down' });
+    await closing;
+  });
+
+  it('503s reopening a session while the daemon is shutting down', async () => {
+    const created = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
+    await api(`/api/sessions/${created.id}/close`, { method: 'POST' });
+
+    const closing = sessions.closeAll();
+    const res = await api(`/api/sessions/${created.id}/reopen`, { method: 'POST' });
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: 'daemon_shutting_down' });
+    await closing;
   });
 
   it('409s posting a message to a closed session instead of silently queuing it', async () => {

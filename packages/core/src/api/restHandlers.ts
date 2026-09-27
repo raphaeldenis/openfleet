@@ -1,3 +1,4 @@
+import type { ServerResponse } from 'node:http';
 import type { ManagerSpec, SessionSpec } from '@openfleet/shared';
 import { PERMISSION_MODES, SessionSpecSchema } from '@openfleet/shared';
 import { z } from 'zod';
@@ -6,8 +7,20 @@ import type { FakeHandle } from '../harness/fakeHarness.js';
 import type { ManagerService } from '../managers/managerService.js';
 import type { PulseScheduler } from '../managers/pulseScheduler.js';
 import { resolveModel, type ModelTable } from '../models.js';
-import { SessionClosedError, SessionReopenError, type SessionService } from '../sessions/sessionService.js';
+import { DaemonShuttingDownError, SessionClosedError, SessionReopenError, type SessionService } from '../sessions/sessionService.js';
 import { json, Router } from './router.js';
+
+// Used by the messages, permission-mode and model routes: each can hit a session that closed or a daemon
+// that started shutting down between the request landing and the session-service call running.
+function respondToLifecycleErrors(res: ServerResponse, run: () => void): void {
+  try {
+    run();
+  } catch (error) {
+    if (error instanceof SessionClosedError) return json(res, 409, { error: 'session_closed' });
+    if (error instanceof DaemonShuttingDownError) return json(res, 503, { error: 'daemon_shutting_down' });
+    throw error;
+  }
+}
 
 const CreateSessionSchema = SessionSpecSchema.extend({ repoPath: z.string().optional(), branchName: z.string().optional() });
 
@@ -21,12 +34,17 @@ export function registerRestRoutes(router: Router, deps: { sessions: SessionServ
   router.add('POST', '/api/sessions', async ({ res, body }) => {
     const spec = CreateSessionSchema.parse(body);
     const hasRepo = spec.repoPath !== undefined && spec.branchName !== undefined;
-    const session = spec.manager
-      ? await deps.managers.createManagerSession(spec as SessionSpec & { manager: ManagerSpec })
-      : hasRepo
-        ? await deps.sessions.createInWorktree({ ...spec, repoPath: spec.repoPath!, branchName: spec.branchName! })
-        : await deps.sessions.create(spec);
-    json(res, 201, session);
+    try {
+      const session = spec.manager
+        ? await deps.managers.createManagerSession(spec as SessionSpec & { manager: ManagerSpec })
+        : hasRepo
+          ? await deps.sessions.createInWorktree({ ...spec, repoPath: spec.repoPath!, branchName: spec.branchName! })
+          : await deps.sessions.create(spec);
+      json(res, 201, session);
+    } catch (error) {
+      if (!(error instanceof DaemonShuttingDownError)) throw error;
+      json(res, 503, { error: 'daemon_shutting_down' });
+    }
   });
 
   router.add('POST', '/api/managers/:id/pulse', ({ res, params }) => {
@@ -45,12 +63,7 @@ export function registerRestRoutes(router: Router, deps: { sessions: SessionServ
   router.add('POST', '/api/sessions/:id/messages', ({ res, params, body }) => {
     if (!deps.sessions.get(params.id!)) return json(res, 404, { error: 'not_found' });
     const { body: text } = z.object({ body: z.string().min(1) }).parse(body);
-    try {
-      json(res, 200, deps.sessions.sendMessage({ sessionId: params.id!, body: text }));
-    } catch (error) {
-      if (!(error instanceof SessionClosedError)) throw error;
-      json(res, 409, { error: 'session_closed' });
-    }
+    respondToLifecycleErrors(res, () => json(res, 200, deps.sessions.sendMessage({ sessionId: params.id!, body: text })));
   });
 
   router.add('POST', '/api/sessions/:id/reopen', ({ res, params }) => {
@@ -58,20 +71,16 @@ export function registerRestRoutes(router: Router, deps: { sessions: SessionServ
     try {
       json(res, 200, deps.sessions.reopen(params.id!));
     } catch (error) {
+      if (error instanceof DaemonShuttingDownError) return json(res, 503, { error: 'daemon_shutting_down' });
       if (!(error instanceof SessionReopenError)) throw error;
-      json(res, 409, { error: error.code });
+      json(res, error.code === 'launch_failed' ? 500 : 409, { error: error.code });
     }
   });
 
   router.add('POST', '/api/sessions/:id/permission-mode', ({ res, params, body }) => {
     if (!deps.sessions.get(params.id!)) return json(res, 404, { error: 'not_found' });
     const { mode } = z.object({ mode: z.enum(PERMISSION_MODES) }).parse(body);
-    try {
-      json(res, 200, deps.sessions.updatePermissionMode(params.id!, mode));
-    } catch (error) {
-      if (!(error instanceof SessionClosedError)) throw error;
-      json(res, 409, { error: 'session_closed' });
-    }
+    respondToLifecycleErrors(res, () => json(res, 200, deps.sessions.updatePermissionMode(params.id!, mode)));
   });
 
   router.add('POST', '/api/sessions/:id/input', ({ res, params, body }) => {
@@ -84,12 +93,7 @@ export function registerRestRoutes(router: Router, deps: { sessions: SessionServ
   router.add('POST', '/api/sessions/:id/model', ({ res, params, body }) => {
     if (!deps.sessions.get(params.id!)) return json(res, 404, { error: 'not_found' });
     const { model } = z.object({ model: z.string().min(1) }).parse(body);
-    try {
-      json(res, 200, deps.sessions.updateModel(params.id!, resolveModel(deps.modelTable, model)));
-    } catch (error) {
-      if (!(error instanceof SessionClosedError)) throw error;
-      json(res, 409, { error: 'session_closed' });
-    }
+    respondToLifecycleErrors(res, () => json(res, 200, deps.sessions.updateModel(params.id!, resolveModel(deps.modelTable, model))));
   });
 
   router.add('POST', '/api/sessions/:id/resize', ({ res, params, body }) => {

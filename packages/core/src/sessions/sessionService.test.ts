@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmdirSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
@@ -7,7 +7,7 @@ import { openDatabase } from '../db/database.js';
 import { FakeHandle, FakeHarness } from '../harness/fakeHarness.js';
 import type { Harness, HarnessHandle, HarnessLaunch } from '../harness/harness.js';
 import { EventBus } from '../events/eventBus.js';
-import { DEFAULT_CLOSE_ESCALATE_MS, DELIVERY_RETRY_MS, MAX_DELIVERY_RETRIES, PARKED_RETRY_MS, RESUME_LAUNCH_FAILED_EXIT_CODE, RESUME_TIMEOUT_EXIT_CODE, SessionReopenError, SessionService, SUBMIT_KEYSTROKE_DELAY_MS, TURN_START_TIMEOUT_MS } from './sessionService.js';
+import { DaemonShuttingDownError, DEFAULT_CLOSE_ESCALATE_MS, DELIVERY_RETRY_MS, MAX_DELIVERY_RETRIES, PARKED_RETRY_MS, RESUME_LAUNCH_FAILED_EXIT_CODE, RESUME_TIMEOUT_EXIT_CODE, SessionReopenError, SessionService, SUBMIT_KEYSTROKE_DELAY_MS, TURN_START_TIMEOUT_MS } from './sessionService.js';
 import { MessageQueue } from './messageQueue.js';
 import { SessionRepository } from './sessionRepository.js';
 import { PERMISSION_MODES, type ServerEvent } from '@openfleet/shared';
@@ -1731,5 +1731,97 @@ describe('SessionService.reopen', () => {
 
     expect(() => service.reopen(session.id)).toThrow(SessionReopenError);
     expect(service.get(session.id)!.state).toBe('closed');
+  });
+
+  it('rejects reopening a closed session whose directory was replaced by a symlink while it was closed, launching nothing', async () => {
+    const { service, harness } = setup();
+    const sessionDir = mkdtempSync(join(tmpdir(), 'of-swap-'));
+    const elsewhereDir = mkdtempSync(join(tmpdir(), 'of-elsewhere-'));
+    const session = await service.create({ directory: sessionDir, name: 'G', harness: 'fake', emoji: '🤖' });
+    harness.handles[0]!.emitExit(0);
+
+    rmdirSync(sessionDir);
+    symlinkSync(elsewhereDir, sessionDir);
+
+    let caught: unknown;
+    try {
+      service.reopen(session.id);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(SessionReopenError);
+    expect((caught as SessionReopenError).code).toBe('directory_changed');
+    expect(harness.launches).toHaveLength(1);
+    expect(service.get(session.id)!.state).toBe('closed');
+  });
+
+  it('rejects reopening a session whose harness fails to launch, leaving it closed without emitting session.reopened', async () => {
+    const db = openDatabase(':memory:');
+    const bus = new EventBus();
+    const events: ServerEvent[] = [];
+    bus.subscribe((e) => events.push(e));
+    const firstRunHarness = new FakeHarness();
+    const original = new SessionService({ db, bus, harnesses: [firstRunHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+    const session = await original.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    firstRunHarness.handles[0]!.emitExit(0);
+
+    class FailingHarness implements Harness {
+      readonly id = 'fake' as const;
+      readonly launches: HarnessLaunch[] = [];
+      start(launch: HarnessLaunch): HarnessHandle {
+        this.launches.push(launch);
+        throw new Error('pty spawn ENOENT');
+      }
+    }
+    const failingHarness = new FailingHarness();
+    const service = new SessionService({ db, bus, harnesses: [failingHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+
+    let caught: unknown;
+    try {
+      service.reopen(session.id);
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(SessionReopenError);
+    expect((caught as SessionReopenError).code).toBe('launch_failed');
+    expect((caught as SessionReopenError).message).toContain('pty spawn ENOENT');
+    expect(failingHarness.launches).toHaveLength(1);
+    expect(service.get(session.id)!.state).toBe('closed');
+    // Already closed before this reopen attempt: markClosed's own no-op-if-already-closed guard means a
+    // failed reopen leaves the session's original exit reason untouched rather than overwriting it.
+    expect(service.get(session.id)!.exitCode).toBe(0);
+    expect(events.some((e) => e.type === 'session.reopened')).toBe(false);
+  });
+});
+
+describe('SessionService shutdown', () => {
+  it('refuses to create a new session once closeAll has started, so it never escapes closeAll\'s own snapshot', async () => {
+    const { service } = setup();
+
+    const closing = service.closeAll();
+    await expect(service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' })).rejects.toThrow(DaemonShuttingDownError);
+    await closing;
+  });
+
+  it('refuses to reopen a closed session once closeAll has started', async () => {
+    const { service, harness } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    harness.handles[0]!.emitExit(0);
+
+    const closing = service.closeAll();
+    expect(() => service.reopen(session.id)).toThrow(DaemonShuttingDownError);
+    expect(harness.launches).toHaveLength(1);
+    await closing;
+  });
+
+  it('refuses a model change that would relaunch an idle session once closeAll has started', async () => {
+    const { service } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+
+    const closing = service.closeAll();
+    expect(() => service.updateModel(session.id, 'claude-opus-5-5')).toThrow(DaemonShuttingDownError);
+    await closing;
   });
 });
