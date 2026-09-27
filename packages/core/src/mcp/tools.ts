@@ -13,6 +13,14 @@ import type { SessionService } from '../sessions/sessionService.js';
 const ok = (payload: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(payload) }] });
 const fail = (message: string) => ({ content: [{ type: 'text' as const, text: message }], isError: true });
 
+// A long body written in one pty handle.write can arrive at the CLI in several chunks and submit early
+// (Task 6f fix loop 2, decision 1) — capped well under the MCP transport's own 1 MiB request limit.
+const MAX_MESSAGE_BODY_BYTES = 16 * 1024;
+function tooLongMessage(body: string): string | undefined {
+  const byteLength = Buffer.byteLength(body, 'utf8');
+  return byteLength > MAX_MESSAGE_BODY_BYTES ? `message too long: ${byteLength} bytes, max ${MAX_MESSAGE_BODY_BYTES}` : undefined;
+}
+
 export interface RegisterToolsDeps {
   sessions: SessionService;
   caller: Session;
@@ -55,6 +63,8 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
   );
 
   server.registerTool('send_session_message', { description: 'Send a message to a child (or your parent). Queued if it is busy, delivered on its next idle turn. Pass back a previous message_id to retry idempotently.', inputSchema: { target_uuid: z.string(), body: z.string().min(1), message_id: z.uuid().optional() } }, async ({ target_uuid, body, message_id }) => {
+    const tooLong = tooLongMessage(body);
+    if (tooLong) return fail(tooLong);
     const target = sessions.get(target_uuid);
     if (!target || !isInLineage(target) || target.id === caller.id) return fail('target not found or outside your lineage');
     const result = sessions.sendMessage({ sessionId: target.id, body, fromSessionId: caller.id, messageId: message_id });
@@ -62,6 +72,8 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
   });
 
   server.registerTool('message_parent', { description: 'Report to the manager that spawned you. Pass back a previous message_id to retry idempotently.', inputSchema: { body: z.string().min(1), message_id: z.uuid().optional() } }, async ({ body, message_id }) => {
+    const tooLong = tooLongMessage(body);
+    if (tooLong) return fail(tooLong);
     if (!caller.parentId) return fail('this session has no parent');
     const result = sessions.sendMessage({ sessionId: caller.parentId, body, fromSessionId: caller.id, messageId: message_id });
     return ok({ status: result.status, message_id: result.messageId });

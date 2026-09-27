@@ -3,6 +3,12 @@ export const AGENT_MESSAGE_END = '--- END AGENT MESSAGE ---';
 
 const SENDER_ID_DISPLAY_LENGTH = 8;
 
+// The pty submits on a bare '\r' written 150 ms after the body (Task 6f delivery). A '\r' embedded in the
+// body itself would submit early, cutting the envelope before its real END marker ever reaches the pty.
+function normalizeLineEndings(text: string): string {
+  return text.replace(/\r\n?/g, '\n');
+}
+
 // A line that merely contains a marker (not just an exact match) is neutralized too: a hostile body could
 // pad the marker with trailing text to still visually read as closing the envelope.
 function neutralizeEnvelopeMarkers(body: string): string {
@@ -29,6 +35,6 @@ export function wrapAgentMessage(input: { fromSessionId: string; fromBranch?: st
   const messageId = splitHeaderField(input.messageId);
   const header = `[from agent · session ${senderId.displayValue} · branch ${branch.displayValue} · msg ${messageId.displayValue}]`;
   const spillover = [senderId.spillover, branch.spillover, messageId.spillover].filter((part): part is string => part !== undefined);
-  const bodyWithSpillover = [...spillover, input.body].join('\n');
+  const bodyWithSpillover = [...spillover, normalizeLineEndings(input.body)].join('\n');
   return [header, AGENT_MESSAGE_BEGIN, neutralizeEnvelopeMarkers(bodyWithSpillover), AGENT_MESSAGE_END].join('\n');
 }
