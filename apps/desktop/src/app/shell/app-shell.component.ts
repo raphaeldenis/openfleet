@@ -135,7 +135,9 @@ export class AppShellComponent {
 
   closePalette(): void {
     this.paletteOpen.set(false);
-    (this.paletteOpener ?? this.paletteTrigger().nativeElement).focus();
+    const opener = this.paletteOpener;
+    const focusTarget = opener?.isConnected ? opener : this.paletteTrigger().nativeElement;
+    focusTarget.focus();
     this.paletteOpener = null;
   }
 

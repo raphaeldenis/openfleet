@@ -290,6 +290,23 @@ describe('AppShellComponent', () => {
     expect(document.activeElement).toBe(inbox);
   });
 
+  it('falls back to the search trigger when the palette opener no longer exists in the DOM', async () => {
+    const { harness, root } = await setUp();
+    const inbox = root.querySelector('[data-testid="nav-inbox"]') as HTMLElement;
+    inbox.focus();
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }));
+    await harness.fixture.whenStable();
+
+    inbox.remove();
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await harness.fixture.whenStable();
+
+    const trigger = root.querySelector('[data-testid="open-palette"]') as HTMLElement;
+    expect(document.activeElement).toBe(trigger);
+  });
+
   it('never lets a disabled nav item navigate, by click or by keyboard, since it renders as inert text rather than a link', async () => {
     const { harness, root } = await setUp();
     const router = TestBed.inject(Router);
