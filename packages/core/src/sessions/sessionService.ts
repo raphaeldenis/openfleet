@@ -68,7 +68,16 @@ export const TRANSCRIPT_INTERRUPT_POLL_MS = 200;
 export const TRANSCRIPT_INTERRUPT_TIMEOUT_MS = 30_000;
 const INTERRUPTED_TRANSCRIPT_MARKER = '[Request interrupted by user]';
 
-interface InterruptWatch { transcriptPath: string; offset: number; timer: ReturnType<typeof setInterval>; timeout: ReturnType<typeof setTimeout> }
+interface InterruptWatch {
+  transcriptPath: string;
+  offset: number;
+  // A line split across two polls (the CLI's write straddling the poll boundary) would otherwise be
+  // dropped for good: the tail end read on its own poll is not valid JSON. Carried over and prepended to
+  // the next poll's read, like tail -f line buffering.
+  pendingPartialLine: string;
+  timer: ReturnType<typeof setInterval>;
+  timeout: ReturnType<typeof setTimeout>;
+}
 
 // Claude Code fires no Stop hook when Escape cancels a turn, but it does append this line to the
 // session's own transcript JSONL (confirmed in T06h's real-CLI QA evidence) — the one place the daemon
@@ -416,9 +425,11 @@ export class SessionService {
     if (data.includes('\x1b')) this.armInterruptWatchIfGenerating(sessionId);
   }
 
-  // Arms a one-shot watch the moment a raw Escape is written while the CLI is generating — the only
-  // signal the daemon has that the human meant to cancel the running turn. No-ops (per the manager's
-  // rule) when a watch is already armed, the session isn't generating, or no hook has ever reported a
+  // Arms a one-shot watch the moment a raw write containing the ESC byte lands while the CLI is
+  // generating — the only signal the daemon has that the human meant to cancel the running turn. An
+  // arrow key's CSI sequence also starts with ESC and arms it too; harmless, since arming costs at most
+  // one poll interval running for up to TRANSCRIPT_INTERRUPT_TIMEOUT_MS. No-ops (per the manager's rule)
+  // when a watch is already armed, the session isn't generating, or no hook has ever reported a
   // transcript_path for it.
   private armInterruptWatchIfGenerating(sessionId: string): void {
     if (this.interruptWatches.has(sessionId)) return;
@@ -434,7 +445,7 @@ export class SessionService {
     }
     const timer = setInterval(() => this.pollInterruptWatch(sessionId), TRANSCRIPT_INTERRUPT_POLL_MS);
     const timeout = setTimeout(() => this.disarmInterruptWatch(sessionId), TRANSCRIPT_INTERRUPT_TIMEOUT_MS);
-    this.interruptWatches.set(sessionId, { transcriptPath, offset, timer, timeout });
+    this.interruptWatches.set(sessionId, { transcriptPath, offset, pendingPartialLine: '', timer, timeout });
   }
 
   // Reads only the bytes appended since the watch armed (or since the last poll), never re-scanning the
@@ -447,12 +458,19 @@ export class SessionService {
     try {
       size = statSync(watch.transcriptPath).size;
     } catch {
-      return;
+      return; // e.g. the transcript file vanished this tick; treat as nothing this tick, keep polling until the timeout
     }
     if (size <= watch.offset) return;
-    const appended = readFileSync(watch.transcriptPath).subarray(watch.offset, size).toString('utf8');
+    let appended: string;
+    try {
+      appended = readFileSync(watch.transcriptPath).subarray(watch.offset, size).toString('utf8');
+    } catch {
+      return; // e.g. a transient permission/read error; treat as nothing this tick, keep polling until the timeout
+    }
     watch.offset = size;
-    const sawInterruptMarker = appended.split('\n').some(isInterruptedTranscriptLine);
+    const lines = (watch.pendingPartialLine + appended).split('\n');
+    watch.pendingPartialLine = lines.pop() ?? '';
+    const sawInterruptMarker = lines.some(isInterruptedTranscriptLine);
     if (!sawInterruptMarker) return;
     this.disarmInterruptWatch(sessionId);
     this.applyInput(sessionId, { kind: 'transcript_interrupted' });

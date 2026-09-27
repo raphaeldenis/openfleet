@@ -1457,7 +1457,7 @@ describe('SessionService submit-keystroke hostile cases', () => {
       expect(service.get(session.id)!.state).toBe('idle'); // an arrow key alone armed the watch, same as a bare Escape
     });
 
-    it('silently drops the interrupt marker when the CLI\'s write to the transcript straddles two polls (a torn write)', async () => {
+    it('still detects the interrupt marker when the CLI\'s write to the transcript straddles two polls (a torn write), by carrying the partial line to the next poll', async () => {
       vi.useFakeTimers();
       const { service } = setup();
       const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
@@ -1475,7 +1475,7 @@ describe('SessionService submit-keystroke hostile cases', () => {
       expect(service.get(session.id)!.state).toBe('idle');
     });
 
-    it.skipIf(process.getuid?.() === 0)('propagates (instead of swallowing) an fs error thrown mid-poll: an unreadable transcript file throws inside the interval', async () => {
+    it.skipIf(process.getuid?.() === 0)('swallows (instead of propagating) an fs error thrown mid-poll: an unreadable transcript file is treated as nothing this tick, and the watch keeps polling', async () => {
       vi.useFakeTimers();
       const { service } = setup();
       const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
@@ -1487,10 +1487,15 @@ describe('SessionService submit-keystroke hostile cases', () => {
       chmodSync(transcriptPath, 0o000); // statSync still succeeds (stat needs no read permission); readFileSync does not
 
       try {
-        await expect(vi.advanceTimersByTimeAsync(TRANSCRIPT_INTERRUPT_POLL_MS)).rejects.toThrow();
+        await expect(vi.advanceTimersByTimeAsync(TRANSCRIPT_INTERRUPT_POLL_MS)).resolves.not.toThrow();
+        expect(service.get(session.id)!.state).toBe('generating'); // the read error was swallowed, not propagated
       } finally {
         chmodSync(transcriptPath, 0o600);
       }
+
+      // Once readable again, the watch is still armed and still catches the marker it couldn't read before.
+      await vi.advanceTimersByTimeAsync(TRANSCRIPT_INTERRUPT_POLL_MS);
+      expect(service.get(session.id)!.state).toBe('idle');
     });
   });
 
