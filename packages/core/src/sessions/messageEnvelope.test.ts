@@ -77,17 +77,19 @@ describe('wrapAgentMessage', () => {
     expect(lines.at(-1)).toBe(AGENT_MESSAGE_END);
   });
 
-  it('wraps an 8192-byte body full of marker lines without truncating, even though neutralization pushes it past the old 4096-byte pty-write bound', () => {
+  it('wraps an 8192-byte body full of marker lines without truncating, at the exact cap boundary', () => {
     // One body-sized line per marker keeps each line's neutralization backslash counted exactly once;
-    // sized so the raw body itself sits at the new cap, before header/marker overhead is even added.
+    // padding the last line brings the raw body to exactly the 8192-byte cap, not just under it.
     const lineCount = Math.floor(8192 / (AGENT_MESSAGE_END.length + 1));
-    const body = Array(lineCount).fill(AGENT_MESSAGE_END).join('\n');
+    const unpaddedBody = Array(lineCount).fill(AGENT_MESSAGE_END).join('\n');
+    const body = unpaddedBody + 'x'.repeat(8192 - Buffer.byteLength(unpaddedBody, 'utf8'));
+    expect(Buffer.byteLength(body, 'utf8')).toBe(8192);
+
     const wrapped = wrapAgentMessage({ fromSessionId: '12345678-0000-0000-0000-000000000000', messageId: 'm1', body });
 
-    // Each neutralized line grows by exactly one backslash byte, so the wrapped envelope's real byte
-    // length runs past the old single-pty-write ceiling — proving nothing downstream still assumes it.
-    expect(Buffer.byteLength(wrapped, 'utf8')).toBeGreaterThan(4096);
-    const neutralizedLines = wrapped.split('\n').filter((line) => line === `\\${AGENT_MESSAGE_END}`);
+    // Guards the envelope builder against truncation when the body sits exactly at the cap.
+    expect(Buffer.byteLength(wrapped, 'utf8')).toBeGreaterThan(8192);
+    const neutralizedLines = wrapped.split('\n').filter((line) => line.startsWith(`\\${AGENT_MESSAGE_END}`));
     expect(neutralizedLines).toHaveLength(lineCount);
     expect(wrapped.split('\n').at(-1)).toBe(AGENT_MESSAGE_END);
   });
