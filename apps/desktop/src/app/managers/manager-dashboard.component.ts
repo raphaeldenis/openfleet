@@ -206,7 +206,7 @@ export class ManagerDashboardComponent {
   }
 
   openTerminal(): void {
-    void this.router.navigate(['/'], { queryParams: { session: this.managerId() } });
+    void this.router.navigate(['/session', this.managerId()]);
   }
 
   backToSessions(): void {

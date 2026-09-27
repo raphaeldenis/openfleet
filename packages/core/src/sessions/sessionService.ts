@@ -108,10 +108,13 @@ function isInterruptedTranscriptLine(line: string): boolean {
 const activeHandleBySessionId = new Map<string, HarnessHandle>();
 
 // One delivery at a time per session: ready -> typing -> typed -> submitted -> ready, or closing until exit.
-interface TypedPhase { name: 'typed'; messageId: string; handle: HarnessHandle }
+// deferredRaw holds raw input (writeRaw) that arrived while the composer already held this message's body,
+// so it can never land ahead of the Enter that submits it. It rides on the phase object itself: closing or
+// relaunching replaces the phase wholesale, so a dead or replaced pty never receives it.
+interface TypedPhase { name: 'typed'; messageId: string; handle: HarnessHandle; deferredRaw: string[] }
 type DeliveryPhase =
   | { name: 'ready' }
-  | { name: 'typing'; messageId: string; handle: HarnessHandle }
+  | { name: 'typing'; messageId: string; handle: HarnessHandle; deferredRaw: string[] }
   // ponytail: typed trusts the composer still holds the body and only ever adds the '\r' — if something
   // wiped the composer first, the empty submit is a no-op in the CLI and the message is counted delivered
   // but lost. Retyping would risk a doubled body, and Ctrl+U clears only one line of a multi-line body;
@@ -421,8 +424,27 @@ export class SessionService {
   tokens(sessionId: string): { hookToken: string; mcpToken: string } | undefined { return this.repo.tokens(sessionId); }
   // ponytail: exposes the raw harness handle to the REST edge for test-only routes (fake-output); scope down if the daemon leaves localhost
   harnessHandle(sessionId: string): HarnessHandle | undefined { return this.handles.get(sessionId); }
+  // While the composer holds a message's body awaiting its Enter ('typing'), raw input is deferred onto
+  // that phase instead of writing straight through — otherwise it could land between the body and the '\r'
+  // that submits it. Outside that window it still writes straight through, as before, and either way the
+  // arming check below runs where the bytes actually reach the pty, not here.
   writeRaw(sessionId: string, data: string): void {
-    this.handles.get(sessionId)?.write(data);
+    const { phase } = this.deliveryOf(sessionId);
+    if (phase.name === 'typing') {
+      phase.deferredRaw.push(data);
+      return;
+    }
+    const handle = this.handles.get(sessionId);
+    if (!handle) return;
+    this.writeRawChunkAndArm(sessionId, handle, data);
+  }
+
+  // Single place a raw chunk reaches the pty, whether written straight through or flushed out of
+  // deferredRaw: arming on ESC has to happen here, at the point the bytes actually land, not at writeRaw's
+  // call site — a deferred ESC only means the CLI is generating (and so worth watching) once it's actually
+  // flushed, which can be well after the write() call that queued it.
+  private writeRawChunkAndArm(sessionId: string, handle: HarnessHandle, data: string): void {
+    handle.write(data);
     if (data.includes('\x1b')) this.armInterruptWatchIfGenerating(sessionId);
   }
 
@@ -484,6 +506,7 @@ export class SessionService {
     clearTimeout(watch.timeout);
     this.interruptWatches.delete(sessionId);
   }
+
 
   resize(sessionId: string, cols: number, rows: number): void { this.handles.get(sessionId)?.resize(cols, rows); }
   async close(sessionId: string, options?: { escalateAfterMs?: number }): Promise<void> {
@@ -601,13 +624,29 @@ export class SessionService {
     // write, sent only after the delay below.
     const submitDelayMs = this.deps.submitKeystrokeDelayMs ?? SUBMIT_KEYSTROKE_DELAY_MS;
     const submitDelay = this.schedule(sessionId, submitDelayMs, () => this.finishTyping(sessionId));
-    this.enter(sessionId, { name: 'typing', messageId: message.id, handle }, submitDelay);
+    this.enter(sessionId, { name: 'typing', messageId: message.id, handle, deferredRaw: [] }, submitDelay);
   }
 
   private finishTyping(sessionId: string): void {
     const { phase } = this.deliveryOf(sessionId);
     if (phase.name !== 'typing') return;
+    // The phase leaves 'typing' before the deliverability read below, which can itself throw (a db hiccup):
+    // the retry logic (advance(), driven by guarded()'s retryAfterFailure) only knows how to move a 'ready'
+    // or 'typed' phase forward, so a throwing read must never strand the session in 'typing' forever (task 6i).
     this.enter(sessionId, { ...phase, name: 'typed' });
+    const session = this.repo.get(sessionId);
+    const isDeliverable = session !== undefined && canDeliverNow(session.state);
+    // Raw input deferred behind this Enter targets the busy state it was pressed against (e.g. Interrupt
+    // stops the running turn) — holding it for the eventual submit would misfire it onto whatever runs
+    // next, so a non-deliverable session flushes it here, in arrival order, and the 'typed' phase carries
+    // nothing. A deliverable session is unchanged: it still flushes right after the Enter, in submit().
+    if (!isDeliverable) {
+      const isHandleReplaced = this.liveHandle(sessionId) !== phase.handle;
+      this.enter(sessionId, { ...phase, name: 'typed', deferredRaw: [] });
+      // Mirrors submit()'s own guard: a handle a resume already replaced must never receive this, same as
+      // the eventual '\r' never would.
+      if (!isHandleReplaced) this.flushDeferredRaw(sessionId, phase.handle, phase.deferredRaw);
+    }
     this.advance(sessionId);
   }
 
@@ -619,7 +658,8 @@ export class SessionService {
       return;
     }
     phase.handle.write('\r');
-    // The '\r' reached the pty: the delivery is committed, so nothing past this line may lead to a second '\r'.
+    // The '\r' reached the pty: the delivery is committed here, before the deferred flush below, so nothing
+    // past this line may lead to a second '\r' — a throwing flush must never look like a failed submit.
     this.unrecordedDeliveries.set(sessionId, phase.messageId);
     this.unfinishedTurns.add(sessionId);
     const turnStartTimeout = this.schedule(sessionId, TURN_START_TIMEOUT_MS, () => this.stopAwaitingTurnStart(sessionId));
@@ -628,6 +668,26 @@ export class SessionService {
       this.recordDelivery(sessionId);
     } catch (err) {
       console.error(`delivery: session ${sessionId} submitted message ${phase.messageId}, recording it failed and is retried before the next message`, err);
+    }
+    // Flushed right after the Enter, in arrival order: whatever was deferred behind this message now goes
+    // straight through, on the same handle that just received the Enter. The delivery above is already
+    // committed, so a throwing write here only drops the rest of this best-effort flush.
+    this.flushDeferredRaw(sessionId, phase.handle, phase.deferredRaw);
+  }
+
+  // Deferred raw input is best-effort keystrokes, never part of a delivery's commit: a throwing write stops
+  // the flush and drops whatever was still queued behind it — there is no caller left to report it to, so
+  // it is only logged, the same way delivery already reports a write failure elsewhere in this file.
+  // Never rethrowing here is load-bearing: a rethrow reaches retryAfterFailure via guarded(), whose
+  // clearTimeout would cancel the turn-start timeout submit() just armed, wedging the session in 'submitted'.
+  private flushDeferredRaw(sessionId: string, handle: HarnessHandle, deferredRaw: string[]): void {
+    for (const raw of deferredRaw) {
+      try {
+        this.writeRawChunkAndArm(sessionId, handle, raw);
+      } catch (err) {
+        console.error(`delivery: session ${sessionId} failed to flush deferred raw input, dropping what's left`, err);
+        return;
+      }
     }
   }
 

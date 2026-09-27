@@ -28,4 +28,14 @@ describe('environment', () => {
 
     expect(environment.adminToken).toBe('written-after-import');
   });
+
+  it('daemonAddress strips the scheme from apiUrl when nothing is stored', () => {
+    expect(environment.daemonAddress).toBe('127.0.0.1:7331');
+  });
+
+  it('daemonAddress reflects an apiUrl overridden in localStorage, same source as the socket', () => {
+    localStorage.setItem('openfleet.apiUrl', 'http://127.0.0.1:9999');
+
+    expect(environment.daemonAddress).toBe('127.0.0.1:9999');
+  });
 });
