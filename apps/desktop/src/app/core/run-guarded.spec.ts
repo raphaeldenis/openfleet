@@ -70,4 +70,14 @@ describe('runGuarded', () => {
 
     expect(busy()).toBe(false);
   });
+
+  it('maps the thrown error to a message via a message function, for callers whose copy varies by error', async () => {
+    const busy = signal(false);
+    const error = signal<string | null>(null);
+    const action = vi.fn().mockRejectedValue(new Error('not_closed'));
+
+    await runGuarded(busy, error, (thrown) => `mapped: ${(thrown as Error).message}`, action);
+
+    expect(error()).toBe('mapped: not_closed');
+  });
 });

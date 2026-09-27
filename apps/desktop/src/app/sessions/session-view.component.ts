@@ -2,6 +2,7 @@ import { ChangeDetectionStrategy, Component, computed, effect, inject, input, si
 import type { Session } from '@openfleet/shared';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
+import { runGuarded } from '../core/run-guarded';
 import { BannerComponent, BannerVariant } from '../design/banner.component';
 import { ComposerComponent } from './composer.component';
 import { PermissionGateCardComponent } from './permission-gate-card.component';
@@ -73,17 +74,12 @@ export class SessionViewComponent {
   }
 
   async resume(sessionId: string): Promise<void> {
-    if (this.resuming()) return;
-    this.resuming.set(true);
-    this.resumeError.set(null);
-    try {
-      await this.api.reopenSession(sessionId);
-    } catch (error) {
-      const code = error instanceof ApiError ? error.code : undefined;
-      this.resumeError.set(reopenErrorMessage(code));
-    } finally {
-      this.resuming.set(false);
-    }
+    await runGuarded(
+      this.resuming,
+      this.resumeError,
+      (error) => reopenErrorMessage(error instanceof ApiError ? error.code : undefined),
+      async () => { await this.api.reopenSession(sessionId); },
+    );
   }
 
   protected closedVariant(session: Session): BannerVariant {
