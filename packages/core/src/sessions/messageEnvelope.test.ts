@@ -77,6 +77,12 @@ describe('wrapAgentMessage', () => {
     expect(lines.at(-1)).toBe(AGENT_MESSAGE_END);
   });
 
+  it('keeps a 3584-byte body\'s wrapped envelope within one 4096-byte pty write', () => {
+    const body = 'x'.repeat(3584);
+    const wrapped = wrapAgentMessage({ fromSessionId: '12345678-0000-0000-0000-000000000000', messageId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', body });
+    expect(Buffer.byteLength(wrapped, 'utf8')).toBeLessThanOrEqual(4096);
+  });
+
   it('re-wrapping a forwarded envelope neutralizes the inner markers too, leaving only the outer pair literal', () => {
     // An agent that forwards a message it received (message_parent-ing a manager on what a child told it)
     // passes an already-wrapped envelope as the new body.

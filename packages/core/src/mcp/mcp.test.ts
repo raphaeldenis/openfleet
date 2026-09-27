@@ -158,24 +158,32 @@ describe('MCP', () => {
     expect(sessions.queuedMessageCount(parentId)).toBe(1);
   });
 
-  it('refuses a body over the 16 KiB cap through send_session_message', async () => {
+  it('refuses a body over the 3584-byte cap through send_session_message', async () => {
     const parent = await connect(parentToken);
     const created = text(await parent.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('cap-send'), name: 'Gimli' } }));
-    const oversizedBody = 'x'.repeat(16 * 1024 + 1);
+    const oversizedBody = 'x'.repeat(3585);
     const result = await parent.callTool({ name: 'send_session_message', arguments: { target_uuid: created.id, body: oversizedBody } });
     expect(result.isError).toBe(true);
-    expect((result.content as { text: string }[])[0]!.text).toBe('message too long: 16385 bytes, max 16384');
+    expect((result.content as { text: string }[])[0]!.text).toBe('message too long: 3585 bytes, max 3584');
   });
 
-  it('refuses a body over the 16 KiB cap through message_parent', async () => {
+  it('refuses a body over the 3584-byte cap through message_parent', async () => {
     const parent = await connect(parentToken);
     const created = text(await parent.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('cap-parent'), name: 'Gimli' } }));
     const childToken = harness.launches.find((l) => l.sessionId === created.id)!.mcpToken;
     const child = await connect(childToken);
-    const oversizedBody = 'x'.repeat(16 * 1024 + 1);
+    const oversizedBody = 'x'.repeat(3585);
     const result = await child.callTool({ name: 'message_parent', arguments: { body: oversizedBody } });
     expect(result.isError).toBe(true);
-    expect((result.content as { text: string }[])[0]!.text).toBe('message too long: 16385 bytes, max 16384');
+    expect((result.content as { text: string }[])[0]!.text).toBe('message too long: 3585 bytes, max 3584');
+  });
+
+  it('accepts a body at exactly the 3584-byte cap through send_session_message', async () => {
+    const parent = await connect(parentToken);
+    const created = text(await parent.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('cap-send-exact'), name: 'Gimli' } }));
+    const exactBody = 'x'.repeat(3584);
+    const result = await parent.callTool({ name: 'send_session_message', arguments: { target_uuid: created.id, body: exactBody } });
+    expect(result.isError).toBeFalsy();
   });
 
   it('refuses to message a session outside the caller lineage', async () => {
