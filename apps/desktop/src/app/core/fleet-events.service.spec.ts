@@ -141,6 +141,17 @@ describe('FleetEventsService', () => {
     expect(service.sessions()[0]!.model).toBe('claude-opus-5-5');
   });
 
+  it('patches a session\'s permission mode on session.permission_mode_changed, so the label reflects an applied switch without waiting for the relaunch', () => {
+    const service = new FleetEventsService();
+    service.connect();
+    const socket = FakeWebSocket.instances[0]!;
+    socket.dispatchMessage({ type: 'snapshot', sessions: [session('s1')], approvals: [] });
+
+    socket.dispatchMessage({ type: 'session.permission_mode_changed', sessionId: 's1', mode: 'bypassPermissions' });
+
+    expect(service.sessions()[0]!.permissionMode).toBe('bypassPermissions');
+  });
+
   it('moves a closed session to starting and clears its exit code on session.reopened, so Resume reflects the relaunch live', () => {
     const service = new FleetEventsService();
     service.connect();

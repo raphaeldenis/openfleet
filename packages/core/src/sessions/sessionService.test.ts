@@ -2120,6 +2120,18 @@ describe('SessionService.updatePermissionMode', () => {
     expect(harness.launches[1]!.resuming).toBe(true);
   });
 
+  it('emits session.permission_mode_changed immediately, so the label updates without waiting for the relaunch', async () => {
+    vi.useFakeTimers();
+    const { service, events } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+
+    service.updatePermissionMode(session.id, 'bypassPermissions');
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(events).toContainEqual({ type: 'session.permission_mode_changed', sessionId: session.id, mode: 'bypassPermissions' });
+  });
+
   it('defers a permission-mode change while generating, relaunching only after Stop makes the session idle again', async () => {
     vi.useFakeTimers();
     const { service, harness } = setup();

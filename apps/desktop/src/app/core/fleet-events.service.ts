@@ -80,6 +80,7 @@ export class FleetEventsService {
       case 'session.output': return this.output(event.sessionId).next(event.data);
       case 'session.replay': return this.output(event.sessionId).next(event.data);
       case 'session.model_changed': return this.patchSession(event.sessionId, { model: event.model });
+      case 'session.permission_mode_changed': return this.patchSession(event.sessionId, { permissionMode: event.mode });
       // resumeOne() already wrote 'starting' to the DB before this event fires; the event itself carries
       // no state, so mirror that transition here rather than waiting for the next session.state event.
       case 'session.reopened': return this.patchSession(event.sessionId, { state: 'starting', exitCode: undefined });

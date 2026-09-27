@@ -234,6 +234,7 @@ export class SessionService {
     this.assertNotShuttingDown();
     const session = this.requireOpen(sessionId);
     this.repo.setPermissionMode(sessionId, mode);
+    this.deps.bus.emit({ type: 'session.permission_mode_changed', sessionId, mode });
     return this.relaunchOrDefer(sessionId, session.state);
   }
 
