@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import * as pty from 'node-pty';
 import type { Harness, HarnessHandle, HarnessLaunch } from '../harness.js';
 import { childEnvironment } from '../../process/childEnvironment.js';
+import { frameForPaste } from './bracketedPaste.js';
 import { buildClaudeLaunchConfig } from './launchConfig.js';
 import { markDirectoryTrusted } from './trustDirectory.js';
 
@@ -25,6 +26,7 @@ export class ClaudeCliHarness implements Harness {
     });
     return {
       write: (data) => process.write(data),
+      typeMessage: (body) => process.write(frameForPaste(body)),
       resize: (cols, rows) => process.resize(cols, rows),
       kill: (options) => process.kill(options?.force ? 'SIGKILL' : 'SIGTERM'),
       onData: (listener) => process.onData(listener).dispose,

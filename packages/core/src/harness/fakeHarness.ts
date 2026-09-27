@@ -11,6 +11,10 @@ export class FakeHandle implements HarnessHandle {
   ignoresGracefulKill = false;
 
   write(data: string): void { this.written.push(data); }
+  // Records the plain, unframed body: bracketed-paste framing is a ClaudeCliHarness-only concern (see
+  // claudeCliHarness.test.ts), so sessionService's state-machine tests read message bodies back exactly
+  // as typeNextMessage passed them in.
+  typeMessage(data: string): void { this.written.push(data); }
   resize(cols: number, rows: number): void { this.resizes.push({ cols, rows }); }
   kill(options?: { force?: boolean }): void {
     this.killed = true;
