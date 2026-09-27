@@ -64,6 +64,24 @@ describe('FleetEventsService', () => {
     expect(FakeWebSocket.instances[0]!.url).toMatch(/[^/]\/ws\?/);
   });
 
+  it('builds a wss:// URL when apiUrl is stored as https', () => {
+    localStorage.setItem('openfleet.apiUrl', 'https://h:1');
+    const service = new FleetEventsService();
+
+    service.connect();
+
+    expect(FakeWebSocket.instances[0]!.url).toMatch(/^wss:\/\/h:1\/ws\?/);
+  });
+
+  it('keeps a path prefix from apiUrl ahead of the /ws segment', () => {
+    localStorage.setItem('openfleet.apiUrl', 'http://h:1/openfleet/');
+    const service = new FleetEventsService();
+
+    service.connect();
+
+    expect(FakeWebSocket.instances[0]!.url).toMatch(/^ws:\/\/h:1\/openfleet\/ws\?/);
+  });
+
   it('seeds sessions and approvals from the snapshot event instead of a REST call', () => {
     const service = new FleetEventsService();
     service.connect();
