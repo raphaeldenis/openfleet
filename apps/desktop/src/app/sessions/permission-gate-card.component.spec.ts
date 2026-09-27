@@ -1,6 +1,6 @@
 import { render, screen, waitFor, fireEvent } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
-import { inputBinding } from '@angular/core';
+import { inputBinding, signal } from '@angular/core';
 import { describe, expect, it, vi } from 'vitest';
 import type { Approval } from '@openfleet/shared';
 import { PermissionGateCardComponent } from './permission-gate-card.component';
@@ -91,6 +91,34 @@ describe('PermissionGateCardComponent', () => {
 
     // Assert
     expect(api.decide).toHaveBeenCalledTimes(1);
+  });
+
+  it('resets a stale pending/error state when the shown approval changes, instead of leaking it onto the new one', async () => {
+    // Arrange — session is still waiting_permission, so the gate card's approval input switches
+    // straight from one pending approval to the next without the component ever being destroyed.
+    const approvalInput = signal<Approval>(approval({ id: 'a1' }));
+    let resolveDecide: (value: unknown) => void = () => {};
+    const api = { decide: vi.fn(() => new Promise((resolve) => { resolveDecide = resolve; })) };
+    await render(PermissionGateCardComponent, {
+      bindings: [inputBinding('approval', approvalInput)],
+      providers: [{ provide: FleetApiService, useValue: api }],
+    });
+    const approveButton = screen.getByTestId('gate-approve') as HTMLButtonElement;
+
+    // Act — approve a1, then move on to a2 before a1's request ever resolves
+    await userEvent.click(approveButton);
+    approvalInput.set(approval({ id: 'a2', toolName: 'Read' }));
+
+    // Assert — a2 starts clean: it can be decided even though a1's request is still in flight
+    await userEvent.click(approveButton);
+    expect(api.decide).toHaveBeenNthCalledWith(2, 'a2', 'allow');
+
+    // Act — a1's stale request now resolves
+    resolveDecide({});
+    await waitFor(() => expect(api.decide).toHaveBeenCalledTimes(2));
+
+    // Assert — a2's card shows no error left over from a1's settled request
+    expect(screen.queryByTestId('gate-decision-error')).toBeNull();
   });
 
   it('disables "Always allow for this session" with a tooltip explaining it is a later-phase feature', async () => {

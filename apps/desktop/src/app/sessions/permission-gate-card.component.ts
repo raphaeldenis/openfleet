@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, inject, input, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, effect, inject, input, signal } from '@angular/core';
 import type { Approval } from '@openfleet/shared';
 import { decideApproval } from '../core/decide-approval';
 import { FleetApiService } from '../core/fleet-api.service';
@@ -49,6 +49,20 @@ export class PermissionGateCardComponent {
   protected readonly formattedInput = computed(() => JSON.stringify(this.approval().toolInput, null, 2));
   protected readonly pending = signal(false);
   protected readonly error = signal<string | null>(null);
+  private shownApprovalId: string | null = null;
+
+  constructor() {
+    // The gate card can go straight from one pending approval to the next without ever being
+    // destroyed (the session stays `waiting_permission` the whole time), so a decision still in
+    // flight for the previous approval must not leave the new one disabled or errored.
+    effect(() => {
+      const approvalId = this.approval().id;
+      if (approvalId === this.shownApprovalId) return;
+      this.shownApprovalId = approvalId;
+      this.pending.set(false);
+      this.error.set(null);
+    });
+  }
 
   approve(): void {
     void this.decide('allow');
@@ -60,9 +74,11 @@ export class PermissionGateCardComponent {
 
   private async decide(behavior: 'allow' | 'deny'): Promise<void> {
     if (this.pending()) return;
+    const approvalIdAtDecision = this.approval().id;
     this.pending.set(true);
     this.error.set(null);
-    const result = await decideApproval(this.api, this.approval().id, behavior);
+    const result = await decideApproval(this.api, approvalIdAtDecision, behavior);
+    if (this.approval().id !== approvalIdAtDecision) return;
     if (result.outcome === 'failed') this.error.set(result.message);
     else if (result.outcome === 'already-resolved') this.error.set('Already resolved — no action taken.');
     this.pending.set(false);
