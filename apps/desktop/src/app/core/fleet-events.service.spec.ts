@@ -140,6 +140,18 @@ describe('FleetEventsService', () => {
 
     expect(service.sessions()[0]!.model).toBe('claude-opus-5-5');
   });
+
+  it('moves a closed session to starting and clears its exit code on session.reopened, so Resume reflects the relaunch live', () => {
+    const service = new FleetEventsService();
+    service.connect();
+    const socket = FakeWebSocket.instances[0]!;
+    socket.dispatchMessage({ type: 'snapshot', sessions: [{ ...session('s1', { state: 'closed' }), exitCode: 1 }], approvals: [] });
+
+    socket.dispatchMessage({ type: 'session.reopened', sessionId: 's1' });
+
+    expect(service.sessions()[0]!.state).toBe('starting');
+    expect(service.sessions()[0]!.exitCode).toBeUndefined();
+  });
 });
 
 describe('FleetEventsService message delivery', () => {
