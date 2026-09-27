@@ -77,10 +77,21 @@ describe('wrapAgentMessage', () => {
     expect(lines.at(-1)).toBe(AGENT_MESSAGE_END);
   });
 
-  it('keeps a 3584-byte body\'s wrapped envelope within one 4096-byte pty write', () => {
-    const body = 'x'.repeat(3584);
-    const wrapped = wrapAgentMessage({ fromSessionId: '12345678-0000-0000-0000-000000000000', messageId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', body });
-    expect(Buffer.byteLength(wrapped, 'utf8')).toBeLessThanOrEqual(4096);
+  it('wraps an 8192-byte body full of marker lines without truncating, at the exact cap boundary', () => {
+    // One body-sized line per marker keeps each line's neutralization backslash counted exactly once;
+    // padding the last line brings the raw body to exactly the 8192-byte cap, not just under it.
+    const lineCount = Math.floor(8192 / (AGENT_MESSAGE_END.length + 1));
+    const unpaddedBody = Array(lineCount).fill(AGENT_MESSAGE_END).join('\n');
+    const body = unpaddedBody + 'x'.repeat(8192 - Buffer.byteLength(unpaddedBody, 'utf8'));
+    expect(Buffer.byteLength(body, 'utf8')).toBe(8192);
+
+    const wrapped = wrapAgentMessage({ fromSessionId: '12345678-0000-0000-0000-000000000000', messageId: 'm1', body });
+
+    // Guards the envelope builder against truncation when the body sits exactly at the cap.
+    expect(Buffer.byteLength(wrapped, 'utf8')).toBeGreaterThan(8192);
+    const neutralizedLines = wrapped.split('\n').filter((line) => line.startsWith(`\\${AGENT_MESSAGE_END}`));
+    expect(neutralizedLines).toHaveLength(lineCount);
+    expect(wrapped.split('\n').at(-1)).toBe(AGENT_MESSAGE_END);
   });
 
   it('re-wrapping a forwarded envelope neutralizes the inner markers too, leaving only the outer pair literal', () => {

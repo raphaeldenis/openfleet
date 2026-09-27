@@ -1,3 +1,6 @@
+import { chmodSync, mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { PERMISSION_MODES } from '@openfleet/shared';
 import { openDatabase } from '../db/database.js';
@@ -325,6 +328,21 @@ describe('REST', () => {
     await api(`/api/sessions/${created.id}/close`, { method: 'POST' });
     const res = await api(`/api/sessions/${created.id}/reopen`, { method: 'POST' });
     expect(res.status).toBe(409);
+  });
+
+  it.runIf(process.getuid?.() !== 0)('409s reopening a closed session whose directory is unreadable, with a directory_unreadable error body', async () => {
+    const sessionDir = mkdtempSync(join(tmpdir(), 'of-rest-unreadable-'));
+    const created = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: sessionDir, name: 'G', harness: 'fake' }) })).json();
+    await api(`/api/sessions/${created.id}/close`, { method: 'POST' });
+
+    chmodSync(sessionDir, 0o000);
+    try {
+      const res = await api(`/api/sessions/${created.id}/reopen`, { method: 'POST' });
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({ error: 'directory_unreadable' });
+    } finally {
+      chmodSync(sessionDir, 0o755);
+    }
   });
 
   it('500s reopening a session whose harness fails to relaunch, not a fake 200', async () => {
