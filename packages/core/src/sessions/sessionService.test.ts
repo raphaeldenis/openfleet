@@ -55,6 +55,47 @@ describe('SessionService', () => {
     expect(harness.handles[0]!.written).toEqual(['do X', '\r']);
   });
 
+  it('types a queued message body through handle.typeMessage, never through the raw write the submit keystroke uses; FakeHandle records it unframed', async () => {
+    vi.useFakeTimers();
+    const { service, harness } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+    const handle = harness.handles[0]!;
+    const typeMessageSpy = vi.spyOn(handle, 'typeMessage');
+    const writeSpy = vi.spyOn(handle, 'write');
+
+    service.sendMessage({ sessionId: session.id, body: 'do X' });
+
+    expect(typeMessageSpy).toHaveBeenCalledTimes(1);
+    expect(typeMessageSpy).toHaveBeenCalledWith('do X');
+    expect(writeSpy).not.toHaveBeenCalled();
+    // Bracketed-paste framing is a ClaudeCliHarness concern (see claudeCliHarness.test.ts); FakeHandle's
+    // typeMessage just records the plain body so the state-machine tests above can assert on it directly.
+    expect(handle.written).toEqual(['do X']);
+
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
+    expect(writeSpy).toHaveBeenCalledExactlyOnceWith('\r');
+  });
+
+  it('closing a session mid-typing cancels the delayed submit keystroke: no "\\r" reaches the dying pty', async () => {
+    vi.useFakeTimers();
+    const { service, harness } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+    const handle = harness.handles[0]!;
+
+    service.sendMessage({ sessionId: session.id, body: 'do X' });
+    expect(handle.written).toEqual(['do X']);
+
+    const closing = service.close(session.id);
+    await vi.advanceTimersByTimeAsync(0);
+    await closing;
+
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
+    expect(handle.written).toEqual(['do X']); // the delayed '\r' never landed
+    expect(handle.killed).toBe(true);
+  });
+
   it('queues while waiting_permission and flushes on idle', async () => {
     vi.useFakeTimers();
     const { service, harness, events } = setup();
@@ -1630,12 +1671,12 @@ describe('SessionService submit-keystroke hostile cases', () => {
     const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
     service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
     const handle = harness.handles[0]!;
-    const originalWrite = handle.write.bind(handle);
+    const originalTypeMessage = handle.typeMessage.bind(handle);
     let bodyWritesToFail = 1;
-    handle.write = (data: string) => {
+    handle.typeMessage = (data: string) => {
       const shouldFail = data === 'do X' && bodyWritesToFail > 0;
       if (shouldFail) { bodyWritesToFail -= 1; throw new Error('pty write failed'); }
-      originalWrite(data);
+      originalTypeMessage(data);
     };
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
