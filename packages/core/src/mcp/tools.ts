@@ -102,7 +102,9 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     // a genuinely missing directory used to reach the harness, which then died with exit 1 instead of
     // failing this tool call cleanly.
     if (!existsSync(input.directory)) return fail(`directory does not exist: ${input.directory}`);
-    const realDirectory = realpathSync(input.directory);
+    // realpathSync.native, not the plain (non-native) realpathSync: Node's own JS reimplementation has a
+    // lexical blind spot for some symlink + ".." combinations that the native OS call does not.
+    const realDirectory = realpathSync.native(input.directory);
 
     const isWithinWorktreesRoot = isPathWithin(realDirectory, deps.worktreesRoot);
     const isCallersOwnRepo = await sameGitRepository(caller.directory, realDirectory);

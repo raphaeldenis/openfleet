@@ -102,11 +102,14 @@ describe('isPathWithin', () => {
     expect(isPathWithin(escapeLink, root)).toBe(false);
   });
 
-  // Finding 1 (BLOCKER): path.resolve() collapses ".." lexically before symlinks are followed, so the
-  // literal string "root/link/../target" used to resolve to "root/target" (looks inside) even though the
-  // OS actually opens "outside/target" once "link" is followed. fs.realpathSync resolves symlinks and
-  // ".." in the order the OS does, closing the escape.
-  it('is false when a ".." segment after a symlink would lexically collapse back inside the root', () => {
+  // Finding 1 (BLOCKER) / Finding 2 (fix loop 3, MAJOR): path.resolve() collapses ".." lexically before
+  // symlinks are followed, so the literal string "root/link/../target" used to resolve to "root/target"
+  // even though the OS actually opens "outside/target" once "link" is followed. A decoy "root/target"
+  // that genuinely exists is required to expose this: without it, the lexically-collapsed path is missing
+  // on disk, realpathSync throws, and the guard fails safe by accident rather than by resolving correctly.
+  // fs.realpathSync.native, called with no resolve() in front, resolves symlinks and ".." in the order the
+  // OS does, so the candidate lands on "outside/target" and is correctly refused even with the decoy present.
+  it('is false when a ".." segment after a symlink would lexically collapse into an existing decoy inside the root', () => {
     const outside = mkdtempSync(join(tmpdir(), 'of-outside-'));
     const deep = join(outside, 'deep');
     mkdirSync(deep);
@@ -114,6 +117,7 @@ describe('isPathWithin', () => {
     mkdirSync(target);
     const root = mkdtempSync(join(tmpdir(), 'of-wt-'));
     symlinkSync(deep, join(root, 'link'));
+    mkdirSync(join(root, 'target'));
     const escapingCandidate = `${root}/link/../target`;
     expect(isPathWithin(escapingCandidate, root)).toBe(false);
   });

@@ -58,13 +58,15 @@ async function gitCommonDir(cwd: string): Promise<string | undefined> {
   }
 }
 
-// Both paths must exist: fs.realpathSync resolves symlinks and ".." components as the OS does, in the
-// order they appear, which a lexical path.resolve() cannot — that gap let a candidate like
-// "root/link/.." escape through a symlinked "link" while still looking like it stayed under root.
+// Both paths must exist: fs.realpathSync.native resolves symlinks and ".." components as the OS does, in
+// the order they appear, which a lexical path.resolve() cannot — a resolve() placed in front of it would
+// lexically collapse a candidate like "root/link/.." back inside root before the symlink is ever followed,
+// silently undoing the whole guard. Node's own (non-native) realpathSync reimplementation has the same
+// blind spot for some inputs, so both paths go through the native binding with nothing lexical first.
 export function isPathWithin(candidate: string, root: string): boolean {
   try {
-    const realRoot = realpathSync(resolve(root));
-    const realCandidate = realpathSync(resolve(candidate));
+    const realRoot = realpathSync.native(root);
+    const realCandidate = realpathSync.native(candidate);
     const relativePath = relative(realRoot, realCandidate);
     return relativePath === '' || (relativePath !== '..' && !relativePath.startsWith(`..${sep}`) && !isAbsolute(relativePath));
   } catch {
