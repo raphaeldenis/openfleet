@@ -180,18 +180,26 @@ describe('ModelSelectorComponent', () => {
     expect(pendingModelSwitch).not.toHaveBeenCalled();
   });
 
-  it('clears "restarting…" once session.model_changed reports the model actually changed', async () => {
+  it('keeps "restarting…" visible when the daemon reports the model change before the relaunch settles', async () => {
     const api = { updateModel: vi.fn().mockResolvedValue({ status: 'relaunching' }) };
-    const events = { sessions: signal([{ id: 's1', name: 'Gimli', emoji: '⚔️', model: 'claude-sonnet-5', state: 'starting' }]), approvals: signal([]), managers: signal([]) };
-    await render(ModelSelectorComponent, {
+    const events = { sessions: signal([{ id: 's1', name: 'Gimli', emoji: '⚔️', model: 'claude-sonnet-5', state: 'idle' }]), approvals: signal([]), managers: signal([]) };
+    const { fixture } = await render(ModelSelectorComponent, {
       bindings: [inputBinding('sessionId', () => 's1')],
       providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: events }],
     });
     await userEvent.click(screen.getByTestId('apply-model'));
     await waitFor(() => expect(screen.getByTestId('model-switch-status')).toHaveTextContent('restarting…'));
 
-    events.sessions.set([{ id: 's1', name: 'Gimli', emoji: '⚔️', model: 'claude-opus-5-5', state: 'starting' }]);
+    // The daemon persists the model and emits session.model_changed right away, before/while the relaunch starts.
+    events.sessions.set([{ id: 's1', name: 'Gimli', emoji: '⚔️', model: 'claude-opus-5-5', state: 'idle' }]);
+    await fixture.whenStable();
+    expect(screen.getByTestId('model-switch-status')).toHaveTextContent('restarting…');
 
+    events.sessions.set([{ id: 's1', name: 'Gimli', emoji: '⚔️', model: 'claude-opus-5-5', state: 'starting' }]);
+    await fixture.whenStable();
+    expect(screen.getByTestId('model-switch-status')).toHaveTextContent('restarting…');
+
+    events.sessions.set([{ id: 's1', name: 'Gimli', emoji: '⚔️', model: 'claude-opus-5-5', state: 'idle' }]);
     await waitFor(() => expect(screen.queryByTestId('model-switch-status')).toBeNull());
   });
 

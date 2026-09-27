@@ -64,6 +64,10 @@ export class ModelSelectorComponent {
   // moved on, the switch is still in flight. `undefined` means no switch is being tracked.
   private readonly modelBeforeSwitch = signal<string | null | undefined>(undefined);
   private readonly stateBeforeSwitch = signal<SessionState | undefined>(undefined);
+  // The daemon persists the model (and emits session.model_changed) before or while the relaunch it
+  // triggers is still starting, so the model alone landing is not proof the switch is done — only the
+  // relaunch's own state transition (leaving 'starting') or the turn ending (idle/closed) is.
+  private readonly sawStartingSinceSwitch = signal(false);
 
   constructor() {
     // A route param change reuses this component instance, so a session switch must not leak
@@ -78,24 +82,30 @@ export class ModelSelectorComponent {
       this.switchError.set(null);
       this.modelBeforeSwitch.set(undefined);
       this.stateBeforeSwitch.set(undefined);
+      this.sawStartingSinceSwitch.set(false);
       this.pendingModelSwitch.emit(false);
     });
 
-    // Clears "restarting…" / "switch pending" once the switch it describes has actually landed
-    // (the model changed) or the session moved on to idle/closed since the request, so the note
-    // never sits there forever. A session already idle when the switch was requested must still
-    // observe a real transition, not just its already-idle starting state.
+    // Clears "restarting…" / "switch pending" once the relaunch it describes has actually settled
+    // (passed through 'starting' and moved on) or the session reached idle/closed since the request,
+    // so the note never sits there forever. session.model_changed alone is not proof: the daemon emits
+    // it before or while the relaunch is still starting, so clearing on it would drop the note early.
     effect(() => {
       const requestedFrom = this.modelBeforeSwitch();
       if (requestedFrom === undefined) return;
       const session = this.session();
       if (!session) return;
-      const switchLanded = (session.model ?? null) !== requestedFrom;
-      const settledSinceRequest = (session.state === 'idle' || session.state === 'closed') && session.state !== this.stateBeforeSwitch();
-      if (!switchLanded && !settledSinceRequest) return;
+      if (session.state === 'starting') {
+        this.sawStartingSinceSwitch.set(true);
+        return;
+      }
+      const relaunchSettled = this.sawStartingSinceSwitch();
+      const turnEndSettled = (session.state === 'idle' || session.state === 'closed') && session.state !== this.stateBeforeSwitch();
+      if (!relaunchSettled && !turnEndSettled) return;
       this.switchStatus.set(null);
       this.modelBeforeSwitch.set(undefined);
       this.stateBeforeSwitch.set(undefined);
+      this.sawStartingSinceSwitch.set(false);
     });
   }
 

@@ -957,7 +957,9 @@ export class SessionService {
     this.armResumeTimeout(session.id, handle);
     // The DB write is last: if it throws, the handle is already fully wired (onExit + resume timeout),
     // so resumeAll's catch can close this row via markClosed without leaving an untracked process behind.
-    this.repo.setState(session.id, 'starting', new Date().toISOString());
+    const startingSince = new Date().toISOString();
+    this.repo.setState(session.id, 'starting', startingSince);
+    this.deps.bus.emit({ type: 'session.state', sessionId: session.id, state: 'starting', stateSince: startingSince });
     return { launched: true };
   }
 
