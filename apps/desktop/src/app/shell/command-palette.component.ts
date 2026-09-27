@@ -39,6 +39,7 @@ import { PALETTE_PAGES } from './nav-items';
 })
 export class CommandPaletteComponent {
   readonly open = input.required<boolean>();
+  readonly sessionEpoch = input<number>(0);
   readonly closed = output<void>();
   private readonly router = inject(Router);
   protected readonly pages = PALETTE_PAGES;
@@ -72,8 +73,12 @@ export class CommandPaletteComponent {
   }
 
   async go(route: string): Promise<void> {
-    await this.router.navigate([route]);
-    this.closed.emit();
+    const epochAtClick = this.sessionEpoch();
+    try {
+      await this.router.navigate([route]);
+    } finally {
+      if (this.sessionEpoch() === epochAtClick) this.closed.emit();
+    }
   }
 
   stopPropagation(event: Event): void {

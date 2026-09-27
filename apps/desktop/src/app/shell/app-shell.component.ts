@@ -82,7 +82,7 @@ const RUNNING_STATES = new Set(['generating', 'starting']);
         <span class="spacer"></span>
         <span class="limits" data-testid="status-limits" title="Provider limits are not tracked yet">—</span>
       </footer>
-      <of-command-palette [open]="paletteOpen()" (closed)="closePalette()" />
+      <of-command-palette [open]="paletteOpen()" [sessionEpoch]="paletteEpoch()" (closed)="closePalette()" />
     </div>
   `,
   styles: `
@@ -131,6 +131,7 @@ export class AppShellComponent {
   protected readonly navItems = HELM_NAV_ITEMS;
   protected readonly daemonAddress = environment.daemonAddress;
   protected readonly paletteOpen = signal(false);
+  protected readonly paletteEpoch = signal(0);
   protected readonly runningCount = computed(() => this.events.sessions().filter((s) => RUNNING_STATES.has(s.state)).length);
   protected readonly pendingApprovalsCount = computed(() => this.events.approvals().length);
   private readonly paletteTrigger = viewChild.required<ElementRef<HTMLButtonElement>>('paletteTrigger');
@@ -141,6 +142,7 @@ export class AppShellComponent {
   }
 
   openPalette(): void {
+    this.paletteEpoch.update((epoch) => epoch + 1);
     const active = document.activeElement;
     const hasFocusedOpener = active instanceof HTMLElement && active !== document.body;
     this.paletteOpener = hasFocusedOpener ? active : null;
@@ -148,6 +150,7 @@ export class AppShellComponent {
   }
 
   closePalette(): void {
+    if (!this.paletteOpen()) return;
     this.paletteOpen.set(false);
     const opener = this.paletteOpener;
     const focusTarget = opener?.isConnected ? opener : this.paletteTrigger().nativeElement;

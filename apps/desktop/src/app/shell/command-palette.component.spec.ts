@@ -45,6 +45,18 @@ describe('CommandPaletteComponent', () => {
     expect(closed).toHaveBeenCalled();
   });
 
+  it('emits closed even when the navigation rejects, so a dead route never traps the palette open', async () => {
+    const { fixture } = await render(CommandPaletteComponent, { bindings: [inputBinding('open', () => true)], providers: [provideRouter(routes())] });
+    const router = fixture.debugElement.injector.get(Router);
+    vi.spyOn(router, 'navigate').mockRejectedValue(new Error('navigation failed'));
+    const closed = vi.fn();
+    fixture.componentInstance.closed.subscribe(closed);
+
+    await expect(fixture.componentInstance.go('/inbox')).rejects.toThrow('navigation failed');
+
+    expect(closed).toHaveBeenCalled();
+  });
+
   it('closes when the backdrop is clicked, without navigating', async () => {
     const { fixture } = await render(CommandPaletteComponent, { bindings: [inputBinding('open', () => true)], providers: [provideRouter(routes())] });
     const closed = vi.fn();
