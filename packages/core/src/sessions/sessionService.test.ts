@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmdirSync, symlinkSync } from 'node:fs';
+import { chmodSync, mkdtempSync, rmdirSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
@@ -2205,6 +2205,117 @@ describe('SessionService.reopen', () => {
     expect((caught as SessionReopenError).code).toBe('directory_changed');
     expect(harness.launches).toHaveLength(1);
     expect(service.get(session.id)!.state).toBe('closed');
+  });
+
+  it('reports directory_missing specifically for a missing directory, not just any SessionReopenError', async () => {
+    const { service, harness } = setup();
+    const missingDir = join(tmpdir(), `of-missing-code-${Date.now()}`);
+    const session = await service.create({ directory: missingDir, name: 'G', harness: 'fake', emoji: '🤖' });
+    harness.handles[0]!.emitExit(0);
+
+    let caught: unknown;
+    try {
+      service.reopen(session.id);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(SessionReopenError);
+    expect((caught as SessionReopenError).code).toBe('directory_missing');
+  });
+
+  it('reports directory_changed rather than directory_unreadable when a symlink swap points at a directory the harness cannot read, since the changed-directory check runs first', async () => {
+    const { service, harness } = setup();
+    const sessionDir = mkdtempSync(join(tmpdir(), 'of-swap-unreadable-'));
+    const elsewhereDir = mkdtempSync(join(tmpdir(), 'of-elsewhere-unreadable-'));
+    const session = await service.create({ directory: sessionDir, name: 'G', harness: 'fake', emoji: '🤖' });
+    harness.handles[0]!.emitExit(0);
+
+    rmdirSync(sessionDir);
+    symlinkSync(elsewhereDir, sessionDir);
+    if (process.getuid?.() !== 0) chmodSync(elsewhereDir, 0o000);
+    try {
+      let caught: unknown;
+      try {
+        service.reopen(session.id);
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(SessionReopenError);
+      expect((caught as SessionReopenError).code).toBe('directory_changed');
+      expect(harness.launches).toHaveLength(1);
+    } finally {
+      chmodSync(elsewhereDir, 0o755);
+    }
+  });
+
+  it.runIf(process.getuid?.() !== 0)('rejects reopening a closed session whose directory is readable but not executable, launching nothing', async () => {
+    const { service, harness, events } = setup();
+    const sessionDir = mkdtempSync(join(tmpdir(), 'of-readonly-'));
+    const session = await service.create({ directory: sessionDir, name: 'G', harness: 'fake', emoji: '🤖' });
+    harness.handles[0]!.emitExit(0);
+
+    chmodSync(sessionDir, 0o600); // rw-, no execute: cannot be traversed into
+    try {
+      let caught: unknown;
+      try {
+        service.reopen(session.id);
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(SessionReopenError);
+      expect((caught as SessionReopenError).code).toBe('directory_unreadable');
+      expect(harness.launches).toHaveLength(1);
+      expect(service.get(session.id)!.state).toBe('closed');
+      expect(events.some((e) => e.type === 'session.reopened')).toBe(false);
+    } finally {
+      chmodSync(sessionDir, 0o755);
+    }
+  });
+
+  it.runIf(process.getuid?.() !== 0)('rejects reopening a closed session whose directory is executable but not readable, launching nothing', async () => {
+    const { service, harness } = setup();
+    const sessionDir = mkdtempSync(join(tmpdir(), 'of-execonly-'));
+    const session = await service.create({ directory: sessionDir, name: 'G', harness: 'fake', emoji: '🤖' });
+    harness.handles[0]!.emitExit(0);
+
+    chmodSync(sessionDir, 0o100); // --x, no read: cannot be listed
+    try {
+      let caught: unknown;
+      try {
+        service.reopen(session.id);
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(SessionReopenError);
+      expect((caught as SessionReopenError).code).toBe('directory_unreadable');
+      expect(harness.launches).toHaveLength(1);
+    } finally {
+      chmodSync(sessionDir, 0o755);
+    }
+  });
+
+  it.runIf(process.getuid?.() !== 0)('rejects reopening through a symlink whose recorded realpath still matches but whose target turned unreadable, launching nothing', async () => {
+    const { service, harness } = setup();
+    const targetDir = mkdtempSync(join(tmpdir(), 'of-symtarget-'));
+    const linkPath = join(tmpdir(), `of-symlink-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    symlinkSync(targetDir, linkPath);
+    const session = await service.create({ directory: linkPath, name: 'G', harness: 'fake', emoji: '🤖' });
+    harness.handles[0]!.emitExit(0);
+
+    chmodSync(targetDir, 0o000); // symlink itself is untouched: realpath at reopen still matches the recorded one
+    try {
+      let caught: unknown;
+      try {
+        service.reopen(session.id);
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(SessionReopenError);
+      expect((caught as SessionReopenError).code).toBe('directory_unreadable');
+      expect(harness.launches).toHaveLength(1);
+    } finally {
+      chmodSync(targetDir, 0o755);
+    }
   });
 
   it('rejects reopening a session whose harness fails to launch, leaving it closed without emitting session.reopened', async () => {
