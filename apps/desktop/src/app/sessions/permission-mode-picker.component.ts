@@ -30,7 +30,7 @@ const SWITCH_STATUS_LABEL: Record<'relaunching' | 'deferred', string> = {
     <div class="permission-mode-picker" data-testid="permission-mode-picker">
       <span class="mode" data-testid="permission-mode" [attr.data-warning]="isDangerous() ? '1' : null">🛡 {{ label() }}</span>
       <span class="explanation" data-testid="permission-mode-explanation">{{ explanation() }}</span>
-      <select data-testid="permission-mode-select" aria-label="Permission mode" [(ngModel)]="chosenMode">
+      <select class="of-input" data-testid="permission-mode-select" aria-label="Permission mode" [(ngModel)]="chosenMode">
         @for (mode of modes; track mode) { <option [value]="mode">{{ mode }}</option> }
       </select>
       <button type="button" class="of-btn of-btn--secondary" data-testid="apply-permission-mode" [disabled]="applying()" (click)="onApplyClick()">
@@ -83,7 +83,9 @@ export class PermissionModePickerComponent {
   readonly switchError = signal<string | null>(null);
   // The mode and state in effect when the current switch was requested — mirrors ModelSelectorComponent's
   // own landed/settled detection so the "restarting…"/"switch pending" note clears the same way.
-  private readonly modeBeforeSwitch = signal<PermissionMode | undefined>(undefined);
+  // `null` (not `undefined`) records an inherited starting mode, since `undefined` is the "no switch
+  // pending" sentinel below — collapsing the two left a switch from an inherited mode untracked forever.
+  private readonly modeBeforeSwitch = signal<PermissionMode | null | undefined>(undefined);
   private readonly stateBeforeSwitch = signal<SessionState | undefined>(undefined);
 
   constructor() {
@@ -104,7 +106,7 @@ export class PermissionModePickerComponent {
       if (requestedFrom === undefined) return;
       const currentMode = this.currentMode();
       const state = this.sessionState();
-      const switchLanded = (currentMode ?? null) !== (requestedFrom ?? null);
+      const switchLanded = (currentMode ?? null) !== requestedFrom;
       const settledSinceRequest = (state === 'idle' || state === 'closed') && state !== this.stateBeforeSwitch();
       if (!switchLanded && !settledSinceRequest) return;
       this.switchStatus.set(null);
@@ -137,7 +139,7 @@ export class PermissionModePickerComponent {
 
   private async apply(): Promise<void> {
     const sessionIdAtApply = this.sessionId();
-    const modeAtApply = this.currentMode();
+    const modeAtApply = this.currentMode() ?? null;
     const stateAtApply = this.sessionState();
     const attemptedMode = this.chosenMode;
     await runGuarded(this.applying, this.switchError, PERMISSION_MODE_SWITCH_ERROR, async () => {
