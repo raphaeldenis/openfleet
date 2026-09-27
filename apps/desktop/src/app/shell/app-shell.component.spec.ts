@@ -2,9 +2,23 @@ import { TestBed } from '@angular/core/testing';
 import { RouterTestingHarness } from '@angular/router/testing';
 import { Component, signal } from '@angular/core';
 import { provideRouter, withComponentInputBinding, Router, type Routes } from '@angular/router';
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AppShellComponent } from './app-shell.component';
 import { FleetEventsService } from '../core/fleet-events.service';
+
+// jsdom doesn't block focus() inside an inert subtree the way the WHATWG spec requires real
+// browsers to: without this shim, a focus() call fired before Angular's change detection removes
+// `inert` silently "succeeds" here while landing on <body> for real — the exact bug QA caught.
+const nativeFocus = HTMLElement.prototype.focus;
+beforeAll(() => {
+  HTMLElement.prototype.focus = function focusUnlessInert(this: HTMLElement, options?: FocusOptions): void {
+    if (this.closest('[inert]')) return;
+    nativeFocus.call(this, options);
+  };
+});
+afterAll(() => {
+  HTMLElement.prototype.focus = nativeFocus;
+});
 
 @Component({
   selector: 'stub-home',

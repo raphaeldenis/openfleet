@@ -1,4 +1,15 @@
-import { ChangeDetectionStrategy, Component, ElementRef, HostListener, computed, inject, signal, viewChild } from '@angular/core';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  ElementRef,
+  HostListener,
+  Injector,
+  afterNextRender,
+  computed,
+  inject,
+  signal,
+  viewChild,
+} from '@angular/core';
 import { Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { environment } from '../../environments/environment';
 import { FleetEventsService } from '../core/fleet-events.service';
@@ -116,6 +127,7 @@ const RUNNING_STATES = new Set(['generating', 'starting']);
 export class AppShellComponent {
   protected readonly events = inject(FleetEventsService);
   private readonly router = inject(Router);
+  private readonly injector = inject(Injector);
   protected readonly navItems = HELM_NAV_ITEMS;
   protected readonly daemonAddress = environment.daemonAddress;
   protected readonly paletteOpen = signal(false);
@@ -139,8 +151,11 @@ export class AppShellComponent {
     this.paletteOpen.set(false);
     const opener = this.paletteOpener;
     const focusTarget = opener?.isConnected ? opener : this.paletteTrigger().nativeElement;
-    focusTarget.focus();
     this.paletteOpener = null;
+    // The `.body`/statusbar `[attr.inert]` binding only clears once change detection renders this
+    // signal write, so focusing synchronously here is a silent no-op: the target is still inside
+    // an inert subtree. Wait for that render before moving focus.
+    afterNextRender(() => focusTarget.focus(), { injector: this.injector });
   }
 
   @HostListener('document:keydown', ['$event'])
