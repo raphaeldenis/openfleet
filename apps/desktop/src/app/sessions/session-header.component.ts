@@ -24,6 +24,7 @@ const RENAME_ERROR = 'Could not rename — try again.';
         maxlength="8"
         [value]="session().emoji"
         (change)="renameEmoji(emojiInput.value)"
+        (keydown.escape)="cancelEmojiEdit(emojiInput)"
       />
       <input
         #nameInput
@@ -32,6 +33,7 @@ const RENAME_ERROR = 'Could not rename — try again.';
         title="Rename session"
         [value]="session().name"
         (change)="renameName(nameInput.value)"
+        (keydown.escape)="cancelNameEdit(nameInput)"
       />
       @if (renameError(); as error) {
         <span role="alert" data-testid="session-rename-error" class="of-error">✕ {{ error }}</span>
@@ -81,6 +83,11 @@ export class SessionHeaderComponent {
   protected readonly modelSwitchPending = signal(false);
   protected readonly renaming = signal(false);
   protected readonly renameError = signal<string | null>(null);
+  // Set by Escape just before it blurs the field, so the (change) that blur triggers restores the
+  // committed value instead of sending it as a rename — a plain DOM value reset is not enough because
+  // some browsers still fire change from the dirty flag set while the user was typing.
+  private skipNextNameCommit = false;
+  private skipNextEmojiCommit = false;
   // `session` carries a fresh object on every field update (state, model, …), not only on a real
   // session switch — tracking the last-seen id keeps the reset below from firing on every one of
   // those and wiping an in-progress rename's own error.
@@ -99,15 +106,35 @@ export class SessionHeaderComponent {
   }
 
   renameName(value: string): void {
+    if (this.skipNextNameCommit) {
+      this.skipNextNameCommit = false;
+      return;
+    }
     const trimmed = value.trim();
     if (!trimmed || trimmed === this.session().name) return;
     void this.rename({ name: trimmed });
   }
 
   renameEmoji(value: string): void {
+    if (this.skipNextEmojiCommit) {
+      this.skipNextEmojiCommit = false;
+      return;
+    }
     const trimmed = value.trim();
     if (!trimmed || trimmed === this.session().emoji) return;
     void this.rename({ emoji: trimmed });
+  }
+
+  protected cancelNameEdit(input: HTMLInputElement): void {
+    this.skipNextNameCommit = true;
+    input.value = this.session().name;
+    input.blur();
+  }
+
+  protected cancelEmojiEdit(input: HTMLInputElement): void {
+    this.skipNextEmojiCommit = true;
+    input.value = this.session().emoji;
+    input.blur();
   }
 
   private async rename(patch: { name?: string; emoji?: string }): Promise<void> {

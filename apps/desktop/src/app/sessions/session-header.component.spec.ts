@@ -127,6 +127,53 @@ describe('SessionHeaderComponent', () => {
     await waitFor(() => expect(screen.queryByTestId('session-rename-error')).toBeNull());
   });
 
+  it('restores the committed name and blurs without renaming when Escape is pressed', async () => {
+    const session = baseSession();
+    const api = fakeApi();
+    await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session, api) });
+    const nameInput = screen.getByTestId('session-name-input') as HTMLInputElement;
+
+    await userEvent.clear(nameInput);
+    await userEvent.type(nameInput, 'Uncommitted name');
+    await userEvent.keyboard('{Escape}');
+
+    expect(nameInput.value).toBe(session.name);
+    expect(nameInput).not.toHaveFocus();
+    expect(api.renameSession).not.toHaveBeenCalled();
+  });
+
+  it('restores the committed emoji and blurs without renaming when Escape is pressed', async () => {
+    const session = baseSession();
+    const api = fakeApi();
+    await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session, api) });
+    const emojiInput = screen.getByTestId('session-emoji-input') as HTMLInputElement;
+
+    await userEvent.clear(emojiInput);
+    await userEvent.type(emojiInput, '🦉');
+    await userEvent.keyboard('{Escape}');
+
+    expect(emojiInput.value).toBe(session.emoji);
+    expect(emojiInput).not.toHaveFocus();
+    expect(api.renameSession).not.toHaveBeenCalled();
+  });
+
+  it('discards an uncommitted name edit instead of committing it when the session switches', async () => {
+    const sessionA = baseSession({ id: 's1', name: 'Gimli' });
+    const sessionB = baseSession({ id: 's2', name: 'Legolas' });
+    const currentSession = signal<Session>(sessionA);
+    const api = fakeApi();
+    await render(SessionHeaderComponent, { bindings: [inputBinding('session', currentSession)], providers: providersFor(sessionA, api) });
+    const nameInput = screen.getByTestId('session-name-input') as HTMLInputElement;
+
+    await userEvent.clear(nameInput);
+    await userEvent.type(nameInput, 'Uncommitted name');
+
+    currentSession.set(sessionB);
+
+    await waitFor(() => expect(nameInput.value).toBe('Legolas'));
+    expect(api.renameSession).not.toHaveBeenCalled();
+  });
+
   it('shows an inline error when renaming fails', async () => {
     const session = baseSession();
     const api = fakeApi({ renameSession: vi.fn().mockRejectedValue(new Error('boom')) });
