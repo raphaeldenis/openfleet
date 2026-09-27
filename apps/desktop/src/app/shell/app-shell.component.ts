@@ -1,0 +1,144 @@
+import { ChangeDetectionStrategy, Component, HostListener, computed, inject, signal } from '@angular/core';
+import { Router, RouterLink, RouterOutlet } from '@angular/router';
+import { FleetEventsService } from '../core/fleet-events.service';
+import { BannerComponent } from '../design/banner.component';
+import { SessionListComponent } from '../sessions/session-list.component';
+import { CommandPaletteComponent } from './command-palette.component';
+import { DaemonStatusComponent } from './daemon-status.component';
+import { HELM_NAV_ITEMS } from './nav-items';
+
+const DAEMON_ADDRESS = '127.0.0.1:7331';
+const RUNNING_STATES = new Set(['generating', 'starting']);
+
+@Component({
+  selector: 'of-app-shell',
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [RouterLink, RouterOutlet, SessionListComponent, DaemonStatusComponent, CommandPaletteComponent, BannerComponent],
+  template: `
+    <div class="shell" data-testid="app-shell">
+      <div class="body">
+        <nav class="sidebar" data-testid="app-nav">
+          <div class="brand">OpenFleet</div>
+          <section class="sessions">
+            <div class="section-title"><span>Sessions</span><span class="mono">{{ runningCount() }} running</span></div>
+            <of-session-list (selected)="onSessionSelected($event)" />
+          </section>
+          <ul class="helm-list">
+            @for (item of navItems; track item.key) {
+              <li>
+                @if (item.route) {
+                  <a class="nav-item" [routerLink]="item.route" routerLinkActive="active" [attr.data-testid]="'nav-' + item.key">
+                    <span class="glyph">{{ item.glyph }}</span><span class="label">{{ item.label }}</span>
+                  </a>
+                } @else {
+                  <span class="nav-item disabled" aria-disabled="true" [title]="item.availability" [attr.data-testid]="'nav-' + item.key">
+                    <span class="glyph">{{ item.glyph }}</span><span class="label">{{ item.label }}</span>
+                    <span class="availability">{{ item.availability }}</span>
+                  </span>
+                }
+              </li>
+            }
+          </ul>
+        </nav>
+        <div class="main-column">
+          <header class="topbar" data-testid="app-topbar">
+            <span class="brand-mark">OpenFleet</span>
+            <button type="button" class="of-input search-trigger" data-testid="open-palette" (click)="openPalette()">
+              <span>⌕</span><span class="placeholder">Search or run a command…</span><span class="shortcut mono">⌘K</span>
+            </button>
+            <span class="spacer"></span>
+            <of-daemon-status [connected]="events.connected()" />
+            <span class="spend" data-testid="spend-today" title="Cost tracking is not implemented yet">— today</span>
+          </header>
+          @if (!events.connected()) {
+            <of-banner
+              variant="reconnecting"
+              title="↻ Reconnecting to daemon"
+              description="Sessions keep running; the UI shows the last known state."
+            />
+          }
+          <main class="outlet" data-testid="app-outlet">
+            <router-outlet />
+          </main>
+        </div>
+      </div>
+      <footer class="statusbar" data-testid="app-statusbar">
+        <of-daemon-status [connected]="events.connected()" />
+        <span class="mono">{{ daemonAddress }}</span>
+        <span class="spacer"></span>
+        <span class="limits" data-testid="status-limits" title="Provider limits are not tracked yet">—</span>
+      </footer>
+      <of-command-palette [open]="paletteOpen()" (closed)="closePalette()" />
+    </div>
+  `,
+  styles: `
+    .shell { display: flex; flex-direction: column; width: 100%; height: 100%; min-width: 75rem; position: relative; overflow: hidden; }
+    .body { flex: 1; min-height: 0; display: flex; }
+    .sidebar { width: 17.5rem; flex: none; display: flex; flex-direction: column; background: var(--side); border-right: 1px solid var(--line); min-height: 0; overflow-y: auto; }
+    .brand { height: 2.75rem; flex: none; display: flex; align-items: center; padding: 0 .875rem; font-weight: 600; letter-spacing: -.01em; border-bottom: 1px solid var(--line); }
+    .sessions { display: flex; flex-direction: column; min-height: 0; border-bottom: 1px solid var(--line); }
+    .section-title { display: flex; align-items: center; gap: .375rem; height: 1.875rem; padding: 0 .75rem; font-size: .6875rem; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--mut); }
+    .section-title .mono { margin-left: auto; font-family: var(--mono); font-weight: 400; letter-spacing: 0; color: var(--faint); }
+    .helm-list { list-style: none; margin: 0; padding: .375rem; display: flex; flex-direction: column; gap: 1px; overflow-y: auto; }
+    .nav-item { display: flex; align-items: center; gap: .5rem; height: 1.75rem; padding: 0 .5rem; border-radius: .375rem; color: var(--fg); }
+    a.nav-item { cursor: pointer; }
+    a.nav-item:hover, a.nav-item:focus-visible { background: var(--hover); }
+    a.nav-item.active { background: var(--active); }
+    .nav-item.disabled { color: var(--faint); }
+    .nav-item .label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .nav-item .glyph { width: 1rem; text-align: center; font-family: var(--mono); font-size: .75rem; }
+    .nav-item .availability { font-size: .625rem; color: var(--faint); white-space: nowrap; }
+    .main-column { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+    .topbar { height: 2.75rem; flex: none; display: flex; align-items: center; gap: .75rem; padding: 0 .875rem; border-bottom: 1px solid var(--line); background: var(--panel); }
+    .brand-mark { font-weight: 600; }
+    .search-trigger { flex: none; width: 22rem; display: flex; align-items: center; gap: .5rem; color: var(--faint); cursor: pointer; }
+    .search-trigger .placeholder { flex: 1; text-align: left; }
+    .search-trigger .shortcut { font-size: .6875rem; padding: 0 .3125rem; border: 1px solid var(--line-2); border-radius: .25rem; }
+    .spacer { flex: 1; }
+    .spend { font-family: var(--mono); font-size: .75rem; color: var(--mut); font-style: italic; }
+    .outlet { flex: 1; min-height: 0; min-width: 0; display: flex; overflow: hidden; }
+    .statusbar { flex: none; height: 1.625rem; display: flex; align-items: center; gap: .75rem; padding: 0 .75rem; border-top: 1px solid var(--line); background: var(--side); font-size: .6875rem; color: var(--mut); }
+    .limits { font-style: italic; }
+    .mono { font-family: var(--mono); }
+    /* Terminal-first collapse order at 1200×800 (handoff Q10): status bar details, then header
+       density — there is no persistent right panel yet in this shell to collapse first. */
+    @media (max-width: 75rem) {
+      .statusbar .limits { display: none; }
+      .search-trigger .placeholder { display: none; }
+      .search-trigger { width: auto; }
+    }
+  `,
+})
+export class AppShellComponent {
+  protected readonly events = inject(FleetEventsService);
+  private readonly router = inject(Router);
+  protected readonly navItems = HELM_NAV_ITEMS;
+  protected readonly daemonAddress = DAEMON_ADDRESS;
+  protected readonly paletteOpen = signal(false);
+  protected readonly runningCount = computed(() => this.events.sessions().filter((s) => RUNNING_STATES.has(s.state)).length);
+
+  onSessionSelected(sessionId: string): void {
+    void this.router.navigate(['/session', sessionId]);
+  }
+
+  openPalette(): void {
+    this.paletteOpen.set(true);
+  }
+
+  closePalette(): void {
+    this.paletteOpen.set(false);
+  }
+
+  @HostListener('document:keydown', ['$event'])
+  onKeydown(event: KeyboardEvent): void {
+    const isCommandOrCtrlK = (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k';
+    if (isCommandOrCtrlK) {
+      event.preventDefault();
+      this.paletteOpen.update((open) => !open);
+      return;
+    }
+    if (event.key === 'Escape' && this.paletteOpen()) {
+      this.paletteOpen.set(false);
+    }
+  }
+}
