@@ -133,6 +133,53 @@ describe('childEnvironment', () => {
     expect(childEnvironment(parentEnv)).toEqual(parentEnv);
   });
 
+  it('drops GIT_CONFIG_PARAMETERS, the inline config-injection var git itself uses to pass --config down to subprocesses', () => {
+    const parentEnv = { GIT_CONFIG_PARAMETERS: "'core.hooksPath=/tmp/attacker-hooks'", PATH: '/usr/bin' };
+
+    expect(childEnvironment(parentEnv)).toEqual({ PATH: '/usr/bin' });
+  });
+
+  it('drops every indexed GIT_CONFIG_KEY_n/GIT_CONFIG_VALUE_n pair and GIT_CONFIG_COUNT, the modern config-injection mechanism', () => {
+    const parentEnv = {
+      GIT_CONFIG_COUNT: '2',
+      GIT_CONFIG_KEY_0: 'core.hooksPath',
+      GIT_CONFIG_VALUE_0: '/tmp/attacker-hooks',
+      GIT_CONFIG_KEY_1: 'credential.helper',
+      GIT_CONFIG_VALUE_1: '!/tmp/steal-creds.sh',
+      PATH: '/usr/bin',
+    };
+
+    expect(childEnvironment(parentEnv)).toEqual({ PATH: '/usr/bin' });
+  });
+
+  it('drops GIT_CONFIG_GLOBAL and GIT_CONFIG_SYSTEM, which redirect where git reads its global/system config file from', () => {
+    const parentEnv = {
+      GIT_CONFIG_GLOBAL: '/tmp/attacker.gitconfig',
+      GIT_CONFIG_SYSTEM: '/tmp/attacker-system.gitconfig',
+      PATH: '/usr/bin',
+    };
+
+    expect(childEnvironment(parentEnv)).toEqual({ PATH: '/usr/bin' });
+  });
+
+  it('drops the legacy GIT_CONFIG var, which redirects the file `git config` itself reads and writes', () => {
+    const parentEnv = { GIT_CONFIG: '/tmp/attacker.config', PATH: '/usr/bin' };
+
+    expect(childEnvironment(parentEnv)).toEqual({ PATH: '/usr/bin' });
+  });
+
+  it('drops GIT_EXEC_PATH, which redirects where git resolves its own dashed subcommands and helpers from', () => {
+    const parentEnv = { GIT_EXEC_PATH: '/tmp/attacker-exec-path', PATH: '/usr/bin' };
+
+    expect(childEnvironment(parentEnv)).toEqual({ PATH: '/usr/bin' });
+  });
+
+  it('drops GIT_TEMPLATE_DIR, which seeds hooks into any repo our own test helpers create with `git init`', () => {
+    const parentEnv = { GIT_TEMPLATE_DIR: '/tmp/attacker-template', PATH: '/usr/bin' };
+
+    expect(childEnvironment(parentEnv)).toEqual({ PATH: '/usr/bin' });
+  });
+
   it('drops every marker from both the Claude Code and Scape families in one call, while keeping near-miss and case-variant names', () => {
     const parentEnv = {
       CLAUDECODE: '1',
