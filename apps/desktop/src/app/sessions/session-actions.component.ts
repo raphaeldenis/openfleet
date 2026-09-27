@@ -1,6 +1,7 @@
 import { ChangeDetectionStrategy, Component, ElementRef, computed, effect, inject, input, signal, viewChild } from '@angular/core';
 import type { SessionState } from '@openfleet/shared';
 import { FleetApiService } from '../core/fleet-api.service';
+import { runGuarded } from '../core/run-guarded';
 
 const CLOSE_CONFIRM_BODY =
   'The process stops. The worktree, branch and transcript are kept; you can reopen it later with its history.';
@@ -131,28 +132,10 @@ export class SessionActionsComponent {
   }
 
   private async close(sessionId: string): Promise<void> {
-    if (this.closing()) return;
-    this.closing.set(true);
-    this.error.set(null);
-    try {
-      await this.api.closeSession(sessionId);
-    } catch {
-      this.error.set(CLOSE_ERROR);
-    } finally {
-      this.closing.set(false);
-    }
+    await runGuarded(this.closing, this.error, CLOSE_ERROR, async () => { await this.api.closeSession(sessionId); });
   }
 
   async interrupt(): Promise<void> {
-    if (this.interrupting()) return;
-    this.interrupting.set(true);
-    this.error.set(null);
-    try {
-      await this.api.sendInput(this.sessionId(), ESCAPE_KEY);
-    } catch {
-      this.error.set(INTERRUPT_ERROR);
-    } finally {
-      this.interrupting.set(false);
-    }
+    await runGuarded(this.interrupting, this.error, INTERRUPT_ERROR, async () => { await this.api.sendInput(this.sessionId(), ESCAPE_KEY); });
   }
 }
