@@ -137,6 +137,10 @@ export class SessionService {
     return this.queue.hasQueued(sessionId, body);
   }
 
+  queuedMessageCount(sessionId: string): number {
+    return this.queue.countPending(sessionId);
+  }
+
   sendMessage(input: { sessionId: string; body: string; fromSessionId?: string }): { status: 'delivered' | 'queued'; messageId: string } {
     const session = this.require(input.sessionId);
     const message = this.queue.enqueue(input);

@@ -24,4 +24,8 @@ export class MessageQueue {
   markDelivered(id: string): void {
     this.db.prepare(`UPDATE message_queue SET status = 'delivered', delivered_at = ? WHERE id = ?`).run(new Date().toISOString(), id);
   }
+  countPending(sessionId: string): number {
+    const row = this.db.prepare(`SELECT count(*) AS n FROM message_queue WHERE session_id = ? AND status = 'queued'`).get(sessionId) as { n: number };
+    return row.n;
+  }
 }

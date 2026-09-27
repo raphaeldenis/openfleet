@@ -26,7 +26,7 @@ const managers = new ManagerService({ managers: managerRepository, sessions, bus
 
 // The server must be listening before any resumed CLI can POST its first hook — resuming first risks a
 // fast process hitting a port nothing is serving yet.
-const server = await startServer({ ...config, sessions, approvals, managers, pulseScheduler, bus, modelTable, mcp: createMcpHandler({ sessions, worktreesRoot: config.worktreesRoot }) });
+const server = await startServer({ ...config, sessions, approvals, managers, pulseScheduler, bus, modelTable, mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, worktreesRoot: config.worktreesRoot }) });
 console.log(`openfleet core listening on ${server.url} (home: ${config.home})`);
 
 await sessions.resumeAll();

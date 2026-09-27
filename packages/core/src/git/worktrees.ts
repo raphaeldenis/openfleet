@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { existsSync, realpathSync } from 'node:fs';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 
 const run = promisify(execFile);
@@ -49,8 +49,27 @@ export async function sameGitRepository(pathA: string, pathB: string): Promise<b
 async function gitCommonDir(cwd: string): Promise<string | undefined> {
   try {
     const { stdout } = await run('git', ['rev-parse', '--git-common-dir'], { cwd });
-    return resolve(cwd, stdout.trim());
+    // realpathSync canonicalizes the result so two spellings of the same cwd (e.g. a raw session
+    // directory vs. its realpath'd form) still compare equal — otherwise a caller stored with one
+    // spelling could never match a repo_path/directory given with the other.
+    return realpathSync(resolve(cwd, stdout.trim()));
   } catch {
     return undefined;
+  }
+}
+
+// Both paths must exist: fs.realpathSync.native resolves symlinks and ".." components as the OS does, in
+// the order they appear, which a lexical path.resolve() cannot — a resolve() placed in front of it would
+// lexically collapse a candidate like "root/link/.." back inside root before the symlink is ever followed,
+// silently undoing the whole guard. Node's own (non-native) realpathSync reimplementation has the same
+// blind spot for some inputs, so both paths go through the native binding with nothing lexical first.
+export function isPathWithin(candidate: string, root: string): boolean {
+  try {
+    const realRoot = realpathSync.native(root);
+    const realCandidate = realpathSync.native(candidate);
+    const relativePath = relative(realRoot, realCandidate);
+    return relativePath === '' || (relativePath !== '..' && !relativePath.startsWith(`..${sep}`) && !isAbsolute(relativePath));
+  } catch {
+    return false;
   }
 }

@@ -1,9 +1,9 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, existsSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, existsSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { createWorktree, sameGitRepository, WorktreeError } from './worktrees.js';
+import { createWorktree, isPathWithin, sameGitRepository, WorktreeError } from './worktrees.js';
 
 function makeRepo(): string {
   const dir = mkdtempSync(join(tmpdir(), 'of-repo-'));
@@ -60,5 +60,90 @@ describe('sameGitRepository', () => {
     const repoPath = makeRepo();
     const notARepo = mkdtempSync(join(tmpdir(), 'of-not-a-repo-'));
     await expect(sameGitRepository(repoPath, notARepo)).resolves.toBe(false);
+  });
+});
+
+describe('isPathWithin', () => {
+  it('is true for a direct child path', () => {
+    const root = mkdtempSync(join(tmpdir(), 'of-wt-'));
+    const child = join(root, 'task-1');
+    mkdirSync(child);
+    expect(isPathWithin(child, root)).toBe(true);
+  });
+
+  // Decision (fix loop 2, finding 1+3+5): create_session now requires the directory to already exist,
+  // so "is the root itself within the root" is a legitimate case rather than a rejected edge case.
+  it('is true for the root itself', () => {
+    const root = mkdtempSync(join(tmpdir(), 'of-wt-'));
+    expect(isPathWithin(root, root)).toBe(true);
+  });
+
+  it('is false for a sibling directory whose name merely starts with the root\'s name', () => {
+    const root = mkdtempSync(join(tmpdir(), 'of-wt-'));
+    const sibling = `${root}-evil`;
+    mkdirSync(sibling);
+    const child = join(sibling, 'task-1');
+    mkdirSync(child);
+    expect(isPathWithin(child, root)).toBe(false);
+  });
+
+  it('is false for a parent directory', () => {
+    const root = mkdtempSync(join(tmpdir(), 'of-wt-'));
+    const child = join(root, 'task-1');
+    mkdirSync(child);
+    expect(isPathWithin(root, child)).toBe(false);
+  });
+
+  it('is false for a symlink inside the root whose target actually resolves outside it', () => {
+    const root = mkdtempSync(join(tmpdir(), 'of-wt-'));
+    const outside = mkdtempSync(join(tmpdir(), 'of-outside-'));
+    const escapeLink = join(root, 'escape');
+    symlinkSync(outside, escapeLink);
+    expect(isPathWithin(escapeLink, root)).toBe(false);
+  });
+
+  // Finding 1 (BLOCKER) / Finding 2 (fix loop 3, MAJOR): path.resolve() collapses ".." lexically before
+  // symlinks are followed, so the literal string "root/link/../target" used to resolve to "root/target"
+  // even though the OS actually opens "outside/target" once "link" is followed. A decoy "root/target"
+  // that genuinely exists is required to expose this: without it, the lexically-collapsed path is missing
+  // on disk, realpathSync throws, and the guard fails safe by accident rather than by resolving correctly.
+  // fs.realpathSync.native, called with no resolve() in front, resolves symlinks and ".." in the order the
+  // OS does, so the candidate lands on "outside/target" and is correctly refused even with the decoy present.
+  it('is false when a ".." segment after a symlink would lexically collapse into an existing decoy inside the root', () => {
+    const outside = mkdtempSync(join(tmpdir(), 'of-outside-'));
+    const deep = join(outside, 'deep');
+    mkdirSync(deep);
+    const target = join(outside, 'target');
+    mkdirSync(target);
+    const root = mkdtempSync(join(tmpdir(), 'of-wt-'));
+    symlinkSync(deep, join(root, 'link'));
+    mkdirSync(join(root, 'target'));
+    const escapingCandidate = `${root}/link/../target`;
+    expect(isPathWithin(escapingCandidate, root)).toBe(false);
+  });
+
+  it('is true for a trailing-slash child path', () => {
+    const root = mkdtempSync(join(tmpdir(), 'of-wt-'));
+    const child = join(root, 'task-1');
+    mkdirSync(child);
+    expect(isPathWithin(`${child}/`, root)).toBe(true);
+  });
+
+  it('resolves a relative candidate against the current working directory, not silently accepting it', () => {
+    expect(isPathWithin('some/relative/path', '/definitely/not/cwd')).toBe(false);
+  });
+
+  // Finding 5 (MINOR): relativePath.startsWith('..') used to reject any directory whose name merely
+  // starts with two dots, such as "..cache", even though it never leaves the root.
+  it('accepts a directory literally named "..cache" inside the root', () => {
+    const root = mkdtempSync(join(tmpdir(), 'of-wt-'));
+    const dotCache = join(root, '..cache');
+    mkdirSync(dotCache);
+    expect(isPathWithin(dotCache, root)).toBe(true);
+  });
+
+  it('is false for a candidate directory that does not exist', () => {
+    const root = mkdtempSync(join(tmpdir(), 'of-wt-'));
+    expect(isPathWithin(join(root, 'missing'), root)).toBe(false);
   });
 });
