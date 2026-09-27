@@ -123,7 +123,7 @@ describe('REST', () => {
   it('rejects fake-output on a non-fake harness session with 404', async () => {
     const claudeCliStub = {
       id: 'claude-cli' as const,
-      start: () => ({ write: () => {}, resize: () => {}, kill: () => {}, onData: () => () => {}, onExit: () => () => {} }),
+      start: () => ({ write: () => {}, typeMessage: () => {}, resize: () => {}, kill: () => {}, onData: () => () => {}, onExit: () => () => {} }),
     };
     const stubHarnessDb = openDatabase(':memory:');
     const stubHarnessBus = new EventBus();
