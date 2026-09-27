@@ -506,7 +506,21 @@ export class SessionService {
   private finishTyping(sessionId: string): void {
     const { phase } = this.deliveryOf(sessionId);
     if (phase.name !== 'typing') return;
-    this.enter(sessionId, { ...phase, name: 'typed' });
+    const session = this.repo.get(sessionId);
+    const isDeliverable = session !== undefined && canDeliverNow(session.state);
+    // Raw input deferred behind this Enter targets the busy state it was pressed against (e.g. Interrupt
+    // stops the running turn) — holding it for the eventual submit would misfire it onto whatever runs
+    // next, so a non-deliverable session flushes it here, in arrival order, and the 'typed' phase carries
+    // nothing. A deliverable session is unchanged: it still flushes right after the Enter, in submit().
+    if (isDeliverable) {
+      this.enter(sessionId, { ...phase, name: 'typed' });
+    } else {
+      // Mirrors submit()'s own guard: a handle a resume already replaced must never receive this, same as
+      // the eventual '\r' never would.
+      const isHandleReplaced = this.liveHandle(sessionId) !== phase.handle;
+      if (!isHandleReplaced) for (const raw of phase.deferredRaw) phase.handle.write(raw);
+      this.enter(sessionId, { ...phase, name: 'typed', deferredRaw: [] });
+    }
     this.advance(sessionId);
   }
 
