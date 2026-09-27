@@ -5,6 +5,7 @@ import { createWorktree } from '../git/worktrees.js';
 import type { Harness, HarnessHandle } from '../harness/harness.js';
 import { newId, newToken } from '../ids.js';
 import { MessageQueue } from './messageQueue.js';
+import { wrapAgentMessage } from './messageEnvelope.js';
 import { normalizePermissionMode, SessionRepository } from './sessionRepository.js';
 import { canDeliverNow, nextState, provesTurnEnded, type SessionInput } from './stateMachine.js';
 
@@ -141,15 +142,35 @@ export class SessionService {
     return this.queue.countPending(sessionId);
   }
 
-  sendMessage(input: { sessionId: string; body: string; fromSessionId?: string }): { status: 'delivered' | 'queued'; messageId: string } {
+  // A messageId lets the caller retry a delivery attempt idempotently: resending the same id to the same
+  // target returns the already-enqueued message's current status instead of enqueuing a second copy.
+  sendMessage(input: { sessionId: string; body: string; fromSessionId?: string; messageId?: string }): { status: 'delivered' | 'queued'; messageId: string } {
     const session = this.require(input.sessionId);
-    const message = this.queue.enqueue(input);
+    if (input.messageId) {
+      const existing = this.queue.getById(input.messageId);
+      if (existing) return { status: existing.status, messageId: existing.id };
+    }
+    const messageId = input.messageId ?? newId();
+    // Agent-to-agent messages (message_parent, send_session_message) always carry fromSessionId; a human
+    // REST call and a manager's pulse never do, so its presence alone tells apart what needs the untrusted
+    // envelope from what keeps its own shape (Task 6f).
+    const body = input.fromSessionId
+      ? wrapAgentMessage({ fromSessionId: input.fromSessionId, fromBranch: this.senderBranchOf(input.fromSessionId), messageId, body: input.body })
+      : input.body;
+    const message = this.queue.enqueue({ id: messageId, sessionId: session.id, fromSessionId: input.fromSessionId, body });
     this.guarded(session.id, () => this.advance(session.id));
     const { phase } = this.deliveryOf(session.id);
     const isHandedToTerminal = phase.name === 'typing' && phase.messageId === message.id;
     if (isHandedToTerminal) return { status: 'delivered', messageId: message.id };
     this.deps.bus.emit({ type: 'message.queued', sessionId: session.id, messageId: message.id });
     return { status: 'queued', messageId: message.id };
+  }
+
+  // ponytail: Session carries no branch field yet (only a worktree path), so the daemon has nothing to
+  // read here and every envelope shows '?' — add a branch column once a session records the one it runs
+  // on, rather than shelling out to git for it.
+  private senderBranchOf(_fromSessionId: string): string | undefined {
+    return undefined;
   }
 
   // ponytail: a relaunch costs a CLI restart (~2s) and drops the TUI's in-memory state that never made it
