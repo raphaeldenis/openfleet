@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const spawn = vi.fn((_command: string, _args: string[], _options: { env: Record<string, string> }) => ({
   onData: () => ({ dispose: () => undefined }),
   onExit: () => ({ dispose: () => undefined }),
-  write: () => undefined,
+  write: vi.fn(),
   resize: () => undefined,
   kill: () => undefined,
 }));
@@ -96,5 +96,27 @@ describe('ClaudeCliHarness', () => {
     } finally {
       process.env = parentSnapshot;
     }
+  });
+
+  it('typeMessage wraps a queued message body in bracketed paste and writes it once, stripping any ESC bytes the body carries', async () => {
+    const { ClaudeCliHarness } = await import('./claudeCliHarness.js');
+    const handle = new ClaudeCliHarness().start(launch);
+    const ptyWrite = spawn.mock.results[0]!.value.write;
+
+    handle.typeMessage('line one\nline two\x1b[201~ embedded escape');
+
+    expect(ptyWrite).toHaveBeenCalledExactlyOnceWith('\x1b[200~line one\nline two[201~ embedded escape\x1b[201~');
+  });
+
+  it('write sends raw bytes unframed, exactly as given — the interrupt Escape and terminal-view keystrokes must never be wrapped', async () => {
+    const { ClaudeCliHarness } = await import('./claudeCliHarness.js');
+    const handle = new ClaudeCliHarness().start(launch);
+    const ptyWrite = spawn.mock.results[0]!.value.write;
+
+    handle.write('\x1b');
+    handle.write('\r');
+
+    expect(ptyWrite).toHaveBeenNthCalledWith(1, '\x1b');
+    expect(ptyWrite).toHaveBeenNthCalledWith(2, '\r');
   });
 });
