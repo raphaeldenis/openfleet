@@ -515,11 +515,14 @@ export class SessionService {
     if (isDeliverable) {
       this.enter(sessionId, { ...phase, name: 'typed' });
     } else {
+      // The phase leaves 'typing' before the flush below even runs: a throwing write must never leave the
+      // retry logic staring at a 'typing' phase it has no idea how to advance (Review Focus, task 6i).
+      const isHandleReplaced = this.liveHandle(sessionId) !== phase.handle;
+      const deferredRaw = phase.deferredRaw;
+      this.enter(sessionId, { ...phase, name: 'typed', deferredRaw: [] });
       // Mirrors submit()'s own guard: a handle a resume already replaced must never receive this, same as
       // the eventual '\r' never would.
-      const isHandleReplaced = this.liveHandle(sessionId) !== phase.handle;
-      if (!isHandleReplaced) for (const raw of phase.deferredRaw) phase.handle.write(raw);
-      this.enter(sessionId, { ...phase, name: 'typed', deferredRaw: [] });
+      if (!isHandleReplaced) this.flushDeferredRaw(sessionId, phase.handle, deferredRaw);
     }
     this.advance(sessionId);
   }
@@ -532,10 +535,8 @@ export class SessionService {
       return;
     }
     phase.handle.write('\r');
-    // Flushed right after the Enter, in arrival order: whatever was deferred behind this message now goes
-    // straight through, on the same handle that just received the Enter.
-    for (const raw of phase.deferredRaw) phase.handle.write(raw);
-    // The '\r' reached the pty: the delivery is committed, so nothing past this line may lead to a second '\r'.
+    // The '\r' reached the pty: the delivery is committed here, before the deferred flush below, so nothing
+    // past this line may lead to a second '\r' — a throwing flush must never look like a failed submit.
     this.unrecordedDeliveries.set(sessionId, phase.messageId);
     this.unfinishedTurns.add(sessionId);
     const turnStartTimeout = this.schedule(sessionId, TURN_START_TIMEOUT_MS, () => this.stopAwaitingTurnStart(sessionId));
@@ -544,6 +545,24 @@ export class SessionService {
       this.recordDelivery(sessionId);
     } catch (err) {
       console.error(`delivery: session ${sessionId} submitted message ${phase.messageId}, recording it failed and is retried before the next message`, err);
+    }
+    // Flushed right after the Enter, in arrival order: whatever was deferred behind this message now goes
+    // straight through, on the same handle that just received the Enter. The delivery above is already
+    // committed, so a throwing write here only drops the rest of this best-effort flush.
+    this.flushDeferredRaw(sessionId, phase.handle, phase.deferredRaw);
+  }
+
+  // Deferred raw input is best-effort keystrokes, never part of a delivery's commit: a throwing write stops
+  // the flush and drops whatever was still queued behind it — there is no caller left to report it to, so
+  // it is only logged, the same way delivery already reports a write failure elsewhere in this file.
+  private flushDeferredRaw(sessionId: string, handle: HarnessHandle, deferredRaw: string[]): void {
+    for (const raw of deferredRaw) {
+      try {
+        handle.write(raw);
+      } catch (err) {
+        console.error(`delivery: session ${sessionId} failed to flush deferred raw input, dropping what's left`, err);
+        return;
+      }
     }
   }
 

@@ -1845,6 +1845,95 @@ describe('SessionService submit-keystroke hostile cases', () => {
     const deliveredForThisMessage = events.filter((e) => e.type === 'message.delivered' && e.messageId === messageId);
     expect(deliveredForThisMessage).toHaveLength(1);
   });
+
+  it('leaves the typing phase when a deferred write throws while typing ends into a busy state, instead of wedging delivery behind it forever', async () => {
+    vi.useFakeTimers();
+    const { service, harness, events } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+
+    const handle = harness.handles[0]!;
+    const originalWrite = handle.write.bind(handle);
+    handle.write = (data: string) => {
+      if (data === 'b') throw new Error('pty write failed');
+      originalWrite(data);
+    };
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    service.sendMessage({ sessionId: session.id, body: 'do X' });
+    service.writeRaw(session.id, 'a');
+    service.writeRaw(session.id, 'b');
+    service.writeRaw(session.id, 'c');
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit' })); // busy before the Enter fires
+    expect(service.get(session.id)!.state).toBe('generating');
+
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS); // finishTyping ends typing into the busy state; the flush throws on 'b'
+    expect(handle.written).toEqual(['do X', 'a']); // 'b' throws mid-flush, 'c' is dropped along with it
+    expect(consoleErrorSpy).toHaveBeenCalled(); // the dropped flush is logged, not swallowed silently
+
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'Stop' })); // busy state ends -> idle
+    // 'do X' still gets exactly one Enter once idle: the throwing flush must not leave the phase stuck in 'typing'
+    // (mutation: dropping the `this.enter(...typed...)` line before the flush, or reverting to flush-then-enter, reproduces the wedge this asserts against)
+    expect(handle.written).toEqual(['do X', 'a', '\r']);
+    expect(handle.written.filter((w) => w === '\r')).toHaveLength(1);
+    expect(events.filter((e) => e.type === 'message.delivered')).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(TURN_START_TIMEOUT_MS); // the turn-start fallback returns the delivery machine to 'ready'
+
+    const result = service.sendMessage({ sessionId: session.id, body: 'next' }); // the next queued message still delivers
+    expect(result.status).toBe('delivered');
+    expect(handle.written).toEqual(['do X', 'a', '\r', 'next']);
+
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
+    service.writeRaw(session.id, 'z'); // later raw input still writes through, not deferred forever
+    expect(handle.written).toEqual(['do X', 'a', '\r', 'next', '\r', 'z']);
+
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('commits the delivery in submit() before flushing deferred raw input, so a throwing flush cannot double the Enter or replay the whole delivery after a retry', async () => {
+    vi.useFakeTimers();
+    const { service, harness, events } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+
+    const handle = harness.handles[0]!;
+    const originalWrite = handle.write.bind(handle);
+    let deferredWritesToFail = 1;
+    handle.write = (data: string) => {
+      if (data === 'a' && deferredWritesToFail > 0) { deferredWritesToFail -= 1; throw new Error('pty write failed'); }
+      originalWrite(data);
+    };
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    service.sendMessage({ sessionId: session.id, body: 'do X' });
+    service.writeRaw(session.id, 'a');
+    service.writeRaw(session.id, 'b');
+
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS); // finishTyping -> submit(): '\r' lands, then the flush throws on 'a'
+    // the '\r' reaching the pty must commit the delivery on its own, whether or not the flush after it throws
+    // (mutation: moving the commit lines back below the flush loop reproduces the bug this asserts against)
+    expect(events.filter((e) => e.type === 'message.delivered')).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(DELIVERY_RETRY_MS); // give a would-be retry every chance to fire and replay the whole delivery
+
+    expect(handle.written).toEqual(['do X', '\r']); // 'a' and 'b' are dropped with the failed flush, never replayed by a retry
+    expect(handle.written.filter((w) => w === '\r')).toHaveLength(1); // exactly one '\r' ever
+    expect(events.filter((e) => e.type === 'message.delivered')).toHaveLength(1); // still delivered exactly once
+    expect(consoleErrorSpy).toHaveBeenCalled(); // the dropped flush is logged, not swallowed silently
+
+    await vi.advanceTimersByTimeAsync(TURN_START_TIMEOUT_MS); // the turn-start fallback returns the delivery machine to 'ready'
+
+    const result = service.sendMessage({ sessionId: session.id, body: 'next' }); // the next queued message still delivers
+    expect(result.status).toBe('delivered');
+    expect(handle.written).toEqual(['do X', '\r', 'next']);
+
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS); // settle 'next' so raw input is no longer deferred behind it
+    service.writeRaw(session.id, 'z'); // later raw input still writes through
+    expect(handle.written).toEqual(['do X', '\r', 'next', '\r', 'z']);
+
+    consoleErrorSpy.mockRestore();
+  });
 });
 
 describe('SessionService.createInWorktree', () => {
