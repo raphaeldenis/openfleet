@@ -55,6 +55,14 @@ describe('CommandPaletteComponent', () => {
     expect(closed).toHaveBeenCalled();
   });
 
+  it('exposes the panel as a named, modal dialog for assistive tech', async () => {
+    await render(CommandPaletteComponent, { bindings: [inputBinding('open', () => true)], providers: [provideRouter(routes())] });
+
+    const dialog = screen.getByRole('dialog', { name: /command palette/i });
+
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
+  });
+
   it('wraps focus from the last item back to the first on Tab', async () => {
     await render(CommandPaletteComponent, { bindings: [inputBinding('open', () => true)], providers: [provideRouter(routes())] });
     const first = screen.getByTestId('palette-item-sessions');

@@ -8,7 +8,7 @@ import { PALETTE_PAGES } from './nav-items';
   template: `
     @if (open()) {
       <div data-testid="command-palette" class="backdrop" (click)="closed.emit()" (keydown)="trapTab($event)">
-        <div class="panel" #panel (click)="stopPropagation($event)">
+        <div class="panel" #panel role="dialog" aria-modal="true" aria-label="Command palette" (click)="stopPropagation($event)">
           <div class="search-row"><span>⌕</span><span class="placeholder">Jump to a page</span><span class="hint">esc</span></div>
           <div class="group-label">Pages</div>
           <ul class="items">
