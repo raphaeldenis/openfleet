@@ -1,6 +1,5 @@
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
-
-const DAEMON_ADDRESS = '127.0.0.1:7331';
+import { environment } from '../../environments/environment';
 
 @Component({
   selector: 'of-daemon-status',
@@ -23,6 +22,8 @@ export class DaemonStatusComponent {
   protected readonly label = computed(() => (this.connected() ? 'Connected' : 'Reconnecting'));
   protected readonly dotColorVar = computed(() => (this.connected() ? 'var(--state-idle)' : 'var(--state-waiting-permission)'));
   protected readonly tooltip = computed(() =>
-    this.connected() ? `Connected to the daemon on ${DAEMON_ADDRESS}` : `Reconnecting to the daemon on ${DAEMON_ADDRESS}`,
+    this.connected()
+      ? `Connected to the daemon on ${environment.daemonAddress}`
+      : `Reconnecting to the daemon on ${environment.daemonAddress}`,
   );
 }

@@ -19,4 +19,13 @@ describe('DaemonStatusComponent', () => {
     expect(status).toHaveTextContent('Reconnecting');
     expect(status).toHaveAttribute('title', 'Reconnecting to the daemon on 127.0.0.1:7331');
   });
+
+  it('derives the tooltip address from the same source as the socket (environment.apiUrl), not a hardcoded constant', async () => {
+    localStorage.setItem('openfleet.apiUrl', 'http://127.0.0.1:9999');
+
+    await render(DaemonStatusComponent, { bindings: [inputBinding('connected', () => true)] });
+
+    expect(screen.getByTestId('daemon-status')).toHaveAttribute('title', 'Connected to the daemon on 127.0.0.1:9999');
+    localStorage.removeItem('openfleet.apiUrl');
+  });
 });
