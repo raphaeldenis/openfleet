@@ -43,8 +43,9 @@ export class DaemonShuttingDownError extends Error {
 const OUTPUT_BUFFER_LIMIT = 200 * 1024;
 export const DEFAULT_CLOSE_ESCALATE_MS = 5000;
 const DEFAULT_RESUME_TIMEOUT_MS = 15_000;
-// ponytail: fixed delay tuned for Claude Code's paste detection (a multi-char single write reads as a
-// paste and never submits); upgrade path is a per-harness submit strategy, e.g. bracketed paste mode.
+// ponytail: fixed delay giving Claude Code's composer time to settle after typeMessage's bracketed-paste
+// write before the separate '\r' submits it; upgrade path is confirming the composer holds the full body
+// from the pty output instead of trusting a fixed delay.
 export const SUBMIT_KEYSTROKE_DELAY_MS = 150;
 // ponytail: fallback for a hook that never confirms the turn started (a dropped webhook, or a CLI that
 // silently discards the keystroke); the common path ends the wait on the next real state transition.
@@ -593,9 +594,11 @@ export class SessionService {
     if (!handle) return;
     const message = this.queue.nextPending(sessionId);
     if (!message) return;
-    // Assumes HarnessHandle.write throws only when no bytes reached the pty: a failed body is retyped from 'ready'.
-    handle.write(message.body);
-    // The composer reads a body and its '\r' in one write as a paste and never submits it: the '\r' waits.
+    // Assumes HarnessHandle.typeMessage throws only when no bytes reached the pty: a failed body is retyped from 'ready'.
+    handle.typeMessage(message.body);
+    // typeMessage frames the body as one bracketed paste (see claudeCli/bracketedPaste.ts) so the composer
+    // never reads it as keystrokes to submit line by line; the '\r' that actually submits stays a separate
+    // write, sent only after the delay below.
     const submitDelayMs = this.deps.submitKeystrokeDelayMs ?? SUBMIT_KEYSTROKE_DELAY_MS;
     const submitDelay = this.schedule(sessionId, submitDelayMs, () => this.finishTyping(sessionId));
     this.enter(sessionId, { name: 'typing', messageId: message.id, handle }, submitDelay);
