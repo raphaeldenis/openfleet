@@ -3,6 +3,7 @@ import { chmodSync, mkdirSync, mkdtempSync, existsSync, readFileSync, symlinkSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { childEnvironmentForGit } from '../process/childEnvironment.js';
 import { makeRepo } from './testRepo.js';
 import { createWorktree, isPathWithin, sameGitRepository, WorktreeError } from './worktrees.js';
 
@@ -138,6 +139,29 @@ describe('createWorktree', () => {
     expect(existsSync(marker)).toBe(false);
   });
 
+  // Positive control for the test above: proves the GIT_CONFIG_SYSTEM → core.hooksPath injection
+  // is a real attack the guard must stop, not a no-op that would pass even unguarded (e.g. because
+  // this git build or environment ignores GIT_CONFIG_SYSTEM). Calls git directly with the caller's
+  // env passed through unscrubbed — never through createWorktree/childEnvironmentForGit — so the
+  // hook firing here is attributable only to the absence of scrubbing.
+  it('positive control: an unscrubbed GIT_CONFIG_SYSTEM does inject core.hooksPath and run the attacker hook on worktree add', () => {
+    const repoPath = makeRepo();
+    const worktreesRoot = mkdtempSync(join(tmpdir(), 'of-wt-'));
+    const attackerHooksDir = mkdtempSync(join(tmpdir(), 'of-attacker-hooks-'));
+    const marker = join(attackerHooksDir, 'FIRED');
+    writeFileSync(join(attackerHooksDir, 'post-checkout'), `#!/bin/sh\ntouch "${marker}"\n`);
+    chmodSync(join(attackerHooksDir, 'post-checkout'), 0o755);
+    const fakeSystemConfig = join(mkdtempSync(join(tmpdir(), 'of-fake-system-')), 'gitconfig');
+    writeFileSync(fakeSystemConfig, `[core]\n\thooksPath = ${attackerHooksDir}\n`);
+
+    execFileSync('git', ['worktree', 'add', '-b', 'task/config-system-control', '--', join(worktreesRoot, 'control')], {
+      cwd: repoPath,
+      env: { ...process.env, GIT_CONFIG_SYSTEM: fakeSystemConfig },
+    });
+
+    expect(existsSync(marker)).toBe(true);
+  });
+
   it('creating a fresh temp repo through the test helper does not redirect a decoy repo named by the caller\'s GIT_DIR/GIT_WORK_TREE', () => {
     const decoyRepo = makeRepo();
     process.env.GIT_DIR = join(decoyRepo, '.git');
@@ -150,7 +174,17 @@ describe('createWorktree', () => {
       delete process.env.GIT_WORK_TREE;
     }
 
-    expect(() => execFileSync('git', ['config', '--get', 'core.worktree'], { cwd: decoyRepo })).toThrow();
+    // Asserts the specific "key absent" exit status (1), not any throw: a bare toThrow() would
+    // also pass on an unrelated failure (git missing, decoyRepo gone) and prove nothing about
+    // whether core.worktree was actually left unset.
+    let caughtStatus: number | null = null;
+    try {
+      execFileSync('git', ['config', '--get', 'core.worktree'], { cwd: decoyRepo, env: childEnvironmentForGit(process.env) });
+    } catch (error) {
+      caughtStatus = (error as { status: number | null }).status;
+    }
+
+    expect(caughtStatus).toBe(1);
     expect(existsSync(join(targetRepo, '.git'))).toBe(true);
   });
 });

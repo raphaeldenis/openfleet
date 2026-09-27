@@ -29,13 +29,15 @@ const SESSION_MARKERS = new Set([
   'SCAPE_APP',
 ]);
 
-// ponytail: a git subprocess started with one of these set operates on the repository they name,
-// or has its config/hooks/exec-path redirected, instead of the location and config implied by its
-// own cwd — that's how a test's throwaway `git init` once redirected a shared checkout's worktree
-// (see git/worktrees.test.ts), and how GIT_CONFIG_COUNT/KEY_n/VALUE_n, GIT_CONFIG_PARAMETERS,
-// GIT_CONFIG_GLOBAL/SYSTEM, and legacy GIT_CONFIG can inject core.hooksPath to run an attacker
-// hook. Location and config injection only, never configuration a git child should keep
-// (GIT_SSH_COMMAND, GIT_AUTHOR_*, GIT_EDITOR, …).
+// HOME and XDG_CONFIG_HOME are never stripped: they are how git is meant to find the user's
+// own global config, and neither consumer below ever gets them from an attacker-controlled
+// test harness — only from the real host environment.
+
+// A git subprocess started with one of these operates on the repository they name instead of
+// the one implied by its own cwd — that's how a test's throwaway `git init` once redirected a
+// shared checkout's worktree (see git/worktrees.test.ts). Dropped for every git child, the
+// daemon's own and the launched CLI's alike: a CLI started in a worktree must use that
+// worktree's own repo regardless of what its launcher happened to have set.
 const GIT_REPOSITORY_LOCATION_VARS = new Set([
   'GIT_DIR',
   'GIT_WORK_TREE',
@@ -46,25 +48,48 @@ const GIT_REPOSITORY_LOCATION_VARS = new Set([
   'GIT_NAMESPACE',
   'GIT_CEILING_DIRECTORIES',
   'GIT_PREFIX',
-  'GIT_CONFIG_COUNT',
-  'GIT_CONFIG_PARAMETERS',
-  'GIT_CONFIG_GLOBAL',
-  'GIT_CONFIG_SYSTEM',
-  'GIT_CONFIG',
   'GIT_EXEC_PATH',
   'GIT_TEMPLATE_DIR',
 ]);
 
+// GIT_CONFIG_COUNT/KEY_n/VALUE_n, GIT_CONFIG_PARAMETERS, GIT_CONFIG_GLOBAL/SYSTEM, and legacy
+// GIT_CONFIG can inject core.hooksPath to run an attacker hook — dropped only from the
+// daemon's own git calls. The launched CLI keeps them: GIT_CONFIG_GLOBAL=/dev/null or a CI
+// identity there is the user's own intent, not an attacker's.
+const GIT_CONFIG_INJECTION_VARS = new Set(['GIT_CONFIG_COUNT', 'GIT_CONFIG_PARAMETERS', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM', 'GIT_CONFIG']);
 const GIT_CONFIG_INDEXED_VAR = /^GIT_CONFIG_(KEY|VALUE)_\d+$/;
 
-export function childEnvironment(parentEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+// Any of these can name a file git appends its own diagnostics to — dropped only from the
+// daemon's own git calls, for the same reason as the config-injection vars above.
+const GIT_TRACE_DESTINATION_VARS = new Set([
+  'GIT_TRACE',
+  'GIT_TRACE2',
+  'GIT_TRACE2_EVENT',
+  'GIT_TRACE2_PERF',
+  'GIT_TRACE_PACKET',
+  'GIT_TRACE_PERFORMANCE',
+  'GIT_TRACE_SETUP',
+  'GIT_TRACE_SHALLOW',
+  'GIT_TRACE_CURL',
+]);
+
+function scrub(parentEnv: NodeJS.ProcessEnv, alsoDrops: (name: string) => boolean): NodeJS.ProcessEnv {
   return Object.fromEntries(
     Object.entries(parentEnv).filter(
-      ([name, value]) =>
-        value !== undefined &&
-        !SESSION_MARKERS.has(name) &&
-        !GIT_REPOSITORY_LOCATION_VARS.has(name) &&
-        !GIT_CONFIG_INDEXED_VAR.test(name),
+      ([name, value]) => value !== undefined && !SESSION_MARKERS.has(name) && !GIT_REPOSITORY_LOCATION_VARS.has(name) && !alsoDrops(name),
     ),
+  );
+}
+
+/** Env for a claude CLI this daemon launches: keeps the user's own git config variables. */
+export function childEnvironmentForClaudeCli(parentEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return scrub(parentEnv, () => false);
+}
+
+/** Env for a git subprocess the daemon runs itself: also strips config-injection and trace vars. */
+export function childEnvironmentForGit(parentEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return scrub(
+    parentEnv,
+    (name) => GIT_CONFIG_INJECTION_VARS.has(name) || GIT_CONFIG_INDEXED_VAR.test(name) || GIT_TRACE_DESTINATION_VARS.has(name),
   );
 }

@@ -98,6 +98,31 @@ describe('ClaudeCliHarness', () => {
     }
   });
 
+  it('keeps the user\'s own git config vars but drops repository-location vars, since the CLI must use the worktree it was launched in, not redirect where its own git config lives', async () => {
+    const parentSnapshot = { ...process.env };
+    Object.assign(process.env, {
+      GIT_CONFIG_GLOBAL: '/dev/null',
+      GIT_CONFIG_SYSTEM: '/etc/gitconfig-ci',
+      GIT_DIR: '/some/other/repo/.git',
+      GIT_WORK_TREE: '/some/other/repo',
+    });
+
+    try {
+      const { ClaudeCliHarness } = await import('./claudeCliHarness.js');
+      new ClaudeCliHarness().start(launch);
+
+      const [, , options] = spawn.mock.calls[0]!;
+      const childEnv = options.env as Record<string, string>;
+
+      expect(childEnv.GIT_CONFIG_GLOBAL).toBe('/dev/null');
+      expect(childEnv.GIT_CONFIG_SYSTEM).toBe('/etc/gitconfig-ci');
+      expect(childEnv.GIT_DIR).toBeUndefined();
+      expect(childEnv.GIT_WORK_TREE).toBeUndefined();
+    } finally {
+      process.env = parentSnapshot;
+    }
+  });
+
   it('typeMessage wraps a queued message body in bracketed paste and writes it once, stripping any ESC bytes the body carries', async () => {
     const { ClaudeCliHarness } = await import('./claudeCliHarness.js');
     const handle = new ClaudeCliHarness().start(launch);
