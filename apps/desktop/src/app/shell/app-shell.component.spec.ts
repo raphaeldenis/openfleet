@@ -28,16 +28,16 @@ const testRoutes: Routes = [
   },
 ];
 
-function fakeEvents(overrides: { connected?: boolean; sessions?: unknown[] } = {}) {
+function fakeEvents(overrides: { connected?: boolean; sessions?: unknown[]; approvals?: unknown[] } = {}) {
   return {
     sessions: signal(overrides.sessions ?? []),
-    approvals: signal([]),
+    approvals: signal(overrides.approvals ?? []),
     managers: signal([]),
     connected: signal(overrides.connected ?? true),
   };
 }
 
-async function setUp(overrides: { connected?: boolean; sessions?: unknown[] } = {}) {
+async function setUp(overrides: { connected?: boolean; sessions?: unknown[]; approvals?: unknown[] } = {}) {
   TestBed.configureTestingModule({
     providers: [
       provideRouter(testRoutes, withComponentInputBinding()),
@@ -214,6 +214,47 @@ describe('AppShellComponent', () => {
     await harness.fixture.whenStable();
 
     expect(document.activeElement).toBe(trigger);
+  });
+
+  it('gives the Sessions region and the Helm list independent scroll areas so neither can grow over the other', async () => {
+    const { root } = await setUp();
+    const sessions = root.querySelector('[data-testid="app-nav"] .sessions') as HTMLElement;
+    const helmList = root.querySelector('[data-testid="app-nav"] .helm-list') as HTMLElement;
+
+    const sessionsStyle = getComputedStyle(sessions);
+    const helmListStyle = getComputedStyle(helmList);
+
+    expect(sessionsStyle.overflowY).toBe('auto');
+    expect(sessionsStyle.minHeight).toBe('0px');
+    expect(sessionsStyle.flexGrow).toBe('2');
+    expect(helmListStyle.overflowY).toBe('auto');
+    expect(helmListStyle.minHeight).toBe('0px');
+    expect(helmListStyle.flexGrow).toBe('1.4');
+  });
+
+  it('scrolls the Sessions region internally even with zero sessions, so the tall new-session/new-manager forms never spill onto the Helm list below', async () => {
+    const { root } = await setUp({ sessions: [] });
+    const sessions = root.querySelector('[data-testid="app-nav"] .sessions') as HTMLElement;
+    const sessionListHost = root.querySelector('[data-testid="app-nav"] of-session-list') as HTMLElement;
+
+    const sessionsStyle = getComputedStyle(sessions);
+    expect(sessionsStyle.overflowY).toBe('auto');
+    expect(sessions.contains(sessionListHost.querySelector('of-new-manager-form'))).toBe(true);
+  });
+
+  it('badges the Helm Inbox row with the pending approvals count, hidden when there are none', async () => {
+    const { root } = await setUp({ approvals: [{ id: 'a1' }, { id: 'a2' }] });
+
+    const inbox = root.querySelector('[data-testid="nav-inbox"]') as HTMLElement;
+    const badge = inbox.querySelector('[data-testid="nav-inbox-badge"]');
+    expect(badge).toHaveTextContent('2');
+  });
+
+  it('hides the Inbox badge when there are no pending approvals', async () => {
+    const { root } = await setUp();
+
+    const inbox = root.querySelector('[data-testid="nav-inbox"]') as HTMLElement;
+    expect(inbox.querySelector('[data-testid="nav-inbox-badge"]')).toBeFalsy();
   });
 
   it('never lets a disabled nav item navigate, by click or by keyboard, since it renders as inert text rather than a link', async () => {

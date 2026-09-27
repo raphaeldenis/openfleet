@@ -29,6 +29,9 @@ const RUNNING_STATES = new Set(['generating', 'starting']);
                 @if (item.route) {
                   <a class="nav-item" [routerLink]="item.route" routerLinkActive="active" [attr.data-testid]="'nav-' + item.key">
                     <span class="glyph">{{ item.glyph }}</span><span class="label">{{ item.label }}</span>
+                    @if (item.key === 'inbox' && pendingApprovalsCount() > 0) {
+                      <span class="nav-badge" data-testid="nav-inbox-badge">{{ pendingApprovalsCount() }}</span>
+                    }
                   </a>
                 } @else {
                   <span class="nav-item disabled" aria-disabled="true" [title]="item.availability" [attr.data-testid]="'nav-' + item.key">
@@ -76,11 +79,12 @@ const RUNNING_STATES = new Set(['generating', 'starting']);
     .body { flex: 1; min-height: 0; display: flex; }
     .sidebar { width: 17.5rem; flex: none; display: flex; flex-direction: column; background: var(--side); border-right: 1px solid var(--line); min-height: 0; overflow-y: auto; }
     .brand { height: 2.75rem; flex: none; display: flex; align-items: center; padding: 0 .875rem; font-weight: 600; letter-spacing: -.01em; border-bottom: 1px solid var(--line); }
-    .sessions { display: flex; flex-direction: column; min-height: 0; border-bottom: 1px solid var(--line); }
+    .sessions { flex-grow: 2; flex-shrink: 1; flex-basis: 0; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; border-bottom: 1px solid var(--line); }
     .section-title { display: flex; align-items: center; gap: .375rem; height: 1.875rem; padding: 0 .75rem; font-size: .6875rem; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--mut); }
     .section-title .mono { margin-left: auto; font-family: var(--mono); font-weight: 400; letter-spacing: 0; color: var(--faint); }
-    .helm-list { list-style: none; margin: 0; padding: .375rem; display: flex; flex-direction: column; gap: 1px; overflow-y: auto; }
+    .helm-list { flex-grow: 1.4; flex-shrink: 1; flex-basis: 0; min-height: 0; list-style: none; margin: 0; padding: .375rem; display: flex; flex-direction: column; gap: 1px; overflow-y: auto; }
     .nav-item { display: flex; align-items: center; gap: .5rem; height: 1.75rem; padding: 0 .5rem; border-radius: .375rem; color: var(--fg); }
+    .nav-badge { flex: none; min-width: 1rem; height: 1rem; padding: 0 .25rem; border-radius: .5rem; background: var(--accent); color: var(--on-accent); font-size: .625rem; font-weight: 600; display: flex; align-items: center; justify-content: center; }
     a.nav-item { cursor: pointer; }
     a.nav-item:hover, a.nav-item:focus-visible { background: var(--hover); }
     a.nav-item.active { background: var(--active); }
@@ -116,6 +120,7 @@ export class AppShellComponent {
   protected readonly daemonAddress = DAEMON_ADDRESS;
   protected readonly paletteOpen = signal(false);
   protected readonly runningCount = computed(() => this.events.sessions().filter((s) => RUNNING_STATES.has(s.state)).length);
+  protected readonly pendingApprovalsCount = computed(() => this.events.approvals().length);
   private readonly paletteTrigger = viewChild.required<ElementRef<HTMLButtonElement>>('paletteTrigger');
 
   onSessionSelected(sessionId: string): void {
