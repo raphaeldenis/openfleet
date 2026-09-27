@@ -38,4 +38,28 @@ describe('environment', () => {
 
     expect(environment.daemonAddress).toBe('127.0.0.1:9999');
   });
+
+  it('apiUrl strips a single trailing slash stored in localStorage', () => {
+    localStorage.setItem('openfleet.apiUrl', 'http://127.0.0.1:7331/');
+
+    expect(environment.apiUrl).toBe('http://127.0.0.1:7331');
+  });
+
+  it('apiUrl strips repeated trailing slashes stored in localStorage', () => {
+    localStorage.setItem('openfleet.apiUrl', 'http://127.0.0.1:7331//');
+
+    expect(environment.apiUrl).toBe('http://127.0.0.1:7331');
+  });
+
+  it('apiUrl trims surrounding whitespace and a trailing slash stored in localStorage', () => {
+    localStorage.setItem('openfleet.apiUrl', ' http://h:1/ ');
+
+    expect(environment.apiUrl).toBe('http://h:1');
+  });
+
+  it('daemonAddress has no trailing slash when apiUrl was stored with one', () => {
+    localStorage.setItem('openfleet.apiUrl', 'http://127.0.0.1:7331/');
+
+    expect(environment.daemonAddress).toBe('127.0.0.1:7331');
+  });
 });

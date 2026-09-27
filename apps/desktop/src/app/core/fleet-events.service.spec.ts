@@ -49,6 +49,19 @@ describe('FleetEventsService', () => {
   beforeEach(() => {
     FakeWebSocket.instances = [];
     vi.stubGlobal('WebSocket', FakeWebSocket);
+    localStorage.clear();
+  });
+  afterEach(() => {
+    localStorage.clear();
+  });
+
+  it('builds a ws URL with a single slash before "ws" even when apiUrl was stored with a trailing slash', () => {
+    localStorage.setItem('openfleet.apiUrl', 'http://127.0.0.1:7331/');
+    const service = new FleetEventsService();
+
+    service.connect();
+
+    expect(FakeWebSocket.instances[0]!.url).toMatch(/[^/]\/ws\?/);
   });
 
   it('seeds sessions and approvals from the snapshot event instead of a REST call', () => {
