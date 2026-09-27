@@ -3,6 +3,7 @@ import { FormsModule } from '@angular/forms';
 import type { SessionState } from '@openfleet/shared';
 import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
+import { runGuarded } from '../core/run-guarded';
 
 const MODEL_SWITCH_ERROR = 'Could not switch model — try again.';
 
@@ -47,6 +48,9 @@ export class ModelSelectorComponent {
   private readonly api = inject(FleetApiService);
   readonly rungs = MODEL_RUNGS;
   chosenRung: (typeof MODEL_RUNGS)[number] = 'sonnet';
+  // The last rung a switch actually confirmed (or the initial default) — a failed switch reverts
+  // `chosenRung` here instead of leaving the select showing the rejected choice.
+  private confirmedRung: (typeof MODEL_RUNGS)[number] = 'sonnet';
   readonly applying = signal(false);
   readonly switchStatus = signal<'relaunching' | 'deferred' | null>(null);
   readonly switchError = signal<string | null>(null);
@@ -61,6 +65,7 @@ export class ModelSelectorComponent {
     effect(() => {
       this.sessionId();
       this.chosenRung = 'sonnet';
+      this.confirmedRung = 'sonnet';
       this.applying.set(false);
       this.switchStatus.set(null);
       this.switchError.set(null);
@@ -96,24 +101,25 @@ export class ModelSelectorComponent {
   }
 
   async apply(): Promise<void> {
-    if (this.applying()) return;
-    this.applying.set(true);
-    this.switchError.set(null);
     const sessionIdAtApply = this.sessionId();
     const modelAtApply = this.session()?.model ?? null;
     const stateAtApply = this.session()?.state;
-    try {
-      const result = await this.api.updateModel(sessionIdAtApply, this.chosenRung);
+    const attemptedRung = this.chosenRung;
+    await runGuarded(this.applying, this.switchError, MODEL_SWITCH_ERROR, async () => {
+      let result: { status: 'relaunching' | 'deferred' };
+      try {
+        result = await this.api.updateModel(sessionIdAtApply, attemptedRung);
+      } catch (error) {
+        if (this.sessionId() !== sessionIdAtApply) return;
+        this.chosenRung = this.confirmedRung;
+        throw error;
+      }
       if (this.sessionId() !== sessionIdAtApply) return;
+      this.confirmedRung = attemptedRung;
       this.modelBeforeSwitch.set(modelAtApply);
       this.stateBeforeSwitch.set(stateAtApply);
       this.switchStatus.set(result.status);
       this.pendingModelSwitch.emit(result.status === 'deferred');
-    } catch {
-      if (this.sessionId() !== sessionIdAtApply) return;
-      this.switchError.set(MODEL_SWITCH_ERROR);
-    } finally {
-      if (this.sessionId() === sessionIdAtApply) this.applying.set(false);
-    }
+    });
   }
 }

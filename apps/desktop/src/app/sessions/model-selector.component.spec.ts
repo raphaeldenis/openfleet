@@ -225,6 +225,24 @@ describe('ModelSelectorComponent', () => {
     await waitFor(() => expect(screen.queryByTestId('model-switch-status')).toBeNull());
   });
 
+  it('reverts the select to the previously confirmed rung after a failed switch, instead of keeping the rejected choice', async () => {
+    // Arrange
+    const api = { updateModel: vi.fn().mockRejectedValue(new Error('session_closed')) };
+    await render(ModelSelectorComponent, {
+      bindings: [inputBinding('sessionId', () => 's1')],
+      providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: fakeEvents('claude-sonnet-5') }],
+    });
+    const select = screen.getByTestId('model-select') as HTMLSelectElement;
+
+    // Act
+    await userEvent.selectOptions(select, 'opus');
+    await userEvent.click(screen.getByTestId('apply-model'));
+    await waitFor(() => expect(screen.queryByTestId('model-switch-error')).toBeTruthy());
+
+    // Assert
+    expect(select.value).toBe('sonnet');
+  });
+
   it('never types a slash-model command into the UI', async () => {
     await render(ModelSelectorComponent, {
       bindings: [inputBinding('sessionId', () => 's1')],
