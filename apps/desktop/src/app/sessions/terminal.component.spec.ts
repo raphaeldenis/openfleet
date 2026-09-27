@@ -18,6 +18,18 @@ function fakeEventsService() {
 }
 
 describe('TerminalComponent', () => {
+  it('shrinks instead of claiming its full flex height, so a sibling like the permission gate card stays visible', async () => {
+    // Structure/CSS-only: this asserts the host's own flex sizing (a real layout regression — the
+    // gate card pushed below the viewport in waiting_permission — is only visible in a browser).
+    const fake = fakeEventsService();
+    const { fixture } = await render(TerminalComponent, {
+      bindings: [inputBinding('sessionId', () => 's1')],
+      providers: [{ provide: FleetEventsService, useValue: fake }],
+    });
+    expect(fixture.nativeElement).toHaveStyle({ flex: '1 1 auto', minHeight: '0' });
+  });
+
+
   it('forwards typed keys to the session and writes replay then live output in order, over one channel', async () => {
     const fake = fakeEventsService();
     const { fixture } = await render(TerminalComponent, {
