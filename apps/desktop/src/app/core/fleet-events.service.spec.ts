@@ -118,6 +118,17 @@ describe('FleetEventsService', () => {
 
     expect(service.snapshotReceived()).toBe(true);
   });
+
+  it('applies a session.updated event (a PATCH rename) to the live session list instead of dropping it as an unknown event', () => {
+    const service = new FleetEventsService();
+    service.connect();
+    const socket = FakeWebSocket.instances[0]!;
+    socket.dispatchMessage({ type: 'snapshot', sessions: [session('s1', { name: 'Gimli' })], approvals: [] });
+
+    socket.dispatchMessage({ type: 'session.updated', session: session('s1', { name: 'Legolas' }) });
+
+    expect(service.sessions()).toEqual([session('s1', { name: 'Legolas' })]);
+  });
 });
 
 describe('FleetEventsService managers', () => {
