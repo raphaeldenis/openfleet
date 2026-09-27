@@ -1,4 +1,3 @@
-import { execFileSync } from 'node:child_process';
 import { chmodSync, mkdtempSync, rmdirSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,19 +6,11 @@ import { openDatabase } from '../db/database.js';
 import { FakeHandle, FakeHarness } from '../harness/fakeHarness.js';
 import type { Harness, HarnessHandle, HarnessLaunch } from '../harness/harness.js';
 import { EventBus } from '../events/eventBus.js';
-import { childEnvironment } from '../process/childEnvironment.js';
+import { makeRepo } from '../git/testRepo.js';
 import { DaemonShuttingDownError, DEFAULT_CLOSE_ESCALATE_MS, DELIVERY_RETRY_MS, MAX_DELIVERY_RETRIES, PARKED_RETRY_MS, RESUME_LAUNCH_FAILED_EXIT_CODE, RESUME_TIMEOUT_EXIT_CODE, SessionReopenError, SessionService, SUBMIT_KEYSTROKE_DELAY_MS, TURN_START_TIMEOUT_MS } from './sessionService.js';
 import { MessageQueue } from './messageQueue.js';
 import { SessionRepository } from './sessionRepository.js';
 import { PERMISSION_MODES, type ServerEvent } from '@openfleet/shared';
-
-function makeRepo(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'of-repo-'));
-  const env = childEnvironment(process.env);
-  execFileSync('git', ['init', '-b', 'main'], { cwd: dir, env });
-  execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '--allow-empty', '-m', 'init'], { cwd: dir, env });
-  return dir;
-}
 
 function setup() {
   const db = openDatabase(':memory:');

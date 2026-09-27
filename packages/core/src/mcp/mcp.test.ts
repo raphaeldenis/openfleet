@@ -1,7 +1,6 @@
 import { MANAGER_ROLE } from '@openfleet/shared';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, mkdtempSync, realpathSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -13,21 +12,13 @@ import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
 import { ApprovalService } from '../governance/approvalService.js';
 import { FakeHarness } from '../harness/fakeHarness.js';
+import { makeRepo } from '../git/testRepo.js';
 import { ManagerRepository } from '../managers/managerRepository.js';
 import { ManagerService } from '../managers/managerService.js';
 import { PulseScheduler } from '../managers/pulseScheduler.js';
 import { DEFAULT_MODEL_TABLE } from '../models.js';
-import { childEnvironment } from '../process/childEnvironment.js';
 import { SessionService } from '../sessions/sessionService.js';
 import { createMcpHandler } from './mcpServer.js';
-
-function makeRepo(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'of-repo-'));
-  const env = childEnvironment(process.env);
-  execFileSync('git', ['init', '-b', 'main'], { cwd: dir, env });
-  execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '--allow-empty', '-m', 'init'], { cwd: dir, env });
-  return dir;
-}
 
 // create_session now requires its directory to already exist (fix loop 2, decision 1+3+5) — this makes
 // that directory real under the shared worktrees root fixture, idempotently across test runs.

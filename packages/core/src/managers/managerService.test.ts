@@ -1,4 +1,3 @@
-import { execFileSync } from 'node:child_process';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,18 +5,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
 import { FakeHarness } from '../harness/fakeHarness.js';
+import { makeRepo } from '../git/testRepo.js';
 import { ManagerRepository } from './managerRepository.js';
 import { ManagerService } from './managerService.js';
-import { childEnvironment } from '../process/childEnvironment.js';
 import { SessionService } from '../sessions/sessionService.js';
-
-function makeRepo(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'of-repo-'));
-  const env = childEnvironment(process.env);
-  execFileSync('git', ['init', '-b', 'main'], { cwd: dir, env });
-  execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '--allow-empty', '-m', 'init'], { cwd: dir, env });
-  return dir;
-}
 
 function setup() {
   const db = openDatabase(':memory:');

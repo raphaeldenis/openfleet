@@ -3,16 +3,8 @@ import { chmodSync, mkdirSync, mkdtempSync, existsSync, readFileSync, symlinkSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { childEnvironment } from '../process/childEnvironment.js';
+import { makeRepo } from './testRepo.js';
 import { createWorktree, isPathWithin, sameGitRepository, WorktreeError } from './worktrees.js';
-
-function makeRepo(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'of-repo-'));
-  const env = childEnvironment(process.env);
-  execFileSync('git', ['init', '-b', 'main'], { cwd: dir, env });
-  execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '--allow-empty', '-m', 'init'], { cwd: dir, env });
-  return dir;
-}
 
 describe('createWorktree', () => {
   it('creates a worktree on a new branch under worktreesRoot', async () => {
