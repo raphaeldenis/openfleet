@@ -168,6 +168,21 @@ describe('PermissionModePickerComponent', () => {
     expect(screen.queryByTestId('permission-mode-bypass-confirm-row')).toBeNull();
   });
 
+  it('puts the select back on the applied mode when the bypassPermissions confirmation is cancelled', async () => {
+    const api = { updatePermissionMode: vi.fn() };
+    await render(PermissionModePickerComponent, {
+      bindings: [inputBinding('sessionId', () => 's1'), inputBinding('currentMode', () => 'manual' as const)],
+      providers: providersWith(api),
+    });
+    const select = screen.getByTestId('permission-mode-select') as HTMLSelectElement;
+
+    await userEvent.selectOptions(select, 'bypassPermissions');
+    await userEvent.click(screen.getByTestId('apply-permission-mode'));
+    await userEvent.click(screen.getByTestId('permission-mode-bypass-cancel'));
+
+    expect(select.value).toBe('manual');
+  });
+
   it('surfaces an error instead of silently discarding a failed mode switch', async () => {
     const api = { updatePermissionMode: vi.fn().mockRejectedValue(new Error('session_closed')) };
     await render(PermissionModePickerComponent, {

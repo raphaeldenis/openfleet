@@ -127,6 +127,7 @@ export class PermissionModePickerComponent {
 
   cancelBypass(): void {
     this.confirmingBypass.set(false);
+    this.chosenMode = this.confirmedMode;
   }
 
   confirmBypass(): void {
