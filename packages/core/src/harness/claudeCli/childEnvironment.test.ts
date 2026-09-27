@@ -88,4 +88,25 @@ describe('childEnvironment', () => {
 
     expect(parentEnv).toEqual(parentEnvSnapshot);
   });
+
+  it('drops every Scape host-identity marker a launched daemon must not pass on to a nested claude', () => {
+    const parentEnv = {
+      SCAPE_SESSION_UUID: 'session-uuid',
+      SCAPE_PARENT_ARGUS_ID: 'argus-id',
+      SCAPE_EDIT_CAP: 'cap-token',
+      SCAPE_EDIT_SOCK: '/tmp/scape-edit.sock',
+      SCAPE_EDIT_PUBKEY: 'pubkey',
+      SCAPE_EMBEDDED: '1',
+      SCAPE_APP: 'scape',
+      PATH: '/usr/bin',
+    };
+
+    expect(childEnvironment(parentEnv)).toEqual({ PATH: '/usr/bin' });
+  });
+
+  it('keeps a Scape-looking configuration variable, which is not host identity or capability', () => {
+    const parentEnv = { SCAPE_THEME: 'dark' };
+
+    expect(childEnvironment(parentEnv)).toEqual({ SCAPE_THEME: 'dark' });
+  });
 });
