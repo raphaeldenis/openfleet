@@ -109,4 +109,24 @@ describe('childEnvironment', () => {
 
     expect(childEnvironment(parentEnv)).toEqual({ SCAPE_THEME: 'dark' });
   });
+
+  it('drops every marker from both the Claude Code and Scape families in one call, while keeping near-miss and case-variant names', () => {
+    const parentEnv = {
+      CLAUDECODE: '1',
+      CLAUDE_CODE_SESSION_ID: 'x',
+      SCAPE_SESSION_UUID: 'session-uuid',
+      SCAPE_EMBEDDED: '1',
+      scape_session_uuid: 'wrong-case',
+      SCAPE_SESSION: 'missing-suffix',
+      SCAPE_SESSION_UUIDX: 'extra-suffix',
+      PATH: '/usr/bin',
+    };
+
+    expect(childEnvironment(parentEnv)).toEqual({
+      scape_session_uuid: 'wrong-case',
+      SCAPE_SESSION: 'missing-suffix',
+      SCAPE_SESSION_UUIDX: 'extra-suffix',
+      PATH: '/usr/bin',
+    });
+  });
 });

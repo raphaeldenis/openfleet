@@ -53,6 +53,33 @@ describe('ClaudeCliHarness', () => {
     }
   });
 
+  it('spawns the CLI without any inherited Scape host-identity markers, alongside Claude Code markers, and still sets TERM', async () => {
+    const parentSnapshot = { ...process.env };
+    Object.assign(process.env, {
+      CLAUDECODE: '1',
+      SCAPE_SESSION_UUID: 'session-uuid',
+      SCAPE_PARENT_ARGUS_ID: 'argus-id',
+      SCAPE_EMBEDDED: '1',
+    });
+
+    try {
+      const { ClaudeCliHarness } = await import('./claudeCliHarness.js');
+      new ClaudeCliHarness().start(launch);
+
+      const [, , options] = spawn.mock.calls[0]!;
+      const childEnv = options.env as Record<string, string>;
+
+      expect(childEnv.PATH).toBe(process.env.PATH);
+      expect(childEnv.TERM).toBe('xterm-256color');
+      expect(childEnv.CLAUDECODE).toBeUndefined();
+      expect(childEnv.SCAPE_SESSION_UUID).toBeUndefined();
+      expect(childEnv.SCAPE_PARENT_ARGUS_ID).toBeUndefined();
+      expect(childEnv.SCAPE_EMBEDDED).toBeUndefined();
+    } finally {
+      process.env = parentSnapshot;
+    }
+  });
+
   it('overrides an inherited TERM and keeps CLAUDE_CONFIG_DIR, which is not a session marker', async () => {
     const parentSnapshot = { ...process.env };
     Object.assign(process.env, { TERM: 'dumb', CLAUDE_CONFIG_DIR: '/home/user/.claude' });
