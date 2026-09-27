@@ -1,12 +1,23 @@
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { openDatabase } from '../db/database.js';
 import { FakeHandle, FakeHarness } from '../harness/fakeHarness.js';
 import type { Harness, HarnessHandle, HarnessLaunch } from '../harness/harness.js';
 import { EventBus } from '../events/eventBus.js';
-import { DEFAULT_CLOSE_ESCALATE_MS, DELIVERY_RETRY_MS, MAX_DELIVERY_RETRIES, PARKED_RETRY_MS, RESUME_LAUNCH_FAILED_EXIT_CODE, RESUME_TIMEOUT_EXIT_CODE, SessionService, SUBMIT_KEYSTROKE_DELAY_MS, TURN_START_TIMEOUT_MS } from './sessionService.js';
+import { DEFAULT_CLOSE_ESCALATE_MS, DELIVERY_RETRY_MS, MAX_DELIVERY_RETRIES, PARKED_RETRY_MS, RESUME_LAUNCH_FAILED_EXIT_CODE, RESUME_TIMEOUT_EXIT_CODE, SessionReopenError, SessionService, SUBMIT_KEYSTROKE_DELAY_MS, TURN_START_TIMEOUT_MS } from './sessionService.js';
 import { MessageQueue } from './messageQueue.js';
 import { SessionRepository } from './sessionRepository.js';
 import { PERMISSION_MODES, type ServerEvent } from '@openfleet/shared';
+
+function makeRepo(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'of-repo-'));
+  execFileSync('git', ['init', '-b', 'main'], { cwd: dir });
+  execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '--allow-empty', '-m', 'init'], { cwd: dir });
+  return dir;
+}
 
 function setup() {
   const db = openDatabase(':memory:');
@@ -1582,5 +1593,143 @@ describe('SessionService submit-keystroke hostile cases', () => {
     expect(resumedHandle.written).toEqual(['orphaned', '\r']);
     const deliveredForThisMessage = events.filter((e) => e.type === 'message.delivered' && e.messageId === messageId);
     expect(deliveredForThisMessage).toHaveLength(1);
+  });
+});
+
+describe('SessionService.createInWorktree', () => {
+  it("persists the branch createWorktree used, so the session record carries it", async () => {
+    const repoPath = makeRepo();
+    const worktreesRoot = mkdtempSync(join(tmpdir(), 'of-wt-'));
+    const db = openDatabase(':memory:');
+    const harness = new FakeHarness();
+    const bus = new EventBus();
+    const service = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot });
+
+    const session = await service.createInWorktree({ directory: repoPath, name: 'G', harness: 'fake', emoji: '🤖', repoPath, branchName: 'task/CCM-6' });
+
+    expect(session.branch).toBe('task/CCM-6');
+    expect(service.get(session.id)!.branch).toBe('task/CCM-6');
+  });
+
+  it('leaves branch undefined for a session created directly, outside a worktree', async () => {
+    const { service } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    expect(session.branch).toBeUndefined();
+  });
+});
+
+describe('SessionService.rename', () => {
+  it('renames a session\'s name and emoji and emits session.updated with the full session', async () => {
+    const { service, events } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+
+    const renamed = service.rename(session.id, { name: 'Legolas', emoji: '🏹' });
+
+    expect(renamed.name).toBe('Legolas');
+    expect(renamed.emoji).toBe('🏹');
+    expect(events).toContainEqual({ type: 'session.updated', session: renamed });
+  });
+
+  it('renames only the field given, leaving the other untouched', async () => {
+    const { service } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+
+    const renamed = service.rename(session.id, { emoji: '🏹' });
+
+    expect(renamed.name).toBe('G');
+    expect(renamed.emoji).toBe('🏹');
+  });
+
+  it('renames a closed session — only the label changes, the session stays closed', async () => {
+    const { service, harness } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    harness.handles[0]!.emitExit(0);
+
+    const renamed = service.rename(session.id, { name: 'Legolas' });
+
+    expect(renamed.name).toBe('Legolas');
+    expect(renamed.state).toBe('closed');
+  });
+});
+
+describe('SessionService.updatePermissionMode', () => {
+  it('relaunches an idle session with --resume under the new permission mode', async () => {
+    vi.useFakeTimers();
+    const { service, harness } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+
+    const result = service.updatePermissionMode(session.id, 'bypassPermissions');
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(result.status).toBe('relaunching');
+    expect(service.get(session.id)!.permissionMode).toBe('bypassPermissions');
+    expect(harness.launches[1]!.permissionMode).toBe('bypassPermissions');
+    expect(harness.launches[1]!.resuming).toBe(true);
+  });
+
+  it('defers a permission-mode change while generating, relaunching only after Stop makes the session idle again', async () => {
+    vi.useFakeTimers();
+    const { service, harness } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit' }));
+
+    const result = service.updatePermissionMode(session.id, 'bypassPermissions');
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(result.status).toBe('deferred');
+    expect(harness.launches).toHaveLength(1);
+
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'Stop' }));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(harness.launches).toHaveLength(2);
+    expect(harness.launches[1]!.permissionMode).toBe('bypassPermissions');
+  });
+
+  it('rejects a permission-mode change on a session that has already closed', async () => {
+    const { service, harness } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    harness.handles[0]!.emitExit(0);
+
+    expect(() => service.updatePermissionMode(session.id, 'bypassPermissions')).toThrow();
+  });
+});
+
+describe('SessionService.reopen', () => {
+  it('resumes a closed session with --resume, fresh tokens, the same model, in the same directory', async () => {
+    vi.useFakeTimers();
+    const { service, harness } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖', model: 'claude-opus-5-5' });
+    const originalTokens = service.tokens(session.id)!;
+    harness.handles[0]!.emitExit(0);
+    expect(service.get(session.id)!.state).toBe('closed');
+
+    const reopened = service.reopen(session.id);
+
+    expect(reopened.state).toBe('starting');
+    expect(harness.launches[1]!.resuming).toBe(true);
+    expect(harness.launches[1]!.directory).toBe('/tmp');
+    expect(harness.launches[1]!.model).toBe('claude-opus-5-5');
+    const rotated = service.tokens(session.id)!;
+    expect(rotated.hookToken).not.toBe(originalTokens.hookToken);
+  });
+
+  it('rejects reopening a session that is not closed', async () => {
+    const { service } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+
+    expect(() => service.reopen(session.id)).toThrow(SessionReopenError);
+  });
+
+  it('rejects reopening a closed session whose directory no longer exists, leaving it closed', async () => {
+    const { service, harness } = setup();
+    const missingDir = join(tmpdir(), `of-missing-${Date.now()}`);
+    const session = await service.create({ directory: missingDir, name: 'G', harness: 'fake', emoji: '🤖' });
+    harness.handles[0]!.emitExit(0);
+
+    expect(() => service.reopen(session.id)).toThrow(SessionReopenError);
+    expect(service.get(session.id)!.state).toBe('closed');
   });
 });

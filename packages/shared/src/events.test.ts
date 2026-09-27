@@ -26,6 +26,10 @@ describe('ServerEvent', () => {
   it('announces a manager pulse with its ManagerView', () => {
     expectTypeOf<Extract<ServerEvent, { type: 'manager.pulsed' }>['manager']>().toEqualTypeOf<ManagerView>();
   });
+
+  it('announces a session update (rename) with the full updated Session', () => {
+    expectTypeOf<Extract<ServerEvent, { type: 'session.updated' }>['session']>().toEqualTypeOf<Session>();
+  });
 });
 
 describe('Session', () => {
@@ -33,5 +37,9 @@ describe('Session', () => {
     expectTypeOf<Session['permissionMode']>().toEqualTypeOf<
       'manual' | 'acceptEdits' | 'plan' | 'auto' | 'bypassPermissions' | 'dontAsk' | undefined
     >();
+  });
+
+  it('exposes an optional branch, the worktree branch it was created on', () => {
+    expectTypeOf<Session['branch']>().toEqualTypeOf<string | undefined>();
   });
 });

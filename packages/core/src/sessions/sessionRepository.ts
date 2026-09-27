@@ -4,7 +4,8 @@ import { PERMISSION_MODES, type HarnessId, type PermissionMode, type Session, ty
 interface Row {
   id: string; name: string; emoji: string; directory: string; worktree: string | null; model: string | null;
   parent_id: string | null; role: string | null; harness: HarnessId; state: SessionState; state_since: string;
-  exit_code: number | null; hook_token: string; mcp_token: string; permission_mode: string | null; created_at: string; closed_at: string | null;
+  exit_code: number | null; hook_token: string; mcp_token: string; permission_mode: string | null; branch: string | null;
+  created_at: string; closed_at: string | null;
 }
 
 export interface NormalizedPermissionMode { mode: PermissionMode | undefined; wasRecognized: boolean }
@@ -26,6 +27,7 @@ export function normalizePermissionMode(stored: string | null | undefined): Norm
 
 const toSession = (r: Row): Session => ({
   id: r.id, name: r.name, emoji: r.emoji, directory: r.directory, worktree: r.worktree ?? undefined,
+  branch: r.branch ?? undefined,
   model: r.model ?? undefined, parentId: r.parent_id ?? undefined, role: r.role ?? undefined, harness: r.harness,
   state: r.state, stateSince: r.state_since, exitCode: r.exit_code ?? undefined,
   permissionMode: normalizePermissionMode(r.permission_mode).mode,
@@ -36,8 +38,8 @@ export class SessionRepository {
   constructor(private readonly db: DatabaseSync) {}
 
   insert(row: Omit<Row, 'exit_code' | 'closed_at'>): void {
-    this.db.prepare(`INSERT INTO sessions (id, name, emoji, directory, worktree, model, parent_id, role, harness, state, state_since, hook_token, mcp_token, permission_mode, created_at)
-      VALUES (@id, @name, @emoji, @directory, @worktree, @model, @parent_id, @role, @harness, @state, @state_since, @hook_token, @mcp_token, @permission_mode, @created_at)`).run(row as never);
+    this.db.prepare(`INSERT INTO sessions (id, name, emoji, directory, worktree, model, parent_id, role, harness, state, state_since, hook_token, mcp_token, permission_mode, branch, created_at)
+      VALUES (@id, @name, @emoji, @directory, @worktree, @model, @parent_id, @role, @harness, @state, @state_since, @hook_token, @mcp_token, @permission_mode, @branch, @created_at)`).run(row as never);
   }
   get(id: string): Session | undefined {
     const row = this.db.prepare('SELECT * FROM sessions WHERE id = ?').get(id) as Row | undefined;
@@ -51,6 +53,17 @@ export class SessionRepository {
   }
   setModel(id: string, model: string): void {
     this.db.prepare('UPDATE sessions SET model = ? WHERE id = ?').run(model, id);
+  }
+  setPermissionMode(id: string, mode: PermissionMode): void {
+    this.db.prepare('UPDATE sessions SET permission_mode = ? WHERE id = ?').run(mode, id);
+  }
+  setNameAndEmoji(id: string, patch: { name?: string; emoji?: string }): void {
+    const assignments: string[] = [];
+    const values: string[] = [];
+    if (patch.name !== undefined) { assignments.push('name = ?'); values.push(patch.name); }
+    if (patch.emoji !== undefined) { assignments.push('emoji = ?'); values.push(patch.emoji); }
+    if (assignments.length === 0) return;
+    this.db.prepare(`UPDATE sessions SET ${assignments.join(', ')} WHERE id = ?`).run(...values, id);
   }
   setClosed(id: string, exitCode: number | undefined, at: string): void {
     this.db.prepare(`UPDATE sessions SET state = 'closed', state_since = ?, exit_code = ?, closed_at = ? WHERE id = ?`).run(at, exitCode ?? null, at, id);

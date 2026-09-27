@@ -1,15 +1,19 @@
 import type { ManagerSpec, SessionSpec } from '@openfleet/shared';
-import { SessionSpecSchema } from '@openfleet/shared';
+import { PERMISSION_MODES, SessionSpecSchema } from '@openfleet/shared';
 import { z } from 'zod';
 import { ApprovalError, type ApprovalService } from '../governance/approvalService.js';
 import type { FakeHandle } from '../harness/fakeHarness.js';
 import type { ManagerService } from '../managers/managerService.js';
 import type { PulseScheduler } from '../managers/pulseScheduler.js';
 import { resolveModel, type ModelTable } from '../models.js';
-import { SessionClosedError, type SessionService } from '../sessions/sessionService.js';
+import { SessionClosedError, SessionReopenError, type SessionService } from '../sessions/sessionService.js';
 import { json, Router } from './router.js';
 
 const CreateSessionSchema = SessionSpecSchema.extend({ repoPath: z.string().optional(), branchName: z.string().optional() });
+
+const RenameSessionSchema = z
+  .object({ name: z.string().trim().min(1).max(100).optional(), emoji: z.string().trim().min(1).max(32).optional() })
+  .refine((patch) => patch.name !== undefined || patch.emoji !== undefined, { message: 'name or emoji is required' });
 
 export function registerRestRoutes(router: Router, deps: { sessions: SessionService; approvals: ApprovalService; modelTable: ModelTable; managers: ManagerService; pulseScheduler: PulseScheduler }): void {
   router.add('GET', '/api/sessions', ({ res }) => json(res, 200, deps.sessions.list()));
@@ -32,10 +36,39 @@ export function registerRestRoutes(router: Router, deps: { sessions: SessionServ
     json(res, 200, result.coalesced ? { pulsed: false, coalesced: true } : { pulsed: true });
   });
 
-  router.add('POST', '/api/sessions/:id/messages', ({ res, params, body }) => {
+  router.add('PATCH', '/api/sessions/:id', ({ res, params, body }) => {
     if (!deps.sessions.get(params.id!)) return json(res, 404, { error: 'not_found' });
+    const patch = RenameSessionSchema.parse(body);
+    json(res, 200, deps.sessions.rename(params.id!, patch));
+  });
+
+  router.add('POST', '/api/sessions/:id/messages', ({ res, params, body }) => {
+    const session = deps.sessions.get(params.id!);
+    if (!session) return json(res, 404, { error: 'not_found' });
+    if (session.state === 'closed') return json(res, 409, { error: 'session_closed' });
     const { body: text } = z.object({ body: z.string().min(1) }).parse(body);
     json(res, 200, deps.sessions.sendMessage({ sessionId: params.id!, body: text }));
+  });
+
+  router.add('POST', '/api/sessions/:id/reopen', ({ res, params }) => {
+    if (!deps.sessions.get(params.id!)) return json(res, 404, { error: 'not_found' });
+    try {
+      json(res, 200, deps.sessions.reopen(params.id!));
+    } catch (error) {
+      if (!(error instanceof SessionReopenError)) throw error;
+      json(res, 409, { error: error.code });
+    }
+  });
+
+  router.add('POST', '/api/sessions/:id/permission-mode', ({ res, params, body }) => {
+    if (!deps.sessions.get(params.id!)) return json(res, 404, { error: 'not_found' });
+    const { mode } = z.object({ mode: z.enum(PERMISSION_MODES) }).parse(body);
+    try {
+      json(res, 200, deps.sessions.updatePermissionMode(params.id!, mode));
+    } catch (error) {
+      if (!(error instanceof SessionClosedError)) throw error;
+      json(res, 409, { error: 'session_closed' });
+    }
   });
 
   router.add('POST', '/api/sessions/:id/input', ({ res, params, body }) => {

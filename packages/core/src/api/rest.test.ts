@@ -199,6 +199,122 @@ describe('REST', () => {
     expect(res.status).toBe(500);
   });
 
+  it('renames a session\'s name and emoji via PATCH', async () => {
+    const created = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' }) })).json();
+    const res = await api(`/api/sessions/${created.id}`, { method: 'PATCH', body: JSON.stringify({ name: 'Legolas', emoji: '🏹' }) });
+    expect(res.status).toBe(200);
+    const updated = await res.json();
+    expect(updated.name).toBe('Legolas');
+    expect(updated.emoji).toBe('🏹');
+  });
+
+  it('renames only the field given', async () => {
+    const created = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' }) })).json();
+    const res = await api(`/api/sessions/${created.id}`, { method: 'PATCH', body: JSON.stringify({ name: 'Legolas' }) });
+    expect(res.status).toBe(200);
+    const updated = await res.json();
+    expect(updated.name).toBe('Legolas');
+    expect(updated.emoji).toBe('🤖');
+  });
+
+  it('allows renaming a closed session — only the label changes', async () => {
+    const created = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
+    await api(`/api/sessions/${created.id}/close`, { method: 'POST' });
+    const res = await api(`/api/sessions/${created.id}`, { method: 'PATCH', body: JSON.stringify({ name: 'Legolas' }) });
+    expect(res.status).toBe(200);
+    expect((await res.json()).state).toBe('closed');
+  });
+
+  it('404s a rename for an unknown session', async () => {
+    const res = await api('/api/sessions/nope', { method: 'PATCH', body: JSON.stringify({ name: 'Legolas' }) });
+    expect(res.status).toBe(404);
+  });
+
+  it('400s a rename with an empty name', async () => {
+    const created = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
+    const res = await api(`/api/sessions/${created.id}`, { method: 'PATCH', body: JSON.stringify({ name: '' }) });
+    expect(res.status).toBe(400);
+  });
+
+  it('400s a rename with neither name nor emoji given', async () => {
+    const created = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
+    const res = await api(`/api/sessions/${created.id}`, { method: 'PATCH', body: JSON.stringify({}) });
+    expect(res.status).toBe(400);
+  });
+
+  it('answers a rename CORS preflight, since the desktop shell will send PATCH cross-origin', async () => {
+    const res = await fetch(`${server.url}/api/sessions/whatever`, {
+      method: 'OPTIONS',
+      headers: { origin: 'http://localhost:1420', 'access-control-request-method': 'PATCH', 'access-control-request-headers': 'authorization,content-type' },
+    });
+    expect(res.headers.get('access-control-allow-methods')).toContain('PATCH');
+  });
+
+  it.each(PERMISSION_MODES)('changes the permission mode to "%s" and reports relaunching or deferred', async (mode) => {
+    const created = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
+    const res = await api(`/api/sessions/${created.id}/permission-mode`, { method: 'POST', body: JSON.stringify({ mode }) });
+    expect(res.status).toBe(200);
+    expect(['relaunching', 'deferred']).toContain((await res.json()).status);
+  });
+
+  it('a REST permission-mode change accepts bypassPermissions, unlike the MCP create_session tool', async () => {
+    const created = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
+    const res = await api(`/api/sessions/${created.id}/permission-mode`, { method: 'POST', body: JSON.stringify({ mode: 'bypassPermissions' }) });
+    expect(res.status).toBe(200);
+  });
+
+  it('404s a permission-mode change for an unknown session', async () => {
+    const res = await api('/api/sessions/nope/permission-mode', { method: 'POST', body: JSON.stringify({ mode: 'plan' }) });
+    expect(res.status).toBe(404);
+  });
+
+  it('400s a permission-mode change with a bogus mode', async () => {
+    const created = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
+    const res = await api(`/api/sessions/${created.id}/permission-mode`, { method: 'POST', body: JSON.stringify({ mode: 'yolo' }) });
+    expect(res.status).toBe(400);
+  });
+
+  it('409s a permission-mode change on a session that has already closed', async () => {
+    const created = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
+    await api(`/api/sessions/${created.id}/close`, { method: 'POST' });
+    const res = await api(`/api/sessions/${created.id}/permission-mode`, { method: 'POST', body: JSON.stringify({ mode: 'plan' }) });
+    expect(res.status).toBe(409);
+  });
+
+  it('reopens a closed session, resuming it with a fresh starting state', async () => {
+    const created = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
+    await api(`/api/sessions/${created.id}/close`, { method: 'POST' });
+    const res = await api(`/api/sessions/${created.id}/reopen`, { method: 'POST' });
+    expect(res.status).toBe(200);
+    expect((await res.json()).state).toBe('starting');
+  });
+
+  it('404s reopening an unknown session', async () => {
+    const res = await api('/api/sessions/nope/reopen', { method: 'POST' });
+    expect(res.status).toBe(404);
+  });
+
+  it('409s reopening a session that is not closed', async () => {
+    const created = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
+    const res = await api(`/api/sessions/${created.id}/reopen`, { method: 'POST' });
+    expect(res.status).toBe(409);
+  });
+
+  it('409s reopening a closed session whose directory no longer exists', async () => {
+    const created = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp/of-does-not-exist-anywhere', name: 'G', harness: 'fake' }) })).json();
+    await api(`/api/sessions/${created.id}/close`, { method: 'POST' });
+    const res = await api(`/api/sessions/${created.id}/reopen`, { method: 'POST' });
+    expect(res.status).toBe(409);
+  });
+
+  it('409s posting a message to a closed session instead of silently queuing it', async () => {
+    const created = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
+    await api(`/api/sessions/${created.id}/close`, { method: 'POST' });
+    const res = await api(`/api/sessions/${created.id}/messages`, { method: 'POST', body: JSON.stringify({ body: 'hello' }) });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: 'session_closed' });
+  });
+
   it('a POST /api/sessions carrying a manager block creates a role=manager session routed through ManagerService, not a plain session', async () => {
     const res = await api('/api/sessions', {
       method: 'POST',

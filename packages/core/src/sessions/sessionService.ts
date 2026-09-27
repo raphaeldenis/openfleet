@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import type { DatabaseSync } from 'node:sqlite';
 import type { PermissionMode, Session, SessionSpec } from '@openfleet/shared';
 import { EventBus } from '../events/eventBus.js';
@@ -13,6 +14,12 @@ export interface SessionServiceDeps { db: DatabaseSync; bus: EventBus; harnesses
 export class SessionClosedError extends Error {
   constructor(sessionId: string) {
     super(`session ${sessionId} is closed`);
+  }
+}
+
+export class SessionReopenError extends Error {
+  constructor(public readonly code: 'not_closed' | 'directory_missing', message: string) {
+    super(message);
   }
 }
 
@@ -99,14 +106,14 @@ export class SessionService {
     this.queue = new MessageQueue(deps.db);
   }
 
-  async create(spec: SessionSpec): Promise<Session> {
+  async create(spec: SessionSpec, options?: { branch?: string }): Promise<Session> {
     const id = newId();
     const hookToken = newToken();
     const mcpToken = newToken();
     const now = new Date().toISOString();
     this.repo.insert({ id, name: spec.name, emoji: spec.emoji, directory: spec.directory, worktree: null, model: spec.model ?? null,
       parent_id: spec.parentId ?? null, role: spec.role ?? null, harness: spec.harness, state: 'starting', state_since: now, hook_token: hookToken, mcp_token: mcpToken,
-      permission_mode: spec.permissionMode ?? null, created_at: now });
+      permission_mode: spec.permissionMode ?? null, branch: options?.branch ?? null, created_at: now });
     const harness = this.harnessFor(spec.harness);
     const handle = harness.start({
       sessionId: id, directory: spec.directory, model: spec.model, seededPrompt: spec.seededPrompt,
@@ -130,7 +137,7 @@ export class SessionService {
 
   async createInWorktree(spec: SessionSpec & { repoPath: string; branchName: string }): Promise<Session> {
     const worktree = await createWorktree({ repoPath: spec.repoPath, branchName: spec.branchName, worktreesRoot: this.deps.worktreesRoot });
-    return this.create({ ...spec, directory: worktree.path });
+    return this.create({ ...spec, directory: worktree.path }, { branch: worktree.branch });
   }
 
   hasQueuedMessage(sessionId: string, body: string): boolean {
@@ -156,17 +163,54 @@ export class SessionService {
   // into the transcript; acceptable because the transcript carries the conversation. Upgrade path: drive
   // this through a session-scoped model switch if Claude Code ever offers one, instead of a full restart.
   updateModel(sessionId: string, model: string): { status: 'relaunching' | 'deferred' } {
-    const session = this.require(sessionId);
-    if (session.state === 'closed') throw new SessionClosedError(sessionId);
+    const session = this.requireOpen(sessionId);
     this.repo.setModel(sessionId, model);
     this.deps.bus.emit({ type: 'session.model_changed', sessionId, model });
-    const isIdleConfirmed = canDeliverNow(session.state) && this.deliveryOf(sessionId).phase.name === 'ready' && !this.unfinishedTurns.has(sessionId);
+    return this.relaunchOrDefer(sessionId, session.state);
+  }
+
+  // Same relaunch machinery as updateModel: the mode is only picked up on the next --resume launch
+  // (resolveResumePermissionMode), never typed into the terminal, so a busy session defers it instead.
+  updatePermissionMode(sessionId: string, mode: PermissionMode): { status: 'relaunching' | 'deferred' } {
+    const session = this.requireOpen(sessionId);
+    this.repo.setPermissionMode(sessionId, mode);
+    return this.relaunchOrDefer(sessionId, session.state);
+  }
+
+  private requireOpen(sessionId: string): Session {
+    const session = this.require(sessionId);
+    if (session.state === 'closed') throw new SessionClosedError(sessionId);
+    return session;
+  }
+
+  private relaunchOrDefer(sessionId: string, state: Session['state']): { status: 'relaunching' | 'deferred' } {
+    const isIdleConfirmed = canDeliverNow(state) && this.deliveryOf(sessionId).phase.name === 'ready' && !this.unfinishedTurns.has(sessionId);
     if (!isIdleConfirmed) {
       this.pendingRelaunches.add(sessionId);
       return { status: 'deferred' };
     }
     this.startRelaunch(sessionId);
     return { status: 'relaunching' };
+  }
+
+  // Renaming only changes the label — allowed on a closed session too, since it does not touch the process.
+  rename(sessionId: string, patch: { name?: string; emoji?: string }): Session {
+    this.require(sessionId);
+    this.repo.setNameAndEmoji(sessionId, patch);
+    const session = this.repo.get(sessionId)!;
+    this.deps.bus.emit({ type: 'session.updated', session });
+    return session;
+  }
+
+  // Resumes a closed session through the same --resume path a daemon restart uses (resumeOne): fresh
+  // tokens, same model, same directory. Refuses a session that is not closed, or whose directory has
+  // since been removed (e.g. its worktree was cleaned up) rather than launching into a missing cwd.
+  reopen(sessionId: string): Session {
+    const session = this.require(sessionId);
+    if (session.state !== 'closed') throw new SessionReopenError('not_closed', `session ${sessionId} is not closed`);
+    if (!existsSync(session.directory)) throw new SessionReopenError('directory_missing', `session ${sessionId} directory no longer exists: ${session.directory}`);
+    this.resumeOne(session);
+    return this.repo.get(sessionId)!;
   }
 
   // Closes the running process without telling the user the session is closed, then resumes it under the
