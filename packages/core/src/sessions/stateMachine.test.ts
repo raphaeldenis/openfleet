@@ -28,6 +28,9 @@ describe('nextState', () => {
     // Claude Code compacts context on its own mid-turn: that SessionStart says nothing about the turn.
     ['generating', hook({ hook_event_name: 'SessionStart', source: 'compact' }), 'generating'],
     ['waiting_permission', hook({ hook_event_name: 'SessionStart', source: 'compact' }), 'waiting_permission'],
+    // No Stop hook fires when Escape cancels a turn — a transcript-tailing watch proves it ended instead.
+    ['generating', { kind: 'transcript_interrupted' }, 'idle'],
+    ['closed', { kind: 'transcript_interrupted' }, 'closed'],
   ] as const)('%s + %o → %s', (from, input, expected) => {
     expect(nextState(from, input)).toBe(expected);
   });
@@ -39,6 +42,10 @@ describe('provesTurnEnded', () => {
     expect(provesTurnEnded(hook({ hook_event_name: 'SessionStart', source: 'resume' }))).toBe(true);
     expect(provesTurnEnded(hook({ hook_event_name: 'SessionStart', source: 'clear' }))).toBe(true);
     expect(provesTurnEnded(hook({ hook_event_name: 'SessionStart', source: 'compact' }))).toBe(false);
+  });
+
+  it('accepts a transcript-proven interrupt', () => {
+    expect(provesTurnEnded({ kind: 'transcript_interrupted' })).toBe(true);
   });
 });
 

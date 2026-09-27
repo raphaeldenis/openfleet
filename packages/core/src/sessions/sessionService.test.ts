@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmdirSync, symlinkSync } from 'node:fs';
+import { appendFileSync, mkdtempSync, rmdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
@@ -7,7 +7,7 @@ import { openDatabase } from '../db/database.js';
 import { FakeHandle, FakeHarness } from '../harness/fakeHarness.js';
 import type { Harness, HarnessHandle, HarnessLaunch } from '../harness/harness.js';
 import { EventBus } from '../events/eventBus.js';
-import { DaemonShuttingDownError, DEFAULT_CLOSE_ESCALATE_MS, DELIVERY_RETRY_MS, MAX_DELIVERY_RETRIES, PARKED_RETRY_MS, RESUME_LAUNCH_FAILED_EXIT_CODE, RESUME_TIMEOUT_EXIT_CODE, SessionReopenError, SessionService, SUBMIT_KEYSTROKE_DELAY_MS, TURN_START_TIMEOUT_MS } from './sessionService.js';
+import { DaemonShuttingDownError, DEFAULT_CLOSE_ESCALATE_MS, DELIVERY_RETRY_MS, MAX_DELIVERY_RETRIES, PARKED_RETRY_MS, RESUME_LAUNCH_FAILED_EXIT_CODE, RESUME_TIMEOUT_EXIT_CODE, SessionReopenError, SessionService, SUBMIT_KEYSTROKE_DELAY_MS, TRANSCRIPT_INTERRUPT_POLL_MS, TRANSCRIPT_INTERRUPT_TIMEOUT_MS, TURN_START_TIMEOUT_MS } from './sessionService.js';
 import { MessageQueue } from './messageQueue.js';
 import { SessionRepository } from './sessionRepository.js';
 import { PERMISSION_MODES, type ServerEvent } from '@openfleet/shared';
@@ -1238,6 +1238,78 @@ describe('SessionService submit-keystroke hostile cases', () => {
     // bookkeeping itself stays correct (delivered exactly once) even though the pty sees a double-submit.
     expect(harness.handles[0]!.written).toEqual(['do X', '\r', '\r']);
     expect(events.filter((e) => e.type === 'message.delivered')).toHaveLength(1);
+  });
+
+  describe('idle after an Escape interrupt (no Stop hook fires)', () => {
+    function makeTranscriptFile(): string {
+      const dir = mkdtempSync(join(tmpdir(), 'of-transcript-'));
+      const path = join(dir, 'transcript.jsonl');
+      writeFileSync(path, '');
+      return path;
+    }
+
+    const interruptedLine = () =>
+      `${JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: '[Request interrupted by user]' }] } })}\n`;
+
+    it('moves generating -> idle once the CLI writes the interrupt marker to the transcript an ESC armed', async () => {
+      vi.useFakeTimers();
+      const { service } = setup();
+      const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+      const transcriptPath = makeTranscriptFile();
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: transcriptPath }));
+      expect(service.get(session.id)!.state).toBe('generating');
+
+      service.writeRaw(session.id, '\x1b'); // human presses Escape while the CLI is generating
+      appendFileSync(transcriptPath, interruptedLine());
+      await vi.advanceTimersByTimeAsync(TRANSCRIPT_INTERRUPT_POLL_MS);
+
+      expect(service.get(session.id)!.state).toBe('idle');
+    });
+
+    it('does nothing if no hook has ever reported a transcript_path for the session', async () => {
+      vi.useFakeTimers();
+      const { service } = setup();
+      const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit' })); // no transcript_path
+      expect(service.get(session.id)!.state).toBe('generating');
+
+      expect(() => service.writeRaw(session.id, '\x1b')).not.toThrow();
+      await vi.advanceTimersByTimeAsync(TRANSCRIPT_INTERRUPT_TIMEOUT_MS);
+
+      expect(service.get(session.id)!.state).toBe('generating');
+    });
+
+    it('disarms on a PermissionRequest so a later interrupt line does not wrongly clear the pending prompt', async () => {
+      vi.useFakeTimers();
+      const { service } = setup();
+      const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+      const transcriptPath = makeTranscriptFile();
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: transcriptPath }));
+
+      service.writeRaw(session.id, '\x1b');
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: {} }));
+      expect(service.get(session.id)!.state).toBe('waiting_permission');
+
+      appendFileSync(transcriptPath, interruptedLine());
+      await vi.advanceTimersByTimeAsync(TRANSCRIPT_INTERRUPT_POLL_MS);
+
+      expect(service.get(session.id)!.state).toBe('waiting_permission'); // never wrongly cleared by the stale watch
+    });
+
+    it('disarms after the timeout so a very late interrupt line no longer flips the state', async () => {
+      vi.useFakeTimers();
+      const { service } = setup();
+      const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+      const transcriptPath = makeTranscriptFile();
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: transcriptPath }));
+
+      service.writeRaw(session.id, '\x1b');
+      await vi.advanceTimersByTimeAsync(TRANSCRIPT_INTERRUPT_TIMEOUT_MS);
+      appendFileSync(transcriptPath, interruptedLine());
+      await vi.advanceTimersByTimeAsync(TRANSCRIPT_INTERRUPT_POLL_MS);
+
+      expect(service.get(session.id)!.state).toBe('generating'); // the watch gave up before this line ever appeared
+    });
   });
 
   it('the submit delay does not scale with body length: a very long body still waits exactly SUBMIT_KEYSTROKE_DELAY_MS', async () => {

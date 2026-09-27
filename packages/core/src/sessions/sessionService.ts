@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, realpathSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import type { DatabaseSync } from 'node:sqlite';
 import type { PermissionMode, Session, SessionSpec } from '@openfleet/shared';
 import { EventBus } from '../events/eventBus.js';
@@ -60,6 +60,36 @@ export const MAX_DELIVERY_RETRIES = 3;
 export const PARKED_RETRY_MS = 60_000;
 export const RESUME_TIMEOUT_EXIT_CODE = -1;
 export const RESUME_LAUNCH_FAILED_EXIT_CODE = -2;
+// ponytail: fixed-interval poll on the transcript file's size instead of fs.watch — fs.watch coalesces or
+// drops events on some platforms (notably network/tmpfs mounts) and this only ever needs to catch one
+// appended line within the timeout below; upgrade to fs.watch (or tailing over the hook channel) if the
+// poll interval's latency ever matters.
+export const TRANSCRIPT_INTERRUPT_POLL_MS = 200;
+export const TRANSCRIPT_INTERRUPT_TIMEOUT_MS = 30_000;
+const INTERRUPTED_TRANSCRIPT_MARKER = '[Request interrupted by user]';
+
+interface InterruptWatch { transcriptPath: string; offset: number; timer: ReturnType<typeof setInterval>; timeout: ReturnType<typeof setTimeout> }
+
+// Claude Code fires no Stop hook when Escape cancels a turn, but it does append this line to the
+// session's own transcript JSONL (confirmed in T06h's real-CLI QA evidence) — the one place the daemon
+// can see the turn actually ended.
+function isInterruptedTranscriptLine(line: string): boolean {
+  const trimmedLine = line.trim();
+  if (!trimmedLine) return false;
+  let entry: unknown;
+  try {
+    entry = JSON.parse(trimmedLine);
+  } catch {
+    return false;
+  }
+  const record = entry as { type?: string; message?: { content?: unknown } };
+  const content = record.message?.content;
+  if (record.type !== 'user' || !Array.isArray(content)) return false;
+  return content.some((block) => {
+    const textBlock = block as { type?: string; text?: string };
+    return textBlock.type === 'text' && textBlock.text === INTERRUPTED_TRANSCRIPT_MARKER;
+  });
+}
 
 // ponytail: main.ts constructs exactly one SessionService per real daemon process — this module-level
 // map (rather than an instance field) is what lets a freshly resumed handle outrank a stale pre-restart
@@ -117,6 +147,10 @@ export class SessionService {
   // every hook lost, a pending relaunch (and the queue behind it) waits for the next Stop.
   private readonly unfinishedTurns = new Set<string>();
   private readonly relaunches = new Map<string, Promise<void>>();
+  // Last transcript_path any hook reported for this session — the only way an ESC-armed watch below
+  // knows which file to tail.
+  private readonly transcriptPaths = new Map<string, string>();
+  private readonly interruptWatches = new Map<string, InterruptWatch>();
   // Set once closeAll() starts; refuses any new launch (create, reopen, resumeOne, a relaunch) so it can
   // never spawn a process outside closeAll's own snapshot and survive daemon shutdown.
   private shuttingDown = false;
@@ -331,6 +365,7 @@ export class SessionService {
   // Revokes the old tokens first so the dying process's late hooks and MCP calls reach no session, then
   // forgets its handle before killing it: its exit must not trip markClosed, and nothing may kill it twice.
   private async retireForRelaunch(sessionId: string): Promise<void> {
+    this.disarmInterruptWatch(sessionId);
     this.repo.setTokens(sessionId, newToken(), newToken());
     const handle = this.handles.get(sessionId);
     if (!handle) return;
@@ -341,6 +376,7 @@ export class SessionService {
 
   applyInput(sessionId: string, input: SessionInput): void {
     const session = this.require(sessionId);
+    if (input.kind === 'hook' && input.event.transcript_path) this.transcriptPaths.set(sessionId, input.event.transcript_path);
     const endsUnfinishedTurn = provesTurnEnded(input) && this.unfinishedTurns.has(sessionId);
     if (endsUnfinishedTurn) this.unfinishedTurns.delete(sessionId);
     const state = nextState(session.state, input);
@@ -352,6 +388,9 @@ export class SessionService {
     // Only a real state transition proves the (resumed) process is alive; an unrecognized Notification
     // that leaves the session in 'starting' must not cancel the safety net that would otherwise close it.
     this.clearResumeTimer(sessionId);
+    // Any real transition away from 'generating' (Stop, a permission prompt, the idle_prompt self-heal,
+    // the session closing) makes an armed interrupt watch moot — never let a late-firing one override it.
+    this.disarmInterruptWatch(sessionId);
     const isAwaitingTurnStart = this.deliveryOf(sessionId).phase.name === 'submitted';
     if (isAwaitingTurnStart) this.enter(sessionId, READY); // any real transition proves the submitted turn started
     if (state === 'closed') {
@@ -372,7 +411,61 @@ export class SessionService {
   tokens(sessionId: string): { hookToken: string; mcpToken: string } | undefined { return this.repo.tokens(sessionId); }
   // ponytail: exposes the raw harness handle to the REST edge for test-only routes (fake-output); scope down if the daemon leaves localhost
   harnessHandle(sessionId: string): HarnessHandle | undefined { return this.handles.get(sessionId); }
-  writeRaw(sessionId: string, data: string): void { this.handles.get(sessionId)?.write(data); }
+  writeRaw(sessionId: string, data: string): void {
+    this.handles.get(sessionId)?.write(data);
+    if (data.includes('\x1b')) this.armInterruptWatchIfGenerating(sessionId);
+  }
+
+  // Arms a one-shot watch the moment a raw Escape is written while the CLI is generating — the only
+  // signal the daemon has that the human meant to cancel the running turn. No-ops (per the manager's
+  // rule) when a watch is already armed, the session isn't generating, or no hook has ever reported a
+  // transcript_path for it.
+  private armInterruptWatchIfGenerating(sessionId: string): void {
+    if (this.interruptWatches.has(sessionId)) return;
+    const session = this.repo.get(sessionId);
+    if (!session || session.state !== 'generating') return;
+    const transcriptPath = this.transcriptPaths.get(sessionId);
+    if (!transcriptPath) return;
+    let offset: number;
+    try {
+      offset = statSync(transcriptPath).size;
+    } catch {
+      return; // no transcript file yet to tail
+    }
+    const timer = setInterval(() => this.pollInterruptWatch(sessionId), TRANSCRIPT_INTERRUPT_POLL_MS);
+    const timeout = setTimeout(() => this.disarmInterruptWatch(sessionId), TRANSCRIPT_INTERRUPT_TIMEOUT_MS);
+    this.interruptWatches.set(sessionId, { transcriptPath, offset, timer, timeout });
+  }
+
+  // Reads only the bytes appended since the watch armed (or since the last poll), never re-scanning the
+  // whole transcript. A byte offset (not a string index) keeps a multi-byte character straddling a poll
+  // boundary from ever being read.
+  private pollInterruptWatch(sessionId: string): void {
+    const watch = this.interruptWatches.get(sessionId);
+    if (!watch) return;
+    let size: number;
+    try {
+      size = statSync(watch.transcriptPath).size;
+    } catch {
+      return;
+    }
+    if (size <= watch.offset) return;
+    const appended = readFileSync(watch.transcriptPath).subarray(watch.offset, size).toString('utf8');
+    watch.offset = size;
+    const sawInterruptMarker = appended.split('\n').some(isInterruptedTranscriptLine);
+    if (!sawInterruptMarker) return;
+    this.disarmInterruptWatch(sessionId);
+    this.applyInput(sessionId, { kind: 'transcript_interrupted' });
+  }
+
+  private disarmInterruptWatch(sessionId: string): void {
+    const watch = this.interruptWatches.get(sessionId);
+    if (!watch) return;
+    clearInterval(watch.timer);
+    clearTimeout(watch.timeout);
+    this.interruptWatches.delete(sessionId);
+  }
+
   resize(sessionId: string, cols: number, rows: number): void { this.handles.get(sessionId)?.resize(cols, rows); }
   async close(sessionId: string, options?: { escalateAfterMs?: number }): Promise<void> {
     const relaunch = this.relaunches.get(sessionId);
@@ -591,6 +684,7 @@ export class SessionService {
 
   private markClosed(sessionId: string, exitCode: number | undefined): void {
     this.clearResumeTimer(sessionId);
+    this.disarmInterruptWatch(sessionId);
     this.stopDelivery(sessionId);
     this.pendingRelaunches.delete(sessionId);
     this.unfinishedTurns.delete(sessionId);
