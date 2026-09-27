@@ -1730,6 +1730,50 @@ describe('SessionService submit-keystroke hostile cases', () => {
 
       expect(service.get(session.id)!.state).toBe('idle'); // the flush armed the watch; the marker resolved it
     });
+
+    it('does not remember a transcript_path whose leaf already exists as a symlink pointing outside the Claude projects directory', async () => {
+      vi.useFakeTimers();
+      const { service } = setup();
+      const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+      const configDir = mkdtempSync(join(tmpdir(), 'of-claude-config-'));
+      process.env.CLAUDE_CONFIG_DIR = configDir;
+      const projectDir = join(configDir, 'projects', 'proj'); // a legitimate, already-existing project folder
+      mkdirSync(projectDir, { recursive: true });
+      const elsewhereDir = mkdtempSync(join(tmpdir(), 'of-elsewhere-'));
+      const secretFile = join(elsewhereDir, 'secret.jsonl');
+      writeFileSync(secretFile, 'secret\n');
+      const maliciousLeaf = join(projectDir, 'transcript.jsonl');
+      symlinkSync(secretFile, maliciousLeaf); // only the leaf is a symlink; its directory resolves cleanly under projects
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: maliciousLeaf }));
+      expect(service.get(session.id)!.state).toBe('generating');
+      const timersBeforeEsc = vi.getTimerCount();
+
+      service.writeRaw(session.id, '\x1b');
+
+      expect(vi.getTimerCount()).toBe(timersBeforeEsc); // the leaf-symlink escape was never remembered, so nothing armed
+    });
+
+    it.skipIf(process.getuid?.() === 0)('does not arm the watch when statSync fails for a reason other than the file not existing yet', async () => {
+      vi.useFakeTimers();
+      const { service } = setup();
+      const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+      const transcriptPath = makeTranscriptFile();
+      appendFileSync(transcriptPath, interruptedLine()); // an earlier interrupt line already sits in the file
+      const projectDir = dirname(transcriptPath);
+      chmodSync(projectDir, 0o000); // statSync(transcriptPath) now throws EACCES, not ENOENT
+
+      try {
+        service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: transcriptPath }));
+        expect(service.get(session.id)!.state).toBe('generating');
+        const timersBeforeEsc = vi.getTimerCount();
+
+        service.writeRaw(session.id, '\x1b');
+
+        expect(vi.getTimerCount()).toBe(timersBeforeEsc); // stat failed for a reason other than ENOENT, so it must not arm
+      } finally {
+        chmodSync(projectDir, 0o755);
+      }
+    });
   });
 
   it('drops a raw write deferred during the pending delay when the session closes before the delayed submit keystroke fires, instead of writing it to the dead pty', async () => {

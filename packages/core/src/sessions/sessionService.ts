@@ -160,10 +160,24 @@ function isTrustedTranscriptPath(path: string): boolean {
   if (!isAbsolute(path) || normalize(path) !== path) return false;
   try {
     const resolvedProjectsDir = realpathSync(claudeProjectsDir());
+    const isUnderProjectsDir = (resolved: string) => resolved === resolvedProjectsDir || resolved.startsWith(resolvedProjectsDir + sep);
+    // The leaf itself can already exist as a symlink (planted by a hostile CLI) pointing outside the
+    // projects tree even though its containing directory resolves cleanly inside it — realpath-ing only
+    // the directory would miss that. Once the leaf exists (lstat succeeds, even for a symlink whose
+    // target is missing), resolve and trust the full path itself instead of just its directory.
+    const leafExists = (() => {
+      try {
+        lstatSync(path);
+        return true;
+      } catch {
+        return false;
+      }
+    })();
+    if (leafExists) return isUnderProjectsDir(realpathSync(path));
     const { existingAncestor, unbornSegments } = nearestExistingAncestor(dirname(path));
     const resolvedAncestor = realpathSync(existingAncestor);
     const resolvedDir = unbornSegments.length === 0 ? resolvedAncestor : join(resolvedAncestor, ...unbornSegments);
-    return resolvedDir === resolvedProjectsDir || resolvedDir.startsWith(resolvedProjectsDir + sep);
+    return isUnderProjectsDir(resolvedDir);
   } catch {
     return false;
   }
@@ -552,12 +566,16 @@ export class SessionService {
     if (!transcriptPath) return;
     // A trusted transcript_path can still name a file the CLI hasn't created yet (its own UserPromptSubmit
     // hook can fire before the write) — start the offset at 0 so the first poll picks up the whole file
-    // once it exists, rather than refusing to arm at all.
-    let offset = 0;
+    // once it exists, rather than refusing to arm at all. Any other stat failure (e.g. a permission error)
+    // is not "file doesn't exist yet": arming at offset 0 there would replay whatever the file already
+    // held — including a stale interrupt line from an earlier turn — as soon as the error clears, so the
+    // watch must not arm at all.
+    let offset: number;
     try {
       offset = statSync(transcriptPath).size;
-    } catch {
-      // no transcript file yet; poll from offset 0 once it's created
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return;
+      offset = 0; // no transcript file yet; poll from offset 0 once it's created
     }
     const timer = setInterval(() => this.pollInterruptWatch(sessionId), TRANSCRIPT_INTERRUPT_POLL_MS);
     const timeout = setTimeout(() => this.disarmInterruptWatch(sessionId), TRANSCRIPT_INTERRUPT_TIMEOUT_MS);
