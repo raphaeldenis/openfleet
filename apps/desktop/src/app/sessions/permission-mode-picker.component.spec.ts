@@ -119,6 +119,21 @@ describe('PermissionModePickerComponent', () => {
     await waitFor(() => expect(screen.queryByTestId('permission-mode-switch-status')).toBeNull());
   });
 
+  it('clears the "restarting…" note when the session closes mid-relaunch', async () => {
+    const api = { updatePermissionMode: vi.fn().mockResolvedValue({ status: 'relaunching' }) };
+    const sessionState = signal<'starting' | 'closed'>('starting');
+    await render(PermissionModePickerComponent, {
+      bindings: [inputBinding('sessionId', () => 's1'), inputBinding('currentMode', () => 'manual' as const), inputBinding('sessionState', sessionState)],
+      providers: providersWith(api),
+    });
+    await userEvent.click(screen.getByTestId('apply-permission-mode'));
+    await waitFor(() => expect(screen.getByTestId('permission-mode-switch-status')).toHaveTextContent('restarting…'));
+
+    sessionState.set('closed');
+
+    await waitFor(() => expect(screen.queryByTestId('permission-mode-switch-status')).toBeNull());
+  });
+
   it('requires a confirmation before applying bypassPermissions, showing it with the alert style', async () => {
     const api = { updatePermissionMode: vi.fn().mockResolvedValue({ status: 'relaunching' }) };
     await render(PermissionModePickerComponent, {
