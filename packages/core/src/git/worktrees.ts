@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { existsSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
-import { childEnvironment } from '../process/childEnvironment.js';
+import { childEnvironmentForGit } from '../process/childEnvironment.js';
 
 const runExecFile = promisify(execFile);
 
@@ -10,7 +10,7 @@ const runExecFile = promisify(execFile);
 // process.env pass-through would hand a hook planted in the caller's own repo the daemon's
 // host-identity markers (SCAPE_EDIT_CAP, session ids, …) on the next worktree operation.
 function run(args: string[], options: { cwd: string }): Promise<{ stdout: string; stderr: string }> {
-  return runExecFile('git', args, { cwd: options.cwd, env: childEnvironment(process.env) });
+  return runExecFile('git', args, { cwd: options.cwd, env: childEnvironmentForGit(process.env) });
 }
 
 export class WorktreeError extends Error {
