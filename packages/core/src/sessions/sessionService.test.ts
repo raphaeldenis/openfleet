@@ -1259,6 +1259,124 @@ describe('SessionService submit-keystroke hostile cases', () => {
     expect(service.get(session.id)!.state).toBe('closed');
   });
 
+  it('flushes several raw writes deferred during typing in their original arrival order', async () => {
+    vi.useFakeTimers();
+    const { service, harness } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+
+    service.sendMessage({ sessionId: session.id, body: 'do X' });
+    service.writeRaw(session.id, 'a');
+    service.writeRaw(session.id, 'b');
+    service.writeRaw(session.id, 'c');
+    expect(harness.handles[0]!.written).toEqual(['do X']); // all three deferred, none written yet
+
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
+
+    // A FIFO, not a stack: arrival order survives the flush.
+    expect(harness.handles[0]!.written).toEqual(['do X', '\r', 'a', 'b', 'c']);
+  });
+
+  it('writes raw input straight through once a message reaches the "submitted" phase, since only "typing" defers it', async () => {
+    vi.useFakeTimers();
+    const { service, harness } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+
+    service.sendMessage({ sessionId: session.id, body: 'do X' });
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS); // 'do X' submitted; delivery is now 'submitted'
+
+    service.writeRaw(session.id, '\x1b'); // e.g. the human interrupts while the turn has not visibly started yet
+
+    expect(harness.handles[0]!.written).toEqual(['do X', '\r', '\x1b']); // written immediately, not queued behind anything
+  });
+
+  it('resizes the pty immediately during "typing", since resize carries no phase awareness and is never deferred', async () => {
+    vi.useFakeTimers();
+    const { service, harness } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+
+    service.sendMessage({ sessionId: session.id, body: 'do X' }); // delivery phase is 'typing', Enter still pending
+    service.resize(session.id, 120, 40);
+
+    expect(harness.handles[0]!.resizes).toEqual([{ cols: 120, rows: 40 }]);
+  });
+
+  it('leaves a deferred Escape stuck until the session is deliverable again when a hook flips it to "generating" mid-delay, so the Escape lands on the next turn instead of interrupting what it was meant to stop', async () => {
+    vi.useFakeTimers();
+    const { service, harness } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+
+    service.sendMessage({ sessionId: session.id, body: 'do X' });
+    service.writeRaw(session.id, '\x1b'); // human presses Escape mid-delay, meaning to stop whatever happens next
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit' })); // e.g. a stray/duplicated hook
+    expect(service.get(session.id)!.state).toBe('generating');
+
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
+
+    // The submit keystroke holds (Review Focus #1) and the Escape queued behind it holds too: neither
+    // reaches the pty while the session is busy — exactly what the Escape was pressed to interrupt.
+    expect(harness.handles[0]!.written).toEqual(['do X']);
+
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'Stop' })); // generating -> idle
+    // KNOWN GAP (reported, not fixed here): the Escape finally lands, but only after 'do X' is submitted
+    // into the turn it just started — not the turn the human was actually trying to stop when they pressed it.
+    expect(harness.handles[0]!.written).toEqual(['do X', '\r', '\x1b']);
+  });
+
+  it('leaves a deferred Escape stuck until a permission prompt is resolved, instead of using it to dismiss the prompt itself', async () => {
+    vi.useFakeTimers();
+    const { service, harness } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+
+    service.sendMessage({ sessionId: session.id, body: 'do X' });
+    service.writeRaw(session.id, '\x1b'); // human presses Escape, meaning to back out of the incoming prompt
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: {} }));
+    expect(service.get(session.id)!.state).toBe('waiting_permission');
+
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
+    expect(harness.handles[0]!.written).toEqual(['do X']); // the Escape never reaches the prompt itself
+
+    service.applyInput(session.id, { kind: 'permission_resolved' }); // -> generating
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'Stop' })); // -> idle
+    // KNOWN GAP (reported, not fixed here): the prompt is resolved by whatever the CLI defaults to, and the
+    // Escape only lands afterward, on the next turn, instead of ever touching the prompt it targeted.
+    expect(harness.handles[0]!.written).toEqual(['do X', '\r', '\x1b']);
+  });
+
+  it('drops raw input deferred on a stale process\'s typing phase instead of writing it to the pty a resume already replaced it with', async () => {
+    vi.useFakeTimers();
+    const db = openDatabase(':memory:');
+    const bus = new EventBus();
+    const firstRunHarness = new FakeHarness();
+    const original = new SessionService({ db, bus, harnesses: [firstRunHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+    const session = await original.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    original.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+    const staleHandle = firstRunHarness.handles[0]!;
+
+    original.sendMessage({ sessionId: session.id, body: 'do X' }); // stale process still mid-typing when it gets replaced
+    original.writeRaw(session.id, '\x1b'); // human's Escape, deferred behind the pending Enter
+    expect(staleHandle.written).toEqual(['do X']);
+
+    // A daemon restart resumes the session onto a fresh pty, in a second SessionService over the same db.
+    const restartHarness = new FakeHarness();
+    const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt', resumeTimeoutMs: 50 });
+    await restarted.resumeAll();
+
+    // The stale process's own hook still lands on `original` (mirrors the existing "stale process's late
+    // exit" test), proving the session deliverable again from `original`'s point of view.
+    original.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS); // fires the stale delayed submit keystroke
+
+    // isHandleReplaced short-circuits submit(): neither the '\r' nor the deferred Escape reaches the stale
+    // pty, and neither is redirected to the new one either — the Escape is silently lost.
+    expect(staleHandle.written).toEqual(['do X']);
+    expect(restartHarness.handles[0]!.written).toEqual([]);
+  });
+
   it('the submit delay does not scale with body length: a very long body still waits exactly SUBMIT_KEYSTROKE_DELAY_MS', async () => {
     vi.useFakeTimers();
     const { service, harness } = setup();
