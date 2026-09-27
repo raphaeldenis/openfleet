@@ -73,6 +73,7 @@ export class FleetEventsService {
       case 'session.created': return this.upsertSession(event.session);
       case 'session.state': return this.patchSession(event.sessionId, { state: event.state, stateSince: event.stateSince });
       case 'session.closed': return this.patchSession(event.sessionId, { state: 'closed', exitCode: event.exitCode });
+      case 'session.updated': return this.upsertSession(event.session);
       case 'session.output': return this.output(event.sessionId).next(event.data);
       case 'session.replay': return this.output(event.sessionId).next(event.data);
       case 'approval.created': return this.upsertApproval(event.approval);
