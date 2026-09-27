@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, realpathSync } from 'node:fs';
+import { accessSync, constants, existsSync, lstatSync, realpathSync } from 'node:fs';
 import type { DatabaseSync } from 'node:sqlite';
 import type { PermissionMode, Session, SessionSpec } from '@openfleet/shared';
 import { EventBus } from '../events/eventBus.js';
@@ -29,7 +29,7 @@ export class MessageIdAlreadyUsedError extends Error {
 }
 
 export class SessionReopenError extends Error {
-  constructor(public readonly code: 'not_closed' | 'directory_missing' | 'directory_changed' | 'launch_failed', message: string) {
+  constructor(public readonly code: 'not_closed' | 'directory_missing' | 'directory_changed' | 'directory_unreadable' | 'launch_failed', message: string) {
     super(message);
   }
 }
@@ -279,6 +279,7 @@ export class SessionService {
     if (session.state !== 'closed') throw new SessionReopenError('not_closed', `session ${sessionId} is not closed`);
     if (!existsSync(session.directory)) throw new SessionReopenError('directory_missing', `session ${sessionId} directory no longer exists: ${session.directory}`);
     this.assertDirectoryUnchanged(session);
+    this.assertDirectoryAccessible(session);
     const outcome = this.resumeOne(session);
     if (!outcome.launched) throw new SessionReopenError('launch_failed', `session ${sessionId} failed to relaunch: ${outcome.reason}`);
     this.deps.bus.emit({ type: 'session.reopened', sessionId });
@@ -294,6 +295,21 @@ export class SessionService {
     const realpathAtCreation = this.repo.directoryRealpath(session.id);
     const isTrustworthy = realpathAtCreation ? currentRealpath === realpathAtCreation : lstatSync(session.directory).isDirectory();
     if (!isTrustworthy) throw new SessionReopenError('directory_changed', `session ${session.id} directory changed since it closed: ${session.directory}`);
+  }
+
+  // Catches a directory the harness could never actually launch into (e.g. chmod 000) before anything is
+  // launched or announced, rather than reporting a fake 200 "starting" and a session.reopened event that
+  // the CLI then contradicts ~2s later by dying and closing the session (Task 12b QA).
+  // ponytail: no grace window for a launch that dies moments after this check passes (a permission race, a
+  // mid-launch unmount) — this pre-check only covers a directory already unreadable at reopen time. Upgrade
+  // path: have the launch itself emit a launch-failed event when the harness process exits within N seconds
+  // of starting, instead of delaying every reopen reply to wait and see.
+  private assertDirectoryAccessible(session: Session): void {
+    try {
+      accessSync(session.directory, constants.R_OK | constants.X_OK);
+    } catch {
+      throw new SessionReopenError('directory_unreadable', `session ${session.id} directory is not readable: ${session.directory}`);
+    }
   }
 
   private assertNotShuttingDown(): void {
