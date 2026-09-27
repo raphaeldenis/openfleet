@@ -129,6 +129,40 @@ describe('FleetEventsService', () => {
 
     expect(service.sessions()).toEqual([session('s1', { name: 'Legolas' })]);
   });
+
+  it('patches a session\'s model on session.model_changed, so the model selector reflects an applied switch', () => {
+    const service = new FleetEventsService();
+    service.connect();
+    const socket = FakeWebSocket.instances[0]!;
+    socket.dispatchMessage({ type: 'snapshot', sessions: [session('s1')], approvals: [] });
+
+    socket.dispatchMessage({ type: 'session.model_changed', sessionId: 's1', model: 'claude-opus-5-5' });
+
+    expect(service.sessions()[0]!.model).toBe('claude-opus-5-5');
+  });
+});
+
+describe('FleetEventsService message delivery', () => {
+  beforeEach(() => {
+    FakeWebSocket.instances = [];
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+  });
+
+  it('has not delivered a message before its message.delivered event arrives', () => {
+    const service = new FleetEventsService();
+    expect(service.deliveredMessageIds().has('m1')).toBe(false);
+  });
+
+  it('marks a message delivered on message.delivered, so the composer can flip queued to sent', () => {
+    const service = new FleetEventsService();
+    service.connect();
+    const socket = FakeWebSocket.instances[0]!;
+    socket.dispatchMessage({ type: 'snapshot', sessions: [], approvals: [] });
+
+    socket.dispatchMessage({ type: 'message.delivered', sessionId: 's1', messageId: 'm1' });
+
+    expect(service.deliveredMessageIds().has('m1')).toBe(true);
+  });
 });
 
 describe('FleetEventsService managers', () => {

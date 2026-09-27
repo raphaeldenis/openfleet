@@ -1,6 +1,6 @@
-import { render, screen } from '@testing-library/angular/zoneless';
+import { render, screen, waitFor } from '@testing-library/angular/zoneless';
 import { inputBinding } from '@angular/core';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { StateChipComponent, type ChipState } from './state-chip.component';
 
 describe('StateChipComponent', () => {
@@ -71,5 +71,34 @@ describe('StateChipComponent', () => {
   it('renders the idle label in the foreground token, not the state color, so it stays readable on the tinted chip background', async () => {
     await render(StateChipComponent, { bindings: [inputBinding('state', () => 'idle')] });
     expect(screen.getByTestId('state-chip-label')).toHaveStyle({ color: 'var(--fg)' });
+  });
+
+  describe('elapsed time', () => {
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => vi.useRealTimers());
+
+    it('shows no elapsed time when `since` is not given', async () => {
+      await render(StateChipComponent, { bindings: [inputBinding('state', () => 'idle')] });
+      expect(screen.queryByTestId('state-chip-elapsed')).toBeNull();
+    });
+
+    it('shows the time elapsed since `since`, formatted as m:ss', async () => {
+      vi.setSystemTime(new Date('2026-01-01T00:00:40.000Z'));
+      await render(StateChipComponent, {
+        bindings: [inputBinding('state', () => 'idle'), inputBinding('since', () => '2026-01-01T00:00:00.000Z')],
+      });
+      expect(screen.getByTestId('state-chip-elapsed')).toHaveTextContent('0:40');
+    });
+
+    it('ticks the elapsed time forward every second', async () => {
+      vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+      await render(StateChipComponent, {
+        bindings: [inputBinding('state', () => 'idle'), inputBinding('since', () => '2026-01-01T00:00:00.000Z')],
+      });
+      expect(screen.getByTestId('state-chip-elapsed')).toHaveTextContent('0:00');
+
+      vi.advanceTimersByTime(3000);
+      await waitFor(() => expect(screen.getByTestId('state-chip-elapsed')).toHaveTextContent('0:03'));
+    });
   });
 });

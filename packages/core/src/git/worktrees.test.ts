@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, existsSync, symlinkSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, existsSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -39,6 +39,29 @@ describe('createWorktree', () => {
     const repoPath = makeRepo();
     const worktreesRoot = mkdtempSync(join(tmpdir(), 'of-wt-'));
     await expect(createWorktree({ repoPath, branchName: '--upload-pack', worktreesRoot })).rejects.toMatchObject({ code: 'invalid_branch' });
+  });
+
+  it('does not leak Scape host-identity env vars to a post-checkout hook triggered by worktree add', async () => {
+    const repoPath = makeRepo();
+    const worktreesRoot = mkdtempSync(join(tmpdir(), 'of-wt-'));
+    const hookEnvPath = join(worktreesRoot, 'hook-env.txt');
+    const hookPath = join(repoPath, '.git', 'hooks', 'post-checkout');
+    writeFileSync(hookPath, `#!/bin/sh\nenv > "${hookEnvPath}"\n`);
+    chmodSync(hookPath, 0o755);
+
+    process.env.SCAPE_EDIT_CAP = 'leaked-cap-token';
+    process.env.CLAUDECODE = '1';
+    try {
+      await createWorktree({ repoPath, branchName: 'task/hook-check', worktreesRoot });
+    } finally {
+      delete process.env.SCAPE_EDIT_CAP;
+      delete process.env.CLAUDECODE;
+    }
+
+    const hookEnv = readFileSync(hookEnvPath, 'utf8');
+    expect(hookEnv).not.toContain('SCAPE_EDIT_CAP');
+    expect(hookEnv).not.toContain('CLAUDECODE');
+    expect(hookEnv).toContain('PATH=');
   });
 });
 

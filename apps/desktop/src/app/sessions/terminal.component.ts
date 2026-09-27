@@ -6,8 +6,12 @@ import { FleetEventsService } from '../core/fleet-events.service';
 
 @Component({
   selector: 'of-terminal',
+  // flex: 1 1 auto + min-height: 0 lets this shrink below its content size — without min-height: 0 a
+  // flex item's automatic minimum is its content size, so a sibling added next to it (the permission
+  // gate card) gets pushed out of view instead of sharing the row.
+  host: { style: 'display: block; flex: 1 1 auto; min-height: 0; height: 100%;' },
   template: `<div #host class="host" data-testid="terminal"></div>`,
-  styles: `:host { display: block; height: 100% } .host { height: 100% }`,
+  styles: `.host { height: 100% }`,
 })
 export class TerminalComponent implements OnDestroy {
   readonly sessionId = input.required<string>();

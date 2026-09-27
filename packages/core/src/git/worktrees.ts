@@ -2,8 +2,16 @@ import { execFile } from 'node:child_process';
 import { existsSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
+import { childEnvironment } from '../process/childEnvironment.js';
 
-const run = promisify(execFile);
+const runExecFile = promisify(execFile);
+
+// Every hook git triggers (post-checkout, post-commit, …) inherits this env, so a raw
+// process.env pass-through would hand a hook planted in the caller's own repo the daemon's
+// host-identity markers (SCAPE_EDIT_CAP, session ids, …) on the next worktree operation.
+function run(args: string[], options: { cwd: string }): Promise<{ stdout: string; stderr: string }> {
+  return runExecFile('git', args, { cwd: options.cwd, env: childEnvironment(process.env) });
+}
 
 export class WorktreeError extends Error {
   constructor(public readonly code: 'invalid_branch' | 'exists' | 'git_failed', message: string) {
@@ -25,7 +33,7 @@ export async function createWorktree(input: { repoPath: string; branchName: stri
     ? ['worktree', 'add', '--', worktreePath, input.branchName]
     : ['worktree', 'add', '-b', input.branchName, '--', worktreePath];
   try {
-    await run('git', args, { cwd: input.repoPath });
+    await run(args, { cwd: input.repoPath });
   } catch (error) {
     throw new WorktreeError('git_failed', (error as Error).message);
   }
@@ -34,7 +42,7 @@ export async function createWorktree(input: { repoPath: string; branchName: stri
 
 async function gitSucceeds(cwd: string, args: string[]): Promise<boolean> {
   try {
-    await run('git', args, { cwd });
+    await run(args, { cwd });
     return true;
   } catch {
     return false;
@@ -48,7 +56,7 @@ export async function sameGitRepository(pathA: string, pathB: string): Promise<b
 
 async function gitCommonDir(cwd: string): Promise<string | undefined> {
   try {
-    const { stdout } = await run('git', ['rev-parse', '--git-common-dir'], { cwd });
+    const { stdout } = await run(['rev-parse', '--git-common-dir'], { cwd });
     // realpathSync canonicalizes the result so two spellings of the same cwd (e.g. a raw session
     // directory vs. its realpath'd form) still compare equal — otherwise a caller stored with one
     // spelling could never match a repo_path/directory given with the other.

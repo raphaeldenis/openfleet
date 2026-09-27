@@ -2,7 +2,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import * as pty from 'node-pty';
 import type { Harness, HarnessHandle, HarnessLaunch } from '../harness.js';
-import { childEnvironment } from './childEnvironment.js';
+import { childEnvironment } from '../../process/childEnvironment.js';
 import { buildClaudeLaunchConfig } from './launchConfig.js';
 import { markDirectoryTrusted } from './trustDirectory.js';
 

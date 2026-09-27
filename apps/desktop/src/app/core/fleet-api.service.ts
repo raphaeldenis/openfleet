@@ -29,9 +29,10 @@ export class FleetApiService {
     });
   }
   pulseNow(sessionId: string) { return this.post<{ pulsed: boolean; coalesced?: boolean }>(`/api/managers/${sessionId}/pulse`, {}); }
-  sendMessage(id: string, body: string) { return this.post<{ status: string }>(`/api/sessions/${id}/messages`, { body }); }
+  sendMessage(id: string, body: string) { return this.post<{ status: 'delivered' | 'queued'; messageId: string }>(`/api/sessions/${id}/messages`, { body }); }
   sendInput(id: string, data: string) { return this.post(`/api/sessions/${id}/input`, { data }); }
   resize(id: string, cols: number, rows: number) { return this.post(`/api/sessions/${id}/resize`, { cols, rows }); }
   closeSession(id: string) { return this.post(`/api/sessions/${id}/close`, {}); }
+  updateModel(id: string, model: string) { return this.post<{ status: 'relaunching' | 'deferred' }>(`/api/sessions/${id}/model`, { model }); }
   decide(id: string, behavior: 'allow' | 'deny') { return this.post<Approval>(`/api/approvals/${id}/decide`, { behavior }); }
 }
