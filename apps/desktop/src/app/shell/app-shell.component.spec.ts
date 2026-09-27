@@ -257,6 +257,39 @@ describe('AppShellComponent', () => {
     expect(inbox.querySelector('[data-testid="nav-inbox-badge"]')).toBeFalsy();
   });
 
+  it('highlights the nav item for the current route with .active', async () => {
+    const { harness, root } = await setUp();
+    const inbox = root.querySelector('[data-testid="nav-inbox"]') as HTMLAnchorElement;
+
+    inbox.click();
+    await harness.fixture.whenStable();
+
+    expect(inbox.classList.contains('active')).toBe(true);
+    const components = root.querySelector('[data-testid="nav-components"]') as HTMLElement;
+    expect(components.classList.contains('active')).toBe(false);
+  });
+
+  it('lets routed pages scroll inside the outlet instead of clipping their content', async () => {
+    const { root } = await setUp();
+
+    const outlet = root.querySelector('[data-testid="app-outlet"]') as HTMLElement;
+
+    expect(getComputedStyle(outlet).overflowY).toBe('auto');
+  });
+
+  it('restores focus to the element that opened the palette, not always the search trigger, when it closes', async () => {
+    const { harness, root } = await setUp();
+    const inbox = root.querySelector('[data-testid="nav-inbox"]') as HTMLElement;
+    inbox.focus();
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }));
+    await harness.fixture.whenStable();
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await harness.fixture.whenStable();
+
+    expect(document.activeElement).toBe(inbox);
+  });
+
   it('never lets a disabled nav item navigate, by click or by keyboard, since it renders as inert text rather than a link', async () => {
     const { harness, root } = await setUp();
     const router = TestBed.inject(Router);

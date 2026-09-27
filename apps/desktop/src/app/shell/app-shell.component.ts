@@ -1,5 +1,6 @@
 import { ChangeDetectionStrategy, Component, ElementRef, HostListener, computed, inject, signal, viewChild } from '@angular/core';
-import { Router, RouterLink, RouterOutlet } from '@angular/router';
+import { Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
+import { environment } from '../../environments/environment';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { BannerComponent } from '../design/banner.component';
 import { SessionListComponent } from '../sessions/session-list.component';
@@ -7,13 +8,12 @@ import { CommandPaletteComponent } from './command-palette.component';
 import { DaemonStatusComponent } from './daemon-status.component';
 import { HELM_NAV_ITEMS } from './nav-items';
 
-const DAEMON_ADDRESS = '127.0.0.1:7331';
 const RUNNING_STATES = new Set(['generating', 'starting']);
 
 @Component({
   selector: 'of-app-shell',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, RouterOutlet, SessionListComponent, DaemonStatusComponent, CommandPaletteComponent, BannerComponent],
+  imports: [RouterLink, RouterLinkActive, RouterOutlet, SessionListComponent, DaemonStatusComponent, CommandPaletteComponent, BannerComponent],
   template: `
     <div class="shell" data-testid="app-shell">
       <div class="body">
@@ -100,7 +100,7 @@ const RUNNING_STATES = new Set(['generating', 'starting']);
     .search-trigger .shortcut { font-size: .6875rem; padding: 0 .3125rem; border: 1px solid var(--line-2); border-radius: .25rem; }
     .spacer { flex: 1; }
     .spend { font-family: var(--mono); font-size: .75rem; color: var(--mut); font-style: italic; }
-    .outlet { flex: 1; min-height: 0; min-width: 0; display: flex; overflow: hidden; }
+    .outlet { flex: 1; min-height: 0; min-width: 0; display: flex; overflow-y: auto; overflow-x: hidden; }
     .statusbar { flex: none; height: 1.625rem; display: flex; align-items: center; gap: .75rem; padding: 0 .75rem; border-top: 1px solid var(--line); background: var(--side); font-size: .6875rem; color: var(--mut); }
     .limits { font-style: italic; }
     .mono { font-family: var(--mono); }
@@ -117,23 +117,26 @@ export class AppShellComponent {
   protected readonly events = inject(FleetEventsService);
   private readonly router = inject(Router);
   protected readonly navItems = HELM_NAV_ITEMS;
-  protected readonly daemonAddress = DAEMON_ADDRESS;
+  protected readonly daemonAddress = environment.daemonAddress;
   protected readonly paletteOpen = signal(false);
   protected readonly runningCount = computed(() => this.events.sessions().filter((s) => RUNNING_STATES.has(s.state)).length);
   protected readonly pendingApprovalsCount = computed(() => this.events.approvals().length);
   private readonly paletteTrigger = viewChild.required<ElementRef<HTMLButtonElement>>('paletteTrigger');
+  private paletteOpener: HTMLElement | null = null;
 
   onSessionSelected(sessionId: string): void {
     void this.router.navigate(['/session', sessionId]);
   }
 
   openPalette(): void {
+    this.paletteOpener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     this.paletteOpen.set(true);
   }
 
   closePalette(): void {
     this.paletteOpen.set(false);
-    this.paletteTrigger().nativeElement.focus();
+    (this.paletteOpener ?? this.paletteTrigger().nativeElement).focus();
+    this.paletteOpener = null;
   }
 
   @HostListener('document:keydown', ['$event'])
