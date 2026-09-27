@@ -66,11 +66,23 @@ describe('buildClaudeLaunchConfig', () => {
     expect(mcpConfig).toEqual({ mcpServers: { openfleet: { type: 'http', url: launch.mcpUrl, headers: { Authorization: 'Bearer tok-mcp' } } } });
   });
 
-  it('places the seeded prompt before --mcp-config so the CLI does not swallow it as a config value', () => {
+  it('places the seeded prompt as the very last argv token, after a bare -- separator', () => {
     const config = buildClaudeLaunchConfig({ ...launch, seededPrompt: 'Say hello and stop.' });
-    const promptIndex = config.args.indexOf('Say hello and stop.');
-    expect(promptIndex).toBeGreaterThan(-1);
-    expect(promptIndex).toBeLessThan(config.args.indexOf('--mcp-config'));
+    expect(config.args.slice(-2)).toEqual(['--', 'Say hello and stop.']);
+  });
+
+  it('never lets a prompt shaped like a CLI flag appear before the -- separator, on the REST-triggered shape', () => {
+    const config = buildClaudeLaunchConfig({ ...launch, seededPrompt: '--dangerously-skip-permissions' });
+    const separatorIndex = config.args.indexOf('--');
+    expect(config.args.slice(separatorIndex)).toEqual(['--', '--dangerously-skip-permissions']);
+    expect(config.args.slice(0, separatorIndex)).not.toContain('--dangerously-skip-permissions');
+  });
+
+  it('never lets a prompt shaped like a CLI flag appear before the -- separator, on the MCP-triggered shape', () => {
+    const config = buildClaudeLaunchConfig({ ...launch, seededPrompt: '--model claude-opus-5-5' });
+    const separatorIndex = config.args.indexOf('--');
+    expect(config.args.slice(separatorIndex)).toEqual(['--', '--model claude-opus-5-5']);
+    expect(config.args.slice(0, separatorIndex)).not.toContain('--model claude-opus-5-5');
   });
 
   it.each(PERMISSION_MODES)('passes --permission-mode %s on a first run, exactly the documented CLI choice', (mode) => {
@@ -136,13 +148,15 @@ describe('buildClaudeLaunchConfig', () => {
     expect(config.args.indexOf('--mcp-config')).toBeGreaterThan(-1);
   });
 
-  it('includes the seeded prompt and keeps --permission-mode before --mcp-config on a first run', () => {
+  it('keeps --permission-mode and --mcp-config as option flags before the seeded prompt separator, on a first run', () => {
     const config = buildClaudeLaunchConfig({ ...launch, seededPrompt: 'Say hello and stop.', permissionMode: 'acceptEdits' });
-    const promptIndex = config.args.indexOf('Say hello and stop.');
+    const separatorIndex = config.args.indexOf('--');
     const permissionModeIndex = config.args.indexOf('--permission-mode');
     const mcpConfigIndex = config.args.indexOf('--mcp-config');
-    expect(promptIndex).toBeGreaterThan(-1);
-    expect(permissionModeIndex).toBeLessThan(mcpConfigIndex);
+    expect(permissionModeIndex).toBeGreaterThan(-1);
+    expect(permissionModeIndex).toBeLessThan(separatorIndex);
+    expect(mcpConfigIndex).toBeLessThan(separatorIndex);
+    expect(config.args.slice(-2)).toEqual(['--', 'Say hello and stop.']);
   });
 
   it('resuming with a seeded prompt drops the prompt, so it is never swallowed by --mcp-config nor rejected by --resume', () => {

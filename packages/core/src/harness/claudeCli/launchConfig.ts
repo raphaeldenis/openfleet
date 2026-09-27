@@ -32,12 +32,13 @@ export function buildClaudeLaunchConfig(launch: HarnessLaunch): ClaudeLaunchConf
   const firstRunArgs = ['--session-id', launch.sessionId, '--name', launch.displayName];
   const args = launch.resuming ? resumeArgs : firstRunArgs;
   if (launch.model) args.push('--model', launch.model);
-  if (!launch.resuming && launch.seededPrompt) args.push(launch.seededPrompt);
   if (launch.permissionMode) args.push('--permission-mode', launch.permissionMode);
-  // The positional prompt must come before --mcp-config: that flag is
-  // variadic ("<configs...>") and greedily swallows every following
-  // non-flag argument, including a trailing prompt, as another config value.
   args.push('--settings', JSON.stringify(settings), '--mcp-config', JSON.stringify(mcpConfig));
+  // The seeded prompt is untrusted (session/task-provided) text. Commander parses flags
+  // anywhere in argv, so a prompt like "--dangerously-skip-permissions" would otherwise be
+  // read as a CLI option. `--` forces every token after it to be a positional argument, and
+  // it must be the very last argv entry so nothing pushed later can land ahead of it.
+  if (!launch.resuming && launch.seededPrompt) args.push('--', launch.seededPrompt);
   return { command: 'claude', args, settings, mcpConfig };
 }
 
