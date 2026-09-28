@@ -109,6 +109,30 @@ describe('SessionRepository', () => {
     expect(repo.byHookToken('fresh-hook')?.id).toBe('s1');
   });
 
+  it('does not match a closed session\'s token by lookup, even a row this build never touched (a pre-patch upgrade row)', () => {
+    const db = openDatabase(':memory:');
+    const repo = new SessionRepository(db);
+    repo.insert({ ...baseRow, state: 'closed', hook_token: 'legacy-hook', mcp_token: 'legacy-mcp' });
+
+    expect(repo.byHookToken('legacy-hook')).toBeUndefined();
+    expect(repo.byMcpToken('legacy-mcp')).toBeUndefined();
+  });
+
+  it('closes the session and rotates both tokens in a single write', () => {
+    const db = openDatabase(':memory:');
+    const repo = new SessionRepository(db);
+    repo.insert(baseRow);
+
+    repo.setClosed('s1', 0, 't1', 'fresh-hook', 'fresh-mcp');
+
+    const session = repo.get('s1')!;
+    expect(session.state).toBe('closed');
+    expect(session.exitCode).toBe(0);
+    expect(repo.tokens('s1')).toEqual({ hookToken: 'fresh-hook', mcpToken: 'fresh-mcp' });
+    expect(repo.byHookToken('h')).toBeUndefined();
+    expect(repo.byMcpToken('m')).toBeUndefined();
+  });
+
   it('persists and returns the worktree branch a session was created on', () => {
     const db = openDatabase(':memory:');
     const repo = new SessionRepository(db);

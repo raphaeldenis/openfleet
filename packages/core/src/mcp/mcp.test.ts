@@ -92,6 +92,23 @@ describe('MCP', () => {
     await expect(connect(closedToken)).rejects.toThrow();
   });
 
+  it('rejects a session\'s mcp bearer when it was already closed before this boot, its token never rotated by this build (a pre-patch upgrade row)', async () => {
+    const legacyToken = 'legacy-mcp-token-that-predates-the-rotation-fix';
+    db.prepare(
+      `INSERT INTO sessions (id, name, emoji, directory, worktree, model, parent_id, role, harness, state, state_since, hook_token, mcp_token, permission_mode, branch, project_id, created_at, closed_at, exit_code)
+       VALUES (?, 'legacy', '🤖', '/tmp', NULL, NULL, NULL, NULL, 'fake', 'closed', ?, 'legacy-hook-token', ?, NULL, NULL, NULL, ?, ?, 0)`,
+    ).run('legacy-closed-session', new Date().toISOString(), legacyToken, new Date().toISOString(), new Date().toISOString());
+    await sessions.resumeAll(); // boots like main.ts — resumeAll never touches a closed row
+
+    const res = await fetch(`${server.url}/mcp`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${legacyToken}`, 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'get_session_status', arguments: { session_id: 'legacy-closed-session' } } }),
+    });
+
+    expect(res.status).toBe(401);
+  });
+
   it('refuses create_session called with a closed session\'s stale bearer token', async () => {
     const parent = await connect(parentToken);
     const created = text(await parent.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('closed-token-create'), name: 'Gimli', emoji: '⚔️' } }));
