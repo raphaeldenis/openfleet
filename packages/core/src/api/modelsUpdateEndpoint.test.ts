@@ -170,6 +170,17 @@ describe('GET /api/models/available', () => {
     expect(new Set(models).size).toBe(models.length);
   });
 
+  it('offers Opus 5.5 with 1M context, and a rung accepts and saves that id', async () => {
+    const opusWithOneMillionContext = 'claude-opus-5-5[1m]';
+
+    const { models } = (await (await getAvailableModels()).json()) as { models: string[] };
+    const saved = await putModels({ opus: opusWithOneMillionContext });
+
+    expect(models).toContain(opusWithOneMillionContext);
+    expect(saved.status).toBe(200);
+    expect(readConfigFile()).toEqual({ models: { opus: opusWithOneMillionContext } });
+  });
+
   it('requires the admin token', async () => {
     const res = await getAvailableModels({});
 
