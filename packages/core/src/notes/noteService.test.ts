@@ -4,6 +4,7 @@ import { ProjectRepository } from '../projects/projectRepository.js';
 import { expandMentions } from './mentionExpander.js';
 import { NoteRepository } from './noteRepository.js';
 import { NoteNotFoundError, NoteService, NoteTooLargeError, StaleRevisionError } from './noteService.js';
+import { replaceSection } from './noteSections.js';
 
 const AUTHOR = 'rdenisfr@gmail.com';
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -106,6 +107,17 @@ describe('NoteService versioning', () => {
     expect(() => service.update(note.id, { bodyMd: 'v3-stale', expectedRev: 1, author: AUTHOR })).toThrow(StaleRevisionError);
 
     expect(repo.listVersions(note.id)).toHaveLength(2);
+  });
+
+  it('inserts exactly one version row on a successful append, matching the returned note\'s rev and body', () => {
+    const { service, repo } = setup();
+    const note = service.create({ projectId: 'p1', title: 'Title', bodyMd: 'start', author: AUTHOR });
+
+    const appended = service.append(note.id, { content: 'tail', author: AUTHOR });
+
+    const versions = repo.listVersions(note.id);
+    expect(versions).toHaveLength(2);
+    expect(versions[1]).toMatchObject({ rev: appended.rev, bodyMd: appended.bodyMd });
   });
 
   it('rolls back the notes write when the version write fails in the same transaction', () => {
@@ -214,6 +226,25 @@ describe('NoteService updateSection', () => {
 
     expect(repo.get(note.id)!.bodyMd).toBe('## Status\nunrelated-change');
   });
+
+  it('accepts a resulting body exactly at the 1 MiB cap and refuses one byte over, writing nothing', () => {
+    const { service, repo } = setup();
+    const note = service.create({ projectId: 'p1', title: 'Title', bodyMd: '## Status\nplaceholder', author: AUTHOR });
+    // Measure the fixed overhead (heading text, line breaks) that replaceSection wraps around the section content.
+    const probeBody = replaceSection(note.bodyMd, 'Status', 'x');
+    const overheadBytes = Buffer.byteLength(probeBody, 'utf8') - 1;
+    const exactContent = 'a'.repeat(MAX_BODY_BYTES - overheadBytes);
+
+    const atCap = service.updateSection(note.id, { heading: 'Status', content: exactContent, expectedRev: 1, author: AUTHOR });
+    expect(Buffer.byteLength(atCap.bodyMd, 'utf8')).toBe(MAX_BODY_BYTES);
+    expect(atCap.rev).toBe(2);
+
+    const overContent = exactContent + 'a';
+    expect(() => service.updateSection(atCap.id, { heading: 'Status', content: overContent, expectedRev: atCap.rev, author: AUTHOR })).toThrow(NoteTooLargeError);
+
+    expect(repo.get(atCap.id)).toMatchObject({ bodyMd: atCap.bodyMd, rev: 2 });
+    expect(repo.listVersions(atCap.id)).toHaveLength(2);
+  });
 });
 
 describe('NoteService append', () => {
@@ -289,6 +320,52 @@ describe('NoteService append', () => {
     vi.spyOn(repo, 'update').mockReturnValue({ outcome: 'stale_revision', currentRev: note.rev + 99 });
 
     expect(() => service.append(note.id, { content: 'tail', author: AUTHOR })).toThrow(StaleRevisionError);
+  });
+
+  it('absorbs 3 concurrent interleavings between read and CAS, then succeeds', () => {
+    const { service, repo } = setup();
+    const note = service.create({ projectId: 'p1', title: 'Title', bodyMd: 'start', author: AUTHOR });
+    const realUpdate = repo.update.bind(repo);
+    let racesLeft = 3;
+    vi.spyOn(repo, 'update').mockImplementation((id, patch) => {
+      if (racesLeft > 0) {
+        racesLeft--;
+        const current = repo.get(id)!;
+        realUpdate(id, { bodyMd: `raced-${racesLeft}`, expectedRev: current.rev, updatedAt: `raced-at-${racesLeft}` });
+      }
+      return realUpdate(id, patch);
+    });
+
+    const appended = service.append(note.id, { content: 'tail', author: AUTHOR });
+
+    expect(appended.bodyMd).toContain('tail');
+    expect(repo.update).toHaveBeenCalledTimes(4);
+  });
+
+  it('throws StaleRevisionError carrying the actual current revision after 4 concurrent interleavings', () => {
+    const { service, repo } = setup();
+    const note = service.create({ projectId: 'p1', title: 'Title', bodyMd: 'start', author: AUTHOR });
+    const realUpdate = repo.update.bind(repo);
+    let racesLeft = 4;
+    vi.spyOn(repo, 'update').mockImplementation((id, patch) => {
+      if (racesLeft > 0) {
+        racesLeft--;
+        const current = repo.get(id)!;
+        realUpdate(id, { bodyMd: `raced-${racesLeft}`, expectedRev: current.rev, updatedAt: `raced-at-${racesLeft}` });
+      }
+      return realUpdate(id, patch);
+    });
+
+    let caught: unknown;
+    try {
+      service.append(note.id, { content: 'tail', author: AUTHOR });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(StaleRevisionError);
+    expect((caught as StaleRevisionError).currentRev).toBe(repo.get(note.id)!.rev);
+    expect(repo.update).toHaveBeenCalledTimes(4);
   });
 
   it('refuses an append whose resulting body is over the cap and writes nothing', () => {
@@ -371,6 +448,63 @@ describe('NoteService move', () => {
     const { service } = setup();
 
     expect(() => service.move('nope', 'plans')).toThrow(NoteNotFoundError);
+  });
+
+  it('writes no version row for a move', () => {
+    const { service, repo } = setup();
+    const note = service.create({ projectId: 'p1', title: 'Title', bodyMd: 'body', author: AUTHOR });
+    const versionsBefore = repo.listVersions(note.id).length;
+
+    service.move(note.id, 'plans');
+
+    expect(repo.listVersions(note.id)).toHaveLength(versionsBefore);
+  });
+});
+
+describe('NoteService nested transactions (caller-managed)', () => {
+  it('persists two nested writes and their version rows after an outer COMMIT', () => {
+    const { service, repo, db } = setup();
+    const note = service.create({ projectId: 'p1', title: 'Title', bodyMd: 'v1', author: AUTHOR });
+
+    db.exec('BEGIN');
+    const afterFirst = service.update(note.id, { bodyMd: 'v2', expectedRev: 1, author: AUTHOR });
+    const afterSecond = service.update(note.id, { bodyMd: 'v3', expectedRev: afterFirst.rev, author: AUTHOR });
+    db.exec('COMMIT');
+
+    expect(afterSecond).toMatchObject({ bodyMd: 'v3', rev: 3 });
+    expect(repo.get(note.id)).toMatchObject({ bodyMd: 'v3', rev: 3 });
+    expect(repo.listVersions(note.id).map((v) => [v.rev, v.bodyMd])).toEqual([[1, 'v1'], [2, 'v2'], [3, 'v3']]);
+  });
+
+  it('keeps only the writes that succeeded around a mid-transaction failure, and leaves the db usable after COMMIT', () => {
+    const { service, repo, db } = setup();
+    const note = service.create({ projectId: 'p1', title: 'Title', bodyMd: 'v1', author: AUTHOR });
+
+    db.exec('BEGIN');
+    const afterFirst = service.update(note.id, { bodyMd: 'v2', expectedRev: 1, author: AUTHOR });
+    expect(() => service.update(note.id, { bodyMd: 'stale', expectedRev: 1, author: AUTHOR })).toThrow(StaleRevisionError);
+    const afterThird = service.update(note.id, { bodyMd: 'v3', expectedRev: afterFirst.rev, author: AUTHOR });
+    db.exec('COMMIT');
+
+    expect(afterThird).toMatchObject({ bodyMd: 'v3', rev: 3 });
+    expect(repo.get(note.id)).toMatchObject({ bodyMd: 'v3', rev: 3 });
+    expect(repo.listVersions(note.id).map((v) => [v.rev, v.bodyMd])).toEqual([[1, 'v1'], [2, 'v2'], [3, 'v3']]);
+
+    const afterCommitWrite = service.update(note.id, { bodyMd: 'v4', expectedRev: 3, author: AUTHOR });
+    expect(afterCommitWrite).toMatchObject({ bodyMd: 'v4', rev: 4 });
+  });
+
+  it('discards nested writes when the caller rolls back the outer transaction', () => {
+    const { service, repo, db } = setup();
+    const note = service.create({ projectId: 'p1', title: 'Title', bodyMd: 'v1', author: AUTHOR });
+
+    db.exec('BEGIN');
+    service.update(note.id, { bodyMd: 'v2', expectedRev: 1, author: AUTHOR });
+    service.update(note.id, { bodyMd: 'v3', expectedRev: 2, author: AUTHOR });
+    db.exec('ROLLBACK');
+
+    expect(repo.get(note.id)).toMatchObject({ bodyMd: 'v1', rev: 1 });
+    expect(repo.listVersions(note.id)).toHaveLength(1);
   });
 });
 

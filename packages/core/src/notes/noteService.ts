@@ -227,7 +227,15 @@ export class NoteService {
       this.db.exec(isNested ? `RELEASE ${SAVEPOINT_NAME}` : 'COMMIT');
       return result;
     } catch (error) {
-      if (this.db.isTransaction) this.db.exec(isNested ? `ROLLBACK TO ${SAVEPOINT_NAME}` : 'ROLLBACK');
+      if (this.db.isTransaction) {
+        if (isNested) {
+          // ROLLBACK TO alone leaves the savepoint marker open on the stack; RELEASE pops it, the safe idiom.
+          this.db.exec(`ROLLBACK TO ${SAVEPOINT_NAME}`);
+          this.db.exec(`RELEASE ${SAVEPOINT_NAME}`);
+        } else {
+          this.db.exec('ROLLBACK');
+        }
+      }
       throw error;
     }
   }
