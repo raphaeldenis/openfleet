@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { homedir, tmpdir } from 'node:os';
@@ -15,11 +15,16 @@ const CHEAP_MODEL = 'haiku';
 const OTHER_MODEL = 'sonnet';
 const HOOK_WAIT_TIMEOUT_MS = 120_000;
 const TEST_TIMEOUT_MS = 180_000;
+const KILL_TIMEOUT_MS = 10_000;
+const PTY_TAIL_BYTES = 2_048;
 
 interface ReceivedHook {
   hook_event_name: string;
   tool_name?: string;
+  tool_input?: { command?: string };
 }
+
+const createdRepos: string[] = [];
 
 const denyEveryPermissionRequest = {
   hookSpecificOutput: {
@@ -30,6 +35,7 @@ const denyEveryPermissionRequest = {
 
 function makeRepo(): string {
   const dir = mkdtempSync(join(tmpdir(), 'of-live-'));
+  createdRepos.push(dir);
   execFileSync('git', ['init', '-b', 'main'], { cwd: dir });
   execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '--allow-empty', '-m', 'init'], { cwd: dir });
   return dir;
@@ -39,15 +45,32 @@ function readSettingsBytes(): Buffer | null {
   return existsSync(CLAUDE_SETTINGS_PATH) ? readFileSync(CLAUDE_SETTINGS_PATH) : null;
 }
 
-// Stands in for the daemon: records every hook the CLI posts and denies every permission request, so no
-// command a live model asks for ever runs.
+function parseHook(body: Buffer): ReceivedHook | null {
+  try {
+    return JSON.parse(body.toString('utf8')) as ReceivedHook;
+  } catch {
+    return null;
+  }
+}
+
+function describeHooks(received: ReceivedHook[]): string {
+  return received.map((hook) => (hook.tool_name ? `${hook.hook_event_name}(${hook.tool_name})` : hook.hook_event_name)).join(', ');
+}
+
+// Stands in for the daemon: records every hook the CLI posts and denies every permission request. Allow rules
+// and permissive modes can make the CLI skip PermissionRequest, so the denial is not a sandbox: the prompt
+// itself is harmless (`touch` inside a temp directory).
 async function listenForHooks(): Promise<{ server: Server; url: string; received: ReceivedHook[] }> {
   const received: ReceivedHook[] = [];
   const server = createServer((request, response) => {
     const chunks: Buffer[] = [];
     request.on('data', (chunk: Buffer) => chunks.push(chunk));
     request.on('end', () => {
-      const hook = JSON.parse(Buffer.concat(chunks).toString('utf8')) as ReceivedHook;
+      const hook = parseHook(Buffer.concat(chunks));
+      if (!hook) {
+        response.writeHead(400).end();
+        return;
+      }
       received.push(hook);
       const answer = hook.hook_event_name === 'PermissionRequest' ? denyEveryPermissionRequest : {};
       response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(answer));
@@ -58,34 +81,45 @@ async function listenForHooks(): Promise<{ server: Server; url: string; received
   return { server, url: `http://127.0.0.1:${port}/hooks/live`, received };
 }
 
-async function waitForHook(received: ReceivedHook[], isWanted: (hook: ReceivedHook) => boolean): Promise<ReceivedHook> {
+async function waitForHook(
+  received: ReceivedHook[],
+  isWanted: (hook: ReceivedHook) => boolean,
+  ptyTail: () => string,
+): Promise<ReceivedHook> {
   const deadline = Date.now() + HOOK_WAIT_TIMEOUT_MS;
   while (Date.now() < deadline) {
     const found = received.find(isWanted);
     if (found) return found;
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
-  throw new Error(`no matching hook within ${HOOK_WAIT_TIMEOUT_MS} ms; received: ${JSON.stringify(received)}`);
+  throw new Error(
+    `no matching hook within ${HOOK_WAIT_TIMEOUT_MS} ms; received: [${describeHooks(received)}]; PTY tail:\n${ptyTail()}`,
+  );
 }
 
 function killAndWaitForExit(handle: HarnessHandle): Promise<void> {
-  return new Promise((resolve) => {
-    handle.onExit(() => resolve());
-    handle.kill({ force: true });
-  });
+  const exited = new Promise<void>((resolve) => handle.onExit(() => resolve()));
+  const gaveUp = new Promise<void>((resolve) => setTimeout(resolve, KILL_TIMEOUT_MS).unref());
+  handle.kill({ force: true });
+  return Promise.race([exited, gaveUp]);
 }
 
 // Needs a `claude` CLI already logged in with a real subscription (see docs/phase1-smoke.md and
 // .github/workflows/live.yml). Run locally with `pnpm --filter @openfleet/core test:live`. It spends a few
-// real turns on the cheapest model, and — like every session the daemon launches — marks its throwaway
-// repo as trusted in ~/.claude.json.
+// real turns on the cheapest model. Local side effects, like any session the daemon launches: the throwaway
+// `of-live-*` repos in the OS temp directory are marked as trusted in ~/.claude.json (entries stay), and the
+// sessions leave transcripts under ~/.claude/projects. The temp repos themselves are removed after each test.
 describe.skipIf(!isLive)('ClaudeCliHarness (live, needs a logged-in claude CLI)', () => {
   const runningHandles = new Set<HarnessHandle>();
   const listeningServers: Server[] = [];
+  let ptyTail = '';
+  const currentPtyTail = () => ptyTail;
 
   afterEach(async () => {
     await Promise.all([...runningHandles].map(killAndWaitForExit));
     listeningServers.splice(0).forEach((server) => server.close());
+    createdRepos.splice(0).forEach((directory) => rmSync(directory, { recursive: true, force: true }));
+    ptyTail = '';
   });
 
   async function startHookServer() {
@@ -102,6 +136,7 @@ describe.skipIf(!isLive)('ClaudeCliHarness (live, needs a logged-in claude CLI)'
       displayName: '🧪 Live smoke',
     });
     runningHandles.add(handle);
+    handle.onData((data) => { ptyTail = (ptyTail + data).slice(-PTY_TAIL_BYTES); });
     handle.onExit(() => runningHandles.delete(handle));
     return handle;
   }
@@ -116,8 +151,9 @@ describe.skipIf(!isLive)('ClaudeCliHarness (live, needs a logged-in claude CLI)'
       seededPrompt: `Use the Bash tool to run exactly this command and nothing else: touch ${probeFile}`,
     });
 
-    const permissionRequest = await waitForHook(hooks.received, (hook) => hook.hook_event_name === 'PermissionRequest');
+    const permissionRequest = await waitForHook(hooks.received, (hook) => hook.hook_event_name === 'PermissionRequest', currentPtyTail);
     expect(permissionRequest.tool_name).toBe('Bash');
+    expect(permissionRequest.tool_input?.command).toContain(probeFile);
     expect(existsSync(probeFile)).toBe(false);
   }, TEST_TIMEOUT_MS);
 
@@ -130,12 +166,12 @@ describe.skipIf(!isLive)('ClaudeCliHarness (live, needs a logged-in claude CLI)'
     const firstLaunch = startSession({
       sessionId, directory, hookUrl: hooks.url, model: CHEAP_MODEL, seededPrompt: 'Reply with the single word ok and stop.',
     });
-    await waitForHook(hooks.received, (hook) => hook.hook_event_name === 'Stop');
+    await waitForHook(hooks.received, (hook) => hook.hook_event_name === 'Stop', currentPtyTail);
     await killAndWaitForExit(firstLaunch);
     hooks.received.length = 0;
 
     startSession({ sessionId, directory, hookUrl: hooks.url, model: OTHER_MODEL, resuming: true });
-    await waitForHook(hooks.received, (hook) => hook.hook_event_name === 'SessionStart');
+    await waitForHook(hooks.received, (hook) => hook.hook_event_name === 'SessionStart', currentPtyTail);
 
     expect(readSettingsBytes()).toEqual(settingsBeforeHotSwap);
   }, TEST_TIMEOUT_MS);
