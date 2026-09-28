@@ -82,6 +82,31 @@ describe('MCP', () => {
     await restarted.closeAll();
   });
 
+  it('rejects the mcp bearer of a session once it is closed, instead of letting a leftover subprocess keep acting as it', async () => {
+    const parent = await connect(parentToken);
+    const created = text(await parent.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('closed-token'), name: 'Gimli', emoji: '⚔️' } }));
+    const closedToken = harness.launches[1]!.mcpToken;
+    await parent.callTool({ name: 'close_session', arguments: { session_id: created.id } });
+    expect(sessions.get(created.id)!.state).toBe('closed');
+
+    await expect(connect(closedToken)).rejects.toThrow();
+  });
+
+  it('refuses create_session called with a closed session\'s stale bearer token', async () => {
+    const parent = await connect(parentToken);
+    const created = text(await parent.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('closed-token-create'), name: 'Gimli', emoji: '⚔️' } }));
+    const closedToken = harness.launches[1]!.mcpToken;
+    await parent.callTool({ name: 'close_session', arguments: { session_id: created.id } });
+
+    const res = await fetch(`${server.url}/mcp`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', authorization: `Bearer ${closedToken}` },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'create_session', arguments: { directory: '/tmp/of-wt', name: 'spawned-by-closed' } } }),
+    });
+
+    expect(res.status).toBe(401);
+  });
+
   it('rejects an unauthorized request without reading the body, even when it is huge', async () => {
     const oversizedBody = JSON.stringify({ jsonrpc: '2.0', method: 'x', params: { pad: 'x'.repeat(2 * 1024 * 1024) }, id: 1 });
     const res = await fetch(`${server.url}/mcp`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer nope' }, body: oversizedBody });

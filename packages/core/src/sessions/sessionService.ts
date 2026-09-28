@@ -923,6 +923,10 @@ export class SessionService {
     const session = this.repo.get(sessionId);
     if (!session || session.state === 'closed') return;
     this.repo.setClosed(sessionId, exitCode, new Date().toISOString());
+    // Revoked, not just marked closed: a subprocess the agent left behind, or anyone who read the token
+    // (MAJ-03), must not go on calling the hook or MCP surface as this session once it is closed. reopen()
+    // issues its own fresh pair on the way back up (resumeOne), so this never collides with that rotation.
+    this.repo.setTokens(sessionId, newToken(), newToken());
     this.handles.delete(sessionId);
     activeHandleBySessionId.delete(sessionId);
     this.deps.bus.emit({ type: 'session.closed', sessionId, exitCode });
