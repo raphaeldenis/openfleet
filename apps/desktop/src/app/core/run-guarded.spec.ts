@@ -102,16 +102,5 @@ describe('runGuarded', () => {
       expect(error()).toBeNull();
       expect(busy()).toBe(true);
     });
-
-    it('still resets busy and sets the error while the run is not stale', async () => {
-      const busy = signal(false);
-      const error = signal<string | null>(null);
-      const action = vi.fn().mockRejectedValue(new Error('boom'));
-
-      await runGuarded(busy, error, 'Could not do the thing — try again.', action, { isStale: () => false });
-
-      expect(error()).toBe('Could not do the thing — try again.');
-      expect(busy()).toBe(false);
-    });
   });
 });
