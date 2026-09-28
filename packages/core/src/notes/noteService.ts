@@ -1,5 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { Note, NoteFolder } from '@openfleet/shared';
+import { inTransaction as runInTransaction } from '../db/transaction.js';
 import { expandMentions, type MentionLookup } from './mentionExpander.js';
 import type { NoteRepository, NoteUpdateResult } from './noteRepository.js';
 import { appendSection, replaceSection } from './noteSections.js';
@@ -215,29 +216,8 @@ export class NoteService {
     return note;
   }
 
-  // A write already inside a caller's transaction nests as a SAVEPOINT so it can be undone on its own,
-  // without ending the outer transaction; a top-level write owns a real BEGIN IMMEDIATE/COMMIT, mirroring
-  // migrate.ts's own transaction handling. Rolls back only when a transaction is still active, so the
-  // original error is never masked by a rollback failure.
   private inTransaction<T>(work: () => T): T {
-    const isNested = this.db.isTransaction;
-    this.db.exec(isNested ? `SAVEPOINT ${SAVEPOINT_NAME}` : 'BEGIN IMMEDIATE');
-    try {
-      const result = work();
-      this.db.exec(isNested ? `RELEASE ${SAVEPOINT_NAME}` : 'COMMIT');
-      return result;
-    } catch (error) {
-      if (this.db.isTransaction) {
-        if (isNested) {
-          // ROLLBACK TO alone leaves the savepoint marker open on the stack; RELEASE pops it, the safe idiom.
-          this.db.exec(`ROLLBACK TO ${SAVEPOINT_NAME}`);
-          this.db.exec(`RELEASE ${SAVEPOINT_NAME}`);
-        } else {
-          this.db.exec('ROLLBACK');
-        }
-      }
-      throw error;
-    }
+    return runInTransaction(this.db, SAVEPOINT_NAME, work);
   }
 }
 

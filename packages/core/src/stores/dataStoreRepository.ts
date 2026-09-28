@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import type { DatabaseSync } from 'node:sqlite';
-import type { ColumnType, DataStore, DsColumn, DsRow, DsRowChange, DsRowHistoryEntry, RowActorKind, SelectOption } from '@openfleet/shared';
+import type { ColumnType, DataStore, DsColumn, DsRow, DsRowChange, DsRowHistoryEntry, DsView, DsViewConfig, RowActorKind, SelectOption, ViewType } from '@openfleet/shared';
+import { inTransaction as runInTransaction } from '../db/transaction.js';
 import { newId } from '../ids.js';
 
 export interface RowActor { kind: RowActorKind; label: string }
@@ -29,6 +30,7 @@ export class UnknownColumnError extends Error {
   }
 }
 
+interface ViewRow { id: string; store_id: string; display_name: string; view_type: ViewType; config_json: string; sort_order: number }
 interface StoreRow { id: string; project_id: string; display_name: string; created_at: string; updated_at: string }
 interface ColumnRow { id: string; store_id: string; display_name: string; column_type: ColumnType; options_json: string | null; sort_order: number }
 interface RowRow { id: string; store_id: string; data_json: string; created_at: string; updated_at: string }
@@ -40,6 +42,10 @@ const toStore = (r: StoreRow): DataStore => ({
 const toColumn = (r: ColumnRow): DsColumn => ({
   id: r.id, storeId: r.store_id, displayName: r.display_name, columnType: r.column_type,
   options: r.options_json === null ? null : (JSON.parse(r.options_json) as SelectOption[]), sortOrder: r.sort_order,
+});
+const toView = (r: ViewRow): DsView => ({
+  id: r.id, storeId: r.store_id, displayName: r.display_name, viewType: r.view_type,
+  config: JSON.parse(r.config_json) as DsViewConfig, sortOrder: r.sort_order,
 });
 const toRow = (r: RowRow): DsRow => ({
   id: r.id, storeId: r.store_id, data: JSON.parse(r.data_json) as Record<string, unknown>, createdAt: r.created_at, updatedAt: r.updated_at,
@@ -91,6 +97,31 @@ export class DataStoreRepository {
     return { id: input.id, storeId, displayName: input.displayName, columnType: input.columnType, options: input.options ?? null, sortOrder: nextSortOrder };
   }
 
+  /** Removes the store with its columns, rows, views and row history (all cascade). */
+  deleteStore(id: string): void {
+    this.db.prepare('DELETE FROM data_stores WHERE id = ?').run(id);
+  }
+
+  insertView(storeId: string, input: { id: string; displayName: string; viewType: ViewType; config: DsViewConfig; at: string }): DsView {
+    this.refuseMissingStore(storeId);
+    const isNameTaken = this.db.prepare('SELECT 1 FROM ds_views WHERE store_id = ? AND display_name = ? COLLATE NOCASE').get(storeId, input.displayName) !== undefined;
+    if (isNameTaken) throw new DuplicateNameError(input.displayName);
+    const { viewCount: nextSortOrder } = this.db.prepare('SELECT COUNT(*) AS viewCount FROM ds_views WHERE store_id = ?').get(storeId) as { viewCount: number };
+    this.db.prepare('INSERT INTO ds_views (id, store_id, display_name, view_type, config_json, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(input.id, storeId, input.displayName, input.viewType, JSON.stringify(input.config), nextSortOrder, input.at);
+    return { id: input.id, storeId, displayName: input.displayName, viewType: input.viewType, config: input.config, sortOrder: nextSortOrder };
+  }
+
+  listViews(storeId: string): DsView[] {
+    const views = this.db.prepare('SELECT * FROM ds_views WHERE store_id = ? ORDER BY sort_order, created_at, id').all(storeId) as unknown as ViewRow[];
+    return views.map(toView);
+  }
+
+  findView(id: string): DsView | undefined {
+    const view = this.db.prepare('SELECT * FROM ds_views WHERE id = ?').get(id) as ViewRow | undefined;
+    return view ? toView(view) : undefined;
+  }
+
   listColumns(storeId: string): DsColumn[] {
     const rows = this.db.prepare('SELECT * FROM ds_columns WHERE store_id = ? ORDER BY sort_order, created_at, id').all(storeId) as unknown as ColumnRow[];
     return rows.map(toColumn);
@@ -137,6 +168,11 @@ export class DataStoreRepository {
   listRows(storeId: string): DsRow[] {
     const rows = this.db.prepare('SELECT * FROM ds_rows WHERE store_id = ? ORDER BY created_at, rowid').all(storeId) as unknown as RowRow[];
     return rows.map(toRow);
+  }
+
+  countRows(storeId: string): number {
+    const { n } = this.db.prepare('SELECT COUNT(*) AS n FROM ds_rows WHERE store_id = ?').get(storeId) as { n: number };
+    return n;
   }
 
   /** Newest first, at most `limit` entries when given. Authorizes through the entry's own store, so a deleted row's trail stays readable. */
@@ -193,20 +229,6 @@ export class DataStoreRepository {
 
   /** Runs `work` atomically: a transaction of its own, or a savepoint when the caller already holds one. */
   private inTransaction<T>(work: () => T): T {
-    const isInsideCallerTransaction = this.db.isTransaction;
-    const begin = isInsideCallerTransaction ? `SAVEPOINT ${WRITE_SAVEPOINT}` : 'BEGIN IMMEDIATE';
-    const commit = isInsideCallerTransaction ? `RELEASE ${WRITE_SAVEPOINT}` : 'COMMIT';
-    const rollback = isInsideCallerTransaction ? `ROLLBACK TO ${WRITE_SAVEPOINT}; RELEASE ${WRITE_SAVEPOINT}` : 'ROLLBACK';
-
-    this.db.exec(begin);
-    try {
-      const result = work();
-      this.db.exec(commit);
-      return result;
-    } catch (error) {
-      const hasDatabaseAlreadyRolledBack = !this.db.isTransaction;
-      if (!hasDatabaseAlreadyRolledBack) this.db.exec(rollback);
-      throw error;
-    }
+    return runInTransaction(this.db, WRITE_SAVEPOINT, work);
   }
 }
