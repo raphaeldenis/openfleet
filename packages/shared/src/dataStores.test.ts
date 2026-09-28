@@ -109,7 +109,7 @@ describe('data-store records', () => {
     expect(JSON.parse(JSON.stringify(records))).toEqual(records);
   });
 
-  it('refuses a row change kind other than create or delete', () => {
+  it('type-level check, guarded by pnpm typecheck: a row change kind other than create or delete does not compile', () => {
     // @ts-expect-error 'purge' is neither a known change kind nor a column diff
     const unknownKind: DsRowChange = { kind: 'purge' };
     expect(unknownKind).toEqual({ kind: 'purge' });
