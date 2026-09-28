@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
 import { FakeHarness } from '../harness/fakeHarness.js';
@@ -33,6 +33,13 @@ beforeEach(async () => {
 afterEach(() => server.close());
 
 const post = (path: string, body: unknown) => fetch(`${server.url}${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+
+const APPROVAL_POLL_INTERVAL_MS = 5;
+
+const decideOnceRequested = async (behavior: 'allow' | 'deny') => {
+  await vi.waitFor(() => expect(approvals.listPending()).toHaveLength(1), { interval: APPROVAL_POLL_INTERVAL_MS });
+  approvals.decide({ approvalId: approvals.listPending()[0]!.id, behavior });
+};
 
 describe('POST /hooks/:token', () => {
   it('moves the session to idle on SessionStart', async () => {
@@ -74,9 +81,7 @@ describe('POST /hooks/:token', () => {
 
   it('PermissionRequest waits for the decision and answers allow', async () => {
     const pending = post(`/hooks/${hookToken}`, { session_id: 'c', hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'ls' } });
-    await new Promise((r) => setTimeout(r, 20));
-    const approval = approvals.listPending()[0]!;
-    approvals.decide({ approvalId: approval.id, behavior: 'allow' });
+    await decideOnceRequested('allow');
     const body = await (await pending).json();
     expect(body).toEqual({ hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } } });
     expect(sessions.list()[0]!.state).toBe('generating');
@@ -84,9 +89,7 @@ describe('POST /hooks/:token', () => {
 
   it('PermissionRequest answers deny with a message', async () => {
     const pending = post(`/hooks/${hookToken}`, { session_id: 'c', hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'rm -rf /' } });
-    await new Promise((r) => setTimeout(r, 20));
-    const approval = approvals.listPending()[0]!;
-    approvals.decide({ approvalId: approval.id, behavior: 'deny' });
+    await decideOnceRequested('deny');
     const body = await (await pending).json();
     expect(body).toEqual({ hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'deny', message: 'denied in OpenFleet' } } });
   });
