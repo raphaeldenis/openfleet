@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { SettingsComponent } from './settings.component';
+import { MODEL_SETTLE_MS, SettingsComponent } from './settings.component';
 
 const MODEL_TABLE = { haiku: 'claude-haiku-4-5', sonnet: 'claude-sonnet-5', opus: 'claude-opus-5-5', fable: 'claude-fable-5-1' };
 const AVAILABLE_MODELS = ['claude-haiku-4-5', 'claude-haiku-4-5-20251001', 'claude-sonnet-5', 'claude-opus-5-5', 'claude-fable-5-1'];
@@ -30,7 +30,7 @@ async function renderSettings(daemon: FakeDaemon = {}) {
     return answer.then((body) => new Response(JSON.stringify(body)));
   });
   vi.stubGlobal('fetch', fetchStub);
-  const view = await render(SettingsComponent);
+  const view = await render(SettingsComponent, { providers: [{ provide: MODEL_SETTLE_MS, useValue: 20 }] });
   const putRequests = () =>
     fetchStub.mock.calls.filter(([, init]) => init?.method === 'PUT').map(([url, init]) => ({ pathname: new URL(url).pathname, body: JSON.parse(String(init?.body)) as unknown }));
   return { ...view, servedTable, putRequests };
@@ -133,6 +133,7 @@ describe('SettingsComponent', () => {
     const { putRequests } = await renderSettings({ saveModels: () => new Promise(() => {}) });
     const opusSelect = await findRungSelect('opus');
     await userEvent.selectOptions(opusSelect, 'claude-haiku-4-5-20251001');
+    await vi.waitFor(() => expect(putRequests()).toHaveLength(1));
 
     await userEvent.selectOptions(await findRungSelect('haiku'), 'claude-haiku-4-5-20251001');
 

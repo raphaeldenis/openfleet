@@ -1,7 +1,7 @@
-import { render, screen } from '@testing-library/angular/zoneless';
+import { render, screen, within } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { SettingsComponent } from './settings.component';
+import { MODEL_SETTLE_MS, SettingsComponent } from './settings.component';
 
 // Hostile black-box specs for the editable model rungs: what the user sees and what the component sends.
 
@@ -9,6 +9,12 @@ const MODEL_TABLE = { haiku: 'claude-haiku-4-5', sonnet: 'claude-sonnet-5', opus
 const AVAILABLE_MODELS = ['claude-haiku-4-5', 'claude-sonnet-5', 'claude-opus-5-5', 'claude-fable-5-1', 'claude-opus-9'];
 
 type SavedTable = { models: Record<string, string>; unknownRungs: string[] };
+
+const SETTLE_MS = 20;
+
+class DaemonRefusal {
+  constructor(readonly status: number, readonly error: string) {}
+}
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -18,6 +24,7 @@ function deferred<T>() {
 }
 
 interface FakeDaemon {
+  settleMs?: number;
   table?: Record<string, string>;
   availableModels?: () => Promise<unknown>;
   saveModels?: (patch: Record<string, string>) => Promise<unknown>;
@@ -38,10 +45,13 @@ async function renderSettings(daemon: FakeDaemon = {}) {
       init?.method === 'PUT' ? saveModels(JSON.parse(String(init.body))) :
       pathname === '/api/models/available' ? (daemon.availableModels ?? (() => Promise.resolve({ models: AVAILABLE_MODELS })))() :
       Promise.resolve({ ...table });
-    return answer.then((body) => new Response(JSON.stringify(body)));
+    return answer.then(
+      (body) => new Response(JSON.stringify(body)),
+      (failure: unknown) => (failure instanceof DaemonRefusal ? new Response(JSON.stringify({ error: failure.error }), { status: failure.status }) : Promise.reject(failure)),
+    );
   });
   vi.stubGlobal('fetch', fetchStub);
-  const view = await render(SettingsComponent);
+  const view = await render(SettingsComponent, { providers: [{ provide: MODEL_SETTLE_MS, useValue: daemon.settleMs ?? SETTLE_MS }] });
   const putBodies = () => fetchStub.mock.calls.filter(([, init]) => init?.method === 'PUT').map(([, init]) => JSON.parse(String(init?.body)) as unknown);
   return { ...view, putBodies };
 }
@@ -73,6 +83,7 @@ describe('SettingsComponent models — saving under stress', () => {
     const firstSave = deferred<SavedTable>();
     const { putBodies } = await renderSettings({ saveModels: () => firstSave.promise });
     await userEvent.selectOptions(await findSelect('opus'), 'claude-opus-9');
+    await vi.waitFor(() => expect(putBodies()).toHaveLength(1));
 
     await userEvent.selectOptions(await findSelect('haiku'), 'claude-sonnet-5');
 
@@ -222,5 +233,100 @@ describe('SettingsComponent models — defects', () => {
 
     await screen.findByText(/not in the known model list/i);
     expect(screen.getByRole('status')).toBe(liveRegionAfterKnownSave);
+  });
+});
+
+// A native select fires `change` on every ArrowDown (Win/Linux Chrome) and on every type-ahead match.
+function chooseInSteps(select: HTMLSelectElement, modelIds: string[]) {
+  for (const modelId of modelIds) {
+    select.value = modelId;
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+}
+const waitLongerThanSettle = () => new Promise((resolve) => setTimeout(resolve, SETTLE_MS * 5));
+
+describe('SettingsComponent models — settling before saving', () => {
+  beforeEach(() => localStorage.clear());
+  afterEach(() => localStorage.clear());
+
+  it('sends one save carrying only the final id when the dropdown steps through several ids', async () => {
+    const { putBodies } = await renderSettings();
+    const opusSelect = await findSelect('opus');
+
+    chooseInSteps(opusSelect, ['claude-haiku-4-5', 'claude-sonnet-5', 'claude-opus-9']);
+
+    await screen.findByText(/saved opus/i);
+    expect(putBodies()).toEqual([{ opus: 'claude-opus-9' }]);
+  });
+
+  it('sends nothing when the dropdown steps away and lands back on the saved id', async () => {
+    const { putBodies } = await renderSettings();
+    const opusSelect = await findSelect('opus');
+
+    chooseInSteps(opusSelect, ['claude-opus-9', 'claude-opus-5-5']);
+    await waitLongerThanSettle();
+
+    expect(putBodies()).toEqual([]);
+  });
+
+  it('says the change is unsaved, and sends nothing, until the user has settled', async () => {
+    const { putBodies } = await renderSettings({ settleMs: 300 });
+    const opusSelect = await findSelect('opus');
+
+    chooseInSteps(opusSelect, ['claude-opus-9']);
+
+    const announcement = await screen.findByText(/unsaved.*opus/i);
+    expect(announcement).toBe(screen.getByRole('status'));
+    expect(putBodies()).toEqual([]);
+    await screen.findByText(/saved opus/i);
+  });
+
+  it('says the change is saving while the daemon has not answered yet', async () => {
+    const pendingSave = deferred<SavedTable>();
+    await renderSettings({ saveModels: () => pendingSave.promise });
+
+    await userEvent.selectOptions(await findSelect('opus'), 'claude-opus-9');
+
+    expect(await screen.findByText(/saving.*opus/i)).toBe(screen.getByRole('status'));
+    pendingSave.resolve({ models: { ...MODEL_TABLE, opus: 'claude-opus-9' }, unknownRungs: [] });
+  });
+});
+
+describe('SettingsComponent models — failed save card', () => {
+  beforeEach(() => localStorage.clear());
+  afterEach(() => localStorage.clear());
+
+  it.each([
+    ['config.json is read-only', new DaemonRefusal(409, 'config_read_only'), /config\.json is read-only\. Your change was not applied\./i],
+    ['config.json is unreadable', new DaemonRefusal(409, 'config_unreadable'), /config\.json couldn.t be read/i],
+    ['the model id is refused', new DaemonRefusal(400, 'invalid_body'), /the daemon rejected this model id\./i],
+    ['the daemon fails', new DaemonRefusal(500, 'internal'), /something went wrong/i],
+    ['the daemon is unreachable', new TypeError('Failed to fetch'), /something went wrong/i],
+  ])('explains the cause when %s', async (_label, failure, expectedCause) => {
+    await renderSettings({ saveModels: () => Promise.reject(failure) });
+
+    await userEvent.selectOptions(await findSelect('opus'), 'claude-opus-9');
+
+    const card = await screen.findByTestId('models-save-error');
+    expect(card).toHaveTextContent(/couldn.t save/i);
+    expect(card).toHaveTextContent(expectedCause);
+    expect(within(card).getByRole('button', { name: 'Retry' })).toBeTruthy();
+  });
+
+  it('sends the last intended id again when Retry is pressed, and drops the card once it is saved', async () => {
+    let isDaemonWritable = false;
+    const { putBodies } = await renderSettings({
+      saveModels: (patch) => (isDaemonWritable ? Promise.resolve({ models: { ...MODEL_TABLE, ...patch }, unknownRungs: [] }) : Promise.reject(new DaemonRefusal(409, 'config_read_only'))),
+    });
+    await userEvent.selectOptions(await findSelect('opus'), 'claude-opus-9');
+    await screen.findByTestId('models-save-error');
+
+    isDaemonWritable = true;
+    await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    await screen.findByText(/saved opus/i);
+    expect(putBodies()).toEqual([{ opus: 'claude-opus-9' }, { opus: 'claude-opus-9' }]);
+    expect(screen.queryByTestId('models-save-error')).toBeNull();
+    expect((await findSelect('opus')).value).toBe('claude-opus-9');
   });
 });
