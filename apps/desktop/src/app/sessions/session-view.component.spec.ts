@@ -61,12 +61,12 @@ describe('SessionViewComponent', () => {
     expect(screen.getByTestId('permission-gate-card')).toBeTruthy();
   });
 
-  it('replaces the composer with a done banner and an enabled Resume action when the session closed cleanly', async () => {
+  it('replaces the composer with a neutral banner and an enabled Resume action when the session closed cleanly', async () => {
     await render(SessionViewComponent, {
       bindings: [inputBinding('sessionId', () => 's1')],
       providers: [{ provide: FleetApiService, useValue: fakeApi() }, { provide: FleetEventsService, useValue: fakeEvents([session({ state: 'closed', exitCode: 0 })]) }],
     });
-    expect(screen.getByTestId('banner')).toHaveAttribute('data-variant', 'done');
+    expect(screen.getByTestId('session-closed-footer')).toHaveAttribute('data-variant', 'neutral');
     expect(screen.queryByTestId('composer-input')).toBeNull();
     const resume = screen.getByTestId('resume-session') as HTMLButtonElement;
     expect(resume.disabled).toBe(false);
@@ -204,7 +204,7 @@ describe('SessionViewComponent', () => {
       bindings: [inputBinding('sessionId', () => 's1')],
       providers: [{ provide: FleetApiService, useValue: fakeApi() }, { provide: FleetEventsService, useValue: fakeEvents([session({ state: 'closed', exitCode: 1 })]) }],
     });
-    expect(screen.getByTestId('banner')).toHaveAttribute('data-variant', 'error');
+    expect(screen.getByTestId('session-closed-footer')).toHaveAttribute('data-variant', 'error');
   });
 
   it('agrees with the header about an undefined exit code instead of showing it as both a clean and a failed close', async () => {
@@ -218,7 +218,7 @@ describe('SessionViewComponent', () => {
     // Assert — neither a clean nor a failed close: the header shows no exit number, the banner stays non-error
     expect(screen.getByTestId('session-exit-code')).toHaveTextContent('closed');
     expect(screen.getByTestId('session-exit-code')).not.toHaveTextContent('exit');
-    expect(screen.getByTestId('banner')).toHaveAttribute('data-variant', 'done');
+    expect(screen.getByTestId('session-closed-footer')).toHaveAttribute('data-variant', 'neutral');
   });
 
   it('shows the composer for an open, non-gated session', async () => {

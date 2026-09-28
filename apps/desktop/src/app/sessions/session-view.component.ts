@@ -2,7 +2,6 @@ import { ChangeDetectionStrategy, Component, computed, effect, inject, input, si
 import type { Session } from '@openfleet/shared';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
-import { BannerComponent, BannerVariant } from '../design/banner.component';
 import { ComposerComponent } from './composer.component';
 import { PermissionGateCardComponent } from './permission-gate-card.component';
 import { closeStatusFor, reopenErrorMessage, resumeFailureReasonFor } from './session-close-status';
@@ -16,7 +15,7 @@ type LifecycleBanner = { kind: 'resuming' } | { kind: 'resume_failed'; reason: s
 @Component({
   selector: 'of-session-view',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [SessionHeaderComponent, TerminalComponent, PermissionGateCardComponent, ComposerComponent, BannerComponent],
+  imports: [SessionHeaderComponent, TerminalComponent, PermissionGateCardComponent, ComposerComponent],
   template: `
     @if (session(); as s) {
       <div class="session-view" data-testid="session-view">
@@ -45,14 +44,22 @@ type LifecycleBanner = { kind: 'resuming' } | { kind: 'resume_failed'; reason: s
           }
         </div>
         @if (s.state === 'closed') {
-          <div class="closed-footer" data-testid="session-closed-footer">
-            @if (!lifecycleBanner()) {
-              <of-banner [variant]="closedVariant(s)" [title]="closedTitle(s)" [description]="closedDescription(s)" />
+          @let showsCloseStatus = !lifecycleBanner();
+          <div
+            class="closed-footer"
+            data-testid="session-closed-footer"
+            [class.closed-footer--strip]="showsCloseStatus"
+            [attr.data-variant]="showsCloseStatus ? closedVariant(s) : null"
+            [attr.role]="showsCloseStatus ? closedRole(s) : null"
+          >
+            @if (showsCloseStatus) {
+              <span class="closed-title">{{ closedTitle(s) }}</span>
+              <span class="closed-body">{{ closedDescription(s) }}</span>
             }
             <button type="button" class="of-btn of-btn--primary" data-testid="resume-session" [disabled]="resuming()" (click)="resume(s.id)">
               ↻ Resume in worktree
             </button>
-            @if (!lifecycleBanner()) {
+            @if (showsCloseStatus) {
               <button type="button" class="of-btn of-btn--secondary" data-testid="reopen-fresh-session" disabled [attr.title]="reopenFreshUnavailableTooltip">
                 Reopen fresh
               </button>
@@ -69,7 +76,16 @@ type LifecycleBanner = { kind: 'resuming' } | { kind: 'resume_failed'; reason: s
   styles: `
     .session-view { display: flex; flex-direction: column; height: 100%; min-height: 0; }
     .terminal-area { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: .625rem; padding: .5rem; }
-    .closed-footer { display: flex; align-items: center; gap: .625rem; padding: .5rem .75rem; }
+    .closed-footer { display: flex; align-items: center; justify-content: flex-end; gap: .75rem; margin: 0 1rem 1rem; }
+    .closed-footer--strip {
+      justify-content: flex-start; padding: .75rem 1rem; border: 1px solid var(--line-2); border-radius: .5rem;
+      background: var(--panel); font-size: .8125rem; --closed-color: var(--state-closed);
+    }
+    .closed-footer--strip[data-variant='error'] { --closed-color: var(--state-error); border-color: color-mix(in oklch, var(--state-error) 55%, transparent); }
+    .closed-title { color: var(--closed-color); font-weight: 600; }
+    .closed-body { flex: 1; min-width: 0; color: var(--mut); }
+    .closed-footer .of-btn { height: 1.75rem; padding: 0 .75rem; font-size: .75rem; white-space: nowrap; }
+    .lifecycle-banner .of-btn { flex: none; height: 1.5rem; padding: 0 .625rem; font-size: .6875rem; white-space: nowrap; }
     .lifecycle-banner {
       display: flex; align-items: center; gap: .75rem; padding: .5rem 1rem;
       border-bottom: 1px solid var(--line); font-size: .75rem;
@@ -149,8 +165,12 @@ export class SessionViewComponent {
     this.resuming.set(false);
   }
 
-  protected closedVariant(session: Session): BannerVariant {
-    return closeStatusFor(session.exitCode).kind === 'failed' ? 'error' : 'done';
+  protected closedVariant(session: Session): 'error' | 'neutral' {
+    return closeStatusFor(session.exitCode).kind === 'failed' ? 'error' : 'neutral';
+  }
+
+  protected closedRole(session: Session): 'alert' | 'status' {
+    return this.closedVariant(session) === 'error' ? 'alert' : 'status';
   }
 
   protected closedTitle(session: Session): string {
