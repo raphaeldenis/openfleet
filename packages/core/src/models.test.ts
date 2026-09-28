@@ -34,6 +34,16 @@ describe('loadModelTable', () => {
     expect(table.gpt).toBeUndefined();
   });
 
+  it.each([
+    ['an empty string', ''],
+    ['whitespace only', '   '],
+  ])('throws when a rung in the config file is %s instead of serving a blank model id', (_label, blankRung) => {
+    const home = mkdtempSync(join(tmpdir(), 'of-models-'));
+    const configPath = join(home, 'config.json');
+    writeFileSync(configPath, JSON.stringify({ models: { sonnet: blankRung } }));
+    expect(() => loadModelTable(configPath)).toThrow(configPath);
+  });
+
   it('throws when a rung value in the config file is not a string', () => {
     const home = mkdtempSync(join(tmpdir(), 'of-models-'));
     const configPath = join(home, 'config.json');

@@ -66,6 +66,17 @@ describe('REST', () => {
     expect(res.status).toBe(401);
   });
 
+  it('returns the resolved model table on GET /api/models', async () => {
+    const res = await api('/api/models');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual(DEFAULT_MODEL_TABLE);
+  });
+
+  it('refuses GET /api/models without a bearer token', async () => {
+    const res = await fetch(`${server.url}/api/models`);
+    expect(res.status).toBe(401);
+  });
+
   it('rejects a body over 1 MiB on a protected route with 413', async () => {
     const oversizedBody = JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake', pad: 'x'.repeat(2 * 1024 * 1024) });
     const res = await api('/api/sessions', { method: 'POST', body: oversizedBody });
