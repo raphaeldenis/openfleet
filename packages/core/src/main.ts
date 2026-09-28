@@ -12,6 +12,7 @@ import { PulseScheduler } from './managers/pulseScheduler.js';
 import { createMcpHandler } from './mcp/mcpServer.js';
 import { loadModelTable } from './models.js';
 import { installProcessGuards } from './process/processGuards.js';
+import { installShutdownHandler } from './process/shutdownHandler.js';
 import { SessionService } from './sessions/sessionService.js';
 
 installProcessGuards();
@@ -39,11 +40,8 @@ console.log(`openfleet core listening on ${server.url} (home: ${config.home})`);
 await sessions.resumeAll();
 pulseScheduler.start();
 
-for (const signal of ['SIGINT', 'SIGTERM'] as const) {
-  process.on(signal, async () => {
-    pulseScheduler.stop();
-    await sessions.closeAll();
-    await server.close();
-    process.exit(0);
-  });
-}
+installShutdownHandler(async () => {
+  pulseScheduler.stop();
+  await sessions.closeAll();
+  await server.close();
+});
