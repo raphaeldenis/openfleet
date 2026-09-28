@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "tsx src/main.ts",
     "test": "NODE_OPTIONS=--no-warnings=ExperimentalWarning vitest run",
+    "test:live": "OPENFLEET_LIVE=1 NODE_OPTIONS=--no-warnings=ExperimentalWarning vitest run src/harness/claudeCli/claudeCliHarness.live.test.ts",
     "fix-node-pty-permissions": "node scripts/fixNodePtyPermissions.mjs"
   },
   "dependencies": {
