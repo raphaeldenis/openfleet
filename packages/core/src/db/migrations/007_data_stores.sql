@@ -49,5 +49,4 @@ CREATE TABLE ds_views (
   sort_order INTEGER NOT NULL CHECK(sort_order >= 0),
   created_at TEXT NOT NULL
 ) STRICT;
-CREATE INDEX ds_views_store ON ds_views(store_id);
 CREATE UNIQUE INDEX ds_views_store_name ON ds_views(store_id, display_name COLLATE NOCASE);
