@@ -2,11 +2,28 @@ import { TestBed } from '@angular/core/testing';
 import { RouterTestingHarness } from '@angular/router/testing';
 import { Component, signal } from '@angular/core';
 import { provideRouter, withComponentInputBinding, Router, type Routes } from '@angular/router';
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { AppShellComponent } from './app-shell.component';
 import { FleetEventsService } from '../core/fleet-events.service';
 
-@Component({ selector: 'stub-home', template: '<span data-testid="stub-home">home</span>' })
+// jsdom doesn't block focus() inside an inert subtree the way the WHATWG spec requires real
+// browsers to: without this shim, a focus() call fired before Angular's change detection removes
+// `inert` silently "succeeds" here while landing on <body> for real — the exact bug QA caught.
+const nativeFocus = HTMLElement.prototype.focus;
+beforeAll(() => {
+  HTMLElement.prototype.focus = function focusUnlessInert(this: HTMLElement, options?: FocusOptions): void {
+    if (this.closest('[inert]')) return;
+    nativeFocus.call(this, options);
+  };
+});
+afterAll(() => {
+  HTMLElement.prototype.focus = nativeFocus;
+});
+
+@Component({
+  selector: 'stub-home',
+  template: '<span data-testid="stub-home">home</span><button data-testid="stub-home-opener" type="button">Open from page</button>',
+})
 class StubHomeComponent {}
 @Component({ selector: 'stub-inbox', template: '<span data-testid="stub-inbox">inbox</span>' })
 class StubInboxComponent {}
@@ -288,6 +305,102 @@ describe('AppShellComponent', () => {
     await harness.fixture.whenStable();
 
     expect(document.activeElement).toBe(inbox);
+  });
+
+  it('falls back to the search trigger when the palette opener no longer exists in the DOM', async () => {
+    const { harness, root } = await setUp();
+    const inbox = root.querySelector('[data-testid="nav-inbox"]') as HTMLElement;
+    inbox.focus();
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }));
+    await harness.fixture.whenStable();
+
+    inbox.remove();
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await harness.fixture.whenStable();
+
+    const trigger = root.querySelector('[data-testid="open-palette"]') as HTMLElement;
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it('falls back to the search trigger when picking a palette item destroys the outlet opener via navigation', async () => {
+    const { harness, root } = await setUp();
+    const opener = root.querySelector('[data-testid="stub-home-opener"]') as HTMLElement;
+    opener.focus();
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }));
+    await harness.fixture.whenStable();
+    (root.querySelector('[data-testid="palette-item-inbox"]') as HTMLElement).click();
+    await harness.fixture.whenStable();
+
+    const trigger = root.querySelector('[data-testid="open-palette"]') as HTMLElement;
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it('keeps a reopened palette showing when a stale navigation from the closed opening resolves late', async () => {
+    const { harness, root } = await setUp();
+    const router = TestBed.inject(Router);
+    let resolveStaleNavigation!: (value: boolean) => void;
+    const staleNavigation = new Promise<boolean>((resolve) => (resolveStaleNavigation = resolve));
+    vi.spyOn(router, 'navigate').mockReturnValue(staleNavigation);
+    const firstOpener = root.querySelector('[data-testid="nav-inbox"]') as HTMLElement;
+    firstOpener.focus();
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }));
+    await harness.fixture.whenStable();
+    (root.querySelector('[data-testid="palette-item-inbox"]') as HTMLElement).click();
+    await harness.fixture.whenStable();
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await harness.fixture.whenStable();
+    expect(root.querySelector('[data-testid="command-palette"]')).toBeFalsy();
+
+    const secondOpener = root.querySelector('[data-testid="nav-components"]') as HTMLElement;
+    secondOpener.focus();
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }));
+    await harness.fixture.whenStable();
+    expect(root.querySelector('[data-testid="command-palette"]')).toBeTruthy();
+
+    resolveStaleNavigation(true);
+    await staleNavigation;
+    await harness.fixture.whenStable();
+
+    expect(root.querySelector('[data-testid="command-palette"]')).toBeTruthy();
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await harness.fixture.whenStable();
+    expect(document.activeElement).toBe(secondOpener);
+  });
+
+  it('falls back to the search trigger when ⌘K opens the palette with nothing focused beforehand', async () => {
+    const { harness, root } = await setUp();
+    (document.activeElement as HTMLElement | null)?.blur();
+    expect(document.activeElement).toBe(document.body);
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }));
+    await harness.fixture.whenStable();
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await harness.fixture.whenStable();
+
+    const trigger = root.querySelector('[data-testid="open-palette"]') as HTMLElement;
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it('makes the rest of the shell inert to assistive tech while the palette is open, and reachable again once it closes', async () => {
+    const { harness, root } = await setUp();
+
+    (root.querySelector('[data-testid="open-palette"]') as HTMLElement).click();
+    await harness.fixture.whenStable();
+
+    const body = root.querySelector('.body') as HTMLElement;
+    const statusBar = root.querySelector('[data-testid="app-statusbar"]') as HTMLElement;
+    expect(body).toHaveAttribute('inert');
+    expect(statusBar).toHaveAttribute('inert');
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await harness.fixture.whenStable();
+
+    expect(body).not.toHaveAttribute('inert');
+    expect(statusBar).not.toHaveAttribute('inert');
   });
 
   it('never lets a disabled nav item navigate, by click or by keyboard, since it renders as inert text rather than a link', async () => {
