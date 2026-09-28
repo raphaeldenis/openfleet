@@ -14,7 +14,7 @@ const HOOK_PATH = /^\/hooks\/([^/]+)$/;
 
 export interface ServerDeps {
   host: string; port: number; adminToken: string;
-  sessions: SessionService; approvals: ApprovalService; bus: EventBus; modelTable: ModelTable;
+  sessions: SessionService; approvals: ApprovalService; bus: EventBus; modelTable: ModelTable; modelConfigPath: string;
   managers: ManagerService; pulseScheduler: PulseScheduler;
   mcp?: (req: IncomingMessage, res: ServerResponse, body: unknown) => Promise<void>;
 }
@@ -29,7 +29,7 @@ function applyCorsHeaders(req: IncomingMessage, res: ServerResponse): void {
   if (!origin || !ALLOWED_ORIGINS.has(origin)) return;
   res.setHeader('Access-Control-Allow-Origin', origin);
   res.setHeader('Access-Control-Allow-Headers', 'authorization, content-type');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, PUT, OPTIONS');
 }
 
 async function handleHookRequest(req: IncomingMessage, res: ServerResponse, hookToken: string, deps: ServerDeps): Promise<void> {

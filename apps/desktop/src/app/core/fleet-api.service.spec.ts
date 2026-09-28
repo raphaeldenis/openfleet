@@ -67,6 +67,28 @@ describe('FleetApiService', () => {
     expect(init.method).toBeUndefined();
   });
 
+  it('reads the selectable model ids from GET /api/models/available', async () => {
+    fetchMock.mockResolvedValue(fakeResponse({ ok: true, status: 200, json: () => Promise.resolve({ models: ['a', 'b'] }) }));
+
+    await expect(api.availableModels()).resolves.toEqual({ models: ['a', 'b'] });
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toMatch(/\/api\/models\/available$/);
+    expect(init.method).toBeUndefined();
+  });
+
+  it('saves a model patch with PUT /api/models and returns the daemon answer', async () => {
+    const answer = { models: { haiku: 'h', sonnet: 's', opus: 'new', fable: 'f' }, unknownRungs: [] };
+    fetchMock.mockResolvedValue(fakeResponse({ ok: true, status: 200, json: () => Promise.resolve(answer) }));
+
+    await expect(api.saveModels({ opus: 'new' })).resolves.toEqual(answer);
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toMatch(/\/api\/models$/);
+    expect(init.method).toBe('PUT');
+    expect(JSON.parse(init.body as string)).toEqual({ opus: 'new' });
+  });
+
   it('sends the admin bearer token and JSON content type on every request', async () => {
     fetchMock.mockResolvedValue(fakeResponse({ ok: true, status: 200, json: () => Promise.resolve({}) }));
 

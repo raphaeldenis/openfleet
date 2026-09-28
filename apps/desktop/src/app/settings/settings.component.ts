@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
 import { environment } from '../../environments/environment';
 import { FleetApiService } from '../core/fleet-api.service';
 import { focusTabAt, nextTabIndex } from '../design/tablist-keyboard';
@@ -17,8 +17,17 @@ const MODEL_RUNGS: ReadonlyArray<{ rung: string; description: string }> = [
   { rung: 'fable', description: 'Experimental rung' },
 ];
 
+type ModelSaveOutcome =
+  | { kind: 'saved'; rung: string }
+  | { kind: 'unknown'; rung: string; modelId: string }
+  | { kind: 'failed'; rung: string };
+
 function isModelTable(body: unknown): body is Record<string, string> {
   return typeof body === 'object' && body !== null && !Array.isArray(body);
+}
+
+function isAvailableModels(body: unknown): body is { models: string[] } {
+  return typeof body === 'object' && body !== null && 'models' in body && Array.isArray(body.models);
 }
 
 @Component({
@@ -52,11 +61,33 @@ function isModelTable(body: unknown): body is Record<string, string> {
                 @for (row of rungs; track row.rung) {
                   <div class="row" [attr.data-testid]="'model-row-' + row.rung">
                     <div class="label"><span class="name">{{ row.rung }}</span><span class="detail">{{ row.description }}</span></div>
-                    <span class="value mono">{{ table[row.rung] || '—' }}</span>
+                    <select
+                      class="value mono"
+                      [attr.data-testid]="'model-select-' + row.rung"
+                      [attr.aria-label]="row.rung + ' model'"
+                      [disabled]="isSavingModel()"
+                      (change)="onModelChosen(row.rung, $any($event.target))"
+                    >
+                      @if (!table[row.rung]) {
+                        <option value="" selected disabled>—</option>
+                      }
+                      @for (modelId of optionIdsByRung()[row.rung]; track modelId) {
+                        <option [value]="modelId" [selected]="modelId === table[row.rung]">{{ modelId }}</option>
+                      }
+                    </select>
                   </div>
                 }
               </div>
-              <p class="hint" data-testid="models-edit-hint">Read-only · edit models in ~/.openfleet/config.json by hand, then restart the daemon</p>
+              @if (saveOutcome(); as outcome) {
+                @if (outcome.kind === 'failed') {
+                  <p class="error" role="alert" data-testid="models-save-error">✕ Couldn’t save the {{ outcome.rung }} model — the daemon kept the previous one.</p>
+                } @else if (outcome.kind === 'unknown') {
+                  <p class="hint" role="status" data-testid="models-save-status">✓ Saved {{ outcome.rung }} · {{ outcome.modelId }} is not in the known model list — saved anyway.</p>
+                } @else {
+                  <p class="hint" role="status" data-testid="models-save-status">✓ Saved {{ outcome.rung }}.</p>
+                }
+              }
+              <p class="hint" data-testid="models-edit-hint">A change applies to new sessions · running sessions keep their model</p>
             } @else {
               <p class="detail" data-testid="models-loading">Loading…</p>
             }
@@ -96,6 +127,9 @@ function isModelTable(body: unknown): body is Record<string, string> {
     .name { font-weight: 500; }
     .detail { font-size: .75rem; color: var(--mut); }
     .value { height: 1.75rem; min-width: 8rem; display: inline-flex; align-items: center; padding: 0 .625rem; border: 1px solid var(--line); border-radius: .375rem; background: var(--sunk); font-size: .75rem; }
+    select.value { color: var(--fg); cursor: pointer; }
+    select.value:disabled { cursor: progress; opacity: .6; }
+    select.value:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
     .mono { font-family: var(--mono); }
     .hint { margin: 0; font-size: .75rem; color: var(--mut); }
     .error { margin: 0; color: var(--state-error); }
@@ -113,9 +147,43 @@ export class SettingsComponent {
   protected readonly activeTab = signal<SettingsTab>('models');
   protected readonly modelTable = signal<Record<string, string> | null>(null);
   protected readonly modelsFailed = signal(false);
+  protected readonly availableModels = signal<string[]>([]);
+  protected readonly isSavingModel = signal(false);
+  protected readonly saveOutcome = signal<ModelSaveOutcome | null>(null);
+
+  // Each rung offers every available model, plus its current id when the daemon does not list it, so a
+  // custom id stays selectable instead of blanking the dropdown.
+  protected readonly optionIdsByRung = computed(() => {
+    const available = this.availableModels();
+    const table = this.modelTable() ?? {};
+    return Object.fromEntries(
+      MODEL_RUNGS.map(({ rung }) => {
+        const currentId = table[rung];
+        const currentIdIsMissing = !!currentId && !available.includes(currentId);
+        return [rung, currentIdIsMissing ? [...available, currentId] : available];
+      }),
+    );
+  });
 
   constructor() {
     void this.loadModelTable();
+  }
+
+  protected async onModelChosen(rung: string, select: HTMLSelectElement): Promise<void> {
+    const previousId = this.modelTable()?.[rung] ?? '';
+    const chosenId = select.value;
+    if (chosenId === previousId) return;
+    this.isSavingModel.set(true);
+    try {
+      const { models, unknownRungs } = await this.api.saveModels({ [rung]: chosenId });
+      this.modelTable.set(models);
+      this.saveOutcome.set(unknownRungs.includes(rung) ? { kind: 'unknown', rung, modelId: chosenId } : { kind: 'saved', rung });
+    } catch {
+      select.value = previousId;
+      this.saveOutcome.set({ kind: 'failed', rung });
+    } finally {
+      this.isSavingModel.set(false);
+    }
   }
 
   protected onTabKeydown(event: KeyboardEvent): void {
@@ -128,12 +196,10 @@ export class SettingsComponent {
   }
 
   private async loadModelTable(): Promise<void> {
-    try {
-      const body: unknown = await this.api.models();
-      if (isModelTable(body)) this.modelTable.set(body);
-      else this.modelsFailed.set(true);
-    } catch {
-      this.modelsFailed.set(true);
-    }
+    const [tableResult, availableResult] = await Promise.allSettled([this.api.models(), this.api.availableModels()]);
+    if (availableResult.status === 'fulfilled' && isAvailableModels(availableResult.value)) this.availableModels.set(availableResult.value.models);
+    const table: unknown = tableResult.status === 'fulfilled' ? tableResult.value : undefined;
+    if (isModelTable(table)) this.modelTable.set(table);
+    else this.modelsFailed.set(true);
   }
 }

@@ -5,6 +5,23 @@ const api = 'http://127.0.0.1:7332';
 const token = readFileSync('/tmp/of-e2e/admin.token', 'utf8').trim();
 const headers = { 'content-type': 'application/json', authorization: `Bearer ${token}` };
 
+test('a model picked in Settings is written to config.json and served by the running daemon', async ({ page, request }) => {
+  await page.addInitScript(([t, a]) => { localStorage.setItem('openfleet.adminToken', t); localStorage.setItem('openfleet.apiUrl', a); }, [token, api]);
+  const modelsBefore = await (await request.get(`${api}/api/models`, { headers })).json();
+  try {
+    await page.goto('/');
+    await page.getByTestId('nav-settings').click();
+
+    await page.getByTestId('model-select-opus').selectOption('claude-fable-5');
+
+    await expect(page.getByTestId('models-save-status')).toContainText(/saved/i);
+    expect((await (await request.get(`${api}/api/models`, { headers })).json()).opus).toBe('claude-fable-5');
+    expect(JSON.parse(readFileSync('/tmp/of-e2e/config.json', 'utf8')).models.opus).toBe('claude-fable-5');
+  } finally {
+    await request.put(`${api}/api/models`, { headers, data: { opus: modelsBefore.opus } });
+  }
+});
+
 test('a fake session appears in the sidebar, shows output, and its permission gate is decided from the session view', async ({ page, request }) => {
   await page.addInitScript(([t, a]) => { localStorage.setItem('openfleet.adminToken', t); localStorage.setItem('openfleet.apiUrl', a); }, [token, api]);
   await page.goto('/');

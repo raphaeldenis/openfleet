@@ -9,7 +9,12 @@ const ADMIN_TOKEN = 'sekrit-token-3f9a';
 
 async function renderSettings(models: () => Promise<unknown> = () => Promise.resolve(MODEL_TABLE)) {
   const modelsSpy = vi.fn(models);
-  const view = await render(SettingsComponent, { providers: [{ provide: FleetApiService, useValue: { models: modelsSpy } }] });
+  const api = {
+    models: modelsSpy,
+    availableModels: vi.fn(() => Promise.resolve({ models: Object.values(MODEL_TABLE) })),
+    saveModels: vi.fn((patch: Record<string, string>) => Promise.resolve({ models: { ...MODEL_TABLE, ...patch }, unknownRungs: [] })),
+  };
+  const view = await render(SettingsComponent, { providers: [{ provide: FleetApiService, useValue: api }] });
   return { ...view, models: modelsSpy };
 }
 
@@ -51,7 +56,7 @@ describe('SettingsComponent — tab bar', () => {
 
     await userEvent.click(modelsTab());
 
-    expect(screen.getByTestId('model-row-haiku')).toHaveTextContent('claude-haiku-4-5');
+    expect(screen.getByTestId('model-select-haiku')).toHaveValue('claude-haiku-4-5');
     expect(models).toHaveBeenCalledTimes(1);
   });
 
@@ -137,23 +142,33 @@ describe('SettingsComponent — Models tab', () => {
     expect(opusRow).toHaveTextContent('<img src=x onerror="window.__pwned=1">');
   });
 
-  it('offers no editing control of any kind inside the model table', async () => {
+  it('offers exactly four dropdowns and no free-text field inside the model table', async () => {
     await renderSettings();
     await screen.findByTestId('model-row-haiku');
 
-    const editingControls = screen.getByTestId('settings-models').querySelectorAll('input, textarea, select, button, [contenteditable], [role="combobox"], [role="textbox"]');
+    const modelsPanel = screen.getByTestId('settings-models');
 
-    expect(editingControls).toHaveLength(0);
+    expect(within(modelsPanel).getAllByRole('combobox')).toHaveLength(4);
+    expect(modelsPanel.querySelectorAll('input, textarea, [contenteditable]')).toHaveLength(0);
   });
 
-  it('tells the user in visible text to edit the config file by hand and restart the daemon', async () => {
+  it('labels each dropdown with its rung name for screen readers', async () => {
     await renderSettings();
     await screen.findByTestId('model-row-haiku');
 
-    const editHint = screen.getByTestId('models-edit-hint');
+    for (const rung of ['haiku', 'sonnet', 'opus', 'fable']) {
+      expect(screen.getByRole('combobox', { name: new RegExp(rung, 'i') })).toBeTruthy();
+    }
+  });
 
-    expect(editHint).toHaveTextContent('~/.openfleet/config.json');
-    expect(editHint).toHaveTextContent(/restart the daemon/i);
+  it('no longer tells the user to edit the config file by hand and restart the daemon', async () => {
+    await renderSettings();
+    await screen.findByTestId('model-row-haiku');
+
+    const note = screen.getByTestId('models-edit-hint');
+
+    expect(note).not.toHaveTextContent(/by hand/i);
+    expect(note).not.toHaveTextContent(/restart the daemon/i);
   });
 
   it('shows Loading… while the daemon has not answered yet, and no table', async () => {

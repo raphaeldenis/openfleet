@@ -26,7 +26,7 @@ beforeEach(async () => {
   const managerRepo = new ManagerRepository(db);
   const pulseScheduler = new PulseScheduler({ managers: managerRepo, sessions, bus });
   const managers = new ManagerService({ managers: managerRepo, sessions, bus, scheduler: pulseScheduler });
-  server = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable: DEFAULT_MODEL_TABLE });
+  server = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable: DEFAULT_MODEL_TABLE, modelConfigPath: '/tmp/of-unused/config.json' });
   const session = await sessions.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
   hookToken = (db.prepare('SELECT hook_token FROM sessions WHERE id = ?').get(session.id) as { hook_token: string }).hook_token;
 });
