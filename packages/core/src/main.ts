@@ -9,6 +9,7 @@ import { FakeHarness } from './harness/fakeHarness.js';
 import { ManagerRepository } from './managers/managerRepository.js';
 import { ManagerService } from './managers/managerService.js';
 import { PulseScheduler } from './managers/pulseScheduler.js';
+import { log } from './logger.js';
 import { createMcpHandler } from './mcp/mcpServer.js';
 import { loadModelTable } from './models.js';
 import { installProcessGuards } from './process/processGuards.js';
@@ -31,7 +32,7 @@ const managers = new ManagerService({ managers: managerRepository, sessions, bus
 // The server must be listening before any resumed CLI can POST its first hook — resuming first risks a
 // fast process hitting a port nothing is serving yet.
 const server = await startServer({ ...config, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, worktreesRoot: config.worktreesRoot }) });
-console.log(`openfleet core listening on ${server.url} (home: ${config.home})`);
+log('info', `openfleet core listening on ${server.url} (home: ${config.home})`);
 
 await sessions.resumeAll();
 pulseScheduler.start();

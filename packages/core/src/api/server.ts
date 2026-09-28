@@ -9,7 +9,7 @@ import type { SessionService } from '../sessions/sessionService.js';
 import { ALLOWED_ORIGINS } from './allowedOrigins.js';
 import { hooksHandler } from './hooksHandler.js';
 import { registerRestRoutes } from './restHandlers.js';
-import { InvalidJsonBodyError, json, PayloadTooLargeError, readJson, Router } from './router.js';
+import { InvalidJsonBodyError, json, logServerError, PayloadTooLargeError, readJson, Router } from './router.js';
 import { createWsHandler } from './wsHandler.js';
 
 const HOOK_PATH = /^\/hooks\/([^/]+)$/;
@@ -79,6 +79,7 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; clos
       if (error instanceof PayloadTooLargeError) return json(res, 413, { error: 'payload_too_large' });
       if (error instanceof InvalidJsonBodyError) return json(res, 400, { error: 'invalid_json', detail: error.message });
       const isValidation = (error as { name?: string }).name === 'ZodError';
+      if (!isValidation) logServerError(req, error);
       json(res, isValidation ? 400 : 500, { error: isValidation ? 'invalid_body' : 'internal', detail: (error as Error).message });
     }
   });

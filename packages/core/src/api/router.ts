@@ -1,4 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { newId } from '../ids.js';
+import { log } from '../logger.js';
 
 export type Handler = (ctx: { req: IncomingMessage; res: ServerResponse; params: Record<string, string>; body: unknown }) => Promise<void> | void;
 interface Route { method: string; pattern: RegExp; keys: string[]; handler: Handler }
@@ -27,6 +29,16 @@ export class Router {
 export function json(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { 'content-type': 'application/json' });
   res.end(JSON.stringify(body));
+}
+
+// The query string can carry secrets (tokens, admin credentials); never logged. Headers (bearer tokens,
+// hook tokens) are never passed in either — only method, path and the error's own stack.
+export function requestPath(req: IncomingMessage): string {
+  return (req.url ?? '/').split('?')[0] || '/';
+}
+
+export function logServerError(req: IncomingMessage, error: unknown): void {
+  log('error', `${req.method ?? 'GET'} ${requestPath(req)} → 500 [${newId()}]`, error);
 }
 
 export const MAX_BODY_BYTES = 1024 * 1024;
