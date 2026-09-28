@@ -2,6 +2,8 @@ import { Injectable } from '@angular/core';
 import type { Approval, HarnessId, PermissionMode, Session, SessionSpec } from '@openfleet/shared';
 import { environment } from '../../environments/environment';
 
+const DAEMON_ANSWER_TIMEOUT_MS = 5000;
+
 export class ApiError extends Error {
   // `code` is the REST error body's `error` field (e.g. `not_closed`, `directory_missing`) when the
   // server sent one — undefined for a response with no JSON body or no recognizable `error` field.
@@ -30,7 +32,27 @@ export class FleetApiService {
   private post<T>(path: string, body: unknown): Promise<T> { return this.call<T>(path, { method: 'POST', body: JSON.stringify(body) }); }
   private patch<T>(path: string, body: unknown): Promise<T> { return this.call<T>(path, { method: 'PATCH', body: JSON.stringify(body) }); }
 
-  health() { return this.call<{ ok: boolean }>('/health'); }
+  // Rejects when the daemon has not answered within `timeoutMs`, so a daemon that accepts the
+  // connection and never replies counts as unreachable instead of hanging its caller.
+  private async getWithin<T>(path: string, timeoutMs: number): Promise<T> {
+    const controller = new AbortController();
+    const abortTimer = setTimeout(() => controller.abort(), timeoutMs);
+    const hasTimedOut = new Promise<never>((_resolve, reject) =>
+      controller.signal.addEventListener('abort', () => reject(new ApiError(0, `GET ${path} → no answer within ${timeoutMs} ms`))),
+    );
+    try {
+      return await Promise.race([this.call<T>(path, { signal: controller.signal }), hasTimedOut]);
+    } finally {
+      clearTimeout(abortTimer);
+    }
+  }
+
+  async health(): Promise<{ ok: true }> {
+    const body = await this.getWithin<{ ok?: boolean } | null>('/health', DAEMON_ANSWER_TIMEOUT_MS);
+    if (body?.ok !== true) throw new ApiError(200, 'GET /health → the daemon does not report itself ok');
+    return { ok: true };
+  }
+  listSessions() { return this.getWithin<Session[]>('/api/sessions', DAEMON_ANSWER_TIMEOUT_MS); }
   createSession(spec: Partial<SessionSpec> & { directory: string; name: string; repoPath?: string; branchName?: string }) { return this.post<Session>('/api/sessions', spec); }
   createManagerSession(spec: { directory: string; name: string; emoji?: string; model?: string; harness?: HarnessId; permissionMode?: PermissionMode; pulseSeconds: number; childrenCap: number; mission: string }) {
     return this.post<Session>('/api/sessions', {

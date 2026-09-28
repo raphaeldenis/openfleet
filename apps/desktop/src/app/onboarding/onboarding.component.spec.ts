@@ -1,11 +1,14 @@
 import { render, screen } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
+import { TestBed } from '@angular/core/testing';
 import { provideRouter, Router } from '@angular/router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OnboardingComponent } from './onboarding.component';
 
 const HEALTH_POLL_INTERVAL_MS = 2000;
 const DEFERRED_STEP_NAMES = ['Providers', 'Playbooks', 'Team'];
+const DAEMON_STEP_HEADING = 'Start the OpenFleet daemon';
+const PROJECT_STEP_HEADING = 'Define the project';
 
 function jsonResponse(body: unknown): Response {
   return { ok: true, status: 200, json: () => Promise.resolve(body) } as unknown as Response;
@@ -13,24 +16,23 @@ function jsonResponse(body: unknown): Response {
 
 function stubDaemon() {
   const daemon = { isUp: false };
-  const fetchMock = vi.fn((url: string, _init?: RequestInit) => {
+  const fetchMock = vi.fn((url: string, init?: RequestInit) => {
     if (url.endsWith('/health')) return daemon.isUp ? Promise.resolve(jsonResponse({ ok: true })) : Promise.reject(new TypeError('Failed to fetch'));
-    if (url.endsWith('/api/sessions')) return Promise.resolve(jsonResponse({ id: 's-new' }));
+    if (url.endsWith('/api/sessions')) return Promise.resolve(jsonResponse(init?.method === 'POST' ? { id: 's-new' } : []));
     return Promise.reject(new Error(`unexpected request to ${url}`));
   });
   vi.stubGlobal('fetch', fetchMock);
   const healthRequestCount = () => fetchMock.mock.calls.filter(([url]) => url.endsWith('/health')).length;
   const createSessionRequestBody = () => {
-    const createRequest = fetchMock.mock.calls.find(([url]) => url.endsWith('/api/sessions'));
+    const createRequest = fetchMock.mock.calls.find(([url, init]) => url.endsWith('/api/sessions') && init?.method === 'POST');
     return JSON.parse(createRequest?.[1]?.body as string);
   };
   return { daemon, healthRequestCount, createSessionRequestBody };
 }
 
 async function renderOnboarding() {
-  const view = await render(OnboardingComponent, { providers: [provideRouter([])] });
-  const navigateSpy = vi.spyOn(view.fixture.debugElement.injector.get(Router), 'navigate').mockResolvedValue(true);
-  return { ...view, navigateSpy };
+  const view = await render(OnboardingComponent, { providers: [provideRouter([{ path: '**', children: [] }])] });
+  return { ...view, router: TestBed.inject(Router) };
 }
 
 async function letTimePass(milliseconds: number, fixture: { whenStable: () => Promise<unknown> }): Promise<void> {
@@ -39,7 +41,7 @@ async function letTimePass(milliseconds: number, fixture: { whenStable: () => Pr
 }
 
 describe('OnboardingComponent', () => {
-  beforeEach(() => vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] }));
+  beforeEach(() => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }));
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
@@ -95,7 +97,7 @@ describe('OnboardingComponent', () => {
     await letTimePass(HEALTH_POLL_INTERVAL_MS, fixture);
 
     expect(healthRequestCount()).toBe(requestsOnArrival + 2);
-    expect(screen.getByTestId('onboarding-step-daemon')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: DAEMON_STEP_HEADING })).toBeInTheDocument();
   });
 
   it('user sees onboarding move on to the project step once the daemon answers, and /health is no longer polled', async () => {
@@ -107,8 +109,8 @@ describe('OnboardingComponent', () => {
     const requestsWhenAdvanced = healthRequestCount();
     await letTimePass(HEALTH_POLL_INTERVAL_MS * 5, fixture);
 
-    expect(screen.getByTestId('onboarding-step-project')).toBeInTheDocument();
-    expect(screen.queryByTestId('onboarding-step-daemon')).toBeNull();
+    expect(screen.getByRole('heading', { name: PROJECT_STEP_HEADING })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: DAEMON_STEP_HEADING })).toBeNull();
     expect(healthRequestCount()).toBe(requestsWhenAdvanced);
   });
 
@@ -138,20 +140,19 @@ describe('OnboardingComponent', () => {
     expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled();
   });
 
-  it('user creates the first session from the new-session form, pre-filled with the repository path and a safe seeded prompt', async () => {
+  it('user creates the first session from the new-session form, pre-filled with the repository path and a safe seeded prompt, and lands on it', async () => {
     const { daemon, createSessionRequestBody } = stubDaemon();
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-    const { fixture, navigateSpy } = await renderOnboarding();
+    const { fixture, router } = await renderOnboarding();
     daemon.isUp = true;
     await letTimePass(HEALTH_POLL_INTERVAL_MS, fixture);
     await user.type(screen.getByLabelText('Repository path'), '/Users/me/repo');
     await user.click(screen.getByRole('button', { name: 'Continue' }));
 
-    expect(screen.getByTestId('new-session-form')).toBeInTheDocument();
     expect(screen.getByLabelText('Directory')).toHaveValue('/Users/me/repo');
     await user.click(screen.getByRole('button', { name: 'Create session' }));
 
-    await vi.waitFor(() => expect(navigateSpy).toHaveBeenCalledWith(['/session', 's-new']));
+    await vi.waitFor(() => expect(router.url).toBe('/session/s-new'));
     const { directory, seededPrompt } = createSessionRequestBody();
     expect(directory).toBe('/Users/me/repo');
     expect(seededPrompt).toMatch(/do not (modify|change|edit)/i);

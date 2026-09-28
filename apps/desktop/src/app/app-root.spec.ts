@@ -1,7 +1,7 @@
 import { TestBed } from '@angular/core/testing';
 import { Router, provideRouter } from '@angular/router';
 import { signal } from '@angular/core';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppRoot } from './app-root';
 import { routes } from './app.routes';
 import { FleetEventsService } from './core/fleet-events.service';
@@ -29,7 +29,11 @@ function configureAppRoot() {
 }
 
 describe('AppRoot', () => {
-  afterEach(() => vi.unstubAllGlobals());
+  beforeEach(() => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }));
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
 
   it('user opening the app while the daemon is unreachable lands on onboarding', async () => {
     stubDaemon({ isUp: false });
@@ -48,7 +52,7 @@ describe('AppRoot', () => {
 
     TestBed.createComponent(AppRoot).detectChanges();
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.stringMatching(/\/health$/), expect.anything()));
-    await new Promise((resolve) => setTimeout(resolve));
+    await vi.advanceTimersByTimeAsync(0);
 
     expect(router.url).toBe('/inbox');
   });

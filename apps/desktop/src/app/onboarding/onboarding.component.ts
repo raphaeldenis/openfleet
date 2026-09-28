@@ -1,6 +1,7 @@
+import { Location } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, effect, inject, signal, untracked } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { RouterLink } from '@angular/router';
+import { Router, RouterLink } from '@angular/router';
 import { environment } from '../../environments/environment';
 import { FleetApiService } from '../core/fleet-api.service';
 import { NewSessionFormComponent } from '../sessions/new-session-form.component';
@@ -8,7 +9,9 @@ import { NewSessionFormComponent } from '../sessions/new-session-form.component'
 type StepId = 'daemon' | 'providers' | 'project' | 'playbooks' | 'team' | 'first-session';
 
 const HEALTH_POLL_INTERVAL_MS = 2000;
+const APP_HOME_URL = '/';
 const START_DAEMON_COMMAND = 'pnpm dev:core';
+const COPY_FAILURE_MESSAGE = 'Couldn’t copy — select the command and copy it by hand';
 const DEFERRED_STEP_LABEL = 'Available in a later phase';
 const FIRST_SESSION_NAME = 'First session';
 const FIRST_SESSION_SEEDED_PROMPT = 'Read the README and give me a short tour of this project. Do not modify any files.';
@@ -22,19 +25,25 @@ const STEPS: ReadonlyArray<{ id: StepId; name: string; isBuilt: boolean }> = [
   { id: 'first-session', name: 'First session', isBuilt: true },
 ];
 
+function requestedUrlFrom(navigationState: unknown): string {
+  const requestedUrl = (navigationState as { returnUrl?: unknown } | null)?.returnUrl;
+  const isAppUrl = typeof requestedUrl === 'string' && requestedUrl.startsWith('/') && !requestedUrl.startsWith('/onboarding');
+  return isAppUrl ? requestedUrl : APP_HOME_URL;
+}
+
 @Component({
   selector: 'of-onboarding',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [FormsModule, RouterLink, NewSessionFormComponent],
   template: `
     <div class="page" data-testid="onboarding">
-      <div class="topbar"><a routerLink="/" class="skip">Skip to app →</a></div>
+      <div class="topbar"><a [routerLink]="returnUrlTree" class="skip">Skip to app →</a></div>
 
       <ol class="stepper" aria-label="Setup steps">
         @for (step of steps(); track step.id) {
           <li class="step" [attr.aria-current]="step.isCurrent ? 'step' : null" [attr.aria-disabled]="step.isBuilt ? null : 'true'" [attr.data-state]="step.state">
             <span class="bar"></span>
-            <span class="step-name"><span class="mono" aria-hidden="true">{{ step.mark }}</span>{{ step.name }}</span>
+            <span class="step-name"><span class="mono" aria-hidden="true">{{ step.mark }}</span>{{ step.name }}@if (step.state === 'done') {<span class="visually-hidden"> done</span>}</span>
             @if (!step.isBuilt) {
               <span class="step-later">{{ deferredStepLabel }}</span>
             }
@@ -58,6 +67,7 @@ const STEPS: ReadonlyArray<{ id: StepId; name: string; isBuilt: boolean }> = [
                   <div class="terminal">$ {{ startDaemonCommand }}</div>
                   <button type="button" class="of-btn of-btn--secondary" (click)="copyCommand()">{{ hasCopiedCommand() ? 'Copied' : 'Copy command' }}</button>
                 </div>
+                <span class="fine-print" role="status">{{ copyFailureMessage() }}</span>
                 <span class="fine-print">Checking again every 2 s…</span>
               </div>
             </section>
@@ -85,7 +95,9 @@ const STEPS: ReadonlyArray<{ id: StepId; name: string; isBuilt: boolean }> = [
                 <h1>Start your first session</h1>
                 <p>Land in a terminal in under a minute.</p>
               </header>
-              <of-new-session-form [initialDirectory]="repositoryPath().trim()" [initialName]="firstSessionName" [seededPrompt]="seededPrompt" />
+              <p class="seeded-prompt">The session starts by sending this prompt: <q>{{ seededPrompt }}</q></p>
+              <of-new-session-form [embedded]="true" [initialDirectory]="repositoryPath().trim()" [initialName]="firstSessionName" [seededPrompt]="seededPrompt" />
+              <div class="actions actions--start"><button type="button" class="of-btn of-btn--secondary" (click)="backToProject()">Back</button></div>
             </section>
           }
         }
@@ -125,14 +137,21 @@ const STEPS: ReadonlyArray<{ id: StepId; name: string; isBuilt: boolean }> = [
     .command-row .of-btn { height: 2rem; padding: 0 .75rem; white-space: nowrap }
     .fine-print { font-size: .6875rem; color: var(--faint) }
     .of-field { display: flex; flex-direction: column; gap: .25rem }
+    .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap }
+    .seeded-prompt { margin: 0; font-size: .75rem; color: var(--mut) }
     .actions { display: flex; justify-content: flex-end }
+    .actions--start { justify-content: flex-start }
     .actions .of-btn { height: 2rem; padding: 0 1rem }
     .mono { font-family: var(--mono) }
   `,
 })
 export class OnboardingComponent {
   private readonly api = inject(FleetApiService);
+  private readonly router = inject(Router);
+  // AppRoot hands over the URL the user was redirected from when the daemon was unreachable.
+  private readonly returnUrl = requestedUrlFrom(inject(Location).getState());
 
+  protected readonly returnUrlTree = this.router.parseUrl(this.returnUrl);
   protected readonly deferredStepLabel = DEFERRED_STEP_LABEL;
   protected readonly startDaemonCommand = START_DAEMON_COMMAND;
   protected readonly firstSessionName = FIRST_SESSION_NAME;
@@ -143,6 +162,7 @@ export class OnboardingComponent {
   protected readonly repositoryPath = signal('');
   protected readonly hasRepositoryPath = computed(() => this.repositoryPath().trim() !== '');
   protected readonly hasCopiedCommand = signal(false);
+  protected readonly copyFailureMessage = signal('');
   protected readonly steps = computed(() => {
     const currentIndex = STEPS.findIndex((step) => step.id === this.currentStepId());
     return STEPS.map((step, index) => {
@@ -158,15 +178,34 @@ export class OnboardingComponent {
     effect((onCleanup) => {
       const isWaitingForDaemon = this.currentStepId() === 'daemon';
       if (!isWaitingForDaemon) return;
-      const pollTimer = setInterval(() => void this.advanceWhenDaemonAnswers(), HEALTH_POLL_INTERVAL_MS);
-      onCleanup(() => clearInterval(pollTimer));
-      untracked(() => void this.advanceWhenDaemonAnswers());
+      let hasLeftDaemonStep = false;
+      let nextCheckTimer: ReturnType<typeof setTimeout> | undefined;
+      const checkDaemonThenScheduleNextCheck = async () => {
+        const isDaemonUp = await this.api.health().then(
+          () => true,
+          () => false,
+        );
+        if (hasLeftDaemonStep) return;
+        if (isDaemonUp) return this.leaveDaemonStep(() => hasLeftDaemonStep);
+        nextCheckTimer = setTimeout(() => void checkDaemonThenScheduleNextCheck(), HEALTH_POLL_INTERVAL_MS);
+      };
+      onCleanup(() => {
+        hasLeftDaemonStep = true;
+        clearTimeout(nextCheckTimer);
+      });
+      untracked(() => void checkDaemonThenScheduleNextCheck());
     });
   }
 
   protected async copyCommand(): Promise<void> {
-    await navigator.clipboard.writeText(START_DAEMON_COMMAND);
-    this.hasCopiedCommand.set(true);
+    try {
+      await navigator.clipboard.writeText(START_DAEMON_COMMAND);
+      this.hasCopiedCommand.set(true);
+      this.copyFailureMessage.set('');
+    } catch {
+      this.hasCopiedCommand.set(false);
+      this.copyFailureMessage.set(COPY_FAILURE_MESSAGE);
+    }
   }
 
   protected continueToFirstSession(): void {
@@ -174,12 +213,24 @@ export class OnboardingComponent {
     this.currentStepId.set('first-session');
   }
 
-  private async advanceWhenDaemonAnswers(): Promise<void> {
-    const isDaemonUp = await this.api.health().then(
-      () => true,
+  protected backToProject(): void {
+    this.currentStepId.set('project');
+  }
+
+  // A returning user (deep link, or a fleet that already has sessions) goes back to the app;
+  // only a first run with an empty fleet continues with the project.
+  private async leaveDaemonStep(hasLeftDaemonStep: () => boolean): Promise<void> {
+    const isDeepLink = this.returnUrl !== APP_HOME_URL;
+    const isReturningUser = isDeepLink || (await this.fleetHasSessions());
+    if (hasLeftDaemonStep()) return;
+    if (isReturningUser) await this.router.navigateByUrl(this.returnUrl);
+    else this.currentStepId.set('project');
+  }
+
+  private fleetHasSessions(): Promise<boolean> {
+    return this.api.listSessions().then(
+      (sessions) => sessions.length > 0,
       () => false,
     );
-    const isStillWaitingForDaemon = this.currentStepId() === 'daemon';
-    if (isDaemonUp && isStillWaitingForDaemon) this.currentStepId.set('project');
   }
 }

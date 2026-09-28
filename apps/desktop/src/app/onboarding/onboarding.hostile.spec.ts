@@ -5,11 +5,18 @@ import { provideRouter, Router } from '@angular/router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OnboardingComponent } from './onboarding.component';
 
-// Hostile black-box QE suite for P2-U7. Every `it.fails` documents a defect: it asserts the behaviour
-// a user should get, fails today, and flips to a plain `it` once the defect is fixed.
+// Hostile black-box QE suite for P2-U7: what a user sees and can do, never how the component is built.
 
 const HEALTH_POLL_INTERVAL_MS = 2000;
 const REPOSITORY_PATH = '/Users/me/repo';
+const DAEMON_STEP_HEADING = 'Start the OpenFleet daemon';
+const PROJECT_STEP_HEADING = 'Define the project';
+const FIRST_SESSION_STEP_HEADING = 'Start your first session';
+const realSetTimeout = globalThis.setTimeout;
+
+const daemonStepHeading = () => screen.getByRole('heading', { name: DAEMON_STEP_HEADING });
+const projectStepHeading = () => screen.getByRole('heading', { name: PROJECT_STEP_HEADING });
+const firstSessionStepHeading = () => screen.getByRole('heading', { name: FIRST_SESSION_STEP_HEADING });
 
 function response({ status = 200, body = {} as unknown }: { status?: number; body?: unknown } = {}): Response {
   return { ok: status < 400, status, json: () => Promise.resolve(body) } as unknown as Response;
@@ -19,36 +26,26 @@ function responseWithNonJsonBody(): Response {
   return { ok: true, status: 200, json: () => Promise.reject(new SyntaxError('Unexpected token < in JSON')) } as unknown as Response;
 }
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
-
 function stubDaemon({ isUp = false } = {}) {
   const daemon = {
     answerHealth: (): Promise<Response> => (isUp ? Promise.resolve(response({ body: { ok: true } })) : Promise.reject(new TypeError('Failed to fetch'))),
+    answerListSessions: (): Promise<Response> => Promise.resolve(response({ body: [] })),
     answerCreateSession: (): Promise<Response> => Promise.resolve(response({ body: { id: 's-new' } })),
   };
-  const fetchMock = vi.fn((url: string, _init?: RequestInit) => {
+  const fetchMock = vi.fn((url: string, init?: RequestInit) => {
     if (url.endsWith('/health')) return daemon.answerHealth();
-    if (url.endsWith('/api/sessions')) return daemon.answerCreateSession();
+    if (url.endsWith('/api/sessions')) return init?.method === 'POST' ? daemon.answerCreateSession() : daemon.answerListSessions();
     return Promise.reject(new Error(`unexpected request to ${url}`));
   });
   vi.stubGlobal('fetch', fetchMock);
   const healthRequestCount = () => fetchMock.mock.calls.filter(([url]) => url.endsWith('/health')).length;
-  const createSessionRequests = () => fetchMock.mock.calls.filter(([url]) => url.endsWith('/api/sessions')).map(([, init]) => JSON.parse(init?.body as string));
+  const createSessionRequests = () => fetchMock.mock.calls.filter(([url, init]) => url.endsWith('/api/sessions') && init?.method === 'POST').map(([, init]) => JSON.parse(init?.body as string));
   return { daemon, healthRequestCount, createSessionRequests };
 }
 
 async function renderOnboarding() {
-  const view = await render(OnboardingComponent, { providers: [provideRouter([])] });
-  const navigateSpy = vi.spyOn(view.fixture.debugElement.injector.get(Router), 'navigate').mockResolvedValue(true);
-  return { ...view, navigateSpy };
+  const view = await render(OnboardingComponent, { providers: [provideRouter([{ path: '**', children: [] }])] });
+  return { ...view, router: TestBed.inject(Router) };
 }
 
 async function letTimePass(milliseconds: number, fixture: { whenStable: () => Promise<unknown> }): Promise<void> {
@@ -68,7 +65,7 @@ async function collectUnhandledRejections(action: () => Promise<void>): Promise<
   nodeProcess.on('unhandledRejection', (reason) => rejections.push(reason));
   try {
     await action();
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => realSetTimeout(resolve, 10));
   } finally {
     nodeProcess.removeAllListeners('unhandledRejection');
     runnerListeners.forEach((listener) => nodeProcess.on('unhandledRejection', listener));
@@ -96,34 +93,44 @@ async function reachFirstSessionStep(repositoryPath = REPOSITORY_PATH) {
 }
 
 describe('Onboarding — hostile black-box suite', () => {
-  beforeEach(() => vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] }));
+  beforeEach(() => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }));
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
   describe('daemon polling', () => {
-    // DEFECT (major) onboarding.component.ts:161 — setInterval fires whether or not the previous /health is settled.
-    it.fails('a /health request that hangs is not stacked with a new /health request every 2 seconds', async () => {
+    it('a /health request that hangs is not stacked with a new /health request every 2 seconds', async () => {
       const { daemon, healthRequestCount } = stubDaemon();
       daemon.answerHealth = () => new Promise<Response>(() => undefined);
       const { fixture } = await renderOnboarding();
 
-      await letTimePass(HEALTH_POLL_INTERVAL_MS * 3, fixture);
+      await letTimePass(HEALTH_POLL_INTERVAL_MS * 2, fixture);
 
       expect(healthRequestCount()).toBe(1);
+    });
+
+    it('a /health that never answers is given up on after 5 seconds and checked again', async () => {
+      const { daemon, healthRequestCount } = stubDaemon();
+      daemon.answerHealth = () => new Promise<Response>(() => undefined);
+      const { fixture } = await renderOnboarding();
+
+      await letTimePass(5000 + HEALTH_POLL_INTERVAL_MS, fixture);
+
+      expect(healthRequestCount()).toBe(2);
+      expect(daemonStepHeading()).toBeInTheDocument();
     });
 
     it('user starting the daemon after a few failed checks is moved on to the project step', async () => {
       const { daemon } = stubDaemon();
       const { fixture } = await renderOnboarding();
       await letTimePass(HEALTH_POLL_INTERVAL_MS * 2, fixture);
-      expect(screen.getByTestId('onboarding-step-daemon')).toBeInTheDocument();
+      expect(daemonStepHeading()).toBeInTheDocument();
 
       daemon.answerHealth = () => Promise.resolve(response({ body: { ok: true } }));
       await letTimePass(HEALTH_POLL_INTERVAL_MS, fixture);
 
-      expect(screen.getByTestId('onboarding-step-project')).toBeInTheDocument();
+      expect(projectStepHeading()).toBeInTheDocument();
     });
 
     it('user with the daemon already up is taken to the project step at once, without waiting for a poll tick', async () => {
@@ -132,7 +139,7 @@ describe('Onboarding — hostile black-box suite', () => {
 
       await letTimePass(0, fixture);
 
-      expect(screen.getByTestId('onboarding-step-project')).toBeInTheDocument();
+      expect(projectStepHeading()).toBeInTheDocument();
     });
 
     it('a /health answering 503 keeps the user on the daemon step', async () => {
@@ -142,7 +149,7 @@ describe('Onboarding — hostile black-box suite', () => {
 
       await letTimePass(HEALTH_POLL_INTERVAL_MS * 2, fixture);
 
-      expect(screen.getByTestId('onboarding-step-daemon')).toBeInTheDocument();
+      expect(daemonStepHeading()).toBeInTheDocument();
     });
 
     it('a 200 that is not JSON (some other service on the port) keeps the user on the daemon step', async () => {
@@ -152,37 +159,17 @@ describe('Onboarding — hostile black-box suite', () => {
 
       await letTimePass(HEALTH_POLL_INTERVAL_MS * 2, fixture);
 
-      expect(screen.getByTestId('onboarding-step-daemon')).toBeInTheDocument();
+      expect(daemonStepHeading()).toBeInTheDocument();
     });
 
-    // DEFECT (minor) fleet-api.service.ts:33 — health() treats any 2xx JSON body as "up"; `ok: false` is ignored.
-    it.fails('a 200 whose body says {ok: false} keeps the user on the daemon step', async () => {
+    it('a 200 whose body says {ok: false} keeps the user on the daemon step', async () => {
       const { daemon } = stubDaemon();
       daemon.answerHealth = () => Promise.resolve(response({ body: { ok: false } }));
       const { fixture } = await renderOnboarding();
 
       await letTimePass(HEALTH_POLL_INTERVAL_MS, fixture);
 
-      expect(screen.getByTestId('onboarding-step-daemon')).toBeInTheDocument();
-    });
-
-    it('a slow /health answering after the user has moved on to the first-session step does not pull them back', async () => {
-      const { daemon } = stubDaemon();
-      const slowFirstCheck = deferred<Response>();
-      const answers = [slowFirstCheck.promise, Promise.resolve(response({ body: { ok: true } }))];
-      daemon.answerHealth = () => answers.shift() ?? new Promise<Response>(() => undefined);
-      const { fixture } = await renderOnboarding();
-      await letTimePass(HEALTH_POLL_INTERVAL_MS, fixture);
-      const user = newUser();
-      await user.type(screen.getByLabelText('Repository path'), REPOSITORY_PATH);
-      await user.click(screen.getByRole('button', { name: 'Continue' }));
-      expect(screen.getByTestId('onboarding-step-first-session')).toBeInTheDocument();
-
-      slowFirstCheck.resolve(response({ body: { ok: true } }));
-      await letTimePass(HEALTH_POLL_INTERVAL_MS, fixture);
-
-      expect(screen.getByTestId('onboarding-step-first-session')).toBeInTheDocument();
-      expect(screen.getByLabelText('Directory')).toHaveValue(REPOSITORY_PATH);
+      expect(daemonStepHeading()).toBeInTheDocument();
     });
 
     it('user leaving onboarding and coming back gets one poll every 2 seconds, not one per visit', async () => {
@@ -229,24 +216,22 @@ describe('Onboarding — hostile black-box suite', () => {
       expect(screen.getByText('$ pnpm dev:core')).toBeInTheDocument();
     });
 
-    // DEFECT (minor) onboarding.component.ts:167-170 — a refused or absent clipboard rejects the click handler:
-    // the rejection is unhandled (it turns a vitest run red) and nothing tells the user.
-    it.fails('user whose clipboard write is refused causes no unhandled promise rejection', async () => {
+    it('user whose clipboard write is refused causes no unhandled promise rejection', async () => {
       const unhandledRejections = await clickCopyCommandWhenClipboardIs('refusing');
 
       expect(unhandledRejections).toEqual([]);
     });
 
-    it.fails('user with no clipboard API causes no unhandled promise rejection', async () => {
+    it('user with no clipboard API causes no unhandled promise rejection', async () => {
       const unhandledRejections = await clickCopyCommandWhenClipboardIs('missing');
 
       expect(unhandledRejections).toEqual([]);
     });
 
-    it.fails('user whose clipboard write is refused is told the copy failed', async () => {
-      await clickCopyCommandWhenClipboardIs('refusing');
+    it.each(['refusing', 'missing'] as const)('user whose clipboard is %s is told to copy the command by hand', async (clipboard) => {
+      await clickCopyCommandWhenClipboardIs(clipboard);
 
-      expect(screen.getByText(/could not copy|copy failed|couldn.t copy/i)).toBeInTheDocument();
+      expect(screen.getByRole('status')).toHaveTextContent('Couldn’t copy — select the command and copy it by hand');
     });
   });
 
@@ -286,7 +271,7 @@ describe('Onboarding — hostile black-box suite', () => {
       await user.click(screen.getByText('Playbooks'));
 
       expect(tabStops.some((stop) => stepper.contains(stop))).toBe(false);
-      expect(screen.getByTestId('onboarding-step-daemon')).toBeInTheDocument();
+      expect(daemonStepHeading()).toBeInTheDocument();
     });
 
     it('the first Tab stop is "Skip to app" and the second is "Copy command"', async () => {
@@ -300,9 +285,7 @@ describe('Onboarding — hostile black-box suite', () => {
       expect(screen.getByRole('button', { name: 'Copy command' })).toHaveFocus();
     });
 
-    // DEFECT (minor, a11y) onboarding.component.ts:37 — the done ✓ is aria-hidden and the state is colour-only,
-    // so a screen-reader user cannot tell that Daemon is finished.
-    it.fails('screen reader user is told the Daemon step is done once the user is on the Project step', async () => {
+    it('screen reader user is told the Daemon step is done once the user is on the Project step', async () => {
       await reachProjectStep();
 
       const daemonStep = screen.getAllByRole('listitem').find((step) => step.textContent?.includes('Daemon'));
@@ -310,8 +293,7 @@ describe('Onboarding — hostile black-box suite', () => {
       expect(daemonStep).toHaveTextContent(/done|complete/i);
     });
 
-    // DEFECT (minor, a11y) new-session-form.component.ts:33 + onboarding.component.ts:86 — step 3 renders two <h1>.
-    it.fails('the first-session step has a single top-level heading', async () => {
+    it('the first-session step has a single top-level heading', async () => {
       await reachFirstSessionStep();
 
       expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
@@ -324,7 +306,7 @@ describe('Onboarding — hostile black-box suite', () => {
 
       await user.keyboard('{Enter}');
 
-      expect(screen.getByTestId('onboarding-step-first-session')).toBeInTheDocument();
+      expect(firstSessionStepHeading()).toBeInTheDocument();
     });
 
     it('user pressing Enter with an empty repository path stays on the project step', async () => {
@@ -334,7 +316,7 @@ describe('Onboarding — hostile black-box suite', () => {
       await user.click(screen.getByLabelText('Repository path'));
       await user.keyboard('{Enter}');
 
-      expect(screen.getByTestId('onboarding-step-project')).toBeInTheDocument();
+      expect(projectStepHeading()).toBeInTheDocument();
     });
 
     it('a repository path made only of spaces cannot be continued, by button or by Enter', async () => {
@@ -344,14 +326,16 @@ describe('Onboarding — hostile black-box suite', () => {
       await user.type(screen.getByLabelText('Repository path'), '    {Enter}');
 
       expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
-      expect(screen.getByTestId('onboarding-step-project')).toBeInTheDocument();
+      expect(projectStepHeading()).toBeInTheDocument();
     });
 
-    // DEFECT (minor, UX) onboarding.component.ts:72-88 — there is no Back: a wrong path can only be fixed in step 3's Directory field.
-    it.fails('user on the first-session step can go back to the project step', async () => {
-      await reachFirstSessionStep();
+    it('user on the first-session step can go back to the project step and finds the path they typed', async () => {
+      const { user } = await reachFirstSessionStep();
 
-      expect(screen.getByRole('button', { name: /back/i })).toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Back' }));
+
+      expect(projectStepHeading()).toBeInTheDocument();
+      expect(screen.getByLabelText('Repository path')).toHaveValue(REPOSITORY_PATH);
     });
   });
 
@@ -375,7 +359,7 @@ describe('Onboarding — hostile black-box suite', () => {
 
     it('user submitting twice in a row creates one session, so the seeded prompt reaches the daemon once', async () => {
       const { createSessionRequests } = await reachFirstSessionStep();
-      const form = screen.getByTestId('new-session-form');
+      const form = screen.getByRole('button', { name: 'Create session' }).closest('form') as HTMLFormElement;
 
       form.dispatchEvent(new Event('submit', { cancelable: true }));
       form.dispatchEvent(new Event('submit', { cancelable: true }));
@@ -387,8 +371,8 @@ describe('Onboarding — hostile black-box suite', () => {
     it('user who switches to manager mode creates a manager whose payload carries no seeded prompt', async () => {
       const { createSessionRequests, user } = await reachFirstSessionStep();
 
-      await user.click(screen.getByTestId('new-session-mode-manager'));
-      await user.type(screen.getByTestId('manager-mission'), 'Ship phase 2');
+      await user.click(screen.getByRole('button', { name: 'Manager' }));
+      await user.type(screen.getByLabelText('Mission'), 'Ship phase 2');
       await user.click(screen.getByRole('button', { name: 'Create manager' }));
 
       await vi.waitFor(() => expect(createSessionRequests()).toHaveLength(1));
@@ -400,8 +384,8 @@ describe('Onboarding — hostile black-box suite', () => {
     it('user who switches to manager mode and back to session still sends the seeded prompt', async () => {
       const { createSessionRequests, user } = await reachFirstSessionStep();
 
-      await user.click(screen.getByTestId('new-session-mode-manager'));
-      await user.click(screen.getByTestId('new-session-mode-session'));
+      await user.click(screen.getByRole('button', { name: 'Manager' }));
+      await user.click(screen.getByRole('button', { name: 'Session' }));
       await user.click(screen.getByRole('button', { name: 'Create session' }));
 
       await vi.waitFor(() => expect(createSessionRequests()).toHaveLength(1));
@@ -432,16 +416,17 @@ describe('Onboarding — hostile black-box suite', () => {
     });
 
     it('user whose directory the daemon refuses sees the error, stays on the step, and a retry succeeds and navigates', async () => {
-      const { daemon, createSessionRequests, navigateSpy, user } = await reachFirstSessionStep();
+      const { daemon, createSessionRequests, router, user } = await reachFirstSessionStep();
+      const urlBeforeSubmit = router.url;
       daemon.answerCreateSession = () => Promise.resolve(response({ status: 400, body: { error: 'directory_missing' } }));
 
       await user.click(screen.getByRole('button', { name: 'Create session' }));
 
-      expect(await screen.findByTestId('new-session-form-error')).toBeInTheDocument();
-      expect(navigateSpy).not.toHaveBeenCalled();
+      expect(await screen.findByRole('alert')).toHaveTextContent('POST /api/sessions → 400');
+      expect(router.url).toBe(urlBeforeSubmit);
       daemon.answerCreateSession = () => Promise.resolve(response({ body: { id: 's-retry' } }));
       await user.click(screen.getByRole('button', { name: 'Create session' }));
-      await vi.waitFor(() => expect(navigateSpy).toHaveBeenCalledWith(['/session', 's-retry']));
+      await vi.waitFor(() => expect(router.url).toBe('/session/s-retry'));
       expect(createSessionRequests()).toHaveLength(2);
     });
 
@@ -454,8 +439,7 @@ describe('Onboarding — hostile black-box suite', () => {
       expect(await screen.findByRole('alert')).toHaveTextContent(/check your connection/i);
     });
 
-    // DEFECT (minor, UX) onboarding.component.ts:88 — a prompt is sent to the agent that the user never sees.
-    it.fails('user is shown the seeded prompt before it is sent on their behalf', async () => {
+    it('user is shown the seeded prompt before it is sent on their behalf', async () => {
       await reachFirstSessionStep();
 
       expect(screen.getByText(/Read the README/i)).toBeInTheDocument();

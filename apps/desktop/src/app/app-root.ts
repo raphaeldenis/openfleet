@@ -1,3 +1,4 @@
+import { Location } from '@angular/common';
 import { Component, inject } from '@angular/core';
 import { Router, RouterOutlet } from '@angular/router';
 import { FleetApiService } from './core/fleet-api.service';
@@ -13,6 +14,7 @@ export class AppRoot {
   // refresh of /manager/:id never mounts App, so App's constructor cannot be relied on for this.
   private readonly api = inject(FleetApiService);
   private readonly router = inject(Router);
+  private readonly location = inject(Location);
 
   constructor() {
     void inject(FleetEventsService).connect();
@@ -24,6 +26,11 @@ export class AppRoot {
       () => true,
       () => false,
     );
-    if (!isDaemonUp) await this.router.navigateByUrl('/onboarding');
+    if (isDaemonUp) return;
+    // The browser location, not `router.url`: the first navigation may still be running when a refused connection fails fast.
+    const requestedUrl = this.location.path() || '/';
+    const isAlreadyOnboarding = requestedUrl.startsWith('/onboarding');
+    if (isAlreadyOnboarding) return;
+    await this.router.navigateByUrl('/onboarding', { state: { returnUrl: requestedUrl } });
   }
 }

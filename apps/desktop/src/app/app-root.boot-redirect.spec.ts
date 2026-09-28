@@ -8,26 +8,37 @@ import { AppRoot } from './app-root';
 import { routes } from './app.routes';
 import { FleetEventsService } from './core/fleet-events.service';
 
-// Hostile black-box QE suite for the P2-U7 boot redirect. Every `it.fails` documents a defect.
+// Black-box suite for the P2-U7 boot redirect: what URL the user is on and what they see, never how AppRoot decides.
 
 const HEALTH_POLL_INTERVAL_MS = 2000;
-const SLOW_BOOT_MS = 30_000;
+const BOOT_HEALTH_TIMEOUT_MS = 5000;
 const DEEP_LINK = '/session/x';
+const DAEMON_STEP_HEADING = 'Start the OpenFleet daemon';
+const PROJECT_STEP_HEADING = 'Define the project';
 
 function healthResponse(): Response {
   return { ok: true, status: 200, json: () => Promise.resolve({ ok: true }) } as unknown as Response;
 }
 
-function stubDaemon({ answersHealth }: { answersHealth: () => Promise<Response> }) {
-  const fetchMock = vi.fn((url: string) => (url.endsWith('/health') ? answersHealth() : Promise.reject(new TypeError('Failed to fetch'))));
-  vi.stubGlobal('fetch', fetchMock);
-  const healthRequestCount = () => fetchMock.mock.calls.filter(([url]) => url.endsWith('/health')).length;
-  return { healthRequestCount };
+function sessionsResponse(sessions: unknown[]): Response {
+  return { ok: true, status: 200, json: () => Promise.resolve(sessions) } as unknown as Response;
 }
 
 const daemonIsDown = (): Promise<Response> => Promise.reject(new TypeError('Failed to fetch'));
 const daemonIsUp = (): Promise<Response> => Promise.resolve(healthResponse());
 const daemonNeverAnswers = (): Promise<Response> => new Promise<Response>(() => undefined);
+
+function stubDaemon({ answersHealth, fleet = [] }: { answersHealth: () => Promise<Response>; fleet?: unknown[] }) {
+  const daemon = { answersHealth, fleet };
+  const fetchMock = vi.fn((url: string) => {
+    if (url.endsWith('/health')) return daemon.answersHealth();
+    if (url.endsWith('/api/sessions')) return Promise.resolve(sessionsResponse(daemon.fleet));
+    return Promise.reject(new TypeError('Failed to fetch'));
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  const healthRequestCount = () => fetchMock.mock.calls.filter(([url]) => url.endsWith('/health')).length;
+  return { daemon, healthRequestCount };
+}
 
 function configureAppRoot() {
   TestBed.configureTestingModule({
@@ -55,8 +66,8 @@ async function letTimePass(milliseconds: number, fixture: { whenStable: () => Pr
   await fixture.whenStable();
 }
 
-describe('AppRoot boot redirect — hostile black-box suite', () => {
-  beforeEach(() => vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] }));
+describe('AppRoot boot redirect', () => {
+  beforeEach(() => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }));
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
@@ -69,25 +80,57 @@ describe('AppRoot boot redirect — hostile black-box suite', () => {
     await vi.waitFor(() => expect(router.url).toBe('/onboarding'));
     await letTimePass(0, fixture);
 
-    expect(screen.getByTestId('onboarding')).toBeInTheDocument();
-    expect(screen.queryByTestId('app-shell')).toBeNull();
+    expect(screen.getByRole('heading', { name: DAEMON_STEP_HEADING })).toBeInTheDocument();
+    expect(screen.queryByRole('navigation')).toBeNull();
   });
 
-  // DEFECT (major, known choice) app-root.ts:27 — the requested URL is dropped: once the daemon is up the user
-  // is on onboarding and "Skip to app" goes to "/", so the deep link they opened is lost.
-  it.fails('user who opened a deep link while the daemon was down is sent back to it once the daemon is up', async () => {
-    const daemon = { answersHealth: daemonIsDown };
-    stubDaemon({ answersHealth: () => daemon.answersHealth() });
+  it('user who opened a deep link while the daemon was down is sent back to it as soon as the daemon is up', async () => {
+    const { daemon } = stubDaemon({ answersHealth: daemonIsDown });
     const { router, fixture } = await openAppAt(DEEP_LINK);
     await vi.waitFor(() => expect(router.url).toBe('/onboarding'));
     await letTimePass(0, fixture);
 
     daemon.answersHealth = daemonIsUp;
     await letTimePass(HEALTH_POLL_INTERVAL_MS, fixture);
-    await userEvent.click(screen.getByRole('link', { name: /Skip to app/ }));
-    await vi.waitFor(() => expect(router.url).not.toBe('/onboarding'));
 
-    expect(router.url).toBe(DEEP_LINK);
+    await vi.waitFor(() => expect(router.url).toBe(DEEP_LINK));
+  });
+
+  it('user who opened a deep link while the daemon was down and skips onboarding is taken to that link', async () => {
+    stubDaemon({ answersHealth: daemonIsDown });
+    const { router, fixture } = await openAppAt(DEEP_LINK);
+    await vi.waitFor(() => expect(router.url).toBe('/onboarding'));
+    await letTimePass(0, fixture);
+
+    await userEvent.setup({ advanceTimers: vi.advanceTimersByTime }).click(screen.getByRole('link', { name: /Skip to app/ }));
+
+    await vi.waitFor(() => expect(router.url).toBe(DEEP_LINK));
+  });
+
+  it('returning user whose daemon was simply down, with sessions in the fleet, is sent back to the app', async () => {
+    const { daemon } = stubDaemon({ answersHealth: daemonIsDown });
+    const { router, fixture } = await openAppAt('/');
+    await vi.waitFor(() => expect(router.url).toBe('/onboarding'));
+    await letTimePass(0, fixture);
+
+    daemon.fleet = [{ id: 's-1' }];
+    daemon.answersHealth = daemonIsUp;
+    await letTimePass(HEALTH_POLL_INTERVAL_MS, fixture);
+
+    await vi.waitFor(() => expect(router.url).toBe('/'));
+  });
+
+  it('first-run user with an empty fleet, on the app home, continues onboarding with the project once the daemon is up', async () => {
+    const { daemon } = stubDaemon({ answersHealth: daemonIsDown });
+    const { router, fixture } = await openAppAt('/');
+    await vi.waitFor(() => expect(router.url).toBe('/onboarding'));
+    await letTimePass(0, fixture);
+
+    daemon.answersHealth = daemonIsUp;
+    await letTimePass(HEALTH_POLL_INTERVAL_MS, fixture);
+
+    expect(screen.getByRole('heading', { name: PROJECT_STEP_HEADING })).toBeInTheDocument();
+    expect(router.url).toBe('/onboarding');
   });
 
   it('user opening /onboarding while the daemon is up is not bounced out of onboarding', async () => {
@@ -97,7 +140,7 @@ describe('AppRoot boot redirect — hostile black-box suite', () => {
     await letTimePass(0, fixture);
 
     expect(router.url).toBe('/onboarding');
-    expect(screen.getByTestId('onboarding-step-project')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: PROJECT_STEP_HEADING })).toBeInTheDocument();
   });
 
   it('user opening /onboarding while the daemon is down is not redirected in a loop', async () => {
@@ -112,35 +155,33 @@ describe('AppRoot boot redirect — hostile black-box suite', () => {
     await letTimePass(HEALTH_POLL_INTERVAL_MS * 3, fixture);
 
     expect(navigationsAfterBoot).toEqual([]);
-    expect(screen.getByTestId('onboarding-step-daemon')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: DAEMON_STEP_HEADING })).toBeInTheDocument();
   });
 
-  it('user whose daemon has not answered after 30 seconds is left on the page they asked for, with a single /health request', async () => {
+  it('user whose daemon has not answered yet is left on the page they asked for, with a single /health request', async () => {
     const { healthRequestCount } = stubDaemon({ answersHealth: daemonNeverAnswers });
 
     const { router, fixture } = await openAppAt(DEEP_LINK);
-    await letTimePass(SLOW_BOOT_MS, fixture);
+    await letTimePass(BOOT_HEALTH_TIMEOUT_MS - 1000, fixture);
 
     expect(router.url).toBe(DEEP_LINK);
     expect(healthRequestCount()).toBe(1);
   });
 
-  // DEFECT (minor) fleet-api.service.ts:33 + app-root.ts:23 — the boot check has no timeout: a daemon that accepts the
-  // connection and never answers leaves the user on a shell with no data and no explanation, never on onboarding.
-  it.fails('user whose daemon has not answered after 30 seconds ends up on onboarding', async () => {
+  it('user whose daemon has not answered after 5 seconds ends up on onboarding', async () => {
     stubDaemon({ answersHealth: daemonNeverAnswers });
 
     const { router, fixture } = await openAppAt(DEEP_LINK);
-    await letTimePass(SLOW_BOOT_MS, fixture);
+    await letTimePass(BOOT_HEALTH_TIMEOUT_MS, fixture);
 
-    expect(router.url).toBe('/onboarding');
+    await vi.waitFor(() => expect(router.url).toBe('/onboarding'));
   });
 
   it('user working when a slow /health finally fails is taken to onboarding, once', async () => {
     let failHealth!: (reason: unknown) => void;
     stubDaemon({ answersHealth: () => new Promise<Response>((_resolve, reject) => (failHealth = reject)) });
     const { router, fixture } = await openAppAt('/inbox');
-    await letTimePass(SLOW_BOOT_MS, fixture);
+    await letTimePass(BOOT_HEALTH_TIMEOUT_MS - 2000, fixture);
     expect(router.url).toBe('/inbox');
 
     failHealth(new TypeError('Failed to fetch'));
@@ -150,8 +191,7 @@ describe('AppRoot boot redirect — hostile black-box suite', () => {
   });
 
   it('user whose daemon is up at boot is never sent to onboarding, even after the daemon goes away later (the boot check runs once)', async () => {
-    const daemon = { answersHealth: daemonIsUp };
-    const { healthRequestCount } = stubDaemon({ answersHealth: () => daemon.answersHealth() });
+    const { daemon, healthRequestCount } = stubDaemon({ answersHealth: daemonIsUp });
     const { router, fixture } = await openAppAt('/inbox');
     await letTimePass(0, fixture);
 

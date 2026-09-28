@@ -30,7 +30,11 @@ const PERMISSION_MODES_OFFERED_AT_CREATION = PERMISSION_MODES.filter((mode) => m
   template: `
     <form class="of-form" data-testid="new-session-form" (ngSubmit)="submit()" novalidate>
       <div class="header">
-        <h1>{{ isManagerMode() ? 'New manager' : 'New session' }}</h1>
+        @if (embedded()) {
+          <span class="embedded-title">{{ isManagerMode() ? 'New manager' : 'New session' }}</span>
+        } @else {
+          <h1>{{ isManagerMode() ? 'New manager' : 'New session' }}</h1>
+        }
         <div class="mode-toggle" role="group" aria-label="Kind of session">
           <button type="button" [attr.aria-pressed]="!isManagerMode()" [disabled]="pending()" data-testid="new-session-mode-session" (click)="chooseMode('session')">Session</button>
           <button type="button" [attr.aria-pressed]="isManagerMode()" [disabled]="pending()" data-testid="new-session-mode-manager" (click)="chooseMode('manager')">Manager</button>
@@ -111,7 +115,7 @@ const PERMISSION_MODES_OFFERED_AT_CREATION = PERMISSION_MODES.filter((mode) => m
     :host { display: flex; flex: 1; align-items: flex-start; justify-content: center; min-width: 0; padding: 1.5rem 1rem 3rem }
     .of-form { display: flex; flex-direction: column; gap: 1.25rem; width: 46rem; max-width: 100% }
     .header { display: flex; align-items: center; gap: 1rem }
-    h1 { flex: 1; margin: 0; font-size: 1.25rem; font-weight: 600; letter-spacing: -.01em }
+    h1, .embedded-title { flex: 1; margin: 0; font-size: 1.25rem; font-weight: 600; letter-spacing: -.01em }
     .mode-toggle { display: flex; padding: .125rem; border: 1px solid var(--line); border-radius: .5rem; background: var(--sunk) }
     .mode-toggle button { height: 1.625rem; padding: 0 .75rem; border: 0; border-radius: .375rem; background: transparent; color: var(--fg); font: inherit; font-size: .75rem; cursor: pointer }
     .mode-toggle button[aria-pressed='true'] { background: var(--panel) }
@@ -147,6 +151,8 @@ export class NewSessionFormComponent {
 
   protected readonly mode = linkedSignal<CreationMode>(() => (this.queryParams()?.get('mode') === 'manager' ? 'manager' : 'session'));
   protected readonly isManagerMode = computed(() => this.mode() === 'manager');
+  // A host page that already owns the page's h1 embeds the form without its own.
+  readonly embedded = input(false);
   readonly initialDirectory = input('');
   readonly initialName = input('');
   readonly seededPrompt = input('');
