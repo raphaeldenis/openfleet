@@ -234,6 +234,53 @@ describe('SessionViewComponent lifecycle banners — accessibility', () => {
   });
 });
 
+describe('SessionViewComponent lifecycle banners — sessions closed while the UI is connected', () => {
+  it('live → session.closed → Resume → REST 200 → starting: Resuming stays up for the whole starting window, then leaves at idle', async () => {
+    // Arrange — the snapshot holds a live session with no closedAt, as the daemon sends it
+    const api = fakeApi();
+    const { fixture, daemon } = await renderAgainstDaemonEvents(api, [session({ state: 'idle' })]);
+    await daemon.send({ type: 'session.closed', sessionId: 's1', exitCode: 0 });
+
+    // Act
+    await userEvent.click(screen.getByTestId('resume-session'));
+    await daemon.send({ type: 'session.state', sessionId: 's1', state: 'starting', stateSince: 't2' });
+    await daemon.send({ type: 'session.reopened', sessionId: 's1' });
+    await letRequestsSettle(fixture);
+
+    // Assert
+    expect(lifecycleBanner()).toHaveAttribute('data-variant', 'resuming');
+
+    await daemon.send({ type: 'session.state', sessionId: 's1', state: 'idle', stateSince: 't3' });
+    expect(lifecycleBanner()).toBeNull();
+  });
+
+  it('shows Resuming for a session that another client reopens after it closed live, with no click here', async () => {
+    // Arrange
+    const { daemon } = await renderAgainstDaemonEvents(fakeApi(), [session({ state: 'idle' })]);
+    await daemon.send({ type: 'session.closed', sessionId: 's1', exitCode: 0 });
+
+    // Act
+    await daemon.send({ type: 'session.reopened', sessionId: 's1' });
+
+    // Assert
+    expect(lifecycleBanner()).toHaveAttribute('data-variant', 'resuming');
+  });
+
+  it('shows no Resuming banner on a model relaunch from idle after a live close and resume', async () => {
+    // Arrange — closed live, resumed, idle again
+    const { daemon } = await renderAgainstDaemonEvents(fakeApi(), [session({ state: 'idle' })]);
+    await daemon.send({ type: 'session.closed', sessionId: 's1', exitCode: 0 });
+    await daemon.send({ type: 'session.reopened', sessionId: 's1' });
+    await daemon.send({ type: 'session.state', sessionId: 's1', state: 'idle', stateSince: 't3' });
+
+    // Act
+    await daemon.send({ type: 'session.state', sessionId: 's1', state: 'starting', stateSince: 't4' });
+
+    // Assert
+    expect(lifecycleBanner()).toBeNull();
+  });
+});
+
 describe('SessionViewComponent lifecycle banners — defects', () => {
   // MAJOR — session-view.component.ts:95. The daemon never clears sessions.closed_at (sessionRepository.ts:63-67
   // only ever writes it), so every session that was once closed or daemon-restarted keeps `closedAt` forever.

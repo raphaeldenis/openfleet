@@ -91,7 +91,7 @@ export class FleetEventsService {
       case 'session.permission_mode_changed': return this.patchSession(event.sessionId, { permissionMode: event.mode });
       // resumeOne() already wrote 'starting' to the DB before this event fires; the event itself carries
       // no state, so mirror that transition here rather than waiting for the next session.state event.
-      case 'session.reopened': return this.patchSession(event.sessionId, { state: 'starting', exitCode: undefined });
+      case 'session.reopened': return this.markReopened(event.sessionId);
       case 'message.queued': return; // the sender already knows 'queued' from its own REST response; nothing else reads this yet
       case 'message.delivered': return this.markMessageDelivered(event.messageId);
       case 'approval.created': return this.upsertApproval(event.approval);
@@ -117,6 +117,15 @@ export class FleetEventsService {
 
   private patchSession(id: string, patch: Partial<Session>): void {
     this.sessions.update((all) => all.map((s) => (s.id === id ? withoutStaleClosure({ ...s, ...patch }) : s)));
+  }
+
+  // A session closed while this client was connected never received a closedAt from the daemon; stamping it on
+  // reopen keeps "closed, now coming back" recognisable for the whole starting window.
+  private markReopened(id: string): void {
+    const reopenedAt = new Date().toISOString();
+    this.sessions.update((all) =>
+      all.map((s) => (s.id === id ? { ...s, state: 'starting', exitCode: undefined, closedAt: s.closedAt ?? reopenedAt } : s)),
+    );
   }
 
   private markMessageDelivered(messageId: string): void {
