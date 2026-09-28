@@ -34,11 +34,24 @@ export class PendingSwitchesService {
   constructor() {
     const events = inject(FleetEventsService);
     effect(() => {
-      const openSessionIds = new Set(events.sessions().filter((s) => s.state !== 'closed').map((s) => s.id));
+      const sessions = events.sessions();
+      const openSessionIds = new Set(sessions.filter((s) => s.state !== 'closed').map((s) => s.id));
       for (const sessionId of [...this.switchesBySession.keys()]) {
         if (!openSessionIds.has(sessionId)) this.switchesBySession.delete(sessionId);
       }
+      for (const session of sessions) {
+        if (session.state === 'starting') this.markRelaunchStarted(session.id);
+      }
     });
+  }
+
+  // A relaunch that starts and finishes while no selector shows the session must still count as settled on return.
+  private markRelaunchStarted(sessionId: string): void {
+    const switches = this.switchesBySession.get(sessionId);
+    if (!switches) return;
+    for (const pending of Object.values(switches)) {
+      if (pending) pending.sawStartingSinceSwitch = true;
+    }
   }
 
   recall(sessionId: string, kind: SwitchKind): PendingSwitch | undefined {

@@ -336,17 +336,17 @@ describe('SessionViewComponent', () => {
     it.each([
       ['closed', 0],
       ['closed_error', 1],
-    ] as const)('offers "Resume in worktree" and a disabled "Reopen fresh" for a %s session', async (_variant, exitCode) => {
+    ] as const)('offers "Resume in worktree" and an unavailable "Reopen fresh" for a %s session', async (_variant, exitCode) => {
       await render(SessionViewComponent, {
         bindings: [inputBinding('sessionId', () => 's1')],
         providers: [{ provide: FleetApiService, useValue: fakeApi() }, { provide: FleetEventsService, useValue: fakeEvents([session({ state: 'closed', exitCode })]) }],
       });
 
       expect(screen.getByTestId('resume-session')).toHaveTextContent('Resume in worktree');
-      const reopenFresh = screen.getByTestId('reopen-fresh-session') as HTMLButtonElement;
+      const reopenFresh = screen.getByTestId('reopen-fresh-session');
       expect(reopenFresh).toHaveTextContent('Reopen fresh');
-      expect(reopenFresh.disabled).toBe(true);
-      expect(reopenFresh.title).toMatch(/not available yet/i);
+      expect(reopenFresh).toHaveAttribute('aria-disabled', 'true');
+      expect(reopenFresh).toHaveAccessibleDescription(/not available yet/i);
     });
   });
 

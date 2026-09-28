@@ -14,6 +14,18 @@ function withoutStaleClosure(session: Session): Session {
   return hasStaleClosure ? { ...session, closedAt: undefined } : session;
 }
 
+// A full row (session.created / session.updated) of a relaunching session carries the closedAt of a close it
+// recovered from long ago. Only a local copy that is closed, or already coming back from a close, vouches for
+// a closedAt arriving on a `starting` row; otherwise it is the stale stamp of an ordinary model / mode relaunch.
+function withoutClosureNotVouchedFor(incoming: Session, local: Session | undefined): Session {
+  const session = withoutStaleClosure(incoming);
+  const isLocalCopyClosed = local?.state === 'closed';
+  const isLocalCopyComingBackFromClose = local?.state === 'starting' && local.closedAt !== undefined;
+  const isClosureVouchedFor = isLocalCopyClosed || isLocalCopyComingBackFromClose;
+  const isStaleClosureOnStartingRow = session.state === 'starting' && !isClosureVouchedFor;
+  return isStaleClosureOnStartingRow ? { ...session, closedAt: undefined } : session;
+}
+
 @Injectable({ providedIn: 'root' })
 export class FleetEventsService {
   readonly sessions = signal<Session[]>([]);
@@ -103,8 +115,11 @@ export class FleetEventsService {
   }
 
   private upsertSession(incoming: Session): void {
-    const session = withoutStaleClosure(incoming);
-    this.sessions.update((all) => (all.some((s) => s.id === session.id) ? all.map((s) => (s.id === session.id ? session : s)) : [...all, session]));
+    this.sessions.update((all) => {
+      const local = all.find((s) => s.id === incoming.id);
+      const session = withoutClosureNotVouchedFor(incoming, local);
+      return local ? all.map((s) => (s.id === session.id ? session : s)) : [...all, session];
+    });
   }
 
   private upsertApproval(approval: Approval): void {

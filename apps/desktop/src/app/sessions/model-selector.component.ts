@@ -113,6 +113,7 @@ export class ModelSelectorComponent {
       this.modelBeforeSwitch.set(undefined);
       this.stateBeforeSwitch.set(undefined);
       this.sawStartingSinceSwitch.set(false);
+      this.pendingModelSwitch.emit(false);
     });
   }
 

@@ -217,6 +217,49 @@ describe('PendingSwitchesService through the model selector and the permission-m
     });
   });
 
+  describe('a relaunch that runs from start to finish while the user is elsewhere', () => {
+    const setStateOf = (sessions: ReturnType<typeof signal<FakeSession[]>>, id: string, state: SessionState) =>
+      sessions.update((all) => all.map((s) => (s.id === id ? { ...s, state } : s)));
+
+    it.each([
+      { kind: 'model', request: requestModelSwitch, note: modelNote, apiMethod: 'updateModel' },
+      { kind: 'permission-mode', request: requestPermissionModeSwitch, note: permissionModeNote, apiMethod: 'updatePermissionMode' },
+    ])('shows no "restarting…" note for the $kind switch back on the session', async ({ request, note, apiMethod }) => {
+      // Arrange — an idle session: the REST reply says "relaunching", the daemon starts ~2 s later, then idle again
+      const { fixture, goTo, sessions } = await renderSelectors({
+        sessions: [fakeSession('s1', 'idle'), fakeSession('s2', 'idle')],
+        api: { [apiMethod]: vi.fn().mockResolvedValue({ status: 'relaunching' }) },
+      });
+      await request();
+      await waitFor(() => expect(note()).toHaveTextContent('restarting…'));
+      await goTo('s2');
+
+      // Act
+      setStateOf(sessions, 's1', 'starting');
+      await fixture.whenStable();
+      setStateOf(sessions, 's1', 'idle');
+      await fixture.whenStable();
+      await goTo('s1');
+
+      // Assert
+      expect(note()).toBeNull();
+    });
+
+    it('still shows "restarting…" when the user is back before the relaunch has even started', async () => {
+      const { goTo } = await renderSelectors({
+        sessions: [fakeSession('s1', 'idle'), fakeSession('s2', 'idle')],
+        api: { updateModel: vi.fn().mockResolvedValue({ status: 'relaunching' }) },
+      });
+      await requestModelSwitch();
+      await waitFor(() => expect(modelNote()).toHaveTextContent('restarting…'));
+
+      await goTo('s2');
+      await goTo('s1');
+
+      expect(modelNote()).toHaveTextContent('restarting…');
+    });
+  });
+
   describe('a session that leaves the fleet', () => {
     it('forgets the parked switch of a session that disappeared from the fleet', async () => {
       const { fixture, goTo, sessions, pendingSwitches } = await renderSelectors();

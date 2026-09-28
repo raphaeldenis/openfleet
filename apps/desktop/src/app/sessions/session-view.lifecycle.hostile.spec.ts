@@ -146,10 +146,25 @@ describe('SessionViewComponent lifecycle banners — real daemon event order', (
 });
 
 describe('SessionViewComponent lifecycle banners — accessibility', () => {
-  it('announces Resuming politely (status) and Resume failed assertively (alert)', async () => {
+  it('puts the Resuming text inside a polite live region that is already in the page while nothing resumes', async () => {
+    // Arrange
+    const { daemon } = await renderAgainstDaemonEvents(fakeApi(), [session({ state: 'closed', exitCode: 0, closedAt: CLOSED_AT })]);
+    const liveRegion = screen.getByTestId('lifecycle-live-region');
+    expect(liveRegion).toHaveAttribute('aria-live', 'polite');
+    expect(liveRegion).toBeEmptyDOMElement();
+
+    // Act
+    await daemon.send({ type: 'session.state', sessionId: 's1', state: 'starting', stateSince: 't2' });
+
+    // Assert
+    expect(liveRegion).toContainElement(lifecycleBanner());
+    expect(lifecycleBanner()).toHaveTextContent('Resuming…');
+    expect(lifecycleBanner()).not.toHaveAttribute('role');
+  });
+
+  it('announces Resume failed assertively (alert) when a resuming session dies', async () => {
     // Arrange
     const { daemon } = await renderAgainstDaemonEvents(fakeApi(), [session({ state: 'starting', closedAt: CLOSED_AT })]);
-    expect(lifecycleBanner()).toHaveAttribute('role', 'status');
 
     // Act
     await daemon.send({ type: 'session.closed', sessionId: 's1', exitCode: -1 });
@@ -158,15 +173,69 @@ describe('SessionViewComponent lifecycle banners — accessibility', () => {
     expect(lifecycleBanner()).toHaveAttribute('role', 'alert');
   });
 
+  it('raises no alert for a session that was already failed when the user opened it', async () => {
+    await renderAgainstDaemonEvents(fakeApi(), [session({ state: 'closed', exitCode: 1 })]);
+
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('raises one alert when the session the user is watching closes with an error', async () => {
+    // Arrange
+    const { daemon } = await renderAgainstDaemonEvents(fakeApi(), [session({ state: 'generating' })]);
+    expect(screen.queryByRole('alert')).toBeNull();
+
+    // Act
+    await daemon.send({ type: 'session.closed', sessionId: 's1', exitCode: 1 });
+
+    // Assert
+    expect(screen.getAllByRole('alert')).toHaveLength(1);
+    expect(screen.getByTestId('session-closed-footer')).toHaveAttribute('role', 'alert');
+  });
+
+  it('raises no alert when the user navigates to a session that failed while they were looking at another one', async () => {
+    // Arrange
+    const { daemon, sessionId } = await renderAgainstDaemonEvents(fakeApi(), [
+      session({ id: 's1', state: 'generating' }),
+      session({ id: 's2', name: 'Legolas', state: 'generating' }),
+    ]);
+    await daemon.send({ type: 'session.closed', sessionId: 's2', exitCode: 1 });
+
+    // Act
+    sessionId.set('s2');
+    await daemon.send({ type: 'session.state', sessionId: 's1', state: 'idle', stateSince: 't2' });
+
+    // Assert
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
   it.each([
     { scenario: 'the Resume failed banner', exitCode: -1, testId: 'resume-failed-reopen-fresh' },
     { scenario: 'the closed footer', exitCode: 0, testId: 'reopen-fresh-session' },
-  ])('describes the disabled "Reopen fresh" button of $scenario with why it is unavailable, since a disabled button cannot take focus', async ({ exitCode, testId }) => {
+  ])('keeps the unavailable "Reopen fresh" of $scenario focusable and describes why it is unavailable', async ({ exitCode, testId }) => {
     // Arrange
     await renderAgainstDaemonEvents(fakeApi(), [session({ state: 'closed', exitCode, closedAt: CLOSED_AT })]);
+    const reopenFresh = screen.getByTestId(testId);
+
+    // Act
+    reopenFresh.focus();
 
     // Assert
-    expect(screen.getByTestId(testId)).toHaveAccessibleDescription(/not available yet/i);
+    expect(reopenFresh).toHaveAttribute('aria-disabled', 'true');
+    expect(reopenFresh).not.toBeDisabled();
+    expect(reopenFresh).toHaveFocus();
+    expect(reopenFresh).toHaveAccessibleDescription(/not available yet/i);
+  });
+
+  it('does not reopen anything when the unavailable "Reopen fresh" is clicked', async () => {
+    // Arrange
+    const api = fakeApi();
+    await renderAgainstDaemonEvents(api, [session({ state: 'closed', exitCode: 0, closedAt: CLOSED_AT })]);
+
+    // Act
+    await userEvent.click(screen.getByTestId('reopen-fresh-session'));
+
+    // Assert
+    expect(api.reopenSession).not.toHaveBeenCalled();
   });
 
   it('announces a failed resume once, not through two alerts', async () => {
@@ -257,6 +326,72 @@ describe('SessionViewComponent lifecycle banners — sessions that closed long a
 
     // Assert
     expect(lifecycleBanner()).toBeNull();
+  });
+
+  it('shows no Resuming banner when the full row a model relaunch brings back still carries the old closedAt', async () => {
+    // Arrange — a live session; the DB row of a session that closed once keeps its closed_at forever
+    const { daemon } = await renderAgainstDaemonEvents(fakeApi(), [session({ state: 'idle' })]);
+    await daemon.send({ type: 'session.state', sessionId: 's1', state: 'starting', stateSince: 't2' });
+
+    // Act — the rename / update that follows carries the whole row, stale closedAt included
+    await daemon.send({ type: 'session.updated', session: session({ state: 'starting', closedAt: CLOSED_AT }) });
+
+    // Assert
+    expect(lifecycleBanner()).toBeNull();
+  });
+
+  it('keeps Resuming up when a rename brings the full row while a closed session is coming back', async () => {
+    // Arrange
+    const { daemon } = await renderAgainstDaemonEvents(fakeApi(), [session({ state: 'closed', exitCode: 0, closedAt: CLOSED_AT })]);
+    await daemon.send({ type: 'session.state', sessionId: 's1', state: 'starting', stateSince: 't2' });
+    await daemon.send({ type: 'session.reopened', sessionId: 's1' });
+
+    // Act
+    await daemon.send({ type: 'session.updated', session: session({ state: 'starting', closedAt: CLOSED_AT }) });
+
+    // Assert
+    expect(lifecycleBanner()).toHaveAttribute('data-variant', 'resuming');
+  });
+
+  it('does not arm a Resume failed banner from a reopen rejection that lands after the session is already live', async () => {
+    // Arrange — the reopen reply is slow: the daemon relaunches the session and it is idle before the REST answer fails
+    const reopen = deferred<unknown>();
+    const api = fakeApi();
+    api.reopenSession = vi.fn(() => reopen.promise);
+    const { fixture, daemon } = await renderAgainstDaemonEvents(api, [session({ state: 'closed', exitCode: 0, closedAt: CLOSED_AT })]);
+    await userEvent.click(screen.getByTestId('resume-session'));
+    await daemon.send({ type: 'session.state', sessionId: 's1', state: 'starting', stateSince: 't2' });
+    await daemon.send({ type: 'session.reopened', sessionId: 's1' });
+    await daemon.send({ type: 'session.state', sessionId: 's1', state: 'idle', stateSince: 't3' });
+    reopen.reject(new Error('network down'));
+    await settleRequests(fixture);
+
+    // Act — the user finishes and the session closes cleanly
+    await daemon.send({ type: 'session.closed', sessionId: 's1', exitCode: 0 });
+
+    // Assert
+    expect(lifecycleBanner()).toBeNull();
+  });
+
+  it('does not let a 409 that lands while the session is starting override the exit-code reason of a later failed resume', async () => {
+    // Arrange — another client already reopened the session: the daemon answers this click with 409 not_closed
+    const reopen = deferred<unknown>();
+    const api = fakeApi();
+    api.reopenSession = vi.fn(() => reopen.promise);
+    const { fixture, daemon } = await renderAgainstDaemonEvents(api, [session({ state: 'closed', exitCode: 0, closedAt: CLOSED_AT })]);
+    await userEvent.click(screen.getByTestId('resume-session'));
+    await daemon.send({ type: 'session.state', sessionId: 's1', state: 'starting', stateSince: 't2' });
+    await daemon.send({ type: 'session.reopened', sessionId: 's1' });
+    reopen.reject(new ApiError(409, 'boom', 'not_closed'));
+    await settleRequests(fixture);
+
+    // Act — the relaunch then dies with the launch-failed exit code
+    await daemon.send({ type: 'session.closed', sessionId: 's1', exitCode: -2 });
+
+    // Assert
+    expect(lifecycleBanner()).toHaveAttribute('data-variant', 'error');
+    expect(screen.getByTestId('resume-error')).toHaveTextContent('failed to launch');
+    expect(screen.getByTestId('resume-error')).not.toHaveTextContent('not closed');
   });
 
   // P2-U2e

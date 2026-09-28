@@ -1,5 +1,5 @@
-import { ChangeDetectionStrategy, Component, computed, effect, inject, input, signal } from '@angular/core';
-import type { Session } from '@openfleet/shared';
+import { NgTemplateOutlet } from '@angular/common';
+import { ChangeDetectionStrategy, Component, computed, effect, inject, input, signal, untracked } from '@angular/core';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { runGuarded } from '../core/run-guarded';
@@ -9,34 +9,43 @@ import { type ClosedStripCopy, closedStripCopyFor, reopenErrorMessage, resumeFai
 import { SessionHeaderComponent } from './session-header.component';
 import { TerminalComponent } from './terminal.component';
 
-const REOPEN_FRESH_UNAVAILABLE_TOOLTIP = 'Not available yet — the daemon cannot relaunch a session without its previous conversation.';
+const REOPEN_FRESH_UNAVAILABLE_REASON = 'Not available yet — the daemon cannot relaunch a session without its previous conversation.';
 
 type LifecycleBanner = { kind: 'resuming' } | { kind: 'resume_failed'; reason: string };
 
-type ClosedStrip = ClosedStripCopy & { role: 'alert' | 'status' };
+type ClosedStrip = ClosedStripCopy & { role: 'alert' | null };
 
 @Component({
   selector: 'of-session-view',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [SessionHeaderComponent, TerminalComponent, PermissionGateCardComponent, ComposerComponent],
+  imports: [NgTemplateOutlet, SessionHeaderComponent, TerminalComponent, PermissionGateCardComponent, ComposerComponent],
   template: `
     @if (session(); as s) {
       <div class="session-view" data-testid="session-view">
+        <ng-template #reopenFreshUnavailable let-testId>
+          <span class="reopen-fresh">
+            <button type="button" class="of-btn of-btn--secondary" [attr.data-testid]="testId" aria-disabled="true" [attr.aria-describedby]="testId + '-reason'">
+              Reopen fresh
+            </button>
+            <span class="reopen-fresh-reason" [id]="testId + '-reason'">{{ reopenFreshUnavailableReason }}</span>
+          </span>
+        </ng-template>
         <of-session-header [session]="s" />
-        @if (lifecycleBanner(); as banner) {
-          @if (banner.kind === 'resuming') {
-            <div class="lifecycle-banner" data-testid="lifecycle-banner" data-variant="resuming" role="status">
+        <div class="lifecycle-live-region" data-testid="lifecycle-live-region" aria-live="polite">
+          @if (lifecycleBanner()?.kind === 'resuming') {
+            <div class="lifecycle-banner" data-testid="lifecycle-banner" data-variant="resuming">
               <span class="lifecycle-title">↻ Resuming…</span>
               <span class="lifecycle-body">Reattaching to the same conversation in the same worktree.</span>
             </div>
-          } @else {
+          }
+        </div>
+        @if (lifecycleBanner(); as banner) {
+          @if (banner.kind === 'resume_failed') {
             <div class="lifecycle-banner" data-testid="lifecycle-banner" data-variant="error" role="alert">
               <span class="lifecycle-title">✕ Resume failed</span>
               <span class="lifecycle-body" data-testid="resume-error">{{ banner.reason }}</span>
               <button type="button" class="of-btn of-btn--primary" data-testid="resume-retry" (click)="resume(s.id)">↻ Retry</button>
-              <button type="button" class="of-btn of-btn--secondary" data-testid="resume-failed-reopen-fresh" disabled [attr.title]="reopenFreshUnavailableTooltip">
-                Reopen fresh
-              </button>
+              <ng-container [ngTemplateOutlet]="reopenFreshUnavailable" [ngTemplateOutletContext]="{ $implicit: 'resume-failed-reopen-fresh' }" />
             </div>
           }
         }
@@ -63,9 +72,7 @@ type ClosedStrip = ClosedStripCopy & { role: 'alert' | 'status' };
               ↻ Resume in worktree
             </button>
             @if (strip) {
-              <button type="button" class="of-btn of-btn--secondary" data-testid="reopen-fresh-session" disabled [attr.title]="reopenFreshUnavailableTooltip">
-                Reopen fresh
-              </button>
+              <ng-container [ngTemplateOutlet]="reopenFreshUnavailable" [ngTemplateOutletContext]="{ $implicit: 'reopen-fresh-session' }" />
             }
           </div>
         } @else {
@@ -98,6 +105,16 @@ type ClosedStrip = ClosedStripCopy & { role: 'alert' | 'status' };
     .lifecycle-banner[data-variant='error'] { --lifecycle-color: var(--state-error); }
     .lifecycle-title { flex: none; color: var(--lifecycle-color); font-weight: 600; font-family: var(--mono); }
     .lifecycle-body { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .reopen-fresh { position: relative; display: inline-flex; flex: none; }
+    .reopen-fresh .of-btn[aria-disabled='true'] { border-color: var(--line); background: var(--sunk); color: var(--faint); cursor: not-allowed; }
+    .reopen-fresh-reason {
+      position: absolute; right: 0; z-index: 1; width: max-content; max-width: 18rem; padding: .375rem .5rem;
+      border: 1px solid var(--line-2); border-radius: .375rem; background: var(--panel); color: var(--mut);
+      font-size: .6875rem; font-weight: 400; white-space: normal; visibility: hidden;
+    }
+    .closed-footer .reopen-fresh-reason { bottom: calc(100% + .25rem); }
+    .lifecycle-banner .reopen-fresh-reason { top: calc(100% + .25rem); }
+    .reopen-fresh:hover .reopen-fresh-reason, .reopen-fresh:focus-within .reopen-fresh-reason { visibility: visible; }
   `,
 })
 export class SessionViewComponent {
@@ -109,7 +126,11 @@ export class SessionViewComponent {
 
   protected readonly session = computed(() => this.events.sessions().find((s) => s.id === this.sessionId()));
 
-  protected readonly reopenFreshUnavailableTooltip = REOPEN_FRESH_UNAVAILABLE_TOOLTIP;
+  protected readonly reopenFreshUnavailableReason = REOPEN_FRESH_UNAVAILABLE_REASON;
+
+  // The session the user has seen open since it was shown: only its close is news worth an alert,
+  // a session that was already closed when opened is not.
+  private readonly watchedOpenSessionId = signal<string | undefined>(undefined);
 
   protected readonly lifecycleBanner = computed<LifecycleBanner | undefined>(() => {
     const session = this.session();
@@ -126,7 +147,8 @@ export class SessionViewComponent {
     const session = this.session();
     if (!session || session.state !== 'closed' || this.lifecycleBanner()) return undefined;
     const copy = closedStripCopyFor(session.exitCode);
-    return { ...copy, role: copy.variant === 'error' ? 'alert' : 'status' };
+    const isFailureJustSeen = copy.variant === 'error' && this.watchedOpenSessionId() === session.id;
+    return { ...copy, role: isFailureJustSeen ? 'alert' : null };
   });
 
   protected readonly pendingApproval = computed(() => {
@@ -143,16 +165,20 @@ export class SessionViewComponent {
       this.resuming.set(false);
       this.resumeError.set(null);
     });
-    // A resume error belongs to the closed session it failed on: once the session is live again it
-    // must not resurface on a later, clean close.
+    // A resume error belongs to the closed session it failed on: a rejection that lands once the session is
+    // starting or live again (a slow reply, a 409 from another client's reopen) must not resurface on a later close.
     effect(() => {
-      const isLiveAgain = this.isLive(this.session());
-      if (isLiveAgain) this.resumeError.set(null);
+      const isSessionStillClosed = this.session()?.state === 'closed';
+      const hasResumeError = this.resumeError() !== null;
+      if (!isSessionStillClosed && hasResumeError) this.resumeError.set(null);
     });
-  }
-
-  private isLive(session: Session | undefined): boolean {
-    return session !== undefined && session.state !== 'closed' && session.state !== 'starting';
+    effect(() => {
+      const session = this.session();
+      if (!session) return this.watchedOpenSessionId.set(undefined);
+      const isOpen = session.state !== 'closed';
+      const isClosingWhileWatched = untracked(this.watchedOpenSessionId) === session.id;
+      this.watchedOpenSessionId.set(isOpen || isClosingWhileWatched ? session.id : undefined);
+    });
   }
 
   // This component instance is reused across a route param change, so a reopen that settles after the user
