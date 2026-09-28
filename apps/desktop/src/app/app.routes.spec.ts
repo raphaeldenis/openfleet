@@ -1,4 +1,5 @@
 import { TestBed } from '@angular/core/testing';
+import userEvent from '@testing-library/user-event';
 import { provideRouter, withComponentInputBinding } from '@angular/router';
 import { RouterTestingHarness } from '@angular/router/testing';
 import { signal } from '@angular/core';
@@ -48,6 +49,13 @@ describe('app.routes', () => {
     expect(harness.routeNativeElement?.querySelector('[data-testid="app-shell"]')).toBeFalsy();
   });
 
+  it("renders onboarding at '/onboarding', outside the shell chrome", async () => {
+    await configureTestBed();
+    const harness = await RouterTestingHarness.create('/onboarding');
+    expect(harness.routeNativeElement?.querySelector('[data-testid="onboarding"]')).toBeTruthy();
+    expect(harness.routeNativeElement?.querySelector('[data-testid="app-shell"]')).toBeFalsy();
+  });
+
   it("renders the inbox in its own panel at '/inbox', inside the shell", async () => {
     await configureTestBed();
     const harness = await RouterTestingHarness.create('/inbox');
@@ -92,6 +100,25 @@ describe('app.routes', () => {
     await harness.navigateByUrl('/session/s2');
 
     expect((harness.routeNativeElement?.querySelector('[data-testid="session-name-input"]') as HTMLInputElement)?.value).toBe('Legolas');
+  });
+
+  it("user opening a crafted '/new?…' link creates a session without the prompt, the mode and the pre-fills the link tried to inject", async () => {
+    await configureTestBed();
+    const fetchMock = vi.fn(() => Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ id: 's-new' }) } as unknown as Response));
+    vi.stubGlobal('fetch', fetchMock);
+    const harness = await RouterTestingHarness.create('/new?seededPrompt=evil&embedded=true&initialName=Injected&initialDirectory=/injected');
+    const field = (testId: string) => harness.routeNativeElement?.querySelector(`[data-testid="${testId}"]`) as HTMLInputElement;
+    const user = userEvent.setup();
+    expect(harness.routeNativeElement?.querySelector('[data-testid="new-session-cancel"]')).toBeTruthy();
+
+    await user.type(field('new-session-directory'), '/tmp/wt');
+    await user.type(field('new-session-name'), 'Gimli');
+    await user.click(field('new-session-submit'));
+
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const [, createRequest] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(createRequest.body as string)).toStrictEqual({ directory: '/tmp/wt', name: 'Gimli', emoji: '🤖', model: 'sonnet', harness: 'claude-cli' });
+    vi.unstubAllGlobals();
   });
 
   it('user visiting an unknown path still lands inside the app shell instead of a blank page', async () => {
