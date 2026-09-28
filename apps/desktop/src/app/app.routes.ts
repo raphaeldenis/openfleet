@@ -5,6 +5,7 @@ export const routes: Routes = [
   // Tried before the shell's own wildcard — stays outside the shell chrome, a dev-only
   // style/component sheet rather than a product screen.
   { path: 'components', component: ComponentsSheetComponent },
+  { path: 'onboarding', loadComponent: () => import('./onboarding/onboarding.component').then((m) => m.OnboardingComponent) },
   {
     path: '',
     loadComponent: () => import('./shell/app-shell.component').then((m) => m.AppShellComponent),

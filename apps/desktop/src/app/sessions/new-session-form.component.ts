@@ -1,4 +1,4 @@
-import { afterNextRender, ChangeDetectionStrategy, Component, computed, DestroyRef, ElementRef, inject, Injector, linkedSignal, signal, viewChild } from '@angular/core';
+import { afterNextRender, ChangeDetectionStrategy, Component, computed, DestroyRef, ElementRef, inject, Injector, input, linkedSignal, signal, viewChild } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
@@ -147,8 +147,11 @@ export class NewSessionFormComponent {
 
   protected readonly mode = linkedSignal<CreationMode>(() => (this.queryParams()?.get('mode') === 'manager' ? 'manager' : 'session'));
   protected readonly isManagerMode = computed(() => this.mode() === 'manager');
-  protected readonly directory = signal('');
-  protected readonly name = signal('');
+  readonly initialDirectory = input('');
+  readonly initialName = input('');
+  readonly seededPrompt = input('');
+  protected readonly directory = linkedSignal(() => this.initialDirectory());
+  protected readonly name = linkedSignal(() => this.initialName());
   protected readonly typedEmoji = signal<string | null>(null);
   private readonly defaultEmoji = computed(() => (this.isManagerMode() ? MANAGER_DEFAULT_EMOJI : SESSION_DEFAULT_EMOJI));
   protected readonly emoji = computed(() => this.typedEmoji() ?? this.defaultEmoji());
@@ -217,7 +220,8 @@ export class NewSessionFormComponent {
       harness: this.harness(),
       ...(chosenMode === INHERITED_MODE ? {} : { permissionMode: chosenMode }),
     };
-    if (!this.isManagerMode()) return this.api.createSession(sharedSpec);
+    const seededPrompt = this.seededPrompt().trim();
+    if (!this.isManagerMode()) return this.api.createSession({ ...sharedSpec, ...(seededPrompt ? { seededPrompt } : {}) });
     return this.api.createManagerSession({
       ...sharedSpec,
       pulseSeconds: this.pulseSeconds(),

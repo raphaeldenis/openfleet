@@ -48,6 +48,13 @@ describe('app.routes', () => {
     expect(harness.routeNativeElement?.querySelector('[data-testid="app-shell"]')).toBeFalsy();
   });
 
+  it("renders onboarding at '/onboarding', outside the shell chrome", async () => {
+    await configureTestBed();
+    const harness = await RouterTestingHarness.create('/onboarding');
+    expect(harness.routeNativeElement?.querySelector('[data-testid="onboarding"]')).toBeTruthy();
+    expect(harness.routeNativeElement?.querySelector('[data-testid="app-shell"]')).toBeFalsy();
+  });
+
   it("renders the inbox in its own panel at '/inbox', inside the shell", async () => {
     await configureTestBed();
     const harness = await RouterTestingHarness.create('/inbox');
