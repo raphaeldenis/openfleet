@@ -4,7 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
 import { environment } from '../../environments/environment';
 import { FleetApiService } from '../core/fleet-api.service';
-import { NewSessionFormComponent } from '../sessions/new-session-form.component';
+import { EmbeddedSessionSeed, NewSessionFormComponent } from '../sessions/new-session-form.component';
 
 type StepId = 'daemon' | 'providers' | 'project' | 'playbooks' | 'team' | 'first-session';
 
@@ -35,6 +35,7 @@ function requestedUrlFrom(navigationState: unknown): string {
   selector: 'of-onboarding',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [FormsModule, RouterLink, NewSessionFormComponent],
+  viewProviders: [EmbeddedSessionSeed],
   template: `
     <div class="page" data-testid="onboarding">
       <div class="topbar"><a [routerLink]="returnUrlTree" class="skip">Skip to app →</a></div>
@@ -101,7 +102,7 @@ function requestedUrlFrom(navigationState: unknown): string {
                 <p>Land in a terminal in under a minute.</p>
               </header>
               <p class="seeded-prompt">The session starts by sending this prompt: <q>{{ seededPrompt }}</q></p>
-              <of-new-session-form [embedded]="true" [initialDirectory]="repositoryPath().trim()" [initialName]="firstSessionName" [seededPrompt]="seededPrompt">
+              <of-new-session-form>
                 <button type="button" class="of-btn of-btn--secondary back" [attr.aria-disabled]="isCreatingFirstSession() || null" (click)="backToProject()">Back</button>
               </of-new-session-form>
             </section>
@@ -160,7 +161,7 @@ export class OnboardingComponent {
   protected readonly returnUrlTree = this.router.parseUrl(this.returnUrl);
   protected readonly deferredStepLabel = DEFERRED_STEP_LABEL;
   protected readonly startDaemonCommand = START_DAEMON_COMMAND;
-  protected readonly firstSessionName = FIRST_SESSION_NAME;
+  private readonly firstSessionSeed = inject(EmbeddedSessionSeed);
   protected readonly seededPrompt = FIRST_SESSION_SEEDED_PROMPT;
   protected readonly daemonAddress = environment.daemonAddress;
 
@@ -183,6 +184,8 @@ export class OnboardingComponent {
   });
 
   constructor() {
+    this.firstSessionSeed.name.set(FIRST_SESSION_NAME);
+    this.firstSessionSeed.prompt.set(FIRST_SESSION_SEEDED_PROMPT);
     effect((onCleanup) => {
       const isWaitingForDaemon = this.currentStepId() === 'daemon';
       if (!isWaitingForDaemon) return;
@@ -218,6 +221,7 @@ export class OnboardingComponent {
 
   protected continueToFirstSession(): void {
     if (!this.hasRepositoryPath()) return;
+    this.firstSessionSeed.directory.set(this.repositoryPath().trim());
     this.currentStepId.set('first-session');
   }
 
