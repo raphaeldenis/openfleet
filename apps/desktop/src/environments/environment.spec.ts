@@ -1,12 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { setAdminToken } from '../app/core/admin-token.store.js';
 import { environment } from './environment.js';
 
 describe('environment', () => {
   beforeEach(() => {
     localStorage.clear();
+    setAdminToken('');
   });
   afterEach(() => {
     localStorage.clear();
+    setAdminToken('');
   });
 
   it('apiUrl defaults to the local daemon address when nothing is stored', () => {
@@ -173,6 +176,19 @@ describe('environment', () => {
       localStorage.setItem('openfleet.adminToken', '  secret-token\n');
 
       expect(environment.adminToken).toBe('secret-token');
+    });
+
+    it('prefers the in-memory token (set by Tauri) over whatever is stored in localStorage', () => {
+      localStorage.setItem('openfleet.adminToken', 'stale-localstorage-token');
+      setAdminToken('fresh-in-memory-token');
+
+      expect(environment.adminToken).toBe('fresh-in-memory-token');
+    });
+
+    it('falls back to localStorage when no token was loaded into memory', () => {
+      localStorage.setItem('openfleet.adminToken', 'pasted-by-hand');
+
+      expect(environment.adminToken).toBe('pasted-by-hand');
     });
   });
 });

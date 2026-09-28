@@ -20,7 +20,7 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; connect-src 'self' http://127.0.0.1:7331 ws://127.0.0.1:7331 http://127.0.0.1:7332 ws://127.0.0.1:7332; style-src 'self' 'unsafe-inline'"
     }
   },
   "bundle": {
