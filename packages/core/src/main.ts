@@ -11,7 +11,10 @@ import { ManagerService } from './managers/managerService.js';
 import { PulseScheduler } from './managers/pulseScheduler.js';
 import { createMcpHandler } from './mcp/mcpServer.js';
 import { loadModelTable } from './models.js';
+import { installProcessGuards } from './process/processGuards.js';
 import { SessionService } from './sessions/sessionService.js';
+
+installProcessGuards();
 
 const config = loadConfig();
 const db = openDatabase(config.dbPath);

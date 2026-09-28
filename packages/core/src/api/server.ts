@@ -59,7 +59,13 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; clos
     applyCorsHeaders(req, res);
     if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
 
-    const url = new URL(req.url ?? '/', `http://${deps.host}`);
+    let url: URL;
+    try {
+      url = new URL(req.url ?? '/', `http://${deps.host}`);
+    } catch {
+      return json(res, 400, { error: 'invalid_url' });
+    }
+
     try {
       // Both /hooks and /mcp resolve their token from the URL/header alone, before touching the body —
       // an unknown hook token or MCP bearer is answered without ever buffering the request into memory.
