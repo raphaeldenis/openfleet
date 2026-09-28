@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { findPermissiveSettingsWarning } from './permissiveSettings.js';
 
 function claudeDir(directory: string): string {
@@ -63,5 +63,26 @@ describe('findPermissiveSettingsWarning', () => {
     writeFileSync(join(claudeDir(directory), 'settings.json'), '{not json');
 
     expect(findPermissiveSettingsWarning(directory)).toBeUndefined();
+  });
+
+  describe('a malformed settings file', () => {
+    let warnSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    });
+    afterEach(() => {
+      warnSpy.mockRestore();
+    });
+
+    it('logs a warning naming the unreadable file instead of being silently skipped', () => {
+      const directory = mkdtempSync(join(tmpdir(), 'of-project-'));
+      const settingsPath = join(claudeDir(directory), 'settings.json');
+      writeFileSync(settingsPath, '{not json');
+
+      findPermissiveSettingsWarning(directory);
+
+      expect(warnSpy).toHaveBeenCalledWith(`could not parse ${settingsPath}, not checked`);
+    });
   });
 });

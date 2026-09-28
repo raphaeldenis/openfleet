@@ -34,9 +34,15 @@ export const environment = {
     return normalizeStoredApiUrl(storedApiUrl) ?? DEFAULT_API_URL;
   },
   // Tauri sources the real token into memory (admin-token.store.ts) so it never touches localStorage;
-  // a plain browser (manual paste, e2e) has nowhere else to keep it, so that's the fallback.
+  // a plain browser (manual paste, e2e) has nowhere else to keep it, so that's the fallback. Inside
+  // Tauri an empty in-memory token stays empty — falling back to localStorage there would defeat the
+  // point of keeping the token out of it.
   get adminToken(): string {
-    return getAdminToken() || (globalThis.localStorage?.getItem('openfleet.adminToken')?.trim() ?? '');
+    const inMemoryToken = getAdminToken();
+    if (inMemoryToken) return inMemoryToken;
+    const isTauriWebview = '__TAURI_INTERNALS__' in globalThis;
+    if (isTauriWebview) return '';
+    return globalThis.localStorage?.getItem('openfleet.adminToken')?.trim() ?? '';
   },
   get daemonAddress(): string {
     return this.apiUrl.replace(/^\w+:\/\//, '');

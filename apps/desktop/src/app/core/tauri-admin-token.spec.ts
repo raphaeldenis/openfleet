@@ -83,4 +83,26 @@ describe('ensureAdminTokenLoaded', () => {
 
     expect(getAdminToken()).toBe('token-with-trailing-newline');
   });
+
+  it('purges a leftover token that a pre-fix build wrote to localStorage while running inside Tauri', async () => {
+    (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    localStorage.setItem('openfleet.adminToken', 'leftover-from-pre-fix-build');
+    invokeMock.mockResolvedValue('secret-token');
+    const ensureAdminTokenLoaded = await importFresh();
+
+    await ensureAdminTokenLoaded();
+
+    expect(localStorage.getItem('openfleet.adminToken')).toBeNull();
+  });
+
+  it('purges a leftover localStorage token inside Tauri even when the read command rejects', async () => {
+    (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    localStorage.setItem('openfleet.adminToken', 'leftover-from-pre-fix-build');
+    invokeMock.mockRejectedValue(new Error('no such file'));
+    const ensureAdminTokenLoaded = await importFresh();
+
+    await ensureAdminTokenLoaded();
+
+    expect(localStorage.getItem('openfleet.adminToken')).toBeNull();
+  });
 });

@@ -190,5 +190,25 @@ describe('environment', () => {
 
       expect(environment.adminToken).toBe('pasted-by-hand');
     });
+
+    describe('inside a Tauri webview', () => {
+      afterEach(() => {
+        delete (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+      });
+
+      it('stays empty instead of falling back to localStorage, leaving the UI\'s "no token" handling to take over', () => {
+        (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+        localStorage.setItem('openfleet.adminToken', 'stale-localstorage-token');
+
+        expect(environment.adminToken).toBe('');
+      });
+
+      it('still prefers the in-memory token when one was loaded', () => {
+        (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+        setAdminToken('fresh-in-memory-token');
+
+        expect(environment.adminToken).toBe('fresh-in-memory-token');
+      });
+    });
   });
 });

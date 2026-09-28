@@ -12,5 +12,8 @@ export async function ensureAdminTokenLoaded(): Promise<void> {
     if (token) setAdminToken(token);
   } catch (error) {
     console.error('could not read the admin token from Tauri', error);
+  } finally {
+    // Pre-fix builds wrote the token to localStorage even inside Tauri; purge any leftover.
+    globalThis.localStorage?.removeItem('openfleet.adminToken');
   }
 }

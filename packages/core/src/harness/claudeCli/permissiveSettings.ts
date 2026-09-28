@@ -32,6 +32,7 @@ function tryReadSettings(settingsPath: string): ClaudeSettings | undefined {
   try {
     return JSON.parse(readFileSync(settingsPath, 'utf8'));
   } catch {
-    return undefined; // a malformed settings file is not this detector's concern
+    console.warn(`could not parse ${settingsPath}, not checked`);
+    return undefined;
   }
 }
