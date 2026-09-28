@@ -2,8 +2,9 @@ import { describe, expect, it } from 'vitest';
 import type { RowActorKind } from '@openfleet/shared';
 import { openDatabase } from '../db/database.js';
 import { ProjectRepository } from '../projects/projectRepository.js';
-import { DataStoreRepository, RowNotFoundError, UnknownColumnError } from './dataStoreRepository.js';
+import { DataStoreRepository, RowNotFoundError, StoreNotFoundError, UnknownColumnError } from './dataStoreRepository.js';
 
+const owningProject = { projectId: 'p1' } as const;
 const human = { kind: 'human', label: 'You' } as const;
 const agent = { kind: 'agent', label: '⛏️ Gimli · T6' } as const;
 
@@ -61,9 +62,18 @@ describe('DataStoreRepository', () => {
 
       expect(row).toEqual({ id: 'r1', storeId: 's1', data: { [status.id]: 'todo' }, createdAt: 't1', updatedAt: 't1' });
       expect(repository.listRows(store.id)).toEqual([row]);
-      expect(repository.rowHistory(row.id)).toEqual([
+      expect(repository.rowHistory(row.id, owningProject)).toEqual([
         expect.objectContaining({ rowId: 'r1', actorKind: 'human', actorLabel: 'You', change: { kind: 'create' }, createdAt: 't1' }),
       ]);
+    });
+
+    it('throws a typed not-found for a store that does not exist, before looking at the columns', () => {
+      const repository = openRepository();
+
+      const insertion = () => repository.insertRow('ghost-store', { id: 'r1', data: { 'c-ghost': 'x' }, actor: human, at: 't1' });
+
+      expect(insertion).toThrow(StoreNotFoundError);
+      expect(repository.rowHistory('r1', owningProject)).toEqual([]);
     });
 
     it('refuses data keyed by a column the store does not have, and stores nothing', () => {
@@ -85,7 +95,7 @@ describe('DataStoreRepository', () => {
 
       const updated = repository.updateRow(row.id, { patch: { [status.id]: 'done' }, actor: agent, at: 't2' });
 
-      const [latest] = repository.rowHistory(row.id);
+      const [latest] = repository.rowHistory(row.id, owningProject);
       expect(latest).toMatchObject({ actorKind: 'agent', actorLabel: '⛏️ Gimli · T6', change: { [status.id]: { from: 'todo', to: 'done' } }, createdAt: 't2' });
       expect(updated).toEqual({ id: 'r1', storeId: 's1', data: { [status.id]: 'done' }, createdAt: 't1', updatedAt: 't2' });
       expect(repository.listRows(store.id)).toEqual([updated]);
@@ -99,7 +109,7 @@ describe('DataStoreRepository', () => {
 
       repository.updateRow(row.id, { patch: { [status.id]: 'done', [title.id]: 'ship it' }, actor: human, at: 't2' });
 
-      const [latest] = repository.rowHistory(row.id);
+      const [latest] = repository.rowHistory(row.id, owningProject);
       expect(latest!.change).toEqual({ [status.id]: { from: 'todo', to: 'done' } });
     });
 
@@ -110,7 +120,7 @@ describe('DataStoreRepository', () => {
 
       repository.updateRow(row.id, { patch: { [status.id]: 'todo' }, actor: human, at: 't2' });
 
-      const [latest] = repository.rowHistory(row.id);
+      const [latest] = repository.rowHistory(row.id, owningProject);
       expect(latest!.change).toEqual({ [status.id]: { from: null, to: 'todo' } });
     });
 
@@ -122,7 +132,7 @@ describe('DataStoreRepository', () => {
 
       repository.updateRow(row.id, { patch: { [payload.id]: { a: 1, b: [2] } }, actor: human, at: 't2' });
 
-      expect(repository.rowHistory(row.id)).toHaveLength(1);
+      expect(repository.rowHistory(row.id, owningProject)).toHaveLength(1);
     });
 
     it('writes no history entry and leaves updated_at alone when the patch changes nothing', () => {
@@ -133,7 +143,7 @@ describe('DataStoreRepository', () => {
       const unchanged = repository.updateRow(row.id, { patch: { [status.id]: 'todo' }, actor: agent, at: 't2' });
 
       expect(unchanged).toEqual(row);
-      expect(repository.rowHistory(row.id)).toHaveLength(1);
+      expect(repository.rowHistory(row.id, owningProject)).toHaveLength(1);
       expect(repository.listRows(store.id)[0]!.updatedAt).toBe('t1');
     });
 
@@ -143,7 +153,7 @@ describe('DataStoreRepository', () => {
       const update = () => repository.updateRow('ghost', { patch: {}, actor: human, at: 't1' });
 
       expect(update).toThrow(RowNotFoundError);
-      expect(repository.rowHistory('ghost')).toEqual([]);
+      expect(repository.rowHistory('ghost', owningProject)).toEqual([]);
     });
 
     it('refuses a patch keyed by a column the store does not have, and changes nothing', () => {
@@ -155,7 +165,7 @@ describe('DataStoreRepository', () => {
 
       expect(update).toThrow(UnknownColumnError);
       expect(repository.listRows(store.id)).toEqual([row]);
-      expect(repository.rowHistory(row.id)).toHaveLength(1);
+      expect(repository.rowHistory(row.id, owningProject)).toHaveLength(1);
     });
   });
 
@@ -169,7 +179,7 @@ describe('DataStoreRepository', () => {
       repository.deleteRow(row.id, { actor: agent, at: 't3' });
 
       expect(repository.listRows(store.id)).toEqual([]);
-      expect(repository.rowHistory(row.id).map((entry) => [entry.actorKind, entry.change])).toEqual([
+      expect(repository.rowHistory(row.id, owningProject).map((entry) => [entry.actorKind, entry.change])).toEqual([
         ['agent', { kind: 'delete' }],
         ['agent', { [status.id]: { from: 'todo', to: 'done' } }],
         ['human', { kind: 'create' }],
@@ -182,7 +192,7 @@ describe('DataStoreRepository', () => {
       const deletion = () => repository.deleteRow('ghost', { actor: human, at: 't1' });
 
       expect(deletion).toThrow(RowNotFoundError);
-      expect(repository.rowHistory('ghost')).toEqual([]);
+      expect(repository.rowHistory('ghost', owningProject)).toEqual([]);
     });
 
     it('throws a typed not-found for a row that is already deleted, without a second delete entry', () => {
@@ -194,7 +204,7 @@ describe('DataStoreRepository', () => {
       const secondDeletion = () => repository.deleteRow(row.id, { actor: human, at: 't3' });
 
       expect(secondDeletion).toThrow(RowNotFoundError);
-      expect(repository.rowHistory(row.id)).toHaveLength(2);
+      expect(repository.rowHistory(row.id, owningProject)).toHaveLength(2);
     });
   });
 
@@ -209,7 +219,7 @@ describe('DataStoreRepository', () => {
 
       expect(insertion).toThrow();
       expect(repository.listRows(store.id)).toEqual([]);
-      expect(repository.rowHistory('r1')).toEqual([]);
+      expect(repository.rowHistory('r1', owningProject)).toEqual([]);
     });
 
     it('updateRow leaves the row and its history exactly as they were when the history entry is refused', () => {
@@ -221,7 +231,7 @@ describe('DataStoreRepository', () => {
 
       expect(update).toThrow();
       expect(repository.listRows(store.id)).toEqual([row]);
-      expect(repository.rowHistory(row.id)).toHaveLength(1);
+      expect(repository.rowHistory(row.id, owningProject)).toHaveLength(1);
     });
 
     it('deleteRow keeps the row and its history exactly as they were when the history entry is refused', () => {
@@ -233,7 +243,7 @@ describe('DataStoreRepository', () => {
 
       expect(deletion).toThrow();
       expect(repository.listRows(store.id)).toEqual([row]);
-      expect(repository.rowHistory(row.id)).toHaveLength(1);
+      expect(repository.rowHistory(row.id, owningProject)).toHaveLength(1);
     });
 
     it('stays usable after a refused write', () => {
@@ -257,7 +267,7 @@ describe('DataStoreRepository', () => {
         repository.updateRow(row.id, { patch: { [status.id]: value }, actor: human, at: 'same-ms' });
       }
 
-      const newestValueFirst = repository.rowHistory(row.id).map((entry) => (entry.change as Record<string, { to: unknown }>)[status.id]?.to);
+      const newestValueFirst = repository.rowHistory(row.id, owningProject).map((entry) => (entry.change as Record<string, { to: unknown }>)[status.id]?.to);
 
       expect(newestValueFirst).toEqual(['s8', 's7', 's6', 's5', 's4', 's3', 's2', 's1', undefined]);
     });
@@ -279,7 +289,7 @@ describe('DataStoreRepository', () => {
       const row = repository.insertRow(store.id, { id: 'r1', data: {}, actor: human, at: 't1' });
       repository.deleteRow(row.id, { actor: human, at: 't2' });
 
-      const historyInOwningProject = repository.rowHistory(row.id, { projectId: 'p1' });
+      const historyInOwningProject = repository.rowHistory(row.id, owningProject);
       const historyInOtherProject = repository.rowHistory(row.id, { projectId: 'p2' });
 
       expect(historyInOwningProject.map((entry) => entry.change)).toEqual([{ kind: 'delete' }, { kind: 'create' }]);

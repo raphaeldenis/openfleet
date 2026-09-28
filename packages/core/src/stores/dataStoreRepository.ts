@@ -5,6 +5,12 @@ import { newId } from '../ids.js';
 
 export interface RowActor { kind: RowActorKind; label: string }
 
+export class StoreNotFoundError extends Error {
+  constructor(readonly storeId: string) {
+    super(`Data store ${storeId} not found`);
+  }
+}
+
 export class RowNotFoundError extends Error {
   constructor(readonly rowId: string) {
     super(`Row ${rowId} not found`);
@@ -76,6 +82,7 @@ export class DataStoreRepository {
 
   insertRow(storeId: string, input: { id: string; data: Record<string, unknown>; actor: RowActor; at: string }): DsRow {
     this.inTransaction(() => {
+      this.refuseMissingStore(storeId);
       this.refuseUnknownColumns(storeId, Object.keys(input.data));
       this.db.prepare('INSERT INTO ds_rows (id, store_id, data_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
         .run(input.id, storeId, JSON.stringify(input.data), input.at, input.at);
@@ -114,14 +121,13 @@ export class DataStoreRepository {
   }
 
   /** Newest first. Authorizes through the entry's own store, so a deleted row's trail stays readable. */
-  rowHistory(rowId: string, scope?: { projectId: string }): DsRowHistoryEntry[] {
-    const projectId = scope?.projectId ?? null;
+  rowHistory(rowId: string, scope: { projectId: string }): DsRowHistoryEntry[] {
     const entries = this.db.prepare(
       `SELECT history.* FROM ds_row_history history
        JOIN data_stores store ON store.id = history.store_id
-       WHERE history.row_id = ? AND (? IS NULL OR store.project_id = ?)
+       WHERE history.row_id = ? AND store.project_id = ?
        ORDER BY history.created_at DESC, history.rowid DESC`,
-    ).all(rowId, projectId, projectId) as unknown as HistoryRow[];
+    ).all(rowId, scope.projectId) as unknown as HistoryRow[];
     return entries.map(toHistoryEntry);
   }
 
@@ -138,6 +144,11 @@ export class DataStoreRepository {
   private findRow(rowId: string): DsRow | undefined {
     const row = this.db.prepare('SELECT * FROM ds_rows WHERE id = ?').get(rowId) as RowRow | undefined;
     return row ? toRow(row) : undefined;
+  }
+
+  private refuseMissingStore(storeId: string): void {
+    const store = this.db.prepare('SELECT 1 FROM data_stores WHERE id = ?').get(storeId);
+    if (!store) throw new StoreNotFoundError(storeId);
   }
 
   private refuseUnknownColumns(storeId: string, columnIds: string[]): void {
