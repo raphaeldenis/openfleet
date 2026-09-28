@@ -1,9 +1,8 @@
-import { ChangeDetectionStrategy, Component, DestroyRef, computed, effect, inject, input, signal, untracked } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, input, linkedSignal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { PERMISSION_MODES, type PermissionMode, type SessionState } from '@openfleet/shared';
-import { FleetApiService } from '../core/fleet-api.service';
-import { PendingSwitchesService } from '../core/pending-switches.service';
-import { runGuarded } from '../core/run-guarded';
+import { PERMISSION_MODES, type PermissionMode } from '@openfleet/shared';
+import { PendingSwitchesService, SWITCH_STATUS_LABEL } from '../core/pending-switches.service';
+import { SessionRequestsService } from '../core/session-requests';
 
 export const PERMISSION_MODE_EXPLANATIONS: Record<PermissionMode, string> = {
   manual: 'asks before risky tools, except those you already allowed in your Claude settings',
@@ -16,12 +15,7 @@ export const PERMISSION_MODE_EXPLANATIONS: Record<PermissionMode, string> = {
 
 const INHERITED_LABEL = 'inherited';
 export const INHERITED_EXPLANATION ='No mode set: the CLI uses your own default (Claude settings)';
-const PERMISSION_MODE_SWITCH_ERROR = 'Could not change permission mode — try again.';
-
-const SWITCH_STATUS_LABEL: Record<'relaunching' | 'deferred', string> = {
-  relaunching: 'restarting…',
-  deferred: 'switch pending: happens when this turn ends',
-};
+const FALLBACK_MODE: PermissionMode = 'manual';
 
 @Component({
   selector: 'of-permission-mode-picker',
@@ -31,7 +25,7 @@ const SWITCH_STATUS_LABEL: Record<'relaunching' | 'deferred', string> = {
     <div class="permission-mode-picker" data-testid="permission-mode-picker">
       <span class="mode" data-testid="permission-mode" [attr.data-warning]="isDangerous() ? '1' : null">🛡 {{ label() }}</span>
       <span class="explanation" data-testid="permission-mode-explanation">{{ explanation() }}</span>
-      <select class="of-input" data-testid="permission-mode-select" aria-label="Permission mode" [(ngModel)]="chosenMode">
+      <select class="of-input" data-testid="permission-mode-select" aria-label="Permission mode" [ngModel]="shownMode()" (ngModelChange)="pickedMode.set($event)">
         @for (mode of modes; track mode) { <option [value]="mode">{{ mode }}</option> }
       </select>
       <button type="button" class="of-btn of-btn--secondary" data-testid="apply-permission-mode" [disabled]="applying()" (click)="onApplyClick()">
@@ -45,7 +39,7 @@ const SWITCH_STATUS_LABEL: Record<'relaunching' | 'deferred', string> = {
         </div>
       }
       @if (switchStatus(); as status) {
-        <span class="switch-status" data-testid="permission-mode-switch-status">{{ statusLabel(status) }}</span>
+        <span class="switch-status" data-testid="permission-mode-switch-status">{{ statusLabel[status] }}</span>
       }
       @if (switchError(); as error) {
         <span role="alert" data-testid="permission-mode-switch-error" class="of-error">✕ {{ error }}</span>
@@ -64,13 +58,12 @@ const SWITCH_STATUS_LABEL: Record<'relaunching' | 'deferred', string> = {
 export class PermissionModePickerComponent {
   readonly sessionId = input.required<string>();
   readonly currentMode = input<PermissionMode>();
-  readonly sessionState = input<SessionState>();
-  private readonly api = inject(FleetApiService);
   private readonly pendingSwitches = inject(PendingSwitchesService);
-  private shownSessionId: string | undefined;
+  private readonly requests = inject(SessionRequestsService);
 
   protected readonly modes = PERMISSION_MODES;
   protected readonly bypassWarning = PERMISSION_MODE_EXPLANATIONS.bypassPermissions;
+  protected readonly statusLabel = SWITCH_STATUS_LABEL;
   protected readonly label = computed(() => this.currentMode() ?? INHERITED_LABEL);
   protected readonly isDangerous = computed(() => this.currentMode() === 'bypassPermissions');
   protected readonly explanation = computed(() => {
@@ -78,116 +71,37 @@ export class PermissionModePickerComponent {
     return mode ? PERMISSION_MODE_EXPLANATIONS[mode] : INHERITED_EXPLANATION;
   });
 
-  chosenMode: PermissionMode = 'manual';
-  private confirmedMode: PermissionMode = 'manual';
-  readonly applying = signal(false);
-  readonly confirmingBypass = signal(false);
-  readonly switchStatus = signal<'relaunching' | 'deferred' | null>(null);
-  readonly switchError = signal<string | null>(null);
-  // The mode and state in effect when the current switch was requested — `null` (not `undefined`)
-  // records an inherited starting mode, since `undefined` is the "no switch pending" sentinel below —
-  // collapsing the two left a switch from an inherited mode untracked forever.
-  private readonly modeBeforeSwitch = signal<PermissionMode | null | undefined>(undefined);
-  private readonly stateBeforeSwitch = signal<SessionState | undefined>(undefined);
-  // The daemon persists the mode (and emits permission_mode_changed) before or while the relaunch it
-  // triggers is still starting, so the mode alone landing is not proof the switch is done — only the
-  // relaunch's own state transition (leaving 'starting') or the turn ending (idle/closed) is.
-  private readonly sawStartingSinceSwitch = signal(false);
+  // What the user picked and has not applied yet; a session switch starts from no pick and no bypass confirmation.
+  protected readonly pickedMode = linkedSignal<string, PermissionMode | undefined>({ source: this.sessionId, computation: () => undefined });
+  protected readonly confirmingBypass = linkedSignal<string, boolean>({ source: this.sessionId, computation: () => false });
+  private readonly pending = computed(() => this.pendingSwitches.pendingOf(this.sessionId(), 'permissionMode'));
+  private readonly modeInForce = computed(() => (this.pending()?.requestedValue as PermissionMode | undefined) ?? this.currentMode() ?? FALLBACK_MODE);
+  protected readonly shownMode = computed(() => this.pickedMode() ?? this.modeInForce());
+  protected readonly switchStatus = computed(() => this.pending()?.status ?? null);
+  protected readonly applying = computed(() => this.requests.isBusy(this.sessionId(), 'permissionMode'));
+  protected readonly switchError = computed(() => this.requests.errorOf(this.sessionId(), 'permissionMode'));
 
-  constructor() {
-    // A route param change reuses this component instance: the session being left keeps its pending
-    // switch in the service, the session arriving gets its own back.
-    effect(() => {
-      const sessionId = this.sessionId();
-      untracked(() => this.showSwitchStateOf(sessionId));
-    });
-    inject(DestroyRef).onDestroy(() => this.parkPendingSwitchOfShownSession());
-
-    effect(() => {
-      const requestedFrom = this.modeBeforeSwitch();
-      if (requestedFrom === undefined) return;
-      const state = this.sessionState();
-      if (state === 'starting') {
-        this.sawStartingSinceSwitch.set(true);
-        return;
-      }
-      const relaunchSettled = this.sawStartingSinceSwitch();
-      const turnEndSettled = (state === 'idle' || state === 'closed') && state !== this.stateBeforeSwitch();
-      if (!relaunchSettled && !turnEndSettled) return;
-      this.switchStatus.set(null);
-      this.modeBeforeSwitch.set(undefined);
-      this.stateBeforeSwitch.set(undefined);
-      this.sawStartingSinceSwitch.set(false);
-    });
-  }
-
-  private showSwitchStateOf(sessionId: string): void {
-    this.parkPendingSwitchOfShownSession();
-    this.shownSessionId = sessionId;
-    const pending = this.pendingSwitches.recall(sessionId, 'permissionMode');
-    this.chosenMode = (pending?.requestedValue as PermissionMode | undefined) ?? this.currentMode() ?? 'manual';
-    this.confirmedMode = this.chosenMode;
-    this.applying.set(false);
-    this.confirmingBypass.set(false);
-    this.switchStatus.set(pending?.status ?? null);
-    this.switchError.set(null);
-    this.modeBeforeSwitch.set(pending ? (pending.valueBeforeSwitch as PermissionMode | null) : undefined);
-    this.stateBeforeSwitch.set(pending?.stateBeforeSwitch);
-    this.sawStartingSinceSwitch.set(pending?.sawStartingSinceSwitch ?? false);
-  }
-
-  private parkPendingSwitchOfShownSession(): void {
-    if (this.shownSessionId === undefined) return;
-    this.pendingSwitches.park(this.shownSessionId, 'permissionMode', {
-      status: this.switchStatus(),
-      requestedValue: this.confirmedMode,
-      valueBeforeSwitch: this.modeBeforeSwitch(),
-      stateBeforeSwitch: this.stateBeforeSwitch(),
-      sawStartingSinceSwitch: this.sawStartingSinceSwitch(),
-    });
-  }
-
-  statusLabel(status: 'relaunching' | 'deferred'): string {
-    return SWITCH_STATUS_LABEL[status];
-  }
-
-  onApplyClick(): void {
-    if (this.chosenMode === 'bypassPermissions') {
+  protected onApplyClick(): void {
+    if (this.shownMode() === 'bypassPermissions') {
       this.confirmingBypass.set(true);
       return;
     }
-    void this.apply();
+    this.apply();
   }
 
-  cancelBypass(): void {
+  protected cancelBypass(): void {
     this.confirmingBypass.set(false);
-    this.chosenMode = this.confirmedMode;
+    this.pickedMode.set(undefined);
   }
 
-  confirmBypass(): void {
+  protected confirmBypass(): void {
     this.confirmingBypass.set(false);
-    void this.apply();
+    this.apply();
   }
 
-  private async apply(): Promise<void> {
-    const sessionIdAtApply = this.sessionId();
-    const modeAtApply = this.currentMode() ?? null;
-    const stateAtApply = this.sessionState();
-    const attemptedMode = this.chosenMode;
-    await runGuarded(this.applying, this.switchError, PERMISSION_MODE_SWITCH_ERROR, async () => {
-      let result: { status: 'relaunching' | 'deferred' };
-      try {
-        result = await this.api.updatePermissionMode(sessionIdAtApply, attemptedMode);
-      } catch (error) {
-        if (this.sessionId() !== sessionIdAtApply) return;
-        this.chosenMode = this.confirmedMode;
-        throw error;
-      }
-      if (this.sessionId() !== sessionIdAtApply) return;
-      this.confirmedMode = attemptedMode;
-      this.modeBeforeSwitch.set(modeAtApply);
-      this.stateBeforeSwitch.set(stateAtApply);
-      this.switchStatus.set(result.status);
-    });
+  private apply(): void {
+    const value = this.shownMode();
+    this.pickedMode.set(undefined);
+    void this.pendingSwitches.request({ sessionId: this.sessionId(), kind: 'permissionMode', value });
   }
 }
