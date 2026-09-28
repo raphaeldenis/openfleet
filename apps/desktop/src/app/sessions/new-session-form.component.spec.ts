@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
 import { ActivatedRoute, convertToParamMap, provideRouter, Router } from '@angular/router';
-import { of } from 'rxjs';
+import { BehaviorSubject } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
 import { NewSessionFormComponent } from './new-session-form.component';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
@@ -15,15 +15,17 @@ function fakeApi(overrides: Record<string, unknown> = {}) {
 }
 
 async function renderForm(api: ReturnType<typeof fakeApi>, queryParams: Record<string, string> = {}) {
+  const queryParamMap$ = new BehaviorSubject(convertToParamMap(queryParams));
   const { fixture } = await render(NewSessionFormComponent, {
     providers: [
       provideRouter([]),
       { provide: FleetApiService, useValue: api },
-      { provide: ActivatedRoute, useValue: { queryParamMap: of(convertToParamMap(queryParams)) } },
+      { provide: ActivatedRoute, useValue: { queryParamMap: queryParamMap$ } },
     ],
   });
   const navigateSpy = vi.spyOn(fixture.debugElement.injector.get(Router), 'navigate').mockResolvedValue(true);
-  return { fixture, navigateSpy };
+  const changeUrlQueryParams = (nextQueryParams: Record<string, string>) => queryParamMap$.next(convertToParamMap(nextQueryParams));
+  return { fixture, navigateSpy, changeUrlQueryParams };
 }
 
 async function pasteMission(mission: string): Promise<void> {
@@ -262,6 +264,17 @@ describe('NewSessionFormComponent', () => {
       expect(api.createSession).not.toHaveBeenCalled();
     });
 
+    it('user typing stray spaces around the mission creates the manager with it trimmed', async () => {
+      const api = fakeApi();
+      await renderForm(api, { mode: 'manager' });
+      await fillSessionFields({ name: 'Lead' });
+
+      await pasteMission('  Ship phase 2  \n');
+      await userEvent.click(screen.getByTestId('new-session-submit'));
+
+      expect(api.createManagerSession).toHaveBeenCalledWith(expect.objectContaining({ mission: 'Ship phase 2' }));
+    });
+
     it('user sees the name error clear as soon as a name is typed', async () => {
       await renderForm(fakeApi());
       await userEvent.click(screen.getByTestId('new-session-submit'));
@@ -344,9 +357,7 @@ describe('NewSessionFormComponent', () => {
       expect(screen.getByTestId('new-session-form-error')).toHaveTextContent('check your connection');
     });
 
-    // KNOWN DEFECT (Hermione, P2-U5): submit() navigates unconditionally after the await, so a create
-    // that resolves after the user left /new yanks them to the new session. Flip to `it` once fixed.
-    it.fails('user who left the form before the create resolves is not pulled back to the new session', async () => {
+    it('user who left the form before the create resolves is not pulled back to the new session', async () => {
       let resolveCreate!: (session: { id: string }) => void;
       const api = fakeApi({ createSession: vi.fn(() => new Promise((resolve) => { resolveCreate = resolve; })) });
       const { fixture, navigateSpy } = await renderForm(api);
@@ -382,6 +393,34 @@ describe('NewSessionFormComponent', () => {
       expect(screen.getByTestId('new-session-name')).toHaveValue('Gimli');
       expect(screen.getByTestId('new-session-model')).toHaveValue('opus');
       expect(screen.getByTestId('new-session-permission-mode')).toHaveValue('plan');
+    });
+
+    it('user switching to manager puts ?mode=manager in the URL without adding a history entry', async () => {
+      const { navigateSpy } = await renderForm(fakeApi());
+
+      await userEvent.click(screen.getByTestId('new-session-mode-manager'));
+
+      expect(navigateSpy).toHaveBeenCalledWith([], expect.objectContaining({ queryParams: { mode: 'manager' }, replaceUrl: true }));
+    });
+
+    it('user switching back to session removes the mode from the URL', async () => {
+      const { navigateSpy } = await renderForm(fakeApi(), { mode: 'manager' });
+
+      await userEvent.click(screen.getByTestId('new-session-mode-session'));
+
+      expect(navigateSpy).toHaveBeenCalledWith([], expect.objectContaining({ queryParams: {}, replaceUrl: true }));
+    });
+
+    it('user following a sidebar link while the form is open sees the form follow the URL', async () => {
+      const { changeUrlQueryParams } = await renderForm(fakeApi());
+      expect(screen.queryByTestId('manager-mission')).toBeNull();
+
+      changeUrlQueryParams({ mode: 'manager' });
+      await waitFor(() => expect(screen.getByTestId('manager-mission')).toBeTruthy());
+      expect(screen.getByTestId('new-session-mode-manager')).toHaveAttribute('aria-pressed', 'true');
+
+      changeUrlQueryParams({});
+      await waitFor(() => expect(screen.queryByTestId('manager-mission')).toBeNull());
     });
 
     it('user creating a manager with a chosen permission mode sends the mode and harness along', async () => {
@@ -425,14 +464,73 @@ describe('NewSessionFormComponent', () => {
       expect(screen.getByRole('textbox', { name: /mission/i })).toBeTruthy();
     });
 
-    // KNOWN DEFECT (Hermione, P2-U5): the error <span> lives inside the wrapping <label>, so the error text
-    // becomes part of the field's accessible name ("Name ✕ Name is required"). Flip to `it` once fixed.
-    it.fails('keeps the field name as its accessible name while its error is shown', async () => {
+    it('keeps the field name as its accessible name while its error is shown', async () => {
       await renderForm(fakeApi());
 
       await userEvent.click(screen.getByTestId('new-session-submit'));
 
       expect(screen.getByTestId('new-session-name')).toHaveAccessibleName('Name');
+    });
+
+    it('describes each invalid field with its error message', async () => {
+      await renderForm(fakeApi(), { mode: 'manager' });
+
+      await userEvent.click(screen.getByTestId('new-session-submit'));
+
+      expect(screen.getByTestId('new-session-directory')).toHaveAccessibleDescription('✕ Directory is required');
+      expect(screen.getByTestId('new-session-name')).toHaveAccessibleDescription('✕ Name is required');
+      expect(screen.getByTestId('manager-mission')).toHaveAccessibleDescription('✕ A manager needs a mission');
+    });
+
+    it('describes the pulse seconds and children cap fields with their errors while keeping their names', async () => {
+      await renderForm(fakeApi(), { mode: 'manager' });
+
+      await setNumberField('manager-pulse-seconds', '0');
+      await setNumberField('manager-children-cap', '65');
+      await userEvent.tab();
+
+      expect(screen.getByTestId('manager-pulse-seconds')).toHaveAccessibleName('Pulse seconds');
+      expect(screen.getByTestId('manager-pulse-seconds')).toHaveAccessibleDescription(/whole number between 1 and 86400/);
+      expect(screen.getByTestId('manager-children-cap')).toHaveAccessibleName('Children cap');
+      expect(screen.getByTestId('manager-children-cap')).toHaveAccessibleDescription(/whole number between 1 and 64/);
+    });
+  });
+
+  describe('focus after a failed submit', () => {
+    it('user is taken to the directory when it is the first invalid field', async () => {
+      await renderForm(fakeApi());
+
+      await userEvent.click(screen.getByTestId('new-session-submit'));
+
+      expect(screen.getByTestId('new-session-directory')).toHaveFocus();
+    });
+
+    it('user is taken to the name when only the name is invalid', async () => {
+      await renderForm(fakeApi());
+      await userEvent.type(screen.getByTestId('new-session-directory'), '/tmp/wt');
+
+      await userEvent.click(screen.getByTestId('new-session-submit'));
+
+      expect(screen.getByTestId('new-session-name')).toHaveFocus();
+    });
+
+    it('user is taken to the mission when it is the only invalid field of a manager', async () => {
+      await renderForm(fakeApi(), { mode: 'manager' });
+      await fillSessionFields({ name: 'Lead' });
+
+      await userEvent.click(screen.getByTestId('new-session-submit'));
+
+      expect(screen.getByTestId('manager-mission')).toHaveFocus();
+    });
+
+    it('user is taken to the pulse seconds before the mission when both are invalid', async () => {
+      await renderForm(fakeApi(), { mode: 'manager' });
+      await fillSessionFields({ name: 'Lead' });
+      await setNumberField('manager-pulse-seconds', '0');
+
+      await userEvent.click(screen.getByTestId('new-session-submit'));
+
+      expect(screen.getByTestId('manager-pulse-seconds')).toHaveFocus();
     });
   });
 
