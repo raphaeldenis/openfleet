@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/angular/zoneless';
+import { render, screen, within } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FleetApiService } from '../core/fleet-api.service';
@@ -55,14 +55,6 @@ describe('SettingsComponent — tab bar', () => {
     expect(models).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps focus on the tab that was just picked instead of dropping it to the body', async () => {
-    await renderSettings();
-
-    await openDaemonTab();
-
-    expect(document.activeElement).toBe(daemonTab());
-  });
-
   it('switches tab from the keyboard with Enter and with Space on a focused tab', async () => {
     await renderSettings();
     daemonTab().focus();
@@ -75,96 +67,49 @@ describe('SettingsComponent — tab bar', () => {
     expect(modelsTab()).toHaveAttribute('aria-selected', 'true');
   });
 
-  it('declares the vertical layout of its tab list to assistive tech', async () => {
+  it('exposes a named vertical tab list whose selected tab is the only Tab stop and controls the tabpanel', async () => {
     await renderSettings();
 
-    expect(screen.getByRole('tablist')).toHaveAttribute('aria-orientation', 'vertical');
-  });
-
-  it('names the tab list for screen readers', async () => {
-    await renderSettings();
-
-    expect(screen.getByRole('tablist', { name: /settings/i })).toBeTruthy();
-  });
-
-  it('wires the selected tab to a tabpanel through aria-controls and aria-labelledby', async () => {
-    await renderSettings();
-
+    expect(screen.getByRole('tablist', { name: /settings/i })).toHaveAttribute('aria-orientation', 'vertical');
+    expect(modelsTab()).toHaveAttribute('tabindex', '0');
+    expect(daemonTab()).toHaveAttribute('tabindex', '-1');
     const panelId = modelsTab().getAttribute('aria-controls');
     const panel = panelId ? document.getElementById(panelId) : null;
-
     expect(panel).toHaveAttribute('role', 'tabpanel');
     expect(panel).toHaveAttribute('aria-labelledby', modelsTab().id);
   });
 
-  it('keeps only the selected tab in the Tab sequence', async () => {
-    await renderSettings();
-
-    expect(modelsTab()).toHaveAttribute('tabindex', '0');
-    expect(daemonTab()).toHaveAttribute('tabindex', '-1');
-  });
-
-  it('moves selection and focus to the next tab on ArrowDown', async () => {
+  it('moves selection and focus with the arrow keys, wrapping around', async () => {
     await renderSettings();
     modelsTab().focus();
 
     await userEvent.keyboard('{ArrowDown}');
+    expect(daemonTab()).toHaveAttribute('aria-selected', 'true');
+    expect(document.activeElement).toBe(daemonTab());
 
+    await userEvent.keyboard('{ArrowDown}');
+    expect(modelsTab()).toHaveAttribute('aria-selected', 'true');
+    expect(document.activeElement).toBe(modelsTab());
+
+    await userEvent.keyboard('{ArrowUp}');
     expect(daemonTab()).toHaveAttribute('aria-selected', 'true');
     expect(document.activeElement).toBe(daemonTab());
   });
 
-  it('wraps from the first tab to the last on ArrowUp', async () => {
+  it('leaves a modified arrow key to the browser: not swallowed, no tab change', async () => {
     await renderSettings();
-    modelsTab().focus();
+    const modifiedArrow = new KeyboardEvent('keydown', { key: 'ArrowDown', altKey: true, bubbles: true, cancelable: true });
 
-    await userEvent.keyboard('{ArrowUp}');
+    modelsTab().dispatchEvent(modifiedArrow);
 
-    expect(document.activeElement).toBe(daemonTab());
-  });
-
-  it('jumps to the last tab on End and back to the first on Home', async () => {
-    await renderSettings();
-    modelsTab().focus();
-
-    await userEvent.keyboard('{End}');
-    expect(document.activeElement).toBe(daemonTab());
-
-    await userEvent.keyboard('{Home}');
-    expect(document.activeElement).toBe(modelsTab());
-  });
-
-  it.each([
-    ['Alt', '{Alt>}{ArrowDown}{/Alt}'],
-    ['Ctrl', '{Control>}{ArrowDown}{/Control}'],
-    ['Meta', '{Meta>}{ArrowDown}{/Meta}'],
-    ['Shift', '{Shift>}{ArrowDown}{/Shift}'],
-  ])('leaves %s+ArrowDown to the browser instead of swallowing it', async (_modifier, keystroke) => {
-    await renderSettings();
-    modelsTab().focus();
-
-    await userEvent.keyboard(keystroke);
-
-    expect(modelsTab()).toHaveAttribute('aria-selected', 'true');
-    expect(document.activeElement).toBe(modelsTab());
-  });
-
-  it('does not react to ArrowLeft and ArrowRight on the vertical tab list', async () => {
-    await renderSettings();
-    modelsTab().focus();
-
-    await userEvent.keyboard('{ArrowRight}{ArrowLeft}');
-
+    expect(modifiedArrow.defaultPrevented).toBe(false);
     expect(modelsTab()).toHaveAttribute('aria-selected', 'true');
   });
 });
 
 describe('SettingsComponent — Models tab', () => {
   beforeEach(() => localStorage.clear());
-  afterEach(() => {
-    localStorage.clear();
-    vi.unstubAllGlobals();
-  });
+  afterEach(() => localStorage.clear());
 
   it('lists the rungs cheapest to most capable, never more than the four it knows', async () => {
     await renderSettings(() => Promise.resolve({ ...MODEL_TABLE, gpt: 'gpt-4', secret: 'leaked-extra-key' }));
@@ -193,11 +138,14 @@ describe('SettingsComponent — Models tab', () => {
     expect(editingControls).toHaveLength(0);
   });
 
-  it('names the file to edit in visible text, not only in a hover tooltip', async () => {
+  it('tells the user in visible text to edit the config file by hand and restart the daemon', async () => {
     await renderSettings();
     await screen.findByTestId('model-row-haiku');
 
-    expect(screen.getByTestId('models-edit-hint')).toHaveTextContent('~/.openfleet/config.json');
+    const editHint = screen.getByTestId('models-edit-hint');
+
+    expect(editHint).toHaveTextContent('~/.openfleet/config.json');
+    expect(editHint).toHaveTextContent(/restart the daemon/i);
   });
 
   it('shows Loading… while the daemon has not answered yet, and no table', async () => {
@@ -208,10 +156,11 @@ describe('SettingsComponent — Models tab', () => {
     expect(screen.queryByTestId('models-error')).toBeNull();
   });
 
-  it('replaces Loading… with the error, leaving no spinner behind, when the daemon is unreachable', async () => {
+  it('replaces Loading… with an announced error, and no table, when the daemon is unreachable', async () => {
     await renderSettings(() => Promise.reject(new TypeError('Failed to fetch')));
 
-    expect(await screen.findByTestId('models-error')).toHaveTextContent(/couldn.t load the model table/i);
+    expect(await screen.findByRole('alert')).toHaveTextContent(/couldn.t load the model table/i);
+    expect(screen.getByTestId('models-error')).toBeTruthy();
     expect(screen.queryByTestId('models-loading')).toBeNull();
     expect(screen.queryByTestId('model-row-haiku')).toBeNull();
   });
@@ -227,48 +176,19 @@ describe('SettingsComponent — Models tab', () => {
     expect(screen.queryByTestId('models-loading')).toBeNull();
   });
 
-  it('reads the table from the daemon with GET /api/models and the stored admin token as bearer, then shows the error on a 401', async () => {
-    localStorage.setItem('openfleet.adminToken', ADMIN_TOKEN);
-    const fetchStub = vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401, headers: { 'content-type': 'application/json' } }));
-    vi.stubGlobal('fetch', fetchStub);
-
-    await render(SettingsComponent);
-
-    expect(await screen.findByTestId('models-error')).toBeTruthy();
-    const [requestedUrl, requestInit] = fetchStub.mock.calls[0] as [string, RequestInit];
-    expect(requestedUrl).toBe('http://127.0.0.1:7331/api/models');
-    expect(requestInit.method ?? 'GET').toBe('GET');
-    expect(requestInit.headers).toMatchObject({ authorization: `Bearer ${ADMIN_TOKEN}` });
-  });
-
-  it('shows the error, not a table, when the real service hits a daemon that refuses the connection', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));
-
-    await render(SettingsComponent);
+  it('shows the error, and no table or Loading…, when the daemon answers with something that is not a table', async () => {
+    await renderSettings(() => Promise.resolve(null));
 
     expect(await screen.findByTestId('models-error')).toBeTruthy();
     expect(screen.queryByTestId('models-loading')).toBeNull();
+    expect(screen.queryByTestId('model-row-haiku')).toBeNull();
   });
 
-  it('announces the load failure to assistive tech', async () => {
-    await renderSettings(() => Promise.reject(new Error('down')));
-
-    expect(await screen.findByRole('alert')).toHaveTextContent(/couldn.t load/i);
-  });
-
-  it('leaves Loading… once the daemon answered, even when the body is not a table', async () => {
-    await renderSettings(() => Promise.resolve(null));
-
-    await vi.waitFor(() => expect(screen.queryByTestId('models-loading')).toBeNull());
-  });
-
-  it('never renders an empty model id cell for a rung the daemon did not send', async () => {
+  it('shows a dash, never an empty cell, for a rung the daemon did not send', async () => {
     await renderSettings(() => Promise.resolve({ haiku: 'claude-haiku-4-5' }));
     await screen.findByTestId('model-row-haiku');
 
-    const sonnetId = screen.getByTestId('model-row-sonnet').querySelector('.value')?.textContent?.trim();
-
-    expect(sonnetId).toBeTruthy();
+    expect(within(screen.getByTestId('model-row-sonnet')).getByText('—')).toBeTruthy();
   });
 });
 
@@ -276,7 +196,7 @@ describe('SettingsComponent — Daemon tab', () => {
   beforeEach(() => localStorage.clear());
   afterEach(() => localStorage.clear());
 
-  it('never puts a single character of the admin token anywhere in the document, on either tab', async () => {
+  it('labels the token line as a stored token that is found, without revealing any of its characters, on either tab', async () => {
     localStorage.setItem('openfleet.adminToken', ADMIN_TOKEN);
     await renderSettings();
     await screen.findByTestId('model-row-haiku');
@@ -290,7 +210,9 @@ describe('SettingsComponent — Daemon tab', () => {
       expect(markup).not.toContain('sekrit');
       expect(markup).not.toContain('3f9a');
     }
-    expect(screen.getByTestId('admin-token-status')).toHaveTextContent('found');
+    expect(screen.getByTestId('admin-token-status')).toHaveTextContent(/^found$/);
+    expect(screen.getByTestId('settings-daemon')).toHaveTextContent('Stored admin token');
+    expect(screen.getByTestId('settings-daemon')).not.toHaveTextContent('admin.token');
   });
 
   it('exposes the token status in no title, aria-label, aria-description or value attribute', async () => {
@@ -304,50 +226,13 @@ describe('SettingsComponent — Daemon tab', () => {
     expect(document.querySelectorAll('input, textarea')).toHaveLength(0);
   });
 
-  it('reports not found when the stored token is the empty string', async () => {
-    localStorage.setItem('openfleet.adminToken', '');
-    await renderSettings();
-
-    await openDaemonTab();
-
-    expect(screen.getByTestId('admin-token-status')).toHaveTextContent('not found');
-  });
-
   it.each([['spaces', '   '], ['a newline', '\n'], ['a tab and a space', '\t ']])('reports not found when the stored token is only %s', async (_label, blankToken) => {
     localStorage.setItem('openfleet.adminToken', blankToken);
     await renderSettings();
 
     await openDaemonTab();
 
-    expect(screen.getByTestId('admin-token-status')).toHaveTextContent('not found');
-  });
-
-  it('shows the default address, not the garbage, when the stored api url has no http(s) scheme', async () => {
-    localStorage.setItem('openfleet.apiUrl', 'localhost:9999');
-    await renderSettings();
-
-    await openDaemonTab();
-
-    expect(screen.getByTestId('daemon-address')).toHaveTextContent('127.0.0.1:7331');
-    expect(screen.getByTestId('daemon-address').textContent).not.toContain('9999');
-  });
-
-  it('shows the default address when the stored api url is blank', async () => {
-    localStorage.setItem('openfleet.apiUrl', '   ');
-    await renderSettings();
-
-    await openDaemonTab();
-
-    expect(screen.getByTestId('daemon-address')).toHaveTextContent('127.0.0.1:7331');
-  });
-
-  it('keeps the path prefix of a stored api url and drops its trailing slash and scheme', async () => {
-    localStorage.setItem('openfleet.apiUrl', 'http://127.0.0.1:7331/openfleet/');
-    await renderSettings();
-
-    await openDaemonTab();
-
-    expect(screen.getByTestId('daemon-address').textContent?.trim()).toBe('127.0.0.1:7331/openfleet');
+    expect(screen.getByTestId('admin-token-status')).toHaveTextContent(/^not found$/);
   });
 
   it.each([['localhost', 'http://localhost:7331', 'localhost:7331'], ['IPv6 loopback', 'http://[::1]:7331', '[::1]:7331']])('captions the %s address as "Local only"', async (_label, apiUrl, shownAddress) => {

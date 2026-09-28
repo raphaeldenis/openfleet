@@ -1,6 +1,7 @@
 import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/core';
 import { environment } from '../../environments/environment';
 import { FleetApiService } from '../core/fleet-api.service';
+import { focusTabAt, nextTabIndex } from '../design/tablist-keyboard';
 
 type SettingsTab = 'models' | 'daemon';
 
@@ -16,23 +17,7 @@ const MODEL_RUNGS: ReadonlyArray<{ rung: string; description: string }> = [
   { rung: 'fable', description: 'Experimental rung' },
 ];
 
-const LAST_TAB_INDEX = SETTINGS_TABS.length - 1;
 const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(['127.0.0.1', 'localhost', '::1']);
-const MISSING_MODEL_ID = '—';
-
-function hasModifierKey(event: KeyboardEvent): boolean {
-  return event.altKey || event.ctrlKey || event.metaKey || event.shiftKey;
-}
-
-function tabIndexAfterKey(key: string, currentIndex: number): number | undefined {
-  switch (key) {
-    case 'ArrowDown': return currentIndex === LAST_TAB_INDEX ? 0 : currentIndex + 1;
-    case 'ArrowUp': return currentIndex === 0 ? LAST_TAB_INDEX : currentIndex - 1;
-    case 'Home': return 0;
-    case 'End': return LAST_TAB_INDEX;
-    default: return undefined;
-  }
-}
 
 function isLoopbackAddress(address: string): boolean {
   const url = `http://${address}`;
@@ -44,8 +29,6 @@ function isLoopbackAddress(address: string): boolean {
 function isModelTable(body: unknown): body is Record<string, string> {
   return typeof body === 'object' && body !== null && !Array.isArray(body);
 }
-
-const MODEL_TABLE_EDIT_HINT ='Read-only. To change a rung, edit models in ~/.openfleet/config.json by hand and restart the daemon.';
 
 @Component({
   selector: 'of-settings',
@@ -78,11 +61,11 @@ const MODEL_TABLE_EDIT_HINT ='Read-only. To change a rung, edit models in ~/.ope
                 @for (row of rungs; track row.rung) {
                   <div class="row" [attr.data-testid]="'model-row-' + row.rung">
                     <div class="label"><span class="name">{{ row.rung }}</span><span class="detail">{{ row.description }}</span></div>
-                    <span class="value mono">{{ table[row.rung] || missingModelId }}</span>
+                    <span class="value mono">{{ table[row.rung] || '—' }}</span>
                   </div>
                 }
               </div>
-              <p class="hint" data-testid="models-edit-hint" [title]="editHint">Read-only · edited by hand in ~/.openfleet/config.json</p>
+              <p class="hint" data-testid="models-edit-hint">Read-only · edit models in ~/.openfleet/config.json by hand, then restart the daemon</p>
             } @else {
               <p class="detail" data-testid="models-loading">Loading…</p>
             }
@@ -96,7 +79,7 @@ const MODEL_TABLE_EDIT_HINT ='Read-only. To change a rung, edit models in ~/.ope
                 <span class="value mono" data-testid="daemon-address">{{ daemonAddress }}</span>
               </div>
               <div class="row">
-                <div class="label"><span class="name">Admin token</span><span class="detail">Read from ~/.openfleet/admin.token · created on first daemon start</span></div>
+                <div class="label"><span class="name">Stored admin token</span><span class="detail">Whether this app holds one · the daemon may still refuse it</span></div>
                 <span class="value mono" data-testid="admin-token-status">{{ isAdminTokenFound ? 'found' : 'not found' }}</span>
               </div>
             </div>
@@ -123,7 +106,7 @@ const MODEL_TABLE_EDIT_HINT ='Read-only. To change a rung, edit models in ~/.ope
     .detail { font-size: .75rem; color: var(--mut); }
     .value { height: 1.75rem; min-width: 8rem; display: inline-flex; align-items: center; padding: 0 .625rem; border: 1px solid var(--line); border-radius: .375rem; background: var(--sunk); font-size: .75rem; }
     .mono { font-family: var(--mono); }
-    .hint { margin: 0; font-size: .75rem; color: var(--mut); cursor: help; }
+    .hint { margin: 0; font-size: .75rem; color: var(--mut); }
     .error { margin: 0; color: var(--state-error); }
   `,
 })
@@ -132,9 +115,7 @@ export class SettingsComponent {
 
   protected readonly tabs = SETTINGS_TABS;
   protected readonly rungs = MODEL_RUNGS;
-  protected readonly editHint = MODEL_TABLE_EDIT_HINT;
   protected readonly daemonAddress = environment.daemonAddress;
-  protected readonly missingModelId = MISSING_MODEL_ID;
   protected readonly tabPanelId = 'settings-tabpanel';
   protected readonly isDaemonLocal = isLoopbackAddress(environment.daemonAddress);
   protected readonly isAdminTokenFound = environment.adminToken.trim() !== '';
@@ -148,14 +129,12 @@ export class SettingsComponent {
   }
 
   protected onTabKeydown(event: KeyboardEvent): void {
-    if (hasModifierKey(event)) return;
     const currentIndex = SETTINGS_TABS.findIndex((tab) => tab.key === this.activeTab());
-    const targetIndex = tabIndexAfterKey(event.key, currentIndex);
+    const targetIndex = nextTabIndex(event, { currentIndex, tabCount: SETTINGS_TABS.length, orientation: 'vertical' });
     if (targetIndex === undefined) return;
     event.preventDefault();
     this.activeTab.set(SETTINGS_TABS[targetIndex].key);
-    const tabButtons = (event.currentTarget as HTMLElement).querySelectorAll<HTMLElement>('[role="tab"]');
-    tabButtons[targetIndex].focus();
+    focusTabAt(event.currentTarget as HTMLElement, targetIndex);
   }
 
   private async loadModelTable(): Promise<void> {
