@@ -31,6 +31,8 @@ class StubInboxComponent {}
 class StubComponentsComponent {}
 @Component({ selector: 'stub-session', template: '<span data-testid="stub-session">session</span>' })
 class StubSessionComponent {}
+@Component({ selector: 'stub-settings', template: '<span data-testid="stub-settings">settings</span>' })
+class StubSettingsComponent {}
 
 const testRoutes: Routes = [
   {
@@ -40,6 +42,7 @@ const testRoutes: Routes = [
       { path: '', pathMatch: 'full', component: StubHomeComponent },
       { path: 'inbox', component: StubInboxComponent },
       { path: 'components', component: StubComponentsComponent },
+      { path: 'settings', component: StubSettingsComponent },
       { path: 'session/:sessionId', component: StubSessionComponent },
     ],
   },
@@ -93,7 +96,6 @@ describe('AppShellComponent', () => {
 
     expect(root.querySelector('[data-testid="nav-project"]')).toHaveTextContent('Available in phase 3');
     expect(root.querySelector('[data-testid="nav-audit"]')).toHaveTextContent('Available in phase 4');
-    expect(root.querySelector('[data-testid="nav-settings"]')).toHaveTextContent('Available in phase 2');
     expect(root.querySelector('[data-testid="nav-toolkit"]')).toHaveTextContent('Available in phase 4');
     expect(root.querySelector('[data-testid="nav-mgrprofile"]')).toHaveTextContent('Available in phase 4');
     expect(root.querySelector('[data-testid="nav-profiles"]')).toHaveTextContent('Not yet available');
@@ -108,6 +110,18 @@ describe('AppShellComponent', () => {
     await harness.fixture.whenStable();
 
     expect(root.querySelector('[data-testid="stub-inbox"]')).toBeTruthy();
+  });
+
+  it('renders Settings as a real link that routes to the settings screen', async () => {
+    const { harness, root } = await setUp();
+    const settings = root.querySelector('[data-testid="nav-settings"]') as HTMLAnchorElement;
+    expect(settings.tagName).toBe('A');
+    expect(settings).not.toHaveTextContent('Available in phase');
+
+    settings.click();
+    await harness.fixture.whenStable();
+
+    expect(root.querySelector('[data-testid="stub-settings"]')).toBeTruthy();
   });
 
   it('renders Component sheet as a real link, staying reachable as a dev route', async () => {

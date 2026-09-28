@@ -7,7 +7,7 @@ export interface NavItem {
 }
 
 // Single source of truth for when a not-yet-built section unlocks (per Capitaine, backlog
-// tasks P3-T02 for Projects and U6 for Settings) — update this map only.
+// task P3-T02 for Projects) — update this map only.
 const AVAILABILITY_BY_SECTION: Readonly<Record<string, string>> = {
   project: 'Available in phase 3',
   toolkit: 'Available in phase 4',
@@ -20,7 +20,6 @@ const AVAILABILITY_BY_SECTION: Readonly<Record<string, string>> = {
   triggers: 'Available in phase 5',
   integrations: 'Available in phase 5',
   usage: 'Available in phase 4',
-  settings: 'Available in phase 2',
 };
 
 // Order and labels mirror the Helm section of specs/design/OpenFleet.dc.html's `navDef` array.
@@ -39,7 +38,7 @@ const HELM_SECTIONS: ReadonlyArray<{ key: string; glyph: string; label: string; 
   { key: 'triggers', glyph: '⚡', label: 'Triggers & Playbooks', route: null },
   { key: 'integrations', glyph: '⇄', label: 'Integrations', route: null },
   { key: 'usage', glyph: '$', label: 'Usage', route: null },
-  { key: 'settings', glyph: '⚙', label: 'Settings', route: null },
+  { key: 'settings', glyph: '⚙', label: 'Settings', route: '/settings' },
   { key: 'components', glyph: '◈', label: 'Component sheet', route: '/components' },
 ];
 
