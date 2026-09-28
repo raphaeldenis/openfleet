@@ -98,6 +98,18 @@ describe('listSections', () => {
     expect(sections).toHaveLength(sectionCount);
     expect(elapsed).toBeLessThan(1000);
   });
+
+  it('parses 100 000 lines of unclosed backtick and tilde fences in linear time', () => {
+    const lineCount = 100_000;
+    const repeatedLines = ['```js', '~~~js', 'text'];
+    const body = ['## A', ...Array.from({ length: lineCount }, (_, index) => repeatedLines[index % repeatedLines.length])].join('\n');
+
+    let sections: unknown[] = [];
+    const elapsed = millisecondsToRun(() => { sections = listSections(body); });
+
+    expect(sections).toHaveLength(1);
+    expect(elapsed).toBeLessThan(1000);
+  });
 });
 
 function millisecondsToRun(work: () => void): number {

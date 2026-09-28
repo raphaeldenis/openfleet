@@ -22,6 +22,11 @@ interface Fence {
   info: string;
 }
 
+interface Closer {
+  index: number;
+  length: number;
+}
+
 interface ParsedBody {
   lines: Line[];
   headings: Heading[];
@@ -188,10 +193,11 @@ function sectionsOf(headings: Heading[], lineCount: number): Section[] {
 
 function parseHeadings(lines: Line[]): Heading[] {
   const texts = lines.map((line, lineIndex) => (lineIndex === 0 ? line.text.replace(BYTE_ORDER_MARK_PATTERN, '') : line.text));
+  const fenceClosingIndexes = closingIndexesOfFences(texts.map(fenceOf));
   const headings: Heading[] = [];
 
   for (let lineIndex = 0; lineIndex < texts.length; lineIndex++) {
-    const fenceClosingIndex = closingIndexOfFenceOpenedAt(texts, lineIndex);
+    const fenceClosingIndex = fenceClosingIndexes[lineIndex];
     if (fenceClosingIndex !== undefined) {
       lineIndex = fenceClosingIndex;
       continue;
@@ -204,16 +210,44 @@ function parseHeadings(lines: Line[]): Heading[] {
   return headings;
 }
 
-// ponytail: an opener without a closer rescans to the end, quadratic only on a body made of unclosed fences
-function closingIndexOfFenceOpenedAt(texts: string[], openerIndex: number): number | undefined {
-  const opener = fenceOf(texts[openerIndex]!);
-  if (!opener || !canOpen(opener)) return undefined;
+/** Maps each line that opens a closed fence to the index of its closing line; one reverse pass over the lines. */
+function closingIndexesOfFences(fences: (Fence | undefined)[]): (number | undefined)[] {
+  const closingIndexes: (number | undefined)[] = [];
+  const closersByCharacter = new Map<string, Closer[]>();
 
-  for (let index = openerIndex + 1; index < texts.length; index++) {
-    const candidate = fenceOf(texts[index]!);
-    if (candidate && closes(candidate, opener)) return index;
+  for (let index = fences.length - 1; index >= 0; index--) {
+    const fence = fences[index];
+    if (!fence) continue;
+
+    const closers = closersByCharacter.get(fence.character) ?? [];
+    closersByCharacter.set(fence.character, closers);
+    if (canOpen(fence)) closingIndexes[index] = nearestCloserAtLeast(closers, fence.length)?.index;
+    if (canClose(fence)) pushCloser(closers, { index, length: fence.length });
   }
-  return undefined;
+
+  return closingIndexes;
+}
+
+/** Keeps only the closers no later closer beats: nearest on top, lengths strictly increasing towards the bottom. */
+function pushCloser(closers: Closer[], closer: Closer): void {
+  while (closers.length > 0 && closers[closers.length - 1]!.length <= closer.length) closers.pop();
+  closers.push(closer);
+}
+
+function nearestCloserAtLeast(closers: Closer[], length: number): Closer | undefined {
+  let nearest: Closer | undefined;
+  let low = 0;
+  let high = closers.length - 1;
+
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    const isLongEnough = closers[middle]!.length >= length;
+    if (isLongEnough) nearest = closers[middle];
+    if (isLongEnough) low = middle + 1;
+    else high = middle - 1;
+  }
+
+  return nearest;
 }
 
 function fenceOf(text: string): Fence | undefined {
@@ -228,11 +262,8 @@ function canOpen(fence: Fence): boolean {
   return !isBacktickFenceWithBacktickInInfo;
 }
 
-function closes(candidate: Fence, opener: Fence): boolean {
-  const isSameCharacter = candidate.character === opener.character;
-  const isLongEnough = candidate.length >= opener.length;
-  const hasNoInfo = candidate.info.trim() === '';
-  return isSameCharacter && isLongEnough && hasNoInfo;
+function canClose(fence: Fence): boolean {
+  return fence.info.trim() === '';
 }
 
 function titleOf(rawTitle: string): string {
