@@ -250,6 +250,30 @@ describe('MCP', () => {
     expect(result.isError).toBe(true);
   });
 
+  it('refuses get_session_status on a session outside the caller lineage', async () => {
+    const stranger = await sessions.create({ directory: '/tmp', name: 'S', harness: 'fake', emoji: '👤' });
+    const parent = await connect(parentToken);
+    const result = await parent.callTool({ name: 'get_session_status', arguments: { session_id: stranger.id } });
+    expect(result.isError).toBe(true);
+  });
+
+  it('refuses close_session on a session that is not the caller\'s child', async () => {
+    const stranger = await sessions.create({ directory: '/tmp', name: 'S', harness: 'fake', emoji: '👤' });
+    const parent = await connect(parentToken);
+    const result = await parent.callTool({ name: 'close_session', arguments: { session_id: stranger.id } });
+    expect(result.isError).toBe(true);
+    expect(sessions.get(stranger.id)!.state).not.toBe('closed');
+  });
+
+  it('refuses close_session on the caller\'s own parent', async () => {
+    await (await connect(parentToken)).callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('close-parent-guard'), name: 'Gimli', emoji: '⚔️' } });
+    const childToken = harness.launches[1]!.mcpToken;
+    const child = await connect(childToken);
+    const result = await child.callTool({ name: 'close_session', arguments: { session_id: parentId } });
+    expect(result.isError).toBe(true);
+    expect(sessions.get(parentId)!.state).not.toBe('closed');
+  });
+
   it('send_session_message to a closed child still reports success instead of refusing, unlike the REST /messages route\'s 409 — the caller believes delivery is still possible', async () => {
     const parent = await connect(parentToken);
     const created = text(await parent.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('closed-target'), name: 'Gimli', emoji: '⚔️' } }));

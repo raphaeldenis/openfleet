@@ -37,6 +37,17 @@ function tryConnect(headers: Record<string, string> = {}): Promise<'accepted' | 
   });
 }
 
+function tryConnectWithToken(token: string | undefined): Promise<'accepted' | 'refused'> {
+  return new Promise((resolve) => {
+    const query = token === undefined ? '' : `?token=${token}`;
+    const socket = new WebSocket(`${server.url.replace('http', 'ws')}/ws${query}`);
+    const timer = setTimeout(() => { socket.terminate(); resolve('refused'); }, 2000);
+    socket.on('open', () => { clearTimeout(timer); socket.close(); resolve('accepted'); });
+    socket.on('error', () => { clearTimeout(timer); resolve('refused'); });
+    socket.on('unexpected-response', () => { clearTimeout(timer); resolve('refused'); });
+  });
+}
+
 describe('WS Origin allowlist', () => {
   it('accepts a connection with no Origin header, for non-browser clients', async () => {
     expect(await tryConnect()).toBe('accepted');
@@ -48,5 +59,15 @@ describe('WS Origin allowlist', () => {
 
   it('refuses a connection from a foreign Origin even with a valid token', async () => {
     expect(await tryConnect({ Origin: 'https://evil.example' })).toBe('refused');
+  });
+});
+
+describe('WS token', () => {
+  it('refuses a connection with a wrong token', async () => {
+    expect(await tryConnectWithToken('wrong')).toBe('refused');
+  });
+
+  it('refuses a connection with no token at all', async () => {
+    expect(await tryConnectWithToken(undefined)).toBe('refused');
   });
 });
