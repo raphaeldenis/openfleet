@@ -304,4 +304,19 @@ describe('applyMigrations transaction-control guard', () => {
     expect(() => applyMigrations(db, tabbed)).toThrow(/transaction-control/);
     expect(() => applyMigrations(db, newlined)).toThrow(/transaction-control/);
   });
+
+  it.each(['TEMP', 'TEMPORARY'])('accepts a CREATE %s TRIGGER body the same way it accepts CREATE TRIGGER', (qualifier) => {
+    const db = openDatabase(':memory:');
+    const tempTrigger = [
+      {
+        version: '999_temp_trigger',
+        sql: `CREATE TABLE temp_trigger_probe (id TEXT) STRICT;
+              CREATE ${qualifier} TRIGGER temp_trigger_guard AFTER INSERT ON temp_trigger_probe
+              BEGIN SELECT RAISE(IGNORE); END;`,
+      },
+    ];
+
+    expect(() => applyMigrations(db, tempTrigger)).not.toThrow();
+    expect(db.prepare('SELECT count(*) AS n FROM schema_migrations WHERE version = ?').get('999_temp_trigger')).toEqual({ n: 1 });
+  });
 });
