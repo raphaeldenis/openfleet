@@ -22,7 +22,7 @@ beforeEach(async () => {
   const managerRepo = new ManagerRepository(db);
   pulseScheduler = new PulseScheduler({ managers: managerRepo, sessions, bus });
   managers = new ManagerService({ managers: managerRepo, sessions, bus, scheduler: pulseScheduler });
-  server = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, modelTable: DEFAULT_MODEL_TABLE, bus });
+  server = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, modelTable: DEFAULT_MODEL_TABLE, modelConfigPath: '/tmp/of-unused/config.json', bus });
 });
 afterEach(() => server.close());
 

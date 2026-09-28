@@ -1,0 +1,41 @@
+name: live
+# Opt-in only: never runs on push or pull_request. Trigger it from the Actions tab ("Run workflow") on main.
+# It drives a real `claude` CLI and spends real subscription turns.
+#
+# One-time GitHub setup (repository admin):
+#   1. Settings → Environments → New environment, named `live`.
+#   2. In `live`, under "Deployment branches and tags", choose "Selected branches and tags" and add `main` only.
+#   3. In `live`, under "Environment secrets", add CLAUDE_CODE_OAUTH_TOKEN: a long-lived token created on a
+#      logged-in machine with `claude setup-token`.
+# The secret lives in the Environment, so only runs on main can read it, and only the test step receives it.
+on:
+  workflow_dispatch:
+    inputs:
+      claude_version:
+        description: Version of @anthropic-ai/claude-code to install
+        default: 2.1.281
+
+permissions:
+  contents: read
+
+jobs:
+  live-smoke:
+    runs-on: macos-latest
+    environment: live
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 26, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: npm install --global "@anthropic-ai/claude-code@$CLAUDE_CLI_VERSION"
+        env:
+          CLAUDE_CLI_VERSION: ${{ inputs.claude_version }}
+      - run: claude --version
+      - name: Seed a sentinel ~/.claude/settings.json for the byte-identical assertion
+        run: mkdir -p ~/.claude && echo '{"sentinel":true}' > ~/.claude/settings.json
+      - run: pnpm --filter @openfleet/core test:live
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

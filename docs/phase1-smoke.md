@@ -9,3 +9,11 @@ Checks that need a real `claude` (subscription) and cannot run in CI (CI covers 
 | A real permission gate is decided from the inbox (Task 15) | In the running session's terminal, ask Claude to run a command that is not pre-approved (e.g. `rm somefile`) | An item appears in the inbox (`data-testid="inbox-item"`) with the tool name/input; clicking Allow (`data-testid="inbox-allow"`) lets the TUI continue and the sidebar state goes `waiting_permission` → `generating` | ✅ 2026-09-24, Raphaël, live: Bash gate shown in the inbox, Allow resolved it (approvals pending → allowed), session continued |
 
 Sessions inherit the user's global Claude Code permission mode — `auto` mode suppresses gates entirely, so the inbox only sees requests when the session is in a mode that asks; a per-session `--permission-mode` override is phase 2.
+
+## Opt-in live test
+
+`OPENFLEET_LIVE=1 pnpm --filter @openfleet/core test:live` (or the `live` workflow, run on `main`) drives a real logged-in `claude` on the cheapest model. It spends a few real turns and leaves these local side effects:
+
+- `~/.claude.json` gains a trust entry for each throwaway `of-live-*` repo (the entries stay).
+- `~/.claude/projects` gains a transcript for each session.
+- The `of-live-*` repos in the OS temp directory are removed at the end of each test.

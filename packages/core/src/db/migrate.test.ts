@@ -275,4 +275,33 @@ describe('applyMigrations transaction-control guard', () => {
     const probeTable = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'end_probe'`).all();
     expect(probeTable).toHaveLength(0);
   });
+
+  it.each([
+    { name: 'a newline', separator: '\n' },
+    { name: 'a tab', separator: '\t' },
+  ])('rejects COMMIT TRANSACTION separated by $name before anything is committed, and a clean retry succeeds', ({ separator }) => {
+    const db = openDatabase(':memory:');
+    const version = '999_whitespace_commit';
+    const createProbe = 'CREATE TABLE whitespace_probe (id TEXT) STRICT;';
+    const whitespaceCommit = [{ version, sql: `${createProbe} COMMIT${separator}TRANSACTION;` }];
+
+    expect(() => applyMigrations(db, whitespaceCommit)).toThrow(/transaction-control/);
+
+    const probeTable = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'whitespace_probe'`).all();
+    expect(probeTable).toHaveLength(0);
+    expect(db.prepare('SELECT version FROM schema_migrations WHERE version = ?').get(version)).toBeUndefined();
+
+    const cleanRetry = [{ version, sql: createProbe }];
+    expect(() => applyMigrations(db, cleanRetry)).not.toThrow();
+    expect(db.prepare('SELECT count(*) AS n FROM schema_migrations WHERE version = ?').get(version)).toEqual({ n: 1 });
+  });
+
+  it.each(['BEGIN', 'COMMIT', 'END', 'ROLLBACK', 'SAVEPOINT', 'RELEASE'])('rejects %s followed by a tab or a newline', (keyword) => {
+    const db = openDatabase(':memory:');
+    const tabbed = [{ version: '999_tabbed_keyword', sql: `CREATE TABLE tabbed_probe (id TEXT); ${keyword}\tsp1;` }];
+    const newlined = [{ version: '999_newlined_keyword', sql: `CREATE TABLE newlined_probe (id TEXT); ${keyword}\nsp1;` }];
+
+    expect(() => applyMigrations(db, tabbed)).toThrow(/transaction-control/);
+    expect(() => applyMigrations(db, newlined)).toThrow(/transaction-control/);
+  });
 });

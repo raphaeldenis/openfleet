@@ -7,14 +7,14 @@ import type { ModelTable } from '../models.js';
 import type { SessionService } from '../sessions/sessionService.js';
 import { hooksHandler } from './hooksHandler.js';
 import { registerRestRoutes } from './restHandlers.js';
-import { json, PayloadTooLargeError, readJson, Router } from './router.js';
+import { InvalidJsonBodyError, json, PayloadTooLargeError, readJson, Router } from './router.js';
 import { createWsHandler } from './wsHandler.js';
 
 const HOOK_PATH = /^\/hooks\/([^/]+)$/;
 
 export interface ServerDeps {
   host: string; port: number; adminToken: string;
-  sessions: SessionService; approvals: ApprovalService; bus: EventBus; modelTable: ModelTable;
+  sessions: SessionService; approvals: ApprovalService; bus: EventBus; modelTable: ModelTable; modelConfigPath: string;
   managers: ManagerService; pulseScheduler: PulseScheduler;
   mcp?: (req: IncomingMessage, res: ServerResponse, body: unknown) => Promise<void>;
 }
@@ -29,7 +29,7 @@ function applyCorsHeaders(req: IncomingMessage, res: ServerResponse): void {
   if (!origin || !ALLOWED_ORIGINS.has(origin)) return;
   res.setHeader('Access-Control-Allow-Origin', origin);
   res.setHeader('Access-Control-Allow-Headers', 'authorization, content-type');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, PUT, OPTIONS');
 }
 
 async function handleHookRequest(req: IncomingMessage, res: ServerResponse, hookToken: string, deps: ServerDeps): Promise<void> {
@@ -56,9 +56,6 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; clos
   registerRestRoutes(router, deps);
 
   const server = createServer(async (req, res) => {
-    // ponytail: echoes the request origin rather than a fixed allowlist — the daemon uses bearer tokens,
-    // never cookies/credentials, and binds 127.0.0.1 only, so an echoed origin leaks nothing an attacker
-    // page doesn't already need the admin token to exploit. Narrow to a real allowlist if that changes.
     applyCorsHeaders(req, res);
     if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
 
@@ -77,6 +74,7 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; clos
       await match.handler({ req, res, params: match.params, body: await readJson(req) });
     } catch (error) {
       if (error instanceof PayloadTooLargeError) return json(res, 413, { error: 'payload_too_large' });
+      if (error instanceof InvalidJsonBodyError) return json(res, 400, { error: 'invalid_json', detail: error.message });
       const isValidation = (error as { name?: string }).name === 'ZodError';
       json(res, isValidation ? 400 : 500, { error: isValidation ? 'invalid_body' : 'internal', detail: (error as Error).message });
     }
