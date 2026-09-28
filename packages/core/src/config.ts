@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { newToken } from './ids.js';
@@ -8,6 +8,9 @@ export interface Config { host: '127.0.0.1'; port: number; home: string; dbPath:
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const home = env.OPENFLEET_HOME ?? join(homedir(), '.openfleet');
   mkdirSync(home, { recursive: true });
+  // mkdirSync's mode option is ignored on a directory that already exists, so a home that predates this
+  // check (or was loosened by something else) is tightened here every load, not just at creation (MAJ-02).
+  chmodSync(home, 0o700);
   const worktreesRoot = join(home, 'worktrees');
   mkdirSync(worktreesRoot, { recursive: true });
   return {
@@ -30,6 +33,7 @@ function readOrCreateAdminToken(path: string): string {
     if (token.length < MIN_ADMIN_TOKEN_LENGTH) {
       throw new Error(`admin token at ${path} is ${token.length} characters, need at least ${MIN_ADMIN_TOKEN_LENGTH}; delete it to have OpenFleet generate a fresh one`);
     }
+    chmodSync(path, 0o600);
     return token;
   }
   const token = newToken();
