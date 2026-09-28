@@ -101,6 +101,48 @@ describe('notes schema constraints', () => {
     expect(() => insertNote(db, 'n4', 'D', 'd', '/docs/specs/a.md')).toThrow(/UNIQUE/);
   });
 
+  it('rejects a note with a revision below 1', () => {
+    const db = openDatabaseWithProject();
+
+    const insertRevisionZero = () =>
+      db
+        .prepare(
+          `INSERT INTO notes (id, project_id, title, body_md, folder, file_path, rev, shared, created_at, updated_at)
+           VALUES ('n1', 'p1', 'T', 'b', NULL, NULL, 0, 0, 't0', 't0')`,
+        )
+        .run();
+
+    expect(insertRevisionZero).toThrow(/CHECK/);
+  });
+
+  it('rejects a shared flag other than 0 or 1', () => {
+    const db = openDatabaseWithProject();
+
+    const insertSharedTwo = () =>
+      db
+        .prepare(
+          `INSERT INTO notes (id, project_id, title, body_md, folder, file_path, rev, shared, created_at, updated_at)
+           VALUES ('n1', 'p1', 'T', 'b', NULL, NULL, 1, 2, 't0', 't0')`,
+        )
+        .run();
+
+    expect(insertSharedTwo).toThrow(/CHECK/);
+  });
+
+  it('rejects a source hash on a note that has no file', () => {
+    const db = openDatabaseWithProject();
+
+    const insertHashWithoutFile = () =>
+      db
+        .prepare(
+          `INSERT INTO notes (id, project_id, title, body_md, folder, file_path, rev, shared, source_hash, created_at, updated_at)
+           VALUES ('n1', 'p1', 'T', 'b', NULL, NULL, 1, 0, 'abc123', 't0', 't0')`,
+        )
+        .run();
+
+    expect(insertHashWithoutFile).toThrow(/CHECK/);
+  });
+
   it('rejects two versions with the same revision of one note', () => {
     const db = openDatabaseWithProject();
     insertNote(db, 'n1', 'T', 'b');

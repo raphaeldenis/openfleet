@@ -47,9 +47,7 @@ describe('note_fts follows every kind of write to notes', () => {
     expect(findNoteIds(db, 'shared-word')).toEqual(['n2']);
   });
 
-  // Known defect: REPLACE deletes the old row without firing notes_fts_ad (recursive_triggers is off),
-  // so the old index row survives. Flip to `it` once REPLACE is handled or banned.
-  it.fails('leaves one index row with the new body after INSERT OR REPLACE on the same id', () => {
+  it('leaves one index row with the new body after INSERT OR REPLACE on the same id', () => {
     const db = openDatabaseWithProject();
     insertNote(db, 'n1', 'T', 'oldword');
 
@@ -59,7 +57,7 @@ describe('note_fts follows every kind of write to notes', () => {
     expect(countIndexRows(db, 'n1')).toBe(1);
   });
 
-  it.fails('drops the replaced note from the index when INSERT OR REPLACE evicts it through a file_path conflict', () => {
+  it('drops the replaced note from the index when INSERT OR REPLACE evicts it through a file_path conflict', () => {
     const db = openDatabaseWithProject();
     insertNote(db, 'n1', 'T', 'oldword', '/docs/specs/a.md');
 
