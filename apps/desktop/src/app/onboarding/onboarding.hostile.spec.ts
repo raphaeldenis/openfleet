@@ -368,28 +368,35 @@ describe('Onboarding — hostile black-box suite', () => {
       expect(createSessionRequests()).toHaveLength(1);
     });
 
-    it('user who switches to manager mode creates a manager whose payload carries no seeded prompt', async () => {
-      const { createSessionRequests, user } = await reachFirstSessionStep();
+    it('the form offers no Session/Manager choice, since onboarding creates a session', async () => {
+      await reachFirstSessionStep();
 
-      await user.click(screen.getByRole('button', { name: 'Manager' }));
-      await user.type(screen.getByLabelText('Mission'), 'Ship phase 2');
-      await user.click(screen.getByRole('button', { name: 'Create manager' }));
-
-      await vi.waitFor(() => expect(createSessionRequests()).toHaveLength(1));
-      const [payload] = createSessionRequests();
-      expect(payload).toEqual(expect.objectContaining({ directory: REPOSITORY_PATH, manager: expect.objectContaining({ mission: 'Ship phase 2' }) }));
-      expect(payload).not.toHaveProperty('seededPrompt');
+      expect(screen.queryByRole('button', { name: 'Manager' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Session' })).toBeNull();
+      expect(screen.queryByRole('group', { name: 'Kind of session' })).toBeNull();
     });
 
-    it('user who switches to manager mode and back to session still sends the seeded prompt', async () => {
-      const { createSessionRequests, user } = await reachFirstSessionStep();
+    it('the form has no Cancel link and no title of its own, since Skip to app covers leaving and the step owns the heading', async () => {
+      await reachFirstSessionStep();
 
-      await user.click(screen.getByRole('button', { name: 'Manager' }));
-      await user.click(screen.getByRole('button', { name: 'Session' }));
+      expect(screen.queryByRole('link', { name: 'Cancel' })).toBeNull();
+      expect(screen.queryByText('New session')).toBeNull();
+    });
+
+    it('user arriving with ?mode=manager in the URL still creates a session with the seeded prompt, and the URL is left untouched', async () => {
+      const daemonStub = stubDaemon({ isUp: true });
+      const { fixture, router } = await renderOnboarding();
+      await router.navigateByUrl('/onboarding?mode=manager');
+      await letTimePass(0, fixture);
+      const user = newUser();
+      await user.type(screen.getByLabelText('Repository path'), REPOSITORY_PATH);
+      await user.click(screen.getByRole('button', { name: 'Continue' }));
+      expect(router.url).toBe('/onboarding?mode=manager');
+
       await user.click(screen.getByRole('button', { name: 'Create session' }));
 
-      await vi.waitFor(() => expect(createSessionRequests()).toHaveLength(1));
-      expect(createSessionRequests()[0]).toHaveProperty('seededPrompt', expect.stringMatching(/do not modify/i));
+      await vi.waitFor(() => expect(daemonStub.createSessionRequests()).toHaveLength(1));
+      expect(daemonStub.createSessionRequests()[0]).toHaveProperty('seededPrompt', expect.stringMatching(/do not modify/i));
     });
 
     it('user can overwrite the pre-filled directory and name, and the payload follows what they typed', async () => {

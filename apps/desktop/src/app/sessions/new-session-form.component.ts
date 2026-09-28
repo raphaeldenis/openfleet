@@ -27,19 +27,18 @@ const PERMISSION_MODES_OFFERED_AT_CREATION = PERMISSION_MODES.filter((mode) => m
   selector: 'of-new-session-form',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [FormsModule, RouterLink, ManagerFieldsComponent],
+  host: { '[class.embedded]': 'embedded()' },
   template: `
     <form class="of-form" data-testid="new-session-form" (ngSubmit)="submit()" novalidate>
-      <div class="header">
-        @if (embedded()) {
-          <span class="embedded-title">{{ isManagerMode() ? 'New manager' : 'New session' }}</span>
-        } @else {
+      @if (!embedded()) {
+        <div class="header">
           <h1>{{ isManagerMode() ? 'New manager' : 'New session' }}</h1>
-        }
-        <div class="mode-toggle" role="group" aria-label="Kind of session">
-          <button type="button" [attr.aria-pressed]="!isManagerMode()" [disabled]="pending()" data-testid="new-session-mode-session" (click)="chooseMode('session')">Session</button>
-          <button type="button" [attr.aria-pressed]="isManagerMode()" [disabled]="pending()" data-testid="new-session-mode-manager" (click)="chooseMode('manager')">Manager</button>
+          <div class="mode-toggle" role="group" aria-label="Kind of session">
+            <button type="button" [attr.aria-pressed]="!isManagerMode()" [disabled]="pending()" data-testid="new-session-mode-session" (click)="chooseMode('session')">Session</button>
+            <button type="button" [attr.aria-pressed]="isManagerMode()" [disabled]="pending()" data-testid="new-session-mode-manager" (click)="chooseMode('manager')">Manager</button>
+          </div>
         </div>
-      </div>
+      }
 
       <fieldset class="card" [disabled]="pending()">
       <div class="of-section-title">Workspace</div>
@@ -106,7 +105,10 @@ const PERMISSION_MODES_OFFERED_AT_CREATION = PERMISSION_MODES.filter((mode) => m
         <p role="alert" data-testid="new-session-form-error" class="of-error">✕ {{ error }}</p>
       }
       <div class="actions">
-        <a class="of-btn of-btn--secondary" routerLink="/" data-testid="new-session-cancel">Cancel</a>
+        <ng-content />
+        @if (!embedded()) {
+          <a class="of-btn of-btn--secondary" routerLink="/" data-testid="new-session-cancel">Cancel</a>
+        }
         <button type="submit" class="of-btn of-btn--primary" data-testid="new-session-submit" [disabled]="pending()">{{ isManagerMode() ? 'Create manager' : 'Create session' }}</button>
       </div>
     </form>
@@ -115,7 +117,10 @@ const PERMISSION_MODES_OFFERED_AT_CREATION = PERMISSION_MODES.filter((mode) => m
     :host { display: flex; flex: 1; align-items: flex-start; justify-content: center; min-width: 0; padding: 1.5rem 1rem 3rem }
     .of-form { display: flex; flex-direction: column; gap: 1.25rem; width: 46rem; max-width: 100% }
     .header { display: flex; align-items: center; gap: 1rem }
-    h1, .embedded-title { flex: 1; margin: 0; font-size: 1.25rem; font-weight: 600; letter-spacing: -.01em }
+    :host(.embedded) { padding: 0 }
+    :host(.embedded) .of-form { width: 100% }
+    :host(.embedded) .actions { position: sticky; bottom: 0; padding: .75rem 0; background: var(--bg) }
+    h1 { flex: 1; margin: 0; font-size: 1.25rem; font-weight: 600; letter-spacing: -.01em }
     .mode-toggle { display: flex; padding: .125rem; border: 1px solid var(--line); border-radius: .5rem; background: var(--sunk) }
     .mode-toggle button { height: 1.625rem; padding: 0 .75rem; border: 0; border-radius: .375rem; background: transparent; color: var(--fg); font: inherit; font-size: .75rem; cursor: pointer }
     .mode-toggle button[aria-pressed='true'] { background: var(--panel) }
@@ -149,10 +154,13 @@ export class NewSessionFormComponent {
   protected readonly permissionModes = PERMISSION_MODES_OFFERED_AT_CREATION;
   protected readonly inheritedMode = INHERITED_MODE;
 
-  protected readonly mode = linkedSignal<CreationMode>(() => (this.queryParams()?.get('mode') === 'manager' ? 'manager' : 'session'));
-  protected readonly isManagerMode = computed(() => this.mode() === 'manager');
-  // A host page that already owns the page's h1 embeds the form without its own.
+  // A host page that owns the heading, the way out and the kind of session embeds the form as a plain session form.
   readonly embedded = input(false);
+  protected readonly mode = linkedSignal<CreationMode>(() => {
+    const isManagerRequested = this.queryParams()?.get('mode') === 'manager';
+    return isManagerRequested && !this.embedded() ? 'manager' : 'session';
+  });
+  protected readonly isManagerMode = computed(() => this.mode() === 'manager');
   readonly initialDirectory = input('');
   readonly initialName = input('');
   readonly seededPrompt = input('');

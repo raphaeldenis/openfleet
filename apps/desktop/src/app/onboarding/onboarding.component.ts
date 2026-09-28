@@ -41,7 +41,7 @@ function requestedUrlFrom(navigationState: unknown): string {
 
       <ol class="stepper" aria-label="Setup steps">
         @for (step of steps(); track step.id) {
-          <li class="step" [attr.aria-current]="step.isCurrent ? 'step' : null" [attr.aria-disabled]="step.isBuilt ? null : 'true'" [attr.data-state]="step.state">
+          <li class="step" [attr.aria-current]="step.isCurrent ? 'step' : null" [attr.data-state]="step.state">
             <span class="bar"></span>
             <span class="step-name"><span class="mono" aria-hidden="true">{{ step.mark }}</span>{{ step.name }}@if (step.state === 'done') {<span class="visually-hidden"> done</span>}</span>
             @if (!step.isBuilt) {
@@ -61,13 +61,13 @@ function requestedUrlFrom(navigationState: unknown): string {
                 <p>The daemon runs your agents in the background so they keep working when this window is closed.</p>
               </header>
               <div class="card">
-                <div class="card-head"><span class="dot"></span><span>Daemon not found</span><span class="spacer"></span><span class="mono address">{{ daemonAddress }}</span></div>
+                <div class="card-head"><span class="dot"></span><span>No daemon on {{ daemonAddress }}</span></div>
                 <span class="hint">Start the daemon: <code>{{ startDaemonCommand }}</code> in the OpenFleet folder. The first start creates <code>~/.openfleet/admin.token</code>; the app reads it by itself.</span>
                 <div class="command-row">
                   <div class="terminal">$ {{ startDaemonCommand }}</div>
                   <button type="button" class="of-btn of-btn--secondary" (click)="copyCommand()">{{ hasCopiedCommand() ? 'Copied' : 'Copy command' }}</button>
                 </div>
-                <span class="fine-print" role="status">{{ copyFailureMessage() }}</span>
+                <span class="fine-print" [class.visually-hidden]="!copyFailureMessage()" role="status">{{ copyFailureMessage() }}</span>
                 <span class="fine-print">Checking again every 2 s…</span>
               </div>
             </section>
@@ -79,12 +79,17 @@ function requestedUrlFrom(navigationState: unknown): string {
                 <h1>Define the project</h1>
                 <p>Sessions run in your repository. Type its path — folder discovery is not available yet.</p>
               </header>
-              <form class="card" (ngSubmit)="continueToFirstSession()">
-                <label class="of-field">
-                  <span class="of-label">Repository path</span>
-                  <input class="of-input" name="repositoryPath" [ngModel]="repositoryPath()" (ngModelChange)="repositoryPath.set($event)" placeholder="/path/to/repository" />
-                </label>
-                <div class="actions"><button type="submit" class="of-btn of-btn--primary" [disabled]="!hasRepositoryPath()">Continue</button></div>
+              <form class="project-form" (ngSubmit)="continueToFirstSession()">
+                <div class="card">
+                  <label class="of-field">
+                    <span class="of-label">Repository path</span>
+                    <input class="of-input" name="repositoryPath" [ngModel]="repositoryPath()" (ngModelChange)="repositoryPath.set($event)" placeholder="/path/to/repository" />
+                  </label>
+                </div>
+                <div class="footer">
+                  <span class="footer-note">Next: start your first session</span>
+                  <button type="submit" class="of-btn of-btn--primary" [disabled]="!hasRepositoryPath()">Continue</button>
+                </div>
               </form>
             </section>
           }
@@ -96,8 +101,9 @@ function requestedUrlFrom(navigationState: unknown): string {
                 <p>Land in a terminal in under a minute.</p>
               </header>
               <p class="seeded-prompt">The session starts by sending this prompt: <q>{{ seededPrompt }}</q></p>
-              <of-new-session-form [embedded]="true" [initialDirectory]="repositoryPath().trim()" [initialName]="firstSessionName" [seededPrompt]="seededPrompt" />
-              <div class="actions actions--start"><button type="button" class="of-btn of-btn--secondary" (click)="backToProject()">Back</button></div>
+              <of-new-session-form [embedded]="true" [initialDirectory]="repositoryPath().trim()" [initialName]="firstSessionName" [seededPrompt]="seededPrompt">
+                <button type="button" class="of-btn of-btn--secondary back" (click)="backToProject()">Back</button>
+              </of-new-session-form>
             </section>
           }
         }
@@ -105,12 +111,12 @@ function requestedUrlFrom(navigationState: unknown): string {
     </div>
   `,
   styles: `
-    :host { display: flex; flex: 1; min-width: 0; min-height: 0 }
-    .page { display: flex; flex: 1; flex-direction: column; min-width: 0; background: var(--bg); color: var(--fg) }
-    .topbar { display: flex; justify-content: flex-end; align-items: center; height: 2.75rem; padding: 0 .875rem }
+    :host { display: flex; flex-direction: column; height: 100%; min-width: 0; min-height: 0 }
+    .page { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg); color: var(--fg) }
+    .topbar { display: flex; flex: none; justify-content: flex-end; align-items: center; height: 2.75rem; padding: 0 .875rem }
     .skip { color: var(--mut); font-size: .75rem; text-decoration: none }
     .skip:focus-visible { outline: 2px solid var(--accent); outline-offset: .125rem }
-    .stepper { display: flex; align-items: flex-start; gap: .25rem; width: 56rem; max-width: 100%; margin: 0 auto; padding: 0 2rem .5rem; box-sizing: border-box; list-style: none }
+    .stepper { display: flex; flex: none; align-items: flex-start; gap: .25rem; width: 56rem; max-width: calc(100% - 4rem); margin: 0 auto; padding: 0 0 .5rem; box-sizing: border-box; list-style: none }
     .step { display: flex; flex: 1 1 0; flex-direction: column; gap: .375rem; min-width: 0; font-size: .6875rem; color: var(--faint) }
     .step .bar { height: .25rem; border-radius: .125rem; background: var(--line) }
     .step-name { display: flex; align-items: center; gap: .25rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
@@ -119,7 +125,7 @@ function requestedUrlFrom(navigationState: unknown): string {
     .step[data-state='done'] .bar { background: var(--state-idle) }
     .step[data-state='current'] { color: var(--fg) }
     .step[data-state='current'] .bar { background: var(--accent) }
-    .content { display: flex; flex: 1; justify-content: center; min-height: 0; overflow: auto; padding: 1rem 2rem 2rem }
+    .content { display: flex; flex: 1; align-items: flex-start; justify-content: center; min-height: 0; overflow: auto; padding: 1rem 2rem 2rem }
     .step-panel { display: flex; flex-direction: column; gap: 1rem; width: 56rem; max-width: 100% }
     header { display: flex; flex-direction: column; gap: .25rem }
     .kicker { font-size: .75rem; color: var(--mut) }
@@ -127,9 +133,7 @@ function requestedUrlFrom(navigationState: unknown): string {
     header p { margin: 0; color: var(--mut); font-size: .875rem }
     .card { display: flex; flex-direction: column; gap: .625rem; padding: 1rem; border: 1px solid var(--line); border-radius: .625rem; background: var(--panel) }
     .card-head { display: flex; align-items: center; gap: .5rem; font-weight: 500 }
-    .card-head .dot { width: .5rem; height: .5rem; border-radius: 50%; background: var(--state-waiting-permission) }
-    .spacer { flex: 1 }
-    .address { font-size: .6875rem; color: var(--mut) }
+    .card-head .dot { width: .5rem; height: .5rem; border-radius: 50%; background: var(--state-error) }
     .hint { font-size: .75rem; color: var(--mut) }
     code { padding: 0 .25rem; border-radius: .25rem; background: var(--sunk); font-family: var(--mono) }
     .command-row { display: flex; align-items: center; gap: .5rem }
@@ -139,9 +143,11 @@ function requestedUrlFrom(navigationState: unknown): string {
     .of-field { display: flex; flex-direction: column; gap: .25rem }
     .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap }
     .seeded-prompt { margin: 0; font-size: .75rem; color: var(--mut) }
-    .actions { display: flex; justify-content: flex-end }
-    .actions--start { justify-content: flex-start }
-    .actions .of-btn { height: 2rem; padding: 0 1rem }
+    .project-form { display: flex; flex-direction: column; gap: 1rem }
+    .footer { display: flex; align-items: center; justify-content: space-between }
+    .footer-note { font-size: .75rem; color: var(--mut) }
+    .footer .of-btn, .back { height: 2rem; padding: 0 1rem }
+    .back { margin-right: auto }
     .mono { font-family: var(--mono) }
   `,
 })

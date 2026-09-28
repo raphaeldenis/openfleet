@@ -64,9 +64,17 @@ describe('OnboardingComponent', () => {
     expect(steps[0]).toHaveAttribute('aria-current', 'step');
     for (const deferredName of DEFERRED_STEP_NAMES) {
       const deferredStep = steps.find((step) => step.textContent?.includes(deferredName));
-      expect(deferredStep).toHaveAttribute('aria-disabled', 'true');
+      expect(deferredStep).not.toHaveAttribute('aria-disabled');
       expect(deferredStep).toHaveTextContent('Available in a later phase');
     }
+  });
+
+  it('user is told no daemon answers on the configured address', async () => {
+    stubDaemon();
+    await renderOnboarding();
+
+    expect(screen.getByText('No daemon on 127.0.0.1:7331')).toBeInTheDocument();
+    expect(screen.queryByText('Daemon not found')).toBeNull();
   });
 
   it('user is told to start the daemon with pnpm dev:core, with no CLI install or token to paste', async () => {
