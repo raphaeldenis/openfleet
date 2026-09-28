@@ -277,11 +277,20 @@ export class SessionService {
     // in-between symlink swap from one whose path never resolved to a real directory at all.
     if (existsSync(spec.directory)) this.repo.setDirectoryRealpath(id, realpathSync.native(spec.directory));
     const harness = this.harnessFor(spec.harness);
-    const handle = harness.start({
-      sessionId: id, directory: spec.directory, model: spec.model, seededPrompt: spec.seededPrompt,
-      hookUrl: `${this.deps.baseUrl}/hooks/${hookToken}`, mcpUrl: `${this.deps.baseUrl}/mcp`, mcpToken, displayName: `${spec.emoji} ${spec.name}`,
-      permissionMode: spec.permissionMode,
-    });
+    let handle: HarnessHandle;
+    try {
+      handle = harness.start({
+        sessionId: id, directory: spec.directory, model: spec.model, seededPrompt: spec.seededPrompt,
+        hookUrl: `${this.deps.baseUrl}/hooks/${hookToken}`, mcpUrl: `${this.deps.baseUrl}/mcp`, mcpToken, displayName: `${spec.emoji} ${spec.name}`,
+        permissionMode: spec.permissionMode,
+      });
+    } catch (err) {
+      // The row above already exists: left alone, it would be a ghost forever — starting, no handle,
+      // unclosable and unreopenable. Same treatment as resumeOne's own launch failure.
+      console.error(`create: session ${id} failed to launch`, err);
+      this.markClosed(id, RESUME_LAUNCH_FAILED_EXIT_CODE);
+      throw err;
+    }
     this.handles.set(id, handle);
     activeHandleBySessionId.set(id, handle);
     handle.onData((data) => {
@@ -292,6 +301,10 @@ export class SessionService {
       if (activeHandleBySessionId.get(id) !== handle) return; // a stale process we already replaced (e.g. by a resume)
       this.markClosed(id, exitCode);
     });
+    // Same safety net resumeOne arms: a harness that starts but never reports a single real hook (SessionStart
+    // included) leaves this session starting forever otherwise. Reuses resumeTimeoutMs — one knob for "how
+    // long any launch, first or resumed, gets before it must prove it's alive".
+    this.armResumeTimeout(id, handle);
     const session = this.repo.get(id)!;
     this.deps.bus.emit({ type: 'session.created', session });
     return session;
@@ -667,7 +680,13 @@ export class SessionService {
       return relaunch;
     }
     const handle = this.handles.get(sessionId);
-    if (!handle) return;
+    if (!handle) {
+      // No process to kill (this instance never launched or resumed one for this row), but the caller
+      // still asked this session closed: markClosed is itself a no-op for an unknown or already-closed
+      // id (MIN-04), so this only ever closes a real open-but-handle-less row instead of leaving it stuck.
+      this.markClosed(sessionId, undefined);
+      return;
+    }
     // The process may take the whole escalation window to exit: nothing is typed or submitted into it meanwhile.
     this.enter(sessionId, { name: 'closing' });
     await this.killWithEscalation(handle, options?.escalateAfterMs ?? DEFAULT_CLOSE_ESCALATE_MS);

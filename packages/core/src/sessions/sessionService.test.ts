@@ -888,6 +888,60 @@ describe('SessionService resume', () => {
   });
 });
 
+describe('SessionService launch failure and manual close (AUD-06)', () => {
+  it('a launch whose harness throws leaves the session closed with an error exit code, never a phantom starting row', async () => {
+    const db = openDatabase(':memory:');
+    const bus = new EventBus();
+    const throwingHarness: Harness = { id: 'fake', start: () => { throw new Error('posix_spawnp ENOENT'); } };
+    const service = new SessionService({ db, bus, harnesses: [throwingHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+
+    await expect(service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' })).rejects.toThrow('posix_spawnp ENOENT');
+
+    const [ghost] = service.list();
+    expect(ghost!.state).toBe('closed');
+    expect(ghost!.exitCode).toBe(RESUME_LAUNCH_FAILED_EXIT_CODE);
+  });
+
+  it('close() on a session this instance holds no handle for marks it closed instead of silently no-op-ing', async () => {
+    const db = openDatabase(':memory:');
+    const bus = new EventBus();
+    const firstRunHarness = new FakeHarness();
+    const original = new SessionService({ db, bus, harnesses: [firstRunHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+    const session = await original.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+
+    // A fresh instance over the same db that never resumed anything: it holds no handle for this session,
+    // the same shape a request landing between daemon boot and resumeAll() finishing would see.
+    const restartHarness = new FakeHarness();
+    const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+
+    await restarted.close(session.id);
+
+    expect(restarted.get(session.id)!.state).toBe('closed');
+  });
+
+  it('close() on a session id that never existed stays a no-op', async () => {
+    const { service } = setup();
+
+    await expect(service.close('never-existed')).resolves.toBeUndefined();
+
+    expect(service.get('never-existed')).toBeUndefined();
+  });
+
+  it('closes a freshly created session that never leaves starting before the first-start timeout, reusing resumeTimeoutMs (the same knob resume uses)', async () => {
+    vi.useFakeTimers();
+    const db = openDatabase(':memory:');
+    const bus = new EventBus();
+    const harness = new FakeHarness();
+    const service = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt', resumeTimeoutMs: 50 });
+
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    await vi.advanceTimersByTimeAsync(51);
+
+    expect(service.get(session.id)!.state).toBe('closed');
+    expect(service.get(session.id)!.exitCode).toBe(RESUME_TIMEOUT_EXIT_CODE);
+  });
+});
+
 describe('SessionService.updateModel', () => {
   it('relaunches an idle session with --resume and the new model instead of typing /model, rotating tokens', async () => {
     vi.useFakeTimers();
