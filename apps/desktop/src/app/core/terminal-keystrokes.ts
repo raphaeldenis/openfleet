@@ -4,11 +4,16 @@ const BELL = '\x07';
 const FOCUS_REPORT = `${ESCAPE}\\[[IO]`;
 const DEVICE_AND_CURSOR_REPLY = `${ESCAPE}\\[[?>]?[\\d;]*[cRn]`;
 const OSC_REPLY = `${ESCAPE}\\][^${BELL}${ESCAPE}]*(?:${BELL}|${ESCAPE}\\\\)`;
-const TERMINAL_REPORTS = new RegExp([FOCUS_REPORT, DEVICE_AND_CURSOR_REPLY, OSC_REPLY].join('|'), 'g');
+const SGR_MOUSE_REPORT = `${ESCAPE}\\[<\\d+;\\d+;\\d+[Mm]`;
+const X10_MOUSE_REPORT = `${ESCAPE}\\[M[\\s\\S]{3}`;
+const TERMINAL_REPORTS = new RegExp(
+  [FOCUS_REPORT, DEVICE_AND_CURSOR_REPLY, OSC_REPLY, SGR_MOUSE_REPORT, X10_MOUSE_REPORT].join('|'),
+  'g',
+);
 
 /**
  * Tells what the user typed from what the terminal writes back by itself (focus reports, device attribute,
- * cursor position and status replies, OSC replies): a write is typing when something other than those reports,
+ * cursor position and status replies, OSC replies, mouse reports): a write is typing when something other than those reports,
  * and other than a lone Escape, is left in it.
  */
 export function isUserTyping(terminalInput: string): boolean {
