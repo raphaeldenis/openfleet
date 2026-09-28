@@ -269,6 +269,64 @@ describe('ModelSelectorComponent', () => {
     expect(options).toEqual(['haiku', 'sonnet', 'opus', 'fable', 'claude-opus-5-5']);
   });
 
+  describe('a pending switch belongs to its session', () => {
+    async function renderSwitchedAwayFromAndBackTo() {
+      const api = { updateModel: vi.fn().mockResolvedValue({ status: 'deferred' }) };
+      const sessionId = signal('s1');
+      const pendingModelSwitch = vi.fn();
+      const events = {
+        sessions: signal([
+          { id: 's1', name: 'Gimli', emoji: '⚔️', model: 'claude-sonnet-5', state: 'generating' },
+          { id: 's2', name: 'Legolas', emoji: '🏹', model: 'claude-haiku-4-5', state: 'idle' },
+        ]),
+        approvals: signal([]),
+        managers: signal([]),
+      };
+      const { fixture } = await render(ModelSelectorComponent, {
+        bindings: [inputBinding('sessionId', sessionId), outputBinding('pendingModelSwitch', pendingModelSwitch)],
+        providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: events }],
+      });
+      await userEvent.selectOptions(screen.getByTestId('model-select'), 'opus');
+      await userEvent.click(screen.getByTestId('apply-model'));
+      await waitFor(() => expect(screen.getByTestId('model-switch-status')).toHaveTextContent('switch pending'));
+
+      const goTo = async (id: string) => {
+        sessionId.set(id);
+        await fixture.whenStable();
+      };
+      return { goTo, events, pendingModelSwitch };
+    }
+
+    it('does not show session A\'s pending switch on session B', async () => {
+      const { goTo } = await renderSwitchedAwayFromAndBackTo();
+
+      await goTo('s2');
+
+      expect(screen.queryByTestId('model-switch-status')).toBeNull();
+    });
+
+    it('shows session A\'s deferred switch again, with the requested rung selected and the close dialog warned, after coming back', async () => {
+      const { goTo, pendingModelSwitch } = await renderSwitchedAwayFromAndBackTo();
+      await goTo('s2');
+
+      await goTo('s1');
+
+      expect(screen.getByTestId('model-switch-status')).toHaveTextContent('switch pending: happens when this turn ends');
+      expect((screen.getByTestId('model-select') as HTMLSelectElement).value).toBe('opus');
+      expect(pendingModelSwitch).toHaveBeenLastCalledWith(true);
+    });
+
+    it('still clears the restored switch note once session A\'s turn ends', async () => {
+      const { goTo, events } = await renderSwitchedAwayFromAndBackTo();
+      await goTo('s2');
+      await goTo('s1');
+
+      events.sessions.update((all) => all.map((s) => (s.id === 's1' ? { ...s, state: 'idle' } : s)));
+
+      await waitFor(() => expect(screen.queryByTestId('model-switch-status')).toBeNull());
+    });
+  });
+
   it('never types a slash-model command into the UI', async () => {
     await render(ModelSelectorComponent, {
       bindings: [inputBinding('sessionId', () => 's1')],
