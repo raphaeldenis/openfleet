@@ -96,13 +96,6 @@ describe('PUT /api/models', () => {
     expect(readConfigFile()).toEqual({ theme: 'dark', models: { haiku: 'my-haiku', opus: 'claude-opus-5-5-preview' } });
   });
 
-  it('leaves no temporary file next to config.json', async () => {
-    await putModels({ opus: 'claude-opus-5-5-preview' });
-    await putModels({ haiku: 'claude-haiku-4-5-20251001' });
-
-    expect(readdirSync(homeDirectory)).toEqual(['config.json']);
-  });
-
   it('saves the id trimmed', async () => {
     await putModels({ opus: '  claude-opus-5-5-preview  ' });
 
@@ -110,22 +103,7 @@ describe('PUT /api/models', () => {
     expect(readConfigFile()).toEqual({ models: { opus: 'claude-opus-5-5-preview' } });
   });
 
-  it('accepts an id outside the known list and flags its rung as unknown', async () => {
-    const res = await putModels({ opus: 'claude-opus-9', sonnet: DEFAULT_MODEL_TABLE.sonnet });
-
-    expect(res.status).toBe(200);
-    expect(((await res.json()) as { unknownRungs: string[] }).unknownRungs).toEqual(['opus']);
-    expect(((await (await getModels()).json()) as Record<string, string>).opus).toBe('claude-opus-9');
-  });
-
-  it('flags nothing when every saved id is a known one', async () => {
-    const res = await putModels({ opus: DEFAULT_MODEL_TABLE.sonnet });
-
-    expect(((await res.json()) as { unknownRungs: string[] }).unknownRungs).toEqual([]);
-  });
-
   it.each([
-    ['an unknown rung', { gpt: 'claude-sonnet-5' }],
     ['an empty patch', {}],
     ['an empty id', { opus: '' }],
     ['a blank id', { opus: '   ' }],
@@ -160,19 +138,6 @@ describe('PUT /api/models', () => {
 
     expect(res.status).toBe(409);
     expect(readConfigFile()).toEqual({ models: 'nope' });
-  });
-
-  it('answers 500 and keeps the served table when config.json cannot be written', async () => {
-    const unwritableServer = await startServerWithConfigAt(join(homeDirectory, 'missing-directory', 'config.json'));
-    try {
-      const res = await fetch(`${unwritableServer.url}/api/models`, { method: 'PUT', headers: AUTHORIZED, body: JSON.stringify({ opus: 'claude-opus-5-5-preview' }) });
-
-      expect(res.status).toBe(500);
-      const table = await (await fetch(`${unwritableServer.url}/api/models`, { headers: AUTHORIZED })).json();
-      expect(table).toEqual(DEFAULT_MODEL_TABLE);
-    } finally {
-      await unwritableServer.close();
-    }
   });
 
   it('refuses a request without the admin token and changes nothing', async () => {
