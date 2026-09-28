@@ -45,12 +45,15 @@ function handleClientMessage(socket: WebSocket, message: ClientMessage, deps: { 
 
 export interface WsHandler {
   upgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void;
-  // Closes every currently-connected client: a close frame first (so a cooperative UI sees a clean
-  // close), then terminate() right behind it, since shutdown cannot wait on a slow or dead peer to ack.
+  // Closes every currently-connected client: a close frame first (so a cooperative UI gets a clean 1001
+  // going-away close), then a short grace period for that handshake to land, after which any client still
+  // open — a dead or hostile peer that never acks — is force-terminated so shutdown can never hang on it.
   closeClients(): void;
 }
 
-export function createWsHandler(deps: { bus: EventBus; sessions: SessionService; approvals: ApprovalService; managers: ManagerService; adminToken: string }): WsHandler {
+const DEFAULT_WS_CLOSE_GRACE_MS = 250;
+
+export function createWsHandler(deps: { bus: EventBus; sessions: SessionService; approvals: ApprovalService; managers: ManagerService; adminToken: string; wsCloseGraceMs?: number }): WsHandler {
   const wss = new WebSocketServer({ noServer: true });
   deps.bus.subscribe((event) => {
     const payload = JSON.stringify(event);
@@ -94,10 +97,12 @@ export function createWsHandler(deps: { bus: EventBus; sessions: SessionService;
       }
     },
     closeClients() {
-      for (const client of wss.clients) {
-        client.close();
-        client.terminate();
-      }
+      const clients = [...wss.clients];
+      for (const client of clients) client.close(1001, 'daemon shutting down');
+      const graceTimer = setTimeout(() => {
+        for (const client of clients) if (client.readyState !== client.CLOSED) client.terminate();
+      }, deps.wsCloseGraceMs ?? DEFAULT_WS_CLOSE_GRACE_MS);
+      graceTimer.unref?.();
     },
   };
 }

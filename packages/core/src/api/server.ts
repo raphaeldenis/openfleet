@@ -19,6 +19,7 @@ export interface ServerDeps {
   sessions: SessionService; approvals: ApprovalService; bus: EventBus; modelTable: ModelTable; modelConfigPath: string;
   managers: ManagerService; pulseScheduler: PulseScheduler;
   mcp?: (req: IncomingMessage, res: ServerResponse, body: unknown) => Promise<void>;
+  wsCloseGraceMs?: number;
 }
 
 function applyCorsHeaders(req: IncomingMessage, res: ServerResponse): void {

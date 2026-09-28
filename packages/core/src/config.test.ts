@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -33,6 +33,15 @@ describe('loadConfig', () => {
     loadConfig({ OPENFLEET_HOME: home });
 
     expect(modeOf(home)).toBe(0o700);
+  });
+
+  it('tightens an existing, looser worktrees directory to 0700 instead of leaving it as found (AUD-05)', () => {
+    const home = mkdtempSync(join(tmpdir(), 'of-home-'));
+    mkdirSync(join(home, 'worktrees'), { recursive: true, mode: 0o755 });
+
+    loadConfig({ OPENFLEET_HOME: home });
+
+    expect(modeOf(join(home, 'worktrees'))).toBe(0o700);
   });
 
   it('forces admin.token back to 0600 on every load, even one that finds it already looser (AUD-05)', () => {

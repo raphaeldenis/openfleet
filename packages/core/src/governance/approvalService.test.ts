@@ -7,6 +7,7 @@ import type { ServerEvent } from '@openfleet/shared';
 function setup(timeoutMs = 50) {
   const db = openDatabase(':memory:');
   db.prepare(`INSERT INTO sessions (id, name, directory, harness, state, state_since, hook_token, mcp_token, created_at) VALUES ('s1','G','/tmp','fake','generating','t','h','m','t')`).run();
+  db.prepare(`INSERT INTO sessions (id, name, directory, harness, state, state_since, hook_token, mcp_token, created_at) VALUES ('s2','G','/tmp','fake','generating','t','h2','m2','t')`).run();
   const bus = new EventBus();
   const events: ServerEvent[] = [];
   bus.subscribe((e) => events.push(e));
@@ -36,5 +37,29 @@ describe('ApprovalService', () => {
   it('throws not_found for an unknown approval', () => {
     const { service } = setup();
     expect(() => service.decide({ approvalId: 'nope', behavior: 'deny' })).toThrowError(expect.objectContaining({ code: 'not_found' }));
+  });
+
+  it('expires only the closed session\'s own pending approval, leaving another session\'s untouched (AUD-07)', () => {
+    const { service, bus } = setup();
+    service.request({ sessionId: 's1', toolName: 'Bash', toolInput: {} });
+    service.request({ sessionId: 's2', toolName: 'Bash', toolInput: {} });
+
+    bus.emit({ type: 'session.closed', sessionId: 's1' });
+
+    const bySessionId = new Map(service.listPending().map((a) => [a.sessionId, a]));
+    expect(bySessionId.has('s1')).toBe(false);
+    expect(bySessionId.get('s2')?.status).toBe('pending');
+  });
+
+  it('expires only the relaunching session\'s own pending approval, leaving another session\'s untouched (AUD-07)', () => {
+    const { service, bus } = setup();
+    service.request({ sessionId: 's1', toolName: 'Bash', toolInput: {} });
+    service.request({ sessionId: 's2', toolName: 'Bash', toolInput: {} });
+
+    bus.emit({ type: 'session.relaunching', sessionId: 's2' });
+
+    const bySessionId = new Map(service.listPending().map((a) => [a.sessionId, a]));
+    expect(bySessionId.get('s1')?.status).toBe('pending');
+    expect(bySessionId.has('s2')).toBe(false);
   });
 });

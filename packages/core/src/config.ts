@@ -13,6 +13,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   chmodSync(home, 0o700);
   const worktreesRoot = join(home, 'worktrees');
   mkdirSync(worktreesRoot, { recursive: true });
+  // Same rationale as home above: mkdirSync's mode is ignored on an existing directory, so tighten on every load.
+  chmodSync(worktreesRoot, 0o700);
   return {
     host: '127.0.0.1',
     port: Number(env.OPENFLEET_PORT ?? 7331),

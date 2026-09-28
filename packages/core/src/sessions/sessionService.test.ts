@@ -927,18 +927,32 @@ describe('SessionService launch failure and manual close (AUD-06)', () => {
     expect(service.get('never-existed')).toBeUndefined();
   });
 
-  it('closes a freshly created session that never leaves starting before the first-start timeout, reusing resumeTimeoutMs (the same knob resume uses)', async () => {
+  it('closes a freshly created session that never leaves starting before its own first-start timeout (AUD-06)', async () => {
     vi.useFakeTimers();
     const db = openDatabase(':memory:');
     const bus = new EventBus();
     const harness = new FakeHarness();
-    const service = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt', resumeTimeoutMs: 50 });
+    const service = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt', firstStartTimeoutMs: 50 });
 
     const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
     await vi.advanceTimersByTimeAsync(51);
 
     expect(service.get(session.id)!.state).toBe('closed');
     expect(service.get(session.id)!.exitCode).toBe(RESUME_TIMEOUT_EXIT_CODE);
+  });
+
+  it('does not close a freshly created session at the (smaller) resumeTimeoutMs — first launch has its own timeout (AUD-06)', async () => {
+    vi.useFakeTimers();
+    const db = openDatabase(':memory:');
+    const bus = new EventBus();
+    const harness = new FakeHarness();
+    // resumeTimeoutMs is tiny; firstStartTimeoutMs is left at its 60s default and must be what governs a first launch.
+    const service = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt', resumeTimeoutMs: 50 });
+
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    await vi.advanceTimersByTimeAsync(51);
+
+    expect(service.get(session.id)!.state).toBe('starting');
   });
 });
 

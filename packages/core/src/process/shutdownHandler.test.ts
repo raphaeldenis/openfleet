@@ -47,4 +47,31 @@ describe('installShutdownHandler', () => {
     expect(shutdown).toHaveBeenCalledTimes(1);
     expect(proc.exit).toHaveBeenCalledTimes(1);
   });
+
+  it('exits with code 1 when the shutdown callback rejects (AUD-08)', async () => {
+    const { proc, fire } = fakeProcess();
+    const shutdown = vi.fn(() => Promise.reject(new Error('sessions.closeAll() failed')));
+    installShutdownHandler(shutdown, proc);
+
+    fire('SIGTERM');
+
+    await vi.waitFor(() => expect(proc.exit).toHaveBeenCalledWith(1));
+    expect(proc.exit).toHaveBeenCalledTimes(1);
+  });
+
+  it('force-exits with code 1 if shutdown has not settled by the guard timeout (AUD-08)', async () => {
+    vi.useFakeTimers();
+    const { proc, fire } = fakeProcess();
+    const shutdown = vi.fn(() => new Promise<void>(() => {})); // never settles
+    installShutdownHandler(shutdown, proc, { guardTimeoutMs: 10_000 });
+
+    fire('SIGTERM');
+    expect(proc.exit).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(proc.exit).toHaveBeenCalledWith(1);
+    expect(proc.exit).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
 });

@@ -12,7 +12,7 @@ import { wrapAgentMessage } from './messageEnvelope.js';
 import { normalizePermissionMode, SessionRepository } from './sessionRepository.js';
 import { canDeliverNow, nextState, provesTurnEnded, type SessionInput } from './stateMachine.js';
 
-export interface SessionServiceDeps { db: DatabaseSync; bus: EventBus; harnesses: Harness[]; baseUrl: string; worktreesRoot: string; resumeTimeoutMs?: number; submitKeystrokeDelayMs?: number }
+export interface SessionServiceDeps { db: DatabaseSync; bus: EventBus; harnesses: Harness[]; baseUrl: string; worktreesRoot: string; resumeTimeoutMs?: number; firstStartTimeoutMs?: number; submitKeystrokeDelayMs?: number }
 
 export class SessionClosedError extends Error {
   constructor(sessionId: string) {
@@ -51,6 +51,9 @@ export class DaemonShuttingDownError extends Error {
 const OUTPUT_BUFFER_LIMIT = 200 * 1024;
 export const DEFAULT_CLOSE_ESCALATE_MS = 5000;
 const DEFAULT_RESUME_TIMEOUT_MS = 15_000;
+// A cold real CLI can sit waiting on an auth or trust prompt far longer than a resume ever should, so a
+// first launch gets its own, more generous ceiling instead of sharing resumeTimeoutMs (AUD-06).
+const DEFAULT_FIRST_START_TIMEOUT_MS = 60_000;
 // ponytail: fixed delay giving Claude Code's composer time to settle after typeMessage's bracketed-paste
 // write before the separate '\r' submits it; upgrade path is confirming the composer holds the full body
 // from the pty output instead of trusting a fixed delay.
@@ -302,9 +305,9 @@ export class SessionService {
       this.markClosed(id, exitCode);
     });
     // Same safety net resumeOne arms: a harness that starts but never reports a single real hook (SessionStart
-    // included) leaves this session starting forever otherwise. Reuses resumeTimeoutMs — one knob for "how
-    // long any launch, first or resumed, gets before it must prove it's alive".
-    this.armResumeTimeout(id, handle);
+    // included) leaves this session starting forever otherwise. A first launch gets its own, longer timeout
+    // (firstStartTimeoutMs) since a cold real CLI can sit waiting on an auth or trust prompt (AUD-06).
+    this.armFirstStartTimeout(id, handle);
     const session = this.repo.get(id)!;
     this.deps.bus.emit({ type: 'session.created', session });
     return session;
@@ -1023,6 +1026,14 @@ export class SessionService {
   }
 
   private armResumeTimeout(sessionId: string, handle: HarnessHandle): void {
+    this.armStartTimeout(sessionId, handle, this.deps.resumeTimeoutMs ?? DEFAULT_RESUME_TIMEOUT_MS);
+  }
+
+  private armFirstStartTimeout(sessionId: string, handle: HarnessHandle): void {
+    this.armStartTimeout(sessionId, handle, this.deps.firstStartTimeoutMs ?? DEFAULT_FIRST_START_TIMEOUT_MS);
+  }
+
+  private armStartTimeout(sessionId: string, handle: HarnessHandle, timeoutMs: number): void {
     const timer = setTimeout(() => {
       if (activeHandleBySessionId.get(sessionId) !== handle) return; // already replaced or closed by something else
       // Detach first so the handle's own onExit (fired by killWithEscalation below) can't race this
@@ -1036,7 +1047,7 @@ export class SessionService {
         if (activeHandleBySessionId.has(sessionId)) return;
         this.markClosed(sessionId, RESUME_TIMEOUT_EXIT_CODE);
       });
-    }, this.deps.resumeTimeoutMs ?? DEFAULT_RESUME_TIMEOUT_MS);
+    }, timeoutMs);
     this.resumeTimers.set(sessionId, timer);
   }
 
