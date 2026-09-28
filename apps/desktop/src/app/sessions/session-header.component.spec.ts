@@ -225,6 +225,18 @@ describe('SessionHeaderComponent', () => {
     await waitFor(() => expect(screen.getByTestId('session-rename-error')).toHaveTextContent(/could not rename/i));
   });
 
+  it('drops the failure of a name edit once the next emoji edit starts', async () => {
+    const session = baseSession();
+    const api = fakeApi({ renameSession: vi.fn().mockRejectedValueOnce(new Error('boom')).mockResolvedValue({}) });
+    await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session, api) });
+    fireEvent.change(screen.getByTestId('session-name-input'), { target: { value: 'Gimli · T7' } });
+    await waitFor(() => expect(screen.getByTestId('session-rename-error')).toBeTruthy());
+
+    fireEvent.change(screen.getByTestId('session-emoji-input'), { target: { value: '🦉' } });
+
+    await waitFor(() => expect(screen.queryByTestId('session-rename-error')).toBeNull());
+  });
+
   it('a rename request for a previous session settling late does not surface its error on the new session, nor release the new session\'s own busy flag', async () => {
     const sessionA = baseSession({ id: 's1', name: 'Gimli' });
     const sessionB = baseSession({ id: 's2', name: 'Legolas' });
@@ -256,6 +268,29 @@ describe('SessionHeaderComponent', () => {
     expect(renameSession).toHaveBeenCalledTimes(2);
 
     resolveB({});
+  });
+
+  it('keeps a rename of A guarded, and its failure visible, after A → B → A', async () => {
+    const sessionA = baseSession({ id: 's1', name: 'Gimli' });
+    const sessionB = baseSession({ id: 's2', name: 'Legolas' });
+    const currentSession = signal<Session>(sessionA);
+    let rejectRename: (reason?: unknown) => void = () => {};
+    const renameSession = vi.fn(() => new Promise((_resolve, reject) => { rejectRename = reject; }));
+    const { fixture } = await render(SessionHeaderComponent, {
+      bindings: [inputBinding('session', currentSession)],
+      providers: providersFor(sessionA, fakeApi({ renameSession })),
+    });
+    fireEvent.change(screen.getByTestId('session-name-input'), { target: { value: 'Gimli renamed' } });
+    currentSession.set(sessionB);
+    await fixture.whenStable();
+    currentSession.set(sessionA);
+    await fixture.whenStable();
+
+    fireEvent.change(screen.getByTestId('session-name-input'), { target: { value: 'Gimli renamed again' } });
+    expect(renameSession).toHaveBeenCalledTimes(1);
+    rejectRename(new Error('boom'));
+
+    await waitFor(() => expect(screen.getByTestId('session-rename-error')).toHaveTextContent(/could not rename/i));
   });
 
   it('renaming the name field does not block a concurrent emoji edit — separate busy flags', async () => {

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { ApiError, FleetApiService } from './fleet-api.service';
 
 function fakeResponse(init: { ok: boolean; status: number; json: () => Promise<unknown> }) {
@@ -97,6 +97,30 @@ describe('FleetApiService', () => {
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(init.headers).toMatchObject({ 'content-type': 'application/json' });
     expect((init.headers as Record<string, string>)['authorization']).toMatch(/^Bearer /);
+  });
+
+  describe('a request the daemon never answers', () => {
+    // The close of a session that ignores SIGTERM takes up to the 5 s escalation window plus a relaunch it may wait for.
+    const SLOWEST_LEGITIMATE_REQUEST_MS = 30_000;
+
+    it('gives up once its time limit passes instead of staying pending forever', async () => {
+      const timeLimit = new AbortController();
+      const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timeLimit.signal);
+      onTestFinished(() => timeoutSpy.mockRestore());
+      fetchMock.mockImplementation(
+        (_url: string, init: RequestInit) =>
+          new Promise((_resolve, reject) => init.signal?.addEventListener('abort', () => reject(init.signal?.reason))),
+      );
+      const closing = api.closeSession('s1');
+      const outcome = () =>
+        Promise.race([closing.then(() => 'answered', () => 'gave up'), new Promise((resolve) => setTimeout(() => resolve('still waiting'), 10))]);
+      expect(await outcome()).toBe('still waiting');
+
+      timeLimit.abort(new DOMException('signal timed out', 'TimeoutError'));
+
+      expect(await outcome()).toBe('gave up');
+      expect(timeoutSpy.mock.calls[0]![0]).toBeGreaterThan(SLOWEST_LEGITIMATE_REQUEST_MS);
+    });
   });
 
   describe('where the admin token goes', () => {
