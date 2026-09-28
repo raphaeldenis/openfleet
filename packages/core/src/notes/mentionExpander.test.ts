@@ -181,27 +181,46 @@ describe('expandMentions', () => {
   });
 
   describe('byte budget', () => {
-    it('never appends a block that would push the output past the budget', () => {
+    it('names a mention whose block would push the output past the budget', () => {
       const lookup = lookupWith({ big: { title: 'Big', bodyMd: 'x'.repeat(70_000) } });
 
       const out = expandMentions('@note:big', lookup, { budgetBytes: 64 * 1024 });
 
-      expect(out).toBe('@note:big');
+      expect(out).toBe('@note:big\n\n--- @note:big: not expanded (budget) ---');
     });
 
-    it('stops at the first block that does not fit, without truncating inside a block', () => {
+    it('lists every mention after the first miss as budget-skipped, without opening them', () => {
       const lookup = lookupWith({
         small: { title: 'Small', bodyMd: 'tiny' },
-        big: { title: 'Big', bodyMd: 'x'.repeat(500) },
+        big: { title: 'Big', bodyMd: `${'x'.repeat(500)} @note:hidden` },
         after: { title: 'After', bodyMd: 'tiny' },
+        hidden: { title: 'Hidden', bodyMd: 'tiny' },
       });
 
       const out = expandMentions('@note:small @note:big @note:after', lookup, { budgetBytes: 300 });
 
       expect(out).toContain('from note @note:small');
-      expect(out).not.toContain('@note:big (');
+      expect(out).not.toContain('from note @note:big');
       expect(out).not.toContain('from note @note:after');
-      expect(out.endsWith('--- end @note:small ---')).toBe(true);
+      expect(out).not.toContain('@note:hidden');
+      expect(out.endsWith(
+        '--- @note:big: not expanded (budget) ---\n\n--- @note:after: not expanded (budget) ---',
+      )).toBe(true);
+    });
+
+    it('names a resolved pointer to another kind that does not fit', () => {
+      const lookup = lookupWith(
+        { a: { title: 'A', bodyMd: 'leaf' } },
+        { 'table:t1': { name: 'Orders', toolHint: 'query_data_store' } },
+      );
+      const rootBody = '@note:a @table:t1';
+      const fullBytes = Buffer.byteLength(expandMentions(rootBody, lookup), 'utf8');
+
+      const out = expandMentions(rootBody, lookup, { budgetBytes: fullBytes - 1 });
+
+      expect(out).toContain('from note @note:a');
+      expect(out).not.toContain('Orders');
+      expect(out.endsWith('--- @table:t1: not expanded (budget) ---')).toBe(true);
     });
 
     it('counts UTF-8 bytes, not characters', () => {
@@ -215,7 +234,7 @@ describe('expandMentions', () => {
       const oneByteShort = expandMentions(rootBody, lookup, { budgetBytes: fullOutputBytes - 1 });
 
       expect(fitsExactly).toBe(fullOutput);
-      expect(oneByteShort).toBe(rootBody);
+      expect(oneByteShort).toBe(`${rootBody}\n\n--- @note:accented: not expanded (budget) ---`);
     });
 
     it('applies a default budget of 64 KiB', () => {
@@ -229,7 +248,7 @@ describe('expandMentions', () => {
 
       expect(out).toContain('from note @note:first');
       expect(out).not.toContain('from note @note:second');
-      expect(Buffer.byteLength(out, 'utf8')).toBeLessThanOrEqual(64 * 1024);
+      expect(out).toContain('--- @note:second: not expanded (budget) ---');
     });
   });
 });

@@ -22,33 +22,37 @@ interface Walk {
   lookup: MentionLookup;
   maxDepth: number;
   expandedNoteIds: Set<string>;
+  bytesLeft: number;
+  isBudgetExhausted: boolean;
 }
 
 /**
- * Returns the body followed by one block per @-mention, walking notes up to `depth` levels,
- * expanding each note once, and stopping before the first block that would exceed `budgetBytes` (UTF-8).
- * A mention the lookup cannot resolve renders as "not resolved", whatever the reason.
+ * Returns the body followed by one block per @-mention, walking notes up to `depth` levels
+ * and expanding each note once. Content blocks share `budgetBytes` (UTF-8): from the first block
+ * that does not fit, every remaining mention is listed as "not expanded (budget)".
+ * Skip lines are free of the budget. A mention the lookup cannot resolve renders as "not resolved".
  */
 export function expandMentions(bodyMd: string, lookup: MentionLookup, opts: ExpandMentionsOptions = {}): string {
   const { depth = DEFAULT_DEPTH, budgetBytes = DEFAULT_BUDGET_BYTES, rootNoteId } = opts;
-  const expandedNoteIds = new Set(rootNoteId === undefined ? [] : [rootNoteId]);
-  const walk: Walk = { lookup, maxDepth: depth, expandedNoteIds };
+  const walk: Walk = {
+    lookup,
+    maxDepth: depth,
+    expandedNoteIds: new Set(rootNoteId === undefined ? [] : [rootNoteId]),
+    bytesLeft: budgetBytes - utf8Bytes(bodyMd),
+    isBudgetExhausted: false,
+  };
 
-  const output = [bodyMd];
-  let bytesUsed = utf8Bytes(bodyMd);
-  for (const block of renderMentions(bodyMd, 1, walk)) {
-    const bytesWithBlock = bytesUsed + utf8Bytes(BLOCK_SEPARATOR + block);
-    const blockExceedsBudget = bytesWithBlock > budgetBytes;
-    if (blockExceedsBudget) break;
-    output.push(block);
-    bytesUsed = bytesWithBlock;
-  }
-  return output.join(BLOCK_SEPARATOR);
+  return [bodyMd, ...renderMentions(bodyMd, 1, walk)].join(BLOCK_SEPARATOR);
 }
 
 function* renderMentions(bodyMd: string, level: number, walk: Walk): Generator<string> {
   for (const mention of findMentions(bodyMd)) {
     const tag = `@${mention.kind}:${mention.id}`;
+
+    if (walk.isBudgetExhausted) {
+      yield notExpandedLine(tag, 'budget');
+      continue;
+    }
 
     const isBeyondDepthLimit = level > walk.maxDepth;
     if (isBeyondDepthLimit) {
@@ -57,7 +61,13 @@ function* renderMentions(bodyMd: string, level: number, walk: Walk): Generator<s
     }
 
     if (mention.kind !== 'note') {
-      yield renderOtherMention(mention.kind, mention.id, walk.lookup);
+      const item = walk.lookup.describeOther(mention.kind, mention.id);
+      if (!item) {
+        yield notResolvedLine(tag);
+        continue;
+      }
+      const pointer = `--- ${tag} → ${mention.kind} "${item.name}" — ${item.toolHint} ---`;
+      yield takeFromBudget(walk, pointer) ? pointer : notExpandedLine(tag, 'budget');
       continue;
     }
 
@@ -72,17 +82,27 @@ function* renderMentions(bodyMd: string, level: number, walk: Walk): Generator<s
       continue;
     }
 
+    const noteBlock = `--- from note ${tag} (${note.title}, ${note.projectId}) ---\n${note.bodyMd}\n--- end ${tag} ---`;
+    if (!takeFromBudget(walk, noteBlock)) {
+      yield notExpandedLine(tag, 'budget');
+      continue;
+    }
+
     walk.expandedNoteIds.add(note.id);
-    yield `--- from note ${tag} (${note.title}, ${note.projectId}) ---\n${note.bodyMd}\n--- end ${tag} ---`;
+    yield noteBlock;
     yield* renderMentions(note.bodyMd, level + 1, walk);
   }
 }
 
-function renderOtherMention(kind: OtherMentionKind, id: string, lookup: MentionLookup): string {
-  const tag = `@${kind}:${id}`;
-  const item = lookup.describeOther(kind, id);
-  if (!item) return notResolvedLine(tag);
-  return `--- ${tag} → ${kind} "${item.name}" — ${item.toolHint} ---`;
+function takeFromBudget(walk: Walk, block: string): boolean {
+  const blockBytes = utf8Bytes(BLOCK_SEPARATOR + block);
+  const blockFits = blockBytes <= walk.bytesLeft;
+  if (!blockFits) {
+    walk.isBudgetExhausted = true;
+    return false;
+  }
+  walk.bytesLeft -= blockBytes;
+  return true;
 }
 
 function findMentions(bodyMd: string): MentionRef[] {
