@@ -30,7 +30,7 @@ test('a fake session appears in the sidebar, shows output, and its permission ga
 
   const secondGate = request.post(`${api}/hooks/${hookToken}`, { data: { session_id: 'x', hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'rm -rf build' } } });
   await page.getByTestId('nav-inbox').click();
-  await expect(page.getByTestId('inbox-item')).toContainText('rm -rf build');
+  await expect(page.getByTestId('inbox-gate-card')).toContainText('rm -rf build');
   await page.getByTestId('inbox-allow').click();
   expect((await (await secondGate).json()).hookSpecificOutput.decision.behavior).toBe('allow');
   await expect(sessionRow.getByTestId('state-chip-label')).toHaveText('generating');

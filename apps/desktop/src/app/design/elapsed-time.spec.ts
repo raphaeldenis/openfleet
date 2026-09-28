@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { elapsedLabel, elapsedSecondsSince } from './elapsed-time';
+import { compactElapsedLabel, elapsedLabel, elapsedSecondsSince } from './elapsed-time';
 
 describe('elapsedSecondsSince', () => {
   it('counts up from a past timestamp to now', () => {
@@ -30,5 +30,29 @@ describe('elapsedLabel', () => {
 
   it('returns nothing to display when there is no elapsed time to show', () => {
     expect(elapsedLabel(null)).toBeNull();
+  });
+});
+
+describe('compactElapsedLabel', () => {
+  it('shows seconds under a minute as "<n> s"', () => {
+    expect(compactElapsedLabel(42)).toBe('42 s');
+  });
+
+  it('shows whole minutes under an hour as "<n> min"', () => {
+    expect(compactElapsedLabel(600)).toBe('10 min');
+    expect(compactElapsedLabel(119)).toBe('1 min');
+  });
+
+  it('shows whole hours under a day as "<n> h"', () => {
+    expect(compactElapsedLabel(7200)).toBe('2 h');
+    expect(compactElapsedLabel(7199)).toBe('1 h');
+  });
+
+  it('shows whole days from a day on as "<n> d"', () => {
+    expect(compactElapsedLabel(3 * 86400 + 5)).toBe('3 d');
+  });
+
+  it('returns nothing to display when there is no elapsed time to show', () => {
+    expect(compactElapsedLabel(null)).toBeNull();
   });
 });

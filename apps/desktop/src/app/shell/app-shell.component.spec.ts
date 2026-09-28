@@ -4,7 +4,9 @@ import { Component, signal } from '@angular/core';
 import { provideRouter, withComponentInputBinding, Router, type Routes } from '@angular/router';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { AppShellComponent } from './app-shell.component';
+import { ApiError, FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
+import { InboxComponent } from '../inbox/inbox.component';
 
 // jsdom doesn't block focus() inside an inert subtree the way the WHATWG spec requires real
 // browsers to: without this shim, a focus() call fired before Angular's change detection removes
@@ -108,6 +110,35 @@ describe('AppShellComponent', () => {
     await harness.fixture.whenStable();
 
     expect(root.querySelector('[data-testid="stub-inbox"]')).toBeTruthy();
+  });
+
+  it('drops the sidebar Inbox badge count when the Inbox dismisses an already-resolved gate', async () => {
+    // Arrange
+    const events = fakeEvents({
+      approvals: [
+        { id: 'a1', sessionId: 's1', toolName: 'Bash', toolInput: {}, status: 'pending', createdAt: 't' },
+        { id: 'a2', sessionId: 's1', toolName: 'Write', toolInput: {}, status: 'pending', createdAt: 't' },
+      ],
+    });
+    const api = { decide: vi.fn().mockRejectedValue(new ApiError(409, 'already_resolved')) };
+    TestBed.configureTestingModule({
+      providers: [
+        provideRouter([{ path: '', component: AppShellComponent, children: [{ path: 'inbox', component: InboxComponent }] }]),
+        { provide: FleetEventsService, useValue: events },
+        { provide: FleetApiService, useValue: api },
+      ],
+    });
+    const harness = await RouterTestingHarness.create('/inbox');
+    const root = harness.routeNativeElement as HTMLElement;
+    const badge = () => root.querySelector('[data-testid="nav-inbox-badge"]');
+    expect(badge()).toHaveTextContent('2');
+
+    // Act
+    (root.querySelector('[data-testid="inbox-allow"]') as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(root.querySelectorAll('[data-testid="inbox-gate-card"]')).toHaveLength(1));
+
+    // Assert
+    expect(badge()).toHaveTextContent('1');
   });
 
   it('renders Component sheet as a real link, staying reachable as a dev route', async () => {
