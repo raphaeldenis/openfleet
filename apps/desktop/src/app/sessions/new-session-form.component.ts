@@ -1,14 +1,15 @@
-import { ChangeDetectionStrategy, Component, computed, DestroyRef, ElementRef, inject, linkedSignal, signal, viewChild } from '@angular/core';
+import { afterNextRender, ChangeDetectionStrategy, Component, computed, DestroyRef, ElementRef, inject, Injector, linkedSignal, signal, viewChild } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { PERMISSION_MODES, type HarnessId, type PermissionMode, type Session } from '@openfleet/shared';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
 import { ManagerFieldsComponent } from '../managers/manager-fields.component';
+import { MODEL_RUNGS } from './model-selector.component';
+import { INHERITED_EXPLANATION, PERMISSION_MODE_EXPLANATIONS } from './permission-mode-picker.component';
 
 type CreationMode = 'session' | 'manager';
 
-const MODEL_RUNGS = ['haiku', 'sonnet', 'opus', 'fable'] as const;
 const NOT_AVAILABLE_YET = 'not available yet';
 const SESSION_DEFAULT_EMOJI = '🤖';
 const MANAGER_DEFAULT_EMOJI = '🧭';
@@ -19,16 +20,6 @@ const HARNESS_OPTIONS: ReadonlyArray<{ id: string; label: string; isAvailable: b
   { id: 'generic-pty', label: 'Generic PTY', isAvailable: false },
 ];
 
-// ponytail: duplicated from PermissionModePickerComponent to avoid a merge conflict with U2b — share it once U2b lands.
-const PERMISSION_MODE_EXPLANATIONS: Record<PermissionMode, string> = {
-  manual: 'asks before risky tools, except those you already allowed in your Claude settings',
-  acceptEdits: 'File edits run without asking; shell and network still gate.',
-  plan: 'Read-only: the agent plans and asks before any change.',
-  auto: 'The harness decides from the project allow-list; unknown tools gate.',
-  dontAsk: 'Gated tools are denied instead of asked — never blocks, never escalates.',
-  bypassPermissions: 'Everything runs. Only for throwaway worktrees; audited and flagged red.',
-};
-const INHERITED_EXPLANATION = 'No mode set: the CLI uses your own default (Claude settings)';
 const INHERITED_MODE = '';
 const PERMISSION_MODES_OFFERED_AT_CREATION = PERMISSION_MODES.filter((mode) => mode !== 'bypassPermissions');
 
@@ -41,12 +32,12 @@ const PERMISSION_MODES_OFFERED_AT_CREATION = PERMISSION_MODES.filter((mode) => m
       <div class="header">
         <h1>{{ isManagerMode() ? 'New manager' : 'New session' }}</h1>
         <div class="mode-toggle" role="group" aria-label="Kind of session">
-          <button type="button" [attr.aria-pressed]="!isManagerMode()" data-testid="new-session-mode-session" (click)="chooseMode('session')">Session</button>
-          <button type="button" [attr.aria-pressed]="isManagerMode()" data-testid="new-session-mode-manager" (click)="chooseMode('manager')">Manager</button>
+          <button type="button" [attr.aria-pressed]="!isManagerMode()" [disabled]="pending()" data-testid="new-session-mode-session" (click)="chooseMode('session')">Session</button>
+          <button type="button" [attr.aria-pressed]="isManagerMode()" [disabled]="pending()" data-testid="new-session-mode-manager" (click)="chooseMode('manager')">Manager</button>
         </div>
       </div>
 
-      <div class="card">
+      <fieldset class="card" [disabled]="pending()">
       <div class="of-section-title">Workspace</div>
       <div class="of-field">
         <label class="of-label" for="new-session-directory">Directory</label>
@@ -92,7 +83,7 @@ const PERMISSION_MODES_OFFERED_AT_CREATION = PERMISSION_MODES.filter((mode) => m
           <span class="of-label">Emoji</span>
           <input class="of-input" data-testid="new-session-emoji" name="emoji" [ngModel]="emoji()" (ngModelChange)="typedEmoji.set($event)" size="2" />
         </label>
-        <div class="of-field of-field--grow">
+        <div class="of-field">
           <label class="of-label" for="new-session-name">Name</label>
           <input #nameInput id="new-session-name" class="of-input" data-testid="new-session-name" name="name" [ngModel]="name()" (ngModelChange)="name.set($event)" placeholder="e.g. Dwalin · T9" [attr.aria-invalid]="nameError() ? 'true' : null" [attr.aria-describedby]="nameError() ? 'new-session-name-error' : null" />
           @if (nameError(); as error) {
@@ -105,7 +96,7 @@ const PERMISSION_MODES_OFFERED_AT_CREATION = PERMISSION_MODES.filter((mode) => m
         <div class="of-section-title">Manager</div>
         <of-manager-fields [(pulseSeconds)]="pulseSeconds" [(childrenCap)]="childrenCap" [(mission)]="mission" />
       }
-      </div>
+      </fieldset>
 
       @if (serverError(); as error) {
         <p role="alert" data-testid="new-session-form-error" class="of-error">✕ {{ error }}</p>
@@ -125,11 +116,11 @@ const PERMISSION_MODES_OFFERED_AT_CREATION = PERMISSION_MODES.filter((mode) => m
     .mode-toggle button { height: 1.625rem; padding: 0 .75rem; border: 0; border-radius: .375rem; background: transparent; color: var(--fg); font: inherit; font-size: .75rem; cursor: pointer }
     .mode-toggle button[aria-pressed='true'] { background: var(--panel) }
     .mode-toggle button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
-    .card { display: flex; flex-direction: column; gap: 1.25rem; padding: 1.25rem; border: 1px solid var(--line); border-radius: .75rem; background: var(--panel) }
+    .card { display: flex; flex-direction: column; gap: 1.25rem; min-width: 0; margin: 0; padding: 1.25rem; border: 1px solid var(--line); border-radius: .75rem; background: var(--panel) }
     .of-error { margin: 0 }
     .of-row { display: flex; gap: 1rem }
     .of-row .of-field { flex: 1 }
-    .of-field--emoji { flex: none; width: 3.5rem }
+    .of-row .of-field--emoji { flex: none; width: 3.5rem }
     .hint { font-size: .6875rem; color: var(--mut) }
     .actions { display: flex; justify-content: flex-end; gap: .5rem }
     .actions .of-btn { height: 2rem }
@@ -142,6 +133,7 @@ export class NewSessionFormComponent {
   private readonly router = inject(Router);
   private readonly route = inject(ActivatedRoute);
   private readonly destroyRef = inject(DestroyRef);
+  private readonly injector = inject(Injector);
   private readonly queryParams = toSignal(this.route.queryParamMap);
   private readonly managerFields = viewChild(ManagerFieldsComponent);
   private readonly directoryInput = viewChild<ElementRef<HTMLInputElement>>('directoryInput');
@@ -158,7 +150,8 @@ export class NewSessionFormComponent {
   protected readonly directory = signal('');
   protected readonly name = signal('');
   protected readonly typedEmoji = signal<string | null>(null);
-  protected readonly emoji = computed(() => this.typedEmoji() ?? (this.isManagerMode() ? MANAGER_DEFAULT_EMOJI : SESSION_DEFAULT_EMOJI));
+  private readonly defaultEmoji = computed(() => (this.isManagerMode() ? MANAGER_DEFAULT_EMOJI : SESSION_DEFAULT_EMOJI));
+  protected readonly emoji = computed(() => this.typedEmoji() ?? this.defaultEmoji());
   protected readonly harness = signal<HarnessId>('claude-cli');
   protected readonly model = signal<string>('sonnet');
   protected readonly permissionMode = signal<PermissionMode | typeof INHERITED_MODE>(INHERITED_MODE);
@@ -190,18 +183,19 @@ export class NewSessionFormComponent {
     if (this.pending()) return;
     this.serverError.set('');
     this.hasSubmitted.set(true);
-    const isDirectoryValid = this.directory().trim() !== '';
-    const isNameValid = this.name().trim() !== '';
+    const isDirectoryValid = !this.directoryError();
+    const isNameValid = !this.nameError();
     const isManagerFieldsValid = !this.isManagerMode() || (this.managerFields()?.validate() ?? false);
-    if (!isDirectoryValid) return this.directoryInput()?.nativeElement.focus();
-    if (!isNameValid) return this.nameInput()?.nativeElement.focus();
-    if (!isManagerFieldsValid) return this.managerFields()?.focusFirstInvalidField();
+    if (!isDirectoryValid) return this.focusAfterRender(() => this.directoryInput()?.nativeElement.focus());
+    if (!isNameValid) return this.focusAfterRender(() => this.nameInput()?.nativeElement.focus());
+    if (!isManagerFieldsValid) return this.focusAfterRender(() => this.managerFields()?.focusFirstInvalidField());
 
+    const createdSessionRoute = this.isManagerMode() ? '/manager' : '/session';
     this.pending.set(true);
     try {
       const session = await this.create();
       if (this.hasBeenDestroyed) return;
-      await this.router.navigate([this.isManagerMode() ? '/manager' : '/session', session.id]);
+      await this.router.navigate([createdSessionRoute, session.id]);
     } catch (error) {
       this.serverError.set(error instanceof ApiError ? error.message : 'Could not create the session — check your connection');
     } finally {
@@ -209,12 +203,16 @@ export class NewSessionFormComponent {
     }
   }
 
+  private focusAfterRender(focus: () => void): void {
+    afterNextRender(focus, { injector: this.injector });
+  }
+
   private create(): Promise<Session> {
     const chosenMode = this.permissionMode();
     const sharedSpec = {
       directory: this.directory().trim(),
       name: this.name().trim(),
-      emoji: this.emoji(),
+      emoji: this.emoji().trim() || this.defaultEmoji(),
       model: this.model(),
       harness: this.harness(),
       ...(chosenMode === INHERITED_MODE ? {} : { permissionMode: chosenMode }),

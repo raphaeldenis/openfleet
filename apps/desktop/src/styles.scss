@@ -73,7 +73,7 @@ body {
   text-transform: uppercase; letter-spacing: .05em;
 }
 .of-field { display: flex; flex-direction: column; gap: .375rem; }
-.of-label { font-size: .875rem; font-weight: 500; }
+.of-label { font-weight: 500; }
 .of-input {
   height: 2rem; padding: 0 .625rem; border: 1px solid var(--line); border-radius: .375rem;
   background: var(--sunk); color: var(--fg); font: inherit; outline: 0;

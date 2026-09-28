@@ -1,5 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
+import { NgForm } from '@angular/forms';
+import { By } from '@angular/platform-browser';
 import { ActivatedRoute, convertToParamMap, provideRouter, Router } from '@angular/router';
 import { BehaviorSubject } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
@@ -76,13 +78,6 @@ describe('NewSessionFormComponent', () => {
     expect(navigateSpy).toHaveBeenCalledWith(['/session', 's-new']);
   });
 
-  it('user does not see the manager fields while creating a plain session', async () => {
-    await renderForm(fakeApi());
-
-    expect(screen.queryByTestId('manager-mission')).toBeNull();
-    expect(screen.queryByTestId('manager-pulse-seconds')).toBeNull();
-  });
-
   it('user can switch to manager mode and sees the pulse, children cap and mission fields', async () => {
     await renderForm(fakeApi());
 
@@ -140,17 +135,6 @@ describe('NewSessionFormComponent', () => {
 
     expect(screen.getByTestId('manager-mission-error')).toBeTruthy();
     expect(api.createManagerSession).not.toHaveBeenCalled();
-  });
-
-  it('user sees a session created without a mission, since a mission only applies to managers', async () => {
-    const api = fakeApi();
-    await renderForm(api);
-
-    await fillSessionFields();
-    await userEvent.click(screen.getByTestId('new-session-submit'));
-
-    expect(screen.queryByTestId('manager-mission-error')).toBeNull();
-    expect(api.createSession).toHaveBeenCalledTimes(1);
   });
 
   it('user can only pick Claude Code as harness, the others are shown as not available yet', async () => {
@@ -231,14 +215,6 @@ describe('NewSessionFormComponent', () => {
     await renderForm(fakeApi());
 
     expect(screen.getByTestId('new-session-cancel')).toHaveAttribute('href', '/');
-  });
-
-  it('gives the emoji, model and permission fields an accessible name for screen reader users', async () => {
-    await renderForm(fakeApi());
-
-    expect(screen.getByRole('textbox', { name: /emoji/i })).toBeTruthy();
-    expect(screen.getByRole('combobox', { name: /model/i })).toBeTruthy();
-    expect(screen.getByRole('combobox', { name: /permission mode/i })).toBeTruthy();
   });
 
   describe('input hygiene', () => {
@@ -357,6 +333,43 @@ describe('NewSessionFormComponent', () => {
       expect(screen.getByTestId('new-session-form-error')).toHaveTextContent('check your connection');
     });
 
+    it.each([
+      ['a session is created and the URL then switches to manager mode', {}, { mode: 'manager' }, '/session'],
+      ['a manager is created and the URL then switches to session mode', { mode: 'manager' }, {}, '/manager'],
+    ])('user is taken to the kind that was submitted when %s during the request', async (_label, initialQueryParams, switchedQueryParams, expectedRoot) => {
+      let resolveCreate!: (session: { id: string }) => void;
+      const pendingCreate = vi.fn(() => new Promise((resolve) => { resolveCreate = resolve; }));
+      const api = fakeApi({ createSession: pendingCreate, createManagerSession: pendingCreate });
+      const { navigateSpy, changeUrlQueryParams } = await renderForm(api, initialQueryParams);
+      await fillSessionFields({ name: 'Lead' });
+      if ('mode' in initialQueryParams) await fillManagerMission();
+      await userEvent.click(screen.getByTestId('new-session-submit'));
+
+      changeUrlQueryParams(switchedQueryParams);
+      resolveCreate({ id: 'created' });
+      await new Promise((resolve) => setTimeout(resolve));
+
+      expect(navigateSpy).toHaveBeenCalledWith([expectedRoot, 'created']);
+    });
+
+    it('user cannot edit any field or switch the kind while the create is pending', async () => {
+      let resolveCreate!: (session: { id: string }) => void;
+      const api = fakeApi({ createManagerSession: vi.fn(() => new Promise((resolve) => { resolveCreate = resolve; })) });
+      await renderForm(api, { mode: 'manager' });
+      await fillSessionFields({ name: 'Lead' });
+      await fillManagerMission();
+
+      await userEvent.click(screen.getByTestId('new-session-submit'));
+
+      const lockedTestIds = [
+        'new-session-directory', 'new-session-name', 'new-session-emoji', 'new-session-harness', 'new-session-model',
+        'new-session-permission-mode', 'manager-pulse-seconds', 'manager-children-cap', 'manager-mission',
+        'new-session-mode-session', 'new-session-mode-manager',
+      ];
+      lockedTestIds.forEach((testId) => expect(screen.getByTestId(testId)).toBeDisabled());
+      resolveCreate({ id: 'm-new' });
+    });
+
     it('user who left the form before the create resolves is not pulled back to the new session', async () => {
       let resolveCreate!: (session: { id: string }) => void;
       const api = fakeApi({ createSession: vi.fn(() => new Promise((resolve) => { resolveCreate = resolve; })) });
@@ -448,20 +461,20 @@ describe('NewSessionFormComponent', () => {
   });
 
   describe('labels', () => {
-    it('gives the directory, name and harness fields an accessible name for screen reader users', async () => {
-      await renderForm(fakeApi());
-
-      expect(screen.getByRole('textbox', { name: /directory/i })).toBeTruthy();
-      expect(screen.getByRole('textbox', { name: /name/i })).toBeTruthy();
-      expect(screen.getByRole('combobox', { name: /harness/i })).toBeTruthy();
-    });
-
-    it('gives the pulse, children cap and mission fields an accessible name for screen reader users', async () => {
+    it.each([
+      ['textbox', /directory/i],
+      ['textbox', /name/i],
+      ['textbox', /emoji/i],
+      ['combobox', /harness/i],
+      ['combobox', /model/i],
+      ['combobox', /permission mode/i],
+      ['spinbutton', /pulse seconds/i],
+      ['spinbutton', /children cap/i],
+      ['textbox', /mission/i],
+    ] as const)('gives the %s named %s an accessible name for screen reader users', async (role, name) => {
       await renderForm(fakeApi(), { mode: 'manager' });
 
-      expect(screen.getByRole('spinbutton', { name: /pulse seconds/i })).toBeTruthy();
-      expect(screen.getByRole('spinbutton', { name: /children cap/i })).toBeTruthy();
-      expect(screen.getByRole('textbox', { name: /mission/i })).toBeTruthy();
+      expect(screen.getByRole(role, { name })).toBeTruthy();
     });
 
     it('keeps the field name as its accessible name while its error is shown', async () => {
@@ -521,6 +534,23 @@ describe('NewSessionFormComponent', () => {
       await userEvent.click(screen.getByTestId('new-session-submit'));
 
       expect(screen.getByTestId('manager-mission')).toHaveFocus();
+    });
+
+    it.each([
+      ['directory', {}, 'new-session-directory', 'new-session-directory-error'],
+      ['mission', { mode: 'manager' }, 'manager-mission', 'manager-mission-error'],
+    ])('user is taken to the %s only once it is rendered as invalid and described by its error', async (_label, queryParams, fieldTestId, errorTestId) => {
+      await renderForm(fakeApi(), queryParams);
+      const field = screen.getByTestId(fieldTestId);
+      if ('mode' in queryParams) await fillSessionFields({ name: 'Lead' });
+      let attributesWhenFocused: { ariaInvalid: string | null; ariaDescribedBy: string | null } | undefined;
+      field.addEventListener('focus', () => {
+        attributesWhenFocused = { ariaInvalid: field.getAttribute('aria-invalid'), ariaDescribedBy: field.getAttribute('aria-describedby') };
+      });
+
+      await userEvent.click(screen.getByTestId('new-session-submit'));
+
+      expect(attributesWhenFocused).toEqual({ ariaInvalid: 'true', ariaDescribedBy: errorTestId });
     });
 
     it('user is taken to the pulse seconds before the mission when both are invalid', async () => {
@@ -587,14 +617,15 @@ describe('NewSessionFormComponent', () => {
       expect(screen.queryByTestId('manager-pulse-seconds-error')).toBeNull();
     });
 
-    it('user sees the children-cap error as soon as the field is left', async () => {
+    it('user sees the mission error clear as soon as a mission is typed', async () => {
       await renderForm(fakeApi(), { mode: 'manager' });
+      await fillSessionFields({ name: 'Lead' });
+      await userEvent.click(screen.getByTestId('new-session-submit'));
+      expect(screen.getByTestId('manager-mission-error')).toBeTruthy();
 
-      await userEvent.clear(screen.getByTestId('manager-children-cap'));
-      await userEvent.type(screen.getByTestId('manager-children-cap'), '65');
-      await userEvent.tab();
+      await fillManagerMission('S');
 
-      expect(screen.getByTestId('manager-children-cap-error')).toBeTruthy();
+      expect(screen.queryByTestId('manager-mission-error')).toBeNull();
     });
 
     it.each([
@@ -677,6 +708,45 @@ describe('NewSessionFormComponent', () => {
       expect(screen.getByTestId('new-session-emoji')).toHaveValue('🤖');
     });
 
+    it.each([
+      ['left empty', ''],
+      ['left as spaces', '   '],
+    ])('creates a session with the default emoji when the emoji is %s', async (_label, typedEmoji) => {
+      const api = fakeApi();
+      await renderForm(api);
+      await fillSessionFields();
+      await userEvent.clear(screen.getByTestId('new-session-emoji'));
+      if (typedEmoji) await userEvent.type(screen.getByTestId('new-session-emoji'), typedEmoji);
+
+      await userEvent.click(screen.getByTestId('new-session-submit'));
+
+      expect(api.createSession).toHaveBeenCalledWith(expect.objectContaining({ emoji: '🤖' }));
+    });
+
+    it('creates a manager with the manager default emoji when the emoji is left empty', async () => {
+      const api = fakeApi();
+      await renderForm(api, { mode: 'manager' });
+      await fillSessionFields({ name: 'Lead' });
+      await fillManagerMission();
+      await userEvent.clear(screen.getByTestId('new-session-emoji'));
+
+      await userEvent.click(screen.getByTestId('new-session-submit'));
+
+      expect(api.createManagerSession).toHaveBeenCalledWith(expect.objectContaining({ emoji: '🧭' }));
+    });
+
+    it('trims the emoji the user typed', async () => {
+      const api = fakeApi();
+      await renderForm(api);
+      await fillSessionFields();
+      await userEvent.clear(screen.getByTestId('new-session-emoji'));
+      await userEvent.type(screen.getByTestId('new-session-emoji'), ' 🚀 ');
+
+      await userEvent.click(screen.getByTestId('new-session-submit'));
+
+      expect(api.createSession).toHaveBeenCalledWith(expect.objectContaining({ emoji: '🚀' }));
+    });
+
     it('keeps the emoji the user typed when the mode is toggled', async () => {
       const api = fakeApi();
       await renderForm(api);
@@ -701,5 +771,7 @@ describe('NewSessionFormComponent', () => {
     const reportedMessages = consoleWarn.mock.calls.map((callArguments) => String(callArguments[0]));
     expect(reportedMessages.filter((message) => message.includes('NG01354'))).toEqual([]);
     consoleWarn.mockRestore();
+    const ngForm = fixture.debugElement.query(By.directive(NgForm)).injector.get(NgForm);
+    expect(Object.keys(ngForm.controls)).toEqual(expect.arrayContaining(['pulseSeconds', 'childrenCap', 'mission']));
   });
 });

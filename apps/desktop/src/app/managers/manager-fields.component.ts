@@ -5,8 +5,9 @@ const PULSE_SECONDS_BOUNDS = { min: 1, max: 86_400 };
 const CHILDREN_CAP_BOUNDS = { min: 1, max: 64 };
 const MISSION_MAX_BYTES = 64 * 1024;
 
-function isIntegerWithinBounds(value: number, bounds: { min: number; max: number }): boolean {
-  return Number.isInteger(value) && value >= bounds.min && value <= bounds.max;
+function boundedIntegerError(label: string, value: number, bounds: { min: number; max: number }): string {
+  const isWholeNumberWithinBounds = Number.isInteger(value) && value >= bounds.min && value <= bounds.max;
+  return isWholeNumberWithinBounds ? '' : `${label} must be a whole number between ${bounds.min} and ${bounds.max}`;
 }
 
 function utf8ByteLength(text: string): number {
@@ -24,7 +25,7 @@ function utf8ByteLength(text: string): number {
         <label class="of-label" for="manager-pulse-seconds">Pulse seconds</label>
         <input
           #pulseSecondsInput id="manager-pulse-seconds" class="of-input" data-testid="manager-pulse-seconds" name="pulseSeconds" type="number"
-          [ngModel]="pulseSeconds()" (ngModelChange)="onPulseSecondsChange($event)" (blur)="validatePulseSeconds()"
+          [ngModel]="pulseSeconds()" (ngModelChange)="onPulseSecondsChange($event)"
           placeholder="Pulse seconds" [attr.min]="pulseSecondsBounds.min" [attr.max]="pulseSecondsBounds.max"
           [attr.aria-invalid]="pulseSecondsError() ? 'true' : null"
           [attr.aria-describedby]="pulseSecondsError() ? 'manager-pulse-seconds-error' : null"
@@ -37,7 +38,7 @@ function utf8ByteLength(text: string): number {
         <label class="of-label" for="manager-children-cap">Children cap</label>
         <input
           #childrenCapInput id="manager-children-cap" class="of-input" data-testid="manager-children-cap" name="childrenCap" type="number"
-          [ngModel]="childrenCap()" (ngModelChange)="onChildrenCapChange($event)" (blur)="validateChildrenCap()"
+          [ngModel]="childrenCap()" (ngModelChange)="onChildrenCapChange($event)"
           placeholder="Children cap" [attr.min]="childrenCapBounds.min" [attr.max]="childrenCapBounds.max"
           [attr.aria-invalid]="childrenCapError() ? 'true' : null"
           [attr.aria-describedby]="childrenCapError() ? 'manager-children-cap-error' : null"
@@ -51,7 +52,7 @@ function utf8ByteLength(text: string): number {
       <label class="of-label" for="manager-mission">Mission</label>
       <textarea
         #missionInput id="manager-mission" class="of-input of-input--textarea" data-testid="manager-mission" name="mission" [ngModel]="mission()"
-        (ngModelChange)="mission.set($event)" placeholder="Mission" [attr.aria-invalid]="missionError() ? 'true' : null"
+        (ngModelChange)="onMissionChange($event)" placeholder="Mission" [attr.aria-invalid]="missionError() ? 'true' : null"
         [attr.aria-describedby]="missionError() ? 'manager-mission-error' : null"
       ></textarea>
       @if (missionError(); as error) {
@@ -101,18 +102,17 @@ export class ManagerFieldsComponent {
     this.validateChildrenCap();
   }
 
-  protected validatePulseSeconds(): void {
-    const isPulseSecondsValid = isIntegerWithinBounds(this.pulseSeconds(), PULSE_SECONDS_BOUNDS);
-    this.pulseSecondsError.set(isPulseSecondsValid
-      ? ''
-      : `Pulse seconds must be a whole number between ${PULSE_SECONDS_BOUNDS.min} and ${PULSE_SECONDS_BOUNDS.max}`);
+  protected onMissionChange(value: string): void {
+    this.mission.set(value);
+    this.validateMission();
   }
 
-  protected validateChildrenCap(): void {
-    const isChildrenCapValid = isIntegerWithinBounds(this.childrenCap(), CHILDREN_CAP_BOUNDS);
-    this.childrenCapError.set(isChildrenCapValid
-      ? ''
-      : `Children cap must be a whole number between ${CHILDREN_CAP_BOUNDS.min} and ${CHILDREN_CAP_BOUNDS.max}`);
+  private validatePulseSeconds(): void {
+    this.pulseSecondsError.set(boundedIntegerError('Pulse seconds', this.pulseSeconds(), PULSE_SECONDS_BOUNDS));
+  }
+
+  private validateChildrenCap(): void {
+    this.childrenCapError.set(boundedIntegerError('Children cap', this.childrenCap(), CHILDREN_CAP_BOUNDS));
   }
 
   private validateMission(): void {
