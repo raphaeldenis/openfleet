@@ -664,4 +664,42 @@ describe('NewSessionFormComponent', () => {
       expect(api.createManagerSession).toHaveBeenCalledTimes(1);
     });
   });
+
+  describe('emoji default', () => {
+    it('follows the mode while the user has not typed an emoji', async () => {
+      await renderForm(fakeApi());
+      expect(screen.getByTestId('new-session-emoji')).toHaveValue('🤖');
+
+      await userEvent.click(screen.getByTestId('new-session-mode-manager'));
+      expect(screen.getByTestId('new-session-emoji')).toHaveValue('🧭');
+
+      await userEvent.click(screen.getByTestId('new-session-mode-session'));
+      expect(screen.getByTestId('new-session-emoji')).toHaveValue('🤖');
+    });
+
+    it('keeps the emoji the user typed when the mode is toggled', async () => {
+      const api = fakeApi();
+      await renderForm(api);
+      await userEvent.clear(screen.getByTestId('new-session-emoji'));
+      await userEvent.type(screen.getByTestId('new-session-emoji'), '🚀');
+
+      await userEvent.click(screen.getByTestId('new-session-mode-manager'));
+      await userEvent.click(screen.getByTestId('new-session-mode-session'));
+      await userEvent.click(screen.getByTestId('new-session-mode-manager'));
+
+      expect(screen.getByTestId('new-session-emoji')).toHaveValue('🚀');
+    });
+  });
+
+  it('registers every manager field with the form without Angular reporting NG01354', async () => {
+    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { fixture } = await renderForm(fakeApi());
+
+    await userEvent.click(screen.getByTestId('new-session-mode-manager'));
+    await fixture.whenStable();
+
+    const reportedMessages = consoleWarn.mock.calls.map((callArguments) => String(callArguments[0]));
+    expect(reportedMessages.filter((message) => message.includes('NG01354'))).toEqual([]);
+    consoleWarn.mockRestore();
+  });
 });

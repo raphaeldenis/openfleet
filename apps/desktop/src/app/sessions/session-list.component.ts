@@ -53,7 +53,8 @@ import { ManagerCardComponent } from '../managers/manager-card.component';
     </div>
   `,
   styles: `
-    .sessions { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column }
+    :host { display: flex; flex-direction: column; flex: 1; min-height: 0 }
+    .sessions { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto }
     .children { list-style: none; padding: 0 0 0 1.6rem; margin: 0 0 0 .75rem; border-left: 1px solid var(--line-2); display: flex; flex-direction: column }
     .row {
       display: flex; align-items: center; justify-content: space-between; gap: .5rem;
@@ -64,7 +65,7 @@ import { ManagerCardComponent } from '../managers/manager-card.component';
     .row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
     .row .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
     .row .meta { display: flex; align-items: center; gap: .375rem; flex: none; font-size: .6875rem; color: var(--faint); font-family: var(--mono) }
-    .new-links { display: flex; gap: .375rem; padding: .6rem }
+    .new-links { display: flex; flex: none; gap: .375rem; padding: .6rem }
     .new-links a { flex: 1; justify-content: center; text-decoration: none }
   `,
 })

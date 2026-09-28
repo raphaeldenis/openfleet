@@ -1,5 +1,5 @@
 import { ChangeDetectionStrategy, Component, ElementRef, model, signal, viewChild } from '@angular/core';
-import { FormsModule } from '@angular/forms';
+import { ControlContainer, FormsModule, NgForm } from '@angular/forms';
 
 const PULSE_SECONDS_BOUNDS = { min: 1, max: 86_400 };
 const CHILDREN_CAP_BOUNDS = { min: 1, max: 64 };
@@ -17,6 +17,7 @@ function utf8ByteLength(text: string): number {
   selector: 'of-manager-fields',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [FormsModule],
+  viewProviders: [{ provide: ControlContainer, useExisting: NgForm }],
   template: `
     <div class="of-row">
       <div class="of-field">
@@ -59,7 +60,7 @@ function utf8ByteLength(text: string): number {
     </div>
   `,
   styles: `
-    :host { display: flex; flex-direction: column; gap: .625rem }
+    :host { display: flex; flex-direction: column; gap: 1.25rem }
     .of-row { display: flex; gap: 1rem }
     .of-row .of-field { flex: 1 }
   `,

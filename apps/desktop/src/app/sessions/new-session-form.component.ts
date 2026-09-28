@@ -10,6 +10,8 @@ type CreationMode = 'session' | 'manager';
 
 const MODEL_RUNGS = ['haiku', 'sonnet', 'opus', 'fable'] as const;
 const NOT_AVAILABLE_YET = 'not available yet';
+const SESSION_DEFAULT_EMOJI = '🤖';
+const MANAGER_DEFAULT_EMOJI = '🧭';
 const HARNESS_OPTIONS: ReadonlyArray<{ id: string; label: string; isAvailable: boolean }> = [
   { id: 'claude-cli', label: 'Claude Code', isAvailable: true },
   { id: 'codex', label: 'Codex', isAvailable: false },
@@ -37,13 +39,14 @@ const PERMISSION_MODES_OFFERED_AT_CREATION = PERMISSION_MODES.filter((mode) => m
   template: `
     <form class="of-form" data-testid="new-session-form" (ngSubmit)="submit()" novalidate>
       <div class="header">
-        <h2>{{ isManagerMode() ? 'New manager' : 'New session' }}</h2>
+        <h1>{{ isManagerMode() ? 'New manager' : 'New session' }}</h1>
         <div class="mode-toggle" role="group" aria-label="Kind of session">
-          <button type="button" class="of-btn" [class.of-btn--primary]="!isManagerMode()" [class.of-btn--secondary]="isManagerMode()" [attr.aria-pressed]="!isManagerMode()" data-testid="new-session-mode-session" (click)="chooseMode('session')">Session</button>
-          <button type="button" class="of-btn" [class.of-btn--primary]="isManagerMode()" [class.of-btn--secondary]="!isManagerMode()" [attr.aria-pressed]="isManagerMode()" data-testid="new-session-mode-manager" (click)="chooseMode('manager')">Manager</button>
+          <button type="button" [attr.aria-pressed]="!isManagerMode()" data-testid="new-session-mode-session" (click)="chooseMode('session')">Session</button>
+          <button type="button" [attr.aria-pressed]="isManagerMode()" data-testid="new-session-mode-manager" (click)="chooseMode('manager')">Manager</button>
         </div>
       </div>
 
+      <div class="card">
       <div class="of-section-title">Workspace</div>
       <div class="of-field">
         <label class="of-label" for="new-session-directory">Directory</label>
@@ -87,7 +90,7 @@ const PERMISSION_MODES_OFFERED_AT_CREATION = PERMISSION_MODES.filter((mode) => m
       <div class="of-row">
         <label class="of-field of-field--emoji">
           <span class="of-label">Emoji</span>
-          <input class="of-input" data-testid="new-session-emoji" name="emoji" [ngModel]="emoji()" (ngModelChange)="emoji.set($event)" size="2" />
+          <input class="of-input" data-testid="new-session-emoji" name="emoji" [ngModel]="emoji()" (ngModelChange)="typedEmoji.set($event)" size="2" />
         </label>
         <div class="of-field of-field--grow">
           <label class="of-label" for="new-session-name">Name</label>
@@ -102,6 +105,7 @@ const PERMISSION_MODES_OFFERED_AT_CREATION = PERMISSION_MODES.filter((mode) => m
         <div class="of-section-title">Manager</div>
         <of-manager-fields [(pulseSeconds)]="pulseSeconds" [(childrenCap)]="childrenCap" [(mission)]="mission" />
       }
+      </div>
 
       @if (serverError(); as error) {
         <p role="alert" data-testid="new-session-form-error" class="of-error">✕ {{ error }}</p>
@@ -113,16 +117,23 @@ const PERMISSION_MODES_OFFERED_AT_CREATION = PERMISSION_MODES.filter((mode) => m
     </form>
   `,
   styles: `
-    :host { display: block; flex: 1; min-width: 0; padding: 1.25rem }
-    .of-form { display: flex; flex-direction: column; gap: .75rem; max-width: 45rem; padding: 1.25rem; border: 1px solid var(--line); border-radius: .75rem; background: var(--panel) }
-    .header { display: flex; align-items: center; justify-content: space-between; gap: 1rem }
-    h2 { margin: 0; font-size: 1.125rem }
-    .mode-toggle { display: flex; gap: .25rem }
+    :host { display: flex; flex: 1; align-items: flex-start; justify-content: center; min-width: 0; padding: 1.5rem 1rem 3rem }
+    .of-form { display: flex; flex-direction: column; gap: 1.25rem; width: 46rem; max-width: 100% }
+    .header { display: flex; align-items: center; gap: 1rem }
+    h1 { flex: 1; margin: 0; font-size: 1.25rem; font-weight: 600; letter-spacing: -.01em }
+    .mode-toggle { display: flex; padding: .125rem; border: 1px solid var(--line); border-radius: .5rem; background: var(--sunk) }
+    .mode-toggle button { height: 1.625rem; padding: 0 .75rem; border: 0; border-radius: .375rem; background: transparent; color: var(--fg); font: inherit; font-size: .75rem; cursor: pointer }
+    .mode-toggle button[aria-pressed='true'] { background: var(--panel) }
+    .mode-toggle button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
+    .card { display: flex; flex-direction: column; gap: 1.25rem; padding: 1.25rem; border: 1px solid var(--line); border-radius: .75rem; background: var(--panel) }
+    .of-error { margin: 0 }
     .of-row { display: flex; gap: 1rem }
     .of-row .of-field { flex: 1 }
     .of-field--emoji { flex: none; width: 3.5rem }
     .hint { font-size: .6875rem; color: var(--mut) }
     .actions { display: flex; justify-content: flex-end; gap: .5rem }
+    .actions .of-btn { height: 2rem }
+    .actions .of-btn--primary { padding: 0 1rem }
     .actions a { display: inline-flex; align-items: center; text-decoration: none }
   `,
 })
@@ -146,7 +157,8 @@ export class NewSessionFormComponent {
   protected readonly isManagerMode = computed(() => this.mode() === 'manager');
   protected readonly directory = signal('');
   protected readonly name = signal('');
-  protected readonly emoji = linkedSignal(() => (this.isManagerMode() ? '🧭' : '🤖'));
+  protected readonly typedEmoji = signal<string | null>(null);
+  protected readonly emoji = computed(() => this.typedEmoji() ?? (this.isManagerMode() ? MANAGER_DEFAULT_EMOJI : SESSION_DEFAULT_EMOJI));
   protected readonly harness = signal<HarnessId>('claude-cli');
   protected readonly model = signal<string>('sonnet');
   protected readonly permissionMode = signal<PermissionMode | typeof INHERITED_MODE>(INHERITED_MODE);
