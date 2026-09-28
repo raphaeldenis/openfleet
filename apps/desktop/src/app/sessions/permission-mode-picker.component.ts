@@ -4,7 +4,7 @@ import { PERMISSION_MODES, type PermissionMode, type SessionState } from '@openf
 import { FleetApiService } from '../core/fleet-api.service';
 import { runGuarded } from '../core/run-guarded';
 
-const EXPLANATION: Record<PermissionMode, string> = {
+export const PERMISSION_MODE_EXPLANATIONS: Record<PermissionMode, string> = {
   manual: 'asks before risky tools, except those you already allowed in your Claude settings',
   acceptEdits: 'File edits run without asking; shell and network still gate.',
   plan: 'Read-only: the agent plans and asks before any change.',
@@ -14,7 +14,7 @@ const EXPLANATION: Record<PermissionMode, string> = {
 };
 
 const INHERITED_LABEL = 'inherited';
-const INHERITED_EXPLANATION = 'No mode set: the CLI uses your own default (Claude settings)';
+export const INHERITED_EXPLANATION ='No mode set: the CLI uses your own default (Claude settings)';
 const PERMISSION_MODE_SWITCH_ERROR = 'Could not change permission mode — try again.';
 
 const SWITCH_STATUS_LABEL: Record<'relaunching' | 'deferred', string> = {
@@ -67,12 +67,12 @@ export class PermissionModePickerComponent {
   private readonly api = inject(FleetApiService);
 
   protected readonly modes = PERMISSION_MODES;
-  protected readonly bypassWarning = EXPLANATION.bypassPermissions;
+  protected readonly bypassWarning = PERMISSION_MODE_EXPLANATIONS.bypassPermissions;
   protected readonly label = computed(() => this.currentMode() ?? INHERITED_LABEL);
   protected readonly isDangerous = computed(() => this.currentMode() === 'bypassPermissions');
   protected readonly explanation = computed(() => {
     const mode = this.currentMode();
-    return mode ? EXPLANATION[mode] : INHERITED_EXPLANATION;
+    return mode ? PERMISSION_MODE_EXPLANATIONS[mode] : INHERITED_EXPLANATION;
   });
 
   chosenMode: PermissionMode = 'manual';

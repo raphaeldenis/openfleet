@@ -269,10 +269,11 @@ describe('AppShellComponent', () => {
     const sessions = root.querySelector('[data-testid="app-nav"] .sessions') as HTMLElement;
     const helmList = root.querySelector('[data-testid="app-nav"] .helm-list') as HTMLElement;
 
+    const sessionRows = sessions.querySelector('ul.sessions') as HTMLElement;
     const sessionsStyle = getComputedStyle(sessions);
     const helmListStyle = getComputedStyle(helmList);
 
-    expect(sessionsStyle.overflowY).toBe('auto');
+    expect(getComputedStyle(sessionRows).overflowY).toBe('auto');
     expect(sessionsStyle.minHeight).toBe('0px');
     expect(sessionsStyle.flexGrow).toBe('2');
     expect(helmListStyle.overflowY).toBe('auto');
@@ -280,14 +281,27 @@ describe('AppShellComponent', () => {
     expect(helmListStyle.flexGrow).toBe('1.4');
   });
 
-  it('scrolls the Sessions region internally even with zero sessions, so the tall new-session/new-manager forms never spill onto the Helm list below', async () => {
-    const { root } = await setUp({ sessions: [] });
-    const sessions = root.querySelector('[data-testid="app-nav"] .sessions') as HTMLElement;
-    const sessionListHost = root.querySelector('[data-testid="app-nav"] of-session-list') as HTMLElement;
+  it('pins the new-session and new-manager links outside the scrolling session rows so many sessions never push them out of reach', async () => {
+    const manySessions = Array.from({ length: 40 }, (_, index) => ({ id: `s${index}`, name: `Session ${index}`, emoji: '🤖', state: 'idle' }));
+    const { root } = await setUp({ sessions: manySessions });
+    const sessionsRegion = root.querySelector('[data-testid="app-nav"] .sessions') as HTMLElement;
+    const scrollingRows = sessionsRegion.querySelector('ul.sessions') as HTMLElement;
+    const newSessionLink = root.querySelector('[data-testid="new-session-link"]') as HTMLElement;
+    const newManagerLink = root.querySelector('[data-testid="new-manager-link"]') as HTMLElement;
 
-    const sessionsStyle = getComputedStyle(sessions);
-    expect(sessionsStyle.overflowY).toBe('auto');
-    expect(sessions.contains(sessionListHost.querySelector('of-new-manager-form'))).toBe(true);
+    const isScrollContainer = (element: HTMLElement) => ['auto', 'scroll'].includes(getComputedStyle(element).overflowY);
+    const scrollContainersAbove = (link: HTMLElement) => {
+      const containers: HTMLElement[] = [];
+      for (let ancestor = link.parentElement; ancestor && ancestor !== sessionsRegion.parentElement; ancestor = ancestor.parentElement) {
+        if (isScrollContainer(ancestor)) containers.push(ancestor);
+      }
+      return containers;
+    };
+
+    expect(isScrollContainer(scrollingRows)).toBe(true);
+    expect(scrollingRows.contains(newSessionLink)).toBe(false);
+    expect(scrollContainersAbove(newSessionLink)).toEqual([]);
+    expect(scrollContainersAbove(newManagerLink)).toEqual([]);
   });
 
   it('badges the Helm Inbox row with the pending approvals count, hidden when there are none', async () => {

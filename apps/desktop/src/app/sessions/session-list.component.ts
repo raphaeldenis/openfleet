@@ -1,17 +1,14 @@
 import { Component, inject, output } from '@angular/core';
 import { NgTemplateOutlet } from '@angular/common';
-import { FormsModule } from '@angular/forms';
-import { Router } from '@angular/router';
+import { Router, RouterLink } from '@angular/router';
 import { MANAGER_ROLE, type Session } from '@openfleet/shared';
-import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { StateChipComponent } from '../design/state-chip.component';
 import { ManagerCardComponent } from '../managers/manager-card.component';
-import { NewManagerFormComponent } from '../managers/new-manager-form.component';
 
 @Component({
   selector: 'of-session-list',
-  imports: [FormsModule, NgTemplateOutlet, StateChipComponent, ManagerCardComponent, NewManagerFormComponent],
+  imports: [RouterLink, NgTemplateOutlet, StateChipComponent, ManagerCardComponent],
   template: `
     <ul class="sessions">
       @for (session of roots(); track session.id) {
@@ -50,16 +47,14 @@ import { NewManagerFormComponent } from '../managers/new-manager-form.component'
         }
       }
     </ng-template>
-    <form (ngSubmit)="create()">
-      <input name="directory" [(ngModel)]="directory" placeholder="/path/to/worktree" required />
-      <input name="name" [(ngModel)]="name" placeholder="Name" required />
-      <input name="emoji" [(ngModel)]="emoji" size="2" />
-      <button type="submit" class="of-btn of-btn--secondary">+ New session</button>
-    </form>
-    <of-new-manager-form />
+    <div class="new-links">
+      <a class="of-btn of-btn--secondary" routerLink="/new" data-testid="new-session-link">+ New session</a>
+      <a class="of-btn of-btn--secondary" routerLink="/new" [queryParams]="{ mode: 'manager' }" data-testid="new-manager-link">+ New manager</a>
+    </div>
   `,
   styles: `
-    .sessions { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column }
+    :host { display: flex; flex-direction: column; flex: 1; min-height: 0 }
+    .sessions { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto }
     .children { list-style: none; padding: 0 0 0 1.6rem; margin: 0 0 0 .75rem; border-left: 1px solid var(--line-2); display: flex; flex-direction: column }
     .row {
       display: flex; align-items: center; justify-content: space-between; gap: .5rem;
@@ -70,17 +65,14 @@ import { NewManagerFormComponent } from '../managers/new-manager-form.component'
     .row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
     .row .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
     .row .meta { display: flex; align-items: center; gap: .375rem; flex: none; font-size: .6875rem; color: var(--faint); font-family: var(--mono) }
-    form { display: flex; flex-direction: column; gap: .4rem; padding: .6rem }
+    .new-links { display: flex; flex: none; gap: .375rem; padding: .6rem }
+    .new-links a { flex: 1; justify-content: center; text-decoration: none }
   `,
 })
 export class SessionListComponent {
   readonly events = inject(FleetEventsService);
-  private readonly api = inject(FleetApiService);
   private readonly router = inject(Router);
   readonly selected = output<string>();
-  directory = '';
-  name = '';
-  emoji = '🤖';
 
   roots(): Session[] {
     const sessions = this.events.sessions();
@@ -104,10 +96,5 @@ export class SessionListComponent {
       return;
     }
     this.selected.emit(session.id);
-  }
-
-  async create(): Promise<void> {
-    await this.api.createSession({ directory: this.directory, name: this.name, emoji: this.emoji });
-    this.name = '';
   }
 }
