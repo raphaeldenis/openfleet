@@ -17,15 +17,6 @@ const MODEL_RUNGS: ReadonlyArray<{ rung: string; description: string }> = [
   { rung: 'fable', description: 'Experimental rung' },
 ];
 
-const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(['127.0.0.1', 'localhost', '::1']);
-
-function isLoopbackAddress(address: string): boolean {
-  const url = `http://${address}`;
-  if (!URL.canParse(url)) return false;
-  const host = new URL(url).hostname.replace(/^\[|\]$/g, '');
-  return LOOPBACK_HOSTS.has(host);
-}
-
 function isModelTable(body: unknown): body is Record<string, string> {
   return typeof body === 'object' && body !== null && !Array.isArray(body);
 }
@@ -75,7 +66,7 @@ function isModelTable(body: unknown): body is Record<string, string> {
             <h1>Daemon</h1>
             <div class="rows">
               <div class="row">
-                <div class="label"><span class="name">Address</span>@if (isDaemonLocal) {<span class="detail">Local only</span>}</div>
+                <div class="label"><span class="name">Address</span><span class="detail">Local only</span></div>
                 <span class="value mono" data-testid="daemon-address">{{ daemonAddress }}</span>
               </div>
               <div class="row">
@@ -117,7 +108,6 @@ export class SettingsComponent {
   protected readonly rungs = MODEL_RUNGS;
   protected readonly daemonAddress = environment.daemonAddress;
   protected readonly tabPanelId = 'settings-tabpanel';
-  protected readonly isDaemonLocal = isLoopbackAddress(environment.daemonAddress);
   protected readonly isAdminTokenFound = environment.adminToken.trim() !== '';
 
   protected readonly activeTab = signal<SettingsTab>('models');
