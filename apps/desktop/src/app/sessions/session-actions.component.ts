@@ -1,7 +1,7 @@
-import { ChangeDetectionStrategy, Component, ElementRef, computed, effect, inject, input, signal, viewChild } from '@angular/core';
+import { ChangeDetectionStrategy, Component, ElementRef, Injector, afterNextRender, computed, effect, inject, input, signal, viewChild } from '@angular/core';
+import type { WritableSignal } from '@angular/core';
 import type { SessionState } from '@openfleet/shared';
 import { FleetApiService } from '../core/fleet-api.service';
-import { runGuarded } from '../core/run-guarded';
 
 const CLOSE_CONFIRM_BODY =
   'The process stops. The worktree, branch and transcript are kept; you can reopen it later with its history.';
@@ -72,6 +72,7 @@ export class SessionActionsComponent {
   readonly sessionName = input.required<string>();
   readonly modelSwitchPending = input(false);
   private readonly api = inject(FleetApiService);
+  private readonly injector = inject(Injector);
 
   protected readonly closeConfirmBody = CLOSE_CONFIRM_BODY;
   protected readonly closeConfirmPendingSwitchWarning = CLOSE_CONFIRM_PENDING_SWITCH_WARNING;
@@ -93,10 +94,12 @@ export class SessionActionsComponent {
       if (this.confirmingClose()) this.cancelButton()?.nativeElement.focus();
     });
     // A route param change reuses this component instance, so a session switch must not leave a
-    // stale confirm dialog (or a previous session's close error) showing over the new session.
+    // stale confirm dialog, close error or in-flight flag showing over the new session.
     effect(() => {
       this.sessionId();
       this.confirmingClose.set(false);
+      this.closing.set(false);
+      this.interrupting.set(false);
       this.error.set(null);
     });
   }
@@ -109,7 +112,8 @@ export class SessionActionsComponent {
 
   cancelClose(): void {
     this.confirmingClose.set(false);
-    this.closeTrigger()?.nativeElement.focus();
+    // The trigger sits under `[attr.inert]` until this signal write renders; focus only lands after that.
+    afterNextRender(() => this.closeTrigger()?.nativeElement.focus(), { injector: this.injector });
   }
 
   confirmClose(): void {
@@ -132,10 +136,35 @@ export class SessionActionsComponent {
   }
 
   private async close(sessionId: string): Promise<void> {
-    await runGuarded(this.closing, this.error, CLOSE_ERROR, async () => { await this.api.closeSession(sessionId); });
+    await this.runForSession({ sessionId, busy: this.closing, failureMessage: CLOSE_ERROR, action: () => this.api.closeSession(sessionId) });
   }
 
   async interrupt(): Promise<void> {
-    await runGuarded(this.interrupting, this.error, INTERRUPT_ERROR, async () => { await this.api.sendInput(this.sessionId(), ESCAPE_KEY); });
+    const sessionId = this.sessionId();
+    await this.runForSession({ sessionId, busy: this.interrupting, failureMessage: INTERRUPT_ERROR, action: () => this.api.sendInput(sessionId, ESCAPE_KEY) });
+  }
+
+  // Unlike runGuarded, a settle for a session the user has since left touches nothing: the busy flag and
+  // error already belong to whichever session is current, so it must neither show its error nor reset its flag.
+  private async runForSession(request: {
+    sessionId: string;
+    busy: WritableSignal<boolean>;
+    failureMessage: string;
+    action: () => Promise<unknown>;
+  }): Promise<void> {
+    const { sessionId, busy, failureMessage, action } = request;
+    if (busy()) return;
+    busy.set(true);
+    this.error.set(null);
+    let failed = false;
+    try {
+      await action();
+    } catch {
+      failed = true;
+    }
+    const isStale = this.sessionId() !== sessionId;
+    if (isStale) return;
+    if (failed) this.error.set(failureMessage);
+    busy.set(false);
   }
 }

@@ -1,10 +1,23 @@
 import { render, screen, waitFor, fireEvent } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
 import { inputBinding, signal } from '@angular/core';
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { SessionState } from '@openfleet/shared';
 import { SessionActionsComponent } from './session-actions.component';
 import { FleetApiService } from '../core/fleet-api.service';
+
+// jsdom lets focus() land inside an inert subtree, where a real browser drops it onto <body>; this
+// shim reproduces the browser so a focus() fired before Angular removes `inert` fails here too.
+const nativeFocus = HTMLElement.prototype.focus;
+beforeAll(() => {
+  HTMLElement.prototype.focus = function focusUnlessInert(this: HTMLElement, options?: FocusOptions): void {
+    if (this.closest('[inert]')) return;
+    nativeFocus.call(this, options);
+  };
+});
+afterAll(() => {
+  HTMLElement.prototype.focus = nativeFocus;
+});
 
 function bindingsFor(state: SessionState, options: { sessionName?: string; modelSwitchPending?: boolean } = {}) {
   const { sessionName = 'Gimli · T6', modelSwitchPending = false } = options;
@@ -247,6 +260,134 @@ describe('SessionActionsComponent', () => {
       await userEvent.click(screen.getByTestId('close-confirm-submit'));
 
       await waitFor(() => expect(screen.getByTestId('session-action-error')).toHaveTextContent(/could not close/i));
+    });
+  });
+
+  describe('switching session while a request is pending', () => {
+    function deferred() {
+      let resolve: (value: unknown) => void = () => {};
+      let reject: (reason: unknown) => void = () => {};
+      const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+      return { promise, resolve, reject };
+    }
+
+    async function renderSwitchable(api: { closeSession: ReturnType<typeof vi.fn>; sendInput: ReturnType<typeof vi.fn> }) {
+      const sessionId = signal('s1');
+      const { fixture } = await render(SessionActionsComponent, {
+        bindings: [
+          inputBinding('sessionId', sessionId),
+          inputBinding('state', () => 'generating' as const),
+          inputBinding('sessionName', () => 'Gimli · T6'),
+          inputBinding('modelSwitchPending', () => false),
+        ],
+        providers: [{ provide: FleetApiService, useValue: api }],
+      });
+      const switchTo = async (id: string) => {
+        sessionId.set(id);
+        await fixture.whenStable();
+      };
+      const settle = async () => {
+        await new Promise((resolve) => setTimeout(resolve));
+        await fixture.whenStable();
+      };
+      return { switchTo, settle };
+    }
+
+    async function confirmCloseOnCurrentSession() {
+      await userEvent.click(screen.getByTestId('session-close'));
+      await userEvent.click(screen.getByTestId('close-confirm-submit'));
+    }
+
+    it('re-enables Close on the new session while the previous session close is still pending', async () => {
+      const closeOnS1 = deferred();
+      const api = { closeSession: vi.fn(() => closeOnS1.promise), sendInput: vi.fn() };
+      const { switchTo } = await renderSwitchable(api);
+      await confirmCloseOnCurrentSession();
+      expect(screen.getByTestId('session-close')).toHaveAttribute('disabled');
+
+      await switchTo('s2');
+
+      expect(screen.getByTestId('session-close')).not.toHaveAttribute('disabled');
+    });
+
+    it('re-enables Interrupt on the new session while the previous session interrupt is still pending', async () => {
+      const interruptOnS1 = deferred();
+      const api = { closeSession: vi.fn(), sendInput: vi.fn(() => interruptOnS1.promise) };
+      const { switchTo } = await renderSwitchable(api);
+      fireEvent.click(screen.getByTestId('session-interrupt'));
+      await waitFor(() => expect(screen.getByTestId('session-interrupt')).toHaveAttribute('disabled'));
+
+      await switchTo('s2');
+
+      expect(screen.getByTestId('session-interrupt')).not.toHaveAttribute('disabled');
+    });
+
+    it('does not show the previous session close error on the new session', async () => {
+      const closeOnS1 = deferred();
+      const api = { closeSession: vi.fn(() => closeOnS1.promise), sendInput: vi.fn() };
+      const { switchTo, settle } = await renderSwitchable(api);
+      await confirmCloseOnCurrentSession();
+      await switchTo('s2');
+
+      closeOnS1.reject(new Error('boom'));
+      await closeOnS1.promise.catch(() => {});
+      await settle();
+
+      expect(screen.queryByTestId('session-action-error')).toBeNull();
+    });
+
+    it('does not show the previous session interrupt error on the new session', async () => {
+      const interruptOnS1 = deferred();
+      const api = { closeSession: vi.fn(), sendInput: vi.fn(() => interruptOnS1.promise) };
+      const { switchTo, settle } = await renderSwitchable(api);
+      fireEvent.click(screen.getByTestId('session-interrupt'));
+      await switchTo('s2');
+
+      interruptOnS1.reject(new Error('boom'));
+      await interruptOnS1.promise.catch(() => {});
+      await settle();
+
+      expect(screen.queryByTestId('session-action-error')).toBeNull();
+    });
+
+    it('keeps Close disabled on the new session while its own close is pending, when the previous session close settles', async () => {
+      const closeOnS1 = deferred();
+      const closeOnS2 = deferred();
+      const api = {
+        closeSession: vi.fn((id: string) => (id === 's1' ? closeOnS1.promise : closeOnS2.promise)),
+        sendInput: vi.fn(),
+      };
+      const { switchTo, settle } = await renderSwitchable(api);
+      await confirmCloseOnCurrentSession();
+      await switchTo('s2');
+      await confirmCloseOnCurrentSession();
+      expect(api.closeSession).toHaveBeenLastCalledWith('s2');
+
+      closeOnS1.resolve({});
+      await closeOnS1.promise;
+      await settle();
+
+      expect(screen.getByTestId('session-close')).toHaveAttribute('disabled');
+    });
+
+    it('keeps Interrupt disabled on the new session while its own interrupt is pending, when the previous session interrupt settles', async () => {
+      const interruptOnS1 = deferred();
+      const interruptOnS2 = deferred();
+      const api = {
+        closeSession: vi.fn(),
+        sendInput: vi.fn((id: string) => (id === 's1' ? interruptOnS1.promise : interruptOnS2.promise)),
+      };
+      const { switchTo, settle } = await renderSwitchable(api);
+      fireEvent.click(screen.getByTestId('session-interrupt'));
+      await switchTo('s2');
+      fireEvent.click(screen.getByTestId('session-interrupt'));
+      await waitFor(() => expect(api.sendInput).toHaveBeenLastCalledWith('s2', '\x1b'));
+
+      interruptOnS1.resolve({});
+      await interruptOnS1.promise;
+      await settle();
+
+      expect(screen.getByTestId('session-interrupt')).toHaveAttribute('disabled');
     });
   });
 
