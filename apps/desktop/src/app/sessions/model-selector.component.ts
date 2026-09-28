@@ -1,8 +1,9 @@
-import { ChangeDetectionStrategy, Component, computed, effect, inject, input, output, signal, untracked } from '@angular/core';
+import { ChangeDetectionStrategy, Component, DestroyRef, computed, effect, inject, input, output, signal, untracked } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import type { SessionState } from '@openfleet/shared';
 import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
+import { PendingSwitchesService } from '../core/pending-switches.service';
 import { runGuarded } from '../core/run-guarded';
 
 const MODEL_SWITCH_ERROR = 'Could not switch model — try again.';
@@ -46,6 +47,8 @@ export class ModelSelectorComponent {
   readonly pendingModelSwitch = output<boolean>();
   private readonly events = inject(FleetEventsService);
   private readonly api = inject(FleetApiService);
+  private readonly pendingSwitches = inject(PendingSwitchesService);
+  private shownSessionId: string | undefined;
   // The session's current model rarely matches one of the fixed rungs exactly (it is a full model id,
   // e.g. 'claude-opus-5-5', not the short alias 'opus') — add it as its own option instead of forcing
   // the select onto a rung that would silently apply a different model.
@@ -70,21 +73,25 @@ export class ModelSelectorComponent {
   private readonly sawStartingSinceSwitch = signal(false);
 
   constructor() {
-    // A route param change reuses this component instance, so a session switch must not leak
-    // the previous session's in-flight state or result into the one now shown.
+    // A route param change reuses this component instance: the session being left keeps its pending
+    // switch in the service, the session arriving gets its own back.
     effect(() => {
-      this.sessionId();
+      const sessionId = this.sessionId();
+      untracked(() => this.parkPendingSwitchOfShownSession());
+      this.shownSessionId = sessionId;
+      const pending = this.pendingSwitches.recall(sessionId, 'model');
       const currentModel = untracked(() => this.session()?.model) ?? 'sonnet';
-      this.chosenRung = currentModel;
-      this.confirmedRung = currentModel;
+      this.chosenRung = pending?.requestedValue ?? currentModel;
+      this.confirmedRung = this.chosenRung;
       this.applying.set(false);
-      this.switchStatus.set(null);
+      this.switchStatus.set(pending?.status ?? null);
       this.switchError.set(null);
-      this.modelBeforeSwitch.set(undefined);
-      this.stateBeforeSwitch.set(undefined);
-      this.sawStartingSinceSwitch.set(false);
-      this.pendingModelSwitch.emit(false);
+      this.modelBeforeSwitch.set(pending ? pending.valueBeforeSwitch : undefined);
+      this.stateBeforeSwitch.set(pending?.stateBeforeSwitch);
+      this.sawStartingSinceSwitch.set(pending?.sawStartingSinceSwitch ?? false);
+      this.pendingModelSwitch.emit(pending?.status === 'deferred');
     });
+    inject(DestroyRef).onDestroy(() => this.parkPendingSwitchOfShownSession());
 
     // Clears "restarting…" / "switch pending" once the relaunch it describes has actually settled
     // (passed through 'starting' and moved on) or the session reached idle/closed since the request,
@@ -106,11 +113,23 @@ export class ModelSelectorComponent {
       this.modelBeforeSwitch.set(undefined);
       this.stateBeforeSwitch.set(undefined);
       this.sawStartingSinceSwitch.set(false);
+      this.pendingModelSwitch.emit(false);
     });
   }
 
   session() {
     return this.events.sessions().find((s) => s.id === this.sessionId());
+  }
+
+  private parkPendingSwitchOfShownSession(): void {
+    if (this.shownSessionId === undefined) return;
+    this.pendingSwitches.park(this.shownSessionId, 'model', {
+      status: this.switchStatus(),
+      requestedValue: this.confirmedRung,
+      valueBeforeSwitch: this.modelBeforeSwitch(),
+      stateBeforeSwitch: this.stateBeforeSwitch(),
+      sawStartingSinceSwitch: this.sawStartingSinceSwitch(),
+    });
   }
 
   statusLabel(status: 'relaunching' | 'deferred'): string {

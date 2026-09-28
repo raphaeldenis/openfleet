@@ -41,6 +41,12 @@ describe('SessionHeaderComponent', () => {
     expect(screen.getByTestId('session-harness')).toHaveTextContent('claude-cli');
   });
 
+  it('truncates a name wider than the field with an ellipsis instead of clipping it', async () => {
+    const session = baseSession({ name: 'Gimli · T6 · make the desktop client reconnect to the daemon with exponential backoff' });
+    await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
+    expect(getComputedStyle(screen.getByTestId('session-name-input')).textOverflow).toBe('ellipsis');
+  });
+
   it('renames the session when the name field is committed', async () => {
     const session = baseSession();
     const api = fakeApi({ renameSession: vi.fn().mockResolvedValue({ ...session, name: 'Gimli · T7' }) });
@@ -241,8 +247,6 @@ describe('SessionHeaderComponent', () => {
     await waitFor(() => expect(renameSession).toHaveBeenCalledTimes(2));
 
     rejectA(new Error('boom'));
-    // Let session A's rejected promise unwind through every `await` hop before asserting.
-    await new Promise((resolve) => setTimeout(resolve, 0));
     await fixture.whenStable();
 
     expect(screen.queryByTestId('session-rename-error')).toBeNull();
