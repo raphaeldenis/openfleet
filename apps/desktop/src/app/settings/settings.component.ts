@@ -106,10 +106,12 @@ const MODEL_TABLE_EDIT_HINT ='Read-only. To change a rung, edit models in ~/.ope
     </div>
   `,
   styles: `
-    .settings { flex: 1; display: flex; min-height: 0; }
+    :host { display: flex; flex: 1 1 0%; min-width: 0; min-height: 0; }
+    .settings { flex: 1; display: flex; min-width: 0; min-height: 0; }
     .tabs { width: 13rem; flex: none; padding: .75rem .5rem; border-right: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; gap: .0625rem; }
     .tab { height: 1.75rem; display: flex; align-items: center; padding: 0 .625rem; border: 0; border-radius: .375rem; background: transparent; color: var(--fg); font: inherit; text-align: left; cursor: pointer; }
     .tab.active { background: var(--active); }
+    .tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
     .content { flex: 1; min-width: 0; overflow: auto; padding: 1.25rem 1.5rem 3rem; }
     .panel { max-width: 40rem; display: flex; flex-direction: column; gap: 1rem; }
     h1 { margin: 0; font-size: 1.125rem; font-weight: 600; }
@@ -119,10 +121,10 @@ const MODEL_TABLE_EDIT_HINT ='Read-only. To change a rung, edit models in ~/.ope
     .label { flex: 1; display: flex; flex-direction: column; }
     .name { font-weight: 500; }
     .detail { font-size: .75rem; color: var(--mut); }
-    .value { min-width: 8rem; padding: .3125rem .625rem; border: 1px solid var(--line); border-radius: .375rem; background: var(--sunk); font-size: .75rem; }
+    .value { height: 1.75rem; min-width: 8rem; display: inline-flex; align-items: center; padding: 0 .625rem; border: 1px solid var(--line); border-radius: .375rem; background: var(--sunk); font-size: .75rem; }
     .mono { font-family: var(--mono); }
     .hint { margin: 0; font-size: .75rem; color: var(--mut); cursor: help; }
-    .error { margin: 0; color: var(--s-err); }
+    .error { margin: 0; color: var(--state-error); }
   `,
 })
 export class SettingsComponent {
