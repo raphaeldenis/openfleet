@@ -25,6 +25,17 @@ const REOPEN_ERROR_MESSAGES: Record<string, string> = {
 };
 export const GENERIC_REOPEN_ERROR = 'Could not resume the session — try again.';
 
+// The exit codes the daemon stamps on a session whose resume never came up
+// (packages/core/src/sessions/sessionService.ts: RESUME_TIMEOUT_EXIT_CODE, RESUME_LAUNCH_FAILED_EXIT_CODE).
+const RESUME_FAILURE_REASONS: Record<number, string> = {
+  [-1]: 'The harness did not come up in time — the resume timed out.',
+  [-2]: 'The harness failed to launch on resume.',
+};
+
+export function resumeFailureReasonFor(exitCode: number | undefined): string | undefined {
+  return exitCode === undefined ? undefined : RESUME_FAILURE_REASONS[exitCode];
+}
+
 export function reopenErrorMessage(code: string | undefined): string {
   return (code && REOPEN_ERROR_MESSAGES[code]) || GENERIC_REOPEN_ERROR;
 }

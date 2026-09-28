@@ -5,9 +5,13 @@ import { FleetEventsService } from '../core/fleet-events.service';
 import { BannerComponent, BannerVariant } from '../design/banner.component';
 import { ComposerComponent } from './composer.component';
 import { PermissionGateCardComponent } from './permission-gate-card.component';
-import { closeStatusFor, reopenErrorMessage } from './session-close-status';
+import { closeStatusFor, reopenErrorMessage, resumeFailureReasonFor } from './session-close-status';
 import { SessionHeaderComponent } from './session-header.component';
 import { TerminalComponent } from './terminal.component';
+
+const REOPEN_FRESH_UNAVAILABLE_TOOLTIP = 'Not available yet — the daemon cannot relaunch a session without its previous conversation.';
+
+type LifecycleBanner = { kind: 'resuming' } | { kind: 'resume_failed'; reason: string };
 
 @Component({
   selector: 'of-session-view',
@@ -17,6 +21,23 @@ import { TerminalComponent } from './terminal.component';
     @if (session(); as s) {
       <div class="session-view" data-testid="session-view">
         <of-session-header [session]="s" />
+        @if (lifecycleBanner(); as banner) {
+          @if (banner.kind === 'resuming') {
+            <div class="lifecycle-banner" data-testid="lifecycle-banner" data-variant="resuming" role="status">
+              <span class="lifecycle-title">↻ Resuming…</span>
+              <span class="lifecycle-body">Reattaching to the same conversation in the same worktree.</span>
+            </div>
+          } @else {
+            <div class="lifecycle-banner" data-testid="lifecycle-banner" data-variant="error" role="alert">
+              <span class="lifecycle-title">✕ Resume failed</span>
+              <span class="lifecycle-body" data-testid="resume-error">{{ banner.reason }}</span>
+              <button type="button" class="of-btn of-btn--primary" data-testid="resume-retry" (click)="resume(s.id)">↻ Retry</button>
+              <button type="button" class="of-btn of-btn--secondary" data-testid="resume-failed-reopen-fresh" disabled [attr.title]="reopenFreshUnavailableTooltip">
+                Reopen fresh
+              </button>
+            </div>
+          }
+        }
         <div class="terminal-area">
           <of-terminal [sessionId]="s.id" />
           @if (pendingApproval(); as approval) {
@@ -26,12 +47,12 @@ import { TerminalComponent } from './terminal.component';
         @if (s.state === 'closed') {
           <div class="closed-footer" data-testid="session-closed-footer">
             <of-banner [variant]="closedVariant(s)" [title]="closedTitle(s)" [description]="closedDescription(s)" />
-            <button type="button" class="of-btn of-btn--secondary" data-testid="resume-session" [disabled]="resuming()" (click)="resume(s.id)">
-              ↻ Resume
+            <button type="button" class="of-btn of-btn--primary" data-testid="resume-session" [disabled]="resuming()" (click)="resume(s.id)">
+              ↻ Resume in worktree
             </button>
-            @if (resumeError(); as error) {
-              <span role="alert" data-testid="resume-error" class="of-error">✕ {{ error }}</span>
-            }
+            <button type="button" class="of-btn of-btn--secondary" data-testid="reopen-fresh-session" disabled [attr.title]="reopenFreshUnavailableTooltip">
+              Reopen fresh
+            </button>
           </div>
         } @else {
           <of-composer [sessionId]="s.id" [busy]="s.state === 'generating'" />
@@ -45,6 +66,15 @@ import { TerminalComponent } from './terminal.component';
     .session-view { display: flex; flex-direction: column; height: 100%; min-height: 0; }
     .terminal-area { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: .625rem; padding: .5rem; }
     .closed-footer { display: flex; align-items: center; gap: .625rem; padding: .5rem .75rem; }
+    .lifecycle-banner {
+      display: flex; align-items: center; gap: .75rem; padding: .5rem 1rem;
+      border-bottom: 1px solid var(--line); font-size: .75rem;
+      --lifecycle-color: var(--state-generating);
+      background: color-mix(in oklch, var(--lifecycle-color) 10%, var(--panel));
+    }
+    .lifecycle-banner[data-variant='error'] { --lifecycle-color: var(--state-error); }
+    .lifecycle-title { flex: none; color: var(--lifecycle-color); font-weight: 600; font-family: var(--mono); }
+    .lifecycle-body { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   `,
 })
 export class SessionViewComponent {
@@ -55,6 +85,19 @@ export class SessionViewComponent {
   protected readonly resumeError = signal<string | null>(null);
 
   protected readonly session = computed(() => this.events.sessions().find((s) => s.id === this.sessionId()));
+
+  protected readonly reopenFreshUnavailableTooltip = REOPEN_FRESH_UNAVAILABLE_TOOLTIP;
+
+  protected readonly lifecycleBanner = computed<LifecycleBanner | undefined>(() => {
+    const session = this.session();
+    if (!session) return undefined;
+    const isReopenRequestInFlight = this.resuming();
+    const isClosedSessionRelaunching = session.state === 'starting' && session.closedAt !== undefined;
+    if (isReopenRequestInFlight || isClosedSessionRelaunching) return { kind: 'resuming' };
+    if (session.state !== 'closed') return undefined;
+    const reason = this.resumeError() ?? resumeFailureReasonFor(session.exitCode);
+    return reason ? { kind: 'resume_failed', reason } : undefined;
+  });
 
   protected readonly pendingApproval = computed(() => {
     const session = this.session();

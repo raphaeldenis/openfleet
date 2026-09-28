@@ -245,6 +245,149 @@ describe('SessionViewComponent', () => {
     expect(screen.getByTestId('session-interrupt')).toBeTruthy();
   });
 
+  describe('resume lifecycle banners', () => {
+    const CLOSED_AT = '2026-09-26T10:00:00.000Z';
+
+    it('shows a Resuming banner while the daemon relaunches a session that had closed', async () => {
+      await render(SessionViewComponent, {
+        bindings: [inputBinding('sessionId', () => 's1')],
+        providers: [{ provide: FleetApiService, useValue: fakeApi() }, { provide: FleetEventsService, useValue: fakeEvents([session({ state: 'starting', closedAt: CLOSED_AT })]) }],
+      });
+
+      const banner = screen.getByTestId('lifecycle-banner');
+      expect(banner).toHaveAttribute('data-variant', 'resuming');
+      expect(banner).toHaveTextContent('Resuming…');
+    });
+
+    it('shows no lifecycle banner for a brand-new session that is starting for the first time', async () => {
+      await render(SessionViewComponent, {
+        bindings: [inputBinding('sessionId', () => 's1')],
+        providers: [{ provide: FleetApiService, useValue: fakeApi() }, { provide: FleetEventsService, useValue: fakeEvents([session({ state: 'starting' })]) }],
+      });
+
+      expect(screen.queryByTestId('lifecycle-banner')).toBeNull();
+    });
+
+    it('shows the Resuming banner from the click until the reopen request answers, before any daemon event lands', async () => {
+      let resolveReopen: (value: unknown) => void = () => {};
+      const api = fakeApi();
+      api.reopenSession = vi.fn(() => new Promise((resolve) => { resolveReopen = resolve; }));
+      await render(SessionViewComponent, {
+        bindings: [inputBinding('sessionId', () => 's1')],
+        providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: fakeEvents([session({ state: 'closed', exitCode: 0, closedAt: CLOSED_AT })]) }],
+      });
+
+      await userEvent.click(screen.getByTestId('resume-session'));
+      expect(screen.getByTestId('lifecycle-banner')).toHaveTextContent('Resuming…');
+
+      resolveReopen({});
+      await waitFor(() => expect(screen.queryByTestId('lifecycle-banner')).toBeNull());
+    });
+
+    it('follows the real daemon event order: starting appears, then goes away once the resumed session is idle', async () => {
+      const events = fakeEvents([session({ state: 'closed', exitCode: 0, closedAt: CLOSED_AT })]);
+      const { fixture } = await render(SessionViewComponent, {
+        bindings: [inputBinding('sessionId', () => 's1')],
+        providers: [{ provide: FleetApiService, useValue: fakeApi() }, { provide: FleetEventsService, useValue: events }],
+      });
+      expect(screen.queryByTestId('lifecycle-banner')).toBeNull();
+
+      events.sessions.set([session({ state: 'starting', exitCode: undefined, closedAt: CLOSED_AT })]);
+      await fixture.whenStable();
+      expect(screen.getByTestId('lifecycle-banner')).toHaveTextContent('Resuming…');
+
+      events.sessions.set([session({ state: 'idle', exitCode: undefined, closedAt: CLOSED_AT })]);
+      await fixture.whenStable();
+      expect(screen.queryByTestId('lifecycle-banner')).toBeNull();
+    });
+
+    it('shows a Resume failed banner with the reason when the reopen request is rejected', async () => {
+      const api = fakeApi();
+      api.reopenSession = vi.fn().mockRejectedValue(new ApiError(409, 'boom', 'directory_missing'));
+      await render(SessionViewComponent, {
+        bindings: [inputBinding('sessionId', () => 's1')],
+        providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: fakeEvents([session({ state: 'closed', exitCode: 0, closedAt: CLOSED_AT })]) }],
+      });
+
+      await userEvent.click(screen.getByTestId('resume-session'));
+
+      await waitFor(() => expect(screen.getByTestId('lifecycle-banner')).toHaveAttribute('data-variant', 'error'));
+      expect(screen.getByTestId('lifecycle-banner')).toHaveTextContent('Resume failed');
+      expect(screen.getByTestId('resume-error')).toHaveTextContent("This session's directory no longer exists");
+    });
+
+    it.each([
+      [-1, 'timed out'],
+      [-2, 'failed to launch'],
+    ] as const)('shows a Resume failed banner for a session the daemon closed with resume exit code %i', async (exitCode, reason) => {
+      await render(SessionViewComponent, {
+        bindings: [inputBinding('sessionId', () => 's1')],
+        providers: [{ provide: FleetApiService, useValue: fakeApi() }, { provide: FleetEventsService, useValue: fakeEvents([session({ state: 'closed', exitCode, closedAt: CLOSED_AT })]) }],
+      });
+
+      expect(screen.getByTestId('lifecycle-banner')).toHaveTextContent('Resume failed');
+      expect(screen.getByTestId('resume-error')).toHaveTextContent(reason);
+    });
+
+    it('does not call an ordinary non-zero exit a failed resume', async () => {
+      await render(SessionViewComponent, {
+        bindings: [inputBinding('sessionId', () => 's1')],
+        providers: [{ provide: FleetApiService, useValue: fakeApi() }, { provide: FleetEventsService, useValue: fakeEvents([session({ state: 'closed', exitCode: 1, closedAt: CLOSED_AT })]) }],
+      });
+
+      expect(screen.queryByTestId('lifecycle-banner')).toBeNull();
+    });
+
+    it('retries the reopen from the Resume failed banner and swaps it for the Resuming banner', async () => {
+      let resolveRetry: (value: unknown) => void = () => {};
+      const api = fakeApi();
+      api.reopenSession = vi.fn()
+        .mockRejectedValueOnce(new ApiError(500, 'boom', 'launch_failed'))
+        .mockImplementationOnce(() => new Promise((resolve) => { resolveRetry = resolve; }));
+      await render(SessionViewComponent, {
+        bindings: [inputBinding('sessionId', () => 's1')],
+        providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: fakeEvents([session({ state: 'closed', exitCode: 0, closedAt: CLOSED_AT })]) }],
+      });
+      await userEvent.click(screen.getByTestId('resume-session'));
+      await waitFor(() => expect(screen.getByTestId('lifecycle-banner')).toHaveTextContent('Resume failed'));
+
+      await userEvent.click(screen.getByTestId('resume-retry'));
+
+      expect(api.reopenSession).toHaveBeenCalledTimes(2);
+      expect(screen.getByTestId('lifecycle-banner')).toHaveTextContent('Resuming…');
+      resolveRetry({});
+    });
+
+    it('offers Reopen fresh on the Resume failed banner as a disabled action explaining the missing backend', async () => {
+      await render(SessionViewComponent, {
+        bindings: [inputBinding('sessionId', () => 's1')],
+        providers: [{ provide: FleetApiService, useValue: fakeApi() }, { provide: FleetEventsService, useValue: fakeEvents([session({ state: 'closed', exitCode: -1, closedAt: CLOSED_AT })]) }],
+      });
+
+      const reopenFresh = screen.getByTestId('resume-failed-reopen-fresh') as HTMLButtonElement;
+      expect(reopenFresh.disabled).toBe(true);
+      expect(reopenFresh.title).toMatch(/not available yet/i);
+    });
+  });
+
+  describe('closed footer call-to-actions', () => {
+    it.each([
+      ['closed', 0],
+      ['closed_error', 1],
+    ] as const)('offers "Resume in worktree" and a disabled "Reopen fresh" for a %s session', async (_variant, exitCode) => {
+      await render(SessionViewComponent, {
+        bindings: [inputBinding('sessionId', () => 's1')],
+        providers: [{ provide: FleetApiService, useValue: fakeApi() }, { provide: FleetEventsService, useValue: fakeEvents([session({ state: 'closed', exitCode })]) }],
+      });
+
+      expect(screen.getByTestId('resume-session')).toHaveTextContent('Resume in worktree');
+      const reopenFresh = screen.getByTestId('reopen-fresh-session') as HTMLButtonElement;
+      expect(reopenFresh).toHaveTextContent('Reopen fresh');
+      expect(reopenFresh.disabled).toBe(true);
+      expect(reopenFresh.title).toMatch(/not available yet/i);
+    });
+  });
+
   it('shows a not-found message when the session id matches nothing in the snapshot', async () => {
     await render(SessionViewComponent, {
       bindings: [inputBinding('sessionId', () => 'missing')],
