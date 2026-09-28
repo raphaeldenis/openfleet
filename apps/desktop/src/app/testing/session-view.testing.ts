@@ -28,6 +28,26 @@ export const withoutRealTerminal = {
   },
 };
 
+export const RENDER_FRAME_MS = 20;
+
+/**
+ * Returns an `elapse(ms)` for a fixture under fake timers: it advances the clock by `ms`, then waits for the render.
+ * A timer that fires on the very last millisecond schedules a render that only a further tick of the clock runs, so while
+ * the render is pending the clock moves one render frame at a time instead of leaving `whenStable` waiting on a frozen clock.
+ */
+export function fakeClockElapser(fixture: Pick<Rendered, 'whenStable'>) {
+  return async (ms: number) => {
+    await vi.advanceTimersByTimeAsync(ms);
+    let isRendered = false;
+    const rendered = fixture.whenStable().then(() => {
+      isRendered = true;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    while (!isRendered) await vi.advanceTimersByTimeAsync(RENDER_FRAME_MS);
+    await rendered;
+  };
+}
+
 export function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;

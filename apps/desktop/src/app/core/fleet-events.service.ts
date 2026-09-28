@@ -41,6 +41,10 @@ export class FleetEventsService {
   // messageIds whose message.delivered event has already arrived — a composer showing "queued" for its
   // own messageId flips to "sent" once that id lands here.
   readonly deliveredMessageIds = signal<ReadonlySet<string>>(new Set());
+  /** Ids of the sessions whose terminal just received fresh output: a replay of past output is not fresh. */
+  readonly liveOutputSessionIds = new Subject<string>();
+  /** Ids of the sessions the user just sent keystrokes to through their terminal. */
+  readonly typedInSessionIds = new Subject<string>();
   private readonly outputBySession = new Map<string, Subject<string>>();
   private socket?: WebSocket;
   private reconnectDelayMs = INITIAL_RECONNECT_DELAY_MS;
@@ -81,7 +85,10 @@ export class FleetEventsService {
     return subject;
   }
 
-  sendInput(sessionId: string, data: string): void { this.socket?.send(JSON.stringify({ type: 'input', sessionId, data })); }
+  sendInput(sessionId: string, data: string): void {
+    this.typedInSessionIds.next(sessionId);
+    this.socket?.send(JSON.stringify({ type: 'input', sessionId, data }));
+  }
   sendResize(sessionId: string, cols: number, rows: number): void { this.socket?.send(JSON.stringify({ type: 'resize', sessionId, cols, rows })); }
   sendAttach(sessionId: string): void { this.socket?.send(JSON.stringify({ type: 'attach', sessionId })); }
 
@@ -97,7 +104,10 @@ export class FleetEventsService {
       case 'session.state': return this.patchSession(event.sessionId, { state: event.state, stateSince: event.stateSince });
       case 'session.closed': return this.patchSession(event.sessionId, { state: 'closed', exitCode: event.exitCode });
       case 'session.updated': return this.upsertSession(event.session);
-      case 'session.output': return this.output(event.sessionId).next(event.data);
+      case 'session.output':
+        this.output(event.sessionId).next(event.data);
+        this.liveOutputSessionIds.next(event.sessionId);
+        return;
       case 'session.replay': return this.output(event.sessionId).next(event.data);
       case 'session.model_changed': return this.patchSession(event.sessionId, { model: event.model });
       case 'session.permission_mode_changed': return this.patchSession(event.sessionId, { permissionMode: event.mode });

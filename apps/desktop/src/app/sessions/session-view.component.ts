@@ -39,6 +39,12 @@ type ClosedStrip = ClosedStripCopy & { role: 'alert' | null };
               <span class="lifecycle-body">Reattaching to the same conversation in the same worktree.</span>
             </div>
           }
+          @if (isEarlyEscapeHintShown()) {
+            <div class="lifecycle-banner" data-testid="early-escape-hint" data-variant="hint">
+              <span class="lifecycle-title"><span aria-hidden="true">↩</span> Cancelled before a reply?</span>
+              <span class="lifecycle-body">Claude may have put your prompt back — press Enter in the terminal to resend it, or edit it first.</span>
+            </div>
+          }
         </div>
         @if (lifecycleBanner(); as banner) {
           @if (banner.kind === 'resume_failed') {
@@ -49,12 +55,6 @@ type ClosedStrip = ClosedStripCopy & { role: 'alert' | null };
               <ng-container [ngTemplateOutlet]="reopenFreshUnavailable" [ngTemplateOutletContext]="{ $implicit: 'resume-failed-reopen-fresh' }" />
             </div>
           }
-        }
-        @if (isEarlyEscapeHintShown()) {
-          <div class="lifecycle-banner" data-testid="early-escape-hint" data-variant="hint" role="status">
-            <span class="lifecycle-title">↩ Cancelled before a reply?</span>
-            <span class="lifecycle-body">Claude put your prompt back — press Enter in the terminal to resend it, or edit it first.</span>
-          </div>
         }
         <div class="terminal-area">
           <of-terminal [sessionId]="s.id" />

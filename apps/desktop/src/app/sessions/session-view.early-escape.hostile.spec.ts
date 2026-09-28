@@ -1,17 +1,16 @@
-import { fireEvent, render, screen } from '@testing-library/angular/zoneless';
+import { fireEvent, render, screen, within } from '@testing-library/angular/zoneless';
 import { inputBinding, signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ServerEvent, Session } from '@openfleet/shared';
 import { SessionViewComponent } from './session-view.component';
 import { FleetApiService } from '../core/fleet-api.service';
-import { connectFakeDaemon, withoutRealTerminal } from '../testing/session-view.testing';
+import { FleetEventsService } from '../core/fleet-events.service';import { connectFakeDaemon, fakeClockElapser, RENDER_FRAME_MS, withoutRealTerminal } from '../testing/session-view.testing';
 
 const ESCAPE_KEY = '\x1b';
 const COMPOSER_REDRAW = '\x1b[2K❯ hi';
 const SPINNER_FRAME = '\x1b[2K✻ Thinking…';
 const KEYSTROKE_ECHO = 'x';
-const RENDER_FRAME_MS = 20;
 const QUIET_MS = 4000;
 const GENEROUS_QUIET_MS = 10_000;
 
@@ -39,10 +38,7 @@ async function renderViewing({ api = fakeApi(), sessions = [gimli(), boromir()] 
   const daemon = connectFakeDaemon(fixture);
   await daemon.send({ type: 'snapshot', sessions, approvals: [], managers: [] });
   vi.useFakeTimers();
-  const elapse = async (ms: number) => {
-    await vi.advanceTimersByTimeAsync(ms);
-    await fixture.whenStable();
-  };
+  const elapse = fakeClockElapser(fixture);
   const send = async (event: ServerEvent) => {
     await Promise.all([daemon.send(event), vi.advanceTimersByTimeAsync(RENDER_FRAME_MS)]);
   };
@@ -56,7 +52,11 @@ async function renderViewing({ api = fakeApi(), sessions = [gimli(), boromir()] 
     sessionId.set(id);
     await elapse(RENDER_FRAME_MS);
   };
-  return { api, fixture, elapse, output, pressInterrupt, replay, send, viewSession };
+  const typeInTerminal = async (keys: string) => {
+    fixture.debugElement.injector.get(FleetEventsService).sendInput('s1', keys);
+    await output(keys);
+  };
+  return { api, fixture, elapse, output, pressInterrupt, replay, send, typeInTerminal, viewSession };
 }
 
 const hint = () => screen.queryByTestId('early-escape-hint');
@@ -79,6 +79,18 @@ describe('early-escape hint — timing', () => {
 
     // Assert
     expect(justBefore).toBeNull();
+    expect(hint()).not.toBeNull();
+  });
+
+  it('appears when the clock stops on the very millisecond the 4 s are up', async () => {
+    // Arrange
+    const { pressInterrupt, elapse } = await renderViewing();
+    await pressInterrupt();
+
+    // Act
+    await elapse(QUIET_MS);
+
+    // Assert
     expect(hint()).not.toBeNull();
   });
 
@@ -194,20 +206,64 @@ describe('early-escape hint — what the user does after the Escape', () => {
     expect(hint()).toBeNull();
   });
 
-  it('the user types a few characters then pauses: the terminal is quiet again, so the hint comes back (spec: any output restarts the wait)', async () => {
+  it('the user types a few characters while the hint shows, then pauses: the hint does not come back while they edit', async () => {
+    // Arrange
+    const { pressInterrupt, typeInTerminal, elapse } = await renderViewing();
+    await pressInterrupt();
+    await elapse(GENEROUS_QUIET_MS);
+    expect(hint()).not.toBeNull();
+
+    // Act
+    await typeInTerminal(KEYSTROKE_ECHO);
+    await elapse(GENEROUS_QUIET_MS);
+
+    // Assert
+    expect(hint()).toBeNull();
+  });
+
+  it('the user starts editing the restored prompt before the 4 s are up: the hint never shows', async () => {
+    // Arrange
+    const { pressInterrupt, typeInTerminal, elapse } = await renderViewing();
+    await pressInterrupt();
+    await elapse(2000);
+
+    // Act
+    await typeInTerminal(KEYSTROKE_ECHO);
+    await elapse(GENEROUS_QUIET_MS);
+
+    // Assert
+    expect(hint()).toBeNull();
+  });
+
+  it('the user resent the prompt after the hint showed: 4 s of silence in the middle of the new turn shows no false hint', async () => {
     // Arrange
     const { pressInterrupt, output, elapse } = await renderViewing();
     await pressInterrupt();
     await elapse(GENEROUS_QUIET_MS);
+    expect(hint()).not.toBeNull();
 
     // Act
-    await output(KEYSTROKE_ECHO);
-    await elapse(QUIET_MS - RENDER_FRAME_MS - 100);
-    const whileStillTyping = hint();
-    await elapse(200);
+    await output(SPINNER_FRAME);
+    await elapse(GENEROUS_QUIET_MS);
 
     // Assert
-    expect(whileStillTyping).toBeNull();
+    expect(hint()).toBeNull();
+  });
+
+  it('a second Interrupt after the hint went away arms the watch again', async () => {
+    // Arrange
+    const { pressInterrupt, output, elapse } = await renderViewing();
+    await pressInterrupt();
+    await elapse(GENEROUS_QUIET_MS);
+    await output(SPINNER_FRAME);
+    await elapse(GENEROUS_QUIET_MS);
+    expect(hint()).toBeNull();
+
+    // Act
+    await pressInterrupt();
+    await elapse(GENEROUS_QUIET_MS);
+
+    // Assert
     expect(hint()).not.toBeNull();
   });
 });
@@ -285,7 +341,7 @@ describe('early-escape hint — several sessions', () => {
     expect(hint()).not.toBeNull();
   });
 
-  it('coming back to Gimli remounts its terminal, whose replay counts as output: the hint blinks off and returns once the terminal is quiet again (spec)', async () => {
+  it('coming back to Gimli remounts its terminal, whose replay is not activity: the hint stays up, without blinking', async () => {
     // Arrange
     const { pressInterrupt, elapse, viewSession, replay } = await renderViewing();
     await pressInterrupt();
@@ -299,7 +355,23 @@ describe('early-escape hint — several sessions', () => {
     await elapse(QUIET_MS);
 
     // Assert
-    expect(rightAfterTheReplay).toBeNull();
+    expect(rightAfterTheReplay).not.toBeNull();
+    expect(hint()).not.toBeNull();
+  });
+
+  it('a replay that lands before the 4 s are up does not restart the wait', async () => {
+    // Arrange
+    const { pressInterrupt, elapse, viewSession, replay } = await renderViewing();
+    await pressInterrupt();
+    await viewSession('s2');
+    await viewSession('s1');
+    await elapse(2000);
+
+    // Act
+    await replay(COMPOSER_REDRAW);
+    await elapse(QUIET_MS - 2000);
+
+    // Assert
     expect(hint()).not.toBeNull();
   });
 
@@ -489,7 +561,7 @@ describe('early-escape hint — reconnect', () => {
     expect(hint()).toBeNull();
   });
 
-  it('the terminal re-requests its replay after a reconnect: the replay takes the hint down, and it returns once the terminal is quiet again (spec: a replay counts as output)', async () => {
+  it('the terminal re-requests its replay after a reconnect: the replay is not activity, the hint stays up without blinking', async () => {
     // Arrange
     const { pressInterrupt, elapse, send, replay } = await renderViewing();
     await pressInterrupt();
@@ -502,7 +574,7 @@ describe('early-escape hint — reconnect', () => {
     await elapse(QUIET_MS);
 
     // Assert
-    expect(rightAfterTheReplay).toBeNull();
+    expect(rightAfterTheReplay).not.toBeNull();
     expect(hint()).not.toBeNull();
   });
 });
@@ -553,10 +625,7 @@ describe('early-escape hint — accessibility and copy', () => {
     vi.useRealTimers();
   });
 
-  // DEFECT (minor, a11y): session-view.component.ts:53-58 inserts the role="status" element together with its text, so a screen
-  // reader that only announces changes inside a region already in the page stays silent. The always-present
-  // `lifecycle-live-region` (U2c) is the place for it. Remove `.fails` once the hint is rendered inside a pre-existing live region.
-  it.fails('announces itself through a live region that was already in the page before the hint appeared', async () => {
+  it('announces itself through a live region that was already in the page before the hint appeared', async () => {
     // Arrange
     const { pressInterrupt, elapse } = await renderViewing();
     const liveRegionsBeforeTheHint = [...document.querySelectorAll('[role="status"], [aria-live]')];
@@ -580,6 +649,19 @@ describe('early-escape hint — accessibility and copy', () => {
 
     // Assert
     expect(hint()).toHaveTextContent('Cancelled before a reply?');
-    expect(hint()).toHaveTextContent('Claude put your prompt back — press Enter in the terminal to resend it, or edit it first.');
+    expect(hint()).toHaveTextContent('Claude may have put your prompt back — press Enter in the terminal to resend it, or edit it first.');
+  });
+
+  it('keeps the arrow glyph out of the accessibility tree: a screen reader would read it as "leftwards arrow with hook"', async () => {
+    // Arrange
+    const { pressInterrupt, elapse } = await renderViewing();
+
+    // Act
+    await pressInterrupt();
+    await elapse(GENEROUS_QUIET_MS);
+
+    // Assert
+    const glyph = within(hint()!).getByText('↩');
+    expect(glyph).toHaveAttribute('aria-hidden', 'true');
   });
 });

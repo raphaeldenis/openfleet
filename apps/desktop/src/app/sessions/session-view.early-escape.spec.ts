@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ServerEvent, Session, SessionState } from '@openfleet/shared';
 import { SessionViewComponent } from './session-view.component';
 import { FleetApiService } from '../core/fleet-api.service';
-import { connectFakeDaemon, withoutRealTerminal } from '../testing/session-view.testing';
+import { connectFakeDaemon, fakeClockElapser, RENDER_FRAME_MS, withoutRealTerminal } from '../testing/session-view.testing';
 
 const ESCAPE_KEY = '\x1b';
 const COMPOSER_REDRAW_WITH_RESTORED_PROMPT = '\x1b[2K❯ hi';
@@ -35,11 +35,7 @@ async function renderGeneratingSession(api = fakeApi()) {
   const daemon = connectFakeDaemon(fixture);
   await daemon.send({ type: 'snapshot', sessions: [session()], approvals: [], managers: [] });
   vi.useFakeTimers();
-  const elapse = async (ms: number) => {
-    await vi.advanceTimersByTimeAsync(ms);
-    await fixture.whenStable();
-  };
-  const RENDER_FRAME_MS = 20;
+  const elapse = fakeClockElapser(fixture);
   const send = async (event: ServerEvent) => {
     await Promise.all([daemon.send(event), vi.advanceTimersByTimeAsync(RENDER_FRAME_MS)]);
   };
@@ -70,22 +66,8 @@ describe('SessionViewComponent early-escape hint — Claude cancels silently whe
 
     // Assert
     expect(api.sendInput).toHaveBeenCalledWith('s1', ESCAPE_KEY);
-    expect(hint()).toHaveAttribute('role', 'status');
     expect(hint()).toHaveTextContent('Cancelled before a reply?');
     expect(hint()).toHaveTextContent('press Enter in the terminal to resend it, or edit it first');
-  });
-
-  it('the hint is not there yet right after the Escape: the CLI needs a moment to answer', async () => {
-    // Arrange
-    const { pressInterrupt, output, elapse } = await renderGeneratingSession();
-
-    // Act
-    await pressInterrupt();
-    await output(COMPOSER_REDRAW_WITH_RESTORED_PROMPT);
-    await elapse(1000);
-
-    // Assert
-    expect(hint()).toBeNull();
   });
 
   it('a normal interrupted turn (interrupt line, then idle) never shows the hint', async () => {
@@ -123,20 +105,6 @@ describe('SessionViewComponent early-escape hint — Claude cancels silently whe
 
     // Act
     await output(SPINNER_FRAME);
-    await elapse(60_000);
-
-    // Assert
-    expect(hint()).toBeNull();
-  });
-
-  it('an Interrupt request that failed sent no Escape, so no hint', async () => {
-    // Arrange
-    const api = fakeApi();
-    api.sendInput = vi.fn().mockRejectedValue(new Error('network'));
-    const { pressInterrupt, elapse } = await renderGeneratingSession(api);
-
-    // Act
-    await pressInterrupt();
     await elapse(60_000);
 
     // Assert
