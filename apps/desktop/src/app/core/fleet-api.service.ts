@@ -33,7 +33,7 @@ export class FleetApiService {
 
   models() { return this.call<Record<string, string>>('/api/models'); }
   availableModels() { return this.call<{ models: string[] }>('/api/models/available'); }
-  saveModels(patch: Record<string, string>) { return this.put<{ models: Record<string, string>; unknownRungs?: string[] }>('/api/models', patch); }
+  saveModels(patch: Record<string, string>) { return this.put<{ models: Record<string, string> }>('/api/models', patch); }
   createSession(spec: Partial<SessionSpec> & { directory: string; name: string; repoPath?: string; branchName?: string }) { return this.post<Session>('/api/sessions', spec); }
   createManagerSession(spec: { directory: string; name: string; emoji?: string; model?: string; harness?: HarnessId; permissionMode?: PermissionMode; pulseSeconds: number; childrenCap: number; mission: string }) {
     return this.post<Session>('/api/sessions', {

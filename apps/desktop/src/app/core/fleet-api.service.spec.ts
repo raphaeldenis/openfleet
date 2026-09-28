@@ -78,7 +78,7 @@ describe('FleetApiService', () => {
   });
 
   it('saves a model patch with PUT /api/models and returns the daemon answer', async () => {
-    const answer = { models: { haiku: 'h', sonnet: 's', opus: 'new', fable: 'f' }, unknownRungs: [] };
+    const answer = { models: { haiku: 'h', sonnet: 's', opus: 'new', fable: 'f' } };
     fetchMock.mockResolvedValue(fakeResponse({ ok: true, status: 200, json: () => Promise.resolve(answer) }));
 
     await expect(api.saveModels({ opus: 'new' })).resolves.toEqual(answer);

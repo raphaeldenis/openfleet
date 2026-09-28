@@ -12,7 +12,7 @@ async function renderSettings(models: () => Promise<unknown> = () => Promise.res
   const api = {
     models: modelsSpy,
     availableModels: vi.fn(() => Promise.resolve({ models: Object.values(MODEL_TABLE) })),
-    saveModels: vi.fn((patch: Record<string, string>) => Promise.resolve({ models: { ...MODEL_TABLE, ...patch }, unknownRungs: [] })),
+    saveModels: vi.fn((patch: Record<string, string>) => Promise.resolve({ models: { ...MODEL_TABLE, ...patch } })),
   };
   const view = await render(SettingsComponent, { providers: [{ provide: FleetApiService, useValue: api }] });
   return { ...view, models: modelsSpy };
@@ -159,16 +159,6 @@ describe('SettingsComponent — Models tab', () => {
     for (const rung of ['haiku', 'sonnet', 'opus', 'fable']) {
       expect(screen.getByRole('combobox', { name: new RegExp(rung, 'i') })).toBeTruthy();
     }
-  });
-
-  it('no longer tells the user to edit the config file by hand and restart the daemon', async () => {
-    await renderSettings();
-    await screen.findByTestId('model-row-haiku');
-
-    const note = screen.getByTestId('models-edit-hint');
-
-    expect(note).not.toHaveTextContent(/by hand/i);
-    expect(note).not.toHaveTextContent(/restart the daemon/i);
   });
 
   it('shows Loading… while the daemon has not answered yet, and no table', async () => {

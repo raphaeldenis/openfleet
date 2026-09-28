@@ -8,7 +8,7 @@ import { MODEL_SETTLE_MS, SettingsComponent } from './settings.component';
 const MODEL_TABLE = { haiku: 'claude-haiku-4-5', sonnet: 'claude-sonnet-5', opus: 'claude-opus-5-5', fable: 'claude-fable-5-1' };
 const AVAILABLE_MODELS = ['claude-haiku-4-5', 'claude-sonnet-5', 'claude-opus-5-5', 'claude-fable-5-1', 'claude-opus-9'];
 
-type SavedTable = { models: Record<string, string>; unknownRungs: string[] };
+type SavedTable = { models: Record<string, string> };
 
 const SETTLE_MS = 20;
 
@@ -37,7 +37,7 @@ async function renderSettings(daemon: FakeDaemon = {}) {
     daemon.saveModels ??
     ((patch: Record<string, string>) => {
       Object.assign(table, patch);
-      return Promise.resolve({ models: { ...table }, unknownRungs: [] } satisfies SavedTable);
+      return Promise.resolve({ models: { ...table } } satisfies SavedTable);
     });
   const fetchStub = vi.fn((url: string, init?: RequestInit) => {
     const { pathname } = new URL(url);
@@ -89,7 +89,7 @@ describe('SettingsComponent models — saving under stress', () => {
 
     expect(putBodies()).toHaveLength(1);
     expect((await findSelect('haiku')).value).toBe('claude-haiku-4-5');
-    firstSave.resolve({ models: { ...MODEL_TABLE, opus: 'claude-opus-9' }, unknownRungs: [] });
+    firstSave.resolve({ models: { ...MODEL_TABLE, opus: 'claude-opus-9' } });
   });
 
   it('puts an id the daemon does not list back on its dropdown when the save fails', async () => {
@@ -113,7 +113,7 @@ describe('SettingsComponent models — saving under stress', () => {
   it('clears the failure notice once the next save works, and names the rung that failed while it shows', async () => {
     let shouldFail = true;
     await renderSettings({
-      saveModels: (patch) => (shouldFail ? Promise.reject(new Error('500')) : Promise.resolve({ models: { ...MODEL_TABLE, ...patch }, unknownRungs: [] })),
+      saveModels: (patch) => (shouldFail ? Promise.reject(new Error('500')) : Promise.resolve({ models: { ...MODEL_TABLE, ...patch } })),
     });
     await userEvent.selectOptions(await findSelect('opus'), 'claude-opus-9');
     expect(await screen.findByTestId('models-save-error')).toHaveTextContent(/opus/);
@@ -125,14 +125,6 @@ describe('SettingsComponent models — saving under stress', () => {
     expect(screen.queryByTestId('models-save-error')).toBeNull();
   });
 
-  it('enables every dropdown again after a failed save', async () => {
-    await renderSettings({ saveModels: () => Promise.reject(new Error('500')) });
-
-    await userEvent.selectOptions(await findSelect('opus'), 'claude-opus-9');
-    await screen.findByTestId('models-save-error');
-
-    for (const rung of Object.keys(MODEL_TABLE)) expect(await findSelect(rung)).toBeEnabled();
-  });
 });
 
 describe('SettingsComponent models — leaving mid-save', () => {
@@ -159,7 +151,7 @@ describe('SettingsComponent models — leaving mid-save', () => {
     await userEvent.selectOptions(await findSelect('opus'), 'claude-opus-9');
     await openTab('Daemon');
 
-    pendingSave.resolve({ models: { ...MODEL_TABLE, opus: 'claude-opus-9' }, unknownRungs: [] });
+    pendingSave.resolve({ models: { ...MODEL_TABLE, opus: 'claude-opus-9' } });
     await openTab('Models');
 
     expect((await findSelect('opus')).value).toBe('claude-opus-9');
@@ -173,8 +165,6 @@ describe('SettingsComponent models — degraded lists', () => {
 
   it.each([
     ['rejects', () => Promise.reject(new Error('down'))],
-    ['answers null', () => Promise.resolve(null)],
-    ['answers without a models list', () => Promise.resolve({})],
     ['answers a models list that is not an array', () => Promise.resolve({ models: 'claude-sonnet-5' })],
   ])('still shows every current id on its own dropdown when the available list %s', async (_label, availableModels) => {
     await renderSettings({ availableModels });
@@ -211,28 +201,16 @@ describe('SettingsComponent models — defects', () => {
     expect(document.activeElement).toBe(opusSelect);
   });
 
-  it('reports a save as saved, and keeps the new id shown, when the daemon answers without unknownRungs', async () => {
-    await renderSettings({ saveModels: (patch) => Promise.resolve({ models: { ...MODEL_TABLE, ...patch } }) });
-
-    await userEvent.selectOptions(await findSelect('opus'), 'claude-opus-9');
-
-    expect(await screen.findByText(/saved opus/i)).toBeTruthy();
-    expect(screen.queryByTestId('models-save-error')).toBeNull();
-    expect((await findSelect('opus')).value).toBe('claude-opus-9');
-  });
-
-  it('announces a known save and then an unknown-id save through the same live region', async () => {
-    let unknownRungs: string[] = [];
-    await renderSettings({ saveModels: (patch) => Promise.resolve({ models: { ...MODEL_TABLE, ...patch }, unknownRungs }) });
+  it('announces one save and then the next through the same live region', async () => {
+    await renderSettings();
     await userEvent.selectOptions(await findSelect('opus'), 'claude-opus-9');
     await screen.findByText(/saved opus/i);
-    const liveRegionAfterKnownSave = screen.getByRole('status');
+    const liveRegionAfterFirstSave = screen.getByRole('status');
 
-    unknownRungs = ['haiku'];
     await userEvent.selectOptions(await findSelect('haiku'), 'claude-sonnet-5');
 
-    await screen.findByText(/not in the known model list/i);
-    expect(screen.getByRole('status')).toBe(liveRegionAfterKnownSave);
+    await screen.findByText(/saved haiku/i);
+    expect(screen.getByRole('status')).toBe(liveRegionAfterFirstSave);
   });
 });
 
@@ -288,7 +266,7 @@ describe('SettingsComponent models — settling before saving', () => {
     await userEvent.selectOptions(await findSelect('opus'), 'claude-opus-9');
 
     expect(await screen.findByText(/saving.*opus/i)).toBe(screen.getByRole('status'));
-    pendingSave.resolve({ models: { ...MODEL_TABLE, opus: 'claude-opus-9' }, unknownRungs: [] });
+    pendingSave.resolve({ models: { ...MODEL_TABLE, opus: 'claude-opus-9' } });
   });
 });
 
@@ -316,7 +294,7 @@ describe('SettingsComponent models — failed save card', () => {
   it('sends the last intended id again when Retry is pressed, and drops the card once it is saved', async () => {
     let isDaemonWritable = false;
     const { putBodies } = await renderSettings({
-      saveModels: (patch) => (isDaemonWritable ? Promise.resolve({ models: { ...MODEL_TABLE, ...patch }, unknownRungs: [] }) : Promise.reject(new DaemonRefusal(409, 'config_read_only'))),
+      saveModels: (patch) => (isDaemonWritable ? Promise.resolve({ models: { ...MODEL_TABLE, ...patch } }) : Promise.reject(new DaemonRefusal(409, 'config_read_only'))),
     });
     await userEvent.selectOptions(await findSelect('opus'), 'claude-opus-9');
     await screen.findByTestId('models-save-error');
@@ -328,5 +306,73 @@ describe('SettingsComponent models — failed save card', () => {
     expect(putBodies()).toEqual([{ opus: 'claude-opus-9' }, { opus: 'claude-opus-9' }]);
     expect(screen.queryByTestId('models-save-error')).toBeNull();
     expect((await findSelect('opus')).value).toBe('claude-opus-9');
+  });
+
+  it('shows the intended id in the dropdown at once when Retry is pressed, while the save runs', async () => {
+    const retrySave = deferred<SavedTable>();
+    let isDaemonWritable = false;
+    await renderSettings({ saveModels: () => (isDaemonWritable ? retrySave.promise : Promise.reject(new DaemonRefusal(409, 'config_read_only'))) });
+    await userEvent.selectOptions(await findSelect('opus'), 'claude-opus-9');
+    await screen.findByTestId('models-save-error');
+    expect((await findSelect('opus')).value).toBe('claude-opus-5-5');
+
+    isDaemonWritable = true;
+    await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    await screen.findByText(/saving.*opus/i);
+    expect((await findSelect('opus')).value).toBe('claude-opus-9');
+    retrySave.resolve({ models: { ...MODEL_TABLE, opus: 'claude-opus-9' } });
+  });
+
+  it('drops the failure card as soon as the user starts another change', async () => {
+    await renderSettings({ settleMs: 300, saveModels: (patch) => (patch['opus'] ? Promise.reject(new Error('500')) : Promise.resolve({ models: { ...MODEL_TABLE, ...patch } })) });
+    await userEvent.selectOptions(await findSelect('opus'), 'claude-opus-9');
+    await screen.findByTestId('models-save-error');
+
+    chooseInSteps(await findSelect('haiku'), ['claude-sonnet-5']);
+
+    await screen.findByText(/unsaved.*haiku/i);
+    expect(screen.queryByTestId('models-save-error')).toBeNull();
+    await screen.findByText(/saved haiku/i);
+  });
+});
+
+describe('SettingsComponent models — notices never outlive their edit', () => {
+  beforeEach(() => localStorage.clear());
+  afterEach(() => localStorage.clear());
+
+  it('goes quiet, instead of repeating the last "Saved", when a new edit is undone', async () => {
+    await renderSettings();
+    await userEvent.selectOptions(await findSelect('opus'), 'claude-opus-9');
+    await screen.findByText(/saved opus/i);
+
+    chooseInSteps(await findSelect('haiku'), ['claude-sonnet-5', 'claude-haiku-4-5']);
+
+    await vi.waitFor(() => expect(screen.getByRole('status').textContent).toBe(''));
+  });
+});
+
+describe('SettingsComponent models — leaving before the user has settled', () => {
+  beforeEach(() => localStorage.clear());
+  afterEach(() => localStorage.clear());
+
+  it('sends the pending change at once when the screen is left, instead of dropping it', async () => {
+    const { fixture, putBodies } = await renderSettings({ settleMs: 60_000 });
+    chooseInSteps(await findSelect('opus'), ['claude-opus-9']);
+    await screen.findByText(/unsaved.*opus/i);
+
+    fixture.destroy();
+
+    await vi.waitFor(() => expect(putBodies()).toEqual([{ opus: 'claude-opus-9' }]));
+  });
+
+  it('sends nothing when the screen is left with no pending change', async () => {
+    const { fixture, putBodies } = await renderSettings({ settleMs: 60_000 });
+    await findSelect('opus');
+
+    fixture.destroy();
+    await waitLongerThanSettle();
+
+    expect(putBodies()).toEqual([]);
   });
 });

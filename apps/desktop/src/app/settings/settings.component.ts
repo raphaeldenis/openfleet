@@ -25,9 +25,11 @@ interface ModelChange {
   modelId: string;
 }
 
-type ModelSaveOutcome =
+type ModelSaveState =
+  | { kind: 'idle' }
+  | { kind: 'pending'; change: ModelChange }
+  | { kind: 'saving'; change: ModelChange }
   | { kind: 'saved'; rung: string }
-  | { kind: 'unknown'; rung: string; modelId: string }
   | { kind: 'failed'; change: ModelChange; cause: string };
 
 const GENERIC_SAVE_FAILURE = 'Something went wrong. Your change was not applied.';
@@ -101,14 +103,14 @@ function isAvailableModels(body: unknown): body is { models: string[] } {
                 }
               </div>
               <p class="hint status" role="status" data-testid="models-save-status">{{ saveStatusMessage() }}</p>
-              @if (saveOutcome(); as outcome) {
-                @if (outcome.kind === 'failed') {
+              @if (saveState(); as state) {
+                @if (state.kind === 'failed') {
                   <div class="error-card" role="alert" data-testid="models-save-error">
                     <div class="error-text">
-                      <span class="error-title">✕ Couldn’t save {{ outcome.change.rung }}</span>
-                      <span class="detail">{{ outcome.cause }}</span>
+                      <span class="error-title">✕ Couldn’t save {{ state.change.rung }}</span>
+                      <span class="detail">{{ state.cause }}</span>
                     </div>
-                    <button type="button" class="of-btn of-btn--secondary" (click)="retryFailedSave(outcome.change)">Retry</button>
+                    <button type="button" class="of-btn of-btn--secondary" (click)="retryFailedSave(state.change)">Retry</button>
                   </div>
                 }
               }
@@ -180,10 +182,8 @@ export class SettingsComponent {
   protected readonly modelTable = signal<Record<string, string> | null>(null);
   protected readonly modelsFailed = signal(false);
   protected readonly availableModels = signal<string[]>([]);
-  protected readonly pendingChange = signal<ModelChange | null>(null);
-  protected readonly savingChange = signal<ModelChange | null>(null);
-  protected readonly isSavingModel = computed(() => this.savingChange() !== null);
-  protected readonly saveOutcome = signal<ModelSaveOutcome | null>(null);
+  protected readonly saveState = signal<ModelSaveState>({ kind: 'idle' });
+  protected readonly isSavingModel = computed(() => this.saveState().kind === 'saving');
 
   // Each rung offers every available model, plus its current id when the daemon does not list it, so a
   // custom id stays selectable instead of blanking the dropdown.
@@ -202,18 +202,15 @@ export class SettingsComponent {
   // One persistent live region carries every progress and success notice, so a screen reader announces the
   // text change (a region inserted fresh between saves is easily never spoken).
   protected readonly saveStatusMessage = computed(() => {
-    const saving = this.savingChange();
-    if (saving) return `Saving ${saving.rung}…`;
-    const pending = this.pendingChange();
-    if (pending) return `Unsaved change to ${pending.rung} · saves once you stop choosing.`;
-    const outcome = this.saveOutcome();
-    if (outcome?.kind === 'saved') return `✓ Saved ${outcome.rung}.`;
-    if (outcome?.kind === 'unknown') return `✓ Saved ${outcome.rung} · ${outcome.modelId} is not in the known model list — saved anyway.`;
+    const state = this.saveState();
+    if (state.kind === 'saving') return `Saving ${state.change.rung}…`;
+    if (state.kind === 'pending') return `Unsaved change to ${state.change.rung} · saves once you stop choosing.`;
+    if (state.kind === 'saved') return `✓ Saved ${state.rung}.`;
     return '';
   });
 
   constructor() {
-    inject(DestroyRef).onDestroy(() => clearTimeout(this.settleTimer));
+    inject(DestroyRef).onDestroy(() => this.savePendingChange());
     void this.loadModelTable();
   }
 
@@ -222,53 +219,51 @@ export class SettingsComponent {
   // choice made during a save, or beside an unsaved change on another rung, is put back instead of kept.
   protected onModelChosen(rung: string, select: HTMLSelectElement): void {
     const savedId = this.modelTable()?.[rung] ?? '';
-    const unsavedChange = this.pendingChange();
-    const isAnotherRungBusy = this.isSavingModel() || (unsavedChange !== null && unsavedChange.rung !== rung);
-    if (isAnotherRungBusy) {
+    const state = this.saveState();
+    const isBlockedByAnotherChange = state.kind === 'saving' || (state.kind === 'pending' && state.change.rung !== rung);
+    if (isBlockedByAnotherChange) {
       select.value = savedId;
       return;
     }
     clearTimeout(this.settleTimer);
     const isBackOnSavedId = select.value === savedId;
     if (isBackOnSavedId) {
-      this.pendingChange.set(null);
+      this.saveState.set({ kind: 'idle' });
       return;
     }
-    this.pendingChange.set({ rung, modelId: select.value });
-    this.settleTimer = setTimeout(() => void this.savePendingChange(), this.settleMs);
+    this.saveState.set({ kind: 'pending', change: { rung, modelId: select.value } });
+    this.settleTimer = setTimeout(() => this.savePendingChange(), this.settleMs);
   }
 
   protected retryFailedSave(change: ModelChange): void {
-    const isBusy = this.isSavingModel() || this.pendingChange() !== null;
-    if (isBusy) return;
+    this.showIdInDropdown(change.rung, change.modelId);
     void this.saveChange(change);
   }
 
-  private async savePendingChange(): Promise<void> {
-    const change = this.pendingChange();
-    if (!change) return;
-    this.pendingChange.set(null);
-    await this.saveChange(change);
+  // Also the destroy hook: leaving the screen inside the settle window sends the change at once (the PUT is
+  // idempotent), so it is never silently dropped.
+  private savePendingChange(): void {
+    clearTimeout(this.settleTimer);
+    const state = this.saveState();
+    if (state.kind === 'pending') void this.saveChange(state.change);
   }
 
   private async saveChange(change: ModelChange): Promise<void> {
     const { rung, modelId } = change;
-    this.savingChange.set(change);
+    this.saveState.set({ kind: 'saving', change });
     try {
-      const { models, unknownRungs = [] } = await this.api.saveModels({ [rung]: modelId });
+      const { models } = await this.api.saveModels({ [rung]: modelId });
       this.modelTable.set(models);
-      this.saveOutcome.set(unknownRungs.includes(rung) ? { kind: 'unknown', rung, modelId } : { kind: 'saved', rung });
+      this.saveState.set({ kind: 'saved', rung });
     } catch (failure) {
-      this.putDropdownBackOnSavedId(rung);
-      this.saveOutcome.set({ kind: 'failed', change, cause: describeSaveFailure(failure) });
-    } finally {
-      this.savingChange.set(null);
+      this.showIdInDropdown(rung, this.modelTable()?.[rung] ?? '');
+      this.saveState.set({ kind: 'failed', change, cause: describeSaveFailure(failure) });
     }
   }
 
-  private putDropdownBackOnSavedId(rung: string): void {
+  private showIdInDropdown(rung: string, modelId: string): void {
     const select = this.host.nativeElement.querySelector<HTMLSelectElement>(`select[data-rung="${rung}"]`);
-    if (select) select.value = this.modelTable()?.[rung] ?? '';
+    if (select) select.value = modelId;
   }
 
   protected onTabKeydown(event: KeyboardEvent): void {

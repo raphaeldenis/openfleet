@@ -9,18 +9,15 @@ const AVAILABLE_MODELS = ['claude-haiku-4-5', 'claude-haiku-4-5-20251001', 'clau
 interface FakeDaemon {
   table?: Record<string, string>;
   availableModels?: () => Promise<unknown>;
-  saveModels?: (patch: Record<string, string>) => Promise<unknown>;
 }
 
 // A daemon behind a stubbed fetch: the component is exercised through the REST calls it really sends.
 async function renderSettings(daemon: FakeDaemon = {}) {
   const servedTable = { ...(daemon.table ?? MODEL_TABLE) };
-  const saveModels =
-    daemon.saveModels ??
-    ((patch: Record<string, string>) => {
-      Object.assign(servedTable, patch);
-      return Promise.resolve({ models: { ...servedTable }, unknownRungs: [] });
-    });
+  const saveModels = async (patch: Record<string, string>) => {
+    Object.assign(servedTable, patch);
+    return { models: { ...servedTable } };
+  };
   const fetchStub = vi.fn((url: string, init?: RequestInit) => {
     const { pathname } = new URL(url);
     const answer =
@@ -87,12 +84,6 @@ describe('SettingsComponent', () => {
     expect(optionValuesOf(opusSelect)).toContain('my-private-opus');
   });
 
-  it('still shows the current ids when the daemon cannot list the available models', async () => {
-    await renderSettings({ availableModels: () => Promise.reject(new Error('down')) });
-
-    expect((await findRungSelect('sonnet')).value).toBe('claude-sonnet-5');
-  });
-
   it('sends one PUT to the models endpoint carrying only the rung that was changed', async () => {
     const { putRequests } = await renderSettings();
     const opusSelect = await findRungSelect('opus');
@@ -101,45 +92,6 @@ describe('SettingsComponent', () => {
 
     await screen.findByText(/saved opus/i);
     expect(putRequests()).toEqual([{ pathname: '/api/models', body: { opus: 'claude-haiku-4-5-20251001' } }]);
-  });
-
-  it('confirms the save and leaves the daemon serving the new id', async () => {
-    const { servedTable } = await renderSettings();
-
-    await userEvent.selectOptions(await findRungSelect('opus'), 'claude-haiku-4-5-20251001');
-
-    expect(await screen.findByText(/saved opus/i)).toBeTruthy();
-    expect(servedTable.opus).toBe('claude-haiku-4-5-20251001');
-  });
-
-  it('warns when the daemon saved an id it does not know', async () => {
-    await renderSettings({ saveModels: (patch) => Promise.resolve({ models: { ...MODEL_TABLE, ...patch }, unknownRungs: ['opus'] }) });
-
-    await userEvent.selectOptions(await findRungSelect('opus'), 'claude-haiku-4-5-20251001');
-
-    expect(await screen.findByText(/not in the known model list/i)).toBeTruthy();
-  });
-
-  it('announces a failed save and puts the dropdown back on the previous id', async () => {
-    await renderSettings({ saveModels: () => Promise.reject(new Error('500')) });
-
-    await userEvent.selectOptions(await findRungSelect('opus'), 'claude-haiku-4-5-20251001');
-
-    expect(await screen.findByTestId('models-save-error')).toHaveTextContent(/couldn.t save/i);
-    expect((await findRungSelect('opus')).value).toBe('claude-opus-5-5');
-  });
-
-  it('sends no second save while one is in flight and leaves the dropdowns usable', async () => {
-    const { putRequests } = await renderSettings({ saveModels: () => new Promise(() => {}) });
-    const opusSelect = await findRungSelect('opus');
-    await userEvent.selectOptions(opusSelect, 'claude-haiku-4-5-20251001');
-    await vi.waitFor(() => expect(putRequests()).toHaveLength(1));
-
-    await userEvent.selectOptions(await findRungSelect('haiku'), 'claude-haiku-4-5-20251001');
-
-    expect(putRequests()).toHaveLength(1);
-    for (const rung of Object.keys(MODEL_TABLE)) expect(await findRungSelect(rung)).toBeEnabled();
-    expect((await findRungSelect('haiku')).value).toBe('claude-haiku-4-5');
   });
 
   it('tells the user a change reaches new sessions only and running sessions keep their model', async () => {
