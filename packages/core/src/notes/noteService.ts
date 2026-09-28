@@ -1,0 +1,254 @@
+import type { DatabaseSync } from 'node:sqlite';
+import type { Note, NoteFolder } from '@openfleet/shared';
+import { expandMentions, type MentionLookup } from './mentionExpander.js';
+import type { NoteRepository, NoteUpdateResult } from './noteRepository.js';
+import { appendSection, replaceSection } from './noteSections.js';
+
+const MAX_BODY_BYTES = 1024 * 1024;
+// One first try plus three retries after a stale CAS (decision 2); a fourth loss means real contention, not luck.
+const MAX_APPEND_ATTEMPTS = 4;
+const SAVEPOINT_NAME = 'note_service_write';
+
+export class StaleRevisionError extends Error {
+  constructor(public readonly currentRev: number) {
+    super(`note revision is stale; current revision is ${currentRev}`);
+  }
+}
+
+export class NoteNotFoundError extends Error {
+  constructor(noteId: string) {
+    super(`note not found: ${noteId}`);
+  }
+}
+
+export class NoteTooLargeError extends Error {
+  constructor(public readonly byteLength: number) {
+    super(`note body is ${byteLength} bytes, over the ${MAX_BODY_BYTES}-byte cap`);
+  }
+}
+
+export interface NoteServiceDeps {
+  repo: NoteRepository;
+  db: DatabaseSync;
+  expandMentions: typeof expandMentions;
+  clock: () => string;
+  newId: () => string;
+}
+
+export interface CreateNoteInput {
+  projectId: string;
+  title: string;
+  bodyMd: string;
+  folder?: NoteFolder | null;
+  shared?: boolean;
+  author: string;
+}
+
+export interface UpdateNoteInput {
+  bodyMd: string;
+  expectedRev: number;
+  author: string;
+}
+
+export interface UpdateSectionInput {
+  heading: string;
+  content: string;
+  expectedRev: number;
+  author: string;
+}
+
+export interface AppendNoteInput {
+  content: string;
+  heading?: string;
+  author: string;
+}
+
+export interface RenameNoteInput {
+  title: string;
+  expectedRev: number;
+  author: string;
+}
+
+export interface GetExpandedOptions {
+  viewerProjectId: string;
+}
+
+export interface ExpandedNote {
+  note: Note;
+  expandedBody: string;
+}
+
+type AppendAttemptOutcome = { applied: true; note: Note } | { applied: false; currentRev: number };
+
+/**
+ * Orchestrates revisioned writes over notes: every write is compare-and-set against the caller's
+ * expected revision (never merged, never silently overwritten) and, on success, records exactly one
+ * note_versions row in the same transaction as the notes write. Ids and timestamps come from the
+ * injected `newId`/`clock` so writes are deterministic under test.
+ */
+export class NoteService {
+  private readonly repo: NoteRepository;
+  private readonly db: DatabaseSync;
+  private readonly expandMentions: typeof expandMentions;
+  private readonly clock: () => string;
+  private readonly newId: () => string;
+
+  constructor(deps: NoteServiceDeps) {
+    this.repo = deps.repo;
+    this.db = deps.db;
+    this.expandMentions = deps.expandMentions;
+    this.clock = deps.clock;
+    this.newId = deps.newId;
+  }
+
+  create(input: CreateNoteInput): Note {
+    assertWithinBodyCap(input.bodyMd);
+    const now = this.clock();
+    const note: Note = {
+      id: this.newId(),
+      projectId: input.projectId,
+      title: input.title,
+      bodyMd: input.bodyMd,
+      folder: input.folder ?? null,
+      filePath: null,
+      rev: 1,
+      shared: input.shared ?? false,
+      createdAt: now,
+      updatedAt: now,
+    };
+    return this.inTransaction(() => {
+      this.repo.insert(note);
+      this.insertVersionRow(note, input.author, now);
+      return note;
+    });
+  }
+
+  update(id: string, input: UpdateNoteInput): Note {
+    assertWithinBodyCap(input.bodyMd);
+    return this.writeThroughCas(id, input.author, (updatedAt) =>
+      this.repo.update(id, { bodyMd: input.bodyMd, expectedRev: input.expectedRev, updatedAt }));
+  }
+
+  updateSection(id: string, input: UpdateSectionInput): Note {
+    const current = this.require(id);
+    const newBodyMd = replaceSection(current.bodyMd, input.heading, input.content);
+    assertWithinBodyCap(newBodyMd);
+    return this.writeThroughCas(id, input.author, (updatedAt) =>
+      this.repo.update(id, { bodyMd: newBodyMd, expectedRev: input.expectedRev, updatedAt }));
+  }
+
+  append(id: string, input: AppendNoteInput): Note {
+    let lastKnownRev: number | undefined;
+    for (let attempt = 0; attempt < MAX_APPEND_ATTEMPTS; attempt++) {
+      const outcome = this.tryAppendOnce(id, input);
+      if (outcome.applied) return outcome.note;
+      lastKnownRev = outcome.currentRev;
+    }
+    throw new StaleRevisionError(lastKnownRev!);
+  }
+
+  rename(id: string, input: RenameNoteInput): Note {
+    return this.writeThroughCas(id, input.author, (updatedAt) =>
+      this.repo.rename(id, { title: input.title, expectedRev: input.expectedRev, updatedAt }));
+  }
+
+  move(id: string, folder: NoteFolder | null): Note {
+    const wasMoved = this.repo.move(id, folder);
+    if (!wasMoved) throw new NoteNotFoundError(id);
+    return this.repo.get(id)!;
+  }
+
+  getExpanded(id: string, { viewerProjectId }: GetExpandedOptions): ExpandedNote {
+    const note = this.require(id);
+    const lookup = this.mentionLookupFor(viewerProjectId);
+    const expandedBody = this.expandMentions(note.bodyMd, lookup, { rootNoteId: note.id });
+    return { note, expandedBody };
+  }
+
+  private mentionLookupFor(viewerProjectId: string): MentionLookup {
+    return {
+      getNote: (mentionedId) => {
+        const mentioned = this.repo.get(mentionedId);
+        if (!mentioned) return undefined;
+        const isVisibleToViewer = mentioned.projectId === viewerProjectId || mentioned.shared;
+        if (!isVisibleToViewer) return undefined;
+        return { id: mentioned.id, title: mentioned.title, bodyMd: mentioned.bodyMd, projectId: mentioned.projectId };
+      },
+      describeOther: () => undefined,
+    };
+  }
+
+  private tryAppendOnce(id: string, input: AppendNoteInput): AppendAttemptOutcome {
+    return this.inTransaction(() => {
+      const current = this.require(id);
+      const newBodyMd = input.heading === undefined
+        ? appendToEndOfBody(current.bodyMd, input.content)
+        : appendSection(current.bodyMd, input.heading, input.content);
+      assertWithinBodyCap(newBodyMd);
+      const updatedAt = this.clock();
+      const result = this.repo.update(id, { bodyMd: newBodyMd, expectedRev: current.rev, updatedAt });
+      if (result.outcome === 'not_found') throw new NoteNotFoundError(id);
+      if (result.outcome === 'stale_revision') return { applied: false, currentRev: result.currentRev };
+      this.insertVersionRow(result.note, input.author, updatedAt);
+      return { applied: true, note: result.note };
+    });
+  }
+
+  private writeThroughCas(id: string, author: string, performCas: (updatedAt: string) => NoteUpdateResult): Note {
+    return this.inTransaction(() => {
+      const updatedAt = this.clock();
+      const result = performCas(updatedAt);
+      if (result.outcome === 'not_found') throw new NoteNotFoundError(id);
+      if (result.outcome === 'stale_revision') throw new StaleRevisionError(result.currentRev);
+      this.insertVersionRow(result.note, author, updatedAt);
+      return result.note;
+    });
+  }
+
+  private insertVersionRow(note: Note, author: string, createdAt: string): void {
+    this.repo.insertVersion({ id: this.newId(), noteId: note.id, rev: note.rev, bodyMd: note.bodyMd, author, createdAt });
+  }
+
+  private require(id: string): Note {
+    const note = this.repo.get(id);
+    if (!note) throw new NoteNotFoundError(id);
+    return note;
+  }
+
+  // A write already inside a caller's transaction nests as a SAVEPOINT so it can be undone on its own,
+  // without ending the outer transaction; a top-level write owns a real BEGIN IMMEDIATE/COMMIT, mirroring
+  // migrate.ts's own transaction handling. Rolls back only when a transaction is still active, so the
+  // original error is never masked by a rollback failure.
+  private inTransaction<T>(work: () => T): T {
+    const isNested = this.db.isTransaction;
+    this.db.exec(isNested ? `SAVEPOINT ${SAVEPOINT_NAME}` : 'BEGIN IMMEDIATE');
+    try {
+      const result = work();
+      this.db.exec(isNested ? `RELEASE ${SAVEPOINT_NAME}` : 'COMMIT');
+      return result;
+    } catch (error) {
+      if (this.db.isTransaction) {
+        if (isNested) {
+          // ROLLBACK TO alone leaves the savepoint marker open on the stack; RELEASE pops it, the safe idiom.
+          this.db.exec(`ROLLBACK TO ${SAVEPOINT_NAME}`);
+          this.db.exec(`RELEASE ${SAVEPOINT_NAME}`);
+        } else {
+          this.db.exec('ROLLBACK');
+        }
+      }
+      throw error;
+    }
+  }
+}
+
+function assertWithinBodyCap(bodyMd: string): void {
+  const byteLength = Buffer.byteLength(bodyMd, 'utf8');
+  if (byteLength > MAX_BODY_BYTES) throw new NoteTooLargeError(byteLength);
+}
+
+function appendToEndOfBody(bodyMd: string, content: string): string {
+  if (content === '') return bodyMd;
+  if (bodyMd === '') return content;
+  const bodyEndsWithNewline = bodyMd.endsWith('\n');
+  return bodyEndsWithNewline ? bodyMd + content : `${bodyMd}\n${content}`;
+}

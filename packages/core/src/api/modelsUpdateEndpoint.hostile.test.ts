@@ -183,7 +183,7 @@ describe('PUT /api/models — config.json in a hostile state', () => {
     expect(await getModels()).toEqual(DEFAULT_MODEL_TABLE);
   });
 
-  it('answers 500, keeps the served table and leaves no temp file when the home directory is not writable', async () => {
+  it.skipIf(process.getuid?.() === 0)('answers 500, keeps the served table and leaves no temp file when the home directory is not writable', async () => {
     chmodSync(homeDirectory, 0o500);
     try {
       const res = await putModels({ opus: 'claude-opus-5-5-b' });
