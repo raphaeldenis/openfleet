@@ -1,0 +1,22 @@
+name: live
+# Opt-in only: never runs on push or pull_request. Trigger it from the Actions tab ("Run workflow") or with
+# `gh workflow run live.yml --ref <branch>`. It drives a real `claude` CLI and spends real subscription turns.
+#
+# Auth: the repository secret CLAUDE_CODE_OAUTH_TOKEN, a long-lived token created on a logged-in machine with
+# `claude setup-token`. Add it under Settings → Secrets and variables → Actions before the first run.
+on:
+  workflow_dispatch: {}
+
+jobs:
+  live-smoke:
+    runs-on: macos-latest
+    env:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 26, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: npm install --global @anthropic-ai/claude-code
+      - run: pnpm --filter @openfleet/core test:live
