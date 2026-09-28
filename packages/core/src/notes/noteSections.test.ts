@@ -57,7 +57,54 @@ describe('listSections', () => {
   it('returns no sections for a body without ## headings', () => {
     expect(listSections('# Title\njust text')).toEqual([]);
   });
+
+  it('accepts up to three leading spaces before the hashes and rejects four', () => {
+    const body = '   ## Indented\nx\n    ## Code\ny';
+
+    const headings = listSections(body).map((section) => section.heading);
+
+    expect(headings).toEqual(['Indented']);
+  });
+
+  it('drops closing hashes from the title but keeps a hash glued to the text', () => {
+    const body = '## A ##\nx\n## C#\ny\n## D   #  \nz';
+
+    const headings = listSections(body).map((section) => section.heading);
+
+    expect(headings).toEqual(['A', 'C#', 'D']);
+  });
+
+  it('ignores a leading byte order mark when matching the first heading', () => {
+    const sections = listSections('﻿## First\nx');
+
+    expect(sections).toEqual([{ heading: 'First', level: 2, startLine: 0, endLine: 1 }]);
+  });
+
+  it('parses a 40 KB heading line with a long whitespace run in linear time', () => {
+    const body = `## a${' '.repeat(40_000)}b`;
+
+    const elapsed = millisecondsToRun(() => listSections(body));
+
+    expect(elapsed).toBeLessThan(50);
+  });
+
+  it('parses 100 000 sections in linear time', () => {
+    const sectionCount = 100_000;
+    const body = Array.from({ length: sectionCount }, (_, index) => `## S${index}\ntext`).join('\n');
+
+    let sections: unknown[] = [];
+    const elapsed = millisecondsToRun(() => { sections = listSections(body); });
+
+    expect(sections).toHaveLength(sectionCount);
+    expect(elapsed).toBeLessThan(1000);
+  });
 });
+
+function millisecondsToRun(work: () => void): number {
+  const start = performance.now();
+  work();
+  return performance.now() - start;
+}
 
 describe('getSection', () => {
   it('returns the content under a heading without the heading or trailing blank lines', () => {
@@ -104,6 +151,20 @@ describe('getSection', () => {
     const body = '## A\r\none\r\ntwo\r\n## B\r\nx';
 
     expect(getSection(body, 'A')).toBe('one\r\ntwo');
+  });
+
+  it('drops a whitespace-only line before the next heading', () => {
+    const body = '## A\nx\n   \n## B\ny';
+
+    expect(getSection(body, 'A')).toBe('x');
+  });
+
+  it('finds a heading whatever the Unicode normalization form on either side', () => {
+    const decomposed = '## Café\nx';
+    const composed = '## Café\ny';
+
+    expect(getSection(decomposed, 'Café')).toBe('x');
+    expect(getSection(composed, 'Café')).toBe('y');
   });
 });
 
@@ -168,6 +229,69 @@ describe('replaceSection', () => {
   it('clears a section when the new content is empty', () => {
     expect(replaceSection('## A\nx\n\n## B\ny', 'A', '')).toBe('## A\n\n## B\ny');
   });
+
+  it('keeps a whitespace-only line that precedes the next heading', () => {
+    expect(replaceSection('## A\nx\n   \n## B\ny', 'A', 'z')).toBe('## A\nz\n   \n## B\ny');
+  });
+
+  it('gives a mixed CRLF/LF body back unchanged when replacing a section with its own content', () => {
+    const body = '## A\r\none\ntwo\r\n\r\n## B\r\nx\ny\n';
+
+    expect(replaceSection(body, 'A', getSection(body, 'A')!)).toBe(body);
+    expect(replaceSection(body, 'B', getSection(body, 'B')!)).toBe(body);
+  });
+
+  it('keeps the byte order mark in front of the first heading', () => {
+    expect(replaceSection('﻿## A\nold\n## B\nkeep', 'A', 'new')).toBe('﻿## A\nnew\n## B\nkeep');
+  });
+
+  describe('fences that only look like fences', () => {
+    const sectionB = '## B\nkeep me';
+
+    it.each([
+      ['a list-prefixed fence with an indented closer', `## A\n- \`\`\`\n  ## fake\n  \`\`\`\n${sectionB}`],
+      ['an ordered-list fence with an info string', `## A\n1. \`\`\`js\n  ## fake\n  \`\`\`\n${sectionB}`],
+      ['a four-space-indented fence', `## A\n    \`\`\`\n${sectionB}`],
+      ['an inline triple-backtick span', `## A\n\`\`\`x\`\`\` is inline\n${sectionB}`],
+      ['a fence that never closes', `## A\n\`\`\`\ntext\n${sectionB}`],
+      ['a tilde fence that never closes', `## A\n~~~\ntext\n${sectionB}`],
+    ])('keeps the next section intact with %s', (_name, body) => {
+      const replaced = replaceSection(body, 'A', 'replacement');
+
+      expect(replaced.endsWith(sectionB)).toBe(true);
+      expect(getSection(replaced, 'B')).toBe('keep me');
+    });
+
+    it.each([
+      ['a tilde line inside a backtick fence', `## A\n\`\`\`\n~~~\n## fake\n\`\`\`\n${sectionB}`],
+      ['a triple-backtick line inside a four-backtick fence', `## A\n\`\`\`\`\n\`\`\`\n## fake\n\`\`\`\n\`\`\`\`\n${sectionB}`],
+      ['an info-string line that cannot close a fence', `## A\n\`\`\`\n## fake\n\`\`\`js\n## fake too\n\`\`\`\n${sectionB}`],
+    ])('keeps a real fence open across %s', (_name, body) => {
+      const replaced = replaceSection(body, 'A', 'replacement');
+
+      expect(replaced).toBe(`## A\nreplacement\n${sectionB}`);
+    });
+  });
+
+  describe('structure invariant', () => {
+    const body = '## A\nold\n## B\n```\ncode\n```';
+
+    it.each([
+      ['content that repeats the heading', 'text\n## A\nmore'],
+      ['content that contains another heading', 'text\n## B\nmore'],
+      ['content that opens a fence swallowing the next heading', '```js\ntext'],
+    ])('refuses %s', (_name, content) => {
+      const replaceWithContent = () => replaceSection(body, 'A', content);
+
+      expect(replaceWithContent).toThrow('content would change the section structure');
+    });
+
+    it.each(['', '   ', 'New\n## Injected'])('refuses the heading %j', (heading) => {
+      const replaceUnderHeading = () => replaceSection(body, heading, 'x');
+
+      expect(replaceUnderHeading).toThrow();
+    });
+  });
 });
 
 describe('appendSection', () => {
@@ -209,5 +333,42 @@ describe('appendSection', () => {
 
     expect(created).toBe('## A\r\nx\r\n\r\n## Log\r\none');
     expect(extended).toBe('## A\r\nx\r\n\r\n## Log\r\none\r\ntwo');
+  });
+
+  it('leaves every existing byte of a mixed CRLF/LF body untouched and writes the new line with the first line break', () => {
+    const body = '## A\r\none\ntwo\r\n## B\r\nx\ny';
+
+    const appended = appendSection(body, 'A', 'three');
+
+    expect(appended).toBe('## A\r\none\ntwo\r\nthree\r\n## B\r\nx\ny');
+  });
+
+  it('trims the heading of the section it creates', () => {
+    expect(appendSection('## A\nx', '  Log ', 'entry')).toBe('## A\nx\n\n## Log\nentry');
+  });
+
+  it('keeps the final line break of a body that ends with one', () => {
+    expect(appendSection('## Log\nentry 1\n', 'Log', 'entry 2')).toBe('## Log\nentry 1\nentry 2\n');
+  });
+
+  describe('structure invariant', () => {
+    const body = '## A\nold\n## B\n```\ncode\n```';
+
+    it.each([
+      ['content that repeats the heading', 'A', 'text\n## A\nmore'],
+      ['content that contains another heading', 'A', 'text\n## B\nmore'],
+      ['content that opens a fence swallowing the next heading', 'A', '```js\ntext'],
+      ['content that adds a heading to a new section', 'Log', 'entry\n## Extra'],
+    ])('refuses %s', (_name, heading, content) => {
+      const appendContent = () => appendSection(body, heading, content);
+
+      expect(appendContent).toThrow('content would change the section structure');
+    });
+
+    it.each(['', '   ', 'New\n## Injected'])('refuses the heading %j', (heading) => {
+      const appendUnderHeading = () => appendSection(body, heading, 'x');
+
+      expect(appendUnderHeading).toThrow();
+    });
   });
 });

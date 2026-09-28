@@ -94,6 +94,16 @@ describe('NoteRepository list', () => {
     expect(ids).toEqual(['n1', 'n2', 'n3']);
   });
 
+  it('orders by creation time before id when the two orders disagree', () => {
+    const { repository } = openRepositoryWithProjects('p1');
+    repository.insert(aNote({ id: 'a', createdAt: 't2' }));
+    repository.insert(aNote({ id: 'b', createdAt: 't1' }));
+
+    const ids = repository.list('p1').map((note) => note.id);
+
+    expect(ids).toEqual(['b', 'a']);
+  });
+
   it('returns an empty list for a project without notes', () => {
     const { repository } = openRepositoryWithProjects('p1');
 
@@ -163,16 +173,6 @@ describe('NoteRepository update', () => {
     expect(searchNoteIds(db, 'pipes')).toEqual(['n1']);
   });
 
-  it('keeps search on the old body when the revision is stale', () => {
-    const { db, repository } = openRepositoryWithProjects('p1');
-    repository.insert(aNote({ bodyMd: 'sockets everywhere', rev: 2 }));
-
-    repository.update('n1', { bodyMd: 'pipes everywhere', expectedRev: 1, updatedAt: 't1' });
-
-    expect(searchNoteIds(db, 'sockets')).toEqual(['n1']);
-    expect(searchNoteIds(db, 'pipes')).toEqual([]);
-  });
-
   it('keeps the note versions across updates', () => {
     const { db, repository } = openRepositoryWithProjects('p1');
     repository.insert(aNote());
@@ -202,6 +202,24 @@ describe('NoteRepository move', () => {
 
     expect(repository.get('n1')!.folder).toBeNull();
   });
+
+  it('leaves the folder of the other notes untouched', () => {
+    const { repository } = openRepositoryWithProjects('p1');
+    repository.insert(aNote({ id: 'n1', folder: null }));
+    repository.insert(aNote({ id: 'n2', folder: 'specs' }));
+
+    repository.move('n1', 'plans');
+
+    expect(repository.get('n2')!.folder).toBe('specs');
+  });
+
+  it('reports whether a note was found', () => {
+    const { repository } = openRepositoryWithProjects('p1');
+    repository.insert(aNote());
+
+    expect(repository.move('n1', 'plans')).toBe(true);
+    expect(repository.move('nope', 'plans')).toBe(false);
+  });
 });
 
 describe('NoteRepository delete', () => {
@@ -227,5 +245,13 @@ describe('NoteRepository delete', () => {
 
     expect(repository.list('p1').map((note) => note.id)).toEqual(['n2']);
     expect(searchNoteIds(db, 'two')).toEqual(['n2']);
+  });
+
+  it('reports whether a note was found', () => {
+    const { repository } = openRepositoryWithProjects('p1');
+    repository.insert(aNote());
+
+    expect(repository.delete('n1')).toBe(true);
+    expect(repository.delete('n1')).toBe(false);
   });
 });

@@ -39,19 +39,19 @@ export class NoteRepository {
     return rows.map(toNote);
   }
   update(id: string, { bodyMd, expectedRev, updatedAt }: NoteBodyUpdate): NoteUpdateResult {
-    const { changes } = this.db.prepare('UPDATE notes SET body_md = ?, rev = rev + 1, updated_at = ? WHERE id = ? AND rev = ?')
-      .run(bodyMd, updatedAt, id, expectedRev);
-    const wasApplied = Number(changes) === 1;
+    const updatedRow = this.db.prepare('UPDATE notes SET body_md = ?, rev = rev + 1, updated_at = ? WHERE id = ? AND rev = ? RETURNING *')
+      .get(bodyMd, updatedAt, id, expectedRev) as Row | undefined;
+    if (updatedRow) return { outcome: 'updated', note: toNote(updatedRow) };
 
     const current = this.get(id);
-    if (!current) return { outcome: 'not_found' };
-    if (!wasApplied) return { outcome: 'stale_revision', currentRev: current.rev };
-    return { outcome: 'updated', note: current };
+    return current ? { outcome: 'stale_revision', currentRev: current.rev } : { outcome: 'not_found' };
   }
-  move(id: string, folder: NoteFolder | null): void {
-    this.db.prepare('UPDATE notes SET folder = ? WHERE id = ?').run(folder, id);
+  move(id: string, folder: NoteFolder | null): boolean {
+    const { changes } = this.db.prepare('UPDATE notes SET folder = ? WHERE id = ?').run(folder, id);
+    return Number(changes) > 0;
   }
-  delete(id: string): void {
-    this.db.prepare('DELETE FROM notes WHERE id = ?').run(id);
+  delete(id: string): boolean {
+    const { changes } = this.db.prepare('DELETE FROM notes WHERE id = ?').run(id);
+    return Number(changes) > 0;
   }
 }
