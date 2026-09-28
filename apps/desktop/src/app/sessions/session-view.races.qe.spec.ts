@@ -15,6 +15,7 @@ import {
   requestSwitch,
   selectedValueOf,
   settleRequests,
+  withoutRealTerminal,
 } from '../testing/session-view.testing';
 
 /**
@@ -60,7 +61,10 @@ class ViewHostComponent {
 }
 
 async function renderFleet(api: ReturnType<typeof fakeApi>, sessions: Session[]) {
-  const { fixture } = await render(ViewHostComponent, { providers: [{ provide: FleetApiService, useValue: api }] });
+  const { fixture } = await render(ViewHostComponent, {
+    providers: [{ provide: FleetApiService, useValue: api }],
+    ...withoutRealTerminal,
+  });
   const host = fixture.componentInstance;
   const fakeDaemon = connectFakeDaemon(fixture);
   const daemon = {

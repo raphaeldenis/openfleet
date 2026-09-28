@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Session } from '@openfleet/shared';
 import { SessionViewComponent } from './session-view.component';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
-import { connectFakeDaemon, deferred, settleRequests } from '../testing/session-view.testing';
+import { connectFakeDaemon, deferred, settleRequests, withoutRealTerminal } from '../testing/session-view.testing';
 
 const CLOSED_AT = '2026-09-26T10:00:00.000Z';
 
@@ -34,6 +34,7 @@ async function renderAgainstDaemonEvents(api: ReturnType<typeof fakeApi>, initia
   const { fixture } = await render(SessionViewComponent, {
     bindings: [inputBinding('sessionId', sessionId)],
     providers: [{ provide: FleetApiService, useValue: api }],
+    ...withoutRealTerminal,
   });
   const daemon = connectFakeDaemon(fixture);
   await daemon.send({ type: 'snapshot', sessions: initialSessions, approvals: [], managers: [] });

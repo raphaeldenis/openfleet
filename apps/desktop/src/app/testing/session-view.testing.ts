@@ -1,14 +1,32 @@
 import { screen } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
-import type { DebugElement } from '@angular/core';
+import { Component, input, type DebugElement } from '@angular/core';
+import type { TestBed } from '@angular/core/testing';
 import { onTestFinished, vi } from 'vitest';
 import type { ServerEvent } from '@openfleet/shared';
 import { FleetEventsService } from '../core/fleet-events.service';
+import { SessionViewComponent } from '../sessions/session-view.component';
+import { TerminalComponent } from '../sessions/terminal.component';
 
 interface Rendered {
   debugElement: DebugElement;
   whenStable(): Promise<unknown>;
 }
+
+@Component({ selector: 'of-terminal', template: '<div data-testid="terminal"></div>' })
+class TerminalStubComponent {
+  readonly sessionId = input.required<string>();
+}
+
+/** `render` option that swaps the xterm terminal for an empty stub: mounting a real one costs about 2 s per render. */
+export const withoutRealTerminal = {
+  configureTestBed: (testBed: TestBed) => {
+    testBed.overrideComponent(SessionViewComponent, {
+      remove: { imports: [TerminalComponent] },
+      add: { imports: [TerminalStubComponent] },
+    });
+  },
+};
 
 export function deferred<T>() {
   let resolve!: (value: T) => void;
