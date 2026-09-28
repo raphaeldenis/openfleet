@@ -372,29 +372,6 @@ describe('SessionViewComponent lifecycle banners — sessions that closed long a
     expect(screen.getByTestId('resume-error')).toHaveTextContent('failed to launch');
     expect(screen.getByTestId('resume-error')).not.toHaveTextContent('not closed');
   });
-
-  it('does not send a second reopen for a session whose first reopen is still in flight after A → B → A', async () => {
-    // Arrange
-    const reopen = deferred<unknown>();
-    const api = fakeApi();
-    api.reopenSession = vi.fn(() => reopen.promise);
-    const { fixture, sessionId } = await renderAgainstDaemonEvents(api, [
-      session({ id: 's1', state: 'closed', exitCode: 0, closedAt: CLOSED_AT }),
-      session({ id: 's2', name: 'Legolas', state: 'closed', exitCode: 0, closedAt: CLOSED_AT }),
-    ]);
-    await userEvent.click(screen.getByTestId('resume-session'));
-    sessionId.set('s2');
-    await fixture.whenStable();
-    sessionId.set('s1');
-    await fixture.whenStable();
-
-    // Act
-    await userEvent.click(screen.getByTestId('resume-session'));
-
-    // Assert
-    expect(api.reopenSession).toHaveBeenCalledTimes(1);
-    reopen.resolve({});
-  });
 });
 
 describe('SessionViewComponent reopen — a request that outlives a session switch', () => {

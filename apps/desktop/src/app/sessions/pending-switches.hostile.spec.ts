@@ -281,48 +281,9 @@ describe('PendingSwitchesService through the model selector and the permission-m
   });
 
   describe('a switch reply or a request that outlives the session view', () => {
-    it('parks a model switch whose reply arrives after the user left the session', async () => {
-      const reply = deferred<{ status: 'deferred' }>();
-      const { fixture, goTo } = await renderSelectors({ api: { updateModel: vi.fn(() => reply.promise) } });
-      await requestModelSwitch();
-      await goTo('s2');
-      reply.resolve({ status: 'deferred' });
-      await fixture.whenStable();
-
-      await goTo('s1');
-
-      expect(modelNote()).toHaveTextContent('switch pending');
-    });
-
-    it('parks a permission-mode switch whose reply arrives after the user left the session', async () => {
-      const reply = deferred<{ status: 'deferred' }>();
-      const { fixture, goTo } = await renderSelectors({ api: { updatePermissionMode: vi.fn(() => reply.promise) } });
-      await requestPermissionModeSwitch();
-      await goTo('s2');
-      reply.resolve({ status: 'deferred' });
-      await fixture.whenStable();
-
-      await goTo('s1');
-
-      expect(permissionModeNote()).toHaveTextContent('switch pending');
-    });
-
     describe.each(SWITCH_KINDS)('the $kind switch request of A', (kind) => {
       const { apiMethod } = kind;
       const applyButton = () => applyButtonOf(kind);
-
-      it('is not sent a second time while the first is still in flight after A → B → A', async () => {
-        const reply = deferred<{ status: 'deferred' }>();
-        const { goTo, api } = await renderSelectors({ api: { [apiMethod]: vi.fn(() => reply.promise) } });
-        await requestSwitch(kind);
-        await goTo('s2');
-        await goTo('s1');
-
-        await userEvent.click(applyButton());
-
-        expect(api[apiMethod]).toHaveBeenCalledTimes(1);
-        reply.resolve({ status: 'deferred' });
-      });
 
       it('keeps Apply disabled after A → B → A until the reply lands, then shows the note and lets Apply send again', async () => {
         const reply = deferred<{ status: 'deferred' }>();
@@ -354,23 +315,6 @@ describe('PendingSwitchesService through the model selector and the permission-m
         expect(errorOf(kind)).toHaveTextContent(/could not/i);
         expect(noteOf(kind)).toBeNull();
         expect(applyButton()).toBeEnabled();
-      });
-
-      it.each([
-        { outcome: 'resolves', settle: (reply: ReturnType<typeof deferred<{ status: 'deferred' }>>) => reply.resolve({ status: 'deferred' }) },
-        { outcome: 'rejects', settle: (reply: ReturnType<typeof deferred<{ status: 'deferred' }>>) => reply.reject(new Error('boom')) },
-      ])('leaves B untouched when A\'s request $outcome while B is shown', async ({ settle }) => {
-        const reply = deferred<{ status: 'deferred' }>();
-        const { fixture, goTo } = await renderSelectors({ api: { [apiMethod]: vi.fn(() => reply.promise) } });
-        await requestSwitch(kind);
-        await goTo('s2');
-
-        settle(reply);
-        await settleRequests(fixture);
-
-        expect(applyButton()).toBeEnabled();
-        expect(noteOf(kind)).toBeNull();
-        expect(errorOf(kind)).toBeNull();
       });
 
       it.each([

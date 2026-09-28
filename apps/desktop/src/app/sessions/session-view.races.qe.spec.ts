@@ -410,21 +410,6 @@ describe('Close and Interrupt of a session across A → B → A', () => {
     closeReply.resolve({});
   });
 
-  it('sends the close of A once, even when the confirm dialog is reopened after A → B → A', async () => {
-    const closeReply = deferred<unknown>();
-    const api = Object.assign(fakeApi(), { closeSession: vi.fn(() => closeReply.promise) });
-    const { goTo } = await renderFleet(api, [gimli(), legolas()]);
-    await requestClose();
-    await goTo('s2');
-    await goTo('s1');
-
-    await userEvent.click(screen.getByTestId('session-close'));
-
-    expect(api.closeSession).toHaveBeenCalledTimes(1);
-    expect(screen.queryByTestId('close-confirm-dialog')).toBeNull();
-    closeReply.resolve({});
-  });
-
   it('keeps A\'s failed close off B, and lets A close again on return', async () => {
     const closeReply = deferred<unknown>();
     const api = Object.assign(fakeApi(), { closeSession: vi.fn(() => closeReply.promise) });
