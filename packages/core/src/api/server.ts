@@ -56,9 +56,6 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; clos
   registerRestRoutes(router, deps);
 
   const server = createServer(async (req, res) => {
-    // ponytail: echoes the request origin rather than a fixed allowlist — the daemon uses bearer tokens,
-    // never cookies/credentials, and binds 127.0.0.1 only, so an echoed origin leaks nothing an attacker
-    // page doesn't already need the admin token to exploit. Narrow to a real allowlist if that changes.
     applyCorsHeaders(req, res);
     if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
 

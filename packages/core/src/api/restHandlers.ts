@@ -44,7 +44,6 @@ export function registerRestRoutes(router: Router, deps: { sessions: SessionServ
   // next launch or model switch resolves against the new ids. Running sessions keep the id they resolved.
   router.add('PUT', '/api/models', async ({ res, body }) => {
     const patch = ModelTablePatchSchema.parse(body);
-    const availableModels = await listAvailableModels();
     try {
       saveModelPatch(deps.modelConfigPath, patch);
     } catch (error) {
@@ -53,8 +52,7 @@ export function registerRestRoutes(router: Router, deps: { sessions: SessionServ
       throw error;
     }
     Object.assign(deps.modelTable, patch);
-    const unknownRungs = Object.entries(patch).filter(([, modelId]) => !availableModels.includes(modelId)).map(([rung]) => rung);
-    json(res, 200, { models: servedRungs(), unknownRungs });
+    json(res, 200, { models: servedRungs() });
   });
 
   router.add('POST', '/api/sessions', async ({ res, body }) => {
