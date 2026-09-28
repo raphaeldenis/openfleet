@@ -5,13 +5,15 @@ import type { WritableSignal } from '@angular/core';
  * before the first request settles). Clears `error` before running and sets it, if `action`
  * throws, to `message` — a fixed string, or a function of the thrown error for callers that map
  * error codes to copy — never the thrown error's own text, since a raw fetch/Error message is not
- * fit for a user to read. Always resets `busy` once `action` settles.
+ * fit for a user to read. Always resets `busy` once `action` settles, unless `isStale()` reports
+ * the run as superseded by then: a stale settle touches neither `busy` nor `error`.
  */
 export async function runGuarded(
   busy: WritableSignal<boolean>,
   error: WritableSignal<string | null>,
   message: string | ((error: unknown) => string),
-  action: () => Promise<void>,
+  action: () => Promise<unknown>,
+  { isStale = () => false }: { isStale?: () => boolean } = {},
 ): Promise<void> {
   if (busy()) return;
   busy.set(true);
@@ -19,8 +21,8 @@ export async function runGuarded(
   try {
     await action();
   } catch (thrown) {
-    error.set(typeof message === 'function' ? message(thrown) : message);
+    if (!isStale()) error.set(typeof message === 'function' ? message(thrown) : message);
   } finally {
-    busy.set(false);
+    if (!isStale()) busy.set(false);
   }
 }

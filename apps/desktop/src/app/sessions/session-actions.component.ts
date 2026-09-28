@@ -1,7 +1,7 @@
 import { ChangeDetectionStrategy, Component, ElementRef, Injector, afterNextRender, computed, effect, inject, input, signal, viewChild } from '@angular/core';
-import type { WritableSignal } from '@angular/core';
 import type { SessionState } from '@openfleet/shared';
 import { FleetApiService } from '../core/fleet-api.service';
+import { runGuarded } from '../core/run-guarded';
 
 const CLOSE_CONFIRM_BODY =
   'The process stops. The worktree, branch and transcript are kept; you can reopen it later with its history.';
@@ -30,7 +30,7 @@ const ESCAPE_KEY = '\x1b';
       }
     </div>
     @if (confirmingClose()) {
-      <div class="close-confirm-overlay" data-testid="close-confirm-overlay" (keydown.escape)="cancelClose()" (keydown)="trapTabFocus($event)">
+      <div class="close-confirm-overlay" tabindex="-1" data-testid="close-confirm-overlay" (keydown.escape)="cancelClose()" (keydown)="trapTabFocus($event)">
         <div class="close-confirm" role="dialog" aria-modal="true" aria-labelledby="close-confirm-title" data-testid="close-confirm-dialog">
           <span id="close-confirm-title" class="close-confirm-title">Close {{ sessionName() }}?</span>
           <p class="close-confirm-body">{{ closeConfirmBody }}</p>
@@ -55,6 +55,7 @@ const ESCAPE_KEY = '\x1b';
       position: fixed; inset: 0; z-index: 30;
       display: flex; align-items: center; justify-content: center;
       background: rgba(0, 0, 0, .45);
+      outline: none;
     }
     .close-confirm {
       width: 26rem; display: flex; flex-direction: column; gap: .75rem; padding: 1.125rem;
@@ -93,6 +94,9 @@ export class SessionActionsComponent {
     effect(() => {
       if (this.confirmingClose()) this.cancelButton()?.nativeElement.focus();
     });
+    effect(() => {
+      if (this.closed()) this.confirmingClose.set(false);
+    });
     // A route param change reuses this component instance, so a session switch must not leave a
     // stale confirm dialog, close error or in-flight flag showing over the new session.
     effect(() => {
@@ -112,13 +116,20 @@ export class SessionActionsComponent {
 
   cancelClose(): void {
     this.confirmingClose.set(false);
-    // The trigger sits under `[attr.inert]` until this signal write renders; focus only lands after that.
-    afterNextRender(() => this.closeTrigger()?.nativeElement.focus(), { injector: this.injector });
+    this.focusCloseTriggerAfterRender();
   }
 
   confirmClose(): void {
     this.confirmingClose.set(false);
-    void this.close(this.closingSessionId);
+    void this.close(this.closingSessionId).then(() => {
+      const closeFailed = this.error() !== null;
+      if (closeFailed) this.focusCloseTriggerAfterRender();
+    });
+  }
+
+  // The trigger sits under `[attr.inert]` (and `[disabled]` while closing) until the pending signal writes render.
+  private focusCloseTriggerAfterRender(): void {
+    afterNextRender(() => this.closeTrigger()?.nativeElement.focus(), { injector: this.injector });
   }
 
   /** Keeps Tab cycling between Cancel and Close session only, so focus never reaches what's behind the dialog. */
@@ -136,35 +147,19 @@ export class SessionActionsComponent {
   }
 
   private async close(sessionId: string): Promise<void> {
-    await this.runForSession({ sessionId, busy: this.closing, failureMessage: CLOSE_ERROR, action: () => this.api.closeSession(sessionId) });
+    await runGuarded(this.closing, this.error, CLOSE_ERROR, () => this.api.closeSession(sessionId), {
+      isStale: () => this.hasLeftSession(sessionId),
+    });
   }
 
   async interrupt(): Promise<void> {
     const sessionId = this.sessionId();
-    await this.runForSession({ sessionId, busy: this.interrupting, failureMessage: INTERRUPT_ERROR, action: () => this.api.sendInput(sessionId, ESCAPE_KEY) });
+    await runGuarded(this.interrupting, this.error, INTERRUPT_ERROR, () => this.api.sendInput(sessionId, ESCAPE_KEY), {
+      isStale: () => this.hasLeftSession(sessionId),
+    });
   }
 
-  // Unlike runGuarded, a settle for a session the user has since left touches nothing: the busy flag and
-  // error already belong to whichever session is current, so it must neither show its error nor reset its flag.
-  private async runForSession(request: {
-    sessionId: string;
-    busy: WritableSignal<boolean>;
-    failureMessage: string;
-    action: () => Promise<unknown>;
-  }): Promise<void> {
-    const { sessionId, busy, failureMessage, action } = request;
-    if (busy()) return;
-    busy.set(true);
-    this.error.set(null);
-    let failed = false;
-    try {
-      await action();
-    } catch {
-      failed = true;
-    }
-    const isStale = this.sessionId() !== sessionId;
-    if (isStale) return;
-    if (failed) this.error.set(failureMessage);
-    busy.set(false);
+  private hasLeftSession(sessionId: string): boolean {
+    return this.sessionId() !== sessionId;
   }
 }

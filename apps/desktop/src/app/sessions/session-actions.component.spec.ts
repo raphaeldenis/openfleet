@@ -494,23 +494,31 @@ describe('SessionActionsComponent', () => {
       expect(screen.getByTestId('session-close')).toHaveAttribute('disabled');
     });
 
-    // KNOWN DEFECT (major, a11y): Escape and the Tab trap are bound on the overlay's keydown, so once a
-    // click on non-focusable dialog text drops focus to <body> neither works and Tab leaves the modal.
-    it.fails('dismisses the dialog on Escape after a click on its text moved focus to <body>', async () => {
+    it('dismisses the dialog on Escape after a click on its text moved focus off the buttons', async () => {
       const api = { closeSession: vi.fn(), sendInput: vi.fn() };
       await renderControllable(api, 'idle');
       await userEvent.click(screen.getByTestId('session-close'));
       await userEvent.click(screen.getByText(/The process stops/));
-      expect(document.body).toHaveFocus();
+      expect(screen.getByTestId('close-confirm-cancel')).not.toHaveFocus();
 
       await userEvent.keyboard('{Escape}');
 
       expect(screen.queryByTestId('close-confirm-dialog')).toBeNull();
     });
 
-    // KNOWN DEFECT (minor): only a sessionId change dismisses the dialog; a `state` change to 'closed'
-    // leaves "Close session" armed for a session that no longer has a process to stop.
-    it.fails('dismisses the dialog when the session is closed elsewhere while it is open', async () => {
+    it('keeps Tab inside the dialog after a click on its text moved focus off the buttons', async () => {
+      const api = { closeSession: vi.fn(), sendInput: vi.fn() };
+      await renderControllable(api, 'idle');
+      await userEvent.click(screen.getByTestId('session-close'));
+      await userEvent.click(screen.getByText(/The process stops/));
+
+      await userEvent.tab();
+
+      const dialog = screen.getByTestId('close-confirm-dialog');
+      expect(dialog.contains(document.activeElement)).toBe(true);
+    });
+
+    it('dismisses the dialog when the session is closed elsewhere while it is open', async () => {
       const api = { closeSession: vi.fn(), sendInput: vi.fn() };
       const { state, flush } = await renderControllable(api, 'idle');
       await userEvent.click(screen.getByTestId('session-close'));
@@ -521,15 +529,15 @@ describe('SessionActionsComponent', () => {
       expect(screen.queryByTestId('close-confirm-dialog')).toBeNull();
     });
 
-    it('cancels cleanly, without focusing anything, when the Close button has vanished behind the open dialog', async () => {
+    it('cancels cleanly, without focusing anything, when the Close button has vanished', async () => {
       const api = { closeSession: vi.fn(), sendInput: vi.fn() };
       const handleError = vi.fn();
-      const { state, flush } = await renderControllable(api, 'idle', [{ provide: ErrorHandler, useValue: { handleError } }]);
+      const { fixture, state, flush } = await renderControllable(api, 'idle', [{ provide: ErrorHandler, useValue: { handleError } }]);
       await userEvent.click(screen.getByTestId('session-close'));
       state.set('closed');
       await flush();
 
-      await userEvent.click(screen.getByTestId('close-confirm-cancel'));
+      fixture.componentInstance.cancelClose();
       await flush();
 
       expect(screen.queryByTestId('close-confirm-dialog')).toBeNull();
@@ -537,9 +545,7 @@ describe('SessionActionsComponent', () => {
       expect(handleError).not.toHaveBeenCalled();
     });
 
-    // KNOWN DEFECT (minor, a11y): confirmClose destroys the focused dialog and, unlike cancelClose, never
-    // refocuses Close, so after a failed close the keyboard user lands on <body> next to the error.
-    it.fails('returns focus to Close when a confirmed close fails', async () => {
+    it('returns focus to Close when a confirmed close fails', async () => {
       const api = { closeSession: vi.fn().mockRejectedValue(new Error('boom')), sendInput: vi.fn() };
       const { flush } = await renderControllable(api, 'idle');
       const closeButton = screen.getByTestId('session-close');
