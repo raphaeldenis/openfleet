@@ -1,0 +1,471 @@
+import { render, screen, within } from '@testing-library/angular/zoneless';
+import userEvent from '@testing-library/user-event';
+import { TestBed } from '@angular/core/testing';
+import { provideRouter, Router } from '@angular/router';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { OnboardingComponent } from './onboarding.component';
+
+// Hostile black-box QE suite for P2-U7. Every `it.fails` documents a defect: it asserts the behaviour
+// a user should get, fails today, and flips to a plain `it` once the defect is fixed.
+
+const HEALTH_POLL_INTERVAL_MS = 2000;
+const REPOSITORY_PATH = '/Users/me/repo';
+
+function response({ status = 200, body = {} as unknown }: { status?: number; body?: unknown } = {}): Response {
+  return { ok: status < 400, status, json: () => Promise.resolve(body) } as unknown as Response;
+}
+
+function responseWithNonJsonBody(): Response {
+  return { ok: true, status: 200, json: () => Promise.reject(new SyntaxError('Unexpected token < in JSON')) } as unknown as Response;
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+function stubDaemon({ isUp = false } = {}) {
+  const daemon = {
+    answerHealth: (): Promise<Response> => (isUp ? Promise.resolve(response({ body: { ok: true } })) : Promise.reject(new TypeError('Failed to fetch'))),
+    answerCreateSession: (): Promise<Response> => Promise.resolve(response({ body: { id: 's-new' } })),
+  };
+  const fetchMock = vi.fn((url: string, _init?: RequestInit) => {
+    if (url.endsWith('/health')) return daemon.answerHealth();
+    if (url.endsWith('/api/sessions')) return daemon.answerCreateSession();
+    return Promise.reject(new Error(`unexpected request to ${url}`));
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  const healthRequestCount = () => fetchMock.mock.calls.filter(([url]) => url.endsWith('/health')).length;
+  const createSessionRequests = () => fetchMock.mock.calls.filter(([url]) => url.endsWith('/api/sessions')).map(([, init]) => JSON.parse(init?.body as string));
+  return { daemon, healthRequestCount, createSessionRequests };
+}
+
+async function renderOnboarding() {
+  const view = await render(OnboardingComponent, { providers: [provideRouter([])] });
+  const navigateSpy = vi.spyOn(view.fixture.debugElement.injector.get(Router), 'navigate').mockResolvedValue(true);
+  return { ...view, navigateSpy };
+}
+
+async function letTimePass(milliseconds: number, fixture: { whenStable: () => Promise<unknown> }): Promise<void> {
+  await vi.advanceTimersByTimeAsync(milliseconds);
+  await fixture.whenStable();
+}
+
+type Listener = (...args: unknown[]) => void;
+type NodeProcess = { listeners(event: string): Listener[]; removeAllListeners(event: string): unknown; on(event: string, listener: Listener): unknown };
+
+// Runs `action` while collecting the promise rejections nobody handled, so the run itself stays green.
+async function collectUnhandledRejections(action: () => Promise<void>): Promise<unknown[]> {
+  const nodeProcess = (globalThis as unknown as { process: NodeProcess }).process;
+  const runnerListeners = nodeProcess.listeners('unhandledRejection');
+  const rejections: unknown[] = [];
+  nodeProcess.removeAllListeners('unhandledRejection');
+  nodeProcess.on('unhandledRejection', (reason) => rejections.push(reason));
+  try {
+    await action();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  } finally {
+    nodeProcess.removeAllListeners('unhandledRejection');
+    runnerListeners.forEach((listener) => nodeProcess.on('unhandledRejection', listener));
+  }
+  return rejections;
+}
+
+function newUser() {
+  return userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+}
+
+async function reachProjectStep() {
+  const daemonStub = stubDaemon({ isUp: true });
+  const view = await renderOnboarding();
+  await letTimePass(0, view.fixture);
+  return { ...daemonStub, ...view };
+}
+
+async function reachFirstSessionStep(repositoryPath = REPOSITORY_PATH) {
+  const view = await reachProjectStep();
+  const user = newUser();
+  await user.type(screen.getByLabelText('Repository path'), repositoryPath);
+  await user.click(screen.getByRole('button', { name: 'Continue' }));
+  return { ...view, user };
+}
+
+describe('Onboarding — hostile black-box suite', () => {
+  beforeEach(() => vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] }));
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  describe('daemon polling', () => {
+    // DEFECT (major) onboarding.component.ts:161 — setInterval fires whether or not the previous /health is settled.
+    it.fails('a /health request that hangs is not stacked with a new /health request every 2 seconds', async () => {
+      const { daemon, healthRequestCount } = stubDaemon();
+      daemon.answerHealth = () => new Promise<Response>(() => undefined);
+      const { fixture } = await renderOnboarding();
+
+      await letTimePass(HEALTH_POLL_INTERVAL_MS * 3, fixture);
+
+      expect(healthRequestCount()).toBe(1);
+    });
+
+    it('user starting the daemon after a few failed checks is moved on to the project step', async () => {
+      const { daemon } = stubDaemon();
+      const { fixture } = await renderOnboarding();
+      await letTimePass(HEALTH_POLL_INTERVAL_MS * 2, fixture);
+      expect(screen.getByTestId('onboarding-step-daemon')).toBeInTheDocument();
+
+      daemon.answerHealth = () => Promise.resolve(response({ body: { ok: true } }));
+      await letTimePass(HEALTH_POLL_INTERVAL_MS, fixture);
+
+      expect(screen.getByTestId('onboarding-step-project')).toBeInTheDocument();
+    });
+
+    it('user with the daemon already up is taken to the project step at once, without waiting for a poll tick', async () => {
+      stubDaemon({ isUp: true });
+      const { fixture } = await renderOnboarding();
+
+      await letTimePass(0, fixture);
+
+      expect(screen.getByTestId('onboarding-step-project')).toBeInTheDocument();
+    });
+
+    it('a /health answering 503 keeps the user on the daemon step', async () => {
+      const { daemon } = stubDaemon();
+      daemon.answerHealth = () => Promise.resolve(response({ status: 503, body: { error: 'starting' } }));
+      const { fixture } = await renderOnboarding();
+
+      await letTimePass(HEALTH_POLL_INTERVAL_MS * 2, fixture);
+
+      expect(screen.getByTestId('onboarding-step-daemon')).toBeInTheDocument();
+    });
+
+    it('a 200 that is not JSON (some other service on the port) keeps the user on the daemon step', async () => {
+      const { daemon } = stubDaemon();
+      daemon.answerHealth = () => Promise.resolve(responseWithNonJsonBody());
+      const { fixture } = await renderOnboarding();
+
+      await letTimePass(HEALTH_POLL_INTERVAL_MS * 2, fixture);
+
+      expect(screen.getByTestId('onboarding-step-daemon')).toBeInTheDocument();
+    });
+
+    // DEFECT (minor) fleet-api.service.ts:33 — health() treats any 2xx JSON body as "up"; `ok: false` is ignored.
+    it.fails('a 200 whose body says {ok: false} keeps the user on the daemon step', async () => {
+      const { daemon } = stubDaemon();
+      daemon.answerHealth = () => Promise.resolve(response({ body: { ok: false } }));
+      const { fixture } = await renderOnboarding();
+
+      await letTimePass(HEALTH_POLL_INTERVAL_MS, fixture);
+
+      expect(screen.getByTestId('onboarding-step-daemon')).toBeInTheDocument();
+    });
+
+    it('a slow /health answering after the user has moved on to the first-session step does not pull them back', async () => {
+      const { daemon } = stubDaemon();
+      const slowFirstCheck = deferred<Response>();
+      const answers = [slowFirstCheck.promise, Promise.resolve(response({ body: { ok: true } }))];
+      daemon.answerHealth = () => answers.shift() ?? new Promise<Response>(() => undefined);
+      const { fixture } = await renderOnboarding();
+      await letTimePass(HEALTH_POLL_INTERVAL_MS, fixture);
+      const user = newUser();
+      await user.type(screen.getByLabelText('Repository path'), REPOSITORY_PATH);
+      await user.click(screen.getByRole('button', { name: 'Continue' }));
+      expect(screen.getByTestId('onboarding-step-first-session')).toBeInTheDocument();
+
+      slowFirstCheck.resolve(response({ body: { ok: true } }));
+      await letTimePass(HEALTH_POLL_INTERVAL_MS, fixture);
+
+      expect(screen.getByTestId('onboarding-step-first-session')).toBeInTheDocument();
+      expect(screen.getByLabelText('Directory')).toHaveValue(REPOSITORY_PATH);
+    });
+
+    it('user leaving onboarding and coming back gets one poll every 2 seconds, not one per visit', async () => {
+      const { healthRequestCount } = stubDaemon();
+      const firstVisit = await renderOnboarding();
+      firstVisit.fixture.destroy();
+
+      const secondVisit = TestBed.createComponent(OnboardingComponent);
+      secondVisit.detectChanges();
+      const requestsOnSecondArrival = healthRequestCount();
+      await letTimePass(HEALTH_POLL_INTERVAL_MS * 2, secondVisit);
+
+      expect(healthRequestCount()).toBe(requestsOnSecondArrival + 2);
+    });
+  });
+
+  describe('copy command', () => {
+    async function clickCopyCommandWhenClipboardIs(clipboard: 'refusing' | 'missing') {
+      stubDaemon();
+      const user = newUser();
+      await renderOnboarding();
+      const originalClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+      if (clipboard === 'refusing') vi.spyOn(navigator.clipboard, 'writeText').mockRejectedValue(new DOMException('denied', 'NotAllowedError'));
+      if (clipboard === 'missing') Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
+      try {
+        return await collectUnhandledRejections(() => user.click(screen.getByRole('button', { name: 'Copy command' })));
+      } finally {
+        if (originalClipboard) Object.defineProperty(navigator, 'clipboard', originalClipboard);
+      }
+    }
+
+    it('user whose clipboard write is refused is not told the command was copied, and can still read it', async () => {
+      await clickCopyCommandWhenClipboardIs('refusing');
+
+      expect(screen.queryByRole('button', { name: 'Copied' })).toBeNull();
+      expect(screen.getByRole('button', { name: 'Copy command' })).toBeInTheDocument();
+      expect(screen.getByText('$ pnpm dev:core')).toBeInTheDocument();
+    });
+
+    it('user with no clipboard API is not told the command was copied, and can still read it', async () => {
+      await clickCopyCommandWhenClipboardIs('missing');
+
+      expect(screen.queryByRole('button', { name: 'Copied' })).toBeNull();
+      expect(screen.getByText('$ pnpm dev:core')).toBeInTheDocument();
+    });
+
+    // DEFECT (minor) onboarding.component.ts:167-170 — a refused or absent clipboard rejects the click handler:
+    // the rejection is unhandled (it turns a vitest run red) and nothing tells the user.
+    it.fails('user whose clipboard write is refused causes no unhandled promise rejection', async () => {
+      const unhandledRejections = await clickCopyCommandWhenClipboardIs('refusing');
+
+      expect(unhandledRejections).toEqual([]);
+    });
+
+    it.fails('user with no clipboard API causes no unhandled promise rejection', async () => {
+      const unhandledRejections = await clickCopyCommandWhenClipboardIs('missing');
+
+      expect(unhandledRejections).toEqual([]);
+    });
+
+    it.fails('user whose clipboard write is refused is told the copy failed', async () => {
+      await clickCopyCommandWhenClipboardIs('refusing');
+
+      expect(screen.getByText(/could not copy|copy failed|couldn.t copy/i)).toBeInTheDocument();
+    });
+  });
+
+  describe('stepper', () => {
+    it('the stepper is a labelled list, so a screen reader announces "Setup steps, list, 6 items"', async () => {
+      stubDaemon();
+      await renderOnboarding();
+
+      const stepper = screen.getByRole('list', { name: 'Setup steps' });
+
+      expect(within(stepper).getAllByRole('listitem')).toHaveLength(6);
+    });
+
+    it('exactly one step is current at any time, and it follows the user from Daemon to Project', async () => {
+      const { daemon } = stubDaemon();
+      const { fixture } = await renderOnboarding();
+      const currentSteps = () => screen.getAllByRole('listitem').filter((step) => step.getAttribute('aria-current') === 'step');
+      expect(currentSteps().map((step) => step.textContent)).toEqual([expect.stringContaining('Daemon')]);
+
+      daemon.answerHealth = () => Promise.resolve(response({ body: { ok: true } }));
+      await letTimePass(HEALTH_POLL_INTERVAL_MS, fixture);
+
+      expect(currentSteps().map((step) => step.textContent)).toEqual([expect.stringContaining('Project')]);
+    });
+
+    it('keyboard user tabbing through the page never lands on a step of the stepper, and clicking a later-phase step goes nowhere', async () => {
+      stubDaemon();
+      const user = newUser();
+      await renderOnboarding();
+      const stepper = screen.getByRole('list', { name: 'Setup steps' });
+
+      const tabStops: Element[] = [];
+      for (let pressCount = 0; pressCount < 6; pressCount++) {
+        await user.tab();
+        tabStops.push(document.activeElement as Element);
+      }
+      await user.click(screen.getByText('Playbooks'));
+
+      expect(tabStops.some((stop) => stepper.contains(stop))).toBe(false);
+      expect(screen.getByTestId('onboarding-step-daemon')).toBeInTheDocument();
+    });
+
+    it('the first Tab stop is "Skip to app" and the second is "Copy command"', async () => {
+      stubDaemon();
+      const user = newUser();
+      await renderOnboarding();
+
+      await user.tab();
+      expect(screen.getByRole('link', { name: /Skip to app/ })).toHaveFocus();
+      await user.tab();
+      expect(screen.getByRole('button', { name: 'Copy command' })).toHaveFocus();
+    });
+
+    // DEFECT (minor, a11y) onboarding.component.ts:37 — the done ✓ is aria-hidden and the state is colour-only,
+    // so a screen-reader user cannot tell that Daemon is finished.
+    it.fails('screen reader user is told the Daemon step is done once the user is on the Project step', async () => {
+      await reachProjectStep();
+
+      const daemonStep = screen.getAllByRole('listitem').find((step) => step.textContent?.includes('Daemon'));
+
+      expect(daemonStep).toHaveTextContent(/done|complete/i);
+    });
+
+    // DEFECT (minor, a11y) new-session-form.component.ts:33 + onboarding.component.ts:86 — step 3 renders two <h1>.
+    it.fails('the first-session step has a single top-level heading', async () => {
+      await reachFirstSessionStep();
+
+      expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    });
+  });
+
+  describe('project step', () => {
+    it('user pressing Enter in the repository path field moves on to the first-session step', async () => {
+      const { user } = await reachProjectStepAndType();
+
+      await user.keyboard('{Enter}');
+
+      expect(screen.getByTestId('onboarding-step-first-session')).toBeInTheDocument();
+    });
+
+    it('user pressing Enter with an empty repository path stays on the project step', async () => {
+      await reachProjectStep();
+      const user = newUser();
+
+      await user.click(screen.getByLabelText('Repository path'));
+      await user.keyboard('{Enter}');
+
+      expect(screen.getByTestId('onboarding-step-project')).toBeInTheDocument();
+    });
+
+    it('a repository path made only of spaces cannot be continued, by button or by Enter', async () => {
+      await reachProjectStep();
+      const user = newUser();
+
+      await user.type(screen.getByLabelText('Repository path'), '    {Enter}');
+
+      expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
+      expect(screen.getByTestId('onboarding-step-project')).toBeInTheDocument();
+    });
+
+    // DEFECT (minor, UX) onboarding.component.ts:72-88 — there is no Back: a wrong path can only be fixed in step 3's Directory field.
+    it.fails('user on the first-session step can go back to the project step', async () => {
+      await reachFirstSessionStep();
+
+      expect(screen.getByRole('button', { name: /back/i })).toBeInTheDocument();
+    });
+  });
+
+  describe('first-session step', () => {
+    it('user gets exactly the documented payload: trimmed path, default identity, default model, and the seeded prompt', async () => {
+      const { createSessionRequests, user } = await reachFirstSessionStep(`  ${REPOSITORY_PATH}  `);
+
+      await user.click(screen.getByRole('button', { name: 'Create session' }));
+
+      await vi.waitFor(() => expect(createSessionRequests()).toHaveLength(1));
+      const [payload] = createSessionRequests();
+      expect(payload).toEqual({
+        directory: REPOSITORY_PATH,
+        name: 'First session',
+        emoji: '🤖',
+        model: 'sonnet',
+        harness: 'claude-cli',
+        seededPrompt: expect.stringMatching(/do not modify/i),
+      });
+    });
+
+    it('user submitting twice in a row creates one session, so the seeded prompt reaches the daemon once', async () => {
+      const { createSessionRequests } = await reachFirstSessionStep();
+      const form = screen.getByTestId('new-session-form');
+
+      form.dispatchEvent(new Event('submit', { cancelable: true }));
+      form.dispatchEvent(new Event('submit', { cancelable: true }));
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(createSessionRequests()).toHaveLength(1);
+    });
+
+    it('user who switches to manager mode creates a manager whose payload carries no seeded prompt', async () => {
+      const { createSessionRequests, user } = await reachFirstSessionStep();
+
+      await user.click(screen.getByTestId('new-session-mode-manager'));
+      await user.type(screen.getByTestId('manager-mission'), 'Ship phase 2');
+      await user.click(screen.getByRole('button', { name: 'Create manager' }));
+
+      await vi.waitFor(() => expect(createSessionRequests()).toHaveLength(1));
+      const [payload] = createSessionRequests();
+      expect(payload).toEqual(expect.objectContaining({ directory: REPOSITORY_PATH, manager: expect.objectContaining({ mission: 'Ship phase 2' }) }));
+      expect(payload).not.toHaveProperty('seededPrompt');
+    });
+
+    it('user who switches to manager mode and back to session still sends the seeded prompt', async () => {
+      const { createSessionRequests, user } = await reachFirstSessionStep();
+
+      await user.click(screen.getByTestId('new-session-mode-manager'));
+      await user.click(screen.getByTestId('new-session-mode-session'));
+      await user.click(screen.getByRole('button', { name: 'Create session' }));
+
+      await vi.waitFor(() => expect(createSessionRequests()).toHaveLength(1));
+      expect(createSessionRequests()[0]).toHaveProperty('seededPrompt', expect.stringMatching(/do not modify/i));
+    });
+
+    it('user can overwrite the pre-filled directory and name, and the payload follows what they typed', async () => {
+      const { createSessionRequests, user } = await reachFirstSessionStep();
+
+      await user.clear(screen.getByLabelText('Directory'));
+      await user.type(screen.getByLabelText('Directory'), '/Users/me/other-worktree');
+      await user.clear(screen.getByLabelText('Name'));
+      await user.type(screen.getByLabelText('Name'), 'Gimli');
+      await user.click(screen.getByRole('button', { name: 'Create session' }));
+
+      await vi.waitFor(() => expect(createSessionRequests()).toHaveLength(1));
+      expect(createSessionRequests()[0]).toEqual(expect.objectContaining({ directory: '/Users/me/other-worktree', name: 'Gimli' }));
+    });
+
+    it('user who empties the pre-filled name gets an inline error and nothing is sent', async () => {
+      const { createSessionRequests, user } = await reachFirstSessionStep();
+
+      await user.clear(screen.getByLabelText('Name'));
+      await user.click(screen.getByRole('button', { name: 'Create session' }));
+
+      expect(screen.getByRole('alert')).toHaveTextContent('Name is required');
+      expect(createSessionRequests()).toHaveLength(0);
+    });
+
+    it('user whose directory the daemon refuses sees the error, stays on the step, and a retry succeeds and navigates', async () => {
+      const { daemon, createSessionRequests, navigateSpy, user } = await reachFirstSessionStep();
+      daemon.answerCreateSession = () => Promise.resolve(response({ status: 400, body: { error: 'directory_missing' } }));
+
+      await user.click(screen.getByRole('button', { name: 'Create session' }));
+
+      expect(await screen.findByTestId('new-session-form-error')).toBeInTheDocument();
+      expect(navigateSpy).not.toHaveBeenCalled();
+      daemon.answerCreateSession = () => Promise.resolve(response({ body: { id: 's-retry' } }));
+      await user.click(screen.getByRole('button', { name: 'Create session' }));
+      await vi.waitFor(() => expect(navigateSpy).toHaveBeenCalledWith(['/session', 's-retry']));
+      expect(createSessionRequests()).toHaveLength(2);
+    });
+
+    it('user whose daemon has gone away meanwhile is told to check the connection', async () => {
+      const { daemon, user } = await reachFirstSessionStep();
+      daemon.answerCreateSession = () => Promise.reject(new TypeError('Failed to fetch'));
+
+      await user.click(screen.getByRole('button', { name: 'Create session' }));
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(/check your connection/i);
+    });
+
+    // DEFECT (minor, UX) onboarding.component.ts:88 — a prompt is sent to the agent that the user never sees.
+    it.fails('user is shown the seeded prompt before it is sent on their behalf', async () => {
+      await reachFirstSessionStep();
+
+      expect(screen.getByText(/Read the README/i)).toBeInTheDocument();
+    });
+  });
+});
+
+async function reachProjectStepAndType() {
+  const view = await reachProjectStep();
+  const user = newUser();
+  await user.type(screen.getByLabelText('Repository path'), REPOSITORY_PATH);
+  return { ...view, user };
+}
