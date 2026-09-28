@@ -1,5 +1,6 @@
 import { NgTemplateOutlet } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, effect, inject, input, signal, untracked } from '@angular/core';
+import { EarlyEscapeHintService } from '../core/early-escape-hint.service';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { SessionRequestsService } from '../core/session-requests';
@@ -36,6 +37,12 @@ type ClosedStrip = ClosedStripCopy & { role: 'alert' | null };
             <div class="lifecycle-banner" data-testid="lifecycle-banner" data-variant="resuming">
               <span class="lifecycle-title">↻ Resuming…</span>
               <span class="lifecycle-body">Reattaching to the same conversation in the same worktree.</span>
+            </div>
+          }
+          @if (isEarlyEscapeHintShown()) {
+            <div class="lifecycle-banner" data-testid="early-escape-hint" data-variant="hint">
+              <span class="lifecycle-title"><span aria-hidden="true">↩</span> Cancelled before a reply?</span>
+              <span class="lifecycle-body">Claude may have put your prompt back — press Enter in the terminal to resend it, or edit it first.</span>
             </div>
           }
         </div>
@@ -105,6 +112,7 @@ type ClosedStrip = ClosedStripCopy & { role: 'alert' | null };
     .lifecycle-banner[data-variant='error'] { --lifecycle-color: var(--state-error); }
     .lifecycle-title { flex: none; color: var(--lifecycle-color); font-weight: 600; font-family: var(--mono); }
     .lifecycle-body { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .lifecycle-banner[data-variant='hint'] .lifecycle-body { white-space: normal; }
     .reopen-fresh { position: relative; display: inline-flex; flex: none; }
     .reopen-fresh .of-btn[aria-disabled='true'] { border-color: var(--line); background: var(--sunk); color: var(--faint); cursor: not-allowed; }
     .reopen-fresh-reason {
@@ -122,6 +130,7 @@ export class SessionViewComponent {
   private readonly events = inject(FleetEventsService);
   private readonly api = inject(FleetApiService);
   private readonly requests = inject(SessionRequestsService);
+  private readonly earlyEscapeHint = inject(EarlyEscapeHintService);
   protected readonly resuming = computed(() => this.requests.isBusy(this.sessionId(), 'resume'));
   protected readonly resumeError = computed(() => this.requests.errorOf(this.sessionId(), 'resume'));
 
@@ -142,6 +151,11 @@ export class SessionViewComponent {
     if (session.state !== 'closed') return undefined;
     const reason = this.resumeError() ?? resumeFailureReasonFor(session.exitCode);
     return reason ? { kind: 'resume_failed', reason } : undefined;
+  });
+
+  protected readonly isEarlyEscapeHintShown = computed(() => {
+    const session = this.session();
+    return session !== undefined && this.earlyEscapeHint.isHinting(session);
   });
 
   protected readonly closedStrip = computed<ClosedStrip | undefined>(() => {
