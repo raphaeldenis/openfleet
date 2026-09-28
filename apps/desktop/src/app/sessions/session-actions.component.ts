@@ -1,5 +1,6 @@
 import { ChangeDetectionStrategy, Component, DestroyRef, ElementRef, Injector, afterNextRender, computed, effect, inject, input, signal, viewChild } from '@angular/core';
 import type { SessionState } from '@openfleet/shared';
+import { EarlyEscapeHintService } from '../core/early-escape-hint.service';
 import { FleetApiService } from '../core/fleet-api.service';
 import { PendingSwitchesService } from '../core/pending-switches.service';
 import { SessionRequestsService } from '../core/session-requests';
@@ -73,6 +74,7 @@ export class SessionActionsComponent {
   readonly state = input.required<SessionState>();
   readonly sessionName = input.required<string>();
   private readonly api = inject(FleetApiService);
+  private readonly earlyEscapeHint = inject(EarlyEscapeHintService);
   private readonly pendingSwitches = inject(PendingSwitchesService);
   private readonly requests = inject(SessionRequestsService);
   private readonly injector = inject(Injector);
@@ -173,7 +175,11 @@ export class SessionActionsComponent {
   async interrupt(): Promise<void> {
     const sessionId = this.sessionId();
     this.requests.clearError(sessionId, 'close');
-    await this.requests.run({ sessionId, kind: 'interrupt', message: INTERRUPT_ERROR, action: () => this.api.sendInput(sessionId, ESCAPE_KEY) });
+    const sendEscape = async () => {
+      await this.api.sendInput(sessionId, ESCAPE_KEY);
+      this.earlyEscapeHint.escapeSent(sessionId);
+    };
+    await this.requests.run({ sessionId, kind: 'interrupt', message: INTERRUPT_ERROR, action: sendEscape });
   }
 
   private hasLeftSession(sessionId: string): boolean {
