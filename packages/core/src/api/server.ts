@@ -1,10 +1,12 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { EventBus } from '../events/eventBus.js';
 import type { ApprovalService } from '../governance/approvalService.js';
+import { tokensMatch } from '../ids.js';
 import type { ManagerService } from '../managers/managerService.js';
 import type { PulseScheduler } from '../managers/pulseScheduler.js';
 import type { ModelTable } from '../models.js';
 import type { SessionService } from '../sessions/sessionService.js';
+import { ALLOWED_ORIGINS } from './allowedOrigins.js';
 import { hooksHandler } from './hooksHandler.js';
 import { registerRestRoutes } from './restHandlers.js';
 import { InvalidJsonBodyError, json, PayloadTooLargeError, readJson, Router } from './router.js';
@@ -18,11 +20,6 @@ export interface ServerDeps {
   managers: ManagerService; pulseScheduler: PulseScheduler;
   mcp?: (req: IncomingMessage, res: ServerResponse, body: unknown) => Promise<void>;
 }
-
-// The desktop shell's own origins: the Angular dev server (also the e2e baseURL), and the Tauri webview
-// in both its dev and packaged forms. Any other Origin gets no CORS headers, so a page in Raphaël's
-// everyday browser can't use his admin token even if it somehow read it.
-const ALLOWED_ORIGINS = new Set(['http://localhost:1420', 'tauri://localhost', 'http://tauri.localhost']);
 
 function applyCorsHeaders(req: IncomingMessage, res: ServerResponse): void {
   const origin = req.headers.origin;
@@ -76,7 +73,7 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; clos
       const match = router.match(req.method ?? 'GET', url.pathname);
       if (!match) return json(res, 404, { error: 'not_found' });
       const isProtected = url.pathname.startsWith('/api/');
-      if (isProtected && req.headers.authorization !== `Bearer ${deps.adminToken}`) return json(res, 401, { error: 'unauthorized' });
+      if (isProtected && !tokensMatch(req.headers.authorization ?? '', `Bearer ${deps.adminToken}`)) return json(res, 401, { error: 'unauthorized' });
       await match.handler({ req, res, params: match.params, body: await readJson(req) });
     } catch (error) {
       if (error instanceof PayloadTooLargeError) return json(res, 413, { error: 'payload_too_large' });

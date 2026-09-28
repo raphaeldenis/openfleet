@@ -20,8 +20,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   };
 }
 
+// A token shorter than this is a truncated write (an interrupted disk, a stray echo > admin.token), not a
+// usable secret: the daemon must refuse to boot on it rather than quietly running with a weak or empty one.
+const MIN_ADMIN_TOKEN_LENGTH = 32;
+
 function readOrCreateAdminToken(path: string): string {
-  if (existsSync(path)) return readFileSync(path, 'utf8').trim();
+  if (existsSync(path)) {
+    const token = readFileSync(path, 'utf8').trim();
+    if (token.length < MIN_ADMIN_TOKEN_LENGTH) {
+      throw new Error(`admin token at ${path} is ${token.length} characters, need at least ${MIN_ADMIN_TOKEN_LENGTH}; delete it to have OpenFleet generate a fresh one`);
+    }
+    return token;
+  }
   const token = newToken();
   writeFileSync(path, token, { mode: 0o600 });
   return token;

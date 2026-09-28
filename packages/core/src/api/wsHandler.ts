@@ -3,8 +3,10 @@ import type { Duplex } from 'node:stream';
 import type { ServerEvent } from '@openfleet/shared';
 import { z } from 'zod';
 import { WebSocketServer, type WebSocket } from 'ws';
+import { ALLOWED_ORIGINS } from './allowedOrigins.js';
 import type { ApprovalService } from '../governance/approvalService.js';
 import type { EventBus } from '../events/eventBus.js';
+import { tokensMatch } from '../ids.js';
 import type { ManagerService } from '../managers/managerService.js';
 import type { SessionService } from '../sessions/sessionService.js';
 
@@ -65,12 +67,17 @@ export function createWsHandler(deps: { bus: EventBus; sessions: SessionService;
   return (req: IncomingMessage, socket: Duplex, head: Buffer): void => {
     try {
       const url = new URL(req.url ?? '/', 'http://localhost');
+      // A browser sends Origin on every WebSocket handshake; a non-browser client (the audit probes, a
+      // future native tool) sends none at all. Only a *foreign* Origin is refused — the browser is the one
+      // context where a page the admin token never touched could still open this socket cross-site.
+      const origin = req.headers.origin;
+      if (origin && !ALLOWED_ORIGINS.has(origin)) { socket.destroy(); return; }
       // ponytail: admin token travels in the query string because the browser WebSocket
       // constructor can't set an Authorization header; acceptable on a 127.0.0.1-only
       // daemon with a 0600 token file. Upgrade to a short-lived single-use ws-ticket
       // (issued over the already-authenticated REST surface) if this ever binds beyond
       // localhost or the desktop shell's webview turns out to persist URLs anywhere.
-      const isAuthorized = url.pathname === '/ws' && url.searchParams.get('token') === deps.adminToken;
+      const isAuthorized = url.pathname === '/ws' && tokensMatch(url.searchParams.get('token') ?? '', deps.adminToken);
       if (!isAuthorized) { socket.destroy(); return; }
       wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
     } catch (error) {
