@@ -2,7 +2,7 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/angular/zon
 import userEvent from '@testing-library/user-event';
 import { ErrorHandler, inputBinding, signal } from '@angular/core';
 import type { Provider } from '@angular/core';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, onTestFinished, vi } from 'vitest';
 import type { SessionState } from '@openfleet/shared';
 import { SessionActionsComponent } from './session-actions.component';
 import { FleetApiService } from '../core/fleet-api.service';
@@ -428,6 +428,7 @@ describe('SessionActionsComponent', () => {
 
   describe('hostile interleavings', () => {
     type Api = { closeSession: ReturnType<typeof vi.fn>; sendInput: ReturnType<typeof vi.fn> };
+    type NodeProcessEvents = { on(event: string, listener: () => void): void; off(event: string, listener: () => void): void };
 
     async function renderControllable(api: Api, initialState: SessionState, extraProviders: Provider[] = []) {
       const sessionId = signal('s1');
@@ -555,6 +556,75 @@ describe('SessionActionsComponent', () => {
 
       expect(screen.getByTestId('session-action-error')).toBeTruthy();
       expect(closeButton).toHaveFocus();
+    });
+
+    it('does not throw when a confirmed close fails after the view is destroyed', async () => {
+      const close = deferred();
+      const api = { closeSession: vi.fn(() => close.promise), sendInput: vi.fn() };
+      const handleError = vi.fn();
+      const unhandledRejection = vi.fn();
+      const { process: nodeProcess } = globalThis as unknown as { process: NodeProcessEvents };
+      nodeProcess.on('unhandledRejection', unhandledRejection);
+      onTestFinished(() => nodeProcess.off('unhandledRejection', unhandledRejection));
+      const { fixture } = await renderControllable(api, 'idle', [{ provide: ErrorHandler, useValue: { handleError } }]);
+      await confirmClose();
+      fixture.destroy();
+
+      close.reject(new Error('boom'));
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      expect(unhandledRejection).not.toHaveBeenCalled();
+      expect(handleError).not.toHaveBeenCalled();
+    });
+
+    it('does not refocus Close when the failed close belongs to a session the user has left, even if the new session has its own error', async () => {
+      const closeOnS1 = deferred();
+      const api = {
+        closeSession: vi.fn(() => closeOnS1.promise),
+        sendInput: vi.fn(() => Promise.reject(new Error('boom'))),
+      };
+      const { sessionId, flush } = await renderControllable(api, 'generating');
+      await confirmClose();
+      sessionId.set('s2');
+      await flush();
+      fireEvent.click(screen.getByTestId('session-interrupt'));
+      await flush();
+      expect(screen.getByTestId('session-action-error')).toHaveTextContent(/could not interrupt/i);
+      expect(screen.getByTestId('session-close')).not.toHaveFocus();
+
+      closeOnS1.reject(new Error('boom'));
+      await flush();
+
+      expect(screen.getByTestId('session-close')).not.toHaveFocus();
+    });
+
+    it('leaves focus where the user moved it while a confirmed close was pending and then failed', async () => {
+      const close = deferred();
+      const api = { closeSession: vi.fn(() => close.promise), sendInput: vi.fn() };
+      const { flush } = await renderControllable(api, 'idle');
+      const composer = document.body.appendChild(document.createElement('textarea'));
+      onTestFinished(() => composer.remove());
+      await confirmClose();
+      composer.focus();
+
+      close.reject(new Error('boom'));
+      await flush();
+
+      expect(screen.getByTestId('session-action-error')).toBeTruthy();
+      expect(composer).toHaveFocus();
+    });
+
+    it('keeps focus on the dialog button when the scrim is pressed', async () => {
+      const api = { closeSession: vi.fn(), sendInput: vi.fn() };
+      await renderControllable(api, 'idle');
+      await userEvent.click(screen.getByTestId('session-close'));
+      const cancel = screen.getByTestId('close-confirm-cancel');
+      await waitFor(() => expect(cancel).toHaveFocus());
+
+      await userEvent.click(screen.getByTestId('close-confirm-overlay'));
+
+      expect(cancel).toHaveFocus();
+      expect(screen.getByTestId('close-confirm-dialog')).toBeTruthy();
     });
 
     it('keeps Close disabled when an interrupt settles while the close is still pending', async () => {
