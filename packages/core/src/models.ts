@@ -10,8 +10,10 @@ export const DEFAULT_MODEL_TABLE: ModelTable = {
   fable: 'claude-fable-5-1',
 };
 
+const ModelId = z.string().trim().min(1);
+
 const ModelConfigFileSchema = z.object({
-  models: z.object({ haiku: z.string().min(1), sonnet: z.string().min(1), opus: z.string().min(1), fable: z.string().min(1) }).partial().optional(),
+  models: z.object({ haiku: ModelId, sonnet: ModelId, opus: ModelId, fable: ModelId }).partial().optional(),
 });
 
 export function loadModelTable(configPath: string): ModelTable {
