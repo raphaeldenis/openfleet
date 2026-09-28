@@ -10,12 +10,17 @@ export class ApiError extends Error {
   }
 }
 
+// A close waits up to the daemon's 5 s SIGTERM grace window and may wait on a relaunch in progress; a request that
+// outlasts this is lost, and its session must not stay busy for good.
+const REQUEST_TIMEOUT_MS = 60_000;
+
 @Injectable({ providedIn: 'root' })
 export class FleetApiService {
   // ponytail: fetch over HttpClient — no interceptors needed yet
   private async call<T>(path: string, init: RequestInit = {}): Promise<T> {
     const response = await fetch(`${environment.apiUrl}${path}`, {
       ...init,
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       headers: { 'content-type': 'application/json', authorization: `Bearer ${environment.adminToken}`, ...(init.headers ?? {}) },
     });
     if (!response.ok) {
