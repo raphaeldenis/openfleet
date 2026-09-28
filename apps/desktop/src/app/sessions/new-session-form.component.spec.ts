@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/angular/zoneless';
+import { fireEvent, render, screen, waitFor } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
 import { ActivatedRoute, convertToParamMap, provideRouter, Router } from '@angular/router';
 import { of } from 'rxjs';
@@ -23,8 +23,20 @@ async function renderForm(api: ReturnType<typeof fakeApi>, queryParams: Record<s
     ],
   });
   const navigateSpy = vi.spyOn(fixture.debugElement.injector.get(Router), 'navigate').mockResolvedValue(true);
-  return { navigateSpy };
+  return { fixture, navigateSpy };
 }
+
+async function pasteMission(mission: string): Promise<void> {
+  await userEvent.click(screen.getByTestId('manager-mission'));
+  await userEvent.paste(mission);
+}
+
+async function setNumberField(testId: string, value: string): Promise<void> {
+  await userEvent.clear(screen.getByTestId(testId));
+  if (value !== '') await userEvent.type(screen.getByTestId(testId), value);
+}
+
+const MISSION_MAX_BYTES = 64 * 1024;
 
 async function fillSessionFields({ directory = '/tmp/wt', name = 'Gimli' } = {}): Promise<void> {
   await userEvent.type(screen.getByTestId('new-session-directory'), directory);
@@ -227,6 +239,203 @@ describe('NewSessionFormComponent', () => {
     expect(screen.getByRole('combobox', { name: /permission mode/i })).toBeTruthy();
   });
 
+  describe('input hygiene', () => {
+    it('user typing stray spaces around the directory and name creates the session with them trimmed', async () => {
+      const api = fakeApi();
+      await renderForm(api);
+
+      await fillSessionFields({ directory: '  /tmp/wt  ', name: '  Gimli  ' });
+      await userEvent.click(screen.getByTestId('new-session-submit'));
+
+      expect(api.createSession).toHaveBeenCalledWith(expect.objectContaining({ directory: '/tmp/wt', name: 'Gimli' }));
+    });
+
+    it('user typing only spaces in the directory and name is told both are required', async () => {
+      const api = fakeApi();
+      await renderForm(api);
+
+      await fillSessionFields({ directory: '   ', name: '   ' });
+      await userEvent.click(screen.getByTestId('new-session-submit'));
+
+      expect(screen.getByTestId('new-session-directory-error')).toBeTruthy();
+      expect(screen.getByTestId('new-session-name-error')).toBeTruthy();
+      expect(api.createSession).not.toHaveBeenCalled();
+    });
+
+    it('user sees the name error clear as soon as a name is typed', async () => {
+      await renderForm(fakeApi());
+      await userEvent.click(screen.getByTestId('new-session-submit'));
+
+      await userEvent.type(screen.getByTestId('new-session-name'), 'G');
+
+      expect(screen.queryByTestId('new-session-name-error')).toBeNull();
+    });
+
+    it('user with an unknown ?mode= value gets the plain session form', async () => {
+      await renderForm(fakeApi(), { mode: 'bogus' });
+
+      expect(screen.queryByTestId('manager-mission')).toBeNull();
+      expect(screen.getByTestId('new-session-mode-session')).toHaveAttribute('aria-pressed', 'true');
+    });
+  });
+
+  describe('submitting', () => {
+    it('user pressing Enter in the name field creates the session once', async () => {
+      const api = fakeApi();
+      await renderForm(api);
+      await userEvent.type(screen.getByTestId('new-session-directory'), '/tmp/wt');
+
+      await userEvent.type(screen.getByTestId('new-session-name'), 'Gimli{enter}');
+
+      expect(api.createSession).toHaveBeenCalledTimes(1);
+    });
+
+    it('user switching to manager mode is not shown validation errors, since the toggle does not submit', async () => {
+      const api = fakeApi();
+      await renderForm(api);
+
+      await userEvent.click(screen.getByTestId('new-session-mode-manager'));
+
+      expect(screen.queryByTestId('new-session-name-error')).toBeNull();
+      expect(screen.queryByTestId('new-session-directory-error')).toBeNull();
+      expect(api.createManagerSession).not.toHaveBeenCalled();
+    });
+
+    it('user cannot create twice when the form is submitted again while the request is pending', async () => {
+      let resolveCreate!: (session: { id: string }) => void;
+      const api = fakeApi({ createSession: vi.fn(() => new Promise((resolve) => { resolveCreate = resolve; })) });
+      await renderForm(api);
+      await fillSessionFields();
+
+      const form = screen.getByTestId('new-session-form');
+      fireEvent.submit(form);
+      fireEvent.submit(form);
+
+      expect(api.createSession).toHaveBeenCalledTimes(1);
+      resolveCreate({ id: 's-new' });
+    });
+
+    it('user keeps what was typed, can retry and is not navigated away after the backend rejects the create', async () => {
+      const createSession = vi.fn().mockRejectedValueOnce(new ApiError(500, 'boom')).mockResolvedValueOnce({ id: 's-new' });
+      const { navigateSpy } = await renderForm(fakeApi({ createSession }));
+      await fillSessionFields();
+
+      await userEvent.click(screen.getByTestId('new-session-submit'));
+
+      expect(screen.getByTestId('new-session-directory')).toHaveValue('/tmp/wt');
+      expect(screen.getByTestId('new-session-name')).toHaveValue('Gimli');
+      expect(screen.getByTestId('new-session-submit')).toBeEnabled();
+      expect(navigateSpy).not.toHaveBeenCalled();
+
+      await userEvent.click(screen.getByTestId('new-session-submit'));
+
+      expect(createSession).toHaveBeenCalledTimes(2);
+      expect(screen.queryByTestId('new-session-form-error')).toBeNull();
+      expect(navigateSpy).toHaveBeenCalledWith(['/session', 's-new']);
+    });
+
+    it('user sees a connection hint when the request fails without an API response', async () => {
+      const api = fakeApi({ createSession: vi.fn().mockRejectedValue(new TypeError('Failed to fetch')) });
+      await renderForm(api);
+      await fillSessionFields();
+
+      await userEvent.click(screen.getByTestId('new-session-submit'));
+
+      expect(screen.getByTestId('new-session-form-error')).toHaveTextContent('check your connection');
+    });
+
+    // KNOWN DEFECT (Hermione, P2-U5): submit() navigates unconditionally after the await, so a create
+    // that resolves after the user left /new yanks them to the new session. Flip to `it` once fixed.
+    it.fails('user who left the form before the create resolves is not pulled back to the new session', async () => {
+      let resolveCreate!: (session: { id: string }) => void;
+      const api = fakeApi({ createSession: vi.fn(() => new Promise((resolve) => { resolveCreate = resolve; })) });
+      const { fixture, navigateSpy } = await renderForm(api);
+      await fillSessionFields();
+      await userEvent.click(screen.getByTestId('new-session-submit'));
+
+      fixture.destroy();
+      resolveCreate({ id: 's-late' });
+      await new Promise((resolve) => setTimeout(resolve));
+
+      expect(navigateSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('toggling between session and manager', () => {
+    it('user toggling to manager and back keeps every typed value', async () => {
+      await renderForm(fakeApi());
+      await fillSessionFields();
+      await userEvent.selectOptions(screen.getByTestId('new-session-model'), 'opus');
+      await userEvent.selectOptions(screen.getByTestId('new-session-permission-mode'), 'plan');
+      await userEvent.click(screen.getByTestId('new-session-mode-manager'));
+      await setNumberField('manager-pulse-seconds', '900');
+      await setNumberField('manager-children-cap', '4');
+      await fillManagerMission('Ship it');
+
+      await userEvent.click(screen.getByTestId('new-session-mode-session'));
+      await userEvent.click(screen.getByTestId('new-session-mode-manager'));
+
+      await waitFor(() => expect(screen.getByTestId('manager-mission')).toHaveValue('Ship it'));
+      expect(screen.getByTestId('manager-pulse-seconds')).toHaveValue(900);
+      expect(screen.getByTestId('manager-children-cap')).toHaveValue(4);
+      expect(screen.getByTestId('new-session-directory')).toHaveValue('/tmp/wt');
+      expect(screen.getByTestId('new-session-name')).toHaveValue('Gimli');
+      expect(screen.getByTestId('new-session-model')).toHaveValue('opus');
+      expect(screen.getByTestId('new-session-permission-mode')).toHaveValue('plan');
+    });
+
+    it('user creating a manager with a chosen permission mode sends the mode and harness along', async () => {
+      const api = fakeApi();
+      await renderForm(api, { mode: 'manager' });
+      await fillSessionFields({ name: 'Lead' });
+      await fillManagerMission();
+      await userEvent.selectOptions(screen.getByTestId('new-session-permission-mode'), 'plan');
+
+      await userEvent.click(screen.getByTestId('new-session-submit'));
+
+      expect(api.createManagerSession).toHaveBeenCalledWith(expect.objectContaining({ permissionMode: 'plan', harness: 'claude-cli' }));
+    });
+
+    it('user leaving the permission mode on inherited creates a manager with no permission mode', async () => {
+      const api = fakeApi();
+      await renderForm(api, { mode: 'manager' });
+      await fillSessionFields({ name: 'Lead' });
+      await fillManagerMission();
+
+      await userEvent.click(screen.getByTestId('new-session-submit'));
+
+      expect(api.createManagerSession.mock.calls[0]![0]).not.toHaveProperty('permissionMode');
+    });
+  });
+
+  describe('labels', () => {
+    it('gives the directory, name and harness fields an accessible name for screen reader users', async () => {
+      await renderForm(fakeApi());
+
+      expect(screen.getByRole('textbox', { name: /directory/i })).toBeTruthy();
+      expect(screen.getByRole('textbox', { name: /name/i })).toBeTruthy();
+      expect(screen.getByRole('combobox', { name: /harness/i })).toBeTruthy();
+    });
+
+    it('gives the pulse, children cap and mission fields an accessible name for screen reader users', async () => {
+      await renderForm(fakeApi(), { mode: 'manager' });
+
+      expect(screen.getByRole('spinbutton', { name: /pulse seconds/i })).toBeTruthy();
+      expect(screen.getByRole('spinbutton', { name: /children cap/i })).toBeTruthy();
+      expect(screen.getByRole('textbox', { name: /mission/i })).toBeTruthy();
+    });
+
+    // KNOWN DEFECT (Hermione, P2-U5): the error <span> lives inside the wrapping <label>, so the error text
+    // becomes part of the field's accessible name ("Name ✕ Name is required"). Flip to `it` once fixed.
+    it.fails('keeps the field name as its accessible name while its error is shown', async () => {
+      await renderForm(fakeApi());
+
+      await userEvent.click(screen.getByTestId('new-session-submit'));
+
+      expect(screen.getByTestId('new-session-name')).toHaveAccessibleName('Name');
+    });
+  });
+
   describe('manager fields', () => {
     async function renderManagerFormWithMinimalValidFields(api: ReturnType<typeof fakeApi>) {
       await renderForm(api, { mode: 'manager' });
@@ -288,6 +497,73 @@ describe('NewSessionFormComponent', () => {
       await userEvent.tab();
 
       expect(screen.getByTestId('manager-children-cap-error')).toBeTruthy();
+    });
+
+    it.each([
+      ['pulse seconds lower bound', 'manager-pulse-seconds', '1', 'pulseSeconds', 1],
+      ['pulse seconds upper bound', 'manager-pulse-seconds', '86400', 'pulseSeconds', 86_400],
+      ['children cap lower bound', 'manager-children-cap', '1', 'childrenCap', 1],
+      ['children cap upper bound', 'manager-children-cap', '64', 'childrenCap', 64],
+    ])('user can create a manager at the %s', async (_label, testId, typed, field, expected) => {
+      const api = fakeApi();
+      await renderManagerFormWithMinimalValidFields(api);
+
+      await setNumberField(testId, typed);
+      await userEvent.click(screen.getByTestId('new-session-submit'));
+
+      expect(api.createManagerSession).toHaveBeenCalledWith(expect.objectContaining({ [field]: expected }));
+    });
+
+    it.each([
+      ['pulse seconds left empty', 'manager-pulse-seconds', ''],
+      ['a fractional pulse seconds', 'manager-pulse-seconds', '1.5'],
+      ['children cap left empty', 'manager-children-cap', ''],
+      ['a fractional children cap', 'manager-children-cap', '2.5'],
+    ])('user cannot submit %s and sees why', async (_label, testId, typed) => {
+      const api = fakeApi();
+      await renderManagerFormWithMinimalValidFields(api);
+
+      await setNumberField(testId, typed);
+      await userEvent.click(screen.getByTestId('new-session-submit'));
+
+      expect(screen.getByTestId(`${testId}-error`)).toHaveTextContent('whole number');
+      expect(api.createManagerSession).not.toHaveBeenCalled();
+    });
+
+    it('user typing only spaces as the mission is told a manager needs one', async () => {
+      const api = fakeApi();
+      await renderForm(api, { mode: 'manager' });
+      await fillSessionFields({ name: 'Lead' });
+      await pasteMission('   \n  ');
+
+      await userEvent.click(screen.getByTestId('new-session-submit'));
+
+      expect(screen.getByTestId('manager-mission-error')).toHaveTextContent('needs a mission');
+      expect(api.createManagerSession).not.toHaveBeenCalled();
+    });
+
+    it('user cannot submit a mission whose UTF-8 size exceeds the limit even though it has fewer characters', async () => {
+      const api = fakeApi();
+      await renderForm(api, { mode: 'manager' });
+      await fillSessionFields({ name: 'Lead' });
+      const threeByteCharacter = '€';
+      await pasteMission(threeByteCharacter.repeat(MISSION_MAX_BYTES / 3 + 1));
+
+      await userEvent.click(screen.getByTestId('new-session-submit'));
+
+      expect(screen.getByTestId('manager-mission-error')).toHaveTextContent('at most');
+      expect(api.createManagerSession).not.toHaveBeenCalled();
+    });
+
+    it('user can submit a mission of exactly the size limit', async () => {
+      const api = fakeApi();
+      await renderForm(api, { mode: 'manager' });
+      await fillSessionFields({ name: 'Lead' });
+      await pasteMission('a'.repeat(MISSION_MAX_BYTES));
+
+      await userEvent.click(screen.getByTestId('new-session-submit'));
+
+      expect(api.createManagerSession).toHaveBeenCalledTimes(1);
     });
   });
 });
