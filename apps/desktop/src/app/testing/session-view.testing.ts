@@ -28,6 +28,26 @@ export const withoutRealTerminal = {
   },
 };
 
+export const RENDER_FRAME_MS = 20;
+
+/**
+ * Returns an `elapse(ms)` for a fixture under fake timers: it advances the clock by `ms`, then waits for the render.
+ * A timer that fires on the very last millisecond schedules a render that only a further tick of the clock runs, so while
+ * the render is pending the clock moves one render frame at a time instead of leaving `whenStable` waiting on a frozen clock.
+ */
+export function fakeClockElapser(fixture: Pick<Rendered, 'whenStable'>) {
+  return async (ms: number) => {
+    await vi.advanceTimersByTimeAsync(ms);
+    let isRendered = false;
+    const rendered = fixture.whenStable().then(() => {
+      isRendered = true;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    while (!isRendered) await vi.advanceTimersByTimeAsync(RENDER_FRAME_MS);
+    await rendered;
+  };
+}
+
 export function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;
@@ -64,40 +84,64 @@ class FakeWebSocket {
   static latest: FakeWebSocket | undefined;
   static readonly CONNECTING = 0;
   static readonly OPEN = 1;
-  private readonly messageListeners: ((event: { data: string }) => void)[] = [];
-  readyState = FakeWebSocket.OPEN;
+  static readonly CLOSED = 3;
+  private readonly listeners: Record<string, ((event: { data: string }) => void)[]> = {};
+  readyState = FakeWebSocket.CONNECTING;
 
   constructor(readonly url: string) {
     FakeWebSocket.latest = this;
   }
 
   addEventListener(type: string, listener: (event: { data: string }) => void): void {
-    if (type === 'message') this.messageListeners.push(listener);
+    (this.listeners[type] ??= []).push(listener);
   }
 
   send(): void {}
 
   dispatchMessage(payload: unknown): void {
-    for (const listener of this.messageListeners) listener({ data: JSON.stringify(payload) });
+    for (const listener of this.listeners['message'] ?? []) listener({ data: JSON.stringify(payload) });
+  }
+
+  dispatchOpen(): void {
+    this.readyState = FakeWebSocket.OPEN;
+    for (const listener of this.listeners['open'] ?? []) listener({} as { data: string });
+  }
+
+  dispatchClose(): void {
+    this.readyState = FakeWebSocket.CLOSED;
+    for (const listener of this.listeners['close'] ?? []) listener({} as { data: string });
   }
 }
 
-/** Connects the real FleetEventsService to a fake WebSocket, so a test feeds it the daemon's own events. */
+/**
+ * Connects the real FleetEventsService to a fake WebSocket, so a test feeds it the daemon's own events.
+ * The connection opens right away, as a real one normally does by the time a session view has mounted.
+ */
 export function connectFakeDaemon(fixture: Rendered) {
   vi.stubGlobal('WebSocket', FakeWebSocket);
   onTestFinished(() => {
     vi.unstubAllGlobals();
   });
   fixture.debugElement.injector.get(FleetEventsService).connect();
-  const socket = FakeWebSocket.latest!;
+  FakeWebSocket.latest!.dispatchOpen();
   return {
     async send(event: ServerEvent) {
-      socket.dispatchMessage(event);
+      FakeWebSocket.latest!.dispatchMessage(event);
       await fixture.whenStable();
     },
     /** Events that reach the client before Angular renders in between. */
     async sendInOneBurst(...events: ServerEvent[]) {
-      for (const event of events) socket.dispatchMessage(event);
+      for (const event of events) FakeWebSocket.latest!.dispatchMessage(event);
+      await fixture.whenStable();
+    },
+    /** Drops the live connection, as a network blip or a daemon restart would. */
+    async disconnect() {
+      FakeWebSocket.latest!.dispatchClose();
+      await fixture.whenStable();
+    },
+    /** Succeeds whichever reconnect attempt is in flight (the service backs off and retries on its own). */
+    async reconnect() {
+      FakeWebSocket.latest!.dispatchOpen();
       await fixture.whenStable();
     },
   };
