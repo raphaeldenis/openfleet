@@ -2,7 +2,7 @@ import { afterNextRender, ChangeDetectionStrategy, Component, computed, ElementR
 import { PERMISSION_MODES, type PermissionMode } from '@openfleet/shared';
 import { INHERITED_EXPLANATION, PERMISSION_MODE_EXPLANATIONS } from './permission-mode-picker.component';
 
-const INHERITED_MODE = '';
+export const INHERITED_MODE = '';
 const DANGEROUS_MODE: PermissionMode = 'bypassPermissions';
 
 export type ChosenPermissionMode = PermissionMode | typeof INHERITED_MODE;
@@ -76,11 +76,9 @@ export class PermissionModeListComponent {
   private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
   private readonly injector = inject(Injector);
   private readonly confirmButton = viewChild<ElementRef<HTMLButtonElement>>('confirmButton');
-  protected readonly isConfirmingDangerousMode = signal(false);
+  readonly isConfirmingDangerousMode = signal(false);
   protected readonly isAnswerDemanded = signal(false);
   protected readonly shownValue = computed(() => (this.isConfirmingDangerousMode() ? DANGEROUS_MODE : this.value()));
-
-  readonly isAwaitingAnswer = this.isConfirmingDangerousMode.asReadonly();
 
   demandAnswer(): void {
     this.isAnswerDemanded.set(true);

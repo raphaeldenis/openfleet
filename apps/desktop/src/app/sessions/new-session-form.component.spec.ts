@@ -825,6 +825,95 @@ describe('NewSessionFormComponent', () => {
     });
   });
 
+  describe('a create that is pending', () => {
+    it.each([
+      ['session', {}, 'Creating session…'],
+      ['manager', { mode: 'manager' }, 'Creating manager…'],
+    ])('announces the %s being created through a busy form and a status', async (_kind, queryParams, announcement) => {
+      let resolveCreate!: (session: { id: string }) => void;
+      const pendingCreate = vi.fn(() => new Promise((resolve) => { resolveCreate = resolve; }));
+      await renderForm(fakeApi({ createSession: pendingCreate, createManagerSession: pendingCreate }), queryParams);
+      await fillSessionFields();
+      if ('mode' in queryParams) await fillManagerMission();
+      const form = screen.getByTestId('new-session-form');
+      expect(form).not.toHaveAttribute('aria-busy', 'true');
+
+      await userEvent.click(screen.getByTestId('new-session-submit'));
+
+      expect(form).toHaveAttribute('aria-busy', 'true');
+      expect(screen.getByRole('status')).toHaveTextContent(announcement);
+      resolveCreate({ id: 'created' });
+      await waitFor(() => expect(form).not.toHaveAttribute('aria-busy', 'true'));
+      expect(screen.getByRole('status')).toBeEmptyDOMElement();
+    });
+
+    it('keeps the "created but not opened" line and its retry when a ?mode change arrived meanwhile', async () => {
+      let resolveCreate!: (session: { id: string }) => void;
+      const api = fakeApi({ createSession: vi.fn(() => new Promise((resolve) => { resolveCreate = resolve; })) });
+      const { navigateSpy, changeUrlQueryParams } = await renderForm(api);
+      navigateSpy.mockResolvedValueOnce(false);
+      await fillSessionFields();
+      await userEvent.click(screen.getByTestId('new-session-submit'));
+
+      changeUrlQueryParams({ mode: 'manager' });
+      resolveCreate({ id: 's-new' });
+      await new Promise((resolve) => setTimeout(resolve));
+
+      expect(screen.getByTestId('new-session-form-error')).toHaveTextContent('The session was created but could not be opened');
+      expect(screen.getByRole('heading', { name: 'New session' })).toBeTruthy();
+      await userEvent.click(screen.getByTestId('new-session-submit'));
+      expect(api.createSession).toHaveBeenCalledTimes(1);
+      expect(navigateSpy).toHaveBeenLastCalledWith(['/session', 's-new']);
+    });
+
+    it('applies a ?mode change that arrived meanwhile once the user edits the form after the create settled', async () => {
+      let resolveCreate!: (session: { id: string }) => void;
+      const { navigateSpy, changeUrlQueryParams } = await renderForm(fakeApi({ createSession: vi.fn(() => new Promise((resolve) => { resolveCreate = resolve; })) }));
+      navigateSpy.mockResolvedValueOnce(false);
+      await fillSessionFields();
+      await userEvent.click(screen.getByTestId('new-session-submit'));
+      changeUrlQueryParams({ mode: 'manager' });
+      resolveCreate({ id: 's-new' });
+      await waitFor(() => expect(screen.getByTestId('new-session-form-error')).toBeTruthy());
+
+      await userEvent.type(screen.getByTestId('new-session-name'), '!');
+
+      await waitFor(() => expect(screen.getByRole('heading', { name: 'New manager' })).toBeTruthy());
+      expect(screen.queryByTestId('new-session-form-error')).toBeNull();
+    });
+  });
+
+  describe('a session that was created but could not be opened', () => {
+    it('is not created twice when the user only adds a space around a field before retrying', async () => {
+      const api = fakeApi();
+      const { navigateSpy } = await renderForm(api);
+      navigateSpy.mockResolvedValueOnce(false);
+      await fillSessionFields();
+      await userEvent.click(screen.getByTestId('new-session-submit'));
+
+      await userEvent.type(screen.getByTestId('new-session-name'), ' ');
+      await userEvent.click(screen.getByTestId('new-session-submit'));
+
+      expect(api.createSession).toHaveBeenCalledTimes(1);
+      expect(navigateSpy).toHaveBeenLastCalledWith(['/session', 's-new']);
+    });
+
+    it('is created again by a form with the same values after the user left and came back', async () => {
+      const api = fakeApi();
+      const { fixture, navigateSpy } = await renderForm(api);
+      navigateSpy.mockResolvedValueOnce(false);
+      await fillSessionFields();
+      await userEvent.click(screen.getByTestId('new-session-submit'));
+      fixture.destroy();
+
+      TestBed.createComponent(NewSessionFormComponent);
+      await fillSessionFields();
+      await userEvent.click(screen.getByTestId('new-session-submit'));
+
+      expect(api.createSession).toHaveBeenCalledTimes(2);
+    });
+  });
+
   describe('emoji default', () => {
     it('follows the mode while the user has not typed an emoji', async () => {
       await renderForm(fakeApi());
