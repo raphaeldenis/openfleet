@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, ElementRef, model, signal, viewChild } from '@angular/core';
+import { ChangeDetectionStrategy, Component, ElementRef, model, OnInit, signal, viewChild } from '@angular/core';
 import { ControlContainer, FormsModule, NgForm } from '@angular/forms';
 
 const PULSE_SECONDS_BOUNDS = { min: 1, max: 86_400 };
@@ -66,7 +66,7 @@ function utf8ByteLength(text: string): number {
     .of-row .of-field { flex: 1 }
   `,
 })
-export class ManagerFieldsComponent {
+export class ManagerFieldsComponent implements OnInit {
   protected readonly pulseSecondsBounds = PULSE_SECONDS_BOUNDS;
   protected readonly childrenCapBounds = CHILDREN_CAP_BOUNDS;
   readonly pulseSeconds = model(1800);
@@ -78,6 +78,11 @@ export class ManagerFieldsComponent {
   protected readonly pulseSecondsError = signal('');
   protected readonly childrenCapError = signal('');
   protected readonly missionError = signal('');
+
+  ngOnInit(): void {
+    this.validatePulseSeconds();
+    this.validateChildrenCap();
+  }
 
   validate(): boolean {
     this.validatePulseSeconds();

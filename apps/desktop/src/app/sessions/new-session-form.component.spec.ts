@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/angular/zoneless';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
 import { NgForm } from '@angular/forms';
 import { By } from '@angular/platform-browser';
@@ -149,25 +149,65 @@ describe('NewSessionFormComponent', () => {
     disabledOptions.forEach((option) => expect(option).toHaveAttribute('title', 'not available yet'));
   });
 
-  it('user is not offered bypassPermissions when creating a session', async () => {
-    await renderForm(fakeApi());
+  describe('permission mode', () => {
+    const permissionModeRadio = (name: string) => screen.getByRole('radio', { name });
 
-    const offeredModes = Array.from(screen.getByTestId('new-session-permission-mode').querySelectorAll('option')).map((option) => option.value);
+    it('user is offered the inherited default and every permission mode as a radio, inherited being selected', async () => {
+      await renderForm(fakeApi());
 
-    expect(offeredModes).not.toContain('bypassPermissions');
-    expect(offeredModes).toEqual(expect.arrayContaining(['manual', 'acceptEdits', 'plan', 'auto', 'dontAsk']));
-  });
+      const offeredRadios = within(screen.getByRole('radiogroup', { name: /permission mode/i })).getAllByRole('radio');
 
-  it('user can create a session with a chosen permission mode, and sees what the mode does', async () => {
-    const api = fakeApi();
-    await renderForm(api);
+      expect(offeredRadios.length).toBe(7);
+      expect(permissionModeRadio('inherited')).toBeChecked();
+      ['manual', 'acceptEdits', 'plan', 'auto', 'dontAsk', 'bypassPermissions'].forEach((mode) => expect(permissionModeRadio(mode)).not.toBeChecked());
+    });
 
-    await fillSessionFields();
-    await userEvent.selectOptions(screen.getByTestId('new-session-permission-mode'), 'acceptEdits');
-    expect(screen.getByTestId('new-session-permission-mode-explanation')).toHaveTextContent('File edits run without asking');
-    await userEvent.click(screen.getByTestId('new-session-submit'));
+    it('user sees what each permission mode does next to its name', async () => {
+      await renderForm(fakeApi());
 
-    expect(api.createSession).toHaveBeenCalledWith(expect.objectContaining({ permissionMode: 'acceptEdits' }));
+      expect(permissionModeRadio('inherited')).toHaveAccessibleDescription(/the CLI uses your own default/);
+      expect(permissionModeRadio('acceptEdits')).toHaveAccessibleDescription(/File edits run without asking/);
+    });
+
+    it('user can create a session with a chosen permission mode', async () => {
+      const api = fakeApi();
+      await renderForm(api);
+
+      await fillSessionFields();
+      await userEvent.click(permissionModeRadio('acceptEdits'));
+      await userEvent.click(screen.getByTestId('new-session-submit'));
+
+      expect(api.createSession).toHaveBeenCalledWith(expect.objectContaining({ permissionMode: 'acceptEdits' }));
+    });
+
+    it('user picking bypassPermissions is warned and can only select it by confirming', async () => {
+      const api = fakeApi();
+      await renderForm(api);
+      await fillSessionFields();
+
+      await userEvent.click(permissionModeRadio('bypassPermissions'));
+      expect(screen.getByRole('alert')).toHaveTextContent('Everything runs');
+      await userEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+      await userEvent.click(screen.getByTestId('new-session-submit'));
+
+      expect(screen.queryByRole('alert')).toBeNull();
+      expect(api.createSession).toHaveBeenCalledWith(expect.objectContaining({ permissionMode: 'bypassPermissions' }));
+    });
+
+    it('user cancelling the bypassPermissions warning keeps the mode that was selected before', async () => {
+      const api = fakeApi();
+      await renderForm(api);
+      await fillSessionFields();
+      await userEvent.click(permissionModeRadio('plan'));
+
+      await userEvent.click(permissionModeRadio('bypassPermissions'));
+      await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+      await userEvent.click(screen.getByTestId('new-session-submit'));
+
+      expect(screen.queryByRole('alert')).toBeNull();
+      expect(permissionModeRadio('plan')).toBeChecked();
+      expect(api.createSession).toHaveBeenCalledWith(expect.objectContaining({ permissionMode: 'plan' }));
+    });
   });
 
   it('user leaving the permission mode on inherited sends no permission mode', async () => {
@@ -186,15 +226,33 @@ describe('NewSessionFormComponent', () => {
     expect(screen.queryByRole('button', { name: /test harness/i })).toBeNull();
   });
 
-  it('user sees the server error inline when the backend rejects the create', async () => {
-    const api = fakeApi({ createSession: vi.fn().mockRejectedValue(new ApiError(400, 'directory must exist')) });
+  it.each([
+    ['invalid_body', 400, 'rejected these values'],
+    ['internal', 500, 'internal error'],
+    ['daemon_shutting_down', 503, 'shutting down'],
+  ])('user reads what went wrong in words when the backend rejects the create with %s', async (code, status, readableFragment) => {
+    const api = fakeApi({ createSession: vi.fn().mockRejectedValue(new ApiError(status, `POST /api/sessions → ${status}`, code)) });
     const { navigateSpy } = await renderForm(api);
 
     await fillSessionFields();
     await userEvent.click(screen.getByTestId('new-session-submit'));
 
-    expect(screen.getByTestId('new-session-form-error')).toHaveTextContent('directory must exist');
+    const errorLine = screen.getByTestId('new-session-form-error');
+    expect(errorLine).toHaveTextContent(readableFragment);
+    expect(errorLine).not.toHaveTextContent('/api/sessions');
     expect(navigateSpy).not.toHaveBeenCalled();
+  });
+
+  it('user sees the HTTP status without the request line when the backend rejects the create with an unknown code', async () => {
+    const api = fakeApi({ createSession: vi.fn().mockRejectedValue(new ApiError(502, 'POST /api/sessions → 502')) });
+    await renderForm(api);
+
+    await fillSessionFields();
+    await userEvent.click(screen.getByTestId('new-session-submit'));
+
+    const errorLine = screen.getByTestId('new-session-form-error');
+    expect(errorLine).toHaveTextContent('502');
+    expect(errorLine).not.toHaveTextContent('/api/sessions');
   });
 
   it('user cannot create twice by double-clicking while the request is pending', async () => {
@@ -363,10 +421,11 @@ describe('NewSessionFormComponent', () => {
 
       const lockedTestIds = [
         'new-session-directory', 'new-session-name', 'new-session-emoji', 'new-session-harness', 'new-session-model',
-        'new-session-permission-mode', 'manager-pulse-seconds', 'manager-children-cap', 'manager-mission',
+        'manager-pulse-seconds', 'manager-children-cap', 'manager-mission',
         'new-session-mode-session', 'new-session-mode-manager',
       ];
       lockedTestIds.forEach((testId) => expect(screen.getByTestId(testId)).toBeDisabled());
+      screen.getAllByRole('radio').forEach((radio) => expect(radio).toBeDisabled());
       resolveCreate({ id: 'm-new' });
     });
 
@@ -383,14 +442,94 @@ describe('NewSessionFormComponent', () => {
 
       expect(navigateSpy).not.toHaveBeenCalled();
     });
+
+    it('user whose session was created but could not be opened is told so, and retrying opens it without creating another', async () => {
+      const api = fakeApi();
+      const { navigateSpy } = await renderForm(api);
+      navigateSpy.mockRejectedValueOnce(new Error('navigation failed'));
+      await fillSessionFields();
+
+      await userEvent.click(screen.getByTestId('new-session-submit'));
+
+      expect(screen.getByTestId('new-session-form-error')).toHaveTextContent('was created');
+      await userEvent.click(screen.getByTestId('new-session-submit'));
+
+      expect(api.createSession).toHaveBeenCalledTimes(1);
+      expect(navigateSpy).toHaveBeenLastCalledWith(['/session', 's-new']);
+      expect(screen.queryByTestId('new-session-form-error')).toBeNull();
+    });
+  });
+
+  describe('while the create is pending', () => {
+    function rejectableCreate() {
+      let rejectCreate!: (error: unknown) => void;
+      const createSession = vi.fn(() => new Promise((_resolve, reject) => { rejectCreate = reject; }));
+      return { createSession, rejectCreate: (error: unknown) => rejectCreate(error) };
+    }
+
+    it('user pressing Enter in the name field gets focus back on the create button once the create fails', async () => {
+      const { createSession, rejectCreate } = rejectableCreate();
+      await renderForm(fakeApi({ createSession }));
+      await userEvent.type(screen.getByTestId('new-session-directory'), '/tmp/wt');
+      await userEvent.type(screen.getByTestId('new-session-name'), 'Gimli{enter}');
+
+      rejectCreate(new ApiError(500, 'POST /api/sessions → 500', 'internal'));
+
+      await waitFor(() => expect(screen.getByTestId('new-session-submit')).toHaveFocus());
+    });
+
+    it('user who moved focus to Cancel while the create was pending keeps it there once the create fails', async () => {
+      const { createSession, rejectCreate } = rejectableCreate();
+      await renderForm(fakeApi({ createSession }));
+      await fillSessionFields();
+      await userEvent.click(screen.getByTestId('new-session-submit'));
+      screen.getByTestId('new-session-cancel').focus();
+
+      rejectCreate(new ApiError(500, 'POST /api/sessions → 500', 'internal'));
+
+      await waitFor(() => expect(screen.getByTestId('new-session-submit')).toBeEnabled());
+      expect(screen.getByTestId('new-session-cancel')).toHaveFocus();
+    });
+
+    it('user following a "New manager" link keeps the session form until the create settles, then sees the manager form', async () => {
+      const { createSession, rejectCreate } = rejectableCreate();
+      const { changeUrlQueryParams } = await renderForm(fakeApi({ createSession }));
+      await fillSessionFields();
+      await userEvent.click(screen.getByTestId('new-session-submit'));
+
+      changeUrlQueryParams({ mode: 'manager' });
+
+      await new Promise((resolve) => setTimeout(resolve));
+      expect(screen.getByRole('heading', { name: 'New session' })).toBeTruthy();
+      expect(screen.queryByTestId('manager-mission')).toBeNull();
+
+      rejectCreate(new ApiError(500, 'POST /api/sessions → 500', 'internal'));
+
+      await waitFor(() => expect(screen.getByTestId('manager-mission')).toBeTruthy());
+      expect(screen.getByRole('heading', { name: 'New manager' })).toBeTruthy();
+    });
   });
 
   describe('toggling between session and manager', () => {
+    it.each([
+      ['pulse seconds', 'manager-pulse-seconds', '0'],
+      ['children cap', 'manager-children-cap', '65'],
+    ])('user toggling to session and back still sees the %s error of the value left in the field', async (_label, testId, invalidValue) => {
+      await renderForm(fakeApi(), { mode: 'manager' });
+      await setNumberField(testId, invalidValue);
+      expect(screen.getByTestId(`${testId}-error`)).toBeTruthy();
+
+      await userEvent.click(screen.getByTestId('new-session-mode-session'));
+      await userEvent.click(screen.getByTestId('new-session-mode-manager'));
+
+      await waitFor(() => expect(screen.getByTestId(`${testId}-error`)).toBeTruthy());
+    });
+
     it('user toggling to manager and back keeps every typed value', async () => {
       await renderForm(fakeApi());
       await fillSessionFields();
       await userEvent.selectOptions(screen.getByTestId('new-session-model'), 'opus');
-      await userEvent.selectOptions(screen.getByTestId('new-session-permission-mode'), 'plan');
+      await userEvent.click(screen.getByRole('radio', { name: 'plan' }));
       await userEvent.click(screen.getByTestId('new-session-mode-manager'));
       await setNumberField('manager-pulse-seconds', '900');
       await setNumberField('manager-children-cap', '4');
@@ -405,7 +544,7 @@ describe('NewSessionFormComponent', () => {
       expect(screen.getByTestId('new-session-directory')).toHaveValue('/tmp/wt');
       expect(screen.getByTestId('new-session-name')).toHaveValue('Gimli');
       expect(screen.getByTestId('new-session-model')).toHaveValue('opus');
-      expect(screen.getByTestId('new-session-permission-mode')).toHaveValue('plan');
+      expect(screen.getByRole('radio', { name: 'plan' })).toBeChecked();
     });
 
     it('user switching to manager puts ?mode=manager in the URL without adding a history entry', async () => {
@@ -441,7 +580,7 @@ describe('NewSessionFormComponent', () => {
       await renderForm(api, { mode: 'manager' });
       await fillSessionFields({ name: 'Lead' });
       await fillManagerMission();
-      await userEvent.selectOptions(screen.getByTestId('new-session-permission-mode'), 'plan');
+      await userEvent.click(screen.getByRole('radio', { name: 'plan' }));
 
       await userEvent.click(screen.getByTestId('new-session-submit'));
 
@@ -467,7 +606,7 @@ describe('NewSessionFormComponent', () => {
       ['textbox', /emoji/i],
       ['combobox', /harness/i],
       ['combobox', /model/i],
-      ['combobox', /permission mode/i],
+      ['radiogroup', /permission mode/i],
       ['spinbutton', /pulse seconds/i],
       ['spinbutton', /children cap/i],
       ['textbox', /mission/i],
@@ -599,13 +738,12 @@ describe('NewSessionFormComponent', () => {
       expect(api.createManagerSession).not.toHaveBeenCalled();
     });
 
-    it('user sees the pulse-seconds error as soon as the field is left, and it clears once corrected', async () => {
+    it('user sees the pulse-seconds error as soon as an out-of-range value is typed, and it clears once corrected', async () => {
       await renderForm(fakeApi(), { mode: 'manager' });
       const input = screen.getByTestId('manager-pulse-seconds');
 
       await userEvent.clear(input);
       await userEvent.type(input, '0');
-      await userEvent.tab();
       const error = screen.getByTestId('manager-pulse-seconds-error');
       expect(error).toHaveTextContent('✕');
       expect(error).toHaveAttribute('role', 'alert');
