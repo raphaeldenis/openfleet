@@ -80,4 +80,27 @@ describe('runGuarded', () => {
 
     expect(error()).toBe('mapped: not_closed');
   });
+
+  describe('when the caller reports the run as stale by the time the action settles', () => {
+    it('leaves busy untouched after the action succeeds', async () => {
+      const busy = signal(false);
+      const error = signal<string | null>(null);
+      const action = vi.fn().mockResolvedValue(undefined);
+
+      await runGuarded(busy, error, 'boom', action, { isStale: () => true });
+
+      expect(busy()).toBe(true);
+    });
+
+    it('leaves busy and error untouched after the action throws', async () => {
+      const busy = signal(false);
+      const error = signal<string | null>(null);
+      const action = vi.fn().mockRejectedValue(new Error('boom'));
+
+      await runGuarded(busy, error, 'Could not do the thing — try again.', action, { isStale: () => true });
+
+      expect(error()).toBeNull();
+      expect(busy()).toBe(true);
+    });
+  });
 });

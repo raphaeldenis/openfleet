@@ -55,6 +55,19 @@ describe('app.routes', () => {
     expect(harness.routeNativeElement?.querySelector('of-inbox')).toBeTruthy();
   });
 
+  it("renders the new-session form at '/new' inside the shell", async () => {
+    await configureTestBed();
+    const harness = await RouterTestingHarness.create('/new');
+    expect(harness.routeNativeElement?.querySelector('[data-testid="app-shell"]')).toBeTruthy();
+    expect(harness.routeNativeElement?.querySelector('[data-testid="new-session-form"]')).toBeTruthy();
+  });
+
+  it("opens the new-session form in manager mode at '/new?mode=manager'", async () => {
+    await configureTestBed();
+    const harness = await RouterTestingHarness.create('/new?mode=manager');
+    expect(harness.routeNativeElement?.querySelector('[data-testid="manager-mission"]')).toBeTruthy();
+  });
+
   it("renders the manager dashboard at '/manager/:id' without losing the sidebar (the old three-column layout's dead end)", async () => {
     await configureTestBed();
     const harness = await RouterTestingHarness.create('/manager/m1');

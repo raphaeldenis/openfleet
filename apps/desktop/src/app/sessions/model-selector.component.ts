@@ -8,7 +8,7 @@ import { runGuarded } from '../core/run-guarded';
 
 const MODEL_SWITCH_ERROR = 'Could not switch model — try again.';
 
-const MODEL_RUNGS = ['haiku', 'sonnet', 'opus', 'fable'] as const;
+export const MODEL_RUNGS = ['haiku', 'sonnet', 'opus', 'fable'] as const;
 
 const SWITCH_STATUS_LABEL: Record<'relaunching' | 'deferred', string> = {
   relaunching: 'restarting…',
