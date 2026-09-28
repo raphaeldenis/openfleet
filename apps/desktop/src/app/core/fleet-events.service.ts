@@ -2,6 +2,7 @@ import { Injectable, signal } from '@angular/core';
 import type { Approval, ManagerView, ServerEvent, Session } from '@openfleet/shared';
 import { Subject } from 'rxjs';
 import { environment } from '../../environments/environment';
+import { isUserTyping } from './terminal-keystrokes';
 
 const INITIAL_RECONNECT_DELAY_MS = 1000;
 const MAX_RECONNECT_DELAY_MS = 10_000;
@@ -43,7 +44,7 @@ export class FleetEventsService {
   readonly deliveredMessageIds = signal<ReadonlySet<string>>(new Set());
   /** Ids of the sessions whose terminal just received fresh output: a replay of past output is not fresh. */
   readonly liveOutputSessionIds = new Subject<string>();
-  /** Ids of the sessions the user just sent keystrokes to through their terminal. */
+  /** Ids of the sessions the user just typed in through their terminal: the replies the terminal sends by itself are not typing. */
   readonly typedInSessionIds = new Subject<string>();
   private readonly outputBySession = new Map<string, Subject<string>>();
   private socket?: WebSocket;
@@ -86,7 +87,7 @@ export class FleetEventsService {
   }
 
   sendInput(sessionId: string, data: string): void {
-    this.typedInSessionIds.next(sessionId);
+    if (isUserTyping(data)) this.typedInSessionIds.next(sessionId);
     this.socket?.send(JSON.stringify({ type: 'input', sessionId, data }));
   }
   sendResize(sessionId: string, cols: number, rows: number): void { this.socket?.send(JSON.stringify({ type: 'resize', sessionId, cols, rows })); }

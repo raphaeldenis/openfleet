@@ -133,7 +133,10 @@ describe('SessionViewComponent early-escape hint — Claude cancels silently whe
     expect(hint()).not.toBeNull();
 
     // Act
-    await output(SPINNER_FRAME);
+    for (let tick = 0; tick < 15; tick++) {
+      await output(SPINNER_FRAME);
+      await elapse(SPINNER_TICK_MS);
+    }
 
     // Assert
     expect(hint()).toBeNull();

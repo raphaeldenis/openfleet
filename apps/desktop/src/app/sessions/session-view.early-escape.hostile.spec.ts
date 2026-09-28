@@ -13,6 +13,14 @@ const SPINNER_FRAME = '\x1b[2K✻ Thinking…';
 const KEYSTROKE_ECHO = 'x';
 const QUIET_MS = 4000;
 const GENEROUS_QUIET_MS = 10_000;
+const REDRAW_BURST_EVENTS = 5;
+const LIVE_TURN_EVENT_EVERY_MS = 300;
+const LIVE_TURN_LONG_ENOUGH_MS = 1500;
+const FOCUS_IN_REPORT = '\x1b[I';
+const FOCUS_OUT_REPORT = '\x1b[O';
+const DEVICE_ATTRIBUTES_REPLY = '\x1b[?1;2c';
+const CURSOR_POSITION_REPLY = '\x1b[24;80R';
+const OSC_COLOR_REPLY = '\x1b]11;rgb:0000/0000/0000\x1b\\';
 
 function session(patch: Partial<Session> = {}): Session {
   return {
@@ -52,11 +60,29 @@ async function renderViewing({ api = fakeApi(), sessions = [gimli(), boromir()] 
     sessionId.set(id);
     await elapse(RENDER_FRAME_MS);
   };
+  const events = () => fixture.debugElement.injector.get(FleetEventsService);
   const typeInTerminal = async (keys: string) => {
-    fixture.debugElement.injector.get(FleetEventsService).sendInput('s1', keys);
+    events().sendInput('s1', keys);
     await output(keys);
   };
-  return { api, fixture, elapse, output, pressInterrupt, replay, send, typeInTerminal, viewSession };
+  const terminalSends = async (data: string) => {
+    events().sendInput('s1', data);
+    await elapse(RENDER_FRAME_MS);
+  };
+  const resizeTerminal = async () => {
+    events().sendResize('s1', 80, 20);
+    await elapse(RENDER_FRAME_MS);
+  };
+  const redrawBurst = async () => {
+    for (let frame = 0; frame < REDRAW_BURST_EVENTS; frame++) await output(COMPOSER_REDRAW);
+  };
+  const liveTurnFor = async (ms: number, id = 's1') => {
+    for (let elapsed = 0; elapsed < ms; elapsed += LIVE_TURN_EVENT_EVERY_MS) {
+      await output(SPINNER_FRAME, id);
+      await elapse(LIVE_TURN_EVENT_EVERY_MS - RENDER_FRAME_MS);
+    }
+  };
+  return { api, fixture, elapse, liveTurnFor, output, pressInterrupt, redrawBurst, replay, resizeTerminal, send, terminalSends, typeInTerminal, viewSession };
 }
 
 const hint = () => screen.queryByTestId('early-escape-hint');
@@ -91,22 +117,6 @@ describe('early-escape hint — timing', () => {
     await elapse(QUIET_MS);
 
     // Assert
-    expect(hint()).not.toBeNull();
-  });
-
-  it('output 3 s in restarts the whole 4 s wait', async () => {
-    // Arrange
-    const { pressInterrupt, output, elapse } = await renderViewing();
-    await pressInterrupt();
-    await elapse(3000);
-
-    // Act
-    await output(SPINNER_FRAME);
-    await elapse(QUIET_MS - RENDER_FRAME_MS - 100);
-
-    // Assert
-    expect(hint()).toBeNull();
-    await elapse(200);
     expect(hint()).not.toBeNull();
   });
 
@@ -237,13 +247,13 @@ describe('early-escape hint — what the user does after the Escape', () => {
 
   it('the user resent the prompt after the hint showed: 4 s of silence in the middle of the new turn shows no false hint', async () => {
     // Arrange
-    const { pressInterrupt, output, elapse } = await renderViewing();
+    const { pressInterrupt, liveTurnFor, elapse } = await renderViewing();
     await pressInterrupt();
     await elapse(GENEROUS_QUIET_MS);
     expect(hint()).not.toBeNull();
 
     // Act
-    await output(SPINNER_FRAME);
+    await liveTurnFor(LIVE_TURN_LONG_ENOUGH_MS);
     await elapse(GENEROUS_QUIET_MS);
 
     // Assert
@@ -252,10 +262,10 @@ describe('early-escape hint — what the user does after the Escape', () => {
 
   it('a second Interrupt after the hint went away arms the watch again', async () => {
     // Arrange
-    const { pressInterrupt, output, elapse } = await renderViewing();
+    const { pressInterrupt, liveTurnFor, elapse } = await renderViewing();
     await pressInterrupt();
     await elapse(GENEROUS_QUIET_MS);
-    await output(SPINNER_FRAME);
+    await liveTurnFor(LIVE_TURN_LONG_ENOUGH_MS);
     await elapse(GENEROUS_QUIET_MS);
     expect(hint()).toBeNull();
 
@@ -393,13 +403,13 @@ describe('early-escape hint — several sessions', () => {
 
   it('Gimli’s terminal answers while the user is on Boromir: no hint when they come back', async () => {
     // Arrange
-    const { pressInterrupt, elapse, viewSession, output } = await renderViewing();
+    const { pressInterrupt, elapse, viewSession, liveTurnFor } = await renderViewing();
     await pressInterrupt();
     await elapse(GENEROUS_QUIET_MS);
     await viewSession('s2');
 
     // Act
-    await output(SPINNER_FRAME, 's1');
+    await liveTurnFor(LIVE_TURN_LONG_ENOUGH_MS, 's1');
     await viewSession('s1');
 
     // Assert
@@ -614,6 +624,191 @@ describe('early-escape hint — the view goes away', () => {
     remounted.componentRef.setInput('sessionId', 's1');
     remounted.detectChanges();
     await elapse(RENDER_FRAME_MS);
+
+    // Assert
+    expect(hint()).not.toBeNull();
+  });
+});
+
+describe('early-escape hint — a blip from the terminal is not a turn', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('the banner shrinks the terminal, the page resizes, the CLI redraws in one burst: the hint stays', async () => {
+    // Arrange
+    const { pressInterrupt, elapse, resizeTerminal, redrawBurst } = await renderViewing();
+    await pressInterrupt();
+    await elapse(GENEROUS_QUIET_MS);
+    expect(hint()).not.toBeNull();
+
+    // Act
+    await resizeTerminal();
+    await redrawBurst();
+
+    // Assert
+    expect(hint()).not.toBeNull();
+    await elapse(GENEROUS_QUIET_MS);
+    expect(hint()).not.toBeNull();
+  });
+
+  it('the redraw that follows the resize is a single output event: the hint stays', async () => {
+    // Arrange
+    const { pressInterrupt, elapse, resizeTerminal, output } = await renderViewing();
+    await pressInterrupt();
+    await elapse(GENEROUS_QUIET_MS);
+
+    // Act
+    await resizeTerminal();
+    await output(COMPOSER_REDRAW);
+
+    // Assert
+    expect(hint()).not.toBeNull();
+  });
+
+  it('a resize and its redraw before the 4 s are up do not stop the hint from showing on time', async () => {
+    // Arrange
+    const { pressInterrupt, elapse, resizeTerminal, redrawBurst } = await renderViewing();
+    await pressInterrupt();
+    await elapse(2000);
+
+    // Act
+    await resizeTerminal();
+    await redrawBurst();
+    await elapse(QUIET_MS - 2000);
+
+    // Assert
+    expect(hint()).not.toBeNull();
+  });
+
+  it('coming back to the session remounts its terminal — replay, fit, resize, DA reply, redraw: the hint never blinks', async () => {
+    // Arrange
+    const { pressInterrupt, elapse, viewSession, replay, resizeTerminal, terminalSends, redrawBurst } = await renderViewing();
+    await pressInterrupt();
+    await elapse(GENEROUS_QUIET_MS);
+    await viewSession('s2');
+    await viewSession('s1');
+
+    // Act
+    const seenAfterEachStep: (HTMLElement | null)[] = [hint()];
+    for (const step of [() => replay(COMPOSER_REDRAW), resizeTerminal, () => terminalSends(DEVICE_ATTRIBUTES_REPLY), redrawBurst]) {
+      await step();
+      seenAfterEachStep.push(hint());
+    }
+
+    // Assert
+    expect(seenAfterEachStep.every((seen) => seen !== null)).toBe(true);
+  });
+
+  it.each([
+    ['a focus-in report', FOCUS_IN_REPORT],
+    ['a focus-out report', FOCUS_OUT_REPORT],
+    ['a device attributes reply', DEVICE_ATTRIBUTES_REPLY],
+    ['a cursor position report', CURSOR_POSITION_REPLY],
+    ['an OSC color reply', OSC_COLOR_REPLY],
+    ['several replies in one write', `${DEVICE_ATTRIBUTES_REPLY}${FOCUS_IN_REPORT}${OSC_COLOR_REPLY}`],
+  ])('%s that the terminal sends by itself is not typing: the hint stays', async (_name, terminalGeneratedInput) => {
+    // Arrange
+    const { pressInterrupt, elapse, terminalSends } = await renderViewing();
+    await pressInterrupt();
+    await elapse(GENEROUS_QUIET_MS);
+
+    // Act
+    await terminalSends(terminalGeneratedInput);
+    await elapse(GENEROUS_QUIET_MS);
+
+    // Assert
+    expect(hint()).not.toBeNull();
+  });
+
+  it('a focus-in report before the 4 s are up does not stop the hint from showing on time', async () => {
+    // Arrange
+    const { pressInterrupt, elapse, terminalSends } = await renderViewing();
+    await pressInterrupt();
+    await elapse(1000);
+
+    // Act
+    await terminalSends(FOCUS_IN_REPORT);
+    await elapse(QUIET_MS - 1000);
+
+    // Assert
+    expect(hint()).not.toBeNull();
+  });
+
+  it.each([
+    ['a printable key', 'x'],
+    ['Enter', '\r'],
+    ['Backspace', '\x7f'],
+    ['an arrow key', '\x1b[A'],
+    ['a key typed together with a focus-in report', `${FOCUS_IN_REPORT}x`],
+  ])('%s is real typing: the hint goes away', async (_name, keys) => {
+    // Arrange
+    const { pressInterrupt, elapse, terminalSends } = await renderViewing();
+    await pressInterrupt();
+    await elapse(GENEROUS_QUIET_MS);
+    expect(hint()).not.toBeNull();
+
+    // Act
+    await terminalSends(keys);
+
+    // Assert
+    expect(hint()).toBeNull();
+  });
+
+  it('a live turn (one output every 300 ms for 1.5 s) takes the hint down', async () => {
+    // Arrange
+    const { pressInterrupt, elapse, liveTurnFor } = await renderViewing();
+    await pressInterrupt();
+    await elapse(GENEROUS_QUIET_MS);
+    expect(hint()).not.toBeNull();
+
+    // Act
+    await liveTurnFor(LIVE_TURN_LONG_ENOUGH_MS);
+
+    // Assert
+    expect(hint()).toBeNull();
+    await elapse(GENEROUS_QUIET_MS);
+    expect(hint()).toBeNull();
+  });
+
+  it('a live turn during the 4 s wait means the hint never shows', async () => {
+    // Arrange
+    const { pressInterrupt, elapse, liveTurnFor } = await renderViewing();
+    await pressInterrupt();
+
+    // Act
+    await liveTurnFor(LIVE_TURN_LONG_ENOUGH_MS);
+    await elapse(GENEROUS_QUIET_MS);
+
+    // Assert
+    expect(hint()).toBeNull();
+  });
+
+  it('a single output 3 s in does not restart the wait: one event is not a turn', async () => {
+    // Arrange
+    const { pressInterrupt, elapse, output } = await renderViewing();
+    await pressInterrupt();
+    await elapse(3000);
+
+    // Act
+    await output(SPINNER_FRAME);
+    await elapse(QUIET_MS - 3000);
+
+    // Assert
+    expect(hint()).not.toBeNull();
+  });
+
+  it('an output every 2 s is not a live turn: the hint still shows on time', async () => {
+    // Arrange
+    const { pressInterrupt, elapse, output } = await renderViewing();
+    await pressInterrupt();
+    await elapse(1000);
+    await output(SPINNER_FRAME);
+    await elapse(2000);
+    await output(SPINNER_FRAME);
+
+    // Act
+    await elapse(QUIET_MS);
 
     // Assert
     expect(hint()).not.toBeNull();
