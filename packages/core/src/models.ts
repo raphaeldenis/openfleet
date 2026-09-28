@@ -1,4 +1,6 @@
-import { chmodSync, existsSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { closeSync, existsSync, fchmodSync, fsyncSync, openSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { z } from 'zod';
 
 export interface ModelTable { haiku: string; sonnet: string; opus: string; fable: string }
@@ -80,7 +82,8 @@ function readConfigFileForUpdate(configPath: string): Record<string, unknown> {
 }
 
 /**
- * Merges the patch into the config file's models, keeping every other key, and swaps the file in atomically.
+ * Merges the patch into the config file's models, keeping every other key, and swaps the file in atomically
+ * once its bytes and its directory entry are on disk.
  * A symlinked config is written through to its target, the file keeps its permissions (a new one gets 0600),
  * and a read-only config is refused.
  */
@@ -93,14 +96,35 @@ export function saveModelPatch(configPath: string, patch: ModelTablePatch): void
   const isReadOnly = (existingMode & OWNER_WRITE_BIT) === 0;
   if (isReadOnly) throw new ModelConfigReadOnlyError(`config at ${configPath} is read-only`);
 
-  const temporaryPath = `${targetPath}.${process.pid}.tmp`;
+  const temporaryPath = `${targetPath}.${randomUUID()}.tmp`;
   try {
-    writeFileSync(temporaryPath, `${JSON.stringify(nextConfig, null, 2)}\n`, { mode: NEW_CONFIG_FILE_MODE });
-    chmodSync(temporaryPath, existingMode);
+    writeNewFileDurably({ path: temporaryPath, contents: `${JSON.stringify(nextConfig, null, 2)}\n`, mode: existingMode });
     renameSync(temporaryPath, targetPath);
+    flushDirectory(dirname(targetPath));
   } catch (error) {
     rmSync(temporaryPath, { force: true });
     throw error;
+  }
+}
+
+/** Creates the file exclusively (a planted symlink at that path makes it fail), then flushes it to disk. */
+function writeNewFileDurably({ path, contents, mode }: { path: string; contents: string; mode: number }): void {
+  const descriptor = openSync(path, 'wx', NEW_CONFIG_FILE_MODE);
+  try {
+    writeFileSync(descriptor, contents);
+    fchmodSync(descriptor, mode);
+    fsyncSync(descriptor);
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+function flushDirectory(directoryPath: string): void {
+  const descriptor = openSync(directoryPath, 'r');
+  try {
+    fsyncSync(descriptor);
+  } finally {
+    closeSync(descriptor);
   }
 }
 
