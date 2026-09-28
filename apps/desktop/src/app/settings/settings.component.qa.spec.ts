@@ -55,6 +55,14 @@ describe('SettingsComponent — tab bar', () => {
     expect(models).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps focus on the tab that was just picked instead of dropping it to the body', async () => {
+    await renderSettings();
+
+    await openDaemonTab();
+
+    expect(document.activeElement).toBe(daemonTab());
+  });
+
   it('switches tab from the keyboard with Enter and with Space on a focused tab', async () => {
     await renderSettings();
     daemonTab().focus();
