@@ -87,6 +87,7 @@ class FakeWebSocket {
   static readonly CLOSED = 3;
   private readonly listeners: Record<string, ((event: { data: string }) => void)[]> = {};
   readyState = FakeWebSocket.CONNECTING;
+  readonly sent: unknown[] = [];
 
   constructor(readonly url: string) {
     FakeWebSocket.latest = this;
@@ -96,7 +97,12 @@ class FakeWebSocket {
     (this.listeners[type] ??= []).push(listener);
   }
 
-  send(): void {}
+  // Mirrors the real WebSocket, which throws InvalidStateError for a send while CONNECTING or CLOSED —
+  // a client guard that forgets to check readyState surfaces here exactly as it would against a real socket.
+  send(data: string): void {
+    if (this.readyState !== FakeWebSocket.OPEN) throw new DOMException('WebSocket is not open', 'InvalidStateError');
+    this.sent.push(JSON.parse(data));
+  }
 
   dispatchMessage(payload: unknown): void {
     for (const listener of this.listeners['message'] ?? []) listener({ data: JSON.stringify(payload) });
@@ -117,13 +123,13 @@ class FakeWebSocket {
  * Connects the real FleetEventsService to a fake WebSocket, so a test feeds it the daemon's own events.
  * The connection opens right away, as a real one normally does by the time a session view has mounted.
  */
-export function connectFakeDaemon(fixture: Rendered) {
+export function connectFakeDaemon(fixture: Rendered, options: { openImmediately?: boolean } = {}) {
   vi.stubGlobal('WebSocket', FakeWebSocket);
   onTestFinished(() => {
     vi.unstubAllGlobals();
   });
   fixture.debugElement.injector.get(FleetEventsService).connect();
-  FakeWebSocket.latest!.dispatchOpen();
+  if (options.openImmediately ?? true) FakeWebSocket.latest!.dispatchOpen();
   return {
     async send(event: ServerEvent) {
       FakeWebSocket.latest!.dispatchMessage(event);
@@ -139,10 +145,14 @@ export function connectFakeDaemon(fixture: Rendered) {
       FakeWebSocket.latest!.dispatchClose();
       await fixture.whenStable();
     },
-    /** Succeeds whichever reconnect attempt is in flight (the service backs off and retries on its own). */
+    /** Succeeds whichever reconnect attempt is in flight (the service backs off and retries on its own) — also what opens a socket left CONNECTING. */
     async reconnect() {
       FakeWebSocket.latest!.dispatchOpen();
       await fixture.whenStable();
+    },
+    /** What the client actually sent up the wire so far, in order. */
+    sentMessages(): unknown[] {
+      return [...FakeWebSocket.latest!.sent];
     },
   };
 }

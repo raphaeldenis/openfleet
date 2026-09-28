@@ -19,6 +19,9 @@ class FakeWebSocket {
   }
 
   send(data: string): void {
+    // Mirrors the real WebSocket: it throws InvalidStateError for a send while CONNECTING or CLOSED,
+    // so a test here catches a guard the service forgot exactly like a real socket would.
+    if (this.readyState !== FakeWebSocket.OPEN) throw new DOMException('WebSocket is not open', 'InvalidStateError');
     this.sent.push(data);
   }
 
@@ -392,6 +395,94 @@ describe('FleetEventsService reconnect', () => {
     vi.advanceTimersByTime(1000);
     FakeWebSocket.instances[1]!.dispatchOpen();
     expect(service.reconnectCount()).toBe(1);
+  });
+});
+
+describe('FleetEventsService offline sends (AUD-14)', () => {
+  beforeEach(() => {
+    FakeWebSocket.instances = [];
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+  });
+
+  function sentTypes(socket: FakeWebSocket) {
+    return socket.sent.map((raw) => (JSON.parse(raw) as { type: string }).type);
+  }
+
+  it('sends nothing and throws nothing while the socket is still connecting', () => {
+    const service = new FleetEventsService();
+    service.connect();
+    const socket = FakeWebSocket.instances[0]!;
+
+    expect(() => service.sendInput('s1', 'y')).not.toThrow();
+    expect(() => service.sendResize('s1', 80, 24)).not.toThrow();
+    expect(() => service.sendAttach('s1')).not.toThrow();
+
+    expect(socket.sent).toEqual([]);
+  });
+
+  it('sends nothing and throws nothing once the socket has closed', () => {
+    const service = new FleetEventsService();
+    service.connect();
+    const socket = FakeWebSocket.instances[0]!;
+    socket.dispatchOpen();
+    socket.dispatchClose();
+
+    expect(() => service.sendInput('s1', 'y')).not.toThrow();
+    expect(() => service.sendResize('s1', 80, 24)).not.toThrow();
+    expect(() => service.sendAttach('s1')).not.toThrow();
+
+    expect(socket.sent).toEqual([]);
+  });
+
+  it('sends normally once the socket is open', () => {
+    const service = new FleetEventsService();
+    service.connect();
+    const socket = FakeWebSocket.instances[0]!;
+    socket.dispatchOpen();
+
+    service.sendInput('s1', 'y');
+    service.sendResize('s1', 80, 24);
+    service.sendAttach('s1');
+
+    expect(sentTypes(socket)).toEqual(['input', 'resize', 'attach']);
+  });
+
+  it('drops a keystroke sent while offline for good — it never replays once the socket opens', () => {
+    const service = new FleetEventsService();
+    service.connect();
+    const socket = FakeWebSocket.instances[0]!;
+
+    service.sendInput('s1', 'y');
+    socket.dispatchOpen();
+
+    expect(sentTypes(socket)).not.toContain('input');
+  });
+
+  it('queues an attach requested while connecting, deduplicated per session, and flushes it once on open', () => {
+    const service = new FleetEventsService();
+    service.connect();
+    const socket = FakeWebSocket.instances[0]!;
+
+    service.sendAttach('s1');
+    service.sendAttach('s1'); // repeat request for the same session while still offline
+    service.sendAttach('s2');
+    socket.dispatchOpen();
+
+    const attaches = socket.sent.map((raw) => JSON.parse(raw) as { type: string; sessionId: string }).filter((m) => m.type === 'attach');
+    expect(attaches).toEqual([{ type: 'attach', sessionId: 's1' }, { type: 'attach', sessionId: 's2' }]);
+  });
+
+  it('keeps only the latest resize per session while offline, and flushes that one on open', () => {
+    const service = new FleetEventsService();
+    service.connect();
+    const socket = FakeWebSocket.instances[0]!;
+
+    service.sendResize('s1', 80, 24);
+    service.sendResize('s1', 100, 40);
+    socket.dispatchOpen();
+
+    const resizes = socket.sent.map((raw) => JSON.parse(raw)).filter((m) => m.type === 'resize');
+    expect(resizes).toEqual([{ type: 'resize', sessionId: 's1', cols: 100, rows: 40 }]);
   });
 });
 
