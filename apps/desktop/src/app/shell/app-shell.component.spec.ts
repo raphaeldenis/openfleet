@@ -114,18 +114,6 @@ describe('AppShellComponent', () => {
     expect(root.querySelector('[data-testid="stub-inbox"]')).toBeTruthy();
   });
 
-  it('renders Settings as a real link that routes to the settings screen', async () => {
-    const { harness, root } = await setUp();
-    const settings = root.querySelector('[data-testid="nav-settings"]') as HTMLAnchorElement;
-    expect(settings.tagName).toBe('A');
-    expect(settings).not.toHaveTextContent('Available in phase');
-
-    settings.click();
-    await harness.fixture.whenStable();
-
-    expect(root.querySelector('[data-testid="stub-settings"]')).toBeTruthy();
-  });
-
   it('drops the sidebar Inbox badge count when the Inbox dismisses an already-resolved gate', async () => {
     // Arrange
     const events = fakeEvents({

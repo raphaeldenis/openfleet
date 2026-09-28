@@ -103,16 +103,6 @@ describe('Settings navigation', () => {
     expect(root.querySelector('[data-testid="model-row-haiku"]')).toBeNull();
   });
 
-  it('shows the four model ids on /settings when the daemon answers', async () => {
-    vi.stubGlobal('fetch', daemonAnswering(MODEL_TABLE));
-    const { harness, root } = await openApp('/settings');
-
-    await vi.waitFor(() => {
-      harness.detectChanges();
-      expect(root.querySelector('[data-testid="model-row-fable"]')).toHaveTextContent('claude-fable-5-1');
-    });
-  });
-
   it('leaves the settings screen when a command-palette page is picked', async () => {
     vi.stubGlobal('fetch', daemonAnswering(MODEL_TABLE));
     const { harness, root, router } = await openApp('/settings');

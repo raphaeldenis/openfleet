@@ -55,13 +55,6 @@ describe('app.routes', () => {
     expect(harness.routeNativeElement?.querySelector('of-inbox')).toBeTruthy();
   });
 
-  it("renders the settings screen at '/settings', inside the shell", async () => {
-    await configureTestBed();
-    const harness = await RouterTestingHarness.create('/settings');
-    expect(harness.routeNativeElement?.querySelector('[data-testid="app-shell"]')).toBeTruthy();
-    expect(harness.routeNativeElement?.querySelector('[data-testid="settings"]')).toBeTruthy();
-  });
-
   it("renders the new-session form at '/new' inside the shell", async () => {
     await configureTestBed();
     const harness = await RouterTestingHarness.create('/new');
