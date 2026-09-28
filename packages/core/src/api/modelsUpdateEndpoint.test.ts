@@ -111,6 +111,9 @@ describe('PUT /api/models', () => {
     ['an id with a space inside', { opus: 'claude opus' }],
     ['an id with a shell metacharacter', { opus: 'claude-opus;rm' }],
     ['an id longer than 100 characters', { opus: 'a'.repeat(101) }],
+    ['a flag-shaped id', { opus: '--x' }],
+    ['a short-flag-shaped id', { opus: '-p' }],
+    ['an id with a newline inside', { opus: 'a\nb' }],
     ['a body that is not an object', ['claude-opus-5-5']],
   ])('refuses %s with a 400 and changes nothing', async (_label, body) => {
     const res = await putModels(body);

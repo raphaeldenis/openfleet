@@ -136,6 +136,23 @@ describe('MCP', () => {
     expect(res.status).toBe(413);
   });
 
+  it.each([
+    ['a flag-shaped id', '--x'],
+    ['a short-flag-shaped id', '-p'],
+    ['an id with a space inside', 'a b'],
+    ['an id with a newline inside', 'a\nb'],
+  ])('refuses create_session whose model is %s, so it can never reach the claude CLI as an extra flag', async (_label, model) => {
+    const parent = await connect(parentToken);
+    const result = await parent.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('bad-model-create'), name: 'Gimli', model } });
+    expect(result.isError).toBe(true);
+  });
+
+  it('accepts the Opus 1M-context id, brackets included, through create_session', async () => {
+    const parent = await connect(parentToken);
+    const created = text(await parent.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('good-model-create'), name: 'Gimli', model: 'claude-opus-5-5[1m]' } }));
+    expect(created.model).toBe('claude-opus-5-5[1m]');
+  });
+
   it('creates a child that inherits harness and can message its parent', async () => {
     const parent = await connect(parentToken);
     const created = text(await parent.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('gimli'), name: 'Gimli', emoji: '⚔️' } }));
@@ -540,6 +557,23 @@ describe('update_session', () => {
     const stranger = await sessions.create({ directory: '/tmp', name: 'Stranger', harness: 'fake', emoji: '👤' });
     const forbidden = await client.callTool({ name: 'update_session', arguments: { session_id: stranger.id, model: 'opus' } });
     expect(forbidden.isError).toBe(true);
+  });
+
+  it.each([
+    ['a flag-shaped id', '--x'],
+    ['a short-flag-shaped id', '-p'],
+    ['an id with a space inside', 'a b'],
+    ['an id with a newline inside', 'a\nb'],
+  ])('refuses update_session whose model is %s, so it can never reach the claude CLI as an extra flag', async (_label, model) => {
+    const client = await connect(parentToken);
+    const result = await client.callTool({ name: 'update_session', arguments: { model } });
+    expect(result.isError).toBe(true);
+  });
+
+  it('accepts the Opus 1M-context id, brackets included, through update_session', async () => {
+    const client = await connect(parentToken);
+    const result = text(await client.callTool({ name: 'update_session', arguments: { model: 'claude-opus-5-5[1m]' } }));
+    expect(result.status).toBe('deferred');
   });
 });
 
