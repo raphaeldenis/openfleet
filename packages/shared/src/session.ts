@@ -33,6 +33,7 @@ export interface Session {
   branch?: string;
   model?: string;
   parentId?: string;
+  projectId?: string;
   role?: string;
   permissionMode?: PermissionMode;
   harness: HarnessId;

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { openDatabase } from '../db/database.js';
+import { ProjectRepository } from '../projects/projectRepository.js';
 import { SessionRepository } from './sessionRepository.js';
 
 describe('SessionRepository.closeAllOpen', () => {
@@ -40,6 +41,24 @@ describe('SessionRepository', () => {
 
     expect(repo.get('s1')!.permissionMode).toBeUndefined();
     expect(repo.list()[0]!.permissionMode).toBeUndefined();
+  });
+
+  it('persists and returns projectId, both from get() and list()', () => {
+    const db = openDatabase(':memory:');
+    new ProjectRepository(db).insert({ id: 'p1', name: 'OpenFleet', docsFolderPath: null, createdAt: 't0' });
+    const repo = new SessionRepository(db);
+    repo.insert({ ...baseRow, project_id: 'p1' });
+
+    expect(repo.get('s1')!.projectId).toBe('p1');
+    expect(repo.list()[0]!.projectId).toBe('p1');
+  });
+
+  it('leaves projectId undefined when the session belongs to no project', () => {
+    const db = openDatabase(':memory:');
+    const repo = new SessionRepository(db);
+    repo.insert(baseRow);
+
+    expect(repo.get('s1')!.projectId).toBeUndefined();
   });
 
   it('leaves permissionMode undefined when none was given', () => {
