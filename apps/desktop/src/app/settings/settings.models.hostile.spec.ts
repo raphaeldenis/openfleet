@@ -165,6 +165,7 @@ describe('SettingsComponent models — degraded lists', () => {
 
   it.each([
     ['rejects', () => Promise.reject(new Error('down'))],
+    ['answers null', () => Promise.resolve(null)],
     ['answers a models list that is not an array', () => Promise.resolve({ models: 'claude-sonnet-5' })],
   ])('still shows every current id on its own dropdown when the available list %s', async (_label, availableModels) => {
     await renderSettings({ availableModels });
@@ -196,6 +197,7 @@ describe('SettingsComponent models — defects', () => {
     opusSelect.focus();
 
     await userEvent.selectOptions(opusSelect, 'claude-opus-9');
+    await screen.findByText(/saving.*opus/i);
 
     expect(opusSelect).toBeEnabled();
     expect(document.activeElement).toBe(opusSelect);
