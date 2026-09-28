@@ -492,6 +492,14 @@ export class SessionService {
     if (input.kind === 'hook' && input.event.transcript_path && isTrustedTranscriptPath(input.event.transcript_path)) {
       this.transcriptPaths.set(sessionId, input.event.transcript_path);
     }
+    // A new prompt means the previous turn is over from the user's side even when 'generating' ->
+    // 'generating' is a no-op transition below (the CLI hadn't reported the previous turn's end yet): an
+    // interrupt watch still armed for that turn must not survive to misjudge this one.
+    // ponytail: a stray/duplicated UserPromptSubmit hook for the SAME turn disarms a genuine pending
+    // ESC the same way a real new turn would (applyInput cannot tell the two apart), so that ESC is
+    // dropped until idle_prompt or the next Stop. Upgrade path: compare the hook's user_prompt (or the
+    // transcript's user entries) against the armed watch's turn before disarming.
+    if (input.kind === 'hook' && input.event.hook_event_name === 'UserPromptSubmit') this.disarmInterruptWatch(sessionId);
     const endsUnfinishedTurn = provesTurnEnded(input) && this.unfinishedTurns.has(sessionId);
     if (endsUnfinishedTurn) this.unfinishedTurns.delete(sessionId);
     const state = nextState(session.state, input);
