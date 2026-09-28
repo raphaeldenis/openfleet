@@ -6,6 +6,14 @@ import { environment } from '../../environments/environment';
 const INITIAL_RECONNECT_DELAY_MS = 1000;
 const MAX_RECONNECT_DELAY_MS = 10_000;
 
+// The daemon never clears closedAt, so a live session keeps the stamp of a close it has long recovered
+// from. closedAt only means something while the session is closed or coming back (starting): drop it once live.
+function withoutStaleClosure(session: Session): Session {
+  const isComingBackOrClosed = session.state === 'starting' || session.state === 'closed';
+  const hasStaleClosure = session.closedAt !== undefined && !isComingBackOrClosed;
+  return hasStaleClosure ? { ...session, closedAt: undefined } : session;
+}
+
 @Injectable({ providedIn: 'root' })
 export class FleetEventsService {
   readonly sessions = signal<Session[]>([]);
@@ -68,7 +76,7 @@ export class FleetEventsService {
   private reduce(event: ServerEvent): void {
     switch (event.type) {
       case 'snapshot':
-        this.sessions.set(event.sessions);
+        this.sessions.set(event.sessions.map(withoutStaleClosure));
         this.approvals.set(event.approvals);
         this.managers.set(event.managers ?? []);
         this.snapshotReceived.set(true);
@@ -94,7 +102,8 @@ export class FleetEventsService {
     }
   }
 
-  private upsertSession(session: Session): void {
+  private upsertSession(incoming: Session): void {
+    const session = withoutStaleClosure(incoming);
     this.sessions.update((all) => (all.some((s) => s.id === session.id) ? all.map((s) => (s.id === session.id ? session : s)) : [...all, session]));
   }
 
@@ -107,7 +116,7 @@ export class FleetEventsService {
   }
 
   private patchSession(id: string, patch: Partial<Session>): void {
-    this.sessions.update((all) => all.map((s) => (s.id === id ? { ...s, ...patch } : s)));
+    this.sessions.update((all) => all.map((s) => (s.id === id ? withoutStaleClosure({ ...s, ...patch }) : s)));
   }
 
   private markMessageDelivered(messageId: string): void {

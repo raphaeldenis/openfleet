@@ -207,26 +207,27 @@ describe('SessionViewComponent lifecycle banners — accessibility', () => {
     expect(lifecycleBanner()).toHaveAttribute('role', 'alert');
   });
 
-  it('describes the disabled "Reopen fresh" buttons with why they are unavailable, since a disabled button cannot take focus', async () => {
+  it.each([
+    { scenario: 'the Resume failed banner', exitCode: -1, testId: 'resume-failed-reopen-fresh' },
+    { scenario: 'the closed footer', exitCode: 0, testId: 'reopen-fresh-session' },
+  ])('describes the disabled "Reopen fresh" button of $scenario with why it is unavailable, since a disabled button cannot take focus', async ({ exitCode, testId }) => {
     // Arrange
-    await renderAgainstDaemonEvents(fakeApi(), [session({ state: 'closed', exitCode: -1, closedAt: CLOSED_AT })]);
+    await renderAgainstDaemonEvents(fakeApi(), [session({ state: 'closed', exitCode, closedAt: CLOSED_AT })]);
 
     // Assert
-    for (const testId of ['resume-failed-reopen-fresh', 'reopen-fresh-session']) {
-      expect(screen.getByTestId(testId)).toHaveAccessibleDescription(/not available yet/i);
-    }
+    expect(screen.getByTestId(testId)).toHaveAccessibleDescription(/not available yet/i);
   });
 
   // MINOR — a resume that dies with -1/-2 renders BOTH the lifecycle banner and the closed footer
   // banner (session-view.component.ts:24-40 and :47-56): two role="alert" announcements for one failure.
-  it.fails('announces a failed resume once, not through two alerts', async () => {
+  it('announces a failed resume once, not through two alerts', async () => {
     await renderAgainstDaemonEvents(fakeApi(), [session({ state: 'closed', exitCode: -2, closedAt: CLOSED_AT })]);
 
     expect(screen.getAllByRole('alert')).toHaveLength(1);
   });
 
   // minor — same duplication: two "Reopen fresh" and two reopen actions (Retry + Resume in worktree) side by side.
-  it.fails('offers one "Reopen fresh" action on a failed resume, not one in the banner and one in the footer', async () => {
+  it('offers one "Reopen fresh" action on a failed resume, not one in the banner and one in the footer', async () => {
     await renderAgainstDaemonEvents(fakeApi(), [session({ state: 'closed', exitCode: -2, closedAt: CLOSED_AT })]);
 
     expect(screen.getAllByRole('button', { name: /reopen fresh/i })).toHaveLength(1);
@@ -238,7 +239,7 @@ describe('SessionViewComponent lifecycle banners — defects', () => {
   // only ever writes it), so every session that was once closed or daemon-restarted keeps `closedAt` forever.
   // Any later, ordinary relaunch (model / permission-mode switch → starting) then shows "Resuming… Reattaching
   // to the same conversation" although nothing was closed.
-  it.fails('shows no Resuming banner when an already-resumed session relaunches for a model switch', async () => {
+  it('shows no Resuming banner when an already-resumed session relaunches for a model switch', async () => {
     // Arrange — a session reopened long ago: idle again, closedAt still stamped
     const { daemon } = await renderAgainstDaemonEvents(fakeApi(), [session({ state: 'idle', closedAt: CLOSED_AT })]);
 
@@ -252,7 +253,7 @@ describe('SessionViewComponent lifecycle banners — defects', () => {
   // MINOR — session-view.component.ts:99. `resumeError` is only reset by a new resume or a session switch, so a
   // reopen whose reply was lost (network error while the daemon did relaunch) leaves the error armed; when that
   // session later closes cleanly the old "Resume failed" alert resurfaces on it.
-  it.fails('does not resurface an earlier failed reopen as Resume failed once the session resumed and later closed cleanly', async () => {
+  it('does not resurface an earlier failed reopen as Resume failed once the session resumed and later closed cleanly', async () => {
     // Arrange — the reopen reply is lost, yet the daemon relaunches the session
     const api = fakeApi();
     api.reopenSession = vi.fn().mockRejectedValue(new Error('network down'));
@@ -270,6 +271,7 @@ describe('SessionViewComponent lifecycle banners — defects', () => {
     expect(lifecycleBanner()).toBeNull();
   });
 
+  // P2-U2e — deferred: expected to fail until then.
   // MINOR — session-view.component.ts:111-115. Leaving a session resets `resuming`, but its reopen is still in
   // flight; coming back re-enables "Resume in worktree", so a second click sends a duplicate reopen (the daemon
   // answers the loser with 409 not_closed, which renders as a bogus failure).

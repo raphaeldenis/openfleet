@@ -250,7 +250,7 @@ describe('PendingSwitchesService through the model selector and the permission-m
     // MINOR — pending-switches.service.ts:20. Nothing ever forgets an entry for a session that no longer exists
     // (deleted, or its switch settled while the user never returned): the map only shrinks when that very
     // session is shown and left again.
-    it.fails('forgets the parked switch of a session that disappeared from the fleet', async () => {
+    it('forgets the parked switch of a session that disappeared from the fleet', async () => {
       const { goTo, sessions, pendingSwitches } = await renderSelectors();
       await requestModelSwitch();
       await waitFor(() => expect(modelNote()).toBeTruthy());
@@ -262,6 +262,7 @@ describe('PendingSwitchesService through the model selector and the permission-m
       expect(pendingSwitches.recall('s1', 'model')).toBeUndefined();
     });
 
+    // P2-U2e — deferred: expected to fail until then.
     // MINOR — model-selector.component.ts:154-158. A switch the daemon accepted, whose reply lands after the
     // user left the session, is dropped instead of parked: back on that session there is no "switch pending"
     // note and no close-dialog warning although the switch is queued in the daemon.
@@ -278,6 +279,7 @@ describe('PendingSwitchesService through the model selector and the permission-m
       expect(modelNote()).toHaveTextContent('switch pending');
     });
 
+    // P2-U2e — deferred: expected to fail until then.
     // MINOR — permission-mode-picker.component.ts:186-192, same drop for a permission-mode switch.
     it.fails('parks a permission-mode switch whose reply arrives after the user left the session', async () => {
       const reply = deferred<{ status: 'deferred' }>();
@@ -292,6 +294,7 @@ describe('PendingSwitchesService through the model selector and the permission-m
       expect(permissionModeNote()).toHaveTextContent('switch pending');
     });
 
+    // P2-U2e — deferred: expected to fail until then.
     // MINOR — model-selector.component.ts:86 / permission-mode-picker.component.ts:130. Coming back to A resets
     // `applying`, although A's request is still in flight, so Apply is live again and a second click sends a
     // duplicate switch.

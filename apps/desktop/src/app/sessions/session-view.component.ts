@@ -46,13 +46,17 @@ type LifecycleBanner = { kind: 'resuming' } | { kind: 'resume_failed'; reason: s
         </div>
         @if (s.state === 'closed') {
           <div class="closed-footer" data-testid="session-closed-footer">
-            <of-banner [variant]="closedVariant(s)" [title]="closedTitle(s)" [description]="closedDescription(s)" />
+            @if (!lifecycleBanner()) {
+              <of-banner [variant]="closedVariant(s)" [title]="closedTitle(s)" [description]="closedDescription(s)" />
+            }
             <button type="button" class="of-btn of-btn--primary" data-testid="resume-session" [disabled]="resuming()" (click)="resume(s.id)">
               ↻ Resume in worktree
             </button>
-            <button type="button" class="of-btn of-btn--secondary" data-testid="reopen-fresh-session" disabled [attr.title]="reopenFreshUnavailableTooltip">
-              Reopen fresh
-            </button>
+            @if (!lifecycleBanner()) {
+              <button type="button" class="of-btn of-btn--secondary" data-testid="reopen-fresh-session" disabled [attr.title]="reopenFreshUnavailableTooltip">
+                Reopen fresh
+              </button>
+            }
           </div>
         } @else {
           <of-composer [sessionId]="s.id" [busy]="s.state === 'generating'" />
@@ -113,6 +117,16 @@ export class SessionViewComponent {
       this.resuming.set(false);
       this.resumeError.set(null);
     });
+    // A resume error belongs to the closed session it failed on: once the session is live again it
+    // must not resurface on a later, clean close.
+    effect(() => {
+      const isLiveAgain = this.isLive(this.session());
+      if (isLiveAgain) this.resumeError.set(null);
+    });
+  }
+
+  private isLive(session: Session | undefined): boolean {
+    return session !== undefined && session.state !== 'closed' && session.state !== 'starting';
   }
 
   // Ignores a reopen response for a session the user has since navigated away from: no error shown, and

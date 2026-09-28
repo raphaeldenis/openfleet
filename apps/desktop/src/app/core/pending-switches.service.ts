@@ -1,5 +1,6 @@
-import { Injectable } from '@angular/core';
+import { effect, inject, Injectable } from '@angular/core';
 import type { SessionState } from '@openfleet/shared';
+import { FleetEventsService } from './fleet-events.service';
 
 export type SwitchKind = 'model' | 'permissionMode';
 
@@ -14,10 +15,21 @@ export interface PendingSwitch {
 /**
  * Remembers each session's in-flight model / permission-mode switch, so a selector component reused
  * across a session switch (or destroyed and recreated by navigation) shows it again on return.
+ * Forgets the switches of a session that is closed or gone from the fleet.
  */
 @Injectable({ providedIn: 'root' })
 export class PendingSwitchesService {
   private readonly bySessionAndKind = new Map<string, PendingSwitch>();
+
+  constructor() {
+    const events = inject(FleetEventsService);
+    effect(() => {
+      const openSessionIds = new Set(events.sessions().filter((s) => s.state !== 'closed').map((s) => s.id));
+      for (const key of [...this.bySessionAndKind.keys()]) {
+        if (!openSessionIds.has(sessionIdOf(key))) this.bySessionAndKind.delete(key);
+      }
+    });
+  }
 
   recall(sessionId: string, kind: SwitchKind): PendingSwitch | undefined {
     return this.bySessionAndKind.get(keyOf(sessionId, kind));
@@ -32,4 +44,8 @@ export class PendingSwitchesService {
 
 function keyOf(sessionId: string, kind: SwitchKind): string {
   return `${kind}:${sessionId}`;
+}
+
+function sessionIdOf(key: string): string {
+  return key.slice(key.indexOf(':') + 1);
 }

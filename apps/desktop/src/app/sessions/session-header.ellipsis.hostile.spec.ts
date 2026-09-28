@@ -86,7 +86,7 @@ describe('SessionHeaderComponent long-name ellipsis', () => {
   // MINOR — session-header.component.ts:28-36. The name field has no label; since the title was added its
   // accessible name is the field's own current value (a screen reader says "Gimli · T6, edit text"), so it never
   // says what the field is for. Before the title it had no name at all, so this is a gap rather than a regression.
-  it.fails('names the name field "Session name" for assistive tech, not with the session name itself', async () => {
+  it('names the name field "Session name" for assistive tech, not with the session name itself', async () => {
     await renderHeader(signal(baseSession({ name: LONG_NAME })));
 
     expect(screen.getByRole('textbox', { name: /session name/i })).toBeTruthy();

@@ -29,6 +29,7 @@ const RENAME_ERROR = 'Could not rename — try again.';
         #nameInput
         class="name"
         data-testid="session-name-input"
+        aria-label="Session name"
         [attr.title]="session().name"
         [value]="session().name"
         (change)="renameName(nameInput.value)"
