@@ -1,7 +1,8 @@
-import { ChangeDetectionStrategy, Component, computed, effect, inject, input, signal, untracked } from '@angular/core';
+import { ChangeDetectionStrategy, Component, DestroyRef, computed, effect, inject, input, signal, untracked } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { PERMISSION_MODES, type PermissionMode, type SessionState } from '@openfleet/shared';
 import { FleetApiService } from '../core/fleet-api.service';
+import { PendingSwitchesService } from '../core/pending-switches.service';
 import { runGuarded } from '../core/run-guarded';
 
 const EXPLANATION: Record<PermissionMode, string> = {
@@ -65,6 +66,8 @@ export class PermissionModePickerComponent {
   readonly currentMode = input<PermissionMode>();
   readonly sessionState = input<SessionState>();
   private readonly api = inject(FleetApiService);
+  private readonly pendingSwitches = inject(PendingSwitchesService);
+  private shownSessionId: string | undefined;
 
   protected readonly modes = PERMISSION_MODES;
   protected readonly bypassWarning = EXPLANATION.bypassPermissions;
@@ -92,18 +95,13 @@ export class PermissionModePickerComponent {
   private readonly sawStartingSinceSwitch = signal(false);
 
   constructor() {
+    // A route param change reuses this component instance: the session being left keeps its pending
+    // switch in the service, the session arriving gets its own back.
     effect(() => {
-      this.sessionId();
-      this.chosenMode = untracked(this.currentMode) ?? 'manual';
-      this.confirmedMode = this.chosenMode;
-      this.applying.set(false);
-      this.confirmingBypass.set(false);
-      this.switchStatus.set(null);
-      this.switchError.set(null);
-      this.modeBeforeSwitch.set(undefined);
-      this.stateBeforeSwitch.set(undefined);
-      this.sawStartingSinceSwitch.set(false);
+      const sessionId = this.sessionId();
+      untracked(() => this.showSwitchStateOf(sessionId));
     });
+    inject(DestroyRef).onDestroy(() => this.rememberPendingSwitchOfShownSession());
 
     effect(() => {
       const requestedFrom = this.modeBeforeSwitch();
@@ -121,6 +119,38 @@ export class PermissionModePickerComponent {
       this.stateBeforeSwitch.set(undefined);
       this.sawStartingSinceSwitch.set(false);
     });
+  }
+
+  private showSwitchStateOf(sessionId: string): void {
+    this.rememberPendingSwitchOfShownSession();
+    this.shownSessionId = sessionId;
+    const pending = this.pendingSwitches.recall(sessionId, 'permissionMode');
+    this.chosenMode = (pending?.requestedValue as PermissionMode | undefined) ?? this.currentMode() ?? 'manual';
+    this.confirmedMode = this.chosenMode;
+    this.applying.set(false);
+    this.confirmingBypass.set(false);
+    this.switchStatus.set(pending?.status ?? null);
+    this.switchError.set(null);
+    this.modeBeforeSwitch.set(pending ? (pending.valueBeforeSwitch as PermissionMode | null) : undefined);
+    this.stateBeforeSwitch.set(pending?.stateBeforeSwitch);
+    this.sawStartingSinceSwitch.set(pending?.sawStartingSinceSwitch ?? false);
+  }
+
+  private rememberPendingSwitchOfShownSession(): void {
+    if (this.shownSessionId === undefined) return;
+    const status = this.switchStatus();
+    const valueBeforeSwitch = this.modeBeforeSwitch();
+    const isSwitchPending = status !== null && valueBeforeSwitch !== undefined;
+    const pending = isSwitchPending
+      ? {
+          status,
+          requestedValue: this.confirmedMode,
+          valueBeforeSwitch,
+          stateBeforeSwitch: this.stateBeforeSwitch(),
+          sawStartingSinceSwitch: this.sawStartingSinceSwitch(),
+        }
+      : undefined;
+    this.pendingSwitches.remember(this.shownSessionId, 'permissionMode', pending);
   }
 
   statusLabel(status: 'relaunching' | 'deferred'): string {
