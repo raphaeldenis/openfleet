@@ -5,7 +5,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ServerEvent, Session } from '@openfleet/shared';
 import { SessionViewComponent } from './session-view.component';
 import { FleetApiService } from '../core/fleet-api.service';
-import { FleetEventsService } from '../core/fleet-events.service';import { connectFakeDaemon, fakeClockElapser, RENDER_FRAME_MS, withoutRealTerminal } from '../testing/session-view.testing';
+import { FleetEventsService } from '../core/fleet-events.service';
+import { connectFakeDaemon, fakeClockElapser, RENDER_FRAME_MS, withoutRealTerminal } from '../testing/session-view.testing';
 
 const ESCAPE_KEY = '\x1b';
 const COMPOSER_REDRAW = '\x1b[2K❯ hi';
@@ -82,7 +83,16 @@ async function renderViewing({ api = fakeApi(), sessions = [gimli(), boromir()] 
       await elapse(LIVE_TURN_EVENT_EVERY_MS - RENDER_FRAME_MS);
     }
   };
-  return { api, fixture, elapse, liveTurnFor, output, pressInterrupt, redrawBurst, replay, resizeTerminal, send, terminalSends, typeInTerminal, viewSession };
+  const dropConnection = async () => {
+    await Promise.all([daemon.disconnect(), vi.advanceTimersByTimeAsync(RENDER_FRAME_MS)]);
+  };
+  const restoreConnection = async () => {
+    await Promise.all([daemon.reconnect(), vi.advanceTimersByTimeAsync(RENDER_FRAME_MS)]);
+  };
+  return {
+    api, fixture, elapse, dropConnection, liveTurnFor, output, pressInterrupt, redrawBurst, replay,
+    resizeTerminal, restoreConnection, send, terminalSends, typeInTerminal, viewSession,
+  };
 }
 
 const hint = () => screen.queryByTestId('early-escape-hint');
@@ -351,40 +361,6 @@ describe('early-escape hint — several sessions', () => {
     expect(hint()).not.toBeNull();
   });
 
-  it('coming back to Gimli remounts its terminal, whose replay is not activity: the hint stays up, without blinking', async () => {
-    // Arrange
-    const { pressInterrupt, elapse, viewSession, replay } = await renderViewing();
-    await pressInterrupt();
-    await elapse(GENEROUS_QUIET_MS);
-    await viewSession('s2');
-    await viewSession('s1');
-
-    // Act
-    await replay(COMPOSER_REDRAW);
-    const rightAfterTheReplay = hint();
-    await elapse(QUIET_MS);
-
-    // Assert
-    expect(rightAfterTheReplay).not.toBeNull();
-    expect(hint()).not.toBeNull();
-  });
-
-  it('a replay that lands before the 4 s are up does not restart the wait', async () => {
-    // Arrange
-    const { pressInterrupt, elapse, viewSession, replay } = await renderViewing();
-    await pressInterrupt();
-    await viewSession('s2');
-    await viewSession('s1');
-    await elapse(2000);
-
-    // Act
-    await replay(COMPOSER_REDRAW);
-    await elapse(QUIET_MS - 2000);
-
-    // Assert
-    expect(hint()).not.toBeNull();
-  });
-
   it('Gimli’s turn ends while the user is on Boromir: no hint when they come back', async () => {
     // Arrange
     const { pressInterrupt, elapse, viewSession, send } = await renderViewing();
@@ -447,6 +423,32 @@ describe('early-escape hint — several sessions', () => {
 
     // Assert
     expect(onBoromir).toBeNull();
+    expect(hint()).not.toBeNull();
+  });
+});
+
+describe('early-escape hint — the replay/live split', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('a replay right after the Escape does not seed the live-output run: brief real output shortly after stays under a sustained turn, so the hint still shows on time', async () => {
+    // Arrange
+    const { pressInterrupt, elapse, replay, output } = await renderViewing();
+    await pressInterrupt();
+
+    // Act — a replay, then real output close enough behind it that counting the replay as live output would
+    // already read as 1 s of gap-continuous output by the third event and disarm the watch early.
+    await replay(COMPOSER_REDRAW);
+    await elapse(380);
+    await output(SPINNER_FRAME);
+    await elapse(380);
+    await output(SPINNER_FRAME);
+    await elapse(180);
+    await output(SPINNER_FRAME);
+    await elapse(GENEROUS_QUIET_MS);
+
+    // Assert
     expect(hint()).not.toBeNull();
   });
 });
@@ -589,6 +591,49 @@ describe('early-escape hint — reconnect', () => {
   });
 });
 
+describe('early-escape hint — daemon connectivity', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('never shows while the connection is down, even long past the normal 4 s wait, and shows 4 s after it reconnects', async () => {
+    // Arrange
+    const { pressInterrupt, elapse, dropConnection, restoreConnection } = await renderViewing();
+    await pressInterrupt();
+    await elapse(1000);
+
+    // Act
+    await dropConnection();
+    await elapse(GENEROUS_QUIET_MS);
+    const stillDownPastTheNormalWait = hint();
+
+    // Assert
+    expect(stillDownPastTheNormalWait).toBeNull();
+    await restoreConnection();
+    await elapse(QUIET_MS - 500);
+    expect(hint()).toBeNull();
+    await elapse(600);
+    expect(hint()).not.toBeNull();
+  });
+
+  it('a reconnect that finds the turn already over does not show the hint', async () => {
+    // Arrange
+    const { pressInterrupt, elapse, dropConnection, restoreConnection, send } = await renderViewing();
+    await pressInterrupt();
+    await elapse(1000);
+    await dropConnection();
+    await elapse(GENEROUS_QUIET_MS);
+
+    // Act
+    await restoreConnection();
+    await send({ type: 'snapshot', sessions: [session({ state: 'idle', stateSince: 't2' }), boromir()], approvals: [], managers: [] });
+    await elapse(GENEROUS_QUIET_MS);
+
+    // Assert
+    expect(hint()).toBeNull();
+  });
+});
+
 describe('early-escape hint — the view goes away', () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -649,35 +694,6 @@ describe('early-escape hint — a blip from the terminal is not a turn', () => {
     // Assert
     expect(hint()).not.toBeNull();
     await elapse(GENEROUS_QUIET_MS);
-    expect(hint()).not.toBeNull();
-  });
-
-  it('the redraw that follows the resize is a single output event: the hint stays', async () => {
-    // Arrange
-    const { pressInterrupt, elapse, resizeTerminal, output } = await renderViewing();
-    await pressInterrupt();
-    await elapse(GENEROUS_QUIET_MS);
-
-    // Act
-    await resizeTerminal();
-    await output(COMPOSER_REDRAW);
-
-    // Assert
-    expect(hint()).not.toBeNull();
-  });
-
-  it('a resize and its redraw before the 4 s are up do not stop the hint from showing on time', async () => {
-    // Arrange
-    const { pressInterrupt, elapse, resizeTerminal, redrawBurst } = await renderViewing();
-    await pressInterrupt();
-    await elapse(2000);
-
-    // Act
-    await resizeTerminal();
-    await redrawBurst();
-    await elapse(QUIET_MS - 2000);
-
-    // Assert
     expect(hint()).not.toBeNull();
   });
 

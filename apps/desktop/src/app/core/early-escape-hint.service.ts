@@ -13,6 +13,8 @@ const SUSTAINED_OUTPUT_MS = 1000;
 
 interface ArmedWatch {
   stateSince: string;
+  /** Undefined while the daemon connection is down: the wait is paused, not just delayed, until it reconnects. */
+  hintTimer: ReturnType<typeof setTimeout> | undefined;
   stop: () => void;
 }
 
@@ -37,6 +39,9 @@ function createSustainedOutputDetector(): () => boolean {
  * The hint is an inference, so it is shown at most once per Escape: the watch is disarmed for good as soon as the terminal
  * outputs sustainedly (a live turn), the user types, or the turn the Escape belonged to is over. Only the next Escape arms it again.
  * A single redraw of the CLI (after a resize, a focus change or a remount) is not sustained output.
+ *
+ * The wait also ignores time spent with the daemon connection down: a client that cannot hear the CLI's own reply has
+ * no basis to infer anything, so the 4 s wait pauses while disconnected and restarts fresh once the connection is back.
  */
 @Injectable({ providedIn: 'root' })
 export class EarlyEscapeHintService {
@@ -46,6 +51,7 @@ export class EarlyEscapeHintService {
 
   constructor() {
     effect(() => this.disarmWatchesOfEndedTurns(this.events.sessions()));
+    effect(() => this.onConnectivityChange(this.events.connected()));
   }
 
   isHinting(session: Session): boolean {
@@ -53,16 +59,18 @@ export class EarlyEscapeHintService {
     return session.state === 'generating' && hintedStateSince === session.stateSince;
   }
 
-  escapeSent(sessionId: string): void {
+  /**
+   * `stateSince` is the turn the caller captured right before sending the Escape: sendInput is async, so the
+   * turn it was sent against can already be over by the time this runs. Only arm the watch when it still is.
+   */
+  escapeSent(sessionId: string, stateSince: string): void {
     const session = this.currentSession(sessionId);
-    if (session?.state !== 'generating') return;
+    const isStillTheTurnTheEscapeWasSentAgainst = session?.state === 'generating' && session.stateSince === stateSince;
+    if (!isStillTheTurnTheEscapeWasSentAgainst) return;
     this.disarm(sessionId);
 
-    const { stateSince } = session;
     const isThisSession = (id: string) => id === sessionId;
     const isOutputSustained = createSustainedOutputDetector();
-    const hintTimer = setTimeout(() => this.showHint(sessionId, stateSince), EARLY_ESCAPE_HINT_DELAY_MS);
-
     const subscriptions = new Subscription();
     subscriptions.add(
       this.events.liveOutputSessionIds.pipe(filter(isThisSession)).subscribe(() => {
@@ -70,13 +78,17 @@ export class EarlyEscapeHintService {
       }),
     );
     subscriptions.add(this.events.typedInSessionIds.pipe(filter(isThisSession)).subscribe(() => this.disarm(sessionId)));
-    this.armedWatchesBySession.set(sessionId, {
+
+    const watch: ArmedWatch = {
       stateSince,
+      hintTimer: undefined,
       stop: () => {
-        clearTimeout(hintTimer);
+        clearTimeout(watch.hintTimer);
         subscriptions.unsubscribe();
       },
-    });
+    };
+    this.armedWatchesBySession.set(sessionId, watch);
+    this.startHintTimerIfConnected(sessionId, watch);
   }
 
   private showHint(sessionId: string, stateSince: string): void {
@@ -99,6 +111,33 @@ export class EarlyEscapeHintService {
       const isStillInTheTurnOfTheEscape = session?.state === 'generating' && session.stateSince === stateSince;
       if (!isStillInTheTurnOfTheEscape) this.disarm(sessionId);
     }
+  }
+
+  /**
+   * A disconnect pauses every armed wait (the timer is cleared, not just left running blind); a reconnect restarts
+   * each one fresh, provided the session it was armed for is still in the very turn the Escape was sent against.
+   */
+  private onConnectivityChange(connected: boolean): void {
+    for (const [sessionId, watch] of this.armedWatchesBySession) {
+      if (connected) this.startHintTimerIfConnected(sessionId, watch);
+      else this.pauseHintTimer(watch);
+    }
+  }
+
+  private startHintTimerIfConnected(sessionId: string, watch: ArmedWatch): void {
+    if (!this.events.connected()) return;
+    const session = this.currentSession(sessionId);
+    const isStillTheTurnTheEscapeWasSentAgainst = session?.state === 'generating' && session.stateSince === watch.stateSince;
+    if (!isStillTheTurnTheEscapeWasSentAgainst) {
+      this.disarm(sessionId);
+      return;
+    }
+    watch.hintTimer = setTimeout(() => this.showHint(sessionId, watch.stateSince), EARLY_ESCAPE_HINT_DELAY_MS);
+  }
+
+  private pauseHintTimer(watch: ArmedWatch): void {
+    clearTimeout(watch.hintTimer);
+    watch.hintTimer = undefined;
   }
 
   private currentSession(sessionId: string): Session | undefined {

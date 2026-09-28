@@ -72,6 +72,7 @@ const ESCAPE_KEY = '\x1b';
 export class SessionActionsComponent {
   readonly sessionId = input.required<string>();
   readonly state = input.required<SessionState>();
+  readonly stateSince = input.required<string>();
   readonly sessionName = input.required<string>();
   private readonly api = inject(FleetApiService);
   private readonly earlyEscapeHint = inject(EarlyEscapeHintService);
@@ -174,10 +175,13 @@ export class SessionActionsComponent {
 
   async interrupt(): Promise<void> {
     const sessionId = this.sessionId();
+    // Captured before the request goes out: a turn that ends and a new one that starts while it is
+    // pending must not have its hint blamed on this Escape.
+    const stateSinceWhenEscapeWasSent = this.stateSince();
     this.requests.clearError(sessionId, 'close');
     const sendEscape = async () => {
       await this.api.sendInput(sessionId, ESCAPE_KEY);
-      this.earlyEscapeHint.escapeSent(sessionId);
+      this.earlyEscapeHint.escapeSent(sessionId, stateSinceWhenEscapeWasSent);
     };
     await this.requests.run({ sessionId, kind: 'interrupt', message: INTERRUPT_ERROR, action: sendEscape });
   }

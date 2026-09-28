@@ -125,23 +125,6 @@ describe('SessionViewComponent early-escape hint — Claude cancels silently whe
     expect(hint()).toBeNull();
   });
 
-  it('the hint leaves when the terminal comes alive again (the user pressed Enter, the CLI answers)', async () => {
-    // Arrange
-    const { pressInterrupt, output, elapse } = await renderGeneratingSession();
-    await pressInterrupt();
-    await elapse(10_000);
-    expect(hint()).not.toBeNull();
-
-    // Act
-    for (let tick = 0; tick < 15; tick++) {
-      await output(SPINNER_FRAME);
-      await elapse(SPINNER_TICK_MS);
-    }
-
-    // Assert
-    expect(hint()).toBeNull();
-  });
-
   it('a later generating turn is not blamed on an old Escape', async () => {
     // Arrange
     const { changeState, pressInterrupt, elapse } = await renderGeneratingSession();

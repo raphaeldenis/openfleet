@@ -14,6 +14,20 @@ describe('isUserTyping', () => {
     });
   });
 
+  describe('DECRPM replies written back by the terminal', () => {
+    it.each([
+      ['a DECRPM reply for synchronized output (mode 2026, set)', '\x1b[?2026;2$y'],
+      ['a DECRPM reply reporting a reset mode', '\x1b[?1049;1$y'],
+      ['several DECRPM replies in one write', '\x1b[?2026;2$y\x1b[?1049;1$y'],
+    ])('does not count %s as typing', (_label, decrpmReply) => {
+      expect(isUserTyping(decrpmReply)).toBe(false);
+    });
+
+    it('counts a letter typed right after a DECRPM reply as typing', () => {
+      expect(isUserTyping('\x1b[?2026;2$ya')).toBe(true);
+    });
+  });
+
   describe('real keys', () => {
     it.each([
       ['a letter', 'a'],

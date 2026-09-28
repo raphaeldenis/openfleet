@@ -5,6 +5,7 @@ import type { Provider } from '@angular/core';
 import { afterAll, beforeAll, describe, expect, it, onTestFinished, vi } from 'vitest';
 import type { SessionState } from '@openfleet/shared';
 import { SessionActionsComponent } from './session-actions.component';
+import { EarlyEscapeHintService } from '../core/early-escape-hint.service';
 import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { PendingSwitchesService } from '../core/pending-switches.service';
@@ -23,11 +24,12 @@ afterAll(() => {
   HTMLElement.prototype.focus = nativeFocus;
 });
 
-function bindingsFor(state: SessionState, options: { sessionName?: string } = {}) {
-  const { sessionName = 'Gimli · T6' } = options;
+function bindingsFor(state: SessionState, options: { sessionName?: string; stateSince?: string } = {}) {
+  const { sessionName = 'Gimli · T6', stateSince = 't1' } = options;
   return [
     inputBinding('sessionId', () => 's1'),
     inputBinding('state', () => state),
+    inputBinding('stateSince', () => stateSince),
     inputBinding('sessionName', () => sessionName),
   ];
 }
@@ -96,7 +98,7 @@ describe('SessionActionsComponent', () => {
     describe('the pending model-switch warning', () => {
       async function renderWithAModelSwitchAnswered(status: 'deferred' | 'relaunching') {
         const api = { closeSession: vi.fn(), sendInput: vi.fn(), updateModel: vi.fn().mockResolvedValue({ status }) };
-        const fleet = { sessions: signal([{ id: 's1', name: 'Gimli', emoji: '⚔️', model: 'claude-sonnet-5', state: 'generating' }]), approvals: signal([]), managers: signal([]) };
+        const fleet = { sessions: signal([{ id: 's1', name: 'Gimli', emoji: '⚔️', model: 'claude-sonnet-5', state: 'generating' }]), approvals: signal([]), managers: signal([]), connected: signal(true) };
         const { fixture } = await render(SessionActionsComponent, {
           bindings: bindingsFor('generating'),
           providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: fleet }],
@@ -197,6 +199,7 @@ describe('SessionActionsComponent', () => {
         bindings: [
           inputBinding('sessionId', sessionId),
           inputBinding('state', () => 'idle' as const),
+          inputBinding('stateSince', () => 't1'),
           inputBinding('sessionName', () => 'Gimli · T6'),
         ],
         providers: [{ provide: FleetApiService, useValue: api }],
@@ -218,6 +221,7 @@ describe('SessionActionsComponent', () => {
         bindings: [
           inputBinding('sessionId', sessionId),
           inputBinding('state', () => 'idle' as const),
+          inputBinding('stateSince', () => 't1'),
           inputBinding('sessionName', () => 'Gimli · T6'),
         ],
         providers: [{ provide: FleetApiService, useValue: api }],
@@ -312,6 +316,7 @@ describe('SessionActionsComponent', () => {
         bindings: [
           inputBinding('sessionId', sessionId),
           inputBinding('state', () => 'generating' as const),
+          inputBinding('stateSince', () => 't1'),
           inputBinding('sessionName', () => 'Gimli · T6'),
         ],
         providers: [{ provide: FleetApiService, useValue: api }],
@@ -483,6 +488,33 @@ describe('SessionActionsComponent', () => {
 
       await waitFor(() => expect(screen.getByTestId('session-action-error')).toHaveTextContent(/could not interrupt/i));
     });
+
+    it('blames the turn generating when Interrupt was pressed, not one that ends and restarts while sendInput is still pending', async () => {
+      const sendInput = deferred();
+      const api = { closeSession: vi.fn(), sendInput: vi.fn(() => sendInput.promise) };
+      const escapeSent = vi.fn();
+      const stateSince = signal('t1');
+      await render(SessionActionsComponent, {
+        bindings: [
+          inputBinding('sessionId', () => 's1'),
+          inputBinding('state', () => 'generating' as const),
+          inputBinding('stateSince', stateSince),
+          inputBinding('sessionName', () => 'Gimli · T6'),
+        ],
+        providers: [
+          { provide: FleetApiService, useValue: api },
+          { provide: EarlyEscapeHintService, useValue: { escapeSent, isHinting: () => false } },
+        ],
+      });
+
+      fireEvent.click(screen.getByTestId('session-interrupt'));
+      // The turn stateSince belonged to ends and a new one starts while sendInput is still awaited.
+      stateSince.set('t2');
+      sendInput.resolve({});
+      await new Promise((resolve) => setTimeout(resolve));
+
+      expect(escapeSent).toHaveBeenCalledWith('s1', 't1');
+    });
   });
 
   describe('hostile interleavings', () => {
@@ -495,6 +527,7 @@ describe('SessionActionsComponent', () => {
         bindings: [
           inputBinding('sessionId', sessionId),
           inputBinding('state', state),
+          inputBinding('stateSince', () => 't1'),
           inputBinding('sessionName', () => 'Gimli · T6'),
         ],
         providers: [{ provide: FleetApiService, useValue: api }, ...extraProviders],

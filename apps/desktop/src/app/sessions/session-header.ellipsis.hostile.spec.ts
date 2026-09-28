@@ -23,7 +23,7 @@ async function renderHeader(session: ReturnType<typeof signal<Session>>) {
     bindings: [inputBinding('session', session)],
     providers: [
       { provide: FleetApiService, useValue: api },
-      { provide: FleetEventsService, useValue: { sessions: signal([session()]), approvals: signal([]), managers: signal([]) } },
+      { provide: FleetEventsService, useValue: { sessions: signal([session()]), approvals: signal([]), managers: signal([]), connected: signal(true) } },
     ],
   });
   return { api };
