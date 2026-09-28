@@ -1,42 +1,67 @@
-import type { WritableSignal } from '@angular/core';
-import { runGuarded } from './run-guarded';
+import { Injectable, signal } from '@angular/core';
 
-interface ShownRequestState {
-  shownSessionId: () => string;
-  busy: WritableSignal<boolean>;
-  error: WritableSignal<string | null>;
+export type RequestKind = 'model' | 'permissionMode' | 'close' | 'interrupt' | 'resume';
+
+interface SessionRequest {
+  sessionId: string;
+  kind: RequestKind;
 }
 
+interface SessionRequestToRun extends SessionRequest {
+  message: string | ((error: unknown) => string);
+  action: () => Promise<unknown>;
+}
+
+const keyOf = ({ sessionId, kind }: SessionRequest) => `${sessionId}:${kind}`;
+
 /**
- * One kind of request (close, reopen, apply…) of a component that stays mounted while the route switches
- * session. Each session keeps its own request in flight: it still reads as busy after A → B → A, a second run
- * for that session is skipped meanwhile, and a request settling while another session is shown leaves that
- * session's busy flag and error alone.
+ * Each session's requests (switch model, close, reopen…) by kind. Being a root service, a request in flight and
+ * a request's failure outlive the component that sent it: a view left and re-entered mid-request still reads as
+ * busy, a second run of that kind for that session is skipped meanwhile, and the failure waits for the user's return.
  */
-export class SessionRequests {
-  private readonly sessionsInFlight = new Set<string>();
+@Injectable({ providedIn: 'root' })
+export class SessionRequestsService {
+  private readonly keysInFlight = signal<ReadonlySet<string>>(new Set());
+  private readonly errorsByKey = signal<ReadonlyMap<string, string>>(new Map());
 
-  constructor(private readonly shown: ShownRequestState) {}
-
-  /** Points busy and error at `sessionId`: busy while its own request is in flight, no error. */
-  show(sessionId: string): void {
-    this.shown.busy.set(this.sessionsInFlight.has(sessionId));
-    this.shown.error.set(null);
+  isBusy(sessionId: string, kind: RequestKind): boolean {
+    return this.keysInFlight().has(keyOf({ sessionId, kind }));
   }
 
-  /** `action` learns whether its session is no longer the shown one through `isStale`. */
-  async run(
-    sessionId: string,
-    message: string | ((error: unknown) => string),
-    action: (isStale: () => boolean) => Promise<unknown>,
-  ): Promise<void> {
-    if (this.sessionsInFlight.has(sessionId)) return;
-    this.sessionsInFlight.add(sessionId);
-    const isStale = () => this.shown.shownSessionId() !== sessionId;
+  errorOf(sessionId: string, kind: RequestKind): string | null {
+    return this.errorsByKey().get(keyOf({ sessionId, kind })) ?? null;
+  }
+
+  clearError(sessionId: string, kind: RequestKind): void {
+    this.setError({ sessionId, kind }, null);
+  }
+
+  /** Runs `action` unless that session already has a request of that kind in flight; a failure is kept as `message`, never the thrown error's own text. */
+  async run({ sessionId, kind, message, action }: SessionRequestToRun): Promise<void> {
+    const request = { sessionId, kind };
+    if (this.isBusy(sessionId, kind)) return;
+    this.setInFlight(request, true);
+    this.setError(request, null);
     try {
-      await runGuarded(this.shown.busy, this.shown.error, message, () => action(isStale), { isStale });
+      await action();
+    } catch (thrown) {
+      this.setError(request, typeof message === 'function' ? message(thrown) : message);
     } finally {
-      this.sessionsInFlight.delete(sessionId);
+      this.setInFlight(request, false);
     }
+  }
+
+  private setInFlight(request: SessionRequest, isInFlight: boolean): void {
+    const keys = new Set(this.keysInFlight());
+    if (isInFlight) keys.add(keyOf(request));
+    else keys.delete(keyOf(request));
+    this.keysInFlight.set(keys);
+  }
+
+  private setError(request: SessionRequest, error: string | null): void {
+    const errors = new Map(this.errorsByKey());
+    if (error === null) errors.delete(keyOf(request));
+    else errors.set(keyOf(request), error);
+    this.errorsByKey.set(errors);
   }
 }

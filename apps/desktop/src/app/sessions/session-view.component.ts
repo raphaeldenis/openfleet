@@ -2,7 +2,7 @@ import { NgTemplateOutlet } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, effect, inject, input, signal, untracked } from '@angular/core';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
-import { SessionRequests } from '../core/session-requests';
+import { SessionRequestsService } from '../core/session-requests';
 import { ComposerComponent } from './composer.component';
 import { PermissionGateCardComponent } from './permission-gate-card.component';
 import { type ClosedStripCopy, closedStripCopyFor, reopenErrorMessage, resumeFailureReasonFor } from './session-close-status';
@@ -121,9 +121,9 @@ export class SessionViewComponent {
   readonly sessionId = input.required<string>();
   private readonly events = inject(FleetEventsService);
   private readonly api = inject(FleetApiService);
-  protected readonly resuming = signal(false);
-  protected readonly resumeError = signal<string | null>(null);
-  private readonly resumeRequests = new SessionRequests({ shownSessionId: () => this.sessionId(), busy: this.resuming, error: this.resumeError });
+  private readonly requests = inject(SessionRequestsService);
+  protected readonly resuming = computed(() => this.requests.isBusy(this.sessionId(), 'resume'));
+  protected readonly resumeError = computed(() => this.requests.errorOf(this.sessionId(), 'resume'));
 
   protected readonly session = computed(() => this.events.sessions().find((s) => s.id === this.sessionId()));
 
@@ -159,15 +159,12 @@ export class SessionViewComponent {
   });
 
   constructor() {
-    // A route param change reuses this component instance, so a session switch must not leak the previous
-    // session's resume error into the one now shown; each session keeps its own in-flight resume.
-    effect(() => this.resumeRequests.show(this.sessionId()));
     // A resume error belongs to the closed session it failed on: a rejection that lands once the session is
     // starting or live again (a slow reply, a 409 from another client's reopen) must not resurface on a later close.
     effect(() => {
       const isSessionStillClosed = this.session()?.state === 'closed';
       const hasResumeError = this.resumeError() !== null;
-      if (!isSessionStillClosed && hasResumeError) this.resumeError.set(null);
+      if (!isSessionStillClosed && hasResumeError) untracked(() => this.requests.clearError(this.sessionId(), 'resume'));
     });
     effect(() => {
       const session = this.session();
@@ -180,6 +177,6 @@ export class SessionViewComponent {
 
   async resume(sessionId: string): Promise<void> {
     const reopenErrorFor = (error: unknown) => reopenErrorMessage(error instanceof ApiError ? error.code : undefined);
-    await this.resumeRequests.run(sessionId, reopenErrorFor, () => this.api.reopenSession(sessionId));
+    await this.requests.run({ sessionId, kind: 'resume', message: reopenErrorFor, action: () => this.api.reopenSession(sessionId) });
   }
 }

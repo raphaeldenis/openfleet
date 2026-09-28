@@ -5,7 +5,6 @@ import { describe, expect, it, vi } from 'vitest';
 import type { PermissionMode, SessionState } from '@openfleet/shared';
 import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
-import { PendingSwitchesService } from '../core/pending-switches.service';
 import { ModelSelectorComponent } from './model-selector.component';
 import { PermissionModePickerComponent } from './permission-mode-picker.component';
 
@@ -55,12 +54,11 @@ async function renderSelectors(options: { sessions?: FakeSession[]; api?: Partia
     ],
   });
   const host = fixture.componentInstance;
-  const pendingSwitches = fixture.debugElement.injector.get(PendingSwitchesService);
   const goTo = async (id: string) => {
     host.sessionId.set(id);
     await fixture.whenStable();
   };
-  return { fixture, host, sessions, api, pendingSwitches, goTo };
+  return { fixture, host, sessions, api, goTo };
 }
 
 async function requestModelSwitch() {
@@ -121,17 +119,17 @@ describe('PendingSwitchesService through the model selector and the permission-m
     });
 
     it('parks both switches of the same session, restores both, and clears each on its own when the turn ends', async () => {
-      const { goTo, sessions, pendingSwitches } = await renderSelectors();
+      const { goTo, sessions } = await renderSelectors();
       await requestModelSwitch();
       await requestPermissionModeSwitch();
       await waitFor(() => expect(permissionModeNote()).toBeTruthy());
 
       await goTo('s2');
-      expect(pendingSwitches.recall('s1', 'model')?.requestedValue).toBe('opus');
-      expect(pendingSwitches.recall('s1', 'permissionMode')?.requestedValue).toBe('acceptEdits');
       await goTo('s1');
       expect(modelNote()).toBeTruthy();
       expect(permissionModeNote()).toBeTruthy();
+      expect((screen.getByTestId('model-select') as HTMLSelectElement).value).toBe('opus');
+      expect((screen.getByTestId('permission-mode-select') as HTMLSelectElement).value).toBe('acceptEdits');
 
       sessions.update((all) => all.map((s) => (s.id === 's1' ? { ...s, state: 'idle' as const } : s)));
 
@@ -142,7 +140,7 @@ describe('PendingSwitchesService through the model selector and the permission-m
 
   describe('parking on destroy (the session view leaves the screen, no sessionId change)', () => {
     it('parks both pending switches when the selectors are destroyed, and restores them when they come back', async () => {
-      const { fixture, host, pendingSwitches } = await renderSelectors();
+      const { fixture, host } = await renderSelectors();
       await requestModelSwitch();
       await requestPermissionModeSwitch();
       await waitFor(() => expect(permissionModeNote()).toBeTruthy());
@@ -150,8 +148,6 @@ describe('PendingSwitchesService through the model selector and the permission-m
       host.visible.set(false);
       await fixture.whenStable();
       expect(modelNote()).toBeNull();
-      expect(pendingSwitches.recall('s1', 'model')?.status).toBe('deferred');
-      expect(pendingSwitches.recall('s1', 'permissionMode')?.status).toBe('deferred');
 
       host.visible.set(true);
       await fixture.whenStable();
@@ -162,30 +158,33 @@ describe('PendingSwitchesService through the model selector and the permission-m
       expect((screen.getByTestId('permission-mode-select') as HTMLSelectElement).value).toBe('acceptEdits');
     });
 
-    it('parks nothing when the selectors are destroyed with no switch pending', async () => {
-      const { fixture, host, pendingSwitches } = await renderSelectors();
+    it('shows no note on return when the selectors were destroyed with no switch pending', async () => {
+      const { fixture, host } = await renderSelectors();
 
       host.visible.set(false);
       await fixture.whenStable();
+      host.visible.set(true);
+      await fixture.whenStable();
 
-      expect(pendingSwitches.recall('s1', 'model')).toBeUndefined();
-      expect(pendingSwitches.recall('s1', 'permissionMode')).toBeUndefined();
+      expect(modelNote()).toBeNull();
+      expect(permissionModeNote()).toBeNull();
     });
 
     it('does not resurrect a switch that settled, after coming back to its session, before the selectors were destroyed', async () => {
-      const { fixture, host, goTo, sessions, pendingSwitches } = await renderSelectors();
+      const { fixture, host, goTo, sessions } = await renderSelectors();
       await requestModelSwitch();
       await waitFor(() => expect(modelNote()).toBeTruthy());
       await goTo('s2');
       await goTo('s1');
-      expect(pendingSwitches.recall('s1', 'model')?.status).toBe('deferred');
       sessions.update((all) => all.map((s) => (s.id === 's1' ? { ...s, state: 'idle' as const } : s)));
       await waitFor(() => expect(modelNote()).toBeNull());
 
       host.visible.set(false);
       await fixture.whenStable();
+      host.visible.set(true);
+      await fixture.whenStable();
 
-      expect(pendingSwitches.recall('s1', 'model')).toBeUndefined();
+      expect(modelNote()).toBeNull();
     });
   });
 
@@ -221,17 +220,19 @@ describe('PendingSwitchesService through the model selector and the permission-m
       expect(permissionModeNote()).toBeTruthy();
     });
 
-    it('does not park a switch that was requested on B under A\'s id', async () => {
-      const { goTo, pendingSwitches } = await renderSelectors();
+    it('does not show a switch that was requested on B on A, and gives it back on B', async () => {
+      const { goTo } = await renderSelectors();
       await goTo('s2');
       await requestModelSwitch();
       await waitFor(() => expect(modelNote()).toBeTruthy());
 
       await goTo('s1');
-
-      expect(pendingSwitches.recall('s1', 'model')).toBeUndefined();
-      expect(pendingSwitches.recall('s2', 'model')?.requestedValue).toBe('opus');
       expect(modelNote()).toBeNull();
+      expect((screen.getByTestId('model-select') as HTMLSelectElement).value).toBe('claude-sonnet-5');
+
+      await goTo('s2');
+      expect(modelNote()).toHaveTextContent('switch pending');
+      expect((screen.getByTestId('model-select') as HTMLSelectElement).value).toBe('opus');
     });
   });
 
@@ -276,42 +277,36 @@ describe('PendingSwitchesService through the model selector and the permission-m
   });
 
   describe('a session that leaves the fleet', () => {
-    it('forgets the parked switch of a session that disappeared from the fleet', async () => {
-      const { fixture, goTo, sessions, pendingSwitches } = await renderSelectors();
-      await requestModelSwitch();
-      await waitFor(() => expect(modelNote()).toBeTruthy());
-      await goTo('s2');
-
-      sessions.update((all) => all.filter((s) => s.id !== 's1'));
-      await fixture.whenStable();
-
-      expect(pendingSwitches.recall('s1', 'model')).toBeUndefined();
-    });
-
-    it('forgets the parked switches of a session that closed while the user was elsewhere', async () => {
-      const { fixture, goTo, sessions, pendingSwitches } = await renderSelectors();
+    it('shows no old note when a session that closed while the user was elsewhere is resumed', async () => {
+      const { fixture, goTo, sessions } = await renderSelectors();
       await requestModelSwitch();
       await requestPermissionModeSwitch();
       await waitFor(() => expect(permissionModeNote()).toBeTruthy());
       await goTo('s2');
 
-      sessions.update((all) => all.map((s) => (s.id === 's1' ? { ...s, state: 'closed' as const } : s)));
+      setStateOf(sessions, 's1', 'closed');
       await fixture.whenStable();
+      setStateOf(sessions, 's1', 'starting');
+      await fixture.whenStable();
+      setStateOf(sessions, 's1', 'idle');
+      await fixture.whenStable();
+      await goTo('s1');
 
-      expect(pendingSwitches.recall('s1', 'model')).toBeUndefined();
-      expect(pendingSwitches.recall('s1', 'permissionMode')).toBeUndefined();
+      expect(modelNote()).toBeNull();
+      expect(permissionModeNote()).toBeNull();
     });
 
-    it('keeps the parked switches of a session that is still open while another session closes', async () => {
-      const { fixture, goTo, sessions, pendingSwitches } = await renderSelectors();
+    it('keeps the note of a session that is still open while another session closes', async () => {
+      const { fixture, goTo, sessions } = await renderSelectors();
       await requestModelSwitch();
       await waitFor(() => expect(modelNote()).toBeTruthy());
       await goTo('s2');
 
-      sessions.update((all) => all.map((s) => (s.id === 's2' ? { ...s, state: 'closed' as const } : s)));
+      setStateOf(sessions, 's2', 'closed');
       await fixture.whenStable();
+      await goTo('s1');
 
-      expect(pendingSwitches.recall('s1', 'model')?.status).toBe('deferred');
+      expect(modelNote()).toHaveTextContent('switch pending');
     });
   });
 

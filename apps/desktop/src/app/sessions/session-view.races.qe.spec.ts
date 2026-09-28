@@ -252,10 +252,7 @@ describe('a switch request that fails while the user is on B, then a retry on A'
       expect(errorOf(kind)).toBeNull();
     });
 
-    // MINOR — a request that fails while its session is off screen leaves no trace on return: the select snaps
-    // back, Apply is enabled and nothing says the switch did not happen. Session-requests.ts:22 clears the
-    // error on show() and run() drops a stale error by design; the user only learns by re-reading the model.
-    itShowsADefect('tells the user on return to A that the switch failed while they were away', async () => {
+    it('tells the user on return to A that the switch failed while they were away', async () => {
       const { goTo } = await renderWithAFailingThenAnAnsweredRequest();
 
       await goTo('s1');
@@ -411,8 +408,7 @@ describe('Close and Interrupt of a session across A → B → A', () => {
     expect(api.closeSession).toHaveBeenCalledTimes(2);
   });
 
-  // MINOR — same silence as a failed switch: A's failed close leaves nothing on return to A (session-requests.ts:22).
-  itShowsADefect('tells the user on return to A that the close failed while they were away', async () => {
+  it('tells the user on return to A that the close failed while they were away', async () => {
     const closeReply = deferred<unknown>();
     const api = Object.assign(fakeApi(), { closeSession: vi.fn(() => closeReply.promise) });
     const { fixture, goTo } = await renderFleet(api, [gimli(), legolas()]);
@@ -426,10 +422,7 @@ describe('Close and Interrupt of a session across A → B → A', () => {
     expect(actionError()).toHaveTextContent(/could not close/i);
   });
 
-  // MINOR — session-actions.component.ts:86 shares one `error` between Close and Interrupt and never clears it
-  // when the session closes: an Interrupt that fails after Close was confirmed leaves "try again" on a closed
-  // session that no longer has an Interrupt button.
-  itShowsADefect('shows no interrupt error on a session that closed while its interrupt was still in flight', async () => {
+  it('shows no interrupt error on a session that closed while its interrupt was still in flight', async () => {
     const interruptReply = deferred<unknown>();
     const api = Object.assign(fakeApi(), { sendInput: vi.fn(() => interruptReply.promise) });
     const { fixture, daemon } = await renderFleet(api, [gimli()]);
@@ -485,10 +478,7 @@ describe('a switch requested while the session is still starting', () => {
       expect(noteOf(kind)).toBeNull();
     });
 
-    // MAJOR — pending-switches.service.ts:53 marks every parked switch of a 'starting' session as having seen its own
-    // relaunch, including a switch requested during that very launch (its stateBeforeSwitch is 'starting'). Any session
-    // event while the user is elsewhere flips it, so back on the session the note is gone before the queued relaunch ran.
-    itShowsADefect('keeps its note through the earlier launch when the user was on B, and an unrelated session event fired meanwhile', async () => {
+    it('keeps its note through the earlier launch when the user was on B, and an unrelated session event fired meanwhile', async () => {
       // Arrange
       const { daemon, goTo } = await renderFleet(fakeApi(), [gimli({ state: 'starting' }), legolas()]);
       await requestSwitch(kind);
@@ -524,10 +514,10 @@ describe('a switch requested while the session is still starting', () => {
 });
 
 describe('a relaunch whose state events reach the client in one burst', () => {
-  // MINOR — the notes watch the session's latest state, not the sequence of its states (model-selector.component.ts:101,
-  // permission-mode-picker.component.ts:114): an idle → starting pair that lands before a render is read as one
-  // 'starting', and the idle → starting → idle of a whole relaunch as a plain 'idle', so the note is never cleared.
-  // Only reachable when rendering is late (a throttled background window); the note then stays until the session closes.
+  // Documented limit: the notes watch the session's latest state, not the sequence of its states, and the fleet
+  // events service exposes no launch counter to tell "idle" from "starting → idle". A whole relaunch that lands before
+  // one render therefore reads as a plain 'idle' and the note stays until the session closes. Only reachable when
+  // rendering is late (a throttled background window).
   itShowsADefect.each(SWITCH_KINDS)('clears the $kind note when the whole relaunch (starting → idle) lands before a render', async (kind) => {
     const { fixture, daemon } = await renderFleet(
       Object.assign(fakeApi(), { [kind.apiMethod]: vi.fn().mockResolvedValue({ status: 'relaunching' }) }),
@@ -548,11 +538,7 @@ describe('a relaunch whose state events reach the client in one burst', () => {
 
 describe('leaving the session view and coming back with a switch request in flight', () => {
   describe.each(SWITCH_KINDS)('the $kind switch', (kind) => {
-    // MAJOR — the "deferred" reply of a request sent from a selector that is destroyed before the reply lands
-    // is dropped: the destroyed component is not `isStale()` (its input still reads the old id), so answer() is
-    // never called and the note parked on destroy keeps status null. Back on the session the user sees no note,
-    // and the Close dialog does not warn that closing cancels the switch.
-    itShowsADefect('shows the "deferred" answer on return when the reply landed while the view was gone', async () => {
+    it('shows the "deferred" answer on return when the reply landed while the view was gone', async () => {
       const reply = deferred<SwitchReply>();
       const { fixture, leaveTheSessionView, comeBackToTheSessionView } = await renderFleet(
         Object.assign(fakeApi(), { [kind.apiMethod]: vi.fn(() => reply.promise) }),
@@ -568,9 +554,7 @@ describe('leaving the session view and coming back with a switch request in flig
       expect(noteOf(kind)).toHaveTextContent(SWITCH_PENDING_NOTE);
     });
 
-    // MAJOR — SessionRequests lives in the component, so a request in flight is forgotten when the view is
-    // destroyed: Apply is live again on return and a second click sends a second switch (a second CLI relaunch).
-    itShowsADefect('keeps Apply disabled on return until the first reply lands, and sends no second request', async () => {
+    it('keeps Apply disabled on return until the first reply lands, and sends no second request', async () => {
       const reply = deferred<SwitchReply>();
       const api = Object.assign(fakeApi(), { [kind.apiMethod]: vi.fn(() => reply.promise) });
       const { leaveTheSessionView, comeBackToTheSessionView } = await renderFleet(api, [gimli()]);
@@ -585,9 +569,7 @@ describe('leaving the session view and coming back with a switch request in flig
     });
   });
 
-  // MAJOR — same root cause for Close: the in-flight close is forgotten with the header, so Close is live again
-  // on return and a second confirm sends a second close.
-  itShowsADefect('keeps Close disabled on return until the first close reply lands', async () => {
+  it('keeps Close disabled on return until the first close reply lands', async () => {
     const closeReply = deferred<unknown>();
     const api = Object.assign(fakeApi(), { closeSession: vi.fn(() => closeReply.promise) });
     const { leaveTheSessionView, comeBackToTheSessionView } = await renderFleet(api, [gimli()]);

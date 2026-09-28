@@ -4,7 +4,7 @@ import type { SessionState } from '@openfleet/shared';
 import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { NO_SWITCH_TRACKED, PendingSwitchesService, type SwitchSnapshot, type SwitchStatus } from '../core/pending-switches.service';
-import { SessionRequests } from '../core/session-requests';
+import { SessionRequestsService } from '../core/session-requests';
 
 const MODEL_SWITCH_ERROR = 'Could not switch model — try again.';
 
@@ -48,6 +48,8 @@ export class ModelSelectorComponent {
   private readonly events = inject(FleetEventsService);
   private readonly api = inject(FleetApiService);
   private readonly pendingSwitches = inject(PendingSwitchesService);
+  private readonly requests = inject(SessionRequestsService);
+  private readonly destroyRef = inject(DestroyRef);
   private shownSessionId: string | undefined;
   // The session's current model rarely matches one of the fixed rungs exactly (it is a full model id,
   // e.g. 'claude-opus-5-5', not the short alias 'opus') — add it as its own option instead of forcing
@@ -60,9 +62,9 @@ export class ModelSelectorComponent {
   // The last value a switch actually confirmed (or the session's model at mount) — a failed switch
   // reverts `chosenRung` here instead of leaving the select showing the rejected choice.
   private confirmedRung = 'sonnet';
-  readonly applying = signal(false);
+  readonly applying = computed(() => this.requests.isBusy(this.sessionId(), 'model'));
   readonly switchStatus = signal<'relaunching' | 'deferred' | null>(null);
-  readonly switchError = signal<string | null>(null);
+  readonly switchError = computed(() => this.requests.errorOf(this.sessionId(), 'model'));
   // The model and state in effect when the current switch was requested — as long as neither has
   // moved on, the switch is still in flight. `undefined` means no switch is being tracked.
   private readonly modelBeforeSwitch = signal<string | null | undefined>(undefined);
@@ -72,12 +74,6 @@ export class ModelSelectorComponent {
   // relaunch's own state transition (leaving 'starting') or the turn ending (idle/closed) is.
   private readonly sawStartingSinceSwitch = signal(false);
 
-  private readonly requests = new SessionRequests({
-    shownSessionId: () => this.sessionId(),
-    busy: this.applying,
-    error: this.switchError,
-  });
-
   constructor() {
     // A route param change reuses this component instance: the session being left keeps its pending
     // switch in the service, the session arriving gets its own back.
@@ -85,12 +81,11 @@ export class ModelSelectorComponent {
       const sessionId = this.sessionId();
       untracked(() => this.parkPendingSwitchOfShownSession());
       this.shownSessionId = sessionId;
-      this.requests.show(sessionId);
       const pending = this.pendingSwitches.recall(sessionId, 'model');
       const currentModel = untracked(() => this.session()?.model) ?? 'sonnet';
       this.restoreSwitch(pending ?? { ...NO_SWITCH_TRACKED, requestedValue: currentModel });
     });
-    inject(DestroyRef).onDestroy(() => this.parkPendingSwitchOfShownSession());
+    this.destroyRef.onDestroy(() => this.parkPendingSwitchOfShownSession());
 
     // Clears "restarting…" / "switch pending" once the relaunch it describes has actually settled
     // (passed through 'starting' and moved on) or the session reached idle/closed since the request,
@@ -169,23 +164,29 @@ export class ModelSelectorComponent {
     const stateAtApply = this.session()?.state;
     const attemptedRung = this.chosenRung;
     const switchBeforeApply = this.switchSnapshot();
-    await this.requests.run(sessionIdAtApply, MODEL_SWITCH_ERROR, async (isStale) => {
-      this.showSwitch({
-        status: switchBeforeApply.status,
-        requestedValue: attemptedRung,
-        valueBeforeSwitch: modelAtApply,
-        stateBeforeSwitch: stateAtApply,
-        sawStartingSinceSwitch: false,
-      });
-      try {
-        const { status } = await this.api.updateModel(sessionIdAtApply, attemptedRung);
-        if (isStale()) this.pendingSwitches.answer(sessionIdAtApply, 'model', status);
-        else this.showAnswer(status);
-      } catch (error) {
-        if (isStale()) this.pendingSwitches.park(sessionIdAtApply, 'model', switchBeforeApply);
-        else this.restoreSwitch(switchBeforeApply);
-        throw error;
-      }
+    const isOffScreen = () => this.sessionId() !== sessionIdAtApply || this.destroyRef.destroyed;
+    await this.requests.run({
+      sessionId: sessionIdAtApply,
+      kind: 'model',
+      message: MODEL_SWITCH_ERROR,
+      action: async () => {
+        this.showSwitch({
+          status: switchBeforeApply.status,
+          requestedValue: attemptedRung,
+          valueBeforeSwitch: modelAtApply,
+          stateBeforeSwitch: stateAtApply,
+          sawStartingSinceSwitch: false,
+        });
+        try {
+          const { status } = await this.api.updateModel(sessionIdAtApply, attemptedRung);
+          if (isOffScreen()) this.pendingSwitches.answer(sessionIdAtApply, 'model', status);
+          else this.showAnswer(status);
+        } catch (error) {
+          if (isOffScreen()) this.pendingSwitches.park(sessionIdAtApply, 'model', switchBeforeApply);
+          else this.restoreSwitch(switchBeforeApply);
+          throw error;
+        }
+      },
     });
   }
 

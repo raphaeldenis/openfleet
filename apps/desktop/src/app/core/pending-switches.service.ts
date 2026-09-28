@@ -49,18 +49,25 @@ export class PendingSwitchesService {
       for (const sessionId of [...this.switchesBySession.keys()]) {
         if (!openSessionIds.has(sessionId)) this.switchesBySession.delete(sessionId);
       }
-      for (const session of sessions) {
-        if (session.state === 'starting') this.markRelaunchStarted(session.id);
-      }
+      for (const session of sessions) this.followSessionState(session.id, session.state);
     });
   }
 
-  // A relaunch that starts and finishes while no selector shows the session must still count as settled on return.
-  private markRelaunchStarted(sessionId: string): void {
+  // Mirrors what a selector does while it is mounted: a relaunch that starts and finishes while no selector shows
+  // the session must still count as settled on return. A switch requested during a launch waits for it to end,
+  // and only a 'starting' entered after that is its own relaunch.
+  private followSessionState(sessionId: string, state: SessionState): void {
     const switches = this.switchesBySession.get(sessionId);
     if (!switches) return;
     for (const pending of Object.values(switches)) {
-      if (pending) pending.sawStartingSinceSwitch = true;
+      if (!pending) continue;
+      const wasRequestedDuringLaunch = pending.stateBeforeSwitch === 'starting';
+      if (state === 'starting') {
+        if (!wasRequestedDuringLaunch) pending.sawStartingSinceSwitch = true;
+        continue;
+      }
+      const isEarlierLaunchOver = wasRequestedDuringLaunch && !pending.sawStartingSinceSwitch && state !== 'closed';
+      if (isEarlierLaunchOver) pending.stateBeforeSwitch = state;
     }
   }
 
