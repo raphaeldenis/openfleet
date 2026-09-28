@@ -56,6 +56,17 @@ describe('FleetApiService', () => {
     await expect(api.reopenSession('s1')).resolves.toEqual(session);
   });
 
+  it('reads the resolved model table from GET /api/models', async () => {
+    const modelTable = { haiku: 'h', sonnet: 's', opus: 'o', fable: 'f' };
+    fetchMock.mockResolvedValue(fakeResponse({ ok: true, status: 200, json: () => Promise.resolve(modelTable) }));
+
+    await expect(api.models()).resolves.toEqual(modelTable);
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toMatch(/\/api\/models$/);
+    expect(init.method).toBeUndefined();
+  });
+
   it('sends the admin bearer token and JSON content type on every request', async () => {
     fetchMock.mockResolvedValue(fakeResponse({ ok: true, status: 200, json: () => Promise.resolve({}) }));
 
@@ -64,6 +75,51 @@ describe('FleetApiService', () => {
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(init.headers).toMatchObject({ 'content-type': 'application/json' });
     expect((init.headers as Record<string, string>)['authorization']).toMatch(/^Bearer /);
+  });
+
+  describe('where the admin token goes', () => {
+    beforeEach(() => {
+      localStorage.clear();
+      localStorage.setItem('openfleet.adminToken', 'secret-token');
+      fetchMock.mockResolvedValue(fakeResponse({ ok: true, status: 200, json: () => Promise.resolve({}) }));
+    });
+    afterEach(() => {
+      localStorage.clear();
+    });
+
+    it.each([
+      ['a remote host', 'http://evil:1'],
+      ['a host that starts with localhost', 'http://localhost.evil.com'],
+      ['userinfo hiding the real host', 'http://x@evil.com'],
+      ['a wildcard-DNS host embedding the loopback address', 'http://127.0.0.1.nip.io'],
+      ['the IPv4-mapped IPv6 loopback', 'http://[::ffff:7f00:1]:7331'],
+    ])('sends the request to the default daemon, not to %s (%s)', async (_label, storedApiUrl) => {
+      localStorage.setItem('openfleet.apiUrl', storedApiUrl);
+
+      await api.closeSession('s1');
+
+      const [requestedUrl] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(requestedUrl).toBe('http://127.0.0.1:7331/api/sessions/s1/close');
+    });
+
+    it('sends the request to the stored loopback daemon with the bearer token', async () => {
+      localStorage.setItem('openfleet.apiUrl', 'http://localhost:9999');
+
+      await api.closeSession('s1');
+
+      const [requestedUrl, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(requestedUrl).toBe('http://localhost:9999/api/sessions/s1/close');
+      expect((init.headers as Record<string, string>)['authorization']).toBe('Bearer secret-token');
+    });
+
+    it('sends a whitespace-only stored token as no token', async () => {
+      localStorage.setItem('openfleet.adminToken', '   ');
+
+      await api.closeSession('s1');
+
+      const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect((init.headers as Record<string, string>)['authorization']).toBe('Bearer ');
+    });
   });
 
   describe('createManagerSession', () => {

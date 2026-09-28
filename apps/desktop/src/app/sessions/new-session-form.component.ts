@@ -1,14 +1,18 @@
-import { afterNextRender, ChangeDetectionStrategy, Component, computed, DestroyRef, ElementRef, inject, Injector, input, linkedSignal, signal, viewChild } from '@angular/core';
+import { DOCUMENT } from '@angular/common';
+import { afterNextRender, ChangeDetectionStrategy, Component, computed, DestroyRef, effect, ElementRef, inject, Injector, input, linkedSignal, signal, untracked, viewChild } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { FormsModule } from '@angular/forms';
-import { ActivatedRoute, Router, RouterLink } from '@angular/router';
-import { PERMISSION_MODES, type HarnessId, type PermissionMode, type Session } from '@openfleet/shared';
-import { ApiError, FleetApiService } from '../core/fleet-api.service';
+import { ActivatedRoute, type ParamMap, Router, RouterLink } from '@angular/router';
+import { type HarnessId, type Session } from '@openfleet/shared';
+import { FleetApiService } from '../core/fleet-api.service';
 import { ManagerFieldsComponent } from '../managers/manager-fields.component';
+import { createdButNotOpenedMessage, createSessionErrorMessage } from './create-session-error';
 import { MODEL_RUNGS } from './model-selector.component';
-import { INHERITED_EXPLANATION, PERMISSION_MODE_EXPLANATIONS } from './permission-mode-picker.component';
+import { type ChosenPermissionMode, INHERITED_MODE, PermissionModeListComponent } from './permission-mode-list.component';
 
 type CreationMode = 'session' | 'manager';
+type CreatedSession = { id: string; formFingerprint: string };
+type ServerFailure = { message: string; formFingerprint: string };
 
 const NOT_AVAILABLE_YET = 'not available yet';
 const SESSION_DEFAULT_EMOJI = '🤖';
@@ -20,31 +24,37 @@ const HARNESS_OPTIONS: ReadonlyArray<{ id: string; label: string; isAvailable: b
   { id: 'generic-pty', label: 'Generic PTY', isAvailable: false },
 ];
 
-const INHERITED_MODE = '';
-const PERMISSION_MODES_OFFERED_AT_CREATION = PERMISSION_MODES.filter((mode) => mode !== 'bypassPermissions');
+// The router's component input binding sets every input the route does not provide to undefined.
+function emptyWhenUnbound(value: string | undefined): string {
+  return value ?? '';
+}
+
+function creationModeFrom(queryParams: ParamMap | undefined): CreationMode {
+  return queryParams?.get('mode') === 'manager' ? 'manager' : 'session';
+}
 
 @Component({
   selector: 'of-new-session-form',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FormsModule, RouterLink, ManagerFieldsComponent],
+  imports: [FormsModule, RouterLink, ManagerFieldsComponent, PermissionModeListComponent],
   host: { '[class.embedded]': 'embedded()' },
   template: `
-    <form class="of-form" data-testid="new-session-form" (ngSubmit)="submit()" novalidate>
+    <form class="of-form" data-testid="new-session-form" [attr.aria-busy]="pending() || null" (ngSubmit)="submit()" novalidate>
       @if (!embedded()) {
         <div class="header">
           <h1>{{ isManagerMode() ? 'New manager' : 'New session' }}</h1>
           <div class="mode-toggle" role="group" aria-label="Kind of session">
-            <button type="button" [attr.aria-pressed]="!isManagerMode()" [disabled]="pending()" data-testid="new-session-mode-session" (click)="chooseMode('session')">Session</button>
-            <button type="button" [attr.aria-pressed]="isManagerMode()" [disabled]="pending()" data-testid="new-session-mode-manager" (click)="chooseMode('manager')">Manager</button>
+            <button type="button" [attr.aria-pressed]="!isManagerMode()" [attr.aria-disabled]="ariaDisabled()" data-testid="new-session-mode-session" (click)="chooseMode('session')">Session</button>
+            <button type="button" [attr.aria-pressed]="isManagerMode()" [attr.aria-disabled]="ariaDisabled()" data-testid="new-session-mode-manager" (click)="chooseMode('manager')">Manager</button>
           </div>
         </div>
       }
 
-      <fieldset class="card" [disabled]="pending()">
+      <fieldset class="card">
       <div class="of-section-title">Workspace</div>
       <div class="of-field">
         <label class="of-label" for="new-session-directory">Directory</label>
-        <input #directoryInput id="new-session-directory" class="of-input" data-testid="new-session-directory" name="directory" [ngModel]="directory()" (ngModelChange)="directory.set($event)" placeholder="/path/to/worktree" [attr.aria-invalid]="directoryError() ? 'true' : null" [attr.aria-describedby]="directoryError() ? 'new-session-directory-error' : null" />
+        <input #directoryInput id="new-session-directory" class="of-input" data-testid="new-session-directory" name="directory" [readonly]="pending()" [ngModel]="directory()" (ngModelChange)="directory.set($event)" placeholder="/path/to/worktree" [attr.aria-invalid]="directoryError() ? 'true' : null" [attr.aria-describedby]="directoryError() ? 'new-session-directory-error' : null" />
         @if (directoryError(); as error) {
           <span id="new-session-directory-error" role="alert" data-testid="new-session-directory-error" class="of-error">✕ {{ error }}</span>
         }
@@ -53,7 +63,7 @@ const PERMISSION_MODES_OFFERED_AT_CREATION = PERMISSION_MODES.filter((mode) => m
       <div class="of-section-title">Agent</div>
       <label class="of-field">
         <span class="of-label">Harness</span>
-        <select class="of-input" data-testid="new-session-harness" name="harness" [ngModel]="harness()" (ngModelChange)="harness.set($event)">
+        <select class="of-input" data-testid="new-session-harness" name="harness" [attr.disabled]="pending() ? '' : null" [ngModel]="harness()" (ngModelChange)="harness.set($event)">
           @for (option of harnessOptions; track option.id) {
             <option [value]="option.id" [disabled]="!option.isAvailable" [attr.title]="option.isAvailable ? null : notAvailableYet">{{ option.label }}</option>
           }
@@ -62,33 +72,24 @@ const PERMISSION_MODES_OFFERED_AT_CREATION = PERMISSION_MODES.filter((mode) => m
       <div class="of-row">
         <label class="of-field">
           <span class="of-label">Model</span>
-          <select class="of-input" data-testid="new-session-model" name="model" [ngModel]="model()" (ngModelChange)="model.set($event)">
+          <select class="of-input" data-testid="new-session-model" name="model" [attr.disabled]="pending() ? '' : null" [ngModel]="model()" (ngModelChange)="model.set($event)">
             @for (rung of modelRungs; track rung) {
               <option [value]="rung">{{ rung }}</option>
             }
           </select>
         </label>
-        <label class="of-field">
-          <span class="of-label">Permission mode</span>
-          <select class="of-input" data-testid="new-session-permission-mode" name="permissionMode" [ngModel]="permissionMode()" (ngModelChange)="permissionMode.set($event)">
-            <option [value]="inheritedMode">inherited (CLI default)</option>
-            @for (mode of permissionModes; track mode) {
-              <option [value]="mode">{{ mode }}</option>
-            }
-          </select>
-        </label>
+        <of-permission-mode-list class="of-field" [(value)]="permissionMode" [isLocked]="pending()" />
       </div>
-      <span class="hint" data-testid="new-session-permission-mode-explanation">{{ permissionModeExplanation() }}</span>
 
       <div class="of-section-title">Identity</div>
       <div class="of-row">
         <label class="of-field of-field--emoji">
           <span class="of-label">Emoji</span>
-          <input class="of-input" data-testid="new-session-emoji" name="emoji" [ngModel]="emoji()" (ngModelChange)="typedEmoji.set($event)" size="2" />
+          <input class="of-input" data-testid="new-session-emoji" name="emoji" [readonly]="pending()" [ngModel]="emoji()" (ngModelChange)="typedEmoji.set($event)" size="2" />
         </label>
         <div class="of-field">
           <label class="of-label" for="new-session-name">Name</label>
-          <input #nameInput id="new-session-name" class="of-input" data-testid="new-session-name" name="name" [ngModel]="name()" (ngModelChange)="name.set($event)" placeholder="e.g. Dwalin · T9" [attr.aria-invalid]="nameError() ? 'true' : null" [attr.aria-describedby]="nameError() ? 'new-session-name-error' : null" />
+          <input #nameInput id="new-session-name" class="of-input" data-testid="new-session-name" name="name" [readonly]="pending()" [ngModel]="name()" (ngModelChange)="name.set($event)" placeholder="e.g. Dwalin · T9" [attr.aria-invalid]="nameError() ? 'true' : null" [attr.aria-describedby]="nameError() ? 'new-session-name-error' : null" />
           @if (nameError(); as error) {
             <span id="new-session-name-error" role="alert" data-testid="new-session-name-error" class="of-error">✕ {{ error }}</span>
           }
@@ -97,7 +98,7 @@ const PERMISSION_MODES_OFFERED_AT_CREATION = PERMISSION_MODES.filter((mode) => m
 
       @if (isManagerMode()) {
         <div class="of-section-title">Manager</div>
-        <of-manager-fields [(pulseSeconds)]="pulseSeconds" [(childrenCap)]="childrenCap" [(mission)]="mission" />
+        <of-manager-fields [isLocked]="pending()" [(pulseSeconds)]="pulseSeconds" [(childrenCap)]="childrenCap" [(mission)]="mission" [(isMissionTouched)]="isMissionTouched" />
       }
       </fieldset>
 
@@ -105,11 +106,12 @@ const PERMISSION_MODES_OFFERED_AT_CREATION = PERMISSION_MODES.filter((mode) => m
         <p role="alert" data-testid="new-session-form-error" class="of-error">✕ {{ error }}</p>
       }
       <div class="actions">
+        <span class="creating" role="status">@if (pending()) {Creating {{ mode() }}…}</span>
         <ng-content />
         @if (!embedded()) {
           <a class="of-btn of-btn--secondary" routerLink="/" data-testid="new-session-cancel">Cancel</a>
         }
-        <button type="submit" class="of-btn of-btn--primary" data-testid="new-session-submit" [disabled]="pending()">{{ isManagerMode() ? 'Create manager' : 'Create session' }}</button>
+        <button #submitButton type="submit" class="of-btn of-btn--primary" data-testid="new-session-submit" [attr.aria-disabled]="ariaDisabled()">{{ isManagerMode() ? 'Create manager' : 'Create session' }}</button>
       </div>
     </form>
   `,
@@ -119,19 +121,20 @@ const PERMISSION_MODES_OFFERED_AT_CREATION = PERMISSION_MODES.filter((mode) => m
     .header { display: flex; align-items: center; gap: 1rem }
     :host(.embedded) { padding: 0 }
     :host(.embedded) .of-form { width: 100% }
-    :host(.embedded) .actions { position: sticky; bottom: 0; padding: .75rem 0; background: var(--bg) }
+    :host(.embedded) .actions { position: sticky; bottom: 0; margin-top: .75rem; padding: .75rem 0; background: var(--bg) }
     h1 { flex: 1; margin: 0; font-size: 1.25rem; font-weight: 600; letter-spacing: -.01em }
     .mode-toggle { display: flex; padding: .125rem; border: 1px solid var(--line); border-radius: .5rem; background: var(--sunk) }
     .mode-toggle button { height: 1.625rem; padding: 0 .75rem; border: 0; border-radius: .375rem; background: transparent; color: var(--fg); font: inherit; font-size: .75rem; cursor: pointer }
     .mode-toggle button[aria-pressed='true'] { background: var(--panel) }
+    .mode-toggle button[aria-disabled='true'] { color: var(--faint); cursor: not-allowed }
     .mode-toggle button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
     .card { display: flex; flex-direction: column; gap: 1.25rem; min-width: 0; margin: 0; padding: 1.25rem; border: 1px solid var(--line); border-radius: .75rem; background: var(--panel) }
     .of-error { margin: 0 }
     .of-row { display: flex; gap: 1rem }
     .of-row .of-field { flex: 1 }
     .of-row .of-field--emoji { flex: none; width: 3.5rem }
-    .hint { font-size: .6875rem; color: var(--mut) }
-    .actions { display: flex; justify-content: flex-end; gap: .5rem }
+    .actions { display: flex; justify-content: flex-end; align-items: center; gap: .5rem }
+    .creating { flex: 1; font-size: .75rem; color: var(--mut) }
     .actions .of-btn { height: 2rem }
     .actions .of-btn--primary { padding: 0 1rem }
     .actions a { display: inline-flex; align-items: center; text-decoration: none }
@@ -143,27 +146,33 @@ export class NewSessionFormComponent {
   private readonly route = inject(ActivatedRoute);
   private readonly destroyRef = inject(DestroyRef);
   private readonly injector = inject(Injector);
+  private readonly document = inject(DOCUMENT);
   private readonly queryParams = toSignal(this.route.queryParamMap);
   private readonly managerFields = viewChild(ManagerFieldsComponent);
+  private readonly permissionModeList = viewChild(PermissionModeListComponent);
   private readonly directoryInput = viewChild<ElementRef<HTMLInputElement>>('directoryInput');
   private readonly nameInput = viewChild<ElementRef<HTMLInputElement>>('nameInput');
+  private readonly submitButton = viewChild<ElementRef<HTMLButtonElement>>('submitButton');
   private hasBeenDestroyed = false;
   protected readonly harnessOptions = HARNESS_OPTIONS;
   protected readonly notAvailableYet = NOT_AVAILABLE_YET;
   protected readonly modelRungs = MODEL_RUNGS;
-  protected readonly permissionModes = PERMISSION_MODES_OFFERED_AT_CREATION;
-  protected readonly inheritedMode = INHERITED_MODE;
 
   // A host page that owns the heading, the way out and the kind of session embeds the form as a plain session form.
   readonly embedded = input(false);
-  protected readonly mode = linkedSignal<CreationMode>(() => {
-    const isManagerRequested = this.queryParams()?.get('mode') === 'manager';
-    return isManagerRequested && !this.embedded() ? 'manager' : 'session';
+  protected readonly pending = signal(false);
+  readonly isPending = this.pending.asReadonly();
+  protected readonly ariaDisabled = computed(() => (this.pending() ? 'true' : null));
+  private readonly createdSession = signal<CreatedSession | undefined>(undefined);
+  private readonly modeFromUrl = linkedSignal<{ urlMode: CreationMode; isHoldingMode: boolean }, CreationMode>({
+    source: () => ({ urlMode: creationModeFrom(this.queryParams()), isHoldingMode: this.pending() || this.createdSession() !== undefined }),
+    computation: ({ urlMode, isHoldingMode }, previous) => (isHoldingMode && previous ? previous.value : urlMode),
   });
+  protected readonly mode = linkedSignal<CreationMode>(() => (this.embedded() ? 'session' : this.modeFromUrl()));
   protected readonly isManagerMode = computed(() => this.mode() === 'manager');
-  readonly initialDirectory = input('');
-  readonly initialName = input('');
-  readonly seededPrompt = input('');
+  readonly initialDirectory = input('', { transform: emptyWhenUnbound });
+  readonly initialName = input('', { transform: emptyWhenUnbound });
+  readonly seededPrompt = input('', { transform: emptyWhenUnbound });
   protected readonly directory = linkedSignal(() => this.initialDirectory());
   protected readonly name = linkedSignal(() => this.initialName());
   protected readonly typedEmoji = signal<string | null>(null);
@@ -171,60 +180,15 @@ export class NewSessionFormComponent {
   protected readonly emoji = computed(() => this.typedEmoji() ?? this.defaultEmoji());
   protected readonly harness = signal<HarnessId>('claude-cli');
   protected readonly model = signal<string>('sonnet');
-  protected readonly permissionMode = signal<PermissionMode | typeof INHERITED_MODE>(INHERITED_MODE);
+  protected readonly permissionMode = signal<ChosenPermissionMode>(INHERITED_MODE);
   protected readonly pulseSeconds = signal(1800);
   protected readonly childrenCap = signal(2);
   protected readonly mission = signal('');
+  protected readonly isMissionTouched = signal(false);
 
   protected readonly hasSubmitted = signal(false);
-  protected readonly serverError = signal('');
-  protected readonly pending = signal(false);
-  protected readonly directoryError = computed(() => (this.hasSubmitted() && this.directory().trim() === '' ? 'Directory is required' : ''));
-  protected readonly nameError = computed(() => (this.hasSubmitted() && this.name().trim() === '' ? 'Name is required' : ''));
-  protected readonly permissionModeExplanation = computed(() => {
-    const chosenMode = this.permissionMode();
-    return chosenMode === INHERITED_MODE ? INHERITED_EXPLANATION : PERMISSION_MODE_EXPLANATIONS[chosenMode];
-  });
-
-  constructor() {
-    this.destroyRef.onDestroy(() => (this.hasBeenDestroyed = true));
-  }
-
-  protected chooseMode(chosenMode: CreationMode): void {
-    this.mode.set(chosenMode);
-    const queryParams = chosenMode === 'manager' ? { mode: 'manager' } : {};
-    void this.router.navigate([], { relativeTo: this.route, queryParams, replaceUrl: true });
-  }
-
-  async submit(): Promise<void> {
-    if (this.pending()) return;
-    this.serverError.set('');
-    this.hasSubmitted.set(true);
-    const isDirectoryValid = !this.directoryError();
-    const isNameValid = !this.nameError();
-    const isManagerFieldsValid = !this.isManagerMode() || (this.managerFields()?.validate() ?? false);
-    if (!isDirectoryValid) return this.focusAfterRender(() => this.directoryInput()?.nativeElement.focus());
-    if (!isNameValid) return this.focusAfterRender(() => this.nameInput()?.nativeElement.focus());
-    if (!isManagerFieldsValid) return this.focusAfterRender(() => this.managerFields()?.focusFirstInvalidField());
-
-    const createdSessionRoute = this.isManagerMode() ? '/manager' : '/session';
-    this.pending.set(true);
-    try {
-      const session = await this.create();
-      if (this.hasBeenDestroyed) return;
-      await this.router.navigate([createdSessionRoute, session.id]);
-    } catch (error) {
-      this.serverError.set(error instanceof ApiError ? error.message : 'Could not create the session — check your connection');
-    } finally {
-      this.pending.set(false);
-    }
-  }
-
-  private focusAfterRender(focus: () => void): void {
-    afterNextRender(focus, { injector: this.injector });
-  }
-
-  private create(): Promise<Session> {
+  private readonly serverFailure = signal<ServerFailure | undefined>(undefined);
+  private readonly spec = computed(() => {
     const chosenMode = this.permissionMode();
     const sharedSpec = {
       directory: this.directory().trim(),
@@ -235,12 +199,97 @@ export class NewSessionFormComponent {
       ...(chosenMode === INHERITED_MODE ? {} : { permissionMode: chosenMode }),
     };
     const seededPrompt = this.seededPrompt().trim();
-    if (!this.isManagerMode()) return this.api.createSession({ ...sharedSpec, ...(seededPrompt ? { seededPrompt } : {}) });
-    return this.api.createManagerSession({
-      ...sharedSpec,
-      pulseSeconds: this.pulseSeconds(),
-      childrenCap: this.childrenCap(),
-      mission: this.mission().trim(),
+    if (!this.isManagerMode()) return { kind: 'session' as const, fields: { ...sharedSpec, ...(seededPrompt ? { seededPrompt } : {}) } };
+    const managerFields = { ...sharedSpec, pulseSeconds: this.pulseSeconds(), childrenCap: this.childrenCap(), mission: this.mission().trim() };
+    return { kind: 'manager' as const, fields: managerFields };
+  });
+  private readonly formFingerprint = computed(() => JSON.stringify(this.spec()));
+  protected readonly serverError = computed(() => {
+    const failure = this.serverFailure();
+    const isFailureOfCurrentForm = failure?.formFingerprint === this.formFingerprint();
+    return isFailureOfCurrentForm ? failure.message : '';
+  });
+  protected readonly directoryError = computed(() => (this.hasSubmitted() && this.directory().trim() === '' ? 'Directory is required' : ''));
+  protected readonly nameError = computed(() => (this.hasSubmitted() && this.name().trim() === '' ? 'Name is required' : ''));
+
+  constructor() {
+    this.destroyRef.onDestroy(() => (this.hasBeenDestroyed = true));
+    effect(() => {
+      const editedFormFingerprint = this.formFingerprint();
+      const isCreatedSessionOfAnotherForm = untracked(() => this.createdSession()?.formFingerprint !== editedFormFingerprint);
+      if (isCreatedSessionOfAnotherForm) untracked(() => this.createdSession.set(undefined));
     });
+  }
+
+  protected chooseMode(chosenMode: CreationMode): void {
+    if (this.pending()) return;
+    this.mode.set(chosenMode);
+    const queryParams = chosenMode === 'manager' ? { mode: 'manager' } : {};
+    void this.router.navigate([], { relativeTo: this.route, queryParams, replaceUrl: true });
+  }
+
+  async submit(): Promise<void> {
+    if (this.pending()) return;
+    this.serverFailure.set(undefined);
+    if (this.permissionModeList()?.isConfirmingDangerousMode()) return this.permissionModeList()?.demandAnswer();
+    this.hasSubmitted.set(true);
+    const isRetryOfOpeningCreatedSession = this.createdSession() !== undefined;
+    if (!isRetryOfOpeningCreatedSession && !this.isValidOrFocusFirstInvalidField()) return;
+
+    const focusWhenSubmitted = this.document.activeElement;
+    this.pending.set(true);
+    try {
+      const formFingerprint = this.formFingerprint();
+      const createdSession = this.createdSession() ?? { id: (await this.createSessionOfCurrentMode()).id, formFingerprint };
+      this.createdSession.set(createdSession);
+      if (this.hasBeenDestroyed) return;
+      const isOpened = await this.router.navigate([`/${this.mode()}`, createdSession.id]);
+      if (!isOpened) this.showCreatedButNotOpened(focusWhenSubmitted);
+    } catch (error) {
+      if (this.createdSession()) this.showCreatedButNotOpened(focusWhenSubmitted);
+      else this.showCreateFailed(error, focusWhenSubmitted);
+    } finally {
+      this.pending.set(false);
+    }
+  }
+
+  private showCreatedButNotOpened(focusWhenSubmitted: Element | null): void {
+    this.showServerError(createdButNotOpenedMessage(this.mode()), focusWhenSubmitted);
+  }
+
+  private showCreateFailed(error: unknown, focusWhenSubmitted: Element | null): void {
+    this.showServerError(createSessionErrorMessage(error, this.mode()), focusWhenSubmitted);
+  }
+
+  private showServerError(message: string, focusWhenSubmitted: Element | null): void {
+    this.serverFailure.set({ message, formFingerprint: this.formFingerprint() });
+    this.restoreFocusDroppedWhilePending(focusWhenSubmitted);
+  }
+
+  private isValidOrFocusFirstInvalidField(): boolean {
+    const isDirectoryValid = !this.directoryError();
+    const isNameValid = !this.nameError();
+    const isManagerFieldsValid = !this.isManagerMode() || (this.managerFields()?.validate() ?? false);
+    if (!isDirectoryValid) this.focusAfterRender(() => this.directoryInput()?.nativeElement.focus());
+    else if (!isNameValid) this.focusAfterRender(() => this.nameInput()?.nativeElement.focus());
+    else if (!isManagerFieldsValid) this.focusAfterRender(() => this.managerFields()?.focusFirstInvalidField());
+    return isDirectoryValid && isNameValid && isManagerFieldsValid;
+  }
+
+  private focusAfterRender(focus: () => void): void {
+    afterNextRender(focus, { injector: this.injector });
+  }
+
+  private restoreFocusDroppedWhilePending(focusWhenSubmitted: Element | null): void {
+    this.focusAfterRender(() => {
+      const focusedElement = this.document.activeElement;
+      const isFocusDropped = focusedElement === null || focusedElement === this.document.body || focusedElement === focusWhenSubmitted;
+      if (isFocusDropped) this.submitButton()?.nativeElement.focus();
+    });
+  }
+
+  private createSessionOfCurrentMode(): Promise<Session> {
+    const spec = this.spec();
+    return spec.kind === 'manager' ? this.api.createManagerSession(spec.fields) : this.api.createSession(spec.fields);
   }
 }

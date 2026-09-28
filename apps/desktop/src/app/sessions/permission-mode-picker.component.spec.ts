@@ -328,6 +328,49 @@ describe('PermissionModePickerComponent', () => {
     await waitFor(() => expect(select.value).toBe('acceptEdits'));
   });
 
+  describe('a pending switch belongs to its session', () => {
+    async function renderSwitchedAwayFromAndBackTo(sessionState: ReturnType<typeof signal<'generating' | 'idle'>>) {
+      const api = { updatePermissionMode: vi.fn().mockResolvedValue({ status: 'deferred' }) };
+      const sessionId = signal('s1');
+      const currentMode = signal<'manual' | 'plan'>('manual');
+      const { fixture } = await render(PermissionModePickerComponent, {
+        bindings: [inputBinding('sessionId', sessionId), inputBinding('currentMode', currentMode), inputBinding('sessionState', sessionState)],
+        providers: providersWith(api),
+      });
+      await userEvent.selectOptions(screen.getByTestId('permission-mode-select'), 'acceptEdits');
+      await userEvent.click(screen.getByTestId('apply-permission-mode'));
+      await waitFor(() => expect(screen.getByTestId('permission-mode-switch-status')).toHaveTextContent('switch pending'));
+
+      const goTo = async (id: string, mode: 'manual' | 'plan') => {
+        sessionId.set(id);
+        currentMode.set(mode);
+        await fixture.whenStable();
+      };
+      return { goTo };
+    }
+
+    it('shows session A\'s deferred switch again after switching to B and coming back, with the requested mode selected', async () => {
+      const { goTo } = await renderSwitchedAwayFromAndBackTo(signal<'generating' | 'idle'>('generating'));
+      await goTo('s2', 'plan');
+
+      await goTo('s1', 'manual');
+
+      expect(screen.getByTestId('permission-mode-switch-status')).toHaveTextContent('switch pending: happens when this turn ends');
+      expect((screen.getByTestId('permission-mode-select') as HTMLSelectElement).value).toBe('acceptEdits');
+    });
+
+    it('does not restore the note when session A\'s turn ended while the user was away', async () => {
+      const sessionState = signal<'generating' | 'idle'>('generating');
+      const { goTo } = await renderSwitchedAwayFromAndBackTo(sessionState);
+      await goTo('s2', 'plan');
+      sessionState.set('idle');
+
+      await goTo('s1', 'manual');
+
+      await waitFor(() => expect(screen.queryByTestId('permission-mode-switch-status')).toBeNull());
+    });
+  });
+
   it('gives the mode select an accessible name', async () => {
     await render(PermissionModePickerComponent, {
       bindings: [inputBinding('sessionId', () => 's1'), inputBinding('currentMode', () => 'manual' as const)],

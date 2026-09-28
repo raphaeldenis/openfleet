@@ -66,6 +66,17 @@ describe('REST', () => {
     expect(res.status).toBe(401);
   });
 
+  it('returns the resolved model table on GET /api/models', async () => {
+    const res = await api('/api/models');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual(DEFAULT_MODEL_TABLE);
+  });
+
+  it('refuses GET /api/models without a bearer token', async () => {
+    const res = await fetch(`${server.url}/api/models`);
+    expect(res.status).toBe(401);
+  });
+
   it('rejects a body over 1 MiB on a protected route with 413', async () => {
     const oversizedBody = JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake', pad: 'x'.repeat(2 * 1024 * 1024) });
     const res = await api('/api/sessions', { method: 'POST', body: oversizedBody });
@@ -329,6 +340,19 @@ describe('REST', () => {
     const res = await api(`/api/sessions/${created.id}/reopen`, { method: 'POST' });
     expect(res.status).toBe(200);
     expect((await res.json()).state).toBe('starting');
+  });
+
+  it('lists a reopened session that reached idle without the closedAt and exit code of its earlier close', async () => {
+    const created = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
+    await api(`/api/sessions/${created.id}/close`, { method: 'POST' });
+    await api(`/api/sessions/${created.id}/reopen`, { method: 'POST' });
+    sessions.applyInput(created.id, { kind: 'hook', event: { session_id: created.id, hook_event_name: 'SessionStart' } as never });
+
+    const listed = (await (await api('/api/sessions')).json()).find((s: { id: string }) => s.id === created.id);
+
+    expect(listed.state).toBe('idle');
+    expect(listed.closedAt).toBeUndefined();
+    expect(listed.exitCode).toBeUndefined();
   });
 
   it('404s reopening an unknown session', async () => {

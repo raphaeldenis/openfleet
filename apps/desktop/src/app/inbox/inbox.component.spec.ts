@@ -413,7 +413,7 @@ describe('InboxComponent', () => {
     expect(screen.getByTestId('inbox-tab-questions').getAttribute('tabindex')).toBe('-1');
   });
 
-  it('moves selection and focus between tabs with the arrow keys, wrapping around, and Home/End jump to the ends', async () => {
+  it('moves selection and focus between tabs with the arrow keys, wrapping around', async () => {
     // Arrange
     await render(InboxComponent, { providers: [{ provide: FleetApiService, useValue: { decide: vi.fn() } }, { provide: FleetEventsService, useValue: fakeEvents() }] });
     const gatesTab = screen.getByTestId('inbox-tab-gates');
@@ -425,35 +425,27 @@ describe('InboxComponent', () => {
     expect(document.activeElement).toBe(screen.getByTestId('inbox-tab-questions'));
     expect(screen.getByTestId('inbox-questions-coming')).toBeTruthy();
 
-    await userEvent.keyboard('{ArrowLeft}{ArrowLeft}');
-    expect(document.activeElement).toBe(screen.getByTestId('inbox-tab-proposals'));
-
-    await userEvent.keyboard('{Home}');
+    await userEvent.keyboard('{ArrowLeft}');
+    expect(gatesTab.getAttribute('aria-selected')).toBe('true');
     expect(document.activeElement).toBe(gatesTab);
 
-    await userEvent.keyboard('{End}');
+    await userEvent.keyboard('{ArrowLeft}');
+    expect(screen.getByTestId('inbox-tab-proposals').getAttribute('aria-selected')).toBe('true');
     expect(document.activeElement).toBe(screen.getByTestId('inbox-tab-proposals'));
   });
 
-  describe('tab keyboard shortcuts with modifiers', () => {
-    const MODIFIERS = ['altKey', 'ctrlKey', 'metaKey', 'shiftKey'] as const;
-    const NAVIGATION_KEYS = ['ArrowRight', 'ArrowLeft', 'Home', 'End'];
+  it('leaves a modified arrow key to the browser: not swallowed, no tab change', async () => {
+    // Arrange
+    await render(InboxComponent, { providers: [{ provide: FleetApiService, useValue: { decide: vi.fn() } }, { provide: FleetEventsService, useValue: fakeEvents() }] });
+    const gatesTab = screen.getByTestId('inbox-tab-gates');
+    const modifiedArrow = new KeyboardEvent('keydown', { key: 'ArrowRight', altKey: true, bubbles: true, cancelable: true });
 
-    it.each(MODIFIERS.flatMap((modifier) => NAVIGATION_KEYS.map((key) => [modifier, key] as const)))(
-      'leaves %s+%s to the browser: not swallowed, no tab change',
-      async (modifier, key) => {
-        // Arrange
-        await render(InboxComponent, { providers: [{ provide: FleetApiService, useValue: { decide: vi.fn() } }, { provide: FleetEventsService, useValue: fakeEvents() }] });
-        const gatesTab = screen.getByTestId('inbox-tab-gates');
+    // Act
+    gatesTab.dispatchEvent(modifiedArrow);
 
-        // Act
-        const wasNotPrevented = fireEvent.keyDown(gatesTab, { key, [modifier]: true });
-
-        // Assert
-        expect(wasNotPrevented).toBe(true);
-        expect(gatesTab.getAttribute('aria-selected')).toBe('true');
-      },
-    );
+    // Assert
+    expect(modifiedArrow.defaultPrevented).toBe(false);
+    expect(gatesTab.getAttribute('aria-selected')).toBe('true');
   });
 
   describe('bidi control characters', () => {

@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, ElementRef, model, signal, viewChild } from '@angular/core';
+import { ChangeDetectionStrategy, Component, ElementRef, input, model, OnInit, signal, viewChild } from '@angular/core';
 import { ControlContainer, FormsModule, NgForm } from '@angular/forms';
 
 const PULSE_SECONDS_BOUNDS = { min: 1, max: 86_400 };
@@ -24,7 +24,7 @@ function utf8ByteLength(text: string): number {
       <div class="of-field">
         <label class="of-label" for="manager-pulse-seconds">Pulse seconds</label>
         <input
-          #pulseSecondsInput id="manager-pulse-seconds" class="of-input" data-testid="manager-pulse-seconds" name="pulseSeconds" type="number"
+          #pulseSecondsInput id="manager-pulse-seconds" class="of-input" data-testid="manager-pulse-seconds" name="pulseSeconds" type="number" [readonly]="isLocked()"
           [ngModel]="pulseSeconds()" (ngModelChange)="onPulseSecondsChange($event)"
           placeholder="Pulse seconds" [attr.min]="pulseSecondsBounds.min" [attr.max]="pulseSecondsBounds.max"
           [attr.aria-invalid]="pulseSecondsError() ? 'true' : null"
@@ -37,7 +37,7 @@ function utf8ByteLength(text: string): number {
       <div class="of-field">
         <label class="of-label" for="manager-children-cap">Children cap</label>
         <input
-          #childrenCapInput id="manager-children-cap" class="of-input" data-testid="manager-children-cap" name="childrenCap" type="number"
+          #childrenCapInput id="manager-children-cap" class="of-input" data-testid="manager-children-cap" name="childrenCap" type="number" [readonly]="isLocked()"
           [ngModel]="childrenCap()" (ngModelChange)="onChildrenCapChange($event)"
           placeholder="Children cap" [attr.min]="childrenCapBounds.min" [attr.max]="childrenCapBounds.max"
           [attr.aria-invalid]="childrenCapError() ? 'true' : null"
@@ -51,7 +51,7 @@ function utf8ByteLength(text: string): number {
     <div class="of-field">
       <label class="of-label" for="manager-mission">Mission</label>
       <textarea
-        #missionInput id="manager-mission" class="of-input of-input--textarea" data-testid="manager-mission" name="mission" [ngModel]="mission()"
+        #missionInput id="manager-mission" class="of-input of-input--textarea" data-testid="manager-mission" name="mission" [readonly]="isLocked()" [ngModel]="mission()"
         (ngModelChange)="onMissionChange($event)" placeholder="Mission" [attr.aria-invalid]="missionError() ? 'true' : null"
         [attr.aria-describedby]="missionError() ? 'manager-mission-error' : null"
       ></textarea>
@@ -66,12 +66,14 @@ function utf8ByteLength(text: string): number {
     .of-row .of-field { flex: 1 }
   `,
 })
-export class ManagerFieldsComponent {
+export class ManagerFieldsComponent implements OnInit {
   protected readonly pulseSecondsBounds = PULSE_SECONDS_BOUNDS;
   protected readonly childrenCapBounds = CHILDREN_CAP_BOUNDS;
+  readonly isLocked = input(false);
   readonly pulseSeconds = model(1800);
   readonly childrenCap = model(2);
   readonly mission = model('');
+  readonly isMissionTouched = model(false);
   private readonly pulseSecondsInput = viewChild<ElementRef<HTMLInputElement>>('pulseSecondsInput');
   private readonly childrenCapInput = viewChild<ElementRef<HTMLInputElement>>('childrenCapInput');
   private readonly missionInput = viewChild<ElementRef<HTMLTextAreaElement>>('missionInput');
@@ -79,9 +81,16 @@ export class ManagerFieldsComponent {
   protected readonly childrenCapError = signal('');
   protected readonly missionError = signal('');
 
+  ngOnInit(): void {
+    this.validatePulseSeconds();
+    this.validateChildrenCap();
+    if (this.isMissionTouched()) this.validateMission();
+  }
+
   validate(): boolean {
     this.validatePulseSeconds();
     this.validateChildrenCap();
+    this.isMissionTouched.set(true);
     this.validateMission();
     return !this.pulseSecondsError() && !this.childrenCapError() && !this.missionError();
   }
@@ -104,6 +113,7 @@ export class ManagerFieldsComponent {
 
   protected onMissionChange(value: string): void {
     this.mission.set(value);
+    this.isMissionTouched.set(true);
     this.validateMission();
   }
 

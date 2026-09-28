@@ -27,6 +27,14 @@ function fakeEvents(sessions: Session[], approvals: Approval[] = []) {
   };
 }
 
+const PROMISE_HOPS_OF_A_SETTLED_REQUEST = 10;
+
+/** Runs the continuations chained on a settled request (action → runGuarded → caller), then renders. */
+async function settleRequests(fixture: { whenStable(): Promise<unknown> }) {
+  for (let hop = 0; hop < PROMISE_HOPS_OF_A_SETTLED_REQUEST; hop++) await Promise.resolve();
+  await fixture.whenStable();
+}
+
 function fakeApi() {
   return {
     updateModel: vi.fn().mockResolvedValue({ status: 'deferred' }),
@@ -61,12 +69,12 @@ describe('SessionViewComponent', () => {
     expect(screen.getByTestId('permission-gate-card')).toBeTruthy();
   });
 
-  it('replaces the composer with a done banner and an enabled Resume action when the session closed cleanly', async () => {
+  it('replaces the composer with a neutral banner and an enabled Resume action when the session closed cleanly', async () => {
     await render(SessionViewComponent, {
       bindings: [inputBinding('sessionId', () => 's1')],
       providers: [{ provide: FleetApiService, useValue: fakeApi() }, { provide: FleetEventsService, useValue: fakeEvents([session({ state: 'closed', exitCode: 0 })]) }],
     });
-    expect(screen.getByTestId('banner')).toHaveAttribute('data-variant', 'done');
+    expect(screen.getByTestId('session-closed-footer')).toHaveAttribute('data-variant', 'neutral');
     expect(screen.queryByTestId('composer-input')).toBeNull();
     const resume = screen.getByTestId('resume-session') as HTMLButtonElement;
     expect(resume.disabled).toBe(false);
@@ -155,10 +163,7 @@ describe('SessionViewComponent', () => {
     expect(resumeButton.disabled).toBe(true);
 
     rejectA(new ApiError(409, 'boom', 'not_closed'));
-    // Let session A's rejected promise unwind through every `await` hop (action → runGuarded → resume)
-    // before asserting — a single microtask flush is not enough to reach the catch/finally.
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    await fixture.whenStable();
+    await settleRequests(fixture);
 
     expect(screen.queryByTestId('resume-error')).toBeNull();
     expect(resumeButton.disabled).toBe(true); // B's own in-flight request must still be tracked as busy
@@ -204,7 +209,7 @@ describe('SessionViewComponent', () => {
       bindings: [inputBinding('sessionId', () => 's1')],
       providers: [{ provide: FleetApiService, useValue: fakeApi() }, { provide: FleetEventsService, useValue: fakeEvents([session({ state: 'closed', exitCode: 1 })]) }],
     });
-    expect(screen.getByTestId('banner')).toHaveAttribute('data-variant', 'error');
+    expect(screen.getByTestId('session-closed-footer')).toHaveAttribute('data-variant', 'error');
   });
 
   it('agrees with the header about an undefined exit code instead of showing it as both a clean and a failed close', async () => {
@@ -218,7 +223,7 @@ describe('SessionViewComponent', () => {
     // Assert — neither a clean nor a failed close: the header shows no exit number, the banner stays non-error
     expect(screen.getByTestId('session-exit-code')).toHaveTextContent('closed');
     expect(screen.getByTestId('session-exit-code')).not.toHaveTextContent('exit');
-    expect(screen.getByTestId('banner')).toHaveAttribute('data-variant', 'done');
+    expect(screen.getByTestId('session-closed-footer')).toHaveAttribute('data-variant', 'neutral');
   });
 
   it('shows the composer for an open, non-gated session', async () => {
@@ -243,6 +248,106 @@ describe('SessionViewComponent', () => {
       providers: [{ provide: FleetApiService, useValue: fakeApi() }, { provide: FleetEventsService, useValue: fakeEvents([session({ state: 'generating' })]) }],
     });
     expect(screen.getByTestId('session-interrupt')).toBeTruthy();
+  });
+
+  describe('resume lifecycle banners', () => {
+    const CLOSED_AT = '2026-09-26T10:00:00.000Z';
+
+    it('shows a Resuming banner while the daemon relaunches a session that had closed', async () => {
+      await render(SessionViewComponent, {
+        bindings: [inputBinding('sessionId', () => 's1')],
+        providers: [{ provide: FleetApiService, useValue: fakeApi() }, { provide: FleetEventsService, useValue: fakeEvents([session({ state: 'starting', closedAt: CLOSED_AT })]) }],
+      });
+
+      const banner = screen.getByTestId('lifecycle-banner');
+      expect(banner).toHaveAttribute('data-variant', 'resuming');
+      expect(banner).toHaveTextContent('Resuming…');
+    });
+
+    it('shows no lifecycle banner for a brand-new session that is starting for the first time', async () => {
+      await render(SessionViewComponent, {
+        bindings: [inputBinding('sessionId', () => 's1')],
+        providers: [{ provide: FleetApiService, useValue: fakeApi() }, { provide: FleetEventsService, useValue: fakeEvents([session({ state: 'starting' })]) }],
+      });
+
+      expect(screen.queryByTestId('lifecycle-banner')).toBeNull();
+    });
+
+    it('shows a Resume failed banner with the reason when the reopen request is rejected', async () => {
+      const api = fakeApi();
+      api.reopenSession = vi.fn().mockRejectedValue(new ApiError(409, 'boom', 'directory_missing'));
+      await render(SessionViewComponent, {
+        bindings: [inputBinding('sessionId', () => 's1')],
+        providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: fakeEvents([session({ state: 'closed', exitCode: 0, closedAt: CLOSED_AT })]) }],
+      });
+
+      await userEvent.click(screen.getByTestId('resume-session'));
+
+      await waitFor(() => expect(screen.getByTestId('lifecycle-banner')).toHaveAttribute('data-variant', 'error'));
+      expect(screen.getByTestId('lifecycle-banner')).toHaveTextContent('Resume failed');
+      expect(screen.getByTestId('resume-error')).toHaveTextContent("This session's directory no longer exists");
+    });
+
+    it.each([
+      [-1, 'timed out'],
+      [-2, 'failed to launch'],
+    ] as const)('shows a Resume failed banner for a session the daemon closed with resume exit code %i', async (exitCode, reason) => {
+      await render(SessionViewComponent, {
+        bindings: [inputBinding('sessionId', () => 's1')],
+        providers: [{ provide: FleetApiService, useValue: fakeApi() }, { provide: FleetEventsService, useValue: fakeEvents([session({ state: 'closed', exitCode, closedAt: CLOSED_AT })]) }],
+      });
+
+      expect(screen.getByTestId('lifecycle-banner')).toHaveTextContent('Resume failed');
+      expect(screen.getByTestId('resume-error')).toHaveTextContent(reason);
+    });
+
+    it('does not call an ordinary non-zero exit a failed resume', async () => {
+      await render(SessionViewComponent, {
+        bindings: [inputBinding('sessionId', () => 's1')],
+        providers: [{ provide: FleetApiService, useValue: fakeApi() }, { provide: FleetEventsService, useValue: fakeEvents([session({ state: 'closed', exitCode: 1, closedAt: CLOSED_AT })]) }],
+      });
+
+      expect(screen.queryByTestId('lifecycle-banner')).toBeNull();
+    });
+
+    it('retries the reopen from the Resume failed banner and swaps it for the Resuming banner', async () => {
+      let resolveRetry: (value: unknown) => void = () => {};
+      const api = fakeApi();
+      api.reopenSession = vi.fn()
+        .mockRejectedValueOnce(new ApiError(500, 'boom', 'launch_failed'))
+        .mockImplementationOnce(() => new Promise((resolve) => { resolveRetry = resolve; }));
+      await render(SessionViewComponent, {
+        bindings: [inputBinding('sessionId', () => 's1')],
+        providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: fakeEvents([session({ state: 'closed', exitCode: 0, closedAt: CLOSED_AT })]) }],
+      });
+      await userEvent.click(screen.getByTestId('resume-session'));
+      await waitFor(() => expect(screen.getByTestId('lifecycle-banner')).toHaveTextContent('Resume failed'));
+
+      await userEvent.click(screen.getByTestId('resume-retry'));
+
+      expect(api.reopenSession).toHaveBeenCalledTimes(2);
+      expect(screen.getByTestId('lifecycle-banner')).toHaveTextContent('Resuming…');
+      resolveRetry({});
+    });
+
+  });
+
+  describe('closed footer call-to-actions', () => {
+    it.each([
+      ['closed', 0],
+      ['closed_error', 1],
+    ] as const)('offers "Resume in worktree" and an unavailable "Reopen fresh" for a %s session', async (_variant, exitCode) => {
+      await render(SessionViewComponent, {
+        bindings: [inputBinding('sessionId', () => 's1')],
+        providers: [{ provide: FleetApiService, useValue: fakeApi() }, { provide: FleetEventsService, useValue: fakeEvents([session({ state: 'closed', exitCode })]) }],
+      });
+
+      expect(screen.getByTestId('resume-session')).toHaveTextContent('Resume in worktree');
+      const reopenFresh = screen.getByTestId('reopen-fresh-session');
+      expect(reopenFresh).toHaveTextContent('Reopen fresh');
+      expect(reopenFresh).toHaveAttribute('aria-disabled', 'true');
+      expect(reopenFresh).toHaveAccessibleDescription(/not available yet/i);
+    });
   });
 
   it('shows a not-found message when the session id matches nothing in the snapshot', async () => {
