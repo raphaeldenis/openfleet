@@ -65,12 +65,15 @@ function stripCommentsAndStrings(sql: string): string {
 const TRANSACTION_CONTROL_KEYWORDS = ['BEGIN', 'COMMIT', 'END', 'ROLLBACK', 'SAVEPOINT', 'RELEASE'];
 const CREATE_TRIGGER_STATEMENT = /^CREATE\s+(?:TEMP|TEMPORARY\s+)?TRIGGER\b/;
 
+const TRANSACTION_CONTROL_STATEMENT = new RegExp(`^(?:${TRANSACTION_CONTROL_KEYWORDS.join('|')})(?:\\s|$)`, 'i');
+const TRIGGER_BODY_CLOSING_STATEMENT = /^END(?:\s|$)/i;
+
 function isTransactionControlStatement(statement: string): boolean {
-  return TRANSACTION_CONTROL_KEYWORDS.some((keyword) => statement === keyword || statement.startsWith(`${keyword} `));
+  return TRANSACTION_CONTROL_STATEMENT.test(statement);
 }
 
 function closesTriggerBody(statement: string): boolean {
-  return statement === 'END' || statement.startsWith('END ');
+  return TRIGGER_BODY_CLOSING_STATEMENT.test(statement);
 }
 
 // ponytail: migrations own no transaction control — applyMigrations owns the BEGIN IMMEDIATE/COMMIT
