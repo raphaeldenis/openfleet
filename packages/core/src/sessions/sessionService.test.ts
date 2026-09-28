@@ -3052,6 +3052,208 @@ describe('SessionService.reopen', () => {
   });
 });
 
+describe('SessionService closure stamps of a reopened session', () => {
+  const snapshotOf = (service: SessionService, id: string) => service.list().find((s) => s.id === id)!;
+
+  async function closedThenReopened(exitCode: number) {
+    vi.useFakeTimers();
+    const context = setup();
+    const session = await context.service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    context.harness.handles[0]!.emitExit(exitCode);
+    context.service.reopen(session.id);
+    return { ...context, id: session.id };
+  }
+
+  it('keeps closedAt in the snapshot while the reopened session is still starting', async () => {
+    const { service, id } = await closedThenReopened(0);
+
+    expect(snapshotOf(service, id).state).toBe('starting');
+    expect(snapshotOf(service, id).closedAt).toBeDefined();
+  });
+
+  it.each([
+    ['idle', { hook_event_name: 'SessionStart' }],
+    ['generating', { hook_event_name: 'UserPromptSubmit' }],
+    ['waiting_permission', { hook_event_name: 'PermissionRequest' }],
+  ])('drops closedAt from the snapshot once the reopened session is %s', async (state, hookEvent) => {
+    const { service, id } = await closedThenReopened(0);
+
+    service.applyInput(id, hook(id, hookEvent));
+
+    expect(snapshotOf(service, id).state).toBe(state);
+    expect(snapshotOf(service, id).closedAt).toBeUndefined();
+  });
+
+  it('shows no closedAt in the snapshot while a live, once-closed session relaunches for a model change', async () => {
+    const { service, id } = await closedThenReopened(0);
+    service.applyInput(id, hook(id, { hook_event_name: 'SessionStart' }));
+
+    service.updateModel(id, 'claude-opus-5-5');
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(snapshotOf(service, id).state).toBe('starting');
+    expect(snapshotOf(service, id).closedAt).toBeUndefined();
+  });
+
+  it('shows no closedAt in the snapshot while a live, once-closed session relaunches for a permission-mode change', async () => {
+    const { service, id } = await closedThenReopened(0);
+    service.applyInput(id, hook(id, { hook_event_name: 'SessionStart' }));
+
+    service.updatePermissionMode(id, 'plan');
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(snapshotOf(service, id).state).toBe('starting');
+    expect(snapshotOf(service, id).closedAt).toBeUndefined();
+  });
+
+  it('drops the exit code of the earlier close from the snapshot once the reopened session is live', async () => {
+    const { service, id } = await closedThenReopened(RESUME_LAUNCH_FAILED_EXIT_CODE);
+
+    service.applyInput(id, hook(id, { hook_event_name: 'SessionStart' }));
+
+    expect(snapshotOf(service, id).exitCode).toBeUndefined();
+  });
+
+  it('drops the exit code of the earlier close from the snapshot as soon as the reopened session is starting', async () => {
+    const { service, id } = await closedThenReopened(RESUME_LAUNCH_FAILED_EXIT_CODE);
+
+    expect(snapshotOf(service, id).state).toBe('starting');
+    expect(snapshotOf(service, id).exitCode).toBeUndefined();
+  });
+
+  it('stamps a fresh closedAt and the new exit code when the reopened session closes again', async () => {
+    const { service, harness, id } = await closedThenReopened(RESUME_LAUNCH_FAILED_EXIT_CODE);
+    service.applyInput(id, hook(id, { hook_event_name: 'SessionStart' }));
+
+    harness.handles[1]!.emitExit(0);
+
+    expect(snapshotOf(service, id).state).toBe('closed');
+    expect(snapshotOf(service, id).exitCode).toBe(0);
+    expect(snapshotOf(service, id).closedAt).toBeDefined();
+  });
+
+  it('closes a once-failed, reopened session at daemon shutdown without leaving the earlier failure on it', async () => {
+    const { service, id } = await closedThenReopened(RESUME_LAUNCH_FAILED_EXIT_CODE);
+    service.applyInput(id, hook(id, { hook_event_name: 'SessionStart' }));
+
+    const shuttingDown = service.closeAll();
+    await vi.advanceTimersByTimeAsync(0);
+    await shuttingDown;
+
+    expect(snapshotOf(service, id).state).toBe('closed');
+    expect(snapshotOf(service, id).exitCode).not.toBe(RESUME_LAUNCH_FAILED_EXIT_CODE);
+  });
+
+  it('keeps closedAt for a reopened session still starting when the daemon restarts', async () => {
+    const { db, harness, bus, id } = await closedThenReopened(0);
+    const restarted = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+
+    await restarted.resumeAll();
+
+    expect(snapshotOf(restarted, id).state).toBe('starting');
+    expect(snapshotOf(restarted, id).closedAt).toBeDefined();
+  });
+});
+
+describe('SessionService closure stamps across the reopen lifecycle', () => {
+  const snapshotOf = (service: SessionService, id: string) => service.list().find((s) => s.id === id)!;
+  const ONE_HOUR_MS = 60 * 60 * 1000;
+  const FIRST_CLOSE_EXIT_CODE = 3;
+
+  async function closedThenReopenedAnHourLater() {
+    vi.useFakeTimers();
+    const context = setup();
+    const session = await context.service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    context.harness.handles[0]!.emitExit(FIRST_CLOSE_EXIT_CODE);
+    const firstClosedAt = snapshotOf(context.service, session.id).closedAt!;
+    await vi.advanceTimersByTimeAsync(ONE_HOUR_MS);
+    context.service.reopen(session.id);
+    return { ...context, id: session.id, firstClosedAt };
+  }
+
+  it('drops closedAt from the snapshot once the reopened session waits for input', async () => {
+    const { service, id } = await closedThenReopenedAnHourLater();
+
+    service.applyInput(id, hook(id, { hook_event_name: 'Notification', notification_type: 'agent_needs_input' }));
+
+    expect(snapshotOf(service, id).state).toBe('waiting_input');
+    expect(snapshotOf(service, id).closedAt).toBeUndefined();
+  });
+
+  it('stamps a new closedAt and the new exit code when the process dies while the reopened session is still starting', async () => {
+    const { service, harness, id, firstClosedAt } = await closedThenReopenedAnHourLater();
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    harness.handles[1]!.emitExit(0);
+
+    expect(snapshotOf(service, id).state).toBe('closed');
+    expect(snapshotOf(service, id).exitCode).toBe(0);
+    expect(Date.parse(snapshotOf(service, id).closedAt!)).toBeGreaterThan(Date.parse(firstClosedAt));
+  });
+
+  it('stamps a new closedAt and the timeout exit code when the reopened session never reports in', async () => {
+    const { service, id, firstClosedAt } = await closedThenReopenedAnHourLater();
+
+    await vi.advanceTimersByTimeAsync(DEFAULT_CLOSE_ESCALATE_MS + 60_000);
+
+    expect(snapshotOf(service, id).state).toBe('closed');
+    expect(snapshotOf(service, id).exitCode).toBe(RESUME_TIMEOUT_EXIT_CODE);
+    expect(Date.parse(snapshotOf(service, id).closedAt!)).toBeGreaterThan(Date.parse(firstClosedAt));
+  });
+
+  it('never announces a session.state or session.closed event that the stored row contradicts at that moment', async () => {
+    vi.useFakeTimers();
+    const { service, harness, bus } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    const id = session.id;
+    const announcedStates: string[] = [];
+    const contradictions: string[] = [];
+    bus.subscribe((event) => {
+      if (event.type !== 'session.state' && event.type !== 'session.closed') return;
+      const announcedState = event.type === 'session.closed' ? 'closed' : event.state;
+      announcedStates.push(announcedState);
+      const row = snapshotOf(service, id);
+      const isPastStarting = announcedState !== 'starting' && announcedState !== 'closed';
+      if (row.state !== announcedState) contradictions.push(`${announcedState}: row says ${row.state}`);
+      if (isPastStarting && row.closedAt !== undefined) contradictions.push(`${announcedState}: row still has closedAt`);
+      if (announcedState !== 'closed' && row.exitCode !== undefined) contradictions.push(`${announcedState}: row still has exitCode ${row.exitCode}`);
+    });
+
+    harness.handles[0]!.emitExit(RESUME_LAUNCH_FAILED_EXIT_CODE);
+    service.reopen(id);
+    service.applyInput(id, hook(id, { hook_event_name: 'SessionStart' }));
+    service.updateModel(id, 'claude-opus-5-5');
+    await vi.advanceTimersByTimeAsync(0);
+    service.applyInput(id, hook(id, { hook_event_name: 'SessionStart' }));
+    service.applyInput(id, hook(id, { hook_event_name: 'UserPromptSubmit' }));
+    service.applyInput(id, hook(id, { hook_event_name: 'PermissionRequest' }));
+    harness.handles[2]!.emitExit(0);
+
+    expect(announcedStates).toEqual(['closed', 'starting', 'idle', 'starting', 'idle', 'generating', 'waiting_permission', 'closed']);
+    expect(contradictions).toEqual([]);
+  });
+
+  it('leaves the closedAt and the exit code of the earlier close untouched when a reopen fails to launch', async () => {
+    vi.useFakeTimers();
+    const db = openDatabase(':memory:');
+    const bus = new EventBus();
+    const firstRunHarness = new FakeHarness();
+    const original = new SessionService({ db, bus, harnesses: [firstRunHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+    const session = await original.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    firstRunHarness.handles[0]!.emitExit(RESUME_LAUNCH_FAILED_EXIT_CODE);
+    const closedBefore = snapshotOf(original, session.id);
+    const refusingHarness: Harness = { id: 'fake', start: () => { throw new Error('pty spawn ENOENT'); } };
+    const service = new SessionService({ db, bus, harnesses: [refusingHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+    await vi.advanceTimersByTimeAsync(ONE_HOUR_MS);
+
+    expect(() => service.reopen(session.id)).toThrow(SessionReopenError);
+
+    expect(snapshotOf(service, session.id).state).toBe('closed');
+    expect(snapshotOf(service, session.id).exitCode).toBe(RESUME_LAUNCH_FAILED_EXIT_CODE);
+    expect(snapshotOf(service, session.id).closedAt).toBe(closedBefore.closedAt);
+  });
+});
+
 describe('SessionService shutdown', () => {
   it('refuses to create a new session once closeAll has started, so it never escapes closeAll\'s own snapshot', async () => {
     const { service } = setup();

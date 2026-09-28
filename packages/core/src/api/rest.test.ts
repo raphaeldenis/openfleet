@@ -342,6 +342,19 @@ describe('REST', () => {
     expect((await res.json()).state).toBe('starting');
   });
 
+  it('lists a reopened session that reached idle without the closedAt and exit code of its earlier close', async () => {
+    const created = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
+    await api(`/api/sessions/${created.id}/close`, { method: 'POST' });
+    await api(`/api/sessions/${created.id}/reopen`, { method: 'POST' });
+    sessions.applyInput(created.id, { kind: 'hook', event: { session_id: created.id, hook_event_name: 'SessionStart' } as never });
+
+    const listed = (await (await api('/api/sessions')).json()).find((s: { id: string }) => s.id === created.id);
+
+    expect(listed.state).toBe('idle');
+    expect(listed.closedAt).toBeUndefined();
+    expect(listed.exitCode).toBeUndefined();
+  });
+
   it('404s reopening an unknown session', async () => {
     const res = await api('/api/sessions/nope/reopen', { method: 'POST' });
     expect(res.status).toBe(404);
