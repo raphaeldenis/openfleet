@@ -1,6 +1,6 @@
 import { render, screen, waitFor, fireEvent } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
-import { inputBinding, outputBinding, signal } from '@angular/core';
+import { inputBinding, signal } from '@angular/core';
 import { describe, expect, it, vi } from 'vitest';
 import { ModelSelectorComponent } from './model-selector.component';
 import { FleetApiService } from '../core/fleet-api.service';
@@ -123,79 +123,6 @@ describe('ModelSelectorComponent', () => {
     await waitFor(() => expect(screen.queryByTestId('model-switch-status')).toBeNull());
   });
 
-  it('emits pendingModelSwitch(true) when the switch waits for the turn to end', async () => {
-    const api = { updateModel: vi.fn().mockResolvedValue({ status: 'deferred' }) };
-    const pendingModelSwitch = vi.fn();
-    await render(ModelSelectorComponent, {
-      bindings: [inputBinding('sessionId', () => 's1'), outputBinding('pendingModelSwitch', pendingModelSwitch)],
-      providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: fakeEvents('claude-sonnet-5') }],
-    });
-
-    await userEvent.click(screen.getByTestId('apply-model'));
-
-    await waitFor(() => expect(pendingModelSwitch).toHaveBeenLastCalledWith(true));
-  });
-
-  it('emits pendingModelSwitch(false) once the switch relaunches immediately instead of waiting', async () => {
-    const api = { updateModel: vi.fn().mockResolvedValue({ status: 'relaunching' }) };
-    const pendingModelSwitch = vi.fn();
-    await render(ModelSelectorComponent, {
-      bindings: [inputBinding('sessionId', () => 's1'), outputBinding('pendingModelSwitch', pendingModelSwitch)],
-      providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: fakeEvents('claude-sonnet-5') }],
-    });
-
-    await userEvent.click(screen.getByTestId('apply-model'));
-
-    await waitFor(() => expect(pendingModelSwitch).toHaveBeenLastCalledWith(false));
-  });
-
-  it('emits pendingModelSwitch(false) once a deferred switch settles because the turn ended', async () => {
-    const api = { updateModel: vi.fn().mockResolvedValue({ status: 'deferred' }) };
-    const events = { sessions: signal([{ id: 's1', name: 'Gimli', emoji: '⚔️', model: 'claude-sonnet-5', state: 'generating' }]), approvals: signal([]), managers: signal([]) };
-    const pendingModelSwitch = vi.fn();
-    await render(ModelSelectorComponent, {
-      bindings: [inputBinding('sessionId', () => 's1'), outputBinding('pendingModelSwitch', pendingModelSwitch)],
-      providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: events }],
-    });
-    await userEvent.click(screen.getByTestId('apply-model'));
-    await waitFor(() => expect(pendingModelSwitch).toHaveBeenLastCalledWith(true));
-
-    events.sessions.set([{ id: 's1', name: 'Gimli', emoji: '⚔️', model: 'claude-sonnet-5', state: 'idle' }]);
-
-    await waitFor(() => expect(pendingModelSwitch).toHaveBeenLastCalledWith(false));
-  });
-
-  it('never emits a stale pendingModelSwitch for a session already navigated away from', async () => {
-    // Arrange
-    const sessionId = signal('s1');
-    let resolveUpdate: (value: unknown) => void = () => {};
-    const api = { updateModel: vi.fn(() => new Promise((resolve) => { resolveUpdate = resolve; })) };
-    const pendingModelSwitch = vi.fn();
-    const events = { sessions: signal([{ id: 's1', name: 'Gimli', emoji: '⚔️', model: 'claude-sonnet-5', state: 'idle' }, { id: 's2', name: 'Legolas', emoji: '🏹', model: 'claude-haiku-4-5', state: 'idle' }]), approvals: signal([]), managers: signal([]) };
-    await render(ModelSelectorComponent, {
-      bindings: [inputBinding('sessionId', sessionId), outputBinding('pendingModelSwitch', pendingModelSwitch)],
-      providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: events }],
-    });
-    await userEvent.click(screen.getByTestId('apply-model'));
-    // Only the initial mount's own reset (emit(false)) has fired so far — the switch is still in flight.
-    expect(pendingModelSwitch).toHaveBeenCalledTimes(1);
-
-    // Act — navigate away before the switch resolves. Wait for a SECOND emit(false): proof the
-    // route-reuse reset for the session change itself has actually run (not just the mount's own),
-    // which is only possible once the component's sessionId input genuinely reads 's2'.
-    sessionId.set('s2');
-    await waitFor(() => expect(pendingModelSwitch).toHaveBeenCalledTimes(2));
-    expect(pendingModelSwitch).toHaveBeenLastCalledWith(false);
-    pendingModelSwitch.mockClear();
-
-    // ...then let s1's stale "deferred" response arrive well after that reset already ran
-    resolveUpdate({ status: 'deferred' });
-    await waitFor(() => expect(api.updateModel).toHaveBeenCalled());
-
-    // Assert — s2's header never sees a pending-switch warning meant for s1
-    expect(pendingModelSwitch).not.toHaveBeenCalled();
-  });
-
   it('keeps "restarting…" visible when the daemon reports the model change before the relaunch settles', async () => {
     const api = { updateModel: vi.fn().mockResolvedValue({ status: 'relaunching' }) };
     const events = { sessions: signal([{ id: 's1', name: 'Gimli', emoji: '⚔️', model: 'claude-sonnet-5', state: 'idle' }]), approvals: signal([]), managers: signal([]) };
@@ -289,7 +216,6 @@ describe('ModelSelectorComponent', () => {
     async function renderSwitchedAwayFromAndBackTo() {
       const api = { updateModel: vi.fn().mockResolvedValue({ status: 'deferred' }) };
       const sessionId = signal('s1');
-      const pendingModelSwitch = vi.fn();
       const events = {
         sessions: signal([
           { id: 's1', name: 'Gimli', emoji: '⚔️', model: 'claude-sonnet-5', state: 'generating' },
@@ -299,7 +225,7 @@ describe('ModelSelectorComponent', () => {
         managers: signal([]),
       };
       const { fixture } = await render(ModelSelectorComponent, {
-        bindings: [inputBinding('sessionId', sessionId), outputBinding('pendingModelSwitch', pendingModelSwitch)],
+        bindings: [inputBinding('sessionId', sessionId)],
         providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: events }],
       });
       await userEvent.selectOptions(screen.getByTestId('model-select'), 'opus');
@@ -310,39 +236,37 @@ describe('ModelSelectorComponent', () => {
         sessionId.set(id);
         await fixture.whenStable();
       };
-      return { goTo, events, pendingModelSwitch };
+      return { goTo, events };
     }
 
-    it('shows session A\'s deferred switch again, with the requested rung selected and the close dialog warned, after coming back', async () => {
-      const { goTo, pendingModelSwitch } = await renderSwitchedAwayFromAndBackTo();
+    it('shows session A\'s deferred switch again, with the requested rung selected, after coming back', async () => {
+      const { goTo } = await renderSwitchedAwayFromAndBackTo();
       await goTo('s2');
 
       await goTo('s1');
 
       expect(screen.getByTestId('model-switch-status')).toHaveTextContent('switch pending: happens when this turn ends');
       expect((screen.getByTestId('model-select') as HTMLSelectElement).value).toBe('opus');
-      expect(pendingModelSwitch).toHaveBeenLastCalledWith(true);
     });
 
-    it('lifts the close-dialog warning once the restored switch settles because the turn ended', async () => {
-      const { goTo, events, pendingModelSwitch } = await renderSwitchedAwayFromAndBackTo();
+    it('lifts the restored note once the turn ends', async () => {
+      const { goTo, events } = await renderSwitchedAwayFromAndBackTo();
       await goTo('s2');
       await goTo('s1');
-      expect(pendingModelSwitch).toHaveBeenLastCalledWith(true);
 
       events.sessions.update((all) => all.map((s) => (s.id === 's1' ? { ...s, state: 'idle' } : s)));
 
-      await waitFor(() => expect(pendingModelSwitch).toHaveBeenLastCalledWith(false));
+      await waitFor(() => expect(screen.queryByTestId('model-switch-status')).toBeNull());
     });
 
-    it('lifts the close-dialog warning when the turn ended while the user was away', async () => {
-      const { goTo, events, pendingModelSwitch } = await renderSwitchedAwayFromAndBackTo();
+    it('shows no note on return when the turn ended while the user was away', async () => {
+      const { goTo, events } = await renderSwitchedAwayFromAndBackTo();
       await goTo('s2');
       events.sessions.update((all) => all.map((s) => (s.id === 's1' ? { ...s, state: 'idle' } : s)));
 
       await goTo('s1');
 
-      await waitFor(() => expect(pendingModelSwitch).toHaveBeenLastCalledWith(false));
+      expect(screen.queryByTestId('model-switch-status')).toBeNull();
     });
   });
 

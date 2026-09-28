@@ -7,6 +7,7 @@ import type { Approval, Session } from '@openfleet/shared';
 import { SessionViewComponent } from './session-view.component';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
+import { settleRequests } from '../testing/session-view.testing';
 
 function session(patch: Partial<Session> = {}): Session {
   return {
@@ -25,14 +26,6 @@ function fakeEvents(sessions: Session[], approvals: Approval[] = []) {
     connected: signal(true), reconnectCount: signal(0), deliveredMessageIds: signal(new Set<string>()),
     output: () => new Subject<string>(), sendInput: vi.fn(), sendResize: vi.fn(), sendAttach: vi.fn(),
   };
-}
-
-const PROMISE_HOPS_OF_A_SETTLED_REQUEST = 10;
-
-/** Runs the continuations chained on a settled request (action → runGuarded → caller), then renders. */
-async function settleRequests(fixture: { whenStable(): Promise<unknown> }) {
-  for (let hop = 0; hop < PROMISE_HOPS_OF_A_SETTLED_REQUEST; hop++) await Promise.resolve();
-  await fixture.whenStable();
 }
 
 function fakeApi() {
