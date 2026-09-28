@@ -65,21 +65,58 @@ describe('FleetEventsService', () => {
   });
 
   it('builds a wss:// URL when apiUrl is stored as https', () => {
-    localStorage.setItem('openfleet.apiUrl', 'https://h:1');
+    localStorage.setItem('openfleet.apiUrl', 'https://127.0.0.1:1');
     const service = new FleetEventsService();
 
     service.connect();
 
-    expect(FakeWebSocket.instances[0]!.url).toMatch(/^wss:\/\/h:1\/ws\?/);
+    expect(FakeWebSocket.instances[0]!.url).toMatch(/^wss:\/\/127\.0\.0\.1:1\/ws\?/);
   });
 
   it('keeps a path prefix from apiUrl ahead of the /ws segment', () => {
-    localStorage.setItem('openfleet.apiUrl', 'http://h:1/openfleet/');
+    localStorage.setItem('openfleet.apiUrl', 'http://127.0.0.1:1/openfleet/');
     const service = new FleetEventsService();
 
     service.connect();
 
-    expect(FakeWebSocket.instances[0]!.url).toMatch(/^ws:\/\/h:1\/openfleet\/ws\?/);
+    expect(FakeWebSocket.instances[0]!.url).toMatch(/^ws:\/\/127\.0\.0\.1:1\/openfleet\/ws\?/);
+  });
+
+  describe('where the admin token goes', () => {
+    it.each([
+      ['a remote host', 'http://evil:1'],
+      ['a host that starts with localhost', 'http://localhost.evil.com'],
+      ['userinfo hiding the real host', 'http://x@evil.com'],
+      ['a wildcard-DNS host embedding the loopback address', 'http://127.0.0.1.nip.io'],
+      ['the IPv4-mapped IPv6 loopback', 'http://[::ffff:7f00:1]:7331'],
+    ])('opens the socket on the default daemon, not on %s (%s)', (_label, storedApiUrl) => {
+      localStorage.setItem('openfleet.adminToken', 'secret-token');
+      localStorage.setItem('openfleet.apiUrl', storedApiUrl);
+      const service = new FleetEventsService();
+
+      service.connect();
+
+      expect(FakeWebSocket.instances[0]!.url).toBe('ws://127.0.0.1:7331/ws?token=secret-token');
+    });
+
+    it('opens the socket on the stored loopback daemon with the token', () => {
+      localStorage.setItem('openfleet.adminToken', 'secret-token');
+      localStorage.setItem('openfleet.apiUrl', 'http://localhost:9999');
+      const service = new FleetEventsService();
+
+      service.connect();
+
+      expect(FakeWebSocket.instances[0]!.url).toBe('ws://localhost:9999/ws?token=secret-token');
+    });
+
+    it('sends a whitespace-only stored token as no token', () => {
+      localStorage.setItem('openfleet.adminToken', '   ');
+      const service = new FleetEventsService();
+
+      service.connect();
+
+      expect(FakeWebSocket.instances[0]!.url).toBe('ws://127.0.0.1:7331/ws?token=');
+    });
   });
 
   it('seeds sessions and approvals from the snapshot event instead of a REST call', () => {
