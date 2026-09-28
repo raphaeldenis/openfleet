@@ -167,6 +167,25 @@ describe('REST', () => {
     expect((await res.json()).status).toBe('deferred'); // still 'starting' — the fake session never received SessionStart
   });
 
+  it('resolves a model rung to its full model id when creating a session', async () => {
+    const res = await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake', model: 'sonnet' }) });
+
+    expect((await res.json()).model).toBe(DEFAULT_MODEL_TABLE.sonnet);
+  });
+
+  it('resolves a model rung to its full model id when creating a manager', async () => {
+    const manager = { pulseSeconds: 900, childrenCap: 2, mission: 'Ship it' };
+    const res = await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'L', harness: 'fake', model: 'fable', manager }) });
+
+    expect((await res.json()).model).toBe(DEFAULT_MODEL_TABLE.fable);
+  });
+
+  it('keeps an explicit model id untouched when creating a session', async () => {
+    const res = await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake', model: 'claude-opus-5-5' }) });
+
+    expect((await res.json()).model).toBe('claude-opus-5-5');
+  });
+
   it('404s a model change for an unknown session', async () => {
     const res = await api('/api/sessions/nope/model', { method: 'POST', body: JSON.stringify({ model: 'sonnet' }) });
     expect(res.status).toBe(404);

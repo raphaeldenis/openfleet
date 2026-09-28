@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, ElementRef, computed, effect, inject, input, signal, viewChild } from '@angular/core';
+import { ChangeDetectionStrategy, Component, DestroyRef, ElementRef, Injector, afterNextRender, computed, effect, inject, input, signal, viewChild } from '@angular/core';
 import type { SessionState } from '@openfleet/shared';
 import { FleetApiService } from '../core/fleet-api.service';
 import { runGuarded } from '../core/run-guarded';
@@ -30,7 +30,7 @@ const ESCAPE_KEY = '\x1b';
       }
     </div>
     @if (confirmingClose()) {
-      <div class="close-confirm-overlay" data-testid="close-confirm-overlay" (keydown.escape)="cancelClose()" (keydown)="trapTabFocus($event)">
+      <div class="close-confirm-overlay" tabindex="-1" data-testid="close-confirm-overlay" (mousedown)="keepFocusOnDialogWhenScrimPressed($event)" (keydown.escape)="cancelClose()" (keydown)="trapTabFocus($event)">
         <div class="close-confirm" role="dialog" aria-modal="true" aria-labelledby="close-confirm-title" data-testid="close-confirm-dialog">
           <span id="close-confirm-title" class="close-confirm-title">Close {{ sessionName() }}?</span>
           <p class="close-confirm-body">{{ closeConfirmBody }}</p>
@@ -55,6 +55,7 @@ const ESCAPE_KEY = '\x1b';
       position: fixed; inset: 0; z-index: 30;
       display: flex; align-items: center; justify-content: center;
       background: rgba(0, 0, 0, .45);
+      outline: none;
     }
     .close-confirm {
       width: 26rem; display: flex; flex-direction: column; gap: .75rem; padding: 1.125rem;
@@ -72,6 +73,8 @@ export class SessionActionsComponent {
   readonly sessionName = input.required<string>();
   readonly modelSwitchPending = input(false);
   private readonly api = inject(FleetApiService);
+  private readonly injector = inject(Injector);
+  private readonly destroyRef = inject(DestroyRef);
 
   protected readonly closeConfirmBody = CLOSE_CONFIRM_BODY;
   protected readonly closeConfirmPendingSwitchWarning = CLOSE_CONFIRM_PENDING_SWITCH_WARNING;
@@ -92,11 +95,16 @@ export class SessionActionsComponent {
     effect(() => {
       if (this.confirmingClose()) this.cancelButton()?.nativeElement.focus();
     });
+    effect(() => {
+      if (this.closed()) this.confirmingClose.set(false);
+    });
     // A route param change reuses this component instance, so a session switch must not leave a
-    // stale confirm dialog (or a previous session's close error) showing over the new session.
+    // stale confirm dialog, close error or in-flight flag showing over the new session.
     effect(() => {
       this.sessionId();
       this.confirmingClose.set(false);
+      this.closing.set(false);
+      this.interrupting.set(false);
       this.error.set(null);
     });
   }
@@ -109,12 +117,35 @@ export class SessionActionsComponent {
 
   cancelClose(): void {
     this.confirmingClose.set(false);
-    this.closeTrigger()?.nativeElement.focus();
+    this.focusCloseTriggerAfterRender();
   }
 
   confirmClose(): void {
+    const sessionId = this.closingSessionId;
     this.confirmingClose.set(false);
-    void this.close(this.closingSessionId);
+    void this.close(sessionId).then(() => {
+      const closeFailedOnCurrentSession = this.error() !== null && !this.hasLeftSession(sessionId);
+      if (closeFailedOnCurrentSession) this.focusCloseTriggerAfterRender();
+    });
+  }
+
+  /** Keeps a press on the scrim from moving focus off the dialog button; the scrim still does not dismiss. */
+  keepFocusOnDialogWhenScrimPressed(event: MouseEvent): void {
+    const isPressOnScrimItself = event.target === event.currentTarget;
+    if (isPressOnScrimItself) event.preventDefault();
+  }
+
+  // The trigger sits under `[attr.inert]` (and `[disabled]` while closing) until the pending signal writes render.
+  // Focus only returns when nothing else took it meanwhile, so a user who moved on is never yanked back.
+  private focusCloseTriggerAfterRender(): void {
+    if (this.destroyRef.destroyed) return;
+    afterNextRender(
+      () => {
+        const isFocusFree = document.activeElement === null || document.activeElement === document.body;
+        if (isFocusFree) this.closeTrigger()?.nativeElement.focus();
+      },
+      { injector: this.injector },
+    );
   }
 
   /** Keeps Tab cycling between Cancel and Close session only, so focus never reaches what's behind the dialog. */
@@ -132,10 +163,19 @@ export class SessionActionsComponent {
   }
 
   private async close(sessionId: string): Promise<void> {
-    await runGuarded(this.closing, this.error, CLOSE_ERROR, async () => { await this.api.closeSession(sessionId); });
+    await runGuarded(this.closing, this.error, CLOSE_ERROR, () => this.api.closeSession(sessionId), {
+      isStale: () => this.hasLeftSession(sessionId),
+    });
   }
 
   async interrupt(): Promise<void> {
-    await runGuarded(this.interrupting, this.error, INTERRUPT_ERROR, async () => { await this.api.sendInput(this.sessionId(), ESCAPE_KEY); });
+    const sessionId = this.sessionId();
+    await runGuarded(this.interrupting, this.error, INTERRUPT_ERROR, () => this.api.sendInput(sessionId, ESCAPE_KEY), {
+      isStale: () => this.hasLeftSession(sessionId),
+    });
+  }
+
+  private hasLeftSession(sessionId: string): boolean {
+    return this.sessionId() !== sessionId;
   }
 }

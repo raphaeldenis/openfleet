@@ -4,7 +4,9 @@ import { Component, signal } from '@angular/core';
 import { provideRouter, withComponentInputBinding, Router, type Routes } from '@angular/router';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { AppShellComponent } from './app-shell.component';
+import { ApiError, FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
+import { InboxComponent } from '../inbox/inbox.component';
 
 // jsdom doesn't block focus() inside an inert subtree the way the WHATWG spec requires real
 // browsers to: without this shim, a focus() call fired before Angular's change detection removes
@@ -122,6 +124,35 @@ describe('AppShellComponent', () => {
     await harness.fixture.whenStable();
 
     expect(root.querySelector('[data-testid="stub-settings"]')).toBeTruthy();
+  });
+
+  it('drops the sidebar Inbox badge count when the Inbox dismisses an already-resolved gate', async () => {
+    // Arrange
+    const events = fakeEvents({
+      approvals: [
+        { id: 'a1', sessionId: 's1', toolName: 'Bash', toolInput: {}, status: 'pending', createdAt: 't' },
+        { id: 'a2', sessionId: 's1', toolName: 'Write', toolInput: {}, status: 'pending', createdAt: 't' },
+      ],
+    });
+    const api = { decide: vi.fn().mockRejectedValue(new ApiError(409, 'already_resolved')) };
+    TestBed.configureTestingModule({
+      providers: [
+        provideRouter([{ path: '', component: AppShellComponent, children: [{ path: 'inbox', component: InboxComponent }] }]),
+        { provide: FleetEventsService, useValue: events },
+        { provide: FleetApiService, useValue: api },
+      ],
+    });
+    const harness = await RouterTestingHarness.create('/inbox');
+    const root = harness.routeNativeElement as HTMLElement;
+    const badge = () => root.querySelector('[data-testid="nav-inbox-badge"]');
+    expect(badge()).toHaveTextContent('2');
+
+    // Act
+    (root.querySelector('[data-testid="inbox-allow"]') as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(root.querySelectorAll('[data-testid="inbox-gate-card"]')).toHaveLength(1));
+
+    // Assert
+    expect(badge()).toHaveTextContent('1');
   });
 
   it('renders Component sheet as a real link, staying reachable as a dev route', async () => {
@@ -252,10 +283,11 @@ describe('AppShellComponent', () => {
     const sessions = root.querySelector('[data-testid="app-nav"] .sessions') as HTMLElement;
     const helmList = root.querySelector('[data-testid="app-nav"] .helm-list') as HTMLElement;
 
+    const sessionRows = sessions.querySelector('ul.sessions') as HTMLElement;
     const sessionsStyle = getComputedStyle(sessions);
     const helmListStyle = getComputedStyle(helmList);
 
-    expect(sessionsStyle.overflowY).toBe('auto');
+    expect(getComputedStyle(sessionRows).overflowY).toBe('auto');
     expect(sessionsStyle.minHeight).toBe('0px');
     expect(sessionsStyle.flexGrow).toBe('2');
     expect(helmListStyle.overflowY).toBe('auto');
@@ -263,14 +295,27 @@ describe('AppShellComponent', () => {
     expect(helmListStyle.flexGrow).toBe('1.4');
   });
 
-  it('scrolls the Sessions region internally even with zero sessions, so the tall new-session/new-manager forms never spill onto the Helm list below', async () => {
-    const { root } = await setUp({ sessions: [] });
-    const sessions = root.querySelector('[data-testid="app-nav"] .sessions') as HTMLElement;
-    const sessionListHost = root.querySelector('[data-testid="app-nav"] of-session-list') as HTMLElement;
+  it('pins the new-session and new-manager links outside the scrolling session rows so many sessions never push them out of reach', async () => {
+    const manySessions = Array.from({ length: 40 }, (_, index) => ({ id: `s${index}`, name: `Session ${index}`, emoji: '🤖', state: 'idle' }));
+    const { root } = await setUp({ sessions: manySessions });
+    const sessionsRegion = root.querySelector('[data-testid="app-nav"] .sessions') as HTMLElement;
+    const scrollingRows = sessionsRegion.querySelector('ul.sessions') as HTMLElement;
+    const newSessionLink = root.querySelector('[data-testid="new-session-link"]') as HTMLElement;
+    const newManagerLink = root.querySelector('[data-testid="new-manager-link"]') as HTMLElement;
 
-    const sessionsStyle = getComputedStyle(sessions);
-    expect(sessionsStyle.overflowY).toBe('auto');
-    expect(sessions.contains(sessionListHost.querySelector('of-new-manager-form'))).toBe(true);
+    const isScrollContainer = (element: HTMLElement) => ['auto', 'scroll'].includes(getComputedStyle(element).overflowY);
+    const scrollContainersAbove = (link: HTMLElement) => {
+      const containers: HTMLElement[] = [];
+      for (let ancestor = link.parentElement; ancestor && ancestor !== sessionsRegion.parentElement; ancestor = ancestor.parentElement) {
+        if (isScrollContainer(ancestor)) containers.push(ancestor);
+      }
+      return containers;
+    };
+
+    expect(isScrollContainer(scrollingRows)).toBe(true);
+    expect(scrollingRows.contains(newSessionLink)).toBe(false);
+    expect(scrollContainersAbove(newSessionLink)).toEqual([]);
+    expect(scrollContainersAbove(newManagerLink)).toEqual([]);
   });
 
   it('badges the Helm Inbox row with the pending approvals count, hidden when there are none', async () => {

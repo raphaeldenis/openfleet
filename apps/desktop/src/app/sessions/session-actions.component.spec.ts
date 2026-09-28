@@ -1,10 +1,24 @@
 import { render, screen, waitFor, fireEvent } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
-import { inputBinding, signal } from '@angular/core';
-import { describe, expect, it, vi } from 'vitest';
+import { ErrorHandler, inputBinding, signal } from '@angular/core';
+import type { Provider } from '@angular/core';
+import { afterAll, beforeAll, describe, expect, it, onTestFinished, vi } from 'vitest';
 import type { SessionState } from '@openfleet/shared';
 import { SessionActionsComponent } from './session-actions.component';
 import { FleetApiService } from '../core/fleet-api.service';
+
+// jsdom lets focus() land inside an inert subtree, where a real browser drops it onto <body>; this
+// shim reproduces the browser so a focus() fired before Angular removes `inert` fails here too.
+const nativeFocus = HTMLElement.prototype.focus;
+beforeAll(() => {
+  HTMLElement.prototype.focus = function focusUnlessInert(this: HTMLElement, options?: FocusOptions): void {
+    if (this.closest('[inert]')) return;
+    nativeFocus.call(this, options);
+  };
+});
+afterAll(() => {
+  HTMLElement.prototype.focus = nativeFocus;
+});
 
 function bindingsFor(state: SessionState, options: { sessionName?: string; modelSwitchPending?: boolean } = {}) {
   const { sessionName = 'Gimli · T6', modelSwitchPending = false } = options;
@@ -14,6 +28,15 @@ function bindingsFor(state: SessionState, options: { sessionName?: string; model
     inputBinding('sessionName', () => sessionName),
     inputBinding('modelSwitchPending', () => modelSwitchPending),
   ];
+}
+
+type Api = { closeSession: ReturnType<typeof vi.fn>; sendInput: ReturnType<typeof vi.fn> };
+
+function deferred() {
+  let resolve: (value: unknown) => void = () => {};
+  let reject: (reason: unknown) => void = () => {};
+  const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
 }
 
 describe('SessionActionsComponent', () => {
@@ -250,6 +273,95 @@ describe('SessionActionsComponent', () => {
     });
   });
 
+  describe.each([
+    {
+      action: 'close',
+      buttonTestId: 'session-close',
+      startOnCurrentSession: async () => {
+        await userEvent.click(screen.getByTestId('session-close'));
+        await userEvent.click(screen.getByTestId('close-confirm-submit'));
+      },
+      apiAnswering: (answer: (sessionId: string) => Promise<unknown>): Api => ({ closeSession: vi.fn(answer), sendInput: vi.fn() }),
+      requestOf: (api: Api) => api.closeSession,
+      requestArgsFor: (sessionId: string) => [sessionId],
+    },
+    {
+      action: 'interrupt',
+      buttonTestId: 'session-interrupt',
+      startOnCurrentSession: async () => {
+        fireEvent.click(screen.getByTestId('session-interrupt'));
+      },
+      apiAnswering: (answer: (sessionId: string) => Promise<unknown>): Api => ({ closeSession: vi.fn(), sendInput: vi.fn(answer) }),
+      requestOf: (api: Api) => api.sendInput,
+      requestArgsFor: (sessionId: string) => [sessionId, '\x1b'],
+    },
+  ])('switching session while a $action request is pending', ({ buttonTestId, startOnCurrentSession, apiAnswering, requestOf, requestArgsFor }) => {
+    async function renderSwitchable(api: Api) {
+      const sessionId = signal('s1');
+      const { fixture } = await render(SessionActionsComponent, {
+        bindings: [
+          inputBinding('sessionId', sessionId),
+          inputBinding('state', () => 'generating' as const),
+          inputBinding('sessionName', () => 'Gimli · T6'),
+          inputBinding('modelSwitchPending', () => false),
+        ],
+        providers: [{ provide: FleetApiService, useValue: api }],
+      });
+      const switchTo = async (id: string) => {
+        sessionId.set(id);
+        await fixture.whenStable();
+      };
+      const settle = async () => {
+        await new Promise((resolve) => setTimeout(resolve));
+        await fixture.whenStable();
+      };
+      return { switchTo, settle };
+    }
+
+    it('re-enables the button on the new session while the previous session request is still pending', async () => {
+      const requestOnS1 = deferred();
+      const api = apiAnswering(() => requestOnS1.promise);
+      const { switchTo } = await renderSwitchable(api);
+      await startOnCurrentSession();
+      await waitFor(() => expect(screen.getByTestId(buttonTestId)).toHaveAttribute('disabled'));
+
+      await switchTo('s2');
+
+      expect(screen.getByTestId(buttonTestId)).not.toHaveAttribute('disabled');
+    });
+
+    it('does not show the previous session error on the new session', async () => {
+      const requestOnS1 = deferred();
+      const api = apiAnswering(() => requestOnS1.promise);
+      const { switchTo, settle } = await renderSwitchable(api);
+      await startOnCurrentSession();
+      await switchTo('s2');
+
+      requestOnS1.reject(new Error('boom'));
+      await requestOnS1.promise.catch(() => {});
+      await settle();
+
+      expect(screen.queryByTestId('session-action-error')).toBeNull();
+    });
+
+    it('keeps the button disabled on the new session while its own request is pending, when the previous session request settles', async () => {
+      const requestOnS1 = deferred();
+      const requestOnS2 = deferred();
+      const api = apiAnswering((sessionId) => (sessionId === 's1' ? requestOnS1.promise : requestOnS2.promise));
+      const { switchTo, settle } = await renderSwitchable(api);
+      await startOnCurrentSession();
+      await switchTo('s2');
+      await startOnCurrentSession();
+      await waitFor(() => expect(requestOf(api)).toHaveBeenLastCalledWith(...requestArgsFor('s2')));
+
+      requestOnS1.resolve({});
+      await requestOnS1.promise;
+      await settle();
+
+      expect(screen.getByTestId(buttonTestId)).toHaveAttribute('disabled');
+    });
+  });
+
   describe('Interrupt', () => {
     it('sends the escape key through the REST input route', async () => {
       const api = { closeSession: vi.fn(), sendInput: vi.fn().mockResolvedValue({}) };
@@ -281,6 +393,199 @@ describe('SessionActionsComponent', () => {
       await userEvent.click(screen.getByTestId('session-interrupt'));
 
       await waitFor(() => expect(screen.getByTestId('session-action-error')).toHaveTextContent(/could not interrupt/i));
+    });
+  });
+
+  describe('hostile interleavings', () => {
+    type NodeProcessEvents = { on(event: string, listener: () => void): void; off(event: string, listener: () => void): void };
+
+    async function renderControllable(api: Api, initialState: SessionState, extraProviders: Provider[] = []) {
+      const sessionId = signal('s1');
+      const state = signal<SessionState>(initialState);
+      const { fixture } = await render(SessionActionsComponent, {
+        bindings: [
+          inputBinding('sessionId', sessionId),
+          inputBinding('state', state),
+          inputBinding('sessionName', () => 'Gimli · T6'),
+          inputBinding('modelSwitchPending', () => false),
+        ],
+        providers: [{ provide: FleetApiService, useValue: api }, ...extraProviders],
+      });
+      const flush = async () => {
+        await new Promise((resolve) => setTimeout(resolve));
+        await fixture.whenStable();
+      };
+      return { fixture, sessionId, state, flush };
+    }
+
+    async function confirmClose() {
+      await userEvent.click(screen.getByTestId('session-close'));
+      await userEvent.click(screen.getByTestId('close-confirm-submit'));
+    }
+
+    it('ignores a programmatic requestClose while a close is already pending', async () => {
+      const close = deferred();
+      const api = { closeSession: vi.fn(() => close.promise), sendInput: vi.fn() };
+      const { fixture, flush } = await renderControllable(api, 'idle');
+      await confirmClose();
+
+      fixture.componentInstance.requestClose();
+      await flush();
+
+      expect(screen.queryByTestId('close-confirm-dialog')).toBeNull();
+    });
+
+    // KNOWN DEFECT (accepted, tracked as P2-U2e): the switch reset clears `closing` and the late settle
+    // is compared by session id only, so A→B→A re-enables Close on A while its first request is pending.
+    it.fails('keeps Close disabled when returning to a session whose close is still pending (A→B→A round trip)', async () => {
+      const closeOnS1 = deferred();
+      const api = { closeSession: vi.fn(() => closeOnS1.promise), sendInput: vi.fn() };
+      const { sessionId, flush } = await renderControllable(api, 'idle');
+      await confirmClose();
+
+      sessionId.set('s2');
+      await flush();
+      sessionId.set('s1');
+      await flush();
+
+      expect(screen.getByTestId('session-close')).toHaveAttribute('disabled');
+    });
+
+    it('dismisses the dialog on Escape after a click on its text moved focus off the buttons', async () => {
+      const api = { closeSession: vi.fn(), sendInput: vi.fn() };
+      await renderControllable(api, 'idle');
+      await userEvent.click(screen.getByTestId('session-close'));
+      await userEvent.click(screen.getByText(/The process stops/));
+      expect(screen.getByTestId('close-confirm-cancel')).not.toHaveFocus();
+
+      await userEvent.keyboard('{Escape}');
+
+      expect(screen.queryByTestId('close-confirm-dialog')).toBeNull();
+    });
+
+    it('dismisses the dialog when the session is closed elsewhere while it is open', async () => {
+      const api = { closeSession: vi.fn(), sendInput: vi.fn() };
+      const { state, flush } = await renderControllable(api, 'idle');
+      await userEvent.click(screen.getByTestId('session-close'));
+
+      state.set('closed');
+      await flush();
+
+      expect(screen.queryByTestId('close-confirm-dialog')).toBeNull();
+    });
+
+    it('cancels cleanly, without focusing anything, when the Close button has vanished', async () => {
+      const api = { closeSession: vi.fn(), sendInput: vi.fn() };
+      const handleError = vi.fn();
+      const { fixture, state, flush } = await renderControllable(api, 'idle', [{ provide: ErrorHandler, useValue: { handleError } }]);
+      await userEvent.click(screen.getByTestId('session-close'));
+      state.set('closed');
+      await flush();
+
+      fixture.componentInstance.cancelClose();
+      await flush();
+
+      expect(screen.queryByTestId('close-confirm-dialog')).toBeNull();
+      expect(screen.queryByTestId('session-close')).toBeNull();
+      expect(handleError).not.toHaveBeenCalled();
+    });
+
+    it('returns focus to Close when a confirmed close fails', async () => {
+      const api = { closeSession: vi.fn().mockRejectedValue(new Error('boom')), sendInput: vi.fn() };
+      const { flush } = await renderControllable(api, 'idle');
+      const closeButton = screen.getByTestId('session-close');
+
+      await confirmClose();
+      await flush();
+
+      expect(screen.getByTestId('session-action-error')).toBeTruthy();
+      expect(closeButton).toHaveFocus();
+    });
+
+    it('does not throw when a confirmed close fails after the view is destroyed', async () => {
+      const close = deferred();
+      const api = { closeSession: vi.fn(() => close.promise), sendInput: vi.fn() };
+      const handleError = vi.fn();
+      const unhandledRejection = vi.fn();
+      const { process: nodeProcess } = globalThis as unknown as { process: NodeProcessEvents };
+      nodeProcess.on('unhandledRejection', unhandledRejection);
+      onTestFinished(() => nodeProcess.off('unhandledRejection', unhandledRejection));
+      const { fixture } = await renderControllable(api, 'idle', [{ provide: ErrorHandler, useValue: { handleError } }]);
+      await confirmClose();
+      fixture.destroy();
+
+      close.reject(new Error('boom'));
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      expect(unhandledRejection).not.toHaveBeenCalled();
+      expect(handleError).not.toHaveBeenCalled();
+    });
+
+    it('does not refocus Close when the failed close belongs to a session the user has left, even if the new session has its own error', async () => {
+      const closeOnS1 = deferred();
+      const api = {
+        closeSession: vi.fn(() => closeOnS1.promise),
+        sendInput: vi.fn(() => Promise.reject(new Error('boom'))),
+      };
+      const { sessionId, flush } = await renderControllable(api, 'generating');
+      await confirmClose();
+      sessionId.set('s2');
+      await flush();
+      fireEvent.click(screen.getByTestId('session-interrupt'));
+      await flush();
+      expect(screen.getByTestId('session-action-error')).toHaveTextContent(/could not interrupt/i);
+      expect(screen.getByTestId('session-close')).not.toHaveFocus();
+
+      closeOnS1.reject(new Error('boom'));
+      await flush();
+
+      expect(screen.getByTestId('session-close')).not.toHaveFocus();
+    });
+
+    it('leaves focus where the user moved it while a confirmed close was pending and then failed', async () => {
+      const close = deferred();
+      const api = { closeSession: vi.fn(() => close.promise), sendInput: vi.fn() };
+      const { flush } = await renderControllable(api, 'idle');
+      const composer = document.body.appendChild(document.createElement('textarea'));
+      onTestFinished(() => composer.remove());
+      await confirmClose();
+      composer.focus();
+
+      close.reject(new Error('boom'));
+      await flush();
+
+      expect(screen.getByTestId('session-action-error')).toBeTruthy();
+      expect(composer).toHaveFocus();
+    });
+
+    it('keeps focus on the dialog button when the scrim is pressed', async () => {
+      const api = { closeSession: vi.fn(), sendInput: vi.fn() };
+      await renderControllable(api, 'idle');
+      await userEvent.click(screen.getByTestId('session-close'));
+      const cancel = screen.getByTestId('close-confirm-cancel');
+      await waitFor(() => expect(cancel).toHaveFocus());
+
+      await userEvent.click(screen.getByTestId('close-confirm-overlay'));
+
+      expect(cancel).toHaveFocus();
+      expect(screen.getByTestId('close-confirm-dialog')).toBeTruthy();
+    });
+
+    it('keeps Close disabled when an interrupt settles while the close is still pending', async () => {
+      const close = deferred();
+      const interrupt = deferred();
+      const api = { closeSession: vi.fn(() => close.promise), sendInput: vi.fn(() => interrupt.promise) };
+      const { flush } = await renderControllable(api, 'generating');
+      await confirmClose();
+
+      fireEvent.click(screen.getByTestId('session-interrupt'));
+      await flush();
+      expect(api.sendInput).toHaveBeenCalledWith('s1', '\x1b');
+      interrupt.resolve({});
+      await flush();
+
+      expect(screen.getByTestId('session-close')).toHaveAttribute('disabled');
+      expect(screen.getByTestId('session-interrupt')).not.toHaveAttribute('disabled');
     });
   });
 });

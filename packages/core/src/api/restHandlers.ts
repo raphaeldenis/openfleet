@@ -37,7 +37,8 @@ export function registerRestRoutes(router: Router, deps: { sessions: SessionServ
   });
 
   router.add('POST', '/api/sessions', async ({ res, body }) => {
-    const spec = CreateSessionSchema.parse(body);
+    const requestedSpec = CreateSessionSchema.parse(body);
+    const spec = requestedSpec.model ? { ...requestedSpec, model: resolveModel(deps.modelTable, requestedSpec.model) } : requestedSpec;
     const hasRepo = spec.repoPath !== undefined && spec.branchName !== undefined;
     try {
       const session = spec.manager

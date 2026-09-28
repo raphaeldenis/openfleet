@@ -76,4 +76,35 @@ describe('FleetApiService', () => {
     expect(init.headers).toMatchObject({ 'content-type': 'application/json' });
     expect((init.headers as Record<string, string>)['authorization']).toMatch(/^Bearer /);
   });
+
+  describe('createManagerSession', () => {
+    function postedBody(): unknown {
+      const [, init] = fetchMock.mock.calls[0]!;
+      return JSON.parse(init.body as string);
+    }
+
+    it('posts the harness and permission mode next to the nested manager spec', async () => {
+      fetchMock.mockResolvedValue(fakeResponse({ ok: true, status: 200, json: () => Promise.resolve({ id: 'm-1' }) }));
+
+      await api.createManagerSession({
+        directory: '/tmp/wt', name: 'Lead', emoji: '🧭', model: 'opus', harness: 'claude-cli', permissionMode: 'plan',
+        pulseSeconds: 900, childrenCap: 4, mission: 'Ship it',
+      });
+
+      expect(postedBody()).toEqual({
+        directory: '/tmp/wt', name: 'Lead', emoji: '🧭', model: 'opus', harness: 'claude-cli', permissionMode: 'plan',
+        manager: { pulseSeconds: 900, childrenCap: 4, mission: 'Ship it' },
+      });
+    });
+
+    it('posts no permission mode when none is chosen', async () => {
+      fetchMock.mockResolvedValue(fakeResponse({ ok: true, status: 200, json: () => Promise.resolve({ id: 'm-1' }) }));
+
+      await api.createManagerSession({
+        directory: '/tmp/wt', name: 'Lead', pulseSeconds: 900, childrenCap: 4, mission: 'Ship it',
+      });
+
+      expect(postedBody()).not.toHaveProperty('permissionMode');
+    });
+  });
 });
