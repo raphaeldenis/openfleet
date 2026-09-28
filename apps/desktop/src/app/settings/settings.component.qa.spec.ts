@@ -81,16 +81,13 @@ describe('SettingsComponent — tab bar', () => {
     expect(screen.getByRole('tablist')).toHaveAttribute('aria-orientation', 'vertical');
   });
 
-  // Major (a11y, settings.component.ts:26): the tab list has no accessible name.
-  it.fails('names the tab list for screen readers', async () => {
+  it('names the tab list for screen readers', async () => {
     await renderSettings();
 
     expect(screen.getByRole('tablist', { name: /settings/i })).toBeTruthy();
   });
 
-  // Major (a11y, settings.component.ts:28-33): role="tab" without a matching role="tabpanel" wired by
-  // aria-controls / aria-labelledby, so a screen reader announces tabs that control nothing.
-  it.fails('wires the selected tab to a tabpanel through aria-controls and aria-labelledby', async () => {
+  it('wires the selected tab to a tabpanel through aria-controls and aria-labelledby', async () => {
     await renderSettings();
 
     const panelId = modelsTab().getAttribute('aria-controls');
@@ -100,18 +97,14 @@ describe('SettingsComponent — tab bar', () => {
     expect(panel).toHaveAttribute('aria-labelledby', modelsTab().id);
   });
 
-  // Minor (a11y, settings.component.ts:28): every tab is a Tab stop; the APG pattern keeps only the selected tab in the
-  // tab sequence (roving tabindex) so Tab leaves the tab list in one press.
-  it.fails('keeps only the selected tab in the Tab sequence', async () => {
+  it('keeps only the selected tab in the Tab sequence', async () => {
     await renderSettings();
 
     expect(modelsTab()).toHaveAttribute('tabindex', '0');
     expect(daemonTab()).toHaveAttribute('tabindex', '-1');
   });
 
-  // Major (a11y, settings.component.ts:28): role="tab" promises arrow-key navigation; the list is vertical so
-  // ArrowDown/ArrowUp move between tabs, wrapping. There is no keydown handler at all.
-  it.fails('moves selection and focus to the next tab on ArrowDown', async () => {
+  it('moves selection and focus to the next tab on ArrowDown', async () => {
     await renderSettings();
     modelsTab().focus();
 
@@ -121,7 +114,7 @@ describe('SettingsComponent — tab bar', () => {
     expect(document.activeElement).toBe(daemonTab());
   });
 
-  it.fails('wraps from the first tab to the last on ArrowUp', async () => {
+  it('wraps from the first tab to the last on ArrowUp', async () => {
     await renderSettings();
     modelsTab().focus();
 
@@ -130,7 +123,7 @@ describe('SettingsComponent — tab bar', () => {
     expect(document.activeElement).toBe(daemonTab());
   });
 
-  it.fails('jumps to the last tab on End and back to the first on Home', async () => {
+  it('jumps to the last tab on End and back to the first on Home', async () => {
     await renderSettings();
     modelsTab().focus();
 
@@ -139,6 +132,30 @@ describe('SettingsComponent — tab bar', () => {
 
     await userEvent.keyboard('{Home}');
     expect(document.activeElement).toBe(modelsTab());
+  });
+
+  it.each([
+    ['Alt', '{Alt>}{ArrowDown}{/Alt}'],
+    ['Ctrl', '{Control>}{ArrowDown}{/Control}'],
+    ['Meta', '{Meta>}{ArrowDown}{/Meta}'],
+    ['Shift', '{Shift>}{ArrowDown}{/Shift}'],
+  ])('leaves %s+ArrowDown to the browser instead of swallowing it', async (_modifier, keystroke) => {
+    await renderSettings();
+    modelsTab().focus();
+
+    await userEvent.keyboard(keystroke);
+
+    expect(modelsTab()).toHaveAttribute('aria-selected', 'true');
+    expect(document.activeElement).toBe(modelsTab());
+  });
+
+  it('does not react to ArrowLeft and ArrowRight on the vertical tab list', async () => {
+    await renderSettings();
+    modelsTab().focus();
+
+    await userEvent.keyboard('{ArrowRight}{ArrowLeft}');
+
+    expect(modelsTab()).toHaveAttribute('aria-selected', 'true');
   });
 });
 
@@ -233,24 +250,19 @@ describe('SettingsComponent — Models tab', () => {
     expect(screen.queryByTestId('models-loading')).toBeNull();
   });
 
-  // Minor (settings.component.ts:35): the error paragraph is not a live region, so a screen-reader user who
-  // opens Settings against a dead daemon is never told the load failed.
-  it.fails('announces the load failure to assistive tech', async () => {
+  it('announces the load failure to assistive tech', async () => {
     await renderSettings(() => Promise.reject(new Error('down')));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/couldn.t load/i);
   });
 
-  // Minor (settings.component.ts:37): a 200 whose body is JSON `null` keeps modelTable() falsy, so the
-  // Loading… branch renders forever — the endless spinner the error state exists to prevent.
-  it.fails('leaves Loading… once the daemon answered, even when the body is not a table', async () => {
+  it('leaves Loading… once the daemon answered, even when the body is not a table', async () => {
     await renderSettings(() => Promise.resolve(null));
 
     await vi.waitFor(() => expect(screen.queryByTestId('models-loading')).toBeNull());
   });
 
-  // Minor (settings.component.ts:42): a body missing a rung renders an empty id cell as if it were a value.
-  it.fails('never renders an empty model id cell for a rung the daemon did not send', async () => {
+  it('never renders an empty model id cell for a rung the daemon did not send', async () => {
     await renderSettings(() => Promise.resolve({ haiku: 'claude-haiku-4-5' }));
     await screen.findByTestId('model-row-haiku');
 
@@ -301,9 +313,7 @@ describe('SettingsComponent — Daemon tab', () => {
     expect(screen.getByTestId('admin-token-status')).toHaveTextContent('not found');
   });
 
-  // Minor (settings.component.ts:96): `!== ''` counts a whitespace-only value as a token. The status says "found"
-  // while every request sends `Bearer    ` and the daemon answers 401.
-  it.fails.each([['spaces', '   '], ['a newline', '\n'], ['a tab and a space', '\t ']])('reports not found when the stored token is only %s', async (_label, blankToken) => {
+  it.each([['spaces', '   '], ['a newline', '\n'], ['a tab and a space', '\t ']])('reports not found when the stored token is only %s', async (_label, blankToken) => {
     localStorage.setItem('openfleet.adminToken', blankToken);
     await renderSettings();
 
@@ -340,9 +350,17 @@ describe('SettingsComponent — Daemon tab', () => {
     expect(screen.getByTestId('daemon-address').textContent?.trim()).toBe('127.0.0.1:7331/openfleet');
   });
 
-  // Minor (settings.component.ts:56): the "Local only" caption is hard-coded, so a stored https://daemon.example
-  // url is shown, scheme stripped, under a caption that says it is local.
-  it.fails('does not caption a remote https daemon address as "Local only"', async () => {
+  it.each([['localhost', 'http://localhost:7331', 'localhost:7331'], ['IPv6 loopback', 'http://[::1]:7331', '[::1]:7331']])('captions the %s address as "Local only"', async (_label, apiUrl, shownAddress) => {
+    localStorage.setItem('openfleet.apiUrl', apiUrl);
+    await renderSettings();
+
+    await openDaemonTab();
+
+    expect(screen.getByTestId('daemon-address')).toHaveTextContent(shownAddress);
+    expect(screen.getByTestId('settings-daemon').textContent).toContain('Local only');
+  });
+
+  it('does not caption a remote https daemon address as "Local only"', async () => {
     localStorage.setItem('openfleet.apiUrl', 'https://daemon.example.com:7331');
     await renderSettings();
 

@@ -170,9 +170,7 @@ describe('GET /api/models response shape', () => {
     expect(({} as Record<string, unknown>)['polluted']).toBeUndefined();
   });
 
-  // Minor: restHandlers.ts:34 serializes deps.modelTable as-is. loadModelTable() strips unknown keys today, so this
-  // is defence in depth, but a table built any other way (test double, future loader) leaks every key it carries.
-  it.fails('projects the response onto the four rungs even when the served table carries extra keys', async () => {
+  it('projects the response onto the four rungs even when the served table carries extra keys', async () => {
     const tableWithExtraKey = { ...DEFAULT_MODEL_TABLE, apiKey: 'sk-should-never-leave-the-daemon' } as unknown as ModelTable;
     const server = await startServerServing(tableWithExtraKey);
 
@@ -181,9 +179,7 @@ describe('GET /api/models response shape', () => {
     expect(bodyText).not.toContain('sk-should-never-leave-the-daemon');
   });
 
-  // Minor (pre-existing, models.ts:9): z.string() accepts '', so a blank rung boots the daemon and resolves to '',
-  // and the Settings table then renders an empty id cell instead of failing loudly like every other bad config.
-  it.fails('refuses a config.json that blanks a rung instead of serving an empty model id', () => {
+  it('refuses a config.json that blanks a rung instead of serving an empty model id', () => {
     const blankRungConfig = JSON.stringify({ models: { sonnet: '' } });
 
     expect(() => modelTableFromConfigFile(blankRungConfig)).toThrow();

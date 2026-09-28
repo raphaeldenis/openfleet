@@ -16,30 +16,69 @@ const MODEL_RUNGS: ReadonlyArray<{ rung: string; description: string }> = [
   { rung: 'fable', description: 'Experimental rung' },
 ];
 
-const MODEL_TABLE_EDIT_HINT = 'Read-only. To change a rung, edit models in ~/.openfleet/config.json by hand and restart the daemon.';
+const LAST_TAB_INDEX = SETTINGS_TABS.length - 1;
+const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(['127.0.0.1', 'localhost', '::1']);
+const MISSING_MODEL_ID = '—';
+
+function hasModifierKey(event: KeyboardEvent): boolean {
+  return event.altKey || event.ctrlKey || event.metaKey || event.shiftKey;
+}
+
+function tabIndexAfterKey(key: string, currentIndex: number): number | undefined {
+  switch (key) {
+    case 'ArrowDown': return currentIndex === LAST_TAB_INDEX ? 0 : currentIndex + 1;
+    case 'ArrowUp': return currentIndex === 0 ? LAST_TAB_INDEX : currentIndex - 1;
+    case 'Home': return 0;
+    case 'End': return LAST_TAB_INDEX;
+    default: return undefined;
+  }
+}
+
+function isLoopbackAddress(address: string): boolean {
+  const url = `http://${address}`;
+  if (!URL.canParse(url)) return false;
+  const host = new URL(url).hostname.replace(/^\[|\]$/g, '');
+  return LOOPBACK_HOSTS.has(host);
+}
+
+function isModelTable(body: unknown): body is Record<string, string> {
+  return typeof body === 'object' && body !== null && !Array.isArray(body);
+}
+
+const MODEL_TABLE_EDIT_HINT ='Read-only. To change a rung, edit models in ~/.openfleet/config.json by hand and restart the daemon.';
 
 @Component({
   selector: 'of-settings',
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="settings" data-testid="settings">
-      <div class="tabs" role="tablist" aria-orientation="vertical">
+      <div class="tabs" role="tablist" aria-label="Settings sections" aria-orientation="vertical" (keydown)="onTabKeydown($event)">
         @for (tab of tabs; track tab.key) {
-          <button type="button" role="tab" class="tab" [class.active]="activeTab() === tab.key" [attr.aria-selected]="activeTab() === tab.key" (click)="activeTab.set(tab.key)">{{ tab.label }}</button>
+          <button
+            type="button"
+            role="tab"
+            class="tab"
+            [class.active]="activeTab() === tab.key"
+            [id]="'settings-tab-' + tab.key"
+            [attr.aria-selected]="activeTab() === tab.key"
+            [attr.aria-controls]="tabPanelId"
+            [attr.tabindex]="activeTab() === tab.key ? 0 : -1"
+            (click)="activeTab.set(tab.key)"
+          >{{ tab.label }}</button>
         }
       </div>
-      <div class="content">
+      <div class="content" role="tabpanel" [id]="tabPanelId" [attr.aria-labelledby]="'settings-tab-' + activeTab()">
         @if (activeTab() === 'models') {
           <section class="panel" data-testid="settings-models">
             <h1>Models</h1>
             @if (modelsFailed()) {
-              <p class="error" data-testid="models-error">✕ Couldn’t load the model table from the daemon.</p>
+              <p class="error" role="alert" data-testid="models-error">✕ Couldn’t load the model table from the daemon.</p>
             } @else if (modelTable(); as table) {
               <div class="rows">
                 @for (row of rungs; track row.rung) {
                   <div class="row" [attr.data-testid]="'model-row-' + row.rung">
                     <div class="label"><span class="name">{{ row.rung }}</span><span class="detail">{{ row.description }}</span></div>
-                    <span class="value mono">{{ table[row.rung] }}</span>
+                    <span class="value mono">{{ table[row.rung] || missingModelId }}</span>
                   </div>
                 }
               </div>
@@ -53,7 +92,7 @@ const MODEL_TABLE_EDIT_HINT = 'Read-only. To change a rung, edit models in ~/.op
             <h1>Daemon</h1>
             <div class="rows">
               <div class="row">
-                <div class="label"><span class="name">Address</span><span class="detail">Local only</span></div>
+                <div class="label"><span class="name">Address</span>@if (isDaemonLocal) {<span class="detail">Local only</span>}</div>
                 <span class="value mono" data-testid="daemon-address">{{ daemonAddress }}</span>
               </div>
               <div class="row">
@@ -93,7 +132,10 @@ export class SettingsComponent {
   protected readonly rungs = MODEL_RUNGS;
   protected readonly editHint = MODEL_TABLE_EDIT_HINT;
   protected readonly daemonAddress = environment.daemonAddress;
-  protected readonly isAdminTokenFound = environment.adminToken !== '';
+  protected readonly missingModelId = MISSING_MODEL_ID;
+  protected readonly tabPanelId = 'settings-tabpanel';
+  protected readonly isDaemonLocal = isLoopbackAddress(environment.daemonAddress);
+  protected readonly isAdminTokenFound = environment.adminToken.trim() !== '';
 
   protected readonly activeTab = signal<SettingsTab>('models');
   protected readonly modelTable = signal<Record<string, string> | null>(null);
@@ -103,9 +145,22 @@ export class SettingsComponent {
     void this.loadModelTable();
   }
 
+  protected onTabKeydown(event: KeyboardEvent): void {
+    if (hasModifierKey(event)) return;
+    const currentIndex = SETTINGS_TABS.findIndex((tab) => tab.key === this.activeTab());
+    const targetIndex = tabIndexAfterKey(event.key, currentIndex);
+    if (targetIndex === undefined) return;
+    event.preventDefault();
+    this.activeTab.set(SETTINGS_TABS[targetIndex].key);
+    const tabButtons = (event.currentTarget as HTMLElement).querySelectorAll<HTMLElement>('[role="tab"]');
+    tabButtons[targetIndex].focus();
+  }
+
   private async loadModelTable(): Promise<void> {
     try {
-      this.modelTable.set(await this.api.models());
+      const body: unknown = await this.api.models();
+      if (isModelTable(body)) this.modelTable.set(body);
+      else this.modelsFailed.set(true);
     } catch {
       this.modelsFailed.set(true);
     }

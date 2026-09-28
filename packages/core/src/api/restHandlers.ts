@@ -31,7 +31,10 @@ const RenameSessionSchema = z
 export function registerRestRoutes(router: Router, deps: { sessions: SessionService; approvals: ApprovalService; modelTable: ModelTable; managers: ManagerService; pulseScheduler: PulseScheduler }): void {
   router.add('GET', '/api/sessions', ({ res }) => json(res, 200, deps.sessions.list()));
 
-  router.add('GET', '/api/models', ({ res }) => json(res, 200, deps.modelTable));
+  router.add('GET', '/api/models', ({ res }) => {
+    const { haiku, sonnet, opus, fable } = deps.modelTable;
+    json(res, 200, { haiku, sonnet, opus, fable });
+  });
 
   router.add('POST', '/api/sessions', async ({ res, body }) => {
     const spec = CreateSessionSchema.parse(body);

@@ -11,7 +11,7 @@ export const DEFAULT_MODEL_TABLE: ModelTable = {
 };
 
 const ModelConfigFileSchema = z.object({
-  models: z.object({ haiku: z.string(), sonnet: z.string(), opus: z.string(), fable: z.string() }).partial().optional(),
+  models: z.object({ haiku: z.string().min(1), sonnet: z.string().min(1), opus: z.string().min(1), fable: z.string().min(1) }).partial().optional(),
 });
 
 export function loadModelTable(configPath: string): ModelTable {

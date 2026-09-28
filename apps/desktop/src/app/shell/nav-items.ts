@@ -58,5 +58,6 @@ export interface PalettePage {
 export const PALETTE_PAGES: readonly PalettePage[] = [
   { key: 'sessions', icon: '🗂', label: 'Sessions', route: '/' },
   { key: 'inbox', icon: '◫', label: 'Inbox', route: '/inbox' },
+  { key: 'settings', icon: '⚙', label: 'Settings', route: '/settings' },
   { key: 'components', icon: '◈', label: 'Components', route: '/components' },
 ];

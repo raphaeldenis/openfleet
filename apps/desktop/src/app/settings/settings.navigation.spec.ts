@@ -128,9 +128,7 @@ describe('Settings navigation', () => {
     expect(root.querySelector('[data-testid="command-palette"]')).toBeNull();
   });
 
-  // Minor (nav-items.ts:66): PALETTE_PAGES stops at Sessions/Inbox/Components although its own comment says every
-  // route that exists today belongs there — Settings exists now but cannot be reached from ⌘K. May be by design.
-  it.fails('offers Settings as a page in the command palette', async () => {
+  it('offers Settings as a page in the command palette', async () => {
     vi.stubGlobal('fetch', daemonAnswering(MODEL_TABLE));
     const { harness, root } = await openApp('/inbox');
 
