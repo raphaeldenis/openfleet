@@ -10,6 +10,7 @@ import {
   WhereClauseSchema,
   type DsColumn,
   type DsRow,
+  type DsRowChange,
   type DsRowHistoryEntry,
   type DsView,
 } from './dataStores.js';
@@ -103,7 +104,14 @@ describe('data-store records', () => {
     const view: DsView = { id: 'v1', storeId: 's1', displayName: 'Board', viewType: 'kanban', config: { groupByColumnId: 'c1' }, sortOrder: 0 };
     const created: DsRowHistoryEntry = { id: 'h1', rowId: 'r1', actorKind: 'human', actorLabel: 'You', change: { kind: 'create' }, createdAt: 't0' };
     const updated: DsRowHistoryEntry = { ...created, id: 'h2', actorKind: 'agent', change: { c1: { from: 'todo', to: 'done' } } };
-    const records = [column, row, view, created, updated];
+    const deleted: DsRowHistoryEntry = { ...created, id: 'h3', actorKind: 'trigger', change: { kind: 'delete' } };
+    const records = [column, row, view, created, updated, deleted];
     expect(JSON.parse(JSON.stringify(records))).toEqual(records);
+  });
+
+  it('refuses a row change kind other than create or delete', () => {
+    // @ts-expect-error 'purge' is neither a known change kind nor a column diff
+    const unknownKind: DsRowChange = { kind: 'purge' };
+    expect(unknownKind).toEqual({ kind: 'purge' });
   });
 });

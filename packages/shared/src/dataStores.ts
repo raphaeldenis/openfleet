@@ -36,7 +36,7 @@ export const ROW_ACTOR_KINDS = ['human', 'agent', 'trigger'] as const;
 export const RowActorKindSchema = z.enum(ROW_ACTOR_KINDS);
 export type RowActorKind = z.infer<typeof RowActorKindSchema>;
 
-export type DsRowChange = { kind: 'create' } | Record<string, { from: unknown; to: unknown }>;
+export type DsRowChange = { kind: 'create' } | { kind: 'delete' } | Record<string, { from: unknown; to: unknown }>;
 
 export interface DsRowHistoryEntry {
   id: string;
