@@ -23,7 +23,7 @@ function fakeSession(id: string, state: SessionState = 'generating'): FakeSessio
   template: `
     @if (visible()) {
       <of-model-selector [sessionId]="sessionId()" />
-      <of-permission-mode-picker [sessionId]="sessionId()" [currentMode]="shown()?.permissionMode" [sessionState]="shown()?.state" />
+      <of-permission-mode-picker [sessionId]="sessionId()" [currentMode]="shown()?.permissionMode" />
     }
   `,
 })
@@ -67,7 +67,7 @@ const setStateOf = (sessions: ReturnType<typeof signal<FakeSession[]>>, id: stri
 
 describe('PendingSwitchesService through the model selector and the permission-mode picker', () => {
   describe('the model entry and the permission-mode entry of one session', () => {
-    it('keeps a parked model switch out of the permission-mode picker', async () => {
+    it('keeps a model switch out of the permission-mode picker', async () => {
       const { goTo } = await renderSelectors();
       await requestModelSwitch();
       await waitFor(() => expect(modelNote()).toBeTruthy());
@@ -79,7 +79,7 @@ describe('PendingSwitchesService through the model selector and the permission-m
       expect(permissionModeNote()).toBeNull();
     });
 
-    it('keeps a parked permission-mode switch out of the model selector', async () => {
+    it('keeps a permission-mode switch out of the model selector', async () => {
       const { goTo } = await renderSelectors();
       await requestPermissionModeSwitch();
       await waitFor(() => expect(permissionModeNote()).toBeTruthy());
@@ -91,7 +91,7 @@ describe('PendingSwitchesService through the model selector and the permission-m
       expect(modelNote()).toBeNull();
     });
 
-    it('parks both switches of the same session, restores both, and clears each on its own when the turn ends', async () => {
+    it('shows both switches of the same session again after A → B → A, and clears each on its own when the turn ends', async () => {
       const { goTo, sessions } = await renderSelectors();
       await requestModelSwitch();
       await requestPermissionModeSwitch();
@@ -111,8 +111,8 @@ describe('PendingSwitchesService through the model selector and the permission-m
     });
   });
 
-  describe('parking on destroy (the session view leaves the screen, no sessionId change)', () => {
-    it('parks both pending switches when the selectors are destroyed, and restores them when they come back', async () => {
+  describe('the session view leaving the screen (no sessionId change)', () => {
+    it('shows both pending switches again when the selectors are destroyed and come back', async () => {
       const { fixture, host } = await renderSelectors();
       await requestModelSwitch();
       await requestPermissionModeSwitch();
@@ -175,7 +175,7 @@ describe('PendingSwitchesService through the model selector and the permission-m
       expect((screen.getByTestId('model-select') as HTMLSelectElement).value).toBe('opus');
     });
 
-    it('never lets a switch parked for A show up on B or C during a fast A → B → C → A walk', async () => {
+    it('never lets a switch of A show up on B or C during a fast A → B → C → A walk', async () => {
       const { goTo } = await renderSelectors({ sessions: [fakeSession('s1'), fakeSession('s2', 'idle'), fakeSession('s3', 'idle')] });
       await requestModelSwitch();
       await requestPermissionModeSwitch();
@@ -452,7 +452,7 @@ describe('PendingSwitchesService through the model selector and the permission-m
       expect(noteOf(kind)).toBeNull();
     });
 
-    it.each(SWITCH_KINDS)('parks the $kind switch of a user who left, so the note is right when the relaunch ran while away', async (kind) => {
+    it.each(SWITCH_KINDS)('shows the right $kind note on return when the relaunch ran while the user was away', async (kind) => {
       const { apiMethod } = kind;
       const reply = deferred<{ status: 'relaunching' }>();
       const { fixture, goTo, sessions } = await renderSelectors({

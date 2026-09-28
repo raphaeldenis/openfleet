@@ -159,13 +159,6 @@ export class SessionViewComponent {
   });
 
   constructor() {
-    // A resume error belongs to the closed session it failed on: a rejection that lands once the session is
-    // starting or live again (a slow reply, a 409 from another client's reopen) must not resurface on a later close.
-    effect(() => {
-      const isSessionStillClosed = this.session()?.state === 'closed';
-      const hasResumeError = this.resumeError() !== null;
-      if (!isSessionStillClosed && hasResumeError) untracked(() => this.requests.clearError(this.sessionId(), 'resume'));
-    });
     effect(() => {
       const session = this.session();
       if (!session) return this.watchedOpenSessionId.set(undefined);

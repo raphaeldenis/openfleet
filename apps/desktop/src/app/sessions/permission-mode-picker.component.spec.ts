@@ -2,11 +2,25 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/angular/zon
 import userEvent from '@testing-library/user-event';
 import { inputBinding, signal } from '@angular/core';
 import { describe, expect, it, vi } from 'vitest';
+import type { SessionState } from '@openfleet/shared';
 import { PermissionModePickerComponent } from './permission-mode-picker.component';
 import { FleetApiService } from '../core/fleet-api.service';
+import { FleetEventsService } from '../core/fleet-events.service';
 
-function providersWith(api: { updatePermissionMode: ReturnType<typeof vi.fn> }) {
-  return [{ provide: FleetApiService, useValue: api }];
+/** The fleet as the daemon reports it: sessions s1 (and s2, when asked for) in the given state. */
+function fakeFleet(state: SessionState = 'idle', sessionIds: string[] = ['s1']) {
+  return {
+    sessions: signal(sessionIds.map((id) => ({ id, name: id, emoji: '⚔️', state }))),
+    approvals: signal([]),
+    managers: signal([]),
+  };
+}
+
+const setStateOf = (fleet: ReturnType<typeof fakeFleet>, sessionId: string, state: SessionState) =>
+  fleet.sessions.update((all) => all.map((s) => (s.id === sessionId ? { ...s, state } : s)));
+
+function providersWith(api: { updatePermissionMode: ReturnType<typeof vi.fn> }, fleet = fakeFleet()) {
+  return [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: fleet }];
 }
 
 describe('PermissionModePickerComponent', () => {
@@ -107,10 +121,10 @@ describe('PermissionModePickerComponent', () => {
   it('keeps "restarting…" visible when the daemon reports the mode change before the relaunch settles', async () => {
     const api = { updatePermissionMode: vi.fn().mockResolvedValue({ status: 'relaunching' }) };
     const currentMode = signal<'manual' | 'acceptEdits'>('manual');
-    const sessionState = signal<'idle' | 'starting' | 'generating'>('idle');
+    const fleet = fakeFleet('idle');
     const { fixture } = await render(PermissionModePickerComponent, {
-      bindings: [inputBinding('sessionId', () => 's1'), inputBinding('currentMode', currentMode), inputBinding('sessionState', sessionState)],
-      providers: providersWith(api),
+      bindings: [inputBinding('sessionId', () => 's1'), inputBinding('currentMode', currentMode)],
+      providers: providersWith(api, fleet),
     });
 
     await userEvent.selectOptions(screen.getByTestId('permission-mode-select'), 'acceptEdits');
@@ -122,21 +136,21 @@ describe('PermissionModePickerComponent', () => {
     await fixture.whenStable();
     expect(screen.getByTestId('permission-mode-switch-status')).toHaveTextContent('restarting…');
 
-    sessionState.set('starting');
+    setStateOf(fleet, 's1', 'starting');
     await fixture.whenStable();
     expect(screen.getByTestId('permission-mode-switch-status')).toHaveTextContent('restarting…');
 
-    sessionState.set('idle');
+    setStateOf(fleet, 's1', 'idle');
     await waitFor(() => expect(screen.queryByTestId('permission-mode-switch-status')).toBeNull());
   });
 
   it('keeps "switch pending" visible until the turn ends, even once the mode itself has landed', async () => {
     const api = { updatePermissionMode: vi.fn().mockResolvedValue({ status: 'deferred' }) };
     const currentMode = signal<'manual' | 'acceptEdits'>('manual');
-    const sessionState = signal<'generating' | 'idle'>('generating');
+    const fleet = fakeFleet('generating');
     const { fixture } = await render(PermissionModePickerComponent, {
-      bindings: [inputBinding('sessionId', () => 's1'), inputBinding('currentMode', currentMode), inputBinding('sessionState', sessionState)],
-      providers: providersWith(api),
+      bindings: [inputBinding('sessionId', () => 's1'), inputBinding('currentMode', currentMode)],
+      providers: providersWith(api, fleet),
     });
 
     await userEvent.selectOptions(screen.getByTestId('permission-mode-select'), 'acceptEdits');
@@ -147,51 +161,51 @@ describe('PermissionModePickerComponent', () => {
     await fixture.whenStable();
     expect(screen.getByTestId('permission-mode-switch-status')).toHaveTextContent('switch pending');
 
-    sessionState.set('idle');
+    setStateOf(fleet, 's1', 'idle');
     await waitFor(() => expect(screen.queryByTestId('permission-mode-switch-status')).toBeNull());
   });
 
   it('clears the switch status once the session reaches idle', async () => {
     const api = { updatePermissionMode: vi.fn().mockResolvedValue({ status: 'deferred' }) };
-    const sessionState = signal<'generating' | 'idle'>('generating');
+    const fleet = fakeFleet('generating');
     await render(PermissionModePickerComponent, {
-      bindings: [inputBinding('sessionId', () => 's1'), inputBinding('currentMode', () => 'manual' as const), inputBinding('sessionState', sessionState)],
-      providers: providersWith(api),
+      bindings: [inputBinding('sessionId', () => 's1'), inputBinding('currentMode', () => 'manual' as const)],
+      providers: providersWith(api, fleet),
     });
     await userEvent.click(screen.getByTestId('apply-permission-mode'));
     await waitFor(() => expect(screen.getByTestId('permission-mode-switch-status')).toHaveTextContent('switch pending'));
 
-    sessionState.set('idle');
+    setStateOf(fleet, 's1', 'idle');
 
     await waitFor(() => expect(screen.queryByTestId('permission-mode-switch-status')).toBeNull());
   });
 
   it('clears the "restarting…" note when the session closes mid-relaunch', async () => {
     const api = { updatePermissionMode: vi.fn().mockResolvedValue({ status: 'relaunching' }) };
-    const sessionState = signal<'starting' | 'closed'>('starting');
+    const fleet = fakeFleet('starting');
     await render(PermissionModePickerComponent, {
-      bindings: [inputBinding('sessionId', () => 's1'), inputBinding('currentMode', () => 'manual' as const), inputBinding('sessionState', sessionState)],
-      providers: providersWith(api),
+      bindings: [inputBinding('sessionId', () => 's1'), inputBinding('currentMode', () => 'manual' as const)],
+      providers: providersWith(api, fleet),
     });
     await userEvent.click(screen.getByTestId('apply-permission-mode'));
     await waitFor(() => expect(screen.getByTestId('permission-mode-switch-status')).toHaveTextContent('restarting…'));
 
-    sessionState.set('closed');
+    setStateOf(fleet, 's1', 'closed');
 
     await waitFor(() => expect(screen.queryByTestId('permission-mode-switch-status')).toBeNull());
   });
 
   it('clears the "restarting…" note when the session closes mid-relaunch, starting from an inherited (no mode set) permission mode', async () => {
     const api = { updatePermissionMode: vi.fn().mockResolvedValue({ status: 'relaunching' }) };
-    const sessionState = signal<'starting' | 'closed'>('starting');
+    const fleet = fakeFleet('starting');
     await render(PermissionModePickerComponent, {
-      bindings: [inputBinding('sessionId', () => 's1'), inputBinding('currentMode', () => undefined), inputBinding('sessionState', sessionState)],
-      providers: providersWith(api),
+      bindings: [inputBinding('sessionId', () => 's1'), inputBinding('currentMode', () => undefined)],
+      providers: providersWith(api, fleet),
     });
     await userEvent.click(screen.getByTestId('apply-permission-mode'));
     await waitFor(() => expect(screen.getByTestId('permission-mode-switch-status')).toHaveTextContent('restarting…'));
 
-    sessionState.set('closed');
+    setStateOf(fleet, 's1', 'closed');
 
     await waitFor(() => expect(screen.queryByTestId('permission-mode-switch-status')).toBeNull());
   });
@@ -291,10 +305,10 @@ describe('PermissionModePickerComponent', () => {
   it('keeps a newly picked mode selected when an earlier pending switch lands, without touching it', async () => {
     const api = { updatePermissionMode: vi.fn().mockResolvedValue({ status: 'deferred' }) };
     const currentMode = signal<'manual' | 'acceptEdits' | undefined>('manual');
-    const sessionState = signal<'generating' | 'idle'>('generating');
+    const fleet = fakeFleet('generating');
     await render(PermissionModePickerComponent, {
-      bindings: [inputBinding('sessionId', () => 's1'), inputBinding('currentMode', currentMode), inputBinding('sessionState', sessionState)],
-      providers: providersWith(api),
+      bindings: [inputBinding('sessionId', () => 's1'), inputBinding('currentMode', currentMode)],
+      providers: providersWith(api, fleet),
     });
     const select = screen.getByTestId('permission-mode-select') as HTMLSelectElement;
 
@@ -305,7 +319,7 @@ describe('PermissionModePickerComponent', () => {
     await userEvent.selectOptions(select, 'plan');
     // The earlier switch lands: the daemon confirms the mode, then the turn ends (state settles to idle).
     currentMode.set('acceptEdits');
-    sessionState.set('idle');
+    setStateOf(fleet, 's1', 'idle');
 
     await waitFor(() => expect(screen.queryByTestId('permission-mode-switch-status')).toBeNull());
     expect(select.value).toBe('plan');
@@ -329,13 +343,13 @@ describe('PermissionModePickerComponent', () => {
   });
 
   describe('a pending switch belongs to its session', () => {
-    async function renderSwitchedAwayFromAndBackTo(sessionState: ReturnType<typeof signal<'generating' | 'idle'>>) {
+    async function renderSwitchedAwayFromAndBackTo(fleet: ReturnType<typeof fakeFleet>) {
       const api = { updatePermissionMode: vi.fn().mockResolvedValue({ status: 'deferred' }) };
       const sessionId = signal('s1');
       const currentMode = signal<'manual' | 'plan'>('manual');
       const { fixture } = await render(PermissionModePickerComponent, {
-        bindings: [inputBinding('sessionId', sessionId), inputBinding('currentMode', currentMode), inputBinding('sessionState', sessionState)],
-        providers: providersWith(api),
+        bindings: [inputBinding('sessionId', sessionId), inputBinding('currentMode', currentMode)],
+        providers: providersWith(api, fleet),
       });
       await userEvent.selectOptions(screen.getByTestId('permission-mode-select'), 'acceptEdits');
       await userEvent.click(screen.getByTestId('apply-permission-mode'));
@@ -350,7 +364,7 @@ describe('PermissionModePickerComponent', () => {
     }
 
     it('shows session A\'s deferred switch again after switching to B and coming back, with the requested mode selected', async () => {
-      const { goTo } = await renderSwitchedAwayFromAndBackTo(signal<'generating' | 'idle'>('generating'));
+      const { goTo } = await renderSwitchedAwayFromAndBackTo(fakeFleet('generating', ['s1', 's2']));
       await goTo('s2', 'plan');
 
       await goTo('s1', 'manual');
@@ -360,10 +374,10 @@ describe('PermissionModePickerComponent', () => {
     });
 
     it('does not restore the note when session A\'s turn ended while the user was away', async () => {
-      const sessionState = signal<'generating' | 'idle'>('generating');
-      const { goTo } = await renderSwitchedAwayFromAndBackTo(sessionState);
+      const fleet = fakeFleet('generating', ['s1', 's2']);
+      const { goTo } = await renderSwitchedAwayFromAndBackTo(fleet);
       await goTo('s2', 'plan');
-      sessionState.set('idle');
+      setStateOf(fleet, 's1', 'idle');
 
       await goTo('s1', 'manual');
 

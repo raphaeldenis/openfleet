@@ -6,6 +6,8 @@ import { afterAll, beforeAll, describe, expect, it, onTestFinished, vi } from 'v
 import type { SessionState } from '@openfleet/shared';
 import { SessionActionsComponent } from './session-actions.component';
 import { FleetApiService } from '../core/fleet-api.service';
+import { FleetEventsService } from '../core/fleet-events.service';
+import { PendingSwitchesService } from '../core/pending-switches.service';
 import { deferred, settleRequests } from '../testing/session-view.testing';
 
 // jsdom lets focus() land inside an inert subtree, where a real browser drops it onto <body>; this
@@ -21,13 +23,12 @@ afterAll(() => {
   HTMLElement.prototype.focus = nativeFocus;
 });
 
-function bindingsFor(state: SessionState, options: { sessionName?: string; modelSwitchPending?: boolean } = {}) {
-  const { sessionName = 'Gimli · T6', modelSwitchPending = false } = options;
+function bindingsFor(state: SessionState, options: { sessionName?: string } = {}) {
+  const { sessionName = 'Gimli · T6' } = options;
   return [
     inputBinding('sessionId', () => 's1'),
     inputBinding('state', () => state),
     inputBinding('sessionName', () => sessionName),
-    inputBinding('modelSwitchPending', () => modelSwitchPending),
   ];
 }
 
@@ -92,28 +93,45 @@ describe('SessionActionsComponent', () => {
       await waitFor(() => expect(screen.getByTestId('close-confirm-cancel')).toHaveFocus());
     });
 
-    it('shows the pending model-switch warning only when a switch is pending', async () => {
-      const api = { closeSession: vi.fn(), sendInput: vi.fn() };
-      await render(SessionActionsComponent, {
-        bindings: bindingsFor('idle', { modelSwitchPending: true }),
-        providers: [{ provide: FleetApiService, useValue: api }],
+    describe('the pending model-switch warning', () => {
+      async function renderWithAModelSwitchAnswered(status: 'deferred' | 'relaunching') {
+        const api = { closeSession: vi.fn(), sendInput: vi.fn(), updateModel: vi.fn().mockResolvedValue({ status }) };
+        const fleet = { sessions: signal([{ id: 's1', name: 'Gimli', emoji: '⚔️', model: 'claude-sonnet-5', state: 'generating' }]), approvals: signal([]), managers: signal([]) };
+        const { fixture } = await render(SessionActionsComponent, {
+          bindings: bindingsFor('generating'),
+          providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: fleet }],
+        });
+        await fixture.debugElement.injector.get(PendingSwitchesService).request({ sessionId: 's1', kind: 'model', value: 'opus' });
+        return { fixture };
+      }
+
+      it('shows when a model switch waits for the turn to end', async () => {
+        await renderWithAModelSwitchAnswered('deferred');
+
+        await userEvent.click(screen.getByTestId('session-close'));
+
+        expect(screen.getByTestId('close-confirm-pending-switch')).toHaveTextContent('Closing cancels the pending model switch.');
       });
 
-      await userEvent.click(screen.getByTestId('session-close'));
+      it('stays hidden when the model switch relaunches at once', async () => {
+        await renderWithAModelSwitchAnswered('relaunching');
 
-      expect(screen.getByTestId('close-confirm-pending-switch')).toHaveTextContent('Closing cancels the pending model switch.');
-    });
+        await userEvent.click(screen.getByTestId('session-close'));
 
-    it('hides the pending model-switch warning when no switch is pending', async () => {
-      const api = { closeSession: vi.fn(), sendInput: vi.fn() };
-      await render(SessionActionsComponent, {
-        bindings: bindingsFor('idle', { modelSwitchPending: false }),
-        providers: [{ provide: FleetApiService, useValue: api }],
+        expect(screen.queryByTestId('close-confirm-pending-switch')).toBeNull();
       });
 
-      await userEvent.click(screen.getByTestId('session-close'));
+      it('stays hidden when no switch is pending', async () => {
+        const api = { closeSession: vi.fn(), sendInput: vi.fn() };
+        await render(SessionActionsComponent, {
+          bindings: bindingsFor('idle'),
+          providers: [{ provide: FleetApiService, useValue: api }],
+        });
 
-      expect(screen.queryByTestId('close-confirm-pending-switch')).toBeNull();
+        await userEvent.click(screen.getByTestId('session-close'));
+
+        expect(screen.queryByTestId('close-confirm-pending-switch')).toBeNull();
+      });
     });
 
     it('sends no request and returns focus to Close when Cancel is clicked', async () => {
@@ -180,7 +198,6 @@ describe('SessionActionsComponent', () => {
           inputBinding('sessionId', sessionId),
           inputBinding('state', () => 'idle' as const),
           inputBinding('sessionName', () => 'Gimli · T6'),
-          inputBinding('modelSwitchPending', () => false),
         ],
         providers: [{ provide: FleetApiService, useValue: api }],
       });
@@ -202,7 +219,6 @@ describe('SessionActionsComponent', () => {
           inputBinding('sessionId', sessionId),
           inputBinding('state', () => 'idle' as const),
           inputBinding('sessionName', () => 'Gimli · T6'),
-          inputBinding('modelSwitchPending', () => false),
         ],
         providers: [{ provide: FleetApiService, useValue: api }],
       });
@@ -297,7 +313,6 @@ describe('SessionActionsComponent', () => {
           inputBinding('sessionId', sessionId),
           inputBinding('state', () => 'generating' as const),
           inputBinding('sessionName', () => 'Gimli · T6'),
-          inputBinding('modelSwitchPending', () => false),
         ],
         providers: [{ provide: FleetApiService, useValue: api }],
       });
@@ -481,7 +496,6 @@ describe('SessionActionsComponent', () => {
           inputBinding('sessionId', sessionId),
           inputBinding('state', state),
           inputBinding('sessionName', () => 'Gimli · T6'),
-          inputBinding('modelSwitchPending', () => false),
         ],
         providers: [{ provide: FleetApiService, useValue: api }, ...extraProviders],
       });
@@ -672,6 +686,32 @@ describe('SessionActionsComponent', () => {
 
       expect(screen.getByTestId('session-action-error')).toHaveTextContent(/could not close/i);
       expect(screen.getByTestId('session-interrupt')).not.toHaveAttribute('disabled');
+    });
+
+    it('shows the failure of the interrupt that follows a failed close, not the older close failure', async () => {
+      const api = { closeSession: vi.fn().mockRejectedValue(new Error('boom')), sendInput: vi.fn().mockRejectedValue(new Error('boom')) };
+      const { flush } = await renderControllable(api, 'generating');
+      await confirmClose();
+      await flush();
+      expect(screen.getByTestId('session-action-error')).toHaveTextContent(/could not close/i);
+
+      await userEvent.click(screen.getByTestId('session-interrupt'));
+      await flush();
+
+      expect(screen.getByTestId('session-action-error')).toHaveTextContent(/could not interrupt/i);
+    });
+
+    it('shows the failure of the close that follows a failed interrupt, not the older interrupt failure', async () => {
+      const api = { closeSession: vi.fn().mockRejectedValue(new Error('boom')), sendInput: vi.fn().mockRejectedValue(new Error('boom')) };
+      const { flush } = await renderControllable(api, 'generating');
+      await userEvent.click(screen.getByTestId('session-interrupt'));
+      await flush();
+      expect(screen.getByTestId('session-action-error')).toHaveTextContent(/could not interrupt/i);
+
+      await confirmClose();
+      await flush();
+
+      expect(screen.getByTestId('session-action-error')).toHaveTextContent(/could not close/i);
     });
 
     it('sends no interrupt while a close is pending', async () => {

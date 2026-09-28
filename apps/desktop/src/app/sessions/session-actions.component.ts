@@ -1,6 +1,7 @@
-import { ChangeDetectionStrategy, Component, DestroyRef, ElementRef, Injector, afterNextRender, computed, effect, inject, input, signal, untracked, viewChild } from '@angular/core';
+import { ChangeDetectionStrategy, Component, DestroyRef, ElementRef, Injector, afterNextRender, computed, effect, inject, input, signal, viewChild } from '@angular/core';
 import type { SessionState } from '@openfleet/shared';
 import { FleetApiService } from '../core/fleet-api.service';
+import { PendingSwitchesService } from '../core/pending-switches.service';
 import { SessionRequestsService } from '../core/session-requests';
 
 const CLOSE_CONFIRM_BODY =
@@ -34,7 +35,7 @@ const ESCAPE_KEY = '\x1b';
         <div class="close-confirm" role="dialog" aria-modal="true" aria-labelledby="close-confirm-title" data-testid="close-confirm-dialog">
           <span id="close-confirm-title" class="close-confirm-title">Close {{ sessionName() }}?</span>
           <p class="close-confirm-body">{{ closeConfirmBody }}</p>
-          @if (modelSwitchPending()) {
+          @if (isModelSwitchDeferred()) {
             <p class="close-confirm-warning" role="alert" data-testid="close-confirm-pending-switch">{{ closeConfirmPendingSwitchWarning }}</p>
           }
           <div class="close-confirm-actions">
@@ -71,8 +72,8 @@ export class SessionActionsComponent {
   readonly sessionId = input.required<string>();
   readonly state = input.required<SessionState>();
   readonly sessionName = input.required<string>();
-  readonly modelSwitchPending = input(false);
   private readonly api = inject(FleetApiService);
+  private readonly pendingSwitches = inject(PendingSwitchesService);
   private readonly requests = inject(SessionRequestsService);
   private readonly injector = inject(Injector);
   private readonly destroyRef = inject(DestroyRef);
@@ -84,6 +85,7 @@ export class SessionActionsComponent {
   protected readonly closed = computed(() => this.state() === 'closed');
   protected readonly closing = computed(() => this.requests.isBusy(this.sessionId(), 'close'));
   protected readonly interrupting = computed(() => this.requests.isBusy(this.sessionId(), 'interrupt'));
+  protected readonly isModelSwitchDeferred = computed(() => this.pendingSwitches.pendingOf(this.sessionId(), 'model')?.status === 'deferred');
   private readonly closeError = computed(() => this.requests.errorOf(this.sessionId(), 'close'));
   private readonly interruptError = computed(() => this.requests.errorOf(this.sessionId(), 'interrupt'));
   protected readonly error = computed(() => this.closeError() ?? this.interruptError());
@@ -106,14 +108,6 @@ export class SessionActionsComponent {
     effect(() => {
       this.sessionId();
       this.confirmingClose.set(false);
-    });
-    // A closed session has no Close or Interrupt left to retry, and a resume must not bring their errors back.
-    effect(() => {
-      const hasErrorOnClosedSession = this.closed() && this.error() !== null;
-      if (!hasErrorOnClosedSession) return;
-      const sessionId = untracked(this.sessionId);
-      this.requests.clearError(sessionId, 'close');
-      this.requests.clearError(sessionId, 'interrupt');
     });
   }
 
@@ -170,12 +164,15 @@ export class SessionActionsComponent {
     focusable[nextIndex]!.focus();
   }
 
+  // Only the failure of the latest of the two actions is shown.
   private async close(sessionId: string): Promise<void> {
+    this.requests.clearError(sessionId, 'interrupt');
     await this.requests.run({ sessionId, kind: 'close', message: CLOSE_ERROR, action: () => this.api.closeSession(sessionId) });
   }
 
   async interrupt(): Promise<void> {
     const sessionId = this.sessionId();
+    this.requests.clearError(sessionId, 'close');
     await this.requests.run({ sessionId, kind: 'interrupt', message: INTERRUPT_ERROR, action: () => this.api.sendInput(sessionId, ESCAPE_KEY) });
   }
 
