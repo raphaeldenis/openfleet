@@ -56,6 +56,17 @@ describe('FleetApiService', () => {
     await expect(api.reopenSession('s1')).resolves.toEqual(session);
   });
 
+  it('reads the resolved model table from GET /api/models', async () => {
+    const modelTable = { haiku: 'h', sonnet: 's', opus: 'o', fable: 'f' };
+    fetchMock.mockResolvedValue(fakeResponse({ ok: true, status: 200, json: () => Promise.resolve(modelTable) }));
+
+    await expect(api.models()).resolves.toEqual(modelTable);
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toMatch(/\/api\/models$/);
+    expect(init.method).toBeUndefined();
+  });
+
   it('sends the admin bearer token and JSON content type on every request', async () => {
     fetchMock.mockResolvedValue(fakeResponse({ ok: true, status: 200, json: () => Promise.resolve({}) }));
 

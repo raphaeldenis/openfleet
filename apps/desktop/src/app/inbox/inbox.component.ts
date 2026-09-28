@@ -4,6 +4,7 @@ import { compactElapsedLabel, elapsedSecondsSince } from '../design/elapsed-time
 import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { KindBadgeComponent } from '../design/kind-badge.component';
+import { focusTabAt, nextTabIndex } from '../design/tablist-keyboard';
 
 type InboxTab = 'gates' | 'questions' | 'proposals';
 type FilterKey = 'all' | 'unread' | 'mine' | 'blocked' | 'recent';
@@ -32,8 +33,6 @@ const TABS: readonly { readonly key: InboxTab; readonly label: string }[] = [
   { key: 'proposals', label: 'Governance proposals' },
 ];
 
-const LAST_TAB_INDEX = TABS.length - 1;
-
 const BIDI_CONTROL_CHARACTERS = /[؜‎‏‪-‮⁦-⁩]/g;
 
 function showBidiControlsAsEscapes(text: string): string {
@@ -47,20 +46,6 @@ interface FormattedInput {
 
 function formatInput(toolInput: unknown): FormattedInput {
   return { toolInput, text: showBidiControlsAsEscapes(JSON.stringify(toolInput, null, 2) ?? '') };
-}
-
-function hasModifierKey(event: KeyboardEvent): boolean {
-  return event.altKey || event.ctrlKey || event.metaKey || event.shiftKey;
-}
-
-function tabIndexAfterKey(key: string, currentIndex: number): number | undefined {
-  switch (key) {
-    case 'ArrowRight': return currentIndex === LAST_TAB_INDEX ? 0 : currentIndex + 1;
-    case 'ArrowLeft': return currentIndex === 0 ? LAST_TAB_INDEX : currentIndex - 1;
-    case 'Home': return 0;
-    case 'End': return LAST_TAB_INDEX;
-    default: return undefined;
-  }
 }
 
 @Component({
@@ -230,14 +215,12 @@ export class InboxComponent {
   );
 
   protected onTabKeydown(event: KeyboardEvent): void {
-    if (hasModifierKey(event)) return;
     const currentIndex = TABS.findIndex((entry) => entry.key === this.tab());
-    const targetIndex = tabIndexAfterKey(event.key, currentIndex);
+    const targetIndex = nextTabIndex(event, { currentIndex, tabCount: TABS.length, orientation: 'horizontal' });
     if (targetIndex === undefined) return;
     event.preventDefault();
     this.tab.set(TABS[targetIndex].key);
-    const tabButtons = (event.currentTarget as HTMLElement).querySelectorAll<HTMLElement>('[role="tab"]');
-    tabButtons[targetIndex].focus();
+    focusTabAt(event.currentTarget as HTMLElement, targetIndex);
   }
 
   async decide(id: string, behavior: 'allow' | 'deny'): Promise<void> {

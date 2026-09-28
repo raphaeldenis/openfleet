@@ -394,3 +394,106 @@ describe('FleetEventsService reconnect', () => {
     expect(service.reconnectCount()).toBe(1);
   });
 });
+
+describe('FleetEventsService closedAt', () => {
+  const CLOSED_AT = '2026-09-26T10:00:00.000Z';
+
+  function sessionWithClosedAt(id: string, state: string, closedAt: string | undefined = CLOSED_AT) {
+    return { ...session(id, { state }), closedAt };
+  }
+
+  function connectedServiceWith(sessions: unknown[]) {
+    const service = new FleetEventsService();
+    service.connect();
+    const socket = FakeWebSocket.instances[0]!;
+    socket.dispatchMessage({ type: 'snapshot', sessions, approvals: [] });
+    return { service, socket };
+  }
+
+  beforeEach(() => {
+    FakeWebSocket.instances = [];
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    localStorage.clear();
+  });
+
+  describe('snapshot', () => {
+    it.each([
+      ['closed', CLOSED_AT],
+      ['starting', CLOSED_AT],
+      ['idle', undefined],
+      ['generating', undefined],
+    ])('a %s session comes out of the snapshot with closedAt %s', (state, expectedClosedAt) => {
+      const { service } = connectedServiceWith([sessionWithClosedAt('s1', state)]);
+
+      expect(service.sessions()[0]!.closedAt).toBe(expectedClosedAt);
+    });
+  });
+
+  describe('session.updated and session.created', () => {
+    it('drops the stale closedAt a model relaunch brings back on the full row of a session that was live', () => {
+      const { service, socket } = connectedServiceWith([session('s1', { state: 'idle' })]);
+      socket.dispatchMessage({ type: 'session.state', sessionId: 's1', state: 'starting', stateSince: 't2' });
+
+      socket.dispatchMessage({ type: 'session.updated', session: sessionWithClosedAt('s1', 'starting') });
+
+      expect(service.sessions()[0]!.closedAt).toBeUndefined();
+    });
+
+    it('drops the stale closedAt a rename of a live session brings back', () => {
+      const { service, socket } = connectedServiceWith([session('s1', { state: 'idle' })]);
+
+      socket.dispatchMessage({ type: 'session.updated', session: sessionWithClosedAt('s1', 'idle') });
+
+      expect(service.sessions()[0]!.closedAt).toBeUndefined();
+    });
+
+    it('keeps the closedAt of a full row that arrives while the session is coming back from a close', () => {
+      const { service, socket } = connectedServiceWith([sessionWithClosedAt('s1', 'closed')]);
+      socket.dispatchMessage({ type: 'session.state', sessionId: 's1', state: 'starting', stateSince: 't2' });
+
+      socket.dispatchMessage({ type: 'session.updated', session: sessionWithClosedAt('s1', 'starting') });
+
+      expect(service.sessions()[0]!.closedAt).toBe(CLOSED_AT);
+    });
+
+    it('keeps the closedAt of a full row of a session that is closed', () => {
+      const { service, socket } = connectedServiceWith([session('s1', { state: 'idle' })]);
+      socket.dispatchMessage({ type: 'session.closed', sessionId: 's1', exitCode: 0 });
+
+      socket.dispatchMessage({ type: 'session.updated', session: sessionWithClosedAt('s1', 'closed') });
+
+      expect(service.sessions()[0]!.closedAt).toBe(CLOSED_AT);
+    });
+  });
+
+  describe('patches', () => {
+    it('keeps the closedAt of a closed session while it starts again, and drops it once it is live', () => {
+      const { service, socket } = connectedServiceWith([sessionWithClosedAt('s1', 'closed')]);
+
+      socket.dispatchMessage({ type: 'session.state', sessionId: 's1', state: 'starting', stateSince: 't2' });
+      expect(service.sessions()[0]!.closedAt).toBe(CLOSED_AT);
+
+      socket.dispatchMessage({ type: 'session.state', sessionId: 's1', state: 'idle', stateSince: 't3' });
+      expect(service.sessions()[0]!.closedAt).toBeUndefined();
+    });
+
+    it('stamps a closedAt on a session closed live once it is reopened, and drops it once it is live', () => {
+      const { service, socket } = connectedServiceWith([session('s1', { state: 'idle' })]);
+      socket.dispatchMessage({ type: 'session.closed', sessionId: 's1', exitCode: 0 });
+
+      socket.dispatchMessage({ type: 'session.reopened', sessionId: 's1' });
+      expect(service.sessions()[0]!.closedAt).toBeDefined();
+
+      socket.dispatchMessage({ type: 'session.state', sessionId: 's1', state: 'idle', stateSince: 't3' });
+      expect(service.sessions()[0]!.closedAt).toBeUndefined();
+    });
+
+    it('gives a live session that relaunches no closedAt', () => {
+      const { service, socket } = connectedServiceWith([sessionWithClosedAt('s1', 'idle')]);
+
+      socket.dispatchMessage({ type: 'session.state', sessionId: 's1', state: 'starting', stateSince: 't2' });
+
+      expect(service.sessions()[0]!.closedAt).toBeUndefined();
+    });
+  });
+});

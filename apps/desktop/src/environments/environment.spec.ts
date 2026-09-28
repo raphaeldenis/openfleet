@@ -63,6 +63,12 @@ describe('environment', () => {
     expect(environment.daemonAddress).toBe('127.0.0.1:7331');
   });
 
+  it('daemonAddress keeps a stored path prefix and drops its scheme and trailing slash', () => {
+    localStorage.setItem('openfleet.apiUrl', 'http://127.0.0.1:7331/openfleet/');
+
+    expect(environment.daemonAddress).toBe('127.0.0.1:7331/openfleet');
+  });
+
   it('apiUrl keeps a path prefix and strips only the trailing slash after it', () => {
     localStorage.setItem('openfleet.apiUrl', 'http://127.0.0.1:1/openfleet/');
 
