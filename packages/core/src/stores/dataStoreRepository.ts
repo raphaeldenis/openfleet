@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import type { DatabaseSync } from 'node:sqlite';
 import type { ColumnType, DataStore, DsColumn, DsRow, DsRowChange, DsRowHistoryEntry, DsView, DsViewConfig, RowActorKind, SelectOption, ViewType } from '@openfleet/shared';
+import { inTransaction as runInTransaction } from '../db/transaction.js';
 import { newId } from '../ids.js';
 
 export interface RowActor { kind: RowActorKind; label: string }
@@ -169,6 +170,11 @@ export class DataStoreRepository {
     return rows.map(toRow);
   }
 
+  countRows(storeId: string): number {
+    const { n } = this.db.prepare('SELECT COUNT(*) AS n FROM ds_rows WHERE store_id = ?').get(storeId) as { n: number };
+    return n;
+  }
+
   /** Newest first, at most `limit` entries when given. Authorizes through the entry's own store, so a deleted row's trail stays readable. */
   rowHistory(rowId: string, scope: { projectId: string; limit?: number }): DsRowHistoryEntry[] {
     const entries = this.db.prepare(
@@ -223,20 +229,6 @@ export class DataStoreRepository {
 
   /** Runs `work` atomically: a transaction of its own, or a savepoint when the caller already holds one. */
   private inTransaction<T>(work: () => T): T {
-    const isInsideCallerTransaction = this.db.isTransaction;
-    const begin = isInsideCallerTransaction ? `SAVEPOINT ${WRITE_SAVEPOINT}` : 'BEGIN IMMEDIATE';
-    const commit = isInsideCallerTransaction ? `RELEASE ${WRITE_SAVEPOINT}` : 'COMMIT';
-    const rollback = isInsideCallerTransaction ? `ROLLBACK TO ${WRITE_SAVEPOINT}; RELEASE ${WRITE_SAVEPOINT}` : 'ROLLBACK';
-
-    this.db.exec(begin);
-    try {
-      const result = work();
-      this.db.exec(commit);
-      return result;
-    } catch (error) {
-      const hasDatabaseAlreadyRolledBack = !this.db.isTransaction;
-      if (!hasDatabaseAlreadyRolledBack) this.db.exec(rollback);
-      throw error;
-    }
+    return runInTransaction(this.db, WRITE_SAVEPOINT, work);
   }
 }

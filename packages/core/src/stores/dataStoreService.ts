@@ -1,9 +1,11 @@
+import { isDeepStrictEqual } from 'node:util';
 import type { DatabaseSync } from 'node:sqlite';
 import {
   COLUMN_TYPES, DsViewConfigSchema, OrderTermSchema, SelectOptionSchema, VIEW_TYPES, WhereClauseSchema,
   type ColumnType, type DataStore, type DsColumn, type DsRow, type DsView, type DsViewConfig, type OrderTerm, type SelectOption, type ViewType, type WhereClause,
 } from '@openfleet/shared';
 import { z } from 'zod';
+import { inTransaction as runInTransaction } from '../db/transaction.js';
 import { DuplicateNameError, StoreNotFoundError, UnknownColumnError, type DataStoreRepository, type RowActor } from './dataStoreRepository.js';
 
 export class InvalidCellValueError extends Error {
@@ -18,6 +20,11 @@ export class InvalidViewConfigError extends Error {}
 export class InvalidActorError extends Error {}
 export class DuplicateIdError extends Error {}
 export class ConstraintError extends Error {}
+export class DataStoreWriteError extends Error {
+  constructor(message: string, options: { cause: unknown }) {
+    super(message, options);
+  }
+}
 export class ViewNotFoundError extends Error {
   constructor(readonly viewId: string) {
     super(`View ${viewId} not found`);
@@ -63,17 +70,33 @@ function isValidCell(column: DsColumn, value: unknown): boolean {
     case 'number': return typeof value === 'number' && Number.isFinite(value);
     case 'date': return typeof value === 'string' && isIsoDate(value);
     case 'select': return typeof value === 'string' && (column.options ?? []).some((option) => option.id === value);
-    case 'json': return !['undefined', 'function', 'symbol', 'bigint'].includes(typeof value);
+    case 'json': return survivesJsonRoundTrip(value);
+  }
+}
+
+/** A json cell is only valid if it comes back unchanged from JSON.stringify/parse: no NaN, Infinity, -0, Date, undefined, function… */
+function survivesJsonRoundTrip(value: unknown): boolean {
+  try {
+    return isDeepStrictEqual(value, JSON.parse(JSON.stringify(value)) as unknown);
+  } catch {
+    return false;
   }
 }
 
 const isEmptyCell = (value: unknown): boolean => value === undefined || value === null;
 const typeRank = (value: unknown): number => (typeof value === 'number' ? 0 : typeof value === 'string' ? 1 : typeof value === 'boolean' ? 2 : 3);
 
-/** Total order that never throws: numbers, then strings, then booleans, then the rest (all equal). */
-function compareCells(a: unknown, b: unknown): number {
+/** Total order that never throws: numbers, then strings (parsed as dates for a date column), then booleans, then the rest (all equal). */
+function compareCells(column: DsColumn, a: unknown, b: unknown): number {
   if (typeof a === 'number' && typeof b === 'number') return a - b;
-  if (typeof a === 'string' && typeof b === 'string') return a < b ? -1 : a > b ? 1 : 0;
+  if (typeof a === 'string' && typeof b === 'string') {
+    if (column.columnType === 'date') {
+      const [timeA, timeB] = [Date.parse(a), Date.parse(b)];
+      if (!Number.isNaN(timeA) && !Number.isNaN(timeB)) return timeA - timeB;
+    }
+    // ponytail: ordinal code-point order is deterministic; add localeCompare later if users need alphabetic sorting
+    return a < b ? -1 : a > b ? 1 : 0;
+  }
   if (typeof a === 'boolean' && typeof b === 'boolean') return Number(a) - Number(b);
   return typeRank(a) - typeRank(b);
 }
@@ -86,7 +109,7 @@ function orderOf(column: DsColumn, cell: unknown, target: unknown): number | und
     const [cellTime, targetTime] = [Date.parse(cell), Date.parse(target)];
     return Number.isNaN(cellTime) || Number.isNaN(targetTime) ? undefined : cellTime - targetTime;
   }
-  return compareCells(cell, target);
+  return compareCells(column, cell, target);
 }
 
 function matches(column: DsColumn, cell: unknown, clause: WhereClause): boolean {
@@ -103,11 +126,13 @@ function matches(column: DsColumn, cell: unknown, clause: WhereClause): boolean 
   }
 }
 
-const isSameValue = (a: unknown, b: unknown): boolean => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+const isSameValue = (a: unknown, b: unknown): boolean => isDeepStrictEqual(a ?? null, b ?? null);
 
-/** Maps raw SQLite errors to typed ones so no SQL text leaves the service. */
+/** Maps raw SQLite errors to typed ones so no SQL text leaves the service; a typed application error (not from SQLite) passes through untouched. */
 function mapDatabaseError(error: unknown): unknown {
-  if (!(error instanceof Error) || !/constraint failed/i.test(error.message)) return error;
+  const isSqliteError = error instanceof Error && (error as NodeJS.ErrnoException).code === 'ERR_SQLITE_ERROR';
+  if (!isSqliteError) return error;
+  if (!/constraint failed/i.test(error.message)) return new DataStoreWriteError('The write failed', { cause: error });
   if (/UNIQUE constraint failed: \w+\.id\b|PRIMARY KEY/i.test(error.message)) return new DuplicateIdError('That id is already in use');
   if (/actor_kind/i.test(error.message)) return new InvalidActorError('Actor kind must be human, agent or trigger');
   if (/UNIQUE constraint failed/i.test(error.message)) return new DuplicateNameError('name');
@@ -160,7 +185,7 @@ export class DataStoreService {
   deleteStore(storeId: string, input: Scope & { force?: boolean }): void {
     this.authorize(storeId, input.projectId);
     this.inTransaction(() => {
-      const rowCount = this.repo.listRows(storeId).length;
+      const rowCount = this.repo.countRows(storeId);
       if (rowCount > 0 && input.force !== true) throw new StoreHasRowsError(storeId, rowCount);
       this.repo.deleteStore(storeId);
     });
@@ -267,7 +292,7 @@ export class DataStoreService {
       for (const { columnId, dir } of orderBy.data) {
         const [cellA, cellB] = [a.data[columnId], b.data[columnId]];
         if (isEmptyCell(cellA) !== isEmptyCell(cellB)) return isEmptyCell(cellA) ? 1 : -1;
-        const order = compareCells(cellA, cellB);
+        const order = compareCells(columnById.get(columnId)!, cellA, cellB);
         if (order !== 0) return dir === 'asc' ? order : -order;
       }
       return 0;
@@ -285,14 +310,9 @@ export class DataStoreService {
 
   /** One outer transaction (or a savepoint when the caller holds one) so a batch is all-or-nothing; the repository nests inside. */
   private inTransaction<T>(work: () => T): T {
-    const isInsideCallerTransaction = this.db.isTransaction;
-    this.db.exec(isInsideCallerTransaction ? `SAVEPOINT ${BATCH_SAVEPOINT}` : 'BEGIN IMMEDIATE');
     try {
-      const result = work();
-      this.db.exec(isInsideCallerTransaction ? `RELEASE ${BATCH_SAVEPOINT}` : 'COMMIT');
-      return result;
+      return runInTransaction(this.db, BATCH_SAVEPOINT, work);
     } catch (error) {
-      if (this.db.isTransaction) this.db.exec(isInsideCallerTransaction ? `ROLLBACK TO ${BATCH_SAVEPOINT}; RELEASE ${BATCH_SAVEPOINT}` : 'ROLLBACK');
       throw mapDatabaseError(error);
     }
   }

@@ -4,7 +4,7 @@ import { openDatabase } from '../db/database.js';
 import { ProjectRepository } from '../projects/projectRepository.js';
 import { DataStoreRepository, DuplicateNameError, RowNotFoundError, StoreNotFoundError, UnknownColumnError } from './dataStoreRepository.js';
 import {
-  ConstraintError, DataStoreService, DuplicateIdError, InvalidActorError, InvalidCellValueError, InvalidColumnDefinitionError,
+  ConstraintError, DataStoreService, DataStoreWriteError, DuplicateIdError, InvalidActorError, InvalidCellValueError, InvalidColumnDefinitionError,
   InvalidNameError, StoreHasRowsError, ViewNotFoundError,
 } from './dataStoreService.js';
 
@@ -110,6 +110,30 @@ describe('DataStoreService', () => {
       expect(thrownBy(() => service.query(store.id, { ...scope, orderBy: [{ columnId: 'nope', dir: 'asc' }] }))).toBeInstanceOf(UnknownColumnError);
       expect(() => service.query(store.id, { ...scope, limit: -1 })).toThrow();
     });
+
+    it('sorts a date column by parsed time, not by string order', () => {
+      const { service, store, cols } = backlog();
+      const early = '2026-01-01T00:00:00+02:00'; // 2025-12-31T22:00:00.000Z
+      const late = '2025-12-31T23:00:00Z'; // an hour after early, despite sorting first as a string
+      service.insertRow(store.id, { ...scope, data: { [cols.due]: late }, actor: human });
+      service.insertRow(store.id, { ...scope, data: { [cols.due]: early }, actor: human });
+
+      const dates = service.query(store.id, { ...scope, orderBy: [{ columnId: cols.due, dir: 'asc' }] }).map((r) => r.data[cols.due]);
+
+      expect(dates).toEqual([early, late]);
+    });
+
+    it('eq/neq compare parsed values deeply: key order does not matter, array order does', () => {
+      const { service, store, cols } = backlog();
+      const byKeys = service.insertRow(store.id, { ...scope, data: { [cols.meta]: { a: 1, b: 2 } }, actor: human });
+      service.insertRow(store.id, { ...scope, data: { [cols.meta]: [1, 2] }, actor: human });
+
+      const matchingByKeyOrder = service.query(store.id, { ...scope, where: [{ columnId: cols.meta, op: 'eq', value: { b: 2, a: 1 } }] });
+      const matchingByArrayOrder = service.query(store.id, { ...scope, where: [{ columnId: cols.meta, op: 'eq', value: [2, 1] }] });
+
+      expect(matchingByKeyOrder.map((r) => r.id)).toEqual([byKeys.id]);
+      expect(matchingByArrayOrder).toEqual([]);
+    });
   });
 
   describe('views and kanban', () => {
@@ -195,6 +219,9 @@ describe('DataStoreService', () => {
       ['text: number', 'title', 5],
       ['text: object', 'title', {}],
       ['json: function', 'meta', () => 1],
+      ['json: NaN', 'meta', Number.NaN],
+      ['json: nested Infinity', 'meta', { a: Number.POSITIVE_INFINITY }],
+      ['json: Date', 'meta', new Date(0)],
     ];
 
     it.each(accepted)('accepts a valid %s value on insert and update', (_name, build) => {
@@ -359,6 +386,25 @@ describe('DataStoreService', () => {
       expect([ctx.rowCount(), ctx.historyCount()]).toEqual([0, 0]);
     });
 
+    it('nests repository writes inside a service batch: a mid-batch database failure rolls back only the batch, leaving the outer caller transaction and its earlier write intact', () => {
+      let calls = 0;
+      const ctx = setup({ newId: () => (calls++ < 4 ? `id-${calls}` : 'id-4') });
+      const store = ctx.service.createStore({ ...scope, displayName: 's' }); // id-1
+      ctx.service.addColumn(store.id, { ...scope, displayName: 'c', columnType: 'text' }); // id-2
+
+      ctx.db.exec('BEGIN');
+      const survivor = ctx.service.insertRow(store.id, { ...scope, data: {}, actor: human }); // id-3
+
+      const error = thrownBy(() => ctx.service.insertRows(store.id, { ...scope, actor: human, items: [{}, {}] })); // id-4, id-4 (collides)
+
+      expect(error).toBeInstanceOf(DuplicateIdError);
+      expect(ctx.db.isTransaction).toBe(true);
+      expect(ctx.repo.listRows(store.id).map((row) => row.id)).toEqual([survivor.id]);
+
+      ctx.db.exec('COMMIT');
+      expect(ctx.repo.listRows(store.id).map((row) => row.id)).toEqual([survivor.id]);
+    });
+
     it('updateRows applies every patch or none', () => {
       const { service, store, cols, repo } = backlog();
       const [a, b] = service.insertRows(store.id, { ...scope, actor: human, items: [{ [cols.priority]: 1 }, { [cols.priority]: 2 }] }) as unknown as [{ id: string }, { id: string }];
@@ -403,6 +449,17 @@ describe('DataStoreService', () => {
 
       expect(error).toBeInstanceOf(ConstraintError);
       expect((error as Error).message).not.toMatch(/sqlite|FOREIGN/i);
+    });
+
+    it('maps every other SQLite error to an opaque DataStoreWriteError, with the original as cause', () => {
+      const { service, store, db } = backlog();
+      db.exec("CREATE TRIGGER refuse_insert BEFORE INSERT ON ds_rows BEGIN SELECT RAISE(ABORT, 'x'); END");
+
+      const error = thrownBy(() => service.insertRow(store.id, { ...scope, data: {}, actor: human }));
+
+      expect(error).toBeInstanceOf(DataStoreWriteError);
+      expect((error as Error).message).not.toMatch(/select|insert|from|where|ds_rows|sqlite/i);
+      expect((error as Error & { cause: unknown }).cause).toBeInstanceOf(Error);
     });
   });
 });
