@@ -7,7 +7,7 @@ import { FakeHandle, FakeHarness } from '../harness/fakeHarness.js';
 import type { Harness, HarnessHandle, HarnessLaunch } from '../harness/harness.js';
 import { EventBus } from '../events/eventBus.js';
 import { makeRepo } from '../git/testRepo.js';
-import { DaemonShuttingDownError, DEFAULT_CLOSE_ESCALATE_MS, DELIVERY_RETRY_MS, MAX_DELIVERY_RETRIES, PARKED_RETRY_MS, RESUME_LAUNCH_FAILED_EXIT_CODE, RESUME_TIMEOUT_EXIT_CODE, SessionReopenError, SessionService, SUBMIT_KEYSTROKE_DELAY_MS, TRANSCRIPT_INTERRUPT_POLL_MS, TRANSCRIPT_INTERRUPT_TIMEOUT_MS, TURN_START_TIMEOUT_MS } from './sessionService.js';
+import { DaemonShuttingDownError, DEFAULT_CLOSE_ESCALATE_MS, DELIVERY_RETRY_MS, MAX_DELIVERY_RETRIES, MAX_PENDING_AGENT_MESSAGES_PER_SENDER, PARKED_RETRY_MS, RESUME_LAUNCH_FAILED_EXIT_CODE, RESUME_TIMEOUT_EXIT_CODE, SessionClosedError, SessionReopenError, SessionService, SUBMIT_KEYSTROKE_DELAY_MS, TRANSCRIPT_INTERRUPT_POLL_MS, TRANSCRIPT_INTERRUPT_TIMEOUT_MS, TURN_START_TIMEOUT_MS } from './sessionService.js';
 import { MessageQueue } from './messageQueue.js';
 import { SessionRepository } from './sessionRepository.js';
 import { PERMISSION_MODES, type ServerEvent } from '@openfleet/shared';
@@ -339,6 +339,117 @@ describe('SessionService agent message envelope', () => {
 
     const everythingTyped = harness.handles[1]!.written.join('');
     expect(everythingTyped).not.toContain('corrected retry');
+  });
+});
+
+describe('SessionService agent message flood bound', () => {
+  const blockTarget = (service: ReturnType<typeof setup>['service'], targetId: string) =>
+    service.applyInput(targetId, hook(targetId, { hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: {} })); // keeps every message queued
+  const queueFrom = (service: ReturnType<typeof setup>['service'], input: { targetId: string; senderId: string; count: number }) => {
+    for (let i = 0; i < input.count; i++) service.sendMessage({ sessionId: input.targetId, body: `msg ${i}`, fromSessionId: input.senderId });
+  };
+
+  it('accepts MAX_PENDING_AGENT_MESSAGES_PER_SENDER pending messages from one sender and refuses the next', async () => {
+    vi.useFakeTimers();
+    const { service } = setup();
+    const sender = await service.create({ directory: '/tmp', name: 'Sender', harness: 'fake', emoji: '🤖' });
+    const target = await service.create({ directory: '/tmp', name: 'Target', harness: 'fake', emoji: '🤖' });
+    blockTarget(service, target.id);
+
+    queueFrom(service, { targetId: target.id, senderId: sender.id, count: MAX_PENDING_AGENT_MESSAGES_PER_SENDER });
+
+    expect(() => service.sendMessage({ sessionId: target.id, body: 'one too many', fromSessionId: sender.id }))
+      .toThrow(`too many pending messages to ${target.id}: 20 already queued, wait for delivery`);
+    expect(service.queuedMessageCount(target.id)).toBe(MAX_PENDING_AGENT_MESSAGES_PER_SENDER);
+  });
+
+  it('still accepts a message from another sender while the first sender is at the limit', async () => {
+    vi.useFakeTimers();
+    const { service } = setup();
+    const floodingSender = await service.create({ directory: '/tmp', name: 'SenderA', harness: 'fake', emoji: '🤖' });
+    const otherSender = await service.create({ directory: '/tmp', name: 'SenderB', harness: 'fake', emoji: '🤖' });
+    const target = await service.create({ directory: '/tmp', name: 'Target', harness: 'fake', emoji: '🤖' });
+    blockTarget(service, target.id);
+    queueFrom(service, { targetId: target.id, senderId: floodingSender.id, count: MAX_PENDING_AGENT_MESSAGES_PER_SENDER });
+
+    const fromOtherSender = service.sendMessage({ sessionId: target.id, body: 'unrelated', fromSessionId: otherSender.id });
+
+    expect(fromOtherSender.status).toBe('queued');
+  });
+
+  it('lets a sender queue again once one of its messages is delivered', async () => {
+    vi.useFakeTimers();
+    const { service } = setup();
+    const sender = await service.create({ directory: '/tmp', name: 'Sender', harness: 'fake', emoji: '🤖' });
+    const target = await service.create({ directory: '/tmp', name: 'Target', harness: 'fake', emoji: '🤖' });
+    blockTarget(service, target.id);
+    queueFrom(service, { targetId: target.id, senderId: sender.id, count: MAX_PENDING_AGENT_MESSAGES_PER_SENDER });
+
+    service.applyInput(target.id, hook(target.id, { hook_event_name: 'UserPromptSubmit' }));
+    service.applyInput(target.id, hook(target.id, { hook_event_name: 'Stop' })); // back to idle: the oldest message is typed
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
+
+    const afterDelivery = service.sendMessage({ sessionId: target.id, body: 'room again', fromSessionId: sender.id });
+    expect(afterDelivery.messageId).toEqual(expect.any(String));
+  });
+
+  it('answers a resent message_id with the existing id even when the sender is at the limit', async () => {
+    vi.useFakeTimers();
+    const { service } = setup();
+    const sender = await service.create({ directory: '/tmp', name: 'Sender', harness: 'fake', emoji: '🤖' });
+    const target = await service.create({ directory: '/tmp', name: 'Target', harness: 'fake', emoji: '🤖' });
+    blockTarget(service, target.id);
+    queueFrom(service, { targetId: target.id, senderId: sender.id, count: MAX_PENDING_AGENT_MESSAGES_PER_SENDER - 1 });
+    service.sendMessage({ sessionId: target.id, body: 'the retried one', fromSessionId: sender.id, messageId: 'retried-id' });
+
+    const resend = service.sendMessage({ sessionId: target.id, body: 'the retried one', fromSessionId: sender.id, messageId: 'retried-id' });
+
+    expect(resend).toEqual({ status: 'queued', messageId: 'retried-id' });
+    expect(service.queuedMessageCount(target.id)).toBe(MAX_PENDING_AGENT_MESSAGES_PER_SENDER);
+  });
+
+  it('never caps human REST messages or pulses, which carry no fromSessionId', async () => {
+    vi.useFakeTimers();
+    const { service } = setup();
+    const sender = await service.create({ directory: '/tmp', name: 'Sender', harness: 'fake', emoji: '🤖' });
+    const target = await service.create({ directory: '/tmp', name: 'Target', harness: 'fake', emoji: '🤖' });
+    blockTarget(service, target.id);
+    queueFrom(service, { targetId: target.id, senderId: sender.id, count: MAX_PENDING_AGENT_MESSAGES_PER_SENDER });
+    const uncappedCount = MAX_PENDING_AGENT_MESSAGES_PER_SENDER + 5;
+
+    for (let i = 0; i < uncappedCount; i++) service.sendMessage({ sessionId: target.id, body: `human ${i}` });
+    service.sendMessage({ sessionId: target.id, body: '[pulse] re-read your mission' });
+
+    expect(service.queuedMessageCount(target.id)).toBe(MAX_PENDING_AGENT_MESSAGES_PER_SENDER + uncappedCount + 1);
+  });
+
+  it('still lets a sender at the limit toward one target message a different target', async () => {
+    vi.useFakeTimers();
+    const { service } = setup();
+    const sender = await service.create({ directory: '/tmp', name: 'Sender', harness: 'fake', emoji: '🤖' });
+    const floodedTarget = await service.create({ directory: '/tmp', name: 'Flooded', harness: 'fake', emoji: '🤖' });
+    const otherTarget = await service.create({ directory: '/tmp', name: 'Other', harness: 'fake', emoji: '🤖' });
+    blockTarget(service, floodedTarget.id);
+    blockTarget(service, otherTarget.id);
+    queueFrom(service, { targetId: floodedTarget.id, senderId: sender.id, count: MAX_PENDING_AGENT_MESSAGES_PER_SENDER });
+
+    const toOtherTarget = service.sendMessage({ sessionId: otherTarget.id, body: 'different peer', fromSessionId: sender.id });
+
+    expect(toOtherTarget.status).toBe('queued');
+  });
+
+  it('reports a closed target as closed, not as a full queue, even when the sender is at the limit', async () => {
+    vi.useFakeTimers();
+    const { service } = setup();
+    const sender = await service.create({ directory: '/tmp', name: 'Sender', harness: 'fake', emoji: '🤖' });
+    const target = await service.create({ directory: '/tmp', name: 'Target', harness: 'fake', emoji: '🤖' });
+    blockTarget(service, target.id);
+    queueFrom(service, { targetId: target.id, senderId: sender.id, count: MAX_PENDING_AGENT_MESSAGES_PER_SENDER });
+    await service.close(target.id);
+
+    const sendToClosedTarget = () => service.sendMessage({ sessionId: target.id, body: 'too late', fromSessionId: sender.id });
+
+    expect(sendToClosedTarget).toThrow(SessionClosedError);
   });
 });
 
@@ -800,6 +911,7 @@ describe('SessionService.updateModel', () => {
     expect(rotated.hookToken).not.toBe(originalTokens.hookToken);
     expect(rotated.mcpToken).not.toBe(originalTokens.mcpToken);
     expect(service.get(session.id)!.state).toBe('starting');
+    expect(events.some((e) => e.type === 'session.state' && e.state === 'starting' && e.sessionId === session.id)).toBe(true);
 
     // The relaunched process reports SessionStart exactly like a fresh resume: same path, same landing state.
     service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
@@ -1313,6 +1425,68 @@ describe('SessionService submit-keystroke hostile cases', () => {
       expect(service.get(session.id)!.state).toBe('idle');
     });
 
+    it('keeps a new turn generating when its UserPromptSubmit arrives before the previous turn\'s interrupt line is written (no disarm on a no-op state transition)', async () => {
+      vi.useFakeTimers();
+      const { service } = setup();
+      const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+      const transcriptPath = makeTranscriptFile();
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: transcriptPath }));
+      expect(service.get(session.id)!.state).toBe('generating');
+
+      service.writeRaw(session.id, '\x1b'); // human presses Escape while the CLI is generating turn 1
+      // The user submits a new prompt before the CLI's own reaction to the ESC is written to the
+      // transcript and before the next poll: UserPromptSubmit while already 'generating' is a no-op
+      // state transition, which must still disarm the watch armed for the turn that just ended.
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: transcriptPath }));
+      appendFileSync(transcriptPath, interruptedLine()); // turn 1's interrupt marker, only now written by the CLI
+      await vi.advanceTimersByTimeAsync(TRANSCRIPT_INTERRUPT_POLL_MS);
+
+      expect(service.get(session.id)!.state).toBe('generating'); // turn 2 must not be flipped idle by turn 1's stale marker
+    });
+
+    // Accepted limitation, not a bug to fix: flips to passing if the upgrade path noted at the disarm in
+    // applyInput (sessionService.ts) is implemented.
+    it.fails('loses a still-running turn\'s own interrupt marker when a stray/duplicated UserPromptSubmit hook fires for that same turn (applyInput cannot tell a duplicate hook from a genuine new turn)', async () => {
+      vi.useFakeTimers();
+      const { service } = setup();
+      const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+      const transcriptPath = makeTranscriptFile();
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: transcriptPath }));
+      expect(service.get(session.id)!.state).toBe('generating');
+
+      service.writeRaw(session.id, '\x1b'); // human presses Escape, meaning to stop THIS still-running turn
+      // A stray/duplicated hook re-reports the SAME turn's UserPromptSubmit — already an accepted
+      // possibility elsewhere in this file (e.g. "writes a deferred Escape immediately when typing ends
+      // into 'generating' mid-delay", which labels this exact shape "a stray/duplicated hook") — rather
+      // than a genuine new prompt. applyInput has no way to distinguish the two and disarms either way.
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: transcriptPath }));
+      appendFileSync(transcriptPath, interruptedLine()); // the CLI's real reaction to the human's ESC above
+
+      await vi.advanceTimersByTimeAsync(TRANSCRIPT_INTERRUPT_POLL_MS);
+
+      // The human's ESC against the still-running turn is silently swallowed: the duplicate hook tore
+      // down the only watch that could have caught it, and the session is stuck 'generating' forever.
+      expect(service.get(session.id)!.state).toBe('idle');
+    });
+
+    it('re-arms on a second Escape pressed against the new turn, and that fresh watch still catches the new turn\'s own interrupt marker', async () => {
+      vi.useFakeTimers();
+      const { service } = setup();
+      const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+      const transcriptPath = makeTranscriptFile();
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: transcriptPath }));
+
+      service.writeRaw(session.id, '\x1b'); // ESC pressed against turn 1, arms watch #1
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: transcriptPath })); // genuine turn 2: disarms watch #1
+      expect(service.get(session.id)!.state).toBe('generating');
+
+      service.writeRaw(session.id, '\x1b'); // human presses Escape again, now against turn 2: must arm a fresh watch #2
+      appendFileSync(transcriptPath, interruptedLine()); // turn 2's own interrupt marker
+      await vi.advanceTimersByTimeAsync(TRANSCRIPT_INTERRUPT_POLL_MS);
+
+      expect(service.get(session.id)!.state).toBe('idle'); // watch #2 caught turn 2's own marker
+    });
+
     it('does nothing if no hook has ever reported a transcript_path for the session', async () => {
       vi.useFakeTimers();
       const { service } = setup();
@@ -1623,21 +1797,24 @@ describe('SessionService submit-keystroke hostile cases', () => {
       expect(vi.getTimerCount()).toBe(timersBeforeEsc); // the untrusted path was never remembered, so nothing armed
     });
 
-    it('does not remember a transcript_path whose directory escapes the Claude projects directory via ".."', async () => {
+    it('does not remember a transcript_path containing a literal ".." segment, even one that resolves back inside the Claude projects directory', async () => {
       vi.useFakeTimers();
       const { service } = setup();
       const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
-      const configDir = mkdtempSync(join(tmpdir(), 'of-claude-config-'));
-      process.env.CLAUDE_CONFIG_DIR = configDir;
-      mkdirSync(join(configDir, 'projects'), { recursive: true });
-      const escapedPath = join(configDir, 'projects', '..', 'escaped', 'transcript.jsonl');
-      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: escapedPath }));
+      const transcriptPath = makeTranscriptFile(); // <configDir>/projects/proj/transcript.jsonl, file exists
+      const projectDir = dirname(transcriptPath);
+      // path.join would silently normalize a '..' segment away before isTrustedTranscriptPath ever saw
+      // it (join(dir, '..', 'proj', 'file') === join(dir, 'proj', 'file')), so build the raw string by
+      // hand instead. This path resolves to a real, existing file under the projects dir — only the
+      // normalize(path) !== path guard rejects it; isUnderProjectsDir alone would accept it.
+      const rawPathWithDotDot = `${projectDir}/../proj/transcript.jsonl`;
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: rawPathWithDotDot }));
       expect(service.get(session.id)!.state).toBe('generating');
       const timersBeforeEsc = vi.getTimerCount();
 
       service.writeRaw(session.id, '\x1b');
 
-      expect(vi.getTimerCount()).toBe(timersBeforeEsc); // the escaped path was never remembered, so nothing armed
+      expect(vi.getTimerCount()).toBe(timersBeforeEsc); // rejected by the normalize guard alone, even though it resolves inside
     });
 
     it('does not remember a transcript_path whose directory is a symlink pointing outside the Claude projects directory', async () => {
@@ -2606,6 +2783,35 @@ describe('SessionService.updatePermissionMode', () => {
     expect(service.get(session.id)!.permissionMode).toBe('bypassPermissions');
     expect(harness.launches[1]!.permissionMode).toBe('bypassPermissions');
     expect(harness.launches[1]!.resuming).toBe(true);
+  });
+
+  it('emits session.permission_mode_changed immediately, so the label updates without waiting for the relaunch', async () => {
+    vi.useFakeTimers();
+    const { service, events } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+
+    service.updatePermissionMode(session.id, 'bypassPermissions');
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(events).toContainEqual({ type: 'session.permission_mode_changed', sessionId: session.id, mode: 'bypassPermissions' });
+  });
+
+  it('emits session.state "starting" for the relaunch, then "idle" once the resumed process reports back', async () => {
+    vi.useFakeTimers();
+    const { service, events } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+
+    service.updatePermissionMode(session.id, 'bypassPermissions');
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(service.get(session.id)!.state).toBe('starting');
+    expect(events.some((e) => e.type === 'session.state' && e.state === 'starting' && e.sessionId === session.id)).toBe(true);
+
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart', source: 'resume' }));
+
+    expect(service.get(session.id)!.state).toBe('idle');
   });
 
   it('defers a permission-mode change while generating, relaunching only after Stop makes the session idle again', async () => {

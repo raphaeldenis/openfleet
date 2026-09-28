@@ -87,11 +87,11 @@ describe('app.routes', () => {
   it('user picking a different session while already on a session view sees the new session, not the old one (zoneless router-input-binding regression)', async () => {
     await configureTestBed();
     const harness = await RouterTestingHarness.create('/session/s1');
-    expect(harness.routeNativeElement?.querySelector('[data-testid="session-name"]')).toHaveTextContent('Gimli');
+    expect((harness.routeNativeElement?.querySelector('[data-testid="session-name-input"]') as HTMLInputElement)?.value).toBe('Gimli');
 
     await harness.navigateByUrl('/session/s2');
 
-    expect(harness.routeNativeElement?.querySelector('[data-testid="session-name"]')).toHaveTextContent('Legolas');
+    expect((harness.routeNativeElement?.querySelector('[data-testid="session-name-input"]') as HTMLInputElement)?.value).toBe('Legolas');
   });
 
   it('user visiting an unknown path still lands inside the app shell instead of a blank page', async () => {

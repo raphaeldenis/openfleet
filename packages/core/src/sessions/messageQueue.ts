@@ -34,4 +34,8 @@ export class MessageQueue {
     const row = this.db.prepare(`SELECT count(*) AS n FROM message_queue WHERE session_id = ? AND status = 'queued'`).get(sessionId) as { n: number };
     return row.n;
   }
+  countPendingFromSender(input: { sessionId: string; fromSessionId: string }): number {
+    const row = this.db.prepare(`SELECT count(*) AS n FROM message_queue WHERE session_id = ? AND from_session_id = ? AND status = 'queued'`).get(input.sessionId, input.fromSessionId) as { n: number };
+    return row.n;
+  }
 }

@@ -3,7 +3,9 @@ import type { Approval, HarnessId, PermissionMode, Session, SessionSpec } from '
 import { environment } from '../../environments/environment';
 
 export class ApiError extends Error {
-  constructor(public readonly status: number, message: string) {
+  // `code` is the REST error body's `error` field (e.g. `not_closed`, `directory_missing`) when the
+  // server sent one — undefined for a response with no JSON body or no recognizable `error` field.
+  constructor(public readonly status: number, message: string, public readonly code?: string) {
     super(message);
   }
 }
@@ -16,10 +18,17 @@ export class FleetApiService {
       ...init,
       headers: { 'content-type': 'application/json', authorization: `Bearer ${environment.adminToken}`, ...(init.headers ?? {}) },
     });
-    if (!response.ok) throw new ApiError(response.status, `${init.method ?? 'GET'} ${path} → ${response.status}`);
+    if (!response.ok) {
+      const code = await response
+        .json()
+        .then((body: unknown) => (body && typeof body === 'object' && 'error' in body && typeof body.error === 'string' ? body.error : undefined))
+        .catch(() => undefined);
+      throw new ApiError(response.status, `${init.method ?? 'GET'} ${path} → ${response.status}`, code);
+    }
     return (await response.json()) as T;
   }
   private post<T>(path: string, body: unknown): Promise<T> { return this.call<T>(path, { method: 'POST', body: JSON.stringify(body) }); }
+  private patch<T>(path: string, body: unknown): Promise<T> { return this.call<T>(path, { method: 'PATCH', body: JSON.stringify(body) }); }
 
   createSession(spec: Partial<SessionSpec> & { directory: string; name: string; repoPath?: string; branchName?: string }) { return this.post<Session>('/api/sessions', spec); }
   createManagerSession(spec: { directory: string; name: string; emoji?: string; model?: string; harness?: HarnessId; permissionMode?: PermissionMode; pulseSeconds: number; childrenCap: number; mission: string }) {
@@ -35,5 +44,8 @@ export class FleetApiService {
   resize(id: string, cols: number, rows: number) { return this.post(`/api/sessions/${id}/resize`, { cols, rows }); }
   closeSession(id: string) { return this.post(`/api/sessions/${id}/close`, {}); }
   updateModel(id: string, model: string) { return this.post<{ status: 'relaunching' | 'deferred' }>(`/api/sessions/${id}/model`, { model }); }
+  updatePermissionMode(id: string, mode: PermissionMode) { return this.post<{ status: 'relaunching' | 'deferred' }>(`/api/sessions/${id}/permission-mode`, { mode }); }
+  renameSession(id: string, patch: { name?: string; emoji?: string }) { return this.patch<Session>(`/api/sessions/${id}`, patch); }
+  reopenSession(id: string) { return this.post<Session>(`/api/sessions/${id}/reopen`, {}); }
   decide(id: string, behavior: 'allow' | 'deny') { return this.post<Approval>(`/api/approvals/${id}/decide`, { behavior }); }
 }

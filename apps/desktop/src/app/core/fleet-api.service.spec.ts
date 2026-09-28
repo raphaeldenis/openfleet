@@ -1,41 +1,99 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { FleetApiService } from './fleet-api.service';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ApiError, FleetApiService } from './fleet-api.service';
 
-function stubFetchReturning(session: { id: string }) {
-  const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => session });
-  vi.stubGlobal('fetch', fetchMock);
-  return fetchMock;
+function fakeResponse(init: { ok: boolean; status: number; json: () => Promise<unknown> }) {
+  return init as unknown as Response;
 }
 
-function postedBody(fetchMock: ReturnType<typeof vi.fn>): unknown {
-  const [, init] = fetchMock.mock.calls[0]!;
-  return JSON.parse(init.body as string);
-}
+describe('FleetApiService', () => {
+  let api: FleetApiService;
+  let fetchMock: ReturnType<typeof vi.fn>;
 
-describe('FleetApiService.createManagerSession', () => {
-  afterEach(() => vi.unstubAllGlobals());
-
-  it('posts the harness and permission mode next to the nested manager spec', async () => {
-    const fetchMock = stubFetchReturning({ id: 'm-1' });
-
-    await new FleetApiService().createManagerSession({
-      directory: '/tmp/wt', name: 'Lead', emoji: '🧭', model: 'opus', harness: 'claude-cli', permissionMode: 'plan',
-      pulseSeconds: 900, childrenCap: 4, mission: 'Ship it',
-    });
-
-    expect(postedBody(fetchMock)).toEqual({
-      directory: '/tmp/wt', name: 'Lead', emoji: '🧭', model: 'opus', harness: 'claude-cli', permissionMode: 'plan',
-      manager: { pulseSeconds: 900, childrenCap: 4, mission: 'Ship it' },
-    });
+  beforeEach(() => {
+    api = new FleetApiService();
+    fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
   });
 
-  it('posts no permission mode when none is chosen', async () => {
-    const fetchMock = stubFetchReturning({ id: 'm-1' });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
 
-    await new FleetApiService().createManagerSession({
-      directory: '/tmp/wt', name: 'Lead', pulseSeconds: 900, childrenCap: 4, mission: 'Ship it',
+  it('extracts the error code from a JSON error body', async () => {
+    fetchMock.mockResolvedValue(fakeResponse({ ok: false, status: 409, json: () => Promise.resolve({ error: 'not_closed' }) }));
+
+    await expect(api.reopenSession('s1')).rejects.toMatchObject({ status: 409, code: 'not_closed' });
+  });
+
+  it('leaves the error code undefined for a non-JSON error body', async () => {
+    fetchMock.mockResolvedValue(fakeResponse({ ok: false, status: 500, json: () => Promise.reject(new SyntaxError('Unexpected end of input')) }));
+
+    await expect(api.reopenSession('s1')).rejects.toMatchObject({ status: 500, code: undefined });
+  });
+
+  it('leaves the error code undefined when the JSON body has no "error" field', async () => {
+    fetchMock.mockResolvedValue(fakeResponse({ ok: false, status: 500, json: () => Promise.resolve({ message: 'internal error' }) }));
+
+    await expect(api.reopenSession('s1')).rejects.toMatchObject({ status: 500, code: undefined });
+  });
+
+  it('leaves the error code undefined when the "error" field is not a string', async () => {
+    fetchMock.mockResolvedValue(fakeResponse({ ok: false, status: 500, json: () => Promise.resolve({ error: 42 }) }));
+
+    await expect(api.reopenSession('s1')).rejects.toMatchObject({ status: 500, code: undefined });
+  });
+
+  it('throws a plain ApiError instance so callers can narrow with instanceof', async () => {
+    fetchMock.mockResolvedValue(fakeResponse({ ok: false, status: 500, json: () => Promise.reject(new Error('boom')) }));
+
+    await expect(api.reopenSession('s1')).rejects.toBeInstanceOf(ApiError);
+  });
+
+  it('resolves with the parsed JSON body on a successful response', async () => {
+    const session = { id: 's1', state: 'starting' };
+    fetchMock.mockResolvedValue(fakeResponse({ ok: true, status: 200, json: () => Promise.resolve(session) }));
+
+    await expect(api.reopenSession('s1')).resolves.toEqual(session);
+  });
+
+  it('sends the admin bearer token and JSON content type on every request', async () => {
+    fetchMock.mockResolvedValue(fakeResponse({ ok: true, status: 200, json: () => Promise.resolve({}) }));
+
+    await api.closeSession('s1');
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(init.headers).toMatchObject({ 'content-type': 'application/json' });
+    expect((init.headers as Record<string, string>)['authorization']).toMatch(/^Bearer /);
+  });
+
+  describe('createManagerSession', () => {
+    function postedBody(): unknown {
+      const [, init] = fetchMock.mock.calls[0]!;
+      return JSON.parse(init.body as string);
+    }
+
+    it('posts the harness and permission mode next to the nested manager spec', async () => {
+      fetchMock.mockResolvedValue(fakeResponse({ ok: true, status: 200, json: () => Promise.resolve({ id: 'm-1' }) }));
+
+      await api.createManagerSession({
+        directory: '/tmp/wt', name: 'Lead', emoji: '🧭', model: 'opus', harness: 'claude-cli', permissionMode: 'plan',
+        pulseSeconds: 900, childrenCap: 4, mission: 'Ship it',
+      });
+
+      expect(postedBody()).toEqual({
+        directory: '/tmp/wt', name: 'Lead', emoji: '🧭', model: 'opus', harness: 'claude-cli', permissionMode: 'plan',
+        manager: { pulseSeconds: 900, childrenCap: 4, mission: 'Ship it' },
+      });
     });
 
-    expect(postedBody(fetchMock)).not.toHaveProperty('permissionMode');
+    it('posts no permission mode when none is chosen', async () => {
+      fetchMock.mockResolvedValue(fakeResponse({ ok: true, status: 200, json: () => Promise.resolve({ id: 'm-1' }) }));
+
+      await api.createManagerSession({
+        directory: '/tmp/wt', name: 'Lead', pulseSeconds: 900, childrenCap: 4, mission: 'Ship it',
+      });
+
+      expect(postedBody()).not.toHaveProperty('permissionMode');
+    });
   });
 });

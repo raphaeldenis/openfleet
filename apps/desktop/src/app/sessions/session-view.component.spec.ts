@@ -1,10 +1,11 @@
-import { render, screen } from '@testing-library/angular/zoneless';
+import { render, screen, waitFor, fireEvent } from '@testing-library/angular/zoneless';
+import userEvent from '@testing-library/user-event';
 import { inputBinding, signal } from '@angular/core';
 import { Subject } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
 import type { Approval, Session } from '@openfleet/shared';
 import { SessionViewComponent } from './session-view.component';
-import { FleetApiService } from '../core/fleet-api.service';
+import { ApiError, FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
 
 function session(patch: Partial<Session> = {}): Session {
@@ -29,10 +30,13 @@ function fakeEvents(sessions: Session[], approvals: Approval[] = []) {
 function fakeApi() {
   return {
     updateModel: vi.fn().mockResolvedValue({ status: 'deferred' }),
+    updatePermissionMode: vi.fn().mockResolvedValue({ status: 'deferred' }),
+    renameSession: vi.fn().mockResolvedValue({}),
     decide: vi.fn().mockResolvedValue({}),
     sendMessage: vi.fn().mockResolvedValue({ status: 'delivered', messageId: 'm1' }),
     closeSession: vi.fn().mockResolvedValue({}),
     sendInput: vi.fn().mockResolvedValue({}),
+    reopenSession: vi.fn().mockResolvedValue({}),
   };
 }
 
@@ -57,7 +61,7 @@ describe('SessionViewComponent', () => {
     expect(screen.getByTestId('permission-gate-card')).toBeTruthy();
   });
 
-  it('replaces the composer with a done banner and a disabled Resume action when the session closed cleanly', async () => {
+  it('replaces the composer with a done banner and an enabled Resume action when the session closed cleanly', async () => {
     await render(SessionViewComponent, {
       bindings: [inputBinding('sessionId', () => 's1')],
       providers: [{ provide: FleetApiService, useValue: fakeApi() }, { provide: FleetEventsService, useValue: fakeEvents([session({ state: 'closed', exitCode: 0 })]) }],
@@ -65,7 +69,134 @@ describe('SessionViewComponent', () => {
     expect(screen.getByTestId('banner')).toHaveAttribute('data-variant', 'done');
     expect(screen.queryByTestId('composer-input')).toBeNull();
     const resume = screen.getByTestId('resume-session') as HTMLButtonElement;
-    expect(resume.disabled).toBe(true);
+    expect(resume.disabled).toBe(false);
+  });
+
+  it('resumes a closed session by calling reopenSession', async () => {
+    const api = fakeApi();
+    await render(SessionViewComponent, {
+      bindings: [inputBinding('sessionId', () => 's1')],
+      providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: fakeEvents([session({ state: 'closed', exitCode: 0 })]) }],
+    });
+
+    await userEvent.click(screen.getByTestId('resume-session'));
+
+    expect(api.reopenSession).toHaveBeenCalledWith('s1');
+  });
+
+  it('sends only one reopen request when Resume is double-clicked before the request resolves', async () => {
+    let resolveReopen: (value: unknown) => void = () => {};
+    const api = fakeApi();
+    api.reopenSession = vi.fn(() => new Promise((resolve) => { resolveReopen = resolve; }));
+    await render(SessionViewComponent, {
+      bindings: [inputBinding('sessionId', () => 's1')],
+      providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: fakeEvents([session({ state: 'closed', exitCode: 0 })]) }],
+    });
+    const resumeButton = screen.getByTestId('resume-session') as HTMLButtonElement;
+
+    fireEvent.click(resumeButton);
+    fireEvent.click(resumeButton);
+    resolveReopen({});
+    await waitFor(() => expect(resumeButton.disabled).toBe(false));
+
+    expect(api.reopenSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears a previous session\'s resume error when navigating to a different session', async () => {
+    const sessionId = signal('s1');
+    const api = fakeApi();
+    api.reopenSession = vi.fn().mockRejectedValue(new ApiError(409, 'boom', 'not_closed'));
+    await render(SessionViewComponent, {
+      bindings: [inputBinding('sessionId', sessionId)],
+      providers: [
+        { provide: FleetApiService, useValue: api },
+        {
+          provide: FleetEventsService,
+          useValue: fakeEvents([session({ id: 's1', state: 'closed', exitCode: 0 }), session({ id: 's2', name: 'Legolas', state: 'closed', exitCode: 0 })]),
+        },
+      ],
+    });
+
+    await userEvent.click(screen.getByTestId('resume-session'));
+    await waitFor(() => expect(screen.getByTestId('resume-error')).toBeTruthy());
+
+    sessionId.set('s2');
+
+    await waitFor(() => expect(screen.queryByTestId('resume-error')).toBeNull());
+  });
+
+  it('a resume request for a previous session settling late does not surface its error on the new session, nor release the new session\'s own busy flag', async () => {
+    const sessionId = signal('s1');
+    let rejectA: (reason?: unknown) => void = () => {};
+    let resolveB: (value: unknown) => void = () => {};
+    const api = fakeApi();
+    api.reopenSession = vi.fn()
+      .mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectA = reject; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveB = resolve; }));
+    const { fixture } = await render(SessionViewComponent, {
+      bindings: [inputBinding('sessionId', sessionId)],
+      providers: [
+        { provide: FleetApiService, useValue: api },
+        {
+          provide: FleetEventsService,
+          useValue: fakeEvents([session({ id: 's1', state: 'closed', exitCode: 0 }), session({ id: 's2', name: 'Legolas', state: 'closed', exitCode: 0 })]),
+        },
+      ],
+    });
+
+    await userEvent.click(screen.getByTestId('resume-session')); // session A's resume is now in flight, unresolved
+
+    sessionId.set('s2');
+    await fixture.whenStable();
+    const resumeButton = screen.getByTestId('resume-session') as HTMLButtonElement;
+    expect(resumeButton.disabled).toBe(false);
+
+    await userEvent.click(resumeButton); // session B's own resume, also in flight
+    expect(resumeButton.disabled).toBe(true);
+
+    rejectA(new ApiError(409, 'boom', 'not_closed'));
+    // Let session A's rejected promise unwind through every `await` hop (action → runGuarded → resume)
+    // before asserting — a single microtask flush is not enough to reach the catch/finally.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await fixture.whenStable();
+
+    expect(screen.queryByTestId('resume-error')).toBeNull();
+    expect(resumeButton.disabled).toBe(true); // B's own in-flight request must still be tracked as busy
+
+    resolveB({});
+    await waitFor(() => expect(resumeButton.disabled).toBe(false));
+  });
+
+  it.each([
+    ['not_closed', 'This session is not closed — nothing to resume.'],
+    ['directory_missing', "This session's directory no longer exists — nothing to resume into."],
+    ['directory_changed', "This session's directory changed since it closed — resume refused for safety."],
+    ['directory_unreadable', "This session's directory can't be read — check its permissions."],
+    ['launch_failed', 'The harness failed to relaunch — try again.'],
+  ] as const)('shows a readable error for a %s reopen failure', async (code, message) => {
+    const api = fakeApi();
+    api.reopenSession = vi.fn().mockRejectedValue(new ApiError(code === 'launch_failed' ? 500 : 409, 'boom', code));
+    await render(SessionViewComponent, {
+      bindings: [inputBinding('sessionId', () => 's1')],
+      providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: fakeEvents([session({ state: 'closed', exitCode: 0 })]) }],
+    });
+
+    await userEvent.click(screen.getByTestId('resume-session'));
+
+    await waitFor(() => expect(screen.getByTestId('resume-error')).toHaveTextContent(message));
+  });
+
+  it('shows a generic error for a reopen failure with no recognized code', async () => {
+    const api = fakeApi();
+    api.reopenSession = vi.fn().mockRejectedValue(new Error('network down'));
+    await render(SessionViewComponent, {
+      bindings: [inputBinding('sessionId', () => 's1')],
+      providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: fakeEvents([session({ state: 'closed', exitCode: 0 })]) }],
+    });
+
+    await userEvent.click(screen.getByTestId('resume-session'));
+
+    await waitFor(() => expect(screen.getByTestId('resume-error')).toHaveTextContent('Could not resume the session — try again.'));
   });
 
   it('shows an error banner when the session closed with a non-zero exit code', async () => {

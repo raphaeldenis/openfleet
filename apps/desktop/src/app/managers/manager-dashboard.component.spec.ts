@@ -35,6 +35,19 @@ describe('ManagerDashboardComponent', () => {
     expect(screen.getByTestId('manager-dashboard-cap')).toHaveTextContent('1/2');
   });
 
+  it('gives an unbroken long manager name a tooltip and lets it wrap instead of being clipped', async () => {
+    const longName = 'A'.repeat(80);
+    const fake = fakeEvents({ sessions: [{ ...MANAGER_SESSION, name: longName }], managers: [MANAGER_VIEW] });
+    await render(ManagerDashboardComponent, {
+      providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('m1') }, { provide: FleetEventsService, useValue: fake }],
+    });
+
+    const name = screen.getByTestId('manager-dashboard-name');
+
+    expect(name).toHaveAttribute('title', longName);
+    expect(getComputedStyle(name).overflowWrap).toBe('anywhere');
+  });
+
   it('shows a loading state before the snapshot has arrived, instead of a blank screen', async () => {
     const fake = fakeEvents({ snapshotReceived: false });
     await render(ManagerDashboardComponent, {

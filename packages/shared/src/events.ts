@@ -1,5 +1,5 @@
 import type { ManagerView } from './managers.js';
-import type { Approval, Session, SessionState } from './session.js';
+import type { Approval, PermissionMode, Session, SessionState } from './session.js';
 
 export type ServerEvent =
   | { type: 'snapshot'; sessions: Session[]; approvals: Approval[]; managers: ManagerView[] }
@@ -9,6 +9,7 @@ export type ServerEvent =
   | { type: 'session.output'; sessionId: string; data: string }
   | { type: 'session.replay'; sessionId: string; data: string }
   | { type: 'session.model_changed'; sessionId: string; model: string }
+  | { type: 'session.permission_mode_changed'; sessionId: string; mode: PermissionMode }
   | { type: 'session.updated'; session: Session }
   | { type: 'session.reopened'; sessionId: string }
   | { type: 'message.queued'; sessionId: string; messageId: string }
