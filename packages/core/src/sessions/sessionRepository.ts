@@ -5,8 +5,10 @@ interface Row {
   id: string; name: string; emoji: string; directory: string; worktree: string | null; model: string | null;
   parent_id: string | null; role: string | null; harness: HarnessId; state: SessionState; state_since: string;
   exit_code: number | null; hook_token: string; mcp_token: string; permission_mode: string | null; branch: string | null;
-  created_at: string; closed_at: string | null;
+  created_at: string; closed_at: string | null; project_id: string | null;
 }
+
+type NewSessionRow = Omit<Row, 'exit_code' | 'closed_at' | 'project_id'> & { project_id?: string | null };
 
 export interface NormalizedPermissionMode { mode: PermissionMode | undefined; wasRecognized: boolean }
 
@@ -28,7 +30,7 @@ export function normalizePermissionMode(stored: string | null | undefined): Norm
 const toSession = (r: Row): Session => ({
   id: r.id, name: r.name, emoji: r.emoji, directory: r.directory, worktree: r.worktree ?? undefined,
   branch: r.branch ?? undefined,
-  model: r.model ?? undefined, parentId: r.parent_id ?? undefined, role: r.role ?? undefined, harness: r.harness,
+  model: r.model ?? undefined, parentId: r.parent_id ?? undefined, projectId: r.project_id ?? undefined, role: r.role ?? undefined, harness: r.harness,
   state: r.state, stateSince: r.state_since, exitCode: r.exit_code ?? undefined,
   permissionMode: normalizePermissionMode(r.permission_mode).mode,
   createdAt: r.created_at, closedAt: r.closed_at ?? undefined,
@@ -37,9 +39,10 @@ const toSession = (r: Row): Session => ({
 export class SessionRepository {
   constructor(private readonly db: DatabaseSync) {}
 
-  insert(row: Omit<Row, 'exit_code' | 'closed_at'>): void {
-    this.db.prepare(`INSERT INTO sessions (id, name, emoji, directory, worktree, model, parent_id, role, harness, state, state_since, hook_token, mcp_token, permission_mode, branch, created_at)
-      VALUES (@id, @name, @emoji, @directory, @worktree, @model, @parent_id, @role, @harness, @state, @state_since, @hook_token, @mcp_token, @permission_mode, @branch, @created_at)`).run(row as never);
+  insert(row: NewSessionRow): void {
+    const rowWithProject = { ...row, project_id: row.project_id ?? null };
+    this.db.prepare(`INSERT INTO sessions (id, name, emoji, directory, worktree, model, parent_id, role, harness, state, state_since, hook_token, mcp_token, permission_mode, branch, project_id, created_at)
+      VALUES (@id, @name, @emoji, @directory, @worktree, @model, @parent_id, @role, @harness, @state, @state_since, @hook_token, @mcp_token, @permission_mode, @branch, @project_id, @created_at)`).run(rowWithProject as never);
   }
   get(id: string): Session | undefined {
     const row = this.db.prepare('SELECT * FROM sessions WHERE id = ?').get(id) as Row | undefined;
