@@ -202,7 +202,10 @@ describe('SettingsComponent — Models tab', () => {
 
 describe('SettingsComponent — Daemon tab', () => {
   beforeEach(() => localStorage.clear());
-  afterEach(() => localStorage.clear());
+  afterEach(() => {
+    localStorage.clear();
+    vi.unstubAllGlobals();
+  });
 
   it('labels the token line as a stored token that is found, without revealing any of its characters, on either tab', async () => {
     localStorage.setItem('openfleet.adminToken', ADMIN_TOKEN);
@@ -253,13 +256,20 @@ describe('SettingsComponent — Daemon tab', () => {
     expect(screen.getByTestId('settings-daemon').textContent).toContain('Local only');
   });
 
-  it('does not caption a remote https daemon address as "Local only"', async () => {
+  it('shows the default local daemon address and never sends the token to a stored remote https address', async () => {
     localStorage.setItem('openfleet.apiUrl', 'https://daemon.example.com:7331');
-    await renderSettings();
+    localStorage.setItem('openfleet.adminToken', ADMIN_TOKEN);
+    const fetchSpy = vi.fn((_url: string) => Promise.resolve(new Response(JSON.stringify(MODEL_TABLE))));
+    vi.stubGlobal('fetch', fetchSpy);
+    await render(SettingsComponent);
+    await screen.findByTestId('model-row-haiku');
 
     await openDaemonTab();
 
-    expect(screen.getByTestId('daemon-address')).toHaveTextContent('daemon.example.com:7331');
-    expect(screen.getByTestId('settings-daemon').textContent).not.toContain('Local only');
+    expect(screen.getByTestId('daemon-address')).toHaveTextContent(/^127\.0\.0\.1:7331$/);
+    expect(screen.getByTestId('settings-daemon').textContent).toContain('Local only');
+    const requestedUrls = fetchSpy.mock.calls.map(([url]) => String(url));
+    expect(requestedUrls.length).toBeGreaterThan(0);
+    expect(requestedUrls.every((url) => url.startsWith('http://127.0.0.1:7331/'))).toBe(true);
   });
 });
