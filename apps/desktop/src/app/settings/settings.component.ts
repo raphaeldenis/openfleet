@@ -65,7 +65,7 @@ function isAvailableModels(body: unknown): body is { models: string[] } {
                       class="value mono"
                       [attr.data-testid]="'model-select-' + row.rung"
                       [attr.aria-label]="row.rung + ' model'"
-                      [disabled]="isSavingModel()"
+                      [attr.aria-disabled]="isSavingModel() ? 'true' : null"
                       (change)="onModelChosen(row.rung, $any($event.target))"
                     >
                       @if (!table[row.rung]) {
@@ -78,13 +78,10 @@ function isAvailableModels(body: unknown): body is { models: string[] } {
                   </div>
                 }
               </div>
+              <p class="hint status" role="status" data-testid="models-save-status">{{ saveStatusMessage() }}</p>
               @if (saveOutcome(); as outcome) {
                 @if (outcome.kind === 'failed') {
                   <p class="error" role="alert" data-testid="models-save-error">✕ Couldn’t save the {{ outcome.rung }} model — the daemon kept the previous one.</p>
-                } @else if (outcome.kind === 'unknown') {
-                  <p class="hint" role="status" data-testid="models-save-status">✓ Saved {{ outcome.rung }} · {{ outcome.modelId }} is not in the known model list — saved anyway.</p>
-                } @else {
-                  <p class="hint" role="status" data-testid="models-save-status">✓ Saved {{ outcome.rung }}.</p>
                 }
               }
               <p class="hint" data-testid="models-edit-hint">A change applies to new sessions · running sessions keep their model</p>
@@ -128,7 +125,8 @@ function isAvailableModels(body: unknown): body is { models: string[] } {
     .detail { font-size: .75rem; color: var(--mut); }
     .value { height: 1.75rem; min-width: 8rem; display: inline-flex; align-items: center; padding: 0 .625rem; border: 1px solid var(--line); border-radius: .375rem; background: var(--sunk); font-size: .75rem; }
     select.value { color: var(--fg); cursor: pointer; }
-    select.value:disabled { cursor: progress; opacity: .6; }
+    select.value[aria-disabled='true'] { cursor: progress; opacity: .6; }
+    .status:empty { position: absolute; }
     select.value:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
     .mono { font-family: var(--mono); }
     .hint { margin: 0; font-size: .75rem; color: var(--mut); }
@@ -165,17 +163,33 @@ export class SettingsComponent {
     );
   });
 
+  // One persistent live region carries every success notice, so a screen reader announces the text change
+  // (a region inserted fresh between saves is easily never spoken).
+  protected readonly saveStatusMessage = computed(() => {
+    const outcome = this.saveOutcome();
+    if (outcome?.kind === 'saved') return `✓ Saved ${outcome.rung}.`;
+    if (outcome?.kind === 'unknown') return `✓ Saved ${outcome.rung} · ${outcome.modelId} is not in the known model list — saved anyway.`;
+    return '';
+  });
+
   constructor() {
     void this.loadModelTable();
   }
 
+  // The dropdowns stay enabled while a save runs (a disabled select drops keyboard focus), so a choice made
+  // during a save is put back instead of sent.
   protected async onModelChosen(rung: string, select: HTMLSelectElement): Promise<void> {
     const previousId = this.modelTable()?.[rung] ?? '';
+    const isAnotherSaveRunning = this.isSavingModel();
+    if (isAnotherSaveRunning) {
+      select.value = previousId;
+      return;
+    }
     const chosenId = select.value;
     if (chosenId === previousId) return;
     this.isSavingModel.set(true);
     try {
-      const { models, unknownRungs } = await this.api.saveModels({ [rung]: chosenId });
+      const { models, unknownRungs = [] } = await this.api.saveModels({ [rung]: chosenId });
       this.modelTable.set(models);
       this.saveOutcome.set(unknownRungs.includes(rung) ? { kind: 'unknown', rung, modelId: chosenId } : { kind: 'saved', rung });
     } catch {

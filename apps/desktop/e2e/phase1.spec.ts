@@ -1,24 +1,32 @@
 import { expect, test } from '@playwright/test';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 
 const api = 'http://127.0.0.1:7332';
 const token = readFileSync('/tmp/of-e2e/admin.token', 'utf8').trim();
 const headers = { 'content-type': 'application/json', authorization: `Bearer ${token}` };
 
+const configPath = '/tmp/of-e2e/config.json';
+
 test('a model picked in Settings is written to config.json and served by the running daemon', async ({ page, request }) => {
   await page.addInitScript(([t, a]) => { localStorage.setItem('openfleet.adminToken', t); localStorage.setItem('openfleet.apiUrl', a); }, [token, api]);
+  const configBefore = existsSync(configPath) ? readFileSync(configPath, 'utf8') : undefined;
   const modelsBefore = await (await request.get(`${api}/api/models`, { headers })).json();
+  const { models: availableModels } = await (await request.get(`${api}/api/models/available`, { headers })).json();
+  const differentKnownModel: string = availableModels.find((modelId: string) => modelId !== modelsBefore.opus);
   try {
     await page.goto('/');
     await page.getByTestId('nav-settings').click();
 
-    await page.getByTestId('model-select-opus').selectOption('claude-fable-5');
+    await page.getByTestId('model-select-opus').selectOption(differentKnownModel);
 
-    await expect(page.getByTestId('models-save-status')).toContainText(/saved/i);
-    expect((await (await request.get(`${api}/api/models`, { headers })).json()).opus).toBe('claude-fable-5');
-    expect(JSON.parse(readFileSync('/tmp/of-e2e/config.json', 'utf8')).models.opus).toBe('claude-fable-5');
+    await expect(page.getByTestId('models-save-status')).toHaveText(/^✓ Saved opus\.$/);
+    expect((await (await request.get(`${api}/api/models`, { headers })).json()).opus).toBe(differentKnownModel);
+    expect(JSON.parse(readFileSync(configPath, 'utf8')).models.opus).toBe(differentKnownModel);
   } finally {
-    await request.put(`${api}/api/models`, { headers, data: { opus: modelsBefore.opus } });
+    const restore = await request.put(`${api}/api/models`, { headers, data: { opus: modelsBefore.opus } });
+    expect(restore.ok()).toBe(true);
+    if (configBefore === undefined) rmSync(configPath, { force: true });
+    else writeFileSync(configPath, configBefore);
   }
 });
 

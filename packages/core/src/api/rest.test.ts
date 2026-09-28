@@ -237,10 +237,10 @@ describe('REST', () => {
     expect(res.status).toBe(400);
   });
 
-  it('answers a non-JSON model body with a server error rather than a silent 200', async () => {
+  it('answers a non-JSON model body with a 400 rather than a silent 200', async () => {
     const created = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
     const res = await api(`/api/sessions/${created.id}/model`, { method: 'POST', body: 'not json' });
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(400);
   });
 
   it('renames a session\'s name and emoji via PATCH', async () => {

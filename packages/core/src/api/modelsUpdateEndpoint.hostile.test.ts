@@ -18,8 +18,6 @@ import { createMcpHandler } from '../mcp/mcpServer.js';
 import { startServer } from './server.js';
 
 // Black-box hostile tests for PUT /api/models: REST in and out, config.json on disk, nothing private.
-// `it.fails` marks a proven defect (the assertion states the correct behaviour and currently does not hold);
-// each carries its severity and production file:line. Fix the code, then flip `it.fails` to `it`.
 
 const ADMIN_TOKEN = 'admin';
 const AUTHORIZED = { authorization: `Bearer ${ADMIN_TOKEN}`, 'content-type': 'application/json' };
@@ -112,18 +110,13 @@ describe('PUT /api/models — hostile bodies', () => {
     await expectRefusedAndNothingChanged(res, 413);
   });
 
-  // Defect (minor) — packages/core/src/api/server.ts:78-81: a JSON syntax error is not a ZodError, so a
-  // malformed body answers 500 "internal" instead of a 400. The 500 tells a client the daemon is broken.
-  it.fails('answers a body that is not JSON with a 400, not a 500', async () => {
+  it('answers a body that is not JSON with a 400, not a 500', async () => {
     const res = await putRaw('{"opus": ');
 
     expect(res.status).toBe(400);
   });
 
-  // Defect (minor, hardening) — packages/core/src/models.ts:28 (MODEL_ID_CHARACTERS allows a leading '-'):
-  // the id becomes the value of `claude --model <id>` (launchConfig.ts:34); an id that starts with '-'
-  // looks like a flag to any parser that does not treat the next argv as a value. Real ids start with a letter.
-  it.fails.each([['-x'],['--dangerously-skip-permissions'], ['-']])('refuses the flag-shaped id %s', async (modelId) => {
+  it.each([['-x'], ['--dangerously-skip-permissions'], ['-']])('refuses the flag-shaped id %s', async (modelId) => {
     const res = await putModels({ opus: modelId });
 
     await expectRefusedAndNothingChanged(res, 400);
@@ -151,6 +144,12 @@ describe('PUT /api/models — concurrency and round trip', () => {
     for (const seen of settled.filter((answer): answer is Record<string, string> => !(answer instanceof Response))) {
       expect(Object.keys(seen).sort()).toEqual([...RUNGS].sort());
     }
+  });
+
+  it('never rewrites the defaults a daemon without a config file falls back to', async () => {
+    await putModels({ opus: 'changed-at-runtime' });
+
+    expect(loadModelTable(join(homeDirectory, 'nonexistent.json'))).toEqual(DEFAULT_MODEL_TABLE);
   });
 
   it('writes a file a daemon restart reads back as exactly the table it served', async () => {
@@ -221,9 +220,7 @@ describe('PUT /api/models — config.json in a hostile state', () => {
     }
   });
 
-  // Defect (minor) — packages/core/src/models.ts:87-88 (writeFileSync temp + renameSync): the new file gets
-  // the umask default (0644), so a config.json the user locked down to 0600 is silently widened.
-  it.fails('keeps the permissions of the config.json it rewrites', async () => {
+  it('keeps the permissions of the config.json it rewrites', async () => {
     writeFileSync(configPath, '{"theme":"dark"}');
     chmodSync(configPath, 0o600);
 
@@ -232,10 +229,7 @@ describe('PUT /api/models — config.json in a hostile state', () => {
     expect(statSync(configPath).mode & 0o777).toBe(0o600);
   });
 
-  // Defect (minor) — packages/core/src/models.ts:88 (renameSync over the path): rename replaces a symlinked
-  // config.json with a regular file, so a dotfile-managed config stops being the linked one and the link
-  // target never receives the change.
-  it.fails('writes through a symlinked config.json instead of replacing the link', async () => {
+  it('writes through a symlinked config.json instead of replacing the link', async () => {
     const realConfigPath = join(homeDirectory, 'dotfiles-config.json');
     writeFileSync(realConfigPath, '{"theme":"dark"}');
     symlinkSync(realConfigPath, configPath);
@@ -247,16 +241,23 @@ describe('PUT /api/models — config.json in a hostile state', () => {
     expect(JSON.parse(readFileSync(realConfigPath, 'utf8'))).toEqual({ theme: 'dark', models: { opus: 'claude-opus-5-5-b' } });
   });
 
-  // Defect (minor, policy) — packages/core/src/models.ts:88: rename ignores the target's own mode, so a
-  // config.json the user made read-only (0444) is overwritten and its mode reset. The safe answer is to
-  // refuse (409/403) and leave the file as it is.
-  it.fails('does not overwrite a config.json the user made read-only', async () => {
+  it('refuses with a 409 and does not overwrite a config.json the user made read-only', async () => {
     writeFileSync(configPath, '{"theme":"dark"}');
     chmodSync(configPath, 0o444);
 
+    const res = await putModels({ opus: 'claude-opus-5-5-b' });
+
+    expect(res.status).toBe(409);
+    expect(readFileSync(configPath, 'utf8')).toBe('{"theme":"dark"}');
+    expect(statSync(configPath).mode & 0o777).toBe(0o444);
+    expect(readdirSync(homeDirectory)).toEqual(['config.json']);
+    expect(await getModels()).toEqual(DEFAULT_MODEL_TABLE);
+  });
+
+  it('gives a config.json it creates the private mode 0600', async () => {
     await putModels({ opus: 'claude-opus-5-5-b' });
 
-    expect(readFileSync(configPath, 'utf8')).toBe('{"theme":"dark"}');
+    expect(statSync(configPath).mode & 0o777).toBe(0o600);
   });
 
   it('creates config.json when there is none, holding only the saved rung', async () => {

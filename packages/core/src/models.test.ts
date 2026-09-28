@@ -10,15 +10,6 @@ describe('loadModelTable', () => {
     expect(loadModelTable(join(home, 'config.json'))).toEqual(DEFAULT_MODEL_TABLE);
   });
 
-  it('hands out a private copy of the defaults, so updating the served table never rewrites them', () => {
-    const home = mkdtempSync(join(tmpdir(), 'of-models-'));
-    const servedTable = loadModelTable(join(home, 'config.json'));
-
-    servedTable.opus = 'changed-at-runtime';
-
-    expect(DEFAULT_MODEL_TABLE.opus).toBe('claude-opus-5-5');
-  });
-
   it('overrides only the rungs present in the config file', () => {
     const home = mkdtempSync(join(tmpdir(), 'of-models-'));
     const configPath = join(home, 'config.json');

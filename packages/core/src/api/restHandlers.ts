@@ -6,7 +6,7 @@ import { ApprovalError, type ApprovalService } from '../governance/approvalServi
 import type { FakeHandle } from '../harness/fakeHarness.js';
 import type { ManagerService } from '../managers/managerService.js';
 import type { PulseScheduler } from '../managers/pulseScheduler.js';
-import { listAvailableModels, ModelConfigUnreadableError, ModelTablePatchSchema, resolveModel, saveModelPatch, type ModelTable } from '../models.js';
+import { listAvailableModels, ModelConfigReadOnlyError, ModelConfigUnreadableError, ModelTablePatchSchema, resolveModel, saveModelPatch, type ModelTable } from '../models.js';
 import { DaemonShuttingDownError, SessionClosedError, SessionReopenError, type SessionService } from '../sessions/sessionService.js';
 import { json, Router } from './router.js';
 
@@ -48,8 +48,9 @@ export function registerRestRoutes(router: Router, deps: { sessions: SessionServ
     try {
       saveModelPatch(deps.modelConfigPath, patch);
     } catch (error) {
-      if (!(error instanceof ModelConfigUnreadableError)) throw error;
-      return json(res, 409, { error: 'config_unreadable', detail: error.message });
+      if (error instanceof ModelConfigUnreadableError) return json(res, 409, { error: 'config_unreadable', detail: error.message });
+      if (error instanceof ModelConfigReadOnlyError) return json(res, 409, { error: 'config_read_only', detail: error.message });
+      throw error;
     }
     Object.assign(deps.modelTable, patch);
     const unknownRungs = Object.entries(patch).filter(([, modelId]) => !availableModels.includes(modelId)).map(([rung]) => rung);

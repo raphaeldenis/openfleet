@@ -7,7 +7,7 @@ import type { ModelTable } from '../models.js';
 import type { SessionService } from '../sessions/sessionService.js';
 import { hooksHandler } from './hooksHandler.js';
 import { registerRestRoutes } from './restHandlers.js';
-import { json, PayloadTooLargeError, readJson, Router } from './router.js';
+import { InvalidJsonBodyError, json, PayloadTooLargeError, readJson, Router } from './router.js';
 import { createWsHandler } from './wsHandler.js';
 
 const HOOK_PATH = /^\/hooks\/([^/]+)$/;
@@ -77,6 +77,7 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; clos
       await match.handler({ req, res, params: match.params, body: await readJson(req) });
     } catch (error) {
       if (error instanceof PayloadTooLargeError) return json(res, 413, { error: 'payload_too_large' });
+      if (error instanceof InvalidJsonBodyError) return json(res, 400, { error: 'invalid_json', detail: error.message });
       const isValidation = (error as { name?: string }).name === 'ZodError';
       json(res, isValidation ? 400 : 500, { error: isValidation ? 'invalid_body' : 'internal', detail: (error as Error).message });
     }

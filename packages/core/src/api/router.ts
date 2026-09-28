@@ -33,6 +33,8 @@ export const MAX_BODY_BYTES = 1024 * 1024;
 
 export class PayloadTooLargeError extends Error {}
 
+export class InvalidJsonBodyError extends Error {}
+
 export async function readJson(req: IncomingMessage, maxBytes = MAX_BODY_BYTES): Promise<unknown> {
   const chunks: Buffer[] = [];
   let bytesRead = 0;
@@ -42,5 +44,10 @@ export async function readJson(req: IncomingMessage, maxBytes = MAX_BODY_BYTES):
     chunks.push(chunk as Buffer);
   }
   const text = Buffer.concat(chunks).toString('utf8');
-  return text ? JSON.parse(text) : undefined;
+  if (!text) return undefined;
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    throw new InvalidJsonBodyError((error as Error).message);
+  }
 }
