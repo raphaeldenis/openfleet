@@ -75,7 +75,7 @@ describe('listSections', () => {
   });
 
   it('ignores a leading byte order mark when matching the first heading', () => {
-    const sections = listSections('﻿## First\nx');
+    const sections = listSections('\uFEFF## First\nx');
 
     expect(sections).toEqual([{ heading: 'First', level: 2, startLine: 0, endLine: 1 }]);
   });
@@ -109,6 +109,28 @@ describe('listSections', () => {
 
     expect(sections).toHaveLength(1);
     expect(elapsed).toBeLessThan(1000);
+  });
+
+  it('sees a heading that sits between two fenced blocks using the same fence character', () => {
+    const body = '## A\n```\nx\n```\n## R\n```\ny\n```';
+
+    const headings = listSections(body).map((section) => section.heading);
+
+    expect(headings).toEqual(['A', 'R']);
+  });
+
+  it('treats a bare "##" line as a heading with an empty title', () => {
+    const body = '##\nx\n## Next\ny';
+
+    const headings = listSections(body).map((section) => section.heading);
+
+    expect(headings).toEqual(['', 'Next']);
+  });
+
+  it('accepts a tab between the hashes and the title', () => {
+    const sections = listSections('##\tTitle\nx');
+
+    expect(sections).toEqual([{ heading: 'Title', level: 2, startLine: 0, endLine: 1 }]);
   });
 });
 
@@ -254,7 +276,7 @@ describe('replaceSection', () => {
   });
 
   it('keeps the byte order mark in front of the first heading', () => {
-    expect(replaceSection('﻿## A\nold\n## B\nkeep', 'A', 'new')).toBe('﻿## A\nnew\n## B\nkeep');
+    expect(replaceSection('\uFEFF## A\nold\n## B\nkeep', 'A', 'new')).toBe('\uFEFF## A\nnew\n## B\nkeep');
   });
 
   describe('fences that only look like fences', () => {
@@ -263,10 +285,9 @@ describe('replaceSection', () => {
     it.each([
       ['a list-prefixed fence with an indented closer', `## A\n- \`\`\`\n  ## fake\n  \`\`\`\n${sectionB}`],
       ['an ordered-list fence with an info string', `## A\n1. \`\`\`js\n  ## fake\n  \`\`\`\n${sectionB}`],
-      ['a four-space-indented fence', `## A\n    \`\`\`\n${sectionB}`],
-      ['an inline triple-backtick span', `## A\n\`\`\`x\`\`\` is inline\n${sectionB}`],
       ['a fence that never closes', `## A\n\`\`\`\ntext\n${sectionB}`],
       ['a tilde fence that never closes', `## A\n~~~\ntext\n${sectionB}`],
+      ['a closer with trailing spaces', `## A\n\`\`\`\ntext\n\`\`\`   \n${sectionB}`],
     ])('keeps the next section intact with %s', (_name, body) => {
       const replaced = replaceSection(body, 'A', 'replacement');
 
@@ -282,6 +303,28 @@ describe('replaceSection', () => {
       const replaced = replaceSection(body, 'A', 'replacement');
 
       expect(replaced).toBe(`## A\nreplacement\n${sectionB}`);
+    });
+
+    // A four-space indent (past the 0-3 allowed by FENCE_PATTERN) and a backtick-in-info span
+    // (which canOpen must reject) never open a fence, so on their own they don't prove anything:
+    // with no later closer downstream, an implementation that wrongly treated them as openers
+    // would behave identically to a correct one (nothing to pair with either way). Each case
+    // below adds a real downstream closer and a heading in between, so a wrongly-permissive
+    // opener would swallow that heading and the assertion would fail.
+    it('does not let a four-space-indented line open a fence, even with a later real closer', () => {
+      const body = '## A\n    ```\n## R\nkept\n```\n## B\nkeep me';
+
+      const replaced = replaceSection(body, 'A', 'replacement');
+
+      expect(replaced).toBe('## A\nreplacement\n## R\nkept\n```\n## B\nkeep me');
+    });
+
+    it('does not let an inline triple-backtick span open a fence, even with a later real closer', () => {
+      const body = '## A\n```x``` is inline\n## R\nkept\n```\n## B\nkeep me';
+
+      const replaced = replaceSection(body, 'A', 'replacement');
+
+      expect(replaced).toBe('## A\nreplacement\n## R\nkept\n```\n## B\nkeep me');
     });
   });
 
@@ -302,6 +345,41 @@ describe('replaceSection', () => {
       const replaceUnderHeading = () => replaceSection(body, heading, 'x');
 
       expect(replaceUnderHeading).toThrow();
+    });
+
+    it('rejects a heading argument ending in closing #s with a clear message', () => {
+      const replaceUnderClosedHeading = () => replaceSection(body, 'Log ##', 'x');
+
+      expect(replaceUnderClosedHeading).toThrow(/closing #s/);
+    });
+
+    it('rejects a heading argument made only of #s with a clear message', () => {
+      const replaceUnderHashOnlyHeading = () => replaceSection(body, '###', 'x');
+
+      expect(replaceUnderHashOnlyHeading).toThrow(/closing #s/);
+    });
+
+    it('refuses content that introduces a level-1 heading', () => {
+      const introducesLevelOneHeading = () => replaceSection(body, 'A', 'text\n# top\nmore');
+
+      expect(introducesLevelOneHeading).toThrow('content would change the section structure');
+    });
+
+    it('refuses content that restates a following heading hidden inside a fence, leaving the body unchanged', () => {
+      const bodyWithFencedSibling = '## A\nold\n## B\n```\nvaluable\n```';
+
+      const replaceWithHiddenHeading = () => replaceSection(bodyWithFencedSibling, 'A', '## B\nimpostor\n```');
+
+      expect(replaceWithHiddenHeading).toThrow('content would change the section structure');
+      expect(getSection(bodyWithFencedSibling, 'B')).toBe('```\nvaluable\n```');
+    });
+
+    it('refuses content that shifts a fence boundary and swaps a real heading for one nested inside a former fence', () => {
+      const bodyWithNestedHeading = '## A\nx\n## B\ny\n```\n## B\n```\n## C\nz';
+
+      const replaceThatShiftsFenceBoundary = () => replaceSection(bodyWithNestedHeading, 'A', '```');
+
+      expect(replaceThatShiftsFenceBoundary).toThrow('content would change the section structure');
     });
   });
 });
@@ -363,6 +441,20 @@ describe('appendSection', () => {
     expect(appendSection('## Log\nentry 1\n', 'Log', 'entry 2')).toBe('## Log\nentry 1\nentry 2\n');
   });
 
+  it('returns the body unchanged when appended content is empty', () => {
+    const body = '## A\nx\n## B\ny';
+
+    expect(appendSection(body, 'A', '')).toBe(body);
+  });
+
+  it('writes multi-line appended content with the line breaks of a CRLF body', () => {
+    const body = '## A\r\nold\r\n## B\r\nkeep';
+
+    const appended = appendSection(body, 'A', 'one\ntwo');
+
+    expect(appended).toBe('## A\r\nold\r\none\r\ntwo\r\n## B\r\nkeep');
+  });
+
   describe('structure invariant', () => {
     const body = '## A\nold\n## B\n```\ncode\n```';
 
@@ -381,6 +473,35 @@ describe('appendSection', () => {
       const appendUnderHeading = () => appendSection(body, heading, 'x');
 
       expect(appendUnderHeading).toThrow();
+    });
+
+    it('rejects a heading argument ending in closing #s with a clear message', () => {
+      const appendUnderClosedHeading = () => appendSection(body, 'Log ##', 'x');
+
+      expect(appendUnderClosedHeading).toThrow(/closing #s/);
+    });
+
+    it('rejects a heading argument made only of #s with a clear message', () => {
+      const appendUnderHashOnlyHeading = () => appendSection(body, '###', 'x');
+
+      expect(appendUnderHashOnlyHeading).toThrow(/closing #s/);
+    });
+
+    it('refuses content that restates a following heading hidden inside a fence, leaving the body unchanged', () => {
+      const bodyWithFencedSibling = '## A\nold\n## B\n```\nvaluable\n```';
+
+      const appendWithHiddenHeading = () => appendSection(bodyWithFencedSibling, 'A', '## B\nimpostor\n```');
+
+      expect(appendWithHiddenHeading).toThrow('content would change the section structure');
+      expect(getSection(bodyWithFencedSibling, 'B')).toBe('```\nvaluable\n```');
+    });
+
+    it('refuses new-section content that hides a fake heading and heading inside a fence that swallows the real ones', () => {
+      const bodyWithUnclosedFence = '## A\n```\n## B\nkeep';
+
+      const appendThatHidesRealHeadings = () => appendSection(bodyWithUnclosedFence, 'Log', '```\n## B\nfake\n## Log\nentry');
+
+      expect(appendThatHidesRealHeadings).toThrow('content would change the section structure');
     });
   });
 });

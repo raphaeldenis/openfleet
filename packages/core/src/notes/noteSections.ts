@@ -34,22 +34,25 @@ interface ParsedBody {
 
 interface LocatedSection {
   section: Section;
+  sectionIndex: number;
   lines: Line[];
   contentEnd: number;
 }
 
 const SECTION_LEVEL = 2;
-const HEADING_PATTERN = /^ {0,3}(#{1,6})(?:[ \t]+(.*))?$/s;
+const HEADING_PATTERN = /^ {0,3}(#{1,2})(?:[ \t]+(.*))?$/s;
 const FENCE_PATTERN = /^ {0,3}(`{3,}|~{3,})(.*)$/s;
-const BYTE_ORDER_MARK_PATTERN = /^﻿/;
+const BYTE_ORDER_MARK_PATTERN = /^\uFEFF/;
 const LINE_BREAK_PATTERN = /\r?\n/;
 const DEFAULT_LINE_BREAK = '\n';
 const STRUCTURE_CHANGE_MESSAGE = 'content would change the section structure';
 
 /**
  * Lists the `##` sections of a Markdown body, each with its 0-based first and last line.
- * Sections come from ATX headings (`#` to `######`, up to three leading spaces, optional closing `#`s)
+ * Sections come from ATX headings (`#` or `##`, up to three leading spaces, optional closing `#`s)
  * found outside fenced code blocks; a fence that never closes is read as ordinary lines.
+ * A `#` heading ends the preceding section without starting one of its own; a deeper heading
+ * (`###` and beyond) is not recognized at all and stays inside the enclosing section's content.
  * Setext headings, HTML comments and front matter are not recognized.
  */
 export function listSections(bodyMd: string): Section[] {
@@ -71,7 +74,7 @@ export function replaceSection(bodyMd: string, heading: string, newContent: stri
   if (!located) throw new Error(`section "${heading}" not found`);
   if (newContent === contentOf(located)) return bodyMd;
 
-  const { section, lines, contentEnd } = located;
+  const { section, sectionIndex, lines, contentEnd } = located;
   const lineBreak = firstLineBreakOf(bodyMd);
   const headingLine = lines[section.startLine]!;
   const contentLines = lines.slice(section.startLine + 1, contentEnd);
@@ -84,7 +87,7 @@ export function replaceSection(bodyMd: string, heading: string, newContent: stri
   const newBlock = hasNewContent ? normalizeLineBreaks(newContent, lineBreak) + contentLineBreak : '';
 
   const replaced = joinLines(lines.slice(0, section.startLine)) + headingLine.text + headingLineBreak + newBlock + joinLines(followingLines);
-  return ensureOutline(replaced, outlineOf(parsed.headings));
+  return ensureStructure(replaced, parsed, sectionIndex, outlineOf(parsed.headings));
 }
 
 /**
@@ -97,13 +100,14 @@ export function appendSection(bodyMd: string, heading: string, content: string):
   const located = locateSection(parsed, wantedHeading);
   const lineBreak = firstLineBreakOf(bodyMd);
   const newContent = normalizeLineBreaks(content, lineBreak);
-  const outline = outlineOf(parsed.headings);
+  if (located && newContent === '') return bodyMd;
 
   if (!located) {
     const appended = appendNewSection(bodyMd, parsed.lines, wantedHeading, newContent, lineBreak);
-    return ensureOutline(appended, [...outline, outlineEntry(SECTION_LEVEL, wantedHeading)]);
+    const outlineWithNewSection = [...outlineOf(parsed.headings), outlineEntry(SECTION_LEVEL, wantedHeading)];
+    return ensureStructure(appended, parsed, undefined, outlineWithNewSection);
   }
-  return ensureOutline(insertAtContentEnd(located, newContent, lineBreak), outline);
+  return ensureStructure(insertAtContentEnd(located, newContent, lineBreak), parsed, located.sectionIndex, outlineOf(parsed.headings));
 }
 
 function insertAtContentEnd({ lines, contentEnd }: LocatedSection, newContent: string, lineBreak: string): string {
@@ -129,6 +133,9 @@ function requireSingleLineHeading(heading: string): string {
   const trimmedHeading = heading.trim();
   const isSingleNonEmptyLine = trimmedHeading !== '' && !/[\r\n]/.test(trimmedHeading);
   if (!isSingleNonEmptyLine) throw new Error('heading must be a single non-empty line');
+
+  const endsWithClosingHashes = titleOf(trimmedHeading) !== trimmedHeading;
+  if (endsWithClosingHashes) throw new Error(`heading "${trimmedHeading}" must not end with closing #s`);
   return trimmedHeading;
 }
 
@@ -142,11 +149,46 @@ function outlineEntry(level: number, text: string): string {
   return `${level} ${text}`;
 }
 
-function ensureOutline(bodyMd: string, expectedOutline: string[]): string {
-  const actualOutline = outlineOf(parse(bodyMd).headings);
-  const hasExpectedStructure = actualOutline.join('\n') === expectedOutline.join('\n');
-  if (!hasExpectedStructure) throw new Error(STRUCTURE_CHANGE_MESSAGE);
-  return bodyMd;
+/**
+ * Guards against both ways a section edit can corrupt structure: the outline (levels 1 and 2)
+ * no longer matching `expectedOutline` — an old, cheap check, still needed since sections only
+ * ever track `##` siblings, so it's the only guard left for a level-1 heading — and a `##`
+ * sibling's own bytes changing, which a fence a splice opens or closes can cause by hiding or
+ * revealing a sibling's heading while its heading TEXT coincidentally stays the same, something
+ * outline comparison alone would miss (see the "structure invariant" fence repros in
+ * noteSections.test.ts). `expectedOutline` is the caller's own outline, grown by one entry when
+ * the edit creates a new section.
+ */
+function ensureStructure(newBodyMd: string, oldParsed: ParsedBody, targetIndex: number | undefined, expectedOutline: string[]): string {
+  const newParsed = parse(newBodyMd);
+  const outlineIsUnchanged = outlineOf(newParsed.headings).join('\n') === expectedOutline.join('\n');
+  const siblingsAreUnchanged = siblingSectionsMatch(sectionTexts(oldParsed), sectionTexts(newParsed), targetIndex);
+  if (!outlineIsUnchanged || !siblingsAreUnchanged) throw new Error(STRUCTURE_CHANGE_MESSAGE);
+  return newBodyMd;
+}
+
+/**
+ * Every section other than the one at `targetIndex` must be byte-identical, in the same order.
+ * `targetIndex` is `undefined` when the edit creates a brand new section: every old section must
+ * then be unchanged and the new body must have exactly one more section (the created one, last).
+ */
+function siblingSectionsMatch(oldSectionTexts: string[], newSectionTexts: string[], targetIndex: number | undefined): boolean {
+  const isNewSection = targetIndex === undefined;
+  const expectedSectionCount = oldSectionTexts.length + (isNewSection ? 1 : 0);
+  if (newSectionTexts.length !== expectedSectionCount) return false;
+  return oldSectionTexts.every((oldText, index) => index === targetIndex || newSectionTexts[index] === oldText);
+}
+
+/**
+ * The text of each `##` section, heading line through its last non-blank line, in document order.
+ * Trailing blank lines are trimmed (as `contentOf` already does for one section's own content), and
+ * so is the one trailing line break past that: without it, the section that used to be last in a
+ * body with no final line break would register as changed once appending a new section adds one.
+ */
+function sectionTexts({ lines, headings }: ParsedBody): string[] {
+  return sectionsOf(headings, lines.length).map((section) =>
+    joinLines(lines.slice(section.startLine, endOfContent(lines, section))).replace(/\r?\n$/, ''),
+  );
 }
 
 function parse(bodyMd: string): ParsedBody {
@@ -156,9 +198,11 @@ function parse(bodyMd: string): ParsedBody {
 
 function locateSection({ lines, headings }: ParsedBody, heading: string): LocatedSection | undefined {
   const wantedHeading = comparableHeading(heading);
-  const section = sectionsOf(headings, lines.length).find((candidate) => comparableHeading(candidate.heading) === wantedHeading);
-  if (!section) return undefined;
-  return { section, lines, contentEnd: endOfContent(lines, section) };
+  const sections = sectionsOf(headings, lines.length);
+  const sectionIndex = sections.findIndex((candidate) => comparableHeading(candidate.heading) === wantedHeading);
+  if (sectionIndex === -1) return undefined;
+  const section = sections[sectionIndex]!;
+  return { section, sectionIndex, lines, contentEnd: endOfContent(lines, section) };
 }
 
 function comparableHeading(heading: string): string {
@@ -183,7 +227,6 @@ function sectionsOf(headings: Heading[], lineCount: number): Section[] {
 
   for (let position = headings.length - 1; position >= 0; position--) {
     const heading = headings[position]!;
-    if (heading.level > SECTION_LEVEL) continue;
     if (heading.level === SECTION_LEVEL) sections.push({ heading: heading.text, level: heading.level, startLine: heading.lineIndex, endLine });
     endLine = heading.lineIndex - 1;
   }
@@ -241,10 +284,12 @@ function nearestCloserAtLeast(closers: Closer[], length: number): Closer | undef
 
   while (low <= high) {
     const middle = Math.floor((low + high) / 2);
-    const isLongEnough = closers[middle]!.length >= length;
-    if (isLongEnough) nearest = closers[middle];
-    if (isLongEnough) low = middle + 1;
-    else high = middle - 1;
+    if (closers[middle]!.length >= length) {
+      nearest = closers[middle];
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
   }
 
   return nearest;
