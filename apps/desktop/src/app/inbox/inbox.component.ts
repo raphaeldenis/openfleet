@@ -1,6 +1,6 @@
 import { ChangeDetectionStrategy, Component, DestroyRef, computed, inject, signal } from '@angular/core';
 import { decideApproval } from '../core/decide-approval';
-import { elapsedLabel, elapsedSecondsSince } from '../design/elapsed-time';
+import { compactElapsedLabel, elapsedSecondsSince } from '../design/elapsed-time';
 import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { KindBadgeComponent } from '../design/kind-badge.component';
@@ -50,8 +50,22 @@ function tabIndexAfterKey(key: string, currentIndex: number): number | undefined
   imports: [KindBadgeComponent],
   template: `
     <section class="inbox" data-testid="inbox">
-      <header class="inbox-header">
-        <h2>Inbox <span class="count" data-testid="inbox-count">{{ events.approvals().length }}</span></h2>
+      <header class="title-row" data-testid="inbox-title-row">
+        <h1 class="title">Inbox @if (events.approvals().length; as pendingCount) {<span class="count" data-testid="inbox-count">{{ pendingCount }}</span>}</h1>
+        @if (tab() === 'gates') {
+          <div class="filters" data-testid="inbox-filters">
+            @for (filter of filters; track filter.key) {
+              <button
+                type="button"
+                class="filter-chip"
+                [class.active]="filter.key === 'all'"
+                [disabled]="filter.disabled"
+                [title]="filter.disabled ? needsBackendSupport : null"
+                [attr.data-testid]="'inbox-filter-' + filter.key"
+              >{{ filter.label }}</button>
+            }
+          </div>
+        }
       </header>
       <nav class="tabs" role="tablist" aria-label="Inbox sections" (keydown)="onTabKeydown($event)">
         @for (entry of tabs; track entry.key) {
@@ -73,33 +87,18 @@ function tabIndexAfterKey(key: string, currentIndex: number): number | undefined
       <div class="tabpanel" role="tabpanel" [id]="tabPanelId" [attr.aria-labelledby]="'inbox-tab-' + tab()">
       @switch (tab()) {
         @case ('gates') {
-          <div class="filters" data-testid="inbox-filters">
-            @for (filter of filters; track filter.key) {
-              <button
-                type="button"
-                class="filter-chip"
-                [class.active]="filter.key === 'all'"
-                [disabled]="filter.disabled"
-                [title]="filter.disabled ? needsBackendSupport : null"
-                [attr.data-testid]="'inbox-filter-' + filter.key"
-              >{{ filter.label }}</button>
-            }
-          </div>
-          <div class="gate-list">
+          <div class="gate-list" data-testid="inbox-gate-list">
             @for (item of items(); track item.id) {
               <article class="gate-card" data-testid="inbox-gate-card">
-                <of-kind-badge kind="gate" />
+                <span class="avatar" data-testid="inbox-gate-avatar">{{ item.sessionEmoji }}</span>
                 <div class="gate-body">
-                  <div class="gate-meta">
-                    <span class="session-label" data-testid="inbox-gate-session">{{ item.sessionLabel }}</span>
-                    <code class="tool-name" data-testid="inbox-gate-tool">{{ item.toolName }}</code>
+                  <div class="gate-meta" data-testid="inbox-gate-meta">
+                    <of-kind-badge kind="gate" />
+                    <span class="session-label" data-testid="inbox-gate-session">{{ item.sessionName }}</span>
                     <span class="age" data-testid="inbox-gate-age">{{ item.ageLabel }}</span>
                   </div>
-                  <pre
-                    class="tool-args"
-                    style="overflow: auto; max-height: 10rem; white-space: pre-wrap"
-                    data-testid="inbox-gate-args"
-                  >{{ item.formattedInput }}</pre>
+                  <p class="gate-sentence" data-testid="inbox-gate-sentence">Wants to run <code class="tool-name" data-testid="inbox-gate-tool">{{ item.toolName }}</code>.</p>
+                  <pre class="tool-args" data-testid="inbox-gate-args">{{ item.formattedInput }}</pre>
                   <div class="actions">
                     <button type="button" class="of-btn of-btn--primary" data-testid="inbox-allow" [disabled]="item.pending" (click)="decide(item.id, 'allow')">Approve</button>
                     <button type="button" class="of-btn of-btn--secondary" data-testid="inbox-deny" [disabled]="item.pending" (click)="decide(item.id, 'deny')">Deny</button>
@@ -110,7 +109,10 @@ function tabIndexAfterKey(key: string, currentIndex: number): number | undefined
                 </div>
               </article>
             } @empty {
-              <p class="empty" data-testid="inbox-empty">Nothing waiting for you.</p>
+              <div class="empty" data-testid="inbox-empty">
+                <span class="empty-title">Nothing needs you</span>
+                <span>Gates, questions, budget incidents and manager proposals show up here.</span>
+              </div>
             }
           </div>
         }
@@ -125,8 +127,10 @@ function tabIndexAfterKey(key: string, currentIndex: number): number | undefined
     </section>
   `,
   styles: `
-    .inbox { display: flex; flex-direction: column; gap: .75rem; padding: 1rem; width: 100%; }
-    .inbox-header { display: flex; align-items: center; }
+    :host { display: block; flex: 1; min-width: 0; max-width: 54rem; margin: 0 auto; }
+    .inbox { display: flex; flex-direction: column; gap: .75rem; padding: 1rem; width: 100%; box-sizing: border-box; }
+    .title-row { display: flex; align-items: center; gap: .375rem; flex-wrap: wrap; }
+    .title { margin: 0; flex: 1; font-size: 1.25rem; font-weight: 600; }
     .count { display: inline-flex; min-width: 1rem; height: 1rem; padding: 0 .25rem; margin-left: .5rem; border-radius: .5rem; background: var(--accent); color: var(--on-accent); font-size: .625rem; font-weight: 600; align-items: center; justify-content: center; }
     .tabs { display: flex; gap: .25rem; border-bottom: 1px solid var(--line); }
     .tab { height: 1.875rem; padding: 0 .75rem; border: 0; border-bottom: 1px solid transparent; background: transparent; color: var(--mut); cursor: pointer; font: inherit; }
@@ -136,16 +140,20 @@ function tabIndexAfterKey(key: string, currentIndex: number): number | undefined
     .filter-chip { height: 1.625rem; padding: 0 .625rem; border: 1px solid var(--line); border-radius: 1rem; background: var(--panel); color: var(--fg); font-size: .75rem; cursor: pointer; }
     .filter-chip.active { background: var(--active); }
     .filter-chip:disabled { color: var(--faint); cursor: not-allowed; }
-    .gate-list { display: flex; flex-direction: column; gap: .5rem; }
-    .gate-card { display: flex; gap: .625rem; padding: .875rem 1rem; border: 1px solid var(--line); border-radius: .625rem; background: var(--panel); }
+    .gate-list { display: flex; flex-direction: column; gap: .5rem; min-width: 0; }
+    .gate-card { display: flex; gap: .75rem; min-width: 0; padding: .875rem 1rem; border: 1px solid var(--line); border-radius: .625rem; background: var(--panel); }
+    .avatar { display: flex; align-items: center; justify-content: center; flex: none; width: 2rem; height: 2rem; border-radius: .5rem; border: 1px solid var(--line); background: var(--sunk); }
     .gate-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: .5rem; }
     .gate-meta { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
     .session-label { font-weight: 500; }
+    .gate-sentence { margin: 0; }
     .tool-name { font-family: var(--mono); font-size: .75rem; padding: 0 .375rem; border-radius: .25rem; background: var(--sunk); }
     .age { margin-left: auto; font-size: .6875rem; color: var(--faint); }
-    .tool-args { font-family: var(--mono); font-size: .8125rem; padding: .5rem .625rem; border-radius: .375rem; background: var(--sunk); border: 1px solid var(--line); margin: 0; }
+    .tool-args { margin: 0; overflow: auto; max-height: 10rem; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--mono); font-size: .75rem; padding: .375rem .5rem; border-radius: .375rem; background-color: var(--term-bg); color: var(--term-fg); border: 1px solid var(--line); }
     .actions { display: flex; gap: .5rem; }
-    .empty, .coming { color: var(--mut); padding: 1rem 0; }
+    .empty { display: flex; flex-direction: column; align-items: center; gap: .375rem; padding: 4rem 1rem; color: var(--mut); }
+    .empty-title { color: var(--fg); font-weight: 500; }
+    .coming { color: var(--mut); padding: 1rem 0; }
   `,
 })
 export class InboxComponent {
@@ -168,8 +176,9 @@ export class InboxComponent {
   private readonly gates = computed(() =>
     this.events.approvals().map((approval) => {
       const session = this.events.sessions().find((s) => s.id === approval.sessionId);
-      const sessionLabel = session ? `${session.emoji} ${session.name}` : approval.sessionId;
-      return { ...approval, sessionLabel, formattedInput: JSON.stringify(approval.toolInput, null, 2) };
+      const sessionName = session ? session.name : approval.sessionId;
+      const sessionEmoji = session ? session.emoji : '';
+      return { ...approval, sessionName, sessionEmoji, formattedInput: JSON.stringify(approval.toolInput, null, 2) };
     }),
   );
 
@@ -178,7 +187,7 @@ export class InboxComponent {
       ...gate,
       pending: this.pendingIds().has(gate.id),
       error: this.errorsById()[gate.id],
-      ageLabel: elapsedLabel(elapsedSecondsSince(gate.createdAt, this.now())),
+      ageLabel: compactElapsedLabel(elapsedSecondsSince(gate.createdAt, this.now())),
     })),
   );
 
