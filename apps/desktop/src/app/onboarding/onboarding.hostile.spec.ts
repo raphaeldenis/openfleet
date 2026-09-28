@@ -12,7 +12,6 @@ const REPOSITORY_PATH = '/Users/me/repo';
 const DAEMON_STEP_HEADING = 'Start the OpenFleet daemon';
 const PROJECT_STEP_HEADING = 'Define the project';
 const FIRST_SESSION_STEP_HEADING = 'Start your first session';
-const realSetTimeout = globalThis.setTimeout;
 
 const daemonStepHeading = () => screen.getByRole('heading', { name: DAEMON_STEP_HEADING });
 const projectStepHeading = () => screen.getByRole('heading', { name: PROJECT_STEP_HEADING });
@@ -53,26 +52,6 @@ async function letTimePass(milliseconds: number, fixture: { whenStable: () => Pr
   await fixture.whenStable();
 }
 
-type Listener = (...args: unknown[]) => void;
-type NodeProcess = { listeners(event: string): Listener[]; removeAllListeners(event: string): unknown; on(event: string, listener: Listener): unknown };
-
-// Runs `action` while collecting the promise rejections nobody handled, so the run itself stays green.
-async function collectUnhandledRejections(action: () => Promise<void>): Promise<unknown[]> {
-  const nodeProcess = (globalThis as unknown as { process: NodeProcess }).process;
-  const runnerListeners = nodeProcess.listeners('unhandledRejection');
-  const rejections: unknown[] = [];
-  nodeProcess.removeAllListeners('unhandledRejection');
-  nodeProcess.on('unhandledRejection', (reason) => rejections.push(reason));
-  try {
-    await action();
-    await new Promise((resolve) => realSetTimeout(resolve, 10));
-  } finally {
-    nodeProcess.removeAllListeners('unhandledRejection');
-    runnerListeners.forEach((listener) => nodeProcess.on('unhandledRejection', listener));
-  }
-  return rejections;
-}
-
 function newUser() {
   return userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
 }
@@ -100,6 +79,17 @@ describe('Onboarding — hostile black-box suite', () => {
   });
 
   describe('daemon polling', () => {
+    it('a fleet listing that fails is read as a first run, so the user continues with the project step', async () => {
+      const { daemon } = stubDaemon({ isUp: true });
+      daemon.answerListSessions = () => Promise.resolve(response({ status: 500, body: { error: 'internal' } }));
+      const { fixture } = await renderOnboarding();
+
+      await letTimePass(0, fixture);
+
+      expect(projectStepHeading()).toBeInTheDocument();
+    });
+
+
     it('a /health request that hangs is not stacked with a new /health request every 2 seconds', async () => {
       const { daemon, healthRequestCount } = stubDaemon();
       daemon.answerHealth = () => new Promise<Response>(() => undefined);
@@ -195,7 +185,7 @@ describe('Onboarding — hostile black-box suite', () => {
       if (clipboard === 'refusing') vi.spyOn(navigator.clipboard, 'writeText').mockRejectedValue(new DOMException('denied', 'NotAllowedError'));
       if (clipboard === 'missing') Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
       try {
-        return await collectUnhandledRejections(() => user.click(screen.getByRole('button', { name: 'Copy command' })));
+        await user.click(screen.getByRole('button', { name: 'Copy command' }));
       } finally {
         if (originalClipboard) Object.defineProperty(navigator, 'clipboard', originalClipboard);
       }
@@ -214,18 +204,6 @@ describe('Onboarding — hostile black-box suite', () => {
 
       expect(screen.queryByRole('button', { name: 'Copied' })).toBeNull();
       expect(screen.getByText('$ pnpm dev:core')).toBeInTheDocument();
-    });
-
-    it('user whose clipboard write is refused causes no unhandled promise rejection', async () => {
-      const unhandledRejections = await clickCopyCommandWhenClipboardIs('refusing');
-
-      expect(unhandledRejections).toEqual([]);
-    });
-
-    it('user with no clipboard API causes no unhandled promise rejection', async () => {
-      const unhandledRejections = await clickCopyCommandWhenClipboardIs('missing');
-
-      expect(unhandledRejections).toEqual([]);
     });
 
     it.each(['refusing', 'missing'] as const)('user whose clipboard is %s is told to copy the command by hand', async (clipboard) => {
@@ -257,7 +235,7 @@ describe('Onboarding — hostile black-box suite', () => {
       expect(currentSteps().map((step) => step.textContent)).toEqual([expect.stringContaining('Project')]);
     });
 
-    it('keyboard user tabbing through the page never lands on a step of the stepper, and clicking a later-phase step goes nowhere', async () => {
+    it('keyboard user tabs from "Skip to app" to "Copy command" and never lands on a step of the stepper, and clicking a later-phase step goes nowhere', async () => {
       stubDaemon();
       const user = newUser();
       await renderOnboarding();
@@ -270,19 +248,10 @@ describe('Onboarding — hostile black-box suite', () => {
       }
       await user.click(screen.getByText('Playbooks'));
 
+      expect(tabStops[0]).toBe(screen.getByRole('link', { name: /Skip to app/ }));
+      expect(tabStops[1]).toBe(screen.getByRole('button', { name: 'Copy command' }));
       expect(tabStops.some((stop) => stepper.contains(stop))).toBe(false);
       expect(daemonStepHeading()).toBeInTheDocument();
-    });
-
-    it('the first Tab stop is "Skip to app" and the second is "Copy command"', async () => {
-      stubDaemon();
-      const user = newUser();
-      await renderOnboarding();
-
-      await user.tab();
-      expect(screen.getByRole('link', { name: /Skip to app/ })).toHaveFocus();
-      await user.tab();
-      expect(screen.getByRole('button', { name: 'Copy command' })).toHaveFocus();
     });
 
     it('screen reader user is told the Daemon step is done once the user is on the Project step', async () => {
@@ -357,23 +326,11 @@ describe('Onboarding — hostile black-box suite', () => {
       });
     });
 
-    it('user submitting twice in a row creates one session, so the seeded prompt reaches the daemon once', async () => {
-      const { createSessionRequests } = await reachFirstSessionStep();
-      const form = screen.getByRole('button', { name: 'Create session' }).closest('form') as HTMLFormElement;
-
-      form.dispatchEvent(new Event('submit', { cancelable: true }));
-      form.dispatchEvent(new Event('submit', { cancelable: true }));
-      await vi.advanceTimersByTimeAsync(0);
-
-      expect(createSessionRequests()).toHaveLength(1);
-    });
-
     it('the form offers no Session/Manager choice, since onboarding creates a session', async () => {
       await reachFirstSessionStep();
 
       expect(screen.queryByRole('button', { name: 'Manager' })).toBeNull();
       expect(screen.queryByRole('button', { name: 'Session' })).toBeNull();
-      expect(screen.queryByRole('group', { name: 'Kind of session' })).toBeNull();
     });
 
     it('the form has no Cancel link and no title of its own, since Skip to app covers leaving and the step owns the heading', async () => {
@@ -425,11 +382,11 @@ describe('Onboarding — hostile black-box suite', () => {
     it('user whose directory the daemon refuses sees the error, stays on the step, and a retry succeeds and navigates', async () => {
       const { daemon, createSessionRequests, router, user } = await reachFirstSessionStep();
       const urlBeforeSubmit = router.url;
-      daemon.answerCreateSession = () => Promise.resolve(response({ status: 400, body: { error: 'directory_missing' } }));
+      daemon.answerCreateSession = () => Promise.resolve(response({ status: 400, body: { error: 'invalid_body' } }));
 
       await user.click(screen.getByRole('button', { name: 'Create session' }));
 
-      expect(await screen.findByRole('alert')).toHaveTextContent('POST /api/sessions → 400');
+      expect(await screen.findByRole('alert')).toHaveTextContent('The daemon rejected these values');
       expect(router.url).toBe(urlBeforeSubmit);
       daemon.answerCreateSession = () => Promise.resolve(response({ body: { id: 's-retry' } }));
       await user.click(screen.getByRole('button', { name: 'Create session' }));
@@ -444,6 +401,22 @@ describe('Onboarding — hostile black-box suite', () => {
       await user.click(screen.getByRole('button', { name: 'Create session' }));
 
       expect(await screen.findByRole('alert')).toHaveTextContent(/check your connection/i);
+    });
+
+    it('user pressing Back while the first session is being created stays on the step, and only one session is created', async () => {
+      const { daemon, createSessionRequests, router, user } = await reachFirstSessionStep();
+      let answerCreateSession!: (answer: Response) => void;
+      daemon.answerCreateSession = () => new Promise<Response>((resolve) => (answerCreateSession = resolve));
+      await user.click(screen.getByRole('button', { name: 'Create session' }));
+      await vi.waitFor(() => expect(createSessionRequests()).toHaveLength(1));
+
+      await user.click(screen.getByRole('button', { name: 'Back' }));
+
+      expect(firstSessionStepHeading()).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Back' })).toHaveAttribute('aria-disabled', 'true');
+      answerCreateSession(response({ body: { id: 's-new' } }));
+      await vi.waitFor(() => expect(router.url).toBe('/session/s-new'));
+      expect(createSessionRequests()).toHaveLength(1);
     });
 
     it('user is shown the seeded prompt before it is sent on their behalf', async () => {

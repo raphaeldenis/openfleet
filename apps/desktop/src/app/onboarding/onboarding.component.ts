@@ -1,5 +1,5 @@
 import { Location } from '@angular/common';
-import { ChangeDetectionStrategy, Component, computed, effect, inject, signal, untracked } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, effect, inject, signal, untracked, viewChild } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
 import { environment } from '../../environments/environment';
@@ -102,7 +102,7 @@ function requestedUrlFrom(navigationState: unknown): string {
               </header>
               <p class="seeded-prompt">The session starts by sending this prompt: <q>{{ seededPrompt }}</q></p>
               <of-new-session-form [embedded]="true" [initialDirectory]="repositoryPath().trim()" [initialName]="firstSessionName" [seededPrompt]="seededPrompt">
-                <button type="button" class="of-btn of-btn--secondary back" (click)="backToProject()">Back</button>
+                <button type="button" class="of-btn of-btn--secondary back" [attr.aria-disabled]="isCreatingFirstSession() || null" (click)="backToProject()">Back</button>
               </of-new-session-form>
             </section>
           }
@@ -125,7 +125,7 @@ function requestedUrlFrom(navigationState: unknown): string {
     .step[data-state='done'] .bar { background: var(--state-idle) }
     .step[data-state='current'] { color: var(--fg) }
     .step[data-state='current'] .bar { background: var(--accent) }
-    .content { display: flex; flex: 1; align-items: flex-start; justify-content: center; min-height: 0; overflow: auto; padding: 1rem 2rem 2rem }
+    .content { display: flex; flex: 1; align-items: flex-start; justify-content: center; min-height: 0; overflow: auto; padding: 1rem 2rem 2rem; scroll-padding-bottom: 3.5rem }
     .step-panel { display: flex; flex-direction: column; gap: 1rem; width: 56rem; max-width: 100% }
     header { display: flex; flex-direction: column; gap: .25rem }
     .kicker { font-size: .75rem; color: var(--mut) }
@@ -164,6 +164,8 @@ export class OnboardingComponent {
   protected readonly seededPrompt = FIRST_SESSION_SEEDED_PROMPT;
   protected readonly daemonAddress = environment.daemonAddress;
 
+  private readonly firstSessionForm = viewChild(NewSessionFormComponent);
+  protected readonly isCreatingFirstSession = computed(() => this.firstSessionForm()?.isPending() ?? false);
   protected readonly currentStepId = signal<StepId>('daemon');
   protected readonly repositoryPath = signal('');
   protected readonly hasRepositoryPath = computed(() => this.repositoryPath().trim() !== '');
@@ -220,7 +222,8 @@ export class OnboardingComponent {
   }
 
   protected backToProject(): void {
-    this.currentStepId.set('project');
+    if (this.isCreatingFirstSession()) return;
+    this.showProjectStep();
   }
 
   // A returning user (deep link, or a fleet that already has sessions) goes back to the app;
@@ -229,8 +232,12 @@ export class OnboardingComponent {
     const isDeepLink = this.returnUrl !== APP_HOME_URL;
     const isReturningUser = isDeepLink || (await this.fleetHasSessions());
     if (hasLeftDaemonStep()) return;
-    if (isReturningUser) await this.router.navigateByUrl(this.returnUrl);
-    else this.currentStepId.set('project');
+    if (isReturningUser) await this.router.navigateByUrl(this.returnUrl).catch(() => this.showProjectStep());
+    else this.showProjectStep();
+  }
+
+  private showProjectStep(): void {
+    this.currentStepId.set('project');
   }
 
   private fleetHasSessions(): Promise<boolean> {

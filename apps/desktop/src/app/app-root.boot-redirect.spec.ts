@@ -1,6 +1,6 @@
 import { signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
-import { NavigationEnd, provideRouter, Router, withComponentInputBinding } from '@angular/router';
+import { NavigationEnd, provideRouter, Router, type Routes, withComponentInputBinding } from '@angular/router';
 import { screen } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -40,10 +40,10 @@ function stubDaemon({ answersHealth, fleet = [] }: { answersHealth: () => Promis
   return { daemon, healthRequestCount };
 }
 
-function configureAppRoot() {
+function configureAppRoot(appRoutes: Routes = routes) {
   TestBed.configureTestingModule({
     providers: [
-      provideRouter(routes, withComponentInputBinding()),
+      provideRouter(appRoutes, withComponentInputBinding()),
       {
         provide: FleetEventsService,
         useValue: { connect: vi.fn(), sessions: signal([]), approvals: signal([]), managers: signal([]), connected: signal(true), snapshotReceived: signal(true) },
@@ -105,6 +105,27 @@ describe('AppRoot boot redirect', () => {
     await userEvent.setup({ advanceTimers: vi.advanceTimersByTime }).click(screen.getByRole('link', { name: /Skip to app/ }));
 
     await vi.waitFor(() => expect(router.url).toBe(DEEP_LINK));
+  });
+
+  it('user sent back to a deep link that then fails to open lands on the project step instead of staying on the daemon step', async () => {
+    const { daemon } = stubDaemon({ answersHealth: daemonIsDown });
+    let visitsToDeepLink = 0;
+    const opensOnlyOnTheFirstVisit = () => {
+      visitsToDeepLink += 1;
+      if (visitsToDeepLink > 1) throw new Error('route failed to load');
+      return true;
+    };
+    const router = configureAppRoot([{ path: 'session/:id', canActivate: [opensOnlyOnTheFirstVisit], children: [] }, ...routes]);
+    await router.navigateByUrl(DEEP_LINK);
+    const fixture = TestBed.createComponent(AppRoot);
+    fixture.detectChanges();
+    await vi.waitFor(() => expect(router.url).toBe('/onboarding'));
+    await letTimePass(0, fixture);
+
+    daemon.answersHealth = daemonIsUp;
+    await letTimePass(HEALTH_POLL_INTERVAL_MS, fixture);
+
+    await vi.waitFor(() => expect(screen.getByRole('heading', { name: PROJECT_STEP_HEADING })).toBeInTheDocument());
   });
 
   it('returning user whose daemon was simply down, with sessions in the fleet, is sent back to the app', async () => {

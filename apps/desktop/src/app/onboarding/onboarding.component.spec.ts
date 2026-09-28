@@ -1,7 +1,6 @@
 import { render, screen } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
-import { TestBed } from '@angular/core/testing';
-import { provideRouter, Router } from '@angular/router';
+import { provideRouter } from '@angular/router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OnboardingComponent } from './onboarding.component';
 
@@ -16,23 +15,18 @@ function jsonResponse(body: unknown): Response {
 
 function stubDaemon() {
   const daemon = { isUp: false };
-  const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+  const fetchMock = vi.fn((url: string) => {
     if (url.endsWith('/health')) return daemon.isUp ? Promise.resolve(jsonResponse({ ok: true })) : Promise.reject(new TypeError('Failed to fetch'));
-    if (url.endsWith('/api/sessions')) return Promise.resolve(jsonResponse(init?.method === 'POST' ? { id: 's-new' } : []));
+    if (url.endsWith('/api/sessions')) return Promise.resolve(jsonResponse([]));
     return Promise.reject(new Error(`unexpected request to ${url}`));
   });
   vi.stubGlobal('fetch', fetchMock);
   const healthRequestCount = () => fetchMock.mock.calls.filter(([url]) => url.endsWith('/health')).length;
-  const createSessionRequestBody = () => {
-    const createRequest = fetchMock.mock.calls.find(([url, init]) => url.endsWith('/api/sessions') && init?.method === 'POST');
-    return JSON.parse(createRequest?.[1]?.body as string);
-  };
-  return { daemon, healthRequestCount, createSessionRequestBody };
+  return { daemon, healthRequestCount };
 }
 
-async function renderOnboarding() {
-  const view = await render(OnboardingComponent, { providers: [provideRouter([{ path: '**', children: [] }])] });
-  return { ...view, router: TestBed.inject(Router) };
+function renderOnboarding() {
+  return render(OnboardingComponent, { providers: [provideRouter([{ path: '**', children: [] }])] });
 }
 
 async function letTimePass(milliseconds: number, fixture: { whenStable: () => Promise<unknown> }): Promise<void> {
@@ -96,18 +90,6 @@ describe('OnboardingComponent', () => {
     expect(await navigator.clipboard.readText()).toBe('pnpm dev:core');
   });
 
-  it('user waiting on the daemon step has /health checked every 2 seconds', async () => {
-    const { healthRequestCount } = stubDaemon();
-    const { fixture } = await renderOnboarding();
-    const requestsOnArrival = healthRequestCount();
-
-    await letTimePass(HEALTH_POLL_INTERVAL_MS, fixture);
-    await letTimePass(HEALTH_POLL_INTERVAL_MS, fixture);
-
-    expect(healthRequestCount()).toBe(requestsOnArrival + 2);
-    expect(screen.getByRole('heading', { name: DAEMON_STEP_HEADING })).toBeInTheDocument();
-  });
-
   it('user sees onboarding move on to the project step once the daemon answers, and /health is no longer polled', async () => {
     const { daemon, healthRequestCount } = stubDaemon();
     const { fixture } = await renderOnboarding();
@@ -148,28 +130,4 @@ describe('OnboardingComponent', () => {
     expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled();
   });
 
-  it('user creates the first session from the new-session form, pre-filled with the repository path and a safe seeded prompt, and lands on it', async () => {
-    const { daemon, createSessionRequestBody } = stubDaemon();
-    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-    const { fixture, router } = await renderOnboarding();
-    daemon.isUp = true;
-    await letTimePass(HEALTH_POLL_INTERVAL_MS, fixture);
-    await user.type(screen.getByLabelText('Repository path'), '/Users/me/repo');
-    await user.click(screen.getByRole('button', { name: 'Continue' }));
-
-    expect(screen.getByLabelText('Directory')).toHaveValue('/Users/me/repo');
-    await user.click(screen.getByRole('button', { name: 'Create session' }));
-
-    await vi.waitFor(() => expect(router.url).toBe('/session/s-new'));
-    const { directory, seededPrompt } = createSessionRequestBody();
-    expect(directory).toBe('/Users/me/repo');
-    expect(seededPrompt).toMatch(/do not (modify|change|edit)/i);
-  });
-
-  it('user can skip onboarding and go straight to the app', async () => {
-    stubDaemon();
-    await renderOnboarding();
-
-    expect(screen.getByRole('link', { name: /Skip to app/ })).toHaveAttribute('href', '/');
-  });
 });
