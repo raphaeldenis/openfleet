@@ -126,8 +126,8 @@ function requestedUrlFrom(navigationState: unknown): string {
     .step[data-state='done'] .bar { background: var(--state-idle) }
     .step[data-state='current'] { color: var(--fg) }
     .step[data-state='current'] .bar { background: var(--accent) }
-    .content { display: flex; flex: 1; align-items: flex-start; justify-content: center; min-height: 0; overflow: auto; padding: 1rem 2rem 2rem; scroll-padding-bottom: 3.5rem }
-    .step-panel { display: flex; flex-direction: column; gap: 1rem; width: 56rem; max-width: 100% }
+    .content { display: flex; flex: 1; align-items: flex-start; justify-content: center; min-height: 0; overflow: auto; padding: 1rem 2rem 0; scroll-padding-bottom: 3.5rem }
+    .step-panel { display: flex; flex-direction: column; gap: 1rem; width: 56rem; max-width: 100%; padding-bottom: 2rem }
     header { display: flex; flex-direction: column; gap: .25rem }
     .kicker { font-size: .75rem; color: var(--mut) }
     h1 { margin: 0; font-size: 1.375rem; font-weight: 600; letter-spacing: -.015em }
@@ -236,7 +236,7 @@ export class OnboardingComponent {
     const isDeepLink = this.returnUrl !== APP_HOME_URL;
     const isReturningUser = isDeepLink || (await this.fleetHasSessions());
     if (hasLeftDaemonStep()) return;
-    if (isReturningUser) await this.router.navigateByUrl(this.returnUrl).catch(() => this.showProjectStep());
+    if (isReturningUser) await this.router.navigateByUrl(this.returnUrl).then((isOpened) => isOpened || this.showProjectStep(), () => this.showProjectStep());
     else this.showProjectStep();
   }
 
@@ -246,7 +246,7 @@ export class OnboardingComponent {
 
   private fleetHasSessions(): Promise<boolean> {
     return this.api.listSessions().then(
-      (sessions) => sessions.length > 0,
+      (sessions) => Array.isArray(sessions) && sessions.length > 0,
       () => false,
     );
   }

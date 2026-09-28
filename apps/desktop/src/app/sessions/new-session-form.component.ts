@@ -26,12 +26,14 @@ const HARNESS_OPTIONS: ReadonlyArray<{ id: string; label: string; isAvailable: b
 
 // A host page that embeds the form provides this in its view providers: it owns the heading, the way out and the kind
 // of session, and it shows the prompt it seeds. Dependency injection is the only way in, since a link cannot fill it
-// the way it fills a routed component's inputs.
+// the way it fills a routed component's inputs. It also remembers the session the form created, so a form that the host
+// destroys and mounts again opens that session instead of creating a second one.
 @Injectable()
 export class EmbeddedSessionSeed {
   readonly directory = signal('');
   readonly name = signal('');
   readonly prompt = signal('');
+  readonly createdSession = signal<CreatedSession | undefined>(undefined);
 }
 
 function creationModeFrom(queryParams: ParamMap | undefined): CreationMode {
@@ -107,16 +109,18 @@ function creationModeFrom(queryParams: ParamMap | undefined): CreationMode {
       }
       </fieldset>
 
-      @if (serverError(); as error) {
-        <p role="alert" data-testid="new-session-form-error" class="of-error">✕ {{ error }}</p>
-      }
-      <div class="actions">
-        <span class="creating" role="status">@if (pending()) {Creating {{ mode() }}…}</span>
-        <ng-content />
-        @if (!isEmbedded) {
-          <a class="of-btn of-btn--secondary" routerLink="/" data-testid="new-session-cancel">Cancel</a>
+      <div class="footer">
+        @if (serverError(); as error) {
+          <p role="alert" data-testid="new-session-form-error" class="of-error">✕ {{ error }}</p>
         }
-        <button #submitButton type="submit" class="of-btn of-btn--primary" data-testid="new-session-submit" [attr.aria-disabled]="ariaDisabled()">{{ isManagerMode() ? 'Create manager' : 'Create session' }}</button>
+        <div class="actions">
+          <span class="creating" role="status">@if (pending()) {Creating {{ mode() }}…}</span>
+          <ng-content />
+          @if (!isEmbedded) {
+            <a class="of-btn of-btn--secondary" routerLink="/" data-testid="new-session-cancel">Cancel</a>
+          }
+          <button #submitButton type="submit" class="of-btn of-btn--primary" data-testid="new-session-submit" [attr.aria-disabled]="ariaDisabled()">{{ isManagerMode() ? 'Create manager' : 'Create session' }}</button>
+        </div>
       </div>
     </form>
   `,
@@ -126,7 +130,8 @@ function creationModeFrom(queryParams: ParamMap | undefined): CreationMode {
     .header { display: flex; align-items: center; gap: 1rem }
     :host(.embedded) { padding: 0 }
     :host(.embedded) .of-form { width: 100% }
-    :host(.embedded) .actions { position: sticky; bottom: 0; margin-top: .75rem; padding: .75rem 0; background: var(--bg) }
+    .footer { display: flex; flex-direction: column; gap: 1.25rem }
+    :host(.embedded) .footer { position: sticky; bottom: 0; gap: .75rem; margin-top: .75rem; padding: .75rem 0; background: var(--bg) }
     h1 { flex: 1; margin: 0; font-size: 1.25rem; font-weight: 600; letter-spacing: -.01em }
     .mode-toggle { display: flex; padding: .125rem; border: 1px solid var(--line); border-radius: .5rem; background: var(--sunk) }
     .mode-toggle button { height: 1.625rem; padding: 0 .75rem; border: 0; border-radius: .375rem; background: transparent; color: var(--fg); font: inherit; font-size: .75rem; cursor: pointer }
@@ -168,7 +173,7 @@ export class NewSessionFormComponent {
   protected readonly pending = signal(false);
   readonly isPending = this.pending.asReadonly();
   protected readonly ariaDisabled = computed(() => (this.pending() ? 'true' : null));
-  private readonly createdSession = signal<CreatedSession | undefined>(undefined);
+  private readonly createdSession = this.embeddedSessionSeed?.createdSession ?? signal<CreatedSession | undefined>(undefined);
   private readonly modeFromUrl = linkedSignal<{ urlMode: CreationMode; isHoldingMode: boolean }, CreationMode>({
     source: () => ({ urlMode: creationModeFrom(this.queryParams()), isHoldingMode: this.pending() || this.createdSession() !== undefined }),
     computation: ({ urlMode, isHoldingMode }, previous) => (isHoldingMode && previous ? previous.value : urlMode),

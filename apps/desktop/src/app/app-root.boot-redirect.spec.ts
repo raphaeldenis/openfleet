@@ -128,6 +128,26 @@ describe('AppRoot boot redirect', () => {
     await vi.waitFor(() => expect(screen.getByRole('heading', { name: PROJECT_STEP_HEADING })).toBeInTheDocument());
   });
 
+  it('user sent back to a deep link that the router refuses to open lands on the project step instead of staying on the daemon step', async () => {
+    const { daemon } = stubDaemon({ answersHealth: daemonIsDown });
+    let visitsToDeepLink = 0;
+    const opensOnlyOnTheFirstVisit = () => {
+      visitsToDeepLink += 1;
+      return visitsToDeepLink === 1;
+    };
+    const router = configureAppRoot([{ path: 'session/:id', canActivate: [opensOnlyOnTheFirstVisit], children: [] }, ...routes]);
+    await router.navigateByUrl(DEEP_LINK);
+    const fixture = TestBed.createComponent(AppRoot);
+    fixture.detectChanges();
+    await vi.waitFor(() => expect(router.url).toBe('/onboarding'));
+    await letTimePass(0, fixture);
+
+    daemon.answersHealth = daemonIsUp;
+    await letTimePass(HEALTH_POLL_INTERVAL_MS, fixture);
+
+    await vi.waitFor(() => expect(screen.getByRole('heading', { name: PROJECT_STEP_HEADING })).toBeInTheDocument());
+  });
+
   it('returning user whose daemon was simply down, with sessions in the fleet, is sent back to the app', async () => {
     const { daemon } = stubDaemon({ answersHealth: daemonIsDown });
     const { router, fixture } = await openAppAt('/');

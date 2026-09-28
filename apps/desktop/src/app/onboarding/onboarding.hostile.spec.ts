@@ -27,12 +27,12 @@ function responseWithNonJsonBody(): Response {
 
 function stubDaemon({ isUp = false } = {}) {
   const daemon = {
-    answerHealth: (): Promise<Response> => (isUp ? Promise.resolve(response({ body: { ok: true } })) : Promise.reject(new TypeError('Failed to fetch'))),
+    answerHealth: (_init?: RequestInit): Promise<Response> => (isUp ? Promise.resolve(response({ body: { ok: true } })) : Promise.reject(new TypeError('Failed to fetch'))),
     answerListSessions: (): Promise<Response> => Promise.resolve(response({ body: [] })),
     answerCreateSession: (): Promise<Response> => Promise.resolve(response({ body: { id: 's-new' } })),
   };
   const fetchMock = vi.fn((url: string, init?: RequestInit) => {
-    if (url.endsWith('/health')) return daemon.answerHealth();
+    if (url.endsWith('/health')) return daemon.answerHealth(init);
     if (url.endsWith('/api/sessions')) return init?.method === 'POST' ? daemon.answerCreateSession() : daemon.answerListSessions();
     return Promise.reject(new Error(`unexpected request to ${url}`));
   });
@@ -42,8 +42,15 @@ function stubDaemon({ isUp = false } = {}) {
   return { daemon, healthRequestCount, createSessionRequests };
 }
 
-async function renderOnboarding() {
-  const view = await render(OnboardingComponent, { providers: [provideRouter([{ path: '**', children: [] }])] });
+type SessionRouteGuard = () => boolean;
+const alwaysOpensSessions: SessionRouteGuard = () => true;
+
+async function renderOnboarding({ canOpenSessions = alwaysOpensSessions } = {}) {
+  const routes = [
+    { path: 'session/:id', canActivate: [canOpenSessions], children: [] },
+    { path: '**', children: [] },
+  ];
+  const view = await render(OnboardingComponent, { providers: [provideRouter(routes)] });
   return { ...view, router: TestBed.inject(Router) };
 }
 
@@ -56,15 +63,15 @@ function newUser() {
   return userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
 }
 
-async function reachProjectStep() {
+async function reachProjectStep({ canOpenSessions = alwaysOpensSessions } = {}) {
   const daemonStub = stubDaemon({ isUp: true });
-  const view = await renderOnboarding();
+  const view = await renderOnboarding({ canOpenSessions });
   await letTimePass(0, view.fixture);
   return { ...daemonStub, ...view };
 }
 
-async function reachFirstSessionStep(repositoryPath = REPOSITORY_PATH) {
-  const view = await reachProjectStep();
+async function reachFirstSessionStep({ repositoryPath = REPOSITORY_PATH, canOpenSessions = alwaysOpensSessions } = {}) {
+  const view = await reachProjectStep({ canOpenSessions });
   const user = newUser();
   await user.type(screen.getByLabelText('Repository path'), repositoryPath);
   await user.click(screen.getByRole('button', { name: 'Continue' }));
@@ -89,6 +96,18 @@ describe('Onboarding — hostile black-box suite', () => {
       expect(projectStepHeading()).toBeInTheDocument();
     });
 
+    it.each([
+      ['null', null],
+      ['an object', { error: 'unexpected' }],
+    ])('a fleet listing answering 200 with %s instead of a list is read as a first run, so the user continues with the project step', async (_bodyName, body) => {
+      const { daemon } = stubDaemon({ isUp: true });
+      daemon.answerListSessions = () => Promise.resolve(response({ body }));
+      const { fixture } = await renderOnboarding();
+
+      await letTimePass(0, fixture);
+
+      expect(projectStepHeading()).toBeInTheDocument();
+    });
 
     it('a /health request that hangs is not stacked with a new /health request every 2 seconds', async () => {
       const { daemon, healthRequestCount } = stubDaemon();
@@ -100,13 +119,20 @@ describe('Onboarding — hostile black-box suite', () => {
       expect(healthRequestCount()).toBe(1);
     });
 
-    it('a /health that never answers is given up on after 5 seconds and checked again', async () => {
+    it('a /health that never answers is aborted after 5 seconds and checked again', async () => {
       const { daemon, healthRequestCount } = stubDaemon();
-      daemon.answerHealth = () => new Promise<Response>(() => undefined);
+      const healthSignals: AbortSignal[] = [];
+      daemon.answerHealth = (init) => {
+        healthSignals.push(init?.signal as AbortSignal);
+        return new Promise<Response>(() => undefined);
+      };
       const { fixture } = await renderOnboarding();
 
-      await letTimePass(5000 + HEALTH_POLL_INTERVAL_MS, fixture);
+      await letTimePass(4999, fixture);
+      expect(healthSignals[0]?.aborted).toBe(false);
+      await letTimePass(1 + HEALTH_POLL_INTERVAL_MS, fixture);
 
+      expect(healthSignals[0]?.aborted).toBe(true);
       expect(healthRequestCount()).toBe(2);
       expect(daemonStepHeading()).toBeInTheDocument();
     });
@@ -310,7 +336,7 @@ describe('Onboarding — hostile black-box suite', () => {
 
   describe('first-session step', () => {
     it('user gets exactly the documented payload: trimmed path, default identity, default model, and the seeded prompt', async () => {
-      const { createSessionRequests, user } = await reachFirstSessionStep(`  ${REPOSITORY_PATH}  `);
+      const { createSessionRequests, user } = await reachFirstSessionStep({ repositoryPath: `  ${REPOSITORY_PATH}  ` });
 
       await user.click(screen.getByRole('button', { name: 'Create session' }));
 
@@ -417,6 +443,35 @@ describe('Onboarding — hostile black-box suite', () => {
       answerCreateSession(response({ body: { id: 's-new' } }));
       await vi.waitFor(() => expect(router.url).toBe('/session/s-new'));
       expect(createSessionRequests()).toHaveLength(1);
+    });
+
+    it('user whose created session could not be opened goes Back then Continue, and Create opens that same session instead of creating a second one', async () => {
+      let isOpeningSessionsAllowed = false;
+      const { createSessionRequests, router, user } = await reachFirstSessionStep({ canOpenSessions: () => isOpeningSessionsAllowed });
+      await user.click(screen.getByRole('button', { name: 'Create session' }));
+      expect(await screen.findByRole('alert')).toHaveTextContent('created but could not be opened');
+
+      await user.click(screen.getByRole('button', { name: 'Back' }));
+      await user.click(screen.getByRole('button', { name: 'Continue' }));
+      isOpeningSessionsAllowed = true;
+      await user.click(screen.getByRole('button', { name: 'Create session' }));
+
+      await vi.waitFor(() => expect(router.url).toBe('/session/s-new'));
+      expect(createSessionRequests()).toHaveLength(1);
+    });
+
+    it('user whose created session could not be opened, then edits the path on the project step, gets a new session for the edited form', async () => {
+      const { createSessionRequests, user } = await reachFirstSessionStep({ canOpenSessions: () => false });
+      await user.click(screen.getByRole('button', { name: 'Create session' }));
+      expect(await screen.findByRole('alert')).toHaveTextContent('created but could not be opened');
+
+      await user.click(screen.getByRole('button', { name: 'Back' }));
+      await user.type(screen.getByLabelText('Repository path'), '-other');
+      await user.click(screen.getByRole('button', { name: 'Continue' }));
+      await user.click(screen.getByRole('button', { name: 'Create session' }));
+
+      await vi.waitFor(() => expect(createSessionRequests()).toHaveLength(2));
+      expect(createSessionRequests()[1]).toHaveProperty('directory', `${REPOSITORY_PATH}-other`);
     });
 
     it('user is shown the seeded prompt before it is sent on their behalf', async () => {
