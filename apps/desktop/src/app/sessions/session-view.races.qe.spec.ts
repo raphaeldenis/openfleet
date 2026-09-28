@@ -2,10 +2,19 @@ import { render, screen, waitFor } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
 import { ChangeDetectionStrategy, Component, signal } from '@angular/core';
 import { describe, expect, it, vi } from 'vitest';
-import type { ServerEvent, Session, SessionState } from '@openfleet/shared';
+import type { Session, SessionState } from '@openfleet/shared';
 import { SessionViewComponent } from './session-view.component';
 import { FleetApiService } from '../core/fleet-api.service';
-import { FleetEventsService } from '../core/fleet-events.service';
+import {
+  SWITCH_KINDS,
+  applyButtonOf,
+  connectFakeDaemon,
+  deferred,
+  errorOf,
+  noteOf,
+  requestSwitch,
+  settleRequests,
+} from '../testing/session-view.testing';
 
 /** A test that states the wanted behavior of a known defect: it passes while the defect exists, and fails once the defect is fixed. */
 const itShowsADefect = it.fails;
@@ -27,13 +36,6 @@ function session(patch: Partial<Session> = {}): Session {
 
 const gimli = (patch: Partial<Session> = {}) => session({ id: 's1', name: 'Gimli', ...patch });
 const legolas = (patch: Partial<Session> = {}) => session({ id: 's2', name: 'Legolas', state: 'idle', ...patch });
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
-  return { promise, resolve, reject };
-}
 
 function fakeApi() {
   return {
@@ -62,18 +64,10 @@ class ViewHostComponent {
 async function renderFleet(api: ReturnType<typeof fakeApi>, sessions: Session[]) {
   const { fixture } = await render(ViewHostComponent, { providers: [{ provide: FleetApiService, useValue: api }] });
   const host = fixture.componentInstance;
-  const reducer = fixture.debugElement.injector.get(FleetEventsService) as unknown as { reduce(event: ServerEvent): void };
+  const fakeDaemon = connectFakeDaemon(fixture);
   const daemon = {
-    async send(event: ServerEvent) {
-      reducer.reduce(event);
-      await fixture.whenStable();
-    },
-    /** Events that reach the client before Angular renders in between. */
-    async sendInOneBurst(...events: ServerEvent[]) {
-      for (const event of events) reducer.reduce(event);
-      await fixture.whenStable();
-    },
-    setState: (sessionId: string, state: SessionState) => daemon.send({ type: 'session.state', sessionId, state, stateSince: 't2' }),
+    ...fakeDaemon,
+    setState: (sessionId: string, state: SessionState) => fakeDaemon.send({ type: 'session.state', sessionId, state, stateSince: 't2' }),
   };
   await daemon.send({ type: 'snapshot', sessions, approvals: [], managers: [] });
   const goTo = async (sessionId: string) => {
@@ -91,28 +85,6 @@ async function renderFleet(api: ReturnType<typeof fakeApi>, sessions: Session[])
   return { fixture, api, daemon, goTo, leaveTheSessionView, comeBackToTheSessionView };
 }
 
-const PROMISE_HOPS_OF_A_SETTLED_REQUEST = 10;
-
-/** Runs the continuations chained on a settled request (action → runGuarded → caller), then renders. */
-async function settleRequests(fixture: { whenStable(): Promise<unknown> }) {
-  for (let hop = 0; hop < PROMISE_HOPS_OF_A_SETTLED_REQUEST; hop++) await Promise.resolve();
-  await fixture.whenStable();
-}
-
-const SWITCH_KINDS = [
-  { kind: 'model', select: 'model-select', valueInForce: 'claude-sonnet-5', option: 'opus', apply: 'apply-model', note: 'model-switch-status', error: 'model-switch-error', apiMethod: 'updateModel' },
-  { kind: 'permission-mode', select: 'permission-mode-select', valueInForce: 'manual', option: 'acceptEdits', apply: 'apply-permission-mode', note: 'permission-mode-switch-status', error: 'permission-mode-switch-error', apiMethod: 'updatePermissionMode' },
-] as const;
-type SwitchKind = (typeof SWITCH_KINDS)[number];
-
-async function requestSwitch({ select, option, apply }: SwitchKind) {
-  await userEvent.selectOptions(screen.getByTestId(select), option);
-  await userEvent.click(screen.getByTestId(apply));
-}
-
-const noteOf = ({ note }: SwitchKind) => screen.queryByTestId(note);
-const errorOf = ({ error }: SwitchKind) => screen.queryByTestId(error);
-const applyButtonOf = ({ apply }: SwitchKind) => screen.getByTestId(apply) as HTMLButtonElement;
 const modelSwitch = SWITCH_KINDS[0];
 const permissionModeSwitch = SWITCH_KINDS[1];
 

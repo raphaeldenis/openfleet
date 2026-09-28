@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it, onTestFinished, vi } from 'v
 import type { SessionState } from '@openfleet/shared';
 import { SessionActionsComponent } from './session-actions.component';
 import { FleetApiService } from '../core/fleet-api.service';
+import { deferred, settleRequests } from '../testing/session-view.testing';
 
 // jsdom lets focus() land inside an inert subtree, where a real browser drops it onto <body>; this
 // shim reproduces the browser so a focus() fired before Angular removes `inert` fails here too.
@@ -31,21 +32,6 @@ function bindingsFor(state: SessionState, options: { sessionName?: string; model
 }
 
 type Api = { closeSession: ReturnType<typeof vi.fn>; sendInput: ReturnType<typeof vi.fn> };
-
-function deferred() {
-  let resolve: (value: unknown) => void = () => {};
-  let reject: (reason: unknown) => void = () => {};
-  const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
-  return { promise, resolve, reject };
-}
-
-const PROMISE_HOPS_OF_A_SETTLED_REQUEST = 10;
-
-/** Runs the continuations chained on a settled request (action → runGuarded → caller), then renders. */
-async function settleRequests(fixture: { whenStable(): Promise<unknown> }) {
-  for (let hop = 0; hop < PROMISE_HOPS_OF_A_SETTLED_REQUEST; hop++) await Promise.resolve();
-  await fixture.whenStable();
-}
 
 describe('SessionActionsComponent', () => {
   it('shows Close but not Interrupt for an idle session', async () => {

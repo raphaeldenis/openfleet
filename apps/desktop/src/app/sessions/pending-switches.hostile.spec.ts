@@ -7,6 +7,7 @@ import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { ModelSelectorComponent } from './model-selector.component';
 import { PermissionModePickerComponent } from './permission-mode-picker.component';
+import { SWITCH_KINDS, applyButtonOf, deferred, errorOf, noteOf, requestSwitch, settleRequests } from '../testing/session-view.testing';
 
 interface FakeSession { id: string; name: string; emoji: string; model: string; state: SessionState; permissionMode: PermissionMode }
 
@@ -33,13 +34,6 @@ class SelectorsHostComponent {
   protected readonly shown = computed(() => this.events.sessions().find((s) => s.id === this.sessionId()));
 }
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
-  return { promise, resolve, reject };
-}
-
 async function renderSelectors(options: { sessions?: FakeSession[]; api?: Partial<Record<'updateModel' | 'updatePermissionMode', ReturnType<typeof vi.fn>>> } = {}) {
   const sessions = signal<FakeSession[]>(options.sessions ?? [fakeSession('s1'), fakeSession('s2', 'idle')]);
   const api = {
@@ -61,36 +55,15 @@ async function renderSelectors(options: { sessions?: FakeSession[]; api?: Partia
   return { fixture, host, sessions, api, goTo };
 }
 
-async function requestModelSwitch() {
-  await userEvent.selectOptions(screen.getByTestId('model-select'), 'opus');
-  await userEvent.click(screen.getByTestId('apply-model'));
-}
-
-async function requestPermissionModeSwitch() {
-  await userEvent.selectOptions(screen.getByTestId('permission-mode-select'), 'acceptEdits');
-  await userEvent.click(screen.getByTestId('apply-permission-mode'));
-}
-
-const modelNote = () => screen.queryByTestId('model-switch-status');
-const permissionModeNote = () => screen.queryByTestId('permission-mode-switch-status');
-const modelError = () => screen.queryByTestId('model-switch-error');
-const permissionModeError = () => screen.queryByTestId('permission-mode-switch-error');
-
-const PROMISE_HOPS_OF_A_SETTLED_REQUEST = 10;
-
-/** Runs the continuations chained on a settled request (action → runGuarded → caller), then renders. */
-async function settleRequests(fixture: { whenStable(): Promise<unknown> }) {
-  for (let hop = 0; hop < PROMISE_HOPS_OF_A_SETTLED_REQUEST; hop++) await Promise.resolve();
-  await fixture.whenStable();
-}
+const modelSwitch = SWITCH_KINDS[0];
+const permissionModeSwitch = SWITCH_KINDS[1];
+const requestModelSwitch = () => requestSwitch(modelSwitch);
+const requestPermissionModeSwitch = () => requestSwitch(permissionModeSwitch);
+const modelNote = () => noteOf(modelSwitch);
+const permissionModeNote = () => noteOf(permissionModeSwitch);
 
 const setStateOf = (sessions: ReturnType<typeof signal<FakeSession[]>>, id: string, state: SessionState) =>
   sessions.update((all) => all.map((s) => (s.id === id ? { ...s, state } : s)));
-
-const SWITCH_KINDS = [
-  { kind: 'model', request: requestModelSwitch, note: modelNote, error: modelError, apiMethod: 'updateModel', applyTestId: 'apply-model' },
-  { kind: 'permission-mode', request: requestPermissionModeSwitch, note: permissionModeNote, error: permissionModeError, apiMethod: 'updatePermissionMode', applyTestId: 'apply-permission-mode' },
-] as const;
 
 describe('PendingSwitchesService through the model selector and the permission-mode picker', () => {
   describe('the model entry and the permission-mode entry of one session', () => {
@@ -237,17 +210,14 @@ describe('PendingSwitchesService through the model selector and the permission-m
   });
 
   describe('a relaunch that runs from start to finish while the user is elsewhere', () => {
-    it.each([
-      { kind: 'model', request: requestModelSwitch, note: modelNote, apiMethod: 'updateModel' },
-      { kind: 'permission-mode', request: requestPermissionModeSwitch, note: permissionModeNote, apiMethod: 'updatePermissionMode' },
-    ])('shows no "restarting…" note for the $kind switch back on the session', async ({ request, note, apiMethod }) => {
+    it.each(SWITCH_KINDS)('shows no "restarting…" note for the $kind switch back on the session', async (kind) => {
       // Arrange — an idle session: the REST reply says "relaunching", the daemon starts ~2 s later, then idle again
       const { fixture, goTo, sessions } = await renderSelectors({
         sessions: [fakeSession('s1', 'idle'), fakeSession('s2', 'idle')],
-        api: { [apiMethod]: vi.fn().mockResolvedValue({ status: 'relaunching' }) },
+        api: { [kind.apiMethod]: vi.fn().mockResolvedValue({ status: 'relaunching' }) },
       });
-      await request();
-      await waitFor(() => expect(note()).toHaveTextContent('restarting…'));
+      await requestSwitch(kind);
+      await waitFor(() => expect(noteOf(kind)).toHaveTextContent('restarting…'));
       await goTo('s2');
 
       // Act
@@ -258,7 +228,7 @@ describe('PendingSwitchesService through the model selector and the permission-m
       await goTo('s1');
 
       // Assert
-      expect(note()).toBeNull();
+      expect(noteOf(kind)).toBeNull();
     });
 
     it('still shows "restarting…" when the user is back before the relaunch has even started', async () => {
@@ -337,13 +307,14 @@ describe('PendingSwitchesService through the model selector and the permission-m
       expect(permissionModeNote()).toHaveTextContent('switch pending');
     });
 
-    describe.each(SWITCH_KINDS)('the $kind switch request of A', ({ request, note, error, apiMethod, applyTestId }) => {
-      const applyButton = () => screen.getByTestId(applyTestId);
+    describe.each(SWITCH_KINDS)('the $kind switch request of A', (kind) => {
+      const { apiMethod } = kind;
+      const applyButton = () => applyButtonOf(kind);
 
       it('is not sent a second time while the first is still in flight after A → B → A', async () => {
         const reply = deferred<{ status: 'deferred' }>();
         const { goTo, api } = await renderSelectors({ api: { [apiMethod]: vi.fn(() => reply.promise) } });
-        await request();
+        await requestSwitch(kind);
         await goTo('s2');
         await goTo('s1');
 
@@ -356,7 +327,7 @@ describe('PendingSwitchesService through the model selector and the permission-m
       it('keeps Apply disabled after A → B → A until the reply lands, then shows the note and lets Apply send again', async () => {
         const reply = deferred<{ status: 'deferred' }>();
         const { fixture, goTo, api } = await renderSelectors({ api: { [apiMethod]: vi.fn(() => reply.promise) } });
-        await request();
+        await requestSwitch(kind);
         await goTo('s2');
         await goTo('s1');
         expect(applyButton()).toBeDisabled();
@@ -364,7 +335,7 @@ describe('PendingSwitchesService through the model selector and the permission-m
         reply.resolve({ status: 'deferred' });
         await settleRequests(fixture);
 
-        expect(note()).toHaveTextContent('switch pending');
+        expect(noteOf(kind)).toHaveTextContent('switch pending');
         expect(applyButton()).toBeEnabled();
         await userEvent.click(applyButton());
         expect(api[apiMethod]).toHaveBeenCalledTimes(2);
@@ -373,15 +344,15 @@ describe('PendingSwitchesService through the model selector and the permission-m
       it('shows the error on A when the reply fails after A → B → A, and lets Apply send again', async () => {
         const reply = deferred<{ status: 'deferred' }>();
         const { fixture, goTo } = await renderSelectors({ api: { [apiMethod]: vi.fn(() => reply.promise) } });
-        await request();
+        await requestSwitch(kind);
         await goTo('s2');
         await goTo('s1');
 
         reply.reject(new Error('boom'));
         await settleRequests(fixture);
 
-        expect(error()).toHaveTextContent(/could not/i);
-        expect(note()).toBeNull();
+        expect(errorOf(kind)).toHaveTextContent(/could not/i);
+        expect(noteOf(kind)).toBeNull();
         expect(applyButton()).toBeEnabled();
       });
 
@@ -391,15 +362,15 @@ describe('PendingSwitchesService through the model selector and the permission-m
       ])('leaves B untouched when A\'s request $outcome while B is shown', async ({ settle }) => {
         const reply = deferred<{ status: 'deferred' }>();
         const { fixture, goTo } = await renderSelectors({ api: { [apiMethod]: vi.fn(() => reply.promise) } });
-        await request();
+        await requestSwitch(kind);
         await goTo('s2');
 
         settle(reply);
         await settleRequests(fixture);
 
         expect(applyButton()).toBeEnabled();
-        expect(note()).toBeNull();
-        expect(error()).toBeNull();
+        expect(noteOf(kind)).toBeNull();
+        expect(errorOf(kind)).toBeNull();
       });
 
       it.each([
@@ -410,29 +381,30 @@ describe('PendingSwitchesService through the model selector and the permission-m
         const replyOfB = deferred<{ status: 'deferred' }>();
         const answerBySession = (sessionId: string) => (sessionId === 's1' ? replyOfA.promise : replyOfB.promise);
         const { fixture, goTo } = await renderSelectors({ api: { [apiMethod]: vi.fn(answerBySession) } });
-        await request();
+        await requestSwitch(kind);
         await goTo('s2');
-        await request();
+        await requestSwitch(kind);
 
         settle(replyOfA);
         await settleRequests(fixture);
 
         expect(applyButton()).toBeDisabled();
-        expect(error()).toBeNull();
+        expect(errorOf(kind)).toBeNull();
         replyOfB.resolve({ status: 'deferred' });
       });
     });
   });
 
   describe('a relaunch whose daemon events outrun the switch reply', () => {
-    it.each(SWITCH_KINDS)('shows no "restarting…" note for the $kind switch when the relaunch has already finished by the time the reply lands', async ({ request, note, apiMethod }) => {
+    it.each(SWITCH_KINDS)('shows no "restarting…" note for the $kind switch when the relaunch has already finished by the time the reply lands', async (kind) => {
+      const { apiMethod } = kind;
       // Arrange — an idle session: the daemon starts the relaunch and finishes it before the HTTP reply reaches the UI
       const reply = deferred<{ status: 'relaunching' }>();
       const { fixture, sessions } = await renderSelectors({
         sessions: [fakeSession('s1', 'idle'), fakeSession('s2', 'idle')],
         api: { [apiMethod]: vi.fn(() => reply.promise) },
       });
-      await request();
+      await requestSwitch(kind);
       setStateOf(sessions, 's1', 'starting');
       await fixture.whenStable();
       setStateOf(sessions, 's1', 'idle');
@@ -443,48 +415,51 @@ describe('PendingSwitchesService through the model selector and the permission-m
       await settleRequests(fixture);
 
       // Assert
-      expect(note()).toBeNull();
+      expect(noteOf(kind)).toBeNull();
     });
 
-    it.each(SWITCH_KINDS)('shows "restarting…" for the $kind switch when the relaunch has started but not finished by the time the reply lands, and clears it at idle', async ({ request, note, apiMethod }) => {
+    it.each(SWITCH_KINDS)('shows "restarting…" for the $kind switch when the relaunch has started but not finished by the time the reply lands, and clears it at idle', async (kind) => {
+      const { apiMethod } = kind;
       const reply = deferred<{ status: 'relaunching' }>();
       const { fixture, sessions } = await renderSelectors({
         sessions: [fakeSession('s1', 'idle'), fakeSession('s2', 'idle')],
         api: { [apiMethod]: vi.fn(() => reply.promise) },
       });
-      await request();
+      await requestSwitch(kind);
       setStateOf(sessions, 's1', 'starting');
       await fixture.whenStable();
 
       reply.resolve({ status: 'relaunching' });
       await settleRequests(fixture);
-      expect(note()).toHaveTextContent('restarting…');
+      expect(noteOf(kind)).toHaveTextContent('restarting…');
 
       setStateOf(sessions, 's1', 'idle');
       await fixture.whenStable();
-      expect(note()).toBeNull();
+      expect(noteOf(kind)).toBeNull();
     });
 
-    it.each(SWITCH_KINDS)('keeps no note for the $kind switch when the turn ends before the "deferred" reply lands', async ({ request, note, apiMethod }) => {
+    it.each(SWITCH_KINDS)('keeps no note for the $kind switch when the turn ends before the "deferred" reply lands', async (kind) => {
+      const { apiMethod } = kind;
       const reply = deferred<{ status: 'deferred' }>();
       const { fixture, sessions } = await renderSelectors({ api: { [apiMethod]: vi.fn(() => reply.promise) } });
-      await request();
+      await requestSwitch(kind);
       setStateOf(sessions, 's1', 'idle');
       await fixture.whenStable();
 
       reply.resolve({ status: 'deferred' });
       await settleRequests(fixture);
 
-      expect(note()).toBeNull();
+      expect(noteOf(kind)).toBeNull();
     });
 
-    it.each(SWITCH_KINDS)('parks the $kind switch of a user who left, so the note is right when the relaunch ran while away', async ({ request, note, apiMethod }) => {
+    it.each(SWITCH_KINDS)('parks the $kind switch of a user who left, so the note is right when the relaunch ran while away', async (kind) => {
+      const { apiMethod } = kind;
       const reply = deferred<{ status: 'relaunching' }>();
       const { fixture, goTo, sessions } = await renderSelectors({
         sessions: [fakeSession('s1', 'idle'), fakeSession('s2', 'idle')],
         api: { [apiMethod]: vi.fn(() => reply.promise) },
       });
-      await request();
+      await requestSwitch(kind);
       await goTo('s2');
       setStateOf(sessions, 's1', 'starting');
       await fixture.whenStable();
@@ -495,22 +470,23 @@ describe('PendingSwitchesService through the model selector and the permission-m
 
       await goTo('s1');
 
-      expect(note()).toBeNull();
+      expect(noteOf(kind)).toBeNull();
     });
   });
 
   describe('a second switch requested while the first relaunch is still starting', () => {
-    it.each(SWITCH_KINDS)('keeps the "restarting…" note of the second $kind relaunch through the idle that ends the first one', async ({ request, note, apiMethod, applyTestId }) => {
+    it.each(SWITCH_KINDS)('keeps the "restarting…" note of the second $kind relaunch through the idle that ends the first one', async (kind) => {
+      const { apiMethod } = kind;
       // Arrange — the first relaunch is under way (starting) when the user applies again
       const { fixture, sessions } = await renderSelectors({
         sessions: [fakeSession('s1', 'idle'), fakeSession('s2', 'idle')],
         api: { [apiMethod]: vi.fn().mockResolvedValue({ status: 'relaunching' }) },
       });
-      await request();
-      await waitFor(() => expect(note()).toHaveTextContent('restarting…'));
+      await requestSwitch(kind);
+      await waitFor(() => expect(noteOf(kind)).toHaveTextContent('restarting…'));
       setStateOf(sessions, 's1', 'starting');
       await fixture.whenStable();
-      await userEvent.click(screen.getByTestId(applyTestId));
+      await userEvent.click(applyButtonOf(kind));
       await settleRequests(fixture);
 
       // Act — the first relaunch is done
@@ -518,12 +494,12 @@ describe('PendingSwitchesService through the model selector and the permission-m
       await fixture.whenStable();
 
       // Assert — the second relaunch has not run yet
-      expect(note()).toHaveTextContent('restarting…');
+      expect(noteOf(kind)).toHaveTextContent('restarting…');
       setStateOf(sessions, 's1', 'starting');
       await fixture.whenStable();
       setStateOf(sessions, 's1', 'idle');
       await fixture.whenStable();
-      expect(note()).toBeNull();
+      expect(noteOf(kind)).toBeNull();
     });
   });
 });

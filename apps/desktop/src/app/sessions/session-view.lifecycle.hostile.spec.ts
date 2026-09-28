@@ -2,10 +2,10 @@ import { render, screen, waitFor } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
 import { inputBinding, signal } from '@angular/core';
 import { describe, expect, it, vi } from 'vitest';
-import type { ServerEvent, Session } from '@openfleet/shared';
+import type { Session } from '@openfleet/shared';
 import { SessionViewComponent } from './session-view.component';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
-import { FleetEventsService } from '../core/fleet-events.service';
+import { connectFakeDaemon, deferred, settleRequests } from '../testing/session-view.testing';
 
 const CLOSED_AT = '2026-09-26T10:00:00.000Z';
 
@@ -14,13 +14,6 @@ function session(patch: Partial<Session> = {}): Session {
     id: 's1', name: 'Gimli', emoji: '⛏️', directory: '/repo', model: 'claude-sonnet-5',
     harness: 'claude-cli', state: 'idle', stateSince: 't', permissionMode: 'manual', createdAt: 't', ...patch,
   } as Session;
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
-  return { promise, resolve, reject };
 }
 
 function fakeApi() {
@@ -42,23 +35,9 @@ async function renderAgainstDaemonEvents(api: ReturnType<typeof fakeApi>, initia
     bindings: [inputBinding('sessionId', sessionId)],
     providers: [{ provide: FleetApiService, useValue: api }],
   });
-  const reducer = fixture.debugElement.injector.get(FleetEventsService) as unknown as { reduce(event: ServerEvent): void };
-  const daemon = {
-    async send(event: ServerEvent) {
-      reducer.reduce(event);
-      await fixture.whenStable();
-    },
-  };
+  const daemon = connectFakeDaemon(fixture);
   await daemon.send({ type: 'snapshot', sessions: initialSessions, approvals: [], managers: [] });
   return { fixture, daemon, sessionId };
-}
-
-const PROMISE_HOPS_OF_A_SETTLED_REQUEST = 10;
-
-/** Runs the continuations chained on a settled request (action → runGuarded → caller), then renders. */
-async function settleRequests(fixture: { whenStable(): Promise<unknown> }) {
-  for (let hop = 0; hop < PROMISE_HOPS_OF_A_SETTLED_REQUEST; hop++) await Promise.resolve();
-  await fixture.whenStable();
 }
 
 const lifecycleBanner = () => screen.queryByTestId('lifecycle-banner');
