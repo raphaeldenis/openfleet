@@ -28,7 +28,7 @@ beforeEach(async () => {
   const managerRepo = new ManagerRepository(db);
   const pulseScheduler = new PulseScheduler({ managers: managerRepo, sessions, bus });
   const managers = new ManagerService({ managers: managerRepo, sessions, bus, scheduler: pulseScheduler });
-  server = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable: DEFAULT_MODEL_TABLE });
+  server = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable: DEFAULT_MODEL_TABLE, modelConfigPath: '/tmp/of-unused/config.json' });
 });
 afterEach(() => server.close());
 
@@ -146,7 +146,7 @@ describe('REST', () => {
     const stubHarnessManagerRepo = new ManagerRepository(stubHarnessDb);
     const stubHarnessScheduler = new PulseScheduler({ managers: stubHarnessManagerRepo, sessions: stubHarnessSessions, bus: stubHarnessBus });
     const stubHarnessManagers = new ManagerService({ managers: stubHarnessManagerRepo, sessions: stubHarnessSessions, bus: stubHarnessBus, scheduler: stubHarnessScheduler });
-    const stubHarnessServer = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions: stubHarnessSessions, approvals: stubHarnessApprovals, managers: stubHarnessManagers, pulseScheduler: stubHarnessScheduler, bus: stubHarnessBus, modelTable: DEFAULT_MODEL_TABLE });
+    const stubHarnessServer = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions: stubHarnessSessions, approvals: stubHarnessApprovals, managers: stubHarnessManagers, pulseScheduler: stubHarnessScheduler, bus: stubHarnessBus, modelTable: DEFAULT_MODEL_TABLE, modelConfigPath: '/tmp/of-unused/config.json' });
     const stubHarnessApi = (path: string, init: RequestInit = {}) =>
       fetch(`${stubHarnessServer.url}${path}`, { ...init, headers: { 'content-type': 'application/json', authorization: 'Bearer admin', ...(init.headers ?? {}) } });
     const session = await (await stubHarnessApi('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'claude-cli' }) })).json();
@@ -237,10 +237,10 @@ describe('REST', () => {
     expect(res.status).toBe(400);
   });
 
-  it('answers a non-JSON model body with a server error rather than a silent 200', async () => {
+  it('answers a non-JSON model body with a 400 rather than a silent 200', async () => {
     const created = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
     const res = await api(`/api/sessions/${created.id}/model`, { method: 'POST', body: 'not json' });
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(400);
   });
 
   it('renames a session\'s name and emoji via PATCH', async () => {

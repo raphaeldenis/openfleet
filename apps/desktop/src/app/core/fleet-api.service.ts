@@ -38,6 +38,7 @@ export class FleetApiService {
   }
   private post<T>(path: string, body: unknown): Promise<T> { return this.call<T>(path, { method: 'POST', body: JSON.stringify(body) }); }
   private patch<T>(path: string, body: unknown): Promise<T> { return this.call<T>(path, { method: 'PATCH', body: JSON.stringify(body) }); }
+  private put<T>(path: string, body: unknown): Promise<T> { return this.call<T>(path, { method: 'PUT', body: JSON.stringify(body) }); }
 
   // Rejects when the daemon has not answered within `timeoutMs`, so a daemon that accepts the
   // connection and never replies counts as unreachable instead of hanging its caller.
@@ -61,6 +62,8 @@ export class FleetApiService {
   }
   listSessions() { return this.getWithin<Session[]>('/api/sessions', DAEMON_ANSWER_TIMEOUT_MS); }
   models() { return this.call<Record<string, string>>('/api/models'); }
+  availableModels() { return this.call<{ models: string[] }>('/api/models/available'); }
+  saveModels(patch: Record<string, string>) { return this.put<{ models: Record<string, string> }>('/api/models', patch); }
   createSession(spec: Partial<SessionSpec> & { directory: string; name: string; repoPath?: string; branchName?: string }) { return this.post<Session>('/api/sessions', spec); }
   createManagerSession(spec: { directory: string; name: string; emoji?: string; model?: string; harness?: HarnessId; permissionMode?: PermissionMode; pulseSeconds: number; childrenCap: number; mission: string }) {
     return this.post<Session>('/api/sessions', {

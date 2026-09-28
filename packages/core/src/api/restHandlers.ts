@@ -6,7 +6,7 @@ import { ApprovalError, type ApprovalService } from '../governance/approvalServi
 import type { FakeHandle } from '../harness/fakeHarness.js';
 import type { ManagerService } from '../managers/managerService.js';
 import type { PulseScheduler } from '../managers/pulseScheduler.js';
-import { resolveModel, type ModelTable } from '../models.js';
+import { listAvailableModels, ModelConfigReadOnlyError, ModelConfigUnreadableError, ModelTablePatchSchema, resolveModel, saveModelPatch, type ModelTable } from '../models.js';
 import { DaemonShuttingDownError, SessionClosedError, SessionReopenError, type SessionService } from '../sessions/sessionService.js';
 import { json, Router } from './router.js';
 
@@ -28,12 +28,31 @@ const RenameSessionSchema = z
   .object({ name: z.string().trim().min(1).max(100).optional(), emoji: z.string().trim().min(1).max(32).optional() })
   .refine((patch) => patch.name !== undefined || patch.emoji !== undefined, { message: 'name or emoji is required' });
 
-export function registerRestRoutes(router: Router, deps: { sessions: SessionService; approvals: ApprovalService; modelTable: ModelTable; managers: ManagerService; pulseScheduler: PulseScheduler }): void {
+export function registerRestRoutes(router: Router, deps: { sessions: SessionService; approvals: ApprovalService; modelTable: ModelTable; modelConfigPath: string; managers: ManagerService; pulseScheduler: PulseScheduler }): void {
+  const servedRungs = (): ModelTable => {
+    const { haiku, sonnet, opus, fable } = deps.modelTable;
+    return { haiku, sonnet, opus, fable };
+  };
+
   router.add('GET', '/api/sessions', ({ res }) => json(res, 200, deps.sessions.list()));
 
-  router.add('GET', '/api/models', ({ res }) => {
-    const { haiku, sonnet, opus, fable } = deps.modelTable;
-    json(res, 200, { haiku, sonnet, opus, fable });
+  router.add('GET', '/api/models', ({ res }) => json(res, 200, servedRungs()));
+
+  router.add('GET', '/api/models/available', async ({ res }) => json(res, 200, { models: await listAvailableModels() }));
+
+  // The table is updated in place: the MCP handler and the session routes hold this same object, so the
+  // next launch or model switch resolves against the new ids. Running sessions keep the id they resolved.
+  router.add('PUT', '/api/models', async ({ res, body }) => {
+    const patch = ModelTablePatchSchema.parse(body);
+    try {
+      saveModelPatch(deps.modelConfigPath, patch);
+    } catch (error) {
+      if (error instanceof ModelConfigUnreadableError) return json(res, 409, { error: 'config_unreadable', detail: error.message });
+      if (error instanceof ModelConfigReadOnlyError) return json(res, 409, { error: 'config_read_only', detail: error.message });
+      throw error;
+    }
+    Object.assign(deps.modelTable, patch);
+    json(res, 200, { models: servedRungs() });
   });
 
   router.add('POST', '/api/sessions', async ({ res, body }) => {

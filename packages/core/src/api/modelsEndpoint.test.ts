@@ -27,7 +27,7 @@ async function startServerServing(modelTable: ModelTable) {
   const managerRepo = new ManagerRepository(db);
   const pulseScheduler = new PulseScheduler({ managers: managerRepo, sessions, bus });
   const managers = new ManagerService({ managers: managerRepo, sessions, bus, scheduler: pulseScheduler });
-  const server = await startServer({ host: '127.0.0.1', port: 0, adminToken: ADMIN_TOKEN, sessions, approvals, managers, pulseScheduler, bus, modelTable });
+  const server = await startServer({ host: '127.0.0.1', port: 0, adminToken: ADMIN_TOKEN, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath: '/tmp/of-unused/config.json' });
   openServers.push(server);
   return server;
 }
