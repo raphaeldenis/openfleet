@@ -17,7 +17,7 @@ import { ManagerRepository } from '../managers/managerRepository.js';
 import { ManagerService } from '../managers/managerService.js';
 import { PulseScheduler } from '../managers/pulseScheduler.js';
 import { DEFAULT_MODEL_TABLE } from '../models.js';
-import { SessionService } from '../sessions/sessionService.js';
+import { MAX_PENDING_AGENT_MESSAGES_PER_SENDER, SessionService } from '../sessions/sessionService.js';
 import { createMcpHandler } from './mcpServer.js';
 
 // create_session now requires its directory to already exist (fix loop 2, decision 1+3+5) — this makes
@@ -149,6 +149,20 @@ describe('MCP', () => {
     expect(text(fromA).message_id).toBe(collidingMessageId);
     expect(fromB.isError).toBe(true);
     expect(sessions.queuedMessageCount(parentId)).toBe(1);
+  });
+
+  it('refuses the 21st pending message from one sender to the same target with a tool error and queues nothing', async () => {
+    const parent = await connect(parentToken);
+    await parent.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('flood'), name: 'Gimli' } });
+    const child = await connect(harness.launches[1]!.mcpToken);
+    sessions.applyInput(parentId, { kind: 'hook', event: { session_id: 'x', hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: {} } }); // keep the parent non-deliverable
+    for (let i = 0; i < MAX_PENDING_AGENT_MESSAGES_PER_SENDER; i++) await child.callTool({ name: 'message_parent', arguments: { body: `report ${i}` } });
+
+    const refused = await child.callTool({ name: 'message_parent', arguments: { body: 'one too many' } });
+
+    expect(refused.isError).toBe(true);
+    expect((refused.content as { text: string }[])[0]!.text).toBe(`too many pending messages to ${parentId}: 20 already queued, wait for delivery`);
+    expect(sessions.queuedMessageCount(parentId)).toBe(MAX_PENDING_AGENT_MESSAGES_PER_SENDER);
   });
 
   it('refuses a body over the 8192-byte cap through send_session_message', async () => {

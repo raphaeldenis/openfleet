@@ -30,6 +30,12 @@ export class MessageIdAlreadyUsedError extends Error {
   }
 }
 
+export class TooManyPendingMessagesError extends Error {
+  constructor(targetId: string) {
+    super(`too many pending messages to ${targetId}: ${MAX_PENDING_AGENT_MESSAGES_PER_SENDER} already queued, wait for delivery`);
+  }
+}
+
 export class SessionReopenError extends Error {
   constructor(public readonly code: 'not_closed' | 'directory_missing' | 'directory_changed' | 'directory_unreadable' | 'launch_failed', message: string) {
     super(message);
@@ -49,6 +55,9 @@ const DEFAULT_RESUME_TIMEOUT_MS = 15_000;
 // write before the separate '\r' submits it; upgrade path is confirming the composer holds the full body
 // from the pty output instead of trusting a fixed delay.
 export const SUBMIT_KEYSTROKE_DELAY_MS = 150;
+// Bounds how many not-yet-delivered messages one agent can stack on a single peer, so a looping agent
+// cannot flood a target's queue (8 KB each) faster than the target can read.
+export const MAX_PENDING_AGENT_MESSAGES_PER_SENDER = 20;
 // ponytail: fallback for a hook that never confirms the turn started (a dropped webhook, or a CLI that
 // silently discards the keystroke); the common path ends the wait on the next real state transition.
 // Ceiling: a UserPromptSubmit hook later than this leaves the DB saying idle while the CLI generates, so
@@ -326,6 +335,10 @@ export class SessionService {
         throw new MessageIdAlreadyUsedError(input.messageId);
       }
     }
+    const { fromSessionId } = input;
+    const isSenderAtPendingLimit = fromSessionId !== undefined
+      && this.queue.countPendingFromSender({ sessionId: session.id, fromSessionId }) >= MAX_PENDING_AGENT_MESSAGES_PER_SENDER;
+    if (isSenderAtPendingLimit) throw new TooManyPendingMessagesError(session.id);
     const message = this.queue.enqueue({ id: messageId, sessionId: session.id, fromSessionId: input.fromSessionId, body });
     this.guarded(session.id, () => this.advance(session.id));
     const { phase } = this.deliveryOf(session.id);

@@ -7,7 +7,7 @@ import { FakeHandle, FakeHarness } from '../harness/fakeHarness.js';
 import type { Harness, HarnessHandle, HarnessLaunch } from '../harness/harness.js';
 import { EventBus } from '../events/eventBus.js';
 import { makeRepo } from '../git/testRepo.js';
-import { DaemonShuttingDownError, DEFAULT_CLOSE_ESCALATE_MS, DELIVERY_RETRY_MS, MAX_DELIVERY_RETRIES, PARKED_RETRY_MS, RESUME_LAUNCH_FAILED_EXIT_CODE, RESUME_TIMEOUT_EXIT_CODE, SessionReopenError, SessionService, SUBMIT_KEYSTROKE_DELAY_MS, TRANSCRIPT_INTERRUPT_POLL_MS, TRANSCRIPT_INTERRUPT_TIMEOUT_MS, TURN_START_TIMEOUT_MS } from './sessionService.js';
+import { DaemonShuttingDownError, DEFAULT_CLOSE_ESCALATE_MS, DELIVERY_RETRY_MS, MAX_DELIVERY_RETRIES, MAX_PENDING_AGENT_MESSAGES_PER_SENDER, PARKED_RETRY_MS, RESUME_LAUNCH_FAILED_EXIT_CODE, RESUME_TIMEOUT_EXIT_CODE, SessionReopenError, SessionService, SUBMIT_KEYSTROKE_DELAY_MS, TRANSCRIPT_INTERRUPT_POLL_MS, TRANSCRIPT_INTERRUPT_TIMEOUT_MS, TURN_START_TIMEOUT_MS } from './sessionService.js';
 import { MessageQueue } from './messageQueue.js';
 import { SessionRepository } from './sessionRepository.js';
 import { PERMISSION_MODES, type ServerEvent } from '@openfleet/shared';
@@ -339,6 +339,88 @@ describe('SessionService agent message envelope', () => {
 
     const everythingTyped = harness.handles[1]!.written.join('');
     expect(everythingTyped).not.toContain('corrected retry');
+  });
+});
+
+describe('SessionService agent message flood bound', () => {
+  const blockTarget = (service: ReturnType<typeof setup>['service'], targetId: string) =>
+    service.applyInput(targetId, hook(targetId, { hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: {} })); // keeps every message queued
+  const queueFrom = (service: ReturnType<typeof setup>['service'], input: { targetId: string; senderId: string; count: number }) => {
+    for (let i = 0; i < input.count; i++) service.sendMessage({ sessionId: input.targetId, body: `msg ${i}`, fromSessionId: input.senderId });
+  };
+
+  it('accepts MAX_PENDING_AGENT_MESSAGES_PER_SENDER pending messages from one sender and refuses the next', async () => {
+    vi.useFakeTimers();
+    const { service } = setup();
+    const sender = await service.create({ directory: '/tmp', name: 'Sender', harness: 'fake', emoji: '🤖' });
+    const target = await service.create({ directory: '/tmp', name: 'Target', harness: 'fake', emoji: '🤖' });
+    blockTarget(service, target.id);
+
+    queueFrom(service, { targetId: target.id, senderId: sender.id, count: MAX_PENDING_AGENT_MESSAGES_PER_SENDER });
+
+    expect(() => service.sendMessage({ sessionId: target.id, body: 'one too many', fromSessionId: sender.id }))
+      .toThrow(`too many pending messages to ${target.id}: 20 already queued, wait for delivery`);
+    expect(service.queuedMessageCount(target.id)).toBe(MAX_PENDING_AGENT_MESSAGES_PER_SENDER);
+  });
+
+  it('still accepts a message from another sender while the first sender is at the limit', async () => {
+    vi.useFakeTimers();
+    const { service } = setup();
+    const floodingSender = await service.create({ directory: '/tmp', name: 'SenderA', harness: 'fake', emoji: '🤖' });
+    const otherSender = await service.create({ directory: '/tmp', name: 'SenderB', harness: 'fake', emoji: '🤖' });
+    const target = await service.create({ directory: '/tmp', name: 'Target', harness: 'fake', emoji: '🤖' });
+    blockTarget(service, target.id);
+    queueFrom(service, { targetId: target.id, senderId: floodingSender.id, count: MAX_PENDING_AGENT_MESSAGES_PER_SENDER });
+
+    const fromOtherSender = service.sendMessage({ sessionId: target.id, body: 'unrelated', fromSessionId: otherSender.id });
+
+    expect(fromOtherSender.status).toBe('queued');
+  });
+
+  it('lets a sender queue again once one of its messages is delivered', async () => {
+    vi.useFakeTimers();
+    const { service } = setup();
+    const sender = await service.create({ directory: '/tmp', name: 'Sender', harness: 'fake', emoji: '🤖' });
+    const target = await service.create({ directory: '/tmp', name: 'Target', harness: 'fake', emoji: '🤖' });
+    blockTarget(service, target.id);
+    queueFrom(service, { targetId: target.id, senderId: sender.id, count: MAX_PENDING_AGENT_MESSAGES_PER_SENDER });
+
+    service.applyInput(target.id, hook(target.id, { hook_event_name: 'UserPromptSubmit' }));
+    service.applyInput(target.id, hook(target.id, { hook_event_name: 'Stop' })); // back to idle: the oldest message is typed
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
+
+    const afterDelivery = service.sendMessage({ sessionId: target.id, body: 'room again', fromSessionId: sender.id });
+    expect(afterDelivery.messageId).toEqual(expect.any(String));
+  });
+
+  it('answers a resent message_id with the existing id even when the sender is at the limit', async () => {
+    vi.useFakeTimers();
+    const { service } = setup();
+    const sender = await service.create({ directory: '/tmp', name: 'Sender', harness: 'fake', emoji: '🤖' });
+    const target = await service.create({ directory: '/tmp', name: 'Target', harness: 'fake', emoji: '🤖' });
+    blockTarget(service, target.id);
+    queueFrom(service, { targetId: target.id, senderId: sender.id, count: MAX_PENDING_AGENT_MESSAGES_PER_SENDER - 1 });
+    service.sendMessage({ sessionId: target.id, body: 'the retried one', fromSessionId: sender.id, messageId: 'retried-id' });
+
+    const resend = service.sendMessage({ sessionId: target.id, body: 'the retried one', fromSessionId: sender.id, messageId: 'retried-id' });
+
+    expect(resend).toEqual({ status: 'queued', messageId: 'retried-id' });
+    expect(service.queuedMessageCount(target.id)).toBe(MAX_PENDING_AGENT_MESSAGES_PER_SENDER);
+  });
+
+  it('never caps human REST messages or pulses, which carry no fromSessionId', async () => {
+    vi.useFakeTimers();
+    const { service } = setup();
+    const sender = await service.create({ directory: '/tmp', name: 'Sender', harness: 'fake', emoji: '🤖' });
+    const target = await service.create({ directory: '/tmp', name: 'Target', harness: 'fake', emoji: '🤖' });
+    blockTarget(service, target.id);
+    queueFrom(service, { targetId: target.id, senderId: sender.id, count: MAX_PENDING_AGENT_MESSAGES_PER_SENDER });
+    const uncappedCount = MAX_PENDING_AGENT_MESSAGES_PER_SENDER + 5;
+
+    for (let i = 0; i < uncappedCount; i++) service.sendMessage({ sessionId: target.id, body: `human ${i}` });
+    service.sendMessage({ sessionId: target.id, body: '[pulse] re-read your mission' });
+
+    expect(service.queuedMessageCount(target.id)).toBe(MAX_PENDING_AGENT_MESSAGES_PER_SENDER + uncappedCount + 1);
   });
 });
 
