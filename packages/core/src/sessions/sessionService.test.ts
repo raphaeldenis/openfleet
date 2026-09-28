@@ -7,7 +7,7 @@ import { FakeHandle, FakeHarness } from '../harness/fakeHarness.js';
 import type { Harness, HarnessHandle, HarnessLaunch } from '../harness/harness.js';
 import { EventBus } from '../events/eventBus.js';
 import { makeRepo } from '../git/testRepo.js';
-import { DaemonShuttingDownError, DEFAULT_CLOSE_ESCALATE_MS, DELIVERY_RETRY_MS, MAX_DELIVERY_RETRIES, MAX_PENDING_AGENT_MESSAGES_PER_SENDER, PARKED_RETRY_MS, RESUME_LAUNCH_FAILED_EXIT_CODE, RESUME_TIMEOUT_EXIT_CODE, SessionReopenError, SessionService, SUBMIT_KEYSTROKE_DELAY_MS, TRANSCRIPT_INTERRUPT_POLL_MS, TRANSCRIPT_INTERRUPT_TIMEOUT_MS, TURN_START_TIMEOUT_MS } from './sessionService.js';
+import { DaemonShuttingDownError, DEFAULT_CLOSE_ESCALATE_MS, DELIVERY_RETRY_MS, MAX_DELIVERY_RETRIES, MAX_PENDING_AGENT_MESSAGES_PER_SENDER, PARKED_RETRY_MS, RESUME_LAUNCH_FAILED_EXIT_CODE, RESUME_TIMEOUT_EXIT_CODE, SessionClosedError, SessionReopenError, SessionService, SUBMIT_KEYSTROKE_DELAY_MS, TRANSCRIPT_INTERRUPT_POLL_MS, TRANSCRIPT_INTERRUPT_TIMEOUT_MS, TURN_START_TIMEOUT_MS } from './sessionService.js';
 import { MessageQueue } from './messageQueue.js';
 import { SessionRepository } from './sessionRepository.js';
 import { PERMISSION_MODES, type ServerEvent } from '@openfleet/shared';
@@ -421,6 +421,35 @@ describe('SessionService agent message flood bound', () => {
     service.sendMessage({ sessionId: target.id, body: '[pulse] re-read your mission' });
 
     expect(service.queuedMessageCount(target.id)).toBe(MAX_PENDING_AGENT_MESSAGES_PER_SENDER + uncappedCount + 1);
+  });
+
+  it('still lets a sender at the limit toward one target message a different target', async () => {
+    vi.useFakeTimers();
+    const { service } = setup();
+    const sender = await service.create({ directory: '/tmp', name: 'Sender', harness: 'fake', emoji: '🤖' });
+    const floodedTarget = await service.create({ directory: '/tmp', name: 'Flooded', harness: 'fake', emoji: '🤖' });
+    const otherTarget = await service.create({ directory: '/tmp', name: 'Other', harness: 'fake', emoji: '🤖' });
+    blockTarget(service, floodedTarget.id);
+    blockTarget(service, otherTarget.id);
+    queueFrom(service, { targetId: floodedTarget.id, senderId: sender.id, count: MAX_PENDING_AGENT_MESSAGES_PER_SENDER });
+
+    const toOtherTarget = service.sendMessage({ sessionId: otherTarget.id, body: 'different peer', fromSessionId: sender.id });
+
+    expect(toOtherTarget.status).toBe('queued');
+  });
+
+  it('reports a closed target as closed, not as a full queue, even when the sender is at the limit', async () => {
+    vi.useFakeTimers();
+    const { service } = setup();
+    const sender = await service.create({ directory: '/tmp', name: 'Sender', harness: 'fake', emoji: '🤖' });
+    const target = await service.create({ directory: '/tmp', name: 'Target', harness: 'fake', emoji: '🤖' });
+    blockTarget(service, target.id);
+    queueFrom(service, { targetId: target.id, senderId: sender.id, count: MAX_PENDING_AGENT_MESSAGES_PER_SENDER });
+    await service.close(target.id);
+
+    const sendToClosedTarget = () => service.sendMessage({ sessionId: target.id, body: 'too late', fromSessionId: sender.id });
+
+    expect(sendToClosedTarget).toThrow(SessionClosedError);
   });
 });
 

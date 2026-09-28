@@ -165,6 +165,19 @@ describe('MCP', () => {
     expect(sessions.queuedMessageCount(parentId)).toBe(MAX_PENDING_AGENT_MESSAGES_PER_SENDER);
   });
 
+  it('refuses the 21st pending send_session_message from a manager to one child with a tool error and queues nothing', async () => {
+    const parent = await connect(parentToken);
+    const created = text(await parent.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('flood-down'), name: 'Gimli' } }));
+    sessions.applyInput(created.id, { kind: 'hook', event: { session_id: 'x', hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: {} } }); // keep the child non-deliverable
+    for (let i = 0; i < MAX_PENDING_AGENT_MESSAGES_PER_SENDER; i++) await parent.callTool({ name: 'send_session_message', arguments: { target_uuid: created.id, body: `order ${i}` } });
+
+    const refused = await parent.callTool({ name: 'send_session_message', arguments: { target_uuid: created.id, body: 'one too many' } });
+
+    expect(refused.isError).toBe(true);
+    expect((refused.content as { text: string }[])[0]!.text).toBe(`too many pending messages to ${created.id}: 20 already queued, wait for delivery`);
+    expect(sessions.queuedMessageCount(created.id)).toBe(MAX_PENDING_AGENT_MESSAGES_PER_SENDER);
+  });
+
   it('refuses a body over the 8192-byte cap through send_session_message', async () => {
     const parent = await connect(parentToken);
     const created = text(await parent.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('cap-send'), name: 'Gimli' } }));
