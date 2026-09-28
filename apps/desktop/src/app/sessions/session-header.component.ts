@@ -29,7 +29,7 @@ const RENAME_ERROR = 'Could not rename — try again.';
         #nameInput
         class="name"
         data-testid="session-name-input"
-        title="Rename session"
+        [attr.title]="session().name"
         [value]="session().name"
         (change)="renameName(nameInput.value)"
         (keydown.escape)="cancelNameEdit(nameInput)"
@@ -67,7 +67,7 @@ const RENAME_ERROR = 'Could not rename — try again.';
     .emoji:hover, .name:hover { border-color: var(--line); }
     .emoji:focus, .name:focus { border-color: var(--accent); outline: 0; }
     .emoji { font-size: 1.125rem; width: 2.25rem; text-align: center; }
-    .name { font-weight: 600; font-size: 1rem; width: 9rem; }
+    .name { font-weight: 600; font-size: 1rem; width: 9rem; text-overflow: ellipsis; }
     .exit-code { font-family: var(--mono); font-size: .75rem; color: var(--state-closed); }
     .harness { font-size: .75rem; color: var(--mut); border: 1px solid var(--line); border-radius: .375rem; padding: 0 .5rem; }
     .directory { font-family: var(--mono); font-size: .6875rem; color: var(--mut); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 16rem; }
