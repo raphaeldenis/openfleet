@@ -4,23 +4,33 @@ import { FleetEventsService } from './fleet-events.service';
 
 export type SwitchKind = 'model' | 'permissionMode';
 
+export type SwitchStatus = 'relaunching' | 'deferred';
+
 export interface PendingSwitch {
-  status: 'relaunching' | 'deferred';
+  /** `null` while the daemon has not answered the request yet. */
+  status: SwitchStatus | null;
   requestedValue: string;
   valueBeforeSwitch: string | null;
   stateBeforeSwitch: SessionState | undefined;
   sawStartingSinceSwitch: boolean;
 }
 
-/** What a selector component knows about its switch at the moment it leaves a session: nothing pending when `status` is null. */
+/** What a selector component knows about its switch at the moment it leaves a session: nothing pending when `valueBeforeSwitch` is undefined. */
 export interface SwitchSnapshot {
-  status: PendingSwitch['status'] | null;
+  status: SwitchStatus | null;
   requestedValue: string;
   /** `undefined` means no switch is being tracked; `null` is a switch made from an unset value. */
   valueBeforeSwitch: string | null | undefined;
   stateBeforeSwitch: SessionState | undefined;
   sawStartingSinceSwitch: boolean;
 }
+
+export const NO_SWITCH_TRACKED = {
+  status: null,
+  valueBeforeSwitch: undefined,
+  stateBeforeSwitch: undefined,
+  sawStartingSinceSwitch: false,
+} as const satisfies Omit<SwitchSnapshot, 'requestedValue'>;
 
 /**
  * Remembers each session's in-flight model / permission-mode switch, so a selector component reused
@@ -58,12 +68,18 @@ export class PendingSwitchesService {
     return this.switchesBySession.get(sessionId)?.[kind];
   }
 
-  /** Stores the snapshot as the session's pending switch of that kind, or forgets the kind when nothing is pending. */
+  /** Stores the snapshot as the session's pending switch of that kind, or forgets the kind when no switch is tracked. */
   park(sessionId: string, kind: SwitchKind, snapshot: SwitchSnapshot): void {
-    const { status, valueBeforeSwitch } = snapshot;
-    const isSwitchPending = status !== null && valueBeforeSwitch !== undefined;
-    if (isSwitchPending) this.store(sessionId, kind, { ...snapshot, status, valueBeforeSwitch });
+    const { valueBeforeSwitch } = snapshot;
+    const isSwitchTracked = valueBeforeSwitch !== undefined;
+    if (isSwitchTracked) this.store(sessionId, kind, { ...snapshot, valueBeforeSwitch });
     else this.forget(sessionId, kind);
+  }
+
+  /** Records the daemon's answer for a switch parked while its request was still in flight; a session gone from the fleet ignores it. */
+  answer(sessionId: string, kind: SwitchKind, status: SwitchStatus): void {
+    const pending = this.recall(sessionId, kind);
+    if (pending) this.store(sessionId, kind, { ...pending, status });
   }
 
   private store(sessionId: string, kind: SwitchKind, pending: PendingSwitch): void {

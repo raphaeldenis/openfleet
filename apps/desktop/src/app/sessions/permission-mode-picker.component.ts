@@ -2,8 +2,8 @@ import { ChangeDetectionStrategy, Component, DestroyRef, computed, effect, injec
 import { FormsModule } from '@angular/forms';
 import { PERMISSION_MODES, type PermissionMode, type SessionState } from '@openfleet/shared';
 import { FleetApiService } from '../core/fleet-api.service';
-import { PendingSwitchesService } from '../core/pending-switches.service';
-import { runGuarded } from '../core/run-guarded';
+import { NO_SWITCH_TRACKED, PendingSwitchesService, type SwitchSnapshot, type SwitchStatus } from '../core/pending-switches.service';
+import { SessionRequests } from '../core/session-requests';
 
 export const PERMISSION_MODE_EXPLANATIONS: Record<PermissionMode, string> = {
   manual: 'asks before risky tools, except those you already allowed in your Claude settings',
@@ -18,7 +18,7 @@ const INHERITED_LABEL = 'inherited';
 export const INHERITED_EXPLANATION ='No mode set: the CLI uses your own default (Claude settings)';
 const PERMISSION_MODE_SWITCH_ERROR = 'Could not change permission mode — try again.';
 
-const SWITCH_STATUS_LABEL: Record<'relaunching' | 'deferred', string> = {
+const SWITCH_STATUS_LABEL: Record<SwitchStatus, string> = {
   relaunching: 'restarting…',
   deferred: 'switch pending: happens when this turn ends',
 };
@@ -94,6 +94,12 @@ export class PermissionModePickerComponent {
   // relaunch's own state transition (leaving 'starting') or the turn ending (idle/closed) is.
   private readonly sawStartingSinceSwitch = signal(false);
 
+  private readonly requests = new SessionRequests({
+    shownSessionId: () => this.sessionId(),
+    busy: this.applying,
+    error: this.switchError,
+  });
+
   constructor() {
     // A route param change reuses this component instance: the session being left keeps its pending
     // switch in the service, the session arriving gets its own back.
@@ -103,15 +109,23 @@ export class PermissionModePickerComponent {
     });
     inject(DestroyRef).onDestroy(() => this.parkPendingSwitchOfShownSession());
 
+    // A switch requested while another relaunch is already starting waits for the session to leave that
+    // one: only a 'starting' entered after the request is this switch's own relaunch.
     effect(() => {
       const requestedFrom = this.modeBeforeSwitch();
       if (requestedFrom === undefined) return;
       const state = this.sessionState();
+      const wasRequestedDuringRelaunch = this.stateBeforeSwitch() === 'starting';
       if (state === 'starting') {
-        this.sawStartingSinceSwitch.set(true);
+        if (!wasRequestedDuringRelaunch) this.sawStartingSinceSwitch.set(true);
         return;
       }
       const relaunchSettled = this.sawStartingSinceSwitch();
+      const isEarlierRelaunchOver = wasRequestedDuringRelaunch && !relaunchSettled && state !== 'closed';
+      if (isEarlierRelaunchOver) {
+        this.stateBeforeSwitch.set(state);
+        return;
+      }
       const turnEndSettled = (state === 'idle' || state === 'closed') && state !== this.stateBeforeSwitch();
       if (!relaunchSettled && !turnEndSettled) return;
       this.switchStatus.set(null);
@@ -124,30 +138,38 @@ export class PermissionModePickerComponent {
   private showSwitchStateOf(sessionId: string): void {
     this.parkPendingSwitchOfShownSession();
     this.shownSessionId = sessionId;
-    const pending = this.pendingSwitches.recall(sessionId, 'permissionMode');
-    this.chosenMode = (pending?.requestedValue as PermissionMode | undefined) ?? this.currentMode() ?? 'manual';
-    this.confirmedMode = this.chosenMode;
-    this.applying.set(false);
+    this.requests.show(sessionId);
     this.confirmingBypass.set(false);
-    this.switchStatus.set(pending?.status ?? null);
-    this.switchError.set(null);
-    this.modeBeforeSwitch.set(pending ? (pending.valueBeforeSwitch as PermissionMode | null) : undefined);
-    this.stateBeforeSwitch.set(pending?.stateBeforeSwitch);
-    this.sawStartingSinceSwitch.set(pending?.sawStartingSinceSwitch ?? false);
+    const pending = this.pendingSwitches.recall(sessionId, 'permissionMode');
+    const currentMode = this.currentMode() ?? 'manual';
+    this.showSwitch(pending ?? { ...NO_SWITCH_TRACKED, requestedValue: currentMode });
   }
 
   private parkPendingSwitchOfShownSession(): void {
     if (this.shownSessionId === undefined) return;
-    this.pendingSwitches.park(this.shownSessionId, 'permissionMode', {
+    this.pendingSwitches.park(this.shownSessionId, 'permissionMode', this.switchSnapshot());
+  }
+
+  private switchSnapshot(): SwitchSnapshot {
+    return {
       status: this.switchStatus(),
       requestedValue: this.confirmedMode,
       valueBeforeSwitch: this.modeBeforeSwitch(),
       stateBeforeSwitch: this.stateBeforeSwitch(),
       sawStartingSinceSwitch: this.sawStartingSinceSwitch(),
-    });
+    };
   }
 
-  statusLabel(status: 'relaunching' | 'deferred'): string {
+  private showSwitch(snapshot: SwitchSnapshot): void {
+    this.chosenMode = snapshot.requestedValue as PermissionMode;
+    this.confirmedMode = this.chosenMode;
+    this.switchStatus.set(snapshot.status);
+    this.modeBeforeSwitch.set(snapshot.valueBeforeSwitch as PermissionMode | null | undefined);
+    this.stateBeforeSwitch.set(snapshot.stateBeforeSwitch);
+    this.sawStartingSinceSwitch.set(snapshot.sawStartingSinceSwitch);
+  }
+
+  statusLabel(status: SwitchStatus): string {
     return SWITCH_STATUS_LABEL[status];
   }
 
@@ -169,25 +191,37 @@ export class PermissionModePickerComponent {
     void this.apply();
   }
 
+  // The switch is tracked from the click, not from the reply: the daemon's state events can outrun the HTTP
+  // answer, and a tracking that starts late would miss a relaunch that already ran.
   private async apply(): Promise<void> {
     const sessionIdAtApply = this.sessionId();
     const modeAtApply = this.currentMode() ?? null;
     const stateAtApply = this.sessionState();
     const attemptedMode = this.chosenMode;
-    await runGuarded(this.applying, this.switchError, PERMISSION_MODE_SWITCH_ERROR, async () => {
-      let result: { status: 'relaunching' | 'deferred' };
+    const switchBeforeApply = this.switchSnapshot();
+    await this.requests.run(sessionIdAtApply, PERMISSION_MODE_SWITCH_ERROR, async (isStale) => {
+      this.showSwitch({
+        status: switchBeforeApply.status,
+        requestedValue: attemptedMode,
+        valueBeforeSwitch: modeAtApply,
+        stateBeforeSwitch: stateAtApply,
+        sawStartingSinceSwitch: false,
+      });
       try {
-        result = await this.api.updatePermissionMode(sessionIdAtApply, attemptedMode);
+        const { status } = await this.api.updatePermissionMode(sessionIdAtApply, attemptedMode);
+        if (isStale()) this.pendingSwitches.answer(sessionIdAtApply, 'permissionMode', status);
+        else this.showAnswer(status);
       } catch (error) {
-        if (this.sessionId() !== sessionIdAtApply) return;
-        this.chosenMode = this.confirmedMode;
+        if (isStale()) this.pendingSwitches.park(sessionIdAtApply, 'permissionMode', switchBeforeApply);
+        else this.showSwitch(switchBeforeApply);
         throw error;
       }
-      if (this.sessionId() !== sessionIdAtApply) return;
-      this.confirmedMode = attemptedMode;
-      this.modeBeforeSwitch.set(modeAtApply);
-      this.stateBeforeSwitch.set(stateAtApply);
-      this.switchStatus.set(result.status);
     });
+  }
+
+  // A switch the session has already settled (its relaunch or turn ended before the answer) shows no note.
+  private showAnswer(status: SwitchStatus): void {
+    const isSwitchStillTracked = this.modeBeforeSwitch() !== undefined;
+    if (isSwitchStillTracked) this.switchStatus.set(status);
   }
 }

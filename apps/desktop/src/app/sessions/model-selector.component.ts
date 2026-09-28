@@ -3,14 +3,14 @@ import { FormsModule } from '@angular/forms';
 import type { SessionState } from '@openfleet/shared';
 import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
-import { PendingSwitchesService } from '../core/pending-switches.service';
-import { runGuarded } from '../core/run-guarded';
+import { NO_SWITCH_TRACKED, PendingSwitchesService, type SwitchSnapshot, type SwitchStatus } from '../core/pending-switches.service';
+import { SessionRequests } from '../core/session-requests';
 
 const MODEL_SWITCH_ERROR = 'Could not switch model — try again.';
 
 export const MODEL_RUNGS = ['haiku', 'sonnet', 'opus', 'fable'] as const;
 
-const SWITCH_STATUS_LABEL: Record<'relaunching' | 'deferred', string> = {
+const SWITCH_STATUS_LABEL: Record<SwitchStatus, string> = {
   relaunching: 'restarting…',
   deferred: 'switch pending: happens when this turn ends',
 };
@@ -72,6 +72,12 @@ export class ModelSelectorComponent {
   // relaunch's own state transition (leaving 'starting') or the turn ending (idle/closed) is.
   private readonly sawStartingSinceSwitch = signal(false);
 
+  private readonly requests = new SessionRequests({
+    shownSessionId: () => this.sessionId(),
+    busy: this.applying,
+    error: this.switchError,
+  });
+
   constructor() {
     // A route param change reuses this component instance: the session being left keeps its pending
     // switch in the service, the session arriving gets its own back.
@@ -79,17 +85,10 @@ export class ModelSelectorComponent {
       const sessionId = this.sessionId();
       untracked(() => this.parkPendingSwitchOfShownSession());
       this.shownSessionId = sessionId;
+      this.requests.show(sessionId);
       const pending = this.pendingSwitches.recall(sessionId, 'model');
       const currentModel = untracked(() => this.session()?.model) ?? 'sonnet';
-      this.chosenRung = pending?.requestedValue ?? currentModel;
-      this.confirmedRung = this.chosenRung;
-      this.applying.set(false);
-      this.switchStatus.set(pending?.status ?? null);
-      this.switchError.set(null);
-      this.modelBeforeSwitch.set(pending ? pending.valueBeforeSwitch : undefined);
-      this.stateBeforeSwitch.set(pending?.stateBeforeSwitch);
-      this.sawStartingSinceSwitch.set(pending?.sawStartingSinceSwitch ?? false);
-      this.pendingModelSwitch.emit(pending?.status === 'deferred');
+      this.restoreSwitch(pending ?? { ...NO_SWITCH_TRACKED, requestedValue: currentModel });
     });
     inject(DestroyRef).onDestroy(() => this.parkPendingSwitchOfShownSession());
 
@@ -97,16 +96,24 @@ export class ModelSelectorComponent {
     // (passed through 'starting' and moved on) or the session reached idle/closed since the request,
     // so the note never sits there forever. session.model_changed alone is not proof: the daemon emits
     // it before or while the relaunch is still starting, so clearing on it would drop the note early.
+    // A switch requested while another relaunch is already starting waits for the session to leave that
+    // one: only a 'starting' entered after the request is this switch's own relaunch.
     effect(() => {
       const requestedFrom = this.modelBeforeSwitch();
       if (requestedFrom === undefined) return;
       const session = this.session();
       if (!session) return;
+      const wasRequestedDuringRelaunch = this.stateBeforeSwitch() === 'starting';
       if (session.state === 'starting') {
-        this.sawStartingSinceSwitch.set(true);
+        if (!wasRequestedDuringRelaunch) this.sawStartingSinceSwitch.set(true);
         return;
       }
       const relaunchSettled = this.sawStartingSinceSwitch();
+      const isEarlierRelaunchOver = wasRequestedDuringRelaunch && !relaunchSettled && session.state !== 'closed';
+      if (isEarlierRelaunchOver) {
+        this.stateBeforeSwitch.set(session.state);
+        return;
+      }
       const turnEndSettled = (session.state === 'idle' || session.state === 'closed') && session.state !== this.stateBeforeSwitch();
       if (!relaunchSettled && !turnEndSettled) return;
       this.switchStatus.set(null);
@@ -123,39 +130,70 @@ export class ModelSelectorComponent {
 
   private parkPendingSwitchOfShownSession(): void {
     if (this.shownSessionId === undefined) return;
-    this.pendingSwitches.park(this.shownSessionId, 'model', {
+    this.pendingSwitches.park(this.shownSessionId, 'model', this.switchSnapshot());
+  }
+
+  private switchSnapshot(): SwitchSnapshot {
+    return {
       status: this.switchStatus(),
       requestedValue: this.confirmedRung,
       valueBeforeSwitch: this.modelBeforeSwitch(),
       stateBeforeSwitch: this.stateBeforeSwitch(),
       sawStartingSinceSwitch: this.sawStartingSinceSwitch(),
-    });
+    };
   }
 
-  statusLabel(status: 'relaunching' | 'deferred'): string {
+  private showSwitch(snapshot: SwitchSnapshot): void {
+    this.chosenRung = snapshot.requestedValue;
+    this.confirmedRung = snapshot.requestedValue;
+    this.switchStatus.set(snapshot.status);
+    this.modelBeforeSwitch.set(snapshot.valueBeforeSwitch);
+    this.stateBeforeSwitch.set(snapshot.stateBeforeSwitch);
+    this.sawStartingSinceSwitch.set(snapshot.sawStartingSinceSwitch);
+  }
+
+  private restoreSwitch(snapshot: SwitchSnapshot): void {
+    this.showSwitch(snapshot);
+    this.pendingModelSwitch.emit(snapshot.status === 'deferred');
+  }
+
+  statusLabel(status: SwitchStatus): string {
     return SWITCH_STATUS_LABEL[status];
   }
 
+  // The switch is tracked from the click, not from the reply: the daemon's state events can outrun the HTTP
+  // answer, and a tracking that starts late would miss a relaunch that already ran.
   async apply(): Promise<void> {
     const sessionIdAtApply = this.sessionId();
     const modelAtApply = this.session()?.model ?? null;
     const stateAtApply = this.session()?.state;
     const attemptedRung = this.chosenRung;
-    await runGuarded(this.applying, this.switchError, MODEL_SWITCH_ERROR, async () => {
-      let result: { status: 'relaunching' | 'deferred' };
+    const switchBeforeApply = this.switchSnapshot();
+    await this.requests.run(sessionIdAtApply, MODEL_SWITCH_ERROR, async (isStale) => {
+      this.showSwitch({
+        status: switchBeforeApply.status,
+        requestedValue: attemptedRung,
+        valueBeforeSwitch: modelAtApply,
+        stateBeforeSwitch: stateAtApply,
+        sawStartingSinceSwitch: false,
+      });
       try {
-        result = await this.api.updateModel(sessionIdAtApply, attemptedRung);
+        const { status } = await this.api.updateModel(sessionIdAtApply, attemptedRung);
+        if (isStale()) this.pendingSwitches.answer(sessionIdAtApply, 'model', status);
+        else this.showAnswer(status);
       } catch (error) {
-        if (this.sessionId() !== sessionIdAtApply) return;
-        this.chosenRung = this.confirmedRung;
+        if (isStale()) this.pendingSwitches.park(sessionIdAtApply, 'model', switchBeforeApply);
+        else this.restoreSwitch(switchBeforeApply);
         throw error;
       }
-      if (this.sessionId() !== sessionIdAtApply) return;
-      this.confirmedRung = attemptedRung;
-      this.modelBeforeSwitch.set(modelAtApply);
-      this.stateBeforeSwitch.set(stateAtApply);
-      this.switchStatus.set(result.status);
-      this.pendingModelSwitch.emit(result.status === 'deferred');
     });
+  }
+
+  // A switch the session has already settled (its relaunch or turn ended before the answer) shows no note.
+  private showAnswer(status: SwitchStatus): void {
+    const isSwitchStillTracked = this.modelBeforeSwitch() !== undefined;
+    if (!isSwitchStillTracked) return;
+    this.switchStatus.set(status);
+    this.pendingModelSwitch.emit(status === 'deferred');
   }
 }
