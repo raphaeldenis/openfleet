@@ -20,9 +20,11 @@ const REQUEST_TIMEOUT_MS = 60_000;
 export class FleetApiService {
   // ponytail: fetch over HttpClient — no interceptors needed yet
   private async call<T>(path: string, init: RequestInit = {}): Promise<T> {
+    const requestTimeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+    const abortsOnCallerOrTimeout = init.signal ? AbortSignal.any([init.signal, requestTimeout]) : requestTimeout;
     const response = await fetch(`${environment.apiUrl}${path}`, {
       ...init,
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      signal: abortsOnCallerOrTimeout,
       headers: { 'content-type': 'application/json', authorization: `Bearer ${environment.adminToken}`, ...(init.headers ?? {}) },
     });
     if (!response.ok) {
