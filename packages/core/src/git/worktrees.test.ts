@@ -3,7 +3,7 @@ import { chmodSync, mkdirSync, mkdtempSync, existsSync, readFileSync, symlinkSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { childEnvironmentForGit } from '../process/childEnvironment.js';
+import { childEnvironmentForClaudeCli, childEnvironmentForGit } from '../process/childEnvironment.js';
 import { makeRepo } from './testRepo.js';
 import { createWorktree, isPathWithin, sameGitRepository, WorktreeError } from './worktrees.js';
 
@@ -141,9 +141,9 @@ describe('createWorktree', () => {
 
   // Positive control for the test above: proves the GIT_CONFIG_SYSTEM → core.hooksPath injection
   // is a real attack the guard must stop, not a no-op that would pass even unguarded (e.g. because
-  // this git build or environment ignores GIT_CONFIG_SYSTEM). Calls git directly with the caller's
-  // env passed through unscrubbed — never through createWorktree/childEnvironmentForGit — so the
-  // hook firing here is attributable only to the absence of scrubbing.
+  // this git build or environment ignores GIT_CONFIG_SYSTEM). Calls git directly, never through
+  // createWorktree/childEnvironmentForGit, with the config-injection vars left in place — only the
+  // repository-location vars (GIT_DIR…) are dropped, so a hook-launched run stays on its temp repo.
   it('positive control: an unscrubbed GIT_CONFIG_SYSTEM does inject core.hooksPath and run the attacker hook on worktree add', () => {
     const repoPath = makeRepo();
     const worktreesRoot = mkdtempSync(join(tmpdir(), 'of-wt-'));
@@ -156,7 +156,7 @@ describe('createWorktree', () => {
 
     execFileSync('git', ['worktree', 'add', '-b', 'task/config-system-control', '--', join(worktreesRoot, 'control')], {
       cwd: repoPath,
-      env: { ...process.env, GIT_CONFIG_SYSTEM: fakeSystemConfig },
+      env: { ...childEnvironmentForClaudeCli(process.env), GIT_CONFIG_SYSTEM: fakeSystemConfig },
     });
 
     expect(existsSync(marker)).toBe(true);
