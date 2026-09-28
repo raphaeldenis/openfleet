@@ -6,6 +6,7 @@ import type { PermissionMode, Session, SessionSpec } from '@openfleet/shared';
 import { EventBus } from '../events/eventBus.js';
 import { createWorktree } from '../git/worktrees.js';
 import type { Harness, HarnessHandle } from '../harness/harness.js';
+import { findPermissiveSettingsWarning } from '../harness/claudeCli/permissiveSettings.js';
 import { newId, newToken } from '../ids.js';
 import { MessageQueue } from './messageQueue.js';
 import { wrapAgentMessage } from './messageEnvelope.js';
@@ -276,6 +277,7 @@ export class SessionService {
     // Captured now so a later reopen can tell a directory that still resolves the same way apart from an
     // in-between symlink swap from one whose path never resolved to a real directory at all.
     if (existsSync(spec.directory)) this.repo.setDirectoryRealpath(id, realpathSync.native(spec.directory));
+    this.warnIfPermissiveSettings(spec.harness, spec.directory);
     const harness = this.harnessFor(spec.harness);
     const handle = harness.start({
       sessionId: id, directory: spec.directory, model: spec.model, seededPrompt: spec.seededPrompt,
@@ -934,6 +936,7 @@ export class SessionService {
     this.assertNotShuttingDown();
     const tokens = this.repo.tokens(session.id);
     if (!tokens) return { launched: false, reason: 'session has no stored tokens' }; // defensive: every session row carries its tokens
+    this.warnIfPermissiveSettings(session.harness, session.directory);
     const harness = this.harnessFor(session.harness);
     const permissionMode = this.resolveResumePermissionMode(session);
     // A daemon crash can leave the pre-restart process alive for a moment in its orphaned PTY (ponytail:
@@ -982,6 +985,15 @@ export class SessionService {
     this.repo.setState(session.id, 'starting', startingSince);
     this.deps.bus.emit({ type: 'session.state', sessionId: session.id, state: 'starting', stateSince: startingSince });
     return { launched: true };
+  }
+
+  // Read-only, best-effort governance signal: a worktree whose .claude settings grant a permission
+  // bypass can let a local session skip the daemon's own approval gate. Only claude-cli actually reads
+  // those settings, so a 'fake' harness launch is never inspected.
+  private warnIfPermissiveSettings(harnessId: Session['harness'], directory: string): void {
+    if (harnessId !== 'claude-cli') return;
+    const warning = findPermissiveSettingsWarning(directory);
+    if (warning) console.warn(`session directory ${directory} has permissive Claude settings: ${warning}`);
   }
 
   private resolveResumePermissionMode(session: Session): PermissionMode | undefined {
