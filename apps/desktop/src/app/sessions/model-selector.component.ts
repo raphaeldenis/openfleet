@@ -1,8 +1,9 @@
-import { ChangeDetectionStrategy, Component, effect, inject, input, output, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, effect, inject, input, output, signal, untracked } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import type { SessionState } from '@openfleet/shared';
 import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
+import { runGuarded } from '../core/run-guarded';
 
 const MODEL_SWITCH_ERROR = 'Could not switch model — try again.';
 
@@ -20,8 +21,8 @@ const SWITCH_STATUS_LABEL: Record<'relaunching' | 'deferred', string> = {
   template: `
     <div class="model-selector" data-testid="model-selector">
       <span class="current" data-testid="current-model">{{ session()?.model ?? 'default' }}</span>
-      <select data-testid="model-select" [(ngModel)]="chosenRung">
-        @for (rung of rungs; track rung) {
+      <select class="of-input" data-testid="model-select" aria-label="Model" [(ngModel)]="chosenRung">
+        @for (rung of rungs(); track rung) {
           <option [value]="rung">{{ rung }}</option>
         }
       </select>
@@ -45,8 +46,17 @@ export class ModelSelectorComponent {
   readonly pendingModelSwitch = output<boolean>();
   private readonly events = inject(FleetEventsService);
   private readonly api = inject(FleetApiService);
-  readonly rungs = MODEL_RUNGS;
-  chosenRung: (typeof MODEL_RUNGS)[number] = 'sonnet';
+  // The session's current model rarely matches one of the fixed rungs exactly (it is a full model id,
+  // e.g. 'claude-opus-5-5', not the short alias 'opus') — add it as its own option instead of forcing
+  // the select onto a rung that would silently apply a different model.
+  readonly rungs = computed(() => {
+    const model = this.session()?.model;
+    return model && !(MODEL_RUNGS as readonly string[]).includes(model) ? [...MODEL_RUNGS, model] : MODEL_RUNGS;
+  });
+  chosenRung = 'sonnet';
+  // The last value a switch actually confirmed (or the session's model at mount) — a failed switch
+  // reverts `chosenRung` here instead of leaving the select showing the rejected choice.
+  private confirmedRung = 'sonnet';
   readonly applying = signal(false);
   readonly switchStatus = signal<'relaunching' | 'deferred' | null>(null);
   readonly switchError = signal<string | null>(null);
@@ -54,36 +64,48 @@ export class ModelSelectorComponent {
   // moved on, the switch is still in flight. `undefined` means no switch is being tracked.
   private readonly modelBeforeSwitch = signal<string | null | undefined>(undefined);
   private readonly stateBeforeSwitch = signal<SessionState | undefined>(undefined);
+  // The daemon persists the model (and emits session.model_changed) before or while the relaunch it
+  // triggers is still starting, so the model alone landing is not proof the switch is done — only the
+  // relaunch's own state transition (leaving 'starting') or the turn ending (idle/closed) is.
+  private readonly sawStartingSinceSwitch = signal(false);
 
   constructor() {
     // A route param change reuses this component instance, so a session switch must not leak
     // the previous session's in-flight state or result into the one now shown.
     effect(() => {
       this.sessionId();
-      this.chosenRung = 'sonnet';
+      const currentModel = untracked(() => this.session()?.model) ?? 'sonnet';
+      this.chosenRung = currentModel;
+      this.confirmedRung = currentModel;
       this.applying.set(false);
       this.switchStatus.set(null);
       this.switchError.set(null);
       this.modelBeforeSwitch.set(undefined);
       this.stateBeforeSwitch.set(undefined);
+      this.sawStartingSinceSwitch.set(false);
       this.pendingModelSwitch.emit(false);
     });
 
-    // Clears "restarting…" / "switch pending" once the switch it describes has actually landed
-    // (the model changed) or the session moved on to idle/closed since the request, so the note
-    // never sits there forever. A session already idle when the switch was requested must still
-    // observe a real transition, not just its already-idle starting state.
+    // Clears "restarting…" / "switch pending" once the relaunch it describes has actually settled
+    // (passed through 'starting' and moved on) or the session reached idle/closed since the request,
+    // so the note never sits there forever. session.model_changed alone is not proof: the daemon emits
+    // it before or while the relaunch is still starting, so clearing on it would drop the note early.
     effect(() => {
       const requestedFrom = this.modelBeforeSwitch();
       if (requestedFrom === undefined) return;
       const session = this.session();
       if (!session) return;
-      const switchLanded = (session.model ?? null) !== requestedFrom;
-      const settledSinceRequest = (session.state === 'idle' || session.state === 'closed') && session.state !== this.stateBeforeSwitch();
-      if (!switchLanded && !settledSinceRequest) return;
+      if (session.state === 'starting') {
+        this.sawStartingSinceSwitch.set(true);
+        return;
+      }
+      const relaunchSettled = this.sawStartingSinceSwitch();
+      const turnEndSettled = (session.state === 'idle' || session.state === 'closed') && session.state !== this.stateBeforeSwitch();
+      if (!relaunchSettled && !turnEndSettled) return;
       this.switchStatus.set(null);
       this.modelBeforeSwitch.set(undefined);
       this.stateBeforeSwitch.set(undefined);
+      this.sawStartingSinceSwitch.set(false);
     });
   }
 
@@ -96,24 +118,25 @@ export class ModelSelectorComponent {
   }
 
   async apply(): Promise<void> {
-    if (this.applying()) return;
-    this.applying.set(true);
-    this.switchError.set(null);
     const sessionIdAtApply = this.sessionId();
     const modelAtApply = this.session()?.model ?? null;
     const stateAtApply = this.session()?.state;
-    try {
-      const result = await this.api.updateModel(sessionIdAtApply, this.chosenRung);
+    const attemptedRung = this.chosenRung;
+    await runGuarded(this.applying, this.switchError, MODEL_SWITCH_ERROR, async () => {
+      let result: { status: 'relaunching' | 'deferred' };
+      try {
+        result = await this.api.updateModel(sessionIdAtApply, attemptedRung);
+      } catch (error) {
+        if (this.sessionId() !== sessionIdAtApply) return;
+        this.chosenRung = this.confirmedRung;
+        throw error;
+      }
       if (this.sessionId() !== sessionIdAtApply) return;
+      this.confirmedRung = attemptedRung;
       this.modelBeforeSwitch.set(modelAtApply);
       this.stateBeforeSwitch.set(stateAtApply);
       this.switchStatus.set(result.status);
       this.pendingModelSwitch.emit(result.status === 'deferred');
-    } catch {
-      if (this.sessionId() !== sessionIdAtApply) return;
-      this.switchError.set(MODEL_SWITCH_ERROR);
-    } finally {
-      if (this.sessionId() === sessionIdAtApply) this.applying.set(false);
-    }
+    });
   }
 }

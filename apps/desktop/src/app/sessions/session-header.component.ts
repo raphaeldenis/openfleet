@@ -1,10 +1,13 @@
-import { ChangeDetectionStrategy, Component, input, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, effect, inject, input, signal, type WritableSignal } from '@angular/core';
 import type { Session } from '@openfleet/shared';
+import { FleetApiService } from '../core/fleet-api.service';
 import { StateChipComponent } from '../design/state-chip.component';
 import { ModelSelectorComponent } from './model-selector.component';
 import { PermissionModePickerComponent } from './permission-mode-picker.component';
 import { SessionActionsComponent } from './session-actions.component';
 import { exitCodeLabel } from './session-close-status';
+
+const RENAME_ERROR = 'Could not rename — try again.';
 
 @Component({
   selector: 'of-session-header',
@@ -12,15 +15,35 @@ import { exitCodeLabel } from './session-close-status';
   imports: [StateChipComponent, ModelSelectorComponent, PermissionModePickerComponent, SessionActionsComponent],
   template: `
     <header class="session-header" data-testid="session-header">
-      <span class="emoji" data-testid="session-emoji" title="Change emoji — not available yet">{{ session().emoji }}</span>
-      <span class="name" data-testid="session-name" title="Renaming isn't available yet — no backend route to update a session's name">{{ session().name }}</span>
+      <input
+        #emojiInput
+        class="emoji"
+        data-testid="session-emoji-input"
+        title="Change emoji"
+        maxlength="8"
+        [value]="session().emoji"
+        (change)="renameEmoji(emojiInput.value)"
+        (keydown.escape)="cancelEmojiEdit(emojiInput)"
+      />
+      <input
+        #nameInput
+        class="name"
+        data-testid="session-name-input"
+        title="Rename session"
+        [value]="session().name"
+        (change)="renameName(nameInput.value)"
+        (keydown.escape)="cancelNameEdit(nameInput)"
+      />
+      @if (renameError(); as error) {
+        <span role="alert" data-testid="session-rename-error" class="of-error">✕ {{ error }}</span>
+      }
       <of-state-chip [state]="session().state" [since]="session().stateSince" />
       @if (session().state === 'closed') {
         <span class="exit-code" data-testid="session-exit-code">{{ exitCodeLabel(session().exitCode) }}</span>
       }
       <span class="harness" data-testid="session-harness" title="Harness">{{ session().harness }}</span>
       <of-model-selector [sessionId]="session().id" (pendingModelSwitch)="modelSwitchPending.set($event)" />
-      <of-permission-mode-picker [sessionId]="session().id" [currentMode]="session().permissionMode" />
+      <of-permission-mode-picker [sessionId]="session().id" [currentMode]="session().permissionMode" [sessionState]="session().state" />
       <span class="directory" data-testid="session-directory" [attr.title]="session().directory">{{ session().directory }}</span>
       <span class="cost" data-testid="session-cost" title="Cost tracking is not implemented yet">—</span>
       <span class="spacer"></span>
@@ -37,8 +60,14 @@ import { exitCodeLabel } from './session-close-status';
       display: flex; align-items: center; gap: .625rem; flex-wrap: wrap;
       padding: .5rem .75rem; border-bottom: 1px solid var(--line); background: var(--panel);
     }
-    .emoji { font-size: 1.125rem; }
-    .name { font-weight: 600; }
+    .emoji, .name {
+      border: 1px solid transparent; border-radius: .375rem; background: transparent; color: var(--fg);
+      font-family: inherit; padding: 0 .25rem; height: 1.75rem;
+    }
+    .emoji:hover, .name:hover { border-color: var(--line); }
+    .emoji:focus, .name:focus { border-color: var(--accent); outline: 0; }
+    .emoji { font-size: 1.125rem; width: 2.25rem; text-align: center; }
+    .name { font-weight: 600; font-size: 1rem; width: 9rem; }
     .exit-code { font-family: var(--mono); font-size: .75rem; color: var(--state-closed); }
     .harness { font-size: .75rem; color: var(--mut); border: 1px solid var(--line); border-radius: .375rem; padding: 0 .5rem; }
     .directory { font-family: var(--mono); font-size: .6875rem; color: var(--mut); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 16rem; }
@@ -48,6 +77,72 @@ import { exitCodeLabel } from './session-close-status';
 })
 export class SessionHeaderComponent {
   readonly session = input.required<Session>();
+  private readonly api = inject(FleetApiService);
   protected readonly exitCodeLabel = exitCodeLabel;
   protected readonly modelSwitchPending = signal(false);
+  // Separate busy flags: a name edit and an emoji edit are independent requests, so one in flight
+  // must not guard-block the other.
+  protected readonly renamingName = signal(false);
+  protected readonly renamingEmoji = signal(false);
+  protected readonly renameError = signal<string | null>(null);
+  // `session` carries a fresh object on every field update (state, model, …), not only on a real
+  // session switch — tracking the last-seen id keeps the reset below from firing on every one of
+  // those and wiping an in-progress rename's own error.
+  private lastSessionId: string | undefined;
+
+  constructor() {
+    // A route param change reuses this component instance, so a session switch must not leak the
+    // previous session's in-flight rename or rename error into the one now shown.
+    effect(() => {
+      const id = this.session().id;
+      if (id === this.lastSessionId) return;
+      this.lastSessionId = id;
+      this.renamingName.set(false);
+      this.renamingEmoji.set(false);
+      this.renameError.set(null);
+    });
+  }
+
+  renameName(value: string): void {
+    const trimmed = value.trim();
+    if (!trimmed || trimmed === this.session().name) return;
+    void this.rename({ name: trimmed }, this.renamingName);
+  }
+
+  renameEmoji(value: string): void {
+    const trimmed = value.trim();
+    if (!trimmed || trimmed === this.session().emoji) return;
+    void this.rename({ emoji: trimmed }, this.renamingEmoji);
+  }
+
+  protected cancelNameEdit(input: HTMLInputElement): void {
+    input.value = this.session().name;
+    input.blur();
+  }
+
+  protected cancelEmojiEdit(input: HTMLInputElement): void {
+    input.value = this.session().emoji;
+    input.blur();
+  }
+
+  // Ignores a rename response for a session the user has since navigated away from: no error shown, and
+  // (unlike runGuarded) no busy-flag reset — this component instance is reused across a route param
+  // change, so `busy`/`renameError` already belong to whichever session is current by the time this
+  // settles, and a stale settle must not touch state that may now belong to that session's own in-flight rename.
+  private async rename(patch: { name?: string; emoji?: string }, busy: WritableSignal<boolean>): Promise<void> {
+    if (busy()) return;
+    const sessionId = this.session().id;
+    busy.set(true);
+    this.renameError.set(null);
+    try {
+      await this.api.renameSession(sessionId, patch);
+    } catch {
+      if (this.session().id !== sessionId) return;
+      this.renameError.set(RENAME_ERROR);
+      busy.set(false);
+      return;
+    }
+    if (this.session().id !== sessionId) return;
+    busy.set(false);
+  }
 }

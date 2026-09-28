@@ -800,6 +800,7 @@ describe('SessionService.updateModel', () => {
     expect(rotated.hookToken).not.toBe(originalTokens.hookToken);
     expect(rotated.mcpToken).not.toBe(originalTokens.mcpToken);
     expect(service.get(session.id)!.state).toBe('starting');
+    expect(events.some((e) => e.type === 'session.state' && e.state === 'starting' && e.sessionId === session.id)).toBe(true);
 
     // The relaunched process reports SessionStart exactly like a fresh resume: same path, same landing state.
     service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
@@ -2606,6 +2607,35 @@ describe('SessionService.updatePermissionMode', () => {
     expect(service.get(session.id)!.permissionMode).toBe('bypassPermissions');
     expect(harness.launches[1]!.permissionMode).toBe('bypassPermissions');
     expect(harness.launches[1]!.resuming).toBe(true);
+  });
+
+  it('emits session.permission_mode_changed immediately, so the label updates without waiting for the relaunch', async () => {
+    vi.useFakeTimers();
+    const { service, events } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+
+    service.updatePermissionMode(session.id, 'bypassPermissions');
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(events).toContainEqual({ type: 'session.permission_mode_changed', sessionId: session.id, mode: 'bypassPermissions' });
+  });
+
+  it('emits session.state "starting" for the relaunch, then "idle" once the resumed process reports back', async () => {
+    vi.useFakeTimers();
+    const { service, events } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+
+    service.updatePermissionMode(session.id, 'bypassPermissions');
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(service.get(session.id)!.state).toBe('starting');
+    expect(events.some((e) => e.type === 'session.state' && e.state === 'starting' && e.sessionId === session.id)).toBe(true);
+
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart', source: 'resume' }));
+
+    expect(service.get(session.id)!.state).toBe('idle');
   });
 
   it('defers a permission-mode change while generating, relaunching only after Stop makes the session idle again', async () => {
