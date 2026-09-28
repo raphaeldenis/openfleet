@@ -484,6 +484,76 @@ describe('FleetEventsService offline sends (AUD-14)', () => {
     const resizes = socket.sent.map((raw) => JSON.parse(raw)).filter((m) => m.type === 'resize');
     expect(resizes).toEqual([{ type: 'resize', sessionId: 's1', cols: 100, rows: 40 }]);
   });
+
+  it('ignores a repeat attach for a session already attached since this open, e.g. a reconnect effect racing the flush', () => {
+    const service = new FleetEventsService();
+    service.connect();
+    const socket = FakeWebSocket.instances[0]!;
+
+    service.sendAttach('s1'); // queued while connecting
+    socket.dispatchOpen(); // flush sends s1
+    service.sendAttach('s1'); // e.g. the terminal's own reconnect effect, right after
+
+    expect(sentTypes(socket).filter((type) => type === 'attach')).toHaveLength(1);
+  });
+
+  it('drops a session\'s queued attach and resize once it is no longer wanted, so reconnect sends nothing for it', () => {
+    const service = new FleetEventsService();
+    service.connect();
+    const socket = FakeWebSocket.instances[0]!;
+
+    service.sendAttach('s1');
+    service.sendResize('s1', 80, 24);
+    service.dropQueuedSendsFor('s1');
+    socket.dispatchOpen();
+
+    expect(sentTypes(socket)).not.toContain('attach');
+    expect(sentTypes(socket)).not.toContain('resize');
+  });
+});
+
+describe('FleetEventsService reconnect cycle attach dedupe (AUD-14)', () => {
+  beforeEach(() => {
+    FakeWebSocket.instances = [];
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function sentTypes(socket: FakeWebSocket) {
+    return socket.sent.map((raw) => (JSON.parse(raw) as { type: string }).type);
+  }
+
+  it('clears the flushed attach queue so a later reconnect with no new request resends nothing', () => {
+    const service = new FleetEventsService();
+    service.connect();
+    service.sendAttach('s1');
+    FakeWebSocket.instances[0]!.dispatchOpen();
+    expect(sentTypes(FakeWebSocket.instances[0]!).filter((type) => type === 'attach')).toHaveLength(1);
+
+    FakeWebSocket.instances[0]!.dispatchClose();
+    vi.advanceTimersByTime(1000);
+    FakeWebSocket.instances[1]!.dispatchOpen();
+
+    expect(sentTypes(FakeWebSocket.instances[1]!)).not.toContain('attach');
+  });
+
+  it('attaches again on a fresh connect cycle when the session is requested anew, even though it was attached before', () => {
+    const service = new FleetEventsService();
+    service.connect();
+    FakeWebSocket.instances[0]!.dispatchOpen();
+    service.sendAttach('s1');
+    expect(sentTypes(FakeWebSocket.instances[0]!).filter((type) => type === 'attach')).toHaveLength(1);
+
+    FakeWebSocket.instances[0]!.dispatchClose();
+    vi.advanceTimersByTime(1000);
+    service.sendAttach('s1');
+    FakeWebSocket.instances[1]!.dispatchOpen();
+
+    expect(sentTypes(FakeWebSocket.instances[1]!).filter((type) => type === 'attach')).toHaveLength(1);
+  });
 });
 
 describe('FleetEventsService closedAt', () => {

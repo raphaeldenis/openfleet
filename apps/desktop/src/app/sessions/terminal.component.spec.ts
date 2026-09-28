@@ -14,7 +14,17 @@ function fakeEventsService() {
     subjects.set(sessionId, subject);
     return subject;
   };
-  return { output, sendInput: vi.fn(), sendResize: vi.fn(), sendAttach: vi.fn(), sessions: signal([]), approvals: signal([]), connected: signal(true), reconnectCount: signal(0) };
+  return {
+    output,
+    sendInput: vi.fn(),
+    sendResize: vi.fn(),
+    sendAttach: vi.fn(),
+    dropQueuedSendsFor: vi.fn(),
+    sessions: signal([]),
+    approvals: signal([]),
+    connected: signal(true),
+    reconnectCount: signal(0),
+  };
 }
 
 describe('TerminalComponent', () => {

@@ -54,6 +54,11 @@ export class FleetEventsService {
   // socket opens. Keystrokes are never queued here — replaying stale input into a live agent is dangerous.
   private readonly queuedAttachSessionIds = new Set<string>();
   private readonly queuedResizeBySession = new Map<string, { cols: number; rows: number }>();
+  // Sessions already attached since the current socket opened. A queued attach flushed on open and a
+  // terminal's own reconnect effect can both ask to attach the same session right after that open — this
+  // is what makes the second one a no-op instead of a duplicate replay. Cleared the moment the socket
+  // drops, so a real future reconnect still attaches normally.
+  private readonly attachedSinceOpenSessionIds = new Set<string>();
 
   connect(): void {
     const isAlreadyConnectingOrOpen =
@@ -79,6 +84,7 @@ export class FleetEventsService {
 
   private scheduleReconnect(): void {
     this.connected.set(false);
+    this.attachedSinceOpenSessionIds.clear();
     setTimeout(() => this.openSocket(), this.reconnectDelayMs);
     this.reconnectDelayMs = Math.min(this.reconnectDelayMs * 2, MAX_RECONNECT_DELAY_MS);
   }
@@ -106,11 +112,19 @@ export class FleetEventsService {
   }
 
   sendAttach(sessionId: string): void {
+    if (this.attachedSinceOpenSessionIds.has(sessionId)) return;
     if (!this.isSocketOpen()) {
       this.queuedAttachSessionIds.add(sessionId);
       return;
     }
+    this.attachedSinceOpenSessionIds.add(sessionId);
     this.send({ type: 'attach', sessionId });
+  }
+
+  /** Drops a session's queued attach/resize — nothing left to view means nothing worth sending on reconnect. */
+  dropQueuedSendsFor(sessionId: string): void {
+    this.queuedAttachSessionIds.delete(sessionId);
+    this.queuedResizeBySession.delete(sessionId);
   }
 
   private isSocketOpen(): boolean {
@@ -122,7 +136,10 @@ export class FleetEventsService {
   }
 
   private flushQueuedSends(): void {
-    for (const sessionId of this.queuedAttachSessionIds) this.send({ type: 'attach', sessionId });
+    for (const sessionId of this.queuedAttachSessionIds) {
+      this.attachedSinceOpenSessionIds.add(sessionId);
+      this.send({ type: 'attach', sessionId });
+    }
     this.queuedAttachSessionIds.clear();
     for (const [sessionId, size] of this.queuedResizeBySession) this.send({ type: 'resize', sessionId, ...size });
     this.queuedResizeBySession.clear();

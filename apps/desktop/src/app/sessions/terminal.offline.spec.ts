@@ -1,5 +1,5 @@
 import { render, screen } from '@testing-library/angular/zoneless';
-import { inputBinding } from '@angular/core';
+import { inputBinding, signal } from '@angular/core';
 import { describe, expect, it } from 'vitest';
 import { TerminalComponent } from './terminal.component';
 import { connectFakeDaemon } from '../testing/session-view.testing';
@@ -19,8 +19,23 @@ async function renderTerminal(options: { openImmediately?: boolean } = {}) {
   return { fixture, daemon };
 }
 
+async function renderSwitchableTerminal() {
+  const sessionId = signal('s1');
+  const { fixture } = await render(TerminalComponent, { bindings: [inputBinding('sessionId', sessionId)] });
+  const daemon = connectFakeDaemon(fixture);
+  await fixture.whenStable();
+  return { fixture, daemon, sessionId };
+}
+
 function sentTypes(daemon: Awaited<ReturnType<typeof renderTerminal>>['daemon']) {
   return daemon.sentMessages().map((message) => (message as { type: string }).type);
+}
+
+function attachedSessionIds(daemon: Awaited<ReturnType<typeof renderTerminal>>['daemon']) {
+  return daemon
+    .sentMessages()
+    .filter((message) => (message as { type: string }).type === 'attach')
+    .map((message) => (message as { sessionId: string }).sessionId);
 }
 
 describe('TerminalComponent offline (AUD-14)', () => {
@@ -58,5 +73,42 @@ describe('TerminalComponent offline (AUD-14)', () => {
     await daemon.reconnect(); // fires the socket's open event
 
     expect(sentTypes(daemon).filter((type) => type === 'attach')).toHaveLength(1);
+  });
+
+  it('sends a keystroke typed while connected, through the real terminal instance', async () => {
+    const { fixture, daemon } = await renderTerminal();
+
+    fixture.componentInstance.terminal!.input('y');
+    await fixture.whenStable();
+
+    expect(sentTypes(daemon)).toContain('input');
+  });
+
+  it('attaches the session viewed at reconnect exactly once, even after switching away from another session while offline', async () => {
+    const { fixture, daemon, sessionId } = await renderSwitchableTerminal();
+
+    await daemon.disconnect();
+    sessionId.set('s2');
+    await fixture.whenStable();
+
+    await daemon.reconnect();
+    await fixture.whenStable();
+
+    expect(attachedSessionIds(daemon)).toEqual(['s1', 's2']);
+  });
+
+  it('drops the queued attach of a session left before reconnecting, sending only the session still viewed', async () => {
+    const { fixture, daemon, sessionId } = await renderSwitchableTerminal();
+
+    await daemon.disconnect();
+    sessionId.set('s2');
+    await fixture.whenStable();
+    sessionId.set('s3');
+    await fixture.whenStable();
+
+    await daemon.reconnect();
+    await fixture.whenStable();
+
+    expect(attachedSessionIds(daemon)).toEqual(['s1', 's3']);
   });
 });

@@ -45,7 +45,7 @@ export class TerminalComponent implements OnDestroy {
     effect((onCleanup) => {
       const sessionId = this.sessionId();
       this.attach(sessionId);
-      onCleanup(() => this.detach());
+      onCleanup(() => this.detach(sessionId));
     });
 
     // A reconnect means the connection (and whatever we last saw) may be stale — clear and re-request
@@ -102,14 +102,15 @@ export class TerminalComponent implements OnDestroy {
     this.events.sendResize(this.sessionId(), this.terminal.cols, this.terminal.rows);
   }
 
-  private detach(): void {
+  private detach(sessionId: string): void {
     this.resizeObserver.disconnect();
     if (this.pendingRefitFrame !== undefined) cancelAnimationFrame(this.pendingRefitFrame);
     this.pendingRefitFrame = undefined;
     this.outputSub?.unsubscribe();
+    this.events.dropQueuedSendsFor(sessionId);
     this.terminal?.dispose();
     this.terminal = undefined;
   }
 
-  ngOnDestroy(): void { this.detach(); }
+  ngOnDestroy(): void { this.detach(this.sessionId()); }
 }
