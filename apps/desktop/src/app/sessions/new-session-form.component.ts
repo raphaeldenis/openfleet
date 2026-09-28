@@ -6,12 +6,12 @@ import { ActivatedRoute, type ParamMap, Router, RouterLink } from '@angular/rout
 import { type HarnessId, type Session } from '@openfleet/shared';
 import { FleetApiService } from '../core/fleet-api.service';
 import { ManagerFieldsComponent } from '../managers/manager-fields.component';
-import { createSessionErrorMessage, SESSION_CREATED_BUT_NOT_OPENED } from './create-session-error';
+import { type CreatedKind, createSessionErrorMessage, SESSION_CREATED_BUT_NOT_OPENED } from './create-session-error';
 import { MODEL_RUNGS } from './model-selector.component';
 import { type ChosenPermissionMode, PermissionModeListComponent } from './permission-mode-list.component';
 
 type CreationMode = 'session' | 'manager';
-type CreatedSession = { id: string; route: '/session' | '/manager' };
+type CreatedSession = { id: string; route: '/session' | '/manager'; formFingerprint: string };
 
 const NOT_AVAILABLE_YET = 'not available yet';
 const SESSION_DEFAULT_EMOJI = '🤖';
@@ -91,7 +91,7 @@ function creationModeFrom(queryParams: ParamMap | undefined): CreationMode {
 
       @if (isManagerMode()) {
         <div class="of-section-title">Manager</div>
-        <of-manager-fields [(pulseSeconds)]="pulseSeconds" [(childrenCap)]="childrenCap" [(mission)]="mission" />
+        <of-manager-fields [(pulseSeconds)]="pulseSeconds" [(childrenCap)]="childrenCap" [(mission)]="mission" [(isMissionTouched)]="isMissionTouched" />
       }
       </fieldset>
 
@@ -133,6 +133,7 @@ export class NewSessionFormComponent {
   private readonly document = inject(DOCUMENT);
   private readonly queryParams = toSignal(this.route.queryParamMap);
   private readonly managerFields = viewChild(ManagerFieldsComponent);
+  private readonly permissionModeList = viewChild(PermissionModeListComponent);
   private readonly directoryInput = viewChild<ElementRef<HTMLInputElement>>('directoryInput');
   private readonly nameInput = viewChild<ElementRef<HTMLInputElement>>('nameInput');
   private readonly submitButton = viewChild<ElementRef<HTMLButtonElement>>('submitButton');
@@ -160,9 +161,14 @@ export class NewSessionFormComponent {
   protected readonly pulseSeconds = signal(1800);
   protected readonly childrenCap = signal(2);
   protected readonly mission = signal('');
+  protected readonly isMissionTouched = signal(false);
 
   protected readonly hasSubmitted = signal(false);
   protected readonly serverError = signal('');
+  private readonly formFingerprint = computed(() => JSON.stringify([
+    this.mode(), this.directory(), this.name(), this.emoji(), this.harness(), this.model(), this.permissionMode(),
+    this.pulseSeconds(), this.childrenCap(), this.mission(),
+  ]));
   protected readonly directoryError = computed(() => (this.hasSubmitted() && this.directory().trim() === '' ? 'Directory is required' : ''));
   protected readonly nameError = computed(() => (this.hasSubmitted() && this.name().trim() === '' ? 'Name is required' : ''));
 
@@ -178,23 +184,42 @@ export class NewSessionFormComponent {
 
   async submit(): Promise<void> {
     if (this.pending()) return;
+    if (this.permissionModeList()?.isAwaitingAnswer()) return this.permissionModeList()?.demandAnswer();
     this.serverError.set('');
     this.hasSubmitted.set(true);
-    const isRetryOfOpeningCreatedSession = this.createdSession !== undefined;
+    let createdSession = this.createdSessionOfCurrentForm();
+    const isRetryOfOpeningCreatedSession = createdSession !== undefined;
     if (!isRetryOfOpeningCreatedSession && !this.isValidOrFocusFirstInvalidField()) return;
 
     const focusWhenSubmitted = this.document.activeElement;
     this.pending.set(true);
     try {
-      this.createdSession ??= await this.create();
+      createdSession ??= await this.create();
+      this.createdSession = createdSession;
       if (this.hasBeenDestroyed) return;
-      await this.router.navigate([this.createdSession.route, this.createdSession.id]);
+      const isOpened = await this.router.navigate([createdSession.route, createdSession.id]);
+      if (!isOpened) this.showCreatedButNotOpened(focusWhenSubmitted);
     } catch (error) {
-      this.serverError.set(this.createdSession ? SESSION_CREATED_BUT_NOT_OPENED : createSessionErrorMessage(error));
-      this.restoreFocusDroppedWhilePending(focusWhenSubmitted);
+      if (createdSession) this.showCreatedButNotOpened(focusWhenSubmitted);
+      else this.showCreateFailed(error, focusWhenSubmitted);
     } finally {
       this.pending.set(false);
     }
+  }
+
+  private showCreatedButNotOpened(focusWhenSubmitted: Element | null): void {
+    this.serverError.set(SESSION_CREATED_BUT_NOT_OPENED);
+    this.restoreFocusDroppedWhilePending(focusWhenSubmitted);
+  }
+
+  private showCreateFailed(error: unknown, focusWhenSubmitted: Element | null): void {
+    this.serverError.set(createSessionErrorMessage(error, this.kindOfSession()));
+    this.restoreFocusDroppedWhilePending(focusWhenSubmitted);
+  }
+
+  private createdSessionOfCurrentForm(): CreatedSession | undefined {
+    const isFormUnchangedSinceCreation = this.createdSession?.formFingerprint === this.formFingerprint();
+    return isFormUnchangedSinceCreation ? this.createdSession : undefined;
   }
 
   private isValidOrFocusFirstInvalidField(): boolean {
@@ -221,8 +246,13 @@ export class NewSessionFormComponent {
 
   private async create(): Promise<CreatedSession> {
     const route = this.isManagerMode() ? '/manager' : '/session';
+    const formFingerprint = this.formFingerprint();
     const session = await this.createSessionOfCurrentMode();
-    return { id: session.id, route };
+    return { id: session.id, route, formFingerprint };
+  }
+
+  private kindOfSession(): CreatedKind {
+    return this.isManagerMode() ? 'manager' : 'session';
   }
 
   private createSessionOfCurrentMode(): Promise<Session> {

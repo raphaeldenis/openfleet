@@ -8,9 +8,6 @@ import { NewSessionFormComponent } from './new-session-form.component';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
 
 // Hostile black-box tests of the /new form follow-ups (P2-U5b).
-// `it.fails` marks a proven defect: the test states the behaviour a user should get and currently
-// fails on it. When the defect is fixed the test starts passing, vitest flags the `it.fails`, and the
-// marker is dropped.
 
 const MISSION_MAX_BYTES = 64 * 1024;
 
@@ -212,11 +209,7 @@ describe('NewSessionFormComponent — hostile QE pass (P2-U5b)', () => {
       expect(api.createManagerSession).toHaveBeenCalledWith(expect.objectContaining({ permissionMode: 'bypassPermissions' }));
     });
 
-    // MAJOR — permission-mode-list.component.ts:69 (shownValue) + new-session-form.component.ts:229.
-    // While the warning is open the radio shows bypassPermissions but Create sends the previous mode:
-    // the user believes the session runs without any permission gate and gets one that prompts, with
-    // no word about it. The form should hold the submit until the warning is answered.
-    it.fails('DEFECT: Create pressed while the bypass warning is open does not create a session with a mode other than the one shown', async () => {
+    it('Create pressed while the bypass warning is open does not create a session with a mode other than the one shown, and asks for the answer', async () => {
       const api = fakeApi();
       await renderForm(api);
       await fillSessionFields();
@@ -227,11 +220,11 @@ describe('NewSessionFormComponent — hostile QE pass (P2-U5b)', () => {
       await userEvent.click(submitButton());
 
       expect(api.createSession).not.toHaveBeenCalled();
+      expect(screen.getByTestId('new-session-permission-mode-answer-hint')).toHaveTextContent('Confirm or cancel');
+      expect(screen.getByRole('button', { name: 'Confirm' })).toHaveFocus();
     });
 
-    // MAJOR — same root cause through the keyboard: Enter on the focused bypassPermissions radio
-    // submits the form (implicit submission) with the previous mode.
-    it.fails('DEFECT: Enter on the bypassPermissions radio while its warning is open does not create a session', async () => {
+    it('Enter on the bypassPermissions radio while its warning is open does not create a session', async () => {
       const api = fakeApi();
       await renderForm(api);
       await fillSessionFields();
@@ -240,6 +233,21 @@ describe('NewSessionFormComponent — hostile QE pass (P2-U5b)', () => {
       await userEvent.keyboard('{Enter}');
 
       expect(api.createSession).not.toHaveBeenCalled();
+      expect(screen.getByRole('button', { name: 'Confirm' })).toHaveFocus();
+    });
+
+    it('once the warning is confirmed after a held Create, pressing Create sends bypassPermissions', async () => {
+      const api = fakeApi();
+      await renderForm(api);
+      await fillSessionFields();
+      await userEvent.click(radio('bypassPermissions'));
+      await userEvent.click(submitButton());
+
+      await userEvent.keyboard('{Enter}');
+      await userEvent.click(submitButton());
+
+      expect(screen.queryByTestId('new-session-permission-mode-answer-hint')).toBeNull();
+      expect(api.createSession).toHaveBeenCalledWith(expect.objectContaining({ permissionMode: 'bypassPermissions' }));
     });
 
     it('control: Enter on a radio submits the form (the DEFECT above is reachable through the keyboard)', async () => {
@@ -253,9 +261,7 @@ describe('NewSessionFormComponent — hostile QE pass (P2-U5b)', () => {
       expect(api.createSession).toHaveBeenCalledWith(expect.objectContaining({ permissionMode: 'plan' }));
     });
 
-    // MINOR — permission-mode-list.component.ts:41-47: nothing handles Escape, so a keyboard user with
-    // the warning open has to Tab to Cancel; Escape does nothing.
-    it.fails('DEFECT: Escape dismisses the bypass warning and restores the previous mode', async () => {
+    it('Escape dismisses the bypass warning and restores the previous mode', async () => {
       await renderForm(fakeApi());
       await userEvent.click(radio('plan'));
       await userEvent.click(radio('bypassPermissions'));
@@ -266,9 +272,7 @@ describe('NewSessionFormComponent — hostile QE pass (P2-U5b)', () => {
       expect(radio('plan')).toBeChecked();
     });
 
-    // MINOR (a11y) — permission-mode-list.component.ts:41-47: the Cancel/Confirm buttons are removed
-    // while focused, so focus drops to <body> and a keyboard user restarts from the top of the page.
-    it.fails('DEFECT: focus returns to the radio group after Cancel', async () => {
+    it('focus returns to the radio group after Cancel', async () => {
       await renderForm(fakeApi());
       await userEvent.click(radio('plan'));
       await userEvent.click(radio('bypassPermissions'));
@@ -280,7 +284,7 @@ describe('NewSessionFormComponent — hostile QE pass (P2-U5b)', () => {
       expect(radio('plan')).toHaveFocus();
     });
 
-    it.fails('DEFECT: focus returns to the radio group after Confirm', async () => {
+    it('focus returns to the radio group after Confirm', async () => {
       await renderForm(fakeApi());
       await userEvent.click(radio('bypassPermissions'));
       await userEvent.tab();
@@ -303,10 +307,7 @@ describe('NewSessionFormComponent — hostile QE pass (P2-U5b)', () => {
       return rendered;
     }
 
-    // MAJOR — new-session-form.component.ts:183-191: `createdSession` outlives the toggle. The button
-    // says "Create manager", the user filled a mission, and the click opens the earlier *session*
-    // (/session/s-new) instead — the manager is never created and the mission is silently dropped.
-    it.fails('DEFECT: switching to manager after the failed open and pressing "Create manager" creates the manager', async () => {
+    it('switching to manager after the failed open and pressing "Create manager" creates the manager', async () => {
       const api = fakeApi();
       const { navigateSpy } = await renderFormWhoseFirstNavigationFails(api);
 
@@ -317,6 +318,40 @@ describe('NewSessionFormComponent — hostile QE pass (P2-U5b)', () => {
 
       expect(api.createManagerSession).toHaveBeenCalledTimes(1);
       expect(navigateSpy).not.toHaveBeenLastCalledWith(['/session', 's-new']);
+    });
+
+    it('editing a field after the failed open and pressing Create creates a new session with the edit', async () => {
+      const api = fakeApi();
+      await renderFormWhoseFirstNavigationFails(api);
+
+      await userEvent.type(screen.getByTestId('new-session-name'), ' the Second');
+      await userEvent.click(submitButton());
+
+      expect(api.createSession).toHaveBeenCalledTimes(2);
+      expect(api.createSession).toHaveBeenLastCalledWith(expect.objectContaining({ name: 'Gimli the Second' }));
+    });
+
+    it('a failed create after a failed open reads as a create failure, not as a session that was created', async () => {
+      const createSession = vi.fn().mockResolvedValueOnce({ id: 's-new' }).mockRejectedValueOnce(new ApiError(500, 'boom', 'internal'));
+      await renderFormWhoseFirstNavigationFails(fakeApi({ createSession }));
+
+      await userEvent.type(screen.getByTestId('new-session-name'), ' the Second');
+      await userEvent.click(submitButton());
+
+      expect(screen.getByTestId('new-session-form-error')).toHaveTextContent('internal error');
+    });
+
+    it('tells the user the session was created but not opened when the navigation resolves false', async () => {
+      const { navigateSpy } = await renderForm(fakeApi());
+      navigateSpy.mockResolvedValueOnce(false);
+      await fillSessionFields();
+
+      await userEvent.click(submitButton());
+
+      expect(screen.getByTestId('new-session-form-error')).toHaveTextContent('was created');
+      await userEvent.click(submitButton());
+      expect(navigateSpy).toHaveBeenLastCalledWith(['/session', 's-new']);
+      expect(screen.queryByTestId('new-session-form-error')).toBeNull();
     });
 
     it('keeps saying so, and never creates a second session, while every retry of the open fails', async () => {
@@ -399,10 +434,8 @@ describe('NewSessionFormComponent — hostile QE pass (P2-U5b)', () => {
       expect(screen.getByTestId('new-session-form-error')).toHaveTextContent('shorten the mission');
     });
 
-    // MINOR — create-session-error.ts:4,17: the code lookup hits Object.prototype, so a daemon
-    // answering { error: "constructor" } prints the source of Object() in the form.
     ['constructor', 'toString', '__proto__'].forEach((prototypeKey) => {
-      it.fails(`DEFECT: an error code named "${prototypeKey}" reads as the HTTP status, not as a JavaScript object`, async () => {
+      it(`an error code named "${prototypeKey}" reads as the HTTP status, not as a JavaScript object`, async () => {
         await renderForm(fakeApi({ createSession: vi.fn().mockRejectedValue(new ApiError(500, 'POST /api/sessions → 500', prototypeKey)) }));
         await fillSessionFields();
 
@@ -414,9 +447,7 @@ describe('NewSessionFormComponent — hostile QE pass (P2-U5b)', () => {
       });
     });
 
-    // MINOR — create-session-error.ts:6: the payload_too_large copy tells a plain-session creator to
-    // shorten "the mission", a field the session form does not have.
-    it.fails('DEFECT: a plain session creator is not told to shorten a mission when the payload is too large', async () => {
+    it('a plain session creator is not told to shorten a mission when the payload is too large', async () => {
       await renderForm(fakeApi({ createSession: vi.fn().mockRejectedValue(new ApiError(413, 'POST /api/sessions → 413', 'payload_too_large')) }));
       await fillSessionFields();
 
@@ -510,10 +541,7 @@ describe('NewSessionFormComponent — hostile QE pass (P2-U5b)', () => {
   });
 
   describe('manager fields after a round trip through session mode', () => {
-    // MINOR — manager-fields.component.ts:82-85: ngOnInit revalidates pulse and cap only, so the
-    // mission error (empty after a failed submit) disappears on the round trip while the directory and
-    // name errors stay, and the pulse/cap errors are restored.
-    it.fails('DEFECT: the "needs a mission" error shown after a failed submit is still shown after toggling to session and back', async () => {
+    it('the "needs a mission" error shown after a failed submit is still shown after toggling to session and back', async () => {
       await renderForm(fakeApi(), { mode: 'manager' });
       await fillSessionFields({ name: 'Lead' });
       await userEvent.click(submitButton());
@@ -525,7 +553,7 @@ describe('NewSessionFormComponent — hostile QE pass (P2-U5b)', () => {
       await waitFor(() => expect(screen.getByTestId('manager-mission-error')).toBeTruthy());
     });
 
-    it.fails('DEFECT: the "at most 65536 bytes" error is still shown after toggling to session and back', async () => {
+    it('the "at most 65536 bytes" error is still shown after toggling to session and back', async () => {
       await renderForm(fakeApi(), { mode: 'manager' });
       await pasteMission('a'.repeat(MISSION_MAX_BYTES + 1));
       expect(screen.getByTestId('manager-mission-error')).toHaveTextContent('at most');
@@ -534,6 +562,29 @@ describe('NewSessionFormComponent — hostile QE pass (P2-U5b)', () => {
       await userEvent.click(screen.getByTestId('new-session-mode-manager'));
 
       await waitFor(() => expect(screen.getByTestId('manager-mission-error')).toHaveTextContent('at most'));
+    });
+
+    it('a mission typed then cleared still says a manager needs one after the round trip', async () => {
+      await renderForm(fakeApi(), { mode: 'manager' });
+      await fillManagerMission('S');
+      await userEvent.clear(screen.getByTestId('manager-mission'));
+      expect(screen.getByTestId('manager-mission-error')).toBeTruthy();
+
+      await userEvent.click(screen.getByTestId('new-session-mode-session'));
+      await userEvent.click(screen.getByTestId('new-session-mode-manager'));
+
+      await waitFor(() => expect(screen.getByTestId('manager-mission-error')).toHaveTextContent('needs a mission'));
+    });
+
+    it('a fresh manager form shows no mission error, also after a round trip through session mode', async () => {
+      await renderForm(fakeApi());
+
+      await userEvent.click(screen.getByTestId('new-session-mode-manager'));
+      expect(screen.queryByTestId('manager-mission-error')).toBeNull();
+      await userEvent.click(screen.getByTestId('new-session-mode-session'));
+      await userEvent.click(screen.getByTestId('new-session-mode-manager'));
+
+      expect(screen.queryByTestId('manager-mission-error')).toBeNull();
     });
 
     it('a cleared pulse field is still an error after the round trip, and correcting it clears the error', async () => {

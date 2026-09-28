@@ -72,6 +72,7 @@ export class ManagerFieldsComponent implements OnInit {
   readonly pulseSeconds = model(1800);
   readonly childrenCap = model(2);
   readonly mission = model('');
+  readonly isMissionTouched = model(false);
   private readonly pulseSecondsInput = viewChild<ElementRef<HTMLInputElement>>('pulseSecondsInput');
   private readonly childrenCapInput = viewChild<ElementRef<HTMLInputElement>>('childrenCapInput');
   private readonly missionInput = viewChild<ElementRef<HTMLTextAreaElement>>('missionInput');
@@ -82,11 +83,13 @@ export class ManagerFieldsComponent implements OnInit {
   ngOnInit(): void {
     this.validatePulseSeconds();
     this.validateChildrenCap();
+    if (this.isMissionTouched()) this.validateMission();
   }
 
   validate(): boolean {
     this.validatePulseSeconds();
     this.validateChildrenCap();
+    this.isMissionTouched.set(true);
     this.validateMission();
     return !this.pulseSecondsError() && !this.childrenCapError() && !this.missionError();
   }
@@ -109,6 +112,7 @@ export class ManagerFieldsComponent implements OnInit {
 
   protected onMissionChange(value: string): void {
     this.mission.set(value);
+    this.isMissionTouched.set(true);
     this.validateMission();
   }
 

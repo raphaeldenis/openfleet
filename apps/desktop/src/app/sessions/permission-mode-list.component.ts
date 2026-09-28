@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, model, signal } from '@angular/core';
+import { afterNextRender, ChangeDetectionStrategy, Component, computed, ElementRef, inject, Injector, model, signal, viewChild } from '@angular/core';
 import { PERMISSION_MODES, type PermissionMode } from '@openfleet/shared';
 import { INHERITED_EXPLANATION, PERMISSION_MODE_EXPLANATIONS } from './permission-mode-picker.component';
 
@@ -23,7 +23,7 @@ const PERMISSION_MODE_OPTIONS: ReadonlyArray<PermissionModeOption> = [
   selector: 'of-permission-mode-list',
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <div class="permission-mode-list">
+    <div class="permission-mode-list" (keydown.escape)="cancelDangerousModeOnEscape()">
       <span class="of-label" id="permission-mode-list-label">Permission mode</span>
       <div class="options" role="radiogroup" aria-labelledby="permission-mode-list-label" data-testid="new-session-permission-mode">
         @for (option of options; track option.label) {
@@ -41,8 +41,11 @@ const PERMISSION_MODE_OPTIONS: ReadonlyArray<PermissionModeOption> = [
       @if (isConfirmingDangerousMode()) {
         <div class="confirm" data-testid="new-session-permission-mode-bypass-confirm-row">
           <span role="alert" class="of-error">✕ {{ dangerousModeWarning }}</span>
+          @if (isAnswerDemanded()) {
+            <span role="status" class="of-error" data-testid="new-session-permission-mode-answer-hint">Confirm or cancel this warning before creating.</span>
+          }
           <button type="button" class="of-btn of-btn--secondary" (click)="cancelDangerousMode()">Cancel</button>
-          <button type="button" class="of-btn of-btn--primary" (click)="confirmDangerousMode()">Confirm</button>
+          <button #confirmButton type="button" class="of-btn of-btn--primary" (click)="confirmDangerousMode()">Confirm</button>
         </div>
       }
     </div>
@@ -65,20 +68,47 @@ export class PermissionModeListComponent {
   readonly value = model<ChosenPermissionMode>(INHERITED_MODE);
   protected readonly options = PERMISSION_MODE_OPTIONS;
   protected readonly dangerousModeWarning = PERMISSION_MODE_EXPLANATIONS[DANGEROUS_MODE];
+  private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
+  private readonly injector = inject(Injector);
+  private readonly confirmButton = viewChild<ElementRef<HTMLButtonElement>>('confirmButton');
   protected readonly isConfirmingDangerousMode = signal(false);
+  protected readonly isAnswerDemanded = signal(false);
   protected readonly shownValue = computed(() => (this.isConfirmingDangerousMode() ? DANGEROUS_MODE : this.value()));
+
+  readonly isAwaitingAnswer = this.isConfirmingDangerousMode.asReadonly();
+
+  demandAnswer(): void {
+    this.isAnswerDemanded.set(true);
+    this.confirmButton()?.nativeElement.focus();
+  }
 
   protected choose(option: PermissionModeOption): void {
     this.isConfirmingDangerousMode.set(option.isDangerous);
+    this.isAnswerDemanded.set(false);
     if (!option.isDangerous) this.value.set(option.value);
   }
 
   protected cancelDangerousMode(): void {
-    this.isConfirmingDangerousMode.set(false);
+    this.closeWarning();
+    this.focusCheckedRadioAfterRender();
   }
 
   protected confirmDangerousMode(): void {
-    this.isConfirmingDangerousMode.set(false);
+    this.closeWarning();
     this.value.set(DANGEROUS_MODE);
+    this.focusCheckedRadioAfterRender();
+  }
+
+  protected cancelDangerousModeOnEscape(): void {
+    if (this.isConfirmingDangerousMode()) this.cancelDangerousMode();
+  }
+
+  private closeWarning(): void {
+    this.isConfirmingDangerousMode.set(false);
+    this.isAnswerDemanded.set(false);
+  }
+
+  private focusCheckedRadioAfterRender(): void {
+    afterNextRender(() => this.host.nativeElement.querySelector<HTMLInputElement>('input[type=radio]:checked')?.focus(), { injector: this.injector });
   }
 }

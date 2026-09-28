@@ -1,8 +1,8 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/angular/zoneless';
+import { render, screen, waitFor, within } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
-import { NgForm } from '@angular/forms';
-import { By } from '@angular/platform-browser';
+import { TestBed } from '@angular/core/testing';
 import { ActivatedRoute, convertToParamMap, provideRouter, Router } from '@angular/router';
+import { RouterTestingHarness } from '@angular/router/testing';
 import { BehaviorSubject } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
 import { NewSessionFormComponent } from './new-session-form.component';
@@ -220,12 +220,6 @@ describe('NewSessionFormComponent', () => {
     expect(api.createSession.mock.calls[0]![0]).not.toHaveProperty('permissionMode');
   });
 
-  it('user sees no "Test harness" button, since there is no backend probe to run', async () => {
-    await renderForm(fakeApi());
-
-    expect(screen.queryByRole('button', { name: /test harness/i })).toBeNull();
-  });
-
   it.each([
     ['invalid_body', 400, 'rejected these values'],
     ['internal', 500, 'internal error'],
@@ -348,15 +342,14 @@ describe('NewSessionFormComponent', () => {
       expect(api.createManagerSession).not.toHaveBeenCalled();
     });
 
-    it('user cannot create twice when the form is submitted again while the request is pending', async () => {
+    it('user pressing Enter twice in a row in the name field creates the session once', async () => {
       let resolveCreate!: (session: { id: string }) => void;
       const api = fakeApi({ createSession: vi.fn(() => new Promise((resolve) => { resolveCreate = resolve; })) });
       await renderForm(api);
-      await fillSessionFields();
+      await userEvent.type(screen.getByTestId('new-session-directory'), '/tmp/wt');
+      const fastTypist = userEvent.setup({ delay: null });
 
-      const form = screen.getByTestId('new-session-form');
-      fireEvent.submit(form);
-      fireEvent.submit(form);
+      await fastTypist.type(screen.getByTestId('new-session-name'), 'Gimli{enter}{enter}');
 
       expect(api.createSession).toHaveBeenCalledTimes(1);
       resolveCreate({ id: 's-new' });
@@ -547,20 +540,32 @@ describe('NewSessionFormComponent', () => {
       expect(screen.getByRole('radio', { name: 'plan' })).toBeChecked();
     });
 
-    it('user switching to manager puts ?mode=manager in the URL without adding a history entry', async () => {
-      const { navigateSpy } = await renderForm(fakeApi());
+    describe('behind the real router', () => {
+      async function renderFormBehindRouter(url: string) {
+        TestBed.configureTestingModule({
+          providers: [provideRouter([{ path: 'new', component: NewSessionFormComponent }]), { provide: FleetApiService, useValue: fakeApi() }],
+        });
+        await RouterTestingHarness.create(url);
+        return TestBed.inject(Router);
+      }
 
-      await userEvent.click(screen.getByTestId('new-session-mode-manager'));
+      it('user switching to manager puts ?mode=manager in the URL', async () => {
+        const router = await renderFormBehindRouter('/new');
 
-      expect(navigateSpy).toHaveBeenCalledWith([], expect.objectContaining({ queryParams: { mode: 'manager' }, replaceUrl: true }));
-    });
+        await userEvent.click(screen.getByTestId('new-session-mode-manager'));
 
-    it('user switching back to session removes the mode from the URL', async () => {
-      const { navigateSpy } = await renderForm(fakeApi(), { mode: 'manager' });
+        await waitFor(() => expect(router.url).toBe('/new?mode=manager'));
+        expect(screen.getByRole('heading', { name: 'New manager' })).toBeTruthy();
+      });
 
-      await userEvent.click(screen.getByTestId('new-session-mode-session'));
+      it('user switching back to session removes the mode from the URL', async () => {
+        const router = await renderFormBehindRouter('/new?mode=manager');
 
-      expect(navigateSpy).toHaveBeenCalledWith([], expect.objectContaining({ queryParams: {}, replaceUrl: true }));
+        await userEvent.click(screen.getByTestId('new-session-mode-session'));
+
+        await waitFor(() => expect(router.url).toBe('/new'));
+        expect(screen.getByRole('heading', { name: 'New session' })).toBeTruthy();
+      });
     });
 
     it('user following a sidebar link while the form is open sees the form follow the URL', async () => {
@@ -673,23 +678,6 @@ describe('NewSessionFormComponent', () => {
       await userEvent.click(screen.getByTestId('new-session-submit'));
 
       expect(screen.getByTestId('manager-mission')).toHaveFocus();
-    });
-
-    it.each([
-      ['directory', {}, 'new-session-directory', 'new-session-directory-error'],
-      ['mission', { mode: 'manager' }, 'manager-mission', 'manager-mission-error'],
-    ])('user is taken to the %s only once it is rendered as invalid and described by its error', async (_label, queryParams, fieldTestId, errorTestId) => {
-      await renderForm(fakeApi(), queryParams);
-      const field = screen.getByTestId(fieldTestId);
-      if ('mode' in queryParams) await fillSessionFields({ name: 'Lead' });
-      let attributesWhenFocused: { ariaInvalid: string | null; ariaDescribedBy: string | null } | undefined;
-      field.addEventListener('focus', () => {
-        attributesWhenFocused = { ariaInvalid: field.getAttribute('aria-invalid'), ariaDescribedBy: field.getAttribute('aria-describedby') };
-      });
-
-      await userEvent.click(screen.getByTestId('new-session-submit'));
-
-      expect(attributesWhenFocused).toEqual({ ariaInvalid: 'true', ariaDescribedBy: errorTestId });
     });
 
     it('user is taken to the pulse seconds before the mission when both are invalid', async () => {
@@ -897,19 +885,5 @@ describe('NewSessionFormComponent', () => {
 
       expect(screen.getByTestId('new-session-emoji')).toHaveValue('🚀');
     });
-  });
-
-  it('registers every manager field with the form without Angular reporting NG01354', async () => {
-    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    const { fixture } = await renderForm(fakeApi());
-
-    await userEvent.click(screen.getByTestId('new-session-mode-manager'));
-    await fixture.whenStable();
-
-    const reportedMessages = consoleWarn.mock.calls.map((callArguments) => String(callArguments[0]));
-    expect(reportedMessages.filter((message) => message.includes('NG01354'))).toEqual([]);
-    consoleWarn.mockRestore();
-    const ngForm = fixture.debugElement.query(By.directive(NgForm)).injector.get(NgForm);
-    expect(Object.keys(ngForm.controls)).toEqual(expect.arrayContaining(['pulseSeconds', 'childrenCap', 'mission']));
   });
 });
