@@ -34,6 +34,25 @@ const TABS: readonly { readonly key: InboxTab; readonly label: string }[] = [
 
 const LAST_TAB_INDEX = TABS.length - 1;
 
+const BIDI_CONTROL_CHARACTERS = /[؜‎‏‪-‮⁦-⁩]/g;
+
+function showBidiControlsAsEscapes(text: string): string {
+  return text.replace(BIDI_CONTROL_CHARACTERS, (control) => `<U+${control.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}>`);
+}
+
+interface FormattedInput {
+  readonly toolInput: unknown;
+  readonly text: string;
+}
+
+function formatInput(toolInput: unknown): FormattedInput {
+  return { toolInput, text: showBidiControlsAsEscapes(JSON.stringify(toolInput, null, 2) ?? '') };
+}
+
+function hasModifierKey(event: KeyboardEvent): boolean {
+  return event.altKey || event.ctrlKey || event.metaKey || event.shiftKey;
+}
+
 function tabIndexAfterKey(key: string, currentIndex: number): number | undefined {
   switch (key) {
     case 'ArrowRight': return currentIndex === LAST_TAB_INDEX ? 0 : currentIndex + 1;
@@ -149,7 +168,7 @@ function tabIndexAfterKey(key: string, currentIndex: number): number | undefined
     .gate-sentence { margin: 0; }
     .tool-name { font-family: var(--mono); font-size: .75rem; padding: 0 .375rem; border-radius: .25rem; background: var(--sunk); }
     .age { margin-left: auto; font-size: .6875rem; color: var(--faint); }
-    .tool-args { margin: 0; overflow: auto; max-height: 10rem; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--mono); font-size: .75rem; padding: .375rem .5rem; border-radius: .375rem; background-color: var(--term-bg); color: var(--term-fg); border: 1px solid var(--line); }
+    .tool-args { margin: 0; overflow: auto; max-height: 10rem; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--mono); font-size: .75rem; padding: .375rem .5rem; border-radius: .375rem; background-color: var(--term-bg); color: var(--term-fg); border: 1px solid var(--line); background-image: linear-gradient(var(--term-bg), var(--term-bg)), linear-gradient(to top, var(--faint), transparent); background-position: bottom, bottom; background-size: 100% 1.5rem, 100% .75rem; background-repeat: no-repeat; background-attachment: local, scroll; }
     .actions { display: flex; gap: .5rem; }
     .empty { display: flex; flex-direction: column; align-items: center; gap: .375rem; padding: 4rem 1rem; color: var(--mut); }
     .empty-title { color: var(--fg); font-weight: 500; }
@@ -173,14 +192,33 @@ export class InboxComponent {
     inject(DestroyRef).onDestroy(() => clearInterval(tick));
   }
 
-  private readonly gates = computed(() =>
-    this.events.approvals().map((approval) => {
-      const session = this.events.sessions().find((s) => s.id === approval.sessionId);
+  private formattedInputsById = new Map<string, FormattedInput>();
+
+  private readonly sessionsById = computed(() => new Map(this.events.sessions().map((session) => [session.id, session])));
+
+  private readonly gates = computed(() => {
+    const sessionsById = this.sessionsById();
+    const previousFormattedInputs = this.formattedInputsById;
+    const currentFormattedInputs = new Map<string, FormattedInput>();
+    const gates = this.events.approvals().map((approval) => {
+      const session = sessionsById.get(approval.sessionId);
       const sessionName = session ? session.name : approval.sessionId;
       const sessionEmoji = session ? session.emoji : '';
-      return { ...approval, sessionName, sessionEmoji, formattedInput: JSON.stringify(approval.toolInput, null, 2) };
-    }),
-  );
+      const previous = previousFormattedInputs.get(approval.id);
+      const isUnchanged = previous !== undefined && previous.toolInput === approval.toolInput;
+      const formattedInput = isUnchanged ? previous : formatInput(approval.toolInput);
+      currentFormattedInputs.set(approval.id, formattedInput);
+      return {
+        ...approval,
+        toolName: showBidiControlsAsEscapes(approval.toolName),
+        sessionName: showBidiControlsAsEscapes(sessionName),
+        sessionEmoji,
+        formattedInput: formattedInput.text,
+      };
+    });
+    this.formattedInputsById = currentFormattedInputs;
+    return gates;
+  });
 
   readonly items = computed(() =>
     this.gates().map((gate) => ({
@@ -192,6 +230,7 @@ export class InboxComponent {
   );
 
   protected onTabKeydown(event: KeyboardEvent): void {
+    if (hasModifierKey(event)) return;
     const currentIndex = TABS.findIndex((entry) => entry.key === this.tab());
     const targetIndex = tabIndexAfterKey(event.key, currentIndex);
     if (targetIndex === undefined) return;

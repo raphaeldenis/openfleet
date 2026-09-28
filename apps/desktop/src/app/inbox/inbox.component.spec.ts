@@ -434,4 +434,118 @@ describe('InboxComponent', () => {
     await userEvent.keyboard('{End}');
     expect(document.activeElement).toBe(screen.getByTestId('inbox-tab-proposals'));
   });
+
+  describe('tab keyboard shortcuts with modifiers', () => {
+    const MODIFIERS = ['altKey', 'ctrlKey', 'metaKey', 'shiftKey'] as const;
+    const NAVIGATION_KEYS = ['ArrowRight', 'ArrowLeft', 'Home', 'End'];
+
+    it.each(MODIFIERS.flatMap((modifier) => NAVIGATION_KEYS.map((key) => [modifier, key] as const)))(
+      'leaves %s+%s to the browser: not swallowed, no tab change',
+      async (modifier, key) => {
+        // Arrange
+        await render(InboxComponent, { providers: [{ provide: FleetApiService, useValue: { decide: vi.fn() } }, { provide: FleetEventsService, useValue: fakeEvents() }] });
+        const gatesTab = screen.getByTestId('inbox-tab-gates');
+
+        // Act
+        const wasNotPrevented = fireEvent.keyDown(gatesTab, { key, [modifier]: true });
+
+        // Assert
+        expect(wasNotPrevented).toBe(true);
+        expect(gatesTab.getAttribute('aria-selected')).toBe('true');
+      },
+    );
+  });
+
+  describe('bidi control characters', () => {
+    const RIGHT_TO_LEFT_OVERRIDE = '‮';
+    const ISOLATE_OPEN = '⁦';
+    const ANY_BIDI_CONTROL = /[؜‎‏‪-‮⁦-⁩]/;
+
+    async function renderSpoofedGate() {
+      const events = fakeEvents({ toolName: `Ba${RIGHT_TO_LEFT_OVERRIDE}sh`, toolInput: { command: `echo ${RIGHT_TO_LEFT_OVERRIDE}gpj.exe ${ISOLATE_OPEN}` } });
+      const api = { decide: vi.fn().mockResolvedValue({}) };
+      await render(InboxComponent, { providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: events }] });
+      return { api, events };
+    }
+
+    it('shows them as visible escapes in the tool name and the arguments instead of reordering the text', async () => {
+      // Arrange & Act
+      await renderSpoofedGate();
+
+      // Assert
+      const toolName = screen.getByTestId('inbox-gate-tool').textContent ?? '';
+      const args = screen.getByTestId('inbox-gate-args').textContent ?? '';
+      expect(toolName).not.toMatch(ANY_BIDI_CONTROL);
+      expect(args).not.toMatch(ANY_BIDI_CONTROL);
+      expect(toolName.trim()).toBe('Ba<U+202E>sh');
+      expect(args).toContain('echo <U+202E>gpj.exe <U+2066>');
+    });
+
+    it('never alters the data: the decision still targets the approval id and the shared approval keeps its raw characters', async () => {
+      // Arrange
+      const { api, events } = await renderSpoofedGate();
+
+      // Act
+      await userEvent.click(screen.getByTestId('inbox-allow'));
+
+      // Assert
+      expect(api.decide).toHaveBeenCalledWith('a1', 'allow');
+      expect(events.approvals()[0].toolName).toBe(`Ba${RIGHT_TO_LEFT_OVERRIDE}sh`);
+    });
+  });
+
+  describe('gate derivation cost', () => {
+    const twoSessions = () => [
+      { id: 's1', name: 'Gimli', emoji: '⚔️', state: 'waiting_permission' },
+      { id: 's2', name: 'Legolas', emoji: '🏹', state: 'working' },
+    ];
+
+    it('does not re-format unchanged tool arguments when an unrelated session changes, yet keeps session labels live', async () => {
+      // Arrange
+      const toolInput = { command: 'x'.repeat(50_000) };
+      const events = { sessions: signal(twoSessions()), approvals: signal([{ id: 'a1', sessionId: 's1', toolName: 'Bash', toolInput, status: 'pending', createdAt: 't' }]) };
+      const stringifySpy = vi.spyOn(JSON, 'stringify');
+      try {
+        const { fixture } = await render(InboxComponent, { providers: [{ provide: FleetApiService, useValue: { decide: vi.fn() } }, { provide: FleetEventsService, useValue: events }] });
+        const formatCalls = () => stringifySpy.mock.calls.filter((call) => call[0] === toolInput).length;
+        const callsAfterRender = formatCalls();
+
+        // Act — an unrelated session event, then the owning session is renamed
+        events.sessions.update((all) => all.map((s) => (s.id === 's2' ? { ...s, state: 'idle' } : s)));
+        await fixture.whenStable();
+        events.sessions.update((all) => all.map((s) => (s.id === 's1' ? { ...s, name: 'Gimli the Bold' } : s)));
+        await fixture.whenStable();
+
+        // Assert
+        expect(screen.getByTestId('inbox-gate-session')).toHaveTextContent('Gimli the Bold');
+        expect(formatCalls()).toBe(callsAfterRender);
+      } finally {
+        stringifySpy.mockRestore();
+      }
+    });
+
+    it('re-formats the arguments of an approval whose tool input changed', async () => {
+      // Arrange
+      const events = { sessions: signal(twoSessions()), approvals: signal([{ id: 'a1', sessionId: 's1', toolName: 'Bash', toolInput: { command: 'ls' }, status: 'pending', createdAt: 't' }]) };
+      const { fixture } = await render(InboxComponent, { providers: [{ provide: FleetApiService, useValue: { decide: vi.fn() } }, { provide: FleetEventsService, useValue: events }] });
+
+      // Act
+      events.approvals.update((all) => all.map((a) => ({ ...a, toolInput: { command: 'pwd' } })));
+      await fixture.whenStable();
+
+      // Assert
+      expect(screen.getByTestId('inbox-gate-args')).toHaveTextContent('"command": "pwd"');
+    });
+  });
+
+  it('signals that more args lie below the fold with a scroll-aware background: a bottom shadow that a local-attached cover hides once the end is reached', async () => {
+    // Arrange & Act
+    await render(InboxComponent, { providers: [{ provide: FleetApiService, useValue: { decide: vi.fn() } }, { provide: FleetEventsService, useValue: fakeEvents() }] });
+    const args = getComputedStyle(screen.getByTestId('inbox-gate-args'));
+
+    // Assert
+    expect(args.backgroundImage).toContain('gradient');
+    expect(args.backgroundAttachment).toContain('local');
+    expect(args.backgroundAttachment).toContain('scroll');
+  });
 });
