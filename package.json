@@ -14,11 +14,13 @@
     "dev:desktop": "pnpm --filter @openfleet/desktop tauri dev",
     "dev": "concurrently -k \"pnpm dev:core\" \"pnpm dev:desktop\"",
     "e2e": "pnpm --filter @openfleet/desktop exec playwright test",
-    "postinstall": "pnpm --filter @openfleet/core run fix-node-pty-permissions"
+    "postinstall": "pnpm --filter @openfleet/core run fix-node-pty-permissions",
+    "prepare": "husky"
   },
   "devDependencies": {
     "@types/node": "^26.0.0",
     "concurrently": "^10.0.5",
+    "husky": "^9.1.7",
     "typescript": "^5.9.0",
     "vitest": "^4.0.0"
   }
