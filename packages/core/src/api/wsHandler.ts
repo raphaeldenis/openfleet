@@ -82,7 +82,9 @@ export function createWsHandler(deps: { bus: EventBus; sessions: SessionService;
       if (!isAuthorized) { socket.destroy(); return; }
       wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
     } catch (error) {
-      log('error', 'ws: rejecting an unparsable upgrade request', error);
+      // Never the error object itself: node:url's own TypeError carries the full request URL — token
+      // and all — on its .input property, which a naive `log(..., error)` would print in full.
+      log('error', 'ws: rejecting an unparsable upgrade request', { code: (error as { code?: string }).code });
       socket.destroy();
     }
   };

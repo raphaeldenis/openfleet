@@ -37,8 +37,17 @@ export function requestPath(req: IncomingMessage): string {
   return (req.url ?? '/').split('?')[0] || '/';
 }
 
+// A /hooks/:token path segment IS a bearer credential, unlike every other route — replaced with the
+// route pattern so a forced 500 never puts it in the log, same spirit as the query string above.
+const HOOK_TOKEN_SEGMENT = /^\/hooks\/[^/]+$/;
+
+function redactedRequestPath(req: IncomingMessage): string {
+  const path = requestPath(req);
+  return HOOK_TOKEN_SEGMENT.test(path) ? '/hooks/:token' : path;
+}
+
 export function logServerError(req: IncomingMessage, error: unknown): void {
-  log('error', `${req.method ?? 'GET'} ${requestPath(req)} → 500 [${newId()}]`, error);
+  log('error', `${req.method ?? 'GET'} ${redactedRequestPath(req)} → 500 [${newId()}]`, error);
 }
 
 export const MAX_BODY_BYTES = 1024 * 1024;

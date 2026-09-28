@@ -51,6 +51,18 @@ describe('applyMigrations — per-file checksum', () => {
     expect(() => applyMigrations(db)).toThrow(new RegExp(anyAppliedVersion));
   });
 
+  it('does not trip the mismatch guard when an applied migration file gains a BOM and CRLF line endings (e.g. a Windows checkout), only a real content edit', () => {
+    const db = openDatabase(':memory:');
+    const anyApplied = db.prepare('SELECT version FROM schema_migrations LIMIT 1').get() as { version: string };
+    const realSql = readFileSync(new URL(`${anyApplied.version}.sql`, migrationsDirectory), 'utf8');
+    const crlfWithBom = '﻿' + realSql.replace(/\n/g, '\r\n');
+
+    expect(() => applyMigrations(db, [{ version: anyApplied.version, sql: crlfWithBom }])).not.toThrow();
+
+    const editedSql = realSql.replace(/\n/g, '\r\n') + '\r\n-- a real edit, not just a line-ending change\r\n';
+    expect(() => applyMigrations(db, [{ version: anyApplied.version, sql: editedSql }])).toThrow(new RegExp(anyApplied.version));
+  });
+
   it('does not fail startup for a database that predates the checksum column at all, and backfills it on that first run', () => {
     const db = new DatabaseSync(':memory:');
     db.exec('PRAGMA foreign_keys = ON;');

@@ -56,9 +56,13 @@ export class PulseScheduler {
   }
 
   private arm(record: ManagerRecord): void {
-    this.clearTimer(record.sessionId);
     const delayMs = Math.max(0, new Date(nextPulseAt(record)).getTime() - Date.now());
-    this.timers.set(record.sessionId, setTimeout(() => this.tick(record.sessionId), delayMs));
+    this.armAfter(record.sessionId, delayMs);
+  }
+
+  private armAfter(sessionId: string, delayMs: number): void {
+    this.clearTimer(sessionId);
+    this.timers.set(sessionId, setTimeout(() => this.tick(sessionId), delayMs));
   }
 
   private tick(sessionId: string): void {
@@ -72,7 +76,10 @@ export class PulseScheduler {
       this.fire(record);
     } catch (error) {
       log('error', `pulse: manager ${sessionId} tick failed; re-arming instead of losing its cadence`, error);
-      this.arm(record);
+      // Re-arms a full cadence from now, never via nextPulseAt(record): fire() threw before persisting
+      // lastPulseAt, so record's base is stale — computing off it would land in the past (delayMs 0) and
+      // hot-loop the retry every tick instead of waiting out the cadence.
+      this.armAfter(sessionId, record.pulseSeconds * 1000);
     }
   }
 

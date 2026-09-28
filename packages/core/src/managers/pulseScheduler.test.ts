@@ -466,4 +466,34 @@ describe('PulseScheduler — hostile cases', () => {
     expect(pulseCount(harness.handles[0]!.written)).toBe(1);
     consoleErrorSpy.mockRestore();
   });
+
+  it('re-arms at a full cadence from now after each failure, not the stale past deadline, so a persistent failure fires at most once per cadence', async () => {
+    const { scheduler, sessions, managers } = setup();
+    const manager = await sessions.create({ directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake' });
+    sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'SessionStart' }));
+    const pulseSeconds = 100;
+    managers.insert({ sessionId: manager.id, pulseSeconds, childrenCap: 1, missionText: 'x', createdAt: new Date().toISOString() });
+    scheduler.onManagerCreated(managers.get(manager.id)!);
+
+    vi.spyOn(sessions, 'sendMessage').mockImplementation(() => {
+      throw new Error('sqlite write refused');
+    });
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const cadenceMs = pulseSeconds * 1000;
+    vi.advanceTimersByTime(cadenceMs); // 1st failure
+    expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(cadenceMs - 1); // just short of the next cadence: must not have retried yet
+    expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1); // 2nd failure, exactly one cadence after the 1st
+    expect(consoleErrorSpy).toHaveBeenCalledTimes(2);
+
+    vi.advanceTimersByTime(cadenceMs - 1); // just short of the 3rd cadence
+    expect(consoleErrorSpy).toHaveBeenCalledTimes(2);
+    vi.advanceTimersByTime(1); // 3rd failure, exactly one cadence after the 2nd
+    expect(consoleErrorSpy).toHaveBeenCalledTimes(3);
+
+    consoleErrorSpy.mockRestore();
+  });
 });

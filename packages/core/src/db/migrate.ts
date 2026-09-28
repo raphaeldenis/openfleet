@@ -101,8 +101,16 @@ function containsTransactionControl(sql: string): boolean {
   return false;
 }
 
+// A checkout can hand back a migration file with a BOM and/or CRLF line endings (Windows, a careless
+// editor) despite .gitattributes pinning `text eol=lf`: normalized away before hashing so line-ending
+// drift alone never trips reconcileChecksums' "edited after being applied" guard.
+function normalizeForChecksum(sql: string): string {
+  const withoutBom = sql.charCodeAt(0) === 0xfeff ? sql.slice(1) : sql;
+  return withoutBom.replace(/\r\n?/g, '\n');
+}
+
 function sha256Hex(text: string): string {
-  return createHash('sha256').update(text).digest('hex');
+  return createHash('sha256').update(normalizeForChecksum(text)).digest('hex');
 }
 
 function hasChecksumColumn(db: DatabaseSync): boolean {

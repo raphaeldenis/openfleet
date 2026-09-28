@@ -113,6 +113,23 @@ describe('POST /hooks/:token', () => {
     expect(await res.json()).toEqual({});
   });
 
+  it('logs a forced 500 on a known hook token with the route pattern, never any part of the raw token', async () => {
+    const applyInputSpy = vi.spyOn(sessions, 'applyInput').mockImplementation(() => {
+      throw new Error('boom');
+    });
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const res = await post(`/hooks/${hookToken}`, { session_id: 'c', hook_event_name: 'SessionStart' });
+
+    expect(res.status).toBe(500);
+    expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+    const [line] = consoleErrorSpy.mock.calls[0]!;
+    expect(line as string).not.toContain(hookToken);
+    expect(line as string).toContain('/hooks/:token');
+    applyInputSpy.mockRestore();
+    consoleErrorSpy.mockRestore();
+  });
+
   it('a hook posted with the pre-restart hook token is a no-op once resume has rotated it', async () => {
     const staleHookToken = hookToken;
     const restartHarness = new FakeHarness();
