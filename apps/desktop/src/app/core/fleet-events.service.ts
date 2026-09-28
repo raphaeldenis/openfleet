@@ -6,6 +6,26 @@ import { environment } from '../../environments/environment';
 const INITIAL_RECONNECT_DELAY_MS = 1000;
 const MAX_RECONNECT_DELAY_MS = 10_000;
 
+// The daemon never clears closedAt, so a live session keeps the stamp of a close it has long recovered
+// from. closedAt only means something while the session is closed or coming back (starting): drop it once live.
+function withoutStaleClosure(session: Session): Session {
+  const isComingBackOrClosed = session.state === 'starting' || session.state === 'closed';
+  const hasStaleClosure = session.closedAt !== undefined && !isComingBackOrClosed;
+  return hasStaleClosure ? { ...session, closedAt: undefined } : session;
+}
+
+// A full row (session.created / session.updated) of a relaunching session carries the closedAt of a close it
+// recovered from long ago. Only a local copy that is closed, or already coming back from a close, vouches for
+// a closedAt arriving on a `starting` row; otherwise it is the stale stamp of an ordinary model / mode relaunch.
+function withoutClosureNotVouchedFor(incoming: Session, local: Session | undefined): Session {
+  const session = withoutStaleClosure(incoming);
+  const isLocalCopyClosed = local?.state === 'closed';
+  const isLocalCopyComingBackFromClose = local?.state === 'starting' && local.closedAt !== undefined;
+  const isClosureVouchedFor = isLocalCopyClosed || isLocalCopyComingBackFromClose;
+  const isStaleClosureOnStartingRow = session.state === 'starting' && !isClosureVouchedFor;
+  return isStaleClosureOnStartingRow ? { ...session, closedAt: undefined } : session;
+}
+
 @Injectable({ providedIn: 'root' })
 export class FleetEventsService {
   readonly sessions = signal<Session[]>([]);
@@ -68,7 +88,7 @@ export class FleetEventsService {
   private reduce(event: ServerEvent): void {
     switch (event.type) {
       case 'snapshot':
-        this.sessions.set(event.sessions);
+        this.sessions.set(event.sessions.map(withoutStaleClosure));
         this.approvals.set(event.approvals);
         this.managers.set(event.managers ?? []);
         this.snapshotReceived.set(true);
@@ -83,7 +103,7 @@ export class FleetEventsService {
       case 'session.permission_mode_changed': return this.patchSession(event.sessionId, { permissionMode: event.mode });
       // resumeOne() already wrote 'starting' to the DB before this event fires; the event itself carries
       // no state, so mirror that transition here rather than waiting for the next session.state event.
-      case 'session.reopened': return this.patchSession(event.sessionId, { state: 'starting', exitCode: undefined });
+      case 'session.reopened': return this.markReopened(event.sessionId);
       case 'message.queued': return; // the sender already knows 'queued' from its own REST response; nothing else reads this yet
       case 'message.delivered': return this.markMessageDelivered(event.messageId);
       case 'approval.created': return this.upsertApproval(event.approval);
@@ -94,8 +114,12 @@ export class FleetEventsService {
     }
   }
 
-  private upsertSession(session: Session): void {
-    this.sessions.update((all) => (all.some((s) => s.id === session.id) ? all.map((s) => (s.id === session.id ? session : s)) : [...all, session]));
+  private upsertSession(incoming: Session): void {
+    this.sessions.update((all) => {
+      const local = all.find((s) => s.id === incoming.id);
+      const session = withoutClosureNotVouchedFor(incoming, local);
+      return local ? all.map((s) => (s.id === session.id ? session : s)) : [...all, session];
+    });
   }
 
   private upsertApproval(approval: Approval): void {
@@ -107,7 +131,16 @@ export class FleetEventsService {
   }
 
   private patchSession(id: string, patch: Partial<Session>): void {
-    this.sessions.update((all) => all.map((s) => (s.id === id ? { ...s, ...patch } : s)));
+    this.sessions.update((all) => all.map((s) => (s.id === id ? withoutStaleClosure({ ...s, ...patch }) : s)));
+  }
+
+  // A session closed while this client was connected never received a closedAt from the daemon; stamping it on
+  // reopen keeps "closed, now coming back" recognisable for the whole starting window.
+  private markReopened(id: string): void {
+    const reopenedAt = new Date().toISOString();
+    this.sessions.update((all) =>
+      all.map((s) => (s.id === id ? { ...s, state: 'starting', exitCode: undefined, closedAt: s.closedAt ?? reopenedAt } : s)),
+    );
   }
 
   private markMessageDelivered(messageId: string): void {

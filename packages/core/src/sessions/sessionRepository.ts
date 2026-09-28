@@ -48,8 +48,17 @@ export class SessionRepository {
   list(): Session[] {
     return (this.db.prepare('SELECT * FROM sessions ORDER BY created_at').all() as unknown as Row[]).map(toSession);
   }
+  // exit_code describes a close, so it goes as soon as the session leaves 'closed'. closed_at also marks a
+  // reopened session as "closed, coming back" for the whole 'starting' window, so it only goes once the
+  // session is live (any state past 'starting').
   setState(id: string, state: SessionState, since: string): void {
-    this.db.prepare('UPDATE sessions SET state = ?, state_since = ? WHERE id = ?').run(state, since, id);
+    const isClosed = state === 'closed';
+    const isComingBack = state === 'starting';
+    const keepsExitCode = isClosed;
+    const keepsClosedAt = isClosed || isComingBack;
+    this.db.prepare(`UPDATE sessions SET state = ?, state_since = ?,
+      exit_code = CASE WHEN ? THEN exit_code END, closed_at = CASE WHEN ? THEN closed_at END WHERE id = ?`)
+      .run(state, since, Number(keepsExitCode), Number(keepsClosedAt), id);
   }
   setModel(id: string, model: string): void {
     this.db.prepare('UPDATE sessions SET model = ? WHERE id = ?').run(model, id);

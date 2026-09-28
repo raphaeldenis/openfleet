@@ -1,6 +1,7 @@
 import { ChangeDetectionStrategy, Component, effect, inject, input, signal, type WritableSignal } from '@angular/core';
 import type { Session } from '@openfleet/shared';
 import { FleetApiService } from '../core/fleet-api.service';
+import { runGuarded } from '../core/run-guarded';
 import { StateChipComponent } from '../design/state-chip.component';
 import { ModelSelectorComponent } from './model-selector.component';
 import { PermissionModePickerComponent } from './permission-mode-picker.component';
@@ -29,7 +30,8 @@ const RENAME_ERROR = 'Could not rename — try again.';
         #nameInput
         class="name"
         data-testid="session-name-input"
-        title="Rename session"
+        aria-label="Session name"
+        [attr.title]="session().name"
         [value]="session().name"
         (change)="renameName(nameInput.value)"
         (keydown.escape)="cancelNameEdit(nameInput)"
@@ -67,7 +69,7 @@ const RENAME_ERROR = 'Could not rename — try again.';
     .emoji:hover, .name:hover { border-color: var(--line); }
     .emoji:focus, .name:focus { border-color: var(--accent); outline: 0; }
     .emoji { font-size: 1.125rem; width: 2.25rem; text-align: center; }
-    .name { font-weight: 600; font-size: 1rem; width: 9rem; }
+    .name { font-weight: 600; font-size: 1rem; width: 9rem; text-overflow: ellipsis; }
     .exit-code { font-family: var(--mono); font-size: .75rem; color: var(--state-closed); }
     .harness { font-size: .75rem; color: var(--mut); border: 1px solid var(--line); border-radius: .375rem; padding: 0 .5rem; }
     .directory { font-family: var(--mono); font-size: .6875rem; color: var(--mut); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 16rem; }
@@ -125,24 +127,11 @@ export class SessionHeaderComponent {
     input.blur();
   }
 
-  // Ignores a rename response for a session the user has since navigated away from: no error shown, and
-  // (unlike runGuarded) no busy-flag reset — this component instance is reused across a route param
-  // change, so `busy`/`renameError` already belong to whichever session is current by the time this
-  // settles, and a stale settle must not touch state that may now belong to that session's own in-flight rename.
+  // This component instance is reused across a route param change, so a rename that settles after the user
+  // navigated away leaves `busy`/`renameError` alone: they belong to whichever session is current by then.
   private async rename(patch: { name?: string; emoji?: string }, busy: WritableSignal<boolean>): Promise<void> {
-    if (busy()) return;
     const sessionId = this.session().id;
-    busy.set(true);
-    this.renameError.set(null);
-    try {
-      await this.api.renameSession(sessionId, patch);
-    } catch {
-      if (this.session().id !== sessionId) return;
-      this.renameError.set(RENAME_ERROR);
-      busy.set(false);
-      return;
-    }
-    if (this.session().id !== sessionId) return;
-    busy.set(false);
+    const hasNavigatedAway = () => this.session().id !== sessionId;
+    await runGuarded(busy, this.renameError, RENAME_ERROR, () => this.api.renameSession(sessionId, patch), { isStale: hasNavigatedAway });
   }
 }
