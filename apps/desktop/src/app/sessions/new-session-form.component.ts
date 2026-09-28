@@ -1,5 +1,5 @@
 import { DOCUMENT } from '@angular/common';
-import { afterNextRender, ChangeDetectionStrategy, Component, computed, DestroyRef, effect, ElementRef, inject, Injector, linkedSignal, signal, untracked, viewChild } from '@angular/core';
+import { afterNextRender, ChangeDetectionStrategy, Component, computed, DestroyRef, effect, ElementRef, inject, Injectable, Injector, linkedSignal, signal, untracked, viewChild } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, type ParamMap, Router, RouterLink } from '@angular/router';
@@ -24,6 +24,18 @@ const HARNESS_OPTIONS: ReadonlyArray<{ id: string; label: string; isAvailable: b
   { id: 'generic-pty', label: 'Generic PTY', isAvailable: false },
 ];
 
+// A host page that embeds the form provides this in its view providers: it owns the heading, the way out and the kind
+// of session, and it shows the prompt it seeds. Dependency injection is the only way in, since a link cannot fill it
+// the way it fills a routed component's inputs. It also remembers the session the form created, so a form that the host
+// destroys and mounts again opens that session instead of creating a second one.
+@Injectable()
+export class EmbeddedSessionSeed {
+  readonly directory = signal('');
+  readonly name = signal('');
+  readonly prompt = signal('');
+  readonly createdSession = signal<CreatedSession | undefined>(undefined);
+}
+
 function creationModeFrom(queryParams: ParamMap | undefined): CreationMode {
   return queryParams?.get('mode') === 'manager' ? 'manager' : 'session';
 }
@@ -32,15 +44,18 @@ function creationModeFrom(queryParams: ParamMap | undefined): CreationMode {
   selector: 'of-new-session-form',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [FormsModule, RouterLink, ManagerFieldsComponent, PermissionModeListComponent],
+  host: { '[class.embedded]': 'isEmbedded' },
   template: `
     <form class="of-form" data-testid="new-session-form" [attr.aria-busy]="pending() || null" (ngSubmit)="submit()" novalidate>
-      <div class="header">
-        <h1>{{ isManagerMode() ? 'New manager' : 'New session' }}</h1>
-        <div class="mode-toggle" role="group" aria-label="Kind of session">
-          <button type="button" [attr.aria-pressed]="!isManagerMode()" [attr.aria-disabled]="ariaDisabled()" data-testid="new-session-mode-session" (click)="chooseMode('session')">Session</button>
-          <button type="button" [attr.aria-pressed]="isManagerMode()" [attr.aria-disabled]="ariaDisabled()" data-testid="new-session-mode-manager" (click)="chooseMode('manager')">Manager</button>
+      @if (!isEmbedded) {
+        <div class="header">
+          <h1>{{ isManagerMode() ? 'New manager' : 'New session' }}</h1>
+          <div class="mode-toggle" role="group" aria-label="Kind of session">
+            <button type="button" [attr.aria-pressed]="!isManagerMode()" [attr.aria-disabled]="ariaDisabled()" data-testid="new-session-mode-session" (click)="chooseMode('session')">Session</button>
+            <button type="button" [attr.aria-pressed]="isManagerMode()" [attr.aria-disabled]="ariaDisabled()" data-testid="new-session-mode-manager" (click)="chooseMode('manager')">Manager</button>
+          </div>
         </div>
-      </div>
+      }
 
       <fieldset class="card">
       <div class="of-section-title">Workspace</div>
@@ -94,13 +109,18 @@ function creationModeFrom(queryParams: ParamMap | undefined): CreationMode {
       }
       </fieldset>
 
-      @if (serverError(); as error) {
-        <p role="alert" data-testid="new-session-form-error" class="of-error">✕ {{ error }}</p>
-      }
-      <div class="actions">
-        <span class="creating" role="status">@if (pending()) {Creating {{ mode() }}…}</span>
-        <a class="of-btn of-btn--secondary" routerLink="/" data-testid="new-session-cancel">Cancel</a>
-        <button #submitButton type="submit" class="of-btn of-btn--primary" data-testid="new-session-submit" [attr.aria-disabled]="ariaDisabled()">{{ isManagerMode() ? 'Create manager' : 'Create session' }}</button>
+      <div class="footer">
+        @if (serverError(); as error) {
+          <p role="alert" data-testid="new-session-form-error" class="of-error">✕ {{ error }}</p>
+        }
+        <div class="actions">
+          <span class="creating" role="status">@if (pending()) {Creating {{ mode() }}…}</span>
+          <ng-content />
+          @if (!isEmbedded) {
+            <a class="of-btn of-btn--secondary" routerLink="/" data-testid="new-session-cancel">Cancel</a>
+          }
+          <button #submitButton type="submit" class="of-btn of-btn--primary" data-testid="new-session-submit" [attr.aria-disabled]="ariaDisabled()">{{ isManagerMode() ? 'Create manager' : 'Create session' }}</button>
+        </div>
       </div>
     </form>
   `,
@@ -108,6 +128,10 @@ function creationModeFrom(queryParams: ParamMap | undefined): CreationMode {
     :host { display: flex; flex: 1; align-items: flex-start; justify-content: center; min-width: 0; padding: 1.5rem 1rem 3rem }
     .of-form { display: flex; flex-direction: column; gap: 1.25rem; width: 46rem; max-width: 100% }
     .header { display: flex; align-items: center; gap: 1rem }
+    :host(.embedded) { padding: 0 }
+    :host(.embedded) .of-form { width: 100% }
+    .footer { display: flex; flex-direction: column; gap: 1.25rem }
+    :host(.embedded) .footer { position: sticky; bottom: 0; gap: .75rem; margin-top: .75rem; padding: .75rem 0; background: var(--bg) }
     h1 { flex: 1; margin: 0; font-size: 1.25rem; font-weight: 600; letter-spacing: -.01em }
     .mode-toggle { display: flex; padding: .125rem; border: 1px solid var(--line); border-radius: .5rem; background: var(--sunk) }
     .mode-toggle button { height: 1.625rem; padding: 0 .75rem; border: 0; border-radius: .375rem; background: transparent; color: var(--fg); font: inherit; font-size: .75rem; cursor: pointer }
@@ -144,17 +168,20 @@ export class NewSessionFormComponent {
   protected readonly notAvailableYet = NOT_AVAILABLE_YET;
   protected readonly modelRungs = MODEL_RUNGS;
 
+  private readonly embeddedSessionSeed = inject(EmbeddedSessionSeed, { optional: true });
+  protected readonly isEmbedded = this.embeddedSessionSeed !== null;
   protected readonly pending = signal(false);
+  readonly isPending = this.pending.asReadonly();
   protected readonly ariaDisabled = computed(() => (this.pending() ? 'true' : null));
-  private readonly createdSession = signal<CreatedSession | undefined>(undefined);
+  private readonly createdSession = this.embeddedSessionSeed?.createdSession ?? signal<CreatedSession | undefined>(undefined);
   private readonly modeFromUrl = linkedSignal<{ urlMode: CreationMode; isHoldingMode: boolean }, CreationMode>({
     source: () => ({ urlMode: creationModeFrom(this.queryParams()), isHoldingMode: this.pending() || this.createdSession() !== undefined }),
     computation: ({ urlMode, isHoldingMode }, previous) => (isHoldingMode && previous ? previous.value : urlMode),
   });
-  protected readonly mode = linkedSignal<CreationMode>(() => this.modeFromUrl());
+  protected readonly mode = linkedSignal<CreationMode>(() => (this.isEmbedded ? 'session' : this.modeFromUrl()));
   protected readonly isManagerMode = computed(() => this.mode() === 'manager');
-  protected readonly directory = signal('');
-  protected readonly name = signal('');
+  protected readonly directory = signal(this.embeddedSessionSeed?.directory() ?? '');
+  protected readonly name = signal(this.embeddedSessionSeed?.name() ?? '');
   protected readonly typedEmoji = signal<string | null>(null);
   private readonly defaultEmoji = computed(() => (this.isManagerMode() ? MANAGER_DEFAULT_EMOJI : SESSION_DEFAULT_EMOJI));
   protected readonly emoji = computed(() => this.typedEmoji() ?? this.defaultEmoji());
@@ -178,7 +205,8 @@ export class NewSessionFormComponent {
       harness: this.harness(),
       ...(chosenMode === INHERITED_MODE ? {} : { permissionMode: chosenMode }),
     };
-    if (!this.isManagerMode()) return { kind: 'session' as const, fields: sharedSpec };
+    const seededPrompt = this.embeddedSessionSeed?.prompt().trim();
+    if (!this.isManagerMode()) return { kind: 'session' as const, fields: { ...sharedSpec, ...(seededPrompt ? { seededPrompt } : {}) } };
     const managerFields = { ...sharedSpec, pulseSeconds: this.pulseSeconds(), childrenCap: this.childrenCap(), mission: this.mission().trim() };
     return { kind: 'manager' as const, fields: managerFields };
   });
