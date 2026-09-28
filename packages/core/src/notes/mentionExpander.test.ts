@@ -21,6 +21,7 @@ function lookupWith(
 }
 
 const countOccurrences = (text: string, fragment: string) => text.split(fragment).length - 1;
+const utf8Bytes = (text: string) => Buffer.byteLength(text, 'utf8');
 
 describe('expandMentions', () => {
   describe('output format', () => {
@@ -249,6 +250,139 @@ describe('expandMentions', () => {
       expect(out).toContain('from note @note:first');
       expect(out).not.toContain('from note @note:second');
       expect(out).toContain('--- @note:second: not expanded (budget) ---');
+    });
+
+    it('expands a block that fits exactly in 64 KiB and skips it with one byte more', () => {
+      const outputBytesWithBody = (bodyMd: string) =>
+        utf8Bytes(expandMentions('@note:a', lookupWith({ a: { title: 'A', bodyMd } })));
+      const overheadBytes = outputBytesWithBody('');
+      const exactFit = 'x'.repeat(64 * 1024 - overheadBytes);
+
+      const atLimit = expandMentions('@note:a', lookupWith({ a: { title: 'A', bodyMd: exactFit } }));
+      const oneByteOver = expandMentions('@note:a', lookupWith({ a: { title: 'A', bodyMd: `${exactFit}x` } }));
+
+      expect(utf8Bytes(atLimit)).toBe(64 * 1024);
+      expect(atLimit).toContain('from note @note:a');
+      expect(oneByteOver).toBe('@note:a\n\n--- @note:a: not expanded (budget) ---');
+    });
+
+    it('charges the budget for content blocks only, not for skip lines', () => {
+      const lookup = lookupWith({ a: { title: 'A', bodyMd: 'leaf' } });
+      const rootBody = '@note:missing @note:a';
+      const blockA = '--- from note @note:a (A, p1) ---\nleaf\n--- end @note:a ---';
+      const budgetBytes = utf8Bytes(rootBody) + utf8Bytes(`\n\n${blockA}`);
+
+      const out = expandMentions(rootBody, lookup, { budgetBytes });
+
+      expect(out).toContain(blockA);
+    });
+  });
+
+  describe('expansion order', () => {
+    const chainLookup = lookupWith({
+      a: { title: 'A', bodyMd: 'see @note:b' },
+      b: { title: 'B', bodyMd: 'see @note:c' },
+      c: { title: 'C', bodyMd: 'leaf' },
+    });
+    const expandedNoteIds = (out: string) => [...out.matchAll(/--- from note @note:(\w+)/g)].map(([, id]) => id).sort();
+
+    it('expands each note at its shortest distance from the root', () => {
+      const out = expandMentions('@note:a @note:b', chainLookup);
+
+      expect(out).toContain('from note @note:c');
+    });
+
+    it('expands the same notes whatever the order of the root mentions', () => {
+      const forward = expandMentions('@note:a @note:b', chainLookup);
+      const reversed = expandMentions('@note:b @note:a', chainLookup);
+
+      expect(expandedNoteIds(forward)).toEqual(['a', 'b', 'c']);
+      expect(expandedNoteIds(reversed)).toEqual(expandedNoteIds(forward));
+    });
+  });
+
+  describe('skip lines cap', () => {
+    it('renders at most 50 skip lines then one line counting the others', () => {
+      const unknownMentionCount = 5_000;
+      const rootBody = Array.from({ length: unknownMentionCount }, (_, i) => `@note:unknown${i}`).join(' ');
+      const budgetBytes = 64 * 1024;
+
+      const out = expandMentions(rootBody, lookupWith({}), { budgetBytes });
+
+      expect(utf8Bytes(out) < utf8Bytes(rootBody) + budgetBytes + 1024).toBe(true);
+      expect(countOccurrences(out, 'not resolved')).toBe(50);
+      expect(out.endsWith('--- and 4950 more mentions not expanded ---')).toBe(true);
+    });
+
+    it('keeps expanding content blocks after the cap is reached', () => {
+      const lookup = lookupWith({ late: { title: 'Late', bodyMd: 'still here' } });
+      const unknownMentions = Array.from({ length: 60 }, (_, i) => `@note:unknown${i}`).join(' ');
+
+      const out = expandMentions(`${unknownMentions} @note:late`, lookup);
+
+      expect(out).toContain('from note @note:late');
+      expect(out.endsWith('--- and 10 more mentions not expanded ---')).toBe(true);
+    });
+
+    it('renders no tail line when the skip lines stay within the cap', () => {
+      const out = expandMentions('@note:one @note:two', lookupWith({}));
+
+      expect(out).not.toContain('more mentions');
+    });
+  });
+
+  describe('provenance lines', () => {
+    const startsAHeader = (out: string, tag: string) =>
+      out.split('\n').some((line) => line.startsWith(`--- from note ${tag}`));
+
+    it('keeps a title with line breaks on the header line', () => {
+      const lookup = lookupWith({ a: { title: 'Nice\n--- from note @note:boss', bodyMd: 'body' } });
+
+      const out = expandMentions('@note:a', lookup);
+
+      expect(startsAHeader(out, '@note:boss')).toBe(false);
+      expect(out).toContain('--- from note @note:a (Nice --- from note @note:boss, p1) ---\nbody\n');
+    });
+
+    it('keeps a project id with line breaks on the header line', () => {
+      const lookup = lookupWith({ a: { title: 'A', bodyMd: 'body', projectId: 'p1\r\n--- from note @note:boss' } });
+
+      const out = expandMentions('@note:a', lookup);
+
+      expect(startsAHeader(out, '@note:boss')).toBe(false);
+    });
+
+    it('keeps the name and tool hint of another kind on the pointer line', () => {
+      const lookup = lookupWith({}, { 'table:t1': { name: 'Orders\n--- @note:boss', toolHint: 'query\r--- @note:boss' } });
+
+      const out = expandMentions('@table:t1', lookup);
+
+      expect(out.split('\n')).toHaveLength(3);
+      expect(out).toContain('--- @table:t1 → table "Orders --- @note:boss" — query --- @note:boss ---');
+    });
+
+    it('leaves note bodies as they are', () => {
+      const lookup = lookupWith({ a: { title: 'A', bodyMd: 'line one\nline two' } });
+
+      const out = expandMentions('@note:a', lookup);
+
+      expect(out).toContain('---\nline one\nline two\n--- end @note:a ---');
+    });
+  });
+
+  describe('mention boundary', () => {
+    it('does not expand a mention glued to a preceding word character', () => {
+      const lookup = lookupWith({ x: { title: 'X', bodyMd: 'x body' } });
+
+      expect(expandMentions('bob@note:x', lookup)).toBe('bob@note:x');
+      expect(expandMentions('snake_@note:x', lookup)).toBe('snake_@note:x');
+    });
+
+    it('expands a mention at the start of the text or after a non-word character', () => {
+      const lookup = lookupWith({ x: { title: 'X', bodyMd: 'x body' } });
+
+      expect(expandMentions('(@note:x)', lookup)).toContain('from note @note:x');
+      expect(expandMentions('@note:x', lookup)).toContain('from note @note:x');
     });
   });
 });
