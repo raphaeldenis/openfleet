@@ -66,6 +66,11 @@ describe('REST', () => {
     expect(res.status).toBe(401);
   });
 
+  it('rejects a wrong bearer token', async () => {
+    const res = await fetch(`${server.url}/api/sessions`, { headers: { authorization: 'Bearer wrong' } });
+    expect(res.status).toBe(401);
+  });
+
   it('returns the resolved model table on GET /api/models', async () => {
     const res = await api('/api/models');
     expect(res.status).toBe(200);

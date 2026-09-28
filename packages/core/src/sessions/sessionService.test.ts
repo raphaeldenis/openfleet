@@ -670,9 +670,9 @@ describe('SessionService resume', () => {
       return originalSetState.call(this, id, state, since);
     });
     const originalSetClosed = SessionRepository.prototype.setClosed;
-    const setClosedSpy = vi.spyOn(SessionRepository.prototype, 'setClosed').mockImplementation(function (this: SessionRepository, id, exitCode, at) {
+    const setClosedSpy = vi.spyOn(SessionRepository.prototype, 'setClosed').mockImplementation(function (this: SessionRepository, id, exitCode, at, hookToken, mcpToken) {
       if (id === badSession.id) throw new Error('setClosed boom');
-      return originalSetClosed.call(this, id, exitCode, at);
+      return originalSetClosed.call(this, id, exitCode, at, hookToken, mcpToken);
     });
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
@@ -2860,6 +2860,21 @@ describe('SessionService.reopen', () => {
     expect(harness.launches[1]!.model).toBe('claude-opus-5-5');
     const rotated = service.tokens(session.id)!;
     expect(rotated.hookToken).not.toBe(originalTokens.hookToken);
+  });
+
+  it('authenticates a reopened session on its new tokens, and no longer on the ones from before it closed', async () => {
+    const { service, harness } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    const originalTokens = service.tokens(session.id)!;
+    harness.handles[0]!.emitExit(0);
+
+    service.reopen(session.id);
+
+    const rotated = service.tokens(session.id)!;
+    expect(service.byHookToken(rotated.hookToken)?.id).toBe(session.id);
+    expect(service.byMcpToken(rotated.mcpToken)?.id).toBe(session.id);
+    expect(service.byHookToken(originalTokens.hookToken)).toBeUndefined();
+    expect(service.byMcpToken(originalTokens.mcpToken)).toBeUndefined();
   });
 
   it('rejects reopening a session that is not closed', async () => {

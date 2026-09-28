@@ -72,18 +72,24 @@ export class SessionRepository {
   setNameAndEmoji(id: string, patch: { name?: string; emoji?: string }): void {
     this.db.prepare('UPDATE sessions SET name = COALESCE(?, name), emoji = COALESCE(?, emoji) WHERE id = ?').run(patch.name ?? null, patch.emoji ?? null, id);
   }
-  setClosed(id: string, exitCode: number | undefined, at: string): void {
-    this.db.prepare(`UPDATE sessions SET state = 'closed', state_since = ?, exit_code = ?, closed_at = ? WHERE id = ?`).run(at, exitCode ?? null, at, id);
+  // Closes and rotates tokens in one statement: a row can never sit closed with its pre-close tokens
+  // still live, even for the instant between two separate writes (or if the second one never ran).
+  setClosed(id: string, exitCode: number | undefined, at: string, hookToken: string, mcpToken: string): void {
+    this.db.prepare(`UPDATE sessions SET state = 'closed', state_since = ?, exit_code = ?, closed_at = ?, hook_token = ?, mcp_token = ? WHERE id = ?`)
+      .run(at, exitCode ?? null, at, hookToken, mcpToken, id);
   }
   closeAllOpen(at: string): void {
     this.db.prepare(`UPDATE sessions SET state = 'closed', state_since = ?, closed_at = ? WHERE state <> 'closed'`).run(at, at);
   }
+  // The state filter, not just token rotation on close, is what makes a closed row's token refuse to
+  // authenticate: a row a pre-patch build left closed (never rotated by this build's markClosed) must
+  // still be rejected, and this lookup is the one place every such row passes through regardless of history.
   byHookToken(token: string): Session | undefined {
-    const row = this.db.prepare('SELECT * FROM sessions WHERE hook_token = ?').get(token) as Row | undefined;
+    const row = this.db.prepare(`SELECT * FROM sessions WHERE hook_token = ? AND state <> 'closed'`).get(token) as Row | undefined;
     return row ? toSession(row) : undefined;
   }
   byMcpToken(token: string): Session | undefined {
-    const row = this.db.prepare('SELECT * FROM sessions WHERE mcp_token = ?').get(token) as Row | undefined;
+    const row = this.db.prepare(`SELECT * FROM sessions WHERE mcp_token = ? AND state <> 'closed'`).get(token) as Row | undefined;
     return row ? toSession(row) : undefined;
   }
   setTokens(id: string, hookToken: string, mcpToken: string): void {

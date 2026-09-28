@@ -66,6 +66,20 @@ describe('POST /hooks/:token', () => {
     expect(await res.json()).toEqual({});
   });
 
+  it('a closed session\'s hook token, never rotated by this build (a pre-patch upgrade row), is a no-op 200 — same as an unknown token', async () => {
+    const legacyToken = 'legacy-hook-token-that-predates-the-rotation-fix';
+    db.prepare(
+      `INSERT INTO sessions (id, name, emoji, directory, worktree, model, parent_id, role, harness, state, state_since, hook_token, mcp_token, permission_mode, branch, project_id, created_at, closed_at, exit_code)
+       VALUES (?, 'legacy', '🤖', '/tmp', NULL, NULL, NULL, NULL, 'fake', 'closed', ?, ?, 'legacy-mcp-token', NULL, NULL, NULL, ?, ?, 0)`,
+    ).run('legacy-closed-session', new Date().toISOString(), legacyToken, new Date().toISOString(), new Date().toISOString());
+    await sessions.resumeAll(); // boots like main.ts — resumeAll never touches a closed row
+
+    const res = await post(`/hooks/${legacyToken}`, { session_id: 'c', hook_event_name: 'Stop' });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({});
+  });
+
   it('answers an unknown token without reading the body, even when it is huge', async () => {
     const oversizedBody = { session_id: 'c', hook_event_name: 'Stop', pad: 'x'.repeat(2 * 1024 * 1024) };
     const res = await post('/hooks/nope', oversizedBody);
