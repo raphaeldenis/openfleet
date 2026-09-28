@@ -256,7 +256,7 @@ describe('NewSessionFormComponent', () => {
     await fillSessionFields();
 
     await userEvent.click(screen.getByTestId('new-session-submit'));
-    expect(screen.getByTestId('new-session-submit')).toBeDisabled();
+    expect(screen.getByTestId('new-session-submit')).toHaveAttribute('aria-disabled', 'true');
     await userEvent.click(screen.getByTestId('new-session-submit'));
 
     expect(api.createSession).toHaveBeenCalledTimes(1);
@@ -364,7 +364,7 @@ describe('NewSessionFormComponent', () => {
 
       expect(screen.getByTestId('new-session-directory')).toHaveValue('/tmp/wt');
       expect(screen.getByTestId('new-session-name')).toHaveValue('Gimli');
-      expect(screen.getByTestId('new-session-submit')).toBeEnabled();
+      expect(screen.getByTestId('new-session-submit')).not.toHaveAttribute('aria-disabled');
       expect(navigateSpy).not.toHaveBeenCalled();
 
       await userEvent.click(screen.getByTestId('new-session-submit'));
@@ -412,13 +412,16 @@ describe('NewSessionFormComponent', () => {
 
       await userEvent.click(screen.getByTestId('new-session-submit'));
 
-      const lockedTestIds = [
-        'new-session-directory', 'new-session-name', 'new-session-emoji', 'new-session-harness', 'new-session-model',
-        'manager-pulse-seconds', 'manager-children-cap', 'manager-mission',
-        'new-session-mode-session', 'new-session-mode-manager',
-      ];
-      lockedTestIds.forEach((testId) => expect(screen.getByTestId(testId)).toBeDisabled());
-      screen.getAllByRole('radio').forEach((radio) => expect(radio).toBeDisabled());
+      await userEvent.type(screen.getByTestId('new-session-name'), '!');
+      await userEvent.type(screen.getByTestId('manager-mission'), '!');
+      await userEvent.selectOptions(screen.getByTestId('new-session-harness'), 'claude-cli');
+      await userEvent.click(screen.getByTestId('new-session-mode-session'));
+      await userEvent.click(screen.getByRole('radio', { name: 'plan' }));
+
+      expect(screen.getByTestId('new-session-name')).toHaveValue('Lead');
+      expect(screen.getByTestId('manager-mission')).toHaveValue('Ship phase 2');
+      expect(screen.getByRole('heading', { name: 'New manager' })).toBeTruthy();
+      expect(screen.getByRole('radio', { name: 'inherited' })).toBeChecked();
       resolveCreate({ id: 'm-new' });
     });
 
@@ -480,7 +483,7 @@ describe('NewSessionFormComponent', () => {
 
       rejectCreate(new ApiError(500, 'POST /api/sessions → 500', 'internal'));
 
-      await waitFor(() => expect(screen.getByTestId('new-session-submit')).toBeEnabled());
+      await waitFor(() => expect(screen.getByTestId('new-session-submit')).not.toHaveAttribute('aria-disabled'));
       expect(screen.getByTestId('new-session-cancel')).toHaveFocus();
     });
 

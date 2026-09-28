@@ -146,7 +146,7 @@ describe('NewSessionFormComponent — hostile QE pass (P2-U5b)', () => {
       await fillSessionFields();
       await focusModelSelectThenTabIntoPermissionModes();
 
-      await userEvent.keyboard('{ArrowDown}{ArrowDown}{ArrowDown}{ArrowDown}{ArrowDown}');
+      await userEvent.keyboard('{ArrowDown}{ArrowDown}{ArrowDown}{ArrowDown}{ArrowDown}{ArrowDown}');
       expect(radio('bypassPermissions')).toBeChecked();
       expect(screen.getByRole('alert')).toHaveTextContent('Everything runs');
       await userEvent.tab();
@@ -188,9 +188,9 @@ describe('NewSessionFormComponent — hostile QE pass (P2-U5b)', () => {
       await userEvent.keyboard('{ArrowUp}');
 
       expect(screen.queryByRole('alert')).toBeNull();
-      expect(radio('auto')).toBeChecked();
+      expect(radio('dontAsk')).toBeChecked();
       await userEvent.click(submitButton());
-      expect(api.createSession).toHaveBeenCalledWith(expect.objectContaining({ permissionMode: 'auto' }));
+      expect(api.createSession).toHaveBeenCalledWith(expect.objectContaining({ permissionMode: 'dontAsk' }));
     });
 
     it('switching between session and manager while the warning is open keeps the warning and the confirmation applies to the manager', async () => {
@@ -464,11 +464,11 @@ describe('NewSessionFormComponent — hostile QE pass (P2-U5b)', () => {
       await fillSessionFields();
       await userEvent.click(submitButton());
 
-      await userEvent.tab();
+      await userEvent.tab({ shift: true });
       expect(screen.getByTestId('new-session-cancel')).toHaveFocus();
       rejectCreate(new ApiError(500, 'POST /api/sessions → 500', 'internal'));
 
-      await waitFor(() => expect(submitButton()).toBeEnabled());
+      await waitFor(() => expect(submitButton()).not.toHaveAttribute('aria-disabled'));
       expect(screen.getByTestId('new-session-cancel')).toHaveFocus();
     });
 
@@ -517,7 +517,7 @@ describe('NewSessionFormComponent — hostile QE pass (P2-U5b)', () => {
       await nextMacrotask();
       rejectCreate(new ApiError(500, 'boom', 'internal'));
 
-      await waitFor(() => expect(submitButton()).toBeEnabled());
+      await waitFor(() => expect(submitButton()).not.toHaveAttribute('aria-disabled'));
       expect(screen.getByRole('heading', { name: 'New session' })).toBeTruthy();
       expect(screen.queryByTestId('manager-mission')).toBeNull();
       expect(submitButton()).toHaveTextContent('Create session');
