@@ -301,4 +301,39 @@ describe('InboxComponent', () => {
     expect(gatesTab.getAttribute('aria-selected')).toBe('true');
     expect(questionsTab.getAttribute('aria-selected')).toBe('false');
   });
+
+  it('links each tab to a labelled tabpanel and keeps only the selected tab in the tab order', async () => {
+    // Arrange & Act
+    await render(InboxComponent, { providers: [{ provide: FleetApiService, useValue: { decide: vi.fn() } }, { provide: FleetEventsService, useValue: fakeEvents() }] });
+    const gatesTab = screen.getByTestId('inbox-tab-gates');
+    const panel = screen.getByRole('tabpanel');
+
+    // Assert
+    expect(gatesTab.getAttribute('aria-controls')).toBe(panel.id);
+    expect(panel.getAttribute('aria-labelledby')).toBe(gatesTab.id);
+    expect(gatesTab.getAttribute('tabindex')).toBe('0');
+    expect(screen.getByTestId('inbox-tab-questions').getAttribute('tabindex')).toBe('-1');
+  });
+
+  it('moves selection and focus between tabs with the arrow keys, wrapping around, and Home/End jump to the ends', async () => {
+    // Arrange
+    await render(InboxComponent, { providers: [{ provide: FleetApiService, useValue: { decide: vi.fn() } }, { provide: FleetEventsService, useValue: fakeEvents() }] });
+    const gatesTab = screen.getByTestId('inbox-tab-gates');
+    gatesTab.focus();
+
+    // Act & Assert
+    await userEvent.keyboard('{ArrowRight}');
+    expect(screen.getByTestId('inbox-tab-questions').getAttribute('aria-selected')).toBe('true');
+    expect(document.activeElement).toBe(screen.getByTestId('inbox-tab-questions'));
+    expect(screen.getByTestId('inbox-questions-coming')).toBeTruthy();
+
+    await userEvent.keyboard('{ArrowLeft}{ArrowLeft}');
+    expect(document.activeElement).toBe(screen.getByTestId('inbox-tab-proposals'));
+
+    await userEvent.keyboard('{Home}');
+    expect(document.activeElement).toBe(gatesTab);
+
+    await userEvent.keyboard('{End}');
+    expect(document.activeElement).toBe(screen.getByTestId('inbox-tab-proposals'));
+  });
 });

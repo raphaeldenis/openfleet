@@ -26,6 +26,24 @@ const FILTERS: readonly FilterOption[] = [
   { key: 'recent', label: 'Recent', disabled: true },
 ];
 
+const TABS: readonly { readonly key: InboxTab; readonly label: string }[] = [
+  { key: 'gates', label: 'Gates' },
+  { key: 'questions', label: 'Questions from agents' },
+  { key: 'proposals', label: 'Governance proposals' },
+];
+
+const LAST_TAB_INDEX = TABS.length - 1;
+
+function tabIndexAfterKey(key: string, currentIndex: number): number | undefined {
+  switch (key) {
+    case 'ArrowRight': return currentIndex === LAST_TAB_INDEX ? 0 : currentIndex + 1;
+    case 'ArrowLeft': return currentIndex === 0 ? LAST_TAB_INDEX : currentIndex - 1;
+    case 'Home': return 0;
+    case 'End': return LAST_TAB_INDEX;
+    default: return undefined;
+  }
+}
+
 @Component({
   selector: 'of-inbox',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -35,12 +53,24 @@ const FILTERS: readonly FilterOption[] = [
       <header class="inbox-header">
         <h2>Inbox <span class="count" data-testid="inbox-count">{{ events.approvals().length }}</span></h2>
       </header>
-      <nav class="tabs" role="tablist">
-        <button type="button" class="tab" [class.active]="tab() === 'gates'" data-testid="inbox-tab-gates" (click)="tab.set('gates')">Gates</button>
-        <button type="button" class="tab" [class.active]="tab() === 'questions'" data-testid="inbox-tab-questions" (click)="tab.set('questions')">Questions from agents</button>
-        <button type="button" class="tab" [class.active]="tab() === 'proposals'" data-testid="inbox-tab-proposals" (click)="tab.set('proposals')">Governance proposals</button>
+      <nav class="tabs" role="tablist" aria-label="Inbox sections" (keydown)="onTabKeydown($event)">
+        @for (entry of tabs; track entry.key) {
+          <button
+            type="button"
+            role="tab"
+            class="tab"
+            [class.active]="tab() === entry.key"
+            [id]="'inbox-tab-' + entry.key"
+            [attr.aria-selected]="tab() === entry.key"
+            [attr.aria-controls]="tabPanelId"
+            [attr.tabindex]="tab() === entry.key ? 0 : -1"
+            [attr.data-testid]="'inbox-tab-' + entry.key"
+            (click)="tab.set(entry.key)"
+          >{{ entry.label }}</button>
+        }
       </nav>
 
+      <div class="tabpanel" role="tabpanel" [id]="tabPanelId" [attr.aria-labelledby]="'inbox-tab-' + tab()">
       @switch (tab()) {
         @case ('gates') {
           <div class="filters" data-testid="inbox-filters">
@@ -91,6 +121,7 @@ const FILTERS: readonly FilterOption[] = [
           <p class="coming" data-testid="inbox-proposals-coming">Governance proposals are coming with phase 4 tables/governance.</p>
         }
       }
+      </div>
     </section>
   `,
   styles: `
@@ -100,6 +131,7 @@ const FILTERS: readonly FilterOption[] = [
     .tabs { display: flex; gap: .25rem; border-bottom: 1px solid var(--line); }
     .tab { height: 1.875rem; padding: 0 .75rem; border: 0; border-bottom: 1px solid transparent; background: transparent; color: var(--mut); cursor: pointer; font: inherit; }
     .tab.active { color: var(--fg); border-bottom-color: var(--accent); }
+    .tabpanel { display: flex; flex-direction: column; gap: .75rem; }
     .filters { display: flex; flex-wrap: wrap; gap: .375rem; }
     .filter-chip { height: 1.625rem; padding: 0 .625rem; border: 1px solid var(--line); border-radius: 1rem; background: var(--panel); color: var(--fg); font-size: .75rem; cursor: pointer; }
     .filter-chip.active { background: var(--active); }
@@ -121,10 +153,11 @@ export class InboxComponent {
   private readonly api = inject(FleetApiService);
   protected readonly filters = FILTERS;
   protected readonly needsBackendSupport = NEEDS_BACKEND_SUPPORT;
+  protected readonly tabs = TABS;
+  protected readonly tabPanelId = 'inbox-tabpanel';
   protected readonly tab = signal<InboxTab>('gates');
   private readonly now = signal(Date.now());
   private readonly pendingIds = signal<ReadonlySet<string>>(new Set());
-  private readonly dismissedIds = signal<ReadonlySet<string>>(new Set());
   private readonly errorsById = signal<Readonly<Record<string, string>>>({});
 
   constructor() {
@@ -132,29 +165,39 @@ export class InboxComponent {
     inject(DestroyRef).onDestroy(() => clearInterval(tick));
   }
 
-  readonly items = computed(() =>
-    this.events.approvals()
-      .filter((approval) => !this.dismissedIds().has(approval.id))
-      .map((approval) => {
-        const session = this.events.sessions().find((s) => s.id === approval.sessionId);
-        const sessionLabel = session ? `${session.emoji} ${session.name}` : approval.sessionId;
-        return {
-          ...approval,
-          sessionLabel,
-          pending: this.pendingIds().has(approval.id),
-          error: this.errorsById()[approval.id],
-          formattedInput: JSON.stringify(approval.toolInput, null, 2),
-          ageLabel: elapsedLabel(elapsedSecondsSince(approval.createdAt, this.now())),
-        };
-      }),
+  private readonly gates = computed(() =>
+    this.events.approvals().map((approval) => {
+      const session = this.events.sessions().find((s) => s.id === approval.sessionId);
+      const sessionLabel = session ? `${session.emoji} ${session.name}` : approval.sessionId;
+      return { ...approval, sessionLabel, formattedInput: JSON.stringify(approval.toolInput, null, 2) };
+    }),
   );
+
+  readonly items = computed(() =>
+    this.gates().map((gate) => ({
+      ...gate,
+      pending: this.pendingIds().has(gate.id),
+      error: this.errorsById()[gate.id],
+      ageLabel: elapsedLabel(elapsedSecondsSince(gate.createdAt, this.now())),
+    })),
+  );
+
+  protected onTabKeydown(event: KeyboardEvent): void {
+    const currentIndex = TABS.findIndex((entry) => entry.key === this.tab());
+    const targetIndex = tabIndexAfterKey(event.key, currentIndex);
+    if (targetIndex === undefined) return;
+    event.preventDefault();
+    this.tab.set(TABS[targetIndex].key);
+    const tabButtons = (event.currentTarget as HTMLElement).querySelectorAll<HTMLElement>('[role="tab"]');
+    tabButtons[targetIndex].focus();
+  }
 
   async decide(id: string, behavior: 'allow' | 'deny'): Promise<void> {
     if (this.pendingIds().has(id)) return;
     this.setPending(id, true);
     this.clearError(id);
     const result = await decideApproval(this.api, id, behavior);
-    if (result.outcome === 'already-resolved') this.dismiss(id);
+    if (result.outcome === 'already-resolved') this.removeFromSharedApprovals(id);
     else if (result.outcome === 'failed') this.setError(id, result.message);
     this.setPending(id, false);
   }
@@ -176,7 +219,7 @@ export class InboxComponent {
     this.errorsById.update((errors) => Object.fromEntries(Object.entries(errors).filter(([key]) => key !== id)));
   }
 
-  private dismiss(id: string): void {
-    this.dismissedIds.update((ids) => new Set(ids).add(id));
+  private removeFromSharedApprovals(id: string): void {
+    this.events.approvals.update((all) => all.filter((approval) => approval.id !== id));
   }
 }
