@@ -30,7 +30,7 @@ const ESCAPE_KEY = '\x1b';
       }
     </div>
     @if (confirmingClose()) {
-      <div class="close-confirm-overlay" tabindex="-1" data-testid="close-confirm-overlay" (mousedown)="keepFocusOnDialogWhenScrimPressed($event)"(keydown.escape)="cancelClose()" (keydown)="trapTabFocus($event)">
+      <div class="close-confirm-overlay" tabindex="-1" data-testid="close-confirm-overlay" (mousedown)="keepFocusOnDialogWhenScrimPressed($event)" (keydown.escape)="cancelClose()" (keydown)="trapTabFocus($event)">
         <div class="close-confirm" role="dialog" aria-modal="true" aria-labelledby="close-confirm-title" data-testid="close-confirm-dialog">
           <span id="close-confirm-title" class="close-confirm-title">Close {{ sessionName() }}?</span>
           <p class="close-confirm-body">{{ closeConfirmBody }}</p>
