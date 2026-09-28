@@ -152,4 +152,153 @@ describe('InboxComponent', () => {
     expect(screen.getByTestId('inbox-proposals-coming')).toBeTruthy();
     expect(screen.queryByTestId('inbox-gate-card')).toBeNull();
   });
+
+  it('shows an empty state and a zero count when there are no gates waiting', async () => {
+    // Arrange
+    const events = { sessions: signal([]), approvals: signal([]) };
+
+    // Act
+    await render(InboxComponent, { providers: [{ provide: FleetApiService, useValue: { decide: vi.fn() } }, { provide: FleetEventsService, useValue: events }] });
+
+    // Assert
+    expect(screen.getByTestId('inbox-empty')).toHaveTextContent('Nothing waiting for you.');
+    expect(screen.getByTestId('inbox-count')).toHaveTextContent('0');
+    expect(screen.queryByTestId('inbox-gate-card')).toBeNull();
+  });
+
+  it('shows a live age that advances as time passes, not a value frozen at render', async () => {
+    // Arrange
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
+    try {
+      const createdAt = new Date(Date.now() - 5000).toISOString();
+      const { fixture } = await render(InboxComponent, {
+        providers: [{ provide: FleetApiService, useValue: { decide: vi.fn() } }, { provide: FleetEventsService, useValue: fakeEvents({ createdAt }) }],
+      });
+      const before = screen.getByTestId('inbox-gate-age').textContent;
+
+      // Act
+      await vi.advanceTimersByTimeAsync(3000);
+      await fixture.whenStable();
+
+      // Assert
+      expect(screen.getByTestId('inbox-gate-age').textContent).not.toBe(before);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('cleans up its 1s age ticker on destroy, leaving no dangling timer', async () => {
+    // Arrange
+    const setIntervalSpy = vi.spyOn(globalThis, 'setInterval');
+    const clearIntervalSpy = vi.spyOn(globalThis, 'clearInterval');
+    const { fixture } = await render(InboxComponent, { providers: [{ provide: FleetApiService, useValue: { decide: vi.fn() } }, { provide: FleetEventsService, useValue: fakeEvents() }] });
+    const createdTimers = setIntervalSpy.mock.results.map((result) => result.value);
+
+    // Act
+    fixture.destroy();
+
+    // Assert
+    expect(createdTimers.length).toBeGreaterThan(0);
+    for (const timer of createdTimers) expect(clearIntervalSpy).toHaveBeenCalledWith(timer);
+    vi.restoreAllMocks();
+  });
+
+  it("keeps each gate's pending state isolated from the others when the list changes", async () => {
+    // Arrange
+    const approvals = signal([
+      { id: 'a1', sessionId: 's1', toolName: 'Bash', toolInput: {}, status: 'pending', createdAt: 't' },
+      { id: 'a2', sessionId: 's1', toolName: 'Write', toolInput: {}, status: 'pending', createdAt: 't' },
+    ]);
+    const events = { sessions: signal([{ id: 's1', name: 'Gimli', emoji: '⚔️', state: 'waiting_permission' }]), approvals };
+    const api = { decide: vi.fn(() => new Promise(() => {})) }; // never settles — a1 stays pending
+    await render(InboxComponent, { providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: events }] });
+    const firstCard = screen.getAllByTestId('inbox-gate-card')[0];
+    await userEvent.click(within(firstCard).getByTestId('inbox-allow'));
+    await waitFor(() => expect((within(screen.getAllByTestId('inbox-gate-card')[0]).getByTestId('inbox-allow') as HTMLButtonElement).disabled).toBe(true));
+
+    // Act — a new gate arrives at the front of the list, reordering the existing cards
+    approvals.update((all) => [{ id: 'a3', sessionId: 's1', toolName: 'Read', toolInput: {}, status: 'pending', createdAt: 't' }, ...all]);
+    await waitFor(() => expect(screen.getAllByTestId('inbox-gate-card')).toHaveLength(3));
+
+    // Assert
+    const cards = screen.getAllByTestId('inbox-gate-card');
+    const byTool = (name: string) => cards.find((card) => within(card).getByTestId('inbox-gate-tool').textContent?.trim() === name)!;
+    expect((within(byTool('Read')).getByTestId('inbox-allow') as HTMLButtonElement).disabled).toBe(false);
+    expect((within(byTool('Bash')).getByTestId('inbox-allow') as HTMLButtonElement).disabled).toBe(true);
+    expect((within(byTool('Write')).getByTestId('inbox-allow') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('drops a gate the moment it is resolved elsewhere, even with its own decision still in flight', async () => {
+    // Arrange
+    const approvals = signal([{ id: 'a1', sessionId: 's1', toolName: 'Bash', toolInput: {}, status: 'pending', createdAt: 't' }]);
+    const events = { sessions: signal([{ id: 's1', name: 'Gimli', emoji: '⚔️', state: 'waiting_permission' }]), approvals };
+    let resolveDecide: (value: unknown) => void = () => {};
+    const api = { decide: vi.fn(() => new Promise((resolve) => { resolveDecide = resolve; })) };
+    await render(InboxComponent, { providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: events }] });
+    await userEvent.click(screen.getByTestId('inbox-allow'));
+
+    // Act — another client resolves it first; the approval.resolved reducer removes it from the shared signal
+    approvals.set([]);
+
+    // Assert
+    await waitFor(() => expect(screen.queryByTestId('inbox-gate-card')).toBeNull());
+    resolveDecide({}); // the abandoned in-flight decide must not throw or resurrect the card
+    await waitFor(() => expect(screen.queryByTestId('inbox-gate-card')).toBeNull());
+  });
+
+  it('keeps the header count in sync with the visible list once a gate is dismissed locally as already-resolved', async () => {
+    // Arrange
+    const api = { decide: vi.fn().mockRejectedValue(new ApiError(409, 'already_resolved')) };
+    const events = {
+      sessions: signal([{ id: 's1', name: 'Gimli', emoji: '⚔️', state: 'waiting_permission' }]),
+      approvals: signal([
+        { id: 'a1', sessionId: 's1', toolName: 'Bash', toolInput: {}, status: 'pending', createdAt: 't' },
+        { id: 'a2', sessionId: 's1', toolName: 'Write', toolInput: {}, status: 'pending', createdAt: 't' },
+      ]),
+    };
+    await render(InboxComponent, { providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: events }] });
+
+    // Act
+    await userEvent.click(screen.getAllByTestId('inbox-allow')[0]);
+    await waitFor(() => expect(screen.getAllByTestId('inbox-gate-card')).toHaveLength(1));
+
+    // Assert — one card left; the header badge must say so too, not the stale backend-signal count
+    expect(screen.getByTestId('inbox-count')).toHaveTextContent('1');
+  });
+
+  it('does not re-serialize unchanged tool arguments on every age tick', async () => {
+    // Arrange
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
+    try {
+      const toolInput = { command: 'x'.repeat(50_000) };
+      const stringifySpy = vi.spyOn(JSON, 'stringify');
+      const { fixture } = await render(InboxComponent, {
+        providers: [{ provide: FleetApiService, useValue: { decide: vi.fn() } }, { provide: FleetEventsService, useValue: fakeEvents({ toolInput }) }],
+      });
+      const callsAfterRender = stringifySpy.mock.calls.filter((call) => call[0] === toolInput).length;
+
+      // Act — three age ticks; the approval itself never changes
+      await vi.advanceTimersByTimeAsync(3000);
+      await fixture.whenStable();
+
+      // Assert
+      const callsAfterTicks = stringifySpy.mock.calls.filter((call) => call[0] === toolInput).length;
+      expect(callsAfterTicks).toBe(callsAfterRender);
+    } finally {
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+    }
+  });
+
+  it('exposes the tab buttons with the ARIA tab role and aria-selected so assistive tech can navigate them', async () => {
+    // Arrange & Act
+    await render(InboxComponent, { providers: [{ provide: FleetApiService, useValue: { decide: vi.fn() } }, { provide: FleetEventsService, useValue: fakeEvents() }] });
+    const gatesTab = screen.getByTestId('inbox-tab-gates');
+    const questionsTab = screen.getByTestId('inbox-tab-questions');
+
+    // Assert
+    expect(gatesTab.getAttribute('role')).toBe('tab');
+    expect(gatesTab.getAttribute('aria-selected')).toBe('true');
+    expect(questionsTab.getAttribute('aria-selected')).toBe('false');
+  });
 });
