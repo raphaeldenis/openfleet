@@ -8,7 +8,7 @@ import { PALETTE_PAGES } from './nav-items';
   template: `
     @if (open()) {
       <div data-testid="command-palette" class="backdrop" (click)="closed.emit()" (keydown)="trapTab($event)">
-        <div class="panel" #panel (click)="stopPropagation($event)">
+        <div class="panel" #panel role="dialog" aria-modal="true" aria-label="Command palette" (click)="stopPropagation($event)">
           <div class="search-row"><span>⌕</span><span class="placeholder">Jump to a page</span><span class="hint">esc</span></div>
           <div class="group-label">Pages</div>
           <ul class="items">
@@ -39,6 +39,7 @@ import { PALETTE_PAGES } from './nav-items';
 })
 export class CommandPaletteComponent {
   readonly open = input.required<boolean>();
+  readonly sessionEpoch = input<number>(0);
   readonly closed = output<void>();
   private readonly router = inject(Router);
   protected readonly pages = PALETTE_PAGES;
@@ -71,9 +72,13 @@ export class CommandPaletteComponent {
     }
   }
 
-  go(route: string): void {
-    void this.router.navigate([route]);
-    this.closed.emit();
+  async go(route: string): Promise<void> {
+    const epochAtClick = this.sessionEpoch();
+    try {
+      await this.router.navigate([route]);
+    } finally {
+      if (this.sessionEpoch() === epochAtClick) this.closed.emit();
+    }
   }
 
   stopPropagation(event: Event): void {

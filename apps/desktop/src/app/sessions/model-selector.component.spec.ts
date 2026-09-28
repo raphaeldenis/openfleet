@@ -180,18 +180,26 @@ describe('ModelSelectorComponent', () => {
     expect(pendingModelSwitch).not.toHaveBeenCalled();
   });
 
-  it('clears "restarting…" once session.model_changed reports the model actually changed', async () => {
+  it('keeps "restarting…" visible when the daemon reports the model change before the relaunch settles', async () => {
     const api = { updateModel: vi.fn().mockResolvedValue({ status: 'relaunching' }) };
-    const events = { sessions: signal([{ id: 's1', name: 'Gimli', emoji: '⚔️', model: 'claude-sonnet-5', state: 'starting' }]), approvals: signal([]), managers: signal([]) };
-    await render(ModelSelectorComponent, {
+    const events = { sessions: signal([{ id: 's1', name: 'Gimli', emoji: '⚔️', model: 'claude-sonnet-5', state: 'idle' }]), approvals: signal([]), managers: signal([]) };
+    const { fixture } = await render(ModelSelectorComponent, {
       bindings: [inputBinding('sessionId', () => 's1')],
       providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: events }],
     });
     await userEvent.click(screen.getByTestId('apply-model'));
     await waitFor(() => expect(screen.getByTestId('model-switch-status')).toHaveTextContent('restarting…'));
 
-    events.sessions.set([{ id: 's1', name: 'Gimli', emoji: '⚔️', model: 'claude-opus-5-5', state: 'starting' }]);
+    // The daemon persists the model and emits session.model_changed right away, before/while the relaunch starts.
+    events.sessions.set([{ id: 's1', name: 'Gimli', emoji: '⚔️', model: 'claude-opus-5-5', state: 'idle' }]);
+    await fixture.whenStable();
+    expect(screen.getByTestId('model-switch-status')).toHaveTextContent('restarting…');
 
+    events.sessions.set([{ id: 's1', name: 'Gimli', emoji: '⚔️', model: 'claude-opus-5-5', state: 'starting' }]);
+    await fixture.whenStable();
+    expect(screen.getByTestId('model-switch-status')).toHaveTextContent('restarting…');
+
+    events.sessions.set([{ id: 's1', name: 'Gimli', emoji: '⚔️', model: 'claude-opus-5-5', state: 'idle' }]);
     await waitFor(() => expect(screen.queryByTestId('model-switch-status')).toBeNull());
   });
 
@@ -225,11 +233,55 @@ describe('ModelSelectorComponent', () => {
     await waitFor(() => expect(screen.queryByTestId('model-switch-status')).toBeNull());
   });
 
+  it('reverts the select to the previously confirmed rung after a failed switch, instead of keeping the rejected choice', async () => {
+    // Arrange
+    const api = { updateModel: vi.fn().mockRejectedValue(new Error('session_closed')) };
+    await render(ModelSelectorComponent, {
+      bindings: [inputBinding('sessionId', () => 's1')],
+      providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: fakeEvents('claude-opus-5-5') }],
+    });
+    const select = screen.getByTestId('model-select') as HTMLSelectElement;
+
+    // Act
+    await userEvent.selectOptions(select, 'sonnet');
+    await userEvent.click(screen.getByTestId('apply-model'));
+    await waitFor(() => expect(screen.queryByTestId('model-switch-error')).toBeTruthy());
+
+    // Assert — reverts to the session's actual model, not a hardcoded 'sonnet'
+    expect(select.value).toBe('claude-opus-5-5');
+  });
+
+  it('initialises the select to the session\'s actual model instead of a hardcoded "sonnet" default', async () => {
+    await render(ModelSelectorComponent, {
+      bindings: [inputBinding('sessionId', () => 's1')],
+      providers: [{ provide: FleetApiService, useValue: { updateModel: vi.fn() } }, { provide: FleetEventsService, useValue: fakeEvents('claude-opus-5-5') }],
+    });
+    const select = screen.getByTestId('model-select') as HTMLSelectElement;
+    expect(select.value).toBe('claude-opus-5-5');
+  });
+
+  it('shows a model not among the fixed rungs as an extra option instead of silently mismatching it', async () => {
+    await render(ModelSelectorComponent, {
+      bindings: [inputBinding('sessionId', () => 's1')],
+      providers: [{ provide: FleetApiService, useValue: { updateModel: vi.fn() } }, { provide: FleetEventsService, useValue: fakeEvents('claude-opus-5-5') }],
+    });
+    const options = screen.getAllByRole('option').map((o) => (o as HTMLOptionElement).value);
+    expect(options).toEqual(['haiku', 'sonnet', 'opus', 'fable', 'claude-opus-5-5']);
+  });
+
   it('never types a slash-model command into the UI', async () => {
     await render(ModelSelectorComponent, {
       bindings: [inputBinding('sessionId', () => 's1')],
       providers: [{ provide: FleetApiService, useValue: { updateModel: vi.fn() } }, { provide: FleetEventsService, useValue: fakeEvents('claude-sonnet-5') }],
     });
     expect(document.body.textContent).not.toContain('/model');
+  });
+
+  it('gives the rung select an accessible name', async () => {
+    await render(ModelSelectorComponent, {
+      bindings: [inputBinding('sessionId', () => 's1')],
+      providers: [{ provide: FleetApiService, useValue: { updateModel: vi.fn() } }, { provide: FleetEventsService, useValue: fakeEvents('claude-sonnet-5') }],
+    });
+    expect(screen.getByRole('combobox', { name: 'Model' })).toBeTruthy();
   });
 });

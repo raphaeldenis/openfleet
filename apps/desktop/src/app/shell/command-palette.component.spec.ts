@@ -45,6 +45,18 @@ describe('CommandPaletteComponent', () => {
     expect(closed).toHaveBeenCalled();
   });
 
+  it('emits closed even when the navigation rejects, so a dead route never traps the palette open', async () => {
+    const { fixture } = await render(CommandPaletteComponent, { bindings: [inputBinding('open', () => true)], providers: [provideRouter(routes())] });
+    const router = fixture.debugElement.injector.get(Router);
+    vi.spyOn(router, 'navigate').mockRejectedValue(new Error('navigation failed'));
+    const closed = vi.fn();
+    fixture.componentInstance.closed.subscribe(closed);
+
+    await expect(fixture.componentInstance.go('/inbox')).rejects.toThrow('navigation failed');
+
+    expect(closed).toHaveBeenCalled();
+  });
+
   it('closes when the backdrop is clicked, without navigating', async () => {
     const { fixture } = await render(CommandPaletteComponent, { bindings: [inputBinding('open', () => true)], providers: [provideRouter(routes())] });
     const closed = vi.fn();
@@ -53,6 +65,14 @@ describe('CommandPaletteComponent', () => {
     await userEvent.click(screen.getByTestId('command-palette'));
 
     expect(closed).toHaveBeenCalled();
+  });
+
+  it('exposes the panel as a named, modal dialog for assistive tech', async () => {
+    await render(CommandPaletteComponent, { bindings: [inputBinding('open', () => true)], providers: [provideRouter(routes())] });
+
+    const dialog = screen.getByRole('dialog', { name: /command palette/i });
+
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
   });
 
   it('wraps focus from the last item back to the first on Tab', async () => {

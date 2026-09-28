@@ -30,6 +30,12 @@ export class MessageIdAlreadyUsedError extends Error {
   }
 }
 
+export class TooManyPendingMessagesError extends Error {
+  constructor(targetId: string) {
+    super(`too many pending messages to ${targetId}: ${MAX_PENDING_AGENT_MESSAGES_PER_SENDER} already queued, wait for delivery`);
+  }
+}
+
 export class SessionReopenError extends Error {
   constructor(public readonly code: 'not_closed' | 'directory_missing' | 'directory_changed' | 'directory_unreadable' | 'launch_failed', message: string) {
     super(message);
@@ -49,6 +55,9 @@ const DEFAULT_RESUME_TIMEOUT_MS = 15_000;
 // write before the separate '\r' submits it; upgrade path is confirming the composer holds the full body
 // from the pty output instead of trusting a fixed delay.
 export const SUBMIT_KEYSTROKE_DELAY_MS = 150;
+// Bounds how many not-yet-delivered messages one agent can stack on a single peer, so a looping agent
+// cannot flood a target's queue (8 KB each) faster than the target can read.
+export const MAX_PENDING_AGENT_MESSAGES_PER_SENDER = 20;
 // ponytail: fallback for a hook that never confirms the turn started (a dropped webhook, or a CLI that
 // silently discards the keystroke); the common path ends the wait on the next real state transition.
 // Ceiling: a UserPromptSubmit hook later than this leaves the DB saying idle while the CLI generates, so
@@ -326,6 +335,10 @@ export class SessionService {
         throw new MessageIdAlreadyUsedError(input.messageId);
       }
     }
+    const { fromSessionId } = input;
+    const isSenderAtPendingLimit = fromSessionId !== undefined
+      && this.queue.countPendingFromSender({ sessionId: session.id, fromSessionId }) >= MAX_PENDING_AGENT_MESSAGES_PER_SENDER;
+    if (isSenderAtPendingLimit) throw new TooManyPendingMessagesError(session.id);
     const message = this.queue.enqueue({ id: messageId, sessionId: session.id, fromSessionId: input.fromSessionId, body });
     this.guarded(session.id, () => this.advance(session.id));
     const { phase } = this.deliveryOf(session.id);
@@ -359,6 +372,7 @@ export class SessionService {
     this.assertNotShuttingDown();
     const session = this.requireOpen(sessionId);
     this.repo.setPermissionMode(sessionId, mode);
+    this.deps.bus.emit({ type: 'session.permission_mode_changed', sessionId, mode });
     return this.relaunchOrDefer(sessionId, session.state);
   }
 
@@ -491,6 +505,14 @@ export class SessionService {
     if (input.kind === 'hook' && input.event.transcript_path && isTrustedTranscriptPath(input.event.transcript_path)) {
       this.transcriptPaths.set(sessionId, input.event.transcript_path);
     }
+    // A new prompt means the previous turn is over from the user's side even when 'generating' ->
+    // 'generating' is a no-op transition below (the CLI hadn't reported the previous turn's end yet): an
+    // interrupt watch still armed for that turn must not survive to misjudge this one.
+    // ponytail: a stray/duplicated UserPromptSubmit hook for the SAME turn disarms a genuine pending
+    // ESC the same way a real new turn would (applyInput cannot tell the two apart), so that ESC is
+    // dropped until idle_prompt or the next Stop. Upgrade path: compare the hook's user_prompt (or the
+    // transcript's user entries) against the armed watch's turn before disarming.
+    if (input.kind === 'hook' && input.event.hook_event_name === 'UserPromptSubmit') this.disarmInterruptWatch(sessionId);
     const endsUnfinishedTurn = provesTurnEnded(input) && this.unfinishedTurns.has(sessionId);
     if (endsUnfinishedTurn) this.unfinishedTurns.delete(sessionId);
     const state = nextState(session.state, input);
@@ -956,7 +978,9 @@ export class SessionService {
     this.armResumeTimeout(session.id, handle);
     // The DB write is last: if it throws, the handle is already fully wired (onExit + resume timeout),
     // so resumeAll's catch can close this row via markClosed without leaving an untracked process behind.
-    this.repo.setState(session.id, 'starting', new Date().toISOString());
+    const startingSince = new Date().toISOString();
+    this.repo.setState(session.id, 'starting', startingSince);
+    this.deps.bus.emit({ type: 'session.state', sessionId: session.id, state: 'starting', stateSince: startingSince });
     return { launched: true };
   }
 

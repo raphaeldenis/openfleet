@@ -1,4 +1,15 @@
-import { ChangeDetectionStrategy, Component, ElementRef, HostListener, computed, inject, signal, viewChild } from '@angular/core';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  ElementRef,
+  HostListener,
+  Injector,
+  afterNextRender,
+  computed,
+  inject,
+  signal,
+  viewChild,
+} from '@angular/core';
 import { Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { environment } from '../../environments/environment';
 import { FleetEventsService } from '../core/fleet-events.service';
@@ -16,7 +27,7 @@ const RUNNING_STATES = new Set(['generating', 'starting']);
   imports: [RouterLink, RouterLinkActive, RouterOutlet, SessionListComponent, DaemonStatusComponent, CommandPaletteComponent, BannerComponent],
   template: `
     <div class="shell" data-testid="app-shell">
-      <div class="body">
+      <div class="body" [attr.inert]="paletteOpen() ? '' : null">
         <nav class="sidebar" data-testid="app-nav">
           <div class="brand">OpenFleet</div>
           <section class="sessions">
@@ -65,13 +76,13 @@ const RUNNING_STATES = new Set(['generating', 'starting']);
           </main>
         </div>
       </div>
-      <footer class="statusbar" data-testid="app-statusbar">
+      <footer class="statusbar" data-testid="app-statusbar" [attr.inert]="paletteOpen() ? '' : null">
         <of-daemon-status [connected]="events.connected()" />
         <span class="mono">{{ daemonAddress }}</span>
         <span class="spacer"></span>
         <span class="limits" data-testid="status-limits" title="Provider limits are not tracked yet">—</span>
       </footer>
-      <of-command-palette [open]="paletteOpen()" (closed)="closePalette()" />
+      <of-command-palette [open]="paletteOpen()" [sessionEpoch]="paletteEpoch()" (closed)="closePalette()" />
     </div>
   `,
   styles: `
@@ -116,9 +127,11 @@ const RUNNING_STATES = new Set(['generating', 'starting']);
 export class AppShellComponent {
   protected readonly events = inject(FleetEventsService);
   private readonly router = inject(Router);
+  private readonly injector = inject(Injector);
   protected readonly navItems = HELM_NAV_ITEMS;
   protected readonly daemonAddress = environment.daemonAddress;
   protected readonly paletteOpen = signal(false);
+  protected readonly paletteEpoch = signal(0);
   protected readonly runningCount = computed(() => this.events.sessions().filter((s) => RUNNING_STATES.has(s.state)).length);
   protected readonly pendingApprovalsCount = computed(() => this.events.approvals().length);
   private readonly paletteTrigger = viewChild.required<ElementRef<HTMLButtonElement>>('paletteTrigger');
@@ -129,14 +142,23 @@ export class AppShellComponent {
   }
 
   openPalette(): void {
-    this.paletteOpener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    this.paletteEpoch.update((epoch) => epoch + 1);
+    const active = document.activeElement;
+    const hasFocusedOpener = active instanceof HTMLElement && active !== document.body;
+    this.paletteOpener = hasFocusedOpener ? active : null;
     this.paletteOpen.set(true);
   }
 
   closePalette(): void {
+    if (!this.paletteOpen()) return;
     this.paletteOpen.set(false);
-    (this.paletteOpener ?? this.paletteTrigger().nativeElement).focus();
+    const opener = this.paletteOpener;
+    const focusTarget = opener?.isConnected ? opener : this.paletteTrigger().nativeElement;
     this.paletteOpener = null;
+    // The `.body`/statusbar `[attr.inert]` binding only clears once change detection renders this
+    // signal write, so focusing synchronously here is a silent no-op: the target is still inside
+    // an inert subtree. Wait for that render before moving focus.
+    afterNextRender(() => focusTarget.focus(), { injector: this.injector });
   }
 
   @HostListener('document:keydown', ['$event'])

@@ -8,7 +8,7 @@ import type { ApprovalService } from '../governance/approvalService.js';
 import type { ManagerService } from '../managers/managerService.js';
 import { toManagerView } from '../managers/managerView.js';
 import type { PulseScheduler } from '../managers/pulseScheduler.js';
-import { SessionClosedError, type SessionService } from '../sessions/sessionService.js';
+import { SessionClosedError, TooManyPendingMessagesError, type SessionService } from '../sessions/sessionService.js';
 
 const ok = (payload: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(payload) }] });
 const fail = (message: string) => ({ content: [{ type: 'text' as const, text: message }], isError: true });
@@ -23,13 +23,14 @@ function tooLongMessage(body: string): string | undefined {
 }
 
 // Shared by send_session_message and message_parent: both just pick a different target session for the
-// same delivery call and need the same closed-target tool error. Any other thrown error (e.g. a colliding
+// same delivery call and need the same closed-target and pending-limit tool errors. Any other thrown error (e.g. a colliding
 // message_id) is left to propagate — the MCP SDK turns it into isError itself.
 function trySendMessage(send: () => { status: 'delivered' | 'queued'; messageId: string }) {
   try {
     const result = send();
     return ok({ status: result.status, message_id: result.messageId });
   } catch (error) {
+    if (error instanceof TooManyPendingMessagesError) return fail(error.message);
     if (!(error instanceof SessionClosedError)) throw error;
     return fail('target session is closed');
   }
