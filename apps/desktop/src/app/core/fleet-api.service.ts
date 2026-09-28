@@ -1,5 +1,5 @@
 import { Injectable } from '@angular/core';
-import type { Approval, Session, SessionSpec } from '@openfleet/shared';
+import type { Approval, HarnessId, PermissionMode, Session, SessionSpec } from '@openfleet/shared';
 import { environment } from '../../environments/environment';
 
 export class ApiError extends Error {
@@ -22,9 +22,10 @@ export class FleetApiService {
   private post<T>(path: string, body: unknown): Promise<T> { return this.call<T>(path, { method: 'POST', body: JSON.stringify(body) }); }
 
   createSession(spec: Partial<SessionSpec> & { directory: string; name: string; repoPath?: string; branchName?: string }) { return this.post<Session>('/api/sessions', spec); }
-  createManagerSession(spec: { directory: string; name: string; emoji?: string; model?: string; pulseSeconds: number; childrenCap: number; mission: string }) {
+  createManagerSession(spec: { directory: string; name: string; emoji?: string; model?: string; harness?: HarnessId; permissionMode?: PermissionMode; pulseSeconds: number; childrenCap: number; mission: string }) {
     return this.post<Session>('/api/sessions', {
       directory: spec.directory, name: spec.name, emoji: spec.emoji, model: spec.model,
+      harness: spec.harness, permissionMode: spec.permissionMode,
       manager: { pulseSeconds: spec.pulseSeconds, childrenCap: spec.childrenCap, mission: spec.mission },
     });
   }

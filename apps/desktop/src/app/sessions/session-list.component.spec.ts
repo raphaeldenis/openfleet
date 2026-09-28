@@ -164,6 +164,20 @@ describe('SessionListComponent', () => {
     expect(nameEl).toHaveAttribute('title', longName);
   });
 
+  it('user can reach the one new-session form from the sidebar, as a session or as a manager', async () => {
+    await render(SessionListComponent, { providers: [provideRouter([]), { provide: FleetEventsService, useValue: fakeEvents() }] });
+
+    expect(screen.getByTestId('new-session-link')).toHaveAttribute('href', '/new');
+    expect(screen.getByTestId('new-manager-link')).toHaveAttribute('href', '/new?mode=manager');
+  });
+
+  it('user no longer sees an inline create form in the sidebar', async () => {
+    await render(SessionListComponent, { providers: [provideRouter([]), { provide: FleetEventsService, useValue: fakeEvents() }] });
+
+    expect(screen.queryByPlaceholderText('/path/to/worktree')).toBeNull();
+    expect(screen.queryByTestId('create-manager')).toBeNull();
+  });
+
   it('lets a keyboard-only user Tab to a session row and open it with Enter', async () => {
     const fake = fakeEvents({ sessions: [{ id: 's1', name: 'Gimli', emoji: '⚔️', state: 'idle' }] });
     const { fixture } = await render(SessionListComponent, { providers: [provideRouter([]), { provide: FleetEventsService, useValue: fake }] });

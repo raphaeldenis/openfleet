@@ -232,14 +232,15 @@ describe('AppShellComponent', () => {
     expect(helmListStyle.flexGrow).toBe('1.4');
   });
 
-  it('scrolls the Sessions region internally even with zero sessions, so the tall new-session/new-manager forms never spill onto the Helm list below', async () => {
+  it('keeps the new-session and new-manager links inside the scrolling Sessions region even with zero sessions', async () => {
     const { root } = await setUp({ sessions: [] });
     const sessions = root.querySelector('[data-testid="app-nav"] .sessions') as HTMLElement;
     const sessionListHost = root.querySelector('[data-testid="app-nav"] of-session-list') as HTMLElement;
 
     const sessionsStyle = getComputedStyle(sessions);
     expect(sessionsStyle.overflowY).toBe('auto');
-    expect(sessions.contains(sessionListHost.querySelector('of-new-manager-form'))).toBe(true);
+    expect(sessions.contains(sessionListHost.querySelector('[data-testid="new-session-link"]'))).toBe(true);
+    expect(sessions.contains(sessionListHost.querySelector('[data-testid="new-manager-link"]'))).toBe(true);
   });
 
   it('badges the Helm Inbox row with the pending approvals count, hidden when there are none', async () => {
