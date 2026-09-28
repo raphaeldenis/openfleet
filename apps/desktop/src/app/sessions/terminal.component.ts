@@ -22,7 +22,7 @@ import { FleetEventsService } from '../core/fleet-events.service';
       position: absolute; top: .5rem; right: .5rem; padding: .25rem .625rem; border-radius: .375rem;
       border: 1px solid color-mix(in oklch, var(--state-waiting-permission) 45%, transparent);
       background: color-mix(in oklch, var(--state-waiting-permission) 20%, var(--panel));
-      color: var(--state-waiting-permission); font-size: .6875rem; font-weight: 600;
+      color: var(--fg); font-size: .6875rem; font-weight: 600;
     }
   `,
 })
@@ -34,7 +34,12 @@ export class TerminalComponent implements OnDestroy {
   terminal?: Terminal;
   private outputSub?: Subscription;
   private readonly fit = new FitAddon();
-  private readonly resizeObserver = new ResizeObserver(() => this.refit());
+  private pendingRefitFrame?: number;
+  // Resizing the terminal from inside the ResizeObserver callback that reported the resize is what
+  // the browser's "ResizeObserver loop completed with undelivered notifications" warning is about:
+  // deferring the actual fit to the next frame, and coalescing bursts of notifications into the single
+  // latest one, keeps the callback itself from doing synchronous work the browser can't settle in time.
+  private readonly resizeObserver = new ResizeObserver(() => this.scheduleRefit());
 
   constructor() {
     effect((onCleanup) => {
@@ -83,6 +88,14 @@ export class TerminalComponent implements OnDestroy {
     this.events.sendAttach(sessionId);
   }
 
+  private scheduleRefit(): void {
+    if (this.pendingRefitFrame !== undefined) cancelAnimationFrame(this.pendingRefitFrame);
+    this.pendingRefitFrame = requestAnimationFrame(() => {
+      this.pendingRefitFrame = undefined;
+      this.refit();
+    });
+  }
+
   private refit(): void {
     if (!this.terminal) return;
     this.fit.fit();
@@ -91,6 +104,8 @@ export class TerminalComponent implements OnDestroy {
 
   private detach(): void {
     this.resizeObserver.disconnect();
+    if (this.pendingRefitFrame !== undefined) cancelAnimationFrame(this.pendingRefitFrame);
+    this.pendingRefitFrame = undefined;
     this.outputSub?.unsubscribe();
     this.terminal?.dispose();
     this.terminal = undefined;
