@@ -22,6 +22,9 @@ const bus = new EventBus();
 const baseUrl = `http://${config.host}:${config.port}`;
 const sessions = new SessionService({ db, bus, harnesses: [new ClaudeCliHarness(), new FakeHarness()], baseUrl, worktreesRoot: config.worktreesRoot });
 const approvals = new ApprovalService({ db, bus });
+// A row still 'pending' from before this boot has no live waiter any more (AUD-07): the pre-restart
+// process that would have decided it is gone with the old daemon.
+approvals.expireAllPending('daemon restarted');
 const modelConfigPath = join(config.home, 'config.json');
 const modelTable = loadModelTable(modelConfigPath);
 const managerRepository = new ManagerRepository(db);

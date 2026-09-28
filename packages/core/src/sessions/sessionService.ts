@@ -505,6 +505,10 @@ export class SessionService {
   private async retireForRelaunch(sessionId: string): Promise<void> {
     this.disarmInterruptWatch(sessionId);
     this.transcriptPaths.delete(sessionId);
+    // Any approval still gating this session belonged to the process about to die: ApprovalService
+    // listens for this to expire it and answer its waiting hook, rather than leave it pending forever
+    // behind a relaunch it can never come back from (AUD-07).
+    this.deps.bus.emit({ type: 'session.relaunching', sessionId });
     this.repo.setTokens(sessionId, newToken(), newToken());
     const handle = this.handles.get(sessionId);
     if (!handle) return;
