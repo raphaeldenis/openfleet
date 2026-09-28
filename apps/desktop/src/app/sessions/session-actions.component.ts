@@ -1,7 +1,7 @@
 import { ChangeDetectionStrategy, Component, DestroyRef, ElementRef, Injector, afterNextRender, computed, effect, inject, input, signal, viewChild } from '@angular/core';
 import type { SessionState } from '@openfleet/shared';
 import { FleetApiService } from '../core/fleet-api.service';
-import { runGuarded } from '../core/run-guarded';
+import { SessionRequests } from '../core/session-requests';
 
 const CLOSE_CONFIRM_BODY =
   'The process stops. The worktree, branch and transcript are kept; you can reopen it later with its history.';
@@ -17,7 +17,7 @@ const ESCAPE_KEY = '\x1b';
     <div class="session-actions" data-testid="session-actions" [attr.inert]="confirmingClose() ? '' : null">
       @if (!closed()) {
         @if (busy()) {
-          <button type="button" class="of-btn of-btn--secondary" data-testid="session-interrupt" [disabled]="interrupting()" (click)="interrupt()">
+          <button type="button" class="of-btn of-btn--secondary" data-testid="session-interrupt" [disabled]="interrupting() || closing()" (click)="interrupt()">
             Interrupt
           </button>
         }
@@ -90,6 +90,8 @@ export class SessionActionsComponent {
   private readonly cancelButton = viewChild<ElementRef<HTMLButtonElement>>('cancelButton');
   private readonly submitButton = viewChild<ElementRef<HTMLButtonElement>>('submitButton');
   private closingSessionId = '';
+  private readonly closeRequests = new SessionRequests({ shownSessionId: () => this.sessionId(), busy: this.closing, error: this.error });
+  private readonly interruptRequests = new SessionRequests({ shownSessionId: () => this.sessionId(), busy: this.interrupting, error: this.error });
 
   constructor() {
     effect(() => {
@@ -98,14 +100,13 @@ export class SessionActionsComponent {
     effect(() => {
       if (this.closed()) this.confirmingClose.set(false);
     });
-    // A route param change reuses this component instance, so a session switch must not leave a
-    // stale confirm dialog, close error or in-flight flag showing over the new session.
+    // A route param change reuses this component instance, so a session switch must not leave a stale
+    // confirm dialog or close error showing over the new session; each session keeps its own in-flight flags.
     effect(() => {
-      this.sessionId();
+      const sessionId = this.sessionId();
       this.confirmingClose.set(false);
-      this.closing.set(false);
-      this.interrupting.set(false);
-      this.error.set(null);
+      this.closeRequests.show(sessionId);
+      this.interruptRequests.show(sessionId);
     });
   }
 
@@ -163,16 +164,12 @@ export class SessionActionsComponent {
   }
 
   private async close(sessionId: string): Promise<void> {
-    await runGuarded(this.closing, this.error, CLOSE_ERROR, () => this.api.closeSession(sessionId), {
-      isStale: () => this.hasLeftSession(sessionId),
-    });
+    await this.closeRequests.run(sessionId, CLOSE_ERROR, () => this.api.closeSession(sessionId));
   }
 
   async interrupt(): Promise<void> {
     const sessionId = this.sessionId();
-    await runGuarded(this.interrupting, this.error, INTERRUPT_ERROR, () => this.api.sendInput(sessionId, ESCAPE_KEY), {
-      isStale: () => this.hasLeftSession(sessionId),
-    });
+    await this.interruptRequests.run(sessionId, INTERRUPT_ERROR, () => this.api.sendInput(sessionId, ESCAPE_KEY));
   }
 
   private hasLeftSession(sessionId: string): boolean {

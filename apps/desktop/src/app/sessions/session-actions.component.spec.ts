@@ -39,6 +39,14 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
+const PROMISE_HOPS_OF_A_SETTLED_REQUEST = 10;
+
+/** Runs the continuations chained on a settled request (action → runGuarded → caller), then renders. */
+async function settleRequests(fixture: { whenStable(): Promise<unknown> }) {
+  for (let hop = 0; hop < PROMISE_HOPS_OF_A_SETTLED_REQUEST; hop++) await Promise.resolve();
+  await fixture.whenStable();
+}
+
 describe('SessionActionsComponent', () => {
   it('shows Close but not Interrupt for an idle session', async () => {
     await render(SessionActionsComponent, {
@@ -315,8 +323,88 @@ describe('SessionActionsComponent', () => {
         await new Promise((resolve) => setTimeout(resolve));
         await fixture.whenStable();
       };
-      return { switchTo, settle };
+      return { fixture, switchTo, settle };
     }
+
+    it('keeps the button disabled after A → B → A while the first request is pending, and sends no second request', async () => {
+      const requestOnS1 = deferred();
+      const api = apiAnswering(() => requestOnS1.promise);
+      const { switchTo } = await renderSwitchable(api);
+      await startOnCurrentSession();
+      await switchTo('s2');
+      await switchTo('s1');
+
+      expect(screen.getByTestId(buttonTestId)).toHaveAttribute('disabled');
+      fireEvent.click(screen.getByTestId(buttonTestId));
+      expect(requestOf(api)).toHaveBeenCalledTimes(1);
+      requestOnS1.resolve({});
+    });
+
+    it('enables the button again once the first request settles after A → B → A', async () => {
+      const requestOnS1 = deferred();
+      const api = apiAnswering(() => requestOnS1.promise);
+      const { fixture, switchTo } = await renderSwitchable(api);
+      await startOnCurrentSession();
+      await switchTo('s2');
+      await switchTo('s1');
+
+      requestOnS1.resolve({});
+      await settleRequests(fixture);
+
+      expect(screen.getByTestId(buttonTestId)).not.toHaveAttribute('disabled');
+    });
+
+    it('shows the failure of the first request on A when it fails after A → B → A', async () => {
+      const requestOnS1 = deferred();
+      const api = apiAnswering(() => requestOnS1.promise);
+      const { fixture, switchTo } = await renderSwitchable(api);
+      await startOnCurrentSession();
+      await switchTo('s2');
+      await switchTo('s1');
+
+      requestOnS1.reject(new Error('boom'));
+      await settleRequests(fixture);
+
+      expect(screen.getByTestId('session-action-error')).toBeTruthy();
+      expect(screen.getByTestId(buttonTestId)).not.toHaveAttribute('disabled');
+    });
+
+    it.each([
+      { outcome: 'resolves', settle: (request: ReturnType<typeof deferred>) => request.resolve({}) },
+      { outcome: 'rejects', settle: (request: ReturnType<typeof deferred>) => request.reject(new Error('boom')) },
+    ])('leaves the new session clean when the previous session request $outcome', async ({ settle }) => {
+      const requestOnS1 = deferred();
+      const api = apiAnswering(() => requestOnS1.promise);
+      const { fixture, switchTo } = await renderSwitchable(api);
+      await startOnCurrentSession();
+      await switchTo('s2');
+
+      settle(requestOnS1);
+      await settleRequests(fixture);
+
+      expect(screen.queryByTestId('session-action-error')).toBeNull();
+      expect(screen.getByTestId(buttonTestId)).not.toHaveAttribute('disabled');
+    });
+
+    it.each([
+      { outcome: 'resolves', settle: (request: ReturnType<typeof deferred>) => request.resolve({}) },
+      { outcome: 'rejects', settle: (request: ReturnType<typeof deferred>) => request.reject(new Error('boom')) },
+    ])('keeps the new session request busy, with no error, when the previous session request $outcome', async ({ settle }) => {
+      const requestOnS1 = deferred();
+      const requestOnS2 = deferred();
+      const api = apiAnswering((sessionId) => (sessionId === 's1' ? requestOnS1.promise : requestOnS2.promise));
+      const { fixture, switchTo } = await renderSwitchable(api);
+      await startOnCurrentSession();
+      await switchTo('s2');
+      await startOnCurrentSession();
+
+      settle(requestOnS1);
+      await settleRequests(fixture);
+
+      expect(screen.getByTestId(buttonTestId)).toHaveAttribute('disabled');
+      expect(screen.queryByTestId('session-action-error')).toBeNull();
+      requestOnS2.resolve({});
+    });
 
     it('re-enables the button on the new session while the previous session request is still pending', async () => {
       const requestOnS1 = deferred();
@@ -435,9 +523,7 @@ describe('SessionActionsComponent', () => {
       expect(screen.queryByTestId('close-confirm-dialog')).toBeNull();
     });
 
-    // KNOWN DEFECT (accepted, tracked as P2-U2e): the switch reset clears `closing` and the late settle
-    // is compared by session id only, so A→B→A re-enables Close on A while its first request is pending.
-    it.fails('keeps Close disabled when returning to a session whose close is still pending (A→B→A round trip)', async () => {
+    it('keeps Close disabled when returning to a session whose close is still pending (A→B→A round trip)', async () => {
       const closeOnS1 = deferred();
       const api = { closeSession: vi.fn(() => closeOnS1.promise), sendInput: vi.fn() };
       const { sessionId, flush } = await renderControllable(api, 'idle');
@@ -571,21 +657,46 @@ describe('SessionActionsComponent', () => {
       expect(screen.getByTestId('close-confirm-dialog')).toBeTruthy();
     });
 
-    it('keeps Close disabled when an interrupt settles while the close is still pending', async () => {
+    it('keeps Close and Interrupt disabled when an interrupt settles while the close is still pending', async () => {
       const close = deferred();
       const interrupt = deferred();
       const api = { closeSession: vi.fn(() => close.promise), sendInput: vi.fn(() => interrupt.promise) };
       const { flush } = await renderControllable(api, 'generating');
-      await confirmClose();
-
       fireEvent.click(screen.getByTestId('session-interrupt'));
-      await flush();
+      await confirmClose();
       expect(api.sendInput).toHaveBeenCalledWith('s1', '\x1b');
+
       interrupt.resolve({});
       await flush();
 
       expect(screen.getByTestId('session-close')).toHaveAttribute('disabled');
+      expect(screen.getByTestId('session-interrupt')).toHaveAttribute('disabled');
+    });
+
+    it('disables Interrupt while a close is pending, and enables it again when the close fails', async () => {
+      const close = deferred();
+      const api = { closeSession: vi.fn(() => close.promise), sendInput: vi.fn() };
+      const { fixture } = await renderControllable(api, 'generating');
+
+      await confirmClose();
+      expect(screen.getByTestId('session-interrupt')).toHaveAttribute('disabled');
+
+      close.reject(new Error('boom'));
+      await settleRequests(fixture);
+
+      expect(screen.getByTestId('session-action-error')).toHaveTextContent(/could not close/i);
       expect(screen.getByTestId('session-interrupt')).not.toHaveAttribute('disabled');
+    });
+
+    it('sends no interrupt while a close is pending', async () => {
+      const close = deferred();
+      const api = { closeSession: vi.fn(() => close.promise), sendInput: vi.fn() };
+      await renderControllable(api, 'generating');
+      await confirmClose();
+
+      await userEvent.click(screen.getByTestId('session-interrupt'));
+
+      expect(api.sendInput).not.toHaveBeenCalled();
     });
   });
 });

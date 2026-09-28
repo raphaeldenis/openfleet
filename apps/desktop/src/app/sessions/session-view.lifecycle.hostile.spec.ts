@@ -394,8 +394,7 @@ describe('SessionViewComponent lifecycle banners — sessions that closed long a
     expect(screen.getByTestId('resume-error')).not.toHaveTextContent('not closed');
   });
 
-  // P2-U2e
-  it.fails('does not send a second reopen for a session whose first reopen is still in flight after A → B → A', async () => {
+  it('does not send a second reopen for a session whose first reopen is still in flight after A → B → A', async () => {
     // Arrange
     const reopen = deferred<unknown>();
     const api = fakeApi();
@@ -416,5 +415,89 @@ describe('SessionViewComponent lifecycle banners — sessions that closed long a
     // Assert
     expect(api.reopenSession).toHaveBeenCalledTimes(1);
     reopen.resolve({});
+  });
+});
+
+describe('SessionViewComponent reopen — a request that outlives a session switch', () => {
+  const TWO_CLOSED_SESSIONS = [
+    session({ id: 's1', state: 'closed', exitCode: 0, closedAt: CLOSED_AT }),
+    session({ id: 's2', name: 'Legolas', state: 'closed', exitCode: 0, closedAt: CLOSED_AT }),
+  ];
+
+  async function renderOnBothSessions(reopenSession: (sessionId: string) => Promise<unknown>) {
+    const api = fakeApi();
+    api.reopenSession = vi.fn(reopenSession);
+    const rendered = await renderAgainstDaemonEvents(api, TWO_CLOSED_SESSIONS);
+    const goTo = async (id: string) => {
+      rendered.sessionId.set(id);
+      await rendered.fixture.whenStable();
+    };
+    return { ...rendered, api, goTo };
+  }
+
+  it('keeps Resume disabled with the Resuming banner after A → B → A while the first reopen is pending, then enables it once it settles', async () => {
+    // Arrange
+    const reopen = deferred<unknown>();
+    const { fixture, api, goTo } = await renderOnBothSessions(() => reopen.promise);
+    await userEvent.click(screen.getByTestId('resume-session'));
+    await goTo('s2');
+    await goTo('s1');
+    expect(screen.getByTestId('resume-session')).toBeDisabled();
+    expect(lifecycleBanner()).toHaveAttribute('data-variant', 'resuming');
+
+    // Act
+    reopen.resolve({});
+    await settleRequests(fixture);
+
+    // Assert
+    expect(lifecycleBanner()).toBeNull();
+    expect(screen.getByTestId('resume-session')).toBeEnabled();
+    expect(api.reopenSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the failure of the first reopen on A when it fails after A → B → A', async () => {
+    const reopen = deferred<unknown>();
+    const { fixture, goTo } = await renderOnBothSessions(() => reopen.promise);
+    await userEvent.click(screen.getByTestId('resume-session'));
+    await goTo('s2');
+    await goTo('s1');
+
+    reopen.reject(new ApiError(500, 'boom', 'launch_failed'));
+    await settleRequests(fixture);
+
+    expect(lifecycleBanner()).toHaveAttribute('data-variant', 'error');
+    expect(screen.getByTestId('resume-retry')).toBeEnabled();
+  });
+
+  it('leaves B clean when the reopen of A resolves while B is shown', async () => {
+    const reopen = deferred<unknown>();
+    const { fixture, goTo } = await renderOnBothSessions(() => reopen.promise);
+    await userEvent.click(screen.getByTestId('resume-session'));
+    await goTo('s2');
+
+    reopen.resolve({});
+    await settleRequests(fixture);
+
+    expect(lifecycleBanner()).toBeNull();
+    expect(screen.getByTestId('resume-session')).toBeEnabled();
+  });
+
+  it.each([
+    { outcome: 'resolves', settle: (reopen: ReturnType<typeof deferred<unknown>>) => reopen.resolve({}) },
+    { outcome: 'rejects', settle: (reopen: ReturnType<typeof deferred<unknown>>) => reopen.reject(new ApiError(500, 'boom', 'launch_failed')) },
+  ])('keeps the reopen of B busy when the reopen of A $outcome while B is shown', async ({ settle }) => {
+    const reopenOfA = deferred<unknown>();
+    const reopenOfB = deferred<unknown>();
+    const { fixture, goTo } = await renderOnBothSessions((sessionId) => (sessionId === 's1' ? reopenOfA.promise : reopenOfB.promise));
+    await userEvent.click(screen.getByTestId('resume-session'));
+    await goTo('s2');
+    await userEvent.click(screen.getByTestId('resume-session'));
+
+    settle(reopenOfA);
+    await settleRequests(fixture);
+
+    expect(lifecycleBanner()).toHaveAttribute('data-variant', 'resuming');
+    expect(screen.getByTestId('resume-session')).toBeDisabled();
+    reopenOfB.resolve({});
   });
 });
