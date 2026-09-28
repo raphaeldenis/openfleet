@@ -12,6 +12,16 @@ export interface PendingSwitch {
   sawStartingSinceSwitch: boolean;
 }
 
+/** What a selector component knows about its switch at the moment it leaves a session: nothing pending when `status` is null. */
+export interface SwitchSnapshot {
+  status: PendingSwitch['status'] | null;
+  requestedValue: string;
+  /** `undefined` means no switch is being tracked; `null` is a switch made from an unset value. */
+  valueBeforeSwitch: string | null | undefined;
+  stateBeforeSwitch: SessionState | undefined;
+  sawStartingSinceSwitch: boolean;
+}
+
 /**
  * Remembers each session's in-flight model / permission-mode switch, so a selector component reused
  * across a session switch (or destroyed and recreated by navigation) shows it again on return.
@@ -19,33 +29,37 @@ export interface PendingSwitch {
  */
 @Injectable({ providedIn: 'root' })
 export class PendingSwitchesService {
-  private readonly bySessionAndKind = new Map<string, PendingSwitch>();
+  private readonly switchesBySession = new Map<string, Partial<Record<SwitchKind, PendingSwitch>>>();
 
   constructor() {
     const events = inject(FleetEventsService);
     effect(() => {
       const openSessionIds = new Set(events.sessions().filter((s) => s.state !== 'closed').map((s) => s.id));
-      for (const key of [...this.bySessionAndKind.keys()]) {
-        if (!openSessionIds.has(sessionIdOf(key))) this.bySessionAndKind.delete(key);
+      for (const sessionId of [...this.switchesBySession.keys()]) {
+        if (!openSessionIds.has(sessionId)) this.switchesBySession.delete(sessionId);
       }
     });
   }
 
   recall(sessionId: string, kind: SwitchKind): PendingSwitch | undefined {
-    return this.bySessionAndKind.get(keyOf(sessionId, kind));
+    return this.switchesBySession.get(sessionId)?.[kind];
   }
 
-  /** `undefined` forgets the switch: nothing is pending for this session any more. */
-  remember(sessionId: string, kind: SwitchKind, pending: PendingSwitch | undefined): void {
-    if (pending) this.bySessionAndKind.set(keyOf(sessionId, kind), pending);
-    else this.bySessionAndKind.delete(keyOf(sessionId, kind));
+  /** Stores the snapshot as the session's pending switch of that kind, or forgets the kind when nothing is pending. */
+  park(sessionId: string, kind: SwitchKind, snapshot: SwitchSnapshot): void {
+    const { status, valueBeforeSwitch } = snapshot;
+    const isSwitchPending = status !== null && valueBeforeSwitch !== undefined;
+    if (isSwitchPending) this.store(sessionId, kind, { ...snapshot, status, valueBeforeSwitch });
+    else this.forget(sessionId, kind);
   }
-}
 
-function keyOf(sessionId: string, kind: SwitchKind): string {
-  return `${kind}:${sessionId}`;
-}
+  private store(sessionId: string, kind: SwitchKind, pending: PendingSwitch): void {
+    this.switchesBySession.set(sessionId, { ...this.switchesBySession.get(sessionId), [kind]: pending });
+  }
 
-function sessionIdOf(key: string): string {
-  return key.slice(key.indexOf(':') + 1);
+  private forget(sessionId: string, kind: SwitchKind): void {
+    const { [kind]: _forgotten, ...remaining } = this.switchesBySession.get(sessionId) ?? {};
+    if (Object.keys(remaining).length === 0) this.switchesBySession.delete(sessionId);
+    else this.switchesBySession.set(sessionId, remaining);
+  }
 }

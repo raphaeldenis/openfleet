@@ -8,6 +8,27 @@ export function closeStatusFor(exitCode: number | undefined): SessionCloseStatus
   return exitCode === 0 ? { kind: 'clean' } : { kind: 'failed', exitCode };
 }
 
+export interface ClosedStripCopy {
+  variant: 'error' | 'neutral';
+  title: string;
+  description: string;
+}
+
+export function closedStripCopyFor(exitCode: number | undefined): ClosedStripCopy {
+  const status = closeStatusFor(exitCode);
+  if (status.kind === 'unknown') {
+    return { variant: 'neutral', title: '■ Session closed', description: 'Session closed · worktree kept · transcript is read-only.' };
+  }
+  if (status.kind === 'clean') {
+    return { variant: 'neutral', title: '■ Closed · exit 0', description: 'Closed · worktree kept · transcript is read-only.' };
+  }
+  return {
+    variant: 'error',
+    title: `■ Closed · exit ${status.exitCode}`,
+    description: 'The session exited with an error · worktree kept · transcript is read-only.',
+  };
+}
+
 export function exitCodeLabel(exitCode: number | undefined): string {
   const status = closeStatusFor(exitCode);
   return status.kind === 'failed' ? `closed · exit ${status.exitCode}` : status.kind === 'clean' ? 'closed · exit 0' : 'closed';

@@ -101,7 +101,7 @@ export class PermissionModePickerComponent {
       const sessionId = this.sessionId();
       untracked(() => this.showSwitchStateOf(sessionId));
     });
-    inject(DestroyRef).onDestroy(() => this.rememberPendingSwitchOfShownSession());
+    inject(DestroyRef).onDestroy(() => this.parkPendingSwitchOfShownSession());
 
     effect(() => {
       const requestedFrom = this.modeBeforeSwitch();
@@ -122,7 +122,7 @@ export class PermissionModePickerComponent {
   }
 
   private showSwitchStateOf(sessionId: string): void {
-    this.rememberPendingSwitchOfShownSession();
+    this.parkPendingSwitchOfShownSession();
     this.shownSessionId = sessionId;
     const pending = this.pendingSwitches.recall(sessionId, 'permissionMode');
     this.chosenMode = (pending?.requestedValue as PermissionMode | undefined) ?? this.currentMode() ?? 'manual';
@@ -136,21 +136,15 @@ export class PermissionModePickerComponent {
     this.sawStartingSinceSwitch.set(pending?.sawStartingSinceSwitch ?? false);
   }
 
-  private rememberPendingSwitchOfShownSession(): void {
+  private parkPendingSwitchOfShownSession(): void {
     if (this.shownSessionId === undefined) return;
-    const status = this.switchStatus();
-    const valueBeforeSwitch = this.modeBeforeSwitch();
-    const isSwitchPending = status !== null && valueBeforeSwitch !== undefined;
-    const pending = isSwitchPending
-      ? {
-          status,
-          requestedValue: this.confirmedMode,
-          valueBeforeSwitch,
-          stateBeforeSwitch: this.stateBeforeSwitch(),
-          sawStartingSinceSwitch: this.sawStartingSinceSwitch(),
-        }
-      : undefined;
-    this.pendingSwitches.remember(this.shownSessionId, 'permissionMode', pending);
+    this.pendingSwitches.park(this.shownSessionId, 'permissionMode', {
+      status: this.switchStatus(),
+      requestedValue: this.confirmedMode,
+      valueBeforeSwitch: this.modeBeforeSwitch(),
+      stateBeforeSwitch: this.stateBeforeSwitch(),
+      sawStartingSinceSwitch: this.sawStartingSinceSwitch(),
+    });
   }
 
   statusLabel(status: 'relaunching' | 'deferred'): string {

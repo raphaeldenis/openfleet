@@ -77,7 +77,7 @@ export class ModelSelectorComponent {
     // switch in the service, the session arriving gets its own back.
     effect(() => {
       const sessionId = this.sessionId();
-      untracked(() => this.rememberPendingSwitchOfShownSession());
+      untracked(() => this.parkPendingSwitchOfShownSession());
       this.shownSessionId = sessionId;
       const pending = this.pendingSwitches.recall(sessionId, 'model');
       const currentModel = untracked(() => this.session()?.model) ?? 'sonnet';
@@ -91,7 +91,7 @@ export class ModelSelectorComponent {
       this.sawStartingSinceSwitch.set(pending?.sawStartingSinceSwitch ?? false);
       this.pendingModelSwitch.emit(pending?.status === 'deferred');
     });
-    inject(DestroyRef).onDestroy(() => this.rememberPendingSwitchOfShownSession());
+    inject(DestroyRef).onDestroy(() => this.parkPendingSwitchOfShownSession());
 
     // Clears "restarting…" / "switch pending" once the relaunch it describes has actually settled
     // (passed through 'starting' and moved on) or the session reached idle/closed since the request,
@@ -120,21 +120,15 @@ export class ModelSelectorComponent {
     return this.events.sessions().find((s) => s.id === this.sessionId());
   }
 
-  private rememberPendingSwitchOfShownSession(): void {
+  private parkPendingSwitchOfShownSession(): void {
     if (this.shownSessionId === undefined) return;
-    const status = this.switchStatus();
-    const valueBeforeSwitch = this.modelBeforeSwitch();
-    const isSwitchPending = status !== null && valueBeforeSwitch !== undefined;
-    const pending = isSwitchPending
-      ? {
-          status,
-          requestedValue: this.confirmedRung,
-          valueBeforeSwitch,
-          stateBeforeSwitch: this.stateBeforeSwitch(),
-          sawStartingSinceSwitch: this.sawStartingSinceSwitch(),
-        }
-      : undefined;
-    this.pendingSwitches.remember(this.shownSessionId, 'model', pending);
+    this.pendingSwitches.park(this.shownSessionId, 'model', {
+      status: this.switchStatus(),
+      requestedValue: this.confirmedRung,
+      valueBeforeSwitch: this.modelBeforeSwitch(),
+      stateBeforeSwitch: this.stateBeforeSwitch(),
+      sawStartingSinceSwitch: this.sawStartingSinceSwitch(),
+    });
   }
 
   statusLabel(status: 'relaunching' | 'deferred'): string {

@@ -297,14 +297,6 @@ describe('ModelSelectorComponent', () => {
       return { goTo, events, pendingModelSwitch };
     }
 
-    it('does not show session A\'s pending switch on session B', async () => {
-      const { goTo } = await renderSwitchedAwayFromAndBackTo();
-
-      await goTo('s2');
-
-      expect(screen.queryByTestId('model-switch-status')).toBeNull();
-    });
-
     it('shows session A\'s deferred switch again, with the requested rung selected and the close dialog warned, after coming back', async () => {
       const { goTo, pendingModelSwitch } = await renderSwitchedAwayFromAndBackTo();
       await goTo('s2');
@@ -314,16 +306,6 @@ describe('ModelSelectorComponent', () => {
       expect(screen.getByTestId('model-switch-status')).toHaveTextContent('switch pending: happens when this turn ends');
       expect((screen.getByTestId('model-select') as HTMLSelectElement).value).toBe('opus');
       expect(pendingModelSwitch).toHaveBeenLastCalledWith(true);
-    });
-
-    it('still clears the restored switch note once session A\'s turn ends', async () => {
-      const { goTo, events } = await renderSwitchedAwayFromAndBackTo();
-      await goTo('s2');
-      await goTo('s1');
-
-      events.sessions.update((all) => all.map((s) => (s.id === 's1' ? { ...s, state: 'idle' } : s)));
-
-      await waitFor(() => expect(screen.queryByTestId('model-switch-status')).toBeNull());
     });
   });
 

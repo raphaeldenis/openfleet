@@ -1,6 +1,5 @@
 import { render, screen, waitFor } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
-import type { ComponentFixture } from '@angular/core/testing';
 import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
 import { describe, expect, it, vi } from 'vitest';
 import type { PermissionMode, SessionState } from '@openfleet/shared';
@@ -76,11 +75,6 @@ async function requestPermissionModeSwitch() {
 
 const modelNote = () => screen.queryByTestId('model-switch-status');
 const permissionModeNote = () => screen.queryByTestId('permission-mode-switch-status');
-
-async function letRequestsSettle(fixture: ComponentFixture<unknown>) {
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  await fixture.whenStable();
-}
 
 describe('PendingSwitchesService through the model selector and the permission-mode picker', () => {
   describe('the model entry and the permission-mode entry of one session', () => {
@@ -223,81 +217,76 @@ describe('PendingSwitchesService through the model selector and the permission-m
     });
   });
 
-  describe('memory with many sessions', () => {
-    it('leaves no entry behind once every parked switch has settled and its session was visited again', async () => {
-      // Arrange — 30 sessions each carry a parked deferred switch (model and mode)
-      const sessionIds = Array.from({ length: 30 }, (_, index) => `s${index}`);
-      const { goTo, sessions, pendingSwitches } = await renderSelectors({ sessions: sessionIds.map((id) => fakeSession(id)) });
-      for (const id of sessionIds) {
-        await goTo(id);
-        await requestModelSwitch();
-        await requestPermissionModeSwitch();
-        await waitFor(() => expect(permissionModeNote()).toBeTruthy());
-      }
-
-      // Act — every turn ends while the user is elsewhere, then the user walks through them all again
-      sessions.update((all) => all.map((s) => ({ ...s, state: 'idle' as const })));
-      for (const id of sessionIds) await goTo(id);
-      await goTo('somewhere-else');
-
-      // Assert
-      const survivors = sessionIds.filter((id) => pendingSwitches.recall(id, 'model') || pendingSwitches.recall(id, 'permissionMode'));
-      expect(survivors).toEqual([]);
-    });
-  });
-
-  describe('defects', () => {
-    // MINOR — pending-switches.service.ts:20. Nothing ever forgets an entry for a session that no longer exists
-    // (deleted, or its switch settled while the user never returned): the map only shrinks when that very
-    // session is shown and left again.
+  describe('a session that leaves the fleet', () => {
     it('forgets the parked switch of a session that disappeared from the fleet', async () => {
-      const { goTo, sessions, pendingSwitches } = await renderSelectors();
+      const { fixture, goTo, sessions, pendingSwitches } = await renderSelectors();
       await requestModelSwitch();
       await waitFor(() => expect(modelNote()).toBeTruthy());
       await goTo('s2');
 
       sessions.update((all) => all.filter((s) => s.id !== 's1'));
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await fixture.whenStable();
 
       expect(pendingSwitches.recall('s1', 'model')).toBeUndefined();
     });
 
-    // P2-U2e — deferred: expected to fail until then.
-    // MINOR — model-selector.component.ts:154-158. A switch the daemon accepted, whose reply lands after the
-    // user left the session, is dropped instead of parked: back on that session there is no "switch pending"
-    // note and no close-dialog warning although the switch is queued in the daemon.
+    it('forgets the parked switches of a session that closed while the user was elsewhere', async () => {
+      const { fixture, goTo, sessions, pendingSwitches } = await renderSelectors();
+      await requestModelSwitch();
+      await requestPermissionModeSwitch();
+      await waitFor(() => expect(permissionModeNote()).toBeTruthy());
+      await goTo('s2');
+
+      sessions.update((all) => all.map((s) => (s.id === 's1' ? { ...s, state: 'closed' as const } : s)));
+      await fixture.whenStable();
+
+      expect(pendingSwitches.recall('s1', 'model')).toBeUndefined();
+      expect(pendingSwitches.recall('s1', 'permissionMode')).toBeUndefined();
+    });
+
+    it('keeps the parked switches of a session that is still open while another session closes', async () => {
+      const { fixture, goTo, sessions, pendingSwitches } = await renderSelectors();
+      await requestModelSwitch();
+      await waitFor(() => expect(modelNote()).toBeTruthy());
+      await goTo('s2');
+
+      sessions.update((all) => all.map((s) => (s.id === 's2' ? { ...s, state: 'closed' as const } : s)));
+      await fixture.whenStable();
+
+      expect(pendingSwitches.recall('s1', 'model')?.status).toBe('deferred');
+    });
+  });
+
+  describe('a switch reply or a request that outlives the session view', () => {
+    // P2-U2e
     it.fails('parks a model switch whose reply arrives after the user left the session', async () => {
       const reply = deferred<{ status: 'deferred' }>();
       const { fixture, goTo } = await renderSelectors({ api: { updateModel: vi.fn(() => reply.promise) } });
       await requestModelSwitch();
       await goTo('s2');
       reply.resolve({ status: 'deferred' });
-      await letRequestsSettle(fixture);
+      await fixture.whenStable();
 
       await goTo('s1');
 
       expect(modelNote()).toHaveTextContent('switch pending');
     });
 
-    // P2-U2e — deferred: expected to fail until then.
-    // MINOR — permission-mode-picker.component.ts:186-192, same drop for a permission-mode switch.
+    // P2-U2e
     it.fails('parks a permission-mode switch whose reply arrives after the user left the session', async () => {
       const reply = deferred<{ status: 'deferred' }>();
       const { fixture, goTo } = await renderSelectors({ api: { updatePermissionMode: vi.fn(() => reply.promise) } });
       await requestPermissionModeSwitch();
       await goTo('s2');
       reply.resolve({ status: 'deferred' });
-      await letRequestsSettle(fixture);
+      await fixture.whenStable();
 
       await goTo('s1');
 
       expect(permissionModeNote()).toHaveTextContent('switch pending');
     });
 
-    // P2-U2e — deferred: expected to fail until then.
-    // MINOR — model-selector.component.ts:86 / permission-mode-picker.component.ts:130. Coming back to A resets
-    // `applying`, although A's request is still in flight, so Apply is live again and a second click sends a
-    // duplicate switch.
+    // P2-U2e
     it.fails('does not send a second model switch for A while its first request is still in flight after A → B → A', async () => {
       const reply = deferred<{ status: 'deferred' }>();
       const { goTo, api } = await renderSelectors({ api: { updateModel: vi.fn(() => reply.promise) } });

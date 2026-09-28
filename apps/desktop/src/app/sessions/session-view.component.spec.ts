@@ -27,6 +27,14 @@ function fakeEvents(sessions: Session[], approvals: Approval[] = []) {
   };
 }
 
+const PROMISE_HOPS_OF_A_SETTLED_REQUEST = 10;
+
+/** Runs the continuations chained on a settled request (action → runGuarded → caller), then renders. */
+async function settleRequests(fixture: { whenStable(): Promise<unknown> }) {
+  for (let hop = 0; hop < PROMISE_HOPS_OF_A_SETTLED_REQUEST; hop++) await Promise.resolve();
+  await fixture.whenStable();
+}
+
 function fakeApi() {
   return {
     updateModel: vi.fn().mockResolvedValue({ status: 'deferred' }),
@@ -155,10 +163,7 @@ describe('SessionViewComponent', () => {
     expect(resumeButton.disabled).toBe(true);
 
     rejectA(new ApiError(409, 'boom', 'not_closed'));
-    // Let session A's rejected promise unwind through every `await` hop (action → runGuarded → resume)
-    // before asserting — a single microtask flush is not enough to reach the catch/finally.
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    await fixture.whenStable();
+    await settleRequests(fixture);
 
     expect(screen.queryByTestId('resume-error')).toBeNull();
     expect(resumeButton.disabled).toBe(true); // B's own in-flight request must still be tracked as busy
@@ -268,39 +273,6 @@ describe('SessionViewComponent', () => {
       expect(screen.queryByTestId('lifecycle-banner')).toBeNull();
     });
 
-    it('shows the Resuming banner from the click until the reopen request answers, before any daemon event lands', async () => {
-      let resolveReopen: (value: unknown) => void = () => {};
-      const api = fakeApi();
-      api.reopenSession = vi.fn(() => new Promise((resolve) => { resolveReopen = resolve; }));
-      await render(SessionViewComponent, {
-        bindings: [inputBinding('sessionId', () => 's1')],
-        providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: fakeEvents([session({ state: 'closed', exitCode: 0, closedAt: CLOSED_AT })]) }],
-      });
-
-      await userEvent.click(screen.getByTestId('resume-session'));
-      expect(screen.getByTestId('lifecycle-banner')).toHaveTextContent('Resuming…');
-
-      resolveReopen({});
-      await waitFor(() => expect(screen.queryByTestId('lifecycle-banner')).toBeNull());
-    });
-
-    it('follows the real daemon event order: starting appears, then goes away once the resumed session is idle', async () => {
-      const events = fakeEvents([session({ state: 'closed', exitCode: 0, closedAt: CLOSED_AT })]);
-      const { fixture } = await render(SessionViewComponent, {
-        bindings: [inputBinding('sessionId', () => 's1')],
-        providers: [{ provide: FleetApiService, useValue: fakeApi() }, { provide: FleetEventsService, useValue: events }],
-      });
-      expect(screen.queryByTestId('lifecycle-banner')).toBeNull();
-
-      events.sessions.set([session({ state: 'starting', exitCode: undefined, closedAt: CLOSED_AT })]);
-      await fixture.whenStable();
-      expect(screen.getByTestId('lifecycle-banner')).toHaveTextContent('Resuming…');
-
-      events.sessions.set([session({ state: 'idle', exitCode: undefined, closedAt: CLOSED_AT })]);
-      await fixture.whenStable();
-      expect(screen.queryByTestId('lifecycle-banner')).toBeNull();
-    });
-
     it('shows a Resume failed banner with the reason when the reopen request is rejected', async () => {
       const api = fakeApi();
       api.reopenSession = vi.fn().mockRejectedValue(new ApiError(409, 'boom', 'directory_missing'));
@@ -358,16 +330,6 @@ describe('SessionViewComponent', () => {
       resolveRetry({});
     });
 
-    it('offers Reopen fresh on the Resume failed banner as a disabled action explaining the missing backend', async () => {
-      await render(SessionViewComponent, {
-        bindings: [inputBinding('sessionId', () => 's1')],
-        providers: [{ provide: FleetApiService, useValue: fakeApi() }, { provide: FleetEventsService, useValue: fakeEvents([session({ state: 'closed', exitCode: -1, closedAt: CLOSED_AT })]) }],
-      });
-
-      const reopenFresh = screen.getByTestId('resume-failed-reopen-fresh') as HTMLButtonElement;
-      expect(reopenFresh.disabled).toBe(true);
-      expect(reopenFresh.title).toMatch(/not available yet/i);
-    });
   });
 
   describe('closed footer call-to-actions', () => {

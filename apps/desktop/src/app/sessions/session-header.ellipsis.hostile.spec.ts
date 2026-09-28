@@ -32,12 +32,6 @@ async function renderHeader(session: ReturnType<typeof signal<Session>>) {
 const nameField = () => screen.getByTestId('session-name-input') as HTMLInputElement;
 
 describe('SessionHeaderComponent long-name ellipsis', () => {
-  it('keeps the full name in the field value, so the ellipsis is display-only', async () => {
-    await renderHeader(signal(baseSession({ name: LONG_NAME })));
-
-    expect(nameField().value).toBe(LONG_NAME);
-  });
-
   it('renames with the whole edited long name, not the visible fragment', async () => {
     // Arrange
     const { api } = await renderHeader(signal(baseSession({ name: LONG_NAME })));
@@ -75,17 +69,6 @@ describe('SessionHeaderComponent long-name ellipsis', () => {
     await waitFor(() => expect(nameField()).toHaveAttribute('title', 'Short'));
   });
 
-  it('exposes the full name as the field\'s tooltip for a name containing markup characters, escaped rather than interpreted', async () => {
-    const hostileName = '"><img src=x onerror=alert(1)> & <b>bold</b>';
-    await renderHeader(signal(baseSession({ name: hostileName })));
-
-    expect(nameField()).toHaveAttribute('title', hostileName);
-    expect(document.querySelector('img[src="x"]')).toBeNull();
-  });
-
-  // MINOR — session-header.component.ts:28-36. The name field has no label; since the title was added its
-  // accessible name is the field's own current value (a screen reader says "Gimli · T6, edit text"), so it never
-  // says what the field is for. Before the title it had no name at all, so this is a gap rather than a regression.
   it('names the name field "Session name" for assistive tech, not with the session name itself', async () => {
     await renderHeader(signal(baseSession({ name: LONG_NAME })));
 

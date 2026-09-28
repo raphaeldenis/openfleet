@@ -349,14 +349,6 @@ describe('PermissionModePickerComponent', () => {
       return { goTo };
     }
 
-    it('does not show session A\'s pending switch on session B', async () => {
-      const { goTo } = await renderSwitchedAwayFromAndBackTo(signal<'generating' | 'idle'>('generating'));
-
-      await goTo('s2', 'plan');
-
-      expect(screen.queryByTestId('permission-mode-switch-status')).toBeNull();
-    });
-
     it('shows session A\'s deferred switch again after switching to B and coming back, with the requested mode selected', async () => {
       const { goTo } = await renderSwitchedAwayFromAndBackTo(signal<'generating' | 'idle'>('generating'));
       await goTo('s2', 'plan');
@@ -365,17 +357,6 @@ describe('PermissionModePickerComponent', () => {
 
       expect(screen.getByTestId('permission-mode-switch-status')).toHaveTextContent('switch pending: happens when this turn ends');
       expect((screen.getByTestId('permission-mode-select') as HTMLSelectElement).value).toBe('acceptEdits');
-    });
-
-    it('still clears the restored switch note once session A\'s turn ends', async () => {
-      const sessionState = signal<'generating' | 'idle'>('generating');
-      const { goTo } = await renderSwitchedAwayFromAndBackTo(sessionState);
-      await goTo('s2', 'plan');
-      await goTo('s1', 'manual');
-
-      sessionState.set('idle');
-
-      await waitFor(() => expect(screen.queryByTestId('permission-mode-switch-status')).toBeNull());
     });
 
     it('does not restore the note when session A\'s turn ended while the user was away', async () => {

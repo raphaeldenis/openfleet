@@ -2,15 +2,18 @@ import { ChangeDetectionStrategy, Component, computed, effect, inject, input, si
 import type { Session } from '@openfleet/shared';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
+import { runGuarded } from '../core/run-guarded';
 import { ComposerComponent } from './composer.component';
 import { PermissionGateCardComponent } from './permission-gate-card.component';
-import { closeStatusFor, reopenErrorMessage, resumeFailureReasonFor } from './session-close-status';
+import { type ClosedStripCopy, closedStripCopyFor, reopenErrorMessage, resumeFailureReasonFor } from './session-close-status';
 import { SessionHeaderComponent } from './session-header.component';
 import { TerminalComponent } from './terminal.component';
 
 const REOPEN_FRESH_UNAVAILABLE_TOOLTIP = 'Not available yet — the daemon cannot relaunch a session without its previous conversation.';
 
 type LifecycleBanner = { kind: 'resuming' } | { kind: 'resume_failed'; reason: string };
+
+type ClosedStrip = ClosedStripCopy & { role: 'alert' | 'status' };
 
 @Component({
   selector: 'of-session-view',
@@ -44,22 +47,22 @@ type LifecycleBanner = { kind: 'resuming' } | { kind: 'resume_failed'; reason: s
           }
         </div>
         @if (s.state === 'closed') {
-          @let showsCloseStatus = !lifecycleBanner();
+          @let strip = closedStrip();
           <div
             class="closed-footer"
             data-testid="session-closed-footer"
-            [class.closed-footer--strip]="showsCloseStatus"
-            [attr.data-variant]="showsCloseStatus ? closedVariant(s) : null"
-            [attr.role]="showsCloseStatus ? closedRole(s) : null"
+            [class.closed-footer--strip]="!!strip"
+            [attr.data-variant]="strip?.variant ?? null"
+            [attr.role]="strip?.role ?? null"
           >
-            @if (showsCloseStatus) {
-              <span class="closed-title">{{ closedTitle(s) }}</span>
-              <span class="closed-body">{{ closedDescription(s) }}</span>
+            @if (strip) {
+              <span class="closed-title">{{ strip.title }}</span>
+              <span class="closed-body">{{ strip.description }}</span>
             }
             <button type="button" class="of-btn of-btn--primary" data-testid="resume-session" [disabled]="resuming()" (click)="resume(s.id)">
               ↻ Resume in worktree
             </button>
-            @if (showsCloseStatus) {
+            @if (strip) {
               <button type="button" class="of-btn of-btn--secondary" data-testid="reopen-fresh-session" disabled [attr.title]="reopenFreshUnavailableTooltip">
                 Reopen fresh
               </button>
@@ -119,6 +122,13 @@ export class SessionViewComponent {
     return reason ? { kind: 'resume_failed', reason } : undefined;
   });
 
+  protected readonly closedStrip = computed<ClosedStrip | undefined>(() => {
+    const session = this.session();
+    if (!session || session.state !== 'closed' || this.lifecycleBanner()) return undefined;
+    const copy = closedStripCopyFor(session.exitCode);
+    return { ...copy, role: copy.variant === 'error' ? 'alert' : 'status' };
+  });
+
   protected readonly pendingApproval = computed(() => {
     const session = this.session();
     if (!session || session.state !== 'waiting_permission') return undefined;
@@ -145,45 +155,11 @@ export class SessionViewComponent {
     return session !== undefined && session.state !== 'closed' && session.state !== 'starting';
   }
 
-  // Ignores a reopen response for a session the user has since navigated away from: no error shown, and
-  // (unlike runGuarded) no busy-flag reset — this component instance is reused across a route param
-  // change, so `resuming`/`resumeError` already belong to whichever session is current by the time this
-  // settles, and a stale settle must not touch state that may now belong to that session's own in-flight resume.
+  // This component instance is reused across a route param change, so a reopen that settles after the user
+  // navigated away leaves `resuming`/`resumeError` alone: they belong to whichever session is current by then.
   async resume(sessionId: string): Promise<void> {
-    if (this.resuming()) return;
-    this.resuming.set(true);
-    this.resumeError.set(null);
-    try {
-      await this.api.reopenSession(sessionId);
-    } catch (error) {
-      if (this.sessionId() !== sessionId) return;
-      this.resumeError.set(reopenErrorMessage(error instanceof ApiError ? error.code : undefined));
-      this.resuming.set(false);
-      return;
-    }
-    if (this.sessionId() !== sessionId) return;
-    this.resuming.set(false);
-  }
-
-  protected closedVariant(session: Session): 'error' | 'neutral' {
-    return closeStatusFor(session.exitCode).kind === 'failed' ? 'error' : 'neutral';
-  }
-
-  protected closedRole(session: Session): 'alert' | 'status' {
-    return this.closedVariant(session) === 'error' ? 'alert' : 'status';
-  }
-
-  protected closedTitle(session: Session): string {
-    const status = closeStatusFor(session.exitCode);
-    if (status.kind === 'unknown') return '■ Session closed';
-    return status.kind === 'clean' ? '■ Closed · exit 0' : `■ Closed · exit ${status.exitCode}`;
-  }
-
-  protected closedDescription(session: Session): string {
-    const status = closeStatusFor(session.exitCode);
-    if (status.kind === 'unknown') return 'Session closed · worktree kept · transcript is read-only.';
-    return status.kind === 'clean'
-      ? 'Closed · worktree kept · transcript is read-only.'
-      : 'The session exited with an error · worktree kept · transcript is read-only.';
+    const reopenErrorFor = (error: unknown) => reopenErrorMessage(error instanceof ApiError ? error.code : undefined);
+    const hasNavigatedAway = () => this.sessionId() !== sessionId;
+    await runGuarded(this.resuming, this.resumeError, reopenErrorFor, () => this.api.reopenSession(sessionId), { isStale: hasNavigatedAway });
   }
 }
