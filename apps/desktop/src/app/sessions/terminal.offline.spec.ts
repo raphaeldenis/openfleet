@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/angular/zoneless';
 import { inputBinding, signal } from '@angular/core';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TerminalComponent } from './terminal.component';
 import { connectFakeDaemon } from '../testing/session-view.testing';
 
@@ -39,6 +39,12 @@ function attachedSessionIds(daemon: Awaited<ReturnType<typeof renderTerminal>>['
 }
 
 describe('TerminalComponent offline (AUD-14)', () => {
+  // The service's reconnect backoff runs on a real setTimeout: without a fake clock, a slow CI runner can let
+  // it fire on its own between two `await`s, swapping the daemon's socket out from under a test that expects
+  // to control reconnection itself (regression: flaked once in CI run 36484967669, job 109139535010).
+  beforeEach(() => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }));
+  afterEach(() => vi.useRealTimers());
+
   it('shows read-only the instant the connection drops, and writable again once it is back', async () => {
     const { fixture, daemon } = await renderTerminal();
     expect(screen.queryByTestId('terminal-readonly')).toBeNull();
