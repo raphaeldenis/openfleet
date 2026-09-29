@@ -5,6 +5,7 @@ import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
 import { ApprovalService } from '../governance/approvalService.js';
 import { FakeHarness } from '../harness/fakeHarness.js';
+import type { Harness } from '../harness/harness.js';
 import { ManagerRepository } from '../managers/managerRepository.js';
 import { ManagerService } from '../managers/managerService.js';
 import { PulseScheduler } from '../managers/pulseScheduler.js';
@@ -23,13 +24,13 @@ let terminalOutput: string;
 
 let service: SessionService;
 
-const bootDaemon = async (clearTimings: { clearInFlightTimeoutMs: number; clearFlushGraceMs: number } = { clearInFlightTimeoutMs: 50, clearFlushGraceMs: 0 }) => {
+const bootDaemon = async (clearTimings: { clearInFlightTimeoutMs: number; clearFlushGraceMs: number } = { clearInFlightTimeoutMs: 50, clearFlushGraceMs: 0 }, harnesses: Harness[] = [harness]) => {
   bus = new EventBus();
   bus.subscribe((event: ServerEvent) => {
     if (event.type === 'session.output') terminalOutput += event.data;
   });
   const sessions = new SessionService({
-    db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt', submitKeystrokeDelayMs: 0,
+    db, bus, harnesses, baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt', submitKeystrokeDelayMs: 0,
     ...clearTimings,
   });
   service = sessions;
@@ -181,6 +182,17 @@ describe('a user reopening a session whose conversation file is gone', () => {
 
     expect(noticeCount()).toBe(2);
     expect(lastLaunch().cliSessionId).not.toBe(secondConversationId);
+  });
+
+  it('finds the notice again in the terminal output replayed after the reopen, exactly once', async () => {
+    const id = await runningSession();
+    const clearedId = await userTypesClear(id);
+    harness.missingConversations.add(clearedId);
+    await closeThenReopen(id);
+
+    const { output } = (await (await api(`/api/sessions/${id}/output`)).json()) as { output: string };
+
+    expect(output.split(NEW_CONVERSATION_NOTICE).length - 1).toBe(1);
   });
 
   it('sees the missing conversation logged with the session and conversation ids only, no path', async () => {
@@ -350,6 +362,23 @@ describe('a user relaunching a session whose conversation the daemon cannot insp
     expect(lines[0]).toContain(id);
     expect(lines[0]).toContain(clearedId);
     expect(lines[0]).not.toContain('/');
+  });
+});
+
+describe('a user whose harness cannot tell whether a conversation exists', () => {
+  it('sees the stored conversation resumed as is, with no notice', async () => {
+    await server.close();
+    harness = new FakeHarness();
+    const harnessWithoutConversationCheck: Harness = { id: 'fake', start: (launch) => harness.start(launch) };
+    await bootDaemon(undefined, [harnessWithoutConversationCheck]);
+    const id = await runningSession();
+    const clearedId = await userTypesClear(id);
+
+    await closeThenReopen(id);
+
+    expect(lastLaunch().resuming).toBe(true);
+    expect(lastLaunch().cliSessionId).toBe(clearedId);
+    expect(noticeCount()).toBe(0);
   });
 });
 
