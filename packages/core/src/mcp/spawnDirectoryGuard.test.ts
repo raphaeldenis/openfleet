@@ -1,10 +1,10 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { startServer } from '../api/server.js';
 import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
@@ -28,6 +28,8 @@ import { SessionService } from '../sessions/sessionService.js';
 import { createMcpHandler } from './mcpServer.js';
 
 const WORKTREES_ROOT = '/tmp/of-wt';
+mkdirSync(WORKTREES_ROOT, { recursive: true });
+const volumeIsCaseInsensitive = existsSync(WORKTREES_ROOT.toUpperCase());
 
 let server: Awaited<ReturnType<typeof startServer>>;
 let db: DatabaseSync;
@@ -36,10 +38,32 @@ let harness: FakeHarness;
 let managerDirectory: string;
 let managerId: string;
 let managerToken: string;
+let realManagerDirectory: string;
+let createdDirectories: string[] = [];
+
+const makeTrackedDirectory = (prefix: string) => {
+  const directory = mkdtempSync(prefix);
+  createdDirectories.push(directory);
+  return directory;
+};
+
+const gitCheckHook: { beforeEachCheck?: () => void } = {};
+vi.mock('../git/worktrees.js', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../git/worktrees.js')>();
+  return {
+    ...original,
+    sameGitRepository: (...args: Parameters<typeof original.sameGitRepository>) => {
+      gitCheckHook.beforeEachCheck?.();
+      return original.sameGitRepository(...args);
+    },
+  };
+});
 
 beforeEach(async () => {
   mkdirSync(WORKTREES_ROOT, { recursive: true });
-  managerDirectory = mkdtempSync(join(WORKTREES_ROOT, 'manager-'));
+  gitCheckHook.beforeEachCheck = undefined;
+  managerDirectory = makeTrackedDirectory(join(WORKTREES_ROOT, 'manager-'));
+  realManagerDirectory = realpathSync.native(managerDirectory);
   db = openDatabase(':memory:');
   const bus = new EventBus();
   harness = new FakeHarness();
@@ -60,7 +84,11 @@ beforeEach(async () => {
   managerId = manager.id;
   managerToken = harness.launches[0]!.mcpToken;
 });
-afterEach(() => server.close());
+afterEach(async () => {
+  await server.close();
+  for (const directory of createdDirectories) rmSync(directory, { recursive: true, force: true });
+  createdDirectories = [];
+});
 
 async function connect(token: string) {
   const client = new Client({ name: 'test', version: '0.0.0' });
@@ -81,7 +109,7 @@ describe('spawn directory guard', () => {
     const result = await callCreateSession(manager, { directory: managerDirectory });
 
     expect(result.isError).toBe(true);
-    expect(errorText(result)).toContain(managerDirectory);
+    expect(errorText(result)).toContain(`directory ${realManagerDirectory} is already`);
     expect(errorText(result)).toContain(managerId);
     expect(errorText(result)).toMatch(/worktree/i);
     expect(sessions.list()).toHaveLength(sessionCountBefore);
@@ -90,7 +118,7 @@ describe('spawn directory guard', () => {
 
   it('user can be refused when the requested directory is a symbolic link to the manager directory', async () => {
     const manager = await connect(managerToken);
-    const linkToManager = join(mkdtempSync(join(WORKTREES_ROOT, 'links-')), 'alias');
+    const linkToManager = join(makeTrackedDirectory(join(WORKTREES_ROOT,'links-')), 'alias');
     symlinkSync(managerDirectory, linkToManager);
 
     const result = await callCreateSession(manager, { directory: linkToManager });
@@ -101,7 +129,7 @@ describe('spawn directory guard', () => {
   });
 
   it('user can be refused when the manager directory is reached through a symbolic link on the caller side', async () => {
-    const linkToManager = join(mkdtempSync(join(WORKTREES_ROOT, 'links-')), 'alias');
+    const linkToManager = join(makeTrackedDirectory(join(WORKTREES_ROOT,'links-')), 'alias');
     symlinkSync(managerDirectory, linkToManager);
     const viaLink = await sessions.create({ directory: linkToManager, name: 'ViaLink', harness: 'fake', emoji: '🔗' });
     const viaLinkClient = await connect(harness.launches[1]!.mcpToken);
@@ -114,11 +142,14 @@ describe('spawn directory guard', () => {
 
   it('user can be refused with allow_duplicate set, because no override lifts the refusal', async () => {
     const manager = await connect(managerToken);
+    const tools = await manager.listTools();
+    const createSessionSchema = tools.tools.find((tool) => tool.name === 'create_session')!.inputSchema;
+    expect(Object.keys(createSessionSchema.properties ?? {})).toContain('allow_duplicate');
 
     const result = await callCreateSession(manager, { directory: managerDirectory, allow_duplicate: true });
 
     expect(result.isError).toBe(true);
-    expect(errorText(result)).toContain(managerDirectory);
+    expect(errorText(result)).toContain(`directory ${realManagerDirectory} is already`);
     expect(harness.launches).toHaveLength(1);
   });
 
@@ -137,6 +168,7 @@ describe('spawn directory guard', () => {
     const manager = await connect(managerToken);
     const siblingWithSamePrefix = `${managerDirectory}-copy`;
     mkdirSync(siblingWithSamePrefix, { recursive: true });
+    createdDirectories.push(siblingWithSamePrefix);
 
     const result = await callCreateSession(manager, { directory: siblingWithSamePrefix });
 
@@ -146,21 +178,21 @@ describe('spawn directory guard', () => {
 
   it('user can be refused when a child of a child spawns into the directory of the first manager', async () => {
     const manager = await connect(managerToken);
-    const childDirectory = mkdtempSync(join(WORKTREES_ROOT, 'child-'));
+    const childDirectory = makeTrackedDirectory(join(WORKTREES_ROOT,'child-'));
     await callCreateSession(manager, { directory: childDirectory });
     const child = await connect(harness.launches[1]!.mcpToken);
 
     const result = await callCreateSession(child, { directory: managerDirectory, name: 'Grandchild' });
 
     expect(result.isError).toBe(true);
-    expect(errorText(result)).toContain(managerDirectory);
+    expect(errorText(result)).toContain(`directory ${realManagerDirectory} is already`);
     expect(errorText(result)).toContain(managerId);
     expect(harness.launches).toHaveLength(2);
   });
 
   it('user can be refused when a child of a child spawns into its own parent directory, not only the manager one', async () => {
     const manager = await connect(managerToken);
-    const childDirectory = mkdtempSync(join(WORKTREES_ROOT, 'child-'));
+    const childDirectory = makeTrackedDirectory(join(WORKTREES_ROOT,'child-'));
     await callCreateSession(manager, { directory: childDirectory });
     const child = await connect(harness.launches[1]!.mcpToken);
 
@@ -174,7 +206,7 @@ describe('spawn directory guard', () => {
 describe('spawn directory guard, hostile requests (QE)', () => {
   async function spawnDescendant(callerToken: string, name: string): Promise<{ client: Client; token: string }> {
     const caller = await connect(callerToken);
-    const directory = mkdtempSync(join(WORKTREES_ROOT, `${name}-`));
+    const directory = makeTrackedDirectory(join(WORKTREES_ROOT,`${name}-`));
     const launchesBefore = harness.launches.length;
     await callCreateSession(caller, { directory, name });
     const token = harness.launches[launchesBefore]!.mcpToken;
@@ -228,7 +260,7 @@ describe('spawn directory guard, hostile requests (QE)', () => {
 
   it('user can be refused when the requested directory is a chain of two symbolic links to the manager directory', async () => {
     const manager = await connect(managerToken);
-    const linksFolder = mkdtempSync(join(WORKTREES_ROOT, 'links-'));
+    const linksFolder = makeTrackedDirectory(join(WORKTREES_ROOT,'links-'));
     symlinkSync(managerDirectory, join(linksFolder, 'first'));
     symlinkSync(join(linksFolder, 'first'), join(linksFolder, 'second'));
 
@@ -252,7 +284,7 @@ describe('spawn directory guard, hostile requests (QE)', () => {
 
   it('user can be refused with a clean error and no session when the requested directory is a symbolic link loop', async () => {
     const manager = await connect(managerToken);
-    const loopFolder = mkdtempSync(join(WORKTREES_ROOT, 'loop-'));
+    const loopFolder = makeTrackedDirectory(join(WORKTREES_ROOT,'loop-'));
     symlinkSync(join(loopFolder, 'b'), join(loopFolder, 'a'));
     symlinkSync(join(loopFolder, 'a'), join(loopFolder, 'b'));
 
@@ -264,7 +296,7 @@ describe('spawn directory guard, hostile requests (QE)', () => {
 
   it('user can spawn a child when the manager directory no longer exists on disk', async () => {
     const manager = await connect(managerToken);
-    const childDirectory = mkdtempSync(join(WORKTREES_ROOT, 'child-'));
+    const childDirectory = makeTrackedDirectory(join(WORKTREES_ROOT,'child-'));
     rmSync(managerDirectory, { recursive: true, force: true });
 
     const result = await callCreateSession(manager, { directory: childDirectory });
@@ -274,7 +306,7 @@ describe('spawn directory guard, hostile requests (QE)', () => {
   });
 
   it('user can read the directory refusal rather than the worktree-root refusal when a manager outside the worktrees root spawns into its own directory', async () => {
-    const outsideDirectory = mkdtempSync(join(tmpdir(), 'of-outside-'));
+    const outsideDirectory = makeTrackedDirectory(join(tmpdir(),'of-outside-'));
     const outsider = await sessions.create({ directory: outsideDirectory, name: 'Outsider', harness: 'fake', emoji: '🚪' });
     const outsiderClient = await connect(harness.launches[1]!.mcpToken);
 
@@ -285,16 +317,192 @@ describe('spawn directory guard, hostile requests (QE)', () => {
     expect(harness.launches).toHaveLength(2);
   });
 
-  it('user can be refused when the requested directory differs from the manager directory only by letter case on a case-insensitive volume', async () => {
+  it.skipIf(!volumeIsCaseInsensitive)('user can be refused when the requested directory differs from the manager directory only by letter case on a case-insensitive volume', async () => {
     const manager = await connect(managerToken);
     const upperCased = managerDirectory.toUpperCase();
-    const volumeIsCaseInsensitive = upperCased !== managerDirectory && existsSync(upperCased);
-    if (!volumeIsCaseInsensitive) return;
 
     const result = await callCreateSession(manager, { directory: upperCased });
 
     expect(result.isError).toBe(true);
     expect(errorText(result)).toContain(managerId);
     expect(harness.launches).toHaveLength(1);
+  });
+});
+
+const firmlinkSpellingIsAvailable = existsSync('/System/Volumes/Data/private/tmp');
+
+describe('spawn directory guard, check-to-launch consistency', () => {
+  it('user can be refused when the requested directory is swapped for a link to the manager directory after the checks started', async () => {
+    const manager = await connect(managerToken);
+    const requestedDirectory = makeTrackedDirectory(join(WORKTREES_ROOT, 'swapped-'));
+    gitCheckHook.beforeEachCheck = () => {
+      rmSync(requestedDirectory, { recursive: true, force: true });
+      symlinkSync(managerDirectory, requestedDirectory);
+    };
+
+    const result = await callCreateSession(manager, { directory: requestedDirectory });
+
+    expect(result.isError).toBe(true);
+    expect(harness.launches).toHaveLength(1);
+  });
+
+  it.skipIf(!firmlinkSpellingIsAvailable)('user can be refused when the requested directory spells the manager directory through the macOS data volume', async () => {
+    const manager = await connect(managerToken);
+
+    const result = await callCreateSession(manager, { directory: `/System/Volumes/Data${realManagerDirectory}` });
+
+    expect(result.isError).toBe(true);
+    expect(errorText(result)).toContain(managerId);
+    expect(errorText(result)).toContain('is already the working directory');
+    expect(harness.launches).toHaveLength(1);
+  });
+
+  it('user can be refused when the directory a session started in is reached after its path was re-pointed elsewhere', async () => {
+    const startedIn = makeTrackedDirectory(join(WORKTREES_ROOT, 'started-in-'));
+    const repointedTo = makeTrackedDirectory(join(WORKTREES_ROOT, 'repointed-to-'));
+    const link = join(makeTrackedDirectory(join(WORKTREES_ROOT, 'links-')), 'alias');
+    symlinkSync(startedIn, link);
+    const viaLink = await sessions.create({ directory: link, name: 'ViaLink', harness: 'fake', emoji: '🔗' });
+    const viaLinkClient = await connect(harness.launches[1]!.mcpToken);
+    unlinkSync(link);
+    symlinkSync(repointedTo, link);
+
+    const result = await callCreateSession(viaLinkClient, { directory: startedIn });
+
+    expect(result.isError).toBe(true);
+    expect(errorText(result)).toContain(viaLink.id);
+    expect(harness.launches).toHaveLength(2);
+  });
+});
+
+describe('spawn directory guard, sessions without a recorded directory', () => {
+  it('user can be refused when a session started before its directory existed asks for that directory once it exists', async () => {
+    const lateDirectory = join(WORKTREES_ROOT, `late-${Date.now()}-${process.pid}`);
+    createdDirectories.push(lateDirectory);
+    const lateSession = await sessions.create({ directory: lateDirectory, name: 'Late', harness: 'fake', emoji: '⏳' });
+    const lateClient = await connect(harness.launches[1]!.mcpToken);
+    mkdirSync(lateDirectory);
+
+    const result = await callCreateSession(lateClient, { directory: lateDirectory });
+
+    expect(result.isError).toBe(true);
+    expect(errorText(result)).toContain(lateSession.id);
+    expect(harness.launches).toHaveLength(2);
+  });
+});
+
+describe('duplicate spawn guard', () => {
+  const spawnChild = async (client: Client, args: Record<string, unknown>) => {
+    const result = await callCreateSession(client, args);
+    return { result, child: result.isError ? undefined : (JSON.parse(errorText(result)) as { id: string; name: string }) };
+  };
+  const newWorktree = (prefix: string) => makeTrackedDirectory(join(WORKTREES_ROOT, `${prefix}-`));
+
+  it('user can be refused when a manager spawns a child with the name of one of its live children, and the answer names that child and its state', async () => {
+    const manager = await connect(managerToken);
+    const { child } = await spawnChild(manager, { directory: newWorktree('first'), name: 'Builder' });
+
+    const { result } = await spawnChild(manager, { directory: newWorktree('second'), name: 'Builder' });
+
+    expect(result.isError).toBe(true);
+    expect(errorText(result)).toContain(child!.id);
+    expect(errorText(result)).toContain('Builder');
+    expect(errorText(result)).toContain(`state ${sessions.get(child!.id)!.state}`);
+    expect(errorText(result)).toContain('send_session_message');
+    expect(harness.launches).toHaveLength(2);
+  });
+
+  it('user can be refused when a manager spawns a child into the directory of one of its live children', async () => {
+    const manager = await connect(managerToken);
+    const sharedDirectory = newWorktree('shared');
+    const { child } = await spawnChild(manager, { directory: sharedDirectory, name: 'Builder' });
+
+    const { result } = await spawnChild(manager, { directory: sharedDirectory, name: 'Reviewer' });
+
+    expect(result.isError).toBe(true);
+    expect(errorText(result)).toContain(child!.id);
+    expect(harness.launches).toHaveLength(2);
+  });
+
+  it('user can be refused when the requested directory is a symbolic link to the directory of a live child', async () => {
+    const manager = await connect(managerToken);
+    const sharedDirectory = newWorktree('shared');
+    const { child } = await spawnChild(manager, { directory: sharedDirectory, name: 'Builder' });
+    const link = join(newWorktree('links'), 'alias');
+    symlinkSync(sharedDirectory, link);
+
+    const { result } = await spawnChild(manager, { directory: link, name: 'Reviewer' });
+
+    expect(result.isError).toBe(true);
+    expect(errorText(result)).toContain(child!.id);
+  });
+
+  it('user can spawn a second child with the same name or the same directory when allow_duplicate is set', async () => {
+    const manager = await connect(managerToken);
+    const sharedDirectory = newWorktree('shared');
+    await spawnChild(manager, { directory: sharedDirectory, name: 'Builder' });
+
+    const sameName = await spawnChild(manager, { directory: newWorktree('other'), name: 'Builder', allow_duplicate: true });
+    const sameDirectory = await spawnChild(manager, { directory: sharedDirectory, name: 'Reviewer', allow_duplicate: true });
+
+    expect(sameName.result.isError).toBeFalsy();
+    expect(sameDirectory.result.isError).toBeFalsy();
+    expect(harness.launches).toHaveLength(4);
+  });
+
+  it('user can spawn again once the live child with that name and directory is closed', async () => {
+    const manager = await connect(managerToken);
+    const sharedDirectory = newWorktree('shared');
+    const { child } = await spawnChild(manager, { directory: sharedDirectory, name: 'Builder' });
+    await manager.callTool({ name: 'close_session', arguments: { session_id: child!.id } });
+
+    const { result } = await spawnChild(manager, { directory: sharedDirectory, name: 'Builder' });
+
+    expect(result.isError).toBeFalsy();
+  });
+
+  it('user can spawn a child whose name differs only by letter case from a live child', async () => {
+    const manager = await connect(managerToken);
+    await spawnChild(manager, { directory: newWorktree('first'), name: 'Builder' });
+
+    const { result } = await spawnChild(manager, { directory: newWorktree('second'), name: 'builder' });
+
+    expect(result.isError).toBeFalsy();
+  });
+
+  it('user can spawn a child with the name of a live child that belongs to another manager', async () => {
+    const otherRoot = await sessions.create({ directory: newWorktree('other-root'), name: 'OtherLead', harness: 'fake', emoji: '🧭' });
+    const manager = await connect(managerToken);
+    const otherClient = await connect(harness.launches[1]!.mcpToken);
+    const sharedDirectory = newWorktree('shared');
+    await spawnChild(otherClient, { directory: sharedDirectory, name: 'Builder' });
+
+    const { result } = await spawnChild(manager, { directory: sharedDirectory, name: 'Builder' });
+
+    expect(otherRoot.parentId).toBeUndefined();
+    expect(result.isError).toBeFalsy();
+  });
+
+  it('user can spawn a child with the name of a live grandchild', async () => {
+    const manager = await connect(managerToken);
+    const { child } = await spawnChild(manager, { directory: newWorktree('child'), name: 'Middle' });
+    const middle = await connect(harness.launches[1]!.mcpToken);
+    await spawnChild(middle, { directory: newWorktree('grand'), name: 'Builder' });
+
+    const { result } = await spawnChild(manager, { directory: newWorktree('builder'), name: 'Builder' });
+
+    expect(child).toBeDefined();
+    expect(result.isError).toBeFalsy();
+  });
+
+  it('user can read the directory refusal rather than the duplicate one when the requested directory is the manager directory and the name is a live child name', async () => {
+    const manager = await connect(managerToken);
+    await spawnChild(manager, { directory: newWorktree('first'), name: 'Builder' });
+
+    const { result } = await spawnChild(manager, { directory: managerDirectory, name: 'Builder', allow_duplicate: true });
+
+    expect(result.isError).toBe(true);
+    expect(errorText(result)).toContain(`directory ${realManagerDirectory} is already the working directory`);
+    expect(harness.launches).toHaveLength(2);
   });
 });
