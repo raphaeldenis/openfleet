@@ -1,4 +1,4 @@
-import { ColumnTypeSchema, OrderTermSchema, SelectOptionSchema, WhereClauseSchema, type Session } from '@openfleet/shared';
+import { AutoValueSchema, ColumnTypeSchema, OrderTermSchema, SelectOptionSchema, WhereClauseSchema, type Session } from '@openfleet/shared';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { RowNotFoundError, StoreNotFoundError, type DataStoreRepository, type RowActor } from '../stores/dataStoreRepository.js';
@@ -48,18 +48,19 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
       if (!dataStore || dataStore.projectId !== scope.projectId) throw new StoreNotFoundError(store);
       const columns = storeRepo.listColumns(store).map((column) => ({
         id: column.id, displayName: column.displayName, columnType: column.columnType, options: column.options, sortOrder: column.sortOrder,
+        ...(column.autoValue ? { autoValue: column.autoValue } : {}),
       }));
       return { id: dataStore.id, displayName: dataStore.displayName, columns };
     });
   });
 
   server.registerTool('add_data_store_column', {
-    description: 'Add a typed column to a data store; a select column needs at least one option',
-    inputSchema: { store: z.string().min(1), display_name: z.string().min(1), column_type: ColumnTypeSchema, options: z.array(SelectOptionSchema).optional() },
-  }, async ({ store, display_name, column_type, options }) => {
+    description: 'Add a typed column to a data store; a select column needs at least one option; auto_value "created_at" (date column only) makes the daemon fill the column with its own clock at insert and refuse any update',
+    inputSchema: { store: z.string().min(1), display_name: z.string().min(1), column_type: ColumnTypeSchema, options: z.array(SelectOptionSchema).optional(), auto_value: AutoValueSchema.optional() },
+  }, async ({ store, display_name, column_type, options, auto_value }) => {
     const scope = requireProject();
     if (!scope) return fail('this session has no project');
-    return guarded(() => stores.addColumn(store, { ...scope, displayName: display_name, columnType: column_type, options }));
+    return guarded(() => stores.addColumn(store, { ...scope, displayName: display_name, columnType: column_type, options, ...(auto_value ? { autoValue: auto_value } : {}) }));
   });
 
   server.registerTool('insert_data_store_rows', {
@@ -69,8 +70,9 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
     const scope = requireProject();
     if (!scope) return fail('this session has no project');
     return guarded(() => {
+      const ignored = stores.ignoredDaemonSetColumnIds(store, { ...scope, items: rows });
       const inserted = stores.insertRows(store, { ...scope, items: rows, actor: agentActor(caller) });
-      return { ids: inserted.map((row) => row.id), count: inserted.length };
+      return { ids: inserted.map((row) => row.id), count: inserted.length, ...(ignored.length > 0 ? { ignored } : {}) };
     });
   });
 
