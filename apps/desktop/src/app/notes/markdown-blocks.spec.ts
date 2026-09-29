@@ -55,6 +55,12 @@ describe('parseMarkdownBlocks', () => {
     expect(parseMarkdownBlocks(markdown)).toEqual(expected);
   });
 
+  it('keeps two inline code spans written back to back as two chips', () => {
+    const [paragraph] = parseMarkdownBlocks('`a``b`');
+
+    expect(paragraph).toEqual({ type: 'paragraph', segments: [code('a'), code('b')] });
+  });
+
   it('parses three thousand nested mentioned notes without overflowing the stack', () => {
     const opens = Array.from({ length: 3000 }, (_, index) => `--- from note @note:n${index} (t, d) ---`);
     const closes = Array.from({ length: 3000 }, (_, index) => `--- end @note:n${2999 - index} ---`);
@@ -96,6 +102,12 @@ describe('parseMarkdownBlocks', () => {
 });
 
 describe('takeWithinRenderBudget', () => {
+  it('keeps one list of three items when the first bullet is empty', () => {
+    const blocks = takeWithinRenderBudget(parseMarkdownBlocks('- \n- b\n- c'), 2000);
+
+    expect(blocks).toMatchObject([{ type: 'list', items: [expect.anything(), expect.anything(), expect.anything()] }]);
+  });
+
   it('drops a list item that would keep only an empty bullet', () => {
     const blocks = parseMarkdownBlocks('- `x`');
 

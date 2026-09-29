@@ -184,6 +184,51 @@ describe('notes view resists out-of-order answers', () => {
     expect(screen.queryByTestId('note-conflict-bar')).not.toBeInTheDocument();
   });
 
+  it('a note that fails to load after the user opened another note leaves the other note on screen', async () => {
+    const slowNote = deferred<NoteView>();
+    const getNote = vi.fn((_projectId: string, noteId: string) => (noteId === 'n1' ? slowNote.promise : Promise.resolve(VIEWS[noteId])));
+    await renderView({ api: fakeApi({ getNote }) });
+    await screen.findByTestId('note-list-item-n1');
+    await userEvent.click(screen.getByTestId('note-list-item-n2'));
+    await expectEditorTitle('voice');
+
+    slowNote.reject(new ApiError(500, 'GET note → 500'));
+    await flushPendingWork();
+
+    expect(screen.queryByTestId('note-error-title')).not.toBeInTheDocument();
+    expect(screen.getByTestId('note-editor-title')).toHaveTextContent('voice');
+  });
+
+  it('a restore failing after the user left the note raises no alert on the next note', async () => {
+    const restore = deferred<NoteView>();
+    await renderView({ api: fakeApi({ restoreNoteVersion: vi.fn(() => restore.promise) }) });
+    await editorTitle();
+    await restoreSelectedVersion();
+    await userEvent.click(screen.getByTestId('note-list-item-n2'));
+    await expectEditorTitle('voice');
+
+    restore.reject(new ApiError(500, 'POST restore → 500'));
+    await flushPendingWork();
+
+    expect(screen.queryByTestId('note-action-error')).not.toBeInTheDocument();
+  });
+
+  it('a conflict whose author lookup answers after the user left the note never shows its banner', async () => {
+    const authorLookup = deferred<ReturnType<typeof page<ReturnType<typeof aNoteVersion>>>>();
+    const listNoteVersions = vi.fn().mockResolvedValueOnce(page([aNoteVersion({ id: 'v1', rev: 1 })])).mockReturnValueOnce(authorLookup.promise);
+    await renderView({ api: conflictingRestoreApi({ listNoteVersions }) });
+    await editorTitle();
+    await restoreSelectedVersion();
+    await waitFor(() => expect(listNoteVersions).toHaveBeenCalledTimes(2));
+    await userEvent.click(screen.getByTestId('note-list-item-n2'));
+    await expectEditorTitle('voice');
+
+    authorLookup.resolve(page([aNoteVersion({ id: 'v5', rev: 5, author: 'Nori' })]));
+    await flushPendingWork();
+
+    expect(screen.queryByTestId('note-conflict-bar')).not.toBeInTheDocument();
+  });
+
   it('a restore still running when the user switches project does not turn the new project into an error', async () => {
     const restore = deferred<NoteView>();
     const api = fakeApi({
@@ -336,6 +381,18 @@ describe('notes view tells the user when something failed', () => {
     expect(screen.getByTestId('note-action-error-reason')).toHaveTextContent('500');
     expect(screen.getByTestId('note-editor-body')).toHaveTextContent('Original body');
     expect(screen.queryByTestId('note-error-title')).not.toBeInTheDocument();
+  });
+
+  it('the failure alert of a note never follows the user to the next note', async () => {
+    await renderView({ api: fakeApi({ restoreNoteVersion: vi.fn().mockRejectedValue(new ApiError(500, 'boom')) }) });
+    await editorTitle();
+    await restoreSelectedVersion();
+    await screen.findByTestId('note-action-error');
+
+    await userEvent.click(screen.getByTestId('note-list-item-n2'));
+    await expectEditorTitle('voice');
+
+    expect(screen.queryByTestId('note-action-error')).not.toBeInTheDocument();
   });
 
   it('a second concurrent edit during restore anyway shows a fresh banner that holds the user’s text', async () => {
@@ -652,6 +709,23 @@ describe('notes view keeps a slow note creation from disturbing what the user do
     expect(screen.getByTestId('note-list-new')).toBeEnabled();
   });
 
+  it('the create button stays disabled while the creation of the current project is in flight, even if the previous project answers', async () => {
+    const creationA = deferred<NoteView>();
+    const creationB = deferred<NoteView>();
+    const createNote = vi.fn().mockReturnValueOnce(creationA.promise).mockReturnValueOnce(creationB.promise);
+    await renderView({ api: fakeApi({ createNote }) });
+    await editorTitle();
+    await userEvent.click(screen.getByTestId('note-list-new'));
+    await userEvent.selectOptions(screen.getByTestId('notes-project-select'), 'p2');
+    await screen.findByTestId('note-list-item-n9');
+    await userEvent.click(screen.getByTestId('note-list-new'));
+
+    creationA.resolve(createdNote());
+    await flushPendingWork();
+
+    expect(screen.getByTestId('note-list-new')).toBeDisabled();
+  });
+
   it('user can type right away in a note created from the empty state', async () => {
     const api = fakeApi({ listNotes: vi.fn().mockResolvedValue(page([])), getNote: vi.fn().mockResolvedValue(createdNote()) });
     await renderView({ api });
@@ -935,6 +1009,16 @@ describe('notes view navigation', () => {
     expect(screen.getByTestId('note-list-item-new')).toHaveAttribute('aria-current', 'true');
   });
 
+  it('a filter made of spaces hides nothing', async () => {
+    await renderView();
+    await editorTitle();
+
+    await userEvent.type(screen.getByTestId('note-list-filter'), '   ');
+
+    expect(screen.getByTestId('note-list-item-n1')).toBeInTheDocument();
+    expect(screen.getByTestId('note-list-item-n2')).toBeInTheDocument();
+  });
+
   it('a filter with no match shows the no-match hint and the note stays open', async () => {
     await renderView();
     await editorTitle();
@@ -985,5 +1069,6 @@ describe('notes view keeps the intent of a restore that hit a conflict', () => {
     await restoreSelectedVersion();
 
     expect(await screen.findByTestId('note-conflict-restore')).toHaveTextContent('Restore rev 1');
+    expect(screen.getByTestId('note-conflict-ours')).toHaveTextContent('You had open');
   });
 });
