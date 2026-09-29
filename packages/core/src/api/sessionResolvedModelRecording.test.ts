@@ -584,7 +584,7 @@ describe('resolved model recording from a session\'s transcript', () => {
     expect(String(nameMismatchWarnings[0]![0])).not.toMatch(/[\n\u001b]/);
   });
 
-  it('follows the launch transcript again after a permission-mode relaunch that follows a /clear', async () => {
+  it('keeps following the transcript of the cleared conversation, not the launch one, after a permission-mode relaunch that follows a /clear', async () => {
     const id = await createSession('opus');
     const clearedCliSessionId = randomUUID();
     await sendHook(id, { hook_event_name: 'SessionStart', source: 'clear', session_id: clearedCliSessionId }, transcriptPathOf(clearedCliSessionId));
@@ -594,15 +594,15 @@ describe('resolved model recording from a session\'s transcript', () => {
     const modeReply = (await (await postJson(`/api/sessions/${id}/permission-mode`, { mode: 'plan' })).json()) as { status: string };
     if (modeReply.status === 'deferred') await sendHook(id, stop, transcriptPathOf(clearedCliSessionId));
     await expect.poll(() => harness.launches.length).toBe(2);
-    await sendHook(id, preToolUse, transcriptPathOf(clearedCliSessionId));
-    const afterClearedName = await listed(id);
     await sendHook(id, preToolUse, transcriptPathOf(id));
+    const afterLaunchName = await listed(id);
+    await sendHook(id, preToolUse, transcriptPathOf(clearedCliSessionId));
 
-    expect(afterClearedName).not.toHaveProperty('resolvedModel');
-    expect(await listed(id)).toMatchObject({ resolvedModel: 'claude-model-of-the-launch' });
+    expect(afterLaunchName).not.toHaveProperty('resolvedModel');
+    expect(await listed(id)).toMatchObject({ resolvedModel: 'claude-model-of-the-cleared-session' });
   });
 
-  it('follows the launch transcript again after a close and reopen that follow a /clear', async () => {
+  it('keeps following the transcript of the cleared conversation, not the launch one, after a close and reopen that follow a /clear', async () => {
     const id = await createSession('opus');
     const clearedCliSessionId = randomUUID();
     await sendHook(id, { hook_event_name: 'SessionStart', source: 'clear', session_id: clearedCliSessionId }, transcriptPathOf(clearedCliSessionId));
@@ -611,12 +611,12 @@ describe('resolved model recording from a session\'s transcript', () => {
 
     await postJson(`/api/sessions/${id}/close`);
     await postJson(`/api/sessions/${id}/reopen`);
-    await sendHook(id, preToolUse, transcriptPathOf(clearedCliSessionId));
-    const afterClearedName = await listed(id);
     await sendHook(id, preToolUse, transcriptPathOf(id));
+    const afterLaunchName = await listed(id);
+    await sendHook(id, preToolUse, transcriptPathOf(clearedCliSessionId));
 
-    expect(afterClearedName).not.toHaveProperty('resolvedModel');
-    expect(await listed(id)).toMatchObject({ resolvedModel: 'claude-model-of-the-launch' });
+    expect(afterLaunchName).not.toHaveProperty('resolvedModel');
+    expect(await listed(id)).toMatchObject({ resolvedModel: 'claude-model-of-the-cleared-session' });
   });
 
   it('logs once per launch that a hook names a transcript that does not carry the session\'s CLI id, with ids and file name only', async () => {

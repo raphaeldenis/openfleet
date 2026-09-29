@@ -267,6 +267,20 @@ describe('ClaudeCliHarness', () => {
     expect(rotatedMcpConfig.mcpServers.openfleet.headers.Authorization).toBe('Bearer tok-mcp-rotated');
   });
 
+  it('keeps the token files of a resume on the OpenFleet session id directory while resuming the CLI session id', async () => {
+    const clearedCliSessionId = '22222222-2222-4222-8222-222222222222';
+    const { ClaudeCliHarness } = await import('./claudeCliHarness.js');
+
+    new ClaudeCliHarness(sessionsRoot).start({ ...launch, resuming: true, cliSessionId: clearedCliSessionId });
+
+    const [, args] = spawn.mock.calls[0]!;
+    const argv = args as string[];
+    const settingsPath = argv[argv.indexOf('--settings') + 1]!;
+    expect(argv.slice(0, 2)).toEqual(['--resume', clearedCliSessionId]);
+    expect(settingsPath.startsWith(join(sessionsRoot, launch.sessionId))).toBe(true);
+    expect(settingsPath).not.toContain(clearedCliSessionId);
+  });
+
   it('never reuses a token file path across two launches of the same session, even when the earlier launch\'s files were never cleaned up', async () => {
     const { ClaudeCliHarness } = await import('./claudeCliHarness.js');
     const harness = new ClaudeCliHarness(sessionsRoot);

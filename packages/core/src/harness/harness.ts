@@ -2,6 +2,8 @@ import type { HarnessId, PermissionMode } from '@openfleet/shared';
 
 export interface HarnessLaunch {
   sessionId: string;
+  // The conversation a resume reattaches to, when the CLI left the launch conversation (a /clear).
+  cliSessionId?: string;
   directory: string;
   model?: string;
   seededPrompt?: string;
