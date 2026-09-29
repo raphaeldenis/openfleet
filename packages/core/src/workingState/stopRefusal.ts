@@ -1,10 +1,10 @@
 import { WORKING_STATE_SECTIONS, type StopHookOutput, type WorkingState, type WorkingStateSections } from '@openfleet/shared';
 import type { DatabaseSync } from 'node:sqlite';
 import { renderWorkingState } from './renderWorkingState.js';
+import { ageInWholeMinutes, ageMsOf, isOlderThanLimit, isWrittenBeforeFleetChanged } from './stateFreshness.js';
 import type { WorkingStateService } from './workingStateService.js';
 import type { WorkingStateSettings } from './workingStateSettings.js';
 
-const MINUTE_MS = 60_000;
 const MAX_CHILDREN_NAMED = 10;
 const UPDATE_TOOL_NAME = 'update_working_state';
 const SECTION_ARGUMENT_NAMES = 'plan, todo, remaining, questions_for_human, internal_questions, blockers';
@@ -27,12 +27,9 @@ export class StopRefusal {
   }
 
   private reasonToRefuseStoredState(state: WorkingState): string | undefined {
-    const ageMs = Date.parse(this.deps.clock()) - Date.parse(state.updatedAt);
-    const isOlderThanLimit = ageMs > this.deps.settings.maxAgeMinutes * MINUTE_MS;
-    if (isOlderThanLimit) return this.staleByAgeReason(Math.floor(ageMs / MINUTE_MS));
-
-    const isWrittenBeforeFleetChanged = state.fleetChangedAt !== undefined && state.updatedAt < state.fleetChangedAt;
-    if (isWrittenBeforeFleetChanged) return this.staleByFleetReason(state);
+    const ageMs = ageMsOf(state, this.deps.clock());
+    if (isOlderThanLimit(ageMs, this.deps.settings.maxAgeMinutes)) return this.staleByAgeReason(ageInWholeMinutes(ageMs));
+    if (isWrittenBeforeFleetChanged(state)) return this.staleByFleetReason(state);
 
     const sizeInBytes = Buffer.byteLength(renderWorkingState(sectionsOf(state)), 'utf8');
     const isOverCap = sizeInBytes > this.deps.settings.maxBytes;
