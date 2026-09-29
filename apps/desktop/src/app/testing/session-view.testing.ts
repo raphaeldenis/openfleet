@@ -122,13 +122,17 @@ class FakeWebSocket {
 /**
  * Connects the real FleetEventsService to a fake WebSocket, so a test feeds it the daemon's own events.
  * The connection opens right away, as a real one normally does by the time a session view has mounted.
+ *
+ * Stubs `fetch` for the AUD-27 ws-ticket call the service makes before every (re)connect: real component
+ * tests never exercise that REST round trip, only what happens once the socket is up.
  */
-export function connectFakeDaemon(fixture: Rendered, options: { openImmediately?: boolean } = {}) {
+export async function connectFakeDaemon(fixture: Rendered, options: { openImmediately?: boolean } = {}) {
   vi.stubGlobal('WebSocket', FakeWebSocket);
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({ ticket: 'fake-ticket' }) }));
   onTestFinished(() => {
     vi.unstubAllGlobals();
   });
-  fixture.debugElement.injector.get(FleetEventsService).connect();
+  await fixture.debugElement.injector.get(FleetEventsService).connect();
   if (options.openImmediately ?? true) FakeWebSocket.latest!.dispatchOpen();
   return {
     async send(event: ServerEvent) {

@@ -25,15 +25,23 @@ async function startProbeServer(overrides: Partial<Parameters<typeof startServer
   return startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable: DEFAULT_MODEL_TABLE, modelConfigPath: '/tmp/of-unused/config.json', ...overrides });
 }
 
+async function wsUrl(serverUrl: string): Promise<string> {
+  const res = await fetch(`${serverUrl}/api/ws-ticket`, { method: 'POST', headers: { authorization: 'Bearer admin' } });
+  const { ticket } = (await res.json()) as { ticket: string };
+  return `${serverUrl.replace('http', 'ws')}/ws?ticket=${ticket}`;
+}
+
 // Performs the WS handshake at the raw HTTP level and then never speaks the protocol again: no close-frame
 // ack, no writes at all. Only terminate() can ever end a connection like this one.
-function openNonCooperativeSocket(serverUrl: string): Promise<Socket> {
+async function openNonCooperativeSocket(serverUrl: string): Promise<Socket> {
+  const res = await fetch(`${serverUrl}/api/ws-ticket`, { method: 'POST', headers: { authorization: 'Bearer admin' } });
+  const { ticket } = (await res.json()) as { ticket: string };
   return new Promise((resolve, reject) => {
     const url = new URL(serverUrl);
     const req = request({
       hostname: url.hostname,
       port: url.port,
-      path: '/ws?token=admin',
+      path: `/ws?ticket=${ticket}`,
       headers: { Connection: 'Upgrade', Upgrade: 'websocket', 'Sec-WebSocket-Key': randomBytes(16).toString('base64'), 'Sec-WebSocket-Version': '13' },
     });
     req.on('upgrade', (_res, socket) => { socket.on('data', () => {}); resolve(socket); });
@@ -48,7 +56,7 @@ describe('server shutdown with a connected WS client', () => {
   it('server.close() settles within a bound and the client sees its socket close (AUD-08)', async () => {
     const server = await startProbeServer();
 
-    const client = new WebSocket(`${server.url.replace('http', 'ws')}/ws?token=admin`);
+    const client = new WebSocket(await wsUrl(server.url));
     await new Promise((resolve) => client.addEventListener('message', resolve, { once: true })); // the initial snapshot
     let clientClosed = false;
     client.addEventListener('close', () => { clientClosed = true; });
@@ -66,7 +74,7 @@ describe('server shutdown with a connected WS client', () => {
 
   it('sends a going-away close frame (1001, daemon shutting down) instead of an unexplained drop (AUD-08)', async () => {
     const server = await startProbeServer();
-    const client = new WebSocket(`${server.url.replace('http', 'ws')}/ws?token=admin`);
+    const client = new WebSocket(await wsUrl(server.url));
     await new Promise((resolve) => client.on('message', resolve)); // the initial snapshot
     const closeInfo = new Promise<{ code: number; reason: string }>((resolve) => {
       client.on('close', (code: number, reasonBuf: Buffer) => resolve({ code, reason: reasonBuf.toString() }));

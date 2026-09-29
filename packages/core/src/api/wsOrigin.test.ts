@@ -26,11 +26,20 @@ beforeEach(async () => {
 });
 afterEach(() => server.close());
 
+const api = (path: string, init: RequestInit = {}) => fetch(`${server.url}${path}`, { ...init, headers: { 'content-type': 'application/json', authorization: 'Bearer admin', ...(init.headers ?? {}) } });
+
+async function issueTicket(): Promise<string> {
+  const res = await api('/api/ws-ticket', { method: 'POST' });
+  const body = (await res.json()) as { ticket: string };
+  return body.ticket;
+}
+
 // The 'ws' package's client, not the native global WebSocket: only it lets a test set a custom Origin
 // header, which a real browser's WebSocket constructor never allows a page to override.
-function tryConnect(headers: Record<string, string> = {}): Promise<'accepted' | 'refused'> {
+async function tryConnect(headers: Record<string, string> = {}): Promise<'accepted' | 'refused'> {
+  const ticket = await issueTicket();
   return new Promise((resolve) => {
-    const socket = new WebSocket(`${server.url.replace('http', 'ws')}/ws?token=admin`, { headers });
+    const socket = new WebSocket(`${server.url.replace('http', 'ws')}/ws?ticket=${ticket}`, { headers });
     const timer = setTimeout(() => { socket.terminate(); resolve('refused'); }, 2000);
     socket.on('open', () => { clearTimeout(timer); socket.close(); resolve('accepted'); });
     socket.on('error', () => { clearTimeout(timer); resolve('refused'); });
@@ -38,9 +47,8 @@ function tryConnect(headers: Record<string, string> = {}): Promise<'accepted' | 
   });
 }
 
-function tryConnectWithToken(token: string | undefined): Promise<'accepted' | 'refused'> {
+function tryConnectWithQuery(query: string): Promise<'accepted' | 'refused'> {
   return new Promise((resolve) => {
-    const query = token === undefined ? '' : `?token=${token}`;
     const socket = new WebSocket(`${server.url.replace('http', 'ws')}/ws${query}`);
     const timer = setTimeout(() => { socket.terminate(); resolve('refused'); }, 2000);
     socket.on('open', () => { clearTimeout(timer); socket.close(); resolve('accepted'); });
@@ -75,26 +83,26 @@ describe('WS Origin allowlist', () => {
     expect(await tryConnect({ Origin: 'http://localhost:1420' })).toBe('accepted');
   });
 
-  it('refuses a connection from a foreign Origin even with a valid token', async () => {
+  it('refuses a connection from a foreign Origin even with a valid ticket', async () => {
     expect(await tryConnect({ Origin: 'https://evil.example' })).toBe('refused');
   });
 });
 
-describe('WS token', () => {
-  it('refuses a connection with a wrong token', async () => {
-    expect(await tryConnectWithToken('wrong')).toBe('refused');
+describe('WS ticket', () => {
+  it('refuses a connection with an unknown ticket', async () => {
+    expect(await tryConnectWithQuery('?ticket=wrong')).toBe('refused');
   });
 
-  it('refuses a connection with no token at all', async () => {
-    expect(await tryConnectWithToken(undefined)).toBe('refused');
+  it('refuses a connection with no ticket at all', async () => {
+    expect(await tryConnectWithQuery('')).toBe('refused');
   });
 
-  it('never logs any part of the token from a malformed upgrade request, even though node:url\'s own parse error carries the full URL on its .input property', async () => {
+  it('never logs any part of the ticket from a malformed upgrade request, even though node:url\'s own parse error carries the full URL on its .input property', async () => {
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     // node:url's URL constructor throws ERR_INVALID_URL for this shape (an "authority" with an
-    // unterminated IPv6-literal host) while still preserving ?token=SECRET in the string it throws.
-    await rawUpgrade('//x@[/ws?token=SECRET');
+    // unterminated IPv6-literal host) while still preserving ?ticket=SECRET in the string it throws.
+    await rawUpgrade('//x@[/ws?ticket=SECRET');
 
     expect(consoleErrorSpy).toHaveBeenCalled();
     const loggedText = consoleErrorSpy.mock.calls
