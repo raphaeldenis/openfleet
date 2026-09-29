@@ -7,8 +7,16 @@ import { nextPulseAt } from './pulseTiming.js';
 
 export const PULSE_MESSAGE = '[pulse] Re-read your mission and continue: check your children, unblock them, record what you did.';
 
+const MAX_CHILD_NAME_LENGTH = 80;
+
+const toSingleLineName = (name: string) => {
+  const collapsed = name.replace(/[\s\p{Cc}]+/gu, ' ').trim();
+  const isTooLong = collapsed.length > MAX_CHILD_NAME_LENGTH;
+  return isTooLong ? `${collapsed.slice(0, MAX_CHILD_NAME_LENGTH)}…` : collapsed;
+};
+
 const childClosedLine = (child: { name: string }, exitCode: number | undefined) =>
-  `[pulse] Child "${child.name}" closed (exit code ${exitCode ?? 'unknown'}).`;
+  `[pulse] Child "${toSingleLineName(child.name)}" closed (exit code ${exitCode ?? 'unknown'}).`;
 
 export interface PulseSchedulerDeps {
   managers: ManagerRepository;
@@ -44,6 +52,7 @@ export class PulseScheduler {
   }
 
   private onSessionReopened(sessionId: string): void {
+    if (this.isStopped) return;
     const record = this.deps.managers.get(sessionId);
     if (!record) return; // not a manager: nothing to re-arm
     this.arm(record);
@@ -60,6 +69,7 @@ export class PulseScheduler {
   // The interval is a heartbeat: any change of a manager's state is a turn starting or ending, whoever
   // started it, and a pulse is only for a manager that stayed silent for one full interval.
   private restartHeartbeatOfManager(sessionId: string): void {
+    if (this.isStopped) return;
     const record = this.deps.managers.get(sessionId);
     if (!record) return;
     if (!this.isManagerAlive(sessionId)) return;
