@@ -44,7 +44,7 @@ async function renderViewing({ api = fakeApi(), sessions = [gimli(), boromir()] 
     providers: [{ provide: FleetApiService, useValue: api }],
     ...withoutRealTerminal,
   });
-  const daemon = connectFakeDaemon(fixture);
+  const daemon = await connectFakeDaemon(fixture);
   await daemon.send({ type: 'snapshot', sessions, approvals: [], managers: [] });
   vi.useFakeTimers();
   const elapse = fakeClockElapser(fixture);

@@ -9,6 +9,7 @@ import type { PulseScheduler } from '../managers/pulseScheduler.js';
 import { listAvailableModels, ModelConfigReadOnlyError, ModelConfigUnreadableError, ModelTablePatchSchema, resolveModel, saveModelPatch, type ModelTable } from '../models.js';
 import { DaemonShuttingDownError, SessionClosedError, SessionReopenError, type SessionService } from '../sessions/sessionService.js';
 import { json, logServerError, Router } from './router.js';
+import type { WsTicketStore } from './wsTicketStore.js';
 
 // Used by the messages, permission-mode and model routes: each can hit a session that closed or a daemon
 // that started shutting down between the request landing and the session-service call running.
@@ -28,13 +29,17 @@ const RenameSessionSchema = z
   .object({ name: z.string().trim().min(1).max(100).optional(), emoji: z.string().trim().min(1).max(32).optional() })
   .refine((patch) => patch.name !== undefined || patch.emoji !== undefined, { message: 'name or emoji is required' });
 
-export function registerRestRoutes(router: Router, deps: { sessions: SessionService; approvals: ApprovalService; modelTable: ModelTable; modelConfigPath: string; managers: ManagerService; pulseScheduler: PulseScheduler }): void {
+export function registerRestRoutes(router: Router, deps: { sessions: SessionService; approvals: ApprovalService; modelTable: ModelTable; modelConfigPath: string; managers: ManagerService; pulseScheduler: PulseScheduler; wsTickets: WsTicketStore }): void {
   const servedRungs = (): ModelTable => {
     const { haiku, sonnet, opus, fable } = deps.modelTable;
     return { haiku, sonnet, opus, fable };
   };
 
   router.add('GET', '/api/sessions', ({ res }) => json(res, 200, deps.sessions.list()));
+
+  // AUD-27: the desktop shell calls this, bearer-authenticated like every other /api/ route, right before
+  // opening (or reopening) the WS — the ticket it gets back is what actually authorizes that connection.
+  router.add('POST', '/api/ws-ticket', ({ res }) => json(res, 200, { ticket: deps.wsTickets.issue() }));
 
   router.add('GET', '/api/models', ({ res }) => json(res, 200, servedRungs()));
 
