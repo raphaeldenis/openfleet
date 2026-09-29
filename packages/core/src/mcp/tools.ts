@@ -48,6 +48,15 @@ export interface RegisterToolsDeps {
 
 export function registerTools(server: McpServer, deps: RegisterToolsDeps): void {
   const { sessions, caller, approvals, managers, pulseScheduler, modelTable } = deps;
+  const realPathOrSelf = (directory: string) => (existsSync(directory) ? realpathSync.native(directory) : directory);
+  const findLineageSessionOwning = (realDirectory: string): Session | undefined => {
+    const visited = new Set<string>();
+    for (let session: Session | undefined = caller; session && !visited.has(session.id); session = session.parentId ? sessions.get(session.parentId) : undefined) {
+      visited.add(session.id);
+      if (realPathOrSelf(session.directory) === realDirectory) return session;
+    }
+    return undefined;
+  };
   const isInLineage = (target: Session) => target.id === caller.id || target.parentId === caller.id || target.id === caller.parentId;
 
   const pendingPermissionFor = (sessionId: string): { toolName: string; ageSeconds: number } | undefined => {
@@ -130,6 +139,11 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     // realpathSync.native, not the plain (non-native) realpathSync: Node's own JS reimplementation has a
     // lexical blind spot for some symlink + ".." combinations that the native OS call does not.
     const realDirectory = realpathSync.native(input.directory);
+
+    const ownerOfRequestedDirectory = findLineageSessionOwning(realDirectory);
+    if (ownerOfRequestedDirectory) {
+      return fail(`directory ${realDirectory} is already the working directory of session ${ownerOfRequestedDirectory.id} (${ownerOfRequestedDirectory.name}), which is you or one of your ancestors: use a worktree (create_worktree) or another directory`);
+    }
 
     const isWithinWorktreesRoot = isPathWithin(realDirectory, deps.worktreesRoot);
     const isCallersOwnRepo = await sameGitRepository(caller.directory, realDirectory);
