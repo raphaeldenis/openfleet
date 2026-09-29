@@ -1,8 +1,21 @@
-import { chmodSync, mkdtempSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { markDirectoryTrusted } from './trustDirectory.js';
+
+function readTree(root: string): Record<string, string> {
+  const files: Record<string, string> = {};
+  const walk = (directory: string) => {
+    for (const entry of readdirSync(directory)) {
+      const path = join(directory, entry);
+      if (statSync(path).isDirectory()) walk(path);
+      else files[path] = readFileSync(path, 'utf8');
+    }
+  };
+  walk(root);
+  return files;
+}
 
 describe('markDirectoryTrusted', () => {
   it('creates a project entry with hasTrustDialogAccepted when the config file does not exist', () => {
@@ -82,6 +95,21 @@ describe('markDirectoryTrusted', () => {
     markDirectoryTrusted(configPath, directory);
 
     expect(statSync(configPath).mode & 0o777).toBe(0o600);
+  });
+
+  it('user can trust a project directory without a single file of that directory changing, and leaves nothing but the config file in the config folder', () => {
+    const home = mkdtempSync(join(tmpdir(), 'of-claude-home-'));
+    const configPath = join(home, '.claude.json');
+    const directory = mkdtempSync(join(tmpdir(), 'of-project-'));
+    mkdirSync(join(directory, '.claude'));
+    writeFileSync(join(directory, '.claude', 'settings.local.json'), '{"hooks":{}}');
+    writeFileSync(join(directory, 'README.md'), 'hello');
+    const projectBefore = readTree(directory);
+
+    markDirectoryTrusted(configPath, directory);
+
+    expect(readTree(directory)).toEqual(projectBefore);
+    expect(readdirSync(home)).toEqual(['.claude.json']);
   });
 
   it('creates a brand new trust file with mode 0600', () => {

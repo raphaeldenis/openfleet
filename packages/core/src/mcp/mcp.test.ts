@@ -38,6 +38,13 @@ function existingWorktreeDir(name: string): string {
   return path;
 }
 
+// The spawn directory guard refuses the caller's own directory, so a child of a repo-rooted caller lives in a subdirectory.
+function subdirectoryOf(repo: string): string {
+  const path = join(repo, 'child-workspace');
+  mkdirSync(path, { recursive: true });
+  return path;
+}
+
 let server: Awaited<ReturnType<typeof startServer>>;
 let db: DatabaseSync;
 let bus: EventBus;
@@ -364,7 +371,7 @@ describe('MCP', () => {
     const repoParentToken = harness.launches.find((l) => l.sessionId === repoParent.id)!.mcpToken;
     const parent = await connect(repoParentToken);
     const launchesBefore = harness.launches.length;
-    text(await parent.callTool({ name: 'create_session', arguments: { directory: ownRepo, name: 'Builder' } }));
+    text(await parent.callTool({ name: 'create_session', arguments: { directory: subdirectoryOf(ownRepo), name: 'Builder' } }));
     const builderToken = harness.launches[launchesBefore]!.mcpToken;
     const builder = await connect(builderToken);
 
@@ -378,7 +385,7 @@ describe('MCP', () => {
     const repoParentToken = harness.launches.find((l) => l.sessionId === repoParent.id)!.mcpToken;
     const parent = await connect(repoParentToken);
     const launchesBefore = harness.launches.length;
-    text(await parent.callTool({ name: 'create_session', arguments: { directory: ownRepo, name: 'Builder' } }));
+    text(await parent.callTool({ name: 'create_session', arguments: { directory: subdirectoryOf(ownRepo), name: 'Builder' } }));
     const builderToken = harness.launches[launchesBefore]!.mcpToken;
     const builder = await connect(builderToken);
 
@@ -408,7 +415,7 @@ describe('create_session guardrails', () => {
     const repoParent = await sessions.create({ directory: repoPath, name: 'Lead', harness: 'fake', emoji: '🧭' });
     const repoParentToken = harness.launches.find((l) => l.sessionId === repoParent.id)!.mcpToken;
     const client = await connect(repoParentToken);
-    const result = await client.callTool({ name: 'create_session', arguments: { directory: repoPath, name: 'Gimli' } });
+    const result = await client.callTool({ name: 'create_session', arguments: { directory: subdirectoryOf(repoPath), name: 'Gimli' } });
     expect(result.isError).toBeFalsy();
   });
 
