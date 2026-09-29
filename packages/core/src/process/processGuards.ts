@@ -10,4 +10,8 @@ import { log } from '../logger.js';
 export function installProcessGuards(proc: NodeJS.Process = process): void {
   proc.on('unhandledRejection', (reason) => log('error', 'unhandledRejection: daemon continuing', reason));
   proc.on('uncaughtException', (error) => log('error', 'uncaughtException: daemon continuing', error));
+  // The daemon's home holds session tokens and a db full of message bodies (MAJ-02): every file created
+  // from here on (config.ts, database.ts, a session's own settings files) must default to owner-only
+  // rather than trust each call site to pass its own mode.
+  proc.umask(0o077);
 }

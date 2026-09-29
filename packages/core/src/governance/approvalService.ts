@@ -18,6 +18,12 @@ export class ApprovalService {
 
   constructor(private readonly deps: { db: DatabaseSync; bus: EventBus; timeoutMs?: number }) {
     this.timeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    // Decoupled from SessionService through the bus, the same way the WS broadcast is: a session closing
+    // or relaunching moots whatever approval was still gating it (AUD-07).
+    this.deps.bus.subscribe((event) => {
+      if (event.type === 'session.closed') this.expirePendingForSession(event.sessionId, 'session closed');
+      if (event.type === 'session.relaunching') this.expirePendingForSession(event.sessionId, 'session relaunching');
+    });
   }
 
   request(input: { sessionId: string; toolName: string; toolInput: unknown }): Promise<ApprovalDecision> {
@@ -28,9 +34,23 @@ export class ApprovalService {
     this.deps.bus.emit({ type: 'approval.created', approval });
 
     return new Promise<ApprovalDecision>((resolve) => {
-      const timer = setTimeout(() => { this.expire(approval.id); resolve('ask'); }, this.timeoutMs);
+      const timer = setTimeout(() => this.expireWithReason(approval.id, 'no decision before hook timeout'), this.timeoutMs);
       this.waiters.set(approval.id, (decision) => { clearTimeout(timer); resolve(decision); });
     });
+  }
+
+  // Called at daemon startup (main.ts, before any hook can reach the fresh instance): a row still 'pending'
+  // from before the restart has no live waiter any more — the process that would have resolved it died
+  // with the old daemon — so it would otherwise sit pending forever, never decidable and never reopenable.
+  expireAllPending(reason: string): void {
+    for (const approval of this.listPending()) this.expireWithReason(approval.id, reason);
+  }
+
+  // Called from SessionService when a session closes or relaunches (AUD-07): whatever approval was still
+  // gating it is now moot, and its requester (the hook still awaiting a decision) must not be left hanging
+  // for the full request() timeout.
+  expirePendingForSession(sessionId: string, reason: string): void {
+    for (const approval of this.listPending().filter((a) => a.sessionId === sessionId)) this.expireWithReason(approval.id, reason);
   }
 
   decide(input: { approvalId: string; behavior: 'allow' | 'deny'; reason?: string }): Approval {
@@ -53,9 +73,13 @@ export class ApprovalService {
     return row ? toApproval(row) : undefined;
   }
 
-  private expire(id: string): void {
+  // Resolves the waiting hook (if the process that requested it, and this ApprovalService instance, are
+  // still both alive — a daemon-restart expiry has no waiter left to call) the same way a timed-out
+  // approval always has: 'ask', which the CLI reads as "fall back to your own interactive prompt".
+  private expireWithReason(id: string, reason: string): void {
     if (this.get(id)?.status !== 'pending') return;
-    this.resolve(id, 'expired', 'no decision before hook timeout');
+    this.resolve(id, 'expired', reason);
+    this.waiters.get(id)?.('ask');
     this.waiters.delete(id);
   }
 

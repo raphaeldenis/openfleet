@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
 import { FakeHarness } from '../harness/fakeHarness.js';
-import { ApprovalService } from '../governance/approvalService.js';
+import { ApprovalError, ApprovalService } from '../governance/approvalService.js';
 import { ManagerRepository } from '../managers/managerRepository.js';
 import { ManagerService } from '../managers/managerService.js';
 import { PulseScheduler } from '../managers/pulseScheduler.js';
@@ -128,6 +128,76 @@ describe('POST /hooks/:token', () => {
     expect(line as string).toContain('/hooks/:token');
     applyInputSpy.mockRestore();
     consoleErrorSpy.mockRestore();
+  });
+
+  // Both tests below need an approval that would NOT resolve on its own within the test's lifetime, so a
+  // long-lived timeoutMs (far past vitest's own per-test timeout) rules out the pre-existing timeout
+  // fallback from masking a broken close/relaunch expiry as a false green — only the AUD-07 code path
+  // being tested can resolve these in time. Self-contained: the shared beforeEach's approvals uses a
+  // short 100ms timeoutMs for its own (unrelated) fallback test.
+  async function setupLongTimeoutFixture() {
+    const localDb = openDatabase(':memory:');
+    const localBus = new EventBus();
+    const localSessions = new SessionService({ db: localDb, bus: localBus, harnesses: [new FakeHarness()], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt' });
+    const localApprovals = new ApprovalService({ db: localDb, bus: localBus, timeoutMs: 60_000 });
+    const managerRepo = new ManagerRepository(localDb);
+    const pulseScheduler = new PulseScheduler({ managers: managerRepo, sessions: localSessions, bus: localBus });
+    const managers = new ManagerService({ managers: managerRepo, sessions: localSessions, bus: localBus, scheduler: pulseScheduler });
+    const localServer = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions: localSessions, approvals: localApprovals, managers, pulseScheduler, bus: localBus, modelTable: DEFAULT_MODEL_TABLE, modelConfigPath: '/tmp/of-unused/config.json' });
+    const session = await localSessions.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    const localHookToken = (localDb.prepare('SELECT hook_token FROM sessions WHERE id = ?').get(session.id) as { hook_token: string }).hook_token;
+    const localPost = (path: string, body: unknown) => fetch(`${localServer.url}${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    return { sessions: localSessions, approvals: localApprovals, server: localServer, hookToken: localHookToken, post: localPost, sessionId: session.id };
+  }
+
+  it('closing a gated session expires its pending approval, answering the waiting hook with the ask fallback instead of leaving it hanging (AUD-07)', async () => {
+    const fx = await setupLongTimeoutFixture();
+    try {
+      const pending = fx.post(`/hooks/${fx.hookToken}`, { session_id: 'c', hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'ls' } });
+      await vi.waitFor(() => expect(fx.approvals.listPending()).toHaveLength(1), { interval: APPROVAL_POLL_INTERVAL_MS });
+      const approvalId = fx.approvals.listPending()[0]!.id;
+
+      await fx.sessions.close(fx.sessionId);
+
+      const body = await (await pending).json();
+      expect(body).toEqual({});
+      expect(fx.approvals.listPending()).toEqual([]);
+      expect(() => fx.approvals.decide({ approvalId, behavior: 'allow' })).toThrow(ApprovalError);
+    } finally {
+      await fx.server.close();
+    }
+  });
+
+  it('relaunching a session (a deferred model change released once its gate clears) expires any approval still pending for it, instead of leaving that one hanging for the daemon\'s full timeout (AUD-07)', async () => {
+    const fx = await setupLongTimeoutFixture();
+    try {
+      await fx.post(`/hooks/${fx.hookToken}`, { session_id: 'c', hook_event_name: 'SessionStart' });
+
+      // Two tool calls request approval close together; the first gates the session, the second piles up
+      // pending behind it — Claude Code can fire PermissionRequest for parallel tool_use blocks in one turn.
+      const gating = fx.post(`/hooks/${fx.hookToken}`, { session_id: 'c', hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'ls' } });
+      await vi.waitFor(() => expect(fx.approvals.listPending()).toHaveLength(1), { interval: APPROVAL_POLL_INTERVAL_MS });
+      const gatingApprovalId = fx.approvals.listPending()[0]!.id;
+      const orphaned = fx.post(`/hooks/${fx.hookToken}`, { session_id: 'c', hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'ls -la' } });
+      await vi.waitFor(() => expect(fx.approvals.listPending()).toHaveLength(2), { interval: APPROVAL_POLL_INTERVAL_MS });
+      const orphanedApprovalId = fx.approvals.listPending().find((a) => a.id !== gatingApprovalId)!.id;
+
+      // The session is gated (not deliverable), so this defers instead of relaunching yet.
+      expect(fx.sessions.updateModel(fx.sessionId, 'claude-opus-5-5').status).toBe('deferred');
+
+      // Deciding the gating approval frees the turn; Stop then makes the session deliverable again, which
+      // releases the deferred relaunch while the orphaned approval is still sitting pending.
+      fx.approvals.decide({ approvalId: gatingApprovalId, behavior: 'allow' });
+      await gating;
+      await fx.post(`/hooks/${fx.hookToken}`, { session_id: 'c', hook_event_name: 'Stop' });
+
+      const orphanedBody = await (await orphaned).json();
+      expect(orphanedBody).toEqual({});
+      expect(fx.approvals.listPending()).toEqual([]);
+      expect(() => fx.approvals.decide({ approvalId: orphanedApprovalId, behavior: 'allow' })).toThrow(ApprovalError);
+    } finally {
+      await fx.server.close();
+    }
   });
 
   it('a hook posted with the pre-restart hook token is a no-op once resume has rotated it', async () => {
