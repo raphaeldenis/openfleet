@@ -127,6 +127,29 @@ describe('user gets a clean answer from the paged reads at the limit and offset 
     expect(new Set([first.items[0]!.title, second.items[0]!.title])).toEqual(new Set(['a', 'b']));
   });
 
+  it.each([['offset=-1'], ['offset=abc'], ['offset='], ['offset=9007199254740993']])('refuses %s on the search and the row history with 400', async (query) => {
+    const store = await createStore();
+    const inserted = await (await call('POST', `/api/data-stores/${store.id}/rows`, { projectId: 'p1', rows: [{}] })).json() as { items: { id: string }[] };
+
+    const search = await call('GET', `/api/notes/search?projectId=p1&q=a&${query}`);
+    const history = await call('GET', `/api/data-stores/${store.id}/rows/${inserted.items[0]!.id}/changes?projectId=p1&${query}`);
+
+    expect([search.status, history.status]).toEqual([400, 400]);
+  });
+
+  it('pages the search by offset and answers the page shape with the real total', async () => {
+    for (const title of ['a', 'b', 'c']) await createNote({ title, bodyMd: 'zebra' });
+
+    const firstPage = await (await call('GET', '/api/notes/search?projectId=p1&q=zebra&limit=2')).json() as { items: { id: string }[]; total: number };
+    const lastPage = await (await call('GET', '/api/notes/search?projectId=p1&q=zebra&limit=2&offset=2')).json() as { items: { id: string }[]; total: number };
+    const blank = await (await call('GET', '/api/notes/search?projectId=p1&q=&offset=4')).json();
+
+    expect([firstPage.items.length, firstPage.total, lastPage.items.length, lastPage.total]).toEqual([2, 3, 1, 3]);
+    expect(lastPage).toMatchObject({ limit: 2, offset: 2 });
+    expect(new Set([...firstPage.items, ...lastPage.items].map((item) => item.id)).size).toBe(3);
+    expect(blank).toEqual({ items: [], total: 0, limit: 50, offset: 4 });
+  });
+
   it('answers the rows and history reads at their own maximum and one above', async () => {
     const store = await createStore();
 

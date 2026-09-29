@@ -53,7 +53,7 @@ export interface NoteSearchResult extends NoteSummary {
 }
 
 export const MAX_NOTE_TITLE_CHARS = 512;
-const TitleSchema = z.string().trim().min(1).max(MAX_NOTE_TITLE_CHARS);
+export const TitleSchema = z.string().trim().min(1).max(MAX_NOTE_TITLE_CHARS);
 
 export const CreateNoteRequestSchema = z.object({
   projectId: z.string().min(1),

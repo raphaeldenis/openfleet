@@ -55,6 +55,7 @@ export interface NoteListOptions {
 export interface NoteSearchOptions {
   projectId: string;
   limit: number;
+  offset?: number;
 }
 
 interface Row {
@@ -96,6 +97,11 @@ export class NoteRepository {
   get(id: string): Note | undefined {
     const row = this.db.prepare('SELECT * FROM notes WHERE id = ?').get(id) as Row | undefined;
     return row ? toNote(row) : undefined;
+  }
+  /** Ownership lookup that never loads the body. */
+  getProjectId(id: string): string | undefined {
+    const row = this.db.prepare('SELECT project_id FROM notes WHERE id = ?').get(id) as { project_id: string } | undefined;
+    return row?.project_id;
   }
   getByFilePath(filePath: string): Note | undefined {
     const row = this.db.prepare('SELECT * FROM notes WHERE file_path = ?').get(filePath) as Row | undefined;
@@ -174,16 +180,22 @@ export class NoteRepository {
     return n;
   }
   /** Same match as `search`, but reads only summary columns: no body is loaded. */
-  searchSummaries(escapedQuery: string, { projectId, limit }: NoteSearchOptions): NoteSummaryHit[] {
+  searchSummaries(escapedQuery: string, { projectId, limit, offset = 0 }: NoteSearchOptions): NoteSummaryHit[] {
     const rows = this.db.prepare(
       `SELECT n.id, n.title, n.folder, n.rev, n.shared, n.file_path IS NOT NULL AS is_file_backed, n.updated_at,
               snippet(note_fts, 2, '', '', '…', 12) AS snippet
        FROM notes n JOIN note_fts ON note_fts.note_id = n.id
        WHERE note_fts MATCH ? AND n.project_id = ?
-       ORDER BY rank
-       LIMIT ?`,
-    ).all(escapedQuery, projectId, limit) as unknown as (SummaryRow & { snippet: string })[];
+       ORDER BY rank, n.id
+       LIMIT ? OFFSET ?`,
+    ).all(escapedQuery, projectId, limit, offset) as unknown as (SummaryRow & { snippet: string })[];
     return rows.map((row) => ({ note: toSummary(row), snippet: row.snippet }));
+  }
+  countSearchMatches(escapedQuery: string, projectId: string): number {
+    const { n } = this.db.prepare(
+      `SELECT COUNT(*) AS n FROM notes n JOIN note_fts ON note_fts.note_id = n.id WHERE note_fts MATCH ? AND n.project_id = ?`,
+    ).get(escapedQuery, projectId) as { n: number };
+    return n;
   }
   /** `escapedQuery` must already be FTS5-safe (see noteTools.ts's query escaping) — this method trusts it verbatim. */
   search(escapedQuery: string, { projectId, limit }: NoteSearchOptions): NoteSearchHit[] {

@@ -96,20 +96,25 @@ interface ImportCandidate {
  *
  * **Write-through ordering** (`writeThrough`): the size cap is checked first, then a temp file is written
  * next to the target ('wx', fsynced — durable once `writeFileExclusiveSync` returns), THEN the DB row
- * commits (body + source_hash + rev CAS, one transaction), THEN the temp file is renamed over the target.
- * On any failure the temp file is removed and the target is never touched — a failed CAS or an oversized
- * body leaves neither the DB nor the visible file changed.
+ * (body + source_hash + rev CAS) and the rename of the temp file over the target run inside ONE
+ * transaction, the rename last. On any failure the temp file is removed and the target is never touched —
+ * a failed CAS, an oversized body, a vanished docs folder or a failed rename leaves neither the DB nor
+ * the visible file changed (the revision and version row roll back with the failed rename). A docs folder
+ * or subfolder that disappeared (ENOENT, ENOTDIR) surfaces as `NoteFileUnreadableError`; any other fs
+ * failure (ENOSPC, EROFS, EACCES, EXDEV) propagates unchanged, so the caller sees an internal error.
  *
- * This order never leaves a mismatch `reconcileOnBoot` can't heal: before the DB commits, the target
- * file is untouched (nothing to reconcile — the write never happened as far as disk is concerned); the
- * only crash window is between the DB commit and the rename, where the DB holds the new body/hash but
- * the target file still holds the old bytes. `reconcileOnBoot` hashes the actual file and compares it
+ * This order never leaves a mismatch `reconcileOnBoot` can't heal: before the rename, the target
+ * file is untouched (nothing to reconcile — the write never happened as far as disk is concerned). Two
+ * windows leave the file ahead of the DB, the file holding the new bytes while the DB still holds the old
+ * body/hash: a crash between the rename and the transaction's COMMIT, and a COMMIT failure after a
+ * successful rename. In the COMMIT-failure window the client gets a 500, and the edit lands later as a
+ * revision authored by the external-edit author ('disk'), not by the user. Until reconcile runs, a PATCH
+ * is refused with `stale_revision`. `reconcileOnBoot` hashes the actual file and compares it
  * to `notes.source_hash`; on a mismatch it always applies whatever is really on disk as a new 'disk'
  * revision (`applyExternalEdit`, decision 2) — so after reconcile, `source_hash` is by construction the
- * hash of the bytes reconcile just read. The attempted write is not lost: it is still the version row
- * the DB commit created, just superseded by the disk-observed revision. Renaming last also means the
- * file only changes at the very end, once our own DB bookkeeping is already committed — so `watch`'s
- * hash comparison (the self-write guard) never races an in-flight transaction of our own.
+ * hash of the bytes reconcile just read, so the user's write is kept, never reverted. The whole sequence
+ * is synchronous, so `watch`'s debounced hash comparison (the self-write guard) only runs after the
+ * transaction has committed.
  *
  * **Create ordering** (`createFileBackedNote`) is the opposite: the size cap is checked, a temp file is
  * written, THEN renamed onto the (not-yet-existing) target, THEN the DB row is inserted. If the DB insert
@@ -161,23 +166,26 @@ export class DocsFolderService {
     const current = this.requireFileBackedNote(noteId);
     const targetPath = current.filePath!;
     const project = this.requireProject(current.projectId);
-    const realDocsFolderPath = this.deps.fs.realpathSync(this.requireDocsFolderPath(project));
+    const docsFolderPath = this.requireDocsFolderPath(project);
+    const realDocsFolderPath = this.orUnreadable(docsFolderPath, () => this.deps.fs.realpathSync(docsFolderPath));
     if (!this.isFileWithinDocsFolder(realDocsFolderPath, targetPath)) throw new PathEscapesDocsFolderError(targetPath);
     this.assertWithinCap(input.bodyMd);
     this.refuseIfDiskEditIsUnreconciled(current);
 
-    const tempPath = this.writeTempFile(targetPath, input.bodyMd);
+    const tempPath = this.orUnreadable(targetPath, () => this.writeTempFile(targetPath, input.bodyMd));
     try {
-      const note = this.deps.notes.updateFileBacked(noteId, {
-        bodyMd: input.bodyMd,
-        sourceHash: sha256(input.bodyMd),
-        expectedRev: input.expectedRev,
-        author: input.author,
+      return this.deps.notes.runAtomically(() => {
+        const note = this.deps.notes.updateFileBacked(noteId, {
+          bodyMd: input.bodyMd,
+          sourceHash: sha256(input.bodyMd),
+          expectedRev: input.expectedRev,
+          author: input.author,
+        });
+        this.orUnreadable(targetPath, () => this.deps.fs.renameSync(tempPath, targetPath));
+        return note;
       });
-      this.deps.fs.renameSync(tempPath, targetPath);
-      return note;
     } catch (error) {
-      this.deps.fs.unlinkSync(tempPath);
+      this.removeTempFileQuietly(tempPath);
       throw error;
     }
   }
@@ -377,6 +385,30 @@ export class DocsFolderService {
       if (!this.deps.fs.existsSync(candidate)) return candidate;
     }
     throw new Error(`could not find a free filename for "${title}" under ${realFolderDir}`);
+  }
+
+  /** A missing folder or file (ENOENT, ENOTDIR) reads as an unreadable note file; every other fs failure (full disk, permissions, EXDEV) propagates unchanged. */
+  private orUnreadable<T>(path: string, run: () => T): T {
+    try {
+      return run();
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      const isMissingFolderOrFile = code === 'ENOENT' || code === 'ENOTDIR';
+      if (!isMissingFolderOrFile) throw error;
+      throw new NoteFileUnreadableError(path, error);
+    }
+  }
+
+  /** A temp file already gone (ENOENT) needs no cleanup; any other unlink failure is warned with its code only, never the path. */
+  private removeTempFileQuietly(tempPath: string): void {
+    try {
+      this.deps.fs.unlinkSync(tempPath);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      const isAlreadyGone = code === 'ENOENT';
+      if (isAlreadyGone) return;
+      console.warn(`note temp file cleanup failed: ${code}`);
+    }
   }
 
   private writeTempFile(targetPath: string, contents: string): string {

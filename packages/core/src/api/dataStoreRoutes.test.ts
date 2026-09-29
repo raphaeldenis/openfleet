@@ -391,6 +391,18 @@ describe('data store REST routes', () => {
       expect(tooMany.status).toBe(400);
     });
 
+    it('pages the history by offset and answers the page shape with the real total', async () => {
+      const { store, name, qty } = seedStore();
+      const [bolt] = (await insertRows(store.id, { name, qty }, [['bolt', 1]])).items;
+      for (const quantity of [2, 3]) await call('PATCH', `/api/data-stores/${store.id}/rows`, { projectId: 'p1', updates: [{ rowId: bolt!.id, patch: { [qty.id]: quantity } }] });
+      const changesPath = `/api/data-stores/${store.id}/rows/${bolt!.id}/changes?projectId=p1`;
+
+      const everything = await json(await call('GET', changesPath));
+      const secondNewest = await json(await call('GET', `${changesPath}&limit=1&offset=1`));
+
+      expect(secondNewest).toEqual({ items: [everything.items[1]], total: 3, limit: 1, offset: 1 });
+    });
+
     it('asks the repository for only the requested number of changes', async () => {
       const { store, name, qty } = seedStore();
       const [bolt] = (await insertRows(store.id, { name, qty }, [['bolt', 1]])).items;

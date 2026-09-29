@@ -5,21 +5,20 @@ import {
 } from '@openfleet/shared';
 import { z } from 'zod';
 import type { DocsFolderService } from '../notes/docsFolderService.js';
+import { MAX_QUERY_CHARS, MAX_QUERY_TERMS, MAX_SEARCH_RESULTS, buildFtsQuery } from '../notes/ftsQuery.js';
 import { NoteFileUnreadableError, PathEscapesDocsFolderError } from '../notes/docsFolderService.js';
 import type { NoteRepository } from '../notes/noteRepository.js';
 import { FileBackedNoteError, NoteNotFoundError, NoteTooLargeError, StaleRevisionError, VersionNotFoundError, type NoteService } from '../notes/noteService.js';
 import { json, queryParams, type Router } from './router.js';
 
 const REST_AUTHOR = 'You';
-const MAX_SEARCH_RESULTS = 50;
-const MAX_QUERY_CHARS = 512;
-const MAX_QUERY_TERMS = 16;
 
 const ProjectScopeSchema = z.object({ projectId: z.string().min(1) });
 const ListNotesQuerySchema = ProjectScopeSchema.extend({ folder: NoteFolderSchema.optional() }).extend(pageQuerySchema(MAX_NOTE_PAGE_LIMIT).shape);
 const VersionsQuerySchema = ProjectScopeSchema.extend(pageQuerySchema(MAX_NOTE_PAGE_LIMIT).shape);
 const SearchNotesQuerySchema = ProjectScopeSchema.extend({ q: z.string().max(MAX_QUERY_CHARS).default(''),
   limit: queryInteger.pipe(z.number().min(1).max(MAX_SEARCH_RESULTS)).default(MAX_SEARCH_RESULTS),
+  offset: queryInteger.default(0),
 });
 
 export interface NoteRouteDeps {
@@ -27,8 +26,6 @@ export interface NoteRouteDeps {
   noteRepo: NoteRepository;
   docs: DocsFolderService;
 }
-
-const escapeFtsTerms = (terms: string[]) => terms.map((term) => `"${term.replace(/"/g, '""')}"*`).join(' ');
 
 const isForeignKeyError = (error: unknown) =>
   error instanceof Error && (error as NodeJS.ErrnoException).code === 'ERR_SQLITE_ERROR' && /FOREIGN KEY/i.test(error.message);
@@ -65,6 +62,10 @@ export function registerNoteRoutes(router: Router, { notes, noteRepo, docs }: No
     return note;
   }
 
+  function assertOwnNote(projectId: string, id: string): void {
+    if (noteRepo.getProjectId(id) !== projectId) throw new NoteNotFoundError(id);
+  }
+
   function commitBody(current: Note, bodyMd: string, expectedRev: number): Note {
     const write = { bodyMd, expectedRev, author: REST_AUTHOR };
     return current.filePath ? docs.writeThrough(current.id, write) : notes.update(current.id, write);
@@ -85,13 +86,13 @@ export function registerNoteRoutes(router: Router, { notes, noteRepo, docs }: No
   });
 
   router.add('GET', '/api/notes/search', ({ req, res }) => {
-    const { projectId, q, limit } = SearchNotesQuerySchema.parse(queryParams(req));
-    const terms = q.replaceAll('\0', ' ').trim().split(/\s+/).filter((term) => term !== '');
-    if (terms.length > MAX_QUERY_TERMS) return json(res, 400, { error: 'invalid_body', detail: `too many terms in query (max ${MAX_QUERY_TERMS})` });
-    if (terms.length === 0) return json(res, 200, { items: [], total: 0 });
-    const hits = noteRepo.searchSummaries(escapeFtsTerms(terms), { projectId, limit });
+    const { projectId, q, limit, offset } = SearchNotesQuerySchema.parse(queryParams(req));
+    const ftsQuery = buildFtsQuery(q);
+    if (ftsQuery.outcome === 'too_many_terms') return json(res, 400, { error: 'invalid_body', detail: `too many terms in query (max ${MAX_QUERY_TERMS})` });
+    if (ftsQuery.outcome === 'blank') return json(res, 200, { items: [], total: 0, limit, offset });
+    const hits = noteRepo.searchSummaries(ftsQuery.match, { projectId, limit, offset });
     const items = hits.map(({ note, snippet }) => ({ ...note, snippet }));
-    json(res, 200, { items, total: items.length });
+    json(res, 200, { items, total: noteRepo.countSearchMatches(ftsQuery.match, projectId), limit, offset });
   });
 
   router.add('GET', '/api/notes/:id', ({ req, res, params }) => {
@@ -117,7 +118,7 @@ export function registerNoteRoutes(router: Router, { notes, noteRepo, docs }: No
   router.add('GET', '/api/notes/:id/versions', ({ req, res, params }) => {
     const { projectId, limit, offset } = VersionsQuerySchema.parse(queryParams(req));
     respondToNoteErrors(res, () => {
-      requireOwnNote(projectId, params.id!);
+      assertOwnNote(projectId, params.id!);
       const items = noteRepo.listVersionSummaries(params.id!, { limit, offset });
       const page: Page<NoteVersionSummary> = { items, total: noteRepo.countVersions(params.id!), limit, offset };
       json(res, 200, page);

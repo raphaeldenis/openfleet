@@ -228,6 +228,11 @@ export class NoteService {
     return this.repo.get(id)!;
   }
 
+  /** Runs `work` in one transaction: a throw inside it rolls back every note write it made. */
+  runAtomically<T>(work: () => T): T {
+    return this.inTransaction(work);
+  }
+
   getExpanded(id: string, { viewerProjectId }: GetExpandedOptions): ExpandedNote {
     const note = this.require(id);
     const lookup = this.mentionLookupFor(viewerProjectId);
