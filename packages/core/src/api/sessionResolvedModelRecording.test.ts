@@ -1,7 +1,8 @@
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync, appendFileSync } from 'node:fs';
+import { execFileSync, spawn } from 'node:child_process';
+import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, rmdirSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
 import { ApprovalService } from '../governance/approvalService.js';
@@ -231,6 +232,21 @@ describe('resolved model recording from a session\'s transcript', () => {
     expect(await listed(id)).not.toHaveProperty('resolvedModel');
   });
 
+  it('answers hooks and records nothing when the transcript path is a named pipe nobody writes to', async () => {
+    const id = await createSession('opus');
+    execFileSync('mkfifo', [transcriptPath]);
+    const writerAppearsAfterSeconds = 2;
+    spawn('sh', ['-c', `sleep ${writerAppearsAfterSeconds}; exec 3<>"$0"`, transcriptPath], { stdio: 'ignore' }).unref();
+    const startedAt = Date.now();
+
+    const reply = await sendHook(id, preToolUse);
+    const answeredAfterMs = Date.now() - startedAt;
+
+    expect(reply.status).toBe(200);
+    expect(answeredAfterMs).toBeLessThan(writerAppearsAfterSeconds * 1000 / 2);
+    expect(await listed(id)).not.toHaveProperty('resolvedModel');
+  }, 10_000);
+
   it('finds the resolved model of a transcript far larger than the window read at the end of the file', async () => {
     const id = await createSession('opus');
     const filler = `${JSON.stringify({ type: 'user', message: { role: 'user', content: 'x'.repeat(1000) } })}\n`;
@@ -304,6 +320,129 @@ describe('resolved model recording from a session\'s transcript', () => {
     expect(await reply.json()).toEqual({ status: 'deferred' });
     expect(whileDeferred).toMatchObject({ model: 'claude-sonnet-5-5', resolvedModel: 'claude-opus-5-5' });
     expect(afterRelaunch).not.toHaveProperty('resolvedModel');
+  });
+
+  it('records nothing from a transcript swapped for a symlink leaving the projects directory between two hooks', async () => {
+    const id = await createSession('opus');
+    writeFileSync(transcriptPath, '');
+    const outsideTarget = join(mkdtempSync(join(tmpdir(), 'of-outside-')), 'real.jsonl');
+    writeFileSync(outsideTarget, assistantLine({ model: 'claude-opus-5-5' }));
+    await sendHook(id, preToolUse);
+
+    unlinkSync(transcriptPath);
+    symlinkSync(outsideTarget, transcriptPath);
+    await sendHook(id, preToolUse);
+
+    expect(await listed(id)).not.toHaveProperty('resolvedModel');
+  });
+
+  it('keeps the resolved model of a session relaunched for a permission-mode change', async () => {
+    const id = await createSession('claude-opus-5-5');
+    await sendHook(id, { hook_event_name: 'SessionStart' });
+    writeFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-5' }));
+    await sendHook(id, preToolUse);
+    await sendHook(id, stop);
+
+    await postJson(`/api/sessions/${id}/permission-mode`, { mode: 'plan' });
+    await expect.poll(() => harness.launches.length).toBe(2);
+
+    expect(await listed(id)).toMatchObject({ resolvedModel: 'claude-opus-5-5', cliVersion: CLI_VERSION });
+  });
+
+  it('keeps the resolved model through a permission-mode relaunch that follows a deferred model switch abandoned by close and reopen', async () => {
+    const id = await createSession('claude-opus-5-5');
+    await sendHook(id, { hook_event_name: 'SessionStart' });
+    writeFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-5' }));
+    await sendHook(id, preToolUse);
+    await sendHook(id, { hook_event_name: 'UserPromptSubmit' });
+    const switchReply = await postJson(`/api/sessions/${id}/model`, { model: 'claude-sonnet-5-5' });
+    await postJson(`/api/sessions/${id}/close`);
+    await postJson(`/api/sessions/${id}/reopen`);
+    await sendHook(id, { hook_event_name: 'SessionStart' });
+    const afterReopen = await listed(id);
+
+    const modeReply = (await (await postJson(`/api/sessions/${id}/permission-mode`, { mode: 'plan' })).json()) as { status: string };
+    if (modeReply.status === 'deferred') await sendHook(id, stop);
+    await expect.poll(() => harness.launches.length).toBe(3);
+    const afterModeRelaunch = await listed(id);
+
+    expect(await switchReply.json()).toEqual({ status: 'deferred' });
+    expect(afterReopen).toMatchObject({ model: 'claude-sonnet-5-5', resolvedModel: 'claude-opus-5-5' });
+    expect(afterModeRelaunch).toMatchObject({ model: 'claude-sonnet-5-5', resolvedModel: 'claude-opus-5-5' });
+  });
+
+  it('answers hooks and records nothing when the transcript path is a directory, then an unreadable file', async () => {
+    const id = await createSession('opus');
+    mkdirSync(transcriptPath);
+    const withDirectory = await sendHook(id, preToolUse);
+    const afterDirectory = await listed(id);
+    rmdirSync(transcriptPath);
+    writeFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-5' }));
+    chmodSync(transcriptPath, 0o000);
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const withUnreadableFile = await sendHook(id, preToolUse);
+    const afterUnreadableFile = await listed(id);
+    consoleErrorSpy.mockRestore();
+
+    expect(withDirectory.status).toBe(200);
+    expect(withUnreadableFile.status).toBe(200);
+    expect(afterDirectory).not.toHaveProperty('resolvedModel');
+    expect(afterUnreadableFile).not.toHaveProperty('resolvedModel');
+  });
+
+  it('logs a persistent transcript read failure once per launch, however many hooks follow', async () => {
+    const id = await createSession('opus');
+    writeFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-5' }));
+    chmodSync(transcriptPath, 0o000);
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await sendHook(id, preToolUse);
+    await sendHook(id, preToolUse);
+    await sendHook(id, stop);
+    const resolvedModelErrors = consoleErrorSpy.mock.calls.filter((call) => String(call[0]).includes('resolved model'));
+    consoleErrorSpy.mockRestore();
+
+    expect(resolvedModelErrors).toHaveLength(1);
+  });
+
+  it.each(['2.1.284 trailing junk', '2.1.284-beta\n', `2.1.284${'a'.repeat(21)}`])('never shows the CLI version %j', async (version) => {
+    const id = await createSession('opus');
+    writeFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-5', version }));
+
+    await sendHook(id, preToolUse);
+
+    expect(await listed(id)).not.toHaveProperty('resolvedModel');
+  });
+
+  it('shows the resolved model of an assistant line written at the very instant the session launched', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const launchInstant = new Date('2026-09-29T10:00:00.000Z');
+    vi.setSystemTime(launchInstant);
+    try {
+      const id = await createSession('opus');
+      writeFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-5', at: launchInstant }));
+
+      await sendHook(id, preToolUse);
+
+      expect(await listed(id)).toMatchObject({ resolvedModel: 'claude-opus-5-5' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('finds the assistant line that starts exactly where the tail window starts', async () => {
+    const id = await createSession('opus');
+    const paddingLine = (bytes: number) => {
+      const emptyPaddingLine = `${JSON.stringify({ type: 'user', pad: '' })}\n`;
+      return `${JSON.stringify({ type: 'user', pad: 'x'.repeat(bytes - emptyPaddingLine.length) })}\n`;
+    };
+    const targetLine = assistantLine({ model: 'claude-model-at-window-start', at: inOneSecond() });
+    writeFileSync(transcriptPath, [paddingLine(100), targetLine, paddingLine(TAIL_WINDOW_BYTES - targetLine.length)].join(''));
+
+    await sendHook(id, preToolUse);
+
+    expect(await listed(id)).toMatchObject({ resolvedModel: 'claude-model-at-window-start' });
   });
 
   it('relaunches a session with the alias it was launched with, never with the model id recorded for it', async () => {

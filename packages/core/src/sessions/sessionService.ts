@@ -263,6 +263,7 @@ export class SessionService {
   private readonly interruptWatches = new Map<string, InterruptWatch>();
   // Presence means "this launch has no recorded resolved model yet"; the value is the launch's start time.
   private readonly launchedAt = new Map<string, string>();
+  private readonly launchesWithLoggedRecordingFailure = new Set<string>();
   // Sessions whose model was switched and whose relaunch has not happened yet: the resolved model the old
   // launch recorded stays visible until the relaunch really replaces the process.
   private readonly modelSwitchesAwaitingRelaunch = new Set<string>();
@@ -290,6 +291,7 @@ export class SessionService {
     this.warnIfPermissiveSettings(spec.harness, spec.directory);
     const harness = this.harnessFor(spec.harness);
     this.launchedAt.set(id, new Date().toISOString());
+    this.launchesWithLoggedRecordingFailure.delete(id);
     let handle: HarnessHandle;
     try {
       handle = harness.start({
@@ -589,6 +591,9 @@ export class SessionService {
       this.launchedAt.delete(sessionId);
       this.deps.bus.emit({ type: 'session.updated', session: this.repo.get(sessionId)! });
     } catch (err) {
+      const isFirstFailureOfThisLaunch = !this.launchesWithLoggedRecordingFailure.has(sessionId);
+      if (!isFirstFailureOfThisLaunch) return;
+      this.launchesWithLoggedRecordingFailure.add(sessionId);
       log('error', `resolved model: session ${sessionId} could not record its resolved model`, err);
     }
   }
@@ -974,6 +979,7 @@ export class SessionService {
     this.disarmInterruptWatch(sessionId);
     this.transcriptPaths.delete(sessionId);
     this.launchedAt.delete(sessionId);
+    this.launchesWithLoggedRecordingFailure.delete(sessionId);
     this.modelSwitchesAwaitingRelaunch.delete(sessionId);
     this.stopDelivery(sessionId);
     this.pendingRelaunches.delete(sessionId);
@@ -1009,6 +1015,7 @@ export class SessionService {
     const mcpToken = newToken();
     this.repo.setTokens(session.id, hookToken, mcpToken);
     this.launchedAt.set(session.id, new Date().toISOString());
+    this.launchesWithLoggedRecordingFailure.delete(session.id);
     let handle: HarnessHandle;
     try {
       handle = harness.start({
