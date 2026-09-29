@@ -833,6 +833,7 @@ describe('SessionService resume', () => {
 
       expect(warn).toHaveBeenCalledTimes(1);
       expect(warn.mock.calls[0]![0]).toContain('bypassPermissions');
+      expect(warn.mock.calls[0]![0]).toContain('OpenFleet ignores');
       warn.mockRestore();
     });
 

@@ -1019,13 +1019,14 @@ export class SessionService {
     return { launched: true };
   }
 
-  // Read-only, best-effort governance signal: a worktree whose .claude settings grant a permission
-  // bypass can let a local session skip the daemon's own approval gate. Only claude-cli actually reads
-  // those settings, so a 'fake' harness launch is never inspected.
+  // Read-only, best-effort informational signal: a worktree can carry a .claude settings file with a
+  // permission bypass, but launchConfig's `--setting-sources user` (AUD-28) keeps claude-cli from ever
+  // loading it, so this can no longer let a session skip the daemon's own approval gate. Only claude-cli
+  // would otherwise read those settings, so a 'fake' harness launch is never inspected.
   private warnIfPermissiveSettings(harnessId: Session['harness'], directory: string): void {
     if (harnessId !== 'claude-cli') return;
     const warning = findPermissiveSettingsWarning(directory);
-    if (warning) console.warn(`session directory ${directory} has permissive Claude settings: ${warning}`);
+    if (warning) console.warn(`session directory ${directory} has permissive Claude settings, but OpenFleet ignores project settings: ${warning}`);
   }
 
   private resolveResumePermissionMode(session: Session): PermissionMode | undefined {
