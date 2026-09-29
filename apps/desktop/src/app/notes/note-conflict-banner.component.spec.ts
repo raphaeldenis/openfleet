@@ -4,12 +4,13 @@ import { inputBinding, outputBinding } from '@angular/core';
 import { describe, expect, it, vi } from 'vitest';
 import { NoteConflictBannerComponent } from './note-conflict-banner.component';
 
-type Resolution = 'mine' | 'theirs' | 'merge';
+type Resolution = 'mine' | 'theirs' | 'merge' | 'restore';
 
-async function renderBanner(overrides: { author?: string } = {}) {
+async function renderBanner(overrides: { author?: string; restoreRev?: number } = {}) {
   const resolve = vi.fn<(resolution: Resolution) => void>();
   await render(NoteConflictBannerComponent, {
     bindings: [
+      inputBinding('restoreRev', () => overrides.restoreRev ?? null),
       inputBinding('ours', () => 'Retry with exponential backoff from 500 ms to 30 s.'),
       inputBinding('theirs', () => ({ author: overrides.author ?? 'Nori · T7', at: '14:08', body: 'Retry with jitter and replay missed events.' })),
       outputBinding<Resolution>('resolve', resolve),
@@ -70,6 +71,36 @@ describe('NoteConflictBannerComponent', () => {
     await userEvent.click(screen.getByTestId('note-conflict-take-theirs'));
 
     expect(resolve).toHaveBeenCalledExactlyOnceWith('mine');
+  });
+
+  it.each([
+    'note-conflict-keep-mine',
+    'note-conflict-take-theirs',
+    'note-conflict-merge',
+    'note-conflict-restore',
+  ])('after choosing %s every choice is disabled', async (chosenTestId) => {
+    await renderBanner({ restoreRev: 4 });
+
+    await userEvent.click(screen.getByTestId(chosenTestId));
+
+    for (const testId of ['note-conflict-keep-mine', 'note-conflict-take-theirs', 'note-conflict-merge', 'note-conflict-restore']) {
+      expect(screen.getByTestId(testId)).toBeDisabled();
+    }
+  });
+
+  it('user can restore the version they were restoring on top of the latest revision', async () => {
+    const { resolve } = await renderBanner({ restoreRev: 4 });
+
+    await userEvent.click(screen.getByTestId('note-conflict-restore'));
+
+    expect(screen.getByTestId('note-conflict-restore')).toHaveTextContent('Restore rev 4');
+    expect(resolve).toHaveBeenCalledExactlyOnceWith('restore');
+  });
+
+  it('a conflict that is not about a restore offers no restore choice', async () => {
+    await renderBanner();
+
+    expect(screen.queryByTestId('note-conflict-restore')).not.toBeInTheDocument();
   });
 
   it('a conflict with the file on disk names the disk instead of an agent', async () => {

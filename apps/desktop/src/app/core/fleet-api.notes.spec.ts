@@ -41,6 +41,36 @@ describe('FleetApiService notes', () => {
     expect(lastRequest().url.searchParams.get('projectId')).toBe('p 1');
   });
 
+  it('asks for a given page of notes', async () => {
+    await api.listNotes('p1', { limit: 200, offset: 400 });
+
+    expect(lastRequest().url.searchParams.get('limit')).toBe('200');
+    expect(lastRequest().url.searchParams.get('offset')).toBe('400');
+  });
+
+  it('sends no paging parameter when none is asked for', async () => {
+    await api.listNotes('p1');
+
+    expect(lastRequest().url.searchParams.has('limit')).toBe(false);
+    expect(lastRequest().url.searchParams.has('offset')).toBe(false);
+  });
+
+  it('asks for a given page of projects', async () => {
+    await api.listProjects({ limit: 200, offset: 200 });
+
+    expect(lastRequest().url.pathname).toBe('/api/projects');
+    expect(lastRequest().url.searchParams.get('limit')).toBe('200');
+    expect(lastRequest().url.searchParams.get('offset')).toBe('200');
+  });
+
+  it('asks for a given page of versions', async () => {
+    await api.listNoteVersions('p1', 'n1', { limit: 200, offset: 200 });
+
+    expect(lastRequest().url.searchParams.get('projectId')).toBe('p1');
+    expect(lastRequest().url.searchParams.get('limit')).toBe('200');
+    expect(lastRequest().url.searchParams.get('offset')).toBe('200');
+  });
+
   it('reads one note within its project', async () => {
     await api.getNote('p1', 'n/1');
 

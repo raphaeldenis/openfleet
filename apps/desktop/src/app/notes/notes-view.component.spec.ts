@@ -32,7 +32,7 @@ function fakeApi(overrides: Record<string, unknown> = {}) {
     getNote: vi.fn((_projectId: string, noteId: string) => Promise.resolve(NOTE_VIEWS[noteId])),
     createNote: vi.fn().mockResolvedValue(aNoteView({ id: 'new', title: 'Untitled note', bodyMd: '' })),
     updateNote: vi.fn().mockResolvedValue(aNoteView({ id: 'n1', rev: 6, bodyMd: 'updated' })),
-    listNoteVersions: vi.fn().mockResolvedValue({ items: [aNoteVersion({ id: 'v1', rev: 1 }), aNoteVersion({ id: 'v2', rev: 2 })] }),
+    listNoteVersions: vi.fn().mockResolvedValue(page([aNoteVersion({ id: 'v1', rev: 1 }), aNoteVersion({ id: 'v2', rev: 2 })])),
     restoreNoteVersion: vi.fn().mockResolvedValue(aNoteView({ id: 'n1', rev: 4, bodyMd: 'Restored body' })),
     ...overrides,
   };
@@ -78,7 +78,7 @@ describe('NotesViewComponent', () => {
       const { api } = await renderView();
 
       expect(await editorTitle()).toHaveTextContent('daemon-protocol');
-      expect(api.listNotes).toHaveBeenCalledWith('p1');
+      expect(api.listNotes).toHaveBeenCalledWith('p1', { limit: 200 });
       expect(screen.getByTestId('notes-project-select')).toHaveValue('p1');
     });
 
@@ -86,8 +86,8 @@ describe('NotesViewComponent', () => {
       const { api } = await renderView({ queryParams: { projectId: 'p2' } });
 
       expect(await editorTitle()).toHaveTextContent('other-note');
-      expect(api.listNotes).toHaveBeenCalledWith('p2');
-      expect(api.listNotes).not.toHaveBeenCalledWith('p1');
+      expect(api.listNotes).toHaveBeenCalledWith('p2', { limit: 200 });
+      expect(api.listNotes).not.toHaveBeenCalledWith('p1', expect.anything());
     });
 
     it('user can switch project and sees that project’s notes', async () => {
@@ -177,6 +177,20 @@ describe('NotesViewComponent', () => {
       expect(opener.open).toHaveBeenCalledExactlyOnceWith('/Users/me/docs/specs');
     });
 
+    it('user opens the docs root when the note sits at the root of the docs folder', async () => {
+      const summaries = [aNoteSummary({ id: 'n1', title: 'daemon-protocol', folder: null, fileBacked: true })];
+      const api = fakeApi({
+        listNotes: vi.fn().mockResolvedValue(page(summaries)),
+        getNote: vi.fn().mockRejectedValue(new ApiError(500, 'not valid UTF-8')),
+      });
+      const opener = fakeOpener();
+      await renderView({ api, opener });
+
+      await userEvent.click(await screen.findByTestId('note-error-open-in-finder'));
+
+      expect(opener.open).toHaveBeenCalledExactlyOnceWith('/Users/me/docs');
+    });
+
     it('the action is hidden when the project has no docs folder', async () => {
       await renderView({ api: failingFileBackedNote(), opener: fakeOpener(), queryParams: { projectId: 'p2' } });
       // the failing note belongs to the fake list of every project; project p2 has no docs folder
@@ -213,7 +227,7 @@ describe('NotesViewComponent', () => {
       await userEvent.click(await screen.findByTestId('note-history-version-1'));
       await userEvent.click(screen.getByTestId('note-history-restore'));
 
-      expect(api.listNoteVersions).toHaveBeenCalledWith('p1', 'n1');
+      expect(api.listNoteVersions).toHaveBeenCalledWith('p1', 'n1', { limit: 200, offset: 0 });
       expect(api.restoreNoteVersion).toHaveBeenCalledWith('p1', 'n1', { rev: 1, expectedRev: 3 });
       await waitFor(() => expect(screen.getByTestId('note-editor-body')).toHaveTextContent('Restored body'));
     });
