@@ -10,6 +10,7 @@ import { findPermissiveSettingsWarning } from '../harness/claudeCli/permissiveSe
 import { newId, newToken } from '../ids.js';
 import { log } from '../logger.js';
 import { MessageQueue } from './messageQueue.js';
+import { readResolvedModel } from './resolvedModel.js';
 import { wrapAgentMessage } from './messageEnvelope.js';
 import { normalizePermissionMode, SessionRepository } from './sessionRepository.js';
 import { canDeliverNow, nextState, provesTurnEnded, type SessionInput } from './stateMachine.js';
@@ -260,6 +261,11 @@ export class SessionService {
   // knows which file to tail.
   private readonly transcriptPaths = new Map<string, string>();
   private readonly interruptWatches = new Map<string, InterruptWatch>();
+  // Presence means "this launch has no recorded resolved model yet"; the value is the launch's start time.
+  private readonly launchedAt = new Map<string, string>();
+  // Sessions whose model was switched and whose relaunch has not happened yet: the resolved model the old
+  // launch recorded stays visible until the relaunch really replaces the process.
+  private readonly modelSwitchesAwaitingRelaunch = new Set<string>();
   // Set once closeAll() starts; refuses any new launch (create, reopen, resumeOne, a relaunch) so it can
   // never spawn a process outside closeAll's own snapshot and survive daemon shutdown.
   private shuttingDown = false;
@@ -283,6 +289,7 @@ export class SessionService {
     if (existsSync(spec.directory)) this.repo.setDirectoryRealpath(id, realpathSync.native(spec.directory));
     this.warnIfPermissiveSettings(spec.harness, spec.directory);
     const harness = this.harnessFor(spec.harness);
+    this.launchedAt.set(id, new Date().toISOString());
     let handle: HarnessHandle;
     try {
       handle = harness.start({
@@ -381,6 +388,7 @@ export class SessionService {
     this.assertNotShuttingDown();
     const session = this.requireOpen(sessionId);
     this.repo.setModel(sessionId, model);
+    this.modelSwitchesAwaitingRelaunch.add(sessionId);
     this.deps.bus.emit({ type: 'session.model_changed', sessionId, model });
     return this.relaunchOrDefer(sessionId, session.state);
   }
@@ -496,7 +504,8 @@ export class SessionService {
         this.markClosed(sessionId, undefined);
         return;
       }
-      const outcome = this.resumeOne(session);
+      if (this.modelSwitchesAwaitingRelaunch.delete(sessionId)) this.repo.clearResolvedModel(sessionId);
+      const outcome = this.resumeOne(this.repo.get(sessionId)!);
       // A failed launch already marked the session closed (and stopped its delivery) inside resumeOne:
       // entering READY here would resurrect a delivery record for a session that is no longer open.
       if (outcome.launched) this.enter(sessionId, READY);
@@ -528,6 +537,7 @@ export class SessionService {
     if (input.kind === 'hook' && input.event.transcript_path && isTrustedTranscriptPath(input.event.transcript_path)) {
       this.transcriptPaths.set(sessionId, input.event.transcript_path);
     }
+    this.recordResolvedModelIfPending(sessionId);
     // A new prompt means the previous turn is over from the user's side even when 'generating' ->
     // 'generating' is a no-op transition below (the CLI hadn't reported the previous turn's end yet): an
     // interrupt watch still armed for that turn must not survive to misjudge this one.
@@ -564,6 +574,23 @@ export class SessionService {
     this.repo.setState(sessionId, state, since);
     this.deps.bus.emit({ type: 'session.state', sessionId, state, stateSince: since });
     this.guarded(sessionId, () => this.advance(sessionId));
+  }
+
+  // One attempt per hook until the launch's resolution is found. It never throws into the hook handler.
+  private recordResolvedModelIfPending(sessionId: string): void {
+    const launchedAt = this.launchedAt.get(sessionId);
+    const transcriptPath = this.transcriptPaths.get(sessionId);
+    if (launchedAt === undefined || transcriptPath === undefined) return;
+    try {
+      if (!isTrustedTranscriptPath(transcriptPath)) return;
+      const resolution = readResolvedModel({ transcriptPath, launchedAt });
+      if (!resolution) return;
+      this.repo.recordResolvedModel({ id: sessionId, ...resolution, driftedFrom: undefined });
+      this.launchedAt.delete(sessionId);
+      this.deps.bus.emit({ type: 'session.updated', session: this.repo.get(sessionId)! });
+    } catch (err) {
+      log('error', `resolved model: session ${sessionId} could not record its resolved model`, err);
+    }
   }
 
   recentOutput(sessionId: string): string { return this.outputBuffers.get(sessionId) ?? ''; }
@@ -946,6 +973,8 @@ export class SessionService {
     this.clearResumeTimer(sessionId);
     this.disarmInterruptWatch(sessionId);
     this.transcriptPaths.delete(sessionId);
+    this.launchedAt.delete(sessionId);
+    this.modelSwitchesAwaitingRelaunch.delete(sessionId);
     this.stopDelivery(sessionId);
     this.pendingRelaunches.delete(sessionId);
     this.unfinishedTurns.delete(sessionId);
@@ -979,6 +1008,7 @@ export class SessionService {
     const hookToken = newToken();
     const mcpToken = newToken();
     this.repo.setTokens(session.id, hookToken, mcpToken);
+    this.launchedAt.set(session.id, new Date().toISOString());
     let handle: HarnessHandle;
     try {
       handle = harness.start({

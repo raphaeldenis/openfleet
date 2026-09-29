@@ -37,6 +37,14 @@ const api = (path: string, init: RequestInit = {}) =>
 
 const listSessions = async () => (await (await api('/api/sessions')).json()) as Record<string, unknown>[];
 
+const makeSessionIdle = async (db: DatabaseSync, id: string) => {
+  const { hook_token: hookToken } = db.prepare('SELECT hook_token FROM sessions WHERE id = ?').get(id) as { hook_token: string };
+  await fetch(`${server!.url}/hooks/${hookToken}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ session_id: id, hook_event_name: 'SessionStart' }) });
+};
+
+const untilResolvedModelIsCleared = (id: string) =>
+  expect.poll(async () => (await listSessions()).find((session) => session.id === id)).not.toHaveProperty('resolvedModel');
+
 describe('session listing with the resolved model fields', () => {
   it('lists a session created before the resolved model migration without the resolved model fields', async () => {
     const db = new DatabaseSync(':memory:');
@@ -59,9 +67,11 @@ describe('session listing with the resolved model fields', () => {
     await serveDaemonOn(db);
     const created = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
     db.prepare(`UPDATE sessions SET resolved_model = 'claude-opus-5-5', cli_version = '2.1.284', model_drifted_from = 'claude-opus-5-4' WHERE id = ?`).run(created.id);
+    await makeSessionIdle(db, created.id);
     const [beforeSwitch] = await listSessions();
 
     await api(`/api/sessions/${created.id}/model`, { method: 'POST', body: JSON.stringify({ model: 'claude-sonnet-5-5' }) });
+    await untilResolvedModelIsCleared(created.id);
     const [afterSwitch] = await listSessions();
 
     expect(beforeSwitch).toMatchObject({ resolvedModel: 'claude-opus-5-5', cliVersion: '2.1.284', modelDriftedFrom: 'claude-opus-5-4' });
@@ -80,8 +90,10 @@ describe('session listing with the resolved model fields', () => {
     for (const { id } of [switched, untouched]) {
       db.prepare(`UPDATE sessions SET resolved_model = 'claude-opus-5-5', cli_version = '2.1.284', model_drifted_from = 'claude-opus-5-4' WHERE id = ?`).run(id);
     }
+    await makeSessionIdle(db, switched.id);
 
     await api(`/api/sessions/${switched.id}/model`, { method: 'POST', body: JSON.stringify({ model: 'claude-sonnet-5-5' }) });
+    await untilResolvedModelIsCleared(switched.id);
     const listed = await listSessions();
     const switchedAfter = listed.find((session) => session.id === switched.id);
     const untouchedAfter = listed.find((session) => session.id === untouched.id);

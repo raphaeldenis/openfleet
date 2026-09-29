@@ -67,7 +67,15 @@ export class SessionRepository {
       .run(state, since, Number(keepsExitCode), Number(keepsClosedAt), id);
   }
   setModel(id: string, model: string): void {
-    this.db.prepare('UPDATE sessions SET model = ?, resolved_model = NULL, model_drifted_from = NULL WHERE id = ?').run(model, id);
+    this.db.prepare('UPDATE sessions SET model = ? WHERE id = ?').run(model, id);
+  }
+  clearResolvedModel(id: string): void {
+    this.db.prepare('UPDATE sessions SET resolved_model = NULL, model_drifted_from = NULL WHERE id = ?').run(id);
+  }
+  // COALESCE keeps an existing drift flag when a later identical resolution passes no driftedFrom.
+  recordResolvedModel(input: { id: string; resolvedModel: string; cliVersion: string; driftedFrom: string | undefined }): void {
+    this.db.prepare('UPDATE sessions SET resolved_model = ?, cli_version = ?, model_drifted_from = COALESCE(?, model_drifted_from) WHERE id = ?')
+      .run(input.resolvedModel, input.cliVersion, input.driftedFrom ?? null, input.id);
   }
   setPermissionMode(id: string, mode: PermissionMode): void {
     this.db.prepare('UPDATE sessions SET permission_mode = ? WHERE id = ?').run(mode, id);
