@@ -50,6 +50,15 @@ export class FleetEventsService {
   private socket?: WebSocket;
   private reconnectDelayMs = INITIAL_RECONNECT_DELAY_MS;
   private hasConnectedBefore = false;
+  // An attach or resize made while the socket is not open is not lost, only deferred: it is sent once the
+  // socket opens. Keystrokes are never queued here — replaying stale input into a live agent is dangerous.
+  private readonly queuedAttachSessionIds = new Set<string>();
+  private readonly queuedResizeBySession = new Map<string, { cols: number; rows: number }>();
+  // Sessions already attached since the current socket opened. A queued attach flushed on open and a
+  // terminal's own reconnect effect can both ask to attach the same session right after that open — this
+  // is what makes the second one a no-op instead of a duplicate replay. Cleared the moment the socket
+  // drops, so a real future reconnect still attaches normally.
+  private readonly attachedSinceOpenSessionIds = new Set<string>();
 
   connect(): void {
     const isAlreadyConnectingOrOpen =
@@ -67,6 +76,7 @@ export class FleetEventsService {
       this.reconnectDelayMs = INITIAL_RECONNECT_DELAY_MS;
       if (this.hasConnectedBefore) this.reconnectCount.update((n) => n + 1);
       this.hasConnectedBefore = true;
+      this.flushQueuedSends();
     });
     socket.addEventListener('message', (m) => this.reduce(JSON.parse(String(m.data)) as ServerEvent));
     socket.addEventListener('close', () => this.scheduleReconnect());
@@ -74,6 +84,7 @@ export class FleetEventsService {
 
   private scheduleReconnect(): void {
     this.connected.set(false);
+    this.attachedSinceOpenSessionIds.clear();
     setTimeout(() => this.openSocket(), this.reconnectDelayMs);
     this.reconnectDelayMs = Math.min(this.reconnectDelayMs * 2, MAX_RECONNECT_DELAY_MS);
   }
@@ -87,11 +98,52 @@ export class FleetEventsService {
   }
 
   sendInput(sessionId: string, data: string): void {
+    if (!this.isSocketOpen()) return;
     if (isUserTyping(data)) this.typedInSessionIds.next(sessionId);
-    this.socket?.send(JSON.stringify({ type: 'input', sessionId, data }));
+    this.send({ type: 'input', sessionId, data });
   }
-  sendResize(sessionId: string, cols: number, rows: number): void { this.socket?.send(JSON.stringify({ type: 'resize', sessionId, cols, rows })); }
-  sendAttach(sessionId: string): void { this.socket?.send(JSON.stringify({ type: 'attach', sessionId })); }
+
+  sendResize(sessionId: string, cols: number, rows: number): void {
+    if (!this.isSocketOpen()) {
+      this.queuedResizeBySession.set(sessionId, { cols, rows });
+      return;
+    }
+    this.send({ type: 'resize', sessionId, cols, rows });
+  }
+
+  sendAttach(sessionId: string): void {
+    if (this.attachedSinceOpenSessionIds.has(sessionId)) return;
+    if (!this.isSocketOpen()) {
+      this.queuedAttachSessionIds.add(sessionId);
+      return;
+    }
+    this.attachedSinceOpenSessionIds.add(sessionId);
+    this.send({ type: 'attach', sessionId });
+  }
+
+  /** Drops a session's queued attach/resize — nothing left to view means nothing worth sending on reconnect. */
+  dropQueuedSendsFor(sessionId: string): void {
+    this.queuedAttachSessionIds.delete(sessionId);
+    this.queuedResizeBySession.delete(sessionId);
+  }
+
+  private isSocketOpen(): boolean {
+    return this.socket?.readyState === WebSocket.OPEN;
+  }
+
+  private send(payload: unknown): void {
+    this.socket!.send(JSON.stringify(payload));
+  }
+
+  private flushQueuedSends(): void {
+    for (const sessionId of this.queuedAttachSessionIds) {
+      this.attachedSinceOpenSessionIds.add(sessionId);
+      this.send({ type: 'attach', sessionId });
+    }
+    this.queuedAttachSessionIds.clear();
+    for (const [sessionId, size] of this.queuedResizeBySession) this.send({ type: 'resize', sessionId, ...size });
+    this.queuedResizeBySession.clear();
+  }
 
   private reduce(event: ServerEvent): void {
     switch (event.type) {
