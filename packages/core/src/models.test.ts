@@ -38,6 +38,13 @@ describe('available models', () => {
 
     expect(available.slice(0, RUNG_ALIASES.length)).toEqual(RUNG_ALIASES);
   });
+
+  it('lists only ids a session can be launched with', async () => {
+    const available = await listAvailableModels();
+
+    const rejectedIds = available.filter((modelId) => !ModelIdSchema.safeParse(modelId).success);
+    expect(rejectedIds).toEqual([]);
+  });
 });
 
 describe('loadModelTable', () => {
