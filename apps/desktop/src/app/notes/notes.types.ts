@@ -47,6 +47,11 @@ export interface Page<T> {
   offset: number;
 }
 
+export interface PageRequest {
+  limit?: number;
+  offset?: number;
+}
+
 export interface Project {
   id: string;
   name: string;

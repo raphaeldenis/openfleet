@@ -2,10 +2,15 @@ import { Injectable } from '@angular/core';
 import type { Approval, HarnessId, PermissionMode, Session, SessionSpec } from '@openfleet/shared';
 import { environment } from '../../environments/environment';
 import type {
-  NewNote, NoteChange, NoteRestore, NoteSearchResult, NoteSummary, NoteVersionSummary, NoteView, Page, Project,
+  NewNote, NoteChange, NoteRestore, NoteSearchResult, NoteSummary, NoteVersionSummary, NoteView, Page, PageRequest, Project,
 } from '../notes/notes.types';
 
 const DAEMON_ANSWER_TIMEOUT_MS = 5000;
+
+const pageParams = ({ limit, offset }: PageRequest): Record<string, string> => ({
+  ...(limit === undefined ? {} : { limit: String(limit) }),
+  ...(offset === undefined ? {} : { offset: String(offset) }),
+});
 
 export class ApiError extends Error {
   // `code` is the REST error body's `error` field (e.g. `not_closed`, `directory_missing`) when the
@@ -92,15 +97,17 @@ export class FleetApiService {
     const path = `/api/notes/${encodeURIComponent(noteId)}${suffix}`;
     return queryString ? `${path}?${queryString}` : path;
   }
-  listProjects() { return this.call<Page<Project>>('/api/projects'); }
-  listNotes(projectId: string) { return this.call<Page<NoteSummary>>(`/api/notes?${new URLSearchParams({ projectId })}`); }
+  listProjects(page: PageRequest = {}) { return this.call<Page<Project>>(`/api/projects?${new URLSearchParams(pageParams(page))}`); }
+  listNotes(projectId: string, page: PageRequest = {}) { return this.call<Page<NoteSummary>>(`/api/notes?${new URLSearchParams({ projectId, ...pageParams(page) })}`); }
   getNote(projectId: string, noteId: string) { return this.call<NoteView>(this.noteUrl(noteId, '', { projectId })); }
   createNote(note: NewNote) { return this.post<NoteView>('/api/notes', note); }
   updateNote(projectId: string, noteId: string, change: NoteChange) { return this.patch<NoteView>(this.noteUrl(noteId, '', { projectId }), change); }
   searchNotes(projectId: string, query: string) {
     return this.call<{ items: NoteSearchResult[]; total: number }>(`/api/notes/search?${new URLSearchParams({ projectId, q: query })}`);
   }
-  listNoteVersions(projectId: string, noteId: string) { return this.call<{ items: NoteVersionSummary[] }>(this.noteUrl(noteId, '/versions', { projectId })); }
+  listNoteVersions(projectId: string, noteId: string, page: PageRequest = {}) {
+    return this.call<Page<NoteVersionSummary>>(this.noteUrl(noteId, '/versions', { projectId, ...pageParams(page) }));
+  }
   restoreNoteVersion(projectId: string, noteId: string, restore: NoteRestore) {
     return this.post<NoteView>(this.noteUrl(noteId, '/restore'), { projectId, ...restore });
   }

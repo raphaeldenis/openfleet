@@ -10,17 +10,20 @@ export type MarkdownBlock =
 
 const HEADING = /^(#{1,3}) +(.*)$/;
 const LIST_ITEM = /^[-*] +(.*)$/;
+const LINE_BREAK = /\r?\n/;
 const FENCE = '```';
+const BACKTICK = '`';
+const MAX_MENTION_DEPTH = 10;
 const NOTE_BLOCK_START = /^--- from note @(\w+):([\w-]+) \((.*), [^,]*\) ---$/;
 const MENTION_LINE = /^--- @(\w+):([\w-]+)(?::| →) ?(.*?) ---$/;
 
 // ponytail: headings 1-3, paragraphs, bullet lists, fenced code, inline code and mention blocks only;
 // no emphasis, links or tables. Add `marked` if notes need them.
 export function parseMarkdownBlocks(markdown: string): MarkdownBlock[] {
-  return parseLines(markdown.split('\n'));
+  return parseLines(markdown.split(LINE_BREAK));
 }
 
-function parseLines(lines: string[]): MarkdownBlock[] {
+function parseLines(lines: string[], depth = 0): MarkdownBlock[] {
   const blocks: MarkdownBlock[] = [];
   let index = 0;
 
@@ -46,7 +49,10 @@ function parseLines(lines: string[]): MarkdownBlock[] {
       const endMarker = `--- end @${kind}:${id} ---`;
       const closingIndex = findLine(lines, index + 1, (candidate) => candidate === endMarker);
       const bodyEnd = closingIndex === -1 ? lines.length : closingIndex;
-      blocks.push({ type: 'mention-note', kind: kind!, id: id!, title: title!, blocks: parseLines(lines.slice(index + 1, bodyEnd)) });
+      const bodyLines = lines.slice(index + 1, bodyEnd);
+      const isTooDeepToNest = depth >= MAX_MENTION_DEPTH;
+      const bodyBlocks: MarkdownBlock[] = isTooDeepToNest ? [{ type: 'code', text: bodyLines.join('\n') }] : parseLines(bodyLines, depth + 1);
+      blocks.push({ type: 'mention-note', kind: kind!, id: id!, title: title!, blocks: bodyBlocks });
       index = bodyEnd + 1;
       continue;
     }
@@ -102,8 +108,10 @@ function findLine(lines: string[], from: number, matches: (line: string) => bool
 }
 
 function inlineSegments(text: string): InlineSegment[] {
-  return text
-    .split('`')
+  const parts = text.split(BACKTICK);
+  const hasUnclosedBacktick = parts.length % 2 === 0;
+  const pairedParts = hasUnclosedBacktick ? [...parts.slice(0, -2), parts.slice(-2).join(BACKTICK)] : parts;
+  return pairedParts
     .map((part, position) => ({ text: part, isCode: position % 2 === 1 }))
     .filter((segment) => segment.text !== '');
 }

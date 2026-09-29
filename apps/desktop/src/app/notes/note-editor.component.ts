@@ -1,5 +1,5 @@
 import { NgTemplateOutlet } from '@angular/common';
-import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
+import { ChangeDetectionStrategy, Component, ElementRef, computed, input, output, viewChild } from '@angular/core';
 import { parseMarkdownBlocks } from './markdown-blocks';
 import type { NoteView } from './notes.types';
 
@@ -11,7 +11,7 @@ export interface NoteMentioner { emoji: string; name: string }
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <header class="header">
-      <span class="title" data-testid="note-editor-title">{{ note().title }}</span>
+      <span #title class="title" tabindex="-1" data-testid="note-editor-title">{{ note().title }}</span>
       @if (note().docsRelativePath; as path) {
         <span class="path" data-testid="note-editor-path">{{ path }}</span>
       }
@@ -26,6 +26,9 @@ export interface NoteMentioner { emoji: string; name: string }
     </header>
     <div class="scroller">
       <article class="doc" data-testid="note-editor-body">
+        @if (blocks().length === 0) {
+          <p class="empty-body" data-testid="note-editor-empty-body">This note is empty.</p>
+        }
         <ng-container [ngTemplateOutlet]="blockList" [ngTemplateOutletContext]="{ $implicit: blocks() }" />
         @if (mentionedBy().length > 0) {
           <footer class="mentioned-by" data-testid="note-editor-mentioned-by">
@@ -45,9 +48,9 @@ export interface NoteMentioner { emoji: string; name: string }
         @switch (block.type) {
           @case ('heading') {
             @switch (block.level) {
-              @case (1) { <h1><ng-container [ngTemplateOutlet]="inline" [ngTemplateOutletContext]="{ $implicit: block.segments }" /></h1> }
-              @case (2) { <h2><ng-container [ngTemplateOutlet]="inline" [ngTemplateOutletContext]="{ $implicit: block.segments }" /></h2> }
-              @default { <h3><ng-container [ngTemplateOutlet]="inline" [ngTemplateOutletContext]="{ $implicit: block.segments }" /></h3> }
+              @case (1) { <h1 data-testid="note-editor-heading-1"><ng-container [ngTemplateOutlet]="inline" [ngTemplateOutletContext]="{ $implicit: block.segments }" /></h1> }
+              @case (2) { <h2 data-testid="note-editor-heading-2"><ng-container [ngTemplateOutlet]="inline" [ngTemplateOutletContext]="{ $implicit: block.segments }" /></h2> }
+              @default { <h3 data-testid="note-editor-heading-3"><ng-container [ngTemplateOutlet]="inline" [ngTemplateOutletContext]="{ $implicit: block.segments }" /></h3> }
             }
           }
           @case ('paragraph') {
@@ -56,12 +59,12 @@ export interface NoteMentioner { emoji: string; name: string }
           @case ('list') {
             <ul>
               @for (item of block.items; track $index) {
-                <li><ng-container [ngTemplateOutlet]="inline" [ngTemplateOutletContext]="{ $implicit: item }" /></li>
+                <li data-testid="note-editor-list-item"><ng-container [ngTemplateOutlet]="inline" [ngTemplateOutletContext]="{ $implicit: item }" /></li>
               }
             </ul>
           }
           @case ('code') {
-            <pre>{{ block.text }}</pre>
+            <pre data-testid="note-editor-code-block">{{ block.text }}</pre>
           }
           @case ('mention-note') {
             <section class="mention-note" [attr.data-testid]="'note-editor-mention-' + block.kind + '-' + block.id">
@@ -79,14 +82,15 @@ export interface NoteMentioner { emoji: string; name: string }
     </ng-template>
     <ng-template #inline let-segments>
       @for (segment of segments; track $index) {
-        @if (segment.isCode) { <code>{{ segment.text }}</code> } @else { {{ segment.text }} }
+        @if (segment.isCode) { <code data-testid="note-editor-inline-code">{{ segment.text }}</code> } @else { {{ segment.text }} }
       }
     </ng-template>
   `,
   styles: `
     :host { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0 }
     .header { flex: none; display: flex; align-items: center; gap: .75rem; padding: .625rem 1.25rem; border-bottom: 1px solid var(--line); background: var(--panel) }
-    .title { font-weight: 600 }
+    .title { font-weight: 600; outline: 0 }
+    .empty-body { color: var(--faint); font-style: italic }
     .path { font-family: var(--mono); font-size: .6875rem; color: var(--faint) }
     .spacer { flex: 1 }
     .history-toggle {
@@ -121,5 +125,10 @@ export class NoteEditorComponent {
   readonly historyOpen = input(false);
   readonly historyToggle = output<void>();
 
+  private readonly title = viewChild.required<ElementRef<HTMLElement>>('title');
   protected readonly blocks = computed(() => parseMarkdownBlocks(this.expandedBody() ?? this.note().bodyMd));
+
+  focus(): void {
+    this.title().nativeElement.focus();
+  }
 }

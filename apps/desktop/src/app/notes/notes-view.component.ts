@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, Injector, afterNextRender, computed, effect, inject, signal, untracked, viewChild } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { ActivatedRoute } from '@angular/router';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
@@ -9,7 +9,7 @@ import { NoteEditorComponent } from './note-editor.component';
 import { NoteHistoryComponent } from './note-history.component';
 import { NoteListComponent } from './note-list.component';
 import { NoteStatePanelComponent } from './note-state-panel.component';
-import type { NoteSummary, NoteVersionSummary, NoteView, Project } from './notes.types';
+import type { NoteSummary, NoteVersionSummary, NoteView, Page, PageRequest, Project } from './notes.types';
 
 type LoadStatus = 'loading' | 'ready' | 'error';
 
@@ -17,14 +17,37 @@ interface EditConflict {
   ours: string;
   theirs: ConflictingVersion;
   latest: NoteView;
+  restoreRev: number | null;
+}
+
+interface ActionFailure {
+  title: string;
+  reason: string;
+}
+
+interface FailedWrite {
+  ours: string;
+  restoreRev: number | null;
 }
 
 const NEW_NOTE_TITLE = 'Untitled note';
 const CONCURRENT_EDITOR = 'Another editor';
 const MERGE_SEPARATOR = '\n\n';
+const PAGE_LIMIT = 200;
 
 const isStaleRevision = (error: unknown) => error instanceof ApiError && error.code === 'stale_revision';
 const reasonOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
+async function fetchAllPages<T>(fetchPage: (request: PageRequest) => Promise<Page<T>>): Promise<T[]> {
+  const items: T[] = [];
+  let isLastPage = false;
+  do {
+    const page = await fetchPage({ limit: PAGE_LIMIT, offset: items.length });
+    items.push(...page.items);
+    isLastPage = page.items.length === 0 || items.length >= page.total;
+  } while (!isLastPage);
+  return items;
+}
 
 @Component({
   selector: 'of-notes-view',
@@ -40,13 +63,25 @@ const reasonOf = (error: unknown) => (error instanceof Error ? error.message : S
       </select>
       <of-note-list
         [notes]="notes()"
+        [total]="notesTotal()"
         [selectedId]="selectedId()"
+        [hasLoaded]="notesStatus() === 'ready'"
+        [canCreate]="canCreateNote()"
+        [(filter)]="filter"
         (selected)="openNote($event)"
         (create)="createNote()"
+        (loadMore)="loadMoreNotes()"
       />
     </aside>
 
     <section class="pane">
+      @if (actionFailure(); as failure) {
+        <div class="action-failure" role="alert" data-testid="note-action-error">
+          <span class="action-failure-title" data-testid="note-action-error-title">✕ {{ failure.title }}</span>
+          <span class="action-failure-reason" data-testid="note-action-error-reason">{{ failure.reason }}</span>
+          <button type="button" class="of-btn of-btn--secondary" data-testid="note-action-error-dismiss" (click)="actionFailure.set(null)">Dismiss</button>
+        </div>
+      }
       @if (projectsStatus() === 'loading') {
         <of-note-state-panel state="loading" />
       } @else if (projectsStatus() === 'error') {
@@ -70,17 +105,26 @@ const reasonOf = (error: unknown) => (error instanceof Error ? error.message : S
           [title]="selectedSummary()?.title ?? ''"
           [reason]="noteError()"
           [canOpenInFinder]="canOpenSelectedFolder()"
-          (retry)="openNote(selectedId()!)"
+          (retry)="retryOpenNote()"
           (openInFinder)="openSelectedFolder()"
         />
       } @else if (note(); as openNote) {
         @for (conflict of conflicts(); track conflict) {
-          <of-note-conflict-banner [ours]="conflict.ours" [theirs]="conflict.theirs" (resolve)="resolveConflict($event)" />
+          <of-note-conflict-banner [ours]="conflict.ours" [theirs]="conflict.theirs" [restoreRev]="conflict.restoreRev" (resolve)="resolveConflict($event)" />
         }
         <div class="doc-row">
           <of-note-editor [note]="openNote" [historyOpen]="historyOpen()" (historyToggle)="toggleHistory()" />
           @if (historyOpen()) {
-            <of-note-history [versions]="versions()" (restore)="restoreVersion($event)" />
+            <of-note-history
+              [versions]="versions()"
+              [total]="versionsTotal()"
+              [currentRev]="openNote.rev"
+              [isRestoring]="isRestoring()"
+              [error]="versionsError()"
+              (restore)="restoreVersion($event)"
+              (loadMore)="loadMoreVersions()"
+              (retry)="reloadVersions()"
+            />
           }
         </div>
       }
@@ -97,6 +141,9 @@ const reasonOf = (error: unknown) => (error instanceof Error ? error.message : S
     .project-select:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
     .pane { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column }
     .doc-row { flex: 1; min-height: 0; display: flex }
+    .action-failure { flex: none; display: flex; align-items: center; gap: .75rem; padding: .5rem 1.25rem; border-bottom: 1px solid var(--line); font-size: .75rem }
+    .action-failure-title { color: var(--state-error); font-weight: 600 }
+    .action-failure-reason { flex: 1; color: var(--mut) }
     .no-project { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .5rem; color: var(--mut) }
     .no-project-headline { color: var(--fg); font-weight: 500 }
   `,
@@ -104,7 +151,9 @@ const reasonOf = (error: unknown) => (error instanceof Error ? error.message : S
 export class NotesViewComponent {
   private readonly api = inject(FleetApiService);
   private readonly opener = inject(DirectoryOpener);
+  private readonly injector = inject(Injector);
   private readonly queryParams = toSignal(inject(ActivatedRoute).queryParamMap);
+  private readonly editor = viewChild(NoteEditorComponent);
 
   protected readonly projects = signal<readonly Project[]>([]);
   protected readonly projectsStatus = signal<LoadStatus>('loading');
@@ -112,9 +161,13 @@ export class NotesViewComponent {
   protected readonly projectId = signal<string | null>(null);
 
   protected readonly notes = signal<readonly NoteSummary[]>([]);
+  protected readonly notesTotal = signal(0);
   protected readonly notesStatus = signal<LoadStatus>('loading');
   protected readonly notesError = signal('');
   protected readonly selectedId = signal<string | null>(null);
+  protected readonly filter = signal('');
+  protected readonly isCreating = signal(false);
+  protected readonly actionFailure = signal<ActionFailure | null>(null);
 
   protected readonly note = signal<NoteView | null>(null);
   protected readonly noteStatus = signal<LoadStatus>('loading');
@@ -122,12 +175,16 @@ export class NotesViewComponent {
 
   protected readonly historyOpen = signal(false);
   protected readonly versions = signal<readonly NoteVersionSummary[]>([]);
+  protected readonly versionsTotal = signal(0);
+  protected readonly versionsError = signal('');
+  protected readonly isRestoring = signal(false);
   private readonly conflict = signal<EditConflict | null>(null);
   protected readonly conflicts = computed(() => {
     const conflict = this.conflict();
     return conflict ? [conflict] : [];
   });
 
+  private readonly requestedProjectId = computed(() => this.queryParams()?.get('projectId') ?? null);
   private readonly project = computed(() => this.projects().find((project) => project.id === this.projectId()));
   protected readonly projectName = computed(() => this.project()?.name ?? '');
   protected readonly selectedSummary = computed(() => this.notes().find((summary) => summary.id === this.selectedId()));
@@ -138,19 +195,30 @@ export class NotesViewComponent {
     return this.opener.isAvailable && isFileBacked && hasDocsFolder;
   });
 
+  protected readonly canCreateNote = computed(() => {
+    const hasProject = this.projectId() !== null;
+    const isNoteListReady = this.notesStatus() === 'ready';
+    return hasProject && isNoteListReady && !this.isCreating();
+  });
+
   private latestNotesRequest = 0;
-  private latestNoteRequest = 0;
+  private latestVersionsRequest = 0;
+  private noteSession = 0;
+  private isLoadingMoreNotes = false;
 
   constructor() {
     void this.loadProjects();
+    effect(() => {
+      const requestedProjectId = this.requestedProjectId();
+      untracked(() => this.switchToRequestedProject(requestedProjectId));
+    });
   }
 
   async loadProjects(): Promise<void> {
     this.projectsStatus.set('loading');
     try {
-      const { items } = await this.api.listProjects();
-      const requestedProjectId = this.queryParams()?.get('projectId');
-      const requestedProject = items.find((project) => project.id === requestedProjectId);
+      const items = await fetchAllPages((request) => this.api.listProjects(request));
+      const requestedProject = items.find((project) => project.id === this.requestedProjectId());
       this.projects.set(items);
       this.projectId.set((requestedProject ?? items[0])?.id ?? null);
       this.projectsStatus.set('ready');
@@ -164,22 +232,28 @@ export class NotesViewComponent {
 
   protected switchProject(projectId: string): void {
     this.projectId.set(projectId);
+    this.filter.set('');
     void this.loadNotes();
   }
 
-  protected async loadNotes(noteToOpenId?: string): Promise<void> {
+  protected async loadNotes(): Promise<void> {
     const projectId = this.projectId();
     if (projectId === null) return;
     const request = ++this.latestNotesRequest;
     this.notesStatus.set('loading');
     this.resetOpenNote();
+    this.notes.set([]);
+    this.notesTotal.set(0);
+    this.selectedId.set(null);
+    this.actionFailure.set(null);
     try {
-      const { items } = await this.api.listNotes(projectId);
+      const page = await this.api.listNotes(projectId, { limit: PAGE_LIMIT });
       if (request !== this.latestNotesRequest) return;
-      this.notes.set(items);
+      this.notes.set(page.items);
+      this.notesTotal.set(page.total);
       this.notesStatus.set('ready');
-      const noteToOpen = noteToOpenId ?? items[0]?.id;
-      if (noteToOpen) await this.openNote(noteToOpen);
+      const firstNoteId = page.items[0]?.id;
+      if (firstNoteId) await this.openNote(firstNoteId);
     } catch (error) {
       if (request !== this.latestNotesRequest) return;
       this.notesError.set(reasonOf(error));
@@ -187,34 +261,68 @@ export class NotesViewComponent {
     }
   }
 
-  protected async openNote(noteId: string): Promise<void> {
+  protected async loadMoreNotes(): Promise<void> {
+    const projectId = this.projectId();
+    if (projectId === null || this.isLoadingMoreNotes) return;
+    const request = this.latestNotesRequest;
+    this.isLoadingMoreNotes = true;
+    try {
+      const alreadyLoadedCount = this.notes().length;
+      const page = await this.api.listNotes(projectId, { limit: PAGE_LIMIT, offset: alreadyLoadedCount });
+      if (request !== this.latestNotesRequest) return;
+      const knownIds = new Set(this.notes().map((summary) => summary.id));
+      this.notes.update((notes) => [...notes, ...page.items.filter((summary) => !knownIds.has(summary.id))]);
+      this.notesTotal.set(page.total);
+    } catch (error) {
+      if (request !== this.latestNotesRequest) return;
+      this.actionFailure.set({ title: 'Couldn’t load more notes', reason: reasonOf(error) });
+    } finally {
+      this.isLoadingMoreNotes = false;
+    }
+  }
+
+  protected async openNote(noteId: string, { focusEditor = false } = {}): Promise<void> {
     const projectId = this.projectId();
     if (projectId === null) return;
-    const request = ++this.latestNoteRequest;
-    this.resetOpenNote();
+    const isAlreadyOpenOrOpening = noteId === this.selectedId() && this.noteStatus() !== 'error';
+    if (isAlreadyOpenOrOpening) return;
+    const session = this.resetOpenNote();
     this.selectedId.set(noteId);
     this.noteStatus.set('loading');
     try {
       const openedNote = await this.api.getNote(projectId, noteId);
-      if (request !== this.latestNoteRequest) return;
+      if (!this.isCurrentSession(session)) return;
       this.note.set(openedNote);
       this.noteStatus.set('ready');
+      if (focusEditor) this.focusEditorAfterRender();
     } catch (error) {
-      if (request !== this.latestNoteRequest) return;
-      this.noteError.set(reasonOf(error));
-      this.noteStatus.set('error');
+      if (!this.isCurrentSession(session)) return;
+      this.showNoteError(error);
     }
+  }
+
+  protected retryOpenNote(): Promise<void> {
+    const selectedId = this.selectedId();
+    return selectedId === null ? Promise.resolve() : this.openNote(selectedId, { focusEditor: true });
   }
 
   protected async createNote(): Promise<void> {
     const projectId = this.projectId();
-    if (projectId === null) return;
+    if (projectId === null || this.isCreating()) return;
+    this.isCreating.set(true);
+    this.actionFailure.set(null);
     try {
       const createdNote = await this.api.createNote({ projectId, title: NEW_NOTE_TITLE, bodyMd: '' });
-      await this.loadNotes(createdNote.id);
+      const projectChangedMeanwhile = this.projectId() !== projectId;
+      if (projectChangedMeanwhile) return;
+      this.filter.set('');
+      this.notes.update((notes) => [createdNote, ...notes]);
+      this.notesTotal.update((total) => total + 1);
+      await this.openNote(createdNote.id);
     } catch (error) {
-      this.notesError.set(reasonOf(error));
-      this.notesStatus.set('error');
+      this.actionFailure.set({ title: 'Couldn’t create the note', reason: reasonOf(error) });
+    } finally {
+      this.isCreating.set(false);
     }
   }
 
@@ -229,18 +337,31 @@ export class NotesViewComponent {
   protected async toggleHistory(): Promise<void> {
     const willOpen = !this.historyOpen();
     this.historyOpen.set(willOpen);
-    if (willOpen) await this.loadVersions();
+    if (willOpen) await this.loadVersions({ session: this.noteSession, mode: 'replace' });
+  }
+
+  protected reloadVersions(): Promise<void> {
+    return this.loadVersions({ session: this.noteSession, mode: 'replace' });
+  }
+
+  protected loadMoreVersions(): Promise<void> {
+    return this.loadVersions({ session: this.noteSession, mode: 'append' });
   }
 
   protected async restoreVersion(rev: number): Promise<void> {
     const projectId = this.projectId();
     const openNote = this.note();
-    if (projectId === null || openNote === null) return;
+    if (projectId === null || openNote === null || this.isRestoring()) return;
+    const session = this.noteSession;
+    this.isRestoring.set(true);
     try {
-      this.note.set(await this.api.restoreNoteVersion(projectId, openNote.id, { rev, expectedRev: openNote.rev }));
-      await this.loadVersions();
-    } catch (error) {
-      await this.handleWriteFailure(error);
+      await this.writeNote({
+        session,
+        write: () => this.api.restoreNoteVersion(projectId, openNote.id, { rev, expectedRev: openNote.rev }),
+        failedWrite: { ours: openNote.bodyMd, restoreRev: rev },
+      });
+    } finally {
+      if (this.isCurrentSession(session)) this.isRestoring.set(false);
     }
   }
 
@@ -248,53 +369,118 @@ export class NotesViewComponent {
     const conflict = this.conflict();
     const projectId = this.projectId();
     if (conflict === null || projectId === null) return;
+    const session = this.noteSession;
     this.conflict.set(null);
+    const { latest } = conflict;
 
     if (resolution === 'theirs') {
-      this.note.set(conflict.latest);
-      await this.reloadVersionsWhenOpen();
+      this.note.set(latest);
+      this.focusEditorAfterRender();
+      await this.reloadVersionsWhenOpen(session);
+      return;
+    }
+
+    if (resolution === 'restore' && conflict.restoreRev !== null) {
+      const rev = conflict.restoreRev;
+      await this.writeNote({
+        session,
+        write: () => this.api.restoreNoteVersion(projectId, latest.id, { rev, expectedRev: latest.rev }),
+        failedWrite: { ours: conflict.ours, restoreRev: rev },
+      });
       return;
     }
 
     const mergedBody = [conflict.ours, conflict.theirs.body].join(MERGE_SEPARATOR);
-    const bodyMd = resolution === 'mine' ? conflict.ours : mergedBody;
-    try {
-      this.note.set(await this.api.updateNote(projectId, conflict.latest.id, { expectedRev: conflict.latest.rev, bodyMd }));
-      await this.reloadVersionsWhenOpen();
-    } catch (error) {
-      await this.handleWriteFailure(error);
-    }
+    const bodyMd = resolution === 'merge' ? mergedBody : conflict.ours;
+    await this.writeNote({
+      session,
+      write: () => this.api.updateNote(projectId, latest.id, { expectedRev: latest.rev, bodyMd }),
+      failedWrite: { ours: bodyMd, restoreRev: null },
+    });
   }
 
-  private async handleWriteFailure(error: unknown): Promise<void> {
+  private async writeNote({ session, write, failedWrite }: { session: number; write: () => Promise<NoteView>; failedWrite: FailedWrite }): Promise<void> {
+    try {
+      const writtenNote = await write();
+      if (!this.isCurrentSession(session)) return;
+      this.note.set(writtenNote);
+    } catch (error) {
+      if (!this.isCurrentSession(session)) return;
+      await this.handleWriteFailure({ error, session, failedWrite });
+      return;
+    }
+    this.focusEditorAfterRender();
+    await this.reloadVersionsWhenOpen(session);
+  }
+
+  private async handleWriteFailure({ error, session, failedWrite }: { error: unknown; session: number; failedWrite: FailedWrite }): Promise<void> {
     const projectId = this.projectId();
     const openNote = this.note();
     if (!isStaleRevision(error) || projectId === null || openNote === null) {
-      this.noteError.set(reasonOf(error));
-      this.noteStatus.set('error');
+      this.showNoteError(error);
       return;
     }
-    const latest = await this.api.getNote(projectId, openNote.id);
-    const theirs = { author: CONCURRENT_EDITOR, at: ageLabel(latest.updatedAt), body: latest.bodyMd };
-    this.conflict.set({ ours: openNote.bodyMd, theirs, latest });
+    try {
+      const latest = await this.api.getNote(projectId, openNote.id);
+      if (!this.isCurrentSession(session)) return;
+      const theirs = { author: CONCURRENT_EDITOR, at: ageLabel(latest.updatedAt), body: latest.bodyMd };
+      this.conflict.set({ ours: failedWrite.ours, theirs, latest, restoreRev: failedWrite.restoreRev });
+    } catch (lookupError) {
+      if (!this.isCurrentSession(session)) return;
+      this.showNoteError(lookupError);
+    }
   }
 
-  private async loadVersions(): Promise<void> {
+  private async loadVersions({ session, mode }: { session: number; mode: 'replace' | 'append' }): Promise<void> {
     const projectId = this.projectId();
     const openNote = this.note();
     if (projectId === null || openNote === null) return;
-    const { items } = await this.api.listNoteVersions(projectId, openNote.id);
-    this.versions.set(items);
+    const request = ++this.latestVersionsRequest;
+    const offset = mode === 'append' ? this.versions().length : 0;
+    this.versionsError.set('');
+    try {
+      const page = await this.api.listNoteVersions(projectId, openNote.id, { limit: PAGE_LIMIT, offset });
+      if (!this.isCurrentSession(session) || request !== this.latestVersionsRequest) return;
+      this.versions.update((versions) => (mode === 'append' ? [...versions, ...page.items] : page.items));
+      this.versionsTotal.set(page.total);
+    } catch (error) {
+      if (!this.isCurrentSession(session) || request !== this.latestVersionsRequest) return;
+      this.versionsError.set(reasonOf(error));
+    }
   }
 
-  private async reloadVersionsWhenOpen(): Promise<void> {
-    if (this.historyOpen()) await this.loadVersions();
+  private async reloadVersionsWhenOpen(session: number): Promise<void> {
+    if (this.historyOpen()) await this.loadVersions({ session, mode: 'replace' });
   }
 
-  private resetOpenNote(): void {
+  private showNoteError(error: unknown): void {
+    this.noteError.set(reasonOf(error));
+    this.noteStatus.set('error');
+  }
+
+  private switchToRequestedProject(requestedProjectId: string | null): void {
+    const isKnownProject = this.projects().some((project) => project.id === requestedProjectId);
+    const isAlreadyCurrent = requestedProjectId === this.projectId();
+    if (requestedProjectId === null || !isKnownProject || isAlreadyCurrent) return;
+    this.switchProject(requestedProjectId);
+  }
+
+  private focusEditorAfterRender(): void {
+    afterNextRender(() => this.editor()?.focus(), { injector: this.injector });
+  }
+
+  private isCurrentSession(session: number): boolean {
+    return session === this.noteSession;
+  }
+
+  private resetOpenNote(): number {
     this.note.set(null);
     this.conflict.set(null);
     this.historyOpen.set(false);
     this.versions.set([]);
+    this.versionsTotal.set(0);
+    this.versionsError.set('');
+    this.isRestoring.set(false);
+    return ++this.noteSession;
   }
 }

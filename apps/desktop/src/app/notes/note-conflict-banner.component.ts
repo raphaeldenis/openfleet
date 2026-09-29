@@ -1,6 +1,6 @@
 import { ChangeDetectionStrategy, Component, computed, input, output, signal } from '@angular/core';
 
-export type ConflictResolution = 'mine' | 'theirs' | 'merge';
+export type ConflictResolution = 'mine' | 'theirs' | 'merge' | 'restore';
 export interface ConflictingVersion { author: string; at: string; body: string }
 
 const DISK_AUTHOR = 'disk';
@@ -15,6 +15,9 @@ const DISK_AUTHOR = 'disk';
       <button type="button" class="choice" data-testid="note-conflict-keep-mine" [disabled]="isResolved()" (click)="choose('mine')">Keep mine</button>
       <button type="button" class="choice" data-testid="note-conflict-take-theirs" [disabled]="isResolved()" (click)="choose('theirs')">{{ takeTheirsLabel() }}</button>
       <button type="button" class="choice choice--primary" data-testid="note-conflict-merge" [disabled]="isResolved()" (click)="choose('merge')">Merge both</button>
+      @if (restoreRev(); as rev) {
+        <button type="button" class="choice" data-testid="note-conflict-restore" [disabled]="isResolved()" (click)="choose('restore')">Restore rev {{ rev }} anyway</button>
+      }
     </div>
     <div class="versions">
       <div class="version version--ours" data-testid="note-conflict-ours">
@@ -51,6 +54,7 @@ const DISK_AUTHOR = 'disk';
 export class NoteConflictBannerComponent {
   readonly ours = input.required<string>();
   readonly theirs = input.required<ConflictingVersion>();
+  readonly restoreRev = input<number | null>(null);
   readonly resolve = output<ConflictResolution>();
 
   protected readonly isResolved = signal(false);

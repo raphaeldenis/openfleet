@@ -10,7 +10,7 @@ const SKELETON_BAR_WIDTHS = ['40%', '90%', '85%', '60%', '95%', '70%'];
   template: `
     @switch (state()) {
       @case ('loading') {
-        <div class="skeleton" aria-busy="true" aria-label="Loading note">
+        <div class="skeleton" data-testid="note-skeleton" role="status" aria-busy="true" aria-label="Loading note">
           @for (width of skeletonBarWidths; track $index) {
             <div class="bar" data-testid="note-skeleton-bar" [style.width]="width"></div>
           }
