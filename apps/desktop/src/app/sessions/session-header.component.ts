@@ -49,7 +49,7 @@ const RENAME_ERROR = 'Could not rename — try again.';
       <span class="directory" data-testid="session-directory" [attr.title]="session().directory">{{ session().directory }}</span>
       <span class="cost" data-testid="session-cost" title="Cost tracking is not implemented yet">—</span>
       <span class="spacer"></span>
-      <of-session-actions [sessionId]="session().id" [state]="session().state" [sessionName]="session().name" />
+      <of-session-actions [sessionId]="session().id" [state]="session().state" [stateSince]="session().stateSince" [sessionName]="session().name" />
     </header>
   `,
   styles: `
@@ -61,6 +61,10 @@ const RENAME_ERROR = 'Could not rename — try again.';
       border: 1px solid transparent; border-radius: .375rem; background: transparent; color: var(--fg);
       font-family: inherit; padding: 0 .25rem; height: 1.75rem;
     }
+    .emoji, .name, of-state-chip, .harness { align-self: flex-start; }
+    .emoji, .name { margin-top: .125rem; }
+    of-state-chip { margin-top: .25rem; }
+    .harness { margin-top: .394rem; }
     .emoji:hover, .name:hover { border-color: var(--line); }
     .emoji:focus, .name:focus { border-color: var(--accent); outline: 0; }
     .emoji { font-size: 1.125rem; width: 2.25rem; text-align: center; }

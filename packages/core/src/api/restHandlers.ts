@@ -1,6 +1,6 @@
 import type { ServerResponse } from 'node:http';
 import type { ManagerSpec, SessionSpec } from '@openfleet/shared';
-import { PERMISSION_MODES, SessionSpecSchema } from '@openfleet/shared';
+import { ModelIdSchema, PERMISSION_MODES, SessionSpecSchema } from '@openfleet/shared';
 import { z } from 'zod';
 import { ApprovalError, type ApprovalService } from '../governance/approvalService.js';
 import type { FakeHandle } from '../harness/fakeHarness.js';
@@ -8,7 +8,8 @@ import type { ManagerService } from '../managers/managerService.js';
 import type { PulseScheduler } from '../managers/pulseScheduler.js';
 import { listAvailableModels, ModelConfigReadOnlyError, ModelConfigUnreadableError, ModelTablePatchSchema, resolveModel, saveModelPatch, type ModelTable } from '../models.js';
 import { DaemonShuttingDownError, SessionClosedError, SessionReopenError, type SessionService } from '../sessions/sessionService.js';
-import { json, Router } from './router.js';
+import { json, logServerError, Router } from './router.js';
+import type { WsTicketStore } from './wsTicketStore.js';
 
 // Used by the messages, permission-mode and model routes: each can hit a session that closed or a daemon
 // that started shutting down between the request landing and the session-service call running.
@@ -28,13 +29,17 @@ const RenameSessionSchema = z
   .object({ name: z.string().trim().min(1).max(100).optional(), emoji: z.string().trim().min(1).max(32).optional() })
   .refine((patch) => patch.name !== undefined || patch.emoji !== undefined, { message: 'name or emoji is required' });
 
-export function registerRestRoutes(router: Router, deps: { sessions: SessionService; approvals: ApprovalService; modelTable: ModelTable; modelConfigPath: string; managers: ManagerService; pulseScheduler: PulseScheduler }): void {
+export function registerRestRoutes(router: Router, deps: { sessions: SessionService; approvals: ApprovalService; modelTable: ModelTable; modelConfigPath: string; managers: ManagerService; pulseScheduler: PulseScheduler; wsTickets: WsTicketStore }): void {
   const servedRungs = (): ModelTable => {
     const { haiku, sonnet, opus, fable } = deps.modelTable;
     return { haiku, sonnet, opus, fable };
   };
 
   router.add('GET', '/api/sessions', ({ res }) => json(res, 200, deps.sessions.list()));
+
+  // AUD-27: the desktop shell calls this, bearer-authenticated like every other /api/ route, right before
+  // opening (or reopening) the WS — the ticket it gets back is what actually authorizes that connection.
+  router.add('POST', '/api/ws-ticket', ({ res }) => json(res, 200, { ticket: deps.wsTickets.issue() }));
 
   router.add('GET', '/api/models', ({ res }) => json(res, 200, servedRungs()));
 
@@ -91,13 +96,14 @@ export function registerRestRoutes(router: Router, deps: { sessions: SessionServ
     respondToLifecycleErrors(res, () => json(res, 200, deps.sessions.sendMessage({ sessionId: params.id!, body: text })));
   });
 
-  router.add('POST', '/api/sessions/:id/reopen', ({ res, params }) => {
+  router.add('POST', '/api/sessions/:id/reopen', ({ req, res, params }) => {
     if (!deps.sessions.get(params.id!)) return json(res, 404, { error: 'not_found' });
     try {
       json(res, 200, deps.sessions.reopen(params.id!));
     } catch (error) {
       if (error instanceof DaemonShuttingDownError) return json(res, 503, { error: 'daemon_shutting_down' });
       if (!(error instanceof SessionReopenError)) throw error;
+      if (error.code === 'launch_failed') logServerError(req, error);
       json(res, error.code === 'launch_failed' ? 500 : 409, { error: error.code });
     }
   });
@@ -117,7 +123,7 @@ export function registerRestRoutes(router: Router, deps: { sessions: SessionServ
 
   router.add('POST', '/api/sessions/:id/model', ({ res, params, body }) => {
     if (!deps.sessions.get(params.id!)) return json(res, 404, { error: 'not_found' });
-    const { model } = z.object({ model: z.string().min(1) }).parse(body);
+    const { model } = z.object({ model: ModelIdSchema }).parse(body);
     respondToLifecycleErrors(res, () => json(res, 200, deps.sessions.updateModel(params.id!, resolveModel(deps.modelTable, model))));
   });
 

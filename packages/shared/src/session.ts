@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { ManagerSpecSchema } from './managers.js';
+import { ModelIdSchema } from './models.js';
 
 export const SESSION_STATES = ['starting', 'generating', 'waiting_permission', 'waiting_input', 'idle', 'closed'] as const;
 export type SessionState = (typeof SESSION_STATES)[number];
@@ -14,7 +15,7 @@ export const SessionSpecSchema = z.object({
   directory: z.string().min(1),
   name: z.string().min(1),
   emoji: z.string().default('🤖'),
-  model: z.string().optional(),
+  model: ModelIdSchema.optional(),
   seededPrompt: z.string().optional(),
   parentId: z.string().optional(),
   role: z.string().optional(),
@@ -32,7 +33,11 @@ export interface Session {
   worktree?: string;
   branch?: string;
   model?: string;
+  resolvedModel?: string;
+  cliVersion?: string;
+  modelDriftedFrom?: string;
   parentId?: string;
+  projectId?: string;
   role?: string;
   permissionMode?: PermissionMode;
   harness: HarnessId;

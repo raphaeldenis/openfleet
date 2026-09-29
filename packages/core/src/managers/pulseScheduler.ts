@@ -1,4 +1,5 @@
 import type { EventBus } from '../events/eventBus.js';
+import { log } from '../logger.js';
 import type { SessionService } from '../sessions/sessionService.js';
 import type { ManagerRecord, ManagerRepository } from './managerRepository.js';
 import { toManagerView } from './managerView.js';
@@ -55,16 +56,31 @@ export class PulseScheduler {
   }
 
   private arm(record: ManagerRecord): void {
-    this.clearTimer(record.sessionId);
     const delayMs = Math.max(0, new Date(nextPulseAt(record)).getTime() - Date.now());
-    this.timers.set(record.sessionId, setTimeout(() => this.tick(record.sessionId), delayMs));
+    this.armAfter(record.sessionId, delayMs);
+  }
+
+  private armAfter(sessionId: string, delayMs: number): void {
+    this.clearTimer(sessionId);
+    this.timers.set(sessionId, setTimeout(() => this.tick(sessionId), delayMs));
   }
 
   private tick(sessionId: string): void {
     const record = this.deps.managers.get(sessionId);
     if (!record) return; // manager record removed
     if (!this.isManagerAlive(sessionId)) { this.clearTimer(sessionId); return; } // a closed manager never reschedules itself
-    this.fire(record);
+    // A timer callback has no caller to catch a throw (e.g. a refused SQLite write): left unguarded, it
+    // would escape as an uncaught exception and, worse, never re-arm — this manager's cadence would be
+    // dead until the next daemon restart. Logged and re-armed instead, so one bad tick doesn't end it.
+    try {
+      this.fire(record);
+    } catch (error) {
+      log('error', `pulse: manager ${sessionId} tick failed; re-arming instead of losing its cadence`, error);
+      // Re-arms a full cadence from now, never via nextPulseAt(record): fire() threw before persisting
+      // lastPulseAt, so record's base is stale — computing off it would land in the past (delayMs 0) and
+      // hot-loop the retry every tick instead of waiting out the cadence.
+      this.armAfter(sessionId, record.pulseSeconds * 1000);
+    }
   }
 
   private isManagerAlive(sessionId: string): boolean {

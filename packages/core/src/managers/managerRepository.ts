@@ -1,5 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { ManagerSpecSchema } from '@openfleet/shared';
+import { log } from '../logger.js';
 
 export interface ManagerRecord {
   sessionId: string;
@@ -39,7 +40,7 @@ export class ManagerRepository {
   private isWithinBounds(record: ManagerRecord): boolean {
     const validation = ManagerSpecSchema.safeParse({ pulseSeconds: record.pulseSeconds, childrenCap: record.childrenCap, mission: record.missionText });
     if (validation.success) return true;
-    console.warn(`ManagerRepository: skipping manager row for session ${record.sessionId} — out of bounds`);
+    log('warn', `ManagerRepository: skipping manager row for session ${record.sessionId} — out of bounds`);
     return false;
   }
   setLastPulseAt(sessionId: string, at: string): void {

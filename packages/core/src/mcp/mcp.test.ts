@@ -17,7 +17,17 @@ import { ManagerRepository } from '../managers/managerRepository.js';
 import { ManagerService } from '../managers/managerService.js';
 import { PulseScheduler } from '../managers/pulseScheduler.js';
 import { DEFAULT_MODEL_TABLE } from '../models.js';
+import { DocsFolderService } from '../notes/docsFolderService.js';
+import { expandMentions } from '../notes/mentionExpander.js';
+import { nodeDocsFolderFs } from '../notes/nodeDocsFolderFs.js';
+import { NoteRepository } from '../notes/noteRepository.js';
+import { NoteService } from '../notes/noteService.js';
+import { ProjectRepository } from '../projects/projectRepository.js';
 import { MAX_PENDING_AGENT_MESSAGES_PER_SENDER, SessionService } from '../sessions/sessionService.js';
+import { DataStoreRepository } from '../stores/dataStoreRepository.js';
+import { DataStoreService } from '../stores/dataStoreService.js';
+import { newId } from '../ids.js';
+import { WorkingStateService } from '../workingState/workingStateService.js';
 import { createMcpHandler } from './mcpServer.js';
 
 // create_session now requires its directory to already exist (fix loop 2, decision 1+3+5) — this makes
@@ -53,7 +63,13 @@ beforeEach(async () => {
   const managers = new ManagerService({ managers: managerRepo, sessions, bus, scheduler: pulseScheduler });
   const approvals = new ApprovalService({ db, bus });
   const modelTable = { ...DEFAULT_MODEL_TABLE };
-  server = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath: '/tmp/of-unused/config.json', mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, worktreesRoot: '/tmp/of-wt' }) });
+  const storeRepo = new DataStoreRepository(db);
+  const stores = new DataStoreService({ repo: storeRepo, db, clock: () => new Date().toISOString(), newId });
+  const projects = new ProjectRepository(db);
+  const noteRepo = new NoteRepository(db);
+  const notes = new NoteService({ repo: noteRepo, db, expandMentions, clock: () => new Date().toISOString(), newId });
+  const docs = new DocsFolderService({ notes, noteRepo, projects, fs: nodeDocsFolderFs, clock: () => new Date().toISOString() });
+  server = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath: '/tmp/of-unused/config.json', mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, workingStates: new WorkingStateService({ db, clock: () => new Date().toISOString(), stateRoot: '/tmp/of-unused/state', maxBytes: 6144 }), worktreesRoot: '/tmp/of-wt' }) });
   const parent = await sessions.create({ directory: '/tmp', name: 'Lead', harness: 'fake', emoji: '🧭' });
   parentId = parent.id;
   parentToken = harness.launches[0]!.mcpToken;
@@ -71,7 +87,14 @@ describe('MCP', () => {
   it('lists the tools', async () => {
     const client = await connect(parentToken);
     const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name).sort()).toEqual(['close_session', 'create_session', 'create_worktree', 'get_argus_status', 'get_session_status', 'list_children', 'list_sessions', 'message_parent', 'pulse_now', 'send_session_message', 'update_session']);
+    expect(tools.map((t) => t.name).sort()).toEqual([
+      'add_data_store_column', 'append_to_note', 'close_session', 'create_data_store', 'create_data_store_view', 'create_note', 'create_session',
+      'create_worktree', 'delete_data_store_row', 'delete_data_store_view', 'delete_note', 'describe_data_store', 'get_argus_status', 'get_note',
+      'get_note_version', 'get_session_status', 'get_working_state', 'insert_data_store_rows', 'list_children', 'list_data_store_views', 'list_note_versions',
+      'list_notes', 'list_row_changes', 'list_sessions', 'message_parent', 'move_note', 'pulse_now', 'query_data_store', 'restore_note_version',
+      'search_notes', 'send_session_message', 'update_data_store_rows', 'update_data_store_view', 'update_note', 'update_note_section',
+      'update_session', 'update_working_state',
+    ]);
   });
 
   it('rejects a bad token', async () => {
@@ -89,6 +112,48 @@ describe('MCP', () => {
     await restarted.closeAll();
   });
 
+  it('rejects the mcp bearer of a session once it is closed, instead of letting a leftover subprocess keep acting as it', async () => {
+    const parent = await connect(parentToken);
+    const created = text(await parent.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('closed-token'), name: 'Gimli', emoji: '⚔️' } }));
+    const closedToken = harness.launches[1]!.mcpToken;
+    await parent.callTool({ name: 'close_session', arguments: { session_id: created.id } });
+    expect(sessions.get(created.id)!.state).toBe('closed');
+
+    await expect(connect(closedToken)).rejects.toThrow();
+  });
+
+  it('rejects a session\'s mcp bearer when it was already closed before this boot, its token never rotated by this build (a pre-patch upgrade row)', async () => {
+    const legacyToken = 'legacy-mcp-token-that-predates-the-rotation-fix';
+    db.prepare(
+      `INSERT INTO sessions (id, name, emoji, directory, worktree, model, parent_id, role, harness, state, state_since, hook_token, mcp_token, permission_mode, branch, project_id, created_at, closed_at, exit_code)
+       VALUES (?, 'legacy', '🤖', '/tmp', NULL, NULL, NULL, NULL, 'fake', 'closed', ?, 'legacy-hook-token', ?, NULL, NULL, NULL, ?, ?, 0)`,
+    ).run('legacy-closed-session', new Date().toISOString(), legacyToken, new Date().toISOString(), new Date().toISOString());
+    await sessions.resumeAll(); // boots like main.ts — resumeAll never touches a closed row
+
+    const res = await fetch(`${server.url}/mcp`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${legacyToken}`, 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'get_session_status', arguments: { session_id: 'legacy-closed-session' } } }),
+    });
+
+    expect(res.status).toBe(401);
+  });
+
+  it('refuses create_session called with a closed session\'s stale bearer token', async () => {
+    const parent = await connect(parentToken);
+    const created = text(await parent.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('closed-token-create'), name: 'Gimli', emoji: '⚔️' } }));
+    const closedToken = harness.launches[1]!.mcpToken;
+    await parent.callTool({ name: 'close_session', arguments: { session_id: created.id } });
+
+    const res = await fetch(`${server.url}/mcp`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', authorization: `Bearer ${closedToken}` },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'create_session', arguments: { directory: '/tmp/of-wt', name: 'spawned-by-closed' } } }),
+    });
+
+    expect(res.status).toBe(401);
+  });
+
   it('rejects an unauthorized request without reading the body, even when it is huge', async () => {
     const oversizedBody = JSON.stringify({ jsonrpc: '2.0', method: 'x', params: { pad: 'x'.repeat(2 * 1024 * 1024) }, id: 1 });
     const res = await fetch(`${server.url}/mcp`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer nope' }, body: oversizedBody });
@@ -99,6 +164,23 @@ describe('MCP', () => {
     const oversizedBody = JSON.stringify({ jsonrpc: '2.0', method: 'x', params: { pad: 'x'.repeat(2 * 1024 * 1024) }, id: 1 });
     const res = await fetch(`${server.url}/mcp`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${parentToken}` }, body: oversizedBody });
     expect(res.status).toBe(413);
+  });
+
+  it.each([
+    ['a flag-shaped id', '--x'],
+    ['a short-flag-shaped id', '-p'],
+    ['an id with a space inside', 'a b'],
+    ['an id with a newline inside', 'a\nb'],
+  ])('refuses create_session whose model is %s, so it can never reach the claude CLI as an extra flag', async (_label, model) => {
+    const parent = await connect(parentToken);
+    const result = await parent.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('bad-model-create'), name: 'Gimli', model } });
+    expect(result.isError).toBe(true);
+  });
+
+  it('accepts the Opus 1M-context id, brackets included, through create_session', async () => {
+    const parent = await connect(parentToken);
+    const created = text(await parent.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('good-model-create'), name: 'Gimli', model: 'claude-opus-5-5[1m]' } }));
+    expect(created.model).toBe('claude-opus-5-5[1m]');
   });
 
   it('creates a child that inherits harness and can message its parent', async () => {
@@ -230,6 +312,30 @@ describe('MCP', () => {
     const parent = await connect(parentToken);
     const result = await parent.callTool({ name: 'send_session_message', arguments: { target_uuid: stranger.id, body: 'hi' } });
     expect(result.isError).toBe(true);
+  });
+
+  it('refuses get_session_status on a session outside the caller lineage', async () => {
+    const stranger = await sessions.create({ directory: '/tmp', name: 'S', harness: 'fake', emoji: '👤' });
+    const parent = await connect(parentToken);
+    const result = await parent.callTool({ name: 'get_session_status', arguments: { session_id: stranger.id } });
+    expect(result.isError).toBe(true);
+  });
+
+  it('refuses close_session on a session that is not the caller\'s child', async () => {
+    const stranger = await sessions.create({ directory: '/tmp', name: 'S', harness: 'fake', emoji: '👤' });
+    const parent = await connect(parentToken);
+    const result = await parent.callTool({ name: 'close_session', arguments: { session_id: stranger.id } });
+    expect(result.isError).toBe(true);
+    expect(sessions.get(stranger.id)!.state).not.toBe('closed');
+  });
+
+  it('refuses close_session on the caller\'s own parent', async () => {
+    await (await connect(parentToken)).callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('close-parent-guard'), name: 'Gimli', emoji: '⚔️' } });
+    const childToken = harness.launches[1]!.mcpToken;
+    const child = await connect(childToken);
+    const result = await child.callTool({ name: 'close_session', arguments: { session_id: parentId } });
+    expect(result.isError).toBe(true);
+    expect(sessions.get(parentId)!.state).not.toBe('closed');
   });
 
   it('send_session_message to a closed child still reports success instead of refusing, unlike the REST /messages route\'s 409 — the caller believes delivery is still possible', async () => {
@@ -481,6 +587,23 @@ describe('update_session', () => {
     const stranger = await sessions.create({ directory: '/tmp', name: 'Stranger', harness: 'fake', emoji: '👤' });
     const forbidden = await client.callTool({ name: 'update_session', arguments: { session_id: stranger.id, model: 'opus' } });
     expect(forbidden.isError).toBe(true);
+  });
+
+  it.each([
+    ['a flag-shaped id', '--x'],
+    ['a short-flag-shaped id', '-p'],
+    ['an id with a space inside', 'a b'],
+    ['an id with a newline inside', 'a\nb'],
+  ])('refuses update_session whose model is %s, so it can never reach the claude CLI as an extra flag', async (_label, model) => {
+    const client = await connect(parentToken);
+    const result = await client.callTool({ name: 'update_session', arguments: { model } });
+    expect(result.isError).toBe(true);
+  });
+
+  it('accepts the Opus 1M-context id, brackets included, through update_session', async () => {
+    const client = await connect(parentToken);
+    const result = text(await client.callTool({ name: 'update_session', arguments: { model: 'claude-opus-5-5[1m]' } }));
+    expect(result.status).toBe('deferred');
   });
 });
 

@@ -1,7 +1,7 @@
 import { chmodSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PERMISSION_MODES } from '@openfleet/shared';
 import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
@@ -33,6 +33,12 @@ beforeEach(async () => {
 afterEach(() => server.close());
 
 const api = (path: string, init: RequestInit = {}) => fetch(`${server.url}${path}`, { ...init, headers: { 'content-type': 'application/json', authorization: 'Bearer admin', ...(init.headers ?? {}) } });
+
+async function wsUrl(): Promise<string> {
+  const res = await api('/api/ws-ticket', { method: 'POST' });
+  const { ticket } = (await res.json()) as { ticket: string };
+  return `${server.url.replace('http', 'ws')}/ws?ticket=${ticket}`;
+}
 
 describe('REST', () => {
   it('answers /health with no auth required, for CI/e2e readiness probes', async () => {
@@ -66,6 +72,11 @@ describe('REST', () => {
     expect(res.status).toBe(401);
   });
 
+  it('rejects a wrong bearer token', async () => {
+    const res = await fetch(`${server.url}/api/sessions`, { headers: { authorization: 'Bearer wrong' } });
+    expect(res.status).toBe(401);
+  });
+
   it('returns the resolved model table on GET /api/models', async () => {
     const res = await api('/api/models');
     expect(res.status).toBe(200);
@@ -75,6 +86,37 @@ describe('REST', () => {
   it('refuses GET /api/models without a bearer token', async () => {
     const res = await fetch(`${server.url}/api/models`);
     expect(res.status).toBe(401);
+  });
+
+  it('expires every pending approval at daemon startup: GET /api/approvals answers empty and a late decision 409s through REST (AUD-07)', async () => {
+    const db = openDatabase(':memory:');
+    const bus = new EventBus();
+    const localSessions = new SessionService({ db, bus, harnesses: [new FakeHarness()], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt' });
+    const session = await localSessions.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    // A row left 'pending' by a daemon that crashed mid-approval: the process (and its in-memory waiter)
+    // that would have resolved it is gone, only this row survives — inserted directly, the same shape a
+    // real crash leaves behind, rather than through a live request() whose own waiter this test doesn't want.
+    const pendingId = 'orphan-approval';
+    db.prepare('INSERT INTO approvals (id, session_id, tool_name, tool_input_json, status, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(pendingId, session.id, 'Bash', '{}', 'pending', new Date().toISOString());
+
+    const bootApprovals = new ApprovalService({ db, bus });
+    bootApprovals.expireAllPending('daemon restarted');
+    const managerRepo = new ManagerRepository(db);
+    const pulseScheduler = new PulseScheduler({ managers: managerRepo, sessions: localSessions, bus });
+    const managers = new ManagerService({ managers: managerRepo, sessions: localSessions, bus, scheduler: pulseScheduler });
+    const localServer = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions: localSessions, approvals: bootApprovals, managers, pulseScheduler, bus, modelTable: DEFAULT_MODEL_TABLE, modelConfigPath: '/tmp/of-unused/config.json' });
+    try {
+      const list = await fetch(`${localServer.url}/api/approvals`, { headers: { authorization: 'Bearer admin' } });
+      expect(await list.json()).toEqual([]);
+
+      const decide = await fetch(`${localServer.url}/api/approvals/${pendingId}/decide`, {
+        method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer admin' }, body: JSON.stringify({ behavior: 'allow' }),
+      });
+      expect(decide.status).toBe(409);
+    } finally {
+      await localServer.close();
+    }
   });
 
   it('rejects a body over 1 MiB on a protected route with 413', async () => {
@@ -186,6 +228,23 @@ describe('REST', () => {
     expect((await res.json()).model).toBe('claude-opus-5-5');
   });
 
+  it('accepts the Opus 1M-context id, brackets included, when creating a session', async () => {
+    const res = await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake', model: 'claude-opus-5-5[1m]' }) });
+
+    expect(res.status).toBe(201);
+    expect((await res.json()).model).toBe('claude-opus-5-5[1m]');
+  });
+
+  it.each([
+    ['a flag-shaped id', '--x'],
+    ['a short-flag-shaped id', '-p'],
+    ['an id with a space inside', 'a b'],
+    ['an id with a newline inside', 'a\nb'],
+  ])('400s a session create whose model is %s, so it can never reach the claude CLI as an extra flag', async (_label, model) => {
+    const res = await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake', model }) });
+    expect(res.status).toBe(400);
+  });
+
   it('404s a model change for an unknown session', async () => {
     const res = await api('/api/sessions/nope/model', { method: 'POST', body: JSON.stringify({ model: 'sonnet' }) });
     expect(res.status).toBe(404);
@@ -235,6 +294,23 @@ describe('REST', () => {
     const created = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
     const res = await api(`/api/sessions/${created.id}/model`, { method: 'POST', body: JSON.stringify({ model: '' }) });
     expect(res.status).toBe(400);
+  });
+
+  it.each([
+    ['a flag-shaped id', '--x'],
+    ['a short-flag-shaped id', '-p'],
+    ['an id with a space inside', 'a b'],
+    ['an id with a newline inside', 'a\nb'],
+  ])('400s a model change whose model is %s, so it can never reach the claude CLI as an extra flag', async (_label, model) => {
+    const created = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
+    const res = await api(`/api/sessions/${created.id}/model`, { method: 'POST', body: JSON.stringify({ model }) });
+    expect(res.status).toBe(400);
+  });
+
+  it('accepts the Opus 1M-context id, brackets included, on a model change', async () => {
+    const created = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
+    const res = await api(`/api/sessions/${created.id}/model`, { method: 'POST', body: JSON.stringify({ model: 'claude-opus-5-5[1m]' }) });
+    expect(res.status).toBe(200);
   });
 
   it('answers a non-JSON model body with a 400 rather than a silent 200', async () => {
@@ -402,9 +478,37 @@ describe('REST', () => {
     // reopen call the running server handles goes through a harness that throws on start.
     (sessions as unknown as { harnessFor: (id: string) => Harness }).harnessFor = () => new FailingHarness();
 
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const res = await api(`/api/sessions/${created.id}/reopen`, { method: 'POST' });
     expect(res.status).toBe(500);
     expect(await res.json()).toEqual({ error: 'launch_failed' });
+
+    // sessionService itself already logs the domain-level failure (resumeOne); this call finds the
+    // separate HTTP-level 500 log this test is actually about, among whatever else got logged.
+    const httpErrorLog = consoleErrorSpy.mock.calls.find(([line]) => (line as string).includes('POST') && (line as string).includes(`/api/sessions/${created.id}/reopen`));
+    expect(httpErrorLog).toBeDefined();
+    expect((httpErrorLog![1] as Error).stack).toContain('pty spawn ENOENT');
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('logs every 500 with its stack, method and query-free path, and never logs the request headers', async () => {
+    const listSpy = vi.spyOn(sessions, 'list').mockImplementation(() => {
+      throw new Error('sqlite: database is locked');
+    });
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const res = await fetch(`${server.url}/api/sessions?secret=leak-me`, { headers: { authorization: 'Bearer admin', 'x-super-secret-header': 'do-not-log-me' } });
+
+    expect(res.status).toBe(500);
+    expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+    const [line, loggedError] = consoleErrorSpy.mock.calls[0]!;
+    expect(line as string).toContain('GET');
+    expect(line as string).toContain('/api/sessions');
+    expect(line as string).not.toContain('secret=leak-me');
+    expect(line as string).not.toContain('do-not-log-me');
+    expect((loggedError as Error).stack).toContain('sqlite: database is locked');
+    listSpy.mockRestore();
+    consoleErrorSpy.mockRestore();
   });
 
   it('503s creating a session while the daemon is shutting down', async () => {
@@ -524,7 +628,7 @@ describe('REST', () => {
   });
 
   it('sends a snapshot first, then streams live events', async () => {
-    const ws = new WebSocket(`${server.url.replace('http', 'ws')}/ws?token=admin`);
+    const ws = new WebSocket(await wsUrl());
     const nextMessage = () => new Promise<string>((resolve) => ws.addEventListener('message', (m) => resolve(String(m.data)), { once: true }));
 
     expect(JSON.parse(await nextMessage())).toEqual({ type: 'snapshot', sessions: [], approvals: [], managers: [] });
@@ -537,7 +641,7 @@ describe('REST', () => {
 
   it('snapshot reflects sessions and approvals that already existed before connecting', async () => {
     const created = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
-    const ws = new WebSocket(`${server.url.replace('http', 'ws')}/ws?token=admin`);
+    const ws = new WebSocket(await wsUrl());
     const snapshot = JSON.parse(await new Promise<string>((resolve) => ws.addEventListener('message', (m) => resolve(String(m.data)), { once: true })));
     expect(snapshot.sessions.map((s: { id: string }) => s.id)).toEqual([created.id]);
     ws.close();
@@ -547,8 +651,13 @@ describe('REST', () => {
     const session = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
     harness.handles[0]!.emitData('hello from pty');
 
-    const requester = new WebSocket(`${server.url.replace('http', 'ws')}/ws?token=admin`);
-    const bystander = new WebSocket(`${server.url.replace('http', 'ws')}/ws?token=admin`);
+    // Both tickets are fetched before either socket connects: fetch and WebSocket share undici's connection
+    // pool to the same origin, and a fetch interleaved between the two connects starves the first socket's
+    // upgrade indefinitely, with no error on either side.
+    const requesterUrl = await wsUrl();
+    const bystanderUrl = await wsUrl();
+    const requester = new WebSocket(requesterUrl);
+    const bystander = new WebSocket(bystanderUrl);
     await Promise.all([requester, bystander].map((ws) => new Promise((r) => ws.addEventListener('message', r, { once: true })))); // wait past each socket's snapshot
 
     const bystanderSawReplay = new Promise<boolean>((resolve) => {
@@ -565,7 +674,7 @@ describe('REST', () => {
   });
 
   it('ignores a malformed websocket frame instead of crashing the daemon', async () => {
-    const ws = new WebSocket(`${server.url.replace('http', 'ws')}/ws?token=admin`);
+    const ws = new WebSocket(await wsUrl());
     await new Promise((r) => ws.addEventListener('open', r, { once: true }));
     ws.send('not json');
     await new Promise((r) => setTimeout(r, 50));
@@ -576,7 +685,7 @@ describe('REST', () => {
 
   it('ignores a resize message with non-positive dimensions instead of applying it', async () => {
     const session = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
-    const ws = new WebSocket(`${server.url.replace('http', 'ws')}/ws?token=admin`);
+    const ws = new WebSocket(await wsUrl());
     await new Promise((r) => ws.addEventListener('message', r, { once: true })); // wait past the snapshot
     ws.send(JSON.stringify({ type: 'resize', sessionId: session.id, cols: -1, rows: 10 }));
     await new Promise((r) => setTimeout(r, 50));
@@ -587,7 +696,7 @@ describe('REST', () => {
   });
 
   it('ignores an attach message with a missing sessionId instead of crashing', async () => {
-    const ws = new WebSocket(`${server.url.replace('http', 'ws')}/ws?token=admin`);
+    const ws = new WebSocket(await wsUrl());
     await new Promise((r) => ws.addEventListener('message', r, { once: true })); // wait past the snapshot
     ws.send(JSON.stringify({ type: 'attach' }));
     await new Promise((r) => setTimeout(r, 50));

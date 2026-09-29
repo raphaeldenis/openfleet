@@ -24,7 +24,7 @@ function fakeEvents(sessions: Session[], approvals: Approval[] = []) {
   return {
     sessions: signal(sessions), approvals: signal(approvals), managers: signal([]),
     connected: signal(true), reconnectCount: signal(0), deliveredMessageIds: signal(new Set<string>()),
-    output: () => new Subject<string>(), sendInput: vi.fn(), sendResize: vi.fn(), sendAttach: vi.fn(),
+    output: () => new Subject<string>(), sendInput: vi.fn(), sendResize: vi.fn(), sendAttach: vi.fn(), dropQueuedSendsFor: vi.fn(),
   };
 }
 

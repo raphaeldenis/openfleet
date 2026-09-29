@@ -24,4 +24,10 @@ Requires Node >=26 — `nvm use` in this repo picks up Homebrew's Node via `.nvm
 
 `git push --no-verify` is the only bypass. The hook path is shared by all worktrees through the common `.git/config`; each worktree needs one `pnpm install` (or `pnpm prepare`) to generate its untracked `.husky/_`.
 
+### Autonomous Claude Code sessions (local opt-in only)
+
+The repo ships no `.claude/settings.json` and no auto-approve hook: a clone of this public repo must not grant any agent a permission bypass by default. If you want an autonomous session in your own checkout, add your own `.claude/settings.local.json` (already gitignored) with a `permissions.defaultMode` and any `PreToolUse`/`PermissionRequest` hook you're comfortable with — it stays local to your machine and is never committed.
+
+OpenFleet-launched `claude` sessions ignore a project's `.claude/settings.json` (and `settings.local.json`) entirely (AUD-28), so the file above has no effect on them; a per-project reconcile/import of those settings is planned (AUD-29).
+
 Live smoke checklist (needs a real `claude` subscription, not run in CI): `docs/phase1-smoke.md`.

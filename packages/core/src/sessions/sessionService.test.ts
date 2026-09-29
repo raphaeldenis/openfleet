@@ -670,9 +670,9 @@ describe('SessionService resume', () => {
       return originalSetState.call(this, id, state, since);
     });
     const originalSetClosed = SessionRepository.prototype.setClosed;
-    const setClosedSpy = vi.spyOn(SessionRepository.prototype, 'setClosed').mockImplementation(function (this: SessionRepository, id, exitCode, at) {
+    const setClosedSpy = vi.spyOn(SessionRepository.prototype, 'setClosed').mockImplementation(function (this: SessionRepository, id, exitCode, at, hookToken, mcpToken) {
       if (id === badSession.id) throw new Error('setClosed boom');
-      return originalSetClosed.call(this, id, exitCode, at);
+      return originalSetClosed.call(this, id, exitCode, at, hookToken, mcpToken);
     });
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
@@ -804,6 +804,88 @@ describe('SessionService resume', () => {
     expect(row.permission_mode).toBe('default');
   });
 
+  describe('permissive .claude settings in the launch directory', () => {
+    class FakeClaudeCliHarness implements Harness {
+      readonly id = 'claude-cli' as const;
+      readonly launches: HarnessLaunch[] = [];
+      start(launch: HarnessLaunch): HarnessHandle {
+        this.launches.push(launch);
+        return new FakeHandle();
+      }
+    }
+
+    function permissiveDirectory(): string {
+      const directory = mkdtempSync(join(tmpdir(), 'of-project-'));
+      mkdirSync(join(directory, '.claude'));
+      writeFileSync(join(directory, '.claude', 'settings.json'), JSON.stringify({ permissions: { defaultMode: 'bypassPermissions' } }));
+      return directory;
+    }
+
+    it('warns once when creating a claude-cli session in a directory with a bypassPermissions default mode', async () => {
+      const db = openDatabase(':memory:');
+      const bus = new EventBus();
+      const harness = new FakeClaudeCliHarness();
+      const service = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+      const directory = permissiveDirectory();
+
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      await service.create({ directory, name: 'G', harness: 'claude-cli', emoji: '🤖' });
+
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0]![0]).toContain('bypassPermissions');
+      expect(warn.mock.calls[0]![0]).toContain('OpenFleet ignores');
+      warn.mockRestore();
+    });
+
+    it('does not warn when creating a claude-cli session in a directory without permissive settings', async () => {
+      const db = openDatabase(':memory:');
+      const bus = new EventBus();
+      const harness = new FakeClaudeCliHarness();
+      const service = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+      const directory = mkdtempSync(join(tmpdir(), 'of-project-'));
+
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      await service.create({ directory, name: 'G', harness: 'claude-cli', emoji: '🤖' });
+
+      expect(warn).not.toHaveBeenCalled();
+      warn.mockRestore();
+    });
+
+    it('does not warn for a fake-harness session, even in a permissive directory, since only claude-cli actually reads .claude settings', async () => {
+      const db = openDatabase(':memory:');
+      const bus = new EventBus();
+      const harness = new FakeHarness();
+      const service = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+      const directory = permissiveDirectory();
+
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      await service.create({ directory, name: 'G', harness: 'fake', emoji: '🤖' });
+
+      expect(warn).not.toHaveBeenCalled();
+      warn.mockRestore();
+    });
+
+    it('warns again on a daemon-restart resume of a claude-cli session whose directory grew permissive settings meanwhile', async () => {
+      const db = openDatabase(':memory:');
+      const bus = new EventBus();
+      const firstRunHarness = new FakeClaudeCliHarness();
+      const original = new SessionService({ db, bus, harnesses: [firstRunHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+      const directory = mkdtempSync(join(tmpdir(), 'of-project-'));
+      await original.create({ directory, name: 'G', harness: 'claude-cli', emoji: '🤖' });
+      mkdirSync(join(directory, '.claude'));
+      writeFileSync(join(directory, '.claude', 'settings.json'), JSON.stringify({ permissions: { defaultMode: 'bypassPermissions' } }));
+
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const restartHarness = new FakeClaudeCliHarness();
+      const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt', resumeTimeoutMs: 50 });
+      await restarted.resumeAll();
+
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0]![0]).toContain('bypassPermissions');
+      warn.mockRestore();
+    });
+  });
+
   it('a non-SessionStart hook event after resume still cancels the resume timeout, since any hook proves the process is alive', async () => {
     const db = openDatabase(':memory:');
     const bus = new EventBus();
@@ -888,11 +970,80 @@ describe('SessionService resume', () => {
   });
 });
 
+describe('SessionService launch failure and manual close (AUD-06)', () => {
+  it('a launch whose harness throws leaves the session closed with an error exit code, never a phantom starting row', async () => {
+    const db = openDatabase(':memory:');
+    const bus = new EventBus();
+    const throwingHarness: Harness = { id: 'fake', start: () => { throw new Error('posix_spawnp ENOENT'); } };
+    const service = new SessionService({ db, bus, harnesses: [throwingHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+
+    await expect(service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' })).rejects.toThrow('posix_spawnp ENOENT');
+
+    const [ghost] = service.list();
+    expect(ghost!.state).toBe('closed');
+    expect(ghost!.exitCode).toBe(RESUME_LAUNCH_FAILED_EXIT_CODE);
+  });
+
+  it('close() on a session this instance holds no handle for marks it closed instead of silently no-op-ing', async () => {
+    const db = openDatabase(':memory:');
+    const bus = new EventBus();
+    const firstRunHarness = new FakeHarness();
+    const original = new SessionService({ db, bus, harnesses: [firstRunHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+    const session = await original.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+
+    // A fresh instance over the same db that never resumed anything: it holds no handle for this session,
+    // the same shape a request landing between daemon boot and resumeAll() finishing would see.
+    const restartHarness = new FakeHarness();
+    const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+
+    await restarted.close(session.id);
+
+    expect(restarted.get(session.id)!.state).toBe('closed');
+  });
+
+  it('close() on a session id that never existed stays a no-op', async () => {
+    const { service } = setup();
+
+    await expect(service.close('never-existed')).resolves.toBeUndefined();
+
+    expect(service.get('never-existed')).toBeUndefined();
+  });
+
+  it('closes a freshly created session that never leaves starting before its own first-start timeout (AUD-06)', async () => {
+    vi.useFakeTimers();
+    const db = openDatabase(':memory:');
+    const bus = new EventBus();
+    const harness = new FakeHarness();
+    const service = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt', firstStartTimeoutMs: 50 });
+
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    await vi.advanceTimersByTimeAsync(51);
+
+    expect(service.get(session.id)!.state).toBe('closed');
+    expect(service.get(session.id)!.exitCode).toBe(RESUME_TIMEOUT_EXIT_CODE);
+  });
+
+  it('does not close a freshly created session at the (smaller) resumeTimeoutMs — first launch has its own timeout (AUD-06)', async () => {
+    vi.useFakeTimers();
+    const db = openDatabase(':memory:');
+    const bus = new EventBus();
+    const harness = new FakeHarness();
+    // resumeTimeoutMs is tiny; firstStartTimeoutMs is left at its 60s default and must be what governs a first launch.
+    const service = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt', resumeTimeoutMs: 50 });
+
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    await vi.advanceTimersByTimeAsync(51);
+
+    expect(service.get(session.id)!.state).toBe('starting');
+  });
+});
+
 describe('SessionService.updateModel', () => {
   it('relaunches an idle session with --resume and the new model instead of typing /model, rotating tokens', async () => {
     vi.useFakeTimers();
     const { service, harness, events } = setup();
     const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    harness.markPrompted(session.id);
     service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
     const originalTokens = service.tokens(session.id)!;
 
@@ -922,6 +1073,7 @@ describe('SessionService.updateModel', () => {
     vi.useFakeTimers();
     const { service, harness } = setup();
     const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    harness.markPrompted(session.id);
     service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
     service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit' }));
 
@@ -2774,6 +2926,7 @@ describe('SessionService.updatePermissionMode', () => {
     vi.useFakeTimers();
     const { service, harness } = setup();
     const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    harness.markPrompted(session.id);
     service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
 
     const result = service.updatePermissionMode(session.id, 'bypassPermissions');
@@ -2848,6 +3001,7 @@ describe('SessionService.reopen', () => {
     vi.useFakeTimers();
     const { service, harness } = setup();
     const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖', model: 'claude-opus-5-5' });
+    harness.markPrompted(session.id);
     const originalTokens = service.tokens(session.id)!;
     harness.handles[0]!.emitExit(0);
     expect(service.get(session.id)!.state).toBe('closed');
@@ -2860,6 +3014,21 @@ describe('SessionService.reopen', () => {
     expect(harness.launches[1]!.model).toBe('claude-opus-5-5');
     const rotated = service.tokens(session.id)!;
     expect(rotated.hookToken).not.toBe(originalTokens.hookToken);
+  });
+
+  it('authenticates a reopened session on its new tokens, and no longer on the ones from before it closed', async () => {
+    const { service, harness } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    const originalTokens = service.tokens(session.id)!;
+    harness.handles[0]!.emitExit(0);
+
+    service.reopen(session.id);
+
+    const rotated = service.tokens(session.id)!;
+    expect(service.byHookToken(rotated.hookToken)?.id).toBe(session.id);
+    expect(service.byMcpToken(rotated.mcpToken)?.id).toBe(session.id);
+    expect(service.byHookToken(originalTokens.hookToken)).toBeUndefined();
+    expect(service.byMcpToken(originalTokens.mcpToken)).toBeUndefined();
   });
 
   it('rejects reopening a session that is not closed', async () => {

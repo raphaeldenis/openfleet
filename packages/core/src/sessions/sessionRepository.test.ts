@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { openDatabase } from '../db/database.js';
+import { ProjectRepository } from '../projects/projectRepository.js';
 import { SessionRepository } from './sessionRepository.js';
 
 describe('SessionRepository.closeAllOpen', () => {
@@ -11,6 +12,22 @@ describe('SessionRepository.closeAllOpen', () => {
     repo.closeAllOpen(new Date().toISOString());
 
     expect(repo.get('s1')?.state).toBe('closed');
+  });
+});
+
+const currentCliSessionIdInRow = (db: ReturnType<typeof openDatabase>, id: string) =>
+  (db.prepare('SELECT cli_session_id FROM sessions WHERE id = ?').get(id) as { cli_session_id: string | null }).cli_session_id;
+
+describe('SessionRepository.setCliSessionId', () => {
+  it('leaves the current conversation of the session untouched when reserving the id fails', () => {
+    const db = openDatabase(':memory:');
+    const repo = new SessionRepository(db);
+    repo.insert({ id: 's1', name: 'G', emoji: '🤖', directory: '/tmp', worktree: null, model: null, parent_id: null, role: null, harness: 'fake', state: 'idle', state_since: 't', hook_token: 'h', mcp_token: 'm', permission_mode: null, branch: null, created_at: 't' });
+    db.exec('DROP TABLE session_cli_ids');
+
+    expect(() => repo.setCliSessionId('s1', 'cccccccc-cccc-4ccc-8ccc-cccccccccccc')).toThrow();
+
+    expect(currentCliSessionIdInRow(db, 's1')).toBeNull();
   });
 });
 
@@ -40,6 +57,24 @@ describe('SessionRepository', () => {
 
     expect(repo.get('s1')!.permissionMode).toBeUndefined();
     expect(repo.list()[0]!.permissionMode).toBeUndefined();
+  });
+
+  it('persists and returns projectId, both from get() and list()', () => {
+    const db = openDatabase(':memory:');
+    new ProjectRepository(db).insert({ id: 'p1', name: 'OpenFleet', docsFolderPath: null, createdAt: 't0' });
+    const repo = new SessionRepository(db);
+    repo.insert({ ...baseRow, project_id: 'p1' });
+
+    expect(repo.get('s1')!.projectId).toBe('p1');
+    expect(repo.list()[0]!.projectId).toBe('p1');
+  });
+
+  it('leaves projectId undefined when the session belongs to no project', () => {
+    const db = openDatabase(':memory:');
+    const repo = new SessionRepository(db);
+    repo.insert(baseRow);
+
+    expect(repo.get('s1')!.projectId).toBeUndefined();
   });
 
   it('leaves permissionMode undefined when none was given', () => {
@@ -88,6 +123,30 @@ describe('SessionRepository', () => {
     expect(repo.byHookToken('h')).toBeUndefined();
     expect(repo.byMcpToken('m')).toBeUndefined();
     expect(repo.byHookToken('fresh-hook')?.id).toBe('s1');
+  });
+
+  it('does not match a closed session\'s token by lookup, even a row this build never touched (a pre-patch upgrade row)', () => {
+    const db = openDatabase(':memory:');
+    const repo = new SessionRepository(db);
+    repo.insert({ ...baseRow, state: 'closed', hook_token: 'legacy-hook', mcp_token: 'legacy-mcp' });
+
+    expect(repo.byHookToken('legacy-hook')).toBeUndefined();
+    expect(repo.byMcpToken('legacy-mcp')).toBeUndefined();
+  });
+
+  it('closes the session and rotates both tokens in a single write', () => {
+    const db = openDatabase(':memory:');
+    const repo = new SessionRepository(db);
+    repo.insert(baseRow);
+
+    repo.setClosed('s1', 0, 't1', 'fresh-hook', 'fresh-mcp');
+
+    const session = repo.get('s1')!;
+    expect(session.state).toBe('closed');
+    expect(session.exitCode).toBe(0);
+    expect(repo.tokens('s1')).toEqual({ hookToken: 'fresh-hook', mcpToken: 'fresh-mcp' });
+    expect(repo.byHookToken('h')).toBeUndefined();
+    expect(repo.byMcpToken('m')).toBeUndefined();
   });
 
   it('persists and returns the worktree branch a session was created on', () => {

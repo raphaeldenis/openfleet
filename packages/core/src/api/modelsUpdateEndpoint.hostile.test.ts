@@ -13,8 +13,18 @@ import { ManagerRepository } from '../managers/managerRepository.js';
 import { ManagerService } from '../managers/managerService.js';
 import { PulseScheduler } from '../managers/pulseScheduler.js';
 import { DEFAULT_MODEL_TABLE, loadModelTable } from '../models.js';
+import { DocsFolderService } from '../notes/docsFolderService.js';
+import { expandMentions } from '../notes/mentionExpander.js';
+import { nodeDocsFolderFs } from '../notes/nodeDocsFolderFs.js';
+import { NoteRepository } from '../notes/noteRepository.js';
+import { NoteService } from '../notes/noteService.js';
+import { ProjectRepository } from '../projects/projectRepository.js';
 import { SessionService } from '../sessions/sessionService.js';
+import { WorkingStateService } from '../workingState/workingStateService.js';
 import { createMcpHandler } from '../mcp/mcpServer.js';
+import { DataStoreRepository } from '../stores/dataStoreRepository.js';
+import { DataStoreService } from '../stores/dataStoreService.js';
+import { newId } from '../ids.js';
 import { startServer } from './server.js';
 
 // Black-box hostile tests for PUT /api/models: REST in and out, config.json on disk, nothing private.
@@ -38,7 +48,13 @@ async function startDaemon(modelConfigPath: string) {
   const pulseScheduler = new PulseScheduler({ managers: managerRepo, sessions, bus });
   const managers = new ManagerService({ managers: managerRepo, sessions, bus, scheduler: pulseScheduler });
   const modelTable = loadModelTable(modelConfigPath);
-  const mcp = createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, worktreesRoot: '/tmp/of-wt' });
+  const storeRepo = new DataStoreRepository(db);
+  const stores = new DataStoreService({ repo: storeRepo, db, clock: () => new Date().toISOString(), newId });
+  const projects = new ProjectRepository(db);
+  const noteRepo = new NoteRepository(db);
+  const notes = new NoteService({ repo: noteRepo, db, expandMentions, clock: () => new Date().toISOString(), newId });
+  const docs = new DocsFolderService({ notes, noteRepo, projects, fs: nodeDocsFolderFs, clock: () => new Date().toISOString() });
+  const mcp = createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, workingStates: new WorkingStateService({ db, clock: () => new Date().toISOString(), stateRoot: '/tmp/of-unused/state', maxBytes: 6144 }), worktreesRoot: '/tmp/of-wt' });
   return startServer({ host: '127.0.0.1', port: 0, adminToken: ADMIN_TOKEN, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, mcp });
 }
 
@@ -183,7 +199,7 @@ describe('PUT /api/models — config.json in a hostile state', () => {
     expect(await getModels()).toEqual(DEFAULT_MODEL_TABLE);
   });
 
-  it('answers 500, keeps the served table and leaves no temp file when the home directory is not writable', async () => {
+  it.skipIf(process.getuid?.() === 0)('answers 500, keeps the served table and leaves no temp file when the home directory is not writable', async () => {
     chmodSync(homeDirectory, 0o500);
     try {
       const res = await putModels({ opus: 'claude-opus-5-5-b' });

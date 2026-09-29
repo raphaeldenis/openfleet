@@ -86,11 +86,21 @@ describe('AppShellComponent', () => {
   it('renders a section without a screen yet as disabled, with its phase text, never hidden', async () => {
     const { root } = await setUp();
 
-    const notes = root.querySelector('[data-testid="nav-notes"]') as HTMLElement;
-    expect(notes.tagName).not.toBe('A');
-    expect(notes).toHaveAttribute('aria-disabled', 'true');
-    expect(notes).toHaveTextContent('Notes');
-    expect(notes).toHaveTextContent('Available in phase 3');
+    const calendar = root.querySelector('[data-testid="nav-calendar"]') as HTMLElement;
+    expect(calendar.tagName).not.toBe('A');
+    expect(calendar).toHaveAttribute('aria-disabled', 'true');
+    expect(calendar).toHaveTextContent('Calendar');
+    expect(calendar).toHaveTextContent('Available in phase 5');
+  });
+
+  it('renders Notes as a real link to the notes screen', async () => {
+    const { root } = await setUp();
+
+    const notes = root.querySelector('[data-testid="nav-notes"]') as HTMLAnchorElement;
+
+    expect(notes.tagName).toBe('A');
+    expect(notes).not.toHaveAttribute('aria-disabled');
+    expect(notes.getAttribute('href')).toBe('/notes');
   });
 
   it('gives each disabled section the phase text from the backlog (Capitaine correction 2026-09-27)', async () => {
@@ -112,6 +122,15 @@ describe('AppShellComponent', () => {
     await harness.fixture.whenStable();
 
     expect(root.querySelector('[data-testid="stub-inbox"]')).toBeTruthy();
+  });
+
+  it('renders Tables as a real link to its screen', async () => {
+    const { root } = await setUp();
+
+    const tables = root.querySelector('[data-testid="nav-tables"]') as HTMLAnchorElement;
+
+    expect(tables.tagName).toBe('A');
+    expect(tables.getAttribute('href')).toBe('/tables');
   });
 
   it('drops the sidebar Inbox badge count when the Inbox dismisses an already-resolved gate', async () => {
@@ -453,13 +472,13 @@ describe('AppShellComponent', () => {
   it('never lets a disabled nav item navigate, by click or by keyboard, since it renders as inert text rather than a link', async () => {
     const { harness, root } = await setUp();
     const router = TestBed.inject(Router);
-    const notes = root.querySelector('[data-testid="nav-notes"]') as HTMLElement;
+    const calendar = root.querySelector('[data-testid="nav-calendar"]') as HTMLElement;
 
-    expect(notes.tagName).toBe('SPAN');
-    expect(notes).not.toHaveAttribute('tabindex');
-    expect(notes.getAttribute('href')).toBeNull();
+    expect(calendar.tagName).toBe('SPAN');
+    expect(calendar).not.toHaveAttribute('tabindex');
+    expect(calendar.getAttribute('href')).toBeNull();
 
-    notes.click();
+    calendar.click();
     await harness.fixture.whenStable();
 
     expect(router.url).toBe('/');

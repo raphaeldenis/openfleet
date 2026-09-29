@@ -27,11 +27,32 @@ const FALLBACK_RUNG = 'sonnet';
       @if (switchError(); as error) {
         <span role="alert" data-testid="model-switch-error" class="of-error">✕ {{ error }}</span>
       }
+      @if (session(); as current) {
+        <div class="resolution">
+          @if (current.resolvedModel) {
+            <span data-testid="resolved-model">resolved {{ current.resolvedModel }}</span>
+          }
+          @if (current.cliVersion) {
+            <span data-testid="cli-version">CLI {{ current.cliVersion }}</span>
+          }
+          @if (current.modelDriftedFrom) {
+            <span class="drift">
+              <span class="drift-icon" aria-hidden="true">⚠</span>
+              <span class="drift-text" data-testid="model-drift">changed from {{ current.modelDriftedFrom }}</span>
+            </span>
+          }
+        </div>
+      }
     </div>
   `,
   styles: `
-    .model-selector { display: flex; align-items: center; gap: .375rem; }
-    .current { font-family: var(--mono); font-size: .75rem; }
+    :host { flex: 1 1 auto; }
+    .model-selector { display: flex; flex-wrap: wrap; align-items: center; gap: .375rem; min-width: 0; }
+    .resolution { flex-basis: 100%; min-width: 0; contain: inline-size; display: flex; flex-wrap: wrap; gap: .125rem .5rem; font-family: var(--mono); font-size: .6875rem; color: var(--mut); overflow-wrap: anywhere; }
+    .resolution:empty { display: none; }
+    .drift { display: inline-flex; gap: .25rem; min-width: 0; color: var(--fg); }
+    .drift-icon { color: var(--state-waiting-permission); }
+    .current { font-family: var(--mono); font-size: .75rem; min-width: 0; overflow-wrap: anywhere; }
     .switch-status { font-size: .6875rem; color: var(--state-waiting-permission); }
   `,
 })
@@ -42,9 +63,9 @@ export class ModelSelectorComponent {
   private readonly requests = inject(SessionRequestsService);
   protected readonly statusLabel = SWITCH_STATUS_LABEL;
   protected readonly session = computed(() => this.events.sessions().find((s) => s.id === this.sessionId()));
-  // The session's current model rarely matches one of the fixed rungs exactly (it is a full model id,
-  // e.g. 'claude-opus-5-5', not the short alias 'opus') — add it as its own option instead of forcing
-  // the select onto a rung that would silently apply a different model.
+  // The session's current model is either a rung alias (e.g. 'opus') or a full model id (e.g. 'claude-opus-5-5').
+  // A full id matches no fixed rung, so it is added as its own option instead of forcing the select
+  // onto a rung that would silently apply a different model.
   protected readonly rungs = computed(() => {
     const model = this.session()?.model;
     return model && !(MODEL_RUNGS as readonly string[]).includes(model) ? [...MODEL_RUNGS, model] : MODEL_RUNGS;

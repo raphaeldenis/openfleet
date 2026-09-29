@@ -1,18 +1,21 @@
 import { accessSync, constants, existsSync, lstatSync, readFileSync, realpathSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, normalize, sep } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import type { PermissionMode, Session, SessionSpec } from '@openfleet/shared';
 import { EventBus } from '../events/eventBus.js';
 import { createWorktree } from '../git/worktrees.js';
 import type { Harness, HarnessHandle } from '../harness/harness.js';
+import { claudeProjectsDir } from '../harness/claudeCli/claudeProjects.js';
+import { findPermissiveSettingsWarning } from '../harness/claudeCli/permissiveSettings.js';
 import { newId, newToken } from '../ids.js';
+import { log } from '../logger.js';
 import { MessageQueue } from './messageQueue.js';
+import { findResolvedModel, readTranscriptTail } from './resolvedModel.js';
 import { wrapAgentMessage } from './messageEnvelope.js';
 import { normalizePermissionMode, SessionRepository } from './sessionRepository.js';
-import { canDeliverNow, nextState, provesTurnEnded, type SessionInput } from './stateMachine.js';
+import { canDeliverNow, isClear, nextState, provesTurnEnded, type SessionInput } from './stateMachine.js';
 
-export interface SessionServiceDeps { db: DatabaseSync; bus: EventBus; harnesses: Harness[]; baseUrl: string; worktreesRoot: string; resumeTimeoutMs?: number; submitKeystrokeDelayMs?: number }
+export interface SessionServiceDeps { db: DatabaseSync; bus: EventBus; harnesses: Harness[]; baseUrl: string; worktreesRoot: string; resumeTimeoutMs?: number; firstStartTimeoutMs?: number; submitKeystrokeDelayMs?: number; clearInFlightTimeoutMs?: number; clearFlushGraceMs?: number }
 
 export class SessionClosedError extends Error {
   constructor(sessionId: string) {
@@ -50,7 +53,21 @@ export class DaemonShuttingDownError extends Error {
 
 const OUTPUT_BUFFER_LIMIT = 200 * 1024;
 export const DEFAULT_CLOSE_ESCALATE_MS = 5000;
+
+interface ClearHold { timer: ReturnType<typeof setTimeout>; isFlushGrace: boolean; ended: Promise<void>; end: () => void }
+const RECORDING_RETRY_DELAY_MS = 500;
 const DEFAULT_RESUME_TIMEOUT_MS = 15_000;
+// A /clear reports SessionEnd then SessionStart a few ms apart; a relaunch in between would resume the
+// conversation being left. The hold ends when the SessionStart arrives (after the flush grace) or, if it
+// never does, after this timeout.
+const DEFAULT_CLEAR_IN_FLIGHT_TIMEOUT_MS = 3000;
+// The new conversation's transcript is a 96 B stub until the CLI flushes it (0.32 s measured): a relaunch
+// killing the process inside that window would leave a conversation `--resume` refuses.
+const DEFAULT_CLEAR_FLUSH_GRACE_MS = 500;
+export const NEW_CONVERSATION_NOTICE = '\r\n[OpenFleet] The previous conversation could not be found: started a new one.\r\n';
+// A cold real CLI can sit waiting on an auth or trust prompt far longer than a resume ever should, so a
+// first launch gets its own, more generous ceiling instead of sharing resumeTimeoutMs (AUD-06).
+const DEFAULT_FIRST_START_TIMEOUT_MS = 60_000;
 // ponytail: fixed delay giving Claude Code's composer time to settle after typeMessage's bracketed-paste
 // write before the separate '\r' submits it; upgrade path is confirming the composer holds the full body
 // from the pty output instead of trusting a fixed delay.
@@ -130,14 +147,6 @@ function isInterruptedTranscriptLine(line: string): boolean {
   });
 }
 
-// The daemon's own env is what the harness passes through to the CLI child (childEnvironment.ts keeps
-// CLAUDE_CONFIG_DIR — it's user configuration, not a session marker), so it is also the daemon's own
-// source of truth for where that CLI writes transcripts.
-function claudeProjectsDir(): string {
-  const configDir = process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude');
-  return join(configDir, 'projects');
-}
-
 // Walks up from `path` to the nearest ancestor that already exists on disk, returning that ancestor
 // alongside the path segments below it that don't exist yet (outermost first). The first session ever run
 // in a new directory reports a transcript_path whose whole per-directory project subfolder is still
@@ -164,6 +173,8 @@ function nearestExistingAncestor(path: string): { existingAncestor: string; unbo
 // to the nearest existing ancestor and resolves the still-unborn segments against that ancestor's realpath
 // instead. Never throws: a missing file, missing directory, or missing projects directory is just
 // "untrusted".
+const CLI_SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function isTrustedTranscriptPath(path: string): boolean {
   if (!path.endsWith('.jsonl')) return false;
   if (!isAbsolute(path) || normalize(path) !== path) return false;
@@ -254,7 +265,26 @@ export class SessionService {
   // Last transcript_path any hook reported for this session — the only way an ESC-armed watch below
   // knows which file to tail.
   private readonly transcriptPaths = new Map<string, string>();
+  // Sessions between a /clear's SessionEnd and the end of its flush grace: a relaunch waits for the timer.
+  private readonly clearsInFlight = new Map<string, ClearHold>();
+  // Conversations this daemon launched fresh (--session-id) that no prompt reached yet: the CLI writes no transcript
+  // for them, so a missing file there is not a lost conversation.
+  // ponytail: memory only; after a daemon restart a fresh conversation adopted under another id and still unprompted
+  // reads as lost once. Upgrade path: persist a prompted flag next to cli_session_id.
+  private readonly conversationsAwaitingFirstPrompt = new Set<string>();
+  // Sessions in which the CLI showed a prompt or a /clear since their conversation started: they hold a conversation.
+  private readonly sessionsPrompted = new Set<string>();
   private readonly interruptWatches = new Map<string, InterruptWatch>();
+  // Presence means "this launch has no recorded resolved model yet"; the value is the launch's start time
+  // and whether its recording failure and its transcript name mismatch were already logged.
+  private readonly pendingRecordings = new Map<string, { launchedAt: string; requestedModel: string | null; failureLogged: boolean; nameMismatchLogged: boolean; retryTimer?: ReturnType<typeof setTimeout> }>();
+  // Sessions whose model was switched and whose relaunch has not happened yet: the resolved model the old
+  // launch recorded stays visible until the relaunch really replaces the process.
+  private readonly modelSwitchesAwaitingRelaunch = new Set<string>();
+  // The relaunch clear wipes resolved_model even when the same alias is re-applied; this keeps that launch's id
+  // for the drift comparison of the next recording. Absent when the switch changes the requested model.
+  // ponytail: lost on a daemon restart between the relaunch and the recording; persist the last resolved id (a column) only if that gap matters.
+  private readonly resolvedModelBeforeSameAliasRelaunch = new Map<string, { requestedModel: string | null; resolvedModel: string }>();
   // Set once closeAll() starts; refuses any new launch (create, reopen, resumeOne, a relaunch) so it can
   // never spawn a process outside closeAll's own snapshot and survive daemon shutdown.
   private shuttingDown = false;
@@ -276,12 +306,24 @@ export class SessionService {
     // Captured now so a later reopen can tell a directory that still resolves the same way apart from an
     // in-between symlink swap from one whose path never resolved to a real directory at all.
     if (existsSync(spec.directory)) this.repo.setDirectoryRealpath(id, realpathSync.native(spec.directory));
+    this.warnIfPermissiveSettings(spec.harness, spec.directory);
     const harness = this.harnessFor(spec.harness);
-    const handle = harness.start({
-      sessionId: id, directory: spec.directory, model: spec.model, seededPrompt: spec.seededPrompt,
-      hookUrl: `${this.deps.baseUrl}/hooks/${hookToken}`, mcpUrl: `${this.deps.baseUrl}/mcp`, mcpToken, displayName: `${spec.emoji} ${spec.name}`,
-      permissionMode: spec.permissionMode,
-    });
+    this.startPendingRecording(id, spec.model);
+    this.conversationsAwaitingFirstPrompt.add(id);
+    let handle: HarnessHandle;
+    try {
+      handle = harness.start({
+        sessionId: id, directory: spec.directory, model: spec.model, seededPrompt: spec.seededPrompt,
+        hookUrl: `${this.deps.baseUrl}/hooks/${hookToken}`, mcpUrl: `${this.deps.baseUrl}/mcp`, mcpToken, displayName: `${spec.emoji} ${spec.name}`,
+        permissionMode: spec.permissionMode,
+      });
+    } catch (err) {
+      // The row above already exists: left alone, it would be a ghost forever — starting, no handle,
+      // unclosable and unreopenable. Same treatment as resumeOne's own launch failure.
+      log('error', `create: session ${id} failed to launch`, err);
+      this.markClosed(id, RESUME_LAUNCH_FAILED_EXIT_CODE);
+      throw err;
+    }
     this.handles.set(id, handle);
     activeHandleBySessionId.set(id, handle);
     handle.onData((data) => {
@@ -292,6 +334,10 @@ export class SessionService {
       if (activeHandleBySessionId.get(id) !== handle) return; // a stale process we already replaced (e.g. by a resume)
       this.markClosed(id, exitCode);
     });
+    // Same safety net resumeOne arms: a harness that starts but never reports a single real hook (SessionStart
+    // included) leaves this session starting forever otherwise. A first launch gets its own, longer timeout
+    // (firstStartTimeoutMs) since a cold real CLI can sit waiting on an auth or trust prompt (AUD-06).
+    this.armFirstStartTimeout(id, handle);
     const session = this.repo.get(id)!;
     this.deps.bus.emit({ type: 'session.created', session });
     return session;
@@ -362,6 +408,7 @@ export class SessionService {
     this.assertNotShuttingDown();
     const session = this.requireOpen(sessionId);
     this.repo.setModel(sessionId, model);
+    this.modelSwitchesAwaitingRelaunch.add(sessionId);
     this.deps.bus.emit({ type: 'session.model_changed', sessionId, model });
     return this.relaunchOrDefer(sessionId, session.state);
   }
@@ -388,7 +435,7 @@ export class SessionService {
   // redundant restart with already-correct settings. Upgrade path: collapse a pending relaunch request into
   // one already in flight instead of always queuing a second one.
   private relaunchOrDefer(sessionId: string, state: Session['state']): { status: 'relaunching' | 'deferred' } {
-    const isIdleConfirmed = canDeliverNow(state) && this.deliveryOf(sessionId).phase.name === 'ready' && !this.unfinishedTurns.has(sessionId);
+    const isIdleConfirmed = canDeliverNow(state) && this.deliveryOf(sessionId).phase.name === 'ready' && !this.unfinishedTurns.has(sessionId) && !this.clearsInFlight.has(sessionId);
     if (!isIdleConfirmed) {
       this.pendingRelaunches.add(sessionId);
       return { status: 'deferred' };
@@ -462,7 +509,7 @@ export class SessionService {
     this.pendingRelaunches.delete(sessionId);
     this.enter(sessionId, { name: 'relaunching' });
     const relaunch = this.performRelaunch(sessionId)
-      .catch((err) => console.error(`relaunch: session ${sessionId} could not be closed after a failed relaunch`, err))
+      .catch((err) => log('error', `relaunch: session ${sessionId} could not be closed after a failed relaunch`, err))
       .finally(() => this.relaunches.delete(sessionId));
     this.relaunches.set(sessionId, relaunch);
   }
@@ -477,12 +524,17 @@ export class SessionService {
         this.markClosed(sessionId, undefined);
         return;
       }
-      const outcome = this.resumeOne(session);
+      if (this.modelSwitchesAwaitingRelaunch.delete(sessionId)) {
+        this.rememberResolvedModelOfSameAlias(session);
+        this.repo.clearResolvedModel(sessionId);
+        this.deps.bus.emit({ type: 'session.updated', session: this.repo.get(sessionId)! });
+      }
+      const outcome = this.resumeOne(this.repo.get(sessionId)!);
       // A failed launch already marked the session closed (and stopped its delivery) inside resumeOne:
       // entering READY here would resurrect a delivery record for a session that is no longer open.
       if (outcome.launched) this.enter(sessionId, READY);
     } catch (err) {
-      console.error(`relaunch: session ${sessionId} failed to relaunch after a model change`, err);
+      log('error', `relaunch: session ${sessionId} failed to relaunch after a model change`, err);
       await this.failResume(sessionId);
     }
   }
@@ -492,6 +544,10 @@ export class SessionService {
   private async retireForRelaunch(sessionId: string): Promise<void> {
     this.disarmInterruptWatch(sessionId);
     this.transcriptPaths.delete(sessionId);
+    // Any approval still gating this session belonged to the process about to die: ApprovalService
+    // listens for this to expire it and answer its waiting hook, rather than leave it pending forever
+    // behind a relaunch it can never come back from (AUD-07).
+    this.deps.bus.emit({ type: 'session.relaunching', sessionId });
     this.repo.setTokens(sessionId, newToken(), newToken());
     const handle = this.handles.get(sessionId);
     if (!handle) return;
@@ -502,9 +558,25 @@ export class SessionService {
 
   applyInput(sessionId: string, input: SessionInput): void {
     const session = this.require(sessionId);
+    // The outgoing conversation's SessionEnd carries its old transcript; the SessionStart that follows names the new one.
+    const endsOutgoingConversation = input.kind === 'hook' && isClear(input.event);
+    if (endsOutgoingConversation) {
+      this.holdRelaunchesFor(sessionId, this.deps.clearInFlightTimeoutMs ?? DEFAULT_CLEAR_IN_FLIGHT_TIMEOUT_MS);
+      return;
+    }
     if (input.kind === 'hook' && input.event.transcript_path && isTrustedTranscriptPath(input.event.transcript_path)) {
       this.transcriptPaths.set(sessionId, input.event.transcript_path);
     }
+    if (input.kind === 'hook' && input.event.hook_event_name === 'SessionStart') {
+      this.adoptCliSessionId(sessionId, input.event.session_id);
+      const isWaitingForTheNewConversation = this.clearsInFlight.get(sessionId)?.isFlushGrace === false;
+      if (isWaitingForTheNewConversation) this.holdRelaunchesFor(sessionId, this.deps.clearFlushGraceMs ?? DEFAULT_CLEAR_FLUSH_GRACE_MS, { isFlushGrace: true });
+    }
+    if (input.kind === 'hook' && input.event.hook_event_name === 'UserPromptSubmit') {
+      this.sessionsPrompted.add(sessionId);
+      this.conversationsAwaitingFirstPrompt.delete(this.currentCliSessionIdOf(sessionId));
+    }
+    this.recordResolvedModelIfPending(sessionId);
     // A new prompt means the previous turn is over from the user's side even when 'generating' ->
     // 'generating' is a no-op transition below (the CLI hadn't reported the previous turn's end yet): an
     // interrupt watch still armed for that turn must not survive to misjudge this one.
@@ -541,6 +613,152 @@ export class SessionService {
     this.repo.setState(sessionId, state, since);
     this.deps.bus.emit({ type: 'session.state', sessionId, state, stateSince: since });
     this.guarded(sessionId, () => this.advance(sessionId));
+  }
+
+  private holdRelaunchesFor(sessionId: string, holdMs: number, options: { isFlushGrace: boolean } = { isFlushGrace: false }): void {
+    this.releaseClearHold(sessionId);
+    let end!: () => void;
+    const ended = new Promise<void>((resolve) => { end = resolve; });
+    const timer = setTimeout(() => {
+      this.clearsInFlight.delete(sessionId);
+      end();
+      this.guarded(sessionId, () => this.advance(sessionId));
+    }, holdMs);
+    timer.unref();
+    this.clearsInFlight.set(sessionId, { timer, isFlushGrace: options.isFlushGrace, ended, end });
+  }
+
+  private releaseClearHold(sessionId: string): void {
+    const hold = this.clearsInFlight.get(sessionId);
+    if (!hold) return;
+    clearTimeout(hold.timer);
+    this.clearsInFlight.delete(sessionId);
+    hold.end();
+  }
+
+  // The CLI writes the new conversation's lines a moment after a /clear; a process killed inside that window leaves
+  // a title-only stub the CLI refuses to resume. The wait is the flush grace itself, so it is bounded by it.
+  private async waitForClearFlushes(): Promise<void> {
+    const flushes = [...this.clearsInFlight.values()].filter((hold) => hold.isFlushGrace).map((hold) => hold.ended);
+    await Promise.all(flushes);
+  }
+
+  // The conversation the CLI process of this session is in: the launch id until a SessionStart reports another
+  // one (a /clear starts a new CLI session inside the same process). The id outlives the process, so a relaunch
+  // resumes it.
+  private currentCliSessionIdOf(sessionId: string): string {
+    return this.repo.cliSessionId(sessionId) ?? sessionId;
+  }
+
+  // A CLI session id that is another session's launch id or current id, open or closed, never becomes this session's:
+  // otherwise one session's hook could adopt a neighbour's identity and then read its transcript. Ids a session
+  // left behind stay reserved to it, also across a daemon restart.
+  private adoptCliSessionId(sessionId: string, reportedCliSessionId: string): void {
+    if (!CLI_SESSION_ID_PATTERN.test(reportedCliSessionId)) return;
+    const cliSessionId = reportedCliSessionId.toLowerCase();
+    if (this.repo.isCliSessionIdOfAnotherSession(sessionId, cliSessionId)) return;
+    this.repo.setCliSessionId(sessionId, cliSessionId);
+  }
+
+  private isTranscriptOfSession(sessionId: string, path: string): boolean {
+    return basename(path).toLowerCase() === `${this.currentCliSessionIdOf(sessionId)}.jsonl`;
+  }
+
+  private warnOnceWhenTranscriptNameIsForeign(sessionId: string, path: string, pending: { nameMismatchLogged: boolean }): void {
+    if (pending.nameMismatchLogged) return;
+    pending.nameMismatchLogged = true;
+    const expectedName = `${this.currentCliSessionIdOf(sessionId)}.jsonl`;
+    log('warn', `resolved model: transcript name does not match the session's CLI id: session ${sessionId}, expected ${expectedName}, got ${JSON.stringify(basename(path))}`);
+  }
+
+  // One attempt per hook until the launch's resolution is found, plus one retry a moment after a hook whose
+  // attempt found no assistant line: the CLI flushes its answer to the transcript shortly after it fires Stop.
+  private recordResolvedModelIfPending(sessionId: string): void {
+    const foundNoAssistantLineYet = this.attemptRecording(sessionId) === 'found-no-assistant-line';
+    if (foundNoAssistantLineYet) this.scheduleRecordingRetry(sessionId);
+  }
+
+  private scheduleRecordingRetry(sessionId: string): void {
+    const pending = this.pendingRecordings.get(sessionId);
+    if (pending === undefined || pending.retryTimer !== undefined) return;
+    pending.retryTimer = setTimeout(() => {
+      pending.retryTimer = undefined;
+      this.attemptRecording(sessionId);
+    }, RECORDING_RETRY_DELAY_MS);
+    pending.retryTimer.unref();
+  }
+
+  private startPendingRecording(sessionId: string, requestedModel: string | undefined): void {
+    this.dropPendingRecording(sessionId);
+    this.pendingRecordings.set(sessionId, { launchedAt: new Date().toISOString(), requestedModel: requestedModel ?? null, failureLogged: false, nameMismatchLogged: false });
+  }
+
+  private dropPendingRecording(sessionId: string): void {
+    clearTimeout(this.pendingRecordings.get(sessionId)?.retryTimer);
+    this.pendingRecordings.delete(sessionId);
+  }
+
+  // The clear that follows a model switch wipes the row even when the alias is unchanged: the id resolved under that
+  // same alias is kept for the drift comparison of the next recording. An id resolved under another alias is not.
+  private rememberResolvedModelOfSameAlias(session: Session): void {
+    const requestedModel = session.model ?? null;
+    const resolvedUnderSameAlias = this.repo.resolvedModelUnderAlias({ id: session.id, requestedModel });
+    if (resolvedUnderSameAlias === undefined) return;
+    this.resolvedModelBeforeSameAliasRelaunch.set(session.id, { requestedModel, resolvedModel: resolvedUnderSameAlias });
+  }
+
+  // The session's own earlier id, resolved under the alias of this launch, wins over another session's: a relaunch is compared with itself first.
+  private findDrift(sessionId: string, resolvedModel: string, requestedModel: string | null): { previousModel: string; comparedWith: 'same session relaunched' | { previousSessionId: string } } | undefined {
+    const rememberedBeforeRelaunch = this.resolvedModelBeforeSameAliasRelaunch.get(sessionId);
+    const rememberedUnderThisAlias = rememberedBeforeRelaunch?.requestedModel === requestedModel ? rememberedBeforeRelaunch.resolvedModel : undefined;
+    const ownPreviousModel = this.repo.resolvedModelUnderAlias({ id: sessionId, requestedModel }) ?? rememberedUnderThisAlias;
+    const previousOther = ownPreviousModel === undefined ? this.repo.previousResolvedModel({ requestedModel, excludedSessionId: sessionId }) : undefined;
+    const previous = ownPreviousModel !== undefined
+      ? { previousModel: ownPreviousModel, comparedWith: 'same session relaunched' as const }
+      : previousOther && { previousModel: previousOther.resolvedModel, comparedWith: { previousSessionId: previousOther.sessionId } };
+    const hasDrifted = previous !== undefined && previous.previousModel !== resolvedModel;
+    return hasDrifted ? previous : undefined;
+  }
+
+  private logDrift(sessionId: string, resolution: { resolvedModel: string; cliVersion: string }, requestedModel: string | null, drift: NonNullable<ReturnType<SessionService['findDrift']>>): void {
+    const comparedWith = drift.comparedWith === 'same session relaunched' ? drift.comparedWith : `previous session ${drift.comparedWith.previousSessionId}`;
+    const requested = requestedModel === null ? 'the default model' : JSON.stringify(requestedModel);
+    log('warn', `model drift: ${requested} resolves to ${resolution.resolvedModel}, previously ${drift.previousModel} (session ${sessionId}, ${comparedWith}, cli ${resolution.cliVersion})`);
+  }
+
+  // Never throws into the hook handler.
+  private attemptRecording(sessionId: string): 'found-no-assistant-line' | undefined {
+    const pending = this.pendingRecordings.get(sessionId);
+    const transcriptPath = this.transcriptPaths.get(sessionId);
+    if (pending === undefined || transcriptPath === undefined) return undefined;
+    try {
+      if (!isTrustedTranscriptPath(transcriptPath)) return undefined;
+      if (!this.isTranscriptOfSession(sessionId, transcriptPath)) {
+        this.warnOnceWhenTranscriptNameIsForeign(sessionId, transcriptPath, pending);
+        return undefined;
+      }
+      // Reading the resolved path, not the reported one, closes the window between the check and the open.
+      const resolvedPath = existsSync(transcriptPath) ? realpathSync(transcriptPath) : transcriptPath;
+      if (!this.isTranscriptOfSession(sessionId, resolvedPath)) {
+        this.warnOnceWhenTranscriptNameIsForeign(sessionId, resolvedPath, pending);
+        return undefined;
+      }
+      const resolution = findResolvedModel(readTranscriptTail(resolvedPath), pending.launchedAt);
+      if (!resolution) return 'found-no-assistant-line';
+      const { requestedModel } = pending;
+      const drift = this.findDrift(sessionId, resolution.resolvedModel, requestedModel);
+      this.repo.recordResolvedModel({ id: sessionId, ...resolution, requestedModel, driftedFrom: drift?.previousModel ?? null });
+      this.resolvedModelBeforeSameAliasRelaunch.delete(sessionId);
+      if (drift) this.logDrift(sessionId, resolution, requestedModel, drift);
+      this.dropPendingRecording(sessionId);
+      this.deps.bus.emit({ type: 'session.updated', session: this.repo.get(sessionId)! });
+      return undefined;
+    } catch (err) {
+      if (pending.failureLogged) return undefined;
+      pending.failureLogged = true;
+      log('error', `resolved model: session ${sessionId} could not record its resolved model`, err);
+      return undefined;
+    }
   }
 
   recentOutput(sessionId: string): string { return this.outputBuffers.get(sessionId) ?? ''; }
@@ -616,7 +834,7 @@ export class SessionService {
     try {
       this.pollInterruptWatchUnsafe(sessionId);
     } catch (err) {
-      console.error(`interrupt watch: session ${sessionId} poll failed unexpectedly`, err);
+      log('error', `interrupt watch: session ${sessionId} poll failed unexpectedly`, err);
     }
   }
 
@@ -667,7 +885,13 @@ export class SessionService {
       return relaunch;
     }
     const handle = this.handles.get(sessionId);
-    if (!handle) return;
+    if (!handle) {
+      // No process to kill (this instance never launched or resumed one for this row), but the caller
+      // still asked this session closed: markClosed is itself a no-op for an unknown or already-closed
+      // id (MIN-04), so this only ever closes a real open-but-handle-less row instead of leaving it stuck.
+      this.markClosed(sessionId, undefined);
+      return;
+    }
     // The process may take the whole escalation window to exit: nothing is typed or submitted into it meanwhile.
     this.enter(sessionId, { name: 'closing' });
     await this.killWithEscalation(handle, options?.escalateAfterMs ?? DEFAULT_CLOSE_ESCALATE_MS);
@@ -693,6 +917,7 @@ export class SessionService {
     // guarantees the snapshot stays complete for the rest of this method.
     this.shuttingDown = true;
     const openSessionIds = new Set([...this.handles.keys(), ...this.relaunches.keys()]);
+    await this.waitForClearFlushes();
     await Promise.all([...openSessionIds].map((id) => this.close(id)));
   }
   get(id: string): Session | undefined { return this.repo.get(id); }
@@ -724,14 +949,14 @@ export class SessionService {
         await this.killWithEscalation(handle, DEFAULT_CLOSE_ESCALATE_MS);
       } catch (err) {
         // A kill that throws must not leave the session wedged: it is closed below all the same.
-        console.error(`resume: session ${sessionId} could not kill its process after a resume error`, err);
+        log('error', `resume: session ${sessionId} could not kill its process after a resume error`, err);
       }
     }
     try {
       this.markClosed(sessionId, RESUME_LAUNCH_FAILED_EXIT_CODE);
     } catch (err) {
       // markClosed's own DB write can itself fail; one bad row's cleanup must not stop the rest of the fleet.
-      console.error(`resumeAll: failed to close session ${sessionId} after a resume error`, err);
+      log('error', `resumeAll: failed to close session ${sessionId} after a resume error`, err);
     }
   }
 
@@ -755,7 +980,8 @@ export class SessionService {
     // into a handle we're about to kill would just be retyped into the resumed one anyway.
     const isRelaunchPending = this.pendingRelaunches.has(sessionId);
     const isTurnUnfinished = this.unfinishedTurns.has(sessionId);
-    if (isRelaunchPending && isTurnUnfinished) return;
+    const isClearInFlight = this.clearsInFlight.has(sessionId);
+    if (isRelaunchPending && (isTurnUnfinished || isClearInFlight)) return;
     if (isRelaunchPending) this.startRelaunch(sessionId);
     else this.typeNextMessage(sessionId);
   }
@@ -817,7 +1043,7 @@ export class SessionService {
     try {
       this.recordDelivery(sessionId);
     } catch (err) {
-      console.error(`delivery: session ${sessionId} submitted message ${phase.messageId}, recording it failed and is retried before the next message`, err);
+      log('error', `delivery: session ${sessionId} submitted message ${phase.messageId}, recording it failed and is retried before the next message`, err);
     }
     // Flushed right after the Enter, in arrival order: whatever was deferred behind this message now goes
     // straight through, on the same handle that just received the Enter. The delivery above is already
@@ -835,7 +1061,7 @@ export class SessionService {
       try {
         this.writeRawChunkAndArm(sessionId, handle, raw);
       } catch (err) {
-        console.error(`delivery: session ${sessionId} failed to flush deferred raw input, dropping what's left`, err);
+        log('error', `delivery: session ${sessionId} failed to flush deferred raw input, dropping what's left`, err);
         return;
       }
     }
@@ -855,7 +1081,7 @@ export class SessionService {
     try {
       this.deps.bus.emit({ type: 'message.delivered', sessionId, messageId });
     } catch (err) {
-      console.error(`delivery: session ${sessionId} delivered message ${messageId}, but a message.delivered listener failed`, err);
+      log('error', `delivery: session ${sessionId} delivered message ${messageId}, but a message.delivered listener failed`, err);
     }
   }
 
@@ -904,7 +1130,7 @@ export class SessionService {
     const delivery = this.deliveryOf(sessionId);
     const failedAttempts = delivery.failedAttempts + 1;
     const isNewFailureStreak = failedAttempts === 1;
-    if (isNewFailureStreak) console.error(`delivery: session ${sessionId} failed, its message stays queued`, err);
+    if (isNewFailureStreak) log('error', `delivery: session ${sessionId} failed, its message stays queued`, err);
     // Past the last fast retry the machine parks on the slow PARKED_RETRY_MS; a state transition advances it sooner.
     const isParked = failedAttempts > MAX_DELIVERY_RETRIES;
     const retryDelayMs = isParked ? PARKED_RETRY_MS : DELIVERY_RETRY_MS;
@@ -917,12 +1143,21 @@ export class SessionService {
     this.clearResumeTimer(sessionId);
     this.disarmInterruptWatch(sessionId);
     this.transcriptPaths.delete(sessionId);
+    this.dropPendingRecording(sessionId);
+    this.modelSwitchesAwaitingRelaunch.delete(sessionId);
+    this.resolvedModelBeforeSameAliasRelaunch.delete(sessionId);
     this.stopDelivery(sessionId);
     this.pendingRelaunches.delete(sessionId);
     this.unfinishedTurns.delete(sessionId);
+    this.releaseClearHold(sessionId);
     const session = this.repo.get(sessionId);
     if (!session || session.state === 'closed') return;
-    this.repo.setClosed(sessionId, exitCode, new Date().toISOString());
+    // Revoked, not just marked closed, in the same write as the state change: a subprocess the agent left
+    // behind, or anyone who read the token (MAJ-03), must not go on calling the hook or MCP surface as this
+    // session once it is closed — defence in depth alongside byHookToken/byMcpToken's own state filter,
+    // which is what actually protects a row a pre-patch build already left closed. reopen() issues its own
+    // fresh pair on the way back up (resumeOne), so this never collides with that rotation.
+    this.repo.setClosed(sessionId, exitCode, new Date().toISOString(), newToken(), newToken());
     this.handles.delete(sessionId);
     activeHandleBySessionId.delete(sessionId);
     this.deps.bus.emit({ type: 'session.closed', sessionId, exitCode });
@@ -934,6 +1169,7 @@ export class SessionService {
     this.assertNotShuttingDown();
     const tokens = this.repo.tokens(session.id);
     if (!tokens) return { launched: false, reason: 'session has no stored tokens' }; // defensive: every session row carries its tokens
+    this.warnIfPermissiveSettings(session.harness, session.directory);
     const harness = this.harnessFor(session.harness);
     const permissionMode = this.resolveResumePermissionMode(session);
     // A daemon crash can leave the pre-restart process alive for a moment in its orphaned PTY (ponytail:
@@ -944,10 +1180,14 @@ export class SessionService {
     const hookToken = newToken();
     const mcpToken = newToken();
     this.repo.setTokens(session.id, hookToken, mcpToken);
+    this.startPendingRecording(session.id, session.model);
     let handle: HarnessHandle;
+    let isNewConversationAnnounced = false;
     try {
+      const conversation = this.conversationToLaunch(session, harness);
       handle = harness.start({
         sessionId: session.id,
+        cliSessionId: conversation.cliSessionId,
         directory: session.directory,
         model: session.model,
         hookUrl: `${this.deps.baseUrl}/hooks/${hookToken}`,
@@ -955,13 +1195,14 @@ export class SessionService {
         mcpToken,
         displayName: `${session.emoji} ${session.name}`,
         permissionMode,
-        resuming: true,
+        resuming: conversation.isResumed,
       });
+      isNewConversationAnnounced = conversation.isNewConversationAnnounced;
     } catch (err) {
       // The launch builder refuses to resume with a missing/invalid session id (it would otherwise open
       // the CLI's interactive picker inside the PTY) — close this one row and keep resuming the rest of
       // the fleet rather than letting one bad row abort resumeAll for every other session.
-      console.error(`resumeOne: session ${session.id} failed to launch`, err);
+      log('error', `resumeOne: session ${session.id} failed to launch`, err);
       this.markClosed(session.id, RESUME_LAUNCH_FAILED_EXIT_CODE);
       return { launched: false, reason: (err as Error).message };
     }
@@ -976,6 +1217,7 @@ export class SessionService {
       this.markClosed(session.id, exitCode);
     });
     this.armResumeTimeout(session.id, handle);
+    if (isNewConversationAnnounced) this.announceNewConversation(session.id);
     // The DB write is last: if it throws, the handle is already fully wired (onExit + resume timeout),
     // so resumeAll's catch can close this row via markClosed without leaving an untracked process behind.
     const startingSince = new Date().toISOString();
@@ -984,17 +1226,73 @@ export class SessionService {
     return { launched: true };
   }
 
+  // The CLI exits with code 1 on a conversation it has no file for, which would close the session on every
+  // relaunch. A conversation that is gone gets a fresh one under a new id, recorded at once so the next relaunch
+  // resumes it; the launch id is never the fallback (it would silently undo a /clear). A conversation that never
+  // got a prompt has no file either, and nothing was lost: it is launched again under its own id, without notice.
+  // A conversation the harness cannot inspect is resumed as stored: only a file that is not there proves it gone.
+  private conversationToLaunch(session: Session, harness: Harness): { cliSessionId: string; isResumed: boolean; isNewConversationAnnounced: boolean } {
+    const currentCliSessionId = this.currentCliSessionIdOf(session.id);
+    const presence = harness.conversationExists?.({ cliSessionId: currentCliSessionId, directory: session.directory }) ?? 'present';
+    if (presence === 'present') return { cliSessionId: currentCliSessionId, isResumed: true, isNewConversationAnnounced: false };
+    if (presence === 'unknown') {
+      log('warn', `resume: conversation state unknown, resuming the stored one: session ${session.id}, conversation ${currentCliSessionId}`);
+      return { cliSessionId: currentCliSessionId, isResumed: true, isNewConversationAnnounced: false };
+    }
+    const isAwaitingItsFirstPrompt = this.conversationsAwaitingFirstPrompt.has(currentCliSessionId);
+    const hasLeftItsLaunchConversation = currentCliSessionId !== session.id;
+    const hadConversation = hasLeftItsLaunchConversation || this.sessionsPrompted.has(session.id);
+    const isConversationLost = hadConversation && !isAwaitingItsFirstPrompt;
+    if (!isConversationLost) {
+      this.conversationsAwaitingFirstPrompt.add(currentCliSessionId);
+      return { cliSessionId: currentCliSessionId, isResumed: false, isNewConversationAnnounced: false };
+    }
+    const freshCliSessionId = newId();
+    this.repo.setCliSessionId(session.id, freshCliSessionId);
+    this.conversationsAwaitingFirstPrompt.add(freshCliSessionId);
+    log('warn', `resume: conversation not found: session ${session.id}, missing ${currentCliSessionId}, started ${freshCliSessionId}`);
+    return { cliSessionId: freshCliSessionId, isResumed: false, isNewConversationAnnounced: true };
+  }
+
+  // A failing listener (e.g. a WS client on a closing socket) must not undo a launch that already happened.
+  private announceNewConversation(sessionId: string): void {
+    this.appendOutput(sessionId, NEW_CONVERSATION_NOTICE);
+    try {
+      this.deps.bus.emit({ type: 'session.output', sessionId, data: NEW_CONVERSATION_NOTICE });
+    } catch (err) {
+      log('error', `resume: session ${sessionId} started a new conversation, but a session.output listener failed`, err);
+    }
+  }
+
+  // Read-only, best-effort informational signal: a worktree can carry a .claude settings file with a
+  // permission bypass, but launchConfig's `--setting-sources user` (AUD-28) keeps claude-cli from ever
+  // loading it, so this can no longer let a session skip the daemon's own approval gate. Only claude-cli
+  // would otherwise read those settings, so a 'fake' harness launch is never inspected.
+  private warnIfPermissiveSettings(harnessId: Session['harness'], directory: string): void {
+    if (harnessId !== 'claude-cli') return;
+    const warning = findPermissiveSettingsWarning(directory);
+    if (warning) console.warn(`session directory ${directory} has permissive Claude settings, but OpenFleet ignores project settings: ${warning}`);
+  }
+
   private resolveResumePermissionMode(session: Session): PermissionMode | undefined {
     // session.permissionMode already went through normalizePermissionMode() once in the repository
     // mapper, which discards whether the raw column value was recognized — re-read the raw column here
     // so the resume path can still warn on an unrecognized value the repository silently turned into undefined.
     const raw = this.repo.rawPermissionMode(session.id);
     const { mode, wasRecognized } = normalizePermissionMode(raw);
-    if (!wasRecognized) console.warn(`resumeOne: session ${session.id} has an unrecognized permission_mode "${raw}", resuming without --permission-mode`);
+    if (!wasRecognized) log('warn', `resumeOne: session ${session.id} has an unrecognized permission_mode "${raw}", resuming without --permission-mode`);
     return mode;
   }
 
   private armResumeTimeout(sessionId: string, handle: HarnessHandle): void {
+    this.armStartTimeout(sessionId, handle, this.deps.resumeTimeoutMs ?? DEFAULT_RESUME_TIMEOUT_MS);
+  }
+
+  private armFirstStartTimeout(sessionId: string, handle: HarnessHandle): void {
+    this.armStartTimeout(sessionId, handle, this.deps.firstStartTimeoutMs ?? DEFAULT_FIRST_START_TIMEOUT_MS);
+  }
+
+  private armStartTimeout(sessionId: string, handle: HarnessHandle, timeoutMs: number): void {
     const timer = setTimeout(() => {
       if (activeHandleBySessionId.get(sessionId) !== handle) return; // already replaced or closed by something else
       // Detach first so the handle's own onExit (fired by killWithEscalation below) can't race this
@@ -1008,7 +1306,7 @@ export class SessionService {
         if (activeHandleBySessionId.has(sessionId)) return;
         this.markClosed(sessionId, RESUME_TIMEOUT_EXIT_CODE);
       });
-    }, this.deps.resumeTimeoutMs ?? DEFAULT_RESUME_TIMEOUT_MS);
+    }, timeoutMs);
     this.resumeTimers.set(sessionId, timer);
   }
 

@@ -1,3 +1,6 @@
+import { existsSync, mkdtempSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
 import { openDatabase } from './database.js';
@@ -9,15 +12,16 @@ describe('openDatabase', () => {
     const tables = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' ORDER BY name`).all() as { name: string }[];
     expect(tables.map((t) => t.name)).toEqual(expect.arrayContaining(['sessions', 'message_queue', 'approvals', 'schema_migrations']));
     const applied = db.prepare('SELECT version FROM schema_migrations').all();
-    expect(applied).toHaveLength(4);
+    expect(applied).toContainEqual({ version: '001_init' });
   });
 
   it('does not re-apply an already-applied migration to the same connection', () => {
     const db = openDatabase(':memory:');
+    const appliedCountBefore = db.prepare('SELECT count(*) AS n FROM schema_migrations').get();
 
     expect(() => applyMigrations(db)).not.toThrow();
 
-    expect(db.prepare('SELECT count(*) AS n FROM schema_migrations').get()).toEqual({ n: 4 });
+    expect(db.prepare('SELECT count(*) AS n FROM schema_migrations').get()).toEqual(appliedCountBefore);
   });
 
   it('sets a busy_timeout so a second writer waits instead of failing immediately', () => {
@@ -36,5 +40,16 @@ describe('openDatabase', () => {
     expect(pragmaBatch.indexOf('busy_timeout')).toBeLessThan(pragmaBatch.indexOf('journal_mode'));
 
     execSpy.mockRestore();
+  });
+
+  it('forces the db file (and its -wal/-shm side files, once WAL creates them) to 0600 (AUD-05)', () => {
+    const dbPath = join(mkdtempSync(join(tmpdir(), 'of-db-')), 'openfleet.db');
+
+    openDatabase(dbPath);
+
+    expect(statSync(dbPath).mode & 0o777).toBe(0o600);
+    for (const side of [`${dbPath}-wal`, `${dbPath}-shm`]) {
+      if (existsSync(side)) expect(statSync(side).mode & 0o777).toBe(0o600);
+    }
   });
 });

@@ -28,7 +28,7 @@ function fakeApi(overrides: Partial<Record<'updateModel' | 'closeSession' | 'sen
 function providersFor(session: Session, api: ReturnType<typeof fakeApi> = fakeApi()) {
   return [
     { provide: FleetApiService, useValue: api },
-    { provide: FleetEventsService, useValue: { sessions: signal([session]), approvals: signal([]), managers: signal([]) } },
+    { provide: FleetEventsService, useValue: { sessions: signal([session]), approvals: signal([]), managers: signal([]), connected: signal(true) } },
   ];
 }
 

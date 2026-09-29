@@ -1,3 +1,4 @@
+import { ModelIdSchema } from '@openfleet/shared';
 import { randomUUID } from 'node:crypto';
 import { closeSync, existsSync, fchmodSync, fsyncSync, openSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -6,15 +7,21 @@ import { z } from 'zod';
 export interface ModelTable { haiku: string; sonnet: string; opus: string; fable: string }
 
 export const DEFAULT_MODEL_TABLE: ModelTable = {
-  haiku: 'claude-haiku-4-5',
-  sonnet: 'claude-sonnet-5',
-  opus: 'claude-opus-5-5',
-  fable: 'claude-fable-5-1',
+  haiku: 'haiku',
+  sonnet: 'sonnet',
+  opus: 'opus',
+  fable: 'fable',
 };
 
 // ponytail: a hand-kept list curated from the claude CLI's /model picker (see P2-U6c) — it goes stale when a model ships and needs a release to catch up.
 // Upgrade path: query the Anthropic /v1/models API inside listAvailableModels() when an API key is present.
 const KNOWN_MODELS: readonly string[] = [
+  'haiku',
+  'sonnet',
+  'opus',
+  'fable',
+  'opus[1m]',
+  'sonnet[1m]',
   'claude-haiku-4-5',
   'claude-haiku-4-5-20251001',
   'claude-sonnet-5',
@@ -28,14 +35,10 @@ export async function listAvailableModels(): Promise<string[]> {
   return [...KNOWN_MODELS];
 }
 
-const MAX_MODEL_ID_LENGTH = 100;
-const MODEL_ID_CHARACTERS = /^[A-Za-z0-9][A-Za-z0-9._:[\]-]*$/;
-
 const ModelId = z.string().trim().min(1);
-const ModelIdToSave = ModelId.max(MAX_MODEL_ID_LENGTH).regex(MODEL_ID_CHARACTERS);
 
 export const ModelTablePatchSchema = z
-  .strictObject({ haiku: ModelIdToSave.optional(), sonnet: ModelIdToSave.optional(), opus: ModelIdToSave.optional(), fable: ModelIdToSave.optional() })
+  .strictObject({ haiku: ModelIdSchema.optional(), sonnet: ModelIdSchema.optional(), opus: ModelIdSchema.optional(), fable: ModelIdSchema.optional() })
   .refine((patch) => Object.keys(patch).length > 0, { message: 'at least one rung is required' });
 
 export type ModelTablePatch = z.infer<typeof ModelTablePatchSchema>;

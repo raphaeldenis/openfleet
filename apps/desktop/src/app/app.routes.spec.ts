@@ -5,6 +5,7 @@ import { RouterTestingHarness } from '@angular/router/testing';
 import { signal } from '@angular/core';
 import { routes } from './app.routes';
 import { FleetEventsService } from './core/fleet-events.service';
+import { FleetApiService } from './core/fleet-api.service';
 
 function configureTestBed() {
   const managerSession = { id: 'm1', name: 'Lead', emoji: '🧭', role: 'manager', state: 'idle', harness: 'claude-cli' };
@@ -28,6 +29,7 @@ function configureTestBed() {
           sendInput: () => {},
           sendResize: () => {},
           sendAttach: () => {},
+          dropQueuedSendsFor: () => {},
         },
       },
     ],
@@ -61,6 +63,29 @@ describe('app.routes', () => {
     const harness = await RouterTestingHarness.create('/inbox');
     expect(harness.routeNativeElement?.querySelector('[data-testid="app-shell"]')).toBeTruthy();
     expect(harness.routeNativeElement?.querySelector('of-inbox')).toBeTruthy();
+  });
+
+  it("renders the notes screen at '/notes', inside the shell", async () => {
+    await configureTestBed();
+    const harness = await RouterTestingHarness.create('/notes');
+    expect(harness.routeNativeElement?.querySelector('[data-testid="app-shell"]')).toBeTruthy();
+    expect(harness.routeNativeElement?.querySelector('[data-testid="notes-view"]')).toBeTruthy();
+  });
+
+  it("renders the tables screen at '/tables' inside the shell, scoped by the projectId query parameter", async () => {
+    await configureTestBed();
+    const api = {
+      listProjects: () => Promise.resolve({ items: [{ id: 'p1', name: 'openfleet', docsFolderPath: null }, { id: 'p2', name: 'other', docsFolderPath: null }], total: 2, limit: 100, offset: 0 }),
+      listDataStores: vi.fn().mockResolvedValue({ items: [], total: 0, limit: 100, offset: 0 }),
+    };
+    TestBed.overrideProvider(FleetApiService, { useValue: api });
+
+    const harness = await RouterTestingHarness.create('/tables?projectId=p2');
+    await harness.fixture.whenStable();
+
+    expect(harness.routeNativeElement?.querySelector('[data-testid="app-shell"]')).toBeTruthy();
+    expect(harness.routeNativeElement?.querySelector('[data-testid="tables-view"]')).toBeTruthy();
+    expect(api.listDataStores).toHaveBeenCalledWith('p2');
   });
 
   it("renders the new-session form at '/new' inside the shell", async () => {
@@ -108,7 +133,7 @@ describe('app.routes', () => {
     vi.stubGlobal('fetch', fetchMock);
     const harness = await RouterTestingHarness.create('/new?seededPrompt=evil&embedded=true&initialName=Injected&initialDirectory=/injected');
     const field = (testId: string) => harness.routeNativeElement?.querySelector(`[data-testid="${testId}"]`) as HTMLInputElement;
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     expect(harness.routeNativeElement?.querySelector('[data-testid="new-session-cancel"]')).toBeTruthy();
 
     await user.type(field('new-session-directory'), '/tmp/wt');
@@ -116,10 +141,12 @@ describe('app.routes', () => {
     await user.click(field('new-session-submit'));
 
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    await harness.fixture.whenStable();
     const [, createRequest] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(JSON.parse(createRequest.body as string)).toStrictEqual({ directory: '/tmp/wt', name: 'Gimli', emoji: '🤖', model: 'sonnet', harness: 'claude-cli' });
     vi.unstubAllGlobals();
-  });
+    // A loaded CI runner needs more than Vitest's 5 s default for the lazy route, the typing and the submit.
+  }, 20_000);
 
   it('user visiting an unknown path still lands inside the app shell instead of a blank page', async () => {
     await configureTestBed();
