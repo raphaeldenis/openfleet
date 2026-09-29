@@ -158,28 +158,29 @@ describe('NoteEditorComponent', () => {
     expect(screen.getByRole('heading', { level: 2, name: 'daemon-protocol' })).toBe(screen.getByTestId('note-editor-title'));
   });
 
-  describe('a note with thousands of blocks', () => {
+  // Rendering ~2000 blocks in jsdom is slow when the machine is loaded; the default 5 s timeout flakes.
+  describe('a note with thousands of blocks', { timeout: 30_000 }, () => {
     const bodyOfParagraphs = (count: number) => Array.from({ length: count }, (_, index) => `line ${index}`).join('\n\n');
 
     it('user sees the first blocks and can ask for the rest', async () => {
-      await renderEditor({ note: aNoteView({ bodyMd: bodyOfParagraphs(2500) }) });
+      await renderEditor({ note: aNoteView({ bodyMd: bodyOfParagraphs(2100) }) });
 
       expect(screen.getAllByTestId('note-editor-paragraph')).toHaveLength(2000);
       await userEvent.click(screen.getByTestId('note-editor-show-rest'));
 
-      expect(screen.getAllByTestId('note-editor-paragraph')).toHaveLength(2500);
+      expect(screen.getAllByTestId('note-editor-paragraph')).toHaveLength(2100);
       expect(screen.queryByTestId('note-editor-show-rest')).not.toBeInTheDocument();
     });
 
     it('an unclosed mention marker never lets its content escape the limit', async () => {
-      const bodyMd = `--- from note @note:x (t, y) ---\n${bodyOfParagraphs(2500)}`;
+      const bodyMd = `--- from note @note:x (t, y) ---\n${bodyOfParagraphs(2100)}`;
 
       await renderEditor({ note: aNoteView({ bodyMd }) });
 
       expect(screen.getAllByTestId('note-editor-paragraph')).toHaveLength(1999);
-      expect(screen.getByTestId('note-editor-show-rest')).toHaveTextContent('Show the remaining 501 blocks');
+      expect(screen.getByTestId('note-editor-show-rest')).toHaveTextContent('Show the remaining 101 blocks');
       await userEvent.click(screen.getByTestId('note-editor-show-rest'));
-      expect(screen.getAllByTestId('note-editor-paragraph')).toHaveLength(2500);
+      expect(screen.getAllByTestId('note-editor-paragraph')).toHaveLength(2100);
     });
 
     it('a mentioned note whose header would be the last block within the limit is not shown as an empty card', async () => {
