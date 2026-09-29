@@ -84,6 +84,7 @@ export class FleetApiService {
   decide(id: string, behavior: 'allow' | 'deny') { return this.post<Approval>(`/api/approvals/${id}/decide`, { behavior }); }
 
   // --- Data stores (Tables screen, P3-T18) ---
+  listProjects() { return this.call<Page<Project>>('/api/projects'); }
   listDataStores(projectId: string) { return this.call<Page<DataStore>>(`/api/data-stores${queryString({ projectId })}`); }
   createDataStore(body: { projectId: string; displayName: string }) { return this.post<DataStore>('/api/data-stores', body); }
   getDataStore(scope: StoreScope) { return this.call<DataStoreDetail>(`/api/data-stores/${scope.storeId}${queryString({ projectId: scope.projectId })}`); }
@@ -110,6 +111,7 @@ export class FleetApiService {
 // ponytail: Page and DataStoreDetail are declared here until P3-REST01 exports them from @openfleet/shared; then import them.
 export interface Page<T> { items: T[]; total: number; limit: number; offset: number }
 export interface DataStoreDetail extends DataStore { columns: DsColumn[] }
+export interface Project { id: string; name: string; docsFolderPath: string | null }
 export interface StoreScope { projectId: string; storeId: string }
 
 function queryString(params: Record<string, string | number | undefined>): string {

@@ -23,6 +23,12 @@ describe('FleetApiService data stores', () => {
     vi.unstubAllGlobals();
   });
 
+  it('lists the projects a table can be scoped to', async () => {
+    await api.listProjects();
+
+    expect(lastRequest()).toMatchObject({ path: '/api/projects', method: 'GET' });
+  });
+
   it('lists the data stores of a project', async () => {
     await api.listDataStores('p1');
 

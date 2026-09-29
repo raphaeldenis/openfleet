@@ -2,6 +2,7 @@ import { ChangeDetectionStrategy, Component, computed, input } from '@angular/co
 import { DatePipe } from '@angular/common';
 import type { DsColumn, DsRowChange, DsRowHistoryEntry } from '@openfleet/shared';
 import { ActorBadgeComponent } from './actor-badge.component';
+import { displayValue } from './table-cells';
 
 const EMPTY_VALUE = '—';
 
@@ -55,7 +56,13 @@ export class RowHistoryComponent {
     if ('kind' in change && change.kind === 'delete') return 'deleted row';
     const fieldChanges = change as Record<string, { from: unknown; to: unknown }>;
     return Object.entries(fieldChanges)
-      .map(([columnId, { from, to }]) => `${this.columnNameById().get(columnId) ?? columnId} ${formatValue(from)} → ${formatValue(to)}`)
+      .map(([columnId, { from, to }]) => `${this.columnNameById().get(columnId) ?? columnId} ${this.format(columnId, from)} → ${this.format(columnId, to)}`)
       .join(', ');
+  }
+
+  private format(columnId: string, value: unknown): string {
+    const column = this.columns().find((candidate) => candidate.id === columnId);
+    const shownValue = column ? displayValue(column, value) : formatValue(value);
+    return shownValue === '' ? EMPTY_VALUE : shownValue;
   }
 }

@@ -6,7 +6,7 @@ import { cellText, sortedColumns } from './table-cells';
   selector: 'of-table-grid',
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <div class="grid" role="table">
+    <div class="grid" role="table" data-testid="table-grid">
       <div class="header" role="row">
         @for (column of orderedColumns(); track column.id) {
           <span class="cell" role="columnheader" [attr.data-testid]="'grid-header-' + column.id">{{ column.displayName }}</span>
