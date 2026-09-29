@@ -508,6 +508,53 @@ describe('NoteService nested transactions (caller-managed)', () => {
   });
 });
 
+describe('NoteService createFileBacked', () => {
+  it('inserts a file-backed note at revision 1 with the given filePath and sourceHash', () => {
+    const { service } = setup();
+
+    const note = service.createFileBacked({ projectId: 'p1', title: 'Title', bodyMd: '# v1', folder: 'specs', filePath: '/docs/specs/a.md', sourceHash: 'h1', author: AUTHOR });
+
+    expect(note).toMatchObject({ filePath: '/docs/specs/a.md', sourceHash: 'h1', rev: 1, folder: 'specs' });
+  });
+
+  it('refuses a body over the cap and inserts nothing', () => {
+    const { service, repo } = setup();
+    const overCap = 'a'.repeat(MAX_BODY_BYTES + 1);
+
+    expect(() => service.createFileBacked({ projectId: 'p1', title: 'Title', bodyMd: overCap, filePath: '/docs/specs/a.md', sourceHash: 'h1', author: AUTHOR })).toThrow(NoteTooLargeError);
+    expect(repo.list('p1')).toEqual([]);
+  });
+});
+
+describe('NoteService updateFileBacked', () => {
+  it('replaces the body and source hash together and bumps the revision', () => {
+    const { service } = setup();
+    const note = service.createFileBacked({ projectId: 'p1', title: 'Title', bodyMd: 'v1', filePath: '/docs/a.md', sourceHash: 'h1', author: AUTHOR });
+
+    const updated = service.updateFileBacked(note.id, { bodyMd: 'v2', sourceHash: 'h2', expectedRev: 1, author: AUTHOR });
+
+    expect(updated).toMatchObject({ bodyMd: 'v2', sourceHash: 'h2', rev: 2, filePath: '/docs/a.md' });
+  });
+
+  it('throws StaleRevisionError and leaves the body and hash unchanged when the revision is stale', () => {
+    const { service, repo } = setup();
+    const note = service.createFileBacked({ projectId: 'p1', title: 'Title', bodyMd: 'v1', filePath: '/docs/a.md', sourceHash: 'h1', author: AUTHOR });
+    service.updateFileBacked(note.id, { bodyMd: 'v2', sourceHash: 'h2', expectedRev: 1, author: AUTHOR });
+
+    expect(() => service.updateFileBacked(note.id, { bodyMd: 'v3-stale', sourceHash: 'h3', expectedRev: 1, author: AUTHOR })).toThrow(StaleRevisionError);
+    expect(repo.get(note.id)).toMatchObject({ bodyMd: 'v2', sourceHash: 'h2', rev: 2 });
+  });
+
+  it('inserts one version row per successful write', () => {
+    const { service, repo } = setup();
+    const note = service.createFileBacked({ projectId: 'p1', title: 'Title', bodyMd: 'v1', filePath: '/docs/a.md', sourceHash: 'h1', author: AUTHOR });
+
+    service.updateFileBacked(note.id, { bodyMd: 'v2', sourceHash: 'h2', expectedRev: 1, author: AUTHOR });
+
+    expect(repo.listVersions(note.id)).toHaveLength(2);
+  });
+});
+
 describe('NoteService getExpanded', () => {
   it('renders another project\'s non-shared note exactly like an unknown id', () => {
     const { service } = setup(['p1', 'p2']);

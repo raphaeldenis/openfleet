@@ -11,6 +11,7 @@ export interface Note {
   bodyMd: string;
   folder: NoteFolder | null;
   filePath: string | null;
+  sourceHash: string | null;
   rev: number;
   shared: boolean;
   createdAt: string;

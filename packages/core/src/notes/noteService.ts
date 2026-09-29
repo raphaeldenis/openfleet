@@ -45,6 +45,18 @@ export interface CreateNoteInput {
   author: string;
 }
 
+export interface CreateFileBackedNoteInput extends CreateNoteInput {
+  filePath: string;
+  sourceHash: string;
+}
+
+export interface UpdateFileBackedNoteInput {
+  bodyMd: string;
+  sourceHash: string;
+  expectedRev: number;
+  author: string;
+}
+
 export interface UpdateNoteInput {
   bodyMd: string;
   expectedRev: number;
@@ -112,6 +124,7 @@ export class NoteService {
       bodyMd: input.bodyMd,
       folder: input.folder ?? null,
       filePath: null,
+      sourceHash: null,
       rev: 1,
       shared: input.shared ?? false,
       createdAt: now,
@@ -122,6 +135,37 @@ export class NoteService {
       this.insertVersionRow(note, input.author, now);
       return note;
     });
+  }
+
+  /** Inserts a note that is file-backed from creation: `filePath`/`sourceHash` are set in the same INSERT, never patched in after. */
+  createFileBacked(input: CreateFileBackedNoteInput): Note {
+    assertWithinBodyCap(input.bodyMd);
+    const now = this.clock();
+    const note: Note = {
+      id: this.newId(),
+      projectId: input.projectId,
+      title: input.title,
+      bodyMd: input.bodyMd,
+      folder: input.folder ?? null,
+      filePath: input.filePath,
+      sourceHash: input.sourceHash,
+      rev: 1,
+      shared: input.shared ?? false,
+      createdAt: now,
+      updatedAt: now,
+    };
+    return this.inTransaction(() => {
+      this.repo.insert(note);
+      this.insertVersionRow(note, input.author, now);
+      return note;
+    });
+  }
+
+  /** Same CAS write as `update`, but commits `sourceHash` alongside `bodyMd` in the one UPDATE (Review Focus 5). */
+  updateFileBacked(id: string, input: UpdateFileBackedNoteInput): Note {
+    assertWithinBodyCap(input.bodyMd);
+    return this.writeThroughCas(id, input.author, (updatedAt) =>
+      this.repo.updateFileBacked(id, { bodyMd: input.bodyMd, sourceHash: input.sourceHash, expectedRev: input.expectedRev, updatedAt }));
   }
 
   update(id: string, input: UpdateNoteInput): Note {
