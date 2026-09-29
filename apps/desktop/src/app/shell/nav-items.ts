@@ -16,7 +16,6 @@ const AVAILABILITY_BY_SECTION: Readonly<Record<string, string>> = {
   profiles: 'Not yet available',
   calendar: 'Available in phase 5',
   notes: 'Available in phase 3',
-  tables: 'Available in phase 3',
   triggers: 'Available in phase 5',
   integrations: 'Available in phase 5',
   usage: 'Available in phase 4',
@@ -34,7 +33,7 @@ const HELM_SECTIONS: ReadonlyArray<{ key: string; glyph: string; label: string; 
   { key: 'profiles', glyph: '◉', label: 'Profiles', route: null },
   { key: 'calendar', glyph: '▤', label: 'Calendar', route: null },
   { key: 'notes', glyph: '¶', label: 'Notes', route: null },
-  { key: 'tables', glyph: '▦', label: 'Tables', route: null },
+  { key: 'tables', glyph: '▦', label: 'Tables', route: '/tables' },
   { key: 'triggers', glyph: '⚡', label: 'Triggers & Playbooks', route: null },
   { key: 'integrations', glyph: '⇄', label: 'Integrations', route: null },
   { key: 'usage', glyph: '$', label: 'Usage', route: null },
@@ -58,6 +57,7 @@ export interface PalettePage {
 export const PALETTE_PAGES: readonly PalettePage[] = [
   { key: 'sessions', icon: '🗂', label: 'Sessions', route: '/' },
   { key: 'inbox', icon: '◫', label: 'Inbox', route: '/inbox' },
+  { key: 'tables', icon: '▦', label: 'Tables', route: '/tables' },
   { key: 'settings', icon: '⚙', label: 'Settings', route: '/settings' },
   { key: 'components', icon: '◈', label: 'Components', route: '/components' },
 ];

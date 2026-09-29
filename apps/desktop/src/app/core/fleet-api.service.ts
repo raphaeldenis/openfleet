@@ -1,8 +1,9 @@
 import { Injectable } from '@angular/core';
-import type { Approval, HarnessId, PermissionMode, Session, SessionSpec } from '@openfleet/shared';
+import type { Approval, DataStore, DataStoreDetail, DsRow, DsRowHistoryEntry, DsView, HarnessId, OrderTerm, Page, PermissionMode, Project, Session, SessionSpec, WhereClause } from '@openfleet/shared';
 import { environment } from '../../environments/environment';
 
 const DAEMON_ANSWER_TIMEOUT_MS = 5000;
+const LIST_PAGE_LIMIT = 200;
 
 export class ApiError extends Error {
   // `code` is the REST error body's `error` field (e.g. `not_closed`, `directory_missing`) when the
@@ -35,6 +36,17 @@ export class FleetApiService {
       throw new ApiError(response.status, `${init.method ?? 'GET'} ${path} → ${response.status}`, code);
     }
     return (await response.json()) as T;
+  }
+  private async listAllPages<T>(path: string, params: Record<string, string>): Promise<Page<T>> {
+    const items: T[] = [];
+    let total = 0;
+    do {
+      const page = await this.call<Page<T>>(`${path}${queryString({ ...params, limit: LIST_PAGE_LIMIT, offset: items.length })}`);
+      items.push(...page.items);
+      total = page.total ?? 0;
+      if (page.items.length === 0) break;
+    } while (items.length < total);
+    return { items, total: Math.max(total, items.length), limit: LIST_PAGE_LIMIT, offset: 0 };
   }
   private post<T>(path: string, body: unknown): Promise<T> { return this.call<T>(path, { method: 'POST', body: JSON.stringify(body) }); }
   private patch<T>(path: string, body: unknown): Promise<T> { return this.call<T>(path, { method: 'PATCH', body: JSON.stringify(body) }); }
@@ -82,4 +94,39 @@ export class FleetApiService {
   renameSession(id: string, patch: { name?: string; emoji?: string }) { return this.patch<Session>(`/api/sessions/${id}`, patch); }
   reopenSession(id: string) { return this.post<Session>(`/api/sessions/${id}/reopen`, {}); }
   decide(id: string, behavior: 'allow' | 'deny') { return this.post<Approval>(`/api/approvals/${id}/decide`, { behavior }); }
+
+  // --- Data stores (Tables screen, P3-T18) ---
+  listProjects() { return this.listAllPages<Project>('/api/projects', {}); }
+  listDataStores(projectId: string) { return this.listAllPages<DataStore>('/api/data-stores', { projectId }); }
+  createDataStore(body: { projectId: string; displayName: string }) { return this.post<DataStore>('/api/data-stores', body); }
+  getDataStore(scope: StoreScope) { return this.call<DataStoreDetail>(`${storePath(scope.storeId)}${queryString({ projectId: scope.projectId })}`); }
+  queryDataStore(query: StoreScope & { where?: WhereClause[]; orderBy?: OrderTerm[]; limit?: number; offset?: number }) {
+    const { storeId, where, orderBy, ...rest } = query;
+    const params = { ...rest, where: where && JSON.stringify(where), orderBy: orderBy && JSON.stringify(orderBy) };
+    return this.call<Page<DsRow>>(`${storePath(storeId)}/rows${queryString(params)}`);
+  }
+  insertRows(request: StoreScope & { rows: Record<string, unknown>[] }) {
+    return this.post<{ items: DsRow[] }>(`${storePath(request.storeId)}/rows`, { projectId: request.projectId, rows: request.rows });
+  }
+  updateRows(request: StoreScope & { updates: { rowId: string; patch: Record<string, unknown> }[] }) {
+    return this.patch<{ items: DsRow[] }>(`${storePath(request.storeId)}/rows`, { projectId: request.projectId, updates: request.updates });
+  }
+  listRowChanges(request: StoreScope & { rowId: string; limit?: number }) {
+    const params = { projectId: request.projectId, limit: request.limit };
+    return this.call<{ items: DsRowHistoryEntry[]; total: number }>(`${storePath(request.storeId)}/rows/${encodeURIComponent(request.rowId)}/changes${queryString(params)}`);
+  }
+  listViews(scope: StoreScope) { return this.call<{ items: DsView[] }>(`${storePath(scope.storeId)}/views${queryString({ projectId: scope.projectId })}`); }
+  // --- end data stores ---
 }
+
+// --- Data stores (Tables screen, P3-T18) ---
+export interface StoreScope { projectId: string; storeId: string }
+
+const storePath = (storeId: string) => `/api/data-stores/${encodeURIComponent(storeId)}`;
+
+function queryString(params: Record<string, string | number | undefined>): string {
+  const presentParams = Object.entries(params).filter((entry): entry is [string, string | number] => entry[1] !== undefined);
+  const search = new URLSearchParams(presentParams.map(([key, value]) => [key, String(value)]));
+  return presentParams.length > 0 ? `?${search}` : '';
+}
+// --- end data stores ---

@@ -5,6 +5,7 @@ import { RouterTestingHarness } from '@angular/router/testing';
 import { signal } from '@angular/core';
 import { routes } from './app.routes';
 import { FleetEventsService } from './core/fleet-events.service';
+import { FleetApiService } from './core/fleet-api.service';
 
 function configureTestBed() {
   const managerSession = { id: 'm1', name: 'Lead', emoji: '🧭', role: 'manager', state: 'idle', harness: 'claude-cli' };
@@ -62,6 +63,22 @@ describe('app.routes', () => {
     const harness = await RouterTestingHarness.create('/inbox');
     expect(harness.routeNativeElement?.querySelector('[data-testid="app-shell"]')).toBeTruthy();
     expect(harness.routeNativeElement?.querySelector('of-inbox')).toBeTruthy();
+  });
+
+  it("renders the tables screen at '/tables' inside the shell, scoped by the projectId query parameter", async () => {
+    await configureTestBed();
+    const api = {
+      listProjects: () => Promise.resolve({ items: [{ id: 'p1', name: 'openfleet', docsFolderPath: null }, { id: 'p2', name: 'other', docsFolderPath: null }], total: 2, limit: 100, offset: 0 }),
+      listDataStores: vi.fn().mockResolvedValue({ items: [], total: 0, limit: 100, offset: 0 }),
+    };
+    TestBed.overrideProvider(FleetApiService, { useValue: api });
+
+    const harness = await RouterTestingHarness.create('/tables?projectId=p2');
+    await harness.fixture.whenStable();
+
+    expect(harness.routeNativeElement?.querySelector('[data-testid="app-shell"]')).toBeTruthy();
+    expect(harness.routeNativeElement?.querySelector('[data-testid="tables-view"]')).toBeTruthy();
+    expect(api.listDataStores).toHaveBeenCalledWith('p2');
   });
 
   it("renders the new-session form at '/new' inside the shell", async () => {

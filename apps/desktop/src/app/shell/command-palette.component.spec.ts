@@ -12,6 +12,7 @@ function routes() {
   return [
     { path: '', component: StubComponent },
     { path: 'inbox', component: StubComponent },
+    { path: 'tables', component: StubComponent },
     { path: 'components', component: StubComponent },
   ];
 }
@@ -29,6 +30,7 @@ describe('CommandPaletteComponent', () => {
     expect(screen.getByTestId('palette-item-sessions')).toHaveTextContent('Sessions');
     expect(screen.getByTestId('palette-item-inbox')).toHaveTextContent('Inbox');
     expect(screen.getByTestId('palette-item-components')).toHaveTextContent('Components');
+    expect(screen.getByTestId('palette-item-tables')).toHaveTextContent('Tables');
     expect(screen.queryByText(/Pulse now/i)).toBeNull();
     expect(screen.queryByText(/New session/i)).toBeNull();
   });
