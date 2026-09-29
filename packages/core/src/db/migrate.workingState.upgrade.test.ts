@@ -6,7 +6,7 @@ import { applyMigrations } from './migrate.js';
 const migrationsDirectory = new URL('./migrations/', import.meta.url);
 
 const migrationsBeforeWorkingState = readdirSync(migrationsDirectory)
-  .filter((fileName) => fileName.endsWith('.sql') && fileName < '014')
+  .filter((fileName) => fileName.endsWith('.sql') && fileName < '013')
   .sort()
   .map((fileName) => ({ version: fileName.replace(/\.sql$/, ''), sql: readFileSync(new URL(fileName, migrationsDirectory), 'utf8') }));
 
@@ -35,12 +35,12 @@ describe('the working state migration upgrading a database that predates it', ()
     expect(foreignKeyViolations).toEqual([]);
   });
 
-  it('records the migration as 014_working_state', () => {
+  it('records the working state migration as applied', () => {
     const db = openDatabaseUpgradedFromBeforeWorkingState();
 
     const versions = (db.prepare('SELECT version FROM schema_migrations').all() as { version: string }[]).map((row) => row.version);
 
-    expect(versions).toContain('014_working_state');
+    expect(versions).toContain('013_working_state');
   });
 
   it('holds one state per existing session and refuses a state for a missing session', () => {
