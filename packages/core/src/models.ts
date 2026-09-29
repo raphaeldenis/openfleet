@@ -20,6 +20,8 @@ const KNOWN_MODELS: readonly string[] = [
   'sonnet',
   'opus',
   'fable',
+  'opus[1m]',
+  'sonnet[1m]',
   'claude-haiku-4-5',
   'claude-haiku-4-5-20251001',
   'claude-sonnet-5',

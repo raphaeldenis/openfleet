@@ -17,8 +17,13 @@ describe('default model table', () => {
     for (const modelId of Object.values(DEFAULT_MODEL_TABLE)) expect(modelId).not.toMatch(versionedId);
   });
 
-  it('launches a session asked for a rung on that rung alias', () => {
+  it('resolves each rung name to its alias in the default table', () => {
     expect(RUNG_ALIASES.map((rung) => resolveModel(DEFAULT_MODEL_TABLE, rung))).toEqual(RUNG_ALIASES);
+  });
+
+  it('resolves a rung to the model the table maps it to, not to the rung name itself', () => {
+    const customTable = { ...DEFAULT_MODEL_TABLE, opus: 'my-opus' };
+    expect(resolveModel(customTable, 'opus')).toBe('my-opus');
   });
 
   it('passes a 1M-context id through resolution and validation unchanged', () => {
@@ -39,7 +44,15 @@ describe('available models', () => {
     expect(available.slice(0, RUNG_ALIASES.length)).toEqual(RUNG_ALIASES);
   });
 
-  it('lists only ids a session can be launched with', async () => {
+  it('lists the 1M-context aliases of opus and sonnet right after the four aliases, and none for haiku', async () => {
+    const available = await listAvailableModels();
+
+    const afterAliases = available.slice(RUNG_ALIASES.length, RUNG_ALIASES.length + 2);
+    expect(afterAliases).toEqual(['opus[1m]', 'sonnet[1m]']);
+    expect(available).not.toContain('haiku[1m]');
+  });
+
+  it('lists only schema-valid model ids', async () => {
     const available = await listAvailableModels();
 
     const rejectedIds = available.filter((modelId) => !ModelIdSchema.safeParse(modelId).success);
