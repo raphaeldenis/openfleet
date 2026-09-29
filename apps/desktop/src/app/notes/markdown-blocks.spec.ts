@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseMarkdownBlocks, type MarkdownBlock } from './markdown-blocks';
+import { parseMarkdownBlocks, takeWithinRenderBudget, type MarkdownBlock } from './markdown-blocks';
 
 const text = (value: string) => ({ text: value, isCode: false });
 const code = (value: string) => ({ text: value, isCode: true });
@@ -63,5 +63,44 @@ describe('parseMarkdownBlocks', () => {
 
     expect(blocks).toHaveLength(1);
     expect(blocks[0]).toMatchObject({ type: 'mention-note', id: 'n0' });
+  });
+
+  it('merges the plain text left around empty code spans into one segment', () => {
+    const oneMebibyteOfEmptySpans = 'a``'.repeat(349_525);
+
+    const [block] = parseMarkdownBlocks(oneMebibyteOfEmptySpans);
+
+    expect(block).toEqual({ type: 'paragraph', segments: [text('a'.repeat(349_525))] });
+  });
+
+  it.each(['\r', '\u2028', '\u2029'])('splits lines on %j like on a newline', (lineBreak) => {
+    const blocks = parseMarkdownBlocks(`# Title${lineBreak}- one${lineBreak}- two`);
+
+    expect(blocks).toEqual([
+      { type: 'heading', level: 1, segments: [text('Title')] },
+      { type: 'list', items: [[text('one')], [text('two')]] },
+    ]);
+  });
+
+  it.each([
+    { name: 'a heading marker', prefix: '#' },
+    { name: 'a dash bullet', prefix: '-' },
+    { name: 'a star bullet', prefix: '*' },
+  ])('parses $name followed by a huge run of spaces and a line separator in linear time', ({ prefix }) => {
+    const startedAt = performance.now();
+
+    parseMarkdownBlocks(`${prefix}${' '.repeat(200_000)}\u2028x`);
+
+    expect(performance.now() - startedAt).toBeLessThan(1000);
+  });
+});
+
+describe('takeWithinRenderBudget', () => {
+  it('drops a list item that would keep only an empty bullet', () => {
+    const blocks = parseMarkdownBlocks('- `x`');
+
+    const kept = takeWithinRenderBudget(blocks, 2);
+
+    expect(kept).toEqual([]);
   });
 });

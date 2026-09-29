@@ -304,7 +304,7 @@ export class NotesViewComponent {
     try {
       const createdNote = await this.api.createNote({ projectId, title: NEW_NOTE_TITLE, bodyMd: '' });
       const projectChangedMeanwhile = this.projectId() !== projectId;
-      if (projectChangedMeanwhile) return;
+      if (projectChangedMeanwhile || isSupersededByProjectSwitch()) return;
       this.filter.set('');
       this.notes.update((notes) => [createdNote, ...notes.filter((summary) => summary.id !== createdNote.id)]);
       const userSelectedAnotherNoteMeanwhile = !this.isCurrentSession(session);

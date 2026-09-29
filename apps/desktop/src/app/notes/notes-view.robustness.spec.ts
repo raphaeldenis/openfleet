@@ -625,6 +625,22 @@ describe('notes view keeps a slow note creation from disturbing what the user do
     expect(screen.queryByTestId('note-action-error')).not.toBeInTheDocument();
   });
 
+  it('a creation answered after the user left the project and came back does not overwrite the reloaded list', async () => {
+    const creation = deferred<NoteView>();
+    await renderView({ api: fakeApi({ createNote: vi.fn(() => creation.promise) }) });
+    await editorTitle();
+    await userEvent.click(screen.getByTestId('note-list-new'));
+    await userEvent.selectOptions(screen.getByTestId('notes-project-select'), 'p2');
+    await screen.findByTestId('note-list-item-n9');
+    await userEvent.selectOptions(screen.getByTestId('notes-project-select'), 'p1');
+    await screen.findByTestId('note-list-item-n2');
+
+    creation.resolve(createdNote());
+    await flushPendingWork();
+
+    expect(screen.queryByTestId('note-list-item-new')).not.toBeInTheDocument();
+  });
+
   it('user can create a note in the new project while a creation from the previous project is still pending', async () => {
     const creation = deferred<NoteView>();
     await renderView({ api: fakeApi({ createNote: vi.fn(() => creation.promise) }) });
@@ -813,6 +829,14 @@ describe('notes view renders unusual markdown', () => {
     const startedAt = performance.now();
 
     await renderNoteWithBody(`--- from note @note:a (${', '.repeat(150_000)}`);
+
+    expect(performance.now() - startedAt).toBeLessThan(2000);
+  });
+
+  it.each(['#', '-'])('a huge run of spaces after "%s" and a line separator renders in under two seconds', async (marker) => {
+    const startedAt = performance.now();
+
+    await renderNoteWithBody(`${marker}${' '.repeat(200_000)}\u2028x`);
 
     expect(performance.now() - startedAt).toBeLessThan(2000);
   });

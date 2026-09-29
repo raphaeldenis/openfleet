@@ -12,7 +12,7 @@ export type MarkdownBlock =
 
 const HEADING = /^(#{1,3}) +(.*)$/;
 const LIST_ITEM = /^[-*] +(.*)$/;
-const LINE_BREAK = /\r?\n/;
+const LINE_BREAK = /\r\n|[\n\r\u2028\u2029]/;
 const FENCE = '```';
 const BACKTICK = '`';
 const MAX_MENTION_DEPTH = 10;
@@ -116,7 +116,16 @@ function inlineSegments(text: string): InlineSegment[] {
   const pairedParts = hasUnclosedBacktick ? [...parts.slice(0, -2), parts.slice(-2).join(BACKTICK)] : parts;
   return pairedParts
     .map((part, position) => ({ text: part, isCode: position % 2 === 1 }))
-    .filter((segment) => segment.text !== '');
+    .filter((segment) => segment.text !== '')
+    .reduce<InlineSegment[]>(mergeAdjacentTextSegments, []);
+}
+
+function mergeAdjacentTextSegments(merged: InlineSegment[], segment: InlineSegment): InlineSegment[] {
+  const previous = merged.at(-1);
+  const continuesPreviousText = previous !== undefined && !previous.isCode && !segment.isCode;
+  if (continuesPreviousText) previous.text += segment.text;
+  else merged.push({ ...segment });
+  return merged;
 }
 
 /** Cost of a block in rendered DOM nodes worth budgeting: its own element, its list items and its inline code chips. */
@@ -181,6 +190,8 @@ function takeListItems(items: readonly InlineSegment[][], budget: number): Inlin
     if (remaining <= 0) break;
     remaining -= 1;
     const segments = takeSegments(item, remaining);
+    const isBulletCutOffFromItsContent = item.length > 0 && segments.length === 0;
+    if (isBulletCutOffFromItsContent) break;
     remaining -= countCodeChips(segments);
     kept.push(segments);
   }

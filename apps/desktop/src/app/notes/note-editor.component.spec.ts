@@ -218,6 +218,20 @@ describe('NoteEditorComponent', () => {
       expect(screen.getAllByTestId('note-editor-inline-code')).toHaveLength(2500);
     });
 
+    it('a paragraph of thousands of empty code spans between plain words reads as one run of text', async () => {
+      await renderEditor({ note: aNoteView({ bodyMd: 'a``'.repeat(2500) }) });
+
+      expect(screen.getByTestId('note-editor-paragraph')).toHaveTextContent(new RegExp(`^${'a'.repeat(2500)}$`));
+      expect(screen.queryByTestId('note-editor-inline-code')).not.toBeInTheDocument();
+    });
+
+    it('a list item holding only a code chip is not shown as an empty bullet when the limit cuts it', async () => {
+      await renderEditor({ note: aNoteView({ bodyMd: `${bodyOfParagraphs(1998)}\n\n- \`x\`\n- y` }) });
+
+      expect(screen.queryAllByTestId('note-editor-list-item')).toHaveLength(0);
+      expect(screen.getByTestId('note-editor-show-rest')).toBeInTheDocument();
+    });
+
     it('list items and paragraphs share one budget', async () => {
       const bodyMd = `${'- x\n'.repeat(1500)}\n${bodyOfParagraphs(1000)}`;
 
