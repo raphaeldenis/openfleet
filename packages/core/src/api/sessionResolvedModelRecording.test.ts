@@ -26,21 +26,28 @@ let projectDirectory: string;
 let transcriptPath: string;
 const originalConfigDir = process.env.CLAUDE_CONFIG_DIR;
 
+let db: ReturnType<typeof openDatabase>;
+let daemonSessions: SessionService;
+
+const bootDaemon = async () => {
+  const bus = new EventBus();
+  daemonSessions = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt', submitKeystrokeDelayMs: 0 });
+  const approvals = new ApprovalService({ db, bus });
+  const managerRepo = new ManagerRepository(db);
+  const pulseScheduler = new PulseScheduler({ managers: managerRepo, sessions: daemonSessions, bus });
+  const managers = new ManagerService({ managers: managerRepo, sessions: daemonSessions, bus, scheduler: pulseScheduler });
+  server = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions: daemonSessions, approvals, managers, pulseScheduler, bus, modelTable: DEFAULT_MODEL_TABLE, modelConfigPath: '/tmp/of-unused/config.json' });
+};
+
 beforeEach(async () => {
   const configDir = mkdtempSync(join(tmpdir(), 'of-claude-config-'));
   process.env.CLAUDE_CONFIG_DIR = configDir;
   projectDirectory = join(configDir, 'projects', 'proj');
   mkdirSync(projectDirectory, { recursive: true });
 
-  const db = openDatabase(':memory:');
-  const bus = new EventBus();
+  db = openDatabase(':memory:');
   harness = new FakeHarness();
-  const sessions = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt', submitKeystrokeDelayMs: 0 });
-  const approvals = new ApprovalService({ db, bus });
-  const managerRepo = new ManagerRepository(db);
-  const pulseScheduler = new PulseScheduler({ managers: managerRepo, sessions, bus });
-  const managers = new ManagerService({ managers: managerRepo, sessions, bus, scheduler: pulseScheduler });
-  server = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable: DEFAULT_MODEL_TABLE, modelConfigPath: '/tmp/of-unused/config.json' });
+  await bootDaemon();
 });
 
 afterEach(async () => {
@@ -723,5 +730,476 @@ describe('resolved model recording when the CLI flushes its answer to the transc
 
     expect(beforeNextHook).not.toHaveProperty('resolvedModel');
     expect(await listed(id)).toMatchObject({ resolvedModel: 'claude-opus-5-5' });
+  });
+});
+
+describe('model drift between launches that resolve the same requested model', () => {
+  const resolveOn = async (requestedModel: string | undefined, resolvedModel: string) => {
+    const id = await createSession(requestedModel);
+    writeFileSync(transcriptPath, assistantLine({ model: resolvedModel }));
+    await sendHook(id, preToolUse);
+    return id;
+  };
+  const captureDriftWarnings = () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    return {
+      lines: () => warnSpy.mock.calls.map((call) => String(call[0])).filter((line) => line.includes('model drift')),
+      stop: () => warnSpy.mockRestore(),
+    };
+  };
+  const relaunchWithAlias = async (id: string, alias: string, expectedLaunches: number) => {
+    await postJson(`/api/sessions/${id}/model`, { model: alias });
+    await expect.poll(() => harness.launches.length).toBe(expectedLaunches);
+  };
+
+  it('shows the previous id on a second session whose alias resolves to a different id, and logs one warning naming both ids', async () => {
+    const first = await resolveOn('opus', 'claude-opus-5-5');
+    const warnings = captureDriftWarnings();
+
+    const second = await resolveOn('opus', 'claude-opus-5-6');
+    const lines = warnings.lines();
+    warnings.stop();
+
+    expect(await listed(second)).toMatchObject({ resolvedModel: 'claude-opus-5-6', modelDriftedFrom: 'claude-opus-5-5' });
+    expect(await listed(first)).not.toHaveProperty('modelDriftedFrom');
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain(`"opus" resolves to claude-opus-5-6, previously claude-opus-5-5 (session ${second}, previous session ${first}, cli ${CLI_VERSION})`);
+  });
+
+  it('shows no drift and logs nothing when a second session resolves the same alias to the same id', async () => {
+    await resolveOn('opus', 'claude-opus-5-5');
+    const warnings = captureDriftWarnings();
+
+    const second = await resolveOn('opus', 'claude-opus-5-5');
+    const lines = warnings.lines();
+    warnings.stop();
+
+    expect(await listed(second)).not.toHaveProperty('modelDriftedFrom');
+    expect(lines).toHaveLength(0);
+  });
+
+  it('compares a second session against the most recently created session that resolved the alias', async () => {
+    await resolveOn('opus', 'claude-opus-5-4');
+    await pause(5);
+    await resolveOn('opus', 'claude-opus-5-5');
+    await pause(5);
+
+    const third = await resolveOn('opus', 'claude-opus-5-5');
+
+    expect(await listed(third)).not.toHaveProperty('modelDriftedFrom');
+  });
+
+  it('shows the session\'s own previous id when a relaunch of the same alias resolves to a new id', async () => {
+    const id = await sessionWithRecordedOpus({ requestedModel: 'opus', stopped: true });
+    const warnings = captureDriftWarnings();
+
+    await relaunchWithAlias(id, 'opus', 2);
+    appendFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-6', at: inOneSecond() }));
+    await sendHook(id, preToolUse);
+    const lines = warnings.lines();
+    warnings.stop();
+
+    expect(await listed(id)).toMatchObject({ resolvedModel: 'claude-opus-5-6', modelDriftedFrom: 'claude-opus-5-5' });
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain(`previously claude-opus-5-5 (session ${id}, same session relaunched, cli ${CLI_VERSION})`);
+  });
+
+  it('shows no drift when a relaunch of the same alias resolves to the same id', async () => {
+    const id = await sessionWithRecordedOpus({ requestedModel: 'opus', stopped: true });
+
+    await relaunchWithAlias(id, 'opus', 2);
+    appendFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-5', at: inOneSecond() }));
+    await sendHook(id, preToolUse);
+
+    expect(await listed(id)).toMatchObject({ resolvedModel: 'claude-opus-5-5' });
+    expect(await listed(id)).not.toHaveProperty('modelDriftedFrom');
+  });
+
+  it('never drifts a session against a session of another alias, nor against its own id from before a switch to another alias', async () => {
+    await resolveOn('opus', 'claude-opus-5-5');
+    const sonnet = await resolveOn('sonnet', 'claude-sonnet-5-5');
+    const switched = await sessionWithRecordedOpus({ requestedModel: 'haiku', stopped: true });
+
+    await relaunchWithAlias(switched, 'sonnet', 4);
+    appendFileSync(transcriptPath, assistantLine({ model: 'claude-sonnet-5-5', at: inOneSecond() }));
+    await sendHook(switched, preToolUse);
+
+    expect(await listed(sonnet)).not.toHaveProperty('modelDriftedFrom');
+    expect(await listed(switched)).toMatchObject({ resolvedModel: 'claude-sonnet-5-5' });
+    expect(await listed(switched)).not.toHaveProperty('modelDriftedFrom');
+  });
+
+  it('clears a drift flag when a permission-mode relaunch of the session resolves to the same id again', async () => {
+    await resolveOn('opus', 'claude-opus-5-5');
+    const id = await createSession('opus');
+    writeFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-6' }));
+    await sendHook(id, preToolUse);
+    await sendHook(id, stop);
+    const afterLaunchOne = await listed(id);
+
+    await postJson(`/api/sessions/${id}/permission-mode`, { mode: 'plan' });
+    await expect.poll(() => harness.launches.length).toBe(3);
+    appendFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-6', at: inOneSecond() }));
+    await sendHook(id, preToolUse);
+
+    expect(afterLaunchOne).toMatchObject({ modelDriftedFrom: 'claude-opus-5-5' });
+    expect(await listed(id)).toMatchObject({ resolvedModel: 'claude-opus-5-6' });
+    expect(await listed(id)).not.toHaveProperty('modelDriftedFrom');
+  });
+
+  it('applies the same rule to sessions launched without a model', async () => {
+    await resolveOn(undefined, 'claude-default-5-5');
+    await resolveOn('opus', 'claude-opus-5-5');
+    const warnings = captureDriftWarnings();
+
+    const withoutModel = await resolveOn(undefined, 'claude-default-5-6');
+    const lines = warnings.lines();
+    warnings.stop();
+
+    expect(await listed(withoutModel)).toMatchObject({ resolvedModel: 'claude-default-5-6', modelDriftedFrom: 'claude-default-5-5' });
+    expect(lines).toHaveLength(1);
+  });
+
+  it('streams the drift in the session.updated that carries the resolved model', async () => {
+    await resolveOn('opus', 'claude-opus-5-5');
+    const id = await createSession('opus');
+    const { ticket } = (await (await postJson('/api/ws-ticket')).json()) as { ticket: string };
+    const ws = new WebSocket(`${server.url.replace('http', 'ws')}/ws?ticket=${ticket}`);
+    const received: { type: string; session?: ListedSession }[] = [];
+    ws.addEventListener('message', (message) => received.push(JSON.parse(String(message.data))));
+    await new Promise((resolve) => ws.addEventListener('open', resolve, { once: true }));
+    writeFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-6' }));
+
+    await sendHook(id, preToolUse);
+    await pause(50);
+    ws.close();
+
+    const updates = received.filter((event) => event.type === 'session.updated' && event.session?.id === id);
+    expect(updates).toHaveLength(1);
+    expect(updates[0]!.session).toMatchObject({ resolvedModel: 'claude-opus-5-6', modelDriftedFrom: 'claude-opus-5-5' });
+  });
+
+  it('forgets a same-alias relaunch closed before its recording, so a reopen compares with the other sessions', async () => {
+    await resolveOn('opus', 'claude-opus-5-4');
+    const id = await createSession('opus');
+    writeFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-6' }));
+    await sendHook(id, preToolUse);
+    await sendHook(id, stop);
+    await relaunchWithAlias(id, 'opus', 3);
+    await postJson(`/api/sessions/${id}/close`);
+    await postJson(`/api/sessions/${id}/reopen`);
+    await expect.poll(() => harness.launches.length).toBe(4);
+
+    appendFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-4', at: inOneSecond() }));
+    await sendHook(id, preToolUse);
+
+    expect(await listed(id)).toMatchObject({ resolvedModel: 'claude-opus-5-4' });
+    expect(await listed(id)).not.toHaveProperty('modelDriftedFrom');
+  });
+
+  it('shows the drift against the latest session that recorded a model, skipping a newer session that never recorded one', async () => {
+    await resolveOn('opus', 'claude-opus-5-5');
+    await pause(5);
+    await createSession('opus');
+    await pause(5);
+
+    const third = await resolveOn('opus', 'claude-opus-5-6');
+
+    expect(await listed(third)).toMatchObject({ modelDriftedFrom: 'claude-opus-5-5' });
+  });
+
+  it('compares an alias rolled back after a detour through another alias with the other sessions', async () => {
+    await resolveOn('opus', 'claude-opus-5-5');
+    const id = await createSession('opus');
+    writeFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-5' }));
+    await sendHook(id, preToolUse);
+    await sendHook(id, stop);
+    await relaunchWithAlias(id, 'sonnet', 3);
+    await sendHook(id, { hook_event_name: 'SessionStart' });
+    await sendHook(id, stop);
+    await relaunchWithAlias(id, 'opus', 4);
+    appendFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-6', at: inOneSecond() }));
+    await sendHook(id, preToolUse);
+
+    expect(await listed(id)).toMatchObject({ resolvedModel: 'claude-opus-5-6', modelDriftedFrom: 'claude-opus-5-5' });
+  });
+});
+
+describe('model drift never blames a deliberate model switch', () => {
+  const resolveOn = async (requestedModel: string, resolvedModel: string) => {
+    const id = await createSession(requestedModel);
+    writeFileSync(transcriptPath, assistantLine({ model: resolvedModel }));
+    await sendHook(id, preToolUse);
+    return id;
+  };
+  const waitForLaunches = (count: number) => expect.poll(() => harness.launches.length).toBeGreaterThanOrEqual(count);
+
+  it('shows no drift after a model switch requested twice while the first one still waits for the session to go idle', async () => {
+    const id = await sessionWithRecordedOpus({ requestedModel: 'opus', stopped: false });
+
+    await postJson(`/api/sessions/${id}/model`, { model: 'sonnet' });
+    await postJson(`/api/sessions/${id}/model`, { model: 'sonnet' });
+    await pause(10);
+    await sendHook(id, stop);
+    await waitForLaunches(2);
+    appendFileSync(transcriptPath, assistantLine({ model: 'claude-sonnet-5-5', at: inOneSecond() }));
+    await sendHook(id, preToolUse);
+
+    expect(await listed(id)).toMatchObject({ model: 'sonnet', resolvedModel: 'claude-sonnet-5-5' });
+    expect(await listed(id)).not.toHaveProperty('modelDriftedFrom');
+  });
+
+  it('shows no drift after a model switch requested twice while the first one is relaunching', async () => {
+    const id = await sessionWithRecordedOpus({ requestedModel: 'opus', stopped: true });
+
+    await Promise.all([postJson(`/api/sessions/${id}/model`, { model: 'sonnet' }), postJson(`/api/sessions/${id}/model`, { model: 'sonnet' })]);
+    await waitForLaunches(2);
+    await pause(50);
+    appendFileSync(transcriptPath, assistantLine({ model: 'claude-sonnet-5-5', at: inOneSecond() }));
+    await sendHook(id, preToolUse);
+
+    expect(await listed(id)).toMatchObject({ model: 'sonnet', resolvedModel: 'claude-sonnet-5-5' });
+    expect(await listed(id)).not.toHaveProperty('modelDriftedFrom');
+  });
+
+  it('shows no drift when the daemon restarts between a model switch and its relaunch', async () => {
+    const id = await sessionWithRecordedOpus({ requestedModel: 'opus', stopped: false });
+    await postJson(`/api/sessions/${id}/model`, { model: 'sonnet' });
+
+    await server.close();
+    await bootDaemon();
+    await daemonSessions.resumeAll();
+    await waitForLaunches(2);
+    appendFileSync(transcriptPath, assistantLine({ model: 'claude-sonnet-5-5', at: inOneSecond() }));
+    await sendHook(id, preToolUse);
+
+    expect(await listed(id)).toMatchObject({ model: 'sonnet', resolvedModel: 'claude-sonnet-5-5' });
+    expect(await listed(id)).not.toHaveProperty('modelDriftedFrom');
+  });
+
+  it('shows no drift on a new session of the alias another session is switching to, while that switch waits', async () => {
+    const switching = await sessionWithRecordedOpus({ requestedModel: 'opus', stopped: false });
+    await postJson(`/api/sessions/${switching}/model`, { model: 'sonnet' });
+
+    const fresh = await resolveOn('sonnet', 'claude-sonnet-5-5');
+
+    expect(await listed(fresh)).toMatchObject({ resolvedModel: 'claude-sonnet-5-5' });
+    expect(await listed(fresh)).not.toHaveProperty('modelDriftedFrom');
+  });
+
+  it('still shows the drift of a same-alias relaunch whose old launch recorded only while the relaunch was deferred', async () => {
+    const id = await createSession('opus');
+    await sendHook(id, { hook_event_name: 'UserPromptSubmit' });
+    await postJson(`/api/sessions/${id}/model`, { model: 'opus' });
+    writeFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-5' }));
+    await sendHook(id, preToolUse);
+    await pause(10);
+    await sendHook(id, stop);
+    await waitForLaunches(2);
+
+    appendFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-6', at: inOneSecond() }));
+    await sendHook(id, preToolUse);
+
+    expect(await listed(id)).toMatchObject({ resolvedModel: 'claude-opus-5-6', modelDriftedFrom: 'claude-opus-5-5' });
+  });
+});
+
+describe('model drift hostile cases', () => {
+  const resolveOn = async (requestedModel: string | undefined, resolvedModel: string) => {
+    const id = await createSession(requestedModel);
+    writeFileSync(transcriptPath, assistantLine({ model: resolvedModel }));
+    await sendHook(id, preToolUse);
+    return id;
+  };
+  const waitForLaunches = (count: number) => expect.poll(() => harness.launches.length).toBeGreaterThanOrEqual(count);
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('shows no drift on a new session of the target alias, nor on the switching session, when the old launch records only after a deferred switch to another alias', async () => {
+    const switching = await createSession('opus');
+    const switchingTranscript = transcriptPath;
+    await sendHook(switching, { hook_event_name: 'UserPromptSubmit' });
+    await postJson(`/api/sessions/${switching}/model`, { model: 'sonnet' });
+    writeFileSync(switchingTranscript, assistantLine({ model: 'claude-opus-5-5' }));
+    await sendHook(switching, preToolUse, switchingTranscript);
+
+    const fresh = await resolveOn('sonnet', 'claude-sonnet-5-5');
+    await sendHook(switching, stop, switchingTranscript);
+    await waitForLaunches(3);
+    appendFileSync(switchingTranscript, assistantLine({ model: 'claude-sonnet-5-5', at: inOneSecond() }));
+    await sendHook(switching, preToolUse, switchingTranscript);
+
+    expect(await listed(fresh)).not.toHaveProperty('modelDriftedFrom');
+    expect(await listed(switching)).toMatchObject({ resolvedModel: 'claude-sonnet-5-5' });
+    expect(await listed(switching)).not.toHaveProperty('modelDriftedFrom');
+  });
+
+  it('shows the drift against the session created just before it when a third session is created in the same millisecond as the two others', async () => {
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date() });
+    await resolveOn('opus', 'claude-opus-5-4');
+    await resolveOn('opus', 'claude-opus-5-5');
+
+    const third = await resolveOn('opus', 'claude-opus-5-6');
+
+    expect(await listed(third)).toMatchObject({ modelDriftedFrom: 'claude-opus-5-5' });
+  });
+
+  it('shows no drift on a switch to another alias after the same alias was re-applied, whatever that relaunch recorded', async () => {
+    const id = await sessionWithRecordedOpus({ requestedModel: 'opus', stopped: true });
+    await postJson(`/api/sessions/${id}/model`, { model: 'opus' });
+    await waitForLaunches(2);
+    appendFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-5' }));
+    await sendHook(id, preToolUse);
+    await sendHook(id, stop);
+
+    await postJson(`/api/sessions/${id}/model`, { model: 'sonnet' });
+    await waitForLaunches(3);
+    appendFileSync(transcriptPath, assistantLine({ model: 'claude-sonnet-5-5', at: inOneSecond() }));
+    await sendHook(id, preToolUse);
+
+    expect(await listed(id)).toMatchObject({ model: 'sonnet', resolvedModel: 'claude-sonnet-5-5' });
+    expect(await listed(id)).not.toHaveProperty('modelDriftedFrom');
+  });
+
+  it('shows the own previous id of a session launched without a model when a permission-mode relaunch resolves a new id', async () => {
+    const id = await createSession(undefined);
+    writeFileSync(transcriptPath, assistantLine({ model: 'claude-default-5-5' }));
+    await sendHook(id, preToolUse);
+    await sendHook(id, stop);
+
+    await postJson(`/api/sessions/${id}/permission-mode`, { mode: 'plan' });
+    await waitForLaunches(2);
+    appendFileSync(transcriptPath, assistantLine({ model: 'claude-default-5-6', at: inOneSecond() }));
+    await sendHook(id, preToolUse);
+
+    expect(await listed(id)).toMatchObject({ resolvedModel: 'claude-default-5-6', modelDriftedFrom: 'claude-default-5-5' });
+  });
+
+  it('shows no drift after a deferred switch abandoned by close and reopen when the reopened launch resolves the new alias', async () => {
+    const id = await sessionWithRecordedOpus({ requestedModel: 'opus', stopped: false });
+    await postJson(`/api/sessions/${id}/model`, { model: 'sonnet' });
+
+    await postJson(`/api/sessions/${id}/close`);
+    await postJson(`/api/sessions/${id}/reopen`);
+    await waitForLaunches(2);
+    appendFileSync(transcriptPath, assistantLine({ model: 'claude-sonnet-5-5', at: inOneSecond() }));
+    await sendHook(id, preToolUse);
+
+    expect(await listed(id)).toMatchObject({ model: 'sonnet', resolvedModel: 'claude-sonnet-5-5' });
+    expect(await listed(id)).not.toHaveProperty('modelDriftedFrom');
+  });
+
+  it('shows the drift of each session against the one created just before it in a burst created within one millisecond', async () => {
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date() });
+    const resolvedIds = ['claude-opus-5-5', 'claude-opus-5-5', 'claude-opus-5-6', 'claude-opus-5-6', 'claude-opus-5-7'];
+    const sessions: string[] = [];
+    for (const resolvedId of resolvedIds) sessions.push(await resolveOn('opus', resolvedId));
+
+    const drifts = await Promise.all(sessions.map(async (id) => (await listed(id)).modelDriftedFrom));
+
+    expect(drifts).toEqual([undefined, undefined, 'claude-opus-5-5', undefined, 'claude-opus-5-6']);
+  });
+
+  it('shows no drift on an unknown alias against a session of the default model', async () => {
+    await resolveOn(undefined, 'claude-default-5-5');
+
+    const unknownAlias = await resolveOn('no-such-alias', 'claude-default-5-6');
+
+    expect(await listed(unknownAlias)).not.toHaveProperty('modelDriftedFrom');
+  });
+});
+
+describe('the session a drift is compared with', () => {
+  const resolveOn = async (requestedModel: string, resolvedModel: string) => {
+    const id = await createSession(requestedModel);
+    writeFileSync(transcriptPath, assistantLine({ model: resolvedModel }));
+    await sendHook(id, preToolUse);
+    return id;
+  };
+  afterEach(() => { vi.useRealTimers(); });
+
+  const waitForLaunches = (count: number) => expect.poll(() => harness.launches.length).toBeGreaterThanOrEqual(count);
+
+  it('shows no drift when a session returns to an alias after a detour, since its last run under that alias resolved the same id', async () => {
+    const id = await createSession('opus');
+    writeFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-5' }));
+    await sendHook(id, preToolUse);
+    await sendHook(id, stop);
+    await postJson(`/api/sessions/${id}/model`, { model: 'opus' });
+    await waitForLaunches(2);
+    appendFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-6', at: inOneSecond() }));
+    await sendHook(id, preToolUse);
+    await sendHook(id, stop);
+    await postJson(`/api/sessions/${id}/model`, { model: 'sonnet' });
+    await waitForLaunches(3);
+    appendFileSync(transcriptPath, assistantLine({ model: 'claude-sonnet-5-5', at: inOneSecond() }));
+    await sendHook(id, preToolUse);
+    await sendHook(id, stop);
+    await postJson(`/api/sessions/${id}/model`, { model: 'opus' });
+    await waitForLaunches(4);
+
+    appendFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-6', at: inOneSecond() }));
+    await sendHook(id, preToolUse);
+
+    expect(await listed(id)).toMatchObject({ model: 'opus', resolvedModel: 'claude-opus-5-6' });
+    expect(await listed(id)).not.toHaveProperty('modelDriftedFrom');
+  });
+
+  it('compares a session with the latest session of the alias even when created after: documented reversed-drift ceiling', async () => {
+    const earlier = await createSession('opus');
+    const earlierTranscript = transcriptPath;
+    await pause(5);
+    await resolveOn('opus', 'claude-opus-5-4');
+
+    writeFileSync(earlierTranscript, assistantLine({ model: 'claude-opus-5-5' }));
+    await sendHook(earlier, preToolUse, earlierTranscript);
+
+    expect(await listed(earlier)).toMatchObject({ resolvedModel: 'claude-opus-5-5', modelDriftedFrom: 'claude-opus-5-4' });
+  });
+
+  it('shows no drift on a session switched to an alias whose latest session already resolves the same id', async () => {
+    await resolveOn('sonnet', 'claude-sonnet-5-0');
+    await pause(5);
+    const switching = await createSession('opus');
+    const switchingTranscript = transcriptPath;
+    await sendHook(switching, preToolUse, switchingTranscript);
+    await sendHook(switching, stop, switchingTranscript);
+    await pause(5);
+    await resolveOn('sonnet', 'claude-sonnet-5-5');
+
+    await postJson(`/api/sessions/${switching}/model`, { model: 'sonnet' });
+    await waitForLaunches(4);
+    writeFileSync(switchingTranscript, assistantLine({ model: 'claude-sonnet-5-5', at: inOneSecond() }));
+    await sendHook(switching, preToolUse, switchingTranscript);
+
+    expect(await listed(switching)).toMatchObject({ resolvedModel: 'claude-sonnet-5-5' });
+    expect(await listed(switching)).not.toHaveProperty('modelDriftedFrom');
+  });
+
+  it('shows the drift from the id resolved before an intermediate same-alias relaunch that recorded nothing', async () => {
+    const id = await createSession('opus');
+    writeFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-5' }));
+    await sendHook(id, preToolUse);
+    await sendHook(id, stop);
+    await postJson(`/api/sessions/${id}/model`, { model: 'opus' });
+    await waitForLaunches(2);
+    await sendHook(id, stop);
+    await pause(20);
+    await postJson(`/api/sessions/${id}/model`, { model: 'opus' });
+    await waitForLaunches(3);
+
+    appendFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-6', at: inOneSecond() }));
+    await sendHook(id, preToolUse);
+
+    expect(await listed(id)).toMatchObject({ resolvedModel: 'claude-opus-5-6', modelDriftedFrom: 'claude-opus-5-5' });
+  });
+
+  it('compares a session with the last one created when several were created in the same millisecond', async () => {
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date() });
+    await resolveOn('opus', 'claude-opus-5-4');
+    await resolveOn('opus', 'claude-opus-5-5');
+
+    const third = await resolveOn('opus', 'claude-opus-5-5');
+
+    expect(await listed(third)).not.toHaveProperty('modelDriftedFrom');
   });
 });
