@@ -436,4 +436,41 @@ describe('daemon-set date columns', () => {
     expect(columns[0].autoValue).toBe('created_at');
     expect(columns[1]).not.toHaveProperty('autoValue');
   });
+
+  it('user cannot clear the time of a logged row by patching it with null', async () => {
+    const client = await connect(scopedToken);
+    const { storeId, tsId } = await storeWithColumns(client);
+    const [rowId] = text(await client.callTool({ name: 'insert_data_store_rows', arguments: { store: storeId, rows: [{}] } })).ids;
+
+    const refused = await client.callTool({ name: 'update_data_store_rows', arguments: { store: storeId, updates: [{ row_id: rowId, patch: { [tsId]: null } }] } });
+
+    expect(refused.isError).toBe(true);
+    const { rows } = text(await client.callTool({ name: 'query_data_store', arguments: { store: storeId } }));
+    expect(rows[0].data[tsId]).toBe(DAEMON_TIME);
+  });
+
+  it('user cannot rewrite a logged time from the second update of a batch, and the first update is not applied', async () => {
+    const client = await connect(scopedToken);
+    const { storeId, tsId, dueId } = await storeWithColumns(client);
+    const [firstRowId, secondRowId] = text(await client.callTool({ name: 'insert_data_store_rows', arguments: { store: storeId, rows: [{}, {}] } })).ids;
+
+    const refused = await client.callTool({
+      name: 'update_data_store_rows',
+      arguments: { store: storeId, updates: [{ row_id: firstRowId, patch: { [dueId]: FUTURE_TIME } }, { row_id: secondRowId, patch: { [tsId]: FUTURE_TIME } }] },
+    });
+
+    expect(refused.isError).toBe(true);
+    const { rows } = text(await client.callTool({ name: 'query_data_store', arguments: { store: storeId } }));
+    expect(rows[0].data).not.toHaveProperty(dueId);
+    expect(rows[1].data[tsId]).toBe(DAEMON_TIME);
+  });
+
+  it('user is told the time column was ignored when only a later row of the batch supplies it', async () => {
+    const client = await connect(scopedToken);
+    const { storeId, tsId } = await storeWithColumns(client);
+
+    const inserted = text(await client.callTool({ name: 'insert_data_store_rows', arguments: { store: storeId, rows: [{}, { [tsId]: FUTURE_TIME }] } }));
+
+    expect(inserted.ignored).toEqual([tsId]);
+  });
 });
