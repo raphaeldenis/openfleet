@@ -6,7 +6,7 @@ export type Handler = (ctx: { req: IncomingMessage; res: ServerResponse; params:
 interface Route { method: string; path: string; pattern: RegExp; keys: string[]; handler: Handler }
 
 /** A malformed percent-escape in a path segment reads like an unknown route. */
-function decodeParams(keys: string[], match: RegExpExecArray): Record<string, string> | undefined {
+export function decodeParams(keys: string[], match: RegExpExecArray): Record<string, string> | undefined {
   try {
     return Object.fromEntries(keys.map((k, i) => [k, decodeURIComponent(match[i + 1]!)]));
   } catch (error) {

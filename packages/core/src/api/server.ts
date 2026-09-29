@@ -18,7 +18,7 @@ import { hooksHandler } from './hooksHandler.js';
 import { registerNoteRoutes } from './noteRoutes.js';
 import { registerProjectRoutes } from './projectRoutes.js';
 import { registerRestRoutes } from './restHandlers.js';
-import { InvalidJsonBodyError, json, logServerError, PayloadTooLargeError, readJson, Router } from './router.js';
+import { decodeParams, InvalidJsonBodyError, json, logServerError, PayloadTooLargeError, readJson, Router } from './router.js';
 import { createWsHandler } from './wsHandler.js';
 import { createWsTicketStore, type WsTicketStore } from './wsTicketStore.js';
 
@@ -87,7 +87,11 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; rout
       // Both /hooks and /mcp resolve their token from the URL/header alone, before touching the body —
       // an unknown hook token or MCP bearer is answered without ever buffering the request into memory.
       const hookMatch = req.method === 'POST' ? HOOK_PATH.exec(url.pathname) : null;
-      if (hookMatch) return await handleHookRequest(req, res, decodeURIComponent(hookMatch[1]!), deps);
+      if (hookMatch) {
+        const hookParams = decodeParams(['hookToken'], hookMatch);
+        if (!hookParams) return json(res, 404, { error: 'not_found' });
+        return await handleHookRequest(req, res, hookParams.hookToken!, deps);
+      }
       if (url.pathname === '/mcp' && deps.mcp) return await handleMcpRequest(req, res, deps.mcp, deps.sessions);
 
       const match = router.match(req.method ?? 'GET', url.pathname);
