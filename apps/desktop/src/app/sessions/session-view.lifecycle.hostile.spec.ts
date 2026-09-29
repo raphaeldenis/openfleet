@@ -36,7 +36,7 @@ async function renderAgainstDaemonEvents(api: ReturnType<typeof fakeApi>, initia
     providers: [{ provide: FleetApiService, useValue: api }],
     ...withoutRealTerminal,
   });
-  const daemon = connectFakeDaemon(fixture);
+  const daemon = await connectFakeDaemon(fixture);
   await daemon.send({ type: 'snapshot', sessions: initialSessions, approvals: [], managers: [] });
   return { fixture, daemon, sessionId };
 }

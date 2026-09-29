@@ -26,10 +26,18 @@ beforeEach(async () => {
 });
 afterEach(() => server.close());
 
+const api = (path: string, init: RequestInit = {}) => fetch(`${server.url}${path}`, { ...init, headers: { 'content-type': 'application/json', authorization: 'Bearer admin', ...(init.headers ?? {}) } });
+
+async function wsUrl(): Promise<string> {
+  const res = await api('/api/ws-ticket', { method: 'POST' });
+  const { ticket } = (await res.json()) as { ticket: string };
+  return `${server.url.replace('http', 'ws')}/ws?ticket=${ticket}`;
+}
+
 describe('WS snapshot', () => {
   it('includes managers alongside sessions and approvals', async () => {
     await managers.createManagerSession({ directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake', manager: { pulseSeconds: 60, childrenCap: 1, mission: 'x' } } as never);
-    const ws = new WebSocket(`${server.url.replace('http', 'ws')}/ws?token=admin`);
+    const ws = new WebSocket(await wsUrl());
     const first = new Promise<string>((resolve) => ws.addEventListener('message', (m) => resolve(String(m.data)), { once: true }));
     await new Promise((r) => ws.addEventListener('open', r, { once: true }));
     const snapshot = JSON.parse(await first);
@@ -40,7 +48,7 @@ describe('WS snapshot', () => {
   });
 
   it('starts with an empty managers array when none exist, rather than omitting the field', async () => {
-    const ws = new WebSocket(`${server.url.replace('http', 'ws')}/ws?token=admin`);
+    const ws = new WebSocket(await wsUrl());
     const first = new Promise<string>((resolve) => ws.addEventListener('message', (m) => resolve(String(m.data)), { once: true }));
     await new Promise((r) => ws.addEventListener('open', r, { once: true }));
     const snapshot = JSON.parse(await first);
@@ -68,7 +76,7 @@ function collectMessages(ws: WebSocket, count: number): Promise<unknown[]> {
 
 describe('WS live broadcasts', () => {
   it('streams manager.created to already-connected clients when a manager session is made', async () => {
-    const ws = new WebSocket(`${server.url.replace('http', 'ws')}/ws?token=admin`);
+    const ws = new WebSocket(await wsUrl());
     await new Promise((r) => ws.addEventListener('open', r, { once: true }));
     await new Promise((r) => ws.addEventListener('message', r, { once: true })); // consume the initial snapshot
 
@@ -82,7 +90,7 @@ describe('WS live broadcasts', () => {
 
   it('streams manager.pulsed to already-connected clients when a manager is pulsed on demand', async () => {
     const created = await managers.createManagerSession({ directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake', manager: { pulseSeconds: 60, childrenCap: 1, mission: 'x' } } as never);
-    const ws = new WebSocket(`${server.url.replace('http', 'ws')}/ws?token=admin`);
+    const ws = new WebSocket(await wsUrl());
     await new Promise((r) => ws.addEventListener('open', r, { once: true }));
     await new Promise((r) => ws.addEventListener('message', r, { once: true })); // consume the initial snapshot
 

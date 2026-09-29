@@ -11,6 +11,7 @@ import { hooksHandler } from './hooksHandler.js';
 import { registerRestRoutes } from './restHandlers.js';
 import { InvalidJsonBodyError, json, logServerError, PayloadTooLargeError, readJson, Router } from './router.js';
 import { createWsHandler } from './wsHandler.js';
+import { createWsTicketStore, type WsTicketStore } from './wsTicketStore.js';
 
 const HOOK_PATH = /^\/hooks\/([^/]+)$/;
 
@@ -20,6 +21,8 @@ export interface ServerDeps {
   managers: ManagerService; pulseScheduler: PulseScheduler;
   mcp?: (req: IncomingMessage, res: ServerResponse, body: unknown) => Promise<void>;
   wsCloseGraceMs?: number;
+  // Overridable only so a test can inject a controllable clock/TTL; production always mints its own.
+  wsTickets?: WsTicketStore;
 }
 
 function applyCorsHeaders(req: IncomingMessage, res: ServerResponse): void {
@@ -48,10 +51,11 @@ async function handleMcpRequest(
 }
 
 export async function startServer(deps: ServerDeps): Promise<{ url: string; close(): Promise<void> }> {
+  const wsTickets = deps.wsTickets ?? createWsTicketStore();
   const router = new Router();
   // ponytail: unauthenticated readiness probe for CI/e2e webServer checks, which run before the admin token is known
   router.add('GET', '/health', ({ res }) => json(res, 200, { ok: true }));
-  registerRestRoutes(router, deps);
+  registerRestRoutes(router, { ...deps, wsTickets });
 
   const server = createServer(async (req, res) => {
     applyCorsHeaders(req, res);
@@ -84,7 +88,7 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; clos
       json(res, isValidation ? 400 : 500, { error: isValidation ? 'invalid_body' : 'internal', detail: (error as Error).message });
     }
   });
-  const ws = createWsHandler(deps);
+  const ws = createWsHandler({ ...deps, wsTickets });
   server.on('upgrade', ws.upgrade);
 
   await new Promise<void>((resolve) => server.listen(deps.port, deps.host, resolve));

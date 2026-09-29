@@ -66,7 +66,7 @@ async function renderFleet(api: ReturnType<typeof fakeApi>, sessions: Session[])
     ...withoutRealTerminal,
   });
   const host = fixture.componentInstance;
-  const fakeDaemon = connectFakeDaemon(fixture);
+  const fakeDaemon = await connectFakeDaemon(fixture);
   const daemon = {
     ...fakeDaemon,
     setState: (sessionId: string, state: SessionState) => fakeDaemon.send({ type: 'session.state', sessionId, state, stateSince: 't2' }),

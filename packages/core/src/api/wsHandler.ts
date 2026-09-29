@@ -6,10 +6,10 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import { ALLOWED_ORIGINS } from './allowedOrigins.js';
 import type { ApprovalService } from '../governance/approvalService.js';
 import type { EventBus } from '../events/eventBus.js';
-import { tokensMatch } from '../ids.js';
 import { log } from '../logger.js';
 import type { ManagerService } from '../managers/managerService.js';
 import type { SessionService } from '../sessions/sessionService.js';
+import type { WsTicketStore } from './wsTicketStore.js';
 
 const ClientMessageSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('input'), sessionId: z.string(), data: z.string() }),
@@ -54,7 +54,7 @@ export interface WsHandler {
 
 const DEFAULT_WS_CLOSE_GRACE_MS = 250;
 
-export function createWsHandler(deps: { bus: EventBus; sessions: SessionService; approvals: ApprovalService; managers: ManagerService; adminToken: string; wsCloseGraceMs?: number }): WsHandler {
+export function createWsHandler(deps: { bus: EventBus; sessions: SessionService; approvals: ApprovalService; managers: ManagerService; wsTickets: WsTicketStore; wsCloseGraceMs?: number }): WsHandler {
   const wss = new WebSocketServer({ noServer: true });
   deps.bus.subscribe((event) => {
     const payload = JSON.stringify(event);
@@ -84,12 +84,13 @@ export function createWsHandler(deps: { bus: EventBus; sessions: SessionService;
         // one context where a page the admin token never touched could still open this socket cross-site.
         const origin = req.headers.origin;
         if (origin && !ALLOWED_ORIGINS.has(origin)) { socket.destroy(); return; }
-        // ponytail: admin token travels in the query string because the browser WebSocket
-        // constructor can't set an Authorization header; acceptable on a 127.0.0.1-only
-        // daemon with a 0600 token file. Upgrade to a short-lived single-use ws-ticket
-        // (issued over the already-authenticated REST surface) if this ever binds beyond
-        // localhost or the desktop shell's webview turns out to persist URLs anywhere.
-        const isAuthorized = url.pathname === '/ws' && tokensMatch(url.searchParams.get('token') ?? '', deps.adminToken);
+        // AUD-27: the browser WebSocket constructor can't set an Authorization header, so some credential
+        // still has to travel in the query string — but no longer the long-lived admin token, which used to
+        // land in the console (URL and all) on every failed reconnect. A ticket is minted over the
+        // already-authenticated REST surface (POST /api/ws-ticket), is single-use, and expires in seconds:
+        // whatever ends up logging it gets a value worth nothing by the time anyone could reuse it.
+        const ticket = url.searchParams.get('ticket');
+        const isAuthorized = url.pathname === '/ws' && ticket !== null && deps.wsTickets.consume(ticket);
         if (!isAuthorized) { socket.destroy(); return; }
         wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
       } catch (error) {

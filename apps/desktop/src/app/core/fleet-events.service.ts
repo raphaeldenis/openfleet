@@ -60,15 +60,26 @@ export class FleetEventsService {
   // drops, so a real future reconnect still attaches normally.
   private readonly attachedSinceOpenSessionIds = new Set<string>();
 
-  connect(): void {
+  connect(): Promise<void> {
     const isAlreadyConnectingOrOpen =
       this.socket !== undefined && (this.socket.readyState === WebSocket.CONNECTING || this.socket.readyState === WebSocket.OPEN);
-    if (isAlreadyConnectingOrOpen) return;
-    this.openSocket();
+    if (isAlreadyConnectingOrOpen) return Promise.resolve();
+    return this.openSocket();
   }
 
-  private openSocket(): void {
-    const wsUrl = `${environment.apiUrl.replace(/^http/, 'ws')}/ws?token=${encodeURIComponent(environment.adminToken)}`;
+  // AUD-27: a ticket is fetched fresh over REST (bearer-authenticated, like every other /api/ call) right
+  // before every (re)connect, instead of putting the long-lived admin token in the WS URL — the query
+  // string is the one place a browser WebSocket can carry a credential at all, and a URL there ends up in
+  // the console on every failed reconnect. An unconsumed ticket stays valid for up to its TTL if the
+  // handshake fails before consumption, so a leaked one isn't worthless right away — the short TTL,
+  // single use, and the loopback-only daemon are what keep that window small.
+  private async openSocket(): Promise<void> {
+    const ticket = await this.fetchTicket();
+    if (ticket === undefined) {
+      this.scheduleReconnect();
+      return;
+    }
+    const wsUrl = `${environment.apiUrl.replace(/^http/, 'ws')}/ws?ticket=${encodeURIComponent(ticket)}`;
     const socket = new WebSocket(wsUrl);
     this.socket = socket;
     socket.addEventListener('open', () => {
@@ -82,10 +93,26 @@ export class FleetEventsService {
     socket.addEventListener('close', () => this.scheduleReconnect());
   }
 
+  // A failed fetch (daemon down, network blip) is not a crash: it falls back to the same reconnect/backoff
+  // loop a dropped socket goes through, so the caller stays offline and read-only (AUD-14) until it works.
+  private async fetchTicket(): Promise<string | undefined> {
+    try {
+      const response = await fetch(`${environment.apiUrl}/api/ws-ticket`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${environment.adminToken}` },
+      });
+      if (!response.ok) return undefined;
+      const body = (await response.json()) as { ticket?: string };
+      return body.ticket;
+    } catch {
+      return undefined;
+    }
+  }
+
   private scheduleReconnect(): void {
     this.connected.set(false);
     this.attachedSinceOpenSessionIds.clear();
-    setTimeout(() => this.openSocket(), this.reconnectDelayMs);
+    setTimeout(() => { void this.openSocket(); }, this.reconnectDelayMs);
     this.reconnectDelayMs = Math.min(this.reconnectDelayMs * 2, MAX_RECONNECT_DELAY_MS);
   }
 

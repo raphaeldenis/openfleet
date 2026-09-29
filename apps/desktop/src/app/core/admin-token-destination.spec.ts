@@ -3,7 +3,8 @@ import { FleetApiService } from './fleet-api.service';
 import { FleetEventsService } from './fleet-events.service';
 
 const DEFAULT_DAEMON_URL = 'http://127.0.0.1:7331';
-const DEFAULT_SOCKET_URL = 'ws://127.0.0.1:7331/ws?token=secret-token';
+const FAKE_TICKET = 'fake-ticket';
+const DEFAULT_SOCKET_URL = `ws://127.0.0.1:7331/ws?ticket=${FAKE_TICKET}`;
 const LOOPBACK_HOSTNAMES = ['127.0.0.1', 'localhost', '[::1]'];
 
 // Every rejected value sits on port 9999, never the default 7331: a wrongly accepted value would then
@@ -57,7 +58,14 @@ describe('where the admin token goes, whatever is stored as the daemon address',
   beforeEach(() => {
     localStorage.clear();
     localStorage.setItem('openfleet.adminToken', 'secret-token');
-    fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: () => Promise.resolve({}) });
+    // The ws-ticket call gets a ticket back; every other REST call keeps the old generic empty-body mock.
+    fetchMock = vi.fn().mockImplementation((url: string) =>
+      Promise.resolve(
+        String(url).endsWith('/api/ws-ticket')
+          ? { ok: true, status: 200, json: () => Promise.resolve({ ticket: FAKE_TICKET }) }
+          : { ok: true, status: 200, json: () => Promise.resolve({}) },
+      ),
+    );
     socketUrls = [];
     vi.stubGlobal('fetch', fetchMock);
     vi.stubGlobal(
@@ -87,15 +95,15 @@ describe('where the admin token goes, whatever is stored as the daemon address',
     return requestedUrl;
   }
 
-  function openedSocketUrl(storedApiUrl: string): string {
+  async function openedSocketUrl(storedApiUrl: string): Promise<string> {
     localStorage.setItem('openfleet.apiUrl', storedApiUrl);
-    new FleetEventsService().connect();
+    await new FleetEventsService().connect();
     return socketUrls.at(-1)!;
   }
 
   it.each(rejectedStoredApiUrls)('sends both the request and the socket to the default daemon for %s (%s)', async (_label, storedApiUrl) => {
     const restUrl = await requestedRestUrl(storedApiUrl);
-    const socketUrl = openedSocketUrl(storedApiUrl);
+    const socketUrl = await openedSocketUrl(storedApiUrl);
 
     expect(restUrl).toBe(`${DEFAULT_DAEMON_URL}/api/sessions/s1/close`);
     expect(socketUrl).toBe(DEFAULT_SOCKET_URL);
@@ -103,10 +111,10 @@ describe('where the admin token goes, whatever is stored as the daemon address',
 
   it.each(canonicalLoopbackStoredApiUrls)('keeps %s on its canonical loopback form (%s)', async (_label, storedApiUrl, canonicalDaemonUrl) => {
     const restUrl = await requestedRestUrl(storedApiUrl);
-    const socketUrl = openedSocketUrl(storedApiUrl);
+    const socketUrl = await openedSocketUrl(storedApiUrl);
 
     expect(restUrl).toBe(`${canonicalDaemonUrl}/api/sessions/s1/close`);
-    expect(socketUrl).toBe(`${canonicalDaemonUrl.replace(/^http/, 'ws')}/ws?token=secret-token`);
+    expect(socketUrl).toBe(`${canonicalDaemonUrl.replace(/^http/, 'ws')}/ws?ticket=${FAKE_TICKET}`);
   });
 
   const everyStoredApiUrl = [
@@ -117,12 +125,20 @@ describe('where the admin token goes, whatever is stored as the daemon address',
 
   it.each(everyStoredApiUrl)('never aims the request or the socket at a non-loopback host or at credentials: %s', async (storedApiUrl) => {
     const restUrl = new URL(await requestedRestUrl(storedApiUrl));
-    const socketUrl = new URL(openedSocketUrl(storedApiUrl));
+    const socketUrl = new URL(await openedSocketUrl(storedApiUrl));
 
     for (const destination of [restUrl, socketUrl]) {
       expect(LOOPBACK_HOSTNAMES).toContain(destination.hostname);
       expect(destination.username).toBe('');
       expect(destination.password).toBe('');
     }
+  });
+
+  // AUD-27: the admin token used to travel in the WS URL itself and land in the console on every failed
+  // reconnect. It no longer appears there at all — only a short-lived ticket does.
+  it.each(everyStoredApiUrl)('never puts the admin token anywhere in the WS URL: %s', async (storedApiUrl) => {
+    const socketUrl = await openedSocketUrl(storedApiUrl);
+
+    expect(socketUrl).not.toContain('secret-token');
   });
 });

@@ -34,6 +34,12 @@ afterEach(() => server.close());
 
 const api = (path: string, init: RequestInit = {}) => fetch(`${server.url}${path}`, { ...init, headers: { 'content-type': 'application/json', authorization: 'Bearer admin', ...(init.headers ?? {}) } });
 
+async function wsUrl(): Promise<string> {
+  const res = await api('/api/ws-ticket', { method: 'POST' });
+  const { ticket } = (await res.json()) as { ticket: string };
+  return `${server.url.replace('http', 'ws')}/ws?ticket=${ticket}`;
+}
+
 describe('REST', () => {
   it('answers /health with no auth required, for CI/e2e readiness probes', async () => {
     const res = await fetch(`${server.url}/health`);
@@ -622,7 +628,7 @@ describe('REST', () => {
   });
 
   it('sends a snapshot first, then streams live events', async () => {
-    const ws = new WebSocket(`${server.url.replace('http', 'ws')}/ws?token=admin`);
+    const ws = new WebSocket(await wsUrl());
     const nextMessage = () => new Promise<string>((resolve) => ws.addEventListener('message', (m) => resolve(String(m.data)), { once: true }));
 
     expect(JSON.parse(await nextMessage())).toEqual({ type: 'snapshot', sessions: [], approvals: [], managers: [] });
@@ -635,7 +641,7 @@ describe('REST', () => {
 
   it('snapshot reflects sessions and approvals that already existed before connecting', async () => {
     const created = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
-    const ws = new WebSocket(`${server.url.replace('http', 'ws')}/ws?token=admin`);
+    const ws = new WebSocket(await wsUrl());
     const snapshot = JSON.parse(await new Promise<string>((resolve) => ws.addEventListener('message', (m) => resolve(String(m.data)), { once: true })));
     expect(snapshot.sessions.map((s: { id: string }) => s.id)).toEqual([created.id]);
     ws.close();
@@ -645,8 +651,13 @@ describe('REST', () => {
     const session = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
     harness.handles[0]!.emitData('hello from pty');
 
-    const requester = new WebSocket(`${server.url.replace('http', 'ws')}/ws?token=admin`);
-    const bystander = new WebSocket(`${server.url.replace('http', 'ws')}/ws?token=admin`);
+    // Both tickets are fetched before either socket connects: fetch and WebSocket share undici's connection
+    // pool to the same origin, and a fetch interleaved between the two connects starves the first socket's
+    // upgrade indefinitely, with no error on either side.
+    const requesterUrl = await wsUrl();
+    const bystanderUrl = await wsUrl();
+    const requester = new WebSocket(requesterUrl);
+    const bystander = new WebSocket(bystanderUrl);
     await Promise.all([requester, bystander].map((ws) => new Promise((r) => ws.addEventListener('message', r, { once: true })))); // wait past each socket's snapshot
 
     const bystanderSawReplay = new Promise<boolean>((resolve) => {
@@ -663,7 +674,7 @@ describe('REST', () => {
   });
 
   it('ignores a malformed websocket frame instead of crashing the daemon', async () => {
-    const ws = new WebSocket(`${server.url.replace('http', 'ws')}/ws?token=admin`);
+    const ws = new WebSocket(await wsUrl());
     await new Promise((r) => ws.addEventListener('open', r, { once: true }));
     ws.send('not json');
     await new Promise((r) => setTimeout(r, 50));
@@ -674,7 +685,7 @@ describe('REST', () => {
 
   it('ignores a resize message with non-positive dimensions instead of applying it', async () => {
     const session = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
-    const ws = new WebSocket(`${server.url.replace('http', 'ws')}/ws?token=admin`);
+    const ws = new WebSocket(await wsUrl());
     await new Promise((r) => ws.addEventListener('message', r, { once: true })); // wait past the snapshot
     ws.send(JSON.stringify({ type: 'resize', sessionId: session.id, cols: -1, rows: 10 }));
     await new Promise((r) => setTimeout(r, 50));
@@ -685,7 +696,7 @@ describe('REST', () => {
   });
 
   it('ignores an attach message with a missing sessionId instead of crashing', async () => {
-    const ws = new WebSocket(`${server.url.replace('http', 'ws')}/ws?token=admin`);
+    const ws = new WebSocket(await wsUrl());
     await new Promise((r) => ws.addEventListener('message', r, { once: true })); // wait past the snapshot
     ws.send(JSON.stringify({ type: 'attach' }));
     await new Promise((r) => setTimeout(r, 50));

@@ -12,7 +12,7 @@ import { connectFakeDaemon } from '../testing/session-view.testing';
 
 async function renderTerminal(options: { openImmediately?: boolean } = {}) {
   const { fixture } = await render(TerminalComponent, { bindings: [inputBinding('sessionId', () => 's1')] });
-  const daemon = connectFakeDaemon(fixture, options);
+  const daemon = await connectFakeDaemon(fixture, options);
   // A signal write (connected, on open) does not itself repaint in zoneless mode — the render only
   // catches up once something awaits stability, so every test starts from a settled DOM.
   await fixture.whenStable();
@@ -22,7 +22,7 @@ async function renderTerminal(options: { openImmediately?: boolean } = {}) {
 async function renderSwitchableTerminal() {
   const sessionId = signal('s1');
   const { fixture } = await render(TerminalComponent, { bindings: [inputBinding('sessionId', sessionId)] });
-  const daemon = connectFakeDaemon(fixture);
+  const daemon = await connectFakeDaemon(fixture);
   await fixture.whenStable();
   return { fixture, daemon, sessionId };
 }
