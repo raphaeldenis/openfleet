@@ -45,13 +45,40 @@ describe('TableKanbanComponent', () => {
     expect(screen.queryAllByTestId(/^kanban-card-/)).toHaveLength(3);
   });
 
-  it('user sees a card with its title, id and owner', async () => {
+  it('user sees a card with its title and owner, without the row id', async () => {
     await render(TableKanbanComponent, { bindings: bindings() });
 
     const card = screen.getByTestId('kanban-card-r3');
     expect(card).toHaveTextContent('Desktop reconnect');
-    expect(card).toHaveTextContent('r3');
     expect(card).toHaveTextContent('Gimli');
+    expect(card).not.toHaveTextContent('r3');
+  });
+
+  describe('layout contract with a very long value', () => {
+    const longValue = 'y'.repeat(500);
+    const longGroups = [{ option: option('todo', 'todo'), rows: [row('r9', 'Title', longValue)] }];
+    const renderLongCard = () =>
+      render(TableKanbanComponent, { bindings: [inputBinding('columns', () => columns), inputBinding('groups', () => longGroups)] });
+
+    it('user sees the details of a card clamped to a few lines that wrap anywhere', async () => {
+      await renderLongCard();
+
+      const style = getComputedStyle(screen.getByTestId('kanban-details-r9'));
+      expect([style.overflow, style.overflowWrap, style.webkitLineClamp]).toEqual(['hidden', 'anywhere', '3']);
+    });
+
+    it('user can read the full details of a card from its tooltip', async () => {
+      await renderLongCard();
+
+      expect(screen.getByTestId('kanban-details-r9')).toHaveAttribute('title', longValue);
+    });
+
+    it('user sees a bounded card that keeps its content on one column', async () => {
+      await renderLongCard();
+
+      const style = getComputedStyle(screen.getByTestId('kanban-card-r9'));
+      expect([style.maxHeight, style.overflow, style.minWidth]).toEqual(['12rem', 'hidden', '0px']);
+    });
   });
 
   it('user can open a row by clicking its card', async () => {

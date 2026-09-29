@@ -2,14 +2,16 @@ import { ChangeDetectionStrategy, Component, computed, input, output, signal } f
 import type { DsColumn, DsRow } from '@openfleet/shared';
 import { cellText, sortedColumns } from './table-cells';
 
+const MIN_COLUMN_WIDTH_REM = 8;
+
 @Component({
   selector: 'of-table-grid',
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <div class="grid" role="grid" data-testid="table-grid">
-      <div class="header" role="row">
+    <div class="grid" role="grid" data-testid="table-grid" [style.--grid-columns]="gridColumns()" [style.--grid-min-width]="gridMinWidth()">
+      <div class="header" role="row" data-testid="grid-head">
         @for (column of orderedColumns(); track column.id) {
-          <span class="cell" role="columnheader" [attr.data-testid]="'grid-header-' + column.id">{{ column.displayName }}</span>
+          <span class="cell" role="columnheader" [attr.title]="column.displayName" [attr.data-testid]="'grid-header-' + column.id">{{ column.displayName }}</span>
         }
       </div>
       @for (row of rows(); track row.id) {
@@ -29,7 +31,7 @@ import { cellText, sortedColumns } from './table-cells';
           (keydown.arrowup)="focusNeighbour($event, 'previous')"
         >
           @for (column of orderedColumns(); track column.id) {
-            <span class="cell" role="gridcell" [attr.data-testid]="'grid-cell-' + row.id + '-' + column.id">{{ text(column, row) }}</span>
+            <span class="cell" role="gridcell" [attr.title]="text(column, row)" [attr.data-testid]="'grid-cell-' + row.id + '-' + column.id">{{ text(column, row) }}</span>
           }
         </div>
       }
@@ -37,18 +39,15 @@ import { cellText, sortedColumns } from './table-cells';
   `,
   styles: `
     .grid { border: 1px solid var(--line); border-radius: .5rem; background: var(--panel); overflow-x: auto; overflow-y: hidden }
-    .header {
-      display: flex; width: max-content; min-width: 100%; box-sizing: border-box; padding: 0 .75rem; height: 2rem; align-items: center;
-      border-bottom: 1px solid var(--line); background: var(--sunk);
-      font-size: .6875rem; color: var(--mut); font-weight: 500;
+    .header, .row {
+      display: grid; grid-template-columns: var(--grid-columns); min-width: var(--grid-min-width); box-sizing: border-box;
+      padding: 0 .75rem; align-items: center; border-bottom: 1px solid var(--line);
     }
-    .row {
-      display: flex; width: max-content; min-width: 100%; box-sizing: border-box; padding: 0 .75rem; min-height: 2.25rem; align-items: center;
-      border-bottom: 1px solid var(--line); cursor: pointer; font-size: .75rem;
-    }
+    .header { height: 2rem; background: var(--sunk); font-size: .6875rem; color: var(--mut); font-weight: 500 }
+    .row { min-height: 2.25rem; cursor: pointer; font-size: .75rem }
     .row.selected { background: var(--accent-bg) }
     .row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
-    .cell { flex: 1 1 8rem; min-width: 8rem; padding-right: .5rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+    .cell { min-width: 0; padding-right: .5rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
   `,
 })
 export class TableGridComponent {
@@ -64,6 +63,8 @@ export class TableGridComponent {
     return preferredRowId && rowIds.includes(preferredRowId) ? preferredRowId : rowIds[0];
   });
   protected readonly orderedColumns = computed(() => sortedColumns(this.columns()));
+  protected readonly gridColumns = computed(() => `repeat(${this.orderedColumns().length}, minmax(${MIN_COLUMN_WIDTH_REM}rem, 1fr))`);
+  protected readonly gridMinWidth = computed(() => `${this.orderedColumns().length * MIN_COLUMN_WIDTH_REM}rem`);
   protected readonly text = cellText;
 
   protected openFromKeyboard(event: Event, rowId: string): void {

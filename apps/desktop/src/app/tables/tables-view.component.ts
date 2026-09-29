@@ -42,7 +42,7 @@ const describeCreateFailure = (error: unknown, displayName: string): string => {
   template: `
     <div class="toolbar">
       @if (projects().length > 0) {
-        <select class="scope" data-testid="tables-project-scope" aria-label="Project scope" [value]="activeProjectId()" (change)="chooseProject($any($event.target).value)">
+        <select class="scope of-focus-ring" data-testid="tables-project-scope" aria-label="Project scope" [value]="activeProjectId()" (change)="chooseProject($any($event.target).value)">
           @for (project of projects(); track project.id) {
             <option [value]="project.id" [selected]="project.id === activeProjectId()">{{ project.name }}</option>
           }
@@ -51,8 +51,8 @@ const describeCreateFailure = (error: unknown, displayName: string): string => {
       <of-table-list [stores]="stores()" [activeStoreId]="activeStoreId()" (selected)="openStore($event)" (addRequested)="startCreatingTable()" />
       <span class="spacer"></span>
       <div class="toggle" role="group" aria-label="Layout">
-        <button type="button" data-testid="tables-toggle-grid" [class.on]="viewMode() === 'grid'" [attr.aria-pressed]="viewMode() === 'grid'" (click)="viewMode.set('grid')">▦ Grid</button>
-        <button type="button" data-testid="tables-toggle-kanban" [class.on]="viewMode() === 'kanban'" [attr.aria-pressed]="viewMode() === 'kanban'" (click)="viewMode.set('kanban')">▥ Kanban</button>
+        <button type="button" class="of-focus-ring" data-testid="tables-toggle-grid" [class.on]="viewMode() === 'grid'" [attr.aria-pressed]="viewMode() === 'grid'" (click)="viewMode.set('grid')">▦ Grid</button>
+        <button type="button" class="of-focus-ring" data-testid="tables-toggle-kanban" [class.on]="viewMode() === 'kanban'" [attr.aria-pressed]="viewMode() === 'kanban'" (click)="viewMode.set('kanban')">▥ Kanban</button>
       </div>
       <button type="button" class="of-btn of-btn--primary compact" data-testid="tables-add-row" [disabled]="!activeStoreId() || isClearingMismatches()" (click)="addRow()">+ Row</button>
     </div>
@@ -73,6 +73,12 @@ const describeCreateFailure = (error: unknown, displayName: string): string => {
 
     <div class="body">
       <div class="main">
+        @if (isViewingMismatchedRows()) {
+          <div class="banner" role="region" aria-label="Schema mismatch" data-testid="tables-mismatch-banner">
+            <span class="muted">{{ mismatchSummary() }}</span>
+            <button #clearMismatchesShortcut type="button" class="of-btn of-btn--secondary compact" data-testid="tables-clear-mismatches" [disabled]="isClearingMismatches()" (click)="clearMismatchedValues()">Clear those values</button>
+          </div>
+        }
         @if (loadFailure(); as failure) {
           <div class="card" role="status" data-testid="tables-load-error">
             <span class="card-title">✕ {{ failureTitle() }}</span>
@@ -96,7 +102,7 @@ const describeCreateFailure = (error: unknown, displayName: string): string => {
             }
           </div>
         } @else if (mustResolveMismatches()) {
-          <div class="card" data-testid="tables-schema-mismatch">
+          <div class="card" role="region" [attr.aria-label]="'Schema mismatch in ' + activeStoreName()" data-testid="tables-schema-mismatch">
             <span class="card-title">✕ Schema mismatch in “{{ activeStoreName() }}”</span>
             <span class="muted">{{ mismatchSummary() }}</span>
             <div class="actions">
@@ -134,8 +140,8 @@ const describeCreateFailure = (error: unknown, displayName: string): string => {
       </div>
 
       @if (selectedRowId()) {
-        <aside #historyPanel class="history" tabindex="-1" aria-label="Row history" data-testid="tables-history">
-          <button type="button" class="close" data-testid="tables-history-close" aria-label="Close history" (click)="closeHistory()">✕</button>
+        <aside #historyPanel class="history of-focus-ring" tabindex="-1" aria-label="Row history" data-testid="tables-history" (keydown.escape)="closeHistory()">
+          <button type="button" class="close of-focus-ring" data-testid="tables-history-close" aria-label="Close history" (click)="closeHistory()">✕</button>
           @if (historyFailed()) {
             <div class="history-error" data-testid="tables-history-error">The history of this row could not be loaded.</div>
           } @else {
@@ -185,7 +191,7 @@ const describeCreateFailure = (error: unknown, displayName: string): string => {
     .history { position: relative; width: 20rem; flex: none; border-left: 1px solid var(--line); background: var(--panel); overflow: auto; display: flex; flex-direction: column }
     .history-error { padding: 2.5rem .875rem .875rem; font-size: .75rem; color: var(--state-error) }
     .close { position: absolute; top: .5rem; right: .5rem; border: 0; background: transparent; color: var(--faint); cursor: pointer }
-    .close:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
+    .banner { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; margin-bottom: .75rem; padding: .5rem .75rem; border: 1px solid var(--line); border-radius: .5rem; background: var(--panel); font-size: .75rem }
   `,
 })
 export class TablesViewComponent {
@@ -196,6 +202,7 @@ export class TablesViewComponent {
   private readonly injector = inject(Injector);
   private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
   private readonly historyPanel = viewChild<ElementRef<HTMLElement>>('historyPanel');
+  private readonly clearMismatchesShortcut = viewChild<ElementRef<HTMLElement>>('clearMismatchesShortcut');
 
   protected readonly skeletonBars = Array.from({ length: SKELETON_ROW_COUNT }, (_, index) => index);
   protected readonly projects = signal<Project[]>([]);
@@ -256,6 +263,9 @@ export class TablesViewComponent {
     );
   });
   protected readonly mustResolveMismatches = computed(() => this.mismatches().length > 0 && !this.ignoresMismatches());
+  protected readonly isViewingMismatchedRows = computed(
+    () => this.mismatches().length > 0 && this.ignoresMismatches() && !this.isLoadingTable() && this.loadFailure() === null,
+  );
   protected readonly mismatchSummary = computed(() => {
     const columnNames = [...new Set(this.mismatches().map(({ column }) => `“${column.displayName}”`))].join(', ');
     const rowCount = new Set(this.mismatches().map(({ rowId }) => rowId)).size;
@@ -316,6 +326,7 @@ export class TablesViewComponent {
 
   protected viewRowsAnyway(): void {
     this.ignoresMismatches.set(true);
+    afterNextRender(() => this.clearMismatchesShortcut()?.nativeElement.focus(), { injector: this.injector });
   }
 
   protected async clearMismatchedValues(): Promise<void> {

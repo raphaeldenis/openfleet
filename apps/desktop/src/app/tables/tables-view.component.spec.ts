@@ -666,6 +666,39 @@ describe('TablesViewComponent', () => {
       expect(await screen.findByTestId('grid-cell-r1-c-status')).toHaveTextContent('archived');
     });
 
+    it('user sees the schema mismatch card announced as a labelled region', async () => {
+      await renderView(fakeApi({ rows: [row('r1', { 'c-status': 'archived' })] }));
+
+      const card = await screen.findByTestId('tables-schema-mismatch');
+
+      expect(card).toHaveAttribute('role', 'region');
+      expect(card).toHaveAccessibleName(/schema mismatch/i);
+    });
+
+    it('user can still clear the offending values after choosing View rows', async () => {
+      const api = fakeApi({ rows: [row('r1', { 'c-title': 'Stale', 'c-status': 'archived' })] });
+      await renderView(api);
+      await userEvent.click(await screen.findByTestId('tables-view-rows'));
+
+      const banner = await screen.findByTestId('tables-mismatch-banner');
+      expect(banner).toHaveTextContent('1 row');
+      expect(screen.getByTestId('grid-cell-r1-c-status')).toHaveTextContent('archived');
+      api.queryDataStore.mockResolvedValue(page([row('r1', { 'c-title': 'Stale', 'c-status': null })]));
+
+      await userEvent.click(screen.getByTestId('tables-clear-mismatches'));
+
+      expect(api.updateRows).toHaveBeenCalledWith({ projectId: 'p1', storeId: 's1', updates: [{ rowId: 'r1', patch: { 'c-status': null } }] });
+      await vi.waitFor(() => expect(screen.queryByTestId('tables-mismatch-banner')).toBeNull());
+    });
+
+    it('user keeps the keyboard focus inside the tables view after choosing View rows', async () => {
+      await renderView(fakeApi({ rows: [row('r1', { 'c-title': 'Stale', 'c-status': 'archived' })] }));
+
+      await userEvent.click(await screen.findByTestId('tables-view-rows'));
+
+      await vi.waitFor(() => expect(screen.getByTestId('tables-clear-mismatches')).toHaveFocus());
+    });
+
     it('user can retry after the rows fail to load', async () => {
       const api = fakeApi({ rows: twoRows });
       api.queryDataStore.mockRejectedValueOnce(new ApiError(500, 'GET rows → 500'));
@@ -815,6 +848,29 @@ describe('TablesViewComponent', () => {
       await userEvent.click(screen.getByTestId('tables-history-close'));
 
       expect(screen.getByTestId('grid-row-r2')).toHaveFocus();
+    });
+
+    it('user can close the history with Escape and lands back on the row that was open', async () => {
+      await renderView(fakeApi({ rows: twoRows }));
+      await screen.findByTestId('table-grid');
+      await userEvent.click(screen.getByTestId('grid-row-r2'));
+      const panel = await screen.findByTestId('tables-history');
+      await vi.waitFor(() => expect(panel).toHaveFocus());
+
+      await userEvent.keyboard('{Escape}');
+
+      expect(screen.queryByTestId('tables-history')).toBeNull();
+      expect(screen.getByTestId('grid-row-r2')).toHaveFocus();
+    });
+
+    it('user sees the same focus ring on the project select, the layout toggles and the history panel as on the rest of the app', async () => {
+      await renderView(fakeApi({ rows: twoRows, projects: projectsNamed('p1', 'p2') }));
+      await screen.findByTestId('table-grid');
+      await userEvent.click(screen.getByTestId('grid-row-r1'));
+      await screen.findByTestId('tables-history');
+
+      const ringed = ['tables-project-scope', 'tables-toggle-grid', 'tables-toggle-kanban', 'tables-history', 'tables-history-close'];
+      for (const testId of ringed) expect(screen.getByTestId(testId), testId).toHaveClass('of-focus-ring');
     });
 
     it('user closing the history lands back on the kanban card that was open', async () => {

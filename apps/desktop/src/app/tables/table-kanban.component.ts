@@ -31,10 +31,9 @@ export interface KanbanGroup {
             (click)="rowSelected.emit(row.id)"
           >
             <span class="title">{{ titleOf(row) }}</span>
-            <span class="meta">
-              <span class="id">{{ row.id }}</span>
-              <span class="details">{{ detailsOf(row) }}</span>
-            </span>
+            @if (detailsOf(row); as details) {
+              <span class="details" [attr.title]="details" [attr.data-testid]="'kanban-details-' + row.id">{{ details }}</span>
+            }
           </button>
         }
       </section>
@@ -49,15 +48,17 @@ export interface KanbanGroup {
     .count { color: var(--faint); font-weight: 400 }
     .card {
       display: flex; flex-direction: column; gap: .375rem; padding: .625rem; text-align: left;
+      min-width: 0; max-height: 12rem; overflow: hidden;
       border: 1px solid var(--line); border-radius: .375rem; background: var(--panel); color: inherit;
       cursor: pointer; font: inherit; font-size: .75rem;
     }
     .card.selected { border-color: var(--accent); background: var(--accent-bg) }
     .card:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
-    .title { font-weight: 500; overflow-wrap: anywhere }
-    .meta { display: flex; gap: .5rem; color: var(--mut); font-size: .6875rem }
-    .id { font-family: var(--mono); overflow-wrap: anywhere }
-    .details { flex: 1; min-width: 0; overflow-wrap: anywhere }
+    .title { font-weight: 500; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden }
+    .details {
+      color: var(--mut); font-size: .6875rem; overflow-wrap: anywhere;
+      display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden;
+    }
   `,
 })
 export class TableKanbanComponent {

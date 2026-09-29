@@ -105,6 +105,47 @@ describe('TableGridComponent', () => {
     expect(screen.getByTestId('grid-row-r2')).toHaveAttribute('aria-selected', 'false');
   });
 
+  describe('layout contract with one very long value', () => {
+    const longValue = 'x'.repeat(500);
+    const rowsWithLongValue = [row('r1', { 'c-title': longValue, 'c-status': 'doing' }), row('r2', { 'c-title': 'Short', 'c-status': 'doing' })];
+    const renderWithLongValue = () =>
+      render(TableGridComponent, { bindings: [inputBinding('columns', () => columns), inputBinding('rows', () => rowsWithLongValue)] });
+
+    it('user sees every column share one width template across the header and all rows', async () => {
+      await render(TableGridComponent, { bindings: bindings() });
+
+      const grid = screen.getByTestId('table-grid');
+      expect(grid.style.getPropertyValue('--grid-columns')).toBe('repeat(3, minmax(8rem, 1fr))');
+      expect(grid.style.getPropertyValue('--grid-min-width')).toBe('24rem');
+    });
+
+    it('user sees each cell, the long one included, cut with an ellipsis instead of widening its row', async () => {
+      await renderWithLongValue();
+
+      const cells = [...screen.getAllByTestId(/^grid-cell-/), ...screen.getAllByTestId(/^grid-header-/)];
+      for (const cell of cells) {
+        const style = getComputedStyle(cell);
+        expect([style.overflow, style.textOverflow, style.whiteSpace, style.minWidth]).toEqual(['hidden', 'ellipsis', 'nowrap', '0px']);
+      }
+    });
+
+    it('user can read the full long value from the cell tooltip', async () => {
+      await renderWithLongValue();
+
+      expect(screen.getByTestId('grid-cell-r1-c-title')).toHaveAttribute('title', longValue);
+    });
+
+    it('user sees the header and every row laid out as the same grid', async () => {
+      await renderWithLongValue();
+
+      const laidOutElements = [screen.getByTestId('grid-head'), screen.getByTestId('grid-row-r1'), screen.getByTestId('grid-row-r2')];
+      for (const element of laidOutElements) {
+        const style = getComputedStyle(element);
+        expect([style.display, style.minWidth]).toEqual(['grid', 'var(--grid-min-width)']);
+      }
+    });
+  });
+
   describe('keyboard', () => {
     const tabIndexOf = (rowId: string) => screen.getByTestId(`grid-row-${rowId}`).getAttribute('tabindex');
 
