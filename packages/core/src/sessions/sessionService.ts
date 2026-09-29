@@ -923,6 +923,7 @@ export class SessionService {
   }
   get(id: string): Session | undefined { return this.repo.get(id); }
   list(): Session[] { return this.repo.list(); }
+  directoryRealpathOf(id: string): string | null | undefined { return this.repo.directoryRealpath(id); }
   byHookToken(token: string): Session | undefined { return this.repo.byHookToken(token); }
   transcriptPathOf(id: string): string | undefined { return this.transcriptPaths.get(id); }
   byMcpToken(token: string): Session | undefined { return this.repo.byMcpToken(token); }

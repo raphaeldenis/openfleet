@@ -1,6 +1,6 @@
 import { MANAGER_ROLE, ModelIdSchema, PERMISSION_MODES, type Approval, type ManagerSpec, type Session } from '@openfleet/shared';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync, realpathSync, statSync } from 'node:fs';
 import { z } from 'zod';
 import { createWorktree, isPathWithin, sameGitRepository } from '../git/worktrees.js';
 import { resolveModel, type ModelTable } from '../models.js';
@@ -49,11 +49,37 @@ export interface RegisterToolsDeps {
 export function registerTools(server: McpServer, deps: RegisterToolsDeps): void {
   const { sessions, caller, approvals, managers, pulseScheduler, modelTable } = deps;
   const realPathOrSelf = (directory: string) => (existsSync(directory) ? realpathSync.native(directory) : directory);
+  const isSameDirectory = (first: string, second: string): boolean => {
+    if (first === second) return true;
+    try {
+      const firstStat = statSync(first);
+      const secondStat = statSync(second);
+      return firstStat.dev === secondStat.dev && firstStat.ino === secondStat.ino;
+    } catch {
+      return false;
+    }
+  };
+  const isSessionDirectory = (session: Session, realDirectory: string): boolean => {
+    const recordedRealpath = sessions.directoryRealpathOf(session.id);
+    const isRecordedDirectory = recordedRealpath ? isSameDirectory(recordedRealpath, realDirectory) : false;
+    return isRecordedDirectory || isSameDirectory(realPathOrSelf(session.directory), realDirectory);
+  };
   const findLineageSessionOwning = (realDirectory: string): Session | undefined => {
     const visited = new Set<string>();
     for (let session: Session | undefined = caller; session && !visited.has(session.id); session = session.parentId ? sessions.get(session.parentId) : undefined) {
       visited.add(session.id);
-      if (realPathOrSelf(session.directory) === realDirectory) return session;
+      if (isSessionDirectory(session, realDirectory)) return session;
+    }
+    return undefined;
+  };
+  const comparableName = (name: string) => name.trim().normalize('NFC');
+  const findLiveChildDuplicating = (input: { name: string; realDirectory: string }): { child: Session; sameAs: 'name' | 'directory' } | undefined => {
+    const requestedName = comparableName(input.name);
+    for (const child of sessions.list()) {
+      const isLiveChildOfCaller = child.parentId === caller.id && child.state !== 'closed';
+      if (!isLiveChildOfCaller) continue;
+      if (comparableName(child.name) === requestedName) return { child, sameAs: 'name' };
+      if (isSessionDirectory(child, input.realDirectory)) return { child, sameAs: 'directory' };
     }
     return undefined;
   };
@@ -112,8 +138,9 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
   });
 
   server.registerTool('create_session', { description: 'Spawn a child coding session in a directory (use create_worktree first)', inputSchema: {
-    directory: z.string(), name: z.string().min(1), emoji: z.string().optional(), model: ModelIdSchema.optional(),
+    directory: z.string(), name: z.string().refine((name) => name.trim().length > 0, 'name must not be blank'), emoji: z.string().optional(), model: ModelIdSchema.optional(),
     seeded_prompt: z.string().optional(), role: z.string().optional(), permission_mode: z.enum(PERMISSION_MODES).optional(),
+    allow_duplicate: z.boolean().optional(),
     manager: z.object({ pulse_seconds: z.number().int().positive(), children_cap: z.number().int().positive(), mission: z.string().min(1) }).optional(),
   } }, async (input) => {
     // A parentless caller is a human-launched root session (Raphaël's own Lead/Capitaine), always trusted to
@@ -145,9 +172,31 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
       return fail(`directory ${realDirectory} is already the working directory of session ${ownerOfRequestedDirectory.id} (${ownerOfRequestedDirectory.name}), which is you or one of your ancestors: use a worktree (create_worktree) or another directory`);
     }
 
+    // ponytail: a task is identified by the child's name or directory, not by a task id; a manager that
+    // renames its children defeats the guard. Upgrade path: a `task` field matched against the backlog row.
+    const refuseLiveDuplicate = () => {
+      const liveDuplicate = input.allow_duplicate ? undefined : findLiveChildDuplicating({ name: input.name, realDirectory });
+      if (!liveDuplicate) return undefined;
+      const { child, sameAs } = liveDuplicate;
+      return fail(`session ${child.id} (${child.name}) is already a live child of yours (state ${child.state}) with the same ${sameAs}: message it with send_session_message instead of spawning again, close_session ${child.id} if it is stuck or dead and spawn again, or pass allow_duplicate: true if two sessions are intended`);
+    };
+    const earlyDuplicateRefusal = refuseLiveDuplicate();
+    if (earlyDuplicateRefusal) return earlyDuplicateRefusal;
+
     const isWithinWorktreesRoot = isPathWithin(realDirectory, deps.worktreesRoot);
     const isCallersOwnRepo = await sameGitRepository(caller.directory, realDirectory);
     if (!isWithinWorktreesRoot && !isCallersOwnRepo) return fail('directory must be inside the worktrees root or inside your own git repository');
+
+    const isDirectoryUnchangedSinceChecks = existsSync(input.directory) && realpathSync.native(input.directory) === realDirectory;
+    if (!isDirectoryUnchangedSinceChecks) return fail(`directory ${input.directory} changed while the spawn was being checked: retry`);
+
+    // No `await` between this re-check and the insert in sessions.create(): a concurrent create_session
+    // that passed the early check while this one awaited sameGitRepository is refused here.
+    const isCallerStillLive = sessions.get(caller.id)?.state !== 'closed';
+    if (!isCallerStillLive) return fail(`your session ${caller.id} is no longer live: it was closed while the spawn was being checked, so no child is created`);
+
+    const lateDuplicateRefusal = refuseLiveDuplicate();
+    if (lateDuplicateRefusal) return lateDuplicateRefusal;
 
     if (caller.role === MANAGER_ROLE) {
       const record = managers.get(caller.id);
