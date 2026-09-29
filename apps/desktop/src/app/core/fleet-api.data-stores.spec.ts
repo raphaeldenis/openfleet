@@ -36,6 +36,41 @@ describe('FleetApiService data stores', () => {
     expect(lastRequest().query.get('projectId')).toBe('p1');
   });
 
+  describe('paging through every project and data store', () => {
+    const pagesOf = (allItems: { id: string }[], pageSize: number) => (url: string) => {
+      const offset = Number(new URL(url).searchParams.get('offset') ?? 0);
+      return Promise.resolve(jsonResponse({ items: allItems.slice(offset, offset + pageSize), total: allItems.length, limit: pageSize, offset }));
+    };
+    const manyItems = Array.from({ length: 250 }, (_, index) => ({ id: `item-${index}` }));
+
+    it('reaches the 201st project by asking for the maximum page size and following the offset', async () => {
+      fetchMock.mockImplementation(pagesOf(manyItems, 200));
+
+      const { items } = await api.listProjects();
+
+      expect(items).toHaveLength(250);
+      expect(new URL(fetchMock.mock.calls[0][0] as string).searchParams.get('limit')).toBe('200');
+    });
+
+    it('reaches the 201st data store of a project', async () => {
+      fetchMock.mockImplementation(pagesOf(manyItems, 200));
+
+      const { items } = await api.listDataStores('p1');
+
+      expect(items).toHaveLength(250);
+      expect(lastRequest().query.get('projectId')).toBe('p1');
+    });
+
+    it('stops when the daemon returns an empty page even if the total is larger', async () => {
+      fetchMock.mockResolvedValue(jsonResponse({ items: [], total: 500, limit: 200, offset: 0 }));
+
+      const { items } = await api.listProjects();
+
+      expect(items).toEqual([]);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it('creates a data store in a project', async () => {
     await api.createDataStore({ projectId: 'p1', displayName: 'backlog' });
 

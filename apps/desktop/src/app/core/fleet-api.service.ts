@@ -3,6 +3,7 @@ import type { Approval, DataStore, DsColumn, DsRow, DsRowHistoryEntry, DsView, H
 import { environment } from '../../environments/environment';
 
 const DAEMON_ANSWER_TIMEOUT_MS = 5000;
+const LIST_PAGE_LIMIT = 200;
 
 export class ApiError extends Error {
   // `code` is the REST error body's `error` field (e.g. `not_closed`, `directory_missing`) when the
@@ -35,6 +36,17 @@ export class FleetApiService {
       throw new ApiError(response.status, `${init.method ?? 'GET'} ${path} → ${response.status}`, code);
     }
     return (await response.json()) as T;
+  }
+  private async listAllPages<T>(path: string, params: Record<string, string>): Promise<Page<T>> {
+    const items: T[] = [];
+    let total = 0;
+    do {
+      const page = await this.call<Page<T>>(`${path}${queryString({ ...params, limit: LIST_PAGE_LIMIT, offset: items.length })}`);
+      items.push(...page.items);
+      total = page.total ?? 0;
+      if (page.items.length === 0) break;
+    } while (items.length < total);
+    return { items, total: Math.max(total, items.length), limit: LIST_PAGE_LIMIT, offset: 0 };
   }
   private post<T>(path: string, body: unknown): Promise<T> { return this.call<T>(path, { method: 'POST', body: JSON.stringify(body) }); }
   private patch<T>(path: string, body: unknown): Promise<T> { return this.call<T>(path, { method: 'PATCH', body: JSON.stringify(body) }); }
@@ -84,8 +96,8 @@ export class FleetApiService {
   decide(id: string, behavior: 'allow' | 'deny') { return this.post<Approval>(`/api/approvals/${id}/decide`, { behavior }); }
 
   // --- Data stores (Tables screen, P3-T18) ---
-  listProjects() { return this.call<Page<Project>>('/api/projects'); }
-  listDataStores(projectId: string) { return this.call<Page<DataStore>>(`/api/data-stores${queryString({ projectId })}`); }
+  listProjects() { return this.listAllPages<Project>('/api/projects', {}); }
+  listDataStores(projectId: string) { return this.listAllPages<DataStore>('/api/data-stores', { projectId }); }
   createDataStore(body: { projectId: string; displayName: string }) { return this.post<DataStore>('/api/data-stores', body); }
   getDataStore(scope: StoreScope) { return this.call<DataStoreDetail>(`/api/data-stores/${scope.storeId}${queryString({ projectId: scope.projectId })}`); }
   queryDataStore(query: StoreScope & { where?: WhereClause[]; orderBy?: OrderTerm[]; limit?: number; offset?: number }) {
