@@ -70,8 +70,9 @@ export class FleetEventsService {
   // AUD-27: a ticket is fetched fresh over REST (bearer-authenticated, like every other /api/ call) right
   // before every (re)connect, instead of putting the long-lived admin token in the WS URL — the query
   // string is the one place a browser WebSocket can carry a credential at all, and a URL there ends up in
-  // the console on every failed reconnect. A ticket is single-use and expires in seconds, so that leak
-  // stops costing anything.
+  // the console on every failed reconnect. An unconsumed ticket stays valid for up to its TTL if the
+  // handshake fails before consumption, so a leaked one isn't worthless right away — the short TTL,
+  // single use, and the loopback-only daemon are what keep that window small.
   private async openSocket(): Promise<void> {
     const ticket = await this.fetchTicket();
     if (ticket === undefined) {
