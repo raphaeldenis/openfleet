@@ -20,6 +20,7 @@ export class InvalidViewConfigError extends Error {}
 export class InvalidActorError extends Error {}
 export class DuplicateIdError extends Error {}
 export class ConstraintError extends Error {}
+export class ReferencedRecordMissingError extends ConstraintError {}
 export class DataStoreWriteError extends Error {
   constructor(message: string, options: { cause: unknown }) {
     super(message, options);
@@ -149,7 +150,7 @@ function mapDatabaseError(error: unknown): unknown {
   if (/UNIQUE constraint failed: \w+\.id\b|PRIMARY KEY/i.test(error.message)) return new DuplicateIdError('That id is already in use');
   if (/actor_kind/i.test(error.message)) return new InvalidActorError('Actor kind must be human, agent or trigger');
   if (/UNIQUE constraint failed/i.test(error.message)) return new DuplicateNameError('name');
-  if (/FOREIGN KEY/i.test(error.message)) return new ConstraintError('A referenced record does not exist');
+  if (/FOREIGN KEY/i.test(error.message)) return new ReferencedRecordMissingError('A referenced record does not exist');
   return new ConstraintError('The data violates a store constraint');
 }
 

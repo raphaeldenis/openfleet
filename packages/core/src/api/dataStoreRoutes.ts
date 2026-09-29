@@ -7,7 +7,7 @@ import {
 import { z } from 'zod';
 import { DuplicateNameError, RowNotFoundError, StoreNotFoundError, UnknownColumnError, type DataStoreRepository } from '../stores/dataStoreRepository.js';
 import {
-  ConstraintError, InvalidCellValueError, InvalidNameError, InvalidQueryError, StoreRowCapError, type DataStoreService,
+  ConstraintError, InvalidCellValueError, InvalidNameError, InvalidQueryError, ReferencedRecordMissingError, StoreRowCapError, type DataStoreService,
 } from '../stores/dataStoreService.js';
 import { json, queryParams, type Router } from './router.js';
 
@@ -29,7 +29,7 @@ const QueryRowsQuerySchema = ProjectScopeSchema.extend(pageQuerySchema(MAX_ROW_P
   where: jsonParam(z.array(WhereClauseSchema)).optional(),
   orderBy: jsonParam(z.array(OrderTermSchema)).optional(),
 });
-const ChangesQuerySchema = ProjectScopeSchema.extend({ limit: queryInteger.pipe(z.number().min(1).max(MAX_HISTORY_LIMIT)).default(DEFAULT_PAGE_LIMIT) });
+const ChangesQuerySchema = ProjectScopeSchema.extend({ limit: queryInteger.pipe(z.number().max(MAX_HISTORY_LIMIT)).default(DEFAULT_PAGE_LIMIT) });
 
 export interface DataStoreRouteDeps {
   stores: DataStoreService;
@@ -42,11 +42,11 @@ class ProjectNotFoundError extends Error {
   }
 }
 
-function mapConstraintTo<T>(run: () => T, replacement: Error): T {
+function mapMissingReferenceTo<T>(run: () => T, replacement: Error): T {
   try {
     return run();
   } catch (error) {
-    throw error instanceof ConstraintError ? replacement : error;
+    throw error instanceof ReferencedRecordMissingError ? replacement : error;
   }
 }
 
@@ -85,7 +85,7 @@ export function registerDataStoreRoutes(router: Router, { stores, storeRepo }: D
     const { projectId, displayName } = CreateDataStoreRequestSchema.parse(body);
     respondToStoreErrors(res, () => {
       // createStore's only foreign key is the project
-      const store = mapConstraintTo(() => stores.createStore({ projectId, displayName }), new ProjectNotFoundError(projectId));
+      const store = mapMissingReferenceTo(() => stores.createStore({ projectId, displayName }), new ProjectNotFoundError(projectId));
       json(res, 201, store);
     });
   });
