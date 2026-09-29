@@ -11,11 +11,11 @@ import { ManagerRepository } from '../managers/managerRepository.js';
 import { ManagerService } from '../managers/managerService.js';
 import { PulseScheduler } from '../managers/pulseScheduler.js';
 import { DEFAULT_MODEL_TABLE } from '../models.js';
+import { TRANSCRIPT_TAIL_WINDOW_BYTES } from '../sessions/resolvedModel.js';
 import { SessionService } from '../sessions/sessionService.js';
 import { startServer } from './server.js';
 
 const CLI_VERSION = '2.1.284';
-const TAIL_WINDOW_BYTES = 256 * 1024;
 
 let server: Awaited<ReturnType<typeof startServer>>;
 let harness: FakeHarness;
@@ -84,6 +84,15 @@ const assistantLine = (fields: { model: unknown; version?: string; at?: Date; is
 
 const inOneSecond = () => new Date(Date.now() + 1000);
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const sessionWithRecordedOpus = async ({ requestedModel, stopped }: { requestedModel: string; stopped: boolean }) => {
+  const id = await createSession(requestedModel);
+  await sendHook(id, { hook_event_name: 'SessionStart' });
+  writeFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-5' }));
+  await sendHook(id, preToolUse);
+  await sendHook(id, stopped ? stop : { hook_event_name: 'UserPromptSubmit' });
+  return id;
+};
 
 describe('resolved model recording from a session\'s transcript', () => {
   it('shows the resolved model and CLI version of a session after its first tool use', async () => {
@@ -202,15 +211,6 @@ describe('resolved model recording from a session\'s transcript', () => {
     expect(afterValidLine).toMatchObject({ resolvedModel: 'claude-opus-5-5' });
   });
 
-  it('never shows a CLI version that is not a version number', async () => {
-    const id = await createSession('opus');
-    writeFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-5', version: '<script>alert(1)</script>' }));
-
-    await sendHook(id, preToolUse);
-
-    expect(await listed(id)).not.toHaveProperty('resolvedModel');
-  });
-
   it('records nothing from a transcript named outside the projects directory', async () => {
     const id = await createSession('opus');
     const outsidePath = join(mkdtempSync(join(tmpdir(), 'of-outside-')), 'transcript.jsonl');
@@ -250,7 +250,7 @@ describe('resolved model recording from a session\'s transcript', () => {
   it('finds the resolved model of a transcript far larger than the window read at the end of the file', async () => {
     const id = await createSession('opus');
     const filler = `${JSON.stringify({ type: 'user', message: { role: 'user', content: 'x'.repeat(1000) } })}\n`;
-    const fillerCount = Math.ceil((TAIL_WINDOW_BYTES * 2) / filler.length);
+    const fillerCount = Math.ceil((TRANSCRIPT_TAIL_WINDOW_BYTES * 2) / filler.length);
     writeFileSync(transcriptPath, [
       assistantLine({ model: 'claude-model-at-file-start' }),
       filler.repeat(fillerCount),
@@ -263,11 +263,7 @@ describe('resolved model recording from a session\'s transcript', () => {
   });
 
   it('shows the model id, never a stale one, after a model switch relaunches the session, then the new id', async () => {
-    const id = await createSession('claude-opus-5-5');
-    await sendHook(id, { hook_event_name: 'SessionStart' });
-    writeFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-5' }));
-    await sendHook(id, preToolUse);
-    await sendHook(id, stop);
+    const id = await sessionWithRecordedOpus({ requestedModel: 'claude-opus-5-5', stopped: true });
     const beforeSwitch = await listed(id);
 
     await postJson(`/api/sessions/${id}/model`, { model: 'claude-sonnet-5-5' });
@@ -283,11 +279,7 @@ describe('resolved model recording from a session\'s transcript', () => {
   });
 
   it('picks up the newer resolution of an alias when the same alias is re-applied to an idle session', async () => {
-    const id = await createSession('opus');
-    await sendHook(id, { hook_event_name: 'SessionStart' });
-    writeFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-5' }));
-    await sendHook(id, preToolUse);
-    await sendHook(id, stop);
+    const id = await sessionWithRecordedOpus({ requestedModel: 'opus', stopped: true });
     const alias = (await listed(id)).model!;
     const beforeReapply = await listed(id);
 
@@ -302,24 +294,6 @@ describe('resolved model recording from a session\'s transcript', () => {
     expect(beforeReapply).toMatchObject({ resolvedModel: 'claude-opus-5-5' });
     expect(afterRelaunch).not.toHaveProperty('resolvedModel');
     expect(afterNewLaunchAnswered).toMatchObject({ resolvedModel: 'claude-opus-5-6' });
-  });
-
-  it('keeps the resolved model of a session whose model switch is deferred until the relaunch really happens', async () => {
-    const id = await createSession('claude-opus-5-5');
-    await sendHook(id, { hook_event_name: 'SessionStart' });
-    writeFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-5' }));
-    await sendHook(id, preToolUse);
-    await sendHook(id, { hook_event_name: 'UserPromptSubmit' });
-
-    const reply = await postJson(`/api/sessions/${id}/model`, { model: 'claude-sonnet-5-5' });
-    const whileDeferred = await listed(id);
-    await sendHook(id, stop);
-    await expect.poll(() => harness.launches.length).toBe(2);
-    const afterRelaunch = await listed(id);
-
-    expect(await reply.json()).toEqual({ status: 'deferred' });
-    expect(whileDeferred).toMatchObject({ model: 'claude-sonnet-5-5', resolvedModel: 'claude-opus-5-5' });
-    expect(afterRelaunch).not.toHaveProperty('resolvedModel');
   });
 
   it('records nothing from a transcript swapped for a symlink leaving the projects directory between two hooks', async () => {
@@ -337,11 +311,7 @@ describe('resolved model recording from a session\'s transcript', () => {
   });
 
   it('keeps the resolved model of a session relaunched for a permission-mode change', async () => {
-    const id = await createSession('claude-opus-5-5');
-    await sendHook(id, { hook_event_name: 'SessionStart' });
-    writeFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-5' }));
-    await sendHook(id, preToolUse);
-    await sendHook(id, stop);
+    const id = await sessionWithRecordedOpus({ requestedModel: 'claude-opus-5-5', stopped: true });
 
     await postJson(`/api/sessions/${id}/permission-mode`, { mode: 'plan' });
     await expect.poll(() => harness.launches.length).toBe(2);
@@ -350,11 +320,7 @@ describe('resolved model recording from a session\'s transcript', () => {
   });
 
   it('keeps the resolved model through a permission-mode relaunch that follows a deferred model switch abandoned by close and reopen', async () => {
-    const id = await createSession('claude-opus-5-5');
-    await sendHook(id, { hook_event_name: 'SessionStart' });
-    writeFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-5' }));
-    await sendHook(id, preToolUse);
-    await sendHook(id, { hook_event_name: 'UserPromptSubmit' });
+    const id = await sessionWithRecordedOpus({ requestedModel: 'claude-opus-5-5', stopped: false });
     const switchReply = await postJson(`/api/sessions/${id}/model`, { model: 'claude-sonnet-5-5' });
     await postJson(`/api/sessions/${id}/close`);
     await postJson(`/api/sessions/${id}/reopen`);
@@ -406,7 +372,26 @@ describe('resolved model recording from a session\'s transcript', () => {
     expect(resolvedModelErrors).toHaveLength(1);
   });
 
-  it.each(['2.1.284 trailing junk', '2.1.284-beta\n', `2.1.284${'a'.repeat(21)}`])('never shows the CLI version %j', async (version) => {
+  it('logs a persistent read failure again after the session is relaunched', async () => {
+    const id = await createSession('opus');
+    await sendHook(id, { hook_event_name: 'SessionStart' });
+    writeFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-5' }));
+    chmodSync(transcriptPath, 0o000);
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await sendHook(id, preToolUse);
+    await sendHook(id, stop);
+    const alias = (await listed(id)).model!;
+
+    await postJson(`/api/sessions/${id}/model`, { model: alias });
+    await expect.poll(() => harness.launches.length).toBe(2);
+    await sendHook(id, preToolUse);
+    const resolvedModelErrors = consoleErrorSpy.mock.calls.filter((call) => String(call[0]).includes('resolved model'));
+    consoleErrorSpy.mockRestore();
+
+    expect(resolvedModelErrors).toHaveLength(2);
+  });
+
+  it.each(['2.1.284 trailing junk', '2.1.284-beta\n', `2.1.284${'a'.repeat(21)}`, '<script>alert(1)</script>'])('never shows the CLI version %j', async (version) => {
     const id = await createSession('opus');
     writeFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-5', version }));
 
@@ -438,7 +423,7 @@ describe('resolved model recording from a session\'s transcript', () => {
       return `${JSON.stringify({ type: 'user', pad: 'x'.repeat(bytes - emptyPaddingLine.length) })}\n`;
     };
     const targetLine = assistantLine({ model: 'claude-model-at-window-start', at: inOneSecond() });
-    writeFileSync(transcriptPath, [paddingLine(100), targetLine, paddingLine(TAIL_WINDOW_BYTES - targetLine.length)].join(''));
+    writeFileSync(transcriptPath, [paddingLine(100), targetLine, paddingLine(TRANSCRIPT_TAIL_WINDOW_BYTES - targetLine.length)].join(''));
 
     await sendHook(id, preToolUse);
 
@@ -446,11 +431,7 @@ describe('resolved model recording from a session\'s transcript', () => {
   });
 
   it('describes the still-running old process while a model switch is deferred, then only the new launch once it relaunches', async () => {
-    const id = await createSession('claude-opus-5-5');
-    await sendHook(id, { hook_event_name: 'SessionStart' });
-    writeFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-5' }));
-    await sendHook(id, preToolUse);
-    await sendHook(id, { hook_event_name: 'UserPromptSubmit' });
+    const id = await sessionWithRecordedOpus({ requestedModel: 'claude-opus-5-5', stopped: false });
     const reply = await postJson(`/api/sessions/${id}/model`, { model: 'claude-sonnet-5-5' });
 
     appendFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-5' }));
