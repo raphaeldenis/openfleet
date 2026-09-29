@@ -19,6 +19,7 @@ export interface ServerDeps {
   sessions: SessionService; approvals: ApprovalService; bus: EventBus; modelTable: ModelTable; modelConfigPath: string;
   managers: ManagerService; pulseScheduler: PulseScheduler;
   mcp?: (req: IncomingMessage, res: ServerResponse, body: unknown) => Promise<void>;
+  wsCloseGraceMs?: number;
 }
 
 function applyCorsHeaders(req: IncomingMessage, res: ServerResponse): void {
@@ -82,7 +83,8 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; clos
       json(res, isValidation ? 400 : 500, { error: isValidation ? 'invalid_body' : 'internal', detail: (error as Error).message });
     }
   });
-  server.on('upgrade', createWsHandler(deps));
+  const ws = createWsHandler(deps);
+  server.on('upgrade', ws.upgrade);
 
   await new Promise<void>((resolve) => server.listen(deps.port, deps.host, resolve));
   const address = server.address();
@@ -90,6 +92,10 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; clos
   return {
     url: `http://${deps.host}:${port}`,
     close: () => {
+      // closeAllConnections() only ever covered plain HTTP sockets — an upgraded WS connection is not one
+      // of "server's" connections any more as far as node:http is concerned, so server.close() would wait
+      // on it forever with the UI still open (MAJ-08/AUD-08). Close those out first, then the rest as before.
+      ws.closeClients();
       server.closeAllConnections();
       return new Promise((resolve) => server.close(() => resolve()));
     },

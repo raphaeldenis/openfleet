@@ -12,6 +12,7 @@ import { PulseScheduler } from './managers/pulseScheduler.js';
 import { createMcpHandler } from './mcp/mcpServer.js';
 import { loadModelTable } from './models.js';
 import { installProcessGuards } from './process/processGuards.js';
+import { installShutdownHandler } from './process/shutdownHandler.js';
 import { SessionService } from './sessions/sessionService.js';
 
 installProcessGuards();
@@ -22,6 +23,9 @@ const bus = new EventBus();
 const baseUrl = `http://${config.host}:${config.port}`;
 const sessions = new SessionService({ db, bus, harnesses: [new ClaudeCliHarness(), new FakeHarness()], baseUrl, worktreesRoot: config.worktreesRoot });
 const approvals = new ApprovalService({ db, bus });
+// A row still 'pending' from before this boot has no live waiter any more (AUD-07): the pre-restart
+// process that would have decided it is gone with the old daemon.
+approvals.expireAllPending('daemon restarted');
 const modelConfigPath = join(config.home, 'config.json');
 const modelTable = loadModelTable(modelConfigPath);
 const managerRepository = new ManagerRepository(db);
@@ -36,11 +40,8 @@ console.log(`openfleet core listening on ${server.url} (home: ${config.home})`);
 await sessions.resumeAll();
 pulseScheduler.start();
 
-for (const signal of ['SIGINT', 'SIGTERM'] as const) {
-  process.on(signal, async () => {
-    pulseScheduler.stop();
-    await sessions.closeAll();
-    await server.close();
-    process.exit(0);
-  });
-}
+installShutdownHandler(async () => {
+  pulseScheduler.stop();
+  await sessions.closeAll();
+  await server.close();
+});
