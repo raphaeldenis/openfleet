@@ -270,7 +270,7 @@ export class SessionService {
   private readonly interruptWatches = new Map<string, InterruptWatch>();
   // Presence means "this launch has no recorded resolved model yet"; the value is the launch's start time
   // and whether its recording failure and its transcript name mismatch were already logged.
-  private readonly pendingRecordings = new Map<string, { launchedAt: string; failureLogged: boolean; nameMismatchLogged: boolean; retryTimer?: ReturnType<typeof setTimeout> }>();
+  private readonly pendingRecordings = new Map<string, { launchedAt: string; requestedModel: string | null; failureLogged: boolean; nameMismatchLogged: boolean; retryTimer?: ReturnType<typeof setTimeout> }>();
   // Sessions whose model was switched and whose relaunch has not happened yet: the resolved model the old
   // launch recorded stays visible until the relaunch really replaces the process.
   private readonly modelSwitchesAwaitingRelaunch = new Set<string>();
@@ -301,7 +301,7 @@ export class SessionService {
     if (existsSync(spec.directory)) this.repo.setDirectoryRealpath(id, realpathSync.native(spec.directory));
     this.warnIfPermissiveSettings(spec.harness, spec.directory);
     const harness = this.harnessFor(spec.harness);
-    this.startPendingRecording(id);
+    this.startPendingRecording(id, spec.model);
     let handle: HarnessHandle;
     try {
       handle = harness.start({
@@ -399,9 +399,6 @@ export class SessionService {
   updateModel(sessionId: string, model: string): { status: 'relaunching' | 'deferred' } {
     this.assertNotShuttingDown();
     const session = this.requireOpen(sessionId);
-    const isSameAlias = session.model === model;
-    if (isSameAlias && session.resolvedModel !== undefined) this.resolvedModelBeforeSameAliasRelaunch.set(sessionId, session.resolvedModel);
-    else if (!isSameAlias) this.resolvedModelBeforeSameAliasRelaunch.delete(sessionId);
     this.repo.setModel(sessionId, model);
     this.modelSwitchesAwaitingRelaunch.add(sessionId);
     this.deps.bus.emit({ type: 'session.model_changed', sessionId, model });
@@ -520,6 +517,7 @@ export class SessionService {
         return;
       }
       if (this.modelSwitchesAwaitingRelaunch.delete(sessionId)) {
+        this.rememberResolvedModelOfSameAlias(session);
         this.repo.clearResolvedModel(sessionId);
         this.deps.bus.emit({ type: 'session.updated', session: this.repo.get(sessionId)! });
       }
@@ -640,9 +638,9 @@ export class SessionService {
     pending.retryTimer.unref();
   }
 
-  private startPendingRecording(sessionId: string): void {
+  private startPendingRecording(sessionId: string, requestedModel: string | undefined): void {
     this.dropPendingRecording(sessionId);
-    this.pendingRecordings.set(sessionId, { launchedAt: new Date().toISOString(), failureLogged: false, nameMismatchLogged: false });
+    this.pendingRecordings.set(sessionId, { launchedAt: new Date().toISOString(), requestedModel: requestedModel ?? null, failureLogged: false, nameMismatchLogged: false });
   }
 
   private dropPendingRecording(sessionId: string): void {
@@ -650,23 +648,28 @@ export class SessionService {
     this.pendingRecordings.delete(sessionId);
   }
 
-  // The session's own earlier id wins over another session's: a relaunch is compared with itself first.
-  private findDrift(sessionId: string, resolvedModel: string): { previousModel: string; requestedModel: string | undefined; comparedWith: 'same session relaunched' | { previousSessionId: string } } | undefined {
-    const session = this.repo.get(sessionId)!;
-    const ownPreviousModel = session.resolvedModel ?? this.resolvedModelBeforeSameAliasRelaunch.get(sessionId);
-    this.resolvedModelBeforeSameAliasRelaunch.delete(sessionId);
-    if (ownPreviousModel !== undefined) {
-      const hasDrifted = ownPreviousModel !== resolvedModel;
-      return hasDrifted ? { previousModel: ownPreviousModel, requestedModel: session.model, comparedWith: 'same session relaunched' } : undefined;
-    }
-    const previousOther = this.repo.previousResolvedModel({ requestedModel: session.model ?? null, excludingSessionId: sessionId });
-    const hasDrifted = previousOther !== undefined && previousOther.resolvedModel !== resolvedModel;
-    return hasDrifted ? { previousModel: previousOther.resolvedModel, requestedModel: session.model, comparedWith: { previousSessionId: previousOther.sessionId } } : undefined;
+  // The clear that follows a model switch wipes the row even when the alias is unchanged: the id resolved under that
+  // same alias is kept for the drift comparison of the next recording. An id resolved under another alias is not.
+  private rememberResolvedModelOfSameAlias(session: Session): void {
+    const resolvedUnderSameAlias = this.repo.resolvedModelUnderAlias({ id: session.id, requestedModel: session.model ?? null });
+    if (resolvedUnderSameAlias === undefined) this.resolvedModelBeforeSameAliasRelaunch.delete(session.id);
+    else this.resolvedModelBeforeSameAliasRelaunch.set(session.id, resolvedUnderSameAlias);
   }
 
-  private logDrift(sessionId: string, resolution: { resolvedModel: string; cliVersion: string }, drift: NonNullable<ReturnType<SessionService['findDrift']>>): void {
+  // The session's own earlier id, resolved under the alias of this launch, wins over another session's: a relaunch is compared with itself first.
+  private findDrift(sessionId: string, resolvedModel: string, requestedModel: string | null): { previousModel: string; comparedWith: 'same session relaunched' | { previousSessionId: string } } | undefined {
+    const ownPreviousModel = this.repo.resolvedModelUnderAlias({ id: sessionId, requestedModel }) ?? this.resolvedModelBeforeSameAliasRelaunch.get(sessionId);
+    const previousOther = ownPreviousModel === undefined ? this.repo.previousResolvedModel({ requestedModel, beforeSessionId: sessionId }) : undefined;
+    const previous = ownPreviousModel !== undefined
+      ? { previousModel: ownPreviousModel, comparedWith: 'same session relaunched' as const }
+      : previousOther && { previousModel: previousOther.resolvedModel, comparedWith: { previousSessionId: previousOther.sessionId } };
+    const hasDrifted = previous !== undefined && previous.previousModel !== resolvedModel;
+    return hasDrifted ? previous : undefined;
+  }
+
+  private logDrift(sessionId: string, resolution: { resolvedModel: string; cliVersion: string }, requestedModel: string | null, drift: NonNullable<ReturnType<SessionService['findDrift']>>): void {
     const comparedWith = drift.comparedWith === 'same session relaunched' ? drift.comparedWith : `previous session ${drift.comparedWith.previousSessionId}`;
-    const requested = drift.requestedModel === undefined ? 'the default model' : JSON.stringify(drift.requestedModel);
+    const requested = requestedModel === null ? 'the default model' : JSON.stringify(requestedModel);
     log('warn', `model drift: ${requested} resolves to ${resolution.resolvedModel}, previously ${drift.previousModel} (session ${sessionId}, ${comparedWith}, cli ${resolution.cliVersion})`);
   }
 
@@ -689,9 +692,10 @@ export class SessionService {
       }
       const resolution = findResolvedModel(readTranscriptTail(resolvedPath), pending.launchedAt);
       if (!resolution) return 'found-no-assistant-line';
-      const drift = this.findDrift(sessionId, resolution.resolvedModel);
-      this.repo.recordResolvedModel({ id: sessionId, ...resolution, driftedFrom: drift?.previousModel ?? null });
-      if (drift) this.logDrift(sessionId, resolution, drift);
+      const { requestedModel } = pending;
+      const drift = this.findDrift(sessionId, resolution.resolvedModel, requestedModel);
+      this.repo.recordResolvedModel({ id: sessionId, ...resolution, requestedModel, driftedFrom: drift?.previousModel ?? null });
+      if (drift) this.logDrift(sessionId, resolution, requestedModel, drift);
       this.dropPendingRecording(sessionId);
       this.deps.bus.emit({ type: 'session.updated', session: this.repo.get(sessionId)! });
       return undefined;
@@ -1120,7 +1124,7 @@ export class SessionService {
     const hookToken = newToken();
     const mcpToken = newToken();
     this.repo.setTokens(session.id, hookToken, mcpToken);
-    this.startPendingRecording(session.id);
+    this.startPendingRecording(session.id, session.model);
     let handle: HarnessHandle;
     try {
       handle = harness.start({
