@@ -33,8 +33,8 @@ describe('MentionRefSchema', () => {
 
 describe('Note and NoteVersion', () => {
   it('a free-standing note and a file-backed note both satisfy Note and survive a JSON round-trip', () => {
-    const freeStanding: Note = { id: 'n1', projectId: 'p1', title: 'T', bodyMd: '# T', folder: null, filePath: null, rev: 1, shared: false, createdAt: 't0', updatedAt: 't0' };
-    const fileBacked: Note = { ...freeStanding, id: 'n2', folder: 'specs', filePath: '/docs/specs/2026-01-01-t.md', shared: true };
+    const freeStanding: Note = { id: 'n1', projectId: 'p1', title: 'T', bodyMd: '# T', folder: null, filePath: null, sourceHash: null, rev: 1, shared: false, createdAt: 't0', updatedAt: 't0' };
+    const fileBacked: Note = { ...freeStanding, id: 'n2', folder: 'specs', filePath: '/docs/specs/2026-01-01-t.md', sourceHash: 'deadbeef', shared: true };
     expect(JSON.parse(JSON.stringify([freeStanding, fileBacked]))).toEqual([freeStanding, fileBacked]);
   });
 

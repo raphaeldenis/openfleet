@@ -5,7 +5,7 @@ import { expandMentions, type MentionLookup } from './mentionExpander.js';
 import type { NoteRepository, NoteUpdateResult } from './noteRepository.js';
 import { appendSection, replaceSection } from './noteSections.js';
 
-const MAX_BODY_BYTES = 1024 * 1024;
+export const MAX_BODY_BYTES = 1024 * 1024;
 // One first try plus three retries after a stale CAS (decision 2); a fourth loss means real contention, not luck.
 const MAX_APPEND_ATTEMPTS = 4;
 const SAVEPOINT_NAME = 'note_service_write';
@@ -28,6 +28,12 @@ export class NoteTooLargeError extends Error {
   }
 }
 
+export class FileBackedNoteError extends Error {
+  constructor(noteId: string) {
+    super(`note ${noteId} is file-backed; write through DocsFolderService instead`);
+  }
+}
+
 export interface NoteServiceDeps {
   repo: NoteRepository;
   db: DatabaseSync;
@@ -42,6 +48,18 @@ export interface CreateNoteInput {
   bodyMd: string;
   folder?: NoteFolder | null;
   shared?: boolean;
+  author: string;
+}
+
+export interface CreateFileBackedNoteInput extends CreateNoteInput {
+  filePath: string;
+  sourceHash: string;
+}
+
+export interface UpdateFileBackedNoteInput {
+  bodyMd: string;
+  sourceHash: string;
+  expectedRev: number;
   author: string;
 }
 
@@ -112,6 +130,7 @@ export class NoteService {
       bodyMd: input.bodyMd,
       folder: input.folder ?? null,
       filePath: null,
+      sourceHash: null,
       rev: 1,
       shared: input.shared ?? false,
       createdAt: now,
@@ -124,14 +143,47 @@ export class NoteService {
     });
   }
 
+  /** Inserts a note that is file-backed from creation: `filePath`/`sourceHash` are set in the same INSERT, never patched in after. */
+  createFileBacked(input: CreateFileBackedNoteInput): Note {
+    assertWithinBodyCap(input.bodyMd);
+    const now = this.clock();
+    const note: Note = {
+      id: this.newId(),
+      projectId: input.projectId,
+      title: input.title,
+      bodyMd: input.bodyMd,
+      folder: input.folder ?? null,
+      filePath: input.filePath,
+      sourceHash: input.sourceHash,
+      rev: 1,
+      shared: input.shared ?? false,
+      createdAt: now,
+      updatedAt: now,
+    };
+    return this.inTransaction(() => {
+      this.repo.insert(note);
+      this.insertVersionRow(note, input.author, now);
+      return note;
+    });
+  }
+
+  /** Same CAS write as `update`, but commits `sourceHash` alongside `bodyMd` in the one UPDATE (Review Focus 5). */
+  updateFileBacked(id: string, input: UpdateFileBackedNoteInput): Note {
+    assertWithinBodyCap(input.bodyMd);
+    return this.writeThroughCas(id, input.author, (updatedAt) =>
+      this.repo.updateFileBacked(id, { bodyMd: input.bodyMd, sourceHash: input.sourceHash, expectedRev: input.expectedRev, updatedAt }));
+  }
+
   update(id: string, input: UpdateNoteInput): Note {
     assertWithinBodyCap(input.bodyMd);
+    this.assertNotFileBacked(id);
     return this.writeThroughCas(id, input.author, (updatedAt) =>
       this.repo.update(id, { bodyMd: input.bodyMd, expectedRev: input.expectedRev, updatedAt }));
   }
 
   updateSection(id: string, input: UpdateSectionInput): Note {
     const current = this.require(id);
+    this.assertNotFileBacked(id);
     const newBodyMd = replaceSection(current.bodyMd, input.heading, input.content);
     assertWithinBodyCap(newBodyMd);
     return this.writeThroughCas(id, input.author, (updatedAt) =>
@@ -139,6 +191,7 @@ export class NoteService {
   }
 
   append(id: string, input: AppendNoteInput): Note {
+    this.assertNotFileBacked(id);
     let lastKnownRev: number | undefined;
     for (let attempt = 0; attempt < MAX_APPEND_ATTEMPTS; attempt++) {
       const outcome = this.tryAppendOnce(id, input);
@@ -149,11 +202,13 @@ export class NoteService {
   }
 
   rename(id: string, input: RenameNoteInput): Note {
+    this.assertNotFileBacked(id);
     return this.writeThroughCas(id, input.author, (updatedAt) =>
       this.repo.rename(id, { title: input.title, expectedRev: input.expectedRev, updatedAt }));
   }
 
   move(id: string, folder: NoteFolder | null): Note {
+    this.assertNotFileBacked(id);
     const wasMoved = this.repo.move(id, folder);
     if (!wasMoved) throw new NoteNotFoundError(id);
     return this.repo.get(id)!;
@@ -164,6 +219,12 @@ export class NoteService {
     const lookup = this.mentionLookupFor(viewerProjectId);
     const expandedBody = this.expandMentions(note.bodyMd, lookup, { rootNoteId: note.id });
     return { note, expandedBody };
+  }
+
+  /** Unknown ids fall through to the CAS path's own NoteNotFoundError; only an existing, file-backed note is refused here. */
+  private assertNotFileBacked(id: string): void {
+    const note = this.repo.get(id);
+    if (note?.filePath) throw new FileBackedNoteError(id);
   }
 
   private mentionLookupFor(viewerProjectId: string): MentionLookup {

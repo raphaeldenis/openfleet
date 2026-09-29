@@ -13,7 +13,7 @@ function openRepositoryWithProjects(...projectIds: string[]) {
 
 function aNote(overrides: Partial<Note> = {}): Note {
   return {
-    id: 'n1', projectId: 'p1', title: 'Title', bodyMd: 'body', folder: null, filePath: null,
+    id: 'n1', projectId: 'p1', title: 'Title', bodyMd: 'body', folder: null, filePath: null, sourceHash: null,
     rev: 1, shared: false, createdAt: 't0', updatedAt: 't0', ...overrides,
   };
 }
@@ -181,6 +181,44 @@ describe('NoteRepository update', () => {
     repository.update('n1', { bodyMd: 'v2', expectedRev: 1, updatedAt: 't1' });
 
     expect(countVersions(db, 'n1')).toBe(1);
+  });
+});
+
+describe('NoteRepository getByFilePath', () => {
+  it('finds the note owning that file path', () => {
+    const { repository } = openRepositoryWithProjects('p1');
+    repository.insert(aNote({ filePath: '/docs/specs/a.md', sourceHash: 'h1' }));
+
+    expect(repository.getByFilePath('/docs/specs/a.md')).toEqual(repository.get('n1'));
+  });
+
+  it('returns undefined for a path no note owns', () => {
+    const { repository } = openRepositoryWithProjects('p1');
+
+    expect(repository.getByFilePath('/docs/specs/nope.md')).toBeUndefined();
+  });
+});
+
+describe('NoteRepository updateFileBacked', () => {
+  it('replaces the body and source hash together, bumping the revision by one, when the revision matches', () => {
+    const { repository } = openRepositoryWithProjects('p1');
+    repository.insert(aNote({ filePath: '/docs/specs/a.md', sourceHash: 'h1', bodyMd: 'v1', rev: 1 }));
+
+    const result = repository.updateFileBacked('n1', { bodyMd: 'v2', sourceHash: 'h2', expectedRev: 1, updatedAt: 't1' });
+
+    const expectedNote = aNote({ filePath: '/docs/specs/a.md', sourceHash: 'h2', bodyMd: 'v2', rev: 2, updatedAt: 't1' });
+    expect(result).toEqual({ outcome: 'updated', note: expectedNote });
+    expect(repository.get('n1')).toEqual(expectedNote);
+  });
+
+  it('reports a stale revision and leaves the body and hash untouched', () => {
+    const { repository } = openRepositoryWithProjects('p1');
+    repository.insert(aNote({ filePath: '/docs/specs/a.md', sourceHash: 'h1', bodyMd: 'v1', rev: 1 }));
+
+    const result = repository.updateFileBacked('n1', { bodyMd: 'v2-stale', sourceHash: 'h2', expectedRev: 99, updatedAt: 't1' });
+
+    expect(result).toEqual({ outcome: 'stale_revision', currentRev: 1 });
+    expect(repository.get('n1')).toMatchObject({ bodyMd: 'v1', sourceHash: 'h1', rev: 1 });
   });
 });
 
