@@ -126,10 +126,24 @@ describe('a user typing /clear in a session', () => {
 
     expect(await listed(id)).toMatchObject({ state: 'generating', resolvedModel: 'claude-opus-5-5' });
   });
+
+  it('keeps reading the launch transcript when the SessionEnd with reason clear names a foreign transcript and no SessionStart follows', async () => {
+    const id = await createSession();
+    const foreignCliSessionId = randomUUID();
+    writeFileSync(transcriptPathOf(id), '');
+    await sendHook(id, { hook_event_name: 'SessionStart' });
+
+    writeFileSync(transcriptPathOf(foreignCliSessionId), assistantLine('claude-opus-5-4'));
+    await sendHook(id, sessionEnd('clear'), foreignCliSessionId);
+    writeFileSync(transcriptPathOf(id), assistantLine('claude-opus-5-5'));
+    await sendHook(id, { ...preToolUse, transcript_path: undefined });
+
+    expect(await listed(id)).toMatchObject({ resolvedModel: 'claude-opus-5-5' });
+  });
 });
 
 describe('a session that really ends', () => {
-  it.each(['logout', 'prompt_input_exit', 'other', 'a_reason_added_by_a_future_cli', undefined])(
+  it.each(['logout', 'prompt_input_exit', 'other', 'a_reason_added_by_a_future_cli', 'CLEAR', 'Clear', ' clear', 'clear\n', undefined])(
     'closes when the CLI reports SessionEnd with reason %s',
     async (reason) => {
       const id = await createSession();
