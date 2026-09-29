@@ -181,7 +181,7 @@ describe('notes view resists out-of-order answers', () => {
     latest.resolve(aNoteView({ id: 'n1', rev: 9, bodyMd: 'theirs' }));
     await flushPendingWork();
 
-    expect(screen.queryByTestId('note-conflict-keep-mine')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('note-conflict-bar')).not.toBeInTheDocument();
   });
 
   it('a restore still running when the user switches project does not turn the new project into an error', async () => {
@@ -238,12 +238,12 @@ describe('notes view resists out-of-order answers', () => {
     await renderView({ api: conflictingRestoreApi() });
     await editorTitle();
     await restoreSelectedVersion();
-    await screen.findByTestId('note-conflict-keep-mine');
+    await screen.findByTestId('note-conflict-bar');
 
     await userEvent.click(screen.getByTestId('note-list-item-n2'));
     await expectEditorTitle('voice');
 
-    expect(screen.queryByTestId('note-conflict-keep-mine')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('note-conflict-bar')).not.toBeInTheDocument();
   });
 });
 
@@ -312,16 +312,17 @@ describe('notes view tells the user when something failed', () => {
     { status: 409, code: 'file_backed' },
     { status: 404, code: 'not_found' },
   ])('a conflict resolution failing with $status is reported inline and leaves the note and the choices in place', async ({ status, code }) => {
-    const api = conflictingRestoreApi({ updateNote: vi.fn().mockRejectedValue(new ApiError(status, `PATCH → ${status}`, code)) });
+    const restoreNoteVersion = vi.fn().mockRejectedValueOnce(staleRevision()).mockRejectedValue(new ApiError(status, `POST restore → ${status}`, code));
+    const api = conflictingRestoreApi({ restoreNoteVersion });
     await renderView({ api });
     await editorTitle();
     await restoreSelectedVersion();
-    await userEvent.click(await screen.findByTestId('note-conflict-keep-mine'));
+    await userEvent.click(await screen.findByTestId('note-conflict-restore'));
 
     expect(await screen.findByTestId('note-action-error-reason')).toHaveTextContent(String(status));
     expect(screen.getByTestId('note-editor-title')).toHaveTextContent('daemon-protocol');
     expect(screen.queryByTestId('note-error-title')).not.toBeInTheDocument();
-    expect(screen.getByTestId('note-conflict-keep-mine')).toBeEnabled();
+    expect(screen.getByTestId('note-conflict-restore')).toBeEnabled();
   });
 
   it('a restore failing with a server error is reported inline and leaves the note in place', async () => {
@@ -337,27 +338,24 @@ describe('notes view tells the user when something failed', () => {
     expect(screen.queryByTestId('note-error-title')).not.toBeInTheDocument();
   });
 
-  it.each([
-    { choice: 'note-conflict-keep-mine', expectedOurs: 'Original body' },
-    { choice: 'note-conflict-merge', expectedOurs: 'Original body theirs' },
-  ])('a second concurrent edit during $choice shows a fresh banner that holds the user’s text', async ({ choice, expectedOurs }) => {
+  it('a second concurrent edit during restore anyway shows a fresh banner that holds the user’s text', async () => {
     const latest = aNoteView({ id: 'n1', rev: 5, bodyMd: 'theirs' });
     let getNoteCalls = 0;
     const getNote = vi.fn((_projectId: string, noteId: string) => {
       getNoteCalls += 1;
       return Promise.resolve(getNoteCalls >= 2 ? latest : VIEWS[noteId]);
     });
-    const api = conflictingRestoreApi({ getNote, updateNote: vi.fn().mockRejectedValue(staleRevision()) });
+    const api = conflictingRestoreApi({ getNote, restoreNoteVersion: vi.fn().mockRejectedValue(staleRevision()) });
     await renderView({ api });
     await editorTitle();
     await restoreSelectedVersion();
-    await userEvent.click(await screen.findByTestId(choice));
+    await userEvent.click(await screen.findByTestId('note-conflict-restore'));
 
-    await waitFor(() => expect(api.updateNote).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(api.restoreNoteVersion).toHaveBeenCalledTimes(2));
 
-    await waitFor(() => expect(screen.getByTestId('note-conflict-ours')).toHaveTextContent(expectedOurs));
-    expect(screen.getByTestId(choice)).toBeEnabled();
-    expect(screen.queryByTestId('note-conflict-restore')).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId('note-conflict-ours')).toHaveTextContent('Original body'));
+    expect(screen.getByTestId('note-conflict-restore')).toBeEnabled();
+    expect(screen.getByTestId('note-conflict-keep-current')).toBeEnabled();
   });
 
   it('user can retry the project list after a network error, with no Finder shortcut on offer', async () => {
@@ -385,7 +383,7 @@ describe('notes view tells the user when something failed', () => {
     await renderView({ api });
     await editorTitle();
     await restoreSelectedVersion();
-    await userEvent.click(await screen.findByTestId('note-conflict-take-theirs'));
+    await userEvent.click(await screen.findByTestId('note-conflict-keep-current'));
 
     await waitFor(() => expect(screen.getByTestId('note-history-restore')).toBeEnabled());
   });
@@ -442,18 +440,19 @@ describe('notes view protects against double submits', () => {
     expect(api.restoreNoteVersion).toHaveBeenCalledTimes(1);
   });
 
-  it.each(['note-conflict-keep-mine', 'note-conflict-merge'])('double-clicking %s writes once', async (choiceTestId) => {
+  it('double-clicking Restore anyway writes once', async () => {
     const write = deferred<NoteView>();
-    const api = conflictingRestoreApi({ updateNote: vi.fn(() => write.promise) });
+    const restoreNoteVersion = vi.fn().mockRejectedValueOnce(staleRevision()).mockImplementation(() => write.promise);
+    const api = conflictingRestoreApi({ restoreNoteVersion });
     await renderView({ api });
     await editorTitle();
     await restoreSelectedVersion();
 
-    await userEvent.dblClick(await screen.findByTestId(choiceTestId));
+    await userEvent.dblClick(await screen.findByTestId('note-conflict-restore'));
     write.resolve(aNoteView({ id: 'n1', rev: 6, bodyMd: 'written' }));
     await flushPendingWork();
 
-    expect(api.updateNote).toHaveBeenCalledTimes(1);
+    expect(api.restoreNoteVersion).toHaveBeenCalledTimes(2);
   });
 
   it('double-clicking a list item fetches the note once', async () => {
@@ -593,7 +592,7 @@ describe('notes view is usable from the keyboard and by assistive technology', (
     await renderView({ api: conflictingRestoreApi() });
     await editorTitle();
     await restoreSelectedVersion();
-    await userEvent.click(await screen.findByTestId('note-conflict-take-theirs'));
+    await userEvent.click(await screen.findByTestId('note-conflict-keep-current'));
 
     await waitFor(() => expect(screen.getByTestId('note-editor-title')).toHaveFocus());
   });
@@ -742,12 +741,12 @@ describe('notes view navigation', () => {
     await renderView({ api: conflictingRestoreApi() });
     await editorTitle();
     await restoreSelectedVersion();
-    await screen.findByTestId('note-conflict-keep-mine');
+    await screen.findByTestId('note-conflict-bar');
 
     await userEvent.click(screen.getByTestId('note-list-item-n1'));
     await flushPendingWork();
 
-    expect(screen.getByTestId('note-conflict-keep-mine')).toBeInTheDocument();
+    expect(screen.getByTestId('note-conflict-bar')).toBeInTheDocument();
   });
 
   it('clicking the note that is already open keeps the history open', async () => {
@@ -838,7 +837,7 @@ describe('notes view keeps the intent of a restore that hit a conflict', () => {
     await renderView({ api: conflictingRestoreApi() });
     await editorTitle();
     await restoreSelectedVersion();
-    await screen.findByTestId('note-conflict-keep-mine');
+    await screen.findByTestId('note-conflict-bar');
 
     expect(screen.getByTestId('note-history-restore')).toBeDisabled();
   });
@@ -849,23 +848,5 @@ describe('notes view keeps the intent of a restore that hit a conflict', () => {
     await restoreSelectedVersion();
 
     expect(await screen.findByTestId('note-conflict-restore')).toHaveTextContent('Restore rev 1');
-  });
-
-  it('a conflict raised while keeping the user’s version offers no restore choice', async () => {
-    let getNoteCalls = 0;
-    const getNote = vi.fn((_projectId: string, noteId: string) => {
-      getNoteCalls += 1;
-      return Promise.resolve(getNoteCalls >= 2 ? aNoteView({ id: 'n1', rev: 5, bodyMd: 'theirs' }) : VIEWS[noteId]);
-    });
-    const api = conflictingRestoreApi({ getNote, updateNote: vi.fn().mockRejectedValue(staleRevision()) });
-    await renderView({ api });
-    await editorTitle();
-    await restoreSelectedVersion();
-
-    await userEvent.click(await screen.findByTestId('note-conflict-keep-mine'));
-
-    await waitFor(() => expect(api.updateNote).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(screen.getByTestId('note-conflict-keep-mine')).toBeEnabled());
-    expect(screen.queryByTestId('note-conflict-restore')).not.toBeInTheDocument();
   });
 });

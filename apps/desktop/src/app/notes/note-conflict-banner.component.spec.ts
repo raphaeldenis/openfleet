@@ -52,10 +52,32 @@ describe('NoteConflictBannerComponent', () => {
     expect(resolve).toHaveBeenCalledExactlyOnceWith('merge');
   });
 
-  it('a conflict raised by a restore calls the user’s choice “Keep current”, since it keeps the body from before the restore', async () => {
+  it('user can keep the current note, which cancels the restore', async () => {
+    const { resolve } = await renderBanner({ restoreRev: 4 });
+
+    await userEvent.click(screen.getByTestId('note-conflict-keep-current'));
+
+    expect(resolve).toHaveBeenCalledExactlyOnceWith('theirs');
+  });
+
+  it('a conflict raised by a restore offers only keeping the current note or restoring anyway', async () => {
     await renderBanner({ restoreRev: 4 });
 
-    expect(screen.getByTestId('note-conflict-keep-mine')).toHaveTextContent('Keep current');
+    expect(screen.getByTestId('note-conflict-keep-current')).toHaveTextContent('Keep current');
+    expect(screen.getByTestId('note-conflict-restore')).toHaveTextContent('Restore rev 4 anyway');
+    expect(screen.queryByTestId('note-conflict-merge')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('note-conflict-keep-mine')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('note-conflict-take-theirs')).not.toBeInTheDocument();
+  });
+
+  it('a conflict raised by a restore says what each choice does to the other editor’s save', async () => {
+    await renderBanner({ restoreRev: 4, author: 'Nori · T7' });
+
+    const message = screen.getByTestId('note-conflict-message');
+    expect(message).toHaveTextContent('Nori · T7 saved this note while you were restoring rev 4');
+    expect(message).toHaveTextContent('Keep current cancels the restore and writes nothing');
+    expect(message).toHaveTextContent('Restore rev 4 anyway replaces Nori · T7’s save with rev 4');
+    expect(message).not.toHaveTextContent('nothing is lost');
   });
 
   it('a conflict raised by an edit calls the user’s choice “Keep mine”', async () => {

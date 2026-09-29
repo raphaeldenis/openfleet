@@ -171,6 +171,24 @@ describe('NoteEditorComponent', () => {
       expect(screen.queryByTestId('note-editor-show-rest')).not.toBeInTheDocument();
     });
 
+    it('an unclosed mention marker never lets its content escape the limit', async () => {
+      const bodyMd = `--- from note @note:x (t, y) ---\n${bodyOfParagraphs(2500)}`;
+
+      await renderEditor({ note: aNoteView({ bodyMd }) });
+
+      expect(screen.getAllByTestId('note-editor-paragraph')).toHaveLength(1999);
+      expect(screen.getByTestId('note-editor-show-rest')).toHaveTextContent('Show the remaining 501 blocks');
+      await userEvent.click(screen.getByTestId('note-editor-show-rest'));
+      expect(screen.getAllByTestId('note-editor-paragraph')).toHaveLength(2500);
+    });
+
+    it('a marker naming something that is not a mentionable kind stays plain text', async () => {
+      await renderEditor({ note: aNoteView({ bodyMd: '--- from note @evil:x (t, y) ---\nbody' }) });
+
+      expect(screen.queryByTestId('note-editor-mention-evil-x')).not.toBeInTheDocument();
+      expect(screen.getByTestId('note-editor-body')).toHaveTextContent('--- from note @evil:x (t, y) --- body');
+    });
+
     it('a note within the limit offers nothing to expand', async () => {
       await renderEditor({ note: aNoteView({ bodyMd: bodyOfParagraphs(2000) }) });
 

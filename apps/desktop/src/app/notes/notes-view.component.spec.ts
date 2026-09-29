@@ -7,7 +7,7 @@ import { ApiError, FleetApiService } from '../core/fleet-api.service';
 import { DirectoryOpener } from './directory-opener';
 import { NotesViewComponent } from './notes-view.component';
 import { aNoteSummary, aNoteVersion, aNoteView } from './notes.fixtures';
-import type { NoteSummary, NoteView, Project } from '@openfleet/shared';
+import type { NoteSummary, NoteVersionSummary, NoteView, Project } from '@openfleet/shared';
 
 const OPENFLEET: Project = { id: 'p1', name: 'OpenFleet', docsFolderPath: '/Users/me/docs' };
 const OTHER: Project = { id: 'p2', name: 'Other', docsFolderPath: null };
@@ -23,6 +23,11 @@ const NOTE_VIEWS: Record<string, NoteView> = {
   n9: aNoteView({ id: 'n9', title: 'other-note', projectId: 'p2', bodyMd: 'Other body' }),
 };
 
+const deferred = <T>() => {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => { resolve = res; });
+  return { promise, resolve };
+};
 const page = <T>(items: T[]) => ({ items, total: items.length, limit: 100, offset: 0 });
 
 function fakeApi(overrides: Record<string, unknown> = {}) {
@@ -246,6 +251,17 @@ describe('NotesViewComponent', () => {
       await waitFor(() => expect(screen.getByTestId('note-editor-body')).toHaveTextContent('Restored body'));
     });
 
+    it('user cannot restore the same version twice in a row', async () => {
+      await renderView();
+      await editorTitle();
+      await userEvent.click(screen.getByTestId('note-editor-history-toggle'));
+      await userEvent.click(await screen.findByTestId('note-history-version-1'));
+      await userEvent.click(screen.getByTestId('note-history-restore'));
+      await waitFor(() => expect(screen.getByTestId('note-editor-body')).toHaveTextContent('Restored body'));
+
+      expect(screen.getByTestId('note-history-restore')).toBeDisabled();
+    });
+
     it('user closes the history by clicking the toggle again', async () => {
       await renderView();
       await editorTitle();
@@ -259,11 +275,12 @@ describe('NotesViewComponent', () => {
   });
 
   describe('conflict', () => {
-    async function renderConflictOnRestore() {
+    async function renderConflictOnRestore({ versions, restoreAnyway }: { versions?: NoteVersionSummary[]; restoreAnyway?: () => Promise<NoteView> } = {}) {
       const latest = aNoteView({ id: 'n1', rev: 5, bodyMd: 'Body written by another editor' });
       const getNote = vi.fn((_projectId: string, noteId: string) => Promise.resolve(getNote.mock.calls.length > 1 ? latest : NOTE_VIEWS[noteId]));
-      const restoreNoteVersion = vi.fn().mockRejectedValue(new ApiError(409, 'stale', 'stale_revision'));
-      const api = fakeApi({ getNote, restoreNoteVersion });
+      const restoreNoteVersion = vi.fn().mockRejectedValueOnce(new ApiError(409, 'stale', 'stale_revision')).mockResolvedValue(aNoteView({ id: 'n1', rev: 6, bodyMd: 'Restored body' }));
+      if (restoreAnyway) restoreNoteVersion.mockImplementation(restoreAnyway);
+      const api = fakeApi({ getNote, restoreNoteVersion, ...(versions ? { listNoteVersions: vi.fn().mockResolvedValue(page(versions)) } : {}) });
       await renderView({ api });
       await editorTitle();
       await userEvent.click(screen.getByTestId('note-editor-history-toggle'));
@@ -280,34 +297,44 @@ describe('NotesViewComponent', () => {
       expect(screen.getByTestId('note-conflict-theirs')).toHaveTextContent('Body written by another editor');
     });
 
-    it('user keeps their version on top of the latest revision', async () => {
+    it('user keeps the current note when a restore conflicts: the other editor’s save survives and nothing is written', async () => {
       const { api } = await renderConflictOnRestore();
 
       await userEvent.click(screen.getByTestId('note-conflict-keep-mine'));
 
-      await waitFor(() => expect(api.updateNote).toHaveBeenCalledExactlyOnceWith('p1', 'n1', { expectedRev: 5, bodyMd: 'Original body' }));
-      await waitFor(() => expect(screen.queryByTestId('note-conflict-keep-mine')).not.toBeInTheDocument());
-    });
-
-    it('user takes the other version without writing anything', async () => {
-      const { api } = await renderConflictOnRestore();
-
-      await userEvent.click(screen.getByTestId('note-conflict-take-theirs'));
-
       await waitFor(() => expect(screen.getByTestId('note-editor-body')).toHaveTextContent('Body written by another editor'));
       expect(api.updateNote).not.toHaveBeenCalled();
-      expect(screen.queryByTestId('note-conflict-keep-mine')).not.toBeInTheDocument();
+      expect(api.restoreNoteVersion).toHaveBeenCalledTimes(1);
+      expect(screen.queryByTestId('note-conflict-bar')).not.toBeInTheDocument();
     });
 
-    it('user merges both versions into one write', async () => {
-      const { api } = await renderConflictOnRestore();
+    it('user cannot merge when the conflict comes from a restore', async () => {
+      await renderConflictOnRestore();
 
-      await userEvent.click(screen.getByTestId('note-conflict-merge'));
+      expect(screen.queryByTestId('note-conflict-merge')).not.toBeInTheDocument();
+    });
 
-      await waitFor(() => expect(api.updateNote).toHaveBeenCalledExactlyOnceWith('p1', 'n1', {
-        expectedRev: 5,
-        bodyMd: 'Original body\n\nBody written by another editor',
-      }));
+    it('user sees the name of the editor who saved in the meantime', async () => {
+      await renderConflictOnRestore({ versions: [aNoteVersion({ id: 'v1', rev: 1 }), aNoteVersion({ id: 'v5', rev: 5, author: 'Nori · T7' })] });
+
+      expect(screen.getByTestId('note-conflict-theirs')).toHaveTextContent('Nori · T7');
+      expect(screen.getByTestId('note-conflict-message')).toHaveTextContent('Nori · T7');
+    });
+
+    it('user is not blamed on an unknown editor when the author cannot be read', async () => {
+      await renderConflictOnRestore({ versions: [aNoteVersion({ id: 'v1', rev: 1 })] });
+
+      expect(screen.getByTestId('note-conflict-theirs')).toHaveTextContent('Another editor');
+    });
+
+    it('the history cannot restore again while a restore-anyway write is in flight', async () => {
+      const write = deferred<NoteView>();
+      await renderConflictOnRestore({ restoreAnyway: () => write.promise });
+      await userEvent.click(screen.getByTestId('note-conflict-restore'));
+
+      await waitFor(() => expect(screen.queryByTestId('note-conflict-bar')).not.toBeInTheDocument());
+      expect(screen.getByTestId('note-history-restore')).toBeDisabled();
+      write.resolve(aNoteView({ id: 'n1', rev: 6, bodyMd: 'Restored body' }));
     });
   });
 });
