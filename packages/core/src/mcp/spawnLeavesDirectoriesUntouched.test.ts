@@ -56,6 +56,16 @@ describe('spawning a child session', () => {
     const { ManagerService } = await import('../managers/managerService.js');
     const { PulseScheduler } = await import('../managers/pulseScheduler.js');
     const { DEFAULT_MODEL_TABLE } = await import('../models.js');
+    const { DocsFolderService } = await import('../notes/docsFolderService.js');
+    const { expandMentions } = await import('../notes/mentionExpander.js');
+    const { nodeDocsFolderFs } = await import('../notes/nodeDocsFolderFs.js');
+    const { NoteRepository } = await import('../notes/noteRepository.js');
+    const { NoteService } = await import('../notes/noteService.js');
+    const { ProjectRepository } = await import('../projects/projectRepository.js');
+    const { DataStoreRepository } = await import('../stores/dataStoreRepository.js');
+    const { DataStoreService } = await import('../stores/dataStoreService.js');
+    const { WorkingStateService } = await import('../workingState/workingStateService.js');
+    const { newId } = await import('../ids.js');
     const { SessionService } = await import('../sessions/sessionService.js');
     const { createMcpHandler } = await import('./mcpServer.js');
 
@@ -73,11 +83,17 @@ describe('spawning a child session', () => {
     const managers = new ManagerService({ managers: managerRepo, sessions, bus, scheduler: pulseScheduler });
     const approvals = new ApprovalService({ db, bus });
     const modelTable = { ...DEFAULT_MODEL_TABLE };
-    const server = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath: '/tmp/of-unused/config.json', mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, worktreesRoot: WORKTREES_ROOT }) });
+    const storeRepo = new DataStoreRepository(db);
+    const stores = new DataStoreService({ repo: storeRepo, db, clock: () => new Date().toISOString(), newId });
+    const projects = new ProjectRepository(db);
+    const noteRepo = new NoteRepository(db);
+    const notes = new NoteService({ repo: noteRepo, db, expandMentions, clock: () => new Date().toISOString(), newId });
+    const docs = new DocsFolderService({ notes, noteRepo, projects, fs: nodeDocsFolderFs, clock: () => new Date().toISOString() });
+    const server = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath: '/tmp/of-unused/config.json', mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, workingStates: new WorkingStateService({ db, clock: () => new Date().toISOString(), stateRoot: '/tmp/of-unused/state', maxBytes: 6144 }), worktreesRoot: WORKTREES_ROOT }) });
     close = () => server.close();
 
     await sessions.create({ directory: managerDirectory, name: 'Lead', harness: 'claude-cli', emoji: '🧭' });
-    const managerMcpConfig = JSON.parse(argAfter(spawn.mock.calls[0]![1], '--mcp-config'));
+    const managerMcpConfig = JSON.parse(readFileSync(argAfter(spawn.mock.calls[0]![1], '--mcp-config'), 'utf8'));
     const managerToken = managerMcpConfig.mcpServers.openfleet.headers.Authorization.replace('Bearer ', '');
     const client = new Client({ name: 'test', version: '0.0.0' });
     await client.connect(new StreamableHTTPClientTransport(new URL(`${server.url}/mcp`), { requestInit: { headers: { Authorization: `Bearer ${managerToken}` } } }));
@@ -96,13 +112,13 @@ describe('spawning a child session', () => {
     expect(directories.map(snapshotTree)).toEqual(before);
   });
 
-  it('user can spawn two children that each get their own generated settings, passed inline and not shared with the manager', async () => {
+  it('user can spawn two children that each get their own generated settings, passed as separate files and not shared with the manager', async () => {
     await callCreateSession(firstChildDirectory, 'First');
     await callCreateSession(secondChildDirectory, 'Second');
 
     const [managerLaunch, firstLaunch, secondLaunch] = spawn.mock.calls.map(([, args]) => argAfter(args, '--settings'));
 
     expect(new Set([managerLaunch, firstLaunch, secondLaunch]).size).toBe(3);
-    for (const inlineSettings of [managerLaunch, firstLaunch, secondLaunch]) expect(() => JSON.parse(inlineSettings!)).not.toThrow();
+    for (const settingsPath of [managerLaunch, firstLaunch, secondLaunch]) expect(() => JSON.parse(readFileSync(settingsPath!, 'utf8'))).not.toThrow();
   });
 });
