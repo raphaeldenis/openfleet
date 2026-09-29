@@ -17,7 +17,7 @@ interface EditConflict {
   ours: string;
   theirs: ConflictingVersion;
   latest: NoteView;
-  restoreRev: number | null;
+  restoreRev: number;
 }
 
 interface ActionFailure {
@@ -27,23 +27,20 @@ interface ActionFailure {
 
 interface FailedWrite {
   ours: string;
-  restoreRev: number | null;
+  restoreRev: number;
 }
 
 interface WriteAttempt {
   write: () => Promise<NoteView>;
   failedWrite: FailedWrite;
-  failureTitle: string;
 }
 
 type WriteOutcome = 'written' | 'conflicted' | 'failed' | 'abandoned';
 
 const NEW_NOTE_TITLE = 'Untitled note';
 const CONCURRENT_EDITOR = 'Another editor';
-const MERGE_SEPARATOR = '\n\n';
 const PAGE_LIMIT = 200;
 const RESTORE_FAILURE_TITLE = 'Couldn’t restore the version';
-const SAVE_FAILURE_TITLE = 'Couldn’t save the note';
 
 const isStaleRevision = (error: unknown) => error instanceof ApiError && error.code === 'stale_revision';
 const reasonOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
@@ -341,7 +338,6 @@ export class NotesViewComponent {
         session,
         write: () => this.api.restoreNoteVersion(projectId, openNote.id, { rev, expectedRev: openNote.rev }),
         failedWrite: { ours: openNote.bodyMd, restoreRev: rev },
-        failureTitle: RESTORE_FAILURE_TITLE,
       });
     } finally {
       if (this.isCurrentSession(session)) this.isRestoring.set(false);
@@ -355,37 +351,30 @@ export class NotesViewComponent {
     const session = this.noteSession;
     this.conflict.set(null);
 
-    if (resolution === 'theirs') {
+    const isRestoreAnyway = resolution === 'restore';
+    if (!isRestoreAnyway) {
       this.note.set(conflict.latest);
       this.focusEditorAfterRender();
       await this.reloadVersionsWhenOpen();
       return;
     }
 
-    const outcome = await this.writeNote({ session, ...this.conflictWrite({ resolution, conflict, projectId }) });
-    const shouldOfferChoicesAgain = outcome === 'failed' && this.isCurrentSession(session);
-    if (shouldOfferChoicesAgain) this.conflict.set(conflict);
-  }
-
-  private conflictWrite({ resolution, conflict, projectId }: { resolution: ConflictResolution; conflict: EditConflict; projectId: string }): WriteAttempt {
     const { latest, restoreRev } = conflict;
-    if (resolution === 'restore' && restoreRev !== null) {
-      return {
+    this.isRestoring.set(true);
+    try {
+      const outcome = await this.writeNote({
+        session,
         write: () => this.api.restoreNoteVersion(projectId, latest.id, { rev: restoreRev, expectedRev: latest.rev }),
         failedWrite: { ours: conflict.ours, restoreRev },
-        failureTitle: RESTORE_FAILURE_TITLE,
-      };
+      });
+      const shouldOfferChoicesAgain = outcome === 'failed' && this.isCurrentSession(session);
+      if (shouldOfferChoicesAgain) this.conflict.set(conflict);
+    } finally {
+      if (this.isCurrentSession(session)) this.isRestoring.set(false);
     }
-    const mergedBody = [conflict.ours, conflict.theirs.body].join(MERGE_SEPARATOR);
-    const bodyMd = resolution === 'merge' ? mergedBody : conflict.ours;
-    return {
-      write: () => this.api.updateNote(projectId, latest.id, { expectedRev: latest.rev, bodyMd }),
-      failedWrite: { ours: bodyMd, restoreRev: null },
-      failureTitle: SAVE_FAILURE_TITLE,
-    };
   }
 
-  private async writeNote({ session, write, failedWrite, failureTitle }: WriteAttempt & { session: number }): Promise<WriteOutcome> {
+  private async writeNote({ session, write, failedWrite }: WriteAttempt & { session: number }): Promise<WriteOutcome> {
     this.actionFailure.set(null);
     try {
       const writtenNote = await write();
@@ -393,31 +382,42 @@ export class NotesViewComponent {
       this.note.set(writtenNote);
     } catch (error) {
       if (!this.isCurrentSession(session)) return 'abandoned';
-      return this.handleWriteFailure({ error, session, failedWrite, failureTitle });
+      return this.handleWriteFailure({ error, session, failedWrite });
     }
     this.focusEditorAfterRender();
     await this.reloadVersionsWhenOpen();
     return 'written';
   }
 
-  private async handleWriteFailure({ error, session, failedWrite, failureTitle }: { error: unknown; session: number } & Omit<WriteAttempt, 'write'>): Promise<WriteOutcome> {
+  private async handleWriteFailure({ error, session, failedWrite }: { error: unknown; session: number } & Omit<WriteAttempt, 'write'>): Promise<WriteOutcome> {
     const projectId = this.projectId();
     const openNote = this.note();
     const isConcurrentEdit = isStaleRevision(error) && projectId !== null && openNote !== null;
     if (!isConcurrentEdit) {
-      this.actionFailure.set({ title: failureTitle, reason: reasonOf(error) });
+      this.actionFailure.set({ title: RESTORE_FAILURE_TITLE, reason: reasonOf(error) });
       return 'failed';
     }
     try {
       const latest = await this.api.getNote(projectId, openNote.id);
       if (!this.isCurrentSession(session)) return 'abandoned';
-      const theirs = { author: CONCURRENT_EDITOR, at: ageLabel(latest.updatedAt), body: latest.bodyMd };
+      const author = await this.authorOfRevision({ projectId, noteId: latest.id, rev: latest.rev });
+      if (!this.isCurrentSession(session)) return 'abandoned';
+      const theirs = { author, at: ageLabel(latest.updatedAt), body: latest.bodyMd };
       this.conflict.set({ ours: failedWrite.ours, theirs, latest, restoreRev: failedWrite.restoreRev });
       return 'conflicted';
     } catch (lookupError) {
       if (!this.isCurrentSession(session)) return 'abandoned';
       this.showNoteError(lookupError);
       return 'failed';
+    }
+  }
+
+  private async authorOfRevision({ projectId, noteId, rev }: { projectId: string; noteId: string; rev: number }): Promise<string> {
+    try {
+      const versions = await fetchAllPages((page) => this.api.listNoteVersions(projectId, noteId, page));
+      return versions.find((version) => version.rev === rev)?.author ?? CONCURRENT_EDITOR;
+    } catch {
+      return CONCURRENT_EDITOR;
     }
   }
 

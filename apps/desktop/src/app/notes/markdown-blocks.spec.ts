@@ -33,7 +33,7 @@ describe('parseMarkdownBlocks', () => {
       { type: 'list', items: [[text('one')], [text('two')]] },
     ] },
     { name: 'Windows line endings inside a fenced block', markdown: '```\r\na\r\nb\r\n```', expected: [{ type: 'code', text: 'a\nb' }] },
-    { name: 'a mention line', markdown: '--- @task:t-1 → Ship it ---', expected: [{ type: 'mention-line', kind: 'task', id: 't-1', text: 'Ship it' }] },
+    { name: 'a mention line', markdown: '--- @table:t-1 → Ship it ---', expected: [{ type: 'mention-line', kind: 'table', id: 't-1', text: 'Ship it' }] },
     { name: 'a mentioned note with its own body', markdown: '--- from note @note:abc (Title, 2026-01-01) ---\n# Inner\n--- end @note:abc ---', expected: [
       { type: 'mention-note', kind: 'note', id: 'abc', title: 'Title', blocks: [{ type: 'heading', level: 1, segments: [text('Inner')] }] },
     ] },

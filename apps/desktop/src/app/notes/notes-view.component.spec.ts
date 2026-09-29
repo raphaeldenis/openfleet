@@ -286,7 +286,7 @@ describe('NotesViewComponent', () => {
       await userEvent.click(screen.getByTestId('note-editor-history-toggle'));
       await userEvent.click(await screen.findByTestId('note-history-version-1'));
       await userEvent.click(screen.getByTestId('note-history-restore'));
-      await screen.findByTestId('note-conflict-keep-mine');
+      await screen.findByTestId('note-conflict-bar');
       return { api };
     }
 
@@ -300,7 +300,7 @@ describe('NotesViewComponent', () => {
     it('user keeps the current note when a restore conflicts: the other editor’s save survives and nothing is written', async () => {
       const { api } = await renderConflictOnRestore();
 
-      await userEvent.click(screen.getByTestId('note-conflict-keep-mine'));
+      await userEvent.click(screen.getByTestId('note-conflict-keep-current'));
 
       await waitFor(() => expect(screen.getByTestId('note-editor-body')).toHaveTextContent('Body written by another editor'));
       expect(api.updateNote).not.toHaveBeenCalled();

@@ -377,7 +377,7 @@ describe('notes view tells the user when something failed', () => {
     expect(await screen.findByTestId('note-error-reason')).toHaveTextContent('404');
   });
 
-  it('the restore button is usable again once a restore conflict is resolved by taking the other version', async () => {
+  it('the restore button is usable again once a restore conflict is resolved by keeping the current note', async () => {
     const freshVersions = () => Promise.resolve(page([aNoteVersion({ id: 'v1', rev: 1 })]));
     const api = conflictingRestoreApi({ listNoteVersions: vi.fn(freshVersions) });
     await renderView({ api });
@@ -385,6 +385,7 @@ describe('notes view tells the user when something failed', () => {
     await restoreSelectedVersion();
     await userEvent.click(await screen.findByTestId('note-conflict-keep-current'));
 
+    await userEvent.click(await screen.findByTestId('note-history-version-1'));
     await waitFor(() => expect(screen.getByTestId('note-history-restore')).toBeEnabled());
   });
 });

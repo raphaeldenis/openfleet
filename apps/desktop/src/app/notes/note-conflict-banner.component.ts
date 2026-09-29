@@ -12,16 +12,18 @@ const DISK_AUTHOR = 'disk';
     <div #bar class="bar" role="alert" tabindex="-1" data-testid="note-conflict-bar">
       <span class="label">! Edit conflict</span>
       <span class="message" data-testid="note-conflict-message">{{ message() }}</span>
-      <button type="button" class="choice" data-testid="note-conflict-keep-mine" (click)="resolve.emit('mine')">{{ keepMineLabel() }}</button>
-      <button type="button" class="choice" data-testid="note-conflict-take-theirs" (click)="resolve.emit('theirs')">{{ takeTheirsLabel() }}</button>
-      <button type="button" class="choice choice--primary" data-testid="note-conflict-merge" (click)="resolve.emit('merge')">Merge both</button>
       @if (restoreRev(); as rev) {
+        <button type="button" class="choice choice--primary" data-testid="note-conflict-keep-current" (click)="resolve.emit('theirs')">Keep current</button>
         <button type="button" class="choice" data-testid="note-conflict-restore" (click)="resolve.emit('restore')">Restore rev {{ rev }} anyway</button>
+      } @else {
+        <button type="button" class="choice" data-testid="note-conflict-keep-mine" (click)="resolve.emit('mine')">Keep mine</button>
+        <button type="button" class="choice" data-testid="note-conflict-take-theirs" (click)="resolve.emit('theirs')">{{ takeTheirsLabel() }}</button>
+        <button type="button" class="choice choice--primary" data-testid="note-conflict-merge" (click)="resolve.emit('merge')">Merge both</button>
       }
     </div>
     <div class="versions">
       <div class="version version--ours" data-testid="note-conflict-ours">
-        <div class="version-label">Yours</div>{{ ours() }}
+        <div class="version-label">{{ restoreRev() === null ? 'Yours' : 'You had open' }}</div>{{ ours() }}
       </div>
       <div class="version version--theirs" data-testid="note-conflict-theirs">
         <div class="version-label">{{ theirs().author }} · {{ theirs().at }}</div>{{ theirs().body }}
@@ -63,11 +65,15 @@ export class NoteConflictBannerComponent {
 
   private readonly bar = viewChild.required<ElementRef<HTMLElement>>('bar');
   private readonly isDiskConflict = computed(() => this.theirs().author === DISK_AUTHOR);
-  protected readonly message = computed(() =>
-    this.isDiskConflict()
+  protected readonly message = computed(() => {
+    const { author } = this.theirs();
+    const rev = this.restoreRev();
+    if (rev !== null) {
+      return `${author} saved this note while you were restoring rev ${rev}. Keep current cancels the restore and writes nothing; Restore rev ${rev} anyway replaces ${author}’s save with rev ${rev}.`;
+    }
+    return this.isDiskConflict()
       ? 'This note changed on disk since you opened it. Your version is kept below; nothing is lost.'
-      : `${this.theirs().author} saved while you were typing. Your version is kept below; nothing is lost.`,
-  );
-  protected readonly keepMineLabel = computed(() => (this.restoreRev() === null ? 'Keep mine' : 'Keep current'));
+      : `${author} saved while you were typing. Your version is kept below; nothing is lost.`;
+  });
   protected readonly takeTheirsLabel = computed(() => (this.isDiskConflict() ? 'Keep disk' : `Take ${this.theirs().author}’s`));
 }

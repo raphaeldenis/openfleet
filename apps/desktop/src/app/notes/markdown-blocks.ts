@@ -1,3 +1,5 @@
+import { MENTION_KINDS } from '@openfleet/shared';
+
 export interface InlineSegment { text: string; isCode: boolean }
 
 export type MarkdownBlock =
@@ -14,8 +16,9 @@ const LINE_BREAK = /\r?\n/;
 const FENCE = '```';
 const BACKTICK = '`';
 const MAX_MENTION_DEPTH = 10;
-const NOTE_BLOCK_START = /^--- from note @(\w+):([\w-]+) \((.*), [^,]*\) ---$/;
-const MENTION_LINE = /^--- @(\w+):([\w-]+)(?::| →) ?(.*?) ---$/;
+const MENTION_KIND = MENTION_KINDS.join('|');
+const NOTE_BLOCK_START = new RegExp(`^--- from note @(${MENTION_KIND}):([\\w-]+) \\((.*), [^,]*\\) ---$`);
+const MENTION_LINE = new RegExp(`^--- @(${MENTION_KIND}):([\\w-]+)(?::| →) ?(.*?) ---$`);
 
 // ponytail: headings 1-3, paragraphs, bullet lists, fenced code, inline code and mention blocks only;
 // no emphasis, links or tables. Add `marked` if notes need them.
@@ -114,4 +117,26 @@ function inlineSegments(text: string): InlineSegment[] {
   return pairedParts
     .map((part, position) => ({ text: part, isCode: position % 2 === 1 }))
     .filter((segment) => segment.text !== '');
+}
+
+export function countBlocks(blocks: readonly MarkdownBlock[]): number {
+  return blocks.reduce((total, block) => total + 1 + (block.type === 'mention-note' ? countBlocks(block.blocks) : 0), 0);
+}
+
+/** Keeps the first `limit` blocks in reading order, counting the blocks nested in mentioned notes. */
+export function takeBlocks(blocks: readonly MarkdownBlock[], limit: number): MarkdownBlock[] {
+  const kept: MarkdownBlock[] = [];
+  let remaining = limit;
+  for (const block of blocks) {
+    if (remaining <= 0) break;
+    remaining -= 1;
+    if (block.type === 'mention-note') {
+      const nested = takeBlocks(block.blocks, remaining);
+      remaining -= countBlocks(nested);
+      kept.push({ ...block, blocks: nested });
+    } else {
+      kept.push(block);
+    }
+  }
+  return kept;
 }

@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, input, output, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, input, linkedSignal, output } from '@angular/core';
 import { ageLabel } from './note-age';
 import type { NoteVersionSummary } from '@openfleet/shared';
 
@@ -71,7 +71,7 @@ export class NoteHistoryComponent {
   readonly restore = output<number>();
   readonly retry = output<void>();
 
-  protected readonly selectedRev = signal<number | null>(null);
+  protected readonly selectedRev = linkedSignal<number | null, number | null>({ source: this.currentRev, computation: () => null });
   protected readonly newestFirst = computed(() => [...this.versions()].sort((a, b) => b.rev - a.rev));
   protected readonly canRestoreSelection = computed(() => {
     const rev = this.selectedRev();
