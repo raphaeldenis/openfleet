@@ -13,6 +13,7 @@ import type { SessionService } from '../sessions/sessionService.js';
 import type { DataStoreRepository } from '../stores/dataStoreRepository.js';
 import type { DataStoreService } from '../stores/dataStoreService.js';
 import { registerNoteTools } from './noteTools.js';
+import { registerNoteVersionTools } from './noteVersionTools.js';
 import { registerTableTools } from './tableTools.js';
 import { registerTools } from './tools.js';
 
@@ -27,6 +28,7 @@ export function createMcpHandler(deps: { sessions: SessionService; approvals: Ap
     registerTools(server, { ...deps, caller, worktreesRoot: deps.worktreesRoot ?? '/tmp/openfleet-worktrees' });
     registerTableTools(server, { stores: deps.stores, storeRepo: deps.storeRepo, caller });
     registerNoteTools(server, { notes: deps.notes, noteRepo: deps.noteRepo, docs: deps.docs, caller });
+    registerNoteVersionTools(server, { notes: deps.notes, noteRepo: deps.noteRepo, docs: deps.docs, caller });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on('close', () => { void transport.close(); void server.close(); });
     await server.connect(transport);
