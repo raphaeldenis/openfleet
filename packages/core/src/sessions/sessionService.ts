@@ -266,6 +266,7 @@ export class SessionService {
   // The CLI session id whose transcript belongs to this session's process: the launch id until a SessionStart
   // hook reports another one (a /clear starts a new CLI session inside the same process). Absent = launch id.
   private readonly currentCliSessionIds = new Map<string, string>();
+  private readonly adoptedCliSessionOwners = new Map<string, string>();
   private readonly interruptWatches = new Map<string, InterruptWatch>();
   // Presence means "this launch has no recorded resolved model yet"; the value is the launch's start time
   // and whether its recording failure and its transcript name mismatch were already logged.
@@ -590,24 +591,29 @@ export class SessionService {
 
   // A CLI session id that is another session's launch id or current id, open or closed, never becomes this session's:
   // otherwise one session's hook could adopt a neighbour's identity and then read its transcript.
+  // ponytail: adoptedCliSessionOwners lives in memory only, so a daemon restart forgets which session adopted
+  // which id; the impact stays display-only on the attacker's own row. Upgrade path: persist it in a column
+  // if agents are ever untrusted.
   private adoptCliSessionId(sessionId: string, reportedCliSessionId: string): void {
     if (!CLI_SESSION_ID_PATTERN.test(reportedCliSessionId)) return;
-    const isOwnedByAnotherSession = this.repo.list().some((other) =>
-      other.id !== sessionId
-      && (other.id === reportedCliSessionId || this.currentCliSessionIds.get(other.id) === reportedCliSessionId));
-    if (isOwnedByAnotherSession) return;
-    this.currentCliSessionIds.set(sessionId, reportedCliSessionId);
+    const cliSessionId = reportedCliSessionId.toLowerCase();
+    const isLaunchIdOfAnotherSession = this.repo.list().some((other) => other.id !== sessionId && other.id === cliSessionId);
+    const adopter = this.adoptedCliSessionOwners.get(cliSessionId);
+    const isAdoptedByAnotherSession = adopter !== undefined && adopter !== sessionId;
+    if (isLaunchIdOfAnotherSession || isAdoptedByAnotherSession) return;
+    this.adoptedCliSessionOwners.set(cliSessionId, sessionId);
+    this.currentCliSessionIds.set(sessionId, cliSessionId);
   }
 
   private isTranscriptOfSession(sessionId: string, path: string): boolean {
-    return basename(path) === `${this.currentCliSessionIds.get(sessionId) ?? sessionId}.jsonl`;
+    return basename(path).toLowerCase() === `${this.currentCliSessionIds.get(sessionId) ?? sessionId}.jsonl`;
   }
 
   private warnOnceWhenTranscriptNameIsForeign(sessionId: string, path: string, pending: { nameMismatchLogged: boolean }): void {
     if (pending.nameMismatchLogged) return;
     pending.nameMismatchLogged = true;
     const expectedName = `${this.currentCliSessionIds.get(sessionId) ?? sessionId}.jsonl`;
-    log('warn', `resolved model: transcript name does not match the session's CLI id: session ${sessionId}, expected ${expectedName}, got ${basename(path)}`);
+    log('warn', `resolved model: transcript name does not match the session's CLI id: session ${sessionId}, expected ${expectedName}, got ${JSON.stringify(basename(path))}`);
   }
 
   // One attempt per hook until the launch's resolution is found, plus one retry a moment after a hook whose

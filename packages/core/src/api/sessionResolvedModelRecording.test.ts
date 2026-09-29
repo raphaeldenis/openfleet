@@ -534,6 +534,49 @@ describe('resolved model recording from a session\'s transcript', () => {
     expect(await listed(id)).toMatchObject({ resolvedModel: 'claude-model-of-the-launch' });
   });
 
+  it('records nothing on a session that claims the upper-cased id of another session in a SessionStart, then names its upper-cased transcript', async () => {
+    const sessionA = await createSession('opus');
+    const sessionB = await createSession('opus');
+    writeFileSync(transcriptPathOf(sessionB), assistantLine({ model: 'claude-model-of-session-b' }));
+    const upperCasedTranscriptOfB = transcriptPathOf(sessionB.toUpperCase());
+
+    await sendHook(sessionA, { hook_event_name: 'SessionStart', session_id: sessionB.toUpperCase() }, upperCasedTranscriptOfB);
+    await sendHook(sessionA, preToolUse, upperCasedTranscriptOfB);
+
+    expect(await listed(sessionA)).not.toHaveProperty('resolvedModel');
+  });
+
+  it.each([
+    { endedBy: 'closes', endSession: async (id: string) => { await postJson(`/api/sessions/${id}/close`); } },
+    { endedBy: 'is relaunched', endSession: async (id: string) => { await postJson(`/api/sessions/${id}/close`); await postJson(`/api/sessions/${id}/reopen`); } },
+  ])('records nothing on a session that claims a CLI session id that another session adopted and then $endedBy', async ({ endSession }) => {
+    const sessionA = await createSession('opus');
+    const sessionB = await createSession('opus');
+    const adoptedCliSessionId = randomUUID();
+    await sendHook(sessionB, { hook_event_name: 'SessionStart', source: 'clear', session_id: adoptedCliSessionId }, transcriptPathOf(adoptedCliSessionId));
+    await endSession(sessionB);
+    writeFileSync(transcriptPathOf(adoptedCliSessionId), assistantLine({ model: 'claude-model-of-the-adopted-id' }));
+
+    await sendHook(sessionA, { hook_event_name: 'SessionStart', session_id: adoptedCliSessionId }, transcriptPathOf(adoptedCliSessionId));
+    await sendHook(sessionA, preToolUse, transcriptPathOf(adoptedCliSessionId));
+
+    expect(await listed(sessionA)).not.toHaveProperty('resolvedModel');
+  });
+
+  it('logs a hostile transcript name on one line, without its newline or escape characters', async () => {
+    const id = await createSession('opus');
+    const hostilePath = join(projectDirectory, `${randomUUID()}\nFORGED warn line \u001b[31m.jsonl`);
+    writeFileSync(hostilePath, assistantLine({ model: 'claude-model-of-a-hostile-name' }));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await sendHook(id, preToolUse, hostilePath);
+    const nameMismatchWarnings = warnSpy.mock.calls.filter((call) => String(call[0]).includes('does not match'));
+    warnSpy.mockRestore();
+
+    expect(nameMismatchWarnings).toHaveLength(1);
+    expect(String(nameMismatchWarnings[0]![0])).not.toMatch(/[\n\u001b]/);
+  });
+
   it('follows the launch transcript again after a permission-mode relaunch that follows a /clear', async () => {
     const id = await createSession('opus');
     const clearedCliSessionId = randomUUID();
@@ -582,7 +625,7 @@ describe('resolved model recording from a session\'s transcript', () => {
     warnSpy.mockRestore();
 
     expect(nameMismatchWarnings).toHaveLength(1);
-    expect(String(nameMismatchWarnings[0]![0])).toContain(`transcript name does not match the session's CLI id: session ${id}, expected ${id}.jsonl, got ${foreignName}`);
+    expect(String(nameMismatchWarnings[0]![0])).toContain(`transcript name does not match the session's CLI id: session ${id}, expected ${id}.jsonl, got "${foreignName}"`);
     expect(String(nameMismatchWarnings[0]![0])).not.toContain(projectDirectory);
   });
 
