@@ -1,5 +1,6 @@
 import { ChangeDetectionStrategy, Component, computed, input, model, output } from '@angular/core';
 import { ageLabel } from './note-age';
+import { displayTitleOf } from './note-title';
 import type { NoteSummary } from '@openfleet/shared';
 
 @Component({
@@ -35,7 +36,7 @@ import type { NoteSummary } from '@openfleet/shared';
           [attr.aria-current]="note.id === selectedId() ? 'true' : null"
           (click)="selected.emit(note.id)"
         >
-          <span class="title">{{ note.title }}</span>
+          <span class="title">{{ displayTitleOf(note.title) }}</span>
           <span class="meta">{{ ageOf(note) }}</span>
         </button>
       }
@@ -87,6 +88,8 @@ export class NoteListComponent {
     const needle = this.filter().trim().toLowerCase();
     return this.notes().filter((note) => note.title.toLowerCase().includes(needle));
   });
+
+  protected readonly displayTitleOf = displayTitleOf;
 
   protected ageOf(note: NoteSummary): string {
     return ageLabel(note.updatedAt);

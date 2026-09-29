@@ -34,6 +34,12 @@ describe('NoteEditorComponent', () => {
     expect(screen.getByTestId('note-editor-title')).toHaveTextContent('daemon-protocol');
   });
 
+  it('user sees an "Untitled" heading on a note without a title', async () => {
+    await renderEditor({ note: aNoteView({ title: '' }) });
+
+    expect(screen.getByRole('heading', { level: 2, name: 'Untitled' })).toBe(screen.getByTestId('note-editor-title'));
+  });
+
   describe('path badge', () => {
     it('user sees where a file-backed note lives on disk', async () => {
       await renderEditor({ note: aNoteView({ fileBacked: true, docsRelativePath: 'specs/daemon-protocol.md' }) });
@@ -178,7 +184,7 @@ describe('NoteEditorComponent', () => {
       await renderEditor({ note: aNoteView({ bodyMd }) });
 
       expect(screen.getAllByTestId('note-editor-paragraph')).toHaveLength(1999);
-      expect(screen.getByTestId('note-editor-show-rest')).toHaveTextContent('Show the remaining 101 blocks');
+      expect(screen.getByTestId('note-editor-show-rest')).toHaveTextContent('Show the rest (101 more items)');
       await userEvent.click(screen.getByTestId('note-editor-show-rest'));
       expect(screen.getAllByTestId('note-editor-paragraph')).toHaveLength(2100);
     });
@@ -205,7 +211,7 @@ describe('NoteEditorComponent', () => {
       await renderEditor({ note: aNoteView({ bodyMd: '- x\n'.repeat(2500) }) });
 
       expect(screen.getAllByTestId('note-editor-list-item')).toHaveLength(1999);
-      expect(screen.getByTestId('note-editor-show-rest')).toHaveTextContent('Show the remaining 501 blocks');
+      expect(screen.getByTestId('note-editor-show-rest')).toHaveTextContent('Show the rest (501 more items)');
       await userEvent.click(screen.getByTestId('note-editor-show-rest'));
       expect(screen.getAllByTestId('note-editor-list-item')).toHaveLength(2500);
     });

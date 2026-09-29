@@ -20,6 +20,10 @@ interface EditConflict {
   restoreRev: number;
 }
 
+interface OfferedConflict extends EditConflict {
+  id: number;
+}
+
 interface ActionFailure {
   title: string;
   reason: string;
@@ -114,7 +118,7 @@ async function fetchAllPages<T>(fetchPage: (request: PageRequest) => Promise<Pag
           (openInFinder)="openSelectedFolder()"
         />
       } @else if (note(); as openNote) {
-        @for (conflict of conflicts(); track conflict) {
+        @for (conflict of conflicts(); track conflict.id) {
           <of-note-conflict-banner [ours]="conflict.ours" [theirs]="conflict.theirs" [restoreRev]="conflict.restoreRev" (resolve)="resolveConflict($event)" />
         }
         <div class="doc-row">
@@ -127,6 +131,7 @@ async function fetchAllPages<T>(fetchPage: (request: PageRequest) => Promise<Pag
               [error]="versionsError()"
               (restore)="restoreVersion($event)"
               (retry)="reloadVersions()"
+              (close)="closeHistory()"
             />
           }
         </div>
@@ -179,7 +184,7 @@ export class NotesViewComponent {
   protected readonly versions = signal<readonly NoteVersionSummary[]>([]);
   protected readonly versionsError = signal('');
   protected readonly isRestoring = signal(false);
-  private readonly conflict = signal<EditConflict | null>(null);
+  private readonly conflict = signal<OfferedConflict | null>(null);
   protected readonly isRestoreBlocked = computed(() => this.isRestoring() || this.conflict() !== null);
   protected readonly conflicts = computed(() => {
     const conflict = this.conflict();
@@ -213,6 +218,7 @@ export class NotesViewComponent {
   private latestVersionsRequest = 0;
   private noteSession = 0;
   private latestCreation = 0;
+  private offeredConflictCount = 0;
 
   constructor() {
     void this.loadProjects();
@@ -332,6 +338,11 @@ export class NotesViewComponent {
     if (willOpen) await this.loadVersions();
   }
 
+  protected closeHistory(): void {
+    this.historyOpen.set(false);
+    this.editor()?.focusHistoryToggle();
+  }
+
   protected reloadVersions(): Promise<void> {
     return this.loadVersions();
   }
@@ -377,7 +388,7 @@ export class NotesViewComponent {
         failedWrite: { ours: conflict.ours, restoreRev },
       });
       const shouldOfferChoicesAgain = outcome === 'failed' && this.isCurrentSession(session);
-      if (shouldOfferChoicesAgain) this.conflict.set(conflict);
+      if (shouldOfferChoicesAgain) this.offerConflict(conflict);
     } finally {
       if (this.isCurrentSession(session)) this.isRestoring.set(false);
     }
@@ -413,7 +424,7 @@ export class NotesViewComponent {
       if (!this.isCurrentSession(session)) return 'abandoned';
       if (completeHistory !== null && this.historyOpen()) this.versions.set(completeHistory);
       const theirs = { author, at: ageLabel(latest.updatedAt), body: latest.bodyMd };
-      this.conflict.set({ ours: failedWrite.ours, theirs, latest, restoreRev: failedWrite.restoreRev });
+      this.offerConflict({ ours: failedWrite.ours, theirs, latest, restoreRev: failedWrite.restoreRev });
       return 'conflicted';
     } catch (lookupError) {
       if (!this.isCurrentSession(session)) return 'abandoned';
@@ -458,6 +469,10 @@ export class NotesViewComponent {
 
   private async reloadVersionsWhenOpen(): Promise<void> {
     if (this.historyOpen()) await this.loadVersions();
+  }
+
+  private offerConflict(conflict: EditConflict): void {
+    this.conflict.set({ ...conflict, id: ++this.offeredConflictCount });
   }
 
   private showNoteError(error: unknown): void {

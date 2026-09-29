@@ -421,6 +421,21 @@ describe('notes view tells the user when something failed', () => {
     expect(api.restoreNoteVersion).toHaveBeenLastCalledWith('p1', 'n1', { rev: 1, expectedRev: 6 });
   });
 
+  it('a conflict offered again after a failed restore anyway takes the focus back without Angular warning about the list', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const restoreNoteVersion = vi.fn().mockRejectedValueOnce(staleRevision()).mockRejectedValue(new ApiError(500, 'POST restore → 500'));
+    await renderView({ api: conflictingRestoreApi({ restoreNoteVersion }) });
+    await editorTitle();
+    await restoreSelectedVersion();
+    await userEvent.click(await screen.findByTestId('note-conflict-restore'));
+
+    await screen.findByTestId('note-action-error');
+    await waitFor(() => expect(screen.getByTestId('note-conflict-bar')).toHaveFocus());
+    const angularWarnings = warn.mock.calls.filter(([message]) => String(message).includes('NG0956'));
+    warn.mockRestore();
+    expect(angularWarnings).toEqual([]);
+  });
+
   describe('the author named in a conflict banner', () => {
     const pageOf = <T>(all: T[]) =>
       vi.fn((...args: unknown[]) => {
@@ -769,6 +784,33 @@ describe('notes view is usable from the keyboard and by assistive technology', (
     await userEvent.keyboard('{Enter}');
 
     await waitFor(() => expect(api.restoreNoteVersion).toHaveBeenCalledTimes(1));
+  });
+
+  it('Escape in the history closes it and returns the focus to the History button', async () => {
+    await renderView();
+    await editorTitle();
+    await userEvent.click(screen.getByTestId('note-editor-history-toggle'));
+    (await screen.findByTestId('note-history-version-1')).focus();
+
+    await userEvent.keyboard('{Escape}');
+
+    expect(screen.queryByTestId('note-history-restore')).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId('note-editor-history-toggle')).toHaveFocus());
+  });
+
+  it('Escape on a conflict banner leaves the choice to the user and writes nothing', async () => {
+    const api = conflictingRestoreApi();
+    await renderView({ api });
+    await editorTitle();
+    await restoreSelectedVersion();
+    const banner = await screen.findByTestId('note-conflict-bar');
+    await waitFor(() => expect(banner).toHaveFocus());
+
+    await userEvent.keyboard('{Escape}');
+    await flushPendingWork();
+
+    expect(screen.getByTestId('note-conflict-bar')).toBeInTheDocument();
+    expect(api.restoreNoteVersion).toHaveBeenCalledTimes(1);
   });
 
   it('history versions expose their selection with aria-pressed, not aria-selected', async () => {

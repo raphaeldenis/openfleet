@@ -35,6 +35,12 @@ describe('NoteListComponent', () => {
     expect(screen.getByTestId('note-list-item-n3')).toHaveTextContent('voice');
   });
 
+  it('user sees an "Untitled" placeholder on a note without a title', async () => {
+    await renderList({ notes: [aNoteSummary({ id: 'n7', title: '' })] });
+
+    expect(screen.getByTestId('note-list-item-n7')).toHaveTextContent('Untitled');
+  });
+
   it('user sees when each note was last updated', async () => {
     const twoMinutesAgo = new Date(Date.now() - 2 * 60_000).toISOString();
     await renderList({ notes: [aNoteSummary({ id: 'n1', updatedAt: twoMinutesAgo })] });

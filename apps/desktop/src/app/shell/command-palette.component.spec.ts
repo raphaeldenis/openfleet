@@ -12,6 +12,7 @@ function routes() {
   return [
     { path: '', component: StubComponent },
     { path: 'inbox', component: StubComponent },
+    { path: 'notes', component: StubComponent },
     { path: 'tables', component: StubComponent },
     { path: 'components', component: StubComponent },
   ];
@@ -45,6 +46,15 @@ describe('CommandPaletteComponent', () => {
 
     expect(router.url).toBe('/inbox');
     expect(closed).toHaveBeenCalled();
+  });
+
+  it('user can open Notes from the palette', async () => {
+    const { fixture } = await render(CommandPaletteComponent, { bindings: [inputBinding('open', () => true)], providers: [provideRouter(routes())] });
+    const router = fixture.debugElement.injector.get(Router);
+
+    await userEvent.click(screen.getByTestId('palette-item-notes'));
+
+    expect(router.url).toBe('/notes');
   });
 
   it('emits closed even when the navigation rejects, so a dead route never traps the palette open', async () => {

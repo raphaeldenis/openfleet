@@ -5,6 +5,7 @@ import type { NoteVersionSummary } from '@openfleet/shared';
 @Component({
   selector: 'of-note-history',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  host: { '(keydown.escape)': 'close.emit()' },
   template: `
     <div class="title">History</div>
     @if (error()) {
@@ -70,6 +71,7 @@ export class NoteHistoryComponent {
   readonly error = input('');
   readonly restore = output<number>();
   readonly retry = output<void>();
+  readonly close = output<void>();
 
   protected readonly selectedRev = linkedSignal<number | null, number | null>({ source: this.currentRev, computation: () => null });
   protected readonly newestFirst = computed(() => [...this.versions()].sort((a, b) => b.rev - a.rev));

@@ -1,6 +1,7 @@
 import { NgTemplateOutlet } from '@angular/common';
 import { ChangeDetectionStrategy, Component, ElementRef, computed, input, output, signal, viewChild } from '@angular/core';
 import { countRenderCost, parseMarkdownBlocks, takeWithinRenderBudget } from './markdown-blocks';
+import { displayTitleOf } from './note-title';
 import type { NoteView } from '@openfleet/shared';
 
 const MAX_NODES_RENDERED_AT_FIRST = 2000;
@@ -13,12 +14,13 @@ export interface NoteMentioner { emoji: string; name: string }
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <header class="header">
-      <h2 #title class="title" tabindex="-1" data-testid="note-editor-title">{{ note().title }}</h2>
+      <h2 #title class="title" tabindex="-1" data-testid="note-editor-title">{{ displayTitle() }}</h2>
       @if (note().docsRelativePath; as path) {
         <span class="path" data-testid="note-editor-path">{{ path }}</span>
       }
       <span class="spacer"></span>
       <button
+        #historyButton
         type="button"
         class="history-toggle"
         data-testid="note-editor-history-toggle"
@@ -32,9 +34,9 @@ export interface NoteMentioner { emoji: string; name: string }
           <p class="empty-body" data-testid="note-editor-empty-body">This note is empty.</p>
         }
         <ng-container [ngTemplateOutlet]="blockList" [ngTemplateOutletContext]="{ $implicit: blocks() }" />
-        @if (hiddenBlockCount() > 0) {
+        @if (hiddenItemCount() > 0) {
           <button type="button" class="of-btn of-btn--secondary show-rest" data-testid="note-editor-show-rest" (click)="isShowingAllBlocks.set(true)">
-            Show the remaining {{ hiddenBlockCount() }} blocks
+            Show the rest ({{ hiddenItemCount() }} more items)
           </button>
         }
         @if (mentionedBy().length > 0) {
@@ -134,12 +136,18 @@ export class NoteEditorComponent {
   readonly historyToggle = output<void>();
 
   private readonly title = viewChild.required<ElementRef<HTMLElement>>('title');
+  private readonly historyButton = viewChild.required<ElementRef<HTMLElement>>('historyButton');
   protected readonly isShowingAllBlocks = signal(false);
   private readonly allBlocks = computed(() => parseMarkdownBlocks(this.expandedBody() ?? this.note().bodyMd));
   protected readonly blocks = computed(() => (this.isShowingAllBlocks() ? this.allBlocks() : takeWithinRenderBudget(this.allBlocks(), MAX_NODES_RENDERED_AT_FIRST)));
-  protected readonly hiddenBlockCount = computed(() => countRenderCost(this.allBlocks()) - countRenderCost(this.blocks()));
+  protected readonly hiddenItemCount = computed(() => countRenderCost(this.allBlocks()) - countRenderCost(this.blocks()));
+  protected readonly displayTitle = computed(() => displayTitleOf(this.note().title));
 
   focus(): void {
     this.title().nativeElement.focus();
+  }
+
+  focusHistoryToggle(): void {
+    this.historyButton().nativeElement.focus();
   }
 }
