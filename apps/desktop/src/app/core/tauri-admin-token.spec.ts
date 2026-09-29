@@ -1,16 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { getAdminToken, setAdminToken } from './admin-token.store.js';
 
 const invokeMock = vi.fn();
 vi.mock('@tauri-apps/api/core', () => ({ invoke: invokeMock }));
 
 async function importFresh() {
   const module = await import('./tauri-admin-token.js');
-  return module.ensureAdminTokenInStorage;
+  return module.ensureAdminTokenLoaded;
 }
 
-describe('ensureAdminTokenInStorage', () => {
+describe('ensureAdminTokenLoaded', () => {
   beforeEach(() => {
     localStorage.clear();
+    setAdminToken('');
     invokeMock.mockReset();
     delete (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
   });
@@ -18,80 +20,89 @@ describe('ensureAdminTokenInStorage', () => {
     delete (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
   });
 
-  it('does nothing outside a Tauri webview, leaving localStorage untouched', async () => {
+  it('does nothing outside a Tauri webview, leaving the in-memory token empty for the localStorage fallback to cover', async () => {
     localStorage.setItem('openfleet.adminToken', 'pasted-by-hand');
-    const ensureAdminTokenInStorage = await importFresh();
+    const ensureAdminTokenLoaded = await importFresh();
 
-    await ensureAdminTokenInStorage();
+    await ensureAdminTokenLoaded();
 
     expect(invokeMock).not.toHaveBeenCalled();
-    expect(localStorage.getItem('openfleet.adminToken')).toBe('pasted-by-hand');
+    expect(getAdminToken()).toBe('');
   });
 
-  it('writes the token returned by the Tauri command into localStorage', async () => {
+  it('writes the token returned by the Tauri command into memory, never into localStorage', async () => {
     (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
     invokeMock.mockResolvedValue('secret-token');
-    const ensureAdminTokenInStorage = await importFresh();
+    const ensureAdminTokenLoaded = await importFresh();
 
-    await ensureAdminTokenInStorage();
+    await ensureAdminTokenLoaded();
 
     expect(invokeMock).toHaveBeenCalledWith('read_admin_token');
-    expect(localStorage.getItem('openfleet.adminToken')).toBe('secret-token');
+    expect(getAdminToken()).toBe('secret-token');
+    expect(localStorage.getItem('openfleet.adminToken')).toBeNull();
   });
 
-  it('leaves localStorage untouched when the Tauri command rejects', async () => {
+  it('leaves the in-memory token empty when the Tauri command rejects', async () => {
     (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
-    localStorage.setItem('openfleet.adminToken', 'existing');
     invokeMock.mockRejectedValue(new Error('no such file'));
-    const ensureAdminTokenInStorage = await importFresh();
+    const ensureAdminTokenLoaded = await importFresh();
 
-    await ensureAdminTokenInStorage();
+    await ensureAdminTokenLoaded();
 
-    expect(localStorage.getItem('openfleet.adminToken')).toBe('existing');
+    expect(getAdminToken()).toBe('');
   });
 
-  it('does not overwrite an existing token when the Tauri command resolves an empty string', async () => {
+  it('does not overwrite an already-loaded token when the Tauri command resolves an empty string', async () => {
     (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
-    localStorage.setItem('openfleet.adminToken', 'existing');
+    setAdminToken('existing');
     invokeMock.mockResolvedValue('');
-    const ensureAdminTokenInStorage = await importFresh();
+    const ensureAdminTokenLoaded = await importFresh();
 
-    await ensureAdminTokenInStorage();
+    await ensureAdminTokenLoaded();
 
-    expect(localStorage.getItem('openfleet.adminToken')).toBe('existing');
+    expect(getAdminToken()).toBe('existing');
   });
 
-  it('overwrites a stale token already in storage with the freshly read one', async () => {
+  it('overwrites a stale token already in memory with the freshly read one', async () => {
     (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
-    localStorage.setItem('openfleet.adminToken', 'stale-token');
+    setAdminToken('stale-token');
     invokeMock.mockResolvedValue('fresh-token');
-    const ensureAdminTokenInStorage = await importFresh();
+    const ensureAdminTokenLoaded = await importFresh();
 
-    await ensureAdminTokenInStorage();
+    await ensureAdminTokenLoaded();
 
-    expect(localStorage.getItem('openfleet.adminToken')).toBe('fresh-token');
+    expect(getAdminToken()).toBe('fresh-token');
   });
 
-  it('stores whatever the Tauri command resolves verbatim, trailing whitespace included', async () => {
+  it('stores whatever the Tauri command resolves, trimmed of surrounding whitespace', async () => {
     (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
     invokeMock.mockResolvedValue('token-with-trailing-newline\n');
-    const ensureAdminTokenInStorage = await importFresh();
+    const ensureAdminTokenLoaded = await importFresh();
 
-    await ensureAdminTokenInStorage();
+    await ensureAdminTokenLoaded();
 
-    expect(localStorage.getItem('openfleet.adminToken')).toBe('token-with-trailing-newline\n');
+    expect(getAdminToken()).toBe('token-with-trailing-newline');
   });
 
-  it('still resolves when storing the token fails', async () => {
+  it('purges a leftover token that a pre-fix build wrote to localStorage while running inside Tauri', async () => {
     (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    localStorage.setItem('openfleet.adminToken', 'leftover-from-pre-fix-build');
     invokeMock.mockResolvedValue('secret-token');
-    const setItemSpy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
-      throw new Error('QuotaExceededError');
-    });
-    const ensureAdminTokenInStorage = await importFresh();
+    const ensureAdminTokenLoaded = await importFresh();
 
-    await expect(ensureAdminTokenInStorage()).resolves.toBeUndefined();
+    await ensureAdminTokenLoaded();
 
-    setItemSpy.mockRestore();
+    expect(localStorage.getItem('openfleet.adminToken')).toBeNull();
+  });
+
+  it('purges a leftover localStorage token inside Tauri even when the read command rejects', async () => {
+    (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    localStorage.setItem('openfleet.adminToken', 'leftover-from-pre-fix-build');
+    invokeMock.mockRejectedValue(new Error('no such file'));
+    const ensureAdminTokenLoaded = await importFresh();
+
+    await ensureAdminTokenLoaded();
+
+    expect(localStorage.getItem('openfleet.adminToken')).toBeNull();
   });
 });

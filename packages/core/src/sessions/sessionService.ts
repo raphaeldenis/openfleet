@@ -6,13 +6,14 @@ import type { PermissionMode, Session, SessionSpec } from '@openfleet/shared';
 import { EventBus } from '../events/eventBus.js';
 import { createWorktree } from '../git/worktrees.js';
 import type { Harness, HarnessHandle } from '../harness/harness.js';
+import { findPermissiveSettingsWarning } from '../harness/claudeCli/permissiveSettings.js';
 import { newId, newToken } from '../ids.js';
 import { MessageQueue } from './messageQueue.js';
 import { wrapAgentMessage } from './messageEnvelope.js';
 import { normalizePermissionMode, SessionRepository } from './sessionRepository.js';
 import { canDeliverNow, nextState, provesTurnEnded, type SessionInput } from './stateMachine.js';
 
-export interface SessionServiceDeps { db: DatabaseSync; bus: EventBus; harnesses: Harness[]; baseUrl: string; worktreesRoot: string; resumeTimeoutMs?: number; submitKeystrokeDelayMs?: number }
+export interface SessionServiceDeps { db: DatabaseSync; bus: EventBus; harnesses: Harness[]; baseUrl: string; worktreesRoot: string; resumeTimeoutMs?: number; firstStartTimeoutMs?: number; submitKeystrokeDelayMs?: number }
 
 export class SessionClosedError extends Error {
   constructor(sessionId: string) {
@@ -51,6 +52,9 @@ export class DaemonShuttingDownError extends Error {
 const OUTPUT_BUFFER_LIMIT = 200 * 1024;
 export const DEFAULT_CLOSE_ESCALATE_MS = 5000;
 const DEFAULT_RESUME_TIMEOUT_MS = 15_000;
+// A cold real CLI can sit waiting on an auth or trust prompt far longer than a resume ever should, so a
+// first launch gets its own, more generous ceiling instead of sharing resumeTimeoutMs (AUD-06).
+const DEFAULT_FIRST_START_TIMEOUT_MS = 60_000;
 // ponytail: fixed delay giving Claude Code's composer time to settle after typeMessage's bracketed-paste
 // write before the separate '\r' submits it; upgrade path is confirming the composer holds the full body
 // from the pty output instead of trusting a fixed delay.
@@ -276,12 +280,22 @@ export class SessionService {
     // Captured now so a later reopen can tell a directory that still resolves the same way apart from an
     // in-between symlink swap from one whose path never resolved to a real directory at all.
     if (existsSync(spec.directory)) this.repo.setDirectoryRealpath(id, realpathSync.native(spec.directory));
+    this.warnIfPermissiveSettings(spec.harness, spec.directory);
     const harness = this.harnessFor(spec.harness);
-    const handle = harness.start({
-      sessionId: id, directory: spec.directory, model: spec.model, seededPrompt: spec.seededPrompt,
-      hookUrl: `${this.deps.baseUrl}/hooks/${hookToken}`, mcpUrl: `${this.deps.baseUrl}/mcp`, mcpToken, displayName: `${spec.emoji} ${spec.name}`,
-      permissionMode: spec.permissionMode,
-    });
+    let handle: HarnessHandle;
+    try {
+      handle = harness.start({
+        sessionId: id, directory: spec.directory, model: spec.model, seededPrompt: spec.seededPrompt,
+        hookUrl: `${this.deps.baseUrl}/hooks/${hookToken}`, mcpUrl: `${this.deps.baseUrl}/mcp`, mcpToken, displayName: `${spec.emoji} ${spec.name}`,
+        permissionMode: spec.permissionMode,
+      });
+    } catch (err) {
+      // The row above already exists: left alone, it would be a ghost forever — starting, no handle,
+      // unclosable and unreopenable. Same treatment as resumeOne's own launch failure.
+      console.error(`create: session ${id} failed to launch`, err);
+      this.markClosed(id, RESUME_LAUNCH_FAILED_EXIT_CODE);
+      throw err;
+    }
     this.handles.set(id, handle);
     activeHandleBySessionId.set(id, handle);
     handle.onData((data) => {
@@ -292,6 +306,10 @@ export class SessionService {
       if (activeHandleBySessionId.get(id) !== handle) return; // a stale process we already replaced (e.g. by a resume)
       this.markClosed(id, exitCode);
     });
+    // Same safety net resumeOne arms: a harness that starts but never reports a single real hook (SessionStart
+    // included) leaves this session starting forever otherwise. A first launch gets its own, longer timeout
+    // (firstStartTimeoutMs) since a cold real CLI can sit waiting on an auth or trust prompt (AUD-06).
+    this.armFirstStartTimeout(id, handle);
     const session = this.repo.get(id)!;
     this.deps.bus.emit({ type: 'session.created', session });
     return session;
@@ -492,6 +510,10 @@ export class SessionService {
   private async retireForRelaunch(sessionId: string): Promise<void> {
     this.disarmInterruptWatch(sessionId);
     this.transcriptPaths.delete(sessionId);
+    // Any approval still gating this session belonged to the process about to die: ApprovalService
+    // listens for this to expire it and answer its waiting hook, rather than leave it pending forever
+    // behind a relaunch it can never come back from (AUD-07).
+    this.deps.bus.emit({ type: 'session.relaunching', sessionId });
     this.repo.setTokens(sessionId, newToken(), newToken());
     const handle = this.handles.get(sessionId);
     if (!handle) return;
@@ -667,7 +689,13 @@ export class SessionService {
       return relaunch;
     }
     const handle = this.handles.get(sessionId);
-    if (!handle) return;
+    if (!handle) {
+      // No process to kill (this instance never launched or resumed one for this row), but the caller
+      // still asked this session closed: markClosed is itself a no-op for an unknown or already-closed
+      // id (MIN-04), so this only ever closes a real open-but-handle-less row instead of leaving it stuck.
+      this.markClosed(sessionId, undefined);
+      return;
+    }
     // The process may take the whole escalation window to exit: nothing is typed or submitted into it meanwhile.
     this.enter(sessionId, { name: 'closing' });
     await this.killWithEscalation(handle, options?.escalateAfterMs ?? DEFAULT_CLOSE_ESCALATE_MS);
@@ -939,6 +967,7 @@ export class SessionService {
     this.assertNotShuttingDown();
     const tokens = this.repo.tokens(session.id);
     if (!tokens) return { launched: false, reason: 'session has no stored tokens' }; // defensive: every session row carries its tokens
+    this.warnIfPermissiveSettings(session.harness, session.directory);
     const harness = this.harnessFor(session.harness);
     const permissionMode = this.resolveResumePermissionMode(session);
     // A daemon crash can leave the pre-restart process alive for a moment in its orphaned PTY (ponytail:
@@ -989,6 +1018,15 @@ export class SessionService {
     return { launched: true };
   }
 
+  // Read-only, best-effort governance signal: a worktree whose .claude settings grant a permission
+  // bypass can let a local session skip the daemon's own approval gate. Only claude-cli actually reads
+  // those settings, so a 'fake' harness launch is never inspected.
+  private warnIfPermissiveSettings(harnessId: Session['harness'], directory: string): void {
+    if (harnessId !== 'claude-cli') return;
+    const warning = findPermissiveSettingsWarning(directory);
+    if (warning) console.warn(`session directory ${directory} has permissive Claude settings: ${warning}`);
+  }
+
   private resolveResumePermissionMode(session: Session): PermissionMode | undefined {
     // session.permissionMode already went through normalizePermissionMode() once in the repository
     // mapper, which discards whether the raw column value was recognized — re-read the raw column here
@@ -1000,6 +1038,14 @@ export class SessionService {
   }
 
   private armResumeTimeout(sessionId: string, handle: HarnessHandle): void {
+    this.armStartTimeout(sessionId, handle, this.deps.resumeTimeoutMs ?? DEFAULT_RESUME_TIMEOUT_MS);
+  }
+
+  private armFirstStartTimeout(sessionId: string, handle: HarnessHandle): void {
+    this.armStartTimeout(sessionId, handle, this.deps.firstStartTimeoutMs ?? DEFAULT_FIRST_START_TIMEOUT_MS);
+  }
+
+  private armStartTimeout(sessionId: string, handle: HarnessHandle, timeoutMs: number): void {
     const timer = setTimeout(() => {
       if (activeHandleBySessionId.get(sessionId) !== handle) return; // already replaced or closed by something else
       // Detach first so the handle's own onExit (fired by killWithEscalation below) can't race this
@@ -1013,7 +1059,7 @@ export class SessionService {
         if (activeHandleBySessionId.has(sessionId)) return;
         this.markClosed(sessionId, RESUME_TIMEOUT_EXIT_CODE);
       });
-    }, this.deps.resumeTimeoutMs ?? DEFAULT_RESUME_TIMEOUT_MS);
+    }, timeoutMs);
     this.resumeTimers.set(sessionId, timer);
   }
 

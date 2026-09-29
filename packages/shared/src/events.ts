@@ -12,6 +12,7 @@ export type ServerEvent =
   | { type: 'session.permission_mode_changed'; sessionId: string; mode: PermissionMode }
   | { type: 'session.updated'; session: Session }
   | { type: 'session.reopened'; sessionId: string }
+  | { type: 'session.relaunching'; sessionId: string }
   | { type: 'message.queued'; sessionId: string; messageId: string }
   | { type: 'message.delivered'; sessionId: string; messageId: string }
   | { type: 'approval.created'; approval: Approval }

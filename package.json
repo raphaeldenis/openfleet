@@ -9,7 +9,7 @@
   },
   "scripts": {
     "test": "vitest run",
-    "typecheck": "pnpm -r --filter './packages/*' exec tsc --noEmit",
+    "typecheck": "pnpm -r --filter './packages/*' exec tsc --noEmit && pnpm --filter @openfleet/desktop exec tsc -p tsconfig.app.json --noEmit",
     "dev:core": "pnpm --filter @openfleet/core dev",
     "dev:desktop": "pnpm --filter @openfleet/desktop tauri dev",
     "dev": "concurrently -k \"pnpm dev:core\" \"pnpm dev:desktop\"",
