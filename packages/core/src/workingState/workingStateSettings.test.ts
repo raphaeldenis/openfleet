@@ -36,6 +36,21 @@ describe('the operator sets the working state size cap in config.json', () => {
     expect(() => loadWorkingStateSettings(configWith(contents))).toThrow(/workingState/);
   });
 
+  it('operator can enable enforcement and set the state age limit, defaulting to enforced at 30 minutes', () => {
+    expect(loadWorkingStateSettings(configWith(undefined))).toMatchObject({ enforce: true, maxAgeMinutes: 30 });
+    expect(loadWorkingStateSettings(configWith('{"workingState":{"enforce":false,"maxAgeMinutes":5}}'))).toMatchObject({ enforce: false, maxAgeMinutes: 5 });
+    expect(loadWorkingStateSettings(configWith('{"workingState":{"maxAgeMinutes":1}}')).maxAgeMinutes).toBe(1);
+    expect(loadWorkingStateSettings(configWith('{"workingState":{"maxAgeMinutes":1440}}')).maxAgeMinutes).toBe(1440);
+  });
+
+  it.each([0, 1441, 2.5, '30', null])('refuses to boot on a maxAgeMinutes of %s instead of clamping it', (invalid) => {
+    expect(() => loadWorkingStateSettings(configWith(JSON.stringify({ workingState: { maxAgeMinutes: invalid } })))).toThrow(/workingState/);
+  });
+
+  it.each(['false', 0, null])('refuses to boot on an enforce of %s', (invalid) => {
+    expect(() => loadWorkingStateSettings(configWith(JSON.stringify({ workingState: { enforce: invalid } })))).toThrow(/workingState/);
+  });
+
   it('leaves the other keys of config.json, like the models table, alone', () => {
     expect(loadWorkingStateSettings(configWith('{"models":{"opus":"opus"},"somethingElse":true}')).maxBytes).toBe(6144);
   });
