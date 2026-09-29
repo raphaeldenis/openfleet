@@ -520,6 +520,7 @@ describe('early-escape hint — the session lives on around it', () => {
 
     // Act
     await send({ type: 'session.updated', session: session({ name: 'Gimli the Renamed' }) });
+    await elapse(0);
 
     // Assert
     expect(viewedSessionName()).toContain('Gimli the Renamed');

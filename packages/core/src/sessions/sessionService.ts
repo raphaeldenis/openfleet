@@ -13,7 +13,7 @@ import { MessageQueue } from './messageQueue.js';
 import { findResolvedModel, readTranscriptTail } from './resolvedModel.js';
 import { wrapAgentMessage } from './messageEnvelope.js';
 import { normalizePermissionMode, SessionRepository } from './sessionRepository.js';
-import { canDeliverNow, nextState, provesTurnEnded, type SessionInput } from './stateMachine.js';
+import { canDeliverNow, isClear, nextState, provesTurnEnded, type SessionInput } from './stateMachine.js';
 
 export interface SessionServiceDeps { db: DatabaseSync; bus: EventBus; harnesses: Harness[]; baseUrl: string; worktreesRoot: string; resumeTimeoutMs?: number; firstStartTimeoutMs?: number; submitKeystrokeDelayMs?: number }
 
@@ -551,6 +551,9 @@ export class SessionService {
 
   applyInput(sessionId: string, input: SessionInput): void {
     const session = this.require(sessionId);
+    // The outgoing conversation's SessionEnd carries its old transcript; the SessionStart that follows names the new one.
+    const endsOutgoingConversation = input.kind === 'hook' && isClear(input.event);
+    if (endsOutgoingConversation) return;
     if (input.kind === 'hook' && input.event.transcript_path && isTrustedTranscriptPath(input.event.transcript_path)) {
       this.transcriptPaths.set(sessionId, input.event.transcript_path);
     }
