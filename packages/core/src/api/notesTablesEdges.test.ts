@@ -156,7 +156,15 @@ describe('user searching notes never sees a 500', () => {
     const prefix = await (await call('GET', `/api/notes/search?projectId=p1&q=${encodeURIComponent('cafe')}`)).json() as { items: unknown[] };
 
     expect(accent.items).toHaveLength(1);
-    expect(prefix.items.length).toBeGreaterThanOrEqual(0);
+    expect(prefix.items).toHaveLength(1);
+  });
+
+  it.each([[16, 200], [17, 400]])('answers a search of %i terms with %i', async (termCount, expected) => {
+    const query = Array.from({ length: termCount }, (_, index) => `t${index}`).join(' ');
+
+    const response = await call('GET', `/api/notes/search?projectId=p1&q=${encodeURIComponent(query)}`);
+
+    expect(response.status).toBe(expected);
   });
 
   it('does not let a project see another project\'s hits and reports total as the page size', async () => {
@@ -180,10 +188,10 @@ describe('user hitting an unknown method or a malformed path is refused cleanly'
       expect([401, 404, 405]).toContain(anonymous.status);
     });
 
-  it('answers a malformed percent-escape in a hook token with 4xx, not 500', async () => {
+  it('answers a malformed percent-escape in a hook token with 404', async () => {
     const response = await call('POST', '/hooks/%E0%A4%A', {}, {});
 
-    expect(response.status).toBeLessThan(500);
+    expect(response.status).toBe(404);
   });
 
   it('answers a malformed percent-escape in the row id of the history route with 404', async () => {
@@ -192,6 +200,24 @@ describe('user hitting an unknown method or a malformed path is refused cleanly'
     const response = await call('GET', `/api/data-stores/${store.id}/rows/%E0%A4%A/changes?projectId=p1`);
 
     expect(response.status).toBe(404);
+  });
+});
+
+describe('user giving a note a title with surrounding whitespace', () => {
+  it('gets the title trimmed on create and on PATCH', async () => {
+    const created = await createNote({ title: ' x ' });
+
+    const patched = await (await call('PATCH', `/api/notes/${created.id}`, { projectId: 'p1', expectedRev: 1, title: '  y  ' })).json() as { title: string };
+
+    expect([created.title, patched.title]).toEqual(['x', 'y']);
+  });
+
+  it('is refused with 400 when the PATCH title is only whitespace', async () => {
+    const note = await createNote();
+
+    const response = await call('PATCH', `/api/notes/${note.id}`, { projectId: 'p1', expectedRev: 1, title: '   ' });
+
+    expect(response.status).toBe(400);
   });
 });
 
