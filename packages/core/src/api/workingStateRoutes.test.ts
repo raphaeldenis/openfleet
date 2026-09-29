@@ -247,8 +247,10 @@ describe('WS session.working_state', () => {
     await sessions.close(child.id);
     const events = await settle(connection, manager.id);
 
+    const childClosedAt = sessions.get(child.id)?.closedAt;
+    expect(childClosedAt).toBeDefined();
     expect(events).toHaveLength(1);
-    expect(events[0]).toEqual({ type: 'session.working_state', state: expect.objectContaining({ sessionId: manager.id }) });
+    expect(events[0]).toEqual({ type: 'session.working_state', state: expect.objectContaining({ sessionId: manager.id, fleetChangedAt: childClosedAt }) });
     connection.ws.close();
   });
 

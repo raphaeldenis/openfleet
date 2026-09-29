@@ -16,7 +16,6 @@ import { WorkingStateService } from '../workingState/workingStateService.js';
 import { startServer } from './server.js';
 
 const MAX_BYTES = 6144;
-const DEFAULT_MAX_AGE_MINUTES = 30;
 
 let server: Awaited<ReturnType<typeof startServer>>;
 let sessions: SessionService;
@@ -130,7 +129,7 @@ describe('working-state route under hostile ids', () => {
 });
 
 describe('working-state without the service', () => {
-  it('has no route and a snapshot with the default settings when the daemon hands over no service', async () => {
+  it('has no route and a snapshot that omits every working-state field when the daemon hands over no service', async () => {
     await server.close();
     await startTestServer({ withWorkingStates: false });
     const session = await createSession();
@@ -141,28 +140,27 @@ describe('working-state without the service', () => {
 
     expect(response.status).toBe(404);
     expect(await response.json()).not.toEqual(expect.objectContaining({ plan: expect.anything() }));
-    expect(snapshot.workingStates).toEqual([]);
-    expect(snapshot.workingStateMaxAgeMinutes).toBe(DEFAULT_MAX_AGE_MINUTES);
-    expect(snapshot.workingStateMaxBytes).toBe(MAX_BYTES);
+    expect(snapshot).not.toHaveProperty('workingStates');
+    expect(snapshot).not.toHaveProperty('workingStateMaxAgeMinutes');
+    expect(snapshot).not.toHaveProperty('workingStateMaxBytes');
     ws.close();
   });
 });
 
 describe('fleet events around odd parents', () => {
-  it('does not crash and stays silent for a child whose parent id is unknown', async () => {
+  it('refuses a child whose parent id is unknown and stays silent about it', async () => {
     const bystander = await createSession('Bystander');
     workingStates.update(bystander.id, sections());
     const connection = await connect();
 
-    const orphan = await createSession('Orphan', 'no-such-parent').catch(() => undefined);
-    if (orphan) await sessions.close(orphan.id);
+    await expect(createSession('Orphan', 'no-such-parent')).rejects.toThrow(/FOREIGN KEY/);
     const states = await settle(connection, bystander.id);
 
     expect(states).toEqual([]);
     connection.ws.close();
   });
 
-  it('still announces the state of a parent that is already closed when a child of it closes', async () => {
+  it('sends the state of an already closed parent when its child closes, while the snapshot leaves that parent out', async () => {
     const manager = await createSession('Lead');
     const child = await createSession('Child', manager.id);
     workingStates.update(manager.id, sections());
@@ -172,7 +170,8 @@ describe('fleet events around odd parents', () => {
     await sessions.close(child.id);
     const states = await settle(connection, child.id);
 
-    expect(states.every((state) => state.sessionId === manager.id)).toBe(true);
+    expect(states).toHaveLength(1);
+    expect(states.map((state) => state.sessionId)).toEqual([manager.id]);
     expect(connection.snapshot.workingStates.map((state) => state.sessionId)).not.toContain(manager.id);
     connection.ws.close();
   });
@@ -226,17 +225,15 @@ describe('working-state load and size', () => {
     late.ws.close();
   });
 
-  it('gives a client connecting during an update the new state, from the snapshot or the event, never neither', async () => {
+  it('puts an update made while the client is still fetching its ticket into its snapshot', async () => {
     const session = await createSession();
     workingStates.update(session.id, sections({ plan: ['old'] }));
 
     const connecting = connect();
     workingStates.update(session.id, sections({ plan: ['new'] }));
     const connection = await connecting;
-    const states = await settle(connection, session.id);
 
-    const seen = [...connection.snapshot.workingStates, ...states].map((state) => state.plan[0]);
-    expect(seen.at(-1)).toBe('new');
+    expect(connection.snapshot.workingStates.map((state) => state.plan[0])).toEqual(['new']);
     connection.ws.close();
   });
 

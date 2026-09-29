@@ -631,7 +631,7 @@ describe('REST', () => {
     const ws = new WebSocket(await wsUrl());
     const nextMessage = () => new Promise<string>((resolve) => ws.addEventListener('message', (m) => resolve(String(m.data)), { once: true }));
 
-    expect(JSON.parse(await nextMessage())).toEqual({ type: 'snapshot', sessions: [], approvals: [], managers: [], workingStates: [], workingStateMaxAgeMinutes: 30, workingStateMaxBytes: 6144 });
+    expect(JSON.parse(await nextMessage())).toEqual({ type: 'snapshot', sessions: [], approvals: [], managers: [] });
 
     const secondMessage = nextMessage();
     await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) });

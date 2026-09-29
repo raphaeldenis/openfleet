@@ -9,7 +9,7 @@ import type { EventBus } from '../events/eventBus.js';
 import { log } from '../logger.js';
 import type { ManagerService } from '../managers/managerService.js';
 import type { SessionService } from '../sessions/sessionService.js';
-import { DEFAULT_WORKING_STATE_MAX_AGE_MINUTES, DEFAULT_WORKING_STATE_MAX_BYTES } from '../workingState/workingStateSettings.js';
+import { DEFAULT_WORKING_STATE_MAX_AGE_MINUTES } from '../workingState/workingStateSettings.js';
 import type { WorkingStateService } from '../workingState/workingStateService.js';
 import type { WsTicketStore } from './wsTicketStore.js';
 
@@ -77,14 +77,17 @@ export function createWsHandler(deps: { bus: EventBus; sessions: SessionService;
   const openSessionWorkingStates = () => deps.sessions.list()
     .filter((session) => session.state !== 'closed')
     .flatMap((session) => deps.workingStates?.get(session.id) ?? []);
+  const workingStateSnapshotFields = () => deps.workingStates ? {
+    workingStates: openSessionWorkingStates(),
+    workingStateMaxAgeMinutes: deps.workingStateMaxAgeMinutes ?? DEFAULT_WORKING_STATE_MAX_AGE_MINUTES,
+    workingStateMaxBytes: deps.workingStates.maxBytes,
+  } : {};
   wss.on('connection', (socket: WebSocket) => {
     // Sent synchronously, before any broadcast event can reach this socket, so the client always has a
     // baseline to upsert onto — a session created in the connect/open race just arrives twice, harmlessly.
     send(socket, {
       type: 'snapshot', sessions: deps.sessions.list(), approvals: deps.approvals.listPending(), managers: deps.managers.listViews(),
-      workingStates: openSessionWorkingStates(),
-      workingStateMaxAgeMinutes: deps.workingStateMaxAgeMinutes ?? DEFAULT_WORKING_STATE_MAX_AGE_MINUTES,
-      workingStateMaxBytes: deps.workingStates?.maxBytes ?? DEFAULT_WORKING_STATE_MAX_BYTES,
+      ...workingStateSnapshotFields(),
     });
     socket.on('message', (raw) => {
       const message = parseClientMessage(raw);
