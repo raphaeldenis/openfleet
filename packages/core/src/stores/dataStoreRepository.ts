@@ -122,6 +122,16 @@ export class DataStoreRepository {
     return view ? toView(view) : undefined;
   }
 
+  /** Replaces a view's config; the caller (service) has already verified the view exists and is authorized. */
+  updateView(id: string, config: DsViewConfig): DsView {
+    this.db.prepare('UPDATE ds_views SET config_json = ? WHERE id = ?').run(JSON.stringify(config), id);
+    return { ...this.findView(id)!, config };
+  }
+
+  deleteView(id: string): void {
+    this.db.prepare('DELETE FROM ds_views WHERE id = ?').run(id);
+  }
+
   listColumns(storeId: string): DsColumn[] {
     const rows = this.db.prepare('SELECT * FROM ds_columns WHERE store_id = ? ORDER BY sort_order, created_at, id').all(storeId) as unknown as ColumnRow[];
     return rows.map(toColumn);

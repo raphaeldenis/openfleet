@@ -242,11 +242,27 @@ export class DataStoreService {
     return this.repo.listViews(storeId);
   }
 
+  updateView(viewId: string, input: Scope & { config: DsViewConfig }): DsView {
+    const view = this.authorizeView(viewId, input.projectId);
+    const parsed = DsViewConfigSchema.safeParse(input.config);
+    if (!parsed.success) throw new InvalidViewConfigError('Invalid view config');
+    const config = parsed.data;
+    this.requireColumns(view.storeId, [
+      ...(config.where ?? []).map((clause) => clause.columnId),
+      ...(config.orderBy ?? []).map((term) => term.columnId),
+      ...(config.groupByColumnId ? [config.groupByColumnId] : []),
+    ]);
+    return this.guarded(() => this.repo.updateView(viewId, config));
+  }
+
+  deleteView(viewId: string, input: Scope): void {
+    this.authorizeView(viewId, input.projectId);
+    this.guarded(() => this.repo.deleteView(viewId));
+  }
+
   /** One bucket per select option in option order, empty ones included. Rows with no (or a stale) value are left out. */
   kanbanGroups(viewId: string, input: Scope): KanbanGroup[] {
-    const view = this.repo.findView(viewId);
-    const owner = view ? this.repo.findStore(view.storeId) : undefined;
-    if (!view || owner?.projectId !== input.projectId) throw new ViewNotFoundError(viewId);
+    const view = this.authorizeView(viewId, input.projectId);
 
     const groupBy = this.repo.listColumns(view.storeId).find((column) => column.id === view.config.groupByColumnId);
     if (groupBy?.columnType !== 'select') throw new InvalidViewConfigError('The kanban group-by column must be a select column');
@@ -257,6 +273,13 @@ export class DataStoreService {
 
   private authorize(storeId: string, projectId: string): void {
     if (this.repo.findStore(storeId)?.projectId !== projectId) throw new StoreNotFoundError(storeId);
+  }
+
+  private authorizeView(viewId: string, projectId: string): DsView {
+    const view = this.repo.findView(viewId);
+    const owner = view ? this.repo.findStore(view.storeId) : undefined;
+    if (!view || owner?.projectId !== projectId) throw new ViewNotFoundError(viewId);
+    return view;
   }
 
   /** Refuses an insert that would push a store past MAX_ROWS_PER_STORE; nothing is written when it throws. */
