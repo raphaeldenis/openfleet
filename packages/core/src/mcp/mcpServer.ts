@@ -20,7 +20,7 @@ import { registerTableViewTools } from './tableViewTools.js';
 import { registerTools } from './tools.js';
 import { registerWorkingStateTools } from './workingStateTools.js';
 
-export function createMcpHandler(deps: { sessions: SessionService; approvals: ApprovalService; managers: ManagerService; pulseScheduler: PulseScheduler; modelTable: ModelTable; stores: DataStoreService; storeRepo: DataStoreRepository; notes: NoteService; noteRepo: NoteRepository; docs: DocsFolderService; workingStates?: WorkingStateService; worktreesRoot?: string }) {
+export function createMcpHandler(deps: { sessions: SessionService; approvals: ApprovalService; managers: ManagerService; pulseScheduler: PulseScheduler; modelTable: ModelTable; stores: DataStoreService; storeRepo: DataStoreRepository; notes: NoteService; noteRepo: NoteRepository; docs: DocsFolderService; workingStates: WorkingStateService; worktreesRoot?: string }) {
   return async (req: IncomingMessage, res: ServerResponse, body: unknown): Promise<void> => {
     const token = (req.headers.authorization ?? '').replace(/^Bearer /, '');
     const caller = deps.sessions.byMcpToken(token);
@@ -33,7 +33,7 @@ export function createMcpHandler(deps: { sessions: SessionService; approvals: Ap
     registerTableViewTools(server, { stores: deps.stores, storeRepo: deps.storeRepo, caller });
     registerNoteTools(server, { notes: deps.notes, noteRepo: deps.noteRepo, docs: deps.docs, caller });
     registerNoteVersionTools(server, { notes: deps.notes, noteRepo: deps.noteRepo, docs: deps.docs, caller });
-    if (deps.workingStates) registerWorkingStateTools(server, { workingStates: deps.workingStates, sessions: deps.sessions, caller });
+    registerWorkingStateTools(server, { workingStates: deps.workingStates, sessions: deps.sessions, caller });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on('close', () => { void transport.close(); void server.close(); });
     await server.connect(transport);

@@ -27,4 +27,20 @@ describe('the operator sets the working state size cap in config.json', () => {
   it.each([1023, 8193, 6144.5, '6144', null])('refuses to boot on a maxBytes of %s', (invalid) => {
     expect(() => loadWorkingStateSettings(configWithMaxBytes(invalid))).toThrow(/workingState/);
   });
+
+  it.each([
+    ['a misspelled maxBytes', '{"workingState":{"maxByte":2048}}'],
+    ['a misspelled workingState', '{"workingstate":{"maxBytes":2048}}'],
+    ['an unknown key next to maxBytes', '{"workingState":{"maxBytes":2048,"maxBytez":1}}'],
+  ])('refuses to boot on %s instead of running on the default cap', (_label, contents) => {
+    expect(() => loadWorkingStateSettings(configWith(contents))).toThrow(/workingState/);
+  });
+
+  it('leaves the other keys of config.json, like the models table, alone', () => {
+    expect(loadWorkingStateSettings(configWith('{"models":{"opus":"opus"},"somethingElse":true}')).maxBytes).toBe(6144);
+  });
+
+  it.each([['an empty file', ''], ['a truncated file', '{'], ['a BOM-prefixed file', '﻿{"workingState":{"maxBytes":2048}}']])('refuses to boot on %s', (_label, contents) => {
+    expect(() => loadWorkingStateSettings(configWith(contents))).toThrow(/workingState/);
+  });
 });

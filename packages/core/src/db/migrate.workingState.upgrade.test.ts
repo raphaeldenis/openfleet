@@ -43,6 +43,28 @@ describe('the working state migration upgrading a database that predates it', ()
     expect(versions).toContain('013_working_state');
   });
 
+  it('creates a STRICT table whose sections and update time are mandatory', () => {
+    const db = openDatabaseUpgradedFromBeforeWorkingState();
+
+    const table = db.prepare("SELECT strict FROM pragma_table_list WHERE name = 'session_working_states'").get();
+    const columns = db.prepare("SELECT name, \"notnull\" AS required FROM pragma_table_info('session_working_states')").all();
+
+    expect(table).toEqual({ strict: 1 });
+    expect(columns).toEqual([
+      { name: 'session_id', required: 1 },
+      { name: 'sections_json', required: 1 },
+      { name: 'updated_at', required: 1 },
+    ]);
+  });
+
+  it('indexes the children of a session so the fleet change lookup does not scan every session', () => {
+    const db = openDatabaseUpgradedFromBeforeWorkingState();
+
+    const plan = db.prepare('EXPLAIN QUERY PLAN SELECT created_at FROM sessions WHERE parent_id = ?').all('lead') as { detail: string }[];
+
+    expect(plan.map((step) => step.detail).join('\n')).toContain('sessions_parent');
+  });
+
   it('holds one state per existing session and refuses a state for a missing session', () => {
     const db = openDatabaseUpgradedFromBeforeWorkingState();
     const insertState = (sessionId: string, sections: string) =>

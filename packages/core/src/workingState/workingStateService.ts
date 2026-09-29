@@ -1,7 +1,7 @@
-import type { WorkingState, WorkingStateSections } from '@openfleet/shared';
+import { WorkingStateSectionsSchema, type WorkingState, type WorkingStateSections } from '@openfleet/shared';
 import { randomUUID } from 'node:crypto';
 import { chmodSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { log } from '../logger.js';
 import { renderWorkingState } from './renderWorkingState.js';
@@ -11,6 +11,10 @@ export class WorkingStateTooLargeError extends Error {
     super(`working state is ${bytes} bytes, the cap is ${maxBytes}: keep the current state only, move history to the log`);
   }
 }
+
+const MIRROR_WARNING = 'the state is saved but its mirror file could not be written';
+const SESSION_ID_SHAPE = /^[0-9a-f-]{36}$/;
+const isSafeMirrorFileStem = (sessionId: string) => SESSION_ID_SHAPE.test(sessionId) && basename(sessionId) === sessionId;
 
 export interface WorkingStateServiceDeps { db: DatabaseSync; clock: () => string; stateRoot: string; maxBytes: number }
 
@@ -30,7 +34,8 @@ export class WorkingStateService {
   }
 
   /** Replaces the whole state of a session, stamped with the daemon clock; the mirror file follows and never fails the update. */
-  update(sessionId: string, sections: WorkingStateSections): WorkingStateUpdate {
+  update(sessionId: string, candidateSections: WorkingStateSections): WorkingStateUpdate {
+    const sections = WorkingStateSectionsSchema.parse(candidateSections);
     const bytes = Buffer.byteLength(renderWorkingState(sections), 'utf8');
     if (bytes > this.deps.maxBytes) throw new WorkingStateTooLargeError(bytes, this.deps.maxBytes);
 
@@ -78,6 +83,10 @@ export class WorkingStateService {
   }
 
   private writeMirror(sessionId: string, sections: WorkingStateSections): string | undefined {
+    if (!isSafeMirrorFileStem(sessionId)) {
+      log('warn', `working state mirror refused for session id ${JSON.stringify(sessionId)}: not a plain session id`);
+      return MIRROR_WARNING;
+    }
     const mirrorPath = join(this.deps.stateRoot, `${sessionId}.md`);
     const temporaryPath = `${mirrorPath}.${randomUUID()}.tmp`;
     try {
@@ -85,12 +94,13 @@ export class WorkingStateService {
       // mkdirSync's mode is ignored on a directory that already exists: tightened on every write.
       chmodSync(this.deps.stateRoot, 0o700);
       writeFileSync(temporaryPath, renderWorkingState(sections), { flag: 'wx', mode: 0o600 });
+      // The atomic replace is not observable from a test: a reader seeing a half-written mirror is an accepted, untested risk.
       renameSync(temporaryPath, mirrorPath);
       return undefined;
     } catch (error) {
       this.removeTemporaryFile(temporaryPath);
       log('warn', `working state mirror not written for session ${sessionId}`, error);
-      return 'the state is saved but its mirror file could not be written';
+      return MIRROR_WARNING;
     }
   }
 

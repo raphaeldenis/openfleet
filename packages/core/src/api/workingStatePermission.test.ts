@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
 import { ApprovalService } from '../governance/approvalService.js';
@@ -53,9 +53,8 @@ describe('the working state tools never wait for a human', () => {
 
   it.each(['mcp__other__update_working_state', 'mcp__openfleet__update_working_state_now', 'update_working_state', 'mcp__openfleet__update_session'])('still raises an Inbox approval for %s', async (toolName) => {
     const pendingAnswer = askPermissionFor(toolName);
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await vi.waitFor(() => expect(approvals.listPending().map((approval) => approval.toolName)).toEqual([toolName]));
 
-    expect(approvals.listPending().map((approval) => approval.toolName)).toEqual([toolName]);
     await pendingAnswer;
   });
 });

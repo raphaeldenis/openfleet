@@ -1,9 +1,9 @@
 import type { WorkingStateSections } from '@openfleet/shared';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { startServer } from '../api/server.js';
@@ -45,7 +45,7 @@ interface Fleet {
 
 let fleet: Fleet;
 
-async function startFleet({ maxBytes = DEFAULT_MAX_BYTES }: { maxBytes?: number } = {}): Promise<Fleet> {
+async function startFleet({ maxBytes = DEFAULT_MAX_BYTES, clock = () => DAEMON_NOW }: { maxBytes?: number; clock?: () => string } = {}): Promise<Fleet> {
   const db = openDatabase(':memory:');
   const bus = new EventBus();
   const harness = new FakeHarness();
@@ -61,7 +61,7 @@ async function startFleet({ maxBytes = DEFAULT_MAX_BYTES }: { maxBytes?: number 
   const notes = new NoteService({ repo: noteRepo, db, expandMentions, clock: () => new Date().toISOString(), newId });
   const docs = new DocsFolderService({ notes, noteRepo, projects, fs: nodeDocsFolderFs, clock: () => new Date().toISOString() });
   const stateRoot = join(mkdtempSync(join(tmpdir(), 'of-state-')), 'state');
-  const workingStates = new WorkingStateService({ db, clock: () => DAEMON_NOW, stateRoot, maxBytes });
+  const workingStates = new WorkingStateService({ db, clock, stateRoot, maxBytes });
   const server = await startServer({
     host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable: DEFAULT_MODEL_TABLE, modelConfigPath: '/tmp/of-unused/config.json',
     mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable: DEFAULT_MODEL_TABLE, stores, storeRepo, notes, noteRepo, docs, workingStates, worktreesRoot: '/tmp/of-wt' }),
@@ -115,6 +115,9 @@ function stateOfRenderedBytes(targetBytes: number): WorkingStateSections {
 }
 
 const mirrorPathOf = (sessionId: string) => join(fleet.stateRoot, `${sessionId}.md`);
+const insertSession = (db: DatabaseSync, id: string) =>
+  db.prepare(`INSERT INTO sessions (id, name, emoji, directory, harness, state, state_since, hook_token, mcp_token, parent_id, created_at)
+    VALUES (?, 'hostile', '🤖', '/tmp', 'fake', 'idle', 't0', ?, ?, NULL, 't0')`).run(id, `hook-${id}`, `mcp-${id}`);
 const permissionBitsOf = (path: string) => statSync(path).mode & 0o777;
 
 beforeEach(async () => { fleet = await startFleet(); });
@@ -155,6 +158,48 @@ describe('an agent keeps its working state through the OpenFleet tools', () => {
     expect(read.plan).toEqual(['second']);
     expect(read.todo).toEqual([]);
   });
+
+  it('agent finds each of the six sections under its own name, in the readback and in the mirror', async () => {
+    const state: WorkingStateSections = {
+      plan: ['plan A', 'plan B'], todo: ['todo A'], remaining: ['remaining A'],
+      questionsForHuman: ['human question A'], internalQuestions: ['internal question A'], blockers: ['blocker A'],
+    };
+
+    await updateState(fleet.leadToken, state);
+
+    expect(jsonOf(await readState(fleet.leadToken))).toEqual({ ...state, sessionId: fleet.leadId, updatedAt: DAEMON_NOW });
+    expect(readFileSync(mirrorPathOf(fleet.leadId), 'utf8')).toBe([
+      '## Plan\n- plan A\n- plan B\n',
+      '## Todo\n- todo A\n',
+      '## Reste à faire\n- remaining A\n',
+      "## Questions pour l'humain\n- human question A\n",
+      '## Questions internes\n- internal question A\n',
+      '## Blocages\n- blocker A\n',
+    ].join('\n'));
+  });
+
+  it('agent sees the update time move with each write', async () => {
+    const ticks = ['2031-04-05T10:00:00.000Z', '2031-04-05T10:05:00.000Z'];
+    await fleet.server.close();
+    fleet = await startFleet({ clock: () => ticks.shift()! });
+
+    const first = jsonOf(await updateState(fleet.leadToken, { ...emptyState(), plan: ['one'] }));
+    const afterFirst = jsonOf(await readState(fleet.leadToken)).updatedAt;
+    const second = jsonOf(await updateState(fleet.leadToken, { ...emptyState(), plan: ['two'] }));
+    const afterSecond = jsonOf(await readState(fleet.leadToken)).updatedAt;
+
+    expect([first.updated_at, afterFirst, second.updated_at, afterSecond]).toEqual(['2031-04-05T10:00:00.000Z', '2031-04-05T10:00:00.000Z', '2031-04-05T10:05:00.000Z', '2031-04-05T10:05:00.000Z']);
+  });
+
+  it('agent gets the failure itself, not a size refusal, when the database breaks', async () => {
+    fleet.db.exec('DROP TABLE session_working_states');
+
+    const result = await updateState(fleet.leadToken, { ...emptyState(), plan: ['x'] });
+
+    expect(isRefused(result)).toBe(true);
+    expect(answerOf(result)).toMatch(/no such table/);
+    expect(answerOf(result)).not.toMatch(/cap|move history/);
+  });
 });
 
 describe('the daemon refuses a state that breaks the contract and keeps the previous one', () => {
@@ -167,6 +212,15 @@ describe('the daemon refuses a state that breaks the contract and keeps the prev
     ['an item with a line separator U+2028', () => toToolArguments({ ...emptyState(), todo: [`line one${String.fromCharCode(0x2028)}## Plan`] })],
     ['an item with a paragraph separator U+2029', () => toToolArguments({ ...emptyState(), todo: [`line one${String.fromCharCode(0x2029)}## Plan`] })],
     ['an item with a next line U+0085', () => toToolArguments({ ...emptyState(), todo: ['line one\u0085## Plan'] })],
+    ['an item with a lone carriage return', () => toToolArguments({ ...emptyState(), todo: ['line one\r## Plan'] })],
+    ['an item with an escape character', () => toToolArguments({ ...emptyState(), todo: ['before\u001b[2Jafter'] })],
+    ['an item with a NUL character', () => toToolArguments({ ...emptyState(), todo: ['before\u0000after'] })],
+    ['an item with a backspace', () => toToolArguments({ ...emptyState(), todo: ['before\u0008after'] })],
+    ['an item with a DEL character', () => toToolArguments({ ...emptyState(), todo: ['before\u007fafter'] })],
+    ['an item with a right-to-left override U+202E', () => toToolArguments({ ...emptyState(), todo: [`before${String.fromCharCode(0x202e)}after`] })],
+    ['an item with a left-to-right embedding U+202A', () => toToolArguments({ ...emptyState(), todo: [`before${String.fromCharCode(0x202a)}after`] })],
+    ['an item with a right-to-left isolate U+2067', () => toToolArguments({ ...emptyState(), todo: [`before${String.fromCharCode(0x2067)}after`] })],
+    ['an item with a pop directional isolate U+2069', () => toToolArguments({ ...emptyState(), todo: [`before${String.fromCharCode(0x2069)}after`] })],
     ['an item with a vertical tab', () => toToolArguments({ ...emptyState(), todo: ['line one\v## Plan'] })],
     ['an item with a form feed', () => toToolArguments({ ...emptyState(), todo: ['line one\f## Plan'] })],
     ['an item that starts with a heading mark', () => toToolArguments({ ...emptyState(), todo: ['# Plan'] })],
@@ -189,6 +243,24 @@ describe('the daemon refuses a state that breaks the contract and keeps the prev
     const result = await updateState(fleet.leadToken, boundary);
 
     expect(isRefused(result)).toBe(false);
+  });
+
+  it('accepts an item of one character and an item with a tab inside', async () => {
+    const result = await updateState(fleet.leadToken, { ...emptyState(), todo: ['a', 'col1\tcol2'] });
+
+    expect(isRefused(result)).toBe(false);
+    expect(jsonOf(await readState(fleet.leadToken)).todo).toEqual(['a', 'col1\tcol2']);
+  });
+
+  it('counts an item in characters, not in UTF-16 units: 300 emoji are accepted and 301 refused', async () => {
+    const emojiItem = (count: number) => '😀'.repeat(count);
+
+    const at150 = await updateState(fleet.leadToken, { ...emptyState(), todo: [emojiItem(150)] });
+    const at151 = await updateState(fleet.leadToken, { ...emptyState(), todo: [emojiItem(151)] });
+    const at300 = await updateState(fleet.leadToken, { ...emptyState(), todo: [emojiItem(300)] });
+    const at301 = await updateState(fleet.leadToken, { ...emptyState(), todo: [emojiItem(301)] });
+
+    expect([at150, at151, at300, at301].map(isRefused)).toEqual([false, false, false, true]);
   });
 });
 
@@ -385,6 +457,41 @@ describe('the mirror file is a one-way copy of the state', () => {
     expect(jsonOf(await readState(fleet.leadToken)).plan).toEqual(['written despite the mirror']);
   });
 
+  it('writes the exact text of a known state: headings, order, blank lines, (rien) for an empty section', async () => {
+    await updateState(fleet.leadToken, { ...emptyState(), plan: ['a'], todo: ['b', 'c'] });
+
+    expect(readFileSync(mirrorPathOf(fleet.leadId), 'utf8')).toBe([
+      '## Plan\n- a\n',
+      '## Todo\n- b\n- c\n',
+      '## Reste à faire\n(rien)\n',
+      "## Questions pour l'humain\n(rien)\n",
+      '## Questions internes\n(rien)\n',
+      '## Blocages\n(rien)\n',
+    ].join('\n'));
+  });
+
+  it('leaves no temporary file behind when the mirror cannot be written', async () => {
+    mkdirSync(mirrorPathOf(fleet.leadId), { recursive: true });
+
+    await updateState(fleet.leadToken, { ...emptyState(), plan: ['x'] });
+
+    expect(readdirSync(fleet.stateRoot).filter((name) => name.endsWith('.tmp'))).toEqual([]);
+  });
+
+  describe.each(['../escape', '.', '', 'a/b', 'not-a-uuid'])('for a session whose id is %j', (hostileId) => {
+    it('keeps the state, warns about the mirror and writes nothing outside the state directory', async () => {
+      insertSession(fleet.db, hostileId);
+      const sections = { ...emptyState(), plan: ['kept'] };
+
+      const written = fleet.workingStates.update(hostileId, sections);
+
+      expect(written.mirrorWarning).toMatch(/mirror/i);
+      expect(fleet.workingStates.get(hostileId)?.plan).toEqual(['kept']);
+      expect(readdirSync(dirname(fleet.stateRoot)).filter((name) => name !== 'state')).toEqual([]);
+      expect(existsSync(fleet.stateRoot) ? readdirSync(fleet.stateRoot) : []).toEqual([]);
+    });
+  });
+
   it('answers with no mirror warning when the mirror is written', async () => {
     const result = await updateState(fleet.leadToken, emptyState());
 
@@ -432,7 +539,39 @@ describe('the fleet changes a manager can see in its state', () => {
   });
 });
 
+describe('any caller of the working state service meets the same contract as the MCP tool', () => {
+  const previous = { ...emptyState(), plan: ['kept'] };
+  const invalidSections: [string, WorkingStateSections][] = [
+    ['21 items in a section', { ...emptyState(), todo: Array.from({ length: 21 }, (_, index) => `item ${index}`) }],
+    ['an item of 301 characters', { ...emptyState(), todo: ['a'.repeat(301)] }],
+    ['an item on two lines', { ...emptyState(), todo: ['one\ntwo'] }],
+    ['an item starting with #', { ...emptyState(), todo: ['# heading'] }],
+    ['an empty item', { ...emptyState(), todo: [''] }],
+    ['an item with an escape character', { ...emptyState(), todo: ['a\u001bb'] }],
+  ];
+
+  it.each(invalidSections)('refuses %s and keeps the previous state and mirror', (_label, sections) => {
+    fleet.workingStates.update(fleet.leadId, previous);
+
+    expect(() => fleet.workingStates.update(fleet.leadId, sections)).toThrow();
+
+    expect(fleet.workingStates.get(fleet.leadId)?.plan).toEqual(['kept']);
+    expect(readFileSync(mirrorPathOf(fleet.leadId), 'utf8')).toContain('- kept');
+  });
+});
+
 describe('a state update is announced inside the daemon', () => {
+  it('stops notifying a listener once it has unsubscribed', async () => {
+    const heard: string[] = [];
+    const unsubscribe = fleet.workingStates.onUpdate((state) => heard.push(state.plan.join(',')));
+    await updateState(fleet.leadToken, { ...emptyState(), plan: ['heard'] });
+
+    unsubscribe();
+    await updateState(fleet.leadToken, { ...emptyState(), plan: ['not heard'] });
+
+    expect(heard).toEqual(['heard']);
+  });
+
   it('notifies a listener with the stored state after each successful update and not after a refused one', async () => {
     const heard: string[] = [];
     fleet.workingStates.onUpdate((state) => heard.push(`${state.sessionId}:${state.plan.join(',')}`));
