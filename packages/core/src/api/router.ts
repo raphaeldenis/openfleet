@@ -3,7 +3,17 @@ import { newId } from '../ids.js';
 import { log } from '../logger.js';
 
 export type Handler = (ctx: { req: IncomingMessage; res: ServerResponse; params: Record<string, string>; body: unknown }) => Promise<void> | void;
-interface Route { method: string; pattern: RegExp; keys: string[]; handler: Handler }
+interface Route { method: string; path: string; pattern: RegExp; keys: string[]; handler: Handler }
+
+/** A malformed percent-escape in a path segment reads like an unknown route. */
+export function decodeParams(keys: string[], match: RegExpExecArray): Record<string, string> | undefined {
+  try {
+    return Object.fromEntries(keys.map((k, i) => [k, decodeURIComponent(match[i + 1]!)]));
+  } catch (error) {
+    if (error instanceof URIError) return undefined;
+    throw error;
+  }
+}
 
 export class Router {
   private routes: Route[] = [];
@@ -11,7 +21,12 @@ export class Router {
   add(method: string, path: string, handler: Handler): void {
     const keys: string[] = [];
     const pattern = new RegExp('^' + path.replace(/:([a-zA-Z]+)/g, (_, k: string) => { keys.push(k); return '([^/]+)'; }) + '$');
-    this.routes.push({ method, pattern, keys, handler });
+    this.routes.push({ method, path, pattern, keys, handler });
+  }
+
+  /** Every registered route as `{ method, path }`, path patterns included (`/api/notes/:id`). */
+  list(): { method: string; path: string }[] {
+    return this.routes.map(({ method, path }) => ({ method, path }));
   }
 
   match(method: string, pathname: string): { handler: Handler; params: Record<string, string> } | undefined {
@@ -19,7 +34,8 @@ export class Router {
       if (route.method !== method) continue;
       const m = route.pattern.exec(pathname);
       if (!m) continue;
-      const params = Object.fromEntries(route.keys.map((k, i) => [k, decodeURIComponent(m[i + 1]!)]));
+      const params = decodeParams(route.keys, m);
+      if (!params) return undefined;
       return { handler: route.handler, params };
     }
     return undefined;
@@ -29,6 +45,10 @@ export class Router {
 export function json(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { 'content-type': 'application/json' });
   res.end(JSON.stringify(body));
+}
+
+export function queryParams(req: IncomingMessage): Record<string, string> {
+  return Object.fromEntries(new URL(req.url ?? '/', 'http://localhost').searchParams);
 }
 
 // The query string can carry secrets (tokens, admin credentials); never logged. Headers (bearer tokens,
