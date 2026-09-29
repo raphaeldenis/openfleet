@@ -781,6 +781,18 @@ describe('PulseScheduler — heartbeat and wake-ups', () => {
       expect(typedBodies[1]).toBe('stop everything');
     });
 
+    it('a close while the wake line is being typed starts a new line instead of rewriting the typed one', async () => {
+      const world = await idleManager();
+      const gimli = await spawnChild(world, 'Gimli');
+      const legolas = await spawnChild(world, 'Legolas');
+
+      gimli.childHandle.emitExit(0);
+      legolas.childHandle.emitExit(0);
+
+      expect(world.managerWrites()).toEqual(['[pulse] Child "Gimli" closed (exit code 0).']);
+      expect(queuedWakeBodies(world)).toEqual(['[pulse] Child "Gimli" closed (exit code 0).', '[pulse] Child "Legolas" closed (exit code 0).']);
+    });
+
     it('a close after the wake line was typed starts a new line instead of rewriting the delivered one', async () => {
       const world = await idleManager();
       const gimli = await spawnChild(world, 'Gimli');
