@@ -4,7 +4,7 @@ import { inputBinding, outputBinding } from '@angular/core';
 import { describe, expect, it, vi } from 'vitest';
 import { NotePaneState, NoteStatePanelComponent } from './note-state-panel.component';
 
-async function renderPanel(state: NotePaneState, extra: { title?: string; reason?: string } = {}) {
+async function renderPanel(state: NotePaneState, extra: { title?: string; reason?: string; canOpenInFinder?: boolean } = {}) {
   const retry = vi.fn<() => void>();
   const openInFinder = vi.fn<() => void>();
   const create = vi.fn<() => void>();
@@ -13,6 +13,7 @@ async function renderPanel(state: NotePaneState, extra: { title?: string; reason
       inputBinding('state', () => state),
       inputBinding('title', () => extra.title ?? ''),
       inputBinding('reason', () => extra.reason ?? ''),
+      inputBinding('canOpenInFinder', () => extra.canOpenInFinder ?? true),
       outputBinding<void>('retry', retry),
       outputBinding<void>('openInFinder', openInFinder),
       outputBinding<void>('create', create),
@@ -56,6 +57,15 @@ describe('NoteStatePanelComponent', () => {
       await userEvent.click(screen.getByTestId('note-error-open-in-finder'));
 
       expect(openInFinder).toHaveBeenCalledOnce();
+    });
+  });
+
+  describe('error without a known folder', () => {
+    it('user is not offered Finder when the note has no folder on disk, but can still retry', async () => {
+      await renderPanel('error', { title: 'voice', reason: 'Daemon unreachable', canOpenInFinder: false });
+
+      expect(screen.queryByTestId('note-error-open-in-finder')).not.toBeInTheDocument();
+      expect(screen.getByTestId('note-error-retry')).toBeInTheDocument();
     });
   });
 

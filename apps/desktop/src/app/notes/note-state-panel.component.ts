@@ -21,7 +21,9 @@ const SKELETON_BAR_WIDTHS = ['40%', '90%', '85%', '60%', '95%', '70%'];
           <span class="error-title" data-testid="note-error-title">✕ Couldn’t open “{{ title() }}”</span>
           <span class="error-reason" data-testid="note-error-reason">{{ reason() }}</span>
           <div class="actions">
-            <button type="button" class="of-btn of-btn--secondary" data-testid="note-error-open-in-finder" (click)="openInFinder.emit()">Open in Finder</button>
+            @if (canOpenInFinder()) {
+              <button type="button" class="of-btn of-btn--secondary" data-testid="note-error-open-in-finder" (click)="openInFinder.emit()">Open in Finder</button>
+            }
             <button type="button" class="of-btn of-btn--secondary" data-testid="note-error-retry" (click)="retry.emit()">Retry</button>
           </div>
         </div>
@@ -55,6 +57,7 @@ export class NoteStatePanelComponent {
   readonly state = input.required<NotePaneState>();
   readonly title = input('');
   readonly reason = input('');
+  readonly canOpenInFinder = input(true);
   readonly retry = output<void>();
   readonly openInFinder = output<void>();
   readonly create = output<void>();
