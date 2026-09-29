@@ -86,7 +86,9 @@ export interface DataStoreDetail extends DataStore {
 export const MAX_ROW_BATCH = 500;
 export const MAX_HISTORY_LIMIT = 500;
 
-export const CreateDataStoreRequestSchema = z.object({ projectId: z.string().min(1), displayName: z.string().min(1) });
+export const MAX_STORE_NAME_CHARS = 200;
+
+export const CreateDataStoreRequestSchema = z.object({ projectId: z.string().min(1), displayName: z.string().min(1).max(MAX_STORE_NAME_CHARS) });
 export type CreateDataStoreRequest = z.infer<typeof CreateDataStoreRequestSchema>;
 
 const CellsSchema = z.record(z.string(), z.unknown());

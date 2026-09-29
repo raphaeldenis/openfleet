@@ -1,7 +1,7 @@
 import type { ServerResponse } from 'node:http';
 import {
   CreateDataStoreRequestSchema, InsertRowsRequestSchema, DEFAULT_PAGE_LIMIT, MAX_HISTORY_LIMIT, MAX_NOTE_PAGE_LIMIT, MAX_ROW_PAGE_LIMIT, OrderTermSchema, UpdateRowsRequestSchema, WhereClauseSchema,
-  pageQuerySchema,
+  pageQuerySchema, queryInteger,
   type DataStore, type DataStoreDetail, type DsRow, type DsRowHistoryEntry, type Page, type RowActorKind,
 } from '@openfleet/shared';
 import { z } from 'zod';
@@ -29,11 +29,25 @@ const QueryRowsQuerySchema = ProjectScopeSchema.extend(pageQuerySchema(MAX_ROW_P
   where: jsonParam(z.array(WhereClauseSchema)).optional(),
   orderBy: jsonParam(z.array(OrderTermSchema)).optional(),
 });
-const ChangesQuerySchema = ProjectScopeSchema.extend({ limit: z.coerce.number().int().min(1).max(MAX_HISTORY_LIMIT).default(DEFAULT_PAGE_LIMIT) });
+const ChangesQuerySchema = ProjectScopeSchema.extend({ limit: queryInteger.pipe(z.number().min(1).max(MAX_HISTORY_LIMIT)).default(DEFAULT_PAGE_LIMIT) });
 
 export interface DataStoreRouteDeps {
   stores: DataStoreService;
   storeRepo: DataStoreRepository;
+}
+
+class ProjectNotFoundError extends Error {
+  constructor(projectId: string) {
+    super(`project not found: ${projectId}`);
+  }
+}
+
+function mapConstraintTo<T>(run: () => T, replacement: Error): T {
+  try {
+    return run();
+  } catch (error) {
+    throw error instanceof ConstraintError ? replacement : error;
+  }
 }
 
 /** Maps the data-store domain errors to their HTTP answer; anything else is not a domain error and propagates. */
@@ -41,6 +55,7 @@ function respondToStoreErrors(res: ServerResponse, run: () => void): void {
   try {
     run();
   } catch (error) {
+    if (error instanceof ProjectNotFoundError) return json(res, 404, { error: 'project_not_found' });
     if (error instanceof StoreNotFoundError || error instanceof RowNotFoundError) return json(res, 404, { error: 'not_found' });
     if (error instanceof DuplicateNameError) return json(res, 409, { error: 'duplicate_name' });
     if (error instanceof ConstraintError) return json(res, 409, { error: 'constraint_violation', detail: error.message });
@@ -68,7 +83,11 @@ export function registerDataStoreRoutes(router: Router, { stores, storeRepo }: D
 
   router.add('POST', '/api/data-stores', ({ res, body }) => {
     const { projectId, displayName } = CreateDataStoreRequestSchema.parse(body);
-    respondToStoreErrors(res, () => json(res, 201, stores.createStore({ projectId, displayName })));
+    respondToStoreErrors(res, () => {
+      // createStore's only foreign key is the project
+      const store = mapConstraintTo(() => stores.createStore({ projectId, displayName }), new ProjectNotFoundError(projectId));
+      json(res, 201, store);
+    });
   });
 
   router.add('GET', '/api/data-stores/:id', ({ req, res, params }) => {

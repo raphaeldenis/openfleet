@@ -1,6 +1,6 @@
 import type { ServerResponse } from 'node:http';
 import {
-  CreateNoteRequestSchema, MAX_NOTE_PAGE_LIMIT, NoteFolderSchema, RestoreNoteRequestSchema, UpdateNoteRequestSchema, pageQuerySchema,
+  CreateNoteRequestSchema, MAX_NOTE_PAGE_LIMIT, NoteFolderSchema, RestoreNoteRequestSchema, UpdateNoteRequestSchema, pageQuerySchema, queryInteger,
   type Note, type NoteSummary, type NoteVersionSummary, type NoteView, type Page,
 } from '@openfleet/shared';
 import { z } from 'zod';
@@ -19,7 +19,7 @@ const ProjectScopeSchema = z.object({ projectId: z.string().min(1) });
 const ListNotesQuerySchema = ProjectScopeSchema.extend({ folder: NoteFolderSchema.optional() }).extend(pageQuerySchema(MAX_NOTE_PAGE_LIMIT).shape);
 const VersionsQuerySchema = ProjectScopeSchema.extend(pageQuerySchema(MAX_NOTE_PAGE_LIMIT).shape);
 const SearchNotesQuerySchema = ProjectScopeSchema.extend({ q: z.string().max(MAX_QUERY_CHARS).default(''),
-  limit: z.coerce.number().int().min(1).max(MAX_SEARCH_RESULTS).default(MAX_SEARCH_RESULTS),
+  limit: queryInteger.pipe(z.number().min(1).max(MAX_SEARCH_RESULTS)).default(MAX_SEARCH_RESULTS),
 });
 
 export interface NoteRouteDeps {
@@ -130,7 +130,7 @@ export function registerNoteRoutes(router: Router, { notes, noteRepo, docs }: No
       const current = requireOwnNote(projectId, params.id!);
       const target = noteRepo.getVersion(current.id, rev);
       if (!target) throw new VersionNotFoundError(rev);
-      json(res, 200, viewOf(commitBody(current, target.bodyMd, expectedRev ?? current.rev)));
+      json(res, 200, viewOf(commitBody(current, target.bodyMd, expectedRev)));
     });
   });
 }

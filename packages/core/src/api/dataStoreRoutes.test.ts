@@ -145,7 +145,7 @@ describe('data store REST routes', () => {
       expect(tooMany.status).toBe(400);
     });
 
-    it('refuses a duplicate name with 409, an empty name with 400 and an unknown project with 409', async () => {
+    it('refuses a duplicate name with 409, an empty name with 400 and an unknown project with 404', async () => {
       stores.createStore({ projectId: 'p1', displayName: 'Inventory' });
 
       const duplicate = await call('POST', '/api/data-stores', { projectId: 'p1', displayName: 'Inventory' });
@@ -157,7 +157,31 @@ describe('data store REST routes', () => {
       expect(await duplicate.json()).toMatchObject({ error: 'duplicate_name' });
       expect(empty.status).toBe(400);
       expect(noName.status).toBe(400);
-      expect(ghost.status).toBe(409);
+      expect(ghost.status).toBe(404);
+      expect(await ghost.json()).toEqual({ error: 'project_not_found' });
+    });
+
+    it('refuses a store name over 200 characters with 400 and accepts exactly 200', async () => {
+      const tooLong = await call('POST', '/api/data-stores', { projectId: 'p1', displayName: 'n'.repeat(201) });
+      const atLimit = await call('POST', '/api/data-stores', { projectId: 'p1', displayName: 'n'.repeat(200) });
+
+      expect(tooLong.status).toBe(400);
+      expect(atLimit.status).toBe(201);
+    });
+
+    it.each(['', '%20', '-1', '1.5', 'abc'])('refuses limit=%j on a list with 400', async (limit) => {
+      const response = await call('GET', `/api/data-stores?projectId=p1&limit=${limit}`);
+
+      expect(response.status).toBe(400);
+    });
+
+    it('refuses a blank limit on the row changes with 400', async () => {
+      const { store, name, qty } = seedStore();
+      const [bolt] = (await insertRows(store.id, { name, qty }, [['bolt', 1]])).items;
+
+      const response = await call('GET', `/api/data-stores/${store.id}/rows/${bolt!.id}/changes?projectId=p1&limit=`);
+
+      expect(response.status).toBe(400);
     });
 
     it('shows a store with its columns in order', async () => {

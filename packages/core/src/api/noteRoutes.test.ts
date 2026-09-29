@@ -86,7 +86,7 @@ const NOTE_ROUTES: { method: string; path: string; body?: Record<string, unknown
   { method: 'POST', path: '/api/notes', body: { projectId: 'p1', title: 't', bodyMd: '' } },
   { method: 'PATCH', path: '/api/notes/n1', body: { projectId: 'p1', expectedRev: 1, bodyMd: 'x' } },
   { method: 'GET', path: '/api/notes/n1/versions?projectId=p1' },
-  { method: 'POST', path: '/api/notes/n1/restore', body: { projectId: 'p1', rev: 1 } },
+  { method: 'POST', path: '/api/notes/n1/restore', body: { projectId: 'p1', rev: 1, expectedRev: 1 } },
 ];
 
 describe('notes REST routes', () => {
@@ -126,7 +126,7 @@ describe('notes REST routes', () => {
       call('GET', `/api/notes/${note.id}?projectId=p2`),
       call('PATCH', `/api/notes/${note.id}`, { projectId: 'p2', expectedRev: 1, bodyMd: 'x' }),
       call('GET', `/api/notes/${note.id}/versions?projectId=p2`),
-      call('POST', `/api/notes/${note.id}/restore`, { projectId: 'p2', rev: 1 }),
+      call('POST', `/api/notes/${note.id}/restore`, { projectId: 'p2', rev: 1, expectedRev: 1 }),
     ];
 
     const statuses = (await Promise.all(foreignRoutes)).map((response) => response.status);
@@ -147,6 +147,41 @@ describe('notes REST routes', () => {
       expect(createdNote).not.toHaveProperty('sourceHash');
       expect(read.status).toBe(200);
       expect(await read.json()).toEqual(createdNote);
+    });
+
+    it('caps the title at 512 characters on create and on rename', async () => {
+      const note = await createNote();
+
+      const createTooLong = await call('POST', '/api/notes', { projectId: 'p1', title: 't'.repeat(513), bodyMd: '' });
+      const createAtLimit = await call('POST', '/api/notes', { projectId: 'p1', title: 't'.repeat(512), bodyMd: '' });
+      const renameTooLong = await call('PATCH', `/api/notes/${note.id}`, { projectId: 'p1', expectedRev: 1, title: 't'.repeat(513) });
+
+      expect(createTooLong.status).toBe(400);
+      expect(createAtLimit.status).toBe(201);
+      expect(renameTooLong.status).toBe(400);
+    });
+
+    it.each(['', '%20', '-1', '1.5', 'abc'])('refuses limit=%j on the list, the search and the versions with 400', async (limit) => {
+      const note = await createNote();
+
+      const statuses = (await Promise.all([
+        call('GET', `/api/notes?projectId=p1&limit=${limit}`),
+        call('GET', `/api/notes/search?projectId=p1&q=a&limit=${limit}`),
+        call('GET', `/api/notes/${note.id}/versions?projectId=p1&limit=${limit}`),
+      ])).map((response) => response.status);
+
+      expect(statuses).toEqual([400, 400, 400]);
+    });
+
+    it('bounds the search by limit', async () => {
+      await createNote({ bodyMd: 'zebra one' });
+      await createNote({ bodyMd: 'zebra two' });
+
+      const one = await (await call('GET', '/api/notes/search?projectId=p1&q=zebra&limit=1')).json() as { items: unknown[] };
+      const tooMany = await call('GET', '/api/notes/search?projectId=p1&q=zebra&limit=51');
+
+      expect(one.items).toHaveLength(1);
+      expect(tooMany.status).toBe(400);
     });
 
     it('rejects a note without a title with 400', async () => {
@@ -515,7 +550,7 @@ describe('notes REST routes', () => {
       const note = await createNote({ bodyMd: 'original' });
       await call('PATCH', `/api/notes/${note.id}`, { projectId: 'p1', expectedRev: 1, bodyMd: 'changed' });
 
-      const response = await call('POST', `/api/notes/${note.id}/restore`, { projectId: 'p1', rev: 1 });
+      const response = await call('POST', `/api/notes/${note.id}/restore`, { projectId: 'p1', rev: 1, expectedRev: 2 });
 
       expect(response.status).toBe(200);
       expect(await response.json()).toMatchObject({ bodyMd: 'original', rev: 3 });
@@ -524,7 +559,7 @@ describe('notes REST routes', () => {
     it('answers 404 for an unknown revision and 409 when expectedRev is stale', async () => {
       const note = await createNote();
 
-      const unknownRev = await call('POST', `/api/notes/${note.id}/restore`, { projectId: 'p1', rev: 99 });
+      const unknownRev = await call('POST', `/api/notes/${note.id}/restore`, { projectId: 'p1', rev: 99, expectedRev: 1 });
       const stale = await call('POST', `/api/notes/${note.id}/restore`, { projectId: 'p1', rev: 1, expectedRev: 7 });
 
       expect(unknownRev.status).toBe(404);
@@ -532,12 +567,16 @@ describe('notes REST routes', () => {
       expect(await stale.json()).toEqual({ error: 'stale_revision', currentRev: 1 });
     });
 
-    it('rejects a restore without a revision with 400', async () => {
+    it('rejects a restore without a revision or without the expected revision with 400', async () => {
       const note = await createNote();
 
-      const response = await call('POST', `/api/notes/${note.id}/restore`, { projectId: 'p1' });
+      const noRev = await call('POST', `/api/notes/${note.id}/restore`, { projectId: 'p1', expectedRev: 1 });
+      const noExpectedRev = await call('POST', `/api/notes/${note.id}/restore`, { projectId: 'p1', rev: 1 });
+      const unchanged = await (await call('GET', `/api/notes/${note.id}?projectId=p1`)).json();
 
-      expect(response.status).toBe(400);
+      expect(noRev.status).toBe(400);
+      expect(noExpectedRev.status).toBe(400);
+      expect(unchanged).toMatchObject({ rev: 1 });
     });
   });
 

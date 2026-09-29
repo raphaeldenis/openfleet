@@ -52,9 +52,12 @@ export interface NoteSearchResult extends NoteSummary {
   snippet: string;
 }
 
+export const MAX_NOTE_TITLE_CHARS = 512;
+const TitleSchema = z.string().min(1).max(MAX_NOTE_TITLE_CHARS);
+
 export const CreateNoteRequestSchema = z.object({
   projectId: z.string().min(1),
-  title: z.string().min(1),
+  title: TitleSchema,
   bodyMd: z.string(),
   folder: NoteFolderSchema.optional(),
   shared: z.boolean().optional(),
@@ -64,7 +67,7 @@ export type CreateNoteRequest = z.infer<typeof CreateNoteRequestSchema>;
 export const UpdateNoteRequestSchema = z.object({
   projectId: z.string().min(1),
   expectedRev: z.number().int(),
-  title: z.string().min(1).optional(),
+  title: TitleSchema.optional(),
   bodyMd: z.string().optional(),
 }).refine((patch) => patch.title !== undefined || patch.bodyMd !== undefined, { message: 'title or bodyMd is required' });
 export type UpdateNoteRequest = z.infer<typeof UpdateNoteRequestSchema>;
@@ -72,7 +75,7 @@ export type UpdateNoteRequest = z.infer<typeof UpdateNoteRequestSchema>;
 export const RestoreNoteRequestSchema = z.object({
   projectId: z.string().min(1),
   rev: z.number().int(),
-  expectedRev: z.number().int().optional(),
+  expectedRev: z.number().int(),
 });
 export type RestoreNoteRequest = z.infer<typeof RestoreNoteRequestSchema>;
 
