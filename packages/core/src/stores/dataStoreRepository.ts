@@ -56,6 +56,8 @@ const toHistoryEntry = (r: HistoryRow): DsRowHistoryEntry => ({
 });
 
 const NO_LIMIT = -1;
+
+interface RowHistoryScope { projectId: string; storeId?: string; limit?: number }
 const WRITE_SAVEPOINT = 'data_store_write';
 
 /** Round-trips cells through JSON, as SQLite stores them: an `undefined` cell drops out, NaN becomes null, a Date becomes its ISO string, -0 becomes 0. */
@@ -186,15 +188,24 @@ export class DataStoreRepository {
   }
 
   /** Newest first, at most `limit` entries when given. Authorizes through the entry's own store, so a deleted row's trail stays readable. */
-  rowHistory(rowId: string, scope: { projectId: string; limit?: number }): DsRowHistoryEntry[] {
+  rowHistory(rowId: string, scope: RowHistoryScope): DsRowHistoryEntry[] {
     const entries = this.db.prepare(
       `SELECT history.* FROM ds_row_history history
        JOIN data_stores store ON store.id = history.store_id
-       WHERE history.row_id = ? AND store.project_id = ?
+       WHERE history.row_id = ? AND store.project_id = ? AND (? IS NULL OR history.store_id = ?)
        ORDER BY history.created_at DESC, history.rowid DESC
        LIMIT ?`,
-    ).all(rowId, scope.projectId, scope.limit ?? NO_LIMIT) as unknown as HistoryRow[];
+    ).all(rowId, scope.projectId, scope.storeId ?? null, scope.storeId ?? null, scope.limit ?? NO_LIMIT) as unknown as HistoryRow[];
     return entries.map(toHistoryEntry);
+  }
+
+  countRowHistory(rowId: string, scope: RowHistoryScope): number {
+    const { n } = this.db.prepare(
+      `SELECT COUNT(*) AS n FROM ds_row_history history
+       JOIN data_stores store ON store.id = history.store_id
+       WHERE history.row_id = ? AND store.project_id = ? AND (? IS NULL OR history.store_id = ?)`,
+    ).get(rowId, scope.projectId, scope.storeId ?? null, scope.storeId ?? null) as { n: number };
+    return n;
   }
 
   findStore(id: string): DataStore | undefined {

@@ -24,7 +24,8 @@ import { DataStoreService, MAX_ROWS_PER_STORE } from '../stores/dataStoreService
 import { startServer } from './server.js';
 
 const ADMIN = { authorization: 'Bearer admin', 'content-type': 'application/json' };
-const AGENT = { kind: 'agent', label: '⛏️ Gimli' } as const;
+const FILL_TO_CAP_TIMEOUT_MS = 60_000;
+const AGENT ={ kind: 'agent', label: '⛏️ Gimli' } as const;
 
 let server: Awaited<ReturnType<typeof startServer>>;
 let stores: DataStoreService;
@@ -212,17 +213,21 @@ describe('data store REST routes', () => {
       expect(response.status).toBe(400);
     });
 
-    it('refuses a batch that would pass the store row cap with 413', async () => {
+    it('accepts the row that reaches the store row cap and refuses the next one with 413', async () => {
       const { store, name } = seedStore();
-      for (let inserted = 0; inserted < MAX_ROWS_PER_STORE; inserted += 500) {
-        stores.insertRows(store.id, { projectId: 'p1', items: Array.from({ length: 500 }, () => ({ [name.id]: 'x' })), actor: AGENT });
+      const rowsBelowCap = MAX_ROWS_PER_STORE - 1;
+      for (let inserted = 0; inserted < rowsBelowCap; inserted += 500) {
+        const batchSize = Math.min(500, rowsBelowCap - inserted);
+        stores.insertRows(store.id, { projectId: 'p1', items: Array.from({ length: batchSize }, () => ({ [name.id]: 'x' })), actor: AGENT });
       }
 
-      const response = await call('POST', `/api/data-stores/${store.id}/rows`, { projectId: 'p1', rows: [{ [name.id]: 'one too many' }] });
+      const reachingCap = await call('POST', `/api/data-stores/${store.id}/rows`, { projectId: 'p1', rows: [{ [name.id]: 'last one' }] });
+      const pastCap = await call('POST', `/api/data-stores/${store.id}/rows`, { projectId: 'p1', rows: [{ [name.id]: 'one too many' }] });
 
-      expect(response.status).toBe(413);
-      expect(await response.json()).toMatchObject({ error: 'row_cap' });
-    });
+      expect(reachingCap.status).toBe(201);
+      expect(pastCap.status).toBe(413);
+      expect(await pastCap.json()).toMatchObject({ error: 'row_cap' });
+    }, FILL_TO_CAP_TIMEOUT_MS);
 
     it('patches rows and gets the updated rows back', async () => {
       const { store, name, qty } = seedStore();
@@ -338,6 +343,18 @@ describe('data store REST routes', () => {
       const response = await call('GET', `/api/data-stores/${store.id}/rows/nope/changes?projectId=p1`);
 
       expect(response.status).toBe(404);
+    });
+
+    it('answers 404 for the history of a row that belongs to another store of the same project', async () => {
+      const storeA = seedStore('A');
+      const storeB = seedStore('B');
+      const [rowOfB] = (await insertRows(storeB.store.id, storeB, [['bolt', 1]])).items;
+
+      const underOwnStore = await call('GET', `/api/data-stores/${storeB.store.id}/rows/${rowOfB!.id}/changes?projectId=p1`);
+      const underOtherStore = await call('GET', `/api/data-stores/${storeA.store.id}/rows/${rowOfB!.id}/changes?projectId=p1`);
+
+      expect(underOwnStore.status).toBe(200);
+      expect(underOtherStore.status).toBe(404);
     });
 
     it('lists the saved views of a store', async () => {

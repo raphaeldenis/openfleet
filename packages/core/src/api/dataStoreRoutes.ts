@@ -102,10 +102,12 @@ export function registerDataStoreRoutes(router: Router, { stores, storeRepo }: D
   router.add('GET', '/api/data-stores/:id/rows/:rowId/changes', ({ req, res, params }) => {
     const { projectId, limit } = ChangesQuerySchema.parse(queryParams(req));
     respondToStoreErrors(res, () => {
-      requireOwnStore(projectId, params.id!);
-      const history: DsRowHistoryEntry[] = storeRepo.rowHistory(params.rowId!, { projectId });
-      if (history.length === 0) throw new RowNotFoundError(params.rowId!);
-      json(res, 200, { items: history.slice(0, limit), total: history.length });
+      const store = requireOwnStore(projectId, params.id!);
+      const scope = { projectId, storeId: store.id };
+      const total = storeRepo.countRowHistory(params.rowId!, scope);
+      if (total === 0) throw new RowNotFoundError(params.rowId!);
+      const items: DsRowHistoryEntry[] = storeRepo.rowHistory(params.rowId!, { ...scope, limit });
+      json(res, 200, { items, total });
     });
   });
 
