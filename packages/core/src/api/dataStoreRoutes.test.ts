@@ -1,7 +1,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { DsColumn } from '@openfleet/shared';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
 import { ApprovalService } from '../governance/approvalService.js';
@@ -29,6 +29,7 @@ const AGENT ={ kind: 'agent', label: '⛏️ Gimli' } as const;
 
 let server: Awaited<ReturnType<typeof startServer>>;
 let stores: DataStoreService;
+let storeRepo: DataStoreRepository;
 let mcpToken: string;
 
 const call = (method: string, path: string, body?: unknown, headers: Record<string, string> = ADMIN) =>
@@ -64,7 +65,7 @@ beforeEach(async () => {
   projects.insert({ id: 'p1', name: 'One', docsFolderPath: null, createdAt: 't0' });
   projects.insert({ id: 'p2', name: 'Two', docsFolderPath: null, createdAt: 't0' });
 
-  const storeRepo = new DataStoreRepository(db);
+  storeRepo = new DataStoreRepository(db);
   let tick = 0;
   stores = new DataStoreService({ repo: storeRepo, db, clock: () => `2026-01-01T00:00:${String(tick++ % 60).padStart(2, '0')}.000Z`, newId });
   const noteRepo = new NoteRepository(db);
@@ -335,6 +336,16 @@ describe('data store REST routes', () => {
       expect(page.items).toHaveLength(1);
       expect(page.total).toBe(2);
       expect(tooMany.status).toBe(400);
+    });
+
+    it('asks the repository for only the requested number of changes', async () => {
+      const { store, name, qty } = seedStore();
+      const [bolt] = (await insertRows(store.id, { name, qty }, [['bolt', 1]])).items;
+      const rowHistory = vi.spyOn(storeRepo, 'rowHistory');
+
+      await call('GET', `/api/data-stores/${store.id}/rows/${bolt!.id}/changes?projectId=p1&limit=5`);
+
+      expect(rowHistory).toHaveBeenCalledWith(bolt!.id, expect.objectContaining({ limit: 5 }));
     });
 
     it('answers 404 for a row without history', async () => {

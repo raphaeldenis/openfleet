@@ -198,6 +198,57 @@ describe('notes REST routes', () => {
     });
   });
 
+  describe('the note reads stay bounded in SQL', () => {
+    /** The SQL text of every statement the daemon prepares while serving `path`. */
+    const sqlServing = async (path: string) => {
+      const prepared: string[] = [];
+      const realPrepare = db.prepare.bind(db);
+      const spy = vi.spyOn(db, 'prepare').mockImplementation((sql: string) => { prepared.push(sql); return realPrepare(sql); });
+      const response = await call('GET', path);
+      spy.mockRestore();
+      return { response, prepared };
+    };
+    const readsBodies = (sql: string) => /body_md|SELECT\s+\*|\bn\.\*/i.test(sql.replace(/snippet\([^)]*\)/i, ''));
+
+    it('lists a page with LIMIT/OFFSET and never reads a body', async () => {
+      const { response, prepared } = await sqlServing('/api/notes?projectId=p1&folder=specs&limit=10&offset=5');
+
+      const noteQueries = prepared.filter((sql) => /FROM notes/i.test(sql));
+      expect(response.status).toBe(200);
+      expect(noteQueries.length).toBeGreaterThan(0);
+      expect(noteQueries.some(readsBodies)).toBe(false);
+      expect(noteQueries.filter((sql) => !/COUNT\(\*\)/i.test(sql)).every((sql) => /LIMIT/i.test(sql))).toBe(true);
+    });
+
+    it('answers limit=0 with the total and no items', async () => {
+      await createNote();
+
+      const { response } = await sqlServing('/api/notes?projectId=p1&limit=0');
+
+      expect(await response.json()).toMatchObject({ items: [], total: 1 });
+    });
+
+    it('searches with a LIMIT of 50 and never reads a body', async () => {
+      const { prepared } = await sqlServing('/api/notes/search?projectId=p1&q=zebra');
+
+      const searches = prepared.filter((sql) => /note_fts/i.test(sql));
+      expect(searches).toHaveLength(1);
+      expect(readsBodies(searches[0]!)).toBe(false);
+      expect(searches[0]).toMatch(/LIMIT/i);
+    });
+
+    it('lists versions with LIMIT/OFFSET and never reads a body', async () => {
+      const note = await createNote();
+
+      const { prepared } = await sqlServing(`/api/notes/${note.id}/versions?projectId=p1`);
+
+      const versionQueries = prepared.filter((sql) => /FROM note_versions/i.test(sql) && !/COUNT\(\*\)/i.test(sql));
+      expect(versionQueries).toHaveLength(1);
+      expect(versionQueries[0]).toMatch(/LIMIT/i);
+      expect(readsBodies(versionQueries[0]!)).toBe(false);
+    });
+  });
+
   describe('user can list and search notes', () => {
     it('lists summaries without bodies, filtered by folder, scoped to the project', async () => {
       await createNote({ title: 'Spec', folder: 'specs' });
@@ -381,6 +432,21 @@ describe('notes REST routes', () => {
       expect(items.map((v) => v.rev)).toEqual([1, 2]);
       expect(items[0]).toMatchObject({ author: 'You' });
       expect(items[0]).not.toHaveProperty('bodyMd');
+    });
+
+    it('bounds the history by limit and offset, counting every version, default 100 and max 200', async () => {
+      const note = await createNote();
+      const insertVersion = db.prepare(`INSERT INTO note_versions (id, note_id, rev, body_md, author, change_summary, created_at) VALUES (?, ?, ?, '', 'You', NULL, 't')`);
+      for (let rev = 2; rev <= 250; rev++) insertVersion.run(`v-${rev}`, note.id, rev);
+
+      const byDefault = await (await call('GET', `/api/notes/${note.id}/versions?projectId=p1`)).json() as { items: { rev: number }[]; total: number; limit: number };
+      const paged = await (await call('GET', `/api/notes/${note.id}/versions?projectId=p1&limit=3&offset=10`)).json() as { items: { rev: number }[]; total: number };
+      const tooMany = await call('GET', `/api/notes/${note.id}/versions?projectId=p1&limit=201`);
+
+      expect(byDefault.items).toHaveLength(100);
+      expect(byDefault).toMatchObject({ total: 250, limit: 100 });
+      expect(paged.items.map((v) => v.rev)).toEqual([11, 12, 13]);
+      expect(tooMany.status).toBe(400);
     });
 
     it('answers 404 for the versions of a foreign note', async () => {

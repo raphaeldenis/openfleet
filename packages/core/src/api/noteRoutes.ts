@@ -1,7 +1,7 @@
 import type { ServerResponse } from 'node:http';
 import {
   CreateNoteRequestSchema, MAX_NOTE_PAGE_LIMIT, NoteFolderSchema, RestoreNoteRequestSchema, UpdateNoteRequestSchema, pageQuerySchema,
-  type Note, type NoteSummary, type NoteView, type Page,
+  type Note, type NoteSummary, type NoteVersionSummary, type NoteView, type Page,
 } from '@openfleet/shared';
 import { z } from 'zod';
 import type { DocsFolderService } from '../notes/docsFolderService.js';
@@ -17,6 +17,7 @@ const MAX_QUERY_TERMS = 16;
 
 const ProjectScopeSchema = z.object({ projectId: z.string().min(1) });
 const ListNotesQuerySchema = ProjectScopeSchema.extend({ folder: NoteFolderSchema.optional() }).extend(pageQuerySchema(MAX_NOTE_PAGE_LIMIT).shape);
+const VersionsQuerySchema = ProjectScopeSchema.extend(pageQuerySchema(MAX_NOTE_PAGE_LIMIT).shape);
 const SearchNotesQuerySchema = ProjectScopeSchema.extend({ q: z.string().max(MAX_QUERY_CHARS).default('') });
 
 export interface NoteRouteDeps {
@@ -75,8 +76,8 @@ export function registerNoteRoutes(router: Router, { notes, noteRepo, docs }: No
 
   router.add('GET', '/api/notes',({ req, res }) => {
     const { projectId, folder, limit, offset } = ListNotesQuerySchema.parse(queryParams(req));
-    const inFolder = noteRepo.list(projectId).filter((note) => folder === undefined || note.folder === folder);
-    const page: Page<NoteSummary> = { items: inFolder.slice(offset, offset + limit).map(summaryOf), total: inFolder.length, limit, offset };
+    const items = limit === 0 ? [] : noteRepo.listSummaries(projectId, { folder, limit, offset });
+    const page: Page<NoteSummary> = { items, total: noteRepo.count(projectId, folder), limit, offset };
     json(res, 200, page);
   });
 
@@ -85,8 +86,8 @@ export function registerNoteRoutes(router: Router, { notes, noteRepo, docs }: No
     const terms = q.trim().split(/\s+/).filter((term) => term !== '');
     if (terms.length > MAX_QUERY_TERMS) return json(res, 400, { error: 'invalid_body', detail: `too many terms in query (max ${MAX_QUERY_TERMS})` });
     if (terms.length === 0) return json(res, 200, { items: [], total: 0 });
-    const hits = noteRepo.search(escapeFtsTerms(terms), { projectId, limit: MAX_SEARCH_RESULTS });
-    const items = hits.map(({ note, snippet }) => ({ ...summaryOf(note), snippet }));
+    const hits = noteRepo.searchSummaries(escapeFtsTerms(terms), { projectId, limit: MAX_SEARCH_RESULTS });
+    const items = hits.map(({ note, snippet }) => ({ ...note, snippet }));
     json(res, 200, { items, total: items.length });
   });
 
@@ -111,10 +112,12 @@ export function registerNoteRoutes(router: Router, { notes, noteRepo, docs }: No
   });
 
   router.add('GET', '/api/notes/:id/versions', ({ req, res, params }) => {
-    const { projectId } = ProjectScopeSchema.parse(queryParams(req));
+    const { projectId, limit, offset } = VersionsQuerySchema.parse(queryParams(req));
     respondToNoteErrors(res, () => {
       requireOwnNote(projectId, params.id!);
-      json(res, 200, { items: noteRepo.listVersionSummaries(params.id!) });
+      const items = noteRepo.listVersionSummaries(params.id!, { limit, offset });
+      const page: Page<NoteVersionSummary> = { items, total: noteRepo.countVersions(params.id!), limit, offset };
+      json(res, 200, page);
     });
   });
 
