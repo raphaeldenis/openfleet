@@ -1,6 +1,6 @@
 import { render, screen, within } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
-import { inputBinding, outputBinding } from '@angular/core';
+import { inputBinding, outputBinding, signal } from '@angular/core';
 import { describe, expect, it, vi } from 'vitest';
 import { NoteListComponent } from './note-list.component';
 import { aNoteSummary } from './notes.fixtures';
@@ -158,6 +158,29 @@ describe('NoteListComponent', () => {
 
       expect(selected).toHaveBeenCalledTimes(2);
       expect(selected).toHaveBeenCalledWith('n2');
+    });
+
+    it('the open note becomes the tab stop again after focus left the list and the selection changed', async () => {
+      const selectedId = signal<string | null>(null);
+      await render(NoteListComponent, {
+        bindings: [inputBinding('notes', () => notes), inputBinding('selectedId', selectedId)],
+      });
+      screen.getByTestId('note-list-item-n2').focus();
+
+      await userEvent.click(screen.getByTestId('note-list-filter'));
+      selectedId.set('n3');
+      await userEvent.tab();
+
+      expect([tabIndexOf('n1'), tabIndexOf('n2'), tabIndexOf('n3')]).toEqual(['-1', '-1', '0']);
+    });
+
+    it('the tab stop stays on the focused note while focus moves inside the list', async () => {
+      await renderList({ selectedId: 'n1' });
+      screen.getByTestId('note-list-item-n1').focus();
+
+      await userEvent.keyboard('{ArrowDown}');
+
+      expect([tabIndexOf('n1'), tabIndexOf('n2')]).toEqual(['-1', '0']);
     });
 
     it('a filtered list keeps one tab stop among the notes still shown', async () => {
