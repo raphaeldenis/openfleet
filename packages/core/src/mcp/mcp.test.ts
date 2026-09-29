@@ -17,6 +17,12 @@ import { ManagerRepository } from '../managers/managerRepository.js';
 import { ManagerService } from '../managers/managerService.js';
 import { PulseScheduler } from '../managers/pulseScheduler.js';
 import { DEFAULT_MODEL_TABLE } from '../models.js';
+import { DocsFolderService } from '../notes/docsFolderService.js';
+import { expandMentions } from '../notes/mentionExpander.js';
+import { nodeDocsFolderFs } from '../notes/nodeDocsFolderFs.js';
+import { NoteRepository } from '../notes/noteRepository.js';
+import { NoteService } from '../notes/noteService.js';
+import { ProjectRepository } from '../projects/projectRepository.js';
 import { MAX_PENDING_AGENT_MESSAGES_PER_SENDER, SessionService } from '../sessions/sessionService.js';
 import { DataStoreRepository } from '../stores/dataStoreRepository.js';
 import { DataStoreService } from '../stores/dataStoreService.js';
@@ -51,7 +57,11 @@ beforeEach(async () => {
   const modelTable = { ...DEFAULT_MODEL_TABLE };
   const storeRepo = new DataStoreRepository(db);
   const stores = new DataStoreService({ repo: storeRepo, db, clock: () => new Date().toISOString(), newId });
-  server = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath: '/tmp/of-unused/config.json', mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, worktreesRoot: '/tmp/of-wt' }) });
+  const projects = new ProjectRepository(db);
+  const noteRepo = new NoteRepository(db);
+  const notes = new NoteService({ repo: noteRepo, db, expandMentions, clock: () => new Date().toISOString(), newId });
+  const docs = new DocsFolderService({ notes, noteRepo, projects, fs: nodeDocsFolderFs, clock: () => new Date().toISOString() });
+  server = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath: '/tmp/of-unused/config.json', mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, worktreesRoot: '/tmp/of-wt' }) });
   const parent = await sessions.create({ directory: '/tmp', name: 'Lead', harness: 'fake', emoji: '🧭' });
   parentId = parent.id;
   parentToken = harness.launches[0]!.mcpToken;
@@ -70,9 +80,11 @@ describe('MCP', () => {
     const client = await connect(parentToken);
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
-      'add_data_store_column', 'close_session', 'create_data_store', 'create_session', 'create_worktree', 'delete_data_store_row',
-      'describe_data_store', 'get_argus_status', 'get_session_status', 'insert_data_store_rows', 'list_children', 'list_sessions',
-      'message_parent', 'pulse_now', 'query_data_store', 'send_session_message', 'update_data_store_rows', 'update_session',
+      'add_data_store_column', 'close_session', 'create_data_store', 'create_note', 'create_session', 'create_worktree',
+      'delete_data_store_row', 'delete_note', 'describe_data_store', 'get_argus_status', 'get_note', 'get_session_status',
+      'insert_data_store_rows', 'list_children', 'list_notes', 'list_sessions', 'message_parent', 'move_note',
+      'pulse_now', 'query_data_store', 'search_notes', 'send_session_message', 'update_data_store_rows',
+      'update_note', 'update_session',
     ]);
   });
 

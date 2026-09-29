@@ -34,6 +34,16 @@ export interface NoteVersionInsert {
   createdAt: string;
 }
 
+export interface NoteSearchHit {
+  note: Note;
+  snippet: string;
+}
+
+export interface NoteSearchOptions {
+  projectId: string;
+  limit: number;
+}
+
 interface Row {
   id: string; project_id: string; title: string; body_md: string; folder: NoteFolder | null;
   file_path: string | null; source_hash: string | null; rev: number; shared: number; created_at: string; updated_at: string;
@@ -107,6 +117,17 @@ export class NoteRepository {
   listVersions(noteId: string): NoteVersion[] {
     const rows = this.db.prepare('SELECT * FROM note_versions WHERE note_id = ? ORDER BY rev').all(noteId) as unknown as VersionRow[];
     return rows.map(toNoteVersion);
+  }
+  /** `escapedQuery` must already be FTS5-safe (see noteTools.ts's query escaping) — this method trusts it verbatim. */
+  search(escapedQuery: string, { projectId, limit }: NoteSearchOptions): NoteSearchHit[] {
+    const rows = this.db.prepare(
+      `SELECT n.*, snippet(note_fts, 2, '', '', '…', 12) AS snippet
+       FROM notes n JOIN note_fts ON note_fts.note_id = n.id
+       WHERE note_fts MATCH ? AND n.project_id = ?
+       ORDER BY rank
+       LIMIT ?`,
+    ).all(escapedQuery, projectId, limit) as unknown as (Row & { snippet: string })[];
+    return rows.map((row) => ({ note: toNote(row), snippet: row.snippet }));
   }
 
   private compareAndSet(sql: string, params: SQLInputValue[], id: string, expectedRev: number): NoteUpdateResult {

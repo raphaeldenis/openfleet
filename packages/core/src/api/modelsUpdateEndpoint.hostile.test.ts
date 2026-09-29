@@ -13,6 +13,12 @@ import { ManagerRepository } from '../managers/managerRepository.js';
 import { ManagerService } from '../managers/managerService.js';
 import { PulseScheduler } from '../managers/pulseScheduler.js';
 import { DEFAULT_MODEL_TABLE, loadModelTable } from '../models.js';
+import { DocsFolderService } from '../notes/docsFolderService.js';
+import { expandMentions } from '../notes/mentionExpander.js';
+import { nodeDocsFolderFs } from '../notes/nodeDocsFolderFs.js';
+import { NoteRepository } from '../notes/noteRepository.js';
+import { NoteService } from '../notes/noteService.js';
+import { ProjectRepository } from '../projects/projectRepository.js';
 import { SessionService } from '../sessions/sessionService.js';
 import { createMcpHandler } from '../mcp/mcpServer.js';
 import { DataStoreRepository } from '../stores/dataStoreRepository.js';
@@ -43,7 +49,11 @@ async function startDaemon(modelConfigPath: string) {
   const modelTable = loadModelTable(modelConfigPath);
   const storeRepo = new DataStoreRepository(db);
   const stores = new DataStoreService({ repo: storeRepo, db, clock: () => new Date().toISOString(), newId });
-  const mcp = createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, worktreesRoot: '/tmp/of-wt' });
+  const projects = new ProjectRepository(db);
+  const noteRepo = new NoteRepository(db);
+  const notes = new NoteService({ repo: noteRepo, db, expandMentions, clock: () => new Date().toISOString(), newId });
+  const docs = new DocsFolderService({ notes, noteRepo, projects, fs: nodeDocsFolderFs, clock: () => new Date().toISOString() });
+  const mcp = createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, worktreesRoot: '/tmp/of-wt' });
   return startServer({ host: '127.0.0.1', port: 0, adminToken: ADMIN_TOKEN, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, mcp });
 }
 
