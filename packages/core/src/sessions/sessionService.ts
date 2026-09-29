@@ -263,9 +263,6 @@ export class SessionService {
   // Last transcript_path any hook reported for this session — the only way an ESC-armed watch below
   // knows which file to tail.
   private readonly transcriptPaths = new Map<string, string>();
-  // The CLI session id whose transcript belongs to this session's process: the launch id until a SessionStart
-  // hook reports another one (a /clear starts a new CLI session inside the same process). Absent = launch id.
-  private readonly currentCliSessionIds = new Map<string, string>();
   private readonly adoptedCliSessionOwners = new Map<string, string>();
   private readonly interruptWatches = new Map<string, InterruptWatch>();
   // Presence means "this launch has no recorded resolved model yet"; the value is the launch's start time
@@ -536,7 +533,6 @@ export class SessionService {
   private async retireForRelaunch(sessionId: string): Promise<void> {
     this.disarmInterruptWatch(sessionId);
     this.transcriptPaths.delete(sessionId);
-    this.currentCliSessionIds.delete(sessionId);
     // Any approval still gating this session belonged to the process about to die: ApprovalService
     // listens for this to expire it and answer its waiting hook, rather than leave it pending forever
     // behind a relaunch it can never come back from (AUD-07).
@@ -597,30 +593,37 @@ export class SessionService {
     this.guarded(sessionId, () => this.advance(sessionId));
   }
 
+  // The conversation the CLI process of this session is in: the launch id until a SessionStart reports another
+  // one (a /clear starts a new CLI session inside the same process). The id outlives the process, so a relaunch
+  // resumes it.
+  private currentCliSessionIdOf(sessionId: string): string {
+    return this.repo.cliSessionId(sessionId) ?? sessionId;
+  }
+
   // A CLI session id that is another session's launch id or current id, open or closed, never becomes this session's:
   // otherwise one session's hook could adopt a neighbour's identity and then read its transcript.
-  // ponytail: adoptedCliSessionOwners lives in memory only, so a daemon restart forgets which session adopted
-  // which id; the impact stays display-only on the attacker's own row. Upgrade path: persist it in a column
+  // ponytail: adoptedCliSessionOwners lives in memory only, so a daemon restart forgets which session left an
+  // id behind after a /clear; the impact stays on the attacker's own row. Upgrade path: a table of adopted ids
   // if agents are ever untrusted.
   private adoptCliSessionId(sessionId: string, reportedCliSessionId: string): void {
     if (!CLI_SESSION_ID_PATTERN.test(reportedCliSessionId)) return;
     const cliSessionId = reportedCliSessionId.toLowerCase();
-    const isLaunchIdOfAnotherSession = this.repo.list().some((other) => other.id !== sessionId && other.id === cliSessionId);
+    const isIdOfAnotherSession = this.repo.isCliSessionIdOfAnotherSession(sessionId, cliSessionId);
     const adopter = this.adoptedCliSessionOwners.get(cliSessionId);
-    const isAdoptedByAnotherSession = adopter !== undefined && adopter !== sessionId;
-    if (isLaunchIdOfAnotherSession || isAdoptedByAnotherSession) return;
+    const isLeftBehindByAnotherSession = adopter !== undefined && adopter !== sessionId;
+    if (isIdOfAnotherSession || isLeftBehindByAnotherSession) return;
     this.adoptedCliSessionOwners.set(cliSessionId, sessionId);
-    this.currentCliSessionIds.set(sessionId, cliSessionId);
+    this.repo.setCliSessionId(sessionId, cliSessionId);
   }
 
   private isTranscriptOfSession(sessionId: string, path: string): boolean {
-    return basename(path).toLowerCase() === `${this.currentCliSessionIds.get(sessionId) ?? sessionId}.jsonl`;
+    return basename(path).toLowerCase() === `${this.currentCliSessionIdOf(sessionId)}.jsonl`;
   }
 
   private warnOnceWhenTranscriptNameIsForeign(sessionId: string, path: string, pending: { nameMismatchLogged: boolean }): void {
     if (pending.nameMismatchLogged) return;
     pending.nameMismatchLogged = true;
-    const expectedName = `${this.currentCliSessionIds.get(sessionId) ?? sessionId}.jsonl`;
+    const expectedName = `${this.currentCliSessionIdOf(sessionId)}.jsonl`;
     log('warn', `resolved model: transcript name does not match the session's CLI id: session ${sessionId}, expected ${expectedName}, got ${JSON.stringify(basename(path))}`);
   }
 
@@ -1094,7 +1097,6 @@ export class SessionService {
     this.clearResumeTimer(sessionId);
     this.disarmInterruptWatch(sessionId);
     this.transcriptPaths.delete(sessionId);
-    this.currentCliSessionIds.delete(sessionId);
     this.dropPendingRecording(sessionId);
     this.modelSwitchesAwaitingRelaunch.delete(sessionId);
     this.resolvedModelBeforeSameAliasRelaunch.delete(sessionId);
@@ -1136,6 +1138,7 @@ export class SessionService {
     try {
       handle = harness.start({
         sessionId: session.id,
+        cliSessionId: this.currentCliSessionIdOf(session.id),
         directory: session.directory,
         model: session.model,
         hookUrl: `${this.deps.baseUrl}/hooks/${hookToken}`,

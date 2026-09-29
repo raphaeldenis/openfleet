@@ -19,8 +19,9 @@ export interface ClaudeLaunchConfig {
 export function buildClaudeLaunchConfig(launch: HarnessLaunch, tokenFilePaths: TokenFilePaths): ClaudeLaunchConfig {
   // --resume takes an optional value: a missing or non-UUID session id makes the CLI fall back to its
   // interactive picker, which would hang forever inside a PTY nothing is watching.
-  if (launch.resuming && !UUID_PATTERN.test(launch.sessionId)) {
-    throw new Error(`cannot resume with a missing or non-UUID session id: "${launch.sessionId}"`);
+  const conversationToResume = launch.cliSessionId ?? launch.sessionId;
+  if (launch.resuming && !UUID_PATTERN.test(conversationToResume)) {
+    throw new Error(`cannot resume with a missing or non-UUID session id: "${conversationToResume}"`);
   }
   // Defence in depth: every REST/MCP entry validates a model id before it reaches here, but --model takes
   // this value directly, and a value starting with '-' or containing whitespace would be read as another
@@ -42,7 +43,7 @@ export function buildClaudeLaunchConfig(launch: HarnessLaunch, tokenFilePaths: T
   // on --resume. --model is passed on both paths — `claude --help` documents
   // no conflict with --resume, and the CLI's own transcript-based model
   // restore has decline paths that could silently drop the operator's choice.
-  const resumeArgs = ['--resume', launch.sessionId];
+  const resumeArgs = ['--resume', conversationToResume];
   const firstRunArgs = ['--session-id', launch.sessionId, '--name', launch.displayName];
   const args = launch.resuming ? resumeArgs : firstRunArgs;
   if (launch.model) args.push('--model', launch.model);
