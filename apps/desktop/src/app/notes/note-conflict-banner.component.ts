@@ -12,9 +12,9 @@ const DISK_AUTHOR = 'disk';
     <div #bar class="bar" role="alert" tabindex="-1" data-testid="note-conflict-bar">
       <span class="label">! Edit conflict</span>
       <span class="message" data-testid="note-conflict-message">{{ message() }}</span>
-      @if (restoreRev(); as rev) {
+      @if (restoreRev() !== null) {
         <button type="button" class="choice choice--primary" data-testid="note-conflict-keep-current" (click)="resolve.emit('theirs')">Keep current</button>
-        <button type="button" class="choice" data-testid="note-conflict-restore" (click)="resolve.emit('restore')">Restore rev {{ rev }} anyway</button>
+        <button type="button" class="choice" data-testid="note-conflict-restore" (click)="resolve.emit('restore')">Restore rev {{ restoreRev() }} anyway</button>
       } @else {
         <button type="button" class="choice" data-testid="note-conflict-keep-mine" (click)="resolve.emit('mine')">Keep mine</button>
         <button type="button" class="choice" data-testid="note-conflict-take-theirs" (click)="resolve.emit('theirs')">{{ takeTheirsLabel() }}</button>

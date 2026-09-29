@@ -130,13 +130,15 @@ export function takeBlocks(blocks: readonly MarkdownBlock[], limit: number): Mar
   for (const block of blocks) {
     if (remaining <= 0) break;
     remaining -= 1;
-    if (block.type === 'mention-note') {
-      const nested = takeBlocks(block.blocks, remaining);
-      remaining -= countBlocks(nested);
-      kept.push({ ...block, blocks: nested });
-    } else {
+    if (block.type !== 'mention-note') {
       kept.push(block);
+      continue;
     }
+    const nested = takeBlocks(block.blocks, remaining);
+    const isHeaderCutOffFromItsContent = block.blocks.length > 0 && nested.length === 0;
+    if (isHeaderCutOffFromItsContent) break;
+    remaining -= countBlocks(nested);
+    kept.push({ ...block, blocks: nested });
   }
   return kept;
 }

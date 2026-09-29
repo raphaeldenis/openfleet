@@ -182,6 +182,17 @@ describe('NoteEditorComponent', () => {
       expect(screen.getAllByTestId('note-editor-paragraph')).toHaveLength(2500);
     });
 
+    it('a mentioned note whose header would be the last block within the limit is not shown as an empty card', async () => {
+      const bodyMd = `${bodyOfParagraphs(1999)}\n\n--- from note @note:x (t, y) ---\nnested one\n\nnested two\n--- end @note:x ---`;
+
+      await renderEditor({ note: aNoteView({ bodyMd }) });
+
+      expect(screen.getAllByTestId('note-editor-paragraph')).toHaveLength(1999);
+      expect(screen.queryByTestId('note-editor-mention-note-x')).not.toBeInTheDocument();
+      await userEvent.click(screen.getByTestId('note-editor-show-rest'));
+      expect(screen.getByTestId('note-editor-mention-note-x')).toHaveTextContent('nested two');
+    });
+
     it('a marker naming something that is not a mentionable kind stays plain text', async () => {
       await renderEditor({ note: aNoteView({ bodyMd: '--- from note @evil:x (t, y) ---\nbody' }) });
 

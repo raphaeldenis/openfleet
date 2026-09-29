@@ -400,8 +400,9 @@ export class NotesViewComponent {
     try {
       const latest = await this.api.getNote(projectId, openNote.id);
       if (!this.isCurrentSession(session)) return 'abandoned';
-      const author = await this.authorOfRevision({ projectId, noteId: latest.id, rev: latest.rev });
+      const { author, completeHistory } = await this.readLatestRevisionAuthor({ projectId, noteId: latest.id, rev: latest.rev });
       if (!this.isCurrentSession(session)) return 'abandoned';
+      if (completeHistory !== null && this.historyOpen()) this.versions.set(completeHistory);
       const theirs = { author, at: ageLabel(latest.updatedAt), body: latest.bodyMd };
       this.conflict.set({ ours: failedWrite.ours, theirs, latest, restoreRev: failedWrite.restoreRev });
       return 'conflicted';
@@ -412,12 +413,18 @@ export class NotesViewComponent {
     }
   }
 
-  private async authorOfRevision({ projectId, noteId, rev }: { projectId: string; noteId: string; rev: number }): Promise<string> {
+  /** Versions are ordered oldest first, so the newest revision sits on the last page; `completeHistory` is set only when one page held the whole history. */
+  private async readLatestRevisionAuthor({ projectId, noteId, rev }: { projectId: string; noteId: string; rev: number }): Promise<{ author: string; completeHistory: NoteVersionSummary[] | null }> {
     try {
-      const versions = await fetchAllPages((page) => this.api.listNoteVersions(projectId, noteId, page));
-      return versions.find((version) => version.rev === rev)?.author ?? CONCURRENT_EDITOR;
+      const firstPage = await this.api.listNoteVersions(projectId, noteId, { limit: PAGE_LIMIT, offset: 0 });
+      const isWholeHistory = firstPage.total <= firstPage.items.length;
+      const lastPage = isWholeHistory
+        ? firstPage
+        : await this.api.listNoteVersions(projectId, noteId, { limit: PAGE_LIMIT, offset: Math.max(0, firstPage.total - PAGE_LIMIT) });
+      const author = lastPage.items.find((version) => version.rev === rev)?.author ?? CONCURRENT_EDITOR;
+      return { author, completeHistory: isWholeHistory ? firstPage.items : null };
     } catch {
-      return CONCURRENT_EDITOR;
+      return { author: CONCURRENT_EDITOR, completeHistory: null };
     }
   }
 

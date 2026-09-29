@@ -101,6 +101,13 @@ describe('NoteConflictBannerComponent', () => {
     expect(resolve).toHaveBeenCalledExactlyOnceWith('restore');
   });
 
+  it('a conflict raised by restoring rev 0 still offers to keep the current note or restore anyway', async () => {
+    await renderBanner({ restoreRev: 0 });
+
+    expect(screen.getByTestId('note-conflict-restore')).toHaveTextContent('Restore rev 0 anyway');
+    expect(screen.queryByTestId('note-conflict-keep-mine')).not.toBeInTheDocument();
+  });
+
   it('a conflict that is not about a restore offers no restore choice', async () => {
     await renderBanner();
 

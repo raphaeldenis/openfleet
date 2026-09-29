@@ -339,11 +339,13 @@ describe('notes view tells the user when something failed', () => {
   });
 
   it('a second concurrent edit during restore anyway shows a fresh banner that holds the user’s text', async () => {
-    const latest = aNoteView({ id: 'n1', rev: 5, bodyMd: 'theirs' });
+    const firstLatest = aNoteView({ id: 'n1', rev: 5, bodyMd: 'theirs at rev 5' });
+    const secondLatest = aNoteView({ id: 'n1', rev: 6, bodyMd: 'theirs at rev 6' });
     let getNoteCalls = 0;
     const getNote = vi.fn((_projectId: string, noteId: string) => {
       getNoteCalls += 1;
-      return Promise.resolve(getNoteCalls >= 2 ? latest : VIEWS[noteId]);
+      if (getNoteCalls === 2) return Promise.resolve(firstLatest);
+      return Promise.resolve(getNoteCalls >= 3 ? secondLatest : VIEWS[noteId]);
     });
     const api = conflictingRestoreApi({ getNote, restoreNoteVersion: vi.fn().mockRejectedValue(staleRevision()) });
     await renderView({ api });
@@ -353,9 +355,66 @@ describe('notes view tells the user when something failed', () => {
 
     await waitFor(() => expect(api.restoreNoteVersion).toHaveBeenCalledTimes(2));
 
-    await waitFor(() => expect(screen.getByTestId('note-conflict-ours')).toHaveTextContent('Original body'));
+    await waitFor(() => expect(screen.getByTestId('note-conflict-theirs')).toHaveTextContent('theirs at rev 6'));
+    expect(screen.getByTestId('note-conflict-ours')).toHaveTextContent('Original body');
     expect(screen.getByTestId('note-conflict-restore')).toBeEnabled();
     expect(screen.getByTestId('note-conflict-keep-current')).toBeEnabled();
+    await userEvent.click(screen.getByTestId('note-conflict-restore'));
+    await waitFor(() => expect(api.restoreNoteVersion).toHaveBeenCalledTimes(3));
+    expect(api.restoreNoteVersion).toHaveBeenLastCalledWith('p1', 'n1', { rev: 1, expectedRev: 6 });
+  });
+
+  describe('the author named in a conflict banner', () => {
+    const pageOf = <T>(all: T[]) =>
+      vi.fn((...args: unknown[]) => {
+        const { limit = 200, offset = 0 } = (args.at(-1) ?? {}) as { limit?: number; offset?: number };
+        return Promise.resolve({ items: all.slice(offset, offset + limit), total: all.length, limit, offset });
+      });
+
+    it('is read from the last page of a long history, without walking the pages before it', async () => {
+      const revisions = Array.from({ length: 450 }, (_, index) =>
+        aNoteVersion({ id: `v${index + 1}`, rev: index + 1, author: index + 1 === 450 ? 'Nori · T7' : 'You' }),
+      );
+      const listNoteVersions = pageOf(revisions);
+      const getNote = withLatestNoteOnSecondRead(aNoteView({ id: 'n1', rev: 450, bodyMd: 'theirs' }));
+      await renderView({ api: fakeApi({ getNote, listNoteVersions, restoreNoteVersion: vi.fn().mockRejectedValue(staleRevision()) }) });
+      await editorTitle();
+      await openHistoryAndSelectRev1();
+      const callsBeforeRestore = listNoteVersions.mock.calls.length;
+
+      await userEvent.click(screen.getByTestId('note-history-restore'));
+
+      await waitFor(() => expect(screen.getByTestId('note-conflict-theirs')).toHaveTextContent('Nori · T7'));
+      expect(listNoteVersions.mock.calls.slice(callsBeforeRestore).map(([, , request]) => request)).toEqual([
+        { limit: 200, offset: 0 },
+        { limit: 200, offset: 250 },
+      ]);
+    });
+
+    it('is named “Another editor” when the history cannot be read', async () => {
+      const listNoteVersions = vi.fn().mockResolvedValueOnce(page([aNoteVersion({ id: 'v1', rev: 1 })])).mockRejectedValue(new ApiError(500, 'GET versions → 500'));
+      await renderView({ api: conflictingRestoreApi({ listNoteVersions }) });
+      await editorTitle();
+
+      await restoreSelectedVersion();
+
+      await waitFor(() => expect(screen.getByTestId('note-conflict-theirs')).toHaveTextContent('Another editor'));
+    });
+
+    it('is read together with a refresh of the open history, which then lists the concurrent revision', async () => {
+      const listNoteVersions = vi
+        .fn()
+        .mockResolvedValueOnce(page([aNoteVersion({ id: 'v1', rev: 1 })]))
+        .mockResolvedValue(page([aNoteVersion({ id: 'v1', rev: 1 }), aNoteVersion({ id: 'v5', rev: 5, author: 'Nori · T7' })]));
+      await renderView({ api: conflictingRestoreApi({ listNoteVersions }) });
+      await editorTitle();
+
+      await restoreSelectedVersion();
+
+      await waitFor(() => expect(screen.getByTestId('note-conflict-theirs')).toHaveTextContent('Nori · T7'));
+      expect(screen.getByTestId('note-history-version-5')).toBeInTheDocument();
+      expect(listNoteVersions).toHaveBeenCalledTimes(2);
+    });
   });
 
   it('user can retry the project list after a network error, with no Finder shortcut on offer', async () => {
