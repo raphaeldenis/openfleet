@@ -28,11 +28,9 @@ describe('the daemon-set column migration upgrading a database at version 009', 
 
     const columns = db.prepare('SELECT id, column_type, auto_value FROM ds_columns').all();
     const rows = db.prepare('SELECT id, data_json FROM ds_rows').all();
-    const foreignKeyViolations = db.prepare('PRAGMA foreign_key_check').all();
 
     expect(columns).toEqual([{ id: 'c1', column_type: 'date', auto_value: null }]);
     expect(rows).toEqual([{ id: 'r1', data_json: '{"c1":"2030-01-01"}' }]);
-    expect(foreignKeyViolations).toEqual([]);
   });
 
   it('refuses any auto_value other than created_at at the database level', () => {

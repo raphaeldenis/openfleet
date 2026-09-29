@@ -16,11 +16,7 @@ export class InvalidCellValueError extends Error {
 export class InvalidNameError extends Error {}
 export class InvalidColumnDefinitionError extends Error {}
 export class InvalidQueryError extends Error {}
-export class DaemonSetColumnError extends Error {
-  constructor(readonly columnId: string) {
-    super(`Column ${columnId} is set by the daemon and cannot be updated`);
-  }
-}
+export class DaemonSetColumnError extends Error {}
 export class InvalidViewConfigError extends Error {}
 export class InvalidActorError extends Error {}
 export class DuplicateIdError extends Error {}
@@ -180,15 +176,16 @@ export class DataStoreService {
     const isDaemonSetOnNonDate = input.autoValue !== undefined && input.columnType !== 'date';
     if (isDaemonSetOnNonDate) throw new InvalidColumnDefinitionError('Only a date column can take an auto_value');
     return this.guarded(() => this.repo.addColumn(storeId, {
-      id: this.newId(), displayName, columnType: input.columnType, ...(options ? { options } : {}), ...(input.autoValue ? { autoValue: input.autoValue } : {}), at: this.clock(),
+      id: this.newId(), displayName, columnType: input.columnType, ...(options ? { options } : {}), autoValue: input.autoValue, at: this.clock(),
     }));
   }
 
   insertRow(storeId: string, input: Scope & { data: Record<string, unknown>; actor: RowActor }): DsRow {
     this.authorize(storeId, input.projectId);
     const at = this.clock();
-    const data = this.withDaemonSetCells(storeId, input.data, at);
-    this.validateCells(storeId, data);
+    const columns = this.repo.listColumns(storeId);
+    const data = this.withDaemonSetCells(this.daemonSetColumns(columns), input.data, at);
+    this.validateCells(columns, data);
     this.assertRowCapacity(storeId, 1);
     return this.guarded(() => this.repo.insertRow(storeId, { id: this.newId(), data, actor: input.actor, at }));
   }
@@ -196,7 +193,7 @@ export class DataStoreService {
   updateRow(storeId: string, rowId: string, input: Scope & { patch: Record<string, unknown>; actor: RowActor }): DsRow {
     this.authorize(storeId, input.projectId);
     this.refuseDaemonSetCells(storeId, input.patch);
-    this.validateCells(storeId, input.patch);
+    this.validateCells(this.repo.listColumns(storeId), input.patch);
     return this.guarded(() => this.repo.updateRow(rowId, { storeId, patch: input.patch, actor: input.actor, at: this.clock() }));
   }
 
@@ -217,11 +214,13 @@ export class DataStoreService {
 
   insertRows(storeId: string, input: Scope & { items: Record<string, unknown>[]; actor: RowActor }): DsRow[] {
     this.authorize(storeId, input.projectId);
+    const columns = this.repo.listColumns(storeId);
+    const daemonSetColumns = this.daemonSetColumns(columns);
     const stampedRows = input.items.map((item) => {
       const at = this.clock();
-      return { at, data: this.withDaemonSetCells(storeId, item, at) };
+      return { at, data: this.withDaemonSetCells(daemonSetColumns, item, at) };
     });
-    for (const { data } of stampedRows) this.validateCells(storeId, data);
+    for (const { data } of stampedRows) this.validateCells(columns, data);
     this.assertRowCapacity(storeId, input.items.length);
     return this.inTransaction(() => stampedRows.map(({ data, at }) => this.repo.insertRow(storeId, { id: this.newId(), data, actor: input.actor, at })));
   }
@@ -229,14 +228,15 @@ export class DataStoreService {
   /** The daemon-set columns that the given rows try to fill: they are dropped at insert, and the caller reports them. */
   ignoredDaemonSetColumnIds(storeId: string, input: Scope & { items: Record<string, unknown>[] }): string[] {
     this.authorize(storeId, input.projectId);
-    return this.daemonSetColumns(storeId).map((column) => column.id).filter((columnId) => input.items.some((item) => Object.hasOwn(item, columnId)));
+    return this.daemonSetColumns(this.repo.listColumns(storeId)).map((column) => column.id).filter((columnId) => input.items.some((item) => Object.hasOwn(item, columnId)));
   }
 
   updateRows(storeId: string, input: Scope & { items: { rowId: string; patch: Record<string, unknown> }[]; actor: RowActor }): DsRow[] {
     this.authorize(storeId, input.projectId);
+    const columns = this.repo.listColumns(storeId);
     for (const { patch } of input.items) {
       this.refuseDaemonSetCells(storeId, patch);
-      this.validateCells(storeId, patch);
+      this.validateCells(columns, patch);
     }
     return this.inTransaction(() => input.items.map(({ rowId, patch }) => this.repo.updateRow(rowId, { storeId, patch, actor: input.actor, at: this.clock() })));
   }
@@ -299,10 +299,14 @@ export class DataStoreService {
 
   private requireColumns(storeId: string, columnIds: string[]): DsColumn[] {
     const columns = this.repo.listColumns(storeId);
+    this.assertKnownColumns(columns, columnIds);
+    return columns;
+  }
+
+  private assertKnownColumns(columns: DsColumn[], columnIds: string[]): void {
     const known = new Set(columns.map((column) => column.id));
     const unknown = columnIds.filter((id) => !known.has(id));
     if (unknown.length > 0) throw new UnknownColumnError(unknown);
-    return columns;
   }
 
   /** Parses a raw view config and checks its size, its column references and the kanban group-by rule; returns the parsed config. */
@@ -340,24 +344,24 @@ export class DataStoreService {
     return parsed.data;
   }
 
-  private daemonSetColumns(storeId: string): DsColumn[] {
-    return this.repo.listColumns(storeId).filter((column) => column.autoValue === 'created_at');
+  private daemonSetColumns(columns: DsColumn[]): DsColumn[] {
+    return columns.filter((column) => column.autoValue !== undefined);
   }
 
   /** Replaces whatever the caller sent for a daemon-set column by the daemon's clock. */
-  private withDaemonSetCells(storeId: string, cells: Record<string, unknown>, at: string): Record<string, unknown> {
-    const stamps = Object.fromEntries(this.daemonSetColumns(storeId).map((column) => [column.id, at]));
+  private withDaemonSetCells(daemonSetColumns: DsColumn[], cells: Record<string, unknown>, at: string): Record<string, unknown> {
+    const stamps = Object.fromEntries(daemonSetColumns.map((column) => [column.id, at]));
     return { ...cells, ...stamps };
   }
 
   private refuseDaemonSetCells(storeId: string, patch: Record<string, unknown>): void {
-    const patchedColumn = this.daemonSetColumns(storeId).find((column) => patch[column.id] !== undefined);
-    if (patchedColumn) throw new DaemonSetColumnError(patchedColumn.id);
+    const patchedColumn = this.daemonSetColumns(this.repo.listColumns(storeId)).find((column) => patch[column.id] !== undefined);
+    if (patchedColumn) throw new DaemonSetColumnError(`Column ${patchedColumn.id} is set by the daemon and cannot be updated`);
   }
 
   /** Checks every non-undefined cell against its column type; an `undefined` cell is no change and is skipped. */
-  private validateCells(storeId: string, cells: Record<string, unknown>): void {
-    const columns = this.requireColumns(storeId, Object.keys(cells));
+  private validateCells(columns: DsColumn[], cells: Record<string, unknown>): void {
+    this.assertKnownColumns(columns, Object.keys(cells));
     for (const column of columns) {
       const value = cells[column.id];
       if (Object.hasOwn(cells, column.id) && value !== undefined && !isValidCell(column, value)) throw new InvalidCellValueError(column.id);

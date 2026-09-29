@@ -48,7 +48,7 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
       if (!dataStore || dataStore.projectId !== scope.projectId) throw new StoreNotFoundError(store);
       const columns = storeRepo.listColumns(store).map((column) => ({
         id: column.id, displayName: column.displayName, columnType: column.columnType, options: column.options, sortOrder: column.sortOrder,
-        ...(column.autoValue ? { autoValue: column.autoValue } : {}),
+        autoValue: column.autoValue,
       }));
       return { id: dataStore.id, displayName: dataStore.displayName, columns };
     });
@@ -60,7 +60,7 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
   }, async ({ store, display_name, column_type, options, auto_value }) => {
     const scope = requireProject();
     if (!scope) return fail('this session has no project');
-    return guarded(() => stores.addColumn(store, { ...scope, displayName: display_name, columnType: column_type, options, ...(auto_value ? { autoValue: auto_value } : {}) }));
+    return guarded(() => stores.addColumn(store, { ...scope, displayName: display_name, columnType: column_type, options, autoValue: auto_value }));
   });
 
   server.registerTool('insert_data_store_rows', {

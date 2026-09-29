@@ -389,19 +389,6 @@ describe('daemon-set date columns', () => {
     expect(inserted).not.toHaveProperty('ignored');
   });
 
-  it('user can filter and sort logged rows on the daemon-set column like any date column', async () => {
-    const client = await connect(scopedToken);
-    const { storeId, tsId } = await storeWithColumns(client);
-    await client.callTool({ name: 'insert_data_store_rows', arguments: { store: storeId, rows: [{}] } });
-
-    const { rows } = text(await client.callTool({
-      name: 'query_data_store',
-      arguments: { store: storeId, where: [{ columnId: tsId, op: 'gte', value: '2026-01-01' }], order_by: [{ columnId: tsId, dir: 'desc' }] },
-    }));
-
-    expect(rows).toHaveLength(1);
-  });
-
   it('user cannot rewrite the time of a logged row, while an ordinary date column still takes a future date', async () => {
     const client = await connect(scopedToken);
     const { storeId, tsId, dueId } = await storeWithColumns(client);

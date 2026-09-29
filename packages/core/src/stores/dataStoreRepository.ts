@@ -42,7 +42,7 @@ const toStore = (r: StoreRow): DataStore => ({
 const toColumn = (r: ColumnRow): DsColumn => ({
   id: r.id, storeId: r.store_id, displayName: r.display_name, columnType: r.column_type,
   options: r.options_json === null ? null : (JSON.parse(r.options_json) as SelectOption[]), sortOrder: r.sort_order,
-  ...(r.auto_value === null ? {} : { autoValue: r.auto_value }),
+  autoValue: r.auto_value ?? undefined,
 });
 const toView = (r: ViewRow): DsView => ({
   id: r.id, storeId: r.store_id, displayName: r.display_name, viewType: r.view_type,
@@ -97,7 +97,7 @@ export class DataStoreRepository {
       .run(input.id, storeId, input.displayName, input.columnType, optionsJson, nextSortOrder, input.at, input.autoValue ?? null);
     return {
       id: input.id, storeId, displayName: input.displayName, columnType: input.columnType, options: input.options ?? null, sortOrder: nextSortOrder,
-      ...(input.autoValue ? { autoValue: input.autoValue } : {}),
+      autoValue: input.autoValue,
     };
   }
 
