@@ -5,11 +5,20 @@ import { tokensMatch } from '../ids.js';
 import type { ManagerService } from '../managers/managerService.js';
 import type { PulseScheduler } from '../managers/pulseScheduler.js';
 import type { ModelTable } from '../models.js';
+import type { DocsFolderService } from '../notes/docsFolderService.js';
+import type { NoteRepository } from '../notes/noteRepository.js';
+import type { NoteService } from '../notes/noteService.js';
+import type { ProjectRepository } from '../projects/projectRepository.js';
 import type { SessionService } from '../sessions/sessionService.js';
+import type { DataStoreRepository } from '../stores/dataStoreRepository.js';
+import type { DataStoreService } from '../stores/dataStoreService.js';
 import { ALLOWED_ORIGINS } from './allowedOrigins.js';
+import { registerDataStoreRoutes } from './dataStoreRoutes.js';
 import { hooksHandler } from './hooksHandler.js';
+import { registerNoteRoutes } from './noteRoutes.js';
+import { registerProjectRoutes } from './projectRoutes.js';
 import { registerRestRoutes } from './restHandlers.js';
-import { InvalidJsonBodyError, json, logServerError, PayloadTooLargeError, readJson, Router } from './router.js';
+import { decodeParams, InvalidJsonBodyError, json, logServerError, PayloadTooLargeError, readJson, Router } from './router.js';
 import { createWsHandler } from './wsHandler.js';
 import { createWsTicketStore, type WsTicketStore } from './wsTicketStore.js';
 
@@ -23,6 +32,9 @@ export interface ServerDeps {
   wsCloseGraceMs?: number;
   // Overridable only so a test can inject a controllable clock/TTL; production always mints its own.
   wsTickets?: WsTicketStore;
+  // The notes and data-store REST routes exist only when the daemon hands over their services.
+  notes?: NoteService; noteRepo?: NoteRepository; docs?: DocsFolderService;
+  stores?: DataStoreService; storeRepo?: DataStoreRepository; projects?: ProjectRepository;
 }
 
 function applyCorsHeaders(req: IncomingMessage, res: ServerResponse): void {
@@ -50,12 +62,15 @@ async function handleMcpRequest(
   await mcp(req, res, await readJson(req));
 }
 
-export async function startServer(deps: ServerDeps): Promise<{ url: string; close(): Promise<void> }> {
+export async function startServer(deps: ServerDeps): Promise<{ url: string; routes: { method: string; path: string }[]; close(): Promise<void> }> {
   const wsTickets = deps.wsTickets ?? createWsTicketStore();
   const router = new Router();
   // ponytail: unauthenticated readiness probe for CI/e2e webServer checks, which run before the admin token is known
   router.add('GET', '/health', ({ res }) => json(res, 200, { ok: true }));
   registerRestRoutes(router, { ...deps, wsTickets });
+  if (deps.projects) registerProjectRoutes(router, deps.projects);
+  if (deps.stores && deps.storeRepo) registerDataStoreRoutes(router, { stores: deps.stores, storeRepo: deps.storeRepo });
+  if (deps.notes && deps.noteRepo && deps.docs) registerNoteRoutes(router, { notes: deps.notes, noteRepo: deps.noteRepo, docs: deps.docs });
 
   const server = createServer(async (req, res) => {
     applyCorsHeaders(req, res);
@@ -72,7 +87,11 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; clos
       // Both /hooks and /mcp resolve their token from the URL/header alone, before touching the body —
       // an unknown hook token or MCP bearer is answered without ever buffering the request into memory.
       const hookMatch = req.method === 'POST' ? HOOK_PATH.exec(url.pathname) : null;
-      if (hookMatch) return await handleHookRequest(req, res, decodeURIComponent(hookMatch[1]!), deps);
+      if (hookMatch) {
+        const hookParams = decodeParams(['hookToken'], hookMatch);
+        if (!hookParams) return json(res, 404, { error: 'not_found' });
+        return await handleHookRequest(req, res, hookParams.hookToken!, deps);
+      }
       if (url.pathname === '/mcp' && deps.mcp) return await handleMcpRequest(req, res, deps.mcp, deps.sessions);
 
       const match = router.match(req.method ?? 'GET', url.pathname);
@@ -85,7 +104,8 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; clos
       if (error instanceof InvalidJsonBodyError) return json(res, 400, { error: 'invalid_json', detail: error.message });
       const isValidation = (error as { name?: string }).name === 'ZodError';
       if (!isValidation) logServerError(req, error);
-      json(res, isValidation ? 400 : 500, { error: isValidation ? 'invalid_body' : 'internal', detail: (error as Error).message });
+      if (isValidation) return json(res, 400, { error: 'invalid_body', detail: (error as Error).message });
+      json(res, 500, { error: 'internal_error' });
     }
   });
   const ws = createWsHandler({ ...deps, wsTickets });
@@ -96,6 +116,7 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; clos
   const port = typeof address === 'object' && address ? address.port : deps.port;
   return {
     url: `http://${deps.host}:${port}`,
+    routes: router.list(),
     close: () => {
       // closeAllConnections() only ever covered plain HTTP sockets — an upgraded WS connection is not one
       // of "server's" connections any more as far as node:http is concerned, so server.close() would wait

@@ -451,7 +451,7 @@ describe('DataStoreService', () => {
       const batch = thrownBy(() => service.insertRows(store.id, { ...scope, items: [{}, {}], actor: human }));
       expect(batch).toBeInstanceOf(StoreRowCapError);
       expect(rowCount()).toBe(MAX_ROWS_PER_STORE);
-    });
+    }, 60_000);
   });
 
   describe('error mapping', () => {

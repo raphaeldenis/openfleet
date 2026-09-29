@@ -45,6 +45,11 @@ function isCompaction(event: ClaudeHookEvent): boolean {
   return event.hook_event_name === 'SessionStart' && event.source === 'compact';
 }
 
+// /clear ends the CLI's conversation but not its process: the SessionStart with source 'clear' that follows opens the new one.
+export function isClear(event: ClaudeHookEvent): boolean {
+  return event.hook_event_name === 'SessionEnd' && event.reason === 'clear';
+}
+
 // A hook that only fires while the CLI waits on its composer proves the last turn is over, even when the
 // recorded state already says idle because that turn's UserPromptSubmit never arrived.
 export function provesTurnEnded(input: SessionInput): boolean {
