@@ -108,9 +108,23 @@ describe('a user whose model switch lands between the SessionEnd and the Session
     await switchModel(id);
 
     await sessionStartByClear(id, randomUUID());
+    await new Promise((resolve) => setTimeout(resolve, CLEAR_FLUSH_GRACE_MS / 2));
 
     expect(oldHandle.killed).toBe(false);
     await expect.poll(() => oldHandle.killed).toBe(true);
+  });
+
+  it('sees the relaunch stay held when another hook lets the session look idle inside the window', async () => {
+    const id = await runningSession();
+    const launchesBefore = harness.launches.length;
+    await sessionEndByClear(id);
+    await switchModel(id);
+
+    await sendHook(id, { hook_event_name: 'UserPromptSubmit' });
+    await sendHook(id, { hook_event_name: 'Stop' });
+
+    expect(harness.launches).toHaveLength(launchesBefore);
+    await expect.poll(() => harness.launches.length, { timeout: 3000 }).toBe(launchesBefore + 1);
   });
 
   it('sees the relaunch go ahead on the current conversation when the new conversation never starts', async () => {

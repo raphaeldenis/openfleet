@@ -44,7 +44,7 @@ export function buildClaudeLaunchConfig(launch: HarnessLaunch, tokenFilePaths: T
   // no conflict with --resume, and the CLI's own transcript-based model
   // restore has decline paths that could silently drop the operator's choice.
   const resumeArgs = ['--resume', conversationId];
-  const firstRunArgs = ['--session-id', conversationId,'--name', launch.displayName];
+  const firstRunArgs = ['--session-id', conversationId, '--name', launch.displayName];
   const args = launch.resuming ? resumeArgs : firstRunArgs;
   if (launch.model) args.push('--model', launch.model);
   if (launch.permissionMode) args.push('--permission-mode', launch.permissionMode);
