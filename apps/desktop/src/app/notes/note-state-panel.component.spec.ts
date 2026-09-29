@@ -23,6 +23,12 @@ async function renderPanel(state: NotePaneState, extra: { title?: string; reason
 }
 
 describe('NoteStatePanelComponent', () => {
+  it('an error is announced to assistive technology as an alert', async () => {
+    await renderPanel('error', { title: 'daemon-protocol', reason: 'boom' });
+
+    expect(screen.getByTestId('note-error')).toHaveAttribute('role', 'alert');
+  });
+
   describe('loading', () => {
     it('user sees six skeleton bars with the mockup widths, not a spinner', async () => {
       await renderPanel('loading');

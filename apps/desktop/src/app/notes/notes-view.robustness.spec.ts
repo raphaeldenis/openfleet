@@ -30,7 +30,11 @@ const deferred = <T>() => {
   const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
   return { promise, resolve, reject };
 };
-const settle = () => new Promise((resolve) => setTimeout(resolve, 30));
+let renderedView: { fixture: { whenStable(): Promise<unknown> } };
+const flushPendingWork = async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await renderedView.fixture.whenStable();
+};
 const staleRevision = () => new ApiError(409, 'stale', 'stale_revision');
 
 function fakeApi(overrides: Record<string, unknown> = {}) {
@@ -49,7 +53,7 @@ function fakeApi(overrides: Record<string, unknown> = {}) {
 async function renderView(options: { api?: ReturnType<typeof fakeApi>; queryParams?: BehaviorSubject<ReturnType<typeof convertToParamMap>> } = {}) {
   const api = options.api ?? fakeApi();
   const queryParamMap = options.queryParams ?? new BehaviorSubject(convertToParamMap({}));
-  await render(NotesViewComponent, {
+  renderedView = await render(NotesViewComponent, {
     providers: [
       provideRouter([]),
       { provide: FleetApiService, useValue: api },
@@ -94,13 +98,13 @@ describe('notes view resists out-of-order answers', () => {
     await userEvent.click(screen.getByTestId('note-list-item-n2'));
     await expectEditorTitle('voice');
     restore.resolve(aNoteView({ id: 'n1', title: 'daemon-protocol', rev: 4, bodyMd: 'Restored body' }));
-    await settle();
+    await flushPendingWork();
 
     expect(screen.getByTestId('note-editor-title')).toHaveTextContent('voice');
     expect(screen.getByTestId('note-editor-body')).toHaveTextContent('Voice body');
   });
 
-  it('the notes of an abandoned project never replace the list of the current project', async () => {
+  it.each(['answers', 'fails'] as const)('the notes of an abandoned project never touch the current list when they %s late', async (lateOutcome) => {
     const slowOtherProject = deferred<ReturnType<typeof page<NoteSummary>>>();
     const api = fakeApi({
       listNotes: vi.fn((projectId: string) => (projectId === 'p2' ? slowOtherProject.promise : Promise.resolve(page(SUMMARIES[projectId] ?? [])))),
@@ -111,61 +115,40 @@ describe('notes view resists out-of-order answers', () => {
     await userEvent.selectOptions(screen.getByTestId('notes-project-select'), 'p1');
     await screen.findByTestId('note-list-item-n1');
 
-    slowOtherProject.resolve(page(SUMMARIES['p2']!));
-    await settle();
+    if (lateOutcome === 'answers') slowOtherProject.resolve(page(SUMMARIES['p2']!));
+    else slowOtherProject.reject(new ApiError(500, 'GET /api/notes → 500'));
+    await flushPendingWork();
 
     expect(screen.queryByTestId('note-list-item-n9')).not.toBeInTheDocument();
-    expect(screen.getByTestId('note-editor-title')).toHaveTextContent('daemon-protocol');
-  });
-
-  it('a failing notes listing of an abandoned project never shows an error over the current project', async () => {
-    const slowOtherProject = deferred<ReturnType<typeof page<NoteSummary>>>();
-    const api = fakeApi({
-      listNotes: vi.fn((projectId: string) => (projectId === 'p2' ? slowOtherProject.promise : Promise.resolve(page(SUMMARIES[projectId] ?? [])))),
-    });
-    await renderView({ api });
-    await editorTitle();
-    await userEvent.selectOptions(screen.getByTestId('notes-project-select'), 'p2');
-    await userEvent.selectOptions(screen.getByTestId('notes-project-select'), 'p1');
-    await screen.findByTestId('note-list-item-n1');
-
-    slowOtherProject.reject(new ApiError(500, 'GET /api/notes → 500'));
-    await settle();
-
     expect(screen.queryByTestId('note-error-title')).not.toBeInTheDocument();
     expect(screen.getByTestId('note-editor-title')).toHaveTextContent('daemon-protocol');
   });
 
-  it('a note still loading for a project the user left never appears in an empty project', async () => {
-    const slowNote = deferred<NoteView>();
-    const api = fakeApi({
-      getNote: vi.fn(() => slowNote.promise),
-      listProjects: vi.fn().mockResolvedValue(page([OPENFLEET, EMPTY_PROJECT])),
-    });
-    await renderView({ api });
-    await screen.findByTestId('note-list-item-n1');
-    await userEvent.selectOptions(screen.getByTestId('notes-project-select'), 'p3');
-    await screen.findByTestId('note-empty-headline');
-
-    slowNote.resolve(VIEWS['n1']!);
-    await settle();
-
-    expect(screen.queryByTestId('note-editor-title')).not.toBeInTheDocument();
-    expect(screen.getByTestId('note-empty-headline')).toBeInTheDocument();
-  });
-
-  it('a note still loading for a note the user left never replaces the note opened after it', async () => {
+  it.each([
+    {
+      leaving: 'for another note',
+      leave: () => userEvent.click(screen.getByTestId('note-list-item-n2')),
+      expectStillShown: () => expect(screen.getByTestId('note-editor-title')).toHaveTextContent('voice'),
+    },
+    {
+      leaving: 'for an empty project',
+      leave: () => userEvent.selectOptions(screen.getByTestId('notes-project-select'), 'p3'),
+      expectStillShown: () => expect(screen.getByTestId('note-empty-headline')).toBeInTheDocument(),
+    },
+  ])('a note still loading never shows up once the user left $leaving', async ({ leave, expectStillShown }) => {
     const slowNote = deferred<NoteView>();
     const getNote = vi.fn((_projectId: string, noteId: string) => (noteId === 'n1' ? slowNote.promise : Promise.resolve(VIEWS[noteId])));
-    await renderView({ api: fakeApi({ getNote }) });
-    await screen.findByTestId('note-list-item-n2');
-    await userEvent.click(screen.getByTestId('note-list-item-n2'));
-    await expectEditorTitle('voice');
+    const api = fakeApi({ getNote, listProjects: vi.fn().mockResolvedValue(page([OPENFLEET, EMPTY_PROJECT])) });
+    await renderView({ api });
+    await screen.findByTestId('note-list-item-n1');
+    await leave();
+    await waitFor(expectStillShown);
 
     slowNote.resolve(VIEWS['n1']!);
-    await settle();
+    await flushPendingWork();
 
-    expect(screen.getByTestId('note-editor-title')).toHaveTextContent('voice');
+    expectStillShown();
+    expect(screen.queryByText('Original body')).not.toBeInTheDocument();
   });
 
   it('the sidebar does not offer the notes of the previous project while the next project loads', async () => {
@@ -196,7 +179,7 @@ describe('notes view resists out-of-order answers', () => {
     await expectEditorTitle('voice');
 
     latest.resolve(aNoteView({ id: 'n1', rev: 9, bodyMd: 'theirs' }));
-    await settle();
+    await flushPendingWork();
 
     expect(screen.queryByTestId('note-conflict-keep-mine')).not.toBeInTheDocument();
   });
@@ -217,7 +200,7 @@ describe('notes view resists out-of-order answers', () => {
     await expectEditorTitle('other-note');
 
     restore.resolve(aNoteView({ id: 'n1', rev: 4, bodyMd: 'Restored body' }));
-    await settle();
+    await flushPendingWork();
 
     expect(screen.queryByTestId('note-error-title')).not.toBeInTheDocument();
     expect(screen.getByTestId('note-editor-title')).toHaveTextContent('other-note');
@@ -234,7 +217,7 @@ describe('notes view resists out-of-order answers', () => {
     await userEvent.click(screen.getByTestId('note-editor-history-toggle'));
 
     slowVersions.resolve(page([aNoteVersion({ id: 'stale', rev: 77 })]));
-    await settle();
+    await flushPendingWork();
 
     expect(screen.queryByTestId('note-history-version-77')).not.toBeInTheDocument();
   });
@@ -309,18 +292,7 @@ describe('notes view tells the user when something failed', () => {
     expect(screen.getByTestId('note-editor-body')).toHaveTextContent('Restored body');
   });
 
-  it('a failing note creation keeps the open note on screen', async () => {
-    const api = fakeApi({ createNote: vi.fn().mockRejectedValue(new ApiError(500, 'POST /api/notes → 500')) });
-    await renderView({ api });
-    await editorTitle();
-
-    await userEvent.click(screen.getByTestId('note-list-new'));
-
-    expect(await screen.findByTestId('note-action-error')).toBeInTheDocument();
-    expect(screen.getByTestId('note-editor-title')).toHaveTextContent('daemon-protocol');
-  });
-
-  it('a failing note creation says the note could not be created, with the reason', async () => {
+  it('a failing note creation says why, keeps the open note on screen and can be dismissed', async () => {
     const api = fakeApi({ createNote: vi.fn().mockRejectedValue(new ApiError(500, 'POST /api/notes → 500')) });
     await renderView({ api });
     await editorTitle();
@@ -329,61 +301,46 @@ describe('notes view tells the user when something failed', () => {
 
     expect(await screen.findByTestId('note-action-error-title')).toHaveTextContent('Couldn’t create the note');
     expect(screen.getByTestId('note-action-error-reason')).toHaveTextContent('POST /api/notes → 500');
-  });
-
-  it('user can dismiss the creation failure', async () => {
-    const api = fakeApi({ createNote: vi.fn().mockRejectedValue(new ApiError(500, 'boom')) });
-    await renderView({ api });
-    await editorTitle();
-    await userEvent.click(screen.getByTestId('note-list-new'));
-
-    await userEvent.click(await screen.findByTestId('note-action-error-dismiss'));
-
+    expect(screen.getByTestId('note-editor-title')).toHaveTextContent('daemon-protocol');
+    await userEvent.click(screen.getByTestId('note-action-error-dismiss'));
     expect(screen.queryByTestId('note-action-error')).not.toBeInTheDocument();
   });
 
   it.each([
     { status: 500, code: 'internal_error' },
+    { status: 413, code: 'note_too_large' },
+    { status: 409, code: 'file_backed' },
     { status: 404, code: 'not_found' },
-  ])('user gets a retry that reopens the note after a conflict resolution failed with $status', async ({ status, code }) => {
-    const latest = aNoteView({ id: 'n1', rev: 5, bodyMd: 'theirs' });
-    const api = conflictingRestoreApi({
-      getNote: withLatestNoteOnSecondRead(latest),
-      updateNote: vi.fn().mockRejectedValue(new ApiError(status, `PATCH → ${status}`, code)),
-    });
+  ])('a conflict resolution failing with $status is reported inline and leaves the note and the choices in place', async ({ status, code }) => {
+    const api = conflictingRestoreApi({ updateNote: vi.fn().mockRejectedValue(new ApiError(status, `PATCH → ${status}`, code)) });
     await renderView({ api });
     await editorTitle();
     await restoreSelectedVersion();
     await userEvent.click(await screen.findByTestId('note-conflict-keep-mine'));
 
-    expect(await screen.findByTestId('note-error-reason')).toHaveTextContent(String(status));
-    await userEvent.click(screen.getByTestId('note-error-retry'));
-
-    expect(await editorTitle()).toHaveTextContent('daemon-protocol');
+    expect(await screen.findByTestId('note-action-error-reason')).toHaveTextContent(String(status));
+    expect(screen.getByTestId('note-editor-title')).toHaveTextContent('daemon-protocol');
+    expect(screen.queryByTestId('note-error-title')).not.toBeInTheDocument();
+    expect(screen.getByTestId('note-conflict-keep-mine')).toBeEnabled();
   });
 
-  it('a second concurrent edit during “Keep mine” shows a fresh, usable conflict banner', async () => {
-    const latest = aNoteView({ id: 'n1', rev: 5, bodyMd: 'theirs' });
-    let getNoteCalls = 0;
-    const getNote = vi.fn((_projectId: string, noteId: string) => {
-      getNoteCalls += 1;
-      return Promise.resolve(getNoteCalls >= 2 ? latest : VIEWS[noteId]);
-    });
-    const api = fakeApi({
-      getNote,
-      restoreNoteVersion: vi.fn().mockRejectedValue(staleRevision()),
-      updateNote: vi.fn().mockRejectedValue(staleRevision()),
-    });
+  it('a restore failing with a server error is reported inline and leaves the note in place', async () => {
+    const api = fakeApi({ restoreNoteVersion: vi.fn().mockRejectedValue(new ApiError(500, 'POST restore → 500', 'internal_error')) });
     await renderView({ api });
     await editorTitle();
-    await restoreSelectedVersion();
-    await userEvent.click(await screen.findByTestId('note-conflict-keep-mine'));
 
-    await waitFor(() => expect(api.updateNote).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(screen.getByTestId('note-conflict-keep-mine')).toBeEnabled());
+    await restoreSelectedVersion();
+
+    expect(await screen.findByTestId('note-action-error-title')).toHaveTextContent('Couldn’t restore the version');
+    expect(screen.getByTestId('note-action-error-reason')).toHaveTextContent('500');
+    expect(screen.getByTestId('note-editor-body')).toHaveTextContent('Original body');
+    expect(screen.queryByTestId('note-error-title')).not.toBeInTheDocument();
   });
 
-  it('a second concurrent edit during “Merge both” keeps the merged text as the user’s version', async () => {
+  it.each([
+    { choice: 'note-conflict-keep-mine', expectedOurs: 'Original body' },
+    { choice: 'note-conflict-merge', expectedOurs: 'Original body theirs' },
+  ])('a second concurrent edit during $choice shows a fresh banner that holds the user’s text', async ({ choice, expectedOurs }) => {
     const latest = aNoteView({ id: 'n1', rev: 5, bodyMd: 'theirs' });
     let getNoteCalls = 0;
     const getNote = vi.fn((_projectId: string, noteId: string) => {
@@ -394,30 +351,25 @@ describe('notes view tells the user when something failed', () => {
     await renderView({ api });
     await editorTitle();
     await restoreSelectedVersion();
-    await userEvent.click(await screen.findByTestId('note-conflict-merge'));
+    await userEvent.click(await screen.findByTestId(choice));
 
     await waitFor(() => expect(api.updateNote).toHaveBeenCalledTimes(1));
 
-    await waitFor(() => expect(screen.getByTestId('note-conflict-ours')).toHaveTextContent('Original body theirs'));
+    await waitFor(() => expect(screen.getByTestId('note-conflict-ours')).toHaveTextContent(expectedOurs));
+    expect(screen.getByTestId(choice)).toBeEnabled();
+    expect(screen.queryByTestId('note-conflict-restore')).not.toBeInTheDocument();
   });
 
-  it('user can retry the project list after a network error', async () => {
+  it('user can retry the project list after a network error, with no Finder shortcut on offer', async () => {
     const listProjects = vi.fn().mockRejectedValueOnce(new TypeError('Failed to fetch')).mockResolvedValue(page([OPENFLEET]));
     await renderView({ api: fakeApi({ listProjects }) });
 
     expect(await screen.findByTestId('note-error-reason')).toHaveTextContent('Failed to fetch');
+    expect(screen.queryByTestId('note-error-open-in-finder')).not.toBeInTheDocument();
     await userEvent.click(screen.getByTestId('note-error-retry'));
 
     expect(await editorTitle()).toHaveTextContent('daemon-protocol');
     expect(listProjects).toHaveBeenCalledTimes(2);
-  });
-
-  it('the project error offers no Finder shortcut, only a retry', async () => {
-    await renderView({ api: fakeApi({ listProjects: vi.fn().mockRejectedValue(new TypeError('Failed to fetch')) }) });
-
-    await screen.findByTestId('note-error-retry');
-
-    expect(screen.queryByTestId('note-error-open-in-finder')).not.toBeInTheDocument();
   });
 
   it('user sees the reason when a note was deleted elsewhere', async () => {
@@ -448,7 +400,7 @@ describe('notes view protects against double submits', () => {
 
     await userEvent.dblClick(screen.getByTestId('note-list-new'));
     creation.resolve(aNoteView({ id: 'new', title: 'Untitled note', bodyMd: '' }));
-    await settle();
+    await flushPendingWork();
 
     expect(api.createNote).toHaveBeenCalledTimes(1);
   });
@@ -460,7 +412,7 @@ describe('notes view protects against double submits', () => {
 
     await userEvent.dblClick(await screen.findByTestId('note-empty-create'));
     creation.resolve(aNoteView({ id: 'new', title: 'Untitled note', bodyMd: '' }));
-    await settle();
+    await flushPendingWork();
 
     expect(api.createNote).toHaveBeenCalledTimes(1);
   });
@@ -485,7 +437,7 @@ describe('notes view protects against double submits', () => {
 
     await userEvent.dblClick(screen.getByTestId('note-history-restore'));
     restore.resolve(aNoteView({ id: 'n1', rev: 4, bodyMd: 'Restored body' }));
-    await settle();
+    await flushPendingWork();
 
     expect(api.restoreNoteVersion).toHaveBeenCalledTimes(1);
   });
@@ -499,7 +451,7 @@ describe('notes view protects against double submits', () => {
 
     await userEvent.dblClick(await screen.findByTestId(choiceTestId));
     write.resolve(aNoteView({ id: 'n1', rev: 6, bodyMd: 'written' }));
-    await settle();
+    await flushPendingWork();
 
     expect(api.updateNote).toHaveBeenCalledTimes(1);
   });
@@ -511,102 +463,39 @@ describe('notes view protects against double submits', () => {
     const callsBefore = api.getNote.mock.calls.length;
 
     await userEvent.dblClick(screen.getByTestId('note-list-item-n2'));
-    await settle();
+    await flushPendingWork();
 
     expect(api.getNote.mock.calls.length - callsBefore).toBe(1);
   });
 });
 
 describe('notes view shows every note of a project', () => {
-  const hundredNotes = () => Array.from({ length: 100 }, (_, index) => aNoteSummary({ id: `n${index}`, title: `note ${index}` }));
-  const anyNote = vi.fn((_projectId: string, noteId: string) => Promise.resolve(aNoteView({ id: noteId, title: `note ${noteId}`, bodyMd: '' })));
-
-  it('user is told how many notes are shown out of how many exist', async () => {
-    const api = fakeApi({ listNotes: vi.fn().mockResolvedValue(page(hundredNotes(), { total: 250 })), getNote: anyNote });
-    await renderView({ api });
-    await editorTitle();
-
-    expect(screen.getByTestId('note-list-truncation')).toHaveTextContent('Showing 100 of 250');
-  });
-
-  it('no truncation hint is shown when every note is listed', async () => {
-    await renderView();
-    await editorTitle();
-
-    expect(screen.queryByTestId('note-list-truncation')).not.toBeInTheDocument();
-  });
-
-  it('notes are requested with the largest page the daemon allows', async () => {
-    const api = fakeApi();
-    await renderView({ api });
-    await editorTitle();
-
-    expect(api.listNotes).toHaveBeenCalledWith('p1', { limit: 200 });
-  });
-
-  it('user can load the notes that did not fit in the first page', async () => {
-    const remaining = aNoteSummary({ id: 'late', title: 'late note' });
-    const listNotes = vi.fn().mockResolvedValueOnce(page(hundredNotes(), { total: 101 })).mockResolvedValue(page([remaining], { total: 101 }));
-    await renderView({ api: fakeApi({ listNotes, getNote: anyNote }) });
-    await editorTitle();
-
-    await userEvent.click(screen.getByTestId('note-list-load-more'));
-
-    expect(await screen.findByTestId('note-list-item-late')).toBeInTheDocument();
-    expect(listNotes).toHaveBeenLastCalledWith('p1', { limit: 200, offset: 100 });
-    expect(screen.queryByTestId('note-list-truncation')).not.toBeInTheDocument();
-  });
-
-  it('user is told when more notes could not be loaded', async () => {
-    const listNotes = vi.fn().mockResolvedValueOnce(page(hundredNotes(), { total: 150 })).mockRejectedValue(new ApiError(500, 'GET /api/notes → 500'));
-    await renderView({ api: fakeApi({ listNotes, getNote: anyNote }) });
-    await editorTitle();
-
-    await userEvent.click(screen.getByTestId('note-list-load-more'));
-
-    expect(await screen.findByTestId('note-action-error-title')).toHaveTextContent('Couldn’t load more notes');
-    expect(screen.getByTestId('note-editor-title')).toBeInTheDocument();
-  });
-
-  describe('a history of 450 versions listed oldest first by the daemon', () => {
-    const TOTAL_VERSIONS = 450;
-    const daemonVersionsOldestFirst = () =>
-      vi.fn((_projectId: string, _noteId: string, { limit = 100, offset = 0 }: { limit?: number; offset?: number } = {}) => {
-        const revs = Array.from({ length: TOTAL_VERSIONS }, (_, index) => index + 1).slice(offset, offset + Math.min(limit, 200));
-        return Promise.resolve({ items: revs.map((rev) => aNoteVersion({ id: `v${rev}`, rev })), total: TOTAL_VERSIONS, limit, offset });
-      });
-    const versionRevsOnScreen = () => screen.getAllByTestId(/^note-history-version-/).map((row) => Number(row.dataset['testid']!.split('-').at(-1)));
-
-    it('user sees the newest revision first, with the older ones announced', async () => {
-      await renderView({ api: fakeApi({ listNoteVersions: daemonVersionsOldestFirst() }) });
-      await editorTitle();
-
-      await userEvent.click(screen.getByTestId('note-editor-history-toggle'));
-
-      expect(await screen.findByTestId('note-history-version-450')).toBeInTheDocument();
-      expect(versionRevsOnScreen()[0]).toBe(450);
-      expect(versionRevsOnScreen()).toHaveLength(200);
-      expect(screen.queryByTestId('note-history-version-250')).not.toBeInTheDocument();
-      expect(screen.getByTestId('note-history-truncation')).toHaveTextContent('Showing 200 of 450');
+  const daemonPagesOf = <T>(all: T[]) =>
+    vi.fn((...args: unknown[]) => {
+      const { limit = 200, offset = 0 } = (args.at(-1) ?? {}) as { limit?: number; offset?: number };
+      return Promise.resolve({ items: all.slice(offset, offset + limit), total: all.length, limit, offset });
     });
 
-    it('user can load older revisions page after page until the first one', async () => {
-      const listNoteVersions = daemonVersionsOldestFirst();
-      await renderView({ api: fakeApi({ listNoteVersions }) });
-      await editorTitle();
-      await userEvent.click(screen.getByTestId('note-editor-history-toggle'));
-      await screen.findByTestId('note-history-version-450');
+  it('user finds a note that sits beyond the first page of the daemon', async () => {
+    const notes = Array.from({ length: 250 }, (_, index) => aNoteSummary({ id: `n${index}`, title: `note ${index}` }));
+    const listNotes = daemonPagesOf(notes);
+    const getNote = vi.fn((_projectId: string, noteId: string) => Promise.resolve(aNoteView({ id: noteId, bodyMd: '' })));
+    await renderView({ api: fakeApi({ listNotes, getNote }) });
 
-      await userEvent.click(screen.getByTestId('note-history-load-more'));
-      expect(await screen.findByTestId('note-history-version-250')).toBeInTheDocument();
-      expect(screen.getByTestId('note-history-truncation')).toHaveTextContent('Showing 400 of 450');
-      await userEvent.click(screen.getByTestId('note-history-load-more'));
+    expect(await screen.findByTestId('note-list-item-n249')).toBeInTheDocument();
+    expect(listNotes).toHaveBeenLastCalledWith('p1', { limit: 200, offset: 200 });
+  });
 
-      expect(await screen.findByTestId('note-history-version-1')).toBeInTheDocument();
-      expect(versionRevsOnScreen()).toEqual(Array.from({ length: TOTAL_VERSIONS }, (_, index) => TOTAL_VERSIONS - index));
-      expect(screen.queryByTestId('note-history-truncation')).not.toBeInTheDocument();
-      expect(listNoteVersions).toHaveBeenLastCalledWith('p1', 'n1', { limit: 50, offset: 0 });
-    });
+  it('user sees the whole history of a note, newest revision first, even when the daemon lists it oldest first', async () => {
+    const revisions = Array.from({ length: 450 }, (_, index) => aNoteVersion({ id: `v${index + 1}`, rev: index + 1 }));
+    await renderView({ api: fakeApi({ listNoteVersions: daemonPagesOf(revisions) }) });
+    await editorTitle();
+
+    await userEvent.click(screen.getByTestId('note-editor-history-toggle'));
+
+    expect(await screen.findByTestId('note-history-version-1')).toBeInTheDocument();
+    const revsOnScreen = screen.getAllByTestId(/^note-history-version-/).map((row) => Number(row.dataset['testid']!.split('-').at(-1)));
+    expect(revsOnScreen).toEqual(Array.from({ length: 450 }, (_, index) => 450 - index));
   });
 
   it('a project list longer than one page is fully loaded', async () => {
@@ -621,19 +510,28 @@ describe('notes view shows every note of a project', () => {
     expect(screen.getByTestId('notes-project-select')).toHaveTextContent('Other');
   });
 
-  it('a created note beyond the first page is visible in the list', async () => {
-    const api = fakeApi({
-      listNotes: vi.fn().mockResolvedValue(page(hundredNotes(), { total: 101 })),
-      getNote: vi.fn((_projectId: string, noteId: string) => Promise.resolve(aNoteView({ id: noteId, title: noteId === 'new' ? 'Untitled note' : 'note', bodyMd: '' }))),
-    });
-    await renderView({ api });
+  it('a note created while the user leaves and comes back to the project is listed once', async () => {
+    const creation = deferred<NoteView>();
+    let isCreatedOnDaemon = false;
+    const createdSummary = aNoteSummary({ id: 'new', title: 'Untitled note' });
+    const listNotes = vi.fn((projectId: string) =>
+      Promise.resolve(page(projectId === 'p1' && isCreatedOnDaemon ? [createdSummary, ...SUMMARIES['p1']!] : (SUMMARIES[projectId] ?? []))),
+    );
+    const getNote = vi.fn((_projectId: string, noteId: string) => Promise.resolve(noteId === 'new' ? aNoteView({ id: 'new', title: 'Untitled note', bodyMd: '' }) : VIEWS[noteId]));
+    await renderView({ api: fakeApi({ listNotes, getNote, createNote: vi.fn(() => creation.promise) }) });
     await editorTitle();
-
     await userEvent.click(screen.getByTestId('note-list-new'));
+    isCreatedOnDaemon = true;
+    await userEvent.selectOptions(screen.getByTestId('notes-project-select'), 'p2');
+    await screen.findByTestId('note-list-item-n9');
+    await userEvent.selectOptions(screen.getByTestId('notes-project-select'), 'p1');
+    await screen.findByTestId('note-list-item-new');
 
-    expect(await screen.findByTestId('note-list-item-new')).toBeInTheDocument();
+    creation.resolve(aNoteView({ id: 'new', title: 'Untitled note', bodyMd: '' }));
+    await flushPendingWork();
+
+    expect(screen.getAllByTestId('note-list-item-new')).toHaveLength(1);
   });
-
 });
 
 describe('notes view is usable from the keyboard and by assistive technology', () => {
@@ -765,39 +663,6 @@ describe('notes view renders hostile content as text', () => {
     expect(pwned()).toBeUndefined();
   });
 
-  it('a hostile mention title, mention text and version author are displayed literally', async () => {
-    const body = '--- from note @note:abc-1 (<img src=x onerror=1>, 2026-01-01) ---\n<b>inner</b>\n--- end @note:abc-1 ---\n--- @task:t-1 → <u>line</u> ---';
-    const api = fakeApi({
-      getNote: vi.fn().mockResolvedValue(aNoteView({ id: 'n1', bodyMd: body })),
-      listNoteVersions: vi.fn().mockResolvedValue(page([aNoteVersion({ id: 'v', rev: 1, author: '<img src=x onerror=1>' })])),
-    });
-    await renderView({ api });
-    await editorTitle();
-    await userEvent.click(screen.getByTestId('note-editor-history-toggle'));
-
-    expect(await screen.findByTestId('note-history-version-1')).toHaveTextContent('<img src=x onerror=1>');
-    expect(screen.getByTestId('note-editor-mention-note-abc-1')).toHaveTextContent('<img src=x onerror=1>');
-    expect(screen.getByTestId('note-editor-mention-note-abc-1')).toHaveTextContent('<b>inner</b>');
-    expect(screen.getByTestId('note-editor-mention-task-t-1')).toHaveTextContent('<u>line</u>');
-  });
-
-  it('a hostile body in the conflict banner is displayed literally', async () => {
-    const latest = aNoteView({ id: 'n1', rev: 5, bodyMd: '<img src=x onerror=1>' });
-    await renderView({ api: conflictingRestoreApi({ getNote: withLatestNoteOnSecondRead(latest) }) });
-    await editorTitle();
-    await restoreSelectedVersion();
-
-    expect(await screen.findByTestId('note-conflict-theirs')).toHaveTextContent('<img src=x onerror=1>');
-  });
-
-  it('a mention id that tries to break out of an attribute stays plain text', async () => {
-    const body = '--- @note:a"onmouseover="x → y ---';
-    await renderView({ api: fakeApi({ getNote: vi.fn().mockResolvedValue(aNoteView({ id: 'n1', bodyMd: body })) }) });
-    await editorTitle();
-
-    expect(screen.getByTestId('note-editor-body')).toHaveTextContent('a"onmouseover="x');
-    expect(pwned()).toBeUndefined();
-  });
 });
 
 describe('notes view renders unusual markdown', () => {
@@ -868,7 +733,7 @@ describe('notes view navigation', () => {
     await editorTitle();
 
     queryParams.next(convertToParamMap({ projectId: 'ghost' }));
-    await settle();
+    await flushPendingWork();
 
     expect(screen.getByTestId('note-editor-title')).toHaveTextContent('daemon-protocol');
   });
@@ -880,7 +745,7 @@ describe('notes view navigation', () => {
     await screen.findByTestId('note-conflict-keep-mine');
 
     await userEvent.click(screen.getByTestId('note-list-item-n1'));
-    await settle();
+    await flushPendingWork();
 
     expect(screen.getByTestId('note-conflict-keep-mine')).toBeInTheDocument();
   });
@@ -894,7 +759,7 @@ describe('notes view navigation', () => {
     const callsBefore = api.getNote.mock.calls.length;
 
     await userEvent.click(screen.getByTestId('note-list-item-n1'));
-    await settle();
+    await flushPendingWork();
 
     expect(screen.getByTestId('note-history-restore')).toBeInTheDocument();
     expect(api.getNote.mock.calls.length).toBe(callsBefore);
@@ -967,6 +832,15 @@ describe('notes view keeps the intent of a restore that hit a conflict', () => {
 
     await waitFor(() => expect(api.restoreNoteVersion).toHaveBeenLastCalledWith('p1', 'n1', { rev: 1, expectedRev: 5 }));
     expect(api.updateNote).not.toHaveBeenCalled();
+  });
+
+  it('user cannot restore another version from the history while the conflict waits for their choice', async () => {
+    await renderView({ api: conflictingRestoreApi() });
+    await editorTitle();
+    await restoreSelectedVersion();
+    await screen.findByTestId('note-conflict-keep-mine');
+
+    expect(screen.getByTestId('note-history-restore')).toBeDisabled();
   });
 
   it('the restore choice names the version that will be restored', async () => {

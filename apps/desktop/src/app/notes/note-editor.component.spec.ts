@@ -151,4 +151,30 @@ describe('NoteEditorComponent', () => {
       expect(screen.queryByTestId('note-editor-mentioned-by')).not.toBeInTheDocument();
     });
   });
+
+  it('the note title is a heading of the page', async () => {
+    await renderEditor({ note: aNoteView({ title: 'daemon-protocol' }) });
+
+    expect(screen.getByRole('heading', { level: 2, name: 'daemon-protocol' })).toBe(screen.getByTestId('note-editor-title'));
+  });
+
+  describe('a note with thousands of blocks', () => {
+    const bodyOfParagraphs = (count: number) => Array.from({ length: count }, (_, index) => `line ${index}`).join('\n\n');
+
+    it('user sees the first blocks and can ask for the rest', async () => {
+      await renderEditor({ note: aNoteView({ bodyMd: bodyOfParagraphs(2500) }) });
+
+      expect(screen.getAllByTestId('note-editor-paragraph')).toHaveLength(2000);
+      await userEvent.click(screen.getByTestId('note-editor-show-rest'));
+
+      expect(screen.getAllByTestId('note-editor-paragraph')).toHaveLength(2500);
+      expect(screen.queryByTestId('note-editor-show-rest')).not.toBeInTheDocument();
+    });
+
+    it('a note within the limit offers nothing to expand', async () => {
+      await renderEditor({ note: aNoteView({ bodyMd: bodyOfParagraphs(2000) }) });
+
+      expect(screen.queryByTestId('note-editor-show-rest')).not.toBeInTheDocument();
+    });
+  });
 });

@@ -78,7 +78,7 @@ describe('NotesViewComponent', () => {
       const { api } = await renderView();
 
       expect(await editorTitle()).toHaveTextContent('daemon-protocol');
-      expect(api.listNotes).toHaveBeenCalledWith('p1', { limit: 200 });
+      expect(api.listNotes).toHaveBeenCalledWith('p1', { limit: 200, offset: 0 });
       expect(screen.getByTestId('notes-project-select')).toHaveValue('p1');
     });
 
@@ -86,7 +86,7 @@ describe('NotesViewComponent', () => {
       const { api } = await renderView({ queryParams: { projectId: 'p2' } });
 
       expect(await editorTitle()).toHaveTextContent('other-note');
-      expect(api.listNotes).toHaveBeenCalledWith('p2', { limit: 200 });
+      expect(api.listNotes).toHaveBeenCalledWith('p2', { limit: 200, offset: 0 });
       expect(api.listNotes).not.toHaveBeenCalledWith('p1', expect.anything());
     });
 
@@ -194,6 +194,20 @@ describe('NotesViewComponent', () => {
     it('the action is hidden when the project has no docs folder', async () => {
       await renderView({ api: failingFileBackedNote(), opener: fakeOpener(), queryParams: { projectId: 'p2' } });
       // the failing note belongs to the fake list of every project; project p2 has no docs folder
+
+      await screen.findByTestId('note-error-retry');
+      expect(screen.queryByTestId('note-error-open-in-finder')).not.toBeInTheDocument();
+    });
+
+    it('the action is hidden when the docs folder path is not absolute', async () => {
+      const relativeDocsFolder: Project = { id: 'p1', name: 'OpenFleet', docsFolderPath: '../docs' };
+      const summaries = [aNoteSummary({ id: 'n1', title: 'daemon-protocol', folder: 'specs', fileBacked: true })];
+      const api = fakeApi({
+        listProjects: vi.fn().mockResolvedValue(page([relativeDocsFolder])),
+        listNotes: vi.fn().mockResolvedValue(page(summaries)),
+        getNote: vi.fn().mockRejectedValue(new ApiError(500, 'not valid UTF-8')),
+      });
+      await renderView({ api });
 
       await screen.findByTestId('note-error-retry');
       expect(screen.queryByTestId('note-error-open-in-finder')).not.toBeInTheDocument();

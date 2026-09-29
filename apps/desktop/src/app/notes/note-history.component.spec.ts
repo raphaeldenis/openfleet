@@ -11,23 +11,20 @@ const versions = [
   aNoteVersion({ id: 'v1', rev: 1, author: 'Argus' }),
 ];
 
-async function renderHistory(options: { isRestoring?: boolean; currentRev?: number; total?: number; error?: string } = {}) {
+async function renderHistory(options: { isRestoreBlocked?: boolean; currentRev?: number; error?: string } = {}) {
   const restore = vi.fn<(rev: number) => void>();
-  const loadMore = vi.fn<() => void>();
   const retry = vi.fn<() => void>();
   await render(NoteHistoryComponent, {
     bindings: [
       inputBinding('versions', () => versions),
-      inputBinding('isRestoring', () => options.isRestoring ?? false),
+      inputBinding('isRestoreBlocked', () => options.isRestoreBlocked ?? false),
       inputBinding('currentRev', () => options.currentRev ?? null),
-      inputBinding('total', () => options.total ?? versions.length),
       inputBinding('error', () => options.error ?? ''),
       outputBinding<number>('restore', restore),
-      outputBinding<void>('loadMore', loadMore),
       outputBinding<void>('retry', retry),
     ],
   });
-  return { restore, loadMore, retry };
+  return { restore, retry };
 }
 
 describe('NoteHistoryComponent', () => {
@@ -63,7 +60,7 @@ describe('NoteHistoryComponent', () => {
   });
 
   it('user cannot restore again while a restore is running', async () => {
-    const { restore } = await renderHistory({ isRestoring: true });
+    const { restore } = await renderHistory({ isRestoreBlocked: true });
 
     await userEvent.click(screen.getByTestId('note-history-version-2'));
     await userEvent.click(screen.getByTestId('note-history-restore'));
@@ -95,21 +92,6 @@ describe('NoteHistoryComponent', () => {
 
     expect(screen.getByTestId('note-history-version-3')).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByTestId('note-history-version-2')).toHaveAttribute('aria-pressed', 'false');
-  });
-
-  it('user sees how many versions are shown out of how many exist and can load more', async () => {
-    const { loadMore } = await renderHistory({ total: 250 });
-
-    expect(screen.getByTestId('note-history-truncation')).toHaveTextContent('Showing 3 of 250 versions');
-    await userEvent.click(screen.getByTestId('note-history-load-more'));
-
-    expect(loadMore).toHaveBeenCalledOnce();
-  });
-
-  it('no truncation hint when every version is shown', async () => {
-    await renderHistory({ total: 3 });
-
-    expect(screen.queryByTestId('note-history-truncation')).not.toBeInTheDocument();
   });
 
   it('user sees why the history could not be loaded and can retry', async () => {

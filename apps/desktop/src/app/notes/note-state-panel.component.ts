@@ -17,7 +17,7 @@ const SKELETON_BAR_WIDTHS = ['40%', '90%', '85%', '60%', '95%', '70%'];
         </div>
       }
       @case ('error') {
-        <div class="error">
+        <div class="error" role="alert" data-testid="note-error">
           <span class="error-title" data-testid="note-error-title">✕ Couldn’t open “{{ title() }}”</span>
           <span class="error-reason" data-testid="note-error-reason">{{ reason() }}</span>
           <div class="actions">

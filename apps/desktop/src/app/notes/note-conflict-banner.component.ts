@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, input, output, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, ElementRef, afterNextRender, computed, input, output, viewChild } from '@angular/core';
 
 export type ConflictResolution = 'mine' | 'theirs' | 'merge' | 'restore';
 export interface ConflictingVersion { author: string; at: string; body: string }
@@ -9,14 +9,14 @@ const DISK_AUTHOR = 'disk';
   selector: 'of-note-conflict-banner',
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <div class="bar" role="alert">
+    <div #bar class="bar" role="alert" tabindex="-1" data-testid="note-conflict-bar">
       <span class="label">! Edit conflict</span>
       <span class="message" data-testid="note-conflict-message">{{ message() }}</span>
-      <button type="button" class="choice" data-testid="note-conflict-keep-mine" [disabled]="isResolved()" (click)="choose('mine')">Keep mine</button>
-      <button type="button" class="choice" data-testid="note-conflict-take-theirs" [disabled]="isResolved()" (click)="choose('theirs')">{{ takeTheirsLabel() }}</button>
-      <button type="button" class="choice choice--primary" data-testid="note-conflict-merge" [disabled]="isResolved()" (click)="choose('merge')">Merge both</button>
+      <button type="button" class="choice" data-testid="note-conflict-keep-mine" (click)="resolve.emit('mine')">{{ keepMineLabel() }}</button>
+      <button type="button" class="choice" data-testid="note-conflict-take-theirs" (click)="resolve.emit('theirs')">{{ takeTheirsLabel() }}</button>
+      <button type="button" class="choice choice--primary" data-testid="note-conflict-merge" (click)="resolve.emit('merge')">Merge both</button>
       @if (restoreRev(); as rev) {
-        <button type="button" class="choice" data-testid="note-conflict-restore" [disabled]="isResolved()" (click)="choose('restore')">Restore rev {{ rev }} anyway</button>
+        <button type="button" class="choice" data-testid="note-conflict-restore" (click)="resolve.emit('restore')">Restore rev {{ rev }} anyway</button>
       }
     </div>
     <div class="versions">
@@ -42,7 +42,7 @@ const DISK_AUTHOR = 'disk';
       background: var(--panel); color: var(--fg); cursor: pointer; font: inherit; font-size: .75rem;
     }
     .choice--primary { border-color: var(--accent); background: var(--accent); color: var(--on-accent) }
-    .choice:disabled { border-color: var(--line); background: var(--sunk); color: var(--faint); cursor: not-allowed }
+    .bar:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
     .choice:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
     .versions { display: flex; flex-direction: column; gap: .5rem; padding: .75rem 1.25rem; max-height: 14rem; overflow: auto; font-size: .8125rem }
     .version { padding: .625rem .75rem; border-left: 3px solid; border-radius: 0 .375rem .375rem 0; white-space: pre-wrap }
@@ -57,18 +57,17 @@ export class NoteConflictBannerComponent {
   readonly restoreRev = input<number | null>(null);
   readonly resolve = output<ConflictResolution>();
 
-  protected readonly isResolved = signal(false);
+  constructor() {
+    afterNextRender(() => this.bar().nativeElement.focus());
+  }
+
+  private readonly bar = viewChild.required<ElementRef<HTMLElement>>('bar');
   private readonly isDiskConflict = computed(() => this.theirs().author === DISK_AUTHOR);
   protected readonly message = computed(() =>
     this.isDiskConflict()
       ? 'This note changed on disk since you opened it. Your version is kept below; nothing is lost.'
       : `${this.theirs().author} saved while you were typing. Your version is kept below; nothing is lost.`,
   );
+  protected readonly keepMineLabel = computed(() => (this.restoreRev() === null ? 'Keep mine' : 'Keep current'));
   protected readonly takeTheirsLabel = computed(() => (this.isDiskConflict() ? 'Keep disk' : `Take ${this.theirs().author}’s`));
-
-  protected choose(resolution: ConflictResolution): void {
-    if (this.isResolved()) return;
-    this.isResolved.set(true);
-    this.resolve.emit(resolution);
-  }
 }

@@ -52,40 +52,22 @@ describe('NoteConflictBannerComponent', () => {
     expect(resolve).toHaveBeenCalledExactlyOnceWith('merge');
   });
 
-  it.each([
-    ['note-conflict-keep-mine', 'mine'],
-    ['note-conflict-take-theirs', 'theirs'],
-    ['note-conflict-merge', 'merge'],
-  ])('a double click on %s resolves the conflict once', async (testId, resolution) => {
-    const { resolve } = await renderBanner();
-
-    await userEvent.dblClick(screen.getByTestId(testId));
-
-    expect(resolve).toHaveBeenCalledExactlyOnceWith(resolution);
-  });
-
-  it('once a choice is made the other choices no longer apply', async () => {
-    const { resolve } = await renderBanner();
-
-    await userEvent.click(screen.getByTestId('note-conflict-keep-mine'));
-    await userEvent.click(screen.getByTestId('note-conflict-take-theirs'));
-
-    expect(resolve).toHaveBeenCalledExactlyOnceWith('mine');
-  });
-
-  it.each([
-    'note-conflict-keep-mine',
-    'note-conflict-take-theirs',
-    'note-conflict-merge',
-    'note-conflict-restore',
-  ])('after choosing %s every choice is disabled', async (chosenTestId) => {
+  it('a conflict raised by a restore calls the user’s choice “Keep current”, since it keeps the body from before the restore', async () => {
     await renderBanner({ restoreRev: 4 });
 
-    await userEvent.click(screen.getByTestId(chosenTestId));
+    expect(screen.getByTestId('note-conflict-keep-mine')).toHaveTextContent('Keep current');
+  });
 
-    for (const testId of ['note-conflict-keep-mine', 'note-conflict-take-theirs', 'note-conflict-merge', 'note-conflict-restore']) {
-      expect(screen.getByTestId(testId)).toBeDisabled();
-    }
+  it('a conflict raised by an edit calls the user’s choice “Keep mine”', async () => {
+    await renderBanner();
+
+    expect(screen.getByTestId('note-conflict-keep-mine')).toHaveTextContent('Keep mine');
+  });
+
+  it('the conflict banner takes the focus when it appears', async () => {
+    await renderBanner();
+
+    expect(screen.getByTestId('note-conflict-bar')).toHaveFocus();
   });
 
   it('user can restore the version they were restoring on top of the latest revision', async () => {

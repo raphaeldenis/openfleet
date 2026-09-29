@@ -32,12 +32,6 @@ import type { NoteVersionSummary } from './notes.types';
         </li>
       }
     </ul>
-    @if (total() > versions().length) {
-      <div class="truncation" data-testid="note-history-truncation">
-        <span>Showing {{ versions().length }} of {{ total() }} versions</span>
-        <button type="button" class="of-btn of-btn--secondary" data-testid="note-history-load-more" (click)="loadMore.emit()">Load more</button>
-      </div>
-    }
     <div class="actions">
       <button type="button" class="restore" data-testid="note-history-restore" [disabled]="!canRestoreSelection()" (click)="restoreSelected()">
         Restore selected version
@@ -58,7 +52,7 @@ import type { NoteVersionSummary } from './notes.types';
     .head { display: flex; gap: .375rem }
     .author { font-weight: 500; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
     .when, .rev { font-family: var(--mono); font-size: .625rem; color: var(--faint) }
-    .error, .truncation { display: flex; flex-direction: column; gap: .5rem; padding: .625rem .875rem; font-size: .75rem; color: var(--mut) }
+    .error { display: flex; flex-direction: column; gap: .5rem; padding: .625rem .875rem; font-size: .75rem; color: var(--mut) }
     .error { color: var(--state-error) }
     .actions { padding: .75rem .875rem }
     .restore {
@@ -71,12 +65,10 @@ import type { NoteVersionSummary } from './notes.types';
 })
 export class NoteHistoryComponent {
   readonly versions = input.required<readonly NoteVersionSummary[]>();
-  readonly total = input(0);
   readonly currentRev = input<number | null>(null);
-  readonly isRestoring = input(false);
+  readonly isRestoreBlocked = input(false);
   readonly error = input('');
   readonly restore = output<number>();
-  readonly loadMore = output<void>();
   readonly retry = output<void>();
 
   protected readonly selectedRev = signal<number | null>(null);
@@ -84,7 +76,7 @@ export class NoteHistoryComponent {
   protected readonly canRestoreSelection = computed(() => {
     const rev = this.selectedRev();
     const isSelectionRestorable = rev !== null && rev !== this.currentRev();
-    return isSelectionRestorable && !this.isRestoring();
+    return isSelectionRestorable && !this.isRestoreBlocked();
   });
 
   protected ageOf(version: NoteVersionSummary): string {

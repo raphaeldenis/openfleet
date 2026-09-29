@@ -30,10 +30,20 @@ interface FailedWrite {
   restoreRev: number | null;
 }
 
+interface WriteAttempt {
+  write: () => Promise<NoteView>;
+  failedWrite: FailedWrite;
+  failureTitle: string;
+}
+
+type WriteOutcome = 'written' | 'conflicted' | 'failed' | 'abandoned';
+
 const NEW_NOTE_TITLE = 'Untitled note';
 const CONCURRENT_EDITOR = 'Another editor';
 const MERGE_SEPARATOR = '\n\n';
 const PAGE_LIMIT = 200;
+const RESTORE_FAILURE_TITLE = 'Couldn’t restore the version';
+const SAVE_FAILURE_TITLE = 'Couldn’t save the note';
 
 const isStaleRevision = (error: unknown) => error instanceof ApiError && error.code === 'stale_revision';
 const reasonOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
@@ -63,14 +73,12 @@ async function fetchAllPages<T>(fetchPage: (request: PageRequest) => Promise<Pag
       </select>
       <of-note-list
         [notes]="notes()"
-        [total]="notesTotal()"
         [selectedId]="selectedId()"
         [hasLoaded]="notesStatus() === 'ready'"
         [canCreate]="canCreateNote()"
         [(filter)]="filter"
         (selected)="openNote($event)"
         (create)="createNote()"
-        (loadMore)="loadMoreNotes()"
       />
     </aside>
 
@@ -117,12 +125,10 @@ async function fetchAllPages<T>(fetchPage: (request: PageRequest) => Promise<Pag
           @if (historyOpen()) {
             <of-note-history
               [versions]="versions()"
-              [total]="versionsTotal()"
               [currentRev]="openNote.rev"
-              [isRestoring]="isRestoring()"
+              [isRestoreBlocked]="isRestoreBlocked()"
               [error]="versionsError()"
               (restore)="restoreVersion($event)"
-              (loadMore)="loadMoreVersions()"
               (retry)="reloadVersions()"
             />
           }
@@ -161,7 +167,6 @@ export class NotesViewComponent {
   protected readonly projectId = signal<string | null>(null);
 
   protected readonly notes = signal<readonly NoteSummary[]>([]);
-  protected readonly notesTotal = signal(0);
   protected readonly notesStatus = signal<LoadStatus>('loading');
   protected readonly notesError = signal('');
   protected readonly selectedId = signal<string | null>(null);
@@ -175,10 +180,10 @@ export class NotesViewComponent {
 
   protected readonly historyOpen = signal(false);
   protected readonly versions = signal<readonly NoteVersionSummary[]>([]);
-  protected readonly versionsTotal = signal(0);
   protected readonly versionsError = signal('');
   protected readonly isRestoring = signal(false);
   private readonly conflict = signal<EditConflict | null>(null);
+  protected readonly isRestoreBlocked = computed(() => this.isRestoring() || this.conflict() !== null);
   protected readonly conflicts = computed(() => {
     const conflict = this.conflict();
     return conflict ? [conflict] : [];
@@ -189,9 +194,15 @@ export class NotesViewComponent {
   protected readonly projectName = computed(() => this.project()?.name ?? '');
   protected readonly selectedSummary = computed(() => this.notes().find((summary) => summary.id === this.selectedId()));
 
+  // ponytail: POSIX absolute paths only until OPENER01 registers the opener plugin and its scope; validate against that scope then
+  private readonly revealableDocsFolder = computed(() => {
+    const docsFolderPath = this.project()?.docsFolderPath;
+    return docsFolderPath?.startsWith('/') ? docsFolderPath : null;
+  });
+
   protected readonly canOpenSelectedFolder = computed(() => {
     const isFileBacked = this.selectedSummary()?.fileBacked === true;
-    const hasDocsFolder = !!this.project()?.docsFolderPath;
+    const hasDocsFolder = this.revealableDocsFolder() !== null;
     return this.opener.isAvailable && isFileBacked && hasDocsFolder;
   });
 
@@ -204,8 +215,6 @@ export class NotesViewComponent {
   private latestNotesRequest = 0;
   private latestVersionsRequest = 0;
   private noteSession = 0;
-  private isLoadingMoreNotes = false;
-  private oldestLoadedVersionOffset = 0;
 
   constructor() {
     void this.loadProjects();
@@ -244,41 +253,18 @@ export class NotesViewComponent {
     this.notesStatus.set('loading');
     this.resetOpenNote();
     this.notes.set([]);
-    this.notesTotal.set(0);
     this.selectedId.set(null);
-    this.actionFailure.set(null);
     try {
-      const page = await this.api.listNotes(projectId, { limit: PAGE_LIMIT });
+      const allNotes = await fetchAllPages((page) => this.api.listNotes(projectId, page));
       if (request !== this.latestNotesRequest) return;
-      this.notes.set(page.items);
-      this.notesTotal.set(page.total);
+      this.notes.set(allNotes);
       this.notesStatus.set('ready');
-      const firstNoteId = page.items[0]?.id;
+      const firstNoteId = allNotes[0]?.id;
       if (firstNoteId) await this.openNote(firstNoteId);
     } catch (error) {
       if (request !== this.latestNotesRequest) return;
       this.notesError.set(reasonOf(error));
       this.notesStatus.set('error');
-    }
-  }
-
-  protected async loadMoreNotes(): Promise<void> {
-    const projectId = this.projectId();
-    if (projectId === null || this.isLoadingMoreNotes) return;
-    const request = this.latestNotesRequest;
-    this.isLoadingMoreNotes = true;
-    try {
-      const alreadyLoadedCount = this.notes().length;
-      const page = await this.api.listNotes(projectId, { limit: PAGE_LIMIT, offset: alreadyLoadedCount });
-      if (request !== this.latestNotesRequest) return;
-      const knownIds = new Set(this.notes().map((summary) => summary.id));
-      this.notes.update((notes) => [...notes, ...page.items.filter((summary) => !knownIds.has(summary.id))]);
-      this.notesTotal.set(page.total);
-    } catch (error) {
-      if (request !== this.latestNotesRequest) return;
-      this.actionFailure.set({ title: 'Couldn’t load more notes', reason: reasonOf(error) });
-    } finally {
-      this.isLoadingMoreNotes = false;
     }
   }
 
@@ -317,8 +303,7 @@ export class NotesViewComponent {
       const projectChangedMeanwhile = this.projectId() !== projectId;
       if (projectChangedMeanwhile) return;
       this.filter.set('');
-      this.notes.update((notes) => [createdNote, ...notes]);
-      this.notesTotal.update((total) => total + 1);
+      this.notes.update((notes) => [createdNote, ...notes.filter((summary) => summary.id !== createdNote.id)]);
       await this.openNote(createdNote.id);
     } catch (error) {
       this.actionFailure.set({ title: 'Couldn’t create the note', reason: reasonOf(error) });
@@ -328,9 +313,9 @@ export class NotesViewComponent {
   }
 
   protected openSelectedFolder(): void {
-    const docsFolderPath = this.project()?.docsFolderPath;
+    const docsFolderPath = this.revealableDocsFolder();
     const folder = this.selectedSummary()?.folder;
-    if (!docsFolderPath) return;
+    if (docsFolderPath === null) return;
     const noteFolderPath = folder ? `${docsFolderPath}/${folder}` : docsFolderPath;
     void this.opener.open(noteFolderPath);
   }
@@ -338,21 +323,17 @@ export class NotesViewComponent {
   protected async toggleHistory(): Promise<void> {
     const willOpen = !this.historyOpen();
     this.historyOpen.set(willOpen);
-    if (willOpen) await this.loadVersions({ session: this.noteSession, mode: 'newest' });
+    if (willOpen) await this.loadVersions();
   }
 
   protected reloadVersions(): Promise<void> {
-    return this.loadVersions({ session: this.noteSession, mode: 'newest' });
-  }
-
-  protected loadMoreVersions(): Promise<void> {
-    return this.loadVersions({ session: this.noteSession, mode: 'older' });
+    return this.loadVersions();
   }
 
   protected async restoreVersion(rev: number): Promise<void> {
     const projectId = this.projectId();
     const openNote = this.note();
-    if (projectId === null || openNote === null || this.isRestoring()) return;
+    if (projectId === null || openNote === null || this.isRestoreBlocked()) return;
     const session = this.noteSession;
     this.isRestoring.set(true);
     try {
@@ -360,6 +341,7 @@ export class NotesViewComponent {
         session,
         write: () => this.api.restoreNoteVersion(projectId, openNote.id, { rev, expectedRev: openNote.rev }),
         failedWrite: { ours: openNote.bodyMd, restoreRev: rev },
+        failureTitle: RESTORE_FAILURE_TITLE,
       });
     } finally {
       if (this.isCurrentSession(session)) this.isRestoring.set(false);
@@ -372,103 +354,94 @@ export class NotesViewComponent {
     if (conflict === null || projectId === null) return;
     const session = this.noteSession;
     this.conflict.set(null);
-    const { latest } = conflict;
 
     if (resolution === 'theirs') {
-      this.note.set(latest);
+      this.note.set(conflict.latest);
       this.focusEditorAfterRender();
-      await this.reloadVersionsWhenOpen(session);
+      await this.reloadVersionsWhenOpen();
       return;
     }
 
-    if (resolution === 'restore' && conflict.restoreRev !== null) {
-      const rev = conflict.restoreRev;
-      await this.writeNote({
-        session,
-        write: () => this.api.restoreNoteVersion(projectId, latest.id, { rev, expectedRev: latest.rev }),
-        failedWrite: { ours: conflict.ours, restoreRev: rev },
-      });
-      return;
-    }
+    const outcome = await this.writeNote({ session, ...this.conflictWrite({ resolution, conflict, projectId }) });
+    const shouldOfferChoicesAgain = outcome === 'failed' && this.isCurrentSession(session);
+    if (shouldOfferChoicesAgain) this.conflict.set(conflict);
+  }
 
+  private conflictWrite({ resolution, conflict, projectId }: { resolution: ConflictResolution; conflict: EditConflict; projectId: string }): WriteAttempt {
+    const { latest, restoreRev } = conflict;
+    if (resolution === 'restore' && restoreRev !== null) {
+      return {
+        write: () => this.api.restoreNoteVersion(projectId, latest.id, { rev: restoreRev, expectedRev: latest.rev }),
+        failedWrite: { ours: conflict.ours, restoreRev },
+        failureTitle: RESTORE_FAILURE_TITLE,
+      };
+    }
     const mergedBody = [conflict.ours, conflict.theirs.body].join(MERGE_SEPARATOR);
     const bodyMd = resolution === 'merge' ? mergedBody : conflict.ours;
-    await this.writeNote({
-      session,
+    return {
       write: () => this.api.updateNote(projectId, latest.id, { expectedRev: latest.rev, bodyMd }),
       failedWrite: { ours: bodyMd, restoreRev: null },
-    });
+      failureTitle: SAVE_FAILURE_TITLE,
+    };
   }
 
-  private async writeNote({ session, write, failedWrite }: { session: number; write: () => Promise<NoteView>; failedWrite: FailedWrite }): Promise<void> {
+  private async writeNote({ session, write, failedWrite, failureTitle }: WriteAttempt & { session: number }): Promise<WriteOutcome> {
+    this.actionFailure.set(null);
     try {
       const writtenNote = await write();
-      if (!this.isCurrentSession(session)) return;
+      if (!this.isCurrentSession(session)) return 'abandoned';
       this.note.set(writtenNote);
     } catch (error) {
-      if (!this.isCurrentSession(session)) return;
-      await this.handleWriteFailure({ error, session, failedWrite });
-      return;
+      if (!this.isCurrentSession(session)) return 'abandoned';
+      return this.handleWriteFailure({ error, session, failedWrite, failureTitle });
     }
     this.focusEditorAfterRender();
-    await this.reloadVersionsWhenOpen(session);
+    await this.reloadVersionsWhenOpen();
+    return 'written';
   }
 
-  private async handleWriteFailure({ error, session, failedWrite }: { error: unknown; session: number; failedWrite: FailedWrite }): Promise<void> {
+  private async handleWriteFailure({ error, session, failedWrite, failureTitle }: { error: unknown; session: number } & Omit<WriteAttempt, 'write'>): Promise<WriteOutcome> {
     const projectId = this.projectId();
     const openNote = this.note();
-    if (!isStaleRevision(error) || projectId === null || openNote === null) {
-      this.showNoteError(error);
-      return;
+    const isConcurrentEdit = isStaleRevision(error) && projectId !== null && openNote !== null;
+    if (!isConcurrentEdit) {
+      this.actionFailure.set({ title: failureTitle, reason: reasonOf(error) });
+      return 'failed';
     }
     try {
       const latest = await this.api.getNote(projectId, openNote.id);
-      if (!this.isCurrentSession(session)) return;
+      if (!this.isCurrentSession(session)) return 'abandoned';
       const theirs = { author: CONCURRENT_EDITOR, at: ageLabel(latest.updatedAt), body: latest.bodyMd };
       this.conflict.set({ ours: failedWrite.ours, theirs, latest, restoreRev: failedWrite.restoreRev });
+      return 'conflicted';
     } catch (lookupError) {
-      if (!this.isCurrentSession(session)) return;
+      if (!this.isCurrentSession(session)) return 'abandoned';
       this.showNoteError(lookupError);
+      return 'failed';
     }
   }
 
-  // The daemon lists versions oldest first: the newest page is the last one, older pages are prepended.
-  private async loadVersions({ session, mode }: { session: number; mode: 'newest' | 'older' }): Promise<void> {
+  // ponytail: one request per 200 revisions; add paging if a note ever reaches thousands of revisions
+  private async loadVersions(): Promise<void> {
     const projectId = this.projectId();
     const openNote = this.note();
     if (projectId === null || openNote === null) return;
+    const session = this.noteSession;
     const request = ++this.latestVersionsRequest;
     const isStale = () => !this.isCurrentSession(session) || request !== this.latestVersionsRequest;
-    const fetchVersions = (page: PageRequest) => this.api.listNoteVersions(projectId, openNote.id, page);
     this.versionsError.set('');
     try {
-      if (mode === 'older') {
-        const oldestLoadedOffset = this.oldestLoadedVersionOffset;
-        if (oldestLoadedOffset === 0) return;
-        const offset = Math.max(0, oldestLoadedOffset - PAGE_LIMIT);
-        const olderPage = await fetchVersions({ limit: oldestLoadedOffset - offset, offset });
-        if (isStale()) return;
-        this.versions.update((versions) => [...olderPage.items, ...versions]);
-        this.versionsTotal.set(olderPage.total);
-        this.oldestLoadedVersionOffset = offset;
-        return;
-      }
-      const firstPage = await fetchVersions({ limit: PAGE_LIMIT, offset: 0 });
+      const allVersions = await fetchAllPages((page) => this.api.listNoteVersions(projectId, openNote.id, page));
       if (isStale()) return;
-      const lastPageOffset = Math.max(0, firstPage.total - PAGE_LIMIT);
-      const newestPage = lastPageOffset === 0 ? firstPage : await fetchVersions({ limit: PAGE_LIMIT, offset: lastPageOffset });
-      if (isStale()) return;
-      this.versions.set(newestPage.items);
-      this.versionsTotal.set(newestPage.total);
-      this.oldestLoadedVersionOffset = lastPageOffset;
+      this.versions.set(allVersions);
     } catch (error) {
-      if (!this.isCurrentSession(session) || request !== this.latestVersionsRequest) return;
+      if (isStale()) return;
       this.versionsError.set(reasonOf(error));
     }
   }
 
-  private async reloadVersionsWhenOpen(session: number): Promise<void> {
-    if (this.historyOpen()) await this.loadVersions({ session, mode: 'newest' });
+  private async reloadVersionsWhenOpen(): Promise<void> {
+    if (this.historyOpen()) await this.loadVersions();
   }
 
   private showNoteError(error: unknown): void {
@@ -496,8 +469,8 @@ export class NotesViewComponent {
     this.conflict.set(null);
     this.historyOpen.set(false);
     this.versions.set([]);
-    this.versionsTotal.set(0);
     this.versionsError.set('');
+    this.actionFailure.set(null);
     this.isRestoring.set(false);
     return ++this.noteSession;
   }

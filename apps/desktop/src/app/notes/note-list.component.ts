@@ -46,12 +46,6 @@ import type { NoteSummary } from './notes.types';
       } @else if (visibleNotes().length === 0) {
         <div class="hint" data-testid="note-list-no-match">No note matches “{{ filter() }}”.</div>
       }
-      @if (total() > notes().length) {
-        <div class="hint truncation" data-testid="note-list-truncation">
-          <span>Showing {{ notes().length }} of {{ total() }} notes</span>
-          <button type="button" class="of-btn of-btn--secondary" data-testid="note-list-load-more" (click)="loadMore.emit()">Load more</button>
-        </div>
-      }
     </div>
   `,
   styles: `
@@ -77,20 +71,17 @@ import type { NoteSummary } from './notes.types';
     .title { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
     .meta { font-size: .6875rem; color: var(--mut) }
     .hint { padding: 1rem .5rem; font-size: .75rem; color: var(--mut) }
-    .truncation { display: flex; flex-direction: column; gap: .5rem }
     .new:disabled { color: var(--faint); cursor: not-allowed }
   `,
 })
 export class NoteListComponent {
   readonly notes = input.required<readonly NoteSummary[]>();
   readonly selectedId = input<string | null>(null);
-  readonly total = input(0);
   readonly hasLoaded = input(true);
   readonly canCreate = input(true);
   readonly filter = model('');
   readonly selected = output<string>();
   readonly create = output<void>();
-  readonly loadMore = output<void>();
 
   protected readonly visibleNotes = computed(() => {
     const needle = this.filter().trim().toLowerCase();
