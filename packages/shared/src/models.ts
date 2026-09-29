@@ -5,7 +5,7 @@ import { z } from 'zod';
 // that accepts a model id or rung name validates against this one schema, so the check cannot drift
 // between REST, MCP and the harness launch that spawns the CLI.
 export const MODEL_ID_MAX_LENGTH = 100;
-export const MODEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:[\]-]*$/;
+export const MODEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:\[\]\-]*$/;
 
 export const ModelIdSchema = z.string().trim().min(1).max(MODEL_ID_MAX_LENGTH).regex(MODEL_ID_PATTERN, 'invalid model id');
 
