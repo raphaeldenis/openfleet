@@ -354,3 +354,110 @@ describe('table tools', () => {
     expect((strangerResult.content as { text: string }[])[0]!.text).toBe((missingResult.content as { text: string }[])[0]!.text);
   });
 });
+
+describe('daemon-set date columns', () => {
+  const DAEMON_TIME = '2026-01-01T00:00:00.000Z';
+  const FUTURE_TIME = '2031-06-01T00:00:00.000Z';
+
+  async function storeWithColumns(client: Client) {
+    const store = await createStore(client);
+    await client.callTool({ name: 'add_data_store_column', arguments: { store: store.id, display_name: 'ts', column_type: 'date', auto_value: 'created_at' } });
+    await client.callTool({ name: 'add_data_store_column', arguments: { store: store.id, display_name: 'due', column_type: 'date' } });
+    const [ts, due] = text(await client.callTool({ name: 'describe_data_store', arguments: { store: store.id } })).columns;
+    return { storeId: store.id as string, tsId: ts.id as string, dueId: due.id as string };
+  }
+
+  it('user can log a row whose time column is stamped by the daemon, whatever the agent sends', async () => {
+    const client = await connect(scopedToken);
+    const { storeId, tsId } = await storeWithColumns(client);
+
+    const inserted = text(await client.callTool({ name: 'insert_data_store_rows', arguments: { store: storeId, rows: [{ [tsId]: FUTURE_TIME }] } }));
+
+    const { rows } = text(await client.callTool({ name: 'query_data_store', arguments: { store: storeId } }));
+    expect(rows[0].data[tsId]).toBe(DAEMON_TIME);
+    expect(inserted.ignored).toEqual([tsId]);
+  });
+
+  it('user can log a row without naming the time column and gets it stamped, with nothing reported as ignored', async () => {
+    const client = await connect(scopedToken);
+    const { storeId, tsId } = await storeWithColumns(client);
+
+    const inserted = text(await client.callTool({ name: 'insert_data_store_rows', arguments: { store: storeId, rows: [{}] } }));
+
+    const { rows } = text(await client.callTool({ name: 'query_data_store', arguments: { store: storeId } }));
+    expect(rows[0].data[tsId]).toBe(DAEMON_TIME);
+    expect(inserted).not.toHaveProperty('ignored');
+  });
+
+  it('user cannot rewrite the time of a logged row, while an ordinary date column still takes a future date', async () => {
+    const client = await connect(scopedToken);
+    const { storeId, tsId, dueId } = await storeWithColumns(client);
+    const [rowId] = text(await client.callTool({ name: 'insert_data_store_rows', arguments: { store: storeId, rows: [{}] } })).ids;
+
+    const refused = await client.callTool({ name: 'update_data_store_rows', arguments: { store: storeId, updates: [{ row_id: rowId, patch: { [tsId]: FUTURE_TIME } }] } });
+    const accepted = await client.callTool({ name: 'update_data_store_rows', arguments: { store: storeId, updates: [{ row_id: rowId, patch: { [dueId]: FUTURE_TIME } }] } });
+
+    expect(refused.isError).toBe(true);
+    expect((refused.content as { text: string }[])[0]!.text).toMatch(/set by the daemon/i);
+    expect(accepted.isError).toBeFalsy();
+    const { rows } = text(await client.callTool({ name: 'query_data_store', arguments: { store: storeId } }));
+    expect(rows[0].data).toEqual({ [tsId]: DAEMON_TIME, [dueId]: FUTURE_TIME });
+  });
+
+  it('user cannot make a text column daemon-set', async () => {
+    const client = await connect(scopedToken);
+    const store = await createStore(client);
+
+    const result = await client.callTool({ name: 'add_data_store_column', arguments: { store: store.id, display_name: 'note', column_type: 'text', auto_value: 'created_at' } });
+
+    expect(result.isError).toBe(true);
+    expect((result.content as { text: string }[])[0]!.text).toMatch(/only a date column/i);
+  });
+
+  it('describe_data_store tells which column the daemon sets', async () => {
+    const client = await connect(scopedToken);
+    const { storeId } = await storeWithColumns(client);
+
+    const { columns } = text(await client.callTool({ name: 'describe_data_store', arguments: { store: storeId } }));
+
+    expect(columns[0].autoValue).toBe('created_at');
+    expect(columns[1]).not.toHaveProperty('autoValue');
+  });
+
+  it('user cannot clear the time of a logged row by patching it with null', async () => {
+    const client = await connect(scopedToken);
+    const { storeId, tsId } = await storeWithColumns(client);
+    const [rowId] = text(await client.callTool({ name: 'insert_data_store_rows', arguments: { store: storeId, rows: [{}] } })).ids;
+
+    const refused = await client.callTool({ name: 'update_data_store_rows', arguments: { store: storeId, updates: [{ row_id: rowId, patch: { [tsId]: null } }] } });
+
+    expect(refused.isError).toBe(true);
+    const { rows } = text(await client.callTool({ name: 'query_data_store', arguments: { store: storeId } }));
+    expect(rows[0].data[tsId]).toBe(DAEMON_TIME);
+  });
+
+  it('user cannot rewrite a logged time from the second update of a batch, and the first update is not applied', async () => {
+    const client = await connect(scopedToken);
+    const { storeId, tsId, dueId } = await storeWithColumns(client);
+    const [firstRowId, secondRowId] = text(await client.callTool({ name: 'insert_data_store_rows', arguments: { store: storeId, rows: [{}, {}] } })).ids;
+
+    const refused = await client.callTool({
+      name: 'update_data_store_rows',
+      arguments: { store: storeId, updates: [{ row_id: firstRowId, patch: { [dueId]: FUTURE_TIME } }, { row_id: secondRowId, patch: { [tsId]: FUTURE_TIME } }] },
+    });
+
+    expect(refused.isError).toBe(true);
+    const { rows } = text(await client.callTool({ name: 'query_data_store', arguments: { store: storeId } }));
+    expect(rows[0].data).not.toHaveProperty(dueId);
+    expect(rows[1].data[tsId]).toBe(DAEMON_TIME);
+  });
+
+  it('user is told the time column was ignored when only a later row of the batch supplies it', async () => {
+    const client = await connect(scopedToken);
+    const { storeId, tsId } = await storeWithColumns(client);
+
+    const inserted = text(await client.callTool({ name: 'insert_data_store_rows', arguments: { store: storeId, rows: [{}, { [tsId]: FUTURE_TIME }] } }));
+
+    expect(inserted.ignored).toEqual([tsId]);
+  });
+});
