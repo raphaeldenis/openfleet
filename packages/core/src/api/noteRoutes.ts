@@ -86,7 +86,7 @@ export function registerNoteRoutes(router: Router, { notes, noteRepo, docs }: No
 
   router.add('GET', '/api/notes/search', ({ req, res }) => {
     const { projectId, q, limit } = SearchNotesQuerySchema.parse(queryParams(req));
-    const terms = q.trim().split(/\s+/).filter((term) => term !== '');
+    const terms = q.replaceAll('\0', ' ').trim().split(/\s+/).filter((term) => term !== '');
     if (terms.length > MAX_QUERY_TERMS) return json(res, 400, { error: 'invalid_body', detail: `too many terms in query (max ${MAX_QUERY_TERMS})` });
     if (terms.length === 0) return json(res, 200, { items: [], total: 0 });
     const hits = noteRepo.searchSummaries(escapeFtsTerms(terms), { projectId, limit });
