@@ -1,4 +1,5 @@
-import { ClaudeHookEventSchema, WORKING_STATE_TOOL_NAMES, type StopHookOutput } from '@openfleet/shared';
+import { ClaudeHookEventSchema, WORKING_STATE_TOOL_NAMES, type ContextHookOutput, type StopHookOutput } from '@openfleet/shared';
+import type { SessionStartContext, SessionStartRequest } from '../workingState/sessionStartContext.js';
 import type { ApprovalService } from '../governance/approvalService.js';
 import { log } from '../logger.js';
 import type { SessionService } from '../sessions/sessionService.js';
@@ -14,7 +15,16 @@ function decideStopRefusalFailingOpen(stopRefusal: StopRefusal | undefined, sess
   }
 }
 
-export function hooksHandler(deps: { sessions: SessionService; approvals: ApprovalService; stopRefusal?: StopRefusal }): Handler {
+function buildSessionStartContextFailingOpen(sessionStartContext: SessionStartContext | undefined, request: SessionStartRequest): ContextHookOutput | undefined {
+  try {
+    return sessionStartContext?.build(request);
+  } catch (error) {
+    log('warn', `session start context failed, injecting nothing: ${error instanceof Error ? error.message : String(error)}`);
+    return undefined;
+  }
+}
+
+export function hooksHandler(deps: { sessions: SessionService; approvals: ApprovalService; stopRefusal?: StopRefusal; sessionStartContext?: SessionStartContext }): Handler {
   return async ({ res, params, body }) => {
     const session = deps.sessions.byHookToken(params.hookToken ?? '');
     const parsed = ClaudeHookEventSchema.safeParse(body);
@@ -23,8 +33,11 @@ export function hooksHandler(deps: { sessions: SessionService; approvals: Approv
 
     const event = parsed.data;
     const stopRefusal = event.hook_event_name === 'Stop' ? decideStopRefusalFailingOpen(deps.stopRefusal, session.id, event.stop_hook_active === true) : undefined;
+    const previousTranscriptPath = deps.sessions.transcriptPathOf(session.id);
+    const sessionStartContext = event.hook_event_name === 'SessionStart' ? buildSessionStartContextFailingOpen(deps.sessionStartContext, { sessionId: session.id, source: event.source, previousTranscriptPath }) : undefined;
     deps.sessions.applyInput(session.id, { kind: 'hook', event, turnContinues: stopRefusal !== undefined });
     if (stopRefusal) return json(res, 200, stopRefusal);
+    if (sessionStartContext) return json(res, 200, sessionStartContext);
     if (event.hook_event_name !== 'PermissionRequest') return json(res, 200, {});
 
     const isWorkingStateTool = (WORKING_STATE_TOOL_NAMES as readonly string[]).includes(event.tool_name);

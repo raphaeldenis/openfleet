@@ -1,3 +1,9 @@
+import { spawn } from 'node:child_process';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { PERMISSION_MODES } from '@openfleet/shared';
 import { describe, expect, it } from 'vitest';
 import { buildClaudeLaunchConfig } from './launchConfig.js';
@@ -68,6 +74,37 @@ describe('buildClaudeLaunchConfig', () => {
     expect(sessionStartHook.command).toContain('--data-binary @-');
   });
 
+  it('makes the SessionStart curl fail on an HTTP error status, so an error body is never handed to the CLI as hook stdout', () => {
+    const { settings } = buildClaudeLaunchConfig(launch, tokenFilePaths);
+    const hooks = settings.hooks as Record<string, { hooks: { command?: string }[] }[]>;
+    const command = hooks.SessionStart?.[0]?.hooks[0]!.command!;
+
+    expect(command.split(' ')).toContain('-f');
+  });
+
+  it('prints nothing on stdout when the hook URL answers 500 with a body that looks like hook output', async () => {
+    const errorBody = JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: 'injected by a 5xx body' } });
+    const stub = createServer((_request, response) => {
+      response.writeHead(500, { 'content-type': 'application/json' });
+      response.end(errorBody);
+    });
+    await new Promise<void>((resolve) => stub.listen(0, '127.0.0.1', resolve));
+    try {
+      const hookUrl = `http://127.0.0.1:${(stub.address() as AddressInfo).port}/hooks/tok-hook`;
+      const curlConfigPath = join(mkdtempSync(join(tmpdir(), 'of-launch-config-')), 'hook-curl.conf');
+      const config = buildClaudeLaunchConfig({ ...launch, hookUrl }, { ...tokenFilePaths, hookCurlConfigPath: curlConfigPath });
+      writeFileSync(curlConfigPath, config.hookCurlConfig);
+      const hooks = config.settings.hooks as Record<string, { hooks: { command: string }[] }[]>;
+
+      const hookRun = await runShellCommand(hooks.SessionStart![0]!.hooks[0]!.command, '{"hook_event_name":"SessionStart"}');
+
+      expect(hookRun.stdout).toBe('');
+      expect(hookRun.exitCode).not.toBe(0);
+    } finally {
+      stub.close();
+    }
+  });
+
   it('never puts the hook token in the SessionStart command itself — only in the curl config file a `ps` listing cannot see', () => {
     const { settings } = buildClaudeLaunchConfig(launch, tokenFilePaths);
     const hooks = settings.hooks as Record<string, { hooks: { command?: string }[] }[]>;
@@ -94,7 +131,7 @@ describe('buildClaudeLaunchConfig', () => {
     const command = hooks.SessionStart?.[0]?.hooks[0]!.command!;
 
     expect(command).toBe(
-      `curl -sS --connect-timeout 2 --max-time 10 -X POST -H 'Content-Type: application/json' -K '${tokenFilePaths.hookCurlConfigPath}' --data-binary @-`,
+      `curl -sS -f --connect-timeout 2 --max-time 10 -X POST -H 'Content-Type: application/json' -K '${tokenFilePaths.hookCurlConfigPath}' --data-binary @-`,
     );
     expect(command).not.toContain(dangerousLaunch.directory);
     expect(command).not.toContain(dangerousLaunch.seededPrompt);
@@ -294,3 +331,14 @@ describe('buildClaudeLaunchConfig', () => {
     expect(config.args[config.args.indexOf('--settings') + 1]).toBe(tokenFilePaths.settingsPath);
   });
 });
+
+function runShellCommand(command: string, stdin: string): Promise<{ stdout: string; exitCode: number | null }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn('sh', ['-c', command]);
+    let stdout = '';
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.on('error', reject);
+    child.on('close', (exitCode) => resolve({ stdout, exitCode }));
+    child.stdin.end(stdin);
+  });
+}
