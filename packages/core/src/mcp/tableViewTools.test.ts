@@ -1,7 +1,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { DatabaseSync } from 'node:sqlite';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { startServer } from '../api/server.js';
 import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
@@ -21,6 +21,7 @@ let server: Awaited<ReturnType<typeof startServer>>;
 let db: DatabaseSync;
 let sessions: SessionService;
 let storeRepo: DataStoreRepository;
+let stores: DataStoreService;
 let scopedToken: string;
 let otherToken: string;
 
@@ -52,7 +53,7 @@ beforeEach(async () => {
   projects.insert({ id: 'p2', name: 'Two', docsFolderPath: null, createdAt: 't0' });
   storeRepo = new DataStoreRepository(db);
   let counter = 0;
-  const stores = new DataStoreService({ repo: storeRepo, db, clock: () => '2026-01-01T00:00:00.000Z', newId: () => `id-${++counter}` });
+  stores = new DataStoreService({ repo: storeRepo, db, clock: () => '2026-01-01T00:00:00.000Z', newId: () => `id-${++counter}` });
 
   server = await startServer({
     host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath: '/tmp/of-unused/config.json',
@@ -66,7 +67,10 @@ beforeEach(async () => {
   scopedToken = harness.launches[0]!.mcpToken;
   otherToken = harness.launches[1]!.mcpToken;
 });
-afterEach(() => server.close());
+afterEach(() => {
+  vi.restoreAllMocks();
+  return server.close();
+});
 
 async function createStore(client: Client, displayName = 'backlog') {
   return text(await client.callTool({ name: 'create_data_store', arguments: { display_name: displayName } }));
@@ -163,6 +167,36 @@ describe('table view tools', () => {
     });
   });
 
+  describe('view config size cap', () => {
+    const oversizeWhere = (columnId: string) => Array.from({ length: 400 }, () => ({ columnId, op: 'eq', value: 'v'.repeat(40) }));
+
+    it('refuses an oversize config on create', async () => {
+      const client = await connect(scopedToken);
+      const store = await createStore(client);
+      const titleId = await addTextColumn(client, store.id);
+
+      const result = await client.callTool({
+        name: 'create_data_store_view',
+        arguments: { store: store.id, display_name: 'big', view_type: 'grid', config: { where: oversizeWhere(titleId) } },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toMatch(/too large/i);
+    });
+
+    it('refuses an oversize config on update', async () => {
+      const client = await connect(scopedToken);
+      const store = await createStore(client);
+      const titleId = await addTextColumn(client, store.id);
+      const view = text(await client.callTool({ name: 'create_data_store_view', arguments: { store: store.id, display_name: 'main', view_type: 'grid' } }));
+
+      const result = await client.callTool({ name: 'update_data_store_view', arguments: { view: view.id, config: { where: oversizeWhere(titleId) } } });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toMatch(/too large/i);
+    });
+  });
+
   describe('update_data_store_view', () => {
     it('replaces a view\'s config', async () => {
       const client = await connect(scopedToken);
@@ -208,6 +242,23 @@ describe('table view tools', () => {
 
       expect(result.isError).toBe(true);
       expect(errorText(result)).toMatch(/select column/i);
+    });
+  });
+
+  describe('unexpected errors', () => {
+    it('surface as "request failed" with no internal text, and are logged', async () => {
+      const client = await connect(scopedToken);
+      const store = await createStore(client);
+      vi.spyOn(stores, 'listViews').mockImplementation(() => {
+        throw new Error('SELECT secret_column FROM ds_views');
+      });
+      const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+      const result = await client.callTool({ name: 'list_data_store_views', arguments: { store: store.id } });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toBe('request failed');
+      expect(logged).toHaveBeenCalled();
     });
   });
 
@@ -281,6 +332,34 @@ describe('table view tools', () => {
       const stranger = await connect(otherToken);
       const strangerResult = await stranger.callTool({ name: 'list_row_changes', arguments: { row_id: rowId } });
       expect(strangerResult.isError).toBe(true);
+    });
+
+    it('cuts a hot row\'s history off past 1 MiB and flags it truncated', async () => {
+      const client = await connect(scopedToken);
+      const store = await createStore(client);
+      const titleId = await addTextColumn(client, store.id);
+      const [rowId] = text(await client.callTool({ name: 'insert_data_store_rows', arguments: { store: store.id, rows: [{ [titleId]: 'x' }] } })).ids;
+      const largeCells = ['a', 'b'].map((letter) => letter.repeat(60 * 1024));
+      for (let update = 0; update < 20; update++) {
+        await client.callTool({ name: 'update_data_store_rows', arguments: { store: store.id, updates: [{ row_id: rowId, patch: { [titleId]: largeCells[update % 2] } }] } });
+      }
+
+      const result = text(await client.callTool({ name: 'list_row_changes', arguments: { row_id: rowId } }));
+
+      expect(result.truncated).toBe(true);
+      expect(result.count).toBeLessThan(21);
+      expect(result.entries).toHaveLength(result.count);
+      expect(JSON.stringify(result.entries).length).toBeLessThanOrEqual(1024 * 1024);
+    });
+
+    it('flags a short history as not truncated', async () => {
+      const client = await connect(scopedToken);
+      const store = await createStore(client);
+      const [rowId] = text(await client.callTool({ name: 'insert_data_store_rows', arguments: { store: store.id, rows: [{}] } })).ids;
+
+      const result = text(await client.callTool({ name: 'list_row_changes', arguments: { row_id: rowId } }));
+
+      expect(result).toMatchObject({ truncated: false, count: 1 });
     });
 
     it('refuses a limit over 500', async () => {

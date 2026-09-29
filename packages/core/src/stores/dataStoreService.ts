@@ -55,6 +55,7 @@ const BATCH_SAVEPOINT = 'data_store_batch';
 const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})?)?$/;
 export const MAX_CELL_BYTES = 64 * 1024;
 export const MAX_ROWS_PER_STORE = 10_000;
+export const MAX_VIEW_CONFIG_BYTES = 16 * 1024;
 
 const normalizeName = (name: string): string => {
   const normalized = name.normalize('NFC').trim();
@@ -226,15 +227,7 @@ export class DataStoreService {
     this.authorize(storeId, input.projectId);
     const displayName = normalizeName(input.displayName);
     if (!VIEW_TYPES.includes(input.viewType)) throw new InvalidViewConfigError(`Unknown view type ${String(input.viewType)}`);
-    const parsed = DsViewConfigSchema.safeParse(input.config ?? {});
-    if (!parsed.success) throw new InvalidViewConfigError('Invalid view config');
-    const config = parsed.data;
-    this.requireColumns(storeId, [
-      ...(config.where ?? []).map((clause) => clause.columnId),
-      ...(config.orderBy ?? []).map((term) => term.columnId),
-      ...(config.groupByColumnId ? [config.groupByColumnId] : []),
-    ]);
-    this.assertValidGroupByColumn(storeId, input.viewType, config);
+    const config = this.validatedConfig(storeId, input.viewType, input.config ?? {});
     return this.guarded(() => this.repo.insertView(storeId, { id: this.newId(), displayName, viewType: input.viewType, config, at: this.clock() }));
   }
 
@@ -245,15 +238,7 @@ export class DataStoreService {
 
   updateView(viewId: string, input: Scope & { config: DsViewConfig }): DsView {
     const view = this.authorizeView(viewId, input.projectId);
-    const parsed = DsViewConfigSchema.safeParse(input.config);
-    if (!parsed.success) throw new InvalidViewConfigError('Invalid view config');
-    const config = parsed.data;
-    this.requireColumns(view.storeId, [
-      ...(config.where ?? []).map((clause) => clause.columnId),
-      ...(config.orderBy ?? []).map((term) => term.columnId),
-      ...(config.groupByColumnId ? [config.groupByColumnId] : []),
-    ]);
-    this.assertValidGroupByColumn(view.storeId, view.viewType, config);
+    const config = this.validatedConfig(view.storeId, view.viewType, input.config);
     return this.guarded(() => this.repo.updateView(viewId, config));
   }
 
@@ -295,6 +280,21 @@ export class DataStoreService {
     const unknown = columnIds.filter((id) => !known.has(id));
     if (unknown.length > 0) throw new UnknownColumnError(unknown);
     return columns;
+  }
+
+  /** Parses a raw view config and checks its size, its column references and the kanban group-by rule; returns the parsed config. */
+  private validatedConfig(storeId: string, viewType: ViewType, rawConfig: unknown): DsViewConfig {
+    const parsed = DsViewConfigSchema.safeParse(rawConfig);
+    if (!parsed.success) throw new InvalidViewConfigError('Invalid view config');
+    const config = parsed.data;
+    if (Buffer.byteLength(JSON.stringify(config), 'utf8') > MAX_VIEW_CONFIG_BYTES) throw new InvalidViewConfigError('View config is too large');
+    this.requireColumns(storeId, [
+      ...(config.where ?? []).map((clause) => clause.columnId),
+      ...(config.orderBy ?? []).map((term) => term.columnId),
+      ...(config.groupByColumnId ? [config.groupByColumnId] : []),
+    ]);
+    this.assertValidGroupByColumn(storeId, viewType, config);
+    return config;
   }
 
   /** A kanban view is unreadable without a group-by column that is a select column of its own store; other view types don't care. */
