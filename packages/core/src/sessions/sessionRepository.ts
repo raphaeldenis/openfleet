@@ -72,10 +72,17 @@ export class SessionRepository {
   clearResolvedModel(id: string): void {
     this.db.prepare('UPDATE sessions SET resolved_model = NULL, model_drifted_from = NULL WHERE id = ?').run(id);
   }
-  // COALESCE keeps an existing drift flag when a later identical resolution passes no driftedFrom.
-  recordResolvedModel(input: { id: string; resolvedModel: string; cliVersion: string; driftedFrom: string | undefined }): void {
-    this.db.prepare('UPDATE sessions SET resolved_model = ?, cli_version = ?, model_drifted_from = COALESCE(?, model_drifted_from) WHERE id = ?')
-      .run(input.resolvedModel, input.cliVersion, input.driftedFrom ?? null, input.id);
+  // driftedFrom: a string sets the flag, null clears it (a computed "no drift"), absent leaves it as is.
+  recordResolvedModel(input: { id: string; resolvedModel: string; cliVersion: string; driftedFrom?: string | null }): void {
+    const isComputed = input.driftedFrom !== undefined;
+    this.db.prepare('UPDATE sessions SET resolved_model = ?, cli_version = ?, model_drifted_from = CASE WHEN ? THEN ? ELSE model_drifted_from END WHERE id = ?')
+      .run(input.resolvedModel, input.cliVersion, Number(isComputed), input.driftedFrom ?? null, input.id);
+  }
+  // `IS ?` matches a NULL requested model too. created_at orders "most recently created", a proxy for "most recently resolved".
+  previousResolvedModel(input: { requestedModel: string | null; excludingSessionId: string }): { sessionId: string; resolvedModel: string } | undefined {
+    const row = this.db.prepare('SELECT id, resolved_model FROM sessions WHERE model IS ? AND id <> ? AND resolved_model IS NOT NULL ORDER BY created_at DESC LIMIT 1')
+      .get(input.requestedModel, input.excludingSessionId) as { id: string; resolved_model: string } | undefined;
+    return row ? { sessionId: row.id, resolvedModel: row.resolved_model } : undefined;
   }
   setPermissionMode(id: string, mode: PermissionMode): void {
     this.db.prepare('UPDATE sessions SET permission_mode = ? WHERE id = ?').run(mode, id);

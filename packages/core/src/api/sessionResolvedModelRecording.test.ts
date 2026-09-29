@@ -725,3 +725,150 @@ describe('resolved model recording when the CLI flushes its answer to the transc
     expect(await listed(id)).toMatchObject({ resolvedModel: 'claude-opus-5-5' });
   });
 });
+
+describe('model drift between launches that resolve the same requested model', () => {
+  const resolveOn = async (requestedModel: string | undefined, resolvedModel: string) => {
+    const id = await createSession(requestedModel);
+    writeFileSync(transcriptPath, assistantLine({ model: resolvedModel }));
+    await sendHook(id, preToolUse);
+    return id;
+  };
+  const captureDriftWarnings = () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    return {
+      lines: () => warnSpy.mock.calls.map((call) => String(call[0])).filter((line) => line.includes('model drift')),
+      stop: () => warnSpy.mockRestore(),
+    };
+  };
+  const relaunchWithAlias = async (id: string, alias: string, expectedLaunches: number) => {
+    await postJson(`/api/sessions/${id}/model`, { model: alias });
+    await expect.poll(() => harness.launches.length).toBe(expectedLaunches);
+  };
+
+  it('shows the previous id on a second session whose alias resolves to a different id, and logs one warning naming both ids', async () => {
+    const first = await resolveOn('opus', 'claude-opus-5-5');
+    const warnings = captureDriftWarnings();
+
+    const second = await resolveOn('opus', 'claude-opus-5-6');
+    const lines = warnings.lines();
+    warnings.stop();
+
+    expect(await listed(second)).toMatchObject({ resolvedModel: 'claude-opus-5-6', modelDriftedFrom: 'claude-opus-5-5' });
+    expect(await listed(first)).not.toHaveProperty('modelDriftedFrom');
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain(`"opus" resolves to claude-opus-5-6, previously claude-opus-5-5 (session ${second}, previous session ${first}, cli ${CLI_VERSION})`);
+  });
+
+  it('shows no drift and logs nothing when a second session resolves the same alias to the same id', async () => {
+    await resolveOn('opus', 'claude-opus-5-5');
+    const warnings = captureDriftWarnings();
+
+    const second = await resolveOn('opus', 'claude-opus-5-5');
+    const lines = warnings.lines();
+    warnings.stop();
+
+    expect(await listed(second)).not.toHaveProperty('modelDriftedFrom');
+    expect(lines).toHaveLength(0);
+  });
+
+  it('compares a second session against the most recently created session that resolved the alias', async () => {
+    await resolveOn('opus', 'claude-opus-5-4');
+    await pause(5);
+    await resolveOn('opus', 'claude-opus-5-5');
+    await pause(5);
+
+    const third = await resolveOn('opus', 'claude-opus-5-5');
+
+    expect(await listed(third)).not.toHaveProperty('modelDriftedFrom');
+  });
+
+  it('shows the session\'s own previous id when a relaunch of the same alias resolves to a new id', async () => {
+    const id = await sessionWithRecordedOpus({ requestedModel: 'opus', stopped: true });
+    const warnings = captureDriftWarnings();
+
+    await relaunchWithAlias(id, 'opus', 2);
+    appendFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-6', at: inOneSecond() }));
+    await sendHook(id, preToolUse);
+    const lines = warnings.lines();
+    warnings.stop();
+
+    expect(await listed(id)).toMatchObject({ resolvedModel: 'claude-opus-5-6', modelDriftedFrom: 'claude-opus-5-5' });
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain(`previously claude-opus-5-5 (session ${id}, same session relaunched, cli ${CLI_VERSION})`);
+  });
+
+  it('shows no drift when a relaunch of the same alias resolves to the same id', async () => {
+    const id = await sessionWithRecordedOpus({ requestedModel: 'opus', stopped: true });
+
+    await relaunchWithAlias(id, 'opus', 2);
+    appendFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-5', at: inOneSecond() }));
+    await sendHook(id, preToolUse);
+
+    expect(await listed(id)).toMatchObject({ resolvedModel: 'claude-opus-5-5' });
+    expect(await listed(id)).not.toHaveProperty('modelDriftedFrom');
+  });
+
+  it('never drifts a session against a session of another alias, nor against its own id from before a switch to another alias', async () => {
+    await resolveOn('opus', 'claude-opus-5-5');
+    const sonnet = await resolveOn('sonnet', 'claude-sonnet-5-5');
+    const switched = await sessionWithRecordedOpus({ requestedModel: 'haiku', stopped: true });
+
+    await relaunchWithAlias(switched, 'sonnet', 4);
+    appendFileSync(transcriptPath, assistantLine({ model: 'claude-sonnet-5-5', at: inOneSecond() }));
+    await sendHook(switched, preToolUse);
+
+    expect(await listed(sonnet)).not.toHaveProperty('modelDriftedFrom');
+    expect(await listed(switched)).toMatchObject({ resolvedModel: 'claude-sonnet-5-5' });
+    expect(await listed(switched)).not.toHaveProperty('modelDriftedFrom');
+  });
+
+  it('clears a drift flag when a permission-mode relaunch of the session resolves to the same id again', async () => {
+    await resolveOn('opus', 'claude-opus-5-5');
+    const id = await createSession('opus');
+    writeFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-6' }));
+    await sendHook(id, preToolUse);
+    await sendHook(id, stop);
+    const afterLaunchOne = await listed(id);
+
+    await postJson(`/api/sessions/${id}/permission-mode`, { mode: 'plan' });
+    await expect.poll(() => harness.launches.length).toBe(3);
+    appendFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-6', at: inOneSecond() }));
+    await sendHook(id, preToolUse);
+
+    expect(afterLaunchOne).toMatchObject({ modelDriftedFrom: 'claude-opus-5-5' });
+    expect(await listed(id)).toMatchObject({ resolvedModel: 'claude-opus-5-6' });
+    expect(await listed(id)).not.toHaveProperty('modelDriftedFrom');
+  });
+
+  it('applies the same rule to sessions launched without a model', async () => {
+    await resolveOn(undefined, 'claude-default-5-5');
+    await resolveOn('opus', 'claude-opus-5-5');
+    const warnings = captureDriftWarnings();
+
+    const withoutModel = await resolveOn(undefined, 'claude-default-5-6');
+    const lines = warnings.lines();
+    warnings.stop();
+
+    expect(await listed(withoutModel)).toMatchObject({ resolvedModel: 'claude-default-5-6', modelDriftedFrom: 'claude-default-5-5' });
+    expect(lines).toHaveLength(1);
+  });
+
+  it('streams the drift in the session.updated that carries the resolved model', async () => {
+    await resolveOn('opus', 'claude-opus-5-5');
+    const id = await createSession('opus');
+    const { ticket } = (await (await postJson('/api/ws-ticket')).json()) as { ticket: string };
+    const ws = new WebSocket(`${server.url.replace('http', 'ws')}/ws?ticket=${ticket}`);
+    const received: { type: string; session?: ListedSession }[] = [];
+    ws.addEventListener('message', (message) => received.push(JSON.parse(String(message.data))));
+    await new Promise((resolve) => ws.addEventListener('open', resolve, { once: true }));
+    writeFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-6' }));
+
+    await sendHook(id, preToolUse);
+    await pause(50);
+    ws.close();
+
+    const updates = received.filter((event) => event.type === 'session.updated' && event.session?.id === id);
+    expect(updates).toHaveLength(1);
+    expect(updates[0]!.session).toMatchObject({ resolvedModel: 'claude-opus-5-6', modelDriftedFrom: 'claude-opus-5-5' });
+  });
+});
