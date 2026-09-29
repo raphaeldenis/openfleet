@@ -1119,7 +1119,32 @@ describe('the session a drift is compared with', () => {
 
   const waitForLaunches = (count: number) => expect.poll(() => harness.launches.length).toBeGreaterThanOrEqual(count);
 
-  it('compares a session with the latest session of the alias even when that one was created after it', async () => {
+  it('shows no drift when a session returns to an alias after a detour, since its last run under that alias resolved the same id', async () => {
+    const id = await createSession('opus');
+    writeFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-5' }));
+    await sendHook(id, preToolUse);
+    await sendHook(id, stop);
+    await postJson(`/api/sessions/${id}/model`, { model: 'opus' });
+    await waitForLaunches(2);
+    appendFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-6', at: inOneSecond() }));
+    await sendHook(id, preToolUse);
+    await sendHook(id, stop);
+    await postJson(`/api/sessions/${id}/model`, { model: 'sonnet' });
+    await waitForLaunches(3);
+    appendFileSync(transcriptPath, assistantLine({ model: 'claude-sonnet-5-5', at: inOneSecond() }));
+    await sendHook(id, preToolUse);
+    await sendHook(id, stop);
+    await postJson(`/api/sessions/${id}/model`, { model: 'opus' });
+    await waitForLaunches(4);
+
+    appendFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-6', at: inOneSecond() }));
+    await sendHook(id, preToolUse);
+
+    expect(await listed(id)).toMatchObject({ model: 'opus', resolvedModel: 'claude-opus-5-6' });
+    expect(await listed(id)).not.toHaveProperty('modelDriftedFrom');
+  });
+
+  it('compares a session with the latest session of the alias even when created after: documented reversed-drift ceiling', async () => {
     const earlier = await createSession('opus');
     const earlierTranscript = transcriptPath;
     await pause(5);

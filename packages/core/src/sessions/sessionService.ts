@@ -701,6 +701,7 @@ export class SessionService {
       const { requestedModel } = pending;
       const drift = this.findDrift(sessionId, resolution.resolvedModel, requestedModel);
       this.repo.recordResolvedModel({ id: sessionId, ...resolution, requestedModel, driftedFrom: drift?.previousModel ?? null });
+      this.resolvedModelBeforeSameAliasRelaunch.delete(sessionId);
       if (drift) this.logDrift(sessionId, resolution, requestedModel, drift);
       this.dropPendingRecording(sessionId);
       this.deps.bus.emit({ type: 'session.updated', session: this.repo.get(sessionId)! });
