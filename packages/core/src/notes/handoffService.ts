@@ -9,6 +9,8 @@ const AUTO_HANDOFF_AUTHOR = 'auto-handoff';
 const MANUAL_HANDOFF_WINDOW_MS = 5 * 60_000;
 const DATE_LENGTH = 'YYYY-MM-DD'.length;
 const MAX_GIT_OUTPUT_LINES = 200;
+const MAX_GIT_OUTPUT_LINE_LENGTH = 500;
+const ELLIPSIS = '…';
 
 const SECTION_TITLES = {
   goal: 'Goal',
@@ -107,6 +109,11 @@ export class HandoffService {
     return note;
   }
 
+  /** Lets a reopened session get an automatic handoff again on its next close. */
+  forgetAutoHandoff(sessionId: string): void {
+    this.sessionsWithAutoHandoff.delete(sessionId);
+  }
+
   private hasRecentManualHandoff(sessionId: string): boolean {
     const writtenAtMs = this.lastManualHandoffMs.get(sessionId);
     if (writtenAtMs === undefined) return false;
@@ -132,14 +139,18 @@ export class HandoffService {
   }
 }
 
-/** Calls `handoffs.writeAutoOnClose` on every `session.closed` event. Returns the unsubscribe. */
+/** Calls `handoffs.writeAutoOnClose` on every `session.closed` event and re-arms the session on `session.reopened`. Returns the unsubscribe. */
 // Not called from main.ts on purpose: P3-DOCS-WIRE registers it together with the docs-folder wiring.
 export function registerHandoffOnClose(
   bus: { subscribe(listener: (event: ServerEvent) => void): () => unknown },
-  handoffs: Pick<HandoffService, 'writeAutoOnClose'>,
+  handoffs: Pick<HandoffService, 'writeAutoOnClose' | 'forgetAutoHandoff'>,
   onError: (error: unknown) => void = () => {},
 ): () => unknown {
   return bus.subscribe((event) => {
+    if (event.type === 'session.reopened') {
+      handoffs.forgetAutoHandoff(event.sessionId);
+      return;
+    }
     if (event.type !== 'session.closed') return;
     try {
       handoffs.writeAutoOnClose(event.sessionId);
@@ -203,10 +214,16 @@ function nextFenceState(openFence: Fence | undefined, lineFence: Fence | undefin
   return closesOpenFence ? undefined : openFence;
 }
 
+function capLineLength(line: string): string {
+  const codePoints = [...line];
+  if (codePoints.length <= MAX_GIT_OUTPUT_LINE_LENGTH) return line;
+  return codePoints.slice(0, MAX_GIT_OUTPUT_LINE_LENGTH).join('') + ELLIPSIS;
+}
+
 function truncateLines(output: string): string {
-  const lines = output.split('\n');
+  const lines = output.split('\n').map(capLineLength);
   const hiddenCount = lines.length - MAX_GIT_OUTPUT_LINES;
-  if (hiddenCount <= 0) return output;
+  if (hiddenCount <= 0) return lines.join('\n');
   return [...lines.slice(0, MAX_GIT_OUTPUT_LINES), `(${hiddenCount} more)`].join('\n');
 }
 

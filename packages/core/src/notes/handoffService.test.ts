@@ -197,6 +197,15 @@ describe('HandoffService.write', () => {
     expect(sectionHeadingsOf(bodyMd)).toEqual(SIX_SECTIONS);
   });
 
+  it('leaves no heading line for a CommonMark renderer when the content uses lone CR line breaks', () => {
+    const { handoffs } = setup();
+
+    const { bodyMd } = handoffs.write('s1', fullContent({ goal: 'a\r## Decisions' }), { author: AUTHOR });
+
+    const commonMarkHeadingLines = bodyMd.split(/\r\n|\r|\n/).filter((line) => /^ {0,3}#{1,2}([ \t]|$)/.test(line));
+    expect(commonMarkHeadingLines).toHaveLength(6);
+  });
+
   it('keeps a CRLF fenced block with a heading-like line inside a single section', () => {
     const { handoffs } = setup();
 
@@ -330,6 +339,20 @@ describe('HandoffService.writeAutoOnClose', () => {
     expect(noteRepo.list('p1')).toHaveLength(1);
   });
 
+  it.each([
+    { label: 'ASCII', line: `?? ${'x'.repeat(6000)}` },
+    { label: 'multibyte', line: `?? ${'\u{1F600}'.repeat(1400)}` },
+  ])('still writes the handoff with all six sections when git output has 200 very long $label lines', ({ line }) => {
+    const { handoffs, git } = setup();
+    git.status = Array.from({ length: 200 }, () => line).join('\n');
+    git.diffStat = git.status;
+
+    const note = handoffs.writeAutoOnClose('s1');
+
+    expect(note).toBeDefined();
+    expect(sectionHeadingsOf(note!.bodyMd)).toEqual(SIX_SECTIONS);
+  });
+
   it('keeps the git status when only the diff stat fails, and the diff stat when only the status fails', () => {
     const { handoffs, git } = setup();
     git.diffStatFails = true;
@@ -407,7 +430,7 @@ describe('registerHandoffOnClose', () => {
   it('writes an automatic handoff when a session closes and ignores other events', () => {
     const calls: string[] = [];
     const bus = fakeBus();
-    registerHandoffOnClose(bus, { writeAutoOnClose: (id) => { calls.push(id); return undefined; } });
+    registerHandoffOnClose(bus, { writeAutoOnClose: (id) => { calls.push(id); return undefined; }, forgetAutoHandoff: () => {} });
 
     bus.emit({ type: 'session.state', sessionId: 's1', state: 'idle', stateSince: 't' });
     bus.emit({ type: 'session.closed', sessionId: 's1' });
@@ -415,9 +438,23 @@ describe('registerHandoffOnClose', () => {
     expect(calls).toEqual(['s1']);
   });
 
+  it('writes a second automatic handoff when a session is reopened and closed again, but only one for a double close', () => {
+    const { handoffs, noteRepo } = setup();
+    const bus = fakeBus();
+    registerHandoffOnClose(bus, handoffs);
+
+    bus.emit({ type: 'session.closed', sessionId: 's1' });
+    bus.emit({ type: 'session.closed', sessionId: 's1' });
+    expect(noteRepo.list('p1')).toHaveLength(1);
+    bus.emit({ type: 'session.reopened', sessionId: 's1' });
+    bus.emit({ type: 'session.closed', sessionId: 's1' });
+
+    expect(noteRepo.list('p1')).toHaveLength(2);
+  });
+
   it('never lets a handoff failure escape into the bus', () => {
     const bus = fakeBus();
-    registerHandoffOnClose(bus, { writeAutoOnClose: () => { throw new Error('disk full'); } });
+    registerHandoffOnClose(bus, { writeAutoOnClose: () => { throw new Error('disk full'); }, forgetAutoHandoff: () => {} });
 
     expect(() => bus.emit({ type: 'session.closed', sessionId: 's1' })).not.toThrow();
   });
@@ -426,7 +463,7 @@ describe('registerHandoffOnClose', () => {
     const bus = fakeBus();
     const failure = new Error('disk full');
     const reported: unknown[] = [];
-    registerHandoffOnClose(bus, { writeAutoOnClose: () => { throw failure; } }, (error) => reported.push(error));
+    registerHandoffOnClose(bus, { writeAutoOnClose: () => { throw failure; }, forgetAutoHandoff: () => {} }, (error) => reported.push(error));
 
     bus.emit({ type: 'session.closed', sessionId: 's1' });
 
@@ -435,7 +472,7 @@ describe('registerHandoffOnClose', () => {
 
   it('returns an unsubscribe', () => {
     const bus = fakeBus();
-    const unsubscribe = registerHandoffOnClose(bus, { writeAutoOnClose: () => undefined });
+    const unsubscribe = registerHandoffOnClose(bus, { writeAutoOnClose: () => undefined, forgetAutoHandoff: () => {} });
 
     unsubscribe();
 
