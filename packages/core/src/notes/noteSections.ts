@@ -16,7 +16,7 @@ interface Heading {
   text: string;
 }
 
-interface Fence {
+export interface Fence {
   character: string;
   length: number;
   info: string;
@@ -295,19 +295,19 @@ function nearestCloserAtLeast(closers: Closer[], length: number): Closer | undef
   return nearest;
 }
 
-function fenceOf(text: string): Fence | undefined {
+export function fenceOf(text: string): Fence | undefined {
   const match = FENCE_PATTERN.exec(text);
   if (!match) return undefined;
   const marker = match[1]!;
   return { character: marker[0]!, length: marker.length, info: match[2]! };
 }
 
-function canOpen(fence: Fence): boolean {
+export function canOpen(fence: Fence): boolean {
   const isBacktickFenceWithBacktickInInfo = fence.character === '`' && fence.info.includes('`');
   return !isBacktickFenceWithBacktickInInfo;
 }
 
-function canClose(fence: Fence): boolean {
+export function canClose(fence: Fence): boolean {
   return fence.info.trim() === '';
 }
 

@@ -1,12 +1,14 @@
 import type { Note, ServerEvent, Session } from '@openfleet/shared';
 import type { ProjectRepository } from '../projects/projectRepository.js';
 import type { DocsFolderService } from './docsFolderService.js';
+import { canClose, canOpen, fenceOf, type Fence } from './noteSections.js';
 
 const NONE = '(none)';
 const NOT_RECORDED = '(not recorded)';
 const AUTO_HANDOFF_AUTHOR = 'auto-handoff';
 const MANUAL_HANDOFF_WINDOW_MS = 5 * 60_000;
 const DATE_LENGTH = 'YYYY-MM-DD'.length;
+const MAX_GIT_OUTPUT_LINES = 200;
 
 const SECTION_TITLES = {
   goal: 'Goal',
@@ -19,7 +21,6 @@ const SECTION_TITLES = {
 
 /** The parser in noteSections.ts treats `#` and `##` (up to three leading spaces) outside code fences as section headings. */
 const TOP_LEVEL_HEADING_LINE = /^ {0,3}#{1,2}(?:[ \t]|$)/;
-const FENCE_LINE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
 
 export interface HandoffContent {
   goal: string;
@@ -68,7 +69,9 @@ export interface HandoffServiceDeps {
  * The manual-handoff memory behind the 5-minute window is per process: a daemon restart forgets it.
  */
 export class HandoffService {
+  // ponytail: in-memory, forgotten on daemon restart; persist the last handoff time if a duplicate auto note after restart matters
   private readonly lastManualHandoffMs = new Map<string, number>();
+  private readonly sessionsWithAutoHandoff = new Set<string>();
 
   constructor(private readonly deps: HandoffServiceDeps) {}
 
@@ -87,6 +90,7 @@ export class HandoffService {
     const session = this.deps.sessions.get(sessionId);
     if (!session?.projectId) return undefined;
     if (this.hasRecentManualHandoff(sessionId)) return undefined;
+    if (this.sessionsWithAutoHandoff.has(sessionId)) return undefined;
     const hasDocsFolder = Boolean(this.deps.projects.get(session.projectId)?.docsFolderPath);
     if (!hasDocsFolder) return undefined;
 
@@ -98,7 +102,9 @@ export class HandoffService {
       nextSteps: NOT_RECORDED,
       openQuestions: NOT_RECORDED,
     };
-    return this.createHandoffNote(session, session.projectId, content, AUTO_HANDOFF_AUTHOR);
+    const note = this.createHandoffNote(session, session.projectId, content, AUTO_HANDOFF_AUTHOR);
+    this.sessionsWithAutoHandoff.add(sessionId);
+    return note;
   }
 
   private hasRecentManualHandoff(sessionId: string): boolean {
@@ -121,7 +127,7 @@ export class HandoffService {
 
     return [status, diffStat]
       .filter((output): output is string => Boolean(output?.trim()))
-      .map((output) => `\`\`\`\n${output.trimEnd()}\n\`\`\``)
+      .map((output) => `\`\`\`\n${truncateLines(output.trimEnd())}\n\`\`\``)
       .join('\n\n');
   }
 }
@@ -178,23 +184,30 @@ function singleLine(text: string): string {
 /** Escapes `#`/`##` heading lines and closes a code fence left open, so the text stays inside its own section. */
 function neutralizeSectionText(text: string): string {
   const lines = text.replace(/\r\n?/g, '\n').split('\n');
-  let openFence: string | undefined;
+  let openFence: Fence | undefined;
 
   const safeLines = lines.map((line) => {
-    const fence = FENCE_LINE.exec(line);
-    if (fence) openFence = nextFenceState(openFence, fence[1]!, fence[2]!);
+    openFence = nextFenceState(openFence, fenceOf(line));
     return TOP_LEVEL_HEADING_LINE.test(line) ? `\\${line}` : line;
   });
 
-  if (openFence) safeLines.push(openFence);
+  if (openFence) safeLines.push(openFence.character.repeat(openFence.length));
   return safeLines.join('\n');
 }
 
-/** Returns the fence that is open after `marker`, or undefined when `marker` closes the open one. */
-function nextFenceState(openFence: string | undefined, marker: string, trailing: string): string | undefined {
-  if (!openFence) return marker;
-  const closesOpenFence = marker[0] === openFence[0] && marker.length >= openFence.length && trailing.trim() === '';
+/** Returns the fence open after `line`, using the same open/close rules as the section parser. */
+function nextFenceState(openFence: Fence | undefined, lineFence: Fence | undefined): Fence | undefined {
+  if (!lineFence) return openFence;
+  if (!openFence) return canOpen(lineFence) ? lineFence : undefined;
+  const closesOpenFence = canClose(lineFence) && lineFence.character === openFence.character && lineFence.length >= openFence.length;
   return closesOpenFence ? undefined : openFence;
+}
+
+function truncateLines(output: string): string {
+  const lines = output.split('\n');
+  const hiddenCount = lines.length - MAX_GIT_OUTPUT_LINES;
+  if (hiddenCount <= 0) return output;
+  return [...lines.slice(0, MAX_GIT_OUTPUT_LINES), `(${hiddenCount} more)`].join('\n');
 }
 
 function attempt(run: () => string): string | undefined {

@@ -7,6 +7,7 @@ import { DocsFolderService } from './docsFolderService.js';
 import { HandoffService, SessionNotFoundForHandoffError, registerHandoffOnClose, type GitPort, type HandoffContent } from './handoffService.js';
 import { expandMentions } from './mentionExpander.js';
 import { NoteRepository } from './noteRepository.js';
+import { listSections } from './noteSections.js';
 import { NoteService, NoteTooLargeError } from './noteService.js';
 
 const AUTHOR = 'agent:s1';
@@ -41,14 +42,16 @@ class FakeGit implements GitPort {
   status = ' M src/a.ts\n?? src/b.ts\n';
   diffStat = ' src/a.ts | 2 +-\n 1 file changed, 1 insertion(+), 1 deletion(-)\n';
   fails = false;
+  statusFails = false;
+  diffStatFails = false;
   readonly askedDirectories: string[] = [];
   statusShort(directory: string): string {
     this.askedDirectories.push(directory);
-    if (this.fails) throw new Error('git exploded');
+    if (this.fails || this.statusFails) throw new Error('git exploded');
     return this.status;
   }
   diffStatOf(): string {
-    if (this.fails) throw new Error('git exploded');
+    if (this.fails || this.diffStatFails) throw new Error('git exploded');
     return this.diffStat;
   }
 }
@@ -64,10 +67,10 @@ const fullContent = (overrides: Partial<HandoffContent> = {}): HandoffContent =>
   goal: 'Ship X', state: 'idle', decisions: 'used approach A', filesTouched: 'a.ts', nextSteps: 'none', openQuestions: 'none', ...overrides,
 });
 
-function setup({ docsFolderPath = '/docs' as string | null, sessions = [aSession()] } = {}) {
+function setup({ docsFolderPath = '/docs' as string | null, sessions = [aSession()], projectName = 'Project One' } = {}) {
   const db = openDatabase(':memory:');
   const projects = new ProjectRepository(db);
-  projects.insert({ id: 'p1', name: 'Project One', docsFolderPath, createdAt: 't0' });
+  projects.insert({ id: 'p1', name: projectName, docsFolderPath, createdAt: 't0' });
   const noteRepo = new NoteRepository(db);
   let tick = 0;
   let sequence = 0;
@@ -82,6 +85,8 @@ function setup({ docsFolderPath = '/docs' as string | null, sessions = [aSession
 }
 
 const headingsOf = (body: string) => body.split('\n').filter((line) => /^#{1,2} /.test(line));
+const SIX_SECTIONS = ['Goal', 'State', 'Decisions', 'Files touched', 'Next steps', 'Open questions'];
+const sectionHeadingsOf = (bodyMd: string) => listSections(bodyMd).map((section) => section.heading);
 
 describe('HandoffService.write', () => {
   it('writes handoffs/YYYY-MM-DD-<session-name>.md with the six fixed sections in order', () => {
@@ -158,6 +163,59 @@ describe('HandoffService.write', () => {
     const { bodyMd } = handoffs.write('s1', fullContent(), { author: AUTHOR });
 
     expect(headingsOf(bodyMd)).toHaveLength(6);
+  });
+
+  it('keeps every section when a backtick fence has a backtick in its info string (not a fence)', () => {
+    const { handoffs } = setup();
+
+    const { bodyMd } = handoffs.write('s1', fullContent({ goal: '```x`', state: '```' }), { author: AUTHOR });
+
+    expect(sectionHeadingsOf(bodyMd)).toEqual(SIX_SECTIONS);
+  });
+
+  it('keeps every section when a non-fence line precedes a real fence in the next section', () => {
+    const { handoffs } = setup();
+
+    const { bodyMd } = handoffs.write('s1', fullContent({ goal: 'x\n```a`b', decisions: '```\nfoo' }), { author: AUTHOR });
+
+    expect(sectionHeadingsOf(bodyMd)).toEqual(SIX_SECTIONS);
+  });
+
+  it('keeps every section after a fence the agent closed itself', () => {
+    const { handoffs } = setup();
+
+    const { bodyMd } = handoffs.write('s1', fullContent({ goal: '```\ncode\n```', nextSteps: '```\nx\n```' }), { author: AUTHOR });
+
+    expect(sectionHeadingsOf(bodyMd)).toEqual(SIX_SECTIONS);
+  });
+
+  it('keeps every section when a tilde line appears inside an open backtick fence', () => {
+    const { handoffs } = setup();
+
+    const { bodyMd } = handoffs.write('s1', fullContent({ goal: '```\n~~~', nextSteps: '```\nx' }), { author: AUTHOR });
+
+    expect(sectionHeadingsOf(bodyMd)).toEqual(SIX_SECTIONS);
+  });
+
+  it('keeps a CRLF fenced block with a heading-like line inside a single section', () => {
+    const { handoffs } = setup();
+
+    const { bodyMd } = handoffs.write('s1', fullContent({ goal: '```\r\n## inside\r\n```\r\nafter' }), { author: AUTHOR });
+
+    expect(sectionHeadingsOf(bodyMd)).toEqual(SIX_SECTIONS);
+    expect(bodyMd).toContain('inside');
+    expect(bodyMd).toContain('after');
+  });
+
+  it('cannot forge a heading through the branch, the session id or the project name', () => {
+    const { handoffs } = setup({
+      sessions: [aSession({ id: 's1\n## Goal', branch: 'feat\n## Goal' })],
+      projectName: 'Project\n## Goal',
+    });
+
+    const { bodyMd } = handoffs.write('s1\n## Goal', fullContent(), { author: AUTHOR });
+
+    expect(sectionHeadingsOf(bodyMd)).toEqual(SIX_SECTIONS);
   });
 
   it('refuses a body over the cap with a typed error and writes nothing', () => {
@@ -253,6 +311,66 @@ describe('HandoffService.writeAutoOnClose', () => {
     expect(headingsOf(note.bodyMd)).toHaveLength(6);
   });
 
+  it('still suppresses the automatic handoff exactly 5 minutes after the manual one', () => {
+    const { handoffs, advanceMinutes } = setup();
+    handoffs.write('s1', fullContent(), { author: AUTHOR });
+
+    advanceMinutes(5);
+
+    expect(handoffs.writeAutoOnClose('s1')).toBeUndefined();
+  });
+
+  it('writes a single automatic handoff when the session closes twice', () => {
+    const { handoffs, noteRepo } = setup();
+
+    handoffs.writeAutoOnClose('s1');
+    const second = handoffs.writeAutoOnClose('s1');
+
+    expect(second).toBeUndefined();
+    expect(noteRepo.list('p1')).toHaveLength(1);
+  });
+
+  it('keeps the git status when only the diff stat fails, and the diff stat when only the status fails', () => {
+    const { handoffs, git } = setup();
+    git.diffStatFails = true;
+    const withoutDiffStat = handoffs.writeAutoOnClose('s1')!;
+    const other = setup();
+    other.git.statusFails = true;
+
+    const withoutStatus = other.handoffs.writeAutoOnClose('s1')!;
+
+    expect(withoutDiffStat.bodyMd).toContain('?? src/b.ts');
+    expect(withoutStatus.bodyMd).toContain('1 file changed');
+  });
+
+  it('bounds huge git output so the handoff is still written', () => {
+    const { handoffs, git } = setup();
+    git.status = Array.from({ length: 6000 }, (_, index) => `?? ${'x'.repeat(190)}${index}`).join('\n');
+
+    const note = handoffs.writeAutoOnClose('s1');
+
+    expect(note).toBeDefined();
+    expect(note!.bodyMd).toContain('(5800 more)');
+    expect(sectionHeadingsOf(note!.bodyMd)).toEqual(SIX_SECTIONS);
+  });
+
+  it('records the model, parent session and exit code of the closing session', () => {
+    const { handoffs } = setup({ sessions: [aSession({ parentId: 'parent-1', exitCode: 0 })] });
+
+    const note = handoffs.writeAutoOnClose('s1')!;
+
+    for (const expected of ['Model: sonnet', 'Parent session: parent-1', 'Exit code: 0']) expect(note.bodyMd).toContain(expected);
+  });
+
+  it('omits the parent session and exit code lines when the session has neither', () => {
+    const { handoffs } = setup();
+
+    const note = handoffs.writeAutoOnClose('s1')!;
+
+    expect(note.bodyMd).not.toContain('Parent session');
+    expect(note.bodyMd).not.toContain('Exit code');
+  });
+
   it('returns undefined when the project has no docs folder', () => {
     const { handoffs, git } = setup({ docsFolderPath: null });
 
@@ -302,6 +420,17 @@ describe('registerHandoffOnClose', () => {
     registerHandoffOnClose(bus, { writeAutoOnClose: () => { throw new Error('disk full'); } });
 
     expect(() => bus.emit({ type: 'session.closed', sessionId: 's1' })).not.toThrow();
+  });
+
+  it('reports a handoff failure to onError', () => {
+    const bus = fakeBus();
+    const failure = new Error('disk full');
+    const reported: unknown[] = [];
+    registerHandoffOnClose(bus, { writeAutoOnClose: () => { throw failure; } }, (error) => reported.push(error));
+
+    bus.emit({ type: 'session.closed', sessionId: 's1' });
+
+    expect(reported).toEqual([failure]);
   });
 
   it('returns an unsubscribe', () => {
