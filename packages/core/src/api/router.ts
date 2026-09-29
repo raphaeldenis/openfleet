@@ -5,6 +5,16 @@ import { log } from '../logger.js';
 export type Handler = (ctx: { req: IncomingMessage; res: ServerResponse; params: Record<string, string>; body: unknown }) => Promise<void> | void;
 interface Route { method: string; pattern: RegExp; keys: string[]; handler: Handler }
 
+/** A malformed percent-escape in a path segment reads like an unknown route. */
+function decodeParams(keys: string[], match: RegExpExecArray): Record<string, string> | undefined {
+  try {
+    return Object.fromEntries(keys.map((k, i) => [k, decodeURIComponent(match[i + 1]!)]));
+  } catch (error) {
+    if (error instanceof URIError) return undefined;
+    throw error;
+  }
+}
+
 export class Router {
   private routes: Route[] = [];
 
@@ -19,7 +29,8 @@ export class Router {
       if (route.method !== method) continue;
       const m = route.pattern.exec(pathname);
       if (!m) continue;
-      const params = Object.fromEntries(route.keys.map((k, i) => [k, decodeURIComponent(m[i + 1]!)]));
+      const params = decodeParams(route.keys, m);
+      if (!params) return undefined;
       return { handler: route.handler, params };
     }
     return undefined;
@@ -32,8 +43,7 @@ export function json(res: ServerResponse, status: number, body: unknown): void {
 }
 
 export function queryParams(req: IncomingMessage): Record<string, string> {
-  const search = (req.url ?? '').split('?')[1] ?? '';
-  return Object.fromEntries(new URLSearchParams(search));
+  return Object.fromEntries(new URL(req.url ?? '/', 'http://localhost').searchParams);
 }
 
 // The query string can carry secrets (tokens, admin credentials); never logged. Headers (bearer tokens,

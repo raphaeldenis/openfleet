@@ -410,6 +410,28 @@ describe('notes REST routes', () => {
     });
   });
 
+  describe('request parsing', () => {
+    it('keeps a literal question mark of the query and every parameter after it', async () => {
+      await createNote({ title: 'Why', bodyMd: 'why is it so' });
+      await createNote({ title: 'Why again', bodyMd: 'why not' });
+
+      const response = await call('GET', '/api/notes/search?projectId=p1&q=why%3F&limit=1');
+      const rawQuestionMark = await call('GET', '/api/notes/search?projectId=p1&q=why?&limit=1');
+
+      expect(response.status).toBe(200);
+      expect(rawQuestionMark.status).toBe(200);
+      expect((await rawQuestionMark.json() as { items: unknown[] }).items).toHaveLength(1);
+    });
+
+    it.each(['/api/notes/%E0%A4%A?projectId=p1', '/api/data-stores/%E0%A4%A?projectId=p1'])('answers a malformed percent-escape in %s with 404, signed in or not', async (path) => {
+      const unauthenticated = await call('GET', path, undefined, {});
+      const authenticated = await call('GET', path);
+
+      expect(unauthenticated.status).toBe(404);
+      expect(authenticated.status).toBe(404);
+    });
+  });
+
   describe('errors never leak paths', () => {
     it('answers 409 path_escapes_docs_folder, without the path, when the note file now points outside the docs folder', async () => {
       const fileBacked = docs.createFileBackedNote({ projectId: fileBackedProjectId, folder: 'specs', title: 'log', bodyMd: 'v1', author: 'seed' });

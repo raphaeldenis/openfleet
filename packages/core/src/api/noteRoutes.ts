@@ -18,7 +18,9 @@ const MAX_QUERY_TERMS = 16;
 const ProjectScopeSchema = z.object({ projectId: z.string().min(1) });
 const ListNotesQuerySchema = ProjectScopeSchema.extend({ folder: NoteFolderSchema.optional() }).extend(pageQuerySchema(MAX_NOTE_PAGE_LIMIT).shape);
 const VersionsQuerySchema = ProjectScopeSchema.extend(pageQuerySchema(MAX_NOTE_PAGE_LIMIT).shape);
-const SearchNotesQuerySchema = ProjectScopeSchema.extend({ q: z.string().max(MAX_QUERY_CHARS).default('') });
+const SearchNotesQuerySchema = ProjectScopeSchema.extend({ q: z.string().max(MAX_QUERY_CHARS).default(''),
+  limit: z.coerce.number().int().min(1).max(MAX_SEARCH_RESULTS).default(MAX_SEARCH_RESULTS),
+});
 
 export interface NoteRouteDeps {
   notes: NoteService;
@@ -83,11 +85,11 @@ export function registerNoteRoutes(router: Router, { notes, noteRepo, docs }: No
   });
 
   router.add('GET', '/api/notes/search', ({ req, res }) => {
-    const { projectId, q } = SearchNotesQuerySchema.parse(queryParams(req));
+    const { projectId, q, limit } = SearchNotesQuerySchema.parse(queryParams(req));
     const terms = q.trim().split(/\s+/).filter((term) => term !== '');
     if (terms.length > MAX_QUERY_TERMS) return json(res, 400, { error: 'invalid_body', detail: `too many terms in query (max ${MAX_QUERY_TERMS})` });
     if (terms.length === 0) return json(res, 200, { items: [], total: 0 });
-    const hits = noteRepo.searchSummaries(escapeFtsTerms(terms), { projectId, limit: MAX_SEARCH_RESULTS });
+    const hits = noteRepo.searchSummaries(escapeFtsTerms(terms), { projectId, limit });
     const items = hits.map(({ note, snippet }) => ({ ...note, snippet }));
     json(res, 200, { items, total: items.length });
   });
