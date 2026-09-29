@@ -35,7 +35,7 @@ let fx: Fixture;
 let sessionId: string;
 let hookToken: string;
 
-async function startFixture(settings: Partial<WorkingStateSettings> = {}): Promise<Fixture> {
+async function startFixture(settings: Partial<WorkingStateSettings> = {}, stopRefusalOverride?: StopRefusal): Promise<Fixture> {
   const db = openDatabase(':memory:');
   const bus = new EventBus();
   const harness = new FakeHarness();
@@ -48,7 +48,7 @@ async function startFixture(settings: Partial<WorkingStateSettings> = {}): Promi
   const clock = () => new Date(nowMs).toISOString();
   const workingStateSettings: WorkingStateSettings = { maxBytes: 6144, enforce: true, maxAgeMinutes: 30, ...settings };
   const workingStates = new WorkingStateService({ db, clock, stateRoot: mkdtempSync(join(tmpdir(), 'of-stop-mirror-')), maxBytes: workingStateSettings.maxBytes });
-  const stopRefusal = new StopRefusal({ db, workingStates, settings: workingStateSettings, clock });
+  const stopRefusal = stopRefusalOverride ?? new StopRefusal({ db, workingStates, settings: workingStateSettings, clock });
   const server = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable: DEFAULT_MODEL_TABLE, modelConfigPath: '/tmp/of-unused/config.json', stopRefusal });
   return { server, db, sessions, harness, workingStates, setNow: (epochMs) => { nowMs = epochMs; }, now: () => nowMs };
 }
@@ -105,10 +105,38 @@ describe('user can rely on the daemon refusing the end of a turn while the worki
   });
 
   it('never refuses a Stop with stop_hook_active even with a stale, oversize state and a stale fleet', async () => {
-    fx.workingStates.update(sessionId, STATE_WITH_ONE_TODO);
-    fx.setNow(fx.now() + 600 * MINUTE_MS);
+    const bigState: WorkingStateSections = { ...STATE_WITH_ONE_TODO, todo: Array.from({ length: 40 }, (_, index) => `item ${index} ${'x'.repeat(200)}`) };
+    const writtenAt = fx.now();
+    fx.setNow(writtenAt - 5 * MINUTE_MS);
+    fx.db.prepare('INSERT INTO session_working_states (session_id, sections_json, updated_at) VALUES (?, ?, ?)').run(sessionId, JSON.stringify(bigState), new Date(fx.now()).toISOString());
+    fx.setNow(writtenAt);
+    await fx.sessions.create({ directory: '/tmp', name: 'Late-child', harness: 'fake', emoji: '🧒', parentId: sessionId });
+    fx.setNow(writtenAt + 600 * MINUTE_MS);
 
-    expect(await stop({ stop_hook_active: true })).toEqual({});
+    const withoutContinuation = await stop();
+    const withContinuation = await stop({ stop_hook_active: true });
+
+    expect(withoutContinuation.decision).toBe('block');
+    expect(withoutContinuation.reason).toContain('605 minutes');
+    expect(withContinuation).toEqual({});
+  });
+
+  it('names the fleet, not the size, when the state is oversize and predates a child, and the size when the fleet is unchanged', async () => {
+    const bigState: WorkingStateSections = { ...STATE_WITH_ONE_TODO, todo: Array.from({ length: 40 }, (_, index) => `item ${index} ${'x'.repeat(200)}`) };
+    const writtenAt = fx.now();
+    fx.setNow(writtenAt - 5 * MINUTE_MS);
+    fx.db.prepare('INSERT INTO session_working_states (session_id, sections_json, updated_at) VALUES (?, ?, ?)').run(sessionId, JSON.stringify(bigState), new Date(fx.now()).toISOString());
+    fx.setNow(writtenAt);
+    await fx.sessions.create({ directory: '/tmp', name: 'Late-child', harness: 'fake', emoji: '🧒', parentId: sessionId });
+    fx.setNow(writtenAt + 1_000);
+
+    const oversizeAndFleetStale = await stop();
+    fx.db.prepare('UPDATE session_working_states SET updated_at = ? WHERE session_id = ?').run(new Date(writtenAt + 500).toISOString(), sessionId);
+    const oversizeOnly = await stop();
+
+    expect(oversizeAndFleetStale.reason).toContain('Late-child');
+    expect(oversizeAndFleetStale.reason).not.toContain('bytes');
+    expect(oversizeOnly.reason).toMatch(/\d+ bytes/);
   });
 
   it('lets the turn end when the state is current', async () => {
@@ -293,6 +321,30 @@ describe('user can see a refused turn continue instead of ending', () => {
 
     expect(launchesDuringRefusal).toBe(launchesBefore);
     await vi.waitFor(() => expect(fx.harness.launches.length).toBe(launchesBefore + 1));
+  });
+});
+
+describe('user can rely on a failing refusal check never trapping a session in generating', () => {
+  it('lets the turn end, applies the Stop and logs a warning when the refusal decision throws', async () => {
+    await fx.server.close();
+    const throwingRefusal = { decide: () => { throw new Error('corrupt sections_json'); } } as unknown as StopRefusal;
+    fx = await startFixture({}, throwingRefusal);
+    const session = await fx.sessions.create({ directory: '/tmp', name: 'Boss', harness: 'fake', emoji: '🤖' });
+    sessionId = session.id;
+    hookToken = hookTokenOf(session.id);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await postHook({ hook_event_name: 'SessionStart' });
+    await promptSubmitted();
+    const stateBeforeStop = stateOfSession();
+
+    const answer = await stop();
+
+    expect(stateBeforeStop).toBe('generating');
+    expect(answer).toEqual({});
+    expect(stateOfSession()).toBe('idle');
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('WARN'));
+    expect(warn.mock.calls.flat().join(' ')).toContain('corrupt sections_json');
+    warn.mockRestore();
   });
 });
 

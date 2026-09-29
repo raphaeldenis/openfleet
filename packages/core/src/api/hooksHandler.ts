@@ -1,8 +1,18 @@
-import { ClaudeHookEventSchema, WORKING_STATE_TOOL_NAMES } from '@openfleet/shared';
+import { ClaudeHookEventSchema, WORKING_STATE_TOOL_NAMES, type StopHookOutput } from '@openfleet/shared';
 import type { ApprovalService } from '../governance/approvalService.js';
+import { log } from '../logger.js';
 import type { SessionService } from '../sessions/sessionService.js';
 import type { StopRefusal } from '../workingState/stopRefusal.js';
 import { json, type Handler } from './router.js';
+
+function decideStopRefusalFailingOpen(stopRefusal: StopRefusal | undefined, sessionId: string, stopHookActive: boolean): StopHookOutput | undefined {
+  try {
+    return stopRefusal?.decide({ sessionId, stopHookActive });
+  } catch (error) {
+    log('warn', `stop refusal check failed, letting the turn end: ${error instanceof Error ? error.message : String(error)}`);
+    return undefined;
+  }
+}
 
 export function hooksHandler(deps: { sessions: SessionService; approvals: ApprovalService; stopRefusal?: StopRefusal }): Handler {
   return async ({ res, params, body }) => {
@@ -12,9 +22,7 @@ export function hooksHandler(deps: { sessions: SessionService; approvals: Approv
     if (isIgnorable) return json(res, 200, {});
 
     const event = parsed.data;
-    const stopRefusal = event.hook_event_name === 'Stop'
-      ? deps.stopRefusal?.decide({ sessionId: session.id, stopHookActive: event.stop_hook_active === true })
-      : undefined;
+    const stopRefusal = event.hook_event_name === 'Stop' ? decideStopRefusalFailingOpen(deps.stopRefusal, session.id, event.stop_hook_active === true) : undefined;
     deps.sessions.applyInput(session.id, { kind: 'hook', event, turnContinues: stopRefusal !== undefined });
     if (stopRefusal) return json(res, 200, stopRefusal);
     if (event.hook_event_name !== 'PermissionRequest') return json(res, 200, {});
