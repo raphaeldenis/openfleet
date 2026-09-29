@@ -27,11 +27,32 @@ const FALLBACK_RUNG = 'sonnet';
       @if (switchError(); as error) {
         <span role="alert" data-testid="model-switch-error" class="of-error">✕ {{ error }}</span>
       }
+      @if (session(); as current) {
+        <div class="resolution">
+          @if (current.resolvedModel) {
+            <span data-testid="resolved-model">resolved {{ current.resolvedModel }}</span>
+          }
+          @if (current.cliVersion) {
+            <span data-testid="cli-version">CLI {{ current.cliVersion }}</span>
+          }
+          @if (current.modelDriftedFrom) {
+            <span class="drift">
+              <span class="drift-icon" aria-hidden="true">⚠</span>
+              <span class="drift-text" data-testid="model-drift">changed from {{ current.modelDriftedFrom }}</span>
+            </span>
+          }
+        </div>
+      }
     </div>
   `,
   styles: `
-    .model-selector { display: flex; align-items: center; gap: .375rem; }
-    .current { font-family: var(--mono); font-size: .75rem; }
+    :host { flex: 1 1 auto; }
+    .model-selector { display: flex; flex-wrap: wrap; align-items: center; gap: .375rem; min-width: 0; }
+    .resolution { flex-basis: 100%; min-width: 0; contain: inline-size; display: flex; flex-wrap: wrap; gap: .125rem .5rem; font-family: var(--mono); font-size: .6875rem; color: var(--mut); overflow-wrap: anywhere; }
+    .resolution:empty { display: none; }
+    .drift { display: inline-flex; gap: .25rem; min-width: 0; color: var(--fg); }
+    .drift-icon { color: var(--state-waiting-permission); }
+    .current { font-family: var(--mono); font-size: .75rem; min-width: 0; overflow-wrap: anywhere; }
     .switch-status { font-size: .6875rem; color: var(--state-waiting-permission); }
   `,
 })
