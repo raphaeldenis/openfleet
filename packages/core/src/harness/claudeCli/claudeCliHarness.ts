@@ -1,11 +1,11 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import * as pty from 'node-pty';
-import type { Harness, HarnessHandle, HarnessLaunch } from '../harness.js';
+import type { ConversationPresence, Harness, HarnessHandle, HarnessLaunch } from '../harness.js';
 import { childEnvironmentForClaudeCli } from '../../process/childEnvironment.js';
 import { log } from '../../logger.js';
 import { frameForPaste } from './bracketedPaste.js';
-import { hasConversationTranscript } from './claudeProjects.js';
+import { conversationPresence } from './claudeProjects.js';
 import { buildClaudeLaunchConfig } from './launchConfig.js';
 import { deleteTokenFiles, pathsIn, tokenFilesDirFor, writeTokenFiles } from './tokenFiles.js';
 import { markDirectoryTrusted } from './trustDirectory.js';
@@ -15,8 +15,8 @@ export class ClaudeCliHarness implements Harness {
 
   constructor(private readonly sessionsRoot: string = join(homedir(), '.openfleet', 'sessions')) {}
 
-  conversationExists(conversation: { cliSessionId: string; directory: string }): boolean {
-    return hasConversationTranscript(conversation);
+  conversationExists(conversation: { cliSessionId: string; directory: string }): ConversationPresence {
+    return conversationPresence(conversation);
   }
 
   start(launch: HarnessLaunch): HarnessHandle {
