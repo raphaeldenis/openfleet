@@ -459,6 +459,75 @@ describe('TablesViewComponent', () => {
       expect(screen.queryByTestId('tables-action-error')).toBeNull();
       expect(screen.queryByTestId('tables-schema-mismatch')).toBeNull();
     });
+
+    it('user who opened another table sees no error when the first request of the clear fails', async () => {
+      const api = apiHoldingRows(staleRows(501));
+      api.queryDataStore.mockImplementation(({ storeId }: { storeId: string }) =>
+        Promise.resolve(page(storeId === 's2' ? [row('r-other', { 'c-title': 'From releases' })] : staleRows(501))));
+      const slowFirstChunk = deferred<{ items: DsRow[] }>();
+      api.updateRows.mockReturnValueOnce(slowFirstChunk.promise);
+      const { fixture } = await renderView(api);
+      await userEvent.click(await screen.findByTestId('tables-clear-mismatches'));
+      await userEvent.click(screen.getByTestId('table-pill-s2'));
+      await screen.findByTestId('grid-cell-r-other-c-title');
+
+      slowFirstChunk.reject(new ApiError(500, 'PATCH rows → 500'));
+      await settle(fixture);
+
+      expect(screen.getByTestId('grid-cell-r-other-c-title')).toBeTruthy();
+      expect(screen.queryByTestId('tables-action-error')).toBeNull();
+    });
+
+    it('user cannot add a row or start a second clear while a clear is running', async () => {
+      const api = apiHoldingRows(staleRows(501));
+      const slowFirstChunk = deferred<{ items: DsRow[] }>();
+      api.updateRows.mockReturnValueOnce(slowFirstChunk.promise);
+      const { fixture } = await renderView(api);
+      await userEvent.click(await screen.findByTestId('tables-clear-mismatches'));
+
+      expect(screen.getByTestId('tables-add-row')).toBeDisabled();
+      expect(screen.getByTestId('tables-clear-mismatches')).toBeDisabled();
+
+      slowFirstChunk.resolve({ items: [] });
+      await settle(fixture);
+    });
+
+    it('user reopening the same table during a clear that fails halfway still sees how many values were cleared', async () => {
+      const api = apiHoldingRows(staleRows(501));
+      const applyingUpdates = api.updateRows.getMockImplementation() as (request: unknown) => Promise<unknown>;
+      const slowFirstChunk = deferred<{ items: DsRow[] }>();
+      api.updateRows.mockReturnValueOnce(slowFirstChunk.promise.then(() => applyingUpdates({ updates: [] })));
+      api.updateRows.mockRejectedValueOnce(new ApiError(500, 'PATCH rows → 500'));
+      const { fixture } = await renderView(api);
+      await userEvent.click(await screen.findByTestId('tables-clear-mismatches'));
+      await userEvent.click(screen.getByTestId('table-pill-s1'));
+
+      slowFirstChunk.resolve({ items: [] });
+      await settle(fixture);
+
+      expect(await screen.findByTestId('tables-action-error')).toHaveTextContent(
+        'Cleared 500 of 501 values; the rest could not be saved. Retry to clear the remaining ones',
+      );
+    });
+
+    it('user sees the count of cleared values, not of rows, when a row holds two stale values', async () => {
+      const priorityColumn: DsColumn = {
+        id: 'c-priority', storeId: 's1', displayName: 'Priority', columnType: 'select', sortOrder: 2,
+        options: [{ id: 'low', label: 'low' }, { id: 'high', label: 'high' }],
+      };
+      const rowsWithOneRowHoldingTwoStaleValues = staleRows(501).map((stale, index) =>
+        index === 0 ? row(stale.id, { ...stale.data, 'c-priority': 'urgent' }) : stale);
+      const api = fakeApi({ columns: [...columns, priorityColumn] });
+      api.queryDataStore.mockResolvedValue(page(rowsWithOneRowHoldingTwoStaleValues));
+      api.updateRows.mockResolvedValueOnce({ items: [] });
+      api.updateRows.mockRejectedValueOnce(new ApiError(500, 'PATCH rows → 500'));
+      await renderView(api);
+
+      expect(await screen.findByTestId('tables-schema-mismatch')).toHaveTextContent('for 501 rows');
+      await userEvent.click(screen.getByTestId('tables-clear-mismatches'));
+
+      expect(await screen.findByTestId('tables-action-error')).toHaveTextContent('Cleared 501 of 502 values');
+    });
   });
 
   describe('creating a table without a project', () => {

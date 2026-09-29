@@ -1,6 +1,6 @@
 import { afterNextRender, ChangeDetectionStrategy, Component, computed, effect, ElementRef, inject, Injector, input, linkedSignal, signal, untracked, viewChild } from '@angular/core';
 import { MAX_ROW_BATCH, type DataStore, type DsColumn, type DsRow, type DsRowHistoryEntry, type DsView, type Project } from '@openfleet/shared';
-import { ApiError, FleetApiService } from '../core/fleet-api.service';
+import { ApiError, FleetApiService, type StoreScope } from '../core/fleet-api.service';
 import { RowHistoryComponent } from './row-history.component';
 import { TableGridComponent } from './table-grid.component';
 import { isBlank, selectColumnsWithOptions, titleOf } from './table-cells';
@@ -11,7 +11,6 @@ type LoadTarget = 'projects' | 'stores' | 'table';
 interface LoadFailure { target: LoadTarget; reason: string }
 type LoadFailures = Partial<Record<LoadTarget, string>>;
 interface TableLoadOptions { keepsSelection?: boolean }
-interface StoreScope { projectId: string; storeId: string }
 type ViewMode = 'grid' | 'kanban';
 interface Mismatch { rowId: string; column: DsColumn }
 
@@ -55,7 +54,7 @@ const describeCreateFailure = (error: unknown, displayName: string): string => {
         <button type="button" data-testid="tables-toggle-grid" [class.on]="viewMode() === 'grid'" [attr.aria-pressed]="viewMode() === 'grid'" (click)="viewMode.set('grid')">▦ Grid</button>
         <button type="button" data-testid="tables-toggle-kanban" [class.on]="viewMode() === 'kanban'" [attr.aria-pressed]="viewMode() === 'kanban'" (click)="viewMode.set('kanban')">▥ Kanban</button>
       </div>
-      <button type="button" class="of-btn of-btn--primary compact" data-testid="tables-add-row" [disabled]="!activeStoreId()" (click)="addRow()">+ Row</button>
+      <button type="button" class="of-btn of-btn--primary compact" data-testid="tables-add-row" [disabled]="!activeStoreId() || isClearingMismatches()" (click)="addRow()">+ Row</button>
     </div>
 
     @if (isCreatingTable()) {
@@ -101,7 +100,7 @@ const describeCreateFailure = (error: unknown, displayName: string): string => {
             <span class="card-title">✕ Schema mismatch in “{{ activeStoreName() }}”</span>
             <span class="muted">{{ mismatchSummary() }}</span>
             <div class="actions">
-              <button type="button" class="of-btn of-btn--secondary compact" data-testid="tables-clear-mismatches" (click)="clearMismatchedValues()">Clear those values</button>
+              <button type="button" class="of-btn of-btn--secondary compact" data-testid="tables-clear-mismatches" [disabled]="isClearingMismatches()" (click)="clearMismatchedValues()">Clear those values</button>
               <button type="button" class="of-btn of-btn--secondary compact" data-testid="tables-view-rows" (click)="viewRowsAnyway()">View rows</button>
             </div>
           </div>
@@ -227,6 +226,7 @@ export class TablesViewComponent {
   private readonly hasLoadedProjects = signal(false);
   private readonly hasLoadedStores = signal(false);
   private readonly ignoresMismatches = signal(false);
+  protected readonly isClearingMismatches = signal(false);
   private latestTableRequest = 0;
   private latestStoresRequest = 0;
   private readonly actionsInFlight = new Set<string>();
@@ -325,25 +325,29 @@ export class TablesViewComponent {
     const totalValues = this.mismatches().length;
     const scope = this.currentScope();
     if (!scope) return;
-    const request = this.latestTableRequest;
     await this.runAction('clear-mismatches', async () => {
-      let clearedValues = 0;
-      let hasFailed = false;
-      for (let start = 0; start < updates.length; start += MAX_ROW_BATCH) {
-        const batch = updates.slice(start, start + MAX_ROW_BATCH);
-        try {
-          await this.api.updateRows({ ...scope, updates: batch });
-        } catch (error) {
-          if (clearedValues === 0) throw error;
-          hasFailed = true;
-          break;
+      this.isClearingMismatches.set(true);
+      try {
+        let clearedValues = 0;
+        let hasFailed = false;
+        for (let start = 0; start < updates.length; start += MAX_ROW_BATCH) {
+          const batch = updates.slice(start, start + MAX_ROW_BATCH);
+          try {
+            await this.api.updateRows({ ...scope, updates: batch });
+          } catch (error) {
+            if (this.hasLeft(scope)) return;
+            if (clearedValues === 0) throw error;
+            hasFailed = true;
+            break;
+          }
+          clearedValues += batch.reduce((count, { patch }) => count + Object.keys(patch).length, 0);
         }
-        clearedValues += batch.reduce((count, { patch }) => count + Object.keys(patch).length, 0);
+        if (this.hasLeft(scope)) return;
+        await this.loadTable(scope, { keepsSelection: true });
+        if (hasFailed) this.actionError.set(`Cleared ${clearedValues} of ${totalValues} values; the rest could not be saved. Retry to clear the remaining ones`);
+      } finally {
+        this.isClearingMismatches.set(false);
       }
-      const userLeftTheTable = request !== this.latestTableRequest;
-      if (userLeftTheTable) return;
-      await this.loadTable(scope, { keepsSelection: true });
-      if (hasFailed) this.actionError.set(`Cleared ${clearedValues} of ${totalValues} values; the rest could not be saved. Retry to clear the remaining ones`);
     });
   }
 
@@ -429,13 +433,20 @@ export class TablesViewComponent {
   private async writeThenReload(name: string, write: (scope: StoreScope) => Promise<unknown>): Promise<void> {
     const scope = this.currentScope();
     if (!scope) return;
-    const request = this.latestTableRequest;
     await this.runAction(name, async () => {
-      await write(scope);
-      const userLeftTheTable = request !== this.latestTableRequest;
-      if (userLeftTheTable) return;
+      try {
+        await write(scope);
+      } catch (error) {
+        if (this.hasLeft(scope)) return;
+        throw error;
+      }
+      if (this.hasLeft(scope)) return;
       await this.loadTable(scope, { keepsSelection: true });
     });
+  }
+
+  private hasLeft({ projectId, storeId }: StoreScope): boolean {
+    return this.activeProjectId() !== projectId || this.activeStoreId() !== storeId;
   }
 
   private async runAction(name: string, action: () => Promise<void>, failureMessage = 'That change could not be saved.'): Promise<void> {
