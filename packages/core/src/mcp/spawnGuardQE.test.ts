@@ -159,10 +159,9 @@ describe('duplicate spawn guard, hostile probes (QE STATE-01k1)', () => {
     const manager = await connect(managerToken);
     const name = 'x'.repeat(100_000);
 
-    const first = await create(manager, { directory: makeTrackedDirectory('a'), name });
+    await create(manager, { directory: makeTrackedDirectory('a'), name });
     const second = await create(manager, { directory: makeTrackedDirectory('b'), name });
 
-    console.log('QE-PROBE long name first isError =', first.isError, 'second isError =', second.isError);
     expect(second.isError).toBe(true);
   });
 
@@ -176,7 +175,7 @@ describe('duplicate spawn guard, hostile probes (QE STATE-01k1)', () => {
     expect(text(result)).toContain('same directory');
   });
 
-  it('user can be refused when a live child directory is reached through a child-of-a-child request', async () => {
+  it('user can spawn into the directory of a live grandchild, since only direct children count as duplicates', async () => {
     const manager = await connect(managerToken);
     const childDirectory = makeTrackedDirectory('child');
     await create(manager, { directory: childDirectory, name: 'Middle' });
@@ -186,13 +185,11 @@ describe('duplicate spawn guard, hostile probes (QE STATE-01k1)', () => {
 
     const result = await create(manager, { directory: grandDirectory, name: 'Other' });
 
-    console.log('QE-PROBE manager spawning into grandchild directory isError =', result.isError);
-    expect(result).toBeDefined();
+    expect(result.isError).toBeFalsy();
   });
 
-  it('user can be refused with a clean error when the caller directory became unreadable', async () => {
+  it('user can be refused by the ancestor guard when an alias of the caller directory is requested while that directory is unreadable', async () => {
     const manager = await connect(managerToken);
-    const child = makeTrackedDirectory('child');
     const alias = join(makeTrackedDirectory('alias'), 'link');
     symlinkSync(managerDirectory, alias);
     chmodSync(managerDirectory, 0o000);
@@ -200,8 +197,8 @@ describe('duplicate spawn guard, hostile probes (QE STATE-01k1)', () => {
     const result = await create(manager, { directory: alias, name: 'Blocked' });
     chmodSync(managerDirectory, 0o755);
 
-    console.log('QE-PROBE unreadable caller dir isError =', result.isError, text(result).slice(0, 120), child ? '' : '');
     expect(result.isError).toBe(true);
+    expect(text(result)).toContain('which is you or one of your ancestors');
     expect(harness.launches).toHaveLength(1);
   });
 });
