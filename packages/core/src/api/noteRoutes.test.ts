@@ -1,6 +1,6 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { mkdtempSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, renameSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
@@ -34,6 +34,7 @@ let docs: DocsFolderService;
 let noteRepo: NoteRepository;
 let mcpToken: string;
 let fileBackedProjectId: string;
+let docsFolderPath: string;
 let db: DatabaseSync;
 
 const call = (method: string, path: string, body?: unknown, headers: Record<string, string> = ADMIN) =>
@@ -56,7 +57,7 @@ beforeEach(async () => {
   projects.insert({ id: 'p1', name: 'One', docsFolderPath: null, createdAt: 't0' });
   projects.insert({ id: 'p2', name: 'Two', docsFolderPath: null, createdAt: 't0' });
   fileBackedProjectId = 'p-fb';
-  const docsFolderPath = mkdtempSync(join(tmpdir(), 'of-docs-'));
+  docsFolderPath = mkdtempSync(join(tmpdir(), 'of-docs-'));
   projects.insert({ id: fileBackedProjectId, name: 'FileBacked', docsFolderPath, createdAt: 't0' });
 
   const storeRepo = new DataStoreRepository(db);
@@ -437,6 +438,42 @@ describe('notes REST routes', () => {
       expect(await edited.json()).toMatchObject({ bodyMd: 'v2', rev: 2, fileBacked: true });
       expect(renamed.status).toBe(409);
       expect(await renamed.json()).toMatchObject({ error: 'file_backed' });
+    });
+  });
+
+  describe('user editing a file-backed note whose docs folder moved on disk', () => {
+    const seedFileBackedNote = () => docs.createFileBackedNote({ projectId: fileBackedProjectId, folder: 'specs', title: 'log', bodyMd: 'v1', author: 'seed' });
+    const readNoteVersionRevs = (noteId: string) => noteRepo.listVersionSummaries(noteId).map((version) => version.rev);
+
+    it.each([
+      ['the whole docs folder is renamed', () => docsFolderPath],
+      ['the note subfolder is renamed', () => join(docsFolderPath, 'specs')],
+    ])('gets 409 file_unreadable and no new revision when %s', async (_situation, folderToMove) => {
+      const note = seedFileBackedNote();
+      renameSync(folderToMove(), `${folderToMove()}-moved`);
+
+      const patched = await call('PATCH', `/api/notes/${note.id}`, { projectId: fileBackedProjectId, expectedRev: 1, bodyMd: 'v2' });
+      const restored = await call('POST', `/api/notes/${note.id}/restore`, { projectId: fileBackedProjectId, rev: 1, expectedRev: 1 });
+
+      expect(patched.status).toBe(409);
+      expect(await patched.json()).toEqual({ error: 'file_unreadable' });
+      expect(restored.status).toBe(409);
+      expect(noteRepo.get(note.id)).toMatchObject({ bodyMd: 'v1', rev: 1 });
+      expect(readNoteVersionRevs(note.id)).toEqual([1]);
+    });
+
+    it('keeps the old body, revision and version list when the file swap fails after the body was staged', async () => {
+      const note = seedFileBackedNote();
+      vi.spyOn(nodeDocsFolderFs, 'renameSync').mockImplementation(() => { throw Object.assign(new Error('EXDEV'), { code: 'EXDEV' }); });
+
+      const patched = await call('PATCH', `/api/notes/${note.id}`, { projectId: fileBackedProjectId, expectedRev: 1, bodyMd: 'v2' });
+      vi.restoreAllMocks();
+
+      expect(patched.status).toBe(409);
+      expect(await patched.json()).toEqual({ error: 'file_unreadable' });
+      expect(noteRepo.get(note.id)).toMatchObject({ bodyMd: 'v1', rev: 1 });
+      expect(readNoteVersionRevs(note.id)).toEqual([1]);
+      expect(readFileSync(noteRepo.get(note.id)!.filePath!, 'utf8')).toBe('v1');
     });
   });
 

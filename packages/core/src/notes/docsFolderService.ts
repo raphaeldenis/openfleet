@@ -96,20 +96,21 @@ interface ImportCandidate {
  *
  * **Write-through ordering** (`writeThrough`): the size cap is checked first, then a temp file is written
  * next to the target ('wx', fsynced — durable once `writeFileExclusiveSync` returns), THEN the DB row
- * commits (body + source_hash + rev CAS, one transaction), THEN the temp file is renamed over the target.
- * On any failure the temp file is removed and the target is never touched — a failed CAS or an oversized
- * body leaves neither the DB nor the visible file changed.
+ * (body + source_hash + rev CAS) and the rename of the temp file over the target run inside ONE
+ * transaction, the rename last. On any failure the temp file is removed and the target is never touched —
+ * a failed CAS, an oversized body, a vanished docs folder or a failed rename leaves neither the DB nor
+ * the visible file changed (the revision and version row roll back with the failed rename). A docs folder
+ * or subfolder that disappeared surfaces as `NoteFileUnreadableError`.
  *
- * This order never leaves a mismatch `reconcileOnBoot` can't heal: before the DB commits, the target
+ * This order never leaves a mismatch `reconcileOnBoot` can't heal: before the rename, the target
  * file is untouched (nothing to reconcile — the write never happened as far as disk is concerned); the
- * only crash window is between the DB commit and the rename, where the DB holds the new body/hash but
- * the target file still holds the old bytes. `reconcileOnBoot` hashes the actual file and compares it
+ * only crash window is between the rename and the transaction's COMMIT, where the file holds the new
+ * bytes while the DB still holds the old body/hash. `reconcileOnBoot` hashes the actual file and compares it
  * to `notes.source_hash`; on a mismatch it always applies whatever is really on disk as a new 'disk'
  * revision (`applyExternalEdit`, decision 2) — so after reconcile, `source_hash` is by construction the
- * hash of the bytes reconcile just read. The attempted write is not lost: it is still the version row
- * the DB commit created, just superseded by the disk-observed revision. Renaming last also means the
- * file only changes at the very end, once our own DB bookkeeping is already committed — so `watch`'s
- * hash comparison (the self-write guard) never races an in-flight transaction of our own.
+ * hash of the bytes reconcile just read, so the user's write is kept, never reverted. The whole sequence
+ * is synchronous, so `watch`'s debounced hash comparison (the self-write guard) only runs after the
+ * transaction has committed.
  *
  * **Create ordering** (`createFileBackedNote`) is the opposite: the size cap is checked, a temp file is
  * written, THEN renamed onto the (not-yet-existing) target, THEN the DB row is inserted. If the DB insert
@@ -161,23 +162,26 @@ export class DocsFolderService {
     const current = this.requireFileBackedNote(noteId);
     const targetPath = current.filePath!;
     const project = this.requireProject(current.projectId);
-    const realDocsFolderPath = this.deps.fs.realpathSync(this.requireDocsFolderPath(project));
+    const docsFolderPath = this.requireDocsFolderPath(project);
+    const realDocsFolderPath = this.orUnreadable(docsFolderPath, () => this.deps.fs.realpathSync(docsFolderPath));
     if (!this.isFileWithinDocsFolder(realDocsFolderPath, targetPath)) throw new PathEscapesDocsFolderError(targetPath);
     this.assertWithinCap(input.bodyMd);
     this.refuseIfDiskEditIsUnreconciled(current);
 
-    const tempPath = this.writeTempFile(targetPath, input.bodyMd);
+    const tempPath = this.orUnreadable(targetPath, () => this.writeTempFile(targetPath, input.bodyMd));
     try {
-      const note = this.deps.notes.updateFileBacked(noteId, {
-        bodyMd: input.bodyMd,
-        sourceHash: sha256(input.bodyMd),
-        expectedRev: input.expectedRev,
-        author: input.author,
+      return this.deps.notes.runAtomically(() => {
+        const note = this.deps.notes.updateFileBacked(noteId, {
+          bodyMd: input.bodyMd,
+          sourceHash: sha256(input.bodyMd),
+          expectedRev: input.expectedRev,
+          author: input.author,
+        });
+        this.orUnreadable(targetPath, () => this.deps.fs.renameSync(tempPath, targetPath));
+        return note;
       });
-      this.deps.fs.renameSync(tempPath, targetPath);
-      return note;
     } catch (error) {
-      this.deps.fs.unlinkSync(tempPath);
+      this.removeTempFileQuietly(tempPath);
       throw error;
     }
   }
@@ -377,6 +381,23 @@ export class DocsFolderService {
       if (!this.deps.fs.existsSync(candidate)) return candidate;
     }
     throw new Error(`could not find a free filename for "${title}" under ${realFolderDir}`);
+  }
+
+  /** Any filesystem failure while touching the note's file (folder renamed away, disk error) reads as an unreadable note file. */
+  private orUnreadable<T>(path: string, run: () => T): T {
+    try {
+      return run();
+    } catch (error) {
+      throw new NoteFileUnreadableError(path, error);
+    }
+  }
+
+  private removeTempFileQuietly(tempPath: string): void {
+    try {
+      this.deps.fs.unlinkSync(tempPath);
+    } catch {
+      // the temp file's directory is already gone: nothing left to clean
+    }
   }
 
   private writeTempFile(targetPath: string, contents: string): string {
