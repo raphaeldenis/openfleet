@@ -30,6 +30,12 @@ export class NoteIsNotFileBackedError extends Error {
   }
 }
 
+export class NoteFileUnreadableError extends Error {
+  constructor(path: string, cause: unknown) {
+    super(`note file cannot be read: ${path}`, { cause });
+  }
+}
+
 export class PathEscapesDocsFolderError extends Error {
   constructor(path: string) {
     super(`path escapes the docs folder: ${path}`);
@@ -65,6 +71,8 @@ export interface ReconcileReport {
   oversized: string[];
   /** File-backed notes whose file is gone from disk — not healed, just surfaced. */
   missing: string[];
+  /** File-backed notes whose file exists but cannot be read (permissions, I/O error) — not healed, just surfaced. */
+  unreadable: string[];
   /** File-backed notes whose file path (or its directory) now resolves outside the docs folder — never read. */
   escaped: string[];
 }
@@ -177,10 +185,18 @@ export class DocsFolderService {
   /** The note's file path relative to its project's docs folder; null for a plain note or a path outside the folder. */
   docsRelativePath(note: Note): string | null {
     if (!note.filePath) return null;
-    const project = this.requireProject(note.projectId);
-    const realDocsFolderPath = this.deps.fs.realpathSync(this.requireDocsFolderPath(project));
+    const realDocsFolderPath = this.tryResolveRealDocsFolderPath(note.projectId);
+    if (realDocsFolderPath === null) return null;
     if (!this.isPathContained(realDocsFolderPath, note.filePath)) return null;
     return note.filePath.slice(realDocsFolderPath.length + 1);
+  }
+
+  private tryResolveRealDocsFolderPath(projectId: string): string | null {
+    try {
+      return this.deps.fs.realpathSync(this.requireDocsFolderPath(this.requireProject(projectId)));
+    } catch {
+      return null;
+    }
   }
 
   /** Imports every markdown file under `existingPath`'s four docs subfolders not already known by file_path. Idempotent. */
@@ -196,7 +212,7 @@ export class DocsFolderService {
   /** For every file-backed note of `projectId`: a disk hash that no longer matches `source_hash` is applied as a 'disk' revision. */
   reconcileOnBoot(projectId: string): ReconcileReport {
     const fileBackedNotes = this.deps.noteRepo.list(projectId).filter((note) => note.filePath !== null);
-    const report: ReconcileReport = { applied: [], oversized: [], missing: [], escaped: [] };
+    const report: ReconcileReport = { applied: [], oversized: [], missing: [], unreadable: [], escaped: [] };
     for (const note of fileBackedNotes) this.reconcileNote(note, report);
     return report;
   }
@@ -234,7 +250,7 @@ export class DocsFolderService {
   private reconcilePath(absolutePath: string): void {
     const note = this.deps.noteRepo.getByFilePath(absolutePath);
     if (!note) return;
-    this.reconcileNote(note, { applied: [], oversized: [], missing: [], escaped: [] });
+    this.reconcileNote(note, { applied: [], oversized: [], missing: [], unreadable: [], escaped: [] });
   }
 
   /**
@@ -251,10 +267,15 @@ export class DocsFolderService {
       return;
     }
 
-    let diskBodyMd: string;
+    let diskBodyMd: string | undefined;
     try {
-      diskBodyMd = this.deps.fs.readFileSync(note.filePath!);
-    } catch {
+      diskBodyMd = this.tryReadFile(note.filePath!);
+    } catch (error) {
+      if (!(error instanceof NoteFileUnreadableError)) throw error;
+      report.unreadable.push(note.id);
+      return;
+    }
+    if (diskBodyMd === undefined) {
       report.missing.push(note.id);
       return;
     }
@@ -291,11 +312,14 @@ export class DocsFolderService {
     throw new StaleRevisionError(reconciled.rev);
   }
 
+  /** Returns undefined only when the file does not exist; any other read failure throws `NoteFileUnreadableError`. */
   private tryReadFile(path: string): string | undefined {
     try {
       return this.deps.fs.readFileSync(path);
-    } catch {
-      return undefined;
+    } catch (error) {
+      const isFileMissing = (error as NodeJS.ErrnoException).code === 'ENOENT';
+      if (isFileMissing) return undefined;
+      throw new NoteFileUnreadableError(path, error);
     }
   }
 

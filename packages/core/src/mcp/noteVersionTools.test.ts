@@ -1,6 +1,6 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { mkdtempSync } from 'node:fs';
+import { chmodSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
@@ -202,6 +202,22 @@ describe('note version tools', () => {
     });
   });
 
+  describe('a file-backed note whose file cannot be read', () => {
+    it.skipIf(process.getuid?.() === 0)('fails opaquely and leaves the file and the note untouched', async () => {
+      const note = docs.createFileBackedNote({ projectId: fileBackedProjectId, folder: 'specs', title: 'log', bodyMd: '## Log\nold entry', author: 'seed' });
+      const client = await connect(fileBackedToken);
+      chmodSync(note.filePath!, 0o000);
+
+      const result = await client.callTool({ name: 'update_note_section', arguments: { note: note.id, heading: 'Log', content: 'new entry', expected_rev: note.rev } });
+
+      chmodSync(note.filePath!, 0o600);
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toBe('request failed');
+      expect(nodeDocsFolderFs.readFileSync(note.filePath!)).toBe('## Log\nold entry');
+      expect(noteRepo.get(note.id)).toMatchObject({ bodyMd: '## Log\nold entry', rev: 1 });
+    });
+  });
+
   describe('get_note_version', () => {
     it('returns the full body of a past revision', async () => {
       const client = await connect(scopedToken);
@@ -233,6 +249,22 @@ describe('note version tools', () => {
       expect(strangerResult.isError).toBe(true);
       expect(missingResult.isError).toBe(true);
       expect(errorText(strangerResult)).toBe(errorText(missingResult));
+    });
+  });
+
+  describe('get_note_version across projects', () => {
+    it('returns the caller\'s own body, never another project\'s version of the same rev', async () => {
+      const owner = await connect(scopedToken);
+      const ownerNote = await createNote(owner, { body_md: 'owner secret' });
+      const stranger = await connect(otherToken);
+      const strangerNote = await createNote(stranger, { body_md: 'stranger body' });
+
+      const ownVersion = text(await stranger.callTool({ name: 'get_note_version', arguments: { note: strangerNote.id, rev: 1 } }));
+      const guessed = await stranger.callTool({ name: 'get_note_version', arguments: { note: ownerNote.id, rev: 1 } });
+
+      expect(ownVersion.bodyMd).toBe('stranger body');
+      expect(guessed.isError).toBe(true);
+      expect(errorText(guessed)).not.toContain('owner secret');
     });
   });
 

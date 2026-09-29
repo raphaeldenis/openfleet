@@ -4,7 +4,7 @@ import { openDatabase } from '../db/database.js';
 import { ProjectRepository } from '../projects/projectRepository.js';
 import type { DocsFolderFs } from './docsFolderFs.js';
 import {
-  DocsFolderService, NoteIsNotFileBackedError, PathEscapesDocsFolderError, ProjectHasNoDocsFolderError, ProjectNotFoundError,
+  DocsFolderService, NoteFileUnreadableError, NoteIsNotFileBackedError, PathEscapesDocsFolderError, ProjectHasNoDocsFolderError, ProjectNotFoundError,
 } from './docsFolderService.js';
 import { expandMentions } from './mentionExpander.js';
 import { NoteRepository } from './noteRepository.js';
@@ -18,16 +18,24 @@ function sha256Hex(text: string): string {
   return createHash('sha256').update(text, 'utf8').digest('hex');
 }
 
+function errnoError(code: string, path: string): NodeJS.ErrnoException {
+  return Object.assign(new Error(`${code}: ${path}`), { code });
+}
+
 class FakeDocsFolderFs implements DocsFolderFs {
   readonly files = new Map<string, string>();
+  /** Files whose read fails with the given errno code (e.g. EACCES) even though they exist. */
+  readonly unreadableFiles = new Map<string, string>();
   readonly symlinks = new Map<string, string>();
   readonly dirs = new Set<string>();
   private watchers: { dirPath: string; onEvent: (eventType: 'rename' | 'change', relativePath: string | null) => void }[] = [];
 
   readFileSync(path: string): string {
     const real = this.realpathSync(path);
+    const failureCode = this.unreadableFiles.get(real);
+    if (failureCode) throw errnoError(failureCode, path);
     const content = this.files.get(real);
-    if (content === undefined) throw new Error(`ENOENT: ${path}`);
+    if (content === undefined) throw errnoError('ENOENT', path);
     return content;
   }
 
@@ -38,7 +46,7 @@ class FakeDocsFolderFs implements DocsFolderFs {
 
   renameSync(fromPath: string, toPath: string): void {
     const content = this.files.get(fromPath);
-    if (content === undefined) throw new Error(`ENOENT: ${fromPath}`);
+    if (content === undefined) throw errnoError('ENOENT', fromPath);
     this.files.delete(fromPath);
     this.files.set(toPath, content);
   }
@@ -278,6 +286,57 @@ describe('DocsFolderService writeThrough', () => {
     expect(() => docs.writeThrough(note.id, { bodyMd: oversized, expectedRev: note.rev, author: AUTHOR })).toThrow(NoteTooLargeError);
 
     expect(writeSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('DocsFolderService unreadable files', () => {
+  it('writeThrough refuses with a typed error when the file exists but cannot be read, overwriting nothing', () => {
+    const { fakeFs, noteRepo, docs } = setup();
+    const note = docs.createFileBackedNote({ projectId: 'p1', folder: 'specs', title: 'x', bodyMd: 'v1', author: AUTHOR });
+    fakeFs.unreadableFiles.set(note.filePath!, 'EACCES');
+
+    const write = () => docs.writeThrough(note.id, { bodyMd: 'v2', expectedRev: note.rev, author: AUTHOR });
+
+    expect(write).toThrow(NoteFileUnreadableError);
+    expect(fakeFs.files.get(note.filePath!)).toBe('v1');
+    expect(noteRepo.get(note.id)).toMatchObject({ bodyMd: 'v1', rev: 1 });
+  });
+
+  it('reconcileOnBoot lists a note whose file cannot be read as unreadable, not missing, and changes nothing', () => {
+    const { fakeFs, noteRepo, docs } = setup();
+    const note = docs.createFileBackedNote({ projectId: 'p1', folder: 'specs', title: 'x', bodyMd: 'v1', author: AUTHOR });
+    fakeFs.unreadableFiles.set(note.filePath!, 'EIO');
+
+    const report = docs.reconcileOnBoot('p1');
+
+    expect(report.unreadable).toEqual([note.id]);
+    expect(report.missing).toEqual([]);
+    expect(noteRepo.get(note.id)).toMatchObject({ bodyMd: 'v1', rev: 1 });
+  });
+});
+
+describe('DocsFolderService docsRelativePath', () => {
+  it('returns the path relative to the docs folder', () => {
+    const { docs } = setup();
+    const note = docs.createFileBackedNote({ projectId: 'p1', folder: 'specs', title: 'x', bodyMd: 'v1', author: AUTHOR });
+
+    expect(docs.docsRelativePath(note)).toBe('specs/2026-01-15-x.md');
+  });
+
+  it('returns null instead of throwing when the docs folder can no longer be resolved', () => {
+    const { fakeFs, docs } = setup();
+    const note = docs.createFileBackedNote({ projectId: 'p1', folder: 'specs', title: 'x', bodyMd: 'v1', author: AUTHOR });
+    vi.spyOn(fakeFs, 'realpathSync').mockImplementation((path) => { throw errnoError('ENOENT', path); });
+
+    expect(docs.docsRelativePath(note)).toBeNull();
+  });
+
+  it('returns null instead of throwing when the project no longer has a docs folder', () => {
+    const { db, docs } = setup();
+    const note = docs.createFileBackedNote({ projectId: 'p1', folder: 'specs', title: 'x', bodyMd: 'v1', author: AUTHOR });
+    db.prepare('UPDATE projects SET docs_folder_path = NULL WHERE id = ?').run('p1');
+
+    expect(docs.docsRelativePath(note)).toBeNull();
   });
 });
 

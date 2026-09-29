@@ -305,6 +305,19 @@ describe('NoteRepository version reads', () => {
     expect(repository.getVersion('n1', 3)).toBeUndefined();
   });
 
+  it('getVersion is scoped to its note: two notes sharing a rev never see each other\'s body', () => {
+    const { db, repository } = openRepositoryWithProjects('p1');
+    repository.insert(aNote({ id: 'nA' }));
+    repository.insert(aNote({ id: 'nB' }));
+    insertVersion(db, 'nA', 2);
+    insertVersion(db, 'nB', 2);
+    db.prepare("UPDATE note_versions SET body_md = 'body of A' WHERE note_id = 'nA'").run();
+    db.prepare("UPDATE note_versions SET body_md = 'body of B' WHERE note_id = 'nB'").run();
+
+    expect(repository.getVersion('nB', 2)?.bodyMd).toBe('body of B');
+    expect(repository.getVersion('nA', 2)?.bodyMd).toBe('body of A');
+  });
+
   it('listVersionSummaries returns id, rev, author and createdAt per version, oldest first, with no body', () => {
     const { db, repository } = openRepositoryWithProjects('p1');
     repository.insert(aNote());
