@@ -452,6 +452,22 @@ describe('registerHandoffOnClose', () => {
     expect(noteRepo.list('p1')).toHaveLength(2);
   });
 
+  it('writes an automatic handoff for the work done after a reopen even when a manual handoff predates the reopen', () => {
+    const { handoffs, noteRepo, advanceMinutes } = setup();
+    const bus = fakeBus();
+    registerHandoffOnClose(bus, handoffs);
+
+    handoffs.write('s1', fullContent(), { author: AUTHOR });
+    advanceMinutes(1);
+    bus.emit({ type: 'session.closed', sessionId: 's1' });
+    expect(noteRepo.list('p1')).toHaveLength(1);
+    bus.emit({ type: 'session.reopened', sessionId: 's1' });
+    advanceMinutes(2);
+    bus.emit({ type: 'session.closed', sessionId: 's1' });
+
+    expect(noteRepo.list('p1')).toHaveLength(2);
+  });
+
   it('never lets a handoff failure escape into the bus', () => {
     const bus = fakeBus();
     registerHandoffOnClose(bus, { writeAutoOnClose: () => { throw new Error('disk full'); }, forgetAutoHandoff: () => {} });

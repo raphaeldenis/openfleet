@@ -112,6 +112,7 @@ export class HandoffService {
   /** Lets a reopened session get an automatic handoff again on its next close. */
   forgetAutoHandoff(sessionId: string): void {
     this.sessionsWithAutoHandoff.delete(sessionId);
+    this.lastManualHandoffMs.delete(sessionId);
   }
 
   private hasRecentManualHandoff(sessionId: string): boolean {
