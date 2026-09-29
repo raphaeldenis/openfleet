@@ -1,9 +1,22 @@
 import { Injectable } from '@angular/core';
-import type { Approval, DataStore, DataStoreDetail, DsRow, DsRowHistoryEntry, DsView, HarnessId, OrderTerm, Page, PermissionMode, Project, Session, SessionSpec, WhereClause } from '@openfleet/shared';
+import type {
+  Approval, CreateNoteRequest, DataStore, DataStoreDetail, DsRow, DsRowHistoryEntry, DsView, HarnessId, NoteSummary,
+  NoteVersionSummary, NoteView, OrderTerm, Page, PermissionMode, Project, RestoreNoteRequest, Session, SessionSpec,
+  UpdateNoteRequest, WhereClause,
+} from '@openfleet/shared';
 import { environment } from '../../environments/environment';
+
+export type PageRequest = Partial<Pick<Page<unknown>, 'limit' | 'offset'>>;
+type NoteChange = Omit<UpdateNoteRequest, 'projectId'>;
+type NoteRestore = Omit<RestoreNoteRequest, 'projectId'>;
 
 const DAEMON_ANSWER_TIMEOUT_MS = 5000;
 const LIST_PAGE_LIMIT = 200;
+
+const pageParams = ({ limit, offset }: PageRequest): Record<string, string> => ({
+  ...(limit === undefined ? {} : { limit: String(limit) }),
+  ...(offset === undefined ? {} : { offset: String(offset) }),
+});
 
 export class ApiError extends Error {
   // `code` is the REST error body's `error` field (e.g. `not_closed`, `directory_missing`) when the
@@ -95,8 +108,25 @@ export class FleetApiService {
   reopenSession(id: string) { return this.post<Session>(`/api/sessions/${id}/reopen`, {}); }
   decide(id: string, behavior: 'allow' | 'deny') { return this.post<Approval>(`/api/approvals/${id}/decide`, { behavior }); }
 
+  private noteUrl(noteId: string, suffix = '', query: Record<string, string> = {}): string {
+    const queryString = new URLSearchParams(query).toString();
+    const path = `/api/notes/${encodeURIComponent(noteId)}${suffix}`;
+    return queryString ? `${path}?${queryString}` : path;
+  }
+  listProjects(page?: PageRequest) {
+    return page ? this.call<Page<Project>>(`/api/projects?${new URLSearchParams(pageParams(page))}`) : this.listAllPages<Project>('/api/projects', {});
+  }
+  listNotes(projectId: string, page: PageRequest = {}) { return this.call<Page<NoteSummary>>(`/api/notes?${new URLSearchParams({ projectId, ...pageParams(page) })}`); }
+  getNote(projectId: string, noteId: string) { return this.call<NoteView>(this.noteUrl(noteId, '', { projectId })); }
+  createNote(note: CreateNoteRequest) { return this.post<NoteView>('/api/notes', note); }
+  updateNote(projectId: string, noteId: string, change: NoteChange) { return this.patch<NoteView>(this.noteUrl(noteId), { projectId, ...change }); }
+  listNoteVersions(projectId: string, noteId: string, page: PageRequest = {}) {
+    return this.call<Page<NoteVersionSummary>>(this.noteUrl(noteId, '/versions', { projectId, ...pageParams(page) }));
+  }
+  restoreNoteVersion(projectId: string, noteId: string, restore: NoteRestore) {
+    return this.post<NoteView>(this.noteUrl(noteId, '/restore'), { projectId, ...restore });
+  }
   // --- Data stores (Tables screen, P3-T18) ---
-  listProjects() { return this.listAllPages<Project>('/api/projects', {}); }
   listDataStores(projectId: string) { return this.listAllPages<DataStore>('/api/data-stores', { projectId }); }
   createDataStore(body: { projectId: string; displayName: string }) { return this.post<DataStore>('/api/data-stores', body); }
   getDataStore(scope: StoreScope) { return this.call<DataStoreDetail>(`${storePath(scope.storeId)}${queryString({ projectId: scope.projectId })}`); }

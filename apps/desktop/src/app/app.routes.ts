@@ -13,6 +13,9 @@ export const routes: Routes = [
       { path: '', pathMatch: 'full', loadComponent: () => import('./shell/empty-state.component').then((m) => m.EmptyStateComponent) },
       { path: 'inbox', loadComponent: () => import('./inbox/inbox.component').then((m) => m.InboxComponent) },
       { path: 'settings', loadComponent: () => import('./settings/settings.component').then((m) => m.SettingsComponent) },
+      // ── Notes (P3-T17) ──
+      { path: 'notes', loadComponent: () => import('./notes/notes-view.component').then((m) => m.NotesViewComponent) },
+      // ── end Notes ──
       { path: 'new', loadComponent: () => import('./sessions/new-session-form.component').then((m) => m.NewSessionFormComponent) },
       // --- Tables (P3-T18) ---
       { path: 'tables', loadComponent: () => import('./tables/tables-view.component').then((m) => m.TablesViewComponent) },

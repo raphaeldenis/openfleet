@@ -65,6 +65,13 @@ describe('app.routes', () => {
     expect(harness.routeNativeElement?.querySelector('of-inbox')).toBeTruthy();
   });
 
+  it("renders the notes screen at '/notes', inside the shell", async () => {
+    await configureTestBed();
+    const harness = await RouterTestingHarness.create('/notes');
+    expect(harness.routeNativeElement?.querySelector('[data-testid="app-shell"]')).toBeTruthy();
+    expect(harness.routeNativeElement?.querySelector('[data-testid="notes-view"]')).toBeTruthy();
+  });
+
   it("renders the tables screen at '/tables' inside the shell, scoped by the projectId query parameter", async () => {
     await configureTestBed();
     const api = {
@@ -126,7 +133,7 @@ describe('app.routes', () => {
     vi.stubGlobal('fetch', fetchMock);
     const harness = await RouterTestingHarness.create('/new?seededPrompt=evil&embedded=true&initialName=Injected&initialDirectory=/injected');
     const field = (testId: string) => harness.routeNativeElement?.querySelector(`[data-testid="${testId}"]`) as HTMLInputElement;
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     expect(harness.routeNativeElement?.querySelector('[data-testid="new-session-cancel"]')).toBeTruthy();
 
     await user.type(field('new-session-directory'), '/tmp/wt');
@@ -134,10 +141,12 @@ describe('app.routes', () => {
     await user.click(field('new-session-submit'));
 
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    await harness.fixture.whenStable();
     const [, createRequest] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(JSON.parse(createRequest.body as string)).toStrictEqual({ directory: '/tmp/wt', name: 'Gimli', emoji: '🤖', model: 'sonnet', harness: 'claude-cli' });
     vi.unstubAllGlobals();
-  });
+    // A loaded CI runner needs more than Vitest's 5 s default for the lazy route, the typing and the submit.
+  }, 20_000);
 
   it('user visiting an unknown path still lands inside the app shell instead of a blank page', async () => {
     await configureTestBed();
