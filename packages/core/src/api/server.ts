@@ -1,10 +1,12 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { EventBus } from '../events/eventBus.js';
 import type { ApprovalService } from '../governance/approvalService.js';
+import { tokensMatch } from '../ids.js';
 import type { ManagerService } from '../managers/managerService.js';
 import type { PulseScheduler } from '../managers/pulseScheduler.js';
 import type { ModelTable } from '../models.js';
 import type { SessionService } from '../sessions/sessionService.js';
+import { ALLOWED_ORIGINS } from './allowedOrigins.js';
 import { hooksHandler } from './hooksHandler.js';
 import { registerRestRoutes } from './restHandlers.js';
 import { InvalidJsonBodyError, json, PayloadTooLargeError, readJson, Router } from './router.js';
@@ -17,12 +19,8 @@ export interface ServerDeps {
   sessions: SessionService; approvals: ApprovalService; bus: EventBus; modelTable: ModelTable; modelConfigPath: string;
   managers: ManagerService; pulseScheduler: PulseScheduler;
   mcp?: (req: IncomingMessage, res: ServerResponse, body: unknown) => Promise<void>;
+  wsCloseGraceMs?: number;
 }
-
-// The desktop shell's own origins: the Angular dev server (also the e2e baseURL), and the Tauri webview
-// in both its dev and packaged forms. Any other Origin gets no CORS headers, so a page in Raphaël's
-// everyday browser can't use his admin token even if it somehow read it.
-const ALLOWED_ORIGINS = new Set(['http://localhost:1420', 'tauri://localhost', 'http://tauri.localhost']);
 
 function applyCorsHeaders(req: IncomingMessage, res: ServerResponse): void {
   const origin = req.headers.origin;
@@ -59,7 +57,13 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; clos
     applyCorsHeaders(req, res);
     if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
 
-    const url = new URL(req.url ?? '/', `http://${deps.host}`);
+    let url: URL;
+    try {
+      url = new URL(req.url ?? '/', `http://${deps.host}`);
+    } catch {
+      return json(res, 400, { error: 'invalid_url' });
+    }
+
     try {
       // Both /hooks and /mcp resolve their token from the URL/header alone, before touching the body —
       // an unknown hook token or MCP bearer is answered without ever buffering the request into memory.
@@ -70,7 +74,7 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; clos
       const match = router.match(req.method ?? 'GET', url.pathname);
       if (!match) return json(res, 404, { error: 'not_found' });
       const isProtected = url.pathname.startsWith('/api/');
-      if (isProtected && req.headers.authorization !== `Bearer ${deps.adminToken}`) return json(res, 401, { error: 'unauthorized' });
+      if (isProtected && !tokensMatch(req.headers.authorization ?? '', `Bearer ${deps.adminToken}`)) return json(res, 401, { error: 'unauthorized' });
       await match.handler({ req, res, params: match.params, body: await readJson(req) });
     } catch (error) {
       if (error instanceof PayloadTooLargeError) return json(res, 413, { error: 'payload_too_large' });
@@ -79,7 +83,8 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; clos
       json(res, isValidation ? 400 : 500, { error: isValidation ? 'invalid_body' : 'internal', detail: (error as Error).message });
     }
   });
-  server.on('upgrade', createWsHandler(deps));
+  const ws = createWsHandler(deps);
+  server.on('upgrade', ws.upgrade);
 
   await new Promise<void>((resolve) => server.listen(deps.port, deps.host, resolve));
   const address = server.address();
@@ -87,6 +92,10 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; clos
   return {
     url: `http://${deps.host}:${port}`,
     close: () => {
+      // closeAllConnections() only ever covered plain HTTP sockets — an upgraded WS connection is not one
+      // of "server's" connections any more as far as node:http is concerned, so server.close() would wait
+      // on it forever with the UI still open (MAJ-08/AUD-08). Close those out first, then the rest as before.
+      ws.closeClients();
       server.closeAllConnections();
       return new Promise((resolve) => server.close(() => resolve()));
     },

@@ -3,8 +3,10 @@ import type { Duplex } from 'node:stream';
 import type { ServerEvent } from '@openfleet/shared';
 import { z } from 'zod';
 import { WebSocketServer, type WebSocket } from 'ws';
+import { ALLOWED_ORIGINS } from './allowedOrigins.js';
 import type { ApprovalService } from '../governance/approvalService.js';
 import type { EventBus } from '../events/eventBus.js';
+import { tokensMatch } from '../ids.js';
 import type { ManagerService } from '../managers/managerService.js';
 import type { SessionService } from '../sessions/sessionService.js';
 
@@ -41,7 +43,17 @@ function handleClientMessage(socket: WebSocket, message: ClientMessage, deps: { 
   }
 }
 
-export function createWsHandler(deps: { bus: EventBus; sessions: SessionService; approvals: ApprovalService; managers: ManagerService; adminToken: string }) {
+export interface WsHandler {
+  upgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void;
+  // Closes every currently-connected client: a close frame first (so a cooperative UI gets a clean 1001
+  // going-away close), then a short grace period for that handshake to land, after which any client still
+  // open — a dead or hostile peer that never acks — is force-terminated so shutdown can never hang on it.
+  closeClients(): void;
+}
+
+const DEFAULT_WS_CLOSE_GRACE_MS = 250;
+
+export function createWsHandler(deps: { bus: EventBus; sessions: SessionService; approvals: ApprovalService; managers: ManagerService; adminToken: string; wsCloseGraceMs?: number }): WsHandler {
   const wss = new WebSocketServer({ noServer: true });
   deps.bus.subscribe((event) => {
     const payload = JSON.stringify(event);
@@ -62,15 +74,35 @@ export function createWsHandler(deps: { bus: EventBus; sessions: SessionService;
     });
   });
 
-  return (req: IncomingMessage, socket: Duplex, head: Buffer): void => {
-    const url = new URL(req.url ?? '/', 'http://localhost');
-    // ponytail: admin token travels in the query string because the browser WebSocket
-    // constructor can't set an Authorization header; acceptable on a 127.0.0.1-only
-    // daemon with a 0600 token file. Upgrade to a short-lived single-use ws-ticket
-    // (issued over the already-authenticated REST surface) if this ever binds beyond
-    // localhost or the desktop shell's webview turns out to persist URLs anywhere.
-    const isAuthorized = url.pathname === '/ws' && url.searchParams.get('token') === deps.adminToken;
-    if (!isAuthorized) { socket.destroy(); return; }
-    wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
+  return {
+    upgrade(req, socket, head) {
+      try {
+        const url = new URL(req.url ?? '/', 'http://localhost');
+        // A browser sends Origin on every WebSocket handshake; a non-browser client (the audit probes, a
+        // future native tool) sends none at all. Only a *foreign* Origin is refused — the browser is the
+        // one context where a page the admin token never touched could still open this socket cross-site.
+        const origin = req.headers.origin;
+        if (origin && !ALLOWED_ORIGINS.has(origin)) { socket.destroy(); return; }
+        // ponytail: admin token travels in the query string because the browser WebSocket
+        // constructor can't set an Authorization header; acceptable on a 127.0.0.1-only
+        // daemon with a 0600 token file. Upgrade to a short-lived single-use ws-ticket
+        // (issued over the already-authenticated REST surface) if this ever binds beyond
+        // localhost or the desktop shell's webview turns out to persist URLs anywhere.
+        const isAuthorized = url.pathname === '/ws' && tokensMatch(url.searchParams.get('token') ?? '', deps.adminToken);
+        if (!isAuthorized) { socket.destroy(); return; }
+        wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
+      } catch (error) {
+        console.error('ws: rejecting an unparsable upgrade request', error);
+        socket.destroy();
+      }
+    },
+    closeClients() {
+      const clients = [...wss.clients];
+      for (const client of clients) client.close(1001, 'daemon shutting down');
+      const graceTimer = setTimeout(() => {
+        for (const client of clients) if (client.readyState !== client.CLOSED) client.terminate();
+      }, deps.wsCloseGraceMs ?? DEFAULT_WS_CLOSE_GRACE_MS);
+      graceTimer.unref?.();
+    },
   };
 }

@@ -1,3 +1,6 @@
+import { existsSync, mkdtempSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
 import { openDatabase } from './database.js';
@@ -37,5 +40,16 @@ describe('openDatabase', () => {
     expect(pragmaBatch.indexOf('busy_timeout')).toBeLessThan(pragmaBatch.indexOf('journal_mode'));
 
     execSpy.mockRestore();
+  });
+
+  it('forces the db file (and its -wal/-shm side files, once WAL creates them) to 0600 (AUD-05)', () => {
+    const dbPath = join(mkdtempSync(join(tmpdir(), 'of-db-')), 'openfleet.db');
+
+    openDatabase(dbPath);
+
+    expect(statSync(dbPath).mode & 0o777).toBe(0o600);
+    for (const side of [`${dbPath}-wal`, `${dbPath}-shm`]) {
+      if (existsSync(side)) expect(statSync(side).mode & 0o777).toBe(0o600);
+    }
   });
 });

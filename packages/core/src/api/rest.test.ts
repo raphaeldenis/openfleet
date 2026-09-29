@@ -66,6 +66,11 @@ describe('REST', () => {
     expect(res.status).toBe(401);
   });
 
+  it('rejects a wrong bearer token', async () => {
+    const res = await fetch(`${server.url}/api/sessions`, { headers: { authorization: 'Bearer wrong' } });
+    expect(res.status).toBe(401);
+  });
+
   it('returns the resolved model table on GET /api/models', async () => {
     const res = await api('/api/models');
     expect(res.status).toBe(200);
@@ -75,6 +80,37 @@ describe('REST', () => {
   it('refuses GET /api/models without a bearer token', async () => {
     const res = await fetch(`${server.url}/api/models`);
     expect(res.status).toBe(401);
+  });
+
+  it('expires every pending approval at daemon startup: GET /api/approvals answers empty and a late decision 409s through REST (AUD-07)', async () => {
+    const db = openDatabase(':memory:');
+    const bus = new EventBus();
+    const localSessions = new SessionService({ db, bus, harnesses: [new FakeHarness()], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt' });
+    const session = await localSessions.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    // A row left 'pending' by a daemon that crashed mid-approval: the process (and its in-memory waiter)
+    // that would have resolved it is gone, only this row survives — inserted directly, the same shape a
+    // real crash leaves behind, rather than through a live request() whose own waiter this test doesn't want.
+    const pendingId = 'orphan-approval';
+    db.prepare('INSERT INTO approvals (id, session_id, tool_name, tool_input_json, status, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(pendingId, session.id, 'Bash', '{}', 'pending', new Date().toISOString());
+
+    const bootApprovals = new ApprovalService({ db, bus });
+    bootApprovals.expireAllPending('daemon restarted');
+    const managerRepo = new ManagerRepository(db);
+    const pulseScheduler = new PulseScheduler({ managers: managerRepo, sessions: localSessions, bus });
+    const managers = new ManagerService({ managers: managerRepo, sessions: localSessions, bus, scheduler: pulseScheduler });
+    const localServer = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions: localSessions, approvals: bootApprovals, managers, pulseScheduler, bus, modelTable: DEFAULT_MODEL_TABLE, modelConfigPath: '/tmp/of-unused/config.json' });
+    try {
+      const list = await fetch(`${localServer.url}/api/approvals`, { headers: { authorization: 'Bearer admin' } });
+      expect(await list.json()).toEqual([]);
+
+      const decide = await fetch(`${localServer.url}/api/approvals/${pendingId}/decide`, {
+        method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer admin' }, body: JSON.stringify({ behavior: 'allow' }),
+      });
+      expect(decide.status).toBe(409);
+    } finally {
+      await localServer.close();
+    }
   });
 
   it('rejects a body over 1 MiB on a protected route with 413', async () => {
