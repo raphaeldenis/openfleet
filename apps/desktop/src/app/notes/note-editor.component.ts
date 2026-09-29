@@ -1,9 +1,9 @@
 import { NgTemplateOutlet } from '@angular/common';
 import { ChangeDetectionStrategy, Component, ElementRef, computed, input, output, signal, viewChild } from '@angular/core';
-import { countBlocks, parseMarkdownBlocks, takeBlocks } from './markdown-blocks';
+import { countRenderCost, parseMarkdownBlocks, takeWithinRenderBudget } from './markdown-blocks';
 import type { NoteView } from '@openfleet/shared';
 
-const MAX_BLOCKS_RENDERED_AT_FIRST = 2000;
+const MAX_NODES_RENDERED_AT_FIRST = 2000;
 
 export interface NoteMentioner { emoji: string; name: string }
 
@@ -136,8 +136,8 @@ export class NoteEditorComponent {
   private readonly title = viewChild.required<ElementRef<HTMLElement>>('title');
   protected readonly isShowingAllBlocks = signal(false);
   private readonly allBlocks = computed(() => parseMarkdownBlocks(this.expandedBody() ?? this.note().bodyMd));
-  protected readonly blocks = computed(() => (this.isShowingAllBlocks() ? this.allBlocks() : takeBlocks(this.allBlocks(), MAX_BLOCKS_RENDERED_AT_FIRST)));
-  protected readonly hiddenBlockCount = computed(() => countBlocks(this.allBlocks()) - countBlocks(this.blocks()));
+  protected readonly blocks = computed(() => (this.isShowingAllBlocks() ? this.allBlocks() : takeWithinRenderBudget(this.allBlocks(), MAX_NODES_RENDERED_AT_FIRST)));
+  protected readonly hiddenBlockCount = computed(() => countRenderCost(this.allBlocks()) - countRenderCost(this.blocks()));
 
   focus(): void {
     this.title().nativeElement.focus();

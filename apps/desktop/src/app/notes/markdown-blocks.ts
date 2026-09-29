@@ -119,26 +119,87 @@ function inlineSegments(text: string): InlineSegment[] {
     .filter((segment) => segment.text !== '');
 }
 
-export function countBlocks(blocks: readonly MarkdownBlock[]): number {
-  return blocks.reduce((total, block) => total + 1 + (block.type === 'mention-note' ? countBlocks(block.blocks) : 0), 0);
+/** Cost of a block in rendered DOM nodes worth budgeting: its own element, its list items and its inline code chips. */
+export function renderCost(block: MarkdownBlock): number {
+  switch (block.type) {
+    case 'heading':
+    case 'paragraph':
+      return 1 + countCodeChips(block.segments);
+    case 'list':
+      return 1 + block.items.reduce((total, item) => total + 1 + countCodeChips(item), 0);
+    case 'mention-note':
+      return 1 + countRenderCost(block.blocks);
+    default:
+      return 1;
+  }
 }
 
-/** Keeps the first `limit` blocks in reading order, counting the blocks nested in mentioned notes. */
-export function takeBlocks(blocks: readonly MarkdownBlock[], limit: number): MarkdownBlock[] {
+export function countRenderCost(blocks: readonly MarkdownBlock[]): number {
+  return blocks.reduce((total, block) => total + renderCost(block), 0);
+}
+
+/** Keeps the first `budget` rendered nodes in reading order, cutting inside lists, paragraphs and mentioned notes. */
+export function takeWithinRenderBudget(blocks: readonly MarkdownBlock[], budget: number): MarkdownBlock[] {
   const kept: MarkdownBlock[] = [];
-  let remaining = limit;
+  let remaining = budget;
   for (const block of blocks) {
     if (remaining <= 0) break;
     remaining -= 1;
-    if (block.type !== 'mention-note') {
-      kept.push(block);
-      continue;
-    }
-    const nested = takeBlocks(block.blocks, remaining);
-    const isHeaderCutOffFromItsContent = block.blocks.length > 0 && nested.length === 0;
+    const trimmed = trimToBudget(block, remaining);
+    const isHeaderCutOffFromItsContent = trimmed === null;
     if (isHeaderCutOffFromItsContent) break;
-    remaining -= countBlocks(nested);
-    kept.push({ ...block, blocks: nested });
+    remaining -= renderCost(trimmed) - 1;
+    kept.push(trimmed);
   }
   return kept;
+}
+
+function trimToBudget(block: MarkdownBlock, budget: number): MarkdownBlock | null {
+  switch (block.type) {
+    case 'heading':
+    case 'paragraph': {
+      const segments = takeSegments(block.segments, budget);
+      return block.segments.length > 0 && segments.length === 0 ? null : { ...block, segments };
+    }
+    case 'list': {
+      const items = takeListItems(block.items, budget);
+      return block.items.length > 0 && items.length === 0 ? null : { ...block, items };
+    }
+    case 'mention-note': {
+      const nested = takeWithinRenderBudget(block.blocks, budget);
+      return block.blocks.length > 0 && nested.length === 0 ? null : { ...block, blocks: nested };
+    }
+    default:
+      return block;
+  }
+}
+
+function takeListItems(items: readonly InlineSegment[][], budget: number): InlineSegment[][] {
+  const kept: InlineSegment[][] = [];
+  let remaining = budget;
+  for (const item of items) {
+    if (remaining <= 0) break;
+    remaining -= 1;
+    const segments = takeSegments(item, remaining);
+    remaining -= countCodeChips(segments);
+    kept.push(segments);
+  }
+  return kept;
+}
+
+function takeSegments(segments: readonly InlineSegment[], budget: number): InlineSegment[] {
+  const kept: InlineSegment[] = [];
+  let remaining = budget;
+  for (const segment of segments) {
+    if (segment.isCode) {
+      if (remaining <= 0) break;
+      remaining -= 1;
+    }
+    kept.push(segment);
+  }
+  return kept;
+}
+
+function countCodeChips(segments: readonly InlineSegment[]): number {
+  return segments.filter((segment) => segment.isCode).length;
 }

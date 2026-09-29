@@ -200,6 +200,42 @@ describe('NoteEditorComponent', () => {
       expect(screen.getByTestId('note-editor-body')).toHaveTextContent('--- from note @evil:x (t, y) --- body');
     });
 
+    it('a single huge bullet list shows its first items and can be expanded', async () => {
+      await renderEditor({ note: aNoteView({ bodyMd: '- x\n'.repeat(2500) }) });
+
+      expect(screen.getAllByTestId('note-editor-list-item')).toHaveLength(1999);
+      expect(screen.getByTestId('note-editor-show-rest')).toHaveTextContent('Show the remaining 501 blocks');
+      await userEvent.click(screen.getByTestId('note-editor-show-rest'));
+      expect(screen.getAllByTestId('note-editor-list-item')).toHaveLength(2500);
+    });
+
+    it('a single paragraph made of thousands of inline code spans shows the first spans and can be expanded', async () => {
+      await renderEditor({ note: aNoteView({ bodyMd: 'a`b`'.repeat(2500) }) });
+
+      expect(screen.getAllByTestId('note-editor-inline-code')).toHaveLength(1999);
+      expect(screen.getByTestId('note-editor-show-rest')).toBeInTheDocument();
+      await userEvent.click(screen.getByTestId('note-editor-show-rest'));
+      expect(screen.getAllByTestId('note-editor-inline-code')).toHaveLength(2500);
+    });
+
+    it('list items and paragraphs share one budget', async () => {
+      const bodyMd = `${'- x\n'.repeat(1500)}\n${bodyOfParagraphs(1000)}`;
+
+      await renderEditor({ note: aNoteView({ bodyMd }) });
+
+      expect(screen.getAllByTestId('note-editor-list-item')).toHaveLength(1500);
+      expect(screen.getAllByTestId('note-editor-paragraph')).toHaveLength(499);
+    });
+
+    it('a mentioned note stuffed with list items stays within the budget', async () => {
+      const bodyMd = `--- from note @note:x (t, y) ---\n${'- x\n'.repeat(5000)}--- end @note:x ---`;
+
+      await renderEditor({ note: aNoteView({ bodyMd }) });
+
+      expect(screen.getAllByTestId('note-editor-list-item')).toHaveLength(1998);
+      expect(screen.getByTestId('note-editor-show-rest')).toBeInTheDocument();
+    });
+
     it('a note within the limit offers nothing to expand', async () => {
       await renderEditor({ note: aNoteView({ bodyMd: bodyOfParagraphs(2000) }) });
 

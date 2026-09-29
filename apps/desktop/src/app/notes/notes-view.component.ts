@@ -212,6 +212,7 @@ export class NotesViewComponent {
   private latestNotesRequest = 0;
   private latestVersionsRequest = 0;
   private noteSession = 0;
+  private latestCreation = 0;
 
   constructor() {
     void this.loadProjects();
@@ -240,6 +241,8 @@ export class NotesViewComponent {
   protected switchProject(projectId: string): void {
     this.projectId.set(projectId);
     this.filter.set('');
+    this.latestCreation += 1;
+    this.isCreating.set(false);
     void this.loadNotes();
   }
 
@@ -293,6 +296,9 @@ export class NotesViewComponent {
   protected async createNote(): Promise<void> {
     const projectId = this.projectId();
     if (projectId === null || this.isCreating()) return;
+    const session = this.noteSession;
+    const creation = ++this.latestCreation;
+    const isSupersededByProjectSwitch = () => creation !== this.latestCreation;
     this.isCreating.set(true);
     this.actionFailure.set(null);
     try {
@@ -301,11 +307,14 @@ export class NotesViewComponent {
       if (projectChangedMeanwhile) return;
       this.filter.set('');
       this.notes.update((notes) => [createdNote, ...notes.filter((summary) => summary.id !== createdNote.id)]);
-      await this.openNote(createdNote.id);
+      const userSelectedAnotherNoteMeanwhile = !this.isCurrentSession(session);
+      if (userSelectedAnotherNoteMeanwhile) return;
+      await this.openNote(createdNote.id, { focusEditor: true });
     } catch (error) {
+      if (isSupersededByProjectSwitch()) return;
       this.actionFailure.set({ title: 'Couldn’t create the note', reason: reasonOf(error) });
     } finally {
-      this.isCreating.set(false);
+      if (!isSupersededByProjectSwitch()) this.isCreating.set(false);
     }
   }
 

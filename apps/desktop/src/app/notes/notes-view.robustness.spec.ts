@@ -593,6 +593,59 @@ describe('notes view shows every note of a project', () => {
   });
 });
 
+describe('notes view keeps a slow note creation from disturbing what the user does meanwhile', () => {
+  const createdNote = () => aNoteView({ id: 'new', title: 'Untitled note', bodyMd: '' });
+
+  it('a created note does not steal the editor from a note the user selected while waiting', async () => {
+    const creation = deferred<NoteView>();
+    await renderView({ api: fakeApi({ createNote: vi.fn(() => creation.promise) }) });
+    await editorTitle();
+    await userEvent.click(screen.getByTestId('note-list-new'));
+    await userEvent.click(screen.getByTestId('note-list-item-n2'));
+    await expectEditorTitle('voice');
+
+    creation.resolve(createdNote());
+    await flushPendingWork();
+
+    expect(screen.getByTestId('note-editor-title')).toHaveTextContent('voice');
+    expect(screen.getByTestId('note-list-item-new')).toBeInTheDocument();
+  });
+
+  it('a note creation failing after the user moved to another project raises no alert there', async () => {
+    const creation = deferred<NoteView>();
+    await renderView({ api: fakeApi({ createNote: vi.fn(() => creation.promise) }) });
+    await editorTitle();
+    await userEvent.click(screen.getByTestId('note-list-new'));
+    await userEvent.selectOptions(screen.getByTestId('notes-project-select'), 'p2');
+    await screen.findByTestId('note-list-item-n9');
+
+    creation.reject(new ApiError(500, 'POST /api/notes → 500'));
+    await flushPendingWork();
+
+    expect(screen.queryByTestId('note-action-error')).not.toBeInTheDocument();
+  });
+
+  it('user can create a note in the new project while a creation from the previous project is still pending', async () => {
+    const creation = deferred<NoteView>();
+    await renderView({ api: fakeApi({ createNote: vi.fn(() => creation.promise) }) });
+    await editorTitle();
+    await userEvent.click(screen.getByTestId('note-list-new'));
+    await userEvent.selectOptions(screen.getByTestId('notes-project-select'), 'p2');
+    await screen.findByTestId('note-list-item-n9');
+
+    expect(screen.getByTestId('note-list-new')).toBeEnabled();
+  });
+
+  it('user can type right away in a note created from the empty state', async () => {
+    const api = fakeApi({ listNotes: vi.fn().mockResolvedValue(page([])), getNote: vi.fn().mockResolvedValue(createdNote()) });
+    await renderView({ api });
+
+    await userEvent.click(await screen.findByTestId('note-empty-create'));
+
+    await waitFor(() => expect(screen.getByTestId('note-editor-title')).toHaveFocus());
+  });
+});
+
 describe('notes view is usable from the keyboard and by assistive technology', () => {
   it('Enter on a focused list item opens the note', async () => {
     await renderView();
