@@ -59,7 +59,7 @@ const sessionStartContext = new SessionStartContext({ db, workingStates, setting
 
 // The server must be listening before any resumed CLI can POST its first hook — resuming first risks a
 // fast process hitting a port nothing is serving yet.
-const server = await startServer({ ...config, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, stores, storeRepo, projects, stopRefusal, sessionStartContext, mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, workingStates, worktreesRoot: config.worktreesRoot }) });
+const server = await startServer({ ...config, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, stores, storeRepo, projects, stopRefusal, sessionStartContext, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, workingStates, worktreesRoot: config.worktreesRoot }) });
 log('info', `openfleet core listening on ${server.url} (home: ${config.home})`);
 
 // A launch dir a crashed or killed daemon never cleaned up would otherwise sit on disk carrying a live
