@@ -596,6 +596,15 @@ describe('NoteService refuses plain writes on a file-backed note', () => {
     expect(repo.listVersions(note.id)).toHaveLength(1);
   });
 
+  it('move throws FileBackedNoteError and writes nothing', () => {
+    const { service, repo } = setup();
+    const note = service.createFileBacked({ projectId: 'p1', title: 'Title', bodyMd: 'body', filePath: '/docs/a.md', sourceHash: 'h1', author: AUTHOR });
+
+    expect(() => service.move(note.id, 'plans')).toThrow(FileBackedNoteError);
+
+    expect(repo.get(note.id)).toMatchObject({ folder: null });
+  });
+
   it('does not affect updateFileBacked, which still writes through the file-backed CAS path', () => {
     const { service } = setup();
     const note = service.createFileBacked({ projectId: 'p1', title: 'Title', bodyMd: 'v1', filePath: '/docs/a.md', sourceHash: 'h1', author: AUTHOR });

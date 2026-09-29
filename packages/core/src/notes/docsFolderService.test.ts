@@ -8,7 +8,7 @@ import {
 } from './docsFolderService.js';
 import { expandMentions } from './mentionExpander.js';
 import { NoteRepository } from './noteRepository.js';
-import { NoteService, StaleRevisionError } from './noteService.js';
+import { NoteService, NoteTooLargeError, StaleRevisionError } from './noteService.js';
 
 const AUTHOR = 'rdenisfr@gmail.com';
 const FIXED_DOCS_CLOCK = '2026-01-15T10:00:00.000Z';
@@ -171,6 +171,36 @@ describe('DocsFolderService createFileBackedNote', () => {
 
     expect(() => docs.createFileBackedNote({ projectId: 'p1', folder: 'specs', title: 'x', bodyMd: 'x', author: AUTHOR })).toThrow(ProjectHasNoDocsFolderError);
   });
+
+  it('checks the size cap before writing any temp file', () => {
+    const { fakeFs, docs } = setup();
+    const writeSpy = vi.spyOn(fakeFs, 'writeFileExclusiveSync');
+    const oversized = 'a'.repeat(MAX_BODY_BYTES + 1);
+
+    expect(() => docs.createFileBackedNote({ projectId: 'p1', folder: 'specs', title: 'x', bodyMd: oversized, author: AUTHOR })).toThrow(NoteTooLargeError);
+
+    expect(writeSpy).not.toHaveBeenCalled();
+  });
+
+  it('renames the file into place before attempting the DB insert, so a DB failure leaves no file behind', () => {
+    const { fakeFs, noteRepo, notes, docs } = setup();
+    const calls: string[] = [];
+    const originalRename = fakeFs.renameSync.bind(fakeFs);
+    vi.spyOn(fakeFs, 'renameSync').mockImplementation((from, to) => {
+      calls.push('rename');
+      originalRename(from, to);
+    });
+    vi.spyOn(notes, 'createFileBacked').mockImplementation(() => {
+      calls.push('db-insert');
+      throw new Error('db down');
+    });
+
+    expect(() => docs.createFileBackedNote({ projectId: 'p1', folder: 'specs', title: 'x', bodyMd: 'v1', author: AUTHOR })).toThrow('db down');
+
+    expect(calls).toEqual(['rename', 'db-insert']);
+    expect(fakeFs.files.size).toBe(0);
+    expect(noteRepo.list('p1')).toEqual([]);
+  });
 });
 
 describe('DocsFolderService writeThrough', () => {
@@ -212,6 +242,29 @@ describe('DocsFolderService writeThrough', () => {
     const plain = notes.create({ projectId: 'p1', title: 'Plain', bodyMd: 'x', author: AUTHOR });
 
     expect(() => docs.writeThrough(plain.id, { bodyMd: 'y', expectedRev: 1, author: AUTHOR })).toThrow(NoteIsNotFileBackedError);
+  });
+
+  it('refuses writeThrough once the note\'s directory has become a symlink escaping the docs folder, writing nothing', () => {
+    const { fakeFs, noteRepo, docs } = setup();
+    const note = docs.createFileBackedNote({ projectId: 'p1', folder: 'specs', title: 'x', bodyMd: 'v1', author: AUTHOR });
+    const filesBefore = new Map(fakeFs.files);
+    fakeFs.symlinks.set('/docs/specs', '/outside');
+
+    expect(() => docs.writeThrough(note.id, { bodyMd: 'v2', expectedRev: note.rev, author: AUTHOR })).toThrow(PathEscapesDocsFolderError);
+
+    expect(fakeFs.files).toEqual(filesBefore);
+    expect(noteRepo.get(note.id)).toMatchObject({ bodyMd: 'v1', rev: 1 });
+  });
+
+  it('checks the size cap before writing any temp file', () => {
+    const { fakeFs, docs } = setup();
+    const note = docs.createFileBackedNote({ projectId: 'p1', folder: 'specs', title: 'x', bodyMd: 'v1', author: AUTHOR });
+    const writeSpy = vi.spyOn(fakeFs, 'writeFileExclusiveSync');
+    const oversized = 'a'.repeat(MAX_BODY_BYTES + 1);
+
+    expect(() => docs.writeThrough(note.id, { bodyMd: oversized, expectedRev: note.rev, author: AUTHOR })).toThrow(NoteTooLargeError);
+
+    expect(writeSpy).not.toHaveBeenCalled();
   });
 });
 
@@ -258,6 +311,19 @@ describe('DocsFolderService attachFolder', () => {
     expect(imported.map((note) => note.bodyMd)).toEqual(['fine']);
     expect(noteRepo.getByFilePath('/docs/specs/2026-01-01-big.md')).toBeUndefined();
   });
+
+  it('normalizes a title derived from an NFD-decomposed filename to NFC, leaving the filename on disk untouched', () => {
+    const { fakeFs, docs } = setup();
+    const nfdFilename = '2026-01-01-café.md'; // "café" spelled with a combining acute accent
+
+    fakeFs.files.set(`/docs/specs/${nfdFilename}`, 'body');
+
+    const imported = docs.attachFolder('p1', '/docs');
+
+    expect(imported).toHaveLength(1);
+    expect(imported[0]!.title).toBe('café'); // NFC-composed "café"
+    expect(imported[0]!.filePath).toBe(`/docs/specs/${nfdFilename}`);
+  });
 });
 
 describe('DocsFolderService reconcileOnBoot', () => {
@@ -292,6 +358,32 @@ describe('DocsFolderService reconcileOnBoot', () => {
     const report = docs.reconcileOnBoot('p1');
 
     expect(report.oversized).toEqual([note.id]);
+    expect(noteRepo.get(note.id)).toMatchObject({ bodyMd: 'v1', rev: 1 });
+  });
+
+  it('reports a missing file-backed note instead of silently skipping it', () => {
+    const { fakeFs, noteRepo, docs } = setup();
+    const note = docs.createFileBackedNote({ projectId: 'p1', folder: 'specs', title: 'x', bodyMd: 'v1', author: AUTHOR });
+    fakeFs.files.delete(note.filePath!);
+
+    const report = docs.reconcileOnBoot('p1');
+
+    expect(report.missing).toEqual([note.id]);
+    expect(noteRepo.get(note.id)).toMatchObject({ bodyMd: 'v1', rev: 1 });
+  });
+
+  it('reports an escaped note and never reads through a directory swapped for a symlink outside the docs folder', () => {
+    const { fakeFs, noteRepo, docs } = setup();
+    const note = docs.createFileBackedNote({ projectId: 'p1', folder: 'specs', title: 'x', bodyMd: 'v1', author: AUTHOR });
+    fakeFs.symlinks.set('/docs/specs', '/outside');
+    fakeFs.symlinks.set(note.filePath!, '/outside/secret.md');
+    fakeFs.files.set('/outside/secret.md', 'do not read me');
+    const readSpy = vi.spyOn(fakeFs, 'readFileSync');
+
+    const report = docs.reconcileOnBoot('p1');
+
+    expect(report.escaped).toEqual([note.id]);
+    expect(readSpy).not.toHaveBeenCalled();
     expect(noteRepo.get(note.id)).toMatchObject({ bodyMd: 'v1', rev: 1 });
   });
 });

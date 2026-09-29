@@ -5,7 +5,7 @@ import { expandMentions, type MentionLookup } from './mentionExpander.js';
 import type { NoteRepository, NoteUpdateResult } from './noteRepository.js';
 import { appendSection, replaceSection } from './noteSections.js';
 
-const MAX_BODY_BYTES = 1024 * 1024;
+export const MAX_BODY_BYTES = 1024 * 1024;
 // One first try plus three retries after a stale CAS (decision 2); a fourth loss means real contention, not luck.
 const MAX_APPEND_ATTEMPTS = 4;
 const SAVEPOINT_NAME = 'note_service_write';
@@ -208,6 +208,7 @@ export class NoteService {
   }
 
   move(id: string, folder: NoteFolder | null): Note {
+    this.assertNotFileBacked(id);
     const wasMoved = this.repo.move(id, folder);
     if (!wasMoved) throw new NoteNotFoundError(id);
     return this.repo.get(id)!;

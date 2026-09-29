@@ -1,9 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { NOTE_FOLDERS, type Note, type NoteFolder } from '@openfleet/shared';
 import type { ProjectRecord, ProjectRepository } from '../projects/projectRepository.js';
 import type { DocsFolderFs } from './docsFolderFs.js';
-import { NoteNotFoundError, NoteTooLargeError, type NoteService } from './noteService.js';
+import { MAX_BODY_BYTES, NoteNotFoundError, NoteTooLargeError, type NoteService } from './noteService.js';
 import type { NoteRepository } from './noteRepository.js';
 
 const IMPORT_AUTHOR = 'import';
@@ -63,6 +63,10 @@ export interface WriteThroughInput {
 export interface ReconcileReport {
   applied: string[];
   oversized: string[];
+  /** File-backed notes whose file is gone from disk — not healed, just surfaced. */
+  missing: string[];
+  /** File-backed notes whose file path (or its directory) now resolves outside the docs folder — never read. */
+  escaped: string[];
 }
 
 interface ImportCandidate {
@@ -73,13 +77,20 @@ interface ImportCandidate {
 
 /**
  * Per-project docs folder: notes backed by real markdown files, kept in sync with `notes.body_md`/`rev`
- * by one write-through path and one external-edit path (Review Focus 1 and 5).
+ * by one write-through path, one create path, and one external-edit path (Review Focus 1 and 5).
  *
- * **Write-through ordering** (`writeThrough`/`createFileBackedNote`): write a temp file next to the
- * target ('wx', fsynced — durable once `writeFileExclusiveSync` returns), THEN commit the DB row
- * (body + source_hash + rev CAS, one transaction), THEN rename the temp file over the target. On any
- * failure the temp file is removed and the target is never touched — a failed CAS or an oversized body
- * leaves neither the DB nor the visible file changed.
+ * **Containment**: every fs operation on a note's file — `writeThrough`, and `reconcileNote` whether
+ * called from `reconcileOnBoot` or from `watch` — re-checks that the file's directory, and the file
+ * itself if it exists, still realpath inside the project's docs folder before touching either. A docs
+ * subfolder later swapped for a symlink (or a file itself replaced by one) is caught here: `writeThrough`
+ * throws `PathEscapesDocsFolderError` before writing anything, and `reconcileNote` skips the note without
+ * reading it, reporting its id in `escaped`. Nothing is ever read or written through an escaped path.
+ *
+ * **Write-through ordering** (`writeThrough`): the size cap is checked first, then a temp file is written
+ * next to the target ('wx', fsynced — durable once `writeFileExclusiveSync` returns), THEN the DB row
+ * commits (body + source_hash + rev CAS, one transaction), THEN the temp file is renamed over the target.
+ * On any failure the temp file is removed and the target is never touched — a failed CAS or an oversized
+ * body leaves neither the DB nor the visible file changed.
  *
  * This order never leaves a mismatch `reconcileOnBoot` can't heal: before the DB commits, the target
  * file is untouched (nothing to reconcile — the write never happened as far as disk is concerned); the
@@ -91,6 +102,17 @@ interface ImportCandidate {
  * the DB commit created, just superseded by the disk-observed revision. Renaming last also means the
  * file only changes at the very end, once our own DB bookkeeping is already committed — so `watch`'s
  * hash comparison (the self-write guard) never races an in-flight transaction of our own.
+ *
+ * **Create ordering** (`createFileBackedNote`) is the opposite: the size cap is checked, a temp file is
+ * written, THEN renamed onto the (not-yet-existing) target, THEN the DB row is inserted. If the DB insert
+ * fails, the just-renamed target is unlinked. A crash between the rename and the DB insert leaves a real
+ * file with no DB row — that orphan is not reconciled, it heals the next time `attachFolder` (or a boot
+ * pass over the docs folder) imports it as a brand new file, because nothing in the DB claims its path yet.
+ *
+ * **What `reconcileOnBoot`/`watch` heal vs. report**: a disk hash that no longer matches `source_hash` is
+ * healed by applying it as a new 'disk' revision (`applied`), unless the new body is over the size cap
+ * (`oversized`, left unchanged). A missing file (`missing`) and an escaped path (`escaped`) are never
+ * healed — both are reported only, so the caller can surface them instead of the note silently drifting.
  */
 export class DocsFolderService {
   constructor(private readonly deps: DocsFolderServiceDeps) {}
@@ -100,6 +122,7 @@ export class DocsFolderService {
   }
 
   createFileBackedNote(input: CreateFileBackedNoteInput): Note {
+    this.assertWithinCap(input.bodyMd);
     const project = this.requireProject(input.projectId);
     const docsFolderPath = this.requireDocsFolderPath(project);
     const realDocsFolderPath = this.deps.fs.realpathSync(docsFolderPath);
@@ -108,8 +131,9 @@ export class DocsFolderService {
     const filePath = this.uniqueFilePath(realFolderDir, dateStamp, input.title);
 
     const tempPath = this.writeTempFile(filePath, input.bodyMd);
+    this.deps.fs.renameSync(tempPath, filePath);
     try {
-      const note = this.deps.notes.createFileBacked({
+      return this.deps.notes.createFileBacked({
         projectId: input.projectId,
         title: input.title,
         bodyMd: input.bodyMd,
@@ -119,10 +143,8 @@ export class DocsFolderService {
         filePath,
         sourceHash: sha256(input.bodyMd),
       });
-      this.deps.fs.renameSync(tempPath, filePath);
-      return note;
     } catch (error) {
-      this.deps.fs.unlinkSync(tempPath);
+      this.deps.fs.unlinkSync(filePath);
       throw error;
     }
   }
@@ -130,6 +152,10 @@ export class DocsFolderService {
   writeThrough(noteId: string, input: WriteThroughInput): Note {
     const current = this.requireFileBackedNote(noteId);
     const targetPath = current.filePath!;
+    const project = this.requireProject(current.projectId);
+    const realDocsFolderPath = this.deps.fs.realpathSync(this.requireDocsFolderPath(project));
+    if (!this.isFileWithinDocsFolder(realDocsFolderPath, targetPath)) throw new PathEscapesDocsFolderError(targetPath);
+    this.assertWithinCap(input.bodyMd);
 
     const tempPath = this.writeTempFile(targetPath, input.bodyMd);
     try {
@@ -160,7 +186,7 @@ export class DocsFolderService {
   /** For every file-backed note of `projectId`: a disk hash that no longer matches `source_hash` is applied as a 'disk' revision. */
   reconcileOnBoot(projectId: string): ReconcileReport {
     const fileBackedNotes = this.deps.noteRepo.list(projectId).filter((note) => note.filePath !== null);
-    const report: ReconcileReport = { applied: [], oversized: [] };
+    const report: ReconcileReport = { applied: [], oversized: [], missing: [], escaped: [] };
     for (const note of fileBackedNotes) this.reconcileNote(note, report);
     return report;
   }
@@ -198,7 +224,7 @@ export class DocsFolderService {
   private reconcilePath(absolutePath: string): void {
     const note = this.deps.noteRepo.getByFilePath(absolutePath);
     if (!note) return;
-    this.reconcileNote(note, { applied: [], oversized: [] });
+    this.reconcileNote(note, { applied: [], oversized: [], missing: [], escaped: [] });
   }
 
   /**
@@ -208,11 +234,19 @@ export class DocsFolderService {
    * just wrote, so nothing "changed" as far as the note is concerned.
    */
   private reconcileNote(note: Note, report: ReconcileReport): void {
+    const project = this.requireProject(note.projectId);
+    const realDocsFolderPath = this.deps.fs.realpathSync(this.requireDocsFolderPath(project));
+    if (!this.isFileWithinDocsFolder(realDocsFolderPath, note.filePath!)) {
+      report.escaped.push(note.id);
+      return;
+    }
+
     let diskBodyMd: string;
     try {
       diskBodyMd = this.deps.fs.readFileSync(note.filePath!);
     } catch {
-      return; // ponytail: a deleted/unreadable file is out of scope for reconcile; it only heals content drift.
+      report.missing.push(note.id);
+      return;
     }
     const diskHash = sha256(diskBodyMd);
     if (diskHash === note.sourceHash) return;
@@ -268,10 +302,11 @@ export class DocsFolderService {
     });
   }
 
+  /** The filename on disk is left exactly as it is — only the derived title is NFC-normalized. */
   private titleFromFilename(filename: string): string {
     const withoutExtension = filename.replace(/\.md$/, '');
     const withoutDatePrefix = withoutExtension.replace(FILENAME_DATE_PREFIX, '');
-    return withoutDatePrefix.replaceAll('-', ' ');
+    return withoutDatePrefix.replaceAll('-', ' ').normalize('NFC');
   }
 
   private uniqueFilePath(realFolderDir: string, dateStamp: string, title: string): string {
@@ -292,9 +327,33 @@ export class DocsFolderService {
 
   private assertContained(realDocsFolderPath: string, candidatePath: string): string {
     const real = this.deps.fs.realpathSync(candidatePath);
-    const isContained = real === realDocsFolderPath || real.startsWith(`${realDocsFolderPath}/`);
-    if (!isContained) throw new PathEscapesDocsFolderError(candidatePath);
+    if (!this.isPathContained(realDocsFolderPath, real)) throw new PathEscapesDocsFolderError(candidatePath);
     return real;
+  }
+
+  /** Checks the file's directory, and the file itself if it exists, without ever throwing — the caller decides refuse vs. report. */
+  private isFileWithinDocsFolder(realDocsFolderPath: string, filePath: string): boolean {
+    if (!this.isPathContained(realDocsFolderPath, this.tryRealpath(dirname(filePath)))) return false;
+    if (this.deps.fs.existsSync(filePath) && !this.isPathContained(realDocsFolderPath, this.tryRealpath(filePath))) return false;
+    return true;
+  }
+
+  private isPathContained(realDocsFolderPath: string, realPath: string): boolean {
+    return realPath === realDocsFolderPath || realPath.startsWith(`${realDocsFolderPath}/`);
+  }
+
+  /** A path that can't be resolved has nothing to escape through; the read/write attempt that follows fails on its own. */
+  private tryRealpath(path: string): string {
+    try {
+      return this.deps.fs.realpathSync(path);
+    } catch {
+      return path;
+    }
+  }
+
+  private assertWithinCap(bodyMd: string): void {
+    const byteLength = Buffer.byteLength(bodyMd, 'utf8');
+    if (byteLength > MAX_BODY_BYTES) throw new NoteTooLargeError(byteLength);
   }
 
   private requireProject(projectId: string): ProjectRecord {
