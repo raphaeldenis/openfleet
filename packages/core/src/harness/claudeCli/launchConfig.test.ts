@@ -244,4 +244,29 @@ describe('buildClaudeLaunchConfig', () => {
     expect(resumed.settings).toEqual(firstRun.settings);
     expect(resumed.mcpConfig).toEqual(firstRun.mcpConfig);
   });
+
+  it('passes --setting-sources user on a first run, so a project .claude/settings.json cannot override OpenFleet-issued approvals', () => {
+    const config = buildClaudeLaunchConfig(launch, tokenFilePaths);
+    const flagIndex = config.args.indexOf('--setting-sources');
+    expect(flagIndex).toBeGreaterThan(-1);
+    expect(config.args[flagIndex + 1]).toBe('user');
+  });
+
+  it('passes --setting-sources user while resuming too, so a project settings file cannot override approvals after a restart', () => {
+    const config = buildClaudeLaunchConfig({ ...launch, resuming: true }, tokenFilePaths);
+    const flagIndex = config.args.indexOf('--setting-sources');
+    expect(flagIndex).toBeGreaterThan(-1);
+    expect(config.args[flagIndex + 1]).toBe('user');
+  });
+
+  it('never repeats --setting-sources', () => {
+    const config = buildClaudeLaunchConfig(launch, tokenFilePaths);
+    expect(config.args.filter((arg) => arg === '--setting-sources')).toHaveLength(1);
+  });
+
+  it('still passes OpenFleet\'s own --settings file alongside --setting-sources user, since that flag only restricts the CLI\'s own on-disk settings layers', () => {
+    const config = buildClaudeLaunchConfig(launch, tokenFilePaths);
+    expect(config.args.indexOf('--settings')).toBeGreaterThan(-1);
+    expect(config.args[config.args.indexOf('--settings') + 1]).toBe(tokenFilePaths.settingsPath);
+  });
 });

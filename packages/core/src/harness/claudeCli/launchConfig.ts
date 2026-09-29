@@ -47,7 +47,10 @@ export function buildClaudeLaunchConfig(launch: HarnessLaunch, tokenFilePaths: T
   const args = launch.resuming ? resumeArgs : firstRunArgs;
   if (launch.model) args.push('--model', launch.model);
   if (launch.permissionMode) args.push('--permission-mode', launch.permissionMode);
-  args.push('--settings', tokenFilePaths.settingsPath, '--mcp-config', tokenFilePaths.mcpConfigPath);
+  // AUD-28: a project's own .claude/settings.json can define an auto-approving PermissionRequest hook that
+  // overrides OpenFleet's own deny — `--setting-sources user` drops project/local/managed settings from the
+  // CLI's own merge, so only OpenFleet's `--settings` file below and the user's own ~/.claude/settings.json apply.
+  args.push('--setting-sources', 'user', '--settings', tokenFilePaths.settingsPath, '--mcp-config', tokenFilePaths.mcpConfigPath);
   // The seeded prompt is untrusted (session/task-provided) text. Commander parses flags
   // anywhere in argv, so a prompt like "--dangerously-skip-permissions" would otherwise be
   // read as a CLI option. `--` forces every token after it to be a positional argument, and
