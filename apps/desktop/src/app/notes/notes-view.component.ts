@@ -205,6 +205,7 @@ export class NotesViewComponent {
   private latestVersionsRequest = 0;
   private noteSession = 0;
   private isLoadingMoreNotes = false;
+  private oldestLoadedVersionOffset = 0;
 
   constructor() {
     void this.loadProjects();
@@ -337,15 +338,15 @@ export class NotesViewComponent {
   protected async toggleHistory(): Promise<void> {
     const willOpen = !this.historyOpen();
     this.historyOpen.set(willOpen);
-    if (willOpen) await this.loadVersions({ session: this.noteSession, mode: 'replace' });
+    if (willOpen) await this.loadVersions({ session: this.noteSession, mode: 'newest' });
   }
 
   protected reloadVersions(): Promise<void> {
-    return this.loadVersions({ session: this.noteSession, mode: 'replace' });
+    return this.loadVersions({ session: this.noteSession, mode: 'newest' });
   }
 
   protected loadMoreVersions(): Promise<void> {
-    return this.loadVersions({ session: this.noteSession, mode: 'append' });
+    return this.loadVersions({ session: this.noteSession, mode: 'older' });
   }
 
   protected async restoreVersion(rev: number): Promise<void> {
@@ -431,18 +432,35 @@ export class NotesViewComponent {
     }
   }
 
-  private async loadVersions({ session, mode }: { session: number; mode: 'replace' | 'append' }): Promise<void> {
+  // The daemon lists versions oldest first: the newest page is the last one, older pages are prepended.
+  private async loadVersions({ session, mode }: { session: number; mode: 'newest' | 'older' }): Promise<void> {
     const projectId = this.projectId();
     const openNote = this.note();
     if (projectId === null || openNote === null) return;
     const request = ++this.latestVersionsRequest;
-    const offset = mode === 'append' ? this.versions().length : 0;
+    const isStale = () => !this.isCurrentSession(session) || request !== this.latestVersionsRequest;
+    const fetchVersions = (page: PageRequest) => this.api.listNoteVersions(projectId, openNote.id, page);
     this.versionsError.set('');
     try {
-      const page = await this.api.listNoteVersions(projectId, openNote.id, { limit: PAGE_LIMIT, offset });
-      if (!this.isCurrentSession(session) || request !== this.latestVersionsRequest) return;
-      this.versions.update((versions) => (mode === 'append' ? [...versions, ...page.items] : page.items));
-      this.versionsTotal.set(page.total);
+      if (mode === 'older') {
+        const oldestLoadedOffset = this.oldestLoadedVersionOffset;
+        if (oldestLoadedOffset === 0) return;
+        const offset = Math.max(0, oldestLoadedOffset - PAGE_LIMIT);
+        const olderPage = await fetchVersions({ limit: oldestLoadedOffset - offset, offset });
+        if (isStale()) return;
+        this.versions.update((versions) => [...olderPage.items, ...versions]);
+        this.versionsTotal.set(olderPage.total);
+        this.oldestLoadedVersionOffset = offset;
+        return;
+      }
+      const firstPage = await fetchVersions({ limit: PAGE_LIMIT, offset: 0 });
+      if (isStale()) return;
+      const lastPageOffset = Math.max(0, firstPage.total - PAGE_LIMIT);
+      const newestPage = lastPageOffset === 0 ? firstPage : await fetchVersions({ limit: PAGE_LIMIT, offset: lastPageOffset });
+      if (isStale()) return;
+      this.versions.set(newestPage.items);
+      this.versionsTotal.set(newestPage.total);
+      this.oldestLoadedVersionOffset = lastPageOffset;
     } catch (error) {
       if (!this.isCurrentSession(session) || request !== this.latestVersionsRequest) return;
       this.versionsError.set(reasonOf(error));
@@ -450,7 +468,7 @@ export class NotesViewComponent {
   }
 
   private async reloadVersionsWhenOpen(session: number): Promise<void> {
-    if (this.historyOpen()) await this.loadVersions({ session, mode: 'replace' });
+    if (this.historyOpen()) await this.loadVersions({ session, mode: 'newest' });
   }
 
   private showNoteError(error: unknown): void {

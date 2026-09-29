@@ -568,6 +568,47 @@ describe('notes view shows every note of a project', () => {
     expect(screen.getByTestId('note-editor-title')).toBeInTheDocument();
   });
 
+  describe('a history of 450 versions listed oldest first by the daemon', () => {
+    const TOTAL_VERSIONS = 450;
+    const daemonVersionsOldestFirst = () =>
+      vi.fn((_projectId: string, _noteId: string, { limit = 100, offset = 0 }: { limit?: number; offset?: number } = {}) => {
+        const revs = Array.from({ length: TOTAL_VERSIONS }, (_, index) => index + 1).slice(offset, offset + Math.min(limit, 200));
+        return Promise.resolve({ items: revs.map((rev) => aNoteVersion({ id: `v${rev}`, rev })), total: TOTAL_VERSIONS, limit, offset });
+      });
+    const versionRevsOnScreen = () => screen.getAllByTestId(/^note-history-version-/).map((row) => Number(row.dataset['testid']!.split('-').at(-1)));
+
+    it('user sees the newest revision first, with the older ones announced', async () => {
+      await renderView({ api: fakeApi({ listNoteVersions: daemonVersionsOldestFirst() }) });
+      await editorTitle();
+
+      await userEvent.click(screen.getByTestId('note-editor-history-toggle'));
+
+      expect(await screen.findByTestId('note-history-version-450')).toBeInTheDocument();
+      expect(versionRevsOnScreen()[0]).toBe(450);
+      expect(versionRevsOnScreen()).toHaveLength(200);
+      expect(screen.queryByTestId('note-history-version-250')).not.toBeInTheDocument();
+      expect(screen.getByTestId('note-history-truncation')).toHaveTextContent('Showing 200 of 450');
+    });
+
+    it('user can load older revisions page after page until the first one', async () => {
+      const listNoteVersions = daemonVersionsOldestFirst();
+      await renderView({ api: fakeApi({ listNoteVersions }) });
+      await editorTitle();
+      await userEvent.click(screen.getByTestId('note-editor-history-toggle'));
+      await screen.findByTestId('note-history-version-450');
+
+      await userEvent.click(screen.getByTestId('note-history-load-more'));
+      expect(await screen.findByTestId('note-history-version-250')).toBeInTheDocument();
+      expect(screen.getByTestId('note-history-truncation')).toHaveTextContent('Showing 400 of 450');
+      await userEvent.click(screen.getByTestId('note-history-load-more'));
+
+      expect(await screen.findByTestId('note-history-version-1')).toBeInTheDocument();
+      expect(versionRevsOnScreen()).toEqual(Array.from({ length: TOTAL_VERSIONS }, (_, index) => TOTAL_VERSIONS - index));
+      expect(screen.queryByTestId('note-history-truncation')).not.toBeInTheDocument();
+      expect(listNoteVersions).toHaveBeenLastCalledWith('p1', 'n1', { limit: 50, offset: 0 });
+    });
+  });
+
   it('a project list longer than one page is fully loaded', async () => {
     const listProjects = vi
       .fn()
@@ -593,23 +634,6 @@ describe('notes view shows every note of a project', () => {
     expect(await screen.findByTestId('note-list-item-new')).toBeInTheDocument();
   });
 
-  it('the versions of a long history are paged with a “Load more” action', async () => {
-    const firstPage = Array.from({ length: 100 }, (_, index) => aNoteVersion({ id: `v${index + 1}`, rev: index + 1 }));
-    const listNoteVersions = vi
-      .fn()
-      .mockResolvedValueOnce(page(firstPage, { total: 101 }))
-      .mockResolvedValue(page([aNoteVersion({ id: 'v101', rev: 101 })], { total: 101 }));
-    await renderView({ api: fakeApi({ listNoteVersions }) });
-    await editorTitle();
-    await userEvent.click(screen.getByTestId('note-editor-history-toggle'));
-
-    expect(await screen.findByTestId('note-history-truncation')).toHaveTextContent('Showing 100 of 101');
-    await userEvent.click(screen.getByTestId('note-history-load-more'));
-
-    expect(await screen.findByTestId('note-history-version-101')).toBeInTheDocument();
-    expect(listNoteVersions).toHaveBeenLastCalledWith('p1', 'n1', { limit: 200, offset: 100 });
-    expect(screen.queryByTestId('note-history-truncation')).not.toBeInTheDocument();
-  });
 });
 
 describe('notes view is usable from the keyboard and by assistive technology', () => {
