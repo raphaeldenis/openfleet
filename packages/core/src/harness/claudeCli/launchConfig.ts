@@ -74,5 +74,5 @@ function buildHooks(hookUrl: string, hookCurlConfigPath: string): Record<string,
 // CLI's startup on this hook. Drop this once the CLI delivers SessionStart over http like the rest of the
 // hook events.
 function forwardStdinToHookUrl(hookCurlConfigPath: string): string {
-  return `curl -sS --connect-timeout 2 --max-time 10 -X POST -H 'Content-Type: application/json' -K '${hookCurlConfigPath}' --data-binary @-`;
+  return `curl -sS -f --connect-timeout 2 --max-time 10 -X POST -H 'Content-Type: application/json' -K '${hookCurlConfigPath}' --data-binary @-`;
 }

@@ -15,6 +15,7 @@ import type { DataStoreService } from '../stores/dataStoreService.js';
 import type { WorkingStateService } from '../workingState/workingStateService.js';
 import { ALLOWED_ORIGINS } from './allowedOrigins.js';
 import { registerDataStoreRoutes } from './dataStoreRoutes.js';
+import type { SessionStartContext } from '../workingState/sessionStartContext.js';
 import type { StopRefusal } from '../workingState/stopRefusal.js';
 import { hooksHandler } from './hooksHandler.js';
 import { registerNoteRoutes } from './noteRoutes.js';
@@ -41,6 +42,8 @@ export interface ServerDeps {
   workingStates?: WorkingStateService; workingStateMaxAgeMinutes?: number;
   // Without it every Stop is answered {}, as before the working state existed.
   stopRefusal?: StopRefusal;
+  // Without it every SessionStart is answered {}, as before the working state existed.
+  sessionStartContext?: SessionStartContext;
 }
 
 function applyCorsHeaders(req: IncomingMessage, res: ServerResponse): void {

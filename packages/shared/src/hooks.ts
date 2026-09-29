@@ -33,3 +33,7 @@ export interface PermissionRequestHookOutput {
     decision: { behavior: 'allow' | 'deny'; message?: string };
   };
 }
+
+export interface ContextHookOutput {
+  hookSpecificOutput: { hookEventName: 'SessionStart'; additionalContext: string };
+}
