@@ -13,8 +13,14 @@ import { PulseScheduler } from './managers/pulseScheduler.js';
 import { log } from './logger.js';
 import { createMcpHandler } from './mcp/mcpServer.js';
 import { loadModelTable } from './models.js';
+import { DocsFolderService } from './notes/docsFolderService.js';
+import { expandMentions } from './notes/mentionExpander.js';
+import { nodeDocsFolderFs } from './notes/nodeDocsFolderFs.js';
+import { NoteRepository } from './notes/noteRepository.js';
+import { NoteService } from './notes/noteService.js';
 import { installProcessGuards } from './process/processGuards.js';
 import { installShutdownHandler } from './process/shutdownHandler.js';
+import { ProjectRepository } from './projects/projectRepository.js';
 import { SessionService } from './sessions/sessionService.js';
 import { DataStoreRepository } from './stores/dataStoreRepository.js';
 import { DataStoreService } from './stores/dataStoreService.js';
@@ -38,10 +44,14 @@ const pulseScheduler = new PulseScheduler({ managers: managerRepository, session
 const managers = new ManagerService({ managers: managerRepository, sessions, bus, scheduler: pulseScheduler });
 const storeRepo = new DataStoreRepository(db);
 const stores = new DataStoreService({ repo: storeRepo, db, clock: () => new Date().toISOString(), newId });
+const projects = new ProjectRepository(db);
+const noteRepo = new NoteRepository(db);
+const notes = new NoteService({ repo: noteRepo, db, expandMentions, clock: () => new Date().toISOString(), newId });
+const docs = new DocsFolderService({ notes, noteRepo, projects, fs: nodeDocsFolderFs, clock: () => new Date().toISOString() });
 
 // The server must be listening before any resumed CLI can POST its first hook — resuming first risks a
 // fast process hitting a port nothing is serving yet.
-const server = await startServer({ ...config, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, worktreesRoot: config.worktreesRoot }) });
+const server = await startServer({ ...config, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, worktreesRoot: config.worktreesRoot }) });
 log('info', `openfleet core listening on ${server.url} (home: ${config.home})`);
 
 // A launch dir a crashed or killed daemon never cleaned up would otherwise sit on disk carrying a live

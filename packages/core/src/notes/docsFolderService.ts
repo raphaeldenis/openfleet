@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 import { NOTE_FOLDERS, type Note, type NoteFolder } from '@openfleet/shared';
 import type { ProjectRecord, ProjectRepository } from '../projects/projectRepository.js';
 import type { DocsFolderFs } from './docsFolderFs.js';
-import { MAX_BODY_BYTES, NoteNotFoundError, NoteTooLargeError, type NoteService } from './noteService.js';
+import { MAX_BODY_BYTES, NoteNotFoundError, NoteTooLargeError, StaleRevisionError, type NoteService } from './noteService.js';
 import type { NoteRepository } from './noteRepository.js';
 
 const IMPORT_AUTHOR = 'import';
@@ -27,6 +27,12 @@ export class ProjectHasNoDocsFolderError extends Error {
 export class NoteIsNotFileBackedError extends Error {
   constructor(noteId: string) {
     super(`note ${noteId} is not file-backed`);
+  }
+}
+
+export class NoteFileUnreadableError extends Error {
+  constructor(path: string, cause: unknown) {
+    super(`note file cannot be read: ${path}`, { cause });
   }
 }
 
@@ -65,6 +71,8 @@ export interface ReconcileReport {
   oversized: string[];
   /** File-backed notes whose file is gone from disk — not healed, just surfaced. */
   missing: string[];
+  /** File-backed notes whose file exists but cannot be read (permissions, I/O error) — not healed, just surfaced. */
+  unreadable: string[];
   /** File-backed notes whose file path (or its directory) now resolves outside the docs folder — never read. */
   escaped: string[];
 }
@@ -156,6 +164,7 @@ export class DocsFolderService {
     const realDocsFolderPath = this.deps.fs.realpathSync(this.requireDocsFolderPath(project));
     if (!this.isFileWithinDocsFolder(realDocsFolderPath, targetPath)) throw new PathEscapesDocsFolderError(targetPath);
     this.assertWithinCap(input.bodyMd);
+    this.refuseIfDiskEditIsUnreconciled(current);
 
     const tempPath = this.writeTempFile(targetPath, input.bodyMd);
     try {
@@ -173,6 +182,23 @@ export class DocsFolderService {
     }
   }
 
+  /** The note's file path relative to its project's docs folder; null for a plain note or a path outside the folder. */
+  docsRelativePath(note: Note): string | null {
+    if (!note.filePath) return null;
+    const realDocsFolderPath = this.tryResolveRealDocsFolderPath(note.projectId);
+    if (realDocsFolderPath === null) return null;
+    if (!this.isPathContained(realDocsFolderPath, note.filePath)) return null;
+    return note.filePath.slice(realDocsFolderPath.length + 1);
+  }
+
+  private tryResolveRealDocsFolderPath(projectId: string): string | null {
+    try {
+      return this.deps.fs.realpathSync(this.requireDocsFolderPath(this.requireProject(projectId)));
+    } catch {
+      return null;
+    }
+  }
+
   /** Imports every markdown file under `existingPath`'s four docs subfolders not already known by file_path. Idempotent. */
   attachFolder(projectId: string, existingPath: string): Note[] {
     this.requireProject(projectId);
@@ -186,7 +212,7 @@ export class DocsFolderService {
   /** For every file-backed note of `projectId`: a disk hash that no longer matches `source_hash` is applied as a 'disk' revision. */
   reconcileOnBoot(projectId: string): ReconcileReport {
     const fileBackedNotes = this.deps.noteRepo.list(projectId).filter((note) => note.filePath !== null);
-    const report: ReconcileReport = { applied: [], oversized: [], missing: [], escaped: [] };
+    const report: ReconcileReport = { applied: [], oversized: [], missing: [], unreadable: [], escaped: [] };
     for (const note of fileBackedNotes) this.reconcileNote(note, report);
     return report;
   }
@@ -224,7 +250,7 @@ export class DocsFolderService {
   private reconcilePath(absolutePath: string): void {
     const note = this.deps.noteRepo.getByFilePath(absolutePath);
     if (!note) return;
-    this.reconcileNote(note, { applied: [], oversized: [], missing: [], escaped: [] });
+    this.reconcileNote(note, { applied: [], oversized: [], missing: [], unreadable: [], escaped: [] });
   }
 
   /**
@@ -241,10 +267,15 @@ export class DocsFolderService {
       return;
     }
 
-    let diskBodyMd: string;
+    let diskBodyMd: string | undefined;
     try {
-      diskBodyMd = this.deps.fs.readFileSync(note.filePath!);
-    } catch {
+      diskBodyMd = this.tryReadFile(note.filePath!);
+    } catch (error) {
+      if (!(error instanceof NoteFileUnreadableError)) throw error;
+      report.unreadable.push(note.id);
+      return;
+    }
+    if (diskBodyMd === undefined) {
       report.missing.push(note.id);
       return;
     }
@@ -252,7 +283,7 @@ export class DocsFolderService {
     if (diskHash === note.sourceHash) return;
 
     try {
-      this.deps.notes.updateFileBacked(note.id, { bodyMd: diskBodyMd, sourceHash: diskHash, expectedRev: note.rev, author: EXTERNAL_EDIT_AUTHOR });
+      this.applyExternalEdit(note, diskBodyMd);
       report.applied.push(note.id);
     } catch (error) {
       if (error instanceof NoteTooLargeError) {
@@ -260,6 +291,35 @@ export class DocsFolderService {
         return;
       }
       throw error;
+    }
+  }
+
+  private applyExternalEdit(note: Note, diskBodyMd: string): Note {
+    return this.deps.notes.updateFileBacked(note.id, {
+      bodyMd: diskBodyMd,
+      sourceHash: sha256(diskBodyMd),
+      expectedRev: note.rev,
+      author: EXTERNAL_EDIT_AUTHOR,
+    });
+  }
+
+  /** A file changed on disk since the last write is recorded as a 'disk' revision, then the caller is refused so it re-reads. */
+  private refuseIfDiskEditIsUnreconciled(note: Note): void {
+    const diskBodyMd = this.tryReadFile(note.filePath!);
+    const isFileMissing = diskBodyMd === undefined;
+    if (isFileMissing || sha256(diskBodyMd) === note.sourceHash) return;
+    const reconciled = this.applyExternalEdit(note, diskBodyMd);
+    throw new StaleRevisionError(reconciled.rev);
+  }
+
+  /** Returns undefined only when the file does not exist; any other read failure throws `NoteFileUnreadableError`. */
+  private tryReadFile(path: string): string | undefined {
+    try {
+      return this.deps.fs.readFileSync(path);
+    } catch (error) {
+      const isFileMissing = (error as NodeJS.ErrnoException).code === 'ENOENT';
+      if (isFileMissing) return undefined;
+      throw new NoteFileUnreadableError(path, error);
     }
   }
 

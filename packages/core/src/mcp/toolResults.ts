@@ -4,6 +4,8 @@ import {
   InvalidQueryError, InvalidViewConfigError, StoreHasRowsError, StoreRowCapError, ViewNotFoundError,
 } from '../stores/dataStoreService.js';
 import { DuplicateNameError, RowNotFoundError, StoreNotFoundError, UnknownColumnError } from '../stores/dataStoreRepository.js';
+import { FileBackedNoteError, NoteNotFoundError, NoteTooLargeError, StaleRevisionError, VersionNotFoundError } from '../notes/noteService.js';
+import { SectionError } from '../notes/noteSections.js';
 
 export const ok = (payload: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(payload) }] });
 export const fail = (message: string) => ({ content: [{ type: 'text' as const, text: message }], isError: true });
@@ -25,6 +27,7 @@ export function truncateToByteBudget<T>(items: T[], maxBytes: number): { items: 
 const CALLER_SAFE_ERRORS = [
   ConstraintError, DataStoreWriteError, DuplicateIdError, DuplicateNameError, InvalidActorError, InvalidCellValueError, InvalidColumnDefinitionError,
   InvalidNameError, InvalidQueryError, InvalidViewConfigError, StoreHasRowsError, StoreRowCapError, UnknownColumnError,
+  NoteTooLargeError, SectionError, VersionNotFoundError,
 ];
 
 /**
@@ -39,8 +42,11 @@ export function guarded<T>(work: () => T) {
     if (error instanceof StoreNotFoundError) return fail('data store not found');
     if (error instanceof ViewNotFoundError) return fail('view not found');
     if (error instanceof RowNotFoundError) return fail('row not found');
+    if (error instanceof NoteNotFoundError) return fail('note not found');
+    if (error instanceof StaleRevisionError) return fail(`409 stale_revision, current rev: ${error.currentRev}`);
+    if (error instanceof FileBackedNoteError) return fail('note is file-backed; this operation is not supported for file-backed notes');
     if (CALLER_SAFE_ERRORS.some((safeError) => error instanceof safeError)) return fail((error as Error).message);
-    log('error', 'table tool failed', error);
+    log('error', 'mcp tool failed', error);
     return fail('request failed');
   }
 }
