@@ -26,4 +26,14 @@ describe('installProcessGuards', () => {
     process.emit('unhandledRejection', new Error('boom'), Promise.resolve());
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('unhandledRejection'), expect.any(Error));
   });
+
+  it('sets a restrictive umask so every file the daemon creates afterwards defaults to owner-only (AUD-05)', () => {
+    // A real process.umask() is process-wide and would leak into every other test sharing this worker, so
+    // this asserts the call against an injected fake instead of the real process (same DI as `proc` above).
+    const fakeProc = { on: vi.fn(), umask: vi.fn() } as unknown as NodeJS.Process;
+
+    installProcessGuards(fakeProc);
+
+    expect(fakeProc.umask).toHaveBeenCalledWith(0o077);
+  });
 });
