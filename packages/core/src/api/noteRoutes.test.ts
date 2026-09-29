@@ -443,6 +443,50 @@ describe('notes REST routes', () => {
     });
   });
 
+  describe('file-backed notes stay path-free', () => {
+    it('never shows the file path or the source hash on the read or the edit of a file-backed note', async () => {
+      const fileBacked = docs.createFileBackedNote({ projectId: fileBackedProjectId, folder: 'specs', title: 'log', bodyMd: 'v1', author: 'seed' });
+
+      const read = await (await call('GET', `/api/notes/${fileBacked.id}?projectId=${fileBackedProjectId}`)).json() as Record<string, unknown>;
+      const edited = await (await call('PATCH', `/api/notes/${fileBacked.id}`, { projectId: fileBackedProjectId, expectedRev: 1, bodyMd: 'v2' })).json() as Record<string, unknown>;
+
+      expect(read).toMatchObject({ fileBacked: true });
+      for (const view of [read, edited]) {
+        expect(view).not.toHaveProperty('filePath');
+        expect(view).not.toHaveProperty('sourceHash');
+      }
+    });
+  });
+
+  describe('search and body limits', () => {
+    it('escapes a double quote in the query instead of failing', async () => {
+      await createNote({ bodyMd: 'she said "hello" loudly' });
+
+      const response = await call('GET', `/api/notes/search?projectId=p1&q=${encodeURIComponent('say "hel')}`);
+
+      expect(response.status).toBe(200);
+    });
+
+    it('returns at most 50 hits when more notes match', async () => {
+      const insert = db.prepare(`INSERT INTO notes (id, project_id, title, body_md, folder, file_path, source_hash, rev, shared, created_at, updated_at)
+        VALUES (?, 'p1', 'n', 'zebra', NULL, NULL, NULL, 1, 0, 't', 't')`);
+      for (let index = 0; index < 51; index++) insert.run(`zebra-${index}`);
+
+      const { items } = await (await call('GET', '/api/notes/search?projectId=p1&q=zebra')).json() as { items: unknown[] };
+
+      expect(items).toHaveLength(50);
+    });
+
+    it('refuses a request over 1 MiB with 413 payload_too_large even when the note body itself is under the cap', async () => {
+      const bodyUnderNoteCap = 'x'.repeat(ONE_MIB - 1000);
+
+      const response = await call('POST', '/api/notes', { projectId: 'p1', title: 'Big', bodyMd: bodyUnderNoteCap, padding: 'p'.repeat(2000) });
+
+      expect(response.status).toBe(413);
+      expect(await response.json()).toEqual({ error: 'payload_too_large' });
+    });
+  });
+
   describe('request parsing', () => {
     it('keeps a literal question mark of the query and every parameter after it', async () => {
       await createNote({ title: 'Why', bodyMd: 'why is it so' });
