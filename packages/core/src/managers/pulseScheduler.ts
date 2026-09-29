@@ -15,8 +15,24 @@ const toSingleLineName = (name: string) => {
   return isTooLong ? `${collapsed.slice(0, MAX_CHILD_NAME_LENGTH)}…` : collapsed;
 };
 
-const childClosedLine = (child: { name: string }, exitCode: number | undefined) =>
-  `[pulse] Child "${toSingleLineName(child.name)}" closed (exit code ${exitCode ?? 'unknown'}).`;
+const MAX_LISTED_CLOSED_CHILDREN = 10;
+// setTimeout clamps any longer delay to 1 ms.
+const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
+
+interface ClosedChild { name: string; exitCode: number | undefined }
+// The wake line still waiting in a manager's queue: the children it names and how many closed in all.
+interface QueuedWake { messageId: string; listed: ClosedChild[]; total: number }
+
+const exitCodeText = (exitCode: number | undefined) => exitCode ?? 'unknown';
+
+const wakeLineOf = ({ listed, total }: Pick<QueuedWake, 'listed' | 'total'>) => {
+  const [onlyChild] = listed;
+  if (total === 1 && onlyChild) return `[pulse] Child "${onlyChild.name}" closed (exit code ${exitCodeText(onlyChild.exitCode)}).`;
+  const listedText = listed.map((child) => `"${child.name}" (exit ${exitCodeText(child.exitCode)})`).join(', ');
+  const unlistedCount = total - listed.length;
+  const unlistedText = unlistedCount > 0 ? `, and ${unlistedCount} more` : '';
+  return `[pulse] ${total} children closed: ${listedText}${unlistedText}`;
+};
 
 export interface PulseSchedulerDeps {
   managers: ManagerRepository;
@@ -27,6 +43,7 @@ export interface PulseSchedulerDeps {
 export class PulseScheduler {
   private readonly deps: PulseSchedulerDeps;
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly queuedWakes = new Map<string, QueuedWake>();
   private isStopped = false;
 
   constructor(deps: PulseSchedulerDeps) {
@@ -53,13 +70,13 @@ export class PulseScheduler {
 
   private onSessionReopened(sessionId: string): void {
     if (this.isStopped) return;
-    const record = this.deps.managers.get(sessionId);
+    const record = this.deps.managers.getWithinBounds(sessionId);
     if (!record) return; // not a manager: nothing to re-arm
     this.arm(record);
   }
 
   pulseNow(sessionId: string): { coalesced: boolean } | undefined {
-    const record = this.deps.managers.get(sessionId);
+    const record = this.deps.managers.getWithinBounds(sessionId);
     if (!record) return undefined;
     if (!this.isManagerAlive(sessionId)) return undefined; // a closed manager is never pulsed
     this.clearTimer(sessionId);
@@ -70,7 +87,7 @@ export class PulseScheduler {
   // started it, and a pulse is only for a manager that stayed silent for one full interval.
   private restartHeartbeatOfManager(sessionId: string): void {
     if (this.isStopped) return;
-    const record = this.deps.managers.get(sessionId);
+    const record = this.deps.managers.getWithinBounds(sessionId);
     if (!record) return;
     if (!this.isManagerAlive(sessionId)) return;
     this.armAfter(sessionId, record.pulseSeconds * 1000);
@@ -85,15 +102,33 @@ export class PulseScheduler {
     if (!child || !managerId) return;
     if (!this.deps.managers.get(managerId)) return;
     if (!this.isManagerAlive(managerId)) return;
+    // A close the manager asked for is not news to it: the wake line is for a child that ended unannounced.
+    if (this.deps.sessions.isClosingByParent(childId)) return;
     try {
-      this.deps.sessions.sendMessage({ sessionId: managerId, body: childClosedLine(child, exitCode) });
+      this.queueWakeLine(managerId, { name: toSingleLineName(child.name), exitCode });
     } catch (error) {
       log('error', `pulse: could not wake manager ${managerId} after child ${childId} closed`, error);
     }
   }
 
+  // One queued wake line per manager: a burst of closes grows that line instead of queueing a turn each,
+  // so a human message queued behind it waits for one wake turn at most.
+  private queueWakeLine(managerId: string, closedChild: ClosedChild): void {
+    const queued = this.queuedWakes.get(managerId);
+    if (queued) {
+      const grown = { messageId: queued.messageId, listed: [...queued.listed, closedChild].slice(0, MAX_LISTED_CLOSED_CHILDREN), total: queued.total + 1 };
+      const body = wakeLineOf(grown);
+      const isMergedIntoQueuedLine = this.deps.sessions.replaceQueuedMessageBody({ sessionId: managerId, messageId: grown.messageId, body });
+      if (isMergedIntoQueuedLine) { this.queuedWakes.set(managerId, grown); return; }
+    }
+    const fresh = { listed: [closedChild], total: 1 };
+    const { messageId } = this.deps.sessions.sendMessage({ sessionId: managerId, body: wakeLineOf(fresh) });
+    this.queuedWakes.set(managerId, { messageId, ...fresh });
+  }
+
   stop(): void {
     this.isStopped = true;
+    this.queuedWakes.clear();
     for (const timer of this.timers.values()) clearTimeout(timer);
     this.timers.clear();
   }
@@ -105,11 +140,13 @@ export class PulseScheduler {
 
   private armAfter(sessionId: string, delayMs: number): void {
     this.clearTimer(sessionId);
-    this.timers.set(sessionId, setTimeout(() => this.tick(sessionId), delayMs));
+    const isOutOfBounds = !this.deps.managers.getWithinBounds(sessionId);
+    if (isOutOfBounds) return; // a legacy row is never armed
+    this.timers.set(sessionId, setTimeout(() => this.tick(sessionId), Math.min(delayMs, MAX_TIMER_DELAY_MS)));
   }
 
   private tick(sessionId: string): void {
-    const record = this.deps.managers.get(sessionId);
+    const record = this.deps.managers.getWithinBounds(sessionId);
     if (!record) return; // manager record removed
     if (!this.isManagerAlive(sessionId)) { this.clearTimer(sessionId); return; } // a closed manager never reschedules itself
     if (!this.isManagerIdle(sessionId)) { this.armAfter(sessionId, record.pulseSeconds * 1000); return; } // a busy manager had its turn: no pulse

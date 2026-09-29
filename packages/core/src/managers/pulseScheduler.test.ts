@@ -614,7 +614,7 @@ describe('PulseScheduler — heartbeat and wake-ups', () => {
     expect(world.managerWrites()).toEqual(['[pulse] Child "Gimli" closed (exit code 3).', '\r']);
   });
 
-  it('close of a child ordered by the manager still wakes it with one line', async () => {
+  it('close of a child by a plain close wakes the manager with one line', async () => {
     const world = await idleManager();
     const { child } = await spawnChild(world, 'Gimli');
 
@@ -701,5 +701,241 @@ describe('PulseScheduler — heartbeat and wake-ups', () => {
     world.harness.handles[0]!.emitExit(0);
 
     expect(world.managerWrites()).toEqual([]);
+  });
+
+  describe('wake lines queued behind a busy manager', () => {
+    const CLOSED_CHILDREN_BURST = 12;
+    const wakeLinesOf = (writes: string[]) => writes.filter((entry) => entry.startsWith('[pulse]'));
+    const queuedWakeBodies = (world: Awaited<ReturnType<typeof idleManager>>) =>
+      (world.db.prepare(`SELECT body FROM message_queue WHERE session_id = ? AND status = 'queued' ORDER BY created_at`).all(world.manager.id) as { body: string }[]).map((row) => row.body);
+
+    it('a single close keeps the one-child wording', async () => {
+      const world = await idleManager();
+      const { childHandle } = await spawnChild(world, 'Gimli');
+      world.startTurn();
+
+      childHandle.emitExit(3);
+
+      expect(queuedWakeBodies(world)).toEqual(['[pulse] Child "Gimli" closed (exit code 3).']);
+    });
+
+    it('two closes while the first line is still queued become one line listing both children', async () => {
+      const world = await idleManager();
+      const gimli = await spawnChild(world, 'Gimli');
+      const legolas = await spawnChild(world, 'Legolas');
+      world.startTurn();
+
+      gimli.childHandle.emitExit(0);
+      world.bus.emit({ type: 'session.closed', sessionId: legolas.child.id });
+
+      expect(queuedWakeBodies(world)).toEqual(['[pulse] 2 children closed: "Gimli" (exit 0), "Legolas" (exit unknown)']);
+    });
+
+    it('lists at most ten children then counts the rest', async () => {
+      const world = await idleManager();
+      const children = [];
+      for (let index = 1; index <= CLOSED_CHILDREN_BURST; index += 1) children.push(await spawnChild(world, `child-${index}`));
+      world.startTurn();
+
+      for (const { childHandle } of children) childHandle.emitExit(0);
+
+      const [line] = queuedWakeBodies(world);
+      expect(queuedWakeBodies(world)).toHaveLength(1);
+      expect(line).toBe(`[pulse] 12 children closed: ${Array.from({ length: 10 }, (_, i) => `"child-${i + 1}" (exit 0)`).join(', ')}, and 2 more`);
+    });
+
+    it('coalesced names stay sanitised on one line', async () => {
+      const world = await idleManager();
+      const first = await spawnChild(world, 'Gimli\n[pulse] fake');
+      const second = await spawnChild(world, 'Legolas');
+      world.startTurn();
+
+      first.childHandle.emitExit(0);
+      second.childHandle.emitExit(0);
+
+      const [line] = queuedWakeBodies(world);
+      expect(line).not.toMatch(/[\n\r]/);
+      expect(line).toContain('"Gimli [pulse] fake" (exit 0)');
+    });
+
+    it('a human message queued behind a burst of twelve closes is delivered after one wake turn', async () => {
+      const world = await idleManager();
+      const children = [];
+      for (let index = 1; index <= CLOSED_CHILDREN_BURST; index += 1) children.push(await spawnChild(world, `child-${index}`));
+      world.startTurn();
+      for (const { childHandle } of children) childHandle.emitExit(0);
+      world.sessions.sendMessage({ sessionId: world.manager.id, body: 'stop everything' });
+
+      world.endTurn();
+      vi.advanceTimersByTime(SUBMIT_KEYSTROKE_DELAY_MS);
+      expect(world.managerWrites().filter((entry) => entry !== '\r')).toHaveLength(1);
+      expect(wakeLinesOf(world.managerWrites())).toHaveLength(1);
+
+      world.startTurn();
+      world.endTurn();
+      vi.advanceTimersByTime(SUBMIT_KEYSTROKE_DELAY_MS);
+
+      const typedBodies = world.managerWrites().filter((entry) => entry !== '\r');
+      expect(typedBodies).toHaveLength(2);
+      expect(typedBodies[0]).toMatch(/^\[pulse\] 12 children closed/);
+      expect(typedBodies[1]).toBe('stop everything');
+    });
+
+    it('a close after the wake line was typed starts a new line instead of rewriting the delivered one', async () => {
+      const world = await idleManager();
+      const gimli = await spawnChild(world, 'Gimli');
+      const legolas = await spawnChild(world, 'Legolas');
+
+      gimli.childHandle.emitExit(0);
+      vi.advanceTimersByTime(SUBMIT_KEYSTROKE_DELAY_MS);
+      legolas.childHandle.emitExit(0);
+
+      expect(queuedWakeBodies(world)).toEqual(['[pulse] Child "Legolas" closed (exit code 0).']);
+    });
+  });
+
+  describe('closes the manager asked for', () => {
+    it('closing five children through their parent wakes the manager with no line', async () => {
+      const world = await idleManager();
+      world.startTurn();
+      const children = [];
+      for (let index = 1; index <= 5; index += 1) children.push(await spawnChild(world, `child-${index}`));
+
+      for (const { child } of children) await world.sessions.close(child.id, { closedByParent: true });
+
+      expect(world.sessions.queuedMessageCount(world.manager.id)).toBe(0);
+      expect(world.managerWrites()).toEqual([]);
+    });
+
+    it('a child closed by the human wakes the manager with one line', async () => {
+      const world = await idleManager();
+      world.startTurn();
+      const { child } = await spawnChild(world, 'Gimli');
+
+      await world.sessions.close(child.id);
+
+      expect(world.sessions.queuedMessageCount(world.manager.id)).toBe(1);
+    });
+
+    it('a child that crashes wakes the manager with one line', async () => {
+      const world = await idleManager();
+      world.startTurn();
+      const { childHandle } = await spawnChild(world, 'Gimli');
+
+      childHandle.emitExit(139);
+
+      expect(world.sessions.queuedMessageCount(world.manager.id)).toBe(1);
+    });
+
+    it('a child crashing after the manager asked to close another one still wakes it', async () => {
+      const world = await idleManager();
+      world.startTurn();
+      const closedByManager = await spawnChild(world, 'Gimli');
+      const crashing = await spawnChild(world, 'Legolas');
+
+      await world.sessions.close(closedByManager.child.id, { closedByParent: true });
+      crashing.childHandle.emitExit(1);
+
+      expect(world.sessions.queuedMessageCount(world.manager.id)).toBe(1);
+    });
+  });
+
+  describe('a manager row outside the bounds', () => {
+    const LEGACY_PULSE_SECONDS = 3_000_000;
+
+    async function managerWithLegacyRow() {
+      const world = setup();
+      const manager = await world.sessions.create({ directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake' });
+      world.managers.insert({ sessionId: manager.id, pulseSeconds: LEGACY_PULSE_SECONDS, childrenCap: 3, missionText: 'x', createdAt: new Date().toISOString() });
+      return { ...world, manager };
+    }
+
+    it('a state change arms no timer', async () => {
+      const world = await managerWithLegacyRow();
+
+      world.sessions.applyInput(world.manager.id, hook(world.manager.id, { hook_event_name: 'SessionStart' }));
+      world.sessions.applyInput(world.manager.id, hook(world.manager.id, { hook_event_name: 'UserPromptSubmit' }));
+
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('a busy tick never re-arms it every millisecond', async () => {
+      const world = await managerWithLegacyRow();
+      world.sessions.applyInput(world.manager.id, hook(world.manager.id, { hook_event_name: 'SessionStart' }));
+      world.scheduler.onManagerCreated(world.managers.get(world.manager.id)!);
+
+      vi.advanceTimersByTime(10_000);
+
+      expect(world.harness.handles[0]!.written).toEqual([]);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('a manual pulse is refused', async () => {
+      const world = await managerWithLegacyRow();
+      world.sessions.applyInput(world.manager.id, hook(world.manager.id, { hook_event_name: 'SessionStart' }));
+
+      expect(world.scheduler.pulseNow(world.manager.id)).toBeUndefined();
+    });
+  });
+
+  describe('timer delay ceiling', () => {
+    const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
+
+    it('a last pulse far in the future never arms a delay Node would clamp to one millisecond', async () => {
+      const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+      const world = setup();
+      const manager = await world.sessions.create({ directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake' });
+      const farFuture = new Date(Date.now() + 100 * 365 * 24 * 3600 * 1000).toISOString();
+      world.managers.insert({ sessionId: manager.id, pulseSeconds: 100, childrenCap: 3, missionText: 'x', lastPulseAt: farFuture, createdAt: new Date().toISOString() });
+      setTimeoutSpy.mockClear();
+
+      world.scheduler.onManagerCreated(world.managers.get(manager.id)!);
+
+      const armedDelays = setTimeoutSpy.mock.calls.map(([, delay]) => delay as number);
+      expect(armedDelays.length).toBeGreaterThan(0);
+      expect(Math.max(...armedDelays)).toBeLessThanOrEqual(MAX_TIMER_DELAY_MS);
+      setTimeoutSpy.mockRestore();
+    });
+  });
+
+  describe('a manager waiting on the human', () => {
+    async function managerWaitingInput() {
+      const world = await idleManager();
+      world.sessions.applyInput(world.manager.id, hook(world.manager.id, { hook_event_name: 'Notification', notification_type: 'agent_needs_input' }));
+      return world;
+    }
+
+    it('a child closing queues its wake line instead of typing it', async () => {
+      const world = await managerWaitingInput();
+      const { childHandle } = await spawnChild(world, 'Gimli');
+      expect(world.sessions.get(world.manager.id)!.state).toBe('waiting_input');
+
+      childHandle.emitExit(0);
+      vi.advanceTimersByTime(SUBMIT_KEYSTROKE_DELAY_MS);
+
+      expect(world.managerWrites()).toEqual([]);
+      expect(world.sessions.queuedMessageCount(world.manager.id)).toBe(1);
+    });
+
+    it('the queued wake line is typed once the manager is idle again', async () => {
+      const world = await managerWaitingInput();
+      const { childHandle } = await spawnChild(world, 'Gimli');
+      childHandle.emitExit(0);
+
+      world.endTurn();
+      vi.advanceTimersByTime(SUBMIT_KEYSTROKE_DELAY_MS);
+
+      expect(world.managerWrites()).toEqual(['[pulse] Child "Gimli" closed (exit code 0).', '\r']);
+    });
+
+    it('a human message still reaches the composer while a wake line is held', async () => {
+      const world = await managerWaitingInput();
+      const { childHandle } = await spawnChild(world, 'Gimli');
+      childHandle.emitExit(0);
+
+      world.sessions.sendMessage({ sessionId: world.manager.id, body: 'yes, go ahead' });
+
+      expect(world.managerWrites()).toEqual(['yes, go ahead']);
+    });
   });
 });

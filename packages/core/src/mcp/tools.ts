@@ -264,7 +264,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
   server.registerTool('close_session', { description: 'Close one of your children', inputSchema: { session_id: z.string() } }, async ({ session_id }) => {
     const target = sessions.get(session_id);
     if (!target || target.parentId !== caller.id) return fail('not your child');
-    await sessions.close(target.id);
+    await sessions.close(target.id, { closedByParent: true });
     return ok({ closed: target.id });
   });
 }

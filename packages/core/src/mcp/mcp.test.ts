@@ -339,6 +339,17 @@ describe('MCP', () => {
     expect(sessions.get(stranger.id)!.state).not.toBe('closed');
   });
 
+  it('close_session by a manager wakes it with no line about the child it just closed', async () => {
+    new ManagerRepository(db).insert({ sessionId: parentId, pulseSeconds: 100, childrenCap: 3, missionText: 'x', createdAt: new Date().toISOString() });
+    const parent = await connect(parentToken);
+    const created = text(await parent.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('close-no-wake'), name: 'Gimli', emoji: '⚔️' } }));
+
+    await parent.callTool({ name: 'close_session', arguments: { session_id: created.id } });
+
+    expect(sessions.get(created.id)!.state).toBe('closed');
+    expect(sessions.queuedMessageCount(parentId)).toBe(0);
+  });
+
   it('refuses close_session on the caller\'s own parent', async () => {
     await (await connect(parentToken)).callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('close-parent-guard'), name: 'Gimli', emoji: '⚔️' } });
     const childToken = harness.launches[1]!.mcpToken;

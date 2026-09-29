@@ -173,7 +173,7 @@ describe('QE — scheduler lifecycle and timer leaks', () => {
 describe('QE — child close wake', () => {
   const wakeLines = (written: string[]) => written.filter((entry) => entry.startsWith('[pulse] Child'));
 
-  it('a burst of 50 child closes reaches the manager as 50 distinct lines, none lost', async () => {
+  it('a burst of 50 child closes reaches the manager as the line typed at once plus one coalesced line naming the other 49', async () => {
     const world = setup();
     const { manager, handle } = await addManager(world, 'Lead');
     const children = [];
@@ -186,7 +186,11 @@ describe('QE — child close wake', () => {
       world.sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'Stop' }));
     }
 
-    expect(wakeLines(handle.written)).toHaveLength(50);
+    const lines = handle.written.filter((entry) => entry.startsWith('[pulse] '));
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatch(/^\[pulse\] Child "Kid0" closed/);
+    expect(lines[1]).toMatch(/^\[pulse\] 49 children closed: "Kid1" \(exit 1\)/);
+    expect(lines[1]).toMatch(/, and 39 more$/);
   });
 
   it('a reopened child that closes again wakes its manager a second time (one line per close)', async () => {
