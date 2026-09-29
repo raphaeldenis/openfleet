@@ -4,7 +4,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
 import { ApprovalService } from '../governance/approvalService.js';
@@ -283,6 +283,27 @@ describe('notes REST routes', () => {
       const response = await call('PATCH', `/api/notes/${note.id}`, { projectId: 'p1', expectedRev: 1, title: 'Both', bodyMd: 'both body' });
 
       expect(await response.json()).toMatchObject({ title: 'Both', bodyMd: 'both body' });
+    });
+
+    it('commits a title-and-body patch as one revision with one version', async () => {
+      const note = await createNote();
+
+      const response = await call('PATCH', `/api/notes/${note.id}`, { projectId: 'p1', expectedRev: 1, title: 'Both', bodyMd: 'both body' });
+
+      expect(await response.json()).toMatchObject({ title: 'Both', bodyMd: 'both body', rev: 2 });
+      expect(noteRepo.listVersionSummaries(note.id as string).map((v) => v.rev)).toEqual([1, 2]);
+    });
+
+    it('leaves title, body and revision unchanged when recording the version of a title-and-body patch fails', async () => {
+      const note = await createNote();
+      vi.spyOn(noteRepo, 'insertVersion').mockImplementation(() => { throw new Error('disk full'); });
+
+      const failed = await call('PATCH', `/api/notes/${note.id}`, { projectId: 'p1', expectedRev: 1, title: 'Both', bodyMd: 'both body' });
+      vi.restoreAllMocks();
+      const unchanged = await (await call('GET', `/api/notes/${note.id}?projectId=p1`)).json();
+
+      expect(failed.status).toBe(500);
+      expect(unchanged).toMatchObject({ title: 'Plan', bodyMd: note.bodyMd, rev: 1 });
     });
 
     it('answers 409 with the current revision when the revision is stale and leaves the note alone', async () => {

@@ -66,7 +66,14 @@ export function registerNoteRoutes(router: Router, { notes, noteRepo, docs }: No
     return current.filePath ? docs.writeThrough(current.id, write) : notes.update(current.id, write);
   }
 
-  router.add('GET', '/api/notes', ({ req, res }) => {
+  function applyPatch(current: Note, { title, bodyMd, expectedRev }: { title?: string; bodyMd?: string; expectedRev: number }): Note {
+    const write = { expectedRev, author: REST_AUTHOR };
+    if (title !== undefined && bodyMd !== undefined) return notes.updateBodyAndTitle(current.id, { ...write, title, bodyMd });
+    if (title !== undefined) return notes.rename(current.id, { ...write, title });
+    return commitBody(current, bodyMd!, expectedRev);
+  }
+
+  router.add('GET', '/api/notes',({ req, res }) => {
     const { projectId, folder, limit, offset } = ListNotesQuerySchema.parse(queryParams(req));
     const inFolder = noteRepo.list(projectId).filter((note) => folder === undefined || note.folder === folder);
     const page: Page<NoteSummary> = { items: inFolder.slice(offset, offset + limit).map(summaryOf), total: inFolder.length, limit, offset };
@@ -99,10 +106,7 @@ export function registerNoteRoutes(router: Router, { notes, noteRepo, docs }: No
       const current = requireOwnNote(projectId, params.id!);
       const isRenamingFileBackedNote = title !== undefined && current.filePath !== null;
       if (isRenamingFileBackedNote) throw new FileBackedNoteError(current.id);
-      const afterBody = bodyMd === undefined ? current : commitBody(current, bodyMd, expectedRev);
-      const revAfterBody = bodyMd === undefined ? expectedRev : afterBody.rev;
-      const afterTitle = title === undefined ? afterBody : notes.rename(current.id, { title, expectedRev: revAfterBody, author: REST_AUTHOR });
-      json(res, 200, viewOf(afterTitle));
+      json(res, 200, viewOf(applyPatch(current, { title, bodyMd, expectedRev })));
     });
   });
 

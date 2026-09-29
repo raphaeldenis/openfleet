@@ -103,6 +103,12 @@ export class NoteRepository {
       [title, updatedAt], id, expectedRev,
     );
   }
+  updateBodyAndTitle(id: string, { bodyMd, title, expectedRev, updatedAt }: NoteBodyUpdate & { title: string }): NoteUpdateResult {
+    return this.compareAndSet(
+      'UPDATE notes SET body_md = ?, title = ?, rev = rev + 1, updated_at = ? WHERE id = ? AND rev = ? RETURNING *',
+      [bodyMd, title, updatedAt], id, expectedRev,
+    );
+  }
   move(id: string, folder: NoteFolder | null): boolean {
     const { changes } = this.db.prepare('UPDATE notes SET folder = ? WHERE id = ?').run(folder, id);
     return Number(changes) > 0;
