@@ -4,7 +4,7 @@ import { ApiError, FleetApiService, type Project } from '../core/fleet-api.servi
 import { RowHistoryComponent } from './row-history.component';
 import { TableGridComponent } from './table-grid.component';
 import { cellText, sortedColumns } from './table-cells';
-import { TableKanbanComponent, type KanbanGroup } from './table-kanban.component';
+import { NO_VALUE_GROUP_ID, TableKanbanComponent, type KanbanGroup } from './table-kanban.component';
 import { TableListComponent } from './table-list.component';
 
 export interface UsedByEntry {
@@ -115,6 +115,11 @@ const isBlank = (value: unknown) => value === undefined || value === null || val
             <span>Add one, or let a manager fill it from its mission.</span>
             <button type="button" class="of-btn of-btn--primary" data-testid="tables-add-first-row" (click)="addRow()">+ Add first row</button>
           </div>
+        } @else if (columns().length === 0) {
+          <div class="message" data-testid="tables-no-columns">
+            <span class="message-title">Add a column first</span>
+            <span>Rows have nothing to show until the table has a column.</span>
+          </div>
         } @else if (viewMode() === 'grid') {
           <of-table-grid [columns]="columns()" [rows]="rows()" [selectedRowId]="selectedRowId()" (rowSelected)="openRow($event)" />
         } @else if (kanbanGroups(); as groups) {
@@ -123,6 +128,12 @@ const isBlank = (value: unknown) => value === undefined || value === null || val
           <div class="message" data-testid="tables-kanban-needs-select">
             <span class="message-title">A kanban needs a select column</span>
             <span>Add a select column to group the rows by.</span>
+          </div>
+        }
+        @if (hasMoreRows()) {
+          <div class="truncated" data-testid="tables-rows-truncated">
+            <span>Showing {{ rows().length }} of {{ rowTotal() }}</span>
+            <button type="button" class="of-btn of-btn--secondary compact" data-testid="tables-load-more" (click)="loadMoreRows()">Load more</button>
           </div>
         }
       </div>
@@ -175,6 +186,7 @@ const isBlank = (value: unknown) => value === undefined || value === null || val
       border: 1px solid var(--line); border-radius: .625rem; background: var(--panel);
     }
     .card-title { color: var(--state-error); font-weight: 600 }
+    .truncated { display: flex; align-items: center; justify-content: center; gap: .75rem; padding: .75rem; font-size: .75rem; color: var(--mut) }
     .muted { color: var(--mut) }
     .actions { display: flex; gap: .5rem }
     .history { position: relative; width: 20rem; flex: none; border-left: 1px solid var(--line); background: var(--panel); overflow: auto; display: flex; flex-direction: column }
@@ -196,6 +208,7 @@ export class TablesViewComponent {
   protected readonly activeStoreId = signal<string | null>(null);
   protected readonly columns = signal<DsColumn[]>([]);
   protected readonly rows = signal<DsRow[]>([]);
+  protected readonly rowTotal = signal(0);
   protected readonly views = signal<DsView[]>([]);
   protected readonly status = signal<TableStatus>('loading');
   protected readonly viewMode = signal<ViewMode>('grid');
@@ -213,6 +226,7 @@ export class TablesViewComponent {
   private readonly ignoresMismatches = signal(false);
   private latestTableRequest = 0;
   private latestStoresRequest = 0;
+  private readonly actionsInFlight = new Set<string>();
 
   protected readonly activeProjectId = computed(() => this.chosenProjectId() ?? this.projects()[0]?.id);
   protected readonly hasNoProject = computed(() => this.hasLoadedProjects() && this.activeProjectId() === undefined);
@@ -223,6 +237,7 @@ export class TablesViewComponent {
     if (target === 'stores') return 'Could not load the tables';
     return `Could not load “${this.activeStoreName()}”`;
   });
+  protected readonly hasMoreRows = computed(() => this.status() === 'ready' && this.loadFailure() === null && this.rows().length < this.rowTotal());
   protected readonly activeStoreName = computed(() => this.stores().find((store) => store.id === this.activeStoreId())?.displayName ?? '');
 
   private readonly mismatches = computed<Mismatch[]>(() => {
@@ -254,7 +269,11 @@ export class TablesViewComponent {
   protected readonly kanbanGroups = computed<KanbanGroup[] | null>(() => {
     const column = this.groupColumn();
     if (!column) return null;
-    return (column.options ?? []).map((option) => ({ option, rows: this.rows().filter((row) => row.data[column.id] === option.id) }));
+    const options = column.options ?? [];
+    const groups = options.map((option) => ({ option, rows: this.rows().filter((row) => row.data[column.id] === option.id) }));
+    const rowsWithoutKnownOption = this.rows().filter((row) => !options.some((option) => option.id === row.data[column.id]));
+    const noValueGroup = { option: { id: NO_VALUE_GROUP_ID, label: 'No value' }, rows: rowsWithoutKnownOption };
+    return rowsWithoutKnownOption.length > 0 ? [...groups, noValueGroup] : groups;
   });
   protected readonly selectedRowTitle = computed(() => {
     const selectedRow = this.rows().find((row) => row.id === this.selectedRowId());
@@ -297,7 +316,7 @@ export class TablesViewComponent {
     const patchesByRow = new Map<string, Record<string, unknown>>();
     for (const { rowId, column } of this.mismatches()) patchesByRow.set(rowId, { ...patchesByRow.get(rowId), [column.id]: null });
     const updates = [...patchesByRow].map(([rowId, patch]) => ({ rowId, patch }));
-    await this.runAction(async () => {
+    await this.runAction('clear-mismatches', async () => {
       await this.api.updateRows({ ...scope, updates });
       await this.loadTable(scope.storeId);
     });
@@ -306,13 +325,29 @@ export class TablesViewComponent {
   protected async addRow(): Promise<void> {
     const scope = this.currentScope();
     if (!scope) return;
-    await this.runAction(async () => {
+    await this.runAction('add-row', async () => {
       await this.api.insertRows({ ...scope, rows: [{}] });
       await this.loadTable(scope.storeId);
     });
   }
 
+  protected async loadMoreRows(): Promise<void> {
+    const scope = this.currentScope();
+    if (!scope) return;
+    const request = this.latestTableRequest;
+    await this.runAction('load-more', async () => {
+      const rowPage = await this.api.queryDataStore({ ...scope, limit: ROWS_PAGE_LIMIT, offset: this.rows().length });
+      if (request !== this.latestTableRequest) return;
+      this.rows.update((loadedRows) => [...loadedRows, ...rowPage.items]);
+      this.rowTotal.set(rowPage.total);
+    }, 'More rows could not be loaded.');
+  }
+
   protected startCreatingTable(): void {
+    if (this.activeProjectId() === undefined) {
+      this.actionError.set('No project to create a table in yet.');
+      return;
+    }
     this.createError.set(null);
     this.newTableName.set('');
     this.isCreatingTable.set(true);
@@ -321,7 +356,9 @@ export class TablesViewComponent {
   protected async createTable(): Promise<void> {
     const projectId = this.activeProjectId();
     const displayName = this.newTableName().trim();
-    if (!projectId || displayName === '') return;
+    const isAlreadyCreating = this.actionsInFlight.has('create-table');
+    if (!projectId || displayName === '' || isAlreadyCreating) return;
+    this.actionsInFlight.add('create-table');
     try {
       const created = await this.api.createDataStore({ projectId, displayName });
       this.stores.update((stores) => [...stores, created]);
@@ -330,6 +367,8 @@ export class TablesViewComponent {
     } catch (error) {
       const isNameTaken = error instanceof ApiError && error.code === 'duplicate_name';
       this.createError.set(isNameTaken ? `A table named “${displayName}” already exists.` : 'Could not create the table.');
+    } finally {
+      this.actionsInFlight.delete('create-table');
     }
   }
 
@@ -357,12 +396,16 @@ export class TablesViewComponent {
     return projectId && storeId ? { projectId, storeId } : null;
   }
 
-  private async runAction(action: () => Promise<void>): Promise<void> {
+  private async runAction(name: string, action: () => Promise<void>, failureMessage = 'That change could not be saved.'): Promise<void> {
+    if (this.actionsInFlight.has(name)) return;
+    this.actionsInFlight.add(name);
     this.actionError.set(null);
     try {
       await action();
     } catch {
-      this.actionError.set('That change could not be saved.');
+      this.actionError.set(failureMessage);
+    } finally {
+      this.actionsInFlight.delete(name);
     }
   }
 
@@ -419,6 +462,7 @@ export class TablesViewComponent {
       if (request !== this.latestTableRequest) return;
       this.columns.set(detail.columns);
       this.rows.set(rowPage.items);
+      this.rowTotal.set(rowPage.total);
       this.views.set(viewList.items);
       this.status.set('ready');
     } catch (error) {

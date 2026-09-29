@@ -1,15 +1,16 @@
-import { render, screen } from '@testing-library/angular/zoneless';
+import { render, screen, within } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
 import { inputBinding, signal } from '@angular/core';
 import type { DataStore, DsColumn, DsRow, DsRowHistoryEntry } from '@openfleet/shared';
 import { describe, expect, it, vi } from 'vitest';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
+import { NO_VALUE_GROUP_ID } from './table-kanban.component';
 import { TablesViewComponent } from './tables-view.component';
 
 const NOW = '2026-09-29T10:00:00.000Z';
 
 const store = (id: string, displayName: string): DataStore => ({ id, projectId: 'p1', displayName, createdAt: NOW, updatedAt: NOW });
-const page = <T>(items: T[]) => ({ items, total: items.length, limit: 100, offset: 0 });
+const page = <T>(items: T[], total = items.length) => ({ items, total, limit: 100, offset: 0 });
 const row = (id: string, data: Record<string, unknown>): DsRow => ({ id, storeId: 's1', data, createdAt: NOW, updatedAt: NOW });
 
 const columns: DsColumn[] = [
@@ -247,6 +248,182 @@ describe('TablesViewComponent', () => {
 
       expect(await screen.findByTestId('table-pill-s3')).toHaveTextContent('sprint');
       await vi.waitFor(() => expect(api.queryDataStore).toHaveBeenLastCalledWith(expect.objectContaining({ storeId: 's3' })));
+    });
+  });
+
+  describe('rows beyond the first page', () => {
+    it('user is told how many rows are shown of the total and can load the rest', async () => {
+      const api = fakeApi();
+      api.queryDataStore
+        .mockResolvedValueOnce(page([row('r1', { 'c-title': 'First' })], 3))
+        .mockResolvedValueOnce({ ...page([row('r2', { 'c-title': 'Second' }), row('r3', { 'c-title': 'Third' })], 3), offset: 1 });
+      await renderView(api);
+      expect(await screen.findByTestId('tables-rows-truncated')).toHaveTextContent('Showing 1 of 3');
+
+      await userEvent.click(screen.getByTestId('tables-load-more'));
+
+      expect(await screen.findByTestId('grid-cell-r3-c-title')).toBeTruthy();
+      expect(screen.getByTestId('grid-cell-r1-c-title')).toBeTruthy();
+      expect(api.queryDataStore).toHaveBeenLastCalledWith(expect.objectContaining({ storeId: 's1', offset: 1 }));
+      expect(screen.queryByTestId('tables-rows-truncated')).toBeNull();
+    });
+
+    it('user sees no truncation notice when every row is loaded', async () => {
+      await renderView(fakeApi({ rows: twoRows }));
+      await screen.findByTestId('table-grid');
+
+      expect(screen.queryByTestId('tables-rows-truncated')).toBeNull();
+    });
+
+    it('user is told when loading more rows fails and can try again', async () => {
+      const api = fakeApi();
+      api.queryDataStore.mockResolvedValueOnce(page([row('r1', { 'c-title': 'First' })], 2));
+      await renderView(api);
+      api.queryDataStore.mockRejectedValueOnce(new ApiError(500, 'GET rows → 500'));
+
+      await userEvent.click(await screen.findByTestId('tables-load-more'));
+
+      expect(await screen.findByTestId('tables-action-error')).toBeTruthy();
+      expect(screen.getByTestId('tables-load-more')).toBeTruthy();
+    });
+  });
+
+  describe('writes are not sent twice', () => {
+    it('user double-clicking + Row inserts a single row', async () => {
+      const api = fakeApi({ rows: twoRows });
+      api.insertRows.mockReturnValue(new Promise(() => undefined));
+      await renderView(api);
+      await screen.findByTestId('table-grid');
+
+      await userEvent.dblClick(screen.getByTestId('tables-add-row'));
+
+      expect(api.insertRows).toHaveBeenCalledTimes(1);
+    });
+
+    it('user double-clicking "Clear those values" clears them once', async () => {
+      const api = fakeApi({ rows: [row('r1', { 'c-title': 'Stale', 'c-status': 'archived' })] });
+      api.updateRows.mockReturnValue(new Promise(() => undefined));
+      await renderView(api);
+
+      await userEvent.dblClick(await screen.findByTestId('tables-clear-mismatches'));
+
+      expect(api.updateRows).toHaveBeenCalledTimes(1);
+    });
+
+    it('user pressing Enter twice on the table name creates a single table', async () => {
+      const api = fakeApi({ rows: twoRows });
+      api.createDataStore.mockReturnValue(new Promise(() => undefined));
+      await renderView(api);
+      await screen.findByTestId('table-grid');
+      await userEvent.click(screen.getByRole('button', { name: 'New table' }));
+
+      await userEvent.type(screen.getByTestId('tables-new-name'), 'sprint{Enter}{Enter}');
+
+      expect(api.createDataStore).toHaveBeenCalledTimes(1);
+    });
+
+    it('user can add a row again after a failed attempt and is told about the failure', async () => {
+      const api = fakeApi({ rows: twoRows });
+      api.insertRows.mockRejectedValue(new ApiError(500, 'POST rows → 500'));
+      await renderView(api);
+      await screen.findByTestId('table-grid');
+
+      await userEvent.click(screen.getByTestId('tables-add-row'));
+      expect(await screen.findByTestId('tables-action-error')).toHaveTextContent('could not be saved');
+      await userEvent.click(screen.getByTestId('tables-add-row'));
+
+      await vi.waitFor(() => expect(api.insertRows).toHaveBeenCalledTimes(2));
+    });
+
+    it('user is told when clearing the mismatched values fails', async () => {
+      const api = fakeApi({ rows: [row('r1', { 'c-title': 'Stale', 'c-status': 'archived' })] });
+      api.updateRows.mockRejectedValue(new ApiError(500, 'PATCH rows → 500'));
+      await renderView(api);
+
+      await userEvent.click(await screen.findByTestId('tables-clear-mismatches'));
+
+      expect(await screen.findByTestId('tables-action-error')).toHaveTextContent('could not be saved');
+    });
+  });
+
+  describe('creating a table without a project', () => {
+    it('user is told there is no project to create a table in instead of getting a dead form', async () => {
+      await renderView(fakeApi({ projects: [] }));
+      await screen.findByTestId('tables-no-project');
+
+      await userEvent.click(screen.getByRole('button', { name: 'New table' }));
+
+      expect(screen.getByTestId('tables-action-error')).toHaveTextContent('No project');
+      expect(screen.queryByTestId('tables-new-name')).toBeNull();
+    });
+  });
+
+  describe('kanban buckets', () => {
+    const statusAndPriority: DsColumn[] = [
+      ...columns,
+      { id: 'c-priority', storeId: 's1', displayName: 'Priority', columnType: 'select', sortOrder: 2, options: [{ id: 'p-high', label: 'high' }, { id: 'p-low', label: 'low' }] },
+    ];
+
+    it('user still sees a row with no status in a "No value" bucket of the kanban', async () => {
+      await renderView(fakeApi({ rows: [...twoRows, row('r3', {})] }));
+      await screen.findByTestId('table-grid');
+
+      await userEvent.click(screen.getByTestId('tables-toggle-kanban'));
+
+      const bucket = screen.getByTestId(`kanban-column-${NO_VALUE_GROUP_ID}`);
+      expect(bucket).toHaveTextContent('No value');
+      expect(within(bucket).getByTestId('kanban-card-r3')).toBeTruthy();
+    });
+
+    it('user finds a row whose status is not an option in the "No value" bucket after viewing it anyway', async () => {
+      await renderView(fakeApi({ rows: [row('r1', { 'c-title': 'Stale', 'c-status': 'archived' })] }));
+      await userEvent.click(await screen.findByTestId('tables-view-rows'));
+
+      await userEvent.click(screen.getByTestId('tables-toggle-kanban'));
+
+      expect(within(screen.getByTestId(`kanban-column-${NO_VALUE_GROUP_ID}`)).getByTestId('kanban-card-r1')).toBeTruthy();
+    });
+
+    it('user sees no "No value" bucket when every row has a status', async () => {
+      await renderView(fakeApi({ rows: twoRows }));
+      await screen.findByTestId('table-grid');
+
+      await userEvent.click(screen.getByTestId('tables-toggle-kanban'));
+
+      expect(screen.queryByText('No value')).toBeNull();
+    });
+
+    it('user sees the kanban grouped by the column its saved kanban view names', async () => {
+      const api = fakeApi({ rows: [row('r1', { 'c-title': 'A', 'c-status': 'todo', 'c-priority': 'p-high' })], columns: statusAndPriority });
+      api.listViews.mockResolvedValue({ items: [{ id: 'v1', storeId: 's1', displayName: 'Board', viewType: 'kanban', config: { groupByColumnId: 'c-priority' }, sortOrder: 0 }] });
+      await renderView(api);
+      await screen.findByTestId('table-grid');
+
+      await userEvent.click(screen.getByTestId('tables-toggle-kanban'));
+
+      expect(screen.getByTestId('kanban-count-p-high')).toHaveTextContent('1');
+      expect(screen.queryByTestId('kanban-count-todo')).toBeNull();
+    });
+
+    it('user groups by the first select column when no kanban view names one', async () => {
+      await renderView(fakeApi({ rows: [row('r1', { 'c-title': 'A', 'c-status': 'todo' })], columns: statusAndPriority }));
+      await screen.findByTestId('table-grid');
+
+      await userEvent.click(screen.getByTestId('tables-toggle-kanban'));
+
+      expect(screen.getByTestId('kanban-count-todo')).toHaveTextContent('1');
+    });
+  });
+
+  describe('a table without columns', () => {
+    it('user is told to add a column first instead of seeing empty stripes, in the grid and in the kanban', async () => {
+      await renderView(fakeApi({ rows: [row('r1', {})], columns: [] }));
+
+      expect(await screen.findByTestId('tables-no-columns')).toHaveTextContent('Add a column first');
+      await userEvent.click(screen.getByTestId('tables-toggle-kanban'));
+
+      expect(screen.getByTestId('tables-no-columns')).toBeTruthy();
+      expect(screen.queryByTestId('tables-kanban-needs-select')).toBeNull();
     });
   });
 

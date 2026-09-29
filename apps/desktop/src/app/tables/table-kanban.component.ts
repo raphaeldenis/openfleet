@@ -2,6 +2,8 @@ import { ChangeDetectionStrategy, Component, computed, input, output } from '@an
 import type { DsColumn, DsRow, SelectOption } from '@openfleet/shared';
 import { cellText, sortedColumns } from './table-cells';
 
+export const NO_VALUE_GROUP_ID = '__no_value__';
+
 export interface KanbanGroup {
   option: SelectOption;
   rows: DsRow[];
