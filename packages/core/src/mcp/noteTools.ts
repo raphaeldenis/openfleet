@@ -1,72 +1,25 @@
-import { NoteFolderSchema, type Session } from '@openfleet/shared';
+import { NoteFolderSchema } from '@openfleet/shared';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { DocsFolderService } from '../notes/docsFolderService.js';
-import { FileBackedNoteError, NoteNotFoundError, StaleRevisionError, type NoteService } from '../notes/noteService.js';
-import type { NoteRepository } from '../notes/noteRepository.js';
-
-const ok = (payload: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(payload) }] });
-const fail = (message: string) => ({ content: [{ type: 'text' as const, text: message }], isError: true });
+import { FileBackedNoteError } from '../notes/noteService.js';
+import { createNoteToolSupport, type NoteToolDeps } from './noteToolSupport.js';
+import { fail, guarded } from './toolResults.js';
 
 const MAX_LIST_RESULTS = 200;
 const MAX_SEARCH_RESULTS = 50;
+const MAX_QUERY_CHARS = 512;
+const MAX_QUERY_TERMS = 16;
 
-export interface RegisterNoteToolsDeps {
-  notes: NoteService;
-  noteRepo: NoteRepository;
-  docs: DocsFolderService;
-  caller: Session;
-}
+export type RegisterNoteToolsDeps = NoteToolDeps;
 
-/**
- * Runs a note-tool body, mapping any typed service/repository error (never SQL or an internal id) to a
- * non-throwing `fail()`. A note outside the caller's project reads identically to one that never
- * existed (Review Focus / binding rule 1) — its error carries no id.
- */
-function guarded<T>(work: () => T) {
-  try {
-    return ok(work());
-  } catch (error) {
-    if (error instanceof NoteNotFoundError) return fail('note not found');
-    if (error instanceof StaleRevisionError) return fail(`409 stale_revision, current rev: ${error.currentRev}`);
-    if (error instanceof FileBackedNoteError) return fail('note is file-backed; write through the note tool for this note instead');
-    if (error instanceof Error) return fail(error.message);
-    throw error;
-  }
-}
+const tokenize = (query: string) => query.trim().split(/\s+/).filter((term) => term !== '');
 
-/** Wraps each whitespace-separated term as an escaped, prefix-matched phrase (Task 13 amendment); '' for a blank query. */
-function escapeFtsQuery(query: string): string {
-  const terms = query.trim().split(/\s+/).filter((term) => term !== '');
-  return terms.map((term) => `"${term.replace(/"/g, '""')}"*`).join(' ');
-}
-
-const noteSummary = (note: ReturnType<NoteRepository['get']>) => note && {
-  id: note.id, title: note.title, folder: note.folder, rev: note.rev, shared: note.shared, filePath: note.filePath, updatedAt: note.updatedAt,
-};
+/** Wraps each term as an escaped, prefix-matched phrase; '' for a blank query. */
+const escapeFtsTerms = (terms: string[]) => terms.map((term) => `"${term.replace(/"/g, '""')}"*`).join(' ');
 
 export function registerNoteTools(server: McpServer, deps: RegisterNoteToolsDeps): void {
-  const { notes, noteRepo, docs, caller } = deps;
-
-  function requireProject(): { projectId: string } | undefined {
-    return caller.projectId ? { projectId: caller.projectId } : undefined;
-  }
-
-  const author = () => `${caller.emoji} ${caller.name}`;
-
-  /** The one lookup every note tool starts from: an id from another project reads exactly like a missing one. */
-  function requireOwnNote(projectId: string, id: string) {
-    const note = noteRepo.get(id);
-    if (!note || note.projectId !== projectId) throw new NoteNotFoundError(id);
-    return note;
-  }
-
-  /** update_note's and restore_note_version's shared write path: same body, same CAS, file-backed or not. */
-  function writeBody(projectId: string, id: string, bodyMd: string, expectedRev: number) {
-    const current = requireOwnNote(projectId, id);
-    if (current.filePath) return docs.writeThrough(id, { bodyMd, expectedRev, author: author() });
-    return notes.update(id, { bodyMd, expectedRev, author: author() });
-  }
+  const { notes, noteRepo } = deps;
+  const { author, requireProject, requireOwnNote, writeBody, noteSummary, noteView } = createNoteToolSupport(deps);
 
   server.registerTool('create_note', {
     description: 'Create a note in your project',
@@ -74,7 +27,7 @@ export function registerNoteTools(server: McpServer, deps: RegisterNoteToolsDeps
   }, async ({ title, body_md, folder, shared }) => {
     const scope = requireProject();
     if (!scope) return fail('this session has no project');
-    return guarded(() => notes.create({ ...scope, title, bodyMd: body_md, folder, shared, author: author() }));
+    return guarded(() => noteView(notes.create({ ...scope, title, bodyMd: body_md, folder, shared, author: author() })));
   });
 
   server.registerTool('get_note', {
@@ -86,7 +39,7 @@ export function registerNoteTools(server: McpServer, deps: RegisterNoteToolsDeps
     return guarded(() => {
       requireOwnNote(scope.projectId, note);
       const { note: expandedNote, expandedBody } = notes.getExpanded(note, { viewerProjectId: scope.projectId });
-      return { ...expandedNote, expandedBody };
+      return { ...noteView(expandedNote), expandedBody };
     });
   });
 
@@ -96,7 +49,7 @@ export function registerNoteTools(server: McpServer, deps: RegisterNoteToolsDeps
   }, async ({ note, body_md, expected_rev }) => {
     const scope = requireProject();
     if (!scope) return fail('this session has no project');
-    return guarded(() => writeBody(scope.projectId, note, body_md, expected_rev));
+    return guarded(() => noteView(writeBody(requireOwnNote(scope.projectId, note), body_md, expected_rev)));
   });
 
   server.registerTool('delete_note', {
@@ -107,7 +60,7 @@ export function registerNoteTools(server: McpServer, deps: RegisterNoteToolsDeps
     if (!scope) return fail('this session has no project');
     return guarded(() => {
       const current = requireOwnNote(scope.projectId, note);
-      if (current.filePath) throw new Error('note is file-backed; delete_note is not supported for file-backed notes');
+      if (current.filePath) throw new FileBackedNoteError(note);
       noteRepo.delete(note);
       return { deleted: note };
     });
@@ -120,9 +73,8 @@ export function registerNoteTools(server: McpServer, deps: RegisterNoteToolsDeps
     const scope = requireProject();
     if (!scope) return fail('this session has no project');
     return guarded(() => {
-      const current = requireOwnNote(scope.projectId, note);
-      if (current.filePath) throw new Error('note is file-backed; move_note is not supported for file-backed notes');
-      return notes.move(note, folder);
+      requireOwnNote(scope.projectId, note);
+      return noteView(notes.move(note, folder));
     });
   });
 
@@ -134,20 +86,23 @@ export function registerNoteTools(server: McpServer, deps: RegisterNoteToolsDeps
     if (!scope) return fail('this session has no project');
     return guarded(() => {
       const all = noteRepo.list(scope.projectId).filter((n) => folder === undefined || n.folder === folder);
-      return { notes: all.slice(0, MAX_LIST_RESULTS).map(noteSummary), count: Math.min(all.length, MAX_LIST_RESULTS), truncated: all.length > MAX_LIST_RESULTS };
+      const shown = all.slice(0, MAX_LIST_RESULTS).map(noteSummary);
+      return { notes: shown, count: shown.length, truncated: all.length > MAX_LIST_RESULTS };
     });
   });
 
   server.registerTool('search_notes', {
-    description: `Full-text search over your project's notes (title + body); returns short snippets, never full bodies, capped at ${MAX_SEARCH_RESULTS} results`,
+    description: `Full-text search over your project's notes (title + body); at most ${MAX_QUERY_CHARS} characters and ${MAX_QUERY_TERMS} terms; returns short snippets, never full bodies, capped at ${MAX_SEARCH_RESULTS} results`,
     inputSchema: { query: z.string() },
   }, async ({ query }) => {
     const scope = requireProject();
     if (!scope) return fail('this session has no project');
+    if (query.length > MAX_QUERY_CHARS) return fail(`query too long (max ${MAX_QUERY_CHARS} characters)`);
+    const terms = tokenize(query);
+    if (terms.length > MAX_QUERY_TERMS) return fail(`too many terms in query (max ${MAX_QUERY_TERMS})`);
     return guarded(() => {
-      const escaped = escapeFtsQuery(query);
-      if (escaped === '') return { results: [], count: 0 };
-      const hits = noteRepo.search(escaped, { projectId: scope.projectId, limit: MAX_SEARCH_RESULTS });
+      if (terms.length === 0) return { results: [], count: 0 };
+      const hits = noteRepo.search(escapeFtsTerms(terms), { projectId: scope.projectId, limit: MAX_SEARCH_RESULTS });
       const results = hits.map(({ note, snippet }) => ({ ...noteSummary(note), snippet }));
       return { results, count: results.length };
     });

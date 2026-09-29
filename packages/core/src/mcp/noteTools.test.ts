@@ -1,6 +1,6 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
@@ -140,6 +140,28 @@ describe('note tools', () => {
       expect(fetched.expandedBody).toContain(`@note:${mentioned.id}`);
     });
 
+    it('never exposes filePath or sourceHash; a plain note is fileBacked false', async () => {
+      const client = await connect(scopedToken);
+      const note = await createNote(client);
+
+      const fetched = text(await client.callTool({ name: 'get_note', arguments: { note: note.id } }));
+
+      expect(fetched).toMatchObject({ fileBacked: false, docsRelativePath: null });
+      expect(fetched).not.toHaveProperty('filePath');
+      expect(fetched).not.toHaveProperty('sourceHash');
+    });
+
+    it('a file-backed note reports fileBacked true and its path relative to the docs folder', async () => {
+      const note = docs.createFileBackedNote({ projectId: fileBackedProjectId, folder: 'specs', title: 'daemon-protocol', bodyMd: '# v1', author: 'seed' });
+      const client = await connect(fileBackedToken);
+
+      const fetched = text(await client.callTool({ name: 'get_note', arguments: { note: note.id } }));
+
+      expect(fetched).toMatchObject({ fileBacked: true, docsRelativePath: 'specs/2026-01-01-daemon-protocol.md' });
+      expect(fetched).not.toHaveProperty('filePath');
+      expect(fetched).not.toHaveProperty('sourceHash');
+    });
+
     it('a session cannot get_note across a project boundary — a foreign note reads exactly like a missing one', async () => {
       const owner = await connect(scopedToken);
       const note = await createNote(owner);
@@ -176,7 +198,47 @@ describe('note tools', () => {
       expect(updated.bodyMd).toBe('# v2');
       const onDisk = nodeDocsFolderFs.readFileSync(note.filePath!);
       expect(onDisk).toBe('# v2');
-      expect(noteRepo.get(note.id)!.sourceHash).toBe(updated.sourceHash);
+      expect(updated).not.toHaveProperty('sourceHash');
+      expect(noteRepo.get(note.id)!.sourceHash).toBeTruthy();
+    });
+
+    it('a disk edit nobody reconciled is kept as a new "disk" revision and the caller is refused with the new rev', async () => {
+      const note = docs.createFileBackedNote({ projectId: fileBackedProjectId, folder: 'specs', title: 'edited-outside', bodyMd: '# v1', author: 'seed' });
+      writeFileSync(note.filePath!, '# edited on disk');
+      const client = await connect(fileBackedToken);
+
+      const result = await client.callTool({ name: 'update_note', arguments: { note: note.id, body_md: '# agent write', expected_rev: note.rev } });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toBe('409 stale_revision, current rev: 2');
+      expect(readFileSync(note.filePath!, 'utf8')).toBe('# edited on disk');
+      expect(noteRepo.get(note.id)).toMatchObject({ bodyMd: '# edited on disk', rev: 2 });
+      expect(noteRepo.listVersions(note.id).map((version) => version.author)).toEqual(['seed', 'disk']);
+    });
+
+    it('a note whose file escaped the docs folder fails opaquely, leaking no path', async () => {
+      const note = docs.createFileBackedNote({ projectId: fileBackedProjectId, folder: 'specs', title: 'escapee', bodyMd: '# v1', author: 'seed' });
+      const outsideFolder = mkdtempSync(join(tmpdir(), 'of-outside-'));
+      db.prepare('UPDATE notes SET file_path = ? WHERE id = ?').run(join(outsideFolder, 'x.md'), note.id);
+      const client = await connect(fileBackedToken);
+
+      const result = await client.callTool({ name: 'update_note', arguments: { note: note.id, body_md: '# v2', expected_rev: note.rev } });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toBe('request failed');
+    });
+
+    it('an oversized body is refused with the limit named', async () => {
+      const client = await connect(scopedToken);
+      const note = await createNote(client);
+
+      const halfTheCap = 'a'.repeat(600 * 1024);
+      await client.callTool({ name: 'append_to_note', arguments: { note: note.id, content: halfTheCap } });
+
+      const result = await client.callTool({ name: 'append_to_note', arguments: { note: note.id, content: halfTheCap } });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toMatch(/over the 1048576-byte cap/);
     });
 
     it('on another project\'s note fails exactly like a missing note', async () => {
@@ -353,6 +415,35 @@ describe('note tools', () => {
 
       expect(result.results).toHaveLength(50);
       expect(result.count).toBe(50);
+    });
+
+    it('rejects a 10k-term query with a clear failure instead of building a giant FTS expression', async () => {
+      const client = await connect(scopedToken);
+
+      const result = await client.callTool({ name: 'search_notes', arguments: { query: Array.from({ length: 10_000 }, (_, i) => `t${i}`).join(' ') } });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toMatch(/too long/);
+    });
+
+    it('rejects more than 16 terms even when the query is short, and accepts exactly 16', async () => {
+      const client = await connect(scopedToken);
+
+      const seventeenTerms = await client.callTool({ name: 'search_notes', arguments: { query: 'a b c d e f g h i j k l m n o p q' } });
+      const sixteenTerms = await client.callTool({ name: 'search_notes', arguments: { query: 'a b c d e f g h i j k l m n o p' } });
+
+      expect(seventeenTerms.isError).toBe(true);
+      expect(errorText(seventeenTerms)).toMatch(/too many terms/);
+      expect(sixteenTerms.isError).toBeFalsy();
+    });
+
+    it('a query with a NUL byte fails opaquely, leaking no SQLite text', async () => {
+      const client = await connect(scopedToken);
+
+      const result = await client.callTool({ name: 'search_notes', arguments: { query: 'a\u0000b' } });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toBe('request failed');
     });
 
     it('a session cannot search_notes across a project boundary', async () => {

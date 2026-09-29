@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 import { NOTE_FOLDERS, type Note, type NoteFolder } from '@openfleet/shared';
 import type { ProjectRecord, ProjectRepository } from '../projects/projectRepository.js';
 import type { DocsFolderFs } from './docsFolderFs.js';
-import { MAX_BODY_BYTES, NoteNotFoundError, NoteTooLargeError, type NoteService } from './noteService.js';
+import { MAX_BODY_BYTES, NoteNotFoundError, NoteTooLargeError, StaleRevisionError, type NoteService } from './noteService.js';
 import type { NoteRepository } from './noteRepository.js';
 
 const IMPORT_AUTHOR = 'import';
@@ -156,6 +156,7 @@ export class DocsFolderService {
     const realDocsFolderPath = this.deps.fs.realpathSync(this.requireDocsFolderPath(project));
     if (!this.isFileWithinDocsFolder(realDocsFolderPath, targetPath)) throw new PathEscapesDocsFolderError(targetPath);
     this.assertWithinCap(input.bodyMd);
+    this.refuseIfDiskEditIsUnreconciled(current);
 
     const tempPath = this.writeTempFile(targetPath, input.bodyMd);
     try {
@@ -171,6 +172,15 @@ export class DocsFolderService {
       this.deps.fs.unlinkSync(tempPath);
       throw error;
     }
+  }
+
+  /** The note's file path relative to its project's docs folder; null for a plain note or a path outside the folder. */
+  docsRelativePath(note: Note): string | null {
+    if (!note.filePath) return null;
+    const project = this.requireProject(note.projectId);
+    const realDocsFolderPath = this.deps.fs.realpathSync(this.requireDocsFolderPath(project));
+    if (!this.isPathContained(realDocsFolderPath, note.filePath)) return null;
+    return note.filePath.slice(realDocsFolderPath.length + 1);
   }
 
   /** Imports every markdown file under `existingPath`'s four docs subfolders not already known by file_path. Idempotent. */
@@ -252,7 +262,7 @@ export class DocsFolderService {
     if (diskHash === note.sourceHash) return;
 
     try {
-      this.deps.notes.updateFileBacked(note.id, { bodyMd: diskBodyMd, sourceHash: diskHash, expectedRev: note.rev, author: EXTERNAL_EDIT_AUTHOR });
+      this.applyExternalEdit(note, diskBodyMd);
       report.applied.push(note.id);
     } catch (error) {
       if (error instanceof NoteTooLargeError) {
@@ -260,6 +270,32 @@ export class DocsFolderService {
         return;
       }
       throw error;
+    }
+  }
+
+  private applyExternalEdit(note: Note, diskBodyMd: string): Note {
+    return this.deps.notes.updateFileBacked(note.id, {
+      bodyMd: diskBodyMd,
+      sourceHash: sha256(diskBodyMd),
+      expectedRev: note.rev,
+      author: EXTERNAL_EDIT_AUTHOR,
+    });
+  }
+
+  /** A file changed on disk since the last write is recorded as a 'disk' revision, then the caller is refused so it re-reads. */
+  private refuseIfDiskEditIsUnreconciled(note: Note): void {
+    const diskBodyMd = this.tryReadFile(note.filePath!);
+    const isFileMissing = diskBodyMd === undefined;
+    if (isFileMissing || sha256(diskBodyMd) === note.sourceHash) return;
+    const reconciled = this.applyExternalEdit(note, diskBodyMd);
+    throw new StaleRevisionError(reconciled.rev);
+  }
+
+  private tryReadFile(path: string): string | undefined {
+    try {
+      return this.deps.fs.readFileSync(path);
+    } catch {
+      return undefined;
     }
   }
 

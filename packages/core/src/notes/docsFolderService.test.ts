@@ -226,6 +226,19 @@ describe('DocsFolderService writeThrough', () => {
     expect(() => docs.writeThrough(note.id, { bodyMd: 'app version', expectedRev: staleRev, author: AUTHOR })).toThrow(StaleRevisionError);
   });
 
+  it('an unreconciled disk edit is applied as a new "disk" revision and the caller is refused with the new rev', () => {
+    const { fakeFs, noteRepo, docs } = setup();
+    const note = docs.createFileBackedNote({ projectId: 'p1', folder: 'specs', title: 'x', bodyMd: 'v1', author: AUTHOR });
+    fakeFs.files.set(note.filePath!, 'edited on disk');
+
+    const write = () => docs.writeThrough(note.id, { bodyMd: 'app version', expectedRev: note.rev, author: AUTHOR });
+
+    expect(write).toThrow(new StaleRevisionError(2));
+    expect(fakeFs.files.get(note.filePath!)).toBe('edited on disk');
+    expect(noteRepo.get(note.id)).toMatchObject({ bodyMd: 'edited on disk', rev: 2, sourceHash: sha256Hex('edited on disk') });
+    expect(noteRepo.listVersions(note.id).map((version) => version.author)).toEqual([AUTHOR, 'disk']);
+  });
+
   it('on a stale-revision write, removes the temp file and leaves both the target file and the DB row unchanged', () => {
     const { fakeFs, noteRepo, docs } = setup();
     const note = docs.createFileBackedNote({ projectId: 'p1', folder: 'specs', title: 'x', bodyMd: 'v1', author: AUTHOR });

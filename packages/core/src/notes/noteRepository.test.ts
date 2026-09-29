@@ -293,3 +293,27 @@ describe('NoteRepository delete', () => {
     expect(repository.delete('n1')).toBe(false);
   });
 });
+
+describe('NoteRepository version reads', () => {
+  it('getVersion returns the one version with its body, or undefined', () => {
+    const { db, repository } = openRepositoryWithProjects('p1');
+    repository.insert(aNote());
+    insertVersion(db, 'n1', 1);
+    insertVersion(db, 'n1', 2);
+
+    expect(repository.getVersion('n1', 2)).toMatchObject({ noteId: 'n1', rev: 2, bodyMd: 'body', author: 'tester' });
+    expect(repository.getVersion('n1', 3)).toBeUndefined();
+  });
+
+  it('listVersionSummaries returns id, rev, author and createdAt per version, oldest first, with no body', () => {
+    const { db, repository } = openRepositoryWithProjects('p1');
+    repository.insert(aNote());
+    insertVersion(db, 'n1', 2);
+    insertVersion(db, 'n1', 1);
+
+    expect(repository.listVersionSummaries('n1')).toEqual([
+      { id: 'n1-v1', rev: 1, author: 'tester', createdAt: 't0' },
+      { id: 'n1-v2', rev: 2, author: 'tester', createdAt: 't0' },
+    ]);
+  });
+});

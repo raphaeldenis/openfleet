@@ -34,6 +34,8 @@ export interface NoteVersionInsert {
   createdAt: string;
 }
 
+export type NoteVersionSummary = Pick<NoteVersion, 'id' | 'rev' | 'author' | 'createdAt'>;
+
 export interface NoteSearchHit {
   note: Note;
   snippet: string;
@@ -117,6 +119,16 @@ export class NoteRepository {
   listVersions(noteId: string): NoteVersion[] {
     const rows = this.db.prepare('SELECT * FROM note_versions WHERE note_id = ? ORDER BY rev').all(noteId) as unknown as VersionRow[];
     return rows.map(toNoteVersion);
+  }
+  getVersion(noteId: string, rev: number): NoteVersion | undefined {
+    const row = this.db.prepare('SELECT * FROM note_versions WHERE note_id = ? AND rev = ?').get(noteId, rev) as VersionRow | undefined;
+    return row ? toNoteVersion(row) : undefined;
+  }
+  /** History without bodies: what a listing needs, without reading every revision's full text. */
+  listVersionSummaries(noteId: string): NoteVersionSummary[] {
+    const rows = this.db.prepare('SELECT id, rev, author, created_at FROM note_versions WHERE note_id = ? ORDER BY rev')
+      .all(noteId) as unknown as Pick<VersionRow, 'id' | 'rev' | 'author' | 'created_at'>[];
+    return rows.map((row) => ({ id: row.id, rev: row.rev, author: row.author, createdAt: row.created_at }));
   }
   /** `escapedQuery` must already be FTS5-safe (see noteTools.ts's query escaping) — this method trusts it verbatim. */
   search(escapedQuery: string, { projectId, limit }: NoteSearchOptions): NoteSearchHit[] {

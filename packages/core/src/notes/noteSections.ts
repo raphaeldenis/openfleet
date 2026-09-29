@@ -47,6 +47,9 @@ const LINE_BREAK_PATTERN = /\r?\n/;
 const DEFAULT_LINE_BREAK = '\n';
 const STRUCTURE_CHANGE_MESSAGE = 'content would change the section structure';
 
+/** A section edit the caller can fix by changing its input; its message names only that input. */
+export class SectionError extends Error {}
+
 /**
  * Lists the `##` sections of a Markdown body, each with its 0-based first and last line.
  * Sections come from ATX headings (`#` or `##`, up to three leading spaces, optional closing `#`s)
@@ -71,7 +74,7 @@ export function replaceSection(bodyMd: string, heading: string, newContent: stri
   const wantedHeading = requireSingleLineHeading(heading);
   const parsed = parse(bodyMd);
   const located = locateSection(parsed, wantedHeading);
-  if (!located) throw new Error(`section "${heading}" not found`);
+  if (!located) throw new SectionError(`section "${heading}" not found`);
   if (newContent === contentOf(located)) return bodyMd;
 
   const { section, sectionIndex, lines, contentEnd } = located;
@@ -132,10 +135,10 @@ function separatorBeforeNewSection(lines: Line[], lineBreak: string): string {
 function requireSingleLineHeading(heading: string): string {
   const trimmedHeading = heading.trim();
   const isSingleNonEmptyLine = trimmedHeading !== '' && !/[\r\n]/.test(trimmedHeading);
-  if (!isSingleNonEmptyLine) throw new Error('heading must be a single non-empty line');
+  if (!isSingleNonEmptyLine) throw new SectionError('heading must be a single non-empty line');
 
   const endsWithClosingHashes = titleOf(trimmedHeading) !== trimmedHeading;
-  if (endsWithClosingHashes) throw new Error(`heading "${trimmedHeading}" must not end with closing #s`);
+  if (endsWithClosingHashes) throw new SectionError(`heading "${trimmedHeading}" must not end with closing #s`);
   return trimmedHeading;
 }
 
@@ -163,7 +166,7 @@ function ensureStructure(newBodyMd: string, oldParsed: ParsedBody, targetIndex: 
   const newParsed = parse(newBodyMd);
   const outlineIsUnchanged = outlineOf(newParsed.headings).join('\n') === expectedOutline.join('\n');
   const siblingsAreUnchanged = siblingSectionsMatch(sectionTexts(oldParsed), sectionTexts(newParsed), targetIndex);
-  if (!outlineIsUnchanged || !siblingsAreUnchanged) throw new Error(STRUCTURE_CHANGE_MESSAGE);
+  if (!outlineIsUnchanged || !siblingsAreUnchanged) throw new SectionError(STRUCTURE_CHANGE_MESSAGE);
   return newBodyMd;
 }
 

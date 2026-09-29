@@ -11,6 +11,11 @@ import { ManagerRepository } from '../managers/managerRepository.js';
 import { ManagerService } from '../managers/managerService.js';
 import { PulseScheduler } from '../managers/pulseScheduler.js';
 import { DEFAULT_MODEL_TABLE } from '../models.js';
+import { DocsFolderService } from '../notes/docsFolderService.js';
+import { expandMentions } from '../notes/mentionExpander.js';
+import { nodeDocsFolderFs } from '../notes/nodeDocsFolderFs.js';
+import { NoteRepository } from '../notes/noteRepository.js';
+import { NoteService } from '../notes/noteService.js';
 import { ProjectRepository } from '../projects/projectRepository.js';
 import { SessionService } from '../sessions/sessionService.js';
 import { DataStoreRepository } from '../stores/dataStoreRepository.js';
@@ -53,11 +58,14 @@ beforeEach(async () => {
   projects.insert({ id: 'p2', name: 'Two', docsFolderPath: null, createdAt: 't0' });
   storeRepo = new DataStoreRepository(db);
   let counter = 0;
-  stores = new DataStoreService({ repo: storeRepo, db, clock: () => '2026-01-01T00:00:00.000Z', newId: () => `id-${++counter}` });
+  const noteRepo = new NoteRepository(db);
+  const notes = new NoteService({ repo: noteRepo, db, expandMentions, clock: () => '2026-01-01T00:00:00.000Z', newId: () => `note-${++counter}` });
+  const docs = new DocsFolderService({ notes, noteRepo, projects, fs: nodeDocsFolderFs, clock: () => '2026-01-01T00:00:00.000Z' });
+  stores =new DataStoreService({ repo: storeRepo, db, clock: () => '2026-01-01T00:00:00.000Z', newId: () => `id-${++counter}` });
 
   server = await startServer({
     host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath: '/tmp/of-unused/config.json',
-    mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, worktreesRoot: '/tmp/of-wt', stores, storeRepo }),
+    mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, worktreesRoot: '/tmp/of-wt', stores, storeRepo, notes, noteRepo, docs }),
   });
 
   const scoped = await sessions.create({ directory: '/tmp', name: 'Gimli', harness: 'fake', emoji: '⛏️' });

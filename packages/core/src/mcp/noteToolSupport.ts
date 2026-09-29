@@ -1,0 +1,46 @@
+import type { Note, Session } from '@openfleet/shared';
+import type { DocsFolderService } from '../notes/docsFolderService.js';
+import { NoteNotFoundError, type NoteService } from '../notes/noteService.js';
+import type { NoteRepository } from '../notes/noteRepository.js';
+
+export interface NoteToolDeps {
+  notes: NoteService;
+  noteRepo: NoteRepository;
+  docs: DocsFolderService;
+  caller: Session;
+}
+
+/** What every note tool shares: the caller's project scope, ownership lookup, the CAS write path, attribution and the public note shape. */
+export function createNoteToolSupport({ notes, noteRepo, docs, caller }: NoteToolDeps) {
+  const author = () => `${caller.emoji} ${caller.name}`;
+
+  function requireProject(): { projectId: string } | undefined {
+    return caller.projectId ? { projectId: caller.projectId } : undefined;
+  }
+
+  /** The one lookup every note tool starts from: an id from another project reads exactly like a missing one. */
+  function requireOwnNote(projectId: string, id: string): Note {
+    const note = noteRepo.get(id);
+    if (!note || note.projectId !== projectId) throw new NoteNotFoundError(id);
+    return note;
+  }
+
+  /** The one CAS write every body-changing tool commits through: same body, same rev check, file-backed or not. */
+  function writeBody(current: Note, bodyMd: string, expectedRev: number): Note {
+    const write = { bodyMd, expectedRev, author: author() };
+    return current.filePath ? docs.writeThrough(current.id, write) : notes.update(current.id, write);
+  }
+
+  const noteSummary = (note: Note) => ({
+    id: note.id, title: note.title, folder: note.folder, rev: note.rev, shared: note.shared,
+    fileBacked: note.filePath !== null, updatedAt: note.updatedAt,
+  });
+
+  /** A note as callers see it: no absolute path, no content hash — only whether it is file-backed and where, inside the docs folder. */
+  const noteView = (note: Note) => ({
+    ...noteSummary(note),
+    projectId: note.projectId, bodyMd: note.bodyMd, createdAt: note.createdAt, docsRelativePath: docs.docsRelativePath(note),
+  });
+
+  return { author, requireProject, requireOwnNote, writeBody, noteSummary, noteView };
+}

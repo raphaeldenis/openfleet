@@ -34,6 +34,12 @@ export class FileBackedNoteError extends Error {
   }
 }
 
+export class VersionNotFoundError extends Error {
+  constructor(rev: number) {
+    super(`version not found: rev ${rev}`);
+  }
+}
+
 export interface NoteServiceDeps {
   repo: NoteRepository;
   db: DatabaseSync;

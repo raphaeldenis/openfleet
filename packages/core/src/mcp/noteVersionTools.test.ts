@@ -158,6 +158,26 @@ describe('note version tools', () => {
       expect(errorText(result)).toBe('409 stale_revision, current rev: 2');
     });
 
+    it('a stale caller gets stale_revision even when the section no longer exists', async () => {
+      const client = await connect(scopedToken);
+      const note = await createNote(client, { body_md: '## Log\nv1' });
+      await client.callTool({ name: 'update_note', arguments: { note: note.id, body_md: '## Other\nv2', expected_rev: note.rev } });
+
+      const result = await client.callTool({ name: 'update_note_section', arguments: { note: note.id, heading: 'Log', content: 'x', expected_rev: note.rev } });
+
+      expect(errorText(result)).toBe('409 stale_revision, current rev: 2');
+    });
+
+    it('a fresh caller naming a missing section gets the section error', async () => {
+      const client = await connect(scopedToken);
+      const note = await createNote(client, { body_md: '## Log\nv1' });
+
+      const result = await client.callTool({ name: 'update_note_section', arguments: { note: note.id, heading: 'Nope', content: 'x', expected_rev: note.rev } });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toBe('section "Nope" not found');
+    });
+
     it('on another project\'s note fails exactly like a missing note', async () => {
       const owner = await connect(scopedToken);
       const note = await createNote(owner, { body_md: '## Log\nv1' });
@@ -229,6 +249,18 @@ describe('note version tools', () => {
       expect(result.versions[0].bodyMd).toBeUndefined();
     });
 
+    it('attributes every version to "<emoji> <name>" after create, update, append and restore', async () => {
+      const client = await connect(scopedToken);
+      const note = await createNote(client, { body_md: 'v1' });
+      await client.callTool({ name: 'update_note', arguments: { note: note.id, body_md: 'v2', expected_rev: note.rev } });
+      await client.callTool({ name: 'append_to_note', arguments: { note: note.id, content: 'more' } });
+      await client.callTool({ name: 'restore_note_version', arguments: { note: note.id, rev: 1 } });
+
+      const result = text(await client.callTool({ name: 'list_note_versions', arguments: { note: note.id } }));
+
+      expect(result.versions.map((v: { author: string }) => v.author)).toEqual(Array(4).fill('⛏️ Gimli'));
+    });
+
     it('on another project\'s note fails exactly like a missing note', async () => {
       const owner = await connect(scopedToken);
       const note = await createNote(owner);
@@ -257,6 +289,18 @@ describe('note version tools', () => {
       expect(versions.versions.map((v: { rev: number }) => v.rev)).toEqual([1, 2, 3]);
       const originalVersion = text(await client.callTool({ name: 'get_note_version', arguments: { note: note.id, rev: 1 } }));
       expect(originalVersion.bodyMd).toBe('v1');
+    });
+
+    it('with expected_rev, refuses a stale caller and leaves the note untouched', async () => {
+      const client = await connect(scopedToken);
+      const note = await createNote(client, { body_md: 'v1' });
+      await client.callTool({ name: 'update_note', arguments: { note: note.id, body_md: 'v2', expected_rev: note.rev } });
+
+      const stale = await client.callTool({ name: 'restore_note_version', arguments: { note: note.id, rev: 1, expected_rev: 1 } });
+      const fresh = text(await client.callTool({ name: 'restore_note_version', arguments: { note: note.id, rev: 1, expected_rev: 2 } }));
+
+      expect(errorText(stale)).toBe('409 stale_revision, current rev: 2');
+      expect(fresh).toMatchObject({ bodyMd: 'v1', rev: 3 });
     });
 
     it('on another project\'s note fails exactly like a missing note', async () => {
