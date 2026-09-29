@@ -2,7 +2,7 @@ import { MANAGER_ROLE } from '@openfleet/shared';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, mkdtempSync, realpathSync, symlinkSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
@@ -32,9 +32,11 @@ import { createMcpHandler } from './mcpServer.js';
 
 // create_session now requires its directory to already exist (fix loop 2, decision 1+3+5) — this makes
 // that directory real under the shared worktrees root fixture, idempotently across test runs.
+let createdDirectories: string[] = [];
 function existingWorktreeDir(name: string): string {
   const path = join('/tmp/of-wt', name);
   mkdirSync(path, { recursive: true });
+  createdDirectories.push(path);
   return path;
 }
 
@@ -74,7 +76,11 @@ beforeEach(async () => {
   parentId = parent.id;
   parentToken = harness.launches[0]!.mcpToken;
 });
-afterEach(() => server.close());
+afterEach(async () => {
+  await server.close();
+  for (const directory of createdDirectories) rmSync(directory, { recursive: true, force: true });
+  createdDirectories = [];
+});
 
 async function connect(token: string) {
   const client = new Client({ name: 'test', version: '0.0.0' });
@@ -501,6 +507,7 @@ describe('create_session guardrails', () => {
 
   it('rejects a directory that escapes the worktrees root through a symlink plus a ".." segment, even with a decoy at the lexically-collapsed path', async () => {
     const outside = mkdtempSync(join(tmpdir(), 'of-outside-'));
+    createdDirectories.push(outside);
     const deep = join(outside, 'deep');
     mkdirSync(deep);
     const target = join(outside, 'target');
