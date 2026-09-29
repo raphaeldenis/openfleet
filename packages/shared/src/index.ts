@@ -4,3 +4,4 @@ export * from './hooks.js';
 export * from './events.js';
 export * from './notes.js';
 export * from './dataStores.js';
+export * from './models.js';

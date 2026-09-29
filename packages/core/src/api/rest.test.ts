@@ -222,6 +222,23 @@ describe('REST', () => {
     expect((await res.json()).model).toBe('claude-opus-5-5');
   });
 
+  it('accepts the Opus 1M-context id, brackets included, when creating a session', async () => {
+    const res = await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake', model: 'claude-opus-5-5[1m]' }) });
+
+    expect(res.status).toBe(201);
+    expect((await res.json()).model).toBe('claude-opus-5-5[1m]');
+  });
+
+  it.each([
+    ['a flag-shaped id', '--x'],
+    ['a short-flag-shaped id', '-p'],
+    ['an id with a space inside', 'a b'],
+    ['an id with a newline inside', 'a\nb'],
+  ])('400s a session create whose model is %s, so it can never reach the claude CLI as an extra flag', async (_label, model) => {
+    const res = await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake', model }) });
+    expect(res.status).toBe(400);
+  });
+
   it('404s a model change for an unknown session', async () => {
     const res = await api('/api/sessions/nope/model', { method: 'POST', body: JSON.stringify({ model: 'sonnet' }) });
     expect(res.status).toBe(404);
@@ -271,6 +288,23 @@ describe('REST', () => {
     const created = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
     const res = await api(`/api/sessions/${created.id}/model`, { method: 'POST', body: JSON.stringify({ model: '' }) });
     expect(res.status).toBe(400);
+  });
+
+  it.each([
+    ['a flag-shaped id', '--x'],
+    ['a short-flag-shaped id', '-p'],
+    ['an id with a space inside', 'a b'],
+    ['an id with a newline inside', 'a\nb'],
+  ])('400s a model change whose model is %s, so it can never reach the claude CLI as an extra flag', async (_label, model) => {
+    const created = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
+    const res = await api(`/api/sessions/${created.id}/model`, { method: 'POST', body: JSON.stringify({ model }) });
+    expect(res.status).toBe(400);
+  });
+
+  it('accepts the Opus 1M-context id, brackets included, on a model change', async () => {
+    const created = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
+    const res = await api(`/api/sessions/${created.id}/model`, { method: 'POST', body: JSON.stringify({ model: 'claude-opus-5-5[1m]' }) });
+    expect(res.status).toBe(200);
   });
 
   it('answers a non-JSON model body with a 400 rather than a silent 200', async () => {

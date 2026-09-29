@@ -1,4 +1,4 @@
-import { HOOK_EVENT_NAMES } from '@openfleet/shared';
+import { HOOK_EVENT_NAMES, isValidModelId } from '@openfleet/shared';
 import type { HarnessLaunch } from '../harness.js';
 
 const HOOK_TIMEOUT_SECONDS = 600;
@@ -16,6 +16,12 @@ export function buildClaudeLaunchConfig(launch: HarnessLaunch): ClaudeLaunchConf
   // interactive picker, which would hang forever inside a PTY nothing is watching.
   if (launch.resuming && !UUID_PATTERN.test(launch.sessionId)) {
     throw new Error(`cannot resume with a missing or non-UUID session id: "${launch.sessionId}"`);
+  }
+  // Defence in depth: every REST/MCP entry validates a model id before it reaches here, but --model takes
+  // this value directly, and a value starting with '-' or containing whitespace would be read as another
+  // CLI flag instead.
+  if (launch.model !== undefined && !isValidModelId(launch.model)) {
+    throw new Error(`refusing to launch with an invalid model id: "${launch.model}"`);
   }
   const settings = { hooks: buildHooks(launch.hookUrl) };
   const mcpConfig = {
