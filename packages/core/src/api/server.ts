@@ -15,6 +15,7 @@ import type { DataStoreService } from '../stores/dataStoreService.js';
 import type { WorkingStateService } from '../workingState/workingStateService.js';
 import { ALLOWED_ORIGINS } from './allowedOrigins.js';
 import { registerDataStoreRoutes } from './dataStoreRoutes.js';
+import type { StopRefusal } from '../workingState/stopRefusal.js';
 import { hooksHandler } from './hooksHandler.js';
 import { registerNoteRoutes } from './noteRoutes.js';
 import { registerProjectRoutes } from './projectRoutes.js';
@@ -38,6 +39,8 @@ export interface ServerDeps {
   stores?: DataStoreService; storeRepo?: DataStoreRepository; projects?: ProjectRepository;
   // The working-state route, event and snapshot fields exist only when the daemon hands over the service.
   workingStates?: WorkingStateService; workingStateMaxAgeMinutes?: number;
+  // Without it every Stop is answered {}, as before the working state existed.
+  stopRefusal?: StopRefusal;
 }
 
 function applyCorsHeaders(req: IncomingMessage, res: ServerResponse): void {

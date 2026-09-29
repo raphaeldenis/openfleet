@@ -702,6 +702,7 @@ export class SessionService {
   // same alias is kept for the drift comparison of the next recording. An id resolved under another alias is not.
   private rememberResolvedModelOfSameAlias(session: Session): void {
     const requestedModel = session.model ?? null;
+    if (this.resolvedModelBeforeSameAliasRelaunch.get(session.id)?.requestedModel !== requestedModel) this.resolvedModelBeforeSameAliasRelaunch.delete(session.id);
     const resolvedUnderSameAlias = this.repo.resolvedModelUnderAlias({ id: session.id, requestedModel });
     if (resolvedUnderSameAlias === undefined) return;
     this.resolvedModelBeforeSameAliasRelaunch.set(session.id, { requestedModel, resolvedModel: resolvedUnderSameAlias });
