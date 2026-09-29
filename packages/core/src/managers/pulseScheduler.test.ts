@@ -16,6 +16,9 @@ function setup() {
   const scheduler = new PulseScheduler({ managers, sessions, bus });
   return { db, bus, harness, sessions, managers, scheduler };
 }
+// For tests that build their own SessionService and scheduler: a bus shared with setup()'s scheduler
+// would also feed that one, which reacts to turn and close events on the same database.
+const freshDatabaseAndBus = () => ({ db: openDatabase(':memory:'), bus: new EventBus() });
 const hook = (session_id: string, event: object) => ({ kind: 'hook' as const, event: { session_id, ...event } as never });
 // Counts pulses that have at least started (their body write landed), regardless of whether their
 // separate submit keystroke has fired yet — what these cadence tests actually care about.
@@ -38,7 +41,7 @@ describe('PulseScheduler', () => {
     expect(harness.handles[0]!.written).toEqual([PULSE_MESSAGE, '\r']);
   });
 
-  it('queues the pulse instead of delivering it while the manager is waiting_permission', async () => {
+  it('holds no pulse while the manager is waiting_permission and pulses a full interval after its turn ends', async () => {
     const { scheduler, sessions, managers, harness } = setup();
     const manager = await sessions.create({ directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake' });
     sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'SessionStart' }));
@@ -52,11 +55,14 @@ describe('PulseScheduler', () => {
 
     sessions.applyInput(manager.id, { kind: 'permission_resolved' });
     sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'Stop' }));
+    vi.advanceTimersByTime(999);
+    expect(harness.handles[0]!.written).toEqual([]);
+    vi.advanceTimersByTime(1);
     vi.advanceTimersByTime(SUBMIT_KEYSTROKE_DELAY_MS);
     expect(harness.handles[0]!.written).toEqual([PULSE_MESSAGE, '\r']);
   });
 
-  it('reschedules the next pulse pulseSeconds after the one it just sent', async () => {
+  it('reschedules the next pulse pulseSeconds after the turn the previous one started', async () => {
     const { scheduler, sessions, managers, harness } = setup();
     const manager = await sessions.create({ directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake' });
     sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'SessionStart' }));
@@ -72,7 +78,7 @@ describe('PulseScheduler', () => {
     sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'UserPromptSubmit' }));
     sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'Stop' }));
 
-    vi.advanceTimersByTime(999 - SUBMIT_KEYSTROKE_DELAY_MS);
+    vi.advanceTimersByTime(999);
     expect(pulseCount(harness.handles[0]!.written)).toBe(1);
     vi.advanceTimersByTime(1);
     expect(pulseCount(harness.handles[0]!.written)).toBe(2);
@@ -109,16 +115,16 @@ describe('PulseScheduler', () => {
     sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'UserPromptSubmit' }));
     sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'Stop' }));
 
-    // The re-arm is anchored to the manual pulse's own moment, not the original schedule: the next
-    // pulse lands a full pulseSeconds after pulseNow, not after whatever the original cadence expected.
-    vi.advanceTimersByTime(999 - SUBMIT_KEYSTROKE_DELAY_MS);
+    // The re-arm is anchored to the turn the manual pulse started, not the original schedule: the next
+    // pulse lands a full pulseSeconds after that turn ended.
+    vi.advanceTimersByTime(999);
     expect(harness.handles[0]!.written).toEqual([PULSE_MESSAGE, '\r']); // still only one pulse started
     vi.advanceTimersByTime(1);
     expect(harness.handles[0]!.written).toEqual([PULSE_MESSAGE, '\r', PULSE_MESSAGE]);
   });
 
   it('restarting the scheduler on the same db resumes cadence from the persisted lastPulseAt', async () => {
-    const { db, bus } = setup();
+    const { db, bus } = freshDatabaseAndBus();
     const harness = new FakeHarness();
     let sessions = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
     const manager = await sessions.create({ directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake' });
@@ -244,7 +250,7 @@ describe('PulseScheduler — hostile cases', () => {
   });
 
   it('calling start() twice does not double-fire a manager due at boot', async () => {
-    const { db, bus } = setup();
+    const { db, bus } = freshDatabaseAndBus();
     const harness = new FakeHarness();
     const sessions = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
     const manager = await sessions.create({ directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake' });
@@ -262,7 +268,7 @@ describe('PulseScheduler — hostile cases', () => {
   });
 
   it('a manager already overdue at boot pulses on the very next tick instead of waiting a full pulseSeconds', async () => {
-    const { db, bus } = setup();
+    const { db, bus } = freshDatabaseAndBus();
     const harness = new FakeHarness();
     const sessions = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
     const manager = await sessions.create({ directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake' });
@@ -352,7 +358,7 @@ describe('PulseScheduler — hostile cases', () => {
   });
 
   it('a manager overdue by several cadences pulses exactly once at start(), then waits a full cadence for the next one', async () => {
-    const { db, bus } = setup();
+    const { db, bus } = freshDatabaseAndBus();
     const harness = new FakeHarness();
     const sessions = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
     const manager = await sessions.create({ directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake' });
@@ -370,44 +376,45 @@ describe('PulseScheduler — hostile cases', () => {
     sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'UserPromptSubmit' }));
     sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'Stop' })); // confirms the turn, clearing the turn-start guard
 
-    vi.advanceTimersByTime(999 - SUBMIT_KEYSTROKE_DELAY_MS);
+    vi.advanceTimersByTime(999);
     expect(pulseCount(harness.handles[0]!.written)).toBe(1);
     vi.advanceTimersByTime(1);
-    expect(pulseCount(harness.handles[0]!.written)).toBe(2); // the next one waits a full cadence from the catch-up pulse
+    expect(pulseCount(harness.handles[0]!.written)).toBe(2); // the next one waits a full cadence from the end of the catch-up turn
   });
 
-  it('nextPulseAt in the view matches the real armed deadline across coalesced cycles, and a restart resumes from it', async () => {
-    const { db, bus } = setup();
+  it('nextPulseAt in the view matches the real armed deadline across repeated cycles, and a restarted manager pulses a full cadence after it comes back', async () => {
+    const { db, bus } = freshDatabaseAndBus();
     const harness = new FakeHarness();
     let sessions = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
     const manager = await sessions.create({ directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake' });
     sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'SessionStart' }));
-    sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: {} }));
     const managers = new ManagerRepository(db);
     managers.insert({ sessionId: manager.id, pulseSeconds: 1, childrenCap: 1, missionText: 'x', createdAt: new Date().toISOString() });
     let scheduler = new PulseScheduler({ managers, sessions, bus });
     scheduler.onManagerCreated(managers.get(manager.id)!);
 
-    vi.advanceTimersByTime(1000); // cycle 1: enqueues the pulse (gated, so it stays queued)
+    vi.advanceTimersByTime(1000); // cycle 1: pulses the idle manager
     const afterCycle1 = managers.get(manager.id)!.lastPulseAt!;
-    vi.advanceTimersByTime(1000); // cycle 2: coalesced (still queued from cycle 1)
+    vi.advanceTimersByTime(1000); // cycle 2: pulses again, the manager stayed silent
     const afterCycle2 = managers.get(manager.id)!.lastPulseAt!;
-    expect(afterCycle2).not.toBe(afterCycle1); // lastPulseAt still advances on a coalesced cycle
+    expect(afterCycle2).not.toBe(afterCycle1);
 
     const view = toManagerView(managers.get(manager.id)!, 0);
     expect(view.nextPulseAt).toBe(new Date(new Date(afterCycle2).getTime() + 1000).toISOString());
 
-    // Restart: rebuild SessionService on the same db and confirm the cadence resumes from the persisted lastPulseAt.
+    // Restart: rebuild SessionService on the same db. The resumed CLI's SessionStart is a turn boundary like
+    // any other, so the heartbeat runs a full cadence from the moment the manager is back.
     scheduler.stop();
     sessions = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
     await sessions.resumeAll();
     scheduler = new PulseScheduler({ managers, sessions, bus });
     scheduler.start();
+    sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'SessionStart' }));
 
     vi.advanceTimersByTime(999);
     expect(managers.get(manager.id)!.lastPulseAt).toBe(afterCycle2); // not due yet
     vi.advanceTimersByTime(1);
-    expect(managers.get(manager.id)!.lastPulseAt).not.toBe(afterCycle2); // fires exactly at the persisted deadline
+    expect(managers.get(manager.id)!.lastPulseAt).not.toBe(afterCycle2); // fires a full cadence after the manager came back
   });
 
   it('eventually delivers a pulse after a transient submit write failure, with no hook transition at all', async () => {
@@ -495,5 +502,204 @@ describe('PulseScheduler — hostile cases', () => {
     expect(consoleErrorSpy).toHaveBeenCalledTimes(3);
 
     consoleErrorSpy.mockRestore();
+  });
+});
+
+describe('PulseScheduler — heartbeat and wake-ups', () => {
+  const HEARTBEAT_SECONDS = 100;
+  const HEARTBEAT_MS = HEARTBEAT_SECONDS * 1000;
+
+  async function idleManager() {
+    const world = setup();
+    const manager = await world.sessions.create({ directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake' });
+    world.sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'SessionStart' }));
+    world.managers.insert({ sessionId: manager.id, pulseSeconds: HEARTBEAT_SECONDS, childrenCap: 3, missionText: 'x', createdAt: new Date().toISOString() });
+    world.scheduler.onManagerCreated(world.managers.get(manager.id)!);
+    const managerWrites = () => world.harness.handles[0]!.written;
+    const startTurn = () => world.sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'UserPromptSubmit' }));
+    const endTurn = () => world.sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'Stop' }));
+    return { ...world, manager, managerWrites, startTurn, endTurn };
+  }
+
+  async function spawnChild(world: Awaited<ReturnType<typeof idleManager>>, name: string) {
+    const child = await world.sessions.create({ directory: '/tmp', name, emoji: '🛠️', harness: 'fake', parentId: world.manager.id });
+    const childHandle = world.harness.handles[world.harness.handles.length - 1]!;
+    return { child, childHandle };
+  }
+
+  it('manager that had a turn during the interval receives no pulse at the end of it, and one a full interval after the turn', async () => {
+    const { managerWrites, startTurn, endTurn } = await idleManager();
+
+    vi.advanceTimersByTime(60_000);
+    startTurn();
+    endTurn();
+    vi.advanceTimersByTime(HEARTBEAT_MS - 60_000);
+    vi.advanceTimersByTime(SUBMIT_KEYSTROKE_DELAY_MS);
+    expect(pulseCount(managerWrites())).toBe(0);
+
+    vi.advanceTimersByTime(60_000 - SUBMIT_KEYSTROKE_DELAY_MS);
+    vi.advanceTimersByTime(SUBMIT_KEYSTROKE_DELAY_MS);
+    expect(pulseCount(managerWrites())).toBe(1);
+  });
+
+  it('a turn started by a human prompt restarts the interval like any other turn', async () => {
+    const { managerWrites, sessions, manager } = await idleManager();
+
+    vi.advanceTimersByTime(90_000);
+    sessions.sendMessage({ sessionId: manager.id, body: 'human says hi' });
+    vi.advanceTimersByTime(SUBMIT_KEYSTROKE_DELAY_MS);
+    sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'UserPromptSubmit' }));
+    sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'Stop' }));
+    vi.advanceTimersByTime(20_000);
+
+    expect(pulseCount(managerWrites())).toBe(0);
+  });
+
+  it('manager busy in a long turn receives no pulse at the end of the interval and none queued for after the turn', async () => {
+    const { managerWrites, startTurn, endTurn, sessions, manager } = await idleManager();
+
+    startTurn();
+    vi.advanceTimersByTime(HEARTBEAT_MS);
+    vi.advanceTimersByTime(SUBMIT_KEYSTROKE_DELAY_MS);
+    expect(managerWrites()).toEqual([]);
+    expect(sessions.queuedMessageCount(manager.id)).toBe(0);
+
+    endTurn();
+    vi.advanceTimersByTime(SUBMIT_KEYSTROKE_DELAY_MS);
+    expect(managerWrites()).toEqual([]);
+  });
+
+  it('manager waiting on a permission receives no pulse at the end of the interval', async () => {
+    const { managerWrites, sessions, manager } = await idleManager();
+    sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: {} }));
+
+    vi.advanceTimersByTime(HEARTBEAT_MS);
+
+    expect(managerWrites()).toEqual([]);
+    expect(sessions.queuedMessageCount(manager.id)).toBe(0);
+  });
+
+  it('idle manager receives a pulse at the end of the interval', async () => {
+    const { managerWrites } = await idleManager();
+
+    vi.advanceTimersByTime(HEARTBEAT_MS);
+    expect(pulseCount(managerWrites())).toBe(1);
+  });
+
+  it('closed manager receives no pulse', async () => {
+    const { managerWrites, harness } = await idleManager();
+    harness.handles[0]!.emitExit(0);
+
+    vi.advanceTimersByTime(HEARTBEAT_MS * 3);
+
+    expect(managerWrites()).toEqual([]);
+  });
+
+  it('child message to an idle manager starts its turn at once, without waiting for the pulse', async () => {
+    const world = await idleManager();
+    const { child } = await spawnChild(world, 'Gimli');
+
+    world.sessions.sendMessage({ sessionId: world.manager.id, body: 'need a decision', fromSessionId: child.id });
+
+    expect(world.managerWrites().some((entry) => entry.includes('need a decision'))).toBe(true);
+  });
+
+  it('manager receives exactly one line when its child closes, marked like a pulse', async () => {
+    const world = await idleManager();
+    const { childHandle } = await spawnChild(world, 'Gimli');
+
+    childHandle.emitExit(3);
+    vi.advanceTimersByTime(SUBMIT_KEYSTROKE_DELAY_MS);
+
+    expect(world.managerWrites()).toEqual(['[pulse] Child "Gimli" closed (exit code 3).', '\r']);
+  });
+
+  it('close of a child ordered by the manager still wakes it with one line', async () => {
+    const world = await idleManager();
+    const { child } = await spawnChild(world, 'Gimli');
+
+    await world.sessions.close(child.id);
+    vi.advanceTimersByTime(SUBMIT_KEYSTROKE_DELAY_MS);
+
+    const wakeLines = world.managerWrites().filter((entry) => entry.startsWith('[pulse] Child'));
+    expect(wakeLines).toHaveLength(1);
+  });
+
+  it('close of a child that reports no exit code says the exit code is unknown', async () => {
+    const world = await idleManager();
+    const { child } = await spawnChild(world, 'Gimli');
+
+    world.bus.emit({ type: 'session.closed', sessionId: child.id });
+    vi.advanceTimersByTime(SUBMIT_KEYSTROKE_DELAY_MS);
+
+    expect(world.managerWrites()).toEqual(['[pulse] Child "Gimli" closed (exit code unknown).', '\r']);
+  });
+
+  it('close of a child restarts the manager interval like the turn it starts', async () => {
+    const world = await idleManager();
+    const { childHandle } = await spawnChild(world, 'Gimli');
+    vi.advanceTimersByTime(90_000);
+
+    childHandle.emitExit(0);
+    world.startTurn();
+    world.endTurn();
+    vi.advanceTimersByTime(20_000);
+
+    expect(pulseCount(world.managerWrites())).toBe(0);
+  });
+
+  it('close of a session that is not a manager\'s child wakes nobody', async () => {
+    const world = await idleManager();
+    await world.sessions.create({ directory: '/tmp', name: 'Loner', emoji: '🐺', harness: 'fake' });
+    const lonerHandle = world.harness.handles[1]!;
+
+    lonerHandle.emitExit(0);
+
+    expect(world.managerWrites()).toEqual([]);
+  });
+
+  it('close of a child whose manager already closed neither throws, writes nor logs an error', async () => {
+    const world = await idleManager();
+    const { childHandle } = await spawnChild(world, 'Gimli');
+    world.harness.handles[0]!.emitExit(0);
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    expect(() => childHandle.emitExit(0)).not.toThrow();
+
+    expect(world.managerWrites()).toEqual([]);
+    expect(consoleErrorSpy).not.toHaveBeenCalled();
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('close of a child of a plain session, one that is no manager, wakes nobody', async () => {
+    const world = await idleManager();
+    const plainParent = await world.sessions.create({ directory: '/tmp', name: 'Plain', emoji: '🙂', harness: 'fake' });
+    const plainParentHandle = world.harness.handles[1]!;
+    world.sessions.applyInput(plainParent.id, hook(plainParent.id, { hook_event_name: 'SessionStart' }));
+    await world.sessions.create({ directory: '/tmp', name: 'Kid', emoji: '🧒', harness: 'fake', parentId: plainParent.id });
+    const kidHandle = world.harness.handles[2]!;
+
+    kidHandle.emitExit(0);
+
+    expect(plainParentHandle.written).toEqual([]);
+  });
+
+  it('a child closing while the daemon shuts down leaves no wake line for its manager', async () => {
+    const world = await idleManager();
+    const { childHandle } = await spawnChild(world, 'Gimli');
+    world.scheduler.stop();
+
+    childHandle.emitExit(0);
+
+    expect(world.managerWrites()).toEqual([]);
+    expect(world.sessions.queuedMessageCount(world.manager.id)).toBe(0);
+  });
+
+  it('close of the manager itself sends no wake line', async () => {
+    const world = await idleManager();
+
+    world.harness.handles[0]!.emitExit(0);
+
+    expect(world.managerWrites()).toEqual([]);
   });
 });
