@@ -234,6 +234,7 @@ export class DataStoreService {
       ...(config.orderBy ?? []).map((term) => term.columnId),
       ...(config.groupByColumnId ? [config.groupByColumnId] : []),
     ]);
+    this.assertValidGroupByColumn(storeId, input.viewType, config);
     return this.guarded(() => this.repo.insertView(storeId, { id: this.newId(), displayName, viewType: input.viewType, config, at: this.clock() }));
   }
 
@@ -252,6 +253,7 @@ export class DataStoreService {
       ...(config.orderBy ?? []).map((term) => term.columnId),
       ...(config.groupByColumnId ? [config.groupByColumnId] : []),
     ]);
+    this.assertValidGroupByColumn(view.storeId, view.viewType, config);
     return this.guarded(() => this.repo.updateView(viewId, config));
   }
 
@@ -293,6 +295,13 @@ export class DataStoreService {
     const unknown = columnIds.filter((id) => !known.has(id));
     if (unknown.length > 0) throw new UnknownColumnError(unknown);
     return columns;
+  }
+
+  /** A kanban view is unreadable without a group-by column that is a select column of its own store; other view types don't care. */
+  private assertValidGroupByColumn(storeId: string, viewType: ViewType, config: DsViewConfig): void {
+    if (viewType !== 'kanban') return;
+    const groupByColumn = config.groupByColumnId ? this.repo.listColumns(storeId).find((column) => column.id === config.groupByColumnId) : undefined;
+    if (groupByColumn?.columnType !== 'select') throw new InvalidViewConfigError('A kanban view\'s groupByColumnId must be a select column of the same store');
   }
 
   private validateColumnDefinition(columnType: ColumnType, options: SelectOption[] | undefined): SelectOption[] | undefined {

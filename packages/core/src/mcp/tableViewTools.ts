@@ -1,8 +1,8 @@
-import { DsViewConfigSchema, ViewTypeSchema, type DsViewConfig, type Session, type ViewType } from '@openfleet/shared';
+import { DsViewConfigSchema, ViewTypeSchema, type Session } from '@openfleet/shared';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { RowNotFoundError, StoreNotFoundError, type DataStoreRepository } from '../stores/dataStoreRepository.js';
-import { InvalidViewConfigError, ViewNotFoundError, type DataStoreService } from '../stores/dataStoreService.js';
+import { ViewNotFoundError, type DataStoreService } from '../stores/dataStoreService.js';
 
 const ok = (payload: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(payload) }] });
 const fail = (message: string) => ({ content: [{ type: 'text' as const, text: message }], isError: true });
@@ -30,15 +30,6 @@ function guarded<T>(work: () => T) {
   }
 }
 
-/** A kanban view is unreadable without a group-by column that is a select column of its own store; other view types don't care. */
-function assertKanbanGroupIsSelectColumn(storeRepo: DataStoreRepository, storeId: string, viewType: ViewType, config: DsViewConfig): void {
-  if (viewType !== 'kanban') return;
-  const groupByColumn = config.groupByColumnId
-    ? storeRepo.listColumns(storeId).find((column) => column.id === config.groupByColumnId)
-    : undefined;
-  if (groupByColumn?.columnType !== 'select') throw new InvalidViewConfigError('A kanban view\'s groupByColumnId must reference a select column of the same store');
-}
-
 export function registerTableViewTools(server: McpServer, deps: RegisterTableViewToolsDeps): void {
   const { stores, storeRepo, caller } = deps;
 
@@ -52,12 +43,7 @@ export function registerTableViewTools(server: McpServer, deps: RegisterTableVie
   }, async ({ store, display_name, view_type, config }) => {
     const scope = requireProject();
     if (!scope) return fail('this session has no project');
-    return guarded(() => {
-      const owningStore = storeRepo.findStore(store);
-      if (!owningStore || owningStore.projectId !== scope.projectId) throw new StoreNotFoundError(store);
-      assertKanbanGroupIsSelectColumn(storeRepo, store, view_type, config ?? {});
-      return stores.createView(store, { ...scope, displayName: display_name, viewType: view_type, config });
-    });
+    return guarded(() => stores.createView(store, { ...scope, displayName: display_name, viewType: view_type, config }));
   });
 
   server.registerTool('list_data_store_views', {
@@ -75,13 +61,7 @@ export function registerTableViewTools(server: McpServer, deps: RegisterTableVie
   }, async ({ view, config }) => {
     const scope = requireProject();
     if (!scope) return fail('this session has no project');
-    return guarded(() => {
-      const existing = storeRepo.findView(view);
-      const owner = existing ? storeRepo.findStore(existing.storeId) : undefined;
-      if (!existing || owner?.projectId !== scope.projectId) throw new ViewNotFoundError(view);
-      assertKanbanGroupIsSelectColumn(storeRepo, existing.storeId, existing.viewType, config);
-      return stores.updateView(view, { ...scope, config });
-    });
+    return guarded(() => stores.updateView(view, { ...scope, config }));
   });
 
   server.registerTool('delete_data_store_view', {
