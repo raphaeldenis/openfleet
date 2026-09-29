@@ -7,6 +7,9 @@ export type ColumnType = z.infer<typeof ColumnTypeSchema>;
 export const SelectOptionSchema = z.object({ id: z.string().min(1), label: z.string().min(1) });
 export type SelectOption = z.infer<typeof SelectOptionSchema>;
 
+export const AutoValueSchema = z.enum(['created_at']);
+export type AutoValue = z.infer<typeof AutoValueSchema>;
+
 export interface DsColumn {
   id: string;
   storeId: string;
@@ -14,6 +17,7 @@ export interface DsColumn {
   columnType: ColumnType;
   options: SelectOption[] | null;
   sortOrder: number;
+  autoValue?: AutoValue;
 }
 
 export interface DataStore {
