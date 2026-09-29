@@ -53,6 +53,7 @@ export class DaemonShuttingDownError extends Error {
 
 const OUTPUT_BUFFER_LIMIT = 200 * 1024;
 export const DEFAULT_CLOSE_ESCALATE_MS = 5000;
+const RECORDING_RETRY_DELAY_MS = 500;
 const DEFAULT_RESUME_TIMEOUT_MS = 15_000;
 // A cold real CLI can sit waiting on an auth or trust prompt far longer than a resume ever should, so a
 // first launch gets its own, more generous ceiling instead of sharing resumeTimeoutMs (AUD-06).
@@ -268,7 +269,7 @@ export class SessionService {
   private readonly interruptWatches = new Map<string, InterruptWatch>();
   // Presence means "this launch has no recorded resolved model yet"; the value is the launch's start time
   // and whether its recording failure and its transcript name mismatch were already logged.
-  private readonly pendingRecordings = new Map<string, { launchedAt: string; failureLogged: boolean; nameMismatchLogged: boolean }>();
+  private readonly pendingRecordings = new Map<string, { launchedAt: string; failureLogged: boolean; nameMismatchLogged: boolean; retryTimer?: ReturnType<typeof setTimeout> }>();
   // Sessions whose model was switched and whose relaunch has not happened yet: the resolved model the old
   // launch recorded stays visible until the relaunch really replaces the process.
   private readonly modelSwitchesAwaitingRelaunch = new Set<string>();
@@ -295,7 +296,7 @@ export class SessionService {
     if (existsSync(spec.directory)) this.repo.setDirectoryRealpath(id, realpathSync.native(spec.directory));
     this.warnIfPermissiveSettings(spec.harness, spec.directory);
     const harness = this.harnessFor(spec.harness);
-    this.pendingRecordings.set(id, { launchedAt: new Date().toISOString(), failureLogged: false, nameMismatchLogged: false });
+    this.startPendingRecording(id);
     let handle: HarnessHandle;
     try {
       handle = harness.start({
@@ -609,26 +610,61 @@ export class SessionService {
     log('warn', `resolved model: transcript name does not match the session's CLI id: session ${sessionId}, expected ${expectedName}, got ${basename(path)}`);
   }
 
-  // One attempt per hook until the launch's resolution is found. It never throws into the hook handler.
+  // One attempt per hook until the launch's resolution is found, plus one retry a moment after a hook whose
+  // attempt found no assistant line: the CLI flushes its answer to the transcript shortly after it fires Stop.
   private recordResolvedModelIfPending(sessionId: string): void {
+    const foundNoAssistantLineYet = this.attemptRecording(sessionId) === 'found-no-assistant-line';
+    if (foundNoAssistantLineYet) this.scheduleRecordingRetry(sessionId);
+  }
+
+  private scheduleRecordingRetry(sessionId: string): void {
+    const pending = this.pendingRecordings.get(sessionId);
+    if (pending === undefined || pending.retryTimer !== undefined) return;
+    pending.retryTimer = setTimeout(() => {
+      pending.retryTimer = undefined;
+      this.attemptRecording(sessionId);
+    }, RECORDING_RETRY_DELAY_MS);
+    pending.retryTimer.unref();
+  }
+
+  private startPendingRecording(sessionId: string): void {
+    this.dropPendingRecording(sessionId);
+    this.pendingRecordings.set(sessionId, { launchedAt: new Date().toISOString(), failureLogged: false, nameMismatchLogged: false });
+  }
+
+  private dropPendingRecording(sessionId: string): void {
+    clearTimeout(this.pendingRecordings.get(sessionId)?.retryTimer);
+    this.pendingRecordings.delete(sessionId);
+  }
+
+  // Never throws into the hook handler.
+  private attemptRecording(sessionId: string): 'found-no-assistant-line' | undefined {
     const pending = this.pendingRecordings.get(sessionId);
     const transcriptPath = this.transcriptPaths.get(sessionId);
-    if (pending === undefined || transcriptPath === undefined) return;
+    if (pending === undefined || transcriptPath === undefined) return undefined;
     try {
-      if (!isTrustedTranscriptPath(transcriptPath)) return;
-      if (!this.isTranscriptOfSession(sessionId, transcriptPath)) return this.warnOnceWhenTranscriptNameIsForeign(sessionId, transcriptPath, pending);
+      if (!isTrustedTranscriptPath(transcriptPath)) return undefined;
+      if (!this.isTranscriptOfSession(sessionId, transcriptPath)) {
+        this.warnOnceWhenTranscriptNameIsForeign(sessionId, transcriptPath, pending);
+        return undefined;
+      }
       // Reading the resolved path, not the reported one, closes the window between the check and the open.
       const resolvedPath = existsSync(transcriptPath) ? realpathSync(transcriptPath) : transcriptPath;
-      if (!this.isTranscriptOfSession(sessionId, resolvedPath)) return this.warnOnceWhenTranscriptNameIsForeign(sessionId, resolvedPath, pending);
+      if (!this.isTranscriptOfSession(sessionId, resolvedPath)) {
+        this.warnOnceWhenTranscriptNameIsForeign(sessionId, resolvedPath, pending);
+        return undefined;
+      }
       const resolution = findResolvedModel(readTranscriptTail(resolvedPath), pending.launchedAt);
-      if (!resolution) return;
+      if (!resolution) return 'found-no-assistant-line';
       this.repo.recordResolvedModel({ id: sessionId, ...resolution, driftedFrom: undefined });
-      this.pendingRecordings.delete(sessionId);
+      this.dropPendingRecording(sessionId);
       this.deps.bus.emit({ type: 'session.updated', session: this.repo.get(sessionId)! });
+      return undefined;
     } catch (err) {
-      if (pending.failureLogged) return;
+      if (pending.failureLogged) return undefined;
       pending.failureLogged = true;
       log('error', `resolved model: session ${sessionId} could not record its resolved model`, err);
+      return undefined;
     }
   }
 
@@ -1013,7 +1049,7 @@ export class SessionService {
     this.disarmInterruptWatch(sessionId);
     this.transcriptPaths.delete(sessionId);
     this.currentCliSessionIds.delete(sessionId);
-    this.pendingRecordings.delete(sessionId);
+    this.dropPendingRecording(sessionId);
     this.modelSwitchesAwaitingRelaunch.delete(sessionId);
     this.stopDelivery(sessionId);
     this.pendingRelaunches.delete(sessionId);
@@ -1048,7 +1084,7 @@ export class SessionService {
     const hookToken = newToken();
     const mcpToken = newToken();
     this.repo.setTokens(session.id, hookToken, mcpToken);
-    this.pendingRecordings.set(session.id, { launchedAt: new Date().toISOString(), failureLogged: false, nameMismatchLogged: false });
+    this.startPendingRecording(session.id);
     let handle: HarnessHandle;
     try {
       handle = harness.start({

@@ -655,3 +655,30 @@ describe('resolved model recording from a session\'s transcript', () => {
     });
   });
 });
+
+describe('resolved model recording when the CLI flushes its answer to the transcript just after the Stop hook', () => {
+  it('shows the resolved model and CLI version of a session whose assistant line lands after its Stop hook returned', async () => {
+    const id = await createSession('opus');
+    await sendHook(id, { hook_event_name: 'UserPromptSubmit' });
+    await sendHook(id, stop);
+
+    writeFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-5' }));
+
+    await expect.poll(async () => (await listed(id)).resolvedModel, { timeout: 3000 }).toBe('claude-opus-5-5');
+    expect(await listed(id)).toMatchObject({ cliVersion: CLI_VERSION });
+  });
+
+  it('gives up after that one retry: a line landing later still waits for the next hook', async () => {
+    const id = await createSession('opus');
+    await sendHook(id, stop);
+    await pause(800);
+
+    writeFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-5' }));
+    await pause(1000);
+    const beforeNextHook = await listed(id);
+    await sendHook(id, preToolUse);
+
+    expect(beforeNextHook).not.toHaveProperty('resolvedModel');
+    expect(await listed(id)).toMatchObject({ resolvedModel: 'claude-opus-5-5' });
+  });
+});
