@@ -37,6 +37,19 @@ describe('default model table', () => {
   });
 });
 
+describe('model id charset', () => {
+  const acceptedIds = ['a', 'A9', 'claude-opus-5-5', 'gpt-6-astra', 'a.b:c', 'a[b]', 'claude-opus-5-5[1m]', 'a-', 'a_b'];
+  const refusedIds = ['', '-a', '[a', 'a b', 'a\nb', 'a\r\nb', 'a\tb', 'a\u0000b', 'é', 'aé', 'a/b', 'a'.repeat(101)];
+
+  it.each(acceptedIds)('accepts %j', (id) => {
+    expect(ModelIdSchema.safeParse(id).success).toBe(true);
+  });
+
+  it.each(refusedIds)('refuses %j', (id) => {
+    expect(ModelIdSchema.safeParse(id).success).toBe(false);
+  });
+});
+
 describe('available models', () => {
   it('lists the four aliases first', async () => {
     const available = await listAvailableModels();
