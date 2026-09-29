@@ -1,6 +1,9 @@
 import { Injectable } from '@angular/core';
 import type { Approval, HarnessId, PermissionMode, Session, SessionSpec } from '@openfleet/shared';
 import { environment } from '../../environments/environment';
+import type {
+  NewNote, NoteChange, NoteRestore, NoteSearchResult, NoteSummary, NoteVersionSummary, NoteView, Page, Project,
+} from '../notes/notes.types';
 
 const DAEMON_ANSWER_TIMEOUT_MS = 5000;
 
@@ -82,4 +85,24 @@ export class FleetApiService {
   renameSession(id: string, patch: { name?: string; emoji?: string }) { return this.patch<Session>(`/api/sessions/${id}`, patch); }
   reopenSession(id: string) { return this.post<Session>(`/api/sessions/${id}/reopen`, {}); }
   decide(id: string, behavior: 'allow' | 'deny') { return this.post<Approval>(`/api/approvals/${id}/decide`, { behavior }); }
+
+  // ── Notes (P3-T17) ──────────────────────────────────────────────────────────────────────────
+  private noteUrl(noteId: string, suffix: string, query: Record<string, string> = {}): string {
+    const queryString = new URLSearchParams(query).toString();
+    const path = `/api/notes/${encodeURIComponent(noteId)}${suffix}`;
+    return queryString ? `${path}?${queryString}` : path;
+  }
+  listProjects() { return this.call<Page<Project>>('/api/projects'); }
+  listNotes(projectId: string) { return this.call<Page<NoteSummary>>(`/api/notes?${new URLSearchParams({ projectId })}`); }
+  getNote(projectId: string, noteId: string) { return this.call<NoteView>(this.noteUrl(noteId, '', { projectId })); }
+  createNote(note: NewNote) { return this.post<NoteView>('/api/notes', note); }
+  updateNote(projectId: string, noteId: string, change: NoteChange) { return this.patch<NoteView>(this.noteUrl(noteId, '', { projectId }), change); }
+  searchNotes(projectId: string, query: string) {
+    return this.call<{ items: NoteSearchResult[]; total: number }>(`/api/notes/search?${new URLSearchParams({ projectId, q: query })}`);
+  }
+  listNoteVersions(projectId: string, noteId: string) { return this.call<{ items: NoteVersionSummary[] }>(this.noteUrl(noteId, '/versions', { projectId })); }
+  restoreNoteVersion(projectId: string, noteId: string, restore: NoteRestore) {
+    return this.post<NoteView>(this.noteUrl(noteId, '/restore'), { projectId, ...restore });
+  }
+  // ── end Notes ───────────────────────────────────────────────────────────────────────────────
 }
