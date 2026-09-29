@@ -5,9 +5,18 @@ import { tokensMatch } from '../ids.js';
 import type { ManagerService } from '../managers/managerService.js';
 import type { PulseScheduler } from '../managers/pulseScheduler.js';
 import type { ModelTable } from '../models.js';
+import type { DocsFolderService } from '../notes/docsFolderService.js';
+import type { NoteRepository } from '../notes/noteRepository.js';
+import type { NoteService } from '../notes/noteService.js';
+import type { ProjectRepository } from '../projects/projectRepository.js';
 import type { SessionService } from '../sessions/sessionService.js';
+import type { DataStoreRepository } from '../stores/dataStoreRepository.js';
+import type { DataStoreService } from '../stores/dataStoreService.js';
 import { ALLOWED_ORIGINS } from './allowedOrigins.js';
+import { registerDataStoreRoutes } from './dataStoreRoutes.js';
 import { hooksHandler } from './hooksHandler.js';
+import { registerNoteRoutes } from './noteRoutes.js';
+import { registerProjectRoutes } from './projectRoutes.js';
 import { registerRestRoutes } from './restHandlers.js';
 import { InvalidJsonBodyError, json, logServerError, PayloadTooLargeError, readJson, Router } from './router.js';
 import { createWsHandler } from './wsHandler.js';
@@ -23,6 +32,9 @@ export interface ServerDeps {
   wsCloseGraceMs?: number;
   // Overridable only so a test can inject a controllable clock/TTL; production always mints its own.
   wsTickets?: WsTicketStore;
+  // The notes and data-store REST routes exist only when the daemon hands over their services.
+  notes?: NoteService; noteRepo?: NoteRepository; docs?: DocsFolderService;
+  stores?: DataStoreService; storeRepo?: DataStoreRepository; projects?: ProjectRepository;
 }
 
 function applyCorsHeaders(req: IncomingMessage, res: ServerResponse): void {
@@ -56,6 +68,9 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; clos
   // ponytail: unauthenticated readiness probe for CI/e2e webServer checks, which run before the admin token is known
   router.add('GET', '/health', ({ res }) => json(res, 200, { ok: true }));
   registerRestRoutes(router, { ...deps, wsTickets });
+  if (deps.projects) registerProjectRoutes(router, deps.projects);
+  if (deps.stores && deps.storeRepo) registerDataStoreRoutes(router, { stores: deps.stores, storeRepo: deps.storeRepo });
+  if (deps.notes && deps.noteRepo && deps.docs) registerNoteRoutes(router, { notes: deps.notes, noteRepo: deps.noteRepo, docs: deps.docs });
 
   const server = createServer(async (req, res) => {
     applyCorsHeaders(req, res);

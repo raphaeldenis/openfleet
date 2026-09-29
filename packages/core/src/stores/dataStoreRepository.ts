@@ -202,6 +202,11 @@ export class DataStoreRepository {
     return store ? toStore(store) : undefined;
   }
 
+  listStores(projectId: string): DataStore[] {
+    const stores = this.db.prepare('SELECT * FROM data_stores WHERE project_id = ? ORDER BY created_at, rowid').all(projectId) as unknown as StoreRow[];
+    return stores.map(toStore);
+  }
+
   findStoreByName(projectId: string, displayName: string): DataStore | undefined {
     const store = this.db.prepare('SELECT * FROM data_stores WHERE project_id = ? AND display_name = ? COLLATE NOCASE').get(projectId, displayName) as StoreRow | undefined;
     return store ? toStore(store) : undefined;

@@ -31,6 +31,11 @@ export function json(res: ServerResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body));
 }
 
+export function queryParams(req: IncomingMessage): Record<string, string> {
+  const search = (req.url ?? '').split('?')[1] ?? '';
+  return Object.fromEntries(new URLSearchParams(search));
+}
+
 // The query string can carry secrets (tokens, admin credentials); never logged. Headers (bearer tokens,
 // hook tokens) are never passed in either — only method, path and the error's own stack.
 export function requestPath(req: IncomingMessage): string {
