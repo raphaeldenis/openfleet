@@ -1117,7 +1117,9 @@ describe('the session a drift is compared with', () => {
   };
   afterEach(() => { vi.useRealTimers(); });
 
-  it('never compares a session with one created after it', async () => {
+  const waitForLaunches = (count: number) => expect.poll(() => harness.launches.length).toBeGreaterThanOrEqual(count);
+
+  it('compares a session with the latest session of the alias even when that one was created after it', async () => {
     const earlier = await createSession('opus');
     const earlierTranscript = transcriptPath;
     await pause(5);
@@ -1126,8 +1128,44 @@ describe('the session a drift is compared with', () => {
     writeFileSync(earlierTranscript, assistantLine({ model: 'claude-opus-5-5' }));
     await sendHook(earlier, preToolUse, earlierTranscript);
 
-    expect(await listed(earlier)).toMatchObject({ resolvedModel: 'claude-opus-5-5' });
-    expect(await listed(earlier)).not.toHaveProperty('modelDriftedFrom');
+    expect(await listed(earlier)).toMatchObject({ resolvedModel: 'claude-opus-5-5', modelDriftedFrom: 'claude-opus-5-4' });
+  });
+
+  it('shows no drift on a session switched to an alias whose latest session already resolves the same id', async () => {
+    await resolveOn('sonnet', 'claude-sonnet-5-0');
+    await pause(5);
+    const switching = await createSession('opus');
+    const switchingTranscript = transcriptPath;
+    await sendHook(switching, preToolUse, switchingTranscript);
+    await sendHook(switching, stop, switchingTranscript);
+    await pause(5);
+    await resolveOn('sonnet', 'claude-sonnet-5-5');
+
+    await postJson(`/api/sessions/${switching}/model`, { model: 'sonnet' });
+    await waitForLaunches(4);
+    writeFileSync(switchingTranscript, assistantLine({ model: 'claude-sonnet-5-5', at: inOneSecond() }));
+    await sendHook(switching, preToolUse, switchingTranscript);
+
+    expect(await listed(switching)).toMatchObject({ resolvedModel: 'claude-sonnet-5-5' });
+    expect(await listed(switching)).not.toHaveProperty('modelDriftedFrom');
+  });
+
+  it('shows the drift from the id resolved before an intermediate same-alias relaunch that recorded nothing', async () => {
+    const id = await createSession('opus');
+    writeFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-5' }));
+    await sendHook(id, preToolUse);
+    await sendHook(id, stop);
+    await postJson(`/api/sessions/${id}/model`, { model: 'opus' });
+    await waitForLaunches(2);
+    await sendHook(id, stop);
+    await pause(20);
+    await postJson(`/api/sessions/${id}/model`, { model: 'opus' });
+    await waitForLaunches(3);
+
+    appendFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-6', at: inOneSecond() }));
+    await sendHook(id, preToolUse);
+
+    expect(await listed(id)).toMatchObject({ resolvedModel: 'claude-opus-5-6', modelDriftedFrom: 'claude-opus-5-5' });
   });
 
   it('compares a session with the last one created when several were created in the same millisecond', async () => {

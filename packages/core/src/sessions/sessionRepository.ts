@@ -88,11 +88,14 @@ export class SessionRepository {
   // ponytail: the id comes from a transcript the session's own agent can write, so one session can plant any valid model id here
   // and make a later session of the same alias show modelDriftedFrom = that id. Display-only, never fed back to --model (spec 4.4).
   // Upgrade path: compare only against ids seen in more than one session, or record them from a source the agent cannot write.
-  // (created_at, rowid) orders "created before this session", a proxy for "resolved before it"; rowid breaks a same-millisecond tie.
-  previousResolvedModel(input: { requestedModel: string | null; beforeSessionId: string }): { sessionId: string; resolvedModel: string } | undefined {
+  // The latest other session with a recorded id under the alias, ordered by (created_at, rowid): creation time is a proxy for
+  // "resolved last", and rowid breaks a same-millisecond tie. No column stamps the recording time, so two ceilings remain:
+  // a "reversed drift" (an old session that records after a newer one is compared with that newer one) and a session
+  // resumed long after its creation, whose resolution is ranked by when it was created. Upgrade path: order by a resolved_at column.
+  previousResolvedModel(input: { requestedModel: string | null; excludedSessionId: string }): { sessionId: string; resolvedModel: string } | undefined {
     const row = this.db.prepare(`SELECT id, resolved_model FROM sessions
-      WHERE resolved_for_model IS ? AND resolved_model IS NOT NULL AND (created_at, rowid) < (SELECT created_at, rowid FROM sessions WHERE id = ?)
-      ORDER BY created_at DESC, rowid DESC LIMIT 1`).get(input.requestedModel, input.beforeSessionId) as { id: string; resolved_model: string } | undefined;
+      WHERE resolved_for_model IS ? AND resolved_model IS NOT NULL AND id <> ?
+      ORDER BY created_at DESC, rowid DESC LIMIT 1`).get(input.requestedModel, input.excludedSessionId) as { id: string; resolved_model: string } | undefined;
     return row ? { sessionId: row.id, resolvedModel: row.resolved_model } : undefined;
   }
   setPermissionMode(id: string, mode: PermissionMode): void {
