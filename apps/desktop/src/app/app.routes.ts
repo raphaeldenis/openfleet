@@ -14,6 +14,9 @@ export const routes: Routes = [
       { path: 'inbox', loadComponent: () => import('./inbox/inbox.component').then((m) => m.InboxComponent) },
       { path: 'settings', loadComponent: () => import('./settings/settings.component').then((m) => m.SettingsComponent) },
       { path: 'new', loadComponent: () => import('./sessions/new-session-form.component').then((m) => m.NewSessionFormComponent) },
+      // --- Tables (P3-T18) ---
+      { path: 'tables', loadComponent: () => import('./tables/tables-view.component').then((m) => m.TablesViewComponent) },
+      // --- end Tables ---
       { path: 'manager/:id', loadComponent: () => import('./managers/manager-dashboard.component').then((m) => m.ManagerDashboardComponent) },
       { path: 'session/:sessionId', loadComponent: () => import('./sessions/session-view.component').then((m) => m.SessionViewComponent) },
       { path: '**', loadComponent: () => import('./shell/not-found.component').then((m) => m.NotFoundComponent) },
