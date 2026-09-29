@@ -69,4 +69,26 @@ describe('session listing with the resolved model fields', () => {
     expect(afterSwitch).not.toHaveProperty('resolvedModel');
     expect(afterSwitch).not.toHaveProperty('modelDriftedFrom');
   });
+
+  it('keeps the resolved model of the other sessions when one session switches its model', async () => {
+    const db = openDatabase(':memory:');
+    await serveDaemonOn(db);
+    const createSession = async (name: string) =>
+      (await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name, harness: 'fake' }) })).json()) as { id: string };
+    const switched = await createSession('switched');
+    const untouched = await createSession('untouched');
+    for (const { id } of [switched, untouched]) {
+      db.prepare(`UPDATE sessions SET resolved_model = 'claude-opus-5-5', cli_version = '2.1.284', model_drifted_from = 'claude-opus-5-4' WHERE id = ?`).run(id);
+    }
+
+    await api(`/api/sessions/${switched.id}/model`, { method: 'POST', body: JSON.stringify({ model: 'claude-sonnet-5-5' }) });
+    const listed = await listSessions();
+    const switchedAfter = listed.find((session) => session.id === switched.id);
+    const untouchedAfter = listed.find((session) => session.id === untouched.id);
+
+    expect(switchedAfter).toMatchObject({ cliVersion: '2.1.284' });
+    expect(switchedAfter).not.toHaveProperty('resolvedModel');
+    expect(switchedAfter).not.toHaveProperty('modelDriftedFrom');
+    expect(untouchedAfter).toMatchObject({ resolvedModel: 'claude-opus-5-5', cliVersion: '2.1.284', modelDriftedFrom: 'claude-opus-5-4' });
+  });
 });
