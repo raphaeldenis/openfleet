@@ -30,7 +30,7 @@ export interface KanbanGroup {
             [class.selected]="row.id === selectedRowId()"
             (click)="rowSelected.emit(row.id)"
           >
-            <span class="title">{{ titleOf(row) }}</span>
+            <span class="title">{{ titleOf(row) || untitledLabel }}</span>
             @if (detailsOf(row); as details) {
               <span class="details" [attr.title]="details" [attr.data-testid]="'kanban-details-' + row.id">{{ details }}</span>
             }
@@ -67,6 +67,7 @@ export class TableKanbanComponent {
   readonly selectedRowId = input<string | null>(null);
   readonly rowSelected = output<string>();
 
+  protected readonly untitledLabel = 'Untitled';
   protected readonly titleOf = (row: DsRow) => titleOf(this.columns(), row);
 
   protected detailsOf(row: DsRow): string {

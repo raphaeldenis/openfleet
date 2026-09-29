@@ -54,6 +54,13 @@ describe('TableKanbanComponent', () => {
     expect(card).not.toHaveTextContent('r3');
   });
 
+  it('user sees an "Untitled" placeholder on the card of a row without a title', async () => {
+    const untitledGroups = [{ option: option('todo', 'todo'), rows: [row('r7', '')] }];
+    await render(TableKanbanComponent, { bindings: [inputBinding('columns', () => columns), inputBinding('groups', () => untitledGroups)] });
+
+    expect(screen.getByTestId('kanban-card-r7')).toHaveTextContent('Untitled');
+  });
+
   describe('layout contract with a very long value', () => {
     const longValue = 'y'.repeat(500);
     const longGroups = [{ option: option('todo', 'todo'), rows: [row('r9', 'Title', longValue)] }];

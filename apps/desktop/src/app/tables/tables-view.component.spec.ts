@@ -626,7 +626,7 @@ describe('TablesViewComponent', () => {
       const api = fakeApi({ rows: [] });
       await renderView(api);
 
-      expect(await screen.findByTestId('tables-empty')).toHaveTextContent('backlog has no rows');
+      expect(await screen.findByTestId('tables-empty')).toHaveTextContent('“backlog” has no rows');
       await userEvent.click(screen.getByTestId('tables-add-first-row'));
 
       expect(api.insertRows).toHaveBeenCalledWith({ projectId: 'p1', storeId: 's1', rows: [{}] });

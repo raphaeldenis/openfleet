@@ -34,6 +34,12 @@ describe('RowHistoryComponent', () => {
     expect(screen.getByTestId('history-entry-h1')).toHaveTextContent('HUMAN');
   });
 
+  it('user reads the actor, the badge and the change as separate words', async () => {
+    await render(RowHistoryComponent, { bindings: bindings() });
+
+    expect(screen.getByTestId('history-entry-h3')).toHaveTextContent('Gimli · T6 AGENT Status doing → review');
+  });
+
   it('user reads a field change as column name, old value and new value', async () => {
     await render(RowHistoryComponent, { bindings: bindings() });
 

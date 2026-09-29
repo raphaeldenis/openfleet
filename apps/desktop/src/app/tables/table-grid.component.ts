@@ -8,7 +8,7 @@ const MIN_COLUMN_WIDTH_REM = 8;
   selector: 'of-table-grid',
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <div class="grid" role="grid" data-testid="table-grid" [style.--grid-columns]="gridColumns()" [style.--grid-min-width]="gridMinWidth()">
+    <div class="grid" role="grid" data-testid="table-grid" [style.--grid-min-width]="gridMinWidth()">
       <div class="header" role="row" data-testid="grid-head">
         @for (column of orderedColumns(); track column.id) {
           <span class="cell" role="columnheader" [attr.title]="column.displayName" [attr.data-testid]="'grid-header-' + column.id">{{ column.displayName }}</span>
@@ -40,14 +40,14 @@ const MIN_COLUMN_WIDTH_REM = 8;
   styles: `
     .grid { border: 1px solid var(--line); border-radius: .5rem; background: var(--panel); overflow-x: auto; overflow-y: hidden }
     .header, .row {
-      display: grid; grid-template-columns: var(--grid-columns); min-width: var(--grid-min-width); box-sizing: border-box;
+      display: flex; min-width: var(--grid-min-width); box-sizing: border-box;
       padding: 0 .75rem; align-items: center; border-bottom: 1px solid var(--line);
     }
     .header { height: 2rem; background: var(--sunk); font-size: .6875rem; color: var(--mut); font-weight: 500 }
     .row { min-height: 2.25rem; cursor: pointer; font-size: .75rem }
     .row.selected { background: var(--accent-bg) }
     .row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
-    .cell { min-width: 0; padding-right: .5rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+    .cell { flex-grow: 1; flex-shrink: 1; flex-basis: 0%; min-width: 8rem; padding-right: .5rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
   `,
 })
 export class TableGridComponent {
@@ -63,7 +63,6 @@ export class TableGridComponent {
     return preferredRowId && rowIds.includes(preferredRowId) ? preferredRowId : rowIds[0];
   });
   protected readonly orderedColumns = computed(() => sortedColumns(this.columns()));
-  protected readonly gridColumns = computed(() => `repeat(${this.orderedColumns().length}, minmax(${MIN_COLUMN_WIDTH_REM}rem, 1fr))`);
   protected readonly gridMinWidth = computed(() => `${this.orderedColumns().length * MIN_COLUMN_WIDTH_REM}rem`);
   protected readonly text = cellText;
 

@@ -112,7 +112,7 @@ const describeCreateFailure = (error: unknown, displayName: string): string => {
           </div>
         } @else if (rows().length === 0) {
           <div class="message" data-testid="tables-empty">
-            <span class="message-title">{{ activeStoreName() }} has no rows</span>
+            <span class="message-title">“{{ activeStoreName() }}” has no rows</span>
             <span>Add one, or let a manager fill it from its mission.</span>
             <button type="button" class="of-btn of-btn--primary" data-testid="tables-add-first-row" (click)="addRow()">+ Add first row</button>
           </div>

@@ -23,9 +23,7 @@ const formatValue = (value: unknown) => (value === null || value === undefined ?
       <div class="entry" [attr.data-testid]="'history-entry-' + entry.id">
         <div class="body">
           <span>
-            <b class="who">{{ entry.actorLabel }}</b>
-            <of-actor-badge [kind]="entry.actorKind" />
-            <span class="what">{{ describe(entry.change) }}</span>
+            <b class="who">{{ entry.actorLabel }}</b>&ngsp;<of-actor-badge [kind]="entry.actorKind" />&ngsp;<span class="what">{{ describe(entry.change) }}</span>
           </span>
           <span class="when">{{ formatWhen(entry.createdAt) }}</span>
         </div>

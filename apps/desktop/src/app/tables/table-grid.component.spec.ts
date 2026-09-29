@@ -111,12 +111,21 @@ describe('TableGridComponent', () => {
     const renderWithLongValue = () =>
       render(TableGridComponent, { bindings: [inputBinding('columns', () => columns), inputBinding('rows', () => rowsWithLongValue)] });
 
-    it('user sees every column share one width template across the header and all rows', async () => {
+    it('user sees the grid wide enough for every column, so many columns scroll horizontally', async () => {
       await render(TableGridComponent, { bindings: bindings() });
 
       const grid = screen.getByTestId('table-grid');
-      expect(grid.style.getPropertyValue('--grid-columns')).toBe('repeat(3, minmax(8rem, 1fr))');
       expect(grid.style.getPropertyValue('--grid-min-width')).toBe('24rem');
+    });
+
+    it('user sees every cell take an equal share of its row whatever it contains', async () => {
+      await renderWithLongValue();
+
+      const cells = [...screen.getAllByTestId(/^grid-cell-/), ...screen.getAllByTestId(/^grid-header-/)];
+      for (const cell of cells) {
+        const style = getComputedStyle(cell);
+        expect([style.flexGrow, style.flexShrink, style.flexBasis]).toEqual(['1', '1', '0%']);
+      }
     });
 
     it('user sees each cell, the long one included, cut with an ellipsis instead of widening its row', async () => {
@@ -125,7 +134,7 @@ describe('TableGridComponent', () => {
       const cells = [...screen.getAllByTestId(/^grid-cell-/), ...screen.getAllByTestId(/^grid-header-/)];
       for (const cell of cells) {
         const style = getComputedStyle(cell);
-        expect([style.overflow, style.textOverflow, style.whiteSpace, style.minWidth]).toEqual(['hidden', 'ellipsis', 'nowrap', '0px']);
+        expect([style.overflow, style.textOverflow, style.whiteSpace, style.minWidth]).toEqual(['hidden', 'ellipsis', 'nowrap', '8rem']);
       }
     });
 
@@ -135,13 +144,13 @@ describe('TableGridComponent', () => {
       expect(screen.getByTestId('grid-cell-r1-c-title')).toHaveAttribute('title', longValue);
     });
 
-    it('user sees the header and every row laid out as the same grid', async () => {
+    it('user sees the header and every row laid out as the same flex row', async () => {
       await renderWithLongValue();
 
       const laidOutElements = [screen.getByTestId('grid-head'), screen.getByTestId('grid-row-r1'), screen.getByTestId('grid-row-r2')];
       for (const element of laidOutElements) {
         const style = getComputedStyle(element);
-        expect([style.display, style.minWidth]).toEqual(['grid', 'var(--grid-min-width)']);
+        expect([style.display, style.minWidth]).toEqual(['flex', 'var(--grid-min-width)']);
       }
     });
   });
