@@ -3,7 +3,7 @@ import { newId } from '../ids.js';
 import { log } from '../logger.js';
 
 export type Handler = (ctx: { req: IncomingMessage; res: ServerResponse; params: Record<string, string>; body: unknown }) => Promise<void> | void;
-interface Route { method: string; pattern: RegExp; keys: string[]; handler: Handler }
+interface Route { method: string; path: string; pattern: RegExp; keys: string[]; handler: Handler }
 
 /** A malformed percent-escape in a path segment reads like an unknown route. */
 function decodeParams(keys: string[], match: RegExpExecArray): Record<string, string> | undefined {
@@ -21,7 +21,12 @@ export class Router {
   add(method: string, path: string, handler: Handler): void {
     const keys: string[] = [];
     const pattern = new RegExp('^' + path.replace(/:([a-zA-Z]+)/g, (_, k: string) => { keys.push(k); return '([^/]+)'; }) + '$');
-    this.routes.push({ method, pattern, keys, handler });
+    this.routes.push({ method, path, pattern, keys, handler });
+  }
+
+  /** Every registered route as `{ method, path }`, path patterns included (`/api/notes/:id`). */
+  list(): { method: string; path: string }[] {
+    return this.routes.map(({ method, path }) => ({ method, path }));
   }
 
   match(method: string, pathname: string): { handler: Handler; params: Record<string, string> } | undefined {

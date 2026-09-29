@@ -62,7 +62,7 @@ async function handleMcpRequest(
   await mcp(req, res, await readJson(req));
 }
 
-export async function startServer(deps: ServerDeps): Promise<{ url: string; close(): Promise<void> }> {
+export async function startServer(deps: ServerDeps): Promise<{ url: string; routes: { method: string; path: string }[]; close(): Promise<void> }> {
   const wsTickets = deps.wsTickets ?? createWsTicketStore();
   const router = new Router();
   // ponytail: unauthenticated readiness probe for CI/e2e webServer checks, which run before the admin token is known
@@ -112,6 +112,7 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; clos
   const port = typeof address === 'object' && address ? address.port : deps.port;
   return {
     url: `http://${deps.host}:${port}`,
+    routes: router.list(),
     close: () => {
       // closeAllConnections() only ever covered plain HTTP sockets — an upgraded WS connection is not one
       // of "server's" connections any more as far as node:http is concerned, so server.close() would wait

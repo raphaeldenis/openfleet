@@ -84,26 +84,7 @@ beforeEach(async () => {
 });
 afterEach(() => server.close());
 
-const DATA_STORE_ROUTES: { method: string; path: string; body?: Record<string, unknown> }[] = [
-  { method: 'GET', path: '/api/data-stores?projectId=p1' },
-  { method: 'POST', path: '/api/data-stores', body: { projectId: 'p1', displayName: 'T' } },
-  { method: 'GET', path: '/api/data-stores/s1?projectId=p1' },
-  { method: 'GET', path: '/api/data-stores/s1/rows?projectId=p1' },
-  { method: 'POST', path: '/api/data-stores/s1/rows', body: { projectId: 'p1', rows: [] } },
-  { method: 'PATCH', path: '/api/data-stores/s1/rows', body: { projectId: 'p1', updates: [] } },
-  { method: 'GET', path: '/api/data-stores/s1/rows/r1/changes?projectId=p1' },
-  { method: 'GET', path: '/api/data-stores/s1/views?projectId=p1' },
-];
-
 describe('data store REST routes', () => {
-  it.each(DATA_STORE_ROUTES)('refuse $method $path without the admin token', async ({ method, path, body }) => {
-    const withoutToken = await call(method, path, body, { 'content-type': 'application/json' });
-    const wrongToken = await call(method, path, body, { authorization: 'Bearer wrong', 'content-type': 'application/json' });
-
-    expect(withoutToken.status).toBe(401);
-    expect(wrongToken.status).toBe(401);
-  });
-
   it('hides another project\'s store behind 404 on every :id route', async () => {
     const { store, name, qty } = seedStore();
     const [row] = (await insertRows(store.id, { name, qty }, [['bolt', 1]])).items;

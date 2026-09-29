@@ -78,24 +78,22 @@ beforeEach(async () => {
 });
 afterEach(() => server.close());
 
-const NOTE_ROUTES: { method: string; path: string; body?: Record<string, unknown> }[] = [
-  { method: 'GET', path: '/api/projects' },
-  { method: 'GET', path: '/api/notes?projectId=p1' },
-  { method: 'GET', path: '/api/notes/search?projectId=p1&q=a' },
-  { method: 'GET', path: '/api/notes/n1?projectId=p1' },
-  { method: 'POST', path: '/api/notes', body: { projectId: 'p1', title: 't', bodyMd: '' } },
-  { method: 'PATCH', path: '/api/notes/n1', body: { projectId: 'p1', expectedRev: 1, bodyMd: 'x' } },
-  { method: 'GET', path: '/api/notes/n1/versions?projectId=p1' },
-  { method: 'POST', path: '/api/notes/n1/restore', body: { projectId: 'p1', rev: 1, expectedRev: 1 } },
-];
-
 describe('notes REST routes', () => {
-  it.each(NOTE_ROUTES)('refuse $method $path without the admin token', async ({ method, path, body }) => {
-    const withoutToken = await call(method, path, body, { 'content-type': 'application/json' });
-    const wrongToken = await call(method, path, body, { authorization: 'Bearer wrong', 'content-type': 'application/json' });
+  it('refuses every registered /api route without the admin token', async () => {
+    const apiRoutes = server.routes.filter(({ path }) => path.startsWith('/api/'));
 
-    expect(withoutToken.status).toBe(401);
-    expect(wrongToken.status).toBe(401);
+    const answers = await Promise.all(apiRoutes.flatMap(({ method, path }) => {
+      const concretePath = path.replace(/:\w+/g, 'x');
+      const body = method === 'GET' ? undefined : {};
+      return [
+        call(method, concretePath, body, { 'content-type': 'application/json' }).then((response) => ({ method, path, status: response.status })),
+        call(method, concretePath, body, { authorization: 'Bearer wrong', 'content-type': 'application/json' }).then((response) => ({ method, path, status: response.status })),
+      ];
+    }));
+
+    expect(apiRoutes.length).toBeGreaterThan(15);
+    expect(answers.filter(({ status }) => status !== 401)).toEqual([]);
+    expect(apiRoutes.map(({ path }) => path)).toEqual(expect.arrayContaining(['/api/notes/:id/restore', '/api/data-stores/:id/rows/:rowId/changes', '/api/projects']));
   });
 
   describe('user can list the projects', () => {
