@@ -1,7 +1,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { DatabaseSync } from 'node:sqlite';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { startServer } from '../api/server.js';
 import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
@@ -26,6 +26,7 @@ let server: Awaited<ReturnType<typeof startServer>>;
 let db: DatabaseSync;
 let sessions: SessionService;
 let storeRepo: DataStoreRepository;
+let stores: DataStoreService;
 let scopedToken: string;
 let otherToken: string;
 let unscopedToken: string;
@@ -58,7 +59,7 @@ beforeEach(async () => {
   projects.insert({ id: 'p2', name: 'Two', docsFolderPath: null, createdAt: 't0' });
   storeRepo = new DataStoreRepository(db);
   let counter = 0;
-  const stores = new DataStoreService({ repo: storeRepo, db, clock: () => '2026-01-01T00:00:00.000Z', newId: () => `id-${++counter}` });
+  stores = new DataStoreService({ repo: storeRepo, db, clock: () => '2026-01-01T00:00:00.000Z', newId: () => `id-${++counter}` });
   const noteRepo = new NoteRepository(db);
   const notes = new NoteService({ repo: noteRepo, db, expandMentions, clock: () => '2026-01-01T00:00:00.000Z', newId: () => `id-${++counter}` });
   const docs = new DocsFolderService({ notes, noteRepo, projects, fs: nodeDocsFolderFs, clock: () => '2026-01-01T00:00:00.000Z' });
@@ -77,7 +78,10 @@ beforeEach(async () => {
   otherToken = harness.launches[1]!.mcpToken;
   unscopedToken = harness.launches[2]!.mcpToken;
 });
-afterEach(() => server.close());
+afterEach(() => {
+  vi.restoreAllMocks();
+  return server.close();
+});
 
 async function createStore(client: Client, displayName = 'backlog') {
   return text(await client.callTool({ name: 'create_data_store', arguments: { display_name: displayName } }));
@@ -88,11 +92,12 @@ describe('table tools', () => {
     const client = await connect(scopedToken);
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
-      'add_data_store_column', 'append_to_note', 'close_session', 'create_data_store', 'create_note', 'create_session', 'create_worktree',
-      'delete_data_store_row', 'delete_note', 'describe_data_store', 'get_argus_status', 'get_note', 'get_note_version', 'get_session_status',
-      'insert_data_store_rows', 'list_children', 'list_note_versions', 'list_notes', 'list_sessions', 'message_parent', 'move_note',
-      'pulse_now', 'query_data_store', 'restore_note_version', 'search_notes', 'send_session_message', 'update_data_store_rows',
-      'update_note', 'update_note_section', 'update_session',
+      'add_data_store_column', 'append_to_note', 'close_session', 'create_data_store', 'create_data_store_view', 'create_note', 'create_session',
+      'create_worktree', 'delete_data_store_row', 'delete_data_store_view', 'delete_note', 'describe_data_store', 'get_argus_status', 'get_note',
+      'get_note_version', 'get_session_status', 'insert_data_store_rows', 'list_children', 'list_data_store_views', 'list_note_versions',
+      'list_notes', 'list_row_changes', 'list_sessions', 'message_parent', 'move_note', 'pulse_now', 'query_data_store', 'restore_note_version',
+      'search_notes', 'send_session_message', 'update_data_store_rows', 'update_data_store_view', 'update_note', 'update_note_section',
+      'update_session',
     ]);
   });
 
@@ -101,6 +106,21 @@ describe('table tools', () => {
     const result = await client.callTool({ name: 'create_data_store', arguments: { display_name: 'x' } });
     expect(result.isError).toBe(true);
     expect((result.content as { text: string }[])[0]!.text).toMatch(/no project/i);
+  });
+
+  it('surfaces an unexpected error as "request failed" with no internal text, and logs it', async () => {
+    const client = await connect(scopedToken);
+    const store = await createStore(client);
+    vi.spyOn(stores, 'query').mockImplementation(() => {
+      throw new Error('SELECT secret_column FROM ds_rows');
+    });
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const result = await client.callTool({ name: 'query_data_store', arguments: { store: store.id } });
+
+    expect(result.isError).toBe(true);
+    expect((result.content as { text: string }[])[0]!.text).toBe('request failed');
+    expect(logged).toHaveBeenCalled();
   });
 
   it('create_data_store scopes the new store to the caller\'s own project', async () => {

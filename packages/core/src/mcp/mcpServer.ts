@@ -15,6 +15,7 @@ import type { DataStoreService } from '../stores/dataStoreService.js';
 import { registerNoteTools } from './noteTools.js';
 import { registerNoteVersionTools } from './noteVersionTools.js';
 import { registerTableTools } from './tableTools.js';
+import { registerTableViewTools } from './tableViewTools.js';
 import { registerTools } from './tools.js';
 
 export function createMcpHandler(deps: { sessions: SessionService; approvals: ApprovalService; managers: ManagerService; pulseScheduler: PulseScheduler; modelTable: ModelTable; stores: DataStoreService; storeRepo: DataStoreRepository; notes: NoteService; noteRepo: NoteRepository; docs: DocsFolderService; worktreesRoot?: string }) {
@@ -27,6 +28,7 @@ export function createMcpHandler(deps: { sessions: SessionService; approvals: Ap
     const server = new McpServer({ name: 'openfleet', version: '0.1.0' });
     registerTools(server, { ...deps, caller, worktreesRoot: deps.worktreesRoot ?? '/tmp/openfleet-worktrees' });
     registerTableTools(server, { stores: deps.stores, storeRepo: deps.storeRepo, caller });
+    registerTableViewTools(server, { stores: deps.stores, storeRepo: deps.storeRepo, caller });
     registerNoteTools(server, { notes: deps.notes, noteRepo: deps.noteRepo, docs: deps.docs, caller });
     registerNoteVersionTools(server, { notes: deps.notes, noteRepo: deps.noteRepo, docs: deps.docs, caller });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });

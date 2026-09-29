@@ -5,7 +5,7 @@ import { ProjectRepository } from '../projects/projectRepository.js';
 import { DataStoreRepository, DuplicateNameError, RowNotFoundError, StoreNotFoundError, UnknownColumnError } from './dataStoreRepository.js';
 import {
   ConstraintError, DataStoreService, DataStoreWriteError, DuplicateIdError, InvalidActorError, InvalidCellValueError, InvalidColumnDefinitionError,
-  InvalidNameError, MAX_ROWS_PER_STORE, StoreHasRowsError, StoreRowCapError, ViewNotFoundError,
+  InvalidNameError, InvalidViewConfigError, MAX_ROWS_PER_STORE, StoreHasRowsError, StoreRowCapError, ViewNotFoundError,
 } from './dataStoreService.js';
 
 const scope = { projectId: 'p1' } as const;
@@ -149,11 +149,27 @@ describe('DataStoreService', () => {
       expect(groups.map((g) => g.rows.map((r) => r.data[cols.title]))).toEqual([['b'], [], ['a']]);
     });
 
-    it('throws when the group-by column is not a select column', () => {
+    it('refuses to create a kanban view whose groupByColumnId is not a select column', () => {
       const { service, store, cols } = backlog();
-      const view = service.createView(store.id, { ...scope, displayName: 'board', viewType: 'kanban', config: { groupByColumnId: cols.title } });
 
-      expect(() => service.kanbanGroups(view.id, scope)).toThrow(/must be a select column/);
+      expect(thrownBy(() => service.createView(store.id, { ...scope, displayName: 'board', viewType: 'kanban', config: { groupByColumnId: cols.title } })))
+        .toBeInstanceOf(InvalidViewConfigError);
+    });
+
+    it('refuses to update a kanban view\'s groupByColumnId onto a non-select column', () => {
+      const { service, store, cols } = backlog();
+      const view = service.createView(store.id, { ...scope, displayName: 'board', viewType: 'kanban', config: { groupByColumnId: cols.status } });
+
+      expect(thrownBy(() => service.updateView(view.id, { ...scope, config: { groupByColumnId: cols.title } })))
+        .toBeInstanceOf(InvalidViewConfigError);
+    });
+
+    it('kanbanGroups still throws a clear error for a view stored before this rule existed', () => {
+      const { service, repo, store, cols } = backlog();
+      // Bypasses the service to simulate a kanban view written before groupByColumnId was validated at write time.
+      const legacyView = repo.insertView(store.id, { id: 'legacy-view', displayName: 'legacy board', viewType: 'kanban', config: { groupByColumnId: cols.title }, at: '2026-01-01T00:00:00.000Z' });
+
+      expect(() => service.kanbanGroups(legacyView.id, scope)).toThrow(/must be a select column/);
     });
 
     it('lists views in creation order and rejects a config naming an unknown column', () => {

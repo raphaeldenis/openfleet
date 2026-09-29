@@ -80,11 +80,12 @@ describe('MCP', () => {
     const client = await connect(parentToken);
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
-      'add_data_store_column', 'append_to_note', 'close_session', 'create_data_store', 'create_note', 'create_session', 'create_worktree',
-      'delete_data_store_row', 'delete_note', 'describe_data_store', 'get_argus_status', 'get_note', 'get_note_version', 'get_session_status',
-      'insert_data_store_rows', 'list_children', 'list_note_versions', 'list_notes', 'list_sessions', 'message_parent', 'move_note',
-      'pulse_now', 'query_data_store', 'restore_note_version', 'search_notes', 'send_session_message', 'update_data_store_rows',
-      'update_note', 'update_note_section', 'update_session',
+      'add_data_store_column', 'append_to_note', 'close_session', 'create_data_store', 'create_data_store_view', 'create_note', 'create_session',
+      'create_worktree', 'delete_data_store_row', 'delete_data_store_view', 'delete_note', 'describe_data_store', 'get_argus_status', 'get_note',
+      'get_note_version', 'get_session_status', 'insert_data_store_rows', 'list_children', 'list_data_store_views', 'list_note_versions',
+      'list_notes', 'list_row_changes', 'list_sessions', 'message_parent', 'move_note', 'pulse_now', 'query_data_store', 'restore_note_version',
+      'search_notes', 'send_session_message', 'update_data_store_rows', 'update_data_store_view', 'update_note', 'update_note_section',
+      'update_session',
     ]);
   });
 
