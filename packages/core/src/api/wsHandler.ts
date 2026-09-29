@@ -9,7 +9,7 @@ import type { EventBus } from '../events/eventBus.js';
 import { log } from '../logger.js';
 import type { ManagerService } from '../managers/managerService.js';
 import type { SessionService } from '../sessions/sessionService.js';
-import { DEFAULT_WORKING_STATE_MAX_BYTES } from '../workingState/workingStateSettings.js';
+import { DEFAULT_WORKING_STATE_MAX_AGE_MINUTES, DEFAULT_WORKING_STATE_MAX_BYTES } from '../workingState/workingStateSettings.js';
 import type { WorkingStateService } from '../workingState/workingStateService.js';
 import type { WsTicketStore } from './wsTicketStore.js';
 
@@ -55,8 +55,6 @@ export interface WsHandler {
 }
 
 const DEFAULT_WS_CLOSE_GRACE_MS = 250;
-
-export const DEFAULT_WORKING_STATE_MAX_AGE_MINUTES = 30;
 
 export function createWsHandler(deps: { bus: EventBus; sessions: SessionService; approvals: ApprovalService; managers: ManagerService; wsTickets: WsTicketStore; wsCloseGraceMs?: number; workingStates?: WorkingStateService; workingStateMaxAgeMinutes?: number }): WsHandler {
   const wss = new WebSocketServer({ noServer: true });

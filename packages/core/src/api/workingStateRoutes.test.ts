@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ServerEvent, WorkingStateSections } from '@openfleet/shared';
@@ -13,10 +13,11 @@ import { PulseScheduler } from '../managers/pulseScheduler.js';
 import { DEFAULT_MODEL_TABLE } from '../models.js';
 import { SessionService } from '../sessions/sessionService.js';
 import { WorkingStateService } from '../workingState/workingStateService.js';
+import { loadWorkingStateSettings } from '../workingState/workingStateSettings.js';
 import { startServer } from './server.js';
 
 const CUSTOM_MAX_BYTES = 2048;
-const CUSTOM_MAX_AGE_MINUTES = 5;
+const CUSTOM_MAX_AGE_MINUTES = 45;
 const DEFAULT_MAX_AGE_MINUTES = 30;
 
 let server: Awaited<ReturnType<typeof startServer>>;
@@ -28,16 +29,20 @@ const sections = (overrides: Partial<WorkingStateSections> = {}): WorkingStateSe
   plan: ['ship the API'], todo: [], remaining: [], questionsForHuman: [], internalQuestions: [], blockers: [], ...overrides,
 });
 
-async function startTestServer(extra: { workingStateMaxAgeMinutes?: number; maxBytes?: number } = {}) {
+// Wired as main.ts wires it: the settings come from config.json and feed both the service and the server.
+async function startTestServer(configuredWorkingState: { maxAgeMinutes?: number; maxBytes?: number } = {}) {
+  const configPath = join(mkdtempSync(join(tmpdir(), 'of-ws-config-')), 'config.json');
+  writeFileSync(configPath, JSON.stringify({ workingState: configuredWorkingState }));
+  const settings = loadWorkingStateSettings(configPath);
   const db = openDatabase(':memory:');
   const bus = new EventBus();
   sessions = new SessionService({ db, bus, harnesses: [new FakeHarness()], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt' });
-  workingStates = new WorkingStateService({ db, clock: () => now, stateRoot: mkdtempSync(join(tmpdir(), 'of-ws-routes-')), maxBytes: extra.maxBytes ?? 6144 });
+  workingStates = new WorkingStateService({ db, clock: () => now, stateRoot: mkdtempSync(join(tmpdir(), 'of-ws-routes-')), maxBytes: settings.maxBytes });
   const approvals = new ApprovalService({ db, bus });
   const managerRepo = new ManagerRepository(db);
   const pulseScheduler = new PulseScheduler({ managers: managerRepo, sessions, bus });
   const managers = new ManagerService({ managers: managerRepo, sessions, bus, scheduler: pulseScheduler });
-  server = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable: DEFAULT_MODEL_TABLE, modelConfigPath: '/tmp/of-unused/config.json', workingStates, ...(extra.workingStateMaxAgeMinutes ? { workingStateMaxAgeMinutes: extra.workingStateMaxAgeMinutes } : {}) });
+  server = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable: DEFAULT_MODEL_TABLE, modelConfigPath: '/tmp/of-unused/config.json', workingStates, workingStateMaxAgeMinutes: settings.maxAgeMinutes });
 }
 
 beforeEach(async () => {
@@ -167,7 +172,7 @@ describe('WS snapshot working states', () => {
 
   it('follows the age and size settings the daemon runs with', async () => {
     await server.close();
-    await startTestServer({ workingStateMaxAgeMinutes: CUSTOM_MAX_AGE_MINUTES, maxBytes: CUSTOM_MAX_BYTES });
+    await startTestServer({ maxAgeMinutes: CUSTOM_MAX_AGE_MINUTES, maxBytes: CUSTOM_MAX_BYTES });
 
     const { ws, snapshot } = await connect();
 
