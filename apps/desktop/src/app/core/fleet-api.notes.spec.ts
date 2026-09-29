@@ -86,27 +86,19 @@ describe('FleetApiService notes', () => {
     expect(JSON.parse(lastRequest().init.body as string)).toEqual({ projectId: 'p1', title: 'voice', bodyMd: 'hello' });
   });
 
-  it('updates a note against the revision the user last saw', async () => {
+  // Mirrors UpdateNoteRequestSchema of the REST server (packages/shared/src/notes.ts): the project scope travels in the BODY.
+  it('updates a note with the project and the revision the user last saw in the body', async () => {
     await api.updateNote('p1', 'n1', { expectedRev: 3, bodyMd: 'new body' });
 
     expect(lastRequest().url.pathname).toBe('/api/notes/n1');
-    expect(lastRequest().url.searchParams.get('projectId')).toBe('p1');
     expect(lastRequest().init.method).toBe('PATCH');
-    expect(JSON.parse(lastRequest().init.body as string)).toEqual({ expectedRev: 3, bodyMd: 'new body' });
+    expect(JSON.parse(lastRequest().init.body as string)).toEqual({ projectId: 'p1', expectedRev: 3, bodyMd: 'new body' });
   });
 
   it('reports a stale revision as a 409 the caller can recognise', async () => {
     fetchMock.mockResolvedValue(jsonResponse(409, { error: 'stale_revision', currentRev: 5 }));
 
     await expect(api.updateNote('p1', 'n1', { expectedRev: 3, bodyMd: 'x' })).rejects.toMatchObject({ status: 409, code: 'stale_revision' });
-  });
-
-  it('searches the notes of a project', async () => {
-    await api.searchNotes('p1', 'reconnect backoff');
-
-    expect(lastRequest().url.pathname).toBe('/api/notes/search');
-    expect(lastRequest().url.searchParams.get('projectId')).toBe('p1');
-    expect(lastRequest().url.searchParams.get('q')).toBe('reconnect backoff');
   });
 
   it('lists the versions of a note', async () => {

@@ -33,11 +33,7 @@ export interface NoteChange {
 
 export interface NoteRestore {
   rev: number;
-  expectedRev?: number;
-}
-
-export interface NoteSearchResult extends NoteSummary {
-  snippet: string;
+  expectedRev: number;
 }
 
 export interface Page<T> {
