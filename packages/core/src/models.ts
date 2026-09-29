@@ -7,15 +7,21 @@ import { z } from 'zod';
 export interface ModelTable { haiku: string; sonnet: string; opus: string; fable: string }
 
 export const DEFAULT_MODEL_TABLE: ModelTable = {
-  haiku: 'claude-haiku-4-5',
-  sonnet: 'claude-sonnet-5',
-  opus: 'claude-opus-5-5',
-  fable: 'claude-fable-5-1',
+  haiku: 'haiku',
+  sonnet: 'sonnet',
+  opus: 'opus',
+  fable: 'fable',
 };
 
 // ponytail: a hand-kept list curated from the claude CLI's /model picker (see P2-U6c) — it goes stale when a model ships and needs a release to catch up.
 // Upgrade path: query the Anthropic /v1/models API inside listAvailableModels() when an API key is present.
 const KNOWN_MODELS: readonly string[] = [
+  'haiku',
+  'sonnet',
+  'opus',
+  'fable',
+  'opus[1m]',
+  'sonnet[1m]',
   'claude-haiku-4-5',
   'claude-haiku-4-5-20251001',
   'claude-sonnet-5',

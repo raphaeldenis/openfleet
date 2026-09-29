@@ -42,9 +42,9 @@ export class ModelSelectorComponent {
   private readonly requests = inject(SessionRequestsService);
   protected readonly statusLabel = SWITCH_STATUS_LABEL;
   protected readonly session = computed(() => this.events.sessions().find((s) => s.id === this.sessionId()));
-  // The session's current model rarely matches one of the fixed rungs exactly (it is a full model id,
-  // e.g. 'claude-opus-5-5', not the short alias 'opus') — add it as its own option instead of forcing
-  // the select onto a rung that would silently apply a different model.
+  // The session's current model is either a rung alias (e.g. 'opus') or a full model id (e.g. 'claude-opus-5-5').
+  // A full id matches no fixed rung, so it is added as its own option instead of forcing the select
+  // onto a rung that would silently apply a different model.
   protected readonly rungs = computed(() => {
     const model = this.session()?.model;
     return model && !(MODEL_RUNGS as readonly string[]).includes(model) ? [...MODEL_RUNGS, model] : MODEL_RUNGS;
