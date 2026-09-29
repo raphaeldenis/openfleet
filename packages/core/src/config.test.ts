@@ -53,6 +53,15 @@ describe('loadConfig', () => {
     expect(modeOf(config.sessionsRoot)).toBe(0o700);
   });
 
+  it('exposes the working state mirror directory as stateRoot, apart from the sessions directory', () => {
+    const home = mkdtempSync(join(tmpdir(), 'of-home-'));
+
+    const config = loadConfig({ OPENFLEET_HOME: home });
+
+    expect(config.stateRoot).toBe(join(home, 'state'));
+    expect(config.stateRoot).not.toBe(config.sessionsRoot);
+  });
+
   it('tightens an existing, looser sessions directory to 0700 instead of leaving it as found (AUD-11)', () => {
     const home = mkdtempSync(join(tmpdir(), 'of-home-'));
     mkdirSync(join(home, 'sessions'), { recursive: true, mode: 0o755 });
