@@ -3,7 +3,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { newToken } from './ids.js';
 
-export interface Config { host: '127.0.0.1'; port: number; home: string; dbPath: string; worktreesRoot: string; adminToken: string }
+export interface Config { host: '127.0.0.1'; port: number; home: string; dbPath: string; worktreesRoot: string; sessionsRoot: string; adminToken: string }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const home = env.OPENFLEET_HOME ?? join(homedir(), '.openfleet');
@@ -15,12 +15,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   mkdirSync(worktreesRoot, { recursive: true });
   // Same rationale as home above: mkdirSync's mode is ignored on an existing directory, so tighten on every load.
   chmodSync(worktreesRoot, 0o700);
+  const sessionsRoot = join(home, 'sessions');
+  mkdirSync(sessionsRoot, { recursive: true });
+  // Same rationale as home above: mkdirSync's mode is ignored on an existing directory, so tighten on every load (AUD-11).
+  chmodSync(sessionsRoot, 0o700);
   return {
     host: '127.0.0.1',
     port: Number(env.OPENFLEET_PORT ?? 7331),
     home,
     dbPath: join(home, 'openfleet.db'),
     worktreesRoot,
+    sessionsRoot,
     adminToken: readOrCreateAdminToken(join(home, 'admin.token')),
   };
 }
