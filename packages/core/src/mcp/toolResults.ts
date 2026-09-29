@@ -1,6 +1,6 @@
 import { log } from '../logger.js';
 import {
-  ConstraintError, DataStoreWriteError, DuplicateIdError, InvalidActorError, InvalidCellValueError, InvalidColumnDefinitionError, InvalidNameError,
+  ConstraintError, DaemonSetColumnError, DataStoreWriteError, DuplicateIdError, InvalidActorError, InvalidCellValueError, InvalidColumnDefinitionError, InvalidNameError,
   InvalidQueryError, InvalidViewConfigError, StoreHasRowsError, StoreRowCapError, ViewNotFoundError,
 } from '../stores/dataStoreService.js';
 import { DuplicateNameError, RowNotFoundError, StoreNotFoundError, UnknownColumnError } from '../stores/dataStoreRepository.js';
@@ -25,7 +25,7 @@ export function truncateToByteBudget<T>(items: T[], maxBytes: number): { items: 
 
 // Typed errors whose message was written for the caller and carries no SQL or internal state.
 const CALLER_SAFE_ERRORS = [
-  ConstraintError, DataStoreWriteError, DuplicateIdError, DuplicateNameError, InvalidActorError, InvalidCellValueError, InvalidColumnDefinitionError,
+  ConstraintError, DaemonSetColumnError, DataStoreWriteError, DuplicateIdError, DuplicateNameError, InvalidActorError, InvalidCellValueError, InvalidColumnDefinitionError,
   InvalidNameError, InvalidQueryError, InvalidViewConfigError, StoreHasRowsError, StoreRowCapError, UnknownColumnError,
   NoteTooLargeError, SectionError, VersionNotFoundError,
 ];

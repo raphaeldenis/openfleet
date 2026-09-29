@@ -213,6 +213,14 @@ export class NoteService {
       this.repo.rename(id, { title: input.title, expectedRev: input.expectedRev, updatedAt }));
   }
 
+  /** Replaces body and title under one revision check: one new revision, one version row. */
+  updateBodyAndTitle(id: string, input: UpdateNoteInput & { title: string }): Note {
+    assertWithinBodyCap(input.bodyMd);
+    this.assertNotFileBacked(id);
+    return this.writeThroughCas(id, input.author, (updatedAt) =>
+      this.repo.updateBodyAndTitle(id, { bodyMd: input.bodyMd, title: input.title, expectedRev: input.expectedRev, updatedAt }));
+  }
+
   move(id: string, folder: NoteFolder | null): Note {
     this.assertNotFileBacked(id);
     const wasMoved = this.repo.move(id, folder);

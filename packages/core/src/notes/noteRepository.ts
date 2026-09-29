@@ -1,5 +1,5 @@
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
-import type { Note, NoteFolder, NoteVersion } from '@openfleet/shared';
+import type { Note, NoteFolder, NoteSummary, NoteVersion } from '@openfleet/shared';
 
 export type NoteUpdateResult =
   | { outcome: 'updated'; note: Note }
@@ -41,6 +41,17 @@ export interface NoteSearchHit {
   snippet: string;
 }
 
+export interface NoteSummaryHit {
+  note: NoteSummary;
+  snippet: string;
+}
+
+export interface NoteListOptions {
+  folder?: NoteFolder;
+  limit: number;
+  offset: number;
+}
+
 export interface NoteSearchOptions {
   projectId: string;
   limit: number;
@@ -54,6 +65,16 @@ interface Row {
 interface VersionRow {
   id: string; note_id: string; rev: number; body_md: string; author: string; change_summary: string | null; created_at: string;
 }
+
+interface SummaryRow {
+  id: string; title: string; folder: NoteFolder | null; rev: number; shared: number; is_file_backed: number; updated_at: string;
+}
+
+const SUMMARY_COLUMNS = 'id, title, folder, rev, shared, file_path IS NOT NULL AS is_file_backed, updated_at';
+
+const toSummary = (r: SummaryRow): NoteSummary => ({
+  id: r.id, title: r.title, folder: r.folder, rev: r.rev, shared: r.shared === 1, fileBacked: r.is_file_backed === 1, updatedAt: r.updated_at,
+});
 
 const toNote = (r: Row): Note => ({
   id: r.id, projectId: r.project_id, title: r.title, bodyMd: r.body_md, folder: r.folder,
@@ -84,6 +105,18 @@ export class NoteRepository {
     const rows = this.db.prepare('SELECT * FROM notes WHERE project_id = ? ORDER BY created_at, id').all(projectId) as unknown as Row[];
     return rows.map(toNote);
   }
+  /** One page of summaries, bodies never read; `folder` narrows the page. */
+  listSummaries(projectId: string, { folder, limit, offset }: NoteListOptions): NoteSummary[] {
+    const rows = this.db.prepare(
+      `SELECT ${SUMMARY_COLUMNS} FROM notes WHERE project_id = ? AND (? IS NULL OR folder = ?) ORDER BY created_at, id LIMIT ? OFFSET ?`,
+    ).all(projectId, folder ?? null, folder ?? null, limit, offset) as unknown as SummaryRow[];
+    return rows.map(toSummary);
+  }
+  count(projectId: string, folder?: NoteFolder): number {
+    const { n } = this.db.prepare('SELECT COUNT(*) AS n FROM notes WHERE project_id = ? AND (? IS NULL OR folder = ?)')
+      .get(projectId, folder ?? null, folder ?? null) as { n: number };
+    return n;
+  }
   update(id: string, { bodyMd, expectedRev, updatedAt }: NoteBodyUpdate): NoteUpdateResult {
     return this.compareAndSet(
       'UPDATE notes SET body_md = ?, rev = rev + 1, updated_at = ? WHERE id = ? AND rev = ? RETURNING *',
@@ -101,6 +134,12 @@ export class NoteRepository {
     return this.compareAndSet(
       'UPDATE notes SET title = ?, rev = rev + 1, updated_at = ? WHERE id = ? AND rev = ? RETURNING *',
       [title, updatedAt], id, expectedRev,
+    );
+  }
+  updateBodyAndTitle(id: string, { bodyMd, title, expectedRev, updatedAt }: NoteBodyUpdate & { title: string }): NoteUpdateResult {
+    return this.compareAndSet(
+      'UPDATE notes SET body_md = ?, title = ?, rev = rev + 1, updated_at = ? WHERE id = ? AND rev = ? RETURNING *',
+      [bodyMd, title, updatedAt], id, expectedRev,
     );
   }
   move(id: string, folder: NoteFolder | null): boolean {
@@ -124,11 +163,27 @@ export class NoteRepository {
     const row = this.db.prepare('SELECT * FROM note_versions WHERE note_id = ? AND rev = ?').get(noteId, rev) as VersionRow | undefined;
     return row ? toNoteVersion(row) : undefined;
   }
-  /** History without bodies: what a listing needs, without reading every revision's full text. */
-  listVersionSummaries(noteId: string): NoteVersionSummary[] {
-    const rows = this.db.prepare('SELECT id, rev, author, created_at FROM note_versions WHERE note_id = ? ORDER BY rev')
-      .all(noteId) as unknown as Pick<VersionRow, 'id' | 'rev' | 'author' | 'created_at'>[];
+  /** History without bodies: what a listing needs, without reading every revision's full text. Unbounded unless `page` is given. */
+  listVersionSummaries(noteId: string, page: { limit: number; offset: number } = { limit: -1, offset: 0 }): NoteVersionSummary[] {
+    const rows = this.db.prepare('SELECT id, rev, author, created_at FROM note_versions WHERE note_id = ? ORDER BY rev LIMIT ? OFFSET ?')
+      .all(noteId, page.limit, page.offset) as unknown as Pick<VersionRow, 'id' | 'rev' | 'author' | 'created_at'>[];
     return rows.map((row) => ({ id: row.id, rev: row.rev, author: row.author, createdAt: row.created_at }));
+  }
+  countVersions(noteId: string): number {
+    const { n } = this.db.prepare('SELECT COUNT(*) AS n FROM note_versions WHERE note_id = ?').get(noteId) as { n: number };
+    return n;
+  }
+  /** Same match as `search`, but reads only summary columns: no body is loaded. */
+  searchSummaries(escapedQuery: string, { projectId, limit }: NoteSearchOptions): NoteSummaryHit[] {
+    const rows = this.db.prepare(
+      `SELECT n.id, n.title, n.folder, n.rev, n.shared, n.file_path IS NOT NULL AS is_file_backed, n.updated_at,
+              snippet(note_fts, 2, '', '', '…', 12) AS snippet
+       FROM notes n JOIN note_fts ON note_fts.note_id = n.id
+       WHERE note_fts MATCH ? AND n.project_id = ?
+       ORDER BY rank
+       LIMIT ?`,
+    ).all(escapedQuery, projectId, limit) as unknown as (SummaryRow & { snippet: string })[];
+    return rows.map((row) => ({ note: toSummary(row), snippet: row.snippet }));
   }
   /** `escapedQuery` must already be FTS5-safe (see noteTools.ts's query escaping) — this method trusts it verbatim. */
   search(escapedQuery: string, { projectId, limit }: NoteSearchOptions): NoteSearchHit[] {
