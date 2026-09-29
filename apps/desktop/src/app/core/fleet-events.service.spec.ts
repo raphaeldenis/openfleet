@@ -228,6 +228,22 @@ describe('FleetEventsService', () => {
     expect(service.sessions()[0]!.model).toBe('claude-opus-5-5');
   });
 
+  it('drops the resolved model and drift mark on session.model_changed but keeps the CLI version, so a stale id never sits beside a new alias', async () => {
+    const service = new FleetEventsService();
+    await service.connect();
+    const socket = FakeWebSocket.instances[0]!;
+    const resolved = { ...session('s1'), model: 'opus', resolvedModel: 'claude-opus-5-5', cliVersion: '2.1.284', modelDriftedFrom: 'claude-opus-5-4' };
+    socket.dispatchMessage({ type: 'snapshot', sessions: [resolved], approvals: [] });
+
+    socket.dispatchMessage({ type: 'session.model_changed', sessionId: 's1', model: 'sonnet' });
+
+    const [after] = service.sessions();
+    expect(after!.model).toBe('sonnet');
+    expect(after!.resolvedModel).toBeUndefined();
+    expect(after!.modelDriftedFrom).toBeUndefined();
+    expect(after!.cliVersion).toBe('2.1.284');
+  });
+
   it('patches a session\'s permission mode on session.permission_mode_changed, so the label reflects an applied switch without waiting for the relaunch', async () => {
     const service = new FleetEventsService();
     await service.connect();

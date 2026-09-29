@@ -270,6 +270,39 @@ describe('ModelSelectorComponent', () => {
     });
   });
 
+  describe('resolved model line', () => {
+    async function renderWithSession(fields: Record<string, string>) {
+      const events = { sessions: signal([{ id: 's1', name: 'Gimli', emoji: '⚔️', model: 'opus', state: 'idle', ...fields }]), approvals: signal([]), managers: signal([]) };
+      await render(ModelSelectorComponent, {
+        bindings: [inputBinding('sessionId', () => 's1')],
+        providers: [{ provide: FleetApiService, useValue: { updateModel: vi.fn() } }, { provide: FleetEventsService, useValue: events }],
+      });
+    }
+
+    it('user can see the resolved model id, the CLI version and the previous id when the model drifted', async () => {
+      await renderWithSession({ resolvedModel: 'claude-opus-5-5', cliVersion: '2.1.284', modelDriftedFrom: 'claude-opus-5-4' });
+
+      expect(screen.getByTestId('resolved-model')).toHaveTextContent('resolved claude-opus-5-5');
+      expect(screen.getByTestId('cli-version')).toHaveTextContent('CLI 2.1.284');
+      expect(screen.getByTestId('model-drift')).toHaveTextContent('changed from claude-opus-5-4');
+    });
+
+    it('user sees no resolved model, CLI version or drift mark for a session that has none', async () => {
+      await renderWithSession({});
+
+      expect(screen.queryByTestId('resolved-model')).toBeNull();
+      expect(screen.queryByTestId('cli-version')).toBeNull();
+      expect(screen.queryByTestId('model-drift')).toBeNull();
+    });
+
+    it('user sees the resolved model without a drift mark when the model did not drift', async () => {
+      await renderWithSession({ resolvedModel: 'claude-opus-5-5', cliVersion: '2.1.284' });
+
+      expect(screen.getByTestId('resolved-model')).toBeTruthy();
+      expect(screen.queryByTestId('model-drift')).toBeNull();
+    });
+  });
+
   it('never types a slash-model command into the UI', async () => {
     await render(ModelSelectorComponent, {
       bindings: [inputBinding('sessionId', () => 's1')],
