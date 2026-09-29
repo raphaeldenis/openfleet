@@ -31,6 +31,16 @@ describe('buildClaudeLaunchConfig', () => {
     expect(config.args[mcpConfigFlagIndex + 1]).toBe(tokenFilePaths.mcpConfigPath);
   });
 
+  it('starts a fresh conversation under the given CLI session id, not the OpenFleet session id, when not resuming', () => {
+    const freshConversationId = '22222222-2222-4222-8222-222222222222';
+
+    const { args } = buildClaudeLaunchConfig({ ...launch, cliSessionId: freshConversationId }, tokenFilePaths);
+
+    expect(args[args.indexOf('--session-id') + 1]).toBe(freshConversationId);
+    expect(args).not.toContain('--resume');
+    expect(args).not.toContain(launch.sessionId);
+  });
+
   it('never puts the hook token or the mcp bearer token in argv — only the file paths they are written to', () => {
     const config = buildClaudeLaunchConfig(launch, tokenFilePaths);
     const argvBlob = config.args.join(' ');

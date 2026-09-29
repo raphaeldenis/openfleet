@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { inTransaction } from '../db/transaction.js';
 import { PERMISSION_MODES, type HarnessId, type PermissionMode, type Session, type SessionState } from '@openfleet/shared';
 
 interface Row {
@@ -152,11 +153,16 @@ export class SessionRepository {
     const row = this.db.prepare('SELECT cli_session_id FROM sessions WHERE id = ?').get(id) as { cli_session_id: string | null } | undefined;
     return row?.cli_session_id;
   }
+  // Every id a session ever adopted stays reserved to it in session_cli_ids, also once it moved on.
   setCliSessionId(id: string, cliSessionId: string): void {
-    this.db.prepare('UPDATE sessions SET cli_session_id = ? WHERE id = ?').run(cliSessionId, id);
+    inTransaction(this.db, 'set_cli_session_id', () => {
+      this.db.prepare('UPDATE sessions SET cli_session_id = ? WHERE id = ?').run(cliSessionId, id);
+      this.db.prepare('INSERT OR IGNORE INTO session_cli_ids (cli_session_id, session_id) VALUES (?, ?)').run(cliSessionId, id);
+    });
   }
   isCliSessionIdOfAnotherSession(id: string, cliSessionId: string): boolean {
-    const row = this.db.prepare('SELECT 1 AS found FROM sessions WHERE id <> ? AND (id = ? OR cli_session_id = ?)').get(id, cliSessionId, cliSessionId);
-    return row !== undefined;
+    const isLaunchOrCurrentIdOfAnother = this.db.prepare('SELECT 1 AS found FROM sessions WHERE id <> ? AND (id = ? OR cli_session_id = ?)').get(id, cliSessionId, cliSessionId) !== undefined;
+    const isLeftBehindByAnother = this.db.prepare('SELECT 1 AS found FROM session_cli_ids WHERE session_id <> ? AND cli_session_id = ?').get(id, cliSessionId) !== undefined;
+    return isLaunchOrCurrentIdOfAnother || isLeftBehindByAnother;
   }
 }

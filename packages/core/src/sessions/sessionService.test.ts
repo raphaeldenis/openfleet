@@ -1043,6 +1043,7 @@ describe('SessionService.updateModel', () => {
     vi.useFakeTimers();
     const { service, harness, events } = setup();
     const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    harness.markPrompted(session.id);
     service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
     const originalTokens = service.tokens(session.id)!;
 
@@ -1072,6 +1073,7 @@ describe('SessionService.updateModel', () => {
     vi.useFakeTimers();
     const { service, harness } = setup();
     const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    harness.markPrompted(session.id);
     service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
     service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit' }));
 
@@ -2924,6 +2926,7 @@ describe('SessionService.updatePermissionMode', () => {
     vi.useFakeTimers();
     const { service, harness } = setup();
     const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    harness.markPrompted(session.id);
     service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
 
     const result = service.updatePermissionMode(session.id, 'bypassPermissions');
@@ -2998,6 +3001,7 @@ describe('SessionService.reopen', () => {
     vi.useFakeTimers();
     const { service, harness } = setup();
     const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖', model: 'claude-opus-5-5' });
+    harness.markPrompted(session.id);
     const originalTokens = service.tokens(session.id)!;
     harness.handles[0]!.emitExit(0);
     expect(service.get(session.id)!.state).toBe('closed');

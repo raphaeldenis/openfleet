@@ -71,6 +71,7 @@ const transcriptPathOf = (cliSessionId: string) => join(projectDirectory, `${cli
 const createSession = async (model?: string) => {
   const created = (await (await postJson('/api/sessions', { directory: '/tmp', name: 'G', harness: 'fake', model })).json()) as ListedSession;
   transcriptPath = transcriptPathOf(created.id);
+  harness.markPrompted(created.id);
   return created.id;
 };
 
