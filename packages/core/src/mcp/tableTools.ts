@@ -3,22 +3,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { RowNotFoundError, StoreNotFoundError, type DataStoreRepository, type RowActor } from '../stores/dataStoreRepository.js';
 import type { DataStoreService } from '../stores/dataStoreService.js';
-
-const ok = (payload: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(payload) }] });
-const fail = (message: string) => ({ content: [{ type: 'text' as const, text: message }], isError: true });
-
-/** Keeps rows until adding the next one would push the serialized result past maxBytes; always keeps at least one. */
-function truncateToByteBudget<T>(items: T[], maxBytes: number): { items: T[]; truncated: boolean } {
-  let bytes = 0;
-  const kept: T[] = [];
-  for (const item of items) {
-    const itemBytes = Buffer.byteLength(JSON.stringify(item), 'utf8');
-    if (kept.length > 0 && bytes + itemBytes > maxBytes) return { items: kept, truncated: true };
-    bytes += itemBytes;
-    kept.push(item);
-  }
-  return { items: kept, truncated: false };
-}
+import { fail, guarded, truncateToByteBudget } from './toolResults.js';
 
 // Task 15 caps (see the plan's Review Focus #3 and Lead amendment on P3-T11): a batch write is capped so
 // one call can't hold the outer transaction open indefinitely, and a query defaults to a page an agent can
@@ -35,22 +20,6 @@ export interface RegisterTableToolsDeps {
 }
 
 const agentActor = (caller: Session): RowActor => ({ kind: 'agent', label: `${caller.emoji} ${caller.name}` });
-
-/**
- * Runs a table-tool body, mapping any typed service/repository error (never raw SQL) to a non-throwing
- * `fail()`. A store or row outside the caller's project reads identically to one that never existed — its
- * error carries no id, so a caller can't tell "wrong project" apart from "never existed".
- */
-function guarded<T>(work: () => T) {
-  try {
-    return ok(work());
-  } catch (error) {
-    if (error instanceof StoreNotFoundError) return fail('data store not found');
-    if (error instanceof RowNotFoundError) return fail('row not found');
-    if (error instanceof Error) return fail(error.message);
-    throw error;
-  }
-}
 
 export function registerTableTools(server: McpServer, deps: RegisterTableToolsDeps): void {
   const { stores, storeRepo, caller } = deps;

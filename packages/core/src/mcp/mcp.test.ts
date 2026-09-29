@@ -70,9 +70,10 @@ describe('MCP', () => {
     const client = await connect(parentToken);
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
-      'add_data_store_column', 'close_session', 'create_data_store', 'create_session', 'create_worktree', 'delete_data_store_row',
-      'describe_data_store', 'get_argus_status', 'get_session_status', 'insert_data_store_rows', 'list_children', 'list_sessions',
-      'message_parent', 'pulse_now', 'query_data_store', 'send_session_message', 'update_data_store_rows', 'update_session',
+      'add_data_store_column', 'close_session', 'create_data_store', 'create_data_store_view', 'create_session', 'create_worktree',
+      'delete_data_store_row', 'delete_data_store_view', 'describe_data_store', 'get_argus_status', 'get_session_status',
+      'insert_data_store_rows', 'list_children', 'list_data_store_views', 'list_row_changes', 'list_sessions', 'message_parent',
+      'pulse_now', 'query_data_store', 'send_session_message', 'update_data_store_rows', 'update_data_store_view', 'update_session',
     ]);
   });
 
