@@ -1,7 +1,8 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { mkdirSync, mkdtempSync, symlinkSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, relative } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { startServer } from '../api/server.js';
@@ -167,5 +168,133 @@ describe('spawn directory guard', () => {
 
     expect(result.isError).toBe(true);
     expect(harness.launches).toHaveLength(2);
+  });
+});
+
+describe('spawn directory guard, hostile requests (QE)', () => {
+  async function spawnDescendant(callerToken: string, name: string): Promise<{ client: Client; token: string }> {
+    const caller = await connect(callerToken);
+    const directory = mkdtempSync(join(WORKTREES_ROOT, `${name}-`));
+    const launchesBefore = harness.launches.length;
+    await callCreateSession(caller, { directory, name });
+    const token = harness.launches[launchesBefore]!.mcpToken;
+    return { client: await connect(token), token };
+  }
+
+  it('user can be refused when a great-grandchild spawns into the directory of the first manager, four levels down', async () => {
+    const child = await spawnDescendant(managerToken, 'child');
+    const grandchild = await spawnDescendant(child.token, 'grandchild');
+    const greatGrandchild = await spawnDescendant(grandchild.token, 'great-grandchild');
+    const launchesBefore = harness.launches.length;
+
+    const result = await callCreateSession(greatGrandchild.client, { directory: managerDirectory });
+
+    expect(result.isError).toBe(true);
+    expect(errorText(result)).toContain(managerId);
+    expect(harness.launches).toHaveLength(launchesBefore);
+  });
+
+  it('user can be refused when the requested directory carries a trailing slash', async () => {
+    const manager = await connect(managerToken);
+
+    const result = await callCreateSession(manager, { directory: `${managerDirectory}/` });
+
+    expect(result.isError).toBe(true);
+    expect(errorText(result)).toContain(managerId);
+    expect(harness.launches).toHaveLength(1);
+  });
+
+  it('user can be refused when the requested directory reaches the manager directory through a dot-dot segment', async () => {
+    const manager = await connect(managerToken);
+    const subdirectory = join(managerDirectory, 'nested');
+    mkdirSync(subdirectory);
+
+    const result = await callCreateSession(manager, { directory: join(subdirectory, '..') });
+
+    expect(result.isError).toBe(true);
+    expect(errorText(result)).toContain(managerId);
+    expect(harness.launches).toHaveLength(1);
+  });
+
+  it('user can be refused when the requested directory is a relative path that resolves to the manager directory', async () => {
+    const manager = await connect(managerToken);
+
+    const result = await callCreateSession(manager, { directory: relative(process.cwd(), managerDirectory) });
+
+    expect(result.isError).toBe(true);
+    expect(errorText(result)).toContain(managerId);
+    expect(harness.launches).toHaveLength(1);
+  });
+
+  it('user can be refused when the requested directory is a chain of two symbolic links to the manager directory', async () => {
+    const manager = await connect(managerToken);
+    const linksFolder = mkdtempSync(join(WORKTREES_ROOT, 'links-'));
+    symlinkSync(managerDirectory, join(linksFolder, 'first'));
+    symlinkSync(join(linksFolder, 'first'), join(linksFolder, 'second'));
+
+    const result = await callCreateSession(manager, { directory: join(linksFolder, 'second') });
+
+    expect(result.isError).toBe(true);
+    expect(errorText(result)).toContain(managerId);
+    expect(harness.launches).toHaveLength(1);
+  });
+
+  it('user can be refused with a clean error and no session when the requested directory does not exist', async () => {
+    const manager = await connect(managerToken);
+    const sessionCountBefore = sessions.list().length;
+
+    const result = await callCreateSession(manager, { directory: join(managerDirectory, 'missing') });
+
+    expect(result.isError).toBe(true);
+    expect(sessions.list()).toHaveLength(sessionCountBefore);
+    expect(harness.launches).toHaveLength(1);
+  });
+
+  it('user can be refused with a clean error and no session when the requested directory is a symbolic link loop', async () => {
+    const manager = await connect(managerToken);
+    const loopFolder = mkdtempSync(join(WORKTREES_ROOT, 'loop-'));
+    symlinkSync(join(loopFolder, 'b'), join(loopFolder, 'a'));
+    symlinkSync(join(loopFolder, 'a'), join(loopFolder, 'b'));
+
+    const result = await callCreateSession(manager, { directory: join(loopFolder, 'a') });
+
+    expect(result.isError).toBe(true);
+    expect(harness.launches).toHaveLength(1);
+  });
+
+  it('user can spawn a child when the manager directory no longer exists on disk', async () => {
+    const manager = await connect(managerToken);
+    const childDirectory = mkdtempSync(join(WORKTREES_ROOT, 'child-'));
+    rmSync(managerDirectory, { recursive: true, force: true });
+
+    const result = await callCreateSession(manager, { directory: childDirectory });
+
+    expect(result.isError).toBeFalsy();
+    expect(harness.launches).toHaveLength(2);
+  });
+
+  it('user can read the directory refusal rather than the worktree-root refusal when a manager outside the worktrees root spawns into its own directory', async () => {
+    const outsideDirectory = mkdtempSync(join(tmpdir(), 'of-outside-'));
+    const outsider = await sessions.create({ directory: outsideDirectory, name: 'Outsider', harness: 'fake', emoji: '🚪' });
+    const outsiderClient = await connect(harness.launches[1]!.mcpToken);
+
+    const result = await callCreateSession(outsiderClient, { directory: outsideDirectory });
+
+    expect(result.isError).toBe(true);
+    expect(errorText(result)).toContain(outsider.id);
+    expect(harness.launches).toHaveLength(2);
+  });
+
+  it('user can be refused when the requested directory differs from the manager directory only by letter case on a case-insensitive volume', async () => {
+    const manager = await connect(managerToken);
+    const upperCased = managerDirectory.toUpperCase();
+    const volumeIsCaseInsensitive = upperCased !== managerDirectory && existsSync(upperCased);
+    if (!volumeIsCaseInsensitive) return;
+
+    const result = await callCreateSession(manager, { directory: upperCased });
+
+    expect(result.isError).toBe(true);
+    expect(errorText(result)).toContain(managerId);
+    expect(harness.launches).toHaveLength(1);
   });
 });

@@ -1,7 +1,8 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const spawn = vi.fn((_command: string, _args: string[], _options: { cwd: string }) => ({
@@ -28,8 +29,10 @@ function snapshotTree(root: string): Record<string, string> {
   const walk = (directory: string) => {
     for (const entry of readdirSync(directory)) {
       const path = join(directory, entry);
-      if (statSync(path).isDirectory()) walk(path);
-      else files[path] = readFileSync(path, 'utf8');
+      if (statSync(path).isDirectory()) {
+        files[`${path}/`] = '<directory>';
+        walk(path);
+      } else files[path] = readFileSync(path, 'utf8');
     }
   };
   walk(root);
@@ -44,6 +47,7 @@ describe('spawning a child session', () => {
   let managerDirectory: string;
   let firstChildDirectory: string;
   let secondChildDirectory: string;
+  let openFleetSessionsRoot: string;
 
   beforeEach(async () => {
     spawn.mockClear();
@@ -77,7 +81,8 @@ describe('spawning a child session', () => {
 
     const db = openDatabase(':memory:');
     const bus = new EventBus();
-    const sessions = new SessionService({ db, bus, harnesses: [new ClaudeCliHarness()], baseUrl: 'http://127.0.0.1:0', worktreesRoot: WORKTREES_ROOT, submitKeystrokeDelayMs: 0 });
+    openFleetSessionsRoot = mkdtempSync(join(tmpdir(), 'of-home-'));
+    const sessions = new SessionService({ db, bus, harnesses: [new ClaudeCliHarness(openFleetSessionsRoot)], baseUrl: 'http://127.0.0.1:0', worktreesRoot: WORKTREES_ROOT, submitKeystrokeDelayMs: 0 });
     const managerRepo = new ManagerRepository(db);
     const pulseScheduler = new PulseScheduler({ managers: managerRepo, sessions, bus });
     const managers = new ManagerService({ managers: managerRepo, sessions, bus, scheduler: pulseScheduler });
@@ -120,5 +125,33 @@ describe('spawning a child session', () => {
 
     expect(new Set([managerLaunch, firstLaunch, secondLaunch]).size).toBe(3);
     for (const settingsPath of [managerLaunch, firstLaunch, secondLaunch]) expect(() => JSON.parse(readFileSync(settingsPath!, 'utf8'))).not.toThrow();
+  });
+
+  it('user can spawn a child whose settings and mcp config live in a 0700 folder of the OpenFleet home, mode 0600, and in no working directory', async () => {
+    await callCreateSession(firstChildDirectory, 'First');
+
+    const workingDirectories = [managerDirectory, firstChildDirectory, secondChildDirectory].map((directory) => realpathSync(directory));
+    const openFleetHome = realpathSync(openFleetSessionsRoot);
+    for (const [, args] of spawn.mock.calls) {
+      for (const generatedFile of [argAfter(args, '--settings'), argAfter(args, '--mcp-config')]) {
+        const realFile = realpathSync(generatedFile);
+        const folder = dirname(realFile);
+        expect(realFile.startsWith(`${openFleetHome}/`)).toBe(true);
+        for (const workingDirectory of workingDirectories) expect(realFile.startsWith(`${workingDirectory}/`)).toBe(false);
+        expect(statSync(realFile).mode & 0o777).toBe(0o600);
+        expect(statSync(folder).mode & 0o777).toBe(0o700);
+      }
+    }
+  });
+
+  it('user can spawn two children and neither shares a generated settings folder with the manager or the other child', async () => {
+    await callCreateSession(firstChildDirectory, 'First');
+    await callCreateSession(secondChildDirectory, 'Second');
+
+    const settingsFolders = spawn.mock.calls.map(([, args]) => dirname(argAfter(args, '--settings')));
+    const mcpConfigFolders = spawn.mock.calls.map(([, args]) => dirname(argAfter(args, '--mcp-config')));
+
+    expect(new Set(settingsFolders).size).toBe(3);
+    expect(mcpConfigFolders).toEqual(settingsFolders);
   });
 });
