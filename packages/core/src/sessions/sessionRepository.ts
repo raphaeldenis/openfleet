@@ -6,10 +6,10 @@ interface Row {
   parent_id: string | null; role: string | null; harness: HarnessId; state: SessionState; state_since: string;
   exit_code: number | null; hook_token: string; mcp_token: string; permission_mode: string | null; branch: string | null;
   created_at: string; closed_at: string | null; project_id: string | null;
-  resolved_model: string | null; cli_version: string | null; model_drifted_from: string | null;
+  resolved_model: string | null; cli_version: string | null; model_drifted_from: string | null; resolved_for_model: string | null;
 }
 
-type NewSessionRow = Omit<Row, 'exit_code' | 'closed_at' | 'project_id' | 'resolved_model' | 'cli_version' | 'model_drifted_from'> & { project_id?: string | null };
+type NewSessionRow = Omit<Row, 'exit_code' | 'closed_at' | 'project_id' | 'resolved_model' | 'cli_version' | 'model_drifted_from' | 'resolved_for_model'> & { project_id?: string | null };
 
 export interface NormalizedPermissionMode { mode: PermissionMode | undefined; wasRecognized: boolean }
 
@@ -70,12 +70,33 @@ export class SessionRepository {
     this.db.prepare('UPDATE sessions SET model = ? WHERE id = ?').run(model, id);
   }
   clearResolvedModel(id: string): void {
-    this.db.prepare('UPDATE sessions SET resolved_model = NULL, model_drifted_from = NULL WHERE id = ?').run(id);
+    this.db.prepare('UPDATE sessions SET resolved_model = NULL, resolved_for_model = NULL, model_drifted_from = NULL WHERE id = ?').run(id);
   }
-  // COALESCE keeps an existing drift flag when a later identical resolution passes no driftedFrom.
-  recordResolvedModel(input: { id: string; resolvedModel: string; cliVersion: string; driftedFrom: string | undefined }): void {
-    this.db.prepare('UPDATE sessions SET resolved_model = ?, cli_version = ?, model_drifted_from = COALESCE(?, model_drifted_from) WHERE id = ?')
-      .run(input.resolvedModel, input.cliVersion, input.driftedFrom ?? null, input.id);
+  // requestedModel is the alias the recorded launch was started with: sessions.model may already name the next one.
+  // driftedFrom: a string sets the flag, null clears it (a computed "no drift"), absent leaves it as is.
+  recordResolvedModel(input: { id: string; resolvedModel: string; cliVersion: string; requestedModel: string | null; driftedFrom?: string | null }): void {
+    const isComputed = input.driftedFrom !== undefined;
+    this.db.prepare('UPDATE sessions SET resolved_model = ?, cli_version = ?, resolved_for_model = ?, model_drifted_from = CASE WHEN ? THEN ? ELSE model_drifted_from END WHERE id = ?')
+      .run(input.resolvedModel, input.cliVersion, input.requestedModel, Number(isComputed), input.driftedFrom ?? null, input.id);
+  }
+  // `IS ?` matches a NULL requested model too.
+  resolvedModelUnderAlias(input: { id: string; requestedModel: string | null }): string | undefined {
+    const row = this.db.prepare('SELECT resolved_model FROM sessions WHERE id = ? AND resolved_for_model IS ?')
+      .get(input.id, input.requestedModel) as { resolved_model: string | null } | undefined;
+    return row?.resolved_model ?? undefined;
+  }
+  // ponytail: the id comes from a transcript the session's own agent can write, so one session can plant any valid model id here
+  // and make a later session of the same alias show modelDriftedFrom = that id. Display-only, never fed back to --model (spec 4.4).
+  // Upgrade path: compare only against ids seen in more than one session, or record them from a source the agent cannot write.
+  // The latest other session with a recorded id under the alias, ordered by (created_at, rowid): creation time is a proxy for
+  // "resolved last", and rowid breaks a same-millisecond tie. No column stamps the recording time, so two ceilings remain:
+  // a "reversed drift" (an old session that records after a newer one is compared with that newer one) and a session
+  // resumed long after its creation, whose resolution is ranked by when it was created. Upgrade path: order by a resolved_at column.
+  previousResolvedModel(input: { requestedModel: string | null; excludedSessionId: string }): { sessionId: string; resolvedModel: string } | undefined {
+    const row = this.db.prepare(`SELECT id, resolved_model FROM sessions
+      WHERE resolved_for_model IS ? AND resolved_model IS NOT NULL AND id <> ?
+      ORDER BY created_at DESC, rowid DESC LIMIT 1`).get(input.requestedModel, input.excludedSessionId) as { id: string; resolved_model: string } | undefined;
+    return row ? { sessionId: row.id, resolvedModel: row.resolved_model } : undefined;
   }
   setPermissionMode(id: string, mode: PermissionMode): void {
     this.db.prepare('UPDATE sessions SET permission_mode = ? WHERE id = ?').run(mode, id);
