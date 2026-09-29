@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -142,6 +142,117 @@ describe('a user whose CLI conversation transcript may be gone', () => {
     writeFileSync(join(configDir, 'outside.jsonl'), userLine);
 
     expect(await conversationExists({ cliSessionId: '../../outside', directory: sessionDirectory })).toBe('missing');
+  });
+
+  describe('when its user line sits at the edge of what is read at once', () => {
+    const READ_CHUNK_BYTES = 64 * 1024;
+    const systemLineOfBytes = (bytes: number) => {
+      const emptyLine = '{"type":"system","note":""}\n';
+      return `{"type":"system","note":"${'x'.repeat(bytes - emptyLine.length)}"}\n`;
+    };
+    const emojiUserLine = `{"type":"user","message":{"content":"${'🚀é'.repeat(40)}"}}\n`;
+
+    it('sees the conversation present when the user line straddles the first chunk boundary', async () => {
+      writeTranscript('-p', { content: systemLineOfBytes(READ_CHUNK_BYTES - 30) + userLine });
+
+      expect(await conversationExists({ cliSessionId: conversationId, directory: sessionDirectory })).toBe('present');
+    });
+
+    it('sees the conversation present when the user line starts exactly on the chunk boundary', async () => {
+      writeTranscript('-p', { content: systemLineOfBytes(READ_CHUNK_BYTES) + userLine });
+
+      expect(await conversationExists({ cliSessionId: conversationId, directory: sessionDirectory })).toBe('present');
+    });
+
+    it.each([1, 2, 3, 5, 9, 40])('sees the conversation present when the boundary cuts the emoji of its user line %i bytes in', async (offset) => {
+      writeTranscript('-p', { content: systemLineOfBytes(READ_CHUNK_BYTES - offset) + emojiUserLine });
+
+      expect(await conversationExists({ cliSessionId: conversationId, directory: sessionDirectory })).toBe('present');
+    });
+
+    it('sees the conversation present when its last user line has no trailing newline', async () => {
+      writeTranscript('-p', { content: titleOnlyStub + userLine.trimEnd() });
+
+      expect(await conversationExists({ cliSessionId: conversationId, directory: sessionDirectory })).toBe('present');
+    });
+  });
+
+  describe('when its transcript holds no user line and grows large', () => {
+    const MAX_BYTES_SCANNED = 4 * 1024 * 1024;
+    const systemLineOfBytes = (bytes: number) => `{"type":"system","note":"${'x'.repeat(bytes - 28)}"}\n`;
+
+    it('sees the conversation present once it is as long as what the daemon agrees to read, a title-only stub never is that long', async () => {
+      writeTranscript('-p', { content: systemLineOfBytes(MAX_BYTES_SCANNED) });
+
+      expect(await conversationExists({ cliSessionId: conversationId, directory: sessionDirectory })).toBe('present');
+    });
+
+    it('sees the conversation present when its user line only comes after more than what the daemon agrees to read', async () => {
+      writeTranscript('-p', { content: systemLineOfBytes(MAX_BYTES_SCANNED + 1024 * 1024) + userLine });
+
+      expect(await conversationExists({ cliSessionId: conversationId, directory: sessionDirectory })).toBe('present');
+    });
+
+    it('sees the conversation missing when it stays one byte under what the daemon agrees to read', async () => {
+      writeTranscript('-p', { content: systemLineOfBytes(MAX_BYTES_SCANNED - 1) });
+
+      expect(await conversationExists({ cliSessionId: conversationId, directory: sessionDirectory })).toBe('missing');
+    });
+  });
+
+  it('sees the conversation missing when its transcript holds a title line and a system line only', async () => {
+    writeTranscript('-p', { content: `${titleOnlyStub}{"type":"system","note":"started"}\n` });
+
+    expect(await conversationExists({ cliSessionId: conversationId, directory: sessionDirectory })).toBe('missing');
+  });
+
+  it('sees the conversation missing when a regular file stands where its project directory should be', async () => {
+    mkdirSync(join(configDir, 'projects'), { recursive: true });
+    writeFileSync(join(configDir, 'projects', projectDirectoryNameOf(sessionDirectory)), 'not a directory');
+
+    expect(await conversationExists({ cliSessionId: conversationId, directory: sessionDirectory })).toBe('missing');
+  });
+
+  it('sees the conversation found in another project when its own project cannot be read', async () => {
+    writeTranscript(projectDirectoryNameOf(sessionDirectory));
+    chmodSync(join(configDir, 'projects', projectDirectoryNameOf(sessionDirectory), `${conversationId}.jsonl`), 0o000);
+    writeTranscript('-another');
+
+    expect(await conversationExists({ cliSessionId: conversationId, directory: sessionDirectory })).toBe('present');
+  });
+
+  it('sees the conversation present under the lower-case file name whatever the case of the stored id', async () => {
+    const lowerCaseId = 'abcdef01-2345-4678-89ab-cdef01234567';
+    writeTranscript('-p', { fileName: `${lowerCaseId}.jsonl` });
+
+    expect(await conversationExists({ cliSessionId: lowerCaseId.toUpperCase(), directory: sessionDirectory })).toBe('present');
+  });
+
+  it.each([`x${conversationId}`, `../${conversationId}`])('never looks for a conversation whose id only ends with a real one: %j', async (cliSessionId) => {
+    mkdirSync(join(configDir, 'projects', '-p'), { recursive: true });
+    writeFileSync(join(configDir, 'projects', `${cliSessionId.replace('../', '')}.jsonl`), userLine);
+    writeFileSync(join(configDir, 'projects', '-p', `${cliSessionId.replace('../', '')}.jsonl`), userLine);
+
+    expect(await conversationExists({ cliSessionId, directory: sessionDirectory })).toBe('missing');
+  });
+
+  describe.skipIf(process.getuid?.() === 0)('when the permissions of the CLI config forbid reading', () => {
+    it('cannot tell when the transcript itself is not readable', async () => {
+      writeTranscript('-p');
+      chmodSync(join(configDir, 'projects', '-p', `${conversationId}.jsonl`), 0o000);
+
+      expect(await conversationExists({ cliSessionId: conversationId, directory: sessionDirectory })).toBe('unknown');
+    });
+
+    it('cannot tell when the projects directory is not readable', async () => {
+      writeTranscript('-p');
+      chmodSync(join(configDir, 'projects'), 0o000);
+      try {
+        expect(await conversationExists({ cliSessionId: conversationId, directory: sessionDirectory })).toBe('unknown');
+      } finally {
+        chmodSync(join(configDir, 'projects'), 0o700);
+      }
+    });
   });
 
   it.each(['', 'not-a-uuid'])('never looks for a conversation named %j', async (cliSessionId) => {
