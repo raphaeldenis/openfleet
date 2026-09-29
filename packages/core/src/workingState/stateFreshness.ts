@@ -9,3 +9,5 @@ export const isOlderThanLimit = (ageMs: number, maxAgeMinutes: number): boolean 
 export const isWrittenBeforeFleetChanged = (state: WorkingState): boolean => state.fleetChangedAt !== undefined && state.updatedAt < state.fleetChangedAt;
 
 export const ageInWholeMinutes = (ageMs: number): number => Math.floor(ageMs / MINUTE_MS);
+
+export const minutesLabel = (minutes: number): string => (minutes === 1 ? `${minutes} minute` : `${minutes} minutes`);

@@ -1,7 +1,7 @@
 import { WORKING_STATE_SECTIONS, type ContextHookOutput, type WorkingState, type WorkingStateSections } from '@openfleet/shared';
 import type { DatabaseSync } from 'node:sqlite';
 import { renderWorkingState } from './renderWorkingState.js';
-import { ageInWholeMinutes, ageMsOf, isOlderThanLimit, isWrittenBeforeFleetChanged } from './stateFreshness.js';
+import { ageInWholeMinutes, ageMsOf, isOlderThanLimit, isWrittenBeforeFleetChanged, minutesLabel } from './stateFreshness.js';
 import type { WorkingStateService } from './workingStateService.js';
 import type { WorkingStateSettings } from './workingStateSettings.js';
 
@@ -72,7 +72,7 @@ export class SessionStartContext {
   private staleReasons(state: WorkingState): string[] {
     const ageMs = ageMsOf(state, this.deps.clock());
     const reasons: string[] = [];
-    if (isOlderThanLimit(ageMs, this.deps.settings.maxAgeMinutes)) reasons.push(`written ${ageInWholeMinutes(ageMs)} minutes ago, the limit is ${this.deps.settings.maxAgeMinutes}`);
+    if (isOlderThanLimit(ageMs, this.deps.settings.maxAgeMinutes)) reasons.push(`written ${minutesLabel(ageInWholeMinutes(ageMs))} ago, the limit is ${this.deps.settings.maxAgeMinutes}`);
     if (isWrittenBeforeFleetChanged(state)) reasons.push('written before the last spawn or close');
     return reasons;
   }

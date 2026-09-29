@@ -1,7 +1,7 @@
 import { WORKING_STATE_SECTIONS, type StopHookOutput, type WorkingState, type WorkingStateSections } from '@openfleet/shared';
 import type { DatabaseSync } from 'node:sqlite';
 import { renderWorkingState } from './renderWorkingState.js';
-import { ageInWholeMinutes, ageMsOf, isOlderThanLimit, isWrittenBeforeFleetChanged } from './stateFreshness.js';
+import { ageInWholeMinutes, ageMsOf, isOlderThanLimit, isWrittenBeforeFleetChanged, minutesLabel } from './stateFreshness.js';
 import type { WorkingStateService } from './workingStateService.js';
 import type { WorkingStateSettings } from './workingStateSettings.js';
 
@@ -42,7 +42,7 @@ export class StopRefusal {
   }
 
   private staleByAgeReason(ageMinutes: number): string {
-    return `Your working state is ${ageMinutes} minutes old (the limit is ${this.deps.settings.maxAgeMinutes}). Before ending the turn, refresh it with the MCP tool ${UPDATE_TOOL_NAME}.`;
+    return `Your working state is ${minutesLabel(ageMinutes)} old (the limit is ${this.deps.settings.maxAgeMinutes}). Before ending the turn, refresh it with the MCP tool ${UPDATE_TOOL_NAME}.`;
   }
 
   private staleByFleetReason(state: WorkingState): string {

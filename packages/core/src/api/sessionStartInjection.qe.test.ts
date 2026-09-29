@@ -211,6 +211,17 @@ describe('QE: user gets exact stale marking at the boundaries', () => {
     expect(contextOf(await sessionStarted('clear')).split('\n')[0]).toContain('written 31 minutes ago');
   });
 
+  it('writes "1 minute", singular, when the stale age floors to one minute', async () => {
+    await server.close();
+    await startFixture({ maxAgeMinutes: 1 });
+    const writtenAt = Date.now();
+    writeState(new Date(writtenAt).toISOString());
+
+    vi.setSystemTime(writtenAt + MINUTE_MS + 1);
+
+    expect(contextOf(await sessionStarted('clear')).split('\n')[0]).toContain('stale: written 1 minute ago, the limit is 1');
+  });
+
   it('does not mark stale a state written at the very instant of the last spawn, and marks it 1 ms earlier', async () => {
     const child = await spawnChild('Now-child');
     const spawnedAt = (db.prepare('SELECT created_at FROM sessions WHERE id = ?').get(child.id) as { created_at: string }).created_at;

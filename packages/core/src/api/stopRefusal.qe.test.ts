@@ -91,6 +91,15 @@ describe('QE boundaries of the turn end refusal', () => {
     expect((await stop()).reason).toContain('31 minutes old');
   });
 
+  it('writes "1 minute old", singular, when the age floors to one minute', async () => {
+    await restart({ maxAgeMinutes: 1 });
+    const writtenAt = fx.now();
+    insertRawState(STATE, isoAt(writtenAt));
+    fx.setNow(writtenAt + MINUTE_MS + 1);
+
+    expect((await stop()).reason).toContain('is 1 minute old (the limit is 1)');
+  });
+
   it('lets a state written the same millisecond as the last child spawn end the turn, and refuses one written 1 ms before', async () => {
     const child = await fx.sessions.create({ directory: '/tmp', name: 'Kid', harness: 'fake', emoji: '🧒', parentId: sessionId });
     const spawnedAtIso = (fx.db.prepare('SELECT created_at FROM sessions WHERE id = ?').get(child.id) as { created_at: string }).created_at;
