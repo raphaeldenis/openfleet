@@ -33,6 +33,9 @@ export interface Session {
   worktree?: string;
   branch?: string;
   model?: string;
+  resolvedModel?: string;
+  cliVersion?: string;
+  modelDriftedFrom?: string;
   parentId?: string;
   projectId?: string;
   role?: string;
