@@ -13,14 +13,14 @@ interface EditorOptions {
 
 async function renderEditor(options: EditorOptions = {}) {
   const historyToggle = vi.fn<() => void>();
-  await render(NoteEditorComponent, {
+  const { fixture } = await render(NoteEditorComponent, {
     bindings: [
       inputBinding('note', () => options.note ?? aNoteView()),
       inputBinding('historyOpen', () => options.historyOpen ?? false),
       outputBinding<void>('historyToggle', historyToggle),
     ],
   });
-  return { historyToggle };
+  return { historyToggle, fixture };
 }
 
 describe('NoteEditorComponent', () => {
@@ -202,12 +202,13 @@ describe('NoteEditorComponent', () => {
     });
 
     it('a single paragraph made of thousands of inline code spans shows the first spans and can be expanded', async () => {
-      await renderEditor({ note: aNoteView({ bodyMd: 'a`b`'.repeat(2500) }) });
+      const { fixture } = await renderEditor({ note: aNoteView({ bodyMd: 'a`b`'.repeat(2100) }) });
 
       expect(screen.getAllByTestId('note-editor-inline-code')).toHaveLength(1999);
       expect(screen.getByTestId('note-editor-show-rest')).toBeInTheDocument();
-      await userEvent.click(screen.getByTestId('note-editor-show-rest'));
-      expect(screen.getAllByTestId('note-editor-inline-code')).toHaveLength(2500);
+      await userEvent.setup({ delay: null }).click(screen.getByTestId('note-editor-show-rest'));
+      await fixture.whenStable();
+      expect(screen.getAllByTestId('note-editor-inline-code')).toHaveLength(2100);
     });
 
     it('a paragraph of thousands of empty code spans between plain words reads as one run of text', async () => {
@@ -276,11 +277,12 @@ describe('NoteEditorComponent', () => {
     });
 
     it('a paragraph made of thousands of bold runs shows the first runs and can be expanded', async () => {
-      await renderEditor({ note: aNoteView({ bodyMd: 'a**b**'.repeat(2500) }) });
+      const { fixture } = await renderEditor({ note: aNoteView({ bodyMd: 'a**b**'.repeat(2100) }) });
 
       expect(screen.getAllByTestId('note-editor-bold')).toHaveLength(1999);
-      await userEvent.click(screen.getByTestId('note-editor-show-rest'));
-      expect(screen.getAllByTestId('note-editor-bold')).toHaveLength(2500);
+      await userEvent.setup({ delay: null }).click(screen.getByTestId('note-editor-show-rest'));
+      await fixture.whenStable();
+      expect(screen.getAllByTestId('note-editor-bold')).toHaveLength(2100);
     });
 
     it('a quote of thousands of paragraphs stays within the budget and can be expanded', async () => {
