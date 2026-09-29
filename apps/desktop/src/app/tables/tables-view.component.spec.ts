@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
-import { inputBinding } from '@angular/core';
+import { inputBinding, signal } from '@angular/core';
 import type { DataStore, DsColumn, DsRow, DsRowHistoryEntry } from '@openfleet/shared';
 import { describe, expect, it, vi } from 'vitest';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
@@ -53,6 +53,15 @@ function fakeApi(options: FakeOptions = {}) {
 const renderView = (api: ReturnType<typeof fakeApi>, extraBindings: ReturnType<typeof inputBinding>[] = []) =>
   render(TablesViewComponent, { providers: [{ provide: FleetApiService, useValue: api }], bindings: extraBindings });
 
+const deferred = <T>() => {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((onResolve, onReject) => { resolve = onResolve; reject = onReject; });
+  return { promise, resolve, reject };
+};
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+const projectsNamed = (...ids: string[]) => ids.map((id) => ({ id, name: `project ${id}`, docsFolderPath: null }));
+
 const twoRows = [row('r1', { 'c-title': 'Desktop reconnect', 'c-status': 'doing' }), row('r2', { 'c-title': 'Usage budgets', 'c-status': 'todo' })];
 
 describe('TablesViewComponent', () => {
@@ -92,6 +101,152 @@ describe('TablesViewComponent', () => {
 
       expect(await screen.findByTestId('tables-no-project')).toBeTruthy();
       expect(api.listDataStores).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('loading correctness', () => {
+    it('user switching project never sees the slow tables of the previous project nor queries them in the new one', async () => {
+      const api = fakeApi({ projects: projectsNamed('p1', 'p2') });
+      const slowFirstProject = deferred<ReturnType<typeof page<DataStore>>>();
+      api.listDataStores.mockImplementation((projectId: string) =>
+        projectId === 'p1' ? slowFirstProject.promise : Promise.resolve(page([store('s9', 'other-table')])));
+      await renderView(api);
+      await userEvent.selectOptions(await screen.findByTestId('tables-project-scope'), 'p2');
+      await screen.findByTestId('table-pill-s9');
+
+      slowFirstProject.resolve(page([store('s1', 'backlog')]));
+      await settle();
+
+      expect(screen.queryByTestId('table-pill-s1')).toBeNull();
+      expect(api.queryDataStore).not.toHaveBeenCalledWith(expect.objectContaining({ projectId: 'p2', storeId: 's1' }));
+    });
+
+    it('user sees the error card, not "No project yet", when the projects fail to load, and Retry reloads the projects', async () => {
+      const api = fakeApi();
+      api.listProjects.mockRejectedValueOnce(new ApiError(502, 'GET /api/projects → 502'));
+      await renderView(api);
+
+      expect(await screen.findByTestId('tables-load-error')).toBeTruthy();
+      expect(screen.queryByTestId('tables-no-project')).toBeNull();
+      await userEvent.click(screen.getByTestId('tables-retry'));
+
+      expect(await screen.findByTestId('table-pill-s1')).toBeTruthy();
+      expect(screen.queryByTestId('tables-load-error')).toBeNull();
+    });
+
+    it('user can retry after the table list fails to load', async () => {
+      const api = fakeApi({ rows: twoRows });
+      api.listDataStores.mockRejectedValueOnce(new ApiError(500, 'GET stores → 500'));
+      await renderView(api);
+      const card = await screen.findByTestId('tables-load-error');
+      expect(card).toHaveTextContent('Could not load the tables');
+      expect(card).not.toHaveTextContent('“”');
+
+      await userEvent.click(screen.getByTestId('tables-retry'));
+
+      expect(await screen.findByTestId('table-grid')).toBeTruthy();
+      expect(api.listDataStores).toHaveBeenCalledTimes(2);
+    });
+
+    it.each([
+      { failure: new ApiError(404, 'GET → 404'), expected: 'no longer exists' },
+      { failure: new ApiError(500, 'GET → 500'), expected: 'hit an error' },
+      { failure: new TypeError('Failed to fetch'), expected: 'did not answer' },
+    ])('user reads an accurate reason when the rows fail with $failure', async ({ failure, expected }) => {
+      const api = fakeApi();
+      api.queryDataStore.mockRejectedValue(failure);
+
+      await renderView(api);
+
+      expect(await screen.findByTestId('tables-load-error')).toHaveTextContent(expected);
+    });
+
+    it('user sees no tables yet, and no rows are requested, when the project has none', async () => {
+      const api = fakeApi({ stores: [] });
+
+      await renderView(api);
+
+      expect(await screen.findByTestId('tables-no-tables')).toBeTruthy();
+      expect(api.queryDataStore).not.toHaveBeenCalled();
+    });
+
+    it('user asks for a full page of rows', async () => {
+      const api = fakeApi({ rows: twoRows });
+
+      await renderView(api);
+      await screen.findByTestId('table-grid');
+
+      expect(api.queryDataStore).toHaveBeenCalledWith(expect.objectContaining({ storeId: 's1', limit: 1000 }));
+    });
+
+    it('user follows a changed route project even after picking another project by hand', async () => {
+      const api = fakeApi({ projects: projectsNamed('p1', 'p2', 'p3') });
+      const routeProject = signal<string | undefined>('p2');
+      const { fixture } = await renderView(api, [inputBinding('projectId', routeProject)]);
+      await userEvent.selectOptions(await screen.findByTestId('tables-project-scope'), 'p1');
+      await vi.waitFor(() => expect(api.listDataStores).toHaveBeenLastCalledWith('p1'));
+
+      routeProject.set('p3');
+      fixture.detectChanges();
+
+      await vi.waitFor(() => expect(api.listDataStores).toHaveBeenLastCalledWith('p3'));
+    });
+
+    it('user sees the rows of the table they clicked last, not of a slower earlier one', async () => {
+      const api = fakeApi();
+      const slowBacklog = deferred<ReturnType<typeof page<DsRow>>>();
+      api.queryDataStore.mockImplementation(({ storeId }: { storeId: string }) =>
+        storeId === 's1' ? slowBacklog.promise : Promise.resolve(page([row('r9', { 'c-title': 'From releases' })])));
+      await renderView(api);
+      await userEvent.click(await screen.findByTestId('table-pill-s2'));
+      await screen.findByTestId('grid-cell-r9-c-title');
+
+      slowBacklog.resolve(page([row('r1', { 'c-title': 'From backlog' })]));
+      await settle();
+
+      expect(screen.getByTestId('grid-cell-r9-c-title')).toBeTruthy();
+      expect(screen.queryByTestId('grid-cell-r1-c-title')).toBeNull();
+    });
+
+    it('user sees the history of the row they clicked last, not of a slower earlier one', async () => {
+      const api = fakeApi({ rows: twoRows });
+      const slowFirstRow = deferred<{ items: DsRowHistoryEntry[]; total: number }>();
+      api.listRowChanges.mockImplementation(({ rowId }: { rowId: string }) =>
+        rowId === 'r1' ? slowFirstRow.promise : Promise.resolve({ items: [historyEntry({ id: 'h2', rowId: 'r2' })], total: 1 }));
+      await renderView(api);
+      await screen.findByTestId('table-grid');
+      await userEvent.click(screen.getByTestId('grid-row-r1'));
+      await userEvent.click(screen.getByTestId('grid-row-r2'));
+      await screen.findByTestId('history-entry-h2');
+
+      slowFirstRow.resolve({ items: [historyEntry({ id: 'h1' })], total: 1 });
+      await settle();
+
+      expect(screen.queryByTestId('history-entry-h1')).toBeNull();
+    });
+
+    it('user who chose to view mismatched rows is warned again in the next table', async () => {
+      const staleRows = [row('r1', { 'c-title': 'Stale', 'c-status': 'archived' })];
+      await renderView(fakeApi({ rows: staleRows }));
+      await userEvent.click(await screen.findByTestId('tables-view-rows'));
+      await screen.findByTestId('table-grid');
+
+      await userEvent.click(screen.getByTestId('table-pill-s2'));
+
+      expect(await screen.findByTestId('tables-schema-mismatch')).toBeTruthy();
+    });
+
+    it('user sees the new table among the pills and opens it', async () => {
+      const api = fakeApi({ rows: twoRows });
+      await renderView(api);
+      await screen.findByTestId('table-grid');
+
+      await userEvent.click(screen.getByRole('button', { name: 'New table' }));
+      await userEvent.type(screen.getByTestId('tables-new-name'), 'sprint');
+      await userEvent.click(screen.getByTestId('tables-create'));
+
+      expect(await screen.findByTestId('table-pill-s3')).toHaveTextContent('sprint');
+      await vi.waitFor(() => expect(api.queryDataStore).toHaveBeenLastCalledWith(expect.objectContaining({ storeId: 's3' })));
     });
   });
 

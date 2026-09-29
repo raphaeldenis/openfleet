@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, effect, inject, input, signal, untracked } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, effect, inject, input, linkedSignal, signal, untracked } from '@angular/core';
 import type { DataStore, DsColumn, DsRow, DsRowHistoryEntry, DsView } from '@openfleet/shared';
 import { ApiError, FleetApiService, type Project } from '../core/fleet-api.service';
 import { RowHistoryComponent } from './row-history.component';
@@ -13,12 +13,21 @@ export interface UsedByEntry {
   tip?: string;
 }
 
-type TableStatus = 'loading' | 'ready' | 'error';
+type TableStatus = 'loading' | 'ready';
+type LoadTarget = 'projects' | 'stores' | 'table';
+interface LoadFailure { target: LoadTarget; reason: string }
 type ViewMode = 'grid' | 'kanban';
 interface Mismatch { rowId: string; column: DsColumn }
 
 const ROWS_PAGE_LIMIT = 1000;
 const SKELETON_ROW_COUNT = 6;
+const describeFailure = (error: unknown): string => {
+  const status = error instanceof ApiError ? error.status : 0;
+  if (status === 0) return 'The daemon did not answer this request.';
+  if (status === 404) return 'This no longer exists on the daemon.';
+  if (status >= 500) return 'The daemon hit an error while handling this request.';
+  return `The daemon refused this request (${status}).`;
+};
 const isBlank = (value: unknown) => value === undefined || value === null || value === '';
 
 @Component({
@@ -69,7 +78,13 @@ const isBlank = (value: unknown) => value === undefined || value === null || val
 
     <div class="body">
       <div class="main">
-        @if (hasNoProject()) {
+        @if (loadFailure(); as failure) {
+          <div class="card" data-testid="tables-load-error">
+            <span class="card-title">✕ {{ failureTitle() }}</span>
+            <span class="muted">{{ failure.reason }}</span>
+            <div class="actions"><button type="button" class="of-btn of-btn--secondary compact" data-testid="tables-retry" (click)="retry()">Retry</button></div>
+          </div>
+        } @else if (hasNoProject()) {
           <div class="message" data-testid="tables-no-project">
             <span class="message-title">No project yet</span>
             <span>Create a project first, tables live inside one.</span>
@@ -84,12 +99,6 @@ const isBlank = (value: unknown) => value === undefined || value === null || val
             @for (bar of skeletonBars; track bar) {
               <div class="skeleton-row"></div>
             }
-          </div>
-        } @else if (status() === 'error') {
-          <div class="card" data-testid="tables-load-error">
-            <span class="card-title">✕ Could not load “{{ activeStoreName() }}”</span>
-            <span class="muted">The daemon did not answer this request.</span>
-            <div class="actions"><button type="button" class="of-btn of-btn--secondary compact" data-testid="tables-retry" (click)="retry()">Retry</button></div>
           </div>
         } @else if (mustResolveMismatches()) {
           <div class="card" data-testid="tables-schema-mismatch">
@@ -197,15 +206,23 @@ export class TablesViewComponent {
   protected readonly newTableName = signal('');
   protected readonly createError = signal<string | null>(null);
 
-  private readonly chosenProjectId = signal<string | undefined>(undefined);
+  private readonly chosenProjectId = linkedSignal<string | undefined>(() => this.projectId());
+  protected readonly loadFailure = signal<LoadFailure | null>(null);
   private readonly hasLoadedProjects = signal(false);
   private readonly hasLoadedStores = signal(false);
   private readonly ignoresMismatches = signal(false);
   private latestTableRequest = 0;
+  private latestStoresRequest = 0;
 
-  protected readonly activeProjectId = computed(() => this.chosenProjectId() ?? this.projectId() ?? this.projects()[0]?.id);
+  protected readonly activeProjectId = computed(() => this.chosenProjectId() ?? this.projects()[0]?.id);
   protected readonly hasNoProject = computed(() => this.hasLoadedProjects() && this.activeProjectId() === undefined);
   protected readonly hasNoTables = computed(() => this.hasLoadedStores() && this.stores().length === 0);
+  protected readonly failureTitle = computed(() => {
+    const target = this.loadFailure()?.target;
+    if (target === 'projects') return 'Could not load the projects';
+    if (target === 'stores') return 'Could not load the tables';
+    return `Could not load “${this.activeStoreName()}”`;
+  });
   protected readonly activeStoreName = computed(() => this.stores().find((store) => store.id === this.activeStoreId())?.displayName ?? '');
 
   private readonly mismatches = computed<Mismatch[]>(() => {
@@ -262,10 +279,11 @@ export class TablesViewComponent {
   }
 
   protected retry(): void {
+    const target = this.loadFailure()?.target;
     const storeId = this.activeStoreId();
     const projectId = this.activeProjectId();
-    if (storeId) void this.loadTable(storeId);
-    else if (projectId) void this.loadStores(projectId);
+    if (target === 'table' && storeId) void this.loadTable(storeId);
+    else if (target === 'stores' && projectId) void this.loadStores(projectId);
     else void this.loadProjects();
   }
 
@@ -349,27 +367,37 @@ export class TablesViewComponent {
   }
 
   private async loadProjects(): Promise<void> {
+    this.clearFailureOf('projects');
     try {
       const { items } = await this.api.listProjects();
       this.projects.set(items);
-    } catch {
-      this.status.set('error');
+      this.hasLoadedProjects.set(true);
+    } catch (error) {
+      this.loadFailure.set({ target: 'projects', reason: describeFailure(error) });
     }
-    this.hasLoadedProjects.set(true);
+  }
+
+  private clearFailureOf(...targets: LoadTarget[]): void {
+    const failedTarget = this.loadFailure()?.target;
+    if (failedTarget && targets.includes(failedTarget)) this.loadFailure.set(null);
   }
 
   private async loadStores(projectId: string): Promise<void> {
+    const request = ++this.latestStoresRequest;
+    this.latestTableRequest++;
+    this.clearFailureOf('stores', 'table');
     this.hasLoadedStores.set(false);
     this.status.set('loading');
     this.activeStoreId.set(null);
     this.selectedRowId.set(null);
     try {
       const { items } = await this.api.listDataStores(projectId);
+      if (request !== this.latestStoresRequest) return;
       this.stores.set(items);
       this.hasLoadedStores.set(true);
       if (items[0]) await this.loadTable(items[0].id);
-    } catch {
-      this.status.set('error');
+    } catch (error) {
+      if (request === this.latestStoresRequest) this.loadFailure.set({ target: 'stores', reason: describeFailure(error) });
     }
   }
 
@@ -379,6 +407,7 @@ export class TablesViewComponent {
     const request = ++this.latestTableRequest;
     this.activeStoreId.set(storeId);
     this.status.set('loading');
+    this.clearFailureOf('table');
     this.ignoresMismatches.set(false);
     this.selectedRowId.set(null);
     try {
@@ -392,8 +421,8 @@ export class TablesViewComponent {
       this.rows.set(rowPage.items);
       this.views.set(viewList.items);
       this.status.set('ready');
-    } catch {
-      if (request === this.latestTableRequest) this.status.set('error');
+    } catch (error) {
+      if (request === this.latestTableRequest) this.loadFailure.set({ target: 'table', reason: describeFailure(error) });
     }
   }
 }
