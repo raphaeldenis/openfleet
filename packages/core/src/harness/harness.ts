@@ -30,4 +30,7 @@ export interface HarnessHandle {
 export interface Harness {
   readonly id: HarnessId;
   start(launch: HarnessLaunch): HarnessHandle;
+  // Whether a resume of this conversation can succeed: the CLI refuses (exit 1) a conversation it has no file for.
+  // A harness that cannot tell omits it and its conversations are assumed to exist.
+  conversationExists?(conversation: { cliSessionId: string; directory: string }): boolean;
 }

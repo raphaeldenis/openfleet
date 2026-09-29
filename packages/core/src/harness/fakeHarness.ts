@@ -38,6 +38,12 @@ export class FakeHarness implements Harness {
   readonly id = 'fake' as const;
   readonly handles: FakeHandle[] = [];
   readonly launches: HarnessLaunch[] = [];
+  // Test-only: conversations the fake CLI has no file for; every other one exists.
+  readonly missingConversations = new Set<string>();
+
+  conversationExists({ cliSessionId }: { cliSessionId: string; directory: string }): boolean {
+    return !this.missingConversations.has(cliSessionId);
+  }
 
   start(launch: HarnessLaunch): HarnessHandle {
     const handle = new FakeHandle();
