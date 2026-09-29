@@ -64,6 +64,13 @@ describe('app.routes', () => {
     expect(harness.routeNativeElement?.querySelector('of-inbox')).toBeTruthy();
   });
 
+  it("renders the notes screen at '/notes', inside the shell", async () => {
+    await configureTestBed();
+    const harness = await RouterTestingHarness.create('/notes');
+    expect(harness.routeNativeElement?.querySelector('[data-testid="app-shell"]')).toBeTruthy();
+    expect(harness.routeNativeElement?.querySelector('[data-testid="notes-view"]')).toBeTruthy();
+  });
+
   it("renders the new-session form at '/new' inside the shell", async () => {
     await configureTestBed();
     const harness = await RouterTestingHarness.create('/new');

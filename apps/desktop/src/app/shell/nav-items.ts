@@ -33,7 +33,7 @@ const HELM_SECTIONS: ReadonlyArray<{ key: string; glyph: string; label: string; 
   { key: 'mgrprofile', glyph: '◎', label: 'Manager profile', route: null },
   { key: 'profiles', glyph: '◉', label: 'Profiles', route: null },
   { key: 'calendar', glyph: '▤', label: 'Calendar', route: null },
-  { key: 'notes', glyph: '¶', label: 'Notes', route: null },
+  { key: 'notes', glyph: '¶', label: 'Notes', route: '/notes' },
   { key: 'tables', glyph: '▦', label: 'Tables', route: null },
   { key: 'triggers', glyph: '⚡', label: 'Triggers & Playbooks', route: null },
   { key: 'integrations', glyph: '⇄', label: 'Integrations', route: null },

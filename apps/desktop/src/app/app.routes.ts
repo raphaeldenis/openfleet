@@ -12,7 +12,10 @@ export const routes: Routes = [
     children: [
       { path: '', pathMatch: 'full', loadComponent: () => import('./shell/empty-state.component').then((m) => m.EmptyStateComponent) },
       { path: 'inbox', loadComponent: () => import('./inbox/inbox.component').then((m) => m.InboxComponent) },
-      { path: 'settings', loadComponent: () => import('./settings/settings.component').then((m) => m.SettingsComponent) },
+      // ── Notes (P3-T17) ──
+      { path: 'notes', loadComponent: () => import('./notes/notes-view.component').then((m) => m.NotesViewComponent) },
+      // ── end Notes ──
+      { path: 'settings',loadComponent: () => import('./settings/settings.component').then((m) => m.SettingsComponent) },
       { path: 'new', loadComponent: () => import('./sessions/new-session-form.component').then((m) => m.NewSessionFormComponent) },
       { path: 'manager/:id', loadComponent: () => import('./managers/manager-dashboard.component').then((m) => m.ManagerDashboardComponent) },
       { path: 'session/:sessionId', loadComponent: () => import('./sessions/session-view.component').then((m) => m.SessionViewComponent) },

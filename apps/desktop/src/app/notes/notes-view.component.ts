@@ -30,6 +30,7 @@ const reasonOf = (error: unknown) => (error instanceof Error ? error.message : S
   selector: 'of-notes-view',
   imports: [NoteListComponent, NoteEditorComponent, NoteHistoryComponent, NoteConflictBannerComponent, NoteStatePanelComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
+  host: { 'data-testid': 'notes-view' },
   template: `
     <aside class="sidebar">
       <select class="project-select" aria-label="Project" data-testid="notes-project-select" (change)="switchProject($any($event.target).value)">
