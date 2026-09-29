@@ -8,7 +8,8 @@ export const WORKING_STATE_MAX_ITEM_CHARACTERS = 300;
 
 export const WORKING_STATE_TOOL_NAMES = ['mcp__openfleet__update_working_state', 'mcp__openfleet__get_working_state'] as const;
 
-const isSingleLine = (item: string) => !/[\r\n]/.test(item);
+const LINE_BREAKING_CODE_POINTS = new Set([0x0a, 0x0b, 0x0c, 0x0d, 0x85, 0x2028, 0x2029]);
+const isSingleLine = (item: string) => ![...item].some((character) => LINE_BREAKING_CODE_POINTS.has(character.codePointAt(0)!));
 const isNotHeading = (item: string) => !item.startsWith('#');
 
 const SectionSchema = z

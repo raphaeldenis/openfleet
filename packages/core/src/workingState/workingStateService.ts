@@ -41,7 +41,7 @@ export class WorkingStateService {
 
     const mirrorWarning = this.writeMirror(sessionId, sections);
     const state = this.get(sessionId)!;
-    for (const listener of this.listeners) listener(state);
+    this.notifyListeners(state);
     return mirrorWarning ? { updatedAt, mirrorWarning } : { updatedAt };
   }
 
@@ -65,6 +65,16 @@ export class WorkingStateService {
   onUpdate(listener: UpdateListener): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  private notifyListeners(state: WorkingState): void {
+    for (const listener of this.listeners) {
+      try {
+        listener(state);
+      } catch (error) {
+        log('warn', `working state update listener failed for session ${state.sessionId}`, error);
+      }
+    }
   }
 
   private writeMirror(sessionId: string, sections: WorkingStateSections): string | undefined {

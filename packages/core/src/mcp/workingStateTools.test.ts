@@ -5,7 +5,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { startServer } from '../api/server.js';
 import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
@@ -164,6 +164,11 @@ describe('the daemon refuses a state that breaks the contract and keeps the prev
     ['21 items in a section', () => toToolArguments({ ...emptyState(), todo: Array.from({ length: 21 }, (_, index) => `item ${index}`) })],
     ['an item of 301 characters', () => toToolArguments({ ...emptyState(), todo: ['a'.repeat(301)] })],
     ['an item on two lines', () => toToolArguments({ ...emptyState(), todo: ['line one\nline two'] })],
+    ['an item with a line separator U+2028', () => toToolArguments({ ...emptyState(), todo: [`line one${String.fromCharCode(0x2028)}## Plan`] })],
+    ['an item with a paragraph separator U+2029', () => toToolArguments({ ...emptyState(), todo: [`line one${String.fromCharCode(0x2029)}## Plan`] })],
+    ['an item with a next line U+0085', () => toToolArguments({ ...emptyState(), todo: ['line one\u0085## Plan'] })],
+    ['an item with a vertical tab', () => toToolArguments({ ...emptyState(), todo: ['line one\v## Plan'] })],
+    ['an item with a form feed', () => toToolArguments({ ...emptyState(), todo: ['line one\f## Plan'] })],
     ['an item that starts with a heading mark', () => toToolArguments({ ...emptyState(), todo: ['# Plan'] })],
     ['an empty item', () => toToolArguments({ ...emptyState(), todo: ['   '] })],
   ];
@@ -259,6 +264,69 @@ describe('who can read a working state', () => {
     expect(isRefused(unknown)).toBe(true);
   });
 
+  describe('across the real relations of a session tree', () => {
+    interface Tree { child: Actor; sibling: Actor; grandchild: Actor; otherRoot: Actor; otherRootChild: Actor; lead: Actor }
+    interface Actor { id: string; token: string }
+
+    async function growTree(): Promise<Tree> {
+      const child = await spawnChild('Child', fleet.leadId);
+      const sibling = await spawnChild('Sibling', fleet.leadId);
+      const grandchild = await spawnChild('Grandchild', child.id);
+      const otherRootSession = await fleet.sessions.create({ directory: '/tmp', name: 'Other root', harness: 'fake', emoji: '👤' });
+      const otherRoot = { id: otherRootSession.id, token: fleet.harness.launches.find((launch) => launch.sessionId === otherRootSession.id)!.mcpToken };
+      const otherRootChild = await spawnChild('Other child', otherRoot.id);
+      const lead = { id: fleet.leadId, token: fleet.leadToken };
+      return { child, sibling, grandchild, otherRoot, otherRootChild, lead };
+    }
+
+    const refusedReads: [string, (tree: Tree) => [reader: Actor, target: Actor]][] = [
+      ['a sibling reads a sibling', (tree) => [tree.sibling, tree.child]],
+      ['a grandparent reads a grandchild', (tree) => [tree.lead, tree.grandchild]],
+      ['a grandchild reads its grandparent', (tree) => [tree.grandchild, tree.lead]],
+      ['a session of another root reads a session of this tree', (tree) => [tree.otherRoot, tree.child]],
+      ['a child of another root reads the root of this tree', (tree) => [tree.otherRootChild, tree.lead]],
+    ];
+
+    it.each(refusedReads)('%s: refused, and nothing of the state leaks', async (_label, pick) => {
+      const tree = await growTree();
+      await updateState(tree.child.token, { ...emptyState(), plan: ['private'] });
+      await updateState(tree.lead.token, { ...emptyState(), plan: ['private'] });
+      await updateState(tree.grandchild.token, { ...emptyState(), plan: ['private'] });
+      const [reader, target] = pick(tree);
+
+      const result = await readState(reader.token, target.id);
+
+      expect(isRefused(result)).toBe(true);
+      expect(answerOf(result)).not.toContain('private');
+    });
+
+    const allowedReads: [string, (tree: Tree) => [reader: Actor, target: Actor]][] = [
+      ['a session reads itself by id', (tree) => [tree.child, tree.child]],
+      ['a manager reads its direct child', (tree) => [tree.child, tree.grandchild]],
+      ['a child reads its direct parent', (tree) => [tree.grandchild, tree.child]],
+    ];
+
+    it.each(allowedReads)('%s', async (_label, pick) => {
+      const tree = await growTree();
+      const [reader, target] = pick(tree);
+      await updateState(target.token, { ...emptyState(), plan: ['visible'] });
+
+      const result = await readState(reader.token, target.id);
+
+      expect(isRefused(result)).toBe(false);
+      expect(jsonOf(result).plan).toEqual(['visible']);
+    });
+
+    it('a child cannot write the state of its parent', async () => {
+      const tree = await growTree();
+      await updateState(tree.lead.token, { ...emptyState(), plan: ['lead plan'] });
+
+      await updateState(tree.child.token, { ...emptyState(), plan: ['forged'] }, { session_id: tree.lead.id });
+
+      expect(jsonOf(await readState(tree.lead.token)).plan).toEqual(['lead plan']);
+    });
+  });
+
   it('each session keeps a separate state', async () => {
     const child = await spawnChild('Scout', fleet.leadId);
 
@@ -331,19 +399,28 @@ describe('the fleet changes a manager can see in its state', () => {
     expect(jsonOf(await readState(fleet.leadToken)).fleetChangedAt).toBeUndefined();
   });
 
-  it('reports the creation time of the latest child, then the close time of a child closed afterwards', async () => {
-    const first = await spawnChild('First', fleet.leadId);
-    const second = await spawnChild('Second', fleet.leadId);
-    await updateState(fleet.leadToken, emptyState());
-    const secondCreatedAt = fleet.sessions.get(second.id)!.createdAt;
+  describe('with a controlled session clock', () => {
+    const SPAWN_TIME = '2031-04-05T09:00:00.000Z';
+    const CLOSE_TIME = '2031-04-05T09:30:00.000Z';
 
-    const afterSpawns = jsonOf(await readState(fleet.leadToken)).fleetChangedAt;
-    await fleet.sessions.close(first.id);
-    const firstClosedAt = fleet.sessions.get(first.id)!.closedAt;
-    const afterClose = jsonOf(await readState(fleet.leadToken)).fleetChangedAt;
+    beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); });
+    afterEach(() => { vi.useRealTimers(); });
 
-    expect(afterSpawns).toBe(secondCreatedAt);
-    expect(afterClose).toBe(firstClosedAt! > secondCreatedAt ? firstClosedAt : secondCreatedAt);
+    it('reports the creation time of the latest child, then the close time of a child closed afterwards', async () => {
+      vi.setSystemTime(new Date(SPAWN_TIME));
+      const first = await spawnChild('First', fleet.leadId);
+      const second = await spawnChild('Second', fleet.leadId);
+      await updateState(fleet.leadToken, emptyState());
+
+      const afterSpawns = jsonOf(await readState(fleet.leadToken)).fleetChangedAt;
+      vi.setSystemTime(new Date(CLOSE_TIME));
+      await fleet.sessions.close(first.id);
+      const afterClose = jsonOf(await readState(fleet.leadToken)).fleetChangedAt;
+
+      expect(fleet.sessions.get(second.id)!.createdAt).toBe(SPAWN_TIME);
+      expect(afterSpawns).toBe(SPAWN_TIME);
+      expect(afterClose).toBe(CLOSE_TIME);
+    });
   });
 
   it('ignores the children of other sessions', async () => {
@@ -365,5 +442,18 @@ describe('a state update is announced inside the daemon', () => {
     await client.callTool({ name: 'update_working_state', arguments: { ...toToolArguments(emptyState()), todo: ['x\ny'] } });
 
     expect(heard).toEqual([`${fleet.leadId}:announced`]);
+  });
+
+  it('a listener that throws neither fails the update nor silences the other listeners', async () => {
+    const heard: string[] = [];
+    fleet.workingStates.onUpdate(() => { throw new Error('listener exploded'); });
+    fleet.workingStates.onUpdate((state) => heard.push(state.plan.join(',')));
+
+    const result = await updateState(fleet.leadToken, { ...emptyState(), plan: ['saved anyway'] });
+
+    expect(isRefused(result)).toBe(false);
+    expect(jsonOf(result).updated_at).toBe(DAEMON_NOW);
+    expect(heard).toEqual(['saved anyway']);
+    expect(jsonOf(await readState(fleet.leadToken)).plan).toEqual(['saved anyway']);
   });
 });
