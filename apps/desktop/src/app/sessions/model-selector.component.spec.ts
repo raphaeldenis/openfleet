@@ -330,7 +330,7 @@ describe('ModelSelectorComponent', () => {
 
       const fullSession =(fields: Record<string, string>) => ({ id: 's1', name: 'Gimli', emoji: '⚔️', directory: '/tmp', harness: 'fake', state: 'idle', stateSince: 't', createdAt: 't', model: 'opus', ...fields });
 
-      it('user sees the resolved model and drift mark disappear on a model switch, the CLI version stay, then the new resolved id return on session.updated', async () => {
+      it('user sees the three lines stay on a model switch, the resolved model and drift mark clear on the relaunch session.updated, then the new resolved id return', async () => {
         // Arrange
         FakeWebSocket.instances = [];
         vi.stubGlobal('WebSocket', FakeWebSocket);
@@ -349,6 +349,16 @@ describe('ModelSelectorComponent', () => {
 
         // Act — the daemon reports the model switch
         socket.dispatchMessage({ type: 'session.model_changed', sessionId: 's1', model: 'sonnet' });
+        await fixture.whenStable();
+
+        // Assert — the still-running process stays visible next to the pending model
+        expect(screen.getByTestId('current-model')).toHaveTextContent('sonnet');
+        expect(screen.getByTestId('resolved-model')).toHaveTextContent('resolved claude-opus-5-5');
+        expect(screen.getByTestId('model-drift')).toHaveTextContent('changed from claude-opus-5-4');
+        expect(screen.getByTestId('cli-version')).toHaveTextContent('CLI 2.1.284');
+
+        // Act — the relaunch clears the resolved fields
+        socket.dispatchMessage({ type: 'session.updated', session: fullSession({ model: 'sonnet', cliVersion: '2.1.284' }) });
         await fixture.whenStable();
 
         // Assert
