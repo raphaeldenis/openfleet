@@ -2,7 +2,43 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_MODEL_TABLE, loadModelTable, resolveModel } from './models.js';
+import { ModelIdSchema } from '@openfleet/shared';
+import { DEFAULT_MODEL_TABLE, listAvailableModels, loadModelTable, resolveModel } from './models.js';
+
+const RUNG_ALIASES = ['haiku', 'sonnet', 'opus', 'fable'];
+
+describe('default model table', () => {
+  it('maps every rung to its alias so a session always runs the latest iteration', () => {
+    expect(DEFAULT_MODEL_TABLE).toEqual({ haiku: 'haiku', sonnet: 'sonnet', opus: 'opus', fable: 'fable' });
+  });
+
+  it('holds no dated or versioned model id', () => {
+    const versionedId = /\d/;
+    for (const modelId of Object.values(DEFAULT_MODEL_TABLE)) expect(modelId).not.toMatch(versionedId);
+  });
+
+  it('launches a session asked for a rung on that rung alias', () => {
+    expect(RUNG_ALIASES.map((rung) => resolveModel(DEFAULT_MODEL_TABLE, rung))).toEqual(RUNG_ALIASES);
+  });
+
+  it('passes a 1M-context id through resolution and validation unchanged', () => {
+    const longContextId = 'claude-opus-5-5[1m]';
+    expect(resolveModel(DEFAULT_MODEL_TABLE, longContextId)).toBe(longContextId);
+    expect(ModelIdSchema.parse(longContextId)).toBe(longContextId);
+  });
+
+  it('accepts every alias as a model id', () => {
+    expect(RUNG_ALIASES.map((alias) => ModelIdSchema.parse(alias))).toEqual(RUNG_ALIASES);
+  });
+});
+
+describe('available models', () => {
+  it('lists the four aliases first', async () => {
+    const available = await listAvailableModels();
+
+    expect(available.slice(0, RUNG_ALIASES.length)).toEqual(RUNG_ALIASES);
+  });
+});
 
 describe('loadModelTable', () => {
   it('falls back to the default table when no config file exists', () => {
