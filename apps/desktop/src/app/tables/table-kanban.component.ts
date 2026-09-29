@@ -25,6 +25,7 @@ export interface KanbanGroup {
             type="button"
             class="card"
             [attr.data-testid]="'kanban-card-' + row.id"
+            [attr.data-row-id]="row.id"
             [attr.aria-pressed]="row.id === selectedRowId()"
             [class.selected]="row.id === selectedRowId()"
             (click)="rowSelected.emit(row.id)"
@@ -53,10 +54,10 @@ export interface KanbanGroup {
     }
     .card.selected { border-color: var(--accent); background: var(--accent-bg) }
     .card:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
-    .title { font-weight: 500 }
+    .title { font-weight: 500; overflow-wrap: anywhere }
     .meta { display: flex; gap: .5rem; color: var(--mut); font-size: .6875rem }
-    .id { font-family: var(--mono) }
-    .details { flex: 1; min-width: 0 }
+    .id { font-family: var(--mono); overflow-wrap: anywhere }
+    .details { flex: 1; min-width: 0; overflow-wrap: anywhere }
   `,
 })
 export class TableKanbanComponent {

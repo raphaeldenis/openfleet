@@ -14,4 +14,14 @@ describe('ActorBadgeComponent', () => {
 
     expect(screen.getByTestId('actor-badge')).toHaveTextContent(label);
   });
+
+  it.each<[RowActorKind, string]>([
+    ['human', 'var(--state-idle)'],
+    ['agent', 'var(--state-generating)'],
+    ['trigger', 'var(--state-thinking)'],
+  ])('user tells the actors apart by colour: a %s actor is %s', async (kind, expectedColor) => {
+    await render(ActorBadgeComponent, { bindings: [inputBinding('kind', () => kind)] });
+
+    expect(screen.getByTestId('actor-badge').style.color).toBe(expectedColor);
+  });
 });

@@ -1,17 +1,19 @@
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
-import { DatePipe } from '@angular/common';
+import { formatDate } from '@angular/common';
 import type { DsColumn, DsRowChange, DsRowHistoryEntry } from '@openfleet/shared';
 import { ActorBadgeComponent } from './actor-badge.component';
 import { displayValue } from './table-cells';
 
 const EMPTY_VALUE = '—';
+const WHEN_FORMAT = 'MMM d, HH:mm';
+const WHEN_LOCALE = 'en-US';
 
 const formatValue = (value: unknown) => (value === null || value === undefined ? EMPTY_VALUE : typeof value === 'object' ? JSON.stringify(value) : String(value));
 
 @Component({
   selector: 'of-row-history',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [ActorBadgeComponent, DatePipe],
+  imports: [ActorBadgeComponent],
   template: `
     @if (heading(); as title) {
       <div class="heading" data-testid="history-heading">{{ title }}</div>
@@ -25,7 +27,7 @@ const formatValue = (value: unknown) => (value === null || value === undefined ?
             <of-actor-badge [kind]="entry.actorKind" />
             <span class="what">{{ describe(entry.change) }}</span>
           </span>
-          <span class="when">{{ entry.createdAt | date: 'MMM d, HH:mm' }}</span>
+          <span class="when">{{ formatWhen(entry.createdAt) }}</span>
         </div>
       </div>
     } @empty {
@@ -38,8 +40,8 @@ const formatValue = (value: unknown) => (value === null || value === undefined ?
     .section-title { padding: .5rem .875rem }
     .entry { display: flex; padding: .375rem .875rem; font-size: .75rem }
     .body { flex: 1; min-width: 0; display: flex; flex-direction: column }
-    .who { font-weight: 500 }
-    .what { color: var(--mut) }
+    .who { font-weight: 500; overflow-wrap: anywhere }
+    .what { color: var(--mut); overflow-wrap: anywhere }
     .when { font-family: var(--mono); font-size: .625rem; color: var(--faint) }
     .empty { padding: .375rem .875rem; font-size: .75rem; color: var(--mut) }
   `,
@@ -50,6 +52,11 @@ export class RowHistoryComponent {
   readonly heading = input<string | null>(null);
 
   private readonly columnNameById = computed(() => new Map(this.columns().map((column) => [column.id, column.displayName])));
+
+  protected formatWhen(createdAt: string): string {
+    const isDate = !Number.isNaN(new Date(createdAt).getTime());
+    return isDate ? formatDate(createdAt, WHEN_FORMAT, WHEN_LOCALE) : createdAt;
+  }
 
   protected describe(change: DsRowChange): string {
     if ('kind' in change && change.kind === 'create') return 'created row';

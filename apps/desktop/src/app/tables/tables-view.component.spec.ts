@@ -629,6 +629,41 @@ describe('TablesViewComponent', () => {
     });
   });
 
+  describe('keyboard focus', () => {
+    it('user opening a row lands on the labelled history panel', async () => {
+      await renderView(fakeApi({ rows: twoRows }));
+      await screen.findByTestId('table-grid');
+
+      await userEvent.click(screen.getByTestId('grid-row-r1'));
+
+      const panel = await screen.findByRole('complementary', { name: 'Row history' });
+      await vi.waitFor(() => expect(panel).toHaveFocus());
+    });
+
+    it('user closing the history lands back on the row that was open', async () => {
+      await renderView(fakeApi({ rows: twoRows }));
+      await screen.findByTestId('table-grid');
+      await userEvent.click(screen.getByTestId('grid-row-r2'));
+      await screen.findByTestId('tables-history');
+
+      await userEvent.click(screen.getByTestId('tables-history-close'));
+
+      expect(screen.getByTestId('grid-row-r2')).toHaveFocus();
+    });
+
+    it('user closing the history lands back on the kanban card that was open', async () => {
+      await renderView(fakeApi({ rows: twoRows }));
+      await screen.findByTestId('table-grid');
+      await userEvent.click(screen.getByTestId('tables-toggle-kanban'));
+      await userEvent.click(screen.getByTestId('kanban-card-r1'));
+      await screen.findByTestId('tables-history');
+
+      await userEvent.click(screen.getByTestId('tables-history-close'));
+
+      expect(screen.getByTestId('kanban-card-r1')).toHaveFocus();
+    });
+  });
+
   describe('used by', () => {
     it('user sees no "used by" bar when nothing supplies it', async () => {
       await renderView(fakeApi({ rows: twoRows }));

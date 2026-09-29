@@ -16,7 +16,6 @@ const AVAILABILITY_BY_SECTION: Readonly<Record<string, string>> = {
   profiles: 'Not yet available',
   calendar: 'Available in phase 5',
   notes: 'Available in phase 3',
-  tables: 'Available in phase 3',
   triggers: 'Available in phase 5',
   integrations: 'Available in phase 5',
   usage: 'Available in phase 4',
@@ -58,6 +57,7 @@ export interface PalettePage {
 export const PALETTE_PAGES: readonly PalettePage[] = [
   { key: 'sessions', icon: '🗂', label: 'Sessions', route: '/' },
   { key: 'inbox', icon: '◫', label: 'Inbox', route: '/inbox' },
+  { key: 'tables', icon: '▦', label: 'Tables', route: '/tables' },
   { key: 'settings', icon: '⚙', label: 'Settings', route: '/settings' },
   { key: 'components', icon: '◈', label: 'Components', route: '/components' },
 ];

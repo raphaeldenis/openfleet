@@ -73,4 +73,12 @@ describe('RowHistoryComponent', () => {
 
     expect(screen.getByTestId('history-heading')).toHaveTextContent('Desktop reconnect with backoff');
   });
+
+  it('user still sees the entry, with the raw value, when its date is not a date', async () => {
+    const badDate = [entry({ id: 'h9', createdAt: 'yesterday-ish', change: { kind: 'create' } })];
+
+    await render(RowHistoryComponent, { bindings: [inputBinding('entries', () => badDate), inputBinding('columns', () => columns)] });
+
+    expect(screen.getByTestId('history-entry-h9')).toHaveTextContent('yesterday-ish');
+  });
 });

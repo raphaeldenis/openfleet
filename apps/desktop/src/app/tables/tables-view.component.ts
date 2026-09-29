@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, effect, inject, input, linkedSignal, signal, untracked } from '@angular/core';
+import { afterNextRender, ChangeDetectionStrategy, Component, computed, effect, ElementRef, inject, Injector, input, linkedSignal, signal, untracked, viewChild } from '@angular/core';
 import type { DataStore, DsColumn, DsRow, DsRowHistoryEntry, DsView } from '@openfleet/shared';
 import { ApiError, FleetApiService, type Project } from '../core/fleet-api.service';
 import { RowHistoryComponent } from './row-history.component';
@@ -139,7 +139,7 @@ const isBlank = (value: unknown) => value === undefined || value === null || val
       </div>
 
       @if (selectedRowId()) {
-        <aside class="history" data-testid="tables-history">
+        <aside #historyPanel class="history" tabindex="-1" aria-label="Row history" data-testid="tables-history">
           <button type="button" class="close" data-testid="tables-history-close" aria-label="Close history" (click)="closeHistory()">✕</button>
           <of-row-history [entries]="history()" [columns]="columns()" [heading]="selectedRowTitle()" />
         </aside>
@@ -201,6 +201,9 @@ export class TablesViewComponent {
   readonly usedBy = input<UsedByEntry[] | undefined>(undefined);
 
   private readonly api = inject(FleetApiService);
+  private readonly injector = inject(Injector);
+  private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
+  private readonly historyPanel = viewChild<ElementRef<HTMLElement>>('historyPanel');
 
   protected readonly skeletonBars = Array.from({ length: SKELETON_ROW_COUNT }, (_, index) => index);
   protected readonly projects = signal<Project[]>([]);
@@ -377,6 +380,7 @@ export class TablesViewComponent {
     if (!scope) return;
     this.selectedRowId.set(rowId);
     this.history.set([]);
+    afterNextRender(() => this.historyPanel()?.nativeElement.focus(), { injector: this.injector });
     try {
       const { items } = await this.api.listRowChanges({ ...scope, rowId });
       if (this.selectedRowId() === rowId) this.history.set(items);
@@ -387,7 +391,10 @@ export class TablesViewComponent {
   }
 
   protected closeHistory(): void {
+    const closedRowId = this.selectedRowId();
     this.selectedRowId.set(null);
+    const rowElements = Array.from(this.host.nativeElement.querySelectorAll<HTMLElement>('[data-row-id]'));
+    rowElements.find((element) => element.dataset['rowId'] === closedRowId)?.focus();
   }
 
   private currentScope(): { projectId: string; storeId: string } | null {

@@ -97,4 +97,42 @@ describe('TableGridComponent', () => {
     expect(screen.getByTestId('grid-row-r1')).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByTestId('grid-row-r2')).toHaveAttribute('aria-selected', 'false');
   });
+
+  describe('keyboard', () => {
+    const tabIndexOf = (rowId: string) => screen.getByTestId(`grid-row-${rowId}`).getAttribute('tabindex');
+
+    it('user tabs into the grid on a single row, the others stay out of the tab order', async () => {
+      await render(TableGridComponent, { bindings: bindings() });
+
+      expect([tabIndexOf('r1'), tabIndexOf('r2')]).toEqual(['0', '-1']);
+    });
+
+    it('user tabs into the open row when one is open', async () => {
+      await render(TableGridComponent, { bindings: [...bindings(), inputBinding('selectedRowId', () => 'r2')] });
+
+      expect([tabIndexOf('r1'), tabIndexOf('r2')]).toEqual(['-1', '0']);
+    });
+
+    it('user moves between rows with the arrow keys and the tab stop follows', async () => {
+      await render(TableGridComponent, { bindings: bindings() });
+      screen.getByTestId('grid-row-r1').focus();
+
+      await userEvent.keyboard('{ArrowDown}');
+
+      expect(screen.getByTestId('grid-row-r2')).toHaveFocus();
+      expect([tabIndexOf('r1'), tabIndexOf('r2')]).toEqual(['-1', '0']);
+      await userEvent.keyboard('{ArrowUp}');
+      expect(screen.getByTestId('grid-row-r1')).toHaveFocus();
+    });
+
+    it('user can open a focused row with the space bar', async () => {
+      const rowSelected = vi.fn();
+      await render(TableGridComponent, { bindings: bindings([outputBinding('rowSelected', rowSelected)]) });
+
+      screen.getByTestId('grid-row-r2').focus();
+      await userEvent.keyboard(' ');
+
+      expect(rowSelected).toHaveBeenCalledExactlyOnceWith('r2');
+    });
+  });
 });
