@@ -16,10 +16,15 @@ export interface UsedByEntry {
 type TableStatus = 'loading' | 'ready';
 type LoadTarget = 'projects' | 'stores' | 'table';
 interface LoadFailure { target: LoadTarget; reason: string }
+type LoadFailures = Partial<Record<LoadTarget, string>>;
+interface TableLoadOptions { keepsSelection?: boolean }
 type ViewMode = 'grid' | 'kanban';
 interface Mismatch { rowId: string; column: DsColumn }
 
+const LOAD_TARGETS_BY_PRIORITY: LoadTarget[] = ['projects', 'stores', 'table'];
 const ROWS_PAGE_LIMIT = 1000;
+const HISTORY_PAGE_LIMIT = 500;
+const TABLE_NAME_MAX_LENGTH = 200;
 const SKELETON_ROW_COUNT = 6;
 const describeFailure = (error: unknown): string => {
   const status = error instanceof ApiError ? error.status : 0;
@@ -27,6 +32,13 @@ const describeFailure = (error: unknown): string => {
   if (status === 404) return 'This no longer exists on the daemon.';
   if (status >= 500) return 'The daemon hit an error while handling this request.';
   return `The daemon refused this request (${status}).`;
+};
+const describeCreateFailure = (error: unknown, displayName: string): string => {
+  const code = error instanceof ApiError ? error.code : undefined;
+  if (code === 'duplicate_name') return `A table named “${displayName}” already exists.`;
+  if (code === 'project_not_found') return 'This project no longer exists.';
+  if (code === 'invalid_body') return `The table name is not valid (1 to ${TABLE_NAME_MAX_LENGTH} characters).`;
+  return 'Could not create the table.';
 };
 const isBlank = (value: unknown) => value === undefined || value === null || value === '';
 
@@ -55,7 +67,7 @@ const isBlank = (value: unknown) => value === undefined || value === null || val
 
     @if (isCreatingTable()) {
       <form class="create-table" (submit)="$event.preventDefault(); createTable()">
-        <input class="of-input" data-testid="tables-new-name" aria-label="Table name" placeholder="Table name" [value]="newTableName()" (input)="newTableName.set($any($event.target).value)" />
+        <input class="of-input" data-testid="tables-new-name" aria-label="Table name" [attr.maxlength]="tableNameMaxLength" placeholder="Table name" [value]="newTableName()" (input)="newTableName.set($any($event.target).value)" />
         <button type="submit" class="of-btn of-btn--primary compact" data-testid="tables-create" [disabled]="newTableName().trim() === ''">Create</button>
         @if (createError(); as message) {
           <span class="create-error" data-testid="tables-create-error">{{ message }}</span>
@@ -141,7 +153,11 @@ const isBlank = (value: unknown) => value === undefined || value === null || val
       @if (selectedRowId()) {
         <aside #historyPanel class="history" tabindex="-1" aria-label="Row history" data-testid="tables-history">
           <button type="button" class="close" data-testid="tables-history-close" aria-label="Close history" (click)="closeHistory()">✕</button>
-          <of-row-history [entries]="history()" [columns]="columns()" [heading]="selectedRowTitle()" />
+          @if (historyFailed()) {
+            <div class="history-error" data-testid="tables-history-error">The history of this row could not be loaded.</div>
+          } @else {
+            <of-row-history [entries]="history()" [columns]="columns()" [heading]="selectedRowTitle()" />
+          }
         </aside>
       }
     </div>
@@ -190,6 +206,7 @@ const isBlank = (value: unknown) => value === undefined || value === null || val
     .muted { color: var(--mut) }
     .actions { display: flex; gap: .5rem }
     .history { position: relative; width: 20rem; flex: none; border-left: 1px solid var(--line); background: var(--panel); overflow: auto; display: flex; flex-direction: column }
+    .history-error { padding: 2.5rem .875rem .875rem; font-size: .75rem; color: var(--state-error) }
     .close { position: absolute; top: .5rem; right: .5rem; border: 0; background: transparent; color: var(--faint); cursor: pointer }
     .close:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
   `,
@@ -217,13 +234,20 @@ export class TablesViewComponent {
   protected readonly viewMode = signal<ViewMode>('grid');
   protected readonly selectedRowId = signal<string | null>(null);
   protected readonly history = signal<DsRowHistoryEntry[]>([]);
+  protected readonly historyFailed = signal(false);
+  protected readonly tableNameMaxLength = TABLE_NAME_MAX_LENGTH;
   protected readonly actionError = signal<string | null>(null);
   protected readonly isCreatingTable = signal(false);
   protected readonly newTableName = signal('');
   protected readonly createError = signal<string | null>(null);
 
   private readonly chosenProjectId = linkedSignal<string | undefined>(() => this.projectId());
-  protected readonly loadFailure = signal<LoadFailure | null>(null);
+  private readonly loadFailures = signal<LoadFailures>({});
+  protected readonly loadFailure = computed<LoadFailure | null>(() => {
+    const failures = this.loadFailures();
+    const target = LOAD_TARGETS_BY_PRIORITY.find((candidate) => failures[candidate] !== undefined);
+    return target ? { target, reason: failures[target] ?? '' } : null;
+  });
   private readonly hasLoadedProjects = signal(false);
   private readonly hasLoadedStores = signal(false);
   private readonly ignoresMismatches = signal(false);
@@ -297,16 +321,20 @@ export class TablesViewComponent {
   }
 
   protected openStore(storeId: string): void {
+    this.actionError.set(null);
     void this.loadTable(storeId);
   }
 
   protected retry(): void {
-    const target = this.loadFailure()?.target;
+    const failures = this.loadFailures();
     const storeId = this.activeStoreId();
     const projectId = this.activeProjectId();
-    if (target === 'table' && storeId) void this.loadTable(storeId);
-    else if (target === 'stores' && projectId) void this.loadStores(projectId);
-    else void this.loadProjects();
+    const mustReloadProjects = failures.projects !== undefined;
+    const mustReloadStores = failures.stores !== undefined && projectId !== undefined;
+    const mustReloadTable = failures.table !== undefined && storeId !== null;
+    if (mustReloadProjects) void this.loadProjects();
+    if (mustReloadStores) void this.loadStores(projectId);
+    else if (mustReloadTable) void this.loadTable(storeId);
   }
 
   protected viewRowsAnyway(): void {
@@ -321,7 +349,7 @@ export class TablesViewComponent {
     const updates = [...patchesByRow].map(([rowId, patch]) => ({ rowId, patch }));
     await this.runAction('clear-mismatches', async () => {
       await this.api.updateRows({ ...scope, updates });
-      await this.loadTable(scope.storeId);
+      await this.loadTable(scope.storeId, { keepsSelection: true });
     });
   }
 
@@ -330,7 +358,7 @@ export class TablesViewComponent {
     if (!scope) return;
     await this.runAction('add-row', async () => {
       await this.api.insertRows({ ...scope, rows: [{}] });
-      await this.loadTable(scope.storeId);
+      await this.loadTable(scope.storeId, { keepsSelection: true });
     });
   }
 
@@ -364,12 +392,16 @@ export class TablesViewComponent {
     this.actionsInFlight.add('create-table');
     try {
       const created = await this.api.createDataStore({ projectId, displayName });
+      const projectChangedMeanwhile = this.activeProjectId() !== projectId;
+      if (projectChangedMeanwhile) {
+        this.isCreatingTable.set(false);
+        return;
+      }
       this.stores.update((stores) => [...stores, created]);
       this.isCreatingTable.set(false);
       await this.loadTable(created.id);
     } catch (error) {
-      const isNameTaken = error instanceof ApiError && error.code === 'duplicate_name';
-      this.createError.set(isNameTaken ? `A table named “${displayName}” already exists.` : 'Could not create the table.');
+      this.createError.set(describeCreateFailure(error, displayName));
     } finally {
       this.actionsInFlight.delete('create-table');
     }
@@ -380,13 +412,15 @@ export class TablesViewComponent {
     if (!scope) return;
     this.selectedRowId.set(rowId);
     this.history.set([]);
+    this.historyFailed.set(false);
     afterNextRender(() => this.historyPanel()?.nativeElement.focus(), { injector: this.injector });
     try {
-      const { items } = await this.api.listRowChanges({ ...scope, rowId });
+      const { items } = await this.api.listRowChanges({ ...scope, rowId, limit: HISTORY_PAGE_LIMIT });
       if (this.selectedRowId() === rowId) this.history.set(items);
-    } catch {
-      // ponytail: any failure (404 = no recorded changes) reads as an empty history; surface real errors when the daemon reports a distinct code
-      if (this.selectedRowId() === rowId) this.history.set([]);
+    } catch (error) {
+      const isStillSelected = this.selectedRowId() === rowId;
+      const hasNoRecordedChanges = error instanceof ApiError && error.status === 404;
+      if (isStillSelected) this.historyFailed.set(!hasNoRecordedChanges);
     }
   }
 
@@ -423,13 +457,20 @@ export class TablesViewComponent {
       this.projects.set(items);
       this.hasLoadedProjects.set(true);
     } catch (error) {
-      this.loadFailure.set({ target: 'projects', reason: describeFailure(error) });
+      this.recordFailure('projects', error);
     }
   }
 
+  private recordFailure(target: LoadTarget, error: unknown): void {
+    this.loadFailures.update((failures) => ({ ...failures, [target]: describeFailure(error) }));
+  }
+
   private clearFailureOf(...targets: LoadTarget[]): void {
-    const failedTarget = this.loadFailure()?.target;
-    if (failedTarget && targets.includes(failedTarget)) this.loadFailure.set(null);
+    this.loadFailures.update((failures) => {
+      const remaining = { ...failures };
+      for (const target of targets) delete remaining[target];
+      return remaining;
+    });
   }
 
   private async loadStores(projectId: string): Promise<void> {
@@ -437,6 +478,8 @@ export class TablesViewComponent {
     this.latestTableRequest++;
     this.clearFailureOf('stores', 'table');
     this.hasLoadedStores.set(false);
+    this.stores.set([]);
+    this.actionError.set(null);
     this.status.set('loading');
     this.activeStoreId.set(null);
     this.selectedRowId.set(null);
@@ -447,11 +490,11 @@ export class TablesViewComponent {
       this.hasLoadedStores.set(true);
       if (items[0]) await this.loadTable(items[0].id);
     } catch (error) {
-      if (request === this.latestStoresRequest) this.loadFailure.set({ target: 'stores', reason: describeFailure(error) });
+      if (request === this.latestStoresRequest) this.recordFailure('stores', error);
     }
   }
 
-  private async loadTable(storeId: string): Promise<void> {
+  private async loadTable(storeId: string, { keepsSelection = false }: TableLoadOptions = {}): Promise<void> {
     const projectId = this.activeProjectId();
     if (!projectId) return;
     const request = ++this.latestTableRequest;
@@ -459,7 +502,7 @@ export class TablesViewComponent {
     this.status.set('loading');
     this.clearFailureOf('table');
     this.ignoresMismatches.set(false);
-    this.selectedRowId.set(null);
+    if (!keepsSelection) this.selectedRowId.set(null);
     try {
       const [detail, rowPage, viewList] = await Promise.all([
         this.api.getDataStore({ projectId, storeId }),
@@ -473,7 +516,7 @@ export class TablesViewComponent {
       this.views.set(viewList.items);
       this.status.set('ready');
     } catch (error) {
-      if (request === this.latestTableRequest) this.loadFailure.set({ target: 'table', reason: describeFailure(error) });
+      if (request === this.latestTableRequest) this.recordFailure('table', error);
     }
   }
 }

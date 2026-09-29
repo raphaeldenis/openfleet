@@ -60,7 +60,11 @@ const deferred = <T>() => {
   const promise = new Promise<T>((onResolve, onReject) => { resolve = onResolve; reject = onReject; });
   return { promise, resolve, reject };
 };
-const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+const settle = async (fixture: { detectChanges: () => void; whenStable: () => Promise<unknown> }) => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  fixture.detectChanges();
+  await fixture.whenStable();
+};
 const projectsNamed = (...ids: string[]) => ids.map((id) => ({ id, name: `project ${id}`, docsFolderPath: null }));
 
 const twoRows = [row('r1', { 'c-title': 'Desktop reconnect', 'c-status': 'doing' }), row('r2', { 'c-title': 'Usage budgets', 'c-status': 'todo' })];
@@ -111,12 +115,12 @@ describe('TablesViewComponent', () => {
       const slowFirstProject = deferred<ReturnType<typeof page<DataStore>>>();
       api.listDataStores.mockImplementation((projectId: string) =>
         projectId === 'p1' ? slowFirstProject.promise : Promise.resolve(page([store('s9', 'other-table')])));
-      await renderView(api);
+      const { fixture } = await renderView(api);
       await userEvent.selectOptions(await screen.findByTestId('tables-project-scope'), 'p2');
       await screen.findByTestId('table-pill-s9');
 
       slowFirstProject.resolve(page([store('s1', 'backlog')]));
-      await settle();
+      await settle(fixture);
 
       expect(screen.queryByTestId('table-pill-s1')).toBeNull();
       expect(api.queryDataStore).not.toHaveBeenCalledWith(expect.objectContaining({ projectId: 'p2', storeId: 's1' }));
@@ -198,12 +202,12 @@ describe('TablesViewComponent', () => {
       const slowBacklog = deferred<ReturnType<typeof page<DsRow>>>();
       api.queryDataStore.mockImplementation(({ storeId }: { storeId: string }) =>
         storeId === 's1' ? slowBacklog.promise : Promise.resolve(page([row('r9', { 'c-title': 'From releases' })])));
-      await renderView(api);
+      const { fixture } = await renderView(api);
       await userEvent.click(await screen.findByTestId('table-pill-s2'));
       await screen.findByTestId('grid-cell-r9-c-title');
 
       slowBacklog.resolve(page([row('r1', { 'c-title': 'From backlog' })]));
-      await settle();
+      await settle(fixture);
 
       expect(screen.getByTestId('grid-cell-r9-c-title')).toBeTruthy();
       expect(screen.queryByTestId('grid-cell-r1-c-title')).toBeNull();
@@ -214,14 +218,14 @@ describe('TablesViewComponent', () => {
       const slowFirstRow = deferred<{ items: DsRowHistoryEntry[]; total: number }>();
       api.listRowChanges.mockImplementation(({ rowId }: { rowId: string }) =>
         rowId === 'r1' ? slowFirstRow.promise : Promise.resolve({ items: [historyEntry({ id: 'h2', rowId: 'r2' })], total: 1 }));
-      await renderView(api);
+      const { fixture } = await renderView(api);
       await screen.findByTestId('table-grid');
       await userEvent.click(screen.getByTestId('grid-row-r1'));
       await userEvent.click(screen.getByTestId('grid-row-r2'));
       await screen.findByTestId('history-entry-h2');
 
       slowFirstRow.resolve({ items: [historyEntry({ id: 'h1' })], total: 1 });
-      await settle();
+      await settle(fixture);
 
       expect(screen.queryByTestId('history-entry-h1')).toBeNull();
     });
@@ -242,7 +246,7 @@ describe('TablesViewComponent', () => {
       await renderView(api);
       await screen.findByTestId('table-grid');
 
-      await userEvent.click(screen.getByRole('button', { name: 'New table' }));
+      await userEvent.click(screen.getByTestId('table-add'));
       await userEvent.type(screen.getByTestId('tables-new-name'), 'sprint');
       await userEvent.click(screen.getByTestId('tables-create'));
 
@@ -315,7 +319,7 @@ describe('TablesViewComponent', () => {
       api.createDataStore.mockReturnValue(new Promise(() => undefined));
       await renderView(api);
       await screen.findByTestId('table-grid');
-      await userEvent.click(screen.getByRole('button', { name: 'New table' }));
+      await userEvent.click(screen.getByTestId('table-add'));
 
       await userEvent.type(screen.getByTestId('tables-new-name'), 'sprint{Enter}{Enter}');
 
@@ -351,7 +355,7 @@ describe('TablesViewComponent', () => {
       await renderView(fakeApi({ projects: [] }));
       await screen.findByTestId('tables-no-project');
 
-      await userEvent.click(screen.getByRole('button', { name: 'New table' }));
+      await userEvent.click(screen.getByTestId('table-add'));
 
       expect(screen.getByTestId('tables-action-error')).toHaveTextContent('No project');
       expect(screen.queryByTestId('tables-new-name')).toBeNull();
@@ -390,7 +394,7 @@ describe('TablesViewComponent', () => {
 
       await userEvent.click(screen.getByTestId('tables-toggle-kanban'));
 
-      expect(screen.queryByText('No value')).toBeNull();
+      expect(screen.queryByTestId(`kanban-column-${NO_VALUE_GROUP_ID}`)).toBeNull();
     });
 
     it('user sees the kanban grouped by the column its saved kanban view names', async () => {
@@ -636,7 +640,7 @@ describe('TablesViewComponent', () => {
 
       await userEvent.click(screen.getByTestId('grid-row-r1'));
 
-      const panel = await screen.findByRole('complementary', { name: 'Row history' });
+      const panel = await screen.findByTestId('tables-history');
       await vi.waitFor(() => expect(panel).toHaveFocus());
     });
 
@@ -661,6 +665,182 @@ describe('TablesViewComponent', () => {
       await userEvent.click(screen.getByTestId('tables-history-close'));
 
       expect(screen.getByTestId('kanban-card-r1')).toHaveFocus();
+    });
+  });
+
+  describe('recovering from failures', () => {
+    it('user reaches the tables again with one Retry after both the projects and the tables failed on a deep link', async () => {
+      const api = fakeApi({ rows: twoRows });
+      const storesFailure = deferred<never>();
+      const projectsFailure = deferred<never>();
+      api.listDataStores.mockReturnValueOnce(storesFailure.promise);
+      api.listProjects.mockReturnValueOnce(projectsFailure.promise);
+      await renderView(api, [inputBinding('projectId', () => 'p1')]);
+      await vi.waitFor(() => expect(api.listDataStores).toHaveBeenCalledTimes(1));
+      storesFailure.reject(new ApiError(500, 'GET stores → 500'));
+      await vi.waitFor(() => expect(screen.getByTestId('tables-load-error')).toHaveTextContent('Could not load the tables'));
+      projectsFailure.reject(new ApiError(500, 'GET projects → 500'));
+      await vi.waitFor(() => expect(screen.getByTestId('tables-load-error')).toHaveTextContent('Could not load the projects'));
+
+      await userEvent.click(screen.getByTestId('tables-retry'));
+
+      expect(await screen.findByTestId('table-grid')).toBeTruthy();
+      expect(screen.queryByTestId('tables-loading')).toBeNull();
+      expect(screen.queryByTestId('tables-load-error')).toBeNull();
+    });
+
+    it('user does not see "No tables yet" flash while the tables are still loading', async () => {
+      const api = fakeApi();
+      api.listDataStores.mockReturnValue(new Promise(() => undefined));
+
+      await renderView(api);
+
+      expect(await screen.findByTestId('tables-loading')).toBeTruthy();
+      expect(screen.queryByTestId('tables-no-tables')).toBeNull();
+    });
+  });
+
+  describe('switching project or table', () => {
+    it('user switching project no longer sees the previous project tables while the new list loads', async () => {
+      const api = fakeApi({ projects: projectsNamed('p1', 'p2') });
+      api.listDataStores.mockImplementation((projectId: string) => (projectId === 'p1' ? Promise.resolve(page([store('s1', 'backlog')])) : new Promise(() => undefined)));
+      await renderView(api);
+      await screen.findByTestId('table-pill-s1');
+
+      await userEvent.selectOptions(screen.getByTestId('tables-project-scope'), 'p2');
+
+      await vi.waitFor(() => expect(screen.queryByTestId('table-pill-s1')).toBeNull());
+    });
+
+    it('user creating a table then switching project before the answer never sees it in the other project', async () => {
+      const api = fakeApi({ projects: projectsNamed('p1', 'p2'), rows: twoRows });
+      const slowCreation = deferred<DataStore>();
+      api.createDataStore.mockReturnValue(slowCreation.promise);
+      api.listDataStores.mockImplementation((projectId: string) => Promise.resolve(page(projectId === 'p1' ? [store('s1', 'backlog')] : [store('s9', 'other-table')])));
+      const { fixture } = await renderView(api);
+      await screen.findByTestId('table-grid');
+      await userEvent.click(screen.getByTestId('table-add'));
+      await userEvent.type(screen.getByTestId('tables-new-name'), 'sprint');
+      await userEvent.click(screen.getByTestId('tables-create'));
+      await userEvent.selectOptions(screen.getByTestId('tables-project-scope'), 'p2');
+      await screen.findByTestId('table-pill-s9');
+
+      slowCreation.resolve(store('s3', 'sprint'));
+      await settle(fixture);
+
+      expect(screen.queryByTestId('table-pill-s3')).toBeNull();
+      expect(api.queryDataStore).not.toHaveBeenCalledWith(expect.objectContaining({ storeId: 's3' }));
+    });
+
+    it('user no longer sees a failed-action message after opening another table', async () => {
+      const api = fakeApi({ rows: twoRows });
+      api.insertRows.mockRejectedValue(new ApiError(500, 'POST rows → 500'));
+      await renderView(api);
+      await screen.findByTestId('table-grid');
+      await userEvent.click(screen.getByTestId('tables-add-row'));
+      await screen.findByTestId('tables-action-error');
+
+      await userEvent.click(screen.getByTestId('table-pill-s2'));
+
+      await vi.waitFor(() => expect(screen.queryByTestId('tables-action-error')).toBeNull());
+    });
+
+    it('user no longer sees a failed-action message after switching project', async () => {
+      const api = fakeApi({ projects: projectsNamed('p1', 'p2'), rows: twoRows });
+      api.insertRows.mockRejectedValue(new ApiError(500, 'POST rows → 500'));
+      await renderView(api);
+      await screen.findByTestId('table-grid');
+      await userEvent.click(screen.getByTestId('tables-add-row'));
+      await screen.findByTestId('tables-action-error');
+
+      await userEvent.selectOptions(screen.getByTestId('tables-project-scope'), 'p2');
+
+      await vi.waitFor(() => expect(screen.queryByTestId('tables-action-error')).toBeNull());
+    });
+
+    it('user never sees the rows of a slow "Load more" land in the table they switched to', async () => {
+      const api = fakeApi();
+      const slowNextPage = deferred<ReturnType<typeof page<DsRow>>>();
+      api.queryDataStore.mockImplementation(({ storeId, offset }: { storeId: string; offset?: number }) => {
+        if (storeId === 's2') return Promise.resolve(page([row('r9', { 'c-title': 'From releases' })]));
+        return offset ? slowNextPage.promise : Promise.resolve(page([row('r1', { 'c-title': 'First' })], 2));
+      });
+      const { fixture } = await renderView(api);
+      await userEvent.click(await screen.findByTestId('tables-load-more'));
+      await userEvent.click(screen.getByTestId('table-pill-s2'));
+      await screen.findByTestId('grid-cell-r9-c-title');
+
+      slowNextPage.resolve(page([row('r2', { 'c-title': 'Second' })], 2));
+      await settle(fixture);
+
+      expect(screen.queryByTestId('grid-cell-r2-c-title')).toBeNull();
+    });
+  });
+
+  describe('row history reliability', () => {
+    it('user is told the history could not be loaded, not that there are no changes, when the daemon errors', async () => {
+      const api = fakeApi({ rows: twoRows });
+      api.listRowChanges.mockRejectedValue(new ApiError(500, 'GET changes → 500', 'internal_error'));
+      await renderView(api);
+      await screen.findByTestId('table-grid');
+
+      await userEvent.click(screen.getByTestId('grid-row-r1'));
+
+      expect(await screen.findByTestId('tables-history-error')).toBeTruthy();
+      expect(screen.queryByTestId('history-empty')).toBeNull();
+    });
+
+    it('user reading a row history gets up to the daemon maximum of 500 entries', async () => {
+      const api = fakeApi({ rows: twoRows });
+      await renderView(api);
+      await screen.findByTestId('table-grid');
+
+      await userEvent.click(screen.getByTestId('grid-row-r1'));
+
+      await screen.findByTestId('history-entry-h1');
+      expect(api.listRowChanges).toHaveBeenCalledWith(expect.objectContaining({ rowId: 'r1', limit: 500 }));
+    });
+
+    it('user adding a row keeps the history panel of the open row', async () => {
+      const api = fakeApi({ rows: twoRows });
+      await renderView(api);
+      await screen.findByTestId('table-grid');
+      await userEvent.click(screen.getByTestId('grid-row-r1'));
+      await screen.findByTestId('history-entry-h1');
+
+      await userEvent.click(screen.getByTestId('tables-add-row'));
+
+      await vi.waitFor(() => expect(api.queryDataStore).toHaveBeenCalledTimes(2));
+      await screen.findByTestId('table-grid');
+      expect(screen.getByTestId('tables-history')).toBeTruthy();
+      expect(screen.getByTestId('history-entry-h1')).toBeTruthy();
+    });
+  });
+
+  describe('naming a new table', () => {
+    it('user cannot type a table name longer than the daemon accepts', async () => {
+      await renderView(fakeApi({ rows: twoRows }));
+      await screen.findByTestId('table-grid');
+
+      await userEvent.click(screen.getByTestId('table-add'));
+
+      expect(screen.getByTestId('tables-new-name')).toHaveAttribute('maxlength', '200');
+    });
+
+    it.each([
+      { failure: new ApiError(404, 'POST → 404', 'project_not_found'), expected: 'project no longer exists' },
+      { failure: new ApiError(400, 'POST → 400', 'invalid_body'), expected: 'name is not valid' },
+    ])('user reads why the table was refused: $failure.code', async ({ failure, expected }) => {
+      const api = fakeApi({ rows: twoRows });
+      api.createDataStore.mockRejectedValue(failure);
+      await renderView(api);
+      await screen.findByTestId('table-grid');
+      await userEvent.click(screen.getByTestId('table-add'));
+      await userEvent.type(screen.getByTestId('tables-new-name'), 'sprint');
+
+      await userEvent.click(screen.getByTestId('tables-create'));
+
+      expect(await screen.findByTestId('tables-create-error')).toHaveTextContent(expected);
     });
   });
 

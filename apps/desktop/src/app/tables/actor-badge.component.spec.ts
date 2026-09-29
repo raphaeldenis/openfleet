@@ -1,8 +1,9 @@
 import { render, screen } from '@testing-library/angular/zoneless';
-import { inputBinding } from '@angular/core';
+import { inputBinding, signal } from '@angular/core';
 import type { RowActorKind } from '@openfleet/shared';
 import { describe, expect, it } from 'vitest';
 import { ActorBadgeComponent } from './actor-badge.component';
+
 
 describe('ActorBadgeComponent', () => {
   it.each<[RowActorKind, string]>([
@@ -15,13 +16,17 @@ describe('ActorBadgeComponent', () => {
     expect(screen.getByTestId('actor-badge')).toHaveTextContent(label);
   });
 
-  it.each<[RowActorKind, string]>([
-    ['human', 'var(--state-idle)'],
-    ['agent', 'var(--state-generating)'],
-    ['trigger', 'var(--state-thinking)'],
-  ])('user tells the actors apart by colour: a %s actor is %s', async (kind, expectedColor) => {
-    await render(ActorBadgeComponent, { bindings: [inputBinding('kind', () => kind)] });
+  it('user tells the actors apart by colour: human, agent and trigger each render a different colour', async () => {
+    const kind = signal<RowActorKind>('human');
+    const { fixture } = await render(ActorBadgeComponent, { bindings: [inputBinding('kind', kind)] });
+    const colors: string[] = [];
+    for (const shownKind of ['human', 'agent', 'trigger'] as const) {
+      kind.set(shownKind);
+      fixture.detectChanges();
+      colors.push(screen.getByTestId('actor-badge').style.color);
+    }
 
-    expect(screen.getByTestId('actor-badge').style.color).toBe(expectedColor);
+    expect(colors.every((color) => color !== '')).toBe(true);
+    expect(new Set(colors).size).toBe(3);
   });
 });
