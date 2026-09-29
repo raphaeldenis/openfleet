@@ -7,7 +7,7 @@ import {
 import { z } from 'zod';
 import { DuplicateNameError, RowNotFoundError, StoreNotFoundError, UnknownColumnError, type DataStoreRepository } from '../stores/dataStoreRepository.js';
 import {
-  ConstraintError, InvalidCellValueError, InvalidNameError, InvalidQueryError, ReferencedRecordMissingError, StoreRowCapError, type DataStoreService,
+  ConstraintError, DaemonSetColumnError, InvalidCellValueError, InvalidNameError, InvalidQueryError, ReferencedRecordMissingError, StoreRowCapError, type DataStoreService,
 } from '../stores/dataStoreService.js';
 import { json, queryParams, type Router } from './router.js';
 
@@ -60,7 +60,7 @@ function respondToStoreErrors(res: ServerResponse, run: () => void): void {
     if (error instanceof DuplicateNameError) return json(res, 409, { error: 'duplicate_name' });
     if (error instanceof ConstraintError) return json(res, 409, { error: 'constraint_violation', detail: error.message });
     if (error instanceof StoreRowCapError) return json(res, 413, { error: 'row_cap' });
-    const isInvalidInput = error instanceof InvalidCellValueError || error instanceof InvalidNameError || error instanceof InvalidQueryError || error instanceof UnknownColumnError;
+    const isInvalidInput = error instanceof DaemonSetColumnError || error instanceof InvalidCellValueError || error instanceof InvalidNameError || error instanceof InvalidQueryError || error instanceof UnknownColumnError;
     if (isInvalidInput) return json(res, 400, { error: 'invalid_body', detail: error.message });
     throw error;
   }
