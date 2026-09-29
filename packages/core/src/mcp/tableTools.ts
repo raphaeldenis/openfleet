@@ -7,12 +7,26 @@ import type { DataStoreService } from '../stores/dataStoreService.js';
 const ok = (payload: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(payload) }] });
 const fail = (message: string) => ({ content: [{ type: 'text' as const, text: message }], isError: true });
 
+/** Keeps rows until adding the next one would push the serialized result past maxBytes; always keeps at least one. */
+function truncateToByteBudget<T>(items: T[], maxBytes: number): { items: T[]; truncated: boolean } {
+  let bytes = 0;
+  const kept: T[] = [];
+  for (const item of items) {
+    const itemBytes = Buffer.byteLength(JSON.stringify(item), 'utf8');
+    if (kept.length > 0 && bytes + itemBytes > maxBytes) return { items: kept, truncated: true };
+    bytes += itemBytes;
+    kept.push(item);
+  }
+  return { items: kept, truncated: false };
+}
+
 // Task 15 caps (see the plan's Review Focus #3 and Lead amendment on P3-T11): a batch write is capped so
 // one call can't hold the outer transaction open indefinitely, and a query defaults to a page an agent can
 // actually read rather than dumping a whole store.
 const MAX_BATCH_ROWS = 500;
 const MAX_QUERY_LIMIT = 1000;
 const DEFAULT_QUERY_LIMIT = 100;
+const MAX_QUERY_RESULT_BYTES = 1024 * 1024;
 
 export interface RegisterTableToolsDeps {
   stores: DataStoreService;
@@ -80,16 +94,19 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
   });
 
   server.registerTool('insert_data_store_rows', {
-    description: `Insert up to ${MAX_BATCH_ROWS} rows in one all-or-nothing batch; each row is keyed by column id`,
+    description: `Insert up to ${MAX_BATCH_ROWS} rows in one all-or-nothing batch; each row is keyed by column id. Returns the inserted row ids and a count, not the rows themselves`,
     inputSchema: { store: z.string().min(1), rows: z.array(z.record(z.string(), z.unknown())).max(MAX_BATCH_ROWS) },
   }, async ({ store, rows }) => {
     const scope = requireProject();
     if (!scope) return fail('this session has no project');
-    return guarded(() => stores.insertRows(store, { ...scope, items: rows, actor: agentActor(caller) }));
+    return guarded(() => {
+      const inserted = stores.insertRows(store, { ...scope, items: rows, actor: agentActor(caller) });
+      return { ids: inserted.map((row) => row.id), count: inserted.length };
+    });
   });
 
   server.registerTool('update_data_store_rows', {
-    description: `Patch up to ${MAX_BATCH_ROWS} rows in one all-or-nothing batch`,
+    description: `Patch up to ${MAX_BATCH_ROWS} rows in one all-or-nothing batch. Returns the patched row ids and a count, not the rows themselves`,
     inputSchema: {
       store: z.string().min(1),
       updates: z.array(z.object({ row_id: z.string().min(1), patch: z.record(z.string(), z.unknown()) })).max(MAX_BATCH_ROWS),
@@ -98,7 +115,10 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
     const scope = requireProject();
     if (!scope) return fail('this session has no project');
     const items = updates.map(({ row_id, patch }) => ({ rowId: row_id, patch }));
-    return guarded(() => stores.updateRows(store, { ...scope, items, actor: agentActor(caller) }));
+    return guarded(() => {
+      const updated = stores.updateRows(store, { ...scope, items, actor: agentActor(caller) });
+      return { ids: updated.map((row) => row.id), count: updated.length };
+    });
   });
 
   server.registerTool('delete_data_store_row', {
@@ -108,16 +128,16 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
     const scope = requireProject();
     if (!scope) return fail('this session has no project');
     return guarded(() => {
-      const row = storeRepo.findRowById(row_id);
-      const owningStore = row ? storeRepo.findStore(row.storeId) : undefined;
-      if (!row || owningStore?.projectId !== scope.projectId) throw new RowNotFoundError(row_id);
-      stores.deleteRow(row.storeId, row_id, { ...scope, actor: agentActor(caller) });
+      const storeId = storeRepo.findRowStoreId(row_id);
+      const owningStore = storeId ? storeRepo.findStore(storeId) : undefined;
+      if (!storeId || owningStore?.projectId !== scope.projectId) throw new RowNotFoundError(row_id);
+      stores.deleteRow(storeId, row_id, { ...scope, actor: agentActor(caller) });
       return { deleted: row_id };
     });
   });
 
   server.registerTool('query_data_store', {
-    description: `Filter, sort and limit a store's rows (limit ≤ ${MAX_QUERY_LIMIT}, default ${DEFAULT_QUERY_LIMIT})`,
+    description: `Filter, sort and limit a store's rows (limit ≤ ${MAX_QUERY_LIMIT}, default ${DEFAULT_QUERY_LIMIT}); the result is also cut off past ${MAX_QUERY_RESULT_BYTES} bytes, with \`truncated: true\` when that happened`,
     inputSchema: {
       store: z.string().min(1),
       where: z.array(WhereClauseSchema).optional(),
@@ -127,6 +147,10 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
   }, async ({ store, where, order_by, limit }) => {
     const scope = requireProject();
     if (!scope) return fail('this session has no project');
-    return guarded(() => stores.query(store, { ...scope, where, orderBy: order_by, limit: limit ?? DEFAULT_QUERY_LIMIT }));
+    return guarded(() => {
+      const rows = stores.query(store, { ...scope, where, orderBy: order_by, limit: limit ?? DEFAULT_QUERY_LIMIT });
+      const { items, truncated } = truncateToByteBudget(rows, MAX_QUERY_RESULT_BYTES);
+      return { rows: items, truncated, count: items.length };
+    });
   });
 }

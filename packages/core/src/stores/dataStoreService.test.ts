@@ -5,7 +5,7 @@ import { ProjectRepository } from '../projects/projectRepository.js';
 import { DataStoreRepository, DuplicateNameError, RowNotFoundError, StoreNotFoundError, UnknownColumnError } from './dataStoreRepository.js';
 import {
   ConstraintError, DataStoreService, DataStoreWriteError, DuplicateIdError, InvalidActorError, InvalidCellValueError, InvalidColumnDefinitionError,
-  InvalidNameError, StoreHasRowsError, ViewNotFoundError,
+  InvalidNameError, MAX_ROWS_PER_STORE, StoreHasRowsError, StoreRowCapError, ViewNotFoundError,
 } from './dataStoreService.js';
 
 const scope = { projectId: 'p1' } as const;
@@ -222,6 +222,8 @@ describe('DataStoreService', () => {
       ['json: NaN', 'meta', Number.NaN],
       ['json: nested Infinity', 'meta', { a: Number.POSITIVE_INFINITY }],
       ['json: Date', 'meta', new Date(0)],
+      ['text: oversize', 'title', 'a'.repeat(64 * 1024 + 1)],
+      ['json: oversize', 'meta', { big: 'a'.repeat(64 * 1024 + 1) }],
     ];
 
     it.each(accepted)('accepts a valid %s value on insert and update', (_name, build) => {
@@ -417,6 +419,22 @@ describe('DataStoreService', () => {
       const invalid = thrownBy(() => service.updateRows(store.id, { ...scope, actor: human, items: [{ rowId: a.id, patch: { [cols.priority]: 99 } }, { rowId: b.id, patch: { [cols.priority]: 'x' } }] }));
       expect(invalid).toBeInstanceOf(InvalidCellValueError);
       expect(repo.listRows(store.id).map((r) => r.data[cols.priority])).toEqual([10, 20]);
+    });
+  });
+
+  describe('row cap', () => {
+    it('refuses a single insert and a batch insert that would exceed the per-store row cap, writing nothing', () => {
+      const { service, store, repo, rowCount } = backlog();
+      for (let i = 0; i < MAX_ROWS_PER_STORE; i++) repo.insertRow(store.id, { id: `seed-${i}`, data: {}, actor: human, at: '2026-01-01T00:00:00.000Z' });
+      expect(rowCount()).toBe(MAX_ROWS_PER_STORE);
+
+      const single = thrownBy(() => service.insertRow(store.id, { ...scope, data: {}, actor: human }));
+      expect(single).toBeInstanceOf(StoreRowCapError);
+      expect(rowCount()).toBe(MAX_ROWS_PER_STORE);
+
+      const batch = thrownBy(() => service.insertRows(store.id, { ...scope, items: [{}, {}], actor: human }));
+      expect(batch).toBeInstanceOf(StoreRowCapError);
+      expect(rowCount()).toBe(MAX_ROWS_PER_STORE);
     });
   });
 

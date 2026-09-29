@@ -207,10 +207,10 @@ export class DataStoreRepository {
     return row ? toRow(row) : undefined;
   }
 
-  /** Looks up a row by id alone, its `storeId` telling the caller which store (and project) owns it. */
-  findRowById(rowId: string): DsRow | undefined {
-    const row = this.db.prepare('SELECT * FROM ds_rows WHERE id = ?').get(rowId) as RowRow | undefined;
-    return row ? toRow(row) : undefined;
+  /** The store id owning a row, without parsing its data — enough to authorize before touching the row itself. */
+  findRowStoreId(rowId: string): string | undefined {
+    const row = this.db.prepare('SELECT store_id FROM ds_rows WHERE id = ?').get(rowId) as { store_id: string } | undefined;
+    return row?.store_id;
   }
 
   private refuseMissingStore(storeId: string): void {

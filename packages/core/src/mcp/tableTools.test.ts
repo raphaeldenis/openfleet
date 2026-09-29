@@ -143,10 +143,26 @@ describe('table tools', () => {
     const columns = text(await client.callTool({ name: 'describe_data_store', arguments: { store: store.id } })).columns;
     const titleId = columns[0].id;
 
-    const rows = text(await client.callTool({ name: 'insert_data_store_rows', arguments: { store: store.id, rows: [{ [titleId]: 'first' }] } }));
+    const result = text(await client.callTool({ name: 'insert_data_store_rows', arguments: { store: store.id, rows: [{ [titleId]: 'first' }] } }));
 
-    const history = storeRepo.rowHistory(rows[0].id, { projectId: 'p1' });
+    const history = storeRepo.rowHistory(result.ids[0], { projectId: 'p1' });
     expect(history[0]).toMatchObject({ actorKind: 'agent', actorLabel: '⛏️ Gimli' });
+  });
+
+  it('insert_data_store_rows and update_data_store_rows return only the affected row ids and a count, never cell data', async () => {
+    const client = await connect(scopedToken);
+    const store = await createStore(client);
+    await client.callTool({ name: 'add_data_store_column', arguments: { store: store.id, display_name: 'title', column_type: 'text' } });
+    const titleId = text(await client.callTool({ name: 'describe_data_store', arguments: { store: store.id } })).columns[0].id;
+
+    const inserted = text(await client.callTool({ name: 'insert_data_store_rows', arguments: { store: store.id, rows: [{ [titleId]: 'first' }, { [titleId]: 'second' }] } }));
+    expect(inserted).toEqual({ ids: [expect.any(String), expect.any(String)], count: 2 });
+
+    const updated = text(await client.callTool({
+      name: 'update_data_store_rows',
+      arguments: { store: store.id, updates: inserted.ids.map((row_id: string) => ({ row_id, patch: { [titleId]: 'changed' } })) },
+    }));
+    expect(updated).toEqual({ ids: inserted.ids, count: 2 });
   });
 
   it('insert_data_store_rows refuses more than 500 rows in one batch', async () => {
@@ -165,8 +181,8 @@ describe('table tools', () => {
     const result = await client.callTool({ name: 'insert_data_store_rows', arguments: { store: store.id, rows: [{ 'unknown-col': 'x' }, {}] } });
 
     expect(result.isError).toBe(true);
-    const rows = text(await client.callTool({ name: 'query_data_store', arguments: { store: store.id } }));
-    expect(rows).toHaveLength(0);
+    const queried = text(await client.callTool({ name: 'query_data_store', arguments: { store: store.id } }));
+    expect(queried.rows).toHaveLength(0);
   });
 
   it('update_data_store_rows writes actor-attributed history for each row and is all-or-nothing on a bad patch', async () => {
@@ -174,40 +190,79 @@ describe('table tools', () => {
     const store = await createStore(client);
     await client.callTool({ name: 'add_data_store_column', arguments: { store: store.id, display_name: 'status', column_type: 'select', options: [{ id: 'todo', label: 'todo' }, { id: 'done', label: 'done' }] } });
     const statusId = text(await client.callTool({ name: 'describe_data_store', arguments: { store: store.id } })).columns[0].id;
-    const [row1, row2] = text(await client.callTool({ name: 'insert_data_store_rows', arguments: { store: store.id, rows: [{ [statusId]: 'todo' }, { [statusId]: 'todo' }] } }));
+    const [row1Id, row2Id] = text(await client.callTool({ name: 'insert_data_store_rows', arguments: { store: store.id, rows: [{ [statusId]: 'todo' }, { [statusId]: 'todo' }] } })).ids;
 
-    const badBatch = await client.callTool({ name: 'update_data_store_rows', arguments: { store: store.id, updates: [{ row_id: row1.id, patch: { [statusId]: 'done' } }, { row_id: row2.id, patch: { [statusId]: 'not-an-option' } }] } });
+    const badBatch = await client.callTool({ name: 'update_data_store_rows', arguments: { store: store.id, updates: [{ row_id: row1Id, patch: { [statusId]: 'done' } }, { row_id: row2Id, patch: { [statusId]: 'not-an-option' } }] } });
     expect(badBatch.isError).toBe(true);
     const untouched = text(await client.callTool({ name: 'query_data_store', arguments: { store: store.id } }));
-    expect(untouched.find((r: { id: string }) => r.id === row1.id).data[statusId]).toBe('todo');
+    expect(untouched.rows.find((r: { id: string }) => r.id === row1Id).data[statusId]).toBe('todo');
 
-    const goodBatch = text(await client.callTool({ name: 'update_data_store_rows', arguments: { store: store.id, updates: [{ row_id: row1.id, patch: { [statusId]: 'done' } }] } }));
-    expect(goodBatch[0].data[statusId]).toBe('done');
-    const [latest] = storeRepo.rowHistory(row1.id, { projectId: 'p1' });
+    const goodBatch = text(await client.callTool({ name: 'update_data_store_rows', arguments: { store: store.id, updates: [{ row_id: row1Id, patch: { [statusId]: 'done' } }] } }));
+    expect(goodBatch).toEqual({ ids: [row1Id], count: 1 });
+    const [latest] = storeRepo.rowHistory(row1Id, { projectId: 'p1' });
     expect(latest).toMatchObject({ actorKind: 'agent', actorLabel: '⛏️ Gimli', change: { [statusId]: { from: 'todo', to: 'done' } } });
   });
 
   it('delete_data_store_row writes a delete history entry with its actor and removes the row', async () => {
     const client = await connect(scopedToken);
     const store = await createStore(client);
-    const [row] = text(await client.callTool({ name: 'insert_data_store_rows', arguments: { store: store.id, rows: [{}] } }));
+    const [rowId] = text(await client.callTool({ name: 'insert_data_store_rows', arguments: { store: store.id, rows: [{}] } })).ids;
 
-    const result = await client.callTool({ name: 'delete_data_store_row', arguments: { row_id: row.id } });
+    const result = await client.callTool({ name: 'delete_data_store_row', arguments: { row_id: rowId } });
 
     expect(result.isError).toBeFalsy();
     const remaining = text(await client.callTool({ name: 'query_data_store', arguments: { store: store.id } }));
-    expect(remaining).toHaveLength(0);
-    const history = storeRepo.rowHistory(row.id, { projectId: 'p1' });
+    expect(remaining.rows).toHaveLength(0);
+    const history = storeRepo.rowHistory(rowId, { projectId: 'p1' });
     expect(history[0]).toMatchObject({ actorKind: 'agent', actorLabel: '⛏️ Gimli', change: { kind: 'delete' } });
+  });
+
+  it('add_data_store_column on another project\'s store fails exactly like a missing store', async () => {
+    const owner = await connect(scopedToken);
+    const store = await createStore(owner);
+    const stranger = await connect(otherToken);
+
+    const strangerResult = await stranger.callTool({ name: 'add_data_store_column', arguments: { store: store.id, display_name: 'title', column_type: 'text' } });
+    const missingResult = await stranger.callTool({ name: 'add_data_store_column', arguments: { store: 'does-not-exist', display_name: 'title', column_type: 'text' } });
+
+    expect(strangerResult.isError).toBe(true);
+    expect(missingResult.isError).toBe(true);
+    expect((strangerResult.content as { text: string }[])[0]!.text).toBe((missingResult.content as { text: string }[])[0]!.text);
+  });
+
+  it('insert_data_store_rows on another project\'s store fails exactly like a missing store', async () => {
+    const owner = await connect(scopedToken);
+    const store = await createStore(owner);
+    const stranger = await connect(otherToken);
+
+    const strangerResult = await stranger.callTool({ name: 'insert_data_store_rows', arguments: { store: store.id, rows: [{}] } });
+    const missingResult = await stranger.callTool({ name: 'insert_data_store_rows', arguments: { store: 'does-not-exist', rows: [{}] } });
+
+    expect(strangerResult.isError).toBe(true);
+    expect(missingResult.isError).toBe(true);
+    expect((strangerResult.content as { text: string }[])[0]!.text).toBe((missingResult.content as { text: string }[])[0]!.text);
+  });
+
+  it('update_data_store_rows on another project\'s store fails exactly like a missing store', async () => {
+    const owner = await connect(scopedToken);
+    const store = await createStore(owner);
+    const stranger = await connect(otherToken);
+
+    const strangerResult = await stranger.callTool({ name: 'update_data_store_rows', arguments: { store: store.id, updates: [{ row_id: 'r1', patch: {} }] } });
+    const missingResult = await stranger.callTool({ name: 'update_data_store_rows', arguments: { store: 'does-not-exist', updates: [{ row_id: 'r1', patch: {} }] } });
+
+    expect(strangerResult.isError).toBe(true);
+    expect(missingResult.isError).toBe(true);
+    expect((strangerResult.content as { text: string }[])[0]!.text).toBe((missingResult.content as { text: string }[])[0]!.text);
   });
 
   it('delete_data_store_row on another project\'s row fails exactly like a missing row', async () => {
     const owner = await connect(scopedToken);
     const store = await createStore(owner);
-    const [row] = text(await owner.callTool({ name: 'insert_data_store_rows', arguments: { store: store.id, rows: [{}] } }));
+    const [rowId] = text(await owner.callTool({ name: 'insert_data_store_rows', arguments: { store: store.id, rows: [{}] } })).ids;
     const stranger = await connect(otherToken);
 
-    const strangerResult = await stranger.callTool({ name: 'delete_data_store_row', arguments: { row_id: row.id } });
+    const strangerResult = await stranger.callTool({ name: 'delete_data_store_row', arguments: { row_id: rowId } });
     const missingResult = await stranger.callTool({ name: 'delete_data_store_row', arguments: { row_id: 'does-not-exist' } });
 
     expect(strangerResult.isError).toBe(true);
@@ -227,7 +282,26 @@ describe('table tools', () => {
       arguments: { store: store.id, where: [{ columnId: priorityId, op: 'gt', value: 1 }], order_by: [{ columnId: priorityId, dir: 'asc' }], limit: 1 },
     }));
 
-    expect(result.map((r: { data: Record<string, unknown> }) => r.data[priorityId])).toEqual([2]);
+    expect(result.rows.map((r: { data: Record<string, unknown> }) => r.data[priorityId])).toEqual([2]);
+    expect(result).toMatchObject({ truncated: false, count: 1 });
+  });
+
+  it('query_data_store stops adding rows once the serialized result would exceed 1 MiB and flags truncated', async () => {
+    const client = await connect(scopedToken);
+    const store = await createStore(client);
+    await client.callTool({ name: 'add_data_store_column', arguments: { store: store.id, display_name: 'blob', column_type: 'text' } });
+    const blobId = text(await client.callTool({ name: 'describe_data_store', arguments: { store: store.id } })).columns[0].id;
+    const bigValue = 'x'.repeat(64 * 1024);
+    for (let batch = 0; batch < 5; batch++) {
+      const rows = Array.from({ length: 4 }, () => ({ [blobId]: bigValue }));
+      await client.callTool({ name: 'insert_data_store_rows', arguments: { store: store.id, rows } });
+    }
+
+    const result = text(await client.callTool({ name: 'query_data_store', arguments: { store: store.id, limit: 20 } }));
+
+    expect(result.truncated).toBe(true);
+    expect(result.rows.length).toBe(result.count);
+    expect(result.rows.length).toBeLessThan(20);
   });
 
   it('query_data_store refuses a limit over 1000', async () => {

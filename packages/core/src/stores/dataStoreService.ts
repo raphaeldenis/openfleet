@@ -35,6 +35,11 @@ export class StoreHasRowsError extends Error {
     super(`Data store ${storeId} still has ${rowCount} rows; pass force to delete it with its history`);
   }
 }
+export class StoreRowCapError extends Error {
+  constructor(readonly storeId: string, readonly cap: number) {
+    super(`Data store ${storeId} is at its ${cap}-row cap`);
+  }
+}
 
 export interface DataStoreServiceDeps {
   repo: DataStoreRepository;
@@ -48,6 +53,8 @@ type Scope = { projectId: string };
 
 const BATCH_SAVEPOINT = 'data_store_batch';
 const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})?)?$/;
+export const MAX_CELL_BYTES = 64 * 1024;
+export const MAX_ROWS_PER_STORE = 10_000;
 
 const normalizeName = (name: string): string => {
   const normalized = name.normalize('NFC').trim();
@@ -66,12 +73,17 @@ function isIsoDate(value: string): boolean {
 function isValidCell(column: DsColumn, value: unknown): boolean {
   if (value === null) return true;
   switch (column.columnType) {
-    case 'text': return typeof value === 'string';
+    case 'text': return typeof value === 'string' && !exceedsCellByteCap(value);
     case 'number': return typeof value === 'number' && Number.isFinite(value);
     case 'date': return typeof value === 'string' && isIsoDate(value);
     case 'select': return typeof value === 'string' && (column.options ?? []).some((option) => option.id === value);
-    case 'json': return survivesJsonRoundTrip(value);
+    case 'json': return survivesJsonRoundTrip(value) && !exceedsCellByteCap(JSON.stringify(value));
   }
+}
+
+/** A text or json cell's serialized value must fit within MAX_CELL_BYTES: one agent can't grow a row without bound. */
+function exceedsCellByteCap(serialized: string): boolean {
+  return Buffer.byteLength(serialized, 'utf8') > MAX_CELL_BYTES;
 }
 
 /** A json cell is only valid if it comes back unchanged from JSON.stringify/parse: no NaN, Infinity, -0, Date, undefined, function… */
@@ -167,6 +179,7 @@ export class DataStoreService {
   insertRow(storeId: string, input: Scope & { data: Record<string, unknown>; actor: RowActor }): DsRow {
     this.authorize(storeId, input.projectId);
     this.validateCells(storeId, input.data);
+    this.assertRowCapacity(storeId, 1);
     return this.guarded(() => this.repo.insertRow(storeId, { id: this.newId(), data: input.data, actor: input.actor, at: this.clock() }));
   }
 
@@ -194,6 +207,7 @@ export class DataStoreService {
   insertRows(storeId: string, input: Scope & { items: Record<string, unknown>[]; actor: RowActor }): DsRow[] {
     this.authorize(storeId, input.projectId);
     for (const data of input.items) this.validateCells(storeId, data);
+    this.assertRowCapacity(storeId, input.items.length);
     return this.inTransaction(() => input.items.map((data) => this.repo.insertRow(storeId, { id: this.newId(), data, actor: input.actor, at: this.clock() })));
   }
 
@@ -245,6 +259,11 @@ export class DataStoreService {
     if (this.repo.findStore(storeId)?.projectId !== projectId) throw new StoreNotFoundError(storeId);
   }
 
+  /** Refuses an insert that would push a store past MAX_ROWS_PER_STORE; nothing is written when it throws. */
+  private assertRowCapacity(storeId: string, additionalRows: number): void {
+    if (this.repo.countRows(storeId) + additionalRows > MAX_ROWS_PER_STORE) throw new StoreRowCapError(storeId, MAX_ROWS_PER_STORE);
+  }
+
   private requireColumns(storeId: string, columnIds: string[]): DsColumn[] {
     const columns = this.repo.listColumns(storeId);
     const known = new Set(columns.map((column) => column.id));
@@ -285,7 +304,7 @@ export class DataStoreService {
     const columns = this.requireColumns(storeId, [...where.data.map((c) => c.columnId), ...orderBy.data.map((t) => t.columnId)]);
     const columnById = new Map(columns.map((column) => [column.id, column]));
 
-    // ponytail: in-memory filter; push down to SQL if stores grow past ~10k rows
+    // ponytail: in-memory filter; push down to SQL if stores grow past the MAX_ROWS_PER_STORE cap
     const filtered = this.repo.listRows(storeId).filter((row) =>
       where.data.every((clause) => matches(columnById.get(clause.columnId)!, row.data[clause.columnId] ?? null, clause)));
     const sorted = filtered.sort((a, b) => {
