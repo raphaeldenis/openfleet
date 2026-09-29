@@ -1,6 +1,6 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
@@ -407,6 +407,38 @@ describe('notes REST routes', () => {
       expect(await edited.json()).toMatchObject({ bodyMd: 'v2', rev: 2, fileBacked: true });
       expect(renamed.status).toBe(409);
       expect(await renamed.json()).toMatchObject({ error: 'file_backed' });
+    });
+  });
+
+  describe('errors never leak paths', () => {
+    it('answers 409 path_escapes_docs_folder, without the path, when the note file now points outside the docs folder', async () => {
+      const fileBacked = docs.createFileBackedNote({ projectId: fileBackedProjectId, folder: 'specs', title: 'log', bodyMd: 'v1', author: 'seed' });
+      const outsideDir = mkdtempSync(join(tmpdir(), 'of-outside-'));
+      const outsideFile = join(outsideDir, 'secret.md');
+      writeFileSync(outsideFile, 'v1');
+      const filePath = noteRepo.get(fileBacked.id)!.filePath!;
+      unlinkSync(filePath);
+      symlinkSync(outsideFile, filePath);
+
+      const response = await call('PATCH', `/api/notes/${fileBacked.id}`, { projectId: fileBackedProjectId, expectedRev: 1, bodyMd: 'v2' });
+      const text = await response.text();
+
+      expect(response.status).toBe(409);
+      expect(JSON.parse(text)).toEqual({ error: 'path_escapes_docs_folder' });
+      expect(text).not.toContain(outsideDir);
+      expect(text).not.toContain(filePath);
+    });
+
+    it('answers an unexpected failure with a bare 500 internal_error carrying no message', async () => {
+      const note = await createNote();
+      vi.spyOn(noteRepo, 'get').mockImplementation(() => { throw new Error("EACCES: permission denied, open '/Users/secret/docs/plan.md'"); });
+
+      const response = await call('GET', `/api/notes/${note.id}?projectId=p1`);
+      const text = await response.text();
+      vi.restoreAllMocks();
+
+      expect(response.status).toBe(500);
+      expect(JSON.parse(text)).toEqual({ error: 'internal_error' });
     });
   });
 

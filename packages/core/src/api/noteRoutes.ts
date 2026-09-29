@@ -5,7 +5,7 @@ import {
 } from '@openfleet/shared';
 import { z } from 'zod';
 import type { DocsFolderService } from '../notes/docsFolderService.js';
-import { NoteFileUnreadableError } from '../notes/docsFolderService.js';
+import { NoteFileUnreadableError, PathEscapesDocsFolderError } from '../notes/docsFolderService.js';
 import type { NoteRepository } from '../notes/noteRepository.js';
 import { FileBackedNoteError, NoteNotFoundError, NoteTooLargeError, StaleRevisionError, VersionNotFoundError, type NoteService } from '../notes/noteService.js';
 import { json, queryParams, type Router } from './router.js';
@@ -40,6 +40,7 @@ function respondToNoteErrors(res: ServerResponse, run: () => void): void {
     if (error instanceof StaleRevisionError) return json(res, 409, { error: 'stale_revision', currentRev: error.currentRev });
     if (error instanceof FileBackedNoteError) return json(res, 409, { error: 'file_backed' });
     if (error instanceof NoteFileUnreadableError) return json(res, 409, { error: 'file_unreadable' });
+    if (error instanceof PathEscapesDocsFolderError) return json(res, 409, { error: 'path_escapes_docs_folder' });
     // ponytail: the 1 MiB JSON body cap fires first, so this is a backstop; drop it if the note cap is ever raised past the body cap
     if (error instanceof NoteTooLargeError) return json(res, 413, { error: 'note_too_large' });
     if (isForeignKeyError(error)) return json(res, 404, { error: 'project_not_found' });

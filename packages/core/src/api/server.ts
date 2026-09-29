@@ -100,7 +100,8 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; clos
       if (error instanceof InvalidJsonBodyError) return json(res, 400, { error: 'invalid_json', detail: error.message });
       const isValidation = (error as { name?: string }).name === 'ZodError';
       if (!isValidation) logServerError(req, error);
-      json(res, isValidation ? 400 : 500, { error: isValidation ? 'invalid_body' : 'internal', detail: (error as Error).message });
+      if (isValidation) return json(res, 400, { error: 'invalid_body', detail: (error as Error).message });
+      json(res, 500, { error: 'internal_error' });
     }
   });
   const ws = createWsHandler({ ...deps, wsTickets });
