@@ -1,7 +1,7 @@
 import { ChangeDetectionStrategy, Component, Injector, afterNextRender, computed, effect, inject, signal, untracked, viewChild } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { ActivatedRoute } from '@angular/router';
-import { ApiError, FleetApiService } from '../core/fleet-api.service';
+import { ApiError, FleetApiService, type PageRequest } from '../core/fleet-api.service';
 import { DirectoryOpener } from './directory-opener';
 import { ageLabel } from './note-age';
 import { NoteConflictBannerComponent, type ConflictingVersion, type ConflictResolution } from './note-conflict-banner.component';
@@ -9,7 +9,7 @@ import { NoteEditorComponent } from './note-editor.component';
 import { NoteHistoryComponent } from './note-history.component';
 import { NoteListComponent } from './note-list.component';
 import { NoteStatePanelComponent } from './note-state-panel.component';
-import type { NoteSummary, NoteVersionSummary, NoteView, Page, PageRequest, Project } from './notes.types';
+import type { NoteSummary, NoteVersionSummary, NoteView, Page, Project } from '@openfleet/shared';
 
 type LoadStatus = 'loading' | 'ready' | 'error';
 

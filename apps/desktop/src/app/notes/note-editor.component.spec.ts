@@ -4,7 +4,7 @@ import { inputBinding, outputBinding } from '@angular/core';
 import { describe, expect, it, vi } from 'vitest';
 import { NoteEditorComponent, type NoteMentioner } from './note-editor.component';
 import { aNoteView } from './notes.fixtures';
-import type { NoteView } from './notes.types';
+import type { NoteView } from '@openfleet/shared';
 
 interface EditorOptions {
   note?: NoteView;

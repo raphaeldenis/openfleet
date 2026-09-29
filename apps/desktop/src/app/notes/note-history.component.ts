@@ -1,6 +1,6 @@
 import { ChangeDetectionStrategy, Component, computed, input, output, signal } from '@angular/core';
 import { ageLabel } from './note-age';
-import type { NoteVersionSummary } from './notes.types';
+import type { NoteVersionSummary } from '@openfleet/shared';
 
 @Component({
   selector: 'of-note-history',

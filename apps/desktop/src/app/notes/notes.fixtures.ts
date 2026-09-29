@@ -1,4 +1,4 @@
-import type { NoteSummary, NoteVersionSummary, NoteView } from './notes.types';
+import type { NoteSummary, NoteVersionSummary, NoteView } from '@openfleet/shared';
 
 export function aNoteSummary(overrides: Partial<NoteSummary> = {}): NoteSummary {
   return {

@@ -7,7 +7,7 @@ import { ApiError, FleetApiService } from '../core/fleet-api.service';
 import { DirectoryOpener } from './directory-opener';
 import { NotesViewComponent } from './notes-view.component';
 import { aNoteSummary, aNoteVersion, aNoteView } from './notes.fixtures';
-import type { NoteSummary, NoteView, Project } from './notes.types';
+import type { NoteSummary, NoteView, Project } from '@openfleet/shared';
 
 const OPENFLEET: Project = { id: 'p1', name: 'OpenFleet', docsFolderPath: '/Users/me/docs' };
 const OTHER: Project = { id: 'p2', name: 'Other', docsFolderPath: null };

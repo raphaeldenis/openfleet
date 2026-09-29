@@ -4,7 +4,7 @@ import { inputBinding, outputBinding } from '@angular/core';
 import { describe, expect, it, vi } from 'vitest';
 import { NoteListComponent } from './note-list.component';
 import { aNoteSummary } from './notes.fixtures';
-import type { NoteSummary } from './notes.types';
+import type { NoteSummary } from '@openfleet/shared';
 
 const notes = [
   aNoteSummary({ id: 'n1', title: 'daemon-protocol' }),

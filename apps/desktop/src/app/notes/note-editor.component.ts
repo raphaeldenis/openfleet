@@ -1,7 +1,7 @@
 import { NgTemplateOutlet } from '@angular/common';
 import { ChangeDetectionStrategy, Component, ElementRef, computed, input, output, signal, viewChild } from '@angular/core';
 import { parseMarkdownBlocks } from './markdown-blocks';
-import type { NoteView } from './notes.types';
+import type { NoteView } from '@openfleet/shared';
 
 const MAX_BLOCKS_RENDERED_AT_FIRST = 2000;
 

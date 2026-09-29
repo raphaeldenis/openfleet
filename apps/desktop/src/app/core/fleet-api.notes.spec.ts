@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { CreateNoteRequestSchema, RestoreNoteRequestSchema, UpdateNoteRequestSchema, MAX_NOTE_PAGE_LIMIT, pageQuerySchema } from '@openfleet/shared';
 import { FleetApiService } from './fleet-api.service';
 
 function jsonResponse(status: number, body: unknown) {
@@ -12,6 +13,14 @@ describe('FleetApiService notes', () => {
   function lastRequest() {
     const [url, init] = fetchMock.mock.calls.at(-1) as [string, RequestInit];
     return { url: new URL(url), init };
+  }
+
+  function sentBody() {
+    return JSON.parse(lastRequest().init.body as string);
+  }
+
+  function sentQuery() {
+    return Object.fromEntries(lastRequest().url.searchParams);
   }
 
   beforeEach(() => {
@@ -44,8 +53,7 @@ describe('FleetApiService notes', () => {
   it('asks for a given page of notes', async () => {
     await api.listNotes('p1', { limit: 200, offset: 400 });
 
-    expect(lastRequest().url.searchParams.get('limit')).toBe('200');
-    expect(lastRequest().url.searchParams.get('offset')).toBe('400');
+    expect(pageQuerySchema(MAX_NOTE_PAGE_LIMIT).parse(sentQuery())).toEqual({ limit: 200, offset: 400 });
   });
 
   it('sends no paging parameter when none is asked for', async () => {
@@ -59,16 +67,14 @@ describe('FleetApiService notes', () => {
     await api.listProjects({ limit: 200, offset: 200 });
 
     expect(lastRequest().url.pathname).toBe('/api/projects');
-    expect(lastRequest().url.searchParams.get('limit')).toBe('200');
-    expect(lastRequest().url.searchParams.get('offset')).toBe('200');
+    expect(pageQuerySchema(MAX_NOTE_PAGE_LIMIT).parse(sentQuery())).toEqual({ limit: 200, offset: 200 });
   });
 
   it('asks for a given page of versions', async () => {
     await api.listNoteVersions('p1', 'n1', { limit: 200, offset: 200 });
 
     expect(lastRequest().url.searchParams.get('projectId')).toBe('p1');
-    expect(lastRequest().url.searchParams.get('limit')).toBe('200');
-    expect(lastRequest().url.searchParams.get('offset')).toBe('200');
+    expect(pageQuerySchema(MAX_NOTE_PAGE_LIMIT).parse(sentQuery())).toEqual({ limit: 200, offset: 200 });
   });
 
   it('reads one note within its project', async () => {
@@ -83,16 +89,15 @@ describe('FleetApiService notes', () => {
 
     expect(lastRequest().url.pathname).toBe('/api/notes');
     expect(lastRequest().init.method).toBe('POST');
-    expect(JSON.parse(lastRequest().init.body as string)).toEqual({ projectId: 'p1', title: 'voice', bodyMd: 'hello' });
+    expect(CreateNoteRequestSchema.parse(sentBody())).toEqual({ projectId: 'p1', title: 'voice', bodyMd: 'hello' });
   });
 
-  // Mirrors UpdateNoteRequestSchema of the REST server (packages/shared/src/notes.ts): the project scope travels in the BODY.
   it('updates a note with the project and the revision the user last saw in the body', async () => {
     await api.updateNote('p1', 'n1', { expectedRev: 3, bodyMd: 'new body' });
 
     expect(lastRequest().url.pathname).toBe('/api/notes/n1');
     expect(lastRequest().init.method).toBe('PATCH');
-    expect(JSON.parse(lastRequest().init.body as string)).toEqual({ projectId: 'p1', expectedRev: 3, bodyMd: 'new body' });
+    expect(UpdateNoteRequestSchema.parse(sentBody())).toEqual({ projectId: 'p1', expectedRev: 3, bodyMd: 'new body' });
   });
 
   it('reports a stale revision as a 409 the caller can recognise', async () => {
@@ -113,6 +118,6 @@ describe('FleetApiService notes', () => {
 
     expect(lastRequest().url.pathname).toBe('/api/notes/n1/restore');
     expect(lastRequest().init.method).toBe('POST');
-    expect(JSON.parse(lastRequest().init.body as string)).toEqual({ projectId: 'p1', rev: 2, expectedRev: 4 });
+    expect(RestoreNoteRequestSchema.parse(sentBody())).toEqual({ projectId: 'p1', rev: 2, expectedRev: 4 });
   });
 });
