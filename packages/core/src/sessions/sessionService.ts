@@ -569,9 +569,8 @@ export class SessionService {
     }
     if (input.kind === 'hook' && input.event.hook_event_name === 'SessionStart') {
       this.adoptCliSessionId(sessionId, input.event.session_id);
-      const isStartOfClearedConversation = input.event.source === 'clear';
-      if (isStartOfClearedConversation) this.sessionsPrompted.add(sessionId);
-      if (this.clearsInFlight.has(sessionId)) this.holdRelaunchesFor(sessionId, this.deps.clearFlushGraceMs ?? DEFAULT_CLEAR_FLUSH_GRACE_MS, { isFlushGrace: true });
+      const isWaitingForTheNewConversation = this.clearsInFlight.get(sessionId)?.isFlushGrace === false;
+      if (isWaitingForTheNewConversation) this.holdRelaunchesFor(sessionId, this.deps.clearFlushGraceMs ?? DEFAULT_CLEAR_FLUSH_GRACE_MS, { isFlushGrace: true });
     }
     if (input.kind === 'hook' && input.event.hook_event_name === 'UserPromptSubmit') {
       this.sessionsPrompted.add(sessionId);
@@ -1251,7 +1250,6 @@ export class SessionService {
     const freshCliSessionId = newId();
     this.repo.setCliSessionId(session.id, freshCliSessionId);
     this.conversationsAwaitingFirstPrompt.add(freshCliSessionId);
-    this.sessionsPrompted.delete(session.id);
     log('warn', `resume: conversation not found: session ${session.id}, missing ${currentCliSessionId}, started ${freshCliSessionId}`);
     return { cliSessionId: freshCliSessionId, isResumed: false, isNewConversationAnnounced: true };
   }

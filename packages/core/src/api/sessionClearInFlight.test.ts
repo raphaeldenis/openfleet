@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
 import { ApprovalService } from '../governance/approvalService.js';
@@ -18,13 +18,16 @@ let server: Awaited<ReturnType<typeof startServer>>;
 let harness: FakeHarness;
 let db: ReturnType<typeof openDatabase>;
 
-const bootDaemon = async (holds: { clearInFlightTimeoutMs: number; clearFlushGraceMs: number }) => {
+let service: SessionService;
+
+const bootDaemon = async (holds: { clearInFlightTimeoutMs?: number; clearFlushGraceMs?: number }) => {
   db = openDatabase(':memory:');
   harness = new FakeHarness();
   const bus = new EventBus();
   const sessions = new SessionService({
     db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt', submitKeystrokeDelayMs: 0, ...holds,
   });
+  service = sessions;
   const approvals = new ApprovalService({ db, bus });
   const managerRepo = new ManagerRepository(db);
   const pulseScheduler = new PulseScheduler({ managers: managerRepo, sessions, bus });
@@ -37,6 +40,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.useRealTimers();
   await server.close();
 });
 
@@ -166,5 +170,119 @@ describe('a user switching the model with no /clear in flight', () => {
     expect(answer.status).toBe('relaunching');
     await expect.poll(() => harness.launches.length, { timeout: 200, interval: 10 }).toBe(launchesBefore + 1);
     expect(lastLaunch().cliSessionId).toBe(clearedId);
+  });
+});
+
+const rebootOnFakeClock = async (holds: { clearInFlightTimeoutMs?: number; clearFlushGraceMs?: number }) => {
+  await server.close();
+  await bootDaemon(holds);
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+};
+
+const advance = (ms: number) => vi.advanceTimersByTimeAsync(ms);
+
+describe('a user whose daemon runs with the default /clear holds', () => {
+  it('sees a model switch made after a SessionEnd wait 3000 ms, not a millisecond less, before it relaunches', async () => {
+    await rebootOnFakeClock({});
+    const id = await runningSession();
+    const launchesBefore = harness.launches.length;
+    await sessionEndByClear(id);
+
+    const answer = await switchModel(id);
+    await advance(2999);
+    const launchesJustBeforeTheTimeout = harness.launches.length;
+    await advance(1);
+
+    expect(answer.status).toBe('deferred');
+    expect(launchesJustBeforeTheTimeout).toBe(launchesBefore);
+    expect(harness.launches).toHaveLength(launchesBefore + 1);
+  });
+
+  it('sees the old process kept 500 ms, not a millisecond less, after the new conversation starts', async () => {
+    await rebootOnFakeClock({});
+    const id = await runningSession();
+    const oldHandle = harness.handles.at(-1)!;
+    await sessionEndByClear(id);
+    await switchModel(id);
+    await sessionStartByClear(id, randomUUID());
+
+    await advance(499);
+    const isKilledJustBeforeTheGrace = oldHandle.killed;
+    await advance(1);
+
+    expect(isKilledJustBeforeTheGrace).toBe(false);
+    expect(oldHandle.killed).toBe(true);
+  });
+});
+
+describe('a user clearing twice in a row', () => {
+  it('sees the second /clear restart the wait, so a switch made after the first wait would have ended is still deferred', async () => {
+    await rebootOnFakeClock({ clearInFlightTimeoutMs: 600, clearFlushGraceMs: 300 });
+    const id = await runningSession();
+    const launchesBefore = harness.launches.length;
+    await sessionEndByClear(id);
+    await advance(300);
+    await sessionEndByClear(id);
+    await advance(400);
+
+    const answer = await switchModel(id);
+
+    expect(answer.status).toBe('deferred');
+    expect(harness.launches).toHaveLength(launchesBefore);
+  });
+});
+
+describe('a user whose new conversations keep starting during the flush grace', () => {
+  it('sees the pending relaunch go ahead when the first grace ends, however many SessionStart keep arriving', async () => {
+    await rebootOnFakeClock({ clearInFlightTimeoutMs: 600, clearFlushGraceMs: 300 });
+    const id = await runningSession();
+    const launchesBefore = harness.launches.length;
+    await sessionEndByClear(id);
+    await switchModel(id);
+
+    await sessionStartByClear(id, randomUUID());
+    await advance(100);
+    await sessionStartByClear(id, randomUUID());
+    await advance(100);
+    await sessionStartByClear(id, randomUUID());
+    await advance(100);
+
+    expect(harness.launches).toHaveLength(launchesBefore + 1);
+  });
+});
+
+describe('a daemon shutting down while a /clear is in flight', () => {
+  it('finishes shutting down when the session closes during its flush grace', async () => {
+    await rebootOnFakeClock({ clearInFlightTimeoutMs: 60_000, clearFlushGraceMs: 60_000 });
+    const id = await runningSession();
+    await sessionEndByClear(id);
+    await sessionStartByClear(id, randomUUID());
+    let isShutdownFinished = false;
+    const shutdown = service.closeAll().then(() => { isShutdownFinished = true; });
+
+    await postJson(`/api/sessions/${id}/close`);
+    await advance(1);
+
+    expect(isShutdownFinished).toBe(true);
+    await shutdown;
+  });
+
+  it('waits at most the flush grace for every session, whatever the longer holds of the others', async () => {
+    await rebootOnFakeClock({ clearInFlightTimeoutMs: 60_000, clearFlushGraceMs: 300 });
+    const flushing = await runningSession();
+    const waitingForItsSessionStart = await runningSession();
+    await sessionEndByClear(flushing);
+    await sessionStartByClear(flushing, randomUUID());
+    await sessionEndByClear(waitingForItsSessionStart);
+    let isShutdownFinished = false;
+    const shutdown = service.closeAll().then(() => { isShutdownFinished = true; });
+
+    await advance(299);
+    const isFinishedJustBeforeTheGrace = isShutdownFinished;
+    await advance(1);
+
+    expect(isFinishedJustBeforeTheGrace).toBe(false);
+    expect(isShutdownFinished).toBe(true);
+    await shutdown;
   });
 });
