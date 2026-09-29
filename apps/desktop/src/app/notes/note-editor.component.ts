@@ -6,8 +6,6 @@ import type { NoteView } from '@openfleet/shared';
 
 const NODES_PER_CHUNK = 2000;
 
-export interface NoteMentioner { emoji: string; name: string }
-
 @Component({
   selector: 'of-note-editor',
   imports: [NgTemplateOutlet],
@@ -40,16 +38,6 @@ export interface NoteMentioner { emoji: string; name: string }
             Show the rest ({{ hiddenItemCount() }} more items)
           </button>
         }
-        @if (mentionedBy().length > 0) {
-          <footer class="mentioned-by" data-testid="note-editor-mentioned-by">
-            <span>Mentioned by</span>
-            <span class="mentioners">
-              @for (mentioner of mentionedBy(); track mentioner.name; let last = $last) {
-                {{ mentioner.emoji }} {{ mentioner.name }}{{ last ? '' : ' · ' }}
-              }
-            </span>
-          </footer>
-        }
       </article>
     </div>
 
@@ -75,17 +63,6 @@ export interface NoteMentioner { emoji: string; name: string }
           }
           @case ('code') {
             <pre data-testid="note-editor-code-block">{{ block.text }}</pre>
-          }
-          @case ('mention-note') {
-            <section class="mention-note" [attr.data-testid]="'note-editor-mention-' + block.kind + '-' + block.id">
-              <div class="mention-label">{{ block.title }}</div>
-              <ng-container [ngTemplateOutlet]="blockList" [ngTemplateOutletContext]="{ $implicit: block.blocks }" />
-            </section>
-          }
-          @case ('mention-line') {
-            <div class="mention-line" [attr.data-testid]="'note-editor-mention-' + block.kind + '-' + block.id">
-              &#64;{{ block.kind }}:{{ block.id }} · {{ block.text }}
-            </div>
           }
         }
       }
@@ -119,27 +96,17 @@ export interface NoteMentioner { emoji: string; name: string }
     .doc ul { padding-left: 1.25rem }
     .doc code { font-family: var(--mono); font-size: .8125rem; padding: 0 .25rem; border-radius: .25rem; background: var(--sunk) }
     .doc pre { padding: .625rem .75rem; border-radius: .375rem; background: var(--sunk); font-family: var(--mono); font-size: .8125rem; line-height: 1.5; overflow: auto }
-    .mention-note {
-      display: flex; flex-direction: column; gap: .5rem; padding: .625rem .75rem; border-left: 3px solid var(--state-generating);
-      border-radius: 0 .375rem .375rem 0; background: color-mix(in oklch, var(--state-generating) 8%, transparent);
-    }
-    .mention-label { font-size: .6875rem; color: var(--mut) }
-    .mention-line { font-family: var(--mono); font-size: .75rem; color: var(--mut) }
-    .mentioned-by { display: flex; gap: .5rem; padding-top: 1rem; border-top: 1px solid var(--line); font-size: .75rem; color: var(--mut) }
-    .mentioners { color: var(--fg) }
   `,
 })
 export class NoteEditorComponent {
   readonly note = input.required<NoteView>();
-  readonly expandedBody = input<string>();
-  readonly mentionedBy = input<readonly NoteMentioner[]>([]);
   readonly historyOpen = input(false);
   readonly historyToggle = output<void>();
 
   private readonly title = viewChild.required<ElementRef<HTMLElement>>('title');
   private readonly historyButton = viewChild.required<ElementRef<HTMLElement>>('historyButton');
   private readonly renderBudget = signal(NODES_PER_CHUNK);
-  private readonly allBlocks = computed(() => parseMarkdownBlocks(this.expandedBody() ?? this.note().bodyMd));
+  private readonly allBlocks = computed(() => parseMarkdownBlocks(this.note().bodyMd));
   protected readonly blocks = computed(() => takeWithinRenderBudget(this.allBlocks(), this.renderBudget()));
   protected readonly hiddenItemCount = computed(() => countRenderCost(this.allBlocks()) - countRenderCost(this.blocks()));
   protected readonly displayTitle = computed(() => displayTitleOf(this.note().title));

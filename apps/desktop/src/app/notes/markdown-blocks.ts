@@ -1,32 +1,24 @@
-import { MENTION_KINDS } from '@openfleet/shared';
-
 export interface InlineSegment { text: string; isCode: boolean }
 
 export type MarkdownBlock =
   | { type: 'heading'; level: 1 | 2 | 3; segments: InlineSegment[] }
   | { type: 'paragraph'; segments: InlineSegment[] }
   | { type: 'list'; items: InlineSegment[][] }
-  | { type: 'code'; text: string }
-  | { type: 'mention-note'; kind: string; id: string; title: string; blocks: MarkdownBlock[] }
-  | { type: 'mention-line'; kind: string; id: string; text: string };
+  | { type: 'code'; text: string };
 
 const HEADING = /^(#{1,3}) +(.*)$/;
 const LIST_ITEM = /^[-*] +(.*)$/;
 const LINE_BREAK = /\r\n|[\n\r\u2028\u2029]/;
 const FENCE = '```';
 const BACKTICK = '`';
-const MAX_MENTION_DEPTH = 10;
-const MENTION_KIND = MENTION_KINDS.join('|');
-const NOTE_BLOCK_START = new RegExp(`^--- from note @(${MENTION_KIND}):([\\w-]+) \\((.*), [^,]*\\) ---$`);
-const MENTION_LINE = new RegExp(`^--- @(${MENTION_KIND}):([\\w-]+)(?::| →) ?(.*?) ---$`);
 
-// ponytail: headings 1-3, paragraphs, bullet lists, fenced code, inline code and mention blocks only;
+// ponytail: headings 1-3, paragraphs, bullet lists, fenced code and inline code only;
 // no emphasis, links or tables. Add `marked` if notes need them.
 export function parseMarkdownBlocks(markdown: string): MarkdownBlock[] {
   return parseLines(markdown.split(LINE_BREAK));
 }
 
-function parseLines(lines: string[], depth = 0): MarkdownBlock[] {
+function parseLines(lines: string[]): MarkdownBlock[] {
   const blocks: MarkdownBlock[] = [];
   let index = 0;
 
@@ -43,28 +35,6 @@ function parseLines(lines: string[], depth = 0): MarkdownBlock[] {
       const codeEnd = closingIndex === -1 ? lines.length : closingIndex;
       blocks.push({ type: 'code', text: lines.slice(index + 1, codeEnd).join('\n') });
       index = codeEnd + 1;
-      continue;
-    }
-
-    const noteBlockStart = NOTE_BLOCK_START.exec(line);
-    if (noteBlockStart) {
-      const [, kind, id, title] = noteBlockStart;
-      const endMarker = `--- end @${kind}:${id} ---`;
-      const closingIndex = findLine(lines, index + 1, (candidate) => candidate === endMarker);
-      const bodyEnd = closingIndex === -1 ? lines.length : closingIndex;
-      const bodyLines = lines.slice(index + 1, bodyEnd);
-      const isTooDeepToNest = depth >= MAX_MENTION_DEPTH;
-      const bodyBlocks: MarkdownBlock[] = isTooDeepToNest ? [{ type: 'code', text: bodyLines.join('\n') }] : parseLines(bodyLines, depth + 1);
-      blocks.push({ type: 'mention-note', kind: kind!, id: id!, title: title!, blocks: bodyBlocks });
-      index = bodyEnd + 1;
-      continue;
-    }
-
-    const mentionLine = MENTION_LINE.exec(line);
-    if (mentionLine) {
-      const [, kind, id, text] = mentionLine;
-      blocks.push({ type: 'mention-line', kind: kind!, id: id!, text: text! });
-      index += 1;
       continue;
     }
 
@@ -99,7 +69,7 @@ function parseLines(lines: string[], depth = 0): MarkdownBlock[] {
 function startsParagraphContinuation(line: string): boolean {
   const isBlank = line.trim() === '';
   const startsAnotherBlock =
-    line.startsWith(FENCE) || HEADING.test(line) || LIST_ITEM.test(line) || NOTE_BLOCK_START.test(line) || MENTION_LINE.test(line);
+    line.startsWith(FENCE) || HEADING.test(line) || LIST_ITEM.test(line);
   return !isBlank && !startsAnotherBlock;
 }
 
@@ -136,8 +106,6 @@ export function renderCost(block: MarkdownBlock): number {
       return 1 + countCodeChips(block.segments);
     case 'list':
       return 1 + block.items.reduce((total, item) => total + 1 + countCodeChips(item), 0);
-    case 'mention-note':
-      return 1 + countRenderCost(block.blocks);
     case 'code':
       return 1 + countLines(block.text);
     default:
@@ -166,7 +134,7 @@ export function countRenderCost(blocks: readonly MarkdownBlock[]): number {
   return blocks.reduce((total, block) => total + renderCost(block), 0);
 }
 
-/** Keeps the first `budget` rendered nodes in reading order, cutting inside lists, paragraphs and mentioned notes. */
+/** Keeps the first `budget` rendered nodes in reading order, cutting inside lists and paragraphs. */
 export function takeWithinRenderBudget(blocks: readonly MarkdownBlock[], budget: number): MarkdownBlock[] {
   const kept: MarkdownBlock[] = [];
   let remaining = budget;
@@ -192,10 +160,6 @@ function trimToBudget(block: MarkdownBlock, budget: number): MarkdownBlock | nul
     case 'list': {
       const items = takeListItems(block.items, budget);
       return block.items.length > 0 && items.length === 0 ? null : { ...block, items };
-    }
-    case 'mention-note': {
-      const nested = takeWithinRenderBudget(block.blocks, budget);
-      return block.blocks.length > 0 && nested.length === 0 ? null : { ...block, blocks: nested };
     }
     case 'code': {
       const text = takeLines(block.text, budget);
