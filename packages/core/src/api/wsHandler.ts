@@ -7,6 +7,7 @@ import { ALLOWED_ORIGINS } from './allowedOrigins.js';
 import type { ApprovalService } from '../governance/approvalService.js';
 import type { EventBus } from '../events/eventBus.js';
 import { tokensMatch } from '../ids.js';
+import { log } from '../logger.js';
 import type { ManagerService } from '../managers/managerService.js';
 import type { SessionService } from '../sessions/sessionService.js';
 
@@ -21,12 +22,12 @@ function parseClientMessage(raw: unknown): ClientMessage | undefined {
   try {
     const parsed = ClientMessageSchema.safeParse(JSON.parse(String(raw)));
     if (!parsed.success) {
-      console.error('ws: ignoring invalid client message', parsed.error.message);
+      log('error', 'ws: ignoring invalid client message', parsed.error.message);
       return undefined;
     }
     return parsed.data;
   } catch {
-    console.error('ws: ignoring malformed client frame');
+    log('error', 'ws: ignoring malformed client frame');
     return undefined;
   }
 }
@@ -69,7 +70,7 @@ export function createWsHandler(deps: { bus: EventBus; sessions: SessionService;
       try {
         handleClientMessage(socket, message, deps);
       } catch (error) {
-        console.error('ws: error handling client message', error);
+        log('error', 'ws: error handling client message', error);
       }
     });
   });
@@ -92,7 +93,9 @@ export function createWsHandler(deps: { bus: EventBus; sessions: SessionService;
         if (!isAuthorized) { socket.destroy(); return; }
         wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
       } catch (error) {
-        console.error('ws: rejecting an unparsable upgrade request', error);
+        // Never the error object itself: node:url's own TypeError carries the full request URL — token
+        // and all — on its .input property, which a naive `log(..., error)` would print in full.
+        log('error', 'ws: rejecting an unparsable upgrade request', { code: (error as { code?: string }).code });
         socket.destroy();
       }
     },

@@ -8,7 +8,7 @@ import type { ManagerService } from '../managers/managerService.js';
 import type { PulseScheduler } from '../managers/pulseScheduler.js';
 import { listAvailableModels, ModelConfigReadOnlyError, ModelConfigUnreadableError, ModelTablePatchSchema, resolveModel, saveModelPatch, type ModelTable } from '../models.js';
 import { DaemonShuttingDownError, SessionClosedError, SessionReopenError, type SessionService } from '../sessions/sessionService.js';
-import { json, Router } from './router.js';
+import { json, logServerError, Router } from './router.js';
 
 // Used by the messages, permission-mode and model routes: each can hit a session that closed or a daemon
 // that started shutting down between the request landing and the session-service call running.
@@ -91,13 +91,14 @@ export function registerRestRoutes(router: Router, deps: { sessions: SessionServ
     respondToLifecycleErrors(res, () => json(res, 200, deps.sessions.sendMessage({ sessionId: params.id!, body: text })));
   });
 
-  router.add('POST', '/api/sessions/:id/reopen', ({ res, params }) => {
+  router.add('POST', '/api/sessions/:id/reopen', ({ req, res, params }) => {
     if (!deps.sessions.get(params.id!)) return json(res, 404, { error: 'not_found' });
     try {
       json(res, 200, deps.sessions.reopen(params.id!));
     } catch (error) {
       if (error instanceof DaemonShuttingDownError) return json(res, 503, { error: 'daemon_shutting_down' });
       if (!(error instanceof SessionReopenError)) throw error;
+      if (error.code === 'launch_failed') logServerError(req, error);
       json(res, error.code === 'launch_failed' ? 500 : 409, { error: error.code });
     }
   });

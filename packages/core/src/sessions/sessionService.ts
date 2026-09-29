@@ -8,6 +8,7 @@ import { createWorktree } from '../git/worktrees.js';
 import type { Harness, HarnessHandle } from '../harness/harness.js';
 import { findPermissiveSettingsWarning } from '../harness/claudeCli/permissiveSettings.js';
 import { newId, newToken } from '../ids.js';
+import { log } from '../logger.js';
 import { MessageQueue } from './messageQueue.js';
 import { wrapAgentMessage } from './messageEnvelope.js';
 import { normalizePermissionMode, SessionRepository } from './sessionRepository.js';
@@ -292,7 +293,7 @@ export class SessionService {
     } catch (err) {
       // The row above already exists: left alone, it would be a ghost forever — starting, no handle,
       // unclosable and unreopenable. Same treatment as resumeOne's own launch failure.
-      console.error(`create: session ${id} failed to launch`, err);
+      log('error', `create: session ${id} failed to launch`, err);
       this.markClosed(id, RESUME_LAUNCH_FAILED_EXIT_CODE);
       throw err;
     }
@@ -480,7 +481,7 @@ export class SessionService {
     this.pendingRelaunches.delete(sessionId);
     this.enter(sessionId, { name: 'relaunching' });
     const relaunch = this.performRelaunch(sessionId)
-      .catch((err) => console.error(`relaunch: session ${sessionId} could not be closed after a failed relaunch`, err))
+      .catch((err) => log('error', `relaunch: session ${sessionId} could not be closed after a failed relaunch`, err))
       .finally(() => this.relaunches.delete(sessionId));
     this.relaunches.set(sessionId, relaunch);
   }
@@ -500,7 +501,7 @@ export class SessionService {
       // entering READY here would resurrect a delivery record for a session that is no longer open.
       if (outcome.launched) this.enter(sessionId, READY);
     } catch (err) {
-      console.error(`relaunch: session ${sessionId} failed to relaunch after a model change`, err);
+      log('error', `relaunch: session ${sessionId} failed to relaunch after a model change`, err);
       await this.failResume(sessionId);
     }
   }
@@ -638,7 +639,7 @@ export class SessionService {
     try {
       this.pollInterruptWatchUnsafe(sessionId);
     } catch (err) {
-      console.error(`interrupt watch: session ${sessionId} poll failed unexpectedly`, err);
+      log('error', `interrupt watch: session ${sessionId} poll failed unexpectedly`, err);
     }
   }
 
@@ -752,14 +753,14 @@ export class SessionService {
         await this.killWithEscalation(handle, DEFAULT_CLOSE_ESCALATE_MS);
       } catch (err) {
         // A kill that throws must not leave the session wedged: it is closed below all the same.
-        console.error(`resume: session ${sessionId} could not kill its process after a resume error`, err);
+        log('error', `resume: session ${sessionId} could not kill its process after a resume error`, err);
       }
     }
     try {
       this.markClosed(sessionId, RESUME_LAUNCH_FAILED_EXIT_CODE);
     } catch (err) {
       // markClosed's own DB write can itself fail; one bad row's cleanup must not stop the rest of the fleet.
-      console.error(`resumeAll: failed to close session ${sessionId} after a resume error`, err);
+      log('error', `resumeAll: failed to close session ${sessionId} after a resume error`, err);
     }
   }
 
@@ -845,7 +846,7 @@ export class SessionService {
     try {
       this.recordDelivery(sessionId);
     } catch (err) {
-      console.error(`delivery: session ${sessionId} submitted message ${phase.messageId}, recording it failed and is retried before the next message`, err);
+      log('error', `delivery: session ${sessionId} submitted message ${phase.messageId}, recording it failed and is retried before the next message`, err);
     }
     // Flushed right after the Enter, in arrival order: whatever was deferred behind this message now goes
     // straight through, on the same handle that just received the Enter. The delivery above is already
@@ -863,7 +864,7 @@ export class SessionService {
       try {
         this.writeRawChunkAndArm(sessionId, handle, raw);
       } catch (err) {
-        console.error(`delivery: session ${sessionId} failed to flush deferred raw input, dropping what's left`, err);
+        log('error', `delivery: session ${sessionId} failed to flush deferred raw input, dropping what's left`, err);
         return;
       }
     }
@@ -883,7 +884,7 @@ export class SessionService {
     try {
       this.deps.bus.emit({ type: 'message.delivered', sessionId, messageId });
     } catch (err) {
-      console.error(`delivery: session ${sessionId} delivered message ${messageId}, but a message.delivered listener failed`, err);
+      log('error', `delivery: session ${sessionId} delivered message ${messageId}, but a message.delivered listener failed`, err);
     }
   }
 
@@ -932,7 +933,7 @@ export class SessionService {
     const delivery = this.deliveryOf(sessionId);
     const failedAttempts = delivery.failedAttempts + 1;
     const isNewFailureStreak = failedAttempts === 1;
-    if (isNewFailureStreak) console.error(`delivery: session ${sessionId} failed, its message stays queued`, err);
+    if (isNewFailureStreak) log('error', `delivery: session ${sessionId} failed, its message stays queued`, err);
     // Past the last fast retry the machine parks on the slow PARKED_RETRY_MS; a state transition advances it sooner.
     const isParked = failedAttempts > MAX_DELIVERY_RETRIES;
     const retryDelayMs = isParked ? PARKED_RETRY_MS : DELIVERY_RETRY_MS;
@@ -995,7 +996,7 @@ export class SessionService {
       // The launch builder refuses to resume with a missing/invalid session id (it would otherwise open
       // the CLI's interactive picker inside the PTY) — close this one row and keep resuming the rest of
       // the fleet rather than letting one bad row abort resumeAll for every other session.
-      console.error(`resumeOne: session ${session.id} failed to launch`, err);
+      log('error', `resumeOne: session ${session.id} failed to launch`, err);
       this.markClosed(session.id, RESUME_LAUNCH_FAILED_EXIT_CODE);
       return { launched: false, reason: (err as Error).message };
     }
@@ -1033,7 +1034,7 @@ export class SessionService {
     // so the resume path can still warn on an unrecognized value the repository silently turned into undefined.
     const raw = this.repo.rawPermissionMode(session.id);
     const { mode, wasRecognized } = normalizePermissionMode(raw);
-    if (!wasRecognized) console.warn(`resumeOne: session ${session.id} has an unrecognized permission_mode "${raw}", resuming without --permission-mode`);
+    if (!wasRecognized) log('warn', `resumeOne: session ${session.id} has an unrecognized permission_mode "${raw}", resuming without --permission-mode`);
     return mode;
   }
 

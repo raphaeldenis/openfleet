@@ -436,4 +436,64 @@ describe('PulseScheduler — hostile cases', () => {
     expect(scheduler.pulseNow(manager.id)).toEqual({ coalesced: false });
     consoleErrorSpy.mockRestore();
   });
+
+  it('logs and re-arms instead of dying when a cadence tick throws (e.g. a refused SQLite write), so the manager still pulses on its next cadence', async () => {
+    const { scheduler, sessions, managers, harness } = setup();
+    const manager = await sessions.create({ directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake' });
+    sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'SessionStart' }));
+    managers.insert({ sessionId: manager.id, pulseSeconds: 1, childrenCap: 1, missionText: 'x', createdAt: new Date().toISOString() });
+    scheduler.onManagerCreated(managers.get(manager.id)!);
+
+    const originalSendMessage = sessions.sendMessage.bind(sessions);
+    let shouldThrow = true;
+    vi.spyOn(sessions, 'sendMessage').mockImplementation((...args: Parameters<typeof sessions.sendMessage>) => {
+      if (shouldThrow) {
+        shouldThrow = false;
+        throw new Error('sqlite write refused');
+      }
+      return originalSendMessage(...args);
+    });
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    vi.advanceTimersByTime(1000); // first cadence: tick() throws inside fire()
+
+    expect(consoleErrorSpy).toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(1); // re-armed for the next cadence, not dropped
+
+    vi.advanceTimersByTime(1000); // second cadence: the write succeeds this time
+    vi.advanceTimersByTime(SUBMIT_KEYSTROKE_DELAY_MS);
+
+    expect(pulseCount(harness.handles[0]!.written)).toBe(1);
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('re-arms at a full cadence from now after each failure, not the stale past deadline, so a persistent failure fires at most once per cadence', async () => {
+    const { scheduler, sessions, managers } = setup();
+    const manager = await sessions.create({ directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake' });
+    sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'SessionStart' }));
+    const pulseSeconds = 100;
+    managers.insert({ sessionId: manager.id, pulseSeconds, childrenCap: 1, missionText: 'x', createdAt: new Date().toISOString() });
+    scheduler.onManagerCreated(managers.get(manager.id)!);
+
+    vi.spyOn(sessions, 'sendMessage').mockImplementation(() => {
+      throw new Error('sqlite write refused');
+    });
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const cadenceMs = pulseSeconds * 1000;
+    vi.advanceTimersByTime(cadenceMs); // 1st failure
+    expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(cadenceMs - 1); // just short of the next cadence: must not have retried yet
+    expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1); // 2nd failure, exactly one cadence after the 1st
+    expect(consoleErrorSpy).toHaveBeenCalledTimes(2);
+
+    vi.advanceTimersByTime(cadenceMs - 1); // just short of the 3rd cadence
+    expect(consoleErrorSpy).toHaveBeenCalledTimes(2);
+    vi.advanceTimersByTime(1); // 3rd failure, exactly one cadence after the 2nd
+    expect(consoleErrorSpy).toHaveBeenCalledTimes(3);
+
+    consoleErrorSpy.mockRestore();
+  });
 });

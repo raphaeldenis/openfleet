@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { connect } from 'node:net';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WebSocket } from 'ws';
 import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
@@ -48,6 +49,23 @@ function tryConnectWithToken(token: string | undefined): Promise<'accepted' | 'r
   });
 }
 
+// Bypasses the 'ws' client (which validates the URL client-side and never sends one malformed enough
+// to make node:url's own constructor throw) with a raw socket that writes exactly the request line asked
+// for, the way an adversarial client could.
+function rawUpgrade(requestTarget: string): Promise<void> {
+  return new Promise((resolve) => {
+    const { hostname, port } = new URL(server.url);
+    const socket = connect(Number(port), hostname, () => {
+      socket.write(`GET ${requestTarget} HTTP/1.1\r\nHost: ${hostname}:${port}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n`);
+    });
+    const done = () => { socket.destroy(); resolve(); };
+    socket.on('data', done);
+    socket.on('error', done);
+    socket.on('close', done);
+    setTimeout(done, 500);
+  });
+}
+
 describe('WS Origin allowlist', () => {
   it('accepts a connection with no Origin header, for non-browser clients', async () => {
     expect(await tryConnect()).toBe('accepted');
@@ -69,5 +87,21 @@ describe('WS token', () => {
 
   it('refuses a connection with no token at all', async () => {
     expect(await tryConnectWithToken(undefined)).toBe('refused');
+  });
+
+  it('never logs any part of the token from a malformed upgrade request, even though node:url\'s own parse error carries the full URL on its .input property', async () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    // node:url's URL constructor throws ERR_INVALID_URL for this shape (an "authority" with an
+    // unterminated IPv6-literal host) while still preserving ?token=SECRET in the string it throws.
+    await rawUpgrade('//x@[/ws?token=SECRET');
+
+    expect(consoleErrorSpy).toHaveBeenCalled();
+    const loggedText = consoleErrorSpy.mock.calls
+      .flat()
+      .map((value) => (typeof value === 'string' ? value : JSON.stringify(value, Object.getOwnPropertyNames(value ?? {}))))
+      .join('\n');
+    expect(loggedText).not.toContain('SECRET');
+    consoleErrorSpy.mockRestore();
   });
 });
