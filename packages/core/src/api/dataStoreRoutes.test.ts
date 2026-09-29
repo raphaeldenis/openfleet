@@ -262,6 +262,54 @@ describe('data store REST routes', () => {
     });
   });
 
+  describe('user cannot write a daemon-set column', () => {
+    function seedStoreWithCreatedAt() {
+      const seeded = seedStore();
+      const createdAt = stores.addColumn(seeded.store.id, { projectId: 'p1', displayName: 'created', columnType: 'date', autoValue: 'created_at' });
+      return { ...seeded, createdAt };
+    }
+
+    it('answers 400 invalid_body when a patch sets the column, to a value or to null, changing nothing', async () => {
+      const { store, name, qty, createdAt } = seedStoreWithCreatedAt();
+      const [bolt] = (await insertRows(store.id, { name, qty }, [['bolt', 1]])).items;
+      const before = await json(await call('GET', `/api/data-stores/${store.id}/rows?projectId=p1`));
+
+      const toValue = await call('PATCH', `/api/data-stores/${store.id}/rows`, { projectId: 'p1', updates: [{ rowId: bolt!.id, patch: { [createdAt.id]: '2020-01-01T00:00:00.000Z' } }] });
+      const toNull = await call('PATCH', `/api/data-stores/${store.id}/rows`, { projectId: 'p1', updates: [{ rowId: bolt!.id, patch: { [createdAt.id]: null } }] });
+      const after = await json(await call('GET', `/api/data-stores/${store.id}/rows?projectId=p1`));
+
+      expect(toValue.status).toBe(400);
+      expect(await toValue.json()).toEqual({ error: 'invalid_body', detail: `Column ${createdAt.id} is set by the daemon and cannot be updated` });
+      expect(toNull.status).toBe(400);
+      expect(after).toEqual(before);
+    });
+
+    it('answers 400 and applies no item of a batch whose second item sets the column', async () => {
+      const { store, name, qty, createdAt } = seedStoreWithCreatedAt();
+      const [bolt, nut] = (await insertRows(store.id, { name, qty }, [['bolt', 1], ['nut', 2]])).items;
+      const before = await json(await call('GET', `/api/data-stores/${store.id}/rows?projectId=p1`));
+
+      const response = await call('PATCH', `/api/data-stores/${store.id}/rows`, {
+        projectId: 'p1', updates: [{ rowId: bolt!.id, patch: { [qty.id]: 10 } }, { rowId: nut!.id, patch: { [createdAt.id]: '2020-01-01T00:00:00.000Z' } }],
+      });
+      const after = await json(await call('GET', `/api/data-stores/${store.id}/rows?projectId=p1`));
+
+      expect(response.status).toBe(400);
+      expect(after).toEqual(before);
+    });
+
+    it('answers 201 on an insert that supplies the column and stamps the daemon clock instead of the supplied value', async () => {
+      const { store, name, createdAt } = seedStoreWithCreatedAt();
+      const suppliedValue = '2020-01-01T00:00:00.000Z';
+
+      const response = await call('POST', `/api/data-stores/${store.id}/rows`, { projectId: 'p1', rows: [{ [name.id]: 'bolt', [createdAt.id]: suppliedValue }] });
+      const { items } = await json(response);
+
+      expect(response.status).toBe(201);
+      expect(items[0].data[createdAt.id]).toMatch(/^2026-01-01T/);
+    });
+  });
+
   describe('user can query rows', () => {
     it('filters, orders and pages, counting the matches before paging', async () => {
       const { store, name, qty } = seedStore();
