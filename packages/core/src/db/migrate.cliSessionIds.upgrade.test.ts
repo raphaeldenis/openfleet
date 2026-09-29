@@ -5,7 +5,7 @@ import { openDatabase } from './database.js';
 import { applyMigrations } from './migrate.js';
 
 const migrationsDirectory = new URL('./migrations/', import.meta.url);
-const cliSessionIdsMigrationFileName = '013_session_cli_ids.sql';
+const cliSessionIdsMigrationFileName = '014_session_cli_ids.sql';
 
 const migrationsBeforeCliSessionIds = readdirSync(migrationsDirectory)
   .filter((fileName) => fileName.endsWith('.sql') && fileName < cliSessionIdsMigrationFileName)
