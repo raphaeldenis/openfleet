@@ -119,7 +119,11 @@ function inlineSegments(text: string): InlineSegment[] {
 }
 
 function boldSegments(text: string): InlineSegment[] {
-  return splitPairedBy(text, BOLD_MARKER).map((piece) => ({ text: piece.text, isCode: false, isBold: piece.isInside }));
+  return splitPairedBy(text, BOLD_MARKER).map((piece) => {
+    const isBoldWithoutContent = piece.isInside && piece.text.trim() === '';
+    if (isBoldWithoutContent) return { text: `${BOLD_MARKER}${piece.text}${BOLD_MARKER}`, isCode: false, isBold: false };
+    return { text: piece.text, isCode: false, isBold: piece.isInside };
+  });
 }
 
 /** Splits on `delimiter`; odd pieces are inside a pair, and a delimiter left unpaired at the end stays literal text. */

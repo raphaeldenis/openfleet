@@ -46,7 +46,10 @@ describe('parseMarkdownBlocks', () => {
     { name: 'bold inside a numbered item', markdown: '1. **b** x', expected: [{ type: 'ordered-list', start: 1, items: [[bold('b'), text(' x')]] }] },
     { name: 'an unclosed bold marker stays text', markdown: 'a **b', expected: [{ type: 'paragraph', segments: [text('a **b')] }] },
     { name: 'a third bold marker stays text', markdown: 'a **b** c ** d', expected: [{ type: 'paragraph', segments: [text('a '), bold('b'), text(' c ** d')] }] },
-    { name: 'empty bold disappears', markdown: 'a****b', expected: [{ type: 'paragraph', segments: [text('ab')] }] },
+    { name: 'an empty bold pair between words stays literal', markdown: 'a****b', expected: [{ type: 'paragraph', segments: [text('a****b')] }] },
+    { name: 'an empty bold pair alone stays literal', markdown: '****', expected: [{ type: 'paragraph', segments: [text('****')] }] },
+    { name: 'a bold pair holding only a space stays literal', markdown: '** **', expected: [{ type: 'paragraph', segments: [text('** **')] }] },
+    { name: 'an empty bold pair next to real bold stays literal', markdown: '****a**b**', expected: [{ type: 'paragraph', segments: [text('****a'), bold('b')] }] },
     { name: 'bold markers inside inline code stay literal', markdown: '`**x**`', expected: [{ type: 'paragraph', segments: [code('**x**')] }] },
     { name: 'a numbered list', markdown: '1. one\n2. two', expected: [{ type: 'ordered-list', start: 1, items: [[text('one')], [text('two')]] }] },
     { name: 'a numbered list keeps its first number', markdown: '3. c\n4. d', expected: [{ type: 'ordered-list', start: 3, items: [[text('c')], [text('d')]] }] },
@@ -94,6 +97,14 @@ describe('parseMarkdownBlocks', () => {
     const [block] = parseMarkdownBlocks(oneMebibyteOfEmptySpans);
 
     expect(block).toEqual({ type: 'paragraph', segments: [text('a'.repeat(349_525))] });
+  });
+
+  it('keeps 500k empty bold pairs as one literal text segment', () => {
+    const oneMillionBytesOfBoldMarkers = '**'.repeat(500_000);
+
+    const [block] = parseMarkdownBlocks(oneMillionBytesOfBoldMarkers);
+
+    expect(block).toEqual({ type: 'paragraph', segments: [text(oneMillionBytesOfBoldMarkers)] });
   });
 
   it.each(['\r', '\u2028', '\u2029'])('splits lines on %j like on a newline', (lineBreak) => {
