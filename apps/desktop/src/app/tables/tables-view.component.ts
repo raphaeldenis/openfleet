@@ -1,6 +1,6 @@
 import { afterNextRender, ChangeDetectionStrategy, Component, computed, effect, ElementRef, inject, Injector, input, linkedSignal, signal, untracked, viewChild } from '@angular/core';
-import type { DataStore, DsColumn, DsRow, DsRowHistoryEntry, DsView } from '@openfleet/shared';
-import { ApiError, FleetApiService, type Project } from '../core/fleet-api.service';
+import { MAX_ROW_BATCH, type DataStore, type DsColumn, type DsRow, type DsRowHistoryEntry, type DsView, type Project } from '@openfleet/shared';
+import { ApiError, FleetApiService } from '../core/fleet-api.service';
 import { RowHistoryComponent } from './row-history.component';
 import { TableGridComponent } from './table-grid.component';
 import { isBlank, selectColumnsWithOptions, titleOf } from './table-cells';
@@ -322,7 +322,29 @@ export class TablesViewComponent {
     const patchesByRow = new Map<string, Record<string, unknown>>();
     for (const { rowId, column } of this.mismatches()) patchesByRow.set(rowId, { ...patchesByRow.get(rowId), [column.id]: null });
     const updates = [...patchesByRow].map(([rowId, patch]) => ({ rowId, patch }));
-    await this.writeThenReload('clear-mismatches', (scope) => this.api.updateRows({ ...scope, updates }));
+    const totalValues = this.mismatches().length;
+    const scope = this.currentScope();
+    if (!scope) return;
+    const request = this.latestTableRequest;
+    await this.runAction('clear-mismatches', async () => {
+      let clearedValues = 0;
+      let hasFailed = false;
+      for (let start = 0; start < updates.length; start += MAX_ROW_BATCH) {
+        const batch = updates.slice(start, start + MAX_ROW_BATCH);
+        try {
+          await this.api.updateRows({ ...scope, updates: batch });
+        } catch (error) {
+          if (clearedValues === 0) throw error;
+          hasFailed = true;
+          break;
+        }
+        clearedValues += batch.reduce((count, { patch }) => count + Object.keys(patch).length, 0);
+      }
+      const userLeftTheTable = request !== this.latestTableRequest;
+      if (userLeftTheTable) return;
+      await this.loadTable(scope, { keepsSelection: true });
+      if (hasFailed) this.actionError.set(`Cleared ${clearedValues} of ${totalValues} values; the rest could not be saved. Retry to clear the remaining ones`);
+    });
   }
 
   protected async addRow(): Promise<void> {

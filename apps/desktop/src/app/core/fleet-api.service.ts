@@ -1,5 +1,5 @@
 import { Injectable } from '@angular/core';
-import type { Approval, DataStore, DsColumn, DsRow, DsRowHistoryEntry, DsView, HarnessId, OrderTerm, PermissionMode, Session, SessionSpec, WhereClause } from '@openfleet/shared';
+import type { Approval, DataStore, DataStoreDetail, DsRow, DsRowHistoryEntry, DsView, HarnessId, OrderTerm, Page, PermissionMode, Project, Session, SessionSpec, WhereClause } from '@openfleet/shared';
 import { environment } from '../../environments/environment';
 
 const DAEMON_ANSWER_TIMEOUT_MS = 5000;
@@ -120,10 +120,6 @@ export class FleetApiService {
 }
 
 // --- Data stores (Tables screen, P3-T18) ---
-// ponytail: Page and DataStoreDetail are declared here until P3-REST01 exports them from @openfleet/shared; then import them.
-export interface Page<T> { items: T[]; total: number; limit: number; offset: number }
-export interface DataStoreDetail extends DataStore { columns: DsColumn[] }
-export interface Project { id: string; name: string; docsFolderPath: string | null }
 export interface StoreScope { projectId: string; storeId: string }
 
 const storePath = (storeId: string) => `/api/data-stores/${encodeURIComponent(storeId)}`;

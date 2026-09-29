@@ -1,3 +1,4 @@
+import { CreateDataStoreRequestSchema, InsertRowsRequestSchema, UpdateRowsRequestSchema } from '@openfleet/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FleetApiService } from './fleet-api.service';
 
@@ -75,6 +76,7 @@ describe('FleetApiService data stores', () => {
     await api.createDataStore({ projectId: 'p1', displayName: 'backlog' });
 
     expect(lastRequest()).toMatchObject({ path: '/api/data-stores', method: 'POST', body: { projectId: 'p1', displayName: 'backlog' } });
+    expect(CreateDataStoreRequestSchema.safeParse(lastRequest().body).success).toBe(true);
   });
 
   it('reads a data store with its columns', async () => {
@@ -108,12 +110,14 @@ describe('FleetApiService data stores', () => {
     await api.insertRows({ projectId: 'p1', storeId: 's1', rows: [{ c1: 'a' }] });
 
     expect(lastRequest()).toMatchObject({ path: '/api/data-stores/s1/rows', method: 'POST', body: { projectId: 'p1', rows: [{ c1: 'a' }] } });
+    expect(InsertRowsRequestSchema.safeParse(lastRequest().body).success).toBe(true);
   });
 
   it('updates rows', async () => {
     await api.updateRows({ projectId: 'p1', storeId: 's1', updates: [{ rowId: 'r1', patch: { c1: 'b' } }] });
 
     expect(lastRequest()).toMatchObject({ path: '/api/data-stores/s1/rows', method: 'PATCH', body: { projectId: 'p1', updates: [{ rowId: 'r1', patch: { c1: 'b' } }] } });
+    expect(UpdateRowsRequestSchema.safeParse(lastRequest().body).success).toBe(true);
   });
 
   it('lists the changes of a row', async () => {

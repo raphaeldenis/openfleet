@@ -375,6 +375,92 @@ describe('TablesViewComponent', () => {
     });
   });
 
+  describe('clearing more mismatched values than one request can carry', () => {
+    const MAX_UPDATES_PER_REQUEST = 500;
+    const staleRow = (index: number) => row(`r${index}`, { 'c-title': `Stale ${index}`, 'c-status': 'archived' });
+    const staleRows = (count: number) => Array.from({ length: count }, (_unused, index) => staleRow(index));
+
+    const apiHoldingRows = (initialRows: DsRow[]) => {
+      let storedRows = initialRows;
+      const api = fakeApi();
+      api.queryDataStore.mockImplementation(() => Promise.resolve(page(storedRows)));
+      api.updateRows.mockImplementation(({ updates }: { updates: { rowId: string; patch: Record<string, unknown> }[] }) => {
+        if (updates.length > MAX_UPDATES_PER_REQUEST) return Promise.reject(new ApiError(400, 'PATCH rows → 400', 'invalid_body'));
+        const patchesByRowId = new Map(updates.map(({ rowId, patch }) => [rowId, patch]));
+        storedRows = storedRows.map((stored) => ({ ...stored, data: { ...stored.data, ...patchesByRowId.get(stored.id) } }));
+        return Promise.resolve({ items: [] });
+      });
+      return api;
+    };
+    const sentBatchSizes = (api: ReturnType<typeof fakeApi>) =>
+      api.updateRows.mock.calls.map(([request]) => request.updates.length);
+
+    it('user can clear 501 mismatched rows, sent as one request of 500 and one of 1', async () => {
+      const api = apiHoldingRows(staleRows(501));
+      await renderView(api);
+
+      await userEvent.click(await screen.findByTestId('tables-clear-mismatches'));
+
+      expect(await screen.findByTestId('table-grid')).toBeTruthy();
+      expect(sentBatchSizes(api)).toEqual([500, 1]);
+      expect(screen.queryByTestId('tables-schema-mismatch')).toBeNull();
+      expect(screen.queryByTestId('tables-action-error')).toBeNull();
+    });
+
+    it('user clearing exactly 500 mismatched rows sends a single request', async () => {
+      const api = apiHoldingRows(staleRows(500));
+      await renderView(api);
+
+      await userEvent.click(await screen.findByTestId('tables-clear-mismatches'));
+
+      expect(await screen.findByTestId('table-grid')).toBeTruthy();
+      expect(sentBatchSizes(api)).toEqual([500]);
+    });
+
+    it('user is told how many values were cleared when a later request fails, and can retry only the remaining ones', async () => {
+      const api = apiHoldingRows(staleRows(501));
+      const applyingUpdates = api.updateRows.getMockImplementation() as (request: unknown) => Promise<unknown>;
+      api.updateRows.mockImplementationOnce(applyingUpdates);
+      api.updateRows.mockRejectedValueOnce(new ApiError(500, 'PATCH rows → 500'));
+      await renderView(api);
+
+      await userEvent.click(await screen.findByTestId('tables-clear-mismatches'));
+
+      expect(await screen.findByTestId('tables-action-error')).toHaveTextContent(
+        'Cleared 500 of 501 values; the rest could not be saved. Retry to clear the remaining ones',
+      );
+      expect(screen.getByTestId('tables-schema-mismatch')).toHaveTextContent('1 row');
+
+      await userEvent.click(screen.getByTestId('tables-clear-mismatches'));
+
+      expect(await screen.findByTestId('table-grid')).toBeTruthy();
+      expect(api.updateRows).toHaveBeenCalledTimes(3);
+      expect(api.updateRows).toHaveBeenLastCalledWith({ projectId: 'p1', storeId: 's1', updates: [{ rowId: 'r500', patch: { 'c-status': null } }] });
+      expect(screen.queryByTestId('tables-action-error')).toBeNull();
+    });
+
+    it('user who opened another table while a chunked clear fails halfway keeps the other table and sees no error about the first one', async () => {
+      const api = apiHoldingRows(staleRows(501));
+      api.queryDataStore.mockImplementation(({ storeId }: { storeId: string }) =>
+        Promise.resolve(page(storeId === 's2' ? [row('r-other', { 'c-title': 'From releases' })] : staleRows(501))));
+      const slowFirstChunk = deferred<{ items: DsRow[] }>();
+      api.updateRows.mockReturnValueOnce(slowFirstChunk.promise);
+      api.updateRows.mockRejectedValueOnce(new ApiError(500, 'PATCH rows → 500'));
+      const { fixture } = await renderView(api);
+      await userEvent.click(await screen.findByTestId('tables-clear-mismatches'));
+      await userEvent.click(screen.getByTestId('table-pill-s2'));
+      await screen.findByTestId('grid-cell-r-other-c-title');
+
+      slowFirstChunk.resolve({ items: [] });
+      await settle(fixture);
+
+      expect(api.updateRows).toHaveBeenCalledTimes(2);
+      expect(screen.getByTestId('grid-cell-r-other-c-title')).toBeTruthy();
+      expect(screen.queryByTestId('tables-action-error')).toBeNull();
+      expect(screen.queryByTestId('tables-schema-mismatch')).toBeNull();
+    });
+  });
+
   describe('creating a table without a project', () => {
     it('user is told there is no project to create a table in instead of getting a dead form', async () => {
       await renderView(fakeApi({ projects: [] }));
