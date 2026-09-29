@@ -21,6 +21,8 @@ export const ClaudeHookEventSchema = z.discriminatedUnion('hook_event_name', [
 export type ClaudeHookEvent = z.infer<typeof ClaudeHookEventSchema>;
 export type ClaudeHookEventName = ClaudeHookEvent['hook_event_name'];
 
+export interface StopHookOutput { decision: 'block'; reason: string }
+
 export const HOOK_EVENT_NAMES: ClaudeHookEventName[] = [
   'SessionStart', 'SessionEnd', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PermissionRequest', 'Notification', 'Stop',
 ];

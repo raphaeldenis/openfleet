@@ -1061,6 +1061,24 @@ describe('model drift hostile cases', () => {
     expect(await listed(id)).not.toHaveProperty('modelDriftedFrom');
   });
 
+  it('shows no drift against the id held under an alias before a detour through another alias with no recording in between', async () => {
+    const id = await sessionWithRecordedOpus({ requestedModel: 'opus', stopped: true });
+    await postJson(`/api/sessions/${id}/model`, { model: 'opus' });
+    await waitForLaunches(2);
+    await sendHook(id, stop);
+    await postJson(`/api/sessions/${id}/model`, { model: 'sonnet' });
+    await waitForLaunches(3);
+    await sendHook(id, stop);
+    await postJson(`/api/sessions/${id}/model`, { model: 'opus' });
+    await waitForLaunches(4);
+
+    appendFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-6', at: inOneSecond() }));
+    await sendHook(id, preToolUse);
+
+    expect(await listed(id)).toMatchObject({ model: 'opus', resolvedModel: 'claude-opus-5-6' });
+    expect(await listed(id)).not.toHaveProperty('modelDriftedFrom');
+  });
+
   it('shows the own previous id of a session launched without a model when a permission-mode relaunch resolves a new id', async () => {
     const id = await createSession(undefined);
     writeFileSync(transcriptPath, assistantLine({ model: 'claude-default-5-5' }));
