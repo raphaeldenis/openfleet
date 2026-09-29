@@ -1,5 +1,6 @@
 import { execFileSync, spawn } from 'node:child_process';
-import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, rmdirSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { appendFileSync, chmodSync, linkSync, mkdirSync, mkdtempSync, rmdirSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -16,6 +17,8 @@ import { SessionService } from '../sessions/sessionService.js';
 import { startServer } from './server.js';
 
 const CLI_VERSION = '2.1.284';
+// Skipped as root: root reads a file whose mode is 0o000, so the read failure these tests need never happens.
+const isRunningAsRoot = process.getuid?.() === 0;
 
 let server: Awaited<ReturnType<typeof startServer>>;
 let harness: FakeHarness;
@@ -28,7 +31,6 @@ beforeEach(async () => {
   process.env.CLAUDE_CONFIG_DIR = configDir;
   projectDirectory = join(configDir, 'projects', 'proj');
   mkdirSync(projectDirectory, { recursive: true });
-  transcriptPath = join(projectDirectory, 'transcript.jsonl');
 
   const db = openDatabase(':memory:');
   const bus = new EventBus();
@@ -57,8 +59,11 @@ interface ListedSession { id: string; model?: string; state: string; resolvedMod
 const listSessions = async () => (await (await api('/api/sessions')).json()) as ListedSession[];
 const listed = async (id: string) => (await listSessions()).find((session) => session.id === id)!;
 
+const transcriptPathOf = (cliSessionId: string) => join(projectDirectory, `${cliSessionId}.jsonl`);
+
 const createSession = async (model?: string) => {
   const created = (await (await postJson('/api/sessions', { directory: '/tmp', name: 'G', harness: 'fake', model })).json()) as ListedSession;
+  transcriptPath = transcriptPathOf(created.id);
   return created.id;
 };
 
@@ -337,7 +342,7 @@ describe('resolved model recording from a session\'s transcript', () => {
     expect(afterModeRelaunch).toMatchObject({ model: 'claude-sonnet-5-5', resolvedModel: 'claude-opus-5-5' });
   });
 
-  it('answers hooks and records nothing when the transcript path is a directory, then an unreadable file', async () => {
+  it.skipIf(isRunningAsRoot)('answers hooks and records nothing when the transcript path is a directory, then an unreadable file', async () => {
     const id = await createSession('opus');
     mkdirSync(transcriptPath);
     const withDirectory = await sendHook(id, preToolUse);
@@ -357,7 +362,7 @@ describe('resolved model recording from a session\'s transcript', () => {
     expect(afterUnreadableFile).not.toHaveProperty('resolvedModel');
   });
 
-  it('logs a persistent transcript read failure once per launch, however many hooks follow', async () => {
+  it.skipIf(isRunningAsRoot)('logs a persistent transcript read failure once per launch, however many hooks follow', async () => {
     const id = await createSession('opus');
     writeFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-5' }));
     chmodSync(transcriptPath, 0o000);
@@ -372,7 +377,7 @@ describe('resolved model recording from a session\'s transcript', () => {
     expect(resolvedModelErrors).toHaveLength(1);
   });
 
-  it('logs a persistent read failure again after the session is relaunched', async () => {
+  it.skipIf(isRunningAsRoot)('logs a persistent read failure again after the session is relaunched', async () => {
     const id = await createSession('opus');
     await sendHook(id, { hook_event_name: 'SessionStart' });
     writeFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-5' }));
@@ -467,5 +472,90 @@ describe('resolved model recording from a session\'s transcript', () => {
     expect(harness.launches).toHaveLength(2);
     expect(harness.launches[1]!.model).toBe(requestedModel);
     expect(harness.launches[1]!.model).not.toBe('claude-opus-5-9');
+  });
+
+  it('follows the transcript of the new CLI session after a /clear, whichever model the launch transcript holds', async () => {
+    const id = await createSession('opus');
+    writeFileSync(transcriptPathOf(id), assistantLine({ model: 'claude-opus-5-4' }));
+    const clearedCliSessionId = randomUUID();
+    const clearedTranscriptPath = transcriptPathOf(clearedCliSessionId);
+    writeFileSync(clearedTranscriptPath, assistantLine({ model: 'claude-opus-5-5' }));
+
+    await sendHook(id, { hook_event_name: 'SessionStart', source: 'clear', session_id: clearedCliSessionId }, clearedTranscriptPath);
+    await sendHook(id, preToolUse, clearedTranscriptPath);
+
+    expect(await listed(id)).toMatchObject({ resolvedModel: 'claude-opus-5-5', cliVersion: CLI_VERSION });
+  });
+
+  it('records nothing on a session whose hook names the transcript of another session',async () => {
+    const sessionA = await createSession('opus');
+    const sessionB = await createSession('opus');
+    writeFileSync(transcriptPathOf(sessionB), assistantLine({ model: 'claude-model-of-session-b' }));
+
+    await sendHook(sessionA, preToolUse, transcriptPathOf(sessionB));
+
+    expect(await listed(sessionA)).not.toHaveProperty('resolvedModel');
+  });
+
+  it('records nothing on a session that claims the id of another session in a SessionStart, then names its transcript',async () => {
+    const sessionA = await createSession('opus');
+    const sessionB = await createSession('opus');
+    writeFileSync(transcriptPathOf(sessionB), assistantLine({ model: 'claude-model-of-session-b' }));
+
+    await sendHook(sessionA, { hook_event_name: 'SessionStart', source: 'clear', session_id: sessionB }, transcriptPathOf(sessionB));
+    await sendHook(sessionA, preToolUse, transcriptPathOf(sessionB));
+
+    expect(await listed(sessionA)).not.toHaveProperty('resolvedModel');
+  });
+
+  it('records nothing from a hard link in the projects directory to a file outside it', async () => {
+    const id = await createSession('opus');
+    const foreignFile = join(mkdtempSync(join(tmpdir(), 'of-outside-')), 'foreign.jsonl');
+    writeFileSync(foreignFile, assistantLine({ model: 'claude-model-of-a-foreign-file' }));
+    const hardLinkPath = join(projectDirectory, 'hardlink.jsonl');
+    linkSync(foreignFile, hardLinkPath);
+
+    await sendHook(id, preToolUse, hardLinkPath);
+
+    expect(await listed(id)).not.toHaveProperty('resolvedModel');
+  });
+
+  it('records nothing from a transcript named after the session that is a symlink to another session\'s transcript', async () => {
+    const sessionA = await createSession('opus');
+    const sessionB = await createSession('opus');
+    writeFileSync(transcriptPathOf(sessionB), assistantLine({ model: 'claude-model-of-session-b' }));
+    symlinkSync(transcriptPathOf(sessionB), transcriptPathOf(sessionA));
+
+    await sendHook(sessionA, preToolUse, transcriptPathOf(sessionA));
+
+    expect(await listed(sessionA)).not.toHaveProperty('resolvedModel');
+  });
+
+  describe.each([
+    { relaunchedBy: 'a model switch', relaunch: (id: string) => postJson(`/api/sessions/${id}/model`, { model: 'claude-sonnet-5-5' }) },
+    { relaunchedBy: 'the same alias re-applied', relaunch: (id: string) => postJson(`/api/sessions/${id}/model`, { model: 'opus' }) },
+  ])('a connected client after $relaunchedBy relaunches the session',({ relaunch }) => {
+    it('receives one session.updated without the resolved model the old launch recorded', async () => {
+      const id = await createSession('opus');
+      const { ticket } = (await (await postJson('/api/ws-ticket')).json()) as { ticket: string };
+      const ws = new WebSocket(`${server.url.replace('http', 'ws')}/ws?ticket=${ticket}`);
+      const received: { type: string; session?: ListedSession }[] = [];
+      ws.addEventListener('message', (message) => received.push(JSON.parse(String(message.data))));
+      await new Promise((resolve) => ws.addEventListener('open', resolve, { once: true }));
+      await sendHook(id, { hook_event_name: 'SessionStart' });
+      writeFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-5' }));
+      await sendHook(id, preToolUse);
+      await sendHook(id, stop);
+
+      await relaunch(id);
+      await expect.poll(() => harness.launches.length).toBe(2);
+      await pause(50);
+      ws.close();
+
+      const updates = received.filter((event) => event.type === 'session.updated' && event.session?.id === id);
+      expect(updates).toHaveLength(2);
+      expect(updates[0]!.session).toMatchObject({ resolvedModel: 'claude-opus-5-5' });
+      expect(updates[1]!.session).not.toHaveProperty('resolvedModel');
+    });
   });
 });
