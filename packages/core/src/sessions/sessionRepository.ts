@@ -146,4 +146,17 @@ export class SessionRepository {
     const row = this.db.prepare('SELECT directory_realpath FROM sessions WHERE id = ?').get(id) as { directory_realpath: string | null } | undefined;
     return row?.directory_realpath;
   }
+  // The CLI's current conversation id, outside Session like directoryRealpath: NULL means the session
+  // never left its launch conversation, which is the OpenFleet session id.
+  cliSessionId(id: string): string | null | undefined {
+    const row = this.db.prepare('SELECT cli_session_id FROM sessions WHERE id = ?').get(id) as { cli_session_id: string | null } | undefined;
+    return row?.cli_session_id;
+  }
+  setCliSessionId(id: string, cliSessionId: string): void {
+    this.db.prepare('UPDATE sessions SET cli_session_id = ? WHERE id = ?').run(cliSessionId, id);
+  }
+  isCliSessionIdOfAnotherSession(id: string, cliSessionId: string): boolean {
+    const row = this.db.prepare('SELECT 1 AS found FROM sessions WHERE id <> ? AND (id = ? OR cli_session_id = ?)').get(id, cliSessionId, cliSessionId);
+    return row !== undefined;
+  }
 }

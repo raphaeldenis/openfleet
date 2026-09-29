@@ -136,6 +136,20 @@ describe('buildClaudeLaunchConfig', () => {
     expect(config.args[flagIndex + 1]).toBe(mode);
   });
 
+  it('resumes the CLI session id when the launch carries one, the OpenFleet session id otherwise', () => {
+    const clearedCliSessionId = '22222222-2222-4222-8222-222222222222';
+
+    const clearedConfig = buildClaudeLaunchConfig({ ...launch, resuming: true, cliSessionId: clearedCliSessionId }, tokenFilePaths);
+    const neverClearedConfig = buildClaudeLaunchConfig({ ...launch, resuming: true }, tokenFilePaths);
+
+    expect(clearedConfig.args.slice(0, 2)).toEqual(['--resume', clearedCliSessionId]);
+    expect(neverClearedConfig.args.slice(0, 2)).toEqual(['--resume', launch.sessionId]);
+  });
+
+  it.each(['not-a-uuid', '', '--dangerously-skip-permissions'])('refuses to resume a CLI session id that is %j, whatever the OpenFleet session id is', (cliSessionId) => {
+    expect(() => buildClaudeLaunchConfig({ ...launch, resuming: true, cliSessionId }, tokenFilePaths)).toThrow(/UUID/);
+  });
+
   it('omits --permission-mode entirely when none is given, so the CLI keeps the user default', () => {
     const config = buildClaudeLaunchConfig(launch, tokenFilePaths);
     expect(config.args).not.toContain('--permission-mode');
