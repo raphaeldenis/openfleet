@@ -15,7 +15,14 @@ const QUOTE_LINE = /^> ?(.*)$/;
 const LINE_BREAK = /\r\n|[\n\r\u2028\u2029]/;
 const FENCE = '```';
 const BACKTICK = '`';
-const BOLD_MARKER = '**';
+const ASTERISK = '*';
+const BOLD_MARKER = ASTERISK.repeat(2);
+const NO_OPENER = -1;
+const ZERO_WIDTH_CODE_POINTS = [0x200b, 0x200c, 0x200d, 0x2060, 0xfeff];
+const ZERO_WIDTH_CHARACTERS = String.fromCodePoint(...ZERO_WIDTH_CODE_POINTS);
+const BLANK_TEXT = new RegExp(`^[\\s${ZERO_WIDTH_CHARACTERS}]*$`);
+const WHITESPACE = /^\s$/;
+const PUNCTUATION = /^[\p{P}\p{S}]$/u;
 const MAX_QUOTE_DEPTH = 3;
 
 // ponytail: headings 1-3, paragraphs, bullet and numbered lists, quotes (3 levels), fenced code, inline code and bold only;
@@ -119,11 +126,63 @@ function inlineSegments(text: string): InlineSegment[] {
 }
 
 function boldSegments(text: string): InlineSegment[] {
-  return splitPairedBy(text, BOLD_MARKER).map((piece) => {
-    const isBoldWithoutContent = piece.isInside && piece.text.trim() === '';
-    if (isBoldWithoutContent) return { text: `${BOLD_MARKER}${piece.text}${BOLD_MARKER}`, isCode: false, isBold: false };
-    return { text: piece.text, isCode: false, isBold: piece.isInside };
-  });
+  const segments: InlineSegment[] = [];
+  let cursor = 0;
+  for (const { openAt, closeAt } of findBoldPairs(text)) {
+    segments.push({ text: text.slice(cursor, openAt), isCode: false, isBold: false });
+    segments.push({ text: text.slice(openAt + BOLD_MARKER.length, closeAt), isCode: false, isBold: true });
+    cursor = closeAt + BOLD_MARKER.length;
+  }
+  segments.push({ text: text.slice(cursor), isCode: false, isBold: false });
+  return segments;
+}
+
+/**
+ * Pairs the `**` markers that flank text CommonMark-style, in one left-to-right scan.
+ * Only a run of exactly two asterisks is a marker; a marker with punctuation on both sides (a glob path) and a pair around blank content stay literal.
+ */
+function findBoldPairs(text: string): { openAt: number; closeAt: number }[] {
+  const pairs: { openAt: number; closeAt: number }[] = [];
+  let openAt = NO_OPENER;
+  let runStart = text.indexOf(ASTERISK);
+  while (runStart !== -1) {
+    const runEnd = endOfAsteriskRun(text, runStart);
+    const isBoldMarker = runEnd - runStart === BOLD_MARKER.length;
+    if (isBoldMarker) {
+      const { canOpen, canClose } = flankingOf(text, runStart, runEnd);
+      const closesTheOpener = openAt !== NO_OPENER && canClose;
+      if (closesTheOpener) {
+        const isBlankContent = BLANK_TEXT.test(text.slice(openAt + BOLD_MARKER.length, runStart));
+        if (!isBlankContent) pairs.push({ openAt, closeAt: runStart });
+        openAt = NO_OPENER;
+      } else if (canOpen) {
+        openAt = runStart;
+      }
+    }
+    runStart = text.indexOf(ASTERISK, runEnd);
+  }
+  return pairs;
+}
+
+function endOfAsteriskRun(text: string, runStart: number): number {
+  let runEnd = runStart;
+  while (text[runEnd] === ASTERISK) runEnd += 1;
+  return runEnd;
+}
+
+function flankingOf(text: string, runStart: number, runEnd: number): { canOpen: boolean; canClose: boolean } {
+  const before = characterKindOf(text[runStart - 1]);
+  const after = characterKindOf(text[runEnd]);
+  const isPunctuationOnBothSides = before === 'punctuation' && after === 'punctuation';
+  return {
+    canOpen: after !== 'space' && !isPunctuationOnBothSides,
+    canClose: before !== 'space' && !isPunctuationOnBothSides,
+  };
+}
+
+function characterKindOf(character: string | undefined): 'space' | 'punctuation' | 'word' {
+  if (character === undefined || WHITESPACE.test(character)) return 'space';
+  return PUNCTUATION.test(character) ? 'punctuation' : 'word';
 }
 
 /** Splits on `delimiter`; odd pieces are inside a pair, and a delimiter left unpaired at the end stays literal text. */

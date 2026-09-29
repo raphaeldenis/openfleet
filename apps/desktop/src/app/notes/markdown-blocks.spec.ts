@@ -81,6 +81,41 @@ describe('parseMarkdownBlocks', () => {
       { type: 'paragraph', segments: [text('b')] },
     ] },
     { name: 'a link stays literal text', markdown: '[a](https://x.test)', expected: [{ type: 'paragraph', segments: [text('[a](https://x.test)')] }] },
+    { name: 'glob patterns in prose stay plain text', markdown: 'src/**/*.ts and docs/**/*.md', expected: [{ type: 'paragraph', segments: [text('src/**/*.ts and docs/**/*.md')] }] },
+    { name: 'bold glued to the following word', markdown: '**bold**text', expected: [{ type: 'paragraph', segments: [bold('bold'), text('text')] }] },
+    { name: 'bold inside a word, as CommonMark allows for double asterisks', markdown: 'snake**case**x', expected: [{ type: 'paragraph', segments: [text('snake'), bold('case'), text('x')] }] },
+    { name: 'a power operator spaced on both sides stays literal', markdown: '2 ** 3 ** 4', expected: [{ type: 'paragraph', segments: [text('2 ** 3 ** 4')] }] },
+    { name: 'a marker followed by a space cannot open bold', markdown: 'a ** b** c', expected: [{ type: 'paragraph', segments: [text('a ** b** c')] }] },
+    { name: 'bold wrapped in parentheses', markdown: '(**b**)', expected: [{ type: 'paragraph', segments: [text('('), bold('b'), text(')')] }] },
+    { name: 'a numbered list starting at 9 keeps 9', markdown: '9. a\n10. b', expected: [{ type: 'ordered-list', start: 9, items: [[text('a')], [text('b')]] }] },
+    { name: 'a numbered list starting at 10 keeps 10', markdown: '10. x', expected: [{ type: 'ordered-list', start: 10, items: [[text('x')]] }] },
+    { name: 'a quote marker strips a single space after a nested marker', markdown: '> >  x', expected: [
+      { type: 'quote', blocks: [{ type: 'quote', blocks: [{ type: 'paragraph', segments: [text(' x')] }] }] },
+    ] },
+    { name: 'a quote marker strips one space and keeps the rest of the indentation', markdown: '>    x', expected: [
+      { type: 'quote', blocks: [{ type: 'paragraph', segments: [text('   x')] }] },
+    ] },
+    { name: 'a numbered item interrupts a paragraph', markdown: 'a\n2. b', expected: [
+      { type: 'paragraph', segments: [text('a')] },
+      { type: 'ordered-list', start: 2, items: [[text('b')]] },
+    ] },
+    { name: 'a bullet interrupts a paragraph', markdown: 'a\n- b', expected: [
+      { type: 'paragraph', segments: [text('a')] },
+      { type: 'list', items: [[text('b')]] },
+    ] },
+    { name: 'a blank line splits two numbered lists', markdown: '1. a\n\n2. b', expected: [
+      { type: 'ordered-list', start: 1, items: [[text('a')]] },
+      { type: 'ordered-list', start: 2, items: [[text('b')]] },
+    ] },
+    { name: 'a blank line splits two bullet lists', markdown: '- a\n\n- b', expected: [
+      { type: 'list', items: [[text('a')]] },
+      { type: 'list', items: [[text('b')]] },
+    ] },
+    // Documented ceiling: no nested lists; an indented sub-bullet falls out of the list as a plain paragraph.
+    { name: 'an indented sub-bullet is flattened into a paragraph', markdown: '- a\n  - b', expected: [
+      { type: 'list', items: [[text('a')]] },
+      { type: 'paragraph', segments: [text('  - b')] },
+    ] },
   ])('parses $name', ({ markdown, expected }) => {
     expect(parseMarkdownBlocks(markdown)).toEqual(expected);
   });
@@ -105,6 +140,20 @@ describe('parseMarkdownBlocks', () => {
     const [block] = parseMarkdownBlocks(oneMillionBytesOfBoldMarkers);
 
     expect(block).toEqual({ type: 'paragraph', segments: [text(oneMillionBytesOfBoldMarkers)] });
+  });
+
+  it.each([
+    { name: 'zero-width space', codePoint: 0x200b },
+    { name: 'zero-width non-joiner', codePoint: 0x200c },
+    { name: 'zero-width joiner', codePoint: 0x200d },
+    { name: 'word joiner', codePoint: 0x2060 },
+    { name: 'byte order mark', codePoint: 0xfeff },
+  ])('keeps a bold pair holding only a $name literal', ({ codePoint }) => {
+    const invisible = String.fromCodePoint(codePoint);
+
+    const [block] = parseMarkdownBlocks(`a **${invisible}${invisible}** b`);
+
+    expect(block).toEqual({ type: 'paragraph', segments: [text(`a **${invisible}${invisible}** b`)] });
   });
 
   it.each(['\r', '\u2028', '\u2029'])('splits lines on %j like on a newline', (lineBreak) => {
@@ -136,6 +185,9 @@ describe('parseMarkdownBlocks', () => {
     { name: '200k numbered items', markdown: '1. \n'.repeat(200_000), blockType: 'ordered-list' },
     { name: '500k bold markers', markdown: '**'.repeat(500_000), blockType: 'paragraph' },
     { name: 'a bold marker opened and never closed 250k times', markdown: 'a **b '.repeat(150_000), blockType: 'paragraph' },
+    { name: '200k bold markers each followed by a lone asterisk', markdown: '**a*'.repeat(200_000), blockType: 'paragraph' },
+    { name: '300k runs of three asterisks', markdown: '***'.repeat(300_000), blockType: 'paragraph' },
+    { name: '100k runs of four asterisks around a letter', markdown: '****a****'.repeat(100_000), blockType: 'paragraph' },
     { name: '500k nested quote markers', markdown: '> '.repeat(500_000), blockType: 'quote' },
     { name: '200k quoted numbered items', markdown: '> 1. x\n'.repeat(150_000), blockType: 'quote' },
   ])('hostile body: $name', ({ markdown, blockType }) => {
@@ -189,6 +241,30 @@ describe('takeWithinRenderBudget', () => {
       const kept = takeWithinRenderBudget(parseMarkdownBlocks('5. a\n6. b\n7. c'), 3);
 
       expect(kept).toEqual([{ type: 'ordered-list', start: 5, items: [[text('a')], [text('b')]] }]);
+    });
+
+    it('a bullet holding a bold run and a code chip costs its list, its item and both styled runs', () => {
+      expect(countRenderCost(parseMarkdownBlocks('- **a** `b`'))).toBe(4);
+    });
+
+    it('keeps only the bullets whose bold runs fit the budget', () => {
+      const kept = takeWithinRenderBudget(parseMarkdownBlocks('- **a**\n- **b**\n- **c**'), 5);
+
+      expect(kept).toMatchObject([{ type: 'list', items: [expect.anything(), expect.anything()] }]);
+      expect(countRenderCost(kept)).toBeLessThanOrEqual(5);
+    });
+
+    it('keeps an empty quote within the budget', () => {
+      const kept = takeWithinRenderBudget(parseMarkdownBlocks('>'), 5);
+
+      expect(kept).toEqual([{ type: 'quote', blocks: [] }]);
+      expect(countRenderCost(kept)).toBe(1);
+    });
+
+    it('keeps a heading that has no text', () => {
+      const kept = takeWithinRenderBudget(parseMarkdownBlocks('# '), 5);
+
+      expect(kept).toEqual([{ type: 'heading', level: 1, segments: [] }]);
     });
 
     it('cuts inside a quote and drops a quote that would keep nothing', () => {

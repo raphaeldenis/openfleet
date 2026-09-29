@@ -90,6 +90,7 @@ describe('NoteEditorComponent', () => {
       await renderEditor({ note: aNoteView({ bodyMd: 'Ship **the daemon** today.' }) });
 
       expect(screen.getByTestId('note-editor-bold')).toHaveTextContent('the daemon');
+      expect(screen.getByTestId('note-editor-bold').tagName).toBe('STRONG');
       expect(screen.getByTestId('note-editor-paragraph')).toHaveTextContent('Ship the daemon today.');
     });
 
@@ -230,6 +231,14 @@ describe('NoteEditorComponent', () => {
 
       expect(screen.getAllByTestId('note-editor-list-item')).toHaveLength(1500);
       expect(screen.getAllByTestId('note-editor-paragraph')).toHaveLength(499);
+    });
+
+    it('bold runs count in the budget, so the button counts the bullets and runs still hidden', async () => {
+      await renderEditor({ note: aNoteView({ bodyMd: '- **x**\n'.repeat(1500) }) });
+
+      expect(screen.getAllByTestId('note-editor-list-item')).toHaveLength(999);
+      expect(screen.getAllByTestId('note-editor-bold')).toHaveLength(999);
+      expect(screen.getByTestId('note-editor-show-rest')).toHaveTextContent('Show the rest (1002 more items)');
     });
 
     it('user reveals a very long list a chunk at a time, the button counting what remains', async () => {

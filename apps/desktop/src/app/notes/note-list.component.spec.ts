@@ -190,5 +190,27 @@ describe('NoteListComponent', () => {
 
       expect(tabIndexOf('n2')).toBe('0');
     });
+
+    it('the first note still shown is the tab stop when the filter hides the open note', async () => {
+      await renderList({ selectedId: 'n1' });
+
+      await userEvent.type(screen.getByTestId('note-list-filter'), 'release');
+
+      expect(tabIndexOf('n2')).toBe('0');
+    });
+
+    it('a note focused before focus left the list does not keep the tab stop once the open note changes', async () => {
+      const selectedId = signal<string | null>('n1');
+      await render(NoteListComponent, {
+        bindings: [inputBinding('notes', () => notes), inputBinding('selectedId', selectedId)],
+      });
+      screen.getByTestId('note-list-item-n1').focus();
+
+      await userEvent.click(screen.getByTestId('note-list-filter'));
+      selectedId.set('n3');
+      await userEvent.tab();
+
+      expect([tabIndexOf('n1'), tabIndexOf('n3')]).toEqual(['-1', '0']);
+    });
   });
 });
