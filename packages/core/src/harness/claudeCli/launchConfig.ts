@@ -1,5 +1,6 @@
 import { HOOK_EVENT_NAMES, isValidModelId } from '@openfleet/shared';
 import type { HarnessLaunch } from '../harness.js';
+import type { TokenFilePaths } from './tokenFiles.js';
 
 const HOOK_TIMEOUT_SECONDS = 600;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -11,7 +12,10 @@ export interface ClaudeLaunchConfig {
   mcpConfig: Record<string, unknown>;
 }
 
-export function buildClaudeLaunchConfig(launch: HarnessLaunch): ClaudeLaunchConfig {
+// tokenFilePaths are where the caller will write `settings` and `mcpConfig` on disk (0600, inside a 0700
+// per-session directory) — this function only ever puts those *paths* in argv, never the JSON itself, so
+// the session hook token and the MCP bearer never appear in `ps` output (AUD-11).
+export function buildClaudeLaunchConfig(launch: HarnessLaunch, tokenFilePaths: TokenFilePaths): ClaudeLaunchConfig {
   // --resume takes an optional value: a missing or non-UUID session id makes the CLI fall back to its
   // interactive picker, which would hang forever inside a PTY nothing is watching.
   if (launch.resuming && !UUID_PATTERN.test(launch.sessionId)) {
@@ -39,7 +43,7 @@ export function buildClaudeLaunchConfig(launch: HarnessLaunch): ClaudeLaunchConf
   const args = launch.resuming ? resumeArgs : firstRunArgs;
   if (launch.model) args.push('--model', launch.model);
   if (launch.permissionMode) args.push('--permission-mode', launch.permissionMode);
-  args.push('--settings', JSON.stringify(settings), '--mcp-config', JSON.stringify(mcpConfig));
+  args.push('--settings', tokenFilePaths.settingsPath, '--mcp-config', tokenFilePaths.mcpConfigPath);
   // The seeded prompt is untrusted (session/task-provided) text. Commander parses flags
   // anywhere in argv, so a prompt like "--dangerously-skip-permissions" would otherwise be
   // read as a CLI option. `--` forces every token after it to be a positional argument, and

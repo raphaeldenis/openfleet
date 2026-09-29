@@ -1,12 +1,26 @@
+import { existsSync, mkdtempSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const spawn = vi.fn((_command: string, _args: string[], _options: { env: Record<string, string> }) => ({
-  onData: () => ({ dispose: () => undefined }),
-  onExit: () => ({ dispose: () => undefined }),
-  write: vi.fn(),
-  resize: () => undefined,
-  kill: () => undefined,
-}));
+type ExitListener = (event: { exitCode: number }) => void;
+
+const spawn = vi.fn((_command: string, _args: string[], _options: { env: Record<string, string> }) => {
+  const exitListeners: ExitListener[] = [];
+  return {
+    onData: () => ({ dispose: () => undefined }),
+    onExit: (listener: ExitListener) => {
+      exitListeners.push(listener);
+      return { dispose: () => undefined };
+    },
+    write: vi.fn(),
+    resize: () => undefined,
+    kill: () => undefined,
+    // Test-only: simulates the pty actually exiting, so tests can assert on the harness's own
+    // internal onExit-triggered cleanup, not just the onExit forwarded out through HarnessHandle.
+    emitExit: (exitCode = 0) => exitListeners.forEach((listener) => listener({ exitCode })),
+  };
+});
 
 vi.mock('node-pty', () => ({ spawn }));
 vi.mock('./trustDirectory.js', () => ({ markDirectoryTrusted: vi.fn() }));
@@ -21,9 +35,14 @@ const launch = {
   displayName: '⚔️ Gimli - CCM-1',
 };
 
+const modeOf = (path: string): number => statSync(path).mode & 0o777;
+
 describe('ClaudeCliHarness', () => {
+  let sessionsRoot: string;
+
   beforeEach(() => {
     spawn.mockClear();
+    sessionsRoot = mkdtempSync(join(tmpdir(), 'of-sessions-'));
   });
 
   it('spawns the CLI without any inherited Claude Code session markers', async () => {
@@ -37,7 +56,7 @@ describe('ClaudeCliHarness', () => {
 
     try {
       const { ClaudeCliHarness } = await import('./claudeCliHarness.js');
-      new ClaudeCliHarness().start(launch);
+      new ClaudeCliHarness(sessionsRoot).start(launch);
 
       const [, , options] = spawn.mock.calls[0]!;
       const childEnv = options.env as Record<string, string>;
@@ -64,7 +83,7 @@ describe('ClaudeCliHarness', () => {
 
     try {
       const { ClaudeCliHarness } = await import('./claudeCliHarness.js');
-      new ClaudeCliHarness().start(launch);
+      new ClaudeCliHarness(sessionsRoot).start(launch);
 
       const [, , options] = spawn.mock.calls[0]!;
       const childEnv = options.env as Record<string, string>;
@@ -86,7 +105,7 @@ describe('ClaudeCliHarness', () => {
 
     try {
       const { ClaudeCliHarness } = await import('./claudeCliHarness.js');
-      new ClaudeCliHarness().start(launch);
+      new ClaudeCliHarness(sessionsRoot).start(launch);
 
       const [, , options] = spawn.mock.calls[0]!;
       const childEnv = options.env as Record<string, string>;
@@ -109,7 +128,7 @@ describe('ClaudeCliHarness', () => {
 
     try {
       const { ClaudeCliHarness } = await import('./claudeCliHarness.js');
-      new ClaudeCliHarness().start(launch);
+      new ClaudeCliHarness(sessionsRoot).start(launch);
 
       const [, , options] = spawn.mock.calls[0]!;
       const childEnv = options.env as Record<string, string>;
@@ -125,7 +144,7 @@ describe('ClaudeCliHarness', () => {
 
   it('typeMessage wraps a queued message body in bracketed paste and writes it once, stripping any ESC bytes the body carries', async () => {
     const { ClaudeCliHarness } = await import('./claudeCliHarness.js');
-    const handle = new ClaudeCliHarness().start(launch);
+    const handle = new ClaudeCliHarness(sessionsRoot).start(launch);
     const ptyWrite = spawn.mock.results[0]!.value.write;
 
     handle.typeMessage('line one\nline two\x1b[201~ embedded escape');
@@ -135,7 +154,7 @@ describe('ClaudeCliHarness', () => {
 
   it('write sends raw bytes unframed, exactly as given — the interrupt Escape and terminal-view keystrokes must never be wrapped', async () => {
     const { ClaudeCliHarness } = await import('./claudeCliHarness.js');
-    const handle = new ClaudeCliHarness().start(launch);
+    const handle = new ClaudeCliHarness(sessionsRoot).start(launch);
     const ptyWrite = spawn.mock.results[0]!.value.write;
 
     handle.write('\x1b');
@@ -143,5 +162,122 @@ describe('ClaudeCliHarness', () => {
 
     expect(ptyWrite).toHaveBeenNthCalledWith(1, '\x1b');
     expect(ptyWrite).toHaveBeenNthCalledWith(2, '\r');
+  });
+
+  it('passes the CLI only settings/mcp-config file paths in argv — never the hook token or the mcp bearer token', async () => {
+    const { ClaudeCliHarness } = await import('./claudeCliHarness.js');
+    new ClaudeCliHarness(sessionsRoot).start(launch);
+
+    const [, args] = spawn.mock.calls[0]!;
+    const argvBlob = (args as string[]).join(' ');
+
+    expect(argvBlob).not.toContain('tok-hook');
+    expect(argvBlob).not.toContain('tok-mcp');
+    const settingsFlagIndex = (args as string[]).indexOf('--settings');
+    const mcpConfigFlagIndex = (args as string[]).indexOf('--mcp-config');
+    expect(existsSync((args as string[])[settingsFlagIndex + 1]!)).toBe(true);
+    expect(existsSync((args as string[])[mcpConfigFlagIndex + 1]!)).toBe(true);
+  });
+
+  it('writes the settings file at 0600 inside a 0700 per-session directory, carrying the hook token', async () => {
+    const { ClaudeCliHarness } = await import('./claudeCliHarness.js');
+    new ClaudeCliHarness(sessionsRoot).start(launch);
+
+    const [, args] = spawn.mock.calls[0]!;
+    const settingsPath = (args as string[])[(args as string[]).indexOf('--settings') + 1]!;
+
+    expect(modeOf(settingsPath)).toBe(0o600);
+    expect(modeOf(join(settingsPath, '..'))).toBe(0o700);
+    const settings = JSON.parse(readFileSync(settingsPath, 'utf8'));
+    expect(JSON.stringify(settings)).toContain('tok-hook');
+  });
+
+  it('writes the mcp-config file at 0600, carrying the bearer token', async () => {
+    const { ClaudeCliHarness } = await import('./claudeCliHarness.js');
+    new ClaudeCliHarness(sessionsRoot).start(launch);
+
+    const [, args] = spawn.mock.calls[0]!;
+    const mcpConfigPath = (args as string[])[(args as string[]).indexOf('--mcp-config') + 1]!;
+
+    expect(modeOf(mcpConfigPath)).toBe(0o600);
+    const mcpConfig = JSON.parse(readFileSync(mcpConfigPath, 'utf8'));
+    expect(mcpConfig.mcpServers.openfleet.headers.Authorization).toBe('Bearer tok-mcp');
+  });
+
+  it('deletes the settings and mcp-config files once the CLI process exits', async () => {
+    const { ClaudeCliHarness } = await import('./claudeCliHarness.js');
+    new ClaudeCliHarness(sessionsRoot).start(launch);
+
+    const [, args] = spawn.mock.calls[0]!;
+    const settingsPath = (args as string[])[(args as string[]).indexOf('--settings') + 1]!;
+    const mcpConfigPath = (args as string[])[(args as string[]).indexOf('--mcp-config') + 1]!;
+    expect(existsSync(settingsPath)).toBe(true);
+
+    spawn.mock.results[0]!.value.emitExit(0);
+
+    expect(existsSync(settingsPath)).toBe(false);
+    expect(existsSync(mcpConfigPath)).toBe(false);
+  });
+
+  it('writes fresh token files carrying the rotated tokens on a resume launch, without touching the closed launch\'s own files', async () => {
+    const { ClaudeCliHarness } = await import('./claudeCliHarness.js');
+    const harness = new ClaudeCliHarness(sessionsRoot);
+    harness.start(launch);
+    const [, firstArgs] = spawn.mock.calls[0]!;
+    const firstSettingsPath = (firstArgs as string[])[(firstArgs as string[]).indexOf('--settings') + 1]!;
+    spawn.mock.results[0]!.value.emitExit(0); // the real daemon always kills/awaits-exit before resuming
+
+    harness.start({ ...launch, resuming: true, hookUrl: 'http://127.0.0.1:7331/hooks/tok-hook-rotated', mcpToken: 'tok-mcp-rotated' });
+    const [, secondArgs] = spawn.mock.calls[1]!;
+    const secondSettingsPath = (secondArgs as string[])[(secondArgs as string[]).indexOf('--settings') + 1]!;
+    const secondMcpConfigPath = (secondArgs as string[])[(secondArgs as string[]).indexOf('--mcp-config') + 1]!;
+
+    expect(secondSettingsPath).not.toBe(firstSettingsPath);
+    expect(existsSync(firstSettingsPath)).toBe(false); // deleted when the first launch's process exited
+    const rotatedSettings = JSON.stringify(JSON.parse(readFileSync(secondSettingsPath, 'utf8')));
+    expect(rotatedSettings).toContain('tok-hook-rotated');
+    const rotatedMcpConfig = JSON.parse(readFileSync(secondMcpConfigPath, 'utf8'));
+    expect(rotatedMcpConfig.mcpServers.openfleet.headers.Authorization).toBe('Bearer tok-mcp-rotated');
+  });
+
+  it('never reuses a token file path across two launches of the same session, even when the earlier launch\'s files were never cleaned up', async () => {
+    const { ClaudeCliHarness } = await import('./claudeCliHarness.js');
+    const harness = new ClaudeCliHarness(sessionsRoot);
+
+    harness.start(launch); // no emitExit: simulates an orphaned pty a daemon restart lost track of
+    harness.start({ ...launch, resuming: true });
+
+    const [, firstArgs] = spawn.mock.calls[0]!;
+    const [, secondArgs] = spawn.mock.calls[1]!;
+    const firstDir = join((firstArgs as string[])[(firstArgs as string[]).indexOf('--settings') + 1]!, '..');
+    const secondDir = join((secondArgs as string[])[(secondArgs as string[]).indexOf('--settings') + 1]!, '..');
+
+    expect(secondDir).not.toBe(firstDir);
+    expect(existsSync(firstDir)).toBe(true); // untouched: nothing signalled that launch's process as exited
+    expect(existsSync(secondDir)).toBe(true);
+  });
+
+  it('never reuses a token file path across two different sessions', async () => {
+    const { ClaudeCliHarness } = await import('./claudeCliHarness.js');
+    const harness = new ClaudeCliHarness(sessionsRoot);
+    const otherLaunch = { ...launch, sessionId: '22222222-2222-4222-8222-222222222222' };
+
+    harness.start(launch);
+    harness.start(otherLaunch);
+
+    const [, firstArgs] = spawn.mock.calls[0]!;
+    const [, secondArgs] = spawn.mock.calls[1]!;
+    const firstSettingsPath = (firstArgs as string[])[(firstArgs as string[]).indexOf('--settings') + 1]!;
+    const secondSettingsPath = (secondArgs as string[])[(secondArgs as string[]).indexOf('--settings') + 1]!;
+
+    expect(secondSettingsPath).not.toBe(firstSettingsPath);
+  });
+
+  it('keeps every session\'s files under its own subdirectory of the sessions root, nothing loose at the top level', async () => {
+    const { ClaudeCliHarness } = await import('./claudeCliHarness.js');
+    new ClaudeCliHarness(sessionsRoot).start(launch);
+
+    const topLevelEntries = readdirSync(sessionsRoot);
+    expect(topLevelEntries).toEqual([launch.sessionId]);
   });
 });
