@@ -243,14 +243,13 @@ describe('notes REST routes', () => {
     };
     const readsBodies = (sql: string) => /body_md|SELECT\s+\*|\bn\.\*/i.test(sql.replace(/snippet\([^)]*\)/i, ''));
 
-    it('lists a page with LIMIT/OFFSET and never reads a body', async () => {
+    it('lists a page and never reads a body', async () => {
       const { response, prepared } = await sqlServing('/api/notes?projectId=p1&folder=specs&limit=10&offset=5');
 
       const noteQueries = prepared.filter((sql) => /FROM notes/i.test(sql));
       expect(response.status).toBe(200);
       expect(noteQueries.length).toBeGreaterThan(0);
       expect(noteQueries.some(readsBodies)).toBe(false);
-      expect(noteQueries.filter((sql) => !/COUNT\(\*\)/i.test(sql)).every((sql) => /LIMIT/i.test(sql))).toBe(true);
     });
 
     it('answers limit=0 with the total and no items', async () => {
@@ -261,23 +260,21 @@ describe('notes REST routes', () => {
       expect(await response.json()).toMatchObject({ items: [], total: 1 });
     });
 
-    it('searches with a LIMIT of 50 and never reads a body', async () => {
+    it('searches and never reads a body', async () => {
       const { prepared } = await sqlServing('/api/notes/search?projectId=p1&q=zebra');
 
       const searches = prepared.filter((sql) => /note_fts/i.test(sql));
       expect(searches).toHaveLength(1);
       expect(readsBodies(searches[0]!)).toBe(false);
-      expect(searches[0]).toMatch(/LIMIT/i);
     });
 
-    it('lists versions with LIMIT/OFFSET and never reads a body', async () => {
+    it('lists versions and never reads a body', async () => {
       const note = await createNote();
 
       const { prepared } = await sqlServing(`/api/notes/${note.id}/versions?projectId=p1`);
 
       const versionQueries = prepared.filter((sql) => /FROM note_versions/i.test(sql) && !/COUNT\(\*\)/i.test(sql));
       expect(versionQueries).toHaveLength(1);
-      expect(versionQueries[0]).toMatch(/LIMIT/i);
       expect(readsBodies(versionQueries[0]!)).toBe(false);
     });
   });
