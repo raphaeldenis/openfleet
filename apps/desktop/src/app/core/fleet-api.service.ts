@@ -1,7 +1,8 @@
 import { Injectable } from '@angular/core';
 import type {
-  Approval, CreateNoteRequest, HarnessId, NoteSummary, NoteVersionSummary, NoteView, Page, PermissionMode, Project,
-  RestoreNoteRequest, Session, SessionSpec, UpdateNoteRequest,
+  Approval, CreateNoteRequest, DataStore, DataStoreDetail, DsRow, DsRowHistoryEntry, DsView, HarnessId, NoteSummary,
+  NoteVersionSummary, NoteView, OrderTerm, Page, PermissionMode, Project, RestoreNoteRequest, Session, SessionSpec,
+  UpdateNoteRequest, WhereClause,
 } from '@openfleet/shared';
 import { environment } from '../../environments/environment';
 
@@ -10,6 +11,7 @@ type NoteChange = Omit<UpdateNoteRequest, 'projectId'>;
 type NoteRestore = Omit<RestoreNoteRequest, 'projectId'>;
 
 const DAEMON_ANSWER_TIMEOUT_MS = 5000;
+const LIST_PAGE_LIMIT = 200;
 
 const pageParams = ({ limit, offset }: PageRequest): Record<string, string> => ({
   ...(limit === undefined ? {} : { limit: String(limit) }),
@@ -47,6 +49,17 @@ export class FleetApiService {
       throw new ApiError(response.status, `${init.method ?? 'GET'} ${path} → ${response.status}`, code);
     }
     return (await response.json()) as T;
+  }
+  private async listAllPages<T>(path: string, params: Record<string, string>): Promise<Page<T>> {
+    const items: T[] = [];
+    let total = 0;
+    do {
+      const page = await this.call<Page<T>>(`${path}${queryString({ ...params, limit: LIST_PAGE_LIMIT, offset: items.length })}`);
+      items.push(...page.items);
+      total = page.total ?? 0;
+      if (page.items.length === 0) break;
+    } while (items.length < total);
+    return { items, total: Math.max(total, items.length), limit: LIST_PAGE_LIMIT, offset: 0 };
   }
   private post<T>(path: string, body: unknown): Promise<T> { return this.call<T>(path, { method: 'POST', body: JSON.stringify(body) }); }
   private patch<T>(path: string, body: unknown): Promise<T> { return this.call<T>(path, { method: 'PATCH', body: JSON.stringify(body) }); }
@@ -100,7 +113,9 @@ export class FleetApiService {
     const path = `/api/notes/${encodeURIComponent(noteId)}${suffix}`;
     return queryString ? `${path}?${queryString}` : path;
   }
-  listProjects(page: PageRequest = {}) { return this.call<Page<Project>>(`/api/projects?${new URLSearchParams(pageParams(page))}`); }
+  listProjects(page?: PageRequest) {
+    return page ? this.call<Page<Project>>(`/api/projects?${new URLSearchParams(pageParams(page))}`) : this.listAllPages<Project>('/api/projects', {});
+  }
   listNotes(projectId: string, page: PageRequest = {}) { return this.call<Page<NoteSummary>>(`/api/notes?${new URLSearchParams({ projectId, ...pageParams(page) })}`); }
   getNote(projectId: string, noteId: string) { return this.call<NoteView>(this.noteUrl(noteId, '', { projectId })); }
   createNote(note: CreateNoteRequest) { return this.post<NoteView>('/api/notes', note); }
@@ -111,4 +126,37 @@ export class FleetApiService {
   restoreNoteVersion(projectId: string, noteId: string, restore: NoteRestore) {
     return this.post<NoteView>(this.noteUrl(noteId, '/restore'), { projectId, ...restore });
   }
+  // --- Data stores (Tables screen, P3-T18) ---
+  listDataStores(projectId: string) { return this.listAllPages<DataStore>('/api/data-stores', { projectId }); }
+  createDataStore(body: { projectId: string; displayName: string }) { return this.post<DataStore>('/api/data-stores', body); }
+  getDataStore(scope: StoreScope) { return this.call<DataStoreDetail>(`${storePath(scope.storeId)}${queryString({ projectId: scope.projectId })}`); }
+  queryDataStore(query: StoreScope & { where?: WhereClause[]; orderBy?: OrderTerm[]; limit?: number; offset?: number }) {
+    const { storeId, where, orderBy, ...rest } = query;
+    const params = { ...rest, where: where && JSON.stringify(where), orderBy: orderBy && JSON.stringify(orderBy) };
+    return this.call<Page<DsRow>>(`${storePath(storeId)}/rows${queryString(params)}`);
+  }
+  insertRows(request: StoreScope & { rows: Record<string, unknown>[] }) {
+    return this.post<{ items: DsRow[] }>(`${storePath(request.storeId)}/rows`, { projectId: request.projectId, rows: request.rows });
+  }
+  updateRows(request: StoreScope & { updates: { rowId: string; patch: Record<string, unknown> }[] }) {
+    return this.patch<{ items: DsRow[] }>(`${storePath(request.storeId)}/rows`, { projectId: request.projectId, updates: request.updates });
+  }
+  listRowChanges(request: StoreScope & { rowId: string; limit?: number }) {
+    const params = { projectId: request.projectId, limit: request.limit };
+    return this.call<{ items: DsRowHistoryEntry[]; total: number }>(`${storePath(request.storeId)}/rows/${encodeURIComponent(request.rowId)}/changes${queryString(params)}`);
+  }
+  listViews(scope: StoreScope) { return this.call<{ items: DsView[] }>(`${storePath(scope.storeId)}/views${queryString({ projectId: scope.projectId })}`); }
+  // --- end data stores ---
 }
+
+// --- Data stores (Tables screen, P3-T18) ---
+export interface StoreScope { projectId: string; storeId: string }
+
+const storePath = (storeId: string) => `/api/data-stores/${encodeURIComponent(storeId)}`;
+
+function queryString(params: Record<string, string | number | undefined>): string {
+  const presentParams = Object.entries(params).filter((entry): entry is [string, string | number] => entry[1] !== undefined);
+  const search = new URLSearchParams(presentParams.map(([key, value]) => [key, String(value)]));
+  return presentParams.length > 0 ? `?${search}` : '';
+}
+// --- end data stores ---

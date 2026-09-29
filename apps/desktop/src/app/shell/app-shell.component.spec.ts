@@ -124,6 +124,15 @@ describe('AppShellComponent', () => {
     expect(root.querySelector('[data-testid="stub-inbox"]')).toBeTruthy();
   });
 
+  it('renders Tables as a real link to its screen', async () => {
+    const { root } = await setUp();
+
+    const tables = root.querySelector('[data-testid="nav-tables"]') as HTMLAnchorElement;
+
+    expect(tables.tagName).toBe('A');
+    expect(tables.getAttribute('href')).toBe('/tables');
+  });
+
   it('drops the sidebar Inbox badge count when the Inbox dismisses an already-resolved gate', async () => {
     // Arrange
     const events = fakeEvents({

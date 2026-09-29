@@ -37,7 +37,7 @@ describe('FleetApiService notes', () => {
     const page = { items: [{ id: 'p1', name: 'OpenFleet', docsFolderPath: '/docs' }], total: 1, limit: 100, offset: 0 };
     fetchMock.mockResolvedValue(jsonResponse(200, page));
 
-    await expect(api.listProjects()).resolves.toEqual(page);
+    await expect(api.listProjects()).resolves.toMatchObject({ items: page.items, total: page.total });
 
     expect(lastRequest().url.pathname).toBe('/api/projects');
     expect(lastRequest().init.method ?? 'GET').toBe('GET');
