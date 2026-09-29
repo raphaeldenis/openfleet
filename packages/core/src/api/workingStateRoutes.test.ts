@@ -54,6 +54,15 @@ afterEach(() => server.close());
 const api = (path: string, init: RequestInit = {}) => fetch(`${server.url}${path}`, { ...init, headers: { 'content-type': 'application/json', authorization: 'Bearer admin', ...(init.headers ?? {}) } });
 const createSession = (overrides: { name?: string; parentId?: string } = {}) => sessions.create({ directory: '/tmp', name: overrides.name ?? 'Dev', harness: 'fake', emoji: '🤖', ...(overrides.parentId ? { parentId: overrides.parentId } : {}) });
 
+const fleetChangedAtOf = async (managerId: string) => ((await (await api(`/api/sessions/${managerId}/working-state`)).json()) as { fleetChangedAt?: string }).fleetChangedAt;
+const listedSession = async (sessionId: string) => ((await (await api('/api/sessions')).json()) as { id: string; createdAt: string; closedAt?: string }[]).find((session) => session.id === sessionId)!;
+
+const FAIL_FAST_MS = 500;
+function failFast<T>(promise: Promise<T>, expectation: string): Promise<T> {
+  const timeout = new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`timed out after ${FAIL_FAST_MS} ms: ${expectation}`)), FAIL_FAST_MS));
+  return Promise.race([promise, timeout]);
+}
+
 async function ticketedWsUrl(): Promise<string> {
   const { ticket } = (await (await api('/api/ws-ticket', { method: 'POST' })).json()) as { ticket: string };
   return `${server.url.replace('http', 'ws')}/ws?ticket=${ticket}`;
@@ -75,7 +84,7 @@ async function connect(): Promise<Connection> {
 async function settle(connection: Connection, sessionId: string): Promise<ServerEvent[]> {
   const marker = new Promise<void>((resolve) => connection.ws.addEventListener('message', (message) => { if (JSON.parse(String(message.data)).type === 'session.updated') resolve(); }));
   sessions.rename(sessionId, { name: 'marker' });
-  await marker;
+  await failFast(marker, 'the settle marker (session.updated) never reached the client');
   return connection.received.filter((event) => event.type === 'session.working_state');
 }
 
@@ -98,11 +107,14 @@ describe('GET /api/sessions/:id/working-state', () => {
     const child = await createSession({ name: 'Child', parentId: manager.id });
     workingStates.update(manager.id, sections());
 
-    const body = (await (await api(`/api/sessions/${manager.id}/working-state`)).json()) as { fleetChangedAt?: string };
+    const afterSpawn = await fleetChangedAtOf(manager.id);
+    await sessions.close(child.id);
+    const afterClose = await fleetChangedAtOf(manager.id);
 
-    expect(body.fleetChangedAt).toBe(workingStates.fleetChangedAt(manager.id));
-    expect(body.fleetChangedAt).toBeDefined();
-    expect(child.parentId).toBe(manager.id);
+    const childAsListed = await listedSession(child.id);
+    expect(afterSpawn).toBe(childAsListed.createdAt);
+    expect(childAsListed.closedAt).toBeDefined();
+    expect(afterClose).toBe(childAsListed.closedAt);
   });
 
   it('answers not_found for a session that does not exist', async () => {
@@ -274,7 +286,7 @@ describe('WS session.working_state', () => {
 
     workingStates.update(session.id, sections());
     await settle(authorized, session.id);
-    await refused;
+    await failFast(refused, 'the forged ticket was not refused');
 
     expect(unauthorized.readyState).not.toBe(WebSocket.OPEN);
     expect(heard).toEqual([]);
@@ -288,7 +300,7 @@ describe('WS session.working_state', () => {
     const replay = new WebSocket(url);
     const replayHeard: unknown[] = [];
     replay.addEventListener('message', (message) => replayHeard.push(message.data));
-    await new Promise((resolve) => replay.addEventListener('error', resolve, { once: true }));
+    await failFast(new Promise((resolve) => replay.addEventListener('error', resolve, { once: true })), 'the replayed ticket was not refused');
 
     expect(replay.readyState).not.toBe(WebSocket.OPEN);
     expect(replayHeard).toEqual([]);
