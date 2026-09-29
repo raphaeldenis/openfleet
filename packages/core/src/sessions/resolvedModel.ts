@@ -6,7 +6,7 @@ export const TRANSCRIPT_TAIL_WINDOW_BYTES = 256 * 1024;
 const NEWLINE_BYTE = 0x0a;
 const CLI_VERSION_PATTERN = /^\d+\.\d+\.\d+[0-9A-Za-z.+-]{0,20}$/;
 
-export interface ResolvedModel { resolvedModel: string; cliVersion: string }
+interface ResolvedModel { resolvedModel: string; cliVersion: string }
 
 // Reads at most the last TRANSCRIPT_TAIL_WINDOW_BYTES of the file. A window that starts past byte 0 starts
 // inside a line unless the byte just before it is a newline, so its first fragment is then dropped.
@@ -76,8 +76,4 @@ function parseJsonObject(line: string): Record<string, unknown> | undefined {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-export function readResolvedModel(input: { transcriptPath: string; launchedAt: string }): ResolvedModel | undefined {
-  return findResolvedModel(readTranscriptTail(input.transcriptPath), input.launchedAt);
 }

@@ -10,7 +10,7 @@ import { findPermissiveSettingsWarning } from '../harness/claudeCli/permissiveSe
 import { newId, newToken } from '../ids.js';
 import { log } from '../logger.js';
 import { MessageQueue } from './messageQueue.js';
-import { readResolvedModel } from './resolvedModel.js';
+import { findResolvedModel, readTranscriptTail } from './resolvedModel.js';
 import { wrapAgentMessage } from './messageEnvelope.js';
 import { normalizePermissionMode, SessionRepository } from './sessionRepository.js';
 import { canDeliverNow, nextState, provesTurnEnded, type SessionInput } from './stateMachine.js';
@@ -261,9 +261,9 @@ export class SessionService {
   // knows which file to tail.
   private readonly transcriptPaths = new Map<string, string>();
   private readonly interruptWatches = new Map<string, InterruptWatch>();
-  // Presence means "this launch has no recorded resolved model yet"; the value is the launch's start time.
-  private readonly launchedAt = new Map<string, string>();
-  private readonly launchesWithLoggedRecordingFailure = new Set<string>();
+  // Presence means "this launch has no recorded resolved model yet"; the value is the launch's start time
+  // and whether its recording failure was already logged.
+  private readonly pendingRecordings = new Map<string, { launchedAt: string; failureLogged: boolean }>();
   // Sessions whose model was switched and whose relaunch has not happened yet: the resolved model the old
   // launch recorded stays visible until the relaunch really replaces the process.
   private readonly modelSwitchesAwaitingRelaunch = new Set<string>();
@@ -290,8 +290,7 @@ export class SessionService {
     if (existsSync(spec.directory)) this.repo.setDirectoryRealpath(id, realpathSync.native(spec.directory));
     this.warnIfPermissiveSettings(spec.harness, spec.directory);
     const harness = this.harnessFor(spec.harness);
-    this.launchedAt.set(id, new Date().toISOString());
-    this.launchesWithLoggedRecordingFailure.delete(id);
+    this.pendingRecordings.set(id, { launchedAt: new Date().toISOString(), failureLogged: false });
     let handle: HarnessHandle;
     try {
       handle = harness.start({
@@ -580,20 +579,19 @@ export class SessionService {
 
   // One attempt per hook until the launch's resolution is found. It never throws into the hook handler.
   private recordResolvedModelIfPending(sessionId: string): void {
-    const launchedAt = this.launchedAt.get(sessionId);
+    const pending = this.pendingRecordings.get(sessionId);
     const transcriptPath = this.transcriptPaths.get(sessionId);
-    if (launchedAt === undefined || transcriptPath === undefined) return;
+    if (pending === undefined || transcriptPath === undefined) return;
     try {
       if (!isTrustedTranscriptPath(transcriptPath)) return;
-      const resolution = readResolvedModel({ transcriptPath, launchedAt });
+      const resolution = findResolvedModel(readTranscriptTail(transcriptPath), pending.launchedAt);
       if (!resolution) return;
       this.repo.recordResolvedModel({ id: sessionId, ...resolution, driftedFrom: undefined });
-      this.launchedAt.delete(sessionId);
+      this.pendingRecordings.delete(sessionId);
       this.deps.bus.emit({ type: 'session.updated', session: this.repo.get(sessionId)! });
     } catch (err) {
-      const isFirstFailureOfThisLaunch = !this.launchesWithLoggedRecordingFailure.has(sessionId);
-      if (!isFirstFailureOfThisLaunch) return;
-      this.launchesWithLoggedRecordingFailure.add(sessionId);
+      if (pending.failureLogged) return;
+      pending.failureLogged = true;
       log('error', `resolved model: session ${sessionId} could not record its resolved model`, err);
     }
   }
@@ -978,8 +976,7 @@ export class SessionService {
     this.clearResumeTimer(sessionId);
     this.disarmInterruptWatch(sessionId);
     this.transcriptPaths.delete(sessionId);
-    this.launchedAt.delete(sessionId);
-    this.launchesWithLoggedRecordingFailure.delete(sessionId);
+    this.pendingRecordings.delete(sessionId);
     this.modelSwitchesAwaitingRelaunch.delete(sessionId);
     this.stopDelivery(sessionId);
     this.pendingRelaunches.delete(sessionId);
@@ -1014,8 +1011,7 @@ export class SessionService {
     const hookToken = newToken();
     const mcpToken = newToken();
     this.repo.setTokens(session.id, hookToken, mcpToken);
-    this.launchedAt.set(session.id, new Date().toISOString());
-    this.launchesWithLoggedRecordingFailure.delete(session.id);
+    this.pendingRecordings.set(session.id, { launchedAt: new Date().toISOString(), failureLogged: false });
     let handle: HarnessHandle;
     try {
       handle = harness.start({
