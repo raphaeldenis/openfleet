@@ -144,7 +144,7 @@ describe('spawn directory guard', () => {
     const manager = await connect(managerToken);
     const tools = await manager.listTools();
     const createSessionSchema = tools.tools.find((tool) => tool.name === 'create_session')!.inputSchema;
-    expect(Object.keys(createSessionSchema.properties ?? {})).toContain('allow_duplicate');
+    expect(createSessionSchema.properties?.allow_duplicate).toMatchObject({ type: 'boolean' });
 
     const result = await callCreateSession(manager, { directory: managerDirectory, allow_duplicate: true });
 
@@ -479,19 +479,21 @@ describe('duplicate spawn guard', () => {
 
     const { result } = await spawnChild(manager, { directory: sharedDirectory, name: 'Builder' });
 
-    expect(otherRoot.parentId).toBeUndefined();
+    const liveBuilders = sessions.list().filter((s) => s.name === 'Builder' && s.state !== 'closed');
+    expect(liveBuilders).toHaveLength(2);
+    expect(liveBuilders.some((s) => s.parentId === otherRoot.id)).toBe(true);
     expect(result.isError).toBeFalsy();
   });
 
   it('user can spawn a child with the name of a live grandchild', async () => {
     const manager = await connect(managerToken);
-    const { child } = await spawnChild(manager, { directory: newWorktree('child'), name: 'Middle' });
+    await spawnChild(manager, { directory: newWorktree('child'), name: 'Middle' });
     const middle = await connect(harness.launches[1]!.mcpToken);
     await spawnChild(middle, { directory: newWorktree('grand'), name: 'Builder' });
 
     const { result } = await spawnChild(manager, { directory: newWorktree('builder'), name: 'Builder' });
 
-    expect(child).toBeDefined();
+    expect(sessions.list().filter((s) => s.name === 'Builder' && s.state !== 'closed')).toHaveLength(2);
     expect(result.isError).toBeFalsy();
   });
 
