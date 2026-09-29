@@ -804,6 +804,87 @@ describe('SessionService resume', () => {
     expect(row.permission_mode).toBe('default');
   });
 
+  describe('permissive .claude settings in the launch directory', () => {
+    class FakeClaudeCliHarness implements Harness {
+      readonly id = 'claude-cli' as const;
+      readonly launches: HarnessLaunch[] = [];
+      start(launch: HarnessLaunch): HarnessHandle {
+        this.launches.push(launch);
+        return new FakeHandle();
+      }
+    }
+
+    function permissiveDirectory(): string {
+      const directory = mkdtempSync(join(tmpdir(), 'of-project-'));
+      mkdirSync(join(directory, '.claude'));
+      writeFileSync(join(directory, '.claude', 'settings.json'), JSON.stringify({ permissions: { defaultMode: 'bypassPermissions' } }));
+      return directory;
+    }
+
+    it('warns once when creating a claude-cli session in a directory with a bypassPermissions default mode', async () => {
+      const db = openDatabase(':memory:');
+      const bus = new EventBus();
+      const harness = new FakeClaudeCliHarness();
+      const service = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+      const directory = permissiveDirectory();
+
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      await service.create({ directory, name: 'G', harness: 'claude-cli', emoji: '🤖' });
+
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0]![0]).toContain('bypassPermissions');
+      warn.mockRestore();
+    });
+
+    it('does not warn when creating a claude-cli session in a directory without permissive settings', async () => {
+      const db = openDatabase(':memory:');
+      const bus = new EventBus();
+      const harness = new FakeClaudeCliHarness();
+      const service = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+      const directory = mkdtempSync(join(tmpdir(), 'of-project-'));
+
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      await service.create({ directory, name: 'G', harness: 'claude-cli', emoji: '🤖' });
+
+      expect(warn).not.toHaveBeenCalled();
+      warn.mockRestore();
+    });
+
+    it('does not warn for a fake-harness session, even in a permissive directory, since only claude-cli actually reads .claude settings', async () => {
+      const db = openDatabase(':memory:');
+      const bus = new EventBus();
+      const harness = new FakeHarness();
+      const service = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+      const directory = permissiveDirectory();
+
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      await service.create({ directory, name: 'G', harness: 'fake', emoji: '🤖' });
+
+      expect(warn).not.toHaveBeenCalled();
+      warn.mockRestore();
+    });
+
+    it('warns again on a daemon-restart resume of a claude-cli session whose directory grew permissive settings meanwhile', async () => {
+      const db = openDatabase(':memory:');
+      const bus = new EventBus();
+      const firstRunHarness = new FakeClaudeCliHarness();
+      const original = new SessionService({ db, bus, harnesses: [firstRunHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+      const directory = mkdtempSync(join(tmpdir(), 'of-project-'));
+      await original.create({ directory, name: 'G', harness: 'claude-cli', emoji: '🤖' });
+      mkdirSync(join(directory, '.claude'));
+      writeFileSync(join(directory, '.claude', 'settings.json'), JSON.stringify({ permissions: { defaultMode: 'bypassPermissions' } }));
+
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const restartHarness = new FakeClaudeCliHarness();
+      const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt', resumeTimeoutMs: 50 });
+      await restarted.resumeAll();
+
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0]![0]).toContain('bypassPermissions');
+      warn.mockRestore();
+    });
+  });
+
   it('a non-SessionStart hook event after resume still cancels the resume timeout, since any hook proves the process is alive', async () => {
     const db = openDatabase(':memory:');
     const bus = new EventBus();
