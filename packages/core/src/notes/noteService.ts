@@ -28,6 +28,12 @@ export class NoteTooLargeError extends Error {
   }
 }
 
+export class FileBackedNoteError extends Error {
+  constructor(noteId: string) {
+    super(`note ${noteId} is file-backed; write through DocsFolderService instead`);
+  }
+}
+
 export interface NoteServiceDeps {
   repo: NoteRepository;
   db: DatabaseSync;
@@ -170,12 +176,14 @@ export class NoteService {
 
   update(id: string, input: UpdateNoteInput): Note {
     assertWithinBodyCap(input.bodyMd);
+    this.assertNotFileBacked(id);
     return this.writeThroughCas(id, input.author, (updatedAt) =>
       this.repo.update(id, { bodyMd: input.bodyMd, expectedRev: input.expectedRev, updatedAt }));
   }
 
   updateSection(id: string, input: UpdateSectionInput): Note {
     const current = this.require(id);
+    this.assertNotFileBacked(id);
     const newBodyMd = replaceSection(current.bodyMd, input.heading, input.content);
     assertWithinBodyCap(newBodyMd);
     return this.writeThroughCas(id, input.author, (updatedAt) =>
@@ -183,6 +191,7 @@ export class NoteService {
   }
 
   append(id: string, input: AppendNoteInput): Note {
+    this.assertNotFileBacked(id);
     let lastKnownRev: number | undefined;
     for (let attempt = 0; attempt < MAX_APPEND_ATTEMPTS; attempt++) {
       const outcome = this.tryAppendOnce(id, input);
@@ -193,6 +202,7 @@ export class NoteService {
   }
 
   rename(id: string, input: RenameNoteInput): Note {
+    this.assertNotFileBacked(id);
     return this.writeThroughCas(id, input.author, (updatedAt) =>
       this.repo.rename(id, { title: input.title, expectedRev: input.expectedRev, updatedAt }));
   }
@@ -208,6 +218,12 @@ export class NoteService {
     const lookup = this.mentionLookupFor(viewerProjectId);
     const expandedBody = this.expandMentions(note.bodyMd, lookup, { rootNoteId: note.id });
     return { note, expandedBody };
+  }
+
+  /** Unknown ids fall through to the CAS path's own NoteNotFoundError; only an existing, file-backed note is refused here. */
+  private assertNotFileBacked(id: string): void {
+    const note = this.repo.get(id);
+    if (note?.filePath) throw new FileBackedNoteError(id);
   }
 
   private mentionLookupFor(viewerProjectId: string): MentionLookup {

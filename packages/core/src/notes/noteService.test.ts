@@ -3,7 +3,7 @@ import { openDatabase } from '../db/database.js';
 import { ProjectRepository } from '../projects/projectRepository.js';
 import { expandMentions } from './mentionExpander.js';
 import { NoteRepository } from './noteRepository.js';
-import { NoteNotFoundError, NoteService, NoteTooLargeError, StaleRevisionError } from './noteService.js';
+import { FileBackedNoteError, NoteNotFoundError, NoteService, NoteTooLargeError, StaleRevisionError } from './noteService.js';
 import { replaceSection } from './noteSections.js';
 
 const AUTHOR = 'rdenisfr@gmail.com';
@@ -552,6 +552,72 @@ describe('NoteService updateFileBacked', () => {
     service.updateFileBacked(note.id, { bodyMd: 'v2', sourceHash: 'h2', expectedRev: 1, author: AUTHOR });
 
     expect(repo.listVersions(note.id)).toHaveLength(2);
+  });
+});
+
+describe('NoteService refuses plain writes on a file-backed note', () => {
+  it('update throws FileBackedNoteError and writes nothing', () => {
+    const { service, repo } = setup();
+    const note = service.createFileBacked({ projectId: 'p1', title: 'Title', bodyMd: 'v1', filePath: '/docs/a.md', sourceHash: 'h1', author: AUTHOR });
+
+    expect(() => service.update(note.id, { bodyMd: 'v2', expectedRev: 1, author: AUTHOR })).toThrow(FileBackedNoteError);
+
+    expect(repo.get(note.id)).toMatchObject({ bodyMd: 'v1', rev: 1 });
+    expect(repo.listVersions(note.id)).toHaveLength(1);
+  });
+
+  it('updateSection throws FileBackedNoteError and writes nothing', () => {
+    const { service, repo } = setup();
+    const note = service.createFileBacked({ projectId: 'p1', title: 'Title', bodyMd: '## Status\nold', filePath: '/docs/a.md', sourceHash: 'h1', author: AUTHOR });
+
+    expect(() => service.updateSection(note.id, { heading: 'Status', content: 'new', expectedRev: 1, author: AUTHOR })).toThrow(FileBackedNoteError);
+
+    expect(repo.get(note.id)!.bodyMd).toBe('## Status\nold');
+    expect(repo.listVersions(note.id)).toHaveLength(1);
+  });
+
+  it('append throws FileBackedNoteError and writes nothing', () => {
+    const { service, repo } = setup();
+    const note = service.createFileBacked({ projectId: 'p1', title: 'Title', bodyMd: 'start', filePath: '/docs/a.md', sourceHash: 'h1', author: AUTHOR });
+
+    expect(() => service.append(note.id, { content: 'tail', author: AUTHOR })).toThrow(FileBackedNoteError);
+
+    expect(repo.get(note.id)!.bodyMd).toBe('start');
+    expect(repo.listVersions(note.id)).toHaveLength(1);
+  });
+
+  it('rename throws FileBackedNoteError and writes nothing', () => {
+    const { service, repo } = setup();
+    const note = service.createFileBacked({ projectId: 'p1', title: 'Old', bodyMd: 'body', filePath: '/docs/a.md', sourceHash: 'h1', author: AUTHOR });
+
+    expect(() => service.rename(note.id, { title: 'New', expectedRev: 1, author: AUTHOR })).toThrow(FileBackedNoteError);
+
+    expect(repo.get(note.id)).toMatchObject({ title: 'Old', rev: 1 });
+    expect(repo.listVersions(note.id)).toHaveLength(1);
+  });
+
+  it('does not affect updateFileBacked, which still writes through the file-backed CAS path', () => {
+    const { service } = setup();
+    const note = service.createFileBacked({ projectId: 'p1', title: 'Title', bodyMd: 'v1', filePath: '/docs/a.md', sourceHash: 'h1', author: AUTHOR });
+
+    const updated = service.updateFileBacked(note.id, { bodyMd: 'v2', sourceHash: 'h2', expectedRev: 1, author: AUTHOR });
+
+    expect(updated).toMatchObject({ bodyMd: 'v2', sourceHash: 'h2', rev: 2 });
+  });
+
+  it('does not refuse a plain (non-file-backed) note', () => {
+    const { service } = setup();
+    const note = service.create({ projectId: 'p1', title: 'Title', bodyMd: 'v1', author: AUTHOR });
+
+    const updated = service.update(note.id, { bodyMd: 'v2', expectedRev: 1, author: AUTHOR });
+
+    expect(updated.bodyMd).toBe('v2');
+  });
+
+  it('still throws NoteNotFoundError, not FileBackedNoteError, for an unknown note', () => {
+    const { service } = setup();
+
+    expect(() => service.update('nope', { bodyMd: 'x', expectedRev: 1, author: AUTHOR })).toThrow(NoteNotFoundError);
   });
 });
 
