@@ -107,7 +107,9 @@ interface ImportCandidate {
  * file is untouched (nothing to reconcile — the write never happened as far as disk is concerned). Two
  * windows leave the file ahead of the DB, the file holding the new bytes while the DB still holds the old
  * body/hash: a crash between the rename and the transaction's COMMIT, and a COMMIT failure after a
- * successful rename. Until reconcile runs, a PATCH is refused with `stale_revision`. `reconcileOnBoot` hashes the actual file and compares it
+ * successful rename. In the COMMIT-failure window the client gets a 500, and the edit lands later as a
+ * revision authored by the external-edit author ('disk'), not by the user. Until reconcile runs, a PATCH
+ * is refused with `stale_revision`. `reconcileOnBoot` hashes the actual file and compares it
  * to `notes.source_hash`; on a mismatch it always applies whatever is really on disk as a new 'disk'
  * revision (`applyExternalEdit`, decision 2) — so after reconcile, `source_hash` is by construction the
  * hash of the bytes reconcile just read, so the user's write is kept, never reverted. The whole sequence
@@ -397,11 +399,15 @@ export class DocsFolderService {
     }
   }
 
+  /** A temp file already gone (ENOENT) needs no cleanup; any other unlink failure is warned with its code only, never the path. */
   private removeTempFileQuietly(tempPath: string): void {
     try {
       this.deps.fs.unlinkSync(tempPath);
-    } catch {
-      // the temp file's directory is already gone: nothing left to clean
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      const isAlreadyGone = code === 'ENOENT';
+      if (isAlreadyGone) return;
+      console.warn(`note temp file cleanup failed: ${code}`);
     }
   }
 

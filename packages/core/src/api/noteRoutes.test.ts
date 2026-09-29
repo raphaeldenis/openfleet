@@ -241,13 +241,17 @@ describe('notes REST routes', () => {
       expect(await response.json()).toMatchObject({ items: [], total: 1 });
     });
 
-    it('lists versions without any statement of the request reading a note body', async () => {
-      const note = await createNote();
+    it.each([
+      { reading: 'lists notes', path: () => '/api/notes?projectId=p1' },
+      { reading: 'searches notes', path: () => '/api/notes/search?projectId=p1&q=zebra' },
+      { reading: 'lists versions', path: (noteId: string) => `/api/notes/${noteId}/versions?projectId=p1` },
+    ])('$reading without any statement of the request reading a note body', async ({ path }) => {
+      const note = await createNote({ bodyMd: 'zebra' });
       const prepared: string[] = [];
       const realPrepare = db.prepare.bind(db);
       const spy = vi.spyOn(db, 'prepare').mockImplementation((sql: string) => { prepared.push(sql); return realPrepare(sql); });
 
-      const response = await call('GET', `/api/notes/${note.id}/versions?projectId=p1`);
+      const response = await call('GET', path(note.id));
       spy.mockRestore();
 
       expect(response.status).toBe(200);
@@ -465,6 +469,34 @@ describe('notes REST routes', () => {
       expect(readNoteVersionRevs(note.id)).toEqual([1]);
     });
 
+    it.each(['EACCES', 'EBUSY'])('answers the original 500 and warns with the code only when removing the leftover temp file fails with %s', async (code) => {
+      const note = seedFileBackedNote();
+      vi.spyOn(nodeDocsFolderFs, 'renameSync').mockImplementation(() => { throw Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' }); });
+      vi.spyOn(nodeDocsFolderFs, 'unlinkSync').mockImplementation(() => { throw Object.assign(new Error(`${code}: /secret/path.tmp`), { code }); });
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+      const patched = await call('PATCH', `/api/notes/${note.id}`, { projectId: fileBackedProjectId, expectedRev: 1, bodyMd: 'v2' });
+      const warnings = warn.mock.calls;
+      vi.restoreAllMocks();
+
+      expect(patched.status).toBe(500);
+      expect(await patched.json()).toEqual({ error: 'internal_error' });
+      expect(warnings).toEqual([[`note temp file cleanup failed: ${code}`]]);
+    });
+
+    it('stays silent when the leftover temp file is already gone', async () => {
+      const note = seedFileBackedNote();
+      vi.spyOn(nodeDocsFolderFs, 'renameSync').mockImplementation(() => { throw Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' }); });
+      vi.spyOn(nodeDocsFolderFs, 'unlinkSync').mockImplementation(() => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); });
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+      await call('PATCH', `/api/notes/${note.id}`, { projectId: fileBackedProjectId, expectedRev: 1, bodyMd: 'v2' });
+      const warnings = warn.mock.calls;
+      vi.restoreAllMocks();
+
+      expect(warnings).toEqual([]);
+    });
+
     it('answers 500 when the temp file cannot be written because the disk is full', async () => {
       const note = seedFileBackedNote();
       vi.spyOn(nodeDocsFolderFs, 'writeFileExclusiveSync').mockImplementation(() => { throw Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' }); });
@@ -501,12 +533,12 @@ describe('notes REST routes', () => {
       expect(response.status).toBe(200);
     });
 
-    it('pages notes of identical text one by one, each note exactly once', async () => {
+    it('pages notes of identical text one by one in id order, each note exactly once', async () => {
       const noteCount = 12;
       const insert = db.prepare(`INSERT INTO notes (id, project_id, title, body_md, folder, file_path, source_hash, rev, shared, created_at, updated_at)
         VALUES (?, 'p1', 'n', 'zebra', NULL, NULL, NULL, 1, 0, 't', 't')`);
-      const insertedIds = Array.from({ length: noteCount }, (_, index) => `same-${index}`);
-      for (const id of insertedIds) insert.run(id);
+      const idsInAscendingOrder = Array.from({ length: noteCount }, (_, index) => `same-${String(index).padStart(2, '0')}`);
+      for (const id of [...idsInAscendingOrder].reverse()) insert.run(id);
 
       const pagedIds: string[] = [];
       for (let offset = 0; offset < noteCount; offset++) {
@@ -514,7 +546,7 @@ describe('notes REST routes', () => {
         pagedIds.push(...page.items.map((item) => item.id));
       }
 
-      expect([...pagedIds].sort()).toEqual([...insertedIds].sort());
+      expect(pagedIds).toEqual(idsInAscendingOrder);
     });
 
     it('returns at most 50 hits when more notes match', async () => {
