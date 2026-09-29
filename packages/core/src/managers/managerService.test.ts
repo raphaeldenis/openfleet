@@ -45,6 +45,41 @@ describe('ManagerService.createManagerSession', () => {
   });
 });
 
+describe('ManagerService.createManagerSession — heartbeat default', () => {
+  const managerWithoutPulseSeconds = { directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake', manager: { childrenCap: 2, mission: 'Ship' } } as never;
+
+  function serviceWithHeartbeatDefault(heartbeatDefaultSeconds?: number) {
+    const { db, bus, sessions, scheduler } = setup();
+    const managerRepo = new ManagerRepository(db);
+    const service = new ManagerService({ managers: managerRepo, sessions, bus, scheduler, heartbeatDefaultSeconds });
+    return { service, managerRepo };
+  }
+
+  it('a manager created without a heartbeat gets the default of the settings', async () => {
+    const { service, managerRepo } = serviceWithHeartbeatDefault(600);
+
+    const session = await service.createManagerSession(managerWithoutPulseSeconds);
+
+    expect(managerRepo.get(session.id)?.pulseSeconds).toBe(600);
+  });
+
+  it('a manager created without a heartbeat and without a setting gets 1800 seconds', async () => {
+    const { service, managerRepo } = serviceWithHeartbeatDefault(undefined);
+
+    const session = await service.createManagerSession(managerWithoutPulseSeconds);
+
+    expect(managerRepo.get(session.id)?.pulseSeconds).toBe(1800);
+  });
+
+  it('a manager created with its own heartbeat keeps it whatever the setting says', async () => {
+    const { service, managerRepo } = serviceWithHeartbeatDefault(600);
+
+    const session = await service.createManagerSession({ directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake', manager: { pulseSeconds: 45, childrenCap: 2, mission: 'Ship' } } as never);
+
+    expect(managerRepo.get(session.id)?.pulseSeconds).toBe(45);
+  });
+});
+
 describe('ManagerService.createManagerSession — worktrees', () => {
   it('creates the worktree first, exactly as the non-manager path does, and launches the manager inside it', async () => {
     const repoPath = makeRepo();

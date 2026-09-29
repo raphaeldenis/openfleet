@@ -481,6 +481,23 @@ describe('create_session guardrails', () => {
     expect(second.isError).toBe(true);
   });
 
+  it('a manager created without pulse_seconds gets the default heartbeat', async () => {
+    const managerClient = await connect(parentToken);
+
+    const lead = text(await managerClient.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('lead-default-heartbeat'), name: 'LeadDefault', manager: { children_cap: 1, mission: 'x' } } }));
+
+    const stored = db.prepare('SELECT pulse_seconds FROM managers WHERE session_id = ?').get(lead.id) as { pulse_seconds: number };
+    expect(stored.pulse_seconds).toBe(1800);
+  });
+
+  it.each([0, 86_401, 1.5])('refuses a manager created with a pulse_seconds of %s', async (pulseSeconds) => {
+    const managerClient = await connect(parentToken);
+
+    const result = await managerClient.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir(`lead-bad-heartbeat-${pulseSeconds}`), name: 'LeadBad', manager: { pulse_seconds: pulseSeconds, children_cap: 1, mission: 'x' } } });
+
+    expect(result.isError).toBe(true);
+  });
+
   it('two concurrent create_session calls at the cap admit only one child', async () => {
     const managerClient = await connect(parentToken);
     const lead = text(await managerClient.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('lead3'), name: 'Lead3', manager: { pulse_seconds: 3600, children_cap: 1, mission: 'x' } } }));

@@ -29,8 +29,8 @@ describe('ManagerSpecSchema hostile inputs', () => {
     expect(() => ManagerSpecSchema.parse({ pulseSeconds: 60, childrenCap: 1.5, mission: 'x' })).toThrow();
   });
 
-  it('rejects a spec missing pulseSeconds', () => {
-    expect(() => ManagerSpecSchema.parse({ childrenCap: 1, mission: 'x' })).toThrow();
+  it('accepts a spec without pulseSeconds and leaves it undefined for the daemon to default', () => {
+    expect(ManagerSpecSchema.parse({ childrenCap: 1, mission: 'x' }).pulseSeconds).toBeUndefined();
   });
 
   it('accepts a whitespace-only mission — min(1) counts characters, not trimmed length', () => {
