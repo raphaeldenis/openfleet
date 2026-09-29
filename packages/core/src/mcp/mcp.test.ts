@@ -2,7 +2,7 @@ import { MANAGER_ROLE } from '@openfleet/shared';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, mkdtempSync, realpathSync, symlinkSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
@@ -30,11 +30,17 @@ import { newId } from '../ids.js';
 import { WorkingStateService } from '../workingState/workingStateService.js';
 import { createMcpHandler } from './mcpServer.js';
 
-// create_session now requires its directory to already exist (fix loop 2, decision 1+3+5) — this makes
-// that directory real under the shared worktrees root fixture, idempotently across test runs.
+const WORKTREES_ROOT = '/tmp/of-wt';
+
+// create_session requires its directory to already exist. Each call makes `name` inside a private
+// directory of the shared worktrees root, so concurrent runs never touch each other's directories.
+let createdDirectories: string[] = [];
 function existingWorktreeDir(name: string): string {
-  const path = join('/tmp/of-wt', name);
-  mkdirSync(path, { recursive: true });
+  mkdirSync(WORKTREES_ROOT, { recursive: true });
+  const privateParent = mkdtempSync(join(WORKTREES_ROOT, 'run-'));
+  createdDirectories.push(privateParent);
+  const path = join(privateParent, name);
+  mkdirSync(path);
   return path;
 }
 
@@ -74,7 +80,11 @@ beforeEach(async () => {
   parentId = parent.id;
   parentToken = harness.launches[0]!.mcpToken;
 });
-afterEach(() => server.close());
+afterEach(async () => {
+  await server.close();
+  for (const directory of createdDirectories) rmSync(directory, { recursive: true, force: true });
+  createdDirectories = [];
+});
 
 async function connect(token: string) {
   const client = new Client({ name: 'test', version: '0.0.0' });
@@ -391,6 +401,7 @@ describe('MCP', () => {
 
     const allowed = await builder.callTool({ name: 'create_worktree', arguments: { repo_path: ownRepo, branch_name: `task/${randomUUID()}` } });
     expect(allowed.isError).toBeFalsy();
+    createdDirectories.push((text(allowed) as { path: string }).path);
   });
 });
 
@@ -501,26 +512,28 @@ describe('create_session guardrails', () => {
 
   it('rejects a directory that escapes the worktrees root through a symlink plus a ".." segment, even with a decoy at the lexically-collapsed path', async () => {
     const outside = mkdtempSync(join(tmpdir(), 'of-outside-'));
+    createdDirectories.push(outside);
     const deep = join(outside, 'deep');
     mkdirSync(deep);
     const target = join(outside, 'target');
     mkdirSync(target);
-    const linkName = `escape-link-${randomUUID()}`;
-    symlinkSync(deep, join('/tmp/of-wt', linkName));
+    const insideRoot = existingWorktreeDir('escape-fixture');
+    const linkName = 'escape-link';
+    symlinkSync(deep, join(insideRoot, linkName));
     // path.resolve() would lexically collapse this back to "/tmp/of-wt/target" (looks inside); the OS
     // actually opens "outside/target" once the symlink is followed — the escape decision 1 closes. The
     // decoy directory genuinely existing at the lexically-collapsed path is what exposes a resolve()-first
     // regression: without it, a broken guard would merely throw ENOENT and fail safe by accident.
-    mkdirSync(join('/tmp/of-wt', 'target'), { recursive: true });
-    const escapingDirectory = `/tmp/of-wt/${linkName}/../target`;
+    mkdirSync(join(insideRoot, 'target'));
+    const escapingDirectory = `${insideRoot}/${linkName}/../target`;
     const client = await connect(parentToken);
     const result = await client.callTool({ name: 'create_session', arguments: { directory: escapingDirectory, name: 'Escapee' } });
     expect(result.isError).toBe(true);
   });
 
   it('stores the resolved real path, not the symlink, as the session directory', async () => {
-    const realTarget = existingWorktreeDir(`real-target-${randomUUID()}`);
-    const linkPath = join('/tmp/of-wt', `link-to-target-${randomUUID()}`);
+    const realTarget = existingWorktreeDir('real-target');
+    const linkPath = join(existingWorktreeDir('link-fixture'), 'link-to-target');
     symlinkSync(realTarget, linkPath);
     const client = await connect(parentToken);
     const created = text(await client.callTool({ name: 'create_session', arguments: { directory: linkPath, name: 'Real' } }));

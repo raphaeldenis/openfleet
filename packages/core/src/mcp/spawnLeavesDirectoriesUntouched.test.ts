@@ -1,6 +1,6 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -48,6 +48,12 @@ describe('spawning a child session', () => {
   let firstChildDirectory: string;
   let secondChildDirectory: string;
   let openFleetSessionsRoot: string;
+  let createdDirectories: string[] = [];
+  const makeTrackedDirectory = (prefix: string) => {
+    const directory = mkdtempSync(prefix);
+    createdDirectories.push(directory);
+    return directory;
+  };
 
   beforeEach(async () => {
     spawn.mockClear();
@@ -74,14 +80,14 @@ describe('spawning a child session', () => {
     const { createMcpHandler } = await import('./mcpServer.js');
 
     mkdirSync(WORKTREES_ROOT, { recursive: true });
-    managerDirectory = mkdtempSync(join(WORKTREES_ROOT, 'manager-'));
-    firstChildDirectory = mkdtempSync(join(WORKTREES_ROOT, 'first-'));
-    secondChildDirectory = mkdtempSync(join(WORKTREES_ROOT, 'second-'));
+    managerDirectory = makeTrackedDirectory(join(WORKTREES_ROOT, 'manager-'));
+    firstChildDirectory = makeTrackedDirectory(join(WORKTREES_ROOT, 'first-'));
+    secondChildDirectory = makeTrackedDirectory(join(WORKTREES_ROOT, 'second-'));
     for (const directory of [managerDirectory, firstChildDirectory, secondChildDirectory]) seedProjectSettings(directory);
 
     const db = openDatabase(':memory:');
     const bus = new EventBus();
-    openFleetSessionsRoot = mkdtempSync(join(tmpdir(), 'of-home-'));
+    openFleetSessionsRoot = makeTrackedDirectory(join(tmpdir(), 'of-home-'));
     const sessions = new SessionService({ db, bus, harnesses: [new ClaudeCliHarness(openFleetSessionsRoot)], baseUrl: 'http://127.0.0.1:0', worktreesRoot: WORKTREES_ROOT, submitKeystrokeDelayMs: 0 });
     const managerRepo = new ManagerRepository(db);
     const pulseScheduler = new PulseScheduler({ managers: managerRepo, sessions, bus });
@@ -104,7 +110,11 @@ describe('spawning a child session', () => {
     await client.connect(new StreamableHTTPClientTransport(new URL(`${server.url}/mcp`), { requestInit: { headers: { Authorization: `Bearer ${managerToken}` } } }));
     callCreateSession = (directory, name) => client.callTool({ name: 'create_session', arguments: { directory, name } });
   });
-  afterEach(() => close());
+  afterEach(async () => {
+    await close();
+    for (const directory of createdDirectories) rmSync(directory, { recursive: true, force: true });
+    createdDirectories = [];
+  });
 
   it('user can spawn two children and every file in the manager and child directories keeps its content, project settings included', async () => {
     const directories = [managerDirectory, firstChildDirectory, secondChildDirectory];
