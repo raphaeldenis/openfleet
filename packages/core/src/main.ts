@@ -16,6 +16,9 @@ import { loadModelTable } from './models.js';
 import { installProcessGuards } from './process/processGuards.js';
 import { installShutdownHandler } from './process/shutdownHandler.js';
 import { SessionService } from './sessions/sessionService.js';
+import { DataStoreRepository } from './stores/dataStoreRepository.js';
+import { DataStoreService } from './stores/dataStoreService.js';
+import { newId } from './ids.js';
 
 installProcessGuards();
 
@@ -33,10 +36,12 @@ const modelTable = loadModelTable(modelConfigPath);
 const managerRepository = new ManagerRepository(db);
 const pulseScheduler = new PulseScheduler({ managers: managerRepository, sessions, bus });
 const managers = new ManagerService({ managers: managerRepository, sessions, bus, scheduler: pulseScheduler });
+const storeRepo = new DataStoreRepository(db);
+const stores = new DataStoreService({ repo: storeRepo, db, clock: () => new Date().toISOString(), newId });
 
 // The server must be listening before any resumed CLI can POST its first hook — resuming first risks a
 // fast process hitting a port nothing is serving yet.
-const server = await startServer({ ...config, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, worktreesRoot: config.worktreesRoot }) });
+const server = await startServer({ ...config, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, worktreesRoot: config.worktreesRoot }) });
 log('info', `openfleet core listening on ${server.url} (home: ${config.home})`);
 
 // A launch dir a crashed or killed daemon never cleaned up would otherwise sit on disk carrying a live

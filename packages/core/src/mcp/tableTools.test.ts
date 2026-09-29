@@ -1,0 +1,252 @@
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import type { DatabaseSync } from 'node:sqlite';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { startServer } from '../api/server.js';
+import { openDatabase } from '../db/database.js';
+import { EventBus } from '../events/eventBus.js';
+import { ApprovalService } from '../governance/approvalService.js';
+import { FakeHarness } from '../harness/fakeHarness.js';
+import { ManagerRepository } from '../managers/managerRepository.js';
+import { ManagerService } from '../managers/managerService.js';
+import { PulseScheduler } from '../managers/pulseScheduler.js';
+import { DEFAULT_MODEL_TABLE } from '../models.js';
+import { ProjectRepository } from '../projects/projectRepository.js';
+import { SessionService } from '../sessions/sessionService.js';
+import { DataStoreRepository } from '../stores/dataStoreRepository.js';
+import { DataStoreService } from '../stores/dataStoreService.js';
+import { createMcpHandler } from './mcpServer.js';
+
+let server: Awaited<ReturnType<typeof startServer>>;
+let db: DatabaseSync;
+let sessions: SessionService;
+let storeRepo: DataStoreRepository;
+let scopedToken: string;
+let otherToken: string;
+let unscopedToken: string;
+
+/** The daemon has no project-creation UI yet (P3-T02): a session's project comes from a direct row update, the same way seed/test code assigns one. */
+function assignProject(sessionId: string, projectId: string): void {
+  db.prepare('UPDATE sessions SET project_id = ? WHERE id = ?').run(projectId, sessionId);
+}
+
+async function connect(token: string) {
+  const client = new Client({ name: 'test', version: '0.0.0' });
+  await client.connect(new StreamableHTTPClientTransport(new URL(`${server.url}/mcp`), { requestInit: { headers: { Authorization: `Bearer ${token}` } } }));
+  return client;
+}
+const text = (r: unknown) => JSON.parse(((r as { content: { text: string }[] }).content[0]!).text);
+
+beforeEach(async () => {
+  db = openDatabase(':memory:');
+  const bus = new EventBus();
+  const harness = new FakeHarness();
+  sessions = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt', submitKeystrokeDelayMs: 0 });
+  const managerRepo = new ManagerRepository(db);
+  const pulseScheduler = new PulseScheduler({ managers: managerRepo, sessions, bus });
+  const managers = new ManagerService({ managers: managerRepo, sessions, bus, scheduler: pulseScheduler });
+  const approvals = new ApprovalService({ db, bus });
+  const modelTable = { ...DEFAULT_MODEL_TABLE };
+
+  const projects = new ProjectRepository(db);
+  projects.insert({ id: 'p1', name: 'One', docsFolderPath: null, createdAt: 't0' });
+  projects.insert({ id: 'p2', name: 'Two', docsFolderPath: null, createdAt: 't0' });
+  storeRepo = new DataStoreRepository(db);
+  let counter = 0;
+  const stores = new DataStoreService({ repo: storeRepo, db, clock: () => '2026-01-01T00:00:00.000Z', newId: () => `id-${++counter}` });
+
+  server = await startServer({
+    host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath: '/tmp/of-unused/config.json',
+    mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, worktreesRoot: '/tmp/of-wt', stores, storeRepo }),
+  });
+
+  const scoped = await sessions.create({ directory: '/tmp', name: 'Gimli', harness: 'fake', emoji: '⛏️' });
+  assignProject(scoped.id, 'p1');
+  const other = await sessions.create({ directory: '/tmp', name: 'Legolas', harness: 'fake', emoji: '🏹' });
+  assignProject(other.id, 'p2');
+  await sessions.create({ directory: '/tmp', name: 'Rootless', harness: 'fake', emoji: '👤' });
+  scopedToken = harness.launches[0]!.mcpToken;
+  otherToken = harness.launches[1]!.mcpToken;
+  unscopedToken = harness.launches[2]!.mcpToken;
+});
+afterEach(() => server.close());
+
+async function createStore(client: Client, displayName = 'backlog') {
+  return text(await client.callTool({ name: 'create_data_store', arguments: { display_name: displayName } }));
+}
+
+describe('table tools', () => {
+  it('lists the table tools', async () => {
+    const client = await connect(scopedToken);
+    const { tools } = await client.listTools();
+    expect(tools.map((t) => t.name).sort()).toEqual([
+      'add_data_store_column', 'close_session', 'create_data_store', 'create_session', 'create_worktree', 'delete_data_store_row',
+      'describe_data_store', 'get_argus_status', 'get_session_status', 'insert_data_store_rows', 'list_children', 'list_sessions',
+      'message_parent', 'pulse_now', 'query_data_store', 'send_session_message', 'update_data_store_rows', 'update_session',
+    ]);
+  });
+
+  it('refuses every table tool for a session with no project', async () => {
+    const client = await connect(unscopedToken);
+    const result = await client.callTool({ name: 'create_data_store', arguments: { display_name: 'x' } });
+    expect(result.isError).toBe(true);
+    expect((result.content as { text: string }[])[0]!.text).toMatch(/no project/i);
+  });
+
+  it('create_data_store scopes the new store to the caller\'s own project', async () => {
+    const client = await connect(scopedToken);
+    const created = await createStore(client);
+    expect(created.projectId).toBe('p1');
+    expect(created.displayName).toBe('backlog');
+  });
+
+  it('describe_data_store returns id, displayName, and columns with id/displayName/columnType/options/sortOrder', async () => {
+    const client = await connect(scopedToken);
+    const store = await createStore(client);
+    await client.callTool({ name: 'add_data_store_column', arguments: { store: store.id, display_name: 'status', column_type: 'select', options: [{ id: 'todo', label: 'todo' }] } });
+
+    const described = text(await client.callTool({ name: 'describe_data_store', arguments: { store: store.id } }));
+
+    expect(described).toMatchObject({
+      id: store.id,
+      displayName: 'backlog',
+      columns: [{ displayName: 'status', columnType: 'select', options: [{ id: 'todo', label: 'todo' }], sortOrder: 0 }],
+    });
+    expect(described.columns[0].id).toEqual(expect.any(String));
+  });
+
+  it('describe_data_store on another project\'s store fails exactly like a missing store', async () => {
+    const owner = await connect(scopedToken);
+    const store = await createStore(owner);
+    const stranger = await connect(otherToken);
+
+    const strangerResult = await stranger.callTool({ name: 'describe_data_store', arguments: { store: store.id } });
+    const missingResult = await stranger.callTool({ name: 'describe_data_store', arguments: { store: 'does-not-exist' } });
+
+    expect(strangerResult.isError).toBe(true);
+    expect(missingResult.isError).toBe(true);
+    expect((strangerResult.content as { text: string }[])[0]!.text).toBe((missingResult.content as { text: string }[])[0]!.text);
+  });
+
+  it('add_data_store_column refuses a bad column definition with a clear, non-throwing error', async () => {
+    const client = await connect(scopedToken);
+    const store = await createStore(client);
+    const result = await client.callTool({ name: 'add_data_store_column', arguments: { store: store.id, display_name: 'status', column_type: 'select', options: [] } });
+    expect(result.isError).toBe(true);
+    expect((result.content as { text: string }[])[0]!.text).toBe('A select column needs at least one option, each with an id and a label');
+  });
+
+  it('insert_data_store_rows attributes actor_kind: agent with the caller\'s emoji and name', async () => {
+    const client = await connect(scopedToken);
+    const store = await createStore(client);
+    await client.callTool({ name: 'add_data_store_column', arguments: { store: store.id, display_name: 'title', column_type: 'text' } });
+    const columns = text(await client.callTool({ name: 'describe_data_store', arguments: { store: store.id } })).columns;
+    const titleId = columns[0].id;
+
+    const rows = text(await client.callTool({ name: 'insert_data_store_rows', arguments: { store: store.id, rows: [{ [titleId]: 'first' }] } }));
+
+    const history = storeRepo.rowHistory(rows[0].id, { projectId: 'p1' });
+    expect(history[0]).toMatchObject({ actorKind: 'agent', actorLabel: '⛏️ Gimli' });
+  });
+
+  it('insert_data_store_rows refuses more than 500 rows in one batch', async () => {
+    const client = await connect(scopedToken);
+    const store = await createStore(client);
+    const rows = Array.from({ length: 501 }, () => ({}));
+    const result = await client.callTool({ name: 'insert_data_store_rows', arguments: { store: store.id, rows } });
+    expect(result.isError).toBe(true);
+  });
+
+  it('insert_data_store_rows is all-or-nothing: one bad row writes nothing', async () => {
+    const client = await connect(scopedToken);
+    const store = await createStore(client);
+    await client.callTool({ name: 'add_data_store_column', arguments: { store: store.id, display_name: 'title', column_type: 'text' } });
+
+    const result = await client.callTool({ name: 'insert_data_store_rows', arguments: { store: store.id, rows: [{ 'unknown-col': 'x' }, {}] } });
+
+    expect(result.isError).toBe(true);
+    const rows = text(await client.callTool({ name: 'query_data_store', arguments: { store: store.id } }));
+    expect(rows).toHaveLength(0);
+  });
+
+  it('update_data_store_rows writes actor-attributed history for each row and is all-or-nothing on a bad patch', async () => {
+    const client = await connect(scopedToken);
+    const store = await createStore(client);
+    await client.callTool({ name: 'add_data_store_column', arguments: { store: store.id, display_name: 'status', column_type: 'select', options: [{ id: 'todo', label: 'todo' }, { id: 'done', label: 'done' }] } });
+    const statusId = text(await client.callTool({ name: 'describe_data_store', arguments: { store: store.id } })).columns[0].id;
+    const [row1, row2] = text(await client.callTool({ name: 'insert_data_store_rows', arguments: { store: store.id, rows: [{ [statusId]: 'todo' }, { [statusId]: 'todo' }] } }));
+
+    const badBatch = await client.callTool({ name: 'update_data_store_rows', arguments: { store: store.id, updates: [{ row_id: row1.id, patch: { [statusId]: 'done' } }, { row_id: row2.id, patch: { [statusId]: 'not-an-option' } }] } });
+    expect(badBatch.isError).toBe(true);
+    const untouched = text(await client.callTool({ name: 'query_data_store', arguments: { store: store.id } }));
+    expect(untouched.find((r: { id: string }) => r.id === row1.id).data[statusId]).toBe('todo');
+
+    const goodBatch = text(await client.callTool({ name: 'update_data_store_rows', arguments: { store: store.id, updates: [{ row_id: row1.id, patch: { [statusId]: 'done' } }] } }));
+    expect(goodBatch[0].data[statusId]).toBe('done');
+    const [latest] = storeRepo.rowHistory(row1.id, { projectId: 'p1' });
+    expect(latest).toMatchObject({ actorKind: 'agent', actorLabel: '⛏️ Gimli', change: { [statusId]: { from: 'todo', to: 'done' } } });
+  });
+
+  it('delete_data_store_row writes a delete history entry with its actor and removes the row', async () => {
+    const client = await connect(scopedToken);
+    const store = await createStore(client);
+    const [row] = text(await client.callTool({ name: 'insert_data_store_rows', arguments: { store: store.id, rows: [{}] } }));
+
+    const result = await client.callTool({ name: 'delete_data_store_row', arguments: { row_id: row.id } });
+
+    expect(result.isError).toBeFalsy();
+    const remaining = text(await client.callTool({ name: 'query_data_store', arguments: { store: store.id } }));
+    expect(remaining).toHaveLength(0);
+    const history = storeRepo.rowHistory(row.id, { projectId: 'p1' });
+    expect(history[0]).toMatchObject({ actorKind: 'agent', actorLabel: '⛏️ Gimli', change: { kind: 'delete' } });
+  });
+
+  it('delete_data_store_row on another project\'s row fails exactly like a missing row', async () => {
+    const owner = await connect(scopedToken);
+    const store = await createStore(owner);
+    const [row] = text(await owner.callTool({ name: 'insert_data_store_rows', arguments: { store: store.id, rows: [{}] } }));
+    const stranger = await connect(otherToken);
+
+    const strangerResult = await stranger.callTool({ name: 'delete_data_store_row', arguments: { row_id: row.id } });
+    const missingResult = await stranger.callTool({ name: 'delete_data_store_row', arguments: { row_id: 'does-not-exist' } });
+
+    expect(strangerResult.isError).toBe(true);
+    expect(missingResult.isError).toBe(true);
+    expect((strangerResult.content as { text: string }[])[0]!.text).toBe((missingResult.content as { text: string }[])[0]!.text);
+  });
+
+  it('query_data_store filters, sorts, and limits, defaulting the limit to 100', async () => {
+    const client = await connect(scopedToken);
+    const store = await createStore(client);
+    await client.callTool({ name: 'add_data_store_column', arguments: { store: store.id, display_name: 'priority', column_type: 'number' } });
+    const priorityId = text(await client.callTool({ name: 'describe_data_store', arguments: { store: store.id } })).columns[0].id;
+    await client.callTool({ name: 'insert_data_store_rows', arguments: { store: store.id, rows: [{ [priorityId]: 3 }, { [priorityId]: 1 }, { [priorityId]: 2 }] } });
+
+    const result = text(await client.callTool({
+      name: 'query_data_store',
+      arguments: { store: store.id, where: [{ columnId: priorityId, op: 'gt', value: 1 }], order_by: [{ columnId: priorityId, dir: 'asc' }], limit: 1 },
+    }));
+
+    expect(result.map((r: { data: Record<string, unknown> }) => r.data[priorityId])).toEqual([2]);
+  });
+
+  it('query_data_store refuses a limit over 1000', async () => {
+    const client = await connect(scopedToken);
+    const store = await createStore(client);
+    const result = await client.callTool({ name: 'query_data_store', arguments: { store: store.id, limit: 1001 } });
+    expect(result.isError).toBe(true);
+  });
+
+  it('query_data_store on another project\'s store fails exactly like a missing store', async () => {
+    const owner = await connect(scopedToken);
+    const store = await createStore(owner);
+    const stranger = await connect(otherToken);
+
+    const strangerResult = await stranger.callTool({ name: 'query_data_store', arguments: { store: store.id } });
+    const missingResult = await stranger.callTool({ name: 'query_data_store', arguments: { store: 'does-not-exist' } });
+
+    expect(strangerResult.isError).toBe(true);
+    expect(missingResult.isError).toBe(true);
+    expect((strangerResult.content as { text: string }[])[0]!.text).toBe((missingResult.content as { text: string }[])[0]!.text);
+  });
+});
