@@ -82,3 +82,26 @@ export interface DsView {
   config: DsViewConfig;
   sortOrder: number;
 }
+
+export interface DataStoreDetail extends DataStore {
+  columns: DsColumn[];
+}
+
+export const MAX_ROW_BATCH = 500;
+export const MAX_HISTORY_LIMIT = 500;
+
+export const MAX_STORE_NAME_CHARS = 200;
+
+export const CreateDataStoreRequestSchema = z.object({ projectId: z.string().min(1), displayName: z.string().min(1).max(MAX_STORE_NAME_CHARS) });
+export type CreateDataStoreRequest = z.infer<typeof CreateDataStoreRequestSchema>;
+
+const CellsSchema = z.record(z.string(), z.unknown());
+
+export const InsertRowsRequestSchema = z.object({ projectId: z.string().min(1), rows: z.array(CellsSchema).max(MAX_ROW_BATCH) });
+export type InsertRowsRequest = z.infer<typeof InsertRowsRequestSchema>;
+
+export const UpdateRowsRequestSchema = z.object({
+  projectId: z.string().min(1),
+  updates: z.array(z.object({ rowId: z.string().min(1), patch: CellsSchema })).max(MAX_ROW_BATCH),
+});
+export type UpdateRowsRequest = z.infer<typeof UpdateRowsRequestSchema>;
