@@ -51,7 +51,7 @@ export class RowHistoryComponent {
   readonly columns = input<DsColumn[]>([]);
   readonly heading = input<string | null>(null);
 
-  private readonly columnNameById = computed(() => new Map(this.columns().map((column) => [column.id, column.displayName])));
+  private readonly columnById = computed(() => new Map(this.columns().map((column) => [column.id, column])));
 
   protected formatWhen(createdAt: string): string {
     const isDate = !Number.isNaN(new Date(createdAt).getTime());
@@ -63,12 +63,12 @@ export class RowHistoryComponent {
     if ('kind' in change && change.kind === 'delete') return 'deleted row';
     const fieldChanges = change as Record<string, { from: unknown; to: unknown }>;
     return Object.entries(fieldChanges)
-      .map(([columnId, { from, to }]) => `${this.columnNameById().get(columnId) ?? columnId} ${this.format(columnId, from)} → ${this.format(columnId, to)}`)
+      .map(([columnId, { from, to }]) => `${this.columnById().get(columnId)?.displayName ?? columnId} ${this.format(columnId, from)} → ${this.format(columnId, to)}`)
       .join(', ');
   }
 
   private format(columnId: string, value: unknown): string {
-    const column = this.columns().find((candidate) => candidate.id === columnId);
+    const column = this.columnById().get(columnId);
     const shownValue = column ? displayValue(column, value) : formatValue(value);
     return shownValue === '' ? EMPTY_VALUE : shownValue;
   }

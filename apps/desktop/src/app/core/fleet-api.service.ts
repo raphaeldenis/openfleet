@@ -99,23 +99,23 @@ export class FleetApiService {
   listProjects() { return this.listAllPages<Project>('/api/projects', {}); }
   listDataStores(projectId: string) { return this.listAllPages<DataStore>('/api/data-stores', { projectId }); }
   createDataStore(body: { projectId: string; displayName: string }) { return this.post<DataStore>('/api/data-stores', body); }
-  getDataStore(scope: StoreScope) { return this.call<DataStoreDetail>(`/api/data-stores/${scope.storeId}${queryString({ projectId: scope.projectId })}`); }
+  getDataStore(scope: StoreScope) { return this.call<DataStoreDetail>(`${storePath(scope.storeId)}${queryString({ projectId: scope.projectId })}`); }
   queryDataStore(query: StoreScope & { where?: WhereClause[]; orderBy?: OrderTerm[]; limit?: number; offset?: number }) {
     const { storeId, where, orderBy, ...rest } = query;
     const params = { ...rest, where: where && JSON.stringify(where), orderBy: orderBy && JSON.stringify(orderBy) };
-    return this.call<Page<DsRow>>(`/api/data-stores/${storeId}/rows${queryString(params)}`);
+    return this.call<Page<DsRow>>(`${storePath(storeId)}/rows${queryString(params)}`);
   }
   insertRows(request: StoreScope & { rows: Record<string, unknown>[] }) {
-    return this.post<{ items: DsRow[] }>(`/api/data-stores/${request.storeId}/rows`, { projectId: request.projectId, rows: request.rows });
+    return this.post<{ items: DsRow[] }>(`${storePath(request.storeId)}/rows`, { projectId: request.projectId, rows: request.rows });
   }
   updateRows(request: StoreScope & { updates: { rowId: string; patch: Record<string, unknown> }[] }) {
-    return this.patch<{ items: DsRow[] }>(`/api/data-stores/${request.storeId}/rows`, { projectId: request.projectId, updates: request.updates });
+    return this.patch<{ items: DsRow[] }>(`${storePath(request.storeId)}/rows`, { projectId: request.projectId, updates: request.updates });
   }
   listRowChanges(request: StoreScope & { rowId: string; limit?: number }) {
     const params = { projectId: request.projectId, limit: request.limit };
-    return this.call<{ items: DsRowHistoryEntry[]; total: number }>(`/api/data-stores/${request.storeId}/rows/${request.rowId}/changes${queryString(params)}`);
+    return this.call<{ items: DsRowHistoryEntry[]; total: number }>(`${storePath(request.storeId)}/rows/${encodeURIComponent(request.rowId)}/changes${queryString(params)}`);
   }
-  listViews(scope: StoreScope) { return this.call<{ items: DsView[] }>(`/api/data-stores/${scope.storeId}/views${queryString({ projectId: scope.projectId })}`); }
+  listViews(scope: StoreScope) { return this.call<{ items: DsView[] }>(`${storePath(scope.storeId)}/views${queryString({ projectId: scope.projectId })}`); }
   // --- end data stores ---
 }
 
@@ -125,6 +125,8 @@ export interface Page<T> { items: T[]; total: number; limit: number; offset: num
 export interface DataStoreDetail extends DataStore { columns: DsColumn[] }
 export interface Project { id: string; name: string; docsFolderPath: string | null }
 export interface StoreScope { projectId: string; storeId: string }
+
+const storePath = (storeId: string) => `/api/data-stores/${encodeURIComponent(storeId)}`;
 
 function queryString(params: Record<string, string | number | undefined>): string {
   const presentParams = Object.entries(params).filter((entry): entry is [string, string | number] => entry[1] !== undefined);

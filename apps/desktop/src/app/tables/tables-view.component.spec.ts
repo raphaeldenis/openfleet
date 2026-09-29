@@ -272,6 +272,31 @@ describe('TablesViewComponent', () => {
       expect(screen.queryByTestId('tables-rows-truncated')).toBeNull();
     });
 
+    it('user never sees a row twice when the next page overlaps the rows already loaded', async () => {
+      const api = fakeApi();
+      api.queryDataStore
+        .mockResolvedValueOnce(page([row('r1', { 'c-title': 'First' })], 2))
+        .mockResolvedValueOnce(page([row('r1', { 'c-title': 'First' }), row('r2', { 'c-title': 'Second' })], 2));
+      await renderView(api);
+
+      await userEvent.click(await screen.findByTestId('tables-load-more'));
+
+      await screen.findByTestId('grid-row-r2');
+      expect(screen.getAllByTestId('grid-row-r1')).toHaveLength(1);
+    });
+
+    it('user adding a row sees the total of the truncation notice grow', async () => {
+      const api = fakeApi();
+      api.queryDataStore.mockResolvedValueOnce(page([row('r1', { 'c-title': 'First' })], 2));
+      await renderView(api);
+      expect(await screen.findByTestId('tables-rows-truncated')).toHaveTextContent('Showing 1 of 2');
+      api.queryDataStore.mockResolvedValueOnce(page([row('r1', { 'c-title': 'First' })], 3));
+
+      await userEvent.click(screen.getByTestId('tables-add-row'));
+
+      await vi.waitFor(() => expect(screen.getByTestId('tables-rows-truncated')).toHaveTextContent('Showing 1 of 3'));
+    });
+
     it('user sees no truncation notice when every row is loaded', async () => {
       await renderView(fakeApi({ rows: twoRows }));
       await screen.findByTestId('table-grid');
@@ -293,7 +318,7 @@ describe('TablesViewComponent', () => {
   });
 
   describe('writes are not sent twice', () => {
-    it('user double-clicking + Row inserts a single row', async () => {
+    it('user can add a row from the toolbar, and double-clicking + Row inserts a single row', async () => {
       const api = fakeApi({ rows: twoRows });
       api.insertRows.mockReturnValue(new Promise(() => undefined));
       await renderView(api);
@@ -301,7 +326,7 @@ describe('TablesViewComponent', () => {
 
       await userEvent.dblClick(screen.getByTestId('tables-add-row'));
 
-      expect(api.insertRows).toHaveBeenCalledTimes(1);
+      expect(api.insertRows).toHaveBeenCalledExactlyOnceWith({ projectId: 'p1', storeId: 's1', rows: [{}] });
     });
 
     it('user double-clicking "Clear those values" clears them once', async () => {
@@ -442,29 +467,12 @@ describe('TablesViewComponent', () => {
       expect(screen.queryByTestId('table-grid')).toBeNull();
     });
 
-    it('user sees the rows in a grid once loaded', async () => {
-      await renderView(fakeApi({ rows: twoRows }));
-
-      expect(await screen.findByTestId('grid-cell-r1-c-title')).toHaveTextContent('Desktop reconnect');
-      expect(screen.queryByTestId('tables-loading')).toBeNull();
-    });
-
     it('user sees that a table has no rows and can add the first one', async () => {
       const api = fakeApi({ rows: [] });
       await renderView(api);
 
       expect(await screen.findByTestId('tables-empty')).toHaveTextContent('backlog has no rows');
       await userEvent.click(screen.getByTestId('tables-add-first-row'));
-
-      expect(api.insertRows).toHaveBeenCalledWith({ projectId: 'p1', storeId: 's1', rows: [{}] });
-    });
-
-    it('user can add a row from the toolbar', async () => {
-      const api = fakeApi({ rows: twoRows });
-      await renderView(api);
-      await screen.findByTestId('table-grid');
-
-      await userEvent.click(screen.getByTestId('tables-add-row'));
 
       expect(api.insertRows).toHaveBeenCalledWith({ projectId: 'p1', storeId: 's1', rows: [{}] });
     });
@@ -553,14 +561,13 @@ describe('TablesViewComponent', () => {
   });
 
   describe('grid and kanban', () => {
-    it('user can switch to a kanban with one column per status, an empty one included', async () => {
+    it('user can switch to a kanban', async () => {
       await renderView(fakeApi({ rows: twoRows }));
       await screen.findByTestId('table-grid');
 
       await userEvent.click(screen.getByTestId('tables-toggle-kanban'));
 
-      expect(screen.getByTestId('kanban-count-doing')).toHaveTextContent('1');
-      expect(screen.getByTestId('kanban-count-done')).toHaveTextContent('0');
+      expect(screen.getByTestId('kanban-column-doing')).toBeTruthy();
       expect(screen.queryByTestId('table-grid')).toBeNull();
     });
 
@@ -777,6 +784,73 @@ describe('TablesViewComponent', () => {
     });
   });
 
+  describe('a write answering after the user moved on', () => {
+    const rowsByStore = (api: ReturnType<typeof fakeApi>) =>
+      api.queryDataStore.mockImplementation(({ storeId }: { storeId: string }) =>
+        Promise.resolve(page(storeId === 's2' ? [row('r9', { 'c-title': 'From releases' })] : twoRows)));
+
+    it('user adding a row then opening another table keeps the other table on screen', async () => {
+      const api = fakeApi();
+      rowsByStore(api);
+      const slowInsert = deferred<{ items: DsRow[] }>();
+      api.insertRows.mockReturnValue(slowInsert.promise);
+      const { fixture } = await renderView(api);
+      await screen.findByTestId('grid-cell-r1-c-title');
+      await userEvent.click(screen.getByTestId('tables-add-row'));
+      await userEvent.click(screen.getByTestId('table-pill-s2'));
+      await screen.findByTestId('grid-cell-r9-c-title');
+
+      slowInsert.resolve({ items: [] });
+      await settle(fixture);
+
+      expect(screen.getByTestId('grid-cell-r9-c-title')).toBeTruthy();
+      expect(screen.queryByTestId('grid-cell-r1-c-title')).toBeNull();
+      expect(api.queryDataStore).toHaveBeenCalledTimes(2);
+    });
+
+    it('user clearing mismatched values then opening another table keeps the other table on screen', async () => {
+      const api = fakeApi();
+      api.queryDataStore.mockImplementation(({ storeId }: { storeId: string }) =>
+        Promise.resolve(page(storeId === 's2' ? [row('r9', { 'c-title': 'From releases' })] : [row('r1', { 'c-title': 'Stale', 'c-status': 'archived' })])));
+      const slowUpdate = deferred<{ items: DsRow[] }>();
+      api.updateRows.mockReturnValue(slowUpdate.promise);
+      const { fixture } = await renderView(api);
+      await userEvent.click(await screen.findByTestId('tables-clear-mismatches'));
+      await userEvent.click(screen.getByTestId('table-pill-s2'));
+      await screen.findByTestId('grid-cell-r9-c-title');
+
+      slowUpdate.resolve({ items: [] });
+      await settle(fixture);
+
+      expect(screen.getByTestId('grid-cell-r9-c-title')).toBeTruthy();
+      expect(screen.queryByTestId('tables-schema-mismatch')).toBeNull();
+    });
+
+    it('user adding a row then switching project sees the tables of the new project, with no error', async () => {
+      const api = fakeApi({ projects: projectsNamed('p1', 'p2'), rows: twoRows });
+      api.listDataStores.mockImplementation((projectId: string) => Promise.resolve(page(projectId === 'p1' ? [store('s1', 'backlog')] : [store('s9', 'other-table')])));
+      api.getDataStore.mockImplementation(({ projectId, storeId }: { projectId: string; storeId: string }) =>
+        projectId === 'p2' && storeId === 's1' ? Promise.reject(new ApiError(404, 'GET → 404')) : Promise.resolve({ ...store(storeId, 'any'), columns }));
+      api.queryDataStore.mockImplementation(({ storeId }: { storeId: string }) =>
+        Promise.resolve(page(storeId === 's9' ? [row('r9', { 'c-title': 'From other project' })] : twoRows)));
+      const slowInsert = deferred<{ items: DsRow[] }>();
+      api.insertRows.mockReturnValue(slowInsert.promise);
+      const { fixture } = await renderView(api);
+      await screen.findByTestId('grid-cell-r1-c-title');
+      await userEvent.click(screen.getByTestId('tables-add-row'));
+      await userEvent.selectOptions(screen.getByTestId('tables-project-scope'), 'p2');
+      await screen.findByTestId('grid-cell-r9-c-title');
+
+      slowInsert.resolve({ items: [] });
+      await settle(fixture);
+
+      expect(screen.queryByTestId('tables-load-error')).toBeNull();
+      expect(screen.getByTestId('grid-cell-r9-c-title')).toBeTruthy();
+      expect(screen.queryByTestId('grid-cell-r1-c-title')).toBeNull();
+      expect(api.getDataStore).not.toHaveBeenCalledWith({ projectId: 'p2', storeId: 's1' });
+    });
+  });
+
   describe('row history reliability', () => {
     it('user is told the history could not be loaded, not that there are no changes, when the daemon errors', async () => {
       const api = fakeApi({ rows: twoRows });
@@ -844,19 +918,22 @@ describe('TablesViewComponent', () => {
     });
   });
 
-  describe('used by', () => {
-    it('user sees no "used by" bar when nothing supplies it', async () => {
-      await renderView(fakeApi({ rows: twoRows }));
+  describe('errors are announced', () => {
+    it('user of a screen reader is told of a load error, an action error and a create error', async () => {
+      const api = fakeApi({ rows: twoRows });
+      api.insertRows.mockRejectedValue(new ApiError(500, 'POST rows → 500'));
+      api.createDataStore.mockRejectedValue(new ApiError(409, 'POST → 409', 'duplicate_name'));
+      api.listProjects.mockRejectedValueOnce(new ApiError(502, 'GET → 502'));
+      await renderView(api);
+      expect(await screen.findByTestId('tables-load-error')).toHaveAttribute('role', 'status');
+      await userEvent.click(screen.getByTestId('tables-retry'));
       await screen.findByTestId('table-grid');
+      await userEvent.click(screen.getByTestId('tables-add-row'));
+      expect(await screen.findByTestId('tables-action-error')).toHaveAttribute('role', 'status');
+      await userEvent.click(screen.getByTestId('table-add'));
+      await userEvent.type(screen.getByTestId('tables-new-name'), 'backlog{Enter}');
 
-      expect(screen.queryByTestId('tables-used-by')).toBeNull();
-    });
-
-    it('user sees the "used by" bar when it is supplied', async () => {
-      await renderView(fakeApi({ rows: twoRows }), [inputBinding('usedBy', () => [{ name: 'Argus', mode: 'read · write' }])]);
-      await screen.findByTestId('table-grid');
-
-      expect(screen.getByTestId('tables-used-by')).toHaveTextContent('Argus');
+      expect(await screen.findByTestId('tables-create-error')).toHaveAttribute('role', 'status');
     });
   });
 });

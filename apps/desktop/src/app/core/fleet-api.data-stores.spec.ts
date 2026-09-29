@@ -123,6 +123,12 @@ describe('FleetApiService data stores', () => {
     expect(lastRequest().query.get('projectId')).toBe('p1');
   });
 
+  it('keeps a store id and a row id with reserved characters inside their path segment', async () => {
+    await api.listRowChanges({ projectId: 'p1', storeId: 's/1?', rowId: 'r/1#' });
+
+    expect(lastRequest().path).toBe('/api/data-stores/s%2F1%3F/rows/r%2F1%23/changes');
+  });
+
   it('lists the views of a data store', async () => {
     await api.listViews({ projectId: 'p1', storeId: 's1' });
 

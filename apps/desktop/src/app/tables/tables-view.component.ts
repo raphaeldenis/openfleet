@@ -3,21 +3,15 @@ import type { DataStore, DsColumn, DsRow, DsRowHistoryEntry, DsView } from '@ope
 import { ApiError, FleetApiService, type Project } from '../core/fleet-api.service';
 import { RowHistoryComponent } from './row-history.component';
 import { TableGridComponent } from './table-grid.component';
-import { cellText, sortedColumns } from './table-cells';
+import { isBlank, selectColumnsWithOptions, titleOf } from './table-cells';
 import { NO_VALUE_GROUP_ID, TableKanbanComponent, type KanbanGroup } from './table-kanban.component';
 import { TableListComponent } from './table-list.component';
 
-export interface UsedByEntry {
-  name: string;
-  mode: string;
-  tip?: string;
-}
-
-type TableStatus = 'loading' | 'ready';
 type LoadTarget = 'projects' | 'stores' | 'table';
 interface LoadFailure { target: LoadTarget; reason: string }
 type LoadFailures = Partial<Record<LoadTarget, string>>;
 interface TableLoadOptions { keepsSelection?: boolean }
+interface StoreScope { projectId: string; storeId: string }
 type ViewMode = 'grid' | 'kanban';
 interface Mismatch { rowId: string; column: DsColumn }
 
@@ -40,7 +34,6 @@ const describeCreateFailure = (error: unknown, displayName: string): string => {
   if (code === 'invalid_body') return `The table name is not valid (1 to ${TABLE_NAME_MAX_LENGTH} characters).`;
   return 'Could not create the table.';
 };
-const isBlank = (value: unknown) => value === undefined || value === null || value === '';
 
 @Component({
   selector: 'of-tables-view',
@@ -70,28 +63,19 @@ const isBlank = (value: unknown) => value === undefined || value === null || val
         <input class="of-input" data-testid="tables-new-name" aria-label="Table name" [attr.maxlength]="tableNameMaxLength" placeholder="Table name" [value]="newTableName()" (input)="newTableName.set($any($event.target).value)" />
         <button type="submit" class="of-btn of-btn--primary compact" data-testid="tables-create" [disabled]="newTableName().trim() === ''">Create</button>
         @if (createError(); as message) {
-          <span class="create-error" data-testid="tables-create-error">{{ message }}</span>
+          <span class="create-error" role="status" data-testid="tables-create-error">{{ message }}</span>
         }
       </form>
     }
 
-    @if (usedBy(); as entries) {
-      <div class="used-by" data-testid="tables-used-by">
-        <span>Used by</span>
-        @for (entry of entries; track entry.name) {
-          <span class="used-by-entry" [attr.title]="entry.tip">{{ entry.name }} <span class="mode">{{ entry.mode }}</span></span>
-        }
-      </div>
-    }
-
     @if (actionError(); as message) {
-      <div class="action-error" data-testid="tables-action-error">{{ message }}</div>
+      <div class="action-error" role="status" data-testid="tables-action-error">{{ message }}</div>
     }
 
     <div class="body">
       <div class="main">
         @if (loadFailure(); as failure) {
-          <div class="card" data-testid="tables-load-error">
+          <div class="card" role="status" data-testid="tables-load-error">
             <span class="card-title">✕ {{ failureTitle() }}</span>
             <span class="muted">{{ failure.reason }}</span>
             <div class="actions"><button type="button" class="of-btn of-btn--secondary compact" data-testid="tables-retry" (click)="retry()">Retry</button></div>
@@ -106,7 +90,7 @@ const isBlank = (value: unknown) => value === undefined || value === null || val
             <span class="message-title">No tables yet</span>
             <span>Use + to create the first one.</span>
           </div>
-        } @else if (status() === 'loading') {
+        } @else if (isLoadingTable()) {
           <div class="skeleton" data-testid="tables-loading">
             @for (bar of skeletonBars; track bar) {
               <div class="skeleton-row"></div>
@@ -183,12 +167,6 @@ const isBlank = (value: unknown) => value === undefined || value === null || val
     .create-table { flex: none; display: flex; align-items: center; gap: .5rem; padding: .5rem 1rem; border-bottom: 1px solid var(--line) }
     .create-error, .action-error { color: var(--state-error); font-size: .75rem }
     .action-error { flex: none; padding: .375rem 1rem; border-bottom: 1px solid var(--line) }
-    .used-by {
-      flex: none; min-width: 0; display: flex; align-items: center; flex-wrap: wrap; gap: .375rem .5rem;
-      padding: .4375rem 1rem; border-bottom: 1px solid var(--line); font-size: .75rem; color: var(--mut);
-    }
-    .used-by-entry { display: flex; align-items: center; gap: .25rem; padding: 0 .4375rem; border: 1px solid var(--line); border-radius: .25rem; background: var(--panel); color: var(--fg); white-space: nowrap }
-    .mode { font-family: var(--mono); font-size: .625rem; color: var(--faint) }
     .body { flex: 1; min-height: 0; display: flex }
     .main { flex: 1; min-width: 0; overflow: auto; padding: 1rem }
     .skeleton { display: flex; flex-direction: column; gap: .5rem }
@@ -214,8 +192,6 @@ const isBlank = (value: unknown) => value === undefined || value === null || val
 export class TablesViewComponent {
   /** Bound from the `projectId` query parameter; overrides the default project. */
   readonly projectId = input<string | undefined>(undefined);
-  /** Renders the "Used by" bar only when supplied. */
-  readonly usedBy = input<UsedByEntry[] | undefined>(undefined);
 
   private readonly api = inject(FleetApiService);
   private readonly injector = inject(Injector);
@@ -230,7 +206,7 @@ export class TablesViewComponent {
   protected readonly rows = signal<DsRow[]>([]);
   protected readonly rowTotal = signal(0);
   protected readonly views = signal<DsView[]>([]);
-  protected readonly status = signal<TableStatus>('loading');
+  protected readonly isLoadingTable = signal(true);
   protected readonly viewMode = signal<ViewMode>('grid');
   protected readonly selectedRowId = signal<string | null>(null);
   protected readonly history = signal<DsRowHistoryEntry[]>([]);
@@ -264,11 +240,11 @@ export class TablesViewComponent {
     if (target === 'stores') return 'Could not load the tables';
     return `Could not load “${this.activeStoreName()}”`;
   });
-  protected readonly hasMoreRows = computed(() => this.status() === 'ready' && this.loadFailure() === null && this.rows().length < this.rowTotal());
+  protected readonly hasMoreRows = computed(() => !this.isLoadingTable() && this.loadFailure() === null && this.rows().length < this.rowTotal());
   protected readonly activeStoreName = computed(() => this.stores().find((store) => store.id === this.activeStoreId())?.displayName ?? '');
 
   private readonly mismatches = computed<Mismatch[]>(() => {
-    const constrainedColumns = this.columns().filter((column) => column.columnType === 'select' && column.options);
+    const constrainedColumns = selectColumnsWithOptions(this.columns());
     return this.rows().flatMap((row) =>
       constrainedColumns
         .filter((column) => {
@@ -288,7 +264,7 @@ export class TablesViewComponent {
   });
 
   private readonly groupColumn = computed(() => {
-    const selectColumns = sortedColumns(this.columns()).filter((column) => column.columnType === 'select' && column.options);
+    const selectColumns = selectColumnsWithOptions(this.columns());
     const kanbanView = this.views().find((view) => view.viewType === 'kanban' && view.config.groupByColumnId);
     const viewGroupColumn = selectColumns.find((column) => column.id === kanbanView?.config.groupByColumnId);
     return viewGroupColumn ?? selectColumns[0];
@@ -304,8 +280,7 @@ export class TablesViewComponent {
   });
   protected readonly selectedRowTitle = computed(() => {
     const selectedRow = this.rows().find((row) => row.id === this.selectedRowId());
-    const [titleColumn] = sortedColumns(this.columns()).filter((column) => column.columnType === 'text');
-    return selectedRow && titleColumn ? cellText(titleColumn, selectedRow) : null;
+    return selectedRow ? titleOf(this.columns(), selectedRow) || null : null;
   });
 
   constructor() {
@@ -321,20 +296,22 @@ export class TablesViewComponent {
   }
 
   protected openStore(storeId: string): void {
+    const projectId = this.activeProjectId();
+    if (!projectId) return;
     this.actionError.set(null);
-    void this.loadTable(storeId);
+    void this.loadTable({ projectId, storeId });
   }
 
   protected retry(): void {
     const failures = this.loadFailures();
-    const storeId = this.activeStoreId();
+    const scope = this.currentScope();
     const projectId = this.activeProjectId();
     const mustReloadProjects = failures.projects !== undefined;
     const mustReloadStores = failures.stores !== undefined && projectId !== undefined;
-    const mustReloadTable = failures.table !== undefined && storeId !== null;
+    const mustReloadTable = failures.table !== undefined && scope !== null;
     if (mustReloadProjects) void this.loadProjects();
     if (mustReloadStores) void this.loadStores(projectId);
-    else if (mustReloadTable) void this.loadTable(storeId);
+    else if (mustReloadTable) void this.loadTable(scope);
   }
 
   protected viewRowsAnyway(): void {
@@ -342,24 +319,14 @@ export class TablesViewComponent {
   }
 
   protected async clearMismatchedValues(): Promise<void> {
-    const scope = this.currentScope();
-    if (!scope) return;
     const patchesByRow = new Map<string, Record<string, unknown>>();
     for (const { rowId, column } of this.mismatches()) patchesByRow.set(rowId, { ...patchesByRow.get(rowId), [column.id]: null });
     const updates = [...patchesByRow].map(([rowId, patch]) => ({ rowId, patch }));
-    await this.runAction('clear-mismatches', async () => {
-      await this.api.updateRows({ ...scope, updates });
-      await this.loadTable(scope.storeId, { keepsSelection: true });
-    });
+    await this.writeThenReload('clear-mismatches', (scope) => this.api.updateRows({ ...scope, updates }));
   }
 
   protected async addRow(): Promise<void> {
-    const scope = this.currentScope();
-    if (!scope) return;
-    await this.runAction('add-row', async () => {
-      await this.api.insertRows({ ...scope, rows: [{}] });
-      await this.loadTable(scope.storeId, { keepsSelection: true });
-    });
+    await this.writeThenReload('add-row', (scope) => this.api.insertRows({ ...scope, rows: [{}] }));
   }
 
   protected async loadMoreRows(): Promise<void> {
@@ -369,7 +336,10 @@ export class TablesViewComponent {
     await this.runAction('load-more', async () => {
       const rowPage = await this.api.queryDataStore({ ...scope, limit: ROWS_PAGE_LIMIT, offset: this.rows().length });
       if (request !== this.latestTableRequest) return;
-      this.rows.update((loadedRows) => [...loadedRows, ...rowPage.items]);
+      this.rows.update((loadedRows) => {
+        const loadedIds = new Set(loadedRows.map((loadedRow) => loadedRow.id));
+        return [...loadedRows, ...rowPage.items.filter((item) => !loadedIds.has(item.id))];
+      });
       this.rowTotal.set(rowPage.total);
     }, 'More rows could not be loaded.');
   }
@@ -392,14 +362,11 @@ export class TablesViewComponent {
     this.actionsInFlight.add('create-table');
     try {
       const created = await this.api.createDataStore({ projectId, displayName });
-      const projectChangedMeanwhile = this.activeProjectId() !== projectId;
-      if (projectChangedMeanwhile) {
-        this.isCreatingTable.set(false);
-        return;
-      }
-      this.stores.update((stores) => [...stores, created]);
       this.isCreatingTable.set(false);
-      await this.loadTable(created.id);
+      const projectChangedMeanwhile = this.activeProjectId() !== projectId;
+      if (projectChangedMeanwhile) return;
+      this.stores.update((stores) => [...stores, created]);
+      await this.loadTable({ projectId, storeId: created.id });
     } catch (error) {
       this.createError.set(describeCreateFailure(error, displayName));
     } finally {
@@ -431,10 +398,22 @@ export class TablesViewComponent {
     rowElements.find((element) => element.dataset['rowId'] === closedRowId)?.focus();
   }
 
-  private currentScope(): { projectId: string; storeId: string } | null {
+  private currentScope(): StoreScope | null {
     const projectId = this.activeProjectId();
     const storeId = this.activeStoreId();
     return projectId && storeId ? { projectId, storeId } : null;
+  }
+
+  private async writeThenReload(name: string, write: (scope: StoreScope) => Promise<unknown>): Promise<void> {
+    const scope = this.currentScope();
+    if (!scope) return;
+    const request = this.latestTableRequest;
+    await this.runAction(name, async () => {
+      await write(scope);
+      const userLeftTheTable = request !== this.latestTableRequest;
+      if (userLeftTheTable) return;
+      await this.loadTable(scope, { keepsSelection: true });
+    });
   }
 
   private async runAction(name: string, action: () => Promise<void>, failureMessage = 'That change could not be saved.'): Promise<void> {
@@ -480,7 +459,7 @@ export class TablesViewComponent {
     this.hasLoadedStores.set(false);
     this.stores.set([]);
     this.actionError.set(null);
-    this.status.set('loading');
+    this.isLoadingTable.set(true);
     this.activeStoreId.set(null);
     this.selectedRowId.set(null);
     try {
@@ -488,18 +467,16 @@ export class TablesViewComponent {
       if (request !== this.latestStoresRequest) return;
       this.stores.set(items);
       this.hasLoadedStores.set(true);
-      if (items[0]) await this.loadTable(items[0].id);
+      if (items[0]) await this.loadTable({ projectId, storeId: items[0].id });
     } catch (error) {
       if (request === this.latestStoresRequest) this.recordFailure('stores', error);
     }
   }
 
-  private async loadTable(storeId: string, { keepsSelection = false }: TableLoadOptions = {}): Promise<void> {
-    const projectId = this.activeProjectId();
-    if (!projectId) return;
+  private async loadTable({ projectId, storeId }: StoreScope, { keepsSelection = false }: TableLoadOptions = {}): Promise<void> {
     const request = ++this.latestTableRequest;
     this.activeStoreId.set(storeId);
-    this.status.set('loading');
+    this.isLoadingTable.set(true);
     this.clearFailureOf('table');
     this.ignoresMismatches.set(false);
     if (!keepsSelection) this.selectedRowId.set(null);
@@ -514,7 +491,7 @@ export class TablesViewComponent {
       this.rows.set(rowPage.items);
       this.rowTotal.set(rowPage.total);
       this.views.set(viewList.items);
-      this.status.set('ready');
+      this.isLoadingTable.set(false);
     } catch (error) {
       if (request === this.latestTableRequest) this.recordFailure('table', error);
     }

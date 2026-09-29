@@ -1,6 +1,6 @@
-import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
+import { ChangeDetectionStrategy, Component, input, output } from '@angular/core';
 import type { DsColumn, DsRow, SelectOption } from '@openfleet/shared';
-import { cellText, sortedColumns } from './table-cells';
+import { cellText, textColumns, titleOf } from './table-cells';
 
 export const NO_VALUE_GROUP_ID = '__no_value__';
 
@@ -66,15 +66,10 @@ export class TableKanbanComponent {
   readonly selectedRowId = input<string | null>(null);
   readonly rowSelected = output<string>();
 
-  private readonly textColumns = computed(() => sortedColumns(this.columns()).filter((column) => column.columnType === 'text'));
-
-  protected titleOf(row: DsRow): string {
-    const [titleColumn] = this.textColumns();
-    return titleColumn ? cellText(titleColumn, row) : '';
-  }
+  protected readonly titleOf = (row: DsRow) => titleOf(this.columns(), row);
 
   protected detailsOf(row: DsRow): string {
-    const [, ...detailColumns] = this.textColumns();
+    const [, ...detailColumns] = textColumns(this.columns());
     return detailColumns.map((column) => cellText(column, row)).filter(Boolean).join(' · ');
   }
 }

@@ -89,6 +89,13 @@ describe('TableGridComponent', () => {
     expect(rowSelected).toHaveBeenCalledExactlyOnceWith('r1');
   });
 
+  it('user of a screen reader navigates a grid whose rows can be selected', async () => {
+    await render(TableGridComponent, { bindings: bindings() });
+
+    expect(screen.getByTestId('table-grid')).toHaveAttribute('role', 'grid');
+    expect(screen.getByTestId('grid-cell-r1-c-title')).toHaveAttribute('role', 'gridcell');
+  });
+
   it('user can tell which row is open', async () => {
     await render(TableGridComponent, {
       bindings: [...bindings(), inputBinding('selectedRowId', () => 'r1')],

@@ -6,7 +6,7 @@ import { cellText, sortedColumns } from './table-cells';
   selector: 'of-table-grid',
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <div class="grid" role="table" data-testid="table-grid">
+    <div class="grid" role="grid" data-testid="table-grid">
       <div class="header" role="row">
         @for (column of orderedColumns(); track column.id) {
           <span class="cell" role="columnheader" [attr.data-testid]="'grid-header-' + column.id">{{ column.displayName }}</span>
@@ -29,7 +29,7 @@ import { cellText, sortedColumns } from './table-cells';
           (keydown.arrowup)="focusNeighbour($event, 'previous')"
         >
           @for (column of orderedColumns(); track column.id) {
-            <span class="cell" role="cell" [attr.data-testid]="'grid-cell-' + row.id + '-' + column.id">{{ text(column, row) }}</span>
+            <span class="cell" role="gridcell" [attr.data-testid]="'grid-cell-' + row.id + '-' + column.id">{{ text(column, row) }}</span>
           }
         </div>
       }

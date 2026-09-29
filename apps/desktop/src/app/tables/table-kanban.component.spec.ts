@@ -33,18 +33,13 @@ const bindings = (extra: ReturnType<typeof outputBinding>[] = []) => [
 ];
 
 describe('TableKanbanComponent', () => {
-  it('user sees one column per option, titled with the option label and its card count', async () => {
+  it('user sees one column per option, titled with the option label and its card count, an empty one included', async () => {
     await render(TableKanbanComponent, { bindings: bindings() });
 
     expect(screen.getByTestId('kanban-column-todo')).toHaveTextContent('todo');
     expect(screen.getByTestId('kanban-count-todo')).toHaveTextContent('2');
     expect(screen.getByTestId('kanban-column-doing')).toHaveTextContent('in progress');
     expect(screen.getByTestId('kanban-count-doing')).toHaveTextContent('1');
-  });
-
-  it('user still sees the column of an empty bucket, with a count of 0', async () => {
-    await render(TableKanbanComponent, { bindings: bindings() });
-
     expect(screen.getByTestId('kanban-column-done')).toHaveTextContent('done');
     expect(screen.getByTestId('kanban-count-done')).toHaveTextContent('0');
     expect(screen.queryAllByTestId(/^kanban-card-/)).toHaveLength(3);

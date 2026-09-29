@@ -1,10 +1,15 @@
 import type { DsColumn, DsRow } from '@openfleet/shared';
 
-const isBlank = (value: unknown) => value === undefined || value === null || value === '';
+export const isBlank = (value: unknown) => value === undefined || value === null || value === '';
 
 export function sortedColumns(columns: DsColumn[]): DsColumn[] {
   return [...columns].sort((left, right) => left.sortOrder - right.sortOrder);
 }
+
+export const textColumns = (columns: DsColumn[]): DsColumn[] => sortedColumns(columns).filter((column) => column.columnType === 'text');
+
+export const selectColumnsWithOptions = (columns: DsColumn[]): DsColumn[] =>
+  sortedColumns(columns).filter((column) => column.columnType === 'select' && column.options);
 
 export function displayValue(column: DsColumn, value: unknown): string {
   if (isBlank(value)) return '';
@@ -18,4 +23,9 @@ export function displayValue(column: DsColumn, value: unknown): string {
 
 export function cellText(column: DsColumn, row: DsRow): string {
   return displayValue(column, row.data[column.id]);
+}
+
+export function titleOf(columns: DsColumn[], row: DsRow): string {
+  const [titleColumn] = textColumns(columns);
+  return titleColumn ? cellText(titleColumn, row) : '';
 }
