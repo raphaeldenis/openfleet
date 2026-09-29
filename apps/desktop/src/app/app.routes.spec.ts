@@ -28,6 +28,7 @@ function configureTestBed() {
           sendInput: () => {},
           sendResize: () => {},
           sendAttach: () => {},
+          dropQueuedSendsFor: () => {},
         },
       },
     ],

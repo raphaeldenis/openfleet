@@ -1,6 +1,6 @@
 import type { ServerResponse } from 'node:http';
 import type { ManagerSpec, SessionSpec } from '@openfleet/shared';
-import { PERMISSION_MODES, SessionSpecSchema } from '@openfleet/shared';
+import { ModelIdSchema, PERMISSION_MODES, SessionSpecSchema } from '@openfleet/shared';
 import { z } from 'zod';
 import { ApprovalError, type ApprovalService } from '../governance/approvalService.js';
 import type { FakeHandle } from '../harness/fakeHarness.js';
@@ -118,7 +118,7 @@ export function registerRestRoutes(router: Router, deps: { sessions: SessionServ
 
   router.add('POST', '/api/sessions/:id/model', ({ res, params, body }) => {
     if (!deps.sessions.get(params.id!)) return json(res, 404, { error: 'not_found' });
-    const { model } = z.object({ model: z.string().min(1) }).parse(body);
+    const { model } = z.object({ model: ModelIdSchema }).parse(body);
     respondToLifecycleErrors(res, () => json(res, 200, deps.sessions.updateModel(params.id!, resolveModel(deps.modelTable, model))));
   });
 

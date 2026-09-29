@@ -1,3 +1,4 @@
+import { ModelIdSchema } from '@openfleet/shared';
 import { randomUUID } from 'node:crypto';
 import { closeSync, existsSync, fchmodSync, fsyncSync, openSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -28,14 +29,10 @@ export async function listAvailableModels(): Promise<string[]> {
   return [...KNOWN_MODELS];
 }
 
-const MAX_MODEL_ID_LENGTH = 100;
-const MODEL_ID_CHARACTERS = /^[A-Za-z0-9][A-Za-z0-9._:[\]-]*$/;
-
 const ModelId = z.string().trim().min(1);
-const ModelIdToSave = ModelId.max(MAX_MODEL_ID_LENGTH).regex(MODEL_ID_CHARACTERS);
 
 export const ModelTablePatchSchema = z
-  .strictObject({ haiku: ModelIdToSave.optional(), sonnet: ModelIdToSave.optional(), opus: ModelIdToSave.optional(), fable: ModelIdToSave.optional() })
+  .strictObject({ haiku: ModelIdSchema.optional(), sonnet: ModelIdSchema.optional(), opus: ModelIdSchema.optional(), fable: ModelIdSchema.optional() })
   .refine((patch) => Object.keys(patch).length > 0, { message: 'at least one rung is required' });
 
 export type ModelTablePatch = z.infer<typeof ModelTablePatchSchema>;

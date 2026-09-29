@@ -1,4 +1,4 @@
-import { MANAGER_ROLE, PERMISSION_MODES, type Approval, type ManagerSpec, type Session } from '@openfleet/shared';
+import { MANAGER_ROLE, ModelIdSchema, PERMISSION_MODES, type Approval, type ManagerSpec, type Session } from '@openfleet/shared';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { existsSync, realpathSync } from 'node:fs';
 import { z } from 'zod';
@@ -103,7 +103,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
   });
 
   server.registerTool('create_session', { description: 'Spawn a child coding session in a directory (use create_worktree first)', inputSchema: {
-    directory: z.string(), name: z.string().min(1), emoji: z.string().optional(), model: z.string().optional(),
+    directory: z.string(), name: z.string().min(1), emoji: z.string().optional(), model: ModelIdSchema.optional(),
     seeded_prompt: z.string().optional(), role: z.string().optional(), permission_mode: z.enum(PERMISSION_MODES).optional(),
     manager: z.object({ pulse_seconds: z.number().int().positive(), children_cap: z.number().int().positive(), mission: z.string().min(1) }).optional(),
   } }, async (input) => {
@@ -166,7 +166,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     return ok(child);
   });
 
-  server.registerTool('update_session', { description: "Change the model of yourself or one of your children (a rung name like 'opus' or an exact model id)", inputSchema: { session_id: z.string().optional(), model: z.string().min(1) } }, async ({ session_id, model }) => {
+  server.registerTool('update_session', { description: "Change the model of yourself or one of your children (a rung name like 'opus' or an exact model id)", inputSchema: { session_id: z.string().optional(), model: ModelIdSchema } }, async ({ session_id, model }) => {
     const targetId = session_id ?? caller.id;
     if (targetId !== caller.id) {
       const target = sessions.get(targetId);

@@ -105,6 +105,24 @@ describe('buildClaudeLaunchConfig', () => {
     expect(config.args).not.toContain('--permission-mode');
   });
 
+  it.each([
+    ['a flag-shaped id', '--x'],
+    ['a short-flag-shaped id', '-p'],
+    ['an id with a space inside', 'a b'],
+    ['an id with a newline inside', 'a\nb'],
+  ])('refuses to spawn with a model that is %s, in case an invalid id slipped past every REST/MCP check', (_label, model) => {
+    expect(() => buildClaudeLaunchConfig({ ...launch, model })).toThrow();
+  });
+
+  it.each(['claude-haiku-4-5', 'claude-haiku-4-5-20251001', 'claude-sonnet-5', 'claude-opus-5-5', 'claude-opus-5-5[1m]', 'claude-fable-5-1'])(
+    'passes --model %s through for every real id in the model table',
+    (model) => {
+      const config = buildClaudeLaunchConfig({ ...launch, model });
+      const flagIndex = config.args.indexOf('--model');
+      expect(config.args[flagIndex + 1]).toBe(model);
+    },
+  );
+
   it('refuses to resume with an empty session id, so the CLI never opens its interactive picker inside the PTY', () => {
     expect(() => buildClaudeLaunchConfig({ ...launch, resuming: true, sessionId: '' })).toThrow();
   });
