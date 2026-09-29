@@ -36,17 +36,22 @@ const FALLBACK_RUNG = 'sonnet';
             <span data-testid="cli-version">CLI {{ current.cliVersion }}</span>
           }
           @if (current.modelDriftedFrom) {
-            <span data-testid="model-drift">changed from {{ current.modelDriftedFrom }}</span>
+            <span class="drift">
+              <span class="drift-icon" aria-hidden="true">⚠</span>
+              <span class="drift-text" data-testid="model-drift">changed from {{ current.modelDriftedFrom }}</span>
+            </span>
           }
         </div>
       }
     </div>
   `,
   styles: `
-    .model-selector { display: flex; flex-wrap: wrap; align-items: center; gap: .375rem; }
-    .resolution { flex-basis: 100%; display: flex; gap: .5rem; font-family: var(--mono); font-size: .6875rem; color: var(--mut); }
+    .model-selector { display: flex; flex-wrap: wrap; align-items: center; gap: .375rem; min-width: 0; }
+    .resolution { flex-basis: 100%; min-width: 0; display: flex; flex-wrap: wrap; gap: .125rem .5rem; font-family: var(--mono); font-size: .6875rem; color: var(--mut); overflow-wrap: anywhere; }
     .resolution:empty { display: none; }
-    .current { font-family: var(--mono); font-size: .75rem; }
+    .drift { display: inline-flex; gap: .25rem; min-width: 0; color: var(--fg); }
+    .drift-icon { color: var(--state-waiting-permission); }
+    .current { font-family: var(--mono); font-size: .75rem; min-width: 0; overflow-wrap: anywhere; }
     .switch-status { font-size: .6875rem; color: var(--state-waiting-permission); }
   `,
 })
