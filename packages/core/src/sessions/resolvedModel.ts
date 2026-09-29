@@ -15,7 +15,7 @@ interface ResolvedModel { resolvedModel: string; cliVersion: string }
 export function readTranscriptTail(path: string): string {
   let descriptor: number;
   try {
-    descriptor = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK);
+    descriptor = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK | (constants.O_NOFOLLOW ?? 0));
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return '';
     throw err;

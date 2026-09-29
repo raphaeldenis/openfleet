@@ -170,6 +170,8 @@ function nearestExistingAncestor(path: string): { existingAncestor: string; unbo
 // to the nearest existing ancestor and resolves the still-unborn segments against that ancestor's realpath
 // instead. Never throws: a missing file, missing directory, or missing projects directory is just
 // "untrusted".
+const CLI_SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function isTrustedTranscriptPath(path: string): boolean {
   if (!path.endsWith('.jsonl')) return false;
   if (!isAbsolute(path) || normalize(path) !== path) return false;
@@ -260,6 +262,9 @@ export class SessionService {
   // Last transcript_path any hook reported for this session — the only way an ESC-armed watch below
   // knows which file to tail.
   private readonly transcriptPaths = new Map<string, string>();
+  // The CLI session id whose transcript belongs to this session's process: the launch id until a SessionStart
+  // hook reports another one (a /clear starts a new CLI session inside the same process). Absent = launch id.
+  private readonly currentCliSessionIds = new Map<string, string>();
   private readonly interruptWatches = new Map<string, InterruptWatch>();
   // Presence means "this launch has no recorded resolved model yet"; the value is the launch's start time
   // and whether its recording failure was already logged.
@@ -505,7 +510,10 @@ export class SessionService {
         this.markClosed(sessionId, undefined);
         return;
       }
-      if (this.modelSwitchesAwaitingRelaunch.delete(sessionId)) this.repo.clearResolvedModel(sessionId);
+      if (this.modelSwitchesAwaitingRelaunch.delete(sessionId)) {
+        this.repo.clearResolvedModel(sessionId);
+        this.deps.bus.emit({ type: 'session.updated', session: this.repo.get(sessionId)! });
+      }
       const outcome = this.resumeOne(this.repo.get(sessionId)!);
       // A failed launch already marked the session closed (and stopped its delivery) inside resumeOne:
       // entering READY here would resurrect a delivery record for a session that is no longer open.
@@ -521,6 +529,7 @@ export class SessionService {
   private async retireForRelaunch(sessionId: string): Promise<void> {
     this.disarmInterruptWatch(sessionId);
     this.transcriptPaths.delete(sessionId);
+    this.currentCliSessionIds.delete(sessionId);
     // Any approval still gating this session belonged to the process about to die: ApprovalService
     // listens for this to expire it and answer its waiting hook, rather than leave it pending forever
     // behind a relaunch it can never come back from (AUD-07).
@@ -538,6 +547,7 @@ export class SessionService {
     if (input.kind === 'hook' && input.event.transcript_path && isTrustedTranscriptPath(input.event.transcript_path)) {
       this.transcriptPaths.set(sessionId, input.event.transcript_path);
     }
+    if (input.kind === 'hook' && input.event.hook_event_name === 'SessionStart') this.adoptCliSessionId(sessionId, input.event.session_id);
     this.recordResolvedModelIfPending(sessionId);
     // A new prompt means the previous turn is over from the user's side even when 'generating' ->
     // 'generating' is a no-op transition below (the CLI hadn't reported the previous turn's end yet): an
@@ -577,6 +587,21 @@ export class SessionService {
     this.guarded(sessionId, () => this.advance(sessionId));
   }
 
+  // A CLI session id that is another open session's launch id or current id never becomes this session's:
+  // otherwise one session's hook could adopt a neighbour's identity and then read its transcript.
+  private adoptCliSessionId(sessionId: string, reportedCliSessionId: string): void {
+    if (!CLI_SESSION_ID_PATTERN.test(reportedCliSessionId)) return;
+    const isOwnedByAnotherOpenSession = this.repo.list().some((other) =>
+      other.id !== sessionId && other.state !== 'closed'
+      && (other.id === reportedCliSessionId || this.currentCliSessionIds.get(other.id) === reportedCliSessionId));
+    if (isOwnedByAnotherOpenSession) return;
+    this.currentCliSessionIds.set(sessionId, reportedCliSessionId);
+  }
+
+  private isTranscriptOfSession(sessionId: string, path: string): boolean {
+    return basename(path) === `${this.currentCliSessionIds.get(sessionId) ?? sessionId}.jsonl`;
+  }
+
   // One attempt per hook until the launch's resolution is found. It never throws into the hook handler.
   private recordResolvedModelIfPending(sessionId: string): void {
     const pending = this.pendingRecordings.get(sessionId);
@@ -584,7 +609,11 @@ export class SessionService {
     if (pending === undefined || transcriptPath === undefined) return;
     try {
       if (!isTrustedTranscriptPath(transcriptPath)) return;
-      const resolution = findResolvedModel(readTranscriptTail(transcriptPath), pending.launchedAt);
+      if (!this.isTranscriptOfSession(sessionId, transcriptPath)) return;
+      // Reading the resolved path, not the reported one, closes the window between the check and the open.
+      const resolvedPath = existsSync(transcriptPath) ? realpathSync(transcriptPath) : transcriptPath;
+      if (!this.isTranscriptOfSession(sessionId, resolvedPath)) return;
+      const resolution = findResolvedModel(readTranscriptTail(resolvedPath), pending.launchedAt);
       if (!resolution) return;
       this.repo.recordResolvedModel({ id: sessionId, ...resolution, driftedFrom: undefined });
       this.pendingRecordings.delete(sessionId);
@@ -976,6 +1005,7 @@ export class SessionService {
     this.clearResumeTimer(sessionId);
     this.disarmInterruptWatch(sessionId);
     this.transcriptPaths.delete(sessionId);
+    this.currentCliSessionIds.delete(sessionId);
     this.pendingRecordings.delete(sessionId);
     this.modelSwitchesAwaitingRelaunch.delete(sessionId);
     this.stopDelivery(sessionId);
