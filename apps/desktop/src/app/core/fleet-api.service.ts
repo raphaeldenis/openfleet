@@ -1,5 +1,5 @@
 import { Injectable } from '@angular/core';
-import type { Approval, HarnessId, PermissionMode, Session, SessionSpec } from '@openfleet/shared';
+import type { Approval, DataStore, DsColumn, DsRow, DsRowHistoryEntry, DsView, HarnessId, OrderTerm, PermissionMode, Session, SessionSpec, WhereClause } from '@openfleet/shared';
 import { environment } from '../../environments/environment';
 
 const DAEMON_ANSWER_TIMEOUT_MS = 5000;
@@ -82,4 +82,39 @@ export class FleetApiService {
   renameSession(id: string, patch: { name?: string; emoji?: string }) { return this.patch<Session>(`/api/sessions/${id}`, patch); }
   reopenSession(id: string) { return this.post<Session>(`/api/sessions/${id}/reopen`, {}); }
   decide(id: string, behavior: 'allow' | 'deny') { return this.post<Approval>(`/api/approvals/${id}/decide`, { behavior }); }
+
+  // --- Data stores (Tables screen, P3-T18) ---
+  listDataStores(projectId: string) { return this.call<Page<DataStore>>(`/api/data-stores${queryString({ projectId })}`); }
+  createDataStore(body: { projectId: string; displayName: string }) { return this.post<DataStore>('/api/data-stores', body); }
+  getDataStore(scope: StoreScope) { return this.call<DataStoreDetail>(`/api/data-stores/${scope.storeId}${queryString({ projectId: scope.projectId })}`); }
+  queryDataStore(query: StoreScope & { where?: WhereClause[]; orderBy?: OrderTerm[]; limit?: number; offset?: number }) {
+    const { storeId, where, orderBy, ...rest } = query;
+    const params = { ...rest, where: where && JSON.stringify(where), orderBy: orderBy && JSON.stringify(orderBy) };
+    return this.call<Page<DsRow>>(`/api/data-stores/${storeId}/rows${queryString(params)}`);
+  }
+  insertRows(request: StoreScope & { rows: Record<string, unknown>[] }) {
+    return this.post<{ items: DsRow[] }>(`/api/data-stores/${request.storeId}/rows`, { projectId: request.projectId, rows: request.rows });
+  }
+  updateRows(request: StoreScope & { updates: { rowId: string; patch: Record<string, unknown> }[] }) {
+    return this.patch<{ items: DsRow[] }>(`/api/data-stores/${request.storeId}/rows`, { projectId: request.projectId, updates: request.updates });
+  }
+  listRowChanges(request: StoreScope & { rowId: string; limit?: number }) {
+    const params = { projectId: request.projectId, limit: request.limit };
+    return this.call<{ items: DsRowHistoryEntry[]; total: number }>(`/api/data-stores/${request.storeId}/rows/${request.rowId}/changes${queryString(params)}`);
+  }
+  listViews(scope: StoreScope) { return this.call<{ items: DsView[] }>(`/api/data-stores/${scope.storeId}/views${queryString({ projectId: scope.projectId })}`); }
+  // --- end data stores ---
 }
+
+// --- Data stores (Tables screen, P3-T18) ---
+// ponytail: Page and DataStoreDetail are declared here until P3-REST01 exports them from @openfleet/shared; then import them.
+export interface Page<T> { items: T[]; total: number; limit: number; offset: number }
+export interface DataStoreDetail extends DataStore { columns: DsColumn[] }
+export interface StoreScope { projectId: string; storeId: string }
+
+function queryString(params: Record<string, string | number | undefined>): string {
+  const presentParams = Object.entries(params).filter((entry): entry is [string, string | number] => entry[1] !== undefined);
+  const search = new URLSearchParams(presentParams.map(([key, value]) => [key, String(value)]));
+  return presentParams.length > 0 ? `?${search}` : '';
+}
+// --- end data stores ---
