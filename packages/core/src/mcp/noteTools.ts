@@ -1,21 +1,14 @@
-import { NoteFolderSchema } from '@openfleet/shared';
+import { NoteFolderSchema, TitleSchema } from '@openfleet/shared';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { MAX_QUERY_CHARS, MAX_QUERY_TERMS, MAX_SEARCH_RESULTS, buildFtsQuery } from '../notes/ftsQuery.js';
 import { FileBackedNoteError } from '../notes/noteService.js';
 import { createNoteToolSupport, type NoteToolDeps } from './noteToolSupport.js';
 import { fail, guarded } from './toolResults.js';
 
 const MAX_LIST_RESULTS = 200;
-const MAX_SEARCH_RESULTS = 50;
-const MAX_QUERY_CHARS = 512;
-const MAX_QUERY_TERMS = 16;
 
 export type RegisterNoteToolsDeps = NoteToolDeps;
-
-const tokenize = (query: string) => query.trim().split(/\s+/).filter((term) => term !== '');
-
-/** Wraps each term as an escaped, prefix-matched phrase; '' for a blank query. */
-const escapeFtsTerms = (terms: string[]) => terms.map((term) => `"${term.replace(/"/g, '""')}"*`).join(' ');
 
 export function registerNoteTools(server: McpServer, deps: RegisterNoteToolsDeps): void {
   const { notes, noteRepo } = deps;
@@ -23,7 +16,7 @@ export function registerNoteTools(server: McpServer, deps: RegisterNoteToolsDeps
 
   server.registerTool('create_note', {
     description: 'Create a note in your project',
-    inputSchema: { title: z.string().min(1), body_md: z.string(), folder: NoteFolderSchema.optional(), shared: z.boolean().optional() },
+    inputSchema: { title: TitleSchema, body_md: z.string(), folder: NoteFolderSchema.optional(), shared: z.boolean().optional() },
   }, async ({ title, body_md, folder, shared }) => {
     const scope = requireProject();
     if (!scope) return fail('this session has no project');
@@ -98,11 +91,11 @@ export function registerNoteTools(server: McpServer, deps: RegisterNoteToolsDeps
     const scope = requireProject();
     if (!scope) return fail('this session has no project');
     if (query.length > MAX_QUERY_CHARS) return fail(`query too long (max ${MAX_QUERY_CHARS} characters)`);
-    const terms = tokenize(query);
-    if (terms.length > MAX_QUERY_TERMS) return fail(`too many terms in query (max ${MAX_QUERY_TERMS})`);
+    const ftsQuery = buildFtsQuery(query);
+    if (ftsQuery.outcome === 'too_many_terms') return fail(`too many terms in query (max ${MAX_QUERY_TERMS})`);
     return guarded(() => {
-      if (terms.length === 0) return { results: [], count: 0 };
-      const hits = noteRepo.search(escapeFtsTerms(terms), { projectId: scope.projectId, limit: MAX_SEARCH_RESULTS });
+      if (ftsQuery.outcome === 'blank') return { results: [], count: 0 };
+      const hits = noteRepo.search(ftsQuery.match, { projectId: scope.projectId, limit: MAX_SEARCH_RESULTS });
       const results = hits.map(({ note, snippet }) => ({ ...noteSummary(note), snippet }));
       return { results, count: results.length };
     });

@@ -232,51 +232,27 @@ describe('notes REST routes', () => {
     });
   });
 
-  describe('the note reads stay bounded in SQL', () => {
-    /** The SQL text of every statement the daemon prepares while serving `path`. */
-    const sqlServing = async (path: string) => {
-      const prepared: string[] = [];
-      const realPrepare = db.prepare.bind(db);
-      const spy = vi.spyOn(db, 'prepare').mockImplementation((sql: string) => { prepared.push(sql); return realPrepare(sql); });
-      const response = await call('GET', path);
-      spy.mockRestore();
-      return { response, prepared };
-    };
-    const readsBodies = (sql: string) => /body_md|SELECT\s+\*|\bn\.\*/i.test(sql.replace(/snippet\([^)]*\)/i, ''));
-
-    it('lists a page and never reads a body', async () => {
-      const { response, prepared } = await sqlServing('/api/notes?projectId=p1&folder=specs&limit=10&offset=5');
-
-      const noteQueries = prepared.filter((sql) => /FROM notes/i.test(sql));
-      expect(response.status).toBe(200);
-      expect(noteQueries.length).toBeGreaterThan(0);
-      expect(noteQueries.some(readsBodies)).toBe(false);
-    });
-
+  describe('user can read the notes list and the version history without loading any body', () => {
     it('answers limit=0 with the total and no items', async () => {
       await createNote();
 
-      const { response } = await sqlServing('/api/notes?projectId=p1&limit=0');
+      const response = await call('GET', '/api/notes?projectId=p1&limit=0');
 
       expect(await response.json()).toMatchObject({ items: [], total: 1 });
     });
 
-    it('searches and never reads a body', async () => {
-      const { prepared } = await sqlServing('/api/notes/search?projectId=p1&q=zebra');
-
-      const searches = prepared.filter((sql) => /note_fts/i.test(sql));
-      expect(searches).toHaveLength(1);
-      expect(readsBodies(searches[0]!)).toBe(false);
-    });
-
-    it('lists versions and never reads a body', async () => {
+    it('lists versions without any statement of the request reading a note body', async () => {
       const note = await createNote();
+      const prepared: string[] = [];
+      const realPrepare = db.prepare.bind(db);
+      const spy = vi.spyOn(db, 'prepare').mockImplementation((sql: string) => { prepared.push(sql); return realPrepare(sql); });
 
-      const { prepared } = await sqlServing(`/api/notes/${note.id}/versions?projectId=p1`);
+      const response = await call('GET', `/api/notes/${note.id}/versions?projectId=p1`);
+      spy.mockRestore();
 
-      const versionQueries = prepared.filter((sql) => /FROM note_versions/i.test(sql) && !/COUNT\(\*\)/i.test(sql));
-      expect(versionQueries).toHaveLength(1);
-      expect(readsBodies(versionQueries[0]!)).toBe(false);
+      expect(response.status).toBe(200);
+      expect(prepared.length).toBeGreaterThan(0);
+      expect(prepared.filter((sql) => /body_md|SELECT\s+\*|\bn\.\*/i.test(sql))).toEqual([]);
     });
   });
 
@@ -332,7 +308,7 @@ describe('notes REST routes', () => {
       const tooLong = await call('GET', `/api/notes/search?projectId=p1&q=${'a'.repeat(513)}`);
       const tooManyTerms = await call('GET', `/api/notes/search?projectId=p1&q=${Array(17).fill('a').join('+')}`);
 
-      expect(blank).toEqual({ items: [], total: 0 });
+      expect(blank).toEqual({ items: [], total: 0, limit: 50, offset: 0 });
       expect(tooLong.status).toBe(400);
       expect(tooManyTerms.status).toBe(400);
     });

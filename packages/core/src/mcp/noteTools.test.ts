@@ -120,6 +120,22 @@ describe('note tools', () => {
       expect(created).toMatchObject({ projectId: 'p1', title: 'Design doc', bodyMd: '# v1', folder: null, shared: false, rev: 1 });
     });
 
+    it.each([['a whitespace-only title', '   '], ['a title over 512 characters', 'x'.repeat(513)]])('refuses %s like the REST route does', async (_case, title) => {
+      const client = await connect(scopedToken);
+
+      const result = await client.callTool({ name: 'create_note', arguments: { title, body_md: 'body' } });
+
+      expect(result.isError).toBe(true);
+    });
+
+    it('trims the title it stores', async () => {
+      const client = await connect(scopedToken);
+
+      const created = await createNote(client, { title: '  Design doc  ' });
+
+      expect(created).toMatchObject({ title: 'Design doc' });
+    });
+
     it('honors an explicit folder and shared flag', async () => {
       const client = await connect(scopedToken);
       const created = await createNote(client, { folder: 'specs', shared: true });
@@ -437,13 +453,14 @@ describe('note tools', () => {
       expect(sixteenTerms.isError).toBeFalsy();
     });
 
-    it('a query with a NUL byte fails opaquely, leaking no SQLite text', async () => {
+    it('a query with a NUL byte searches its two halves as separate terms, like the REST search', async () => {
       const client = await connect(scopedToken);
+      await createNote(client, { title: 'Pair', body_md: 'alpha beta' });
 
-      const result = await client.callTool({ name: 'search_notes', arguments: { query: 'a\u0000b' } });
+      const result = await client.callTool({ name: 'search_notes', arguments: { query: 'alp\u0000bet' } });
 
-      expect(result.isError).toBe(true);
-      expect(errorText(result)).toBe('request failed');
+      expect(result.isError).toBeFalsy();
+      expect(text(result)).toMatchObject({ count: 1 });
     });
 
     it('a session cannot search_notes across a project boundary', async () => {

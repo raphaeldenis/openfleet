@@ -1,7 +1,7 @@
 import type { ServerResponse } from 'node:http';
 import {
-  CreateDataStoreRequestSchema, InsertRowsRequestSchema, DEFAULT_PAGE_LIMIT, MAX_HISTORY_LIMIT, MAX_NOTE_PAGE_LIMIT, MAX_ROW_PAGE_LIMIT, OrderTermSchema, UpdateRowsRequestSchema, WhereClauseSchema,
-  pageQuerySchema, queryInteger,
+  CreateDataStoreRequestSchema, InsertRowsRequestSchema, MAX_HISTORY_LIMIT, MAX_NOTE_PAGE_LIMIT, MAX_ROW_PAGE_LIMIT, OrderTermSchema, UpdateRowsRequestSchema, WhereClauseSchema,
+  pageQuerySchema,
   type DataStore, type DataStoreDetail, type DsRow, type DsRowHistoryEntry, type Page, type RowActorKind,
 } from '@openfleet/shared';
 import { z } from 'zod';
@@ -29,7 +29,7 @@ const QueryRowsQuerySchema = ProjectScopeSchema.extend(pageQuerySchema(MAX_ROW_P
   where: jsonParam(z.array(WhereClauseSchema)).optional(),
   orderBy: jsonParam(z.array(OrderTermSchema)).optional(),
 });
-const ChangesQuerySchema = ProjectScopeSchema.extend({ limit: queryInteger.pipe(z.number().max(MAX_HISTORY_LIMIT)).default(DEFAULT_PAGE_LIMIT) });
+const ChangesQuerySchema = ProjectScopeSchema.extend(pageQuerySchema(MAX_HISTORY_LIMIT).shape);
 
 export interface DataStoreRouteDeps {
   stores: DataStoreService;
@@ -119,14 +119,15 @@ export function registerDataStoreRoutes(router: Router, { stores, storeRepo }: D
   });
 
   router.add('GET', '/api/data-stores/:id/rows/:rowId/changes', ({ req, res, params }) => {
-    const { projectId, limit } = ChangesQuerySchema.parse(queryParams(req));
+    const { projectId, limit, offset } = ChangesQuerySchema.parse(queryParams(req));
     respondToStoreErrors(res, () => {
       const store = requireOwnStore(projectId, params.id!);
       const scope = { projectId, storeId: store.id };
       const total = storeRepo.countRowHistory(params.rowId!, scope);
       if (total === 0) throw new RowNotFoundError(params.rowId!);
-      const items: DsRowHistoryEntry[] = storeRepo.rowHistory(params.rowId!, { ...scope, limit });
-      json(res, 200, { items, total });
+      const items: DsRowHistoryEntry[] = storeRepo.rowHistory(params.rowId!, { ...scope, limit, offset });
+      const page: Page<DsRowHistoryEntry> = { items, total, limit, offset };
+      json(res, 200, page);
     });
   });
 
