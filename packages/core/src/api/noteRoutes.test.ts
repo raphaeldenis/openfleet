@@ -438,9 +438,23 @@ describe('notes REST routes', () => {
       expect(readNoteVersionRevs(note.id)).toEqual([1]);
     });
 
-    it('keeps the old body, revision and version list when the file swap fails after the body was staged', async () => {
+    it.each(['EXDEV', 'EACCES', 'ENOSPC'])('answers 500 and keeps the old body, revision and version list when the file swap fails with %s', async (code) => {
       const note = seedFileBackedNote();
-      vi.spyOn(nodeDocsFolderFs, 'renameSync').mockImplementation(() => { throw Object.assign(new Error('EXDEV'), { code: 'EXDEV' }); });
+      vi.spyOn(nodeDocsFolderFs, 'renameSync').mockImplementation(() => { throw Object.assign(new Error(code), { code }); });
+
+      const patched = await call('PATCH', `/api/notes/${note.id}`, { projectId: fileBackedProjectId, expectedRev: 1, bodyMd: 'v2' });
+      vi.restoreAllMocks();
+
+      expect(patched.status).toBe(500);
+      expect(await patched.json()).toEqual({ error: 'internal_error' });
+      expect(noteRepo.get(note.id)).toMatchObject({ bodyMd: 'v1', rev: 1 });
+      expect(readNoteVersionRevs(note.id)).toEqual([1]);
+      expect(readFileSync(noteRepo.get(note.id)!.filePath!, 'utf8')).toBe('v1');
+    });
+
+    it.each(['ENOENT', 'ENOTDIR'])('answers 409 file_unreadable and rolls back when the file swap fails with %s', async (code) => {
+      const note = seedFileBackedNote();
+      vi.spyOn(nodeDocsFolderFs, 'renameSync').mockImplementation(() => { throw Object.assign(new Error(code), { code }); });
 
       const patched = await call('PATCH', `/api/notes/${note.id}`, { projectId: fileBackedProjectId, expectedRev: 1, bodyMd: 'v2' });
       vi.restoreAllMocks();
@@ -449,7 +463,17 @@ describe('notes REST routes', () => {
       expect(await patched.json()).toEqual({ error: 'file_unreadable' });
       expect(noteRepo.get(note.id)).toMatchObject({ bodyMd: 'v1', rev: 1 });
       expect(readNoteVersionRevs(note.id)).toEqual([1]);
-      expect(readFileSync(noteRepo.get(note.id)!.filePath!, 'utf8')).toBe('v1');
+    });
+
+    it('answers 500 when the temp file cannot be written because the disk is full', async () => {
+      const note = seedFileBackedNote();
+      vi.spyOn(nodeDocsFolderFs, 'writeFileExclusiveSync').mockImplementation(() => { throw Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' }); });
+
+      const patched = await call('PATCH', `/api/notes/${note.id}`, { projectId: fileBackedProjectId, expectedRev: 1, bodyMd: 'v2' });
+      vi.restoreAllMocks();
+
+      expect(patched.status).toBe(500);
+      expect(noteRepo.get(note.id)).toMatchObject({ bodyMd: 'v1', rev: 1 });
     });
   });
 
@@ -475,6 +499,22 @@ describe('notes REST routes', () => {
       const response = await call('GET', `/api/notes/search?projectId=p1&q=${encodeURIComponent('say "hel')}`);
 
       expect(response.status).toBe(200);
+    });
+
+    it('pages notes of identical text one by one, each note exactly once', async () => {
+      const noteCount = 12;
+      const insert = db.prepare(`INSERT INTO notes (id, project_id, title, body_md, folder, file_path, source_hash, rev, shared, created_at, updated_at)
+        VALUES (?, 'p1', 'n', 'zebra', NULL, NULL, NULL, 1, 0, 't', 't')`);
+      const insertedIds = Array.from({ length: noteCount }, (_, index) => `same-${index}`);
+      for (const id of insertedIds) insert.run(id);
+
+      const pagedIds: string[] = [];
+      for (let offset = 0; offset < noteCount; offset++) {
+        const page = await (await call('GET', `/api/notes/search?projectId=p1&q=zebra&limit=1&offset=${offset}`)).json() as { items: { id: string }[] };
+        pagedIds.push(...page.items.map((item) => item.id));
+      }
+
+      expect([...pagedIds].sort()).toEqual([...insertedIds].sort());
     });
 
     it('returns at most 50 hits when more notes match', async () => {

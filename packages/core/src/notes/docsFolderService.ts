@@ -100,12 +100,14 @@ interface ImportCandidate {
  * transaction, the rename last. On any failure the temp file is removed and the target is never touched —
  * a failed CAS, an oversized body, a vanished docs folder or a failed rename leaves neither the DB nor
  * the visible file changed (the revision and version row roll back with the failed rename). A docs folder
- * or subfolder that disappeared surfaces as `NoteFileUnreadableError`.
+ * or subfolder that disappeared (ENOENT, ENOTDIR) surfaces as `NoteFileUnreadableError`; any other fs
+ * failure (ENOSPC, EROFS, EACCES, EXDEV) propagates unchanged, so the caller sees an internal error.
  *
  * This order never leaves a mismatch `reconcileOnBoot` can't heal: before the rename, the target
- * file is untouched (nothing to reconcile — the write never happened as far as disk is concerned); the
- * only crash window is between the rename and the transaction's COMMIT, where the file holds the new
- * bytes while the DB still holds the old body/hash. `reconcileOnBoot` hashes the actual file and compares it
+ * file is untouched (nothing to reconcile — the write never happened as far as disk is concerned). Two
+ * windows leave the file ahead of the DB, the file holding the new bytes while the DB still holds the old
+ * body/hash: a crash between the rename and the transaction's COMMIT, and a COMMIT failure after a
+ * successful rename. Until reconcile runs, a PATCH is refused with `stale_revision`. `reconcileOnBoot` hashes the actual file and compares it
  * to `notes.source_hash`; on a mismatch it always applies whatever is really on disk as a new 'disk'
  * revision (`applyExternalEdit`, decision 2) — so after reconcile, `source_hash` is by construction the
  * hash of the bytes reconcile just read, so the user's write is kept, never reverted. The whole sequence
@@ -383,11 +385,14 @@ export class DocsFolderService {
     throw new Error(`could not find a free filename for "${title}" under ${realFolderDir}`);
   }
 
-  /** Any filesystem failure while touching the note's file (folder renamed away, disk error) reads as an unreadable note file. */
+  /** A missing folder or file (ENOENT, ENOTDIR) reads as an unreadable note file; every other fs failure (full disk, permissions, EXDEV) propagates unchanged. */
   private orUnreadable<T>(path: string, run: () => T): T {
     try {
       return run();
     } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      const isMissingFolderOrFile = code === 'ENOENT' || code === 'ENOTDIR';
+      if (!isMissingFolderOrFile) throw error;
       throw new NoteFileUnreadableError(path, error);
     }
   }
