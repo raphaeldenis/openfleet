@@ -493,7 +493,7 @@ describe('notes view tells the user when something failed', () => {
     const listProjects = vi.fn().mockRejectedValueOnce(new TypeError('Failed to fetch')).mockResolvedValue(page([OPENFLEET]));
     await renderView({ api: fakeApi({ listProjects }) });
 
-    expect(await screen.findByTestId('note-error-reason')).toHaveTextContent('Failed to fetch');
+    expect(await screen.findByTestId('note-error-reason')).toHaveTextContent('Can’t reach the OpenFleet daemon');
     expect(screen.queryByTestId('note-error-open-in-finder')).not.toBeInTheDocument();
     await userEvent.click(screen.getByTestId('note-error-retry'));
 
@@ -1112,5 +1112,125 @@ describe('notes view keeps the intent of a restore that hit a conflict', () => {
 
     expect(await screen.findByTestId('note-conflict-restore')).toHaveTextContent('Restore rev 1');
     expect(screen.getByTestId('note-conflict-ours')).toHaveTextContent('You had open');
+  });
+});
+
+describe('notes view after the live QA', () => {
+  const listedIds = () => screen.getAllByTestId(/^note-list-item-/).map((item) => item.dataset['testid']);
+  const unreachableDaemon = () => new TypeError('Failed to fetch');
+
+  it('a note created in the session is listed last, like the daemon lists it after a reload', async () => {
+    const created = aNoteView({ id: 'new', title: 'Untitled note', bodyMd: '' });
+    const api = fakeApi({ createNote: vi.fn().mockResolvedValue(created), getNote: vi.fn((_p: string, id: string) => Promise.resolve(id === 'new' ? created : VIEWS[id])) });
+    await renderView({ api });
+    await editorTitle();
+
+    await userEvent.click(screen.getByTestId('note-list-new'));
+
+    await expectEditorTitle('Untitled note');
+    expect(listedIds()).toEqual(['note-list-item-n1', 'note-list-item-n2', 'note-list-item-new']);
+  });
+
+  describe('banner order', () => {
+    it('the note header comes first and the conflict banner sits below it', async () => {
+      await renderView({ api: conflictingRestoreApi() });
+      await editorTitle();
+      await restoreSelectedVersion();
+
+      const banner = await screen.findByTestId('note-conflict-bar');
+
+      const follows = screen.getByTestId('note-editor-title').compareDocumentPosition(banner) & Node.DOCUMENT_POSITION_FOLLOWING;
+      expect(follows).toBeTruthy();
+      const precedesBody = banner.compareDocumentPosition(screen.getByTestId('note-editor-body')) & Node.DOCUMENT_POSITION_FOLLOWING;
+      expect(precedesBody).toBeTruthy();
+    });
+
+    it('the banner still takes the focus', async () => {
+      await renderView({ api: conflictingRestoreApi() });
+      await editorTitle();
+      await restoreSelectedVersion();
+
+      await waitFor(() => expect(screen.getByTestId('note-conflict-bar')).toHaveFocus());
+    });
+  });
+
+  describe('focus after a retry', () => {
+    it('the loaded note title takes the focus when the note list was retried', async () => {
+      const listNotes = vi.fn().mockRejectedValueOnce(new ApiError(500, 'boom')).mockResolvedValue(page(SUMMARIES['p1']!));
+      await renderView({ api: fakeApi({ listNotes }) });
+
+      await userEvent.click(await screen.findByTestId('note-error-retry'));
+
+      await waitFor(() => expect(screen.getByTestId('note-editor-title')).toHaveFocus());
+    });
+
+    it('the loaded note title takes the focus when the project list was retried', async () => {
+      const listProjects = vi.fn().mockRejectedValueOnce(new ApiError(500, 'boom')).mockResolvedValue(page([OPENFLEET]));
+      await renderView({ api: fakeApi({ listProjects }) });
+
+      await userEvent.click(await screen.findByTestId('note-error-retry'));
+
+      await waitFor(() => expect(screen.getByTestId('note-editor-title')).toHaveFocus());
+    });
+
+    it('the list takes the focus when the retried list turns out to be empty', async () => {
+      const listNotes = vi.fn().mockRejectedValueOnce(new ApiError(500, 'boom')).mockResolvedValue(page([]));
+      await renderView({ api: fakeApi({ listNotes }) });
+
+      await userEvent.click(await screen.findByTestId('note-error-retry'));
+
+      await waitFor(() => expect(screen.getByTestId('note-list-filter')).toHaveFocus());
+    });
+
+    it('the list takes the focus when the retried list loads but its first note still fails', async () => {
+      const listNotes = vi.fn().mockRejectedValueOnce(new ApiError(500, 'boom')).mockResolvedValue(page(SUMMARIES['p1']!));
+      const getNote = vi.fn().mockRejectedValue(new ApiError(500, 'still down'));
+      await renderView({ api: fakeApi({ listNotes, getNote }) });
+
+      await userEvent.click(await screen.findByTestId('note-error-retry'));
+      await screen.findByTestId('note-error-reason');
+
+      await waitFor(() => expect(screen.getByTestId('note-list-item-n1')).toHaveFocus());
+    });
+  });
+
+  describe('a daemon that cannot be reached', () => {
+    it('user reads a plain sentence instead of “Failed to fetch”, with the technical reason on hover', async () => {
+      await renderView({ api: fakeApi({ listNotes: vi.fn().mockRejectedValue(unreachableDaemon()) }) });
+
+      const reason = await screen.findByTestId('note-error-reason');
+
+      expect(reason).toHaveTextContent('Can’t reach the OpenFleet daemon');
+      expect(reason).not.toHaveTextContent('Failed to fetch');
+      expect(reason).toHaveAttribute('title', 'Failed to fetch');
+    });
+
+    it('user reads the same sentence when a note cannot be created', async () => {
+      await renderView({ api: fakeApi({ createNote: vi.fn().mockRejectedValue(unreachableDaemon()) }) });
+      await editorTitle();
+
+      await userEvent.click(screen.getByTestId('note-list-new'));
+
+      const reason = await screen.findByTestId('note-action-error-reason');
+      expect(reason).toHaveTextContent('Can’t reach the OpenFleet daemon');
+      expect(reason).toHaveAttribute('title', 'Failed to fetch');
+    });
+
+    it('user reads the same sentence when the history cannot be loaded', async () => {
+      await renderView({ api: fakeApi({ listNoteVersions: vi.fn().mockRejectedValue(unreachableDaemon()) }) });
+      await editorTitle();
+
+      await userEvent.click(screen.getByTestId('note-editor-history-toggle'));
+
+      const error = await screen.findByTestId('note-history-error');
+      expect(error).toHaveTextContent('Can’t reach the OpenFleet daemon');
+      expect(error).not.toHaveTextContent('Failed to fetch');
+    });
+
+    it('a server error keeps its technical wording', async () => {
+      await renderView({ api: fakeApi({ listNotes: vi.fn().mockRejectedValue(new ApiError(503, 'GET /api/notes → 503')) }) });
+
+      expect(await screen.findByTestId('note-error-reason')).toHaveTextContent('GET /api/notes → 503');
+    });
   });
 });

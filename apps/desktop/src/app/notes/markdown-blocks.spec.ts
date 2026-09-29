@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseMarkdownBlocks, takeWithinRenderBudget, type MarkdownBlock } from './markdown-blocks';
+import { countRenderCost, parseMarkdownBlocks, takeWithinRenderBudget, type MarkdownBlock } from './markdown-blocks';
 
 const text = (value: string) => ({ text: value, isCode: false });
 const code = (value: string) => ({ text: value, isCode: true });
@@ -114,5 +114,41 @@ describe('takeWithinRenderBudget', () => {
     const kept = takeWithinRenderBudget(blocks, 2);
 
     expect(kept).toEqual([]);
+  });
+
+  describe('code fences', () => {
+    const fenceOf = (lineCount: number) => `\`\`\`\n${'x\n'.repeat(lineCount)}\`\`\``;
+
+    it('charges each line of a fence in the budget', () => {
+      const blocks = parseMarkdownBlocks(fenceOf(3000));
+
+      expect(countRenderCost(blocks)).toBe(3001);
+    });
+
+    it('keeps only the first lines of a fence that exceeds the budget', () => {
+      const blocks = parseMarkdownBlocks(fenceOf(3000));
+
+      const kept = takeWithinRenderBudget(blocks, 2000);
+
+      expect(kept).toMatchObject([{ type: 'code' }]);
+      expect(kept[0]).toMatchObject({ text: 'x\n'.repeat(1998) + 'x' });
+      expect(countRenderCost(kept)).toBe(2000);
+    });
+
+    it('a single-line fence costs two nodes however long the line is', () => {
+      const blocks = parseMarkdownBlocks(`\`\`\`\n${'x'.repeat(1_000_000)}\n\`\`\``);
+
+      expect(countRenderCost(blocks)).toBe(2);
+    });
+
+    it('drops a fence whose first line does not fit', () => {
+      const kept = takeWithinRenderBudget(parseMarkdownBlocks(fenceOf(3)), 1);
+
+      expect(kept).toEqual([]);
+    });
+
+    it('an empty fence costs one node', () => {
+      expect(countRenderCost(parseMarkdownBlocks('```\n```'))).toBe(1);
+    });
   });
 });

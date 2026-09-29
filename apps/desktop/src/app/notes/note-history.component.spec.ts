@@ -37,6 +37,22 @@ describe('NoteHistoryComponent', () => {
     expect(newest).toHaveTextContent('2 min ago');
   });
 
+  it('user can read the exact date and time of a version by hovering its age', async () => {
+    await renderHistory();
+
+    const age = screen.getByTestId('note-history-when-2');
+
+    expect(age).toHaveAttribute('title', expect.stringContaining('2026'));
+    expect(age.getAttribute('title')).not.toMatch(/ago$/);
+  });
+
+  it('a version whose date cannot be read shows no exact date', async () => {
+    const unreadable = [aNoteVersion({ id: 'v9', rev: 9, createdAt: 'not-a-date' })];
+    await render(NoteHistoryComponent, { bindings: [inputBinding('versions', () => unreadable)] });
+
+    expect(screen.getByTestId('note-history-when-9')).not.toHaveAttribute('title');
+  });
+
   it('user sees the newest version first even though the daemon lists it last', async () => {
     await renderHistory();
 

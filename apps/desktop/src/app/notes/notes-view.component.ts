@@ -6,6 +6,7 @@ import { DirectoryOpener } from './directory-opener';
 import { ageLabel } from './note-age';
 import { NoteConflictBannerComponent, type ConflictingVersion, type ConflictResolution } from './note-conflict-banner.component';
 import { NoteEditorComponent } from './note-editor.component';
+import { NO_FAILURE, failureOf, type Failure } from './note-failure';
 import { NoteHistoryComponent } from './note-history.component';
 import { NoteListComponent } from './note-list.component';
 import { NoteStatePanelComponent } from './note-state-panel.component';
@@ -24,9 +25,8 @@ interface OfferedConflict extends EditConflict {
   id: number;
 }
 
-interface ActionFailure {
+interface ActionFailure extends Failure {
   title: string;
-  reason: string;
 }
 
 interface FailedWrite {
@@ -47,7 +47,6 @@ const PAGE_LIMIT = 200;
 const RESTORE_FAILURE_TITLE = 'Couldn’t restore the version';
 
 const isStaleRevision = (error: unknown) => error instanceof ApiError && error.code === 'stale_revision';
-const reasonOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 async function fetchAllPages<T>(fetchPage: (request: PageRequest) => Promise<Page<T>>): Promise<T[]> {
   const items: T[] = [];
@@ -87,14 +86,14 @@ async function fetchAllPages<T>(fetchPage: (request: PageRequest) => Promise<Pag
       @if (actionFailure(); as failure) {
         <div class="action-failure" role="alert" data-testid="note-action-error">
           <span class="action-failure-title" data-testid="note-action-error-title">✕ {{ failure.title }}</span>
-          <span class="action-failure-reason" data-testid="note-action-error-reason">{{ failure.reason }}</span>
+          <span class="action-failure-reason" [attr.title]="failure.detail || null" data-testid="note-action-error-reason">{{ failure.reason }}</span>
           <button type="button" class="of-btn of-btn--secondary" data-testid="note-action-error-dismiss" (click)="actionFailure.set(null)">Dismiss</button>
         </div>
       }
       @if (projectsStatus() === 'loading') {
         <of-note-state-panel state="loading" />
       } @else if (projectsStatus() === 'error') {
-        <of-note-state-panel state="error" title="projects" [reason]="projectsError()" [canOpenInFinder]="false" (retry)="loadProjects()" />
+        <of-note-state-panel state="error" title="projects" [reason]="projectsError().reason" [reasonDetail]="projectsError().detail" [canOpenInFinder]="false" (retry)="loadProjects({ focusAfterLoad: true })" />
       } @else if (projects().length === 0) {
         <div class="no-project" data-testid="notes-no-project">
           <span class="no-project-headline">No project yet</span>
@@ -103,7 +102,7 @@ async function fetchAllPages<T>(fetchPage: (request: PageRequest) => Promise<Pag
       } @else if (notesStatus() === 'loading') {
         <of-note-state-panel state="loading" />
       } @else if (notesStatus() === 'error') {
-        <of-note-state-panel state="error" [title]="projectName()" [reason]="notesError()" [canOpenInFinder]="false" (retry)="loadNotes()" />
+        <of-note-state-panel state="error" [title]="projectName()" [reason]="notesError().reason" [reasonDetail]="notesError().detail" [canOpenInFinder]="false" (retry)="loadNotes({ focusAfterLoad: true })" />
       } @else if (notes().length === 0) {
         <of-note-state-panel state="empty" (create)="createNote()" />
       } @else if (noteStatus() === 'loading') {
@@ -112,23 +111,26 @@ async function fetchAllPages<T>(fetchPage: (request: PageRequest) => Promise<Pag
         <of-note-state-panel
           state="error"
           [title]="selectedSummary()?.title ?? ''"
-          [reason]="noteError()"
+          [reason]="noteError().reason"
+          [reasonDetail]="noteError().detail"
           [canOpenInFinder]="canOpenSelectedFolder()"
           (retry)="retryOpenNote()"
           (openInFinder)="openSelectedFolder()"
         />
       } @else if (note(); as openNote) {
-        @for (conflict of conflicts(); track conflict.id) {
-          <of-note-conflict-banner [ours]="conflict.ours" [theirs]="conflict.theirs" [restoreRev]="conflict.restoreRev" (resolve)="resolveConflict($event)" />
-        }
         <div class="doc-row">
-          <of-note-editor [note]="openNote" [historyOpen]="historyOpen()" (historyToggle)="toggleHistory()" />
+          <of-note-editor [note]="openNote" [historyOpen]="historyOpen()" (historyToggle)="toggleHistory()">
+            @for (conflict of conflicts(); track conflict.id) {
+              <of-note-conflict-banner [ours]="conflict.ours" [theirs]="conflict.theirs" [restoreRev]="conflict.restoreRev" (resolve)="resolveConflict($event)" />
+            }
+          </of-note-editor>
           @if (historyOpen()) {
             <of-note-history
               [versions]="versions()"
               [currentRev]="openNote.rev"
               [isRestoreBlocked]="isRestoreBlocked()"
-              [error]="versionsError()"
+              [error]="versionsError().reason"
+              [errorDetail]="versionsError().detail"
               (restore)="restoreVersion($event)"
               (retry)="reloadVersions()"
               (close)="closeHistory()"
@@ -162,15 +164,16 @@ export class NotesViewComponent {
   private readonly injector = inject(Injector);
   private readonly queryParams = toSignal(inject(ActivatedRoute).queryParamMap);
   private readonly editor = viewChild(NoteEditorComponent);
+  private readonly list = viewChild(NoteListComponent);
 
   protected readonly projects = signal<readonly Project[]>([]);
   protected readonly projectsStatus = signal<LoadStatus>('loading');
-  protected readonly projectsError = signal('');
+  protected readonly projectsError = signal<Failure>(NO_FAILURE);
   protected readonly projectId = signal<string | null>(null);
 
   protected readonly notes = signal<readonly NoteSummary[]>([]);
   protected readonly notesStatus = signal<LoadStatus>('loading');
-  protected readonly notesError = signal('');
+  protected readonly notesError = signal<Failure>(NO_FAILURE);
   protected readonly selectedId = signal<string | null>(null);
   protected readonly filter = signal('');
   protected readonly isCreating = signal(false);
@@ -178,11 +181,11 @@ export class NotesViewComponent {
 
   protected readonly note = signal<NoteView | null>(null);
   protected readonly noteStatus = signal<LoadStatus>('loading');
-  protected readonly noteError = signal('');
+  protected readonly noteError = signal<Failure>(NO_FAILURE);
 
   protected readonly historyOpen = signal(false);
   protected readonly versions = signal<readonly NoteVersionSummary[]>([]);
-  protected readonly versionsError = signal('');
+  protected readonly versionsError = signal<Failure>(NO_FAILURE);
   protected readonly isRestoring = signal(false);
   private readonly conflict = signal<OfferedConflict | null>(null);
   protected readonly isRestoreBlocked = computed(() => this.isRestoring() || this.conflict() !== null);
@@ -228,7 +231,7 @@ export class NotesViewComponent {
     });
   }
 
-  async loadProjects(): Promise<void> {
+  async loadProjects({ focusAfterLoad = false } = {}): Promise<void> {
     this.projectsStatus.set('loading');
     try {
       const items = await fetchAllPages((request) => this.api.listProjects(request));
@@ -237,11 +240,11 @@ export class NotesViewComponent {
       this.projectId.set((requestedProject ?? items[0])?.id ?? null);
       this.projectsStatus.set('ready');
     } catch (error) {
-      this.projectsError.set(reasonOf(error));
+      this.projectsError.set(failureOf(error));
       this.projectsStatus.set('error');
       return;
     }
-    await this.loadNotes();
+    await this.loadNotes({ focusAfterLoad });
   }
 
   protected switchProject(projectId: string): void {
@@ -252,7 +255,7 @@ export class NotesViewComponent {
     void this.loadNotes();
   }
 
-  protected async loadNotes(): Promise<void> {
+  protected async loadNotes({ focusAfterLoad = false } = {}): Promise<void> {
     const projectId = this.projectId();
     if (projectId === null) return;
     const request = ++this.latestNotesRequest;
@@ -266,10 +269,13 @@ export class NotesViewComponent {
       this.notes.set(allNotes);
       this.notesStatus.set('ready');
       const firstNoteId = allNotes[0]?.id;
-      if (firstNoteId) await this.openNote(firstNoteId);
+      if (firstNoteId) await this.openNote(firstNoteId, { focusEditor: focusAfterLoad });
+      const isFirstNoteMissingOrUnreadable = !firstNoteId || this.noteStatus() === 'error';
+      const isStillCurrent = request === this.latestNotesRequest;
+      if (focusAfterLoad && isFirstNoteMissingOrUnreadable && isStillCurrent) this.focusListAfterRender();
     } catch (error) {
       if (request !== this.latestNotesRequest) return;
-      this.notesError.set(reasonOf(error));
+      this.notesError.set(failureOf(error));
       this.notesStatus.set('error');
     }
   }
@@ -312,13 +318,13 @@ export class NotesViewComponent {
       const projectChangedMeanwhile = this.projectId() !== projectId;
       if (projectChangedMeanwhile || isSupersededByProjectSwitch()) return;
       this.filter.set('');
-      this.notes.update((notes) => [createdNote, ...notes.filter((summary) => summary.id !== createdNote.id)]);
+      this.notes.update((notes) => [...notes.filter((summary) => summary.id !== createdNote.id), createdNote]);
       const userSelectedAnotherNoteMeanwhile = !this.isCurrentSession(session);
       if (userSelectedAnotherNoteMeanwhile) return;
       await this.openNote(createdNote.id, { focusEditor: true });
     } catch (error) {
       if (isSupersededByProjectSwitch()) return;
-      this.actionFailure.set({ title: 'Couldn’t create the note', reason: reasonOf(error) });
+      this.actionFailure.set({ title: 'Couldn’t create the note', ...failureOf(error) });
     } finally {
       if (!isSupersededByProjectSwitch()) this.isCreating.set(false);
     }
@@ -414,7 +420,7 @@ export class NotesViewComponent {
     const openNote = this.note();
     const isConcurrentEdit = isStaleRevision(error) && projectId !== null && openNote !== null;
     if (!isConcurrentEdit) {
-      this.actionFailure.set({ title: RESTORE_FAILURE_TITLE, reason: reasonOf(error) });
+      this.actionFailure.set({ title: RESTORE_FAILURE_TITLE, ...failureOf(error) });
       return 'failed';
     }
     try {
@@ -456,14 +462,14 @@ export class NotesViewComponent {
     const session = this.noteSession;
     const request = ++this.latestVersionsRequest;
     const isStale = () => !this.isCurrentSession(session) || request !== this.latestVersionsRequest;
-    this.versionsError.set('');
+    this.versionsError.set(NO_FAILURE);
     try {
       const allVersions = await fetchAllPages((page) => this.api.listNoteVersions(projectId, openNote.id, page));
       if (isStale()) return;
       this.versions.set(allVersions);
     } catch (error) {
       if (isStale()) return;
-      this.versionsError.set(reasonOf(error));
+      this.versionsError.set(failureOf(error));
     }
   }
 
@@ -476,7 +482,7 @@ export class NotesViewComponent {
   }
 
   private showNoteError(error: unknown): void {
-    this.noteError.set(reasonOf(error));
+    this.noteError.set(failureOf(error));
     this.noteStatus.set('error');
   }
 
@@ -485,6 +491,10 @@ export class NotesViewComponent {
     const isAlreadyCurrent = requestedProjectId === this.projectId();
     if (requestedProjectId === null || !isKnownProject || isAlreadyCurrent) return;
     this.switchProject(requestedProjectId);
+  }
+
+  private focusListAfterRender(): void {
+    afterNextRender(() => this.list()?.focus(), { injector: this.injector });
   }
 
   private focusEditorAfterRender(): void {
@@ -500,7 +510,7 @@ export class NotesViewComponent {
     this.conflict.set(null);
     this.historyOpen.set(false);
     this.versions.set([]);
-    this.versionsError.set('');
+    this.versionsError.set(NO_FAILURE);
     this.actionFailure.set(null);
     this.isRestoring.set(false);
     return ++this.noteSession;

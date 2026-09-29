@@ -138,9 +138,28 @@ export function renderCost(block: MarkdownBlock): number {
       return 1 + block.items.reduce((total, item) => total + 1 + countCodeChips(item), 0);
     case 'mention-note':
       return 1 + countRenderCost(block.blocks);
+    case 'code':
+      return 1 + countLines(block.text);
     default:
       return 1;
   }
+}
+
+function countLines(text: string): number {
+  if (text === '') return 0;
+  let lineCount = 1;
+  for (let at = text.indexOf('\n'); at !== -1; at = text.indexOf('\n', at + 1)) lineCount += 1;
+  return lineCount;
+}
+
+function takeLines(text: string, lineBudget: number): string {
+  if (lineBudget <= 0) return '';
+  let end = -1;
+  for (let taken = 0; taken < lineBudget; taken += 1) {
+    end = text.indexOf('\n', end + 1);
+    if (end === -1) return text;
+  }
+  return text.slice(0, end);
 }
 
 export function countRenderCost(blocks: readonly MarkdownBlock[]): number {
@@ -177,6 +196,10 @@ function trimToBudget(block: MarkdownBlock, budget: number): MarkdownBlock | nul
     case 'mention-note': {
       const nested = takeWithinRenderBudget(block.blocks, budget);
       return block.blocks.length > 0 && nested.length === 0 ? null : { ...block, blocks: nested };
+    }
+    case 'code': {
+      const text = takeLines(block.text, budget);
+      return block.text !== '' && text === '' ? null : { ...block, text };
     }
     default:
       return block;

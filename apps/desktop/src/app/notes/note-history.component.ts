@@ -1,5 +1,5 @@
 import { ChangeDetectionStrategy, Component, computed, input, linkedSignal, output } from '@angular/core';
-import { ageLabel } from './note-age';
+import { absoluteDateLabel, ageLabel } from './note-age';
 import type { NoteVersionSummary } from '@openfleet/shared';
 
 @Component({
@@ -10,7 +10,7 @@ import type { NoteVersionSummary } from '@openfleet/shared';
     <div class="title">History</div>
     @if (error()) {
       <div class="error" role="alert" data-testid="note-history-error">
-        <span>Couldn’t load the history: {{ error() }}</span>
+        <span [attr.title]="errorDetail() || null">Couldn’t load the history: {{ error() }}</span>
         <button type="button" class="of-btn of-btn--secondary" data-testid="note-history-retry" (click)="retry.emit()">Retry</button>
       </div>
     }
@@ -26,7 +26,7 @@ import type { NoteVersionSummary } from '@openfleet/shared';
           >
             <span class="head">
               <span class="author">{{ version.author }}</span>
-              <span class="when">{{ ageOf(version) }}</span>
+              <time class="when" [attr.datetime]="version.createdAt" [attr.title]="absoluteDateOf(version)" [attr.data-testid]="'note-history-when-' + version.rev">{{ ageOf(version) }}</time>
             </span>
             <span class="rev">rev {{ version.rev }}</span>
           </button>
@@ -69,6 +69,7 @@ export class NoteHistoryComponent {
   readonly currentRev = input<number | null>(null);
   readonly isRestoreBlocked = input(false);
   readonly error = input('');
+  readonly errorDetail = input('');
   readonly restore = output<number>();
   readonly retry = output<void>();
   readonly close = output<void>();
@@ -83,6 +84,10 @@ export class NoteHistoryComponent {
 
   protected ageOf(version: NoteVersionSummary): string {
     return ageLabel(version.createdAt);
+  }
+
+  protected absoluteDateOf(version: NoteVersionSummary): string | null {
+    return absoluteDateLabel(version.createdAt);
   }
 
   protected restoreSelected(): void {

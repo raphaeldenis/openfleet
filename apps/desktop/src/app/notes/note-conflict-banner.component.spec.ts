@@ -80,6 +80,47 @@ describe('NoteConflictBannerComponent', () => {
     expect(message).not.toHaveTextContent('nothing is lost');
   });
 
+  it('a restore that conflicts with the user’s own save says “your own save”, never “You’s”', async () => {
+    await renderBanner({ restoreRev: 4, author: 'You' });
+
+    const message = screen.getByTestId('note-conflict-message');
+    expect(message).toHaveTextContent('Restore rev 4 anyway replaces your own save with rev 4');
+    expect(message).not.toHaveTextContent('You’s');
+  });
+
+  it('an edit that conflicts with the user’s own save offers “Take your other save”, never “Take You’s”', async () => {
+    await renderBanner({ author: 'You' });
+
+    expect(screen.getByTestId('note-conflict-take-theirs')).toHaveTextContent('Take your other save');
+    expect(screen.getByTestId('note-conflict-message')).not.toHaveTextContent('You’s');
+  });
+
+  it('user can scroll each version with the keyboard when it is long', async () => {
+    await renderBanner();
+
+    expect(screen.getByTestId('note-conflict-ours')).toHaveAttribute('tabindex', '0');
+    expect(screen.getByTestId('note-conflict-theirs')).toHaveAttribute('tabindex', '0');
+  });
+
+  // Class contracts: jsdom does no layout; the live QA re-measures scrollWidth and the visible height.
+  it('each version has its own readable height with scrolling, so neither hides the other', async () => {
+    await renderBanner();
+
+    for (const testId of ['note-conflict-ours', 'note-conflict-theirs']) {
+      const style = getComputedStyle(screen.getByTestId(testId));
+      expect(style.maxHeight).toMatch(/rem$/);
+      expect(style.overflow).toBe('auto');
+    }
+  });
+
+  it('a very long word wraps instead of widening the banner', async () => {
+    await renderBanner();
+
+    for (const testId of ['note-conflict-message', 'note-conflict-ours', 'note-conflict-theirs']) {
+      expect(getComputedStyle(screen.getByTestId(testId)).overflowWrap).toBe('anywhere');
+    }
+  });
+
   it('a conflict raised by an edit calls the user’s choice “Keep mine”', async () => {
     await renderBanner();
 

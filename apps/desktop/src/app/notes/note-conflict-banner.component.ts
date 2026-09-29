@@ -4,6 +4,7 @@ export type ConflictResolution = 'mine' | 'theirs' | 'merge' | 'restore';
 export interface ConflictingVersion { author: string; at: string; body: string }
 
 const DISK_AUTHOR = 'disk';
+const CURRENT_USER_AUTHOR = 'You';
 
 @Component({
   selector: 'of-note-conflict-banner',
@@ -22,10 +23,10 @@ const DISK_AUTHOR = 'disk';
       }
     </div>
     <div class="versions">
-      <div class="version version--ours" data-testid="note-conflict-ours">
+      <div class="version version--ours" role="region" aria-label="Your version" tabindex="0" data-testid="note-conflict-ours">
         <div class="version-label">{{ restoreRev() === null ? 'Yours' : 'You had open' }}</div>{{ ours() }}
       </div>
-      <div class="version version--theirs" data-testid="note-conflict-theirs">
+      <div class="version version--theirs" role="region" [attr.aria-label]="'Version by ' + theirs().author" tabindex="0" data-testid="note-conflict-theirs">
         <div class="version-label">{{ theirs().author }} · {{ theirs().at }}</div>{{ theirs().body }}
       </div>
     </div>
@@ -38,7 +39,7 @@ const DISK_AUTHOR = 'disk';
       border-bottom: 1px solid var(--line);
     }
     .label { color: var(--state-waiting-permission); font-weight: 600 }
-    .message { flex: 1 }
+    .message { flex: 1; min-width: 0; overflow-wrap: anywhere }
     .choice {
       height: 1.5rem; padding: 0 .625rem; border: 1px solid var(--line-2); border-radius: .375rem;
       background: var(--panel); color: var(--fg); cursor: pointer; font: inherit; font-size: .75rem;
@@ -46,8 +47,12 @@ const DISK_AUTHOR = 'disk';
     .choice--primary { border-color: var(--accent); background: var(--accent); color: var(--on-accent) }
     .bar:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
     .choice:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
-    .versions { display: flex; flex-direction: column; gap: .5rem; padding: .75rem 1.25rem; max-height: 14rem; overflow: auto; font-size: .8125rem }
-    .version { padding: .625rem .75rem; border-left: 3px solid; border-radius: 0 .375rem .375rem 0; white-space: pre-wrap }
+    .versions { display: flex; flex-direction: column; gap: .5rem; padding: .75rem 1.25rem; font-size: .8125rem }
+    .version {
+      max-height: 9rem; overflow: auto; overflow-wrap: anywhere; padding: .625rem .75rem;
+      border-left: 3px solid; border-radius: 0 .375rem .375rem 0; white-space: pre-wrap;
+    }
+    .version:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
     .version--ours { border-color: var(--state-idle); background: color-mix(in oklch, var(--state-idle) 8%, transparent) }
     .version--theirs { border-color: var(--state-generating); background: color-mix(in oklch, var(--state-generating) 8%, transparent) }
     .version-label { font-size: .6875rem; color: var(--mut); margin-bottom: .25rem }
@@ -65,15 +70,21 @@ export class NoteConflictBannerComponent {
 
   private readonly bar = viewChild.required<ElementRef<HTMLElement>>('bar');
   private readonly isDiskConflict = computed(() => this.theirs().author === DISK_AUTHOR);
+  private readonly isOwnSave = computed(() => this.theirs().author === CURRENT_USER_AUTHOR);
   protected readonly message = computed(() => {
     const { author } = this.theirs();
     const rev = this.restoreRev();
+    const saver = this.isOwnSave() ? 'You saved from another window' : `${author} saved`;
+    const saverPossessive = this.isOwnSave() ? 'your own' : `${author}’s`;
     if (rev !== null) {
-      return `${author} saved this note while you were restoring rev ${rev}. Keep current cancels the restore and writes nothing; Restore rev ${rev} anyway replaces ${author}’s save with rev ${rev}.`;
+      return `${saver} this note while you were restoring rev ${rev}. Keep current cancels the restore and writes nothing; Restore rev ${rev} anyway replaces ${saverPossessive} save with rev ${rev}.`;
     }
     return this.isDiskConflict()
       ? 'This note changed on disk since you opened it. Your version is kept below; nothing is lost.'
-      : `${author} saved while you were typing. Your version is kept below; nothing is lost.`;
+      : `${saver} while you were typing. Your version is kept below; nothing is lost.`;
   });
-  protected readonly takeTheirsLabel = computed(() => (this.isDiskConflict() ? 'Keep disk' : `Take ${this.theirs().author}’s`));
+  protected readonly takeTheirsLabel = computed(() => {
+    if (this.isDiskConflict()) return 'Keep disk';
+    return this.isOwnSave() ? 'Take your other save' : `Take ${this.theirs().author}’s`;
+  });
 }

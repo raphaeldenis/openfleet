@@ -4,7 +4,7 @@ import { countRenderCost, parseMarkdownBlocks, takeWithinRenderBudget } from './
 import { displayTitleOf } from './note-title';
 import type { NoteView } from '@openfleet/shared';
 
-const MAX_NODES_RENDERED_AT_FIRST = 2000;
+const NODES_PER_CHUNK = 2000;
 
 export interface NoteMentioner { emoji: string; name: string }
 
@@ -28,6 +28,7 @@ export interface NoteMentioner { emoji: string; name: string }
         (click)="historyToggle.emit()"
       >History</button>
     </header>
+    <ng-content />
     <div class="scroller">
       <article class="doc" data-testid="note-editor-body">
         @if (blocks().length === 0) {
@@ -35,7 +36,7 @@ export interface NoteMentioner { emoji: string; name: string }
         }
         <ng-container [ngTemplateOutlet]="blockList" [ngTemplateOutletContext]="{ $implicit: blocks() }" />
         @if (hiddenItemCount() > 0) {
-          <button type="button" class="of-btn of-btn--secondary show-rest" data-testid="note-editor-show-rest" (click)="isShowingAllBlocks.set(true)">
+          <button type="button" class="of-btn of-btn--secondary show-rest" data-testid="note-editor-show-rest" (click)="showNextChunk()">
             Show the rest ({{ hiddenItemCount() }} more items)
           </button>
         }
@@ -98,7 +99,7 @@ export interface NoteMentioner { emoji: string; name: string }
   styles: `
     :host { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0 }
     .header { flex: none; display: flex; align-items: center; gap: .75rem; padding: .625rem 1.25rem; border-bottom: 1px solid var(--line); background: var(--panel) }
-    .title { margin: 0; font-size: inherit; font-weight: 600; outline: 0 }
+    .title { min-width: 0; margin: 0; font-size: inherit; font-weight: 600; outline: 0; overflow-wrap: anywhere }
     .show-rest { align-self: flex-start }
     .empty-body { color: var(--faint); font-style: italic }
     .path { font-family: var(--mono); font-size: .6875rem; color: var(--faint) }
@@ -110,7 +111,7 @@ export interface NoteMentioner { emoji: string; name: string }
     .history-toggle[aria-pressed='true'] { background: var(--active) }
     .history-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
     .scroller { flex: 1; min-height: 0; overflow: auto; padding: 2rem 3rem; display: flex; justify-content: center }
-    .doc { width: 100%; max-width: 42rem; display: flex; flex-direction: column; gap: .875rem; font-size: .9375rem; line-height: 1.65; text-wrap: pretty }
+    .doc { width: 100%; max-width: 42rem; display: flex; flex-direction: column; gap: .875rem; font-size: .9375rem; line-height: 1.65; text-wrap: pretty; overflow-wrap: anywhere }
     .doc h1, .doc h2, .doc h3, .doc p, .doc ul, .doc pre { margin: 0 }
     .doc h1 { font-size: 1.5rem; font-weight: 600; letter-spacing: -.01em }
     .doc h2 { margin-top: .5rem; font-size: 1.0625rem; font-weight: 600 }
@@ -137,11 +138,15 @@ export class NoteEditorComponent {
 
   private readonly title = viewChild.required<ElementRef<HTMLElement>>('title');
   private readonly historyButton = viewChild.required<ElementRef<HTMLElement>>('historyButton');
-  protected readonly isShowingAllBlocks = signal(false);
+  private readonly renderBudget = signal(NODES_PER_CHUNK);
   private readonly allBlocks = computed(() => parseMarkdownBlocks(this.expandedBody() ?? this.note().bodyMd));
-  protected readonly blocks = computed(() => (this.isShowingAllBlocks() ? this.allBlocks() : takeWithinRenderBudget(this.allBlocks(), MAX_NODES_RENDERED_AT_FIRST)));
+  protected readonly blocks = computed(() => takeWithinRenderBudget(this.allBlocks(), this.renderBudget()));
   protected readonly hiddenItemCount = computed(() => countRenderCost(this.allBlocks()) - countRenderCost(this.blocks()));
   protected readonly displayTitle = computed(() => displayTitleOf(this.note().title));
+
+  protected showNextChunk(): void {
+    this.renderBudget.update((budget) => budget + NODES_PER_CHUNK);
+  }
 
   focus(): void {
     this.title().nativeElement.focus();

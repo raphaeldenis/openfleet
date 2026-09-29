@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/angular/zoneless';
+import { render, screen, within } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
 import { inputBinding, outputBinding } from '@angular/core';
 import { describe, expect, it, vi } from 'vitest';
@@ -93,5 +93,79 @@ describe('NoteListComponent', () => {
     await renderList({ notes: [] });
 
     expect(screen.getByTestId('note-list-empty')).toHaveTextContent('No notes yet.');
+  });
+
+  describe('keyboard', () => {
+    const tabIndexOf = (noteId: string) => screen.getByTestId(`note-list-item-${noteId}`).getAttribute('tabindex');
+
+    it('assistive technology reads the notes as a list of items', async () => {
+      await renderList();
+
+      expect(screen.getByTestId('note-list-items')).toHaveAttribute('role', 'list');
+      expect(within(screen.getByTestId('note-list-items')).getAllByRole('listitem')).toHaveLength(3);
+    });
+
+    it('the list is a single tab stop on the first note', async () => {
+      await renderList();
+
+      expect([tabIndexOf('n1'), tabIndexOf('n2'), tabIndexOf('n3')]).toEqual(['0', '-1', '-1']);
+    });
+
+    it('the open note is the tab stop', async () => {
+      await renderList({ selectedId: 'n2' });
+
+      expect([tabIndexOf('n1'), tabIndexOf('n2'), tabIndexOf('n3')]).toEqual(['-1', '0', '-1']);
+    });
+
+    it('user moves through the notes with the arrow keys and the tab stop follows', async () => {
+      await renderList();
+      screen.getByTestId('note-list-item-n1').focus();
+
+      await userEvent.keyboard('{ArrowDown}');
+      expect(screen.getByTestId('note-list-item-n2')).toHaveFocus();
+      expect([tabIndexOf('n1'), tabIndexOf('n2')]).toEqual(['-1', '0']);
+
+      await userEvent.keyboard('{ArrowUp}');
+      expect(screen.getByTestId('note-list-item-n1')).toHaveFocus();
+    });
+
+    it('user jumps to the first and last notes with Home and End', async () => {
+      await renderList();
+      screen.getByTestId('note-list-item-n2').focus();
+
+      await userEvent.keyboard('{End}');
+      expect(screen.getByTestId('note-list-item-n3')).toHaveFocus();
+
+      await userEvent.keyboard('{Home}');
+      expect(screen.getByTestId('note-list-item-n1')).toHaveFocus();
+    });
+
+    it('the arrow keys stop at both ends of the list', async () => {
+      await renderList();
+      screen.getByTestId('note-list-item-n3').focus();
+
+      await userEvent.keyboard('{ArrowDown}');
+
+      expect(screen.getByTestId('note-list-item-n3')).toHaveFocus();
+    });
+
+    it('user opens the focused note with Enter or Space', async () => {
+      const { selected } = await renderList();
+      screen.getByTestId('note-list-item-n2').focus();
+
+      await userEvent.keyboard('{Enter}');
+      await userEvent.keyboard(' ');
+
+      expect(selected).toHaveBeenCalledTimes(2);
+      expect(selected).toHaveBeenCalledWith('n2');
+    });
+
+    it('a filtered list keeps one tab stop among the notes still shown', async () => {
+      await renderList();
+
+      await userEvent.type(screen.getByTestId('note-list-filter'), 'release');
+
+      expect(tabIndexOf('n2')).toBe('0');
+    });
   });
 });

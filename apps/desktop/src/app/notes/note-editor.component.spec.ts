@@ -106,6 +106,21 @@ describe('NoteEditorComponent', () => {
     });
   });
 
+  // Class contract: jsdom does no layout; the live QA re-measures scrollWidth against the article width.
+  describe('a very long unbroken word', () => {
+    it('wraps inside the note body instead of widening the page', async () => {
+      await renderEditor();
+
+      expect(getComputedStyle(screen.getByTestId('note-editor-body')).overflowWrap).toBe('anywhere');
+    });
+
+    it('wraps inside the note title', async () => {
+      await renderEditor();
+
+      expect(getComputedStyle(screen.getByTestId('note-editor-title')).overflowWrap).toBe('anywhere');
+    });
+  });
+
   describe('mentions', () => {
     const expandedBody = [
       'See @note:other for details.',
@@ -255,6 +270,31 @@ describe('NoteEditorComponent', () => {
 
       expect(screen.getAllByTestId('note-editor-list-item')).toHaveLength(1998);
       expect(screen.getByTestId('note-editor-show-rest')).toBeInTheDocument();
+    });
+
+    it('user reveals a very long list a chunk at a time, the button counting what remains', async () => {
+      await renderEditor({ note: aNoteView({ bodyMd: '- x\n'.repeat(4500) }) });
+
+      expect(screen.getAllByTestId('note-editor-list-item')).toHaveLength(1999);
+      await userEvent.click(screen.getByTestId('note-editor-show-rest'));
+
+      expect(screen.getAllByTestId('note-editor-list-item')).toHaveLength(3999);
+      expect(screen.getByTestId('note-editor-show-rest')).toHaveTextContent('Show the rest (501 more items)');
+      await userEvent.click(screen.getByTestId('note-editor-show-rest'));
+      expect(screen.getAllByTestId('note-editor-list-item')).toHaveLength(4500);
+      expect(screen.queryByTestId('note-editor-show-rest')).not.toBeInTheDocument();
+    });
+
+    it('user reveals the lines of a very long code fence a chunk at a time', async () => {
+      await renderEditor({ note: aNoteView({ bodyMd: `\`\`\`\n${'x\n'.repeat(2500)}\`\`\`` }) });
+
+      const linesShown = () => screen.getByTestId('note-editor-code-block').textContent!.split('\n').length;
+      expect(linesShown()).toBe(1999);
+      expect(screen.getByTestId('note-editor-show-rest')).toHaveTextContent('Show the rest (501 more items)');
+      await userEvent.click(screen.getByTestId('note-editor-show-rest'));
+
+      expect(linesShown()).toBe(2500);
+      expect(screen.queryByTestId('note-editor-show-rest')).not.toBeInTheDocument();
     });
 
     it('a note within the limit offers nothing to expand', async () => {
