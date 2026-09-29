@@ -267,8 +267,8 @@ export class SessionService {
   private readonly currentCliSessionIds = new Map<string, string>();
   private readonly interruptWatches = new Map<string, InterruptWatch>();
   // Presence means "this launch has no recorded resolved model yet"; the value is the launch's start time
-  // and whether its recording failure was already logged.
-  private readonly pendingRecordings = new Map<string, { launchedAt: string; failureLogged: boolean }>();
+  // and whether its recording failure and its transcript name mismatch were already logged.
+  private readonly pendingRecordings = new Map<string, { launchedAt: string; failureLogged: boolean; nameMismatchLogged: boolean }>();
   // Sessions whose model was switched and whose relaunch has not happened yet: the resolved model the old
   // launch recorded stays visible until the relaunch really replaces the process.
   private readonly modelSwitchesAwaitingRelaunch = new Set<string>();
@@ -295,7 +295,7 @@ export class SessionService {
     if (existsSync(spec.directory)) this.repo.setDirectoryRealpath(id, realpathSync.native(spec.directory));
     this.warnIfPermissiveSettings(spec.harness, spec.directory);
     const harness = this.harnessFor(spec.harness);
-    this.pendingRecordings.set(id, { launchedAt: new Date().toISOString(), failureLogged: false });
+    this.pendingRecordings.set(id, { launchedAt: new Date().toISOString(), failureLogged: false, nameMismatchLogged: false });
     let handle: HarnessHandle;
     try {
       handle = harness.start({
@@ -587,19 +587,26 @@ export class SessionService {
     this.guarded(sessionId, () => this.advance(sessionId));
   }
 
-  // A CLI session id that is another open session's launch id or current id never becomes this session's:
+  // A CLI session id that is another session's launch id or current id, open or closed, never becomes this session's:
   // otherwise one session's hook could adopt a neighbour's identity and then read its transcript.
   private adoptCliSessionId(sessionId: string, reportedCliSessionId: string): void {
     if (!CLI_SESSION_ID_PATTERN.test(reportedCliSessionId)) return;
-    const isOwnedByAnotherOpenSession = this.repo.list().some((other) =>
-      other.id !== sessionId && other.state !== 'closed'
+    const isOwnedByAnotherSession = this.repo.list().some((other) =>
+      other.id !== sessionId
       && (other.id === reportedCliSessionId || this.currentCliSessionIds.get(other.id) === reportedCliSessionId));
-    if (isOwnedByAnotherOpenSession) return;
+    if (isOwnedByAnotherSession) return;
     this.currentCliSessionIds.set(sessionId, reportedCliSessionId);
   }
 
   private isTranscriptOfSession(sessionId: string, path: string): boolean {
     return basename(path) === `${this.currentCliSessionIds.get(sessionId) ?? sessionId}.jsonl`;
+  }
+
+  private warnOnceWhenTranscriptNameIsForeign(sessionId: string, path: string, pending: { nameMismatchLogged: boolean }): void {
+    if (pending.nameMismatchLogged) return;
+    pending.nameMismatchLogged = true;
+    const expectedName = `${this.currentCliSessionIds.get(sessionId) ?? sessionId}.jsonl`;
+    log('warn', `resolved model: transcript name does not match the session's CLI id: session ${sessionId}, expected ${expectedName}, got ${basename(path)}`);
   }
 
   // One attempt per hook until the launch's resolution is found. It never throws into the hook handler.
@@ -609,10 +616,10 @@ export class SessionService {
     if (pending === undefined || transcriptPath === undefined) return;
     try {
       if (!isTrustedTranscriptPath(transcriptPath)) return;
-      if (!this.isTranscriptOfSession(sessionId, transcriptPath)) return;
+      if (!this.isTranscriptOfSession(sessionId, transcriptPath)) return this.warnOnceWhenTranscriptNameIsForeign(sessionId, transcriptPath, pending);
       // Reading the resolved path, not the reported one, closes the window between the check and the open.
       const resolvedPath = existsSync(transcriptPath) ? realpathSync(transcriptPath) : transcriptPath;
-      if (!this.isTranscriptOfSession(sessionId, resolvedPath)) return;
+      if (!this.isTranscriptOfSession(sessionId, resolvedPath)) return this.warnOnceWhenTranscriptNameIsForeign(sessionId, resolvedPath, pending);
       const resolution = findResolvedModel(readTranscriptTail(resolvedPath), pending.launchedAt);
       if (!resolution) return;
       this.repo.recordResolvedModel({ id: sessionId, ...resolution, driftedFrom: undefined });
@@ -1041,7 +1048,7 @@ export class SessionService {
     const hookToken = newToken();
     const mcpToken = newToken();
     this.repo.setTokens(session.id, hookToken, mcpToken);
-    this.pendingRecordings.set(session.id, { launchedAt: new Date().toISOString(), failureLogged: false });
+    this.pendingRecordings.set(session.id, { launchedAt: new Date().toISOString(), failureLogged: false, nameMismatchLogged: false });
     let handle: HarnessHandle;
     try {
       handle = harness.start({

@@ -508,6 +508,102 @@ describe('resolved model recording from a session\'s transcript', () => {
     expect(await listed(sessionA)).not.toHaveProperty('resolvedModel');
   });
 
+  it('records nothing on a session that claims the id of a closed session in a SessionStart, then names its transcript', async () => {
+    const openSession = await createSession('opus');
+    const closedSession = await createSession('opus');
+    await postJson(`/api/sessions/${closedSession}/close`);
+    writeFileSync(transcriptPathOf(closedSession), assistantLine({ model: 'claude-model-of-the-closed-session' }));
+
+    await sendHook(openSession, { hook_event_name: 'SessionStart', session_id: closedSession }, transcriptPathOf(closedSession));
+    await sendHook(openSession, preToolUse, transcriptPathOf(closedSession));
+
+    expect(await listed(openSession)).not.toHaveProperty('resolvedModel');
+  });
+
+  it('records nothing on a session that claims a non-uuid CLI session id in a SessionStart, then names a transcript after it', async () => {
+    const id = await createSession('opus');
+    writeFileSync(transcriptPathOf('foo'), assistantLine({ model: 'claude-model-of-foo' }));
+    writeFileSync(transcriptPathOf(id), assistantLine({ model: 'claude-model-of-the-launch' }));
+
+    await sendHook(id, { hook_event_name: 'SessionStart', session_id: 'foo' }, transcriptPathOf('foo'));
+    await sendHook(id, preToolUse, transcriptPathOf('foo'));
+    const afterForeignName = await listed(id);
+    await sendHook(id, preToolUse, transcriptPathOf(id));
+
+    expect(afterForeignName).not.toHaveProperty('resolvedModel');
+    expect(await listed(id)).toMatchObject({ resolvedModel: 'claude-model-of-the-launch' });
+  });
+
+  it('follows the launch transcript again after a permission-mode relaunch that follows a /clear', async () => {
+    const id = await createSession('opus');
+    const clearedCliSessionId = randomUUID();
+    await sendHook(id, { hook_event_name: 'SessionStart', source: 'clear', session_id: clearedCliSessionId }, transcriptPathOf(clearedCliSessionId));
+    writeFileSync(transcriptPathOf(clearedCliSessionId), assistantLine({ model: 'claude-model-of-the-cleared-session', at: inOneSecond() }));
+    writeFileSync(transcriptPathOf(id), assistantLine({ model: 'claude-model-of-the-launch', at: inOneSecond() }));
+
+    const modeReply = (await (await postJson(`/api/sessions/${id}/permission-mode`, { mode: 'plan' })).json()) as { status: string };
+    if (modeReply.status === 'deferred') await sendHook(id, stop, transcriptPathOf(clearedCliSessionId));
+    await expect.poll(() => harness.launches.length).toBe(2);
+    await sendHook(id, preToolUse, transcriptPathOf(clearedCliSessionId));
+    const afterClearedName = await listed(id);
+    await sendHook(id, preToolUse, transcriptPathOf(id));
+
+    expect(afterClearedName).not.toHaveProperty('resolvedModel');
+    expect(await listed(id)).toMatchObject({ resolvedModel: 'claude-model-of-the-launch' });
+  });
+
+  it('follows the launch transcript again after a close and reopen that follow a /clear', async () => {
+    const id = await createSession('opus');
+    const clearedCliSessionId = randomUUID();
+    await sendHook(id, { hook_event_name: 'SessionStart', source: 'clear', session_id: clearedCliSessionId }, transcriptPathOf(clearedCliSessionId));
+    writeFileSync(transcriptPathOf(clearedCliSessionId), assistantLine({ model: 'claude-model-of-the-cleared-session', at: inOneSecond() }));
+    writeFileSync(transcriptPathOf(id), assistantLine({ model: 'claude-model-of-the-launch', at: inOneSecond() }));
+
+    await postJson(`/api/sessions/${id}/close`);
+    await postJson(`/api/sessions/${id}/reopen`);
+    await sendHook(id, preToolUse, transcriptPathOf(clearedCliSessionId));
+    const afterClearedName = await listed(id);
+    await sendHook(id, preToolUse, transcriptPathOf(id));
+
+    expect(afterClearedName).not.toHaveProperty('resolvedModel');
+    expect(await listed(id)).toMatchObject({ resolvedModel: 'claude-model-of-the-launch' });
+  });
+
+  it('logs once per launch that a hook names a transcript that does not carry the session\'s CLI id, with ids and file name only', async () => {
+    const id = await createSession('opus');
+    const foreignName = `${randomUUID()}.jsonl`;
+    const foreignPath = join(projectDirectory, foreignName);
+    writeFileSync(foreignPath, assistantLine({ model: 'claude-model-of-a-foreign-name' }));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await sendHook(id, preToolUse, foreignPath);
+    await sendHook(id, preToolUse, foreignPath);
+    const nameMismatchWarnings = warnSpy.mock.calls.filter((call) => String(call[0]).includes('does not match'));
+    warnSpy.mockRestore();
+
+    expect(nameMismatchWarnings).toHaveLength(1);
+    expect(String(nameMismatchWarnings[0]![0])).toContain(`transcript name does not match the session's CLI id: session ${id}, expected ${id}.jsonl, got ${foreignName}`);
+    expect(String(nameMismatchWarnings[0]![0])).not.toContain(projectDirectory);
+  });
+
+  it('logs the transcript name mismatch again after the session is relaunched', async () => {
+    const id = await createSession('opus');
+    await sendHook(id, { hook_event_name: 'SessionStart' });
+    const foreignPath = transcriptPathOf(randomUUID());
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await sendHook(id, preToolUse, foreignPath);
+    await sendHook(id, stop, foreignPath);
+
+    await postJson(`/api/sessions/${id}/model`, { model: 'opus' });
+    await expect.poll(() => harness.launches.length).toBe(2);
+    await sendHook(id, preToolUse, foreignPath);
+    await sendHook(id, preToolUse, foreignPath);
+    const nameMismatchWarnings = warnSpy.mock.calls.filter((call) => String(call[0]).includes('does not match'));
+    warnSpy.mockRestore();
+
+    expect(nameMismatchWarnings).toHaveLength(2);
+  });
+
   it('records nothing from a hard link in the projects directory to a file outside it', async () => {
     const id = await createSession('opus');
     const foreignFile = join(mkdtempSync(join(tmpdir(), 'of-outside-')), 'foreign.jsonl');
