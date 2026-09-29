@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { countRenderCost, parseMarkdownBlocks, takeWithinRenderBudget, type MarkdownBlock } from './markdown-blocks';
 
-const text = (value: string) => ({ text: value, isCode: false });
-const code = (value: string) => ({ text: value, isCode: true });
+const text = (value: string) => ({ text: value, isCode: false, isBold: false });
+const code = (value: string) => ({ text: value, isCode: true, isBold: false });
+const bold = (value: string) => ({ text: value, isCode: false, isBold: true });
 
 describe('parseMarkdownBlocks', () => {
   it.each<{ name: string; markdown: string; expected: MarkdownBlock[] }>([
@@ -39,6 +40,44 @@ describe('parseMarkdownBlocks', () => {
       { type: 'heading', level: 1, segments: [text('Inner')] },
       { type: 'paragraph', segments: [text('--- end @note:abc ---')] },
     ] },
+    { name: 'bold inside a paragraph', markdown: 'a **b** c', expected: [{ type: 'paragraph', segments: [text('a '), bold('b'), text(' c')] }] },
+    { name: 'bold inside a heading', markdown: '# **Title** now', expected: [{ type: 'heading', level: 1, segments: [bold('Title'), text(' now')] }] },
+    { name: 'bold inside a bullet item', markdown: '- **b** x', expected: [{ type: 'list', items: [[bold('b'), text(' x')]] }] },
+    { name: 'bold inside a numbered item', markdown: '1. **b** x', expected: [{ type: 'ordered-list', start: 1, items: [[bold('b'), text(' x')]] }] },
+    { name: 'an unclosed bold marker stays text', markdown: 'a **b', expected: [{ type: 'paragraph', segments: [text('a **b')] }] },
+    { name: 'a third bold marker stays text', markdown: 'a **b** c ** d', expected: [{ type: 'paragraph', segments: [text('a '), bold('b'), text(' c ** d')] }] },
+    { name: 'empty bold disappears', markdown: 'a****b', expected: [{ type: 'paragraph', segments: [text('ab')] }] },
+    { name: 'bold markers inside inline code stay literal', markdown: '`**x**`', expected: [{ type: 'paragraph', segments: [code('**x**')] }] },
+    { name: 'a numbered list', markdown: '1. one\n2. two', expected: [{ type: 'ordered-list', start: 1, items: [[text('one')], [text('two')]] }] },
+    { name: 'a numbered list keeps its first number', markdown: '3. c\n4. d', expected: [{ type: 'ordered-list', start: 3, items: [[text('c')], [text('d')]] }] },
+    { name: 'a numbered list whose items all repeat one number', markdown: '1. a\n1. b', expected: [{ type: 'ordered-list', start: 1, items: [[text('a')], [text('b')]] }] },
+    { name: 'a parenthesis after the number is a paragraph', markdown: '1) one', expected: [{ type: 'paragraph', segments: [text('1) one')] }] },
+    { name: 'a number without a space after the dot is a paragraph', markdown: '1.one', expected: [{ type: 'paragraph', segments: [text('1.one')] }] },
+    { name: 'a number of ten digits is a paragraph', markdown: '1234567890. one', expected: [{ type: 'paragraph', segments: [text('1234567890. one')] }] },
+    { name: 'a bullet list followed by a numbered list', markdown: '- a\n1. b', expected: [
+      { type: 'list', items: [[text('a')]] },
+      { type: 'ordered-list', start: 1, items: [[text('b')]] },
+    ] },
+    { name: 'a quote over several lines', markdown: '> hello\n> world', expected: [{ type: 'quote', blocks: [{ type: 'paragraph', segments: [text('hello world')] }] }] },
+    { name: 'a quote marker without a space', markdown: '>hello', expected: [{ type: 'quote', blocks: [{ type: 'paragraph', segments: [text('hello')] }] }] },
+    { name: 'an empty quote line separates two paragraphs of a quote', markdown: '> a\n>\n> b', expected: [
+      { type: 'quote', blocks: [{ type: 'paragraph', segments: [text('a')] }, { type: 'paragraph', segments: [text('b')] }] },
+    ] },
+    { name: 'a list inside a quote', markdown: '> - a\n> - b', expected: [{ type: 'quote', blocks: [{ type: 'list', items: [[text('a')], [text('b')]] }] }] },
+    { name: 'a numbered list inside a quote', markdown: '> 2. a', expected: [{ type: 'quote', blocks: [{ type: 'ordered-list', start: 2, items: [[text('a')]] }] }] },
+    { name: 'a quote inside a quote', markdown: '> > deep', expected: [{ type: 'quote', blocks: [{ type: 'quote', blocks: [{ type: 'paragraph', segments: [text('deep')] }] }] }] },
+    { name: 'quotes nested deeper than three levels keep their markers as text', markdown: '> > > > x', expected: [
+      { type: 'quote', blocks: [{ type: 'quote', blocks: [{ type: 'quote', blocks: [{ type: 'paragraph', segments: [text('> x')] }] }] }] },
+    ] },
+    { name: 'a quote interrupts a paragraph', markdown: 'a\n> b', expected: [
+      { type: 'paragraph', segments: [text('a')] },
+      { type: 'quote', blocks: [{ type: 'paragraph', segments: [text('b')] }] },
+    ] },
+    { name: 'a line after a quote is not part of the quote', markdown: '> a\nb', expected: [
+      { type: 'quote', blocks: [{ type: 'paragraph', segments: [text('a')] }] },
+      { type: 'paragraph', segments: [text('b')] },
+    ] },
+    { name: 'a link stays literal text', markdown: '[a](https://x.test)', expected: [{ type: 'paragraph', segments: [text('[a](https://x.test)')] }] },
   ])('parses $name', ({ markdown, expected }) => {
     expect(parseMarkdownBlocks(markdown)).toEqual(expected);
   });
@@ -77,6 +116,27 @@ describe('parseMarkdownBlocks', () => {
 
     expect(performance.now() - startedAt).toBeLessThan(1000);
   });
+
+  // A quadratic scan on these one-mebibyte bodies takes minutes; the generous bound only fails on a super-linear parser.
+  describe.each<{ name: string; markdown: string; blockType: MarkdownBlock['type'] }>([
+    { name: 'a numbered marker followed by 200k spaces', markdown: `1.${' '.repeat(200_000)} x`, blockType: 'ordered-list' },
+    { name: 'a quote marker followed by 200k spaces', markdown: `>${' '.repeat(200_000)} x`, blockType: 'quote' },
+    { name: '200k quote lines', markdown: '> \n'.repeat(200_000), blockType: 'quote' },
+    { name: '200k numbered items', markdown: '1. \n'.repeat(200_000), blockType: 'ordered-list' },
+    { name: '500k bold markers', markdown: '**'.repeat(500_000), blockType: 'paragraph' },
+    { name: 'a bold marker opened and never closed 250k times', markdown: 'a **b '.repeat(150_000), blockType: 'paragraph' },
+    { name: '500k nested quote markers', markdown: '> '.repeat(500_000), blockType: 'quote' },
+    { name: '200k quoted numbered items', markdown: '> 1. x\n'.repeat(150_000), blockType: 'quote' },
+  ])('hostile body: $name', ({ markdown, blockType }) => {
+    it('is parsed in linear time', () => {
+      const startedAt = performance.now();
+
+      const blocks = parseMarkdownBlocks(markdown);
+
+      expect(performance.now() - startedAt).toBeLessThan(3000);
+      expect(blocks.some((block) => block.type === blockType)).toBe(true);
+    });
+  });
 });
 
 describe('takeWithinRenderBudget', () => {
@@ -92,6 +152,40 @@ describe('takeWithinRenderBudget', () => {
     const kept = takeWithinRenderBudget(blocks, 2);
 
     expect(kept).toEqual([]);
+  });
+
+  describe('new node kinds', () => {
+    it('a numbered list costs its element plus one node per item', () => {
+      expect(countRenderCost(parseMarkdownBlocks('1. a\n2. b\n3. c'))).toBe(4);
+    });
+
+    it('each bold run costs one node', () => {
+      expect(countRenderCost(parseMarkdownBlocks('a **b** c **d**'))).toBe(3);
+    });
+
+    it('a quote costs its element plus everything inside it', () => {
+      expect(countRenderCost(parseMarkdownBlocks('> a **b**\n>\n> - c'))).toBe(1 + 2 + 2);
+    });
+
+    it('keeps the first bold runs of a paragraph that exceeds the budget', () => {
+      const [paragraph] = takeWithinRenderBudget(parseMarkdownBlocks('a**b**'.repeat(10)), 4);
+
+      expect(paragraph).toMatchObject({ type: 'paragraph' });
+      expect(countRenderCost([paragraph!])).toBe(4);
+    });
+
+    it('keeps the first items of a numbered list and its start number', () => {
+      const kept = takeWithinRenderBudget(parseMarkdownBlocks('5. a\n6. b\n7. c'), 3);
+
+      expect(kept).toEqual([{ type: 'ordered-list', start: 5, items: [[text('a')], [text('b')]] }]);
+    });
+
+    it('cuts inside a quote and drops a quote that would keep nothing', () => {
+      const blocks = parseMarkdownBlocks('> a\n>\n> b\n>\n> c');
+
+      expect(takeWithinRenderBudget(blocks, 3)).toMatchObject([{ type: 'quote', blocks: [expect.anything(), expect.anything()] }]);
+      expect(takeWithinRenderBudget(blocks, 1)).toEqual([]);
+    });
   });
 
   describe('code fences', () => {

@@ -61,6 +61,18 @@ const NODES_PER_CHUNK = 2000;
               }
             </ul>
           }
+          @case ('ordered-list') {
+            <ol data-testid="note-editor-ordered-list" [attr.start]="block.start">
+              @for (item of block.items; track $index) {
+                <li data-testid="note-editor-list-item"><ng-container [ngTemplateOutlet]="inline" [ngTemplateOutletContext]="{ $implicit: item }" /></li>
+              }
+            </ol>
+          }
+          @case ('quote') {
+            <blockquote data-testid="note-editor-quote">
+              <ng-container [ngTemplateOutlet]="blockList" [ngTemplateOutletContext]="{ $implicit: block.blocks }" />
+            </blockquote>
+          }
           @case ('code') {
             <pre data-testid="note-editor-code-block">{{ block.text }}</pre>
           }
@@ -69,7 +81,11 @@ const NODES_PER_CHUNK = 2000;
     </ng-template>
     <ng-template #inline let-segments>
       @for (segment of segments; track $index) {
-        @if (segment.isCode) { <code data-testid="note-editor-inline-code">{{ segment.text }}</code> } @else { {{ segment.text }} }
+        @if (segment.isCode) {
+          <code data-testid="note-editor-inline-code">{{ segment.text }}</code>
+        } @else if (segment.isBold) {
+          <strong data-testid="note-editor-bold">{{ segment.text }}</strong>
+        } @else { {{ segment.text }} }
       }
     </ng-template>
   `,
@@ -89,11 +105,12 @@ const NODES_PER_CHUNK = 2000;
     .history-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
     .scroller { flex: 1; min-height: 0; overflow: auto; padding: 2rem 3rem; display: flex; justify-content: center }
     .doc { width: 100%; max-width: 42rem; display: flex; flex-direction: column; gap: .875rem; font-size: .9375rem; line-height: 1.65; text-wrap: pretty; overflow-wrap: anywhere }
-    .doc h1, .doc h2, .doc h3, .doc p, .doc ul, .doc pre { margin: 0 }
+    .doc h1, .doc h2, .doc h3, .doc p, .doc ul, .doc ol, .doc blockquote, .doc pre { margin: 0 }
     .doc h1 { font-size: 1.5rem; font-weight: 600; letter-spacing: -.01em }
     .doc h2 { margin-top: .5rem; font-size: 1.0625rem; font-weight: 600 }
     .doc h3 { margin-top: .25rem; font-size: .9375rem; font-weight: 600 }
-    .doc ul { padding-left: 1.25rem }
+    .doc ul, .doc ol { padding-left: 1.25rem }
+    .doc blockquote { display: flex; flex-direction: column; gap: .5rem; padding-left: .875rem; border-left: 3px solid var(--line); color: var(--mut) }
     .doc code { font-family: var(--mono); font-size: .8125rem; padding: 0 .25rem; border-radius: .25rem; background: var(--sunk) }
     .doc pre { padding: .625rem .75rem; border-radius: .375rem; background: var(--sunk); font-family: var(--mono); font-size: .8125rem; line-height: 1.5; overflow: auto }
   `,

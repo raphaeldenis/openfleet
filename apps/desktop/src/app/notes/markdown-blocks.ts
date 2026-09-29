@@ -1,24 +1,31 @@
-export interface InlineSegment { text: string; isCode: boolean }
+export interface InlineSegment { text: string; isCode: boolean; isBold: boolean }
 
 export type MarkdownBlock =
   | { type: 'heading'; level: 1 | 2 | 3; segments: InlineSegment[] }
   | { type: 'paragraph'; segments: InlineSegment[] }
   | { type: 'list'; items: InlineSegment[][] }
+  | { type: 'ordered-list'; start: number; items: InlineSegment[][] }
+  | { type: 'quote'; blocks: MarkdownBlock[] }
   | { type: 'code'; text: string };
 
 const HEADING = /^(#{1,3}) +(.*)$/;
 const LIST_ITEM = /^[-*] +(.*)$/;
+const ORDERED_ITEM = /^\d{1,9}\. +(.*)$/;
+const QUOTE_LINE = /^> ?(.*)$/;
 const LINE_BREAK = /\r\n|[\n\r\u2028\u2029]/;
 const FENCE = '```';
 const BACKTICK = '`';
+const BOLD_MARKER = '**';
+const MAX_QUOTE_DEPTH = 3;
 
-// ponytail: headings 1-3, paragraphs, bullet lists, fenced code and inline code only;
-// no emphasis, links or tables. Add `marked` if notes need them.
+// ponytail: headings 1-3, paragraphs, bullet and numbered lists, quotes (3 levels), fenced code, inline code and bold only;
+// no italics, links or tables. Add `marked` if notes need them.
 export function parseMarkdownBlocks(markdown: string): MarkdownBlock[] {
   return parseLines(markdown.split(LINE_BREAK));
 }
 
-function parseLines(lines: string[]): MarkdownBlock[] {
+function parseLines(lines: string[], quoteDepth = 0): MarkdownBlock[] {
+  const canOpenQuote = quoteDepth < MAX_QUOTE_DEPTH;
   const blocks: MarkdownBlock[] = [];
   let index = 0;
 
@@ -46,17 +53,30 @@ function parseLines(lines: string[]): MarkdownBlock[] {
     }
 
     if (LIST_ITEM.test(line)) {
-      const items: InlineSegment[][] = [];
-      while (index < lines.length && LIST_ITEM.test(lines[index]!)) {
-        items.push(inlineSegments(LIST_ITEM.exec(lines[index]!)![1]!));
-        index += 1;
-      }
+      const { items, next } = collectListItems(lines, index, LIST_ITEM);
       blocks.push({ type: 'list', items });
+      index = next;
+      continue;
+    }
+
+    if (ORDERED_ITEM.test(line)) {
+      const { items, next } = collectListItems(lines, index, ORDERED_ITEM);
+      blocks.push({ type: 'ordered-list', start: Number.parseInt(line, 10), items });
+      index = next;
+      continue;
+    }
+
+    if (canOpenQuote && QUOTE_LINE.test(line)) {
+      const quotedLines: string[] = [];
+      for (; index < lines.length && QUOTE_LINE.test(lines[index]!); index += 1) {
+        quotedLines.push(QUOTE_LINE.exec(lines[index]!)![1]!);
+      }
+      blocks.push({ type: 'quote', blocks: parseLines(quotedLines, quoteDepth + 1) });
       continue;
     }
 
     const paragraphLines: string[] = [];
-    while (index < lines.length && startsParagraphContinuation(lines[index]!)) {
+    while (index < lines.length && startsParagraphContinuation(lines[index]!, canOpenQuote)) {
       paragraphLines.push(lines[index]!);
       index += 1;
     }
@@ -66,10 +86,21 @@ function parseLines(lines: string[]): MarkdownBlock[] {
   return blocks;
 }
 
-function startsParagraphContinuation(line: string): boolean {
+function collectListItems(lines: string[], from: number, itemPattern: RegExp): { items: InlineSegment[][]; next: number } {
+  const items: InlineSegment[][] = [];
+  let next = from;
+  for (; next < lines.length; next += 1) {
+    const match = itemPattern.exec(lines[next]!);
+    if (!match) break;
+    items.push(inlineSegments(match[1]!));
+  }
+  return { items, next };
+}
+
+function startsParagraphContinuation(line: string, canOpenQuote: boolean): boolean {
   const isBlank = line.trim() === '';
   const startsAnotherBlock =
-    line.startsWith(FENCE) || HEADING.test(line) || LIST_ITEM.test(line);
+    line.startsWith(FENCE) || HEADING.test(line) || LIST_ITEM.test(line) || ORDERED_ITEM.test(line) || (canOpenQuote && QUOTE_LINE.test(line));
   return !isBlank && !startsAnotherBlock;
 }
 
@@ -81,31 +112,43 @@ function findLine(lines: string[], from: number, matches: (line: string) => bool
 }
 
 function inlineSegments(text: string): InlineSegment[] {
-  const parts = text.split(BACKTICK);
-  const hasUnclosedBacktick = parts.length % 2 === 0;
-  const pairedParts = hasUnclosedBacktick ? [...parts.slice(0, -2), parts.slice(-2).join(BACKTICK)] : parts;
-  return pairedParts
-    .map((part, position) => ({ text: part, isCode: position % 2 === 1 }))
+  return splitPairedBy(text, BACKTICK)
+    .flatMap((piece) => (piece.isInside ? [{ text: piece.text, isCode: true, isBold: false }] : boldSegments(piece.text)))
     .filter((segment) => segment.text !== '')
     .reduce<InlineSegment[]>(mergeAdjacentTextSegments, []);
 }
 
+function boldSegments(text: string): InlineSegment[] {
+  return splitPairedBy(text, BOLD_MARKER).map((piece) => ({ text: piece.text, isCode: false, isBold: piece.isInside }));
+}
+
+/** Splits on `delimiter`; odd pieces are inside a pair, and a delimiter left unpaired at the end stays literal text. */
+function splitPairedBy(text: string, delimiter: string): { text: string; isInside: boolean }[] {
+  const parts = text.split(delimiter);
+  const hasUnpairedDelimiter = parts.length % 2 === 0;
+  const pairedParts = hasUnpairedDelimiter ? [...parts.slice(0, -2), parts.slice(-2).join(delimiter)] : parts;
+  return pairedParts.map((part, position) => ({ text: part, isInside: position % 2 === 1 }));
+}
+
 function mergeAdjacentTextSegments(merged: InlineSegment[], segment: InlineSegment): InlineSegment[] {
   const previous = merged.at(-1);
-  const continuesPreviousText = previous !== undefined && !previous.isCode && !segment.isCode;
-  if (continuesPreviousText) previous.text += segment.text;
+  const continuesPreviousRun = previous !== undefined && !previous.isCode && !segment.isCode && previous.isBold === segment.isBold;
+  if (continuesPreviousRun) previous.text += segment.text;
   else merged.push({ ...segment });
   return merged;
 }
 
-/** Cost of a block in rendered DOM nodes worth budgeting: its own element, its list items and its inline code chips. */
+/** Cost of a block in rendered DOM nodes worth budgeting: its own element, its list items, its quoted blocks and its inline code and bold runs. */
 export function renderCost(block: MarkdownBlock): number {
   switch (block.type) {
     case 'heading':
     case 'paragraph':
-      return 1 + countCodeChips(block.segments);
+      return 1 + countStyledRuns(block.segments);
+    case 'quote':
+      return 1 + countRenderCost(block.blocks);
     case 'list':
-      return 1 + block.items.reduce((total, item) => total + 1 + countCodeChips(item), 0);
+    case 'ordered-list':
+      return 1 + block.items.reduce((total, item) => total + 1 + countStyledRuns(item), 0);
     case 'code':
       return 1 + countLines(block.text);
     default:
@@ -134,7 +177,7 @@ export function countRenderCost(blocks: readonly MarkdownBlock[]): number {
   return blocks.reduce((total, block) => total + renderCost(block), 0);
 }
 
-/** Keeps the first `budget` rendered nodes in reading order, cutting inside lists and paragraphs. */
+/** Keeps the first `budget` rendered nodes in reading order, cutting inside lists, paragraphs and quotes. */
 export function takeWithinRenderBudget(blocks: readonly MarkdownBlock[], budget: number): MarkdownBlock[] {
   const kept: MarkdownBlock[] = [];
   let remaining = budget;
@@ -157,7 +200,12 @@ function trimToBudget(block: MarkdownBlock, budget: number): MarkdownBlock | nul
       const segments = takeSegments(block.segments, budget);
       return block.segments.length > 0 && segments.length === 0 ? null : { ...block, segments };
     }
-    case 'list': {
+    case 'quote': {
+      const nested = takeWithinRenderBudget(block.blocks, budget);
+      return block.blocks.length > 0 && nested.length === 0 ? null : { ...block, blocks: nested };
+    }
+    case 'list':
+    case 'ordered-list': {
       const items = takeListItems(block.items, budget);
       return block.items.length > 0 && items.length === 0 ? null : { ...block, items };
     }
@@ -179,7 +227,7 @@ function takeListItems(items: readonly InlineSegment[][], budget: number): Inlin
     const segments = takeSegments(item, remaining);
     const isBulletCutOffFromItsContent = item.length > 0 && segments.length === 0;
     if (isBulletCutOffFromItsContent) break;
-    remaining -= countCodeChips(segments);
+    remaining -= countStyledRuns(segments);
     kept.push(segments);
   }
   return kept;
@@ -189,7 +237,7 @@ function takeSegments(segments: readonly InlineSegment[], budget: number): Inlin
   const kept: InlineSegment[] = [];
   let remaining = budget;
   for (const segment of segments) {
-    if (segment.isCode) {
+    if (isStyledRun(segment)) {
       if (remaining <= 0) break;
       remaining -= 1;
     }
@@ -198,6 +246,10 @@ function takeSegments(segments: readonly InlineSegment[], budget: number): Inlin
   return kept;
 }
 
-function countCodeChips(segments: readonly InlineSegment[]): number {
-  return segments.filter((segment) => segment.isCode).length;
+function countStyledRuns(segments: readonly InlineSegment[]): number {
+  return segments.filter(isStyledRun).length;
+}
+
+function isStyledRun(segment: InlineSegment): boolean {
+  return segment.isCode || segment.isBold;
 }
