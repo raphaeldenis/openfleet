@@ -445,6 +445,34 @@ describe('resolved model recording from a session\'s transcript', () => {
     expect(await listed(id)).toMatchObject({ resolvedModel: 'claude-model-at-window-start' });
   });
 
+  it('describes the still-running old process while a model switch is deferred, then only the new launch once it relaunches', async () => {
+    const id = await createSession('claude-opus-5-5');
+    await sendHook(id, { hook_event_name: 'SessionStart' });
+    writeFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-5' }));
+    await sendHook(id, preToolUse);
+    await sendHook(id, { hook_event_name: 'UserPromptSubmit' });
+    const reply = await postJson(`/api/sessions/${id}/model`, { model: 'claude-sonnet-5-5' });
+
+    appendFileSync(transcriptPath, assistantLine({ model: 'claude-opus-5-5' }));
+    await sendHook(id, { hook_event_name: 'PostToolUse', tool_name: 'Bash' });
+    const afterOldProcessHook = await listed(id);
+    await pause(10);
+    await sendHook(id, stop);
+    await expect.poll(() => harness.launches.length).toBe(2);
+    const afterRelaunch = await listed(id);
+    await sendHook(id, preToolUse);
+    const afterHookSeeingOnlyOldLines = await listed(id);
+    appendFileSync(transcriptPath, assistantLine({ model: 'claude-sonnet-5-5', at: inOneSecond() }));
+    await sendHook(id, preToolUse);
+    const afterNewLaunchAnswered = await listed(id);
+
+    expect(await reply.json()).toEqual({ status: 'deferred' });
+    expect(afterOldProcessHook).toMatchObject({ model: 'claude-sonnet-5-5', resolvedModel: 'claude-opus-5-5' });
+    expect(afterRelaunch).not.toHaveProperty('resolvedModel');
+    expect(afterHookSeeingOnlyOldLines).not.toHaveProperty('resolvedModel');
+    expect(afterNewLaunchAnswered).toMatchObject({ resolvedModel: 'claude-sonnet-5-5' });
+  });
+
   it('relaunches a session with the alias it was launched with, never with the model id recorded for it', async () => {
     const id = await createSession('opus');
     const requestedModel = (await listed(id)).model;
