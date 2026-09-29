@@ -192,6 +192,21 @@ describe('ClaudeCliHarness', () => {
     expect(JSON.stringify(settings)).toContain('tok-hook');
   });
 
+  it('never lets the SessionStart command string carry the hook token — only a 0600 curl config file next to settings.json does, invisible to `ps`', async () => {
+    const { ClaudeCliHarness } = await import('./claudeCliHarness.js');
+    new ClaudeCliHarness(sessionsRoot).start(launch);
+
+    const [, args] = spawn.mock.calls[0]!;
+    const settingsPath = (args as string[])[(args as string[]).indexOf('--settings') + 1]!;
+    const settings = JSON.parse(readFileSync(settingsPath, 'utf8'));
+    const sessionStartCommand = settings.hooks.SessionStart[0].hooks[0].command as string;
+    expect(sessionStartCommand).not.toContain('tok-hook');
+
+    const hookCurlConfigPath = join(settingsPath, '..', 'hook-curl.conf');
+    expect(modeOf(hookCurlConfigPath)).toBe(0o600);
+    expect(readFileSync(hookCurlConfigPath, 'utf8')).toBe(`url = "${launch.hookUrl}"`);
+  });
+
   it('writes the mcp-config file at 0600, carrying the bearer token', async () => {
     const { ClaudeCliHarness } = await import('./claudeCliHarness.js');
     new ClaudeCliHarness(sessionsRoot).start(launch);
@@ -217,6 +232,18 @@ describe('ClaudeCliHarness', () => {
 
     expect(existsSync(settingsPath)).toBe(false);
     expect(existsSync(mcpConfigPath)).toBe(false);
+  });
+
+  it('removes every token file it just wrote, not just some, when pty.spawn throws right after they land on disk', async () => {
+    const { ClaudeCliHarness } = await import('./claudeCliHarness.js');
+    spawn.mockImplementationOnce(() => {
+      throw new Error('boom: pty spawn failed');
+    });
+
+    expect(() => new ClaudeCliHarness(sessionsRoot).start(launch)).toThrow('boom: pty spawn failed');
+
+    const sessionDir = join(sessionsRoot, launch.sessionId);
+    expect(existsSync(sessionDir) ? readdirSync(sessionDir) : []).toEqual([]);
   });
 
   it('writes fresh token files carrying the rotated tokens on a resume launch, without touching the closed launch\'s own files', async () => {

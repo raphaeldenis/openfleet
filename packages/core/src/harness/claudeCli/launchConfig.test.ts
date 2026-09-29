@@ -12,7 +12,11 @@ const launch = {
   displayName: '⚔️ Gimli - CCM-1',
 };
 
-const tokenFilePaths = { settingsPath: '/tmp/of-sessions/s1/launch1/settings.json', mcpConfigPath: '/tmp/of-sessions/s1/launch1/mcp-config.json' };
+const tokenFilePaths = {
+  settingsPath: '/tmp/of-sessions/s1/launch1/settings.json',
+  mcpConfigPath: '/tmp/of-sessions/s1/launch1/mcp-config.json',
+  hookCurlConfigPath: '/tmp/of-sessions/s1/launch1/hook-curl.conf',
+};
 
 describe('buildClaudeLaunchConfig', () => {
   it('passes model, name, session id, and the settings/mcp-config file paths as args', () => {
@@ -44,17 +48,31 @@ describe('buildClaudeLaunchConfig', () => {
     }
   });
 
-  it('registers SessionStart as a command hook forwarding its stdin to the same hook URL, since the CLI silently drops http hooks for that event', () => {
+  it('registers SessionStart as a command hook forwarding its stdin to the hook URL via a curl config file, since the CLI silently drops http hooks for that event', () => {
     const { settings } = buildClaudeLaunchConfig(launch, tokenFilePaths);
     const hooks = settings.hooks as Record<string, { hooks: { type: string; command?: string; url?: string }[] }[]>;
     const sessionStartHook = hooks.SessionStart?.[0]?.hooks[0]!;
     expect(sessionStartHook.type).toBe('command');
     expect(sessionStartHook.url).toBeUndefined();
-    expect(sessionStartHook.command).toContain(launch.hookUrl);
+    expect(sessionStartHook.command).toContain(`-K '${tokenFilePaths.hookCurlConfigPath}'`);
     expect(sessionStartHook.command).toContain('--data-binary @-');
   });
 
-  it('single-quotes the hook URL in the SessionStart command and never interpolates the session directory or seeded prompt', () => {
+  it('never puts the hook token in the SessionStart command itself — only in the curl config file a `ps` listing cannot see', () => {
+    const { settings } = buildClaudeLaunchConfig(launch, tokenFilePaths);
+    const hooks = settings.hooks as Record<string, { hooks: { command?: string }[] }[]>;
+    const command = hooks.SessionStart?.[0]?.hooks[0]!.command!;
+
+    expect(command).not.toContain(launch.hookUrl);
+  });
+
+  it('writes the hook URL into the curl config content, in the `url = "..."` form -K expects', () => {
+    const { hookCurlConfig } = buildClaudeLaunchConfig(launch, tokenFilePaths);
+
+    expect(hookCurlConfig).toBe(`url = "${launch.hookUrl}"`);
+  });
+
+  it('single-quotes the curl config path in the SessionStart command and never interpolates the session directory, seeded prompt, or hook URL', () => {
     const dangerousLaunch = {
       ...launch,
       hookUrl: 'http://127.0.0.1:7331/hooks/abcDEF123-_xyz',
@@ -65,9 +83,12 @@ describe('buildClaudeLaunchConfig', () => {
     const hooks = settings.hooks as Record<string, { hooks: { type: string; command?: string }[] }[]>;
     const command = hooks.SessionStart?.[0]?.hooks[0]!.command!;
 
-    expect(command).toBe(`curl -sS --connect-timeout 2 --max-time 10 -X POST -H 'Content-Type: application/json' --data-binary @- '${dangerousLaunch.hookUrl}'`);
+    expect(command).toBe(
+      `curl -sS --connect-timeout 2 --max-time 10 -X POST -H 'Content-Type: application/json' -K '${tokenFilePaths.hookCurlConfigPath}' --data-binary @-`,
+    );
     expect(command).not.toContain(dangerousLaunch.directory);
     expect(command).not.toContain(dangerousLaunch.seededPrompt);
+    expect(command).not.toContain(dangerousLaunch.hookUrl);
   });
 
   it('gives the SessionStart command hook the same timeout as every other hook, so a stalled forward does not hang the CLI indefinitely', () => {

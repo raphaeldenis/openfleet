@@ -24,7 +24,7 @@ export class ClaudeCliHarness implements Harness {
     // never collides with a file an earlier, not-yet-cleaned-up launch of the same session left behind.
     const tokenFilesDir = tokenFilesDirFor(this.sessionsRoot, launch.sessionId);
     const config = buildClaudeLaunchConfig(launch, pathsIn(tokenFilesDir));
-    writeTokenFiles(tokenFilesDir, config.settings, config.mcpConfig);
+    writeTokenFiles(tokenFilesDir, config.settings, config.mcpConfig, config.hookCurlConfig);
     let process: pty.IPty;
     try {
       process = pty.spawn(config.command, config.args, {

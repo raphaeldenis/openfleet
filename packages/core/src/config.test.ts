@@ -44,6 +44,24 @@ describe('loadConfig', () => {
     expect(modeOf(join(home, 'worktrees'))).toBe(0o700);
   });
 
+  it('creates a fresh sessions directory at 0700 and exposes it as sessionsRoot (AUD-11)', () => {
+    const home = mkdtempSync(join(tmpdir(), 'of-home-'));
+
+    const config = loadConfig({ OPENFLEET_HOME: home });
+
+    expect(config.sessionsRoot).toBe(join(home, 'sessions'));
+    expect(modeOf(config.sessionsRoot)).toBe(0o700);
+  });
+
+  it('tightens an existing, looser sessions directory to 0700 instead of leaving it as found (AUD-11)', () => {
+    const home = mkdtempSync(join(tmpdir(), 'of-home-'));
+    mkdirSync(join(home, 'sessions'), { recursive: true, mode: 0o755 });
+
+    loadConfig({ OPENFLEET_HOME: home });
+
+    expect(modeOf(join(home, 'sessions'))).toBe(0o700);
+  });
+
   it('forces admin.token back to 0600 on every load, even one that finds it already looser (AUD-05)', () => {
     const home = mkdtempSync(join(tmpdir(), 'of-home-'));
     loadConfig({ OPENFLEET_HOME: home });

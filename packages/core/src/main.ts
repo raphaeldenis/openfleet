@@ -5,6 +5,7 @@ import { openDatabase } from './db/database.js';
 import { EventBus } from './events/eventBus.js';
 import { ApprovalService } from './governance/approvalService.js';
 import { ClaudeCliHarness } from './harness/claudeCli/claudeCliHarness.js';
+import { sweepStaleSessions } from './harness/claudeCli/tokenFiles.js';
 import { FakeHarness } from './harness/fakeHarness.js';
 import { ManagerRepository } from './managers/managerRepository.js';
 import { ManagerService } from './managers/managerService.js';
@@ -22,7 +23,7 @@ const config = loadConfig();
 const db = openDatabase(config.dbPath);
 const bus = new EventBus();
 const baseUrl = `http://${config.host}:${config.port}`;
-const sessions = new SessionService({ db, bus, harnesses: [new ClaudeCliHarness(join(config.home, 'sessions')), new FakeHarness()], baseUrl, worktreesRoot: config.worktreesRoot });
+const sessions = new SessionService({ db, bus, harnesses: [new ClaudeCliHarness(config.sessionsRoot), new FakeHarness()], baseUrl, worktreesRoot: config.worktreesRoot });
 const approvals = new ApprovalService({ db, bus });
 // A row still 'pending' from before this boot has no live waiter any more (AUD-07): the pre-restart
 // process that would have decided it is gone with the old daemon.
@@ -38,6 +39,10 @@ const managers = new ManagerService({ managers: managerRepository, sessions, bus
 const server = await startServer({ ...config, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, worktreesRoot: config.worktreesRoot }) });
 log('info', `openfleet core listening on ${server.url} (home: ${config.home})`);
 
+// A launch dir a crashed or killed daemon never cleaned up would otherwise sit on disk carrying a live
+// token indefinitely; every resume below rewrites its own launch dir from scratch with rotated tokens
+// anyway, so nothing here is worth preserving across a restart (AUD-11).
+sweepStaleSessions(config.sessionsRoot);
 await sessions.resumeAll();
 pulseScheduler.start();
 

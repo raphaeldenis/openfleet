@@ -10,6 +10,7 @@ export interface ClaudeLaunchConfig {
   args: string[];
   settings: Record<string, unknown>;
   mcpConfig: Record<string, unknown>;
+  hookCurlConfig: string;
 }
 
 // tokenFilePaths are where the caller will write `settings` and `mcpConfig` on disk (0600, inside a 0700
@@ -27,12 +28,15 @@ export function buildClaudeLaunchConfig(launch: HarnessLaunch, tokenFilePaths: T
   if (launch.model !== undefined && !isValidModelId(launch.model)) {
     throw new Error(`refusing to launch with an invalid model id: "${launch.model}"`);
   }
-  const settings = { hooks: buildHooks(launch.hookUrl) };
+  const settings = { hooks: buildHooks(launch.hookUrl, tokenFilePaths.hookCurlConfigPath) };
   const mcpConfig = {
     mcpServers: {
       openfleet: { type: 'http', url: launch.mcpUrl, headers: { Authorization: `Bearer ${launch.mcpToken}` } },
     },
   };
+  // curl's -K config format for a long option: `name = "value"` (double-quoted, since the URL contains
+  // no double quote of its own). Read by forwardStdinToHookUrl below instead of the URL going into argv.
+  const hookCurlConfig = `url = "${launch.hookUrl}"`;
   // A resume reattaches to a UUID the CLI already knows: --session-id, --name
   // and the seeded prompt are first-run-only flags the CLI rejects or ignores
   // on --resume. --model is passed on both paths — `claude --help` documents
@@ -49,21 +53,22 @@ export function buildClaudeLaunchConfig(launch: HarnessLaunch, tokenFilePaths: T
   // read as a CLI option. `--` forces every token after it to be a positional argument, and
   // it must be the very last argv entry so nothing pushed later can land ahead of it.
   if (!launch.resuming && launch.seededPrompt) args.push('--', launch.seededPrompt);
-  return { command: 'claude', args, settings, mcpConfig };
+  return { command: 'claude', args, settings, mcpConfig, hookCurlConfig };
 }
 
-function buildHooks(hookUrl: string): Record<string, unknown> {
+function buildHooks(hookUrl: string, hookCurlConfigPath: string): Record<string, unknown> {
   const httpHookEntry = [{ hooks: [{ type: 'http', url: hookUrl, timeout: HOOK_TIMEOUT_SECONDS }] }];
-  const sessionStartHookEntry = [{ hooks: [{ type: 'command', command: forwardStdinToHookUrl(hookUrl), timeout: HOOK_TIMEOUT_SECONDS }] }];
+  const sessionStartHookEntry = [{ hooks: [{ type: 'command', command: forwardStdinToHookUrl(hookCurlConfigPath), timeout: HOOK_TIMEOUT_SECONDS }] }];
   return Object.fromEntries(HOOK_EVENT_NAMES.map((name) => [name, name === 'SessionStart' ? sessionStartHookEntry : httpHookEntry]));
 }
 
 // ponytail: Claude Code 2.1.281 silently drops `type: "http"` hooks for SessionStart only (confirmed with
 // --debug: "HTTP hooks are not supported for SessionStart"); every other event still arrives over HTTP.
-// A command hook that forwards its own stdin to the same URL works around it. hookUrl is daemon-built from
-// a base64url token (no shell metacharacters), so single-quoting it is enough. The timeouts keep a hung
-// daemon from stalling the CLI's startup on this hook. Drop this once the CLI
-// delivers SessionStart over http like the rest of the hook events.
-function forwardStdinToHookUrl(hookUrl: string): string {
-  return `curl -sS --connect-timeout 2 --max-time 10 -X POST -H 'Content-Type: application/json' --data-binary @- '${hookUrl}'`;
+// A command hook that forwards its own stdin to the same URL works around it. The URL itself lives only
+// in the 0600 curl config file this command points at (AUD-11) — a bare argv URL is visible to any other
+// local user via `ps`, but this path is not a secret. The timeouts keep a hung daemon from stalling the
+// CLI's startup on this hook. Drop this once the CLI delivers SessionStart over http like the rest of the
+// hook events.
+function forwardStdinToHookUrl(hookCurlConfigPath: string): string {
+  return `curl -sS --connect-timeout 2 --max-time 10 -X POST -H 'Content-Type: application/json' -K '${hookCurlConfigPath}' --data-binary @-`;
 }
