@@ -47,13 +47,13 @@ const makeTrackedDirectory = (prefix: string) => {
   return directory;
 };
 
-const gitCheckHook: { beforeEachCheck?: () => void } = {};
+const gitCheckHook: { beforeEachCheck?: () => void | Promise<void> } = {};
 vi.mock('../git/worktrees.js', async (importOriginal) => {
   const original = await importOriginal<typeof import('../git/worktrees.js')>();
   return {
     ...original,
-    sameGitRepository: (...args: Parameters<typeof original.sameGitRepository>) => {
-      gitCheckHook.beforeEachCheck?.();
+    sameGitRepository: async (...args: Parameters<typeof original.sameGitRepository>) => {
+      await gitCheckHook.beforeEachCheck?.();
       return original.sameGitRepository(...args);
     },
   };
@@ -346,6 +346,17 @@ describe('spawn directory guard, check-to-launch consistency', () => {
     expect(harness.launches).toHaveLength(1);
   });
 
+  it('user can be refused with a readable error when the caller is closed while the spawn is being checked', async () => {
+    const manager = await connect(managerToken);
+    gitCheckHook.beforeEachCheck = () => sessions.close(managerId);
+
+    const result = await callCreateSession(manager, { directory: makeTrackedDirectory(join(WORKTREES_ROOT, 'orphan-')), name: 'Orphan' });
+
+    expect(result.isError).toBe(true);
+    expect(errorText(result)).toContain('is no longer live');
+    expect(harness.launches).toHaveLength(1);
+  });
+
   it.skipIf(!firmlinkSpellingIsAvailable)('user can be refused when the requested directory spells the manager directory through the macOS data volume', async () => {
     const manager = await connect(managerToken);
 
@@ -409,6 +420,7 @@ describe('duplicate spawn guard', () => {
     expect(errorText(result)).toContain('Builder');
     expect(errorText(result)).toContain(`state ${sessions.get(child!.id)!.state}`);
     expect(errorText(result)).toContain('send_session_message');
+    expect(errorText(result)).toContain(`close_session ${child!.id}`);
     expect(harness.launches).toHaveLength(2);
   });
 

@@ -178,7 +178,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
       const liveDuplicate = input.allow_duplicate ? undefined : findLiveChildDuplicating({ name: input.name, realDirectory });
       if (!liveDuplicate) return undefined;
       const { child, sameAs } = liveDuplicate;
-      return fail(`session ${child.id} (${child.name}) is already a live child of yours (state ${child.state}) with the same ${sameAs}: message it with send_session_message instead of spawning again, or pass allow_duplicate: true if two sessions are intended`);
+      return fail(`session ${child.id} (${child.name}) is already a live child of yours (state ${child.state}) with the same ${sameAs}: message it with send_session_message instead of spawning again, close_session ${child.id} if it is stuck or dead and spawn again, or pass allow_duplicate: true if two sessions are intended`);
     };
     const earlyDuplicateRefusal = refuseLiveDuplicate();
     if (earlyDuplicateRefusal) return earlyDuplicateRefusal;
@@ -192,6 +192,9 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
 
     // No `await` between this re-check and the insert in sessions.create(): a concurrent create_session
     // that passed the early check while this one awaited sameGitRepository is refused here.
+    const isCallerStillLive = sessions.get(caller.id)?.state !== 'closed';
+    if (!isCallerStillLive) return fail(`your session ${caller.id} is no longer live: it was closed while the spawn was being checked, so no child is created`);
+
     const lateDuplicateRefusal = refuseLiveDuplicate();
     if (lateDuplicateRefusal) return lateDuplicateRefusal;
 
