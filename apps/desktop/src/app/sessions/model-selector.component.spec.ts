@@ -1,7 +1,7 @@
 import { render, screen, waitFor, fireEvent } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
 import { inputBinding, signal } from '@angular/core';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ModelSelectorComponent } from './model-selector.component';
 import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
@@ -300,6 +300,71 @@ describe('ModelSelectorComponent', () => {
 
       expect(screen.getByTestId('resolved-model')).toBeTruthy();
       expect(screen.queryByTestId('model-drift')).toBeNull();
+    });
+
+    it('user sees no resolved model, CLI version or drift mark when the fields are empty strings', async () => {
+      await renderWithSession({ resolvedModel: '', cliVersion: '', modelDriftedFrom: '' });
+
+      expect(screen.queryByTestId('resolved-model')).toBeNull();
+      expect(screen.queryByTestId('cli-version')).toBeNull();
+      expect(screen.queryByTestId('model-drift')).toBeNull();
+    });
+
+    describe('fed by the real FleetEventsService', () => {
+      class FakeWebSocket {
+        static instances: FakeWebSocket[] = [];
+        private readonly listeners: Record<string, ((event: { data: string }) => void)[]> = {};
+        constructor(readonly url: string) {
+          FakeWebSocket.instances.push(this);
+        }
+        addEventListener(type: string, listener: (event: { data: string }) => void): void {
+          (this.listeners[type] ??= []).push(listener);
+        }
+        send(): void {}
+        dispatchMessage(payload: unknown): void {
+          for (const listener of this.listeners['message'] ?? []) listener({ data: JSON.stringify(payload) });
+        }
+      }
+
+      afterEach(() => vi.unstubAllGlobals());
+
+      const fullSession =(fields: Record<string, string>) => ({ id: 's1', name: 'Gimli', emoji: '⚔️', directory: '/tmp', harness: 'fake', state: 'idle', stateSince: 't', createdAt: 't', model: 'opus', ...fields });
+
+      it('user sees the resolved model and drift mark disappear on a model switch, the CLI version stay, then the new resolved id return on session.updated', async () => {
+        // Arrange
+        FakeWebSocket.instances = [];
+        vi.stubGlobal('WebSocket', FakeWebSocket);
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({ ticket: 'fake-ticket' }) }));
+        localStorage.clear();
+        const events = new FleetEventsService();
+        await events.connect();
+        const socket = FakeWebSocket.instances[0]!;
+        socket.dispatchMessage({ type: 'snapshot', sessions: [fullSession({ resolvedModel: 'claude-opus-5-5', cliVersion: '2.1.284', modelDriftedFrom: 'claude-opus-5-4' })], approvals: [] });
+        const { fixture } = await render(ModelSelectorComponent, {
+          bindings: [inputBinding('sessionId', () => 's1')],
+          providers: [{ provide: FleetApiService, useValue: { updateModel: vi.fn() } }, { provide: FleetEventsService, useValue: events }],
+        });
+        expect(screen.getByTestId('resolved-model')).toBeTruthy();
+        expect(screen.getByTestId('model-drift')).toBeTruthy();
+
+        // Act — the daemon reports the model switch
+        socket.dispatchMessage({ type: 'session.model_changed', sessionId: 's1', model: 'sonnet' });
+        await fixture.whenStable();
+
+        // Assert
+        expect(screen.queryByTestId('resolved-model')).toBeNull();
+        expect(screen.queryByTestId('model-drift')).toBeNull();
+        expect(screen.getByTestId('cli-version')).toHaveTextContent('CLI 2.1.284');
+
+        // Act — the relaunched session reports its new resolved id and CLI version
+        socket.dispatchMessage({ type: 'session.updated', session: fullSession({ model: 'sonnet', resolvedModel: 'claude-sonnet-5-5', cliVersion: '2.1.290' }) });
+        await fixture.whenStable();
+
+        // Assert
+        expect(screen.getByTestId('resolved-model')).toHaveTextContent('resolved claude-sonnet-5-5');
+        expect(screen.getByTestId('cli-version')).toHaveTextContent('CLI 2.1.290');
+        expect(screen.queryByTestId('model-drift')).toBeNull();
+      });
     });
   });
 
