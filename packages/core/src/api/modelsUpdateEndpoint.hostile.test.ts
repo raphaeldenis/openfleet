@@ -15,6 +15,9 @@ import { PulseScheduler } from '../managers/pulseScheduler.js';
 import { DEFAULT_MODEL_TABLE, loadModelTable } from '../models.js';
 import { SessionService } from '../sessions/sessionService.js';
 import { createMcpHandler } from '../mcp/mcpServer.js';
+import { DataStoreRepository } from '../stores/dataStoreRepository.js';
+import { DataStoreService } from '../stores/dataStoreService.js';
+import { newId } from '../ids.js';
 import { startServer } from './server.js';
 
 // Black-box hostile tests for PUT /api/models: REST in and out, config.json on disk, nothing private.
@@ -38,7 +41,9 @@ async function startDaemon(modelConfigPath: string) {
   const pulseScheduler = new PulseScheduler({ managers: managerRepo, sessions, bus });
   const managers = new ManagerService({ managers: managerRepo, sessions, bus, scheduler: pulseScheduler });
   const modelTable = loadModelTable(modelConfigPath);
-  const mcp = createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, worktreesRoot: '/tmp/of-wt' });
+  const storeRepo = new DataStoreRepository(db);
+  const stores = new DataStoreService({ repo: storeRepo, db, clock: () => new Date().toISOString(), newId });
+  const mcp = createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, worktreesRoot: '/tmp/of-wt' });
   return startServer({ host: '127.0.0.1', port: 0, adminToken: ADMIN_TOKEN, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, mcp });
 }
 

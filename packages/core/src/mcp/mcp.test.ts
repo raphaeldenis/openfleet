@@ -18,6 +18,9 @@ import { ManagerService } from '../managers/managerService.js';
 import { PulseScheduler } from '../managers/pulseScheduler.js';
 import { DEFAULT_MODEL_TABLE } from '../models.js';
 import { MAX_PENDING_AGENT_MESSAGES_PER_SENDER, SessionService } from '../sessions/sessionService.js';
+import { DataStoreRepository } from '../stores/dataStoreRepository.js';
+import { DataStoreService } from '../stores/dataStoreService.js';
+import { newId } from '../ids.js';
 import { createMcpHandler } from './mcpServer.js';
 
 // create_session now requires its directory to already exist (fix loop 2, decision 1+3+5) — this makes
@@ -46,7 +49,9 @@ beforeEach(async () => {
   const managers = new ManagerService({ managers: managerRepo, sessions, bus, scheduler: pulseScheduler });
   const approvals = new ApprovalService({ db, bus });
   const modelTable = { ...DEFAULT_MODEL_TABLE };
-  server = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath: '/tmp/of-unused/config.json', mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, worktreesRoot: '/tmp/of-wt' }) });
+  const storeRepo = new DataStoreRepository(db);
+  const stores = new DataStoreService({ repo: storeRepo, db, clock: () => new Date().toISOString(), newId });
+  server = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath: '/tmp/of-unused/config.json', mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, worktreesRoot: '/tmp/of-wt' }) });
   const parent = await sessions.create({ directory: '/tmp', name: 'Lead', harness: 'fake', emoji: '🧭' });
   parentId = parent.id;
   parentToken = harness.launches[0]!.mcpToken;
@@ -64,7 +69,11 @@ describe('MCP', () => {
   it('lists the tools', async () => {
     const client = await connect(parentToken);
     const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name).sort()).toEqual(['close_session', 'create_session', 'create_worktree', 'get_argus_status', 'get_session_status', 'list_children', 'list_sessions', 'message_parent', 'pulse_now', 'send_session_message', 'update_session']);
+    expect(tools.map((t) => t.name).sort()).toEqual([
+      'add_data_store_column', 'close_session', 'create_data_store', 'create_session', 'create_worktree', 'delete_data_store_row',
+      'describe_data_store', 'get_argus_status', 'get_session_status', 'insert_data_store_rows', 'list_children', 'list_sessions',
+      'message_parent', 'pulse_now', 'query_data_store', 'send_session_message', 'update_data_store_rows', 'update_session',
+    ]);
   });
 
   it('rejects a bad token', async () => {
