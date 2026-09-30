@@ -599,12 +599,13 @@ describe('resolved model recording from a session\'s transcript', () => {
     const id = await createSession('opus');
     const firstCliSessionId = randomUUID();
     const secondCliSessionId = randomUUID();
-    writeFileSync(transcriptPathOf(firstCliSessionId), assistantLine({ model: 'claude-opus-5-5' }));
+    writeFileSync(transcriptPathOf(firstCliSessionId), '');
     const adopt = (cliSessionId: string) => sendHook(id, { hook_event_name: 'SessionStart', source: 'clear', session_id: cliSessionId }, transcriptPathOf(cliSessionId));
 
     await adopt(firstCliSessionId);
     await adopt(secondCliSessionId);
     await adopt(firstCliSessionId);
+    writeFileSync(transcriptPathOf(firstCliSessionId), assistantLine({ model: 'claude-opus-5-5' }));
     await sendHook(id, preToolUse, transcriptPathOf(firstCliSessionId));
 
     expect(await listed(id)).toMatchObject({ resolvedModel: 'claude-opus-5-5' });
