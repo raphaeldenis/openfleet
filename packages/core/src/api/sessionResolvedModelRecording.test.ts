@@ -554,6 +554,62 @@ describe('resolved model recording from a session\'s transcript', () => {
     expect(await listed(sessionA)).not.toHaveProperty('resolvedModel');
   });
 
+  it('records the model of a session whose hook names its own launch-id transcript in upper case', async () => {
+    const id = await createSession('opus');
+    const upperCasedLaunchTranscript = transcriptPathOf(id.toUpperCase());
+    writeFileSync(upperCasedLaunchTranscript, assistantLine({ model: 'claude-opus-5-5' }));
+
+    await sendHook(id, preToolUse, upperCasedLaunchTranscript);
+
+    expect(await listed(id)).toMatchObject({ resolvedModel: 'claude-opus-5-5' });
+  });
+
+  it('records the model of a session that adopted an upper-case CLI session id when its hook names the lower-case transcript', async () => {
+    const id = await createSession('opus');
+    const adoptedCliSessionId = randomUUID();
+    writeFileSync(transcriptPathOf(adoptedCliSessionId), assistantLine({ model: 'claude-opus-5-5' }));
+
+    await sendHook(id, { hook_event_name: 'SessionStart', source: 'clear', session_id: adoptedCliSessionId.toUpperCase() }, transcriptPathOf(adoptedCliSessionId));
+    await sendHook(id, preToolUse, transcriptPathOf(adoptedCliSessionId));
+
+    expect(await listed(id)).toMatchObject({ resolvedModel: 'claude-opus-5-5' });
+  });
+
+  it.each([
+    { relaunchedBy: 'a permission-mode change', relaunch: (id: string) => postJson(`/api/sessions/${id}/permission-mode`, { mode: 'plan' }) },
+    { relaunchedBy: 'a model change', relaunch: (id: string) => postJson(`/api/sessions/${id}/model`, { model: 'claude-sonnet-5-5' }) },
+  ])('records nothing on a session that claims a CLI session id that another session adopted and then had relaunched by $relaunchedBy, without closing', async ({ relaunch }) => {
+    const sessionA = await createSession('opus');
+    const sessionB = await createSession('opus');
+    const adoptedCliSessionId = randomUUID();
+    await sendHook(sessionB, { hook_event_name: 'SessionStart', source: 'clear', session_id: adoptedCliSessionId }, transcriptPathOf(adoptedCliSessionId));
+    const launchesBeforeRelaunch = harness.launches.length;
+    const relaunchReply = (await (await relaunch(sessionB)).json()) as { status: string };
+    if (relaunchReply.status === 'deferred') await sendHook(sessionB, stop, transcriptPathOf(adoptedCliSessionId));
+    await expect.poll(() => harness.launches.length).toBe(launchesBeforeRelaunch + 1);
+    writeFileSync(transcriptPathOf(adoptedCliSessionId), assistantLine({ model: 'claude-model-of-the-adopted-id' }));
+
+    await sendHook(sessionA, { hook_event_name: 'SessionStart', session_id: adoptedCliSessionId }, transcriptPathOf(adoptedCliSessionId));
+    await sendHook(sessionA, preToolUse, transcriptPathOf(adoptedCliSessionId));
+
+    expect(await listed(sessionA)).not.toHaveProperty('resolvedModel');
+  });
+
+  it('records the model of a session that adopts an earlier CLI session id of its own again', async () => {
+    const id = await createSession('opus');
+    const firstCliSessionId = randomUUID();
+    const secondCliSessionId = randomUUID();
+    writeFileSync(transcriptPathOf(firstCliSessionId), assistantLine({ model: 'claude-opus-5-5' }));
+    const adopt = (cliSessionId: string) => sendHook(id, { hook_event_name: 'SessionStart', source: 'clear', session_id: cliSessionId }, transcriptPathOf(cliSessionId));
+
+    await adopt(firstCliSessionId);
+    await adopt(secondCliSessionId);
+    await adopt(firstCliSessionId);
+    await sendHook(id, preToolUse, transcriptPathOf(firstCliSessionId));
+
+    expect(await listed(id)).toMatchObject({ resolvedModel: 'claude-opus-5-5' });
+  });
+
   it.each([
     { endedBy: 'closes', endSession: async (id: string) => { await postJson(`/api/sessions/${id}/close`); } },
     { endedBy: 'is relaunched', endSession: async (id: string) => { await postJson(`/api/sessions/${id}/close`); await postJson(`/api/sessions/${id}/reopen`); } },
