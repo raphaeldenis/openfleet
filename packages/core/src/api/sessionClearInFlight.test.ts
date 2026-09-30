@@ -215,6 +215,74 @@ describe('a user whose daemon runs with the default /clear holds', () => {
   });
 });
 
+describe('a user closing a session inside the flush grace of a /clear', () => {
+  it('sees the process kept alive until the grace has ended, not a millisecond less', async () => {
+    await rebootOnFakeClock({ clearInFlightTimeoutMs: 600, clearFlushGraceMs: 300 });
+    const id = await runningSession();
+    const handle = harness.handles.at(-1)!;
+    await sessionEndByClear(id);
+    await sessionStartByClear(id, randomUUID());
+
+    const userClose = service.close(id);
+    await advance(299);
+    const isKilledJustBeforeTheGrace = handle.killed;
+    await advance(1);
+    await userClose;
+
+    expect(isKilledJustBeforeTheGrace).toBe(false);
+    expect(handle.killed).toBe(true);
+    expect(service.get(id)?.state).toBe('closed');
+  });
+
+  it('sees a close made before the SessionStart of the /clear kill at once, since no flush is under way', async () => {
+    await rebootOnFakeClock({ clearInFlightTimeoutMs: 600, clearFlushGraceMs: 300 });
+    const id = await runningSession();
+    const handle = harness.handles.at(-1)!;
+    await sessionEndByClear(id);
+
+    const userClose = service.close(id);
+    await advance(1);
+    await userClose;
+
+    expect(handle.killed).toBe(true);
+  });
+});
+
+describe('a user whose SessionStart of a /clear arrives before its SessionEnd', () => {
+  it('sees a model switch relaunch after the flush grace, not after the full wait for a SessionStart that already came', async () => {
+    await rebootOnFakeClock({});
+    const id = await runningSession();
+    const launchesBefore = harness.launches.length;
+    await sessionStartByClear(id, randomUUID());
+    await sessionEndByClear(id);
+
+    const answer = await switchModel(id);
+    await advance(499);
+    const launchesJustBeforeTheGrace = harness.launches.length;
+    await advance(1);
+
+    expect(answer.status).toBe('deferred');
+    expect(launchesJustBeforeTheGrace).toBe(launchesBefore);
+    expect(harness.launches).toHaveLength(launchesBefore + 1);
+  });
+
+  it('sees the process kept for the flush grace of that SessionStart when a switch is pending', async () => {
+    await rebootOnFakeClock({});
+    const id = await runningSession();
+    const oldHandle = harness.handles.at(-1)!;
+    await sessionStartByClear(id, randomUUID());
+    await sessionEndByClear(id);
+    await switchModel(id);
+
+    await advance(499);
+    const isKilledJustBeforeTheGrace = oldHandle.killed;
+    await advance(1);
+
+    expect(isKilledJustBeforeTheGrace).toBe(false);
+    expect(oldHandle.killed).toBe(true);
+  });
+});
+
 describe('a user clearing twice in a row', () => {
   it('sees the second /clear restart the wait, so a switch made after the first wait would have ended is still deferred', async () => {
     await rebootOnFakeClock({ clearInFlightTimeoutMs: 600, clearFlushGraceMs: 300 });
@@ -252,19 +320,22 @@ describe('a user whose new conversations keep starting during the flush grace', 
 });
 
 describe('a daemon shutting down while a /clear is in flight', () => {
-  it('finishes shutting down when the session closes during its flush grace', async () => {
-    await rebootOnFakeClock({ clearInFlightTimeoutMs: 60_000, clearFlushGraceMs: 60_000 });
+  it('finishes shutting down once the flush grace of a session that a user closes meanwhile has ended', async () => {
+    await rebootOnFakeClock({ clearInFlightTimeoutMs: 60_000, clearFlushGraceMs: 300 });
     const id = await runningSession();
     await sessionEndByClear(id);
     await sessionStartByClear(id, randomUUID());
     let isShutdownFinished = false;
     const shutdown = service.closeAll().then(() => { isShutdownFinished = true; });
+    const userClose = service.close(id);
 
-    await postJson(`/api/sessions/${id}/close`);
+    await advance(299);
+    const isFinishedJustBeforeTheGrace = isShutdownFinished;
     await advance(1);
 
+    expect(isFinishedJustBeforeTheGrace).toBe(false);
     expect(isShutdownFinished).toBe(true);
-    await shutdown;
+    await Promise.all([shutdown, userClose]);
   });
 
   it('waits at most the flush grace for every session, whatever the longer holds of the others', async () => {
