@@ -13,7 +13,6 @@ vi.mock('node:fs', async (importOriginal) => {
   return {
     ...actual,
     fchmodSync: () => { throw permissionDenied(); },
-    chmodSync: (path: string, mode: number) => (String(path).endsWith('.config.json') ? (() => { throw permissionDenied(); })() : actual.chmodSync(path, mode)),
   };
 });
 
