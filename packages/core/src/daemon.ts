@@ -25,6 +25,7 @@ import { ProjectRepository } from './projects/projectRepository.js';
 import { SessionService } from './sessions/sessionService.js';
 import { DataStoreRepository } from './stores/dataStoreRepository.js';
 import { DataStoreService } from './stores/dataStoreService.js';
+import { ContextNotice } from './workingState/contextNotice.js';
 import { HandoverLedger } from './workingState/handoverLedger.js';
 import { SessionStartContext } from './workingState/sessionStartContext.js';
 import { StopRefusal } from './workingState/stopRefusal.js';
@@ -53,7 +54,7 @@ export async function startDaemon(config: Config): Promise<Daemon> {
   approvals.expireAllPending('daemon restarted');
   const modelConfigPath = join(config.home, 'config.json');
   const modelTable = readingConfigFile(() => loadModelTable(modelConfigPath));
-  const { workingState: workingStateSettings, managers: managerSettings } = readingConfigFile(() => loadDaemonSettings(modelConfigPath));
+  const { workingState: workingStateSettings, managers: managerSettings, contextNotice: contextNoticeSettings } = readingConfigFile(() => loadDaemonSettings(modelConfigPath));
   const managerRepository = new ManagerRepository(db);
   const pulseScheduler = new PulseScheduler({ managers: managerRepository, sessions, bus });
   const managers = new ManagerService({ managers: managerRepository, sessions, bus, scheduler: pulseScheduler, heartbeatDefaultSeconds: managerSettings.heartbeatDefaultSeconds });
@@ -67,10 +68,11 @@ export async function startDaemon(config: Config): Promise<Daemon> {
   const stopRefusal = new StopRefusal({ db, workingStates, settings: workingStateSettings, clock: () => new Date().toISOString() });
   const sessionStartContext = new SessionStartContext({ db, workingStates, settings: workingStateSettings, clock: () => new Date().toISOString() });
   const handoverLedger = new HandoverLedger({ db, clock: () => new Date().toISOString(), patterns: workingStateSettings.handoverPatterns });
+  const contextNotice = new ContextNotice({ sessions, managers: managerRepository, settings: contextNoticeSettings });
 
   // The server must be listening before any resumed CLI can POST its first hook — resuming first risks a
   // fast process hitting a port nothing is serving yet.
-  const server = await startServer({ ...config, e2eRoutes: config.e2eEnabled, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, stores, storeRepo, projects, stopRefusal, sessionStartContext, handoverLedger, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, workingStates, worktreesRoot: config.worktreesRoot }) });
+  const server = await startServer({ ...config, e2eRoutes: config.e2eEnabled, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, stores, storeRepo, projects, stopRefusal, sessionStartContext, handoverLedger, contextNotice, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, workingStates, worktreesRoot: config.worktreesRoot }) });
   log('info', `openfleet core listening on ${server.url} (home: ${config.home})`);
 
   // A launch dir a crashed or killed daemon never cleaned up would otherwise sit on disk carrying a live
@@ -78,6 +80,7 @@ export async function startDaemon(config: Config): Promise<Daemon> {
   // anyway, so nothing here is worth preserving across a restart (AUD-11).
   const close = async () => {
     pulseScheduler.stop();
+    contextNotice.stop();
     await sessions.closeAll();
     await server.close();
   };
