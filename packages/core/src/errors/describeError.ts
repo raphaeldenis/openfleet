@@ -156,16 +156,32 @@ function logInternalError(error: unknown, { id, scope }: { id: string; scope: Er
   try {
     log('error', line, error);
   } catch {
-    log('error', `${line} (error cannot be printed)`);
+    tryLogging(`${line} (error cannot be printed)`);
+  }
+}
+
+function tryLogging(line: string): void {
+  try {
+    log('error', line);
+  } catch {
+    // logging is best effort: an unwritable log never stops the answer
   }
 }
 
 /**
- * Turns any thrown value into the envelope every transport sends. A typed error is expected and is not logged;
+ * Turns any thrown value into the envelope every transport sends. It never throws: an entry it cannot describe
+ * falls back to the unexpected-error entry. A typed error is expected and is not logged;
  * an error of kind `internal` gets an id and is the one thing this function logs, at `error` level, with that id.
  */
 export function describeError(error: unknown, scope: ErrorScope = {}): ErrorEnvelope {
-  const entry = entryFor(error) ?? UNEXPECTED_ENTRY;
+  try {
+    return envelopeFor(entryFor(error) ?? UNEXPECTED_ENTRY, error, scope);
+  } catch {
+    return envelopeFor(UNEXPECTED_ENTRY, error, scope);
+  }
+}
+
+function envelopeFor(entry: Entry, error: unknown, scope: ErrorScope): ErrorEnvelope {
   const { kind } = ERROR_CODES[entry.code];
   const isInternal = kind === 'internal';
   const id = isInternal ? shortId() : undefined;

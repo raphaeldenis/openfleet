@@ -79,6 +79,16 @@ async function handleMcpRequest(
   await mcp(req, res, await readJson(req));
 }
 
+/** Ends the request with a plain 500 when the error answer itself failed; a response already started is just ended. */
+function answerLastResort(res: ServerResponse): void {
+  try {
+    if (res.headersSent) return void res.end();
+    json(res, 500, { error: 'internal_error', kind: 'internal', retry: 'later', message: 'the daemon hit an unexpected error.' });
+  } catch {
+    res.destroy();
+  }
+}
+
 export async function startServer(deps: ServerDeps): Promise<{ url: string; routes: { method: string; path: string }[]; close(): Promise<void> }> {
   const wsTickets = deps.wsTickets ?? createWsTicketStore();
   const router = new Router();
@@ -117,9 +127,13 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; rout
       if (isProtected && !tokensMatch(req.headers.authorization ?? '', `Bearer ${deps.adminToken}`)) return json(res, 401, { error: 'unauthorized' });
       await match.handler({ req, res, params: match.params, body: await readJson(req) });
     } catch (error) {
-      const envelope = describeError(error, { where: `${req.method ?? 'GET'} ${redactedRequestPath(req)} → 500` });
-      const errorIdHeader: Record<string, string> = envelope.id ? { 'x-openfleet-error-id': envelope.id } : {};
-      json(res, HTTP_STATUS_BY_KIND[envelope.kind], envelope, errorIdHeader);
+      try {
+        const envelope = describeError(error, { where: `${req.method ?? 'GET'} ${redactedRequestPath(req)} → 500` });
+        const errorIdHeader: Record<string, string> = envelope.id ? { 'x-openfleet-error-id': envelope.id } : {};
+        json(res, HTTP_STATUS_BY_KIND[envelope.kind], envelope, errorIdHeader);
+      } catch {
+        answerLastResort(res);
+      }
     }
   });
   const ws = createWsHandler({ ...deps, wsTickets });
