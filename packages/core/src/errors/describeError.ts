@@ -9,7 +9,7 @@ import { ApprovalError } from '../governance/approvalService.js';
 import { shortId } from '../ids.js';
 import { log } from '../logger.js';
 import { ModelConfigReadOnlyError, ModelConfigUnreadableError } from '../models.js';
-import { escapedForRegExp, MASK, maskedSecrets, maskingCutCredential, SECRET_KEY } from '../redact.js';
+import { escapedForRegExp, isSecretEntry, MASK, maskedSecrets, maskingCutCredential } from '../redact.js';
 import { WorktreeError } from '../git/worktrees.js';
 import {
   NoteFileUnreadableError, NoteIsNotFileBackedError, PathEscapesDocsFolderError, ProjectHasNoDocsFolderError, ProjectNotFoundError,
@@ -240,7 +240,7 @@ function withCleanedKeys(value: Record<string, unknown>, homes: RegExp[]): Recor
 }
 
 const sanitizerOfKeysAndValues = (homes: RegExp[]) => (key: string, rawValue: unknown): unknown => {
-  if (SECRET_KEY.test(key)) return MASK;
+  if (isSecretEntry(key, rawValue)) return MASK;
   const value = unboxed(rawValue);
   if (typeof value === 'string') return cleanedText(value, homes);
   return isPlainObject(value) ? withCleanedKeys(value, homes) : value;

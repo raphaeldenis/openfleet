@@ -1,7 +1,10 @@
 // The masking rules shared by the error envelope (describeError) and the structured logger, so both hide the same secrets.
 
-// A key that merely counts tokens (`tokens`, `contextTokens`, `maxTokens`) is a usage counter, not a credential.
-export const SECRET_KEY = /token(?!s)|secret|authorization|password|cookie|ticket|api[_-]?key/i;
+// Any key naming a credential, in any case and anywhere in the name: `token`, `authTokens`, `refreshTokenString`, `TOKENS`, …
+export const SECRET_KEY = /token|secret|authorization|password|cookie|ticket|api[_-]?key/i;
+
+/** A number under such a key (`tokens: 450000`) counts usage; a credential is a string, a list or an object. */
+export const isSecretEntry = (key: string, value: unknown): boolean => SECRET_KEY.test(key) && !(typeof value === 'number' && Number.isFinite(value));
 export const MASK = '***';
 export const escapedForRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 

@@ -2,7 +2,7 @@ import { realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { resolveHome } from './config.js';
 import { shortId } from './ids.js';
-import { MASK, maskedSecrets, maskingCutCredential, SECRET_KEY } from './redact.js';
+import { isSecretEntry, MASK, maskedSecrets, maskingCutCredential } from './redact.js';
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 export interface LogFields { id?: string; sessionId?: string; code?: string; [key: string]: unknown }
@@ -105,8 +105,8 @@ function sanitizeEntries(entries: Iterable<[string, () => unknown]>, walk: Walk,
   const sanitized = Object.create(null) as Record<string, unknown>;
   for (const [rawKey, read] of entries) {
     const key = redactString(rawKey.slice(0, MAX_KEY_CHARS));
-    const isSensitive = SECRET_KEY.test(key);
-    const value = isSensitive ? MASK : sanitize(readOrPlaceholder(read), walk, depth + 1);
+    const rawValue = readOrPlaceholder(read);
+    const value = isSecretEntry(key, rawValue) ? MASK : sanitize(rawValue, walk, depth + 1);
     if (value !== undefined) sanitized[key] = value;
   }
   return sanitized;

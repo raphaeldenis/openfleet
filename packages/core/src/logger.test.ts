@@ -709,17 +709,49 @@ describe('log — gaps the first suite left open', () => {
     },
   );
 
-  it.each(['tokens', 'contextTokens', 'inputTokens', 'outputTokens', 'maxTokens', 'totalTokens'])(
-    'keeps the value under the usage counter %s',
+  it.each(['refreshTokenString', 'accessTokenSig', 'TOKENS', 'authTokens', 'hookTokens', 'tokens', 'contextTokens'])(
+    'masks a string under the credential key %s, whatever follows "token" in the name',
     async (key) => {
       const { log } = await loadLogger();
 
-      log('info', 'usage', { [key]: 1234 }, { [key]: 1234 });
+      log('info', 'keys', { [key]: 'keyVALUE' }, { [key]: 'keyVALUE' });
 
-      expect(parsedLine().detail[key]).toBe(1234);
-      expect(parsedLine()[key]).toBe(1234);
+      expect(onlyWrittenLine()).not.toContain('keyVALUE');
+      expect(parsedLine().detail[key]).toBe('***');
+      expect(parsedLine()[key]).toBe('***');
     },
   );
+
+  it('masks a list of tokens under the key tokens, in the detail and in a field', async () => {
+    const { log } = await loadLogger();
+
+    log('info', 'keys', { tokens: ['ghp_realtoken1', 'ghp_realtoken2'] }, { authTokens: ['ghp_realtoken3'] });
+
+    expect(onlyWrittenLine()).not.toContain('ghp_realtoken');
+    expect(parsedLine().detail.tokens).toBe('***');
+    expect(parsedLine().authTokens).toBe('***');
+  });
+
+  it.each([['tokens', 123], ['contextTokens', 450000], ['inputTokens', 1.5], ['outputTokens', 0], ['maxTokens', 1234], ['totalTokens', 1234]])(
+    'keeps the number under the usage counter %s',
+    async (key, count) => {
+      const { log } = await loadLogger();
+
+      log('info', 'usage', { [key]: count, nested: { [key]: count } }, { [key]: count });
+
+      expect(parsedLine().detail[key]).toBe(count);
+      expect(parsedLine().detail.nested[key]).toBe(count);
+      expect(parsedLine()[key]).toBe(count);
+    },
+  );
+
+  it.each(['?tokens=x', '?authTokens=x', '?refreshTokenString=x', '?TOKENS=x'])('masks the query parameter in %s', async (query) => {
+    const { log } = await loadLogger();
+
+    log('info', `GET /cb${query}&page=2`);
+
+    expect(parsedLine().msg).toBe(`GET /cb${query.replace('=x', '=***')}&page=2`);
+  });
 });
 
 describe('log — linear-time on adversarial input', () => {

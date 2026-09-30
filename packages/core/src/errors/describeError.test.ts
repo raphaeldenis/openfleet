@@ -330,6 +330,37 @@ describe('describeError: hostile case 1, secrets and paths in every field', () =
     expect(detail).toEqual({ [key]: '***', kept: 'visible' });
   });
 
+  it.each(['token', 'accessToken', 'hook_token', 'adminToken', 'refreshTokenString', 'accessTokenSig', 'TOKENS', 'authTokens', 'hookTokens', 'tokens'])(
+    'masks a string under the credential key %s, whatever follows "token" in the name',
+    (key) => {
+      const { detail } = describeError(detailCarrying({ [key]: 'plain-looking-value-42', kept: 'visible' }));
+
+      expect(detail).toEqual({ [key]: '***', kept: 'visible' });
+    },
+  );
+
+  it('masks a list of tokens under authTokens', () => {
+    const { detail } = describeError(detailCarrying({ authTokens: ['ghp_realtoken1', 'ghp_realtoken2'], kept: 'visible' }));
+
+    expect(detail).toEqual({ authTokens: '***', kept: 'visible' });
+  });
+
+  it.each(['tokens', 'contextTokens', 'inputTokens'])('keeps a number under the usage counter %s', (key) => {
+    const { detail } = describeError(detailCarrying({ [key]: 1.5, kept: 'visible' }));
+
+    expect(detail).toEqual({ [key]: 1.5, kept: 'visible' });
+  });
+
+  it.each(['?tokens=x', '?authTokens=x', '?refreshTokenString=x', '?accessTokenSig=x', '?TOKENS=x', '?hookTokens=x'])(
+    'masks the query parameter in %s in the message and the detail',
+    (query) => {
+      const serialized = JSON.stringify(describeError(carrying(`GET /cb${query}&page=2`)));
+
+      expect(serialized).not.toMatch(/=x(?!\w)/);
+      expect(serialized).toContain('=***&page=2');
+    },
+  );
+
   it('shortens the user home inside a structured detail that fits in 2 KiB', () => {
     const { detail } = describeError(detailCarrying({ path: `${homedir()}/work/app` }));
 
