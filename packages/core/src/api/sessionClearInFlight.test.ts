@@ -266,6 +266,21 @@ describe('a user whose SessionStart of a /clear arrives before its SessionEnd', 
     expect(harness.launches).toHaveLength(launchesBefore + 1);
   });
 
+  it('sees a SessionStart older than the clear wait not shorten the wait of a later SessionEnd', async () => {
+    await rebootOnFakeClock({});
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    const id = await runningSession();
+    const launchesBefore = harness.launches.length;
+    await sessionStartByClear(id, randomUUID());
+    await advance(3001);
+    await sessionEndByClear(id);
+
+    await switchModel(id);
+    await advance(2999);
+
+    expect(harness.launches).toHaveLength(launchesBefore);
+  });
+
   it('sees the process kept for the flush grace of that SessionStart when a switch is pending', async () => {
     await rebootOnFakeClock({});
     const id = await runningSession();
