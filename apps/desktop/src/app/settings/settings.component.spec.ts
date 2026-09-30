@@ -48,12 +48,12 @@ describe('SettingsComponent', () => {
     vi.unstubAllGlobals();
   });
 
-  it('offers only the Models and Daemon tabs, Models first', async () => {
+  it('offers the Models, Daemon and About tabs, Models first', async () => {
     await renderSettings();
 
     const tabNames = screen.getAllByRole('tab').map((tab) => tab.textContent?.trim());
 
-    expect(tabNames).toEqual(['Models', 'Daemon']);
+    expect(tabNames).toEqual(['Models', 'Daemon', 'About']);
   });
 
   it('shows one dropdown per rung, each preselected on its current model id', async () => {

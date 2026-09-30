@@ -23,6 +23,7 @@ import { nodeDocsFolderFs } from '../notes/nodeDocsFolderFs.js';
 import { NoteRepository } from '../notes/noteRepository.js';
 import { NoteService } from '../notes/noteService.js';
 import { ProjectRepository } from '../projects/projectRepository.js';
+import { DAEMON_VERSION } from '../version.js';
 import { MAX_PENDING_AGENT_MESSAGES_PER_SENDER, SessionService } from '../sessions/sessionService.js';
 import { DataStoreRepository } from '../stores/dataStoreRepository.js';
 import { DataStoreService } from '../stores/dataStoreService.js';
@@ -105,6 +106,11 @@ describe('MCP', () => {
       'search_notes', 'send_session_message', 'update_data_store_rows', 'update_data_store_view', 'update_note', 'update_note_section',
       'update_session', 'update_working_state',
     ]);
+  });
+
+  it('announces the daemon version as its server version', async () => {
+    const client = await connect(parentToken);
+    expect(client.getServerVersion()).toEqual({ name: 'openfleet', version: DAEMON_VERSION });
   });
 
   it('rejects a bad token', async () => {

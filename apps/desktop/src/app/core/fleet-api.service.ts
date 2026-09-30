@@ -80,10 +80,11 @@ export class FleetApiService {
     }
   }
 
-  async health(): Promise<{ ok: true }> {
-    const body = await this.getWithin<{ ok?: boolean } | null>('/health', DAEMON_ANSWER_TIMEOUT_MS);
+  async health(): Promise<{ ok: true; version?: string }> {
+    const body = await this.getWithin<{ ok?: boolean; version?: unknown } | null>('/health', DAEMON_ANSWER_TIMEOUT_MS);
     if (body?.ok !== true) throw new ApiError(200, 'GET /health → the daemon does not report itself ok');
-    return { ok: true };
+    const reportedVersion = typeof body.version === 'string' && body.version !== '' ? body.version : undefined;
+    return { ok: true, version: reportedVersion };
   }
   listSessions() { return this.getWithin<Session[]>('/api/sessions', DAEMON_ANSWER_TIMEOUT_MS); }
   models() { return this.call<Record<string, string>>('/api/models'); }
