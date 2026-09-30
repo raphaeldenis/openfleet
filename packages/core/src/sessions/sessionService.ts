@@ -1075,8 +1075,7 @@ export class SessionService {
     if (isExplicitClose) this.idsClosingForDaemonShutdown.delete(sessionId); // someone asked: the close is theirs, not the shutdown's
     this.recordCloseCause(sessionId, options?.cause);
     // A requested close owns the exit from here on: a start timeout still armed would kill again and close as resume_timeout.
-    // A SessionEnd close keeps it: that CLI may still exit on its own within the grace.
-    if (options?.cause !== 'session_end') this.clearResumeTimer(sessionId);
+    this.clearResumeTimer(sessionId);
     // Disarmed eagerly, like retireForRelaunch, before the SIGTERM->SIGKILL grace window even starts: a
     // watch left armed through that window could still see a marker and flip session state while the
     // process is on its way out (or wedged and never exiting at all).
@@ -1515,7 +1514,8 @@ export class SessionService {
     // session once it is closed — defence in depth alongside byHookToken/byMcpToken's own state filter,
     // which is what actually protects a row a pre-patch build already left closed. reopen() issues its own
     // fresh pair on the way back up (resumeOne), so this never collides with that rotation.
-    const closedByDaemonShutdown = isClosingForShutdown && closure.reason !== 'resume_timeout'; // a resume that timed out failed: no boot retries it
+    const isFailedStart = closure.reason === 'resume_timeout' || closure.reason === 'launch_failed'; // a start that failed stays closed: no boot retries it
+    const closedByDaemonShutdown = isClosingForShutdown && !isFailedStart;
     this.repo.setClosed(sessionId, exitCode, new Date().toISOString(), newToken(), newToken(), { closedByDaemonShutdown });
     this.handles.delete(sessionId);
     activeHandleBySessionId.delete(sessionId);
