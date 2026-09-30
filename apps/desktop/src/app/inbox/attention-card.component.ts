@@ -47,7 +47,7 @@ import { showBidiControlsAsEscapes, showInvisibleControlsAsEscapes } from './bid
     .meta { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; min-width: 0; }
     .session-link { min-width: 0; font-weight: 500; color: var(--fg); overflow-wrap: anywhere; }
     .session-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-    .age { margin-left: auto; font-size: .6875rem; color: var(--faint); }
+    .age { margin-left: auto; font-size: .6875rem; color: var(--mut); }
     .lines { margin: 0; padding: 0 0 0 1rem; display: flex; flex-direction: column; gap: .125rem; }
     .lines--blockers { color: var(--mut); }
     .line { min-width: 0; overflow-wrap: anywhere; }

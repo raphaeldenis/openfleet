@@ -25,7 +25,7 @@ const NOTHING_LINE = '(rien)';
     .heading { margin: 0; font-size: .6875rem; font-weight: 600; color: var(--mut); text-transform: none; }
     .items { margin: 0; padding: 0 0 0 1rem; display: flex; flex-direction: column; gap: .125rem; }
     .item { font-size: .75rem; min-width: 0; overflow-wrap: anywhere; }
-    .empty { margin: 0; font-size: .75rem; color: var(--faint); }
+    .empty { margin: 0; font-size: .75rem; color: var(--mut); }
   `,
 })
 export class StateSectionComponent {
