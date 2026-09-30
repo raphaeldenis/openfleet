@@ -198,9 +198,13 @@ function buildRecord(level: LogLevel, message: unknown, detail: unknown, fields:
   return Object.assign(record, extras, { ts: record.ts, level: record.level, msg: record.msg });
 }
 
+/** A slice or a concatenation keeps its whole source string alive; a round trip through bytes returns a flat, independent string. */
+const independentCopy = (text: string): string => Buffer.from(text, 'utf8').toString('utf8');
+
 function capLine(line: string): string {
   if (line.length <= MAX_LINE_CHARS) return line;
-  return `${line.slice(0, MAX_LINE_CHARS)}...[truncated ${line.length - MAX_LINE_CHARS} chars]`;
+  const head = independentCopy(line.slice(0, MAX_LINE_CHARS));
+  return independentCopy(`${head}...[truncated ${line.length - MAX_LINE_CHARS} chars]`);
 }
 
 function toNdjson(record: LogRecord): string {
