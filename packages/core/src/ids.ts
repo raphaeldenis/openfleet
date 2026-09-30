@@ -1,6 +1,7 @@
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 export const newId = (): string => randomUUID();
-export const newToken = (): string => randomBytes(32).toString('base64url');
+export const shortId = (): string => randomUUID().slice(0, 8);
+export const newToken =(): string => randomBytes(32).toString('base64url');
 
 // A plain === leaks a secret's length and, byte by byte, how much of it a guess got right through how
 // long the comparison takes. timingSafeEqual needs equal-length buffers, so a length mismatch is checked
