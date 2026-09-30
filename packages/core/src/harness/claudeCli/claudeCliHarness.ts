@@ -59,7 +59,15 @@ export class ClaudeCliHarness implements Harness {
       resize: (cols, rows) => process.resize(cols, rows),
       kill: (options) => process.kill(options?.force ? 'SIGKILL' : 'SIGTERM'),
       onData: (listener) => process.onData(listener).dispose,
-      onExit: (listener) => process.onExit(({ exitCode }) => listener(exitCode)).dispose,
+      onExit: (listener) => process.onExit((exit) => listener(exitCodeOf(exit))).dispose,
     };
   }
+}
+
+const SIGNAL_EXIT_CODE_BASE = 128;
+
+// node-pty reports a signal death as exitCode 0 plus the signal; the shell convention (128 + signal) keeps it distinguishable from a clean exit.
+function exitCodeOf({ exitCode, signal }: { exitCode: number; signal?: number }): number {
+  const wasKilledBySignal = signal !== undefined && signal > 0;
+  return wasKilledBySignal ? SIGNAL_EXIT_CODE_BASE + signal : exitCode;
 }

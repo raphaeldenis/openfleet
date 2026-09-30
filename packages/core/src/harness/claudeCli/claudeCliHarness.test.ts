@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-type ExitListener = (event: { exitCode: number }) => void;
+type ExitListener = (event: { exitCode: number; signal?: number }) => void;
 
 const spawn = vi.fn((_command: string, _args: string[], _options: { env: Record<string, string> }) => {
   const exitListeners: ExitListener[] = [];
@@ -18,7 +18,7 @@ const spawn = vi.fn((_command: string, _args: string[], _options: { env: Record<
     kill: () => undefined,
     // Test-only: simulates the pty actually exiting, so tests can assert on the harness's own
     // internal onExit-triggered cleanup, not just the onExit forwarded out through HarnessHandle.
-    emitExit: (exitCode = 0) => exitListeners.forEach((listener) => listener({ exitCode })),
+    emitExit: (exitCode = 0, signal?: number) => exitListeners.forEach((listener) => listener({ exitCode, signal })),
   };
 });
 
@@ -232,6 +232,24 @@ describe('ClaudeCliHarness', () => {
 
     expect(existsSync(settingsPath)).toBe(false);
     expect(existsSync(mcpConfigPath)).toBe(false);
+  });
+
+  it.each([
+    { label: 'a SIGKILL that node-pty reports as exit code 0', exit: { exitCode: 0, signal: 9 }, reported: 137 },
+    { label: 'a SIGTERM', exit: { exitCode: 0, signal: 15 }, reported: 143 },
+    { label: 'a SIGHUP', exit: { exitCode: 0, signal: 1 }, reported: 129 },
+    { label: 'a clean exit with signal 0', exit: { exitCode: 0, signal: 0 }, reported: 0 },
+    { label: 'a clean exit with no signal', exit: { exitCode: 0, signal: undefined }, reported: 0 },
+    { label: 'a failing exit code with no signal', exit: { exitCode: 1, signal: undefined }, reported: 1 },
+  ])('reports $label as exit code $reported to the exit listener', async ({ exit, reported }) => {
+    const { ClaudeCliHarness } = await import('./claudeCliHarness.js');
+    const handle = new ClaudeCliHarness(sessionsRoot).start(launch);
+    const reportedExitCodes: number[] = [];
+    handle.onExit((exitCode) => reportedExitCodes.push(exitCode));
+
+    spawn.mock.results[0]!.value.emitExit(exit.exitCode, exit.signal);
+
+    expect(reportedExitCodes).toEqual([reported]);
   });
 
   it('removes every token file it just wrote, not just some, when pty.spawn throws right after they land on disk', async () => {
