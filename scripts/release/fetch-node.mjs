@@ -15,6 +15,8 @@ const DEFAULT_TARGET = 'aarch64-apple-darwin';
 const NODE_PLATFORM_BY_TARGET = { 'aarch64-apple-darwin': 'darwin-arm64' };
 const PLAIN_SEMVER = /^\d+\.\d+\.\d+$/;
 const EXECUTABLE_MODE = 0o755;
+const FETCH_TIMEOUT_MS = 60_000;
+const CHECKSUM_RECORD_LINE = /^(tarball|binary) ([0-9a-f]{64})$/;
 
 class FetchNodeError extends Error {}
 
@@ -28,8 +30,8 @@ export const runInstalledVersion = (binaryPath) => {
 };
 
 /** @returns {Promise<Uint8Array>} */
-async function downloadBytes(url) {
-  const response = await fetch(url);
+export async function downloadBytes(url) {
+  const response = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
   if (!response.ok) throw new FetchNodeError(`GET ${url} answered ${response.status}`);
   return Buffer.from(await response.arrayBuffer());
 }
@@ -52,15 +54,33 @@ export function extractNodeBinary({ tarball, packageName, scratchFolder }) {
   return join(scratchFolder, packageName, 'bin/node');
 }
 
-const readRecordedChecksum = (recordPath) => {
+/** @returns {{ tarball?: string, binary?: string }} the `tarball <sha>` / `binary <sha>` lines of the record; empty when it is missing or in another format. */
+const readChecksumRecord = (recordPath) => {
   try {
-    return readFileSync(recordPath, 'utf8').trim();
+    const lines = readFileSync(recordPath, 'utf8').split('\n');
+    const matches = lines.map((line) => CHECKSUM_RECORD_LINE.exec(line.trim())).filter((match) => match !== null);
+    return Object.fromEntries(matches.map(([, kind, checksum]) => [kind, checksum]));
+  } catch {
+    return {};
+  }
+};
+
+const sha256OfFile = (path) => {
+  try {
+    return sha256(readFileSync(path));
   } catch {
     return undefined;
   }
 };
 
-/** Installs the pinned Node binary as the sidecar unless the installed one reports that version and the recorded tarball sha256 is the published one. */
+/** True when the binary reports the pinned version and hashes to the sha256 recorded when it was installed; needs no network. */
+const isInstalledBinaryTheRecordedOne = ({ destination, checksumRecord, version, installedVersion }) => {
+  if (installedVersion(destination) !== `v${version}`) return false;
+  const { binary: recordedBinaryChecksum } = readChecksumRecord(checksumRecord);
+  return recordedBinaryChecksum !== undefined && sha256OfFile(destination) === recordedBinaryChecksum;
+};
+
+/** Installs the pinned Node binary as the sidecar unless the installed one reports that version and hashes to the binary sha256 recorded at its verified install. */
 export async function fetchNode({ version, target = DEFAULT_TARGET, binariesFolder = DEFAULT_BINARIES_FOLDER, fetchBytes = downloadBytes, installedVersion = runInstalledVersion, extractBinary = extractNodeBinary }) {
   if (!PLAIN_SEMVER.test(version)) throw new FetchNodeError(`version "${version}" is not a plain x.y.z`);
   const nodePlatform = NODE_PLATFORM_BY_TARGET[target];
@@ -70,15 +90,13 @@ export async function fetchNode({ version, target = DEFAULT_TARGET, binariesFold
   const checksumRecord = `${destination}.sha256`;
   refuseSymlink(destination);
   refuseSymlink(checksumRecord);
+  if (isInstalledBinaryTheRecordedOne({ destination, checksumRecord, version, installedVersion })) return { status: 'skipped', path: destination };
+
   const packageName = `node-v${version}-${nodePlatform}`;
   const tarballName = `${packageName}.tar.gz`;
   const baseUrl = `https://nodejs.org/dist/v${version}`;
   const shasums = Buffer.from(await fetchBytes(`${baseUrl}/SHASUMS256.txt`)).toString('utf8');
   const publishedChecksum = findPublishedChecksum({ shasums, tarballName });
-  const isPinnedVersionInstalled = installedVersion(destination) === `v${version}`;
-  const isRecordedChecksumPublished = readRecordedChecksum(checksumRecord) === publishedChecksum;
-  if (isPinnedVersionInstalled && isRecordedChecksumPublished) return { status: 'skipped', path: destination };
-
   const tarball = Buffer.from(await fetchBytes(`${baseUrl}/${tarballName}`));
   const downloadedChecksum = sha256(tarball);
   if (downloadedChecksum !== publishedChecksum) throw new FetchNodeError(`checksum mismatch for ${tarballName}: published ${publishedChecksum}, downloaded ${downloadedChecksum}`);
@@ -92,7 +110,7 @@ export async function fetchNode({ version, target = DEFAULT_TARGET, binariesFold
     chmodSync(stagedBinary, EXECUTABLE_MODE);
     refuseSymlink(destination);
     renameSync(stagedBinary, destination);
-    writeFileSync(checksumRecord, `${downloadedChecksum}\n`);
+    writeFileSync(checksumRecord, `tarball ${downloadedChecksum}\nbinary ${sha256OfFile(destination)}\n`);
   } finally {
     rmSync(scratchFolder, { recursive: true, force: true });
   }

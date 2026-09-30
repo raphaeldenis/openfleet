@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { extractNodeBinary as extractNodeBinaryFor, fetchNode, runInstalledVersion } from './fetch-node.mjs';
+import { downloadBytes, extractNodeBinary as extractNodeBinaryFor, fetchNode, runInstalledVersion } from './fetch-node.mjs';
 
 const SCRIPT_FOLDER = dirname(fileURLToPath(import.meta.url));
 const VERSION = '26.9.0';
@@ -86,27 +86,55 @@ describe('fetchNode', () => {
     expect(existsSync(installedBinary())).toBe(false);
   });
 
-  it('records the verified tarball sha256 next to the binary', async () => {
+  it('records the verified tarball sha256 and the installed binary sha256 next to the binary', async () => {
     const tarball = buildTarball();
     const { fetchBytes } = serve({ tarball, shasums: shasumsFor(tarball) });
 
     await fetchNode({ version: VERSION, binariesFolder, fetchBytes, installedVersion: neverInstalled });
 
-    expect(readFileSync(checksumRecord(), 'utf8').trim()).toBe(sha256(tarball));
+    expect(readFileSync(checksumRecord(), 'utf8')).toBe(`tarball ${sha256(tarball)}\nbinary ${sha256(Buffer.from(FAKE_NODE_BODY))}\n`);
   });
 
-  it('skips the tarball download when the installed binary reports the pinned version and the recorded sha256 is the published one', async () => {
-    const tarball = buildTarball();
+  const installBinaryWithRecord = ({ body, recordedBinaryBody = body }: { body: string; recordedBinaryBody?: string }) => {
     mkdirSync(binariesFolder, { recursive: true });
-    writeFileSync(installedBinary(), 'existing');
-    writeFileSync(checksumRecord(), `${sha256(tarball)}\n`);
-    const { fetchBytes, requestedUrls } = serve({ tarball, shasums: shasumsFor(tarball) });
+    writeFileSync(installedBinary(), body);
+    writeFileSync(checksumRecord(), `tarball ${'c'.repeat(64)}\nbinary ${sha256(Buffer.from(recordedBinaryBody))}\n`);
+  };
+
+  it('skips without any network call when the installed binary reports the pinned version and hashes to the recorded binary sha256', async () => {
+    installBinaryWithRecord({ body: 'existing' });
+    const fetchBytes = vi.fn(async () => {
+      throw new Error('offline');
+    });
 
     const result = await fetchNode({ version: VERSION, binariesFolder, fetchBytes, installedVersion: () => `v${VERSION}` });
 
     expect(result).toEqual({ status: 'skipped', path: installedBinary() });
     expect(readFileSync(installedBinary(), 'utf8')).toBe('existing');
-    expect(requestedUrls).toEqual([`${BASE_URL}/SHASUMS256.txt`]);
+    expect(fetchBytes).not.toHaveBeenCalled();
+  });
+
+  it('installs again when the binary on disk is not the one the record was written for (a Homebrew node copied over the fetched one)', async () => {
+    const tarball = buildTarball();
+    installBinaryWithRecord({ body: 'copied from homebrew', recordedBinaryBody: 'fetched' });
+    const { fetchBytes } = serve({ tarball, shasums: shasumsFor(tarball) });
+
+    const result = await fetchNode({ version: VERSION, binariesFolder, fetchBytes, installedVersion: () => `v${VERSION}` });
+
+    expect(result.status).toBe('installed');
+    expect(readFileSync(installedBinary(), 'utf8')).toBe(FAKE_NODE_BODY);
+  });
+
+  it('installs again when the record is the old single-line format, which carries no binary sha256', async () => {
+    const tarball = buildTarball();
+    mkdirSync(binariesFolder, { recursive: true });
+    writeFileSync(installedBinary(), 'existing');
+    writeFileSync(checksumRecord(), `${sha256(tarball)}\n`);
+    const { fetchBytes } = serve({ tarball, shasums: shasumsFor(tarball) });
+
+    const result = await fetchNode({ version: VERSION, binariesFolder, fetchBytes, installedVersion: () => `v${VERSION}` });
+
+    expect(result.status).toBe('installed');
   });
 
   it('installs again when the version matches but no sha256 was recorded (a binary copied in by hand)', async () => {
@@ -121,23 +149,9 @@ describe('fetchNode', () => {
     expect(readFileSync(installedBinary(), 'utf8')).toBe(FAKE_NODE_BODY);
   });
 
-  it('installs again when the version matches but the recorded sha256 is not the published one', async () => {
-    const tarball = buildTarball();
-    mkdirSync(binariesFolder, { recursive: true });
-    writeFileSync(installedBinary(), 'old');
-    writeFileSync(checksumRecord(), `${'b'.repeat(64)}\n`);
-    const { fetchBytes } = serve({ tarball, shasums: shasumsFor(tarball) });
-
-    const result = await fetchNode({ version: VERSION, binariesFolder, fetchBytes, installedVersion: () => `v${VERSION}` });
-
-    expect(result.status).toBe('installed');
-  });
-
   it('downloads again when the installed binary reports another version', async () => {
     const tarball = buildTarball();
-    mkdirSync(binariesFolder, { recursive: true });
-    writeFileSync(installedBinary(), 'old');
-    writeFileSync(checksumRecord(), `${sha256(tarball)}\n`);
+    installBinaryWithRecord({ body: 'old' });
     const { fetchBytes } = serve({ tarball, shasums: shasumsFor(tarball) });
 
     const result = await fetchNode({ version: VERSION, binariesFolder, fetchBytes, installedVersion: () => 'v25.0.0' });
@@ -199,6 +213,21 @@ describe('fetchNode', () => {
     const fetchBytes = async () => Buffer.alloc(0);
 
     await expect(fetchNode({ version: '../evil', binariesFolder, fetchBytes, installedVersion: neverInstalled })).rejects.toThrow(/version/i);
+  });
+});
+
+describe('downloadBytes', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('gives every request a 60 s timeout signal, so a hanging network cannot hang the build', async () => {
+    const timeoutSignal = new AbortController().signal;
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timeoutSignal);
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('ok'));
+
+    await downloadBytes('https://nodejs.org/x');
+
+    expect(timeout).toHaveBeenCalledWith(60_000);
+    expect(fetchSpy).toHaveBeenCalledWith('https://nodejs.org/x', { signal: timeoutSignal });
   });
 });
 
