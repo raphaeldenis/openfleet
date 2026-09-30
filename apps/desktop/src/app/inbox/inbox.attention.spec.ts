@@ -77,7 +77,8 @@ describe('InboxComponent questions from agents', () => {
   it('user sees a count on the Questions tab, and none when nothing is waiting', async () => {
     await renderInbox([agent('s1'), agent('s2')], [stateOf({ sessionId: 's1', blockers: ['a'] }), stateOf({ sessionId: 's2', questionsForHuman: ['b'] })]);
 
-    expect(screen.getByTestId('inbox-tab-count-questions')).toHaveTextContent('2');
+    expect(within(screen.getByTestId('inbox-tab-questions')).getByTestId('inbox-tab-count-questions')).toHaveTextContent('2');
+    expect(within(screen.getByTestId('inbox-tab-gates')).queryByTestId('inbox-tab-count-questions')).toBeNull();
   });
 
   it('user sees no count on the Questions tab when no session needs attention', async () => {
