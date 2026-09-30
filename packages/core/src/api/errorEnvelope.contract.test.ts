@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
+import { forceNdjsonLogging } from '../forceNdjsonLogging.testkit.js';
 import { ApprovalService } from '../governance/approvalService.js';
 import { FakeHarness } from '../harness/fakeHarness.js';
 import { ManagerRepository } from '../managers/managerRepository.js';
@@ -19,7 +20,8 @@ let server: Awaited<ReturnType<typeof startServer>>;
 let errorLog: ReturnType<typeof vi.spyOn>;
 
 beforeEach(async () => {
-  errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  forceNdjsonLogging();
+  errorLog =vi.spyOn(console, 'error').mockImplementation(() => undefined);
   const db = openDatabase(':memory:');
   const bus = new EventBus();
   const sessions = new SessionService({ db, bus, harnesses: [new FakeHarness()], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt' });
@@ -75,6 +77,16 @@ describe('T2: a handler that throws on any route', () => {
     expect(response.headers.get('x-openfleet-error-id')).toBe(id);
     const loggedLines: string[] = errorLog.mock.calls.map((call: unknown[]) => String(call[0]));
     expect(loggedLines.filter((line) => line.includes(id))).toHaveLength(1);
+  });
+
+  it('carries the same id in the logged NDJSON line\'s own id field, with the error code', async () => {
+    makeEveryHandlerThrow(new Error(ERROR_MESSAGE));
+    const response = await callRoute({ method: 'GET', path: '/api/sessions' });
+    const { id } = await response.json() as { id: string };
+    const logged = JSON.parse(String(errorLog.mock.calls[0]![0])) as { id: string; msg: string; code: string };
+    expect(response.headers.get('x-openfleet-error-id')).toBe(id);
+    expect({ id: logged.id, code: logged.code }).toEqual({ id, code: 'internal_error' });
+    expect(logged.msg).toContain(id);
   });
 
   it('logs exactly one error line per failed request', async () => {

@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { newId } from '../ids.js';
+import { shortId } from '../ids.js';
 import { log } from '../logger.js';
 
 export type Handler = (ctx: { req: IncomingMessage; res: ServerResponse; params: Record<string, string>; body: unknown }) => Promise<void> | void;
@@ -67,7 +67,8 @@ export function redactedRequestPath(req: IncomingMessage): string {
 }
 
 export function logServerError(req: IncomingMessage, error: unknown): void {
-  log('error', `${req.method ?? 'GET'} ${redactedRequestPath(req)} → 500 [${newId()}]`, error);
+  const id = shortId();
+  log('error', `${req.method ?? 'GET'} ${redactedRequestPath(req)} → 500 [${id}]`, error, { id });
 }
 
 export const MAX_BODY_BYTES = 1024 * 1024;

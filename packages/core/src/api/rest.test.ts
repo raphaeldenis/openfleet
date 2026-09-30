@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PERMISSION_MODES } from '@openfleet/shared';
 import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
+import { forceNdjsonLogging } from '../forceNdjsonLogging.testkit.js';
 import { FakeHarness } from '../harness/fakeHarness.js';
 import type { Harness, HarnessHandle, HarnessLaunch } from '../harness/harness.js';
 import { ApprovalService } from '../governance/approvalService.js';
@@ -517,6 +518,7 @@ describe('REST', () => {
     // reopen call the running server handles goes through a harness that throws on start.
     (sessions as unknown as { harnessFor: (id: string) => Harness }).harnessFor = () => new FailingHarness();
 
+    forceNdjsonLogging();
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const res = await api(`/api/sessions/${created.id}/reopen`, { method: 'POST' });
     expect(res.status).toBe(500);
@@ -524,9 +526,25 @@ describe('REST', () => {
 
     // sessionService itself already logs the domain-level failure (resumeOne); this call finds the
     // separate HTTP-level 500 log this test is actually about, among whatever else got logged.
-    const httpErrorLog = consoleErrorSpy.mock.calls.find(([line]) => (line as string).includes('POST') && (line as string).includes(`/api/sessions/${created.id}/reopen`));
+    const httpErrorLog = consoleErrorSpy.mock.calls.map(([line]) => JSON.parse(line as string) as { msg: string; id: string; err?: { stack: string } }).find((record) => record.msg.includes('POST') && record.msg.includes(`/api/sessions/${created.id}/reopen`));
     expect(httpErrorLog).toBeDefined();
-    expect((httpErrorLog![1] as Error).stack).toContain('pty spawn ENOENT');
+    expect(httpErrorLog!.err!.stack).toContain('pty spawn ENOENT');
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('logs the 500 of a failed reopen with one 8-hex ref, the same in the message and in the record id', async () => {
+    const created = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'H', harness: 'fake' }) })).json();
+    await api(`/api/sessions/${created.id}/close`, { method: 'POST' });
+    (sessions as unknown as { harnessFor: (id: string) => Harness }).harnessFor = () => ({ id: 'fake', start: () => { throw new Error('pty spawn ENOENT'); } }) as unknown as Harness;
+    forceNdjsonLogging();
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await api(`/api/sessions/${created.id}/reopen`, { method: 'POST' });
+
+    const httpErrorLog = consoleErrorSpy.mock.calls.map(([line]) => JSON.parse(line as string) as { msg: string; id: string }).find((record) => record.msg.includes(`/api/sessions/${created.id}/reopen`));
+    expect(httpErrorLog!.id).toMatch(/^[0-9a-f]{8}$/);
+    expect(httpErrorLog!.msg).toMatch(/→ 500 \[[0-9a-f]{8}\]$/);
+    expect(httpErrorLog!.msg).toBe(`POST /api/sessions/${created.id}/reopen → 500 [${httpErrorLog!.id}]`);
     consoleErrorSpy.mockRestore();
   });
 
@@ -534,18 +552,20 @@ describe('REST', () => {
     const listSpy = vi.spyOn(sessions, 'list').mockImplementation(() => {
       throw new Error('sqlite: database is locked');
     });
+    forceNdjsonLogging();
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     const res = await fetch(`${server.url}/api/sessions?secret=leak-me`, { headers: { authorization: 'Bearer admin', 'x-super-secret-header': 'do-not-log-me' } });
 
     expect(res.status).toBe(500);
     expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
-    const [line, loggedError] = consoleErrorSpy.mock.calls[0]!;
-    expect(line as string).toContain('GET');
-    expect(line as string).toContain('/api/sessions');
-    expect(line as string).not.toContain('secret=leak-me');
-    expect(line as string).not.toContain('do-not-log-me');
-    expect((loggedError as Error).stack).toContain('sqlite: database is locked');
+    const [rawLine] = consoleErrorSpy.mock.calls[0]!;
+    const { msg: line, err: loggedError } = JSON.parse(rawLine as string) as { msg: string; err: { stack: string } };
+    expect(line).toContain('GET');
+    expect(line).toContain('/api/sessions');
+    expect(rawLine as string).not.toContain('secret=leak-me');
+    expect(rawLine as string).not.toContain('do-not-log-me');
+    expect(loggedError.stack).toContain('sqlite: database is locked');
     listSpy.mockRestore();
     consoleErrorSpy.mockRestore();
   });

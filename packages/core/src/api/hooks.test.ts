@@ -2,6 +2,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
+import { forceNdjsonLogging } from '../forceNdjsonLogging.testkit.js';
 import { FakeHarness } from '../harness/fakeHarness.js';
 import { ApprovalError, ApprovalService } from '../governance/approvalService.js';
 import { ManagerRepository } from '../managers/managerRepository.js';
@@ -117,13 +118,14 @@ describe('POST /hooks/:token', () => {
     const applyInputSpy = vi.spyOn(sessions, 'applyInput').mockImplementation(() => {
       throw new Error('boom');
     });
+    forceNdjsonLogging();
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     const res = await post(`/hooks/${hookToken}`, { session_id: 'c', hook_event_name: 'SessionStart' });
 
     expect(res.status).toBe(500);
     expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
-    const [line] = consoleErrorSpy.mock.calls[0]!;
+    const [line] = consoleErrorSpy.mock.calls[0]! as [string];
     expect(line as string).not.toContain(hookToken);
     expect(line as string).toContain('/hooks/:token');
     applyInputSpy.mockRestore();

@@ -9,6 +9,7 @@ import { ApprovalError } from '../governance/approvalService.js';
 import { shortId } from '../ids.js';
 import { log } from '../logger.js';
 import { ModelConfigReadOnlyError, ModelConfigUnreadableError } from '../models.js';
+import { escapedForRegExp, isSecretEntry, MASK, maskedSecrets, maskingCutCredential } from '../redact.js';
 import { WorktreeError } from '../git/worktrees.js';
 import {
   NoteFileUnreadableError, NoteIsNotFileBackedError, PathEscapesDocsFolderError, ProjectHasNoDocsFolderError, ProjectNotFoundError,
@@ -138,64 +139,6 @@ function entryFor(error: unknown): Entry | undefined {
   }
 }
 
-const SECRET_KEY = /token|secret|authorization|password/i;
-const MASK = '***';
-const escapedForRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-/** A percent-escape encoded up to five times (%2F, %252F, …); the bound keeps every scan linear. */
-const ESCAPE_PREFIX = '%(?:25){0,4}';
-const hexOf = (character: string) => character.charCodeAt(0).toString(16).padStart(2, '0');
-
-/** Matches `word` with any of its characters written as a percent-escape. */
-const spelledWithEscapes = (word: string): string =>
-  Array.from(word)
-    .map((character) => `(?:${escapedForRegExp(character)}|${ESCAPE_PREFIX}(?:${hexOf(character.toLowerCase())}|${hexOf(character.toUpperCase())}))`)
-    .join('');
-
-const SLASH = `(?:/|${ESCAPE_PREFIX}2F)`;
-const BEARER_SEPARATOR = `(?:[\\s:=]|${ESCAPE_PREFIX}(?:20|3A|3D|09))+`;
-// A token segment keeps every escape, valid or not: masking the whole segment is what hides a token spelled with escapes.
-const BEARER_TOKEN = new RegExp(`${spelledWithEscapes('Bearer')}${BEARER_SEPARATOR}[A-Za-z0-9._~+/=%-]+`, 'gi');
-const HOOK_TOKEN = new RegExp(`${SLASH}${spelledWithEscapes('hooks')}${SLASH}[^/\\s"'\`&]+`, 'gi');
-const BASIC_CREDENTIAL = /\bBasic\s+(?=[A-Za-z0-9+/]*[0-9+/=])[A-Za-z0-9+/]{8,}={0,2}/g;
-// Behind an Authorization header the word Basic is certain to introduce a credential, whatever characters it holds.
-const AUTHORIZED_BASIC_CREDENTIAL = /\b((?:Proxy-)?Authorization\s*[:=]\s*)Basic\s+[^\s"'`&;]+/gi;
-// A head cut inside a credential leaves a prefix too short or too plain for the rules above to recognise.
-const CREDENTIAL_CUT_BY_THE_HEAD = /\b(Basic\s+)[A-Za-z0-9+/=]+$/;
-// The key class excludes every character that can start a parameter: a run of them stays linear.
-const QUERY_PARAMETER = /(^|[?&;\s])([^=&?;\s"'`#]*)=([^&;\s"'`]*)/g;
-
-/** Decodes every well-formed percent-escape, up to three layers deep; a malformed one stays as it is and nothing throws. */
-function withEscapesDecoded(text: string): string {
-  let decoded = text;
-  for (let layer = 0; layer < 3; layer += 1) {
-    const next = decoded.replace(/%([0-9a-f]{2})/gi, (_escape, hex: string) => String.fromCharCode(parseInt(hex, 16)));
-    if (next === decoded) break;
-    decoded = next;
-  }
-  return decoded;
-}
-
-/** A value that decodes to a URL or header carrying a secret (`next=%2Fx%3Ftoken%3D…`) hides that secret behind its escapes. */
-const hidesSecretBehindEscapes = (value: string): boolean => {
-  const decoded = withEscapesDecoded(value);
-  return decoded !== value && maskedSecrets(decoded) !== decoded;
-};
-
-const maskingSecretParameters = (parameter: string, prefix: string, key: string, value: string): string => {
-  const isSecretParameter = SECRET_KEY.test(withEscapesDecoded(key)) || hidesSecretBehindEscapes(value);
-  return isSecretParameter ? `${prefix}${key}=${MASK}` : parameter;
-};
-
-function maskedSecrets(text: string): string {
-  return text
-    .replace(BEARER_TOKEN, `Bearer ${MASK}`)
-    .replace(AUTHORIZED_BASIC_CREDENTIAL, `$1Basic ${MASK}`)
-    .replace(BASIC_CREDENTIAL, `Basic ${MASK}`)
-    .replace(QUERY_PARAMETER, maskingSecretParameters)
-    .replace(HOOK_TOKEN, `/hooks/${MASK}`);
-}
-
 const realpathOrSelf = (path: string): string => {
   try {
     return realpathSync(path);
@@ -231,8 +174,6 @@ function headBeforeRedaction(text: string, maxChars: number): string {
   const rawLimit = maxChars * RAW_HEAD_FACTOR;
   return text.length > rawLimit ? maskingCutCredential(text.slice(0, rawLimit)) + ELLIPSIS : text;
 }
-
-const maskingCutCredential = (head: string): string => head.replace(CREDENTIAL_CUT_BY_THE_HEAD, `$1${MASK}`);
 
 // Control, format (bidi, zero-width, BOM) and line/paragraph separator characters: the desktop renders what is left.
 const UNRENDERABLE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
@@ -299,7 +240,7 @@ function withCleanedKeys(value: Record<string, unknown>, homes: RegExp[]): Recor
 }
 
 const sanitizerOfKeysAndValues = (homes: RegExp[]) => (key: string, rawValue: unknown): unknown => {
-  if (SECRET_KEY.test(key)) return MASK;
+  if (isSecretEntry(key, rawValue)) return MASK;
   const value = unboxed(rawValue);
   if (typeof value === 'string') return cleanedText(value, homes);
   return isPlainObject(value) ? withCleanedKeys(value, homes) : value;
@@ -343,20 +284,21 @@ function loggableError(error: unknown): unknown {
   return `${maskedSecrets(maskingCutCredential(text.slice(0, MAX_LOGGED_ERROR_CHARS)))}${ELLIPSIS}[truncated ${omittedChars} chars]`;
 }
 
-function logInternalError(error: unknown, { id, scope }: { id: string; scope: ErrorScope }): void {
+function logInternalError(error: unknown, { id, code, scope }: { id: string; code: string; scope: ErrorScope }): void {
   const site = scope.where ?? 'unexpected error';
   const sessionSuffix = scope.sessionId ? ` session=${scope.sessionId}` : '';
   const line = `${site} [${id}]${sessionSuffix}`;
+  const fields = { id, code, ...(scope.sessionId && { sessionId: scope.sessionId }) };
   try {
-    log('error', line, loggableError(error));
+    log('error', line, loggableError(error), fields);
   } catch {
-    tryLogging(`${line} (error cannot be printed)`);
+    tryLogging(`${line} (error cannot be printed)`, fields);
   }
 }
 
-function tryLogging(line: string): void {
+function tryLogging(line: string, fields: { id: string; code: string; sessionId?: string }): void {
   try {
-    log('error', line);
+    log('error', line, undefined, fields);
   } catch {
     // logging is best effort: an unwritable log never stops the answer
   }
@@ -379,7 +321,7 @@ function envelopeFor(entry: Entry, error: unknown, scope: ErrorScope): ErrorEnve
   const { kind } = ERROR_CODES[entry.code];
   const isInternal = kind === 'internal';
   const id = isInternal ? shortId() : undefined;
-  if (id) logInternalError(error, { id, scope });
+  if (id) logInternalError(error, { id, code: entry.code, scope });
   const referenceSentence = id ? `Report ref ${id} if it happens again.` : undefined;
   const hint = [entry.hint, referenceSentence].filter(Boolean).join(' ') || undefined;
   const homes = homePatterns();

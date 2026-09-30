@@ -6,6 +6,7 @@ import { ZodError, z } from 'zod';
 import { ERROR_CODES, OpenFleetError, type ErrorCode } from '@openfleet/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { InvalidJsonBodyError, PayloadTooLargeError } from '../api/router.js';
+import { forceNdjsonLogging } from '../forceNdjsonLogging.testkit.js';
 import { StuckConnectionError } from '../db/transaction.js';
 import { ApprovalError } from '../governance/approvalService.js';
 import { ModelConfigReadOnlyError, ModelConfigUnreadableError } from '../models.js';
@@ -29,7 +30,10 @@ import { describeError } from './describeError.js';
 const ID_PATTERN = /^[0-9a-f]{8}$/;
 
 let errorLog: ReturnType<typeof vi.spyOn>;
-beforeEach(() => { errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined); });
+beforeEach(() => {
+  forceNdjsonLogging();
+  errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+});
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 
 const foreignKeyError = () => Object.assign(new Error('FOREIGN KEY constraint failed'), { code: 'ERR_SQLITE_ERROR' });
@@ -188,6 +192,14 @@ describe('describeError: internal errors', () => {
     expect(String(errorLog.mock.calls[0]![0])).toContain(envelope.id);
   });
 
+  it('logs the envelope id as the id field of the log record, next to the session it belongs to', () => {
+    const envelope = describeError(new Error('sqlite exploded'), { sessionId: 's-42' });
+
+    const loggedRecord = JSON.parse(String(errorLog.mock.calls[0]![0])) as { id: string; sessionId: string };
+    expect(loggedRecord.id).toBe(envelope.id);
+    expect(loggedRecord.sessionId).toBe('s-42');
+  });
+
   it('never puts the raw error message or a stack in the envelope', () => {
     const serialized = JSON.stringify(describeError(new Error('sqlite exploded at /secret/place')));
     expect(serialized).not.toContain('sqlite');
@@ -320,6 +332,76 @@ describe('describeError: hostile case 1, secrets and paths in every field', () =
     const { detail } = describeError(detailCarrying({ [key]: 'plain-looking-value-42', kept: 'visible' }));
 
     expect(detail).toEqual({ [key]: '***', kept: 'visible' });
+  });
+
+  it.each(['token', 'accessToken', 'hook_token', 'adminToken', 'refreshTokenString', 'accessTokenSig', 'TOKENS', 'authTokens', 'hookTokens', 'tokens'])(
+    'masks a string under the credential key %s, whatever follows "token" in the name',
+    (key) => {
+      const { detail } = describeError(detailCarrying({ [key]: 'plain-looking-value-42', kept: 'visible' }));
+
+      expect(detail).toEqual({ [key]: '***', kept: 'visible' });
+    },
+  );
+
+  it('masks a list of tokens under authTokens', () => {
+    const { detail } = describeError(detailCarrying({ authTokens: ['ghp_realtoken1', 'ghp_realtoken2'], kept: 'visible' }));
+
+    expect(detail).toEqual({ authTokens: '***', kept: 'visible' });
+  });
+
+  it.each(['tokens', 'contextTokens', 'inputTokens'])('keeps a number under the usage counter %s', (key) => {
+    const { detail } = describeError(detailCarrying({ [key]: 1.5, kept: 'visible' }));
+
+    expect(detail).toEqual({ [key]: 1.5, kept: 'visible' });
+  });
+
+  it.each(['?tokens=x', '?authTokens=x', '?refreshTokenString=x', '?accessTokenSig=x', '?TOKENS=x', '?hookTokens=x'])(
+    'masks the query parameter in %s in the message and the detail',
+    (query) => {
+      const serialized = JSON.stringify(describeError(carrying(`GET /cb${query}&page=2`)));
+
+      expect(serialized).not.toMatch(/=x(?!\w)/);
+      expect(serialized).toContain('=***&page=2');
+    },
+  );
+
+  describe('a URL credential cut by the head cap', () => {
+    const scheme = 'https://';
+    const credential = 'admin:hunter2longpassword';
+    const keptCharsOfTheUrl = Array.from({ length: credential.length }, (_, position) => scheme.length + position + 1);
+    const withUrlCutAfter = (keptChars: number, capChars: number, padding: string) => `${padding.repeat(capChars - keptChars)}${scheme}${credential}@host/path`;
+    const NUL = '\u0000';
+
+    it('leaves no usable prefix in a message cut at 4 times its 300-character cap, wherever the cut falls', () => {
+      const leakedTails = keptCharsOfTheUrl.flatMap((keptChars) => {
+        const { message } = describeError(new OpenFleetError('row_cap', withUrlCutAfter(keptChars, 300 * 4, NUL)));
+        return message.includes('hunt') || message.includes('admin') ? [message.slice(-30)] : [];
+      });
+
+      expect(leakedTails).toEqual([]);
+    });
+
+    it('leaves no usable prefix in a string detail cut at 4 times its 2 KiB cap, wherever the cut falls', () => {
+      const leakedTails = keptCharsOfTheUrl.flatMap((keptChars) => {
+        const { detail } = describeError(detailCarrying(withUrlCutAfter(keptChars, 2048 * 4, NUL)));
+        return String(detail).includes('hunt') || String(detail).includes('admin') ? [String(detail).slice(-30)] : [];
+      });
+
+      expect(leakedTails).toEqual([]);
+    });
+
+    it('leaves no usable prefix in the logged error cut at 4 KiB, wherever the cut falls', () => {
+      const leakedTails = keptCharsOfTheUrl.flatMap((keptChars) => {
+        errorLog.mockClear();
+        const error = new Error('boom');
+        error.stack = withUrlCutAfter(keptChars, 4096, '_');
+        describeError(error);
+        const logged = String(errorLog.mock.calls[0]![0]);
+        return logged.includes('hunt') || logged.includes('admin') ? [logged.slice(-60)] : [];
+      });
+
+      expect(leakedTails).toEqual([]);
+    });
   });
 
   it('shortens the user home inside a structured detail that fits in 2 KiB', () => {
@@ -735,17 +817,19 @@ describe('describeError: an internal-kind OpenFleetError', () => {
 
     expect(errorLog).toHaveBeenCalledTimes(1);
     expect(String(errorLog.mock.calls[0]![0])).toContain(envelope.id);
-    expect(errorLog.mock.calls[0]![1]).toBe(error);
+    const loggedRecord = JSON.parse(String(errorLog.mock.calls[0]![0])) as { err: { name: string; message: string; code?: string } };
+    expect(loggedRecord.err).toMatchObject({ name: 'Error', message: expect.stringContaining('SELECT * FROM x') });
   });
 
   describe('when the raw message is far larger than the log cap', () => {
     const MEGABYTE = 1024 * 1024;
     const LOG_CAP_CHARS = 4096;
+    const loggedDetailOfFirstCall = (): string => (JSON.parse(String(errorLog.mock.calls[0]![0])) as { detail: string }).detail;
 
     it('logs a few KiB of it with a truncation suffix that counts the omitted characters', () => {
       describeError(new Error(`sqlite exploded ${'x'.repeat(MEGABYTE)}`));
 
-      const loggedDetail = String(errorLog.mock.calls[0]![1]);
+      const loggedDetail = loggedDetailOfFirstCall();
       expect(loggedDetail.length).toBeLessThan(LOG_CAP_CHARS + 200);
       expect(loggedDetail).toMatch(/…\[truncated \d{6,} chars\]$/);
       expect(loggedDetail).toContain('sqlite exploded');
@@ -754,7 +838,7 @@ describe('describeError: an internal-kind OpenFleetError', () => {
     it('masks a secret in the surviving head before logging it', () => {
       describeError(new Error(`call failed with Bearer abcDEF123 ${'x'.repeat(MEGABYTE)}`));
 
-      const loggedDetail = String(errorLog.mock.calls[0]![1]);
+      const loggedDetail = loggedDetailOfFirstCall();
       expect(loggedDetail).not.toContain('abcDEF123');
       expect(loggedDetail).toContain('Bearer ***');
     });
@@ -764,7 +848,8 @@ describe('describeError: an internal-kind OpenFleetError', () => {
 
       describeError(error);
 
-      expect(errorLog.mock.calls[0]![1]).toBe(error);
+      const loggedRecord = JSON.parse(String(errorLog.mock.calls[0]![0])) as { err: { message: string } };
+      expect(loggedRecord.err.message).toBe('short failure');
     });
   });
 });

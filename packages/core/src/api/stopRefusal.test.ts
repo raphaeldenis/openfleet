@@ -6,6 +6,7 @@ import type { WorkingStateSections } from '@openfleet/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
+import { forceNdjsonLogging } from '../forceNdjsonLogging.testkit.js';
 import { ApprovalService } from '../governance/approvalService.js';
 import { FakeHarness } from '../harness/fakeHarness.js';
 import { ManagerRepository } from '../managers/managerRepository.js';
@@ -332,6 +333,7 @@ describe('user can rely on a failing refusal check never trapping a session in g
     const session = await fx.sessions.create({ directory: '/tmp', name: 'Boss', harness: 'fake', emoji: '🤖' });
     sessionId = session.id;
     hookToken = hookTokenOf(session.id);
+    forceNdjsonLogging();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     await postHook({ hook_event_name: 'SessionStart' });
     await promptSubmitted();
@@ -342,7 +344,7 @@ describe('user can rely on a failing refusal check never trapping a session in g
     expect(stateBeforeStop).toBe('generating');
     expect(answer).toEqual({});
     expect(stateOfSession()).toBe('idle');
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('WARN'));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('"level":"warn"'));
     expect(warn.mock.calls.flat().join(' ')).toContain('corrupt sections_json');
     warn.mockRestore();
   });
