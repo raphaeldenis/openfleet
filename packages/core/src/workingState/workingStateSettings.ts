@@ -110,7 +110,7 @@ const misspelledSectionKey = (key: string) => SECTION_KEYS.find((section) => key
 
 function warnAboutUnknownModelAliases(models: ContextNoticeSettings['models']): void {
   const unknownAliases = Object.keys(models).filter((alias) => !KNOWN_MODELS.includes(alias));
-  for (const alias of unknownAliases) log('warn', `contextNotice.models.${alias} is no known model, so no session follows it`);
+  for (const alias of unknownAliases) log('warn', `contextNotice.models.${alias} is not in the known model list, check its spelling (the override is applied to any session on that model)`);
 }
 
 // A malformed value fails the boot loudly, like the model table: a typo must not run every session on a setting nobody chose.

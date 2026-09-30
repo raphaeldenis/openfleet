@@ -69,13 +69,14 @@ describe('the operator sets the context notice in config.json', () => {
     expect(() => loadDaemonSettings(configWith(contents))).toThrow(expectedMessage);
   });
 
-  it('warns once at boot about a models alias that is no known model, and keeps ignoring it', () => {
+  it('warns once at boot, as advice, about a models key that is not in the known model list, and keeps the override', () => {
     const warnings = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     const settings = loadContextNotice({ models: { hiku: { firstAt: 120_000 }, haiku: { firstAt: 120_000 } } });
 
     expect(warnings).toHaveBeenCalledTimes(1);
-    expect(warnings.mock.calls[0]?.[0]).toMatch(/contextNotice\.models\.hiku is no known model/);
+    expect(warnings.mock.calls[0]?.[0]).toMatch(/contextNotice\.models\.hiku is not in the known model list/);
+    expect(warnings.mock.calls[0]?.[0]).not.toMatch(/no session follows it/);
     expect(settings.models).toHaveProperty('hiku');
     warnings.mockRestore();
   });
@@ -83,7 +84,7 @@ describe('the operator sets the context notice in config.json', () => {
   it('warns about nothing when every models alias is a known model', () => {
     const warnings = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-    loadContextNotice({ models: { haiku: { firstAt: 120_000 }, 'claude-opus-5-5': { every: 50_000 } } });
+    loadContextNotice({ models: { haiku: { firstAt: 120_000 }, 'claude-opus-5-5': { every: 50_000 }, 'claude-sonnet-5-5': { firstAt: 150_000 } } });
 
     expect(warnings).not.toHaveBeenCalled();
     warnings.mockRestore();
