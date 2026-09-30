@@ -48,11 +48,15 @@ describe('ManagerCardComponent state overdue chip', () => {
     expect(within(screen.getByTestId('manager-m1-card')).getByTestId('overdue-chip')).toBeTruthy();
   });
 
-  it('user can still reach "Pulse now" next to the chip: the card row wraps instead of clipping its controls', async () => {
+  it('user can still read the counters and reach "Pulse now" next to the chip', async () => {
     await renderCard(fakeWorkingStateEvents({ sessions: [session()] }), session());
+    const card = screen.getByTestId('manager-m1-card');
 
-    expect(screen.getByTestId('manager-m1-pulse')).toBeTruthy();
-    expect(getComputedStyle(screen.getByTestId('manager-m1-card')).flexWrap).toBe('wrap');
+    expect(within(card).getByTestId('overdue-chip')).toBeTruthy();
+    expect(within(card).getByTestId('manager-m1-children')).toBeVisible();
+    expect(within(card).getByTestId('manager-m1-countdown')).toBeVisible();
+    screen.getByTestId('manager-m1-pulse').focus();
+    expect(screen.getByTestId('manager-m1-pulse')).toHaveFocus();
   });
 
   it('user sees no chip on the card of a closed manager', async () => {

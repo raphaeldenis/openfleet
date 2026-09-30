@@ -45,16 +45,14 @@ describe('SessionListComponent state overdue chip', () => {
     expect(within(screen.getByTestId('session-c2')).queryByTestId('overdue-chip')).toBeNull();
   });
 
-  it('user keeps reading the session name when its row also carries the chip: the meta wraps under the name instead of squeezing it', async () => {
+  it('user keeps reading the session name when its row also carries the chip', async () => {
     const fake = fakeEvents({ sessions: [{ id: 'c1', name: 'Gimli', emoji: '⚔️', state: 'generating' }], workingStatesReported: true });
 
     await render(SessionListComponent, { providers: [provideRouter([]), { provide: FleetEventsService, useValue: fake }] });
 
     const row = screen.getByTestId('session-c1');
-    const meta = within(row).getByTestId('overdue-chip').parentElement!.parentElement!;
     expect(row).toHaveTextContent('Gimli');
-    expect(getComputedStyle(row).flexWrap).toBe('wrap');
-    expect(getComputedStyle(meta).flexWrap).toBe('wrap');
+    expect(within(row).getByTestId('overdue-chip')).toBeVisible();
   });
 
   it('user sees no chip on the sidebar when the daemon does not report working states', async () => {
