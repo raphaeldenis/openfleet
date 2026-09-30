@@ -14,11 +14,19 @@ export const ok = (payload: unknown) => ({ content: [{ type: 'text' as const, te
 // The tag is the last group of the line, so a "(retry:" inside a message or a hint is escaped: the text never carries a second one.
 const withoutRetryTag = (text: string) => text.replaceAll('(retry:', '(retry\\:');
 
-/** `error <code>: <message> <hint> (retry: <never|after_refresh|later>[, ref <id>])`: one line, code first, tag last. */
+const MAX_SENTENCES_CHARS = 500;
+const UNRENDERABLE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
+const oneLine = (text: string) => text.replace(/[\n\r\t]+/g, ' ').replace(UNRENDERABLE, '').trim();
+const cappedAt = (text: string, maxChars: number) => (text.length > maxChars ? `${text.slice(0, maxChars - 1)}…` : text);
+const wordingOfEmptyMessage = (envelope: ErrorEnvelope) => `${envelope.error.replaceAll('_', ' ')}.`;
+
+/** `error <code>: <message> <hint> (retry: <never|after_refresh|later>[, ref <id>])`: one line, code first, tag last, whatever the envelope holds. */
 export function errorText(envelope: ErrorEnvelope): string {
-  const sentences = [envelope.message, envelope.hint].filter((sentence): sentence is string => Boolean(sentence)).map(withoutRetryTag).join(' ');
+  const cleanMessage = oneLine(envelope.message);
+  const message = cleanMessage || wordingOfEmptyMessage(envelope);
+  const sentences = [message, envelope.hint && oneLine(envelope.hint)].filter((sentence): sentence is string => Boolean(sentence)).join(' ');
   const reference = envelope.id ? `, ref ${envelope.id}` : '';
-  return `error ${envelope.error}: ${sentences} (retry: ${envelope.retry}${reference})`;
+  return `error ${envelope.error}: ${withoutRetryTag(cappedAt(sentences, MAX_SENTENCES_CHARS))} (retry: ${envelope.retry}${reference})`;
 }
 
 export const fail = (envelope: ErrorEnvelope) => ({ content: [{ type: 'text' as const, text: errorText(envelope) }], isError: true });
@@ -76,11 +84,15 @@ function toolWordingOf(error: unknown): ToolWording | undefined {
  */
 export function describeToolError(error: unknown, scope: ErrorScope = {}): ErrorEnvelope {
   const described = describeError(error, scope);
-  if (error instanceof DataStoreWriteError) return { ...described, message: WRITE_FAILED_MESSAGE };
-  const wording = toolWordingOf(error);
-  if (!wording) return described;
-  const { code = described.error, message, hint = described.hint } = wording;
-  return describeError(new OpenFleetError(code, message, { hint }), scope);
+  try {
+    if (error instanceof DataStoreWriteError) return { ...described, message: WRITE_FAILED_MESSAGE };
+    const wording = toolWordingOf(error);
+    if (!wording) return described;
+    const { code = described.error, message, hint = described.hint } = wording;
+    return describeError(new OpenFleetError(code, message, { hint }), scope);
+  } catch {
+    return described;
+  }
 }
 
 const scopeOf = (caller: Session): ErrorScope => ({ sessionId: caller.id, where: 'mcp tool failed' });
