@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { loadModelTable } from './models.js';
 import { loadDaemonSettings } from './workingState/workingStateSettings.js';
 import { refuseBootOnFailure } from './bootFailure.js';
 
@@ -57,6 +58,42 @@ describe('refuseBootOnFailure', () => {
 
     expect(written.join('')).not.toContain('second line');
     expect(written.join('')).not.toContain(' at ');
+  });
+
+  it.each([
+    ['a string', 'disk on fire', 'disk on fire'],
+    ['undefined', undefined, 'unknown error'],
+    ['null', null, 'unknown error'],
+    ['an object', { code: 7 }, 'unknown error'],
+  ])('prints a sensible reason when the boot throws %s', async (_name, thrown, expectedReason) => {
+    const { written } = await runFailingBoot(thrown);
+
+    expect(written.join('')).toBe(`openfleet: refusing to boot (config: /home/of/config.json): ${expectedReason}\n`);
+  });
+
+  it('caps the reason at 200 characters', async () => {
+    const { written } = await runFailingBoot(new Error('x'.repeat(500)));
+
+    const reason = written.join('').split('): ')[1]!.trimEnd();
+    expect(reason).toHaveLength(200);
+  });
+
+  it('strips control characters so a reason cannot rewrite the terminal', async () => {
+    const { written } = await runFailingBoot(new Error('bad\u001b[31m\u0007 value\r'));
+
+    expect(written.join('')).toBe('openfleet: refusing to boot (config: /home/of/config.json): bad[31m value\n');
+  });
+
+  it('never shows a snippet of a broken config.json, only its path and the position', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'of-boot-secret-'));
+    writeFileSync(join(home, 'config.json'), '{ "adminToken": FAKESECRET-123 }');
+    const bootError = (() => { try { loadModelTable(join(home, 'config.json')); } catch (error) { return error; } })();
+
+    const { written } = await runFailingBoot(bootError);
+
+    expect(written.join('')).not.toContain('FAKESECRET');
+    expect(written.join('')).toContain('/home/of/config.json');
+    expect(written.join('')).toMatch(/not valid JSON/);
   });
 
   it('returns the booted value untouched when the boot succeeds', async () => {
