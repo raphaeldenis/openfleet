@@ -83,7 +83,7 @@ const isInstalledBinaryTheRecordedOne = ({ destination, checksumRecord, version,
 /** Installs the pinned Node binary as the sidecar unless the installed one reports that version and hashes to the binary sha256 recorded at its verified install. */
 export async function fetchNode({ version, target = DEFAULT_TARGET, binariesFolder = DEFAULT_BINARIES_FOLDER, fetchBytes = downloadBytes, installedVersion = runInstalledVersion, extractBinary = extractNodeBinary }) {
   if (!PLAIN_SEMVER.test(version)) throw new FetchNodeError(`version "${version}" is not a plain x.y.z`);
-  const nodePlatform = NODE_PLATFORM_BY_TARGET[target];
+  const nodePlatform = Object.hasOwn(NODE_PLATFORM_BY_TARGET, target) ? NODE_PLATFORM_BY_TARGET[target] : undefined;
   if (nodePlatform === undefined) throw new FetchNodeError(`target "${target}" is not supported, expected: ${Object.keys(NODE_PLATFORM_BY_TARGET).join(' or ')}`);
 
   const destination = join(binariesFolder, `node-${target}`);
