@@ -35,7 +35,7 @@ describe('PermissionModePickerComponent', () => {
   });
 
   it.each([
-    ['manual', 'asks before risky tools, except those you already allowed in your Claude settings'],
+    ['manual', 'Asks before risky tools, except those you already allowed in your Claude settings.'],
     ['acceptEdits', 'File edits run without asking; shell and network still gate.'],
     ['plan', 'Read-only: the agent plans and asks before any change.'],
     ['auto', 'The harness decides from the project allow-list; unknown tools gate.'],

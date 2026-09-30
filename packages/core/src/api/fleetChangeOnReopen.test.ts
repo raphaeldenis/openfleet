@@ -215,7 +215,7 @@ describe('user can see the fleet change of a reopen on the state of the manager'
     expect(afterSecondClose! >= afterReopenAndIdle!).toBe(true);
   });
 
-  it('leaves the manager state fresh and the child closed with its old closed time when a reopen fails to launch', async () => {
+  it('closes the child afresh, with a new closed time and no reopen row, when a reopen fails to launch', async () => {
     const child = await spawnChild('Builder-3');
     await tick();
     await sessions.close(child.id);
@@ -229,9 +229,9 @@ describe('user can see the fleet change of a reopen on the state of the manager'
 
     expect(failedReopen.status).toBe(500);
     expect((await listedSession(child.id)).state).toBe('closed');
-    expect((await listedSession(child.id)).closedAt).toBe(closedAtBeforeFailure);
+    expect((await listedSession(child.id)).closedAt! > closedAtBeforeFailure!).toBe(true);
     expect(reopenRowCountOf(child.id)).toBe(0);
-    expect(await stopOf(managerId)).toEqual({});
+    expect(await stopOf(managerId)).toMatchObject({ decision: 'block' });
   });
 
   it('keeps the reopen row of a successful reopen', async () => {

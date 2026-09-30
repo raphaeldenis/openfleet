@@ -675,14 +675,16 @@ describe('NewSessionFormComponent', () => {
         expect(screen.getByTestId('manager-mission')).toHaveFocus();
       });
 
-      it('user is taken to the pulse seconds before the mission when both are invalid', async () => {
+      it('user with an invalid pulse cannot submit, so the mission is not flagged yet while the pulse alert stays up', async () => {
         await renderForm(fakeApi(), { mode: 'manager' });
         await fillSessionFields({ name: 'Lead' });
         await setNumberField('manager-pulse-seconds', '0');
 
         await userEvent.click(submitButton());
 
-        expect(screen.getByTestId('manager-pulse-seconds')).toHaveFocus();
+        expect(submitButton()).toBeDisabled();
+        expect(screen.getByTestId('manager-pulse-seconds-error')).toBeTruthy();
+        expect(screen.queryByTestId('manager-mission-error')).toBeNull();
       });
     });
   });
@@ -1644,7 +1646,7 @@ describe('NewSessionFormComponent', () => {
       ['combobox', /harness/i],
       ['combobox', /model/i],
       ['radiogroup', /permission mode/i],
-      ['spinbutton', /pulse seconds/i],
+      ['spinbutton', /pulse cadence/i],
       ['spinbutton', /children cap/i],
       ['textbox', /mission/i],
     ] as const)('gives the %s named %s an accessible name for screen reader users', async (role, name) => {
@@ -1678,10 +1680,10 @@ describe('NewSessionFormComponent', () => {
       await setNumberField('manager-children-cap', '65');
       await userEvent.tab();
 
-      expect(screen.getByTestId('manager-pulse-seconds')).toHaveAccessibleName('Pulse seconds');
-      expect(screen.getByTestId('manager-pulse-seconds')).toHaveAccessibleDescription(/whole number between 1 and 86400/);
+      expect(screen.getByTestId('manager-pulse-seconds')).toHaveAccessibleName('Pulse cadence');
+      expect(screen.getByTestId('manager-pulse-seconds')).toHaveAccessibleDescription(/Pulse must be at least 1 s/);
       expect(screen.getByTestId('manager-children-cap')).toHaveAccessibleName('Children cap');
-      expect(screen.getByTestId('manager-children-cap')).toHaveAccessibleDescription(/whole number between 1 and 64/);
+      expect(screen.getByTestId('manager-children-cap')).toHaveAccessibleDescription(/between 1 and 64 — enter a whole number/);
     });
   });
 });

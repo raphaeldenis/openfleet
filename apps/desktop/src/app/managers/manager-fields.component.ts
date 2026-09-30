@@ -1,13 +1,37 @@
-import { ChangeDetectionStrategy, Component, ElementRef, input, model, OnInit, signal, viewChild } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, ElementRef, input, model, OnInit, signal, viewChild } from '@angular/core';
 import { ControlContainer, FormsModule, NgForm } from '@angular/forms';
 
 const PULSE_SECONDS_BOUNDS = { min: 1, max: 86_400 };
 const CHILDREN_CAP_BOUNDS = { min: 1, max: 64 };
 const MISSION_MAX_BYTES = 64 * 1024;
 
-function boundedIntegerError(label: string, value: number, bounds: { min: number; max: number }): string {
-  const isWholeNumberWithinBounds = Number.isInteger(value) && value >= bounds.min && value <= bounds.max;
-  return isWholeNumberWithinBounds ? '' : `${label} must be a whole number between ${bounds.min} and ${bounds.max}`;
+interface PulsePreset {
+  label: string;
+  seconds: number | undefined;
+}
+
+const PULSE_PRESETS: ReadonlyArray<PulsePreset> = [
+  { label: 'Daemon default', seconds: undefined },
+  { label: '5 min', seconds: 300 },
+  { label: '10 min', seconds: 600 },
+  { label: '30 min', seconds: 1800 },
+  { label: '1 h', seconds: 3600 },
+];
+
+const formatWithThousands = (bound: number) => bound.toLocaleString('en-US');
+
+function boundedIntegerError(subject: string, value: number | null, bounds: { min: number; max: number }, unit = ''): string {
+  const isWholeNumberWithinBounds = Number.isInteger(value) && value! >= bounds.min && value! <= bounds.max;
+  if (isWholeNumberWithinBounds) return '';
+  return `${subject} must be between ${formatWithThousands(bounds.min)} and ${formatWithThousands(bounds.max)}${unit} — enter a whole number in that range`;
+}
+
+function pulseSecondsRangeError(value: number): string {
+  const isBelowMinimum = !(value >= PULSE_SECONDS_BOUNDS.min);
+  if (isBelowMinimum) return 'Pulse must be at least 1 s';
+  const isAboveMaximum = value > PULSE_SECONDS_BOUNDS.max;
+  if (isAboveMaximum) return 'Pulse must be at most 86 400 s (24 h)';
+  return boundedIntegerError('Pulse cadence', value, PULSE_SECONDS_BOUNDS, ' seconds');
 }
 
 function utf8ByteLength(text: string): number {
@@ -22,27 +46,43 @@ function utf8ByteLength(text: string): number {
   template: `
     <div class="of-row">
       <div class="of-field">
-        <label class="of-label" for="manager-pulse-seconds">Pulse seconds</label>
-        <input
-          #pulseSecondsInput id="manager-pulse-seconds" class="of-input" data-testid="manager-pulse-seconds" name="pulseSeconds" type="number" [readonly]="isLocked()"
-          [ngModel]="pulseSeconds()" (ngModelChange)="onPulseSecondsChange($event)"
-          placeholder="Daemon default" [attr.min]="pulseSecondsBounds.min" [attr.max]="pulseSecondsBounds.max"
-          [attr.aria-invalid]="pulseSecondsError() ? 'true' : null"
-          [attr.aria-describedby]="pulseSecondsError() ? 'manager-pulse-seconds-error' : null"
-        />
+        <label class="of-label" for="manager-pulse-seconds">Pulse cadence</label>
+        <div class="presets" role="group" aria-label="Pulse cadence presets">
+          @for (preset of pulsePresets; track preset.label) {
+            <button type="button" class="preset" [attr.aria-pressed]="isPresetInForce(preset)" [attr.aria-disabled]="isLocked() ? 'true' : null" (click)="choosePreset(preset)">{{ preset.label }}</button>
+          }
+        </div>
+        <div class="custom">
+          <input
+            #pulseSecondsInput id="manager-pulse-seconds" class="of-input pulse-input" data-testid="manager-pulse-seconds" name="pulseSeconds" type="number" [readonly]="isLocked()"
+            [ngModel]="pulseSeconds()" (ngModelChange)="pulseSeconds.set($event)" (input)="onPulseTyped(pulseSecondsInput)"
+            placeholder="Daemon default" [attr.min]="pulseSecondsBounds.min" [attr.max]="pulseSecondsBounds.max"
+            [attr.aria-invalid]="pulseSecondsError() ? 'true' : null"
+            [attr.aria-describedby]="pulseSecondsError() ? 'manager-pulse-seconds-bounds manager-pulse-seconds-error' : 'manager-pulse-seconds-bounds'"
+          />
+          <span id="manager-pulse-seconds-bounds" class="hint">seconds · 1 – 86,400</span>
+        </div>
         @if (pulseSecondsError(); as error) {
           <span id="manager-pulse-seconds-error" role="alert" data-testid="manager-pulse-seconds-error" class="of-error">✕ {{ error }}</span>
         }
       </div>
       <div class="of-field">
         <label class="of-label" for="manager-children-cap">Children cap</label>
-        <input
-          #childrenCapInput id="manager-children-cap" class="of-input" data-testid="manager-children-cap" name="childrenCap" type="number" [readonly]="isLocked()"
-          [ngModel]="childrenCap()" (ngModelChange)="onChildrenCapChange($event)"
-          placeholder="Children cap" [attr.min]="childrenCapBounds.min" [attr.max]="childrenCapBounds.max"
-          [attr.aria-invalid]="childrenCapError() ? 'true' : null"
-          [attr.aria-describedby]="childrenCapError() ? 'manager-children-cap-error' : null"
-        />
+        <div class="stepper">
+          <button type="button" class="step" data-testid="manager-children-cap-decrease" aria-label="Decrease children cap" title="Decrease" [disabled]="isChildrenCapAtMinimum() || isLocked()" (click)="stepChildrenCap(-1)">−</button>
+          <input
+            #childrenCapInput id="manager-children-cap" class="of-input cap-input" data-testid="manager-children-cap" name="childrenCap" type="number" [readonly]="isLocked()"
+            [ngModel]="childrenCap()" (ngModelChange)="childrenCap.set($event)"
+            placeholder="Children cap" [attr.min]="childrenCapBounds.min" [attr.max]="childrenCapBounds.max"
+            [attr.aria-invalid]="childrenCapError() ? 'true' : null"
+            [attr.aria-describedby]="childrenCapDescriptionIds()"
+          />
+          <button type="button" class="step" data-testid="manager-children-cap-increase" aria-label="Increase children cap" title="Increase" [disabled]="isChildrenCapAtMaximum() || isLocked()" (click)="stepChildrenCap(1)">+</button>
+          <span id="manager-children-cap-bounds" class="hint">1 – 64</span>
+        </div>
+        @if (isChildrenCapAtMaximum() && !childrenCapError()) {
+          <span id="manager-children-cap-maximum" role="status" data-testid="manager-children-cap-maximum" class="maximum"><span class="maximum-icon" aria-hidden="true">!</span> 64 is the daemon maximum</span>
+        }
         @if (childrenCapError(); as error) {
           <span id="manager-children-cap-error" role="alert" data-testid="manager-children-cap-error" class="of-error">✕ {{ error }}</span>
         }
@@ -64,11 +104,26 @@ function utf8ByteLength(text: string): number {
     :host { display: flex; flex-direction: column; gap: 1.25rem }
     .of-row { display: flex; gap: 1rem }
     .of-row .of-field { flex: 1 }
+    .presets { display: flex; flex-wrap: wrap; gap: .25rem }
+    .preset { flex: 1 1 3rem; height: 2rem; padding: 0 .375rem; border: 1px solid var(--line); border-radius: .375rem; background: var(--panel); color: var(--fg); font: inherit; font-size: .75rem; white-space: nowrap; cursor: pointer }
+    .preset[aria-pressed='true'] { border-color: var(--accent); background: var(--accent-bg) }
+    .preset[aria-disabled='true'] { cursor: not-allowed }
+    .preset:focus-visible, .step:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
+    .custom, .stepper { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem }
+    .pulse-input { flex: none; width: 9rem; font-family: var(--mono); font-size: .75rem }
+    .cap-input { flex: none; width: 4rem; text-align: center; font-family: var(--mono); appearance: textfield; -moz-appearance: textfield }
+    .cap-input::-webkit-inner-spin-button, .cap-input::-webkit-outer-spin-button { appearance: none; margin: 0 }
+    .step { flex: none; width: 2rem; height: 2rem; border: 1px solid var(--line); border-radius: .375rem; background: var(--panel); color: var(--fg); font: inherit; cursor: pointer }
+    .step:disabled { color: var(--faint); cursor: not-allowed }
+    .hint { font-size: .6875rem; color: var(--mut); white-space: nowrap }
+    .maximum { font-size: .75rem; color: var(--fg) }
+    .maximum-icon { font-weight: 700; color: var(--state-waiting-permission) }
   `,
 })
 export class ManagerFieldsComponent implements OnInit {
   protected readonly pulseSecondsBounds = PULSE_SECONDS_BOUNDS;
   protected readonly childrenCapBounds = CHILDREN_CAP_BOUNDS;
+  protected readonly pulsePresets = PULSE_PRESETS;
   readonly isLocked = input(false);
   // Undefined or null (typed then cleared): the daemon applies its own heartbeat default.
   readonly pulseSeconds = model<number | null | undefined>(undefined);
@@ -78,22 +133,30 @@ export class ManagerFieldsComponent implements OnInit {
   private readonly pulseSecondsInput = viewChild<ElementRef<HTMLInputElement>>('pulseSecondsInput');
   private readonly childrenCapInput = viewChild<ElementRef<HTMLInputElement>>('childrenCapInput');
   private readonly missionInput = viewChild<ElementRef<HTMLTextAreaElement>>('missionInput');
-  protected readonly pulseSecondsError = signal('');
-  protected readonly childrenCapError = signal('');
+  private readonly isPulseTextUnreadable = signal(false);
+  private readonly isPulseLeftToDaemonDefault = computed(() => this.pulseSeconds() === undefined || this.pulseSeconds() === null);
+  protected readonly pulseSecondsError = computed(() => {
+    if (this.isPulseTextUnreadable()) return pulseSecondsRangeError(NaN);
+    return this.isPulseLeftToDaemonDefault() ? '' : pulseSecondsRangeError(this.pulseSeconds()!);
+  });
+  protected readonly childrenCapError = computed(() => boundedIntegerError('Children cap', this.childrenCap(), CHILDREN_CAP_BOUNDS));
+  protected readonly isChildrenCapAtMinimum = computed(() => this.childrenCap() <= CHILDREN_CAP_BOUNDS.min);
+  protected readonly isChildrenCapAtMaximum = computed(() => this.childrenCap() >= CHILDREN_CAP_BOUNDS.max);
+  protected readonly childrenCapDescriptionIds = computed(() => {
+    const showsMaximumNote = this.isChildrenCapAtMaximum() && !this.childrenCapError();
+    return ['manager-children-cap-bounds', showsMaximumNote ? 'manager-children-cap-maximum' : '', this.childrenCapError() ? 'manager-children-cap-error' : ''].filter(Boolean).join(' ');
+  });
+  readonly hasInvalidNumbers = computed(() => this.pulseSecondsError() !== '' || this.childrenCapError() !== '');
   protected readonly missionError = signal('');
 
   ngOnInit(): void {
-    this.validatePulseSeconds();
-    this.validateChildrenCap();
     if (this.isMissionTouched()) this.validateMission();
   }
 
   validate(): boolean {
-    this.validatePulseSeconds();
-    this.validateChildrenCap();
     this.isMissionTouched.set(true);
     this.validateMission();
-    return !this.pulseSecondsError() && !this.childrenCapError() && !this.missionError();
+    return !this.hasInvalidNumbers() && !this.missionError();
   }
 
   focusFirstInvalidField(): void {
@@ -102,30 +165,33 @@ export class ManagerFieldsComponent implements OnInit {
     if (this.missionError()) return this.missionInput()?.nativeElement.focus();
   }
 
-  protected onPulseSecondsChange(value: number): void {
-    this.pulseSeconds.set(value);
-    this.validatePulseSeconds();
+  protected isPresetInForce(preset: PulsePreset): boolean {
+    return preset.seconds === undefined ? this.isPulseLeftToDaemonDefault() : this.pulseSeconds() === preset.seconds;
   }
 
-  protected onChildrenCapChange(value: number): void {
-    this.childrenCap.set(value);
-    this.validateChildrenCap();
+  protected choosePreset(preset: PulsePreset): void {
+    if (this.isLocked()) return;
+    this.isPulseTextUnreadable.set(false);
+    const pulseInput = this.pulseSecondsInput()?.nativeElement;
+    if (pulseInput) pulseInput.value = '';
+    this.pulseSeconds.set(preset.seconds);
+  }
+
+  protected onPulseTyped(pulseInput: HTMLInputElement): void {
+    this.isPulseTextUnreadable.set(pulseInput.validity.badInput);
+  }
+
+  protected stepChildrenCap(direction: 1 | -1): void {
+    const current = this.childrenCap();
+    const currentWholeNumber = Number.isFinite(current) ? Math.round(current) : 0;
+    const stepped = currentWholeNumber + direction;
+    this.childrenCap.set(Math.min(CHILDREN_CAP_BOUNDS.max, Math.max(CHILDREN_CAP_BOUNDS.min, stepped)));
   }
 
   protected onMissionChange(value: string): void {
     this.mission.set(value);
     this.isMissionTouched.set(true);
     this.validateMission();
-  }
-
-  private validatePulseSeconds(): void {
-    const pulseSeconds = this.pulseSeconds();
-    const isLeftToDaemonDefault = pulseSeconds === undefined || pulseSeconds === null;
-    this.pulseSecondsError.set(isLeftToDaemonDefault ? '' : boundedIntegerError('Pulse seconds', pulseSeconds, PULSE_SECONDS_BOUNDS));
-  }
-
-  private validateChildrenCap(): void {
-    this.childrenCapError.set(boundedIntegerError('Children cap', this.childrenCap(), CHILDREN_CAP_BOUNDS));
   }
 
   private validateMission(): void {

@@ -220,15 +220,33 @@ function toNdjson(record: LogRecord): string {
 const isPrintedInline = (value: unknown): boolean => typeof value === 'string' && value !== '' && !/[\s"=]/.test(value);
 const printedValue = (value: unknown): string => (isPrintedInline(value) ? String(value) : (attempt(() => JSON.stringify(value)) ?? '[unprintable]'));
 
+const MAX_PRINTED_CAUSES = 3;
+
+interface SerializedError { name?: string; message?: string; stack?: string; cause?: unknown }
+
+const printedError = (error: unknown): string => {
+  if (typeof error !== 'object' || error === null) return printedValue(error);
+  const { name, message, stack } = error as SerializedError;
+  return stack ?? `${name}: ${message}`;
+};
+
+function printedCauses(error: SerializedError): string[] {
+  const causes: string[] = [];
+  for (let cause = error.cause; cause !== undefined && causes.length < MAX_PRINTED_CAUSES; cause = (cause as SerializedError | null)?.cause) {
+    causes.push(`Caused by: ${printedError(cause)}`);
+  }
+  return causes;
+}
+
 function toPretty(record: LogRecord): string {
   const clock = new Date(record.ts).toTimeString().slice(0, 8);
   const { ts: _ts, level: _level, msg: _msg, err, ...rest } = record;
   const pairs = Object.entries(rest).map(([key, value]) => `${key}=${printedValue(value)}`);
   const head = `${clock} ${record.level.toUpperCase()} ${record.msg}${pairs.length > 0 ? `  ${pairs.join(' ')}` : ''}`;
-  const errorRecord = err as { name?: string; message?: string; stack?: string } | undefined;
-  const stackText = errorRecord ? (errorRecord.stack ?? `${errorRecord.name}: ${errorRecord.message}`) : undefined;
-  const stackLines = stackText === undefined ? '' : `\n${stackText.split('\n').map((line) => `    ${line}`).join('\n')}`;
-  return capLine(head + stackLines);
+  const errorRecord = err as SerializedError | undefined;
+  const errorTexts = errorRecord ? [printedError(errorRecord), ...printedCauses(errorRecord)] : [];
+  const indentedErrors = errorTexts.map((text) => `\n${text.split('\n').map((line) => `    ${line}`).join('\n')}`).join('');
+  return capLine(head + indentedErrors);
 }
 
 // Only the exact lowercase value `debug` turns debug on; any other value (`DEBUG`, `warn`, …) leaves the default: info and above.
