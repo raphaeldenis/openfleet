@@ -121,7 +121,7 @@ describe('GET /api/sessions/:id/working-state', () => {
     const response = await api('/api/sessions/no-such-session/working-state');
 
     expect(response.status).toBe(404);
-    expect(await response.json()).toEqual({ error: 'not_found' });
+    expect(await response.json()).toMatchObject({ error: 'not_found', kind: 'not_found', retry: 'never' });
   });
 
   it('answers no_state for a session that never wrote its state', async () => {
@@ -130,7 +130,7 @@ describe('GET /api/sessions/:id/working-state', () => {
     const response = await api(`/api/sessions/${session.id}/working-state`);
 
     expect(response.status).toBe(404);
-    expect(await response.json()).toEqual({ error: 'no_state' });
+    expect(await response.json()).toMatchObject({ error: 'no_state', kind: 'not_found', retry: 'never' });
   });
 
   it('keeps showing the last state of a closed session', async () => {

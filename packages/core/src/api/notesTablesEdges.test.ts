@@ -269,7 +269,7 @@ describe('user editing title and body together races safely', () => {
     const current = await (await call('GET', `/api/notes/${note.id}?projectId=p1`)).json();
 
     expect(stale.status).toBe(409);
-    expect(await stale.json()).toEqual({ error: 'stale_revision', currentRev: 2 });
+    expect(await stale.json()).toMatchObject({ error: 'stale_revision', currentRev: 2, kind: 'conflict', retry: 'after_refresh' });
     expect(current).toMatchObject({ title: 'Plan', bodyMd: 'two', rev: 2 });
   });
 
@@ -359,7 +359,7 @@ describe('user creating a store gets a precise refusal', () => {
     const duplicate = await call('POST', '/api/data-stores', { projectId: 'p1', displayName: 'Same' });
 
     expect(ghost.status).toBe(404);
-    expect(await ghost.json()).toEqual({ error: 'project_not_found' });
+    expect(await ghost.json()).toMatchObject({ error: 'project_not_found', kind: 'not_found', retry: 'never' });
     expect(duplicate.status).toBe(409);
   });
 });

@@ -295,7 +295,7 @@ describe('REST', () => {
     const closing = sessions.closeAll();
     const res = await api(`/api/sessions/${created.id}/model`, { method: 'POST', body: JSON.stringify({ model: 'sonnet' }) });
     expect(res.status).toBe(503);
-    expect(await res.json()).toEqual({ error: 'daemon_shutting_down' });
+    expect(await res.json()).toMatchObject({ error: 'daemon_shutting_down', kind: 'unavailable', retry: 'later' });
     await closing;
   });
 
@@ -439,7 +439,7 @@ describe('REST', () => {
     const closing = sessions.closeAll();
     const res = await api(`/api/sessions/${created.id}/permission-mode`, { method: 'POST', body: JSON.stringify({ mode: 'plan' }) });
     expect(res.status).toBe(503);
-    expect(await res.json()).toEqual({ error: 'daemon_shutting_down' });
+    expect(await res.json()).toMatchObject({ error: 'daemon_shutting_down', kind: 'unavailable', retry: 'later' });
     await closing;
   });
 
@@ -498,7 +498,7 @@ describe('REST', () => {
     try {
       const res = await api(`/api/sessions/${created.id}/reopen`, { method: 'POST' });
       expect(res.status).toBe(409);
-      expect(await res.json()).toEqual({ error: 'directory_unreadable' });
+      expect(await res.json()).toMatchObject({ error: 'directory_unreadable', kind: 'conflict', retry: 'never' });
     } finally {
       chmodSync(sessionDir, 0o755);
     }
@@ -522,7 +522,7 @@ describe('REST', () => {
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const res = await api(`/api/sessions/${created.id}/reopen`, { method: 'POST' });
     expect(res.status).toBe(500);
-    expect(await res.json()).toEqual({ error: 'launch_failed' });
+    expect(await res.json()).toMatchObject({ error: 'launch_failed', kind: 'internal', retry: 'later', id: expect.stringMatching(/^[0-9a-f]{8}$/) });
 
     // sessionService itself already logs the domain-level failure (resumeOne); this call finds the
     // separate HTTP-level 500 log this test is actually about, among whatever else got logged.
@@ -574,7 +574,7 @@ describe('REST', () => {
     const closing = sessions.closeAll();
     const res = await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) });
     expect(res.status).toBe(503);
-    expect(await res.json()).toEqual({ error: 'daemon_shutting_down' });
+    expect(await res.json()).toMatchObject({ error: 'daemon_shutting_down', kind: 'unavailable', retry: 'later' });
     await closing;
   });
 
@@ -585,7 +585,7 @@ describe('REST', () => {
     const closing = sessions.closeAll();
     const res = await api(`/api/sessions/${created.id}/reopen`, { method: 'POST' });
     expect(res.status).toBe(503);
-    expect(await res.json()).toEqual({ error: 'daemon_shutting_down' });
+    expect(await res.json()).toMatchObject({ error: 'daemon_shutting_down', kind: 'unavailable', retry: 'later' });
     await closing;
   });
 
@@ -594,7 +594,7 @@ describe('REST', () => {
     await api(`/api/sessions/${created.id}/close`, { method: 'POST' });
     const res = await api(`/api/sessions/${created.id}/messages`, { method: 'POST', body: JSON.stringify({ body: 'hello' }) });
     expect(res.status).toBe(409);
-    expect(await res.json()).toEqual({ error: 'session_closed' });
+    expect(await res.json()).toMatchObject({ error: 'session_closed', kind: 'conflict', retry: 'never' });
   });
 
   it('a POST /api/sessions carrying a manager block creates a role=manager session routed through ManagerService, not a plain session', async () => {
@@ -674,7 +674,7 @@ describe('REST', () => {
     const res = await api(`/api/managers/${created.id}/pulse`, { method: 'POST' });
 
     expect(res.status).toBe(409);
-    expect(await res.json()).toEqual({ error: 'session_closed' });
+    expect(await res.json()).toMatchObject({ error: 'session_closed', kind: 'conflict', retry: 'never' });
   });
 
   it('rejects a pulse request with no bearer token, same as every other /api/ route', async () => {

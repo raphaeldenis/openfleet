@@ -1,29 +1,18 @@
-import type { ServerResponse } from 'node:http';
 import type { ManagerSpec, SessionSpec } from '@openfleet/shared';
-import { ModelIdSchema, PERMISSION_MODES, SessionSpecSchema } from '@openfleet/shared';
+import { ModelIdSchema, OpenFleetError, PERMISSION_MODES, SessionSpecSchema } from '@openfleet/shared';
 import { z } from 'zod';
-import { ApprovalError, type ApprovalService } from '../governance/approvalService.js';
+import type { ApprovalService } from '../governance/approvalService.js';
 import type { FakeHandle } from '../harness/fakeHarness.js';
 import type { ManagerService } from '../managers/managerService.js';
 import type { PulseScheduler } from '../managers/pulseScheduler.js';
-import { listAvailableModels, ModelConfigReadOnlyError, ModelConfigUnreadableError, ModelTablePatchSchema, resolveModel, saveModelPatch, type ModelTable } from '../models.js';
-import { DaemonShuttingDownError, SessionClosedError, SessionReopenError, UnknownHarnessError, type SessionService } from '../sessions/sessionService.js';
+import { listAvailableModels, ModelTablePatchSchema, resolveModel, saveModelPatch, type ModelTable } from '../models.js';
+import type { SessionService } from '../sessions/sessionService.js';
 import type { HandoverLedger } from '../workingState/handoverLedger.js';
 import type { WorkingStateService } from '../workingState/workingStateService.js';
-import { json, logServerError, Router } from './router.js';
+import { json, Router } from './router.js';
 import type { WsTicketStore } from './wsTicketStore.js';
 
-// Used by the messages, permission-mode and model routes: each can hit a session that closed or a daemon
-// that started shutting down between the request landing and the session-service call running.
-function respondToLifecycleErrors(res: ServerResponse, run: () => void): void {
-  try {
-    run();
-  } catch (error) {
-    if (error instanceof SessionClosedError) return json(res, 409, { error: 'session_closed' });
-    if (error instanceof DaemonShuttingDownError) return json(res, 503, { error: 'daemon_shutting_down' });
-    throw error;
-  }
-}
+const notFound = (what: string) => new OpenFleetError('not_found', `the ${what} does not exist.`);
 
 const CreateSessionSchema = SessionSpecSchema.extend({ repoPath: z.string().optional(), branchName: z.string().optional() });
 
@@ -35,6 +24,10 @@ export function registerRestRoutes(router: Router, deps: { sessions: SessionServ
   const servedRungs = (): ModelTable => {
     const { haiku, sonnet, opus, fable } = deps.modelTable;
     return { haiku, sonnet, opus, fable };
+  };
+
+  const requireSession = (sessionId: string): void => {
+    if (!deps.sessions.get(sessionId)) throw notFound('session');
   };
 
   router.add('GET', '/api/sessions', ({ res }) => json(res, 200, deps.sessions.list()));
@@ -51,13 +44,7 @@ export function registerRestRoutes(router: Router, deps: { sessions: SessionServ
   // next launch or model switch resolves against the new ids. Running sessions keep the id they resolved.
   router.add('PUT', '/api/models', async ({ res, body }) => {
     const patch = ModelTablePatchSchema.parse(body);
-    try {
-      saveModelPatch(deps.modelConfigPath, patch);
-    } catch (error) {
-      if (error instanceof ModelConfigUnreadableError) return json(res, 409, { error: 'config_unreadable', detail: error.message });
-      if (error instanceof ModelConfigReadOnlyError) return json(res, 409, { error: 'config_read_only', detail: error.message });
-      throw error;
-    }
+    saveModelPatch(deps.modelConfigPath, patch);
     Object.assign(deps.modelTable, patch);
     json(res, 200, { models: servedRungs() });
   });
@@ -66,93 +53,80 @@ export function registerRestRoutes(router: Router, deps: { sessions: SessionServ
     const requestedSpec = CreateSessionSchema.parse(body);
     const spec = requestedSpec.model ? { ...requestedSpec, model: resolveModel(deps.modelTable, requestedSpec.model) } : requestedSpec;
     const hasRepo = spec.repoPath !== undefined && spec.branchName !== undefined;
-    try {
-      const session = spec.manager
-        ? await deps.managers.createManagerSession(spec as SessionSpec & { manager: ManagerSpec })
-        : hasRepo
-          ? await deps.sessions.createInWorktree({ ...spec, repoPath: spec.repoPath!, branchName: spec.branchName! })
-          : await deps.sessions.create(spec);
-      json(res, 201, session);
-    } catch (error) {
-      if (error instanceof UnknownHarnessError) return json(res, 400, { error: 'unknown_harness', detail: error.message });
-      if (!(error instanceof DaemonShuttingDownError)) throw error;
-      json(res, 503, { error: 'daemon_shutting_down' });
-    }
+    const session = spec.manager
+      ? await deps.managers.createManagerSession(spec as SessionSpec & { manager: ManagerSpec })
+      : hasRepo
+        ? await deps.sessions.createInWorktree({ ...spec, repoPath: spec.repoPath!, branchName: spec.branchName! })
+        : await deps.sessions.create(spec);
+    json(res, 201, session);
   });
 
   router.add('POST', '/api/managers/:id/pulse', ({ res, params }) => {
-    if (!deps.managers.get(params.id!)) return json(res, 404, { error: 'not_found' });
+    if (!deps.managers.get(params.id!)) throw notFound('manager');
     const result = deps.pulseScheduler.pulseNow(params.id!);
-    if (!result) return json(res, 409, { error: 'session_closed' });
+    if (!result) throw new OpenFleetError('session_closed', 'the manager session is closed.');
     json(res, 200, result.coalesced ? { pulsed: false, coalesced: true } : { pulsed: true });
   });
 
   router.add('PATCH', '/api/sessions/:id', ({ res, params, body }) => {
-    if (!deps.sessions.get(params.id!)) return json(res, 404, { error: 'not_found' });
+    requireSession(params.id!);
     const patch = RenameSessionSchema.parse(body);
     json(res, 200, deps.sessions.rename(params.id!, patch));
   });
 
   router.add('POST', '/api/sessions/:id/messages', ({ res, params, body }) => {
-    if (!deps.sessions.get(params.id!)) return json(res, 404, { error: 'not_found' });
+    requireSession(params.id!);
     const { body: text } = z.object({ body: z.string().min(1) }).parse(body);
-    respondToLifecycleErrors(res, () => json(res, 200, deps.sessions.sendMessage({ sessionId: params.id!, body: text })));
+    json(res, 200, deps.sessions.sendMessage({ sessionId: params.id!, body: text }));
   });
 
-  router.add('POST', '/api/sessions/:id/reopen', ({ req, res, params }) => {
-    if (!deps.sessions.get(params.id!)) return json(res, 404, { error: 'not_found' });
-    try {
-      json(res, 200, deps.sessions.reopen(params.id!));
-    } catch (error) {
-      if (error instanceof DaemonShuttingDownError) return json(res, 503, { error: 'daemon_shutting_down' });
-      if (!(error instanceof SessionReopenError)) throw error;
-      if (error.code === 'launch_failed') logServerError(req, error);
-      json(res, error.code === 'launch_failed' ? 500 : 409, { error: error.code });
-    }
+  router.add('POST', '/api/sessions/:id/reopen', ({ res, params }) => {
+    requireSession(params.id!);
+    json(res, 200, deps.sessions.reopen(params.id!));
   });
 
   router.add('POST', '/api/sessions/:id/permission-mode', ({ res, params, body }) => {
-    if (!deps.sessions.get(params.id!)) return json(res, 404, { error: 'not_found' });
+    requireSession(params.id!);
     const { mode } = z.object({ mode: z.enum(PERMISSION_MODES) }).parse(body);
-    respondToLifecycleErrors(res, () => json(res, 200, deps.sessions.updatePermissionMode(params.id!, mode)));
+    json(res, 200, deps.sessions.updatePermissionMode(params.id!, mode));
   });
 
   router.add('POST', '/api/sessions/:id/input', ({ res, params, body }) => {
-    if (!deps.sessions.get(params.id!)) return json(res, 404, { error: 'not_found' });
+    requireSession(params.id!);
     const { data } = z.object({ data: z.string() }).parse(body);
     deps.sessions.writeRaw(params.id!, data);
     json(res, 200, {});
   });
 
   router.add('POST', '/api/sessions/:id/model', ({ res, params, body }) => {
-    if (!deps.sessions.get(params.id!)) return json(res, 404, { error: 'not_found' });
+    requireSession(params.id!);
     const { model } = z.object({ model: ModelIdSchema }).parse(body);
-    respondToLifecycleErrors(res, () => json(res, 200, deps.sessions.updateModel(params.id!, resolveModel(deps.modelTable, model))));
+    json(res, 200, deps.sessions.updateModel(params.id!, resolveModel(deps.modelTable, model)));
   });
 
   router.add('POST', '/api/sessions/:id/resize', ({ res, params, body }) => {
-    if (!deps.sessions.get(params.id!)) return json(res, 404, { error: 'not_found' });
+    requireSession(params.id!);
     const { cols, rows } = z.object({ cols: z.number().int().positive(), rows: z.number().int().positive() }).parse(body);
     deps.sessions.resize(params.id!, cols, rows);
     json(res, 200, {});
   });
 
   router.add('GET', '/api/sessions/:id/output', ({ res, params }) => {
-    if (!deps.sessions.get(params.id!)) return json(res, 404, { error: 'not_found' });
+    requireSession(params.id!);
     json(res, 200, { output: deps.sessions.recentOutput(params.id!) });
   });
 
   // ponytail: exposes the hook token to the operator UI/e2e; scope it down when the daemon leaves localhost
   router.add('GET', '/api/sessions/:id/tokens', ({ res, params }) => {
     const tokens = deps.sessions.tokens(params.id!);
-    if (!tokens) return json(res, 404, { error: 'not_found' });
+    if (!tokens) throw notFound('session');
     json(res, 200, { hookToken: tokens.hookToken });
   });
 
   if (deps.e2eRoutes) {
     router.add('POST', '/api/sessions/:id/fake-output', ({ res, params, body }) => {
       const session = deps.sessions.get(params.id!);
-      if (!session || session.harness !== 'fake') return json(res, 404, { error: 'not_found' });
+      if (!session || session.harness !== 'fake') throw notFound('session');
       const { data } = z.object({ data: z.string() }).parse(body);
       (deps.sessions.harnessHandle(params.id!) as FakeHandle | undefined)?.emitData(data);
       json(res, 200, {});
@@ -160,7 +134,7 @@ export function registerRestRoutes(router: Router, deps: { sessions: SessionServ
   }
 
   router.add('POST', '/api/sessions/:id/close', async ({ res, params }) => {
-    if (!deps.sessions.get(params.id!)) return json(res, 404, { error: 'not_found' });
+    requireSession(params.id!);
     await deps.sessions.close(params.id!);
     json(res, 200, {});
   });
@@ -168,9 +142,9 @@ export function registerRestRoutes(router: Router, deps: { sessions: SessionServ
   const { workingStates } = deps;
   if (workingStates) {
     router.add('GET', '/api/sessions/:id/working-state', ({ res, params }) => {
-      if (!deps.sessions.get(params.id!)) return json(res, 404, { error: 'not_found' });
+      requireSession(params.id!);
       const state = workingStates.get(params.id!);
-      if (!state) return json(res, 404, { error: 'no_state' });
+      if (!state) throw new OpenFleetError('no_state', 'the session has no working state yet.');
       json(res, 200, state);
     });
   }
@@ -178,7 +152,7 @@ export function registerRestRoutes(router: Router, deps: { sessions: SessionServ
   const { handoverLedger } = deps;
   if (handoverLedger) {
     router.add('GET', '/api/sessions/:id/handovers', ({ res, params }) => {
-      if (!deps.sessions.get(params.id!)) return json(res, 404, { error: 'not_found' });
+      requireSession(params.id!);
       json(res, 200, handoverLedger.list(params.id!));
     });
   }
@@ -187,11 +161,6 @@ export function registerRestRoutes(router: Router, deps: { sessions: SessionServ
 
   router.add('POST', '/api/approvals/:id/decide', ({ res, params, body }) => {
     const input = z.object({ behavior: z.enum(['allow', 'deny']), reason: z.string().optional() }).parse(body);
-    try {
-      json(res, 200, deps.approvals.decide({ approvalId: params.id!, ...input }));
-    } catch (error) {
-      if (!(error instanceof ApprovalError)) throw error;
-      json(res, error.code === 'not_found' ? 404 : 409, { error: error.code });
-    }
+    json(res, 200, deps.approvals.decide({ approvalId: params.id!, ...input }));
   });
 }
