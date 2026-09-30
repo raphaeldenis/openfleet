@@ -160,7 +160,7 @@ describe('fleet events around odd parents', () => {
     connection.ws.close();
   });
 
-  it('sends the state of an already closed parent when its child closes, while the snapshot leaves that parent out', async () => {
+  it('sends no state of an already closed parent when its child closes, like the snapshot that leaves that parent out', async () => {
     const manager = await createSession('Lead');
     const child = await createSession('Child', manager.id);
     workingStates.update(manager.id, sections());
@@ -170,8 +170,7 @@ describe('fleet events around odd parents', () => {
     await sessions.close(child.id);
     const states = await settle(connection, child.id);
 
-    expect(states).toHaveLength(1);
-    expect(states.map((state) => state.sessionId)).toEqual([manager.id]);
+    expect(states).toEqual([]);
     expect(connection.snapshot.workingStates.map((state) => state.sessionId)).not.toContain(manager.id);
     connection.ws.close();
   });
