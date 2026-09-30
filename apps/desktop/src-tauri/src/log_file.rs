@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};
 use std::sync::Arc;
+use std::time::Duration;
 
 pub const MAX_LOG_BYTES: u64 = 5 * 1024 * 1024;
 pub const KEPT_FILES: usize = 3;
@@ -177,15 +178,15 @@ pub struct DaemonLog {
 impl DaemonLog {
   pub fn start<F: LogFs + Send + 'static>(
     log: RotatingLog<F>,
-    read_secrets: impl Fn() -> Vec<String> + Send + 'static,
+    poll_secrets: impl FnMut() -> Option<Vec<String>> + Send + 'static,
     clock: impl Fn() -> u64 + Send + 'static,
   ) -> Self {
-    Self::start_with_capacity(log, read_secrets, clock, CHANNEL_CAPACITY)
+    Self::start_with_capacity(log, poll_secrets, clock, CHANNEL_CAPACITY)
   }
 
   pub fn start_with_capacity<F: LogFs + Send + 'static>(
     mut log: RotatingLog<F>,
-    read_secrets: impl Fn() -> Vec<String> + Send + 'static,
+    mut poll_secrets: impl FnMut() -> Option<Vec<String>> + Send + 'static,
     clock: impl Fn() -> u64 + Send + 'static,
     capacity: usize,
   ) -> Self {
@@ -197,7 +198,7 @@ impl DaemonLog {
       for (stream, line) in receiver {
         // The admin token file may only appear after the daemon's first output, so it is read until found.
         if secrets.is_empty() {
-          secrets = read_secrets();
+          secrets = poll_secrets().unwrap_or_default();
         }
         let now = clock();
         let lost = dropped_by_the_writer.swap(0, Ordering::SeqCst);
@@ -221,13 +222,26 @@ impl DaemonLog {
       }
     }
   }
+
+  /// Marks that the daemon's output pipe has delivered its last event.
+  pub fn mark_output_ended(&self) {}
+
+  /// Waits for the output to end, then drains the queue and stops the writer; false when it did not finish within `timeout`.
+  pub fn close_after_output_ends(&self, _timeout: Duration) -> bool {
+    false
+  }
+
+  /// Drains the queue and stops the writer; false when it did not finish within `timeout`.
+  pub fn flush_and_close(&self, _timeout: Duration) -> bool {
+    false
+  }
 }
 
 #[cfg(test)]
 mod tests {
   use super::*;
   use std::collections::HashMap;
-  use std::sync::atomic::{AtomicBool, Ordering};
+  use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
   use std::sync::mpsc;
   use std::sync::Mutex;
   use std::time::{Duration, Instant};
@@ -239,9 +253,21 @@ mod tests {
     files: Mutex<HashMap<PathBuf, Vec<u8>>>,
     rename_fails: AtomicBool,
     first_append_gate: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
+    appends_failing_with: Mutex<Option<String>>,
+    failed_appends: AtomicUsize,
   }
 
   impl FakeFs {
+    /// Makes every append whose text contains `fragment` fail; an empty fragment fails them all.
+    fn fail_appends_containing(&self, fragment: &str) {
+      *self.appends_failing_with.lock().unwrap() = Some(fragment.to_string());
+    }
+    fn stop_failing_appends(&self) {
+      *self.appends_failing_with.lock().unwrap() = None;
+    }
+    fn failed_append_count(&self) -> usize {
+      self.failed_appends.load(Ordering::SeqCst)
+    }
     fn text(&self, path: &str) -> String {
       self.files.lock().unwrap().get(Path::new(path)).map(|bytes| String::from_utf8_lossy(bytes).to_string()).unwrap_or_default()
     }
@@ -265,6 +291,11 @@ mod tests {
       if let Some((entered, release)) = gate {
         entered.send(()).unwrap();
         release.recv().unwrap();
+      }
+      let failing_fragment = self.appends_failing_with.lock().unwrap().clone();
+      if failing_fragment.is_some_and(|fragment| String::from_utf8_lossy(bytes).contains(&fragment)) {
+        self.failed_appends.fetch_add(1, Ordering::SeqCst);
+        return Err(io::Error::other("disk full"));
       }
       self.files.lock().unwrap().entry(path.to_path_buf()).or_default().extend_from_slice(bytes);
       Ok(())
@@ -692,7 +723,8 @@ mod tests {
   // ---- the writer ----
 
   fn writer_over(fs: &Arc<FakeFs>, max_bytes: u64, secrets: Vec<String>, capacity: usize) -> DaemonLog {
-    DaemonLog::start_with_capacity(rotating(fs, max_bytes), move || secrets.clone(), || 0, capacity)
+    let mut secrets_not_yet_polled = Some(secrets);
+    DaemonLog::start_with_capacity(rotating(fs, max_bytes), move || secrets_not_yet_polled.take(), || 0, capacity)
   }
 
   #[test]
@@ -756,16 +788,245 @@ mod tests {
   #[test]
   fn the_writer_picks_the_secrets_up_once_they_exist() {
     let fs = Arc::new(FakeFs::default());
-    let secrets = Arc::new(Mutex::new(Vec::<String>::new()));
+    let secrets = Arc::new(Mutex::new(None::<Vec<String>>));
     let shared = secrets.clone();
-    let log = DaemonLog::start_with_capacity(rotating(&fs, 1000), move || shared.lock().unwrap().clone(), || 0, 16);
+    let log = DaemonLog::start_with_capacity(rotating(&fs, 1000), move || shared.lock().unwrap().take(), || 0, 16);
 
     log.record(Stream::Out, "before");
     wait_until(|| fs.lines(LOG).len() == 1);
-    *secrets.lock().unwrap() = vec!["s3cr3t-admin-token".to_string()];
+    *secrets.lock().unwrap() = Some(vec!["s3cr3t-admin-token".to_string()]);
     log.record(Stream::Out, "token s3cr3t-admin-token");
 
     wait_until(|| fs.lines(LOG).len() == 2);
     assert!(fs.lines(LOG)[1].ends_with("token [redacted]"));
+  }
+
+  // ---- a token that changes while the writer runs ----
+
+  struct ChangingToken {
+    next: Arc<Mutex<Option<Vec<String>>>>,
+    seconds: Arc<AtomicU64>,
+    polls: Arc<AtomicUsize>,
+  }
+
+  impl ChangingToken {
+    fn start(fs: &Arc<FakeFs>) -> (Self, DaemonLog) {
+      let changing = Self { next: Arc::default(), seconds: Arc::default(), polls: Arc::default() };
+      let (next, seconds, polls) = (changing.next.clone(), changing.seconds.clone(), changing.polls.clone());
+      let poll = move || {
+        polls.fetch_add(1, Ordering::SeqCst);
+        next.lock().unwrap().take()
+      };
+      let log = DaemonLog::start_with_capacity(rotating(fs, 100_000), poll, move || seconds.load(Ordering::SeqCst), 64);
+      (changing, log)
+    }
+    fn rotate_to(&self, token: &str) {
+      *self.next.lock().unwrap() = Some(vec![token.to_string()]);
+    }
+    fn advance(&self, seconds: u64) {
+      self.seconds.fetch_add(seconds, Ordering::SeqCst);
+    }
+  }
+
+  #[test]
+  fn a_token_rotated_while_the_writer_runs_is_masked_and_the_old_one_stays_masked() {
+    let fs = Arc::new(FakeFs::default());
+    let (token, log) = ChangingToken::start(&fs);
+    token.rotate_to("old-admin-token-1");
+    log.record(Stream::Out, "first old-admin-token-1");
+    wait_until(|| fs.lines(LOG).len() == 1);
+
+    token.rotate_to("new-admin-token-2");
+    token.advance(3);
+    log.record(Stream::Out, "then new-admin-token-2 and old-admin-token-1");
+
+    wait_until(|| fs.lines(LOG).len() == 2);
+    assert!(fs.lines(LOG)[1].ends_with("then [redacted] and [redacted]"), "{:?}", fs.lines(LOG));
+  }
+
+  #[test]
+  fn the_writer_looks_for_a_new_token_at_most_every_two_seconds_once_it_knows_one() {
+    let fs = Arc::new(FakeFs::default());
+    let (token, log) = ChangingToken::start(&fs);
+    token.rotate_to("old-admin-token-1");
+
+    for (line_count, advance_by) in [(1, 0), (2, 1), (3, 1)] {
+      token.advance(advance_by);
+      log.record(Stream::Out, "a line");
+      wait_until(|| fs.lines(LOG).len() == line_count);
+    }
+
+    assert_eq!(token.polls.load(Ordering::SeqCst), 2, "polls at 0 s (nothing known yet) and at 2 s, not at 1 s");
+  }
+
+  #[test]
+  fn the_writer_keeps_only_the_last_eight_tokens() {
+    let fs = Arc::new(FakeFs::default());
+    let (token, log) = ChangingToken::start(&fs);
+    let names: Vec<String> = (1..=10).map(|n| format!("admin-token-{n:02}")).collect();
+
+    for (index, name) in names.iter().enumerate() {
+      token.rotate_to(name);
+      token.advance(2);
+      log.record(Stream::Out, &format!("rotated {name}"));
+      wait_until(|| fs.lines(LOG).len() == index + 1);
+    }
+    token.advance(2);
+    log.record(Stream::Out, &format!("all {}", names.join(" ")));
+
+    wait_until(|| fs.lines(LOG).len() == 11);
+    let last_line = fs.lines(LOG).pop().unwrap();
+    assert!(last_line.contains("admin-token-01 admin-token-02 [redacted] [redacted]"), "{last_line}");
+    assert!(last_line.ends_with("[redacted] [redacted]"), "{last_line}");
+  }
+
+  // ---- drop accounting ----
+
+  #[test]
+  fn a_failed_write_is_counted_as_lost_and_not_blamed_on_a_slow_writer() {
+    let fs = Arc::new(FakeFs::default());
+    let log = writer_over(&fs, 10_000, vec![], 16);
+    fs.fail_appends_containing("");
+
+    log.record(Stream::Out, "lost-1");
+    log.record(Stream::Out, "lost-2");
+    wait_until(|| fs.failed_append_count() >= 3);
+    fs.stop_failing_appends();
+    log.record(Stream::Out, "fine");
+
+    wait_until(|| fs.lines(LOG).len() == 2);
+    let lines = fs.lines(LOG);
+    assert!(lines[0].ends_with("[log] 2 lines lost: could not write the log file (disk full)"), "{lines:?}");
+    assert!(lines[1].ends_with("[out] fine"));
+    assert!(!lines.iter().any(|line| line.contains("fell behind")));
+  }
+
+  #[test]
+  fn a_full_queue_is_blamed_on_the_writer_and_not_on_the_disk() {
+    let fs = Arc::new(FakeFs::default());
+    let (entered_sender, entered) = mpsc::channel();
+    let (release, release_receiver) = mpsc::channel();
+    *fs.first_append_gate.lock().unwrap() = Some((entered_sender, release_receiver));
+    let log = writer_over(&fs, 10_000, vec![], 1);
+    log.record(Stream::Out, "first");
+    entered.recv().unwrap();
+    for n in 0..3 {
+      log.record(Stream::Out, &format!("burst-{n}"));
+    }
+    release.send(()).unwrap();
+
+    wait_until(|| fs.lines(LOG).len() == 3);
+    let lines = fs.lines(LOG);
+    assert!(lines[1].ends_with("[log] 2 lines dropped: the log writer fell behind"), "{lines:?}");
+    assert!(!lines.iter().any(|line| line.contains("could not write")));
+  }
+
+  #[test]
+  fn the_lost_count_survives_a_notice_that_could_not_be_written() {
+    let fs = Arc::new(FakeFs::default());
+    let (entered_sender, entered) = mpsc::channel();
+    let (release, release_receiver) = mpsc::channel();
+    *fs.first_append_gate.lock().unwrap() = Some((entered_sender, release_receiver));
+    let log = writer_over(&fs, 10_000, vec![], 1);
+    log.record(Stream::Out, "first");
+    entered.recv().unwrap();
+    for n in 0..4 {
+      log.record(Stream::Out, &format!("burst-{n}"));
+    }
+    fs.fail_appends_containing("lines dropped");
+    release.send(()).unwrap();
+    wait_until(|| fs.lines(LOG).len() == 2);
+
+    fs.stop_failing_appends();
+    log.record(Stream::Out, "after");
+
+    wait_until(|| fs.lines(LOG).len() == 4);
+    let lines = fs.lines(LOG);
+    assert!(lines[2].ends_with("[log] 3 lines dropped: the log writer fell behind"), "{lines:?}");
+    assert!(lines[3].ends_with("[out] after"));
+  }
+
+  // ---- flush on exit ----
+
+  #[test]
+  fn flush_and_close_writes_every_queued_line_before_it_returns() {
+    let fs = Arc::new(FakeFs::default());
+    let log = writer_over(&fs, 100_000, vec![], 64);
+    for n in 0..30 {
+      log.record(Stream::Out, &format!("line {n}"));
+    }
+
+    let drained = log.flush_and_close(Duration::from_secs(2));
+
+    assert!(drained);
+    assert_eq!(fs.lines(LOG).len(), 30);
+  }
+
+  #[test]
+  fn flush_and_close_gives_up_within_its_timeout_when_the_disk_is_stuck() {
+    let fs = Arc::new(FakeFs::default());
+    let (entered_sender, entered) = mpsc::channel();
+    let (release, release_receiver) = mpsc::channel();
+    *fs.first_append_gate.lock().unwrap() = Some((entered_sender, release_receiver));
+    let log = writer_over(&fs, 10_000, vec![], 4);
+    log.record(Stream::Out, "stuck");
+    entered.recv().unwrap();
+    let started_at = Instant::now();
+
+    let drained = log.flush_and_close(Duration::from_millis(100));
+
+    assert!(!drained);
+    assert!(started_at.elapsed() < Duration::from_secs(1));
+    release.send(()).unwrap();
+  }
+
+  #[test]
+  fn flush_and_close_returns_when_the_queue_is_full_and_the_disk_is_stuck() {
+    let fs = Arc::new(FakeFs::default());
+    let (entered_sender, entered) = mpsc::channel();
+    let (release, release_receiver) = mpsc::channel();
+    *fs.first_append_gate.lock().unwrap() = Some((entered_sender, release_receiver));
+    let log = writer_over(&fs, 10_000, vec![], 1);
+    log.record(Stream::Out, "stuck");
+    entered.recv().unwrap();
+    log.record(Stream::Out, "fills the queue");
+    let started_at = Instant::now();
+
+    let drained = log.flush_and_close(Duration::from_millis(100));
+
+    assert!(!drained);
+    assert!(started_at.elapsed() < Duration::from_secs(1));
+    release.send(()).unwrap();
+  }
+
+  #[test]
+  fn the_exit_waits_for_the_last_event_of_the_output_pipe() {
+    let fs = Arc::new(FakeFs::default());
+    let log = writer_over(&fs, 100_000, vec![], 64);
+    let pipe = log.clone();
+    std::thread::spawn(move || {
+      std::thread::sleep(Duration::from_millis(50));
+      pipe.record(Stream::Err, "the daemon exited with code Some(0)");
+      pipe.mark_output_ended();
+    });
+
+    let drained = log.close_after_output_ends(Duration::from_secs(2));
+
+    assert!(drained);
+    assert!(fs.lines(LOG).last().is_some_and(|line| line.ends_with("the daemon exited with code Some(0)")), "{:?}", fs.lines(LOG));
+  }
+
+  #[test]
+  fn the_exit_does_not_wait_for_ever_for_a_pipe_that_never_ends() {
+    let fs = Arc::new(FakeFs::default());
+    let log = writer_over(&fs, 100_000, vec![], 64);
+    log.record(Stream::Out, "queued");
+    let started_at = Instant::now();
+
+    let drained = log.close_after_output_ends(Duration::from_millis(400));
+
+    assert!(drained);
+    assert!(started_at.elapsed() < Duration::from_secs(1));
+    assert_eq!(fs.lines(LOG).len(), 1);
   }
 }

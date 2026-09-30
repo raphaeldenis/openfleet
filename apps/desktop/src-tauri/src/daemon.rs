@@ -1,4 +1,4 @@
-use crate::admin_token::{admin_token_path, admin_token_secrets};
+use crate::admin_token::{admin_token_path, AdminTokenWatch};
 use crate::log_file::{logs_dir, DaemonLog, DiskFs, RotatingLog, Stream, KEPT_FILES, LOG_FILE_NAME, MAX_LOG_BYTES};
 use crate::path_repair::{repair_path, run_login_shell, PathSource, RepairedPath, LOGIN_SHELL_TIMEOUT};
 use serde::Serialize;
@@ -402,7 +402,8 @@ fn start_daemon_log(user_home: &Path) -> DaemonLog {
   let log_path = logs_dir(openfleet_home.clone(), user_home).join(LOG_FILE_NAME);
   let token_path = admin_token_path(openfleet_home, user_home);
   let rotating_log = RotatingLog::open(DiskFs, log_path, MAX_LOG_BYTES, KEPT_FILES);
-  DaemonLog::start(rotating_log, move || admin_token_secrets(&token_path), unix_seconds_now)
+  let mut token_watch = AdminTokenWatch::new(token_path);
+  DaemonLog::start(rotating_log, move || token_watch.secrets_if_changed(), unix_seconds_now)
 }
 
 fn unix_seconds_now() -> u64 {
