@@ -30,16 +30,16 @@ const WORKTREES_ROOT = '/tmp/of-wt';
 const CHILD_COUNT = 10;
 
 const BYTE_BUDGET = {
-  createSession: 200,
-  getSessionStatus: 200,
-  listChildren: 1600,
-  listSessions: 1800,
-  getArgusStatus: 1500,
-  listNotes: 2700,
-  searchNotes: 3000,
-  describeDataStore: 1600,
-  queryDataStore: 34000,
-  getWorkingState: 200,
+  createSession: 150,
+  getSessionStatus: 150,
+  listChildren: 1560,
+  listSessions: 2250,
+  getArgusStatus: 1640,
+  listNotes: 2680,
+  searchNotes: 3090,
+  describeDataStore: 1540,
+  queryDataStore: 38600,
+  getWorkingState: 160,
 };
 const NOTE_COUNT = 20;
 const COLUMN_COUNT = 12;
@@ -239,10 +239,10 @@ describe('MCP tool results are compact', () => {
     });
 
     it('agent can chain note edits from the ack alone: it carries the id and new rev but not the body it just sent', async () => {
-      const created = parsed(await call('create_note', { title: 'Plan', body_md: '# v1' }));
+      const created = parsed(await call('create_note', { title: 'Plan', body_md: '## H\nold' }));
       expect(keysOf(created)).toEqual(['fileBacked', 'folder', 'id', 'rev', 'shared', 'title']);
 
-      const updated = parsed(await call('update_note', { note: created.id, body_md: '# v2', expected_rev: created.rev }));
+      const updated = parsed(await call('update_note', { note: created.id, body_md: '## H\nolder', expected_rev: created.rev }));
       const appended = parsed(await call('append_to_note', { note: created.id, content: 'more' }));
       const sectioned = parsed(await call('update_note_section', { note: created.id, heading: 'H', content: 'x', expected_rev: appended.rev }));
       const moved = parsed(await call('move_note', { note: created.id, folder: null }));

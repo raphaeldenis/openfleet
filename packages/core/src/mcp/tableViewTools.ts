@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { RowNotFoundError, type DataStoreRepository } from '../stores/dataStoreRepository.js';
 import type { DataStoreService } from '../stores/dataStoreService.js';
 import { fail, guarded, truncateToByteBudget } from './toolResults.js';
+import { rowChangeView, savedView } from './toolViews.js';
 
 // Rule 3 of the plan's Task 16: a page an agent can actually read, never a whole trail dump.
 const MAX_HISTORY_LIMIT = 500;
@@ -29,7 +30,7 @@ export function registerTableViewTools(server: McpServer, deps: RegisterTableVie
   }, async ({ store, display_name, view_type, config }) => {
     const scope = requireProject();
     if (!scope) return fail('this session has no project');
-    return guarded(() => stores.createView(store, { ...scope, displayName: display_name, viewType: view_type, config }));
+    return guarded(() => savedView(stores.createView(store, { ...scope, displayName: display_name, viewType: view_type, config })));
   });
 
   server.registerTool('list_data_store_views', {
@@ -38,7 +39,7 @@ export function registerTableViewTools(server: McpServer, deps: RegisterTableVie
   }, async ({ store }) => {
     const scope = requireProject();
     if (!scope) return fail('this session has no project');
-    return guarded(() => stores.listViews(store, scope));
+    return guarded(() => stores.listViews(store, scope).map(savedView));
   });
 
   server.registerTool('update_data_store_view', {
@@ -47,7 +48,7 @@ export function registerTableViewTools(server: McpServer, deps: RegisterTableVie
   }, async ({ view, config }) => {
     const scope = requireProject();
     if (!scope) return fail('this session has no project');
-    return guarded(() => stores.updateView(view, { ...scope, config }));
+    return guarded(() => savedView(stores.updateView(view, { ...scope, config })));
   });
 
   server.registerTool('delete_data_store_view', {
@@ -72,7 +73,7 @@ export function registerTableViewTools(server: McpServer, deps: RegisterTableVie
       const history = storeRepo.rowHistory(row_id, { projectId: scope.projectId, limit: limit ?? DEFAULT_HISTORY_LIMIT });
       if (history.length === 0) throw new RowNotFoundError(row_id);
       const { items: entries, truncated } = truncateToByteBudget(history, MAX_HISTORY_RESULT_BYTES);
-      return { entries, truncated, count: entries.length };
+      return { entries: entries.map(rowChangeView), truncated, count: entries.length };
     });
   });
 }

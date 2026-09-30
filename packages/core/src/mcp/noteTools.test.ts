@@ -118,7 +118,8 @@ describe('note tools', () => {
     it('scopes the new note to the caller\'s own project, defaulting folder to null and shared to false', async () => {
       const client = await connect(scopedToken);
       const created = await createNote(client, { title: 'Design doc', body_md: '# v1' });
-      expect(created).toMatchObject({ projectId: 'p1', title: 'Design doc', bodyMd: '# v1', folder: null, shared: false, rev: 1 });
+      expect(created).toMatchObject({ title: 'Design doc', folder: null, shared: false, rev: 1 });
+      expect(created).not.toHaveProperty('bodyMd');
     });
 
     it.each([['a whitespace-only title', '   '], ['a title over 512 characters', 'x'.repeat(513)]])('refuses %s like the REST route does', async (_case, title) => {
@@ -163,7 +164,8 @@ describe('note tools', () => {
 
       const fetched = text(await client.callTool({ name: 'get_note', arguments: { note: note.id } }));
 
-      expect(fetched).toMatchObject({ fileBacked: false, docsRelativePath: null });
+      expect(fetched).toMatchObject({ fileBacked: false });
+      expect(fetched).not.toHaveProperty('docsRelativePath');
       expect(fetched).not.toHaveProperty('filePath');
       expect(fetched).not.toHaveProperty('sourceHash');
     });
@@ -212,7 +214,7 @@ describe('note tools', () => {
 
       const updated = text(await client.callTool({ name: 'update_note', arguments: { note: note.id, body_md: '# v2', expected_rev: note.rev } }));
 
-      expect(updated.bodyMd).toBe('# v2');
+      expect(updated.rev).toBe(note.rev + 1);
       const onDisk = nodeDocsFolderFs.readFileSync(note.filePath!);
       expect(onDisk).toBe('# v2');
       expect(updated).not.toHaveProperty('sourceHash');

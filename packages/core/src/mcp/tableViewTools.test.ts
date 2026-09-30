@@ -106,7 +106,8 @@ describe('table view tools', () => {
 
       const view = text(await client.callTool({ name: 'create_data_store_view', arguments: { store: store.id, display_name: 'main', view_type: 'grid' } }));
 
-      expect(view).toMatchObject({ storeId: store.id, displayName: 'main', viewType: 'grid', sortOrder: 0 });
+      expect(view).toMatchObject({ displayName: 'main', viewType: 'grid' });
+      expect(text(await client.callTool({ name: 'list_data_store_views', arguments: { store: store.id } }))).toEqual([view]);
     });
 
     it('on another project\'s store fails exactly like a missing store', async () => {

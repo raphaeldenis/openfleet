@@ -127,11 +127,11 @@ describe('table tools', () => {
   it('create_data_store scopes the new store to the caller\'s own project', async () => {
     const client = await connect(scopedToken);
     const created = await createStore(client);
-    expect(created.projectId).toBe('p1');
+    expect(storeRepo.findStore(created.id)?.projectId).toBe('p1');
     expect(created.displayName).toBe('backlog');
   });
 
-  it('describe_data_store returns id, displayName, and columns with id/displayName/columnType/options/sortOrder', async () => {
+  it('describe_data_store returns id, displayName, and columns with id/displayName/columnType/options', async () => {
     const client = await connect(scopedToken);
     const store = await createStore(client);
     await client.callTool({ name: 'add_data_store_column', arguments: { store: store.id, display_name: 'status', column_type: 'select', options: [{ id: 'todo', label: 'todo' }] } });
@@ -141,7 +141,7 @@ describe('table tools', () => {
     expect(described).toMatchObject({
       id: store.id,
       displayName: 'backlog',
-      columns: [{ displayName: 'status', columnType: 'select', options: [{ id: 'todo', label: 'todo' }], sortOrder: 0 }],
+      columns: [{ displayName: 'status', columnType: 'select', options: [{ id: 'todo', label: 'todo' }] }],
     });
     expect(described.columns[0].id).toEqual(expect.any(String));
   });

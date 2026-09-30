@@ -226,10 +226,9 @@ describe('notes REST routes', () => {
       await client.connect(new StreamableHTTPClientTransport(new URL(`${server.url}/mcp`), { requestInit: { headers: { Authorization: `Bearer ${mcpToken}` } } }));
 
       const viaMcp = JSON.parse(((await client.callTool({ name: 'get_note', arguments: { note: note.id } })) as { content: { text: string }[] }).content[0]!.text);
-      const { expandedBody, ...mcpView } = viaMcp;
 
-      expect(expandedBody).toBe(note.bodyMd);
-      expect(mcpView).toEqual(note);
+      expect(viaMcp).not.toHaveProperty('expandedBody');
+      expect(note).toMatchObject(viaMcp);
     });
   });
 

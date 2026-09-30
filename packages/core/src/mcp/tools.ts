@@ -8,6 +8,7 @@ import type { ApprovalService } from '../governance/approvalService.js';
 import type { ManagerService } from '../managers/managerService.js';
 import { toManagerView } from '../managers/managerView.js';
 import type { PulseScheduler } from '../managers/pulseScheduler.js';
+import { lineageSessionView, managerView, sessionView } from './toolViews.js';
 import { SessionClosedError, TooManyPendingMessagesError, type SessionService } from '../sessions/sessionService.js';
 
 const ok = (payload: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(payload) }] });
@@ -103,13 +104,13 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
   server.registerTool('get_session_status', { description: 'State of your session or one in your lineage', inputSchema: { session_id: z.string().optional() } }, async ({ session_id }) => {
     const target = sessions.get(session_id ?? caller.id);
     if (!target || !isInLineage(target)) return fail('session not found or outside your lineage');
-    return ok(target);
+    return ok(sessionView(target));
   });
 
-  server.registerTool('list_children', { description: 'Sessions you spawned', inputSchema: {} }, async () => ok(sessions.list().filter((s) => s.parentId === caller.id)));
+  server.registerTool('list_children', { description: 'Sessions you spawned', inputSchema: {} }, async () => ok(sessions.list().filter((s) => s.parentId === caller.id).map(sessionView)));
 
   server.registerTool('list_sessions', { description: 'You, your children, and every descendant beneath them', inputSchema: {} }, async () =>
-    ok(sessions.list().filter((s) => s.id === caller.id || isDescendant(s))),
+    ok(sessions.list().filter((s) => s.id === caller.id || isDescendant(s)).map(lineageSessionView)),
   );
 
   server.registerTool('send_session_message', { description: 'Send a message to a child (or your parent). Queued if it is busy, delivered on its next idle turn. Pass back a previous message_id to retry idempotently.', inputSchema: { target_uuid: z.string(), body: z.string().min(1), message_id: z.uuid().optional() } }, async ({ target_uuid, body, message_id }) => {
@@ -226,7 +227,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     const child = input.manager
       ? await managers.createManagerSession({ ...spec, role: MANAGER_ROLE, manager: { pulseSeconds: input.manager.pulse_seconds, childrenCap: input.manager.children_cap, mission: input.manager.mission } as ManagerSpec })
       : await sessions.create(spec);
-    return ok(child);
+    return ok(sessionView(child));
   });
 
   server.registerTool('update_session', { description: "Change the model of yourself or one of your children (a rung name like 'opus' or an exact model id)", inputSchema: { session_id: z.string().optional(), model: ModelIdSchema } }, async ({ session_id, model }) => {
@@ -240,12 +241,12 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
 
   server.registerTool('get_argus_status', { description: 'Your manager record (if any) and each child: state, pending permission, queued messages', inputSchema: {} }, async () => {
     const children = sessions.list().filter((s) => s.parentId === caller.id).map((child) => ({
-      id: child.id, name: child.name, emoji: child.emoji, state: child.state, stateSince: child.stateSince,
+      id: child.id, name: child.name, state: child.state, stateSince: child.stateSince,
       pendingPermission: pendingPermissionFor(child.id),
       queuedMessageCount: sessions.queuedMessageCount(child.id),
     }));
     const record = caller.role === MANAGER_ROLE ? managers.get(caller.id) : undefined;
-    const manager = record ? toManagerView(record, children.filter((c) => c.state !== 'closed').length) : null;
+    const manager = record ? managerView(toManagerView(record, children.filter((c) => c.state !== 'closed').length)) : null;
     return ok({ manager, children });
   });
 
