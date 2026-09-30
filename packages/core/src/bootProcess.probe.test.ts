@@ -82,24 +82,27 @@ describe('probe: valid boot then signal', () => {
 
 describe('probe: signal while the sessions are still resuming', () => {
   const SESSION_SERVICE = pathToFileURL(join(CORE_ROOT, 'src', 'sessions', 'sessionService.ts')).href;
-  const RESUME_DURATION_MS = 1500;
-  const slowResumePreload = () => {
-    const preload = join(tempDirs.make('of-preload-'), 'slowResume.mjs');
+  const SHUTDOWN_GUARD_MS = 10_000;
+  const slowSessionsPreload = ({ resumeMs, closeMs }: { resumeMs: number; closeMs: number }) => {
+    const preload = join(tempDirs.make('of-preload-'), 'slowSessions.mjs');
     writeFileSync(preload, `
       import { SessionService } from ${JSON.stringify(SESSION_SERVICE)};
       const { resumeAll, closeAll } = SessionService.prototype;
+      const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
       SessionService.prototype.resumeAll = async function (...args) {
         console.log('resumeAll started');
-        await new Promise((resolve) => setTimeout(resolve, ${RESUME_DURATION_MS}));
+        await pause(${resumeMs});
         return resumeAll.apply(this, args);
       };
-      SessionService.prototype.closeAll = function (...args) {
+      SessionService.prototype.closeAll = async function (...args) {
         console.log('closeAll called');
+        await pause(${closeMs});
         return closeAll.apply(this, args);
       };
     `);
     return preload;
   };
+  const slowResumePreload = () => slowSessionsPreload({ resumeMs: 1500, closeMs: 0 });
 
   it.each(['SIGTERM', 'SIGINT'] as const)('%s during the resume exits 0 after closing the sessions and freeing the port', async (signal) => {
     const { daemon, port } = await bootOnFreePort({ OPENFLEET_HOME: homeWith() }, slowResumePreload());
@@ -113,6 +116,35 @@ describe('probe: signal while the sessions are still resuming', () => {
     expect(daemon.stdout()).toContain('closeAll called');
     expect(daemon.stderr()).toBe('');
     expect(await canConnect(port)).toBe(true);
+  }, 40_000);
+
+  it('a second signal during the close neither closes twice nor exits before the close is done', async () => {
+    const closeMs = 1500;
+    const { daemon } = await bootOnFreePort({ OPENFLEET_HOME: homeWith() }, slowSessionsPreload({ resumeMs: 0, closeMs }));
+    await waitFor(() => daemon.stdout().includes('listening'), 'banner');
+
+    const firstSignalAt = Date.now();
+    daemon.child.kill('SIGTERM');
+    await waitFor(() => daemon.stdout().includes('closeAll called'), 'the close to start');
+    daemon.child.kill('SIGINT');
+    const { code } = await daemon.exited;
+
+    const closeCalls = daemon.stdout().split('closeAll called').length - 1;
+    expect(closeCalls).toBe(1);
+    expect(code).toBe(0);
+    expect(Date.now() - firstSignalAt).toBeGreaterThanOrEqual(closeMs);
+  }, 40_000);
+
+  it('a resume that outlasts the shutdown guard exits 1 at the guard instead of hanging', async () => {
+    const { daemon } = await bootOnFreePort({ OPENFLEET_HOME: homeWith() }, slowSessionsPreload({ resumeMs: 60_000, closeMs: 0 }));
+    await waitFor(() => daemon.stdout().includes('resumeAll started'), 'the resume to start');
+
+    const signalAt = Date.now();
+    daemon.child.kill('SIGTERM');
+    const { code } = await daemon.exited;
+
+    expect(code).toBe(1);
+    expect(Date.now() - signalAt).toBeLessThan(SHUTDOWN_GUARD_MS + 3000);
   }, 40_000);
 });
 
