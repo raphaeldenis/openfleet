@@ -16,6 +16,7 @@ import { startServer } from './server.js';
 
 let server: Awaited<ReturnType<typeof startServer>>;
 let projectDirectory: string;
+let sessions: SessionService;
 let deliveredMessageIds: string[];
 const originalConfigDir = process.env.CLAUDE_CONFIG_DIR;
 
@@ -32,7 +33,7 @@ beforeEach(async () => {
   bus.subscribe((event) => {
     if (event.type === 'message.delivered') deliveredByThisTestsBus.push(event.messageId);
   });
-  const sessions = new SessionService({ db, bus, harnesses: [new FakeHarness()], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt', submitKeystrokeDelayMs: 0 });
+  sessions = new SessionService({ db, bus, harnesses: [new FakeHarness()], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt', submitKeystrokeDelayMs: 0 });
   const approvals = new ApprovalService({ db, bus });
   const managerRepo = new ManagerRepository(db);
   const pulseScheduler = new PulseScheduler({ managers: managerRepo, sessions, bus });
@@ -42,6 +43,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await server.close();
+  await sessions.closeAll();
   if (originalConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
   else process.env.CLAUDE_CONFIG_DIR = originalConfigDir;
 });
@@ -101,9 +103,11 @@ describe('a user typing /clear in a session', () => {
     writeFileSync(transcriptPathOf(id), assistantLine('claude-opus-5-5'));
     await sendHook(id, { hook_event_name: 'Stop', transcript_path: undefined });
 
+    const queuedMessage = (await queuedResponse.json()) as { messageId: string; status: string };
     await expect.poll(() => deliveredMessageIds).toHaveLength(1);
+    expect(deliveredMessageIds).toEqual([queuedMessage.messageId]);
     expect(stateAfterWaiting).toBe('generating');
-    expect(await queuedResponse.json()).toMatchObject({ status: 'queued' });
+    expect(queuedMessage).toMatchObject({ status: 'queued' });
     expect(await listed(id)).toMatchObject({ resolvedModel: 'claude-opus-5-5' });
   });
 
