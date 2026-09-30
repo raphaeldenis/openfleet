@@ -1,3 +1,5 @@
+mod path_repair;
+
 use std::path::PathBuf;
 use tauri::Manager;
 
