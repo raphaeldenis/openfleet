@@ -16,7 +16,7 @@ export const DEFAULT_MODEL_TABLE: ModelTable = {
 
 // ponytail: a hand-kept list curated from the claude CLI's /model picker (see P2-U6c) — it goes stale when a model ships and needs a release to catch up.
 // Upgrade path: query the Anthropic /v1/models API inside listAvailableModels() when an API key is present.
-const KNOWN_MODELS: readonly string[] = [
+export const KNOWN_MODELS: readonly string[] = [
   'haiku',
   'sonnet',
   'opus',
@@ -26,6 +26,7 @@ const KNOWN_MODELS: readonly string[] = [
   'claude-haiku-4-5',
   'claude-haiku-4-5-20251001',
   'claude-sonnet-5',
+  'claude-sonnet-5-5',
   'claude-opus-5-5',
   'claude-opus-5-5[1m]',
   'claude-fable-5-1',

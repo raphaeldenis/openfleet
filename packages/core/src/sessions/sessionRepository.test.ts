@@ -15,7 +15,19 @@ describe('SessionRepository.closeAllOpen', () => {
   });
 });
 
-const currentCliSessionIdInRow = (db: ReturnType<typeof openDatabase>, id: string) =>
+describe('SessionRepository.setContextNoticeTokens', () => {
+  it('keeps the session list readable when handed a value beyond the safe integer range', () => {
+    const db = openDatabase(':memory:');
+    const repo = new SessionRepository(db);
+    repo.insert({ id: 's1', name: 'G', emoji: '🤖', directory: '/tmp', worktree: null, model: null, parent_id: null, role: null, harness: 'fake', state: 'idle', state_since: 't', hook_token: 'h', mcp_token: 'm', permission_mode: null, branch: null, created_at: 't' });
+
+    repo.setContextNoticeTokens('s1', 2 ** 60);
+
+    expect(repo.list().map((session) => session.contextNoticeTokens)).toEqual([undefined]);
+  });
+});
+
+const currentCliSessionIdInRow =(db: ReturnType<typeof openDatabase>, id: string) =>
   (db.prepare('SELECT cli_session_id FROM sessions WHERE id = ?').get(id) as { cli_session_id: string | null }).cli_session_id;
 
 describe('SessionRepository.setCliSessionId', () => {

@@ -19,6 +19,7 @@ import type { WorkingStateService } from '../workingState/workingStateService.js
 import { ALLOWED_ORIGINS } from './allowedOrigins.js';
 import { registerDataStoreRoutes } from './dataStoreRoutes.js';
 import type { SessionStartContext } from '../workingState/sessionStartContext.js';
+import type { ContextNotice } from '../workingState/contextNotice.js';
 import type { HandoverLedger } from '../workingState/handoverLedger.js';
 import type { StopRefusal } from '../workingState/stopRefusal.js';
 import { hooksHandler } from './hooksHandler.js';
@@ -50,6 +51,7 @@ export interface ServerDeps {
   sessionStartContext?: SessionStartContext;
   // Without it no handover is recorded and the handovers route does not exist.
   handoverLedger?: HandoverLedger;
+  contextNotice?: ContextNotice;
   // Without it the test-only routes (fake-output) do not exist.
   e2eRoutes?: boolean;
 }
