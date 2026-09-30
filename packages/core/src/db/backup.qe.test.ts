@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -124,18 +124,23 @@ describe('pre-migration backup pruning around strange entries', () => {
     expect(existsSync(staleTemp)).toBe(true);
   });
 
-  it('removes a symlink named like an old backup without touching what it points to', () => {
+  it('ignores a symlink named like a backup: it stays in place, its target is untouched and it is not counted toward the newest three', () => {
     const outside = join(mkdtempSync(join(tmpdir(), 'of-backup-qe-outside-')), 'precious.txt');
     writeFileSync(outside, 'precious');
     mkdirSync(backupsDir, { recursive: true });
-    symlinkSync(outside, join(backupsDir, 'openfleet-015_x-2026-01-01T00-00-00-000Z.db'));
+    const symlinkName = 'openfleet-015_x-2026-01-01T00-00-00-000Z.db';
+    symlinkSync(outside, join(backupsDir, symlinkName));
     for (const day of ['02', '03', '04']) writeFileSync(join(backupsDir, `openfleet-015_x-2026-01-${day}T00-00-00-000Z.db`), 'old');
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-02-01T00:00:00.000Z'));
 
     bootOneMigrationBehindDatabase();
 
+    expect(lstatSync(join(backupsDir, symlinkName)).isSymbolicLink()).toBe(true);
     expect(readFileSync(outside, 'utf8')).toBe('precious');
+    const regularBackups = databaseBackups().filter((name) => name !== symlinkName);
+    expect(regularBackups).toHaveLength(3);
+    expect(regularBackups.some((name) => name.includes('2026-01-02T00-00-00-000Z'))).toBe(false);
   });
 
   it('refuses to boot and leaves the schema alone when the home directory is read-only', () => {
