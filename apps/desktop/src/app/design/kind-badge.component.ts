@@ -14,12 +14,11 @@ const COLOR_VAR: Record<InboxKind, string> = {
   selector: 'of-kind-badge',
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <span data-testid="kind-badge" [style.color]="'var(' + colorVar() + ')'" class="badge">{{ kind().toUpperCase() }}</span>
+    <span data-testid="kind-badge" [style.background]="tintOf(colorVar())" class="badge">{{ kind().toUpperCase() }}</span>
   `,
   styles: `
     .badge {
-      display: inline-flex; padding: 0 .375rem; border-radius: .1875rem;
-      background: color-mix(in oklch, currentColor 14%, transparent);
+      display: inline-flex; padding: 0 .375rem; border-radius: .1875rem; color: var(--fg);
       font-family: var(--mono); font-size: .5625rem; font-weight: 600; letter-spacing: .04em;
     }
   `,
@@ -27,4 +26,5 @@ const COLOR_VAR: Record<InboxKind, string> = {
 export class KindBadgeComponent {
   readonly kind = input.required<InboxKind>();
   protected readonly colorVar = computed(() => COLOR_VAR[this.kind()]);
+  protected readonly tintOf = (colorVar: string) => `color-mix(in oklch, var(${colorVar}) 14%, transparent)`;
 }

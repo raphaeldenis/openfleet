@@ -149,12 +149,13 @@ function formatInput(toolInput: unknown): FormattedInput {
     .inbox { display: flex; flex-direction: column; gap: .75rem; padding: 1rem; width: 100%; box-sizing: border-box; }
     .title-row { display: flex; align-items: center; gap: .375rem; flex-wrap: wrap; }
     .title { margin: 0; flex: 1; font-size: 1.25rem; font-weight: 600; }
-    .count { display: inline-flex; min-width: 1rem; height: 1rem; padding: 0 .25rem; margin-left: .5rem; border-radius: .5rem; background: var(--accent); color: var(--on-accent); font-size: .625rem; font-weight: 600; align-items: center; justify-content: center; }
+    .count { display: inline-flex; min-width: 1rem; height: 1rem; padding: 0 .25rem; margin-left: .5rem; border-radius: .5rem; background: var(--accent-bg); color: var(--fg); font-size: .625rem; font-weight: 600; align-items: center; justify-content: center; }
     .reply-failure { display: flex; flex-direction: column; align-items: flex-start; gap: .375rem; min-width: 0; padding: .625rem .875rem; border: 1px solid var(--state-error); border-radius: .625rem; background: var(--panel); }
     .reply-failure-title { margin: 0; color: var(--state-error); overflow-wrap: anywhere; }
     .reply-failure-draft { margin: 0; max-width: 100%; max-height: 10rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
     .tabs { display: flex; gap: .25rem; border-bottom: 1px solid var(--line); }
     .tab { height: 1.875rem; padding: 0 .75rem; border: 0; border-bottom: 1px solid transparent; background: transparent; color: var(--mut); cursor: pointer; font: inherit; }
+    .tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
     .tab.active { color: var(--fg); border-bottom-color: var(--accent); }
     .tab-count { display: inline-flex; min-width: 1rem; height: 1rem; padding: 0 .25rem; margin-left: .25rem; border-radius: .5rem; background: var(--sunk); color: var(--fg); font-size: .625rem; font-weight: 600; align-items: center; justify-content: center; }
     .tabpanel { display: flex; flex-direction: column; gap: .75rem; }
@@ -170,7 +171,7 @@ function formatInput(toolInput: unknown): FormattedInput {
     .session-label { font-weight: 500; }
     .gate-sentence { margin: 0; }
     .tool-name { font-family: var(--mono); font-size: .75rem; padding: 0 .375rem; border-radius: .25rem; background: var(--sunk); }
-    .age { margin-left: auto; font-size: .6875rem; color: var(--faint); }
+    .age { margin-left: auto; font-size: .6875rem; color: var(--mut); }
     .tool-args { margin: 0; overflow: auto; max-height: 10rem; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--mono); font-size: .75rem; padding: .375rem .5rem; border-radius: .375rem; background-color: var(--term-bg); color: var(--term-fg); border: 1px solid var(--line); background-image: linear-gradient(var(--term-bg), var(--term-bg)), linear-gradient(to top, var(--faint), transparent); background-position: bottom, bottom; background-size: 100% 1.5rem, 100% .75rem; background-repeat: no-repeat; background-attachment: local, scroll; }
     .actions { display: flex; gap: .5rem; }
     .empty { display: flex; flex-direction: column; align-items: center; gap: .375rem; padding: 4rem 1rem; color: var(--mut); }
