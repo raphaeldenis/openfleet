@@ -127,7 +127,17 @@ describe('node-pty prebuild guard', () => {
     return header;
   };
 
-  const writeFakeNodePty = ({ prebuildCpuType, withPrebuild = true }: { prebuildCpuType: number; withPrebuild?: boolean }) => {
+  const writeFakeNodePty = ({
+    prebuildCpuType,
+    withPrebuild = true,
+    ptyNodeContents = machOHeader(prebuildCpuType),
+    spawnHelperContents = machOHeader(prebuildCpuType),
+  }: {
+    prebuildCpuType: number;
+    withPrebuild?: boolean;
+    ptyNodeContents?: Buffer | 'directory';
+    spawnHelperContents?: Buffer;
+  }) => {
     const nodePtyFolder = join(makeScratchFolder(), 'node-pty');
     mkdirSync(join(nodePtyFolder, 'lib'), { recursive: true });
     writeFileSync(join(nodePtyFolder, 'package.json'), JSON.stringify({ name: 'node-pty', version: '1.1.0' }));
@@ -135,8 +145,9 @@ describe('node-pty prebuild guard', () => {
     if (withPrebuild) {
       const prebuildFolder = join(nodePtyFolder, 'prebuilds/darwin-x64');
       mkdirSync(prebuildFolder, { recursive: true });
-      writeFileSync(join(prebuildFolder, 'pty.node'), machOHeader(prebuildCpuType));
-      writeFileSync(join(prebuildFolder, 'spawn-helper'), machOHeader(prebuildCpuType));
+      if (ptyNodeContents === 'directory') mkdirSync(join(prebuildFolder, 'pty.node'));
+      else writeFileSync(join(prebuildFolder, 'pty.node'), ptyNodeContents);
+      writeFileSync(join(prebuildFolder, 'spawn-helper'), spawnHelperContents);
     }
     return nodePtyFolder;
   };
@@ -181,6 +192,32 @@ describe('node-pty prebuild guard', () => {
     expect(result.stderr).toContain('x86_64-apple-darwin');
     expect(prebuildFoldersIn(out)).toEqual(['darwin-arm64']);
   }, BOOT_TIMEOUT_MS);
+
+  const fatHeader = () => {
+    const header = Buffer.alloc(32);
+    header.writeUInt32BE(0xcafebabe, 0);
+    return header;
+  };
+
+  const refusedPrebuilds: Array<{ name: string; ptyNodeContents?: Buffer | 'directory'; spawnHelperContents?: Buffer; mentions: string }> = [
+    { name: 'a good pty.node with a wrong spawn-helper only', spawnHelperContents: machOHeader(CPU_TYPE_ARM64), mentions: 'spawn-helper' },
+    { name: 'a pty.node that is not a Mach-O', ptyNodeContents: Buffer.from('#!/bin/sh\necho not a binary, but long enough to fill a header\n'), mentions: 'pty.node' },
+    { name: 'a pty.node that is a fat/universal Mach-O', ptyNodeContents: fatHeader(), mentions: 'pty.node' },
+    { name: 'a pty.node truncated below the header size', ptyNodeContents: Buffer.from([0xcf, 0xfa]), mentions: 'pty.node' },
+    { name: 'an empty pty.node', ptyNodeContents: Buffer.alloc(0), mentions: 'pty.node' },
+    { name: 'a pty.node that is a directory', ptyNodeContents: 'directory', mentions: 'pty.node' },
+  ];
+
+  it.each(refusedPrebuilds)('refuses $name with a one-line error and keeps the previous bundle', ({ ptyNodeContents, spawnHelperContents, mentions }) => {
+    const out = previousBundleOut();
+
+    const result = bundleX64With({ nodePtyDir: writeFakeNodePty({ prebuildCpuType: CPU_TYPE_X86_64, ptyNodeContents, spawnHelperContents }), out });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr.trim().split('\n')).toHaveLength(1);
+    expect(result.stderr).toContain(mentions);
+    expect(prebuildFoldersIn(out)).toEqual(['darwin-arm64']);
+  }, BOOT_TIMEOUT_MS);
 });
 
 describe('unknown target', () => {
@@ -193,6 +230,17 @@ describe('unknown target', () => {
     expect(result.stdout).toBe('');
     expect(result.stderr.trim().split('\n')).toHaveLength(1);
     expect(result.stderr).toContain('riscv64-unknown-linux-gnu');
+    expect(existsSync(out)).toBe(false);
+  });
+
+  it.each(['constructor', '__proto__', 'toString'])('refuses the object prototype key "%s" as an unknown target', (target) => {
+    const out = join(makeScratchFolder(), 'never-created');
+
+    const result = runBundle(['--target', target, '--out', out, '--tauri-conf', tauriConf]);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr.trim().split('\n')).toHaveLength(1);
+    expect(result.stderr).toContain('unknown target');
     expect(existsSync(out)).toBe(false);
   });
 });
