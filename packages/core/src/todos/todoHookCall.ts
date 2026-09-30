@@ -2,7 +2,8 @@ import { MAX_HOOK_LIST_ENTRIES, MAX_TODO_TEXT, MAX_TRACKED_TASKS, TODO_TOOL_NAME
 import type { ZodError } from 'zod';
 
 const MAX_TOOL_USE_ID_LENGTH = 128;
-const MAX_HEAD_LENGTH = MAX_TODO_TEXT * 2;
+/** A text is head-cut to twice the stored cap before anything reads it: room for the whitespace and masking that shrink it. */
+export const TODO_TEXT_HEAD_LENGTH = MAX_TODO_TEXT * 2;
 
 export type TodoTaskId = string | number;
 
@@ -37,7 +38,7 @@ type PlainObject = Record<string, unknown>;
 const isPlainObject = (value: unknown): value is PlainObject => typeof value === 'object' && value !== null && !Array.isArray(value);
 const isTodoToolName = (name: unknown): name is TodoToolName => (TODO_TOOL_NAMES as readonly unknown[]).includes(name);
 
-const headOfString = (value: unknown): string | undefined => (typeof value === 'string' ? value.slice(0, MAX_HEAD_LENGTH) : undefined);
+const headOfString = (value: unknown): string | undefined => (typeof value === 'string' ? value.slice(0, TODO_TEXT_HEAD_LENGTH) : undefined);
 const idOf = (value: unknown): TodoTaskId | undefined => (typeof value === 'number' && Number.isFinite(value) ? value : headOfString(value));
 const flagOf = (value: unknown): boolean | undefined => (typeof value === 'boolean' ? value : undefined);
 
