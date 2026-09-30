@@ -20,13 +20,14 @@ import { attentionItemsOf, inboxCountLabelOf } from '../working-state/attention-
 import { CommandPaletteComponent } from './command-palette.component';
 import { DaemonStatusComponent } from './daemon-status.component';
 import { HELM_NAV_ITEMS } from './nav-items';
+import { RightPanelComponent, RightPanelToggleComponent } from './right-panel.component';
 
 const RUNNING_STATES = new Set(['generating', 'starting']);
 
 @Component({
   selector: 'of-app-shell',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, RouterLinkActive, RouterOutlet, SessionListComponent, DaemonStatusComponent, CommandPaletteComponent, BannerComponent],
+  imports: [RouterLink, RouterLinkActive, RouterOutlet, SessionListComponent, DaemonStatusComponent, CommandPaletteComponent, BannerComponent, RightPanelComponent, RightPanelToggleComponent],
   template: `
     <div class="shell" data-testid="app-shell">
       <div class="body" [attr.inert]="paletteOpen() ? '' : null">
@@ -63,6 +64,7 @@ const RUNNING_STATES = new Set(['generating', 'starting']);
               <span>⌕</span><span class="placeholder">Search or run a command…</span><span class="shortcut mono">⌘K</span>
             </button>
             <span class="spacer"></span>
+            <of-right-panel-toggle />
             <of-daemon-status [connected]="events.connected()" />
             <span class="spend" data-testid="spend-today" title="Cost tracking is not implemented yet">— today</span>
           </header>
@@ -85,6 +87,7 @@ const RUNNING_STATES = new Set(['generating', 'starting']);
             <router-outlet />
           </main>
         </div>
+        <of-right-panel />
       </div>
       <footer class="statusbar" data-testid="app-statusbar" [attr.inert]="paletteOpen() ? '' : null">
         <of-daemon-status [connected]="events.connected()" />

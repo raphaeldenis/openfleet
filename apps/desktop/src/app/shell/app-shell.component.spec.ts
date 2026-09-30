@@ -556,4 +556,19 @@ describe('AppShellComponent', () => {
 
     expect(router.url).toBe('/');
   });
+
+  it('keeps the right panel closed until the top-bar toggle opens it beside the session view', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => undefined });
+    const { harness, root } = await setUp();
+    const toggle = root.querySelector('[data-testid="app-topbar"] [data-testid="right-panel-toggle"]') as HTMLElement;
+    expect(root.querySelector('[data-testid="right-panel"]')).toBeNull();
+
+    toggle.click();
+    await harness.fixture.whenStable();
+
+    const panel = root.querySelector('[data-testid="right-panel"]') as HTMLElement;
+    expect(panel).not.toBeNull();
+    expect(panel.querySelector('[data-testid="todos-no-session"]')).not.toBeNull();
+    vi.unstubAllGlobals();
+  });
 });
