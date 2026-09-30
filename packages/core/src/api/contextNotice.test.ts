@@ -2,7 +2,7 @@ import { appendFileSync, mkdirSync, mkdtempSync, symlinkSync, unlinkSync, writeF
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ServerEvent, Session } from '@openfleet/shared';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
 import { ApprovalService } from '../governance/approvalService.js';
@@ -52,6 +52,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await server.close();
   if (originalConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
   else process.env.CLAUDE_CONFIG_DIR = originalConfigDir;
@@ -210,6 +211,29 @@ describe('user is told in the inbox data when a manager session is a good moment
     expect(noticeOf(manager)).toBe(400_000);
   });
 
+  it.each([
+    { hook_event_name: 'UserPromptSubmit' },
+    { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: {} },
+    { hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: {} },
+  ])('measures at Stop only: a $hook_event_name hook raises nothing whatever the transcript holds', async (hook) => {
+    const manager = await createManager();
+    contextGrowsTo(manager, 500_000);
+
+    await postHook(manager, hook);
+
+    expect(noticeOf(manager)).toBeUndefined();
+  });
+
+  it('still answers the Stop and ends the turn when the notice measure throws', async () => {
+    const manager = await createManager();
+    vi.spyOn(ContextNotice.prototype, 'measureAtStop').mockImplementation(() => { throw new Error('boom'); });
+
+    const answer = await stop(manager);
+
+    expect(answer).toEqual({});
+    expect(sessionOf(manager).state).toBe('idle');
+  });
+
   it('emits nothing when a clear finds no notice to remove', async () => {
     const manager = await createManager();
     const updatesBefore = updatesOf(manager).length;
@@ -344,7 +368,7 @@ describe('the daemon trusts only the main chain of the session\'s own transcript
     const manager = await createManager();
     contextGrowsTo(manager, 100_000);
     await stop(manager);
-    const outside = join(mkdtempSync(join(tmpdir(), 'of-cn-outside-')), 'elsewhere.jsonl');
+    const outside = join(mkdtempSync(join(tmpdir(), 'of-cn-outside-')), `${manager}.jsonl`);
     writeFileSync(outside, assistantLine({ contextTokens: 900_000 }));
     unlinkSync(transcriptOf(manager));
     symlinkSync(outside, transcriptOf(manager));
