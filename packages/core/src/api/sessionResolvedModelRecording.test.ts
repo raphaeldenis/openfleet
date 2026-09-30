@@ -642,6 +642,21 @@ describe('resolved model recording from a session\'s transcript', () => {
     expect(String(nameMismatchWarnings[0]![0])).not.toMatch(/[\n\u001b]/);
   });
 
+  it('logs a hostile transcript name on one line, without its Unicode line separators or C1 control characters', async () => {
+    const id = await createSession('opus');
+    const lineSeparatorsAndC1Controls = '\u2028\u2029\u0085\u009b';
+    const hostilePath = join(projectDirectory, `${randomUUID()}FORGED${lineSeparatorsAndC1Controls}.jsonl`);
+    writeFileSync(hostilePath, assistantLine({ model: 'claude-model-of-a-hostile-name' }));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await sendHook(id, preToolUse, hostilePath);
+    const nameMismatchWarnings = warnSpy.mock.calls.filter((call) => String(call[0]).includes('does not match'));
+    warnSpy.mockRestore();
+
+    expect(nameMismatchWarnings).toHaveLength(1);
+    expect(String(nameMismatchWarnings[0]![0])).not.toMatch(/[\u0080-\u009f\u2028\u2029]/);
+  });
+
   it('keeps following the transcript of the cleared conversation, not the launch one, after a permission-mode relaunch that follows a /clear', async () => {
     const id = await createSession('opus');
     const clearedCliSessionId = randomUUID();

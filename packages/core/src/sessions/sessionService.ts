@@ -174,6 +174,8 @@ function nearestExistingAncestor(path: string): { existingAncestor: string; unbo
 // instead. Never throws: a missing file, missing directory, or missing projects directory is just
 // "untrusted".
 const CLI_SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// JSON.stringify escapes ASCII controls but passes C1 controls (U+0080-U+009F, incl. the CSI U+009B) and the U+2028/U+2029 line separators through.
+const LINE_BREAKING_CHARACTERS_JSON_LEAVES_RAW = /[\u0080-\u009f\u2028\u2029]/g;
 
 function isTrustedTranscriptPath(path: string): boolean {
   if (!path.endsWith('.jsonl')) return false;
@@ -692,7 +694,7 @@ export class SessionService {
     if (pending.nameMismatchLogged) return;
     pending.nameMismatchLogged = true;
     const expectedName = `${this.currentCliSessionIdOf(sessionId)}.jsonl`;
-    log('warn', `resolved model: transcript name does not match the session's CLI id: session ${sessionId}, expected ${expectedName}, got ${JSON.stringify(basename(path))}`);
+    log('warn', `resolved model: transcript name does not match the session's CLI id: session ${sessionId}, expected ${expectedName}, got ${JSON.stringify(basename(path).replace(LINE_BREAKING_CHARACTERS_JSON_LEAVES_RAW, ''))}`);
   }
 
   // One attempt per hook until the launch's resolution is found, plus one retry a moment after a hook whose
