@@ -20,6 +20,7 @@ import { expandMentions } from './notes/mentionExpander.js';
 import { nodeDocsFolderFs } from './notes/nodeDocsFolderFs.js';
 import { NoteRepository } from './notes/noteRepository.js';
 import { NoteService } from './notes/noteService.js';
+import { closeWithin } from './process/boundedClose.js';
 import { ProjectRepository } from './projects/projectRepository.js';
 import { SessionService } from './sessions/sessionService.js';
 import { DataStoreRepository } from './stores/dataStoreRepository.js';
@@ -30,13 +31,15 @@ import { StopRefusal } from './workingState/stopRefusal.js';
 import { WorkingStateService } from './workingState/workingStateService.js';
 import { loadDaemonSettings } from './workingState/workingStateSettings.js';
 
+const REFUSED_BOOT_CLOSE_TIMEOUT_MS = 5000;
+
 export interface Daemon {
   server: Awaited<ReturnType<typeof startServer>>;
   db: ReturnType<typeof openDatabase>;
   close: () => Promise<void>;
 }
 
-// Builds every service from the config and starts serving; a throw before the server listens means the boot is refused.
+// Builds every service from the config and starts serving; a throw at any point refuses the boot, after closing whatever already started.
 export async function startDaemon(config: Config): Promise<Daemon> {
   const db = openDatabase(config.dbPath);
   const bus = new EventBus();
@@ -71,17 +74,19 @@ export async function startDaemon(config: Config): Promise<Daemon> {
   // A launch dir a crashed or killed daemon never cleaned up would otherwise sit on disk carrying a live
   // token indefinitely; every resume below rewrites its own launch dir from scratch with rotated tokens
   // anyway, so nothing here is worth preserving across a restart (AUD-11).
-  sweepStaleSessions(config.sessionsRoot);
-  await sessions.resumeAll();
-  pulseScheduler.start();
-
-  return {
-    server,
-    db,
-    close: async () => {
-      pulseScheduler.stop();
-      await sessions.closeAll();
-      await server.close();
-    },
+  const close = async () => {
+    pulseScheduler.stop();
+    await sessions.closeAll();
+    await server.close();
   };
+  try {
+    sweepStaleSessions(config.sessionsRoot);
+    await sessions.resumeAll();
+    pulseScheduler.start();
+  } catch (error) {
+    await closeWithin({ timeoutMs: REFUSED_BOOT_CLOSE_TIMEOUT_MS, close });
+    throw error;
+  }
+
+  return { server, db, close };
 }

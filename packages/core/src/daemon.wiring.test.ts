@@ -349,6 +349,41 @@ describe('daemon boots over what the previous run left behind', () => {
   });
 });
 
+describe('daemon refuses to boot after its server listens', () => {
+  const failPulseSchedulerStart = () => vi.spyOn(PulseScheduler.prototype, 'start').mockImplementation(() => { throw new Error('managers table unreadable'); });
+
+  it('rejects with the failure and closes the sessions and the server it started', async () => {
+    failPulseSchedulerStart();
+    const closeServer = vi.spyOn(Server.prototype, 'close');
+    const closeAll = vi.spyOn(SessionService.prototype, 'closeAll');
+
+    await expect(bootDaemon()).rejects.toThrow('managers table unreadable');
+
+    expect(closeAll).toHaveBeenCalledTimes(1);
+    expect(closeServer).toHaveBeenCalled();
+  });
+
+  it('closes the sessions a resume just relaunched before it refuses', async () => {
+    failPulseSchedulerStart();
+    const stop = vi.spyOn(PulseScheduler.prototype, 'stop');
+    const closeAll = vi.spyOn(SessionService.prototype, 'closeAll');
+    const resumeAll = vi.spyOn(SessionService.prototype, 'resumeAll');
+
+    await expect(bootDaemon()).rejects.toThrow();
+
+    const callOrderOf = (spy: { mock: { invocationCallOrder: number[] } }) => spy.mock.invocationCallOrder[0]!;
+    expect(callOrderOf(resumeAll)).toBeLessThan(callOrderOf(stop));
+    expect(callOrderOf(stop)).toBeLessThan(callOrderOf(closeAll));
+  });
+
+  it('still refuses with the original failure when closing throws', async () => {
+    failPulseSchedulerStart();
+    vi.spyOn(SessionService.prototype, 'closeAll').mockRejectedValue(new Error('close blew up'));
+
+    await expect(bootDaemon()).rejects.toThrow('managers table unreadable');
+  });
+});
+
 describe('daemon shutdown', () => {
   it('closes every session and stops answering', async () => {
     await bootDaemon();
