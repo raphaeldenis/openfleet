@@ -41,9 +41,11 @@ On another Mac (AirDrop, browser or Messages add the quarantine flag) Gatekeeper
 
 ### Pre-push hook
 
-`pnpm install` installs a husky `pre-push` hook (`scripts/pre-push.sh`) that runs what CI runs: `pnpm typecheck`, `pnpm test`, `pnpm --filter @openfleet/desktop test`, stopping at the first failure. It puts `/opt/homebrew/bin` first in `PATH` when present and refuses a Node older than 26.
+`pnpm install` installs a husky `pre-push` hook (`scripts/pre-push.sh`) that runs what CI runs: `pnpm typecheck`, `pnpm test`, `pnpm --filter @openfleet/desktop test`, stopping at the first failure. It also re-runs the core tests without `claude` in `PATH` (CI has none; skipped when `claude` is not installed), runs `cargo test` and `cargo clippy -- -D warnings` when the push touches `apps/desktop/src-tauri`, and runs the e2e when it touches `apps/desktop/src`, `packages/core/src/api` or `packages/shared/src` and ports 1420/7332 are free (`OPENFLEET_PREPUSH_E2E=1` forces it, `=0` skips it). `OPENFLEET_PREPUSH_DRYRUN=1 sh scripts/pre-push.sh` lists the steps without running them. It puts `/opt/homebrew/bin` first in `PATH` when present and refuses a Node older than 26.
 
-`pnpm e2e` is opt-in (needs ports 1420 and 7332 free): `OPENFLEET_PREPUSH_E2E=1 git push`.
+The e2e runs automatically when the pushed range touches `apps/desktop/src`, `packages/core/src/api` or `packages/shared/src` and ports 1420 and 7332 are free; `OPENFLEET_PREPUSH_E2E=1 git push` forces it (fails on busy ports), `OPENFLEET_PREPUSH_E2E=0` skips it.
+
+Cost: the claude-free step runs the core tests a second time (about 35 s more). Cargo is skipped with a notice when it is not installed, and the first push that touches `src-tauri` may download the Node sidecar (network) and bundle the daemon.
 
 `git push --no-verify` is the only bypass. The hook path is shared by all worktrees through the common `.git/config`; each worktree needs one `pnpm install` (or `pnpm prepare`) to generate its untracked `.husky/_`.
 
