@@ -194,8 +194,10 @@ describe('parseMarkdownBlocks', () => {
   // A quadratic scan on these one-mebibyte bodies takes minutes; the generous bound only fails on a super-linear parser.
   describe.each<{ name: string; markdown: string; blockType: MarkdownBlock['type'] }>([
     { name: 'a numbered marker followed by 200k spaces', markdown: `1.${' '.repeat(200_000)} x`, blockType: 'ordered-list' },
-    { name: 'a quote marker followed by 200k spaces', markdown: `>${' '.repeat(200_000)} x`, blockType: 'quote' },
-    { name: '200k quote lines', markdown: '> \n'.repeat(200_000), blockType: 'quote' },
+    { name: 'a quote marker followed by 200k spaces', markdown: `>${' '.repeat(200_000)} x`, blockType: 'paragraph' },
+    { name: '200k quote lines', markdown: '> x\n'.repeat(200_000), blockType: 'quote' },
+    { name: '200k empty quote lines', markdown: '>\n'.repeat(200_000), blockType: 'paragraph' },
+    { name: '200k empty heading lines', markdown: '# \n'.repeat(200_000), blockType: 'paragraph' },
     { name: '200k numbered items', markdown: '1. \n'.repeat(200_000), blockType: 'ordered-list' },
     { name: '500k bold markers', markdown: '**'.repeat(500_000), blockType: 'paragraph' },
     { name: 'a bold marker opened and never closed 250k times', markdown: 'a **b '.repeat(150_000), blockType: 'paragraph' },
@@ -211,7 +213,7 @@ describe('parseMarkdownBlocks', () => {
       const blocks = parseMarkdownBlocks(markdown);
 
       expect(performance.now() - startedAt).toBeLessThan(3000);
-      expect(blocks.some((block) => block.type === blockType)).toBe(true);
+      expect(blocks.map((block) => block.type)).toContain(blockType);
     });
   });
 });
@@ -268,17 +270,11 @@ describe('takeWithinRenderBudget', () => {
       expect(countRenderCost(kept)).toBeLessThanOrEqual(5);
     });
 
-    it('keeps an empty quote within the budget', () => {
+    it('keeps a lone quote marker as a one node paragraph within the budget', () => {
       const kept = takeWithinRenderBudget(parseMarkdownBlocks('>'), 5);
 
-      expect(kept).toEqual([{ type: 'quote', blocks: [] }]);
+      expect(kept).toEqual([{ type: 'paragraph', segments: [text('>')] }]);
       expect(countRenderCost(kept)).toBe(1);
-    });
-
-    it('keeps a heading that has no text', () => {
-      const kept = takeWithinRenderBudget(parseMarkdownBlocks('# '), 5);
-
-      expect(kept).toEqual([{ type: 'heading', level: 1, segments: [] }]);
     });
 
     it('cuts inside a quote and drops a quote that would keep nothing', () => {

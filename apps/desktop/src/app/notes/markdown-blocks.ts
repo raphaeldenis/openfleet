@@ -12,7 +12,6 @@ const HEADING = /^(#{1,3}) +(\S.*)$/;
 const LIST_ITEM = /^[-*] +(.*)$/;
 const ORDERED_ITEM = /^\d{1,9}\. +(.*)$/;
 const QUOTE_LINE = /^> ?(.*)$/;
-const QUOTE_WITH_TEXT = /^> ?\s*\S/;
 const NUMBER_THAT_CAN_INTERRUPT_A_PARAGRAPH = 1;
 const LINE_BREAK = /\r\n|[\n\r\u2028\u2029]/;
 const FENCE = '```';
@@ -75,7 +74,7 @@ function parseLines(lines: string[], quoteDepth = 0): MarkdownBlock[] {
       continue;
     }
 
-    if (canOpenQuote && QUOTE_WITH_TEXT.test(line)) {
+    if (canOpenQuote && startsQuote(line)) {
       const quotedLines: string[] = [];
       for (; index < lines.length && QUOTE_LINE.test(lines[index]!); index += 1) {
         quotedLines.push(QUOTE_LINE.exec(lines[index]!)![1]!);
@@ -113,8 +112,13 @@ function startsParagraphContinuation(line: string, canOpenQuote: boolean): boole
     HEADING.test(line) ||
     LIST_ITEM.test(line) ||
     startsOrderedListThatCanInterrupt(line) ||
-    (canOpenQuote && QUOTE_WITH_TEXT.test(line));
+    (canOpenQuote && startsQuote(line));
   return !isBlank && !startsAnotherBlock;
+}
+
+function startsQuote(line: string): boolean {
+  const quotedText = QUOTE_LINE.exec(line)?.[1];
+  return quotedText !== undefined && quotedText.trim() !== '';
 }
 
 function startsOrderedListThatCanInterrupt(line: string): boolean {
