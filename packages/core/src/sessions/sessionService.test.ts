@@ -1829,6 +1829,41 @@ describe('SessionService submit-keystroke hostile cases', () => {
       expect(service.get(session.id)!.state).toBe('idle');
     });
 
+    it('still catches the interrupt marker after the transcript is truncated and rewritten shorter than the armed offset', async () => {
+      vi.useFakeTimers();
+      const { service } = setup();
+      const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+      const transcriptPath = makeTranscriptFile();
+      appendFileSync(transcriptPath, `${'x'.repeat(5_000)}\n`);
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: transcriptPath }));
+
+      service.writeRaw(session.id, '\x1b');
+      writeFileSync(transcriptPath, interruptedLine());
+      await vi.advanceTimersByTimeAsync(TRANSCRIPT_INTERRUPT_POLL_MS);
+
+      expect(service.get(session.id)!.state).toBe('idle');
+    });
+
+    it('catches a marker line whose bytes arrive split across two polls', async () => {
+      vi.useFakeTimers();
+      const { service } = setup();
+      const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+      const transcriptPath = makeTranscriptFile();
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: transcriptPath }));
+      const markerLine = interruptedLine();
+      const splitAt = Math.floor(markerLine.length / 2);
+
+      service.writeRaw(session.id, '\x1b');
+      appendFileSync(transcriptPath, markerLine.slice(0, splitAt));
+      await vi.advanceTimersByTimeAsync(TRANSCRIPT_INTERRUPT_POLL_MS);
+      expect(service.get(session.id)!.state).toBe('generating');
+
+      appendFileSync(transcriptPath, markerLine.slice(splitAt));
+      await vi.advanceTimersByTimeAsync(TRANSCRIPT_INTERRUPT_POLL_MS);
+
+      expect(service.get(session.id)!.state).toBe('idle');
+    });
+
     it('documents current behaviour: any raw write containing the ESC byte arms the watch, not only a bare Escape keypress (e.g. an arrow key\'s CSI sequence)', async () => {
       vi.useFakeTimers();
       const { service } = setup();
