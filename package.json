@@ -14,6 +14,7 @@
     "dev:desktop": "pnpm --filter @openfleet/desktop tauri dev",
     "dev": "concurrently -k \"pnpm dev:core\" \"pnpm dev:desktop\"",
     "build:dmg": "bash scripts/release/build-local.sh",
+    "build:dmg:all": "bash scripts/release/build-local.sh --target aarch64-apple-darwin && bash scripts/release/build-local.sh --target x86_64-apple-darwin",
     "e2e": "pnpm --filter @openfleet/desktop exec playwright test",
     "postinstall": "pnpm --filter @openfleet/core run fix-node-pty-permissions",
     "prepare": "husky"
