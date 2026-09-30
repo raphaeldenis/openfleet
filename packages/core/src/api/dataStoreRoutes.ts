@@ -5,7 +5,8 @@ import {
   type DataStore, type DataStoreDetail, type DsRow, type DsRowHistoryEntry, type Page, type RowActorKind,
 } from '@openfleet/shared';
 import { z } from 'zod';
-import { DuplicateNameError, RowNotFoundError, StoreNotFoundError, UnknownColumnError, type DataStoreRepository } from '../stores/dataStoreRepository.js';
+import { ProjectNotFoundError } from '../notes/docsFolderService.js';
+import { DuplicateNameError,RowNotFoundError, StoreNotFoundError, UnknownColumnError, type DataStoreRepository } from '../stores/dataStoreRepository.js';
 import {
   ConstraintError, DaemonSetColumnError, InvalidCellValueError, InvalidNameError, InvalidQueryError, ReferencedRecordMissingError, StoreRowCapError, type DataStoreService,
 } from '../stores/dataStoreService.js';
@@ -34,12 +35,6 @@ const ChangesQuerySchema = ProjectScopeSchema.extend(pageQuerySchema(MAX_HISTORY
 export interface DataStoreRouteDeps {
   stores: DataStoreService;
   storeRepo: DataStoreRepository;
-}
-
-class ProjectNotFoundError extends Error {
-  constructor(projectId: string) {
-    super(`project not found: ${projectId}`);
-  }
 }
 
 function mapMissingReferenceTo<T>(run: () => T, replacement: Error): T {

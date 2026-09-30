@@ -1,4 +1,6 @@
+import { readdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { ZodError, z } from 'zod';
 import { ERROR_CODES, OpenFleetError, type ErrorCode } from '@openfleet/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -11,10 +13,16 @@ import { FileBackedNoteError, NoteNotFoundError, NoteTooLargeError, StaleRevisio
 import {
   DaemonShuttingDownError, MessageIdAlreadyUsedError, SessionClosedError, SessionReopenError, TooManyPendingMessagesError, UnknownHarnessError,
 } from '../sessions/sessionService.js';
-import { DuplicateNameError, RowNotFoundError, StoreNotFoundError, UnknownColumnError } from '../stores/dataStoreRepository.js';
+import { DuplicateNameError, RowNotFoundError, StoreNotFoundError, UnknownColumnError, UnknownColumnReferenceError } from '../stores/dataStoreRepository.js';
 import {
-  ConstraintError, DaemonSetColumnError, InvalidCellValueError, InvalidNameError, InvalidQueryError, StoreRowCapError, ViewNotFoundError,
+  ConstraintError, DaemonSetColumnError, DuplicateIdError, InvalidActorError, InvalidCellValueError, InvalidColumnDefinitionError, InvalidNameError, InvalidQueryError,
+  InvalidViewConfigError, ReferencedRecordMissingError, StoreHasRowsError, StoreRowCapError, ViewNotFoundError,
 } from '../stores/dataStoreService.js';
+import { NoteIsNotFileBackedError, ProjectHasNoDocsFolderError } from '../notes/docsFolderService.js';
+import { SessionHasNoProjectError, SessionNotFoundForHandoffError } from '../notes/handoffService.js';
+import { SectionError } from '../notes/noteSections.js';
+import { WorktreeError } from '../git/worktrees.js';
+import { WorkingStateTooLargeError } from '../workingState/workingStateService.js';
 import { describeError } from './describeError.js';
 
 const ID_PATTERN = /^[0-9a-f]{8}$/;
@@ -59,12 +67,51 @@ const domainErrorCodes: [string, () => unknown, ErrorCode][] = [
   ['InvalidNameError', () => new InvalidNameError('x'), 'invalid_body'],
   ['InvalidQueryError', () => new InvalidQueryError('x'), 'invalid_body'],
   ['UnknownColumnError', () => new UnknownColumnError(['c1']), 'invalid_body'],
+  ['UnknownColumnReferenceError', () => new UnknownColumnReferenceError(['c1']), 'invalid_body'],
+  ['ReferencedRecordMissingError', () => new ReferencedRecordMissingError('parent row missing'), 'constraint_violation'],
+  ['StoreHasRowsError', () => new StoreHasRowsError('s1', 3), 'store_has_rows'],
+  ['InvalidViewConfigError', () => new InvalidViewConfigError('Invalid view config'), 'invalid_body'],
+  ['InvalidColumnDefinitionError', () => new InvalidColumnDefinitionError('Option ids must be unique'), 'invalid_body'],
+  ['InvalidActorError', () => new InvalidActorError('Actor kind must be human, agent or trigger'), 'invalid_body'],
+  ['DuplicateIdError', () => new DuplicateIdError('That id is already in use'), 'duplicate_id'],
+  ['SectionError', () => new SectionError('section "Plan" not found'), 'invalid_body'],
+  ['WorkingStateTooLargeError', () => new WorkingStateTooLargeError(9000, 8000), 'state_too_large'],
+  ['SessionNotFoundForHandoffError', () => new SessionNotFoundForHandoffError('s1'), 'session_not_found'],
+  ['SessionHasNoProjectError', () => new SessionHasNoProjectError('s1'), 'project_not_found'],
+  ['ProjectHasNoDocsFolderError', () => new ProjectHasNoDocsFolderError('p1'), 'no_docs_folder'],
+  ['NoteIsNotFileBackedError', () => new NoteIsNotFileBackedError('n1'), 'not_file_backed'],
+  ['WorktreeError invalid_branch', () => new WorktreeError('invalid_branch', 'invalid branch name: a b'), 'invalid_body'],
+  ['WorktreeError git_failed', () => new WorktreeError('git_failed', 'fatal: /w/a is not a repository'), 'internal_error'],
+  ['WorktreeError exists',() => new WorktreeError('exists', 'worktree already exists: /w/a'), 'duplicate_name'],
   ['PayloadTooLargeError', () => new PayloadTooLargeError('body exceeds 1 bytes'), 'payload_too_large'],
   ['InvalidJsonBodyError', () => new InvalidJsonBodyError('Unexpected token'), 'invalid_json'],
   ['a SQLite foreign key failure', foreignKeyError, 'project_not_found'],
   ['the stuck-connection error', () => new StuckConnectionError(new Error('disk I/O error')), 'db_stuck'],
   ['an OpenFleetError', () => new OpenFleetError('outside_lineage', 'not your child.'), 'outside_lineage'],
 ];
+
+describe('describeError: every Error subclass of core is mapped or internal on purpose', () => {
+  const CORE_DIRECTORY = fileURLToPath(new URL('../', import.meta.url));
+  const ERROR_SUBCLASS_DECLARATION = /class (\w+) extends \w*Error\b/g;
+  // Boot-time failures answered by bootFailure.ts, and a write failure whose cause is SQL: none reaches a caller as itself.
+  const INTERNAL_ON_PURPOSE = ['ConfigFileError', 'DatabaseOpenError', 'PortInUseError', 'DataStoreWriteError'];
+
+  const declaredErrorClasses = (): string[] =>
+    readdirSync(CORE_DIRECTORY, { recursive: true, encoding: 'utf8' })
+      .filter((file) => file.endsWith('.ts') && !file.endsWith('.test.ts'))
+      .flatMap((file) => [...readFileSync(`${CORE_DIRECTORY}${file}`, 'utf8').matchAll(ERROR_SUBCLASS_DECLARATION)].map(([, name]) => name!));
+
+  it('finds the error classes declared in core', () => {
+    expect(declaredErrorClasses().length).toBeGreaterThan(40);
+  });
+
+  it('leaves no declared error class out of the mapping table', () => {
+    const mappedClasses = new Set(domainErrorCodes.map(([, makeError]) => (makeError() as Error).constructor.name));
+    const unlisted = declaredErrorClasses().filter((name) => !mappedClasses.has(name) && !INTERNAL_ON_PURPOSE.includes(name));
+
+    expect(unlisted).toEqual([]);
+  });
+});
 
 describe('describeError: T3 domain classes', () => {
   it.each(domainErrorCodes)('maps %s to its code', (_label, makeError, code) => {

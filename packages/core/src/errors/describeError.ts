@@ -7,14 +7,21 @@ import { ApprovalError } from '../governance/approvalService.js';
 import { shortId } from '../ids.js';
 import { log } from '../logger.js';
 import { ModelConfigReadOnlyError, ModelConfigUnreadableError } from '../models.js';
-import { NoteFileUnreadableError, PathEscapesDocsFolderError, ProjectNotFoundError } from '../notes/docsFolderService.js';
+import { WorktreeError } from '../git/worktrees.js';
+import {
+  NoteFileUnreadableError, NoteIsNotFileBackedError, PathEscapesDocsFolderError, ProjectHasNoDocsFolderError, ProjectNotFoundError,
+} from '../notes/docsFolderService.js';
+import { SessionHasNoProjectError, SessionNotFoundForHandoffError } from '../notes/handoffService.js';
+import { SectionError } from '../notes/noteSections.js';
+import { WorkingStateTooLargeError } from '../workingState/workingStateService.js';
 import { FileBackedNoteError, NoteNotFoundError, NoteTooLargeError, StaleRevisionError, VersionNotFoundError } from '../notes/noteService.js';
 import {
   DaemonShuttingDownError, MessageIdAlreadyUsedError, SessionClosedError, SessionReopenError, TooManyPendingMessagesError, UnknownHarnessError,
 } from '../sessions/sessionService.js';
 import { DuplicateNameError, RowNotFoundError, StoreNotFoundError, UnknownColumnError } from '../stores/dataStoreRepository.js';
 import {
-  ConstraintError, DaemonSetColumnError, InvalidCellValueError, InvalidNameError, InvalidQueryError, StoreRowCapError, ViewNotFoundError,
+  ConstraintError, DaemonSetColumnError, DuplicateIdError, InvalidActorError, InvalidCellValueError, InvalidColumnDefinitionError, InvalidNameError, InvalidQueryError,
+  InvalidViewConfigError, StoreHasRowsError, StoreRowCapError, ViewNotFoundError,
 } from '../stores/dataStoreService.js';
 
 const MAX_MESSAGE_CHARS = 300;
@@ -31,7 +38,7 @@ export interface ErrorScope {
 interface Entry { code: ErrorCode; message: string; hint?: string; detail?: unknown }
 type Rule = (error: unknown) => Entry | undefined;
 
-const when = <E extends Error>(ErrorClass: new (...args: never[]) => E, describe: (error: E) => Entry): Rule =>
+const when = <E extends Error>(ErrorClass: new (...args: never[]) => E, describe: (error: E) => Entry | undefined): Rule =>
   (error) => (error instanceof ErrorClass ? describe(error) : undefined);
 
 const asIs = (code: ErrorCode) => (error: Error): Entry => ({ code, message: error.message });
@@ -50,6 +57,13 @@ const REOPEN_ENTRY_BY_CODE: Record<SessionReopenError['code'], Omit<Entry, 'code
   directory_changed: { message: 'the session directory changed since the session closed.', hint: 'restore the original directory, then reopen the session.' },
   directory_unreadable: { message: 'the session directory cannot be read.', hint: 'fix its permissions, then reopen the session.' },
   launch_failed: { message: 'the session failed to launch.' },
+};
+
+// A failed git command stays internal: its message is git's own output.
+const WORKTREE_ENTRY_BY_CODE: Record<WorktreeError['code'], (error: WorktreeError) => Entry | undefined> = {
+  invalid_branch: asIs('invalid_body'),
+  exists: () => ({ code: 'duplicate_name', message: 'the worktree already exists.' }),
+  git_failed: () => undefined,
 };
 
 const RULES: Rule[] = [
@@ -90,6 +104,19 @@ const RULES: Rule[] = [
   when(InvalidNameError, asDetail('invalid_body', 'the name is invalid.')),
   when(InvalidQueryError, asDetail('invalid_body', 'the query is invalid.')),
   when(UnknownColumnError, asDetail('invalid_body', 'a column is unknown.')),
+  when(StoreHasRowsError, asIs('store_has_rows')),
+  when(DuplicateIdError, asIs('duplicate_id')),
+  when(InvalidViewConfigError, asIs('invalid_body')),
+  when(InvalidColumnDefinitionError, asIs('invalid_body')),
+  when(InvalidActorError, asIs('invalid_body')),
+  when(SectionError, asIs('invalid_body')),
+
+  when(WorkingStateTooLargeError, asIs('state_too_large')),
+  when(SessionNotFoundForHandoffError, asIs('session_not_found')),
+  when(SessionHasNoProjectError, asIs('project_not_found')),
+  when(ProjectHasNoDocsFolderError, asIs('no_docs_folder')),
+  when(NoteIsNotFileBackedError, asIs('not_file_backed')),
+  when(WorktreeError, (error) => WORKTREE_ENTRY_BY_CODE[error.code](error)),
 ];
 
 const UNEXPECTED_ENTRY: Entry = { code: 'internal_error', message: 'the daemon hit an unexpected error.' };

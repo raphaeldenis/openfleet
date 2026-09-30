@@ -57,6 +57,10 @@ export const ERROR_CODES = {
   outside_lineage: { kind: 'conflict', retry: 'never' },
   not_a_manager: { kind: 'conflict', retry: 'never' },
   directory_in_use: { kind: 'conflict', retry: 'never' },
+  store_has_rows: { kind: 'conflict', retry: 'never' },
+  duplicate_id: { kind: 'conflict', retry: 'never' },
+  no_docs_folder: { kind: 'conflict', retry: 'never' },
+  not_file_backed: { kind: 'conflict', retry: 'never' },
 
   payload_too_large: { kind: 'too_large' },
   note_too_large: { kind: 'too_large' },

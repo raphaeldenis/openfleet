@@ -49,6 +49,7 @@ describe('the wire contract of the registry', () => {
     directory_unreadable: 'conflict/never', already_resolved: 'conflict/never', config_unreadable: 'conflict/never',
     config_read_only: 'conflict/never', message_id_reused: 'conflict/never', too_many_pending: 'conflict/later', children_cap: 'conflict/later',
     outside_lineage: 'conflict/never', not_a_manager: 'conflict/never', directory_in_use: 'conflict/never',
+    store_has_rows: 'conflict/never', duplicate_id: 'conflict/never', no_docs_folder: 'conflict/never', not_file_backed: 'conflict/never',
     payload_too_large: 'too_large/never', note_too_large: 'too_large/never', row_cap: 'too_large/never', state_too_large: 'too_large/never',
     daemon_shutting_down: 'unavailable/later', daemon_degraded: 'unavailable/later',
     internal_error: 'internal/later', launch_failed: 'internal/later', resume_timeout: 'internal/later', db_stuck: 'internal/later',
