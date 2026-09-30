@@ -311,6 +311,41 @@ describe('DocsFolderService writeThrough', () => {
     expect(noteRepo.listVersions(note.id).map((version) => version.author)).toEqual([AUTHOR, 'disk']);
   });
 
+  it('QE: refuses inside a bare SAVEPOINT as well, leaving no stray file and the savepoint intact', () => {
+    const { db, fakeFs, noteRepo, docs } = setup();
+    const note = docs.createFileBackedNote({ projectId: 'p1', folder: 'specs', title: 'x', bodyMd: 'v1', author: AUTHOR });
+    const filesBefore = new Map(fakeFs.files);
+    db.exec('SAVEPOINT caller');
+
+    const write = () => docs.writeThrough(note.id, { bodyMd: 'v2', expectedRev: note.rev, author: AUTHOR });
+
+    expect(write).toThrow(/outer transaction/);
+    expect(db.isTransaction).toBe(true);
+    db.exec('RELEASE caller');
+    expect(fakeFs.files).toEqual(filesBefore);
+    expect(noteRepo.get(note.id)).toMatchObject({ bodyMd: 'v1', rev: 1 });
+  });
+
+  it('QE: after a COMMIT failure past the rename the connection is out of the transaction, no temp file remains, and a second write succeeds once reconciled', () => {
+    const { db, fakeFs, noteRepo, docs } = setup();
+    const note = docs.createFileBackedNote({ projectId: 'p1', folder: 'specs', title: 'x', bodyMd: 'v1', author: AUTHOR });
+    const realExec = db.exec.bind(db);
+    const failCommit = vi.spyOn(db, 'exec').mockImplementation((sql: string) => {
+      if (sql === 'COMMIT') throw new Error('disk I/O error');
+      return realExec(sql);
+    });
+    expect(() => docs.writeThrough(note.id, { bodyMd: 'v2', expectedRev: note.rev, author: AUTHOR })).toThrow('disk I/O error');
+    failCommit.mockRestore();
+
+    expect(db.isTransaction).toBe(false);
+    expect([...fakeFs.files.keys()]).toEqual([note.filePath]);
+    docs.reconcileOnBoot('p1');
+    const reconciled = noteRepo.get(note.id)!;
+    const second = docs.writeThrough(note.id, { bodyMd: 'v3', expectedRev: reconciled.rev, author: AUTHOR });
+    expect(second).toMatchObject({ bodyMd: 'v3', rev: 3 });
+    expect(fakeFs.files.get(note.filePath!)).toBe('v3');
+  });
+
   it('checks the size cap before writing any temp file', () => {
     const { fakeFs, docs } = setup();
     const note = docs.createFileBackedNote({ projectId: 'p1', folder: 'specs', title: 'x', bodyMd: 'v1', author: AUTHOR });
