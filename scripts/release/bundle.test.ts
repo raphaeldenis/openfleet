@@ -469,7 +469,7 @@ describe('the bundled daemon', () => {
     daemon.kill('SIGTERM');
     const exitCode = await Promise.race([exited, new Promise<string>((resolve) => setTimeout(() => resolve('timeout'), SHUTDOWN_TIMEOUT_MS))]);
 
-    expect(health).toEqual({ ok: true, version: TEST_VERSION });
+    expect(health).toEqual({ ok: true, version: TEST_VERSION, status: 'ok', issues: 0 });
     expect(appliedCount).toBe(sqlFilesIn(SOURCE_MIGRATIONS).length);
     expect(exitCode).toBe(0);
   }, BOOT_TIMEOUT_MS);
