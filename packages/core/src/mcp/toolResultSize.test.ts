@@ -39,6 +39,7 @@ const BYTE_BUDGET = {
   searchNotes: 3090,
   describeDataStore: 1540,
   queryDataStore: 38600,
+  queryDataStoreColumnar: 21200,
   getWorkingState: 160,
 };
 const NOTE_COUNT = 20;
@@ -335,6 +336,76 @@ describe('MCP tool results are compact', () => {
       expect(note.expandedBody).toContain('target body');
     });
 
+    describe('get_note with mentions_only', () => {
+      it('agent reads the body once plus one block per mention, with no expandedBody', async () => {
+        const mentioned = parsed(await call('create_note', { title: 'Target', body_md: 'target body\n\nwith a blank line', shared: true }));
+        const created = parsed(await call('create_note', { title: 'Source', body_md: `see @note:${mentioned.id}` }));
+
+        const note = parsed(await call('get_note', { note: created.id, mentions_only: true }));
+
+        expect(note.bodyMd).toBe(`see @note:${mentioned.id}`);
+        expect(note).not.toHaveProperty('expandedBody');
+        expect(note.mentionBlocks).toEqual([`--- from note @note:${mentioned.id} (Target, p1) ---\ntarget body\n\nwith a blank line\n--- end @note:${mentioned.id} ---`]);
+      });
+
+      it('agent gets the same blocks as the tail of expandedBody in the default shape', async () => {
+        const mentioned = parsed(await call('create_note', { title: 'Target', body_md: 'target body', shared: true }));
+        const created = parsed(await call('create_note', { title: 'Source', body_md: `see @note:${mentioned.id}` }));
+
+        const expanded = parsed(await call('get_note', { note: created.id }));
+        const mentionsOnly = parsed(await call('get_note', { note: created.id, mentions_only: true }));
+
+        expect(expanded.expandedBody).toBe([expanded.bodyMd, ...mentionsOnly.mentionBlocks].join('\n\n'));
+      });
+
+      it('agent sees the not-expanded budget and depth lines among the mention blocks', async () => {
+        const huge = parsed(await call('create_note', { title: 'Huge', body_md: 'x'.repeat(70 * 1024), shared: true }));
+        const third = parsed(await call('create_note', { title: 'Third', body_md: 'third body', shared: true }));
+        const second = parsed(await call('create_note', { title: 'Second', body_md: `then @note:${third.id}`, shared: true }));
+        const first = parsed(await call('create_note', { title: 'First', body_md: `then @note:${second.id}`, shared: true }));
+        const budgetSource = parsed(await call('create_note', { title: 'BudgetSource', body_md: `see @note:${huge.id}` }));
+        const depthSource = parsed(await call('create_note', { title: 'DepthSource', body_md: `see @note:${first.id}` }));
+
+        const budgetCut = parsed(await call('get_note', { note: budgetSource.id, mentions_only: true }));
+        const depthCut = parsed(await call('get_note', { note: depthSource.id, mentions_only: true }));
+
+        expect(budgetCut.mentionBlocks).toEqual([`--- @note:${huge.id}: not expanded (budget) ---`]);
+        expect(depthCut.mentionBlocks.at(-1)).toBe(`--- @note:${third.id}: not expanded (depth) ---`);
+      });
+
+      it('agent gets no mentionBlocks from a note without mentions, and the default shape without the flag', async () => {
+        const created = parsed(await call('create_note', { title: 'Plain', body_md: 'just text' }));
+
+        const mentionsOnly = parsed(await call('get_note', { note: created.id, mentions_only: true }));
+        const plain = parsed(await call('get_note', { note: created.id }));
+
+        expect(mentionsOnly).not.toHaveProperty('mentionBlocks');
+        expect(mentionsOnly).not.toHaveProperty('expandedBody');
+        expect(plain).not.toHaveProperty('mentionBlocks');
+      });
+
+      it('agent keeps the default shape of a note with mentions when mentions_only is absent or false', async () => {
+        const mentioned = parsed(await call('create_note', { title: 'Target', body_md: 'target body', shared: true }));
+        const created = parsed(await call('create_note', { title: 'Source', body_md: `see @note:${mentioned.id}` }));
+
+        const withoutFlag = parsed(await call('get_note', { note: created.id }));
+        const withFalse = parsed(await call('get_note', { note: created.id, mentions_only: false }));
+
+        expect(withFalse).toEqual(withoutFlag);
+        expect(withoutFlag.expandedBody).toContain('target body');
+        expect(withoutFlag).not.toHaveProperty('mentionBlocks');
+      });
+
+      it('agent sees mentions_only in the get_note input schema', async () => {
+        const { tools } = await client.listTools();
+        const getNoteTool = tools.find((tool) => tool.name === 'get_note')!;
+        const properties = getNoteTool.inputSchema.properties as Record<string, { type?: string }>;
+
+        expect(properties.mentions_only?.type).toBe('boolean');
+        expect(getNoteTool.description).toContain('mentionBlocks');
+      });
+    });
+
     it('agent sees the mention line and the expanded text of a note whose only mention was cut by the byte budget', async () => {
       const huge = parsed(await call('create_note', { title: 'Huge', body_md: 'x'.repeat(70 * 1024), shared: true }));
       const created = parsed(await call('create_note', { title: 'Source', body_md: `see @note:${huge.id}` }));
@@ -391,6 +462,169 @@ describe('MCP tool results are compact', () => {
         expect(keysOf(row)).toEqual(['data', 'id', 'updatedAt']);
         expect(Object.keys(row.data)).toHaveLength(COLUMN_COUNT);
       }
+    });
+
+    describe('columnar query format', () => {
+      const HUGE_CELL_BYTES = 60 * 1024;
+      const HUGE_ROW_COUNT = 30;
+
+      const columnarQuery = (args: Record<string, unknown>) => call('query_data_store', { format: 'columnar', ...args });
+
+      const rowsRebuiltFromColumnar = (columnar: { columns: string[]; rows: unknown[][] }, { withUpdatedAt }: { withUpdatedAt: boolean }) => {
+        const firstValueIndex = withUpdatedAt ? 2 : 1;
+        return columnar.rows.map((cells) => ({
+          id: cells[0],
+          data: Object.fromEntries(columnar.columns.map((columnId, index) => [columnId, cells[firstValueIndex + index]]).filter(([, value]) => value !== null)),
+          ...(withUpdatedAt ? { updatedAt: cells[1] } : {}),
+        }));
+      };
+
+      const withoutNullCells = (row: { id: string; data: Record<string, unknown>; updatedAt?: string }) => ({
+        ...row, data: Object.fromEntries(Object.entries(row.data).filter(([, value]) => value !== null)),
+      });
+
+      async function seedMixedTypeTable(rowCount: number) {
+        const store = parsed(await call('create_data_store', { display_name: 'mixed' }));
+        const addColumn = async (display_name: string, column_type: string, extra: object = {}) => parsed(await call('add_data_store_column', { store: store.id, display_name, column_type, ...extra })).id as string;
+        const textId = await addColumn('title', 'text');
+        const numberId = await addColumn('points', 'number');
+        const checkboxId = await addColumn('done', 'checkbox');
+        const selectId = await addColumn('status', 'select', { options: [{ id: 'todo', label: 'todo' }, { id: 'done', label: 'done' }] });
+        const rows = Array.from({ length: rowCount }, (_, index) => ({
+          [textId]: index % 3 === 0 ? `héllo wörld 🚀 ${index}` : `plain ${index}`,
+          ...(index % 5 === 0 ? {} : { [numberId]: index }),
+          [checkboxId]: index % 2 === 0,
+          ...(index % 4 === 0 ? {} : { [selectId]: 'todo' }),
+        }));
+        if (rowCount > 0) await call('insert_data_store_rows', { store: store.id, rows });
+        return { storeId: store.id as string, columnIds: [textId, numberId, checkboxId, selectId] };
+      }
+
+      it('agent can query fifty rows in columnar format within the columnar byte budget, columns named once', async () => {
+        const storeId = await seedTable();
+
+        const result = await columnarQuery({ store: storeId, limit: ROW_COUNT });
+
+        expect(isCompactJson(result)).toBe(true);
+        expect(bytesOf(result)).toBeLessThanOrEqual(BYTE_BUDGET.queryDataStoreColumnar);
+        const { columns, rows, count, truncated } = parsed(result);
+        expect(columns).toHaveLength(COLUMN_COUNT);
+        expect(rows).toHaveLength(ROW_COUNT);
+        expect(count).toBe(ROW_COUNT);
+        expect(truncated).toBe(false);
+        for (const row of rows) expect(row).toHaveLength(2 + COLUMN_COUNT);
+      });
+
+      it('agent rebuilds exactly the row objects from the columnar rows, for every column type, empty cells and unicode', async () => {
+        const { storeId } = await seedMixedTypeTable(ROW_COUNT);
+        const asObjects = parsed(await call('query_data_store', { store: storeId, limit: ROW_COUNT }));
+
+        const columnar = parsed(await columnarQuery({ store: storeId, limit: ROW_COUNT }));
+
+        expect(columnar.rows).toHaveLength(ROW_COUNT);
+        expect(rowsRebuiltFromColumnar(columnar, { withUpdatedAt: true })).toEqual(asObjects.rows.map(withoutNullCells));
+        expect(columnar.count).toBe(asObjects.count);
+        expect(columnar.truncated).toBe(asObjects.truncated);
+      });
+
+      it('agent gets empty columns and rows from a store with no rows in both formats', async () => {
+        const { storeId, columnIds } = await seedMixedTypeTable(0);
+
+        const columnar = parsed(await columnarQuery({ store: storeId }));
+        const asObjects = parsed(await call('query_data_store', { store: storeId }));
+
+        expect(columnar).toEqual({ columns: columnIds, rows: [], truncated: false, count: 0 });
+        expect(asObjects).toEqual({ rows: [], truncated: false, count: 0 });
+      });
+
+      it('agent selects columns by id or by name, in the order asked, in both formats', async () => {
+        const { storeId, columnIds: [textId, numberId] } = await seedMixedTypeTable(3);
+
+        const columnar = parsed(await columnarQuery({ store: storeId, columns: ['points', textId] }));
+        const asObjects = parsed(await call('query_data_store', { store: storeId, columns: [textId, 'points'] }));
+
+        expect(columnar.columns).toEqual([numberId, textId]);
+        for (const row of columnar.rows) expect(row).toHaveLength(2 + 2);
+        for (const row of asObjects.rows) expect(Object.keys(row.data).every((key) => [textId, numberId].includes(key))).toBe(true);
+        expect(asObjects.rows.some((row: { data: object }) => textId in row.data)).toBe(true);
+      });
+
+      it('agent is told which column is unknown, in both formats, in the existing error style', async () => {
+        const { storeId } = await seedMixedTypeTable(1);
+
+        const columnar = await columnarQuery({ store: storeId, columns: ['title', 'no such column'] });
+        const asObjects = await call('query_data_store', { store: storeId, columns: ['no such column'] });
+
+        expect(columnar.isError).toBe(true);
+        expect(rawText(columnar)).toBe('Unknown column ids: no such column');
+        expect(asObjects.isError).toBe(true);
+        expect(rawText(asObjects)).toBe('Unknown column ids: no such column');
+      });
+
+      it('agent keeps the existing store error when the store does not exist, with or without the new arguments', async () => {
+        const plain = await call('query_data_store', { store: 'nope' });
+        const columnar = await columnarQuery({ store: 'nope', columns: ['title'], include_updated_at: false });
+
+        expect(rawText(plain)).toBe('data store not found');
+        expect(rawText(columnar)).toBe('data store not found');
+      });
+
+      it('agent drops updatedAt from every row in both formats with include_updated_at false and keeps it otherwise', async () => {
+        const { storeId } = await seedMixedTypeTable(3);
+
+        const columnarWithout = parsed(await columnarQuery({ store: storeId, include_updated_at: false }));
+        const objectsWithout = parsed(await call('query_data_store', { store: storeId, include_updated_at: false }));
+        const columnarWith = parsed(await columnarQuery({ store: storeId, include_updated_at: true }));
+        const objectsWith = parsed(await call('query_data_store', { store: storeId }));
+
+        for (const row of columnarWithout.rows) expect(row).toHaveLength(1 + columnarWithout.columns.length);
+        for (const row of objectsWithout.rows) expect(keysOf(row)).toEqual(['data', 'id']);
+        for (const row of columnarWith.rows) expect(row).toHaveLength(2 + columnarWith.columns.length);
+        for (const row of objectsWith.rows) expect(keysOf(row)).toEqual(['data', 'id', 'updatedAt']);
+      });
+
+      it('agent gets the same rows, count and truncation in both formats when the result passes the byte budget', async () => {
+        const store = parsed(await call('create_data_store', { display_name: 'huge' }));
+        const bodyId = parsed(await call('add_data_store_column', { store: store.id, display_name: 'body', column_type: 'text' })).id;
+        const rows = Array.from({ length: HUGE_ROW_COUNT }, (_, index) => ({ [bodyId]: `${index % 10}`.repeat(HUGE_CELL_BYTES) }));
+        await call('insert_data_store_rows', { store: store.id, rows });
+
+        const asObjects = parsed(await call('query_data_store', { store: store.id, limit: HUGE_ROW_COUNT }));
+        const columnar = parsed(await columnarQuery({ store: store.id, limit: HUGE_ROW_COUNT }));
+
+        expect(asObjects.truncated).toBe(true);
+        expect(columnar.truncated).toBe(true);
+        expect(columnar.count).toBe(asObjects.count);
+        expect(columnar.rows).toHaveLength(columnar.count);
+        expect(columnar.rows.map((row: unknown[]) => row[0])).toEqual(asObjects.rows.map((row: { id: string }) => row.id));
+      });
+
+      it('agent keeps every row when the selected columns make the result fit, because rows are projected before truncation', async () => {
+        const store = parsed(await call('create_data_store', { display_name: 'huge' }));
+        const bodyId = parsed(await call('add_data_store_column', { store: store.id, display_name: 'body', column_type: 'text' })).id;
+        const tagId = parsed(await call('add_data_store_column', { store: store.id, display_name: 'tag', column_type: 'text' })).id;
+        const rows = Array.from({ length: HUGE_ROW_COUNT }, (_, index) => ({ [bodyId]: 'x'.repeat(HUGE_CELL_BYTES), [tagId]: `tag ${index}` }));
+        await call('insert_data_store_rows', { store: store.id, rows });
+
+        const columnar = parsed(await columnarQuery({ store: store.id, columns: ['tag'], limit: HUGE_ROW_COUNT }));
+        const asObjects = parsed(await call('query_data_store', { store: store.id, columns: ['tag'], limit: HUGE_ROW_COUNT }));
+
+        expect(columnar.truncated).toBe(false);
+        expect(columnar.count).toBe(HUGE_ROW_COUNT);
+        expect(asObjects.truncated).toBe(false);
+        expect(asObjects.count).toBe(HUGE_ROW_COUNT);
+      });
+
+      it('agent sees the new arguments in the query_data_store input schema and description', async () => {
+        const { tools } = await client.listTools();
+        const queryTool = tools.find((tool) => tool.name === 'query_data_store')!;
+        const properties = queryTool.inputSchema.properties as Record<string, { enum?: string[]; type?: string; items?: unknown }>;
+
+        expect(properties.format?.enum).toEqual(['rows', 'columnar']);
+        expect(properties.columns?.type).toBe('array');
+        expect(properties.include_updated_at?.type).toBe('boolean');
+        expect(queryTool.description).toContain('columnar');
+      });
     });
 
     it('agent keeps ids and counts from a batch insert and gets a trimmed store and column on creation', async () => {
