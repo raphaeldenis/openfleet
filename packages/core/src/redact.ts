@@ -91,10 +91,19 @@ export function maskedSecrets(text: string): string {
 const URL_CREDENTIALS_CUT_BY_THE_HEAD = /(:\/\/)[^\s/@"'`]+$/;
 
 // A well-known credential the cut left under its rule's minimum length: only its prefix and its first characters remain.
-const WELL_KNOWN_CREDENTIAL_CUT_BY_THE_HEAD = /\b(?:sk-|gh[pousr]_|github_pat_|AKIA|ASIA|eyJ)[A-Za-z0-9_.-]*$/;
+const WELL_KNOWN_CREDENTIAL_CUT_BY_THE_HEAD =
+  /\b(?:sk-|gh[pousr]_|github_pat_|AKIA|ASIA|eyJ|xox[abprs]-|xapp-|AIza|npm_|glpat-|[sr]k_live_)[A-Za-z0-9_.-]*$/;
+
+const CREDENTIAL_CHARACTER = /[A-Za-z0-9_.-]/;
+const LONGEST_CUT_CREDENTIAL_TAIL = 512;
+
+// Only the final run of credential characters can hold a cut credential: testing just that tail keeps the anchored rule linear.
+const maskingCutWellKnownCredential = (head: string): string => {
+  let tailStart = head.length;
+  const earliestTailStart = Math.max(0, head.length - LONGEST_CUT_CREDENTIAL_TAIL);
+  while (tailStart > earliestTailStart && CREDENTIAL_CHARACTER.test(head.charAt(tailStart - 1))) tailStart -= 1;
+  return head.slice(0, tailStart) + head.slice(tailStart).replace(WELL_KNOWN_CREDENTIAL_CUT_BY_THE_HEAD, MASK);
+};
 
 export const maskingCutCredential = (head: string): string =>
-  head
-    .replace(CREDENTIAL_CUT_BY_THE_HEAD, `$1${MASK}`)
-    .replace(URL_CREDENTIALS_CUT_BY_THE_HEAD, `$1${MASK}`)
-    .replace(WELL_KNOWN_CREDENTIAL_CUT_BY_THE_HEAD, MASK);
+  maskingCutWellKnownCredential(head.replace(CREDENTIAL_CUT_BY_THE_HEAD, `$1${MASK}`).replace(URL_CREDENTIALS_CUT_BY_THE_HEAD, `$1${MASK}`));

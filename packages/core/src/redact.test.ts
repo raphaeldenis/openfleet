@@ -124,7 +124,18 @@ describe('maskingCutCredential: a well-known credential the head cut left in par
     ['an AWS key id', 'AKIAIOSFODNN'],
     ['an AWS temporary key id', 'ASIAIOSFODNN'],
     ['a JWT', 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIx'],
+    ['a Slack bot token', 'xoxb-1234567'],
+    ['a Slack app token', 'xapp-1-A0123'],
+    ['a Google API key', 'AIzaSyA1b2C3d4'],
+    ['an npm token', 'npm_aB3dE6gH9j'],
+    ['a GitLab token', 'glpat-aB3dE6gH9j'],
+    ['a Stripe live secret key', 'sk_live_aB3dE6'],
+    ['a Stripe live restricted key', 'rk_live_aB3dE6'],
   ] as const;
+
+  it('masks a prefix that follows a dash inside the final run', () => {
+    expect(maskingCutCredential('Fix CI x-sk-abc')).toBe(`Fix CI x-${MASK}`);
+  });
 
   it.each(cutCredentials)('masks %s at the very end of the head', (_name, credential) => {
     expect(maskingCutCredential(`Fix CI ${credential}`)).toBe(`Fix CI ${MASK}`);
@@ -132,5 +143,23 @@ describe('maskingCutCredential: a well-known credential the head cut left in par
 
   it('leaves a key prefix in the middle of the head to the ordinary rules', () => {
     expect(maskingCutCredential('the sk-1 prefix, then more')).toBe('the sk-1 prefix, then more');
+  });
+
+  it('masks a Slack token after a whitespace run the collapse left behind', () => {
+    const head = `Fix CI${' '.repeat(250)}xoxb-12345`;
+    expect(maskingCutCredential(head)).toBe(`Fix CI${' '.repeat(250)}${MASK}`);
+  });
+
+  it('stays linear on a long run of repeated prefixes ending in a non-credential character', () => {
+    const millisecondsFor = (repeats: number) => {
+      const hostile = `${'sk-'.repeat(repeats)}!`;
+      const startedAt = performance.now();
+      maskingCutCredential(hostile);
+      return performance.now() - startedAt;
+    };
+    const small = Math.max(millisecondsFor(8192), 1);
+    const fourTimesLarger = millisecondsFor(32768);
+    expect(fourTimesLarger / small).toBeLessThan(8);
+    expect(fourTimesLarger).toBeLessThan(500);
   });
 });
