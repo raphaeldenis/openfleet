@@ -1,5 +1,25 @@
 import type { ConversationPresence, Harness, HarnessHandle, HarnessLaunch } from './harness.js';
 
+// What Claude Code 2.1.284 strips from a paste (measured live): zero-width and bidi format characters, BOM, soft
+// hyphen, tag characters, C0 NUL and bell, the line separator; a zero-width (non-)joiner only between plain letters.
+const ALWAYS_INVISIBLE_CODE_POINT_RANGES: readonly (readonly [number, number])[] = [
+  [0x200b, 0x200b], [0x200e, 0x200f], [0x202a, 0x202e], [0x2060, 0x2069], [0xfeff, 0xfeff], [0xad, 0xad],
+  [0x0, 0x0], [0x7, 0x7], [0x2028, 0x2028], [0xe0000, 0xe007f],
+];
+const ZERO_WIDTH_NON_JOINER = 0x200c;
+const ZERO_WIDTH_JOINER = 0x200d;
+const isAsciiLetter = (codePoint: number | undefined) => codePoint !== undefined && /[a-z]/i.test(String.fromCodePoint(codePoint));
+
+function hasInvisibleCharacters(text: string): boolean {
+  const codePoints = [...text].map((character) => character.codePointAt(0)!);
+  return codePoints.some((codePoint, index) => {
+    const isAlwaysInvisible = ALWAYS_INVISIBLE_CODE_POINT_RANGES.some(([first, last]) => codePoint >= first && codePoint <= last);
+    const isJoiner = codePoint === ZERO_WIDTH_NON_JOINER || codePoint === ZERO_WIDTH_JOINER;
+    const isJoinerBetweenLetters = isJoiner && isAsciiLetter(codePoints[index - 1]) && isAsciiLetter(codePoints[index + 1]);
+    return isAlwaysInvisible || isJoinerBetweenLetters;
+  });
+}
+
 export class FakeHandle implements HarnessHandle {
   readonly written: string[] = [];
   readonly resizes: { cols: number; rows: number }[] = [];
@@ -12,16 +32,39 @@ export class FakeHandle implements HarnessHandle {
   // Test-only: like a real pty, the exit arrives after kill() returned instead of inside it.
   exitsAsynchronously = false;
   killCount = 0;
+  // Test-only: like Claude Code, a composer holding invisible characters strips them and answers the Enter
+  // that would submit it with a notice, submitting only on the next Enter.
+  reviewsInvisibleCharacters = false;
+  // Test-only: the bodies the fake CLI actually submitted (an Enter consumed by the review notice is not one).
+  readonly submitted: string[] = [];
+  private composer = '';
+  private isComposerUnderReview = false;
 
   constructor(private readonly onPromptTyped: () => void = () => undefined) {}
 
-  write(data: string): void { this.written.push(data); }
+  write(data: string): void {
+    this.written.push(data);
+    if (data === '\r') this.pressEnter();
+  }
   // Records the plain, unframed body: bracketed-paste framing is a ClaudeCliHarness-only concern (see
   // claudeCliHarness.test.ts), so sessionService's state-machine tests read message bodies back exactly
   // as typeNextMessage passed them in.
   typeMessage(data: string): void {
     this.written.push(data);
+    this.composer = data;
+    this.isComposerUnderReview = false;
     this.onPromptTyped();
+  }
+  private pressEnter(): void {
+    const needsReview = this.reviewsInvisibleCharacters && hasInvisibleCharacters(this.composer);
+    if (needsReview && !this.isComposerUnderReview) {
+      this.isComposerUnderReview = true;
+      this.emitData('Removed 1 invisible character · review and press Enter to send');
+      return;
+    }
+    if (this.composer === '') return;
+    this.submitted.push(this.composer);
+    this.composer = '';
   }
   resize(cols: number, rows: number): void { this.resizes.push({ cols, rows }); }
   kill(options?: { force?: boolean }): void {
