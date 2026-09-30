@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { Handover } from '@openfleet/shared';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
 import { ApprovalService } from '../governance/approvalService.js';
@@ -61,13 +61,13 @@ beforeEach(async () => {
 afterEach(() => fx.server.close());
 
 describe('user can hand a design link or a spec path to a session and the daemon records it once', () => {
-  it('records a design link typed by the human and reminds the agent to open its backlog row', async () => {
+  it('records a design link typed by the human and reminds the agent to note it', async () => {
     const answer = await humanTypes(`Here is the design ${DESIGN_LINK} please build it`);
 
     expect(await handoversOf(sessionId)).toEqual([expect.objectContaining({ sessionId, kind: 'design_link', value: DESIGN_LINK, createdAt: '2026-09-30T10:00:00.000Z' })]);
     expect(answer.hookSpecificOutput?.hookEventName).toBe('UserPromptSubmit');
     expect(reminderOf(answer)).toContain(`Handover recorded: ${DESIGN_LINK}`);
-    expect(reminderOf(answer)).toContain('backlog row');
+    expect(reminderOf(answer)).toBe(`Handover recorded: ${DESIGN_LINK}. If you keep a backlog or notes, record it there in this turn.`);
   });
 
   it('records a spec path and a plan path from one prompt, each with its own kind', async () => {
@@ -204,6 +204,51 @@ describe('user is protected from handovers the human never typed', () => {
   });
 });
 
+describe('user is protected from prompts the daemon supplied to the session itself', () => {
+  const briefWithLinks = `Review the work, spec ${SPEC_PATH} and design ${DESIGN_LINK}`;
+  const createChild = (seededPrompt: string) => fx.sessions.create({ directory: '/tmp', name: 'Child', harness: 'fake', emoji: '🤖', seededPrompt });
+
+  it('records nothing and adds no reminder for the seeded prompt the CLI submits first, then records a human prompt with the same link once', async () => {
+    const child = await createChild(briefWithLinks);
+    const childToken = hookTokenOf(child.id);
+
+    const seededAnswer = await humanTypes(briefWithLinks, childToken);
+    const seededWithBlanksAnswer = await humanTypes(`\n${briefWithLinks}  \n`, childToken);
+    const humanAnswer = await humanTypes(`please use ${DESIGN_LINK}`, childToken);
+    const humanAgain = await humanTypes(`again ${DESIGN_LINK}`, childToken);
+
+    expect(reminderOf(seededAnswer)).toBeUndefined();
+    expect(reminderOf(seededWithBlanksAnswer)).toBeUndefined();
+    expect(reminderOf(humanAnswer)).toContain(DESIGN_LINK);
+    expect(reminderOf(humanAgain)).toBeUndefined();
+    expect(await valuesOf(child.id)).toEqual([DESIGN_LINK]);
+  });
+
+  it('records nothing for a seeded prompt the CLI prefixes with its own preamble', async () => {
+    const child = await createChild(briefWithLinks);
+
+    await humanTypes(`${briefWithLinks}\n\nextra line`, hookTokenOf(child.id));
+
+    expect(await valuesOf(child.id)).toEqual([]);
+  });
+
+  it('records a human prompt on a session created without a seeded prompt or with a blank one', async () => {
+    const blank = await createChild('   ');
+
+    await humanTypes(DESIGN_LINK, hookTokenOf(blank.id));
+
+    expect(await valuesOf(blank.id)).toEqual([DESIGN_LINK]);
+  });
+
+  it('records nothing for the mission of a sub-manager session', async () => {
+    const manager = await fx.sessions.create({ directory: '/tmp', name: 'Sub', harness: 'fake', emoji: '🤖', seededPrompt: `Mission: follow ${SPEC_PATH}` });
+
+    await humanTypes(`Mission: follow ${SPEC_PATH}`, hookTokenOf(manager.id));
+
+    expect(storedRowCount()).toBe(0);
+  });
+});
+
 describe('user can rely on the ledger bounds', () => {
   it('records ten of fifty links in one prompt, and never stores or logs the prompt text', async () => {
     const links = Array.from({ length: 50 }, (_, index) => `https://claude.ai/design/link${index}`);
@@ -267,8 +312,7 @@ describe('user can read the handovers of a session over REST', () => {
 
     const values = await valuesOf(sessionId);
 
-    expect(values.slice(0, 2).sort()).toEqual([PLAN_PATH, SPEC_PATH].sort());
-    expect(values[2]).toBe(DESIGN_LINK);
+    expect(values).toEqual([PLAN_PATH, SPEC_PATH, DESIGN_LINK]);
   });
 
   it('lists at most 50 handovers, the newest ones', async () => {
@@ -322,5 +366,31 @@ describe('operator can override the handover patterns', () => {
     await humanTypes(DESIGN_LINK, hookTokenOf(session.id));
 
     expect(storedRowCount()).toBe(0);
+  });
+});
+
+describe('operator patterns that backtrack catastrophically cannot freeze the daemon', () => {
+  const NESTED_GROUP_KILLERS = [/((x+))+y/g, /((?:x|x))+y/g, /(?:(x+))*y/g];
+  const FAR_BELOW_THE_FREEZE_MS = 1000;
+  const runOfXs = `${'x'.repeat(28)} TICKET-7`;
+
+  it.each(NESTED_GROUP_KILLERS)('answers within a bounded time on %s, disables it with one warning, and keeps recording the other patterns', async (killer) => {
+    await fx.server.close();
+    fx = await startFixture([killer, /TICKET-\d+/g]);
+    const session = await fx.sessions.create({ directory: '/tmp', name: 'Custom', harness: 'fake', emoji: '🤖' });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const startedAt = Date.now();
+
+    const answer = await humanTypes(runOfXs, hookTokenOf(session.id));
+    const secondAnswer = await humanTypes(`${runOfXs} TICKET-8`, hookTokenOf(session.id));
+
+    const elapsed = Date.now() - startedAt;
+    const warnings = warn.mock.calls.map(([line]) => String(line)).filter((line) => line.includes(killer.source));
+    warn.mockRestore();
+    expect(elapsed).toBeLessThan(FAR_BELOW_THE_FREEZE_MS);
+    expect(reminderOf(answer)).toContain('TICKET-7');
+    expect(reminderOf(secondAnswer)).toContain('TICKET-8');
+    expect(warnings).toHaveLength(1);
+    expect(await valuesOf(session.id)).toEqual(['TICKET-8', 'TICKET-7']);
   });
 });

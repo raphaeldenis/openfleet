@@ -33,6 +33,10 @@ describe('the operator sets the handover patterns in config.json', () => {
     expect(() => loadDaemonSettings(configWithPatterns([unsafePattern]))).toThrow(/handoverPatterns.*backtracking/);
   });
 
+  it.each(['((x+))+y', '((?:x|x))+y', '(?:(x+))*y'])('refuses to boot on the nested-group catastrophic pattern %s', (unsafePattern) => {
+    expect(() => loadDaemonSettings(configWithPatterns([unsafePattern]))).toThrow(/handoverPatterns.*backtracking/);
+  });
+
   it('accepts a quantified group without a quantifier inside it, and an optional group', () => {
     expect(() => loadDaemonSettings(configWithPatterns(['(?:ab)+', '(https://x/)?[a-z]+']))).not.toThrow();
   });
