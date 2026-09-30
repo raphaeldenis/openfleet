@@ -17,6 +17,10 @@ describe('the process guards policy', () => {
   let home: string;
   let crashDir: string;
   let nowMs: number;
+  let isShuttingDown: boolean;
+  // The monotonic clock ignores a step of the wall clock: stepping the wall back by an hour adds it here.
+  let wallClockStepMs: number;
+  const monotonicMs = () => nowMs + wallClockStepMs;
   let exit: Mock<(code: number) => void>;
   let degraded: DegradedRegistry;
   const listenersBefore = { rejection: process.listeners('unhandledRejection'), exception: process.listeners('uncaughtException') };
@@ -32,7 +36,9 @@ describe('the process guards policy', () => {
     degraded = createDegradedRegistry({ clock: () => nowMs });
     process.removeAllListeners('unhandledRejection');
     process.removeAllListeners('uncaughtException');
-    installProcessGuards(process, { degraded, crashDir, clock: () => nowMs, exit });
+    isShuttingDown = false;
+    wallClockStepMs = 0;
+    installProcessGuards(process, { degraded, crashDir, clock: () => nowMs, monotonicClock: monotonicMs, isShuttingDown: () => isShuttingDown, exit });
   });
   afterEach(() => {
     process.removeAllListeners('unhandledRejection');
@@ -96,6 +102,66 @@ describe('the process guards policy', () => {
     escapeException();
 
     expect(exit).toHaveBeenCalledWith(EXIT_CODES.runtimeFatal);
+  });
+
+  it('does not take a wall clock step back for a loop: the window is monotonic', () => {
+    escapeException();
+    nowMs -= 60 * 60_000;
+    wallClockStepMs += 60 * 60_000;
+    nowMs += 61 * SECOND_MS;
+    escapeException();
+
+    expect(exit).not.toHaveBeenCalled();
+  });
+
+  it('still sees a loop across a forward wall clock step', () => {
+    escapeException();
+    nowMs += 60 * 60_000;
+    wallClockStepMs -= 60 * 60_000 - SECOND_MS;
+    escapeException();
+
+    expect(exit).toHaveBeenCalledWith(EXIT_CODES.runtimeFatal);
+  });
+
+  it('exits 3, not 2, on an exception loop once the shutdown began: a supervisor must not restart a daemon that was asked to stop', () => {
+    isShuttingDown = true;
+    escapeException();
+    nowMs += SECOND_MS;
+
+    escapeException();
+
+    expect(exit).toHaveBeenCalledExactlyOnceWith(EXIT_CODES.shutdownHung);
+  });
+
+  it('throttles a rejection storm: one crash file, one error line and one announcement per minute, the rest counted', () => {
+    const announced: number[] = [];
+    degraded.onChange((issues) => announced.push(issues.length));
+    const errorLog = vi.spyOn(console, 'error');
+
+    for (let rejection = 0; rejection < 100; rejection += 1) escapeRejection();
+
+    expect(crashFiles()).toHaveLength(1);
+    expect(errorLog).toHaveBeenCalledTimes(1);
+    expect(announced).toEqual([1]);
+    expect(degraded.list()).toMatchObject([{ code: 'uncaught_exception', count: 100 }]);
+  });
+
+  it('writes a new crash file and log line for the first rejection of the next minute', () => {
+    escapeRejection();
+    escapeRejection();
+    nowMs += 60 * SECOND_MS;
+
+    escapeRejection();
+
+    expect(crashFiles()).toHaveLength(2);
+  });
+
+  it('does not let a rejection storm hide an uncaught exception: that one is always logged and written', () => {
+    for (let rejection = 0; rejection < 10; rejection += 1) escapeRejection();
+
+    escapeException();
+
+    expect(crashFiles()).toHaveLength(2);
   });
 
   it('does not count unhandled rejections toward the loop: they mark and continue', () => {
@@ -184,7 +250,7 @@ describe('the process guards policy', () => {
   it('exits 2 even when the exit itself is the first thing a broken registry would stop', () => {
     const throwingRegistry = { ...degraded, mark: () => { throw new Error('registry bug'); } } as DegradedRegistry;
     process.removeAllListeners('uncaughtException');
-    installProcessGuards(process, { degraded: throwingRegistry, crashDir, clock: () => nowMs, exit });
+    installProcessGuards(process, { degraded: throwingRegistry, crashDir, clock: () => nowMs, monotonicClock: monotonicMs, exit });
     escapeException();
     nowMs += SECOND_MS;
 

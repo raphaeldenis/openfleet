@@ -9,7 +9,8 @@ import { installShutdownHandler } from './process/shutdownHandler.js';
 import { shutdownOnStdinEof } from './process/stdinEofShutdown.js';
 
 const degraded = createDegradedRegistry();
-installProcessGuards(process, { degraded, crashDir: join(resolveHome(), CRASH_FOLDER_NAME) });
+let isShuttingDown = false;
+installProcessGuards(process, { degraded, crashDir: join(resolveHome(), CRASH_FOLDER_NAME), isShuttingDown: () => isShuttingDown });
 
 const booting = refuseBootOnFailure(() => startDaemon(loadConfig(), { degraded }), {
   configPath: join(resolveHome(), 'config.json'),
@@ -18,7 +19,7 @@ const booting = refuseBootOnFailure(() => startDaemon(loadConfig(), { degraded }
 });
 
 // Armed before the daemon listens: a signal during boot waits for the boot to finish, then closes it.
-const shutdown = installShutdownHandler(async () => (await booting).close());
+const shutdown = installShutdownHandler(async () => (await booting).close(), process, { onShutdownBegin: () => { isShuttingDown = true; } });
 shutdownOnStdinEof(shutdown, process.stdin, process.env);
 
 await booting;

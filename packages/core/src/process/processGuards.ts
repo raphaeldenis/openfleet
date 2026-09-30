@@ -11,8 +11,12 @@ export interface ProcessGuardsOptions {
   degraded?: DegradedRegistry;
   /** Where a crash file is written; none is written without it. */
   crashDir?: string;
-  /** Epoch milliseconds. */
+  /** Epoch milliseconds: names the crash files and stamps the issues. */
   clock?: () => number;
+  /** Milliseconds that never step back: measures the crash loop window and the rejection throttle. */
+  monotonicClock?: () => number;
+  /** True once the shutdown began: a crash loop then exits with the shutdown code, not the restart code. */
+  isShuttingDown?: () => boolean;
   exit?: (code: number) => void;
 }
 
@@ -30,9 +34,12 @@ function bestEffort(failure: string, step: () => void): void {
 // ref, marks the daemon degraded and leaves a crash file, and a second uncaught exception within 60 s is a
 // loop that ends the process with EXIT_CODES.runtimeFatal for a supervisor to restart.
 export function installProcessGuards(proc: NodeJS.Process = process, options: ProcessGuardsOptions = {}): void {
-  const { degraded, crashDir, clock = Date.now } = options;
+  const { degraded, crashDir, clock = Date.now, monotonicClock = () => performance.now(), isShuttingDown = () => false } = options;
   const exit = options.exit ?? ((code: number) => proc.exit(code));
   let lastUncaughtExceptionAt: number | undefined;
+  let lastReportedRejectionAt: number | undefined;
+
+  const isWithinWindow = (since: number | undefined, now: number): boolean => since !== undefined && now - since >= 0 && now - since < CRASH_LOOP_WINDOW_MS;
 
   const handleEscape = (error: unknown, reason: CrashReason, { isLoop }: { isLoop: boolean }): void => {
     const ref = shortId();
@@ -43,13 +50,22 @@ export function installProcessGuards(proc: NodeJS.Process = process, options: Pr
     bestEffort('crash file not written', () => writeCrashFile({ dir: crashDir, reason, ref, issues: degraded?.list() ?? [], logLines: recentLogLines(), now: clock }));
   };
 
-  proc.on('unhandledRejection', (reason) => handleEscape(reason, 'unhandled_rejection', { isLoop: false }));
+  // A rejection storm costs one log line, one crash file and one announcement per window; the rest only raise the issue count.
+  proc.on('unhandledRejection', (reason) => {
+    const now = monotonicClock();
+    if (isWithinWindow(lastReportedRejectionAt, now)) {
+      bestEffort('degraded registry: counting the rejection failed', () => degraded?.mark('uncaught_exception', ESCAPED_ERROR_MESSAGE));
+      return;
+    }
+    lastReportedRejectionAt = now;
+    handleEscape(reason, 'unhandled_rejection', { isLoop: false });
+  });
   proc.on('uncaughtException', (error) => {
-    const now = clock();
-    const isLoop = lastUncaughtExceptionAt !== undefined && now - lastUncaughtExceptionAt < CRASH_LOOP_WINDOW_MS;
+    const now = monotonicClock();
+    const isLoop = isWithinWindow(lastUncaughtExceptionAt, now);
     lastUncaughtExceptionAt = now;
     handleEscape(error, 'uncaught_exception', { isLoop });
-    if (isLoop) exit(EXIT_CODES.runtimeFatal);
+    if (isLoop) exit(isShuttingDown() ? EXIT_CODES.shutdownHung : EXIT_CODES.runtimeFatal);
   });
   // The daemon's home holds session tokens and a db full of message bodies (MAJ-02): every file created
   // from here on (config.ts, database.ts, a session's own settings files) must default to owner-only

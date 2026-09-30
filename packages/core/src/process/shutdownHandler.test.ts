@@ -59,6 +59,17 @@ describe('installShutdownHandler', () => {
     expect(proc.exit).toHaveBeenCalledTimes(1);
   });
 
+  it('tells the process the shutdown began, once, before it runs the shutdown callback', () => {
+    const { proc, fire } = fakeProcess();
+    const order: string[] = [];
+    installShutdownHandler(() => { order.push('shutdown'); return new Promise<void>(() => {}); }, proc, { onShutdownBegin: () => order.push('began') });
+
+    fire('SIGTERM');
+    fire('SIGINT');
+
+    expect(order).toEqual(['began', 'shutdown']);
+  });
+
   it('exits with code 0 when the shutdown callback resolves', async () => {
     const { proc, fire } = fakeProcess();
     installShutdownHandler(() => Promise.resolve(), proc);
