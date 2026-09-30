@@ -92,7 +92,9 @@ describe('probe: signal while the sessions are still resuming', () => {
       SessionService.prototype.resumeAll = async function (...args) {
         console.log('resumeAll started');
         await pause(${resumeMs});
-        return resumeAll.apply(this, args);
+        const resumed = await resumeAll.apply(this, args);
+        console.log('resumeAll finished');
+        return resumed;
       };
       SessionService.prototype.closeAll = async function (...args) {
         console.log('closeAll called');
@@ -113,7 +115,10 @@ describe('probe: signal while the sessions are still resuming', () => {
 
     expect(killedBy).toBeNull();
     expect(code).toBe(0);
-    expect(daemon.stdout()).toContain('closeAll called');
+    const output = daemon.stdout();
+    expect(output).toContain('closeAll called');
+    expect(output.indexOf('resumeAll finished')).toBeGreaterThanOrEqual(0);
+    expect(output.indexOf('resumeAll finished')).toBeLessThan(output.indexOf('closeAll called'));
     expect(daemon.stderr()).toBe('');
     expect(await canConnect(port)).toBe(true);
   }, 40_000);
