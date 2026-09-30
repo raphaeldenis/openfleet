@@ -291,6 +291,39 @@ describe('DocsFolderService writeThrough', () => {
     expect(noteRepo.get(note.id)).toMatchObject({ bodyMd: 'v1', rev: 1 });
   });
 
+  it('reports the stuck connection, not an outer transaction, when a failed ROLLBACK left the connection inside a transaction', () => {
+    const { db, fakeFs, docs, notes } = setup();
+    const note = docs.createFileBackedNote({ projectId: 'p1', folder: 'specs', title: 'x', bodyMd: 'v1', author: AUTHOR });
+    const filesBefore = new Map(fakeFs.files);
+    const realExec = db.exec.bind(db);
+    vi.spyOn(db, 'exec').mockImplementation((sql: string) => {
+      if (/^ROLLBACK/.test(sql)) throw new Error('disk I/O error');
+      return realExec(sql);
+    });
+    expect(() => notes.runAtomically(() => { throw new Error('work failed'); })).toThrow('work failed');
+
+    const write = () => docs.writeThrough(note.id, { bodyMd: 'v2', expectedRev: note.rev, author: AUTHOR });
+
+    expect(write).toThrow(/stuck in a transaction/);
+    expect(fakeFs.files).toEqual(filesBefore);
+  });
+
+  it('heals a stuck connection when the retried ROLLBACK succeeds, so the write goes through', () => {
+    const { db, fakeFs, docs, notes } = setup();
+    const note = docs.createFileBackedNote({ projectId: 'p1', folder: 'specs', title: 'x', bodyMd: 'v1', author: AUTHOR });
+    const realExec = db.exec.bind(db);
+    const failRollback = vi.spyOn(db, 'exec').mockImplementation((sql: string) => {
+      if (/^ROLLBACK/.test(sql)) throw new Error('disk I/O error');
+      return realExec(sql);
+    });
+    expect(() => notes.runAtomically(() => { throw new Error('work failed'); })).toThrow('work failed');
+    failRollback.mockRestore();
+
+    docs.writeThrough(note.id, { bodyMd: 'v2', expectedRev: note.rev, author: AUTHOR });
+
+    expect(fakeFs.files.get(note.filePath!)).toBe('v2');
+  });
+
   it('leaves the file ahead of the database when COMMIT fails after the rename, and reconcileOnBoot then records the file as a "disk" revision', () => {
     const { db, fakeFs, noteRepo, docs } = setup();
     const note = docs.createFileBackedNote({ projectId: 'p1', folder: 'specs', title: 'x', bodyMd: 'v1', author: AUTHOR });

@@ -107,36 +107,53 @@ describe('inTransaction hostile probes', () => {
     expect(() => inTransaction(db, 'sp', () => undefined)).toThrow(/stuck in a transaction/);
   });
 
-  it('keeps the original error when a nested ROLLBACK TO fails, then rolls the untrustworthy outer transaction back at the next boundary', () => {
+  it('keeps the original error when a nested ROLLBACK TO fails and leaves the outer transaction to its owner: no partial commit, connection not stuck', () => {
     const original = new Error('inner failed');
-    db.exec('BEGIN IMMEDIATE');
-    insert(db, 'outer');
-    failStatement(db, /^ROLLBACK TO/);
+    const outerWork = () => {
+      insert(db, 'outer');
+      failStatement(db, /^ROLLBACK TO/);
+      try {
+        inTransaction(db, 'inner', () => { insert(db, 'inner'); throw original; });
+      } finally {
+        vi.restoreAllMocks();
+      }
+    };
 
-    const run = () => inTransaction(db, 'inner', () => { insert(db, 'inner'); throw original; });
+    const run = () => inTransaction(db, 'outer', outerWork);
 
     expect(run).toThrow(original);
-    vi.restoreAllMocks();
-    expect(db.isTransaction).toBe(true);
-
-    inTransaction(db, 'again', () => insert(db, 'again'));
-
     expect(db.isTransaction).toBe(false);
+    expect(labelsOf(db)).toEqual([]);
+    inTransaction(db, 'again', () => insert(db, 'again'));
     expect(labelsOf(db)).toEqual(['again']);
   });
 
-  it('never rolls back a fresh caller-owned transaction opened after the stuck one was ended outside inTransaction', () => {
+  it('does not flag the connection when a nested ROLLBACK TO fails: the next top-level call inside the outer owner still nests', () => {
+    db.exec('BEGIN IMMEDIATE');
+    insert(db, 'outer');
+    failStatement(db, /^ROLLBACK TO/);
+    expect(() => inTransaction(db, 'inner', () => { throw new Error('inner failed'); })).toThrow('inner failed');
+    vi.restoreAllMocks();
+
+    inTransaction(db, 'sibling', () => insert(db, 'sibling'));
+
+    expect(db.isTransaction).toBe(true);
+    db.exec('COMMIT');
+    expect(labelsOf(db)).toEqual(['outer', 'sibling']);
+  });
+
+  it('a raw BEGIN outside inTransaction is a bug: while the connection is stuck, the next call rolls that raw transaction back', () => {
     failStatement(db, 'ROLLBACK');
     expect(() => inTransaction(db, 'sp', () => { throw new Error('first'); })).toThrow('first');
     vi.restoreAllMocks();
     db.exec('ROLLBACK');
     db.exec('BEGIN IMMEDIATE');
-    insert(db, 'outer');
+    insert(db, 'raw');
 
     inTransaction(db, 'inner', () => insert(db, 'inner'));
 
-    expect(db.isTransaction).toBe(true);
-    db.exec('COMMIT');
+    expect(db.isTransaction).toBe(false);
+    expect(labelsOf(db)).toEqual(['inner']);
   });
 
   it('does not attempt or log a rollback when the work already ended the transaction', () => {
