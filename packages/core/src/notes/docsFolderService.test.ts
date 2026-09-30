@@ -436,6 +436,32 @@ describe('DocsFolderService and the degraded state', () => {
     expect(codesOf(degraded)).toEqual([]);
   });
 
+  it('stays marked when a read of another, healthy file succeeds: only the path that failed can clear it', () => {
+    const degraded = createDegradedRegistry();
+    const { fakeFs, docs } = setup({ degraded });
+    const broken = docs.createFileBackedNote({ projectId: 'p1', folder: 'specs', title: 'broken', bodyMd: 'v1', author: AUTHOR });
+    docs.createFileBackedNote({ projectId: 'p1', folder: 'specs', title: 'fine', bodyMd: 'v1', author: AUTHOR });
+    fakeFs.unreadableFiles.set(broken.filePath!, 'EACCES');
+
+    docs.reconcileOnBoot('p1');
+
+    expect(codesOf(degraded)).toEqual(['docs_folder_unreadable']);
+    expect(degraded.list()[0]!.count).toBe(1);
+  });
+
+  it('clears once the reconcile reads the path that failed', () => {
+    const degraded = createDegradedRegistry();
+    const { fakeFs, docs } = setup({ degraded });
+    const broken = docs.createFileBackedNote({ projectId: 'p1', folder: 'specs', title: 'broken', bodyMd: 'v1', author: AUTHOR });
+    fakeFs.unreadableFiles.set(broken.filePath!, 'EACCES');
+    docs.reconcileOnBoot('p1');
+
+    fakeFs.unreadableFiles.delete(broken.filePath!);
+    docs.reconcileOnBoot('p1');
+
+    expect(codesOf(degraded)).toEqual([]);
+  });
+
   it('stays healthy when a file is merely missing: that is not an unreadable docs folder', () => {
     const degraded = createDegradedRegistry();
     const { fakeFs, docs } = setup({ degraded });

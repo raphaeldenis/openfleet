@@ -93,8 +93,9 @@ export function createDegradedRegistry({ clock = Date.now }: DegradedRegistryOpt
 
     recordHookFailOpen() {
       const now = clock();
-      hookFailureTimes = [...hookFailureTimes.filter((time) => now - time < HOOK_FAILURES_WINDOW_MS), now];
-      if (hookFailureTimes.length >= HOOK_FAILURES_TO_MARK) registry.mark('hook_fail_open', 'hook answers are failing open; the agents run without the daemon guidance.');
+      hookFailureTimes = [...hookFailureTimes, now].slice(-HOOK_FAILURES_TO_MARK);
+      const hasEnoughRecentFailures = hookFailureTimes.length === HOOK_FAILURES_TO_MARK && now - hookFailureTimes[0]! < HOOK_FAILURES_WINDOW_MS;
+      if (hasEnoughRecentFailures) registry.mark('hook_fail_open', 'hook answers are failing open; the agents run without the daemon guidance.');
     },
 
     list() {

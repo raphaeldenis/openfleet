@@ -7,6 +7,7 @@ import type { DocsFolderFs } from './docsFolderFs.js';
 import { MAX_BODY_BYTES, NoteNotFoundError, NoteTooLargeError, StaleRevisionError, type NoteService } from './noteService.js';
 import type { NoteRepository } from './noteRepository.js';
 
+const MAX_TRACKED_UNREADABLE_PATHS = 100;
 const IMPORT_AUTHOR = 'import';
 const EXTERNAL_EDIT_AUTHOR = 'disk';
 const DEBOUNCE_MS = 50;
@@ -133,6 +134,8 @@ interface ImportCandidate {
  * healed — both are reported only, so the caller can surface them instead of the note silently drifting.
  */
 export class DocsFolderService {
+  private readonly unreadablePaths = new Set<string>();
+
   constructor(private readonly deps: DocsFolderServiceDeps) {}
 
   ensureLayout(docsFolderPath: string): void {
@@ -330,7 +333,7 @@ export class DocsFolderService {
   private tryReadFile(path: string): string | undefined {
     try {
       const body = this.deps.fs.readFileSync(path);
-      this.deps.degraded?.clear('docs_folder_unreadable');
+      this.readable(path);
       return body;
     } catch (error) {
       const isFileMissing = (error as NodeJS.ErrnoException).code === 'ENOENT';
@@ -339,10 +342,18 @@ export class DocsFolderService {
     }
   }
 
-  /** Builds the typed error and marks the docs folder unreadable until a later read succeeds. */
+  /** Builds the typed error and marks the docs folder unreadable until every path that failed has been read again. */
   private unreadable(path: string, cause: unknown): NoteFileUnreadableError {
+    this.unreadablePaths.add(path);
+    if (this.unreadablePaths.size > MAX_TRACKED_UNREADABLE_PATHS) this.unreadablePaths.delete(this.unreadablePaths.values().next().value!);
     this.deps.degraded?.mark('docs_folder_unreadable', 'a note file or the docs folder cannot be read.', { cause });
     return new NoteFileUnreadableError(path, cause);
+  }
+
+  /** A successful read or write of a path that failed clears it; the last one to recover clears the issue. */
+  private readable(path: string): void {
+    if (!this.unreadablePaths.delete(path)) return;
+    if (this.unreadablePaths.size === 0) this.deps.degraded?.clear('docs_folder_unreadable');
   }
 
   private importCandidate(projectId: string, candidate: ImportCandidate): Note[] {
@@ -404,7 +415,9 @@ export class DocsFolderService {
   /** A missing folder or file (ENOENT, ENOTDIR) reads as an unreadable note file; every other fs failure (full disk, permissions, EXDEV) propagates unchanged. */
   private orUnreadable<T>(path: string, run: () => T): T {
     try {
-      return run();
+      const result = run();
+      this.readable(path);
+      return result;
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       const isMissingFolderOrFile = code === 'ENOENT' || code === 'ENOTDIR';

@@ -112,7 +112,7 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; rout
   // answers 200 ok: the app probe treats any other answer as a daemon that does not answer. The issues are counted, not listed: no auth here.
   router.add('GET', '/health', ({ res }) => {
     const issues = deps.degraded?.list().length ?? 0;
-    const status = issues > 0 ? 'degraded' : 'ok';
+    const status = deps.degraded?.status() ?? 'ok';
     const answer = isShuttingDown ? { status: 503, body: { ok: false, status: 'shutting_down' } } : { status: 200, body: { ok: true, version: DAEMON_VERSION, status, issues } };
     json(res, answer.status, answer.body);
   });

@@ -11,6 +11,7 @@ const sqliteError = (errcode: number) => Object.assign(new Error('sqlite says no
 describe('isDatabaseUnavailableError', () => {
   it.each([
     ['SQLITE_PERM', 3], ['SQLITE_READONLY', 8], ['SQLITE_IOERR', 10], ['SQLITE_FULL', 13], ['SQLITE_CANTOPEN', 14],
+    ['SQLITE_CORRUPT', 11], ['SQLITE_NOTADB', 26], ['SQLITE_CORRUPT_VTAB', 267],
   ])('recognises %s: the database cannot take writes', (_name, errcode) => {
     expect(isDatabaseUnavailableError(sqliteError(errcode))).toBe(true);
   });
