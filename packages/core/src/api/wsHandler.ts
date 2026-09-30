@@ -9,6 +9,7 @@ import type { ApprovalService } from '../governance/approvalService.js';
 import type { EventBus } from '../events/eventBus.js';
 import { log } from '../logger.js';
 import type { ManagerService } from '../managers/managerService.js';
+import type { DegradedRegistry } from '../process/degradedRegistry.js';
 import { SessionClosedError, type SessionService } from '../sessions/sessionService.js';
 import { DEFAULT_WORKING_STATE_MAX_AGE_MINUTES } from '../workingState/workingStateSettings.js';
 import type { WorkingStateService } from '../workingState/workingStateService.js';
@@ -38,13 +39,15 @@ function echoableSessionId(frame: unknown): string | undefined {
   return isEchoable ? sessionId : undefined;
 }
 
-// Best effort: a socket that is closing or whose send throws never stops the caller.
-function sendBestEffort(socket: WebSocket, payload: string): void {
-  if (socket.readyState !== socket.OPEN) return;
+/** Best effort: a socket that is closing or whose send throws never stops the caller. Returns true when the send threw. */
+function sendBestEffort(socket: WebSocket, payload: string): boolean {
+  if (socket.readyState !== socket.OPEN) return false;
   try {
     socket.send(payload);
+    return false;
   } catch (error) {
     log('warn', 'ws: send failed', { code: (error as { code?: string }).code });
+    return true;
   }
 }
 
@@ -83,14 +86,18 @@ export interface WsHandler {
 
 const DEFAULT_WS_CLOSE_GRACE_MS = 250;
 
-export function createWsHandler(deps: { bus: EventBus; sessions: SessionService; approvals: ApprovalService; managers: ManagerService; wsTickets: WsTicketStore; wsCloseGraceMs?: number; workingStates?: WorkingStateService; workingStateMaxAgeMinutes?: number }): WsHandler {
+export function createWsHandler(deps: { bus: EventBus; sessions: SessionService; approvals: ApprovalService; managers: ManagerService; wsTickets: WsTicketStore; wsCloseGraceMs?: number; workingStates?: WorkingStateService; workingStateMaxAgeMinutes?: number; degraded?: DegradedRegistry }): WsHandler {
   const wss = new WebSocketServer({ noServer: true });
   // A broadcast runs inside the session pipeline (the bus is synchronous): one bad client never stops the others or the caller.
   const broadcast = (event: ServerEvent) => {
     const payload = JSON.stringify(event);
-    for (const client of wss.clients) sendBestEffort(client, payload);
+    const clients = [...wss.clients];
+    const sendFailures = clients.filter((client) => sendBestEffort(client, payload)).length;
+    if (sendFailures > 0) deps.degraded?.mark('ws_broadcast_failed', 'a client did not receive an event.');
+    else if (clients.length > 0) deps.degraded?.clear('ws_broadcast_failed');
   };
   deps.bus.subscribe(broadcast);
+  deps.degraded?.onChange((issues) => broadcast({ type: 'daemon.issues', issues }));
 
   const broadcastWorkingStateOf = (sessionId: string | undefined) => {
     const isClosed = sessionId ? deps.sessions.get(sessionId)?.state === 'closed' : false;
@@ -118,6 +125,7 @@ export function createWsHandler(deps: { bus: EventBus; sessions: SessionService;
     send(socket, {
       type: 'snapshot', sessions: deps.sessions.list(), approvals: deps.approvals.listPending(), managers: deps.managers.listViews(),
       ...workingStateSnapshotFields(),
+      ...(deps.degraded && { daemonIssues: deps.degraded.list() }),
     });
     socket.on('message', (raw) => {
       let frame: unknown;

@@ -55,7 +55,8 @@ export function createDegradedRegistry({ clock = Date.now }: DegradedRegistryOpt
 
   const clearHookFailuresWhenClean = (): void => {
     const lastFailureTime = hookFailureTimes.at(-1);
-    const isClean = lastFailureTime === undefined || clock() - lastFailureTime >= HOOK_FAILURES_WINDOW_MS;
+    if (lastFailureTime === undefined) return;
+    const isClean = clock() - lastFailureTime >= HOOK_FAILURES_WINDOW_MS;
     if (isClean && issues.has('hook_fail_open')) registry.clear('hook_fail_open');
   };
 

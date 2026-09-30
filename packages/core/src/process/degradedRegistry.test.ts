@@ -137,6 +137,13 @@ describe('the degraded registry', () => {
       expect(changes.at(-1)).toEqual([]);
     });
 
+    it('keeps an issue marked directly, without counted failures, until it is cleared', () => {
+      registry.mark('hook_fail_open', 'hooks fail open.');
+      nowMs += 10 * MINUTE_MS;
+
+      expect(registry.status()).toBe('degraded');
+    });
+
     it('stays marked while failures keep coming', () => {
       for (let failure = 0; failure < 3; failure += 1) registry.recordHookFailOpen();
       nowMs += 4 * MINUTE_MS;
