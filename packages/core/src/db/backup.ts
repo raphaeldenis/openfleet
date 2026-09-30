@@ -68,7 +68,8 @@ function reserveBackupPath(backupsFolder: string, schemaVersion: string): { back
   }
 }
 
-function deleteBackupsBeyondTheMostRecent(backupsFolder: string, justTakenPath: string): void {
+// Runs once the migrations succeeded: a failed or refused boot keeps every snapshot it has.
+export function deleteBackupsBeyondTheMostRecent(backupsFolder: string, justTakenPath: string): void {
   try {
     const backupNamesOldestFirst = backupNamesIn(backupsFolder).sort((a, b) => chronologicalKeyOf(a)!.localeCompare(chronologicalKeyOf(b)!));
     for (const name of backupNamesOldestFirst.slice(0, -BACKUPS_TO_KEEP)) {
@@ -96,7 +97,6 @@ export function backUpBeforeMigrating(db: DatabaseSync, options: { home: string;
     db.exec(`VACUUM INTO ${sqlStringLiteral(reservation.inProgressPath)}`);
     renameSync(reservation.inProgressPath, reservation.backupPath);
     copyConfigAlongside(join(options.home, 'config.json'), reservation.backupPath);
-    deleteBackupsBeyondTheMostRecent(backupsFolder, reservation.backupPath);
     return reservation.backupPath;
   } catch (error) {
     if (reservation !== undefined) {

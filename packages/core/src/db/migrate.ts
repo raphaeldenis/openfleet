@@ -167,22 +167,42 @@ export function highestAppliedMigration(db: DatabaseSync): string | undefined {
 // compared against unrelated SQL, since it was never claimed to be that version's real source anyway.
 function reconcileChecksums(db: DatabaseSync, sources: MigrationSource[]): void {
   if (!hasChecksumColumn(db)) return;
-  const sqlByVersion = new Map<string, string>();
-  for (const source of sources) if (!sqlByVersion.has(source.version)) sqlByVersion.set(source.version, source.sql);
+  rejectEditedAppliedMigrations(db, sources);
+  const sqlByVersion = sqlByVersionOf(sources);
 
   const rows = db.prepare('SELECT version, checksum FROM schema_migrations').all() as { version: string; checksum: string | null }[];
   for (const row of rows) {
     const sql = sqlByVersion.get(row.version);
-    if (sql === undefined) continue;
-    const currentChecksum = sha256Hex(sql);
-    if (row.checksum === null) {
-      db.prepare('UPDATE schema_migrations SET checksum = ? WHERE version = ?').run(currentChecksum, row.version);
-      continue;
-    }
-    if (row.checksum !== currentChecksum) {
+    if (sql === undefined || row.checksum !== null) continue;
+    db.prepare('UPDATE schema_migrations SET checksum = ? WHERE version = ?').run(sha256Hex(sql), row.version);
+  }
+}
+
+function sqlByVersionOf(sources: MigrationSource[]): Map<string, string> {
+  const sqlByVersion = new Map<string, string>();
+  for (const source of sources) if (!sqlByVersion.has(source.version)) sqlByVersion.set(source.version, source.sql);
+  return sqlByVersion;
+}
+
+function rejectEditedAppliedMigrations(db: DatabaseSync, sources: MigrationSource[]): void {
+  if (!hasChecksumColumn(db)) return;
+  const sqlByVersion = sqlByVersionOf(sources);
+  const rows = db.prepare('SELECT version, checksum FROM schema_migrations').all() as { version: string; checksum: string | null }[];
+  for (const row of rows) {
+    const sql = sqlByVersion.get(row.version);
+    const wasEditedAfterBeingApplied = sql !== undefined && row.checksum !== null && row.checksum !== sha256Hex(sql);
+    if (wasEditedAfterBeingApplied) {
       throw new Error(`migration ${row.version} was applied with SQL that no longer matches the file on disk now (checksum mismatch); migrations must not be edited after being applied`);
     }
   }
+}
+
+// The refusals applyMigrations would raise on the shipped migrations, raised before anything is
+// backed up so a refused boot leaves the backups folder untouched.
+export function assertBootableSchema(db: DatabaseSync, databasePath: string): void {
+  const knownSources = readMigrationSources(migrationsDir);
+  rejectUnknownAppliedVersions(appliedVersionsOf(db), knownSources, databasePath);
+  rejectEditedAppliedMigrations(db, knownSources);
 }
 
 // ponytail: `sources` exists only so tests can inject a broken migration; the default reads
