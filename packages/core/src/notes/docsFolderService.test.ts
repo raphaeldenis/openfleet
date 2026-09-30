@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDatabase } from '../db/database.js';
+import { createDegradedRegistry, type DegradedRegistry } from '../process/degradedRegistry.js';
 import { ProjectRepository } from '../projects/projectRepository.js';
 import type { DocsFolderFs } from './docsFolderFs.js';
 import {
@@ -88,7 +89,7 @@ class FakeDocsFolderFs implements DocsFolderFs {
   }
 }
 
-function setup({ docsFolderPath = '/docs' }: { docsFolderPath?: string | null } = {}) {
+function setup({ docsFolderPath = '/docs', degraded }: { docsFolderPath?: string | null; degraded?: DegradedRegistry } = {}) {
   const db = openDatabase(':memory:');
   const projects = new ProjectRepository(db);
   projects.insert({ id: 'p1', name: 'P1', docsFolderPath, createdAt: 't0' });
@@ -101,7 +102,7 @@ function setup({ docsFolderPath = '/docs' }: { docsFolderPath?: string | null } 
   const notes = new NoteService({ repo: noteRepo, db, expandMentions, clock, newId });
 
   const fakeFs = new FakeDocsFolderFs();
-  const docs = new DocsFolderService({ notes, noteRepo, projects, fs: fakeFs, clock: () => FIXED_DOCS_CLOCK });
+  const docs = new DocsFolderService({ notes, noteRepo, projects, fs: fakeFs, clock: () => FIXED_DOCS_CLOCK, degraded });
 
   return { db, projects, noteRepo, notes, fakeFs, docs };
 }
@@ -388,6 +389,88 @@ describe('DocsFolderService writeThrough', () => {
     expect(() => docs.writeThrough(note.id, { bodyMd: oversized, expectedRev: note.rev, author: AUTHOR })).toThrow(NoteTooLargeError);
 
     expect(writeSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('DocsFolderService and the degraded state', () => {
+  const codesOf = (degraded: DegradedRegistry) => degraded.list().map((issue) => issue.code);
+
+  beforeEach(() => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  it('marks docs_folder_unreadable when a note file cannot be read', () => {
+    const degraded = createDegradedRegistry();
+    const { fakeFs, docs } = setup({ degraded });
+    const note = docs.createFileBackedNote({ projectId: 'p1', folder: 'specs', title: 'x', bodyMd: 'v1', author: AUTHOR });
+    fakeFs.unreadableFiles.set(note.filePath!, 'EACCES');
+
+    expect(() => docs.writeThrough(note.id, { bodyMd: 'v2', expectedRev: note.rev, author: AUTHOR })).toThrow(NoteFileUnreadableError);
+
+    expect(codesOf(degraded)).toEqual(['docs_folder_unreadable']);
+  });
+
+  it('marks it for a note the boot reconcile could not read, without the path in the issue', () => {
+    const degraded = createDegradedRegistry();
+    const { fakeFs, docs } = setup({ degraded });
+    const note = docs.createFileBackedNote({ projectId: 'p1', folder: 'specs', title: 'x', bodyMd: 'v1', author: AUTHOR });
+    fakeFs.unreadableFiles.set(note.filePath!, 'EIO');
+
+    docs.reconcileOnBoot('p1');
+
+    expect(degraded.list()).toMatchObject([{ code: 'docs_folder_unreadable' }]);
+    expect(JSON.stringify(degraded.list())).not.toContain('/docs');
+  });
+
+  it('clears on the next successful read of a note file', () => {
+    const degraded = createDegradedRegistry();
+    const { fakeFs, docs } = setup({ degraded });
+    const note = docs.createFileBackedNote({ projectId: 'p1', folder: 'specs', title: 'x', bodyMd: 'v1', author: AUTHOR });
+    fakeFs.unreadableFiles.set(note.filePath!, 'EACCES');
+    expect(() => docs.writeThrough(note.id, { bodyMd: 'v2', expectedRev: note.rev, author: AUTHOR })).toThrow(NoteFileUnreadableError);
+
+    fakeFs.unreadableFiles.delete(note.filePath!);
+    docs.writeThrough(note.id, { bodyMd: 'v2', expectedRev: note.rev, author: AUTHOR });
+
+    expect(codesOf(degraded)).toEqual([]);
+  });
+
+  it('stays marked when a read of another, healthy file succeeds: only the path that failed can clear it', () => {
+    const degraded = createDegradedRegistry();
+    const { fakeFs, docs } = setup({ degraded });
+    const broken = docs.createFileBackedNote({ projectId: 'p1', folder: 'specs', title: 'broken', bodyMd: 'v1', author: AUTHOR });
+    docs.createFileBackedNote({ projectId: 'p1', folder: 'specs', title: 'fine', bodyMd: 'v1', author: AUTHOR });
+    fakeFs.unreadableFiles.set(broken.filePath!, 'EACCES');
+
+    docs.reconcileOnBoot('p1');
+
+    expect(codesOf(degraded)).toEqual(['docs_folder_unreadable']);
+    expect(degraded.list()[0]!.count).toBe(1);
+  });
+
+  it('clears once the reconcile reads the path that failed', () => {
+    const degraded = createDegradedRegistry();
+    const { fakeFs, docs } = setup({ degraded });
+    const broken = docs.createFileBackedNote({ projectId: 'p1', folder: 'specs', title: 'broken', bodyMd: 'v1', author: AUTHOR });
+    fakeFs.unreadableFiles.set(broken.filePath!, 'EACCES');
+    docs.reconcileOnBoot('p1');
+
+    fakeFs.unreadableFiles.delete(broken.filePath!);
+    docs.reconcileOnBoot('p1');
+
+    expect(codesOf(degraded)).toEqual([]);
+  });
+
+  it('stays healthy when a file is merely missing: that is not an unreadable docs folder', () => {
+    const degraded = createDegradedRegistry();
+    const { fakeFs, docs } = setup({ degraded });
+    const note = docs.createFileBackedNote({ projectId: 'p1', folder: 'specs', title: 'x', bodyMd: 'v1', author: AUTHOR });
+    fakeFs.files.delete(note.filePath!);
+
+    docs.reconcileOnBoot('p1');
+
+    expect(codesOf(degraded)).toEqual([]);
   });
 });
 
