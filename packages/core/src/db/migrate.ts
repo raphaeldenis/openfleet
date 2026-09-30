@@ -127,7 +127,7 @@ function rejectUnknownAppliedVersions(applied: Set<string>, knownSources: Migrat
   const knownVersions = new Set(knownSources.map((s) => s.version));
   const unknownVersions = [...applied].filter((version) => !knownVersions.has(version)).sort();
   if (unknownVersions.length > 0) {
-    throw new SchemaNewerThanCodeError(unknownVersions, restoreHintFor(databasePath));
+    throw new SchemaNewerThanCodeError(unknownVersions, restoreHintFor(databasePath, [...applied].sort().pop()!));
   }
 }
 
@@ -154,11 +154,11 @@ export function latestShippedMigration(): string {
   return readMigrationSources(migrationsDir).map((source) => source.version).pop()!;
 }
 
-function restoreHintFor(databasePath: string | undefined): string {
+function restoreHintFor(databasePath: string | undefined, databaseSchemaVersion: string): string {
   const hasRealPath = databasePath !== undefined && databasePath !== ':memory:';
   const backupsFolder = hasRealPath ? join(dirname(databasePath), BACKUPS_FOLDER_NAME) : `the ${BACKUPS_FOLDER_NAME} folder next to openfleet.db`;
   const latestKnownVersion = latestShippedMigration();
-  const exactBackupName = hasRealPath ? safelyFind(() => preUpgradeSnapshotName(backupsFolder, shippedMigrationVersions()) ?? newestKnownBackupName(backupsFolder, shippedMigrationVersions())) : undefined;
+  const exactBackupName = hasRealPath ? safelyFind(() => preUpgradeSnapshotName(backupsFolder, shippedMigrationVersions(), databaseSchemaVersion) ?? newestKnownBackupName(backupsFolder, shippedMigrationVersions())) : undefined;
   const backupName = exactBackupName ?? `openfleet-${latestKnownVersion}-<timestamp>.db`;
   return `quit the app, delete openfleet.db-wal and openfleet.db-shm, then copy the .db backup named ${backupName} in ${backupsFolder}, never a .config.json copy, over openfleet.db; or install the newer app`;
 }

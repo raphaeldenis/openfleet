@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -171,6 +171,134 @@ describe('a marker that cannot be trusted', () => {
     expect(lstatSync(markerPath).isDirectory()).toBe(true);
   });
 });
+
+function execOnDatabase(statement: string): void {
+  const db = new DatabaseSync(dbPath);
+  db.exec(statement);
+  db.close();
+}
+
+function restoreDatabaseFrom(backupName: string): void {
+  for (const sideFile of [`${dbPath}-wal`, `${dbPath}-shm`]) rmSync(sideFile, { force: true });
+  copyFileSync(join(backupsDir, backupName), dbPath);
+}
+
+const databaseBackupsOfVersion = (version: string) => databaseBackups().filter((name) => name.startsWith(`openfleet-${version}-`));
+
+describe('a marker left over from an upgrade that is no longer in flight', () => {
+  it('is replaced by this boot snapshot when the user restored the marked snapshot and used the old app since', async () => {
+    createDatabaseWhere016Fails('013_working_state');
+    await refusalLineOf(() => openDatabase(dbPath));
+    const staleMarkedName = readFileSync(markerPath, 'utf8');
+    restoreDatabaseFrom(staleMarkedName);
+    execOnDatabase(`UPDATE newest_data SET v = 'months of work with the old app'`);
+
+    const line = await refusalLineOf(() => openDatabase(dbPath));
+
+    const thisBootsSnapshot = databaseBackupsOfVersion('013_working_state').pop()!;
+    expect(line).toContain(savedAt(thisBootsSnapshot));
+    expect(readFileSync(markerPath, 'utf8')).toBe(thisBootsSnapshot);
+    const snapshot = new DatabaseSync(join(backupsDir, thisBootsSnapshot), { readOnly: true });
+    expect(snapshot.prepare('SELECT v FROM newest_data').all()).toEqual([{ v: 'months of work with the old app' }]);
+    snapshot.close();
+  });
+
+  it('is replaced by this boot snapshot when it looks valid but names a backup of the version the database still holds', async () => {
+    const staleMarkedName = backupNamed('013_working_state', REVIEWER_FIXTURE_TIMESTAMP);
+    seedBackup(staleMarkedName);
+    createDatabaseWhere016Fails('013_working_state');
+    writeFileSync(markerPath, staleMarkedName);
+
+    const line = await refusalLineOf(() => openDatabase(dbPath));
+
+    const thisBootsSnapshot = databaseBackupsOfVersion('013_working_state').filter((name) => name !== staleMarkedName).pop()!;
+    expect(line).toContain(savedAt(thisBootsSnapshot));
+    expect(line).not.toContain(staleMarkedName);
+    expect(readFileSync(markerPath, 'utf8')).toBe(thisBootsSnapshot);
+  });
+
+  it('is deleted by a boot with nothing to migrate, so a crash before the marker was cleared leaves nothing behind', async () => {
+    createDatabaseWhere016Fails('013_working_state');
+    await refusalLineOf(() => openDatabase(dbPath));
+    const markerLeftByTheCrash = readFileSync(markerPath, 'utf8');
+    repairSoThat016Succeeds();
+    openDatabase(dbPath).close();
+    writeFileSync(markerPath, markerLeftByTheCrash);
+
+    openDatabase(dbPath).close();
+
+    expect(existsSync(markerPath)).toBe(false);
+  });
+
+  it('does not name the old snapshot in the newer-schema refusal once a boot with nothing to migrate deleted it', async () => {
+    createDatabaseWhere016Fails('013_working_state');
+    await refusalLineOf(() => openDatabase(dbPath));
+    const markerLeftByTheCrash = readFileSync(markerPath, 'utf8');
+    repairSoThat016Succeeds();
+    openDatabase(dbPath).close();
+    writeFileSync(markerPath, markerLeftByTheCrash);
+    openDatabase(dbPath).close();
+    execOnDatabase(`INSERT INTO schema_migrations (version, applied_at) VALUES ('999_newer', 'x')`);
+
+    const line = await refusalLineOf(() => openDatabase(dbPath));
+
+    expect(line).toContain(backupOfVersion('015_handovers'));
+    expect(line).not.toContain(markerLeftByTheCrash);
+  });
+});
+
+describe('a failure streak, marker validity follows the migrations that committed', () => {
+  it('keeps the marker on the snapshot from before the first attempt while each boot commits one more migration', async () => {
+    execOnDatabaseAfterCreating('012_session_cli_session_id', 'CREATE TABLE session_cli_ids (x); CREATE TABLE handovers (x); ALTER TABLE sessions ADD COLUMN prompted INTEGER');
+    const lines: string[] = [];
+    lines.push(await refusalLineOf(() => openDatabase(dbPath)));
+    const preUpgradeSnapshot = readFileSync(markerPath, 'utf8');
+    execOnDatabase('DROP TABLE session_cli_ids');
+    lines.push(await refusalLineOf(() => openDatabase(dbPath)));
+    execOnDatabase('DROP TABLE handovers');
+    lines.push(await refusalLineOf(() => openDatabase(dbPath)));
+
+    for (const line of lines) expect(line).toContain(savedAt(preUpgradeSnapshot));
+    expect(preUpgradeSnapshot).toContain('openfleet-012_session_cli_session_id-');
+  });
+
+  it('replaces the marker by the equivalent snapshot of this boot when the previous boot committed nothing', async () => {
+    execOnDatabaseAfterCreating('014_session_cli_ids', 'CREATE TABLE handovers (x)');
+    await refusalLineOf(() => openDatabase(dbPath));
+    const firstSnapshot = readFileSync(markerPath, 'utf8');
+
+    const line = await refusalLineOf(() => openDatabase(dbPath));
+
+    const secondSnapshot = readFileSync(markerPath, 'utf8');
+    expect(secondSnapshot).not.toBe(firstSnapshot);
+    expect(line).toContain(savedAt(secondSnapshot));
+    expect(databaseBackupsOfVersion('014_session_cli_ids')).toEqual([secondSnapshot]);
+  });
+
+  it('keeps the marked snapshot after the success even when the streak backed up three more versions', async () => {
+    execOnDatabaseAfterCreating('012_session_cli_session_id', 'CREATE TABLE session_cli_ids (x); CREATE TABLE handovers (x); ALTER TABLE sessions ADD COLUMN prompted INTEGER');
+    await refusalLineOf(() => openDatabase(dbPath));
+    const preUpgradeSnapshot = readFileSync(markerPath, 'utf8');
+    execOnDatabase('DROP TABLE session_cli_ids');
+    await refusalLineOf(() => openDatabase(dbPath));
+    execOnDatabase('DROP TABLE handovers');
+    await refusalLineOf(() => openDatabase(dbPath));
+    repairSoThat016Succeeds();
+
+    openDatabase(dbPath).close();
+
+    expect(existsSync(markerPath)).toBe(false);
+    expect(databaseBackups()).toContain(preUpgradeSnapshot);
+  });
+});
+
+function execOnDatabaseAfterCreating(lastVersion: string, statements: string): void {
+  const db = new DatabaseSync(dbPath);
+  db.exec('PRAGMA journal_mode = WAL');
+  applyMigrations(db, sourcesUpTo(lastVersion));
+  db.exec(statements);
+  db.close();
+}
 
 describe('a successful boot that never failed', () => {
   it('deletes no other backup and leaves no marker', () => {

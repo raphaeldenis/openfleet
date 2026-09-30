@@ -75,14 +75,21 @@ function reserveBackupPath(backupsFolder: string, schemaVersion: string): { back
   }
 }
 
-/** Returns the file name the pre-upgrade marker holds while it names a backup of a known schema version that is still in the folder. */
-export function preUpgradeSnapshotName(backupsFolder: string, knownVersions: ReadonlySet<string>): string | undefined {
+/**
+ * Returns the file name the pre-upgrade marker holds while an upgrade is in flight: it names a backup of a
+ * shipped schema version still in the folder, and that version is strictly older than the one the database
+ * holds now, so migrations committed since the snapshot.
+ */
+export function preUpgradeSnapshotName(backupsFolder: string, knownVersions: ReadonlySet<string>, databaseSchemaVersion: string): string | undefined {
   const markerPath = join(backupsFolder, PRE_UPGRADE_MARKER_NAME);
   if (!isRegularFile(markerPath)) return undefined;
   try {
     const markedName = readFileSync(markerPath, 'utf8');
     const isAnExistingBackup = backupNamesIn(backupsFolder).includes(markedName);
-    return isAnExistingBackup && knownVersions.has(schemaVersionOf(markedName)) ? markedName : undefined;
+    if (!isAnExistingBackup) return undefined;
+    const markedVersion = schemaVersionOf(markedName);
+    const hasMigrationsCommittedSinceTheSnapshot = markedVersion < databaseSchemaVersion;
+    return knownVersions.has(markedVersion) && hasMigrationsCommittedSinceTheSnapshot ? markedName : undefined;
   } catch {
     return undefined;
   }
@@ -91,9 +98,10 @@ export function preUpgradeSnapshotName(backupsFolder: string, knownVersions: Rea
 // The marker holds the exact name of the snapshot taken before the first boot of an upgrade. It is
 // created through a temp name and renamed into place, so a symlink or stale file under the marker name is
 // replaced, never followed; a marker that cannot be written leaves the hint on this boot's snapshot.
-export function recordPreUpgradeSnapshot(backupsFolder: string, backupName: string, knownVersions: ReadonlySet<string>): void {
-  const markerAlreadyNamesASnapshot = preUpgradeSnapshotName(backupsFolder, knownVersions) !== undefined;
-  if (markerAlreadyNamesASnapshot) return;
+// Returns the snapshot the upgrade started from: the marked one while it is still valid, else this boot's.
+export function recordPreUpgradeSnapshot(backupsFolder: string, backupName: string, knownVersions: ReadonlySet<string>, databaseSchemaVersion: string): string {
+  const markedName = preUpgradeSnapshotName(backupsFolder, knownVersions, databaseSchemaVersion);
+  if (markedName !== undefined) return markedName;
   const markerPath = join(backupsFolder, PRE_UPGRADE_MARKER_NAME);
   const inProgressPath = `${markerPath}${IN_PROGRESS_SUFFIX}`;
   removeIfPresent(inProgressPath);
@@ -104,6 +112,7 @@ export function recordPreUpgradeSnapshot(backupsFolder: string, backupName: stri
     removeIfPresent(inProgressPath);
     log('warn', `pre-upgrade marker not written: ${(error as Error).message}`);
   }
+  return backupName;
 }
 
 export function clearPreUpgradeMarker(backupsFolder: string): void {
@@ -147,12 +156,13 @@ function removeConfigCopiesWithoutABackup(backupsFolder: string): void {
   }
 }
 
-export function pruneBackupsKeepingRecentSchemaVersions(backupsFolder: string, justTakenPath: string, knownVersions: ReadonlySet<string>): void {
+export function pruneBackupsKeepingRecentSchemaVersions(backupsFolder: string, options: { justTakenPath: string; preUpgradeSnapshotName: string | undefined; knownVersions: ReadonlySet<string> }): void {
   try {
-    const justTakenName = basename(justTakenPath);
+    const { knownVersions } = options;
+    const justTakenName = basename(options.justTakenPath);
     const newestNameBySchemaVersion = newestBackupNameBySchemaVersion(backupsFolder, knownVersions, justTakenName);
     const keptVersions = retainedSchemaVersions(newestNameBySchemaVersion).slice(-SCHEMA_VERSIONS_TO_KEEP);
-    const keptNames = new Set<string | undefined>([justTakenName, preUpgradeSnapshotName(backupsFolder, knownVersions), ...keptVersions.map((version) => newestNameBySchemaVersion.get(version))]);
+    const keptNames = new Set<string | undefined>([justTakenName, options.preUpgradeSnapshotName, ...keptVersions.map((version) => newestNameBySchemaVersion.get(version))]);
     for (const name of backupNamesIn(backupsFolder)) {
       const isShippedVersion = knownVersions.has(schemaVersionOf(name));
       if (isShippedVersion && !keptNames.has(name)) removeIfPresent(join(backupsFolder, name));

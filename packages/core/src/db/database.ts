@@ -2,7 +2,7 @@ import { chmodSync, existsSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { log } from '../logger.js';
-import { backUpBeforeMigrating, clearPreUpgradeMarker, preUpgradeSnapshotName, pruneBackupsKeepingRecentSchemaVersions, recordPreUpgradeSnapshot } from './backup.js';
+import { BACKUPS_FOLDER_NAME, backUpBeforeMigrating, clearPreUpgradeMarker, pruneBackupsKeepingRecentSchemaVersions, recordPreUpgradeSnapshot } from './backup.js';
 import { applyMigrations, assertBootableSchema, highestAppliedMigration, MigrationFailedError, pendingMigrations, shippedMigrationVersions } from './migrate.js';
 
 export class DatabaseOpenError extends Error {
@@ -22,7 +22,15 @@ function openFile(path: string): DatabaseSync {
 
 // A migration without a backup is the data-loss case, so a failed backup stops the boot; a database
 // that never applied a migration holds nothing worth saving.
-function backUpWhenMigrationsArePending(db: DatabaseSync, path: string): string | undefined {
+interface UpgradeBackup {
+  backupsFolder: string;
+  /** The snapshot this boot just took. It may already include migrations an earlier failed boot committed. */
+  backupPath: string;
+  /** The snapshot the upgrade started from: the marked one while migrations committed since it, else this boot's. */
+  preUpgradeSnapshotName: string;
+}
+
+function backUpWhenMigrationsArePending(db: DatabaseSync, path: string): UpgradeBackup | undefined {
   const schemaVersion = highestAppliedMigration(db);
   const holdsAppliedMigrations = schemaVersion !== undefined;
   const hasPendingMigrations = pendingMigrations(db).length > 0;
@@ -31,44 +39,45 @@ function backUpWhenMigrationsArePending(db: DatabaseSync, path: string): string 
     assertBootableSchema(db, path);
     const backupPath = backUpBeforeMigrating(db, { home: dirname(path), schemaVersion });
     log('info', `database backed up to ${backupPath} before migrating`);
-    recordPreUpgradeSnapshot(dirname(backupPath), basename(backupPath), shippedMigrationVersions());
-    pruneBackupsKeepingRecentSchemaVersions(dirname(backupPath), backupPath, shippedMigrationVersions());
-    return backupPath;
+    const backupsFolder = dirname(backupPath);
+    const knownVersions = shippedMigrationVersions();
+    const preUpgradeSnapshotName = recordPreUpgradeSnapshot(backupsFolder, basename(backupPath), knownVersions, schemaVersion);
+    pruneBackupsKeepingRecentSchemaVersions(backupsFolder, { justTakenPath: backupPath, preUpgradeSnapshotName, knownVersions });
+    return { backupsFolder, backupPath, preUpgradeSnapshotName };
   } catch (error) {
     db.close();
     throw error;
   }
 }
 
-// The backup just taken holds a schema that may already include migrations an earlier failed boot
-// committed; the marker names the snapshot taken before the first attempt of this upgrade.
-function snapshotFromBeforeTheUpgrade(backupPath: string): string {
-  const backupsFolder = dirname(backupPath);
-  const markedName = preUpgradeSnapshotName(backupsFolder, shippedMigrationVersions());
-  return markedName === undefined ? backupPath : join(backupsFolder, markedName);
+// A boot with nothing to migrate means no upgrade is in flight, so a marker left by a crash between the
+// last migration and its clearing goes too. The snapshot the upgrade started from survives the first
+// pruning after a success, so a user can still roll back to it.
+function endTheUpgrade(path: string, upgradeBackup: UpgradeBackup | undefined): void {
+  if (path === ':memory:') return;
+  if (upgradeBackup === undefined) {
+    clearPreUpgradeMarker(join(dirname(path), BACKUPS_FOLDER_NAME));
+    return;
+  }
+  clearPreUpgradeMarker(upgradeBackup.backupsFolder);
+  pruneBackupsKeepingRecentSchemaVersions(upgradeBackup.backupsFolder, { justTakenPath: upgradeBackup.backupPath, preUpgradeSnapshotName: upgradeBackup.preUpgradeSnapshotName, knownVersions: shippedMigrationVersions() });
 }
 
-function endTheUpgrade(backupPath: string | undefined): void {
-  if (backupPath === undefined) return;
-  clearPreUpgradeMarker(dirname(backupPath));
-  pruneBackupsKeepingRecentSchemaVersions(dirname(backupPath), backupPath, shippedMigrationVersions());
-}
-
-function migrateNamingTheBackupOnFailure(db: DatabaseSync, path: string, backupPath: string | undefined): void {
+function migrateNamingTheBackupOnFailure(db: DatabaseSync, path: string, upgradeBackup: UpgradeBackup | undefined): void {
   try {
     applyMigrations(db, undefined, path);
   } catch (error) {
     db.close();
-    throw backupPath === undefined ? error : new MigrationFailedError(error, snapshotFromBeforeTheUpgrade(backupPath));
+    throw upgradeBackup === undefined ? error : new MigrationFailedError(error, join(upgradeBackup.backupsFolder, upgradeBackup.preUpgradeSnapshotName));
   }
 }
 
 export function openDatabase(path: string): DatabaseSync {
   const db = openFile(path);
   db.exec('PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA recursive_triggers = ON;');
-  const backupPath = backUpWhenMigrationsArePending(db, path);
-  migrateNamingTheBackupOnFailure(db, path, backupPath);
-  endTheUpgrade(backupPath);
+  const upgradeBackup = backUpWhenMigrationsArePending(db, path);
+  migrateNamingTheBackupOnFailure(db, path, upgradeBackup);
+  endTheUpgrade(path, upgradeBackup);
   // The db holds session tokens and message bodies in clear text (MAJ-02); WAL mode already created the
   // -wal/-shm side files by now, so tighten all three every time a real (non-:memory:) path is opened.
   for (const file of [path, `${path}-wal`, `${path}-shm`]) if (existsSync(file)) chmodSync(file, 0o600);
