@@ -10,6 +10,7 @@ import { sweepStaleSessions } from './harness/claudeCli/tokenFiles.js';
 import { FakeHarness } from './harness/fakeHarness.js';
 import { newId } from './ids.js';
 import { log } from './logger.js';
+import { DAEMON_VERSION } from './version.js';
 import { ManagerRepository } from './managers/managerRepository.js';
 import { ManagerService } from './managers/managerService.js';
 import { PulseScheduler } from './managers/pulseScheduler.js';
@@ -73,7 +74,7 @@ export async function startDaemon(config: Config): Promise<Daemon> {
   // The server must be listening before any resumed CLI can POST its first hook — resuming first risks a
   // fast process hitting a port nothing is serving yet.
   const server = await startServer({ ...config, e2eRoutes: config.e2eEnabled, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, stores, storeRepo, projects, stopRefusal, sessionStartContext, handoverLedger, contextNotice, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, workingStates, worktreesRoot: config.worktreesRoot }) });
-  log('info', `openfleet core listening on ${server.url} (home: ${config.home})`);
+  log('info', `openfleet core listening on ${server.url} (version: ${DAEMON_VERSION}, home: ${config.home})`);
 
   // A launch dir a crashed or killed daemon never cleaned up would otherwise sit on disk carrying a live
   // token indefinitely; every resume below rewrites its own launch dir from scratch with rotated tokens
