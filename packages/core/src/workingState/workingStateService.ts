@@ -22,6 +22,8 @@ export interface WorkingStateUpdate { updatedAt: string; mirrorWarning?: string 
 
 type UpdateListener = (state: WorkingState) => void;
 
+export interface FleetChange { name: string; kind: 'spawned' | 'closed' | 'reopened'; changedAt: string }
+
 interface StateRow { sections_json: string; updated_at: string }
 
 export class WorkingStateService {
@@ -58,13 +60,29 @@ export class WorkingStateService {
     return { ...sections, sessionId, updatedAt: row.updated_at, ...(fleetChangedAt ? { fleetChangedAt } : {}) };
   }
 
-  /** The latest creation or close time among the direct children of a session; none for a session with no child. */
+  /** The latest spawn, close or reopen time among the direct children of a session; none for a session with no child. */
   fleetChangedAt(sessionId: string): string | undefined {
-    const row = this.deps.db.prepare(`SELECT MAX(changed_at) AS latest FROM (
-      SELECT created_at AS changed_at FROM sessions WHERE parent_id = ?
+    const latest = this.deps.db.prepare(`SELECT MAX(changedAt) AS latest FROM (
+      SELECT created_at AS changedAt FROM sessions WHERE parent_id = ?
       UNION ALL
-      SELECT closed_at AS changed_at FROM sessions WHERE parent_id = ? AND closed_at IS NOT NULL)`).get(sessionId, sessionId) as { latest: string | null };
-    return row.latest ?? undefined;
+      SELECT closed_at AS changedAt FROM sessions WHERE parent_id = ? AND closed_at IS NOT NULL
+      UNION ALL
+      SELECT session_events.ts AS changedAt FROM session_events
+        JOIN sessions ON sessions.id = session_events.session_id
+        WHERE sessions.parent_id = ? AND session_events.kind = 'reopened')`).get(sessionId, sessionId, sessionId) as { latest: string | null };
+    return latest.latest ?? undefined;
+  }
+
+  /** Every spawn, close and reopen of a direct child, oldest first. No row is ever deleted: a deleted child would have to count too, or the value goes backwards. */
+  fleetChanges(sessionId: string): FleetChange[] {
+    return this.deps.db.prepare(`SELECT name, 'spawned' AS kind, created_at AS changedAt FROM sessions WHERE parent_id = ?
+      UNION ALL
+      SELECT name, 'closed' AS kind, closed_at AS changedAt FROM sessions WHERE parent_id = ? AND closed_at IS NOT NULL
+      UNION ALL
+      SELECT sessions.name, 'reopened' AS kind, session_events.ts AS changedAt FROM session_events
+        JOIN sessions ON sessions.id = session_events.session_id
+        WHERE sessions.parent_id = ? AND session_events.kind = 'reopened'
+      ORDER BY changedAt, name`).all(sessionId, sessionId, sessionId) as unknown as FleetChange[];
   }
 
   onUpdate(listener: UpdateListener): () => void {

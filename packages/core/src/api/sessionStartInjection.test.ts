@@ -156,7 +156,7 @@ describe('user can get the working state back after a /clear or a compaction', (
     const context = contextOf(await sessionStarted('clear'));
 
     expect(context.split('\n')[0]).toContain('stale');
-    expect(context.split('\n')[0]).toContain('written before the last spawn or close');
+    expect(context.split('\n')[0]).toContain('written before the last spawn, close or reopen');
   });
 
   it('does not mark a current state stale', async () => {
@@ -454,7 +454,7 @@ describe('user can trust the framing of the injection against text forged by age
 
     const context = contextOf(await sessionStarted('clear', { transcript_path: transcriptPathNamed('new.jsonl') }));
 
-    expect(context.split('\n')[0]).toContain('written before the last spawn or close');
+    expect(context.split('\n')[0]).toContain('written before the last spawn, close or reopen');
     expect(context.split('\n')[0]).toContain('minutes ago');
     expect(context.length).toBeLessThan(9_200);
     for (const item of items) expect(context).toContain(item);

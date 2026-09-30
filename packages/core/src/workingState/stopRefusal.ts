@@ -2,7 +2,7 @@ import { WORKING_STATE_SECTIONS, type StopHookOutput, type WorkingState, type Wo
 import type { DatabaseSync } from 'node:sqlite';
 import { renderWorkingState } from './renderWorkingState.js';
 import { ageInWholeMinutes, ageMsOf, isOlderThanLimit, isWrittenBeforeFleetChanged, minutesLabel } from './stateFreshness.js';
-import type { WorkingStateService } from './workingStateService.js';
+import type { FleetChange, WorkingStateService } from './workingStateService.js';
 import type { WorkingStateSettings } from './workingStateSettings.js';
 
 const MAX_CHILDREN_NAMED = 10;
@@ -10,8 +10,6 @@ const UPDATE_TOOL_NAME = 'update_working_state';
 const SECTION_ARGUMENT_NAMES = 'plan, todo, remaining, questions_for_human, internal_questions, blockers';
 
 export interface StopRefusalDeps { db: DatabaseSync; workingStates: WorkingStateService; settings: WorkingStateSettings; clock: () => string }
-
-interface FleetChange { name: string; kind: 'spawned' | 'closed' }
 
 /** Decides whether the end of a turn is refused: a block answers the Stop, no block lets the turn end. */
 export class StopRefusal {
@@ -46,9 +44,9 @@ export class StopRefusal {
   }
 
   private staleByFleetReason(state: WorkingState): string {
-    const changes = this.fleetChangesSince(state.sessionId, state.updatedAt);
-    const named = changes.slice(0, MAX_CHILDREN_NAMED).map((change) => `${change.name} (${change.kind})`);
-    const hiddenCount = changes.length - named.length;
+    const distinctEntries = distinctChildKindEntries(this.fleetChangesSince(state.sessionId, state.updatedAt));
+    const named = distinctEntries.slice(0, MAX_CHILDREN_NAMED);
+    const hiddenCount = distinctEntries.length - named.length;
     const listing = hiddenCount > 0 ? `${named.join(', ')} and ${hiddenCount} more` : named.join(', ');
     return `Your working state was written before your fleet changed: ${listing}. Before ending the turn, update it with the MCP tool ${UPDATE_TOOL_NAME} so it matches your live children.`;
   }
@@ -58,12 +56,14 @@ export class StopRefusal {
   }
 
   private fleetChangesSince(sessionId: string, since: string): FleetChange[] {
-    const rows = this.deps.db.prepare(`SELECT name, 'spawned' AS kind, created_at AS changed_at FROM sessions WHERE parent_id = ? AND created_at > ?
-      UNION ALL
-      SELECT name, 'closed' AS kind, closed_at AS changed_at FROM sessions WHERE parent_id = ? AND closed_at IS NOT NULL AND closed_at > ?
-      ORDER BY changed_at, name`).all(sessionId, since, sessionId, since) as unknown as FleetChange[];
-    return rows.map(({ name, kind }) => ({ name, kind }));
+    return this.deps.workingStates.fleetChanges(sessionId).filter((change) => change.changedAt > since);
   }
+}
+
+/** Returns one "name (kind)" entry per distinct child and kind, in the chronological order of its first change. */
+function distinctChildKindEntries(changesOldestFirst: FleetChange[]): string[] {
+  const entries = changesOldestFirst.map((change) => `${change.name} (${change.kind})`);
+  return [...new Set(entries)];
 }
 
 function sectionsOf(state: WorkingState): WorkingStateSections {
