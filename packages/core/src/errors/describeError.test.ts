@@ -1,6 +1,6 @@
 import { homedir } from 'node:os';
 import { ZodError, z } from 'zod';
-import { OpenFleetError, type ErrorCode } from '@openfleet/shared';
+import { ERROR_CODES, OpenFleetError, type ErrorCode } from '@openfleet/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { InvalidJsonBodyError, PayloadTooLargeError } from '../api/router.js';
 import { StuckConnectionError } from '../db/transaction.js';
@@ -21,7 +21,7 @@ const ID_PATTERN = /^[0-9a-f]{8}$/;
 
 let errorLog: ReturnType<typeof vi.spyOn>;
 beforeEach(() => { errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined); });
-afterEach(() => { vi.restoreAllMocks(); });
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 
 const foreignKeyError = () => Object.assign(new Error('FOREIGN KEY constraint failed'), { code: 'ERR_SQLITE_ERROR' });
 
@@ -106,6 +106,27 @@ describe('describeError: T3 domain classes', () => {
 
   it('gives a typed error no id', () => {
     expect(describeError(new SessionClosedError('s1')).id).toBeUndefined();
+  });
+});
+
+describe('describeError: every domain class', () => {
+  const isInternalCode = (code: ErrorCode) => ERROR_CODES[code].kind === 'internal';
+  const typedCases = domainErrorCodes.filter(([, , code]) => !isInternalCode(code));
+  const internalCases = domainErrorCodes.filter(([, , code]) => isInternalCode(code));
+
+  it.each(typedCases)('answers %s with no id and no log line', (_label, makeError) => {
+    const envelope = describeError(makeError());
+
+    expect(envelope.id).toBeUndefined();
+    expect(errorLog).not.toHaveBeenCalled();
+  });
+
+  it.each(internalCases)('answers %s with an 8-hex id and exactly one log line that carries it', (_label, makeError) => {
+    const envelope = describeError(makeError());
+
+    expect(envelope.id).toMatch(ID_PATTERN);
+    expect(errorLog).toHaveBeenCalledTimes(1);
+    expect(String(errorLog.mock.calls[0]![0])).toContain(envelope.id);
   });
 });
 
@@ -214,6 +235,43 @@ describe('describeError: hostile case 4, paths and control characters', () => {
   it('shortens the user home to ~ in a carried message', () => {
     const envelope = describeError(new OpenFleetError('directory_in_use', `busy: ${home}/work/app`));
     expect(envelope.message).toBe('busy: ~/work/app');
+  });
+});
+
+describe('describeError: hostile case 1, secrets and paths in every field', () => {
+  const carrying = (text: string) => new OpenFleetError('row_cap', text, { hint: text, detail: text });
+  const detailCarrying = (detail: unknown) => new OpenFleetError('row_cap', 'the store is full.', { detail });
+
+  it.each(['Bearer', 'bearer', 'BEARER'])('redacts a %s token in the message, the hint and the detail', (scheme) => {
+    const serialized = JSON.stringify(describeError(carrying(`call with ${scheme} s3cr3t.tok-EN now`)));
+
+    expect(serialized).not.toContain('s3cr3t.tok-EN');
+  });
+
+  it('redacts a hook token in the message, the hint and the detail', () => {
+    const serialized = JSON.stringify(describeError(carrying('posted to /hooks/h00kT0ken9 just now')));
+
+    expect(serialized).not.toContain('h00kT0ken9');
+  });
+
+  it('redacts a secret inside a structured detail', () => {
+    const serialized = JSON.stringify(describeError(detailCarrying({ header: 'Bearer s3cr3t.tok-EN', pad: 'p'.repeat(4096) })));
+
+    expect(serialized).not.toContain('s3cr3t.tok-EN');
+  });
+
+  it('strips NUL and escape characters from a string detail', () => {
+    const { detail } = describeError(detailCarrying('a\u0000b\u001b[31mc'));
+
+    expect(String(detail)).not.toMatch(/[\u0000-\u0008\u000b-\u001f]/);
+  });
+
+  it('shortens an OpenFleet home that sits outside the user home, in the message, the hint and the detail', () => {
+    vi.stubEnv('OPENFLEET_HOME', '/srv/openfleet-home-hostile');
+
+    const serialized = JSON.stringify(describeError(carrying('failed reading /srv/openfleet-home-hostile/openfleet.db')));
+
+    expect(serialized).not.toContain('/srv/openfleet-home-hostile');
   });
 });
 
