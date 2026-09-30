@@ -3,6 +3,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { DatabaseSync } from 'node:sqlite';
+import { BACKUPS_FOLDER_NAME, newestKnownBackupName, preUpgradeSnapshotName } from './backup.js';
 
 const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), 'migrations');
 
@@ -122,12 +123,67 @@ function hasChecksumColumn(db: DatabaseSync): boolean {
 // tampered with — refusing beats silently running against a schema nothing here has verified. Only
 // checked against the real on-disk migrations (never against a caller-supplied `sources` override,
 // which exists solely so tests can inject a migration that was never really "shipped").
-function rejectUnknownAppliedVersions(applied: Set<string>, knownSources: MigrationSource[]): void {
+function rejectUnknownAppliedVersions(applied: Set<string>, knownSources: MigrationSource[], databasePath: string | undefined): void {
   const knownVersions = new Set(knownSources.map((s) => s.version));
   const unknownVersions = [...applied].filter((version) => !knownVersions.has(version)).sort();
   if (unknownVersions.length > 0) {
-    throw new Error(`database has migrations this code doesn't know: ${unknownVersions.join(', ')}; refusing to start on a schema newer than the code`);
+    throw new SchemaNewerThanCodeError(unknownVersions, restoreHintFor(databasePath, [...applied].sort().pop()!));
   }
+}
+
+// The hint travels beside the message (not inside it) so bootFailure appends it after its reason cap.
+export class SchemaNewerThanCodeError extends Error {
+  constructor(unknownVersions: string[], readonly recoveryHint: string) {
+    super(`database has migrations this code doesn't know: ${unknownVersions.join(', ')}; refusing to start on a schema newer than the code`);
+  }
+}
+
+export class MigrationFailedError extends Error {
+  readonly recoveryHint: string;
+  constructor(cause: unknown, backupPath: string) {
+    super((cause as Error).message, { cause });
+    this.recoveryHint = `the database from before this upgrade is saved at ${backupPath}: quit the app, delete openfleet.db-wal and openfleet.db-shm, then copy it over openfleet.db`;
+  }
+}
+
+export function shippedMigrationVersions(): ReadonlySet<string> {
+  return new Set(readMigrationSources(migrationsDir).map((source) => source.version));
+}
+
+export function latestShippedMigration(): string {
+  return readMigrationSources(migrationsDir).map((source) => source.version).pop()!;
+}
+
+function restoreHintFor(databasePath: string | undefined, databaseSchemaVersion: string): string {
+  const hasRealPath = databasePath !== undefined && databasePath !== ':memory:';
+  const backupsFolder = hasRealPath ? join(dirname(databasePath), BACKUPS_FOLDER_NAME) : `the ${BACKUPS_FOLDER_NAME} folder next to openfleet.db`;
+  const latestKnownVersion = latestShippedMigration();
+  const exactBackupName = hasRealPath ? safelyFind(() => preUpgradeSnapshotName(backupsFolder, shippedMigrationVersions(), databaseSchemaVersion) ?? newestKnownBackupName(backupsFolder, shippedMigrationVersions())) : undefined;
+  const backupName = exactBackupName ?? `openfleet-${latestKnownVersion}-<timestamp>.db`;
+  return `quit the app, delete openfleet.db-wal and openfleet.db-shm, then copy the .db backup named ${backupName} in ${backupsFolder}, never a .config.json copy, over openfleet.db; or install the newer app`;
+}
+
+function safelyFind(find: () => string | undefined): string | undefined {
+  try {
+    return find();
+  } catch {
+    return undefined;
+  }
+}
+
+function appliedVersionsOf(db: DatabaseSync): Set<string> {
+  const hasMigrationsTable = db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'`).get() !== undefined;
+  if (!hasMigrationsTable) return new Set();
+  return new Set((db.prepare('SELECT version FROM schema_migrations').all() as { version: string }[]).map((r) => r.version));
+}
+
+export function pendingMigrations(db: DatabaseSync): string[] {
+  const applied = appliedVersionsOf(db);
+  return readMigrationSources(migrationsDir).map((source) => source.version).filter((version) => !applied.has(version));
+}
+
+export function highestAppliedMigration(db: DatabaseSync): string | undefined {
+  return [...appliedVersionsOf(db)].sort().pop();
 }
 
 // Migrations recorded before the checksum column existed (008_schema_migrations_checksum.sql) have no
@@ -138,22 +194,42 @@ function rejectUnknownAppliedVersions(applied: Set<string>, knownSources: Migrat
 // compared against unrelated SQL, since it was never claimed to be that version's real source anyway.
 function reconcileChecksums(db: DatabaseSync, sources: MigrationSource[]): void {
   if (!hasChecksumColumn(db)) return;
-  const sqlByVersion = new Map<string, string>();
-  for (const source of sources) if (!sqlByVersion.has(source.version)) sqlByVersion.set(source.version, source.sql);
+  rejectEditedAppliedMigrations(db, sources);
+  const sqlByVersion = sqlByVersionOf(sources);
 
   const rows = db.prepare('SELECT version, checksum FROM schema_migrations').all() as { version: string; checksum: string | null }[];
   for (const row of rows) {
     const sql = sqlByVersion.get(row.version);
-    if (sql === undefined) continue;
-    const currentChecksum = sha256Hex(sql);
-    if (row.checksum === null) {
-      db.prepare('UPDATE schema_migrations SET checksum = ? WHERE version = ?').run(currentChecksum, row.version);
-      continue;
-    }
-    if (row.checksum !== currentChecksum) {
+    if (sql === undefined || row.checksum !== null) continue;
+    db.prepare('UPDATE schema_migrations SET checksum = ? WHERE version = ?').run(sha256Hex(sql), row.version);
+  }
+}
+
+function sqlByVersionOf(sources: MigrationSource[]): Map<string, string> {
+  const sqlByVersion = new Map<string, string>();
+  for (const source of sources) if (!sqlByVersion.has(source.version)) sqlByVersion.set(source.version, source.sql);
+  return sqlByVersion;
+}
+
+function rejectEditedAppliedMigrations(db: DatabaseSync, sources: MigrationSource[]): void {
+  if (!hasChecksumColumn(db)) return;
+  const sqlByVersion = sqlByVersionOf(sources);
+  const rows = db.prepare('SELECT version, checksum FROM schema_migrations').all() as { version: string; checksum: string | null }[];
+  for (const row of rows) {
+    const sql = sqlByVersion.get(row.version);
+    const wasEditedAfterBeingApplied = sql !== undefined && row.checksum !== null && row.checksum !== sha256Hex(sql);
+    if (wasEditedAfterBeingApplied) {
       throw new Error(`migration ${row.version} was applied with SQL that no longer matches the file on disk now (checksum mismatch); migrations must not be edited after being applied`);
     }
   }
+}
+
+// The refusals applyMigrations would raise on the shipped migrations, raised before anything is
+// backed up so a refused boot leaves the backups folder untouched.
+export function assertBootableSchema(db: DatabaseSync, databasePath: string): void {
+  const knownSources = readMigrationSources(migrationsDir);
+  rejectUnknownAppliedVersions(appliedVersionsOf(db), knownSources, databasePath);
+  rejectEditedAppliedMigrations(db, knownSources);
 }
 
 // ponytail: `sources` exists only so tests can inject a broken migration; the default reads
@@ -161,14 +237,14 @@ function reconcileChecksums(db: DatabaseSync, sources: MigrationSource[]): void 
 // The unknown-version guard only runs when `sources` is left at its default — a test that overrides it
 // with a synthetic migration is deliberately not exercising "the database has real files this code
 // doesn't ship", so it's exempt by construction rather than something the guard has to reason about.
-export function applyMigrations(db: DatabaseSync, sources?: MigrationSource[]): void {
+export function applyMigrations(db: DatabaseSync, sources?: MigrationSource[], databasePath?: string): void {
   const usingDefaultSources = sources === undefined;
   const effectiveSources = sources ?? readMigrationSources(migrationsDir);
 
   db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY, applied_at TEXT NOT NULL)`);
   const applied = new Set((db.prepare('SELECT version FROM schema_migrations').all() as { version: string }[]).map((r) => r.version));
 
-  if (usingDefaultSources) rejectUnknownAppliedVersions(applied, effectiveSources);
+  if (usingDefaultSources) rejectUnknownAppliedVersions(applied, effectiveSources, databasePath);
 
   for (const { version, sql } of effectiveSources) {
     if (applied.has(version)) continue;
