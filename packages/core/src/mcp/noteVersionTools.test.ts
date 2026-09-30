@@ -1,8 +1,8 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { chmodSync, mkdtempSync } from 'node:fs';
+import { chmodSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { startServer } from '../api/server.js';
@@ -209,7 +209,7 @@ describe('note version tools', () => {
   });
 
   describe('a file-backed note whose file cannot be read', () => {
-    it.skipIf(process.getuid?.() === 0)('fails opaquely and leaves the file and the note untouched', async () => {
+    it.skipIf(process.getuid?.() === 0)('fails with an actionable message and leaves the file and the note untouched', async () => {
       const note = docs.createFileBackedNote({ projectId: fileBackedProjectId, folder: 'specs', title: 'log', bodyMd: '## Log\nold entry', author: 'seed' });
       const client = await connect(fileBackedToken);
       chmodSync(note.filePath!, 0o000);
@@ -218,8 +218,23 @@ describe('note version tools', () => {
 
       chmodSync(note.filePath!, 0o600);
       expect(result.isError).toBe(true);
-      expect(errorText(result)).toBe('request failed');
+      expect(errorText(result)).toMatch(/file-backed.*cannot be read/);
       expect(nodeDocsFolderFs.readFileSync(note.filePath!)).toBe('## Log\nold entry');
+      expect(noteRepo.get(note.id)).toMatchObject({ bodyMd: '## Log\nold entry', rev: 1 });
+    });
+
+    it('tells the agent the note is file-backed, nothing was written, and to retry once the docs folder is back, without leaking the path', async () => {
+      const note = docs.createFileBackedNote({ projectId: fileBackedProjectId, folder: 'specs', title: 'log', bodyMd: '## Log\nold entry', author: 'seed' });
+      const client = await connect(fileBackedToken);
+      rmSync(dirname(dirname(note.filePath!)), { recursive: true });
+
+      const result = await client.callTool({ name: 'update_note', arguments: { note: note.id, body_md: 'new body', expected_rev: note.rev } });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toMatch(/file-backed/);
+      expect(errorText(result)).toMatch(/nothing was written/);
+      expect(errorText(result)).toMatch(/retry/);
+      expect(errorText(result)).not.toContain(note.filePath!);
       expect(noteRepo.get(note.id)).toMatchObject({ bodyMd: '## Log\nold entry', rev: 1 });
     });
   });
