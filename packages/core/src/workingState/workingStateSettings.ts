@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { Script } from 'node:vm';
 import { z } from 'zod';
+import { readableConfigReason } from '../configReason.js';
 
 export const DEFAULT_WORKING_STATE_MAX_BYTES = 6144;
 const MIN_WORKING_STATE_MAX_BYTES = 1024;
@@ -98,6 +99,6 @@ export function loadDaemonSettings(configPath: string): DaemonSettings {
       managers: { ...DEFAULT_MANAGER_SETTINGS, ...definedOnly(parsed.managers ?? {}) },
     };
   } catch (error) {
-    throw new Error(`invalid workingState/managers config at ${configPath}: ${(error as Error).message}`);
+    throw new Error(`invalid workingState/managers config at ${configPath}: ${readableConfigReason(error)}`);
   }
 }

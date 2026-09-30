@@ -5,8 +5,10 @@ import { newToken } from './ids.js';
 
 export interface Config { host: '127.0.0.1'; port: number; home: string; dbPath: string; worktreesRoot: string; sessionsRoot: string; stateRoot: string; adminToken: string }
 
+export const resolveHome = (env: NodeJS.ProcessEnv = process.env): string => env.OPENFLEET_HOME ?? join(homedir(), '.openfleet');
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
-  const home = env.OPENFLEET_HOME ?? join(homedir(), '.openfleet');
+  const home = resolveHome(env);
   mkdirSync(home, { recursive: true });
   // mkdirSync's mode option is ignored on a directory that already exists, so a home that predates this
   // check (or was loosened by something else) is tightened here every load, not just at creation (MAJ-02).
