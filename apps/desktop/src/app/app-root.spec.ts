@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppRoot } from './app-root';
 import { routes } from './app.routes';
 import { FleetEventsService } from './core/fleet-events.service';
+import { silentWorkingStateSignals } from './working-state/working-state-fixtures';
 
 function stubDaemonIsUp() {
   const daemonAnswersHealth = () => Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }) } as unknown as Response);
@@ -26,7 +27,7 @@ describe('AppRoot', () => {
         provideRouter(routes),
         {
           provide: FleetEventsService,
-          useValue: { connect, sessions: signal([]), approvals: signal([]), managers: signal([]), connected: signal(true), snapshotReceived: signal(true) },
+          useValue: { connect, sessions: signal([]), approvals: signal([]), managers: signal([]), connected: signal(true), snapshotReceived: signal(true), ...silentWorkingStateSignals() },
         },
       ],
     });

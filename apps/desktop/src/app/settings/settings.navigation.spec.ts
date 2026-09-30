@@ -5,6 +5,7 @@ import { RouterTestingHarness } from '@angular/router/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { routes } from '../app.routes';
 import { FleetEventsService } from '../core/fleet-events.service';
+import { silentWorkingStateSignals } from '../working-state/working-state-fixtures';
 import { HELM_NAV_ITEMS, PALETTE_PAGES } from '../shell/nav-items';
 
 const MODEL_TABLE = { haiku: 'claude-haiku-4-5', sonnet: 'claude-sonnet-5', opus: 'claude-opus-5-5', fable: 'claude-fable-5-1' };
@@ -13,6 +14,7 @@ function stubFleetEvents() {
   return {
     sessions: signal([]),
     approvals: signal([]),
+    ...silentWorkingStateSignals(),
     managers: signal([]),
     connect: () => {},
     connected: signal(true),

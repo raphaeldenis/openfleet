@@ -15,6 +15,7 @@ import { environment } from '../../environments/environment';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { BannerComponent } from '../design/banner.component';
 import { SessionListComponent } from '../sessions/session-list.component';
+import { attentionItemsOf, inboxCountLabelOf } from '../working-state/attention-items';
 import { CommandPaletteComponent } from './command-palette.component';
 import { DaemonStatusComponent } from './daemon-status.component';
 import { HELM_NAV_ITEMS } from './nav-items';
@@ -40,8 +41,8 @@ const RUNNING_STATES = new Set(['generating', 'starting']);
                 @if (item.route) {
                   <a class="nav-item" [routerLink]="item.route" routerLinkActive="active" [attr.data-testid]="'nav-' + item.key">
                     <span class="glyph">{{ item.glyph }}</span><span class="label">{{ item.label }}</span>
-                    @if (item.key === 'inbox' && pendingApprovalsCount() > 0) {
-                      <span class="nav-badge" data-testid="nav-inbox-badge">{{ pendingApprovalsCount() }}</span>
+                    @if (item.key === 'inbox' && inboxBadge(); as badge) {
+                      <span class="nav-badge" data-testid="nav-inbox-badge" [attr.aria-label]="badge.ariaLabel">{{ badge.text }}</span>
                     }
                   </a>
                 } @else {
@@ -133,7 +134,11 @@ export class AppShellComponent {
   protected readonly paletteOpen = signal(false);
   protected readonly paletteEpoch = signal(0);
   protected readonly runningCount = computed(() => this.events.sessions().filter((s) => RUNNING_STATES.has(s.state)).length);
-  protected readonly pendingApprovalsCount = computed(() => this.events.approvals().length);
+  protected readonly inboxBadge = computed(() => {
+    const attentionCount = attentionItemsOf(this.events.sessions(), this.events.workingStates()).length;
+    const itemsNeedingYou = this.events.approvals().length + attentionCount;
+    return itemsNeedingYou > 0 ? inboxCountLabelOf(itemsNeedingYou) : undefined;
+  });
   private readonly paletteTrigger = viewChild.required<ElementRef<HTMLButtonElement>>('paletteTrigger');
   private paletteOpener: HTMLElement | null = null;
 

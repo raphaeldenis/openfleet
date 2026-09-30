@@ -6,7 +6,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { AppShellComponent } from './app-shell.component';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
-import { silentWorkingStateSignals } from '../working-state/working-state-fixtures';
+import type { WorkingState } from '@openfleet/shared';
+import { silentWorkingStateSignals, stateOf } from '../working-state/working-state-fixtures';
 import { InboxComponent } from '../inbox/inbox.component';
 
 // jsdom doesn't block focus() inside an inert subtree the way the WHATWG spec requires real
@@ -51,17 +52,22 @@ const testRoutes: Routes = [
   },
 ];
 
-function fakeEvents(overrides: { connected?: boolean; sessions?: unknown[]; approvals?: unknown[] } = {}) {
+interface ShellOverrides { connected?: boolean; sessions?: unknown[]; approvals?: unknown[]; workingStates?: WorkingState[] }
+
+function fakeEvents(overrides: ShellOverrides = {}) {
+  const workingStates = overrides.workingStates ?? [];
   return {
     sessions: signal(overrides.sessions ?? []),
     approvals: signal(overrides.approvals ?? []),
     managers: signal([]),
     connected: signal(overrides.connected ?? true),
     ...silentWorkingStateSignals(),
+    workingStates: signal<ReadonlyMap<string, WorkingState>>(new Map(workingStates.map((state) => [state.sessionId, state]))),
+    workingStatesReported: signal(overrides.workingStates !== undefined),
   };
 }
 
-async function setUp(overrides: { connected?: boolean; sessions?: unknown[]; approvals?: unknown[] } = {}) {
+async function setUp(overrides: ShellOverrides = {}) {
   TestBed.configureTestingModule({
     providers: [
       provideRouter(testRoutes, withComponentInputBinding()),
@@ -333,6 +339,70 @@ describe('AppShellComponent', () => {
     const inbox = root.querySelector('[data-testid="nav-inbox"]') as HTMLElement;
     const badge = inbox.querySelector('[data-testid="nav-inbox-badge"]');
     expect(badge).toHaveTextContent('2');
+  });
+
+  describe('Inbox badge with sessions needing attention', () => {
+    const openSession = (id: string) => ({ id, name: `Agent ${id}`, emoji: '🤖', state: 'idle' });
+    const badgeOf = (root: HTMLElement) => root.querySelector('[data-testid="nav-inbox"] [data-testid="nav-inbox-badge"]');
+
+    it('user sees approvals plus the sessions that ask a question or report a blocker', async () => {
+      const { root } = await setUp({
+        approvals: [{ id: 'a1' }, { id: 'a2' }],
+        sessions: [openSession('s1'), openSession('s2'), openSession('s3'), openSession('s4')],
+        workingStates: [
+          stateOf({ sessionId: 's1', questionsForHuman: ['which port?'] }),
+          stateOf({ sessionId: 's2', blockers: ['no token'] }),
+          stateOf({ sessionId: 's3', questionsForHuman: ['a?'], blockers: ['b'] }),
+          stateOf({ sessionId: 's4', plan: ['just working'], internalQuestions: ['not for the human'] }),
+        ],
+      });
+
+      expect(badgeOf(root)).toHaveTextContent('5');
+    });
+
+    it('user sees the badge for a question alone, with no approval pending', async () => {
+      const { root } = await setUp({ sessions: [openSession('s1')], workingStates: [stateOf({ sessionId: 's1', questionsForHuman: ['which port?'] })] });
+
+      expect(badgeOf(root)).toHaveTextContent('1');
+    });
+
+    it('user sees no badge when the sessions only have plans, todos and internal questions', async () => {
+      const { root } = await setUp({ sessions: [openSession('s1')], workingStates: [stateOf({ sessionId: 's1', plan: ['a'], todo: ['b'], remaining: ['c'], internalQuestions: ['d'] })] });
+
+      expect(badgeOf(root)).toBeFalsy();
+    });
+
+    it('user does not see a closed session in the badge', async () => {
+      const { root } = await setUp({ sessions: [{ ...openSession('s1'), state: 'closed' }], workingStates: [stateOf({ sessionId: 's1', blockers: ['stuck'] })] });
+
+      expect(badgeOf(root)).toBeFalsy();
+    });
+
+    it('user sees the real count up to 99 and "99+" beyond, with the true number for a screen reader', async () => {
+      const manySessions = Array.from({ length: 100 }, (_, index) => openSession(`s${index}`));
+      const { root } = await setUp({
+        sessions: manySessions,
+        workingStates: manySessions.map((session) => stateOf({ sessionId: session.id, blockers: ['stuck'] })),
+        approvals: [{ id: 'a1' }, { id: 'a2' }],
+      });
+
+      expect(badgeOf(root)).toHaveTextContent('99+');
+      expect(badgeOf(root)).toHaveAttribute('aria-label', '102 items need you');
+    });
+
+    it('user sees exactly 99 as "99" and gets the count in the label', async () => {
+      const ninetyNine = Array.from({ length: 99 }, (_, index) => ({ id: `a${index}` }));
+      const { root } = await setUp({ approvals: ninetyNine });
+
+      expect(badgeOf(root)).toHaveTextContent(/^99$/);
+      expect(badgeOf(root)).toHaveAttribute('aria-label', '99 items need you');
+    });
+
+    it('user reads "1 item needs you" for a single item', async () => {
+      const { root } = await setUp({ approvals: [{ id: 'a1' }] });
+
+      expect(badgeOf(root)).toHaveAttribute('aria-label', '1 item needs you');
+    });
   });
 
   it('hides the Inbox badge when there are no pending approvals', async () => {

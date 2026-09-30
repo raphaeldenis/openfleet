@@ -5,6 +5,9 @@ import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { KindBadgeComponent } from '../design/kind-badge.component';
 import { focusTabAt, nextTabIndex } from '../design/tablist-keyboard';
+import { attentionItemsOf, inboxCountLabelOf } from '../working-state/attention-items';
+import { AttentionCardComponent } from './attention-card.component';
+import { showBidiControlsAsEscapes } from './bidi-escapes';
 
 type InboxTab = 'gates' | 'questions' | 'proposals';
 type FilterKey = 'all' | 'unread' | 'mine' | 'blocked' | 'recent';
@@ -33,12 +36,6 @@ const TABS: readonly { readonly key: InboxTab; readonly label: string }[] = [
   { key: 'proposals', label: 'Governance proposals' },
 ];
 
-const BIDI_CONTROL_CHARACTERS = /[؜‎‏‪-‮⁦-⁩]/g;
-
-function showBidiControlsAsEscapes(text: string): string {
-  return text.replace(BIDI_CONTROL_CHARACTERS, (control) => `<U+${control.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}>`);
-}
-
 interface FormattedInput {
   readonly toolInput: unknown;
   readonly text: string;
@@ -51,11 +48,11 @@ function formatInput(toolInput: unknown): FormattedInput {
 @Component({
   selector: 'of-inbox',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [KindBadgeComponent],
+  imports: [KindBadgeComponent, AttentionCardComponent],
   template: `
     <section class="inbox" data-testid="inbox">
       <header class="title-row" data-testid="inbox-title-row">
-        <h1 class="title">Inbox @if (events.approvals().length; as pendingCount) {<span class="count" data-testid="inbox-count">{{ pendingCount }}</span>}</h1>
+        <h1 class="title">Inbox @if (pendingCount(); as pending) {<span class="count" data-testid="inbox-count" [attr.aria-label]="pending.ariaLabel">{{ pending.text }}</span>}</h1>
         @if (tab() === 'gates') {
           <div class="filters" data-testid="inbox-filters">
             @for (filter of filters; track filter.key) {
@@ -84,7 +81,7 @@ function formatInput(toolInput: unknown): FormattedInput {
             [attr.tabindex]="tab() === entry.key ? 0 : -1"
             [attr.data-testid]="'inbox-tab-' + entry.key"
             (click)="tab.set(entry.key)"
-          >{{ entry.label }}</button>
+          >{{ entry.label }}@if (entry.key === 'questions' && attentionItems().length > 0) { <span class="tab-count" data-testid="inbox-tab-count-questions">{{ attentionItems().length }}</span>}</button>
         }
       </nav>
 
@@ -121,7 +118,16 @@ function formatInput(toolInput: unknown): FormattedInput {
           </div>
         }
         @case ('questions') {
-          <p class="coming" data-testid="inbox-questions-coming">Questions from agents are coming with phase 4 tables/governance.</p>
+          <div class="gate-list" data-testid="inbox-attention-list">
+            @for (item of attentionItems(); track item.session.id) {
+              <of-attention-card [item]="item" />
+            } @empty {
+              <div class="empty" data-testid="inbox-questions-empty">
+                <span class="empty-title">No agent is waiting on you</span>
+                <span>A session that asks a question or reports a blocker in its state shows up here.</span>
+              </div>
+            }
+          </div>
         }
         @case ('proposals') {
           <p class="coming" data-testid="inbox-proposals-coming">Governance proposals are coming with phase 4 tables/governance.</p>
@@ -139,6 +145,7 @@ function formatInput(toolInput: unknown): FormattedInput {
     .tabs { display: flex; gap: .25rem; border-bottom: 1px solid var(--line); }
     .tab { height: 1.875rem; padding: 0 .75rem; border: 0; border-bottom: 1px solid transparent; background: transparent; color: var(--mut); cursor: pointer; font: inherit; }
     .tab.active { color: var(--fg); border-bottom-color: var(--accent); }
+    .tab-count { display: inline-flex; min-width: 1rem; height: 1rem; padding: 0 .25rem; margin-left: .25rem; border-radius: .5rem; background: var(--sunk); color: var(--fg); font-size: .625rem; font-weight: 600; align-items: center; justify-content: center; }
     .tabpanel { display: flex; flex-direction: column; gap: .75rem; }
     .filters { display: flex; flex-wrap: wrap; gap: .375rem; }
     .filter-chip { height: 1.625rem; padding: 0 .625rem; border: 1px solid var(--line); border-radius: 1rem; background: var(--panel); color: var(--fg); font-size: .75rem; cursor: pointer; }
@@ -203,6 +210,13 @@ export class InboxComponent {
     });
     this.formattedInputsById = currentFormattedInputs;
     return gates;
+  });
+
+  protected readonly attentionItems = computed(() => attentionItemsOf(this.events.sessions(), this.events.workingStates()));
+
+  protected readonly pendingCount = computed(() => {
+    const count = this.events.approvals().length + this.attentionItems().length;
+    return count > 0 ? inboxCountLabelOf(count) : undefined;
   });
 
   readonly items = computed(() =>
