@@ -270,7 +270,7 @@ describe('note version tools', () => {
       expect(strayTempFiles(note)).toEqual([]);
     });
 
-    it.each(writeTools)('$tool with only the file removed recreates the deleted file and commits the revision (characterization: only a vanished folder is refused)', async ({ tool, args }) => {
+    it.each(writeTools)('$tool with only the file removed repairs it: the database is the source of truth while the docs folder exists, so the file is recreated from the committed revision', async ({ tool, args }) => {
       const note = docs.createFileBackedNote({ projectId: fileBackedProjectId, folder: 'specs', title: 'log', bodyMd: OLD_BODY, author: 'seed' });
       const client = await connect(fileBackedToken);
       unlinkSync(note.filePath!);
@@ -280,6 +280,7 @@ describe('note version tools', () => {
       expect(result.isError).toBeFalsy();
       expect(existsSync(note.filePath!)).toBe(true);
       expect(noteRepo.get(note.id)!.rev).toBe(2);
+      expect(nodeDocsFolderFs.readFileSync(note.filePath!)).toBe(noteRepo.get(note.id)!.bodyMd);
       expect(strayTempFiles(note)).toEqual([]);
     });
 

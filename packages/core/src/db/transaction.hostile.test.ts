@@ -107,7 +107,7 @@ describe('inTransaction hostile probes', () => {
     expect(() => inTransaction(db, 'sp', () => undefined)).toThrow(/stuck in a transaction/);
   });
 
-  it('keeps the original error when a nested ROLLBACK TO fails, leaves the outer transaction usable and does not flag the connection', () => {
+  it('keeps the original error when a nested ROLLBACK TO fails, then rolls the untrustworthy outer transaction back at the next boundary', () => {
     const original = new Error('inner failed');
     db.exec('BEGIN IMMEDIATE');
     insert(db, 'outer');
@@ -121,14 +121,11 @@ describe('inTransaction hostile probes', () => {
 
     inTransaction(db, 'again', () => insert(db, 'again'));
 
-    expect(db.isTransaction).toBe(true);
-    db.exec('COMMIT');
-    expect(labelsOf(db)).toContain('outer');
-    expect(labelsOf(db)).toContain('again');
+    expect(db.isTransaction).toBe(false);
+    expect(labelsOf(db)).toEqual(['again']);
   });
 
-  // Probe result: the stuck flag outlives a ROLLBACK issued by someone else, so the next call rolls back the caller's fresh outer transaction.
-  it.fails('never rolls back a fresh caller-owned transaction opened after the stuck one was ended outside inTransaction', () => {
+  it('never rolls back a fresh caller-owned transaction opened after the stuck one was ended outside inTransaction', () => {
     failStatement(db, 'ROLLBACK');
     expect(() => inTransaction(db, 'sp', () => { throw new Error('first'); })).toThrow('first');
     vi.restoreAllMocks();

@@ -1,8 +1,14 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { log } from '../logger.js';
 
-/** Connections whose top-level ROLLBACK failed: the transaction may still be open, so nothing may nest into it. */
-const connectionsStuckInTransaction = new WeakSet<DatabaseSync>();
+const STUCK_TRANSACTION_MARKER = 'openfleet_stuck_transaction_marker';
+
+/**
+ * Connections whose transaction cannot be trusted after a failed ROLLBACK (top-level) or ROLLBACK TO (nested):
+ * nothing may nest into it. The value tells whether a marker savepoint was planted in that transaction,
+ * so a later fresh transaction of a caller is told apart from the stuck one.
+ */
+const connectionsStuckInTransaction = new WeakMap<DatabaseSync, { hasMarker: boolean }>();
 
 /**
  * Runs `work` atomically: a transaction of its own (BEGIN IMMEDIATE/COMMIT), or a SAVEPOINT/RELEASE
@@ -37,13 +43,41 @@ function rollBackKeepingOriginalError(db: DatabaseSync, { name, isNested }: { na
     }
   } catch (rollbackError) {
     log('error', 'transaction rollback failed', rollbackError);
-    if (!isNested) connectionsStuckInTransaction.add(db);
+    markStuckInTransaction(db);
+  }
+}
+
+function markStuckInTransaction(db: DatabaseSync): void {
+  const hasMarker = plantMarkerSavepoint(db);
+  connectionsStuckInTransaction.set(db, { hasMarker });
+}
+
+function plantMarkerSavepoint(db: DatabaseSync): boolean {
+  if (!db.isTransaction) return false;
+  try {
+    db.exec(`SAVEPOINT ${STUCK_TRANSACTION_MARKER}`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** True while the transaction that got stuck is still the connection's current one. */
+function isStuckTransactionStillOpen(db: DatabaseSync, { hasMarker }: { hasMarker: boolean }): boolean {
+  if (!db.isTransaction) return false;
+  if (!hasMarker) return true;
+  try {
+    db.exec(`ROLLBACK TO ${STUCK_TRANSACTION_MARKER}`);
+    return true;
+  } catch {
+    return false;
   }
 }
 
 function releaseStuckTransaction(db: DatabaseSync): void {
-  if (!connectionsStuckInTransaction.has(db)) return;
-  if (db.isTransaction) {
+  const stuck = connectionsStuckInTransaction.get(db);
+  if (!stuck) return;
+  if (isStuckTransactionStillOpen(db, stuck)) {
     try {
       db.exec('ROLLBACK');
     } catch (rollbackError) {

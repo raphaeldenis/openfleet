@@ -246,7 +246,7 @@ export class NoteService {
     if (this.db.isTransaction) throw new Error('refusing to run inside an outer transaction: its rollback could not undo the file rename');
   }
 
-  getExpanded(id: string,{ viewerProjectId }: GetExpandedOptions): ExpandedNote {
+  getExpanded(id: string, { viewerProjectId }: GetExpandedOptions): ExpandedNote {
     const note = this.require(id);
     const lookup = this.mentionLookupFor(viewerProjectId);
     const expandedBody = this.expandMentions(note.bodyMd, lookup, { rootNoteId: note.id });
