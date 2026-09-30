@@ -16,6 +16,7 @@ import type { WorkingStateService } from '../workingState/workingStateService.js
 import { ALLOWED_ORIGINS } from './allowedOrigins.js';
 import { registerDataStoreRoutes } from './dataStoreRoutes.js';
 import type { SessionStartContext } from '../workingState/sessionStartContext.js';
+import type { HandoverLedger } from '../workingState/handoverLedger.js';
 import type { StopRefusal } from '../workingState/stopRefusal.js';
 import { hooksHandler } from './hooksHandler.js';
 import { registerNoteRoutes } from './noteRoutes.js';
@@ -44,6 +45,8 @@ export interface ServerDeps {
   stopRefusal?: StopRefusal;
   // Without it every SessionStart is answered {}, as before the working state existed.
   sessionStartContext?: SessionStartContext;
+  // Without it no handover is recorded and the handovers route does not exist.
+  handoverLedger?: HandoverLedger;
 }
 
 function applyCorsHeaders(req: IncomingMessage, res: ServerResponse): void {

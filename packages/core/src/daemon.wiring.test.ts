@@ -1,6 +1,8 @@
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { afterEach, describe, expect, it } from 'vitest';
 import { loadConfig } from './config.js';
 import { startDaemon, type Daemon } from './daemon.js';
@@ -78,5 +80,31 @@ describe('operator gets every daemon feature when the daemon boots from its conf
     const snapshot = await firstWsFrame();
 
     expect(snapshot.managers[0]?.pulseSeconds).toBe(777);
+  });
+
+  it('records a design link typed by the human as a handover and reminds the agent to note it', async () => {
+    await bootDaemon();
+    const session = await createSession();
+    const designLink = 'https://claude.ai/design/abc123XYZ';
+
+    const answer = await postHook(session.id, { hook_event_name: 'UserPromptSubmit', prompt: `Here is the design ${designLink} please build it` });
+    const handovers = (await (await api(`/api/sessions/${session.id}/handovers`)).json()) as { kind: string; value: string }[];
+
+    expect(handovers).toEqual([expect.objectContaining({ kind: 'design_link', value: designLink })]);
+    expect(answer.hookSpecificOutput?.additionalContext).toContain(`Handover recorded: ${designLink}`);
+  });
+
+  it('lets an agent replace its working state through the MCP route', async () => {
+    await bootDaemon();
+    const session = await createSession();
+    const mcpToken = (daemon!.db.prepare('SELECT mcp_token FROM sessions WHERE id = ?').get(session.id) as { mcp_token: string }).mcp_token;
+    const client = new Client({ name: 'wiring-test', version: '0.0.0' });
+    await client.connect(new StreamableHTTPClientTransport(new URL(`${daemon!.server.url}/mcp`), { requestInit: { headers: { Authorization: `Bearer ${mcpToken}` } } }));
+
+    await client.callTool({ name: 'update_working_state', arguments: { plan: ['ship the wiring'], todo: [], remaining: [], questions_for_human: [], internal_questions: [], blockers: [] } });
+    const stored = (await (await api(`/api/sessions/${session.id}/working-state`)).json()) as { plan?: string[] };
+    await client.close();
+
+    expect(stored.plan).toEqual(['ship the wiring']);
   });
 });
