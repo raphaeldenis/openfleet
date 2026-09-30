@@ -62,8 +62,15 @@ export class WorkingStateService {
 
   /** The latest spawn, close or reopen time among the direct children of a session; none for a session with no child. */
   fleetChangedAt(sessionId: string): string | undefined {
-    const changes = this.fleetChanges(sessionId);
-    return changes.reduce<string | undefined>((latest, { changedAt }) => (latest === undefined || changedAt > latest ? changedAt : latest), undefined);
+    const latest = this.deps.db.prepare(`SELECT MAX(changedAt) AS latest FROM (
+      SELECT created_at AS changedAt FROM sessions WHERE parent_id = ?
+      UNION ALL
+      SELECT closed_at AS changedAt FROM sessions WHERE parent_id = ? AND closed_at IS NOT NULL
+      UNION ALL
+      SELECT session_events.ts AS changedAt FROM session_events
+        JOIN sessions ON sessions.id = session_events.session_id
+        WHERE sessions.parent_id = ? AND session_events.kind = 'reopened')`).get(sessionId, sessionId, sessionId) as { latest: string | null };
+    return latest.latest ?? undefined;
   }
 
   /** Every spawn, close and reopen of a direct child, oldest first. No row is ever deleted: a deleted child would have to count too, or the value goes backwards. */
