@@ -41,18 +41,19 @@ pub fn run() {
     .build(tauri::generate_context!())
     .expect("error while building tauri application");
 
-  application.run(|app, event| match event {
-    tauri::RunEvent::ExitRequested { code, api, .. } => {
-      let request = app_exit::ExitRequest::from_exit_code(code);
-      match app_exit::decide_exit(request, app.webview_windows().len()) {
-        app_exit::ExitDecision::KeepRunning => api.prevent_exit(),
-        app_exit::ExitDecision::StopDaemonAndExit => daemon::stop(app),
+  application.run(|app, event| {
+    app_exit::stop_daemon_on_final_exit(&event, || daemon::stop(app));
+    match event {
+      tauri::RunEvent::ExitRequested { code, api, .. } => {
+        let request = app_exit::ExitRequest::from_exit_code(code);
+        if app_exit::decide_exit(request, app.webview_windows().len()) == app_exit::ExitDecision::KeepRunning {
+          api.prevent_exit();
+        }
       }
+      #[cfg(target_os = "macos")]
+      tauri::RunEvent::Reopen { .. } => show_main_window(app),
+      _ => {}
     }
-    tauri::RunEvent::Exit => daemon::stop(app),
-    #[cfg(target_os = "macos")]
-    tauri::RunEvent::Reopen { .. } => show_main_window(app),
-    _ => {}
   });
 }
 

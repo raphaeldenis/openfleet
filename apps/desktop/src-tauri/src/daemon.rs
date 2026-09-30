@@ -1,5 +1,6 @@
-use crate::path_repair::{repair_path, run_login_shell, LOGIN_SHELL_TIMEOUT};
+use crate::path_repair::{repair_path, run_login_shell, PathSource, RepairedPath, LOGIN_SHELL_TIMEOUT};
 use serde::Serialize;
+use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::sync::Mutex;
@@ -11,14 +12,21 @@ use tauri_plugin_shell::ShellExt;
 pub const HEALTH_ADDRESS: &str = "127.0.0.1:7331";
 pub const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
 pub const READY_TIMEOUT: Duration = Duration::from_secs(15);
+pub const SLOW_START_EXTRA_BUDGET: Duration = Duration::from_secs(300);
 pub const GRACE_BEFORE_SIGKILL: Duration = Duration::from_secs(12);
 const READY_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const EXIT_POLL_INTERVAL: Duration = Duration::from_millis(50);
+const BOOT_REFUSAL_PREFIX: &str = "openfleet: refusing to boot";
+const PORT_VARIABLE: &str = "OPENFLEET_PORT";
+const EXIT_ON_STDIN_EOF_VARIABLE: &str = "OPENFLEET_EXIT_ON_STDIN_EOF";
+const NO_SIGNAL: i32 = 0;
 
 #[derive(Serialize, Clone, Copy, Debug, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum DaemonPhase {
   Starting,
+  /// Still starting after `READY_TIMEOUT`: the process is alive and has not refused to boot.
+  Slow,
   Ready,
   Failed,
   Reused,
@@ -33,6 +41,18 @@ pub struct DaemonStatus {
   pub last_line: Option<String>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub path_tried: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub path_source: Option<PathSource>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub daemon_version: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub started_seconds_ago: Option<u64>,
+}
+
+impl DaemonStatus {
+  fn starting() -> Self {
+    Self { state: DaemonPhase::Starting, last_line: None, path_tried: None, path_source: None, daemon_version: None, started_seconds_ago: None }
+  }
 }
 
 #[derive(Debug, PartialEq)]
@@ -41,41 +61,80 @@ pub enum StopOutcome {
   KilledAfterGrace,
 }
 
+/// What a daemon answers on `GET /health`.
+#[derive(Debug, PartialEq)]
+pub struct HealthAnswer {
+  pub version: Option<String>,
+}
+
 /// Returns the last non-blank line of a chunk of daemon output.
 pub fn last_non_blank_line(chunk: &str) -> Option<String> {
   chunk.lines().map(str::trim).rfind(|line| !line.is_empty()).map(str::to_string)
 }
 
-/// Returns true when the daemon at `address` answers `GET /health` with a 200 within `timeout`.
-pub fn probe_health(address: &str, timeout: Duration) -> bool {
-  let Ok(socket_address) = address.parse::<SocketAddr>() else { return false };
-  let Ok(mut stream) = TcpStream::connect_timeout(&socket_address, timeout) else { return false };
+fn last_boot_refusal_line(chunk: &str) -> Option<String> {
+  chunk.lines().map(str::trim).rfind(|line| line.starts_with(BOOT_REFUSAL_PREFIX)).map(str::to_string)
+}
+
+fn version_in_health_response(response: &str) -> Option<String> {
+  let (_, body) = response.split_once("\r\n\r\n")?;
+  let json = body.get(body.find('{')?..=body.rfind('}')?)?;
+  let health: serde_json::Value = serde_json::from_str(json).ok()?;
+  health.get("version")?.as_str().map(str::to_string)
+}
+
+/// Returns the daemon's answer when it replies `GET /health` with a 200 within `timeout`.
+pub fn probe_health(address: &str, timeout: Duration) -> Option<HealthAnswer> {
+  let socket_address = address.parse::<SocketAddr>().ok()?;
+  let mut stream = TcpStream::connect_timeout(&socket_address, timeout).ok()?;
   let _ = stream.set_read_timeout(Some(timeout));
   let _ = stream.set_write_timeout(Some(timeout));
   let request = format!("GET /health HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n");
-  if stream.write_all(request.as_bytes()).is_err() {
-    return false;
-  }
+  stream.write_all(request.as_bytes()).ok()?;
   let mut response = String::new();
   let _ = stream.read_to_string(&mut response);
-  response.starts_with("HTTP/1.1 200")
+  response.starts_with("HTTP/1.1 200").then(|| HealthAnswer { version: version_in_health_response(&response) })
 }
 
-/// Polls `/health` until it answers, `total` elapses or `keep_waiting` turns false; returns whether the daemon answered.
-pub fn wait_until_healthy(address: &str, total: Duration, keep_waiting: impl Fn() -> bool) -> bool {
+/// Polls `/health` until it answers, `total` elapses or `keep_waiting` turns false.
+pub fn wait_until_healthy(address: &str, total: Duration, keep_waiting: impl Fn() -> bool) -> Option<HealthAnswer> {
   let deadline = Instant::now() + total;
   while Instant::now() < deadline && keep_waiting() {
-    if probe_health(address, PROBE_TIMEOUT) {
-      return true;
+    if let Some(answer) = probe_health(address, PROBE_TIMEOUT) {
+      return Some(answer);
     }
     std::thread::sleep(READY_POLL_INTERVAL);
   }
-  false
+  None
 }
 
-/// Sends SIGTERM, waits up to `grace` for the process to exit, then sends SIGKILL.
-pub fn terminate_gracefully(pid: u32, grace: Duration, mut has_exited: impl FnMut() -> bool) -> StopOutcome {
-  send_signal(pid, libc::SIGTERM);
+/// Sends signals to processes; the seam that lets the stop logic run against a fake.
+pub trait Signals {
+  fn send(&self, pid: u32, signal: i32) -> bool;
+
+  fn is_alive(&self, pid: u32) -> bool {
+    self.send(pid, NO_SIGNAL)
+  }
+}
+
+pub struct OsSignals;
+
+impl Signals for OsSignals {
+  fn send(&self, pid: u32, signal: i32) -> bool {
+    // SAFETY: kill(2) takes plain integers and has no memory-safety preconditions.
+    unsafe { libc::kill(pid as libc::pid_t, signal) == 0 }
+  }
+}
+
+/// Returns true while a process with this pid exists.
+#[cfg(test)]
+pub fn is_process_alive(pid: u32) -> bool {
+  OsSignals.is_alive(pid)
+}
+
+/// Sends SIGTERM, waits up to `grace` for the process to exit, then re-checks once and sends SIGKILL.
+pub fn terminate_gracefully(signals: &impl Signals, pid: u32, grace: Duration, mut has_exited: impl FnMut() -> bool) -> StopOutcome {
+  signals.send(pid, libc::SIGTERM);
   let deadline = Instant::now() + grace;
   while Instant::now() < deadline {
     if has_exited() {
@@ -86,62 +145,138 @@ pub fn terminate_gracefully(pid: u32, grace: Duration, mut has_exited: impl FnMu
   if has_exited() {
     return StopOutcome::ExitedOnSigterm;
   }
-  send_signal(pid, libc::SIGKILL);
+  signals.send(pid, libc::SIGKILL);
   StopOutcome::KilledAfterGrace
 }
 
-/// Returns true while a process with this pid exists.
-pub fn is_process_alive(pid: u32) -> bool {
-  const NO_SIGNAL: i32 = 0;
-  send_signal(pid, NO_SIGNAL)
+/// The spawned sidecar; holding the plugin's handle keeps the child's stdin pipe open, and closing it asks the daemon to exit.
+pub struct RunningChild {
+  pid: u32,
+  _stdin_holder: Option<CommandChild>,
 }
 
-fn send_signal(pid: u32, signal: i32) -> bool {
-  // SAFETY: kill(2) takes plain integers and has no memory-safety preconditions.
-  unsafe { libc::kill(pid as libc::pid_t, signal) == 0 }
+impl RunningChild {
+  fn of_sidecar(child: CommandChild) -> Self {
+    Self { pid: child.pid(), _stdin_holder: Some(child) }
+  }
+}
+
+struct Inner {
+  status: DaemonStatus,
+  last_stderr_line: Option<String>,
+  boot_refusal_line: Option<String>,
+  child: Option<RunningChild>,
+  spawned_at: Option<Instant>,
 }
 
 /// Tauri state: the daemon's status for the webview and the sidecar handle to stop on quit.
 pub struct DaemonState {
-  status: Mutex<DaemonStatus>,
-  last_stderr_line: Mutex<Option<String>>,
-  child: Mutex<Option<CommandChild>>,
+  inner: Mutex<Inner>,
 }
 
 impl DaemonState {
   pub fn new() -> Self {
-    let starting = DaemonStatus { state: DaemonPhase::Starting, last_line: None, path_tried: None };
-    Self { status: Mutex::new(starting), last_stderr_line: Mutex::new(None), child: Mutex::new(None) }
+    Self { inner: Mutex::new(Inner { status: DaemonStatus::starting(), last_stderr_line: None, boot_refusal_line: None, child: None, spawned_at: None }) }
+  }
+
+  /// Returns the status as the webview sees it at `now`.
+  pub fn snapshot(&self, now: Instant) -> DaemonStatus {
+    let inner = self.inner.lock().unwrap();
+    let mut status = inner.status.clone();
+    let is_booting = matches!(status.state, DaemonPhase::Starting | DaemonPhase::Slow);
+    status.started_seconds_ago = inner.spawned_at.filter(|_| is_booting).map(|spawned_at| now.saturating_duration_since(spawned_at).as_secs());
+    status
   }
 
   fn phase(&self) -> DaemonPhase {
-    self.status.lock().unwrap().state
+    self.inner.lock().unwrap().status.state
   }
 
-  fn set_phase(&self, state: DaemonPhase, last_line: Option<String>) {
-    let mut status = self.status.lock().unwrap();
-    status.state = state;
-    status.last_line = last_line;
+  /// True while the sidecar is alive and has neither answered nor refused to boot.
+  fn is_awaiting_health(&self) -> bool {
+    let inner = self.inner.lock().unwrap();
+    let is_booting = matches!(inner.status.state, DaemonPhase::Starting | DaemonPhase::Slow);
+    is_booting && inner.child.is_some()
   }
 
-  fn set_phase_if_starting(&self, state: DaemonPhase, last_line: Option<String>) {
-    if self.phase() == DaemonPhase::Starting {
-      self.set_phase(state, last_line);
+  fn record_spawn(&self, child: RunningChild, repaired_path: RepairedPath, spawned_at: Instant) {
+    let mut inner = self.inner.lock().unwrap();
+    inner.child = Some(child);
+    inner.spawned_at = Some(spawned_at);
+    inner.status.path_tried = Some(repaired_path.path);
+    inner.status.path_source = Some(repaired_path.source);
+  }
+
+  /// Hands the child over exactly once; every later call gets None.
+  fn take_child(&self) -> Option<RunningChild> {
+    self.inner.lock().unwrap().child.take()
+  }
+
+  fn on_reused(&self, daemon_version: Option<String>) {
+    let mut inner = self.inner.lock().unwrap();
+    inner.status.state = DaemonPhase::Reused;
+    inner.status.daemon_version = daemon_version;
+  }
+
+  /// A health answer makes a booting daemon Ready; a daemon already Failed stays Failed.
+  fn on_health_answered(&self, daemon_version: Option<String>) {
+    let mut inner = self.inner.lock().unwrap();
+    let is_booting = matches!(inner.status.state, DaemonPhase::Starting | DaemonPhase::Slow);
+    if !is_booting {
+      return;
+    }
+    inner.status.state = DaemonPhase::Ready;
+    inner.status.last_line = None;
+    inner.status.daemon_version = daemon_version;
+  }
+
+  fn on_slow(&self) {
+    let mut inner = self.inner.lock().unwrap();
+    if inner.status.state == DaemonPhase::Starting {
+      inner.status.state = DaemonPhase::Slow;
     }
   }
 
-  fn remember_path_tried(&self, path: String) {
-    self.status.lock().unwrap().path_tried = Some(path);
+  fn on_start_failed(&self, reason: String) {
+    let mut inner = self.inner.lock().unwrap();
+    inner.status.state = DaemonPhase::Failed;
+    inner.status.last_line = Some(reason);
   }
 
-  fn last_stderr_line(&self) -> Option<String> {
-    self.last_stderr_line.lock().unwrap().clone()
+  fn on_gave_up_waiting(&self, reason: String) {
+    if self.phase() == DaemonPhase::Slow {
+      self.on_start_failed(reason);
+    }
+  }
+
+  /// A plain stderr line is remembered for later; a boot-refusal line fails a booting daemon at once.
+  fn on_stderr(&self, chunk: &str) {
+    let mut inner = self.inner.lock().unwrap();
+    if let Some(line) = last_non_blank_line(chunk) {
+      inner.last_stderr_line = Some(line);
+    }
+    let Some(refusal_line) = last_boot_refusal_line(chunk) else { return };
+    inner.boot_refusal_line = Some(refusal_line.clone());
+    let is_booting = matches!(inner.status.state, DaemonPhase::Starting | DaemonPhase::Slow);
+    if is_booting {
+      inner.status.state = DaemonPhase::Failed;
+      inner.status.last_line = Some(refusal_line);
+    }
+  }
+
+  /// The process is gone: forgets the child (so nothing signals a reaped pid) and fails with the refusal line or the last output line.
+  fn on_terminated(&self, exit_code: Option<i32>) {
+    let mut inner = self.inner.lock().unwrap();
+    inner.child = None;
+    let reason = inner.boot_refusal_line.clone().or_else(|| inner.last_stderr_line.clone()).unwrap_or_else(|| format!("the daemon exited with code {exit_code:?}"));
+    inner.status.state = DaemonPhase::Failed;
+    inner.status.last_line = Some(reason);
   }
 }
 
 #[tauri::command]
 pub fn daemon_status(state: State<DaemonState>) -> DaemonStatus {
-  state.status.lock().unwrap().clone()
+  state.snapshot(Instant::now())
 }
 
 /// Reuses a daemon already answering on 7331, otherwise spawns the bundled one; never blocks the caller.
@@ -152,37 +287,58 @@ pub fn start(app: AppHandle) {
 /// Stops the sidecar with SIGTERM, then SIGKILL after the grace; leaves a reused daemon alone.
 pub fn stop(app: &AppHandle) {
   let state = app.state::<DaemonState>();
-  let Some(child) = state.child.lock().unwrap().take() else { return };
-  let pid = child.pid();
+  match stop_daemon(&state, &OsSignals, GRACE_BEFORE_SIGKILL) {
+    Some(outcome) => log::info!("daemon stopped: {outcome:?}"),
+    None => log::info!("no daemon of ours to stop"),
+  }
+}
+
+/// Takes the child out of the state once and stops it; returns None when there is nothing to stop.
+pub fn stop_daemon(state: &DaemonState, signals: &impl Signals, grace: Duration) -> Option<StopOutcome> {
+  let child = state.take_child()?;
+  let pid = child.pid;
   log::info!("stopping the daemon (pid {pid})");
-  let outcome = terminate_gracefully(pid, GRACE_BEFORE_SIGKILL, || !is_process_alive(pid));
-  log::info!("daemon stopped: {outcome:?}");
+  Some(terminate_gracefully(signals, pid, grace, || !signals.is_alive(pid)))
 }
 
 fn boot(app: &AppHandle) {
   let state = app.state::<DaemonState>();
-  if probe_health(HEALTH_ADDRESS, PROBE_TIMEOUT) {
+  if let Some(answer) = probe_health(HEALTH_ADDRESS, PROBE_TIMEOUT) {
     log::info!("a daemon already answers on {HEALTH_ADDRESS}, reusing it");
-    state.set_phase(DaemonPhase::Reused, None);
+    state.on_reused(answer.version);
     return;
   }
   match spawn_sidecar(app) {
-    Ok(()) => wait_for_ready(&state),
+    Ok(()) => wait_for_ready(&state, HEALTH_ADDRESS, READY_TIMEOUT, SLOW_START_EXTRA_BUDGET),
     Err(reason) => {
       log::error!("could not start the daemon: {reason}");
-      state.set_phase(DaemonPhase::Failed, Some(reason));
+      state.on_start_failed(reason);
     }
   }
 }
 
-fn wait_for_ready(state: &DaemonState) {
-  let is_still_starting = || state.phase() == DaemonPhase::Starting;
-  if wait_until_healthy(HEALTH_ADDRESS, READY_TIMEOUT, is_still_starting) {
-    state.set_phase_if_starting(DaemonPhase::Ready, None);
+/// Polls `/health` for `ready_timeout`, then keeps polling for `extra_budget` in the Slow state; Failed only comes from the process side.
+fn wait_for_ready(state: &DaemonState, address: &str, ready_timeout: Duration, extra_budget: Duration) {
+  let is_awaiting = || state.is_awaiting_health();
+  if let Some(answer) = wait_until_healthy(address, ready_timeout, is_awaiting) {
+    state.on_health_answered(answer.version);
     return;
   }
-  let reason = state.last_stderr_line().unwrap_or_else(|| format!("the daemon did not answer on {HEALTH_ADDRESS} within {}s", READY_TIMEOUT.as_secs()));
-  state.set_phase_if_starting(DaemonPhase::Failed, Some(reason));
+  state.on_slow();
+  if let Some(answer) = wait_until_healthy(address, extra_budget, is_awaiting) {
+    state.on_health_answered(answer.version);
+    return;
+  }
+  let total_seconds = (ready_timeout + extra_budget).as_secs();
+  state.on_gave_up_waiting(format!("the daemon did not answer on {address} within {total_seconds}s"));
+}
+
+/// Returns the sidecar's environment: the parent's without OPENFLEET_PORT (the probe and the CSP are fixed on 7331), with the repaired PATH and the stdin-EOF shutdown switch.
+pub fn sidecar_env(parent_env: impl IntoIterator<Item = (String, String)>, repaired_path: &str) -> HashMap<String, String> {
+  let mut env: HashMap<String, String> = parent_env.into_iter().filter(|(name, _)| name != PORT_VARIABLE).collect();
+  env.insert("PATH".to_string(), repaired_path.to_string());
+  env.insert(EXIT_ON_STDIN_EOF_VARIABLE.to_string(), "1".to_string());
+  env
 }
 
 fn spawn_sidecar(app: &AppHandle) -> Result<(), String> {
@@ -193,18 +349,19 @@ fn spawn_sidecar(app: &AppHandle) -> Result<(), String> {
   let home = app.path().home_dir().map_err(|err| err.to_string())?;
   let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
   let repaired_path = repair_path(|| run_login_shell(&shell, LOGIN_SHELL_TIMEOUT), &home.to_string_lossy());
-  let state = app.state::<DaemonState>();
-  state.remember_path_tried(repaired_path.clone());
+  let environment = sidecar_env(std::env::vars(), &repaired_path.path);
 
   let (events, child) = app
     .shell()
     .sidecar("node")
     .map_err(|err| err.to_string())?
     .args([daemon_script.to_string_lossy().to_string()])
-    .env("PATH", repaired_path)
+    .env_clear()
+    .envs(environment)
     .spawn()
     .map_err(|err| err.to_string())?;
-  *state.child.lock().unwrap() = Some(child);
+  let state = app.state::<DaemonState>();
+  state.record_spawn(RunningChild::of_sidecar(child), repaired_path, Instant::now());
   let app_for_events = app.clone();
   tauri::async_runtime::spawn(async move { pipe_daemon_output(app_for_events, events).await });
   Ok(())
@@ -218,15 +375,12 @@ async fn pipe_daemon_output(app: AppHandle, mut events: tauri::async_runtime::Re
       CommandEvent::Stderr(bytes) => {
         let chunk = String::from_utf8_lossy(&bytes).to_string();
         log::warn!("[daemon] {}", chunk.trim_end());
-        if let Some(line) = last_non_blank_line(&chunk) {
-          *state.last_stderr_line.lock().unwrap() = Some(line);
-        }
+        state.on_stderr(&chunk);
       }
       CommandEvent::Error(reason) => log::error!("[daemon] {reason}"),
       CommandEvent::Terminated(payload) => {
         log::warn!("[daemon] exited with code {:?}", payload.code);
-        let reason = state.last_stderr_line().unwrap_or_else(|| format!("the daemon exited with code {:?}", payload.code));
-        state.set_phase(DaemonPhase::Failed, Some(reason));
+        state.on_terminated(payload.code);
       }
       _ => {}
     }
@@ -236,11 +390,13 @@ async fn pipe_daemon_output(app: AppHandle, mut events: tauri::async_runtime::Re
 #[cfg(test)]
 mod tests {
   use super::*;
+  use std::cell::RefCell;
   use std::io::{BufRead, BufReader};
   use std::net::TcpListener;
   use std::process::{Child, Command, Stdio};
 
   const SHORT: Duration = Duration::from_millis(300);
+  const PID: u32 = 4242;
 
   fn serve_once(response: &'static str) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -249,6 +405,22 @@ mod tests {
       if let Ok((mut stream, _)) = listener.accept() {
         let mut request = [0u8; 512];
         let _ = stream.read(&mut request);
+        let _ = stream.write_all(response.as_bytes());
+      }
+    });
+    address
+  }
+
+  /// Answers 200 only to `GET /health`, 404 to anything else.
+  fn serve_health_only(body: &'static str) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap().to_string();
+    std::thread::spawn(move || {
+      if let Ok((mut stream, _)) = listener.accept() {
+        let mut request = [0u8; 512];
+        let read = stream.read(&mut request).unwrap_or(0);
+        let is_health_request = request[..read].starts_with(b"GET /health HTTP/1.1\r\n");
+        let response = if is_health_request { format!("HTTP/1.1 200 OK\r\n\r\n{body}") } else { "HTTP/1.1 404 Not Found\r\n\r\n".to_string() };
         let _ = stream.write_all(response.as_bytes());
       }
     });
@@ -267,9 +439,39 @@ mod tests {
     child
   }
 
+  fn state_with_a_spawned_child() -> DaemonState {
+    let state = DaemonState::new();
+    let repaired = RepairedPath { path: "/a:/b".to_string(), source: PathSource::Shell };
+    state.record_spawn(RunningChild { pid: PID, _stdin_holder: None }, repaired, Instant::now());
+    state
+  }
+
+  #[derive(Default)]
+  struct RecordingSignals {
+    sent: RefCell<Vec<(u32, i32)>>,
+    is_alive_answers: RefCell<Vec<bool>>,
+  }
+
+  impl RecordingSignals {
+    fn answering_alive(answers: Vec<bool>) -> Self {
+      Self { sent: RefCell::default(), is_alive_answers: RefCell::new(answers) }
+    }
+  }
+
+  impl Signals for RecordingSignals {
+    fn send(&self, pid: u32, signal: i32) -> bool {
+      self.sent.borrow_mut().push((pid, signal));
+      if signal == NO_SIGNAL {
+        let mut answers = self.is_alive_answers.borrow_mut();
+        return if answers.is_empty() { false } else { answers.remove(0) };
+      }
+      true
+    }
+  }
+
   #[test]
   fn serializes_a_failed_status_with_camel_case_keys() {
-    let status = DaemonStatus { state: DaemonPhase::Failed, last_line: Some("boom".into()), path_tried: Some("/a:/b".into()) };
+    let status = DaemonStatus { last_line: Some("boom".into()), path_tried: Some("/a:/b".into()), state: DaemonPhase::Failed, ..DaemonStatus::starting() };
 
     let json = serde_json::to_string(&status).unwrap();
 
@@ -278,16 +480,16 @@ mod tests {
 
   #[test]
   fn omits_the_optional_keys_of_a_starting_status() {
-    let status = DaemonStatus { state: DaemonPhase::Starting, last_line: None, path_tried: None };
-
-    assert_eq!(serde_json::to_string(&status).unwrap(), r#"{"state":"starting"}"#);
+    assert_eq!(serde_json::to_string(&DaemonStatus::starting()).unwrap(), r#"{"state":"starting"}"#);
   }
 
   #[test]
-  fn serializes_the_reused_state() {
-    let status = DaemonStatus { state: DaemonPhase::Reused, last_line: None, path_tried: None };
+  fn serializes_the_reused_and_slow_states() {
+    let reused = DaemonStatus { state: DaemonPhase::Reused, daemon_version: Some("1.2.3".into()), ..DaemonStatus::starting() };
+    let slow = DaemonStatus { state: DaemonPhase::Slow, started_seconds_ago: Some(20), path_source: Some(PathSource::Fallback), ..DaemonStatus::starting() };
 
-    assert_eq!(serde_json::to_string(&status).unwrap(), r#"{"state":"reused"}"#);
+    assert_eq!(serde_json::to_string(&reused).unwrap(), r#"{"state":"reused","daemonVersion":"1.2.3"}"#);
+    assert_eq!(serde_json::to_string(&slow).unwrap(), r#"{"state":"slow","pathSource":"fallback","startedSecondsAgo":20}"#);
   }
 
   #[test]
@@ -301,19 +503,47 @@ mod tests {
   fn probe_sees_a_daemon_answering_200() {
     let address = serve_once("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n{\"ok\":true}");
 
-    assert!(probe_health(&address, PROBE_TIMEOUT));
+    assert!(probe_health(&address, PROBE_TIMEOUT).is_some());
+  }
+
+  #[test]
+  fn probe_reads_the_daemon_version_from_the_health_body() {
+    let address = serve_once("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n{\"ok\":true,\"version\":\"0.4.2\"}");
+
+    assert_eq!(probe_health(&address, PROBE_TIMEOUT), Some(HealthAnswer { version: Some("0.4.2".to_string()) }));
+  }
+
+  #[test]
+  fn probe_reports_no_version_when_the_body_carries_none() {
+    let address = serve_once("HTTP/1.1 200 OK\r\n\r\nnot json");
+
+    assert_eq!(probe_health(&address, PROBE_TIMEOUT), Some(HealthAnswer { version: None }));
+  }
+
+  #[test]
+  fn probe_asks_for_get_health() {
+    let address = serve_health_only("{\"version\":\"1\"}");
+
+    assert!(probe_health(&address, PROBE_TIMEOUT).is_some());
   }
 
   #[test]
   fn probe_rejects_a_server_answering_500() {
     let address = serve_once("HTTP/1.1 500 Internal Server Error\r\n\r\n");
 
-    assert!(!probe_health(&address, PROBE_TIMEOUT));
+    assert!(probe_health(&address, PROBE_TIMEOUT).is_none());
+  }
+
+  #[test]
+  fn probe_rejects_a_failure_that_merely_mentions_200() {
+    let address = serve_once("HTTP/1.1 503 Service Unavailable\r\n\r\nretry after 200 ms");
+
+    assert!(probe_health(&address, PROBE_TIMEOUT).is_none());
   }
 
   #[test]
   fn probe_finds_nothing_on_a_closed_port() {
-    assert!(!probe_health(&closed_address(), PROBE_TIMEOUT));
+    assert!(probe_health(&closed_address(), PROBE_TIMEOUT).is_none());
   }
 
   #[test]
@@ -324,15 +554,15 @@ mod tests {
 
     let answered = probe_health(&address, SHORT);
 
-    assert!(!answered);
+    assert!(answered.is_none());
     assert!(started.elapsed() < Duration::from_secs(2));
   }
 
   #[test]
-  fn wait_returns_true_as_soon_as_the_daemon_answers() {
+  fn wait_returns_as_soon_as_the_daemon_answers() {
     let address = serve_once("HTTP/1.1 200 OK\r\n\r\n");
 
-    assert!(wait_until_healthy(&address, Duration::from_secs(5), || true));
+    assert!(wait_until_healthy(&address, Duration::from_secs(5), || true).is_some());
   }
 
   #[test]
@@ -341,7 +571,7 @@ mod tests {
 
     let answered = wait_until_healthy(&closed_address(), SHORT, || true);
 
-    assert!(!answered);
+    assert!(answered.is_none());
     assert!(started.elapsed() < Duration::from_secs(2));
   }
 
@@ -351,27 +581,75 @@ mod tests {
 
     let answered = wait_until_healthy(&closed_address(), Duration::from_secs(30), || false);
 
-    assert!(!answered);
+    assert!(answered.is_none());
     assert!(started.elapsed() < Duration::from_secs(2));
   }
 
   #[test]
-  fn terminate_lets_a_well_behaved_process_exit_on_sigterm() {
-    let mut child = spawn_shell("echo ready; exec sleep 30");
-    let pid = child.id();
+  fn terminate_sends_sigterm_first_and_nothing_else_when_the_process_exits() {
+    let signals = RecordingSignals::default();
 
-    let outcome = terminate_gracefully(pid, Duration::from_secs(5), || child.try_wait().unwrap().is_some());
+    let outcome = terminate_gracefully(&signals, PID, Duration::from_secs(5), || true);
 
     assert_eq!(outcome, StopOutcome::ExitedOnSigterm);
+    assert_eq!(*signals.sent.borrow(), vec![(PID, libc::SIGTERM)]);
   }
 
   #[test]
-  fn terminate_kills_a_process_that_ignores_sigterm_after_the_grace() {
+  fn terminate_sends_sigkill_after_the_grace_when_the_process_stays() {
+    let signals = RecordingSignals::default();
+
+    let outcome = terminate_gracefully(&signals, PID, Duration::ZERO, || false);
+
+    assert_eq!(outcome, StopOutcome::KilledAfterGrace);
+    assert_eq!(*signals.sent.borrow(), vec![(PID, libc::SIGTERM), (PID, libc::SIGKILL)]);
+  }
+
+  #[test]
+  fn terminate_re_checks_once_after_the_grace_before_sending_sigkill() {
+    let signals = RecordingSignals::default();
+    let mut checks = 0;
+
+    let outcome = terminate_gracefully(&signals, PID, Duration::ZERO, || {
+      checks += 1;
+      true
+    });
+
+    assert_eq!(outcome, StopOutcome::ExitedOnSigterm);
+    assert_eq!(checks, 1);
+    assert_eq!(*signals.sent.borrow(), vec![(PID, libc::SIGTERM)]);
+  }
+
+  #[test]
+  fn liveness_is_asked_with_the_null_signal() {
+    let signals = RecordingSignals::answering_alive(vec![true, false]);
+
+    assert!(signals.is_alive(PID));
+    assert!(!signals.is_alive(PID));
+    assert_eq!(*signals.sent.borrow(), vec![(PID, 0), (PID, 0)]);
+  }
+
+  #[test]
+  fn a_real_process_receives_sigterm_and_gets_to_run_its_handler() {
+    let marker = std::env::temp_dir().join(format!("openfleet-sigterm-{}", std::process::id()));
+    let script = format!("trap 'echo terminated > {}; exit 0' TERM; echo ready; while :; do sleep 0.1; done", marker.display());
+    let mut child = spawn_shell(&script);
+    let pid = child.id();
+
+    let outcome = terminate_gracefully(&OsSignals, pid, Duration::from_secs(5), || child.try_wait().unwrap().is_some());
+
+    assert_eq!(outcome, StopOutcome::ExitedOnSigterm);
+    assert_eq!(std::fs::read_to_string(&marker).unwrap().trim(), "terminated");
+    let _ = std::fs::remove_file(&marker);
+  }
+
+  #[test]
+  fn a_real_process_that_ignores_sigterm_is_killed_after_the_grace() {
     let mut child = spawn_shell("trap '' TERM; echo ready; while :; do sleep 1; done");
     let pid = child.id();
     let started = Instant::now();
 
-    let outcome = terminate_gracefully(pid, SHORT, || child.try_wait().unwrap().is_some());
+    let outcome = terminate_gracefully(&OsSignals, pid, SHORT, || child.try_wait().unwrap().is_some());
 
     assert_eq!(outcome, StopOutcome::KilledAfterGrace);
     assert!(started.elapsed() >= SHORT);
@@ -388,5 +666,251 @@ mod tests {
     child.wait().unwrap();
 
     assert!(!is_process_alive(pid));
+  }
+
+  #[test]
+  fn stop_signals_the_child_once_and_a_second_stop_does_nothing() {
+    let state = state_with_a_spawned_child();
+    let signals = RecordingSignals::answering_alive(vec![false]);
+
+    let first = stop_daemon(&state, &signals, Duration::from_secs(5));
+    let second = stop_daemon(&state, &signals, Duration::from_secs(5));
+
+    assert_eq!(first, Some(StopOutcome::ExitedOnSigterm));
+    assert_eq!(second, None);
+    assert_eq!(signals.sent.borrow().iter().filter(|(_, signal)| *signal == libc::SIGTERM).count(), 1);
+  }
+
+  #[test]
+  fn stop_sends_no_signal_to_a_daemon_that_already_terminated() {
+    let state = state_with_a_spawned_child();
+    state.on_terminated(Some(1));
+    let signals = RecordingSignals::default();
+
+    let outcome = stop_daemon(&state, &signals, Duration::from_secs(5));
+
+    assert_eq!(outcome, None);
+    assert!(signals.sent.borrow().is_empty());
+  }
+
+  #[test]
+  fn stop_sends_no_signal_when_the_daemon_was_reused() {
+    let state = DaemonState::new();
+    state.on_reused(Some("1.0.0".into()));
+    let signals = RecordingSignals::default();
+
+    assert_eq!(stop_daemon(&state, &signals, Duration::from_secs(5)), None);
+    assert!(signals.sent.borrow().is_empty());
+  }
+
+  #[test]
+  fn a_plain_stderr_warning_never_fails_a_booting_daemon() {
+    let state = state_with_a_spawned_child();
+
+    state.on_stderr("(node:1) ExperimentalWarning: something\n");
+
+    assert_eq!(state.snapshot(Instant::now()).state, DaemonPhase::Starting);
+    assert!(state.is_awaiting_health());
+  }
+
+  #[test]
+  fn a_boot_refusal_line_fails_the_daemon_with_that_line() {
+    let state = state_with_a_spawned_child();
+
+    state.on_stderr("warn first\nopenfleet: refusing to boot: port 7331 is already in use\ntrailing noise\n");
+
+    let status = state.snapshot(Instant::now());
+    assert_eq!(status.state, DaemonPhase::Failed);
+    assert_eq!(status.last_line.as_deref(), Some("openfleet: refusing to boot: port 7331 is already in use"));
+    assert!(!state.is_awaiting_health());
+  }
+
+  #[test]
+  fn a_termination_reports_the_refusal_line_over_a_later_stderr_line() {
+    let state = state_with_a_spawned_child();
+    state.on_stderr("openfleet: refusing to boot: schema is newer\n");
+    state.on_stderr("some cleanup message\n");
+
+    state.on_terminated(Some(1));
+
+    assert_eq!(state.snapshot(Instant::now()).last_line.as_deref(), Some("openfleet: refusing to boot: schema is newer"));
+  }
+
+  #[test]
+  fn a_termination_reports_the_last_stderr_line_once_the_process_has_exited() {
+    let state = state_with_a_spawned_child();
+    state.on_stderr("Error: boom\n");
+
+    state.on_terminated(Some(1));
+
+    let status = state.snapshot(Instant::now());
+    assert_eq!(status.state, DaemonPhase::Failed);
+    assert_eq!(status.last_line.as_deref(), Some("Error: boom"));
+  }
+
+  #[test]
+  fn a_termination_without_output_reports_the_exit_code() {
+    let state = state_with_a_spawned_child();
+
+    state.on_terminated(Some(3));
+
+    assert_eq!(state.snapshot(Instant::now()).last_line.as_deref(), Some("the daemon exited with code Some(3)"));
+  }
+
+  #[test]
+  fn a_termination_forgets_the_child() {
+    let state = state_with_a_spawned_child();
+
+    state.on_terminated(Some(0));
+
+    assert!(state.take_child().is_none());
+  }
+
+  #[test]
+  fn the_child_is_handed_over_only_once() {
+    let state = state_with_a_spawned_child();
+
+    assert!(state.take_child().is_some());
+    assert!(state.take_child().is_none());
+  }
+
+  #[test]
+  fn a_late_health_answer_turns_a_slow_daemon_ready_and_clears_the_line() {
+    let state = state_with_a_spawned_child();
+    state.on_slow();
+    assert_eq!(state.phase(), DaemonPhase::Slow);
+
+    state.on_health_answered(Some("0.4.2".into()));
+
+    let status = state.snapshot(Instant::now());
+    assert_eq!(status.state, DaemonPhase::Ready);
+    assert_eq!(status.daemon_version.as_deref(), Some("0.4.2"));
+    assert_eq!(status.last_line, None);
+  }
+
+  #[test]
+  fn a_health_answer_does_not_revive_a_failed_daemon() {
+    let state = state_with_a_spawned_child();
+    state.on_terminated(Some(1));
+
+    state.on_health_answered(None);
+
+    assert_eq!(state.phase(), DaemonPhase::Failed);
+  }
+
+  #[test]
+  fn slow_is_only_entered_from_starting() {
+    let state = state_with_a_spawned_child();
+    state.on_health_answered(None);
+
+    state.on_slow();
+
+    assert_eq!(state.phase(), DaemonPhase::Ready);
+  }
+
+  #[test]
+  fn the_status_counts_seconds_since_the_spawn_only_while_booting() {
+    let state = state_with_a_spawned_child();
+    let later = Instant::now() + Duration::from_secs(20);
+
+    assert_eq!(state.snapshot(later).started_seconds_ago, Some(20));
+    state.on_slow();
+    assert_eq!(state.snapshot(later).started_seconds_ago, Some(20));
+    state.on_health_answered(None);
+    assert_eq!(state.snapshot(later).started_seconds_ago, None);
+  }
+
+  #[test]
+  fn the_status_carries_the_path_that_was_tried_and_where_it_came_from() {
+    let state = state_with_a_spawned_child();
+
+    let status = state.snapshot(Instant::now());
+
+    assert_eq!(status.path_tried.as_deref(), Some("/a:/b"));
+    assert_eq!(status.path_source, Some(PathSource::Shell));
+  }
+
+  #[test]
+  fn a_reused_daemon_exposes_its_version() {
+    let state = DaemonState::new();
+
+    state.on_reused(Some("9.9.9".into()));
+
+    let status = state.snapshot(Instant::now());
+    assert_eq!(status.state, DaemonPhase::Reused);
+    assert_eq!(status.daemon_version.as_deref(), Some("9.9.9"));
+  }
+
+  #[test]
+  fn waiting_turns_slow_after_the_ready_timeout_then_ready_when_the_daemon_finally_answers() {
+    let state = state_with_a_spawned_child();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap().to_string();
+    std::thread::spawn(move || {
+      std::thread::sleep(Duration::from_millis(1500));
+      for mut stream in listener.incoming().flatten() {
+        let mut request = [0u8; 512];
+        let _ = stream.read(&mut request);
+        let _ = stream.write_all(b"HTTP/1.1 200 OK\r\n\r\n{\"version\":\"7.7.7\"}");
+      }
+    });
+    let observed_slow = std::sync::atomic::AtomicBool::new(false);
+
+    std::thread::scope(|scope| {
+      scope.spawn(|| {
+        while state.phase() != DaemonPhase::Ready {
+          if state.phase() == DaemonPhase::Slow {
+            observed_slow.store(true, std::sync::atomic::Ordering::SeqCst);
+          }
+          std::thread::sleep(Duration::from_millis(10));
+        }
+      });
+      wait_for_ready(&state, &address, Duration::from_millis(200), Duration::from_secs(5));
+    });
+
+    let status = state.snapshot(Instant::now());
+    assert_eq!(status.state, DaemonPhase::Ready);
+    assert_eq!(status.daemon_version.as_deref(), Some("7.7.7"));
+    assert!(observed_slow.load(std::sync::atomic::Ordering::SeqCst));
+  }
+
+  #[test]
+  fn waiting_gives_up_with_a_timeout_message_that_is_not_a_stderr_warning() {
+    let state = state_with_a_spawned_child();
+    state.on_stderr("Warning: something harmless\n");
+
+    wait_for_ready(&state, &closed_address(), Duration::from_millis(100), Duration::from_millis(300));
+
+    let status = state.snapshot(Instant::now());
+    assert_eq!(status.state, DaemonPhase::Failed);
+    assert!(status.last_line.unwrap().starts_with("the daemon did not answer on"));
+  }
+
+  #[test]
+  fn waiting_stops_at_once_when_the_daemon_dies() {
+    let state = state_with_a_spawned_child();
+    state.on_terminated(Some(1));
+    let started = Instant::now();
+
+    wait_for_ready(&state, &closed_address(), Duration::from_secs(30), Duration::from_secs(30));
+
+    assert!(started.elapsed() < Duration::from_secs(2));
+    assert_eq!(state.phase(), DaemonPhase::Failed);
+  }
+
+  #[test]
+  fn the_sidecar_environment_drops_the_port_and_sets_path_and_the_stdin_switch() {
+    let parent = vec![
+      ("OPENFLEET_PORT".to_string(), "7332".to_string()),
+      ("OPENFLEET_HOME".to_string(), "/tmp/home".to_string()),
+      ("PATH".to_string(), "/usr/bin".to_string()),
+    ];
+
+    let env = sidecar_env(parent, "/repaired/bin");
+
+    assert_eq!(env.get("OPENFLEET_PORT"), None);
+    assert_eq!(env.get("OPENFLEET_HOME").map(String::as_str), Some("/tmp/home"));
+    assert_eq!(env.get("PATH").map(String::as_str), Some("/repaired/bin"));
+    assert_eq!(env.get("OPENFLEET_EXIT_ON_STDIN_EOF").map(String::as_str), Some("1"));
   }
 }

@@ -1,9 +1,17 @@
-/// Why Tauri asks the app to exit.
+/// Runs `stop_daemon` when the event loop reports the final exit.
+/// On macOS, Cmd+Q, the app menu's Quit and the Dock's Quit reach only `RunEvent::Exit` (through applicationWillTerminate), never `ExitRequested`.
+pub fn stop_daemon_on_final_exit(event: &tauri::RunEvent,stop_daemon: impl FnOnce()) {
+  if matches!(event, tauri::RunEvent::Exit) {
+    stop_daemon();
+  }
+}
+
+/// Why Tauri asks the app to exit through `RunEvent::ExitRequested`.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum ExitRequest {
   /// The last window was destroyed; Tauri reports no exit code.
   LastWindowClosed,
-  /// Quit from the menu, Cmd+Q, the Dock or `AppHandle::exit`; Tauri reports an exit code.
+  /// `AppHandle::exit` or `restart`; Tauri reports an exit code.
   Quit,
 }
 
@@ -34,6 +42,25 @@ pub fn decide_exit(request: ExitRequest, open_window_count: usize) -> ExitDecisi
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn the_final_exit_stops_the_daemon() {
+    let mut stops = 0;
+
+    stop_daemon_on_final_exit(&tauri::RunEvent::Exit, || stops += 1);
+
+    assert_eq!(stops, 1);
+  }
+
+  #[test]
+  fn other_events_leave_the_daemon_running() {
+    let mut stops = 0;
+
+    stop_daemon_on_final_exit(&tauri::RunEvent::Ready, || stops += 1);
+    stop_daemon_on_final_exit(&tauri::RunEvent::MainEventsCleared, || stops += 1);
+
+    assert_eq!(stops, 0);
+  }
 
   #[test]
   fn an_exit_request_without_code_is_the_last_window_closing() {
