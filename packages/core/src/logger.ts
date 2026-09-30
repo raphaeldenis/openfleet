@@ -18,7 +18,8 @@ const MAX_CHILDREN = 50;
 const MAX_DEPTH = 5;
 const MAX_NODES = 256;
 const MAX_ROOT_SPELLINGS = 4;
-const RESERVED_FIELD_KEYS = new Set(['ts', 'level', 'msg', 'id', 'sessionId', 'code', 'err']);
+// A field with one of these names is ignored, by its own name and by its name once cleaned (`__pro​to__` cleans to `__proto__`).
+const RESERVED_FIELD_KEYS = new Set(['ts', 'level', 'msg', 'id', 'sessionId', 'code', 'err', 'detail', 'cause', '__proto__']);
 
 // Control, format (bidi, zero-width, BOM) and line/paragraph separator characters: a line splitter or a terminal honours them.
 // The masking rules live in redact.ts, shared with describeError; strings are cut to MAX_STRING_CHARS before any of them runs.
@@ -195,7 +196,11 @@ function buildRecord(level: LogLevel, message: unknown, detail: unknown, fields:
   const fieldKeys = attempt(() => Object.keys(fields ?? {})) ?? [];
   const extraKeys = fieldKeys.filter((key) => !RESERVED_FIELD_KEYS.has(key)).slice(0, MAX_CHILDREN);
   const extras = sanitizeEntries(extraKeys.map((key): [string, () => unknown] => [key, () => fields?.[key]]), walk, 0);
-  return Object.assign(record, extras, { ts: record.ts, level: record.level, msg: record.msg });
+  for (const [key, value] of Object.entries(extras)) {
+    const isReservedOnceCleaned = RESERVED_FIELD_KEYS.has(key);
+    if (!isReservedOnceCleaned) record[key] = value;
+  }
+  return record;
 }
 
 /** A slice or a concatenation keeps its whole source string alive; a round trip through bytes returns a flat, independent string. */
@@ -226,11 +231,15 @@ function toPretty(record: LogRecord): string {
   return capLine(head + stackLines);
 }
 
+// Only the exact lowercase value `debug` turns debug on; any other value (`DEBUG`, `warn`, …) leaves the default: info and above.
 function isDebugEnabled(): boolean {
   return process.env.OPENFLEET_LOG_LEVEL === 'debug';
 }
 
-const KNOWN_LEVELS = new Set<string>(['debug', 'info', 'warn', 'error']);
+/** A stream whose isTTY cannot be read is treated as a plain file: the line is printed as NDJSON. */
+const isTerminal = (stream: NodeJS.WriteStream): boolean => attempt(() => stream.isTTY === true) === true;
+
+const KNOWN_LEVELS =new Set<string>(['debug', 'info', 'warn', 'error']);
 
 // Best effort by contract: a logging failure of any kind must never reach the caller.
 // Looks up console[method] at call time, not at import time, so tests can still spy on it.
@@ -242,8 +251,10 @@ export function log(level: LogLevel, message: string, detail?: unknown, fields?:
     const ndjson = toNdjson(record);
     ringBuffer.push(ndjson);
     if (ringBuffer.length > RING_CAPACITY) ringBuffer.shift();
-    const printedLine = process.stdout.isTTY === true ? toPretty(record) : ndjson;
-    console[CONSOLE_METHOD_BY_LEVEL[knownLevel]](printedLine);
+    const consoleMethod = CONSOLE_METHOD_BY_LEVEL[knownLevel];
+    const stream = consoleMethod === 'log' ? process.stdout : process.stderr;
+    const printedLine = isTerminal(stream) ? toPretty(record) : ndjson;
+    console[consoleMethod](printedLine);
   } catch {
     /* swallowed: see above */
   }

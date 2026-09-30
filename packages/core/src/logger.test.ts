@@ -13,6 +13,7 @@ type ParsedLine = Record<string, any>;
 
 const tempDirs = createTempDirTracker();
 let stdoutIsTtyBefore: PropertyDescriptor | undefined;
+let stderrIsTtyBefore: PropertyDescriptor | undefined;
 let logSpy: ReturnType<typeof vi.spyOn>;
 let warnSpy: ReturnType<typeof vi.spyOn>;
 let errorSpy: ReturnType<typeof vi.spyOn>;
@@ -22,8 +23,18 @@ async function loadLogger() {
   return import('./logger.js');
 }
 
-function setStdoutIsTty(isTty: boolean): void {
-  Object.defineProperty(process.stdout, 'isTTY', { value: isTty, configurable: true });
+function setStreamIsTty(stream: NodeJS.WriteStream, isTty: boolean): void {
+  Object.defineProperty(stream, 'isTTY', { value: isTty, configurable: true });
+}
+
+function setTerminalIsTty(isTty: boolean): void {
+  setStreamIsTty(process.stdout, isTty);
+  setStreamIsTty(process.stderr, isTty);
+}
+
+function restoreIsTty(stream: NodeJS.WriteStream, before: PropertyDescriptor | undefined): void {
+  if (before) Object.defineProperty(stream, 'isTTY', before);
+  else delete (stream as { isTTY?: boolean }).isTTY;
 }
 
 function everyConsoleArgument(): unknown[] {
@@ -46,7 +57,8 @@ function parsedLine(): ParsedLine {
 
 beforeEach(() => {
   stdoutIsTtyBefore = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
-  setStdoutIsTty(false);
+  stderrIsTtyBefore = Object.getOwnPropertyDescriptor(process.stderr, 'isTTY');
+  setTerminalIsTty(false);
   vi.stubEnv('OPENFLEET_LOG_LEVEL', '');
   logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
   warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -54,8 +66,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  if (stdoutIsTtyBefore) Object.defineProperty(process.stdout, 'isTTY', stdoutIsTtyBefore);
-  else delete (process.stdout as { isTTY?: boolean }).isTTY;
+  restoreIsTty(process.stdout, stdoutIsTtyBefore);
+  restoreIsTty(process.stderr, stderrIsTtyBefore);
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
   tempDirs.removeAll();
@@ -105,6 +117,40 @@ describe('log — line format', () => {
     const line = parsedLine();
     expect(line).toMatchObject({ level: 'warn', msg: 'hook failed open', id: 'abc12345', sessionId: 's-1', code: 'hook_fail_open', attempt: 3 });
     expect(line.ts).toMatch(ISO_TIMESTAMP);
+  });
+
+  it('keeps the real detail when a field is named detail, and never invents one from a field', async () => {
+    const { log } = await loadLogger();
+
+    log('info', 'with detail', { real: 1 }, { detail: 'FORGED' });
+    log('info', 'without detail', undefined, { detail: 'FORGED' });
+
+    const [withDetail, withoutDetail] = writtenLines().map((line) => JSON.parse(line) as ParsedLine);
+    expect(withDetail!.detail).toEqual({ real: 1 });
+    expect(withoutDetail).not.toHaveProperty('detail');
+    expect(writtenLines().join('')).not.toContain('FORGED');
+  });
+
+  it('keeps the real err when a field is named cause or err, and logs no top-level cause from a field', async () => {
+    const { log } = await loadLogger();
+
+    log('error', 'with error', new Error('real', { cause: new Error('real cause') }), { cause: 'FORGED', err: 'FORGED' });
+
+    expect(parsedLine().err.cause.message).toBe('real cause');
+    expect(parsedLine()).not.toHaveProperty('cause');
+    expect(onlyWrittenLine()).not.toContain('FORGED');
+  });
+
+  it.each(['__proto__', '__pro​to__'])('ignores a field named %j: it changes nothing about the record', async (key) => {
+    setTerminalIsTty(true);
+    const { log, recentLogLines } = await loadLogger();
+    const fields = JSON.parse(`{${JSON.stringify(key)}: {"err": {"stack": "FORGED STACK"}, "code": "FORGED"}, "kept": 1}`) as Record<string, unknown>;
+
+    log('info', 'proto', undefined, fields);
+
+    expect(onlyWrittenLine()).toMatch(/^\d{2}:\d{2}:\d{2} INFO proto {2}kept=1$/);
+    const { ts: _ts, ...stored } = JSON.parse(recentLogLines()[0]!) as ParsedLine;
+    expect(stored).toEqual({ level: 'info', msg: 'proto', kept: 1 });
   });
 
   it('puts a non-error detail under detail', async () => {
@@ -172,7 +218,7 @@ describe('log — levels', () => {
 
 describe('log — TTY printer', () => {
   it('prints HH:MM:SS LEVEL msg  key=value on one line for an info line', async () => {
-    setStdoutIsTty(true);
+    setTerminalIsTty(true);
     const { log } = await loadLogger();
 
     log('info', 'session created', undefined, { sessionId: 's-1', count: 2 });
@@ -181,7 +227,7 @@ describe('log — TTY printer', () => {
   });
 
   it('prints the stack on the following lines for an error, and never prints an object', async () => {
-    setStdoutIsTty(true);
+    setTerminalIsTty(true);
     const { log } = await loadLogger();
 
     log('error', 'relaunch failed', new Error('boom'), { detailObject: { nested: 1 } });
@@ -195,8 +241,59 @@ describe('log — TTY printer', () => {
     expect(onlyWrittenLine().trimStart().startsWith('{')).toBe(false);
   });
 
+  describe('picks the printer by the stream the level writes to: error and warn to stderr, info and debug to stdout', () => {
+    const PRETTY = /^\d{2}:\d{2}:\d{2} /;
+
+    it('prints error and warn as NDJSON and info as pretty when only stdout is a TTY', async () => {
+      setStreamIsTty(process.stdout, true);
+      setStreamIsTty(process.stderr, false);
+      const { log } = await loadLogger();
+
+      log('error', 'to stderr');
+      log('warn', 'to stderr');
+      log('info', 'to stdout');
+
+      const [errorLine] = errorSpy.mock.calls[0] as [string];
+      const [warnLine] = warnSpy.mock.calls[0] as [string];
+      const [infoLine] = logSpy.mock.calls[0] as [string];
+      expect([errorLine, warnLine].map((line) => JSON.parse(line).msg)).toEqual(['to stderr', 'to stderr']);
+      expect(infoLine).toMatch(PRETTY);
+    });
+
+    it('prints error and warn as pretty and info as NDJSON when only stderr is a TTY', async () => {
+      setStreamIsTty(process.stdout, false);
+      setStreamIsTty(process.stderr, true);
+      const { log } = await loadLogger();
+
+      log('error', 'to stderr');
+      log('warn', 'to stderr');
+      log('info', 'to stdout');
+
+      const [errorLine] = errorSpy.mock.calls[0] as [string];
+      const [warnLine] = warnSpy.mock.calls[0] as [string];
+      const [infoLine] = logSpy.mock.calls[0] as [string];
+      expect(errorLine).toMatch(PRETTY);
+      expect(warnLine).toMatch(PRETTY);
+      expect(JSON.parse(infoLine).msg).toBe('to stdout');
+    });
+
+    it.each(['stdout', 'stderr'] as const)('prints NDJSON, once, when the isTTY getter of %s throws', async (streamName) => {
+      const stream = process[streamName];
+      Object.defineProperty(stream, 'isTTY', { get: () => { throw new Error('isTTY getter exploded'); }, configurable: true });
+      const { log, recentLogLines } = await loadLogger();
+
+      log('info', 'to stdout');
+      log('error', 'to stderr');
+
+      const printed = writtenLines();
+      expect(printed).toHaveLength(2);
+      expect(printed.map((line) => JSON.parse(line).msg)).toEqual(['to stdout', 'to stderr']);
+      expect(recentLogLines()).toHaveLength(2);
+    });
+  });
+
   it('prints NDJSON when stdout is not a TTY', async () => {
-    setStdoutIsTty(false);
+    setTerminalIsTty(false);
     const { log } = await loadLogger();
 
     log('info', 'plain');
@@ -333,7 +430,7 @@ describe('log — ring buffer', () => {
   });
 
   it('stores the NDJSON line even when stdout is a TTY', async () => {
-    setStdoutIsTty(true);
+    setTerminalIsTty(true);
     const { log, recentLogLines } = await loadLogger();
 
     log('info', 'tty line');
@@ -507,9 +604,9 @@ describe('log — gaps the first suite left open', () => {
     const { log } = await loadLogger();
 
     log('info', 'first');
-    setStdoutIsTty(true);
+    setTerminalIsTty(true);
     log('info', 'second');
-    setStdoutIsTty(false);
+    setTerminalIsTty(false);
     log('info', 'third');
 
     const [first, second, third] = writtenLines() as [string, string, string];
@@ -586,7 +683,7 @@ describe('log — gaps the first suite left open', () => {
   });
 
   it('keeps an ANSI-and-newline message on one uncoloured line in the TTY printer, and indents every stack line', async () => {
-    setStdoutIsTty(true);
+    setTerminalIsTty(true);
     const { log } = await loadLogger();
     const error = new Error('x');
     error.stack = 'Error: x\n10:00:00 ERROR forged\n\u001b[2Jat y';
@@ -609,7 +706,7 @@ describe('log — gaps the first suite left open', () => {
     const LINE_BREAKS = /\n|\r|\p{Zl}|\p{Zp}/u;
 
     it('strips them from the message, from string values and from keys, so one call is one line', async () => {
-      setStdoutIsTty(isTty);
+      setTerminalIsTty(isTty);
       const { log } = await loadLogger();
 
       log('info', `a${withInvisible('msg')}b`, { [withInvisible('key')]: withInvisible('value') }, { field: withInvisible('field') });
@@ -623,7 +720,7 @@ describe('log — gaps the first suite left open', () => {
     });
 
     it('strips them from an error message and stack, which the logger keeps multi-line', async () => {
-      setStdoutIsTty(isTty);
+      setTerminalIsTty(isTty);
       const { log, recentLogLines } = await loadLogger();
       const error = new Error(withInvisible('boom'));
       error.stack = `Error: ${withInvisible('boom')}\n    at ${withInvisible('site')}`;
