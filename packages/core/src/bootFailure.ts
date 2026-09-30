@@ -2,6 +2,7 @@ import { PortInUseError } from './api/portInUseError.js';
 import { ConfigFileError } from './configFileError.js';
 import { readableConfigReason } from './configReason.js';
 import { MigrationFailedError, SchemaNewerThanCodeError } from './db/migrate.js';
+import { EXIT_CODES } from './process/exitCodes.js';
 
 export interface BootRefusalOutput { configPath: string; writeStderr: (text: string) => void; exit: (code: number) => never }
 
@@ -42,6 +43,6 @@ export async function refuseBootOnFailure<T>(boot: () => Promise<T>, output: Boo
     return await boot();
   } catch (error) {
     output.writeStderr(`${refusalLineOf(error, output.configPath)}\n`);
-    return output.exit(1);
+    return output.exit(EXIT_CODES.failed);
   }
 }
