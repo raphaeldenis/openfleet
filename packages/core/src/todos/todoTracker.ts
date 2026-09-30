@@ -8,11 +8,14 @@ import { readTranscriptChunk } from './transcriptChunkReader.js';
 /** The waits before each fallback read of a todo hook that carried no usable payload: about five times the worst flush lag observed, 4.65 s in all. */
 export const FALLBACK_READ_DELAYS_MS = [150, 300, 600, 1200, 2400] as const;
 const MAX_FALLBACK_TOOL_USE_IDS = 50;
+const MAX_CHUNKS_PER_READ = Math.ceil(MAX_FOLD_BYTES / TODO_CHUNK_BYTES);
+
+type WarnCode = 'todo_fold_failed' | 'todo_read_failed' | 'todo_emit_failed' | 'todo_transcript_unreadable' | 'todo_listener_failed';
 
 export type Schedule = (run: () => void, delayMs: number) => () => void;
 
 export interface TodoSessions {
-  get(sessionId: string): { createdAt: string } | undefined;
+  get(sessionId: string): { createdAt: string; state?: string } | undefined;
   /** The resolved transcript path of the session's current conversation, or undefined when there is none the daemon trusts. */
   trustedTranscriptFileOf(sessionId: string): string | undefined;
 }
@@ -36,6 +39,7 @@ interface SessionState {
   fold: TodoFold;
   cursor: Cursor | undefined;
   tasks: Task[];
+  hasQueuedARead: boolean;
   isRunning: boolean;
   isClosing: boolean;
   isStale: boolean;
@@ -89,9 +93,10 @@ export class TodoTracker {
     return () => this.listeners.delete(listener);
   }
 
-  /** Queues the fold of one completed todo call, delivered by its PostToolUse hook. Never folds inline. */
+  /** Queues the fold of one completed todo call, delivered by its PostToolUse hook. Never folds inline. A state that never read its transcript reads it first, so the hook folds after the history. */
   applyHook(sessionId: string, call: TodoHookCall): void {
     const state = this.stateOf(sessionId);
+    if (!state.hasQueuedARead) this.enqueueRead(state, 'repair');
     this.enqueue(state, { kind: 'hook', call });
   }
 
@@ -119,8 +124,9 @@ export class TodoTracker {
   /** The list of a session for the REST route: waits for the queue of the session to drain, at most `getWaitMs`, then answers what it has. */
   async read(sessionId: string): Promise<SessionTodos> {
     const isKnown = this.states.has(sessionId) || this.closedSnapshots.has(sessionId);
-    const hasSession = this.deps.sessions.get(sessionId) !== undefined;
-    if (!isKnown && hasSession) this.repair(sessionId);
+    const session = this.deps.sessions.get(sessionId);
+    const isOpenSession = session !== undefined && session.state !== 'closed';
+    if (!isKnown && isOpenSession) this.repair(sessionId);
     const state = this.states.get(sessionId);
     const hasTimedOut = state ? await this.untilIdle(state) : false;
     const snapshot = this.get(sessionId) ?? snapshotOf(createTodoFold(), sessionId);
@@ -146,7 +152,7 @@ export class TodoTracker {
     const notBefore = createdAt !== undefined && Number.isFinite(Date.parse(createdAt)) ? new Date(createdAt) : undefined;
     const fold = createTodoFold({ now: this.deps.now, notBefore });
     const state: SessionState = {
-      sessionId, fold, cursor: undefined, tasks: [], isRunning: false, isClosing: false, isStale: false,
+      sessionId, fold, cursor: undefined, tasks: [], hasQueuedARead: false, isRunning: false, isClosing: false, isStale: false,
       lastEmittedKey: keyOf(snapshotOf(fold, sessionId)), isEmitPending: false, fallback: undefined, warnedReasons: new Set(), idleWaiters: [],
     };
     this.states.set(sessionId, state);
@@ -169,6 +175,7 @@ export class TodoTracker {
   }
 
   private enqueueRead(state: SessionState, reason: ReadReason): void {
+    state.hasQueuedARead = true;
     const hasReadQueued = state.tasks.some((queued) => queued.kind === 'read');
     if (!hasReadQueued) this.enqueue(state, { kind: 'read', reason });
   }
@@ -195,7 +202,8 @@ export class TodoTracker {
   private foldHook(state: SessionState, call: TodoHookCall): void {
     const wasAlreadyFolded = state.fold.seenCalls.has(call.toolUseId);
     const isApplied = foldHookPayload(state.fold, call);
-    if (!isApplied && !wasAlreadyFolded) this.startFallback(state, call.toolUseId);
+    const wasRejectedByTheCli = call.response?.success === false;
+    if (!isApplied && !wasAlreadyFolded && !wasRejectedByTheCli) this.startFallback(state, call.toolUseId);
   }
 
   private async readTranscript(state: SessionState): Promise<void> {
@@ -206,6 +214,8 @@ export class TodoTracker {
       let cursor = hasMovedToAnotherFile ? undefined : state.cursor;
       let target = state.fold;
       let isRebuilding = false;
+      let sizeAtStart: number | undefined;
+      let chunksRead = 0;
       for (;;) {
         const read = this.readChunk(path, { offset: cursor?.offset ?? 0, inode: cursor?.inode, maxBytes: TODO_CHUNK_BYTES, windowBytes: MAX_FOLD_BYTES });
         if (read.kind === 'nothing') break;
@@ -213,13 +223,18 @@ export class TodoTracker {
           target = createTodoFold({ now: this.deps.now, notBefore: state.fold.notBefore });
           cursor = undefined;
           isRebuilding = true;
+          sizeAtStart = undefined;
           continue;
         }
         foldTranscriptText(target, read.text);
         const madeProgress = read.nextOffset > (cursor?.offset ?? 0);
         cursor = { path, inode: read.inode, offset: read.nextOffset };
         if (!isRebuilding) state.cursor = cursor;
-        if (read.nextOffset >= read.size || !madeProgress) break;
+        sizeAtStart ??= read.size;
+        chunksRead += 1;
+        const hasReadWhatWasThereAtStart = read.nextOffset >= sizeAtStart;
+        const hasSpentTheBudgetOfARead = chunksRead >= MAX_CHUNKS_PER_READ;
+        if (hasReadWhatWasThereAtStart || hasSpentTheBudgetOfARead || !madeProgress) break;
         await nextTurnOfTheEventLoop();
       }
       const hasReadTheReplacement = isRebuilding && cursor !== undefined;
@@ -250,7 +265,7 @@ export class TodoTracker {
     const cancel = this.schedule(() => {
       this.cancelPending.delete(cancel);
       state.isEmitPending = false;
-      this.emitIfChanged(state);
+      this.failingStale(state, 'todo_emit_failed', () => this.emitIfChanged(state));
     }, EMIT_COALESCE_MS);
     this.cancelPending.add(cancel);
   }
@@ -263,8 +278,8 @@ export class TodoTracker {
     for (const listener of this.listeners) {
       try {
         listener(snapshot);
-      } catch {
-        // A faulty listener never stops the others or the tracker.
+      } catch (error) {
+        this.warnOnce(state, 'todo_listener_failed', error);
       }
     }
   }
@@ -281,6 +296,8 @@ export class TodoTracker {
     const delay = FALLBACK_READ_DELAYS_MS[fallback.attempt];
     if (delay === undefined) {
       state.fallback = undefined;
+      const hasNoTranscriptToTrust = this.deps.sessions.trustedTranscriptFileOf(state.sessionId) === undefined;
+      if (hasNoTranscriptToTrust) this.markStale(state, 'todo_transcript_unreadable', undefined);
       return;
     }
     if (fallback.isTimerPending) return;
@@ -289,7 +306,7 @@ export class TodoTracker {
       this.cancelPending.delete(cancel);
       fallback.isTimerPending = false;
       fallback.attempt += 1;
-      this.enqueueRead(state, 'fallback');
+      this.failingStale(state, 'todo_read_failed', () => this.enqueueRead(state, 'fallback'));
     }, delay);
     this.cancelPending.add(cancel);
   }
@@ -308,14 +325,32 @@ export class TodoTracker {
     const isIdle = state.tasks.length === 0 && !state.isRunning;
     if (isIdle) return Promise.resolve(false);
     return new Promise((resolve) => {
-      const timer = setTimeout(() => resolve(true), this.getWaitMs);
+      const answeredInTime = () => { clearTimeout(timer); resolve(false); };
+      const timer = setTimeout(() => {
+        const position = state.idleWaiters.indexOf(answeredInTime);
+        if (position !== -1) state.idleWaiters.splice(position, 1);
+        resolve(true);
+      }, this.getWaitMs);
       timer.unref();
-      state.idleWaiters.push(() => { clearTimeout(timer); resolve(false); });
+      state.idleWaiters.push(answeredInTime);
     });
   }
 
-  private markStale(state: SessionState, code: 'todo_fold_failed' | 'todo_read_failed', error: unknown): void {
+  /** Runs `work` from a timer callback, where a throw would be an uncaught exception: a fault marks the list stale instead. */
+  private failingStale(state: SessionState, code: WarnCode, work: () => void): void {
+    try {
+      work();
+    } catch (error) {
+      this.markStale(state, code, error);
+    }
+  }
+
+  private markStale(state: SessionState, code: WarnCode, error: unknown): void {
     state.isStale = true;
+    this.warnOnce(state, code, error);
+  }
+
+  private warnOnce(state: SessionState, code: WarnCode, error: unknown): void {
     if (state.warnedReasons.has(code)) return;
     state.warnedReasons.add(code);
     log('warn', `todos: session ${state.sessionId}: the list could not be updated, keeping the last one`, undefined, { code, sessionId: state.sessionId, errno: errnoOf(error) });

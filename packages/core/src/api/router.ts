@@ -75,9 +75,9 @@ const MAX_DRAINED_BODY_BYTES = 64 * 1024 * 1024;
 
 /**
  * Reads the JSON body of a request. A body over `maxBytes` is refused with PayloadTooLargeError; with `skipOversized` it is instead read to its end
- * without being kept and answers `undefined`, so the caller can answer 200 to a client (the CLI's hook) that must never see a 4xx.
+ * without being kept and answers `undefined`, so the caller can answer 200 to a client (the CLI's hook) that must never see a 4xx; `onSkipped` hears its byte count.
  */
-export async function readJson(req: IncomingMessage, maxBytes = MAX_BODY_BYTES, options: { skipOversized?: boolean } = {}): Promise<unknown> {
+export async function readJson(req: IncomingMessage, maxBytes = MAX_BODY_BYTES, options: { skipOversized?: boolean; onSkipped?: (bytes: number) => void } = {}): Promise<unknown> {
   const chunks: Buffer[] = [];
   let bytesRead = 0;
   for await (const chunk of req) {
@@ -86,7 +86,10 @@ export async function readJson(req: IncomingMessage, maxBytes = MAX_BODY_BYTES, 
     if (bytesRead > maxBytes && !options.skipOversized) throw new PayloadTooLargeError(`body exceeds ${maxBytes} bytes`);
     if (bytesRead <= maxBytes) chunks.push(chunk as Buffer);
   }
-  if (bytesRead > maxBytes) return undefined;
+  if (bytesRead > maxBytes) {
+    options.onSkipped?.(bytesRead);
+    return undefined;
+  }
   const text = Buffer.concat(chunks).toString('utf8');
   if (!text) return undefined;
   try {

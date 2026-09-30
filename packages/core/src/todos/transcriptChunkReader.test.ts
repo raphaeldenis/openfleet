@@ -30,6 +30,15 @@ describe('reading a transcript by position', () => {
     expect(chunk.nextOffset).toBe(8);
   });
 
+  it('keeps a line that starts exactly at the start of the window of a file larger than the window', () => {
+    writeFileSync(path, 'dropped\nkept-1\nkept-2\n');
+    const windowBytes = 'kept-1\nkept-2\n'.length;
+
+    const chunk = chunkOf(firstRead(BIG, windowBytes));
+
+    expect(chunk.text).toBe('kept-1\nkept-2\n');
+  });
+
   it('leaves a partial last line for the next read', () => {
     writeFileSync(path, 'one\ntw');
 

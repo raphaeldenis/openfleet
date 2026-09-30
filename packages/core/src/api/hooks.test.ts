@@ -4,6 +4,7 @@ import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
 import { forceNdjsonLogging } from '../forceNdjsonLogging.testkit.js';
 import { FakeHarness } from '../harness/fakeHarness.js';
+import { recentLogLines } from '../logger.js';
 import { ApprovalError, ApprovalService } from '../governance/approvalService.js';
 import { ManagerRepository } from '../managers/managerRepository.js';
 import { ManagerService } from '../managers/managerService.js';
@@ -93,6 +94,21 @@ describe('POST /hooks/:token', () => {
     const res = await post(`/hooks/${hookToken}`, oversizedBody);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({});
+  });
+
+  it('warns once per ignored body over 1 MiB with a code, the session id and the byte count, and never the body', async () => {
+    const sessionId = sessions.list()[0]!.id;
+    const secretPad = 'SECRET-PAD-'.repeat(200_000);
+    const warningsCount = () => recentLogLines().filter((line) => line.includes('hook_body_too_large')).length;
+    const warningsBefore = warningsCount();
+
+    await post(`/hooks/${hookToken}`, { session_id: 'c', hook_event_name: 'PermissionRequest', tool_name: 'Write', tool_input: { content: secretPad } });
+
+    const warnings = recentLogLines().filter((line) => line.includes('hook_body_too_large'));
+    expect(warnings).toHaveLength(warningsBefore + 1);
+    expect(warnings.at(-1)).toContain(sessionId);
+    expect(warnings.at(-1)).toMatch(/"bytes":\s*\d{7,}/);
+    expect(warnings.at(-1)).not.toContain('SECRET-PAD');
   });
 
   it('PermissionRequest waits for the decision and answers allow', async () => {

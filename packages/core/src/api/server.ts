@@ -3,6 +3,7 @@ import { HTTP_STATUS_BY_KIND, OpenFleetError } from '@openfleet/shared';
 import type { EventBus } from '../events/eventBus.js';
 import type { ApprovalService } from '../governance/approvalService.js';
 import { tokensMatch } from '../ids.js';
+import { log } from '../logger.js';
 import type { ManagerService } from '../managers/managerService.js';
 import type { PulseScheduler } from '../managers/pulseScheduler.js';
 import type { ModelTable } from '../models.js';
@@ -72,8 +73,10 @@ function applyCorsHeaders(req: IncomingMessage, res: ServerResponse): void {
 }
 
 async function handleHookRequest(req: IncomingMessage, res: ServerResponse, hookToken: string, deps: ServerDeps): Promise<void> {
-  if (!deps.sessions.byHookToken(hookToken)) return json(res, 200, {});
-  const body = await readJson(req, undefined, { skipOversized: true });
+  const session = deps.sessions.byHookToken(hookToken);
+  if (!session) return json(res, 200, {});
+  const warnAboutTheIgnoredBody = (bytes: number) => log('warn', 'hook body over 1 MiB ignored', undefined, { code: 'hook_body_too_large', sessionId: session.id, bytes });
+  const body = await readJson(req, undefined, { skipOversized: true, onSkipped: warnAboutTheIgnoredBody });
   await hooksHandler(deps)({ req, res, params: { hookToken }, body });
 }
 

@@ -1,6 +1,7 @@
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
+import { inspect } from 'node:util';
 import { join } from 'node:path';
 import type { ServerEvent, SessionTodos } from '@openfleet/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -383,6 +384,79 @@ describe('the transcript catches up what the hooks missed, and never folds a cal
     expect((await getTodos(id)).source).toBeNull();
   });
 
+  it('refuses a transcript named after the session that is a symbolic link to another conversation inside the projects directory', async () => {
+    const id = await createSession();
+    const anotherConversation = join(projectsDirectory, 'another-sessions-conversation.jsonl');
+    writeFileSync(anotherConversation, `${transcriptCreate('toolu_other', '1', 'Another session task').join('\n')}\n`);
+    symlinkSync(anotherConversation, transcriptOf(id));
+
+    await resume(id, id);
+    await stop(id);
+
+    expect((await getTodos(id)).source).toBeNull();
+  });
+
+  it('keeps a status the hook folded when the first catch-up reads a file that holds older history (no repair ran before)', async () => {
+    const id = await createSession();
+    writeTranscript(id, [
+      ...transcriptCreate('toolu_c', '1', 'Ship'),
+      assistantLine('toolu_l', 'TaskList', {}),
+      resultLine('toolu_l', { tasks: [{ id: '1', subject: 'Ship', status: 'pending', blockedBy: [] }] }),
+      ...transcriptUpdate('toolu_n', '1', 'completed'),
+    ]);
+
+    await postTodoHook(id, updateHook('toolu_n', '1', 'completed'), { cliId: id });
+    await stop(id);
+    const todos = await getTodos(id);
+
+    expect(rowsOf(todos)).toEqual(['1:completed:Ship']);
+  });
+
+  it('answers a GET for a closed session the tracker does not hold with an empty list, and holds no state for it', async () => {
+    const id = await createSession();
+    await sessions.close(id);
+    tracker.stop();
+    await server.close();
+    await boot();
+
+    for (let attempt = 0; attempt < 20; attempt += 1) expect((await getTodos(id)).source).toBeNull();
+
+    expect((tracker as unknown as { states: Map<string, unknown> }).states.size).toBe(0);
+  });
+
+  it('reads the resolved file, not the reported path, when the transcript is a symbolic link to a file of the same name inside the projects directory', async () => {
+    const id = await createSession();
+    mkdirSync(join(projectsDirectory, 'nested'));
+    writeFileSync(join(projectsDirectory, 'nested', `${id}.jsonl`), `${transcriptCreate('toolu_1', '1', 'Behind a link').join('\n')}\n`);
+    symlinkSync(join(projectsDirectory, 'nested', `${id}.jsonl`), transcriptOf(id));
+
+    await resume(id, id);
+
+    expect(rowsOf(await getTodos(id))).toEqual(['1:pending:Behind a link']);
+  });
+
+  it('finds a call in the transcript when its hook came with no tool_use_id and its line was written after the hook', async () => {
+    const id = await createSession();
+    await postTodoHook(id, createHook('toolu_first', '1', 'Already known'));
+    await getTodos(id);
+    await postTodoHook(id, { tool_name: 'TaskCreate', tool_input: { subject: 'Late line' }, tool_response: { task: { id: '2', subject: 'Late line' } } });
+
+    writeTranscript(id, [...transcriptCreate('toolu_first', '1', 'Already known'), ...transcriptCreate('toolu_late', '2', 'Late line')]);
+
+    await expect.poll(async () => rowsOf(await getTodos(id)), { timeout: 3000, interval: 100 }).toEqual(['1:pending:Already known', '2:pending:Late line']);
+  });
+
+  it('repairs a hook that never arrived at the SessionEnd of the session', async () => {
+    const id = await createSession();
+    await postTodoHook(id, createHook('toolu_1', '1', 'Delivered'));
+    await getTodos(id);
+    writeTranscript(id, [...transcriptCreate('toolu_1', '1', 'Delivered'), ...transcriptCreate('toolu_2', '2', 'Dropped hook')]);
+
+    await postHook(id, { hook_event_name: 'SessionEnd' });
+
+    expect(rowsOf(await getTodos(id))).toEqual(['1:pending:Delivered', '2:pending:Dropped hook']);
+  });
+
   it('answers without hanging when the transcript is a named pipe', async () => {
     const id = await createSession();
     execFileSync('mkfifo', [transcriptOf(id)]);
@@ -566,6 +640,46 @@ describe('the event forwarded to the state machine never carries a tool payload'
       expect(event).not.toHaveProperty('tool_response');
     }
     expect(JSON.stringify(forwarded)).not.toContain('zzzzzzzz');
+  });
+
+  it('retains nothing of a 5 MiB Bash tool_response and answers the next todo hook as fast as before it', async () => {
+    const id = await createSession();
+    const hookLatencyMs = async (toolUseId: string) => {
+      const start = performance.now();
+      await postTodoHook(id, createHook(toolUseId, toolUseId, 'A todo'));
+      return performance.now() - start;
+    };
+    await hookLatencyMs('1');
+    const before = Math.min(await hookLatencyMs('2'), await hookLatencyMs('3'));
+
+    await rawHook(hookTokenOf(id), { hook_event_name: 'PostToolUse', session_id: id, tool_name: 'Bash', tool_use_id: 'toolu_huge', tool_input: {}, tool_response: { stdout: 'q'.repeat(5 * 1024 * 1024) } });
+    await postTodoHook(id, { tool_name: 'Bash', tool_use_id: 'toolu_big', tool_input: {}, tool_response: { stdout: 'q'.repeat(900 * 1024) } });
+    const after = Math.min(await hookLatencyMs('4'), await hookLatencyMs('5'));
+
+    const retained = inspect(tracker, { depth: 8, maxStringLength: Infinity, maxArrayLength: Infinity });
+    expect(retained).not.toContain('qqqqqqqq');
+    expect(after).toBeLessThan(before * 10 + 100);
+  });
+
+  it('answers a todo hook against a 30 000-line transcript in the time of a hook against none (the hook never waits on the read)', async () => {
+    const idWithHistory = await createSession('History');
+    const idWithout = await createSession('None');
+    const filler = Array.from({ length: 30_000 }, (_, index) => JSON.stringify({ type: 'assistant', isSidechain: false, message: { role: 'assistant', content: [{ type: 'text', text: `line ${index}` }] } }));
+    writeTranscript(idWithHistory, filler);
+    const medianHookLatencyMs = async (id: string, prefix: string) => {
+      const latencies: number[] = [];
+      for (let call = 0; call < 7; call += 1) {
+        const start = performance.now();
+        await postTodoHook(id, createHook(`${prefix}${call}`, String(call + 1), 'A todo'));
+        latencies.push(performance.now() - start);
+      }
+      return latencies.sort((a, b) => a - b)[3]!;
+    };
+
+    const withoutHistory = await medianHookLatencyMs(idWithout, 'n');
+    const withHistory = await medianHookLatencyMs(idWithHistory, 'h');
+
+    expect(withHistory).toBeLessThan(withoutHistory * 5 + 100);
   });
 
   it('answers 200 and ignores a hook body over 1 MiB, instead of a 4xx that would surface in the CLI', async () => {
