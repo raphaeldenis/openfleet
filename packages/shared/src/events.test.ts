@@ -38,7 +38,7 @@ describe('ServerEvent', () => {
       type: 'session.closed';
       sessionId: string;
       exitCode?: number;
-      reason?: 'launch_failed' | 'resume_timeout' | 'harness_exit' | 'closed_by_user';
+      reason?: 'launch_failed' | 'resume_timeout' | 'harness_exit' | 'closed_by_user' | 'daemon_shutdown';
     }>();
   });
 

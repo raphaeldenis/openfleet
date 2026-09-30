@@ -123,7 +123,7 @@ describe('session-scoped error broadcasts', () => {
     const errorEvent = await waitForFrame(frames, isErrorEvent);
 
     expect(closed).toEqual({ type: 'session.closed', sessionId: session.id, exitCode: 1, reason: 'harness_exit' });
-    expect(errorEvent).toMatchObject({ sessionId: session.id, error: { error: 'harness_exited', kind: 'internal', retry: 'never' } });
+    expect(errorEvent).toMatchObject({ sessionId: session.id, error: { error: 'harness_exited', kind: 'unavailable', retry: 'never' } });
   });
 
   it('closed by user: the kill exit code (137) closes with reason closed_by_user and broadcasts no error', async () => {

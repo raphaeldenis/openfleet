@@ -3,7 +3,7 @@ import type { ManagerView } from './managers.js';
 import type { Approval, PermissionMode, Session, SessionState } from './session.js';
 import type { WorkingState } from './workingState.js';
 
-export type SessionCloseReason = 'launch_failed' | 'resume_timeout' | 'harness_exit' | 'closed_by_user';
+export type SessionCloseReason = 'launch_failed' | 'resume_timeout' | 'harness_exit' | 'closed_by_user' | 'daemon_shutdown';
 
 // The exit code convention that predates `reason`: a snapshot carries exit codes but no reason, so this recomputes the two it encodes.
 const REASON_BY_CONVENTIONAL_EXIT_CODE: Record<number, SessionCloseReason> = { [-1]: 'resume_timeout', [-2]: 'launch_failed' };

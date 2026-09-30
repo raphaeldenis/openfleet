@@ -224,7 +224,7 @@ describe('several sessions ending at once', () => {
     expect(reasonsBySession).toEqual({ [first.id]: [1, 'harness_exit'], [second.id]: [2, 'harness_exit'] });
   });
 
-  it('a daemon shutdown closing every session announces no error and gives every session the closed_by_user reason', async () => {
+  it('a daemon shutdown closing every session announces no error and gives every session the daemon_shutdown reason', async () => {
     const { server, sessions } = await boot();
     await sessions.create(spec);
     await sessions.create(spec);
@@ -235,12 +235,12 @@ describe('several sessions ending at once', () => {
     await settle();
 
     expect(frames.filter(isError)).toEqual([]);
-    expect(frames.filter(isClosed).map((frame) => frame.reason)).toEqual(['closed_by_user', 'closed_by_user']);
+    expect(frames.filter(isClosed).map((frame) => frame.reason)).toEqual(['daemon_shutdown', 'daemon_shutdown']);
   });
 });
 
 describe('what an error event may carry', () => {
-  it('a harness_exited event carries neither the session directory nor any token, and its id is on exactly one error log line', async () => {
+  it('a harness_exited event carries neither the session directory nor any token, and its session is on exactly one error log line', async () => {
     const secretDirectory = mkdtempSync(join(tmpdir(), 'of-secret-dir-'));
     const { server, sessions, harness } = await boot();
     await sessions.create({ ...spec, directory: secretDirectory });
@@ -251,13 +251,13 @@ describe('what an error event may carry', () => {
     harness.handles[0]!.emitExit(1);
     const errorEvent = await waitFor(() => frames.find(isError));
     const wire = JSON.stringify(errorEvent);
-    const id = (errorEvent.error as { id: string }).id;
+    const sessionId = launch.sessionId;
 
     expect(wire).not.toContain(secretDirectory);
     expect(wire).not.toContain(launch.mcpToken);
     expect(wire).not.toContain(launch.hookUrl);
     expect(wire.length).toBeLessThan(2048);
-    expect(logged.mock.calls.filter((call) => call.some((part) => String(part).includes(id)))).toHaveLength(1);
+    expect(logged.mock.calls.filter((call) => call.some((part) => String(part).includes(sessionId)))).toHaveLength(1);
   });
 });
 

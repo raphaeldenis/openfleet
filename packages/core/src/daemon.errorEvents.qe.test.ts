@@ -42,7 +42,7 @@ describe('a booted daemon tells its clients why a session failed', () => {
 
     expect(frames.filter((frame) => frame.type === 'error' || frame.type === 'session.closed')).toEqual([
       expect.objectContaining({ type: 'session.closed', reason: expect.stringMatching(/^(launch_failed|harness_exit)$/) }),
-      expect.objectContaining({ type: 'error', error: expect.objectContaining({ error: expect.stringMatching(/^(launch_failed|harness_exited)$/), kind: 'internal' }) }),
+      expect.objectContaining({ type: 'error', error: expect.objectContaining({ error: expect.stringMatching(/^(launch_failed|harness_exited)$/), kind: expect.stringMatching(/^(internal|unavailable)$/) }) }),
     ]);
   });
 });
