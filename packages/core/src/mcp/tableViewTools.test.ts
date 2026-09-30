@@ -256,7 +256,7 @@ describe('table view tools', () => {
   });
 
   describe('unexpected errors', () => {
-    it('surface as "request failed" with no internal text, and are logged', async () => {
+    it('surface as "error internal_error" with no internal text, and are logged', async () => {
       const client = await connect(scopedToken);
       const store = await createStore(client);
       vi.spyOn(stores, 'listViews').mockImplementation(() => {
@@ -267,7 +267,7 @@ describe('table view tools', () => {
       const result = await client.callTool({ name: 'list_data_store_views', arguments: { store: store.id } });
 
       expect(result.isError).toBe(true);
-      expect(errorText(result)).toBe('request failed');
+      expect(errorText(result)).toMatch(/^error internal_error: .* \(retry: later, ref [0-9a-f]{8}\)$/);
       expect(logged).toHaveBeenCalled();
     });
   });

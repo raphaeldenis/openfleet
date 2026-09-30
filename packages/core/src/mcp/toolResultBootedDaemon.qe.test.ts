@@ -115,7 +115,7 @@ describe('QE — a booted daemon serves compact MCP results on the real route', 
 
     expect([created.rev, second.rev, third.rev]).toEqual([1, 2, 3]);
     expect(stale.isError).toBe(true);
-    expect(rawText(stale)).toBe('409 stale_revision, current rev: 3');
+    expect(rawText(stale)).toMatch(/^error stale_revision: .*current rev: 3\. .* \(retry: after_refresh\)$/);
     expect(keysOf(fetched)).toEqual(['bodyMd', 'fileBacked', 'folder', 'id', 'rev', 'shared', 'title']);
   });
 

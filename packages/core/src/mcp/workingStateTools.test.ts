@@ -197,7 +197,7 @@ describe('an agent keeps its working state through the OpenFleet tools', () => {
     const result = await updateState(fleet.leadToken, { ...emptyState(), plan: ['x'] });
 
     expect(isRefused(result)).toBe(true);
-    expect(answerOf(result)).toMatch(/no such table/);
+    expect(answerOf(result)).toMatch(/^error internal_error: .* \(retry: later, ref [0-9a-f]{8}\)$/);
     expect(answerOf(result)).not.toMatch(/cap|move history/);
   });
 });

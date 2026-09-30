@@ -38,7 +38,7 @@ describe('the error registry', () => {
 describe('the wire contract of the registry', () => {
   const KIND_AND_RETRY_BY_CODE: Record<ErrorCode, string> = {
     invalid_body: 'invalid_request/never', invalid_json: 'invalid_request/never', invalid_url: 'invalid_request/never', invalid_branch_name: 'invalid_request/never', unknown_harness: 'invalid_request/never',
-    message_too_long: 'invalid_request/never', query_too_long: 'invalid_request/never',
+    message_too_long: 'invalid_request/never', query_too_long: 'invalid_request/never', outside_own_repository: 'invalid_request/never',
     unauthorized: 'unauthorized/never',
     not_found: 'not_found/never', project_not_found: 'not_found/never', no_state: 'not_found/never', session_not_found: 'not_found/never',
     note_not_found: 'not_found/never', store_not_found: 'not_found/never', view_not_found: 'not_found/never', row_not_found: 'not_found/never',
@@ -49,6 +49,7 @@ describe('the wire contract of the registry', () => {
     directory_unreadable: 'conflict/never', already_resolved: 'conflict/never', config_unreadable: 'conflict/never',
     config_read_only: 'conflict/never', message_id_reused: 'conflict/never', too_many_pending: 'conflict/later', children_cap: 'conflict/later',
     outside_lineage: 'conflict/never', not_a_manager: 'conflict/never', directory_in_use: 'conflict/never',
+    duplicate_child: 'conflict/never', no_parent: 'conflict/never', spawn_raced: 'conflict/later',
     store_has_rows: 'conflict/never', duplicate_id: 'conflict/never', no_docs_folder: 'conflict/never', not_file_backed: 'conflict/never',
     payload_too_large: 'too_large/never', note_too_large: 'too_large/never', row_cap: 'too_large/never', state_too_large: 'too_large/never',
     daemon_shutting_down: 'unavailable/later', daemon_degraded: 'unavailable/later',
