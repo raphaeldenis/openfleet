@@ -1,5 +1,4 @@
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Returns the folder the daemon keeps its files in: `$OPENFLEET_HOME`, else `~/.openfleet`.
 pub fn openfleet_home_dir(openfleet_home: Option<String>, user_home: &Path) -> PathBuf {
@@ -21,35 +20,6 @@ pub fn read_admin_token_at(token_path: &Path) -> Result<String, String> {
 /// Returns the admin token as a list a redaction pass can use: empty when the token cannot be read yet.
 pub fn admin_token_secrets(token_path: &Path) -> Vec<String> {
   read_admin_token_at(token_path).into_iter().filter(|token| !token.is_empty()).collect()
-}
-
-/// Reads the admin token again whenever the file's modification time or size changes.
-pub struct AdminTokenWatch {
-  path: PathBuf,
-  last_seen: Option<FileStamp>,
-}
-
-/// What a file's metadata says about its content: the modification time and the size.
-#[derive(Clone, Copy, PartialEq)]
-struct FileStamp {
-  modified: SystemTime,
-  bytes: u64,
-}
-
-impl AdminTokenWatch {
-  pub fn new(path: PathBuf) -> Self {
-    Self { path, last_seen: None }
-  }
-
-  /// Returns the token's secrets when the file appeared, changed or vanished since the last call; None when it is as it was.
-  pub fn secrets_if_changed(&mut self) -> Option<Vec<String>> {
-    let stamp = std::fs::metadata(&self.path).ok().map(|metadata| FileStamp { modified: metadata.modified().unwrap_or(UNIX_EPOCH), bytes: metadata.len() });
-    if stamp == self.last_seen {
-      return None;
-    }
-    self.last_seen = stamp;
-    Some(admin_token_secrets(&self.path))
-  }
 }
 
 #[cfg(test)]
@@ -98,34 +68,35 @@ mod tests {
     std::fs::remove_dir_all(missing.parent().unwrap()).unwrap();
   }
 
-  fn touch_to(path: &Path, modified: std::time::SystemTime) {
-    std::fs::File::options().write(true).open(path).unwrap().set_modified(modified).unwrap();
+  #[test]
+  fn the_secrets_follow_a_token_file_that_was_unreadable_at_first() {
+    use std::os::unix::fs::PermissionsExt;
+    let folder = scratch_folder("unreadable");
+    let path = folder.join("admin.token");
+    std::fs::write(&path, "late-token-0001\n").unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+    assert_eq!(admin_token_secrets(&path), Vec::<String>::new(), "unreadable");
+
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+    assert_eq!(admin_token_secrets(&path), vec!["late-token-0001".to_string()]);
+    std::fs::remove_dir_all(folder).unwrap();
   }
 
   #[test]
-  fn the_watch_reads_the_token_again_only_when_the_file_changed() {
+  fn the_secrets_follow_the_token_file_as_it_changes() {
     let folder = scratch_folder("watch");
     let path = folder.join("admin.token");
-    let mut watch = AdminTokenWatch::new(path.clone());
-    let later = |seconds: u64| std::time::SystemTime::now() + std::time::Duration::from_secs(seconds);
-    assert_eq!(watch.secrets_if_changed(), None, "no file yet");
+    assert_eq!(admin_token_secrets(&path), Vec::<String>::new(), "no file yet");
 
     std::fs::write(&path, "first-token-0001\n").unwrap();
-    assert_eq!(watch.secrets_if_changed(), Some(vec!["first-token-0001".to_string()]), "the file appeared");
-    assert_eq!(watch.secrets_if_changed(), None, "nothing changed");
+    assert_eq!(admin_token_secrets(&path), vec!["first-token-0001".to_string()], "the file appeared");
 
     std::fs::write(&path, "other-token-0002\n").unwrap();
-    touch_to(&path, later(60));
-    assert_eq!(watch.secrets_if_changed(), Some(vec!["other-token-0002".to_string()]), "same size, new modification time");
+    assert_eq!(admin_token_secrets(&path), vec!["other-token-0002".to_string()], "the file changed");
 
-    let modified_before = std::fs::metadata(&path).unwrap().modified().unwrap();
-    std::fs::write(&path, "a-much-longer-token-0003\n").unwrap();
-    touch_to(&path, modified_before);
-    assert_eq!(watch.secrets_if_changed(), Some(vec!["a-much-longer-token-0003".to_string()]), "new size, same modification time");
-
-    std::fs::remove_file(&path).unwrap();
-    assert_eq!(watch.secrets_if_changed(), Some(Vec::new()), "the file vanished");
-    assert_eq!(watch.secrets_if_changed(), None, "still gone");
+    std::fs::write(&path, "\n").unwrap();
+    assert_eq!(admin_token_secrets(&path), Vec::<String>::new(), "an empty file holds no secret");
     std::fs::remove_dir_all(folder).unwrap();
   }
 }
