@@ -37,7 +37,7 @@ function destinationIndex(key: string, current: number, count: number): number |
         (click)="create.emit()"
       >+</button>
     </div>
-    <div class="items" role="list" data-testid="note-list-items">
+    <div class="items" role="list" data-testid="note-list-items" (focusout)="forgetFocusedNoteWhenLeavingList($event)">
       @for (note of visibleNotes(); track note.id) {
         <div class="row" role="listitem">
           <button
@@ -121,6 +121,12 @@ export class NoteListComponent {
     const host: HTMLElement = this.host.nativeElement;
     const target = host.querySelector<HTMLElement>('.item[tabindex="0"]') ?? host.querySelector<HTMLElement>('.filter');
     target?.focus();
+  }
+
+  protected forgetFocusedNoteWhenLeavingList(event: FocusEvent): void {
+    const list = event.currentTarget as HTMLElement;
+    const focusStaysInList = event.relatedTarget instanceof Node && list.contains(event.relatedTarget);
+    if (!focusStaysInList) this.focusedId.set(null);
   }
 
   protected moveFocusWithArrowKeys(event: KeyboardEvent): void {
