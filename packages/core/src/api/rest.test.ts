@@ -14,6 +14,7 @@ import { ManagerService } from '../managers/managerService.js';
 import { PulseScheduler } from '../managers/pulseScheduler.js';
 import { DEFAULT_MODEL_TABLE } from '../models.js';
 import { SessionService } from '../sessions/sessionService.js';
+import { DAEMON_VERSION } from '../version.js';
 import { startServer } from './server.js';
 
 let server: Awaited<ReturnType<typeof startServer>>;
@@ -47,7 +48,7 @@ describe('REST', () => {
   it('answers /health with no auth required, for CI/e2e readiness probes', async () => {
     const res = await fetch(`${server.url}/health`);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true });
+    expect(await res.json()).toEqual({ ok: true, version: DAEMON_VERSION });
   });
 
   it('answers a CORS preflight so the desktop shell can call the daemon cross-origin', async () => {

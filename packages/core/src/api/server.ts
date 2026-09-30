@@ -10,6 +10,7 @@ import type { ModelTable } from '../models.js';
 import type { DocsFolderService } from '../notes/docsFolderService.js';
 import type { NoteRepository } from '../notes/noteRepository.js';
 import type { NoteService } from '../notes/noteService.js';
+import { DAEMON_VERSION } from '../version.js';
 import { PortInUseError } from './portInUseError.js';
 import type { ProjectRepository } from '../projects/projectRepository.js';
 import type { SessionService } from '../sessions/sessionService.js';
@@ -95,7 +96,7 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; rout
   const wsTickets = deps.wsTickets ?? createWsTicketStore();
   const router = new Router();
   // ponytail: unauthenticated readiness probe for CI/e2e webServer checks, which run before the admin token is known
-  router.add('GET', '/health', ({ res }) => json(res, 200, { ok: true }));
+  router.add('GET', '/health', ({ res }) => json(res, 200, { ok: true, version: DAEMON_VERSION }));
   registerRestRoutes(router, { ...deps, wsTickets });
   if (deps.projects) registerProjectRoutes(router, deps.projects);
   if (deps.stores && deps.storeRepo) registerDataStoreRoutes(router, { stores: deps.stores, storeRepo: deps.storeRepo });

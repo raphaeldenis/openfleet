@@ -1,10 +1,11 @@
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 
-export type BannerVariant = 'permission' | 'reconnecting' | 'error' | 'done';
+export type BannerVariant = 'permission' | 'reconnecting' | 'mismatch' | 'error' | 'done';
 
 const COLOR_VAR: Record<BannerVariant, string> = {
   permission: '--state-waiting-permission',
   reconnecting: '--state-waiting-permission',
+  mismatch: '--state-waiting-permission',
   error: '--state-error',
   done: '--state-idle',
 };
@@ -13,6 +14,7 @@ const ANNOUNCE_ROLE: Record<BannerVariant, 'alert' | 'status'> = {
   permission: 'alert',
   error: 'alert',
   reconnecting: 'status',
+  mismatch: 'status',
   done: 'status',
 };
 
@@ -29,7 +31,7 @@ const ANNOUNCE_ROLE: Record<BannerVariant, 'alert' | 'status'> = {
       class="banner"
     >
       <span class="title">{{ title() }}</span>
-      <span>{{ description() }}</span>
+      <span class="description">{{ description() }}</span>
     </div>
   `,
   styles: `
@@ -38,6 +40,7 @@ const ANNOUNCE_ROLE: Record<BannerVariant, 'alert' | 'status'> = {
       border: 1px solid color-mix(in oklch, var(--banner-color) 45%, transparent);
       background: color-mix(in oklch, var(--banner-color) 7%, var(--panel));
     }
+    .description { min-width: 0; overflow-wrap: anywhere; }
     .title { color: var(--banner-color); font-weight: 600; }
   `,
 })

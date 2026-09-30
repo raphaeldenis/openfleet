@@ -17,6 +17,7 @@ import { registerNoteTools } from './noteTools.js';
 import { registerNoteVersionTools } from './noteVersionTools.js';
 import { registerTableTools } from './tableTools.js';
 import { registerTableViewTools } from './tableViewTools.js';
+import { DAEMON_VERSION } from '../version.js';
 import { registerTools } from './tools.js';
 import { registerWorkingStateTools } from './workingStateTools.js';
 
@@ -27,7 +28,7 @@ export function createMcpHandler(deps: { sessions: SessionService; approvals: Ap
     if (!caller) return json(res, 401, { error: 'unauthorized' });
 
     // ponytail: one McpServer per request (stateless); pool them if profiling says so
-    const server = new McpServer({ name: 'openfleet', version: '0.1.0' });
+    const server = new McpServer({ name: 'openfleet', version: DAEMON_VERSION });
     registerTools(server, { ...deps, caller });
     registerTableTools(server, { stores: deps.stores, storeRepo: deps.storeRepo, caller });
     registerTableViewTools(server, { stores: deps.stores, storeRepo: deps.storeRepo, caller });

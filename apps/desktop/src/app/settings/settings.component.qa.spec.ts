@@ -26,6 +26,10 @@ function daemonTab() {
   return screen.getByRole('tab', { name: 'Daemon' });
 }
 
+function aboutTab() {
+  return screen.getByRole('tab', { name: 'About' });
+}
+
 async function openDaemonTab() {
   await userEvent.click(daemonTab());
 }
@@ -101,12 +105,16 @@ describe('SettingsComponent — tab bar', () => {
     expect(document.activeElement).toBe(daemonTab());
 
     await userEvent.keyboard('{ArrowDown}');
+    expect(aboutTab()).toHaveAttribute('aria-selected', 'true');
+    expect(document.activeElement).toBe(aboutTab());
+
+    await userEvent.keyboard('{ArrowDown}');
     expect(modelsTab()).toHaveAttribute('aria-selected', 'true');
     expect(document.activeElement).toBe(modelsTab());
 
     await userEvent.keyboard('{ArrowUp}');
-    expect(daemonTab()).toHaveAttribute('aria-selected', 'true');
-    expect(document.activeElement).toBe(daemonTab());
+    expect(aboutTab()).toHaveAttribute('aria-selected', 'true');
+    expect(document.activeElement).toBe(aboutTab());
   });
 
   it('leaves a modified arrow key to the browser: not swallowed, no tab change', async () => {

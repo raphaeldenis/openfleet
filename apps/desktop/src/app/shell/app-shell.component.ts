@@ -13,6 +13,7 @@ import {
 import { Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { environment } from '../../environments/environment';
 import { FleetEventsService } from '../core/fleet-events.service';
+import { VersionsService } from '../core/versions.service';
 import { BannerComponent } from '../design/banner.component';
 import { SessionListComponent } from '../sessions/session-list.component';
 import { attentionItemsOf, inboxCountLabelOf } from '../working-state/attention-items';
@@ -72,6 +73,14 @@ const RUNNING_STATES = new Set(['generating', 'starting']);
               description="Sessions keep running; the UI shows the last known state."
             />
           }
+          @if (versions.mismatch(); as mismatch) {
+            <of-banner
+              data-testid="version-mismatch-banner"
+              variant="mismatch"
+              title="Version mismatch"
+              [description]="'The daemon on ' + daemonAddress + ' is ' + mismatch.daemonVersion + ', this app is ' + mismatch.appVersion"
+            />
+          }
           <main class="outlet" data-testid="app-outlet">
             <router-outlet />
           </main>
@@ -127,6 +136,7 @@ const RUNNING_STATES = new Set(['generating', 'starting']);
 })
 export class AppShellComponent {
   protected readonly events = inject(FleetEventsService);
+  protected readonly versions = inject(VersionsService);
   private readonly router = inject(Router);
   private readonly injector = inject(Injector);
   protected readonly navItems = HELM_NAV_ITEMS;
@@ -141,6 +151,10 @@ export class AppShellComponent {
   });
   private readonly paletteTrigger = viewChild.required<ElementRef<HTMLButtonElement>>('paletteTrigger');
   private paletteOpener: HTMLElement | null = null;
+
+  constructor() {
+    void this.versions.loadAppVersion();
+  }
 
   onSessionSelected(sessionId: string): void {
     void this.router.navigate(['/session', sessionId]);
