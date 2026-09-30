@@ -1,4 +1,4 @@
-import { accessSync, constants, existsSync, lstatSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { accessSync, closeSync, constants, existsSync, lstatSync, openSync, readSync, realpathSync, statSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, normalize, sep } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import type { PermissionMode, Session, SessionSpec } from '@openfleet/shared';
@@ -124,6 +124,17 @@ interface InterruptWatch {
 // Runs inside a setInterval callback with nothing above it to catch a throw, on a line the session's own
 // (or a compromised) CLI process fully controls — it must return false for any shape it doesn't recognize,
 // never throw, no matter how the JSON parses.
+function readByteRange(path: string, start: number, end: number): string {
+  const buffer = Buffer.alloc(end - start);
+  const fileDescriptor = openSync(path, 'r');
+  try {
+    const bytesRead = readSync(fileDescriptor, buffer, 0, buffer.length, start);
+    return buffer.subarray(0, bytesRead).toString('utf8');
+  } finally {
+    closeSync(fileDescriptor);
+  }
+}
+
 function isInterruptedTranscriptLine(line: string): boolean {
   const trimmedLine = line.trim();
   if (!trimmedLine) return false;
@@ -890,10 +901,15 @@ export class SessionService {
     } catch {
       return; // e.g. the transcript file vanished this tick; treat as nothing this tick, keep polling until the timeout
     }
+    const transcriptWasTruncated = size < watch.offset;
+    if (transcriptWasTruncated) {
+      watch.offset = 0;
+      watch.pendingPartialLine = '';
+    }
     if (size <= watch.offset) return;
     let appended: string;
     try {
-      appended = readFileSync(watch.transcriptPath).subarray(watch.offset, size).toString('utf8');
+      appended = readByteRange(watch.transcriptPath, watch.offset, size);
     } catch {
       return; // e.g. a transient permission/read error; treat as nothing this tick, keep polling until the timeout
     }
