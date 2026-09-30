@@ -8,10 +8,12 @@ export type MarkdownBlock =
   | { type: 'quote'; blocks: MarkdownBlock[] }
   | { type: 'code'; text: string };
 
-const HEADING = /^(#{1,3}) +(.*)$/;
+const HEADING = /^(#{1,3}) +(\S.*)$/;
 const LIST_ITEM = /^[-*] +(.*)$/;
 const ORDERED_ITEM = /^\d{1,9}\. +(.*)$/;
 const QUOTE_LINE = /^> ?(.*)$/;
+const QUOTE_WITH_TEXT = /^> ?\s*\S/;
+const NUMBER_THAT_CAN_INTERRUPT_A_PARAGRAPH = 1;
 const LINE_BREAK = /\r\n|[\n\r\u2028\u2029]/;
 const FENCE = '```';
 const BACKTICK = '`';
@@ -73,7 +75,7 @@ function parseLines(lines: string[], quoteDepth = 0): MarkdownBlock[] {
       continue;
     }
 
-    if (canOpenQuote && QUOTE_LINE.test(line)) {
+    if (canOpenQuote && QUOTE_WITH_TEXT.test(line)) {
       const quotedLines: string[] = [];
       for (; index < lines.length && QUOTE_LINE.test(lines[index]!); index += 1) {
         quotedLines.push(QUOTE_LINE.exec(lines[index]!)![1]!);
@@ -107,8 +109,16 @@ function collectListItems(lines: string[], from: number, itemPattern: RegExp): {
 function startsParagraphContinuation(line: string, canOpenQuote: boolean): boolean {
   const isBlank = line.trim() === '';
   const startsAnotherBlock =
-    line.startsWith(FENCE) || HEADING.test(line) || LIST_ITEM.test(line) || ORDERED_ITEM.test(line) || (canOpenQuote && QUOTE_LINE.test(line));
+    line.startsWith(FENCE) ||
+    HEADING.test(line) ||
+    LIST_ITEM.test(line) ||
+    startsOrderedListThatCanInterrupt(line) ||
+    (canOpenQuote && QUOTE_WITH_TEXT.test(line));
   return !isBlank && !startsAnotherBlock;
+}
+
+function startsOrderedListThatCanInterrupt(line: string): boolean {
+  return ORDERED_ITEM.test(line) && Number.parseInt(line, 10) === NUMBER_THAT_CAN_INTERRUPT_A_PARAGRAPH;
 }
 
 function findLine(lines: string[], from: number, matches: (line: string) => boolean): number {

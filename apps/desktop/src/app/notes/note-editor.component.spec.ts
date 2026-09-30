@@ -103,6 +103,40 @@ describe('NoteEditorComponent', () => {
       expect(within(list).getAllByTestId('note-editor-list-item').map((item) => item.textContent?.trim())).toEqual(['gate.opened', 'gate.closed']);
     });
 
+    it('user reads a wrapped year at the start of a line as part of its paragraph', async () => {
+      await renderEditor({ note: aNoteView({ bodyMd: 'paragraph wrapped year\n2024. is here' }) });
+
+      expect(screen.queryByTestId('note-editor-ordered-list')).toBeNull();
+      expect(screen.getByTestId('note-editor-paragraph')).toHaveTextContent('paragraph wrapped year 2024. is here');
+    });
+
+    it('user reads a year alone in its own block as an ordered list starting at that year', async () => {
+      await renderEditor({ note: aNoteView({ bodyMd: 'paragraph\n\n2024. is here' }) });
+
+      expect(screen.getByTestId('note-editor-ordered-list')).toHaveAttribute('start', '2024');
+    });
+
+    it('user reads a list starting at 1 right after a paragraph line as a list', async () => {
+      await renderEditor({ note: aNoteView({ bodyMd: 'paragraph\n1. first' }) });
+
+      expect(screen.getByTestId('note-editor-paragraph')).toHaveTextContent('paragraph');
+      expect(screen.getByTestId('note-editor-ordered-list')).toHaveAttribute('start', '1');
+    });
+
+    it('user sees no empty blockquote for a lone quote marker', async () => {
+      await renderEditor({ note: aNoteView({ bodyMd: '>' }) });
+
+      expect(screen.queryByTestId('note-editor-quote')).toBeNull();
+      expect(screen.getByTestId('note-editor-paragraph')).toHaveTextContent('>');
+    });
+
+    it('user sees no empty heading for a lone heading marker', async () => {
+      await renderEditor({ note: aNoteView({ bodyMd: '# ' }) });
+
+      expect(screen.queryByTestId('note-editor-heading-1')).toBeNull();
+      expect(screen.getByTestId('note-editor-paragraph')).toHaveTextContent('#');
+    });
+
     it('user reads a quote as a blockquote holding its own paragraphs, lists and bold text', async () => {
       await renderEditor({ note: aNoteView({ bodyMd: '> **Note** to self\n>\n> - one\n> - two' }) });
 

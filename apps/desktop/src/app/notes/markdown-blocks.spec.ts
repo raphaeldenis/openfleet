@@ -95,10 +95,24 @@ describe('parseMarkdownBlocks', () => {
     { name: 'a quote marker strips one space and keeps the rest of the indentation', markdown: '>    x', expected: [
       { type: 'quote', blocks: [{ type: 'paragraph', segments: [text('   x')] }] },
     ] },
-    { name: 'a numbered item interrupts a paragraph', markdown: 'a\n2. b', expected: [
+    { name: 'a numbered item starting at 1 interrupts a paragraph', markdown: 'a\n1. b', expected: [
       { type: 'paragraph', segments: [text('a')] },
-      { type: 'ordered-list', start: 2, items: [[text('b')]] },
+      { type: 'ordered-list', start: 1, items: [[text('b')]] },
     ] },
+    { name: 'a numbered item starting at 2 stays in the paragraph', markdown: 'a\n2. b', expected: [{ type: 'paragraph', segments: [text('a 2. b')] }] },
+    { name: 'a wrapped year stays in the paragraph', markdown: 'paragraph\n2024. x', expected: [{ type: 'paragraph', segments: [text('paragraph 2024. x')] }] },
+    { name: 'a year after a blank line starts a list at that year', markdown: 'paragraph\n\n2024. x', expected: [
+      { type: 'paragraph', segments: [text('paragraph')] },
+      { type: 'ordered-list', start: 2024, items: [[text('x')]] },
+    ] },
+    { name: 'a list keeps counting past a paragraph-safe number', markdown: '1. a\n2. b\n3. c', expected: [
+      { type: 'ordered-list', start: 1, items: [[text('a')], [text('b')], [text('c')]] },
+    ] },
+    { name: 'a lone quote marker is ordinary text', markdown: '>', expected: [{ type: 'paragraph', segments: [text('>')] }] },
+    { name: 'a quote marker followed by spaces only is ordinary text', markdown: '>   ', expected: [{ type: 'paragraph', segments: [text('>   ')] }] },
+    { name: 'a lone heading marker is ordinary text', markdown: '# ', expected: [{ type: 'paragraph', segments: [text('# ')] }] },
+    { name: 'a heading marker followed by spaces only is ordinary text', markdown: '##   ', expected: [{ type: 'paragraph', segments: [text('##   ')] }] },
+    { name: 'a lone quote marker after a paragraph line stays in it', markdown: 'a\n>', expected: [{ type: 'paragraph', segments: [text('a >')] }] },
     { name: 'a bullet interrupts a paragraph', markdown: 'a\n- b', expected: [
       { type: 'paragraph', segments: [text('a')] },
       { type: 'list', items: [[text('b')]] },
