@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ERROR_CODES, ERROR_KINDS, HTTP_STATUS_BY_KIND, OpenFleetError, RETRY_BY_KIND, isErrorEnvelope, type ErrorCode } from './errors.js';
+import { ERROR_CODES, ERROR_KINDS, HTTP_STATUS_BY_KIND, OpenFleetError, RETRY_BY_KIND, isErrorEnvelope, retryOf, type ErrorCode } from './errors.js';
 
 const RETRIES = ['never', 'after_refresh', 'later'];
 const allCodes = Object.keys(ERROR_CODES) as ErrorCode[];
@@ -32,6 +32,44 @@ describe('the error registry', () => {
   // D10 (constraint_violation 409 -> 400) is pending: the registry keeps today's 409 until it is decided.
   it('keeps constraint_violation a conflict until decision D10 moves it to invalid_request', () => {
     expect(ERROR_CODES.constraint_violation.kind).toBe('conflict');
+  });
+});
+
+describe('the wire contract of the registry', () => {
+  const KIND_AND_RETRY_BY_CODE: Record<ErrorCode, string> = {
+    invalid_body: 'invalid_request/never', invalid_json: 'invalid_request/never', invalid_url: 'invalid_request/never', unknown_harness: 'invalid_request/never',
+    message_too_long: 'invalid_request/never', query_too_long: 'invalid_request/never',
+    unauthorized: 'unauthorized/never',
+    not_found: 'not_found/never', project_not_found: 'not_found/never', no_state: 'not_found/never', session_not_found: 'not_found/never',
+    note_not_found: 'not_found/never', store_not_found: 'not_found/never', view_not_found: 'not_found/never', row_not_found: 'not_found/never',
+    manager_not_found: 'not_found/never',
+    session_closed: 'conflict/after_refresh', stale_revision: 'conflict/after_refresh', file_backed: 'conflict/after_refresh', file_unreadable: 'conflict/later',
+    path_escapes_docs_folder: 'conflict/after_refresh', duplicate_name: 'conflict/after_refresh', constraint_violation: 'conflict/after_refresh',
+    not_closed: 'conflict/after_refresh', directory_missing: 'conflict/after_refresh', directory_changed: 'conflict/after_refresh',
+    directory_unreadable: 'conflict/after_refresh', already_resolved: 'conflict/after_refresh', config_unreadable: 'conflict/after_refresh',
+    config_read_only: 'conflict/after_refresh', message_id_reused: 'conflict/after_refresh', too_many_pending: 'conflict/later', children_cap: 'conflict/later',
+    outside_lineage: 'conflict/after_refresh', not_a_manager: 'conflict/after_refresh', directory_in_use: 'conflict/after_refresh',
+    payload_too_large: 'too_large/never', note_too_large: 'too_large/never', row_cap: 'too_large/never', state_too_large: 'too_large/never',
+    daemon_shutting_down: 'unavailable/later', daemon_degraded: 'unavailable/later',
+    internal_error: 'internal/later', launch_failed: 'internal/later', resume_timeout: 'internal/later', db_stuck: 'internal/later',
+  };
+
+  it('gives every code the kind and the retry the spec lists', () => {
+    const actual = Object.fromEntries(allCodes.map((code) => [code, `${ERROR_CODES[code].kind}/${retryOf(code)}`]));
+
+    expect(actual).toEqual(KIND_AND_RETRY_BY_CODE);
+  });
+
+  it('answers each kind with the http status the desktop and the agents read', () => {
+    expect(HTTP_STATUS_BY_KIND).toEqual({
+      invalid_request: 400, unauthorized: 401, not_found: 404, conflict: 409, too_large: 413, unavailable: 503, internal: 500,
+    });
+  });
+
+  it('gives each kind the default retry the spec lists', () => {
+    expect(RETRY_BY_KIND).toEqual({
+      invalid_request: 'never', unauthorized: 'never', not_found: 'never', conflict: 'after_refresh', too_large: 'never', unavailable: 'later', internal: 'later',
+    });
   });
 });
 
