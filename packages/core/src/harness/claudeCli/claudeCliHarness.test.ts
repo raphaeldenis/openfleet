@@ -24,6 +24,8 @@ const spawn = vi.fn((_command: string, _args: string[], _options: { env: Record<
 
 vi.mock('node-pty', () => ({ spawn }));
 vi.mock('./trustDirectory.js', () => ({ markDirectoryTrusted: vi.fn() }));
+// These tests cover the spawn itself, not whether claude exists on the machine running them (claudeCliHarness.notFound.test.ts does).
+vi.mock('../../process/executableOnPath.js', async (importOriginal) => ({ ...(await importOriginal<object>()), findExecutable: () => '/mocked/bin/claude' }));
 
 const launch = {
   sessionId: '11111111-1111-4111-8111-111111111111',

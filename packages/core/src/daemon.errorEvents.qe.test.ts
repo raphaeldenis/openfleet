@@ -41,8 +41,8 @@ describe('a booted daemon tells its clients why a session failed', () => {
     for (let attempt = 0; attempt < 300 && !frames.some((frame) => frame.type === 'error'); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(frames.filter((frame) => frame.type === 'error' || frame.type === 'session.closed')).toEqual([
-      expect.objectContaining({ type: 'session.closed', reason: expect.stringMatching(/^(launch_failed|harness_exit)$/) }),
-      expect.objectContaining({ type: 'error', error: expect.objectContaining({ error: expect.stringMatching(/^(launch_failed|harness_exited)$/), kind: expect.stringMatching(/^(internal|unavailable)$/) }) }),
+      expect.objectContaining({ type: 'session.closed', reason: 'launch_failed' }),
+      expect.objectContaining({ type: 'error', error: expect.objectContaining({ error: 'claude_not_found', kind: 'unavailable' }) }),
     ]);
   });
 });

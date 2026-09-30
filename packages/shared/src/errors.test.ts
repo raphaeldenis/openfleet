@@ -52,6 +52,7 @@ describe('the wire contract of the registry', () => {
     store_has_rows: 'conflict/never', duplicate_id: 'conflict/never', no_docs_folder: 'conflict/never', not_file_backed: 'conflict/never',
     payload_too_large: 'too_large/never', note_too_large: 'too_large/never', row_cap: 'too_large/never', state_too_large: 'too_large/never',
     daemon_shutting_down: 'unavailable/later', daemon_degraded: 'unavailable/later', delivery_failed: 'unavailable/later', harness_exited: 'unavailable/never',
+    claude_not_found: 'unavailable/never', git_unavailable: 'unavailable/never',
     internal_error: 'internal/later', launch_failed: 'internal/later', resume_timeout: 'internal/later', db_stuck: 'internal/later',
   };
 

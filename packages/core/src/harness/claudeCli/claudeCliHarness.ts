@@ -1,6 +1,8 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import * as pty from 'node-pty';
+import { OpenFleetError } from '@openfleet/shared';
+import { findExecutable, pathDirectoriesOf } from '../../process/executableOnPath.js';
 import type { ConversationPresence, Harness, HarnessHandle, HarnessLaunch } from '../harness.js';
 import { childEnvironmentForClaudeCli } from '../../process/childEnvironment.js';
 import { log } from '../../logger.js';
@@ -13,13 +15,17 @@ import { markDirectoryTrusted } from './trustDirectory.js';
 export class ClaudeCliHarness implements Harness {
   readonly id = 'claude-cli' as const;
 
-  constructor(private readonly sessionsRoot: string = join(homedir(), '.openfleet', 'sessions')) {}
+  constructor(
+    private readonly sessionsRoot: string = join(homedir(), '.openfleet', 'sessions'),
+    private readonly env: NodeJS.ProcessEnv = globalThis.process.env,
+  ) {}
 
   conversationExists(conversation: { cliSessionId: string; directory: string }): ConversationPresence {
     return conversationPresence(conversation);
   }
 
   start(launch: HarnessLaunch): HarnessHandle {
+    this.assertClaudeIsOnThePath();
     // Every session runs in a directory this daemon itself created (a worktree
     // under OPENFLEET_HOME, or one the operator pointed the daemon at) — Claude
     // Code's first-run folder-trust dialog would otherwise block the PTY
@@ -37,7 +43,7 @@ export class ClaudeCliHarness implements Harness {
         cols: 120,
         rows: 40,
         cwd: launch.directory,
-        env: { ...childEnvironmentForClaudeCli(globalThis.process.env), TERM: 'xterm-256color' },
+        env: { ...childEnvironmentForClaudeCli(this.env), TERM: 'xterm-256color' },
       });
     } catch (err) {
       deleteTokenFiles(tokenFilesDir);
@@ -62,8 +68,17 @@ export class ClaudeCliHarness implements Harness {
       onExit: (listener) => process.onExit((exit) => listener(exitCodeOf(exit))).dispose,
     };
   }
+
+  // Resolved on the PATH the pty gets. The envelope carries no PATH: the log line names the directories searched.
+  private assertClaudeIsOnThePath(): void {
+    const searchedDirectories = pathDirectoriesOf(this.env);
+    if (findExecutable(CLAUDE_COMMAND, searchedDirectories) !== undefined) return;
+    log('warn', 'claude is not executable in any PATH directory of the daemon', undefined, { code: 'claude_not_found', searchedDirectories });
+    throw new OpenFleetError('claude_not_found', 'the claude CLI is not on the daemon PATH.', { hint: 'Install Claude Code or start the daemon from a shell where claude runs.' });
+  }
 }
 
+const CLAUDE_COMMAND = 'claude';
 const SIGNAL_EXIT_CODE_BASE = 128;
 
 // node-pty reports a signal death as exitCode 0 plus the signal; the shell convention (128 + signal) keeps it distinguishable from a clean exit.

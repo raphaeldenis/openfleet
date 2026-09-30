@@ -14,6 +14,7 @@ const spawn = vi.fn((_command: string, _args: string[], _options: { cwd: string 
 }));
 vi.mock('node-pty', () => ({ spawn }));
 vi.mock('../harness/claudeCli/trustDirectory.js', () => ({ markDirectoryTrusted: vi.fn() }));
+vi.mock('../process/executableOnPath.js', async (importOriginal) => ({ ...(await importOriginal<object>()), findExecutable: () => '/mocked/bin/claude' }));
 
 const WORKTREES_ROOT = '/tmp/of-wt';
 const PROJECT_SETTINGS_FILES = ['settings.json', 'settings.local.json'];

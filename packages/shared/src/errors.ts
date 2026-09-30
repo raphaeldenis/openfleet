@@ -80,6 +80,9 @@ export const ERROR_CODES = {
   delivery_failed: { kind: 'unavailable', retry: 'later' },
   // The process is gone: the same call cannot help, only reopening the session can. Not internal, so its actionable message reaches the client.
   harness_exited: { kind: 'unavailable', retry: 'never' },
+  // A missing binary on the daemon PATH: only installing it, or starting the daemon from a shell that has it, helps.
+  claude_not_found: { kind: 'unavailable', retry: 'never' },
+  git_unavailable: { kind: 'unavailable', retry: 'never' },
 
   internal_error: { kind: 'internal' },
   launch_failed: { kind: 'internal' },

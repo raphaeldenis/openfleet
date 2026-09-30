@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 import { childEnvironmentForGit } from '../process/childEnvironment.js';
@@ -9,12 +9,18 @@ const runExecFile = promisify(execFile);
 // Every hook git triggers (post-checkout, post-commit, …) inherits this env, so a raw
 // process.env pass-through would hand a hook planted in the caller's own repo the daemon's
 // host-identity markers (SCAPE_EDIT_CAP, session ids, …) on the next worktree operation.
-function run(args: string[], options: { cwd: string }): Promise<{ stdout: string; stderr: string }> {
-  return runExecFile('git', args, { cwd: options.cwd, env: childEnvironmentForGit(process.env) });
+async function run(args: string[], options: { cwd: string; env?: NodeJS.ProcessEnv }): Promise<{ stdout: string; stderr: string }> {
+  try {
+    return await runExecFile('git', args, { cwd: options.cwd, env: childEnvironmentForGit(options.env ?? process.env) });
+  } catch (error) {
+    // The caller checked the cwd exists, so a spawn ENOENT means the git binary itself is not on the PATH.
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new WorktreeError('git_unavailable', 'git is not available to the daemon.');
+    throw error;
+  }
 }
 
 export class WorktreeError extends Error {
-  constructor(public readonly code: 'invalid_branch' | 'exists' | 'git_failed', message: string) {
+  constructor(public readonly code: 'invalid_branch' | 'exists' | 'git_failed' | 'directory_missing' | 'git_unavailable', message: string) {
     super(message);
   }
 }
@@ -34,29 +40,34 @@ export function isValidBranchName(branchName: string): boolean {
   return !hasConsecutiveDots && !endsWithDot && !hasRefusedComponent;
 }
 
-export async function createWorktree(input: { repoPath: string; branchName: string; worktreesRoot: string }): Promise<{ path: string; branch: string }> {
+const isDirectory = (path: string): boolean => existsSync(path) && statSync(path).isDirectory();
+
+export async function createWorktree(input: { repoPath: string; branchName: string; worktreesRoot: string; env?: NodeJS.ProcessEnv }): Promise<{ path: string; branch: string }> {
   if (!isValidBranchName(input.branchName)) throw new WorktreeError('invalid_branch', `invalid branch name: ${input.branchName}`);
+  if (!isDirectory(input.repoPath)) throw new WorktreeError('directory_missing', 'the repository directory does not exist.');
 
   const worktreePath = join(input.worktreesRoot, input.branchName.replaceAll('/', '-'));
   if (existsSync(worktreePath)) throw new WorktreeError('exists', `worktree already exists: ${worktreePath}`);
 
-  const branchExists = await gitSucceeds(input.repoPath, ['rev-parse', '--verify', `refs/heads/${input.branchName}`]);
+  const branchExists = await gitSucceeds(input.repoPath, ['rev-parse', '--verify', `refs/heads/${input.branchName}`], input.env);
   const args = branchExists
     ? ['worktree', 'add', '--', worktreePath, input.branchName]
     : ['worktree', 'add', '-b', input.branchName, '--', worktreePath];
   try {
-    await run(args, { cwd: input.repoPath });
+    await run(args, { cwd: input.repoPath, env: input.env });
   } catch (error) {
+    if (error instanceof WorktreeError) throw error;
     throw new WorktreeError('git_failed', (error as Error).message);
   }
   return { path: worktreePath, branch: input.branchName };
 }
 
-async function gitSucceeds(cwd: string, args: string[]): Promise<boolean> {
+async function gitSucceeds(cwd: string, args: string[], env?: NodeJS.ProcessEnv): Promise<boolean> {
   try {
-    await run(args, { cwd });
+    await run(args, { cwd, env });
     return true;
-  } catch {
+  } catch (error) {
+    if (error instanceof WorktreeError) throw error;
     return false;
   }
 }
