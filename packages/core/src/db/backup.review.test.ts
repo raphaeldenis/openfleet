@@ -1,4 +1,5 @@
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -68,6 +69,49 @@ describe('retention keeps the three most recently created backups', () => {
     });
 
     expect(databaseBackups().map((name) => name.match(/(\d{4}-\d{2}-\d{2})T/)![1])).toEqual(['2026-01-01', '2026-01-02', '2030-01-03']);
+  });
+});
+
+describe('the restore instruction for a database newer than the code', () => {
+  it('tells to quit the app, delete the -wal and -shm files, then copy the newest backup .db over openfleet.db, on one line', async () => {
+    const db = createDatabaseAtVersion('015_handovers');
+    db.exec(`INSERT INTO schema_migrations (version, applied_at) VALUES ('999_future', 'now')`);
+    db.close();
+
+    const line = await refusalLineOf(() => openDatabase(dbPath));
+
+    expect(line.slice(0, -1)).not.toMatch(/\p{Cc}/u);
+    expect(line).toContain(`quit the app, delete openfleet.db-wal and openfleet.db-shm, then copy the newest .db backup in ${backupsDir}, never a .config.json copy, over openfleet.db`);
+  });
+
+  it('is necessary: copying only the backup over a database left with a stale WAL replays the newer rows', () => {
+    const script = `
+      const { DatabaseSync } = require('node:sqlite');
+      const db = new DatabaseSync(process.argv[1]);
+      db.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0; CREATE TABLE t (v TEXT); INSERT INTO t VALUES ('before migration')");
+      db.exec("VACUUM INTO '" + process.argv[2] + "'");
+      db.exec("INSERT INTO t VALUES ('after migration')");
+      process.exit(0);
+    `;
+    const restoreAfterAbruptExit = (deleteWalAndShm: boolean) => {
+      const folder = mkdtempSync(join(home, 'restore-'));
+      const databaseFile = join(folder, 'openfleet.db');
+      const backupPath = join(folder, 'backup.db');
+      spawnSync(process.execPath, ['-e', script, databaseFile, backupPath], { stdio: 'inherit' });
+      expect(existsSync(`${databaseFile}-wal`)).toBe(true);
+      if (deleteWalAndShm) for (const side of ['-wal', '-shm']) unlinkSync(`${databaseFile}${side}`);
+      copyFileSync(backupPath, databaseFile);
+      const db = new DatabaseSync(databaseFile);
+      const rows = (db.prepare('SELECT v FROM t ORDER BY v').all() as { v: string }[]).map((r) => r.v);
+      db.close();
+      return rows;
+    };
+
+    const copyingOnlyTheBackup = restoreAfterAbruptExit(false);
+    const alsoDeletingWalAndShm = restoreAfterAbruptExit(true);
+
+    expect(copyingOnlyTheBackup).toEqual(['after migration', 'before migration']);
+    expect(alsoDeletingWalAndShm).toEqual(['before migration']);
   });
 });
 

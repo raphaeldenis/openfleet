@@ -141,7 +141,7 @@ export class SchemaNewerThanCodeError extends Error {
 function restoreHintFor(databasePath: string | undefined): string {
   const hasRealPath = databasePath !== undefined && databasePath !== ':memory:';
   const backupsFolder = hasRealPath ? join(dirname(databasePath), BACKUPS_FOLDER_NAME) : `the ${BACKUPS_FOLDER_NAME} folder next to openfleet.db`;
-  return `restore the newest file in ${backupsFolder} over openfleet.db with the app quit, or install the newer app`;
+  return `quit the app, delete openfleet.db-wal and openfleet.db-shm, then copy the newest .db backup in ${backupsFolder}, never a .config.json copy, over openfleet.db; or install the newer app`;
 }
 
 function appliedVersionsOf(db: DatabaseSync): Set<string> {

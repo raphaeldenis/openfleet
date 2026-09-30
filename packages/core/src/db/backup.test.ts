@@ -246,7 +246,7 @@ describe('a database newer than the code', () => {
     expect(line.endsWith('\n') && line.indexOf('\n') === line.length - 1).toBe(true);
     expect(line).toContain('999_from_the_future');
     expect(line).toContain(backupsDir);
-    expect(line).toMatch(/restore the newest file in .* over openfleet\.db with the app quit, or install the newer app/);
+    expect(line).toMatch(/quit the app, delete openfleet\.db-wal and openfleet\.db-shm, then copy the newest \.db backup in .* over openfleet\.db; or install the newer app/);
   });
 });
 

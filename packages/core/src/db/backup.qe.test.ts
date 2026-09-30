@@ -180,7 +180,7 @@ describe('the refusal line for a database newer than the code', () => {
     expect(line.slice(0, -1)).not.toMatch(/[\p{Cc}]/u);
     expect(line.endsWith('\n')).toBe(true);
     expect(line).toContain('999_from_the_future');
-    expect(line).toMatch(/over openfleet\.db with the app quit, or install the newer app\)\n$/);
+    expect(line).toMatch(/over openfleet\.db; or install the newer app\)\n$/);
   });
 
   it('names the backups folder next to the database path it was given when openfleet.db is a symlink', async () => {
