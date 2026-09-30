@@ -4,6 +4,7 @@ import { render, screen } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DAEMON_STATUS_PORT, DaemonStatus } from '../core/daemon-status.service';
+import { VersionsService } from '../core/versions.service';
 import { OnboardingComponent } from './onboarding.component';
 
 const POLL_INTERVAL_MS = 1000;
@@ -19,15 +20,17 @@ function jsonResponse(body: unknown): Response {
   return { ok: true, status: 200, json: () => Promise.resolve(body) } as unknown as Response;
 }
 
-function stubDaemonHttp({ isUp = false, sessions = [] as unknown[] } = {}) {
+function stubDaemonHttp({ isUp = false, version = undefined as string | undefined, sessions = [] as unknown[] } = {}) {
+  const daemon = { isUp, version };
   vi.stubGlobal(
     'fetch',
     vi.fn((url: string) => {
-      if (url.endsWith('/health')) return isUp ? Promise.resolve(jsonResponse({ ok: true })) : Promise.reject(new TypeError('Failed to fetch'));
+      if (url.endsWith('/health')) return daemon.isUp ? Promise.resolve(jsonResponse({ ok: true, version: daemon.version })) : Promise.reject(new TypeError('Failed to fetch'));
       if (url.endsWith('/api/sessions')) return Promise.resolve(jsonResponse(sessions));
       return Promise.reject(new Error(`unexpected request to ${url}`));
     }),
   );
+  return daemon;
 }
 
 function fakeDaemonStatusPort(initial: DaemonStatus) {
@@ -78,7 +81,7 @@ describe('OnboardingComponent daemon step under Tauri', () => {
     const { port, report } = fakeDaemonStatusPort({ state: 'starting' });
     const { fixture } = await renderUnderTauri(port);
 
-    report({ state: 'slow', startedSecondsAgo: 16 });
+    report({ state: 'slow' });
     await letTimePass(POLL_INTERVAL_MS, fixture);
 
     expect(screen.getByRole('status')).toHaveTextContent(STARTING_COPY);
@@ -158,6 +161,90 @@ describe('OnboardingComponent daemon step under Tauri', () => {
     await fixture.whenStable();
 
     expect(read.mock.calls.length).toBe(readsBefore + 1);
+    expect(screen.getByRole('status')).toHaveTextContent('Daemon ready');
+  });
+
+  it('user whose daemon answers after a failure is let in when pressing Check again, with the daemon version recorded', async () => {
+    const http = stubDaemonHttp();
+    const { port } = fakeDaemonStatusPort({ state: 'failed', lastLine: 'boom' });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const { fixture } = await renderAfterFirstStatusRead(port);
+
+    http.isUp = true;
+    http.version = '0.9.4';
+    await user.click(screen.getByRole('button', { name: 'Check again' }));
+    await letTimePass(0, fixture);
+
+    expect(screen.getByRole('heading', { name: PROJECT_STEP_HEADING })).toBeInTheDocument();
+    expect(TestBed.inject(VersionsService).daemonVersion()).toBe('0.9.4');
+  });
+
+  it('user whose daemon still does not answer is told so politely when pressing Check again, and keeps the focus on the button', async () => {
+    const { port } = fakeDaemonStatusPort({ state: 'failed', lastLine: 'boom' });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const { fixture } = await renderAfterFirstStatusRead(port);
+    expect(screen.getByTestId('daemon-check-result')).toHaveTextContent('');
+
+    await user.click(screen.getByRole('button', { name: 'Check again' }));
+    await fixture.whenStable();
+
+    expect(screen.getByTestId('daemon-check-result')).toHaveTextContent('Still not running — check the last line above, then try again');
+    expect(screen.getByTestId('daemon-check-result')).toHaveAttribute('role', 'status');
+    expect(screen.getByRole('button', { name: 'Check again' })).toHaveFocus();
+  });
+
+  it('user sees the daemon version recorded when the status, not the health check, lets them in', async () => {
+    const { port, report } = fakeDaemonStatusPort({ state: 'starting' });
+    const { fixture } = await renderUnderTauri(port);
+
+    report({ state: 'ready', daemonVersion: '0.9.2' });
+    await letTimePass(POLL_INTERVAL_MS, fixture);
+    await letTimePass(READY_BEAT_MS, fixture);
+
+    expect(screen.getByRole('heading', { name: PROJECT_STEP_HEADING })).toBeInTheDocument();
+    expect(TestBed.inject(VersionsService).daemonVersion()).toBe('0.9.2');
+  });
+
+  it('user sees the daemon version fetched over HTTP when the status reports the daemon ready without one', async () => {
+    const http = stubDaemonHttp();
+    const { port } = fakeDaemonStatusPort({ state: 'reused' });
+    const { fixture } = await renderAfterFirstStatusRead(port);
+
+    http.isUp = true;
+    http.version = '0.9.3';
+    await letTimePass(READY_BEAT_MS, fixture);
+
+    expect(screen.getByRole('heading', { name: PROJECT_STEP_HEADING })).toBeInTheDocument();
+    expect(TestBed.inject(VersionsService).daemonVersion()).toBe('0.9.3');
+  });
+
+  it('user is shown a generic card with the manual command when the daemon reports a state the app does not know, and polling goes on', async () => {
+    const { port, read, report } = fakeDaemonStatusPort({ state: 'stopping' } as unknown as DaemonStatus);
+    const { container, fixture } = await renderAfterFirstStatusRead(port);
+
+    expect(container).toHaveTextContent('The daemon reports an unknown state — check the last line, then try again');
+    expect(container).toHaveTextContent(MANUAL_CARD_COMMAND);
+    expect(screen.getByRole('button', { name: 'Check again' })).toBeEnabled();
+    const readsBefore = read.mock.calls.length;
+    report({ state: 'ready' });
+    await letTimePass(POLL_INTERVAL_MS, fixture);
+
+    expect(read.mock.calls.length).toBe(readsBefore + 1);
+    expect(screen.getByRole('status')).toHaveTextContent('Daemon ready');
+  });
+
+  it.each([
+    ['null', null],
+    ['an object without a state', {}],
+    ['a state that is not a string', { state: 3 }],
+  ])('user is not left with a blank step when the status answer is %s: the manual card shows and polling goes on', async (_name, answer) => {
+    const { port, report } = fakeDaemonStatusPort(answer as unknown as DaemonStatus);
+    const { container, fixture } = await renderAfterFirstStatusRead(port);
+
+    expect(container).toHaveTextContent(`Start the daemon: ${MANUAL_CARD_COMMAND}`);
+    report({ state: 'ready' });
+    await letTimePass(POLL_INTERVAL_MS, fixture);
+
     expect(screen.getByRole('status')).toHaveTextContent('Daemon ready');
   });
 

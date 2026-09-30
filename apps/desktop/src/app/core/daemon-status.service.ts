@@ -1,6 +1,7 @@
 import { DestroyRef, inject, Injectable, InjectionToken, signal } from '@angular/core';
 
-export type DaemonPhase = 'starting' | 'slow' | 'ready' | 'failed' | 'reused';
+const KNOWN_PHASES = ['starting', 'slow', 'ready', 'failed', 'reused'] as const;
+export type DaemonPhase = (typeof KNOWN_PHASES)[number];
 
 /** What the Tauri command `daemon_status` answers (camelCase, absent fields omitted). */
 export interface DaemonStatus {
@@ -9,11 +10,18 @@ export interface DaemonStatus {
   pathTried?: string;
   pathSource?: 'shell' | 'fallback';
   daemonVersion?: string;
-  startedSecondsAgo?: number;
 }
 
-/** What the page knows: the daemon's status, or nothing when the status could not be read. */
-export type ObservedDaemon = DaemonStatus | { state: 'unavailable' };
+/** What the page knows: the daemon's status, a state this app does not know, or nothing when the status could not be read. */
+export type ObservedDaemon = DaemonStatus | (Omit<DaemonStatus, 'state'> & { state: 'unknown' | 'unavailable' });
+
+function observedFrom(answer: unknown): ObservedDaemon {
+  const state = (answer as { state?: unknown } | null)?.state;
+  if (typeof state !== 'string') return { state: 'unavailable' };
+  if (KNOWN_PHASES.includes(state as DaemonPhase)) return answer as DaemonStatus;
+  const lastLine = (answer as { lastLine?: unknown }).lastLine;
+  return { state: 'unknown', lastLine: typeof lastLine === 'string' ? lastLine : undefined };
+}
 
 export interface DaemonStatusPort {
   read(): Promise<DaemonStatus>;
@@ -67,7 +75,7 @@ export class DaemonStatusService {
 
   private async readThenScheduleNextRead(): Promise<void> {
     if (!this.port) return;
-    const observed = await this.port.read().catch((): ObservedDaemon => ({ state: 'unavailable' }));
+    const observed = await this.port.read().then(observedFrom, (): ObservedDaemon => ({ state: 'unavailable' }));
     if (this.isDestroyed) return;
     this.status.set(observed);
     const isSettled = SETTLED_PHASES.includes(observed.state);
