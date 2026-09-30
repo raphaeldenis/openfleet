@@ -376,7 +376,7 @@ describe('notes REST routes', () => {
       const current = await (await call('GET', `/api/notes/${note.id}?projectId=p1`)).json();
 
       expect(stale.status).toBe(409);
-      expect(await stale.json()).toEqual({ error: 'stale_revision', currentRev: 2 });
+      expect(await stale.json()).toMatchObject({ error: 'stale_revision', currentRev: 2, kind: 'conflict', retry: 'after_refresh', detail: { currentRev: 2 } });
       expect(current).toMatchObject({ bodyMd: 'first', rev: 2 });
     });
 
@@ -436,7 +436,7 @@ describe('notes REST routes', () => {
       const restored = await call('POST', `/api/notes/${note.id}/restore`, { projectId: fileBackedProjectId, rev: 1, expectedRev: 1 });
 
       expect(patched.status).toBe(409);
-      expect(await patched.json()).toEqual({ error: 'file_unreadable' });
+      expect(await patched.json()).toMatchObject({ error: 'file_unreadable', kind: 'conflict', retry: 'later' });
       expect(restored.status).toBe(409);
       expect(noteRepo.get(note.id)).toMatchObject({ bodyMd: 'v1', rev: 1 });
       expect(readNoteVersionRevs(note.id)).toEqual([1]);
@@ -464,7 +464,7 @@ describe('notes REST routes', () => {
       vi.restoreAllMocks();
 
       expect(patched.status).toBe(409);
-      expect(await patched.json()).toEqual({ error: 'file_unreadable' });
+      expect(await patched.json()).toMatchObject({ error: 'file_unreadable', kind: 'conflict', retry: 'later' });
       expect(noteRepo.get(note.id)).toMatchObject({ bodyMd: 'v1', rev: 1 });
       expect(readNoteVersionRevs(note.id)).toEqual([1]);
     });
@@ -605,7 +605,7 @@ describe('notes REST routes', () => {
       const text = await response.text();
 
       expect(response.status).toBe(409);
-      expect(JSON.parse(text)).toEqual({ error: 'path_escapes_docs_folder' });
+      expect(JSON.parse(text)).toMatchObject({ error: 'path_escapes_docs_folder', kind: 'conflict', retry: 'never' });
       expect(text).not.toContain(outsideDir);
       expect(text).not.toContain(filePath);
     });
@@ -689,7 +689,7 @@ describe('notes REST routes', () => {
 
       expect(unknownRev.status).toBe(404);
       expect(stale.status).toBe(409);
-      expect(await stale.json()).toEqual({ error: 'stale_revision', currentRev: 1 });
+      expect(await stale.json()).toMatchObject({ error: 'stale_revision', currentRev: 1, kind: 'conflict', retry: 'after_refresh', detail: { currentRev: 1 } });
     });
 
     it('rejects a restore without a revision or without the expected revision with 400', async () => {

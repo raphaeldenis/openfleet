@@ -21,6 +21,8 @@ export const ERROR_CODES = {
   invalid_url: { kind: 'invalid_request' },
   invalid_branch_name: { kind: 'invalid_request' },
   unknown_harness: { kind: 'invalid_request' },
+  // A bad cell value is the caller's row (decision D10): it answers 400, not 409.
+  constraint_violation: { kind: 'invalid_request' },
   message_too_long: { kind: 'invalid_request' },
   query_too_long: { kind: 'invalid_request' },
   outside_own_repository: { kind: 'invalid_request' },
@@ -45,8 +47,6 @@ export const ERROR_CODES = {
   path_escapes_docs_folder: { kind: 'conflict', retry: 'never' },
   duplicate_name: { kind: 'conflict', retry: 'never' },
   worktree_exists: { kind: 'conflict', retry: 'never' },
-  // Decision D10 moves this to invalid_request (400); it stays a conflict (409) until that lands.
-  constraint_violation: { kind: 'conflict', retry: 'never' },
   not_closed: { kind: 'conflict', retry: 'never' },
   directory_missing: { kind: 'conflict', retry: 'never' },
   directory_changed: { kind: 'conflict', retry: 'never' },

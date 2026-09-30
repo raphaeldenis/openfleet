@@ -29,22 +29,21 @@ describe('the error registry', () => {
     expect(allCodes).toEqual(expect.arrayContaining(wireCodes));
   });
 
-  // D10 (constraint_violation 409 -> 400) is pending: the registry keeps today's 409 until it is decided.
-  it('keeps constraint_violation a conflict until decision D10 moves it to invalid_request', () => {
-    expect(ERROR_CODES.constraint_violation.kind).toBe('conflict');
+  it('files constraint_violation under invalid_request: a bad cell value is the caller\'s row (decision D10)', () => {
+    expect(ERROR_CODES.constraint_violation.kind).toBe('invalid_request');
   });
 });
 
 describe('the wire contract of the registry', () => {
   const KIND_AND_RETRY_BY_CODE: Record<ErrorCode, string> = {
     invalid_body: 'invalid_request/never', invalid_json: 'invalid_request/never', invalid_url: 'invalid_request/never', invalid_branch_name: 'invalid_request/never', unknown_harness: 'invalid_request/never',
-    message_too_long: 'invalid_request/never', query_too_long: 'invalid_request/never', outside_own_repository: 'invalid_request/never',
+    constraint_violation: 'invalid_request/never', message_too_long: 'invalid_request/never', query_too_long: 'invalid_request/never', outside_own_repository: 'invalid_request/never',
     unauthorized: 'unauthorized/never',
     not_found: 'not_found/never', project_not_found: 'not_found/never', no_state: 'not_found/never', session_not_found: 'not_found/never',
     note_not_found: 'not_found/never', store_not_found: 'not_found/never', view_not_found: 'not_found/never', row_not_found: 'not_found/never',
     manager_not_found: 'not_found/never',
     session_closed: 'conflict/never', stale_revision: 'conflict/after_refresh', file_backed: 'conflict/never', file_unreadable: 'conflict/later',
-    path_escapes_docs_folder: 'conflict/never', duplicate_name: 'conflict/never', worktree_exists: 'conflict/never', constraint_violation: 'conflict/never',
+    path_escapes_docs_folder: 'conflict/never', duplicate_name: 'conflict/never', worktree_exists: 'conflict/never',
     not_closed: 'conflict/never', directory_missing: 'conflict/never', directory_changed: 'conflict/never',
     directory_unreadable: 'conflict/never', already_resolved: 'conflict/never', config_unreadable: 'conflict/never',
     config_read_only: 'conflict/never', message_id_reused: 'conflict/never', too_many_pending: 'conflict/later', children_cap: 'conflict/later',

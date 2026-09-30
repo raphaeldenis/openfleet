@@ -109,7 +109,7 @@ describe('working-state route under hostile ids', () => {
     const response = await api(`/api/sessions/${id}/working-state`);
 
     expect(response.status).toBe(404);
-    expect(await response.json()).toEqual({ error: 'not_found' });
+    expect(await response.json()).toMatchObject({ error: 'not_found', kind: 'not_found', retry: 'never' });
   });
 
   it('answers 401, not 404, to an unauthenticated caller asking about a session that does not exist', async () => {
