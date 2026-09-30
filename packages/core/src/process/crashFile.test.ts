@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -122,6 +122,29 @@ describe('writeCrashFile', () => {
 
     expect(JSON.parse(readFileSync(path, 'utf8'))).toMatchObject({ ref: 'ab12cd34' });
     expect(filesInCrashDir()).toEqual(['2026-09-30T10-00-00.000Z-ab12cd34.json']);
+  });
+
+  it('never follows a symlink planted at the temporary name the next crash will use: it refuses and leaves the target unchanged', () => {
+    const victim = join(home, 'victim.txt');
+    writeFileSync(victim, 'untouched');
+    mkdirSync(crashDir, { recursive: true });
+    symlinkSync(victim, join(crashDir, '.2026-09-30T10-00-00.000Z-ab12cd34.json.tmp'));
+
+    expect(() => crash()).toThrow(/EEXIST/);
+
+    expect(readFileSync(victim, 'utf8')).toBe('untouched');
+  });
+
+  it('replaces a symlink planted at the final name instead of writing through it', () => {
+    const victim = join(home, 'victim.txt');
+    writeFileSync(victim, 'untouched');
+    mkdirSync(crashDir, { recursive: true });
+    symlinkSync(victim, join(crashDir, '2026-09-30T10-00-00.000Z-ab12cd34.json'));
+
+    const path = crash();
+
+    expect(readFileSync(victim, 'utf8')).toBe('untouched');
+    expect(JSON.parse(readFileSync(path, 'utf8'))).toMatchObject({ ref: 'ab12cd34' });
   });
 
   it('cuts a full ring to the cap in one pass', () => {
