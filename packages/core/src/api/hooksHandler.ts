@@ -1,4 +1,5 @@
-import { ClaudeHookEventSchema, WORKING_STATE_TOOL_NAMES, type ContextHookOutput, type StopHookOutput } from '@openfleet/shared';
+import { ClaudeHookEventSchema, WORKING_STATE_TOOL_NAMES, type ClaudeHookEvent, type ContextHookOutput, type StopHookOutput } from '@openfleet/shared';
+import type { ContextNotice } from '../workingState/contextNotice.js';
 import type { SessionStartContext, SessionStartRequest } from '../workingState/sessionStartContext.js';
 import type { ApprovalService } from '../governance/approvalService.js';
 import { log } from '../logger.js';
@@ -36,7 +37,18 @@ function recordHandoversFailingOpen(handoverLedger: HandoverLedger | undefined, 
   }
 }
 
-export function hooksHandler(deps: { sessions: SessionService; approvals: ApprovalService; stopRefusal?: StopRefusal; sessionStartContext?: SessionStartContext; handoverLedger?: HandoverLedger }): Handler {
+function trackContextNoticeFailingOpen(contextNotice: ContextNotice | undefined, sessionId: string, event: ClaudeHookEvent): void {
+  try {
+    if (event.hook_event_name === 'Stop') contextNotice?.measureAtStop(sessionId);
+    if (event.hook_event_name === 'UserPromptSubmit') contextNotice?.measureAtPrompt(sessionId);
+    const startsFreshConversation = event.hook_event_name === 'SessionStart' && (event.source === 'clear' || event.source === 'compact');
+    if (startsFreshConversation) contextNotice?.clearForNewConversation(sessionId);
+  } catch (error) {
+    log('warn', `context notice failed, changing nothing: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+export function hooksHandler(deps: { sessions: SessionService; approvals: ApprovalService; stopRefusal?: StopRefusal; sessionStartContext?: SessionStartContext; handoverLedger?: HandoverLedger; contextNotice?: ContextNotice }): Handler {
   return async ({ res, params, body }) => {
     const session = deps.sessions.byHookToken(params.hookToken ?? '');
     const parsed = ClaudeHookEventSchema.safeParse(body);
@@ -50,6 +62,7 @@ export function hooksHandler(deps: { sessions: SessionService; approvals: Approv
     const isDaemonSeededPrompt = event.hook_event_name === 'UserPromptSubmit' && event.prompt !== undefined && deps.sessions.isSeededPrompt(session.id, event.prompt);
     const handoverReminderOutput = event.hook_event_name === 'UserPromptSubmit' && !isDaemonSeededPrompt ? recordHandoversFailingOpen(deps.handoverLedger, { sessionId: session.id, prompt: event.prompt }) : undefined;
     deps.sessions.applyInput(session.id, { kind: 'hook', event, turnContinues: stopRefusal !== undefined });
+    trackContextNoticeFailingOpen(deps.contextNotice, session.id, event);
     if (stopRefusal) return json(res, 200, stopRefusal);
     if (sessionStartContext) return json(res, 200, sessionStartContext);
     if (handoverReminderOutput) return json(res, 200, handoverReminderOutput);
