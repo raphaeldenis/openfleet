@@ -16,6 +16,7 @@ import { startServer } from './server.js';
 
 let server: Awaited<ReturnType<typeof startServer>>;
 let projectDirectory: string;
+let deliveredMessageIds: string[];
 const originalConfigDir = process.env.CLAUDE_CONFIG_DIR;
 
 beforeEach(async () => {
@@ -26,6 +27,10 @@ beforeEach(async () => {
 
   const db = openDatabase(':memory:');
   const bus = new EventBus();
+  deliveredMessageIds = [];
+  bus.subscribe((event) => {
+    if (event.type === 'message.delivered') deliveredMessageIds.push(event.messageId);
+  });
   const sessions = new SessionService({ db, bus, harnesses: [new FakeHarness()], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt', submitKeystrokeDelayMs: 0 });
   const approvals = new ApprovalService({ db, bus });
   const managerRepo = new ManagerRepository(db);
@@ -83,15 +88,22 @@ describe('a user typing /clear in a session', () => {
     expect((await sendMessage(id)).status).not.toBe(409);
   });
 
-  it('keeps the session alive when SessionEnd with reason clear is never followed by a SessionStart', async () => {
+  it('keeps a generating session alive, delivering its queued message and reading the launch transcript, when SessionEnd with reason clear is never followed by a SessionStart', async () => {
     const id = await createSession();
-    await sendHook(id, { hook_event_name: 'SessionStart' });
+    writeFileSync(transcriptPathOf(id), '');
+    await sendHook(id, { hook_event_name: 'UserPromptSubmit' });
     await sendHook(id, sessionEnd('clear'));
 
     await new Promise((resolve) => setTimeout(resolve, 300));
+    const stateAfterWaiting = (await listed(id)).state;
+    const queuedResponse = await sendMessage(id);
+    writeFileSync(transcriptPathOf(id), assistantLine('claude-opus-5-5'));
+    await sendHook(id, { hook_event_name: 'Stop', transcript_path: undefined });
 
-    expect((await listed(id)).state).not.toBe('closed');
-    expect((await sendMessage(id)).status).not.toBe(409);
+    expect(stateAfterWaiting).toBe('generating');
+    expect(await queuedResponse.json()).toMatchObject({ status: 'queued' });
+    expect(deliveredMessageIds).toHaveLength(1);
+    expect(await listed(id)).toMatchObject({ resolvedModel: 'claude-opus-5-5' });
   });
 
   it('shows the session idle once the SessionStart with source clear follows the SessionEnd', async () => {
@@ -122,7 +134,7 @@ describe('a user typing /clear in a session', () => {
       await sendHook(id, sessionStartAfterClear, newCliSessionId);
       await sendHook(id, sessionEnd('clear'));
     }
-    await sendHook(id, preToolUse, newCliSessionId);
+    await sendHook(id, { ...preToolUse, transcript_path: undefined }, newCliSessionId);
 
     expect(await listed(id)).toMatchObject({ state: 'generating', resolvedModel: 'claude-opus-5-5' });
   });
