@@ -48,6 +48,34 @@ export function findResolvedModel(tail: string, launchedAt: string): ResolvedMod
   return undefined;
 }
 
+const CONTEXT_USAGE_FIELDS = ['input_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens'] as const;
+
+// The context size of the latest main-chain assistant line that carries a complete usage: the sum of the three
+// input-side fields. A sub-agent line, a line without a usable usage, and a synthetic line totalling zero are skipped.
+export function findLatestContextTokens(tail: string): number | undefined {
+  const linesNewestFirst = tail.split('\n').reverse();
+  for (const line of linesNewestFirst) {
+    const contextTokens = contextTokensOfLine(line);
+    if (contextTokens !== undefined) return contextTokens;
+  }
+  return undefined;
+}
+
+function contextTokensOfLine(line: string): number | undefined {
+  const entry = parseJsonObject(line);
+  if (!entry) return undefined;
+  const isMainChainAssistantLine = entry.type === 'assistant' && entry.isSidechain !== true;
+  if (!isMainChainAssistantLine) return undefined;
+  const usage = isRecord(entry.message) ? entry.message.usage : undefined;
+  if (!isRecord(usage)) return undefined;
+  const fieldValues = CONTEXT_USAGE_FIELDS.map((field) => usage[field]);
+  const isCompleteUsage = fieldValues.every((value) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0);
+  if (!isCompleteUsage) return undefined;
+  const contextTokens = (fieldValues as number[]).reduce((sum, value) => sum + value, 0);
+  const isSyntheticLine = contextTokens === 0;
+  return isSyntheticLine ? undefined : contextTokens;
+}
+
 function resolutionOfLine(line: string, launchedAtMs: number): ResolvedModel | undefined {
   const entry = parseJsonObject(line);
   if (!entry) return undefined;

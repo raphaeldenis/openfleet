@@ -8,9 +8,10 @@ interface Row {
   exit_code: number | null; hook_token: string; mcp_token: string; permission_mode: string | null; branch: string | null;
   created_at: string; closed_at: string | null; project_id: string | null;
   resolved_model: string | null; cli_version: string | null; model_drifted_from: string | null; resolved_for_model: string | null;
+  context_notice_tokens: number | null;
 }
 
-type NewSessionRow = Omit<Row, 'exit_code' | 'closed_at' | 'project_id' | 'resolved_model' | 'cli_version' | 'model_drifted_from' | 'resolved_for_model'> & { project_id?: string | null };
+type NewSessionRow = Omit<Row, 'exit_code' | 'closed_at' | 'project_id' | 'resolved_model' | 'cli_version' | 'model_drifted_from' | 'resolved_for_model' | 'context_notice_tokens'> & { project_id?: string | null };
 
 export interface NormalizedPermissionMode { mode: PermissionMode | undefined; wasRecognized: boolean }
 
@@ -34,6 +35,7 @@ const toSession = (r: Row): Session => ({
   branch: r.branch ?? undefined,
   model: r.model ?? undefined,
   resolvedModel: r.resolved_model ?? undefined, cliVersion: r.cli_version ?? undefined, modelDriftedFrom: r.model_drifted_from ?? undefined,
+  contextNoticeTokens: r.context_notice_tokens ?? undefined,
   parentId: r.parent_id ?? undefined, projectId: r.project_id ?? undefined, role: r.role ?? undefined, harness: r.harness,
   state: r.state, stateSince: r.state_since, exitCode: r.exit_code ?? undefined,
   permissionMode: normalizePermissionMode(r.permission_mode).mode,
@@ -77,6 +79,9 @@ export class SessionRepository {
   }
   setModel(id: string, model: string): void {
     this.db.prepare('UPDATE sessions SET model = ? WHERE id = ?').run(model, id);
+  }
+  setContextNoticeTokens(id: string, tokens: number | null): void {
+    this.db.prepare('UPDATE sessions SET context_notice_tokens = ? WHERE id = ?').run(tokens, id);
   }
   clearResolvedModel(id: string): void {
     this.db.prepare('UPDATE sessions SET resolved_model = NULL, resolved_for_model = NULL, model_drifted_from = NULL WHERE id = ?').run(id);
