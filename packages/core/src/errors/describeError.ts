@@ -4,6 +4,7 @@ import { isAbsolute } from 'node:path';
 import { ERROR_CODES, OpenFleetError, retryOf, type ErrorCode, type ErrorEnvelope } from '@openfleet/shared';
 import { InvalidJsonBodyError, PayloadTooLargeError } from '../api/router.js';
 import { resolveHome } from '../config.js';
+import { isDatabaseUnavailableError } from '../db/databaseFailure.js';
 import { StuckConnectionError } from '../db/transaction.js';
 import { ApprovalError } from '../governance/approvalService.js';
 import { shortId } from '../ids.js';
@@ -72,7 +73,10 @@ const WORKTREE_ENTRY_BY_CODE: Record<WorktreeError['code'], (error: WorktreeErro
   git_unavailable: () => ({ code: 'git_unavailable', message: 'git is not available to the daemon.', hint: 'Install git or start the daemon from a shell where git runs.' }),
 };
 
-const UNEXPECTED_ENTRY: Entry = { code: 'internal_error', message: 'the daemon hit an unexpected error.' };
+// A database that cannot take work answers internal (500): waiting a second fixes nothing, a restart may.
+const DB_STUCK_ENTRY: Entry = { code: 'db_stuck', message: 'the database is not accepting work.', hint: 'restart the daemon.' };
+
+const UNEXPECTED_ENTRY: Entry ={ code: 'internal_error', message: 'the daemon hit an unexpected error.' };
 
 // An internal error never forwards its own words: the log carries them, the caller gets the generic sentence and the id.
 const describedOpenFleetError = (error: OpenFleetError): Entry =>
@@ -86,7 +90,8 @@ const RULES: Rule[] = [
   when(InvalidJsonBodyError, asDetail('invalid_json', 'the request body is not valid JSON.')),
   (error) => (isNamedZodError(error) ? { code: 'invalid_body', message: 'the request body is invalid.', detail: error.message } : undefined),
   (error) => (isForeignKeyError(error) ? { code: 'project_not_found', message: 'the project does not exist.' } : undefined),
-  when(StuckConnectionError, () => ({ code: 'db_stuck', message: 'the database is not accepting work.', hint: 'restart the daemon.' })),
+  when(StuckConnectionError, () => DB_STUCK_ENTRY),
+  (error) => (isDatabaseUnavailableError(error) ? DB_STUCK_ENTRY : undefined),
 
   when(SessionClosedError, asIs('session_closed')),
   when(DaemonShuttingDownError, asIs('daemon_shutting_down')),
