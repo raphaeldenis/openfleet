@@ -1,10 +1,14 @@
-import { ChangeDetectionStrategy, Component, DestroyRef, computed, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, DestroyRef, ElementRef, Injector, afterNextRender, computed, effect, inject, signal } from '@angular/core';
+import { ReplyDraftStore } from '../sessions/reply-draft.store';
 import { decideApproval } from '../core/decide-approval';
 import { compactElapsedLabel, elapsedSecondsSince } from '../design/elapsed-time';
 import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { KindBadgeComponent } from '../design/kind-badge.component';
 import { focusTabAt, nextTabIndex } from '../design/tablist-keyboard';
+import { attentionItemsOf, inboxCountLabelOf } from '../working-state/attention-items';
+import { AttentionCardComponent } from './attention-card.component';
+import { showBidiControlsAsEscapes, showInvisibleControlsAsEscapes } from './bidi-escapes';
 
 type InboxTab = 'gates' | 'questions' | 'proposals';
 type FilterKey = 'all' | 'unread' | 'mine' | 'blocked' | 'recent';
@@ -33,12 +37,6 @@ const TABS: readonly { readonly key: InboxTab; readonly label: string }[] = [
   { key: 'proposals', label: 'Governance proposals' },
 ];
 
-const BIDI_CONTROL_CHARACTERS = /[؜‎‏‪-‮⁦-⁩]/g;
-
-function showBidiControlsAsEscapes(text: string): string {
-  return text.replace(BIDI_CONTROL_CHARACTERS, (control) => `<U+${control.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}>`);
-}
-
 interface FormattedInput {
   readonly toolInput: unknown;
   readonly text: string;
@@ -51,11 +49,11 @@ function formatInput(toolInput: unknown): FormattedInput {
 @Component({
   selector: 'of-inbox',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [KindBadgeComponent],
+  imports: [KindBadgeComponent, AttentionCardComponent],
   template: `
     <section class="inbox" data-testid="inbox">
       <header class="title-row" data-testid="inbox-title-row">
-        <h1 class="title">Inbox @if (events.approvals().length; as pendingCount) {<span class="count" data-testid="inbox-count">{{ pendingCount }}</span>}</h1>
+        <h1 class="title">Inbox @if (pendingCount(); as pending) {<span class="count" data-testid="inbox-count" role="img" [attr.aria-label]="pending.ariaLabel">{{ pending.text }}</span>}</h1>
         @if (tab() === 'gates') {
           <div class="filters" data-testid="inbox-filters">
             @for (filter of filters; track filter.key) {
@@ -71,6 +69,13 @@ function formatInput(toolInput: unknown): FormattedInput {
           </div>
         }
       </header>
+      @for (failure of unseenReplyFailures(); track failure.sessionId) {
+        <div class="reply-failure" role="alert" data-testid="inbox-reply-failure">
+          <p class="reply-failure-title">Your reply to {{ failure.sessionName }} was not sent. Your text is kept here.</p>
+          <pre class="reply-failure-draft" data-testid="inbox-reply-failure-draft">{{ failure.draft }}</pre>
+          <button type="button" class="of-btn of-btn--secondary" data-testid="inbox-reply-failure-dismiss" (click)="dismissReplyFailure(failure.sessionId)">Dismiss</button>
+        </div>
+      }
       <nav class="tabs" role="tablist" aria-label="Inbox sections" (keydown)="onTabKeydown($event)">
         @for (entry of tabs; track entry.key) {
           <button
@@ -84,7 +89,7 @@ function formatInput(toolInput: unknown): FormattedInput {
             [attr.tabindex]="tab() === entry.key ? 0 : -1"
             [attr.data-testid]="'inbox-tab-' + entry.key"
             (click)="tab.set(entry.key)"
-          >{{ entry.label }}</button>
+          >{{ entry.label }}@if (entry.key === 'questions' && attentionItems().length > 0) { <span class="tab-count" data-testid="inbox-tab-count-questions">{{ attentionItems().length }}</span>}</button>
         }
       </nav>
 
@@ -121,7 +126,16 @@ function formatInput(toolInput: unknown): FormattedInput {
           </div>
         }
         @case ('questions') {
-          <p class="coming" data-testid="inbox-questions-coming">Questions from agents are coming with phase 4 tables/governance.</p>
+          <div class="gate-list" data-testid="inbox-attention-list">
+            @for (item of attentionItems(); track item.session.id) {
+              <of-attention-card [item]="item" />
+            } @empty {
+              <div class="empty" data-testid="inbox-questions-empty">
+                <span class="empty-title">No agent is waiting on you</span>
+                <span>A session that asks a question or reports a blocker in its state shows up here.</span>
+              </div>
+            }
+          </div>
         }
         @case ('proposals') {
           <p class="coming" data-testid="inbox-proposals-coming">Governance proposals are coming with phase 4 tables/governance.</p>
@@ -135,10 +149,15 @@ function formatInput(toolInput: unknown): FormattedInput {
     .inbox { display: flex; flex-direction: column; gap: .75rem; padding: 1rem; width: 100%; box-sizing: border-box; }
     .title-row { display: flex; align-items: center; gap: .375rem; flex-wrap: wrap; }
     .title { margin: 0; flex: 1; font-size: 1.25rem; font-weight: 600; }
-    .count { display: inline-flex; min-width: 1rem; height: 1rem; padding: 0 .25rem; margin-left: .5rem; border-radius: .5rem; background: var(--accent); color: var(--on-accent); font-size: .625rem; font-weight: 600; align-items: center; justify-content: center; }
+    .count { display: inline-flex; min-width: 1rem; height: 1rem; padding: 0 .25rem; margin-left: .5rem; border-radius: .5rem; background: var(--accent-bg); color: var(--fg); font-size: .625rem; font-weight: 600; align-items: center; justify-content: center; }
+    .reply-failure { display: flex; flex-direction: column; align-items: flex-start; gap: .375rem; min-width: 0; padding: .625rem .875rem; border: 1px solid var(--state-error); border-radius: .625rem; background: var(--panel); }
+    .reply-failure-title { margin: 0; color: var(--state-error); overflow-wrap: anywhere; }
+    .reply-failure-draft { margin: 0; max-width: 100%; max-height: 10rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
     .tabs { display: flex; gap: .25rem; border-bottom: 1px solid var(--line); }
     .tab { height: 1.875rem; padding: 0 .75rem; border: 0; border-bottom: 1px solid transparent; background: transparent; color: var(--mut); cursor: pointer; font: inherit; }
+    .tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
     .tab.active { color: var(--fg); border-bottom-color: var(--accent); }
+    .tab-count { display: inline-flex; min-width: 1rem; height: 1rem; padding: 0 .25rem; margin-left: .25rem; border-radius: .5rem; background: var(--sunk); color: var(--fg); font-size: .625rem; font-weight: 600; align-items: center; justify-content: center; }
     .tabpanel { display: flex; flex-direction: column; gap: .75rem; }
     .filters { display: flex; flex-wrap: wrap; gap: .375rem; }
     .filter-chip { height: 1.625rem; padding: 0 .625rem; border: 1px solid var(--line); border-radius: 1rem; background: var(--panel); color: var(--fg); font-size: .75rem; cursor: pointer; }
@@ -152,7 +171,7 @@ function formatInput(toolInput: unknown): FormattedInput {
     .session-label { font-weight: 500; }
     .gate-sentence { margin: 0; }
     .tool-name { font-family: var(--mono); font-size: .75rem; padding: 0 .375rem; border-radius: .25rem; background: var(--sunk); }
-    .age { margin-left: auto; font-size: .6875rem; color: var(--faint); }
+    .age { margin-left: auto; font-size: .6875rem; color: var(--mut); }
     .tool-args { margin: 0; overflow: auto; max-height: 10rem; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--mono); font-size: .75rem; padding: .375rem .5rem; border-radius: .375rem; background-color: var(--term-bg); color: var(--term-fg); border: 1px solid var(--line); background-image: linear-gradient(var(--term-bg), var(--term-bg)), linear-gradient(to top, var(--faint), transparent); background-position: bottom, bottom; background-size: 100% 1.5rem, 100% .75rem; background-repeat: no-repeat; background-attachment: local, scroll; }
     .actions { display: flex; gap: .5rem; }
     .empty { display: flex; flex-direction: column; align-items: center; gap: .375rem; padding: 4rem 1rem; color: var(--mut); }
@@ -163,6 +182,9 @@ function formatInput(toolInput: unknown): FormattedInput {
 export class InboxComponent {
   readonly events = inject(FleetEventsService);
   private readonly api = inject(FleetApiService);
+  private readonly replies = inject(ReplyDraftStore);
+  private readonly injector = inject(Injector);
+  private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
   protected readonly filters = FILTERS;
   protected readonly needsBackendSupport = NEEDS_BACKEND_SUPPORT;
   protected readonly tabs = TABS;
@@ -175,6 +197,11 @@ export class InboxComponent {
   constructor() {
     const tick = setInterval(() => this.now.set(Date.now()), 1000);
     inject(DestroyRef).onDestroy(() => clearInterval(tick));
+    effect(() => {
+      const closedSessionIds = this.events.sessions().filter((session) => session.state === 'closed').map((session) => session.id);
+      this.replies.failedSessionIds();
+      closedSessionIds.forEach((sessionId) => this.replies.discardUnlessFailed(sessionId));
+    });
   }
 
   private formattedInputsById = new Map<string, FormattedInput>();
@@ -196,13 +223,45 @@ export class InboxComponent {
       return {
         ...approval,
         toolName: showBidiControlsAsEscapes(approval.toolName),
-        sessionName: showBidiControlsAsEscapes(sessionName),
+        sessionName: showInvisibleControlsAsEscapes(sessionName),
         sessionEmoji,
         formattedInput: formattedInput.text,
       };
     });
     this.formattedInputsById = currentFormattedInputs;
     return gates;
+  });
+
+  protected readonly attentionItems = computed(() => attentionItemsOf(this.events.sessions(), this.events.workingStates()));
+
+  /** Failed replies whose card is not on screen: the session closed, left the list, or another tab is open. */
+  protected readonly unseenReplyFailures = computed(() => {
+    const sessionsById = this.sessionsById();
+    const cardSessionIds = new Set(this.tab() === 'questions' ? this.attentionItems().map((item) => item.session.id) : []);
+    return this.replies
+      .failedSessionIds()
+      .filter((sessionId) => !cardSessionIds.has(sessionId))
+      .map((sessionId) => {
+        const session = sessionsById.get(sessionId);
+        return { sessionId, sessionName: showInvisibleControlsAsEscapes(session ? session.name : sessionId), draft: showBidiControlsAsEscapes(this.replies.draftOf(sessionId)) };
+      });
+  });
+
+  protected dismissReplyFailure(sessionId: string): void {
+    this.replies.dismissFailure(sessionId);
+    afterNextRender(() => this.focusNextAfterDismiss(), { injector: this.injector });
+  }
+
+  private focusNextAfterDismiss(): void {
+    const host: HTMLElement = this.host.nativeElement;
+    const nextDismiss = host.querySelector<HTMLElement>('[data-testid="inbox-reply-failure-dismiss"]');
+    const selectedTab = host.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
+    (nextDismiss ?? selectedTab)?.focus();
+  }
+
+  protected readonly pendingCount = computed(() => {
+    const count = this.events.approvals().length + this.attentionItems().length;
+    return count > 0 ? inboxCountLabelOf(count) : undefined;
   });
 
   readonly items = computed(() =>

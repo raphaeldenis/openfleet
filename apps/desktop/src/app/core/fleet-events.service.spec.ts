@@ -343,6 +343,71 @@ describe('FleetEventsService managers', () => {
   });
 });
 
+describe('FleetEventsService working states', () => {
+  const stateOf = (sessionId: string, patch: Partial<{ updatedAt: string; plan: string[]; fleetChangedAt: string }> = {}) => ({
+    sessionId, plan: patch.plan ?? [], todo: [], remaining: [], questionsForHuman: [], internalQuestions: [], blockers: [],
+    updatedAt: patch.updatedAt ?? '2026-09-30T10:00:00.000Z', ...(patch.fleetChangedAt ? { fleetChangedAt: patch.fleetChangedAt } : {}),
+  });
+
+  async function connectedService() {
+    FakeWebSocket.instances = [];
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({ ticket: 'fake-ticket' }) }));
+    const service = new FleetEventsService();
+    await service.connect();
+    return { service, socket: FakeWebSocket.instances[0]! };
+  }
+
+  it('keeps the working states, the max age and the max size the snapshot carries', async () => {
+    const { service, socket } = await connectedService();
+
+    socket.dispatchMessage({ type: 'snapshot', sessions: [], approvals: [], workingStates: [stateOf('s1')], workingStateMaxAgeMinutes: 45, workingStateMaxBytes: 2048 });
+
+    expect(service.workingStates().get('s1')).toEqual(stateOf('s1'));
+    expect(service.workingStateMaxAgeMinutes()).toBe(45);
+    expect(service.workingStateMaxBytes()).toBe(2048);
+    expect(service.workingStatesReported()).toBe(true);
+  });
+
+  it('knows a daemon that sends no working state fields does not report working states', async () => {
+    const { service, socket } = await connectedService();
+
+    socket.dispatchMessage({ type: 'snapshot', sessions: [], approvals: [] });
+
+    expect(service.workingStatesReported()).toBe(false);
+    expect(service.workingStateMaxAgeMinutes()).toBeUndefined();
+    expect(service.workingStateMaxBytes()).toBeUndefined();
+  });
+
+  it('replaces the state of a session on session.working_state and keeps the others', async () => {
+    const { service, socket } = await connectedService();
+    socket.dispatchMessage({ type: 'snapshot', sessions: [], approvals: [], workingStates: [stateOf('s1', { plan: ['old'] }), stateOf('s2')] });
+
+    socket.dispatchMessage({ type: 'session.working_state', state: stateOf('s1', { plan: ['new'] }) });
+
+    expect(service.workingStates().get('s1')?.plan).toEqual(['new']);
+    expect(service.workingStates().get('s2')).toEqual(stateOf('s2'));
+  });
+
+  it('adds the state of a session announced only by session.working_state', async () => {
+    const { service, socket } = await connectedService();
+    socket.dispatchMessage({ type: 'snapshot', sessions: [], approvals: [], workingStates: [] });
+
+    socket.dispatchMessage({ type: 'session.working_state', state: stateOf('unseen') });
+
+    expect(service.workingStates().get('unseen')).toEqual(stateOf('unseen'));
+  });
+
+  it('drops the states a fresh snapshot no longer lists', async () => {
+    const { service, socket } = await connectedService();
+    socket.dispatchMessage({ type: 'snapshot', sessions: [], approvals: [], workingStates: [stateOf('s1')] });
+
+    socket.dispatchMessage({ type: 'snapshot', sessions: [], approvals: [], workingStates: [] });
+
+    expect(service.workingStates().size).toBe(0);
+  });
+});
+
 describe('FleetEventsService reconnect', () => {
   beforeEach(() => {
     FakeWebSocket.instances = [];

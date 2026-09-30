@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/angular/zoneless';
+import { render, screen, within } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
 import { signal } from '@angular/core';
 import { provideRouter, Router } from '@angular/router';
@@ -7,11 +7,15 @@ import { SessionListComponent } from './session-list.component';
 import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
 
-function fakeEvents(overrides: { sessions?: unknown[]; managers?: unknown[] } = {}) {
+function fakeEvents(overrides: { sessions?: unknown[]; managers?: unknown[]; workingStatesReported?: boolean } = {}) {
   return {
     sessions: signal(overrides.sessions ?? []),
     approvals: signal([]),
     managers: signal(overrides.managers ?? []),
+    workingStates: signal(new Map()),
+    workingStatesReported: signal(overrides.workingStatesReported ?? false),
+    workingStateMaxAgeMinutes: signal<number | undefined>(30),
+    workingStateMaxBytes: signal<number | undefined>(6144),
   };
 }
 
@@ -23,6 +27,74 @@ function fakeApi(overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
+
+describe('SessionListComponent state overdue chip', () => {
+  const sessions = [
+    { id: 'm1', name: 'Lead', emoji: '🧭', role: 'manager', state: 'idle' },
+    { id: 'c1', name: 'Gimli', emoji: '⚔️', parentId: 'm1', state: 'generating' },
+    { id: 'c2', name: 'Legolas', emoji: '🏹', parentId: 'm1', state: 'closed' },
+  ];
+
+  it('user sees "state overdue" on the sidebar row of each open session that has no state, and not on a closed one', async () => {
+    const fake = fakeEvents({ sessions, workingStatesReported: true });
+
+    await render(SessionListComponent, { providers: [provideRouter([]), { provide: FleetEventsService, useValue: fake }] });
+
+    expect(within(screen.getByTestId('session-m1')).getByTestId('overdue-chip')).toBeTruthy();
+    expect(within(screen.getByTestId('session-c1')).getByTestId('overdue-chip')).toBeTruthy();
+    expect(within(screen.getByTestId('session-c2')).queryByTestId('overdue-chip')).toBeNull();
+  });
+
+  it('user sees "state overdue" once for a manager, not on both its row and its pulse card', async () => {
+    const managers = [{ sessionId: 'm1', pulseSeconds: 1800, childrenCap: 2, missionText: 'x', nextPulseAt: new Date().toISOString(), childrenCount: 0 }];
+    const fake = fakeEvents({ sessions: [sessions[0]], managers, workingStatesReported: true });
+
+    await render(SessionListComponent, { providers: [provideRouter([]), { provide: FleetEventsService, useValue: fake }] });
+
+    expect(screen.getAllByTestId('overdue-chip')).toHaveLength(1);
+  });
+
+  it('user keeps reading the session name when its row also carries the chip', async () => {
+    const fake = fakeEvents({ sessions: [{ id: 'c1', name: 'Gimli', emoji: '⚔️', state: 'generating' }], workingStatesReported: true });
+
+    await render(SessionListComponent, { providers: [provideRouter([]), { provide: FleetEventsService, useValue: fake }] });
+
+    const row = screen.getByTestId('session-c1');
+    expect(row).toHaveTextContent('Gimli');
+    expect(within(row).getByTestId('overdue-chip')).toBeVisible();
+  });
+
+  it('user sees the sidebar chip as an icon named "state overdue: <reason>", with no label text taking room in the row', async () => {
+    const fake = fakeEvents({ sessions: [{ id: 'c1', name: 'Gimli', emoji: '⚔️', state: 'generating' }], workingStatesReported: true });
+
+    await render(SessionListComponent, { providers: [provideRouter([]), { provide: FleetEventsService, useValue: fake }] });
+
+    const row = screen.getByTestId('session-c1');
+    const chip = within(row).getByRole('img', { name: 'state overdue: No state recorded' });
+    expect(chip).toHaveAttribute('title', 'No state recorded');
+    expect(row).not.toHaveTextContent('state overdue');
+  });
+
+  it('user sees the sidebar chip on the same meta line as the state and the cost, not on a line of its own', async () => {
+    const fake = fakeEvents({ sessions: [{ id: 'c1', name: 'Gimli', emoji: '⚔️', state: 'generating' }], workingStatesReported: true });
+
+    await render(SessionListComponent, { providers: [provideRouter([]), { provide: FleetEventsService, useValue: fake }] });
+
+    const row = screen.getByTestId('session-c1');
+    const metaOfChip = within(row).getByTestId('overdue-chip').closest('.meta');
+    const metaOfCost = row.querySelector('[title="Cost tracking is not implemented yet"]')?.closest('.meta');
+    expect(metaOfChip).not.toBeNull();
+    expect(metaOfChip).toBe(metaOfCost);
+  });
+
+  it('user sees no chip on the sidebar when the daemon does not report working states', async () => {
+    const fake = fakeEvents({ sessions, workingStatesReported: false });
+
+    await render(SessionListComponent, { providers: [provideRouter([]), { provide: FleetEventsService, useValue: fake }] });
+
+    expect(screen.queryByTestId('overdue-chip')).toBeNull();
+  });
+});
 
 describe('SessionListComponent', () => {
   it('renders each root session with its emoji, name and state', async () => {
@@ -153,6 +225,16 @@ describe('SessionListComponent', () => {
     expect(row).toHaveTextContent('sonnet');
     const cost = row.querySelector('[title="Cost tracking is not implemented yet"]');
     expect(cost).toHaveTextContent('—');
+  });
+
+  it('user reads bidi and zero-width controls of a session name as escapes in the row, its title and its accessible name', async () => {
+    const fake = fakeEvents({ sessions: [{ id: 's1', name: 'Gi‮mli​', emoji: '⚔️', state: 'idle' }] });
+    await render(SessionListComponent, { providers: [provideRouter([]), { provide: FleetEventsService, useValue: fake }] });
+
+    const row = screen.getByTestId('session-s1');
+    expect(row).toHaveTextContent('Gi<U+202E>mli<U+200B>');
+    expect(row).toHaveAttribute('aria-label', 'Gi<U+202E>mli<U+200B> — idle');
+    expect(row.querySelector('.name')).toHaveAttribute('title', 'Gi<U+202E>mli<U+200B>');
   });
 
   it('keeps a long session name on a single line with the full name available in the title attribute', async () => {

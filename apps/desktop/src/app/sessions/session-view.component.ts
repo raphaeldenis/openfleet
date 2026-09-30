@@ -9,6 +9,7 @@ import { PermissionGateCardComponent } from './permission-gate-card.component';
 import { type ClosedStripCopy, closedStripCopyFor, reopenErrorMessage, resumeFailureReasonFor } from './session-close-status';
 import { SessionHeaderComponent } from './session-header.component';
 import { TerminalComponent } from './terminal.component';
+import { StatePanelComponent } from '../working-state/state-panel.component';
 
 const REOPEN_FRESH_UNAVAILABLE_REASON = 'Not available yet — the daemon cannot relaunch a session without its previous conversation.';
 
@@ -19,7 +20,7 @@ type ClosedStrip = ClosedStripCopy & { role: 'alert' | null };
 @Component({
   selector: 'of-session-view',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgTemplateOutlet, SessionHeaderComponent, TerminalComponent, PermissionGateCardComponent, ComposerComponent],
+  imports: [NgTemplateOutlet, SessionHeaderComponent, StatePanelComponent, TerminalComponent, PermissionGateCardComponent, ComposerComponent],
   template: `
     @if (session(); as s) {
       <div class="session-view" data-testid="session-view">
@@ -32,6 +33,7 @@ type ClosedStrip = ClosedStripCopy & { role: 'alert' | null };
           </span>
         </ng-template>
         <of-session-header [session]="s" />
+        <of-state-panel [session]="s" />
         <div class="lifecycle-live-region" data-testid="lifecycle-live-region" aria-live="polite">
           @if (lifecycleBanner()?.kind === 'resuming') {
             <div class="lifecycle-banner" data-testid="lifecycle-banner" data-variant="resuming">
