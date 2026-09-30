@@ -13,7 +13,7 @@ export const ClaudeHookEventSchema = z.discriminatedUnion('hook_event_name', [
   z.object({ ...base, hook_event_name: z.literal('SessionEnd'), reason: z.string().optional() }),
   z.object({ ...base, hook_event_name: z.literal('UserPromptSubmit'), user_prompt: z.string().optional(), prompt: z.string().optional() }),
   z.object({ ...base, hook_event_name: z.literal('PreToolUse'), tool_name: z.string(), tool_input: z.unknown(), tool_use_id: z.string().optional() }),
-  z.object({ ...base, hook_event_name: z.literal('PostToolUse'), tool_name: z.string(), tool_use_id: z.string().optional() }),
+  z.object({ ...base, hook_event_name: z.literal('PostToolUse'), tool_name: z.string(), tool_use_id: z.string().optional(), tool_input: z.unknown().optional(), tool_response: z.unknown().optional() }),
   z.object({ ...base, hook_event_name: z.literal('PermissionRequest'), tool_name: z.string(), tool_input: z.unknown() }),
   z.object({ ...base, hook_event_name: z.literal('Notification'), notification_type: z.string(), message: z.string().optional() }),
   z.object({ ...base, hook_event_name: z.literal('Stop'), last_assistant_message: z.string().optional(), stop_hook_active: z.boolean().optional() }),
