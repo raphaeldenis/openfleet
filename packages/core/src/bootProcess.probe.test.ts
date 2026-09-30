@@ -107,7 +107,7 @@ describe('probe: refused boots', () => {
 
     expect(code).toBe(1);
     expect(daemon.stderr().trimEnd().split('\n')).toHaveLength(1);
-    expect(daemon.stderr()).toContain('EADDRINUSE');
+    expect(daemon.stderr()).toContain(`port ${port} is already in use`);
     expect(blocker.listening).toBe(true);
   }, 40_000);
 

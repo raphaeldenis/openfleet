@@ -123,7 +123,14 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; rout
   const ws = createWsHandler({ ...deps, wsTickets });
   server.on('upgrade', ws.upgrade);
 
-  await new Promise<void>((resolve) => server.listen(deps.port, deps.host, resolve));
+  await new Promise<void>((resolve, reject) => {
+    const rejectListenFailure = (error: NodeJS.ErrnoException) => {
+      const isPortTaken = error.code === 'EADDRINUSE';
+      reject(isPortTaken ? new Error(`port ${deps.port} is already in use`) : error);
+    };
+    server.once('error', rejectListenFailure);
+    server.listen(deps.port, deps.host, () => { server.off('error', rejectListenFailure); resolve(); });
+  });
   const address = server.address();
   const port = typeof address === 'object' && address ? address.port : deps.port;
   return {
