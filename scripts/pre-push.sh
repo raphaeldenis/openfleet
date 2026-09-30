@@ -1,9 +1,13 @@
 #!/bin/sh
 # Runs the checks CI runs (.github/workflows/ci.yml) so a red CI is caught before the push.
-# Invoked by .husky/pre-push; also runnable by hand: sh scripts/pre-push.sh
+# Invoked by .husky/pre-push (git passes the pushed refs on stdin); also runnable by hand: sh scripts/pre-push.sh
+# OPENFLEET_PREPUSH_DRYRUN=1 prints the steps without running them.
+# OPENFLEET_PREPUSH_E2E=1 forces the e2e (fails on busy ports), =0 skips it.
 
 REQUIRED_NODE_MAJOR=26
 E2E_PORTS="1420 7332"
+TAURI_DIR=apps/desktop/src-tauri
+TAURI_MANIFEST=$TAURI_DIR/Cargo.toml
 
 fail() {
   echo "pre-push: $1" >&2
@@ -13,6 +17,10 @@ fail() {
 run_step() {
   step_name=$1
   shift
+  if [ "$OPENFLEET_PREPUSH_DRYRUN" = "1" ]; then
+    echo "pre-push: ▷ $step_name (dry run) — $*"
+    return 0
+  fi
   echo "pre-push: ▶ $step_name"
   step_started_at=$(date +%s)
   "$@" || fail "✖ failed at step '$step_name' — push aborted (bypass: git push --no-verify)"
@@ -26,15 +34,59 @@ assert_compatible_node() {
     fail "node $(node -v) at $(command -v node) is too old; Angular needs Node >= $REQUIRED_NODE_MAJOR (as in CI). Put a newer node first in PATH."
 }
 
-assert_e2e_ports_free() {
+busy_e2e_port_holders() {
   for port in $E2E_PORTS; do
-    if lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
-      fail "e2e needs port $port but it is busy (see: lsof -nP -iTCP:$port -sTCP:LISTEN) — free it or unset OPENFLEET_PREPUSH_E2E"
-    fi
+    lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | awk -v port="$port" 'NR > 1 { print "port " port " held by " $1 " (pid " $2 ")" }' | sort -u
   done
 }
 
+assert_e2e_ports_free() {
+  busy_holders=$(busy_e2e_port_holders)
+  [ -z "$busy_holders" ] ||
+    fail "e2e needs ports $E2E_PORTS but: $(echo "$busy_holders" | tr '\n' ';') — free them or set OPENFLEET_PREPUSH_E2E=0"
+}
+
+is_planned() {
+  printf '%s\n' "$planned_steps" | grep -qx "$1"
+}
+
+build_tauri_inputs_when_missing() {
+  [ -e "$TAURI_DIR/binaries/node-aarch64-apple-darwin" ] || run_step "fetch node sidecar" node scripts/release/fetch-node.mjs
+  [ -d "$TAURI_DIR/resources/daemon" ] || run_step "bundle daemon" pnpm --filter @openfleet/core bundle
+}
+
+run_cargo_checks() {
+  if ! command -v cargo >/dev/null 2>&1; then
+    echo "pre-push: cargo skipped — cargo is not installed (the push touches $TAURI_DIR; CI does not run cargo)"
+    return 0
+  fi
+  build_tauri_inputs_when_missing
+  run_step "cargo test" cargo test --manifest-path "$TAURI_MANIFEST"
+  run_step "cargo clippy" cargo clippy --manifest-path "$TAURI_MANIFEST" --all-targets -- -D warnings
+}
+
+run_e2e_when_decided() {
+  case "$(decide_e2e "$e2e_touched")" in
+    force)
+      assert_e2e_ports_free
+      run_step "e2e" pnpm e2e
+      ;;
+    auto)
+      busy_holders=$(busy_e2e_port_holders)
+      if [ -n "$busy_holders" ]; then
+        echo "pre-push: e2e skipped — $(echo "$busy_holders" | tr '\n' ';') (force with OPENFLEET_PREPUSH_E2E=1 once free)"
+      else
+        run_step "e2e" pnpm e2e
+      fi
+      ;;
+    *)
+      echo "pre-push: e2e skipped — the push does not touch apps/desktop/src, packages/core/src/api or packages/shared/src (force with OPENFLEET_PREPUSH_E2E=1, needs free ports $E2E_PORTS)"
+      ;;
+  esac
+}
+
 cd "$(dirname "$0")/.." || fail "cannot enter the repository root"
+. scripts/pre-push-lib.sh
 
 # git exports GIT_DIR & co. to hooks; tests that create temp repos would otherwise act on this one.
 for git_local_variable in $(git rev-parse --local-env-vars); do
@@ -43,22 +95,42 @@ done
 
 # nvm's default node can be too old; Homebrew's is the one the README points to.
 [ -d /opt/homebrew/bin ] && PATH="/opt/homebrew/bin:$PATH"
+[ -d "$HOME/.cargo/bin" ] && PATH="$HOME/.cargo/bin:$PATH"
 export PATH
 
 assert_compatible_node
 command -v pnpm >/dev/null 2>&1 || fail "pnpm not found in PATH"
 
+# By hand there is no stdin from git: the push is the current HEAD.
+if [ -t 0 ]; then
+  pushed_refs="HEAD $(git rev-parse HEAD) HEAD $ZERO_SHA"
+else
+  pushed_refs=$(cat)
+fi
+planned_steps=$(printf '%s\n' "$pushed_refs" | pushed_files | steps_for_files)
+e2e_touched=no
+is_planned e2e && e2e_touched=yes
+
 started_at=$(date +%s)
 
 run_step "typecheck" pnpm typecheck
 run_step "root tests" pnpm test
-run_step "desktop tests" pnpm --filter @openfleet/desktop test
-
-if [ "$OPENFLEET_PREPUSH_E2E" = "1" ]; then
-  assert_e2e_ports_free
-  run_step "e2e" pnpm e2e
+if command -v claude >/dev/null 2>&1; then
+  run_step "core tests without claude" claude_free_core_tests
 else
-  echo "pre-push: e2e skipped — enable with OPENFLEET_PREPUSH_E2E=1 git push (needs free ports $E2E_PORTS)"
+  echo "pre-push: core tests without claude skipped — claude is not installed, nothing to prove"
 fi
+run_step "desktop tests" pnpm --filter @openfleet/desktop test
+# Slow-test report skipped: ng test prints durations only above vitest's 300 ms threshold, and that needs the verbose reporter (a flood) or a runner config.
+if is_planned cargo; then
+  run_cargo_checks
+else
+  echo "pre-push: cargo skipped — the push does not touch $TAURI_DIR"
+fi
+run_e2e_when_decided
 
-echo "pre-push: all checks passed in $(($(date +%s) - started_at))s"
+if [ "$OPENFLEET_PREPUSH_DRYRUN" = "1" ]; then
+  echo "pre-push: dry run: nothing executed"
+else
+  echo "pre-push: all checks passed in $(($(date +%s) - started_at))s"
+fi
