@@ -113,12 +113,11 @@ describe('pre-migration backup', () => {
     expect(lines.some((line) => line.includes(join(backupsDir, databaseBackups()[0]!)))).toBe(true);
   });
 
-  it('keeps the 3 most recent backups and deletes the oldest db and config pair on the 4th', () => {
+  it('keeps only the newest backup of a schema version and deletes the older db and config pair', () => {
     writeFileSync(join(home, 'config.json'), '{}');
     vi.useFakeTimers();
-    const takenAt = ['2026-01-01T00:00:00.000Z', '2026-01-02T00:00:00.000Z', '2026-01-03T00:00:00.000Z', '2026-01-04T00:00:00.000Z'];
     const names: string[] = [];
-    for (const isoTimestamp of takenAt) {
+    for (const isoTimestamp of ['2026-01-01T00:00:00.000Z', '2026-01-02T00:00:00.000Z']) {
       vi.setSystemTime(new Date(isoTimestamp));
       createDatabaseOneMigrationBehindAndClose();
       openDatabase(dbPath).close();
@@ -126,20 +125,22 @@ describe('pre-migration backup', () => {
       rmDatabaseFiles();
     }
 
-    expect(databaseBackups()).toEqual(names.slice(1));
-    expect(backupFiles().filter((name) => name.endsWith('.config.json'))).toEqual(names.slice(1).map((name) => name.replace(/\.db$/, '.config.json')));
+    expect(databaseBackups()).toEqual([names[1]]);
+    expect(backupFiles().filter((name) => name.endsWith('.config.json'))).toEqual([names[1]!.replace(/\.db$/, '.config.json')]);
   });
 
   it('names backups so that sorting the names sorts them chronologically', () => {
     vi.useFakeTimers();
+    const names: string[] = [];
     for (const isoTimestamp of ['2026-03-01T10:00:00.000Z', '2026-03-01T09:00:00.000Z', '2026-12-01T00:00:00.000Z']) {
       vi.setSystemTime(new Date(isoTimestamp));
       createDatabaseOneMigrationBehindAndClose();
       openDatabase(dbPath).close();
+      names.push(...databaseBackups().filter((name) => !names.includes(name)));
       rmDatabaseFiles();
     }
 
-    expect(databaseBackups().map((name) => name.match(/(\d{4}-.*Z)/)![1])).toEqual([
+    expect([...names].sort().map((name) => name.match(/(\d{4}-.*Z)/)![1])).toEqual([
       '2026-03-01T09-00-00-000Z',
       '2026-03-01T10-00-00-000Z',
       '2026-12-01T00-00-00-000Z',
@@ -159,7 +160,7 @@ describe('pre-migration backup', () => {
     }
 
     for (const name of strangers) expect(readFileSync(join(backupsDir, name), 'utf8')).toBe('mine');
-    expect(databaseBackups().filter((name) => !strangers.includes(name))).toHaveLength(3);
+    expect(databaseBackups().filter((name) => !strangers.includes(name))).toHaveLength(1);
   });
 
   it('never deletes anything outside the backups folder', () => {
@@ -178,16 +179,18 @@ describe('pre-migration backup', () => {
   it('gives a second backup taken in the same millisecond its own counter-suffixed name', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-05-05T05:05:05.005Z'));
+    const names: string[] = [];
     for (let boot = 0; boot < 2; boot++) {
       createDatabaseOneMigrationBehindAndClose();
       openDatabase(dbPath).close();
+      names.push(...databaseBackups().filter((name) => !names.includes(name)));
       rmDatabaseFiles();
     }
 
-    const names = databaseBackups();
     expect(names).toHaveLength(2);
-    expect(new Set(names).size).toBe(2);
-    for (const name of names) expect(() => new DatabaseSync(join(backupsDir, name), { readOnly: true }).close()).not.toThrow();
+    expect(names[1]).toMatch(/Z-2\.db$/);
+    expect(databaseBackups()).toEqual([names[1]]);
+    expect(() => new DatabaseSync(join(backupsDir, names[1]!), { readOnly: true }).close()).not.toThrow();
   });
 
   it('holds the WAL content that never reached the main db file', () => {
@@ -246,7 +249,7 @@ describe('a database newer than the code', () => {
     expect(line.endsWith('\n') && line.indexOf('\n') === line.length - 1).toBe(true);
     expect(line).toContain('999_from_the_future');
     expect(line).toContain(backupsDir);
-    expect(line).toMatch(/quit the app, delete openfleet\.db-wal and openfleet\.db-shm, then copy the newest \.db backup in .* over openfleet\.db; or install the newer app/);
+    expect(line).toMatch(/quit the app, delete openfleet\.db-wal and openfleet\.db-shm, then copy the \.db backup named openfleet-.* in .* over openfleet\.db; or install the newer app/);
   });
 });
 

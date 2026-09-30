@@ -49,39 +49,102 @@ async function refusalLineOf(boot: () => unknown): Promise<string> {
   return written[0]!;
 }
 
-function removeDatabaseFiles(): void {
-  for (const suffix of ['', '-wal', '-shm']) if (existsSync(`${dbPath}${suffix}`)) unlinkSync(`${dbPath}${suffix}`);
+const latestVersion = migrationVersions.at(-1)!;
+const backupNamed = (version: string, timestamp: string) => `openfleet-${version}-${timestamp}.db`;
+const versionsKept = () => databaseBackups().map((name) => name.match(/^openfleet-(.+)-\d{4}-\d{2}-\d{2}T/)![1]);
+
+function seedBackup(name: string, fileDate: string): void {
+  mkdirSync(backupsDir, { recursive: true });
+  writeFileSync(join(backupsDir, name), 'seeded backup');
+  const date = new Date(fileDate);
+  utimesSync(join(backupsDir, name), date, date);
 }
 
-describe('retention keeps the three most recently created backups', () => {
-  it('keeps them even when the clock went backwards between the backups', () => {
-    vi.useFakeTimers();
-    const namedAt = ['2030-01-01', '2030-01-02', '2030-01-03', '2026-01-01', '2026-01-02'];
-    const createdAt = new Date('2025-06-01T00:00:00.000Z').getTime();
-    namedAt.forEach((day, creationOrder) => {
-      vi.setSystemTime(new Date(`${day}T00:00:00.000Z`));
-      createDatabaseAtVersion('015_handovers').close();
-      openDatabase(dbPath).close();
-      removeDatabaseFiles();
-      const justTaken = databaseBackups().find((name) => name.includes(`${day}T00-00-00-000Z`))!;
-      const creationTime = new Date(createdAt + creationOrder * 86_400_000);
-      utimesSync(join(backupsDir, justTaken), creationTime, creationTime);
-    });
+describe('retention keeps the newest backup of each of the three most recent schema versions', () => {
+  it('decides by schema version, whatever the dates of the files are', () => {
+    seedBackup(backupNamed('011_session_resolved_for_model', '2030-01-01T00-00-00-000Z'), '2031-01-01');
+    seedBackup(backupNamed('012_session_cli_session_id', '2029-01-01T00-00-00-000Z'), '2030-01-01');
+    seedBackup(backupNamed('013_working_state', '2028-01-01T00-00-00-000Z'), '2029-01-01');
+    seedBackup(backupNamed('014_session_cli_ids', '2020-01-01T00-00-00-000Z'), '2020-01-01');
+    createDatabaseAtVersion('015_handovers').close();
 
-    expect(databaseBackups().map((name) => name.match(/(\d{4}-\d{2}-\d{2})T/)![1])).toEqual(['2026-01-01', '2026-01-02', '2030-01-03']);
+    openDatabase(dbPath).close();
+
+    expect(versionsKept()).toEqual(['013_working_state', '014_session_cli_ids', '015_handovers']);
+  });
+
+  it('keeps only the newest of two backups of the same schema version', () => {
+    const older = backupNamed('014_session_cli_ids', '2026-01-01T00-00-00-000Z');
+    const newer = backupNamed('014_session_cli_ids', '2026-01-02T00-00-00-000Z');
+    seedBackup(older, '2030-01-01');
+    seedBackup(newer, '2020-01-01');
+    createDatabaseAtVersion('015_handovers').close();
+
+    openDatabase(dbPath).close();
+
+    expect(databaseBackups()).toContain(newer);
+    expect(databaseBackups()).not.toContain(older);
+  });
+
+  it('keeps the backup just taken even when an older schema version holds a later timestamp', () => {
+    const laterNamedSameVersion = backupNamed('015_handovers', '2099-01-01T00-00-00-000Z');
+    seedBackup(laterNamedSameVersion, '2099-01-01');
+    createDatabaseAtVersion('015_handovers').close();
+
+    openDatabase(dbPath).close();
+
+    expect(databaseBackups()).toHaveLength(1);
+    expect(databaseBackups()).not.toContain(laterNamedSameVersion);
+  });
+
+  it('never deletes a file that does not match the backup name pattern', () => {
+    mkdirSync(backupsDir);
+    for (const name of ['notes.db', 'openfleet-014_x.db', 'openfleet-014_x-2026-01-01.db']) writeFileSync(join(backupsDir, name), 'mine');
+    createDatabaseAtVersion('015_handovers').close();
+
+    openDatabase(dbPath).close();
+
+    expect(readdirSync(backupsDir)).toEqual(expect.arrayContaining(['notes.db', 'openfleet-014_x.db', 'openfleet-014_x-2026-01-01.db']));
   });
 });
 
 describe('the restore instruction for a database newer than the code', () => {
-  it('tells to quit the app, delete the -wal and -shm files, then copy the newest backup .db over openfleet.db, on one line', async () => {
+  function createDatabaseNewerThanTheCode(): void {
     const db = createDatabaseAtVersion('015_handovers');
     db.exec(`INSERT INTO schema_migrations (version, applied_at) VALUES ('999_future', 'now')`);
     db.close();
+  }
+
+  it('names the newest backup this app can open, skipping a backup of a schema version it does not know', async () => {
+    const canBeOpened = backupNamed('014_session_cli_ids', '2026-01-01T00-00-00-000Z');
+    seedBackup(canBeOpened, '2026-01-01');
+    seedBackup(backupNamed('999_future', '2026-02-01T00-00-00-000Z'), '2026-02-01');
+    createDatabaseNewerThanTheCode();
 
     const line = await refusalLineOf(() => openDatabase(dbPath));
 
     expect(line.slice(0, -1)).not.toMatch(/\p{Cc}/u);
-    expect(line).toContain(`quit the app, delete openfleet.db-wal and openfleet.db-shm, then copy the newest .db backup in ${backupsDir}, never a .config.json copy, over openfleet.db`);
+    expect(line).toContain(`quit the app, delete openfleet.db-wal and openfleet.db-shm, then copy the .db backup named ${canBeOpened} in ${backupsDir}, never a .config.json copy, over openfleet.db`);
+    expect(line).not.toContain('newest .db backup');
+  });
+
+  it('names the file pattern of the newest schema version this app knows when no backup exists', async () => {
+    createDatabaseNewerThanTheCode();
+
+    const line = await refusalLineOf(() => openDatabase(dbPath));
+
+    expect(line).toContain(`then copy the .db backup named openfleet-${latestVersion}-<timestamp>.db in ${backupsDir}, never a .config.json copy, over openfleet.db`);
+  });
+
+  it('shows a control character of the home path as <0A> so the printed path stays recognisable', async () => {
+    const homeWithNewline = join(home, 'a\nb');
+    mkdirSync(homeWithNewline);
+    dbPath = join(homeWithNewline, 'openfleet.db');
+    createDatabaseNewerThanTheCode();
+
+    const line = await refusalLineOf(() => openDatabase(dbPath));
+
+    expect(line).toContain(`${join(home, 'a<0A>b', 'backups')}`);
   });
 
   it('is necessary: copying only the backup over a database left with a stale WAL replays the newer rows', () => {
@@ -128,6 +191,19 @@ describe('the refusal line of a migration that fails after a backup was taken', 
     expect(line).toContain('duplicate column name: prompted');
     expect(line).toContain(`saved at ${join(backupsDir, backupName!)}: quit the app, delete openfleet.db-wal and openfleet.db-shm, then copy it over openfleet.db`);
   });
+
+  it('keeps naming the snapshot from before the failed upgrade on every retry, never one taken after 015 committed', async () => {
+    const db = createDatabaseAtVersion('014_session_cli_ids');
+    db.exec('ALTER TABLE sessions ADD COLUMN prompted INTEGER');
+    db.close();
+
+    const lines: string[] = [];
+    for (let boot = 0; boot < 4; boot++) lines.push(await refusalLineOf(() => openDatabase(dbPath)));
+
+    const preUpgradeBackup = databaseBackups().find((name) => highestVersionIn(name) === '014_session_cli_ids')!;
+    expect(preUpgradeBackup).toMatch(/^openfleet-014_session_cli_ids-/);
+    for (const line of lines) expect(line).toContain(`saved at ${join(backupsDir, preUpgradeBackup)}: quit the app`);
+  });
 });
 
 describe('the config copy beside a backup', () => {
@@ -166,11 +242,11 @@ describe('the config copy beside a backup', () => {
 describe('pruning orphan config copies', () => {
   it('removes a config copy whose backup is gone or was pruned, and keeps the copies of the kept backups', () => {
     mkdirSync(backupsDir);
-    const stem = (day: string) => `openfleet-014_session_cli_ids-2026-01-${day}T00-00-00-000Z`;
-    writeFileSync(join(backupsDir, `${stem('01')}.config.json`), 'orphan');
-    for (const day of ['02', '03']) {
-      writeFileSync(join(backupsDir, `${stem(day)}.db`), 'kept');
-      writeFileSync(join(backupsDir, `${stem(day)}.config.json`), 'kept');
+    const stem = (version: string) => `openfleet-${version}-2026-01-01T00-00-00-000Z`;
+    writeFileSync(join(backupsDir, `${stem('010_orphan')}.config.json`), 'orphan');
+    for (const version of ['011_pruned', '013_kept', '014_kept']) {
+      writeFileSync(join(backupsDir, `${stem(version)}.db`), 'backup');
+      writeFileSync(join(backupsDir, `${stem(version)}.config.json`), 'copy');
     }
     writeFileSync(join(backupsDir, 'other.config.json'), 'mine');
     createDatabaseAtVersion('015_handovers').close();
@@ -178,22 +254,29 @@ describe('pruning orphan config copies', () => {
     openDatabase(dbPath).close();
 
     const configCopies = readdirSync(backupsDir).filter((name) => name.endsWith('.config.json'));
-    expect(configCopies).not.toContain(`${stem('01')}.config.json`);
-    expect(configCopies).toContain(`${stem('02')}.config.json`);
-    expect(configCopies).toContain(`${stem('03')}.config.json`);
+    expect(configCopies).not.toContain(`${stem('010_orphan')}.config.json`);
+    expect(configCopies).not.toContain(`${stem('011_pruned')}.config.json`);
+    expect(configCopies).toContain(`${stem('013_kept')}.config.json`);
+    expect(configCopies).toContain(`${stem('014_kept')}.config.json`);
     expect(readFileSync(join(backupsDir, 'other.config.json'), 'utf8')).toBe('mine');
   });
 });
 
 describe('a boot that fails or is refused never evicts the pre-upgrade backup', () => {
-  it('keeps the backup taken before 015 across four boots where 015 commits and 016 keeps failing', () => {
+  it('keeps the backup taken before 015 across four boots where 015 commits and 016 keeps failing, and through the successful boot after', () => {
     const db = createDatabaseAtVersion('014_session_cli_ids');
     db.exec('ALTER TABLE sessions ADD COLUMN prompted INTEGER');
     db.close();
-
     for (let boot = 0; boot < 4; boot++) expect(() => openDatabase(dbPath)).toThrow(/duplicate column name: prompted/);
+    expect(databaseBackups().map(highestVersionIn)).toContain('014_session_cli_ids');
+    const repaired = new DatabaseSync(dbPath);
+    repaired.exec('ALTER TABLE sessions DROP COLUMN prompted');
+    repaired.close();
+
+    openDatabase(dbPath).close();
 
     expect(databaseBackups().map(highestVersionIn)).toContain('014_session_cli_ids');
+    expect(databaseBackups().length).toBeLessThanOrEqual(3);
   });
 
   it('takes no backup and prunes nothing when the database names a migration this code does not know', () => {

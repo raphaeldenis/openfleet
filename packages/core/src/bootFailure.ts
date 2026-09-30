@@ -11,6 +11,7 @@ const PERMISSION_TROUBLE_CODES = new Set(['EACCES', 'EPERM', 'EROFS', 'ENOTEMPTY
 
 const firstLineOf = (text: string) => text.split('\n')[0]!;
 const withoutControlCharacters = (text: string) => text.replace(/\p{Cc}/gu, '');
+const visiblyEscapedControlCharacters = (text: string) => text.replace(/\p{Cc}/gu, (character) => `<${character.codePointAt(0)!.toString(16).toUpperCase().padStart(2, '0')}>`);
 
 function errnoOf(error: unknown): { code?: unknown; path?: unknown } {
   return typeof error === 'object' && error !== null ? error : {};
@@ -30,7 +31,7 @@ function refusalLineOf(error: unknown, configPath: string): string {
   const hint = recoveryHintOf(error);
   const hintSuffix = hint === undefined ? '' : ` (${hint})`;
   const reason = withoutControlCharacters(firstLineOf(readableConfigReason(error))).slice(0, MAX_REASON_LENGTH);
-  return withoutControlCharacters(`openfleet: refusing to boot${origin}: ${reason}${hintSuffix}`);
+  return visiblyEscapedControlCharacters(`openfleet: refusing to boot${origin}: ${reason}${hintSuffix}`);
 }
 
 // A boot that throws is a refusal: one readable fatal line and a non-zero exit, never the runtime

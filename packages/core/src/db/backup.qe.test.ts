@@ -56,16 +56,16 @@ describe('pre-migration backup folder permissions', () => {
 });
 
 describe('pre-migration backup retention order', () => {
-  it('keeps the newest three when more than nine backups share one millisecond', () => {
+  it('keeps the newest one when more than nine backups of a schema version share one millisecond', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-05-05T05:05:05.005Z'));
     for (let boot = 0; boot < 11; boot++) bootOneMigrationBehindDatabase();
 
     const counterOf = (name: string) => Number(name.match(/Z(?:-(\d+))?\.db$/)![1] ?? 1);
-    expect(databaseBackups().map(counterOf).sort((a, b) => a - b)).toEqual([9, 10, 11]);
+    expect(databaseBackups().map(counterOf)).toEqual([11]);
   });
 
-  it('drops the oldest backup by time even when an older backup carries a higher schema version in its name', () => {
+  it('keeps the newest backup of a higher schema version too, whatever the dates of the older ones', () => {
     mkdirSync(backupsDir, { recursive: true });
     for (const day of ['01', '02', '03']) writeFileSync(join(backupsDir, `openfleet-999_from_the_future-2026-01-${day}T00-00-00-000Z.db`), 'old');
     vi.useFakeTimers();
@@ -74,22 +74,9 @@ describe('pre-migration backup retention order', () => {
     bootOneMigrationBehindDatabase();
 
     const remaining = databaseBackups();
-    expect(remaining).toHaveLength(3);
+    expect(remaining).toHaveLength(2);
     expect(remaining.some((name) => name.includes('2026-02-01T00-00-00-000Z'))).toBe(true);
-    expect(remaining.some((name) => name.includes('2026-01-01T00-00-00-000Z'))).toBe(false);
-  });
-
-  it('orders same-millisecond backups by their counter as a number, not as text', () => {
-    mkdirSync(backupsDir, { recursive: true });
-    const sameMillisecond = '2026-01-01T00-00-00-000Z';
-    const stem = `openfleet-${previousVersion}-${sameMillisecond}`;
-    for (const name of [`${stem}.db`, `${stem}-8.db`, `${stem}-9.db`, `${stem}-10.db`]) writeFileSync(join(backupsDir, name), 'old');
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
-
-    bootOneMigrationBehindDatabase();
-
-    expect(databaseBackups()).toEqual([`${stem}-10.db`, `${stem}-11.db`, `${stem}-9.db`]);
+    expect(remaining.some((name) => name.includes('999_from_the_future-2026-01-03T00-00-00-000Z'))).toBe(true);
   });
 });
 
@@ -119,7 +106,7 @@ describe('pre-migration backup pruning around strange entries', () => {
     expect(() => bootOneMigrationBehindDatabase()).not.toThrow();
 
     const remaining = databaseBackups();
-    expect(remaining).toHaveLength(3);
+    expect(remaining).toHaveLength(2);
     expect(remaining.some((name) => name.includes('2026-02-01T00-00-00-000Z'))).toBe(true);
     expect(existsSync(staleTemp)).toBe(true);
   });
@@ -139,7 +126,7 @@ describe('pre-migration backup pruning around strange entries', () => {
     expect(lstatSync(join(backupsDir, symlinkName)).isSymbolicLink()).toBe(true);
     expect(readFileSync(outside, 'utf8')).toBe('precious');
     const regularBackups = databaseBackups().filter((name) => name !== symlinkName);
-    expect(regularBackups).toHaveLength(3);
+    expect(regularBackups).toHaveLength(2);
     expect(regularBackups.some((name) => name.includes('2026-01-02T00-00-00-000Z'))).toBe(false);
   });
 
@@ -186,6 +173,17 @@ describe('the refusal line for a database newer than the code', () => {
     expect(line.endsWith('\n')).toBe(true);
     expect(line).toContain('999_from_the_future');
     expect(line).toMatch(/over openfleet\.db; or install the newer app\)\n$/);
+  });
+
+  it('names the backup with the highest same-millisecond counter as a number, not as text', async () => {
+    mkdirSync(backupsDir, { recursive: true });
+    const stem = `openfleet-${previousVersion}-2026-01-01T00-00-00-000Z`;
+    for (const name of [`${stem}.db`, `${stem}-9.db`, `${stem}-10.db`]) writeFileSync(join(backupsDir, name), 'old');
+    createFutureDatabaseAt(dbPath);
+
+    const line = await refusalLineFor(dbPath);
+
+    expect(line).toContain(`named ${stem}-10.db in`);
   });
 
   it('names the backups folder next to the database path it was given when openfleet.db is a symlink', async () => {

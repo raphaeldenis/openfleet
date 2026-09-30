@@ -3,9 +3,9 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { DatabaseSync } from 'node:sqlite';
+import { BACKUPS_FOLDER_NAME, newestBackupNameUpTo } from './backup.js';
 
 const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), 'migrations');
-export const BACKUPS_FOLDER_NAME = 'backups';
 
 interface MigrationSource {
   version: string;
@@ -146,10 +146,25 @@ export class MigrationFailedError extends Error {
   }
 }
 
+export function latestShippedMigration(): string {
+  return readMigrationSources(migrationsDir).map((source) => source.version).pop()!;
+}
+
 function restoreHintFor(databasePath: string | undefined): string {
   const hasRealPath = databasePath !== undefined && databasePath !== ':memory:';
   const backupsFolder = hasRealPath ? join(dirname(databasePath), BACKUPS_FOLDER_NAME) : `the ${BACKUPS_FOLDER_NAME} folder next to openfleet.db`;
-  return `quit the app, delete openfleet.db-wal and openfleet.db-shm, then copy the newest .db backup in ${backupsFolder}, never a .config.json copy, over openfleet.db; or install the newer app`;
+  const latestKnownVersion = latestShippedMigration();
+  const exactBackupName = hasRealPath ? safelyFind(() => newestBackupNameUpTo(backupsFolder, latestKnownVersion)) : undefined;
+  const backupName = exactBackupName ?? `openfleet-${latestKnownVersion}-<timestamp>.db`;
+  return `quit the app, delete openfleet.db-wal and openfleet.db-shm, then copy the .db backup named ${backupName} in ${backupsFolder}, never a .config.json copy, over openfleet.db; or install the newer app`;
+}
+
+function safelyFind(find: () => string | undefined): string | undefined {
+  try {
+    return find();
+  } catch {
+    return undefined;
+  }
 }
 
 function appliedVersionsOf(db: DatabaseSync): Set<string> {

@@ -1,11 +1,11 @@
-import { chmodSync, closeSync, existsSync, fchmodSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, existsSync, fchmodSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { log } from '../logger.js';
-import { BACKUPS_FOLDER_NAME } from './migrate.js';
 
-const BACKUPS_TO_KEEP = 3;
-const BACKUP_NAME_PATTERN = /^openfleet-.+-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z)(?:-(\d+))?\.db$/;
+export const BACKUPS_FOLDER_NAME = 'backups';
+const SCHEMA_VERSIONS_TO_KEEP = 3;
+const BACKUP_NAME_PATTERN = /^openfleet-(.+)-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z)(?:-(\d+))?\.db$/;
 const CONFIG_COPY_NAME_PATTERN = /^(openfleet-.+-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z(?:-\d+)?)\.config\.json$/;
 const IN_PROGRESS_SUFFIX = '.partial';
 
@@ -29,13 +29,17 @@ function removeIfPresent(path: string): void {
 }
 
 function collisionCounterOf(backupName: string): number {
-  return Number(BACKUP_NAME_PATTERN.exec(backupName)?.[2] ?? 1);
+  return Number(BACKUP_NAME_PATTERN.exec(backupName)?.[3] ?? 1);
+}
+
+function schemaVersionOf(backupName: string): string {
+  return BACKUP_NAME_PATTERN.exec(backupName)![1]!;
 }
 
 function chronologicalKeyOf(backupName: string): string | undefined {
   const match = BACKUP_NAME_PATTERN.exec(backupName);
   if (match === null) return undefined;
-  return `${match[1]}-${String(collisionCounterOf(backupName)).padStart(6, '0')}`;
+  return `${match[2]}-${String(collisionCounterOf(backupName)).padStart(6, '0')}`;
 }
 
 function isRegularFile(path: string): boolean {
@@ -70,12 +74,38 @@ function reserveBackupPath(backupsFolder: string, schemaVersion: string): { back
   }
 }
 
-// Runs once the migrations succeeded: a failed or refused boot keeps every snapshot it has.
-// "Most recent" is by creation time (file mtime), never by the timestamp in the name, so a clock that
-// went backwards cannot make a fresh backup look old; the name's key only breaks mtime ties.
-function byCreationTime(backupsFolder: string, a: string, b: string): number {
-  const creationTimeOf = (name: string) => statSync(join(backupsFolder, name)).mtimeMs;
-  return creationTimeOf(a) - creationTimeOf(b) || chronologicalKeyOf(a)!.localeCompare(chronologicalKeyOf(b)!) || a.localeCompare(b);
+// Retention deliberately departs from "the 3 most recent backups": it keeps the newest backup of each of
+// the 3 most recent schema versions (the version in the file name, ordered by migration name). Neither
+// clock nor file date decides which versions survive, so a clock rollback cannot evict a version and
+// the snapshot from before an upgrade outlives any number of failed retries. The clock only picks the
+// newest copy inside one schema version, where the backup just taken always counts as the newest.
+function newestBackupNameBySchemaVersion(backupsFolder: string, justTakenName?: string): Map<string, string> {
+  const newestNameBySchemaVersion = new Map<string, string>();
+  for (const name of backupNamesIn(backupsFolder)) {
+    const version = schemaVersionOf(name);
+    const currentNewest = newestNameBySchemaVersion.get(version);
+    const isNewest = currentNewest === undefined || (currentNewest !== justTakenName && (name === justTakenName || chronologicalKeyOf(name)! > chronologicalKeyOf(currentNewest)!));
+    if (isNewest) newestNameBySchemaVersion.set(version, name);
+  }
+  return newestNameBySchemaVersion;
+}
+
+function retainedSchemaVersions(newestNameBySchemaVersion: Map<string, string>): string[] {
+  return [...newestNameBySchemaVersion.keys()].sort();
+}
+
+/** Returns the name of the oldest retained backup whose schema version is older than `schemaVersion`: the one the previous app can open. */
+export function oldestBackupNameOlderThan(backupsFolder: string, schemaVersion: string): string | undefined {
+  const newestNameBySchemaVersion = newestBackupNameBySchemaVersion(backupsFolder);
+  const oldestVersionOlderThanTarget = retainedSchemaVersions(newestNameBySchemaVersion).find((version) => version < schemaVersion);
+  return oldestVersionOlderThanTarget === undefined ? undefined : newestNameBySchemaVersion.get(oldestVersionOlderThanTarget);
+}
+
+/** Returns the name of the newest retained backup whose schema version is at most `schemaVersion`: the newest one this app can open. */
+export function newestBackupNameUpTo(backupsFolder: string, schemaVersion: string): string | undefined {
+  const newestNameBySchemaVersion = newestBackupNameBySchemaVersion(backupsFolder);
+  const newestVersionTheAppKnows = retainedSchemaVersions(newestNameBySchemaVersion).filter((version) => version <= schemaVersion).pop();
+  return newestVersionTheAppKnows === undefined ? undefined : newestNameBySchemaVersion.get(newestVersionTheAppKnows);
 }
 
 function removeConfigCopiesWithoutABackup(backupsFolder: string): void {
@@ -87,11 +117,13 @@ function removeConfigCopiesWithoutABackup(backupsFolder: string): void {
   }
 }
 
-export function deleteBackupsBeyondTheMostRecent(backupsFolder: string, justTakenPath: string): void {
+export function pruneBackupsKeepingRecentSchemaVersions(backupsFolder: string, justTakenPath: string): void {
   try {
     const justTakenName = basename(justTakenPath);
-    const otherNamesOldestFirst = backupNamesIn(backupsFolder).filter((name) => name !== justTakenName).sort((a, b) => byCreationTime(backupsFolder, a, b));
-    for (const name of otherNamesOldestFirst.slice(0, -(BACKUPS_TO_KEEP - 1))) removeIfPresent(join(backupsFolder, name));
+    const newestNameBySchemaVersion = newestBackupNameBySchemaVersion(backupsFolder, justTakenName);
+    const keptVersions = retainedSchemaVersions(newestNameBySchemaVersion).slice(-SCHEMA_VERSIONS_TO_KEEP);
+    const keptNames = new Set([justTakenName, ...keptVersions.map((version) => newestNameBySchemaVersion.get(version)!)]);
+    for (const name of backupNamesIn(backupsFolder)) if (!keptNames.has(name)) removeIfPresent(join(backupsFolder, name));
     removeConfigCopiesWithoutABackup(backupsFolder);
   } catch {
     // ponytail: a pruning failure never undoes or fails the backup that was just taken

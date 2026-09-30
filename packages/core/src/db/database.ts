@@ -1,9 +1,9 @@
 import { chmodSync, existsSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { log } from '../logger.js';
-import { backUpBeforeMigrating, deleteBackupsBeyondTheMostRecent } from './backup.js';
-import { applyMigrations, assertBootableSchema, highestAppliedMigration, MigrationFailedError, pendingMigrations } from './migrate.js';
+import { backUpBeforeMigrating, oldestBackupNameOlderThan, pruneBackupsKeepingRecentSchemaVersions } from './backup.js';
+import { applyMigrations, assertBootableSchema, highestAppliedMigration, latestShippedMigration, MigrationFailedError, pendingMigrations } from './migrate.js';
 
 export class DatabaseOpenError extends Error {
   readonly code = 'DATABASE_OPEN_FAILED';
@@ -31,6 +31,7 @@ function backUpWhenMigrationsArePending(db: DatabaseSync, path: string): string 
     assertBootableSchema(db, path);
     const backupPath = backUpBeforeMigrating(db, { home: dirname(path), schemaVersion });
     log('info', `database backed up to ${backupPath} before migrating`);
+    pruneBackupsKeepingRecentSchemaVersions(dirname(backupPath), backupPath);
     return backupPath;
   } catch (error) {
     db.close();
@@ -38,12 +39,20 @@ function backUpWhenMigrationsArePending(db: DatabaseSync, path: string): string 
   }
 }
 
+// The backup just taken holds a schema that may already include migrations an earlier failed boot
+// committed; the one the previous app opens is the oldest retained snapshot older than the target.
+function snapshotFromBeforeTheUpgrade(backupPath: string): string {
+  const backupsFolder = dirname(backupPath);
+  const preUpgradeName = oldestBackupNameOlderThan(backupsFolder, latestShippedMigration());
+  return preUpgradeName === undefined ? backupPath : join(backupsFolder, preUpgradeName);
+}
+
 function migrateNamingTheBackupOnFailure(db: DatabaseSync, path: string, backupPath: string | undefined): void {
   try {
     applyMigrations(db, undefined, path);
   } catch (error) {
     db.close();
-    throw backupPath === undefined ? error : new MigrationFailedError(error, backupPath);
+    throw backupPath === undefined ? error : new MigrationFailedError(error, snapshotFromBeforeTheUpgrade(backupPath));
   }
 }
 
@@ -52,7 +61,6 @@ export function openDatabase(path: string): DatabaseSync {
   db.exec('PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA recursive_triggers = ON;');
   const backupPath = backUpWhenMigrationsArePending(db, path);
   migrateNamingTheBackupOnFailure(db, path, backupPath);
-  if (backupPath !== undefined) deleteBackupsBeyondTheMostRecent(dirname(backupPath), backupPath);
   // The db holds session tokens and message bodies in clear text (MAJ-02); WAL mode already created the
   // -wal/-shm side files by now, so tighten all three every time a real (non-:memory:) path is opened.
   for (const file of [path, `${path}-wal`, `${path}-shm`]) if (existsSync(file)) chmodSync(file, 0o600);
