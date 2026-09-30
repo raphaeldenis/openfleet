@@ -119,6 +119,10 @@ export const REVIEW_CONFIRMATION_PATIENCE_MS = 700;
 export const MAX_REVIEW_CONFIRMATIONS = 3;
 export const REVIEW_NOTICE_WINDOW_MS = 500;
 export const COMPOSER_CLEAR_GAP_MS = 300;
+const ESCAPE_KEY = '\u001b';
+// A superset of what the CLI strips from a paste (format, separator and control characters): a body holding one of
+// them waits for the review window before it counts as delivered; the CLI's own notice stays the only proof.
+const MAY_BE_STRIPPED_BY_THE_CLI = /[\p{Cf}\p{Zl}\p{Zp}\p{Cc}]/u;
 // Bounds how many not-yet-delivered messages one agent can stack on a single peer, so a looping agent
 // cannot flood a target's queue (8 KB each) faster than the target can read.
 export const MAX_PENDING_AGENT_MESSAGES_PER_SENDER = 20;
@@ -289,6 +293,19 @@ const activeHandleBySessionId = new Map<string, HarnessHandle>();
 // so it can never land ahead of the Enter that submits it. It rides on the phase object itself: closing or
 // relaunching replaces the phase wholesale, so a dead or replaced pty never receives it.
 interface TypedPhase { name: 'typed'; messageId: string; handle: HarnessHandle; deferredRaw: string[] }
+// The CLI may answer the submit Enter with its invisible-characters notice instead of sending. Nothing else is typed
+// while the session is here, and the message is reported delivered only once the CLI accepted it (its turn started).
+// 'watching': a body that may draw the notice was submitted, the notice has not shown yet.
+// 'confirming': the notice showed; Enter is pressed after a settle delay, then again after each patience delay.
+// 'clearing': the confirmations ran out; the first Escape of the pair that empties the composer was pressed.
+interface ReviewingPhase {
+  name: 'reviewing';
+  messageId: string;
+  handle: HarnessHandle;
+  stage: 'watching' | 'confirming' | 'clearing';
+  confirmations: number;
+  isDeliveryRecorded: boolean;
+}
 type DeliveryPhase =
   | { name: 'ready' }
   | { name: 'typing'; messageId: string; handle: HarnessHandle; deferredRaw: string[] }
@@ -298,6 +315,7 @@ type DeliveryPhase =
   // upgrade path is reading the composer back from the pty output before submitting.
   | TypedPhase
   | { name: 'submitted'; messageId: string }
+  | ReviewingPhase
   | { name: 'closing' }
   | { name: 'relaunching' };
 
@@ -335,7 +353,6 @@ export class SessionService {
   private readonly queue: MessageQueue;
   private readonly handles = new Map<string, HarnessHandle>();
   private readonly outputBuffers = new Map<string, string>();
-  private readonly reviewConfirmedMessageIds = new Map<string, string>();
   private readonly resumeTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly deliveries = new Map<string, Delivery>();
   // Message ids whose '\r' reached the pty but whose markDelivered has not succeeded yet.
@@ -727,7 +744,9 @@ export class SessionService {
     // Any real transition away from 'generating' (Stop, a permission prompt, the idle_prompt self-heal,
     // the session closing) makes an armed interrupt watch moot — never let a late-firing one override it.
     this.disarmInterruptWatch(sessionId);
-    if (this.isAwaitingTurnStart(sessionId)) this.enter(sessionId, READY); // any real transition proves the submitted turn started
+    const { phase: deliveryPhase } = this.deliveryOf(sessionId);
+    if (deliveryPhase.name === 'reviewing') this.acceptReviewedMessage(sessionId, deliveryPhase); // the turn started: the CLI took the message
+    else if (this.isAwaitingTurnStart(sessionId)) this.enter(sessionId, READY); // any real transition proves the submitted turn started
     if (state === 'closed') {
       // harness_exit means the process already died — markClosed only records it. Any other path to
       // closed (SessionEnd, etc.) is not proof the process actually exited, so it must go through the
@@ -1254,22 +1273,74 @@ export class SessionService {
   private appendOutput(sessionId: string, data: string): void {
     const combined = (this.outputBuffers.get(sessionId) ?? '') + data;
     this.outputBuffers.set(sessionId, trimToTail(combined, OUTPUT_BUFFER_LIMIT));
-    this.confirmReviewedPaste(sessionId, combined.slice(-(data.length + REVIEW_NOTICE_SPLIT_ACROSS_CHUNKS_MARGIN)));
+    const recentOutput = combined.slice(-(data.length + REVIEW_NOTICE_SPLIT_ACROSS_CHUNKS_MARGIN));
+    if (INVISIBLE_CHARACTERS_REVIEW_NOTICE.test(recentOutput)) this.startConfirmingReview(sessionId);
   }
 
-  // One extra Enter per submitted message, only while that message awaits its turn start.
-  private confirmReviewedPaste(sessionId: string, recentOutput: string): void {
+  // The notice is redrawn as often as the CLI repaints: only the first one of a submitted message starts the confirmations.
+  private startConfirmingReview(sessionId: string): void {
     const { phase } = this.deliveryOf(sessionId);
-    if (phase.name !== 'submitted') return;
-    const isReviewRequested = INVISIBLE_CHARACTERS_REVIEW_NOTICE.test(recentOutput);
-    const isAlreadyConfirmed = this.reviewConfirmedMessageIds.get(sessionId) === phase.messageId;
     const handle = this.liveHandle(sessionId);
-    if (!isReviewRequested || isAlreadyConfirmed || !handle) return;
-    this.reviewConfirmedMessageIds.set(sessionId, phase.messageId);
+    if (!handle) return;
+    const isReviewOfSubmittedMessage = phase.name === 'submitted';
+    const isReviewOfWatchedMessage = phase.name === 'reviewing' && phase.stage === 'watching';
+    if (!isReviewOfSubmittedMessage && !isReviewOfWatchedMessage) return;
+    const isDeliveryRecorded = isReviewOfSubmittedMessage;
+    const settle = this.schedule(sessionId, REVIEW_SETTLE_MS, () => this.confirmReview(sessionId));
+    this.enter(sessionId, { name: 'reviewing', messageId: phase.messageId, handle, stage: 'confirming', confirmations: 0, isDeliveryRecorded }, settle);
+  }
+
+  private confirmReview(sessionId: string): void {
+    const { phase } = this.deliveryOf(sessionId);
+    if (phase.name !== 'reviewing' || phase.stage !== 'confirming') return;
+    const isHandleReplaced = this.liveHandle(sessionId) !== phase.handle;
+    if (isHandleReplaced) {
+      this.enter(sessionId, READY);
+      return;
+    }
+    const isOutOfConfirmations = phase.confirmations >= MAX_REVIEW_CONFIRMATIONS;
+    if (isOutOfConfirmations) {
+      this.clearStuckComposer(sessionId, phase);
+      return;
+    }
+    phase.handle.write('\r');
+    const patience = this.schedule(sessionId, REVIEW_CONFIRMATION_PATIENCE_MS, () => this.confirmReview(sessionId));
+    this.enter(sessionId, { ...phase, confirmations: phase.confirmations + 1 }, patience);
+  }
+
+  // Claude Code empties its composer on two Escapes in a row; one alone leaves the text.
+  private clearStuckComposer(sessionId: string, phase: ReviewingPhase): void {
+    phase.handle.write(ESCAPE_KEY);
+    const secondEscape = this.schedule(sessionId, COMPOSER_CLEAR_GAP_MS, () => this.abandonReview(sessionId));
+    this.enter(sessionId, { ...phase, stage: 'clearing' }, secondEscape);
+  }
+
+  private abandonReview(sessionId: string): void {
+    const { phase } = this.deliveryOf(sessionId);
+    if (phase.name !== 'reviewing' || phase.stage !== 'clearing') return;
+    const isHandleReplaced = this.liveHandle(sessionId) !== phase.handle;
+    if (!isHandleReplaced) phase.handle.write(ESCAPE_KEY);
+    this.unfinishedTurns.delete(sessionId);
+    this.enter(sessionId, READY);
+    // Out of the queue, or it is typed again and again: it was not submitted, so no message.delivered follows.
     try {
-      handle.write('\r');
+      if (!phase.isDeliveryRecorded) this.queue.markDelivered(phase.messageId);
     } catch (err) {
-      log('error', `delivery: session ${sessionId} failed to confirm the CLI's paste review for message ${phase.messageId}`, err);
+      log('error', `delivery: session ${sessionId} could not take the unsent message ${phase.messageId} out of the queue`, err);
+    }
+    this.announceError(sessionId, new OpenFleetError('delivery_failed', 'the message was not sent: the CLI held it for review because it contains invisible characters and ignored every confirmation.', { hint: 'resend the message without invisible characters (zero-width spaces, direction marks, byte order marks).' }), 'delivery failed');
+    this.advance(sessionId);
+  }
+
+  // The turn the CLI started proves it accepted the Enter: only now a reviewed message counts as delivered.
+  private acceptReviewedMessage(sessionId: string, phase: ReviewingPhase): void {
+    this.enter(sessionId, READY);
+    if (phase.isDeliveryRecorded) return;
+    this.unrecordedDeliveries.set(sessionId, phase.messageId);
+    try {
+      this.recordDelivery(sessionId);
+    } catch (err) {
+      log('error', `delivery: session ${sessionId} submitted message ${phase.messageId}, recording it failed and is retried before the next message`, err);
     }
   }
 
@@ -1345,19 +1416,41 @@ export class SessionService {
     phase.handle.write('\r');
     // The '\r' reached the pty: the delivery is committed here, before the deferred flush below, so nothing
     // past this line may lead to a second '\r' — a throwing flush must never look like a failed submit.
-    this.unrecordedDeliveries.set(sessionId, phase.messageId);
     this.unfinishedTurns.add(sessionId);
-    const turnStartTimeout = this.schedule(sessionId, TURN_START_TIMEOUT_MS, () => this.stopAwaitingTurnStart(sessionId));
-    this.enter(sessionId, { name: 'submitted', messageId: phase.messageId }, turnStartTimeout);
-    try {
-      this.recordDelivery(sessionId);
-    } catch (err) {
-      log('error', `delivery: session ${sessionId} submitted message ${phase.messageId}, recording it failed and is retried before the next message`, err);
-    }
+    if (this.mayDrawReviewNotice(phase.messageId)) this.watchForReviewNotice(sessionId, phase);
+    else this.commitSubmission(sessionId, phase.messageId);
     // Flushed right after the Enter, in arrival order: whatever was deferred behind this message now goes
     // straight through, on the same handle that just received the Enter. The delivery above is already
     // committed, so a throwing write here only drops the rest of this best-effort flush.
     this.flushDeferredRaw(sessionId, phase.handle, phase.deferredRaw);
+  }
+
+  private commitSubmission(sessionId: string, messageId: string): void {
+    this.unrecordedDeliveries.set(sessionId, messageId);
+    const turnStartTimeout = this.schedule(sessionId, TURN_START_TIMEOUT_MS, () => this.stopAwaitingTurnStart(sessionId));
+    this.enter(sessionId, { name: 'submitted', messageId }, turnStartTimeout);
+    try {
+      this.recordDelivery(sessionId);
+    } catch (err) {
+      log('error', `delivery: session ${sessionId} submitted message ${messageId}, recording it failed and is retried before the next message`, err);
+    }
+  }
+
+  private mayDrawReviewNotice(messageId: string): boolean {
+    const body = this.queue.getById(messageId)?.body ?? '';
+    return MAY_BE_STRIPPED_BY_THE_CLI.test(body.replace(/[\n\r\t]/g, ''));
+  }
+
+  // The notice follows the Enter within milliseconds; once its window passed without one, the CLI took the body as is.
+  private watchForReviewNotice(sessionId: string, phase: TypedPhase): void {
+    const window = this.schedule(sessionId, REVIEW_NOTICE_WINDOW_MS, () => this.settleWithoutNotice(sessionId));
+    this.enter(sessionId, { name: 'reviewing', messageId: phase.messageId, handle: phase.handle, stage: 'watching', confirmations: 0, isDeliveryRecorded: false }, window);
+  }
+
+  private settleWithoutNotice(sessionId: string): void {
+    const { phase } = this.deliveryOf(sessionId);
+    if (phase.name !== 'reviewing' || phase.stage !== 'watching') return;
+    this.commitSubmission(sessionId, phase.messageId);
   }
 
   // Deferred raw input is best-effort keystrokes, never part of a delivery's commit: a throwing write stops

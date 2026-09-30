@@ -246,7 +246,7 @@ describe('delivery against the real CLI timing: a notice 3 ms after the Enter, E
     const failures = events.flatMap((event) => (event.type === 'error' ? [event.error] : []));
     expect(countOf(events, 'message.delivered')).toBe(0);
     expect(failures).toHaveLength(1);
-    expect(failures[0]).toMatchObject({ code: 'delivery_failed' });
+    expect(failures[0]).toMatchObject({ error: 'delivery_failed' });
     expect(failures[0]?.message).toContain('invisible characters');
     expect(failures[0]?.hint).toBeTruthy();
   });
