@@ -160,7 +160,7 @@ describe('note version tools', () => {
       const result = await client.callTool({ name: 'update_note_section', arguments: { note: note.id, heading: 'Log', content: 'v3-stale', expected_rev: note.rev } });
 
       expect(result.isError).toBe(true);
-      expect(errorText(result)).toBe('409 stale_revision, current rev: 2');
+      expect(errorText(result)).toMatch(/^error stale_revision: .*current rev: 2\. .* \(retry: after_refresh\)$/);
     });
 
     it('a stale caller gets stale_revision even when the section no longer exists', async () => {
@@ -170,7 +170,7 @@ describe('note version tools', () => {
 
       const result = await client.callTool({ name: 'update_note_section', arguments: { note: note.id, heading: 'Log', content: 'x', expected_rev: note.rev } });
 
-      expect(errorText(result)).toBe('409 stale_revision, current rev: 2');
+      expect(errorText(result)).toMatch(/^error stale_revision: .*current rev: 2\. .* \(retry: after_refresh\)$/);
     });
 
     it('a fresh caller naming a missing section gets the section error', async () => {
@@ -180,7 +180,7 @@ describe('note version tools', () => {
       const result = await client.callTool({ name: 'update_note_section', arguments: { note: note.id, heading: 'Nope', content: 'x', expected_rev: note.rev } });
 
       expect(result.isError).toBe(true);
-      expect(errorText(result)).toBe('section "Nope" not found');
+      expect(errorText(result)).toBe('error invalid_body: section "Nope" not found (retry: never)');
     });
 
     it('on another project\'s note fails exactly like a missing note', async () => {
@@ -257,7 +257,7 @@ describe('note version tools', () => {
       const result = await client.callTool({ name: tool, arguments: args(note) });
 
       expect(result.isError).toBe(true);
-      expect(errorText(result)).toMatch(/^note is file-backed and its file or docs folder cannot be read; nothing was written\. .*retry\.$/);
+      expect(errorText(result)).toMatch(/^error file_unreadable: note is file-backed and its file or docs folder cannot be read; nothing was written\. .*retry\. \(retry: later\)$/);
       expect(errorText(result)).not.toContain(docsRoot);
       expect(errorText(result)).not.toMatch(/ENOENT|EACCES|\/of-docs-/);
       expect(noteRepo.get(note.id)).toMatchObject({ bodyMd: OLD_BODY, rev: 1 });
@@ -428,7 +428,7 @@ describe('note version tools', () => {
       const stale = await client.callTool({ name: 'restore_note_version', arguments: { note: note.id, rev: 1, expected_rev: 1 } });
       const fresh = text(await client.callTool({ name: 'restore_note_version', arguments: { note: note.id, rev: 1, expected_rev: 2 } }));
 
-      expect(errorText(stale)).toBe('409 stale_revision, current rev: 2');
+      expect(errorText(stale)).toMatch(/^error stale_revision: .*current rev: 2\. .* \(retry: after_refresh\)$/);
       expect(fresh.rev).toBe(3);
       expect(await bodyOf(client, note.id)).toBe('v1');
     });

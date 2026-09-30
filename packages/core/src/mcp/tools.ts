@@ -8,11 +8,9 @@ import type { ApprovalService } from '../governance/approvalService.js';
 import type { ManagerService } from '../managers/managerService.js';
 import { toManagerView } from '../managers/managerView.js';
 import type { PulseScheduler } from '../managers/pulseScheduler.js';
+import { guardedFor, ok, refuse } from './toolResults.js';
 import { lineageSessionView, managerView, sessionView } from './toolViews.js';
-import { SessionClosedError, TooManyPendingMessagesError, type SessionService } from '../sessions/sessionService.js';
-
-const ok = (payload: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(payload) }] });
-const fail = (message: string) => ({ content: [{ type: 'text' as const, text: message }], isError: true });
+import type { SessionService } from '../sessions/sessionService.js';
 
 // No longer a pty-write constraint (Task 6h moved delivery to bracketed-paste typing, which handles
 // arbitrarily long bodies) — this is a sane upper bound for agent-to-agent messages, matching the cap
@@ -21,20 +19,6 @@ const MAX_MESSAGE_BODY_BYTES = 8192;
 function tooLongMessage(body: string): string | undefined {
   const byteLength = Buffer.byteLength(body, 'utf8');
   return byteLength > MAX_MESSAGE_BODY_BYTES ? `message too long: ${byteLength} bytes, max ${MAX_MESSAGE_BODY_BYTES}` : undefined;
-}
-
-// Shared by send_session_message and message_parent: both just pick a different target session for the
-// same delivery call and need the same closed-target and pending-limit tool errors. Any other thrown error (e.g. a colliding
-// message_id) is left to propagate — the MCP SDK turns it into isError itself.
-function trySendMessage(send: () => { status: 'delivered' | 'queued'; messageId: string }) {
-  try {
-    const result = send();
-    return ok({ status: result.status, message_id: result.messageId });
-  } catch (error) {
-    if (error instanceof TooManyPendingMessagesError) return fail(error.message);
-    if (!(error instanceof SessionClosedError)) throw error;
-    return fail('target session is closed');
-  }
 }
 
 export interface RegisterToolsDeps {
@@ -49,6 +33,13 @@ export interface RegisterToolsDeps {
 
 export function registerTools(server: McpServer, deps: RegisterToolsDeps): void {
   const { sessions, caller, approvals, managers, pulseScheduler, modelTable } = deps;
+  const guarded = guardedFor(caller);
+  // Shared by send_session_message and message_parent: both pick a different target session for the same delivery call.
+  const sendMessage = (send: () => { status: 'delivered' | 'queued'; messageId: string }) =>
+    guarded(() => {
+      const { status, messageId } = send();
+      return { status, message_id: messageId };
+    });
   const realPathOrSelf = (directory: string) => (existsSync(directory) ? realpathSync.native(directory) : directory);
   const isSameDirectory = (first: string, second: string): boolean => {
     if (first === second) return true;
@@ -105,7 +96,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
 
   server.registerTool('get_session_status', { description: `State of your session or one in your lineage. ${COMPACT_SESSION}`, inputSchema: { session_id: z.string().optional() } }, async ({ session_id }) => {
     const target = sessions.get(session_id ?? caller.id);
-    if (!target || !isInLineage(target)) return fail('session not found or outside your lineage');
+    if (!target || !isInLineage(target)) return refuse('outside_lineage', 'session not found or outside your lineage');
     return ok(sessionView(target));
   });
 
@@ -117,27 +108,23 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
 
   server.registerTool('send_session_message', { description: 'Send a message to a child (or your parent). Queued if it is busy, delivered on its next idle turn. Pass back a previous message_id to retry idempotently.', inputSchema: { target_uuid: z.string(), body: z.string().min(1), message_id: z.uuid().optional() } }, async ({ target_uuid, body, message_id }) => {
     const tooLong = tooLongMessage(body);
-    if (tooLong) return fail(tooLong);
+    if (tooLong) return refuse('message_too_long', tooLong);
     const target = sessions.get(target_uuid);
-    if (!target || !isInLineage(target) || target.id === caller.id) return fail('target not found or outside your lineage');
-    return trySendMessage(() => sessions.sendMessage({ sessionId: target.id, body, fromSessionId: caller.id, messageId: message_id }));
+    if (!target || !isInLineage(target) || target.id === caller.id) return refuse('outside_lineage', 'target not found or outside your lineage');
+    return sendMessage(() => sessions.sendMessage({ sessionId: target.id, body, fromSessionId: caller.id, messageId: message_id }));
   });
 
   server.registerTool('message_parent', { description: 'Report to the manager that spawned you. Pass back a previous message_id to retry idempotently.', inputSchema: { body: z.string().min(1), message_id: z.uuid().optional() } }, async ({ body, message_id }) => {
     const tooLong = tooLongMessage(body);
-    if (tooLong) return fail(tooLong);
-    if (!caller.parentId) return fail('this session has no parent');
-    return trySendMessage(() => sessions.sendMessage({ sessionId: caller.parentId!, body, fromSessionId: caller.id, messageId: message_id }));
+    if (tooLong) return refuse('message_too_long', tooLong);
+    if (!caller.parentId) return refuse('no_parent', 'this session has no parent');
+    return sendMessage(() => sessions.sendMessage({ sessionId: caller.parentId!, body, fromSessionId: caller.id, messageId: message_id }));
   });
 
   server.registerTool('create_worktree', { description: 'Create an isolated git worktree for a task', inputSchema: { repo_path: z.string(), branch_name: z.string() } }, async ({ repo_path, branch_name }) => {
-    try {
-      const isCallersOwnRepo = await sameGitRepository(caller.directory, repo_path);
-      if (!isCallersOwnRepo) return fail('repo_path must be the git repository of your own session directory');
-      return ok(await createWorktree({ repoPath: repo_path, branchName: branch_name, worktreesRoot: deps.worktreesRoot }));
-    } catch (error) {
-      return fail((error as Error).message);
-    }
+    const isCallersOwnRepo = await sameGitRepository(caller.directory, repo_path);
+    if (!isCallersOwnRepo) return refuse('outside_own_repository', 'repo_path must be the git repository of your own session directory');
+    return ok(await createWorktree({ repoPath: repo_path, branchName: branch_name, worktreesRoot: deps.worktreesRoot }));
   });
 
   server.registerTool('create_session', { description: `Spawn a child coding session in a directory (use create_worktree first). ${COMPACT_SESSION}`, inputSchema: {
@@ -153,26 +140,30 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     // mode: a plain MCP-spawned child gets neither privilege.
     const isTrustedOrchestrator = isRootSession || caller.role === MANAGER_ROLE;
     const resolvedTargetRole = input.manager ? MANAGER_ROLE : input.role;
-    if (resolvedTargetRole === MANAGER_ROLE && !input.manager) return fail('role "manager" requires a manager spec');
-    if (input.manager && !isTrustedOrchestrator) return fail('only an existing manager may create another manager');
+    if (resolvedTargetRole === MANAGER_ROLE && !input.manager) return refuse('invalid_body', 'role "manager" requires a manager spec');
+    if (input.manager && !isTrustedOrchestrator) return refuse('not_a_manager', 'only an existing manager may create another manager');
 
     if (input.permission_mode !== undefined) {
-      if (!isTrustedOrchestrator) return fail('only a manager or a root session may set permission_mode; a plain caller\'s children always get manual');
-      if (input.permission_mode === 'bypassPermissions') return fail('bypassPermissions cannot be set through MCP');
+      if (!isTrustedOrchestrator) return refuse('not_a_manager', 'only a manager or a root session may set permission_mode; a plain caller\'s children always get manual');
+      if (input.permission_mode === 'bypassPermissions') return refuse('invalid_body', 'bypassPermissions cannot be set through MCP');
     }
 
     // The directory must already exist: without this, a symlinked "..' segment could be lexically
     // collapsed back inside the root by path.resolve() while the OS actually opened somewhere else, and
     // a genuinely missing directory used to reach the harness, which then died with exit 1 instead of
     // failing this tool call cleanly.
-    if (!existsSync(input.directory)) return fail(`directory does not exist: ${input.directory}`);
+    if (!existsSync(input.directory)) return refuse('directory_missing', `directory does not exist: ${input.directory}`);
     // realpathSync.native, not the plain (non-native) realpathSync: Node's own JS reimplementation has a
     // lexical blind spot for some symlink + ".." combinations that the native OS call does not.
     const realDirectory = realpathSync.native(input.directory);
 
     const ownerOfRequestedDirectory = findLineageSessionOwning(realDirectory);
     if (ownerOfRequestedDirectory) {
-      return fail(`directory ${realDirectory} is already the working directory of session ${ownerOfRequestedDirectory.id} (${ownerOfRequestedDirectory.name}), which is you or one of your ancestors: use a worktree (create_worktree) or another directory`);
+      return refuse(
+        'directory_in_use',
+        `directory ${realDirectory} is already the working directory of session ${ownerOfRequestedDirectory.id} (${ownerOfRequestedDirectory.name}), which is you or one of your ancestors.`,
+        'Use a worktree (create_worktree) or another directory.',
+      );
     }
 
     // ponytail: a task is identified by the child's name or directory, not by a task id; a manager that
@@ -181,22 +172,26 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
       const liveDuplicate = input.allow_duplicate ? undefined : findLiveChildDuplicating({ name: input.name, realDirectory });
       if (!liveDuplicate) return undefined;
       const { child, sameAs } = liveDuplicate;
-      return fail(`session ${child.id} (${child.name}) is already a live child of yours (state ${child.state}) with the same ${sameAs}: message it with send_session_message instead of spawning again, close_session ${child.id} if it is stuck or dead and spawn again, or pass allow_duplicate: true if two sessions are intended`);
+      return refuse(
+        'duplicate_child',
+        `session ${child.id} (${child.name}) is already a live child of yours (state ${child.state}) with the same ${sameAs}.`,
+        `Message it with send_session_message, close_session ${child.id} if it is stuck or dead and spawn again, or pass allow_duplicate: true if two sessions are intended.`,
+      );
     };
     const earlyDuplicateRefusal = refuseLiveDuplicate();
     if (earlyDuplicateRefusal) return earlyDuplicateRefusal;
 
     const isWithinWorktreesRoot = isPathWithin(realDirectory, deps.worktreesRoot);
     const isCallersOwnRepo = await sameGitRepository(caller.directory, realDirectory);
-    if (!isWithinWorktreesRoot && !isCallersOwnRepo) return fail('directory must be inside the worktrees root or inside your own git repository');
+    if (!isWithinWorktreesRoot && !isCallersOwnRepo) return refuse('outside_own_repository', 'directory must be inside the worktrees root or inside your own git repository');
 
     const isDirectoryUnchangedSinceChecks = existsSync(input.directory) && realpathSync.native(input.directory) === realDirectory;
-    if (!isDirectoryUnchangedSinceChecks) return fail(`directory ${input.directory} changed while the spawn was being checked: retry`);
+    if (!isDirectoryUnchangedSinceChecks) return refuse('spawn_raced', `directory ${input.directory} changed while the spawn was being checked: retry`);
 
     // No `await` between this re-check and the insert in sessions.create(): a concurrent create_session
     // that passed the early check while this one awaited sameGitRepository is refused here.
     const isCallerStillLive = sessions.get(caller.id)?.state !== 'closed';
-    if (!isCallerStillLive) return fail(`your session ${caller.id} is no longer live: it was closed while the spawn was being checked, so no child is created`);
+    if (!isCallerStillLive) return refuse('session_closed', `your session ${caller.id} is no longer live: it was closed while the spawn was being checked, so no child is created`);
 
     const lateDuplicateRefusal = refuseLiveDuplicate();
     if (lateDuplicateRefusal) return lateDuplicateRefusal;
@@ -211,7 +206,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
       // A manager-role caller with no ManagerRecord (legacy data, a role forged before this guard existed,
       // a deleted record) is capped at 0 rather than treated as unlimited — defence in depth.
       const childrenCap = record ? record.childrenCap : 0;
-      if (activeChildren >= childrenCap) return fail(`children cap reached (${activeChildren}/${childrenCap})`);
+      if (activeChildren >= childrenCap) return refuse('children_cap', `children cap reached (${activeChildren}/${childrenCap})`);
     }
 
     const resolvedModel = input.model ? resolveModel(modelTable, input.model) : undefined;
@@ -236,7 +231,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     const targetId = session_id ?? caller.id;
     if (targetId !== caller.id) {
       const target = sessions.get(targetId);
-      if (!target || target.parentId !== caller.id) return fail('you can only update yourself or your own child');
+      if (!target || target.parentId !== caller.id) return refuse('outside_lineage', 'you can only update yourself or your own child');
     }
     return ok(sessions.updateModel(targetId, resolveModel(modelTable, model)));
   });
@@ -258,15 +253,15 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     // Narrower than isInLineage: a manager may pulse itself or a manager it is the direct parent of, but
     // never its own parent — pulsing your manager is not "yours to trigger" even though you can message it.
     const isSelfOrOwnManagedChild = target !== undefined && (target.id === caller.id || target.parentId === caller.id);
-    if (!target || !isSelfOrOwnManagedChild || target.role !== MANAGER_ROLE) return fail('target is not a manager in your lineage');
+    if (!target || !isSelfOrOwnManagedChild || target.role !== MANAGER_ROLE) return refuse('not_a_manager', 'target is not a manager in your lineage');
     const record = pulseScheduler.pulseNow(targetId);
-    if (!record) return fail('manager record not found');
+    if (!record) return refuse('manager_not_found', 'manager record not found');
     return ok({ pulsed: true });
   });
 
   server.registerTool('close_session', { description: 'Close one of your children', inputSchema: { session_id: z.string() } }, async ({ session_id }) => {
     const target = sessions.get(session_id);
-    if (!target || target.parentId !== caller.id) return fail('not your child');
+    if (!target || target.parentId !== caller.id) return refuse('outside_lineage', 'not your child');
     await sessions.close(target.id, { closedByParent: true });
     return ok({ closed: target.id });
   });

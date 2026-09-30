@@ -205,7 +205,7 @@ describe('note tools', () => {
       const result = await client.callTool({ name: 'update_note', arguments: { note: note.id, body_md: 'v3-stale', expected_rev: note.rev } });
 
       expect(result.isError).toBe(true);
-      expect(errorText(result)).toBe('409 stale_revision, current rev: 2');
+      expect(errorText(result)).toMatch(/^error stale_revision: .*current rev: 2\. .* \(retry: after_refresh\)$/);
     });
 
     it('writes through to disk for a file-backed note, keeping source_hash in sync (Review Focus 5)', async () => {
@@ -229,7 +229,7 @@ describe('note tools', () => {
       const result = await client.callTool({ name: 'update_note', arguments: { note: note.id, body_md: '# agent write', expected_rev: note.rev } });
 
       expect(result.isError).toBe(true);
-      expect(errorText(result)).toBe('409 stale_revision, current rev: 2');
+      expect(errorText(result)).toMatch(/^error stale_revision: .*current rev: 2\. .* \(retry: after_refresh\)$/);
       expect(readFileSync(note.filePath!, 'utf8')).toBe('# edited on disk');
       expect(noteRepo.get(note.id)).toMatchObject({ bodyMd: '# edited on disk', rev: 2 });
       expect(noteRepo.listVersions(note.id).map((version) => version.author)).toEqual(['seed', 'disk']);
@@ -244,7 +244,7 @@ describe('note tools', () => {
       const result = await client.callTool({ name: 'update_note', arguments: { note: note.id, body_md: '# v2', expected_rev: note.rev } });
 
       expect(result.isError).toBe(true);
-      expect(errorText(result)).toBe('request failed');
+      expect(errorText(result)).toBe('error path_escapes_docs_folder: the path escapes the docs folder. (retry: never)');
     });
 
     it('an oversized body is refused with the limit named', async () => {

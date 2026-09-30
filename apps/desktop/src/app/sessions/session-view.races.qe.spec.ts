@@ -7,6 +7,7 @@ import { SessionViewComponent } from './session-view.component';
 import { FleetApiService } from '../core/fleet-api.service';
 import {
   SWITCH_KINDS,
+  type SwitchKind,
   applyButtonOf,
   connectFakeDaemon,
   deferred,
@@ -102,6 +103,12 @@ async function requestClose() {
 
 const actionError = () => screen.queryByTestId('session-action-error');
 
+// The notes leave through a root effect that settles the pending switch from the daemon's state, then a render: on a loaded
+// runner the screen can trail the event, so a note that must disappear is awaited, not read once.
+const A_LOADED_RUNNER_RENDER_MS = 3_000;
+const noteLeaves = (kind: SwitchKind) =>
+  waitFor(() => expect(noteOf(kind)).toBeNull(), { timeout: A_LOADED_RUNNER_RENDER_MS });
+
 describe('a switch request through A → B → A → B chains', () => {
   describe.each(SWITCH_KINDS)('the $kind switch', (kind) => {
     it('lands on A only, when its reply arrives on the second visit to B', async () => {
@@ -185,7 +192,7 @@ describe('a permission-mode switch made from an inherited mode (no mode set)', (
     expect(noteOf(permissionModeSwitch)).toHaveTextContent(SWITCH_PENDING_NOTE);
 
     await daemon.setState('s1', 'idle');
-    expect(noteOf(permissionModeSwitch)).toBeNull();
+    await noteLeaves(permissionModeSwitch);
   });
 });
 
@@ -476,7 +483,7 @@ describe('a switch requested while the session is still starting', () => {
       await daemon.setState('s1', 'starting');
       expect(noteOf(kind)).toHaveTextContent(SWITCH_PENDING_NOTE);
       await daemon.setState('s1', 'idle');
-      expect(noteOf(kind)).toBeNull();
+      await noteLeaves(kind);
     });
 
     it('clears its note when the launch it waited on fails and the session closes', async () => {
@@ -486,7 +493,7 @@ describe('a switch requested while the session is still starting', () => {
 
       await daemon.send({ type: 'session.closed', sessionId: 's1', exitCode: -2 });
 
-      expect(noteOf(kind)).toBeNull();
+      await noteLeaves(kind);
     });
 
     it('clears its note through a launch that ends waiting for input, then a relaunch that ends idle', async () => {
@@ -499,7 +506,7 @@ describe('a switch requested while the session is still starting', () => {
       await daemon.setState('s1', 'starting');
       await daemon.setState('s1', 'waiting_input');
 
-      expect(noteOf(kind)).toBeNull();
+      await noteLeaves(kind);
     });
 
     it('keeps its note through the earlier launch when the user was on B, and an unrelated session event fired meanwhile', async () => {
@@ -518,7 +525,7 @@ describe('a switch requested while the session is still starting', () => {
       expect(noteOf(kind)).toHaveTextContent(SWITCH_PENDING_NOTE);
       await daemon.setState('s1', 'starting');
       await daemon.setState('s1', 'idle');
-      expect(noteOf(kind)).toBeNull();
+      await noteLeaves(kind);
     });
   });
 
@@ -532,8 +539,8 @@ describe('a switch requested while the session is still starting', () => {
     await daemon.setState('s1', 'starting');
     await daemon.setState('s1', 'idle');
 
-    expect(noteOf(modelSwitch)).toBeNull();
-    expect(noteOf(permissionModeSwitch)).toBeNull();
+    await noteLeaves(modelSwitch);
+    await noteLeaves(permissionModeSwitch);
   });
 });
 

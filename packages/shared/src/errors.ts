@@ -23,6 +23,7 @@ export const ERROR_CODES = {
   unknown_harness: { kind: 'invalid_request' },
   message_too_long: { kind: 'invalid_request' },
   query_too_long: { kind: 'invalid_request' },
+  outside_own_repository: { kind: 'invalid_request' },
 
   unauthorized: { kind: 'unauthorized' },
 
@@ -59,6 +60,10 @@ export const ERROR_CODES = {
   outside_lineage: { kind: 'conflict', retry: 'never' },
   not_a_manager: { kind: 'conflict', retry: 'never' },
   directory_in_use: { kind: 'conflict', retry: 'never' },
+  duplicate_child: { kind: 'conflict', retry: 'never' },
+  no_parent: { kind: 'conflict', retry: 'never' },
+  // The directory moved while the spawn was being checked: the same call can succeed once it settles.
+  spawn_raced: { kind: 'conflict', retry: 'later' },
   store_has_rows: { kind: 'conflict', retry: 'never' },
   duplicate_id: { kind: 'conflict', retry: 'never' },
   no_docs_folder: { kind: 'conflict', retry: 'never' },
