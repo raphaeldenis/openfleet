@@ -10,12 +10,12 @@ import { SectionError } from '../notes/noteSections.js';
 export const ok = (payload: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(payload) }] });
 export const fail = (message: string) => ({ content: [{ type: 'text' as const, text: message }], isError: true });
 
-/** Keeps items until adding the next one would push the serialized result past maxBytes; always keeps at least one. */
-export function truncateToByteBudget<T>(items: T[], maxBytes: number): { items: T[]; truncated: boolean } {
+/** Keeps items until adding the next one would push the serialized result past maxBytes; always keeps at least one. `bytesBetweenItems` counts the separator serialized between two items. */
+export function truncateToByteBudget<T>(items: T[], maxBytes: number, { bytesBetweenItems = 0 }: { bytesBetweenItems?: number } = {}): { items: T[]; truncated: boolean } {
   let bytes = 0;
   const kept: T[] = [];
   for (const item of items) {
-    const itemBytes = Buffer.byteLength(JSON.stringify(item), 'utf8');
+    const itemBytes = Buffer.byteLength(JSON.stringify(item), 'utf8') + (kept.length > 0 ? bytesBetweenItems : 0);
     if (kept.length > 0 && bytes + itemBytes > maxBytes) return { items: kept, truncated: true };
     bytes += itemBytes;
     kept.push(item);

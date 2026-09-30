@@ -681,3 +681,17 @@ describe('NoteService getExpanded', () => {
     expect(() => service.getExpanded('nope', { viewerProjectId: 'p1' })).toThrow(NoteNotFoundError);
   });
 });
+
+describe('NoteService getMentionBlocks', () => {
+  it('returns the blocks of the injected block expander, fed the note body and the note as root', () => {
+    const { db, repo, clock } = setup();
+    const expandMentionBlocks = vi.fn(() => ['stubbed block']);
+    const service = new NoteService({ repo, db, expandMentions, expandMentionBlocks, clock, newId: () => 'stub-note' });
+    const note = service.create({ projectId: 'p1', title: 'Root', bodyMd: 'plain body', author: AUTHOR });
+
+    const { mentionBlocks } = service.getMentionBlocks(note.id, { viewerProjectId: 'p1' });
+
+    expect(mentionBlocks).toEqual(['stubbed block']);
+    expect(expandMentionBlocks).toHaveBeenCalledWith('plain body', expect.anything(), { rootNoteId: 'stub-note' });
+  });
+});

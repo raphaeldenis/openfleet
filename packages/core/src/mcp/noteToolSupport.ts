@@ -46,5 +46,15 @@ export function createNoteToolSupport({ notes, noteRepo, docs, caller }: NoteToo
     };
   };
 
-  return { author, requireProject, requireOwnNote, writeBody, noteSummary, noteView };
+  /** A note as `get_note` shows it with `mentions_only`: the body once, then the mention blocks alone, when there are any. */
+  const noteMentionBlocksView = (note: Note, mentionBlocks: string[]) => {
+    const docsRelativePath = docs.docsRelativePath(note);
+    return {
+      ...noteSummary(note), bodyMd: note.bodyMd,
+      ...(docsRelativePath === null ? {} : { docsRelativePath }),
+      ...(mentionBlocks.length > 0 ? { mentionBlocks } : {}),
+    };
+  };
+
+  return { author, requireProject, requireOwnNote, writeBody, noteSummary, noteView, noteMentionBlocksView };
 }

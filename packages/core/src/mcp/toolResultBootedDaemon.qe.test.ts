@@ -135,6 +135,36 @@ describe('QE — a booted daemon serves compact MCP results on the real route', 
     expect(described.columns[0].id).toBe(column.id);
   });
 
+  it('token-02 probe: on the real route an agent reads the 50x12 table columnar in about a third of the default bytes, and a note with mentions_only without repeating its body', async () => {
+    const rootId = await bootRootSession();
+    const root = await connectAs(rootId);
+    const store = parsed(await root.callTool({ name: 'create_data_store', arguments: { display_name: 'backlog' } }));
+    const columnIds: string[] = [];
+    for (let index = 0; index < 12; index += 1) {
+      const isSelect = index % 4 === 0;
+      const column = parsed(await root.callTool({ name: 'add_data_store_column', arguments: { store: store.id, display_name: `column ${index}`, column_type: isSelect ? 'select' : 'text', ...(isSelect ? { options: [{ id: 'todo', label: 'todo' }, { id: 'done', label: 'done' }] } : {}) } }));
+      columnIds.push(column.id);
+    }
+    const rows = Array.from({ length: 50 }, (_, rowIndex) => Object.fromEntries(columnIds.map((id, index) => [id, index % 4 === 0 ? 'todo' : `value ${rowIndex}-${index}`])));
+    await root.callTool({ name: 'insert_data_store_rows', arguments: { store: store.id, rows } });
+    const target = parsed(await root.callTool({ name: 'create_note', arguments: { title: 'Target', body_md: 'target body', shared: true } }));
+    const source = parsed(await root.callTool({ name: 'create_note', arguments: { title: 'Source', body_md: `see @note:${target.id}` } }));
+
+    const defaultResult = await root.callTool({ name: 'query_data_store', arguments: { store: store.id, limit: 50 } });
+    const columnarResult = await root.callTool({ name: 'query_data_store', arguments: { store: store.id, limit: 50, format: 'columnar' } });
+    const expandedNote = await root.callTool({ name: 'get_note', arguments: { note: source.id } });
+    const mentionsOnlyNote = await root.callTool({ name: 'get_note', arguments: { note: source.id, mentions_only: true } });
+
+    const bytes = (result: unknown) => Buffer.byteLength(rawText(result), 'utf8');
+    expect(bytes(defaultResult)).toBe(35049);
+    expect(bytes(columnarResult)).toBe(11007);
+    expect(parsed(columnarResult).count).toBe(50);
+    expect(bytes(columnarResult)).toBeLessThan(bytes(defaultResult) / 2);
+    expect(parsed(mentionsOnlyNote).mentionBlocks).toHaveLength(1);
+    expect(parsed(mentionsOnlyNote)).not.toHaveProperty('expandedBody');
+    expect(bytes(mentionsOnlyNote)).toBeLessThan(bytes(expandedNote));
+  });
+
   it('REST keeps its full note shape while MCP is compact: an operator reading a note over HTTP still gets projectId, createdAt, updatedAt and docsRelativePath', async () => {
     await bootRootSession();
     const created = (await (await adminApi('/api/notes', { method: 'POST', body: JSON.stringify({ projectId: 'p1', title: 'R', bodyMd: 'b' }) })).json()) as { data?: { id: string } } & { id?: string };
