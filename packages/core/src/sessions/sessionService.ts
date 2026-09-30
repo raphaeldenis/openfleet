@@ -2,6 +2,7 @@ import { accessSync, closeSync, constants, existsSync, lstatSync, openSync, read
 import { basename, dirname, isAbsolute, join, normalize, sep } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { OpenFleetError, type ErrorCode, type ErrorEnvelope, type PermissionMode, type Session, type SessionCloseReason, type SessionSpec } from '@openfleet/shared';
+import { carryLoggedRef, rememberLoggedRef } from '../errors/loggedRef.js';
 import { EventBus } from '../events/eventBus.js';
 import { createWorktree } from '../git/worktrees.js';
 import type { Harness, HarnessHandle } from '../harness/harness.js';
@@ -556,7 +557,9 @@ export class SessionService {
     if (!outcome.launched) {
       this.removeReopenRecord({ sessionId, reopenEventId });
       if (isNamedLaunchFailure(outcome.failure)) throw outcome.failure;
-      throw new SessionReopenError('launch_failed', `session ${sessionId} failed to relaunch: ${outcome.reason}`);
+      const launchFailure = new SessionReopenError('launch_failed', `session ${sessionId} failed to relaunch: ${outcome.reason}`);
+      carryLoggedRef(outcome.failure, launchFailure);
+      throw launchFailure;
     }
     this.deps.bus.emit({ type: 'session.reopened', sessionId });
     return this.repo.get(sessionId)!;
@@ -1438,13 +1441,17 @@ export class SessionService {
   }
 
   // Best effort: an announcement that cannot be built or sent never stops the launch, close or delivery flow that raised it.
-  private announceError(sessionId: string, error: OpenFleetError, where: string): void {
+  // Returns the ref the watchers received, when the error is internal and so was logged under one.
+  private announceError(sessionId: string, error: OpenFleetError, where: string): string | undefined {
     const describe = this.deps.describeError;
-    if (!describe) return;
+    if (!describe) return undefined;
     try {
-      this.deps.bus.emit({ type: 'error', sessionId, error: describe(error, { sessionId, where }) });
+      const envelope = describe(error, { sessionId, where });
+      this.deps.bus.emit({ type: 'error', sessionId, error: envelope });
+      return envelope.id;
     } catch (announceFailure) {
       log('warn', `${where}: the error event could not be broadcast`, { code: (announceFailure as { code?: string }).code });
+      return undefined;
     }
   }
 
@@ -1455,7 +1462,8 @@ export class SessionService {
       : failureCode === 'harness_exited'
         ? this.harnessExitedError(sessionId, exitCode)
         : new OpenFleetError(failureCode, `session closed: ${reason}${exitCode === undefined ? '' : ` (exit code ${exitCode})`}`, { cause: failure });
-    this.announceError(sessionId, error, `session closed: ${reason}`);
+    const watchersRef = this.announceError(sessionId, error, `session closed: ${reason}`);
+    if (watchersRef) rememberLoggedRef(failure, watchersRef); // the REST answer for the same failure reuses this ref instead of logging again
   }
 
   // The one record of a launch failure: describeError logs an internal failure with its cause and the ref the client receives;
@@ -1541,7 +1549,7 @@ export class SessionService {
       if (!(err instanceof UnknownHarnessError)) throw err;
       this.logLaunchFailure(`resumeOne: session ${session.id} cannot resume`, err);
       this.closeAfterFailedLaunch(session.id, { exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE, reason: 'launch_failed', failure: err });
-      return { launched: false, reason: err.message };
+      return { launched: false, reason: err.message, failure: err };
     }
     this.warnIfPermissiveSettings(session.harness, session.directory);
     const permissionMode = this.resolveResumePermissionMode(session);
