@@ -1,7 +1,7 @@
-import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { writeCrashFile } from './crashFile.js';
 
 const FILE_MODE_MASK = 0o777;
@@ -81,6 +81,58 @@ describe('writeCrashFile', () => {
     const { log } = JSON.parse(readFileSync(path, 'utf8')) as { log: { msg: string }[] };
     expect(log.length).toBeGreaterThan(0);
     expect(log.at(-1)!.msg).toMatch(/^line 1999 /);
+  });
+
+  it('ignores a stray json file: it takes no slot and is never deleted', () => {
+    crash();
+    writeFileSync(join(crashDir, 'zz-notes.json'), '{}');
+    for (let crashNumber = 1; crashNumber <= 6; crashNumber += 1) {
+      nowMs += 1000;
+      crash({ ref: `0000000${crashNumber}` });
+    }
+
+    const names = filesInCrashDir();
+    expect(names).toContain('zz-notes.json');
+    expect(names.filter((name) => name !== 'zz-notes.json')).toHaveLength(5);
+  });
+
+  it('keeps the file it just wrote when the clock stepped back: retention goes by modification time', () => {
+    for (let crashNumber = 1; crashNumber <= 5; crashNumber += 1) {
+      nowMs += 1000;
+      crash({ ref: `0000000${crashNumber}` });
+    }
+    nowMs = Date.parse('2026-01-01T00:00:00.000Z');
+
+    const path = crash({ ref: 'aaaaaaaa' });
+
+    expect(existsSync(path)).toBe(true);
+    expect(filesInCrashDir()).toHaveLength(5);
+  });
+
+  it('leaves no partial file behind when the write cannot complete', () => {
+    mkdirSync(join(crashDir, '2026-09-30T10-00-00.000Z-ab12cd34.json'), { recursive: true });
+
+    expect(() => crash()).toThrow();
+
+    expect(filesInCrashDir().filter((name) => name.startsWith('.'))).toEqual([]);
+  });
+
+  it('writes through a temporary name, so the crash folder never shows a half-written crash file', () => {
+    const path = crash();
+
+    expect(JSON.parse(readFileSync(path, 'utf8'))).toMatchObject({ ref: 'ab12cd34' });
+    expect(filesInCrashDir()).toEqual(['2026-09-30T10-00-00.000Z-ab12cd34.json']);
+  });
+
+  it('cuts a full ring to the cap in one pass', () => {
+    const logLines = Array.from({ length: 2000 }, () => JSON.stringify({ msg: 'x'.repeat(8000) }));
+    const stringify = vi.spyOn(JSON, 'stringify');
+
+    crash({ logLines });
+
+    const serializationsOfTheDocument = stringify.mock.calls.filter(([value]) => typeof value === 'object' && value !== null && 'generatedAt' in value).length;
+    expect(serializationsOfTheDocument).toBe(1);
+    stringify.mockRestore();
   });
 
   it.skipIf(isRoot)('throws when the directory cannot be written, so the caller decides', () => {
