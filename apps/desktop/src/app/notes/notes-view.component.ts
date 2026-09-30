@@ -118,12 +118,10 @@ async function fetchAllPages<T>(fetchPage: (request: PageRequest) => Promise<Pag
           (openInFinder)="openSelectedFolder()"
         />
       } @else if (note(); as openNote) {
-        <div class="doc-row">
-          <of-note-editor [note]="openNote" [historyOpen]="historyOpen()" (historyToggle)="toggleHistory()">
-            @for (conflict of conflicts(); track conflict.id) {
-              <of-note-conflict-banner [ours]="conflict.ours" [theirs]="conflict.theirs" [restoreRev]="conflict.restoreRev" (resolve)="resolveConflict($event)" />
-            }
-          </of-note-editor>
+        <of-note-editor [note]="openNote" [historyOpen]="historyOpen()" (historyToggle)="toggleHistory()">
+          @for (conflict of conflicts(); track conflict.id) {
+            <of-note-conflict-banner [ours]="conflict.ours" [theirs]="conflict.theirs" [restoreRev]="conflict.restoreRev" (resolve)="resolveConflict($event)" />
+          }
           @if (historyOpen()) {
             <of-note-history
               [versions]="versions()"
@@ -136,21 +134,20 @@ async function fetchAllPages<T>(fetchPage: (request: PageRequest) => Promise<Pag
               (close)="closeHistory()"
             />
           }
-        </div>
+        </of-note-editor>
       }
     </section>
   `,
   styles: `
     :host { display: flex; flex: 1; min-width: 0; min-height: 0; background: var(--bg) }
     .sidebar { display: flex; flex-direction: column; width: 15rem; flex: none; min-height: 0; border-right: 1px solid var(--line); background: var(--panel) }
-    .sidebar of-note-list { flex: 1; min-height: 0; border-right: 0 }
+    .sidebar of-note-list { flex: 1; width: auto; min-height: 0; border-right: 0 }
     .project-select {
       margin: .625rem .75rem 0; height: 1.625rem; padding: 0 .5rem; border: 1px solid var(--line); border-radius: .375rem;
       background: var(--sunk); color: var(--fg); font: inherit; font-size: .75rem;
     }
     .project-select:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
     .pane { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column }
-    .doc-row { flex: 1; min-height: 0; display: flex }
     .action-failure { flex: none; display: flex; align-items: center; gap: .75rem; padding: .5rem 1.25rem; border-bottom: 1px solid var(--line); font-size: .75rem }
     .action-failure-title { color: var(--state-error); font-weight: 600 }
     .action-failure-reason { flex: 1; color: var(--mut) }

@@ -31,7 +31,7 @@ const SKELETON_BAR_WIDTHS = ['40%', '90%', '85%', '60%', '95%', '70%'];
       @case ('empty') {
         <div class="empty">
           <span class="empty-headline" data-testid="note-empty-headline">Notes are shared memory for you and your agents</span>
-          <span>Agents read them via @note mentions and can edit them with the notes tool.</span>
+          <span data-testid="note-empty-hint">Agents write notes with the notes tool and they appear here.</span>
           <button type="button" class="of-btn of-btn--primary create" data-testid="note-empty-create" (click)="create.emit()">New note</button>
         </div>
       }

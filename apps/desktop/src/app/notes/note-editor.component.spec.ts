@@ -1,30 +1,26 @@
-import { render, screen } from '@testing-library/angular/zoneless';
+import { render, screen, within } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
 import { inputBinding, outputBinding } from '@angular/core';
 import { describe, expect, it, vi } from 'vitest';
-import { NoteEditorComponent, type NoteMentioner } from './note-editor.component';
+import { NoteEditorComponent } from './note-editor.component';
 import { aNoteView } from './notes.fixtures';
 import type { NoteView } from '@openfleet/shared';
 
 interface EditorOptions {
   note?: NoteView;
-  expandedBody?: string;
-  mentionedBy?: NoteMentioner[];
   historyOpen?: boolean;
 }
 
 async function renderEditor(options: EditorOptions = {}) {
   const historyToggle = vi.fn<() => void>();
-  await render(NoteEditorComponent, {
+  const { fixture } = await render(NoteEditorComponent, {
     bindings: [
       inputBinding('note', () => options.note ?? aNoteView()),
-      inputBinding('expandedBody', () => options.expandedBody),
-      inputBinding('mentionedBy', () => options.mentionedBy ?? []),
       inputBinding('historyOpen', () => options.historyOpen ?? false),
       outputBinding<void>('historyToggle', historyToggle),
     ],
   });
-  return { historyToggle };
+  return { historyToggle, fixture };
 }
 
 describe('NoteEditorComponent', () => {
@@ -90,6 +86,89 @@ describe('NoteEditorComponent', () => {
       expect([...items].map((item) => item.textContent?.trim())).toEqual(['session.state', 'gate.opened']);
     });
 
+    it('user reads bold text as strong emphasis', async () => {
+      await renderEditor({ note: aNoteView({ bodyMd: 'Ship **the daemon** today.' }) });
+
+      expect(screen.getByTestId('note-editor-bold')).toHaveTextContent('the daemon');
+      expect(screen.getByTestId('note-editor-bold').tagName).toBe('STRONG');
+      expect(screen.getByTestId('note-editor-paragraph')).toHaveTextContent('Ship the daemon today.');
+    });
+
+    it('user reads a numbered list as an ordered list that starts at its first number', async () => {
+      await renderEditor({ note: aNoteView({ bodyMd: '3. gate.opened\n4. gate.closed' }) });
+
+      const list = screen.getByTestId('note-editor-ordered-list');
+      expect(list.tagName).toBe('OL');
+      expect(list).toHaveAttribute('start', '3');
+      expect(within(list).getAllByTestId('note-editor-list-item').map((item) => item.textContent?.trim())).toEqual(['gate.opened', 'gate.closed']);
+    });
+
+    it('user reads a wrapped year at the start of a line as part of its paragraph', async () => {
+      await renderEditor({ note: aNoteView({ bodyMd: 'paragraph wrapped year\n2024. is here' }) });
+
+      expect(screen.queryByTestId('note-editor-ordered-list')).toBeNull();
+      expect(screen.getByTestId('note-editor-paragraph')).toHaveTextContent('paragraph wrapped year 2024. is here');
+    });
+
+    it('user reads a year alone in its own block as an ordered list starting at that year', async () => {
+      await renderEditor({ note: aNoteView({ bodyMd: 'paragraph\n\n2024. is here' }) });
+
+      expect(screen.getByTestId('note-editor-ordered-list')).toHaveAttribute('start', '2024');
+    });
+
+    it('user reads a list starting at 1 right after a paragraph line as a list', async () => {
+      await renderEditor({ note: aNoteView({ bodyMd: 'paragraph\n1. first' }) });
+
+      expect(screen.getByTestId('note-editor-paragraph')).toHaveTextContent('paragraph');
+      expect(screen.getByTestId('note-editor-ordered-list')).toHaveAttribute('start', '1');
+    });
+
+    it('user sees no empty blockquote for a lone quote marker', async () => {
+      await renderEditor({ note: aNoteView({ bodyMd: '>' }) });
+
+      expect(screen.queryByTestId('note-editor-quote')).toBeNull();
+      expect(screen.getByTestId('note-editor-paragraph')).toHaveTextContent('>');
+    });
+
+    it('user sees no empty heading for a lone heading marker', async () => {
+      await renderEditor({ note: aNoteView({ bodyMd: '# ' }) });
+
+      expect(screen.queryByTestId('note-editor-heading-1')).toBeNull();
+      expect(screen.getByTestId('note-editor-paragraph')).toHaveTextContent('#');
+    });
+
+    it('user reads a quote as a blockquote holding its own paragraphs, lists and bold text', async () => {
+      await renderEditor({ note: aNoteView({ bodyMd: '> **Note** to self\n>\n> - one\n> - two' }) });
+
+      const quote = screen.getByTestId('note-editor-quote');
+      expect(quote.tagName).toBe('BLOCKQUOTE');
+      expect(within(quote).getByTestId('note-editor-bold')).toHaveTextContent('Note');
+      expect(within(quote).getAllByTestId('note-editor-list-item')).toHaveLength(2);
+    });
+
+    it('a quote inside a quote is a nested blockquote', async () => {
+      await renderEditor({ note: aNoteView({ bodyMd: '> > deep' }) });
+
+      const [outer, inner] = screen.getAllByTestId('note-editor-quote');
+      expect(outer).toContainElement(inner!);
+    });
+
+    it('a link is shown as literal text, never as an anchor', async () => {
+      await renderEditor({ note: aNoteView({ bodyMd: '[docs](https://example.test) and **[x](javascript:alert(1))**' }) });
+
+      const body = screen.getByTestId('note-editor-body');
+      expect(body.querySelector('a')).toBeNull();
+      expect(body).toHaveTextContent('[docs](https://example.test)');
+    });
+
+    it('markup typed inside bold is shown as text, never executed', async () => {
+      await renderEditor({ note: aNoteView({ bodyMd: '**<img src=x onerror="window.pwned=1">**' }) });
+
+      const body = screen.getByTestId('note-editor-body');
+      expect(body.querySelector('img')).toBeNull();
+      expect(screen.getByTestId('note-editor-bold')).toHaveTextContent('<img src=x');
+    });
+
     it('user reads a fenced code block verbatim', async () => {
       await renderEditor({ note: aNoteView({ bodyMd: '```\nconst a = 1;\nconst b = 2;\n```' }) });
 
@@ -121,56 +200,10 @@ describe('NoteEditorComponent', () => {
     });
   });
 
-  describe('mentions', () => {
-    const expandedBody = [
-      'See @note:other for details.',
-      '--- from note @note:other (Other note, project-1) ---\nThe other note says hello.\n--- end @note:other ---',
-      '--- @table:tasks → table "Tasks" — query_data_store ---',
-      '--- @note:gone → not resolved (not available yet) ---',
-    ].join('\n\n');
+  it('a mention envelope in a note body is shown as ordinary text', async () => {
+    await renderEditor({ note: aNoteView({ bodyMd: '--- from note @note:x (t, y) ---\nbody\n--- end @note:x ---' }) });
 
-    it('user reads a mentioned note as its own block inside the document', async () => {
-      await renderEditor({ expandedBody });
-
-      const block = screen.getByTestId('note-editor-mention-note-other');
-      expect(block).toHaveTextContent('Other note');
-      expect(block).toHaveTextContent('The other note says hello.');
-    });
-
-    it('user sees a mentioned table or repo as a pointer line', async () => {
-      await renderEditor({ expandedBody });
-
-      expect(screen.getByTestId('note-editor-mention-table-tasks')).toHaveTextContent('Tasks');
-    });
-
-    it('user is told when a mention could not be resolved', async () => {
-      await renderEditor({ expandedBody });
-
-      expect(screen.getByTestId('note-editor-mention-note-gone')).toHaveTextContent('not resolved');
-    });
-
-    it('the note body is shown when no expanded body is supplied', async () => {
-      await renderEditor({ note: aNoteView({ bodyMd: 'Plain body text.' }), expandedBody: undefined });
-
-      expect(screen.getByTestId('note-editor-body')).toHaveTextContent('Plain body text.');
-    });
-  });
-
-  describe('"Mentioned by" footer', () => {
-    it('user sees who mentions the note when that data is supplied', async () => {
-      await renderEditor({ mentionedBy: [{ emoji: '🦉', name: 'Argus' }, { emoji: '🪵', name: 'Nori' }] });
-
-      const footer = screen.getByTestId('note-editor-mentioned-by');
-      expect(footer).toHaveTextContent('Mentioned by');
-      expect(footer).toHaveTextContent('🦉 Argus');
-      expect(footer).toHaveTextContent('🪵 Nori');
-    });
-
-    it('nothing is invented when no backlink data is supplied', async () => {
-      await renderEditor({ mentionedBy: [] });
-
-      expect(screen.queryByTestId('note-editor-mentioned-by')).not.toBeInTheDocument();
-    });
+    expect(screen.getByTestId('note-editor-body')).toHaveTextContent('--- from note @note:x (t, y) --- body --- end @note:x ---');
   });
 
   it('the note title is a heading of the page', async () => {
@@ -193,35 +226,6 @@ describe('NoteEditorComponent', () => {
       expect(screen.queryByTestId('note-editor-show-rest')).not.toBeInTheDocument();
     });
 
-    it('an unclosed mention marker never lets its content escape the limit', async () => {
-      const bodyMd = `--- from note @note:x (t, y) ---\n${bodyOfParagraphs(2100)}`;
-
-      await renderEditor({ note: aNoteView({ bodyMd }) });
-
-      expect(screen.getAllByTestId('note-editor-paragraph')).toHaveLength(1999);
-      expect(screen.getByTestId('note-editor-show-rest')).toHaveTextContent('Show the rest (101 more items)');
-      await userEvent.click(screen.getByTestId('note-editor-show-rest'));
-      expect(screen.getAllByTestId('note-editor-paragraph')).toHaveLength(2100);
-    });
-
-    it('a mentioned note whose header would be the last block within the limit is not shown as an empty card', async () => {
-      const bodyMd = `${bodyOfParagraphs(1999)}\n\n--- from note @note:x (t, y) ---\nnested one\n\nnested two\n--- end @note:x ---`;
-
-      await renderEditor({ note: aNoteView({ bodyMd }) });
-
-      expect(screen.getAllByTestId('note-editor-paragraph')).toHaveLength(1999);
-      expect(screen.queryByTestId('note-editor-mention-note-x')).not.toBeInTheDocument();
-      await userEvent.click(screen.getByTestId('note-editor-show-rest'));
-      expect(screen.getByTestId('note-editor-mention-note-x')).toHaveTextContent('nested two');
-    });
-
-    it('a marker naming something that is not a mentionable kind stays plain text', async () => {
-      await renderEditor({ note: aNoteView({ bodyMd: '--- from note @evil:x (t, y) ---\nbody' }) });
-
-      expect(screen.queryByTestId('note-editor-mention-evil-x')).not.toBeInTheDocument();
-      expect(screen.getByTestId('note-editor-body')).toHaveTextContent('--- from note @evil:x (t, y) --- body');
-    });
-
     it('a single huge bullet list shows its first items and can be expanded', async () => {
       await renderEditor({ note: aNoteView({ bodyMd: '- x\n'.repeat(2500) }) });
 
@@ -232,12 +236,13 @@ describe('NoteEditorComponent', () => {
     });
 
     it('a single paragraph made of thousands of inline code spans shows the first spans and can be expanded', async () => {
-      await renderEditor({ note: aNoteView({ bodyMd: 'a`b`'.repeat(2500) }) });
+      const { fixture } = await renderEditor({ note: aNoteView({ bodyMd: 'a`b`'.repeat(2100) }) });
 
       expect(screen.getAllByTestId('note-editor-inline-code')).toHaveLength(1999);
       expect(screen.getByTestId('note-editor-show-rest')).toBeInTheDocument();
-      await userEvent.click(screen.getByTestId('note-editor-show-rest'));
-      expect(screen.getAllByTestId('note-editor-inline-code')).toHaveLength(2500);
+      await userEvent.setup({ delay: null }).click(screen.getByTestId('note-editor-show-rest'));
+      await fixture.whenStable();
+      expect(screen.getAllByTestId('note-editor-inline-code')).toHaveLength(2100);
     });
 
     it('a paragraph of thousands of empty code spans between plain words reads as one run of text', async () => {
@@ -263,13 +268,12 @@ describe('NoteEditorComponent', () => {
       expect(screen.getAllByTestId('note-editor-paragraph')).toHaveLength(499);
     });
 
-    it('a mentioned note stuffed with list items stays within the budget', async () => {
-      const bodyMd = `--- from note @note:x (t, y) ---\n${'- x\n'.repeat(5000)}--- end @note:x ---`;
+    it('bold runs count in the budget, so the button counts the bullets and runs still hidden', async () => {
+      await renderEditor({ note: aNoteView({ bodyMd: '- **x**\n'.repeat(1500) }) });
 
-      await renderEditor({ note: aNoteView({ bodyMd }) });
-
-      expect(screen.getAllByTestId('note-editor-list-item')).toHaveLength(1998);
-      expect(screen.getByTestId('note-editor-show-rest')).toBeInTheDocument();
+      expect(screen.getAllByTestId('note-editor-list-item')).toHaveLength(999);
+      expect(screen.getAllByTestId('note-editor-bold')).toHaveLength(999);
+      expect(screen.getByTestId('note-editor-show-rest')).toHaveTextContent('Show the rest (1002 more items)');
     });
 
     it('user reveals a very long list a chunk at a time, the button counting what remains', async () => {
@@ -295,6 +299,33 @@ describe('NoteEditorComponent', () => {
 
       expect(linesShown()).toBe(2500);
       expect(screen.queryByTestId('note-editor-show-rest')).not.toBeInTheDocument();
+    });
+
+    it('a single huge numbered list shows its first items and can be expanded', async () => {
+      await renderEditor({ note: aNoteView({ bodyMd: '1. x\n'.repeat(2500) }) });
+
+      expect(screen.getAllByTestId('note-editor-list-item')).toHaveLength(1999);
+      expect(screen.getByTestId('note-editor-show-rest')).toHaveTextContent('Show the rest (501 more items)');
+      await userEvent.click(screen.getByTestId('note-editor-show-rest'));
+      expect(screen.getAllByTestId('note-editor-list-item')).toHaveLength(2500);
+    });
+
+    it('a paragraph made of thousands of bold runs shows the first runs and can be expanded', async () => {
+      const { fixture } = await renderEditor({ note: aNoteView({ bodyMd: 'a**b**'.repeat(2100) }) });
+
+      expect(screen.getAllByTestId('note-editor-bold')).toHaveLength(1999);
+      await userEvent.setup({ delay: null }).click(screen.getByTestId('note-editor-show-rest'));
+      await fixture.whenStable();
+      expect(screen.getAllByTestId('note-editor-bold')).toHaveLength(2100);
+    });
+
+    it('a quote of thousands of paragraphs stays within the budget and can be expanded', async () => {
+      await renderEditor({ note: aNoteView({ bodyMd: '> x\n>\n'.repeat(2500) }) });
+
+      expect(screen.getAllByTestId('note-editor-paragraph')).toHaveLength(1999);
+      expect(screen.getByTestId('note-editor-show-rest')).toHaveTextContent('Show the rest (501 more items)');
+      await userEvent.click(screen.getByTestId('note-editor-show-rest'));
+      expect(screen.getAllByTestId('note-editor-paragraph')).toHaveLength(2500);
     });
 
     it('a note within the limit offers nothing to expand', async () => {

@@ -85,5 +85,13 @@ describe('NoteStatePanelComponent', () => {
 
       expect(create).toHaveBeenCalledOnce();
     });
+
+    it('user is told agents write notes with the notes tool, without any mention wording', async () => {
+      await renderPanel('empty');
+
+      const hint = screen.getByTestId('note-empty-hint');
+      expect(hint).toHaveTextContent('Agents write notes with the notes tool and they appear here.');
+      expect(hint).not.toHaveTextContent(/mention|@note/i);
+    });
   });
 });

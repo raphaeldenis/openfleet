@@ -251,6 +251,20 @@ describe('NotesViewComponent', () => {
       await waitFor(() => expect(screen.getByTestId('note-editor-body')).toHaveTextContent('Restored body'));
     });
 
+    it('the history panel sits below the full-width note header, inside the note pane', async () => {
+      await renderView();
+      const title = await editorTitle();
+
+      await userEvent.click(screen.getByTestId('note-editor-history-toggle'));
+      const history = (await screen.findByTestId('note-history-restore')).closest<HTMLElement>('of-note-history')!;
+
+      const notePane = title.closest<HTMLElement>('of-note-editor')!;
+      expect(notePane).toContainElement(history);
+      expect(title.compareDocumentPosition(history) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(title).toBeVisible();
+      expect(history).toBeVisible();
+    });
+
     it('user cannot restore the same version twice in a row', async () => {
       await renderView();
       await editorTitle();
