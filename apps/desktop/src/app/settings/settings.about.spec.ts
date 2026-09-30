@@ -61,6 +61,23 @@ describe('Settings → About', () => {
     expect(await screen.findByText('unknown', { selector: '[data-testid="about-daemon-version"]' })).toBeInTheDocument();
   });
 
+  it('shows the newer daemon version when a later health answer replaces the recorded one', async () => {
+    await openAboutTab({ appVersion: Promise.resolve('0.2.0') });
+    daemonAnswersBootCheckWith({ version: '0.1.0' });
+
+    daemonAnswersBootCheckWith({ version: '0.2.0' });
+
+    expect(await screen.findByText('0.2.0', { selector: '[data-testid="about-daemon-version"]' })).toBeInTheDocument();
+  });
+
+  it('caps a huge daemon version at 64 characters with an ellipsis', async () => {
+    await openAboutTab({ appVersion: Promise.resolve('0.2.0') });
+
+    daemonAnswersBootCheckWith({ version: '9'.repeat(5000) });
+
+    expect(await screen.findByText(`${'9'.repeat(63)}…`, { selector: '[data-testid="about-daemon-version"]' })).toBeInTheDocument();
+  });
+
   it('says the daemon version is unknown when the daemon did not answer the boot check', async () => {
     await openAboutTab({ appVersion: Promise.resolve('0.2.0') });
 

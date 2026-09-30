@@ -4,6 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
 import { environment } from '../../environments/environment';
 import { FleetApiService } from '../core/fleet-api.service';
+import { VersionsService } from '../core/versions.service';
 import { EmbeddedSessionSeed, NewSessionFormComponent } from '../sessions/new-session-form.component';
 
 type StepId = 'daemon' | 'providers' | 'project' | 'playbooks' | 'team' | 'first-session';
@@ -155,6 +156,7 @@ function requestedUrlFrom(navigationState: unknown): string {
 export class OnboardingComponent {
   private readonly api = inject(FleetApiService);
   private readonly router = inject(Router);
+  private readonly versions = inject(VersionsService);
   // AppRoot hands over the URL the user was redirected from when the daemon was unreachable.
   private readonly returnUrl = requestedUrlFrom(inject(Location).getState());
 
@@ -192,12 +194,12 @@ export class OnboardingComponent {
       let hasLeftDaemonStep = false;
       let nextCheckTimer: ReturnType<typeof setTimeout> | undefined;
       const checkDaemonThenScheduleNextCheck = async () => {
-        const isDaemonUp = await this.api.health().then(
-          () => true,
-          () => false,
-        );
+        const health = await this.api.health().catch(() => null);
         if (hasLeftDaemonStep) return;
-        if (isDaemonUp) return this.leaveDaemonStep(() => hasLeftDaemonStep);
+        if (health) {
+          this.versions.recordDaemonHealth(health);
+          return this.leaveDaemonStep(() => hasLeftDaemonStep);
+        }
         nextCheckTimer = setTimeout(() => void checkDaemonThenScheduleNextCheck(), HEALTH_POLL_INTERVAL_MS);
       };
       onCleanup(() => {

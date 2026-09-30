@@ -6,6 +6,8 @@ export interface VersionMismatch {
   daemonVersion: string;
 }
 
+const MAX_VERSION_LENGTH = 64;
+
 /** What the daemon answered to the boot health check; null when it did not answer. */
 export type DaemonHealth = { version?: string } | null;
 
@@ -38,9 +40,17 @@ export class VersionsService {
     return this.loadingAppVersion;
   }
 
-  /** Takes the daemon version from the boot health check, so the daemon is asked once, not once per screen. */
+  /** Takes the daemon version from any successful health answer; a later answer replaces the earlier one. */
   recordDaemonHealth(health: DaemonHealth): void {
-    this.daemonVersion.set(health?.version ?? null);
+    this.daemonVersion.set(displayableVersionOf(health?.version));
     this.isDaemonVersionSettled.set(true);
   }
+}
+
+/** Returns the version as a string of at most MAX_VERSION_LENGTH characters, or null when it is not a non-empty string. */
+function displayableVersionOf(version: unknown): string | null {
+  const isUsable = typeof version === 'string' && version !== '';
+  if (!isUsable) return null;
+  const isTooLong = version.length > MAX_VERSION_LENGTH;
+  return isTooLong ? `${version.slice(0, MAX_VERSION_LENGTH - 1)}…` : version;
 }

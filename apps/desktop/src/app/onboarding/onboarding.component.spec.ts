@@ -1,7 +1,10 @@
+import { TestBed } from '@angular/core/testing';
 import { render, screen } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
 import { provideRouter } from '@angular/router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { APP_VERSION_READER } from '../core/app-version';
+import { VersionsService } from '../core/versions.service';
 import { OnboardingComponent } from './onboarding.component';
 
 const HEALTH_POLL_INTERVAL_MS = 2000;
@@ -14,9 +17,9 @@ function jsonResponse(body: unknown): Response {
 }
 
 function stubDaemon() {
-  const daemon = { isUp: false };
+  const daemon: { isUp: boolean; version?: unknown } = { isUp: false };
   const fetchMock = vi.fn((url: string) => {
-    if (url.endsWith('/health')) return daemon.isUp ? Promise.resolve(jsonResponse({ ok: true })) : Promise.reject(new TypeError('Failed to fetch'));
+    if (url.endsWith('/health')) return daemon.isUp ? Promise.resolve(jsonResponse({ ok: true, version: daemon.version })) : Promise.reject(new TypeError('Failed to fetch'));
     if (url.endsWith('/api/sessions')) return Promise.resolve(jsonResponse([]));
     return Promise.reject(new Error(`unexpected request to ${url}`));
   });
@@ -25,8 +28,10 @@ function stubDaemon() {
   return { daemon, healthRequestCount };
 }
 
-function renderOnboarding() {
-  return render(OnboardingComponent, { providers: [provideRouter([{ path: '**', children: [] }])] });
+function renderOnboarding({ appVersion = '0.1.0' }: { appVersion?: string } = {}) {
+  return render(OnboardingComponent, {
+    providers: [provideRouter([{ path: '**', children: [] }]), { provide: APP_VERSION_READER, useValue: () => Promise.resolve(appVersion) }],
+  });
 }
 
 async function letTimePass(milliseconds: number, fixture: { whenStable: () => Promise<unknown> }): Promise<void> {
@@ -102,6 +107,32 @@ describe('OnboardingComponent', () => {
     expect(screen.getByRole('heading', { name: PROJECT_STEP_HEADING })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: DAEMON_STEP_HEADING })).toBeNull();
     expect(healthRequestCount()).toBe(requestsWhenAdvanced);
+  });
+
+  it('user starting the daemon after the app sees its version recorded, so About shows it and the mismatch is detected', async () => {
+    const { daemon } = stubDaemon();
+    daemon.version = '0.2.0';
+    const { fixture } = await renderOnboarding({ appVersion: '0.1.0' });
+    const versions = TestBed.inject(VersionsService);
+    await versions.loadAppVersion();
+
+    daemon.isUp = true;
+    await letTimePass(HEALTH_POLL_INTERVAL_MS, fixture);
+
+    expect(versions.daemonVersion()).toBe('0.2.0');
+    expect(versions.mismatch()).toEqual({ appVersion: '0.1.0', daemonVersion: '0.2.0' });
+  });
+
+  it('user starting a daemon that reports no version keeps the daemon version unknown', async () => {
+    const { daemon } = stubDaemon();
+    const { fixture } = await renderOnboarding({ appVersion: '0.1.0' });
+    const versions = TestBed.inject(VersionsService);
+
+    daemon.isUp = true;
+    await letTimePass(HEALTH_POLL_INTERVAL_MS, fixture);
+
+    expect(versions.daemonVersion()).toBeNull();
+    expect(versions.isDaemonVersionSettled()).toBe(true);
   });
 
   it('user leaving the page stops the /health polling', async () => {

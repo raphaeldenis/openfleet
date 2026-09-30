@@ -71,6 +71,34 @@ describe('AppShellComponent version mismatch banner', () => {
     expect(versionMismatchBanner()).not.toBeInTheDocument();
   });
 
+  it('shows a daemon version made of HTML as escaped text', async () => {
+    const { daemonAnswersBootCheckWith } = await openShell({ appVersion: '0.2.0' });
+
+    await daemonAnswersBootCheckWith({ version: '<img src=x onerror=alert(1)>' });
+
+    const banner = screen.getByTestId('version-mismatch-banner');
+    expect(banner).toHaveTextContent('<img src=x onerror=alert(1)>');
+    expect(banner.querySelector('img')).toBeNull();
+  });
+
+  it('caps a huge daemon version at 64 characters with an ellipsis', async () => {
+    const { daemonAnswersBootCheckWith } = await openShell({ appVersion: '0.2.0' });
+
+    await daemonAnswersBootCheckWith({ version: '9'.repeat(5000) });
+
+    const bannerText = screen.getByTestId('version-mismatch-banner').textContent ?? '';
+    expect(bannerText).toContain(`${'9'.repeat(63)}…`);
+    expect(bannerText).not.toContain('9'.repeat(64));
+  });
+
+  it('treats a daemon version that is not a string as unknown and shows nothing', async () => {
+    const { daemonAnswersBootCheckWith } = await openShell({ appVersion: '0.2.0' });
+
+    await daemonAnswersBootCheckWith({ version: 7 as unknown as string });
+
+    expect(versionMismatchBanner()).not.toBeInTheDocument();
+  });
+
   it('shows nothing when the daemon did not answer the boot check', async () => {
     const { daemonAnswersBootCheckWith } = await openShell({ appVersion: '0.2.0' });
 

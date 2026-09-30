@@ -31,7 +31,7 @@ const ANNOUNCE_ROLE: Record<BannerVariant, 'alert' | 'status'> = {
       class="banner"
     >
       <span class="title">{{ title() }}</span>
-      <span>{{ description() }}</span>
+      <span class="description">{{ description() }}</span>
     </div>
   `,
   styles: `
@@ -40,6 +40,7 @@ const ANNOUNCE_ROLE: Record<BannerVariant, 'alert' | 'status'> = {
       border: 1px solid color-mix(in oklch, var(--banner-color) 45%, transparent);
       background: color-mix(in oklch, var(--banner-color) 7%, var(--panel));
     }
+    .description { min-width: 0; overflow-wrap: anywhere; }
     .title { color: var(--banner-color); font-weight: 600; }
   `,
 })
