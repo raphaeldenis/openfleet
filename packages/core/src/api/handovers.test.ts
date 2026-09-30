@@ -334,7 +334,7 @@ describe('user can read the handovers of a session over REST', () => {
     expect(empty.status).toBe(200);
     expect(await empty.json()).toEqual([]);
     expect(unknown.status).toBe(404);
-    expect(await unknown.json()).toEqual({ error: 'not_found' });
+    expect(await unknown.json()).toMatchObject({ error: 'not_found', kind: 'not_found', retry: 'never' });
   });
 
   it('refuses a request without the admin token', async () => {

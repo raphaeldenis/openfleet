@@ -110,7 +110,7 @@ describe('operator gets every daemon feature when the daemon boots from its conf
 
     const response = await api(`/api/sessions/${session.id}/working-state`);
 
-    expect((await response.json())).toEqual({ error: 'no_state' });
+    expect((await response.json())).toMatchObject({ error: 'no_state', kind: 'not_found', retry: 'never' });
   });
 
   it('tells connected clients the working-state max age configured in config.json', async () => {

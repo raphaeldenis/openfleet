@@ -1,14 +1,15 @@
 import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
-import type { ServerEvent } from '@openfleet/shared';
+import { OpenFleetError, type ServerEvent } from '@openfleet/shared';
 import { z } from 'zod';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { ALLOWED_ORIGINS } from './allowedOrigins.js';
+import { describeError } from '../errors/describeError.js';
 import type { ApprovalService } from '../governance/approvalService.js';
 import type { EventBus } from '../events/eventBus.js';
 import { log } from '../logger.js';
 import type { ManagerService } from '../managers/managerService.js';
-import type { SessionService } from '../sessions/sessionService.js';
+import { SessionClosedError, type SessionService } from '../sessions/sessionService.js';
 import { DEFAULT_WORKING_STATE_MAX_AGE_MINUTES } from '../workingState/workingStateSettings.js';
 import type { WorkingStateService } from '../workingState/workingStateService.js';
 import type { WsTicketStore } from './wsTicketStore.js';
@@ -20,27 +21,53 @@ const ClientMessageSchema = z.discriminatedUnion('type', [
 ]);
 type ClientMessage = z.infer<typeof ClientMessageSchema>;
 
-function parseClientMessage(raw: unknown): ClientMessage | undefined {
+const MAX_ECHOED_SESSION_ID_CHARS = 128;
+
+function parseClientFrame(raw: unknown): unknown {
   try {
-    const parsed = ClientMessageSchema.safeParse(JSON.parse(String(raw)));
-    if (!parsed.success) {
-      log('error', 'ws: ignoring invalid client message', parsed.error.message);
-      return undefined;
-    }
-    return parsed.data;
+    return JSON.parse(String(raw));
   } catch {
-    log('error', 'ws: ignoring malformed client frame');
-    return undefined;
+    throw new OpenFleetError('invalid_body', 'the message is not valid JSON.');
+  }
+}
+
+// A session id longer than any real one is never echoed back: the answer stays small whatever the client sent.
+function echoableSessionId(frame: unknown): string | undefined {
+  const sessionId = (frame as { sessionId?: unknown } | null | undefined)?.sessionId;
+  const isEchoable = typeof sessionId === 'string' && sessionId.length <= MAX_ECHOED_SESSION_ID_CHARS;
+  return isEchoable ? sessionId : undefined;
+}
+
+// Best effort: a socket that is closing or whose send throws never stops the caller.
+function sendBestEffort(socket: WebSocket, payload: string): void {
+  if (socket.readyState !== socket.OPEN) return;
+  try {
+    socket.send(payload);
+  } catch (error) {
+    log('warn', 'ws: send failed', { code: (error as { code?: string }).code });
   }
 }
 
 function send(socket: WebSocket, event: ServerEvent): void {
-  socket.send(JSON.stringify(event));
+  sendBestEffort(socket, JSON.stringify(event));
+}
+
+function replyWithError(socket: WebSocket, error: unknown, sessionId: string | undefined): void {
+  const envelope = describeError(error, { sessionId, where: 'ws client message' });
+  send(socket, { type: 'error', ...(sessionId !== undefined && { sessionId }), error: envelope });
+}
+
+function assertSessionAcceptsInput(sessions: SessionService, sessionId: string): void {
+  const session = sessions.get(sessionId);
+  if (!session) throw new OpenFleetError('session_not_found', 'the session does not exist.');
+  if (session.state === 'closed') throw new SessionClosedError(sessionId);
 }
 
 function handleClientMessage(socket: WebSocket, message: ClientMessage, deps: { sessions: SessionService }): void {
   switch (message.type) {
-    case 'input': return deps.sessions.writeRaw(message.sessionId, message.data);
+    case 'input':
+      assertSessionAcceptsInput(deps.sessions, message.sessionId);
+      return deps.sessions.writeRaw(message.sessionId, message.data);
     case 'resize': return deps.sessions.resize(message.sessionId, message.cols, message.rows);
     case 'attach': return send(socket, { type: 'session.replay', sessionId: message.sessionId, data: deps.sessions.recentOutput(message.sessionId) });
   }
@@ -58,9 +85,10 @@ const DEFAULT_WS_CLOSE_GRACE_MS = 250;
 
 export function createWsHandler(deps: { bus: EventBus; sessions: SessionService; approvals: ApprovalService; managers: ManagerService; wsTickets: WsTicketStore; wsCloseGraceMs?: number; workingStates?: WorkingStateService; workingStateMaxAgeMinutes?: number }): WsHandler {
   const wss = new WebSocketServer({ noServer: true });
+  // A broadcast runs inside the session pipeline (the bus is synchronous): one bad client never stops the others or the caller.
   const broadcast = (event: ServerEvent) => {
     const payload = JSON.stringify(event);
-    for (const client of wss.clients) if (client.readyState === client.OPEN) client.send(payload);
+    for (const client of wss.clients) sendBestEffort(client, payload);
   };
   deps.bus.subscribe(broadcast);
 
@@ -92,12 +120,12 @@ export function createWsHandler(deps: { bus: EventBus; sessions: SessionService;
       ...workingStateSnapshotFields(),
     });
     socket.on('message', (raw) => {
-      const message = parseClientMessage(raw);
-      if (!message) return;
+      let frame: unknown;
       try {
-        handleClientMessage(socket, message, deps);
+        frame = parseClientFrame(raw);
+        handleClientMessage(socket, ClientMessageSchema.parse(frame), deps);
       } catch (error) {
-        log('error', 'ws: error handling client message', error);
+        replyWithError(socket, error, echoableSessionId(frame));
       }
     });
   });

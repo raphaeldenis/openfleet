@@ -210,6 +210,7 @@ export class FleetEventsService {
       case 'approval.resolved': return this.approvals.update((all) => all.filter((a) => a.id !== event.approval.id));
       case 'manager.created': return this.upsertManager(event.manager);
       case 'manager.pulsed': return this.upsertManager(event.manager);
+      case 'error': return; // no desktop surface reads a server error event yet
       default: return;
     }
   }

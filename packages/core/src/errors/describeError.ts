@@ -96,8 +96,9 @@ const RULES: Rule[] = [
   when(ModelConfigUnreadableError, asDetail('config_unreadable', 'the model config cannot be read.')),
   when(ModelConfigReadOnlyError, asDetail('config_read_only', 'the model config is read-only.')),
 
-  when(NoteNotFoundError, asIs('not_found')),
-  when(VersionNotFoundError, asIs('not_found')),
+  // A not-found message never echoes the id: a foreign note, store or row answers byte for byte like a missing one.
+  when(NoteNotFoundError, () => ({ code: 'not_found', message: 'the note does not exist.' })),
+  when(VersionNotFoundError, () => ({ code: 'not_found', message: 'the note version does not exist.' })),
   when(StaleRevisionError, (error) => ({ code: 'stale_revision', message: error.message, hint: 'reload the note, then save again.', detail: { currentRev: error.currentRev } })),
   when(FileBackedNoteError, asIs('file_backed')),
   when(NoteFileUnreadableError, () => ({ code: 'file_unreadable', message: 'the note file cannot be read.', hint: 'restore the docs folder or the file permissions, then retry.' })),
@@ -105,8 +106,8 @@ const RULES: Rule[] = [
   when(NoteTooLargeError, asIs('note_too_large')),
   when(ProjectNotFoundError, asIs('project_not_found')),
 
-  when(StoreNotFoundError, asIs('not_found')),
-  when(RowNotFoundError, asIs('not_found')),
+  when(StoreNotFoundError, () => ({ code: 'not_found', message: 'the data store does not exist.' })),
+  when(RowNotFoundError, () => ({ code: 'not_found', message: 'the row does not exist.' })),
   when(ViewNotFoundError, asIs('view_not_found')),
   when(DuplicateNameError, asIs('duplicate_name')),
   when(ConstraintError, asDetail('constraint_violation', 'the change breaks a constraint.')),

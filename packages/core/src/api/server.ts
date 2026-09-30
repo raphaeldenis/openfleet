@@ -1,6 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { HTTP_STATUS_BY_KIND } from '@openfleet/shared';
-import { describeError } from '../errors/describeError.js';
+import { HTTP_STATUS_BY_KIND, OpenFleetError } from '@openfleet/shared';
 import type { EventBus } from '../events/eventBus.js';
 import type { ApprovalService } from '../governance/approvalService.js';
 import { tokensMatch } from '../ids.js';
@@ -18,6 +17,7 @@ import type { DataStoreRepository } from '../stores/dataStoreRepository.js';
 import type { DataStoreService } from '../stores/dataStoreService.js';
 import type { WorkingStateService } from '../workingState/workingStateService.js';
 import { ALLOWED_ORIGINS } from './allowedOrigins.js';
+import { answerError } from './answerError.js';
 import { registerDataStoreRoutes } from './dataStoreRoutes.js';
 import type { SessionStartContext } from '../workingState/sessionStartContext.js';
 import type { ContextNotice } from '../workingState/contextNotice.js';
@@ -78,15 +78,23 @@ async function handleMcpRequest(
   sessions: SessionService,
 ): Promise<void> {
   const bearer = (req.headers.authorization ?? '').replace(/^Bearer /, '');
-  if (!sessions.byMcpToken(bearer)) return json(res, 401, { error: 'unauthorized' });
+  if (!sessions.byMcpToken(bearer)) throw new OpenFleetError('unauthorized', 'the mcp token is missing or wrong.');
   await mcp(req, res, await readJson(req));
+}
+
+function parsedRequestUrl(req: IncomingMessage, host: string): URL {
+  try {
+    return new URL(req.url ?? '/', `http://${host}`);
+  } catch {
+    throw new OpenFleetError('invalid_url', 'the request url is invalid.');
+  }
 }
 
 /** Ends the request with a plain 500 when the error answer itself failed; a response already started is just ended. */
 function answerLastResort(res: ServerResponse): void {
   try {
     if (res.headersSent) return void res.end();
-    json(res, 500, { error: 'internal_error', kind: 'internal', retry: 'later', message: 'the daemon hit an unexpected error.' });
+    json(res, HTTP_STATUS_BY_KIND.internal, { error: 'internal_error', kind: 'internal', retry: 'later', message: 'the daemon hit an unexpected error.' });
   } catch {
     res.destroy();
   }
@@ -106,34 +114,26 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; rout
     applyCorsHeaders(req, res);
     if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
 
-    let url: URL;
     try {
-      url = new URL(req.url ?? '/', `http://${deps.host}`);
-    } catch {
-      return json(res, 400, { error: 'invalid_url' });
-    }
-
-    try {
+      const url = parsedRequestUrl(req, deps.host);
       // Both /hooks and /mcp resolve their token from the URL/header alone, before touching the body —
       // an unknown hook token or MCP bearer is answered without ever buffering the request into memory.
       const hookMatch = req.method === 'POST' ? HOOK_PATH.exec(url.pathname) : null;
       if (hookMatch) {
         const hookParams = decodeParams(['hookToken'], hookMatch);
-        if (!hookParams) return json(res, 404, { error: 'not_found' });
+        if (!hookParams) throw new OpenFleetError('not_found', 'the route does not exist.');
         return await handleHookRequest(req, res, hookParams.hookToken!, deps);
       }
       if (url.pathname === '/mcp' && deps.mcp) return await handleMcpRequest(req, res, deps.mcp, deps.sessions);
 
       const match = router.match(req.method ?? 'GET', url.pathname);
-      if (!match) return json(res, 404, { error: 'not_found' });
+      if (!match) throw new OpenFleetError('not_found', 'the route does not exist.');
       const isProtected = url.pathname.startsWith('/api/');
-      if (isProtected && !tokensMatch(req.headers.authorization ?? '', `Bearer ${deps.adminToken}`)) return json(res, 401, { error: 'unauthorized' });
+      if (isProtected && !tokensMatch(req.headers.authorization ?? '', `Bearer ${deps.adminToken}`)) throw new OpenFleetError('unauthorized', 'the admin token is missing or wrong.');
       await match.handler({ req, res, params: match.params, body: await readJson(req) });
     } catch (error) {
       try {
-        const envelope = describeError(error, { where: `${req.method ?? 'GET'} ${redactedRequestPath(req)} → 500` });
-        const errorIdHeader: Record<string, string> = envelope.id ? { 'x-openfleet-error-id': envelope.id } : {};
-        json(res, HTTP_STATUS_BY_KIND[envelope.kind], envelope, errorIdHeader);
+        answerError(res, error, { where: `${req.method ?? 'GET'} ${redactedRequestPath(req)} → 500` });
       } catch {
         answerLastResort(res);
       }

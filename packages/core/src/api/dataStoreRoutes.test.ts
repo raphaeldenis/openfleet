@@ -140,7 +140,7 @@ describe('data store REST routes', () => {
       expect(empty.status).toBe(400);
       expect(noName.status).toBe(400);
       expect(ghost.status).toBe(404);
-      expect(await ghost.json()).toEqual({ error: 'project_not_found' });
+      expect(await ghost.json()).toMatchObject({ error: 'project_not_found', kind: 'not_found', retry: 'never' });
     });
 
     it('refuses a store name over 200 characters with 400 and accepts exactly 200', async () => {
@@ -280,7 +280,7 @@ describe('data store REST routes', () => {
       const after = await json(await call('GET', `/api/data-stores/${store.id}/rows?projectId=p1`));
 
       expect(toValue.status).toBe(400);
-      expect(await toValue.json()).toEqual({ error: 'invalid_body', detail: `Column ${createdAt.id} is set by the daemon and cannot be updated` });
+      expect(await toValue.json()).toMatchObject({ error: 'invalid_body', kind: 'invalid_request', retry: 'never', detail: `Column ${createdAt.id} is set by the daemon and cannot be updated` });
       expect(toNull.status).toBe(400);
       expect(after).toEqual(before);
     });

@@ -1,14 +1,12 @@
-import type { ServerResponse } from 'node:http';
 import {
-  CreateNoteRequestSchema, MAX_NOTE_PAGE_LIMIT, NoteFolderSchema, RestoreNoteRequestSchema, UpdateNoteRequestSchema, pageQuerySchema, queryInteger,
+  CreateNoteRequestSchema, MAX_NOTE_PAGE_LIMIT, NoteFolderSchema, OpenFleetError, RestoreNoteRequestSchema, UpdateNoteRequestSchema, pageQuerySchema, queryInteger,
   type Note, type NoteSummary, type NoteVersionSummary, type NoteView, type Page,
 } from '@openfleet/shared';
 import { z } from 'zod';
 import type { DocsFolderService } from '../notes/docsFolderService.js';
 import { MAX_QUERY_CHARS, MAX_QUERY_TERMS, MAX_SEARCH_RESULTS, buildFtsQuery } from '../notes/ftsQuery.js';
-import { NoteFileUnreadableError, PathEscapesDocsFolderError } from '../notes/docsFolderService.js';
 import type { NoteRepository } from '../notes/noteRepository.js';
-import { FileBackedNoteError, NoteNotFoundError, NoteTooLargeError, StaleRevisionError, VersionNotFoundError, type NoteService } from '../notes/noteService.js';
+import { FileBackedNoteError, NoteNotFoundError, VersionNotFoundError, type NoteService } from '../notes/noteService.js';
 import { json, queryParams, type Router } from './router.js';
 
 const REST_AUTHOR = 'You';
@@ -25,26 +23,6 @@ export interface NoteRouteDeps {
   notes: NoteService;
   noteRepo: NoteRepository;
   docs: DocsFolderService;
-}
-
-const isForeignKeyError = (error: unknown) =>
-  error instanceof Error && (error as NodeJS.ErrnoException).code === 'ERR_SQLITE_ERROR' && /FOREIGN KEY/i.test(error.message);
-
-/** Maps the note domain errors to their HTTP answer; anything else is not a domain error and propagates. */
-function respondToNoteErrors(res: ServerResponse, run: () => void): void {
-  try {
-    run();
-  } catch (error) {
-    if (error instanceof NoteNotFoundError || error instanceof VersionNotFoundError) return json(res, 404, { error: 'not_found' });
-    if (error instanceof StaleRevisionError) return json(res, 409, { error: 'stale_revision', currentRev: error.currentRev });
-    if (error instanceof FileBackedNoteError) return json(res, 409, { error: 'file_backed' });
-    if (error instanceof NoteFileUnreadableError) return json(res, 409, { error: 'file_unreadable' });
-    if (error instanceof PathEscapesDocsFolderError) return json(res, 409, { error: 'path_escapes_docs_folder' });
-    // ponytail: the 1 MiB JSON body cap fires first, so this is a backstop; drop it if the note cap is ever raised past the body cap
-    if (error instanceof NoteTooLargeError) return json(res, 413, { error: 'note_too_large' });
-    if (isForeignKeyError(error)) return json(res, 404, { error: 'project_not_found' });
-    throw error;
-  }
 }
 
 export function registerNoteRoutes(router: Router, { notes, noteRepo, docs }: NoteRouteDeps): void {
@@ -88,7 +66,7 @@ export function registerNoteRoutes(router: Router, { notes, noteRepo, docs }: No
   router.add('GET', '/api/notes/search', ({ req, res }) => {
     const { projectId, q, limit, offset } = SearchNotesQuerySchema.parse(queryParams(req));
     const ftsQuery = buildFtsQuery(q);
-    if (ftsQuery.outcome === 'too_many_terms') return json(res, 400, { error: 'invalid_body', detail: `too many terms in query (max ${MAX_QUERY_TERMS})` });
+    if (ftsQuery.outcome === 'too_many_terms') throw new OpenFleetError('invalid_body', 'the search query has too many terms.', { detail: `too many terms in query (max ${MAX_QUERY_TERMS})` });
     if (ftsQuery.outcome === 'blank') return json(res, 200, { items: [], total: 0, limit, offset });
     const hits = noteRepo.searchSummaries(ftsQuery.match, { projectId, limit, offset });
     const items = hits.map(({ note, snippet }) => ({ ...note, snippet }));
@@ -97,41 +75,35 @@ export function registerNoteRoutes(router: Router, { notes, noteRepo, docs }: No
 
   router.add('GET', '/api/notes/:id', ({ req, res, params }) => {
     const { projectId } = ProjectScopeSchema.parse(queryParams(req));
-    respondToNoteErrors(res, () => json(res, 200, viewOf(requireOwnNote(projectId, params.id!))));
+    json(res, 200, viewOf(requireOwnNote(projectId, params.id!)));
   });
 
   router.add('POST', '/api/notes', ({ res, body }) => {
     const { projectId, title, bodyMd, folder, shared } = CreateNoteRequestSchema.parse(body);
-    respondToNoteErrors(res, () => json(res, 201, viewOf(notes.create({ projectId, title, bodyMd, folder, shared, author: REST_AUTHOR }))));
+    json(res, 201, viewOf(notes.create({ projectId, title, bodyMd, folder, shared, author: REST_AUTHOR })));
   });
 
   router.add('PATCH', '/api/notes/:id', ({ res, params, body }) => {
     const { projectId, expectedRev, title, bodyMd } = UpdateNoteRequestSchema.parse(body);
-    respondToNoteErrors(res, () => {
-      const current = requireOwnNote(projectId, params.id!);
-      const isRenamingFileBackedNote = title !== undefined && current.filePath !== null;
-      if (isRenamingFileBackedNote) throw new FileBackedNoteError(current.id);
-      json(res, 200, viewOf(applyPatch(current, { title, bodyMd, expectedRev })));
-    });
+    const current = requireOwnNote(projectId, params.id!);
+    const isRenamingFileBackedNote = title !== undefined && current.filePath !== null;
+    if (isRenamingFileBackedNote) throw new FileBackedNoteError(current.id);
+    json(res, 200, viewOf(applyPatch(current, { title, bodyMd, expectedRev })));
   });
 
   router.add('GET', '/api/notes/:id/versions', ({ req, res, params }) => {
     const { projectId, limit, offset } = VersionsQuerySchema.parse(queryParams(req));
-    respondToNoteErrors(res, () => {
-      assertOwnNote(projectId, params.id!);
-      const items = noteRepo.listVersionSummaries(params.id!, { limit, offset });
-      const page: Page<NoteVersionSummary> = { items, total: noteRepo.countVersions(params.id!), limit, offset };
-      json(res, 200, page);
-    });
+    assertOwnNote(projectId, params.id!);
+    const items = noteRepo.listVersionSummaries(params.id!, { limit, offset });
+    const page: Page<NoteVersionSummary> = { items, total: noteRepo.countVersions(params.id!), limit, offset };
+    json(res, 200, page);
   });
 
   router.add('POST', '/api/notes/:id/restore', ({ res, params, body }) => {
     const { projectId, rev, expectedRev } = RestoreNoteRequestSchema.parse(body);
-    respondToNoteErrors(res, () => {
-      const current = requireOwnNote(projectId, params.id!);
-      const target = noteRepo.getVersion(current.id, rev);
-      if (!target) throw new VersionNotFoundError(rev);
-      json(res, 200, viewOf(commitBody(current, target.bodyMd, expectedRev)));
-    });
+    const current = requireOwnNote(projectId, params.id!);
+    const target = noteRepo.getVersion(current.id, rev);
+    if (!target) throw new VersionNotFoundError(rev);
+    json(res, 200, viewOf(commitBody(current, target.bodyMd, expectedRev)));
   });
 }
