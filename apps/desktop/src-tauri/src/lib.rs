@@ -49,6 +49,20 @@ fn report_issue(app: tauri::AppHandle, daemon: tauri::State<daemon::DaemonState>
   issue_report::open_issue_form(&report, |url| issue_report::open_with_macos(url.as_ref()))
 }
 
+#[cfg(test)]
+mod tests {
+  /// A sync command runs on the main thread unless it is declared `async`, and these two read files and wait on child processes.
+  #[test]
+  fn the_support_commands_run_off_the_main_thread_and_take_no_webview_argument() {
+    let source = include_str!("lib.rs");
+
+    for signature in ["fn reveal_logs(app: tauri::AppHandle)", "fn report_issue(app: tauri::AppHandle, daemon: tauri::State<daemon::DaemonState>)"] {
+      let lines_before: Vec<&str> = source.split(signature).next().unwrap().lines().collect();
+      assert_eq!(lines_before.last().copied(), Some("#[tauri::command(async)]"), "{signature}");
+    }
+  }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   let application = tauri::Builder::default()
@@ -76,7 +90,10 @@ pub fn run() {
     .expect("error while building tauri application");
 
   application.run(|app, event| {
-    app_exit::stop_daemon_on_final_exit(&event, || daemon::stop(app));
+    app_exit::stop_daemon_on_final_exit(&event, || {
+      daemon::stop(app);
+      daemon::flush_log(app);
+    });
     match event {
       tauri::RunEvent::ExitRequested { code, api, .. } => {
         let request = app_exit::ExitRequest::from_exit_code(code);

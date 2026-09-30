@@ -17,6 +17,7 @@ pub const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
 pub const READY_TIMEOUT: Duration = Duration::from_secs(15);
 pub const SLOW_START_EXTRA_BUDGET: Duration = Duration::from_secs(300);
 pub const GRACE_BEFORE_SIGKILL: Duration = Duration::from_secs(12);
+const LOG_FLUSH_TIMEOUT: Duration = Duration::from_secs(1);
 /// A dying daemon's shutdown is bounded by its 10 s guard; the launch waits this long for its port to free.
 pub const SHUTTING_DOWN_DAEMON_WAIT: Duration = Duration::from_secs(15);
 const READY_POLL_INTERVAL: Duration = Duration::from_millis(250);
@@ -194,6 +195,7 @@ struct Inner {
   boot_refusal_line: Option<String>,
   child: Option<RunningChild>,
   spawned_at: Option<Instant>,
+  daemon_log: Option<DaemonLog>,
 }
 
 /// Tauri state: the daemon's status for the webview and the sidecar handle to stop on quit.
@@ -203,7 +205,15 @@ pub struct DaemonState {
 
 impl DaemonState {
   pub fn new() -> Self {
-    Self { inner: Mutex::new(Inner { status: DaemonStatus::starting(), last_stderr_line: None, boot_refusal_line: None, child: None, spawned_at: None }) }
+    Self { inner: Mutex::new(Inner { status: DaemonStatus::starting(), last_stderr_line: None, boot_refusal_line: None, child: None, spawned_at: None, daemon_log: None }) }
+  }
+
+  fn record_daemon_log(&self, daemon_log: DaemonLog) {
+    self.inner.lock().unwrap().daemon_log = Some(daemon_log);
+  }
+
+  fn daemon_log(&self) -> Option<DaemonLog> {
+    self.inner.lock().unwrap().daemon_log.clone()
   }
 
   /// Returns the status as the webview sees it at `now`.
@@ -320,6 +330,13 @@ pub fn stop(app: &AppHandle) {
   }
 }
 
+/// Writes the daemon's last output lines to `daemon.log` and stops the writer; waits at most `LOG_FLUSH_TIMEOUT`. Call it after `stop`.
+pub fn flush_log(app: &AppHandle) {
+  let Some(daemon_log) = app.state::<DaemonState>().daemon_log() else { return };
+  let drained = daemon_log.close_after_output_ends(LOG_FLUSH_TIMEOUT);
+  log::info!("daemon log flushed: {drained}");
+}
+
 /// Takes the child out of the state once and stops it; returns None when there is nothing to stop.
 pub fn stop_daemon(state: &DaemonState, signals: &impl Signals, grace: Duration) -> Option<StopOutcome> {
   let child = state.take_child()?;
@@ -392,6 +409,7 @@ fn spawn_sidecar(app: &AppHandle) -> Result<(), String> {
   state.record_spawn(RunningChild::of_sidecar(child), repaired_path, Instant::now());
   let app_for_events = app.clone();
   let daemon_log = start_daemon_log(&home);
+  state.record_daemon_log(daemon_log.clone());
   tauri::async_runtime::spawn(async move { pipe_daemon_output(app_for_events, events, daemon_log).await });
   Ok(())
 }
@@ -437,6 +455,7 @@ async fn pipe_daemon_output(app: AppHandle, mut events: tauri::async_runtime::Re
       _ => {}
     }
   }
+  daemon_log.mark_output_ended();
 }
 
 #[cfg(test)]

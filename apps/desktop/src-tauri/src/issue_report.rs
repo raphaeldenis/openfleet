@@ -3,6 +3,7 @@ use std::ffi::OsStr;
 use std::io;
 use std::path::Path;
 use std::process::Command;
+use std::time::Duration;
 
 pub const NEW_ISSUE_URL: &str = "https://github.com/raphaeldenis/openfleet/issues/new";
 /// GitHub refuses a prefilled URL beyond roughly 8 KB.
@@ -112,6 +113,11 @@ pub fn reveal_logs_dir(logs_dir: &Path, open: impl Fn(&Path) -> io::Result<()>) 
 /// Opens the prefilled issue form in the default browser; the webview supplies nothing.
 pub fn open_issue_form(report: &IssueReport, open: impl Fn(&str) -> io::Result<()>) -> Result<(), String> {
   open(&issue_url(report)).map_err(|err| format!("could not open the browser: {err}"))
+}
+
+/// Runs the command and returns what it printed; fails when it exits unsuccessfully or outlives `timeout`, in which case it is killed.
+pub fn run_within(_command: Command, _timeout: Duration) -> io::Result<String> {
+  Err(io::Error::other("not implemented"))
 }
 
 /// Asks macOS to open a folder or URL with its default application.
@@ -345,6 +351,38 @@ mod tests {
     assert_eq!(outcome, Ok(()));
     assert_eq!(opened.borrow().len(), 1);
     assert!(opened.borrow()[0].starts_with("https://github.com/raphaeldenis/openfleet/issues/new?title="));
+  }
+
+  #[test]
+  fn a_command_that_outlives_its_timeout_is_killed_and_reported() {
+    let started_at = std::time::Instant::now();
+    let mut sleeper = Command::new("/bin/sleep");
+    sleeper.arg("30");
+
+    let outcome = run_within(sleeper, Duration::from_millis(200));
+
+    assert_eq!(outcome.unwrap_err().kind(), io::ErrorKind::TimedOut);
+    assert!(started_at.elapsed() < Duration::from_secs(5));
+  }
+
+  #[test]
+  fn a_command_that_finishes_in_time_returns_what_it_printed() {
+    let mut echo = Command::new("/bin/echo");
+    echo.arg("hello");
+
+    assert_eq!(run_within(echo, Duration::from_secs(5)).unwrap(), "hello\n");
+  }
+
+  #[test]
+  fn a_command_that_exits_unsuccessfully_is_an_error() {
+    let outcome = run_within(Command::new("/usr/bin/false"), Duration::from_secs(5));
+
+    assert!(outcome.unwrap_err().to_string().contains("exited with"));
+  }
+
+  #[test]
+  fn a_missing_program_is_an_error() {
+    assert!(run_within(Command::new("/nonexistent/program"), Duration::from_secs(5)).is_err());
   }
 
   #[test]
