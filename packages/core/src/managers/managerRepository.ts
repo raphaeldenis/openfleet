@@ -33,6 +33,10 @@ export class ManagerRepository {
     const row = this.db.prepare('SELECT * FROM managers WHERE session_id = ?').get(sessionId) as Row | undefined;
     return row ? toManager(row) : undefined;
   }
+  getWithinBounds(sessionId: string): ManagerRecord | undefined {
+    const record = this.get(sessionId);
+    return record && this.isWithinBounds(record) ? record : undefined;
+  }
   list(): ManagerRecord[] {
     return (this.db.prepare('SELECT * FROM managers').all() as unknown as Row[]).map(toManager).filter((record) => this.isWithinBounds(record));
   }

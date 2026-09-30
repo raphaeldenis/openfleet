@@ -13,7 +13,7 @@ import { PulseScheduler } from '../managers/pulseScheduler.js';
 import { DEFAULT_MODEL_TABLE } from '../models.js';
 import { SessionService } from '../sessions/sessionService.js';
 import { WorkingStateService } from '../workingState/workingStateService.js';
-import { loadWorkingStateSettings } from '../workingState/workingStateSettings.js';
+import { loadDaemonSettings } from '../workingState/workingStateSettings.js';
 import { startServer } from './server.js';
 
 const CUSTOM_MAX_BYTES = 2048;
@@ -33,7 +33,7 @@ const sections = (overrides: Partial<WorkingStateSections> = {}): WorkingStateSe
 async function startTestServer(configuredWorkingState: { maxAgeMinutes?: number; maxBytes?: number } = {}) {
   const configPath = join(mkdtempSync(join(tmpdir(), 'of-ws-config-')), 'config.json');
   writeFileSync(configPath, JSON.stringify({ workingState: configuredWorkingState }));
-  const settings = loadWorkingStateSettings(configPath);
+  const settings = loadDaemonSettings(configPath).workingState;
   const db = openDatabase(':memory:');
   const bus = new EventBus();
   sessions = new SessionService({ db, bus, harnesses: [new FakeHarness()], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt' });

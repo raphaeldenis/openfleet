@@ -7,7 +7,7 @@ const MAX_CHILDREN_CAP = 64;
 const MAX_MISSION_BYTES = 64 * 1024;
 
 export const ManagerSpecSchema = z.object({
-  pulseSeconds: z.number().int().min(1).max(ONE_DAY_SECONDS),
+  pulseSeconds: z.number().int().min(1).max(ONE_DAY_SECONDS).optional(),
   childrenCap: z.number().int().min(1).max(MAX_CHILDREN_CAP),
   mission: z.string().min(1).refine((mission) => new TextEncoder().encode(mission).length <= MAX_MISSION_BYTES, { message: `mission must be at most ${MAX_MISSION_BYTES} bytes` }),
 });

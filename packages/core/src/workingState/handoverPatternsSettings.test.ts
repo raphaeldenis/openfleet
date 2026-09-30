@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { loadWorkingStateSettings } from './workingStateSettings.js';
+import { loadDaemonSettings } from './workingStateSettings.js';
 
 const configWithPatterns = (handoverPatterns: unknown): string => {
   const configPath = join(mkdtempSync(join(tmpdir(), 'of-ws-patterns-')), 'config.json');
@@ -15,30 +15,30 @@ describe('the operator sets the handover patterns in config.json', () => {
     const configPath = join(mkdtempSync(join(tmpdir(), 'of-ws-patterns-')), 'config.json');
     writeFileSync(configPath, '{"workingState":{"enforce":true}}');
 
-    expect(loadWorkingStateSettings(configPath).handoverPatterns).toBeUndefined();
+    expect(loadDaemonSettings(configPath).workingState.handoverPatterns).toBeUndefined();
   });
 
   it('boots with valid patterns, compiled once into global regular expressions, and with an empty list', () => {
-    const settings = loadWorkingStateSettings(configWithPatterns(['TICKET-\\d+', 'https://figma\\.com/file/[^\\s]+']));
+    const settings = loadDaemonSettings(configWithPatterns(['TICKET-\\d+', 'https://figma\\.com/file/[^\\s]+'])).workingState;
 
     expect(settings.handoverPatterns).toEqual([/TICKET-\d+/g, /https:\/\/figma\.com\/file\/[^\s]+/g]);
-    expect(loadWorkingStateSettings(configWithPatterns([])).handoverPatterns).toEqual([]);
+    expect(loadDaemonSettings(configWithPatterns([])).workingState.handoverPatterns).toEqual([]);
   });
 
   it('refuses to boot on a pattern that is not a valid regular expression, naming the pattern', () => {
-    expect(() => loadWorkingStateSettings(configWithPatterns(['ok\\d', '(unclosed']))).toThrow(/handoverPatterns.*\(unclosed/);
+    expect(() => loadDaemonSettings(configWithPatterns(['ok\\d', '(unclosed']))).toThrow(/handoverPatterns.*\(unclosed/);
   });
 
   it.each(['(a+)+$', '(.*)*x', '([a-z]+)*z', '(\\d{2,})+'])('refuses to boot on the catastrophic backtracking pattern %s', (unsafePattern) => {
-    expect(() => loadWorkingStateSettings(configWithPatterns([unsafePattern]))).toThrow(/handoverPatterns.*backtracking/);
+    expect(() => loadDaemonSettings(configWithPatterns([unsafePattern]))).toThrow(/handoverPatterns.*backtracking/);
   });
 
   it('accepts a quantified group without a quantifier inside it, and an optional group', () => {
-    expect(() => loadWorkingStateSettings(configWithPatterns(['(?:ab)+', '(https://x/)?[a-z]+']))).not.toThrow();
+    expect(() => loadDaemonSettings(configWithPatterns(['(?:ab)+', '(https://x/)?[a-z]+']))).not.toThrow();
   });
 
   it('refuses to boot on a pattern that matches the empty string', () => {
-    expect(() => loadWorkingStateSettings(configWithPatterns(['a*']))).toThrow(/handoverPatterns.*empty/);
+    expect(() => loadDaemonSettings(configWithPatterns(['a*']))).toThrow(/handoverPatterns.*empty/);
   });
 
   it.each([
@@ -49,11 +49,11 @@ describe('the operator sets the handover patterns in config.json', () => {
     ['a string instead of a list', 'TICKET-\\d+'],
     ['null', null],
   ])('refuses to boot on %s', (_label, invalid) => {
-    expect(() => loadWorkingStateSettings(configWithPatterns(invalid))).toThrow(/workingState/);
+    expect(() => loadDaemonSettings(configWithPatterns(invalid))).toThrow(/workingState/);
   });
 
   it('accepts a pattern of exactly 200 characters and exactly 10 patterns', () => {
-    expect(() => loadWorkingStateSettings(configWithPatterns(['a'.repeat(200)]))).not.toThrow();
-    expect(() => loadWorkingStateSettings(configWithPatterns(Array.from({ length: 10 }, (_, index) => `p${index}`)))).not.toThrow();
+    expect(() => loadDaemonSettings(configWithPatterns(['a'.repeat(200)]))).not.toThrow();
+    expect(() => loadDaemonSettings(configWithPatterns(Array.from({ length: 10 }, (_, index) => `p${index}`)))).not.toThrow();
   });
 });
