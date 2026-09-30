@@ -30,13 +30,32 @@ export const DEFAULT_HEARTBEAT_SECONDS = 1800;
 const MIN_HEARTBEAT_SECONDS = 1;
 const MAX_HEARTBEAT_SECONDS = 86_400;
 
+export const DEFAULT_CONTEXT_NOTICE_FIRST_AT = 300_000;
+export const DEFAULT_CONTEXT_NOTICE_EVERY = 100_000;
+const MIN_CONTEXT_NOTICE_TOKENS = 1000;
+const MAX_CONTEXT_NOTICE_TOKENS = 10_000_000;
+
+export const CONTEXT_NOTICE_ROLES = ['manager', 'child', 'plain'] as const;
+export type ContextNoticeRole = (typeof CONTEXT_NOTICE_ROLES)[number];
+export interface ContextNoticeThresholds { firstAt: number; every: number }
+
+/** A role absent from `roles` is not watched. A model alias absent from `models` follows `firstAt` and `every`. */
+export interface ContextNoticeSettings extends ContextNoticeThresholds {
+  roles: Partial<Record<ContextNoticeRole, boolean>>;
+  models: Record<string, Partial<ContextNoticeThresholds>>;
+}
+
 /** `handoverPatterns` is unset when the operator keeps the built-in patterns. */
 export interface WorkingStateSettings { maxBytes: number; enforce: boolean; maxAgeMinutes: number; handoverPatterns?: RegExp[] }
 export interface ManagerSettings { heartbeatDefaultSeconds: number }
-export interface DaemonSettings { workingState: WorkingStateSettings; managers: ManagerSettings }
+export interface DaemonSettings { workingState: WorkingStateSettings; managers: ManagerSettings; contextNotice: ContextNoticeSettings }
 
 const DEFAULT_WORKING_STATE_SETTINGS: WorkingStateSettings = { maxBytes: DEFAULT_WORKING_STATE_MAX_BYTES, enforce: true, maxAgeMinutes: DEFAULT_WORKING_STATE_MAX_AGE_MINUTES };
 const DEFAULT_MANAGER_SETTINGS: ManagerSettings = { heartbeatDefaultSeconds: DEFAULT_HEARTBEAT_SECONDS };
+const DEFAULT_CONTEXT_NOTICE_SETTINGS: ContextNoticeSettings = { firstAt: DEFAULT_CONTEXT_NOTICE_FIRST_AT, every: DEFAULT_CONTEXT_NOTICE_EVERY, roles: { manager: true }, models: {} };
+
+const ContextNoticeTokensSchema = z.number().int().min(MIN_CONTEXT_NOTICE_TOKENS).max(MAX_CONTEXT_NOTICE_TOKENS);
+const ContextNoticeThresholdsSchema = z.object({ firstAt: ContextNoticeTokensSchema.optional(), every: ContextNoticeTokensSchema.optional() }).strict();
 
 const ConfigFileSchema = z.object({
   workingState: z.object({
@@ -47,6 +66,10 @@ const ConfigFileSchema = z.object({
   }).strict().optional(),
   managers: z.object({
     heartbeatDefaultSeconds: z.number().int().min(MIN_HEARTBEAT_SECONDS).max(MAX_HEARTBEAT_SECONDS).optional(),
+  }).strict().optional(),
+  contextNotice: ContextNoticeThresholdsSchema.extend({
+    roles: z.object({ manager: z.boolean().optional(), child: z.boolean().optional(), plain: z.boolean().optional() }).strict().optional(),
+    models: z.record(z.string().min(1), ContextNoticeThresholdsSchema).optional(),
   }).strict().optional(),
 });
 
@@ -79,13 +102,13 @@ function compileHandoverPattern(source: string, position: number): RegExp {
 
 const definedOnly = <T extends object>(values: T): Partial<T> => Object.fromEntries(Object.entries(values).filter(([, value]) => value !== undefined)) as Partial<T>;
 
-const SECTION_KEYS = ['workingState', 'managers'];
+const SECTION_KEYS = ['workingState', 'managers', 'contextNotice'];
 const spelledLoosely = (key: string) => key.toLowerCase().replace(/s$/, '');
 const misspelledSectionKey = (key: string) => SECTION_KEYS.find((section) => key !== section && spelledLoosely(key) === spelledLoosely(section));
 
 // A malformed value fails the boot loudly, like the model table: a typo must not run every session on a setting nobody chose.
 export function loadDaemonSettings(configPath: string): DaemonSettings {
-  const defaults: DaemonSettings = { workingState: DEFAULT_WORKING_STATE_SETTINGS, managers: DEFAULT_MANAGER_SETTINGS };
+  const defaults: DaemonSettings = { workingState: DEFAULT_WORKING_STATE_SETTINGS, managers: DEFAULT_MANAGER_SETTINGS, contextNotice: DEFAULT_CONTEXT_NOTICE_SETTINGS };
   if (!existsSync(configPath)) return defaults;
   try {
     const rawConfig = JSON.parse(readFileSync(configPath, 'utf8'));
@@ -97,8 +120,9 @@ export function loadDaemonSettings(configPath: string): DaemonSettings {
     return {
       workingState: { ...DEFAULT_WORKING_STATE_SETTINGS, ...definedOnly(scalarSettings), ...(compiledPatterns && { handoverPatterns: compiledPatterns }) },
       managers: { ...DEFAULT_MANAGER_SETTINGS, ...definedOnly(parsed.managers ?? {}) },
+      contextNotice: { ...DEFAULT_CONTEXT_NOTICE_SETTINGS, ...definedOnly(parsed.contextNotice ?? {}) },
     };
   } catch (error) {
-    throw new Error(`invalid workingState/managers config at ${configPath}: ${readableConfigReason(error)}`);
+    throw new Error(`invalid workingState/managers/contextNotice config at ${configPath}: ${readableConfigReason(error)}`);
   }
 }
