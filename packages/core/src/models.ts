@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { closeSync, existsSync, fchmodSync, fsyncSync, openSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { z } from 'zod';
+import { readableConfigReason } from './configReason.js';
 
 export interface ModelTable { haiku: string; sonnet: string; opus: string; fable: string }
 
@@ -62,7 +63,7 @@ export function loadModelTable(configPath: string): ModelTable {
     const parsed = ModelConfigFileSchema.parse(JSON.parse(readFileSync(configPath, 'utf8')));
     return { ...DEFAULT_MODEL_TABLE, ...parsed.models };
   } catch (error) {
-    throw new Error(`invalid model table config at ${configPath}: ${(error as Error).message}`);
+    throw new Error(`invalid model table config at ${configPath}: ${readableConfigReason(error)}`);
   }
 }
 
