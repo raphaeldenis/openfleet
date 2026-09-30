@@ -1,6 +1,8 @@
 mod admin_token;
 mod app_exit;
 mod daemon;
+mod issue_report;
+mod log_file;
 mod path_repair;
 
 use tauri::Manager;
