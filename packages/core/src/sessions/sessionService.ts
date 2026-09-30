@@ -318,6 +318,7 @@ export class SessionService {
   // Set once closeAll() starts; refuses any new launch (create, reopen, resumeOne, a relaunch) so it can
   // never spawn a process outside closeAll's own snapshot and survive daemon shutdown.
   private shuttingDown = false;
+  private readonly idsClosingForDaemonShutdown = new Set<string>();
   // Children their own parent asked to close, until the close lands: the parent already knows they ended.
   private readonly idsClosingByParent = new Set<string>();
   // The prompt the daemon handed each session at launch (a brief or a mission), for the process lifetime: a resume never replays it.
@@ -1052,6 +1053,9 @@ export class SessionService {
     // guarantees the snapshot stays complete for the rest of this method.
     this.shuttingDown = true;
     const openSessionIds = new Set([...this.handles.keys(), ...this.relaunches.keys()]);
+    // A session the user already asked to close stays the user's close: only the rest are marked for the next boot.
+    const idsInterruptedByShutdown = [...openSessionIds].filter((id) => this.deliveryOf(id).phase.name !== 'closing');
+    for (const id of idsInterruptedByShutdown) this.idsClosingForDaemonShutdown.add(id);
     await Promise.all([...openSessionIds].map((id) => this.close(id)));
   }
   get(id: string): Session | undefined { return this.repo.get(id); }
@@ -1067,10 +1071,17 @@ export class SessionService {
   transcriptPathOf(id: string): string | undefined { return this.transcriptPaths.get(id); }
   byMcpToken(token: string): Session | undefined { return this.repo.byMcpToken(token); }
 
+  // Boot resume decides here which rows come back: every row still open (a daemon killed without a graceful
+  // close) and every row whose latest close was the daemon's own shutdown. A user close, a failed resume or a
+  // session closed before the shutdown stays closed.
   async resumeAll(): Promise<void> {
     for (const session of this.repo.list()) {
-      if (session.state === 'closed') continue;
+      const wasInterruptedByShutdown = session.state === 'closed' && this.repo.wasClosedByDaemonShutdown(session.id);
+      if (session.state === 'closed' && !wasInterruptedByShutdown) continue;
       if (this.handles.has(session.id)) continue; // already resumed by an earlier resumeAll() on this instance
+      // Back to 'starting' before the launch: a failed resume then closes the row afresh (new closed_at, exit code),
+      // which is what stops the next boot from retrying it.
+      if (wasInterruptedByShutdown) this.repo.setState(session.id, 'starting', new Date().toISOString());
       try {
         this.resumeOne(session);
       } catch {
@@ -1295,6 +1306,7 @@ export class SessionService {
     this.unfinishedTurns.delete(sessionId);
     this.releaseClearHold(sessionId);
     this.clearStartedAt.delete(sessionId);
+    const isClosingForShutdown = this.idsClosingForDaemonShutdown.delete(sessionId);
     const session = this.repo.get(sessionId);
     if (!session || session.state === 'closed') { this.idsClosingByParent.delete(sessionId); return; }
     // Revoked, not just marked closed, in the same write as the state change: a subprocess the agent left
@@ -1302,7 +1314,8 @@ export class SessionService {
     // session once it is closed — defence in depth alongside byHookToken/byMcpToken's own state filter,
     // which is what actually protects a row a pre-patch build already left closed. reopen() issues its own
     // fresh pair on the way back up (resumeOne), so this never collides with that rotation.
-    this.repo.setClosed(sessionId, exitCode, new Date().toISOString(), newToken(), newToken());
+    const closedByDaemonShutdown = isClosingForShutdown;
+    this.repo.setClosed(sessionId, exitCode, new Date().toISOString(), newToken(), newToken(), { closedByDaemonShutdown });
     this.handles.delete(sessionId);
     activeHandleBySessionId.delete(sessionId);
     try {

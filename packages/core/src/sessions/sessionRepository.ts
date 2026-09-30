@@ -121,9 +121,20 @@ export class SessionRepository {
   }
   // Closes and rotates tokens in one statement: a row can never sit closed with its pre-close tokens
   // still live, even for the instant between two separate writes (or if the second one never ran).
-  setClosed(id: string, exitCode: number | undefined, at: string, hookToken: string, mcpToken: string): void {
-    this.db.prepare(`UPDATE sessions SET state = 'closed', state_since = ?, exit_code = ?, closed_at = ?, hook_token = ?, mcp_token = ? WHERE id = ?`)
-      .run(at, exitCode ?? null, at, hookToken, mcpToken, id);
+  // A daemon-shutdown close also records a 'daemon_shutdown' event stamped with the same instant as closed_at:
+  // that pairing is what tells the next boot this close was the daemon's, not the user's.
+  setClosed(id: string, exitCode: number | undefined, at: string, hookToken: string, mcpToken: string, options: { closedByDaemonShutdown?: boolean } = {}): void {
+    inTransaction(this.db, 'set_session_closed', () => {
+      this.db.prepare(`UPDATE sessions SET state = 'closed', state_since = ?, exit_code = ?, closed_at = ?, hook_token = ?, mcp_token = ? WHERE id = ?`)
+        .run(at, exitCode ?? null, at, hookToken, mcpToken, id);
+      if (options.closedByDaemonShutdown) this.db.prepare("INSERT INTO session_events (session_id, kind, ts) VALUES (?, 'daemon_shutdown', ?)").run(id, at);
+    });
+  }
+  /** True when the session's current close is the one a daemon shutdown made (a later close or a reopen breaks the pairing). */
+  wasClosedByDaemonShutdown(id: string): boolean {
+    const row = this.db.prepare(`SELECT 1 AS found FROM session_events JOIN sessions ON sessions.id = session_events.session_id
+      WHERE session_events.session_id = ? AND session_events.kind = 'daemon_shutdown' AND session_events.ts = sessions.closed_at`).get(id);
+    return row !== undefined;
   }
   closeAllOpen(at: string): void {
     this.db.prepare(`UPDATE sessions SET state = 'closed', state_since = ?, closed_at = ? WHERE state <> 'closed'`).run(at, at);
