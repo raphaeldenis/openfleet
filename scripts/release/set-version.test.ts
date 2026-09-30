@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -29,7 +29,8 @@ const write = (relativePath: string, content: string) => {
 };
 const read = (relativePath: string) => readFileSync(join(root, relativePath), 'utf8');
 const readAll = () => Object.values(FILES).map(read);
-const runSetVersion = (version: string) => spawnSync('node', [SCRIPT, version, '--root', root], { encoding: 'utf8' });
+const listTree = () => readdirSync(root, { recursive: true }).map(String).sort();
+const runSetVersion =(version: string) => spawnSync('node', [SCRIPT, version, '--root', root], { encoding: 'utf8' });
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'of-set-version-'));
@@ -155,13 +156,42 @@ describe('set-version', () => {
     expect(read(FILES.cargoLock)).toContain('name = "app"\nversion = "0.1.0"');
   });
 
-  it.fails('leaves every file untouched when the last file cannot be written', () => {
+  it('leaves every file untouched, with a one-line error and no temp file, when the last file cannot be written', () => {
     const before = readAll();
     chmodSync(join(root, FILES.cargoLock), 0o444);
+    const directoriesBefore = listTree();
 
     const result = runSetVersion('0.2.0');
 
     expect(result.status).not.toBe(0);
+    expect(result.stderr.trim().split('\n')).toHaveLength(1);
+    expect(result.stderr).toContain('set-version:');
     expect(readAll()).toEqual(before);
+    expect(listTree()).toEqual(directoriesBefore);
+  });
+
+  it('keeps the file modes of the files it rewrites', () => {
+    chmodSync(join(root, FILES.cargoToml), 0o755);
+
+    runSetVersion('0.2.0');
+
+    expect(statSync(join(root, FILES.cargoToml)).mode & 0o777).toBe(0o755);
+  });
+
+  it('names the missing file in a one-line error instead of a stack trace', () => {
+    rmSync(join(root, FILES.cargoLock));
+
+    const result = runSetVersion('0.2.0');
+
+    expect(result.stderr.trim().split('\n')).toHaveLength(1);
+    expect(result.stderr).toContain(FILES.cargoLock);
+  });
+
+  it('refuses a --root flag that has no value', () => {
+    const result = spawnSync('node', [SCRIPT, '0.2.0', '--root'], { encoding: 'utf8' });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr.trim().split('\n')).toHaveLength(1);
+    expect(result.stderr).toContain('--root');
   });
 });

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Usage: node scripts/release/set-version.mjs <semver> [--root <repo dir>]
 // tauri.conf.json is the single source of the app version; this script writes it and every copy of it.
-import { readFileSync, writeFileSync } from 'node:fs';
+import { accessSync, constants, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -60,38 +60,68 @@ function planEdits({ root, version }) {
   return { edits: attempts.map(([path, content]) => ({ path, content })) };
 }
 
+/** Stages every changed file as a temp copy (same directory, same mode), then renames them all; any failure restores the originals and removes the temp files. */
 function applyEdits({ root, edits }) {
-  return edits.map(({ path, content }) => {
-    const absolutePath = join(root, path);
-    const isUnchanged = readFileSync(absolutePath, 'utf8') === content;
-    if (!isUnchanged) writeFileSync(absolutePath, content);
-    return `${isUnchanged ? 'unchanged' : 'updated  '} ${path}`;
-  });
+  const absolute = (path) => join(root, path);
+  const tempPathOf = (path) => `${absolute(path)}.set-version-${process.pid}.tmp`;
+  const changed = edits
+    .map((edit) => ({ ...edit, original: readFileSync(absolute(edit.path), 'utf8') }))
+    .filter(({ content, original }) => content !== original);
+  const staged = [];
+  const renamed = [];
+  try {
+    for (const { path, content } of changed) {
+      accessSync(absolute(path), constants.W_OK);
+      staged.push(tempPathOf(path));
+      writeFileSync(tempPathOf(path), content, { mode: statSync(absolute(path)).mode & 0o777 });
+    }
+    for (const edit of changed) {
+      renameSync(tempPathOf(edit.path), absolute(edit.path));
+      renamed.push(edit);
+    }
+  } catch (error) {
+    for (const { path, original } of renamed) writeFileSync(absolute(path), original);
+    for (const tempPath of staged) rmSync(tempPath, { force: true });
+    throw error;
+  }
+  const changedPaths = new Set(changed.map(({ path }) => path));
+  return edits.map(({ path }) => `${changedPaths.has(path) ? 'updated  ' : 'unchanged'} ${path}`);
 }
 
 function parseArguments(argv) {
   const rootFlagIndex = argv.indexOf('--root');
   const hasRootFlag = rootFlagIndex !== -1;
   const defaultRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
-  const root = hasRootFlag ? resolve(argv[rootFlagIndex + 1] ?? '') : defaultRoot;
+  const rootValue = argv[rootFlagIndex + 1];
+  if (hasRootFlag && !rootValue) return { error: '--root needs a directory' };
+  const root = hasRootFlag ? resolve(rootValue) : defaultRoot;
   const positional = argv.filter((_, index) => !hasRootFlag || (index !== rootFlagIndex && index !== rootFlagIndex + 1));
   return { version: positional[0] ?? '', root };
 }
 
 function main() {
-  const { version, root } = parseArguments(process.argv.slice(2));
+  const { version, root, error } = parseArguments(process.argv.slice(2));
+  if (error) {
+    console.error(`set-version: ${error}`);
+    return 1;
+  }
   if (!SEMVER.test(version)) {
     console.error(`set-version: "${version}" is not a valid SemVer version (expected e.g. 0.2.0 or 0.2.0-beta.1)`);
     return 1;
   }
-  const plan = planEdits({ root, version });
-  if (plan.error) {
-    console.error(`set-version: ${plan.error}; nothing was written`);
+  try {
+    const plan = planEdits({ root, version });
+    if (plan.error) {
+      console.error(`set-version: ${plan.error}; nothing was written`);
+      return 1;
+    }
+    const summary = applyEdits({ root, edits: plan.edits });
+    console.log([`OpenFleet version set to ${version}`, ...summary].join('\n'));
+    return 0;
+  } catch (fileError) {
+    console.error(`set-version: ${fileError.message.split('\n')[0]}; every file is left as it was`);
     return 1;
   }
-  const summary = applyEdits({ root, edits: plan.edits });
-  console.log([`OpenFleet version set to ${version}`, ...summary].join('\n'));
-  return 0;
 }
 
 process.exitCode = main();
