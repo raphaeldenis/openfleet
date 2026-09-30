@@ -14,6 +14,8 @@ pub const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
 pub const READY_TIMEOUT: Duration = Duration::from_secs(15);
 pub const SLOW_START_EXTRA_BUDGET: Duration = Duration::from_secs(300);
 pub const GRACE_BEFORE_SIGKILL: Duration = Duration::from_secs(12);
+/// A dying daemon's shutdown is bounded by its 10 s guard; the launch waits this long for its port to free.
+pub const SHUTTING_DOWN_DAEMON_WAIT: Duration = Duration::from_secs(15);
 const READY_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const EXIT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const BOOT_REFUSAL_PREFIX: &str = "openfleet: refusing to boot";
@@ -85,6 +87,24 @@ fn version_in_health_response(response: &str) -> Option<String> {
 
 /// Returns the daemon's answer when it replies `GET /health` with a 200 within `timeout`.
 pub fn probe_health(address: &str, timeout: Duration) -> Option<HealthAnswer> {
+  let response = health_response(address, timeout)?;
+  response.starts_with("HTTP/1.1 200").then(|| HealthAnswer { version: version_in_health_response(&response) })
+}
+
+/// Returns true when the daemon on `address` answers `GET /health` with a 503: it is closing its sessions and still holds the port.
+pub fn is_shutting_down(address: &str, timeout: Duration) -> bool {
+  health_response(address, timeout).is_some_and(|response| response.starts_with("HTTP/1.1 503"))
+}
+
+/// Blocks while the daemon on `address` reports it is shutting down, for at most `total`, so a new daemon can bind the port.
+pub fn wait_while_shutting_down(address: &str, total: Duration) {
+  let deadline = Instant::now() + total;
+  while Instant::now() < deadline && is_shutting_down(address, PROBE_TIMEOUT) {
+    std::thread::sleep(READY_POLL_INTERVAL);
+  }
+}
+
+fn health_response(address: &str, timeout: Duration) -> Option<String> {
   let socket_address = address.parse::<SocketAddr>().ok()?;
   let mut stream = TcpStream::connect_timeout(&socket_address, timeout).ok()?;
   let _ = stream.set_read_timeout(Some(timeout));
@@ -93,7 +113,7 @@ pub fn probe_health(address: &str, timeout: Duration) -> Option<HealthAnswer> {
   stream.write_all(request.as_bytes()).ok()?;
   let mut response = String::new();
   let _ = stream.read_to_string(&mut response);
-  response.starts_with("HTTP/1.1 200").then(|| HealthAnswer { version: version_in_health_response(&response) })
+  Some(response)
 }
 
 /// Polls `/health` until it answers, `total` elapses or `keep_waiting` turns false.
@@ -152,12 +172,16 @@ pub fn terminate_gracefully(signals: &impl Signals, pid: u32, grace: Duration, m
 /// The spawned sidecar; holding the plugin's handle keeps the child's stdin pipe open, and closing it asks the daemon to exit.
 pub struct RunningChild {
   pid: u32,
-  _stdin_holder: Option<CommandChild>,
+  _stdin_holder: Box<dyn Send>,
 }
 
 impl RunningChild {
   fn of_sidecar(child: CommandChild) -> Self {
-    Self { pid: child.pid(), _stdin_holder: Some(child) }
+    Self::holding(child.pid(), child)
+  }
+
+  fn holding(pid: u32, stdin_holder: impl Send + 'static) -> Self {
+    Self { pid, _stdin_holder: Box::new(stdin_holder) }
   }
 }
 
@@ -308,6 +332,7 @@ fn boot(app: &AppHandle) {
     state.on_reused(answer.version);
     return;
   }
+  wait_while_shutting_down(HEALTH_ADDRESS, SHUTTING_DOWN_DAEMON_WAIT);
   match spawn_sidecar(app) {
     Ok(()) => wait_for_ready(&state, HEALTH_ADDRESS, READY_TIMEOUT, SLOW_START_EXTRA_BUDGET),
     Err(reason) => {
@@ -394,6 +419,8 @@ mod tests {
   use std::io::{BufRead, BufReader};
   use std::net::TcpListener;
   use std::process::{Child, Command, Stdio};
+  use std::sync::atomic::{AtomicBool, Ordering};
+  use std::sync::Arc;
 
   const SHORT: Duration = Duration::from_millis(300);
   const PID: u32 = 4242;
@@ -403,6 +430,19 @@ mod tests {
     let address = listener.local_addr().unwrap().to_string();
     std::thread::spawn(move || {
       if let Ok((mut stream, _)) = listener.accept() {
+        let mut request = [0u8; 512];
+        let _ = stream.read(&mut request);
+        let _ = stream.write_all(response.as_bytes());
+      }
+    });
+    address
+  }
+
+  fn serve_always(response: &'static str) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap().to_string();
+    std::thread::spawn(move || {
+      while let Ok((mut stream, _)) = listener.accept() {
         let mut request = [0u8; 512];
         let _ = stream.read(&mut request);
         let _ = stream.write_all(response.as_bytes());
@@ -442,7 +482,7 @@ mod tests {
   fn state_with_a_spawned_child() -> DaemonState {
     let state = DaemonState::new();
     let repaired = RepairedPath { path: "/a:/b".to_string(), source: PathSource::Shell };
-    state.record_spawn(RunningChild { pid: PID, _stdin_holder: None }, repaired, Instant::now());
+    state.record_spawn(RunningChild::holding(PID, ()), repaired, Instant::now());
     state
   }
 
@@ -539,6 +579,56 @@ mod tests {
     let address = serve_once("HTTP/1.1 503 Service Unavailable\r\n\r\nretry after 200 ms");
 
     assert!(probe_health(&address, PROBE_TIMEOUT).is_none());
+  }
+
+  #[test]
+  fn probe_does_not_take_a_shutting_down_daemon_for_a_live_one() {
+    let address = serve_once("HTTP/1.1 503 Service Unavailable\r\n\r\n{\"ok\":false,\"status\":\"shutting_down\"}");
+
+    assert!(probe_health(&address, PROBE_TIMEOUT).is_none());
+  }
+
+  #[test]
+  fn a_503_shutting_down_answer_is_recognised_as_shutting_down() {
+    let address = serve_once("HTTP/1.1 503 Service Unavailable\r\n\r\n{\"ok\":false,\"status\":\"shutting_down\"}");
+
+    assert!(is_shutting_down(&address, PROBE_TIMEOUT));
+  }
+
+  #[test]
+  fn a_200_answer_and_a_closed_port_are_not_shutting_down() {
+    assert!(!is_shutting_down(&serve_once("HTTP/1.1 200 OK\r\n\r\n{\"ok\":true}"), PROBE_TIMEOUT));
+    assert!(!is_shutting_down(&closed_address(), PROBE_TIMEOUT));
+  }
+
+  #[test]
+  fn waiting_for_a_shutting_down_daemon_returns_once_it_stops_answering() {
+    let address = serve_once("HTTP/1.1 503 Service Unavailable\r\n\r\n{\"ok\":false,\"status\":\"shutting_down\"}");
+    let started = Instant::now();
+
+    wait_while_shutting_down(&address, Duration::from_secs(30));
+
+    assert!(started.elapsed() < Duration::from_secs(5));
+  }
+
+  #[test]
+  fn waiting_for_a_shutting_down_daemon_gives_up_after_the_total_delay() {
+    let address = serve_always("HTTP/1.1 503 Service Unavailable\r\n\r\n{\"ok\":false,\"status\":\"shutting_down\"}");
+    let started = Instant::now();
+
+    wait_while_shutting_down(&address, SHORT);
+
+    assert!(started.elapsed() >= SHORT);
+    assert!(started.elapsed() < Duration::from_secs(3));
+  }
+
+  #[test]
+  fn waiting_returns_at_once_when_nothing_is_shutting_down() {
+    let started = Instant::now();
+
+    wait_while_shutting_down(&closed_address(), Duration::from_secs(30));
+
+    assert!(started.elapsed() < Duration::from_secs(2));
   }
 
   #[test]
@@ -679,6 +769,71 @@ mod tests {
     assert_eq!(first, Some(StopOutcome::ExitedOnSigterm));
     assert_eq!(second, None);
     assert_eq!(signals.sent.borrow().iter().filter(|(_, signal)| *signal == libc::SIGTERM).count(), 1);
+  }
+
+  #[test]
+  fn stop_escalates_to_sigkill_when_the_daemon_is_still_alive_after_the_grace() {
+    let state = state_with_a_spawned_child();
+    let signals = RecordingSignals::answering_alive(vec![true]);
+
+    let outcome = stop_daemon(&state, &signals, Duration::ZERO);
+
+    assert_eq!(outcome, Some(StopOutcome::KilledAfterGrace));
+    assert_eq!(*signals.sent.borrow().last().unwrap(), (PID, libc::SIGKILL));
+  }
+
+  struct DropFlag(Arc<AtomicBool>);
+
+  impl Drop for DropFlag {
+    fn drop(&mut self) {
+      self.0.store(true, Ordering::SeqCst);
+    }
+  }
+
+  fn state_holding_a_stdin_holder() -> (DaemonState, Arc<AtomicBool>) {
+    let dropped = Arc::new(AtomicBool::new(false));
+    let state = DaemonState::new();
+    let repaired = RepairedPath { path: "/a:/b".to_string(), source: PathSource::Shell };
+    state.record_spawn(RunningChild::holding(PID, DropFlag(dropped.clone())), repaired, Instant::now());
+    (state, dropped)
+  }
+
+  #[test]
+  fn the_stdin_holder_lives_as_long_as_the_state_keeps_the_child() {
+    let (state, dropped) = state_holding_a_stdin_holder();
+
+    assert!(!dropped.load(Ordering::SeqCst));
+    drop(state);
+    assert!(dropped.load(Ordering::SeqCst));
+  }
+
+  #[test]
+  fn the_stdin_holder_is_released_when_the_daemon_terminates() {
+    let (state, dropped) = state_holding_a_stdin_holder();
+
+    state.on_terminated(Some(0));
+
+    assert!(dropped.load(Ordering::SeqCst));
+  }
+
+  struct SignalsWatchingTheHolder(Arc<AtomicBool>, RefCell<Vec<bool>>);
+
+  impl Signals for SignalsWatchingTheHolder {
+    fn send(&self, _pid: u32, _signal: i32) -> bool {
+      self.1.borrow_mut().push(self.0.load(Ordering::SeqCst));
+      false
+    }
+  }
+
+  #[test]
+  fn stop_keeps_the_stdin_holder_open_until_the_daemon_is_signalled_and_gone() {
+    let (state, dropped) = state_holding_a_stdin_holder();
+    let signals = SignalsWatchingTheHolder(dropped.clone(), RefCell::default());
+
+    stop_daemon(&state, &signals, Duration::from_secs(5));
+
+    assert!(signals.1.borrow().iter().all(|holder_already_dropped| !holder_already_dropped));
+    assert!(dropped.load(Ordering::SeqCst));
   }
 
   #[test]
