@@ -105,7 +105,11 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; rout
   const router = new Router();
   // ponytail: unauthenticated readiness probe for CI/e2e webServer checks, which run before the admin token is known
   let isShuttingDown = false;
-  router.add('GET', '/health', ({ res }) => (isShuttingDown ? json(res, 503, { ok: false, status: 'shutting_down' }) : json(res, 200, { ok: true, version: DAEMON_VERSION })));
+  // The probe's 503 is a readiness answer, not an API error: it carries no error envelope.
+  router.add('GET', '/health', ({ res }) => {
+    const answer = isShuttingDown ? { status: 503, body: { ok: false, status: 'shutting_down' } } : { status: 200, body: { ok: true, version: DAEMON_VERSION } };
+    json(res, answer.status, answer.body);
+  });
   registerRestRoutes(router, { ...deps, wsTickets });
   if (deps.projects) registerProjectRoutes(router, deps.projects);
   if (deps.stores && deps.storeRepo) registerDataStoreRoutes(router, { stores: deps.stores, storeRepo: deps.storeRepo });
