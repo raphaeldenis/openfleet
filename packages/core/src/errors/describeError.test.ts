@@ -301,10 +301,49 @@ describe('describeError: hostile case 1, secrets and paths in every field', () =
     expect(serialized).not.toContain('h00kT0ken9');
   });
 
-  it('redacts a secret inside a structured detail', () => {
+  it('redacts a secret inside a structured detail past 2 KiB', () => {
     const serialized = JSON.stringify(describeError(detailCarrying({ header: 'Bearer s3cr3t.tok-EN', pad: 'p'.repeat(4096) })));
 
     expect(serialized).not.toContain('s3cr3t.tok-EN');
+  });
+
+  it('redacts a secret inside a structured detail that fits in 2 KiB', () => {
+    const { detail } = describeError(detailCarrying({ header: 'Bearer s3cr3t.tok-EN', nested: [{ url: 'POST /hooks/h00kT0ken9' }] }));
+
+    expect(JSON.stringify(detail)).not.toMatch(/s3cr3t|h00kT0ken9/);
+  });
+
+  it.each(['authorization', 'token', 'accessToken', 'client_secret', 'password'])('masks the value under the key %s of a small structured detail', (key) => {
+    const { detail } = describeError(detailCarrying({ [key]: 'plain-looking-value-42', kept: 'visible' }));
+
+    expect(detail).toEqual({ [key]: '***', kept: 'visible' });
+  });
+
+  it('shortens the user home inside a structured detail that fits in 2 KiB', () => {
+    const { detail } = describeError(detailCarrying({ path: `${homedir()}/work/app` }));
+
+    expect(detail).toEqual({ path: '~/work/app' });
+  });
+
+  it('keeps a structured detail that carries nothing sensitive as it is', () => {
+    expect(describeError(detailCarrying({ currentRev: 12 })).detail).toEqual({ currentRev: 12 });
+  });
+
+  it.each([
+    ['Bearer:tok', 'call with Bearer:t0k3nVALUE now'],
+    ['Bearer=tok', 'call with Bearer=t0k3nVALUE now'],
+    ['a token query value', 'GET /x?token=t0k3nVALUE&page=2'],
+    ['an access_token query value', 'GET /x?page=2&access_token=t0k3nVALUE'],
+    ['an encoded hook path', 'posted to %2Fhooks%2Ft0k3nVALUE just now'],
+    ['an upper-case hook path', 'posted to /HOOKS/t0k3nVALUE just now'],
+  ])('redacts %s in the message, the hint and the detail', (_label, text) => {
+    const serialized = JSON.stringify(describeError(carrying(text)));
+
+    expect(serialized).not.toContain('t0k3nVALUE');
+  });
+
+  it('keeps the other query parameters when it redacts a token value', () => {
+    expect(describeError(carrying('GET /x?token=t0k3nVALUE&page=2')).message).toContain('page=2');
   });
 
   it('strips NUL and escape characters from a string detail', () => {
@@ -330,8 +369,8 @@ describe('describeError: hostile case 1, message hygiene and caps', () => {
 
   it('caps message at 300 chars, hint at 200 and detail at 2 KiB', () => {
     const envelope = describeError(hostile);
-    expect(envelope.message.length).toBeLessThanOrEqual(300);
-    expect(envelope.hint!.length).toBeLessThanOrEqual(200);
+    expect(Array.from(envelope.message)).toHaveLength(300);
+    expect(Array.from(envelope.hint!)).toHaveLength(200);
     expect(Buffer.byteLength(JSON.stringify(envelope.detail))).toBeLessThanOrEqual(2048);
   });
 
@@ -343,5 +382,94 @@ describe('describeError: hostile case 1, message hygiene and caps', () => {
     const envelope = describeError(new OpenFleetError('row_cap', 'call with Bearer abc123_-XYZ or POST /hooks/secretToken9 now.'));
     expect(envelope.message).not.toContain('abc123_-XYZ');
     expect(envelope.message).not.toContain('secretToken9');
+  });
+});
+
+describe('describeError: path shortening boundaries', () => {
+  const home = homedir();
+  const messageOf = (text: string) => describeError(new OpenFleetError('directory_in_use', text)).message;
+
+  it('does not shorten a path that only starts with the home prefix', () => {
+    expect(messageOf(`busy: ${home}by/x`)).toBe(`busy: ${home}by/x`);
+  });
+
+  it('shortens the home itself when the text ends there', () => {
+    expect(messageOf(`busy: ${home}`)).toBe('busy: ~');
+  });
+
+  it('leaves unrelated text alone when OPENFLEET_HOME is a short relative path', () => {
+    vi.stubEnv('OPENFLEET_HOME', 'ab');
+
+    expect(messageOf('about the table ab and cab')).toBe('about the table ab and cab');
+  });
+});
+
+describe('describeError: text the desktop renders', () => {
+  const HIDDEN_CHARACTERS = '‮‪⁦​‍﻿  ';
+  const carrying = (text: string) => new OpenFleetError('row_cap', text, { hint: text, detail: text });
+
+  it('removes bidi controls, zero-width characters and line separators from the message, the hint and a string detail', () => {
+    const envelope = describeError(carrying(`x${HIDDEN_CHARACTERS}evil${HIDDEN_CHARACTERS}line`));
+
+    expect([envelope.message, envelope.hint, envelope.detail]).toEqual(['xevilline', 'xevilline', 'xevilline']);
+  });
+
+  it('removes them from the strings of a structured detail', () => {
+    const { detail } = describeError(new OpenFleetError('row_cap', 'full.', { detail: { name: `a${HIDDEN_CHARACTERS}b` } }));
+
+    expect(detail).toEqual({ name: 'ab' });
+  });
+
+  it('counts the 300-char cap in code points, so 400 emoji keep 299 emoji and an ellipsis', () => {
+    const { message } = describeError(new OpenFleetError('row_cap', '😀'.repeat(400)));
+
+    expect(Array.from(message)).toHaveLength(300);
+    expect(message.endsWith('…')).toBe(true);
+  });
+
+  it('keeps a message of 250 emoji whole, since 250 code points fit in 300', () => {
+    const { message } = describeError(new OpenFleetError('row_cap', '😀'.repeat(250)));
+
+    expect(message).toBe('😀'.repeat(250));
+  });
+
+  it('never leaves half of a surrogate pair at the cut', () => {
+    const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+    const { message } = describeError(new OpenFleetError('row_cap', `a${'😀'.repeat(400)}`));
+
+    expect(message).not.toMatch(LONE_SURROGATE);
+  });
+});
+
+describe('describeError: a detail is serialized once', () => {
+  it('answers a body that survives two serializations when the detail has a stateful toJSON', () => {
+    let calls = 0;
+    const statefulDetail = { toJSON: () => { calls += 1; if (calls > 1) throw new Error('second serialization'); return { currentRev: 12 }; } };
+
+    const envelope = describeError(new OpenFleetError('row_cap', 'full.', { detail: statefulDetail }));
+
+    expect(JSON.parse(JSON.stringify(envelope)).detail).toEqual({ currentRev: 12 });
+    expect(JSON.parse(JSON.stringify(envelope)).detail).toEqual({ currentRev: 12 });
+  });
+});
+
+describe('describeError: an internal-kind OpenFleetError', () => {
+  const sqlLeak = 'SELECT * FROM x in ~/p';
+
+  it('answers the generic message with an id instead of forwarding its own message, hint and detail', () => {
+    const envelope = describeError(new OpenFleetError('internal_error', sqlLeak, { hint: 'try SELECT again', detail: { sql: sqlLeak } }));
+
+    expect(JSON.stringify(envelope)).not.toContain('SELECT');
+    expect(envelope).toMatchObject({ error: 'internal_error', message: 'the daemon hit an unexpected error.', id: expect.stringMatching(ID_PATTERN) });
+  });
+
+  it('logs the real message with the id', () => {
+    const error = new OpenFleetError('launch_failed', sqlLeak);
+
+    const envelope = describeError(error);
+
+    expect(errorLog).toHaveBeenCalledTimes(1);
+    expect(String(errorLog.mock.calls[0]![0])).toContain(envelope.id);
+    expect(errorLog.mock.calls[0]![1]).toBe(error);
   });
 });

@@ -1,4 +1,5 @@
 import { homedir } from 'node:os';
+import { isAbsolute } from 'node:path';
 import { ERROR_CODES, OpenFleetError, retryOf, type ErrorCode, type ErrorEnvelope } from '@openfleet/shared';
 import { InvalidJsonBodyError, PayloadTooLargeError } from '../api/router.js';
 import { resolveHome } from '../config.js';
@@ -44,7 +45,7 @@ const when = <E extends Error>(ErrorClass: new (...args: never[]) => E, describe
 const asIs = (code: ErrorCode) => (error: Error): Entry => ({ code, message: error.message });
 const asDetail = (code: ErrorCode, message: string) => (error: Error): Entry => ({ code, message, detail: error.message });
 
-// zod 4's ZodError does not extend Error, so it is recognised by name, as the REST catch-all always did.
+// A ZodError is matched by name, not by class: one thrown by a second copy of zod is a different class.
 const isNamedZodError = (error: unknown): error is { message: string } =>
   typeof error === 'object' && error !== null && (error as { name?: unknown }).name === 'ZodError';
 const isForeignKeyError = (error: unknown): error is Error =>
@@ -66,8 +67,16 @@ const WORKTREE_ENTRY_BY_CODE: Record<WorktreeError['code'], (error: WorktreeErro
   git_failed: () => undefined,
 };
 
+const UNEXPECTED_ENTRY: Entry = { code: 'internal_error', message: 'the daemon hit an unexpected error.' };
+
+// An internal error never forwards its own words: the log carries them, the caller gets the generic sentence and the id.
+const describedOpenFleetError = (error: OpenFleetError): Entry =>
+  error.kind === 'internal'
+    ? { code: error.code, message: UNEXPECTED_ENTRY.message }
+    : { code: error.code, message: error.message, hint: error.options.hint, detail: error.options.detail };
+
 const RULES: Rule[] = [
-  (error) => (error instanceof OpenFleetError ? { code: error.code, message: error.message, hint: error.options.hint, detail: error.options.detail } : undefined),
+  when(OpenFleetError, describedOpenFleetError),
   when(PayloadTooLargeError, asIs('payload_too_large')),
   when(InvalidJsonBodyError, asDetail('invalid_json', 'the request body is not valid JSON.')),
   (error) => (isNamedZodError(error) ? { code: 'invalid_body', message: 'the request body is invalid.', detail: error.message } : undefined),
@@ -119,8 +128,6 @@ const RULES: Rule[] = [
   when(WorktreeError, (error) => WORKTREE_ENTRY_BY_CODE[error.code](error)),
 ];
 
-const UNEXPECTED_ENTRY: Entry = { code: 'internal_error', message: 'the daemon hit an unexpected error.' };
-
 function entryFor(error: unknown): Entry | undefined {
   try {
     return RULES.map((rule) => rule(error)).find((entry) => entry !== undefined);
@@ -129,21 +136,38 @@ function entryFor(error: unknown): Entry | undefined {
   }
 }
 
-const homePrefixes = (): string[] => [resolveHome(), homedir()].filter((home) => home.length > 1).sort((first, second) => second.length - first.length);
+const SECRET_KEY = /token|secret|authorization|password/i;
+const MASK = '***';
+const escapedForRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** Absolute homes only: a relative OPENFLEET_HOME would match ordinary words. Longest first, so a home inside another shortens as the inner one. */
+const homePrefixes = (): string[] =>
+  [resolveHome(), homedir()]
+    .filter((home) => isAbsolute(home))
+    .map((home) => home.replace(/[/\\]+$/, ''))
+    .filter((home) => home.length > 1)
+    .sort((first, second) => second.length - first.length);
+
+const startsPathSegment = (home: string) => new RegExp(`(?<![\\w.~-])${escapedForRegExp(home)}(?![\\w-])(?!\\.\\w)`, 'g');
 
 function redactedAndShortened(text: string): string {
   const withoutSecrets = text
-    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer ***')
-    .replace(/\/hooks\/[^/\s"'`]+/g, '/hooks/***');
-  return homePrefixes().reduce((shortened, home) => shortened.split(home).join('~'), withoutSecrets);
+    .replace(/Bearer[\s:=]+[A-Za-z0-9._~+/=-]+/gi, `Bearer ${MASK}`)
+    .replace(/([?&][\w.-]*(?:token|secret|authorization|password)[\w.-]*=)[^&\s"'`]*/gi, `$1${MASK}`)
+    .replace(/(?:\/|%2F)hooks(?:\/|%2F)[^/\s"'`%&]+/gi, `/hooks/${MASK}`);
+  return homePrefixes().reduce((shortened, home) => shortened.replace(startsPathSegment(home), '~'), withoutSecrets);
 }
 
-const oneLine = (text: string) => text.replace(/[\n\r\t]+/g, ' ').replace(/\p{Cc}/gu, '');
-const keepingLines = (text: string) => text.replace(/[^\P{Cc}\n\t]/gu, '');
+// Control, format (bidi, zero-width, BOM) and line/paragraph separator characters: the desktop renders what is left.
+const UNRENDERABLE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
+const oneLine = (text: string) => text.replace(/[\n\r\t]+/g, ' ').replace(UNRENDERABLE, '');
+const keepingLines = (text: string) => text.replace(UNRENDERABLE, (character) => (character === '\n' || character === '\t' ? character : ''));
 
+/** Cuts at `maxChars` code points, so a surrogate pair is never split; the ellipsis counts as the last one. */
 function truncated(text: string, maxChars: number): string {
-  if (text.length <= maxChars) return text;
-  return Array.from(text).slice(0, maxChars - 1).join('') + ELLIPSIS;
+  const codePoints = Array.from(text);
+  if (codePoints.length <= maxChars) return text;
+  return codePoints.slice(0, maxChars - 1).join('') + ELLIPSIS;
 }
 
 const jsonBytes = (value: unknown): number => Buffer.byteLength(JSON.stringify(value));
@@ -163,14 +187,22 @@ function cappedDetailText(text: string): string {
   return candidate;
 }
 
-/** A string is cleaned and cut at 2 KiB serialized; a structure that fits is kept as is; one that cannot be serialized or fit is dropped or cut to text. */
+const maskingSecrets = (key: string, value: unknown): unknown => {
+  if (SECRET_KEY.test(key)) return MASK;
+  return typeof value === 'string' ? redactedAndShortened(keepingLines(value)) : value;
+};
+
+/**
+ * A string is cleaned and cut at 2 KiB serialized. A structure is serialized once, with every string value cleaned and every secret key masked:
+ * one that fits is answered as that parsed copy, one that does not is cut to text; one that cannot be serialized is dropped.
+ */
 function cappedDetail(detail: unknown): unknown {
   if (detail === undefined) return undefined;
   if (typeof detail === 'string') return cappedDetailText(detail);
   try {
-    const serialized = JSON.stringify(detail);
+    const serialized = JSON.stringify(detail, maskingSecrets);
     if (serialized === undefined) return undefined;
-    return Buffer.byteLength(serialized) <= MAX_DETAIL_BYTES ? detail : cappedDetailText(serialized);
+    return Buffer.byteLength(serialized) <= MAX_DETAIL_BYTES ? JSON.parse(serialized) : cappedDetailText(serialized);
   } catch {
     return undefined;
   }
