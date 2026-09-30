@@ -94,9 +94,10 @@ const domainErrorCodes: [string, () => unknown, ErrorCode][] = [
 describe('describeError: every Error subclass of core is mapped or internal on purpose', () => {
   const CORE_DIRECTORY = fileURLToPath(new URL('../', import.meta.url));
   const ERROR_SUBCLASS_DECLARATION = /class (\w+) extends \w*Error\b/g;
-  // Boot-time failures answered by bootFailure.ts stay internal. DataStoreWriteError stays internal_error on REST (its cause is SQL), while the MCP
+  // Boot-time failures answered by bootFailure.ts stay internal: BackupFailedError, MigrationFailedError and SchemaNewerThanCodeError
+  // are boot refusals that never reach the REST catch-all, so describeError never sees them. DataStoreWriteError stays internal_error on REST (its cause is SQL), while the MCP
   // path still answers its safe message ('The write failed') through mapDatabaseError: ERR-03 must keep that message for agents.
-  const INTERNAL_ON_PURPOSE = ['ConfigFileError', 'DatabaseOpenError', 'PortInUseError', 'DataStoreWriteError'];
+  const INTERNAL_ON_PURPOSE = ['ConfigFileError', 'DatabaseOpenError', 'PortInUseError', 'DataStoreWriteError', 'BackupFailedError', 'MigrationFailedError', 'SchemaNewerThanCodeError'];
 
   const declaredErrorClasses = (): string[] =>
     readdirSync(CORE_DIRECTORY, { recursive: true, encoding: 'utf8' })
