@@ -125,7 +125,7 @@ describe('a user typing /clear in a session', () => {
     const id = await createSession();
     const newCliSessionId = randomUUID();
     writeFileSync(transcriptPathOf(id), assistantLine('claude-opus-5-4'));
-    writeFileSync(transcriptPathOf(newCliSessionId), assistantLine('claude-opus-5-5'));
+    writeFileSync(transcriptPathOf(newCliSessionId), '');
 
     if (endFirst) {
       await sendHook(id, sessionEnd('clear'));
@@ -134,6 +134,7 @@ describe('a user typing /clear in a session', () => {
       await sendHook(id, sessionStartAfterClear, newCliSessionId);
       await sendHook(id, sessionEnd('clear'));
     }
+    writeFileSync(transcriptPathOf(newCliSessionId), assistantLine('claude-opus-5-5'));
     await sendHook(id, { ...preToolUse, transcript_path: undefined }, newCliSessionId);
 
     expect(await listed(id)).toMatchObject({ state: 'generating', resolvedModel: 'claude-opus-5-5' });
