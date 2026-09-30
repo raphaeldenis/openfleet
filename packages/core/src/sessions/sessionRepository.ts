@@ -81,7 +81,8 @@ export class SessionRepository {
     this.db.prepare('UPDATE sessions SET model = ? WHERE id = ?').run(model, id);
   }
   setContextNoticeTokens(id: string, tokens: number | null): void {
-    this.db.prepare('UPDATE sessions SET context_notice_tokens = ? WHERE id = ?').run(tokens, id);
+    const storableTokens = Number.isSafeInteger(tokens) ? tokens : null;
+    this.db.prepare('UPDATE sessions SET context_notice_tokens = ? WHERE id = ?').run(storableTokens, id);
   }
   clearResolvedModel(id: string): void {
     this.db.prepare('UPDATE sessions SET resolved_model = NULL, resolved_for_model = NULL, model_drifted_from = NULL WHERE id = ?').run(id);
