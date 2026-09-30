@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Downloads the official Node binary the packaged app runs the daemon with, verifies it against nodejs.org's SHASUMS256.txt,
 // and installs bin/node as the Tauri sidecar apps/desktop/src-tauri/binaries/node-<target>.
-// Usage: node scripts/release/fetch-node.mjs [<version>] [<target>]   (defaults: node-version.txt, aarch64-apple-darwin)
+// Usage: node scripts/release/fetch-node.mjs [<version>] [<target>]   (defaults: node-version.txt, aarch64-apple-darwin; or x86_64-apple-darwin)
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
@@ -12,7 +12,7 @@ const SCRIPT_FOLDER = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(SCRIPT_FOLDER, '..', '..');
 const DEFAULT_BINARIES_FOLDER = join(REPO_ROOT, 'apps/desktop/src-tauri/binaries');
 const DEFAULT_TARGET = 'aarch64-apple-darwin';
-const NODE_PLATFORM_BY_TARGET = { 'aarch64-apple-darwin': 'darwin-arm64' };
+const NODE_PLATFORM_BY_TARGET = { 'aarch64-apple-darwin': 'darwin-arm64', 'x86_64-apple-darwin': 'darwin-x64' };
 const PLAIN_SEMVER = /^\d+\.\d+\.\d+$/;
 const EXECUTABLE_MODE = 0o755;
 const FETCH_TIMEOUT_MS = 60_000;
@@ -84,7 +84,7 @@ const isInstalledBinaryTheRecordedOne = ({ destination, checksumRecord, version,
 export async function fetchNode({ version, target = DEFAULT_TARGET, binariesFolder = DEFAULT_BINARIES_FOLDER, fetchBytes = downloadBytes, installedVersion = runInstalledVersion, extractBinary = extractNodeBinary }) {
   if (!PLAIN_SEMVER.test(version)) throw new FetchNodeError(`version "${version}" is not a plain x.y.z`);
   const nodePlatform = NODE_PLATFORM_BY_TARGET[target];
-  if (nodePlatform === undefined) throw new FetchNodeError(`target "${target}" is not supported yet, expected: ${Object.keys(NODE_PLATFORM_BY_TARGET).join(', ')}`);
+  if (nodePlatform === undefined) throw new FetchNodeError(`target "${target}" is not supported, expected: ${Object.keys(NODE_PLATFORM_BY_TARGET).join(' or ')}`);
 
   const destination = join(binariesFolder, `node-${target}`);
   const checksumRecord = `${destination}.sha256`;

@@ -19,22 +19,22 @@ let binariesFolder: string;
 
 const sha256 = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
 
-const buildTarball = (): Buffer => {
+const buildTarball = (platform = 'darwin-arm64'): Buffer => {
   const stage = join(workFolder, 'stage');
-  const packageFolder = join(stage, `node-v${VERSION}-darwin-arm64`);
+  const packageFolder = join(stage, `node-v${VERSION}-${platform}`);
   mkdirSync(join(packageFolder, 'bin'), { recursive: true });
   writeFileSync(join(packageFolder, 'bin/node'), FAKE_NODE_BODY);
   writeFileSync(join(packageFolder, 'LICENSE'), 'license');
-  const tarball = join(workFolder, TARBALL_NAME);
-  spawnSync('tar', ['-czf', tarball, '-C', stage, `node-v${VERSION}-darwin-arm64`]);
+  const tarball = join(workFolder, `${platform}.tar.gz`);
+  spawnSync('tar', ['-czf', tarball, '-C', stage, `node-v${VERSION}-${platform}`]);
   return readFileSync(tarball);
 };
 
-const serve = ({ tarball, shasums }: { tarball: Buffer; shasums: string }) => {
+const serve = ({ tarball, shasums, tarballName = TARBALL_NAME }: { tarball: Buffer; shasums: string; tarballName?: string }) => {
   const requestedUrls: string[] = [];
   const fetchBytes = async (url: string) => {
     requestedUrls.push(url);
-    if (url === `${BASE_URL}/${TARBALL_NAME}`) return tarball;
+    if (url === `${BASE_URL}/${tarballName}`) return tarball;
     if (url === `${BASE_URL}/SHASUMS256.txt`) return Buffer.from(shasums);
     throw new Error(`unexpected url ${url}`);
   };
@@ -203,10 +203,54 @@ describe('fetchNode', () => {
     expect(lstatSync(installedBinary()).isSymbolicLink()).toBe(true);
   });
 
-  it('refuses a target other than aarch64-apple-darwin', async () => {
+  it('refuses a target other than the two macOS ones', async () => {
     const fetchBytes = async () => Buffer.alloc(0);
 
-    await expect(fetchNode({ version: VERSION, target: 'x86_64-apple-darwin', binariesFolder, fetchBytes, installedVersion: neverInstalled })).rejects.toThrow(/x86_64-apple-darwin/);
+    await expect(fetchNode({ version: VERSION, target: 'riscv64-unknown-linux-gnu', binariesFolder, fetchBytes, installedVersion: neverInstalled })).rejects.toThrow(/riscv64-unknown-linux-gnu.*aarch64-apple-darwin.*x86_64-apple-darwin/);
+  });
+
+  describe('for x86_64-apple-darwin', () => {
+    const X64_TARGET = 'x86_64-apple-darwin';
+    const X64_TARBALL_NAME = `node-v${VERSION}-darwin-x64.tar.gz`;
+    const x64Binary = () => join(binariesFolder, 'node-x86_64-apple-darwin');
+
+    it('downloads the darwin-x64 tarball, verifies it and records both sha256 next to node-x86_64-apple-darwin', async () => {
+      const tarball = buildTarball('darwin-x64');
+      const shasums = `${sha256(tarball)}  ${X64_TARBALL_NAME}\n${'b'.repeat(64)}  ${TARBALL_NAME}\n`;
+      const { fetchBytes, requestedUrls } = serve({ tarball, shasums, tarballName: X64_TARBALL_NAME });
+
+      const result = await fetchNode({ version: VERSION, target: X64_TARGET, binariesFolder, fetchBytes, installedVersion: neverInstalled });
+
+      expect(result).toEqual({ status: 'installed', path: x64Binary() });
+      expect(requestedUrls).toContain(`${BASE_URL}/${X64_TARBALL_NAME}`);
+      expect(readFileSync(`${x64Binary()}.sha256`, 'utf8')).toBe(`tarball ${sha256(tarball)}\nbinary ${sha256(Buffer.from(FAKE_NODE_BODY))}\n`);
+      expect(statSync(x64Binary()).mode & 0o777).toBe(0o755);
+    });
+
+    it('refuses the darwin-x64 tarball when its checksum differs from the published one', async () => {
+      const tarball = buildTarball('darwin-x64');
+      const shasums = `${'d'.repeat(64)}  ${X64_TARBALL_NAME}\n`;
+      const { fetchBytes } = serve({ tarball, shasums, tarballName: X64_TARBALL_NAME });
+
+      await expect(fetchNode({ version: VERSION, target: X64_TARGET, binariesFolder, fetchBytes, installedVersion: neverInstalled })).rejects.toThrow(/checksum/i);
+
+      expect(existsSync(x64Binary())).toBe(false);
+    });
+
+    it('skips offline on its own record and leaves the arm64 sidecar untouched', async () => {
+      mkdirSync(binariesFolder, { recursive: true });
+      writeFileSync(x64Binary(), 'existing-x64');
+      writeFileSync(`${x64Binary()}.sha256`, `tarball ${'c'.repeat(64)}\nbinary ${sha256(Buffer.from('existing-x64'))}\n`);
+      const fetchBytes = vi.fn(async () => {
+        throw new Error('offline');
+      });
+
+      const result = await fetchNode({ version: VERSION, target: X64_TARGET, binariesFolder, fetchBytes, installedVersion: () => `v${VERSION}` });
+
+      expect(result).toEqual({ status: 'skipped', path: x64Binary() });
+      expect(fetchBytes).not.toHaveBeenCalled();
+      expect(existsSync(installedBinary())).toBe(false);
+    });
   });
 
   it('refuses a version that is not a plain semver', async () => {
