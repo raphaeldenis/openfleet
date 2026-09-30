@@ -91,8 +91,8 @@ describe.each([
     expect(row.closedAt! > closedAtBeforeReopen!).toBe(true);
   });
 
-  it('shows a reconnecting client the exit code the live clients were told, and the next boot does not resume the row', async () => {
-    const { db, harness, service, events, sessionId } = await closedSession();
+  it('shows a reconnecting client the exit code the live clients were told', async () => {
+    const { harness, service, events, sessionId } = await closedSession();
     failLaunchWith(harness, failure());
     vi.spyOn(console, 'error').mockImplementation(() => {});
 
@@ -100,7 +100,22 @@ describe.each([
 
     const liveExitCode = (closuresOf(events)[0] as { exitCode: number }).exitCode;
     expect(service.get(sessionId)!.exitCode).toBe(liveExitCode);
-    const nextBoot = bootDaemon(db);
+  });
+
+  it('is not resumed by the next boot when the row was closed by a daemon shutdown', async () => {
+    const first = bootDaemon();
+    const session = await first.service.create(spec);
+    await first.service.closeAll();
+    const shutdownMarkersOfRow = () => (first.db.prepare("SELECT count(*) AS n FROM session_events WHERE session_id = ? AND kind = 'daemon_shutdown'").get(session.id) as { n: number }).n;
+    expect(shutdownMarkersOfRow()).toBe(1);
+    const secondBoot = bootDaemon(first.db);
+    failLaunchWith(secondBoot.harness, failure());
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    expect(() => secondBoot.service.reopen(session.id)).toThrow(thrown);
+
+    expect(shutdownMarkersOfRow()).toBe(0);
+    const nextBoot = bootDaemon(first.db);
     await nextBoot.service.resumeAll();
     expect(nextBoot.harness.launches).toEqual([]);
   });

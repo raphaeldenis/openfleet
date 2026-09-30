@@ -75,6 +75,7 @@ const createSession = (daemon: ReturnType<typeof bootDaemon>) => daemon.sessions
 const reopenOverRest = (sessionId: string) => fetch(`${server!.url}/api/sessions/${sessionId}/reopen`, { method: 'POST', headers: { authorization: 'Bearer admin' } });
 const failureEventsAfter = (events: Array<Record<string, unknown>>, from: number) => events.slice(from).filter((event) => ['session.closed', 'error', 'session.reopened'].includes(String(event.type)));
 
+const CLOCK_TICK_MS = 5;
 const CLAUDE_NOT_FOUND_ENVELOPE = {
   error: 'claude_not_found', kind: 'unavailable', retry: 'never',
   message: 'the claude CLI is not on the daemon PATH.', hint: 'Install Claude Code or start the daemon from a shell where claude runs.',
@@ -91,6 +92,7 @@ describe('reopening a closed claude-cli session when claude is not on the daemon
     await serve(daemon);
     env.PATH = emptyBin;
     const eventCountBeforeReopen = daemon.events.length;
+    await new Promise((resolve) => setTimeout(resolve, CLOCK_TICK_MS));
 
     const res = await reopenOverRest(session.id);
     const body = await res.json();
