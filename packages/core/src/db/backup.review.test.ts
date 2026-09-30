@@ -148,6 +148,28 @@ describe('the config copy beside a backup', () => {
   });
 });
 
+describe('pruning orphan config copies', () => {
+  it('removes a config copy whose backup is gone or was pruned, and keeps the copies of the kept backups', () => {
+    mkdirSync(backupsDir);
+    const stem = (day: string) => `openfleet-014_session_cli_ids-2026-01-${day}T00-00-00-000Z`;
+    writeFileSync(join(backupsDir, `${stem('01')}.config.json`), 'orphan');
+    for (const day of ['02', '03']) {
+      writeFileSync(join(backupsDir, `${stem(day)}.db`), 'kept');
+      writeFileSync(join(backupsDir, `${stem(day)}.config.json`), 'kept');
+    }
+    writeFileSync(join(backupsDir, 'other.config.json'), 'mine');
+    createDatabaseAtVersion('015_handovers').close();
+
+    openDatabase(dbPath).close();
+
+    const configCopies = readdirSync(backupsDir).filter((name) => name.endsWith('.config.json'));
+    expect(configCopies).not.toContain(`${stem('01')}.config.json`);
+    expect(configCopies).toContain(`${stem('02')}.config.json`);
+    expect(configCopies).toContain(`${stem('03')}.config.json`);
+    expect(readFileSync(join(backupsDir, 'other.config.json'), 'utf8')).toBe('mine');
+  });
+});
+
 describe('a boot that fails or is refused never evicts the pre-upgrade backup', () => {
   it('keeps the backup taken before 015 across four boots where 015 commits and 016 keeps failing', () => {
     const db = createDatabaseAtVersion('014_session_cli_ids');

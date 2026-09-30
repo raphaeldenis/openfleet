@@ -6,6 +6,7 @@ import { BACKUPS_FOLDER_NAME } from './migrate.js';
 
 const BACKUPS_TO_KEEP = 3;
 const BACKUP_NAME_PATTERN = /^openfleet-.+-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z)(?:-(\d+))?\.db$/;
+const CONFIG_COPY_NAME_PATTERN = /^(openfleet-.+-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z(?:-\d+)?)\.config\.json$/;
 const IN_PROGRESS_SUFFIX = '.partial';
 
 export class BackupFailedError extends Error {
@@ -77,15 +78,21 @@ function byCreationTime(backupsFolder: string, a: string, b: string): number {
   return creationTimeOf(a) - creationTimeOf(b) || chronologicalKeyOf(a)!.localeCompare(chronologicalKeyOf(b)!) || a.localeCompare(b);
 }
 
+function removeConfigCopiesWithoutABackup(backupsFolder: string): void {
+  const backupStems = new Set(backupNamesIn(backupsFolder).map((name) => name.replace(/\.db$/, '')));
+  for (const name of readdirSync(backupsFolder)) {
+    const stem = CONFIG_COPY_NAME_PATTERN.exec(name)?.[1];
+    const isOrphan = stem !== undefined && !backupStems.has(stem) && isRegularFile(join(backupsFolder, name));
+    if (isOrphan) removeIfPresent(join(backupsFolder, name));
+  }
+}
+
 export function deleteBackupsBeyondTheMostRecent(backupsFolder: string, justTakenPath: string): void {
   try {
     const justTakenName = basename(justTakenPath);
     const otherNamesOldestFirst = backupNamesIn(backupsFolder).filter((name) => name !== justTakenName).sort((a, b) => byCreationTime(backupsFolder, a, b));
-    for (const name of otherNamesOldestFirst.slice(0, -(BACKUPS_TO_KEEP - 1))) {
-      const path = join(backupsFolder, name);
-      removeIfPresent(path);
-      removeIfPresent(path.replace(/\.db$/, '.config.json'));
-    }
+    for (const name of otherNamesOldestFirst.slice(0, -(BACKUPS_TO_KEEP - 1))) removeIfPresent(join(backupsFolder, name));
+    removeConfigCopiesWithoutABackup(backupsFolder);
   } catch {
     // ponytail: a pruning failure never undoes or fails the backup that was just taken
   }
