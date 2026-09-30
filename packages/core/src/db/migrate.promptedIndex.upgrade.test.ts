@@ -73,7 +73,8 @@ describe('the prompted column and session_events index migration upgrading a dat
       WHERE sessions.parent_id = ? AND session_events.kind = 'reopened'`).all('lead') as { detail: string }[];
 
     const details = plan.map((step) => step.detail);
-    expect(details.some((detail) => /SEARCH session_events USING .*INDEX session_events_by_session_kind_ts/.test(detail))).toBe(true);
+    const searchesByLeadingSessionIdThenKind = /SEARCH session_events USING .*INDEX session_events_by_session_kind_ts \(session_id=\? AND kind=\?\)/;
+    expect(details.some((detail) => searchesByLeadingSessionIdThenKind.test(detail))).toBe(true);
     expect(details.some((detail) => /SCAN session_events/.test(detail))).toBe(false);
   });
 });
