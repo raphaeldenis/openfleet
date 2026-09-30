@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -112,6 +112,39 @@ describe('the restore instruction for a database newer than the code', () => {
 
     expect(copyingOnlyTheBackup).toEqual(['after migration', 'before migration']);
     expect(alsoDeletingWalAndShm).toEqual(['before migration']);
+  });
+});
+
+describe('the config copy beside a backup', () => {
+  const takenAt = '2026-05-05T05:05:05.005Z';
+  const sidecarName = 'openfleet-015_handovers-2026-05-05T05-05-05-005Z.config.json';
+
+  function bootWithSomethingAlreadyNamedLikeTheConfigCopy(plantCollision: () => void): void {
+    writeFileSync(join(home, 'config.json'), '{"secret":"synthetic"}');
+    createDatabaseAtVersion('015_handovers').close();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(takenAt));
+    mkdirSync(backupsDir);
+    plantCollision();
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    openDatabase(dbPath).close();
+  }
+
+  it('never writes through a symlink that already has its name', () => {
+    const outside = join(mkdtempSync(join(tmpdir(), 'of-backup-review-outside-')), 'precious.txt');
+    writeFileSync(outside, 'precious');
+
+    bootWithSomethingAlreadyNamedLikeTheConfigCopy(() => symlinkSync(outside, join(backupsDir, sidecarName)));
+
+    expect(readFileSync(outside, 'utf8')).toBe('precious');
+    expect(lstatSync(join(backupsDir, sidecarName)).isSymbolicLink()).toBe(true);
+    expect(databaseBackups()).toHaveLength(1);
+  });
+
+  it('never overwrites a regular file that already has its name', () => {
+    bootWithSomethingAlreadyNamedLikeTheConfigCopy(() => writeFileSync(join(backupsDir, sidecarName), 'mine'));
+
+    expect(readFileSync(join(backupsDir, sidecarName), 'utf8')).toBe('mine');
   });
 });
 

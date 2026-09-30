@@ -1,6 +1,7 @@
-import { chmodSync, closeSync, copyFileSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, renameSync, statSync, unlinkSync } from 'node:fs';
+import { chmodSync, closeSync, existsSync, fchmodSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
+import { log } from '../logger.js';
 import { BACKUPS_FOLDER_NAME } from './migrate.js';
 
 const BACKUPS_TO_KEEP = 3;
@@ -114,13 +115,37 @@ export function backUpBeforeMigrating(db: DatabaseSync, options: { home: string;
   }
 }
 
-function copyConfigAlongside(configPath: string, backupPath: string): void {
-  const configCopyPath = backupPath.replace(/\.db$/, '.config.json');
+function readConfigIfPresent(configPath: string): Buffer | undefined {
   try {
-    copyFileSync(configPath, configCopyPath);
+    return readFileSync(configPath);
   } catch (error) {
-    if (isMissing(error)) return;
+    if (isMissing(error)) return undefined;
     throw error;
   }
-  chmodSync(configCopyPath, 0o600);
+}
+
+// The copy is created exclusively (never through a symlink), sealed at 0600 through its own descriptor,
+// then hard-linked to its final name, which fails rather than replaces anything already there.
+function copyConfigAlongside(configPath: string, backupPath: string): void {
+  const config = readConfigIfPresent(configPath);
+  if (config === undefined) return;
+  const configCopyPath = backupPath.replace(/\.db$/, '.config.json');
+  const inProgressPath = `${configCopyPath}${IN_PROGRESS_SUFFIX}`;
+  let createdInProgressFile = false;
+  try {
+    const descriptor = openSync(inProgressPath, 'wx', 0o600);
+    createdInProgressFile = true;
+    try {
+      writeFileSync(descriptor, config);
+      fchmodSync(descriptor, 0o600);
+    } finally {
+      closeSync(descriptor);
+    }
+    linkSync(inProgressPath, configCopyPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    log('warn', `config copy skipped: ${configCopyPath} or its temp name is already taken`);
+  } finally {
+    if (createdInProgressFile) removeIfPresent(inProgressPath);
+  }
 }
