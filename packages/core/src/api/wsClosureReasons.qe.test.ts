@@ -160,6 +160,30 @@ describe('the exit codes that predate the reason', () => {
   });
 });
 
+describe('a delivery that keeps failing', () => {
+  it('announces delivery_failed once even when a turn boundary makes the daemon retry and fail again', async () => {
+    const { server, sessions, harness } = await boot();
+    const { frames } = await openClient(server);
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const session = await sessions.create(spec);
+    const hook = (hook_event_name: string) => sessions.applyInput(session.id, { kind: 'hook', event: { session_id: session.id, hook_event_name } as never });
+    hook('SessionStart');
+    harness.handles[0]!.write = () => { throw new Error('pty write failed'); };
+    harness.handles[0]!.typeMessage = () => { throw new Error('pty write failed'); };
+
+    sessions.sendMessage({ sessionId: session.id, body: 'do X' });
+    await waitFor(() => frames.find(isError));
+    hook('UserPromptSubmit');
+    hook('Stop');
+    await settle();
+    hook('UserPromptSubmit');
+    hook('Stop');
+    await settle();
+
+    expect(frames.filter(isError).map((frame) => (frame.error as { error: string }).error)).toEqual(['delivery_failed']);
+  });
+});
+
 describe('a session reopened after a launch failure', () => {
   it('closes for the user later with reason closed_by_user, not with the earlier launch_failed', async () => {
     const harness = new FlakyLaunchHarness();
