@@ -20,6 +20,8 @@ const openDatabaseUpgradedFromBeforePromptedIndex = () => {
   applyMigrations(db, migrationsBeforePromptedIndex);
   insertSession(db, { id: 'lead', parentId: null });
   insertSession(db, { id: 'worker', parentId: 'lead' });
+  insertSession(db, { id: 'adopted', parentId: null });
+  db.prepare("UPDATE sessions SET cli_session_id = 'adopted-after-clear' WHERE id = 'adopted'").run();
   db.prepare("INSERT INTO session_events (session_id, kind, ts) VALUES ('worker', 'reopened', 't1')").run();
   applyMigrations(db);
   return db;
@@ -33,7 +35,7 @@ describe('the prompted column and session_events index migration upgrading a dat
     const events = db.prepare('SELECT session_id, kind, ts FROM session_events').all();
     const foreignKeyViolations = db.prepare('PRAGMA foreign_key_check').all();
 
-    expect(sessions).toEqual([{ id: 'lead' }, { id: 'worker' }]);
+    expect(sessions).toEqual([{ id: 'adopted' }, { id: 'lead' }, { id: 'worker' }]);
     expect(events).toEqual([{ session_id: 'worker', kind: 'reopened', ts: 't1' }]);
     expect(foreignKeyViolations).toEqual([]);
   });
@@ -46,13 +48,19 @@ describe('the prompted column and session_events index migration upgrading a dat
     expect(versions).toContain('016_session_prompted_events_index');
   });
 
-  it('gives every existing session prompted = 0 (a legacy prompted session reopens silently fresh until its next prompt) and a mandatory column', () => {
+  it('gives a legacy /clear-adopted session (cli_session_id <> id) prompted = 1 and a plain session prompted = 0 (a legacy plain prompted session reopens silently fresh until its next prompt)', () => {
     const db = openDatabaseUpgradedFromBeforePromptedIndex();
 
     const promptedValues = db.prepare('SELECT id, prompted FROM sessions ORDER BY id').all();
+
+    expect(promptedValues).toEqual([{ id: 'adopted', prompted: 1 }, { id: 'lead', prompted: 0 }, { id: 'worker', prompted: 0 }]);
+  });
+
+  it('makes the prompted column mandatory', () => {
+    const db = openDatabaseUpgradedFromBeforePromptedIndex();
+
     const column = db.prepare("SELECT \"notnull\" AS required FROM pragma_table_info('sessions') WHERE name = 'prompted'").get();
 
-    expect(promptedValues).toEqual([{ id: 'lead', prompted: 0 }, { id: 'worker', prompted: 0 }]);
     expect(column).toEqual({ required: 1 });
   });
 
