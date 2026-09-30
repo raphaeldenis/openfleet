@@ -134,6 +134,7 @@ const applyTaskCreate: Applier = (fold, input, response) => {
     countAsUntracked(fold, id);
     return true;
   }
+  fold.untrackedTaskIds.delete(id);
   fold.tasks.set(id, rowOf({ id, content, status: 'pending', activeForm }));
   return true;
 };
@@ -165,7 +166,8 @@ const applyTaskUpdate: Applier = (fold, input, response) => {
     countAsUntracked(fold, id);
     return true;
   }
-  fold.tasks.set(id, rowOf({ id, content: subject ?? `Task #${id}`, status: status ?? 'pending', activeForm, unnamed: subject ? undefined : true }));
+  fold.untrackedTaskIds.delete(id);
+  fold.tasks.set(id, rowOf({ id, content: subject ??`Task #${id}`, status: status ?? 'pending', activeForm, unnamed: subject ? undefined : true }));
   return true;
 };
 

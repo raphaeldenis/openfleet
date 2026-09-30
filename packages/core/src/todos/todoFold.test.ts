@@ -495,6 +495,42 @@ describe('the list stays bounded', () => {
 
     expect(snapshot(fold).omitted).toBe(MAX_TRACKED_TASKS - MAX_TODO_ITEMS);
   });
+
+  it('does not count a repeated id again when the set of untracked ids is full', () => {
+    const fold = newFold();
+    tenThousandCreates().slice(0, MAX_TRACKED_TASKS).forEach((call) => foldHookPayload(fold, call));
+    const updateOf = (taskId: string, callId: string) => hookCall('TaskUpdate', callId, { taskId, status: 'pending' }, { success: true, taskId });
+    Array.from({ length: MAX_TRACKED_TASKS }, (_, index) => `x${index}`).forEach((taskId) => foldHookPayload(fold, updateOf(taskId, `first-${taskId}`)));
+    const omittedWhenFull = snapshot(fold).omitted;
+
+    foldHookPayload(fold, updateOf('x0', 'again'));
+
+    expect(snapshot(fold).omitted).toBe(omittedWhenFull);
+  });
+
+  it('counts an untracked id once when a later update gives it a row', () => {
+    const fold = newFold();
+    const creates = tenThousandCreates().slice(0, MAX_TRACKED_TASKS);
+    creates.forEach((call) => foldHookPayload(fold, call));
+    foldHookPayload(fold, hookCall('TaskUpdate', 'u1', { taskId: 'new', status: 'in_progress' }, { success: true, taskId: 'new' }));
+    foldHookPayload(fold, hookCall('TaskUpdate', 'd1', { taskId: '1', status: 'deleted' }, { success: true, taskId: '1' }));
+
+    foldHookPayload(fold, hookCall('TaskUpdate', 'u2', { taskId: 'new', subject: 'Now tracked' }, { success: true, taskId: 'new' }));
+
+    expect(snapshot(fold).counts.total).toBe(MAX_TRACKED_TASKS);
+    expect(snapshot(fold).omitted).toBe(MAX_TRACKED_TASKS - MAX_TODO_ITEMS);
+  });
+
+  it('counts an untracked id once when a TaskCreate gives it a row', () => {
+    const fold = newFold();
+    tenThousandCreates().slice(0, MAX_TRACKED_TASKS).forEach((call) => foldHookPayload(fold, call));
+    foldHookPayload(fold, hookCall('TaskUpdate', 'u1', { taskId: 'new', status: 'in_progress' }, { success: true, taskId: 'new' }));
+    foldHookPayload(fold, hookCall('TaskUpdate', 'd1', { taskId: '1', status: 'deleted' }, { success: true, taskId: '1' }));
+
+    foldHookPayload(fold, hookCall('TaskCreate', 'create-new', { subject: 'Now tracked' }, { task: { id: 'new', subject: 'Now tracked' } }));
+
+    expect(snapshot(fold).omitted).toBe(MAX_TRACKED_TASKS - MAX_TODO_ITEMS);
+  });
 });
 
 describe('the calls waiting for their result hold masked, bounded text', () => {
