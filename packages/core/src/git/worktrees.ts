@@ -20,10 +20,22 @@ export class WorktreeError extends Error {
 }
 
 const SAFE_BRANCH = /^[A-Za-z0-9._][A-Za-z0-9._\/-]*$/;
+// git writes refs/heads/<name>.lock, and that file name hits the 255-character filename limit past 250.
+const MAX_BRANCH_NAME_CHARS = 250;
+const LOCK_SUFFIX = '.lock';
+
+/** Mirrors the `git check-ref-format` rules that the safe character set does not already rule out. */
+export function isValidBranchName(branchName: string): boolean {
+  const isWithinLengthCap = branchName.length <= MAX_BRANCH_NAME_CHARS;
+  if (!isWithinLengthCap || !SAFE_BRANCH.test(branchName)) return false;
+  const hasConsecutiveDots = branchName.includes('..');
+  const endsWithDot = branchName.endsWith('.');
+  const hasRefusedComponent = branchName.split('/').some((component) => component === '' || component.startsWith('.') || component.endsWith(LOCK_SUFFIX));
+  return !hasConsecutiveDots && !endsWithDot && !hasRefusedComponent;
+}
 
 export async function createWorktree(input: { repoPath: string; branchName: string; worktreesRoot: string }): Promise<{ path: string; branch: string }> {
-  const isValidBranch = SAFE_BRANCH.test(input.branchName) && !input.branchName.includes('..');
-  if (!isValidBranch) throw new WorktreeError('invalid_branch', `invalid branch name: ${input.branchName}`);
+  if (!isValidBranchName(input.branchName)) throw new WorktreeError('invalid_branch', `invalid branch name: ${input.branchName}`);
 
   const worktreePath = join(input.worktreesRoot, input.branchName.replaceAll('/', '-'));
   if (existsSync(worktreePath)) throw new WorktreeError('exists', `worktree already exists: ${worktreePath}`);

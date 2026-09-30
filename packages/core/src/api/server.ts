@@ -1,4 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { HTTP_STATUS_BY_KIND } from '@openfleet/shared';
+import { describeError } from '../errors/describeError.js';
 import type { EventBus } from '../events/eventBus.js';
 import type { ApprovalService } from '../governance/approvalService.js';
 import { tokensMatch } from '../ids.js';
@@ -24,7 +26,7 @@ import { hooksHandler } from './hooksHandler.js';
 import { registerNoteRoutes } from './noteRoutes.js';
 import { registerProjectRoutes } from './projectRoutes.js';
 import { registerRestRoutes } from './restHandlers.js';
-import { decodeParams, InvalidJsonBodyError, json, logServerError, PayloadTooLargeError, readJson, Router } from './router.js';
+import { decodeParams, json, readJson, redactedRequestPath, Router } from './router.js';
 import { createWsHandler } from './wsHandler.js';
 import { createWsTicketStore, type WsTicketStore } from './wsTicketStore.js';
 
@@ -79,6 +81,16 @@ async function handleMcpRequest(
   await mcp(req, res, await readJson(req));
 }
 
+/** Ends the request with a plain 500 when the error answer itself failed; a response already started is just ended. */
+function answerLastResort(res: ServerResponse): void {
+  try {
+    if (res.headersSent) return void res.end();
+    json(res, 500, { error: 'internal_error', kind: 'internal', retry: 'later', message: 'the daemon hit an unexpected error.' });
+  } catch {
+    res.destroy();
+  }
+}
+
 export async function startServer(deps: ServerDeps): Promise<{ url: string; routes: { method: string; path: string }[]; close(): Promise<void> }> {
   const wsTickets = deps.wsTickets ?? createWsTicketStore();
   const router = new Router();
@@ -117,12 +129,13 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; rout
       if (isProtected && !tokensMatch(req.headers.authorization ?? '', `Bearer ${deps.adminToken}`)) return json(res, 401, { error: 'unauthorized' });
       await match.handler({ req, res, params: match.params, body: await readJson(req) });
     } catch (error) {
-      if (error instanceof PayloadTooLargeError) return json(res, 413, { error: 'payload_too_large' });
-      if (error instanceof InvalidJsonBodyError) return json(res, 400, { error: 'invalid_json', detail: error.message });
-      const isValidation = (error as { name?: string }).name === 'ZodError';
-      if (!isValidation) logServerError(req, error);
-      if (isValidation) return json(res, 400, { error: 'invalid_body', detail: (error as Error).message });
-      json(res, 500, { error: 'internal_error' });
+      try {
+        const envelope = describeError(error, { where: `${req.method ?? 'GET'} ${redactedRequestPath(req)} → 500` });
+        const errorIdHeader: Record<string, string> = envelope.id ? { 'x-openfleet-error-id': envelope.id } : {};
+        json(res, HTTP_STATUS_BY_KIND[envelope.kind], envelope, errorIdHeader);
+      } catch {
+        answerLastResort(res);
+      }
     }
   });
   const ws = createWsHandler({ ...deps, wsTickets });
