@@ -75,6 +75,7 @@ const RUNNING_STATES = new Set(['generating', 'starting']);
           }
           @if (versions.mismatch(); as mismatch) {
             <of-banner
+              data-testid="version-mismatch-banner"
               variant="mismatch"
               title="Version mismatch"
               [description]="'The daemon on ' + daemonAddress + ' is ' + mismatch.daemonVersion + ', this app is ' + mismatch.appVersion"

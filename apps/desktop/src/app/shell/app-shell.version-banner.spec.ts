@@ -42,7 +42,7 @@ async function openShell({ appVersion }: { appVersion: string }) {
   return { daemonAnswersBootCheckWith };
 }
 
-const versionMismatchBanner = () => screen.queryByText('Version mismatch');
+const versionMismatchBanner = () => screen.queryByTestId('version-mismatch-banner');
 
 describe('AppShellComponent version mismatch banner', () => {
   it('names both versions when the daemon and the app differ', async () => {
@@ -50,9 +50,9 @@ describe('AppShellComponent version mismatch banner', () => {
 
     await daemonAnswersBootCheckWith({ version: '0.2.0-dev' });
 
-    const banner = screen.getByText('The daemon on 127.0.0.1:7331 is 0.2.0-dev, this app is 0.2.0');
-    expect(banner.closest('[data-testid="banner"]')).toHaveAttribute('role', 'status');
-    expect(versionMismatchBanner()).toBeInTheDocument();
+    const banner = screen.getByTestId('version-mismatch-banner');
+    expect(banner).toHaveTextContent('The daemon on 127.0.0.1:7331 is 0.2.0-dev, this app is 0.2.0');
+    expect(banner.querySelector('[data-testid="banner"]')).toHaveAttribute('role', 'status');
   });
 
   it('shows nothing when the daemon and the app run the same version', async () => {

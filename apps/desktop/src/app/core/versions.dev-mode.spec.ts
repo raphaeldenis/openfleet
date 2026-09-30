@@ -22,7 +22,7 @@ describe('the app version in a Tauri webview', () => {
   beforeEach(() => TestBed.configureTestingModule({}));
   afterEach(() => vi.unstubAllGlobals());
 
-  it.fails('is "dev" in a development build, so `tauri dev` against a source daemon raises no version mismatch', async () => {
+  it('is "dev" in a development build, so `tauri dev` against a source daemon raises no version mismatch', async () => {
     runningAs({ build: 'development' });
 
     const versions = await appTalkingToDaemon({ daemonVersion: 'dev' });

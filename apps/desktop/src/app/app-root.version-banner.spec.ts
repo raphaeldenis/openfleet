@@ -46,7 +46,7 @@ describe('AppRoot version mismatch banner', () => {
 
     await bootAppOn({ appVersion: '0.2.0' });
 
-    expect(await screen.findByText('The daemon on 127.0.0.1:7331 is 0.2.0-dev, this app is 0.2.0')).toBeInTheDocument();
+    expect(await screen.findByTestId('version-mismatch-banner')).toHaveTextContent('The daemon on 127.0.0.1:7331 is 0.2.0-dev, this app is 0.2.0');
     expect(healthRequestCount()).toBe(1);
   });
 
@@ -56,6 +56,6 @@ describe('AppRoot version mismatch banner', () => {
     await bootAppOn({ appVersion: '0.2.0' });
 
     expect(await screen.findByTestId('app-shell')).toBeInTheDocument();
-    expect(screen.queryByText('Version mismatch')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('version-mismatch-banner')).not.toBeInTheDocument();
   });
 });
