@@ -143,6 +143,13 @@ export class SessionRepository {
       this.setState(id, 'starting', since);
     });
   }
+  /** Consumes the shutdown close, sets the session back to 'starting' and records the reopen in one transaction; returns the reopen event id. */
+  reopenFromShutdownClose(id: string, at: string): number {
+    return inTransaction(this.db, 'reopen_from_shutdown_close', () => {
+      this.resumeFromShutdownClose(id, at);
+      return this.recordReopen(id, at);
+    });
+  }
   /** Rewrites a shutdown-closed row as a failed close in one transaction: the given exit code, a fresh closed_at, no shutdown marker. */
   failShutdownClose(id: string, exitCode: number, at: string): void {
     inTransaction(this.db, 'fail_shutdown_close', () => {

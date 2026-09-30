@@ -296,6 +296,16 @@ function waitForExit(handle: HarnessHandle): Promise<void> {
 
 const LOW_SURROGATE_RANGE = { min: 0xdc00, max: 0xdfff };
 
+// Reads the code and message of any thrown value (null, a primitive, an object with throwing getters) without ever throwing.
+function readThrownDetail(thrown: unknown): string {
+  try {
+    const { code, message } = Object(thrown) as { code?: unknown; message?: unknown };
+    return `${code ?? ''} ${message ?? ''}`.trim();
+  } catch {
+    return 'unreadable error';
+  }
+}
+
 function trimToTail(text: string, maxLength: number): string {
   if (text.length <= maxLength) return text;
   const start = text.length - maxLength;
@@ -535,8 +545,9 @@ export class SessionService {
     if (session.state !== 'closed') throw new SessionReopenError('not_closed', `session ${sessionId} is not closed`);
     this.assertDirectoryLaunchable(session);
     // Consumed with the 'starting' transition, like a boot resume: a failed launch then closes the row afresh and no boot retries it.
-    if (this.repo.wasClosedByDaemonShutdown(sessionId)) this.repo.resumeFromShutdownClose(sessionId, new Date().toISOString());
-    const reopenEventId = this.repo.recordReopen(sessionId, new Date().toISOString());
+    const isClosedByShutdown = this.repo.wasClosedByDaemonShutdown(sessionId);
+    const reopenedAt = new Date().toISOString();
+    const reopenEventId = isClosedByShutdown ? this.repo.reopenFromShutdownClose(sessionId, reopenedAt) : this.repo.recordReopen(sessionId, reopenedAt);
     const outcome = this.resumeOne(session);
     if (!outcome.launched) {
       this.removeReopenRecord({ sessionId, reopenEventId });
@@ -1184,8 +1195,7 @@ export class SessionService {
       } catch (err) {
         // A failure anywhere past the launch itself (e.g. the state-machine DB write) must not abort
         // resuming the rest of the fleet — kill the process we already launched and move on.
-        const { code, message } = err as { code?: string; message?: string };
-        log('warn', `resume: session ${session.id} is closed instead of resumed: ${code ?? ''} ${message ?? ''}`.trim());
+        log('warn', `resume: session ${session.id} is closed instead of resumed: ${readThrownDetail(err)}`);
         await this.failResume(session.id);
       }
     }

@@ -15,7 +15,7 @@ function bootDaemon(db: Db, options: { resumeTimeoutMs?: number; clearFlushGrace
   const events: Array<{ type: string; sessionId?: string; exitCode?: number; reason?: string }> = [];
   bus.subscribe((event) => events.push(event as never));
   const service = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt', resumeTimeoutMs: 100_000, ...options });
-  return { harness, service, events };
+  return { harness, service, events, bus };
 }
 
 const rejectStartingTransitionOf = (db: Db, name: string) =>
@@ -132,6 +132,82 @@ describe('resume after a graceful shutdown, adversarial review findings', () => 
     expect(() => second.service.reopen(session.id)).toThrow();
 
     expect(reopenedEventsOf(db, session.id)).toBe(0);
+  });
+
+  it('leaves the shutdown-closed row closed with its marker and reopenable when the reopened event cannot be written', async () => {
+    const db = openDatabase(':memory:');
+    const first = bootDaemon(db);
+    const session = await newSession(first.service, 'Worker');
+    await first.service.closeAll();
+    const closedRow = first.service.get(session.id)!;
+    db.exec("CREATE TRIGGER fail_reopened BEFORE INSERT ON session_events WHEN NEW.kind = 'reopened' BEGIN SELECT RAISE(ABORT, 'injected reopened failure'); END");
+    const second = bootDaemon(db);
+
+    expect(() => second.service.reopen(session.id)).toThrow('injected reopened failure');
+
+    expect(second.service.get(session.id)).toMatchObject({ state: 'closed', exitCode: closedRow.exitCode, closedAt: closedRow.closedAt });
+    expect(shutdownEventsOf(db, session.id)).toBe(1);
+    expect(second.harness.launches).toHaveLength(0);
+
+    db.exec('DROP TRIGGER fail_reopened');
+    const third = bootDaemon(db);
+    await third.service.resumeAll();
+    expect(third.harness.launches.map((launch) => launch.sessionId)).toEqual([session.id]);
+    expect(reopenedEventsOf(db, session.id)).toBe(0);
+  });
+
+  it('reopens a shutdown-closed row once the reopened event can be written again', async () => {
+    const db = openDatabase(':memory:');
+    const first = bootDaemon(db);
+    const session = await newSession(first.service, 'Worker');
+    await first.service.closeAll();
+    db.exec("CREATE TRIGGER fail_reopened BEFORE INSERT ON session_events WHEN NEW.kind = 'reopened' BEGIN SELECT RAISE(ABORT, 'injected reopened failure'); END");
+    const second = bootDaemon(db);
+    expect(() => second.service.reopen(session.id)).toThrow();
+    db.exec('DROP TRIGGER fail_reopened');
+
+    second.service.reopen(session.id);
+
+    expect(second.harness.launches).toHaveLength(1);
+    expect(reopenedEventsOf(db, session.id)).toBe(1);
+    expect(shutdownEventsOf(db, session.id)).toBe(0);
+  });
+
+  it('keeps the reopened event of an ordinary closed row that reopens', async () => {
+    const db = openDatabase(':memory:');
+    const first = bootDaemon(db);
+    const session = await newSession(first.service, 'Worker');
+    first.harness.handles[0]!.emitExit(0);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(first.service.get(session.id)!.state).toBe('closed');
+
+    first.service.reopen(session.id);
+
+    expect(reopenedEventsOf(db, session.id)).toBe(1);
+    expect(first.harness.launches).toHaveLength(2);
+  });
+
+  const hostileThrownValues: Array<[string, () => unknown]> = [
+    ['null', () => null],
+    ['undefined', () => undefined],
+    ['a primitive', () => 42],
+    ['an object whose code and message getters throw', () => ({ get code(): string { throw new Error('code getter'); }, get message(): string { throw new Error('message getter'); } })],
+  ];
+  it.each(hostileThrownValues)('fails the row cleanly and resumes the next one when a listener throws %s', async (_label, makeThrown) => {
+    const db = openDatabase(':memory:');
+    const first = bootDaemon(db);
+    const broken = await newSession(first.service, 'broken');
+    const healthy = await newSession(first.service, 'healthy');
+    await first.service.closeAll();
+    const second = bootDaemon(db);
+    second.bus.subscribe((event) => { if (event.type === 'session.state' && event.sessionId === broken.id) throw makeThrown(); });
+
+    await expect(second.service.resumeAll()).resolves.toBeUndefined();
+
+    expect(second.harness.launches.map((launch) => launch.sessionId)).toEqual([broken.id, healthy.id]);
+    expect(second.harness.handles[0]!.killed).toBe(true);
+    expect(second.service.get(broken.id)).toMatchObject({ state: 'closed', exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE });
+    expect(second.service.get(healthy.id)!.state).not.toBe('closed');
   });
 
   it('ends a resume timeout that overlaps the shutdown as a plain close that no next boot resumes', async () => {
