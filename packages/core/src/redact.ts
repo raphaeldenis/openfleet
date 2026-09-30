@@ -63,8 +63,15 @@ const WELL_KNOWN_CREDENTIAL = new RegExp(
     '\\bgh[pousr]_[A-Za-z0-9]{36,}',
     '\\bgithub_pat_[A-Za-z0-9_]{50,}',
     '\\b(?:AKIA|ASIA)[0-9A-Z]{16}\\b',
-    '\\beyJ[A-Za-z0-9_-]{5,}\\.eyJ[A-Za-z0-9_-]{5,}\\.[A-Za-z0-9_-]{5,}',
-    '-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)',
+    // A lookbehind, not `\b`: `-` is in the class, so `\b` would restart a scan after every `-eyJ` of one run (quadratic).
+    '(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{5,}\\.eyJ[A-Za-z0-9_-]{5,}\\.[A-Za-z0-9_-]{5,}',
+    '\\bxox[abprs]-[A-Za-z0-9-]{10,}',
+    '\\bxapp-[A-Za-z0-9-]{10,}',
+    '\\bAIza[0-9A-Za-z_-]{35}',
+    '\\bnpm_[A-Za-z0-9]{36}',
+    '\\bglpat-[A-Za-z0-9_-]{20,}',
+    '\\b[sr]k_live_[A-Za-z0-9]{20,}',
+    '-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----[\\s\\S]*?(?:-----END [A-Z ]*PRIVATE KEY(?: BLOCK)?-----|$)',
   ].join('|'),
   'g',
 );
@@ -83,5 +90,11 @@ export function maskedSecrets(text: string): string {
 // The cut fell between `://` and the `@` that ends the credentials, so the `@` the rule above needs is gone.
 const URL_CREDENTIALS_CUT_BY_THE_HEAD = /(:\/\/)[^\s/@"'`]+$/;
 
+// A well-known credential the cut left under its rule's minimum length: only its prefix and its first characters remain.
+const WELL_KNOWN_CREDENTIAL_CUT_BY_THE_HEAD = /\b(?:sk-|gh[pousr]_|github_pat_|AKIA|ASIA|eyJ)[A-Za-z0-9_.-]*$/;
+
 export const maskingCutCredential = (head: string): string =>
-  head.replace(CREDENTIAL_CUT_BY_THE_HEAD, `$1${MASK}`).replace(URL_CREDENTIALS_CUT_BY_THE_HEAD, `$1${MASK}`);
+  head
+    .replace(CREDENTIAL_CUT_BY_THE_HEAD, `$1${MASK}`)
+    .replace(URL_CREDENTIALS_CUT_BY_THE_HEAD, `$1${MASK}`)
+    .replace(WELL_KNOWN_CREDENTIAL_CUT_BY_THE_HEAD, MASK);
