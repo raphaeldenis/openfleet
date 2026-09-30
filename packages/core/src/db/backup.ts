@@ -1,5 +1,5 @@
-import { chmodSync, closeSync, copyFileSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, renameSync, unlinkSync } from 'node:fs';
-import { join } from 'node:path';
+import { chmodSync, closeSync, copyFileSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, renameSync, statSync, unlinkSync } from 'node:fs';
+import { basename, join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { BACKUPS_FOLDER_NAME } from './migrate.js';
 
@@ -69,12 +69,19 @@ function reserveBackupPath(backupsFolder: string, schemaVersion: string): { back
 }
 
 // Runs once the migrations succeeded: a failed or refused boot keeps every snapshot it has.
+// "Most recent" is by creation time (file mtime), never by the timestamp in the name, so a clock that
+// went backwards cannot make a fresh backup look old; the name's key only breaks mtime ties.
+function byCreationTime(backupsFolder: string, a: string, b: string): number {
+  const creationTimeOf = (name: string) => statSync(join(backupsFolder, name)).mtimeMs;
+  return creationTimeOf(a) - creationTimeOf(b) || chronologicalKeyOf(a)!.localeCompare(chronologicalKeyOf(b)!) || a.localeCompare(b);
+}
+
 export function deleteBackupsBeyondTheMostRecent(backupsFolder: string, justTakenPath: string): void {
   try {
-    const backupNamesOldestFirst = backupNamesIn(backupsFolder).sort((a, b) => chronologicalKeyOf(a)!.localeCompare(chronologicalKeyOf(b)!));
-    for (const name of backupNamesOldestFirst.slice(0, -BACKUPS_TO_KEEP)) {
+    const justTakenName = basename(justTakenPath);
+    const otherNamesOldestFirst = backupNamesIn(backupsFolder).filter((name) => name !== justTakenName).sort((a, b) => byCreationTime(backupsFolder, a, b));
+    for (const name of otherNamesOldestFirst.slice(0, -(BACKUPS_TO_KEEP - 1))) {
       const path = join(backupsFolder, name);
-      if (path === justTakenPath) continue;
       removeIfPresent(path);
       removeIfPresent(path.replace(/\.db$/, '.config.json'));
     }

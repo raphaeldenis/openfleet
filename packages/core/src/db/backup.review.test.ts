@@ -52,6 +52,25 @@ function removeDatabaseFiles(): void {
   for (const suffix of ['', '-wal', '-shm']) if (existsSync(`${dbPath}${suffix}`)) unlinkSync(`${dbPath}${suffix}`);
 }
 
+describe('retention keeps the three most recently created backups', () => {
+  it('keeps them even when the clock went backwards between the backups', () => {
+    vi.useFakeTimers();
+    const namedAt = ['2030-01-01', '2030-01-02', '2030-01-03', '2026-01-01', '2026-01-02'];
+    const createdAt = new Date('2025-06-01T00:00:00.000Z').getTime();
+    namedAt.forEach((day, creationOrder) => {
+      vi.setSystemTime(new Date(`${day}T00:00:00.000Z`));
+      createDatabaseAtVersion('015_handovers').close();
+      openDatabase(dbPath).close();
+      removeDatabaseFiles();
+      const justTaken = databaseBackups().find((name) => name.includes(`${day}T00-00-00-000Z`))!;
+      const creationTime = new Date(createdAt + creationOrder * 86_400_000);
+      utimesSync(join(backupsDir, justTaken), creationTime, creationTime);
+    });
+
+    expect(databaseBackups().map((name) => name.match(/(\d{4}-\d{2}-\d{2})T/)![1])).toEqual(['2026-01-01', '2026-01-02', '2030-01-03']);
+  });
+});
+
 describe('a boot that fails or is refused never evicts the pre-upgrade backup', () => {
   it('keeps the backup taken before 015 across four boots where 015 commits and 016 keeps failing', () => {
     const db = createDatabaseAtVersion('014_session_cli_ids');
