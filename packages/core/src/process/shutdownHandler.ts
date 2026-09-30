@@ -1,3 +1,5 @@
+import { EXIT_CODES } from './exitCodes.js';
+
 const DEFAULT_GUARD_TIMEOUT_MS = 10_000;
 
 export interface ShutdownHandlerOptions { guardTimeoutMs?: number }
@@ -17,12 +19,12 @@ export function installShutdownHandler(shutdown: () => Promise<void>, proc: Node
     const guard = setTimeout(() => {
       if (settled) return;
       settled = true;
-      proc.exit(1);
+      proc.exit(EXIT_CODES.shutdownHung);
     }, guardTimeoutMs);
     guard.unref?.();
     void shutdown().then(
-      () => { if (settled) return; settled = true; clearTimeout(guard); proc.exit(0); },
-      () => { if (settled) return; settled = true; clearTimeout(guard); proc.exit(1); },
+      () => { if (settled) return; settled = true; clearTimeout(guard); proc.exit(EXIT_CODES.cleanShutdown); },
+      () => { if (settled) return; settled = true; clearTimeout(guard); proc.exit(EXIT_CODES.failed); },
     );
   };
   for (const signal of ['SIGINT', 'SIGTERM'] as const) proc.on(signal, handleSignal);
