@@ -25,7 +25,7 @@ export function registerNoteTools(server: McpServer, deps: RegisterNoteToolsDeps
 
   server.registerTool('get_note', {
     description: 'A note\'s full body; expandedBody (its @-mentions expanded after it, depth 2, 64 KiB budget) is present only when mentions were expanded, otherwise bodyMd is the full text. '
-      + 'With mentions_only true the body is not repeated: the result holds bodyMd once plus mentionBlocks, the array of expanded mention blocks (including the "not expanded" lines), present only when the body has mentions',
+      + 'With mentions_only true the body is not repeated: the result holds bodyMd once plus mentionBlocks, the array of expanded mention blocks (including the "not expanded" lines), present only when the body has mentions; the body still counts against the 64 KiB budget',
     inputSchema: { note: z.string().min(1), mentions_only: z.boolean().optional() },
   }, async ({ note, mentions_only }) => {
     const scope = requireProject();

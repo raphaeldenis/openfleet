@@ -31,7 +31,7 @@ export const rowView = (row: DsRow, { columnIds, includeUpdatedAt }: RowProjecti
   ...(includeUpdatedAt ? { updatedAt: row.updatedAt } : {}),
 });
 
-/** A row as `[rowId, updatedAt?, ...one cell per column id]`, an empty cell being null. */
+/** A row as `[rowId, updatedAt?, ...one cell per column id]`, an empty cell being null; the result header names every one of these positions. */
 export const columnarRowView = (row: DsRow, { columnIds, includeUpdatedAt }: Required<RowProjection>) => [
   row.id,
   ...(includeUpdatedAt ? [row.updatedAt] : []),

@@ -156,7 +156,7 @@ describe('QE — a booted daemon serves compact MCP results on the real route', 
 
     const bytes = (result: unknown) => Buffer.byteLength(rawText(result), 'utf8');
     expect(bytes(defaultResult)).toBe(35049);
-    expect(bytes(columnarResult)).toBe(10829);
+    expect(bytes(columnarResult)).toBe(11007);
     expect(parsed(columnarResult).count).toBe(50);
     expect(bytes(columnarResult)).toBeLessThan(bytes(defaultResult) / 2);
     expect(parsed(mentionsOnlyNote).mentionBlocks).toHaveLength(1);

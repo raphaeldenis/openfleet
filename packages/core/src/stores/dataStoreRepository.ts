@@ -30,6 +30,14 @@ export class UnknownColumnError extends Error {
   }
 }
 
+/** Column references (ids or display names) a caller sent that match no column of the store. */
+export class UnknownColumnReferenceError extends UnknownColumnError {
+  constructor(references: string[]) {
+    super(references);
+    this.message = `Unknown columns: ${references.join(', ')}`;
+  }
+}
+
 interface ViewRow { id: string; store_id: string; display_name: string; view_type: ViewType; config_json: string; sort_order: number }
 interface StoreRow { id: string; project_id: string; display_name: string; created_at: string; updated_at: string }
 interface ColumnRow { id: string; store_id: string; display_name: string; column_type: ColumnType; options_json: string | null; sort_order: number; auto_value: AutoValue | null }

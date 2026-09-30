@@ -578,7 +578,7 @@ describe('MCP tool results are compact', () => {
         const wrongCaseId = await columnarQuery({ store: storeId, columns: [selectId.toLowerCase() === selectId ? selectId.toUpperCase() : selectId.toLowerCase()] });
 
         expect(columnar.columns).toEqual(['id', 'updatedAt', selectId, textId]);
-        expect(Object.keys(asObjects.rows[0].data)).toEqual([selectId]);
+        expect(Object.keys(asObjects.rows[1].data)).toEqual([selectId]);
         expect(wrongCaseId.isError).toBe(true);
       });
 
@@ -690,8 +690,10 @@ describe('MCP tool results are compact', () => {
           const evenBodyBytes = Math.floor(bodyBytesToSpread / FILLED_ROW_COUNT);
           const lastBodyBytes = bodyBytesToSpread - evenBodyBytes * (FILLED_ROW_COUNT - 1);
           const rowIds = parsed(emptyResult).rows.map((cells: unknown[]) => cells[0]);
-          const updates = rowIds.map((rowId: string, index: number) => ({ row_id: rowId, patch: { [bodyId]: 'x'.repeat(index === FILLED_ROW_COUNT - 1 ? lastBodyBytes : evenBodyBytes) } }));
-          await call('update_data_store_rows', { store: store.id, updates });
+          for (const [index, rowId] of rowIds.entries()) {
+            const bodyBytes = index === FILLED_ROW_COUNT - 1 ? lastBodyBytes : evenBodyBytes;
+            await call('update_data_store_rows', { store: store.id, updates: [{ row_id: rowId, patch: { [bodyId]: 'x'.repeat(bodyBytes) } }] });
+          }
           return columnarArgs;
         }
 

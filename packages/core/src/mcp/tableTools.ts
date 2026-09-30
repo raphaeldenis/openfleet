@@ -1,7 +1,7 @@
-import { AutoValueSchema, ColumnTypeSchema, OrderTermSchema, SelectOptionSchema, WhereClauseSchema, type Session } from '@openfleet/shared';
+import { AutoValueSchema, ColumnTypeSchema, OrderTermSchema, SelectOptionSchema, WhereClauseSchema, type DsColumn, type Session } from '@openfleet/shared';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { RowNotFoundError, StoreNotFoundError, UnknownColumnError, type DataStoreRepository, type RowActor } from '../stores/dataStoreRepository.js';
+import { RowNotFoundError, StoreNotFoundError, UnknownColumnReferenceError, type DataStoreRepository, type RowActor } from '../stores/dataStoreRepository.js';
 import type { DataStoreService } from '../stores/dataStoreService.js';
 import { fail, guarded, truncateToByteBudget } from './toolResults.js';
 import { columnarRowView, columnView, rowView, storeView } from './toolViews.js';
@@ -106,9 +106,10 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
 
   server.registerTool('query_data_store', {
     description: `Filter, sort and limit a store's rows (limit ≤ ${MAX_QUERY_LIMIT}, default ${DEFAULT_QUERY_LIMIT}); the result is also cut off past ${MAX_QUERY_RESULT_BYTES} bytes, with \`truncated: true\` when that happened. `
-      + 'By default each row is {id, data keyed by column id, updatedAt}. format "columnar" returns {columns: [column ids], rows: [[rowId, updatedAt, ...one cell per column]], truncated, count} instead, naming each column once (an empty cell is null). '
-      + 'columns (ids or display names) keeps only those columns in both formats: names resolve to ids, an id wins over a name, duplicates are dropped, order is preserved, and an empty list keeps NO data columns (columnar rows are [rowId, updatedAt], rows format has data: {}); '
-      + 'include_updated_at false drops updatedAt from every row',
+      + 'By default each row is {id, data keyed by column id, updatedAt}. format "columnar" returns {columns, names, rows: [[rowId, updatedAt, ...one cell per data column]], truncated, count} instead (an empty cell is null): '
+      + 'columns lists id, updatedAt (unless dropped) then the data column ids, names labels the same positions, so columns[k] and names[k] describe row[k]. '
+      + 'columns (ids or display names, names match case-insensitively) keeps only those data columns in both formats: names resolve to ids, an id wins over a name, duplicates are dropped, order is preserved, and an empty list keeps NO data columns (columnar rows are [rowId, updatedAt] or [rowId] with include_updated_at false, rows format has data: {}); '
+      + 'where and order_by take column ids only. include_updated_at false drops updatedAt from every row. Unknown arguments are ignored',
     inputSchema: {
       store: z.string().min(1),
       where: z.array(WhereClauseSchema).optional(),
@@ -118,7 +119,7 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
       columns: z.array(z.string().min(1)).optional(),
       include_updated_at: z.boolean().optional(),
     },
-  }, async ({ store, where, order_by, limit, format, columns, include_updated_at }) => {
+  }, async ({ store, where, order_by, limit, format, columns: requestedColumns, include_updated_at }) => {
     const scope = requireProject();
     if (!scope) return fail('this session has no project');
     return guarded(() => {
@@ -126,24 +127,30 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
       const includeUpdatedAt = include_updated_at ?? true;
       const isColumnar = format === 'columnar';
       if (isColumnar) {
-        const columnIds = resolveColumnIds(store, columns);
-        const columnsHeaderBytes = Buffer.byteLength(JSON.stringify(columnIds), 'utf8');
-        const { items, truncated } = truncateToByteBudget(rows.map((row) => columnarRowView(row, { columnIds, includeUpdatedAt })), MAX_QUERY_RESULT_BYTES - columnsHeaderBytes);
-        return { columns: columnIds, rows: items, truncated, count: items.length };
+        const dataColumns = resolveColumns(store, requestedColumns);
+        const columnIds = dataColumns.map((column) => column.id);
+        const leadingHeaders = includeUpdatedAt ? ['id', 'updatedAt'] : ['id'];
+        const header = { columns: [...leadingHeaders, ...columnIds], names: [...leadingHeaders, ...dataColumns.map((column) => column.displayName)] };
+        const envelopeBytes = Buffer.byteLength(JSON.stringify({ ...header, rows: [], truncated: false, count: rows.length }), 'utf8');
+        const columnarRows = rows.map((row) => columnarRowView(row, { columnIds, includeUpdatedAt }));
+        const { items, truncated } = truncateToByteBudget(columnarRows, MAX_QUERY_RESULT_BYTES - envelopeBytes, { bytesBetweenItems: 1 });
+        return { ...header, rows: items, truncated, count: items.length };
       }
-      const columnIds = columns ? resolveColumnIds(store, columns) : undefined;
+      const columnIds = requestedColumns ? resolveColumns(store, requestedColumns).map((column) => column.id) : undefined;
       const { items, truncated } = truncateToByteBudget(rows.map((row) => rowView(row, { columnIds, includeUpdatedAt })), MAX_QUERY_RESULT_BYTES);
       return { rows: items, truncated, count: items.length };
     });
   });
 
-  /** Turns requested column references (id or display name, an id winning over a name) into de-duplicated column ids; every store column when none are requested. */
-  function resolveColumnIds(storeId: string, requested: string[] | undefined): string[] {
+  /** Turns requested column references (an id, else a display name in any case) into de-duplicated store columns; every store column when none are requested. */
+  function resolveColumns(storeId: string, requested: string[] | undefined): DsColumn[] {
     const storeColumns = storeRepo.listColumns(storeId);
-    if (!requested) return storeColumns.map((column) => column.id);
-    const columnIdByReference = new Map([...storeColumns.map((column) => [column.displayName, column.id] as const), ...storeColumns.map((column) => [column.id, column.id] as const)]);
-    const unknownReferences = requested.filter((reference) => !columnIdByReference.has(reference));
-    if (unknownReferences.length > 0) throw new UnknownColumnError(unknownReferences);
-    return [...new Set(requested.map((reference) => columnIdByReference.get(reference)!))];
+    if (!requested) return storeColumns;
+    const columnById = new Map(storeColumns.map((column) => [column.id, column]));
+    const columnByLowerCaseName = new Map(storeColumns.map((column) => [column.displayName.toLowerCase(), column]));
+    const columnFor = (reference: string) => columnById.get(reference) ?? columnByLowerCaseName.get(reference.toLowerCase());
+    const unknownReferences = requested.filter((reference) => !columnFor(reference));
+    if (unknownReferences.length > 0) throw new UnknownColumnReferenceError(unknownReferences);
+    return [...new Set(requested.map((reference) => columnFor(reference)!))];
   }
 }
