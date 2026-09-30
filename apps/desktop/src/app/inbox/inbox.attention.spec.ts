@@ -276,7 +276,15 @@ describe('InboxComponent questions from agents', () => {
       await renderInbox(sessions, sessions.map((session) => stateOf({ sessionId: session.id, blockers: ['stuck'] })));
 
       expect(screen.getByTestId('inbox-count')).toHaveTextContent('99+');
-      expect(screen.getByTestId('inbox-count')).toHaveAttribute('aria-label', '120 items need you');
+      expect(screen.getByRole('img', { name: '120 items need you' })).toBe(screen.getByTestId('inbox-count'));
+    });
+
+    it('user sees zero-width and bidirectional controls in a session name shown as escapes', async () => {
+      const name = `Le${String.fromCharCode(0x200b)}ad${String.fromCharCode(0x202e)}x`;
+      await renderInbox([agent('s1', { name })], [stateOf({ sessionId: 's1', blockers: ['a'] })]);
+      await openQuestionsTab();
+
+      expect(within(cards()[0]).getByTestId('inbox-attention-session')).toHaveTextContent('Le<U+200B>ad<U+202E>x');
     });
 
     it('user keeps a reply typed in a card when another session starts asking above it', async () => {

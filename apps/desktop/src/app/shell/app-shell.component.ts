@@ -42,7 +42,7 @@ const RUNNING_STATES = new Set(['generating', 'starting']);
                   <a class="nav-item" [routerLink]="item.route" routerLinkActive="active" [attr.data-testid]="'nav-' + item.key">
                     <span class="glyph">{{ item.glyph }}</span><span class="label">{{ item.label }}</span>
                     @if (item.key === 'inbox' && inboxBadge(); as badge) {
-                      <span class="nav-badge" data-testid="nav-inbox-badge" [attr.aria-label]="badge.ariaLabel">{{ badge.text }}</span>
+                      <span class="nav-badge" data-testid="nav-inbox-badge" role="img" [attr.aria-label]="badge.ariaLabel">{{ badge.text }}</span>
                     }
                   </a>
                 } @else {

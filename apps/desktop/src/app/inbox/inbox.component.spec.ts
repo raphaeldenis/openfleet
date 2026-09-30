@@ -16,6 +16,15 @@ function fakeEvents(approval: Record<string, unknown> = {}) {
 }
 
 describe('InboxComponent', () => {
+  it('shows zero-width and bidirectional controls in the session name of a gate as escapes', async () => {
+    const name = `Gim${String.fromCharCode(0x200b)}li${String.fromCharCode(0x202e)}x`;
+    const events = { ...fakeEvents(), sessions: signal([{ id: 's1', name, emoji: '⚔️', state: 'waiting_permission' }]) };
+
+    await render(InboxComponent, { providers: [{ provide: FleetApiService, useValue: { decide: vi.fn() } }, { provide: FleetEventsService, useValue: events }] });
+
+    expect(screen.getByTestId('inbox-gate-session')).toHaveTextContent('Gim<U+200B>li<U+202E>x');
+  });
+
   it('shows a pending gate as a card with the session label, tool name and formatted arguments, and sends the decision', async () => {
     // Arrange
     const api = { decide: vi.fn().mockResolvedValue({}) };

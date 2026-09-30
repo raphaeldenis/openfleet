@@ -6,7 +6,7 @@ import { KindBadgeComponent } from '../design/kind-badge.component';
 import { ComposerComponent } from '../sessions/composer.component';
 import { tickingNow } from '../working-state/working-state-freshness';
 import type { AttentionItem } from '../working-state/attention-items';
-import { showBidiControlsAsEscapes } from './bidi-escapes';
+import { showBidiControlsAsEscapes, showInvisibleControlsAsEscapes } from './bidi-escapes';
 
 @Component({
   selector: 'of-attention-card',
@@ -57,7 +57,7 @@ import { showBidiControlsAsEscapes } from './bidi-escapes';
 export class AttentionCardComponent {
   readonly item = input.required<AttentionItem>();
   private readonly now = tickingNow();
-  protected readonly sessionName = computed(() => showBidiControlsAsEscapes(this.item().session.name));
+  protected readonly sessionName = computed(() => showInvisibleControlsAsEscapes(this.item().session.name));
   protected readonly questions = computed(() => this.item().questions.map(showBidiControlsAsEscapes));
   protected readonly blockers = computed(() => this.item().blockers.map(showBidiControlsAsEscapes));
   protected readonly sessionRoute = computed(() => [this.item().session.role === MANAGER_ROLE ? '/manager' : '/session', this.item().session.id]);

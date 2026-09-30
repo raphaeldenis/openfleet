@@ -2,6 +2,7 @@ import { TestBed } from '@angular/core/testing';
 import { RouterTestingHarness } from '@angular/router/testing';
 import { Component, signal } from '@angular/core';
 import { provideRouter, withComponentInputBinding, Router, type Routes } from '@angular/router';
+import { screen } from '@testing-library/angular/zoneless';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { AppShellComponent } from './app-shell.component';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
@@ -387,7 +388,7 @@ describe('AppShellComponent', () => {
       });
 
       expect(badgeOf(root)).toHaveTextContent('99+');
-      expect(badgeOf(root)).toHaveAttribute('aria-label', '102 items need you');
+      expect(screen.getByRole('img', { name: '102 items need you' })).toBe(badgeOf(root));
     });
 
     it('user sees exactly 99 as "99" and gets the count in the label', async () => {

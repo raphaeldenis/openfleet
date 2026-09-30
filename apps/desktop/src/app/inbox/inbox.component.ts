@@ -7,7 +7,7 @@ import { KindBadgeComponent } from '../design/kind-badge.component';
 import { focusTabAt, nextTabIndex } from '../design/tablist-keyboard';
 import { attentionItemsOf, inboxCountLabelOf } from '../working-state/attention-items';
 import { AttentionCardComponent } from './attention-card.component';
-import { showBidiControlsAsEscapes } from './bidi-escapes';
+import { showBidiControlsAsEscapes, showInvisibleControlsAsEscapes } from './bidi-escapes';
 
 type InboxTab = 'gates' | 'questions' | 'proposals';
 type FilterKey = 'all' | 'unread' | 'mine' | 'blocked' | 'recent';
@@ -52,7 +52,7 @@ function formatInput(toolInput: unknown): FormattedInput {
   template: `
     <section class="inbox" data-testid="inbox">
       <header class="title-row" data-testid="inbox-title-row">
-        <h1 class="title">Inbox @if (pendingCount(); as pending) {<span class="count" data-testid="inbox-count" [attr.aria-label]="pending.ariaLabel">{{ pending.text }}</span>}</h1>
+        <h1 class="title">Inbox @if (pendingCount(); as pending) {<span class="count" data-testid="inbox-count" role="img" [attr.aria-label]="pending.ariaLabel">{{ pending.text }}</span>}</h1>
         @if (tab() === 'gates') {
           <div class="filters" data-testid="inbox-filters">
             @for (filter of filters; track filter.key) {
@@ -203,7 +203,7 @@ export class InboxComponent {
       return {
         ...approval,
         toolName: showBidiControlsAsEscapes(approval.toolName),
-        sessionName: showBidiControlsAsEscapes(sessionName),
+        sessionName: showInvisibleControlsAsEscapes(sessionName),
         sessionEmoji,
         formattedInput: formattedInput.text,
       };
