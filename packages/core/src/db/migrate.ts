@@ -3,7 +3,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { DatabaseSync } from 'node:sqlite';
-import { BACKUPS_FOLDER_NAME, newestBackupNameUpTo } from './backup.js';
+import { BACKUPS_FOLDER_NAME, newestKnownBackupName, preUpgradeSnapshotName } from './backup.js';
 
 const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), 'migrations');
 
@@ -146,6 +146,10 @@ export class MigrationFailedError extends Error {
   }
 }
 
+export function shippedMigrationVersions(): ReadonlySet<string> {
+  return new Set(readMigrationSources(migrationsDir).map((source) => source.version));
+}
+
 export function latestShippedMigration(): string {
   return readMigrationSources(migrationsDir).map((source) => source.version).pop()!;
 }
@@ -154,7 +158,7 @@ function restoreHintFor(databasePath: string | undefined): string {
   const hasRealPath = databasePath !== undefined && databasePath !== ':memory:';
   const backupsFolder = hasRealPath ? join(dirname(databasePath), BACKUPS_FOLDER_NAME) : `the ${BACKUPS_FOLDER_NAME} folder next to openfleet.db`;
   const latestKnownVersion = latestShippedMigration();
-  const exactBackupName = hasRealPath ? safelyFind(() => newestBackupNameUpTo(backupsFolder, latestKnownVersion)) : undefined;
+  const exactBackupName = hasRealPath ? safelyFind(() => preUpgradeSnapshotName(backupsFolder, shippedMigrationVersions()) ?? newestKnownBackupName(backupsFolder, shippedMigrationVersions())) : undefined;
   const backupName = exactBackupName ?? `openfleet-${latestKnownVersion}-<timestamp>.db`;
   return `quit the app, delete openfleet.db-wal and openfleet.db-shm, then copy the .db backup named ${backupName} in ${backupsFolder}, never a .config.json copy, over openfleet.db; or install the newer app`;
 }

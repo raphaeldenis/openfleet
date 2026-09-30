@@ -86,7 +86,7 @@ describe('retention keeps the newest backup of each of the three most recent sch
     expect(databaseBackups()).not.toContain(older);
   });
 
-  it('keeps the backup just taken even when an older schema version holds a later timestamp', () => {
+  it('keeps the backup just taken even when a backup of the same schema version holds a later timestamp', () => {
     const laterNamedSameVersion = backupNamed('015_handovers', '2099-01-01T00-00-00-000Z');
     seedBackup(laterNamedSameVersion, '2099-01-01');
     createDatabaseAtVersion('015_handovers').close();
@@ -244,7 +244,7 @@ describe('pruning orphan config copies', () => {
     mkdirSync(backupsDir);
     const stem = (version: string) => `openfleet-${version}-2026-01-01T00-00-00-000Z`;
     writeFileSync(join(backupsDir, `${stem('010_orphan')}.config.json`), 'orphan');
-    for (const version of ['011_pruned', '013_kept', '014_kept']) {
+    for (const version of ['011_session_resolved_for_model', '013_working_state', '014_session_cli_ids']) {
       writeFileSync(join(backupsDir, `${stem(version)}.db`), 'backup');
       writeFileSync(join(backupsDir, `${stem(version)}.config.json`), 'copy');
     }
@@ -255,9 +255,9 @@ describe('pruning orphan config copies', () => {
 
     const configCopies = readdirSync(backupsDir).filter((name) => name.endsWith('.config.json'));
     expect(configCopies).not.toContain(`${stem('010_orphan')}.config.json`);
-    expect(configCopies).not.toContain(`${stem('011_pruned')}.config.json`);
-    expect(configCopies).toContain(`${stem('013_kept')}.config.json`);
-    expect(configCopies).toContain(`${stem('014_kept')}.config.json`);
+    expect(configCopies).not.toContain(`${stem('011_session_resolved_for_model')}.config.json`);
+    expect(configCopies).toContain(`${stem('013_working_state')}.config.json`);
+    expect(configCopies).toContain(`${stem('014_session_cli_ids')}.config.json`);
     expect(readFileSync(join(backupsDir, 'other.config.json'), 'utf8')).toBe('mine');
   });
 });

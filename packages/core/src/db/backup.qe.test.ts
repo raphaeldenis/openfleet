@@ -65,7 +65,7 @@ describe('pre-migration backup retention order', () => {
     expect(databaseBackups().map(counterOf)).toEqual([11]);
   });
 
-  it('keeps the newest backup of a higher schema version too, whatever the dates of the older ones', () => {
+  it('never prunes backups of a schema version no shipped migration carries', () => {
     mkdirSync(backupsDir, { recursive: true });
     for (const day of ['01', '02', '03']) writeFileSync(join(backupsDir, `openfleet-999_from_the_future-2026-01-${day}T00-00-00-000Z.db`), 'old');
     vi.useFakeTimers();
@@ -74,19 +74,19 @@ describe('pre-migration backup retention order', () => {
     bootOneMigrationBehindDatabase();
 
     const remaining = databaseBackups();
-    expect(remaining).toHaveLength(2);
+    expect(remaining).toHaveLength(4);
     expect(remaining.some((name) => name.includes('2026-02-01T00-00-00-000Z'))).toBe(true);
-    expect(remaining.some((name) => name.includes('999_from_the_future-2026-01-03T00-00-00-000Z'))).toBe(true);
+    expect(remaining.filter((name) => name.includes('999_from_the_future'))).toHaveLength(3);
   });
 });
 
 describe('pre-migration backup pruning around strange entries', () => {
   it('boots and leaves a directory named like a backup alone', () => {
     mkdirSync(backupsDir, { recursive: true });
-    const strangerDirectory = join(backupsDir, 'openfleet-015_x-2026-01-01T00-00-00-000Z.db');
+    const strangerDirectory = join(backupsDir, 'openfleet-014_session_cli_ids-2026-01-01T00-00-00-000Z.db');
     mkdirSync(strangerDirectory);
     writeFileSync(join(strangerDirectory, 'mine.txt'), 'mine');
-    for (const day of ['02', '03', '04']) writeFileSync(join(backupsDir, `openfleet-015_x-2026-01-${day}T00-00-00-000Z.db`), 'old');
+    for (const day of ['02', '03', '04']) writeFileSync(join(backupsDir, `openfleet-014_session_cli_ids-2026-01-${day}T00-00-00-000Z.db`), 'old');
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-02-01T00:00:00.000Z'));
 
@@ -97,9 +97,9 @@ describe('pre-migration backup pruning around strange entries', () => {
 
   it('ignores a stale temp file left by a crashed backup: never counted toward the newest three, never fatal', () => {
     mkdirSync(backupsDir, { recursive: true });
-    const staleTemp = join(backupsDir, 'openfleet-015_x-2026-01-01T00-00-00-000Z.db.partial');
+    const staleTemp = join(backupsDir, 'openfleet-014_session_cli_ids-2026-01-01T00-00-00-000Z.db.partial');
     writeFileSync(staleTemp, '');
-    for (const day of ['02', '03', '04']) writeFileSync(join(backupsDir, `openfleet-015_x-2026-01-${day}T00-00-00-000Z.db`), 'old');
+    for (const day of ['02', '03', '04']) writeFileSync(join(backupsDir, `openfleet-014_session_cli_ids-2026-01-${day}T00-00-00-000Z.db`), 'old');
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-02-01T00:00:00.000Z'));
 
@@ -115,9 +115,9 @@ describe('pre-migration backup pruning around strange entries', () => {
     const outside = join(mkdtempSync(join(tmpdir(), 'of-backup-qe-outside-')), 'precious.txt');
     writeFileSync(outside, 'precious');
     mkdirSync(backupsDir, { recursive: true });
-    const symlinkName = 'openfleet-015_x-2026-01-01T00-00-00-000Z.db';
+    const symlinkName = 'openfleet-014_session_cli_ids-2026-01-01T00-00-00-000Z.db';
     symlinkSync(outside, join(backupsDir, symlinkName));
-    for (const day of ['02', '03', '04']) writeFileSync(join(backupsDir, `openfleet-015_x-2026-01-${day}T00-00-00-000Z.db`), 'old');
+    for (const day of ['02', '03', '04']) writeFileSync(join(backupsDir, `openfleet-014_session_cli_ids-2026-01-${day}T00-00-00-000Z.db`), 'old');
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-02-01T00:00:00.000Z'));
 

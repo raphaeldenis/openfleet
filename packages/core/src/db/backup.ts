@@ -5,6 +5,7 @@ import { log } from '../logger.js';
 
 export const BACKUPS_FOLDER_NAME = 'backups';
 const SCHEMA_VERSIONS_TO_KEEP = 3;
+const PRE_UPGRADE_MARKER_NAME = 'pre-upgrade.marker';
 const BACKUP_NAME_PATTERN = /^openfleet-(.+)-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z)(?:-(\d+))?\.db$/;
 const CONFIG_COPY_NAME_PATTERN = /^(openfleet-.+-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z(?:-\d+)?)\.config\.json$/;
 const IN_PROGRESS_SUFFIX = '.partial';
@@ -74,15 +75,51 @@ function reserveBackupPath(backupsFolder: string, schemaVersion: string): { back
   }
 }
 
+/** Returns the file name the pre-upgrade marker holds while it names a backup of a known schema version that is still in the folder. */
+export function preUpgradeSnapshotName(backupsFolder: string, knownVersions: ReadonlySet<string>): string | undefined {
+  const markerPath = join(backupsFolder, PRE_UPGRADE_MARKER_NAME);
+  if (!isRegularFile(markerPath)) return undefined;
+  try {
+    const markedName = readFileSync(markerPath, 'utf8');
+    const isAnExistingBackup = backupNamesIn(backupsFolder).includes(markedName);
+    return isAnExistingBackup && knownVersions.has(schemaVersionOf(markedName)) ? markedName : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// The marker holds the exact name of the snapshot taken before the first boot of an upgrade. It is
+// created through a temp name and renamed into place, so a symlink or stale file under the marker name is
+// replaced, never followed; a marker that cannot be written leaves the hint on this boot's snapshot.
+export function recordPreUpgradeSnapshot(backupsFolder: string, backupName: string, knownVersions: ReadonlySet<string>): void {
+  const markerAlreadyNamesASnapshot = preUpgradeSnapshotName(backupsFolder, knownVersions) !== undefined;
+  if (markerAlreadyNamesASnapshot) return;
+  const markerPath = join(backupsFolder, PRE_UPGRADE_MARKER_NAME);
+  const inProgressPath = `${markerPath}${IN_PROGRESS_SUFFIX}`;
+  removeIfPresent(inProgressPath);
+  try {
+    writeFileSync(inProgressPath, backupName, { flag: 'wx', mode: 0o600 });
+    renameSync(inProgressPath, markerPath);
+  } catch (error) {
+    removeIfPresent(inProgressPath);
+    log('warn', `pre-upgrade marker not written: ${(error as Error).message}`);
+  }
+}
+
+export function clearPreUpgradeMarker(backupsFolder: string): void {
+  removeIfPresent(join(backupsFolder, PRE_UPGRADE_MARKER_NAME));
+}
+
 // Retention deliberately departs from "the 3 most recent backups": it keeps the newest backup of each of
-// the 3 most recent schema versions (the version in the file name, ordered by migration name). Neither
-// clock nor file date decides which versions survive, so a clock rollback cannot evict a version and
-// the snapshot from before an upgrade outlives any number of failed retries. The clock only picks the
-// newest copy inside one schema version, where the backup just taken always counts as the newest.
-function newestBackupNameBySchemaVersion(backupsFolder: string, justTakenName?: string): Map<string, string> {
+// the 3 most recent schema versions (the version in the file name, ordered by migration name) among the
+// versions this app ships, plus the pre-upgrade snapshot. Neither clock nor file date decides which
+// versions survive, so a clock rollback cannot evict a version. The clock only picks the newest copy
+// inside one schema version, where the backup just taken always counts as the newest.
+function newestBackupNameBySchemaVersion(backupsFolder: string, knownVersions: ReadonlySet<string>, justTakenName?: string): Map<string, string> {
   const newestNameBySchemaVersion = new Map<string, string>();
   for (const name of backupNamesIn(backupsFolder)) {
     const version = schemaVersionOf(name);
+    if (!knownVersions.has(version)) continue;
     const currentNewest = newestNameBySchemaVersion.get(version);
     const isNewest = currentNewest === undefined || (currentNewest !== justTakenName && (name === justTakenName || chronologicalKeyOf(name)! > chronologicalKeyOf(currentNewest)!));
     if (isNewest) newestNameBySchemaVersion.set(version, name);
@@ -94,18 +131,11 @@ function retainedSchemaVersions(newestNameBySchemaVersion: Map<string, string>):
   return [...newestNameBySchemaVersion.keys()].sort();
 }
 
-/** Returns the name of the oldest retained backup whose schema version is older than `schemaVersion`: the one the previous app can open. */
-export function oldestBackupNameOlderThan(backupsFolder: string, schemaVersion: string): string | undefined {
-  const newestNameBySchemaVersion = newestBackupNameBySchemaVersion(backupsFolder);
-  const oldestVersionOlderThanTarget = retainedSchemaVersions(newestNameBySchemaVersion).find((version) => version < schemaVersion);
-  return oldestVersionOlderThanTarget === undefined ? undefined : newestNameBySchemaVersion.get(oldestVersionOlderThanTarget);
-}
-
-/** Returns the name of the newest retained backup whose schema version is at most `schemaVersion`: the newest one this app can open. */
-export function newestBackupNameUpTo(backupsFolder: string, schemaVersion: string): string | undefined {
-  const newestNameBySchemaVersion = newestBackupNameBySchemaVersion(backupsFolder);
-  const newestVersionTheAppKnows = retainedSchemaVersions(newestNameBySchemaVersion).filter((version) => version <= schemaVersion).pop();
-  return newestVersionTheAppKnows === undefined ? undefined : newestNameBySchemaVersion.get(newestVersionTheAppKnows);
+/** Returns the name of the newest backup whose schema version this app ships: the newest one this app can open. */
+export function newestKnownBackupName(backupsFolder: string, knownVersions: ReadonlySet<string>): string | undefined {
+  const newestNameBySchemaVersion = newestBackupNameBySchemaVersion(backupsFolder, knownVersions);
+  const newestKnownVersion = retainedSchemaVersions(newestNameBySchemaVersion).pop();
+  return newestKnownVersion === undefined ? undefined : newestNameBySchemaVersion.get(newestKnownVersion);
 }
 
 function removeConfigCopiesWithoutABackup(backupsFolder: string): void {
@@ -117,13 +147,16 @@ function removeConfigCopiesWithoutABackup(backupsFolder: string): void {
   }
 }
 
-export function pruneBackupsKeepingRecentSchemaVersions(backupsFolder: string, justTakenPath: string): void {
+export function pruneBackupsKeepingRecentSchemaVersions(backupsFolder: string, justTakenPath: string, knownVersions: ReadonlySet<string>): void {
   try {
     const justTakenName = basename(justTakenPath);
-    const newestNameBySchemaVersion = newestBackupNameBySchemaVersion(backupsFolder, justTakenName);
+    const newestNameBySchemaVersion = newestBackupNameBySchemaVersion(backupsFolder, knownVersions, justTakenName);
     const keptVersions = retainedSchemaVersions(newestNameBySchemaVersion).slice(-SCHEMA_VERSIONS_TO_KEEP);
-    const keptNames = new Set([justTakenName, ...keptVersions.map((version) => newestNameBySchemaVersion.get(version)!)]);
-    for (const name of backupNamesIn(backupsFolder)) if (!keptNames.has(name)) removeIfPresent(join(backupsFolder, name));
+    const keptNames = new Set<string | undefined>([justTakenName, preUpgradeSnapshotName(backupsFolder, knownVersions), ...keptVersions.map((version) => newestNameBySchemaVersion.get(version))]);
+    for (const name of backupNamesIn(backupsFolder)) {
+      const isShippedVersion = knownVersions.has(schemaVersionOf(name));
+      if (isShippedVersion && !keptNames.has(name)) removeIfPresent(join(backupsFolder, name));
+    }
     removeConfigCopiesWithoutABackup(backupsFolder);
   } catch {
     // ponytail: a pruning failure never undoes or fails the backup that was just taken
