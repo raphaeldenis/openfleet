@@ -44,7 +44,8 @@ export async function startDaemon(config: Config): Promise<Daemon> {
   const db = openDatabase(config.dbPath);
   const bus = new EventBus();
   const baseUrl = `http://${config.host}:${config.port}`;
-  const sessions = new SessionService({ db, bus, harnesses: [new ClaudeCliHarness(config.sessionsRoot), new FakeHarness()], baseUrl, worktreesRoot: config.worktreesRoot });
+  const harnesses = config.e2eEnabled ? [new ClaudeCliHarness(config.sessionsRoot), new FakeHarness()] : [new ClaudeCliHarness(config.sessionsRoot)];
+  const sessions = new SessionService({ db, bus, harnesses, baseUrl, worktreesRoot: config.worktreesRoot });
   const approvals = new ApprovalService({ db, bus });
   // A row still 'pending' from before this boot has no live waiter any more (AUD-07): the pre-restart
   // process that would have decided it is gone with the old daemon.
@@ -68,7 +69,7 @@ export async function startDaemon(config: Config): Promise<Daemon> {
 
   // The server must be listening before any resumed CLI can POST its first hook — resuming first risks a
   // fast process hitting a port nothing is serving yet.
-  const server = await startServer({ ...config, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, stores, storeRepo, projects, stopRefusal, sessionStartContext, handoverLedger, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, workingStates, worktreesRoot: config.worktreesRoot }) });
+  const server = await startServer({ ...config, e2eRoutes: config.e2eEnabled, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, stores, storeRepo, projects, stopRefusal, sessionStartContext, handoverLedger, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, workingStates, worktreesRoot: config.worktreesRoot }) });
   log('info', `openfleet core listening on ${server.url} (home: ${config.home})`);
 
   // A launch dir a crashed or killed daemon never cleaned up would otherwise sit on disk carrying a live

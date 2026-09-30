@@ -31,7 +31,7 @@ const RenameSessionSchema = z
   .object({ name: z.string().trim().min(1).max(100).optional(), emoji: z.string().trim().min(1).max(32).optional() })
   .refine((patch) => patch.name !== undefined || patch.emoji !== undefined, { message: 'name or emoji is required' });
 
-export function registerRestRoutes(router: Router, deps: { sessions: SessionService; approvals: ApprovalService; modelTable: ModelTable; modelConfigPath: string; managers: ManagerService; pulseScheduler: PulseScheduler; wsTickets: WsTicketStore; workingStates?: WorkingStateService; handoverLedger?: HandoverLedger }): void {
+export function registerRestRoutes(router: Router, deps: { sessions: SessionService; approvals: ApprovalService; modelTable: ModelTable; modelConfigPath: string; managers: ManagerService; pulseScheduler: PulseScheduler; wsTickets: WsTicketStore; workingStates?: WorkingStateService; handoverLedger?: HandoverLedger; e2eRoutes?: boolean }): void {
   const servedRungs = (): ModelTable => {
     const { haiku, sonnet, opus, fable } = deps.modelTable;
     return { haiku, sonnet, opus, fable };
@@ -130,6 +130,7 @@ export function registerRestRoutes(router: Router, deps: { sessions: SessionServ
   });
 
   router.add('POST', '/api/sessions/:id/resize', ({ res, params, body }) => {
+    if (!deps.sessions.get(params.id!)) return json(res, 404, { error: 'not_found' });
     const { cols, rows } = z.object({ cols: z.number().int().positive(), rows: z.number().int().positive() }).parse(body);
     deps.sessions.resize(params.id!, cols, rows);
     json(res, 200, {});
@@ -147,15 +148,18 @@ export function registerRestRoutes(router: Router, deps: { sessions: SessionServ
     json(res, 200, { hookToken: tokens.hookToken });
   });
 
-  router.add('POST', '/api/sessions/:id/fake-output', ({ res, params, body }) => {
-    const session = deps.sessions.get(params.id!);
-    if (!session || session.harness !== 'fake') return json(res, 404, { error: 'not_found' });
-    const { data } = z.object({ data: z.string() }).parse(body);
-    (deps.sessions.harnessHandle(params.id!) as FakeHandle | undefined)?.emitData(data);
-    json(res, 200, {});
-  });
+  if (deps.e2eRoutes) {
+    router.add('POST', '/api/sessions/:id/fake-output', ({ res, params, body }) => {
+      const session = deps.sessions.get(params.id!);
+      if (!session || session.harness !== 'fake') return json(res, 404, { error: 'not_found' });
+      const { data } = z.object({ data: z.string() }).parse(body);
+      (deps.sessions.harnessHandle(params.id!) as FakeHandle | undefined)?.emitData(data);
+      json(res, 200, {});
+    });
+  }
 
   router.add('POST', '/api/sessions/:id/close', async ({ res, params }) => {
+    if (!deps.sessions.get(params.id!)) return json(res, 404, { error: 'not_found' });
     await deps.sessions.close(params.id!);
     json(res, 200, {});
   });
