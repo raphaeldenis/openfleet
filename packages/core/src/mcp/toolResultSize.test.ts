@@ -616,6 +616,49 @@ describe('MCP tool results are compact', () => {
         expect(asObjects.count).toBe(HUGE_ROW_COUNT);
       });
 
+      describe('columns header in the byte budget', () => {
+        const ONE_MEBIBYTE = 1024 * 1024;
+        const FILLED_ROW_COUNT = 20;
+
+        const bytesOfJson = (value: unknown) => Buffer.byteLength(JSON.stringify(value), 'utf8');
+
+        /** Seeds rows whose columnar rows add up to exactly `1 MiB - header + overshootBytes`. */
+        async function seedRowsFillingBudget({ overshootBytes }: { overshootBytes: number }) {
+          const store = parsed(await call('create_data_store', { display_name: 'filled' }));
+          const bodyId = parsed(await call('add_data_store_column', { store: store.id, display_name: 'body', column_type: 'text' })).id as string;
+          const columnarArgs = { store: store.id, include_updated_at: false };
+          await call('insert_data_store_rows', { store: store.id, rows: [{ [bodyId]: '' }] });
+          const probe = parsed(await columnarQuery(columnarArgs));
+          const columnsHeaderBytes = bytesOfJson(probe.columns);
+          const emptyRowBytes = bytesOfJson(probe.rows[0]);
+          const bodyBytesToSpread = ONE_MEBIBYTE - columnsHeaderBytes + overshootBytes - FILLED_ROW_COUNT * emptyRowBytes;
+          const evenBodyBytes = Math.floor(bodyBytesToSpread / FILLED_ROW_COUNT);
+          const lastBodyBytes = bodyBytesToSpread - evenBodyBytes * (FILLED_ROW_COUNT - 1);
+          const bodyBytesPerRow = Array.from({ length: FILLED_ROW_COUNT }, (_, index) => (index === FILLED_ROW_COUNT - 1 ? lastBodyBytes : evenBodyBytes));
+          await call('delete_data_store_row', { row_id: probe.rows[0][0] });
+          for (const bodyBytes of bodyBytesPerRow) await call('insert_data_store_rows', { store: store.id, rows: [{ [bodyId]: 'x'.repeat(bodyBytes) }] });
+          return columnarArgs;
+        }
+
+        it('agent keeps every row when the columns header plus the rows add up to exactly the budget', async () => {
+          const columnarArgs = await seedRowsFillingBudget({ overshootBytes: 0 });
+
+          const result = parsed(await columnarQuery({ ...columnarArgs, limit: FILLED_ROW_COUNT }));
+
+          expect(result.truncated).toBe(false);
+          expect(result.count).toBe(FILLED_ROW_COUNT);
+        });
+
+        it('agent loses the last row when the columns header pushes the result one byte past the budget', async () => {
+          const columnarArgs = await seedRowsFillingBudget({ overshootBytes: 1 });
+
+          const result = parsed(await columnarQuery({ ...columnarArgs, limit: FILLED_ROW_COUNT }));
+
+          expect(result.truncated).toBe(true);
+          expect(result.count).toBe(FILLED_ROW_COUNT - 1);
+        });
+      });
+
       it('agent sees the new arguments in the query_data_store input schema and description', async () => {
         const { tools } = await client.listTools();
         const queryTool = tools.find((tool) => tool.name === 'query_data_store')!;
@@ -625,6 +668,20 @@ describe('MCP tool results are compact', () => {
         expect(properties.columns?.type).toBe('array');
         expect(properties.include_updated_at?.type).toBe('boolean');
         expect(queryTool.description).toContain('columnar');
+      });
+
+      it('agent reads in the query_data_store description what an empty columns list, names, duplicates and empty cells mean', async () => {
+        const { tools } = await client.listTools();
+        const description = tools.find((tool) => tool.name === 'query_data_store')!.description!;
+
+        expect(description).toContain('an empty list keeps NO data columns');
+        expect(description).toContain('columnar rows are [rowId, updatedAt]');
+        expect(description).toContain('rows format has data: {}');
+        expect(description).toContain('names resolve to ids');
+        expect(description).toContain('an id wins over a name');
+        expect(description).toContain('duplicates are dropped');
+        expect(description).toContain('order is preserved');
+        expect(description).toContain('an empty cell is null');
       });
     });
 

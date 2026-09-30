@@ -107,7 +107,8 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
   server.registerTool('query_data_store', {
     description: `Filter, sort and limit a store's rows (limit ≤ ${MAX_QUERY_LIMIT}, default ${DEFAULT_QUERY_LIMIT}); the result is also cut off past ${MAX_QUERY_RESULT_BYTES} bytes, with \`truncated: true\` when that happened. `
       + 'By default each row is {id, data keyed by column id, updatedAt}. format "columnar" returns {columns: [column ids], rows: [[rowId, updatedAt, ...one cell per column]], truncated, count} instead, naming each column once (an empty cell is null). '
-      + 'columns (ids or display names) keeps only those columns, in that order, in both formats; include_updated_at false drops updatedAt from every row',
+      + 'columns (ids or display names) keeps only those columns in both formats: names resolve to ids, an id wins over a name, duplicates are dropped, order is preserved, and an empty list keeps NO data columns (columnar rows are [rowId, updatedAt], rows format has data: {}); '
+      + 'include_updated_at false drops updatedAt from every row',
     inputSchema: {
       store: z.string().min(1),
       where: z.array(WhereClauseSchema).optional(),
@@ -126,7 +127,8 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
       const isColumnar = format === 'columnar';
       if (isColumnar) {
         const columnIds = resolveColumnIds(store, columns);
-        const { items, truncated } = truncateToByteBudget(rows.map((row) => columnarRowView(row, { columnIds, includeUpdatedAt })), MAX_QUERY_RESULT_BYTES);
+        const columnsHeaderBytes = Buffer.byteLength(JSON.stringify(columnIds), 'utf8');
+        const { items, truncated } = truncateToByteBudget(rows.map((row) => columnarRowView(row, { columnIds, includeUpdatedAt })), MAX_QUERY_RESULT_BYTES - columnsHeaderBytes);
         return { columns: columnIds, rows: items, truncated, count: items.length };
       }
       const columnIds = columns ? resolveColumnIds(store, columns) : undefined;
