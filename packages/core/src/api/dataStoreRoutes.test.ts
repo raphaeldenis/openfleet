@@ -358,7 +358,7 @@ describe('data store REST routes', () => {
       const viaMcp = JSON.parse(((await client.callTool({ name: 'query_data_store', arguments: { store: store.id, where, order_by: orderBy } })) as { content: { text: string }[] }).content[0]!.text);
       const viaHttp = await json(await call('GET', `/api/data-stores/${store.id}/rows?${q({ projectId: 'p1', where, orderBy })}`));
 
-      expect(viaHttp.items).toEqual(viaMcp.rows);
+      expect(viaHttp.items).toMatchObject(viaMcp.rows);
     });
   });
 

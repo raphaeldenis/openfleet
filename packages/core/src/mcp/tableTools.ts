@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { RowNotFoundError, StoreNotFoundError, type DataStoreRepository, type RowActor } from '../stores/dataStoreRepository.js';
 import type { DataStoreService } from '../stores/dataStoreService.js';
 import { fail, guarded, truncateToByteBudget } from './toolResults.js';
+import { columnView, rowView, storeView } from './toolViews.js';
 
 // Task 15 caps (see the plan's Review Focus #3 and Lead amendment on P3-T11): a batch write is capped so
 // one call can't hold the outer transaction open indefinitely, and a query defaults to a page an agent can
@@ -34,11 +35,11 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
   }, async ({ display_name }) => {
     const scope = requireProject();
     if (!scope) return fail('this session has no project');
-    return guarded(() => stores.createStore({ ...scope, displayName: display_name }));
+    return guarded(() => storeView(stores.createStore({ ...scope, displayName: display_name })));
   });
 
   server.registerTool('describe_data_store', {
-    description: 'A data store\'s id, display name, and its columns (id, displayName, columnType, options, sortOrder)',
+    description: 'A data store\'s id, display name, and its columns in order (id, displayName, columnType, options when a select column, autoValue when set)',
     inputSchema: { store: z.string().min(1) },
   }, async ({ store }) => {
     const scope = requireProject();
@@ -46,11 +47,7 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
     return guarded(() => {
       const dataStore = storeRepo.findStore(store);
       if (!dataStore || dataStore.projectId !== scope.projectId) throw new StoreNotFoundError(store);
-      const columns = storeRepo.listColumns(store).map((column) => ({
-        id: column.id, displayName: column.displayName, columnType: column.columnType, options: column.options, sortOrder: column.sortOrder,
-        autoValue: column.autoValue,
-      }));
-      return { id: dataStore.id, displayName: dataStore.displayName, columns };
+      return { ...storeView(dataStore), columns: storeRepo.listColumns(store).map(columnView) };
     });
   });
 
@@ -60,7 +57,7 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
   }, async ({ store, display_name, column_type, options, auto_value }) => {
     const scope = requireProject();
     if (!scope) return fail('this session has no project');
-    return guarded(() => stores.addColumn(store, { ...scope, displayName: display_name, columnType: column_type, options, autoValue: auto_value }));
+    return guarded(() => columnView(stores.addColumn(store, { ...scope, displayName: display_name, columnType: column_type, options, autoValue: auto_value })));
   });
 
   server.registerTool('insert_data_store_rows', {
@@ -120,7 +117,7 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
     if (!scope) return fail('this session has no project');
     return guarded(() => {
       const rows = stores.query(store, { ...scope, where, orderBy: order_by, limit: limit ?? DEFAULT_QUERY_LIMIT });
-      const { items, truncated } = truncateToByteBudget(rows, MAX_QUERY_RESULT_BYTES);
+      const { items, truncated } = truncateToByteBudget(rows.map(rowView), MAX_QUERY_RESULT_BYTES);
       return { rows: items, truncated, count: items.length };
     });
   });

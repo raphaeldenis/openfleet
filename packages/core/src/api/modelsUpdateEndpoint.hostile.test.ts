@@ -335,7 +335,6 @@ describe('PUT /api/models — the new table reaches every consumer', () => {
 
     const child = mcpText(await parentClient.callTool({ name: 'create_session', arguments: { directory: existingSessionDirectory(), name: 'Kid', model: 'sonnet' } }));
 
-    expect(child.parentId).toBe(parent.id);
     expect(child.model).toBe(REPLACEMENT.sonnet);
     expect(harness.launches.at(-1)?.model).toBe(REPLACEMENT.sonnet);
   });

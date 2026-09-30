@@ -4,6 +4,7 @@ import { z } from 'zod';
 import type { SessionService } from '../sessions/sessionService.js';
 import { WorkingStateTooLargeError, type WorkingStateService } from '../workingState/workingStateService.js';
 import { fail, ok } from './toolResults.js';
+import { workingStateView } from './toolViews.js';
 
 export interface RegisterWorkingStateToolsDeps {
   workingStates: WorkingStateService;
@@ -39,6 +40,7 @@ export function registerWorkingStateTools(server: McpServer, deps: RegisterWorki
   }, async ({ session_id }) => {
     const target = sessions.get(session_id ?? caller.id);
     if (!target || !isInLineage(target)) return fail('session not found or outside your lineage');
-    return ok(workingStates.get(target.id) ?? { state: null });
+    const state = workingStates.get(target.id);
+    return ok(state ? workingStateView(state) : { state: null });
   });
 }

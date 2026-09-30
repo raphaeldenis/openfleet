@@ -106,7 +106,8 @@ describe('table view tools', () => {
 
       const view = text(await client.callTool({ name: 'create_data_store_view', arguments: { store: store.id, display_name: 'main', view_type: 'grid' } }));
 
-      expect(view).toMatchObject({ storeId: store.id, displayName: 'main', viewType: 'grid', sortOrder: 0 });
+      expect(view).toMatchObject({ displayName: 'main', viewType: 'grid' });
+      expect(text(await client.callTool({ name: 'list_data_store_views', arguments: { store: store.id } }))).toEqual([view]);
     });
 
     it('on another project\'s store fails exactly like a missing store', async () => {
@@ -359,6 +360,27 @@ describe('table view tools', () => {
       expect(result.count).toBeLessThan(21);
       expect(result.entries).toHaveLength(result.count);
       expect(JSON.stringify(result.entries).length).toBeLessThanOrEqual(1024 * 1024);
+    });
+
+    it('fills the 1 MiB history budget with compact entries, leaving less than one entry unused', async () => {
+      const client = await connect(scopedToken);
+      const store = await createStore(client);
+      const titleId = await addTextColumn(client, store.id);
+      const [rowId] = text(await client.callTool({ name: 'insert_data_store_rows', arguments: { store: store.id, rows: [{ [titleId]: 'x' }] } })).ids;
+      const mediumCells = ['a', 'b'].map((letter) => letter.repeat(1200));
+      for (let update = 0; update < 520; update++) {
+        await client.callTool({ name: 'update_data_store_rows', arguments: { store: store.id, updates: [{ row_id: rowId, patch: { [titleId]: mediumCells[update % 2] } }] } });
+      }
+
+      const result = text(await client.callTool({ name: 'list_row_changes', arguments: { row_id: rowId, limit: 500 } }));
+
+      const bytesOfEntries = result.entries.map((entry: unknown) => Buffer.byteLength(JSON.stringify(entry), 'utf8'));
+      const entryBytes = Math.max(...bytesOfEntries);
+      const keptBytes = bytesOfEntries.reduce((sum: number, bytes: number) => sum + bytes, 0);
+      expect(result.truncated).toBe(true);
+      expect(result.count).toBe(result.entries.length);
+      expect(keptBytes).toBeLessThanOrEqual(1024 * 1024);
+      expect(1024 * 1024 - keptBytes).toBeLessThan(entryBytes);
     });
 
     it('flags a short history as not truncated', async () => {

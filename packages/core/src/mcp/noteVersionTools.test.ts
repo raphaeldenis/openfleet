@@ -46,6 +46,9 @@ async function connect(token: string) {
   return client;
 }
 const text = (r: unknown) => JSON.parse(((r as { content: { text: string }[] }).content[0]!).text);
+async function bodyOf(client: Awaited<ReturnType<typeof connect>>, noteId: string): Promise<string> {
+  return text(await client.callTool({ name: 'get_note', arguments: { note: noteId } })).bodyMd;
+}
 const errorText = (r: unknown) => (r as { content: { text: string }[] }).content[0]!.text;
 
 beforeEach(async () => {
@@ -110,7 +113,7 @@ describe('note version tools', () => {
 
       const updated = text(await client.callTool({ name: 'append_to_note', arguments: { note: note.id, content: 'entry 2' } }));
 
-      expect(updated.bodyMd).toContain('entry 2');
+      expect(await bodyOf(client, note.id)).toContain('entry 2');
       expect(updated.rev).toBe(note.rev + 1);
     });
 
@@ -145,7 +148,8 @@ describe('note version tools', () => {
 
       const updated = text(await client.callTool({ name: 'update_note_section', arguments: { note: note.id, heading: 'Log', content: 'new entry', expected_rev: note.rev } }));
 
-      expect(updated.bodyMd).toBe('## Log\nnew entry');
+      expect(updated.rev).toBe(note.rev + 1);
+      expect(await bodyOf(client, note.id)).toBe('## Log\nnew entry');
     });
 
     it('on a stale rev returns a non-throwing error result with the current rev', async () => {
@@ -198,7 +202,8 @@ describe('note version tools', () => {
 
       const updated = text(await client.callTool({ name: 'update_note_section', arguments: { note: note.id, heading: 'Log', content: 'new entry', expected_rev: note.rev } }));
 
-      expect(updated.bodyMd).toBe('## Log\nnew entry');
+      expect(updated.rev).toBe(note.rev + 1);
+      expect(await bodyOf(client, note.id)).toBe('## Log\nnew entry');
       expect(nodeDocsFolderFs.readFileSync(note.filePath!)).toBe('## Log\nnew entry');
     });
   });
@@ -316,7 +321,7 @@ describe('note version tools', () => {
 
       const restored = text(await client.callTool({ name: 'restore_note_version', arguments: { note: note.id, rev: 1 } }));
 
-      expect(restored.bodyMd).toBe('v1');
+      expect(await bodyOf(client, note.id)).toBe('v1');
       expect(restored.rev).toBe(3);
       const versions = text(await client.callTool({ name: 'list_note_versions', arguments: { note: note.id } }));
       expect(versions.versions.map((v: { rev: number }) => v.rev)).toEqual([1, 2, 3]);
@@ -333,7 +338,8 @@ describe('note version tools', () => {
       const fresh = text(await client.callTool({ name: 'restore_note_version', arguments: { note: note.id, rev: 1, expected_rev: 2 } }));
 
       expect(errorText(stale)).toBe('409 stale_revision, current rev: 2');
-      expect(fresh).toMatchObject({ bodyMd: 'v1', rev: 3 });
+      expect(fresh.rev).toBe(3);
+      expect(await bodyOf(client, note.id)).toBe('v1');
     });
 
     it('on another project\'s note fails exactly like a missing note', async () => {
@@ -356,7 +362,7 @@ describe('note version tools', () => {
 
       const restored = text(await client.callTool({ name: 'restore_note_version', arguments: { note: note.id, rev: 1 } }));
 
-      expect(restored.bodyMd).toBe('v1');
+      expect(restored.rev).toBe(3);
       expect(nodeDocsFolderFs.readFileSync(note.filePath!)).toBe('v1');
     });
   });
