@@ -37,7 +37,14 @@ export class FakeHandle implements HarnessHandle {
   reviewsInvisibleCharacters = false;
   // Test-only: how the review step behaves. The real CLI 2.1.284 shows its notice 3 ms after the Enter and ignores
   // every Enter for the next ~100-150 ms (measured live); `neverAcceptsEnter` is a composer that never leaves the review.
-  reviewTiming = { noticeDelayMs: 0, ignoresEnterForMs: 0, neverAcceptsEnter: false };
+  // `redrawsNoticeOnIgnoredEnter`: an ignored Enter repaints the notice, so the output proves the composer still holds the paste.
+  reviewTiming = { noticeDelayMs: 0, ignoresEnterForMs: 0, neverAcceptsEnter: false, redrawsNoticeOnIgnoredEnter: false };
+  // Test-only: a submitted turn is running until endTurn(); the fake then draws the CLI's generating marker when asked.
+  showsGeneratingMarker = false;
+  // Test-only: how often Escape interrupted a running turn, and how often a double Escape on an empty composer opened the rewind selector.
+  interruptCount = 0;
+  rewindOpenCount = 0;
+  private isGenerating = false;
   // Test-only: the bodies the fake CLI actually submitted (an Enter consumed by the review notice is not one).
   readonly submitted: string[] = [];
   // Test-only: called with each body the fake CLI submitted (a test plays the hooks of the turn it starts).
@@ -86,19 +93,32 @@ export class FakeHandle implements HarnessHandle {
       const isIgnored = this.reviewTiming.neverAcceptsEnter
         || this.noticeShownAt === undefined
         || Date.now() - this.noticeShownAt < this.reviewTiming.ignoresEnterForMs;
-      if (isIgnored) return;
+      if (isIgnored) {
+        if (this.reviewTiming.redrawsNoticeOnIgnoredEnter) setTimeout(() => this.emitData('Removed 1 invisible character · review and press Enter to send'), this.reviewTiming.noticeDelayMs);
+        return;
+      }
     }
     if (this.composer === '') return;
     const body = this.composer;
     this.submitted.push(body);
     this.composer = '';
     this.isComposerUnderReview = false;
+    this.isGenerating = true;
+    if (this.showsGeneratingMarker) queueMicrotask(() => this.emitData('✻ Working… (esc to interrupt)'));
     this.onSubmit(body);
   }
-  // Like Claude Code: Escape twice in a row empties the composer (a single Escape leaves it alone).
+  // Test-only: the running turn ends.
+  endTurn(): void { this.isGenerating = false; }
+  // Like Claude Code: Escape interrupts a running turn; twice in a row it empties the composer, and on an empty
+  // composer opens the rewind selector (a single Escape on an idle composer leaves everything alone).
   private pressEscape(): void {
+    if (this.isGenerating) {
+      this.interruptCount += 1;
+      return;
+    }
     const isSecondEscape = this.lastEscapeAt !== undefined && Date.now() - this.lastEscapeAt <= 1000;
     this.lastEscapeAt = isSecondEscape ? undefined : Date.now();
+    if (isSecondEscape && this.composer === '') this.rewindOpenCount += 1;
     if (!isSecondEscape || this.composer === '') return;
     this.composer = '';
     this.isComposerUnderReview = false;
