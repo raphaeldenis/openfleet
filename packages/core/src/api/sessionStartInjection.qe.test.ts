@@ -231,7 +231,7 @@ describe('QE: user gets exact stale marking at the boundaries', () => {
     const oneMillisecondBefore = contextOf(await sessionStarted('clear')).split('\n')[0]!;
 
     expect(sameInstant).not.toContain('stale');
-    expect(oneMillisecondBefore).toContain('written before the last spawn or close');
+    expect(oneMillisecondBefore).toContain('written before the last spawn, close or reopen');
   });
 
   it('says both reasons on line 1 when the state is too old and written before the last spawn', async () => {
@@ -242,7 +242,7 @@ describe('QE: user gets exact stale marking at the boundaries', () => {
     const firstLine = contextOf(await sessionStarted('clear')).split('\n')[0]!;
 
     expect(firstLine).toContain('written 100 minutes ago');
-    expect(firstLine).toContain('written before the last spawn or close');
+    expect(firstLine).toContain('written before the last spawn, close or reopen');
   });
 });
 
