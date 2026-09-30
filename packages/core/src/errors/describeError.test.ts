@@ -188,6 +188,14 @@ describe('describeError: internal errors', () => {
     expect(String(errorLog.mock.calls[0]![0])).toContain(envelope.id);
   });
 
+  it('logs the envelope id as the id field of the log record, next to the session it belongs to', () => {
+    const envelope = describeError(new Error('sqlite exploded'), { sessionId: 's-42' });
+
+    const loggedRecord = JSON.parse(String(errorLog.mock.calls[0]![0])) as { id: string; sessionId: string };
+    expect(loggedRecord.id).toBe(envelope.id);
+    expect(loggedRecord.sessionId).toBe('s-42');
+  });
+
   it('never puts the raw error message or a stack in the envelope', () => {
     const serialized = JSON.stringify(describeError(new Error('sqlite exploded at /secret/place')));
     expect(serialized).not.toContain('sqlite');
