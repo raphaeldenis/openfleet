@@ -19,6 +19,12 @@ function fakeEvents(overrides: { sessions?: unknown[]; managers?: unknown[]; wor
   };
 }
 
+function listNestingDepthOf(element: HTMLElement) {
+  let depth = 0;
+  for (let list = element.closest('ul'); list; list = list.parentElement?.closest('ul') ?? null) depth++;
+  return depth;
+}
+
 function fakeApi(overrides: Record<string, unknown> = {}) {
   return {
     createSession: vi.fn().mockResolvedValue({}),
@@ -112,8 +118,8 @@ describe('SessionListComponent', () => {
       ],
     });
     await render(SessionListComponent, { providers: [provideRouter([]), { provide: FleetEventsService, useValue: fake }] });
-    const childRow = screen.getByTestId('session-c1');
-    expect(childRow.className).toContain('child');
+    expect(listNestingDepthOf(screen.getByTestId('session-m1'))).toBe(1);
+    expect(listNestingDepthOf(screen.getByTestId('session-c1'))).toBe(2);
   });
 
   it('renders a manager card and pulses on click', async () => {
@@ -195,12 +201,7 @@ describe('SessionListComponent', () => {
     });
     await render(SessionListComponent, { providers: [provideRouter([]), { provide: FleetEventsService, useValue: fake }] });
 
-    const grandchildRow = screen.getByTestId('session-g1');
-    expect(grandchildRow).toBeTruthy();
-    expect(grandchildRow.className).toContain('child');
-    const innermostChildrenList = grandchildRow.closest('.children');
-    const outermostChildrenList = innermostChildrenList?.parentElement?.closest('.children');
-    expect(outermostChildrenList).toBeTruthy();
+    expect(listNestingDepthOf(screen.getByTestId('session-g1'))).toBe(3);
   });
 
   it('renders a great-grandchild the same way, so lineage depth is not artificially capped', async () => {

@@ -81,6 +81,7 @@ export async function startDaemon(config: Config): Promise<Daemon> {
   // token indefinitely; every resume below rewrites its own launch dir from scratch with rotated tokens
   // anyway, so nothing here is worth preserving across a restart (AUD-11).
   const close = async () => {
+    server.beginShutdown();
     pulseScheduler.stop();
     contextNotice.stop();
     await sessions.closeAll();

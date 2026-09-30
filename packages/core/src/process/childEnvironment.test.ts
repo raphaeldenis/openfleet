@@ -104,6 +104,12 @@ describe('childEnvironmentForGit', () => {
     expect(childEnvironmentForGit(parentEnv)).toEqual({ PATH: '/usr/bin' });
   });
 
+  it('never hands the sidecar stdin-EOF switch to a git child', () => {
+    const parentEnv = { OPENFLEET_EXIT_ON_STDIN_EOF: '1', PATH: '/usr/bin' };
+
+    expect(childEnvironmentForGit(parentEnv)).toEqual({ PATH: '/usr/bin' });
+  });
+
   it('keeps a Scape-looking configuration variable, which is not host identity or capability', () => {
     const parentEnv = { SCAPE_THEME: 'dark' };
 
@@ -230,6 +236,12 @@ describe('childEnvironmentForClaudeCli', () => {
     };
 
     expect(childEnvironmentForClaudeCli(parentEnv)).toEqual({ PATH: '/usr/bin', ANTHROPIC_API_KEY: 'sk-test' });
+  });
+
+  it('never hands the sidecar stdin-EOF switch to a launched claude, where a dev daemon would inherit it and exit at once', () => {
+    const parentEnv = { OPENFLEET_EXIT_ON_STDIN_EOF: '1', PATH: '/usr/bin' };
+
+    expect(childEnvironmentForClaudeCli(parentEnv)).toEqual({ PATH: '/usr/bin' });
   });
 
   it('drops every git repository-location var, so a CLI launched in one worktree cannot be redirected to another repo', () => {

@@ -51,6 +51,15 @@ describe('REST', () => {
     expect(await res.json()).toEqual({ ok: true, version: DAEMON_VERSION });
   });
 
+  it('answers /health 503 shutting_down once the shutdown has begun, so a launching app does not reuse a dying daemon', async () => {
+    server.beginShutdown();
+
+    const res = await fetch(`${server.url}/health`);
+
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ ok: false, status: 'shutting_down' });
+  });
+
   it('answers a CORS preflight so the desktop shell can call the daemon cross-origin', async () => {
     const res = await fetch(`${server.url}/api/sessions`, {
       method: 'OPTIONS',

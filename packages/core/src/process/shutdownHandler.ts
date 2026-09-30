@@ -7,7 +7,7 @@ export interface ShutdownHandlerOptions { guardTimeoutMs?: number }
 // closeAll()-ing every session twice concurrently is at best redundant, at worst racing itself (AUD-08).
 // A shutdown that rejects or hangs must still exit the process with a failure code rather than leaving the
 // daemon stuck or crashing on an unhandled rejection (AUD-08).
-export function installShutdownHandler(shutdown: () => Promise<void>, proc: NodeJS.Process = process, options: ShutdownHandlerOptions = {}): void {
+export function installShutdownHandler(shutdown: () => Promise<void>, proc: NodeJS.Process = process, options: ShutdownHandlerOptions = {}): () => void {
   const guardTimeoutMs = options.guardTimeoutMs ?? DEFAULT_GUARD_TIMEOUT_MS;
   let shuttingDown = false;
   const handleSignal = (): void => {
@@ -26,4 +26,5 @@ export function installShutdownHandler(shutdown: () => Promise<void>, proc: Node
     );
   };
   for (const signal of ['SIGINT', 'SIGTERM'] as const) proc.on(signal, handleSignal);
+  return handleSignal;
 }
