@@ -607,13 +607,10 @@ export class SessionService {
     const state = nextState(session.state, input);
     if (state === session.state) {
       // A queued /clear never reports a turn start: its SessionStart is the only proof it was processed.
-      const startsClearedConversationWhileSubmitted = input.kind === 'hook' && startsClearedConversation(input.event) && this.isAwaitingTurnStart(sessionId);
-      if (startsClearedConversationWhileSubmitted) {
-        this.enter(sessionId, READY);
-        this.guarded(sessionId, () => this.advance(sessionId));
-      }
+      const startsClearedConversationWhileClearSubmitted = input.kind === 'hook' && startsClearedConversation(input.event) && this.isAwaitingQueuedClear(sessionId);
+      if (startsClearedConversationWhileClearSubmitted) this.enter(sessionId, READY);
       // The turn's start was never reported, but its end still releases a relaunch held behind it.
-      if (endsUnfinishedTurn) this.guarded(sessionId, () => this.advance(sessionId));
+      if (startsClearedConversationWhileClearSubmitted || endsUnfinishedTurn) this.guarded(sessionId, () => this.advance(sessionId));
       return;
     }
     // Only a real state transition proves the (resumed) process is alive; an unrecognized Notification
@@ -639,6 +636,12 @@ export class SessionService {
 
   private isAwaitingTurnStart(sessionId: string): boolean {
     return this.deliveryOf(sessionId).phase.name === 'submitted';
+  }
+
+  private isAwaitingQueuedClear(sessionId: string): boolean {
+    const { phase } = this.deliveryOf(sessionId);
+    if (phase.name !== 'submitted') return false;
+    return this.queue.getById(phase.messageId)?.body.trim() === '/clear';
   }
 
   private holdRelaunchesFor(sessionId: string, holdMs: number, options: { isFlushGrace: boolean } = { isFlushGrace: false }): void {
