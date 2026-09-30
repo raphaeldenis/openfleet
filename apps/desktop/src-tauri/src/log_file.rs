@@ -1,4 +1,5 @@
 use crate::admin_token::openfleet_home_dir;
+use crate::redaction::redact;
 use std::io::{self, Write};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
@@ -12,18 +13,7 @@ pub const LOG_FILE_NAME: &str = "daemon.log";
 const CHANNEL_CAPACITY: usize = 2048;
 const PRIVATE_DIR_MODE: u32 = 0o700;
 const PRIVATE_FILE_MODE: u32 = 0o600;
-// ponytail: a secret shorter than this would redact innocent text; the admin token is far longer.
-const MIN_SECRET_LENGTH: usize = 8;
-const REDACTED: &str = "[redacted]";
 const SECONDS_PER_DAY: u64 = 86_400;
-
-fn is_bearer_token_char(character: char) -> bool {
-  character.is_ascii_alphanumeric() || "-._~+/=".contains(character)
-}
-
-fn is_hook_token_char(character: char) -> bool {
-  character.is_ascii_alphanumeric() || "-._~".contains(character)
-}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Stream {
@@ -130,31 +120,6 @@ fn truncated_at_char_boundary(text: &str, max_bytes: usize) -> &str {
     end -= 1;
   }
   &text[..end]
-}
-
-/// Returns the line redacted: every known secret, `Bearer <token>` and `/hooks/<token>` become `[redacted]`.
-pub fn redact(line: &str, secrets: &[String]) -> String {
-  let usable_secrets = secrets.iter().filter(|secret| secret.len() >= MIN_SECRET_LENGTH);
-  let without_secrets = usable_secrets.fold(line.to_string(), |text, secret| text.replace(secret.as_str(), REDACTED));
-  let without_bearer_tokens = mask_token_after(&without_secrets, "bearer ", is_bearer_token_char);
-  mask_token_after(&without_bearer_tokens, "/hooks/", is_hook_token_char)
-}
-
-fn mask_token_after(text: &str, marker: &str, is_token_char: fn(char) -> bool) -> String {
-  let lowered = text.to_ascii_lowercase();
-  let mut masked = String::with_capacity(text.len());
-  let mut cursor = 0;
-  while let Some(offset) = lowered[cursor..].find(marker) {
-    let token_start = cursor + offset + marker.len();
-    let token_length = text[token_start..].find(|character| !is_token_char(character)).unwrap_or(text.len() - token_start);
-    masked.push_str(&text[cursor..token_start]);
-    if token_length > 0 {
-      masked.push_str(REDACTED);
-    }
-    cursor = token_start + token_length;
-  }
-  masked.push_str(&text[cursor..]);
-  masked
 }
 
 /// Returns the line as the log stores it: `<ts> [out|err] <line>`, a daemon NDJSON line untouched.
@@ -638,7 +603,7 @@ mod tests {
   fn masks_the_admin_token_in_its_percent_encoded_forms() {
     let secrets = vec!["abc+def/ghi=jkl_mno".to_string()];
 
-    let masked = redact("a abc%2Bdef%2Fghi%3Djkl_mno b abc%2bdef%2fghi%3djkl_mno c %61%62%63%2B%64ef%2Fghi%3Djkl_mno", &secrets);
+    let masked = redact("a abc%2Bdef%2Fghi%3Djkl_mno b abc%2bdef%2fghi%3djkl_mno c %61%62%63%2B%64%65%66%2F%67%68%69%3D%6A%6B%6C%5F%6D%6E%6F", &secrets);
 
     assert_eq!(masked, "a [redacted] b [redacted] c [redacted]");
   }

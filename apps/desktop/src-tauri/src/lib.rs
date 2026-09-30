@@ -4,6 +4,7 @@ mod daemon;
 mod issue_report;
 mod log_file;
 mod path_repair;
+mod redaction;
 
 use tauri::Manager;
 
