@@ -143,6 +143,24 @@ describe('OverdueChipComponent', () => {
     expect(chip()).toHaveAttribute('aria-label', `state overdue: ${expected}`);
   });
 
+  describe('with a time the daemon reports unreadably', () => {
+    it.each([
+      ['a state time', { updatedAt: 'not a date' }],
+      ['a fleet change time', { fleetChangedAt: 'not a date' }],
+    ])('user sees the chip, with its reason, on %s that cannot be read', async (_label, patch) => {
+      await renderChip({ states: [stateOf(patch)] });
+
+      expect(chip()).toHaveAttribute('data-reason', 'time_unknown');
+      expect(chip()).toHaveAttribute('title', 'State time unknown');
+    });
+
+    it('user sees no chip and no "NaN" when the daemon reports an unreadable age limit', async () => {
+      await renderChip({ states: [stateOf({ updatedAt: minutesBeforeNow(60 * 24 * 10) })], maxAgeMinutes: Number.NaN });
+
+      expect(chip()).toBeNull();
+    });
+  });
+
   it('user sees the chip appear when time passes the limit, without a new event', async () => {
     const { fixture } = await renderChip({ states: [stateOf({ updatedAt: minutesBeforeNow(29) })] });
     expect(chip()).toBeNull();

@@ -3,7 +3,7 @@ import { WORKING_STATE_SECTIONS, type Session } from '@openfleet/shared';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { OverdueChipComponent } from './overdue-chip.component';
 import { StateSectionComponent } from './state-section.component';
-import { SECTION_HEADINGS, ageInWholeMinutes, tickingNow } from './working-state-freshness';
+import { SECTION_HEADINGS, ageInWholeMinutes, hasReadableUpdatedAt, tickingNow } from './working-state-freshness';
 import { injectOverdue } from './working-state-overdue';
 
 const BODY_ID = 'state-panel-body';
@@ -86,6 +86,7 @@ export class StatePanelComponent {
   protected readonly updatedLabel = computed(() => {
     const state = this.state();
     if (!state) return '';
+    if (!hasReadableUpdatedAt(state)) return 'updated time unknown';
     const minutes = ageInWholeMinutes(state, this.now());
     return minutes < 1 ? 'updated just now' : `updated ${minutes} min ago`;
   });

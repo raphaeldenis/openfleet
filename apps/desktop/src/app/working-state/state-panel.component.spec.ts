@@ -176,6 +176,15 @@ describe('StatePanelComponent', () => {
       expect(screen.queryByTestId('overdue-chip')).toBeNull();
     });
 
+    it('user is told the state time is unknown, never "NaN", when the state time cannot be read', async () => {
+      await renderPanel({ states: [stateOf({ updatedAt: 'not a date' })] });
+
+      expect(screen.getByTestId('state-panel-updated')).toHaveTextContent('updated time unknown');
+      expect(screen.getByTestId('state-panel-overdue-reason')).toHaveTextContent('State time unknown');
+      expect(toggle()).not.toHaveTextContent('NaN');
+      expect(screen.getByTestId('state-panel')).not.toHaveTextContent('NaN');
+    });
+
     it('user sees a 300 character item without a space wrap inside the panel instead of stretching it', async () => {
       const unbrokenItem = 'x'.repeat(300);
       await renderOpenPanel({ plan: [unbrokenItem] });

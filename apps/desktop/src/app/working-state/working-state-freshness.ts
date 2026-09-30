@@ -4,7 +4,7 @@ import { WORKING_STATE_SECTIONS, type WorkingState, type WorkingStateSectionKey 
 const MINUTE_MS = 60_000;
 const TICK_MS = 1000;
 
-export type OverdueReason = 'missing' | 'too_old' | 'fleet_changed' | 'oversize';
+export type OverdueReason = 'missing' | 'too_old' | 'time_unknown' | 'fleet_changed' | 'oversize';
 
 export interface FreshnessRules {
   readonly nowMs: number;
@@ -34,11 +34,19 @@ export function stateSizeInBytes(state: WorkingState): number {
   return new TextEncoder().encode(rendered).length;
 }
 
+const isReadableTime = (iso: string): boolean => !Number.isNaN(Date.parse(iso));
+
+export const hasReadableUpdatedAt = (state: WorkingState): boolean => isReadableTime(state.updatedAt);
+
+const hasUnreadableTime = (state: WorkingState): boolean => !isReadableTime(state.updatedAt) || (state.fleetChangedAt !== undefined && !isReadableTime(state.fleetChangedAt));
+
 export const ageInWholeMinutes = (state: WorkingState, nowMs: number): number => Math.floor((nowMs - Date.parse(state.updatedAt)) / MINUTE_MS);
 
 export function overdueReasonOf(state: WorkingState | undefined, rules: FreshnessRules): OverdueReason | undefined {
   if (!state) return 'missing';
-  const isOlderThanLimit = rules.maxAgeMinutes !== undefined && rules.nowMs - Date.parse(state.updatedAt) > rules.maxAgeMinutes * MINUTE_MS;
+  if (hasUnreadableTime(state)) return 'time_unknown';
+  const hasAgeLimit = rules.maxAgeMinutes !== undefined && !Number.isNaN(rules.maxAgeMinutes);
+  const isOlderThanLimit = hasAgeLimit && rules.nowMs - Date.parse(state.updatedAt) > (rules.maxAgeMinutes ?? 0) * MINUTE_MS;
   if (isOlderThanLimit) return 'too_old';
   const isWrittenBeforeFleetChanged = state.fleetChangedAt !== undefined && Date.parse(state.updatedAt) < Date.parse(state.fleetChangedAt);
   if (isWrittenBeforeFleetChanged) return 'fleet_changed';
@@ -50,6 +58,7 @@ const minutesLabel = (minutes: number): string => (minutes === 1 ? '1 minute' : 
 
 export function overdueExplanation(reason: OverdueReason, state: WorkingState | undefined, rules: FreshnessRules): string {
   if (reason === 'missing' || !state) return 'No state recorded';
+  if (reason === 'time_unknown') return 'State time unknown';
   if (reason === 'too_old') return `Written ${minutesLabel(ageInWholeMinutes(state, rules.nowMs))} ago, limit ${minutesLabel(rules.maxAgeMinutes ?? 0)}`;
   if (reason === 'fleet_changed') return 'Written before the last spawn or close';
   return `Larger than the ${rules.maxBytes ?? 0} byte limit (${stateSizeInBytes(state)} bytes)`;
