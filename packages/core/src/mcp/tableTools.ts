@@ -117,8 +117,8 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
     if (!scope) return fail('this session has no project');
     return guarded(() => {
       const rows = stores.query(store, { ...scope, where, orderBy: order_by, limit: limit ?? DEFAULT_QUERY_LIMIT });
-      const { items, truncated } = truncateToByteBudget(rows, MAX_QUERY_RESULT_BYTES);
-      return { rows: items.map(rowView), truncated, count: items.length };
+      const { items, truncated } = truncateToByteBudget(rows.map(rowView), MAX_QUERY_RESULT_BYTES);
+      return { rows: items, truncated, count: items.length };
     });
   });
 }

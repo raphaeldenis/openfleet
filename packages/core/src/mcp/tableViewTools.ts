@@ -72,8 +72,8 @@ export function registerTableViewTools(server: McpServer, deps: RegisterTableVie
     return guarded(() => {
       const history = storeRepo.rowHistory(row_id, { projectId: scope.projectId, limit: limit ?? DEFAULT_HISTORY_LIMIT });
       if (history.length === 0) throw new RowNotFoundError(row_id);
-      const { items: entries, truncated } = truncateToByteBudget(history, MAX_HISTORY_RESULT_BYTES);
-      return { entries: entries.map(rowChangeView), truncated, count: entries.length };
+      const { items: entries, truncated } = truncateToByteBudget(history.map(rowChangeView), MAX_HISTORY_RESULT_BYTES);
+      return { entries, truncated, count: entries.length };
     });
   });
 }

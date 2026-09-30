@@ -335,6 +335,27 @@ describe('table tools', () => {
     expect(result.rows.length).toBeLessThan(20);
   });
 
+  it('query_data_store fills the 1 MiB budget with compact rows, leaving less than one row unused', async () => {
+    const client = await connect(scopedToken);
+    const store = await createStore(client);
+    await client.callTool({ name: 'add_data_store_column', arguments: { store: store.id, display_name: 'blob', column_type: 'text' } });
+    const blobId = text(await client.callTool({ name: 'describe_data_store', arguments: { store: store.id } })).columns[0].id;
+    const mediumValue = 'x'.repeat(2 * 1024);
+    for (let batch = 0; batch < 30; batch++) {
+      const rows = Array.from({ length: 20 }, () => ({ [blobId]: mediumValue }));
+      await client.callTool({ name: 'insert_data_store_rows', arguments: { store: store.id, rows } });
+    }
+
+    const result = text(await client.callTool({ name: 'query_data_store', arguments: { store: store.id, limit: 600 } }));
+
+    const rowBytes = Buffer.byteLength(JSON.stringify(result.rows[0]), 'utf8');
+    const keptBytes = result.rows.length * rowBytes;
+    expect(result.truncated).toBe(true);
+    expect(result.count).toBe(result.rows.length);
+    expect(keptBytes).toBeLessThanOrEqual(1024 * 1024);
+    expect(1024 * 1024 - keptBytes).toBeLessThan(rowBytes);
+  });
+
   it('query_data_store refuses a limit over 1000', async () => {
     const client = await connect(scopedToken);
     const store = await createStore(client);
