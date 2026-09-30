@@ -1,5 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { Server } from 'node:http';
 import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -12,13 +11,15 @@ import { ManagerRepository } from './managers/managerRepository.js';
 import { PulseScheduler } from './managers/pulseScheduler.js';
 import { SessionRepository } from './sessions/sessionRepository.js';
 import { SessionService } from './sessions/sessionService.js';
+import { createTempDirTracker } from './tempDirTracker.js';
 
+const tempDirs = createTempDirTracker();
 let daemon: Daemon | undefined;
 let adminToken: string;
 let bootedConfig: Config;
 
 async function bootDaemon(configJson?: object, { seedPreviousRun }: { seedPreviousRun?: (config: Config) => void } = {}): Promise<Daemon> {
-  const home = mkdtempSync(join(tmpdir(), 'of-daemon-wiring-'));
+  const home = tempDirs.make('of-daemon-wiring-');
   if (configJson) writeFileSync(join(home, 'config.json'), JSON.stringify(configJson));
   const config = loadConfig({ OPENFLEET_HOME: home, OPENFLEET_PORT: '0' });
   seedPreviousRun?.(config);
@@ -27,7 +28,7 @@ async function bootDaemon(configJson?: object, { seedPreviousRun }: { seedPrevio
   daemon = await startDaemon(config);
   return daemon;
 }
-afterEach(async () => { vi.restoreAllMocks(); await daemon?.close(); daemon = undefined; });
+afterEach(async () => { vi.restoreAllMocks(); await daemon?.close(); daemon = undefined; tempDirs.removeAll(); });
 
 const api = (path: string, init: RequestInit = {}) => fetch(`${daemon!.server.url}${path}`, { ...init, headers: { 'content-type': 'application/json', authorization: `Bearer ${adminToken}`, ...(init.headers ?? {}) } });
 const createSession = async (extra: Record<string, unknown> = {}) => (await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'Boss', harness: 'fake', emoji: '🤖', ...extra }) })).json()) as { id: string };

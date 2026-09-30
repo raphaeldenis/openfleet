@@ -1,19 +1,22 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { loadModelTable } from './models.js';
 import { loadDaemonSettings } from './workingState/workingStateSettings.js';
 import { refuseBootOnFailure } from './bootFailure.js';
+import { createTempDirTracker } from './tempDirTracker.js';
 import { ConfigFileError, readingConfigFile } from './configFileError.js';
 import { PortInUseError } from './api/portInUseError.js';
+
+const tempDirs = createTempDirTracker();
+afterEach(() => tempDirs.removeAll());
 
 const CORE_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 function bootWithConfigJson(configJson: string) {
-  const home = mkdtempSync(join(tmpdir(), 'of-boot-refusal-'));
+  const home = tempDirs.make('of-boot-refusal-');
   writeFileSync(join(home, 'config.json'), configJson);
   const result = spawnSync(process.execPath, ['--import', 'tsx', 'src/main.ts'], {
     cwd: CORE_ROOT, encoding: 'utf8', timeout: 30_000,
@@ -120,7 +123,7 @@ describe('refuseBootOnFailure', () => {
   });
 
   it('never shows a snippet of a broken config.json, only its path and the position', async () => {
-    const home = mkdtempSync(join(tmpdir(), 'of-boot-secret-'));
+    const home = tempDirs.make('of-boot-secret-');
     writeFileSync(join(home, 'config.json'), '{ "adminToken": FAKESECRET-123 }');
     const bootError = (() => { try { readingConfigFile(() => loadModelTable(join(home, 'config.json'))); } catch (error) { return error; } })();
 
@@ -143,7 +146,7 @@ describe('refuseBootOnFailure', () => {
 
 describe('loadDaemonSettings reason', () => {
   it('names the offending key without a raw zod JSON dump', () => {
-    const home = mkdtempSync(join(tmpdir(), 'of-settings-reason-'));
+    const home = tempDirs.make('of-settings-reason-');
     const configPath = join(home, 'config.json');
     writeFileSync(configPath, JSON.stringify({ workingState: { maxAgeMinutes: 0 } }));
 

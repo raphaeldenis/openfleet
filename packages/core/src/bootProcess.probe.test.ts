@@ -1,22 +1,24 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:net';
-import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { refuseBootOnFailure } from './bootFailure.js';
+import { createTempDirTracker } from './tempDirTracker.js';
 
 const CORE_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SRC_MAIN = join(CORE_ROOT, 'src', 'main.ts');
 
 interface Booted { child: ChildProcess; stdout: () => string; stderr: () => string; exited: Promise<{ code: number | null; signal: NodeJS.Signals | null }> }
 
+const tempDirs = createTempDirTracker();
 const children: ChildProcess[] = [];
 const servers: Server[] = [];
 afterEach(async () => {
   for (const child of children.splice(0)) child.kill('SIGKILL');
   await Promise.all(servers.splice(0).map((server) => new Promise((resolve) => server.close(resolve))));
+  tempDirs.removeAll();
 });
 
 function spawnDaemon(env: Record<string, string>, preload?: string): Booted {
@@ -27,7 +29,7 @@ function spawnDaemon(env: Record<string, string>, preload?: string): Booted {
   let err = '';
   child.stdout!.on('data', (chunk) => { out += chunk; });
   child.stderr!.on('data', (chunk) => { err += chunk; });
-  const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => child.on('exit', (code, signal) => resolve({ code, signal })));
+  const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => child.on('close', (code, signal) => resolve({ code, signal })));
   return { child, stdout: () => out, stderr: () => err, exited };
 }
 
@@ -40,7 +42,7 @@ const waitFor = async (predicate: () => boolean, what: string, timeoutMs = 20_00
 };
 
 const homeWith = (configJson?: string) => {
-  const home = mkdtempSync(join(tmpdir(), 'of-probe-'));
+  const home = tempDirs.make('of-probe-');
   if (configJson !== undefined) writeFileSync(join(home, 'config.json'), configJson);
   return home;
 };
@@ -48,10 +50,24 @@ const homeWith = (configJson?: string) => {
 const freePort = () => new Promise<number>((resolve) => { const s = createServer(); s.listen(0, '127.0.0.1', () => { const { port } = s.address() as { port: number }; s.close(() => resolve(port)); }); });
 const canConnect = (port: number) => new Promise<boolean>((resolve) => { const s = createServer(); s.once('error', () => resolve(false)); s.listen(port, '127.0.0.1', () => s.close(() => resolve(true))); });
 
+const MAX_BOOT_ATTEMPTS = 3;
+const hasSettled = (daemon: Booted) => daemon.stdout().includes('listening') || daemon.child.exitCode !== null || daemon.child.signalCode !== null;
+
+// A free port is only free until another process binds it, so a boot that loses that race is tried again.
+async function bootOnFreePort(env: Record<string, string>, preload?: string): Promise<{ daemon: Booted; port: number }> {
+  for (let attempt = 1; ; attempt++) {
+    const port = await freePort();
+    const daemon = spawnDaemon({ OPENFLEET_PORT: String(port), ...env }, preload);
+    await waitFor(() => hasSettled(daemon), 'the boot to settle');
+    const lostThePortRace = daemon.stderr().includes('is already in use') && attempt < MAX_BOOT_ATTEMPTS;
+    if (!lostThePortRace) return { daemon, port };
+    await daemon.exited;
+  }
+}
+
 describe('probe: valid boot then signal', () => {
   it.each(['SIGTERM', 'SIGINT'] as const)('%s after a valid boot exits 0 and frees the port', async (signal) => {
-    const port = await freePort();
-    const daemon = spawnDaemon({ OPENFLEET_HOME: homeWith(), OPENFLEET_PORT: String(port) });
+    const { daemon, port } = await bootOnFreePort({ OPENFLEET_HOME: homeWith() });
     await waitFor(() => daemon.stdout().includes('openfleet core listening on'), 'banner');
 
     daemon.child.kill(signal);
@@ -85,8 +101,7 @@ describe('probe: refused boots', () => {
 
   it.each(cases)('%s → exit 1, exactly one line, no stack, no raw zod, port free', async (_name, expectedLine, build) => {
     const { env } = build();
-    const port = await freePort();
-    const daemon = spawnDaemon({ OPENFLEET_PORT: String(port), ...env });
+    const { daemon, port } = await bootOnFreePort(env);
 
     const { code } = await daemon.exited;
 
@@ -102,7 +117,7 @@ describe('probe: refused boots', () => {
   it('a database file that cannot be opened → names its path and asks to check its permissions', async () => {
     const home = homeWith();
     mkdirSync(join(home, 'openfleet.db'));
-    const daemon = spawnDaemon({ OPENFLEET_HOME: home, OPENFLEET_PORT: String(await freePort()) });
+    const { daemon } = await bootOnFreePort({ OPENFLEET_HOME: home });
 
     await daemon.exited;
 
@@ -138,11 +153,9 @@ describe('probe: refused boots', () => {
     mkdirSync(lockedDirectory, { recursive: true });
     writeFileSync(join(lockedDirectory, 'settings.json'), '{}');
     chmodSync(lockedDirectory, 0o500);
-    const port = await freePort();
-    const daemon = spawnDaemon({ OPENFLEET_HOME: home, OPENFLEET_PORT: String(port) });
+    const { daemon, port } = await bootOnFreePort({ OPENFLEET_HOME: home });
 
     const { code } = await daemon.exited;
-    chmodSync(lockedDirectory, 0o700);
 
     const lines = daemon.stderr().trimEnd().split('\n');
     expect(code).toBe(1);
@@ -156,21 +169,31 @@ describe('probe: refused boots', () => {
 });
 
 describe('probe: boot ordering and reasons', () => {
-  it('creates the database owner-only because process guards are installed before the boot', async () => {
-    const home = homeWith();
-    const port = await freePort();
-    const daemon = spawnDaemon({ OPENFLEET_HOME: home, OPENFLEET_PORT: String(port) });
+  it('creates the home with the owner-only umask already in place because process guards are installed before the boot', async () => {
+    const umaskFile = join(tempDirs.make('of-umask-'), 'umask-at-home-creation');
+    const preload = join(tempDirs.make('of-preload-'), 'recordUmask.mjs');
+    writeFileSync(preload, `
+      import fs from 'node:fs';
+      import { syncBuiltinESMExports } from 'node:module';
+      const mkdirSync = fs.mkdirSync;
+      const writeFileSync = fs.writeFileSync;
+      let recorded = false;
+      fs.mkdirSync = (...args) => {
+        if (!recorded) { recorded = true; writeFileSync(${JSON.stringify(umaskFile)}, process.umask().toString(8)); }
+        return mkdirSync(...args);
+      };
+      syncBuiltinESMExports();
+    `);
+    const { daemon } = await bootOnFreePort({ OPENFLEET_HOME: homeWith() }, preload);
     await waitFor(() => daemon.stdout().includes('listening'), 'banner');
-
-    const dbMode = statSync(join(home, 'openfleet.db')).mode & 0o777;
     daemon.child.kill('SIGTERM');
     await daemon.exited;
 
-    expect(dbMode & 0o077).toBe(0);
+    expect(readFileSync(umaskFile, 'utf8')).toBe('77');
   }, 40_000);
 
   it('names the offending models key on the refusal line instead of a zod dump opener', async () => {
-    const daemon = spawnDaemon({ OPENFLEET_HOME: homeWith('{"models":{"haiku":123}}'), OPENFLEET_PORT: String(await freePort()) });
+    const { daemon } = await bootOnFreePort({ OPENFLEET_HOME: homeWith('{"models":{"haiku":123}}') });
 
     await daemon.exited;
 
@@ -180,11 +203,10 @@ describe('probe: boot ordering and reasons', () => {
 
 describe('probe: runtime uncaught exception after boot', () => {
   it('logs "daemon continuing", keeps serving, and still shuts down cleanly', async () => {
-    const preloadDir = mkdtempSync(join(tmpdir(), 'of-preload-'));
+    const preloadDir = tempDirs.make('of-preload-');
     const preload = join(preloadDir, 'throwLater.mjs');
     writeFileSync(preload, "setTimeout(() => { setTimeout(() => { throw new Error('boom-after-boot'); }, 10); }, 4000);\n");
-    const port = await freePort();
-    const daemon = spawnDaemon({ OPENFLEET_HOME: homeWith(), OPENFLEET_PORT: String(port) }, preload);
+    const { daemon, port } = await bootOnFreePort({ OPENFLEET_HOME: homeWith() }, preload);
     await waitFor(() => daemon.stdout().includes('listening'), 'banner');
 
     await waitFor(() => daemon.stderr().includes('uncaughtException: daemon continuing'), 'guard log');
