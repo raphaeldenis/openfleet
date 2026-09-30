@@ -361,6 +361,45 @@ describe('describeError: hostile case 1, secrets and paths in every field', () =
     },
   );
 
+  describe('a URL credential cut by the head cap', () => {
+    const scheme = 'https://';
+    const credential = 'admin:hunter2longpassword';
+    const keptCharsOfTheUrl = Array.from({ length: credential.length }, (_, position) => scheme.length + position + 1);
+    const withUrlCutAfter = (keptChars: number, capChars: number, padding: string) => `${padding.repeat(capChars - keptChars)}${scheme}${credential}@host/path`;
+    const NUL = '\u0000';
+
+    it('leaves no usable prefix in a message cut at 4 times its 300-character cap, wherever the cut falls', () => {
+      const leakedTails = keptCharsOfTheUrl.flatMap((keptChars) => {
+        const { message } = describeError(new OpenFleetError('row_cap', withUrlCutAfter(keptChars, 300 * 4, NUL)));
+        return message.includes('hunt') || message.includes('admin') ? [message.slice(-30)] : [];
+      });
+
+      expect(leakedTails).toEqual([]);
+    });
+
+    it('leaves no usable prefix in a string detail cut at 4 times its 2 KiB cap, wherever the cut falls', () => {
+      const leakedTails = keptCharsOfTheUrl.flatMap((keptChars) => {
+        const { detail } = describeError(detailCarrying(withUrlCutAfter(keptChars, 2048 * 4, NUL)));
+        return String(detail).includes('hunt') || String(detail).includes('admin') ? [String(detail).slice(-30)] : [];
+      });
+
+      expect(leakedTails).toEqual([]);
+    });
+
+    it('leaves no usable prefix in the logged error cut at 4 KiB, wherever the cut falls', () => {
+      const leakedTails = keptCharsOfTheUrl.flatMap((keptChars) => {
+        errorLog.mockClear();
+        const error = new Error('boom');
+        error.stack = withUrlCutAfter(keptChars, 4096, '_');
+        describeError(error);
+        const logged = String(errorLog.mock.calls[0]![0]);
+        return logged.includes('hunt') || logged.includes('admin') ? [logged.slice(-60)] : [];
+      });
+
+      expect(leakedTails).toEqual([]);
+    });
+  });
+
   it('shortens the user home inside a structured detail that fits in 2 KiB', () => {
     const { detail } = describeError(detailCarrying({ path: `${homedir()}/work/app` }));
 

@@ -66,4 +66,8 @@ export function maskedSecrets(text: string): string {
     .replace(HOOK_TOKEN, `/hooks/${MASK}`);
 }
 
-export const maskingCutCredential = (head: string): string => head.replace(CREDENTIAL_CUT_BY_THE_HEAD, `$1${MASK}`);
+// The cut fell between `://` and the `@` that ends the credentials, so the `@` the rule above needs is gone.
+const URL_CREDENTIALS_CUT_BY_THE_HEAD = /(:\/\/)[^\s/@"'`]+$/;
+
+export const maskingCutCredential = (head: string): string =>
+  head.replace(CREDENTIAL_CUT_BY_THE_HEAD, `$1${MASK}`).replace(URL_CREDENTIALS_CUT_BY_THE_HEAD, `$1${MASK}`);

@@ -745,6 +745,23 @@ describe('log — gaps the first suite left open', () => {
     },
   );
 
+  it('leaves no usable prefix of a URL credential that the 5 KiB string cap cuts, wherever the cut falls', async () => {
+    const { log } = await loadLogger();
+    const MAX_STRING_CHARS = 5 * 1024;
+    const scheme = 'https://';
+    const credential = 'admin:hunter2longpassword';
+    const keptCharsOfTheUrl = Array.from({ length: credential.length }, (_, position) => scheme.length + position + 1);
+
+    const leakedMessages = keptCharsOfTheUrl.flatMap((keptChars) => {
+      logSpy.mockClear();
+      log('info', `${'_'.repeat(MAX_STRING_CHARS - keptChars)}${scheme}${credential}@host/path`);
+      const { msg } = parsedLine() as { msg: string };
+      return msg.endsWith(`${scheme}***…`) ? [] : [msg.slice(-30)];
+    });
+
+    expect(leakedMessages).toEqual([]);
+  });
+
   it.each(['?tokens=x', '?authTokens=x', '?refreshTokenString=x', '?TOKENS=x'])('masks the query parameter in %s', async (query) => {
     const { log } = await loadLogger();
 
