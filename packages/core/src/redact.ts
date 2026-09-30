@@ -37,6 +37,7 @@ const URL_CREDENTIALS = /(:\/\/)[^\s/"'`]+@/g;
 const QUERY_PARAMETER = /(^|[?&;#\s])([^=&?;\s"'`#]*)=([^&;\s"'`]*)/g;
 const NESTED_PARAMETER_START = /[?#]/;
 const NESTED_PARAMETERS_CHECKED = 4;
+const NESTED_DECODINGS_CHECKED = 4;
 
 /** Decodes every well-formed percent-escape, up to three layers deep; a malformed one stays as it is and nothing throws. */
 function withEscapesDecoded(text: string): string {
@@ -49,10 +50,12 @@ function withEscapesDecoded(text: string): string {
   return decoded;
 }
 
-/** A value that decodes to a URL or header carrying a secret (`next=%2Fx%3Ftoken%3D…`) hides that secret behind its escapes. */
-const hidesSecretBehindEscapes = (value: string): boolean => {
+/** A value that decodes to a URL or header carrying a secret (`next=%2Fx%3Ftoken%3D…`) hides that secret behind its escapes; one that still holds escapes after the deepest check is masked, so the recursion is bounded. */
+const hidesSecretBehindEscapes = (value: string, depth: number): boolean => {
   const decoded = withEscapesDecoded(value);
-  return decoded !== value && maskedSecrets(decoded) !== decoded;
+  if (decoded === value) return false;
+  const isDeeperThanChecked = depth >= NESTED_DECODINGS_CHECKED;
+  return isDeeperThanChecked || maskedSecrets(decoded, depth + 1) !== decoded;
 };
 
 /** A value holding more nested `?` or `#` than the check reaches is masked whole; the bound keeps the rescans of one value linear. */
@@ -63,13 +66,13 @@ const nestsMoreParametersThanChecked = (value: string): boolean => {
 };
 
 /** Masks the value of a secret-named parameter; a parameter nested behind a `?` or `#` of a plain value is scanned on its own. */
-const maskingQueryParameters = (text: string): string => {
+const maskingQueryParameters = (text: string, depth: number): string => {
   const parameters = new RegExp(QUERY_PARAMETER.source, 'g');
   let masked = '';
   let copiedUpTo = 0;
   for (let found = parameters.exec(text); found; found = parameters.exec(text)) {
     const [parameter = '', prefix = '', key = '', value = ''] = found;
-    const isSecretParameter = SECRET_KEY.test(withEscapesDecoded(key)) || nestsMoreParametersThanChecked(value) || hidesSecretBehindEscapes(value);
+    const isSecretParameter = SECRET_KEY.test(withEscapesDecoded(key)) || nestsMoreParametersThanChecked(value) || hidesSecretBehindEscapes(value, depth);
     if (isSecretParameter) {
       masked += `${text.slice(copiedUpTo, found.index)}${prefix}${key}=${MASK}`;
       copiedUpTo = found.index + parameter.length;
@@ -104,14 +107,15 @@ const WELL_KNOWN_CREDENTIAL = new RegExp(
   'g',
 );
 
-export function maskedSecrets(text: string): string {
+/** `depth` counts the escape decodings already unwrapped; callers pass only the text. */
+export function maskedSecrets(text: string, depth = 0): string {
   const withoutUrlCredentials = text
     .replace(WELL_KNOWN_CREDENTIAL, MASK)
     .replace(BEARER_TOKEN, `Bearer ${MASK}`)
     .replace(AUTHORIZED_BASIC_CREDENTIAL, `$1Basic ${MASK}`)
     .replace(BASIC_CREDENTIAL, `Basic ${MASK}`)
     .replace(URL_CREDENTIALS, `$1${MASK}@`);
-  return maskingQueryParameters(withoutUrlCredentials).replace(HOOK_TOKEN, `/hooks/${MASK}`);
+  return maskingQueryParameters(withoutUrlCredentials, depth).replace(HOOK_TOKEN, `/hooks/${MASK}`);
 }
 
 // The cut fell between `://` and the `@` that ends the credentials, so the `@` the rule above needs is gone.
@@ -119,9 +123,9 @@ const URL_CREDENTIALS_CUT_BY_THE_HEAD = /(:\/\/)[^\s/@"'`]+$/;
 
 // A well-known credential the cut left under its rule's minimum length: only its prefix and its first characters remain.
 const WELL_KNOWN_CREDENTIAL_CUT_BY_THE_HEAD =
-  /\b(?:sk-|gh[pousr]_|github_pat_|AKIA|ASIA|eyJ|xoxe\.|xox[abcdeprs]-|xapp-|AIza|npm_|glpat-|[sr]k_(?:live|test)_|whsec_|hf_)[A-Za-z0-9_.-]*$/;
+  /\b(?:sk-|gh[pousr]_|github_pat_|AKIA|ASIA|eyJ|xoxe\.|xox[abcdeprs]-|xapp-|AIza|npm_|glpat-|[sr]k_(?:live|test)_|whsec_|hf_)[A-Za-z0-9_.%-]*$/;
 
-const CREDENTIAL_CHARACTER = /[A-Za-z0-9_.-]/;
+const CREDENTIAL_CHARACTER = /[A-Za-z0-9_.%-]/;
 const LONGEST_CUT_CREDENTIAL_TAIL = 512;
 
 // Only the final run of credential characters can hold a cut credential: testing just that tail keeps the anchored rule linear.

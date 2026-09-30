@@ -7,6 +7,12 @@ const millisecondsToMask = (text: string): number => {
   return performance.now() - start;
 };
 
+const millisecondsToMaskCut = (text: string): number => {
+  const start = performance.now();
+  maskingCutCredential(text);
+  return performance.now() - start;
+};
+
 describe('maskedSecrets: ReDoS guard on the well-known formats', () => {
   const hostileInputs = [
     ['a run of JWT starts', '-eyJ'],
@@ -243,6 +249,48 @@ describe('maskedSecrets: provider key formats added after the first round', () =
     ['a Stripe webhook secret', 'whsec_aB3dE6gH'],
   ])('masks %s at the very end of a head cut', (_name, credential) => {
     expect(maskingCutCredential(`Fix CI ${credential}`)).toBe(`Fix CI ${MASK}`);
+  });
+
+  it('masks a Slack cookie token cut inside its escapes', () => {
+    expect(maskingCutCredential('token xoxd-abc%2Fde')).toBe(`token ${MASK}`);
+  });
+
+  it('keeps a long run of escapes before a cut linear', () => {
+    const escapes = '%2F'.repeat(200_000);
+    const small = Math.max(millisecondsToMaskCut(escapes.slice(0, 50_000)), 5);
+    const large = millisecondsToMaskCut(escapes);
+
+    expect(large / small).toBeLessThan(8);
+  });
+});
+
+describe('maskedSecrets: a regression to quadratic time fails fast', () => {
+  const nestedParameterShapes = ['a=?', 'a=#', '?#', 'a=b?c=d?e=f?g=h&', 'a=', 'a=%3F', 'a=%2525%2525%25'];
+  const repeatedTo = (unit: string, size: number) => unit.repeat(Math.ceil(size / unit.length));
+
+  it.each(nestedParameterShapes)('masks %j at 64 KiB and 256 KiB with 4x the input costing less than 8x', (unit) => {
+    const small = Math.max(millisecondsToMask(repeatedTo(unit, 64 * 1024)), 5);
+    const large = millisecondsToMask(repeatedTo(unit, 256 * 1024));
+
+    expect(large / small).toBeLessThan(8);
+  });
+
+  // Each nested `a=` peels three layers off the deep escape, so the decoding recursion runs once per pair.
+  const chainBeforeDeepEscape = (pairs: number) => `${'a='.repeat(pairs)}%${'25'.repeat(3 * pairs)}41`;
+
+  it('masks a 64 KiB chain of nested parameters before a deeply escaped byte without throwing', () => {
+    expect(() => maskedSecrets(chainBeforeDeepEscape(8_000))).not.toThrow();
+  });
+
+  it('masks a chain of nested parameters before a deeply escaped byte in linear time', () => {
+    const small = Math.max(millisecondsToMask(chainBeforeDeepEscape(1_000)), 5);
+    const large = millisecondsToMask(chainBeforeDeepEscape(4_000));
+
+    expect(large / small).toBeLessThan(8);
+  });
+
+  it('masks a value whose escapes nest deeper than the check reaches', () => {
+    expect(maskedSecrets(chainBeforeDeepEscape(6))).toBe(`a=${MASK}`);
   });
 });
 

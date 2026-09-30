@@ -745,6 +745,21 @@ mod tests {
   }
 
   #[test]
+  fn still_checks_a_value_holding_exactly_four_nested_question_marks() {
+    assert_eq!(redact("page=a?b=c?d=e?f=g?token=SECRETVAL1", &[]), "page=a?b=c?d=e?f=g?token=[redacted]");
+  }
+
+  #[test]
+  fn masks_the_token_after_a_repeated_bearer_marker_followed_by_no_token_byte() {
+    assert_eq!(redact("Bearer Bearer !", &[]), "Bearer [redacted] !");
+  }
+
+  #[test]
+  fn keeps_a_url_whose_authority_starts_with_an_at_sign() {
+    assert_eq!(redact("GET ://@x", &[]), "GET ://@x");
+  }
+
+  #[test]
   fn keeps_the_parameters_and_fragments_that_hold_no_secret() {
     for text in ["GET /docs#section=intro", "GET /x?a=1?b=2", "GET /x?page=a#top", "see issue #42 and ?q=tokenless"] {
       assert_eq!(redact(text, &[]), text);
@@ -825,7 +840,8 @@ mod tests {
       let time_at_large_input = fastest_redaction_of(unit, LARGE_INPUT);
       assert!(time_at_large_input < time_at_small_input * 8, "{unit:?}: 4x the input took {time_at_large_input:?} against {time_at_small_input:?}");
 
-      let time_at_one_mebibyte = fastest_redaction_of(unit, MEBIBYTE);      assert!(time_at_one_mebibyte < GENEROUS_CEILING, "{unit:?} x 1 MiB took {time_at_one_mebibyte:?}");
+      let time_at_one_mebibyte = fastest_redaction_of(unit, MEBIBYTE);
+      assert!(time_at_one_mebibyte < GENEROUS_CEILING, "{unit:?} x 1 MiB took {time_at_one_mebibyte:?}");
     }
   }
 
