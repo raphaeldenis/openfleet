@@ -158,6 +158,10 @@ const BEARER_SEPARATOR = `(?:[\\s:=]|${ESCAPE_PREFIX}(?:20|3A|3D|09))+`;
 const BEARER_TOKEN = new RegExp(`${spelledWithEscapes('Bearer')}${BEARER_SEPARATOR}[A-Za-z0-9._~+/=%-]+`, 'gi');
 const HOOK_TOKEN = new RegExp(`${SLASH}${spelledWithEscapes('hooks')}${SLASH}[^/\\s"'\`&]+`, 'gi');
 const BASIC_CREDENTIAL = /\bBasic\s+(?=[A-Za-z0-9+/]*[0-9+/=])[A-Za-z0-9+/]{8,}={0,2}/g;
+// Behind an Authorization header the word Basic is certain to introduce a credential, whatever characters it holds.
+const AUTHORIZED_BASIC_CREDENTIAL = /\b((?:Proxy-)?Authorization\s*[:=]\s*)Basic\s+[^\s"'`&;]+/gi;
+// A head cut inside a credential leaves a prefix too short or too plain for the rules above to recognise.
+const CREDENTIAL_CUT_BY_THE_HEAD = /\b(Basic\s+)[A-Za-z0-9+/=]+$/;
 // The key class excludes every character that can start a parameter: a run of them stays linear.
 const QUERY_PARAMETER = /(^|[?&;\s])([^=&?;\s"'`#]*)=([^&;\s"'`]*)/g;
 
@@ -186,6 +190,7 @@ const maskingSecretParameters = (parameter: string, prefix: string, key: string,
 function maskedSecrets(text: string): string {
   return text
     .replace(BEARER_TOKEN, `Bearer ${MASK}`)
+    .replace(AUTHORIZED_BASIC_CREDENTIAL, `$1Basic ${MASK}`)
     .replace(BASIC_CREDENTIAL, `Basic ${MASK}`)
     .replace(QUERY_PARAMETER, maskingSecretParameters)
     .replace(HOOK_TOKEN, `/hooks/${MASK}`);
@@ -224,8 +229,10 @@ function redactedAndShortened(text: string, homes: RegExp[]): string {
 const RAW_HEAD_FACTOR = 4;
 function headBeforeRedaction(text: string, maxChars: number): string {
   const rawLimit = maxChars * RAW_HEAD_FACTOR;
-  return text.length > rawLimit ? text.slice(0, rawLimit) + ELLIPSIS : text;
+  return text.length > rawLimit ? maskingCutCredential(text.slice(0, rawLimit)) + ELLIPSIS : text;
 }
+
+const maskingCutCredential = (head: string): string => head.replace(CREDENTIAL_CUT_BY_THE_HEAD, `$1${MASK}`);
 
 // Control, format (bidi, zero-width, BOM) and line/paragraph separator characters: the desktop renders what is left.
 const UNRENDERABLE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
@@ -326,12 +333,22 @@ function cappedDetail(detail: unknown, homes: RegExp[]): unknown {
   }
 }
 
+const MAX_LOGGED_ERROR_CHARS = 4096;
+
+/** The error itself when its text fits the log cap; otherwise the masked head of that text and the count of characters left out. */
+function loggableError(error: unknown): unknown {
+  const text = error instanceof Error ? (error.stack ?? `${error.name}: ${error.message}`) : String(error);
+  if (text.length <= MAX_LOGGED_ERROR_CHARS) return error;
+  const omittedChars = text.length - MAX_LOGGED_ERROR_CHARS;
+  return `${maskedSecrets(maskingCutCredential(text.slice(0, MAX_LOGGED_ERROR_CHARS)))}${ELLIPSIS}[truncated ${omittedChars} chars]`;
+}
+
 function logInternalError(error: unknown, { id, scope }: { id: string; scope: ErrorScope }): void {
   const site = scope.where ?? 'unexpected error';
   const sessionSuffix = scope.sessionId ? ` session=${scope.sessionId}` : '';
   const line = `${site} [${id}]${sessionSuffix}`;
   try {
-    log('error', line, error);
+    log('error', line, loggableError(error));
   } catch {
     tryLogging(`${line} (error cannot be printed)`);
   }

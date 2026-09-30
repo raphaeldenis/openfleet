@@ -446,6 +446,47 @@ describe('describeError: credential shapes beyond Bearer and hooks', () => {
   it('leaves the word Basic alone when no credential follows', () => {
     expect(describeError(carrying('Basic setup failed')).message).toBe('Basic setup failed');
   });
+
+  it.each([
+    'Basic authentication failed',
+    'the Basic plan costs more',
+    'the Basic plan costs more than Basic support',
+  ])('leaves the prose sentence "%s" untouched', (sentence) => {
+    expect(describeError(carrying(sentence)).message).toBe(sentence);
+  });
+
+  it.each([
+    ['an Authorization header', 'Authorization: Basic dXNlcjpwYXNz'],
+    ['a Proxy-Authorization header', 'Proxy-Authorization: Basic dXNlcjpwYXNz'],
+    ['a lowercase authorization header with no space after the colon', 'authorization:Basic dXNlcjpwYXNz'],
+  ])('masks a Basic credential made of letters only in %s', (_label, text) => {
+    const envelope = describeError(carrying(`failed with ${text} today`));
+
+    expect([envelope.message, envelope.hint, envelope.detail].map(String).filter((field) => field.includes('dXNlcjpwYXNz'))).toEqual([]);
+    expect(envelope.message).toContain('failed with');
+    expect(envelope.message).toContain('today');
+  });
+
+  describe('when the head cut falls inside a Basic credential', () => {
+    const CREDENTIAL = 'dXNlcjpwYXNzd29yZA==';
+    const MESSAGE_RAW_HEAD_CHARS = 300 * 4;
+    const DETAIL_RAW_HEAD_CHARS = 2048 * 4;
+    const CONTROL = '\u0001';
+    const survivingCharsOfTheCredential = [4, 7, 12, 19];
+    const cutInsideCredential = (rawHeadChars: number, surviving: number) => `${CONTROL.repeat(rawHeadChars - 'Basic '.length - surviving)}Basic ${CREDENTIAL}`;
+
+    it.each(survivingCharsOfTheCredential)('keeps %i characters of a message credential from surviving', (surviving) => {
+      const { message } = describeError(new OpenFleetError('row_cap', cutInsideCredential(MESSAGE_RAW_HEAD_CHARS, surviving)));
+
+      expect(message).not.toContain(CREDENTIAL.slice(0, 4));
+    });
+
+    it.each(survivingCharsOfTheCredential)('keeps %i characters of a detail credential from surviving', (surviving) => {
+      const { detail } = describeError(new OpenFleetError('row_cap', 'full.', { detail: cutInsideCredential(DETAIL_RAW_HEAD_CHARS, surviving) }));
+
+      expect(String(detail)).not.toContain(CREDENTIAL.slice(0, 4));
+    });
+  });
 });
 
 describe('describeError: large inputs stay fast', () => {
@@ -694,5 +735,35 @@ describe('describeError: an internal-kind OpenFleetError', () => {
     expect(errorLog).toHaveBeenCalledTimes(1);
     expect(String(errorLog.mock.calls[0]![0])).toContain(envelope.id);
     expect(errorLog.mock.calls[0]![1]).toBe(error);
+  });
+
+  describe('when the raw message is far larger than the log cap', () => {
+    const MEGABYTE = 1024 * 1024;
+    const LOG_CAP_CHARS = 4096;
+
+    it('logs a few KiB of it with a truncation suffix that counts the omitted characters', () => {
+      describeError(new Error(`sqlite exploded ${'x'.repeat(MEGABYTE)}`));
+
+      const loggedDetail = String(errorLog.mock.calls[0]![1]);
+      expect(loggedDetail.length).toBeLessThan(LOG_CAP_CHARS + 200);
+      expect(loggedDetail).toMatch(/…\[truncated \d{6,} chars\]$/);
+      expect(loggedDetail).toContain('sqlite exploded');
+    });
+
+    it('masks a secret in the surviving head before logging it', () => {
+      describeError(new Error(`call failed with Bearer abcDEF123 ${'x'.repeat(MEGABYTE)}`));
+
+      const loggedDetail = String(errorLog.mock.calls[0]![1]);
+      expect(loggedDetail).not.toContain('abcDEF123');
+      expect(loggedDetail).toContain('Bearer ***');
+    });
+
+    it('logs a text of no more than the cap as it is', () => {
+      const error = new Error('short failure');
+
+      describeError(error);
+
+      expect(errorLog.mock.calls[0]![1]).toBe(error);
+    });
   });
 });
