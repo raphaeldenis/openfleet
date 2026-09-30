@@ -54,32 +54,42 @@ const CONTEXT_USAGE_FIELDS = ['input_tokens', 'cache_creation_input_tokens', 'ca
 // integer range would make the sessions table unreadable.
 const MAX_TRUSTED_CONTEXT_TOKENS = 10_000_000;
 
+type ContextReading = { kind: 'skip' } | { kind: 'no reading' } | { kind: 'tokens'; contextTokens: number };
+
+const SKIP_LINE: ContextReading = { kind: 'skip' };
+const NO_READING: ContextReading = { kind: 'no reading' };
+
 // The context size of the latest main-chain assistant line that carries a complete usage: the sum of the three
-// input-side fields. A sub-agent line, a line without a usable usage, a synthetic line totalling zero and a line
-// summing above MAX_TRUSTED_CONTEXT_TOKENS are skipped.
+// input-side fields. A sub-agent line, a line without a usable usage and a synthetic line totalling zero are
+// skipped. The scan ends without a reading at a compact boundary (the lines before it are the context that was
+// compacted away) and at a line summing above MAX_TRUSTED_CONTEXT_TOKENS (an older line must not stand for it).
 export function findLatestContextTokens(tail: string): number | undefined {
   const linesNewestFirst = tail.split('\n').reverse();
   for (const line of linesNewestFirst) {
-    const contextTokens = contextTokensOfLine(line);
-    if (contextTokens !== undefined) return contextTokens;
+    const reading = readingOfLine(line);
+    if (reading.kind === 'tokens') return reading.contextTokens;
+    if (reading.kind === 'no reading') return undefined;
   }
   return undefined;
 }
 
-function contextTokensOfLine(line: string): number | undefined {
+function readingOfLine(line: string): ContextReading {
   const entry = parseJsonObject(line);
-  if (!entry) return undefined;
+  if (!entry) return SKIP_LINE;
+  const isCompactBoundary = entry.type === 'system' && entry.subtype === 'compact_boundary';
+  if (isCompactBoundary) return NO_READING;
   const isMainChainAssistantLine = entry.type === 'assistant' && entry.isSidechain !== true;
-  if (!isMainChainAssistantLine) return undefined;
+  if (!isMainChainAssistantLine) return SKIP_LINE;
   const usage = isRecord(entry.message) ? entry.message.usage : undefined;
-  if (!isRecord(usage)) return undefined;
+  if (!isRecord(usage)) return SKIP_LINE;
   const fieldValues = CONTEXT_USAGE_FIELDS.map((field) => usage[field]);
   const isCompleteUsage = fieldValues.every((value) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0);
-  if (!isCompleteUsage) return undefined;
+  if (!isCompleteUsage) return SKIP_LINE;
   const contextTokens = (fieldValues as number[]).reduce((sum, value) => sum + value, 0);
   const isSyntheticLine = contextTokens === 0;
+  if (isSyntheticLine) return SKIP_LINE;
   const isBeyondAnyRealContextWindow = contextTokens > MAX_TRUSTED_CONTEXT_TOKENS;
-  return isSyntheticLine || isBeyondAnyRealContextWindow ? undefined : contextTokens;
+  return isBeyondAnyRealContextWindow ? NO_READING : { kind: 'tokens', contextTokens };
 }
 
 function resolutionOfLine(line: string, launchedAtMs: number): ResolvedModel | undefined {

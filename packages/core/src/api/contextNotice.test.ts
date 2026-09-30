@@ -82,7 +82,11 @@ const sessionOf = (id: string): Session => sessions.list().find((session) => ses
 const noticeOf = (id: string) => sessionOf(id).contextNoticeTokens;
 const updatesOf = (id: string) => events.filter((event) => event.type === 'session.updated' && event.session.id === id);
 const noticeUpdatesOf = (id: string) => updatesOf(id).filter((event) => event.type === 'session.updated' && event.session.contextNoticeTokens !== undefined);
-const typedBodies = () => harness.handles.flatMap((handle) => handle.written);
+const noticeOfLastUpdate = (id: string) => {
+  const lastUpdate = updatesOf(id).at(-1);
+  return lastUpdate?.type === 'session.updated' ? lastUpdate.session.contextNoticeTokens : 'no update';
+};
+const typedBodies =() => harness.handles.flatMap((handle) => handle.written);
 
 describe('user is told in the inbox data when a manager session is a good moment to compact', () => {
   it('raises a notice for a manager at 300,000 tokens and none at 299,999', async () => {
@@ -170,11 +174,13 @@ describe('user is told in the inbox data when a manager session is a good moment
     contextGrowsTo(manager, 450_000);
     await stop(manager);
 
+    const updatesBeforeClear = updatesOf(manager).length;
     contextGrowsTo(manager, 60_000);
     await stop(manager);
 
     expect(noticeOf(manager)).toBeUndefined();
-    expect(updatesOf(manager).at(-1)).toMatchObject({ session: { id: manager } });
+    expect(updatesOf(manager)).toHaveLength(updatesBeforeClear + 1);
+    expect(noticeOfLastUpdate(manager)).toBeUndefined();
   });
 
   it('notifies again when the context grows back past the first threshold after it left', async () => {
@@ -195,10 +201,12 @@ describe('user is told in the inbox data when a manager session is a good moment
     contextGrowsTo(manager, 450_000);
     await stop(manager);
 
+    const updatesBeforeClear = updatesOf(manager).length;
     await sessionStart(manager, source);
 
     expect(noticeOf(manager)).toBeUndefined();
-    expect(updatesOf(manager).at(-1)).toMatchObject({ session: { id: manager } });
+    expect(updatesOf(manager)).toHaveLength(updatesBeforeClear + 1);
+    expect(noticeOfLastUpdate(manager)).toBeUndefined();
   });
 
   it.each(['startup', 'resume'])('keeps the notice at the SessionStart of a %s', async (source) => {
@@ -530,26 +538,64 @@ describe('the notice stays right on a huge transcript and at the bounds of the s
     expect(() => sessions.list()).not.toThrow();
   });
 
-  it('measures the legitimate line just before a usage that adds up past the safe integer range', async () => {
+  it('takes no reading from a usage that adds up past the safe integer range and does not fall back to the line before it', async () => {
     const manager = await createManager();
     const hostileUsage = { input_tokens: Number.MAX_SAFE_INTEGER, cache_creation_input_tokens: Number.MAX_SAFE_INTEGER, cache_read_input_tokens: Number.MAX_SAFE_INTEGER };
     writeTranscript(manager, assistantLine({ contextTokens: 350_000 }), assistantLine({ usage: hostileUsage }));
 
     await stop(manager);
 
-    expect(noticeOf(manager)).toBe(300_000);
+    expect(noticeOf(manager)).toBeUndefined();
   });
 
-  it('does not trust a context reading above the 10,000,000 settings cap, a real window is far smaller, so it falls back to the previous line', async () => {
+  it('takes no reading from a context above the 10,000,000 settings cap and does not fall back to an older line, which could clear a notice the real context still deserves', async () => {
     const manager = await createManager();
-    writeTranscript(manager, assistantLine({ contextTokens: 350_000 }), assistantLine({ contextTokens: 10_000_001 }));
+    contextGrowsTo(manager, 450_000);
+    await stop(manager);
+    writeTranscript(manager, assistantLine({ contextTokens: 100_000 }), assistantLine({ contextTokens: 10_000_001 }));
 
     await stop(manager);
 
-    expect(noticeOf(manager)).toBe(300_000);
+    expect(noticeOf(manager)).toBe(400_000);
   });
 
-  it.todo('raises the notice again on a stale pre-compact line still in the transcript tail after a compact');
+  describe('after a /compact the lines written before the compact boundary are not the context any more', () => {
+    const compactBoundaryLine = `${JSON.stringify({ type: 'system', subtype: 'compact_boundary', isSidechain: false })}\n`;
+    const zeroUsage = { input_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 };
+
+    it('keeps the notice cleared when the first Stop after a compact runs before the answer is flushed', async () => {
+      const manager = await createManager();
+      contextGrowsTo(manager, 450_000);
+      await stop(manager);
+      await sessionStart(manager, 'compact');
+      appendFileSync(transcriptOf(manager), compactBoundaryLine);
+
+      await stop(manager);
+
+      expect(noticeOf(manager)).toBeUndefined();
+    });
+
+    it('keeps the notice cleared when the first turn after a compact ends on a synthetic zero-usage line', async () => {
+      const manager = await createManager();
+      contextGrowsTo(manager, 450_000);
+      await stop(manager);
+      await sessionStart(manager, 'compact');
+      appendFileSync(transcriptOf(manager), compactBoundaryLine + assistantLine({ usage: zeroUsage }));
+
+      await stop(manager);
+
+      expect(noticeOf(manager)).toBeUndefined();
+    });
+
+    it('measures a line written after the compact boundary', async () => {
+      const manager = await createManager();
+      writeTranscript(manager, assistantLine({ contextTokens: 450_000 }), compactBoundaryLine, assistantLine({ contextTokens: 350_000 }));
+
+      await stop(manager);
+
+      expect(noticeOf(manager)).toBe(300_000);
+    });
+  });
 
   it('emits one notice, not several, when concurrent Stops measure the same transcript', async () => {
     const manager = await createManager();
