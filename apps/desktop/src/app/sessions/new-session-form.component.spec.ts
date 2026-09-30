@@ -1681,7 +1681,7 @@ describe('NewSessionFormComponent', () => {
       await userEvent.tab();
 
       expect(screen.getByTestId('manager-pulse-seconds')).toHaveAccessibleName('Pulse cadence');
-      expect(screen.getByTestId('manager-pulse-seconds')).toHaveAccessibleDescription(/between 1 and 86,400 seconds — enter a whole number/);
+      expect(screen.getByTestId('manager-pulse-seconds')).toHaveAccessibleDescription(/Pulse must be at least 1 s/);
       expect(screen.getByTestId('manager-children-cap')).toHaveAccessibleName('Children cap');
       expect(screen.getByTestId('manager-children-cap')).toHaveAccessibleDescription(/between 1 and 64 — enter a whole number/);
     });

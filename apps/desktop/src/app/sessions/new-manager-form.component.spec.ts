@@ -6,7 +6,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { NewSessionFormComponent } from './new-session-form.component';
 import { FleetApiService } from '../core/fleet-api.service';
 
-const PULSE_RANGE_ERROR = '✕ Pulse cadence must be between 1 and 86,400 seconds — enter a whole number in that range';
+const PULSE_TOO_LOW_ERROR = '✕ Pulse must be at least 1 s';
+const PULSE_TOO_HIGH_ERROR = '✕ Pulse must be at most 86 400 s (24 h)';
+const PULSE_FRACTION_ERROR = '✕ Pulse cadence must be between 1 and 86,400 seconds — enter a whole number in that range';
 const CAP_RANGE_ERROR = '✕ Children cap must be between 1 and 64 — enter a whole number in that range';
 
 function fakeApi() {
@@ -122,19 +124,34 @@ describe('the New manager form: pulse cadence and children cap', () => {
     });
 
     it.each([
-      ['0', 'below the minimum'],
-      ['86401', 'above the maximum'],
-      ['1.5', 'not a whole number'],
-    ])('says what is wrong and what to do when the pulse is %s (%s)', async (typed) => {
+      ['0', 'below the minimum', PULSE_TOO_LOW_ERROR],
+      ['-5', 'negative', PULSE_TOO_LOW_ERROR],
+      ['86401', 'above the maximum', PULSE_TOO_HIGH_ERROR],
+      ['1.5', 'not a whole number', PULSE_FRACTION_ERROR],
+    ])('says what is wrong and what to do when the pulse is %s (%s)', async (typed, _why, expectedMessage) => {
       await renderManagerForm();
 
       await setNumber(pulseField(), typed);
 
       const alert = screen.getByTestId('manager-pulse-seconds-error');
       expect(alert).toHaveAttribute('role', 'alert');
-      expect(alert).toHaveTextContent(PULSE_RANGE_ERROR);
+      expect(alert).toHaveTextContent(expectedMessage);
       expect(pulseField()).toHaveAttribute('aria-invalid', 'true');
-      expect(pulseField()).toHaveAccessibleDescription(new RegExp(`${PULSE_RANGE_ERROR}`));
+      expect(pulseField()).toHaveAccessibleDescription(expect.stringContaining(expectedMessage));
+    });
+
+    it.each([
+      ['pulse', pulseField],
+      ['children cap', capField],
+    ])('treats text the browser cannot read as a number in the %s field as invalid, not as the default', async (_name, field) => {
+      await renderManagerForm();
+      Object.defineProperty(field(), 'validity', { value: { badInput: true }, configurable: true });
+
+      await userEvent.type(field(), '1e');
+
+      expect(field()).toHaveAttribute('aria-invalid', 'true');
+      expect(field()).toHaveAccessibleDescription(/must be/);
+      expect(submitButton()).toBeDisabled();
     });
 
     it('keeps Create disabled and sends nothing while the pulse is invalid, then enables it once corrected', async () => {

@@ -26,6 +26,14 @@ function boundedIntegerError(subject: string, value: number | null, bounds: { mi
   return `${subject} must be between ${formatWithThousands(bounds.min)} and ${formatWithThousands(bounds.max)}${unit} — enter a whole number in that range`;
 }
 
+function pulseSecondsRangeError(value: number): string {
+  const isBelowMinimum = !(value >= PULSE_SECONDS_BOUNDS.min);
+  if (isBelowMinimum) return 'Pulse must be at least 1 s';
+  const isAboveMaximum = value > PULSE_SECONDS_BOUNDS.max;
+  if (isAboveMaximum) return 'Pulse must be at most 86 400 s (24 h)';
+  return boundedIntegerError('Pulse cadence', value, PULSE_SECONDS_BOUNDS, ' seconds');
+}
+
 function utf8ByteLength(text: string): number {
   return new TextEncoder().encode(text).length;
 }
@@ -47,12 +55,12 @@ function utf8ByteLength(text: string): number {
         <div class="custom">
           <input
             #pulseSecondsInput id="manager-pulse-seconds" class="of-input pulse-input" data-testid="manager-pulse-seconds" name="pulseSeconds" type="number" [readonly]="isLocked()"
-            [ngModel]="pulseSeconds()" (ngModelChange)="pulseSeconds.set($event)"
+            [ngModel]="pulseSeconds()" (ngModelChange)="pulseSeconds.set($event)" (input)="onPulseTyped(pulseSecondsInput)"
             placeholder="Daemon default" [attr.min]="pulseSecondsBounds.min" [attr.max]="pulseSecondsBounds.max"
             [attr.aria-invalid]="pulseSecondsError() ? 'true' : null"
             [attr.aria-describedby]="pulseSecondsError() ? 'manager-pulse-seconds-bounds manager-pulse-seconds-error' : 'manager-pulse-seconds-bounds'"
           />
-          <span id="manager-pulse-seconds-bounds" class="hint">seconds · 1 – 86,400 · empty uses the daemon default</span>
+          <span id="manager-pulse-seconds-bounds" class="hint">seconds · 1 – 86,400</span>
         </div>
         @if (pulseSecondsError(); as error) {
           <span id="manager-pulse-seconds-error" role="alert" data-testid="manager-pulse-seconds-error" class="of-error">✕ {{ error }}</span>
@@ -73,7 +81,7 @@ function utf8ByteLength(text: string): number {
           <span id="manager-children-cap-bounds" class="hint">1 – 64</span>
         </div>
         @if (isChildrenCapAtMaximum() && !childrenCapError()) {
-          <span id="manager-children-cap-maximum" role="status" data-testid="manager-children-cap-maximum" class="maximum">! 64 is the daemon maximum</span>
+          <span id="manager-children-cap-maximum" role="status" data-testid="manager-children-cap-maximum" class="maximum"><span class="maximum-icon" aria-hidden="true">!</span> 64 is the daemon maximum</span>
         }
         @if (childrenCapError(); as error) {
           <span id="manager-children-cap-error" role="alert" data-testid="manager-children-cap-error" class="of-error">✕ {{ error }}</span>
@@ -101,14 +109,15 @@ function utf8ByteLength(text: string): number {
     .preset[aria-pressed='true'] { border-color: var(--accent); background: var(--accent-bg) }
     .preset[aria-disabled='true'] { cursor: not-allowed }
     .preset:focus-visible, .step:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
-    .custom, .stepper { display: flex; align-items: center; gap: .5rem }
-    .pulse-input { flex: none; width: 6rem; font-family: var(--mono); font-size: .75rem }
+    .custom, .stepper { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem }
+    .pulse-input { flex: none; width: 9rem; font-family: var(--mono); font-size: .75rem }
     .cap-input { flex: none; width: 4rem; text-align: center; font-family: var(--mono); appearance: textfield; -moz-appearance: textfield }
     .cap-input::-webkit-inner-spin-button, .cap-input::-webkit-outer-spin-button { appearance: none; margin: 0 }
     .step { flex: none; width: 2rem; height: 2rem; border: 1px solid var(--line); border-radius: .375rem; background: var(--panel); color: var(--fg); font: inherit; cursor: pointer }
     .step:disabled { color: var(--faint); cursor: not-allowed }
-    .hint { font-size: .6875rem; color: var(--mut) }
-    .maximum { font-size: .75rem; color: var(--state-waiting-permission) }
+    .hint { font-size: .6875rem; color: var(--mut); white-space: nowrap }
+    .maximum { font-size: .75rem; color: var(--fg) }
+    .maximum-icon { font-weight: 700; color: var(--state-waiting-permission) }
   `,
 })
 export class ManagerFieldsComponent implements OnInit {
@@ -124,10 +133,11 @@ export class ManagerFieldsComponent implements OnInit {
   private readonly pulseSecondsInput = viewChild<ElementRef<HTMLInputElement>>('pulseSecondsInput');
   private readonly childrenCapInput = viewChild<ElementRef<HTMLInputElement>>('childrenCapInput');
   private readonly missionInput = viewChild<ElementRef<HTMLTextAreaElement>>('missionInput');
+  private readonly isPulseTextUnreadable = signal(false);
   private readonly isPulseLeftToDaemonDefault = computed(() => this.pulseSeconds() === undefined || this.pulseSeconds() === null);
   protected readonly pulseSecondsError = computed(() => {
-    const pulseSeconds = this.pulseSeconds();
-    return this.isPulseLeftToDaemonDefault() ? '' : boundedIntegerError('Pulse cadence', pulseSeconds!, PULSE_SECONDS_BOUNDS, ' seconds');
+    if (this.isPulseTextUnreadable()) return pulseSecondsRangeError(NaN);
+    return this.isPulseLeftToDaemonDefault() ? '' : pulseSecondsRangeError(this.pulseSeconds()!);
   });
   protected readonly childrenCapError = computed(() => boundedIntegerError('Children cap', this.childrenCap(), CHILDREN_CAP_BOUNDS));
   protected readonly isChildrenCapAtMinimum = computed(() => this.childrenCap() <= CHILDREN_CAP_BOUNDS.min);
@@ -161,7 +171,14 @@ export class ManagerFieldsComponent implements OnInit {
 
   protected choosePreset(preset: PulsePreset): void {
     if (this.isLocked()) return;
+    this.isPulseTextUnreadable.set(false);
+    const pulseInput = this.pulseSecondsInput()?.nativeElement;
+    if (pulseInput) pulseInput.value = '';
     this.pulseSeconds.set(preset.seconds);
+  }
+
+  protected onPulseTyped(pulseInput: HTMLInputElement): void {
+    this.isPulseTextUnreadable.set(pulseInput.validity.badInput);
   }
 
   protected stepChildrenCap(direction: 1 | -1): void {
