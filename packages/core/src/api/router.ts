@@ -1,6 +1,4 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { shortId } from '../ids.js';
-import { log } from '../logger.js';
 
 export type Handler = (ctx: { req: IncomingMessage; res: ServerResponse; params: Record<string, string>; body: unknown }) => Promise<void> | void;
 interface Route { method: string; path: string; pattern: RegExp; keys: string[]; handler: Handler }
@@ -64,11 +62,6 @@ const HOOK_TOKEN_SEGMENT = /^\/hooks\/[^/]+$/;
 export function redactedRequestPath(req: IncomingMessage): string {
   const path = requestPath(req);
   return HOOK_TOKEN_SEGMENT.test(path) ? '/hooks/:token' : path;
-}
-
-export function logServerError(req: IncomingMessage, error: unknown): void {
-  const id = shortId();
-  log('error', `${req.method ?? 'GET'} ${redactedRequestPath(req)} → 500 [${id}]`, error, { id });
 }
 
 export const MAX_BODY_BYTES = 1024 * 1024;
