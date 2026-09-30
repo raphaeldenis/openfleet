@@ -2,6 +2,7 @@ import { realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { resolveHome } from './config.js';
 import { shortId } from './ids.js';
+import { MASK, maskedSecrets, maskingCutCredential, SECRET_KEY } from './redact.js';
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 export interface LogFields { id?: string; sessionId?: string; code?: string; [key: string]: unknown }
@@ -9,23 +10,20 @@ export interface LogFields { id?: string; sessionId?: string; code?: string; [ke
 const CONSOLE_METHOD_BY_LEVEL: Record<LogLevel, 'log' | 'warn' | 'error'> = { debug: 'log', info: 'log', warn: 'warn', error: 'error' };
 
 const RING_CAPACITY = 2000;
-const MAX_LINE_CHARS = 16 * 1024;
-const MAX_STRING_CHARS = 8 * 1024;
+const MAX_LINE_CHARS = 8 * 1024;
+// Above describeError's 4 KiB logged error plus its truncation suffix, and below the line cap so one whole string still fits a line.
+const MAX_STRING_CHARS = 5 * 1024;
 const MAX_KEY_CHARS = 128;
 const MAX_CHILDREN = 50;
 const MAX_DEPTH = 5;
 const MAX_NODES = 256;
 const MAX_ROOT_SPELLINGS = 4;
-const MASKED = '***';
 const RESERVED_FIELD_KEYS = new Set(['ts', 'level', 'msg', 'id', 'sessionId', 'code', 'err']);
 
-// Every pattern below is linear: each character is consumed by exactly one alternative, and strings are
-// cut to MAX_STRING_CHARS before any of them runs.
-const CONTROL_AND_BIDI_EXCEPT_NEWLINE = /[\u0000-\u0009\u000b-\u001f\u007f-\u009f‎‏‪-‮⁦-⁩]/g;
-const CONTROL_AND_BIDI = /[\u0000-\u001f\u007f-\u009f‎‏‪-‮⁦-⁩]/g;
-const BEARER_TOKEN = /bearer(?:%20|[\s:])+[^\s"',;]*/gi;
-const HOOK_TOKEN = /(?:\/|%2f|%252f)hooks(?:\/|%2f|%252f)(?!:token(?![\w-]))(?:[^/\s%]|%(?!2f|252f))*/gi;
-const SENSITIVE_KEY = /token|secret|authorization|password/i;
+// Control, format (bidi, zero-width, BOM) and line/paragraph separator characters: a line splitter or a terminal honours them.
+// The masking rules live in redact.ts, shared with describeError; strings are cut to MAX_STRING_CHARS before any of them runs.
+const UNRENDERABLE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
+const UNRENDERABLE_EXCEPT_NEWLINE = /(?!\n)[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
 const PATH_CHARACTER = /[\w.-]/;
 
 const ringBuffer: string[] = [];
@@ -76,11 +74,10 @@ function shortenPaths(text: string): string {
 }
 
 function redactString(value: string, { keepNewlines = false } = {}): string {
-  const capped = value.length > MAX_STRING_CHARS ? `${value.slice(0, MAX_STRING_CHARS)}…` : value;
-  const printable = capped.replace(keepNewlines ? CONTROL_AND_BIDI_EXCEPT_NEWLINE : CONTROL_AND_BIDI, '');
-  const withoutBearer = printable.replace(BEARER_TOKEN, `Bearer ${MASKED}`);
-  const withoutHookToken = withoutBearer.replace(HOOK_TOKEN, `/hooks/${MASKED}`);
-  return shortenPaths(withoutHookToken);
+  const isTooLong = value.length > MAX_STRING_CHARS;
+  const capped = isTooLong ? `${maskingCutCredential(value.slice(0, MAX_STRING_CHARS))}…` : value;
+  const printable = capped.replace(keepNewlines ? UNRENDERABLE_EXCEPT_NEWLINE : UNRENDERABLE, '');
+  return shortenPaths(maskedSecrets(printable));
 }
 
 const attempt = <T>(read: () => T): T | undefined => {
@@ -108,15 +105,27 @@ function sanitizeEntries(entries: Iterable<[string, () => unknown]>, walk: Walk,
   const sanitized = Object.create(null) as Record<string, unknown>;
   for (const [rawKey, read] of entries) {
     const key = redactString(rawKey.slice(0, MAX_KEY_CHARS));
-    const isSensitive = SENSITIVE_KEY.test(key);
-    const value = isSensitive ? MASKED : sanitize(readOrPlaceholder(read), walk, depth + 1);
+    const isSensitive = SECRET_KEY.test(key);
+    const value = isSensitive ? MASK : sanitize(readOrPlaceholder(read), walk, depth + 1);
     if (value !== undefined) sanitized[key] = value;
   }
   return sanitized;
 }
 
+/** Bytes and collections are summarised by kind and size: their content can spell a secret and is never dumped. */
+function summaryOfBytesOrCollection(value: object): string | undefined {
+  if (Buffer.isBuffer(value)) return `[Buffer ${value.byteLength} bytes]`;
+  if (ArrayBuffer.isView(value)) return `[${Object.prototype.toString.call(value).slice(8, -1)} ${value.byteLength} bytes]`;
+  if (value instanceof ArrayBuffer) return `[ArrayBuffer ${value.byteLength} bytes]`;
+  if (value instanceof Map) return `[Map ${value.size} entries]`;
+  if (value instanceof Set) return `[Set ${value.size} entries]`;
+  return undefined;
+}
+
 function sanitizeObject(value: object, walk: Walk, depth: number): unknown {
   if (walk.ancestors.has(value)) return '[circular]';
+  const summary = summaryOfBytesOrCollection(value);
+  if (summary !== undefined) return summary;
   walk.ancestors.add(value);
   try {
     if (Array.isArray(value)) {

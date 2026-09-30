@@ -6,7 +6,7 @@ import { createTempDirTracker } from './tempDirTracker.js';
 
 const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const EIGHT_HEX = /^[0-9a-f]{8}$/;
-const MAX_LINE_CHARS = 16 * 1024;
+const MAX_LINE_CHARS = 8 * 1024;
 const RING_CAPACITY = 2000;
 
 type ParsedLine = Record<string, any>;
@@ -359,7 +359,7 @@ describe('log — hostile input (spec §12 hostile 1 and 3)', () => {
   it('marks a capped line with the number of dropped characters', async () => {
     const { log } = await loadLogger();
 
-    log('info', 'many fields', undefined, Object.fromEntries(Array.from({ length: 40 }, (_, index) => [`field${index}`, 'v'.repeat(1000)])));
+    log('info', 'many fields', undefined, Object.fromEntries(Array.from({ length: 20 }, (_, index) => [`field${index}`, 'v'.repeat(1000)])));
 
     expect(onlyWrittenLine()).toMatch(/\.\.\.\[truncated \d+ chars\]$/);
   });
@@ -551,17 +551,17 @@ describe('log — gaps the first suite left open', () => {
     expect(onlyWrittenLine()).not.toContain('deep');
   });
 
-  it('cuts one string value to 8 KiB', async () => {
+  it('cuts one string value to 5 KiB, so a line holding one whole string is still valid JSON under the 8 KiB line cap', async () => {
     const { log } = await loadLogger();
 
     log('info', 'x'.repeat(100_000));
 
-    expect(parsedLine().msg).toBe(`${'x'.repeat(8 * 1024)}…`);
+    expect(parsedLine().msg).toBe(`${'x'.repeat(5 * 1024)}…`);
   });
 
-  it('leaves a line of exactly 16 KiB whole and marks a line one character longer', async () => {
+  it('leaves a line of exactly 8 KiB whole and marks a line one character longer', async () => {
     const { log } = await loadLogger();
-    const fullPad = 'x'.repeat(8000);
+    const fullPad = 'x'.repeat(4000);
     log('info', 'measure', undefined, { first: fullPad, second: fullPad, rest: '' });
     const emptyRestLength = onlyWrittenLine().length;
     logSpy.mockClear();
@@ -599,23 +599,127 @@ describe('log — gaps the first suite left open', () => {
     expect(onlyWrittenLine()).not.toContain('\u001b');
   });
 
-  it.fails('strips the Unicode line separators and zero-width characters that line splitters and terminals honour', async () => {
-    const { log } = await loadLogger();
-    const invisible = [0x2028, 0x2029, 0x200b, 0x200c, 0x200d, 0x2060, 0xfeff, 0x061c].map((codePoint) => String.fromCharCode(codePoint));
+  describe.each([{ printer: 'NDJSON', isTty: false }, { printer: 'TTY', isTty: true }])('the $printer printer strips invisible characters', ({ isTty }) => {
+    const INVISIBLE_CODE_POINTS = [
+      0x2028, 0x2029, 0x200b, 0x200c, 0x200d, 0x2060, 0xfeff, 0x061c,
+      0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2066, 0x2067, 0x2068, 0x2069,
+    ];
+    const invisible = INVISIBLE_CODE_POINTS.map((codePoint) => String.fromCharCode(codePoint));
+    const withInvisible = (word: string) => `${invisible.join('')}${word}${invisible.join('')}`;
+    const LINE_BREAKS = /\n|\r|\p{Zl}|\p{Zp}/u;
 
-    log('info', ['a', ...invisible, 'b'].join(''));
+    it('strips them from the message, from string values and from keys, so one call is one line', async () => {
+      setStdoutIsTty(isTty);
+      const { log } = await loadLogger();
 
-    expect(parsedLine().msg).toBe('ab');
-    expect(invisible.some((character) => onlyWrittenLine().includes(character))).toBe(false);
+      log('info', `a${withInvisible('msg')}b`, { [withInvisible('key')]: withInvisible('value') }, { field: withInvisible('field') });
+
+      const line = onlyWrittenLine();
+      expect(invisible.some((character) => line.includes(character))).toBe(false);
+      expect(line.split(LINE_BREAKS)).toHaveLength(1);
+      expect(line).toContain('amsgb');
+      expect(line).toContain('key');
+      expect(line).toContain('value');
+    });
+
+    it('strips them from an error message and stack, which the logger keeps multi-line', async () => {
+      setStdoutIsTty(isTty);
+      const { log, recentLogLines } = await loadLogger();
+      const error = new Error(withInvisible('boom'));
+      error.stack = `Error: ${withInvisible('boom')}\n    at ${withInvisible('site')}`;
+
+      log('error', 'failed', error);
+
+      expect(invisible.some((character) => onlyWrittenLine().includes(character))).toBe(false);
+      expect(invisible.some((character) => recentLogLines()[0]!.includes(character))).toBe(false);
+    });
   });
 
-  it.fails('does not dump the bytes of a Buffer as an index-to-byte object, which spells a secret in decimal', async () => {
+  it('strips the invisible characters from the ring buffer line and keeps it parseable as one line', async () => {
+    const { log, recentLogLines } = await loadLogger();
+
+    log('info', `a${String.fromCharCode(0x2028)}b${String.fromCharCode(0x2029)}c`);
+
+    const [stored] = recentLogLines();
+    expect(stored!.split(/\n|\r|\p{Zl}|\p{Zp}/u)).toHaveLength(1);
+    expect((JSON.parse(stored!) as ParsedLine).msg).toBe('abc');
+  });
+
+  it.each([
+    ['a Buffer', () => Buffer.from('Bearer bufSECRET'), '[Buffer 16 bytes]'],
+    ['a Uint8Array', () => new Uint8Array([66, 101, 97]), '[Uint8Array 3 bytes]'],
+    ['a Float64Array', () => new Float64Array(2), '[Float64Array 16 bytes]'],
+    ['an ArrayBuffer', () => new ArrayBuffer(8), '[ArrayBuffer 8 bytes]'],
+    ['a DataView', () => new DataView(new ArrayBuffer(4)), '[DataView 4 bytes]'],
+    ['a Map', () => new Map<string, unknown>([['Bearer mapSECRET', 'mapSECRET'], ['b', 2]]), '[Map 2 entries]'],
+    ['a Set', () => new Set(['setSECRET']), '[Set 1 entries]'],
+  ])('summarises %s by kind and size and never dumps its content', async (_name, make, summary) => {
     const { log } = await loadLogger();
 
-    log('error', 'upstream body', Buffer.from('Bearer bufSECRET'), { body: Buffer.from('Bearer bufSECRET') });
+    log('error', 'binary and collections', make(), { field: make() });
 
-    expect(onlyWrittenLine()).not.toContain('"1":101');
+    const line = parsedLine();
+    expect(line.detail).toBe(summary);
+    expect(line.field).toBe(summary);
+    expect(onlyWrittenLine()).not.toMatch(/SECRET|"0":|"1":/);
   });
+
+  it('does not lose a Buffer nested in an object or an array', async () => {
+    const { log } = await loadLogger();
+
+    log('info', 'nested', { body: Buffer.from('abc'), chunks: [new Uint8Array(2)] });
+
+    expect(parsedLine().detail).toEqual({ body: '[Buffer 3 bytes]', chunks: ['[Uint8Array 2 bytes]'] });
+  });
+
+  it.each([
+    ['a token query parameter', 'GET /ws?token=qSECRET&x=1'],
+    ['a ticket query parameter', 'GET /ws?ticket=qSECRET'],
+    ['an access_token query parameter', 'GET /cb?access_token=qSECRET&state=1'],
+    ['a percent-encoded key', 'GET /cb?access%5Ftoken=qSECRET'],
+    ['a secret hidden behind escapes', 'GET /login?next=%2Fx%3Ftoken%3DqSECRET'],
+    ['a Basic credential behind Authorization', 'Authorization: Basic qSECRET:pw!'],
+    ['a Basic credential behind Proxy-Authorization', 'Proxy-Authorization: Basic qSECRET:pw!'],
+    ['a bare Basic credential', 'header Basic cXNlY3JldDpxU0VDUkVU=='],
+    ['URL credentials', 'clone https://qSECRET:pw@example.com/repo.git failed'],
+  ])('masks %s in the message, in an error message and in a string field', async (_name, text) => {
+    const { log } = await loadLogger();
+
+    log('error', text, new Error(text), { note: text });
+
+    expect(onlyWrittenLine()).not.toMatch(/qSECRET|cXNlY3JldDpxU0VDUkVU|pw!/);
+  });
+
+  it('keeps the text around a masked secret, in the same words the error envelope keeps', async () => {
+    const { log } = await loadLogger();
+
+    log('warn', 'GET /ws?ticket=qSECRET&x=1 refused (Bearer tokSECRET) in [Bearer tokSECRET] and {Bearer tokSECRET}');
+
+    expect(parsedLine().msg).toBe('GET /ws?ticket=***&x=1 refused (Bearer ***) in [Bearer ***] and {Bearer ***}');
+  });
+
+  it.each(['token', 'accessToken', 'access_token', 'hook_token', 'adminToken', 'ticket', 'wsTicket', 'secret', 'clientSecret', 'password', 'db_password', 'authorization', 'Authorization', 'cookie', 'Set-Cookie', 'api_key', 'apiKey', 'x-api-key'])(
+    'masks the value under the key %s',
+    async (key) => {
+      const { log } = await loadLogger();
+
+      log('info', 'keys', { [key]: 'keyVALUE' }, { [key]: 'keyVALUE' });
+
+      expect(onlyWrittenLine()).not.toContain('keyVALUE');
+    },
+  );
+
+  it.each(['tokens', 'contextTokens', 'inputTokens', 'outputTokens', 'maxTokens', 'totalTokens'])(
+    'keeps the value under the usage counter %s',
+    async (key) => {
+      const { log } = await loadLogger();
+
+      log('info', 'usage', { [key]: 1234 }, { [key]: 1234 });
+
+      expect(parsedLine().detail[key]).toBe(1234);
+      expect(parsedLine()[key]).toBe(1234);
+    },
+  );
 });
 
 describe('log — linear-time on adversarial input', () => {
