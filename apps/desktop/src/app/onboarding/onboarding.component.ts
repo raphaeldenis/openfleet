@@ -1,8 +1,9 @@
 import { Location } from '@angular/common';
-import { ChangeDetectionStrategy, Component, computed, effect, inject, signal, untracked, viewChild } from '@angular/core';
+import { ChangeDetectionStrategy, Component, DestroyRef, ElementRef, computed, effect, inject, signal, untracked, viewChild } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
 import { environment } from '../../environments/environment';
+import { DaemonStatusService } from '../core/daemon-status.service';
 import { FleetApiService } from '../core/fleet-api.service';
 import { VersionsService } from '../core/versions.service';
 import { EmbeddedSessionSeed, NewSessionFormComponent } from '../sessions/new-session-form.component';
@@ -11,7 +12,16 @@ type StepId = 'daemon' | 'providers' | 'project' | 'playbooks' | 'team' | 'first
 
 const HEALTH_POLL_INTERVAL_MS = 2000;
 const APP_HOME_URL = '/';
+const DAEMON_READY_BEAT_MS = 1200;
 const START_DAEMON_COMMAND = 'pnpm dev:core';
+const STARTING_COPY = 'Starting the daemon…';
+const SLOW_START_COPY = 'First launch can take up to a minute — macOS checks the app once.';
+const FAILED_TITLE = 'The daemon could not start';
+const FAILED_WITH_LAST_LINE_COPY = 'The daemon did not start — its last line:';
+const FAILED_WITHOUT_LAST_LINE_COPY = 'The daemon did not start and printed nothing — check again in a moment.';
+const UNKNOWN_TITLE = 'The daemon status is unknown';
+const UNKNOWN_STATE_COPY = 'The daemon reports an unknown state — check the last line, then try again';
+const STILL_NOT_RUNNING_COPY = 'Still not running — check the last line above, then try again';
 const COPY_FAILURE_MESSAGE = 'Couldn’t copy — select the command and copy it by hand';
 const DEFERRED_STEP_LABEL = 'Available in a later phase';
 const FIRST_SESSION_NAME = 'First session';
@@ -36,6 +46,7 @@ function requestedUrlFrom(navigationState: unknown): string {
   selector: 'of-onboarding',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [FormsModule, RouterLink, NewSessionFormComponent],
+  providers: [DaemonStatusService],
   viewProviders: [EmbeddedSessionSeed],
   template: `
     <div class="page" data-testid="onboarding">
@@ -62,16 +73,49 @@ function requestedUrlFrom(navigationState: unknown): string {
                 <h1>Start the OpenFleet daemon</h1>
                 <p>The daemon runs your agents in the background so they keep working when this window is closed.</p>
               </header>
-              <div class="card">
-                <div class="card-head"><span class="dot"></span><span>No daemon on {{ daemonAddress }}</span></div>
-                <span class="hint">Start the daemon: <code>{{ startDaemonCommand }}</code> in the OpenFleet folder. The first start creates <code>~/.openfleet/admin.token</code>; the app reads it by itself.</span>
-                <div class="command-row">
-                  <div class="terminal">$ {{ startDaemonCommand }}</div>
-                  <button type="button" class="of-btn of-btn--secondary" (click)="copyCommand()">{{ hasCopiedCommand() ? 'Copied' : 'Copy command' }}</button>
+              @if (showsFailureCard()) {
+                <div class="card" data-testid="daemon-failed">
+                  <div class="card-head"><span class="failure-mark" aria-hidden="true">✕</span><h2 #failureHeading tabindex="-1">{{ failedTitle() }}</h2></div>
+                  <span class="hint-strong">{{ failedCopy() }}</span>
+                  @if (lastLine(); as lastLine) {
+                    <pre class="terminal last-line" tabindex="0" data-testid="daemon-last-line">{{ lastLine }}</pre>
+                  }
+                  @if (pathHint(); as pathHint) {
+                    <span class="hint" data-testid="daemon-path-hint">claude may not be on the daemon PATH — the login shell’s PATH could not be read. @if (pathHint.pathTried) {PATH tried: <code>{{ pathHint.pathTried }}</code>}</span>
+                  }
+                  <div class="command-row"><button type="button" class="of-btn of-btn--primary" (click)="checkDaemonAgain()">Check again</button></div>
+                  <span class="hint" role="status" data-testid="daemon-check-result">{{ checkResult() }}</span>
                 </div>
-                <span class="fine-print" [class.visually-hidden]="!copyFailureMessage()" role="status">{{ copyFailureMessage() }}</span>
-                <span class="fine-print">Checking again every 2 s…</span>
-              </div>
+              } @else if (showsProgress()) {
+                <div class="card" data-testid="daemon-progress">
+                  <div class="card-head" role="status">
+                    @if (isStarting()) {
+                      <span class="spinner" aria-hidden="true"></span>
+                    } @else {
+                      <span class="ready-mark" aria-hidden="true">✓</span>
+                    }
+                    <span>{{ progressTitle() }}</span>
+                    @if (isSlow()) {
+                      <span class="hint" data-testid="daemon-slow-copy">{{ slowStartCopy }}</span>
+                    }
+                  </div>
+                  @if (isDaemonUp()) {
+                    <span class="hint">Continuing in a moment…</span>
+                  }
+                </div>
+              }
+              @if (showsManualCard()) {
+                <div class="card" data-testid="daemon-manual">
+                  <div class="card-head"><span class="dot"></span><span>No daemon on {{ daemonAddress }}</span></div>
+                  <span class="hint">Start the daemon: <code>{{ startDaemonCommand }}</code> in the OpenFleet folder. The first start creates <code>~/.openfleet/admin.token</code>; the app reads it by itself.</span>
+                  <div class="command-row">
+                    <div class="terminal">$ {{ startDaemonCommand }}</div>
+                    <button type="button" class="of-btn of-btn--secondary" (click)="copyCommand()">{{ hasCopiedCommand() ? 'Copied' : 'Copy command' }}</button>
+                  </div>
+                  <span class="fine-print" [class.visually-hidden]="!copyFailureMessage()" role="status">{{ copyFailureMessage() }}</span>
+                  <span class="fine-print">Checking again every 2 s…</span>
+                </div>
+              }
             </section>
           }
           @case ('project') {
@@ -134,10 +178,10 @@ function requestedUrlFrom(navigationState: unknown): string {
     h1 { margin: 0; font-size: 1.375rem; font-weight: 600; letter-spacing: -.015em }
     header p { margin: 0; color: var(--mut); font-size: .875rem }
     .card { display: flex; flex-direction: column; gap: .625rem; padding: 1rem; border: 1px solid var(--line); border-radius: .625rem; background: var(--panel) }
-    .card-head { display: flex; align-items: center; gap: .5rem; font-weight: 500 }
+    .card-head { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; font-weight: 500 }
     .card-head .dot { width: .5rem; height: .5rem; border-radius: 50%; background: var(--state-error) }
     .hint { font-size: .75rem; color: var(--mut) }
-    code { padding: 0 .25rem; border-radius: .25rem; background: var(--sunk); font-family: var(--mono) }
+    code { padding: 0 .25rem; border-radius: .25rem; background: var(--sunk); font-family: var(--mono); overflow-wrap: anywhere }
     .command-row { display: flex; align-items: center; gap: .5rem }
     .terminal { flex: 1; padding: .5rem .75rem; border-radius: .375rem; background: var(--term-bg); color: var(--term-fg); font-family: var(--mono); font-size: .75rem }
     .command-row .of-btn { height: 2rem; padding: 0 .75rem; white-space: nowrap }
@@ -151,6 +195,16 @@ function requestedUrlFrom(navigationState: unknown): string {
     .footer .of-btn, .back { height: 2rem; padding: 0 1rem }
     .back { margin-right: auto }
     .mono { font-family: var(--mono) }
+    h2 { margin: 0; font-size: .875rem; font-weight: 500 }
+    h2:focus-visible { outline: 2px solid var(--accent); outline-offset: .125rem }
+    .failure-mark { color: var(--state-error); font-weight: 600 }
+    .ready-mark { color: var(--fg); font-weight: 600 }
+    .hint-strong { font-size: .75rem; color: var(--fg) }
+    .last-line { margin: 0; max-height: 7.5rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text }
+    .last-line:focus-visible { outline: 2px solid var(--accent); outline-offset: .125rem }
+    .spinner { flex: none; width: .75rem; height: .75rem; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: of-daemon-spin 1s linear infinite }
+    @keyframes of-daemon-spin { to { transform: rotate(360deg) } }
+    @media (prefers-reduced-motion: reduce) { .spinner { animation: none } }
   `,
 })
 export class OnboardingComponent {
@@ -185,9 +239,60 @@ export class OnboardingComponent {
     });
   });
 
+  private readonly daemon = inject(DaemonStatusService);
+  private readonly failureHeading = viewChild<ElementRef<HTMLElement>>('failureHeading');
+  private hasStartedLeavingDaemonStep = false;
+  private isDestroyed = false;
+
+  protected readonly slowStartCopy = SLOW_START_COPY;
+  protected readonly checkResult = signal('');
+  private readonly daemonState = computed(() => this.daemon.status().state);
+  protected readonly isStarting = computed(() => this.daemonState() === 'starting' || this.daemonState() === 'slow');
+  protected readonly isSlow = computed(() => this.daemonState() === 'slow');
+  protected readonly isDaemonUp = computed(() => this.daemonState() === 'ready' || this.daemonState() === 'reused');
+  protected readonly isFailed = computed(() => this.daemonState() === 'failed');
+  private readonly isUnknown = computed(() => this.daemonState() === 'unknown');
+  protected readonly showsFailureCard = computed(() => this.isFailed() || this.isUnknown());
+  protected readonly failedTitle = computed(() => (this.isUnknown() ? UNKNOWN_TITLE : FAILED_TITLE));
+  protected readonly showsProgress = computed(() => this.daemon.isUnderTauri && (this.isStarting() || this.isDaemonUp()));
+  protected readonly showsManualCard = computed(() => !this.daemon.isUnderTauri || this.showsFailureCard() || this.daemonState() === 'unavailable');
+  protected readonly progressTitle = computed(() => {
+    if (this.isStarting()) return STARTING_COPY;
+    const daemonVersion = this.observedStatus()?.daemonVersion;
+    return daemonVersion ? `Daemon ready · core ${daemonVersion}` : 'Daemon ready';
+  });
+  protected readonly lastLine = computed(() => this.observedStatus()?.lastLine);
+  protected readonly failedCopy = computed(() => {
+    if (this.isUnknown()) return UNKNOWN_STATE_COPY;
+    return this.lastLine() ? FAILED_WITH_LAST_LINE_COPY : FAILED_WITHOUT_LAST_LINE_COPY;
+  });
+  // The PATH hint appears only when the failure itself names claude; a fallback PATH alone proves nothing.
+  protected readonly pathHint = computed(() => {
+    const status = this.observedStatus();
+    const isFallbackPath = status?.pathSource === 'fallback';
+    const failureNamesClaude = /claude/i.test(status?.lastLine ?? '');
+    return isFallbackPath && failureNamesClaude ? { pathTried: status?.pathTried } : null;
+  });
+  private readonly observedStatus = computed(() => {
+    const status = this.daemon.status();
+    return status.state === 'unavailable' ? null : status;
+  });
+
   constructor() {
     this.firstSessionSeed.name.set(FIRST_SESSION_NAME);
     this.firstSessionSeed.prompt.set(FIRST_SESSION_SEEDED_PROMPT);
+    let advanceTimer: ReturnType<typeof setTimeout> | undefined;
+    inject(DestroyRef).onDestroy(() => {
+      this.isDestroyed = true;
+      clearTimeout(advanceTimer);
+    });
+    effect(() => this.failureHeading()?.nativeElement.focus());
+    effect(() => {
+      const isWaitingOnDaemonStep = this.currentStepId() === 'daemon';
+      const isFirstTimeDaemonIsUp = this.isDaemonUp() && advanceTimer === undefined;
+      if (!isWaitingOnDaemonStep || !isFirstTimeDaemonIsUp) return;
+      advanceTimer = setTimeout(() => void this.recordDaemonVersionThenLeave(), DAEMON_READY_BEAT_MS);
+    });
     effect((onCleanup) => {
       const isWaitingForDaemon = this.currentStepId() === 'daemon';
       if (!isWaitingForDaemon) return;
@@ -208,6 +313,25 @@ export class OnboardingComponent {
       });
       untracked(() => void checkDaemonThenScheduleNextCheck());
     });
+  }
+
+  protected async checkDaemonAgain(): Promise<void> {
+    this.checkResult.set('');
+    const [health] = await Promise.all([this.api.health().catch(() => null), this.daemon.refresh()]);
+    if (this.isDestroyed) return;
+    if (health) {
+      this.versions.recordDaemonHealth(health);
+      return this.leaveDaemonStep(() => this.isDestroyed);
+    }
+    if (!this.isDaemonUp()) this.checkResult.set(STILL_NOT_RUNNING_COPY);
+  }
+
+  private async recordDaemonVersionThenLeave(): Promise<void> {
+    const reportedVersion = this.observedStatus()?.daemonVersion;
+    const health = reportedVersion ? { ok: true as const, version: reportedVersion } : await this.api.health().catch(() => null);
+    if (this.isDestroyed) return;
+    if (health) this.versions.recordDaemonHealth(health);
+    await this.leaveDaemonStep(() => this.isDestroyed);
   }
 
   protected async copyCommand(): Promise<void> {
@@ -235,6 +359,8 @@ export class OnboardingComponent {
   // A returning user (deep link, or a fleet that already has sessions) goes back to the app;
   // only a first run with an empty fleet continues with the project.
   private async leaveDaemonStep(hasLeftDaemonStep: () => boolean): Promise<void> {
+    if (this.hasStartedLeavingDaemonStep) return;
+    this.hasStartedLeavingDaemonStep = true;
     const isDeepLink = this.returnUrl !== APP_HOME_URL;
     const isReturningUser = isDeepLink || (await this.fleetHasSessions());
     if (hasLeftDaemonStep()) return;
