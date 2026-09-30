@@ -50,12 +50,12 @@ afterEach(() => server.close());
 const tick = () => new Promise((resolve) => setTimeout(resolve, TICK_MS));
 const api = (path: string, init: RequestInit = {}) => fetch(`${server.url}${path}`, { ...init, headers: { 'content-type': 'application/json', authorization: 'Bearer admin', ...(init.headers ?? {}) } });
 const hookTokenOf = (id: string) => (db.prepare('SELECT hook_token FROM sessions WHERE id = ?').get(id) as { hook_token: string }).hook_token;
-const stopOf = async (sessionId: string) => (await fetch(`${server.url}/hooks/${hookTokenOf(sessionId)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ session_id: 'c', hook_event_name: 'Stop' }) })).json() as Promise<{ decision?: string; reason?: string }>;
+const stopOf = async (sessionId: string, { stopHookActive = false } = {}) => (await fetch(`${server.url}/hooks/${hookTokenOf(sessionId)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ session_id: 'c', hook_event_name: 'Stop', stop_hook_active: stopHookActive }) })).json() as Promise<{ decision?: string; reason?: string }>;
 const spawnChild = (name: string, parentId = managerId) => sessions.create({ directory: '/tmp', name, harness: 'fake', emoji: '🧒', parentId });
 const reopen = (id: string) => api(`/api/sessions/${id}/reopen`, { method: 'POST' });
 
 describe('QE probes: reopen as a fleet change', () => {
-  it('does not refuse the manager after a FAILED reopen, since its fleet did not change', async () => {
+  it('refuses the manager once after a FAILED reopen, which closed the child afresh, then lets the continuation and an updated state stop', async () => {
     const child = await spawnChild('Builder-3');
     await tick();
     await sessions.close(child.id);
@@ -71,7 +71,13 @@ describe('QE probes: reopen as a fleet change', () => {
 
     const stopAfterFailedReopen = await stopOf(managerId);
 
-    expect(stopAfterFailedReopen).toEqual({});
+    expect(stopAfterFailedReopen).toMatchObject({ decision: 'block' });
+    const continuationStop = await stopOf(managerId, { stopHookActive: true });
+    expect(continuationStop.decision).toBeUndefined();
+    await tick();
+    workingStates.update(managerId, STATE);
+    const stopAfterUpdatingTheState = await stopOf(managerId);
+    expect(stopAfterUpdatingTheState.decision).toBeUndefined();
   });
 
   it('names at most 10 fleet changes and counts the rest with reopened and closed kinds mixed', async () => {

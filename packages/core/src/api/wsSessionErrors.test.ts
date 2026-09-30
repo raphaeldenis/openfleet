@@ -86,7 +86,7 @@ describe('session-scoped error broadcasts', () => {
     expect(JSON.stringify(errorEvent)).not.toContain('secret-dir');
   });
 
-  it('launch failed: the id of the envelope is on exactly one error log line', async () => {
+  it('launch failed: the only error log record carries the id of the envelope and the original spawn cause', async () => {
     const { server, sessions } = await boot({ harness: new LaunchFailingHarness() });
     const frames = await openClient(server);
     const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -95,8 +95,10 @@ describe('session-scoped error broadcasts', () => {
     const errorEvent = await waitForFrame(frames, isErrorEvent);
     const id = (errorEvent.error as { id: string }).id;
 
-    const linesCarryingTheId = logged.mock.calls.filter((call) => call.some((part) => String(part).includes(id)));
-    expect(linesCarryingTheId).toHaveLength(1);
+    expect(logged.mock.calls).toHaveLength(1);
+    const [onlyRecord] = logged.mock.calls[0]!.map(String);
+    expect(onlyRecord).toContain(id);
+    expect(onlyRecord).toContain('spawn ENOENT');
   });
 
   it('resume timeout: closes the row with exit -1, reason resume_timeout, and broadcasts the resume_timeout envelope', async () => {
