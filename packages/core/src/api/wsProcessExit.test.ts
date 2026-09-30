@@ -209,6 +209,61 @@ describe('a CLI that ends its own session (SessionEnd)', () => {
   });
 });
 
+// The real claude CLI fires its own SessionEnd hook when it receives the SIGTERM the daemon sends, then exits 143.
+function makeKillFireSessionEndThenExit143(sessions: SessionService, sessionId: string, harness: FakeHarness): void {
+  const handle = harness.handles[0]!;
+  handle.kill = () => {
+    handle.killed = true;
+    endSession(sessions, sessionId);
+    handle.emitExit(SIGTERM_EXIT_CODE);
+  };
+}
+
+describe('a close somebody asked for, on a CLI that fires SessionEnd when it is killed', () => {
+  const expectCleanClosure = async (frames: Frame[], sessionId: string, reason: string) => {
+    await waitFor(() => frames.find(isClosed));
+    await settle();
+    expect(frames.filter(isClosed)).toEqual([{ type: 'session.closed', sessionId, exitCode: SIGTERM_EXIT_CODE, reason }]);
+    expect(frames.filter(isError)).toEqual([]);
+  };
+
+  it('a user close is closed_by_user with no error', async () => {
+    const { server, sessions, harness, clock } = await boot();
+    const session = await sessions.create(spec);
+    const frames = await openClient(server);
+    makeKillFireSessionEndThenExit143(sessions, session.id, harness);
+    clock.nowMs += EARLY_EXIT_WINDOW_MS + 1;
+
+    await sessions.close(session.id);
+
+    await expectCleanClosure(frames, session.id, 'closed_by_user');
+  });
+
+  it('a close by the parent (MCP close_session) is closed_by_user with no error', async () => {
+    const { server, sessions, harness, clock } = await boot();
+    const session = await sessions.create(spec);
+    const frames = await openClient(server);
+    makeKillFireSessionEndThenExit143(sessions, session.id, harness);
+    clock.nowMs += EARLY_EXIT_WINDOW_MS + 1;
+
+    await sessions.close(session.id, { closedByParent: true });
+
+    await expectCleanClosure(frames, session.id, 'closed_by_user');
+  });
+
+  it('a daemon shutdown is daemon_shutdown with no error', async () => {
+    const { server, sessions, harness, clock } = await boot();
+    const session = await sessions.create(spec);
+    const frames = await openClient(server);
+    makeKillFireSessionEndThenExit143(sessions, session.id, harness);
+    clock.nowMs += EARLY_EXIT_WINDOW_MS + 1;
+
+    await sessions.closeAll();
+
+    await expectCleanClosure(frames, session.id, 'daemon_shutdown');
+  });
+});
+
 describe('a daemon shutdown', () => {
   it('closes every session with the daemon_shutdown reason and announces no error', async () => {
     const { server, sessions } = await boot();

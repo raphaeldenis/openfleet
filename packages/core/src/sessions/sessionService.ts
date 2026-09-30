@@ -1043,6 +1043,8 @@ export class SessionService {
   }
 
   async close(sessionId: string, options?: { escalateAfterMs?: number; closedByParent?: boolean; cause?: CloseCause }): Promise<void> {
+    const isSessionEndOfACloseAlreadyRequested = options?.cause === 'session_end' && this.isCloseRequested(sessionId);
+    if (isSessionEndOfACloseAlreadyRequested) return;
     if (options?.closedByParent) this.idsClosingByParent.add(sessionId);
     this.recordCloseCause(sessionId, options?.cause);
     // Disarmed eagerly, like retireForRelaunch, before the SIGTERM->SIGKILL grace window even starts: a
@@ -1075,6 +1077,12 @@ export class SessionService {
       this.forgetSessionEndCause(sessionId);
     }
     await this.killWithEscalation(handle, options?.escalateAfterMs ?? DEFAULT_CLOSE_ESCALATE_MS);
+  }
+
+  // The CLI's own SessionEnd, fired because the daemon killed it, is the echo of a close somebody already asked for.
+  private isCloseRequested(sessionId: string): boolean {
+    const isClosing = this.deliveryOf(sessionId).phase.name === 'closing';
+    return isClosing || this.idsClosingByParent.has(sessionId) || this.closeCauses.get(sessionId) === 'shutdown';
   }
 
   // Shutdown outranks every other cause; any other close (a user, a parent, a relaunch) means someone asked, so it drops a pending session_end.
