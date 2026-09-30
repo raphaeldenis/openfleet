@@ -195,7 +195,7 @@ describe('NewSessionFormComponent', () => {
       expect(navigateSpy).toHaveBeenCalledWith(['/manager', 'm-new']);
     });
 
-    it('sends exactly the documented defaults for a manager, with the mission trimmed', async () => {
+    it('sends exactly the documented defaults for a manager, with the mission trimmed and no pulse seconds', async () => {
       const api = fakeApi();
       await renderForm(api, { mode: 'manager' });
       await fillSessionFields({ name: 'Lead' });
@@ -205,7 +205,64 @@ describe('NewSessionFormComponent', () => {
 
       expect(api.createManagerSession.mock.calls[0]![0]).toStrictEqual({
         directory: '/tmp/wt', name: 'Lead', emoji: '🧭', model: 'sonnet', harness: 'claude-cli',
-        pulseSeconds: 1800, childrenCap: 2, mission: 'Ship phase 2',
+        childrenCap: 2, mission: 'Ship phase 2',
+      });
+    });
+
+    describe('the heartbeat left to the daemon', () => {
+      it('user sees the pulse field empty and told the daemon decides, instead of a number the form made up', async () => {
+        await renderForm(fakeApi(), { mode: 'manager' });
+
+        expect(screen.getByTestId('manager-pulse-seconds')).toHaveValue(null);
+        expect(screen.getByTestId('manager-pulse-seconds')).toHaveAttribute('placeholder', 'Daemon default');
+        expect(screen.queryByTestId('manager-pulse-seconds-error')).toBeNull();
+      });
+
+      it('user who never touches the pulse field creates a manager that carries no pulse seconds, so the daemon default applies', async () => {
+        const api = fakeApi();
+        await renderForm(api, { mode: 'manager' });
+        await fillSessionFields({ name: 'Lead' });
+        await fillManagerMission();
+
+        await userEvent.click(submitButton());
+
+        expect(api.createManagerSession.mock.calls[0]![0]).not.toHaveProperty('pulseSeconds');
+      });
+
+      it('user who types a pulse of 1800 sends it explicitly, even though it equals the usual default', async () => {
+        const api = fakeApi();
+        await renderForm(api, { mode: 'manager' });
+        await fillSessionFields({ name: 'Lead' });
+        await fillManagerMission();
+
+        await setNumberField('manager-pulse-seconds', '1800');
+        await userEvent.click(submitButton());
+
+        expect(api.createManagerSession).toHaveBeenCalledWith(expect.objectContaining({ pulseSeconds: 1800 }));
+      });
+
+      it('user who types a pulse then clears it is told a whole number is needed and cannot submit', async () => {
+        const api = fakeApi();
+        await renderForm(api, { mode: 'manager' });
+        await fillSessionFields({ name: 'Lead' });
+        await fillManagerMission();
+        await userEvent.type(screen.getByTestId('manager-pulse-seconds'), '5');
+        await userEvent.clear(screen.getByTestId('manager-pulse-seconds'));
+
+        await userEvent.click(submitButton());
+
+        expect(screen.getByTestId('manager-pulse-seconds-error')).toHaveTextContent('whole number');
+        expect(api.createManagerSession).not.toHaveBeenCalled();
+      });
+
+      it('user who toggles to session and back keeps a pulse field that was never touched empty', async () => {
+        await renderForm(fakeApi(), { mode: 'manager' });
+
+        await userEvent.click(screen.getByTestId('new-session-mode-session'));
+        await userEvent.click(screen.getByTestId('new-session-mode-manager'));
+
+        await waitFor(() => expect(screen.getByTestId('manager-pulse-seconds')).toHaveValue(null));
+        expect(screen.queryByTestId('manager-pulse-seconds-error')).toBeNull();
       });
     });
 
@@ -443,8 +500,9 @@ describe('NewSessionFormComponent', () => {
         expect(screen.queryByTestId('manager-mission-error')).toBeNull();
       });
 
-      it('a cleared pulse field is still an error after the round trip, and correcting it clears the error', async () => {
+      it('a pulse typed then cleared is still an error after the round trip, and correcting it clears the error', async () => {
         await renderForm(fakeApi(), { mode: 'manager' });
+        await userEvent.type(screen.getByTestId('manager-pulse-seconds'), '5');
         await userEvent.clear(screen.getByTestId('manager-pulse-seconds'));
         expect(screen.getByTestId('manager-pulse-seconds-error')).toBeTruthy();
 
@@ -557,7 +615,6 @@ describe('NewSessionFormComponent', () => {
     });
 
     it.each([
-      ['pulse seconds left empty', 'manager-pulse-seconds', ''],
       ['a fractional pulse seconds', 'manager-pulse-seconds', '1.5'],
       ['children cap left empty', 'manager-children-cap', ''],
       ['a fractional children cap', 'manager-children-cap', '2.5'],
@@ -1286,7 +1343,7 @@ describe('NewSessionFormComponent', () => {
 
       expect(screen.getByTestId('manager-mission')).toBeEnabled();
       expect(screen.getByTestId('manager-mission')).toHaveValue('Ship phase 2');
-      expect(screen.getByTestId('manager-pulse-seconds')).toHaveValue(1800);
+      expect(screen.getByTestId('manager-pulse-seconds')).toHaveValue(null);
       expect(screen.getByTestId('manager-children-cap')).toHaveValue(2);
       resolveCreate({ id: 'm-new' });
     });
