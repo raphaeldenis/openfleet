@@ -5,7 +5,7 @@ import { EventBus } from '../events/eventBus.js';
 import type { ServerEvent } from '@openfleet/shared';
 import { describeError } from '../errors/describeError.js';
 import {
-  MAX_REVIEW_CONFIRMATIONS, REVIEW_CONFIRMATION_PATIENCE_MS, REVIEW_NOTICE_WINDOW_MS, REVIEW_SETTLE_MS, SessionService, SUBMIT_KEYSTROKE_DELAY_MS,
+  MAX_REVIEW_CONFIRMATIONS, REVIEW_CONFIRMATION_PATIENCE_MS, REVIEW_NOTICE_WINDOW_MS, REVIEW_SETTLE_MS, REVIEW_UNCONFIRMED_RELEASE_MS, SessionService, SUBMIT_KEYSTROKE_DELAY_MS, TURN_START_TIMEOUT_MS,
 } from './sessionService.js';
 
 const UNTIL_REVIEW_CONFIRMED_MS = SUBMIT_KEYSTROKE_DELAY_MS + REVIEW_SETTLE_MS + 1;
@@ -436,6 +436,57 @@ describe('a review that never gets the proof the composer still holds the paste:
     await vi.advanceTimersByTimeAsync(10_000);
 
     expect({ enters: carriageReturnsIn(handle), escapes: handle.written.filter((data) => data === ESCAPE).length }).toEqual({ enters: 1, escapes: 0 });
+  });
+
+  it.each([
+    ['60 columns', 'Removed 1 invisible character · review and press Enter …'],
+    ['64 columns', 'Removed 1 invisible character · review and press Enter to s…'],
+    ['a start alone', 'Removed 12 invisible characters'],
+    ['a tail alone', '… press Enter to s…'],
+  ])('confirms the review when a narrow terminal truncates the notice (%s)', async (_width, noticeText) => {
+    vi.useFakeTimers();
+    const { harness, service, events } = setup();
+    const session = await createIdleSession(service, 'Target');
+    const handle = handleOf(harness, 0);
+    useRealCliTiming(service, session.id, handle);
+    handle.noticeText = noticeText;
+
+    service.sendMessage({ sessionId: session.id, body: text(0x200b) });
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect({ submitted: handle.submitted.length, composer: handle.composerText, errors: countOf(events, 'error') }).toEqual({ submitted: 1, composer: '', errors: 0 });
+  });
+
+  it('ignores the truncated notice start echoed by a plain message that quotes it', async () => {
+    vi.useFakeTimers();
+    const { harness, service } = setup();
+    const session = await createIdleSession(service, 'Target');
+    const handle = handleOf(harness, 0);
+    handle.onSubmit = (body) => { setTimeout(() => handle.emitData(body), 5); };
+
+    service.sendMessage({ sessionId: session.id, body: 'the log said Removed 3 invisible characters earlier' });
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect({ enters: carriageReturnsIn(handle), escapes: handle.written.filter((data) => data === ESCAPE).length }).toEqual({ enters: 1, escapes: 0 });
+  });
+
+  it('keeps the queue gated after a silent swallow, announces one error and releases without pressing anything', async () => {
+    vi.useFakeTimers();
+    const { harness, service, events } = setup();
+    const session = await createIdleSession(service, 'Target');
+    const handle = handleOf(harness, 0);
+    useRealCliWithLostHooks(handle);
+    handle.swallowsReviewSilently = true;
+    service.sendMessage({ sessionId: session.id, body: text(0x200b) });
+    service.sendMessage({ sessionId: session.id, body: 'second message' });
+
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS + REVIEW_NOTICE_WINDOW_MS + TURN_START_TIMEOUT_MS + 1_000);
+    const typedWhileGated = handle.composerText.includes('second message');
+    await vi.advanceTimersByTimeAsync(REVIEW_UNCONFIRMED_RELEASE_MS);
+
+    const errors = events.flatMap((event) => (event.type === 'error' ? [event.error.error] : []));
+    expect({ typedWhileGated, errors, escapes: handle.written.filter((data) => data === ESCAPE).length, enters: carriageReturnsIn(handle) })
+      .toEqual({ typedWhileGated: false, errors: ['message_held_for_review'], escapes: 0, enters: 2 });
   });
 
   it('counts only a notice drawn after the last confirmation: one drawn before it proves nothing', async () => {

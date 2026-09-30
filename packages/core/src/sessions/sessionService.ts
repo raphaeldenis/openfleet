@@ -115,8 +115,10 @@ export const SUBMIT_KEYSTROKE_DELAY_MS = 150;
 // ponytail: matches the CLI's notice wording (2.1.284); a reworded notice only brings back the unsubmitted paste.
 // The pty output is read with its escape sequences removed and its words allowed to be separated by anything (a wrap, a
 // cursor move, a style change), so a notice wrapped by a narrow terminal still matches.
-const REVIEW_NOTICE_PHRASE = 'review and press Enter to send';
-const INVISIBLE_CHARACTERS_REVIEW_NOTICE = /review\s*and\s*press\s*Enter\s*to\s*send/g;
+// A narrow terminal truncates the notice with an ellipsis instead of wrapping it ("… review and press Enter …" at 60
+// columns, "… press Enter to s…" at 64), so its stable start "Removed <N> invisible character(s)" is the main anchor.
+const INVISIBLE_CHARACTERS_REVIEW_NOTICE_SOURCE = String.raw`Removed\s*\d+\s*invisible\s*characters?|review\s*and\s*press\s*Enter\s*to\s*send|press\s*Enter\s*(?:to\s*s?)?\s*…`;
+const INVISIBLE_CHARACTERS_REVIEW_NOTICE = new RegExp(INVISIBLE_CHARACTERS_REVIEW_NOTICE_SOURCE, 'g');
 const GENERATING_MARKER = /esc\s*to\s*interrupt/g;
 const TERMINAL_ESCAPE_SEQUENCES = /\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b\][^\u0007]*\u0007/g;
 const REVIEW_NOTICE_SPLIT_ACROSS_CHUNKS_MARGIN = 256;
@@ -1354,7 +1356,7 @@ export class SessionService {
     const isReviewOfWatchedMessage = phase.name === 'reviewing' && phase.stage === 'watching';
     if (!isReviewOfSubmittedMessage && !isReviewOfWatchedMessage) return;
     // A message that quotes the notice's own words makes the CLI's echo of it look like the notice.
-    const isEchoOfTheBody = isReviewOfSubmittedMessage && (this.queue.getById(phase.messageId)?.body.includes(REVIEW_NOTICE_PHRASE) ?? false);
+    const isEchoOfTheBody = isReviewOfSubmittedMessage && countMatches(INVISIBLE_CHARACTERS_REVIEW_NOTICE, this.queue.getById(phase.messageId)?.body ?? '') > 0;
     if (isEchoOfTheBody) return;
     const carried = isReviewOfWatchedMessage ? phase : undefined;
     const settle = this.schedule(sessionId, REVIEW_SETTLE_MS, () => this.confirmReview(sessionId));
@@ -1610,7 +1612,20 @@ export class SessionService {
     }
   }
 
+  // A body the CLI may have held for review, with no turn started: whatever notice it drew (unknown wording, hidden by the
+  // terminal width), the composer may still hold it, so the queue stays gated one more step and nothing is pressed.
   private stopAwaitingTurnStart(sessionId: string): void {
+    const { phase } = this.deliveryOf(sessionId);
+    const handle = this.liveHandle(sessionId);
+    const isUnprovenReview = phase.name === 'submitted' && handle !== undefined && this.mayDrawReviewNotice(phase.messageId);
+    if (isUnprovenReview) {
+      const release = this.schedule(sessionId, REVIEW_UNCONFIRMED_RELEASE_MS, () => this.releaseUnconfirmedReview(sessionId));
+      this.enter(sessionId, {
+        name: 'reviewing', messageId: phase.messageId, handle, stage: 'exhausted', confirmations: 0, isDeliveryRecorded: true,
+        deferredRaw: [], isNoticeRedrawn: false, isGeneratingSeen: false, isHumanInterruptPassedThrough: false,
+      }, release);
+      return;
+    }
     this.enter(sessionId, READY);
     this.advance(sessionId);
   }

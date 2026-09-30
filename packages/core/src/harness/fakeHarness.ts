@@ -38,6 +38,10 @@ export class FakeHandle implements HarnessHandle {
   // Test-only: how the review step behaves. The real CLI 2.1.284 shows its notice 3 ms after the Enter and ignores
   // every Enter for the next ~100-150 ms (measured live); `neverAcceptsEnter` is a composer that never leaves the review.
   // `redrawsNoticeOnIgnoredEnter`: an ignored Enter repaints the notice, so the output proves the composer still holds the paste.
+  // Test-only: what the notice reads on a narrow terminal, where the CLI truncates it with an ellipsis instead of wrapping it.
+  noticeText = 'Removed 1 invisible character · review and press Enter to send';
+  // Test-only: a CLI that holds the paste in its composer with no notice at all (an unknown wording, a width that hides it).
+  swallowsReviewSilently = false;
   reviewTiming = { noticeDelayMs: 0, ignoresEnterForMs: 0, neverAcceptsEnter: false, redrawsNoticeOnIgnoredEnter: false };
   // Test-only: a submitted turn is running until endTurn(); the fake then draws the CLI's generating marker when asked.
   showsGeneratingMarker = false;
@@ -82,7 +86,7 @@ export class FakeHandle implements HarnessHandle {
       this.noticeShownAt = undefined;
       const showNotice = () => {
         this.noticeShownAt = Date.now();
-        this.emitData('Removed 1 invisible character · review and press Enter to send');
+        if (!this.swallowsReviewSilently) this.emitData(this.noticeText);
       };
       // Like a real pty, the CLI's answer arrives after write() returned.
       if (this.reviewTiming.noticeDelayMs === 0) queueMicrotask(showNotice);
@@ -94,7 +98,7 @@ export class FakeHandle implements HarnessHandle {
         || this.noticeShownAt === undefined
         || Date.now() - this.noticeShownAt < this.reviewTiming.ignoresEnterForMs;
       if (isIgnored) {
-        if (this.reviewTiming.redrawsNoticeOnIgnoredEnter) setTimeout(() => this.emitData('Removed 1 invisible character · review and press Enter to send'), this.reviewTiming.noticeDelayMs);
+        if (this.reviewTiming.redrawsNoticeOnIgnoredEnter) setTimeout(() => this.emitData(this.noticeText), this.reviewTiming.noticeDelayMs);
         return;
       }
     }
