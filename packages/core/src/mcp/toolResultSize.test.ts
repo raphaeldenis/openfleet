@@ -252,7 +252,7 @@ describe('MCP tool results are compact', () => {
       const description = await descriptionOf(name);
 
       expect(description).toMatch(/compact/i);
-      expect(description).toContain('directory');
+      expect(description).toContain('emoji, directory, state');
       expect(description).toContain('permissionMode');
     });
 
