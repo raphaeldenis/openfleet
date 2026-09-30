@@ -1,5 +1,5 @@
 import { Injectable, signal } from '@angular/core';
-import type { Approval, ManagerView, ServerEvent, Session } from '@openfleet/shared';
+import type { Approval, ManagerView, ServerEvent, Session, WorkingState } from '@openfleet/shared';
 import { Subject } from 'rxjs';
 import { environment } from '../../environments/environment';
 import { isUserTyping } from './terminal-keystrokes';
@@ -32,6 +32,11 @@ export class FleetEventsService {
   readonly sessions = signal<Session[]>([]);
   readonly approvals = signal<Approval[]>([]);
   readonly managers = signal<ManagerView[]>([]);
+  readonly workingStates = signal<ReadonlyMap<string, WorkingState>>(new Map());
+  // A daemon that predates working states sends no list: a missing state then means "not reported", never "overdue".
+  readonly workingStatesReported = signal(false);
+  readonly workingStateMaxAgeMinutes = signal<number | undefined>(undefined);
+  readonly workingStateMaxBytes = signal<number | undefined>(undefined);
   readonly connected = signal(false);
   // A direct load of a route that never mounts App (e.g. /manager/:id) still needs to know
   // whether the first snapshot has arrived, so it can show a loading state instead of "not found".
@@ -178,8 +183,13 @@ export class FleetEventsService {
         this.sessions.set(event.sessions.map(withoutStaleClosure));
         this.approvals.set(event.approvals);
         this.managers.set(event.managers ?? []);
+        this.workingStates.set(new Map((event.workingStates ?? []).map((state) => [state.sessionId, state])));
+        this.workingStatesReported.set(event.workingStates !== undefined);
+        this.workingStateMaxAgeMinutes.set(event.workingStateMaxAgeMinutes);
+        this.workingStateMaxBytes.set(event.workingStateMaxBytes);
         this.snapshotReceived.set(true);
         return;
+      case 'session.working_state': return this.workingStates.update((all) => new Map(all).set(event.state.sessionId, event.state));
       case 'session.created': return this.upsertSession(event.session);
       case 'session.state': return this.patchSession(event.sessionId, { state: event.state, stateSince: event.stateSince });
       case 'session.closed': return this.patchSession(event.sessionId, { state: 'closed', exitCode: event.exitCode });
