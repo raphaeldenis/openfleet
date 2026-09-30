@@ -138,6 +138,14 @@ export class SchemaNewerThanCodeError extends Error {
   }
 }
 
+export class MigrationFailedError extends Error {
+  readonly recoveryHint: string;
+  constructor(cause: unknown, backupPath: string) {
+    super((cause as Error).message, { cause });
+    this.recoveryHint = `the database from before this upgrade is saved at ${backupPath}: quit the app, delete openfleet.db-wal and openfleet.db-shm, then copy it over openfleet.db`;
+  }
+}
+
 function restoreHintFor(databasePath: string | undefined): string {
   const hasRealPath = databasePath !== undefined && databasePath !== ':memory:';
   const backupsFolder = hasRealPath ? join(dirname(databasePath), BACKUPS_FOLDER_NAME) : `the ${BACKUPS_FOLDER_NAME} folder next to openfleet.db`;

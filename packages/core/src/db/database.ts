@@ -3,7 +3,7 @@ import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { log } from '../logger.js';
 import { backUpBeforeMigrating, deleteBackupsBeyondTheMostRecent } from './backup.js';
-import { applyMigrations, assertBootableSchema, highestAppliedMigration, pendingMigrations } from './migrate.js';
+import { applyMigrations, assertBootableSchema, highestAppliedMigration, MigrationFailedError, pendingMigrations } from './migrate.js';
 
 export class DatabaseOpenError extends Error {
   readonly code = 'DATABASE_OPEN_FAILED';
@@ -38,11 +38,20 @@ function backUpWhenMigrationsArePending(db: DatabaseSync, path: string): string 
   }
 }
 
+function migrateNamingTheBackupOnFailure(db: DatabaseSync, path: string, backupPath: string | undefined): void {
+  try {
+    applyMigrations(db, undefined, path);
+  } catch (error) {
+    db.close();
+    throw backupPath === undefined ? error : new MigrationFailedError(error, backupPath);
+  }
+}
+
 export function openDatabase(path: string): DatabaseSync {
   const db = openFile(path);
   db.exec('PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA recursive_triggers = ON;');
   const backupPath = backUpWhenMigrationsArePending(db, path);
-  applyMigrations(db, undefined, path);
+  migrateNamingTheBackupOnFailure(db, path, backupPath);
   if (backupPath !== undefined) deleteBackupsBeyondTheMostRecent(dirname(backupPath), backupPath);
   // The db holds session tokens and message bodies in clear text (MAJ-02); WAL mode already created the
   // -wal/-shm side files by now, so tighten all three every time a real (non-:memory:) path is opened.

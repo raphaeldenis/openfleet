@@ -1,7 +1,7 @@
 import { PortInUseError } from './api/portInUseError.js';
 import { ConfigFileError } from './configFileError.js';
 import { readableConfigReason } from './configReason.js';
-import { SchemaNewerThanCodeError } from './db/migrate.js';
+import { MigrationFailedError, SchemaNewerThanCodeError } from './db/migrate.js';
 
 export interface BootRefusalOutput { configPath: string; writeStderr: (text: string) => void; exit: (code: number) => never }
 
@@ -18,7 +18,7 @@ function errnoOf(error: unknown): { code?: unknown; path?: unknown } {
 
 function recoveryHintOf(error: unknown): string | undefined {
   const { code, path } = errnoOf(error);
-  if (error instanceof SchemaNewerThanCodeError) return error.recoveryHint;
+  if (error instanceof SchemaNewerThanCodeError || error instanceof MigrationFailedError) return error.recoveryHint;
   if (error instanceof PortInUseError) return 'stop the other process or set OPENFLEET_PORT';
   if (code === 'ERR_SOCKET_BAD_PORT') return 'set OPENFLEET_PORT to a port between 0 and 65535';
   const isUnreadablePath = typeof code === 'string' && PERMISSION_TROUBLE_CODES.has(code) && typeof path === 'string';

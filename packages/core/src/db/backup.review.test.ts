@@ -115,6 +115,21 @@ describe('the restore instruction for a database newer than the code', () => {
   });
 });
 
+describe('the refusal line of a migration that fails after a backup was taken', () => {
+  it('names the backup taken for this boot and how to restore it, on one line', async () => {
+    const db = createDatabaseAtVersion('015_handovers');
+    db.exec('ALTER TABLE sessions ADD COLUMN prompted INTEGER');
+    db.close();
+
+    const line = await refusalLineOf(() => openDatabase(dbPath));
+
+    const [backupName] = databaseBackups();
+    expect(line.slice(0, -1)).not.toMatch(/\p{Cc}/u);
+    expect(line).toContain('duplicate column name: prompted');
+    expect(line).toContain(`saved at ${join(backupsDir, backupName!)}: quit the app, delete openfleet.db-wal and openfleet.db-shm, then copy it over openfleet.db`);
+  });
+});
+
 describe('the config copy beside a backup', () => {
   const takenAt = '2026-05-05T05:05:05.005Z';
   const sidecarName = 'openfleet-015_handovers-2026-05-05T05-05-05-005Z.config.json';
