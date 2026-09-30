@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -29,14 +29,20 @@ const writeRustupStub = ({ installedTargets }: { installedTargets: string[] }) =
   return stubFolder;
 };
 
-/** Runs the script with a scratch HOME (so ~/.cargo/bin holds no real rustup) and a PATH made of the stub folder and the system folders only. */
-const runBuildLocal = ({ arguments_, stubFolder }: { arguments_: string[]; stubFolder?: string }) =>
-  spawnSync('/bin/bash', [SCRIPT, ...arguments_], {
+/** Runs the script hermetically: scratch HOME/RUSTUP_HOME/CARGO_HOME, no extra PATH folders, and a PATH made of the stub folder and the system folders only. */
+const runBuildLocal = ({ arguments_, stubFolder }: { arguments_: string[]; stubFolder?: string }) => {
+  const scratchHome = makeScratchFolder();
+  return spawnSync('/bin/bash', [SCRIPT, ...arguments_], {
     encoding: 'utf8',
-    env: { HOME: makeScratchFolder(), PATH: stubFolder === undefined ? SYSTEM_PATH : `${stubFolder}:${SYSTEM_PATH}` },
+    env: {
+      HOME: scratchHome,
+      RUSTUP_HOME: scratchHome,
+      CARGO_HOME: scratchHome,
+      OPENFLEET_BUILD_EXTRA_PATH: '',
+      PATH: stubFolder === undefined ? SYSTEM_PATH : `${stubFolder}:${SYSTEM_PATH}`,
+    },
   });
-
-const hasHomebrewRustup = existsSync('/opt/homebrew/bin/rustup');
+};
 
 describe('build-local.sh argument parsing', () => {
   it.each([
@@ -68,7 +74,7 @@ describe('build-local.sh argument parsing', () => {
 });
 
 describe('build-local.sh Rust toolchain check', () => {
-  it.skipIf(hasHomebrewRustup)('says rustup is not installed, without suggesting rustup target add, when rustup is absent', () => {
+  it('says rustup is not installed, without suggesting rustup target add, when rustup is absent', () => {
     const result = runBuildLocal({ arguments_: ['--target', ARM64_TARGET] });
 
     expect(result.status).toBe(1);

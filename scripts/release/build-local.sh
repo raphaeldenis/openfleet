@@ -4,7 +4,8 @@
 #        pnpm build:dmg:all   (both, x86_64 first and aarch64 last, so resources/daemon ends on the Apple Silicon bundle)
 set -euo pipefail
 
-export PATH="/opt/homebrew/bin:$HOME/.cargo/bin:$PATH"
+extra_path="${OPENFLEET_BUILD_EXTRA_PATH-/opt/homebrew/bin:$HOME/.cargo/bin}"
+[ -z "$extra_path" ] || export PATH="$extra_path:$PATH"
 
 target="aarch64-apple-darwin"
 arguments=("$@")
