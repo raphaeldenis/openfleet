@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Returns the folder the daemon keeps its files in: `$OPENFLEET_HOME`, else `~/.openfleet`.
 pub fn openfleet_home_dir(openfleet_home: Option<String>, user_home: &Path) -> PathBuf {
@@ -25,17 +26,29 @@ pub fn admin_token_secrets(token_path: &Path) -> Vec<String> {
 /// Reads the admin token again whenever the file's modification time or size changes.
 pub struct AdminTokenWatch {
   path: PathBuf,
+  last_seen: Option<FileStamp>,
+}
+
+/// What a file's metadata says about its content: the modification time and the size.
+#[derive(Clone, Copy, PartialEq)]
+struct FileStamp {
+  modified: SystemTime,
+  bytes: u64,
 }
 
 impl AdminTokenWatch {
   pub fn new(path: PathBuf) -> Self {
-    Self { path }
+    Self { path, last_seen: None }
   }
 
   /// Returns the token's secrets when the file appeared, changed or vanished since the last call; None when it is as it was.
   pub fn secrets_if_changed(&mut self) -> Option<Vec<String>> {
-    let _ = &self.path;
-    None
+    let stamp = std::fs::metadata(&self.path).ok().map(|metadata| FileStamp { modified: metadata.modified().unwrap_or(UNIX_EPOCH), bytes: metadata.len() });
+    if stamp == self.last_seen {
+      return None;
+    }
+    self.last_seen = stamp;
+    Some(admin_token_secrets(&self.path))
   }
 }
 

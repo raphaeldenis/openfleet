@@ -3,10 +3,10 @@ use crate::redaction::redact;
 use std::io::{self, Write};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::{self, sync_channel, SyncSender, TrySendError};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub const MAX_LOG_BYTES: u64 = 5 * 1024 * 1024;
 pub const KEPT_FILES: usize = 3;
@@ -168,14 +168,101 @@ fn lines_of(path: &Path) -> Vec<String> {
   String::from_utf8_lossy(&bytes).lines().map(str::to_string).collect()
 }
 
+enum Message {
+  Line(Stream, String),
+  /// Stops the writer once every line queued before it is written, then acknowledges.
+  Close(mpsc::Sender<()>),
+}
+
+/// The admin token is checked again at most this often once one is known.
+const SECRET_CHECK_INTERVAL_SECONDS: u64 = 2;
+const MAX_SECRETS_KEPT: usize = 8;
+const CLOSE_POLL_INTERVAL: Duration = Duration::from_millis(1);
+
+/// The writer thread's state: rotating file, secrets to redact, and what it failed to write.
+struct LogWriter<F: LogFs> {
+  log: RotatingLog<F>,
+  poll_secrets: Box<dyn FnMut() -> Option<Vec<String>> + Send>,
+  clock: Box<dyn Fn() -> u64 + Send>,
+  secrets: Vec<String>,
+  secrets_checked_at: Option<u64>,
+  lines_dropped_by_the_queue: Arc<AtomicU64>,
+  lines_lost_to_write_errors: u64,
+  last_write_error: Option<io::Error>,
+}
+
+impl<F: LogFs> LogWriter<F> {
+  fn run(mut self, messages: mpsc::Receiver<Message>) {
+    for message in messages {
+      match message {
+        Message::Line(stream, line) => self.write(stream, &line),
+        Message::Close(acknowledge) => {
+          let _ = acknowledge.send(());
+          return;
+        }
+      }
+    }
+  }
+
+  fn write(&mut self, stream: Stream, line: &str) {
+    let now = (self.clock)();
+    self.refresh_secrets(now);
+    self.report_lost_lines(now);
+    let stored_line = format_line(stream, &redact(line, &self.secrets), now);
+    if let Err(error) = self.log.append_line(&stored_line) {
+      self.lines_lost_to_write_errors += 1;
+      self.last_write_error = Some(error);
+    }
+  }
+
+  /// Looks for a new admin token on every line while none is known (the file may appear after the first output), then every two seconds.
+  fn refresh_secrets(&mut self, now: u64) {
+    let no_secret_known_yet = self.secrets.is_empty();
+    let check_is_due = self.secrets_checked_at.is_none_or(|checked_at| now.saturating_sub(checked_at) >= SECRET_CHECK_INTERVAL_SECONDS);
+    if !(no_secret_known_yet || check_is_due) {
+      return;
+    }
+    self.secrets_checked_at = Some(now);
+    for secret in (self.poll_secrets)().unwrap_or_default() {
+      if !self.secrets.contains(&secret) {
+        self.secrets.push(secret);
+      }
+    }
+    let surplus = self.secrets.len().saturating_sub(MAX_SECRETS_KEPT);
+    self.secrets.drain(..surplus);
+  }
+
+  /// Writes one notice per cause; a count is cleared only once its notice is in the file.
+  fn report_lost_lines(&mut self, now: u64) {
+    let dropped = self.lines_dropped_by_the_queue.load(Ordering::SeqCst);
+    if dropped > 0 && self.append_notice(now, &format!("{dropped} lines dropped: the log writer fell behind")) {
+      self.lines_dropped_by_the_queue.fetch_sub(dropped, Ordering::SeqCst);
+    }
+    if self.lines_lost_to_write_errors > 0 {
+      let cause = self.last_write_error.as_ref().map_or_else(String::new, |error| format!(" ({error})"));
+      let notice = format!("{} lines lost: could not write the log file{cause}", self.lines_lost_to_write_errors);
+      if self.append_notice(now, &notice) {
+        self.lines_lost_to_write_errors = 0;
+        self.last_write_error = None;
+      }
+    }
+  }
+
+  fn append_notice(&mut self, now: u64, text: &str) -> bool {
+    self.log.append_line(&format!("{} [log] {text}", iso_utc(now))).is_ok()
+  }
+}
+
 /// Hands daemon output to a writer thread; never blocks the caller and counts what it had to drop.
 #[derive(Clone)]
 pub struct DaemonLog {
-  sender: SyncSender<(Stream, String)>,
-  dropped: Arc<AtomicU64>,
+  sender: SyncSender<Message>,
+  lines_dropped_by_the_queue: Arc<AtomicU64>,
+  output_ended: Arc<AtomicBool>,
 }
 
 impl DaemonLog {
+  /// `poll_secrets` returns the secrets to add when the admin token changed, None while it is as it was.
   pub fn start<F: LogFs + Send + 'static>(
     log: RotatingLog<F>,
     poll_secrets: impl FnMut() -> Option<Vec<String>> + Send + 'static,
@@ -185,55 +272,70 @@ impl DaemonLog {
   }
 
   pub fn start_with_capacity<F: LogFs + Send + 'static>(
-    mut log: RotatingLog<F>,
-    mut poll_secrets: impl FnMut() -> Option<Vec<String>> + Send + 'static,
+    log: RotatingLog<F>,
+    poll_secrets: impl FnMut() -> Option<Vec<String>> + Send + 'static,
     clock: impl Fn() -> u64 + Send + 'static,
     capacity: usize,
   ) -> Self {
-    let (sender, receiver) = sync_channel::<(Stream, String)>(capacity);
-    let dropped = Arc::new(AtomicU64::new(0));
-    let dropped_by_the_writer = dropped.clone();
-    std::thread::spawn(move || {
-      let mut secrets: Vec<String> = Vec::new();
-      for (stream, line) in receiver {
-        // The admin token file may only appear after the daemon's first output, so it is read until found.
-        if secrets.is_empty() {
-          secrets = poll_secrets().unwrap_or_default();
-        }
-        let now = clock();
-        let lost = dropped_by_the_writer.swap(0, Ordering::SeqCst);
-        if lost > 0 {
-          let _ = log.append_line(&format!("{} [log] {lost} lines dropped: the log writer fell behind", iso_utc(now)));
-        }
-        if log.append_line(&format_line(stream, &redact(&line, &secrets), now)).is_err() {
-          dropped_by_the_writer.fetch_add(1, Ordering::SeqCst);
-        }
-      }
-    });
-    Self { sender, dropped }
+    let (sender, receiver) = sync_channel::<Message>(capacity);
+    let lines_dropped_by_the_queue = Arc::new(AtomicU64::new(0));
+    let writer = LogWriter {
+      log,
+      poll_secrets: Box::new(poll_secrets),
+      clock: Box::new(clock),
+      secrets: Vec::new(),
+      secrets_checked_at: None,
+      lines_dropped_by_the_queue: lines_dropped_by_the_queue.clone(),
+      lines_lost_to_write_errors: 0,
+      last_write_error: None,
+    };
+    std::thread::spawn(move || writer.run(receiver));
+    Self { sender, lines_dropped_by_the_queue, output_ended: Arc::new(AtomicBool::new(false)) }
   }
 
   /// Queues every non-blank line of a chunk of daemon output.
   pub fn record(&self, stream: Stream, chunk: &str) {
     for line in chunk.lines().filter(|line| !line.trim().is_empty()) {
-      let queue_is_full = matches!(self.sender.try_send((stream, line.to_string())), Err(TrySendError::Full(_)));
+      let queue_is_full = matches!(self.sender.try_send(Message::Line(stream, line.to_string())), Err(TrySendError::Full(_)));
       if queue_is_full {
-        self.dropped.fetch_add(1, Ordering::SeqCst);
+        self.lines_dropped_by_the_queue.fetch_add(1, Ordering::SeqCst);
       }
     }
   }
 
   /// Marks that the daemon's output pipe has delivered its last event.
-  pub fn mark_output_ended(&self) {}
+  pub fn mark_output_ended(&self) {
+    self.output_ended.store(true, Ordering::SeqCst);
+  }
 
-  /// Waits for the output to end, then drains the queue and stops the writer; false when it did not finish within `timeout`.
-  pub fn close_after_output_ends(&self, _timeout: Duration) -> bool {
-    false
+  /// Waits up to half of `timeout` for the output to end, then drains the queue and stops the writer within the other half.
+  pub fn close_after_output_ends(&self, timeout: Duration) -> bool {
+    let waiting_until = Instant::now() + timeout / 2;
+    while !self.output_ended.load(Ordering::SeqCst) && Instant::now() < waiting_until {
+      std::thread::sleep(CLOSE_POLL_INTERVAL);
+    }
+    self.flush_and_close(timeout / 2)
   }
 
   /// Drains the queue and stops the writer; false when it did not finish within `timeout`.
-  pub fn flush_and_close(&self, _timeout: Duration) -> bool {
-    false
+  pub fn flush_and_close(&self, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    let (acknowledge, acknowledged) = mpsc::channel();
+    let mut close = Message::Close(acknowledge);
+    loop {
+      match self.sender.try_send(close) {
+        Ok(()) => break,
+        Err(TrySendError::Disconnected(_)) => return true,
+        Err(TrySendError::Full(unsent)) => {
+          if Instant::now() >= deadline {
+            return false;
+          }
+          close = unsent;
+          std::thread::sleep(CLOSE_POLL_INTERVAL);
+        }
+      }
+    }
+    acknowledged.recv_timeout(deadline.saturating_duration_since(Instant::now())).is_ok()
   }
 }
 
