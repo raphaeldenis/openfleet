@@ -387,6 +387,19 @@ describe('note tools', () => {
       expect(results.results[0].bodyMd).toBeUndefined();
     });
 
+    it('keeps the lowest ids when more equal-rank notes match than the result cap allows', async () => {
+      const client = await connect(scopedToken);
+      const insert = db.prepare(`INSERT INTO notes (id, project_id, title, body_md, folder, file_path, source_hash, rev, shared, created_at, updated_at)
+        VALUES (?, 'p1', 'n', 'zebra', NULL, NULL, NULL, 1, 0, 't', 't')`);
+      const noteCount = 51;
+      const idsInAscendingOrder = Array.from({ length: noteCount }, (_, index) => `same-${String(index).padStart(2, '0')}`);
+      for (const id of [...idsInAscendingOrder].reverse()) insert.run(id);
+
+      const { results } = text(await client.callTool({ name: 'search_notes', arguments: { query: 'zebra' } }));
+
+      expect(results.map((hit: { id: string }) => hit.id)).toEqual(idsInAscendingOrder.slice(0, noteCount - 1));
+    });
+
     it('treats a hyphen as literal input rather than an FTS operator', async () => {
       const client = await connect(scopedToken);
       await createNote(client, { title: 'x', body_md: 'session-service handles routing' });

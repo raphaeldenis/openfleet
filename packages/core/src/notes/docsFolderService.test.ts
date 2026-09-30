@@ -277,6 +277,108 @@ describe('DocsFolderService writeThrough', () => {
     expect(noteRepo.get(note.id)).toMatchObject({ bodyMd: 'v1', rev: 1 });
   });
 
+  it('refuses to run inside an outer transaction, because an outer rollback could not undo the file rename', () => {
+    const { db, fakeFs, noteRepo, docs } = setup();
+    const note = docs.createFileBackedNote({ projectId: 'p1', folder: 'specs', title: 'x', bodyMd: 'v1', author: AUTHOR });
+    const filesBefore = new Map(fakeFs.files);
+    db.exec('BEGIN IMMEDIATE');
+
+    const write = () => docs.writeThrough(note.id, { bodyMd: 'v2', expectedRev: note.rev, author: AUTHOR });
+
+    expect(write).toThrow(/outer transaction/);
+    db.exec('ROLLBACK');
+    expect(fakeFs.files).toEqual(filesBefore);
+    expect(noteRepo.get(note.id)).toMatchObject({ bodyMd: 'v1', rev: 1 });
+  });
+
+  it('reports the stuck connection, not an outer transaction, when a failed ROLLBACK left the connection inside a transaction', () => {
+    const { db, fakeFs, docs, notes } = setup();
+    const note = docs.createFileBackedNote({ projectId: 'p1', folder: 'specs', title: 'x', bodyMd: 'v1', author: AUTHOR });
+    const filesBefore = new Map(fakeFs.files);
+    const realExec = db.exec.bind(db);
+    vi.spyOn(db, 'exec').mockImplementation((sql: string) => {
+      if (/^ROLLBACK/.test(sql)) throw new Error('disk I/O error');
+      return realExec(sql);
+    });
+    expect(() => notes.runAtomically(() => { throw new Error('work failed'); })).toThrow('work failed');
+
+    const write = () => docs.writeThrough(note.id, { bodyMd: 'v2', expectedRev: note.rev, author: AUTHOR });
+
+    expect(write).toThrow(/stuck in a transaction/);
+    expect(fakeFs.files).toEqual(filesBefore);
+  });
+
+  it('heals a stuck connection when the retried ROLLBACK succeeds, so the write goes through', () => {
+    const { db, fakeFs, docs, notes } = setup();
+    const note = docs.createFileBackedNote({ projectId: 'p1', folder: 'specs', title: 'x', bodyMd: 'v1', author: AUTHOR });
+    const realExec = db.exec.bind(db);
+    const failRollback = vi.spyOn(db, 'exec').mockImplementation((sql: string) => {
+      if (/^ROLLBACK/.test(sql)) throw new Error('disk I/O error');
+      return realExec(sql);
+    });
+    expect(() => notes.runAtomically(() => { throw new Error('work failed'); })).toThrow('work failed');
+    failRollback.mockRestore();
+
+    docs.writeThrough(note.id, { bodyMd: 'v2', expectedRev: note.rev, author: AUTHOR });
+
+    expect(fakeFs.files.get(note.filePath!)).toBe('v2');
+  });
+
+  it('leaves the file ahead of the database when COMMIT fails after the rename, and reconcileOnBoot then records the file as a "disk" revision', () => {
+    const { db, fakeFs, noteRepo, docs } = setup();
+    const note = docs.createFileBackedNote({ projectId: 'p1', folder: 'specs', title: 'x', bodyMd: 'v1', author: AUTHOR });
+    const realExec = db.exec.bind(db);
+    const failCommit = vi.spyOn(db, 'exec').mockImplementation((sql: string) => {
+      if (sql === 'COMMIT') throw new Error('disk I/O error');
+      return realExec(sql);
+    });
+
+    expect(() => docs.writeThrough(note.id, { bodyMd: 'v2', expectedRev: note.rev, author: AUTHOR })).toThrow('disk I/O error');
+    failCommit.mockRestore();
+
+    expect(fakeFs.files.get(note.filePath!)).toBe('v2');
+    expect(noteRepo.get(note.id)).toMatchObject({ bodyMd: 'v1', rev: 1 });
+    const report = docs.reconcileOnBoot('p1');
+    expect(report.applied).toEqual([note.id]);
+    expect(noteRepo.get(note.id)).toMatchObject({ bodyMd: 'v2', rev: 2, sourceHash: sha256Hex('v2') });
+    expect(noteRepo.listVersions(note.id).map((version) => version.author)).toEqual([AUTHOR, 'disk']);
+  });
+
+  it('QE: refuses inside a bare SAVEPOINT as well, leaving no stray file and the savepoint intact', () => {
+    const { db, fakeFs, noteRepo, docs } = setup();
+    const note = docs.createFileBackedNote({ projectId: 'p1', folder: 'specs', title: 'x', bodyMd: 'v1', author: AUTHOR });
+    const filesBefore = new Map(fakeFs.files);
+    db.exec('SAVEPOINT caller');
+
+    const write = () => docs.writeThrough(note.id, { bodyMd: 'v2', expectedRev: note.rev, author: AUTHOR });
+
+    expect(write).toThrow(/outer transaction/);
+    expect(db.isTransaction).toBe(true);
+    db.exec('RELEASE caller');
+    expect(fakeFs.files).toEqual(filesBefore);
+    expect(noteRepo.get(note.id)).toMatchObject({ bodyMd: 'v1', rev: 1 });
+  });
+
+  it('QE: after a COMMIT failure past the rename the connection is out of the transaction, no temp file remains, and a second write succeeds once reconciled', () => {
+    const { db, fakeFs, noteRepo, docs } = setup();
+    const note = docs.createFileBackedNote({ projectId: 'p1', folder: 'specs', title: 'x', bodyMd: 'v1', author: AUTHOR });
+    const realExec = db.exec.bind(db);
+    const failCommit = vi.spyOn(db, 'exec').mockImplementation((sql: string) => {
+      if (sql === 'COMMIT') throw new Error('disk I/O error');
+      return realExec(sql);
+    });
+    expect(() => docs.writeThrough(note.id, { bodyMd: 'v2', expectedRev: note.rev, author: AUTHOR })).toThrow('disk I/O error');
+    failCommit.mockRestore();
+
+    expect(db.isTransaction).toBe(false);
+    expect([...fakeFs.files.keys()]).toEqual([note.filePath]);
+    docs.reconcileOnBoot('p1');
+    const reconciled = noteRepo.get(note.id)!;
+    const second = docs.writeThrough(note.id, { bodyMd: 'v3', expectedRev: reconciled.rev, author: AUTHOR });
+    expect(second).toMatchObject({ bodyMd: 'v3', rev: 3 });
+    expect(fakeFs.files.get(note.filePath!)).toBe('v3');
+  });
+
   it('checks the size cap before writing any temp file', () => {
     const { fakeFs, docs } = setup();
     const note = docs.createFileBackedNote({ projectId: 'p1', folder: 'specs', title: 'x', bodyMd: 'v1', author: AUTHOR });

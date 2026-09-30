@@ -103,6 +103,8 @@ interface ImportCandidate {
  * or subfolder that disappeared (ENOENT, ENOTDIR) surfaces as `NoteFileUnreadableError`; any other fs
  * failure (ENOSPC, EROFS, EACCES, EXDEV) propagates unchanged, so the caller sees an internal error.
  *
+ * `writeThrough` refuses to run inside an outer transaction: an outer rollback could not undo the rename.
+ *
  * This order never leaves a mismatch `reconcileOnBoot` can't heal: before the rename, the target
  * file is untouched (nothing to reconcile — the write never happened as far as disk is concerned). Two
  * windows leave the file ahead of the DB, the file holding the new bytes while the DB still holds the old
@@ -163,6 +165,7 @@ export class DocsFolderService {
   }
 
   writeThrough(noteId: string, input: WriteThroughInput): Note {
+    this.deps.notes.assertNoOuterTransaction();
     const current = this.requireFileBackedNote(noteId);
     const targetPath = current.filePath!;
     const project = this.requireProject(current.projectId);
