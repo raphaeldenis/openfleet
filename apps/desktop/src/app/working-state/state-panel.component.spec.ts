@@ -169,6 +169,13 @@ describe('StatePanelComponent', () => {
   });
 
   describe('with hostile data', () => {
+    it('user sees "updated just now" and no chip for a state stamped in the future by clock skew', async () => {
+      await renderPanel({ states: [stateOf({ updatedAt: minutesBeforeNow(-10) })] });
+
+      expect(screen.getByTestId('state-panel-updated')).toHaveTextContent('updated just now');
+      expect(screen.queryByTestId('overdue-chip')).toBeNull();
+    });
+
     it('user sees a 300 character item without a space wrap inside the panel instead of stretching it', async () => {
       const unbrokenItem = 'x'.repeat(300);
       await renderOpenPanel({ plan: [unbrokenItem] });
