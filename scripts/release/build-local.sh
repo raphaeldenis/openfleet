@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Builds the local, ad-hoc signed OpenFleet dmg for one target: pinned Node sidecar, daemon bundle, then `tauri build`.
 # Usage: pnpm build:dmg [--target aarch64-apple-darwin|x86_64-apple-darwin]   (default: aarch64-apple-darwin)
-#        pnpm build:dmg:all   (both, one after the other)
+#        pnpm build:dmg:all   (both, x86_64 first and aarch64 last, so resources/daemon ends on the Apple Silicon bundle)
 set -euo pipefail
 
-export PATH="/opt/homebrew/bin:$HOME/.cargo/bin:$PATH"
+extra_path="${OPENFLEET_BUILD_EXTRA_PATH-/opt/homebrew/bin:$HOME/.cargo/bin}"
+[ -z "$extra_path" ] || export PATH="$extra_path:$PATH"
 
 target="aarch64-apple-darwin"
 arguments=("$@")
@@ -23,7 +24,9 @@ esac
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$repo_root"
 
-rustup target list --installed | grep -qx "$target" || { echo "build-local: the Rust target $target is missing, run: rustup target add $target" >&2; exit 1; }
+command -v rustup >/dev/null || { echo "build-local: rustup is not installed, install it from https://rustup.rs" >&2; exit 1; }
+installed_targets="$(rustup target list --installed)"
+grep -qx "$target" <<<"$installed_targets" || { echo "build-local: the Rust target $target is missing, run: rustup target add $target" >&2; exit 1; }
 
 node scripts/release/fetch-node.mjs "$(cat scripts/release/node-version.txt)" "$target"
 pnpm --filter @openfleet/core bundle --target "$target"

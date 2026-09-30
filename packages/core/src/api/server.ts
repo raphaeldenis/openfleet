@@ -9,6 +9,7 @@ import type { ModelTable } from '../models.js';
 import type { DocsFolderService } from '../notes/docsFolderService.js';
 import type { NoteRepository } from '../notes/noteRepository.js';
 import type { NoteService } from '../notes/noteService.js';
+import type { DegradedRegistry } from '../process/degradedRegistry.js';
 import { DAEMON_VERSION } from '../version.js';
 import { PortInUseError } from './portInUseError.js';
 import type { ProjectRepository } from '../projects/projectRepository.js';
@@ -53,6 +54,8 @@ export interface ServerDeps {
   // Without it no handover is recorded and the handovers route does not exist.
   handoverLedger?: HandoverLedger;
   contextNotice?: ContextNotice;
+  // Without it the daemon reports no degraded state: /health says ok and the snapshot carries no daemonIssues.
+  degraded?: DegradedRegistry;
   // Without it the test-only routes (fake-output) do not exist.
   e2eRoutes?: boolean;
 }
@@ -105,9 +108,12 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; rout
   const router = new Router();
   // ponytail: unauthenticated readiness probe for CI/e2e webServer checks, which run before the admin token is known
   let isShuttingDown = false;
-  // The probe's 503 is a readiness answer, not an API error: it carries no error envelope.
+  // The probe's 503 is a readiness answer, not an API error: it carries no error envelope. A degraded daemon still
+  // answers 200 ok: the app probe treats any other answer as a daemon that does not answer. The issues are counted, not listed: no auth here.
   router.add('GET', '/health', ({ res }) => {
-    const answer = isShuttingDown ? { status: 503, body: { ok: false, status: 'shutting_down' } } : { status: 200, body: { ok: true, version: DAEMON_VERSION } };
+    const issues = deps.degraded?.list().length ?? 0;
+    const status = deps.degraded?.status() ?? 'ok';
+    const answer = isShuttingDown ? { status: 503, body: { ok: false, status: 'shutting_down' } } : { status: 200, body: { ok: true, version: DAEMON_VERSION, status, issues } };
     json(res, answer.status, answer.body);
   });
   registerRestRoutes(router, { ...deps, wsTickets });
