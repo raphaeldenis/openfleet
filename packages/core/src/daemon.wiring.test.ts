@@ -121,6 +121,18 @@ describe('operator gets every daemon feature when the daemon boots from its conf
     expect(snapshot.workingStateMaxAgeMinutes).toBe(45);
   });
 
+  it('serves the todos a session made through its hooks, and lists them in the snapshot of a connecting client', async () => {
+    await bootDaemon();
+    const session = await createSession();
+    await postHook(session.id, { hook_event_name: 'PostToolUse', tool_name: 'TaskCreate', tool_use_id: 'toolu_1', tool_input: { subject: 'Wire it' }, tool_response: { task: { id: '1', subject: 'Wire it' } } });
+
+    const todos = await (await api(`/api/sessions/${session.id}/todos`)).json();
+    const snapshot = await firstWsFrame() as { todoSummaries?: { sessionId: string }[] };
+
+    expect(todos).toMatchObject({ sessionId: session.id, items: [{ id: '1', content: 'Wire it', status: 'pending' }], counts: { total: 1, pending: 1 } });
+    expect(snapshot.todoSummaries?.map((summary) => summary.sessionId)).toEqual([session.id]);
+  });
+
   it('gives a manager created without a pulse the configured default heartbeat', async () => {
     await bootDaemon({ managers: { heartbeatDefaultSeconds: 777 } });
 

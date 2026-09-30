@@ -27,6 +27,7 @@ import { ProjectRepository } from './projects/projectRepository.js';
 import { SessionService } from './sessions/sessionService.js';
 import { DataStoreRepository } from './stores/dataStoreRepository.js';
 import { DataStoreService } from './stores/dataStoreService.js';
+import { TodoTracker } from './todos/todoTracker.js';
 import { ContextNotice } from './workingState/contextNotice.js';
 import { HandoverLedger } from './workingState/handoverLedger.js';
 import { SessionStartContext } from './workingState/sessionStartContext.js';
@@ -73,10 +74,11 @@ export async function startDaemon(config: Config, options: { claudeConfigPath?: 
   const sessionStartContext = new SessionStartContext({ db, workingStates, settings: workingStateSettings, clock: () => new Date().toISOString() });
   const handoverLedger = new HandoverLedger({ db, clock: () => new Date().toISOString(), patterns: workingStateSettings.handoverPatterns });
   const contextNotice = new ContextNotice({ sessions, managers: managerRepository, settings: contextNoticeSettings });
+  const todos = new TodoTracker({ sessions, bus });
 
   // The server must be listening before any resumed CLI can POST its first hook — resuming first risks a
   // fast process hitting a port nothing is serving yet.
-  const server = await startServer({ ...config, e2eRoutes: config.e2eEnabled, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, stores, storeRepo, projects, stopRefusal, sessionStartContext, handoverLedger, contextNotice, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, workingStates, worktreesRoot: config.worktreesRoot }) });
+  const server = await startServer({ ...config, e2eRoutes: config.e2eEnabled, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, stores, storeRepo, projects, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, workingStates, worktreesRoot: config.worktreesRoot }) });
   log('info', `openfleet core listening on ${server.url} (version: ${DAEMON_VERSION}, home: ${config.home})`);
 
   // A launch dir a crashed or killed daemon never cleaned up would otherwise sit on disk carrying a live
@@ -87,6 +89,7 @@ export async function startDaemon(config: Config, options: { claudeConfigPath?: 
     pulseScheduler.stop();
     contextNotice.stop();
     await sessions.closeAll();
+    todos.stop();
     await server.close();
   };
   try {

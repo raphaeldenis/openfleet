@@ -11,6 +11,7 @@ import { log } from '../logger.js';
 import type { ManagerService } from '../managers/managerService.js';
 import { SessionClosedError, type SessionService } from '../sessions/sessionService.js';
 import { DEFAULT_WORKING_STATE_MAX_AGE_MINUTES } from '../workingState/workingStateSettings.js';
+import type { TodoTracker } from '../todos/todoTracker.js';
 import type { WorkingStateService } from '../workingState/workingStateService.js';
 import type { WsTicketStore } from './wsTicketStore.js';
 
@@ -83,7 +84,7 @@ export interface WsHandler {
 
 const DEFAULT_WS_CLOSE_GRACE_MS = 250;
 
-export function createWsHandler(deps: { bus: EventBus; sessions: SessionService; approvals: ApprovalService; managers: ManagerService; wsTickets: WsTicketStore; wsCloseGraceMs?: number; workingStates?: WorkingStateService; workingStateMaxAgeMinutes?: number }): WsHandler {
+export function createWsHandler(deps: { bus: EventBus; sessions: SessionService; approvals: ApprovalService; managers: ManagerService; wsTickets: WsTicketStore; wsCloseGraceMs?: number; workingStates?: WorkingStateService; workingStateMaxAgeMinutes?: number; todos?: TodoTracker }): WsHandler {
   const wss = new WebSocketServer({ noServer: true });
   // A broadcast runs inside the session pipeline (the bus is synchronous): one bad client never stops the others or the caller.
   const broadcast = (event: ServerEvent) => {
@@ -98,6 +99,7 @@ export function createWsHandler(deps: { bus: EventBus; sessions: SessionService;
     if (state) broadcast({ type: 'session.working_state', state });
   };
   deps.workingStates?.onUpdate((state) => broadcast({ type: 'session.working_state', state }));
+  deps.todos?.onUpdate((todos) => broadcast({ type: 'session.todos', todos }));
   // A child spawned, closed or reopened moves its parent's fleetChangedAt, so the parent's state goes out again.
   deps.bus.subscribe((event) => {
     if (event.type === 'session.created') broadcastWorkingStateOf(event.session.parentId);
@@ -118,6 +120,7 @@ export function createWsHandler(deps: { bus: EventBus; sessions: SessionService;
     send(socket, {
       type: 'snapshot', sessions: deps.sessions.list(), approvals: deps.approvals.listPending(), managers: deps.managers.listViews(),
       ...workingStateSnapshotFields(),
+      ...(deps.todos ? { todoSummaries: deps.todos.summaries() } : {}),
     });
     socket.on('message', (raw) => {
       let frame: unknown;

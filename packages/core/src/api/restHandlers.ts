@@ -7,6 +7,7 @@ import type { ManagerService } from '../managers/managerService.js';
 import type { PulseScheduler } from '../managers/pulseScheduler.js';
 import { listAvailableModels, ModelTablePatchSchema, resolveModel, saveModelPatch, type ModelTable } from '../models.js';
 import type { SessionService } from '../sessions/sessionService.js';
+import type { TodoTracker } from '../todos/todoTracker.js';
 import type { HandoverLedger } from '../workingState/handoverLedger.js';
 import type { WorkingStateService } from '../workingState/workingStateService.js';
 import { json, Router } from './router.js';
@@ -20,7 +21,7 @@ const RenameSessionSchema = z
   .object({ name: z.string().trim().min(1).max(100).optional(), emoji: z.string().trim().min(1).max(32).optional() })
   .refine((patch) => patch.name !== undefined || patch.emoji !== undefined, { message: 'name or emoji is required' });
 
-export function registerRestRoutes(router: Router, deps: { sessions: SessionService; approvals: ApprovalService; modelTable: ModelTable; modelConfigPath: string; managers: ManagerService; pulseScheduler: PulseScheduler; wsTickets: WsTicketStore; workingStates?: WorkingStateService; handoverLedger?: HandoverLedger; e2eRoutes?: boolean }): void {
+export function registerRestRoutes(router: Router, deps: { sessions: SessionService; approvals: ApprovalService; modelTable: ModelTable; modelConfigPath: string; managers: ManagerService; pulseScheduler: PulseScheduler; wsTickets: WsTicketStore; workingStates?: WorkingStateService; handoverLedger?: HandoverLedger; todos?: TodoTracker; e2eRoutes?: boolean }): void {
   const servedRungs = (): ModelTable => {
     const { haiku, sonnet, opus, fable } = deps.modelTable;
     return { haiku, sonnet, opus, fable };
@@ -146,6 +147,14 @@ export function registerRestRoutes(router: Router, deps: { sessions: SessionServ
       const state = workingStates.get(params.id!);
       if (!state) throw new OpenFleetError('no_state', 'the session has no working state yet.');
       json(res, 200, state);
+    });
+  }
+
+  const { todos } = deps;
+  if (todos) {
+    router.add('GET', '/api/sessions/:id/todos', async ({ res, params }) => {
+      requireSession(params.id!);
+      json(res, 200, await todos.read(params.id!));
     });
   }
 

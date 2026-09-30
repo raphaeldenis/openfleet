@@ -15,6 +15,7 @@ import type { ProjectRepository } from '../projects/projectRepository.js';
 import type { SessionService } from '../sessions/sessionService.js';
 import type { DataStoreRepository } from '../stores/dataStoreRepository.js';
 import type { DataStoreService } from '../stores/dataStoreService.js';
+import type { TodoTracker } from '../todos/todoTracker.js';
 import type { WorkingStateService } from '../workingState/workingStateService.js';
 import { ALLOWED_ORIGINS } from './allowedOrigins.js';
 import { answerError } from './answerError.js';
@@ -53,6 +54,8 @@ export interface ServerDeps {
   // Without it no handover is recorded and the handovers route does not exist.
   handoverLedger?: HandoverLedger;
   contextNotice?: ContextNotice;
+  // Without it the todos route, event and snapshot field do not exist and the hooks leave the todo tools alone.
+  todos?: TodoTracker;
   // Without it the test-only routes (fake-output) do not exist.
   e2eRoutes?: boolean;
 }
@@ -67,7 +70,7 @@ function applyCorsHeaders(req: IncomingMessage, res: ServerResponse): void {
 
 async function handleHookRequest(req: IncomingMessage, res: ServerResponse, hookToken: string, deps: ServerDeps): Promise<void> {
   if (!deps.sessions.byHookToken(hookToken)) return json(res, 200, {});
-  const body = await readJson(req);
+  const body = await readJson(req, undefined, { skipOversized: true });
   await hooksHandler(deps)({ req, res, params: { hookToken }, body });
 }
 

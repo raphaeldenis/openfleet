@@ -88,10 +88,11 @@ describe('POST /hooks/:token', () => {
     expect(await res.json()).toEqual({});
   });
 
-  it('rejects a body over 1 MiB for a known token with 413', async () => {
+  it('answers 200 and ignores a body over 1 MiB for a known token, so the CLI never sees a 4xx', async () => {
     const oversizedBody = { session_id: 'c', hook_event_name: 'Stop', pad: 'x'.repeat(2 * 1024 * 1024) };
     const res = await post(`/hooks/${hookToken}`, oversizedBody);
-    expect(res.status).toBe(413);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({});
   });
 
   it('PermissionRequest waits for the decision and answers allow', async () => {
