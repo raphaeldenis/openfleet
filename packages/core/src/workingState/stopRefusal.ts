@@ -60,10 +60,10 @@ export class StopRefusal {
   }
 }
 
-/** Returns one "name (kind)" entry per distinct child and kind, most recent change first. */
+/** Returns one "name (kind)" entry per distinct child and kind, in the chronological order of its first change. */
 function distinctChildKindEntries(changesOldestFirst: FleetChange[]): string[] {
-  const entriesNewestFirst = [...changesOldestFirst].reverse().map((change) => `${change.name} (${change.kind})`);
-  return [...new Set(entriesNewestFirst)];
+  const entries = changesOldestFirst.map((change) => `${change.name} (${change.kind})`);
+  return [...new Set(entries)];
 }
 
 function sectionsOf(state: WorkingState): WorkingStateSections {
