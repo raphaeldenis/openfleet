@@ -5,10 +5,11 @@ import { MANAGER_ROLE, type Session } from '@openfleet/shared';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { StateChipComponent } from '../design/state-chip.component';
 import { ManagerCardComponent } from '../managers/manager-card.component';
+import { OverdueChipComponent } from '../working-state/overdue-chip.component';
 
 @Component({
   selector: 'of-session-list',
-  imports: [RouterLink, NgTemplateOutlet, StateChipComponent, ManagerCardComponent],
+  imports: [RouterLink, NgTemplateOutlet, StateChipComponent, ManagerCardComponent, OverdueChipComponent],
   template: `
     <ul class="sessions">
       @for (session of roots(); track session.id) {
@@ -28,6 +29,7 @@ import { ManagerCardComponent } from '../managers/manager-card.component';
         >
           <span class="name" [attr.title]="session.name">{{ session.emoji }} {{ session.name }}</span>
           <span class="meta">
+            <of-overdue-chip [session]="session" />
             <of-state-chip [state]="session.state" />
             <span class="rung" title="Model rung">{{ session.model || '—' }}</span>
             <span class="cost" title="Cost tracking is not implemented yet">—</span>

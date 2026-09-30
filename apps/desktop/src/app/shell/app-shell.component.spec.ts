@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { AppShellComponent } from './app-shell.component';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
+import { silentWorkingStateSignals } from '../working-state/working-state-fixtures';
 import { InboxComponent } from '../inbox/inbox.component';
 
 // jsdom doesn't block focus() inside an inert subtree the way the WHATWG spec requires real
@@ -56,6 +57,7 @@ function fakeEvents(overrides: { connected?: boolean; sessions?: unknown[]; appr
     approvals: signal(overrides.approvals ?? []),
     managers: signal([]),
     connected: signal(overrides.connected ?? true),
+    ...silentWorkingStateSignals(),
   };
 }
 

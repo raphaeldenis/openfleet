@@ -18,6 +18,7 @@ import { overdueExplanation, overdueReasonOf, tickingNow, type FreshnessRules } 
     }
   `,
   styles: `
+    :host(:empty) { display: none; }
     .chip {
       display: inline-flex; align-items: center; flex: none; gap: .375rem; height: 1.25rem; padding: 0 .5rem;
       border-radius: .375rem; font-family: var(--mono); font-size: .6875rem; font-weight: 500; color: var(--fg); white-space: nowrap;

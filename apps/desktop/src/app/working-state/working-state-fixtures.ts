@@ -34,6 +34,16 @@ export function stateOf(patch: Partial<WorkingState> = {}): WorkingState {
   };
 }
 
+/** Working-state signals of a daemon that reports none, to spread into a spec's own FleetEventsService fake. */
+export function silentWorkingStateSignals() {
+  return {
+    workingStates: signal<ReadonlyMap<string, WorkingState>>(new Map()),
+    workingStatesReported: signal(false),
+    workingStateMaxAgeMinutes: signal<number | undefined>(undefined),
+    workingStateMaxBytes: signal<number | undefined>(undefined),
+  };
+}
+
 interface FakeEventsOptions {
   sessions?: Session[];
   states?: WorkingState[];

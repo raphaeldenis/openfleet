@@ -7,13 +7,14 @@ import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { StateChipComponent } from '../design/state-chip.component';
 import { PulseRingComponent } from '../design/pulse-ring.component';
+import { OverdueChipComponent } from '../working-state/overdue-chip.component';
 import { countdownLabel, countdownSecondsUntil } from './manager-countdown';
 import { PulseNowAction } from './pulse-now';
 
 @Component({
   selector: 'of-manager-dashboard',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [StateChipComponent, PulseRingComponent],
+  imports: [StateChipComponent, PulseRingComponent, OverdueChipComponent],
   template: `
     @if (!hasSnapshot()) {
       <p class="state-message" data-testid="manager-dashboard-loading">Loading…</p>
@@ -26,6 +27,7 @@ import { PulseNowAction } from './pulse-now';
               <span data-testid="manager-dashboard-name" class="name" [attr.title]="session.name">{{ session.name }}</span>
               <span class="role-badge">manager</span>
               <of-state-chip [state]="session.state" />
+              <of-overdue-chip [session]="session" />
             </div>
             <div class="meta-line mono" data-testid="manager-dashboard-meta">
               <span>{{ session.harness }}</span>

@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/angular/zoneless';
+import { render, screen, within } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
 import { signal } from '@angular/core';
 import { ActivatedRoute, convertToParamMap, provideRouter, Router } from '@angular/router';
@@ -12,18 +12,41 @@ function activatedRouteFor(id: string) {
   return { paramMap: of(convertToParamMap({ id })) };
 }
 
-function fakeEvents(overrides: { sessions?: unknown[]; managers?: unknown[]; snapshotReceived?: boolean } = {}) {
+function fakeEvents(overrides: { sessions?: unknown[]; managers?: unknown[]; snapshotReceived?: boolean; workingStatesReported?: boolean } = {}) {
   return {
     sessions: signal(overrides.sessions ?? []),
     approvals: signal([]),
     managers: signal(overrides.managers ?? []),
     snapshotReceived: signal(overrides.snapshotReceived ?? true),
+    workingStates: signal(new Map()),
+    workingStatesReported: signal(overrides.workingStatesReported ?? false),
+    workingStateMaxAgeMinutes: signal<number | undefined>(30),
+    workingStateMaxBytes: signal<number | undefined>(6144),
   };
 }
 
 const MANAGER_SESSION = { id: 'm1', name: 'Lead', emoji: '🧭', role: 'manager', state: 'idle', harness: 'claude-cli' };
 const MANAGER_VIEW = { sessionId: 'm1', pulseSeconds: 1800, childrenCap: 2, missionText: 'x', nextPulseAt: new Date(Date.now() + 42_000).toISOString(), childrenCount: 1 };
 const CHILD_SESSION = { id: 'c1', name: 'Gimli', emoji: '⚔️', parentId: 'm1', state: 'generating', harness: 'claude-cli' };
+
+describe('ManagerDashboardComponent state overdue chip', () => {
+  const renderDashboard = (fake: ReturnType<typeof fakeEvents>) =>
+    render(ManagerDashboardComponent, {
+      providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('m1') }, { provide: FleetEventsService, useValue: fake }],
+    });
+
+  it('user sees "state overdue" in the header of a manager that has no state', async () => {
+    await renderDashboard(fakeEvents({ sessions: [MANAGER_SESSION], managers: [MANAGER_VIEW], workingStatesReported: true }));
+
+    expect(within(screen.getByTestId('manager-dashboard')).getByTestId('overdue-chip')).toBeTruthy();
+  });
+
+  it('user sees no chip when the daemon does not report working states', async () => {
+    await renderDashboard(fakeEvents({ sessions: [MANAGER_SESSION], managers: [MANAGER_VIEW], workingStatesReported: false }));
+
+    expect(screen.queryByTestId('overdue-chip')).toBeNull();
+  });
+});
 
 describe('ManagerDashboardComponent', () => {
   it('shows the manager name, state and children cap headroom', async () => {

@@ -1,10 +1,12 @@
-import { render, screen } from '@testing-library/angular/zoneless';
+import { render, screen, within } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
 import { inputBinding } from '@angular/core';
 import { describe, expect, it, vi } from 'vitest';
 import type { ManagerView, Session } from '@openfleet/shared';
 import { ManagerCardComponent } from './manager-card.component';
 import { FleetApiService, ApiError } from '../core/fleet-api.service';
+import { FleetEventsService } from '../core/fleet-events.service';
+import { fakeWorkingStateEvents } from '../working-state/working-state-fixtures';
 
 function manager(patch: Partial<ManagerView> = {}): ManagerView {
   return {
@@ -32,6 +34,32 @@ function session(patch: Partial<Session> = {}): Session {
     ...patch,
   };
 }
+
+describe('ManagerCardComponent state overdue chip', () => {
+  const renderCard = (events: ReturnType<typeof fakeWorkingStateEvents>, managerSession: Session | undefined) =>
+    render(ManagerCardComponent, {
+      bindings: [inputBinding('manager', () => manager()), inputBinding('session', () => managerSession)],
+      providers: [{ provide: FleetEventsService, useValue: events }],
+    });
+
+  it('user sees "state overdue" on the manager card when the manager has no state', async () => {
+    await renderCard(fakeWorkingStateEvents({ sessions: [session()] }), session());
+
+    expect(within(screen.getByTestId('manager-m1-card')).getByTestId('overdue-chip')).toBeTruthy();
+  });
+
+  it('user sees no chip on the card of a closed manager', async () => {
+    await renderCard(fakeWorkingStateEvents({ sessions: [session({ state: 'closed' })] }), session({ state: 'closed' }));
+
+    expect(screen.queryByTestId('overdue-chip')).toBeNull();
+  });
+
+  it('user sees no chip on a card that has no session to judge', async () => {
+    await renderCard(fakeWorkingStateEvents({ sessions: [] }), undefined);
+
+    expect(screen.queryByTestId('overdue-chip')).toBeNull();
+  });
+});
 
 describe('ManagerCardComponent', () => {
   it('shows children count over cap', async () => {
