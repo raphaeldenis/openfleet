@@ -100,9 +100,9 @@ describe('a user typing /clear in a session', () => {
     writeFileSync(transcriptPathOf(id), assistantLine('claude-opus-5-5'));
     await sendHook(id, { hook_event_name: 'Stop', transcript_path: undefined });
 
+    await expect.poll(() => deliveredMessageIds).toHaveLength(1);
     expect(stateAfterWaiting).toBe('generating');
     expect(await queuedResponse.json()).toMatchObject({ status: 'queued' });
-    expect(deliveredMessageIds).toHaveLength(1);
     expect(await listed(id)).toMatchObject({ resolvedModel: 'claude-opus-5-5' });
   });
 
