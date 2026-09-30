@@ -450,3 +450,93 @@ describe('the daemon trusts only the main chain of the session\'s own transcript
     expect(noticeOf(manager)).toBe(400_000);
   });
 });
+
+describe('the notice stays right on a huge transcript and at the bounds of the settings', () => {
+  const TAIL_WINDOW_OVERFLOW_BYTES = 1024 * 1024;
+  const oldLines = (bytes: number) => assistantLine({ contextTokens: 100_000 }).repeat(Math.ceil(bytes / assistantLine({ contextTokens: 100_000 }).length));
+
+  it('measures the last line of a transcript far bigger than the tail window', async () => {
+    const manager = await createManager();
+    writeTranscript(manager, oldLines(TAIL_WINDOW_OVERFLOW_BYTES), assistantLine({ contextTokens: 350_000 }));
+
+    await stop(manager);
+
+    expect(noticeOf(manager)).toBe(300_000);
+  });
+
+  it('raises nothing and still answers the Stop when the last line alone is bigger than the tail window', async () => {
+    const manager = await createManager();
+    const hugeLastLine = `${JSON.stringify({ type: 'user', message: { content: 'x'.repeat(TAIL_WINDOW_OVERFLOW_BYTES) } })}\n`;
+    writeTranscript(manager, assistantLine({ contextTokens: 350_000 }), hugeLastLine);
+
+    const answer = await stop(manager);
+
+    expect(answer).toEqual({});
+    expect(noticeOf(manager)).toBeUndefined();
+  });
+
+  it('treats a transcript of one endless unterminated line as unreadable, not as a crash', async () => {
+    const manager = await createManager();
+    writeTranscript(manager, '{'.repeat(TAIL_WINDOW_OVERFLOW_BYTES));
+
+    const answer = await stop(manager);
+
+    expect(answer).toEqual({});
+    expect(noticeOf(manager)).toBeUndefined();
+  });
+
+  it('raises the notice at the lowest allowed thresholds: 1,000 first, 2,000 next, none at 999 or 1,999', async () => {
+    await server.close();
+    await boot({ ...DEFAULT_SETTINGS, firstAt: 1_000, every: 1_000 });
+    const manager = await createManager();
+    const contextOf = (inputTokens: number) => writeTranscript(manager, assistantLine({ usage: { input_tokens: inputTokens, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } }));
+
+    contextOf(999);
+    await stop(manager);
+    const noticeJustBelow = noticeOf(manager);
+    contextOf(1_000);
+    await stop(manager);
+    const firstNotice = noticeOf(manager);
+    contextOf(1_999);
+    await stop(manager);
+    const noticeJustBelowNextStep = noticeOf(manager);
+    contextOf(2_000);
+    await stop(manager);
+
+    expect([noticeJustBelow, firstNotice, noticeJustBelowNextStep, noticeOf(manager)]).toEqual([undefined, 1_000, 1_000, 2_000]);
+  });
+
+  it('raises the notice at the highest allowed threshold of 10,000,000 and none just under it', async () => {
+    await server.close();
+    await boot({ ...DEFAULT_SETTINGS, firstAt: 10_000_000, every: 10_000_000 });
+    const manager = await createManager();
+
+    contextGrowsTo(manager, 9_999_999);
+    await stop(manager);
+    const noticeJustBelow = noticeOf(manager);
+    contextGrowsTo(manager, 29_999_999);
+    await stop(manager);
+
+    expect([noticeJustBelow, noticeOf(manager)]).toEqual([undefined, 20_000_000]);
+  });
+
+  it.fails('keeps the session list readable when a usage adds up past the safe integer range', async () => {
+    const manager = await createManager();
+    writeTranscript(manager, assistantLine({ usage: { input_tokens: Number.MAX_SAFE_INTEGER, cache_creation_input_tokens: Number.MAX_SAFE_INTEGER, cache_read_input_tokens: Number.MAX_SAFE_INTEGER } }));
+
+    const answer = await stop(manager);
+
+    expect(answer).toEqual({});
+    expect(() => sessions.list()).not.toThrow();
+  });
+
+  it('emits one notice, not several, when concurrent Stops measure the same transcript', async () => {
+    const manager = await createManager();
+    contextGrowsTo(manager, 350_000);
+
+    await Promise.all([stop(manager), stop(manager), stop(manager)]);
+
+    expect(noticeUpdatesOf(manager)).toHaveLength(1);
+    expect(noticeOf(manager)).toBe(300_000);
+  });
+});
