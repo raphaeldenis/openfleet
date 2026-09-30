@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, mkdtempSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ServerEvent, Session } from '@openfleet/shared';
@@ -337,6 +337,20 @@ describe('the daemon trusts only the main chain of the session\'s own transcript
     const answer = await stop(manager, outside);
 
     expect(answer).toEqual({});
+    expect(noticeOf(manager)).toBeUndefined();
+  });
+
+  it('raises nothing when the transcript is swapped for a symbolic link to a file outside the projects directory after a first measure', async () => {
+    const manager = await createManager();
+    contextGrowsTo(manager, 100_000);
+    await stop(manager);
+    const outside = join(mkdtempSync(join(tmpdir(), 'of-cn-outside-')), 'elsewhere.jsonl');
+    writeFileSync(outside, assistantLine({ contextTokens: 900_000 }));
+    unlinkSync(transcriptOf(manager));
+    symlinkSync(outside, transcriptOf(manager));
+
+    await stop(manager);
+
     expect(noticeOf(manager)).toBeUndefined();
   });
 
