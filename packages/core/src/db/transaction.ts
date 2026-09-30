@@ -1,6 +1,12 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { log } from '../logger.js';
 
+export class StuckConnectionError extends Error {
+  constructor(cause: unknown) {
+    super('database connection is stuck in a transaction after a failed ROLLBACK', { cause });
+  }
+}
+
 /** Connections left inside a transaction by a failed top-level ROLLBACK: nothing may run on them until a ROLLBACK succeeds. */
 const connectionsStuckInTransaction = new WeakSet<DatabaseSync>();
 
@@ -35,7 +41,7 @@ export function recoverStuckTransaction(db: DatabaseSync): void {
     if (db.isTransaction) db.exec('ROLLBACK');
   } catch (rollbackError) {
     log('error', 'refusing to run: connection is stuck in a transaction', rollbackError);
-    throw new Error('database connection is stuck in a transaction after a failed ROLLBACK', { cause: rollbackError });
+    throw new StuckConnectionError(rollbackError);
   }
   connectionsStuckInTransaction.delete(db);
 }
