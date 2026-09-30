@@ -3,6 +3,8 @@ import { join } from 'node:path';
 import type { DaemonIssue } from '@openfleet/shared';
 import { DAEMON_VERSION } from '../version.js';
 
+/** The folder of the daemon home that holds the crash files. */
+export const CRASH_FOLDER_NAME = 'crashes';
 export const CRASH_FILES_KEPT = 5;
 export const MAX_CRASH_FILE_BYTES = 1024 * 1024;
 
