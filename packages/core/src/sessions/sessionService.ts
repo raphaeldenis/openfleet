@@ -1074,6 +1074,9 @@ export class SessionService {
     const isExplicitClose = options?.cause === undefined;
     if (isExplicitClose) this.idsClosingForDaemonShutdown.delete(sessionId); // someone asked: the close is theirs, not the shutdown's
     this.recordCloseCause(sessionId, options?.cause);
+    // A requested close owns the exit from here on: a start timeout still armed would kill again and close as resume_timeout.
+    // A SessionEnd close keeps it: that CLI may still exit on its own within the grace.
+    if (options?.cause !== 'session_end') this.clearResumeTimer(sessionId);
     // Disarmed eagerly, like retireForRelaunch, before the SIGTERM->SIGKILL grace window even starts: a
     // watch left armed through that window could still see a marker and flip session state while the
     // process is on its way out (or wedged and never exiting at all).
