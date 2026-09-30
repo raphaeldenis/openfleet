@@ -90,6 +90,21 @@ describe('QE probes: reopen as a fleet change', () => {
     expect(refused.reason).toContain('(closed)');
   });
 
+  it('names a child once per kind however many times it was reopened, closed then reopened both kept', async () => {
+    const kid1 = await spawnChild('kid-1');
+    const kid2 = await spawnChild('kid-2');
+    await tick();
+    workingStates.update(managerId, STATE);
+    await tick();
+    for (let cycle = 0; cycle < 4; cycle++) { await sessions.close(kid1.id); await tick(); await reopen(kid1.id); await tick(); }
+    await sessions.close(kid2.id); await tick(); await reopen(kid2.id); await tick();
+
+    const refused = await stopOf(managerId);
+
+    const listing = refused.reason!.replace(/^.*fleet changed: /, '').replace(/\. Before ending.*$/, '');
+    expect(listing.split(', ').sort()).toEqual(['kid-1 (closed)', 'kid-1 (reopened)', 'kid-2 (closed)', 'kid-2 (reopened)']);
+  });
+
   it('names only the changes made after the state was written, not older spawns and closes', async () => {
     const early = await spawnChild('Early');
     await tick();
