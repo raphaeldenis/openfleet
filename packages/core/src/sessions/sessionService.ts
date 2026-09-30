@@ -1,7 +1,7 @@
 import { accessSync, closeSync, constants, existsSync, lstatSync, openSync, readSync, realpathSync, statSync, type Stats } from 'node:fs';
 import { basename, dirname, isAbsolute, join, normalize, sep } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import type { PermissionMode, Session, SessionSpec } from '@openfleet/shared';
+import { OpenFleetError, type ErrorCode, type ErrorEnvelope, type PermissionMode, type Session, type SessionCloseReason, type SessionSpec } from '@openfleet/shared';
 import { EventBus } from '../events/eventBus.js';
 import { createWorktree } from '../git/worktrees.js';
 import type { Harness, HarnessHandle } from '../harness/harness.js';
@@ -15,7 +15,18 @@ import { wrapAgentMessage } from './messageEnvelope.js';
 import { normalizePermissionMode, SessionRepository } from './sessionRepository.js';
 import { canDeliverNow, isClear, nextState, provesTurnEnded, startsClearedConversation, type SessionInput } from './stateMachine.js';
 
-export interface SessionServiceDeps { db: DatabaseSync; bus: EventBus; harnesses: Harness[]; baseUrl: string; worktreesRoot: string; resumeTimeoutMs?: number; firstStartTimeoutMs?: number; submitKeystrokeDelayMs?: number; clearInFlightTimeoutMs?: number; clearFlushGraceMs?: number }
+// Injected, not imported: describeError imports this module's error classes, so importing it here would make a cycle.
+// Absent, the service still closes sessions with their reason but broadcasts no error events.
+export type DescribeError = (error: unknown, scope: { sessionId?: string; where?: string }) => ErrorEnvelope;
+
+export interface SessionServiceDeps { db: DatabaseSync; bus: EventBus; harnesses: Harness[]; baseUrl: string; worktreesRoot: string; resumeTimeoutMs?: number; firstStartTimeoutMs?: number; submitKeystrokeDelayMs?: number; clearInFlightTimeoutMs?: number; clearFlushGraceMs?: number; describeError?: DescribeError }
+
+interface SessionClosure { exitCode?: number; reason?: SessionCloseReason }
+
+// A close the human must hear about without a request of their own. A user close and a clean exit are not failures.
+const FAILURE_CODE_BY_CLOSE_REASON: Partial<Record<SessionCloseReason, ErrorCode>> = {
+  launch_failed: 'launch_failed', resume_timeout: 'resume_timeout', harness_exit: 'harness_exited',
+};
 
 export class SessionClosedError extends Error {
   constructor(sessionId: string) {
@@ -356,7 +367,7 @@ export class SessionService {
       // The row above already exists: left alone, it would be a ghost forever — starting, no handle,
       // unclosable and unreopenable. Same treatment as resumeOne's own launch failure.
       log('error', `create: session ${id} failed to launch`, err);
-      this.markClosed(id, RESUME_LAUNCH_FAILED_EXIT_CODE);
+      this.markClosed(id, { exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE, reason: 'launch_failed' });
       throw err;
     }
     this.handles.set(id, handle);
@@ -367,7 +378,7 @@ export class SessionService {
     });
     handle.onExit((exitCode) => {
       if (activeHandleBySessionId.get(id) !== handle) return; // a stale process we already replaced (e.g. by a resume)
-      this.markClosed(id, exitCode);
+      this.markClosed(id, { exitCode, reason: this.reasonOfProcessExit(id, exitCode) });
     });
     // Same safety net resumeOne arms: a harness that starts but never reports a single real hook (SessionStart
     // included) leaves this session starting forever otherwise. A first launch gets its own, longer timeout
@@ -579,7 +590,7 @@ export class SessionService {
       if (!session || session.state === 'closed') return; // closed by something else while the relaunch was in flight
       const isCloseRequested = this.deliveryOf(sessionId).phase.name === 'closing';
       if (isCloseRequested) {
-        this.markClosed(sessionId, undefined);
+        this.markClosed(sessionId, { reason: 'closed_by_user' });
         return;
       }
       if (this.modelSwitchesAwaitingRelaunch.delete(sessionId)) {
@@ -668,7 +679,7 @@ export class SessionService {
       // harness_exit means the process already died — markClosed only records it. Any other path to
       // closed (SessionEnd, etc.) is not proof the process actually exited, so it must go through the
       // real close() (kill, await exit, escalate to SIGKILL) or the PTY is orphaned.
-      if (input.kind === 'harness_exit') this.markClosed(sessionId, undefined);
+      if (input.kind === 'harness_exit') this.markClosed(sessionId, { reason: this.reasonOfProcessExit(sessionId, undefined) });
       else void this.close(sessionId);
       return;
     }
@@ -1026,7 +1037,7 @@ export class SessionService {
       // No process to kill (this instance never launched or resumed one for this row), but the caller
       // still asked this session closed: markClosed is itself a no-op for an unknown or already-closed
       // id (MIN-04), so this only ever closes a real open-but-handle-less row instead of leaving it stuck.
-      this.markClosed(sessionId, undefined);
+      this.markClosed(sessionId, { reason: 'closed_by_user' });
       return;
     }
     await this.killWithEscalation(handle, options?.escalateAfterMs ?? DEFAULT_CLOSE_ESCALATE_MS);
@@ -1095,7 +1106,7 @@ export class SessionService {
       }
     }
     try {
-      this.markClosed(sessionId, RESUME_LAUNCH_FAILED_EXIT_CODE);
+      this.markClosed(sessionId, { exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE, reason: 'launch_failed' });
     } catch (err) {
       // markClosed's own DB write can itself fail; one bad row's cleanup must not stop the rest of the fleet.
       log('error', `resumeAll: failed to close session ${sessionId} after a resume error`, err);
@@ -1274,7 +1285,10 @@ export class SessionService {
     const delivery = this.deliveryOf(sessionId);
     const failedAttempts = delivery.failedAttempts + 1;
     const isNewFailureStreak = failedAttempts === 1;
-    if (isNewFailureStreak) log('error', `delivery: session ${sessionId} failed, its message stays queued`, err);
+    if (isNewFailureStreak) {
+      log('error', `delivery: session ${sessionId} failed, its message stays queued`, err);
+      this.announceError(sessionId, new OpenFleetError('delivery_failed', 'the message could not be delivered and stays queued.', { hint: 'the daemon retries on its own; reopen the session if it keeps failing.' }), 'delivery failed');
+    }
     // Past the last fast retry the machine parks on the slow PARKED_RETRY_MS; a state transition advances it sooner.
     const isParked = failedAttempts > MAX_DELIVERY_RETRIES;
     const retryDelayMs = isParked ? PARKED_RETRY_MS : DELIVERY_RETRY_MS;
@@ -1283,7 +1297,34 @@ export class SessionService {
     this.deliveries.set(sessionId, { ...delivery, timer: retry, failedAttempts });
   }
 
-  private markClosed(sessionId: string, exitCode: number | undefined): void {
+  // A close nobody asked for (the process died on its own) is a harness exit only when it failed; the user's own close is never a failure.
+  private reasonOfProcessExit(sessionId: string, exitCode: number | undefined): SessionCloseReason | undefined {
+    const isCloseRequested = this.deliveryOf(sessionId).phase.name === 'closing' || this.idsClosingByParent.has(sessionId);
+    if (isCloseRequested) return 'closed_by_user';
+    const isFailureExit = exitCode !== undefined && exitCode !== 0;
+    return isFailureExit ? 'harness_exit' : undefined;
+  }
+
+  // Best effort: an announcement that cannot be built or sent never stops the launch, close or delivery flow that raised it.
+  private announceError(sessionId: string, error: OpenFleetError, where: string): void {
+    const describe = this.deps.describeError;
+    if (!describe) return;
+    try {
+      this.deps.bus.emit({ type: 'error', sessionId, error: describe(error, { sessionId, where }) });
+    } catch (announceFailure) {
+      log('warn', `${where}: the error event could not be broadcast`, { code: (announceFailure as { code?: string }).code });
+    }
+  }
+
+  private announceClosure(sessionId: string, { exitCode, reason }: SessionClosure): void {
+    const failureCode = reason && FAILURE_CODE_BY_CLOSE_REASON[reason];
+    if (!failureCode) return;
+    const exitSuffix = exitCode === undefined ? '' : ` (exit code ${exitCode})`;
+    this.announceError(sessionId, new OpenFleetError(failureCode, `session closed: ${reason}${exitSuffix}`), `session closed: ${reason}`);
+  }
+
+  private markClosed(sessionId: string, closure: SessionClosure): void {
+    const { exitCode, reason } = closure;
     this.clearResumeTimer(sessionId);
     this.disarmInterruptWatch(sessionId);
     this.transcriptPaths.delete(sessionId);
@@ -1306,7 +1347,8 @@ export class SessionService {
     this.handles.delete(sessionId);
     activeHandleBySessionId.delete(sessionId);
     try {
-      this.deps.bus.emit({ type: 'session.closed', sessionId, exitCode });
+      this.deps.bus.emit({ type: 'session.closed', sessionId, exitCode, ...(reason && { reason }) });
+      this.announceClosure(sessionId, closure);
     } finally {
       this.idsClosingByParent.delete(sessionId);
     }
@@ -1324,7 +1366,7 @@ export class SessionService {
     } catch (err) {
       if (!(err instanceof UnknownHarnessError)) throw err;
       log('error', `resumeOne: session ${session.id} cannot resume: ${err.message}`);
-      this.markClosed(session.id, RESUME_LAUNCH_FAILED_EXIT_CODE);
+      this.markClosed(session.id, { exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE, reason: 'launch_failed' });
       return { launched: false, reason: err.message };
     }
     this.warnIfPermissiveSettings(session.harness, session.directory);
@@ -1360,7 +1402,7 @@ export class SessionService {
       // the CLI's interactive picker inside the PTY) — close this one row and keep resuming the rest of
       // the fleet rather than letting one bad row abort resumeAll for every other session.
       log('error', `resumeOne: session ${session.id} failed to launch`, err);
-      this.markClosed(session.id, RESUME_LAUNCH_FAILED_EXIT_CODE);
+      this.markClosed(session.id, { exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE, reason: 'launch_failed' });
       return { launched: false, reason: (err as Error).message };
     }
     this.handles.set(session.id, handle);
@@ -1371,7 +1413,7 @@ export class SessionService {
     });
     handle.onExit((exitCode) => {
       if (activeHandleBySessionId.get(session.id) !== handle) return; // a stale process we already replaced
-      this.markClosed(session.id, exitCode);
+      this.markClosed(session.id, { exitCode, reason: this.reasonOfProcessExit(session.id, exitCode) });
     });
     this.armResumeTimeout(session.id, handle);
     if (isNewConversationAnnounced) this.announceNewConversation(session.id);
@@ -1455,7 +1497,7 @@ export class SessionService {
         // under a new handle. Our own deletion above already left this slot empty — that's the expected,
         // common case and must still proceed to markClosed; only a handle claimed by someone else means skip.
         if (activeHandleBySessionId.has(sessionId)) return;
-        this.markClosed(sessionId, RESUME_TIMEOUT_EXIT_CODE);
+        this.markClosed(sessionId, { exitCode: RESUME_TIMEOUT_EXIT_CODE, reason: 'resume_timeout' });
       });
     }, timeoutMs);
     this.resumeTimers.set(sessionId, timer);
