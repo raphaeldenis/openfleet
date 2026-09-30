@@ -27,9 +27,10 @@ beforeEach(async () => {
 
   const db = openDatabase(':memory:');
   const bus = new EventBus();
-  deliveredMessageIds = [];
+  const deliveredByThisTestsBus: string[] = [];
+  deliveredMessageIds = deliveredByThisTestsBus;
   bus.subscribe((event) => {
-    if (event.type === 'message.delivered') deliveredMessageIds.push(event.messageId);
+    if (event.type === 'message.delivered') deliveredByThisTestsBus.push(event.messageId);
   });
   const sessions = new SessionService({ db, bus, harnesses: [new FakeHarness()], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt', submitKeystrokeDelayMs: 0 });
   const approvals = new ApprovalService({ db, bus });
