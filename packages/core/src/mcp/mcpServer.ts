@@ -20,7 +20,7 @@ import { registerTableViewTools } from './tableViewTools.js';
 import { registerTools } from './tools.js';
 import { registerWorkingStateTools } from './workingStateTools.js';
 
-export function createMcpHandler(deps: { sessions: SessionService; approvals: ApprovalService; managers: ManagerService; pulseScheduler: PulseScheduler; modelTable: ModelTable; stores: DataStoreService; storeRepo: DataStoreRepository; notes: NoteService; noteRepo: NoteRepository; docs: DocsFolderService; workingStates: WorkingStateService; worktreesRoot?: string }) {
+export function createMcpHandler(deps: { sessions: SessionService; approvals: ApprovalService; managers: ManagerService; pulseScheduler: PulseScheduler; modelTable: ModelTable; stores: DataStoreService; storeRepo: DataStoreRepository; notes: NoteService; noteRepo: NoteRepository; docs: DocsFolderService; workingStates: WorkingStateService; worktreesRoot: string }) {
   return async (req: IncomingMessage, res: ServerResponse, body: unknown): Promise<void> => {
     const token = (req.headers.authorization ?? '').replace(/^Bearer /, '');
     const caller = deps.sessions.byMcpToken(token);
@@ -28,7 +28,7 @@ export function createMcpHandler(deps: { sessions: SessionService; approvals: Ap
 
     // ponytail: one McpServer per request (stateless); pool them if profiling says so
     const server = new McpServer({ name: 'openfleet', version: '0.1.0' });
-    registerTools(server, { ...deps, caller, worktreesRoot: deps.worktreesRoot ?? '/tmp/openfleet-worktrees' });
+    registerTools(server, { ...deps, caller });
     registerTableTools(server, { stores: deps.stores, storeRepo: deps.storeRepo, caller });
     registerTableViewTools(server, { stores: deps.stores, storeRepo: deps.storeRepo, caller });
     registerNoteTools(server, { notes: deps.notes, noteRepo: deps.noteRepo, docs: deps.docs, caller });
