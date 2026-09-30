@@ -128,6 +128,7 @@ describe('StatePanelComponent', () => {
       await renderPanel({ states: [stateOf({ updatedAt: minutesBeforeNow(45) })] });
 
       expect(within(toggle()).getByTestId('overdue-chip')).toBeTruthy();
+      expect(within(toggle()).getByTestId('overdue-chip')).toHaveTextContent('state overdue');
       expect(screen.getByTestId('state-panel-overdue-reason')).toHaveTextContent('Written 45 minutes ago, limit 30 minutes');
     });
 

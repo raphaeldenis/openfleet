@@ -64,6 +64,29 @@ describe('SessionListComponent state overdue chip', () => {
     expect(within(row).getByTestId('overdue-chip')).toBeVisible();
   });
 
+  it('user sees the sidebar chip as an icon named "state overdue: <reason>", with no label text taking room in the row', async () => {
+    const fake = fakeEvents({ sessions: [{ id: 'c1', name: 'Gimli', emoji: '⚔️', state: 'generating' }], workingStatesReported: true });
+
+    await render(SessionListComponent, { providers: [provideRouter([]), { provide: FleetEventsService, useValue: fake }] });
+
+    const row = screen.getByTestId('session-c1');
+    const chip = within(row).getByRole('img', { name: 'state overdue: No state recorded' });
+    expect(chip).toHaveAttribute('title', 'No state recorded');
+    expect(row).not.toHaveTextContent('state overdue');
+  });
+
+  it('user sees the sidebar chip on the same meta line as the state and the cost, not on a line of its own', async () => {
+    const fake = fakeEvents({ sessions: [{ id: 'c1', name: 'Gimli', emoji: '⚔️', state: 'generating' }], workingStatesReported: true });
+
+    await render(SessionListComponent, { providers: [provideRouter([]), { provide: FleetEventsService, useValue: fake }] });
+
+    const row = screen.getByTestId('session-c1');
+    const metaOfChip = within(row).getByTestId('overdue-chip').closest('.meta');
+    const metaOfCost = row.querySelector('[title="Cost tracking is not implemented yet"]')?.closest('.meta');
+    expect(metaOfChip).not.toBeNull();
+    expect(metaOfChip).toBe(metaOfCost);
+  });
+
   it('user sees no chip on the sidebar when the daemon does not report working states', async () => {
     const fake = fakeEvents({ sessions, workingStatesReported: false });
 

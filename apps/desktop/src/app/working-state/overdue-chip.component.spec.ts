@@ -143,6 +143,16 @@ describe('OverdueChipComponent', () => {
     expect(chip()).toHaveAttribute('aria-label', `state overdue: ${expected}`);
   });
 
+  it('user sees only an icon named with the reason in the compact chip', async () => {
+    await render(OverdueChipComponent, {
+      bindings: [inputBinding('session', () => sessionOf()), inputBinding('compact', () => true)],
+      providers: [{ provide: FleetEventsService, useValue: fakeWorkingStateEvents({ sessions: [sessionOf()], states: [] }) }],
+    });
+
+    expect(screen.getByRole('img', { name: 'state overdue: No state recorded' })).toBeVisible();
+    expect(chip()).not.toHaveTextContent('state overdue');
+  });
+
   describe('with a time the daemon reports unreadably', () => {
     it.each([
       ['a state time', { updatedAt: 'not a date' }],

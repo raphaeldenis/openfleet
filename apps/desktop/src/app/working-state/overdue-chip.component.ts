@@ -9,11 +9,13 @@ import { injectOverdue } from './working-state-overdue';
     @if (overdue(); as overdue) {
       <span
         class="chip"
+        [class.compact]="compact()"
         data-testid="overdue-chip"
+        [attr.role]="compact() ? 'img' : null"
         [attr.data-reason]="overdue.reason"
         [attr.title]="overdue.explanation"
         [attr.aria-label]="'state overdue: ' + overdue.explanation"
-      ><span aria-hidden="true">!</span>state overdue</span>
+      ><span aria-hidden="true">!</span>@if (!compact()) {state overdue}</span>
     }
   `,
   styles: `
@@ -24,9 +26,11 @@ import { injectOverdue } from './working-state-overdue';
       background: color-mix(in oklch, var(--state-waiting-permission) 14%, transparent);
     }
     .chip > span[aria-hidden] { color: var(--state-waiting-permission); }
+    .chip.compact { justify-content: center; width: 1.25rem; padding: 0; border-radius: 50%; }
   `,
 })
 export class OverdueChipComponent {
   readonly session = input.required<Session>();
+  readonly compact = input(false);
   protected readonly overdue = injectOverdue(() => this.session());
 }

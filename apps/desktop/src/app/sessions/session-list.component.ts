@@ -31,7 +31,7 @@ import { OverdueChipComponent } from '../working-state/overdue-chip.component';
           <span class="name" [attr.title]="visibleNameOf(session)">{{ session.emoji }} {{ visibleNameOf(session) }}</span>
           <span class="meta">
             @if (!managerOf(session.id)) {
-              <of-overdue-chip [session]="session" />
+              <of-overdue-chip [session]="session" [compact]="true" />
             }
             <of-state-chip [state]="session.state" />
             <span class="rung" title="Model rung">{{ session.model || '—' }}</span>
