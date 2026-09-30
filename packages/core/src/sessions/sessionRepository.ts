@@ -168,6 +168,15 @@ export class SessionRepository {
       this.db.prepare('INSERT OR IGNORE INTO session_cli_ids (cli_session_id, session_id) VALUES (?, ?)').run(cliSessionId, id);
     });
   }
+  // Whether a user prompt reached the CLI's current conversation, outside Session like cliSessionId: only such a
+  // conversation has a transcript worth resuming, and only its loss is worth announcing.
+  isCurrentConversationPrompted(id: string): boolean {
+    const row = this.db.prepare('SELECT prompted FROM sessions WHERE id = ?').get(id) as { prompted: number } | undefined;
+    return row?.prompted === 1;
+  }
+  setCurrentConversationPrompted(id: string, isPrompted: boolean): void {
+    this.db.prepare('UPDATE sessions SET prompted = ? WHERE id = ?').run(isPrompted ? 1 : 0, id);
+  }
   isCliSessionIdOfAnotherSession(id: string, cliSessionId: string): boolean {
     const isLaunchOrCurrentIdOfAnother = this.db.prepare('SELECT 1 AS found FROM sessions WHERE id <> ? AND (id = ? OR cli_session_id = ?)').get(id, cliSessionId, cliSessionId) !== undefined;
     const isLeftBehindByAnother = this.db.prepare('SELECT 1 AS found FROM session_cli_ids WHERE session_id <> ? AND cli_session_id = ?').get(id, cliSessionId) !== undefined;

@@ -86,10 +86,16 @@ const userPrompts = async (id: string, cliSessionId: string = id) => {
   await sendHook(id, { hook_event_name: 'Stop' }, cliSessionId);
 };
 
-const userTypesClear = async (id: string) => {
+const userClearsWithoutPromptingAfterwards = async (id: string) => {
   const clearedId = randomUUID();
   await sendHook(id, { hook_event_name: 'SessionEnd', reason: 'clear' });
   await sendHook(id, { hook_event_name: 'SessionStart', source: 'clear' }, clearedId);
+  return clearedId;
+};
+
+const userTypesClear = async (id: string) => {
+  const clearedId = await userClearsWithoutPromptingAfterwards(id);
+  await userPrompts(id, clearedId);
   return clearedId;
 };
 
@@ -320,6 +326,45 @@ describe('a user switching the model of a session that never got a prompt', () =
 
     expect(lastLaunch().resuming).toBe(true);
     expect(lastLaunch().cliSessionId ?? lastLaunch().sessionId).toBe(id);
+  });
+});
+
+describe('a user restarting the daemon around a conversation that may not have a prompt yet', () => {
+  it('sees a conversation opened by a /clear and never prompted resumed as its own again, silently, restart after restart', async () => {
+    const id = await runningSession();
+    const clearedId = await userClearsWithoutPromptingAfterwards(id);
+    harness.missingConversations.add(clearedId);
+
+    await restartDaemon();
+    await restartDaemon();
+
+    expect(lastLaunch().resuming).toBe(false);
+    expect(lastLaunch().cliSessionId ?? lastLaunch().sessionId).toBe(clearedId);
+    expect(noticeCount()).toBe(0);
+  });
+
+  it('sees a conversation that got a prompt and lost its file announced after a restart', async () => {
+    const id = await runningSession();
+    await userPrompts(id);
+    harness.missingConversations.add(id);
+
+    await restartDaemon();
+
+    expect(lastLaunch().resuming).toBe(false);
+    expect(lastLaunch().cliSessionId).not.toBe(id);
+    expect(noticeCount()).toBe(1);
+  });
+
+  it('sees the prompt of a conversation forgotten once a /clear opens another one', async () => {
+    const id = await runningSession();
+    await userPrompts(id);
+    const clearedId = await userClearsWithoutPromptingAfterwards(id);
+    harness.missingConversations.add(clearedId);
+
+    await closeThenReopen(id);
+
+    expect(lastLaunch().cliSessionId ?? lastLaunch().sessionId).toBe(clearedId);
+    expect(noticeCount()).toBe(0);
   });
 });
 

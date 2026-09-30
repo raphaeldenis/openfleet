@@ -9,6 +9,7 @@ const ERRNO_MEANING_NOT_THERE = new Set(['ENOENT', 'ENOTDIR']);
 const READ_CHUNK_BYTES = 64 * 1024;
 // A transcript this long with no user or assistant line yet is not a title-only stub: it counts as a conversation.
 const MAX_BYTES_SCANNED = 4 * 1024 * 1024;
+const BYTE_ORDER_MARK = /^﻿/;
 const CONVERSATION_LINE_TYPES = new Set(['user', 'assistant']);
 
 // The daemon's own env is what the harness passes through to the CLI child (childEnvironment.ts keeps
@@ -33,7 +34,7 @@ function errnoCodeOf(error: unknown): string | undefined {
 
 function isConversationLine(line: string): boolean {
   try {
-    const parsed: unknown = JSON.parse(line);
+    const parsed: unknown = JSON.parse(line.replace(BYTE_ORDER_MARK, ''));
     const type = typeof parsed === 'object' && parsed !== null ? (parsed as { type?: unknown }).type : undefined;
     return typeof type === 'string' && CONVERSATION_LINE_TYPES.has(type);
   } catch {
