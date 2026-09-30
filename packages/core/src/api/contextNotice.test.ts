@@ -570,6 +570,22 @@ describe('the notice stays right on a huge transcript and at the bounds of the s
     expect(noticeOf(manager)).toBe(400_000);
   });
 
+  it.each([
+    ['a negative', -1],
+    ['a float', 350_000.5],
+    ['an unsafe integer', 2 ** 53],
+  ])('takes no reading from a usage with %s field and does not fall back to an older line, which could clear a notice the real context still deserves', async (_label, hostileValue) => {
+    const manager = await createManager();
+    contextGrowsTo(manager, 450_000);
+    await stop(manager);
+    const hostileUsage = { input_tokens: hostileValue, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 };
+    writeTranscript(manager, assistantLine({ contextTokens: 100_000 }), assistantLine({ usage: hostileUsage }));
+
+    await stop(manager);
+
+    expect(noticeOf(manager)).toBe(400_000);
+  });
+
   describe('after a /compact the lines written before the compact boundary are not the context any more', () => {
     const compactBoundaryLine = `${JSON.stringify({ type: 'system', subtype: 'compact_boundary', isSidechain: false })}\n`;
     const zeroUsage = { input_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 };
