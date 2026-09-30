@@ -241,7 +241,7 @@ describe('NewSessionFormComponent', () => {
         expect(api.createManagerSession).toHaveBeenCalledWith(expect.objectContaining({ pulseSeconds: 1800 }));
       });
 
-      it('user who types a pulse then clears it is told a whole number is needed and cannot submit', async () => {
+      it('user who types a pulse then clears it is back to the daemon default: no error and the manager carries no pulse seconds', async () => {
         const api = fakeApi();
         await renderForm(api, { mode: 'manager' });
         await fillSessionFields({ name: 'Lead' });
@@ -249,10 +249,11 @@ describe('NewSessionFormComponent', () => {
         await userEvent.type(screen.getByTestId('manager-pulse-seconds'), '5');
         await userEvent.clear(screen.getByTestId('manager-pulse-seconds'));
 
+        expect(screen.queryByTestId('manager-pulse-seconds-error')).toBeNull();
         await userEvent.click(submitButton());
 
-        expect(screen.getByTestId('manager-pulse-seconds-error')).toHaveTextContent('whole number');
-        expect(api.createManagerSession).not.toHaveBeenCalled();
+        expect(api.createManagerSession).toHaveBeenCalledTimes(1);
+        expect(api.createManagerSession.mock.calls[0]![0]).not.toHaveProperty('pulseSeconds');
       });
 
       it('user who toggles to session and back keeps a pulse field that was never touched empty', async () => {
@@ -500,16 +501,15 @@ describe('NewSessionFormComponent', () => {
         expect(screen.queryByTestId('manager-mission-error')).toBeNull();
       });
 
-      it('a pulse typed then cleared is still an error after the round trip, and correcting it clears the error', async () => {
+      it('an out-of-range pulse is still an error after the round trip, and clearing it clears the error', async () => {
         await renderForm(fakeApi(), { mode: 'manager' });
-        await userEvent.type(screen.getByTestId('manager-pulse-seconds'), '5');
-        await userEvent.clear(screen.getByTestId('manager-pulse-seconds'));
+        await userEvent.type(screen.getByTestId('manager-pulse-seconds'), '0');
         expect(screen.getByTestId('manager-pulse-seconds-error')).toBeTruthy();
 
         await userEvent.click(screen.getByTestId('new-session-mode-session'));
         await userEvent.click(screen.getByTestId('new-session-mode-manager'));
         await waitFor(() => expect(screen.getByTestId('manager-pulse-seconds-error')).toBeTruthy());
-        await userEvent.type(screen.getByTestId('manager-pulse-seconds'), '60');
+        await userEvent.clear(screen.getByTestId('manager-pulse-seconds'));
 
         expect(screen.queryByTestId('manager-pulse-seconds-error')).toBeNull();
       });

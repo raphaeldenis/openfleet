@@ -70,7 +70,7 @@ export class ManagerFieldsComponent implements OnInit {
   protected readonly pulseSecondsBounds = PULSE_SECONDS_BOUNDS;
   protected readonly childrenCapBounds = CHILDREN_CAP_BOUNDS;
   readonly isLocked = input(false);
-  // Undefined until the user types: the daemon then applies its own heartbeat default.
+  // Undefined or null (typed then cleared): the daemon applies its own heartbeat default.
   readonly pulseSeconds = model<number | null | undefined>(undefined);
   readonly childrenCap = model(2);
   readonly mission = model('');
@@ -120,8 +120,8 @@ export class ManagerFieldsComponent implements OnInit {
 
   private validatePulseSeconds(): void {
     const pulseSeconds = this.pulseSeconds();
-    const isLeftToDaemonDefault = pulseSeconds === undefined;
-    this.pulseSecondsError.set(isLeftToDaemonDefault ? '' : boundedIntegerError('Pulse seconds', pulseSeconds as number, PULSE_SECONDS_BOUNDS));
+    const isLeftToDaemonDefault = pulseSeconds === undefined || pulseSeconds === null;
+    this.pulseSecondsError.set(isLeftToDaemonDefault ? '' : boundedIntegerError('Pulse seconds', pulseSeconds, PULSE_SECONDS_BOUNDS));
   }
 
   private validateChildrenCap(): void {
