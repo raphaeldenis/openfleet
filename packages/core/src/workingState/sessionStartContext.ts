@@ -73,7 +73,7 @@ export class SessionStartContext {
     const ageMs = ageMsOf(state, this.deps.clock());
     const reasons: string[] = [];
     if (isOlderThanLimit(ageMs, this.deps.settings.maxAgeMinutes)) reasons.push(`written ${minutesLabel(ageInWholeMinutes(ageMs))} ago, the limit is ${this.deps.settings.maxAgeMinutes}`);
-    if (isWrittenBeforeFleetChanged(state)) reasons.push('written before the last spawn or close');
+    if (isWrittenBeforeFleetChanged(state)) reasons.push('written before the last spawn, close or reopen');
     return reasons;
   }
 
