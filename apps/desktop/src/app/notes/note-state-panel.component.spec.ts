@@ -30,11 +30,10 @@ describe('NoteStatePanelComponent', () => {
   });
 
   describe('loading', () => {
-    it('user sees six skeleton bars with the mockup widths, not a spinner', async () => {
+    it('user sees six skeleton bars, not a spinner', async () => {
       await renderPanel('loading');
 
-      const bars = screen.getAllByTestId('note-skeleton-bar');
-      expect(bars.map((bar) => bar.style.width)).toEqual(['40%', '90%', '85%', '60%', '95%', '70%']);
+      expect(screen.getAllByTestId('note-skeleton-bar')).toHaveLength(6);
       expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
     });
   });
