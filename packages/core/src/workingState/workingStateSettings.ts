@@ -39,7 +39,7 @@ export const CONTEXT_NOTICE_ROLES = ['manager', 'child', 'plain'] as const;
 export type ContextNoticeRole = (typeof CONTEXT_NOTICE_ROLES)[number];
 export interface ContextNoticeThresholds { firstAt: number; every: number }
 
-/** A role absent from `roles` is not watched. A model alias absent from `models` follows `firstAt` and `every`. */
+/** A role absent from `roles` is not watched, and a given `roles` replaces the default `{ manager: true }` entirely. A model alias absent from `models` follows `firstAt` and `every`. */
 export interface ContextNoticeSettings extends ContextNoticeThresholds {
   roles: Partial<Record<ContextNoticeRole, boolean>>;
   models: Record<string, Partial<ContextNoticeThresholds>>;
