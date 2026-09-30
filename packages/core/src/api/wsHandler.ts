@@ -9,6 +9,7 @@ import type { ApprovalService } from '../governance/approvalService.js';
 import type { EventBus } from '../events/eventBus.js';
 import { log } from '../logger.js';
 import type { ManagerService } from '../managers/managerService.js';
+import type { DegradedRegistry } from '../process/degradedRegistry.js';
 import { SessionClosedError, type SessionService } from '../sessions/sessionService.js';
 import { DEFAULT_WORKING_STATE_MAX_AGE_MINUTES } from '../workingState/workingStateSettings.js';
 import type { TodoTracker } from '../todos/todoTracker.js';
@@ -39,13 +40,17 @@ function echoableSessionId(frame: unknown): string | undefined {
   return isEchoable ? sessionId : undefined;
 }
 
-// Best effort: a socket that is closing or whose send throws never stops the caller.
-function sendBestEffort(socket: WebSocket, payload: string): void {
-  if (socket.readyState !== socket.OPEN) return;
+/** Best effort: a socket that is closing or whose send throws never stops the caller. `onSettled` hears once whether the send failed: it throws, or its write reports an error. */
+function sendBestEffort(socket: WebSocket, payload: string, onSettled: (failed: boolean) => void = () => {}): void {
+  if (socket.readyState !== socket.OPEN) return onSettled(false);
   try {
-    socket.send(payload);
+    socket.send(payload, (error) => {
+      if (error) log('warn', 'ws: write failed', { code: (error as { code?: string }).code });
+      onSettled(error != null);
+    });
   } catch (error) {
     log('warn', 'ws: send failed', { code: (error as { code?: string }).code });
+    onSettled(true);
   }
 }
 
@@ -84,14 +89,25 @@ export interface WsHandler {
 
 const DEFAULT_WS_CLOSE_GRACE_MS = 250;
 
-export function createWsHandler(deps: { bus: EventBus; sessions: SessionService; approvals: ApprovalService; managers: ManagerService; wsTickets: WsTicketStore; wsCloseGraceMs?: number; workingStates?: WorkingStateService; workingStateMaxAgeMinutes?: number; todos?: TodoTracker }): WsHandler {
+export function createWsHandler(deps: { bus: EventBus; sessions: SessionService; approvals: ApprovalService; managers: ManagerService; wsTickets: WsTicketStore; wsCloseGraceMs?: number; workingStates?: WorkingStateService; workingStateMaxAgeMinutes?: number; degraded?: DegradedRegistry; todos?: TodoTracker }): WsHandler {
   const wss = new WebSocketServer({ noServer: true });
   // A broadcast runs inside the session pipeline (the bus is synchronous): one bad client never stops the others or the caller.
   const broadcast = (event: ServerEvent) => {
     const payload = JSON.stringify(event);
-    for (const client of wss.clients) sendBestEffort(client, payload);
+    const clients = [...wss.clients];
+    let unsettledSends = clients.length;
+    let failedSends = 0;
+    const settle = (failed: boolean) => {
+      if (failed) failedSends += 1;
+      unsettledSends -= 1;
+      if (unsettledSends > 0) return;
+      if (failedSends > 0) deps.degraded?.mark('ws_broadcast_failed', 'a client did not receive an event.');
+      else deps.degraded?.clear('ws_broadcast_failed');
+    };
+    for (const client of clients) sendBestEffort(client, payload, settle);
   };
   deps.bus.subscribe(broadcast);
+  deps.degraded?.onChange((issues) => broadcast({ type: 'daemon.issues', issues }));
 
   const broadcastWorkingStateOf = (sessionId: string | undefined) => {
     const isClosed = sessionId ? deps.sessions.get(sessionId)?.state === 'closed' : false;
@@ -120,6 +136,7 @@ export function createWsHandler(deps: { bus: EventBus; sessions: SessionService;
     send(socket, {
       type: 'snapshot', sessions: deps.sessions.list(), approvals: deps.approvals.listPending(), managers: deps.managers.listViews(),
       ...workingStateSnapshotFields(),
+      ...(deps.degraded && { daemonIssues: deps.degraded.list() }),
       ...(deps.todos ? { todoSummaries: deps.todos.summaries() } : {}),
     });
     socket.on('message', (raw) => {

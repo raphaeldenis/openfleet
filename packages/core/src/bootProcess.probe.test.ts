@@ -186,7 +186,7 @@ describe('probe: signal while the sessions are still resuming', () => {
     expect((await daemon.exited).code).toBe(0);
   }, 40_000);
 
-  it('a resume that outlasts the shutdown guard exits 1 at the guard instead of hanging', async () => {
+  it('a resume that outlasts the shutdown guard exits 3 at the guard instead of hanging', async () => {
     const { daemon } = await bootOnFreePort({ OPENFLEET_HOME: homeWith() }, slowSessionsPreload({ resumeMs: 60_000, closeMs: 0 }));
     await waitFor(() => daemon.stdout().includes('resumeAll started'), 'the resume to start');
 
@@ -194,7 +194,7 @@ describe('probe: signal while the sessions are still resuming', () => {
     daemon.child.kill('SIGTERM');
     const { code } = await daemon.exited;
 
-    expect(code).toBe(1);
+    expect(code).toBe(3);
     expect(Date.now() - signalAt).toBeLessThan(SHUTDOWN_GUARD_MS + 3000);
   }, 40_000);
 });

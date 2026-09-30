@@ -11,10 +11,17 @@ function normalizeLineEndings(text: string): string {
 
 // A line that merely contains a marker (not just an exact match) is neutralized too: a hostile body could
 // pad the marker with trailing text to still visually read as closing the envelope.
+// The CLI strips format, separator and control characters from a paste, so a marker split by one of them reads as
+// a literal marker to the model: the check runs on a stripped copy, while the body itself keeps every character.
+const CHARACTERS_THE_CLI_STRIPS = /[\p{Cf}\p{Zl}\p{Zp}\p{Cc}]/gu;
 function neutralizeEnvelopeMarkers(body: string): string {
   return body
     .split('\n')
-    .map((line) => (line.includes(AGENT_MESSAGE_BEGIN) || line.includes(AGENT_MESSAGE_END) ? `\\${line}` : line))
+    .map((line) => {
+      const visibleLine = line.replace(CHARACTERS_THE_CLI_STRIPS, '');
+      const holdsMarker = visibleLine.includes(AGENT_MESSAGE_BEGIN) || visibleLine.includes(AGENT_MESSAGE_END);
+      return holdsMarker ? `\\${line}` : line;
+    })
     .join('\n');
 }
 

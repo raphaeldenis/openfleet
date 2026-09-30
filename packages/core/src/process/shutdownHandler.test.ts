@@ -59,7 +59,27 @@ describe('installShutdownHandler', () => {
     expect(proc.exit).toHaveBeenCalledTimes(1);
   });
 
-  it('force-exits with code 1 if shutdown has not settled by the guard timeout (AUD-08)', async () => {
+  it('tells the process the shutdown began, once, before it runs the shutdown callback', () => {
+    const { proc, fire } = fakeProcess();
+    const order: string[] = [];
+    installShutdownHandler(() => { order.push('shutdown'); return new Promise<void>(() => {}); }, proc, { onShutdownBegin: () => order.push('began') });
+
+    fire('SIGTERM');
+    fire('SIGINT');
+
+    expect(order).toEqual(['began', 'shutdown']);
+  });
+
+  it('exits with code 0 when the shutdown callback resolves', async () => {
+    const { proc, fire } = fakeProcess();
+    installShutdownHandler(() => Promise.resolve(), proc);
+
+    fire('SIGTERM');
+
+    await vi.waitFor(() => expect(proc.exit).toHaveBeenCalledWith(0));
+  });
+
+  it('force-exits with code 3 if shutdown has not settled by the guard timeout: a supervisor may restart, nothing was half-written (AUD-08)', async () => {
     vi.useFakeTimers();
     const { proc, fire } = fakeProcess();
     const shutdown = vi.fn(() => new Promise<void>(() => {})); // never settles
@@ -70,7 +90,7 @@ describe('installShutdownHandler', () => {
 
     await vi.advanceTimersByTimeAsync(10_000);
 
-    expect(proc.exit).toHaveBeenCalledWith(1);
+    expect(proc.exit).toHaveBeenCalledWith(3);
     expect(proc.exit).toHaveBeenCalledTimes(1);
     vi.useRealTimers();
   });

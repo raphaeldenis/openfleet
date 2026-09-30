@@ -48,7 +48,7 @@ describe('REST', () => {
   it('answers /health with no auth required, for CI/e2e readiness probes', async () => {
     const res = await fetch(`${server.url}/health`);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, version: DAEMON_VERSION });
+    expect(await res.json()).toEqual({ ok: true, version: DAEMON_VERSION, status: 'ok', issues: 0 });
   });
 
   it('answers /health 503 shutting_down once the shutdown has begun, so a launching app does not reuse a dying daemon', async () => {

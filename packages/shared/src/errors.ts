@@ -78,6 +78,8 @@ export const ERROR_CODES = {
   daemon_degraded: { kind: 'unavailable' },
   // The daemon keeps retrying a queued message on its own; the caller only waits.
   delivery_failed: { kind: 'unavailable', retry: 'later' },
+  // The same message fails again: only a changed body (without invisible characters) can be delivered.
+  message_held_for_review: { kind: 'invalid_request', retry: 'never' },
   // The process is gone: the same call cannot help, only reopening the session can. Not internal, so its actionable message reaches the client.
   harness_exited: { kind: 'unavailable', retry: 'never' },
   // A missing binary on the daemon PATH: only installing it, or starting the daemon from a shell that has it, helps.

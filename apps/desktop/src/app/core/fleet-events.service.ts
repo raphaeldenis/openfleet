@@ -211,6 +211,7 @@ export class FleetEventsService {
       case 'manager.created': return this.upsertManager(event.manager);
       case 'manager.pulsed': return this.upsertManager(event.manager);
       case 'error': return; // no desktop surface reads a server error event yet
+      case 'daemon.issues': return; // no desktop surface reads the degraded state yet
       default: return;
     }
   }

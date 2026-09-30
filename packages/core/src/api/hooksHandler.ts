@@ -5,48 +5,20 @@ import type { ContextNotice } from '../workingState/contextNotice.js';
 import type { SessionStartContext, SessionStartRequest } from '../workingState/sessionStartContext.js';
 import type { ApprovalService } from '../governance/approvalService.js';
 import { log } from '../logger.js';
+import type { DegradedRegistry } from '../process/degradedRegistry.js';
 import type { SessionService } from '../sessions/sessionService.js';
 import { handoverReminder, type HandoverLedger } from '../workingState/handoverLedger.js';
 import type { StopRefusal } from '../workingState/stopRefusal.js';
 import { json, type Handler } from './router.js';
 
-function decideStopRefusalFailingOpen(stopRefusal: StopRefusal | undefined, sessionId: string, stopHookActive: boolean): StopHookOutput | undefined {
+/** Runs `work`; a throw is logged, counted toward the degraded state, and answered as if the feature were absent (undefined). */
+function failingOpen<T>(degraded: DegradedRegistry | undefined, failure: string, work: () => T): T | undefined {
   try {
-    return stopRefusal?.decide({ sessionId, stopHookActive });
+    return work();
   } catch (error) {
-    log('warn', `stop refusal check failed, letting the turn end: ${error instanceof Error ? error.message : String(error)}`);
+    log('warn', `${failure}: ${error instanceof Error ? error.message : String(error)}`);
+    degraded?.recordHookFailOpen();
     return undefined;
-  }
-}
-
-function buildSessionStartContextFailingOpen(sessionStartContext: SessionStartContext | undefined, request: SessionStartRequest): ContextHookOutput | undefined {
-  try {
-    return sessionStartContext?.build(request);
-  } catch (error) {
-    log('warn', `session start context failed, injecting nothing: ${error instanceof Error ? error.message : String(error)}`);
-    return undefined;
-  }
-}
-
-function recordHandoversFailingOpen(handoverLedger: HandoverLedger | undefined, request: { sessionId: string; prompt: string | undefined }): ContextHookOutput | undefined {
-  try {
-    const recorded = handoverLedger?.record(request) ?? [];
-    if (recorded.length === 0) return undefined;
-    return { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: handoverReminder(recorded) } };
-  } catch (error) {
-    log('warn', `handover recording failed, recording nothing: ${error instanceof Error ? error.message : String(error)}`);
-    return undefined;
-  }
-}
-
-function trackContextNoticeFailingOpen(contextNotice: ContextNotice | undefined, sessionId: string, event: ClaudeHookEvent): void {
-  try {
-    if (event.hook_event_name === 'Stop') contextNotice?.measureAtStop(sessionId);
-    if (event.hook_event_name === 'UserPromptSubmit') contextNotice?.measureAtPrompt(sessionId);
-    const startsFreshConversation = event.hook_event_name === 'SessionStart' && (event.source === 'clear' || event.source === 'compact');
-    if (startsFreshConversation) contextNotice?.clearForNewConversation(sessionId);
-  } catch (error) {
-    log('warn', `context notice failed, changing nothing: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
@@ -59,12 +31,33 @@ function trackTodosFailingOpen(todos: TodoTracker | undefined, sessionId: string
     if (isTodoToolCall && !todoCall) todos.readAfterHookWithoutPayload(sessionId);
     if (event.hook_event_name === 'SessionStart' && event.source === 'resume') todos.repair(sessionId);
     if (event.hook_event_name === 'Stop' || event.hook_event_name === 'SessionEnd') todos.catchUp(sessionId);
-      } catch {
+  } catch {
     log('warn', 'todos: a hook could not be handed to the todo tracker, changing nothing', undefined, { code: 'todo_notify_failed', sessionId });
   }
 }
 
-export function hooksHandler(deps: { sessions: SessionService; approvals: ApprovalService; stopRefusal?: StopRefusal; sessionStartContext?: SessionStartContext; handoverLedger?: HandoverLedger; contextNotice?: ContextNotice; todos?: TodoTracker }): Handler {
+export function hooksHandler(deps: { sessions: SessionService; approvals: ApprovalService; stopRefusal?: StopRefusal; sessionStartContext?: SessionStartContext; handoverLedger?: HandoverLedger; contextNotice?: ContextNotice; todos?: TodoTracker; degraded?: DegradedRegistry }): Handler {
+  const decideStopRefusalFailingOpen = (sessionId: string, stopHookActive: boolean): StopHookOutput | undefined =>
+    failingOpen(deps.degraded, 'stop refusal check failed, letting the turn end', () => deps.stopRefusal?.decide({ sessionId, stopHookActive }));
+
+  const buildSessionStartContextFailingOpen = (request: SessionStartRequest): ContextHookOutput | undefined =>
+    failingOpen(deps.degraded, 'session start context failed, injecting nothing', () => deps.sessionStartContext?.build(request));
+
+  const recordHandoversFailingOpen = (request: { sessionId: string; prompt: string | undefined }): ContextHookOutput | undefined =>
+    failingOpen(deps.degraded, 'handover recording failed, recording nothing', () => {
+      const recorded = deps.handoverLedger?.record(request) ?? [];
+      if (recorded.length === 0) return undefined;
+      return { hookSpecificOutput: { hookEventName: 'UserPromptSubmit' as const, additionalContext: handoverReminder(recorded) } };
+    });
+
+  const trackContextNoticeFailingOpen = (sessionId: string, event: ClaudeHookEvent): void =>
+    failingOpen(deps.degraded, 'context notice failed, changing nothing', () => {
+      if (event.hook_event_name === 'Stop') deps.contextNotice?.measureAtStop(sessionId);
+      if (event.hook_event_name === 'UserPromptSubmit') deps.contextNotice?.measureAtPrompt(sessionId);
+      const startsFreshConversation = event.hook_event_name === 'SessionStart' && (event.source === 'clear' || event.source === 'compact');
+      if (startsFreshConversation) deps.contextNotice?.clearForNewConversation(sessionId);
+    });
+
   return async ({ res, params, body }) => {
     const session = deps.sessions.byHookToken(params.hookToken ?? '');
     const parsed = ClaudeHookEventSchema.safeParse(body);
@@ -73,13 +66,13 @@ export function hooksHandler(deps: { sessions: SessionService; approvals: Approv
 
     const todoCall = parsed.data.hook_event_name === 'PostToolUse' ? narrowTodoHookCall(parsed.data) : undefined;
     const event = withoutTodoPayload(parsed.data);
-    const stopRefusal = event.hook_event_name === 'Stop' ? decideStopRefusalFailingOpen(deps.stopRefusal, session.id, event.stop_hook_active === true) : undefined;
+    const stopRefusal = event.hook_event_name === 'Stop' ? decideStopRefusalFailingOpen(session.id, event.stop_hook_active === true) : undefined;
     const previousTranscriptPath = deps.sessions.transcriptPathOf(session.id);
-    const sessionStartContext = event.hook_event_name === 'SessionStart' ? buildSessionStartContextFailingOpen(deps.sessionStartContext, { sessionId: session.id, source: event.source, previousTranscriptPath }) : undefined;
+    const sessionStartContext = event.hook_event_name === 'SessionStart' ? buildSessionStartContextFailingOpen({ sessionId: session.id, source: event.source, previousTranscriptPath }) : undefined;
     const isDaemonSeededPrompt = event.hook_event_name === 'UserPromptSubmit' && event.prompt !== undefined && deps.sessions.isSeededPrompt(session.id, event.prompt);
-    const handoverReminderOutput = event.hook_event_name === 'UserPromptSubmit' && !isDaemonSeededPrompt ? recordHandoversFailingOpen(deps.handoverLedger, { sessionId: session.id, prompt: event.prompt }) : undefined;
+    const handoverReminderOutput = event.hook_event_name === 'UserPromptSubmit' && !isDaemonSeededPrompt ? recordHandoversFailingOpen({ sessionId: session.id, prompt: event.prompt }) : undefined;
     deps.sessions.applyInput(session.id, { kind: 'hook', event, turnContinues: stopRefusal !== undefined });
-    trackContextNoticeFailingOpen(deps.contextNotice, session.id, event);
+    trackContextNoticeFailingOpen(session.id, event);
     trackTodosFailingOpen(deps.todos, session.id, event, todoCall);
     if (stopRefusal) return json(res, 200, stopRefusal);
     if (sessionStartContext) return json(res, 200, sessionStartContext);
