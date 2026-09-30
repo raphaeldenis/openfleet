@@ -21,7 +21,7 @@ pub struct IssueReport {
 
 /// Returns the GitHub new-issue URL prefilled with the report, the oldest log lines dropped until it fits `MAX_URL_BYTES`.
 pub fn issue_url(report: &IssueReport) -> String {
-  let mut lines: Vec<String> = report.log_lines.iter().map(|line| fit_line(line)).collect();
+  let mut lines: Vec<String> = report.log_lines.iter().map(|line| fit_line(&with_home_shortened(line, &report.user_home))).collect();
   loop {
     let url = url_with(report, &lines);
     let fits = url.len() <= MAX_URL_BYTES;
@@ -37,22 +37,65 @@ fn fit_line(line: &str) -> String {
   line.chars().take(MAX_LINE_CHARS).collect::<String>().replace("```", "'''")
 }
 
+/// Every way a log line spells the home folder: plain, JSON-escaped with and without escaped slashes, percent-encoded in both hex cases.
+fn home_spellings(user_home: &str) -> Vec<String> {
+  let home = user_home.trim_end_matches('/');
+  if home.is_empty() {
+    return Vec::new();
+  }
+  let json_escaped = home.replace('\\', "\\\\").replace('"', "\\\"");
+  let json_escaped_with_slashes = json_escaped.replace('/', "\\/");
+  vec![home.to_string(), json_escaped, json_escaped_with_slashes, percent_escaped(home, false), percent_escaped(home, true)]
+}
+
+/// Replaces the home folder with `~` wherever a whole folder name ends, so `/Users/jdoe2` is not taken for `/Users/jdoe`.
+fn with_home_shortened(text: &str, user_home: &str) -> String {
+  home_spellings(user_home).iter().fold(text.to_string(), |shortened, spelling| with_folder_shortened(&shortened, spelling))
+}
+
+fn with_folder_shortened(text: &str, folder: &str) -> String {
+  let mut shortened = String::with_capacity(text.len());
+  let mut copied_up_to = 0;
+  for (start, _) in text.match_indices(folder) {
+    let end = start + folder.len();
+    let name_continues = text[end..].chars().next().is_some_and(|next| next.is_alphanumeric() || "._-".contains(next));
+    if name_continues {
+      continue;
+    }
+    shortened.push_str(&text[copied_up_to..start]);
+    shortened.push('~');
+    copied_up_to = end;
+  }
+  shortened.push_str(&text[copied_up_to..]);
+  shortened
+}
+
 fn url_with(report: &IssueReport, lines: &[String]) -> String {
-  let daemon_version = report.daemon_version.as_deref().unwrap_or("unknown");
+  let field = |text: &str| with_home_shortened(text, &report.user_home);
+  let daemon_version = field(report.daemon_version.as_deref().unwrap_or("unknown"));
   let log_block = if lines.is_empty() { "(no daemon log yet)".to_string() } else { lines.join("\n") };
   let body = format!(
     "Describe what went wrong:\n\n\n---\nApp version: {}\nDaemon version: {daemon_version}\nmacOS: {}\nCPU: {}\nDaemon state: {}\n\nLast daemon log lines:\n```\n{log_block}\n```\n",
-    report.app_version, report.macos_version, report.arch, report.daemon_state
+    field(&report.app_version),
+    field(&report.macos_version),
+    field(&report.arch),
+    field(&report.daemon_state)
   );
   let title = format!("Bug report: OpenFleet {}", report.app_version);
   format!("{NEW_ISSUE_URL}?title={}&body={}", percent_encoded(&title), percent_encoded(&body))
 }
 
 fn percent_encoded(text: &str) -> String {
+  percent_escaped(text, false)
+}
+
+fn percent_escaped(text: &str, lowercase_hex: bool) -> String {
   text.bytes().fold(String::with_capacity(text.len() * 3), |mut encoded, byte| {
     let is_unreserved = byte.is_ascii_alphanumeric() || b"-._~".contains(&byte);
     if is_unreserved {
       encoded.push(byte as char);
+    } else if lowercase_hex {
+      encoded.push_str(&format!("%{byte:02x}"));
     } else {
       encoded.push_str(&format!("%{byte:02X}"));
     }
