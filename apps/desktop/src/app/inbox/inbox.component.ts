@@ -1,4 +1,5 @@
-import { ChangeDetectionStrategy, Component, DestroyRef, computed, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, DestroyRef, computed, effect, inject, signal } from '@angular/core';
+import { ReplyDraftStore } from '../sessions/reply-draft.store';
 import { decideApproval } from '../core/decide-approval';
 import { compactElapsedLabel, elapsedSecondsSince } from '../design/elapsed-time';
 import { FleetApiService } from '../core/fleet-api.service';
@@ -68,6 +69,13 @@ function formatInput(toolInput: unknown): FormattedInput {
           </div>
         }
       </header>
+      @for (failure of unseenReplyFailures(); track failure.sessionId) {
+        <div class="reply-failure" role="alert" data-testid="inbox-reply-failure">
+          <p class="reply-failure-title">Your reply to {{ failure.sessionName }} was not sent. Your text is kept here.</p>
+          <pre class="reply-failure-draft" data-testid="inbox-reply-failure-draft">{{ failure.draft }}</pre>
+          <button type="button" class="of-btn of-btn--secondary" data-testid="inbox-reply-failure-dismiss" (click)="dismissReplyFailure(failure.sessionId)">Dismiss</button>
+        </div>
+      }
       <nav class="tabs" role="tablist" aria-label="Inbox sections" (keydown)="onTabKeydown($event)">
         @for (entry of tabs; track entry.key) {
           <button
@@ -142,6 +150,9 @@ function formatInput(toolInput: unknown): FormattedInput {
     .title-row { display: flex; align-items: center; gap: .375rem; flex-wrap: wrap; }
     .title { margin: 0; flex: 1; font-size: 1.25rem; font-weight: 600; }
     .count { display: inline-flex; min-width: 1rem; height: 1rem; padding: 0 .25rem; margin-left: .5rem; border-radius: .5rem; background: var(--accent); color: var(--on-accent); font-size: .625rem; font-weight: 600; align-items: center; justify-content: center; }
+    .reply-failure { display: flex; flex-direction: column; align-items: flex-start; gap: .375rem; min-width: 0; padding: .625rem .875rem; border: 1px solid var(--state-error); border-radius: .625rem; background: var(--panel); }
+    .reply-failure-title { margin: 0; color: var(--state-error); overflow-wrap: anywhere; }
+    .reply-failure-draft { margin: 0; max-width: 100%; max-height: 10rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
     .tabs { display: flex; gap: .25rem; border-bottom: 1px solid var(--line); }
     .tab { height: 1.875rem; padding: 0 .75rem; border: 0; border-bottom: 1px solid transparent; background: transparent; color: var(--mut); cursor: pointer; font: inherit; }
     .tab.active { color: var(--fg); border-bottom-color: var(--accent); }
@@ -170,6 +181,7 @@ function formatInput(toolInput: unknown): FormattedInput {
 export class InboxComponent {
   readonly events = inject(FleetEventsService);
   private readonly api = inject(FleetApiService);
+  private readonly replies = inject(ReplyDraftStore);
   protected readonly filters = FILTERS;
   protected readonly needsBackendSupport = NEEDS_BACKEND_SUPPORT;
   protected readonly tabs = TABS;
@@ -182,6 +194,11 @@ export class InboxComponent {
   constructor() {
     const tick = setInterval(() => this.now.set(Date.now()), 1000);
     inject(DestroyRef).onDestroy(() => clearInterval(tick));
+    effect(() => {
+      const closedSessionIds = this.events.sessions().filter((session) => session.state === 'closed').map((session) => session.id);
+      this.replies.failedSessionIds();
+      closedSessionIds.forEach((sessionId) => this.replies.discardUnlessFailed(sessionId));
+    });
   }
 
   private formattedInputsById = new Map<string, FormattedInput>();
@@ -213,6 +230,23 @@ export class InboxComponent {
   });
 
   protected readonly attentionItems = computed(() => attentionItemsOf(this.events.sessions(), this.events.workingStates()));
+
+  /** Failed replies whose card is not on screen: the session closed, left the list, or another tab is open. */
+  protected readonly unseenReplyFailures = computed(() => {
+    const sessionsById = this.sessionsById();
+    const cardSessionIds = new Set(this.tab() === 'questions' ? this.attentionItems().map((item) => item.session.id) : []);
+    return this.replies
+      .failedSessionIds()
+      .filter((sessionId) => !cardSessionIds.has(sessionId))
+      .map((sessionId) => {
+        const session = sessionsById.get(sessionId);
+        return { sessionId, sessionName: showInvisibleControlsAsEscapes(session ? session.name : sessionId), draft: showBidiControlsAsEscapes(this.replies.draftOf(sessionId)) };
+      });
+  });
+
+  protected dismissReplyFailure(sessionId: string): void {
+    this.replies.dismissFailure(sessionId);
+  }
 
   protected readonly pendingCount = computed(() => {
     const count = this.events.approvals().length + this.attentionItems().length;

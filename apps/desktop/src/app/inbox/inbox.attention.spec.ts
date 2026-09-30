@@ -177,6 +177,129 @@ describe('InboxComponent questions from agents', () => {
       expect(within(cards()[1]).getByTestId('composer-input')).toHaveValue('');
     });
 
+    describe('a reply that outlives the card', () => {
+      const replyField = () => within(cards()[0]).getByTestId('composer-input');
+      const sendButton = () => within(cards()[0]).getByTestId('composer-send');
+
+      async function renderWithDeferredSend() {
+        const user = userEvent.setup({ delay: null });
+        const view = await renderInbox([agent('s1')], [stateOf({ sessionId: 's1', questionsForHuman: ['which port?'] })]);
+        let resolveSend: (value: unknown) => void = () => {};
+        let rejectSend: (reason: unknown) => void = () => {};
+        view.api.sendMessage.mockImplementation(() => new Promise((resolve, reject) => { resolveSend = resolve; rejectSend = reject; }));
+        await openQuestionsTab();
+        return { user, ...view, resolveSend: (value: unknown) => resolveSend(value), rejectSend: (reason: unknown) => rejectSend(reason) };
+      }
+
+      type Rendered = Awaited<ReturnType<typeof renderWithDeferredSend>>;
+
+      async function showTab({ user, fixture }: Pick<Rendered, 'user' | 'fixture'>, tab: 'gates' | 'questions') {
+        await user.click(screen.getByTestId(`inbox-tab-${tab}`));
+        await fixture.whenStable();
+      }
+
+      async function visitGatesAndComeBack(rendered: Pick<Rendered, 'user' | 'fixture'>) {
+        await showTab(rendered, 'gates');
+        await showTab(rendered, 'questions');
+      }
+
+      it('user finds the reply again after looking at the Gates tab', async () => {
+        const rendered = await renderWithDeferredSend();
+        await rendered.user.type(replyField(), 'use staging');
+        await rendered.fixture.whenStable();
+
+        await visitGatesAndComeBack(rendered);
+
+        expect(replyField()).toHaveValue('use staging');
+      });
+
+      it('user cannot send the same reply twice by leaving the tab and coming back while it is on its way', async () => {
+        const rendered = await renderWithDeferredSend();
+        await rendered.user.type(replyField(), 'use staging');
+        await rendered.user.click(sendButton());
+
+        await visitGatesAndComeBack(rendered);
+        await rendered.user.click(sendButton());
+
+        expect(rendered.api.sendMessage).toHaveBeenCalledTimes(1);
+        expect(sendButton()).toBeDisabled();
+      });
+
+      it('user finds an empty reply field after a reply was delivered while looking at the Gates tab', async () => {
+        const rendered = await renderWithDeferredSend();
+        await rendered.user.type(replyField(), 'use staging');
+        await rendered.user.click(sendButton());
+        await rendered.fixture.whenStable();
+        await showTab(rendered, 'gates');
+
+        rendered.resolveSend({ status: 'delivered', messageId: 'm1' });
+        await rendered.fixture.whenStable();
+        await showTab(rendered, 'questions');
+
+        expect(replyField()).toHaveValue('');
+      });
+
+      it('user sees the failure and keeps the reply when the send fails while looking at the Gates tab', async () => {
+        const rendered = await renderWithDeferredSend();
+        const { user, fixture, rejectSend } = rendered;
+        await user.type(replyField(), 'use staging');
+        await user.click(sendButton());
+        await fixture.whenStable();
+        await showTab(rendered, 'gates');
+
+        rejectSend(new Error('boom'));
+        await fixture.whenStable();
+
+        await waitFor(() => expect(screen.getByTestId('inbox-reply-failure')).toHaveAttribute('role', 'alert'));
+        expect(screen.getByTestId('inbox-reply-failure')).toHaveTextContent('Agent s1');
+        expect(screen.getByTestId('inbox-reply-failure-draft')).toHaveTextContent('use staging');
+        await showTab(rendered, 'questions');
+        expect(replyField()).toHaveValue('use staging');
+        expect(screen.getByTestId('composer-send-error')).toBeTruthy();
+        expect(screen.queryByTestId('inbox-reply-failure')).toBeNull();
+      });
+
+      it('user sees the failure and the reply when the session closes before the send fails', async () => {
+        const { user, fixture, events, rejectSend } = await renderWithDeferredSend();
+        await user.type(replyField(), 'use staging');
+        await user.click(sendButton());
+        events.sessions.set([agent('s1', { state: 'closed' })]);
+        await fixture.whenStable();
+        expect(cards()).toHaveLength(0);
+
+        rejectSend(new Error('boom'));
+        await fixture.whenStable();
+
+        await waitFor(() => expect(screen.getByTestId('inbox-reply-failure')).toHaveAttribute('role', 'alert'));
+        expect(screen.getByTestId('inbox-reply-failure-draft')).toHaveTextContent('use staging');
+      });
+
+      it('user can dismiss the failure of a reply to a closed session', async () => {
+        const { user, fixture, events, rejectSend } = await renderWithDeferredSend();
+        await user.type(replyField(), 'use staging');
+        await user.click(sendButton());
+        events.sessions.set([agent('s1', { state: 'closed' })]);
+        rejectSend(new Error('boom'));
+        await fixture.whenStable();
+
+        await user.click(await screen.findByTestId('inbox-reply-failure-dismiss'));
+
+        await waitFor(() => expect(screen.queryByTestId('inbox-reply-failure')).toBeNull());
+      });
+
+      it('user does not see a stale reply when a closed session asks again', async () => {
+        const { user, fixture, events } = await renderWithDeferredSend();
+        await user.type(replyField(), 'never sent');
+
+        events.sessions.set([agent('s1', { state: 'closed' })]);
+        await fixture.whenStable();
+        events.sessions.set([agent('s1')]);
+        await fixture.whenStable();
+
+        expect(replyField()).toHaveValue('');
+      });
+    });
+
     it('user can press Escape in the reply field to leave it, and nothing is sent', async () => {
       const user = userEvent.setup({ delay: null });
       const { api } = await renderInbox([agent('s1')], [stateOf({ sessionId: 's1', questionsForHuman: ['which port?'] })]);
