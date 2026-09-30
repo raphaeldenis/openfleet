@@ -480,6 +480,7 @@ export class SessionService {
     if (!existsSync(session.directory)) throw new SessionReopenError('directory_missing', `session ${sessionId} directory no longer exists: ${session.directory}`);
     this.assertDirectoryUnchanged(session);
     this.assertDirectoryAccessible(session);
+    this.repo.recordReopen(sessionId, new Date().toISOString());
     const outcome = this.resumeOne(session);
     if (!outcome.launched) throw new SessionReopenError('launch_failed', `session ${sessionId} failed to relaunch: ${outcome.reason}`);
     this.deps.bus.emit({ type: 'session.reopened', sessionId });

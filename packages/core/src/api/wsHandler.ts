@@ -65,14 +65,16 @@ export function createWsHandler(deps: { bus: EventBus; sessions: SessionService;
   deps.bus.subscribe(broadcast);
 
   const broadcastWorkingStateOf = (sessionId: string | undefined) => {
-    const state = sessionId ? deps.workingStates?.get(sessionId) : undefined;
+    const isClosed = sessionId ? deps.sessions.get(sessionId)?.state === 'closed' : false;
+    const state = sessionId && !isClosed ? deps.workingStates?.get(sessionId) : undefined;
     if (state) broadcast({ type: 'session.working_state', state });
   };
   deps.workingStates?.onUpdate((state) => broadcast({ type: 'session.working_state', state }));
-  // A child spawned or closed moves its parent's fleetChangedAt, so the parent's state goes out again.
+  // A child spawned, closed or reopened moves its parent's fleetChangedAt, so the parent's state goes out again.
   deps.bus.subscribe((event) => {
     if (event.type === 'session.created') broadcastWorkingStateOf(event.session.parentId);
     if (event.type === 'session.closed') broadcastWorkingStateOf(deps.sessions.get(event.sessionId)?.parentId);
+    if (event.type === 'session.reopened') broadcastWorkingStateOf(deps.sessions.get(event.sessionId)?.parentId);
   });
   const openSessionWorkingStates = () => deps.sessions.list()
     .filter((session) => session.state !== 'closed')

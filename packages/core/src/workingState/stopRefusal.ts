@@ -2,7 +2,7 @@ import { WORKING_STATE_SECTIONS, type StopHookOutput, type WorkingState, type Wo
 import type { DatabaseSync } from 'node:sqlite';
 import { renderWorkingState } from './renderWorkingState.js';
 import { ageInWholeMinutes, ageMsOf, isOlderThanLimit, isWrittenBeforeFleetChanged, minutesLabel } from './stateFreshness.js';
-import type { WorkingStateService } from './workingStateService.js';
+import type { FleetChange, WorkingStateService } from './workingStateService.js';
 import type { WorkingStateSettings } from './workingStateSettings.js';
 
 const MAX_CHILDREN_NAMED = 10;
@@ -10,8 +10,6 @@ const UPDATE_TOOL_NAME = 'update_working_state';
 const SECTION_ARGUMENT_NAMES = 'plan, todo, remaining, questions_for_human, internal_questions, blockers';
 
 export interface StopRefusalDeps { db: DatabaseSync; workingStates: WorkingStateService; settings: WorkingStateSettings; clock: () => string }
-
-interface FleetChange { name: string; kind: 'spawned' | 'closed' }
 
 /** Decides whether the end of a turn is refused: a block answers the Stop, no block lets the turn end. */
 export class StopRefusal {
@@ -58,11 +56,7 @@ export class StopRefusal {
   }
 
   private fleetChangesSince(sessionId: string, since: string): FleetChange[] {
-    const rows = this.deps.db.prepare(`SELECT name, 'spawned' AS kind, created_at AS changed_at FROM sessions WHERE parent_id = ? AND created_at > ?
-      UNION ALL
-      SELECT name, 'closed' AS kind, closed_at AS changed_at FROM sessions WHERE parent_id = ? AND closed_at IS NOT NULL AND closed_at > ?
-      ORDER BY changed_at, name`).all(sessionId, since, sessionId, since) as unknown as FleetChange[];
-    return rows.map(({ name, kind }) => ({ name, kind }));
+    return this.deps.workingStates.fleetChanges(sessionId).filter((change) => change.changedAt > since);
   }
 }
 
