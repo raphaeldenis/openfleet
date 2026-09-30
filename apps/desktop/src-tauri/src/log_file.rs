@@ -1,15 +1,29 @@
-use std::io;
+use crate::admin_token::openfleet_home_dir;
+use std::io::{self, Write};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicU64;
-use std::sync::mpsc::SyncSender;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};
 use std::sync::Arc;
 
 pub const MAX_LOG_BYTES: u64 = 5 * 1024 * 1024;
 pub const KEPT_FILES: usize = 3;
 pub const LOG_FILE_NAME: &str = "daemon.log";
 const CHANNEL_CAPACITY: usize = 2048;
+const PRIVATE_DIR_MODE: u32 = 0o700;
+const PRIVATE_FILE_MODE: u32 = 0o600;
+// ponytail: a secret shorter than this would redact innocent text; the admin token is far longer.
 const MIN_SECRET_LENGTH: usize = 8;
 const REDACTED: &str = "[redacted]";
+const SECONDS_PER_DAY: u64 = 86_400;
+
+fn is_bearer_token_char(character: char) -> bool {
+  character.is_ascii_alphanumeric() || "-._~+/=".contains(character)
+}
+
+fn is_hook_token_char(character: char) -> bool {
+  character.is_ascii_alphanumeric() || "-._~".contains(character)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Stream {
@@ -27,25 +41,31 @@ pub trait LogFs {
 pub struct DiskFs;
 
 impl LogFs for DiskFs {
-  fn size(&self, _path: &Path) -> io::Result<u64> {
-    todo!()
+  fn size(&self, path: &Path) -> io::Result<u64> {
+    std::fs::metadata(path).map(|metadata| metadata.len())
   }
-  fn append(&self, _path: &Path, _bytes: &[u8]) -> io::Result<()> {
-    todo!()
+
+  fn append(&self, path: &Path, bytes: &[u8]) -> io::Result<()> {
+    if let Some(folder) = path.parent() {
+      ensure_private_dir(folder)?;
+    }
+    let mut file = std::fs::OpenOptions::new().create(true).append(true).mode(PRIVATE_FILE_MODE).open(path)?;
+    file.write_all(bytes)
   }
-  fn rename(&self, _from: &Path, _to: &Path) -> io::Result<()> {
-    todo!()
+
+  fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+    std::fs::rename(from, to)
   }
 }
 
 /// Returns `$OPENFLEET_HOME/logs`, else `~/.openfleet/logs`.
-pub fn logs_dir(_openfleet_home: Option<String>, _user_home: &Path) -> PathBuf {
-  todo!()
+pub fn logs_dir(openfleet_home: Option<String>, user_home: &Path) -> PathBuf {
+  openfleet_home_dir(openfleet_home, user_home).join("logs")
 }
 
 /// Creates the folder (and its parents) readable by the owner only.
-pub fn ensure_private_dir(_dir: &Path) -> io::Result<()> {
-  todo!()
+pub fn ensure_private_dir(dir: &Path) -> io::Result<()> {
+  std::fs::DirBuilder::new().recursive(true).mode(PRIVATE_DIR_MODE).create(dir)
 }
 
 /// Appends lines to `path`, rotating to `path.1`, `path.2`, … so the current file never exceeds `max_bytes`.
@@ -58,29 +78,128 @@ pub struct RotatingLog<F: LogFs> {
 }
 
 impl<F: LogFs> RotatingLog<F> {
-  pub fn open(_fs: F, _path: PathBuf, _max_bytes: u64, _kept_files: usize) -> Self {
-    todo!()
+  pub fn open(fs: F, path: PathBuf, max_bytes: u64, kept_files: usize) -> Self {
+    let size = fs.size(&path).unwrap_or(0);
+    Self { fs, path, max_bytes, kept_files, size }
   }
 
   /// Writes the line and a newline; a failing rotation is skipped, never raised.
-  pub fn append_line(&mut self, _line: &str) -> io::Result<()> {
-    todo!()
+  pub fn append_line(&mut self, line: &str) -> io::Result<()> {
+    let bytes = self.line_bytes(line);
+    let would_pass_the_limit = self.size + bytes.len() as u64 > self.max_bytes;
+    let has_content_to_rotate = self.size > 0;
+    if would_pass_the_limit && has_content_to_rotate {
+      self.rotate();
+    }
+    self.fs.append(&self.path, &bytes)?;
+    self.size += bytes.len() as u64;
+    Ok(())
+  }
+
+  fn line_bytes(&self, line: &str) -> Vec<u8> {
+    let room_for_the_text = self.max_bytes.saturating_sub(1) as usize;
+    let text = truncated_at_char_boundary(line, room_for_the_text);
+    format!("{text}\n").into_bytes()
+  }
+
+  // ponytail: when the current file cannot be renamed it keeps growing past the limit until a rename works again.
+  fn rotate(&mut self) {
+    let mut current_file_moved = false;
+    for generation in (1..self.kept_files).rev() {
+      let from = if generation == 1 { self.path.clone() } else { numbered(&self.path, generation - 1) };
+      let moved = self.fs.rename(&from, &numbered(&self.path, generation)).is_ok();
+      if generation == 1 {
+        current_file_moved = moved;
+      }
+    }
+    if current_file_moved {
+      self.size = 0;
+    }
   }
 }
 
+fn numbered(path: &Path, generation: usize) -> PathBuf {
+  let mut name = path.as_os_str().to_os_string();
+  name.push(format!(".{generation}"));
+  PathBuf::from(name)
+}
+
+fn truncated_at_char_boundary(text: &str, max_bytes: usize) -> &str {
+  let mut end = max_bytes.min(text.len());
+  while !text.is_char_boundary(end) {
+    end -= 1;
+  }
+  &text[..end]
+}
+
 /// Returns the line redacted: every known secret, `Bearer <token>` and `/hooks/<token>` become `[redacted]`.
-pub fn redact(_line: &str, _secrets: &[String]) -> String {
-  todo!()
+pub fn redact(line: &str, secrets: &[String]) -> String {
+  let usable_secrets = secrets.iter().filter(|secret| secret.len() >= MIN_SECRET_LENGTH);
+  let without_secrets = usable_secrets.fold(line.to_string(), |text, secret| text.replace(secret.as_str(), REDACTED));
+  let without_bearer_tokens = mask_token_after(&without_secrets, "bearer ", is_bearer_token_char);
+  mask_token_after(&without_bearer_tokens, "/hooks/", is_hook_token_char)
+}
+
+fn mask_token_after(text: &str, marker: &str, is_token_char: fn(char) -> bool) -> String {
+  let lowered = text.to_ascii_lowercase();
+  let mut masked = String::with_capacity(text.len());
+  let mut cursor = 0;
+  while let Some(offset) = lowered[cursor..].find(marker) {
+    let token_start = cursor + offset + marker.len();
+    let token_length = text[token_start..].find(|character| !is_token_char(character)).unwrap_or(text.len() - token_start);
+    masked.push_str(&text[cursor..token_start]);
+    if token_length > 0 {
+      masked.push_str(REDACTED);
+    }
+    cursor = token_start + token_length;
+  }
+  masked.push_str(&text[cursor..]);
+  masked
 }
 
 /// Returns the line as the log stores it: `<ts> [out|err] <line>`, a daemon NDJSON line untouched.
-pub fn format_line(_stream: Stream, _line: &str, _unix_seconds: u64) -> String {
-  todo!()
+pub fn format_line(stream: Stream, line: &str, unix_seconds: u64) -> String {
+  let is_daemon_ndjson_line = serde_json::from_str::<serde_json::Value>(line.trim()).is_ok_and(|value| value.is_object());
+  if is_daemon_ndjson_line {
+    return line.to_string();
+  }
+  let stream_label = match stream {
+    Stream::Out => "out",
+    Stream::Err => "err",
+  };
+  format!("{} [{stream_label}] {line}", iso_utc(unix_seconds))
+}
+
+/// Formats seconds since the epoch as `YYYY-MM-DDTHH:MM:SSZ` (civil-from-days, proleptic Gregorian).
+fn iso_utc(unix_seconds: u64) -> String {
+  let seconds_of_day = unix_seconds % SECONDS_PER_DAY;
+  let days_since_epoch = (unix_seconds / SECONDS_PER_DAY) as i64;
+  let shifted_days = days_since_epoch + 719_468;
+  let era = shifted_days.div_euclid(146_097);
+  let day_of_era = shifted_days.rem_euclid(146_097);
+  let year_of_era = (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+  let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+  let month_index = (5 * day_of_year + 2) / 153;
+  let day = day_of_year - (153 * month_index + 2) / 5 + 1;
+  let month = if month_index < 10 { month_index + 3 } else { month_index - 9 };
+  let year = year_of_era + era * 400 + i64::from(month <= 2);
+  let (hour, minute, second) = (seconds_of_day / 3_600, seconds_of_day % 3_600 / 60, seconds_of_day % 60);
+  format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
 }
 
 /// Returns the last `count` lines of the log (topping up from `path.1`), redacted.
-pub fn last_redacted_lines(_path: &Path, _count: usize, _secrets: &[String]) -> Vec<String> {
-  todo!()
+pub fn last_redacted_lines(path: &Path, count: usize, secrets: &[String]) -> Vec<String> {
+  let current = lines_of(path);
+  let rotated = if current.len() < count { lines_of(&numbered(path, 1)) } else { Vec::new() };
+  let all_lines: Vec<String> = rotated.into_iter().chain(current).collect();
+  let first_kept = all_lines.len().saturating_sub(count);
+  all_lines[first_kept..].iter().map(|line| redact(line, secrets)).collect()
+}
+
+// ponytail: reads the whole file (at most 5 MB); seek from the end if this ever shows up in a profile.
+fn lines_of(path: &Path) -> Vec<String> {
+  let bytes = std::fs::read(path).unwrap_or_default();
+  String::from_utf8_lossy(&bytes).lines().map(str::to_string).collect()
 }
 
 /// Hands daemon output to a writer thread; never blocks the caller and counts what it had to drop.
@@ -92,25 +211,50 @@ pub struct DaemonLog {
 
 impl DaemonLog {
   pub fn start<F: LogFs + Send + 'static>(
-    _log: RotatingLog<F>,
-    _read_secrets: impl Fn() -> Vec<String> + Send + 'static,
-    _clock: impl Fn() -> u64 + Send + 'static,
+    log: RotatingLog<F>,
+    read_secrets: impl Fn() -> Vec<String> + Send + 'static,
+    clock: impl Fn() -> u64 + Send + 'static,
   ) -> Self {
-    todo!()
+    Self::start_with_capacity(log, read_secrets, clock, CHANNEL_CAPACITY)
   }
 
   pub fn start_with_capacity<F: LogFs + Send + 'static>(
-    _log: RotatingLog<F>,
-    _read_secrets: impl Fn() -> Vec<String> + Send + 'static,
-    _clock: impl Fn() -> u64 + Send + 'static,
-    _capacity: usize,
+    mut log: RotatingLog<F>,
+    read_secrets: impl Fn() -> Vec<String> + Send + 'static,
+    clock: impl Fn() -> u64 + Send + 'static,
+    capacity: usize,
   ) -> Self {
-    todo!()
+    let (sender, receiver) = sync_channel::<(Stream, String)>(capacity);
+    let dropped = Arc::new(AtomicU64::new(0));
+    let dropped_by_the_writer = dropped.clone();
+    std::thread::spawn(move || {
+      let mut secrets: Vec<String> = Vec::new();
+      for (stream, line) in receiver {
+        // The admin token file may only appear after the daemon's first output, so it is read until found.
+        if secrets.is_empty() {
+          secrets = read_secrets();
+        }
+        let now = clock();
+        let lost = dropped_by_the_writer.swap(0, Ordering::SeqCst);
+        if lost > 0 {
+          let _ = log.append_line(&format!("{} [log] {lost} lines dropped: the log writer fell behind", iso_utc(now)));
+        }
+        if log.append_line(&format_line(stream, &redact(&line, &secrets), now)).is_err() {
+          dropped_by_the_writer.fetch_add(1, Ordering::SeqCst);
+        }
+      }
+    });
+    Self { sender, dropped }
   }
 
   /// Queues every non-blank line of a chunk of daemon output.
-  pub fn record(&self, _stream: Stream, _chunk: &str) {
-    todo!()
+  pub fn record(&self, stream: Stream, chunk: &str) {
+    for line in chunk.lines().filter(|line| !line.trim().is_empty()) {
+      let queue_is_full = matches!(self.sender.try_send((stream, line.to_string())), Err(TrySendError::Full(_)));
+      if queue_is_full {
+        self.dropped.fetch_add(1, Ordering::SeqCst);
+      }
+    }
   }
 }
 

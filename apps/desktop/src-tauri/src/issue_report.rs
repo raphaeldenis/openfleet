@@ -1,5 +1,8 @@
+use crate::log_file::ensure_private_dir;
+use std::ffi::OsStr;
 use std::io;
 use std::path::Path;
+use std::process::Command;
 
 pub const NEW_ISSUE_URL: &str = "https://github.com/raphaeldenis/openfleet/issues/new";
 /// GitHub refuses a prefilled URL beyond roughly 8 KB.
@@ -16,18 +19,72 @@ pub struct IssueReport {
 }
 
 /// Returns the GitHub new-issue URL prefilled with the report, the oldest log lines dropped until it fits `MAX_URL_BYTES`.
-pub fn issue_url(_report: &IssueReport) -> String {
-  todo!()
+pub fn issue_url(report: &IssueReport) -> String {
+  let mut lines: Vec<String> = report.log_lines.iter().map(|line| fit_line(line)).collect();
+  loop {
+    let url = url_with(report, &lines);
+    let fits = url.len() <= MAX_URL_BYTES;
+    if fits || lines.is_empty() {
+      return url;
+    }
+    lines.remove(0);
+  }
+}
+
+/// Cuts the line to `MAX_LINE_CHARS` and defuses a code fence so the log cannot close the block it sits in.
+fn fit_line(line: &str) -> String {
+  line.chars().take(MAX_LINE_CHARS).collect::<String>().replace("```", "'''")
+}
+
+fn url_with(report: &IssueReport, lines: &[String]) -> String {
+  let daemon_version = report.daemon_version.as_deref().unwrap_or("unknown");
+  let log_block = if lines.is_empty() { "(no daemon log yet)".to_string() } else { lines.join("\n") };
+  let body = format!(
+    "Describe what went wrong:\n\n\n---\nApp version: {}\nDaemon version: {daemon_version}\nmacOS: {}\nCPU: {}\nDaemon state: {}\n\nLast daemon log lines:\n```\n{log_block}\n```\n",
+    report.app_version, report.macos_version, report.arch, report.daemon_state
+  );
+  let title = format!("Bug report: OpenFleet {}", report.app_version);
+  format!("{NEW_ISSUE_URL}?title={}&body={}", percent_encoded(&title), percent_encoded(&body))
+}
+
+fn percent_encoded(text: &str) -> String {
+  text.bytes().fold(String::with_capacity(text.len() * 3), |mut encoded, byte| {
+    let is_unreserved = byte.is_ascii_alphanumeric() || b"-._~".contains(&byte);
+    if is_unreserved {
+      encoded.push(byte as char);
+    } else {
+      encoded.push_str(&format!("%{byte:02X}"));
+    }
+    encoded
+  })
 }
 
 /// Opens the folder in the file manager.
-pub fn reveal_logs_dir(_logs_dir: &Path, _open: impl Fn(&Path) -> io::Result<()>) -> Result<(), String> {
-  todo!()
+pub fn reveal_logs_dir(logs_dir: &Path, open: impl Fn(&Path) -> io::Result<()>) -> Result<(), String> {
+  ensure_private_dir(logs_dir).map_err(|err| format!("could not create {}: {err}", logs_dir.display()))?;
+  open(logs_dir).map_err(|err| format!("could not open {}: {err}", logs_dir.display()))
 }
 
 /// Opens the prefilled issue form in the default browser; the webview supplies nothing.
-pub fn open_issue_form(_report: &IssueReport, _open: impl Fn(&str) -> io::Result<()>) -> Result<(), String> {
-  todo!()
+pub fn open_issue_form(report: &IssueReport, open: impl Fn(&str) -> io::Result<()>) -> Result<(), String> {
+  open(&issue_url(report)).map_err(|err| format!("could not open the browser: {err}"))
+}
+
+/// Asks macOS to open a folder or URL with its default application.
+pub fn open_with_macos(target: &OsStr) -> io::Result<()> {
+  let status = Command::new("/usr/bin/open").arg(target).status()?;
+  if status.success() {
+    Ok(())
+  } else {
+    Err(io::Error::other(format!("open exited with {status}")))
+  }
+}
+
+/// Returns the macOS product version, `unknown` when `sw_vers` does not answer.
+pub fn macos_version() -> String {
+  let answer = Command::new("/usr/bin/sw_vers").arg("-productVersion").output();
+  let version = answer.ok().filter(|output| output.status.success()).map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string());
+  version.filter(|version| !version.is_empty()).unwrap_or_else(|| "unknown".to_string())
 }
 
 #[cfg(test)]

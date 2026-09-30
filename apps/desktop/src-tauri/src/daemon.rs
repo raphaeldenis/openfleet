@@ -1,10 +1,13 @@
+use crate::admin_token::{admin_token_path, admin_token_secrets};
+use crate::log_file::{logs_dir, DaemonLog, DiskFs, RotatingLog, Stream, KEPT_FILES, LOG_FILE_NAME, MAX_LOG_BYTES};
 use crate::path_repair::{repair_path, run_login_shell, PathSource, RepairedPath, LOGIN_SHELL_TIMEOUT};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
+use std::path::Path;
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
@@ -388,23 +391,46 @@ fn spawn_sidecar(app: &AppHandle) -> Result<(), String> {
   let state = app.state::<DaemonState>();
   state.record_spawn(RunningChild::of_sidecar(child), repaired_path, Instant::now());
   let app_for_events = app.clone();
-  tauri::async_runtime::spawn(async move { pipe_daemon_output(app_for_events, events).await });
+  let daemon_log = start_daemon_log(&home);
+  tauri::async_runtime::spawn(async move { pipe_daemon_output(app_for_events, events, daemon_log).await });
   Ok(())
 }
 
-async fn pipe_daemon_output(app: AppHandle, mut events: tauri::async_runtime::Receiver<CommandEvent>) {
+/// Starts the writer that appends the sidecar's output, redacted, to `<OPENFLEET_HOME or ~/.openfleet>/logs/daemon.log`.
+fn start_daemon_log(user_home: &Path) -> DaemonLog {
+  let openfleet_home = std::env::var("OPENFLEET_HOME").ok();
+  let log_path = logs_dir(openfleet_home.clone(), user_home).join(LOG_FILE_NAME);
+  let token_path = admin_token_path(openfleet_home, user_home);
+  let rotating_log = RotatingLog::open(DiskFs, log_path, MAX_LOG_BYTES, KEPT_FILES);
+  DaemonLog::start(rotating_log, move || admin_token_secrets(&token_path), unix_seconds_now)
+}
+
+fn unix_seconds_now() -> u64 {
+  SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |elapsed| elapsed.as_secs())
+}
+
+async fn pipe_daemon_output(app: AppHandle, mut events: tauri::async_runtime::Receiver<CommandEvent>, daemon_log: DaemonLog) {
   let state = app.state::<DaemonState>();
   while let Some(event) = events.recv().await {
     match event {
-      CommandEvent::Stdout(bytes) => log::info!("[daemon] {}", String::from_utf8_lossy(&bytes).trim_end()),
+      CommandEvent::Stdout(bytes) => {
+        let chunk = String::from_utf8_lossy(&bytes).to_string();
+        log::info!("[daemon] {}", chunk.trim_end());
+        daemon_log.record(Stream::Out, &chunk);
+      }
       CommandEvent::Stderr(bytes) => {
         let chunk = String::from_utf8_lossy(&bytes).to_string();
         log::warn!("[daemon] {}", chunk.trim_end());
+        daemon_log.record(Stream::Err, &chunk);
         state.on_stderr(&chunk);
       }
-      CommandEvent::Error(reason) => log::error!("[daemon] {reason}"),
+      CommandEvent::Error(reason) => {
+        log::error!("[daemon] {reason}");
+        daemon_log.record(Stream::Err, &format!("sidecar error: {reason}"));
+      }
       CommandEvent::Terminated(payload) => {
         log::warn!("[daemon] exited with code {:?}", payload.code);
+        daemon_log.record(Stream::Err, &format!("the daemon exited with code {:?}", payload.code));
         state.on_terminated(payload.code);
       }
       _ => {}

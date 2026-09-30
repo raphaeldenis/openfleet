@@ -1,9 +1,13 @@
 use std::path::{Path, PathBuf};
 
+/// Returns the folder the daemon keeps its files in: `$OPENFLEET_HOME`, else `~/.openfleet`.
+pub fn openfleet_home_dir(openfleet_home: Option<String>, user_home: &Path) -> PathBuf {
+  openfleet_home.map_or_else(|| user_home.join(".openfleet"), PathBuf::from)
+}
+
 /// Returns where the daemon keeps its admin token: `$OPENFLEET_HOME/admin.token`, else `~/.openfleet/admin.token`.
 pub fn admin_token_path(openfleet_home: Option<String>, user_home: &Path) -> PathBuf {
-  let home = openfleet_home.map_or_else(|| user_home.join(".openfleet"), PathBuf::from);
-  home.join("admin.token")
+  openfleet_home_dir(openfleet_home, user_home).join("admin.token")
 }
 
 /// Reads the admin token, trimmed.
@@ -11,6 +15,11 @@ pub fn read_admin_token_at(token_path: &Path) -> Result<String, String> {
   std::fs::read_to_string(token_path)
     .map(|contents| contents.trim().to_string())
     .map_err(|err| format!("could not read {}: {err}", token_path.display()))
+}
+
+/// Returns the admin token as a list a redaction pass can use: empty when the token cannot be read yet.
+pub fn admin_token_secrets(token_path: &Path) -> Vec<String> {
+  read_admin_token_at(token_path).into_iter().filter(|token| !token.is_empty()).collect()
 }
 
 #[cfg(test)]

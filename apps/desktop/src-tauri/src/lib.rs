@@ -17,6 +17,36 @@ fn read_admin_token(app: tauri::AppHandle) -> Result<String, String> {
   admin_token::read_admin_token_at(&token_path)
 }
 
+const LOG_LINES_IN_REPORT: usize = 50;
+
+/// Opens the logs folder in Finder. Takes no argument: the webview cannot choose what is opened.
+#[tauri::command]
+fn reveal_logs(app: tauri::AppHandle) -> Result<(), String> {
+  let user_home = app.path().home_dir().map_err(|err| err.to_string())?;
+  let logs_folder = log_file::logs_dir(std::env::var("OPENFLEET_HOME").ok(), &user_home);
+  issue_report::reveal_logs_dir(&logs_folder, |folder| issue_report::open_with_macos(folder.as_os_str()))
+}
+
+/// Opens the prefilled GitHub new-issue form in the browser; nothing is sent until the user submits it there.
+#[tauri::command]
+fn report_issue(app: tauri::AppHandle, daemon: tauri::State<daemon::DaemonState>) -> Result<(), String> {
+  let user_home = app.path().home_dir().map_err(|err| err.to_string())?;
+  let openfleet_home = std::env::var("OPENFLEET_HOME").ok();
+  let secrets = admin_token::admin_token_secrets(&admin_token::admin_token_path(openfleet_home.clone(), &user_home));
+  let log_path = log_file::logs_dir(openfleet_home, &user_home).join(log_file::LOG_FILE_NAME);
+  let status = daemon.snapshot(std::time::Instant::now());
+  let daemon_state = serde_json::to_value(status.state).ok().and_then(|state| state.as_str().map(str::to_string)).unwrap_or_default();
+  let report = issue_report::IssueReport {
+    app_version: app.package_info().version.to_string(),
+    daemon_version: status.daemon_version,
+    daemon_state,
+    macos_version: issue_report::macos_version(),
+    arch: std::env::consts::ARCH.to_string(),
+    log_lines: log_file::last_redacted_lines(&log_path, LOG_LINES_IN_REPORT, &secrets),
+  };
+  issue_report::open_issue_form(&report, |url| issue_report::open_with_macos(url.as_ref()))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   let application = tauri::Builder::default()
@@ -28,7 +58,7 @@ pub fn run() {
         let _ = window.hide();
       }
     })
-    .invoke_handler(tauri::generate_handler![read_admin_token, daemon::daemon_status])
+    .invoke_handler(tauri::generate_handler![read_admin_token, daemon::daemon_status, reveal_logs, report_issue])
     .setup(|app| {
       if cfg!(debug_assertions) {
         app.handle().plugin(
