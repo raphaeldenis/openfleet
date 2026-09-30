@@ -7,10 +7,13 @@ import { installShutdownHandler } from './process/shutdownHandler.js';
 
 installProcessGuards();
 
-const daemon = await refuseBootOnFailure(() => startDaemon(loadConfig()), {
+const booting = refuseBootOnFailure(() => startDaemon(loadConfig()), {
   configPath: join(resolveHome(), 'config.json'),
   writeStderr: (text) => process.stderr.write(text),
   exit: (code) => process.exit(code),
 });
 
-installShutdownHandler(daemon.close);
+// Armed before the daemon listens: a signal during boot waits for the boot to finish, then closes it.
+installShutdownHandler(async () => (await booting).close());
+
+await booting;
