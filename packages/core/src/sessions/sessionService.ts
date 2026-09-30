@@ -288,6 +288,8 @@ export class SessionService {
   // Set once closeAll() starts; refuses any new launch (create, reopen, resumeOne, a relaunch) so it can
   // never spawn a process outside closeAll's own snapshot and survive daemon shutdown.
   private shuttingDown = false;
+  // Children their own parent asked to close, until the close lands: the parent already knows they ended.
+  private readonly idsClosingByParent = new Set<string>();
 
   constructor(private readonly deps: SessionServiceDeps) {
     this.repo = new SessionRepository(deps.db);
@@ -350,6 +352,15 @@ export class SessionService {
 
   hasQueuedMessage(sessionId: string, body: string): boolean {
     return this.queue.hasQueued(sessionId, body);
+  }
+
+  // Rewrites a queued message that no delivery has touched yet; false once it is typed, submitted or gone.
+  replaceQueuedMessageBody(input: { sessionId: string; messageId: string; body: string }): boolean {
+    const { phase } = this.deliveryOf(input.sessionId);
+    const isBeingDelivered = (phase.name === 'typing' || phase.name === 'typed') && phase.messageId === input.messageId;
+    const isSubmittedAwaitingRecord = this.unrecordedDeliveries.get(input.sessionId) === input.messageId;
+    if (isBeingDelivered || isSubmittedAwaitingRecord) return false;
+    return this.queue.replaceQueuedBody(input.messageId, input.body);
   }
 
   queuedMessageCount(sessionId: string): number {
@@ -874,7 +885,12 @@ export class SessionService {
 
 
   resize(sessionId: string, cols: number, rows: number): void { this.handles.get(sessionId)?.resize(cols, rows); }
-  async close(sessionId: string, options?: { escalateAfterMs?: number }): Promise<void> {
+  isClosingByParent(sessionId: string): boolean {
+    return this.idsClosingByParent.has(sessionId);
+  }
+
+  async close(sessionId: string, options?: { escalateAfterMs?: number; closedByParent?: boolean }): Promise<void> {
+    if (options?.closedByParent) this.idsClosingByParent.add(sessionId);
     // Disarmed eagerly, like retireForRelaunch, before the SIGTERM->SIGKILL grace window even starts: a
     // watch left armed through that window could still see a marker and flip session state while the
     // process is on its way out (or wedged and never exiting at all).
@@ -994,7 +1010,9 @@ export class SessionService {
     this.recordDelivery(sessionId);
     const handle = this.liveHandle(sessionId);
     if (!handle) return;
-    const message = this.queue.nextPending(sessionId);
+    // A daemon line ([pulse]) never lands in the composer of a session waiting on the human's answer.
+    const isWaitingOnHuman = this.repo.get(sessionId)?.state === 'waiting_input';
+    const message = this.queue.nextPending(sessionId, { skipDaemonLines: isWaitingOnHuman });
     if (!message) return;
     // Assumes HarnessHandle.typeMessage throws only when no bytes reached the pty: a failed body is retyped from 'ready'.
     handle.typeMessage(message.body);
@@ -1154,7 +1172,7 @@ export class SessionService {
     this.unfinishedTurns.delete(sessionId);
     this.releaseClearHold(sessionId);
     const session = this.repo.get(sessionId);
-    if (!session || session.state === 'closed') return;
+    if (!session || session.state === 'closed') { this.idsClosingByParent.delete(sessionId); return; }
     // Revoked, not just marked closed, in the same write as the state change: a subprocess the agent left
     // behind, or anyone who read the token (MAJ-03), must not go on calling the hook or MCP surface as this
     // session once it is closed — defence in depth alongside byHookToken/byMcpToken's own state filter,
@@ -1163,7 +1181,11 @@ export class SessionService {
     this.repo.setClosed(sessionId, exitCode, new Date().toISOString(), newToken(), newToken());
     this.handles.delete(sessionId);
     activeHandleBySessionId.delete(sessionId);
-    this.deps.bus.emit({ type: 'session.closed', sessionId, exitCode });
+    try {
+      this.deps.bus.emit({ type: 'session.closed', sessionId, exitCode });
+    } finally {
+      this.idsClosingByParent.delete(sessionId);
+    }
   }
 
   // Boot resume and reopen both call this, but only reopen acts on the outcome: boot resume keeps its

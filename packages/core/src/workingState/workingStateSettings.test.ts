@@ -2,7 +2,10 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { loadWorkingStateSettings } from './workingStateSettings.js';
+import { loadDaemonSettings } from './workingStateSettings.js';
+
+const loadWorkingStateSettings = (configPath: string) => loadDaemonSettings(configPath).workingState;
+const loadManagerSettings = (configPath: string) => loadDaemonSettings(configPath).managers;
 
 const configWith = (contents: string | undefined): string => {
   const configPath = join(mkdtempSync(join(tmpdir(), 'of-ws-config-')), 'config.json');
@@ -57,5 +60,41 @@ describe('the operator sets the working state size cap in config.json', () => {
 
   it.each([['an empty file', ''], ['a truncated file', '{'], ['a BOM-prefixed file', '﻿{"workingState":{"maxBytes":2048}}']])('refuses to boot on %s', (_label, contents) => {
     expect(() => loadWorkingStateSettings(configWith(contents))).toThrow(/workingState/);
+  });
+});
+
+describe('the operator sets the default heartbeat of a manager in config.json', () => {
+  const configWithHeartbeat = (heartbeatDefaultSeconds: unknown) => configWith(JSON.stringify({ managers: { heartbeatDefaultSeconds }, models: { opus: 'opus' } }));
+
+  it('defaults to 1800 seconds without a config file, without the key, and with an empty managers', () => {
+    expect(loadManagerSettings(configWith(undefined)).heartbeatDefaultSeconds).toBe(1800);
+    expect(loadManagerSettings(configWith('{}')).heartbeatDefaultSeconds).toBe(1800);
+    expect(loadManagerSettings(configWith('{"managers":{}}')).heartbeatDefaultSeconds).toBe(1800);
+  });
+
+  it('reads managers.heartbeatDefaultSeconds within 1 to 86400', () => {
+    expect(loadManagerSettings(configWithHeartbeat(600)).heartbeatDefaultSeconds).toBe(600);
+    expect(loadManagerSettings(configWithHeartbeat(1)).heartbeatDefaultSeconds).toBe(1);
+    expect(loadManagerSettings(configWithHeartbeat(86_400)).heartbeatDefaultSeconds).toBe(86_400);
+  });
+
+  it.each([0, 86_401, 1800.5, '1800', null])('refuses to boot on a heartbeatDefaultSeconds of %s', (invalid) => {
+    expect(() => loadManagerSettings(configWithHeartbeat(invalid))).toThrow(/managers/);
+  });
+
+  it.each([
+    ['a misspelled heartbeatDefaultSeconds', '{"managers":{"heartbeatDefaultSecond":600}}'],
+    ['a misspelled managers', '{"manager":{"heartbeatDefaultSeconds":600}}'],
+    ['an unknown key next to heartbeatDefaultSeconds', '{"managers":{"heartbeatDefaultSeconds":600,"pulse":1}}'],
+  ])('refuses to boot on %s instead of running on the default heartbeat', (_label, contents) => {
+    expect(() => loadManagerSettings(configWith(contents))).toThrow(/managers|manager/);
+  });
+
+  it('keeps the working state settings when only the heartbeat is set, and the heartbeat when only the working state is set', () => {
+    const heartbeatOnly = loadDaemonSettings(configWithHeartbeat(600));
+    const workingStateOnly = loadDaemonSettings(configWith('{"workingState":{"maxBytes":2048}}'));
+
+    expect(heartbeatOnly.workingState.maxBytes).toBe(6144);
+    expect(workingStateOnly.managers.heartbeatDefaultSeconds).toBe(1800);
   });
 });

@@ -2,6 +2,7 @@ import { MANAGER_ROLE, type ManagerSpec, type ManagerView, type Session, type Se
 import type { EventBus } from '../events/eventBus.js';
 import type { SessionService } from '../sessions/sessionService.js';
 import type { ManagerRecord, ManagerRepository } from './managerRepository.js';
+import { DEFAULT_HEARTBEAT_SECONDS } from '../workingState/workingStateSettings.js';
 import { toManagerView } from './managerView.js';
 
 export interface PulseSchedulerLike {
@@ -13,6 +14,7 @@ export interface ManagerServiceDeps {
   sessions: SessionService;
   bus: EventBus;
   scheduler: PulseSchedulerLike;
+  heartbeatDefaultSeconds?: number;
 }
 
 export class ManagerService {
@@ -30,7 +32,7 @@ export class ManagerService {
       : await this.deps.sessions.create(managerSpec);
     const record: ManagerRecord = {
       sessionId: session.id,
-      pulseSeconds: spec.manager.pulseSeconds,
+      pulseSeconds: spec.manager.pulseSeconds ?? this.deps.heartbeatDefaultSeconds ?? DEFAULT_HEARTBEAT_SECONDS,
       childrenCap: spec.manager.childrenCap,
       missionText: spec.manager.mission,
       createdAt: session.createdAt,

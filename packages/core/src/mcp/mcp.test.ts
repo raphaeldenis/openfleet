@@ -339,6 +339,17 @@ describe('MCP', () => {
     expect(sessions.get(stranger.id)!.state).not.toBe('closed');
   });
 
+  it('close_session by a manager wakes it with no line about the child it just closed', async () => {
+    new ManagerRepository(db).insert({ sessionId: parentId, pulseSeconds: 100, childrenCap: 3, missionText: 'x', createdAt: new Date().toISOString() });
+    const parent = await connect(parentToken);
+    const created = text(await parent.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('close-no-wake'), name: 'Gimli', emoji: '⚔️' } }));
+
+    await parent.callTool({ name: 'close_session', arguments: { session_id: created.id } });
+
+    expect(sessions.get(created.id)!.state).toBe('closed');
+    expect(sessions.queuedMessageCount(parentId)).toBe(0);
+  });
+
   it('refuses close_session on the caller\'s own parent', async () => {
     await (await connect(parentToken)).callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('close-parent-guard'), name: 'Gimli', emoji: '⚔️' } });
     const childToken = harness.launches[1]!.mcpToken;
@@ -479,6 +490,40 @@ describe('create_session guardrails', () => {
     expect(first.isError).toBeFalsy();
     const second = await leadClient.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('lead-child-2'), name: 'Child2' } });
     expect(second.isError).toBe(true);
+  });
+
+  it('a manager created without pulse_seconds gets the default heartbeat', async () => {
+    const managerClient = await connect(parentToken);
+
+    const lead = text(await managerClient.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('lead-default-heartbeat'), name: 'LeadDefault', manager: { children_cap: 1, mission: 'x' } } }));
+
+    const stored = db.prepare('SELECT pulse_seconds FROM managers WHERE session_id = ?').get(lead.id) as { pulse_seconds: number };
+    expect(stored.pulse_seconds).toBe(1800);
+  });
+
+  it.each([1, 45, 86_400])('a manager created with a pulse_seconds of %s keeps it as its heartbeat, whatever the default is', async (pulseSeconds) => {
+    const managerClient = await connect(parentToken);
+
+    const lead = text(await managerClient.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir(`lead-explicit-heartbeat-${pulseSeconds}`), name: 'LeadExplicit', manager: { pulse_seconds: pulseSeconds, children_cap: 1, mission: 'x' } } }));
+
+    const stored = db.prepare('SELECT pulse_seconds FROM managers WHERE session_id = ?').get(lead.id) as { pulse_seconds: number };
+    expect(stored.pulse_seconds).toBe(pulseSeconds);
+  });
+
+  it.each(['30', null, -5])('refuses a manager created with a pulse_seconds of %j', async (pulseSeconds) => {
+    const managerClient = await connect(parentToken);
+
+    const result = await managerClient.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir(`lead-odd-heartbeat-${String(pulseSeconds)}`), name: 'LeadOdd', manager: { pulse_seconds: pulseSeconds, children_cap: 1, mission: 'x' } } });
+
+    expect(result.isError).toBe(true);
+  });
+
+  it.each([0, 86_401, 1.5])('refuses a manager created with a pulse_seconds of %s', async (pulseSeconds) => {
+    const managerClient = await connect(parentToken);
+
+    const result = await managerClient.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir(`lead-bad-heartbeat-${pulseSeconds}`), name: 'LeadBad', manager: { pulse_seconds: pulseSeconds, children_cap: 1, mission: 'x' } } });
+
+    expect(result.isError).toBe(true);
   });
 
   it('two concurrent create_session calls at the cap admit only one child', async () => {
