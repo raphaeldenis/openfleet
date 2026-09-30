@@ -446,6 +446,178 @@ describe('log — hostile input (spec §12 hostile 1 and 3)', () => {
   });
 });
 
+describe('log — gaps the first suite left open', () => {
+  it('shortens the OpenFleet home to $OPENFLEET_HOME even when it lives under the user home', async () => {
+    vi.stubEnv('OPENFLEET_HOME', join(homedir(), '.openfleet-qe-probe'));
+    const { log } = await loadLogger();
+
+    log('warn', `read ${join(homedir(), '.openfleet-qe-probe')}/admin.token and ${homedir()}/Documents/x`);
+
+    expect(parsedLine().msg).toBe('read $OPENFLEET_HOME/admin.token and ~/Documents/x');
+  });
+
+  it('masks a secret used as an object key in a detail', async () => {
+    const { log } = await loadLogger();
+
+    log('info', 'keyed', { 'Bearer keySECRET': 1, 'GET /hooks/hookKeySECRET': 2 });
+
+    expect(onlyWrittenLine()).not.toMatch(/keySECRET|hookKeySECRET/);
+  });
+
+  it('masks a bearer token and a hook token in every error of a cause chain', async () => {
+    const { log } = await loadLogger();
+    const root = new Error('root saw Bearer rootSECRET');
+    const middle = new Error('middle saw /hooks/middleSECRET', { cause: root });
+    const top = new Error('top', { cause: middle });
+
+    log('error', 'chain', top);
+
+    expect(onlyWrittenLine()).not.toMatch(/rootSECRET|middleSECRET/);
+    expect(onlyWrittenLine()).toContain('root saw Bearer ***');
+  });
+
+  it('masks a token passed as the id field', async () => {
+    const { log } = await loadLogger();
+
+    log('error', 'odd id', undefined, { id: 'Bearer idSECRET' });
+
+    expect(onlyWrittenLine()).not.toContain('idSECRET');
+  });
+
+  it('never lets a field replace the logged error or the minted id', async () => {
+    const { log } = await loadLogger();
+
+    log('error', 'forgery attempt', new Error('real'), { err: 'forged', id: 5 as unknown as string });
+
+    const line = parsedLine();
+    expect(line.err.message).toBe('real');
+    expect(line.id).toMatch(EIGHT_HEX);
+  });
+
+  it('logs an unknown level as an info line on console.log', async () => {
+    const { log } = await loadLogger();
+
+    log('nope' as 'info', 'unknown level');
+
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    expect(parsedLine().level).toBe('info');
+  });
+
+  it('follows process.stdout.isTTY as it is at each call, not as it was at import', async () => {
+    const { log } = await loadLogger();
+
+    log('info', 'first');
+    setStdoutIsTty(true);
+    log('info', 'second');
+    setStdoutIsTty(false);
+    log('info', 'third');
+
+    const [first, second, third] = writtenLines() as [string, string, string];
+    expect(first.startsWith('{')).toBe(true);
+    expect(second).toMatch(/^\d{2}:\d{2}:\d{2} INFO second$/);
+    expect(third.startsWith('{')).toBe(true);
+  });
+
+  it('marks a circular structure instead of failing', async () => {
+    const { log } = await loadLogger();
+    const circular: Record<string, unknown> = { name: 'loop' };
+    circular.self = circular;
+
+    log('info', 'loop', circular);
+
+    expect(parsedLine().detail).toEqual({ name: 'loop', self: '[circular]' });
+  });
+
+  it('keeps the first 50 items of an array and 50 keys of an object and says how many were left out', async () => {
+    const { log } = await loadLogger();
+    const manyKeys = Object.fromEntries(Array.from({ length: 80 }, (_, index) => [`key${index}`, index]));
+
+    log('info', 'wide', { list: Array.from({ length: 200 }, (_, index) => index), manyKeys });
+
+    const { list, manyKeys: keptKeys } = parsedLine().detail;
+    expect(list).toHaveLength(51);
+    expect(list.at(-1)).toBe('…150 more');
+    expect(Object.keys(keptKeys)).toHaveLength(50);
+  });
+
+  it('replaces what is nested deeper than the depth limit', async () => {
+    const { log } = await loadLogger();
+    let nested: Record<string, unknown> = { leaf: 'deep' };
+    for (let level = 0; level < 20; level += 1) nested = { child: nested };
+
+    log('info', 'nested', nested);
+
+    expect(onlyWrittenLine()).toContain('[depth]');
+    expect(onlyWrittenLine()).not.toContain('deep');
+  });
+
+  it('cuts one string value to 8 KiB', async () => {
+    const { log } = await loadLogger();
+
+    log('info', 'x'.repeat(100_000));
+
+    expect(parsedLine().msg).toBe(`${'x'.repeat(8 * 1024)}…`);
+  });
+
+  it('leaves a line of exactly 16 KiB whole and marks a line one character longer', async () => {
+    const { log } = await loadLogger();
+    const fullPad = 'x'.repeat(8000);
+    log('info', 'measure', undefined, { first: fullPad, second: fullPad, rest: '' });
+    const emptyRestLength = onlyWrittenLine().length;
+    logSpy.mockClear();
+    const paddedTo = (length: number) => ({ first: fullPad, second: fullPad, rest: 'x'.repeat(length - emptyRestLength) });
+
+    log('info', 'measure', undefined, paddedTo(MAX_LINE_CHARS));
+    log('info', 'measure', undefined, paddedTo(MAX_LINE_CHARS + 1));
+
+    const [exact, oneOver] = writtenLines() as [string, string];
+    expect(exact).toHaveLength(MAX_LINE_CHARS);
+    expect(() => JSON.parse(exact)).not.toThrow();
+    expect(oneOver).toMatch(/\.\.\.\[truncated 1 chars\]$/);
+  });
+
+  it('keeps a message that tries to forge a second NDJSON line on one line, inside its own string', async () => {
+    const { log } = await loadLogger();
+
+    log('info', 'x"}\n{"ts":"2020-01-01T00:00:00.000Z","level":"error","msg":"forged');
+
+    expect(onlyWrittenLine().split('\n')).toHaveLength(1);
+    expect(parsedLine().level).toBe('info');
+  });
+
+  it('keeps an ANSI-and-newline message on one uncoloured line in the TTY printer, and indents every stack line', async () => {
+    setStdoutIsTty(true);
+    const { log } = await loadLogger();
+    const error = new Error('x');
+    error.stack = 'Error: x\n10:00:00 ERROR forged\n\u001b[2Jat y';
+
+    log('error', 'a\nFAKE 10:00:00 ERROR forged\u001b[31m', error);
+
+    const [head, ...stackLines] = onlyWrittenLine().split('\n');
+    expect(head).toMatch(/^\d{2}:\d{2}:\d{2} ERROR aFAKE 10:00:00 ERROR forged\[31m {2}id=[0-9a-f]{8}$/);
+    expect(stackLines.every((line) => line.startsWith('    '))).toBe(true);
+    expect(onlyWrittenLine()).not.toContain('\u001b');
+  });
+
+  it.fails('strips the Unicode line separators and zero-width characters that line splitters and terminals honour', async () => {
+    const { log } = await loadLogger();
+    const invisible = [0x2028, 0x2029, 0x200b, 0x200c, 0x200d, 0x2060, 0xfeff, 0x061c].map((codePoint) => String.fromCharCode(codePoint));
+
+    log('info', ['a', ...invisible, 'b'].join(''));
+
+    expect(parsedLine().msg).toBe('ab');
+    expect(invisible.some((character) => onlyWrittenLine().includes(character))).toBe(false);
+  });
+
+  it.fails('does not dump the bytes of a Buffer as an index-to-byte object, which spells a secret in decimal', async () => {
+    const { log } = await loadLogger();
+
+    log('error', 'upstream body', Buffer.from('Bearer bufSECRET'), { body: Buffer.from('Bearer bufSECRET') });
+
+    expect(onlyWrittenLine()).not.toContain('"1":101');
+  });
+});
+
 describe('log — linear-time on adversarial input', () => {
   const SIZES = [64 * 1024, 128 * 1024, 256 * 1024, 1024 * 1024];
   const LIMIT_MS = 500;
