@@ -123,7 +123,7 @@ describe('POST /hooks/:token', () => {
 
     expect(res.status).toBe(500);
     expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
-    const [line] = consoleErrorSpy.mock.calls[0]!;
+    const [line] = consoleErrorSpy.mock.calls[0]! as [string];
     expect(line as string).not.toContain(hookToken);
     expect(line as string).toContain('/hooks/:token');
     applyInputSpy.mockRestore();

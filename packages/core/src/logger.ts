@@ -24,7 +24,7 @@ const RESERVED_FIELD_KEYS = new Set(['ts', 'level', 'msg', 'id', 'sessionId', 'c
 const CONTROL_AND_BIDI_EXCEPT_NEWLINE = /[\u0000-\u0009\u000b-\u001f\u007f-\u009f‎‏‪-‮⁦-⁩]/g;
 const CONTROL_AND_BIDI = /[\u0000-\u001f\u007f-\u009f‎‏‪-‮⁦-⁩]/g;
 const BEARER_TOKEN = /bearer(?:%20|[\s:])+[^\s"',;]*/gi;
-const HOOK_TOKEN = /(?:\/|%2f|%252f)hooks(?:\/|%2f|%252f)(?:[^/\s%]|%(?!2f|252f))*/gi;
+const HOOK_TOKEN = /(?:\/|%2f|%252f)hooks(?:\/|%2f|%252f)(?!:token(?![\w-]))(?:[^/\s%]|%(?!2f|252f))*/gi;
 const SENSITIVE_KEY = /token|secret|authorization|password/i;
 const PATH_CHARACTER = /[\w.-]/;
 

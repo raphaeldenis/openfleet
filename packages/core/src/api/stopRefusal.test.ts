@@ -342,7 +342,7 @@ describe('user can rely on a failing refusal check never trapping a session in g
     expect(stateBeforeStop).toBe('generating');
     expect(answer).toEqual({});
     expect(stateOfSession()).toBe('idle');
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('WARN'));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('"level":"warn"'));
     expect(warn.mock.calls.flat().join(' ')).toContain('corrupt sections_json');
     warn.mockRestore();
   });

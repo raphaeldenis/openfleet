@@ -523,9 +523,9 @@ describe('REST', () => {
 
     // sessionService itself already logs the domain-level failure (resumeOne); this call finds the
     // separate HTTP-level 500 log this test is actually about, among whatever else got logged.
-    const httpErrorLog = consoleErrorSpy.mock.calls.find(([line]) => (line as string).includes('POST') && (line as string).includes(`/api/sessions/${created.id}/reopen`));
+    const httpErrorLog = consoleErrorSpy.mock.calls.map(([line]) => JSON.parse(line as string) as { msg: string; err?: { stack: string } }).find((record) => record.msg.includes('POST') && record.msg.includes(`/api/sessions/${created.id}/reopen`));
     expect(httpErrorLog).toBeDefined();
-    expect((httpErrorLog![1] as Error).stack).toContain('pty spawn ENOENT');
+    expect(httpErrorLog!.err!.stack).toContain('pty spawn ENOENT');
     consoleErrorSpy.mockRestore();
   });
 
@@ -539,12 +539,13 @@ describe('REST', () => {
 
     expect(res.status).toBe(500);
     expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
-    const [line, loggedError] = consoleErrorSpy.mock.calls[0]!;
-    expect(line as string).toContain('GET');
-    expect(line as string).toContain('/api/sessions');
-    expect(line as string).not.toContain('secret=leak-me');
-    expect(line as string).not.toContain('do-not-log-me');
-    expect((loggedError as Error).stack).toContain('sqlite: database is locked');
+    const [rawLine] = consoleErrorSpy.mock.calls[0]!;
+    const { msg: line, err: loggedError } = JSON.parse(rawLine as string) as { msg: string; err: { stack: string } };
+    expect(line).toContain('GET');
+    expect(line).toContain('/api/sessions');
+    expect(rawLine as string).not.toContain('secret=leak-me');
+    expect(rawLine as string).not.toContain('do-not-log-me');
+    expect(loggedError.stack).toContain('sqlite: database is locked');
     listSpy.mockRestore();
     consoleErrorSpy.mockRestore();
   });

@@ -7,6 +7,8 @@ import { installProcessGuards } from './processGuards.js';
 describe('installProcessGuards', () => {
   let errorSpy: ReturnType<typeof vi.spyOn>;
 
+  const loggedErrorRecord = () => JSON.parse(errorSpy.mock.calls[0]![0] as string) as Record<string, unknown>;
+
   beforeEach(() => {
     errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     installProcessGuards();
@@ -19,12 +21,12 @@ describe('installProcessGuards', () => {
 
   it('logs and survives an uncaughtException instead of crashing', () => {
     process.emit('uncaughtException', new Error('boom'));
-    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('uncaughtException'), expect.any(Error));
+    expect(loggedErrorRecord()).toMatchObject({ msg: expect.stringContaining('uncaughtException'), err: { name: 'Error', message: 'boom' } });
   });
 
   it('logs and survives an unhandledRejection instead of crashing', () => {
     process.emit('unhandledRejection', new Error('boom'), Promise.resolve());
-    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('unhandledRejection'), expect.any(Error));
+    expect(loggedErrorRecord()).toMatchObject({ msg: expect.stringContaining('unhandledRejection'), err: { name: 'Error', message: 'boom' } });
   });
 
   it('sets a restrictive umask so every file the daemon creates afterwards defaults to owner-only (AUD-05)', () => {

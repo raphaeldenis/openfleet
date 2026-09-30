@@ -241,6 +241,14 @@ describe('log — redaction', () => {
     },
   );
 
+  it('keeps the /hooks/:token route pattern, which is not a secret', async () => {
+    const { log } = await loadLogger();
+
+    log('error', 'POST /hooks/:token → 500');
+
+    expect(parsedLine().msg).toBe('POST /hooks/:token → 500');
+  });
+
   it('masks the value of any key matching token, secret, authorization or password, at any depth, in any case', async () => {
     const { log } = await loadLogger();
 

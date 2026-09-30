@@ -705,8 +705,9 @@ describe('resolved model recording from a session\'s transcript', () => {
     warnSpy.mockRestore();
 
     expect(nameMismatchWarnings).toHaveLength(1);
-    expect(String(nameMismatchWarnings[0]![0])).toContain(`transcript name does not match the session's CLI id: session ${id}, expected ${id}.jsonl, got "${foreignName}"`);
-    expect(String(nameMismatchWarnings[0]![0])).not.toContain(projectDirectory);
+    const { msg } = JSON.parse(String(nameMismatchWarnings[0]![0])) as { msg: string };
+    expect(msg).toContain(`transcript name does not match the session's CLI id: session ${id}, expected ${id}.jsonl, got "${foreignName}"`);
+    expect(msg).not.toContain(projectDirectory);
   });
 
   it('logs the transcript name mismatch again after the session is relaunched', async () => {
@@ -816,7 +817,7 @@ describe('model drift between launches that resolve the same requested model', (
   const captureDriftWarnings = () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     return {
-      lines: () => warnSpy.mock.calls.map((call) => String(call[0])).filter((line) => line.includes('model drift')),
+      lines: () => warnSpy.mock.calls.map((call) => (JSON.parse(String(call[0])) as { msg: string }).msg).filter((line) => line.includes('model drift')),
       stop: () => warnSpy.mockRestore(),
     };
   };
