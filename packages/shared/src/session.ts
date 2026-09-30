@@ -36,6 +36,8 @@ export interface Session {
   resolvedModel?: string;
   cliVersion?: string;
   modelDriftedFrom?: string;
+  /** The highest context-size threshold, in tokens, the session has crossed. Absent when no notice is raised. */
+  contextNoticeTokens?: number;
   parentId?: string;
   projectId?: string;
   role?: string;
