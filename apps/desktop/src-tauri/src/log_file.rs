@@ -749,19 +749,37 @@ mod tests {
   }
 
   #[test]
-  fn redacts_one_mebibyte_of_hostile_input_in_linear_time() {
-    const MEBIBYTE: usize = 1024 * 1024;
-    let units = ["?", "%", "%25", "/", "Bearer ", "/hooks/", "a", "&", "=", " ", "?a=%25/hooks/Bearer &Basic ", "://", "Basic ", "%2Fhooks%2F", "token=", "a=%3D"];
+  fn redacts_hostile_input_in_linear_time() {
+    const KIBIBYTE: usize = 1024;
+    const SMALL_INPUT: usize = 16 * KIBIBYTE;
+    const LARGE_INPUT: usize = 4 * SMALL_INPUT;
+    const MEBIBYTE: usize = 1024 * KIBIBYTE;
+    const NOISE_FLOOR: Duration = Duration::from_millis(20);
+    const GENEROUS_CEILING: Duration = Duration::from_secs(20);
+    let units = [
+      "?", "%", "%25", "/", "Bearer ", "/hooks/", "a", "&", "=", " ", "?a=%25/hooks/Bearer &Basic ", "://", "Basic ", "%2Fhooks%2F", "token=", "a=%3D",
+      "Bearer", "%42earer", "Basic/", "Basic+", "bearerx", "Authorization: Basic",
+    ];
     let secrets = vec!["s3cr3t-admin-token".to_string()];
+    let fastest_redaction_of = |unit: &str, size: usize| {
+      let hostile = unit.repeat(size / unit.len() + 1);
+      (0..3)
+        .map(|_| {
+          let started_at = Instant::now();
+          redact(&hostile, &secrets);
+          started_at.elapsed()
+        })
+        .min()
+        .unwrap()
+    };
 
     for unit in units {
-      let hostile = unit.repeat(MEBIBYTE / unit.len() + 1);
-      let started_at = Instant::now();
+      let time_at_small_input = fastest_redaction_of(unit, SMALL_INPUT).max(NOISE_FLOOR);
+      let time_at_large_input = fastest_redaction_of(unit, LARGE_INPUT);
+      assert!(time_at_large_input < time_at_small_input * 8, "{unit:?}: 4x the input took {time_at_large_input:?} against {time_at_small_input:?}");
 
-      redact(&hostile, &secrets);
-
-      let elapsed = started_at.elapsed();
-      assert!(elapsed < Duration::from_secs(1), "{unit:?} x 1 MiB took {elapsed:?}");
+      let time_at_one_mebibyte = fastest_redaction_of(unit, MEBIBYTE);
+      assert!(time_at_one_mebibyte < GENEROUS_CEILING, "{unit:?} x 1 MiB took {time_at_one_mebibyte:?}");
     }
   }
 

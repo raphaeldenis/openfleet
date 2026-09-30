@@ -143,8 +143,11 @@ fn bearer_token_at(text: &str, index: usize) -> Replacement {
     token_start += bearer_separator_len_at(text, token_start);
   }
   let has_separator = token_start > marker_end;
+  if !has_separator {
+    return None;
+  }
   let token_length = bytes[token_start..].iter().take_while(|byte| is_bearer_token_byte(**byte)).count();
-  (has_separator && token_length > 0).then(|| (token_start + token_length, format!("{} {MASK}", &text[index..marker_end])))
+  (token_length > 0).then(|| (token_start + token_length, format!("{} {MASK}", &text[index..marker_end])))
 }
 
 // ---- Basic ----
@@ -162,11 +165,14 @@ fn basic_credential_at(text: &str, index: usize) -> Replacement {
   let after_word = index + "Basic".len();
   let credential_start = skip_spaces(text, after_word);
   let has_space = credential_start > after_word;
+  if !has_space {
+    return None;
+  }
   let run_length = bytes[credential_start..].iter().take_while(|byte| is_base64_byte(**byte)).count();
   let run_end = credential_start + run_length;
   let run = &bytes[credential_start..run_end];
   let looks_encoded = run.iter().any(|byte| byte.is_ascii_digit() || *byte == b'+' || *byte == b'/') || bytes.get(run_end) == Some(&b'=');
-  if !(has_space && run_length >= 8 && looks_encoded) {
+  if !(run_length >= 8 && looks_encoded) {
     return None;
   }
   let padding = bytes[run_end..].iter().take(2).take_while(|byte| **byte == b'=').count();
