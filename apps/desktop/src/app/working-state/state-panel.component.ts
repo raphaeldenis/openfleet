@@ -20,7 +20,7 @@ const BODY_ID = 'state-panel-body';
         class="toggle"
         data-testid="state-panel-toggle"
         [attr.aria-expanded]="isOpen()"
-        [attr.aria-controls]="bodyId"
+        [attr.aria-controls]="isOpen() ? bodyId : null"
         (click)="isOpen.set(!isOpen())"
       >
         <span class="caret" aria-hidden="true">{{ isOpen() ? '▾' : '▸' }}</span>
@@ -93,7 +93,7 @@ export class StatePanelComponent {
 
   protected readonly noStateMessage = computed(() => {
     if (!this.events.workingStatesReported()) return 'State not reported by this daemon';
-    return this.session().state === 'closed' ? 'No state kept for a closed session' : 'No state recorded yet';
+    return this.session().state === 'closed' ? 'State not shown for a closed session' : 'No state recorded yet';
   });
 
   protected closeAndReturnToToggle(): void {

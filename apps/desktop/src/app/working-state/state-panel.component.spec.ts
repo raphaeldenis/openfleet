@@ -42,6 +42,23 @@ describe('StatePanelComponent', () => {
     expect(body()).toBeNull();
   });
 
+  it('user of a screen reader is never pointed at a body that does not exist while the panel is collapsed', async () => {
+    await renderPanel({ states: [stateOf({ plan: ['ship it'] })] });
+
+    const controlledId = toggle().getAttribute('aria-controls');
+
+    expect(controlledId === null || document.getElementById(controlledId) !== null).toBe(true);
+  });
+
+  it('user of a screen reader is pointed at the body once the panel is open', async () => {
+    await renderOpenPanel({ plan: ['ship it'] });
+
+    const controlledId = toggle().getAttribute('aria-controls');
+
+    expect(controlledId).not.toBeNull();
+    expect(document.getElementById(controlledId as string)).toBe(body());
+  });
+
   it('user can open the panel and read the six sections in order with their items', async () => {
     await renderOpenPanel({ plan: ['ship the panel'], todo: ['write tests', 'write code'], blockers: ['waiting on design'] });
 
@@ -145,11 +162,11 @@ describe('StatePanelComponent', () => {
       expect(screen.queryByTestId('state-section-plan')).toBeNull();
     });
 
-    it('user reads that no state is kept for a closed session', async () => {
+    it('user reads that the state is not shown for a closed session, not that none exists', async () => {
       await renderPanel({ states: [] }, sessionOf({ state: 'closed' }));
       await userEvent.click(toggle());
 
-      expect(screen.getByTestId('state-panel-none')).toHaveTextContent('No state kept for a closed session');
+      expect(screen.getByTestId('state-panel-none')).toHaveTextContent('State not shown for a closed session');
     });
 
     it('user still reads the last state of a session that closed while the app was open', async () => {
