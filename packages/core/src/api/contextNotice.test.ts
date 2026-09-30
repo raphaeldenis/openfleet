@@ -28,7 +28,30 @@ let events: ServerEvent[];
 let projectsDirectory: string;
 const originalConfigDir = process.env.CLAUDE_CONFIG_DIR;
 
-const boot = async (settings: ContextNoticeSettings) => {
+let contextNotice: ContextNotice;
+const fakeClock = {
+  timers: [] as { run: () => void; at: number; cancelled: boolean; fired: boolean }[],
+  now: 0,
+  schedule(run: () => void, delayMs: number) {
+    const timer = { run, at: fakeClock.now + delayMs, cancelled: false, fired: false };
+    fakeClock.timers.push(timer);
+    return () => { timer.cancelled = true; };
+  },
+  advance(ms: number) {
+    fakeClock.now += ms;
+    for (const timer of fakeClock.timers) {
+      const isDue = !timer.cancelled && !timer.fired && timer.at <= fakeClock.now;
+      if (!isDue) continue;
+      timer.fired = true;
+      timer.run();
+    }
+  },
+  pendingCount: () => fakeClock.timers.filter((timer) => !timer.cancelled && !timer.fired).length,
+};
+
+const boot = async (settings: ContextNoticeSettings, options: { realTimers?: boolean } = {}) => {
+  fakeClock.timers = [];
+  fakeClock.now = 0;
   const bus = new EventBus();
   events = [];
   bus.subscribe((event) => events.push(event));
@@ -38,7 +61,7 @@ const boot = async (settings: ContextNoticeSettings) => {
   const managerRepo = new ManagerRepository(db);
   const pulseScheduler = new PulseScheduler({ managers: managerRepo, sessions, bus });
   managers = new ManagerService({ managers: managerRepo, sessions, bus, scheduler: pulseScheduler });
-  const contextNotice = new ContextNotice({ sessions, managers: managerRepo, settings });
+  contextNotice = new ContextNotice({ sessions, managers: managerRepo, settings, schedule: options.realTimers ? undefined : fakeClock.schedule });
   server = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable: DEFAULT_MODEL_TABLE, modelConfigPath: '/tmp/of-unused/config.json', contextNotice });
 };
 
@@ -220,10 +243,9 @@ describe('user is told in the inbox data when a manager session is a good moment
   });
 
   it.each([
-    { hook_event_name: 'UserPromptSubmit' },
     { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: {} },
     { hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: {} },
-  ])('measures at Stop only: a $hook_event_name hook raises nothing whatever the transcript holds', async (hook) => {
+  ])('measures at Stop and at a prompt only: a $hook_event_name hook raises nothing whatever the transcript holds', async (hook) => {
     const manager = await createManager();
     contextGrowsTo(manager, 500_000);
 
@@ -632,5 +654,141 @@ describe('the notice stays right on a huge transcript and at the bounds of the s
 
     expect(noticeUpdatesOf(manager)).toHaveLength(1);
     expect(noticeOf(manager)).toBe(300_000);
+  });
+});
+
+describe('the notice follows the current turn although the CLI flushes the turn to the transcript after it fires Stop', () => {
+  const REMEASURE_DELAY_MS = 1_000;
+  const appendTurn = (id: string, contextTokens: number) => appendFileSync(transcriptOf(id), assistantLine({ contextTokens }));
+
+  it('measures the turn flushed after the Stop response once the delay has passed', async () => {
+    const manager = await createManager();
+    contextGrowsTo(manager, 250_000);
+    await stop(manager);
+
+    appendTurn(manager, 410_000);
+    const noticeBeforeDelay = noticeOf(manager);
+    fakeClock.advance(REMEASURE_DELAY_MS);
+
+    expect(noticeBeforeDelay).toBeUndefined();
+    expect(noticeOf(manager)).toBe(400_000);
+    expect(noticeOfLastUpdate(manager)).toBe(400_000);
+  });
+
+  it('re-arms one delayed measure when a second Stop comes before the first delay ends', async () => {
+    const manager = await createManager();
+    contextGrowsTo(manager, 250_000);
+    await stop(manager);
+    fakeClock.advance(600);
+    await stop(manager);
+    const pendingAfterSecondStop = fakeClock.pendingCount();
+
+    appendTurn(manager, 350_000);
+    fakeClock.advance(600);
+    const noticeWhereTheFirstDelayWouldHaveEnded = noticeOf(manager);
+    fakeClock.advance(400);
+
+    expect(pendingAfterSecondStop).toBe(1);
+    expect(noticeWhereTheFirstDelayWouldHaveEnded).toBeUndefined();
+    expect(noticeOf(manager)).toBe(300_000);
+    expect(noticeUpdatesOf(manager)).toHaveLength(1);
+  });
+
+  it('raises one notice, not two, when the delayed measure reads what the Stop already measured', async () => {
+    const manager = await createManager();
+    contextGrowsTo(manager, 350_000);
+    await stop(manager);
+
+    fakeClock.advance(REMEASURE_DELAY_MS);
+
+    expect(noticeUpdatesOf(manager)).toHaveLength(1);
+  });
+
+  it('measures nothing once the session is closed', async () => {
+    const manager = await createManager();
+    contextGrowsTo(manager, 250_000);
+    await stop(manager);
+    await sessions.close(manager);
+    const updatesBeforeDelay = updatesOf(manager).length;
+
+    appendTurn(manager, 410_000);
+    fakeClock.advance(REMEASURE_DELAY_MS);
+
+    expect(noticeOf(manager)).toBeUndefined();
+    expect(updatesOf(manager)).toHaveLength(updatesBeforeDelay);
+  });
+
+  it.each(['clear', 'compact'])('keeps the notice cleared by the SessionStart of a %s when the delay ends afterwards', async (source) => {
+    const manager = await createManager();
+    contextGrowsTo(manager, 450_000);
+    await stop(manager);
+    await sessionStart(manager, source);
+
+    fakeClock.advance(REMEASURE_DELAY_MS);
+
+    expect(noticeOf(manager)).toBeUndefined();
+    expect(fakeClock.pendingCount()).toBe(0);
+  });
+
+  it('holds no timer after the shutdown and measures nothing on a closed database', async () => {
+    const manager = await createManager();
+    contextGrowsTo(manager, 250_000);
+    await stop(manager);
+
+    contextNotice.stop();
+    db.close();
+
+    expect(fakeClock.pendingCount()).toBe(0);
+    expect(() => fakeClock.advance(REMEASURE_DELAY_MS)).not.toThrow();
+  });
+
+  it('never keeps the process alive with its delayed measure', async () => {
+    await server.close();
+    await boot(DEFAULT_SETTINGS, { realTimers: true });
+    const manager = await createManager();
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+    contextGrowsTo(manager, 250_000);
+
+    await stop(manager);
+    const remeasureTimers = setTimeoutSpy.mock.calls.flatMap((call, index) => (call[1] === REMEASURE_DELAY_MS ? [setTimeoutSpy.mock.results[index]!.value as NodeJS.Timeout] : []));
+    contextNotice.stop();
+
+    expect(remeasureTimers).toHaveLength(1);
+    expect(remeasureTimers[0]!.hasRef()).toBe(false);
+  });
+
+  it('handles a hostile line flushed after the Stop like any other: the notice the real context deserves stays', async () => {
+    const manager = await createManager();
+    contextGrowsTo(manager, 450_000);
+    await stop(manager);
+
+    appendFileSync(transcriptOf(manager), assistantLine({ usage: { input_tokens: -1, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } }));
+    fakeClock.advance(REMEASURE_DELAY_MS);
+
+    expect(noticeOf(manager)).toBe(400_000);
+  });
+
+  it('measures at the next UserPromptSubmit of a watched session', async () => {
+    const manager = await createManager();
+    contextGrowsTo(manager, 250_000);
+    await stop(manager);
+
+    appendTurn(manager, 410_000);
+    await postHook(manager, { hook_event_name: 'UserPromptSubmit' });
+
+    expect(noticeOf(manager)).toBe(400_000);
+  });
+
+  it('arms no timer and raises nothing for a session whose role is not watched', async () => {
+    const manager = await createManager();
+    const child = await createChildOf(manager);
+    contextGrowsTo(child, 500_000);
+
+    await stop(child);
+    await postHook(child, { hook_event_name: 'UserPromptSubmit' });
+    fakeClock.advance(REMEASURE_DELAY_MS);
+
+    expect(fakeClock.pendingCount()).toBe(0);
+    expect(noticeOf(child)).toBeUndefined();
   });
 });

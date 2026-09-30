@@ -80,6 +80,7 @@ export async function startDaemon(config: Config): Promise<Daemon> {
   // anyway, so nothing here is worth preserving across a restart (AUD-11).
   const close = async () => {
     pulseScheduler.stop();
+    contextNotice.stop();
     await sessions.closeAll();
     await server.close();
   };

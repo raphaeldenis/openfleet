@@ -40,6 +40,7 @@ function recordHandoversFailingOpen(handoverLedger: HandoverLedger | undefined, 
 function trackContextNoticeFailingOpen(contextNotice: ContextNotice | undefined, sessionId: string, event: ClaudeHookEvent): void {
   try {
     if (event.hook_event_name === 'Stop') contextNotice?.measureAtStop(sessionId);
+    if (event.hook_event_name === 'UserPromptSubmit') contextNotice?.measureAtPrompt(sessionId);
     const startsFreshConversation = event.hook_event_name === 'SessionStart' && (event.source === 'clear' || event.source === 'compact');
     if (startsFreshConversation) contextNotice?.clearForNewConversation(sessionId);
   } catch (error) {
