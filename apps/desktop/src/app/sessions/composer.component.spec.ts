@@ -101,6 +101,71 @@ describe('ComposerComponent', () => {
     expect(screen.queryByTestId('composer-status')).toBeNull();
   });
 
+  describe('while a send is pending', () => {
+    async function renderWithPendingSend() {
+      const user = userEvent.setup({ delay: null });
+      let resolveSend: (value: unknown) => void = () => {};
+      let rejectSend: (reason: unknown) => void = () => {};
+      const api = { sendMessage: vi.fn(() => new Promise((resolve, reject) => { resolveSend = resolve; rejectSend = reject; })) };
+      const { fixture } = await render(ComposerComponent, {
+        bindings: [inputBinding('sessionId', () => 's1')],
+        providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: fakeEvents() }],
+      });
+      return { user, api, fixture, resolveSend: (value: unknown) => resolveSend(value), rejectSend: (reason: unknown) => rejectSend(reason) };
+    }
+
+    it('user who clicks Send twice before the response arrives sends the message once', async () => {
+      const { user, api, fixture } = await renderWithPendingSend();
+      await user.type(screen.getByTestId('composer-input'), 'approve staging');
+
+      await user.click(screen.getByTestId('composer-send'));
+      await user.click(screen.getByTestId('composer-send'));
+      await fixture.whenStable();
+
+      expect(api.sendMessage).toHaveBeenCalledTimes(1);
+      expect(screen.getByTestId('composer-send')).toBeDisabled();
+    });
+
+    it('user can send again once a failed send is over', async () => {
+      const { user, api, rejectSend } = await renderWithPendingSend();
+      await user.type(screen.getByTestId('composer-input'), 'approve staging');
+      await user.click(screen.getByTestId('composer-send'));
+
+      rejectSend(new Error('boom'));
+
+      await waitFor(() => expect(screen.getByTestId('composer-send')).toBeEnabled());
+      await user.click(screen.getByTestId('composer-send'));
+      expect(api.sendMessage).toHaveBeenCalledTimes(2);
+    });
+
+    it('user keeps the text typed after Send while the response arrives, and loses only what was sent', async () => {
+      const { user, fixture, resolveSend } = await renderWithPendingSend();
+      await user.type(screen.getByTestId('composer-input'), 'first part');
+      await user.click(screen.getByTestId('composer-send'));
+      await user.type(screen.getByTestId('composer-input'), ' and a second thought');
+      await fixture.whenStable();
+
+      resolveSend({ status: 'delivered', messageId: 'm1' });
+
+      await waitFor(() => expect(screen.getByTestId('composer-status')).toHaveTextContent('sent'));
+      expect(screen.getByTestId('composer-input')).toHaveValue('and a second thought');
+    });
+
+    it('user who replaces the text after Send keeps the new text when the response arrives', async () => {
+      const { user, fixture, resolveSend } = await renderWithPendingSend();
+      await user.type(screen.getByTestId('composer-input'), 'A');
+      await user.click(screen.getByTestId('composer-send'));
+      await user.clear(screen.getByTestId('composer-input'));
+      await user.type(screen.getByTestId('composer-input'), 'B');
+      await fixture.whenStable();
+
+      resolveSend({ status: 'delivered', messageId: 'm1' });
+
+      await waitFor(() => expect(screen.getByTestId('composer-status')).toHaveTextContent('sent'));
+      expect(screen.getByTestId('composer-input')).toHaveValue('B');
+    });
+  });
+
   it('does not send a whitespace-only draft', async () => {
     // Arrange
     const api = { sendMessage: vi.fn() };
