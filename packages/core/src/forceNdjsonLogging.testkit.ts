@@ -1,11 +1,13 @@
 import { onTestFinished } from 'vitest';
 
-/** Makes the logger print NDJSON for the running test, whatever stdout is when a worker runs it, and restores stdout afterwards. */
+/** Test-only: makes the logger print NDJSON for the running test, whatever stdout and stderr are when a worker runs it, and restores both afterwards. */
 export function forceNdjsonLogging(): void {
-  const before = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
-  Object.defineProperty(process.stdout, 'isTTY', { value: false, configurable: true });
-  onTestFinished(() => {
-    if (before) Object.defineProperty(process.stdout, 'isTTY', before);
-    else delete (process.stdout as { isTTY?: boolean }).isTTY;
-  });
+  for (const stream of [process.stdout, process.stderr]) {
+    const before = Object.getOwnPropertyDescriptor(stream, 'isTTY');
+    Object.defineProperty(stream, 'isTTY', { value: false, configurable: true });
+    onTestFinished(() => {
+      if (before) Object.defineProperty(stream, 'isTTY', before);
+      else delete (stream as { isTTY?: boolean }).isTTY;
+    });
+  }
 }

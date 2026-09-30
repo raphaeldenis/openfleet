@@ -6,7 +6,7 @@ import type { WorkingStateSections } from '@openfleet/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
-import { forceNdjsonLogging } from '../forceNdjsonLogging.js';
+import { forceNdjsonLogging } from '../forceNdjsonLogging.testkit.js';
 import { ApprovalService } from '../governance/approvalService.js';
 import { FakeHarness } from '../harness/fakeHarness.js';
 import { ManagerRepository } from '../managers/managerRepository.js';

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
+import { forceNdjsonLogging } from '../forceNdjsonLogging.testkit.js';
 import { ApprovalService } from '../governance/approvalService.js';
 import { FakeHarness } from '../harness/fakeHarness.js';
 import { ManagerRepository } from '../managers/managerRepository.js';
@@ -19,7 +20,8 @@ let server: Awaited<ReturnType<typeof startServer>>;
 let errorLog: ReturnType<typeof vi.spyOn>;
 
 beforeEach(async () => {
-  errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  forceNdjsonLogging();
+  errorLog =vi.spyOn(console, 'error').mockImplementation(() => undefined);
   const db = openDatabase(':memory:');
   const bus = new EventBus();
   const sessions = new SessionService({ db, bus, harnesses: [new FakeHarness()], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt' });

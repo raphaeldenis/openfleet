@@ -6,6 +6,7 @@ import { ZodError, z } from 'zod';
 import { ERROR_CODES, OpenFleetError, type ErrorCode } from '@openfleet/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { InvalidJsonBodyError, PayloadTooLargeError } from '../api/router.js';
+import { forceNdjsonLogging } from '../forceNdjsonLogging.testkit.js';
 import { StuckConnectionError } from '../db/transaction.js';
 import { ApprovalError } from '../governance/approvalService.js';
 import { ModelConfigReadOnlyError, ModelConfigUnreadableError } from '../models.js';
@@ -29,7 +30,10 @@ import { describeError } from './describeError.js';
 const ID_PATTERN = /^[0-9a-f]{8}$/;
 
 let errorLog: ReturnType<typeof vi.spyOn>;
-beforeEach(() => { errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined); });
+beforeEach(() => {
+  forceNdjsonLogging();
+  errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+});
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 
 const foreignKeyError = () => Object.assign(new Error('FOREIGN KEY constraint failed'), { code: 'ERR_SQLITE_ERROR' });
