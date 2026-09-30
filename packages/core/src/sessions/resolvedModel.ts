@@ -50,8 +50,13 @@ export function findResolvedModel(tail: string, launchedAt: string): ResolvedMod
 
 const CONTEXT_USAGE_FIELDS = ['input_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens'] as const;
 
+// The top of the contextNotice settings range: a sum above it is not a context reading, and a sum past the safe
+// integer range would make the sessions table unreadable.
+const MAX_TRUSTED_CONTEXT_TOKENS = 10_000_000;
+
 // The context size of the latest main-chain assistant line that carries a complete usage: the sum of the three
-// input-side fields. A sub-agent line, a line without a usable usage, and a synthetic line totalling zero are skipped.
+// input-side fields. A sub-agent line, a line without a usable usage, a synthetic line totalling zero and a line
+// summing above MAX_TRUSTED_CONTEXT_TOKENS are skipped.
 export function findLatestContextTokens(tail: string): number | undefined {
   const linesNewestFirst = tail.split('\n').reverse();
   for (const line of linesNewestFirst) {
@@ -73,7 +78,8 @@ function contextTokensOfLine(line: string): number | undefined {
   if (!isCompleteUsage) return undefined;
   const contextTokens = (fieldValues as number[]).reduce((sum, value) => sum + value, 0);
   const isSyntheticLine = contextTokens === 0;
-  return isSyntheticLine ? undefined : contextTokens;
+  const isBeyondAnyRealContextWindow = contextTokens > MAX_TRUSTED_CONTEXT_TOKENS;
+  return isSyntheticLine || isBeyondAnyRealContextWindow ? undefined : contextTokens;
 }
 
 function resolutionOfLine(line: string, launchedAtMs: number): ResolvedModel | undefined {

@@ -514,13 +514,13 @@ describe('the notice stays right on a huge transcript and at the bounds of the s
     contextGrowsTo(manager, 9_999_999);
     await stop(manager);
     const noticeJustBelow = noticeOf(manager);
-    contextGrowsTo(manager, 29_999_999);
+    contextGrowsTo(manager, 10_000_000);
     await stop(manager);
 
-    expect([noticeJustBelow, noticeOf(manager)]).toEqual([undefined, 20_000_000]);
+    expect([noticeJustBelow, noticeOf(manager)]).toEqual([undefined, 10_000_000]);
   });
 
-  it.fails('keeps the session list readable when a usage adds up past the safe integer range', async () => {
+  it('keeps the session list readable when a usage adds up past the safe integer range', async () => {
     const manager = await createManager();
     writeTranscript(manager, assistantLine({ usage: { input_tokens: Number.MAX_SAFE_INTEGER, cache_creation_input_tokens: Number.MAX_SAFE_INTEGER, cache_read_input_tokens: Number.MAX_SAFE_INTEGER } }));
 
@@ -529,6 +529,27 @@ describe('the notice stays right on a huge transcript and at the bounds of the s
     expect(answer).toEqual({});
     expect(() => sessions.list()).not.toThrow();
   });
+
+  it('measures the legitimate line just before a usage that adds up past the safe integer range', async () => {
+    const manager = await createManager();
+    const hostileUsage = { input_tokens: Number.MAX_SAFE_INTEGER, cache_creation_input_tokens: Number.MAX_SAFE_INTEGER, cache_read_input_tokens: Number.MAX_SAFE_INTEGER };
+    writeTranscript(manager, assistantLine({ contextTokens: 350_000 }), assistantLine({ usage: hostileUsage }));
+
+    await stop(manager);
+
+    expect(noticeOf(manager)).toBe(300_000);
+  });
+
+  it('does not trust a context reading above the 10,000,000 settings cap, a real window is far smaller, so it falls back to the previous line', async () => {
+    const manager = await createManager();
+    writeTranscript(manager, assistantLine({ contextTokens: 350_000 }), assistantLine({ contextTokens: 10_000_001 }));
+
+    await stop(manager);
+
+    expect(noticeOf(manager)).toBe(300_000);
+  });
+
+  it.todo('raises the notice again on a stale pre-compact line still in the transcript tail after a compact');
 
   it('emits one notice, not several, when concurrent Stops measure the same transcript', async () => {
     const manager = await createManager();
