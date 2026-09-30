@@ -241,7 +241,12 @@ export class NoteService {
     return this.inTransaction(work);
   }
 
-  getExpanded(id: string, { viewerProjectId }: GetExpandedOptions): ExpandedNote {
+  /** Throws when a transaction is already open: a caller that does non-transactional work (a file rename) inside `runAtomically` cannot have an outer rollback undo it. */
+  assertNoOuterTransaction(): void {
+    if (this.db.isTransaction) throw new Error('refusing to run inside an outer transaction: its rollback could not undo the file rename');
+  }
+
+  getExpanded(id: string,{ viewerProjectId }: GetExpandedOptions): ExpandedNote {
     const note = this.require(id);
     const lookup = this.mentionLookupFor(viewerProjectId);
     const expandedBody = this.expandMentions(note.bodyMd, lookup, { rootNoteId: note.id });
