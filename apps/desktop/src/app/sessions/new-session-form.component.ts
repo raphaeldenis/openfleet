@@ -119,7 +119,7 @@ function creationModeFrom(queryParams: ParamMap | undefined): CreationMode {
           @if (!isEmbedded) {
             <a class="of-btn of-btn--secondary" routerLink="/" data-testid="new-session-cancel">Cancel</a>
           }
-          <button #submitButton type="submit" class="of-btn of-btn--primary" data-testid="new-session-submit" [attr.aria-disabled]="ariaDisabled()">{{ isManagerMode() ? 'Create manager' : 'Create session' }}</button>
+          <button #submitButton type="submit" class="of-btn of-btn--primary" data-testid="new-session-submit" [disabled]="hasInvalidManagerNumbers()" [attr.aria-disabled]="ariaDisabled()">{{ isManagerMode() ? 'Create manager' : 'Create session' }}</button>
         </div>
       </div>
     </form>
@@ -180,6 +180,7 @@ export class NewSessionFormComponent {
   });
   protected readonly mode = linkedSignal<CreationMode>(() => (this.isEmbedded ? 'session' : this.modeFromUrl()));
   protected readonly isManagerMode = computed(() => this.mode() === 'manager');
+  protected readonly hasInvalidManagerNumbers = computed(() => this.isManagerMode() && (this.managerFields()?.hasInvalidNumbers() ?? false));
   protected readonly directory = signal(this.embeddedSessionSeed?.directory() ?? '');
   protected readonly name = signal(this.embeddedSessionSeed?.name() ?? '');
   protected readonly typedEmoji = signal<string | null>(null);

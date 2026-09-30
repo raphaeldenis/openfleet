@@ -115,6 +115,74 @@ describe('second target', () => {
   if (!hasX64Prebuild) it('SKIPPED: node-pty ships no darwin-x64 prebuild in this install', () => {});
 });
 
+describe('node-pty prebuild guard', () => {
+  const MACH_O_64_MAGIC = 0xfeedfacf;
+  const CPU_TYPE_X86_64 = 0x01000007;
+  const CPU_TYPE_ARM64 = 0x0100000c;
+
+  const machOHeader = (cpuType: number) => {
+    const header = Buffer.alloc(32);
+    header.writeUInt32LE(MACH_O_64_MAGIC, 0);
+    header.writeUInt32LE(cpuType, 4);
+    return header;
+  };
+
+  const writeFakeNodePty = ({ prebuildCpuType, withPrebuild = true }: { prebuildCpuType: number; withPrebuild?: boolean }) => {
+    const nodePtyFolder = join(makeScratchFolder(), 'node-pty');
+    mkdirSync(join(nodePtyFolder, 'lib'), { recursive: true });
+    writeFileSync(join(nodePtyFolder, 'package.json'), JSON.stringify({ name: 'node-pty', version: '1.1.0' }));
+    writeFileSync(join(nodePtyFolder, 'lib/index.js'), '');
+    if (withPrebuild) {
+      const prebuildFolder = join(nodePtyFolder, 'prebuilds/darwin-x64');
+      mkdirSync(prebuildFolder, { recursive: true });
+      writeFileSync(join(prebuildFolder, 'pty.node'), machOHeader(prebuildCpuType));
+      writeFileSync(join(prebuildFolder, 'spawn-helper'), machOHeader(prebuildCpuType));
+    }
+    return nodePtyFolder;
+  };
+
+  const previousBundleOut = () => {
+    const out = join(makeScratchFolder(), 'previous');
+    cpSync(arm64Out, out, { recursive: true });
+    return out;
+  };
+
+  const bundleX64With = ({ nodePtyDir, out }: { nodePtyDir: string; out: string }) =>
+    runBundle(['--target', X64_TARGET, '--out', out, '--tauri-conf', tauriConf, '--node-pty-dir', nodePtyDir]);
+
+  it('bundles a node-pty whose darwin-x64 prebuild is a x86_64 Mach-O and ships only that prebuild', () => {
+    const out = join(makeScratchFolder(), 'x64');
+
+    const result = bundleX64With({ nodePtyDir: writeFakeNodePty({ prebuildCpuType: CPU_TYPE_X86_64 }), out });
+
+    expect(result.stderr).toBe('');
+    expect(result.status).toBe(0);
+    expect(prebuildFoldersIn(out)).toEqual(['darwin-x64']);
+  }, BOOT_TIMEOUT_MS);
+
+  it('fails loudly and keeps the previous bundle when node-pty has no darwin-x64 prebuild', () => {
+    const out = previousBundleOut();
+
+    const result = bundleX64With({ nodePtyDir: writeFakeNodePty({ prebuildCpuType: CPU_TYPE_X86_64, withPrebuild: false }), out });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr.trim().split('\n')).toHaveLength(1);
+    expect(result.stderr).toContain('darwin-x64');
+    expect(prebuildFoldersIn(out)).toEqual(['darwin-arm64']);
+  }, BOOT_TIMEOUT_MS);
+
+  it('fails loudly and keeps the previous bundle when the darwin-x64 prebuild is an arm64 Mach-O', () => {
+    const out = previousBundleOut();
+
+    const result = bundleX64With({ nodePtyDir: writeFakeNodePty({ prebuildCpuType: CPU_TYPE_ARM64 }), out });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(/arm64/);
+    expect(result.stderr).toContain('x86_64-apple-darwin');
+    expect(prebuildFoldersIn(out)).toEqual(['darwin-arm64']);
+  }, BOOT_TIMEOUT_MS);
+});
+
 describe('unknown target', () => {
   it('is refused with a one-line error and nothing is written', () => {
     const out = join(makeScratchFolder(), 'never-created');

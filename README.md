@@ -20,14 +20,17 @@ Once a packaged app runs on `~/.openfleet` and port 7331, start dev daemons on t
 
 ### Build the dmg
 
-    pnpm build:dmg
+    rustup target add x86_64-apple-darwin   # once, for the Intel dmg
+    pnpm build:dmg                          # Apple Silicon (default)
+    pnpm build:dmg --target x86_64-apple-darwin   # Intel
+    pnpm build:dmg:all                      # both, one after the other
 
-`scripts/release/build-local.sh` fetches the pinned official Node binary (`scripts/release/node-version.txt`, checked against nodejs.org's `SHASUMS256.txt`, cached after the first run), bundles the daemon, runs `tauri build` and prints the dmg path (`apps/desktop/src-tauri/target/release/bundle/dmg/OpenFleet_<version>_aarch64.dmg`). The build is Apple Silicon only, ad-hoc signed, not notarized, with no updater.
+`scripts/release/build-local.sh` fetches the pinned official Node binary (`scripts/release/node-version.txt`, checked against nodejs.org's `SHASUMS256.txt`, cached after the first run), bundles the daemon, runs `tauri build` and prints the dmg path (`apps/desktop/src-tauri/target/<target>/release/bundle/dmg/OpenFleet_<version>_aarch64.dmg` or `..._x64.dmg`). Two separate dmgs, one per architecture (not universal): each ships its own Node sidecar and only its own node-pty prebuild, and the build refuses a node-pty prebuild missing or built for the other CPU. It needs the Rust target of the chosen architecture (`rustup target list --installed`). The resources/daemon folder holds the bundle of the last target built. Ad-hoc signed, not notarized, with no updater.
 
 `tauri-build` requires the Node sidecar and the daemon bundle to exist, so on a fresh clone (or a CI runner) run both before any `cargo` or `tauri` command; `pnpm build:dmg` does it for you:
 
-    node scripts/release/fetch-node.mjs
-    pnpm --filter @openfleet/core bundle
+    node scripts/release/fetch-node.mjs                # [<version>] [<target>]
+    pnpm --filter @openfleet/core bundle                # [--target <target>]
 
 Install: open the dmg, drag `OpenFleet.app` to `/Applications`, launch. A dmg built and kept on the same Mac carries no quarantine flag, so Gatekeeper stays silent. The app starts its own daemon on port 7331 (it reuses one already answering there), and closing the window keeps the app and the daemon running; the Dock icon shows the window again. **Quit** (Cmd+Q) stops the daemon (SIGTERM, then SIGKILL after 12 s) and sessions resume on the next launch. To update, quit the app and drag the new `.app` over the old one.
 
