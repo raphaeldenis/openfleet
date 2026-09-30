@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { NOTE_FOLDERS, type Note, type NoteFolder } from '@openfleet/shared';
+import type { DegradedRegistry } from '../process/degradedRegistry.js';
 import type { ProjectRecord, ProjectRepository } from '../projects/projectRepository.js';
 import type { DocsFolderFs } from './docsFolderFs.js';
 import { MAX_BODY_BYTES, NoteNotFoundError, NoteTooLargeError, StaleRevisionError, type NoteService } from './noteService.js';
@@ -49,6 +50,8 @@ export interface DocsFolderServiceDeps {
   fs: DocsFolderFs;
   /** ISO date-time source for the `YYYY-MM-DD` filename prefix; independent of NoteService's own clock. */
   clock: () => string;
+  /** Hears when a note file cannot be read and when a read succeeds again. */
+  degraded?: Pick<DegradedRegistry, 'mark' | 'clear'>;
 }
 
 export interface CreateFileBackedNoteInput {
@@ -326,12 +329,20 @@ export class DocsFolderService {
   /** Returns undefined only when the file does not exist; any other read failure throws `NoteFileUnreadableError`. */
   private tryReadFile(path: string): string | undefined {
     try {
-      return this.deps.fs.readFileSync(path);
+      const body = this.deps.fs.readFileSync(path);
+      this.deps.degraded?.clear('docs_folder_unreadable');
+      return body;
     } catch (error) {
       const isFileMissing = (error as NodeJS.ErrnoException).code === 'ENOENT';
       if (isFileMissing) return undefined;
-      throw new NoteFileUnreadableError(path, error);
+      throw this.unreadable(path, error);
     }
+  }
+
+  /** Builds the typed error and marks the docs folder unreadable until a later read succeeds. */
+  private unreadable(path: string, cause: unknown): NoteFileUnreadableError {
+    this.deps.degraded?.mark('docs_folder_unreadable', 'a note file or the docs folder cannot be read.', { cause });
+    return new NoteFileUnreadableError(path, cause);
   }
 
   private importCandidate(projectId: string, candidate: ImportCandidate): Note[] {
@@ -398,7 +409,7 @@ export class DocsFolderService {
       const code = (error as NodeJS.ErrnoException).code;
       const isMissingFolderOrFile = code === 'ENOENT' || code === 'ENOTDIR';
       if (!isMissingFolderOrFile) throw error;
-      throw new NoteFileUnreadableError(path, error);
+      throw this.unreadable(path, error);
     }
   }
 
