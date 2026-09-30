@@ -534,9 +534,9 @@ export class SessionService {
     const session = this.require(sessionId);
     if (session.state !== 'closed') throw new SessionReopenError('not_closed', `session ${sessionId} is not closed`);
     this.assertDirectoryLaunchable(session);
-    const reopenEventId = this.repo.recordReopen(sessionId, new Date().toISOString());
     // Consumed with the 'starting' transition, like a boot resume: a failed launch then closes the row afresh and no boot retries it.
     if (this.repo.wasClosedByDaemonShutdown(sessionId)) this.repo.resumeFromShutdownClose(sessionId, new Date().toISOString());
+    const reopenEventId = this.repo.recordReopen(sessionId, new Date().toISOString());
     const outcome = this.resumeOne(session);
     if (!outcome.launched) {
       this.removeReopenRecord({ sessionId, reopenEventId });
@@ -1184,7 +1184,8 @@ export class SessionService {
       } catch (err) {
         // A failure anywhere past the launch itself (e.g. the state-machine DB write) must not abort
         // resuming the rest of the fleet — kill the process we already launched and move on.
-        if (err instanceof SessionReopenError) log('warn', `resume: session ${session.id} is closed instead of resumed: ${err.message}`);
+        const { code, message } = err as { code?: string; message?: string };
+        log('warn', `resume: session ${session.id} is closed instead of resumed: ${code ?? ''} ${message ?? ''}`.trim());
         await this.failResume(session.id);
       }
     }
@@ -1203,10 +1204,19 @@ export class SessionService {
         log('error', `resume: session ${sessionId} could not kill its process after a resume error`, err);
       }
     }
+    const closure: SessionClosure = { exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE, reason: 'launch_failed' };
     try {
-      this.markClosed(sessionId, { exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE, reason: 'launch_failed' });
+      // A transition that rolled back leaves the row closed with its shutdown marker: markClosed skips a closed row, so the marker is rewritten here.
+      const isStillClosedByShutdown = this.repo.wasClosedByDaemonShutdown(sessionId);
+      if (isStillClosedByShutdown) {
+        this.repo.failShutdownClose(sessionId, RESUME_LAUNCH_FAILED_EXIT_CODE, new Date().toISOString());
+        this.deps.bus.emit({ type: 'session.closed', sessionId, ...closure });
+        this.announceClosure(sessionId, closure);
+        return;
+      }
+      this.markClosed(sessionId, closure);
     } catch (err) {
-      // markClosed's own DB write can itself fail; one bad row's cleanup must not stop the rest of the fleet.
+      // The close's own DB write can itself fail; one bad row's cleanup must not stop the rest of the fleet.
       log('error', `resumeAll: failed to close session ${sessionId} after a resume error`, err);
     }
   }

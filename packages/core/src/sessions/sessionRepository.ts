@@ -143,6 +143,13 @@ export class SessionRepository {
       this.setState(id, 'starting', since);
     });
   }
+  /** Rewrites a shutdown-closed row as a failed close in one transaction: the given exit code, a fresh closed_at, no shutdown marker. */
+  failShutdownClose(id: string, exitCode: number, at: string): void {
+    inTransaction(this.db, 'fail_shutdown_close', () => {
+      this.clearShutdownClose(id);
+      this.db.prepare('UPDATE sessions SET state_since = ?, exit_code = ?, closed_at = ? WHERE id = ?').run(at, exitCode, at, id);
+    });
+  }
   /** True when the session's current close is the one a daemon shutdown made and no resume or later close has consumed it. */
   wasClosedByDaemonShutdown(id: string): boolean {
     const row = this.db.prepare(`SELECT 1 AS found FROM session_events JOIN sessions ON sessions.id = session_events.session_id

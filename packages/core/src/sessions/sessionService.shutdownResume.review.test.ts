@@ -11,9 +11,16 @@ type Db = ReturnType<typeof openDatabase>;
 
 function bootDaemon(db: Db, options: { resumeTimeoutMs?: number; clearFlushGraceMs?: number } = {}) {
   const harness = new FakeHarness();
-  const service = new SessionService({ db, bus: new EventBus(), harnesses: [harness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt', resumeTimeoutMs: 100_000, ...options });
-  return { harness, service };
+  const bus = new EventBus();
+  const events: Array<{ type: string; sessionId?: string; exitCode?: number; reason?: string }> = [];
+  bus.subscribe((event) => events.push(event as never));
+  const service = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt', resumeTimeoutMs: 100_000, ...options });
+  return { harness, service, events };
 }
+
+const rejectStartingTransitionOf = (db: Db, name: string) =>
+  db.exec(`CREATE TRIGGER fail_start BEFORE UPDATE OF state ON sessions WHEN NEW.name = '${name}' AND NEW.state = 'starting' BEGIN SELECT RAISE(ABORT, 'injected per-row state failure'); END`);
+const reopenedEventsOf = (db: Db, id: string) => (db.prepare("SELECT COUNT(*) AS n FROM session_events WHERE session_id = ? AND kind = 'reopened'").get(id) as { n: number }).n;
 
 const newSession = (service: SessionService, name: string, directory = '/tmp') =>
   service.create({ directory, name, harness: 'fake', emoji: '🤖' });
@@ -72,19 +79,59 @@ describe('resume after a graceful shutdown, adversarial review findings', () => 
     expect(third.harness.launches).toHaveLength(0);
   });
 
-  it('resumes the healthy rows when the starting transition of one row fails', async () => {
+  it('resumes the healthy rows and finalizes as a failed resume the row whose starting transition fails', async () => {
     const db = openDatabase(':memory:');
     const first = bootDaemon(db);
     const broken = await newSession(first.service, 'bad transition');
     const healthy = await newSession(first.service, 'healthy');
     await first.service.closeAll();
-    db.exec("CREATE TRIGGER fail_start BEFORE UPDATE OF state ON sessions WHEN NEW.name = 'bad transition' AND NEW.state = 'starting' BEGIN SELECT RAISE(ABORT, 'injected per-row state failure'); END");
+    const closedAtBeforeBoot = first.service.get(broken.id)!.closedAt;
+    rejectStartingTransitionOf(db, 'bad transition');
+    await vi.advanceTimersByTimeAsync(10);
     const second = bootDaemon(db);
 
     await second.service.resumeAll();
 
     expect(second.harness.launches.map((launch) => launch.sessionId)).toEqual([healthy.id]);
     expect(second.service.get(broken.id)!.state).toBe('closed');
+    expect(second.service.get(broken.id)!.exitCode).toBe(RESUME_LAUNCH_FAILED_EXIT_CODE);
+    expect(second.service.get(broken.id)!.closedAt).not.toBe(closedAtBeforeBoot);
+    expect(shutdownEventsOf(db, broken.id)).toBe(0);
+    expect(second.events).toContainEqual(expect.objectContaining({ type: 'session.closed', sessionId: broken.id, exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE, reason: 'launch_failed' }));
+
+    db.exec('DROP TRIGGER fail_start');
+    const third = bootDaemon(db);
+    await third.service.resumeAll();
+    expect(third.harness.launches.map((launch) => launch.sessionId)).not.toContain(broken.id);
+  });
+
+  it('keeps resuming the healthy rows when the failure finalization of the broken row also fails to write', async () => {
+    const db = openDatabase(':memory:');
+    const first = bootDaemon(db);
+    await newSession(first.service, 'bad transition');
+    const healthy = await newSession(first.service, 'healthy');
+    await first.service.closeAll();
+    rejectStartingTransitionOf(db, 'bad transition');
+    db.exec("CREATE TRIGGER fail_finalize BEFORE UPDATE OF exit_code ON sessions WHEN NEW.name = 'bad transition' BEGIN SELECT RAISE(ABORT, 'injected finalize failure'); END");
+    const second = bootDaemon(db);
+
+    await expect(second.service.resumeAll()).resolves.toBeUndefined();
+
+    expect(second.harness.launches.map((launch) => launch.sessionId)).toEqual([healthy.id]);
+  });
+
+  it('leaves no reopened event when the manual reopen of a shutdown-closed row fails its starting transition', async () => {
+    const db = openDatabase(':memory:');
+    const first = bootDaemon(db);
+    const session = await newSession(first.service, 'bad transition');
+    await first.service.closeAll();
+    rejectStartingTransitionOf(db, 'bad transition');
+    const second = bootDaemon(db);
+
+    expect(() => second.service.reopen(session.id)).toThrow();
+    expect(() => second.service.reopen(session.id)).toThrow();
+
+    expect(reopenedEventsOf(db, session.id)).toBe(0);
   });
 
   it('ends a resume timeout that overlaps the shutdown as a plain close that no next boot resumes', async () => {
