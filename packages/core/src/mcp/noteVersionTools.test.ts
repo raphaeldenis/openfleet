@@ -1,8 +1,8 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { chmodSync, mkdtempSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { startServer } from '../api/server.js';
@@ -209,7 +209,7 @@ describe('note version tools', () => {
   });
 
   describe('a file-backed note whose file cannot be read', () => {
-    it.skipIf(process.getuid?.() === 0)('fails opaquely and leaves the file and the note untouched', async () => {
+    it.skipIf(process.getuid?.() === 0)('fails with an actionable message and leaves the file and the note untouched', async () => {
       const note = docs.createFileBackedNote({ projectId: fileBackedProjectId, folder: 'specs', title: 'log', bodyMd: '## Log\nold entry', author: 'seed' });
       const client = await connect(fileBackedToken);
       chmodSync(note.filePath!, 0o000);
@@ -218,9 +218,100 @@ describe('note version tools', () => {
 
       chmodSync(note.filePath!, 0o600);
       expect(result.isError).toBe(true);
-      expect(errorText(result)).toBe('request failed');
+      expect(errorText(result)).toMatch(/file-backed.*cannot be read/);
       expect(nodeDocsFolderFs.readFileSync(note.filePath!)).toBe('## Log\nold entry');
       expect(noteRepo.get(note.id)).toMatchObject({ bodyMd: '## Log\nold entry', rev: 1 });
+    });
+
+    it('tells the agent the note is file-backed, nothing was written, and to retry once the docs folder is back, without leaking the path', async () => {
+      const note = docs.createFileBackedNote({ projectId: fileBackedProjectId, folder: 'specs', title: 'log', bodyMd: '## Log\nold entry', author: 'seed' });
+      const client = await connect(fileBackedToken);
+      rmSync(dirname(dirname(note.filePath!)), { recursive: true });
+
+      const result = await client.callTool({ name: 'update_note', arguments: { note: note.id, body_md: 'new body', expected_rev: note.rev } });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toMatch(/file-backed/);
+      expect(errorText(result)).toMatch(/nothing was written/);
+      expect(errorText(result)).toMatch(/retry/);
+      expect(errorText(result)).not.toContain(note.filePath!);
+      expect(noteRepo.get(note.id)).toMatchObject({ bodyMd: '## Log\nold entry', rev: 1 });
+    });
+  });
+
+  describe('QE probes: every write-through tool on a file-backed note whose storage disappears', () => {
+    const OLD_BODY = '## Log\nold entry';
+    const writeTools = [
+      { tool: 'update_note', args: (note: { id: string; rev: number }) => ({ note: note.id, body_md: 'new body', expected_rev: note.rev }) },
+      { tool: 'update_note_section', args: (note: { id: string; rev: number }) => ({ note: note.id, heading: 'Log', content: 'new entry', expected_rev: note.rev }) },
+      { tool: 'restore_note_version', args: (note: { id: string; rev: number }) => ({ note: note.id, rev: 1, expected_rev: note.rev }) },
+    ];
+    const strayTempFiles = (note: { filePath: string | null }) => readdirSync(dirname(note.filePath!)).filter((entry) => entry.includes('.tmp') || entry.startsWith('.'));
+
+    it.each(writeTools)('$tool with the whole docs folder removed answers the fixed message, leaks no path, writes nothing, and works again once the file is back', async ({ tool, args }) => {
+      const note = docs.createFileBackedNote({ projectId: fileBackedProjectId, folder: 'specs', title: 'log', bodyMd: OLD_BODY, author: 'seed' });
+      const client = await connect(fileBackedToken);
+      const docsRoot = dirname(dirname(note.filePath!));
+      rmSync(docsRoot, { recursive: true });
+
+      const result = await client.callTool({ name: tool, arguments: args(note) });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toMatch(/^note is file-backed and its file or docs folder cannot be read; nothing was written\. .*retry\.$/);
+      expect(errorText(result)).not.toContain(docsRoot);
+      expect(errorText(result)).not.toMatch(/ENOENT|EACCES|\/of-docs-/);
+      expect(noteRepo.get(note.id)).toMatchObject({ bodyMd: OLD_BODY, rev: 1 });
+      expect(noteRepo.listVersions(note.id)).toHaveLength(1);
+
+      mkdirSync(dirname(note.filePath!), { recursive: true });
+      writeFileSync(note.filePath!, OLD_BODY);
+      const retry = await client.callTool({ name: tool, arguments: args(note) });
+      expect(retry.isError).toBeFalsy();
+      expect(strayTempFiles(note)).toEqual([]);
+    });
+
+    it.each(writeTools)('$tool with only the file removed repairs it: the database is the source of truth while the docs folder exists, so the file is recreated from the committed revision', async ({ tool, args }) => {
+      const note = docs.createFileBackedNote({ projectId: fileBackedProjectId, folder: 'specs', title: 'log', bodyMd: OLD_BODY, author: 'seed' });
+      const client = await connect(fileBackedToken);
+      unlinkSync(note.filePath!);
+
+      const result = await client.callTool({ name: tool, arguments: args(note) });
+
+      expect(result.isError).toBeFalsy();
+      expect(existsSync(note.filePath!)).toBe(true);
+      expect(noteRepo.get(note.id)!.rev).toBe(2);
+      expect(nodeDocsFolderFs.readFileSync(note.filePath!)).toBe(noteRepo.get(note.id)!.bodyMd);
+      expect(strayTempFiles(note)).toEqual([]);
+    });
+
+    it.skipIf(process.getuid?.() === 0).each(writeTools)('$tool with the file chmod 000 answers the fixed message and works again after chmod 600', async ({ tool, args }) => {
+      const note = docs.createFileBackedNote({ projectId: fileBackedProjectId, folder: 'specs', title: 'log', bodyMd: OLD_BODY, author: 'seed' });
+      const client = await connect(fileBackedToken);
+      chmodSync(note.filePath!, 0o000);
+
+      const result = await client.callTool({ name: tool, arguments: args(note) });
+
+      chmodSync(note.filePath!, 0o600);
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toMatch(/file-backed.*nothing was written.*retry/);
+      expect(errorText(result)).not.toContain(note.filePath!);
+      expect(nodeDocsFolderFs.readFileSync(note.filePath!)).toBe(OLD_BODY);
+      expect(noteRepo.get(note.id)).toMatchObject({ bodyMd: OLD_BODY, rev: 1 });
+      const retry = await client.callTool({ name: tool, arguments: args(note) });
+      expect(retry.isError).toBeFalsy();
+      expect(strayTempFiles(note)).toEqual([]);
+    });
+
+    it('a plain note keeps working while a file-backed note of the same server has lost its docs folder', async () => {
+      const fileBackedNote = docs.createFileBackedNote({ projectId: fileBackedProjectId, folder: 'specs', title: 'log', bodyMd: OLD_BODY, author: 'seed' });
+      rmSync(dirname(dirname(fileBackedNote.filePath!)), { recursive: true });
+      const client = await connect(scopedToken);
+      const plain = await createNote(client, { body_md: 'plain v1' });
+
+      const updated = await client.callTool({ name: 'update_note', arguments: { note: plain.id, body_md: 'plain v2', expected_rev: plain.rev } });
+
+      expect(updated.isError).toBeFalsy();
+      expect(await bodyOf(client, plain.id)).toBe('plain v2');
     });
   });
 

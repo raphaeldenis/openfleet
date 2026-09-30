@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { Note, NoteFolder } from '@openfleet/shared';
-import { inTransaction as runInTransaction } from '../db/transaction.js';
+import { inTransaction as runInTransaction, recoverStuckTransaction } from '../db/transaction.js';
 import { expandMentionBlocks, expandMentions, type MentionLookup } from './mentionExpander.js';
 import type { NoteRepository, NoteUpdateResult } from './noteRepository.js';
 import { appendSection, replaceSection } from './noteSections.js';
@@ -239,6 +239,12 @@ export class NoteService {
   /** Runs `work` in one transaction: a throw inside it rolls back every note write it made. */
   runAtomically<T>(work: () => T): T {
     return this.inTransaction(work);
+  }
+
+  /** Throws when a transaction is already open: a caller that does non-transactional work (a file rename) inside `runAtomically` cannot have an outer rollback undo it. */
+  assertNoOuterTransaction(): void {
+    recoverStuckTransaction(this.db);
+    if (this.db.isTransaction) throw new Error('refusing to run inside an outer transaction: its rollback could not undo the file rename');
   }
 
   getExpanded(id: string, { viewerProjectId }: GetExpandedOptions): ExpandedNote {
