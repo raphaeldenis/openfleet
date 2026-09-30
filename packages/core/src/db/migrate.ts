@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import type { DatabaseSync } from 'node:sqlite';
 
 const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), 'migrations');
+export const BACKUPS_FOLDER_NAME = 'backups';
 
 interface MigrationSource {
   version: string;
@@ -122,12 +123,40 @@ function hasChecksumColumn(db: DatabaseSync): boolean {
 // tampered with — refusing beats silently running against a schema nothing here has verified. Only
 // checked against the real on-disk migrations (never against a caller-supplied `sources` override,
 // which exists solely so tests can inject a migration that was never really "shipped").
-function rejectUnknownAppliedVersions(applied: Set<string>, knownSources: MigrationSource[]): void {
+function rejectUnknownAppliedVersions(db: DatabaseSync, applied: Set<string>, knownSources: MigrationSource[]): void {
   const knownVersions = new Set(knownSources.map((s) => s.version));
   const unknownVersions = [...applied].filter((version) => !knownVersions.has(version)).sort();
   if (unknownVersions.length > 0) {
-    throw new Error(`database has migrations this code doesn't know: ${unknownVersions.join(', ')}; refusing to start on a schema newer than the code`);
+    throw new SchemaNewerThanCodeError(unknownVersions, restoreHintFor(db));
   }
+}
+
+// The hint travels beside the message (not inside it) so bootFailure appends it after its reason cap.
+export class SchemaNewerThanCodeError extends Error {
+  constructor(unknownVersions: string[], readonly recoveryHint: string) {
+    super(`database has migrations this code doesn't know: ${unknownVersions.join(', ')}; refusing to start on a schema newer than the code`);
+  }
+}
+
+function restoreHintFor(db: DatabaseSync): string {
+  const dbFile = db.location();
+  const backupsFolder = dbFile ? join(dirname(dbFile), BACKUPS_FOLDER_NAME) : `the ${BACKUPS_FOLDER_NAME} folder next to openfleet.db`;
+  return `restore the newest file in ${backupsFolder} over openfleet.db with the app quit, or install the newer app`;
+}
+
+function appliedVersionsOf(db: DatabaseSync): Set<string> {
+  const hasMigrationsTable = db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'`).get() !== undefined;
+  if (!hasMigrationsTable) return new Set();
+  return new Set((db.prepare('SELECT version FROM schema_migrations').all() as { version: string }[]).map((r) => r.version));
+}
+
+export function pendingMigrations(db: DatabaseSync): string[] {
+  const applied = appliedVersionsOf(db);
+  return readMigrationSources(migrationsDir).map((source) => source.version).filter((version) => !applied.has(version));
+}
+
+export function highestAppliedMigration(db: DatabaseSync): string | undefined {
+  return [...appliedVersionsOf(db)].sort().pop();
 }
 
 // Migrations recorded before the checksum column existed (008_schema_migrations_checksum.sql) have no
@@ -168,7 +197,7 @@ export function applyMigrations(db: DatabaseSync, sources?: MigrationSource[]): 
   db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY, applied_at TEXT NOT NULL)`);
   const applied = new Set((db.prepare('SELECT version FROM schema_migrations').all() as { version: string }[]).map((r) => r.version));
 
-  if (usingDefaultSources) rejectUnknownAppliedVersions(applied, effectiveSources);
+  if (usingDefaultSources) rejectUnknownAppliedVersions(db, applied, effectiveSources);
 
   for (const { version, sql } of effectiveSources) {
     if (applied.has(version)) continue;
