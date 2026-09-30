@@ -90,9 +90,6 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   const server = await startServer({ ...config, e2eRoutes: config.e2eEnabled, degraded, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, stores, storeRepo, projects, stopRefusal, sessionStartContext, handoverLedger, contextNotice, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, workingStates, worktreesRoot: config.worktreesRoot }) });
   log('info', `openfleet core listening on ${server.url} (version: ${DAEMON_VERSION}, home: ${config.home})`);
 
-  // A launch dir a crashed or killed daemon never cleaned up would otherwise sit on disk carrying a live
-  // token indefinitely; every resume below rewrites its own launch dir from scratch with rotated tokens
-  // anyway, so nothing here is worth preserving across a restart (AUD-11).
   const unwatchDatabase = watchDatabaseHealth(degraded);
   // An issue that clears by itself (hook_fail_open after five clean minutes) is announced on time, not at the next /health.
   const expirySweep = setInterval(() => degraded.list(), ISSUE_EXPIRY_SWEEP_MS);
@@ -107,6 +104,9 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     await server.close();
   };
   try {
+    // A launch dir a crashed or killed daemon never cleaned up would otherwise sit on disk carrying a live
+    // token indefinitely; every resume below rewrites its own launch dir from scratch with rotated tokens
+    // anyway, so nothing here is worth preserving across a restart (AUD-11).
     sweepStaleSessions(config.sessionsRoot);
     await sessions.resumeAll();
     pulseScheduler.start();

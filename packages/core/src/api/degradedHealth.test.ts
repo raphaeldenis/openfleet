@@ -146,6 +146,28 @@ describe('the degraded state over the WebSocket', () => {
     expect(degraded.list().map((issue) => issue.code)).toEqual(['db_stuck', 'hook_fail_open']);
   });
 
+  it('marks ws_broadcast_failed when the send callback reports a write error: the real failure mode of an open socket', async () => {
+    await openClient();
+    const failingWrite = vi.spyOn(WsSocket.prototype, 'send').mockImplementation(((_data: unknown, callback?: (error?: Error) => void) => { callback?.(new Error('write EPIPE')); }) as never);
+
+    degraded.mark('db_stuck', 'the database is not accepting writes.');
+    failingWrite.mockRestore();
+
+    expect(degraded.list().map((issue) => issue.code)).toContain('ws_broadcast_failed');
+  });
+
+  it('clears ws_broadcast_failed once a later broadcast is written to every client without error', async () => {
+    const { frames } = await openClient();
+    const failingWrite = vi.spyOn(WsSocket.prototype, 'send').mockImplementation(((_data: unknown, callback?: (error?: Error) => void) => { callback?.(new Error('write EPIPE')); }) as never);
+    degraded.mark('db_stuck', 'the database is not accepting writes.');
+    failingWrite.mockRestore();
+
+    degraded.mark('hook_fail_open', 'hooks fail open.');
+
+    await vi.waitFor(() => expect(degraded.list().map((issue) => issue.code)).not.toContain('ws_broadcast_failed'));
+    expect(frames.some((frame) => frame.type === 'daemon.issues')).toBe(true);
+  });
+
   it('broadcasts daemon.issues with the full list when an issue appears and when it clears, and on nothing else', async () => {
     const { frames } = await openClient();
 

@@ -77,7 +77,7 @@ const WORKTREE_ENTRY_BY_CODE: Record<WorktreeError['code'], (error: WorktreeErro
 // A database that cannot take work answers internal (500): waiting a second fixes nothing, a restart may.
 const DB_STUCK_ENTRY: Entry = { code: 'db_stuck', message: 'the database is not accepting work.', hint: 'restart the daemon.' };
 
-const UNEXPECTED_ENTRY: Entry ={ code: 'internal_error', message: 'the daemon hit an unexpected error.' };
+const UNEXPECTED_ENTRY: Entry = { code: 'internal_error', message: 'the daemon hit an unexpected error.' };
 
 // An internal error never forwards its own words: the log carries them, the caller gets the generic sentence and the id.
 const describedOpenFleetError = (error: OpenFleetError): Entry =>

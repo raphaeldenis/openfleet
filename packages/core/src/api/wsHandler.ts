@@ -39,15 +39,17 @@ function echoableSessionId(frame: unknown): string | undefined {
   return isEchoable ? sessionId : undefined;
 }
 
-/** Best effort: a socket that is closing or whose send throws never stops the caller. Returns true when the send threw. */
-function sendBestEffort(socket: WebSocket, payload: string): boolean {
-  if (socket.readyState !== socket.OPEN) return false;
+/** Best effort: a socket that is closing or whose send throws never stops the caller. `onSettled` hears once whether the send failed: it throws, or its write reports an error. */
+function sendBestEffort(socket: WebSocket, payload: string, onSettled: (failed: boolean) => void = () => {}): void {
+  if (socket.readyState !== socket.OPEN) return onSettled(false);
   try {
-    socket.send(payload);
-    return false;
+    socket.send(payload, (error) => {
+      if (error) log('warn', 'ws: write failed', { code: (error as { code?: string }).code });
+      onSettled(error != null);
+    });
   } catch (error) {
     log('warn', 'ws: send failed', { code: (error as { code?: string }).code });
-    return true;
+    onSettled(true);
   }
 }
 
@@ -92,9 +94,16 @@ export function createWsHandler(deps: { bus: EventBus; sessions: SessionService;
   const broadcast = (event: ServerEvent) => {
     const payload = JSON.stringify(event);
     const clients = [...wss.clients];
-    const sendFailures = clients.filter((client) => sendBestEffort(client, payload)).length;
-    if (sendFailures > 0) deps.degraded?.mark('ws_broadcast_failed', 'a client did not receive an event.');
-    else if (clients.length > 0) deps.degraded?.clear('ws_broadcast_failed');
+    let unsettledSends = clients.length;
+    let failedSends = 0;
+    const settle = (failed: boolean) => {
+      if (failed) failedSends += 1;
+      unsettledSends -= 1;
+      if (unsettledSends > 0) return;
+      if (failedSends > 0) deps.degraded?.mark('ws_broadcast_failed', 'a client did not receive an event.');
+      else deps.degraded?.clear('ws_broadcast_failed');
+    };
+    for (const client of clients) sendBestEffort(client, payload, settle);
   };
   deps.bus.subscribe(broadcast);
   deps.degraded?.onChange((issues) => broadcast({ type: 'daemon.issues', issues }));
