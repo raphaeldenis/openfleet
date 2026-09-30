@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
+import { ChangeDetectionStrategy, Component, ElementRef, computed, input, viewChild } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { MANAGER_ROLE } from '@openfleet/shared';
 import { compactElapsedLabel, elapsedSecondsSince } from '../design/elapsed-time';
@@ -13,12 +13,12 @@ import { showBidiControlsAsEscapes, showInvisibleControlsAsEscapes } from './bid
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [KindBadgeComponent, RouterLink, ComposerComponent],
   template: `
-    <article class="card" data-testid="inbox-attention-card" (keydown.escape)="leaveFocusedField($event)">
+    <article class="card" data-testid="inbox-attention-card" (keydown.escape)="returnFocusToSessionLink()">
       <span class="avatar" aria-hidden="true">{{ item().session.emoji }}</span>
       <div class="body">
         <div class="meta">
           <of-kind-badge kind="question" />
-          <a class="session-link" data-testid="inbox-attention-session" [routerLink]="sessionRoute()">{{ sessionName() }}</a>
+          <a #sessionLink class="session-link" data-testid="inbox-attention-session" [routerLink]="sessionRoute()">{{ sessionName() }}</a>
           <span class="age" data-testid="inbox-attention-age">{{ ageLabel() }}</span>
         </div>
         @if (questions().length > 0) {
@@ -57,14 +57,14 @@ import { showBidiControlsAsEscapes, showInvisibleControlsAsEscapes } from './bid
 export class AttentionCardComponent {
   readonly item = input.required<AttentionItem>();
   private readonly now = tickingNow();
+  private readonly sessionLink = viewChild.required<ElementRef<HTMLAnchorElement>>('sessionLink');
   protected readonly sessionName = computed(() => showInvisibleControlsAsEscapes(this.item().session.name));
   protected readonly questions = computed(() => this.item().questions.map(showBidiControlsAsEscapes));
   protected readonly blockers = computed(() => this.item().blockers.map(showBidiControlsAsEscapes));
   protected readonly sessionRoute = computed(() => [this.item().session.role === MANAGER_ROLE ? '/manager' : '/session', this.item().session.id]);
   protected readonly ageLabel = computed(() => compactElapsedLabel(elapsedSecondsSince(this.item().updatedAt, this.now())));
 
-  protected leaveFocusedField(event: Event): void {
-    const focused = document.activeElement;
-    if (focused instanceof HTMLElement && (event.currentTarget as HTMLElement).contains(focused)) focused.blur();
+  protected returnFocusToSessionLink(): void {
+    this.sessionLink().nativeElement.focus();
   }
 }

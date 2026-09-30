@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, DestroyRef, computed, effect, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, DestroyRef, ElementRef, Injector, afterNextRender, computed, effect, inject, signal } from '@angular/core';
 import { ReplyDraftStore } from '../sessions/reply-draft.store';
 import { decideApproval } from '../core/decide-approval';
 import { compactElapsedLabel, elapsedSecondsSince } from '../design/elapsed-time';
@@ -182,6 +182,8 @@ export class InboxComponent {
   readonly events = inject(FleetEventsService);
   private readonly api = inject(FleetApiService);
   private readonly replies = inject(ReplyDraftStore);
+  private readonly injector = inject(Injector);
+  private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
   protected readonly filters = FILTERS;
   protected readonly needsBackendSupport = NEEDS_BACKEND_SUPPORT;
   protected readonly tabs = TABS;
@@ -246,6 +248,14 @@ export class InboxComponent {
 
   protected dismissReplyFailure(sessionId: string): void {
     this.replies.dismissFailure(sessionId);
+    afterNextRender(() => this.focusNextAfterDismiss(), { injector: this.injector });
+  }
+
+  private focusNextAfterDismiss(): void {
+    const host: HTMLElement = this.host.nativeElement;
+    const nextDismiss = host.querySelector<HTMLElement>('[data-testid="inbox-reply-failure-dismiss"]');
+    const selectedTab = host.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
+    (nextDismiss ?? selectedTab)?.focus();
   }
 
   protected readonly pendingCount = computed(() => {

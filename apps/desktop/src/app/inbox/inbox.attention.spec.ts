@@ -4,7 +4,9 @@ import { render, screen, waitFor, within } from '@testing-library/angular/zonele
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import type { Session, WorkingState } from '@openfleet/shared';
+import { TestBed } from '@angular/core/testing';
 import { FleetApiService } from '../core/fleet-api.service';
+import { ReplyDraftStore } from '../sessions/reply-draft.store';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { fakeWorkingStateEvents, sessionOf, stateOf } from '../working-state/working-state-fixtures';
 import { InboxComponent } from './inbox.component';
@@ -314,6 +316,46 @@ describe('InboxComponent questions from agents', () => {
       expect(reply).not.toHaveFocus();
       expect(api.sendMessage).not.toHaveBeenCalled();
       expect(reply).toHaveValue('half a thought');
+    });
+
+    it('user pressing Escape in the reply field lands on the session link of that card, not on the page body', async () => {
+      const user = userEvent.setup({ delay: null });
+      await renderInbox([agent('s1')], [stateOf({ sessionId: 's1', questionsForHuman: ['which port?'] })]);
+      await openQuestionsTab();
+      await user.click(within(cards()[0]).getByTestId('composer-input'));
+
+      await user.keyboard('{Escape}');
+
+      expect(within(cards()[0]).getByTestId('inbox-attention-session')).toHaveFocus();
+    });
+
+    describe('dismissing a failed reply', () => {
+      async function renderWithFailedReplies(sessionIds: string[]) {
+        const user = userEvent.setup({ delay: null });
+        const view = await renderInbox(sessionIds.map((id) => agent(id)), []);
+        const replies = TestBed.inject(ReplyDraftStore);
+        sessionIds.forEach((id) => replies.markFailed(id, 'Could not send'));
+        await view.fixture.whenStable();
+        return { user, ...view };
+      }
+
+      it('user dismissing one of two failed replies lands on the Dismiss of the other', async () => {
+        const { user, fixture } = await renderWithFailedReplies(['s1', 's2']);
+
+        await user.click(screen.getAllByTestId('inbox-reply-failure-dismiss')[0]);
+        await fixture.whenStable();
+
+        expect(screen.getByTestId('inbox-reply-failure-dismiss')).toHaveFocus();
+      });
+
+      it('user dismissing the last failed reply lands on the selected Inbox tab, not on the page body', async () => {
+        const { user, fixture } = await renderWithFailedReplies(['s1']);
+
+        await user.click(screen.getByTestId('inbox-reply-failure-dismiss'));
+        await fixture.whenStable();
+
+        expect(screen.getByRole('tab', { selected: true })).toHaveFocus();
+      });
     });
 
     it('user can reach the session link, the reply field and Send with Tab, in that order', async () => {
