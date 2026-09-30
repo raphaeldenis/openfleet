@@ -286,6 +286,7 @@ describe('QE: a user closing sessions while /clear graces run', () => {
     await service.close(id);
     await postJson(`/api/sessions/${id}/reopen`);
     const launchesAfterReopen = harness.launches.length;
+    await sendHook(id, { hook_event_name: 'SessionStart', source: 'resume' });
     await sessionEndByClear(id);
     await switchModel(id);
 
