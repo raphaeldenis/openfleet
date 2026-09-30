@@ -10,7 +10,7 @@ import { findPermissiveSettingsWarning } from '../harness/claudeCli/permissiveSe
 import { newId, newToken } from '../ids.js';
 import { log } from '../logger.js';
 import { MessageQueue } from './messageQueue.js';
-import { findResolvedModel, readTranscriptTail } from './resolvedModel.js';
+import { findLatestContextTokens, findResolvedModel, readTranscriptTail } from './resolvedModel.js';
 import { wrapAgentMessage } from './messageEnvelope.js';
 import { normalizePermissionMode, SessionRepository } from './sessionRepository.js';
 import { canDeliverNow, isClear, nextState, provesTurnEnded, startsClearedConversation, type SessionInput } from './stateMachine.js';
@@ -843,6 +843,27 @@ export class SessionService {
       log('error', `resolved model: session ${sessionId} could not record its resolved model`, err);
       return undefined;
     }
+  }
+
+  // Display-only measure of the context of the session's current conversation, from the same trusted transcript
+  // as the resolved model. Never throws: no trusted readable transcript, or no usable line, is undefined.
+  contextTokensOfLatestTurn(sessionId: string): number | undefined {
+    const transcriptPath = this.transcriptPaths.get(sessionId);
+    if (transcriptPath === undefined) return undefined;
+    try {
+      if (!isTrustedTranscriptPath(transcriptPath) || !this.isTranscriptOfSession(sessionId, transcriptPath)) return undefined;
+      const resolvedPath = existsSync(transcriptPath) ? realpathSync(transcriptPath) : transcriptPath;
+      if (!this.isTranscriptOfSession(sessionId, resolvedPath)) return undefined;
+      return findLatestContextTokens(readTranscriptTail(resolvedPath));
+    } catch (err) {
+      log('warn', `context notice: session ${sessionId} transcript could not be read: ${err instanceof Error ? err.message : String(err)}`);
+      return undefined;
+    }
+  }
+
+  setContextNoticeTokens(sessionId: string, tokens: number | null): void {
+    this.repo.setContextNoticeTokens(sessionId, tokens);
+    this.deps.bus.emit({ type: 'session.updated', session: this.repo.get(sessionId)! });
   }
 
   recentOutput(sessionId: string): string { return this.outputBuffers.get(sessionId) ?? ''; }

@@ -461,3 +461,27 @@ describe('daemon shutdown', () => {
     expect(wakes.n).toBe(0);
   });
 });
+
+describe('context notice of a booted daemon', () => {
+  const originalConfigDir = process.env.CLAUDE_CONFIG_DIR;
+  afterEach(() => {
+    if (originalConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = originalConfigDir;
+  });
+
+  it('raises the notice of a manager at the firstAt read from config.json', async () => {
+    const claudeConfigDir = tempDirs.make('of-cn-wiring-claude-');
+    process.env.CLAUDE_CONFIG_DIR = claudeConfigDir;
+    mkdirSync(join(claudeConfigDir, 'projects', 'proj'), { recursive: true });
+    await bootDaemon({ contextNotice: { firstAt: 5000, every: 1000 } });
+    const manager = await createSession({ name: 'Lead', manager: { childrenCap: 1, mission: 'x' } });
+    const transcriptPath = join(claudeConfigDir, 'projects', 'proj', `${manager.id}.jsonl`);
+    const usage = { input_tokens: 10, cache_creation_input_tokens: 0, cache_read_input_tokens: 6_500 };
+    writeFileSync(transcriptPath, `${JSON.stringify({ type: 'assistant', isSidechain: false, message: { role: 'assistant', content: [], usage } })}\n`);
+
+    await postHook(manager.id, { hook_event_name: 'Stop', transcript_path: transcriptPath });
+
+    const sessions = (await (await api('/api/sessions')).json()) as { id: string; contextNoticeTokens?: number }[];
+    expect(sessions.find((session) => session.id === manager.id)?.contextNoticeTokens).toBe(6000);
+  });
+});
