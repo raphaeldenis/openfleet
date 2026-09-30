@@ -8,6 +8,7 @@ import { SessionViewComponent } from './session-view.component';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { settleRequests } from '../testing/session-view.testing';
+import { fakeWorkingStateEvents, silentWorkingStateSignals, stateOf } from '../working-state/working-state-fixtures';
 
 function session(patch: Partial<Session> = {}): Session {
   return {
@@ -22,6 +23,7 @@ function approval(patch: Partial<Approval> = {}): Approval {
 
 function fakeEvents(sessions: Session[], approvals: Approval[] = []) {
   return {
+    ...silentWorkingStateSignals(),
     sessions: signal(sessions), approvals: signal(approvals), managers: signal([]),
     connected: signal(true), reconnectCount: signal(0), deliveredMessageIds: signal(new Set<string>()),
     output: () => new Subject<string>(), sendInput: vi.fn(), sendResize: vi.fn(), sendAttach: vi.fn(), dropQueuedSendsFor: vi.fn(),
@@ -40,6 +42,61 @@ function fakeApi() {
     reopenSession: vi.fn().mockResolvedValue({}),
   };
 }
+
+describe('SessionViewComponent State panel', () => {
+  const eventsWithStates = (sessions: Session[], states: ReturnType<typeof stateOf>[]) => ({ ...fakeEvents(sessions), ...fakeWorkingStateEvents({ sessions, states }) });
+
+  it('user finds the State panel between the header and the terminal, collapsed', async () => {
+    await render(SessionViewComponent, {
+      bindings: [inputBinding('sessionId', () => 's1')],
+      providers: [{ provide: FleetApiService, useValue: fakeApi() }, { provide: FleetEventsService, useValue: eventsWithStates([session()], [stateOf({ plan: ['ship it'] })]) }],
+    });
+
+    const panel = screen.getByTestId('state-panel');
+    expect(screen.getByTestId('session-header').compareDocumentPosition(panel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(panel.compareDocumentPosition(screen.getByTestId('terminal')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByTestId('state-panel-body')).toBeNull();
+  });
+
+  it('user can read the session state without leaving the session view', async () => {
+    await render(SessionViewComponent, {
+      bindings: [inputBinding('sessionId', () => 's1')],
+      providers: [{ provide: FleetApiService, useValue: fakeApi() }, { provide: FleetEventsService, useValue: eventsWithStates([session()], [stateOf({ plan: ['ship it'] })]) }],
+    });
+
+    await userEvent.click(screen.getByTestId('state-panel-toggle'));
+
+    expect(screen.getByTestId('state-section-plan')).toHaveTextContent('ship it');
+  });
+
+  it('user picking another session finds its State panel closed and showing its own state', async () => {
+    const shownSessionId = signal('s1');
+    const sessions = [session({ id: 's1' }), session({ id: 's2', name: 'Legolas' })];
+    const events = eventsWithStates(sessions, [stateOf({ sessionId: 's1', plan: ['first plan'] }), stateOf({ sessionId: 's2', plan: ['second plan'] })]);
+    const { fixture } = await render(SessionViewComponent, {
+      bindings: [inputBinding('sessionId', shownSessionId)],
+      providers: [{ provide: FleetApiService, useValue: fakeApi() }, { provide: FleetEventsService, useValue: events }],
+    });
+    await userEvent.click(screen.getByTestId('state-panel-toggle'));
+    expect(screen.getByTestId('state-section-plan')).toHaveTextContent('first plan');
+
+    shownSessionId.set('s2');
+    await fixture.whenStable();
+
+    expect(screen.queryByTestId('state-panel-body')).toBeNull();
+    await userEvent.click(screen.getByTestId('state-panel-toggle'));
+    expect(screen.getByTestId('state-section-plan')).toHaveTextContent('second plan');
+  });
+
+  it('user still finds the State panel on a closed session', async () => {
+    await render(SessionViewComponent, {
+      bindings: [inputBinding('sessionId', () => 's1')],
+      providers: [{ provide: FleetApiService, useValue: fakeApi() }, { provide: FleetEventsService, useValue: eventsWithStates([session({ state: 'closed', exitCode: 0 })], []) }],
+    });
+
+    expect(screen.getByTestId('state-panel')).toBeTruthy();
+  });
+});
 
 describe('SessionViewComponent', () => {
   it('renders the header and terminal for an open session', async () => {
