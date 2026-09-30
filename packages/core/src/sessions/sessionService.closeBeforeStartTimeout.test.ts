@@ -128,7 +128,7 @@ describe('a daemon shutdown that lands while a failed resume kills its process',
     const realStart = resumingDaemon.harness.start.bind(resumingDaemon.harness);
     vi.spyOn(resumingDaemon.harness, 'start').mockImplementation((launch) => {
       const handle = realStart(launch);
-      handle.ignoresGracefulKill = true;
+      resumingDaemon.harness.handles.at(-1)!.ignoresGracefulKill = true;
       return handle;
     });
     vi.spyOn(console, 'warn').mockImplementation(() => {});
