@@ -224,14 +224,16 @@ describe('agent reaches every MCP tool family of a booted daemon', () => {
     expect(listed.count).toBe(1);
   });
 
-  it('creates and queries a data store', async () => {
+  it('creates, describes and queries a data store', async () => {
     await bootDaemon();
     seedProject();
     const session = await createRootSession();
 
     const store = await callMcpTool<{ id: string }>(session.id, 'create_data_store', { display_name: 'Inventory' });
+    const described = await callMcpTool<{ displayName: string }>(session.id, 'describe_data_store', { store: store.id });
     const queried = await callMcpTool<{ count: number }>(session.id, 'query_data_store', { store: store.id });
 
+    expect(described.displayName).toBe('Inventory');
     expect(queried.count).toBe(0);
   });
 
