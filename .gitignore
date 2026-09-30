@@ -5,6 +5,8 @@ dist
 *.db-wal
 *.db-shm
 src-tauri/target
+apps/desktop/src-tauri/resources/daemon/
+apps/desktop/src-tauri/binaries/
 .angular
 .DS_Store
 .worktrees/
