@@ -1,7 +1,8 @@
 import { existsSync, mkdtempSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { markDirectoryTrusted } from './trustDirectory.js';
 
 type ExitListener = (event: { exitCode: number; signal?: number }) => void;
 
@@ -340,5 +341,30 @@ describe('ClaudeCliHarness', () => {
 
     const topLevelEntries = readdirSync(sessionsRoot);
     expect(topLevelEntries).toEqual([launch.sessionId]);
+  });
+});
+
+describe('ClaudeCliHarness folder trust', () => {
+  const sessionsRoot = mkdtempSync(join(tmpdir(), 'of-sessions-'));
+
+  beforeEach(() => {
+    vi.mocked(markDirectoryTrusted).mockClear();
+  });
+
+  it('marks the launch directory trusted in the configured Claude config file', async () => {
+    const claudeConfigPath = join(mkdtempSync(join(tmpdir(), 'of-claude-config-')), '.claude.json');
+    const { ClaudeCliHarness } = await import('./claudeCliHarness.js');
+
+    new ClaudeCliHarness(sessionsRoot, process.env, claudeConfigPath).start(launch);
+
+    expect(markDirectoryTrusted).toHaveBeenCalledWith(claudeConfigPath, launch.directory);
+  });
+
+  it('defaults to the .claude.json of the home directory', async () => {
+    const { ClaudeCliHarness } = await import('./claudeCliHarness.js');
+
+    new ClaudeCliHarness(sessionsRoot).start(launch);
+
+    expect(markDirectoryTrusted).toHaveBeenCalledWith(join(homedir(), '.claude.json'), launch.directory);
   });
 });

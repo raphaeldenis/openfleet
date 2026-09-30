@@ -8,6 +8,7 @@ import { isDatabaseUnavailableError } from '../db/databaseFailure.js';
 import { StuckConnectionError } from '../db/transaction.js';
 import { ApprovalError } from '../governance/approvalService.js';
 import { shortId } from '../ids.js';
+import { loggedRefOf } from './loggedRef.js';
 import { log } from '../logger.js';
 import { ModelConfigReadOnlyError, ModelConfigUnreadableError } from '../models.js';
 import { escapedForRegExp, isSecretEntry, MASK, maskedSecrets, maskingCutCredential } from '../redact.js';
@@ -328,8 +329,9 @@ export function describeError(error: unknown, scope: ErrorScope = {}): ErrorEnve
 function envelopeFor(entry: Entry, error: unknown, scope: ErrorScope): ErrorEnvelope {
   const { kind } = ERROR_CODES[entry.code];
   const isInternal = kind === 'internal';
-  const id = isInternal ? shortId() : undefined;
-  if (id) logInternalError(error, { id, code: entry.code, scope });
+  const alreadyLoggedRef = loggedRefOf(error);
+  const id = isInternal ? (alreadyLoggedRef ?? shortId()) : undefined;
+  if (id && id !== alreadyLoggedRef) logInternalError(error, { id, code: entry.code, scope });
   const referenceSentence = id ? `Report ref ${id} if it happens again.` : undefined;
   const hint = [entry.hint, referenceSentence].filter(Boolean).join(' ') || undefined;
   const homes = homePatterns();

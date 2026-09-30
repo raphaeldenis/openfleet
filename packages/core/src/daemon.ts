@@ -49,14 +49,18 @@ export interface Daemon {
 export interface DaemonOptions {
   /** The registry the process guards already mark; the daemon makes its own when none is handed over. */
   degraded?: DegradedRegistry;
+  claudeConfigPath?: string;
 }
 
 // Builds every service from the config and starts serving; a throw at any point refuses the boot, after closing whatever already started.
-export async function startDaemon(config: Config, { degraded = createDegradedRegistry() }: DaemonOptions = {}): Promise<Daemon> {
+// `claudeConfigPath` redirects the folder trust writes of the claude CLI harness; the default is the user's ~/.claude.json.
+export async function startDaemon(config: Config, options: DaemonOptions = {}): Promise<Daemon> {
+  const { degraded = createDegradedRegistry() } = options;
   const db = openDatabase(config.dbPath);
   const bus = new EventBus();
   const baseUrl = `http://${config.host}:${config.port}`;
-  const harnesses = config.e2eEnabled ? [new ClaudeCliHarness(config.sessionsRoot), new FakeHarness()] : [new ClaudeCliHarness(config.sessionsRoot)];
+  const claudeCliHarness = new ClaudeCliHarness(config.sessionsRoot, process.env, options.claudeConfigPath);
+  const harnesses = config.e2eEnabled ? [claudeCliHarness, new FakeHarness()] : [claudeCliHarness];
   if (config.e2eEnabled) log('warn', 'e2e test surface enabled (OPENFLEET_E2E=1): fake harness and fake-output route are registered');
   const sessions = new SessionService({ db, bus, harnesses, baseUrl, worktreesRoot: config.worktreesRoot, describeError });
   const approvals = new ApprovalService({ db, bus });
