@@ -24,9 +24,10 @@ const SEND_ERROR = 'Could not send — your message is kept.';
           data-testid="composer-input"
           [value]="draft()"
           (input)="onInput($event)"
+          aria-label="Message this session"
           [placeholder]="placeholder()"
         ></textarea>
-        <button type="button" class="of-btn of-btn--primary" data-testid="composer-send" [disabled]="isSending()" (click)="send()">{{ sendLabel() }}</button>
+        <button type="button" class="of-btn of-btn--primary" data-testid="composer-send" [disabled]="isSending()" [attr.aria-busy]="isSending()" (click)="send()">{{ sendLabel() }}</button>
         @if (status(); as status) {
           <span class="status" data-testid="composer-status">{{ status }}</span>
         }
@@ -53,7 +54,10 @@ export class ComposerComponent {
   private readonly pending = signal<PendingMessage | null>(null);
   protected readonly sendError = computed(() => this.replies.failureOf(this.sessionId()) ?? null);
   protected readonly isSending = computed(() => this.replies.isSending(this.sessionId()));
-  protected readonly sendLabel = computed(() => (this.busy() ? 'Queue' : 'Send'));
+  protected readonly sendLabel = computed(() => {
+    if (this.isSending()) return 'Sending…';
+    return this.busy() ? 'Queue' : 'Send';
+  });
   protected readonly placeholder = computed(() => (this.busy() ? BUSY_PLACEHOLDER : IDLE_PLACEHOLDER));
 
   constructor() {
@@ -84,11 +88,13 @@ export class ComposerComponent {
     if (!body || isAlreadySending) return;
     this.replies.dismissFailure(sessionIdAtSend);
     this.replies.markSending(sessionIdAtSend, true);
+    this.pending.set(null);
     try {
       const result = await this.api.sendMessage(sessionIdAtSend, body);
       this.replies.clearSentText(sessionIdAtSend, draftAtSend);
       if (this.sessionId() === sessionIdAtSend) this.pending.set({ id: result.messageId, deliveredImmediately: result.status === 'delivered' });
     } catch {
+      if (this.sessionId() === sessionIdAtSend) this.pending.set(null);
       this.replies.markFailed(sessionIdAtSend, SEND_ERROR);
     } finally {
       this.replies.markSending(sessionIdAtSend, false);

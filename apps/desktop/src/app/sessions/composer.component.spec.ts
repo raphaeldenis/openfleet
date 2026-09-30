@@ -74,6 +74,42 @@ describe('ComposerComponent', () => {
     expect(screen.getByTestId('composer-input')).toHaveValue('go');
   });
 
+  it('user no longer sees "queued" next to the failure alert when a send fails after a queued one', async () => {
+    const api = { sendMessage: vi.fn().mockResolvedValueOnce({ status: 'queued', messageId: 'm1' }).mockRejectedValueOnce(new Error('boom')) };
+    await render(ComposerComponent, {
+      bindings: [inputBinding('sessionId', () => 's1')],
+      providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: fakeEvents() }],
+    });
+    await userEvent.type(screen.getByRole('textbox', { name: 'Message this session' }), 'first');
+    await userEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(screen.getByTestId('composer-status')).toHaveTextContent('queued'));
+
+    await userEvent.type(screen.getByRole('textbox', { name: 'Message this session' }), 'second');
+    await userEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/could not send/i));
+    expect(screen.queryByTestId('composer-status')).toBeNull();
+  });
+
+  it('user sees Send turn into a busy "Sending…" button while the message is in flight', async () => {
+    let resolveSend: (value: unknown) => void = () => {};
+    const api = { sendMessage: vi.fn(() => new Promise((resolve) => { resolveSend = resolve; })) };
+    const { fixture } = await render(ComposerComponent, {
+      bindings: [inputBinding('sessionId', () => 's1')],
+      providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: fakeEvents() }],
+    });
+    await userEvent.type(screen.getByRole('textbox', { name: 'Message this session' }), 'go');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await fixture.whenStable();
+
+    expect(screen.getByRole('button', { name: 'Sending…' })).toHaveAttribute('aria-busy', 'true');
+
+    resolveSend({ status: 'delivered', messageId: 'm1' });
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).not.toHaveAttribute('aria-busy', 'true'));
+  });
+
   it('drops a send response for a session the composer has since navigated away from', async () => {
     // Arrange
     const sessionId = signal('s1');
