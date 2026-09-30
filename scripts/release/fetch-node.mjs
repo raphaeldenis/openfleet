@@ -22,7 +22,7 @@ const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 
 const readPinnedVersion = () => readFileSync(join(SCRIPT_FOLDER, 'node-version.txt'), 'utf8').trim();
 
-const runInstalledVersion = (binaryPath) => {
+export const runInstalledVersion = (binaryPath) => {
   const result = spawnSync(binaryPath, ['--version'], { encoding: 'utf8', timeout: 10_000 });
   return result.status === 0 ? result.stdout.trim() : undefined;
 };
@@ -44,7 +44,7 @@ function refuseSymlink(path) {
   if (lstatSync(path, { throwIfNoEntry: false })?.isSymbolicLink()) throw new FetchNodeError(`${path} is a symlink; remove it first`);
 }
 
-function extractNodeBinary({ tarball, packageName, scratchFolder }) {
+export function extractNodeBinary({ tarball, packageName, scratchFolder }) {
   const tarballPath = join(scratchFolder, 'node.tar.gz');
   writeFileSync(tarballPath, tarball);
   const extraction = spawnSync('tar', ['-xzf', tarballPath, '-C', scratchFolder, `${packageName}/bin/node`]);
@@ -52,35 +52,47 @@ function extractNodeBinary({ tarball, packageName, scratchFolder }) {
   return join(scratchFolder, packageName, 'bin/node');
 }
 
-/** Installs the pinned Node binary as the sidecar unless the installed one already reports that version. */
-export async function fetchNode({ version, target = DEFAULT_TARGET, binariesFolder = DEFAULT_BINARIES_FOLDER, fetchBytes = downloadBytes, installedVersion = runInstalledVersion }) {
+const readRecordedChecksum = (recordPath) => {
+  try {
+    return readFileSync(recordPath, 'utf8').trim();
+  } catch {
+    return undefined;
+  }
+};
+
+/** Installs the pinned Node binary as the sidecar unless the installed one reports that version and the recorded tarball sha256 is the published one. */
+export async function fetchNode({ version, target = DEFAULT_TARGET, binariesFolder = DEFAULT_BINARIES_FOLDER, fetchBytes = downloadBytes, installedVersion = runInstalledVersion, extractBinary = extractNodeBinary }) {
   if (!PLAIN_SEMVER.test(version)) throw new FetchNodeError(`version "${version}" is not a plain x.y.z`);
   const nodePlatform = NODE_PLATFORM_BY_TARGET[target];
   if (nodePlatform === undefined) throw new FetchNodeError(`target "${target}" is not supported yet, expected: ${Object.keys(NODE_PLATFORM_BY_TARGET).join(', ')}`);
 
   const destination = join(binariesFolder, `node-${target}`);
+  const checksumRecord = `${destination}.sha256`;
   refuseSymlink(destination);
-  const isAlreadyInstalled = installedVersion(destination) === `v${version}`;
-  if (isAlreadyInstalled) return { status: 'skipped', path: destination };
-
+  refuseSymlink(checksumRecord);
   const packageName = `node-v${version}-${nodePlatform}`;
   const tarballName = `${packageName}.tar.gz`;
   const baseUrl = `https://nodejs.org/dist/v${version}`;
   const shasums = Buffer.from(await fetchBytes(`${baseUrl}/SHASUMS256.txt`)).toString('utf8');
-  const tarball = Buffer.from(await fetchBytes(`${baseUrl}/${tarballName}`));
   const publishedChecksum = findPublishedChecksum({ shasums, tarballName });
+  const isPinnedVersionInstalled = installedVersion(destination) === `v${version}`;
+  const isRecordedChecksumPublished = readRecordedChecksum(checksumRecord) === publishedChecksum;
+  if (isPinnedVersionInstalled && isRecordedChecksumPublished) return { status: 'skipped', path: destination };
+
+  const tarball = Buffer.from(await fetchBytes(`${baseUrl}/${tarballName}`));
   const downloadedChecksum = sha256(tarball);
   if (downloadedChecksum !== publishedChecksum) throw new FetchNodeError(`checksum mismatch for ${tarballName}: published ${publishedChecksum}, downloaded ${downloadedChecksum}`);
 
   mkdirSync(binariesFolder, { recursive: true });
   const scratchFolder = mkdtempSync(join(binariesFolder, '.fetch-node-'));
   try {
-    const extractedBinary = extractNodeBinary({ tarball, packageName, scratchFolder });
+    const extractedBinary = extractBinary({ tarball, packageName, scratchFolder });
     const stagedBinary = join(scratchFolder, 'staged-node');
     renameSync(extractedBinary, stagedBinary);
     chmodSync(stagedBinary, EXECUTABLE_MODE);
     refuseSymlink(destination);
     renameSync(stagedBinary, destination);
+    writeFileSync(checksumRecord, `${downloadedChecksum}\n`);
   } finally {
     rmSync(scratchFolder, { recursive: true, force: true });
   }

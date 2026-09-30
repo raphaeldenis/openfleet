@@ -12,7 +12,10 @@ node scripts/release/fetch-node.mjs
 pnpm --filter @openfleet/core bundle
 pnpm --filter @openfleet/desktop tauri build
 
+version="$(node -p "require('./apps/desktop/src-tauri/tauri.conf.json').version")"
 dmg_folder="apps/desktop/src-tauri/target/release/bundle/dmg"
+dmg="$dmg_folder/OpenFleet_${version}_aarch64.dmg"
+[ -f "$dmg" ] || { echo "build-local: expected $dmg was not produced" >&2; exit 1; }
 echo
-echo "dmg: $(ls "$dmg_folder"/*.dmg)"
-echo "open $repo_root/$dmg_folder"
+echo "dmg: $repo_root/$dmg"
+echo "open \"$repo_root/$dmg_folder\""
