@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { inTransaction } from '../db/transaction.js';
 import { PERMISSION_MODES, type HarnessId, type PermissionMode, type Session, type SessionState } from '@openfleet/shared';
 
 interface Row {
@@ -65,6 +66,14 @@ export class SessionRepository {
     this.db.prepare(`UPDATE sessions SET state = ?, state_since = ?,
       exit_code = CASE WHEN ? THEN exit_code END, closed_at = CASE WHEN ? THEN closed_at END WHERE id = ?`)
       .run(state, since, Number(keepsExitCode), Number(keepsClosedAt), id);
+  }
+  /** Records a reopen and returns the id of the row it inserted. */
+  recordReopen(id: string, at: string): number {
+    const { lastInsertRowid } = this.db.prepare("INSERT INTO session_events (session_id, kind, ts) VALUES (?, 'reopened', ?)").run(id, at);
+    return Number(lastInsertRowid);
+  }
+  removeReopen(reopenEventId: number): void {
+    this.db.prepare('DELETE FROM session_events WHERE id = ?').run(reopenEventId);
   }
   setModel(id: string, model: string): void {
     this.db.prepare('UPDATE sessions SET model = ? WHERE id = ?').run(model, id);
@@ -152,11 +161,25 @@ export class SessionRepository {
     const row = this.db.prepare('SELECT cli_session_id FROM sessions WHERE id = ?').get(id) as { cli_session_id: string | null } | undefined;
     return row?.cli_session_id;
   }
+  // Every id a session ever adopted stays reserved to it in session_cli_ids, also once it moved on.
   setCliSessionId(id: string, cliSessionId: string): void {
-    this.db.prepare('UPDATE sessions SET cli_session_id = ? WHERE id = ?').run(cliSessionId, id);
+    inTransaction(this.db, 'set_cli_session_id', () => {
+      this.db.prepare('UPDATE sessions SET cli_session_id = ? WHERE id = ?').run(cliSessionId, id);
+      this.db.prepare('INSERT OR IGNORE INTO session_cli_ids (cli_session_id, session_id) VALUES (?, ?)').run(cliSessionId, id);
+    });
+  }
+  // Whether a user prompt reached the CLI's current conversation, outside Session like cliSessionId: only such a
+  // conversation has a transcript worth resuming, and only its loss is worth announcing.
+  isCurrentConversationPrompted(id: string): boolean {
+    const row = this.db.prepare('SELECT prompted FROM sessions WHERE id = ?').get(id) as { prompted: number } | undefined;
+    return row?.prompted === 1;
+  }
+  setCurrentConversationPrompted(id: string, isPrompted: boolean): void {
+    this.db.prepare('UPDATE sessions SET prompted = ? WHERE id = ?').run(isPrompted ? 1 : 0, id);
   }
   isCliSessionIdOfAnotherSession(id: string, cliSessionId: string): boolean {
-    const row = this.db.prepare('SELECT 1 AS found FROM sessions WHERE id <> ? AND (id = ? OR cli_session_id = ?)').get(id, cliSessionId, cliSessionId);
-    return row !== undefined;
+    const isLaunchOrCurrentIdOfAnother = this.db.prepare('SELECT 1 AS found FROM sessions WHERE id <> ? AND (id = ? OR cli_session_id = ?)').get(id, cliSessionId, cliSessionId) !== undefined;
+    const isLeftBehindByAnother = this.db.prepare('SELECT 1 AS found FROM session_cli_ids WHERE session_id <> ? AND cli_session_id = ?').get(id, cliSessionId) !== undefined;
+    return isLaunchOrCurrentIdOfAnother || isLeftBehindByAnother;
   }
 }

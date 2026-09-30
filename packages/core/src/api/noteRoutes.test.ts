@@ -22,6 +22,7 @@ import { NoteRepository } from '../notes/noteRepository.js';
 import { NoteService } from '../notes/noteService.js';
 import { ProjectRepository } from '../projects/projectRepository.js';
 import { SessionService } from '../sessions/sessionService.js';
+import { WorkingStateService } from '../workingState/workingStateService.js';
 import { DataStoreRepository } from '../stores/dataStoreRepository.js';
 import { DataStoreService } from '../stores/dataStoreService.js';
 import { startServer } from './server.js';
@@ -70,7 +71,7 @@ beforeEach(async () => {
   server = await startServer({
     host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath: '/tmp/of-unused/config.json',
     notes, noteRepo, docs, stores, storeRepo, projects,
-    mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, worktreesRoot: '/tmp/of-wt', stores, storeRepo, notes, noteRepo, docs }),
+    mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, worktreesRoot: '/tmp/of-wt', stores, storeRepo, notes, noteRepo, docs, workingStates: new WorkingStateService({ db, clock: () => new Date().toISOString(), stateRoot: '/tmp/of-unused/state', maxBytes: 6144 }) }),
   });
 
   const session = await sessions.create({ directory: '/tmp', name: 'Gimli', harness: 'fake', emoji: '⛏️' });
@@ -225,10 +226,9 @@ describe('notes REST routes', () => {
       await client.connect(new StreamableHTTPClientTransport(new URL(`${server.url}/mcp`), { requestInit: { headers: { Authorization: `Bearer ${mcpToken}` } } }));
 
       const viaMcp = JSON.parse(((await client.callTool({ name: 'get_note', arguments: { note: note.id } })) as { content: { text: string }[] }).content[0]!.text);
-      const { expandedBody, ...mcpView } = viaMcp;
 
-      expect(expandedBody).toBe(note.bodyMd);
-      expect(mcpView).toEqual(note);
+      expect(viaMcp).not.toHaveProperty('expandedBody');
+      expect(note).toMatchObject(viaMcp);
     });
   });
 

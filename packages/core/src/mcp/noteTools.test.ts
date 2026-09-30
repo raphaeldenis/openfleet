@@ -22,6 +22,7 @@ import { NoteRepository } from '../notes/noteRepository.js';
 import { NoteService } from '../notes/noteService.js';
 import { ProjectRepository } from '../projects/projectRepository.js';
 import { SessionService } from '../sessions/sessionService.js';
+import { WorkingStateService } from '../workingState/workingStateService.js';
 import { DataStoreRepository } from '../stores/dataStoreRepository.js';
 import { DataStoreService } from '../stores/dataStoreService.js';
 import { createMcpHandler } from './mcpServer.js';
@@ -76,7 +77,7 @@ beforeEach(async () => {
 
   server = await startServer({
     host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath: '/tmp/of-unused/config.json',
-    mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, worktreesRoot: '/tmp/of-wt', stores, storeRepo, notes, noteRepo, docs }),
+    mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, worktreesRoot: '/tmp/of-wt', stores, storeRepo, notes, noteRepo, docs, workingStates: new WorkingStateService({ db, clock: () => new Date().toISOString(), stateRoot: '/tmp/of-unused/state', maxBytes: 6144 }) }),
   });
 
   const scoped = await sessions.create({ directory: '/tmp', name: 'Gimli', harness: 'fake', emoji: '⛏️' });
@@ -117,7 +118,8 @@ describe('note tools', () => {
     it('scopes the new note to the caller\'s own project, defaulting folder to null and shared to false', async () => {
       const client = await connect(scopedToken);
       const created = await createNote(client, { title: 'Design doc', body_md: '# v1' });
-      expect(created).toMatchObject({ projectId: 'p1', title: 'Design doc', bodyMd: '# v1', folder: null, shared: false, rev: 1 });
+      expect(created).toMatchObject({ title: 'Design doc', folder: null, shared: false, rev: 1 });
+      expect(created).not.toHaveProperty('bodyMd');
     });
 
     it.each([['a whitespace-only title', '   '], ['a title over 512 characters', 'x'.repeat(513)]])('refuses %s like the REST route does', async (_case, title) => {
@@ -162,7 +164,8 @@ describe('note tools', () => {
 
       const fetched = text(await client.callTool({ name: 'get_note', arguments: { note: note.id } }));
 
-      expect(fetched).toMatchObject({ fileBacked: false, docsRelativePath: null });
+      expect(fetched).toMatchObject({ fileBacked: false });
+      expect(fetched).not.toHaveProperty('docsRelativePath');
       expect(fetched).not.toHaveProperty('filePath');
       expect(fetched).not.toHaveProperty('sourceHash');
     });
@@ -211,7 +214,7 @@ describe('note tools', () => {
 
       const updated = text(await client.callTool({ name: 'update_note', arguments: { note: note.id, body_md: '# v2', expected_rev: note.rev } }));
 
-      expect(updated.bodyMd).toBe('# v2');
+      expect(updated.rev).toBe(note.rev + 1);
       const onDisk = nodeDocsFolderFs.readFileSync(note.filePath!);
       expect(onDisk).toBe('# v2');
       expect(updated).not.toHaveProperty('sourceHash');
@@ -382,6 +385,19 @@ describe('note tools', () => {
       expect(results.results[0].title).toBe('Daemon protocol');
       expect(results.results[0].snippet).toBeTruthy();
       expect(results.results[0].bodyMd).toBeUndefined();
+    });
+
+    it('keeps the lowest ids when more equal-rank notes match than the result cap allows', async () => {
+      const client = await connect(scopedToken);
+      const insert = db.prepare(`INSERT INTO notes (id, project_id, title, body_md, folder, file_path, source_hash, rev, shared, created_at, updated_at)
+        VALUES (?, 'p1', 'n', 'zebra', NULL, NULL, NULL, 1, 0, 't', 't')`);
+      const noteCount = 51;
+      const idsInAscendingOrder = Array.from({ length: noteCount }, (_, index) => `same-${String(index).padStart(2, '0')}`);
+      for (const id of [...idsInAscendingOrder].reverse()) insert.run(id);
+
+      const { results } = text(await client.callTool({ name: 'search_notes', arguments: { query: 'zebra' } }));
+
+      expect(results.map((hit: { id: string }) => hit.id)).toEqual(idsInAscendingOrder.slice(0, noteCount - 1));
     });
 
     it('treats a hyphen as literal input rather than an FTS operator', async () => {

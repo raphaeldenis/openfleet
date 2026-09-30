@@ -18,6 +18,7 @@ import { NoteRepository } from '../notes/noteRepository.js';
 import { NoteService } from '../notes/noteService.js';
 import { ProjectRepository } from '../projects/projectRepository.js';
 import { SessionService } from '../sessions/sessionService.js';
+import { WorkingStateService } from '../workingState/workingStateService.js';
 import { DataStoreRepository } from '../stores/dataStoreRepository.js';
 import { DataStoreService } from '../stores/dataStoreService.js';
 import { createMcpHandler } from './mcpServer.js';
@@ -66,7 +67,7 @@ beforeEach(async () => {
 
   server = await startServer({
     host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath: '/tmp/of-unused/config.json',
-    mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, worktreesRoot: '/tmp/of-wt', stores, storeRepo, notes, noteRepo, docs }),
+    mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, worktreesRoot: '/tmp/of-wt', stores, storeRepo, notes, noteRepo, docs, workingStates: new WorkingStateService({ db, clock: () => new Date().toISOString(), stateRoot: '/tmp/of-unused/state', maxBytes: 6144 }) }),
   });
 
   const scoped = await sessions.create({ directory: '/tmp', name: 'Gimli', harness: 'fake', emoji: '⛏️' });
@@ -94,10 +95,10 @@ describe('table tools', () => {
     expect(tools.map((t) => t.name).sort()).toEqual([
       'add_data_store_column', 'append_to_note', 'close_session', 'create_data_store', 'create_data_store_view', 'create_note', 'create_session',
       'create_worktree', 'delete_data_store_row', 'delete_data_store_view', 'delete_note', 'describe_data_store', 'get_argus_status', 'get_note',
-      'get_note_version', 'get_session_status', 'insert_data_store_rows', 'list_children', 'list_data_store_views', 'list_note_versions',
+      'get_note_version', 'get_session_status', 'get_working_state', 'insert_data_store_rows', 'list_children', 'list_data_store_views', 'list_note_versions',
       'list_notes', 'list_row_changes', 'list_sessions', 'message_parent', 'move_note', 'pulse_now', 'query_data_store', 'restore_note_version',
       'search_notes', 'send_session_message', 'update_data_store_rows', 'update_data_store_view', 'update_note', 'update_note_section',
-      'update_session',
+      'update_session', 'update_working_state',
     ]);
   });
 
@@ -126,11 +127,11 @@ describe('table tools', () => {
   it('create_data_store scopes the new store to the caller\'s own project', async () => {
     const client = await connect(scopedToken);
     const created = await createStore(client);
-    expect(created.projectId).toBe('p1');
+    expect(storeRepo.findStore(created.id)?.projectId).toBe('p1');
     expect(created.displayName).toBe('backlog');
   });
 
-  it('describe_data_store returns id, displayName, and columns with id/displayName/columnType/options/sortOrder', async () => {
+  it('describe_data_store returns id, displayName, and columns with id/displayName/columnType/options', async () => {
     const client = await connect(scopedToken);
     const store = await createStore(client);
     await client.callTool({ name: 'add_data_store_column', arguments: { store: store.id, display_name: 'status', column_type: 'select', options: [{ id: 'todo', label: 'todo' }] } });
@@ -140,7 +141,7 @@ describe('table tools', () => {
     expect(described).toMatchObject({
       id: store.id,
       displayName: 'backlog',
-      columns: [{ displayName: 'status', columnType: 'select', options: [{ id: 'todo', label: 'todo' }], sortOrder: 0 }],
+      columns: [{ displayName: 'status', columnType: 'select', options: [{ id: 'todo', label: 'todo' }] }],
     });
     expect(described.columns[0].id).toEqual(expect.any(String));
   });
@@ -332,6 +333,27 @@ describe('table tools', () => {
     expect(result.truncated).toBe(true);
     expect(result.rows.length).toBe(result.count);
     expect(result.rows.length).toBeLessThan(20);
+  });
+
+  it('query_data_store fills the 1 MiB budget with compact rows, leaving less than one row unused', async () => {
+    const client = await connect(scopedToken);
+    const store = await createStore(client);
+    await client.callTool({ name: 'add_data_store_column', arguments: { store: store.id, display_name: 'blob', column_type: 'text' } });
+    const blobId = text(await client.callTool({ name: 'describe_data_store', arguments: { store: store.id } })).columns[0].id;
+    const mediumValue = 'x'.repeat(2 * 1024);
+    for (let batch = 0; batch < 30; batch++) {
+      const rows = Array.from({ length: 20 }, () => ({ [blobId]: mediumValue }));
+      await client.callTool({ name: 'insert_data_store_rows', arguments: { store: store.id, rows } });
+    }
+
+    const result = text(await client.callTool({ name: 'query_data_store', arguments: { store: store.id, limit: 600 } }));
+
+    const rowBytes = Buffer.byteLength(JSON.stringify(result.rows[0]), 'utf8');
+    const keptBytes = result.rows.length * rowBytes;
+    expect(result.truncated).toBe(true);
+    expect(result.count).toBe(result.rows.length);
+    expect(keptBytes).toBeLessThanOrEqual(1024 * 1024);
+    expect(1024 * 1024 - keptBytes).toBeLessThan(rowBytes);
   });
 
   it('query_data_store refuses a limit over 1000', async () => {

@@ -1,9 +1,10 @@
-import { AutoValueSchema, ColumnTypeSchema, OrderTermSchema, SelectOptionSchema, WhereClauseSchema, type Session } from '@openfleet/shared';
+import { AutoValueSchema, ColumnTypeSchema, OrderTermSchema, SelectOptionSchema, WhereClauseSchema, type DsColumn, type Session } from '@openfleet/shared';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { RowNotFoundError, StoreNotFoundError, type DataStoreRepository, type RowActor } from '../stores/dataStoreRepository.js';
+import { RowNotFoundError, StoreNotFoundError, UnknownColumnReferenceError, type DataStoreRepository, type RowActor } from '../stores/dataStoreRepository.js';
 import type { DataStoreService } from '../stores/dataStoreService.js';
 import { fail, guarded, truncateToByteBudget } from './toolResults.js';
+import { columnarRowView, columnView, rowView, storeView } from './toolViews.js';
 
 // Task 15 caps (see the plan's Review Focus #3 and Lead amendment on P3-T11): a batch write is capped so
 // one call can't hold the outer transaction open indefinitely, and a query defaults to a page an agent can
@@ -34,11 +35,11 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
   }, async ({ display_name }) => {
     const scope = requireProject();
     if (!scope) return fail('this session has no project');
-    return guarded(() => stores.createStore({ ...scope, displayName: display_name }));
+    return guarded(() => storeView(stores.createStore({ ...scope, displayName: display_name })));
   });
 
   server.registerTool('describe_data_store', {
-    description: 'A data store\'s id, display name, and its columns (id, displayName, columnType, options, sortOrder)',
+    description: 'A data store\'s id, display name, and its columns in order (id, displayName, columnType, options when a select column, autoValue when set)',
     inputSchema: { store: z.string().min(1) },
   }, async ({ store }) => {
     const scope = requireProject();
@@ -46,11 +47,7 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
     return guarded(() => {
       const dataStore = storeRepo.findStore(store);
       if (!dataStore || dataStore.projectId !== scope.projectId) throw new StoreNotFoundError(store);
-      const columns = storeRepo.listColumns(store).map((column) => ({
-        id: column.id, displayName: column.displayName, columnType: column.columnType, options: column.options, sortOrder: column.sortOrder,
-        autoValue: column.autoValue,
-      }));
-      return { id: dataStore.id, displayName: dataStore.displayName, columns };
+      return { ...storeView(dataStore), columns: storeRepo.listColumns(store).map(columnView) };
     });
   });
 
@@ -60,7 +57,7 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
   }, async ({ store, display_name, column_type, options, auto_value }) => {
     const scope = requireProject();
     if (!scope) return fail('this session has no project');
-    return guarded(() => stores.addColumn(store, { ...scope, displayName: display_name, columnType: column_type, options, autoValue: auto_value }));
+    return guarded(() => columnView(stores.addColumn(store, { ...scope, displayName: display_name, columnType: column_type, options, autoValue: auto_value })));
   });
 
   server.registerTool('insert_data_store_rows', {
@@ -108,20 +105,52 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
   });
 
   server.registerTool('query_data_store', {
-    description: `Filter, sort and limit a store's rows (limit ≤ ${MAX_QUERY_LIMIT}, default ${DEFAULT_QUERY_LIMIT}); the result is also cut off past ${MAX_QUERY_RESULT_BYTES} bytes, with \`truncated: true\` when that happened`,
+    description: `Filter, sort and limit a store's rows (limit ≤ ${MAX_QUERY_LIMIT}, default ${DEFAULT_QUERY_LIMIT}); the result is also cut off past ${MAX_QUERY_RESULT_BYTES} bytes, with \`truncated: true\` when that happened. `
+      + 'By default each row is {id, data keyed by column id, updatedAt}. format "columnar" returns {columns, names, rows: [[rowId, updatedAt, ...one cell per data column]], truncated, count} instead (an empty cell is null): '
+      + 'columns lists id, updatedAt (unless dropped) then the data column ids, names labels the same positions, so columns[k] and names[k] describe row[k]. '
+      + 'columns (ids or display names, names match case-insensitively) keeps only those data columns in both formats: names resolve to ids, an id wins over a name, duplicates are dropped, order is preserved, and an empty list keeps NO data columns (columnar rows are [rowId, updatedAt] or [rowId] with include_updated_at false, rows format has data: {}); '
+      + 'where and order_by take column ids only. include_updated_at false drops updatedAt from every row. Unknown arguments are ignored',
     inputSchema: {
       store: z.string().min(1),
       where: z.array(WhereClauseSchema).optional(),
       order_by: z.array(OrderTermSchema).optional(),
       limit: z.number().int().min(0).max(MAX_QUERY_LIMIT).optional(),
+      format: z.enum(['rows', 'columnar']).optional(),
+      columns: z.array(z.string().min(1)).optional(),
+      include_updated_at: z.boolean().optional(),
     },
-  }, async ({ store, where, order_by, limit }) => {
+  }, async ({ store, where, order_by, limit, format, columns: requestedColumns, include_updated_at }) => {
     const scope = requireProject();
     if (!scope) return fail('this session has no project');
     return guarded(() => {
       const rows = stores.query(store, { ...scope, where, orderBy: order_by, limit: limit ?? DEFAULT_QUERY_LIMIT });
-      const { items, truncated } = truncateToByteBudget(rows, MAX_QUERY_RESULT_BYTES);
+      const includeUpdatedAt = include_updated_at ?? true;
+      const isColumnar = format === 'columnar';
+      if (isColumnar) {
+        const dataColumns = resolveColumns(store, requestedColumns);
+        const columnIds = dataColumns.map((column) => column.id);
+        const leadingHeaders = includeUpdatedAt ? ['id', 'updatedAt'] : ['id'];
+        const header = { columns: [...leadingHeaders, ...columnIds], names: [...leadingHeaders, ...dataColumns.map((column) => column.displayName)] };
+        const envelopeBytes = Buffer.byteLength(JSON.stringify({ ...header, rows: [], truncated: false, count: rows.length }), 'utf8');
+        const columnarRows = rows.map((row) => columnarRowView(row, { columnIds, includeUpdatedAt }));
+        const { items, truncated } = truncateToByteBudget(columnarRows, MAX_QUERY_RESULT_BYTES - envelopeBytes, { bytesBetweenItems: 1 });
+        return { ...header, rows: items, truncated, count: items.length };
+      }
+      const columnIds = requestedColumns ? resolveColumns(store, requestedColumns).map((column) => column.id) : undefined;
+      const { items, truncated } = truncateToByteBudget(rows.map((row) => rowView(row, { columnIds, includeUpdatedAt })), MAX_QUERY_RESULT_BYTES);
       return { rows: items, truncated, count: items.length };
     });
   });
+
+  /** Turns requested column references (an id, else a display name in any case) into de-duplicated store columns; every store column when none are requested. */
+  function resolveColumns(storeId: string, requested: string[] | undefined): DsColumn[] {
+    const storeColumns = storeRepo.listColumns(storeId);
+    if (!requested) return storeColumns;
+    const columnById = new Map(storeColumns.map((column) => [column.id, column]));
+    const columnByLowerCaseName = new Map(storeColumns.map((column) => [column.displayName.toLowerCase(), column]));
+    const columnFor = (reference: string) => columnById.get(reference) ?? columnByLowerCaseName.get(reference.toLowerCase());
+    const unknownReferences = requested.filter((reference) => !columnFor(reference));
+    if (unknownReferences.length > 0) throw new UnknownColumnReferenceError(unknownReferences);
+    return [...new Set(requested.map((reference) => columnFor(reference)!))];
+  }
 }

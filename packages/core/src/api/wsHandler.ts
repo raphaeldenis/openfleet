@@ -9,6 +9,8 @@ import type { EventBus } from '../events/eventBus.js';
 import { log } from '../logger.js';
 import type { ManagerService } from '../managers/managerService.js';
 import type { SessionService } from '../sessions/sessionService.js';
+import { DEFAULT_WORKING_STATE_MAX_AGE_MINUTES } from '../workingState/workingStateSettings.js';
+import type { WorkingStateService } from '../workingState/workingStateService.js';
 import type { WsTicketStore } from './wsTicketStore.js';
 
 const ClientMessageSchema = z.discriminatedUnion('type', [
@@ -54,16 +56,41 @@ export interface WsHandler {
 
 const DEFAULT_WS_CLOSE_GRACE_MS = 250;
 
-export function createWsHandler(deps: { bus: EventBus; sessions: SessionService; approvals: ApprovalService; managers: ManagerService; wsTickets: WsTicketStore; wsCloseGraceMs?: number }): WsHandler {
+export function createWsHandler(deps: { bus: EventBus; sessions: SessionService; approvals: ApprovalService; managers: ManagerService; wsTickets: WsTicketStore; wsCloseGraceMs?: number; workingStates?: WorkingStateService; workingStateMaxAgeMinutes?: number }): WsHandler {
   const wss = new WebSocketServer({ noServer: true });
-  deps.bus.subscribe((event) => {
+  const broadcast = (event: ServerEvent) => {
     const payload = JSON.stringify(event);
     for (const client of wss.clients) if (client.readyState === client.OPEN) client.send(payload);
+  };
+  deps.bus.subscribe(broadcast);
+
+  const broadcastWorkingStateOf = (sessionId: string | undefined) => {
+    const isClosed = sessionId ? deps.sessions.get(sessionId)?.state === 'closed' : false;
+    const state = sessionId && !isClosed ? deps.workingStates?.get(sessionId) : undefined;
+    if (state) broadcast({ type: 'session.working_state', state });
+  };
+  deps.workingStates?.onUpdate((state) => broadcast({ type: 'session.working_state', state }));
+  // A child spawned, closed or reopened moves its parent's fleetChangedAt, so the parent's state goes out again.
+  deps.bus.subscribe((event) => {
+    if (event.type === 'session.created') broadcastWorkingStateOf(event.session.parentId);
+    if (event.type === 'session.closed') broadcastWorkingStateOf(deps.sessions.get(event.sessionId)?.parentId);
+    if (event.type === 'session.reopened') broadcastWorkingStateOf(deps.sessions.get(event.sessionId)?.parentId);
   });
+  const openSessionWorkingStates = () => deps.sessions.list()
+    .filter((session) => session.state !== 'closed')
+    .flatMap((session) => deps.workingStates?.get(session.id) ?? []);
+  const workingStateSnapshotFields = () => deps.workingStates ? {
+    workingStates: openSessionWorkingStates(),
+    workingStateMaxAgeMinutes: deps.workingStateMaxAgeMinutes ?? DEFAULT_WORKING_STATE_MAX_AGE_MINUTES,
+    workingStateMaxBytes: deps.workingStates.maxBytes,
+  } : {};
   wss.on('connection', (socket: WebSocket) => {
     // Sent synchronously, before any broadcast event can reach this socket, so the client always has a
     // baseline to upsert onto — a session created in the connect/open race just arrives twice, harmlessly.
-    send(socket, { type: 'snapshot', sessions: deps.sessions.list(), approvals: deps.approvals.listPending(), managers: deps.managers.listViews() });
+    send(socket, {
+      type: 'snapshot', sessions: deps.sessions.list(), approvals: deps.approvals.listPending(), managers: deps.managers.listViews(),
+      ...workingStateSnapshotFields(),
+    });
     socket.on('message', (raw) => {
       const message = parseClientMessage(raw);
       if (!message) return;

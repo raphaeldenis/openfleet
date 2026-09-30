@@ -8,12 +8,17 @@ import type { ModelTable } from '../models.js';
 import type { DocsFolderService } from '../notes/docsFolderService.js';
 import type { NoteRepository } from '../notes/noteRepository.js';
 import type { NoteService } from '../notes/noteService.js';
+import { PortInUseError } from './portInUseError.js';
 import type { ProjectRepository } from '../projects/projectRepository.js';
 import type { SessionService } from '../sessions/sessionService.js';
 import type { DataStoreRepository } from '../stores/dataStoreRepository.js';
 import type { DataStoreService } from '../stores/dataStoreService.js';
+import type { WorkingStateService } from '../workingState/workingStateService.js';
 import { ALLOWED_ORIGINS } from './allowedOrigins.js';
 import { registerDataStoreRoutes } from './dataStoreRoutes.js';
+import type { SessionStartContext } from '../workingState/sessionStartContext.js';
+import type { HandoverLedger } from '../workingState/handoverLedger.js';
+import type { StopRefusal } from '../workingState/stopRefusal.js';
 import { hooksHandler } from './hooksHandler.js';
 import { registerNoteRoutes } from './noteRoutes.js';
 import { registerProjectRoutes } from './projectRoutes.js';
@@ -35,6 +40,16 @@ export interface ServerDeps {
   // The notes and data-store REST routes exist only when the daemon hands over their services.
   notes?: NoteService; noteRepo?: NoteRepository; docs?: DocsFolderService;
   stores?: DataStoreService; storeRepo?: DataStoreRepository; projects?: ProjectRepository;
+  // The working-state route, event and snapshot fields exist only when the daemon hands over the service.
+  workingStates?: WorkingStateService; workingStateMaxAgeMinutes?: number;
+  // Without it every Stop is answered {}, as before the working state existed.
+  stopRefusal?: StopRefusal;
+  // Without it every SessionStart is answered {}, as before the working state existed.
+  sessionStartContext?: SessionStartContext;
+  // Without it no handover is recorded and the handovers route does not exist.
+  handoverLedger?: HandoverLedger;
+  // Without it the test-only routes (fake-output) do not exist.
+  e2eRoutes?: boolean;
 }
 
 function applyCorsHeaders(req: IncomingMessage, res: ServerResponse): void {
@@ -111,7 +126,14 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; rout
   const ws = createWsHandler({ ...deps, wsTickets });
   server.on('upgrade', ws.upgrade);
 
-  await new Promise<void>((resolve) => server.listen(deps.port, deps.host, resolve));
+  await new Promise<void>((resolve, reject) => {
+    const rejectListenFailure = (error: NodeJS.ErrnoException) => {
+      const isPortTaken = error.code === 'EADDRINUSE';
+      reject(isPortTaken ? new PortInUseError(deps.port) : error);
+    };
+    server.once('error', rejectListenFailure);
+    server.listen(deps.port, deps.host, () => { server.off('error', rejectListenFailure); resolve(); });
+  });
   const address = server.address();
   const port = typeof address === 'object' && address ? address.port : deps.port;
   return {

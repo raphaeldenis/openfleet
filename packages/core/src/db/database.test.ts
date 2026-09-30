@@ -1,9 +1,9 @@
-import { existsSync, mkdtempSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
-import { openDatabase } from './database.js';
+import { DatabaseOpenError, openDatabase } from './database.js';
 import { applyMigrations } from './migrate.js';
 
 describe('openDatabase', () => {
@@ -51,5 +51,17 @@ describe('openDatabase', () => {
     for (const side of [`${dbPath}-wal`, `${dbPath}-shm`]) {
       if (existsSync(side)) expect(statSync(side).mode & 0o777).toBe(0o600);
     }
+  });
+
+  it('refuses a database file it cannot open with an error that names the path', () => {
+    const home = mkdtempSync(join(tmpdir(), 'of-db-unopenable-'));
+    const dbPath = join(home, 'openfleet.db');
+    mkdirSync(dbPath);
+
+    const opening = () => openDatabase(dbPath);
+
+    expect(opening).toThrow(DatabaseOpenError);
+    expect(opening).toThrow(`cannot open the database at ${dbPath}`);
+    rmSync(home, { recursive: true });
   });
 });

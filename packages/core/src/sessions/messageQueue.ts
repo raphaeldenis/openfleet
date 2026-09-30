@@ -21,8 +21,14 @@ export class MessageQueue {
     const row = this.db.prepare(`SELECT 1 FROM message_queue WHERE session_id = ? AND status = 'queued' AND body = ? LIMIT 1`).get(sessionId, body);
     return row !== undefined;
   }
-  nextPending(sessionId: string): QueuedMessage | undefined {
-    const row = this.db.prepare(`SELECT id, session_id, from_session_id, body, status, created_at FROM message_queue WHERE session_id = ? AND status = 'queued' ORDER BY created_at LIMIT 1`).get(sessionId) as
+  // True when the message was still queued and now carries the new body.
+  replaceQueuedBody(id: string, body: string): boolean {
+    const result = this.db.prepare(`UPDATE message_queue SET body = ? WHERE id = ? AND status = 'queued'`).run(body, id);
+    return Number(result.changes) > 0;
+  }
+  nextPending(sessionId: string, options: { skipDaemonLines?: boolean } = {}): QueuedMessage | undefined {
+    const daemonLineFilter = options.skipDaemonLines ? `AND body NOT LIKE '[pulse]%'` : '';
+    const row = this.db.prepare(`SELECT id, session_id, from_session_id, body, status, created_at FROM message_queue WHERE session_id = ? AND status = 'queued' ${daemonLineFilter} ORDER BY created_at LIMIT 1`).get(sessionId) as
       { id: string; session_id: string; from_session_id: string | null; body: string; status: 'queued'; created_at: string } | undefined;
     if (!row) return undefined;
     return { id: row.id, sessionId: row.session_id, fromSessionId: row.from_session_id ?? undefined, body: row.body, status: row.status, createdAt: row.created_at };

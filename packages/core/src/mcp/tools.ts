@@ -1,6 +1,6 @@
-import { MANAGER_ROLE, ModelIdSchema, PERMISSION_MODES, type Approval, type ManagerSpec, type Session } from '@openfleet/shared';
+import { MANAGER_ROLE, ManagerSpecSchema, ModelIdSchema, PERMISSION_MODES, type Approval, type ManagerSpec, type Session } from '@openfleet/shared';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync, realpathSync, statSync } from 'node:fs';
 import { z } from 'zod';
 import { createWorktree, isPathWithin, sameGitRepository } from '../git/worktrees.js';
 import { resolveModel, type ModelTable } from '../models.js';
@@ -8,6 +8,7 @@ import type { ApprovalService } from '../governance/approvalService.js';
 import type { ManagerService } from '../managers/managerService.js';
 import { toManagerView } from '../managers/managerView.js';
 import type { PulseScheduler } from '../managers/pulseScheduler.js';
+import { lineageSessionView, managerView, sessionView } from './toolViews.js';
 import { SessionClosedError, TooManyPendingMessagesError, type SessionService } from '../sessions/sessionService.js';
 
 const ok = (payload: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(payload) }] });
@@ -48,6 +49,41 @@ export interface RegisterToolsDeps {
 
 export function registerTools(server: McpServer, deps: RegisterToolsDeps): void {
   const { sessions, caller, approvals, managers, pulseScheduler, modelTable } = deps;
+  const realPathOrSelf = (directory: string) => (existsSync(directory) ? realpathSync.native(directory) : directory);
+  const isSameDirectory = (first: string, second: string): boolean => {
+    if (first === second) return true;
+    try {
+      const firstStat = statSync(first);
+      const secondStat = statSync(second);
+      return firstStat.dev === secondStat.dev && firstStat.ino === secondStat.ino;
+    } catch {
+      return false;
+    }
+  };
+  const isSessionDirectory = (session: Session, realDirectory: string): boolean => {
+    const recordedRealpath = sessions.directoryRealpathOf(session.id);
+    const isRecordedDirectory = recordedRealpath ? isSameDirectory(recordedRealpath, realDirectory) : false;
+    return isRecordedDirectory || isSameDirectory(realPathOrSelf(session.directory), realDirectory);
+  };
+  const findLineageSessionOwning = (realDirectory: string): Session | undefined => {
+    const visited = new Set<string>();
+    for (let session: Session | undefined = caller; session && !visited.has(session.id); session = session.parentId ? sessions.get(session.parentId) : undefined) {
+      visited.add(session.id);
+      if (isSessionDirectory(session, realDirectory)) return session;
+    }
+    return undefined;
+  };
+  const comparableName = (name: string) => name.trim().normalize('NFC');
+  const findLiveChildDuplicating = (input: { name: string; realDirectory: string }): { child: Session; sameAs: 'name' | 'directory' } | undefined => {
+    const requestedName = comparableName(input.name);
+    for (const child of sessions.list()) {
+      const isLiveChildOfCaller = child.parentId === caller.id && child.state !== 'closed';
+      if (!isLiveChildOfCaller) continue;
+      if (comparableName(child.name) === requestedName) return { child, sameAs: 'name' };
+      if (isSessionDirectory(child, input.realDirectory)) return { child, sameAs: 'directory' };
+    }
+    return undefined;
+  };
   const isInLineage = (target: Session) => target.id === caller.id || target.parentId === caller.id || target.id === caller.parentId;
 
   const pendingPermissionFor = (sessionId: string): { toolName: string; ageSeconds: number } | undefined => {
@@ -65,16 +101,18 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     return false;
   };
 
-  server.registerTool('get_session_status', { description: 'State of your session or one in your lineage', inputSchema: { session_id: z.string().optional() } }, async ({ session_id }) => {
+  const COMPACT_SESSION = 'Returns a compact session: id, name, emoji, directory, state, stateSince, model, role, exitCode, closedAt, plus resolvedModel, modelDriftedFrom, worktree and branch when set; permissionMode and harness are not echoed';
+
+  server.registerTool('get_session_status', { description: `State of your session or one in your lineage. ${COMPACT_SESSION}`, inputSchema: { session_id: z.string().optional() } }, async ({ session_id }) => {
     const target = sessions.get(session_id ?? caller.id);
     if (!target || !isInLineage(target)) return fail('session not found or outside your lineage');
-    return ok(target);
+    return ok(sessionView(target));
   });
 
-  server.registerTool('list_children', { description: 'Sessions you spawned', inputSchema: {} }, async () => ok(sessions.list().filter((s) => s.parentId === caller.id)));
+  server.registerTool('list_children', { description: `Sessions you spawned. ${COMPACT_SESSION}; no parentId, they are all yours`, inputSchema: {} }, async () => ok(sessions.list().filter((s) => s.parentId === caller.id).map(sessionView)));
 
-  server.registerTool('list_sessions', { description: 'You, your children, and every descendant beneath them', inputSchema: {} }, async () =>
-    ok(sessions.list().filter((s) => s.id === caller.id || isDescendant(s))),
+  server.registerTool('list_sessions', { description: `You, your children, and every descendant beneath them. ${COMPACT_SESSION}; each session also carries its parentId`, inputSchema: {} }, async () =>
+    ok(sessions.list().filter((s) => s.id === caller.id || isDescendant(s)).map(lineageSessionView)),
   );
 
   server.registerTool('send_session_message', { description: 'Send a message to a child (or your parent). Queued if it is busy, delivered on its next idle turn. Pass back a previous message_id to retry idempotently.', inputSchema: { target_uuid: z.string(), body: z.string().min(1), message_id: z.uuid().optional() } }, async ({ target_uuid, body, message_id }) => {
@@ -102,10 +140,11 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     }
   });
 
-  server.registerTool('create_session', { description: 'Spawn a child coding session in a directory (use create_worktree first)', inputSchema: {
-    directory: z.string(), name: z.string().min(1), emoji: z.string().optional(), model: ModelIdSchema.optional(),
+  server.registerTool('create_session', { description: `Spawn a child coding session in a directory (use create_worktree first). ${COMPACT_SESSION}`, inputSchema: {
+    directory: z.string(), name: z.string().refine((name) => name.trim().length > 0, 'name must not be blank'), emoji: z.string().optional(), model: ModelIdSchema.optional(),
     seeded_prompt: z.string().optional(), role: z.string().optional(), permission_mode: z.enum(PERMISSION_MODES).optional(),
-    manager: z.object({ pulse_seconds: z.number().int().positive(), children_cap: z.number().int().positive(), mission: z.string().min(1) }).optional(),
+    allow_duplicate: z.boolean().optional(),
+    manager: z.object({ pulse_seconds: ManagerSpecSchema.shape.pulseSeconds, children_cap: z.number().int().positive(), mission: z.string().min(1) }).optional(),
   } }, async (input) => {
     // A parentless caller is a human-launched root session (Raphaël's own Lead/Capitaine), always trusted to
     // bootstrap a manager; an MCP-spawned child needs the manager role itself — see Task 7 report deviation.
@@ -131,9 +170,36 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     // lexical blind spot for some symlink + ".." combinations that the native OS call does not.
     const realDirectory = realpathSync.native(input.directory);
 
+    const ownerOfRequestedDirectory = findLineageSessionOwning(realDirectory);
+    if (ownerOfRequestedDirectory) {
+      return fail(`directory ${realDirectory} is already the working directory of session ${ownerOfRequestedDirectory.id} (${ownerOfRequestedDirectory.name}), which is you or one of your ancestors: use a worktree (create_worktree) or another directory`);
+    }
+
+    // ponytail: a task is identified by the child's name or directory, not by a task id; a manager that
+    // renames its children defeats the guard. Upgrade path: a `task` field matched against the backlog row.
+    const refuseLiveDuplicate = () => {
+      const liveDuplicate = input.allow_duplicate ? undefined : findLiveChildDuplicating({ name: input.name, realDirectory });
+      if (!liveDuplicate) return undefined;
+      const { child, sameAs } = liveDuplicate;
+      return fail(`session ${child.id} (${child.name}) is already a live child of yours (state ${child.state}) with the same ${sameAs}: message it with send_session_message instead of spawning again, close_session ${child.id} if it is stuck or dead and spawn again, or pass allow_duplicate: true if two sessions are intended`);
+    };
+    const earlyDuplicateRefusal = refuseLiveDuplicate();
+    if (earlyDuplicateRefusal) return earlyDuplicateRefusal;
+
     const isWithinWorktreesRoot = isPathWithin(realDirectory, deps.worktreesRoot);
     const isCallersOwnRepo = await sameGitRepository(caller.directory, realDirectory);
     if (!isWithinWorktreesRoot && !isCallersOwnRepo) return fail('directory must be inside the worktrees root or inside your own git repository');
+
+    const isDirectoryUnchangedSinceChecks = existsSync(input.directory) && realpathSync.native(input.directory) === realDirectory;
+    if (!isDirectoryUnchangedSinceChecks) return fail(`directory ${input.directory} changed while the spawn was being checked: retry`);
+
+    // No `await` between this re-check and the insert in sessions.create(): a concurrent create_session
+    // that passed the early check while this one awaited sameGitRepository is refused here.
+    const isCallerStillLive = sessions.get(caller.id)?.state !== 'closed';
+    if (!isCallerStillLive) return fail(`your session ${caller.id} is no longer live: it was closed while the spawn was being checked, so no child is created`);
+
+    const lateDuplicateRefusal = refuseLiveDuplicate();
+    if (lateDuplicateRefusal) return lateDuplicateRefusal;
 
     if (caller.role === MANAGER_ROLE) {
       const record = managers.get(caller.id);
@@ -163,7 +229,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     const child = input.manager
       ? await managers.createManagerSession({ ...spec, role: MANAGER_ROLE, manager: { pulseSeconds: input.manager.pulse_seconds, childrenCap: input.manager.children_cap, mission: input.manager.mission } as ManagerSpec })
       : await sessions.create(spec);
-    return ok(child);
+    return ok(sessionView(child));
   });
 
   server.registerTool('update_session', { description: "Change the model of yourself or one of your children (a rung name like 'opus' or an exact model id)", inputSchema: { session_id: z.string().optional(), model: ModelIdSchema } }, async ({ session_id, model }) => {
@@ -177,12 +243,12 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
 
   server.registerTool('get_argus_status', { description: 'Your manager record (if any) and each child: state, pending permission, queued messages', inputSchema: {} }, async () => {
     const children = sessions.list().filter((s) => s.parentId === caller.id).map((child) => ({
-      id: child.id, name: child.name, emoji: child.emoji, state: child.state, stateSince: child.stateSince,
+      id: child.id, name: child.name, state: child.state, stateSince: child.stateSince,
       pendingPermission: pendingPermissionFor(child.id),
       queuedMessageCount: sessions.queuedMessageCount(child.id),
     }));
     const record = caller.role === MANAGER_ROLE ? managers.get(caller.id) : undefined;
-    const manager = record ? toManagerView(record, children.filter((c) => c.state !== 'closed').length) : null;
+    const manager = record ? managerView(toManagerView(record, children.filter((c) => c.state !== 'closed').length)) : null;
     return ok({ manager, children });
   });
 
@@ -201,7 +267,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
   server.registerTool('close_session', { description: 'Close one of your children', inputSchema: { session_id: z.string() } }, async ({ session_id }) => {
     const target = sessions.get(session_id);
     if (!target || target.parentId !== caller.id) return fail('not your child');
-    await sessions.close(target.id);
+    await sessions.close(target.id, { closedByParent: true });
     return ok({ closed: target.id });
   });
 }

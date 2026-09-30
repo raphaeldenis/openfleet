@@ -109,7 +109,7 @@ function normalizeForChecksum(sql: string): string {
   return withoutBom.replace(/\r\n?/g, '\n');
 }
 
-function sha256Hex(text: string): string {
+export function sha256Hex(text: string): string {
   return createHash('sha256').update(normalizeForChecksum(text)).digest('hex');
 }
 

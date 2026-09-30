@@ -16,6 +16,8 @@ import { startServer } from './server.js';
 
 let server: Awaited<ReturnType<typeof startServer>>;
 let projectDirectory: string;
+let sessions: SessionService;
+let deliveredMessageIds: string[];
 const originalConfigDir = process.env.CLAUDE_CONFIG_DIR;
 
 beforeEach(async () => {
@@ -26,7 +28,12 @@ beforeEach(async () => {
 
   const db = openDatabase(':memory:');
   const bus = new EventBus();
-  const sessions = new SessionService({ db, bus, harnesses: [new FakeHarness()], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt', submitKeystrokeDelayMs: 0 });
+  const deliveredByThisTestsBus: string[] = [];
+  deliveredMessageIds = deliveredByThisTestsBus;
+  bus.subscribe((event) => {
+    if (event.type === 'message.delivered') deliveredByThisTestsBus.push(event.messageId);
+  });
+  sessions = new SessionService({ db, bus, harnesses: [new FakeHarness()], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt', submitKeystrokeDelayMs: 0 });
   const approvals = new ApprovalService({ db, bus });
   const managerRepo = new ManagerRepository(db);
   const pulseScheduler = new PulseScheduler({ managers: managerRepo, sessions, bus });
@@ -36,6 +43,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await server.close();
+  await sessions.closeAll();
   if (originalConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
   else process.env.CLAUDE_CONFIG_DIR = originalConfigDir;
 });
@@ -83,15 +91,24 @@ describe('a user typing /clear in a session', () => {
     expect((await sendMessage(id)).status).not.toBe(409);
   });
 
-  it('keeps the session alive when SessionEnd with reason clear is never followed by a SessionStart', async () => {
+  it('keeps a generating session alive, delivering its queued message and reading the launch transcript, when SessionEnd with reason clear is never followed by a SessionStart', async () => {
     const id = await createSession();
-    await sendHook(id, { hook_event_name: 'SessionStart' });
+    writeFileSync(transcriptPathOf(id), '');
+    await sendHook(id, { hook_event_name: 'UserPromptSubmit' });
     await sendHook(id, sessionEnd('clear'));
 
     await new Promise((resolve) => setTimeout(resolve, 300));
+    const stateAfterWaiting = (await listed(id)).state;
+    const queuedResponse = await sendMessage(id);
+    writeFileSync(transcriptPathOf(id), assistantLine('claude-opus-5-5'));
+    await sendHook(id, { hook_event_name: 'Stop', transcript_path: undefined });
 
-    expect((await listed(id)).state).not.toBe('closed');
-    expect((await sendMessage(id)).status).not.toBe(409);
+    const queuedMessage = (await queuedResponse.json()) as { messageId: string; status: string };
+    await expect.poll(() => deliveredMessageIds).toHaveLength(1);
+    expect(deliveredMessageIds).toEqual([queuedMessage.messageId]);
+    expect(stateAfterWaiting).toBe('generating');
+    expect(queuedMessage).toMatchObject({ status: 'queued' });
+    expect(await listed(id)).toMatchObject({ resolvedModel: 'claude-opus-5-5' });
   });
 
   it('shows the session idle once the SessionStart with source clear follows the SessionEnd', async () => {
@@ -113,7 +130,7 @@ describe('a user typing /clear in a session', () => {
     const id = await createSession();
     const newCliSessionId = randomUUID();
     writeFileSync(transcriptPathOf(id), assistantLine('claude-opus-5-4'));
-    writeFileSync(transcriptPathOf(newCliSessionId), assistantLine('claude-opus-5-5'));
+    writeFileSync(transcriptPathOf(newCliSessionId), '');
 
     if (endFirst) {
       await sendHook(id, sessionEnd('clear'));
@@ -122,7 +139,8 @@ describe('a user typing /clear in a session', () => {
       await sendHook(id, sessionStartAfterClear, newCliSessionId);
       await sendHook(id, sessionEnd('clear'));
     }
-    await sendHook(id, preToolUse, newCliSessionId);
+    writeFileSync(transcriptPathOf(newCliSessionId), assistantLine('claude-opus-5-5'));
+    await sendHook(id, { ...preToolUse, transcript_path: undefined }, newCliSessionId);
 
     expect(await listed(id)).toMatchObject({ state: 'generating', resolvedModel: 'claude-opus-5-5' });
   });

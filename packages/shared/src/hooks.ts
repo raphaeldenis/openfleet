@@ -11,7 +11,7 @@ export const ClaudeHookEventSchema = z.discriminatedUnion('hook_event_name', [
   z.object({ ...base, hook_event_name: z.literal('SessionStart'), source: z.string().optional() }),
   // reason is 'clear' | 'logout' | 'prompt_input_exit' | 'other' today; a string keeps a future value from failing the hook.
   z.object({ ...base, hook_event_name: z.literal('SessionEnd'), reason: z.string().optional() }),
-  z.object({ ...base, hook_event_name: z.literal('UserPromptSubmit'), user_prompt: z.string().optional() }),
+  z.object({ ...base, hook_event_name: z.literal('UserPromptSubmit'), user_prompt: z.string().optional(), prompt: z.string().optional() }),
   z.object({ ...base, hook_event_name: z.literal('PreToolUse'), tool_name: z.string(), tool_input: z.unknown(), tool_use_id: z.string().optional() }),
   z.object({ ...base, hook_event_name: z.literal('PostToolUse'), tool_name: z.string(), tool_use_id: z.string().optional() }),
   z.object({ ...base, hook_event_name: z.literal('PermissionRequest'), tool_name: z.string(), tool_input: z.unknown() }),
@@ -20,6 +20,8 @@ export const ClaudeHookEventSchema = z.discriminatedUnion('hook_event_name', [
 ]);
 export type ClaudeHookEvent = z.infer<typeof ClaudeHookEventSchema>;
 export type ClaudeHookEventName = ClaudeHookEvent['hook_event_name'];
+
+export interface StopHookOutput { decision: 'block'; reason: string }
 
 export const HOOK_EVENT_NAMES: ClaudeHookEventName[] = [
   'SessionStart', 'SessionEnd', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PermissionRequest', 'Notification', 'Stop',
@@ -30,4 +32,8 @@ export interface PermissionRequestHookOutput {
     hookEventName: 'PermissionRequest';
     decision: { behavior: 'allow' | 'deny'; message?: string };
   };
+}
+
+export interface ContextHookOutput {
+  hookSpecificOutput: { hookEventName: 'SessionStart' | 'UserPromptSubmit'; additionalContext: string };
 }

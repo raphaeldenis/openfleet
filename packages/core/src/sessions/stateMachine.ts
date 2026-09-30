@@ -1,7 +1,8 @@
 import type { ClaudeHookEvent, SessionState } from '@openfleet/shared';
 
 export type SessionInput =
-  | { kind: 'hook'; event: ClaudeHookEvent }
+  // turnContinues: the daemon answered this Stop with a block, so the CLI keeps generating.
+  | { kind: 'hook'; event: ClaudeHookEvent; turnContinues?: boolean }
   | { kind: 'permission_resolved' }
   | { kind: 'harness_exit' }
   // Proven by a transcript-tailing watch, not by a hook: Claude Code fires no Stop when Escape cancels a
@@ -13,6 +14,7 @@ export function nextState(current: SessionState, input: SessionInput): SessionSt
   if (input.kind === 'harness_exit') return 'closed';
   if (input.kind === 'permission_resolved') return 'generating';
   if (input.kind === 'transcript_interrupted') return 'idle';
+  if (input.turnContinues) return 'generating';
   return stateAfterHook(current, input.event);
 }
 
@@ -50,11 +52,16 @@ export function isClear(event: ClaudeHookEvent): boolean {
   return event.hook_event_name === 'SessionEnd' && event.reason === 'clear';
 }
 
+// The SessionStart with source 'clear' proves the /clear typed into the composer was processed, whatever state it leaves.
+export function startsClearedConversation(event: ClaudeHookEvent): boolean {
+  return event.hook_event_name === 'SessionStart' && event.source === 'clear';
+}
+
 // A hook that only fires while the CLI waits on its composer proves the last turn is over, even when the
 // recorded state already says idle because that turn's UserPromptSubmit never arrived.
 export function provesTurnEnded(input: SessionInput): boolean {
   if (input.kind === 'transcript_interrupted') return true;
-  if (input.kind !== 'hook') return false;
+  if (input.kind !== 'hook' || input.turnContinues) return false;
   const { event } = input;
   if (event.hook_event_name === 'Stop') return true;
   if (event.hook_event_name === 'SessionStart') return !isCompaction(event);

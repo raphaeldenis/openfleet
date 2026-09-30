@@ -15,6 +15,22 @@ describe('SessionRepository.closeAllOpen', () => {
   });
 });
 
+const currentCliSessionIdInRow = (db: ReturnType<typeof openDatabase>, id: string) =>
+  (db.prepare('SELECT cli_session_id FROM sessions WHERE id = ?').get(id) as { cli_session_id: string | null }).cli_session_id;
+
+describe('SessionRepository.setCliSessionId', () => {
+  it('leaves the current conversation of the session untouched when reserving the id fails', () => {
+    const db = openDatabase(':memory:');
+    const repo = new SessionRepository(db);
+    repo.insert({ id: 's1', name: 'G', emoji: '🤖', directory: '/tmp', worktree: null, model: null, parent_id: null, role: null, harness: 'fake', state: 'idle', state_since: 't', hook_token: 'h', mcp_token: 'm', permission_mode: null, branch: null, created_at: 't' });
+    db.exec('DROP TABLE session_cli_ids');
+
+    expect(() => repo.setCliSessionId('s1', 'cccccccc-cccc-4ccc-8ccc-cccccccccccc')).toThrow();
+
+    expect(currentCliSessionIdInRow(db, 's1')).toBeNull();
+  });
+});
+
 const baseRow = { id: 's1', name: 'G', emoji: '🤖', directory: '/tmp', worktree: null, model: null, parent_id: null, role: null, harness: 'fake' as const, state: 'starting' as const, state_since: 't0', hook_token: 'h', mcp_token: 'm', created_at: 't0', permission_mode: null, branch: null };
 
 describe('SessionRepository', () => {

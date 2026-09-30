@@ -17,7 +17,7 @@ let db: ReturnType<typeof openDatabase>;
 
 const bootDaemon = async () => {
   const bus = new EventBus();
-  const sessions = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt', submitKeystrokeDelayMs: 0 });
+  const sessions = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt', submitKeystrokeDelayMs: 0, clearInFlightTimeoutMs: 50, clearFlushGraceMs: 0 });
   const approvals = new ApprovalService({ db, bus });
   const managerRepo = new ManagerRepository(db);
   const pulseScheduler = new PulseScheduler({ managers: managerRepo, sessions, bus });
@@ -236,6 +236,31 @@ describe('a session reporting a CLI session id that is not its own', () => {
     await switchModel(thief);
 
     expect(lastLaunch().cliSessionId).toBe(thief);
+  });
+
+  it('keeps its own conversation when it reports an id another session left behind before a daemon restart', async () => {
+    const owner = await runningSession();
+    const thief = await runningSession();
+    const leftBehindId = await userTypesClear(owner);
+    await userTypesClear(owner, randomUUID(), leftBehindId);
+    await restartDaemon();
+
+    await sendHook(thief, sessionStartByClear, leftBehindId);
+    await switchModel(thief);
+
+    expect(lastLaunch().cliSessionId).toBe(thief);
+  });
+
+  it('lets the owner return to an id it left behind before a daemon restart', async () => {
+    const owner = await runningSession();
+    const leftBehindId = await userTypesClear(owner);
+    await userTypesClear(owner, randomUUID(), leftBehindId);
+    await restartDaemon();
+
+    await sendHook(owner, sessionStartByResume, leftBehindId);
+    await switchModel(owner);
+
+    expect(lastLaunch().cliSessionId).toBe(leftBehindId);
   });
 
   it('lets the owner return to an id it left behind after clearing twice', async () => {

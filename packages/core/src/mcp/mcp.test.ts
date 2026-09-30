@@ -2,7 +2,7 @@ import { MANAGER_ROLE } from '@openfleet/shared';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, mkdtempSync, realpathSync, symlinkSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
@@ -27,12 +27,26 @@ import { MAX_PENDING_AGENT_MESSAGES_PER_SENDER, SessionService } from '../sessio
 import { DataStoreRepository } from '../stores/dataStoreRepository.js';
 import { DataStoreService } from '../stores/dataStoreService.js';
 import { newId } from '../ids.js';
+import { WorkingStateService } from '../workingState/workingStateService.js';
 import { createMcpHandler } from './mcpServer.js';
 
-// create_session now requires its directory to already exist (fix loop 2, decision 1+3+5) — this makes
-// that directory real under the shared worktrees root fixture, idempotently across test runs.
+const WORKTREES_ROOT = '/tmp/of-wt';
+
+// create_session requires its directory to already exist. Each call makes `name` inside a private
+// directory of the shared worktrees root, so concurrent runs never touch each other's directories.
+let createdDirectories: string[] = [];
 function existingWorktreeDir(name: string): string {
-  const path = join('/tmp/of-wt', name);
+  mkdirSync(WORKTREES_ROOT, { recursive: true });
+  const privateParent = mkdtempSync(join(WORKTREES_ROOT, 'run-'));
+  createdDirectories.push(privateParent);
+  const path = join(privateParent, name);
+  mkdirSync(path);
+  return path;
+}
+
+// The spawn directory guard refuses the caller's own directory, so a child of a repo-rooted caller lives in a subdirectory.
+function subdirectoryOf(repo: string): string {
+  const path = join(repo, 'child-workspace');
   mkdirSync(path, { recursive: true });
   return path;
 }
@@ -61,12 +75,16 @@ beforeEach(async () => {
   const noteRepo = new NoteRepository(db);
   const notes = new NoteService({ repo: noteRepo, db, expandMentions, clock: () => new Date().toISOString(), newId });
   const docs = new DocsFolderService({ notes, noteRepo, projects, fs: nodeDocsFolderFs, clock: () => new Date().toISOString() });
-  server = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath: '/tmp/of-unused/config.json', mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, worktreesRoot: '/tmp/of-wt' }) });
+  server = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath: '/tmp/of-unused/config.json', mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, workingStates: new WorkingStateService({ db, clock: () => new Date().toISOString(), stateRoot: '/tmp/of-unused/state', maxBytes: 6144 }), worktreesRoot: '/tmp/of-wt' }) });
   const parent = await sessions.create({ directory: '/tmp', name: 'Lead', harness: 'fake', emoji: '🧭' });
   parentId = parent.id;
   parentToken = harness.launches[0]!.mcpToken;
 });
-afterEach(() => server.close());
+afterEach(async () => {
+  await server.close();
+  for (const directory of createdDirectories) rmSync(directory, { recursive: true, force: true });
+  createdDirectories = [];
+});
 
 async function connect(token: string) {
   const client = new Client({ name: 'test', version: '0.0.0' });
@@ -82,10 +100,10 @@ describe('MCP', () => {
     expect(tools.map((t) => t.name).sort()).toEqual([
       'add_data_store_column', 'append_to_note', 'close_session', 'create_data_store', 'create_data_store_view', 'create_note', 'create_session',
       'create_worktree', 'delete_data_store_row', 'delete_data_store_view', 'delete_note', 'describe_data_store', 'get_argus_status', 'get_note',
-      'get_note_version', 'get_session_status', 'insert_data_store_rows', 'list_children', 'list_data_store_views', 'list_note_versions',
+      'get_note_version', 'get_session_status', 'get_working_state', 'insert_data_store_rows', 'list_children', 'list_data_store_views', 'list_note_versions',
       'list_notes', 'list_row_changes', 'list_sessions', 'message_parent', 'move_note', 'pulse_now', 'query_data_store', 'restore_note_version',
       'search_notes', 'send_session_message', 'update_data_store_rows', 'update_data_store_view', 'update_note', 'update_note_section',
-      'update_session',
+      'update_session', 'update_working_state',
     ]);
   });
 
@@ -178,7 +196,7 @@ describe('MCP', () => {
   it('creates a child that inherits harness and can message its parent', async () => {
     const parent = await connect(parentToken);
     const created = text(await parent.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('gimli'), name: 'Gimli', emoji: '⚔️' } }));
-    expect(created.parentId).toBe(parentId);
+    expect(sessions.get(created.id)?.parentId).toBe(parentId);
     const childToken = harness.launches[1]!.mcpToken;
     const child = await connect(childToken);
     sessions.applyInput(parentId, { kind: 'hook', event: { session_id: 'x', hook_event_name: 'SessionStart' } });
@@ -321,6 +339,17 @@ describe('MCP', () => {
     expect(sessions.get(stranger.id)!.state).not.toBe('closed');
   });
 
+  it('close_session by a manager wakes it with no line about the child it just closed', async () => {
+    new ManagerRepository(db).insert({ sessionId: parentId, pulseSeconds: 100, childrenCap: 3, missionText: 'x', createdAt: new Date().toISOString() });
+    const parent = await connect(parentToken);
+    const created = text(await parent.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('close-no-wake'), name: 'Gimli', emoji: '⚔️' } }));
+
+    await parent.callTool({ name: 'close_session', arguments: { session_id: created.id } });
+
+    expect(sessions.get(created.id)!.state).toBe('closed');
+    expect(sessions.queuedMessageCount(parentId)).toBe(0);
+  });
+
   it('refuses close_session on the caller\'s own parent', async () => {
     await (await connect(parentToken)).callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('close-parent-guard'), name: 'Gimli', emoji: '⚔️' } });
     const childToken = harness.launches[1]!.mcpToken;
@@ -363,7 +392,7 @@ describe('MCP', () => {
     const repoParentToken = harness.launches.find((l) => l.sessionId === repoParent.id)!.mcpToken;
     const parent = await connect(repoParentToken);
     const launchesBefore = harness.launches.length;
-    text(await parent.callTool({ name: 'create_session', arguments: { directory: ownRepo, name: 'Builder' } }));
+    text(await parent.callTool({ name: 'create_session', arguments: { directory: subdirectoryOf(ownRepo), name: 'Builder' } }));
     const builderToken = harness.launches[launchesBefore]!.mcpToken;
     const builder = await connect(builderToken);
 
@@ -377,12 +406,13 @@ describe('MCP', () => {
     const repoParentToken = harness.launches.find((l) => l.sessionId === repoParent.id)!.mcpToken;
     const parent = await connect(repoParentToken);
     const launchesBefore = harness.launches.length;
-    text(await parent.callTool({ name: 'create_session', arguments: { directory: ownRepo, name: 'Builder' } }));
+    text(await parent.callTool({ name: 'create_session', arguments: { directory: subdirectoryOf(ownRepo), name: 'Builder' } }));
     const builderToken = harness.launches[launchesBefore]!.mcpToken;
     const builder = await connect(builderToken);
 
     const allowed = await builder.callTool({ name: 'create_worktree', arguments: { repo_path: ownRepo, branch_name: `task/${randomUUID()}` } });
     expect(allowed.isError).toBeFalsy();
+    createdDirectories.push((text(allowed) as { path: string }).path);
   });
 });
 
@@ -407,14 +437,14 @@ describe('create_session guardrails', () => {
     const repoParent = await sessions.create({ directory: repoPath, name: 'Lead', harness: 'fake', emoji: '🧭' });
     const repoParentToken = harness.launches.find((l) => l.sessionId === repoParent.id)!.mcpToken;
     const client = await connect(repoParentToken);
-    const result = await client.callTool({ name: 'create_session', arguments: { directory: repoPath, name: 'Gimli' } });
+    const result = await client.callTool({ name: 'create_session', arguments: { directory: subdirectoryOf(repoPath), name: 'Gimli' } });
     expect(result.isError).toBeFalsy();
   });
 
   it('defaults permissionMode to manual for an MCP-created child, so its gates reach the inbox', async () => {
     const client = await connect(parentToken);
     const created = text(await client.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('task-2'), name: 'Gimli' } }));
-    expect(created.permissionMode).toBe('manual');
+    expect(sessions.get(created.id)?.permissionMode).toBe('manual');
   });
 
   it('a plain child cannot create a manager', async () => {
@@ -462,6 +492,40 @@ describe('create_session guardrails', () => {
     expect(second.isError).toBe(true);
   });
 
+  it('a manager created without pulse_seconds gets the default heartbeat', async () => {
+    const managerClient = await connect(parentToken);
+
+    const lead = text(await managerClient.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('lead-default-heartbeat'), name: 'LeadDefault', manager: { children_cap: 1, mission: 'x' } } }));
+
+    const stored = db.prepare('SELECT pulse_seconds FROM managers WHERE session_id = ?').get(lead.id) as { pulse_seconds: number };
+    expect(stored.pulse_seconds).toBe(1800);
+  });
+
+  it.each([1, 45, 86_400])('a manager created with a pulse_seconds of %s keeps it as its heartbeat, whatever the default is', async (pulseSeconds) => {
+    const managerClient = await connect(parentToken);
+
+    const lead = text(await managerClient.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir(`lead-explicit-heartbeat-${pulseSeconds}`), name: 'LeadExplicit', manager: { pulse_seconds: pulseSeconds, children_cap: 1, mission: 'x' } } }));
+
+    const stored = db.prepare('SELECT pulse_seconds FROM managers WHERE session_id = ?').get(lead.id) as { pulse_seconds: number };
+    expect(stored.pulse_seconds).toBe(pulseSeconds);
+  });
+
+  it.each(['30', null, -5])('refuses a manager created with a pulse_seconds of %j', async (pulseSeconds) => {
+    const managerClient = await connect(parentToken);
+
+    const result = await managerClient.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir(`lead-odd-heartbeat-${String(pulseSeconds)}`), name: 'LeadOdd', manager: { pulse_seconds: pulseSeconds, children_cap: 1, mission: 'x' } } });
+
+    expect(result.isError).toBe(true);
+  });
+
+  it.each([0, 86_401, 1.5])('refuses a manager created with a pulse_seconds of %s', async (pulseSeconds) => {
+    const managerClient = await connect(parentToken);
+
+    const result = await managerClient.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir(`lead-bad-heartbeat-${pulseSeconds}`), name: 'LeadBad', manager: { pulse_seconds: pulseSeconds, children_cap: 1, mission: 'x' } } });
+
+    expect(result.isError).toBe(true);
+  });
+
   it('two concurrent create_session calls at the cap admit only one child', async () => {
     const managerClient = await connect(parentToken);
     const lead = text(await managerClient.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('lead3'), name: 'Lead3', manager: { pulse_seconds: 3600, children_cap: 1, mission: 'x' } } }));
@@ -493,30 +557,32 @@ describe('create_session guardrails', () => {
 
   it('rejects a directory that escapes the worktrees root through a symlink plus a ".." segment, even with a decoy at the lexically-collapsed path', async () => {
     const outside = mkdtempSync(join(tmpdir(), 'of-outside-'));
+    createdDirectories.push(outside);
     const deep = join(outside, 'deep');
     mkdirSync(deep);
     const target = join(outside, 'target');
     mkdirSync(target);
-    const linkName = `escape-link-${randomUUID()}`;
-    symlinkSync(deep, join('/tmp/of-wt', linkName));
+    const insideRoot = existingWorktreeDir('escape-fixture');
+    const linkName = 'escape-link';
+    symlinkSync(deep, join(insideRoot, linkName));
     // path.resolve() would lexically collapse this back to "/tmp/of-wt/target" (looks inside); the OS
     // actually opens "outside/target" once the symlink is followed — the escape decision 1 closes. The
     // decoy directory genuinely existing at the lexically-collapsed path is what exposes a resolve()-first
     // regression: without it, a broken guard would merely throw ENOENT and fail safe by accident.
-    mkdirSync(join('/tmp/of-wt', 'target'), { recursive: true });
-    const escapingDirectory = `/tmp/of-wt/${linkName}/../target`;
+    mkdirSync(join(insideRoot, 'target'));
+    const escapingDirectory = `${insideRoot}/${linkName}/../target`;
     const client = await connect(parentToken);
     const result = await client.callTool({ name: 'create_session', arguments: { directory: escapingDirectory, name: 'Escapee' } });
     expect(result.isError).toBe(true);
   });
 
   it('stores the resolved real path, not the symlink, as the session directory', async () => {
-    const realTarget = existingWorktreeDir(`real-target-${randomUUID()}`);
-    const linkPath = join('/tmp/of-wt', `link-to-target-${randomUUID()}`);
+    const realTarget = existingWorktreeDir('real-target');
+    const linkPath = join(existingWorktreeDir('link-fixture'), 'link-to-target');
     symlinkSync(realTarget, linkPath);
     const client = await connect(parentToken);
     const created = text(await client.callTool({ name: 'create_session', arguments: { directory: linkPath, name: 'Real' } }));
-    expect(created.directory).toBe(realpathSync(realTarget));
+    expect(sessions.get(created.id)?.directory).toBe(realpathSync(realTarget));
   });
 });
 
@@ -533,7 +599,7 @@ describe('create_session permission_mode restrictions', () => {
   it('allows a root session to set permission_mode to auto', async () => {
     const client = await connect(parentToken);
     const created = text(await client.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('perm-root-auto'), name: 'Gimli', permission_mode: 'auto' } }));
-    expect(created.permissionMode).toBe('auto');
+    expect(sessions.get(created.id)?.permissionMode).toBe('auto');
   });
 
   it('allows a manager to set a child\'s permission_mode to dontAsk', async () => {
@@ -542,7 +608,7 @@ describe('create_session permission_mode restrictions', () => {
     const leadToken = harness.launches.find((l) => l.sessionId === lead.id)!.mcpToken;
     const leadClient = await connect(leadToken);
     const created = text(await leadClient.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('perm-lead-child'), name: 'Child', permission_mode: 'dontAsk' } }));
-    expect(created.permissionMode).toBe('dontAsk');
+    expect(sessions.get(created.id)?.permissionMode).toBe('dontAsk');
   });
 
   it('refuses bypassPermissions through MCP even for a root session', async () => {

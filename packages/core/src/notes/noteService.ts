@@ -1,7 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { Note, NoteFolder } from '@openfleet/shared';
-import { inTransaction as runInTransaction } from '../db/transaction.js';
-import { expandMentions, type MentionLookup } from './mentionExpander.js';
+import { inTransaction as runInTransaction, recoverStuckTransaction } from '../db/transaction.js';
+import { expandMentionBlocks, expandMentions, type MentionLookup } from './mentionExpander.js';
 import type { NoteRepository, NoteUpdateResult } from './noteRepository.js';
 import { appendSection, replaceSection } from './noteSections.js';
 
@@ -44,6 +44,7 @@ export interface NoteServiceDeps {
   repo: NoteRepository;
   db: DatabaseSync;
   expandMentions: typeof expandMentions;
+  expandMentionBlocks?: typeof expandMentionBlocks;
   clock: () => string;
   newId: () => string;
 }
@@ -103,6 +104,11 @@ export interface ExpandedNote {
   expandedBody: string;
 }
 
+export interface NoteWithMentionBlocks {
+  note: Note;
+  mentionBlocks: string[];
+}
+
 type AppendAttemptOutcome = { applied: true; note: Note } | { applied: false; currentRev: number };
 
 /**
@@ -115,6 +121,7 @@ export class NoteService {
   private readonly repo: NoteRepository;
   private readonly db: DatabaseSync;
   private readonly expandMentions: typeof expandMentions;
+  private readonly expandMentionBlocks: typeof expandMentionBlocks;
   private readonly clock: () => string;
   private readonly newId: () => string;
 
@@ -122,6 +129,7 @@ export class NoteService {
     this.repo = deps.repo;
     this.db = deps.db;
     this.expandMentions = deps.expandMentions;
+    this.expandMentionBlocks = deps.expandMentionBlocks ?? expandMentionBlocks;
     this.clock = deps.clock;
     this.newId = deps.newId;
   }
@@ -233,11 +241,24 @@ export class NoteService {
     return this.inTransaction(work);
   }
 
+  /** Throws when a transaction is already open: a caller that does non-transactional work (a file rename) inside `runAtomically` cannot have an outer rollback undo it. */
+  assertNoOuterTransaction(): void {
+    recoverStuckTransaction(this.db);
+    if (this.db.isTransaction) throw new Error('refusing to run inside an outer transaction: its rollback could not undo the file rename');
+  }
+
   getExpanded(id: string, { viewerProjectId }: GetExpandedOptions): ExpandedNote {
     const note = this.require(id);
     const lookup = this.mentionLookupFor(viewerProjectId);
     const expandedBody = this.expandMentions(note.bodyMd, lookup, { rootNoteId: note.id });
     return { note, expandedBody };
+  }
+
+  /** The blocks `getExpanded` appends after the body, without repeating the body. */
+  getMentionBlocks(id: string, { viewerProjectId }: GetExpandedOptions): NoteWithMentionBlocks {
+    const note = this.require(id);
+    const mentionBlocks = this.expandMentionBlocks(note.bodyMd, this.mentionLookupFor(viewerProjectId), { rootNoteId: note.id });
+    return { note, mentionBlocks };
   }
 
   /** Unknown ids fall through to the CAS path's own NoteNotFoundError; only an existing, file-backed note is refused here. */

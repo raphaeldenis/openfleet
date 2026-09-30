@@ -49,6 +49,11 @@ interface Walk {
  * A mention the lookup cannot resolve renders as "not resolved".
  */
 export function expandMentions(bodyMd: string, lookup: MentionLookup, opts: ExpandMentionsOptions = {}): string {
+  return [bodyMd, ...expandMentionBlocks(bodyMd, lookup, opts)].join(BLOCK_SEPARATOR);
+}
+
+/** Returns only the blocks `expandMentions` appends after the body, one per mention; empty when the body mentions nothing. */
+export function expandMentionBlocks(bodyMd: string, lookup: MentionLookup, opts: ExpandMentionsOptions = {}): string[] {
   const { depth = DEFAULT_DEPTH, budgetBytes = DEFAULT_BUDGET_BYTES, rootNoteId } = opts;
   const walk: Walk = {
     lookup,
@@ -59,7 +64,7 @@ export function expandMentions(bodyMd: string, lookup: MentionLookup, opts: Expa
     isBudgetExhausted: false,
     skipLineCount: 0,
   };
-  const blocks = [bodyMd];
+  const blocks: string[] = [];
 
   for (const bodyToScan of walk.bodiesToScan) {
     for (const mention of findMentions(bodyToScan.bodyMd)) {
@@ -71,7 +76,7 @@ export function expandMentions(bodyMd: string, lookup: MentionLookup, opts: Expa
   const unrenderedSkipLineCount = walk.skipLineCount - MAX_SKIP_LINES;
   if (unrenderedSkipLineCount > 0) blocks.push(moreSkippedLine(unrenderedSkipLineCount));
 
-  return blocks.join(BLOCK_SEPARATOR);
+  return blocks;
 }
 
 function renderMention(mention: MentionRef, level: number, walk: Walk): string | undefined {

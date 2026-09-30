@@ -1,12 +1,15 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { E2E_FLAG_ENV, E2E_FLAG_ON } from '@openfleet/shared';
 import { newToken } from './ids.js';
 
-export interface Config { host: '127.0.0.1'; port: number; home: string; dbPath: string; worktreesRoot: string; sessionsRoot: string; adminToken: string }
+export interface Config { host: '127.0.0.1'; port: number; home: string; dbPath: string; worktreesRoot: string; sessionsRoot: string; stateRoot: string; adminToken: string; e2eEnabled: boolean }
+
+export const resolveHome = (env: NodeJS.ProcessEnv = process.env): string => env.OPENFLEET_HOME ?? join(homedir(), '.openfleet');
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
-  const home = env.OPENFLEET_HOME ?? join(homedir(), '.openfleet');
+  const home = resolveHome(env);
   mkdirSync(home, { recursive: true });
   // mkdirSync's mode option is ignored on a directory that already exists, so a home that predates this
   // check (or was loosened by something else) is tightened here every load, not just at creation (MAJ-02).
@@ -20,12 +23,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   // Same rationale as home above: mkdirSync's mode is ignored on an existing directory, so tighten on every load (AUD-11).
   chmodSync(sessionsRoot, 0o700);
   return {
+    stateRoot: join(home, 'state'),
     host: '127.0.0.1',
     port: Number(env.OPENFLEET_PORT ?? 7331),
     home,
     dbPath: join(home, 'openfleet.db'),
     worktreesRoot,
     sessionsRoot,
+    e2eEnabled: env[E2E_FLAG_ENV] === E2E_FLAG_ON,
     adminToken: readOrCreateAdminToken(join(home, 'admin.token')),
   };
 }
