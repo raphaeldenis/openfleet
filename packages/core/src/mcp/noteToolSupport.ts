@@ -32,15 +32,19 @@ export function createNoteToolSupport({ notes, noteRepo, docs, caller }: NoteToo
   }
 
   const noteSummary = (note: Note) => ({
-    id: note.id, title: note.title, folder: note.folder, rev: note.rev, shared: note.shared,
-    fileBacked: note.filePath !== null, updatedAt: note.updatedAt,
+    id: note.id, title: note.title, folder: note.folder, rev: note.rev, shared: note.shared, fileBacked: note.filePath !== null,
   });
 
-  /** A note as callers see it: no absolute path, no content hash — only whether it is file-backed and where, inside the docs folder. */
-  const noteView = (note: Note) => ({
-    ...noteSummary(note),
-    projectId: note.projectId, bodyMd: note.bodyMd, createdAt: note.createdAt, docsRelativePath: docs.docsRelativePath(note),
-  });
+  /** A note as `get_note` shows it: the summary plus its body, its path inside the docs folder when file-backed, and the expanded text only when a mention changed it. */
+  const noteView = (note: Note, expandedBody: string) => {
+    const docsRelativePath = docs.docsRelativePath(note);
+    const hasExpandedMentions = expandedBody !== note.bodyMd;
+    return {
+      ...noteSummary(note), bodyMd: note.bodyMd,
+      ...(docsRelativePath === null ? {} : { docsRelativePath }),
+      ...(hasExpandedMentions ? { expandedBody } : {}),
+    };
+  };
 
   return { author, requireProject, requireOwnNote, writeBody, noteSummary, noteView };
 }

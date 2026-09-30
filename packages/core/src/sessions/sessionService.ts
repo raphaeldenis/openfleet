@@ -13,7 +13,7 @@ import { MessageQueue } from './messageQueue.js';
 import { findResolvedModel, readTranscriptTail } from './resolvedModel.js';
 import { wrapAgentMessage } from './messageEnvelope.js';
 import { normalizePermissionMode, SessionRepository } from './sessionRepository.js';
-import { canDeliverNow, isClear, nextState, provesTurnEnded, type SessionInput } from './stateMachine.js';
+import { canDeliverNow, isClear, nextState, provesTurnEnded, startsClearedConversation, type SessionInput } from './stateMachine.js';
 
 export interface SessionServiceDeps { db: DatabaseSync; bus: EventBus; harnesses: Harness[]; baseUrl: string; worktreesRoot: string; resumeTimeoutMs?: number; firstStartTimeoutMs?: number; submitKeystrokeDelayMs?: number; clearInFlightTimeoutMs?: number; clearFlushGraceMs?: number }
 
@@ -174,6 +174,8 @@ function nearestExistingAncestor(path: string): { existingAncestor: string; unbo
 // instead. Never throws: a missing file, missing directory, or missing projects directory is just
 // "untrusted".
 const CLI_SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// JSON.stringify escapes ASCII controls but passes C1 controls (U+0080-U+009F, incl. the CSI U+009B) and the U+2028/U+2029 line separators through.
+const LINE_BREAKING_CHARACTERS_JSON_LEAVES_RAW = /[\u0080-\u009f\u2028\u2029]/g;
 
 function isTrustedTranscriptPath(path: string): boolean {
   if (!path.endsWith('.jsonl')) return false;
@@ -617,8 +619,11 @@ export class SessionService {
     if (endsUnfinishedTurn) this.unfinishedTurns.delete(sessionId);
     const state = nextState(session.state, input);
     if (state === session.state) {
+      // A queued /clear never reports a turn start: its SessionStart is the only proof it was processed.
+      const startsClearedConversationWhileClearSubmitted = input.kind === 'hook' && startsClearedConversation(input.event) && this.isAwaitingQueuedClear(sessionId);
+      if (startsClearedConversationWhileClearSubmitted) this.enter(sessionId, READY);
       // The turn's start was never reported, but its end still releases a relaunch held behind it.
-      if (endsUnfinishedTurn) this.guarded(sessionId, () => this.advance(sessionId));
+      if (startsClearedConversationWhileClearSubmitted || endsUnfinishedTurn) this.guarded(sessionId, () => this.advance(sessionId));
       return;
     }
     // Only a real state transition proves the (resumed) process is alive; an unrecognized Notification
@@ -627,8 +632,7 @@ export class SessionService {
     // Any real transition away from 'generating' (Stop, a permission prompt, the idle_prompt self-heal,
     // the session closing) makes an armed interrupt watch moot — never let a late-firing one override it.
     this.disarmInterruptWatch(sessionId);
-    const isAwaitingTurnStart = this.deliveryOf(sessionId).phase.name === 'submitted';
-    if (isAwaitingTurnStart) this.enter(sessionId, READY); // any real transition proves the submitted turn started
+    if (this.isAwaitingTurnStart(sessionId)) this.enter(sessionId, READY); // any real transition proves the submitted turn started
     if (state === 'closed') {
       // harness_exit means the process already died — markClosed only records it. Any other path to
       // closed (SessionEnd, etc.) is not proof the process actually exited, so it must go through the
@@ -641,6 +645,16 @@ export class SessionService {
     this.repo.setState(sessionId, state, since);
     this.deps.bus.emit({ type: 'session.state', sessionId, state, stateSince: since });
     this.guarded(sessionId, () => this.advance(sessionId));
+  }
+
+  private isAwaitingTurnStart(sessionId: string): boolean {
+    return this.deliveryOf(sessionId).phase.name === 'submitted';
+  }
+
+  private isAwaitingQueuedClear(sessionId: string): boolean {
+    const { phase } = this.deliveryOf(sessionId);
+    if (phase.name !== 'submitted') return false;
+    return this.queue.getById(phase.messageId)?.body.trim() === '/clear';
   }
 
   private holdRelaunchesFor(sessionId: string, holdMs: number, options: { isFlushGrace: boolean } = { isFlushGrace: false }): void {
@@ -696,7 +710,7 @@ export class SessionService {
     if (pending.nameMismatchLogged) return;
     pending.nameMismatchLogged = true;
     const expectedName = `${this.currentCliSessionIdOf(sessionId)}.jsonl`;
-    log('warn', `resolved model: transcript name does not match the session's CLI id: session ${sessionId}, expected ${expectedName}, got ${JSON.stringify(basename(path))}`);
+    log('warn', `resolved model: transcript name does not match the session's CLI id: session ${sessionId}, expected ${expectedName}, got ${JSON.stringify(basename(path).replace(LINE_BREAKING_CHARACTERS_JSON_LEAVES_RAW, ''))}`);
   }
 
   // One attempt per hook until the launch's resolution is found, plus one retry a moment after a hook whose

@@ -140,7 +140,7 @@ describe('an agent keeps its working state through the OpenFleet tools', () => {
 
     expect(isRefused(written)).toBe(false);
     expect(jsonOf(written)).toEqual({ updated_at: DAEMON_NOW });
-    expect(jsonOf(read)).toEqual({ ...state, sessionId: fleet.leadId, updatedAt: DAEMON_NOW });
+    expect(jsonOf(read)).toEqual({ ...state, updatedAt: DAEMON_NOW });
   });
 
   it('agent reads { state: null } before its first write', async () => {
@@ -167,7 +167,7 @@ describe('an agent keeps its working state through the OpenFleet tools', () => {
 
     await updateState(fleet.leadToken, state);
 
-    expect(jsonOf(await readState(fleet.leadToken))).toEqual({ ...state, sessionId: fleet.leadId, updatedAt: DAEMON_NOW });
+    expect(jsonOf(await readState(fleet.leadToken))).toEqual({ ...state, updatedAt: DAEMON_NOW });
     expect(readFileSync(mirrorPathOf(fleet.leadId), 'utf8')).toBe([
       '## Plan\n- plan A\n- plan B\n',
       '## Todo\n- todo A\n',

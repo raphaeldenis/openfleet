@@ -3453,3 +3453,78 @@ describe('SessionService shutdown', () => {
     await closing;
   });
 });
+
+describe('SessionService queued /clear', () => {
+  it('types the prompt queued behind a /clear right after the SessionStart with source clear, not a turn-start timeout later', async () => {
+    vi.useFakeTimers();
+    const { service, harness } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+    service.sendMessage({ sessionId: session.id, body: '/clear' });
+    const queuedBehindClear = service.sendMessage({ sessionId: session.id, body: 'after the clear' });
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
+    expect(queuedBehindClear.status).toBe('queued');
+
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionEnd', reason: 'clear' }));
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart', source: 'clear', session_id: '3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e' }));
+
+    expect(harness.handles[0]!.written).toEqual(['/clear', '\r', 'after the clear']);
+  });
+
+  const CLEARED_CONVERSATION_ID = '3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e';
+  const sessionStartedByClear = (sessionId: string) => hook(sessionId, { hook_event_name: 'SessionStart', source: 'clear', session_id: CLEARED_CONVERSATION_ID });
+
+  async function idleSessionWithQueued(bodies: string[]) {
+    const { service, harness } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+    for (const body of bodies) service.sendMessage({ sessionId: session.id, body });
+    return { service, harness, sessionId: session.id };
+  }
+
+  it('does not release a prompt submitted after the clear timed out when the late SessionStart with source clear arrives', async () => {
+    vi.useFakeTimers();
+    const { service, harness, sessionId } = await idleSessionWithQueued(['/clear', 'prompt N', 'prompt O']);
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS + TURN_START_TIMEOUT_MS + SUBMIT_KEYSTROKE_DELAY_MS);
+    expect(harness.handles[0]!.written).toEqual(['/clear', '\r', 'prompt N', '\r']);
+
+    service.applyInput(sessionId, sessionStartedByClear(sessionId));
+
+    expect(harness.handles[0]!.written).toEqual(['/clear', '\r', 'prompt N', '\r']);
+  });
+
+  it('does not release an agent prompt when a human /clear reports its SessionStart while that prompt awaits its turn start', async () => {
+    vi.useFakeTimers();
+    const { service, harness, sessionId } = await idleSessionWithQueued(['prompt M', 'prompt N']);
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
+
+    service.applyInput(sessionId, sessionStartedByClear(sessionId));
+
+    expect(harness.handles[0]!.written).toEqual(['prompt M', '\r']);
+  });
+
+  it('keeps a submitted /clear waiting when a compaction SessionStart arrives before its own SessionStart', async () => {
+    vi.useFakeTimers();
+    const { service, harness, sessionId } = await idleSessionWithQueued(['/clear', 'prompt N']);
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
+
+    service.applyInput(sessionId, hook(sessionId, { hook_event_name: 'SessionStart', source: 'compact' }));
+
+    expect(harness.handles[0]!.written).toEqual(['/clear', '\r']);
+  });
+
+  it('retries a failed typing only after DELIVERY_RETRY_MS when the SessionStart with source clear releases a queued /clear', async () => {
+    vi.useFakeTimers();
+    const { service, harness, sessionId } = await idleSessionWithQueued(['/clear', 'after the clear']);
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
+    const typeMessage = vi.spyOn(harness.handles[0]!, 'typeMessage').mockImplementation(() => { throw new Error('pty write failed'); });
+
+    service.applyInput(sessionId, sessionStartedByClear(sessionId));
+    expect(typeMessage).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(DELIVERY_RETRY_MS - 1);
+    expect(typeMessage).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(typeMessage).toHaveBeenCalledTimes(2);
+  });
+});

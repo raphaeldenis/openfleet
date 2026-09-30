@@ -196,7 +196,7 @@ describe('MCP', () => {
   it('creates a child that inherits harness and can message its parent', async () => {
     const parent = await connect(parentToken);
     const created = text(await parent.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('gimli'), name: 'Gimli', emoji: '⚔️' } }));
-    expect(created.parentId).toBe(parentId);
+    expect(sessions.get(created.id)?.parentId).toBe(parentId);
     const childToken = harness.launches[1]!.mcpToken;
     const child = await connect(childToken);
     sessions.applyInput(parentId, { kind: 'hook', event: { session_id: 'x', hook_event_name: 'SessionStart' } });
@@ -444,7 +444,7 @@ describe('create_session guardrails', () => {
   it('defaults permissionMode to manual for an MCP-created child, so its gates reach the inbox', async () => {
     const client = await connect(parentToken);
     const created = text(await client.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('task-2'), name: 'Gimli' } }));
-    expect(created.permissionMode).toBe('manual');
+    expect(sessions.get(created.id)?.permissionMode).toBe('manual');
   });
 
   it('a plain child cannot create a manager', async () => {
@@ -582,7 +582,7 @@ describe('create_session guardrails', () => {
     symlinkSync(realTarget, linkPath);
     const client = await connect(parentToken);
     const created = text(await client.callTool({ name: 'create_session', arguments: { directory: linkPath, name: 'Real' } }));
-    expect(created.directory).toBe(realpathSync(realTarget));
+    expect(sessions.get(created.id)?.directory).toBe(realpathSync(realTarget));
   });
 });
 
@@ -599,7 +599,7 @@ describe('create_session permission_mode restrictions', () => {
   it('allows a root session to set permission_mode to auto', async () => {
     const client = await connect(parentToken);
     const created = text(await client.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('perm-root-auto'), name: 'Gimli', permission_mode: 'auto' } }));
-    expect(created.permissionMode).toBe('auto');
+    expect(sessions.get(created.id)?.permissionMode).toBe('auto');
   });
 
   it('allows a manager to set a child\'s permission_mode to dontAsk', async () => {
@@ -608,7 +608,7 @@ describe('create_session permission_mode restrictions', () => {
     const leadToken = harness.launches.find((l) => l.sessionId === lead.id)!.mcpToken;
     const leadClient = await connect(leadToken);
     const created = text(await leadClient.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('perm-lead-child'), name: 'Child', permission_mode: 'dontAsk' } }));
-    expect(created.permissionMode).toBe('dontAsk');
+    expect(sessions.get(created.id)?.permissionMode).toBe('dontAsk');
   });
 
   it('refuses bypassPermissions through MCP even for a root session', async () => {

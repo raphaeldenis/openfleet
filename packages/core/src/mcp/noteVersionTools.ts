@@ -9,7 +9,7 @@ export type RegisterNoteVersionToolsDeps = NoteToolDeps;
 
 export function registerNoteVersionTools(server: McpServer, deps: RegisterNoteVersionToolsDeps): void {
   const { notes, noteRepo } = deps;
-  const { author, requireProject, requireOwnNote, writeBody, noteView } = createNoteToolSupport(deps);
+  const { author, requireProject, requireOwnNote, writeBody, noteSummary } = createNoteToolSupport(deps);
 
   function requireVersion(noteId: string, rev: number) {
     const version = noteRepo.getVersion(noteId, rev);
@@ -18,19 +18,19 @@ export function registerNoteVersionTools(server: McpServer, deps: RegisterNoteVe
   }
 
   server.registerTool('append_to_note', {
-    description: 'Append content to the end of a note\'s body; additive and rev-free, always succeeds unless the note is file-backed',
+    description: 'Append content to the end of a note\'s body; additive and rev-free, always succeeds unless the note is file-backed; returns the new rev (id, title, folder, rev, shared, fileBacked), not the body',
     inputSchema: { note: z.string().min(1), content: z.string() },
   }, async ({ note, content }) => {
     const scope = requireProject();
     if (!scope) return fail('this session has no project');
     return guarded(() => {
       requireOwnNote(scope.projectId, note);
-      return noteView(notes.append(note, { content, author: author() }));
+      return noteSummary(notes.append(note, { content, author: author() }));
     });
   });
 
   server.registerTool('update_note_section', {
-    description: 'Replace the content of a `##` section (send content without the heading line); rejected with the current rev if expected_rev is stale',
+    description: 'Replace the content of a `##` section (send content without the heading line); rejected with the current rev if expected_rev is stale; returns the new rev (id, title, folder, rev, shared, fileBacked), not the body',
     inputSchema: { note: z.string().min(1), heading: z.string().min(1), content: z.string(), expected_rev: z.number().int() },
   }, async ({ note, heading, content, expected_rev }) => {
     const scope = requireProject();
@@ -38,7 +38,7 @@ export function registerNoteVersionTools(server: McpServer, deps: RegisterNoteVe
     return guarded(() => {
       const current = requireOwnNote(scope.projectId, note);
       if (current.rev !== expected_rev) throw new StaleRevisionError(current.rev);
-      return noteView(writeBody(current, replaceSection(current.bodyMd, heading, content), expected_rev));
+      return noteSummary(writeBody(current, replaceSection(current.bodyMd, heading, content), expected_rev));
     });
   });
 
@@ -67,7 +67,7 @@ export function registerNoteVersionTools(server: McpServer, deps: RegisterNoteVe
   });
 
   server.registerTool('restore_note_version', {
-    description: 'Restore a note to a past revision\'s body — a new, forward revision, never a rewrite of history; rejected with the current rev if expected_rev is given and stale',
+    description: 'Restore a note to a past revision\'s body — a new, forward revision, never a rewrite of history; rejected with the current rev if expected_rev is given and stale; returns the new rev (id, title, folder, rev, shared, fileBacked), not the body',
     inputSchema: { note: z.string().min(1), rev: z.number().int(), expected_rev: z.number().int().optional() },
   }, async ({ note, rev, expected_rev }) => {
     const scope = requireProject();
@@ -75,7 +75,7 @@ export function registerNoteVersionTools(server: McpServer, deps: RegisterNoteVe
     return guarded(() => {
       const current = requireOwnNote(scope.projectId, note);
       const target = requireVersion(note, rev);
-      return noteView(writeBody(current, target.bodyMd, expected_rev ?? current.rev));
+      return noteSummary(writeBody(current, target.bodyMd, expected_rev ?? current.rev));
     });
   });
 }
