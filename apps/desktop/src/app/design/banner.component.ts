@@ -1,10 +1,11 @@
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 
-export type BannerVariant = 'permission' | 'reconnecting' | 'error' | 'done';
+export type BannerVariant = 'permission' | 'reconnecting' | 'mismatch' | 'error' | 'done';
 
 const COLOR_VAR: Record<BannerVariant, string> = {
   permission: '--state-waiting-permission',
   reconnecting: '--state-waiting-permission',
+  mismatch: '--state-waiting-permission',
   error: '--state-error',
   done: '--state-idle',
 };
@@ -13,6 +14,7 @@ const ANNOUNCE_ROLE: Record<BannerVariant, 'alert' | 'status'> = {
   permission: 'alert',
   error: 'alert',
   reconnecting: 'status',
+  mismatch: 'status',
   done: 'status',
 };
 
