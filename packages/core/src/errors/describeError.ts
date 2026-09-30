@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute } from 'node:path';
 import { ERROR_CODES, OpenFleetError, retryOf, type ErrorCode, type ErrorEnvelope } from '@openfleet/shared';
@@ -140,21 +141,63 @@ const SECRET_KEY = /token|secret|authorization|password/i;
 const MASK = '***';
 const escapedForRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-/** Absolute homes only: a relative OPENFLEET_HOME would match ordinary words. Longest first, so a home inside another shortens as the inner one. */
-const homePrefixes = (): string[] =>
-  [resolveHome(), homedir()]
-    .filter((home) => isAbsolute(home))
-    .map((home) => home.replace(/[/\\]+$/, ''))
-    .filter((home) => home.length > 1)
-    .sort((first, second) => second.length - first.length);
+/** A percent-escape however many times it is encoded (%2F, %252F, …). */
+const ESCAPE_PREFIX = '%(?:25)*';
+const hexOf = (character: string) => character.charCodeAt(0).toString(16).padStart(2, '0');
+
+/** Matches `word` with any of its characters written as a percent-escape. */
+const spelledWithEscapes = (word: string): string =>
+  Array.from(word)
+    .map((character) => `(?:${escapedForRegExp(character)}|${ESCAPE_PREFIX}(?:${hexOf(character.toLowerCase())}|${hexOf(character.toUpperCase())}))`)
+    .join('');
+
+const SLASH = `(?:/|${ESCAPE_PREFIX}2F)`;
+const BEARER_SEPARATOR = `(?:[\\s:=]|${ESCAPE_PREFIX}(?:20|3A|3D|09))+`;
+// A token segment keeps every escape, valid or not: masking the whole segment is what hides a token spelled with escapes.
+const BEARER_TOKEN = new RegExp(`${spelledWithEscapes('Bearer')}${BEARER_SEPARATOR}[A-Za-z0-9._~+/=%-]+`, 'gi');
+const HOOK_TOKEN = new RegExp(`${SLASH}${spelledWithEscapes('hooks')}${SLASH}[^/\\s"'\`&]+`, 'gi');
+const QUERY_PARAMETER = /([?&])([^=&\s"'`#]*)=([^&\s"'`]*)/g;
+
+/** Decodes every well-formed percent-escape, up to three layers deep; a malformed one stays as it is and nothing throws. */
+function withEscapesDecoded(text: string): string {
+  let decoded = text;
+  for (let layer = 0; layer < 3; layer += 1) {
+    const next = decoded.replace(/%([0-9a-f]{2})/gi, (_escape, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+    if (next === decoded) break;
+    decoded = next;
+  }
+  return decoded;
+}
+
+const maskingSecretParameters = (parameter: string, prefix: string, key: string): string =>
+  SECRET_KEY.test(withEscapesDecoded(key)) ? `${prefix}${key}=${MASK}` : parameter;
+
+const realpathOrSelf = (path: string): string => {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+};
+
+/**
+ * Absolute homes only: a relative OPENFLEET_HOME would match ordinary words. Each home is listed as configured and as its realpath.
+ * Longest first, so a home inside another shortens as the inner one.
+ */
+const homePrefixes = (): string[] => {
+  const configuredHomes = [resolveHome(), homedir()].filter((home) => isAbsolute(home));
+  const spellings = configuredHomes.flatMap((home) => [home, realpathOrSelf(home)]);
+  const withoutTrailingSeparators = spellings.map((home) => home.replace(/[/\\]+$/, '')).filter((home) => home.length > 1);
+  return [...new Set(withoutTrailingSeparators)].sort((first, second) => second.length - first.length);
+};
 
 const startsPathSegment = (home: string) => new RegExp(`(?<![\\w.~-])${escapedForRegExp(home)}(?![\\w-])(?!\\.\\w)`, 'g');
 
 function redactedAndShortened(text: string): string {
   const withoutSecrets = text
-    .replace(/Bearer[\s:=]+[A-Za-z0-9._~+/=-]+/gi, `Bearer ${MASK}`)
-    .replace(/([?&][\w.-]*(?:token|secret|authorization|password)[\w.-]*=)[^&\s"'`]*/gi, `$1${MASK}`)
-    .replace(/(?:\/|%2F)hooks(?:\/|%2F)[^/\s"'`%&]+/gi, `/hooks/${MASK}`);
+    .replace(BEARER_TOKEN, `Bearer ${MASK}`)
+    .replace(QUERY_PARAMETER, (parameter, prefix: string, key: string) => maskingSecretParameters(parameter, prefix, key))
+    .replace(HOOK_TOKEN, `/hooks/${MASK}`);
   return homePrefixes().reduce((shortened, home) => shortened.replace(startsPathSegment(home), '~'), withoutSecrets);
 }
 
@@ -187,22 +230,50 @@ function cappedDetailText(text: string): string {
   return candidate;
 }
 
-const maskingSecrets = (key: string, value: unknown): unknown => {
+const cleanedText = (text: string) => redactedAndShortened(keepingLines(text));
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+/** JSON.stringify unboxes a String, Number or Boolean object after the replacer ran, so the replacer unboxes it first. */
+function unboxed(value: unknown): unknown {
+  if (value instanceof String) return String.prototype.valueOf.call(value);
+  if (value instanceof Number) return Number.prototype.valueOf.call(value);
+  if (value instanceof Boolean) return Boolean.prototype.valueOf.call(value);
+  return value;
+}
+
+const withCleanedKeys = (value: Record<string, unknown>): Record<string, unknown> =>
+  Object.fromEntries(Object.entries(value).map(([key, entry]) => [cleanedText(key), entry]));
+
+const sanitizingKeysAndValues = (key: string, rawValue: unknown): unknown => {
   if (SECRET_KEY.test(key)) return MASK;
-  return typeof value === 'string' ? redactedAndShortened(keepingLines(value)) : value;
+  const value = unboxed(rawValue);
+  if (typeof value === 'string') return cleanedText(value);
+  return isPlainObject(value) ? withCleanedKeys(value) : value;
 };
 
+function parsedOrText(serialized: string): unknown {
+  try {
+    return JSON.parse(serialized);
+  } catch {
+    return cappedDetailText(serialized);
+  }
+}
+
 /**
- * A string is cleaned and cut at 2 KiB serialized. A structure is serialized once, with every string value cleaned and every secret key masked:
- * one that fits is answered as that parsed copy, one that does not is cut to text; one that cannot be serialized is dropped.
+ * A string is cleaned and cut at 2 KiB serialized. A structure is serialized once, with every key and string value cleaned and every secret key masked,
+ * then the serialized text is redacted a last time whatever its size: one that fits is answered as that parsed copy (as text when the redaction broke the JSON),
+ * one that does not is cut to text; one that cannot be serialized is dropped.
  */
 function cappedDetail(detail: unknown): unknown {
   if (detail === undefined) return undefined;
   if (typeof detail === 'string') return cappedDetailText(detail);
   try {
-    const serialized = JSON.stringify(detail, maskingSecrets);
+    const serialized = JSON.stringify(detail, sanitizingKeysAndValues);
     if (serialized === undefined) return undefined;
-    return Buffer.byteLength(serialized) <= MAX_DETAIL_BYTES ? JSON.parse(serialized) : cappedDetailText(serialized);
+    const redacted = redactedAndShortened(serialized);
+    return Buffer.byteLength(redacted) <= MAX_DETAIL_BYTES ? parsedOrText(redacted) : cappedDetailText(redacted);
   } catch {
     return undefined;
   }

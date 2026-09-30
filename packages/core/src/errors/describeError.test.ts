@@ -1,5 +1,6 @@
-import { readdirSync, readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ZodError, z } from 'zod';
 import { ERROR_CODES, OpenFleetError, type ErrorCode } from '@openfleet/shared';
@@ -93,7 +94,8 @@ const domainErrorCodes: [string, () => unknown, ErrorCode][] = [
 describe('describeError: every Error subclass of core is mapped or internal on purpose', () => {
   const CORE_DIRECTORY = fileURLToPath(new URL('../', import.meta.url));
   const ERROR_SUBCLASS_DECLARATION = /class (\w+) extends \w*Error\b/g;
-  // Boot-time failures answered by bootFailure.ts, and a write failure whose cause is SQL: none reaches a caller as itself.
+  // Boot-time failures answered by bootFailure.ts stay internal. DataStoreWriteError stays internal_error on REST (its cause is SQL), while the MCP
+  // path still answers its safe message ('The write failed') through mapDatabaseError: ERR-03 must keep that message for agents.
   const INTERNAL_ON_PURPOSE = ['ConfigFileError', 'DatabaseOpenError', 'PortInUseError', 'DataStoreWriteError'];
 
   const declaredErrorClasses = (): string[] =>
@@ -382,6 +384,137 @@ describe('describeError: hostile case 1, message hygiene and caps', () => {
     const envelope = describeError(new OpenFleetError('row_cap', 'call with Bearer abc123_-XYZ or POST /hooks/secretToken9 now.'));
     expect(envelope.message).not.toContain('abc123_-XYZ');
     expect(envelope.message).not.toContain('secretToken9');
+  });
+});
+
+describe('describeError: encoded credentials', () => {
+  const carrying = (text: string) => new OpenFleetError('row_cap', text, { hint: text, detail: text });
+
+  it.each([
+    ['an escaped first hook token character', '/hooks/%61bcDEF123', 'bcDEF123'],
+    ['an escape in the middle of a hook token', '/hooks/abc%44EF123', 'EF123'],
+    ['an escaped hook keyword', '/%68ooks/abcDEF123', 'abcDEF123'],
+    ['a double-encoded hook token', '/hooks/%2561bcDEF123', 'bcDEF123'],
+    ['a double-encoded hook separator', '/hooks%252Fabc%2544EF123', 'EF123'],
+    ['a malformed escape inside a hook token', '/hooks/abc%ZZdef123', 'def123'],
+    ['an escaped space after Bearer', 'Bearer%20abcDEF123', 'abcDEF123'],
+    ['an escaped colon after Bearer', 'Bearer%3AabcDEF123', 'abcDEF123'],
+    ['an escape inside a Bearer token', 'Bearer abc%44EF123', 'EF123'],
+    ['a malformed escape inside a Bearer token', 'Bearer abc%ZZdef123', 'def123'],
+    ['an escaped query key', '/x?%74oken=abcDEF123', 'abcDEF123'],
+    ['an escape in the middle of a query key', '/x?to%6Ben=abcDEF123', 'abcDEF123'],
+    ['a double-encoded query key', '/x?%2574oken=abcDEF123', 'abcDEF123'],
+    ['an escaped query key after another parameter', '/x?page=2&%70assword=abcDEF123', 'abcDEF123'],
+  ])('masks %s in the message, the hint and the detail', (_label, text, leaked) => {
+    const envelope = describeError(carrying(text));
+
+    expect([envelope.message, envelope.hint, envelope.detail].map(String).filter((field) => field.includes(leaked))).toEqual([]);
+  });
+
+  it('keeps the other query parameters when it masks an escaped key', () => {
+    expect(describeError(carrying('/x?%74oken=abcDEF123&page=2')).message).toContain('page=2');
+  });
+
+  it('masks an encoded hook token inside a structured detail that fits in 2 KiB', () => {
+    const { detail } = describeError(new OpenFleetError('row_cap', 'full.', { detail: { url: '/hooks/%61bcDEF123' } }));
+
+    expect(JSON.stringify(detail)).not.toContain('bcDEF123');
+  });
+});
+
+describe('describeError: structured detail keys and boxed values', () => {
+  const detailCarrying = (detail: unknown) => new OpenFleetError('row_cap', 'the store is full.', { detail });
+  const home = homedir();
+
+  it('masks a secret and shortens a path in the KEYS of a small detail', () => {
+    const { detail } = describeError(detailCarrying({ 'Bearer abcDEF123': 'x', [`${home}/private`]: 'y' }));
+
+    expect(detail).toEqual({ 'Bearer ***': 'x', '~/private': 'y' });
+  });
+
+  it('masks a secret in the keys of a detail past 2 KiB', () => {
+    const serialized = JSON.stringify(describeError(detailCarrying({ 'Bearer abcDEF123': 'x', pad: 'p'.repeat(4096) })));
+
+    expect(serialized).not.toContain('abcDEF123');
+  });
+
+  it('masks a boxed String value', () => {
+    const { detail } = describeError(detailCarrying({ value: new String('Bearer abcDEF123') }));
+
+    expect(detail).toEqual({ value: 'Bearer ***' });
+  });
+
+  it('masks a boxed String returned by toJSON', () => {
+    const { detail } = describeError(detailCarrying({ toJSON: () => new String('Bearer abcDEF123') }));
+
+    expect(JSON.stringify(detail)).not.toContain('abcDEF123');
+  });
+
+  it('masks a boxed String past 2 KiB', () => {
+    const serialized = JSON.stringify(describeError(detailCarrying({ value: new String('Bearer abcDEF123'), pad: 'p'.repeat(4096) })));
+
+    expect(serialized).not.toContain('abcDEF123');
+  });
+
+  it('keeps boxed numbers and booleans as their primitives', () => {
+    const { detail } = describeError(detailCarrying({ count: new Number(5), flag: new Boolean(false) }));
+
+    expect(detail).toEqual({ count: 5, flag: false });
+  });
+
+  it('answers a body with no secret and no home path when the redaction meets a key that looks like JSON syntax', () => {
+    const { detail } = describeError(detailCarrying({ [`${home}/x"y`]: `/hooks/abc\\"z` }));
+
+    expect(JSON.stringify(detail)).not.toContain(home);
+  });
+
+  it('keeps the 2 KiB cap on a large detail with hostile keys', () => {
+    const hostileKeys = Object.fromEntries(Array.from({ length: 500 }, (_, index) => [`Bearer key${index}secretvalue`, index]));
+
+    const { detail } = describeError(detailCarrying(hostileKeys));
+
+    expect(Buffer.byteLength(JSON.stringify(detail))).toBeLessThanOrEqual(2048);
+    expect(JSON.stringify(detail)).not.toContain('secretvalue');
+  });
+});
+
+describe('describeError: paths under a symlinked home', () => {
+  let scratchDirectory: string;
+  let realHome: string;
+  let linkedHome: string;
+  const messageOf = (text: string) => describeError(new OpenFleetError('directory_in_use', text)).message;
+
+  beforeEach(() => {
+    scratchDirectory = realpathSync(mkdtempSync(join(tmpdir(), 'of-home-')));
+    realHome = join(scratchDirectory, 'real');
+    linkedHome = join(scratchDirectory, 'link');
+    mkdirSync(realHome);
+    symlinkSync(realHome, linkedHome);
+  });
+  afterEach(() => { rmSync(scratchDirectory, { recursive: true, force: true }); });
+
+  it('shortens a path spelled through the configured OPENFLEET_HOME', () => {
+    vi.stubEnv('OPENFLEET_HOME', linkedHome);
+
+    expect(messageOf(`failed ${linkedHome}/openfleet.db`)).toBe('failed ~/openfleet.db');
+  });
+
+  it('shortens a path spelled through the realpath of the configured OPENFLEET_HOME', () => {
+    vi.stubEnv('OPENFLEET_HOME', linkedHome);
+
+    expect(messageOf(`failed ${realHome}/openfleet.db`)).toBe('failed ~/openfleet.db');
+  });
+
+  it('shortens both spellings of a symlinked user home', () => {
+    vi.stubEnv('HOME', linkedHome);
+
+    expect(messageOf(`${linkedHome}/a and ${realHome}/b`)).toBe('~/a and ~/b');
+  });
+
+  it('shortens a realpath even when the configured home is a relative path that does not exist', () => {
+    vi.stubEnv('OPENFLEET_HOME', 'nowhere/at/all');
+
+    expect(messageOf('kept /opt/other/x')).toBe('kept /opt/other/x');
   });
 });
 
