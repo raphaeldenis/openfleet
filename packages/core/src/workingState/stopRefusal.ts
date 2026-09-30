@@ -44,9 +44,9 @@ export class StopRefusal {
   }
 
   private staleByFleetReason(state: WorkingState): string {
-    const changes = this.fleetChangesSince(state.sessionId, state.updatedAt);
-    const named = changes.slice(0, MAX_CHILDREN_NAMED).map((change) => `${change.name} (${change.kind})`);
-    const hiddenCount = changes.length - named.length;
+    const distinctEntries = distinctChildKindEntries(this.fleetChangesSince(state.sessionId, state.updatedAt));
+    const named = distinctEntries.slice(0, MAX_CHILDREN_NAMED);
+    const hiddenCount = distinctEntries.length - named.length;
     const listing = hiddenCount > 0 ? `${named.join(', ')} and ${hiddenCount} more` : named.join(', ');
     return `Your working state was written before your fleet changed: ${listing}. Before ending the turn, update it with the MCP tool ${UPDATE_TOOL_NAME} so it matches your live children.`;
   }
@@ -58,6 +58,12 @@ export class StopRefusal {
   private fleetChangesSince(sessionId: string, since: string): FleetChange[] {
     return this.deps.workingStates.fleetChanges(sessionId).filter((change) => change.changedAt > since);
   }
+}
+
+/** Returns one "name (kind)" entry per distinct child and kind, most recent change first. */
+function distinctChildKindEntries(changesOldestFirst: FleetChange[]): string[] {
+  const entriesNewestFirst = [...changesOldestFirst].reverse().map((change) => `${change.name} (${change.kind})`);
+  return [...new Set(entriesNewestFirst)];
 }
 
 function sectionsOf(state: WorkingState): WorkingStateSections {
