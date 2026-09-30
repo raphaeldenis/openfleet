@@ -23,9 +23,9 @@ Once a packaged app runs on `~/.openfleet` and port 7331, start dev daemons on t
     rustup target add x86_64-apple-darwin   # once, for the Intel dmg
     pnpm build:dmg                          # Apple Silicon (default)
     pnpm build:dmg --target x86_64-apple-darwin   # Intel
-    pnpm build:dmg:all                      # both, one after the other
+    pnpm build:dmg:all                      # both (Intel first, Apple Silicon last)
 
-`scripts/release/build-local.sh` fetches the pinned official Node binary (`scripts/release/node-version.txt`, checked against nodejs.org's `SHASUMS256.txt`, cached after the first run), bundles the daemon, runs `tauri build` and prints the dmg path (`apps/desktop/src-tauri/target/<target>/release/bundle/dmg/OpenFleet_<version>_aarch64.dmg` or `..._x64.dmg`). Two separate dmgs, one per architecture (not universal): each ships its own Node sidecar and only its own node-pty prebuild, and the build refuses a node-pty prebuild missing or built for the other CPU. It needs the Rust target of the chosen architecture (`rustup target list --installed`). The resources/daemon folder holds the bundle of the last target built. Ad-hoc signed, not notarized, with no updater.
+`scripts/release/build-local.sh` fetches the pinned official Node binary (`scripts/release/node-version.txt`, checked against nodejs.org's `SHASUMS256.txt`, cached after the first run), bundles the daemon, runs `tauri build` and prints the dmg path (`apps/desktop/src-tauri/target/<target>/release/bundle/dmg/OpenFleet_<version>_aarch64.dmg` or `..._x64.dmg`). Two separate dmgs, one per architecture (not universal): each ships its own Node sidecar and only its own node-pty prebuild, and the build refuses a node-pty prebuild missing or built for the other CPU. It needs the Rust target of the chosen architecture (`rustup target list --installed`). The resources/daemon folder holds the bundle of the last target built, which is the Apple Silicon one after `pnpm build:dmg:all`. Ad-hoc signed, not notarized, with no updater.
 
 `tauri-build` requires the Node sidecar and the daemon bundle to exist, so on a fresh clone (or a CI runner) run both before any `cargo` or `tauri` command; `pnpm build:dmg` does it for you:
 
