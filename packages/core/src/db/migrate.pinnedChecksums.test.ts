@@ -32,6 +32,9 @@ const migrationVersionsOnDisk = () =>
 
 const checksumOnDisk = (version: string) => sha256Hex(readFileSync(new URL(`${version}.sql`, migrationsDirectory), 'utf8'));
 
+const immutabilityMessage = (versions: string[]) =>
+  `shipped migrations are immutable: add a NEW NNN_*.sql file instead of editing ${versions.map((version) => `${version}.sql`).join(', ')}`;
+
 describe('shipped migrations', () => {
   it('are pinned: every migration file has its checksum listed in this test, so a new migration must add its own line', () => {
     const unpinnedVersions = migrationVersionsOnDisk().filter((version) => !(version in SHIPPED_MIGRATION_CHECKSUMS));
@@ -42,9 +45,9 @@ describe('shipped migrations', () => {
   it('are unedited: no shipped migration file differs from its pinned checksum', () => {
     const pinnedVersionsOnDisk = migrationVersionsOnDisk().filter((version) => version in SHIPPED_MIGRATION_CHECKSUMS);
 
-    const checksumsOnDisk = Object.fromEntries(pinnedVersionsOnDisk.map((version) => [version, checksumOnDisk(version)]));
+    const editedVersions = pinnedVersionsOnDisk.filter((version) => checksumOnDisk(version) !== SHIPPED_MIGRATION_CHECKSUMS[version]);
 
-    expect(checksumsOnDisk).toEqual(Object.fromEntries(pinnedVersionsOnDisk.map((version) => [version, SHIPPED_MIGRATION_CHECKSUMS[version]])));
+    expect(editedVersions, immutabilityMessage(editedVersions)).toEqual([]);
   });
 
   it('are all still present: no pinned migration file was deleted or renamed', () => {
@@ -52,6 +55,6 @@ describe('shipped migrations', () => {
 
     const missingVersions = Object.keys(SHIPPED_MIGRATION_CHECKSUMS).filter((version) => !versionsOnDisk.has(version));
 
-    expect(missingVersions).toEqual([]);
+    expect(missingVersions, immutabilityMessage(missingVersions)).toEqual([]);
   });
 });
