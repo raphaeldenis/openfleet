@@ -37,7 +37,7 @@ describe('the error registry', () => {
 describe('the wire contract of the registry', () => {
   const KIND_AND_RETRY_BY_CODE: Record<ErrorCode, string> = {
     invalid_body: 'invalid_request/never', invalid_json: 'invalid_request/never', invalid_url: 'invalid_request/never', invalid_branch_name: 'invalid_request/never', unknown_harness: 'invalid_request/never',
-    constraint_violation: 'invalid_request/never', message_too_long: 'invalid_request/never', query_too_long: 'invalid_request/never', outside_own_repository: 'invalid_request/never',
+    constraint_violation: 'invalid_request/never', message_held_for_review: 'invalid_request/never', message_too_long: 'invalid_request/never', query_too_long: 'invalid_request/never', outside_own_repository: 'invalid_request/never',
     unauthorized: 'unauthorized/never',
     not_found: 'not_found/never', project_not_found: 'not_found/never', no_state: 'not_found/never', session_not_found: 'not_found/never',
     note_not_found: 'not_found/never', store_not_found: 'not_found/never', view_not_found: 'not_found/never', row_not_found: 'not_found/never',
