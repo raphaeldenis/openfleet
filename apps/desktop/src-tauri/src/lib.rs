@@ -44,6 +44,7 @@ fn report_issue(app: tauri::AppHandle, daemon: tauri::State<daemon::DaemonState>
     macos_version: issue_report::macos_version(),
     arch: std::env::consts::ARCH.to_string(),
     log_lines: log_file::last_redacted_lines(&log_path, LOG_LINES_IN_REPORT, &secrets),
+    user_home: user_home.to_string_lossy().to_string(),
   };
   issue_report::open_issue_form(&report, |url| issue_report::open_with_macos(url.as_ref()))
 }

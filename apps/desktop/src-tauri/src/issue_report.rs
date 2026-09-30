@@ -16,6 +16,7 @@ pub struct IssueReport {
   pub macos_version: String,
   pub arch: String,
   pub log_lines: Vec<String>,
+  pub user_home: String,
 }
 
 /// Returns the GitHub new-issue URL prefilled with the report, the oldest log lines dropped until it fits `MAX_URL_BYTES`.
@@ -100,6 +101,7 @@ mod tests {
       macos_version: "15.4".to_string(),
       arch: "aarch64".to_string(),
       log_lines,
+      user_home: "/Users/jdoe".to_string(),
     }
   }
 
@@ -184,6 +186,71 @@ mod tests {
 
     assert!(url.len() <= MAX_URL_BYTES);
     assert!(decoded_body(&url).contains(&"x".repeat(MAX_LINE_CHARS)));
+  }
+
+  #[test]
+  fn shortens_the_home_folder_to_a_tilde_in_every_spelling_a_log_line_uses() {
+    let lines = [
+      r#"{"msg":"worktree at /Users/jdoe/work/app"}"#,
+      "opened %2FUsers%2Fjdoe%2Fwork",
+      "opened %2fUsers%2fjdoe%2fwork",
+      r#"{"path":"\/Users\/jdoe\/work"}"#,
+      "cwd=/Users/jdoe",
+      "/Users/jdoe/a and /Users/jdoe/b",
+    ]
+    .map(str::to_string)
+    .to_vec();
+
+    let body = decoded_body(&issue_url(&report_with(lines)));
+
+    assert!(!body.contains("jdoe"), "the body still names the user:\n{body}");
+    assert!(body.contains("worktree at ~/work/app"));
+    assert!(body.contains("cwd=~\n"));
+    assert!(body.contains("~/a and ~/b"));
+  }
+
+  #[test]
+  fn shortens_the_home_folder_in_the_report_fields_too() {
+    let report = IssueReport { daemon_state: "failed at /Users/jdoe/x".to_string(), macos_version: "15.4 /Users/jdoe".to_string(), ..report_with(vec![]) };
+
+    let body = decoded_body(&issue_url(&report));
+
+    assert!(!body.contains("jdoe"), "the body still names the user:\n{body}");
+    assert!(body.contains("Daemon state: failed at ~/x"));
+  }
+
+  #[test]
+  fn shortens_a_home_folder_with_characters_that_json_escapes() {
+    let report = IssueReport { user_home: "/Users/j\"doe".to_string(), ..report_with(vec![r#"{"path":"/Users/j\"doe/x"}"#.to_string()]) };
+
+    let body = decoded_body(&issue_url(&report));
+
+    assert!(!body.contains("doe"), "the body still names the user:\n{body}");
+  }
+
+  #[test]
+  fn leaves_another_folder_that_starts_with_the_home_name_alone() {
+    let body = decoded_body(&issue_url(&report_with(vec!["/Users/jdoe2/x and /Users/jdoe/y".to_string()])));
+
+    assert!(body.contains("/Users/jdoe2/x and ~/y"));
+  }
+
+  #[test]
+  fn cuts_a_line_after_the_home_folder_is_shortened_not_before() {
+    let line = format!("/Users/jdoe/{}", "x".repeat(MAX_LINE_CHARS - 2));
+
+    let body = decoded_body(&issue_url(&report_with(vec![line])));
+
+    assert!(body.contains(&format!("~/{}", "x".repeat(MAX_LINE_CHARS - 2))));
+  }
+
+  #[test]
+  fn shortens_nothing_when_the_home_folder_is_the_root_or_empty() {
+    for user_home in ["", "/"] {
+      let report = IssueReport { user_home: user_home.to_string(), ..report_with(vec!["/usr/bin/x".to_string()]) };
+
+      assert!(decoded_body(&issue_url(&report)).contains("/usr/bin/x"));
+    }
   }
 
   #[test]
