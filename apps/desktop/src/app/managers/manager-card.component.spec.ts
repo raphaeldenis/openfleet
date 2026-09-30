@@ -48,6 +48,13 @@ describe('ManagerCardComponent state overdue chip', () => {
     expect(within(screen.getByTestId('manager-m1-card')).getByTestId('overdue-chip')).toBeTruthy();
   });
 
+  it('user can still reach "Pulse now" next to the chip: the card row wraps instead of clipping its controls', async () => {
+    await renderCard(fakeWorkingStateEvents({ sessions: [session()] }), session());
+
+    expect(screen.getByTestId('manager-m1-pulse')).toBeTruthy();
+    expect(getComputedStyle(screen.getByTestId('manager-m1-card')).flexWrap).toBe('wrap');
+  });
+
   it('user sees no chip on the card of a closed manager', async () => {
     await renderCard(fakeWorkingStateEvents({ sessions: [session({ state: 'closed' })] }), session({ state: 'closed' }));
 

@@ -59,14 +59,14 @@ import { OverdueChipComponent } from '../working-state/overdue-chip.component';
     .sessions { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto }
     .children { list-style: none; padding: 0 0 0 1.6rem; margin: 0 0 0 .75rem; border-left: 1px solid var(--line-2); display: flex; flex-direction: column }
     .row {
-      display: flex; align-items: center; justify-content: space-between; gap: .5rem;
+      display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .125rem .5rem;
       padding: .4rem .6rem; cursor: pointer; width: 100%; border: none; background: none;
       font: inherit; color: inherit; text-align: left; min-width: 0;
     }
     .row.closed { opacity: .5 }
     .row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
-    .row .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
-    .row .meta { display: flex; align-items: center; gap: .375rem; flex: none; font-size: .6875rem; color: var(--faint); font-family: var(--mono) }
+    .row .name { flex: 1 1 6rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+    .row .meta { display: flex; flex-wrap: wrap; align-items: center; gap: .125rem .375rem; flex: 0 1 auto; min-width: 0; font-size: .6875rem; color: var(--faint); font-family: var(--mono) }
     .new-links { display: flex; flex: none; gap: .375rem; padding: .6rem }
     .new-links a { flex: 1; justify-content: center; text-decoration: none }
   `,

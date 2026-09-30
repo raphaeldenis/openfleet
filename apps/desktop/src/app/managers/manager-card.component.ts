@@ -35,7 +35,7 @@ import { PulseNowAction } from './pulse-now';
   `,
   styles: `
     .card {
-      display: flex; align-items: center; gap: .5rem;
+      display: flex; flex-wrap: wrap; align-items: center; gap: .25rem .5rem;
       padding: .125rem .5rem .5rem 1.6rem; font-size: .6875rem; color: var(--mut);
     }
   `,
