@@ -203,7 +203,7 @@ export class NoteRepository {
       `SELECT n.*, snippet(note_fts, 2, '', '', '…', 12) AS snippet
        FROM notes n JOIN note_fts ON note_fts.note_id = n.id
        WHERE note_fts MATCH ? AND n.project_id = ?
-       ORDER BY rank
+       ORDER BY rank, n.id
        LIMIT ?`,
     ).all(escapedQuery, projectId, limit) as unknown as (Row & { snippet: string })[];
     return rows.map((row) => ({ note: toNote(row), snippet: row.snippet }));
