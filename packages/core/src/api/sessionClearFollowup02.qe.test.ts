@@ -278,6 +278,21 @@ describe('QE: a user closing sessions while /clear graces run', () => {
 
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  it('sees a session closed between SessionStart(clear) and SessionEnd(clear) forget the marker: after a reopen a SessionEnd takes the full in-flight timeout', async () => {
+    await rebootOnFakeClock({ clearInFlightTimeoutMs: 600, clearFlushGraceMs: 300 }, { fakesDate: true });
+    const id = await runningSession();
+    await sessionStartByClear(id);
+    await service.close(id);
+    await postJson(`/api/sessions/${id}/reopen`);
+    const launchesAfterReopen = harness.launches.length;
+    await sessionEndByClear(id);
+    await switchModel(id);
+
+    await advance(300);
+
+    expect(harness.launches).toHaveLength(launchesAfterReopen);
+  });
 });
 
 describe('QE: a user closing over HTTP while a flush grace runs', () => {

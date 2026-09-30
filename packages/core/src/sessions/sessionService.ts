@@ -1273,6 +1273,7 @@ export class SessionService {
     this.pendingRelaunches.delete(sessionId);
     this.unfinishedTurns.delete(sessionId);
     this.releaseClearHold(sessionId);
+    this.clearStartedAt.delete(sessionId);
     const session = this.repo.get(sessionId);
     if (!session || session.state === 'closed') { this.idsClosingByParent.delete(sessionId); return; }
     // Revoked, not just marked closed, in the same write as the state change: a subprocess the agent left
