@@ -1,6 +1,7 @@
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { E2E_FLAG_ENV, E2E_FLAG_ON } from '@openfleet/shared';
 import { afterEach, describe, expect, it } from 'vitest';
 import { loadConfig } from './config.js';
 
@@ -27,6 +28,13 @@ describe('loadConfig', () => {
     expect(second.adminToken).toBe(first.adminToken);
     expect(readFileSync(join(home, 'admin.token'), 'utf8')).toBe(first.adminToken);
     expect(first.dbPath).toBe(join(home, 'openfleet.db'));
+  });
+
+  it('leaves the e2e test surface off unless the e2e flag is set to 1 (AUD-18)', () => {
+    const home = makeHome();
+    expect(loadConfig({ OPENFLEET_HOME: home }).e2eEnabled).toBe(false);
+    expect(loadConfig({ OPENFLEET_HOME: home, [E2E_FLAG_ENV]: 'true' }).e2eEnabled).toBe(false);
+    expect(loadConfig({ OPENFLEET_HOME: home, [E2E_FLAG_ENV]: E2E_FLAG_ON }).e2eEnabled).toBe(true);
   });
 
   it('creates a fresh home directory at 0700 (AUD-05)', () => {

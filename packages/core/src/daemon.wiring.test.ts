@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { Server } from 'node:http';
 import { join } from 'node:path';
+import { E2E_FLAG_ENV, E2E_FLAG_ON } from '@openfleet/shared';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -18,10 +19,10 @@ let daemon: Daemon | undefined;
 let adminToken: string;
 let bootedConfig: Config;
 
-async function bootDaemon(configJson?: object, { seedPreviousRun }: { seedPreviousRun?: (config: Config) => void } = {}): Promise<Daemon> {
+async function bootDaemon(configJson?: object, { seedPreviousRun, e2e = true }: { seedPreviousRun?: (config: Config) => void; e2e?: boolean } = {}): Promise<Daemon> {
   const home = tempDirs.make('of-daemon-wiring-');
   if (configJson) writeFileSync(join(home, 'config.json'), JSON.stringify(configJson));
-  const config = loadConfig({ OPENFLEET_HOME: home, OPENFLEET_PORT: '0' });
+  const config = loadConfig({ OPENFLEET_HOME: home, OPENFLEET_PORT: '0', ...(e2e ? { [E2E_FLAG_ENV]: E2E_FLAG_ON } : {}) });
   seedPreviousRun?.(config);
   bootedConfig = config;
   adminToken = config.adminToken;
@@ -47,6 +48,16 @@ async function firstWsFrame(): Promise<{ workingStateMaxAgeMinutes?: number; man
 }
 
 describe('operator gets every daemon feature when the daemon boots from its config', () => {
+  it('offers neither the fake harness nor the fake-output route unless the e2e flag is set (AUD-18)', async () => {
+    await bootDaemon(undefined, { e2e: false });
+
+    const created = await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'Boss', harness: 'fake', emoji: '🤖' }) });
+    const fakeOutput = await api('/api/sessions/any/fake-output', { method: 'POST', body: JSON.stringify({ data: 'x' }) });
+
+    expect(created.ok).toBe(false);
+    expect(fakeOutput.status).toBe(404);
+  });
+
   it('refuses the end of a turn that has no working state', async () => {
     await bootDaemon();
     const session = await createSession();
