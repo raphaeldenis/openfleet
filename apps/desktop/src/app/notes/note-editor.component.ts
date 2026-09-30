@@ -27,18 +27,21 @@ const NODES_PER_CHUNK = 2000;
       >History</button>
     </header>
     <ng-content />
-    <div class="scroller">
-      <article class="doc" data-testid="note-editor-body">
-        @if (blocks().length === 0) {
-          <p class="empty-body" data-testid="note-editor-empty-body">This note is empty.</p>
-        }
-        <ng-container [ngTemplateOutlet]="blockList" [ngTemplateOutletContext]="{ $implicit: blocks() }" />
-        @if (hiddenItemCount() > 0) {
-          <button type="button" class="of-btn of-btn--secondary show-rest" data-testid="note-editor-show-rest" (click)="showNextChunk()">
-            Show the rest ({{ hiddenItemCount() }} more items)
-          </button>
-        }
-      </article>
+    <div class="below-header">
+      <div class="scroller">
+        <article class="doc" data-testid="note-editor-body">
+          @if (blocks().length === 0) {
+            <p class="empty-body" data-testid="note-editor-empty-body">This note is empty.</p>
+          }
+          <ng-container [ngTemplateOutlet]="blockList" [ngTemplateOutletContext]="{ $implicit: blocks() }" />
+          @if (hiddenItemCount() > 0) {
+            <button type="button" class="of-btn of-btn--secondary show-rest" data-testid="note-editor-show-rest" (click)="showNextChunk()">
+              Show the rest ({{ hiddenItemCount() }} more items)
+            </button>
+          }
+        </article>
+      </div>
+      <ng-content select="of-note-history" />
     </div>
 
     <ng-template #blockList let-blocks>
@@ -103,12 +106,14 @@ const NODES_PER_CHUNK = 2000;
     }
     .history-toggle[aria-pressed='true'] { background: var(--active) }
     .history-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
-    .scroller { flex: 1; min-height: 0; overflow: auto; padding: 2rem 3rem; display: flex; justify-content: center }
+    .below-header { flex: 1; min-height: 0; display: flex }
+    .scroller { flex: 1; min-width: 0; min-height: 0; overflow: auto; padding: 2rem 3rem; display: flex; justify-content: center }
     .doc { width: 100%; max-width: 42rem; display: flex; flex-direction: column; gap: .875rem; font-size: .9375rem; line-height: 1.65; text-wrap: pretty; overflow-wrap: anywhere }
     .doc h1, .doc h2, .doc h3, .doc p, .doc ul, .doc ol, .doc blockquote, .doc pre { margin: 0 }
     .doc h1 { font-size: 1.5rem; font-weight: 600; letter-spacing: -.01em }
     .doc h2 { margin-top: .5rem; font-size: 1.0625rem; font-weight: 600 }
     .doc h3 { margin-top: .25rem; font-size: .9375rem; font-weight: 600 }
+    .doc :is(h1, h2, h3) strong { font-weight: inherit }
     .doc ul, .doc ol { padding-left: 1.25rem }
     .doc blockquote { display: flex; flex-direction: column; gap: .5rem; padding-left: .875rem; border-left: 3px solid var(--line); color: var(--mut) }
     .doc code { font-family: var(--mono); font-size: .8125rem; padding: 0 .25rem; border-radius: .25rem; background: var(--sunk) }
