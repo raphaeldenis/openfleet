@@ -726,6 +726,52 @@ mod tests {
   }
 
   #[test]
+  fn masks_a_secret_parameter_nested_inside_another_parameter_or_a_fragment() {
+    let cases = [
+      ("GET /cb?page=a?token=SECRETVAL1", "GET /cb?page=a?token=[redacted]"),
+      ("page=a?token=SECRETVAL1", "page=a?token=[redacted]"),
+      ("GET /cb?next=a?x=b?password=SECRETVAL1", "GET /cb?next=a?x=b?password=[redacted]"),
+      ("page=a#access_token=SECRETVAL1", "page=a#access_token=[redacted]"),
+      ("GET /cb#access_token=SECRETVAL1", "GET /cb#access_token=[redacted]"),
+      ("GET /cb#state=1&access_token=SECRETVAL1", "GET /cb#state=1&access_token=[redacted]"),
+      ("#token=SECRETVAL1", "#token=[redacted]"),
+      ("GET /x?password=ab?cdSECRETVAL1", "GET /x?password=[redacted]"),
+      ("GET /x?page=a?b=c?d=e?f=g?h=i?j=SECRETVAL1", "GET /x?page=[redacted]"),
+    ];
+
+    for (text, expected) in cases {
+      assert_eq!(redact(text, &[]), expected);
+    }
+  }
+
+  #[test]
+  fn keeps_the_parameters_and_fragments_that_hold_no_secret() {
+    for text in ["GET /docs#section=intro", "GET /x?a=1?b=2", "GET /x?page=a#top", "see issue #42 and ?q=tokenless"] {
+      assert_eq!(redact(text, &[]), text);
+    }
+  }
+
+  #[test]
+  fn masks_the_token_behind_a_bearer_prefix_written_more_than_once() {
+    let cases = [
+      ("Authorization: Bearer Bearer SECRETVAL1", "Authorization: Bearer [redacted]"),
+      ("Authorization: bearer:BEARER=Bearer SECRETVAL1", "Authorization: bearer [redacted]"),
+      ("Authorization: Bearer%20Bearer%20SECRETVAL1", "Authorization: Bearer [redacted]"),
+    ];
+
+    for (text, expected) in cases {
+      assert_eq!(redact(text, &[]), expected);
+    }
+    assert_eq!(redact("BearerAuth failed, a Bearer", &[]), "BearerAuth failed, a Bearer");
+  }
+
+  #[test]
+  fn masks_a_url_password_holding_a_raw_at_sign_up_to_the_last_at_sign_of_the_authority() {
+    assert_eq!(redact("connect https://u:p@ssSECRETVAL1@host/x failed", &[]), "connect https://[redacted]@host/x failed");
+    assert_eq!(redact("GET https://host/users/a@b", &[]), "GET https://host/users/a@b");
+  }
+
+  #[test]
   fn keeps_the_other_query_parameters() {
     assert_eq!(redact("GET /x?token=t0k3nVALUE&page=2", &[]), "GET /x?token=[redacted]&page=2");
     assert_eq!(redact("GET /x?page=2&sort=asc", &[]), "GET /x?page=2&sort=asc");
@@ -758,7 +804,8 @@ mod tests {
     const GENEROUS_CEILING: Duration = Duration::from_secs(20);
     let units = [
       "?", "%", "%25", "/", "Bearer ", "/hooks/", "a", "&", "=", " ", "?a=%25/hooks/Bearer &Basic ", "://", "Basic ", "%2Fhooks%2F", "token=", "a=%3D",
-      "Bearer", "%42earer", "Basic/", "Basic+", "bearerx", "Authorization: Basic",
+      "Bearer", "%42earer", "Basic/", "Basic+", "bearerx", "Authorization: Basic", "?a=", "page=a?", "a=?a=", "#a=", "a=#a=", "page=%25?", "a=%2F?#", "token=a?",
+      "Bearer Bearer ", "Bearer Bearer", "Bearer %42earer ", "://a@", "://a@@", "://@", "://a@a/",
     ];
     let secrets = vec!["s3cr3t-admin-token".to_string()];
     let fastest_redaction_of = |unit: &str, size: usize| {
@@ -778,8 +825,7 @@ mod tests {
       let time_at_large_input = fastest_redaction_of(unit, LARGE_INPUT);
       assert!(time_at_large_input < time_at_small_input * 8, "{unit:?}: 4x the input took {time_at_large_input:?} against {time_at_small_input:?}");
 
-      let time_at_one_mebibyte = fastest_redaction_of(unit, MEBIBYTE);
-      assert!(time_at_one_mebibyte < GENEROUS_CEILING, "{unit:?} x 1 MiB took {time_at_one_mebibyte:?}");
+      let time_at_one_mebibyte = fastest_redaction_of(unit, MEBIBYTE);      assert!(time_at_one_mebibyte < GENEROUS_CEILING, "{unit:?} x 1 MiB took {time_at_one_mebibyte:?}");
     }
   }
 
