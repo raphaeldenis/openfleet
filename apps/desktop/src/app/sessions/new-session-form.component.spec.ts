@@ -991,7 +991,7 @@ describe('NewSessionFormComponent', () => {
   describe('create errors', () => {
     it.each([
       ['invalid_body', 400, 'rejected these values'],
-      ['invalid_branch_name', 400, 'start with a letter, digit, dot or underscore, and avoid “..”'],
+      ['invalid_branch_name', 400, 'use up to 250 letters, digits, dots, dashes, underscores or slashes, start with a letter, digit or underscore, and avoid “..”, “//”, a trailing “.”, a part starting with “.” and the “.lock” ending'],
       ['worktree_exists', 409, 'A folder for this branch already exists'],
       ['internal_error', 500, 'internal error'],
       ['daemon_shutting_down', 503, 'shutting down'],

@@ -62,10 +62,48 @@ describe('POST /api/sessions with repoPath and branchName: worktree failures', (
     });
   });
 
-  it('answers 400 invalid_branch_name for a well-formed branch name longer than 255 characters', async () => {
-    const { status, text } = await createSessionInWorktree('a'.repeat(256));
+  it('lets a branch name of 250 characters through to worktree creation', async () => {
+    const { status, text } = await createSessionInWorktree('a'.repeat(250));
+
+    expect({ status, error: JSON.parse(text).error }).toEqual({ status: 500, error: 'internal_error' });
+  });
+
+  it('answers 400 invalid_branch_name for a well-formed branch name of 251 characters, which git cannot lock', async () => {
+    const { status, text } = await createSessionInWorktree('a'.repeat(251));
 
     expect({ status, error: JSON.parse(text).error }).toEqual({ status: 400, error: 'invalid_branch_name' });
+  });
+
+  it.each([
+    ['a trailing dot', 'x.'],
+    ['a .lock ending', 'x.lock'],
+    ['a .lock ending on a path component', 'x.lock/y'],
+    ['a component starting with a dot', 'x/.hidden'],
+    ['a leading dot', '.hidden'],
+    ['a trailing slash', 'x/'],
+    ['an empty component', 'x//y'],
+    ['a leading slash', '/x'],
+    ['consecutive dots', 'x..y'],
+    ['a space', 'x y'],
+    ['a tilde', 'x~1'],
+    ['a caret', 'x^'],
+    ['a colon', 'x:y'],
+    ['a question mark', 'x?'],
+    ['an asterisk', 'x*'],
+    ['an opening bracket', 'x[y'],
+    ['a backslash', 'x\\y'],
+    ['an at-brace sequence', 'x@{y'],
+    ['a control character', 'x\u0007y'],
+  ])('answers 400 invalid_branch_name for %s', async (_label, branchName) => {
+    const { status, text } = await createSessionInWorktree(branchName);
+
+    expect({ status, error: JSON.parse(text).error }).toEqual({ status: 400, error: 'invalid_branch_name' });
+  });
+
+  it.each(['feature/x-1', 'v1.2.3', '_private', 'a.b/c.d'])('lets the well-formed branch name %s through to worktree creation', async (branchName) => {
+    const { status, text } = await createSessionInWorktree(branchName);
+
+    expect({ status, error: JSON.parse(text).error }).toEqual({ status: 500, error: 'internal_error' });
   });
 
   it('answers 400 invalid_branch_name within a second for a branch name of 900 000 question marks', async () => {
