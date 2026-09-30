@@ -192,9 +192,9 @@ describe('a call seen by both sources folds once, whichever arrives first', () =
 
   it('does not bring a deleted task back nor revert a status when a hook arrives late for an older call', () => {
     const fold = foldedFrom(linesOf(10, 23));
-    const lateHooks = callsDeliveredByHookFrom(linesOf(10, 23));
+    const hooksOfTheThreeCreatesAndTheFirstUpdate = callsDeliveredByHookFrom(linesOf(10, 23)).slice(0, 4);
 
-    lateHooks.forEach((call) => foldHookPayload(fold, call));
+    hooksOfTheThreeCreatesAndTheFirstUpdate.forEach((call) => foldHookPayload(fold, call));
 
     expect(rowsOf(fold)).toEqual(['1:completed:Review pull request', '2:pending:Update documentation']);
   });
@@ -210,6 +210,15 @@ describe('a call seen by both sources folds once, whichever arrives first', () =
     foldHookPayload(fold, completion);
     foldLines(fold, updateLines('u-completed', '1', 'completed'));
     foldLines(fold, updateLines('u-completed', '1', 'completed'));
+
+    expect(rowsOf(fold)).toEqual(['1:pending:A']);
+  });
+
+  it('still folds a call from the transcript when the hook delivered it without a usable result: a dropped call is not remembered', () => {
+    const fold = newFold();
+    foldHookPayload(fold, hookCall('TaskCreate', 'c1', { subject: 'A' }, { task: { subject: 'A' } }));
+
+    foldLines(fold, createLines('c1', '1', 'A'));
 
     expect(rowsOf(fold)).toEqual(['1:pending:A']);
   });
@@ -453,7 +462,7 @@ describe('text normalisation', () => {
   });
 
   it('masks a provider key that straddles the 200-character cut: the mask runs before the cut', () => {
-    const text = normalisedTodoText(`${'a'.repeat(180)} sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWxYz`);
+    const text = normalisedTodoText(`${'a'.repeat(176)} sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWxYz`);
 
     expect(text).not.toContain('AbCdEf');
     expect(text.length).toBeLessThanOrEqual(MAX_TODO_TEXT);
@@ -474,7 +483,7 @@ describe('text normalisation', () => {
   it('drops the row of a TaskCreate whose subject is empty after normalisation', () => {
     const fold = newFold();
 
-    foldHookPayload(fold, hookCall('TaskCreate', 'c1', { subject: '‮ \u0000 ' }, { task: { id: '1' } }));
+    foldHookPayload(fold, hookCall('TaskCreate', 'c1', { subject: `${String.fromCodePoint(0x202e)} \n ` }, { task: { id: '1' } }));
 
     expect(snapshot(fold).items).toEqual([]);
   });
