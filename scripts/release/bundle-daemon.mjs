@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // Bundles the daemon into a self-contained folder: daemon.mjs (launcher), daemon.bundle.mjs, migrations/ and node_modules/node-pty.
+// A non-empty --out is only cleared when it holds this script's .openfleet-daemon-bundle marker; an older unmarked bundle folder is refused once and must be removed by hand.
 // Usage: node scripts/release/bundle-daemon.mjs [--target aarch64-apple-darwin|x86_64-apple-darwin] [--out <dir>] [--tauri-conf <file>] [--node-pty-dir <dir>]
 import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
