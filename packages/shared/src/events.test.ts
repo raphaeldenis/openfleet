@@ -4,6 +4,7 @@ import { closeReasonOfExitCode } from './events.js';
 import type { ManagerView } from './managers.js';
 import type { ServerEvent } from './events.js';
 import type { Session } from './session.js';
+import type { SessionTodos, TodoSummary } from './todos.js';
 
 // Type-only pins: these ServerEvent variants and the Session field they ride on have no
 // runtime behaviour of their own in this task (nothing constructs or parses them yet), so a
@@ -40,6 +41,14 @@ describe('ServerEvent', () => {
       exitCode?: number;
       reason?: 'launch_failed' | 'resume_timeout' | 'harness_exit' | 'closed_by_user' | 'daemon_shutdown';
     }>();
+  });
+
+  it('announces a session todo list change with the full SessionTodos', () => {
+    expectTypeOf<Extract<ServerEvent, { type: 'session.todos' }>>().toEqualTypeOf<{ type: 'session.todos'; todos: SessionTodos }>();
+  });
+
+  it('carries optional todo summaries on a snapshot, absent when the daemon has no todo tracker', () => {
+    expectTypeOf<Extract<ServerEvent, { type: 'snapshot' }>['todoSummaries']>().toEqualTypeOf<TodoSummary[] | undefined>();
   });
 
   it('announces a session update (rename) with the full updated Session', () => {

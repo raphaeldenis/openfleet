@@ -56,8 +56,29 @@ const maskingSecretParameters = (parameter: string, prefix: string, key: string,
   return isSecretParameter ? `${prefix}${key}=${MASK}` : parameter;
 };
 
+// Credentials that identify themselves by their format, whatever surrounds them: provider keys, JWTs, and PEM private keys (up to their footer, or to the end of a cut text).
+const WELL_KNOWN_CREDENTIAL = new RegExp(
+  [
+    '\\bsk-[A-Za-z0-9_-]{20,}',
+    '\\bgh[pousr]_[A-Za-z0-9]{36,}',
+    '\\bgithub_pat_[A-Za-z0-9_]{50,}',
+    '\\b(?:AKIA|ASIA)[0-9A-Z]{16}\\b',
+    // A lookbehind, not `\b`: `-` is in the class, so `\b` would restart a scan after every `-eyJ` of one run (quadratic).
+    '(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{5,}\\.eyJ[A-Za-z0-9_-]{5,}\\.[A-Za-z0-9_-]{5,}',
+    '\\bxox[abprs]-[A-Za-z0-9-]{10,}',
+    '\\bxapp-[A-Za-z0-9-]{10,}',
+    '\\bAIza[0-9A-Za-z_-]{35}',
+    '\\bnpm_[A-Za-z0-9]{36}',
+    '\\bglpat-[A-Za-z0-9_-]{20,}',
+    '\\b[sr]k_live_[A-Za-z0-9]{20,}',
+    '-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----[\\s\\S]*?(?:-----END [A-Z ]*PRIVATE KEY(?: BLOCK)?-----|$)',
+  ].join('|'),
+  'g',
+);
+
 export function maskedSecrets(text: string): string {
   return text
+    .replace(WELL_KNOWN_CREDENTIAL, MASK)
     .replace(BEARER_TOKEN, `Bearer ${MASK}`)
     .replace(AUTHORIZED_BASIC_CREDENTIAL, `$1Basic ${MASK}`)
     .replace(BASIC_CREDENTIAL, `Basic ${MASK}`)
@@ -69,5 +90,20 @@ export function maskedSecrets(text: string): string {
 // The cut fell between `://` and the `@` that ends the credentials, so the `@` the rule above needs is gone.
 const URL_CREDENTIALS_CUT_BY_THE_HEAD = /(:\/\/)[^\s/@"'`]+$/;
 
+// A well-known credential the cut left under its rule's minimum length: only its prefix and its first characters remain.
+const WELL_KNOWN_CREDENTIAL_CUT_BY_THE_HEAD =
+  /\b(?:sk-|gh[pousr]_|github_pat_|AKIA|ASIA|eyJ|xox[abprs]-|xapp-|AIza|npm_|glpat-|[sr]k_live_)[A-Za-z0-9_.-]*$/;
+
+const CREDENTIAL_CHARACTER = /[A-Za-z0-9_.-]/;
+const LONGEST_CUT_CREDENTIAL_TAIL = 512;
+
+// Only the final run of credential characters can hold a cut credential: testing just that tail keeps the anchored rule linear.
+const maskingCutWellKnownCredential = (head: string): string => {
+  let tailStart = head.length;
+  const earliestTailStart = Math.max(0, head.length - LONGEST_CUT_CREDENTIAL_TAIL);
+  while (tailStart > earliestTailStart && CREDENTIAL_CHARACTER.test(head.charAt(tailStart - 1))) tailStart -= 1;
+  return head.slice(0, tailStart) + head.slice(tailStart).replace(WELL_KNOWN_CREDENTIAL_CUT_BY_THE_HEAD, MASK);
+};
+
 export const maskingCutCredential = (head: string): string =>
-  head.replace(CREDENTIAL_CUT_BY_THE_HEAD, `$1${MASK}`).replace(URL_CREDENTIALS_CUT_BY_THE_HEAD, `$1${MASK}`);
+  maskingCutWellKnownCredential(head.replace(CREDENTIAL_CUT_BY_THE_HEAD, `$1${MASK}`).replace(URL_CREDENTIALS_CUT_BY_THE_HEAD, `$1${MASK}`));
