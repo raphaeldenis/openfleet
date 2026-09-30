@@ -1,10 +1,13 @@
+use crate::admin_token::{admin_token_path, admin_token_secrets};
+use crate::log_file::{logs_dir, DaemonLog, DiskFs, RotatingLog, Stream, KEPT_FILES, LOG_FILE_NAME, MAX_LOG_BYTES};
 use crate::path_repair::{repair_path, run_login_shell, PathSource, RepairedPath, LOGIN_SHELL_TIMEOUT};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
+use std::path::Path;
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
@@ -14,6 +17,7 @@ pub const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
 pub const READY_TIMEOUT: Duration = Duration::from_secs(15);
 pub const SLOW_START_EXTRA_BUDGET: Duration = Duration::from_secs(300);
 pub const GRACE_BEFORE_SIGKILL: Duration = Duration::from_secs(12);
+const LOG_FLUSH_TIMEOUT: Duration = Duration::from_secs(1);
 /// A dying daemon's shutdown is bounded by its 10 s guard; the launch waits this long for its port to free.
 pub const SHUTTING_DOWN_DAEMON_WAIT: Duration = Duration::from_secs(15);
 const READY_POLL_INTERVAL: Duration = Duration::from_millis(250);
@@ -191,6 +195,7 @@ struct Inner {
   boot_refusal_line: Option<String>,
   child: Option<RunningChild>,
   spawned_at: Option<Instant>,
+  daemon_log: Option<DaemonLog>,
 }
 
 /// Tauri state: the daemon's status for the webview and the sidecar handle to stop on quit.
@@ -200,7 +205,15 @@ pub struct DaemonState {
 
 impl DaemonState {
   pub fn new() -> Self {
-    Self { inner: Mutex::new(Inner { status: DaemonStatus::starting(), last_stderr_line: None, boot_refusal_line: None, child: None, spawned_at: None }) }
+    Self { inner: Mutex::new(Inner { status: DaemonStatus::starting(), last_stderr_line: None, boot_refusal_line: None, child: None, spawned_at: None, daemon_log: None }) }
+  }
+
+  fn record_daemon_log(&self, daemon_log: DaemonLog) {
+    self.inner.lock().unwrap().daemon_log = Some(daemon_log);
+  }
+
+  fn daemon_log(&self) -> Option<DaemonLog> {
+    self.inner.lock().unwrap().daemon_log.clone()
   }
 
   /// Returns the status as the webview sees it at `now`.
@@ -317,6 +330,13 @@ pub fn stop(app: &AppHandle) {
   }
 }
 
+/// Writes the daemon's last output lines to `daemon.log` and stops the writer; waits at most `LOG_FLUSH_TIMEOUT`. Call it after `stop`.
+pub fn flush_log(app: &AppHandle) {
+  let Some(daemon_log) = app.state::<DaemonState>().daemon_log() else { return };
+  let drained = daemon_log.close_after_output_ends(LOG_FLUSH_TIMEOUT);
+  log::info!("daemon log flushed: {drained}");
+}
+
 /// Takes the child out of the state once and stops it; returns None when there is nothing to stop.
 pub fn stop_daemon(state: &DaemonState, signals: &impl Signals, grace: Duration) -> Option<StopOutcome> {
   let child = state.take_child()?;
@@ -388,28 +408,53 @@ fn spawn_sidecar(app: &AppHandle) -> Result<(), String> {
   let state = app.state::<DaemonState>();
   state.record_spawn(RunningChild::of_sidecar(child), repaired_path, Instant::now());
   let app_for_events = app.clone();
-  tauri::async_runtime::spawn(async move { pipe_daemon_output(app_for_events, events).await });
+  let daemon_log = start_daemon_log(&home);
+  state.record_daemon_log(daemon_log.clone());
+  tauri::async_runtime::spawn(async move { pipe_daemon_output(app_for_events, events, daemon_log).await });
   Ok(())
 }
 
-async fn pipe_daemon_output(app: AppHandle, mut events: tauri::async_runtime::Receiver<CommandEvent>) {
+/// Starts the writer that appends the sidecar's output, redacted, to `<OPENFLEET_HOME or ~/.openfleet>/logs/daemon.log`.
+fn start_daemon_log(user_home: &Path) -> DaemonLog {
+  let openfleet_home = std::env::var("OPENFLEET_HOME").ok();
+  let log_path = logs_dir(openfleet_home.clone(), user_home).join(LOG_FILE_NAME);
+  let token_path = admin_token_path(openfleet_home, user_home);
+  let rotating_log = RotatingLog::open(DiskFs, log_path, MAX_LOG_BYTES, KEPT_FILES);
+  DaemonLog::start(rotating_log, move || Some(admin_token_secrets(&token_path)), unix_seconds_now)
+}
+
+fn unix_seconds_now() -> u64 {
+  SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |elapsed| elapsed.as_secs())
+}
+
+async fn pipe_daemon_output(app: AppHandle, mut events: tauri::async_runtime::Receiver<CommandEvent>, daemon_log: DaemonLog) {
   let state = app.state::<DaemonState>();
   while let Some(event) = events.recv().await {
     match event {
-      CommandEvent::Stdout(bytes) => log::info!("[daemon] {}", String::from_utf8_lossy(&bytes).trim_end()),
+      CommandEvent::Stdout(bytes) => {
+        let chunk = String::from_utf8_lossy(&bytes).to_string();
+        log::info!("[daemon] {}", chunk.trim_end());
+        daemon_log.record(Stream::Out, &chunk);
+      }
       CommandEvent::Stderr(bytes) => {
         let chunk = String::from_utf8_lossy(&bytes).to_string();
         log::warn!("[daemon] {}", chunk.trim_end());
+        daemon_log.record(Stream::Err, &chunk);
         state.on_stderr(&chunk);
       }
-      CommandEvent::Error(reason) => log::error!("[daemon] {reason}"),
+      CommandEvent::Error(reason) => {
+        log::error!("[daemon] {reason}");
+        daemon_log.record(Stream::Err, &format!("sidecar error: {reason}"));
+      }
       CommandEvent::Terminated(payload) => {
         log::warn!("[daemon] exited with code {:?}", payload.code);
+        daemon_log.record(Stream::Err, &format!("the daemon exited with code {:?}", payload.code));
         state.on_terminated(payload.code);
       }
       _ => {}
     }
   }
+  daemon_log.mark_output_ended();
 }
 
 #[cfg(test)]
