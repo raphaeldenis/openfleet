@@ -263,6 +263,17 @@ describe('user sees a notice for the sessions the settings watch and for no othe
     expect(noticeOf(child)).toBeUndefined();
   });
 
+  it('counts a manager that has a parent as a manager, not as a child', async () => {
+    const topManager = await createManager();
+    const subManager = (await managers.createManagerSession({ directory: '/tmp', name: 'Sub', harness: 'fake', emoji: '🤖', parentId: topManager, manager: { childrenCap: 3, mission: 'mission' } })).id;
+    contextGrowsTo(subManager, 500_000);
+
+    await stop(subManager);
+
+    expect(sessionOf(subManager).parentId).toBe(topManager);
+    expect(noticeOf(subManager)).toBe(500_000);
+  });
+
   it('raises no notice for a plain session that has no parent and no manager row', async () => {
     const plain = await createPlainSession();
     contextGrowsTo(plain, 500_000);
