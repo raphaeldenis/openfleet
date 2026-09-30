@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -85,6 +85,79 @@ describe('set-version', () => {
   it('refuses without writing anything when one file has no version to replace', () => {
     write(FILES.shared, '{\n  "name": "@openfleet/shared"\n}\n');
     const before = readAll();
+
+    const result = runSetVersion('0.2.0');
+
+    expect(result.status).not.toBe(0);
+    expect(readAll()).toEqual(before);
+  });
+
+  it.each(['1.0.0+abc', '1.0.0-beta.1', '1.0.0-rc.1+build.5', '0.0.0'])('accepts "%s" and leaves every file parseable', (validVersion) => {
+    const result = runSetVersion(validVersion);
+
+    expect(result.status).toBe(0);
+    for (const jsonFile of [FILES.tauriConf, FILES.core, FILES.shared, FILES.desktop]) expect(JSON.parse(read(jsonFile)).version).toBe(validVersion);
+    expect(read(FILES.cargoToml)).toContain(`version = "${validVersion}"`);
+    expect(read(FILES.cargoLock)).toContain(`name = "app"\nversion = "${validVersion}"`);
+  });
+
+  it.each(['1.2.3\n', '1.2.3\n"evil": 1', '1.2.3"\nname = "x', '١.٢.٣', '1.2.3-١', '../../etc/passwd', '$1', '$&', ' 1.2.3', '1.2.3 '])('refuses the hostile version %j and writes nothing', (hostileVersion) => {
+    const before = readAll();
+
+    const result = runSetVersion(hostileVersion);
+
+    expect(result.status).not.toBe(0);
+    expect(readAll()).toEqual(before);
+  });
+
+  it('refuses without writing anything when a file is missing', () => {
+    rmSync(join(root, FILES.cargoLock));
+    const before = [FILES.tauriConf, FILES.cargoToml, FILES.core, FILES.shared, FILES.desktop].map(read);
+
+    const result = runSetVersion('0.2.0');
+
+    expect(result.status).not.toBe(0);
+    expect([FILES.tauriConf, FILES.cargoToml, FILES.core, FILES.shared, FILES.desktop].map(read)).toEqual(before);
+  });
+
+  it('refuses without writing anything when Cargo.toml has a dependency version but no package version', () => {
+    write(FILES.cargoToml, '[package]\nname = "app"\nedition = "2021"\n\n[dependencies.serde]\nversion = "1.0"\n');
+    const before = readAll();
+
+    const result = runSetVersion('0.2.0');
+
+    expect(result.status).not.toBe(0);
+    expect(readAll()).toEqual(before);
+  });
+
+  it('changes only the top-level version of a package.json that also has a nested version', () => {
+    const nested = '{\n  "name": "@openfleet/core",\n  "pnpm": {\n    "version": "9.9.9"\n  },\n  "version": "0.1.0"\n}\n';
+    write(FILES.core, nested);
+
+    runSetVersion('0.2.0');
+
+    expect(JSON.parse(read(FILES.core))).toEqual({ name: '@openfleet/core', pnpm: { version: '9.9.9' }, version: '0.2.0' });
+  });
+
+  it('does not touch the lockfile entry of a crate whose name merely starts with the app crate name', () => {
+    runSetVersion('0.2.0');
+
+    expect(read(FILES.cargoLock)).toContain('name = "app-extras"\nversion = "9.9.9"');
+  });
+
+  it('follows the crate name declared in Cargo.toml when updating Cargo.lock', () => {
+    write(FILES.cargoToml, CARGO_TOML.replace('name = "app"', 'name = "fleet-desktop"'));
+    write(FILES.cargoLock, `${CARGO_LOCK}\n[[package]]\nname = "fleet-desktop"\nversion = "0.1.0"\n`);
+
+    runSetVersion('0.2.0');
+
+    expect(read(FILES.cargoLock)).toContain('name = "fleet-desktop"\nversion = "0.2.0"');
+    expect(read(FILES.cargoLock)).toContain('name = "app"\nversion = "0.1.0"');
+  });
+
+  it.fails('leaves every file untouched when the last file cannot be written', () => {
+    const before = readAll();
+    chmodSync(join(root, FILES.cargoLock), 0o444);
 
     const result = runSetVersion('0.2.0');
 
