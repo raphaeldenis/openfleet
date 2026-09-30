@@ -39,7 +39,7 @@ const BYTE_BUDGET = {
   searchNotes: 3090,
   describeDataStore: 1540,
   queryDataStore: 38600,
-  queryDataStoreColumnar: 21200,
+  queryDataStoreColumnar: 11900,
   getWorkingState: 160,
 };
 const NOTE_COUNT = 20;
@@ -488,16 +488,19 @@ describe('MCP tool results are compact', () => {
         const addColumn = async (display_name: string, column_type: string, extra: object = {}) => parsed(await call('add_data_store_column', { store: store.id, display_name, column_type, ...extra })).id as string;
         const textId = await addColumn('title', 'text');
         const numberId = await addColumn('points', 'number');
-        const checkboxId = await addColumn('done', 'checkbox');
+        const dateId = await addColumn('due', 'date');
+        const jsonId = await addColumn('extra', 'json');
         const selectId = await addColumn('status', 'select', { options: [{ id: 'todo', label: 'todo' }, { id: 'done', label: 'done' }] });
         const rows = Array.from({ length: rowCount }, (_, index) => ({
           [textId]: index % 3 === 0 ? `héllo wörld 🚀 ${index}` : `plain ${index}`,
           ...(index % 5 === 0 ? {} : { [numberId]: index }),
-          [checkboxId]: index % 2 === 0,
+          [dateId]: '2026-09-30',
+          [jsonId]: { nested: [index, null, 'ü'] },
           ...(index % 4 === 0 ? {} : { [selectId]: 'todo' }),
         }));
         if (rowCount > 0) await call('insert_data_store_rows', { store: store.id, rows });
-        return { storeId: store.id as string, columnIds: [textId, numberId, checkboxId, selectId] };
+        const columnIds = [textId, numberId, dateId, jsonId, selectId] as [string, string, string, string, string];
+        return { storeId: store.id as string, columnIds };
       }
 
       it('agent can query fifty rows in columnar format within the columnar byte budget, columns named once', async () => {
@@ -586,8 +589,7 @@ describe('MCP tool results are compact', () => {
       it('agent gets the same rows, count and truncation in both formats when the result passes the byte budget', async () => {
         const store = parsed(await call('create_data_store', { display_name: 'huge' }));
         const bodyId = parsed(await call('add_data_store_column', { store: store.id, display_name: 'body', column_type: 'text' })).id;
-        const rows = Array.from({ length: HUGE_ROW_COUNT }, (_, index) => ({ [bodyId]: `${index % 10}`.repeat(HUGE_CELL_BYTES) }));
-        await call('insert_data_store_rows', { store: store.id, rows });
+        for (let index = 0; index < HUGE_ROW_COUNT; index += 1) await call('insert_data_store_rows', { store: store.id, rows: [{ [bodyId]: `${index % 10}`.repeat(HUGE_CELL_BYTES) }] });
 
         const asObjects = parsed(await call('query_data_store', { store: store.id, limit: HUGE_ROW_COUNT }));
         const columnar = parsed(await columnarQuery({ store: store.id, limit: HUGE_ROW_COUNT }));
@@ -603,8 +605,7 @@ describe('MCP tool results are compact', () => {
         const store = parsed(await call('create_data_store', { display_name: 'huge' }));
         const bodyId = parsed(await call('add_data_store_column', { store: store.id, display_name: 'body', column_type: 'text' })).id;
         const tagId = parsed(await call('add_data_store_column', { store: store.id, display_name: 'tag', column_type: 'text' })).id;
-        const rows = Array.from({ length: HUGE_ROW_COUNT }, (_, index) => ({ [bodyId]: 'x'.repeat(HUGE_CELL_BYTES), [tagId]: `tag ${index}` }));
-        await call('insert_data_store_rows', { store: store.id, rows });
+        for (let index = 0; index < HUGE_ROW_COUNT; index += 1) await call('insert_data_store_rows', { store: store.id, rows: [{ [bodyId]: 'x'.repeat(HUGE_CELL_BYTES), [tagId]: `tag ${index}` }] });
 
         const columnar = parsed(await columnarQuery({ store: store.id, columns: ['tag'], limit: HUGE_ROW_COUNT }));
         const asObjects = parsed(await call('query_data_store', { store: store.id, columns: ['tag'], limit: HUGE_ROW_COUNT }));

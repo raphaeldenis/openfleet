@@ -18,7 +18,25 @@ export const columnView = (column: DsColumn) => ({
   ...(column.autoValue ? { autoValue: column.autoValue } : {}),
 });
 
-export const rowView = (row: DsRow) => ({ id: row.id, data: row.data, updatedAt: row.updatedAt });
+export interface RowProjection {
+  /** The column ids a row keeps, in order; undefined keeps the whole row. */
+  columnIds?: string[];
+  includeUpdatedAt: boolean;
+}
+
+/** A row as an object keyed by column id, limited to the projected columns. */
+export const rowView = (row: DsRow, { columnIds, includeUpdatedAt }: RowProjection) => ({
+  id: row.id,
+  data: columnIds ? Object.fromEntries(columnIds.filter((columnId) => columnId in row.data).map((columnId) => [columnId, row.data[columnId]])) : row.data,
+  ...(includeUpdatedAt ? { updatedAt: row.updatedAt } : {}),
+});
+
+/** A row as `[rowId, updatedAt?, ...one cell per column id]`, an empty cell being null. */
+export const columnarRowView = (row: DsRow, { columnIds, includeUpdatedAt }: Required<RowProjection>) => [
+  row.id,
+  ...(includeUpdatedAt ? [row.updatedAt] : []),
+  ...columnIds.map((columnId) => row.data[columnId] ?? null),
+];
 
 export const rowChangeView = (entry: DsRowHistoryEntry) => ({
   actorKind: entry.actorKind, actorLabel: entry.actorLabel, change: entry.change, createdAt: entry.createdAt,
