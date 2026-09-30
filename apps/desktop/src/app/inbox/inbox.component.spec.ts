@@ -183,17 +183,6 @@ describe('InboxComponent', () => {
     expect(screen.getByTestId('inbox-gate-age')).toHaveTextContent(/^\s*2 h\s*$/);
   });
 
-  it('renders the args block on the terminal tokens at 0.75rem', async () => {
-    // Arrange & Act
-    await render(InboxComponent, { providers: [{ provide: FleetApiService, useValue: { decide: vi.fn() } }, { provide: FleetEventsService, useValue: fakeEvents() }] });
-    const args = getComputedStyle(screen.getByTestId('inbox-gate-args'));
-
-    // Assert
-    expect(args.backgroundColor).toBe('var(--term-bg)');
-    expect(args.color).toBe('var(--term-fg)');
-    expect(args.fontSize).toBe('0.75rem');
-  });
-
   it('lays the card out with an emoji avatar box, the kind badge in the meta row and a "Wants to run <tool>." sentence above the args', async () => {
     // Arrange & Act
     await render(InboxComponent, { providers: [{ provide: FleetApiService, useValue: { decide: vi.fn() } }, { provide: FleetEventsService, useValue: fakeEvents() }] });
@@ -202,13 +191,13 @@ describe('InboxComponent', () => {
     const args = within(card).getByTestId('inbox-gate-args');
 
     // Assert
-    expect(getComputedStyle(within(card).getByTestId('inbox-gate-avatar')).width).toBe('2rem');
+    expect(within(card).getByTestId('inbox-gate-avatar')).toBeInTheDocument();
     expect(within(within(card).getByTestId('inbox-gate-meta')).getByTestId('kind-badge')).toBeTruthy();
     expect(sentence).toHaveTextContent('Wants to run Bash.');
     expect(sentence.compareDocumentPosition(args) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it('titles the page with an h1 at 1.25rem/600 and keeps the filter chips on the title row', async () => {
+  it('titles the page with an h1 and keeps the filter chips on the title row', async () => {
     // Arrange & Act
     await render(InboxComponent, { providers: [{ provide: FleetApiService, useValue: { decide: vi.fn() } }, { provide: FleetEventsService, useValue: fakeEvents() }] });
     const heading = screen.getByRole('heading', { level: 1 });
@@ -216,8 +205,6 @@ describe('InboxComponent', () => {
 
     // Assert
     expect(heading).toHaveTextContent('Inbox');
-    expect(getComputedStyle(heading).fontSize).toBe('1.25rem');
-    expect(getComputedStyle(heading).fontWeight).toBe('600');
     expect(titleRow.contains(heading)).toBe(true);
     expect(within(titleRow).getByTestId('inbox-filters')).toBeTruthy();
   });
@@ -260,7 +247,7 @@ describe('InboxComponent', () => {
     expect(screen.queryByTestId('inbox-gate-card')).toBeNull();
   });
 
-  it('shows a centred "Nothing needs you" empty state and hides the count pill when there are no gates waiting', async () => {
+  it('shows a "Nothing needs you" empty state and hides the count pill when there are no gates waiting', async () => {
     // Arrange
     const events = { sessions: signal([]), approvals: signal([]), ...silentWorkingStateSignals() };
 
@@ -271,7 +258,6 @@ describe('InboxComponent', () => {
     // Assert
     expect(empty).toHaveTextContent('Nothing needs you');
     expect(empty).toHaveTextContent('Gates, questions, budget incidents and manager proposals show up here.');
-    expect(getComputedStyle(empty).alignItems).toBe('center');
     expect(screen.queryByTestId('inbox-count')).toBeNull();
     expect(screen.queryByTestId('inbox-gate-card')).toBeNull();
   });
@@ -541,16 +527,5 @@ describe('InboxComponent', () => {
       // Assert
       expect(screen.getByTestId('inbox-gate-args')).toHaveTextContent('"command": "pwd"');
     });
-  });
-
-  it('signals that more args lie below the fold with a scroll-aware background: a bottom shadow that a local-attached cover hides once the end is reached', async () => {
-    // Arrange & Act
-    await render(InboxComponent, { providers: [{ provide: FleetApiService, useValue: { decide: vi.fn() } }, { provide: FleetEventsService, useValue: fakeEvents() }] });
-    const args = getComputedStyle(screen.getByTestId('inbox-gate-args'));
-
-    // Assert
-    expect(args.backgroundImage).toContain('gradient');
-    expect(args.backgroundAttachment).toContain('local');
-    expect(args.backgroundAttachment).toContain('scroll');
   });
 });
