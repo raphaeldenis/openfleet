@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
 import { signal } from '@angular/core';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { InboxComponent } from './inbox.component';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
@@ -16,6 +16,10 @@ function fakeEvents(approval: Record<string, unknown> = {}) {
 }
 
 describe('InboxComponent', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it('shows zero-width and bidirectional controls in the session name of a gate as escapes', async () => {
     const name = `Gim${String.fromCharCode(0x200b)}li${String.fromCharCode(0x202e)}x`;
     const events = { ...fakeEvents(), sessions: signal([{ id: 's1', name, emoji: '⚔️', state: 'waiting_permission' }]) };
@@ -303,7 +307,17 @@ describe('InboxComponent', () => {
       expect(copied).toContain('ref 3f9a1c2e');
       expect(copied).toContain('launch_failed');
       expect(copied).toContain('2026-09-30T10:01:00.000Z');
-      vi.unstubAllGlobals();
+    });
+
+    it('copies nothing but those fields, whatever else the envelope carries', async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+      const envelopeWithForeignFields = { ...internalFailure.envelope, hint: 'see /Users/ana/.openfleet', detail: { token: 'Bearer abc123' } };
+      await renderWith([{ ...internalFailure, envelope: envelopeWithForeignFields }]);
+
+      await userEvent.click(screen.getByTestId('inbox-issue-copy-details'));
+
+      expect(writeText.mock.calls[0]![0]).not.toMatch(/bearer|abc123|\/Users\//i);
     });
 
     it('dismisses an item on request', async () => {
@@ -318,6 +332,49 @@ describe('InboxComponent', () => {
       await renderWith([]);
 
       expect(screen.queryByTestId('inbox-issue')).toBeNull();
+    });
+
+    it('does not claim that nothing needs you while an issue is listed', async () => {
+      const events = { sessions: signal([]), approvals: signal([]), ...silentWorkingStateSignals(), backgroundFailures: signal([deliveryFailure]), dismissBackgroundFailure: vi.fn() };
+
+      await render(InboxComponent, { providers: [{ provide: FleetApiService, useValue: { decide: vi.fn() } }, { provide: FleetEventsService, useValue: events }] });
+
+      expect(screen.getByTestId('inbox-issue')).toBeTruthy();
+      expect(screen.queryByText('Nothing needs you')).toBeNull();
+    });
+
+    describe('focus after Dismiss', () => {
+      const secondDeliveryFailure = { ...deliveryFailure, key: 'f3' };
+
+      async function renderWithRealDismissal(failures: unknown[]) {
+        const backgroundFailures = signal(failures);
+        const dismissBackgroundFailure = (key: string) => backgroundFailures.update((all) => all.filter((failure) => (failure as { key: string }).key !== key));
+        const events = { ...fakeEvents(), backgroundFailures, dismissBackgroundFailure };
+        await render(InboxComponent, { providers: [{ provide: FleetApiService, useValue: { decide: vi.fn() } }, { provide: FleetEventsService, useValue: events }] });
+      }
+
+      it('moves to the Dismiss button of the next issue', async () => {
+        await renderWithRealDismissal([deliveryFailure, secondDeliveryFailure]);
+        const [firstDismiss] = screen.getAllByTestId('inbox-issue-dismiss');
+
+        await userEvent.click(firstDismiss!);
+
+        await vi.waitFor(() => {
+          expect(screen.getAllByTestId('inbox-issue')).toHaveLength(1);
+          expect(document.activeElement).toBe(screen.getByTestId('inbox-issue-dismiss'));
+        });
+      });
+
+      it('moves to the Inbox heading when the last issue is dismissed, so a keyboard user does not land on the page body', async () => {
+        await renderWithRealDismissal([deliveryFailure]);
+
+        await userEvent.click(screen.getByTestId('inbox-issue-dismiss'));
+
+        await vi.waitFor(() => {
+          expect(screen.queryByTestId('inbox-issue')).toBeNull();
+          expect(document.activeElement).toBe(screen.getByRole('heading', { name: /inbox/i }));
+        });
+      });
     });
   });
 

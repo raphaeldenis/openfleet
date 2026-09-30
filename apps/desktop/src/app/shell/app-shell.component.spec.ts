@@ -3,10 +3,11 @@ import { RouterTestingHarness } from '@angular/router/testing';
 import { Component, signal } from '@angular/core';
 import { provideRouter, withComponentInputBinding, Router, type Routes } from '@angular/router';
 import { screen } from '@testing-library/angular/zoneless';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { AppShellComponent } from './app-shell.component';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
+import { VersionsService } from '../core/versions.service';
 import type { DaemonIssue, WorkingState } from '@openfleet/shared';
 import { silentWorkingStateSignals, stateOf } from '../working-state/working-state-fixtures';
 import { InboxComponent } from '../inbox/inbox.component';
@@ -53,7 +54,7 @@ const testRoutes: Routes = [
   },
 ];
 
-interface ShellOverrides { connected?: boolean; sessions?: unknown[]; approvals?: unknown[]; workingStates?: WorkingState[]; issues?: DaemonIssue[] }
+interface ShellOverrides { connected?: boolean; sessions?: unknown[]; approvals?: unknown[]; workingStates?: WorkingState[]; issues?: DaemonIssue[]; backgroundFailures?: unknown[] }
 
 function fakeEvents(overrides: ShellOverrides = {}) {
   const workingStates = overrides.workingStates ?? [];
@@ -64,6 +65,7 @@ function fakeEvents(overrides: ShellOverrides = {}) {
     connected: signal(overrides.connected ?? true),
     ...silentWorkingStateSignals(),
     daemonIssues: signal<DaemonIssue[]>(overrides.issues ?? []),
+    backgroundFailures: signal(overrides.backgroundFailures ?? []),
     workingStates: signal<ReadonlyMap<string, WorkingState>>(new Map(workingStates.map((state) => [state.sessionId, state]))),
     workingStatesReported: signal(overrides.workingStates !== undefined),
   };
@@ -223,6 +225,10 @@ describe('AppShellComponent', () => {
       return writeText;
     }
 
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
     it('stays away while the daemon reports no issue', async () => {
       const { root } = await setUp({ issues: [] });
 
@@ -252,7 +258,8 @@ describe('AppShellComponent', () => {
 
     it('copies the ref, the code, the message and the time, and nothing else, with Copy details', async () => {
       const writeText = stubClipboard();
-      const { root } = await setUp({ issues: [stuckDatabase] });
+      const issueWithForeignFields = { ...stuckDatabase, hint: 'see /Users/ana/.openfleet/db', token: 'Bearer abc123' } as DaemonIssue;
+      const { root } = await setUp({ issues: [issueWithForeignFields] });
 
       (root.querySelector('[data-testid="degraded-copy-details"]') as HTMLButtonElement).click();
 
@@ -261,7 +268,44 @@ describe('AppShellComponent', () => {
       expect(copied).toContain('db_stuck');
       expect(copied).toContain('The database is stuck.');
       expect(copied).toContain('2026-09-30T10:00:00.000Z');
-      expect(copied).not.toMatch(/bearer|token|\/Users\//i);
+      expect(copied).not.toMatch(/bearer|abc123|\/Users\//i);
+    });
+
+    it('adds the daemon version to the copied details when it is known', async () => {
+      const writeText = stubClipboard();
+      const { harness, root } = await setUp({ issues: [stuckDatabase] });
+      TestBed.inject(VersionsService).daemonVersion.set('1.4.2');
+      harness.detectChanges();
+
+      (root.querySelector('[data-testid="degraded-copy-details"]') as HTMLButtonElement).click();
+
+      expect(writeText.mock.calls[0]![0]).toContain('daemon: 1.4.2');
+    });
+
+    it('separates the details of two issues with a blank line', async () => {
+      const writeText = stubClipboard();
+      const { root } = await setUp({ issues: [stuckDatabase, { ...stuckDatabase, code: 'hook_fail_open', id: 'aaaaaaaa' }] });
+
+      (root.querySelector('[data-testid="degraded-copy-details"]') as HTMLButtonElement).click();
+
+      const [first, second, ...rest] = (writeText.mock.calls[0]![0] as string).split('\n\n');
+      expect(first).toContain('ref 3f9a1c2e');
+      expect(second).toContain('ref aaaaaaaa');
+      expect(rest).toEqual([]);
+    });
+
+    it('does not double the period of the issue message before the advice', async () => {
+      const { root } = await setUp({ issues: [stuckDatabase] });
+
+      expect(root.querySelector('[data-testid="degraded-banner"]')).toHaveTextContent('The database is stuck — restart it when convenient.');
+    });
+
+    it('says an issue that clears by itself may clear by itself, and does not ask for a restart', async () => {
+      const { root } = await setUp({ issues: [{ ...stuckDatabase, code: 'hook_fail_open' }] });
+
+      const banner = root.querySelector('[data-testid="degraded-banner"]');
+      expect(banner).toHaveTextContent('it may clear by itself');
+      expect(banner).not.toHaveTextContent('restart');
     });
 
     it('lets a keyboard user reach Copy details and confirms the copy', async () => {
@@ -278,6 +322,28 @@ describe('AppShellComponent', () => {
 
       expect(document.activeElement).toBe(button);
       expect(root.querySelector('[data-testid="degraded-copy-details"]')).toBe(button);
+    });
+
+    describe('the Inbox nav item', () => {
+      const backgroundFailure = { key: 'f1', sessionId: 's1', at: '2026-09-30T10:00:00.000Z', envelope: { error: 'delivery_failed', kind: 'unavailable', retry: 'later', message: 'x' } };
+
+      it('carries an issue dot, announced as such, while a background failure is pending', async () => {
+        const { root } = await setUp({ backgroundFailures: [backgroundFailure] });
+
+        expect(root.querySelector('[data-testid="nav-inbox-issue-dot"]')).toHaveAttribute('aria-label', 'Inbox has issues');
+      });
+
+      it('has no dot when nothing failed in the background', async () => {
+        const { root } = await setUp({ backgroundFailures: [] });
+
+        expect(root.querySelector('[data-testid="nav-inbox-issue-dot"]')).toBeNull();
+      });
+
+      it('leaves the count of items needing you to gates and questions', async () => {
+        const { root } = await setUp({ backgroundFailures: [backgroundFailure] });
+
+        expect(root.querySelector('[data-testid="nav-inbox-badge"]')).toBeNull();
+      });
     });
 
     it('disappears once the daemon reports an empty list', async () => {

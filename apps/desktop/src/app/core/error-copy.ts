@@ -1,4 +1,4 @@
-import { ERROR_CODES, HTTP_STATUS_BY_KIND, retryOf, type ErrorCode, type ErrorEnvelope, type ErrorRetry } from '@openfleet/shared';
+import { ERROR_CODES, HTTP_STATUS_BY_KIND, retryOf, type DaemonIssue, type DegradedCode, type ErrorCode, type ErrorEnvelope, type ErrorRetry } from '@openfleet/shared';
 import { ApiError } from './fleet-api.service';
 
 /** What the user was doing when the error came back: it decides the advice ("shorten the mission" vs "shorten the name"). */
@@ -172,10 +172,17 @@ function copyOfUnknownCode(envelope: ErrorEnvelope): string {
   return envelope.hint ? `${message} ${endsWithPeriod(capitalized(envelope.hint))}` : message;
 }
 
-function retryOfError(error: ApiError, code: ErrorCode | undefined): ErrorRetry {
-  if (error.envelope) return error.envelope.retry;
+/** What the copy is built from: the same facts whether the failure came as a response or as a websocket envelope. */
+interface Failure {
+  code: string | undefined;
+  status: number;
+  envelope: ErrorEnvelope | undefined;
+}
+
+function retryOfFailure({ envelope, status }: Failure, code: ErrorCode | undefined): ErrorRetry {
+  if (envelope) return envelope.retry;
   if (code) return retryOf(code);
-  const isDaemonSideFailure = error.status === 0 || error.status >= 500;
+  const isDaemonSideFailure = status === 0 || status >= 500;
   return isDaemonSideFailure ? 'later' : 'never';
 }
 
@@ -184,20 +191,38 @@ function withRef(text: string, envelope: ErrorEnvelope | undefined): ErrorCopy {
   return ref ? { text: `${text} (ref ${ref})`, ref } : { text };
 }
 
-function copyOfApiError(error: ApiError, { action }: ErrorContext): ErrorCopy {
-  const code = isKnownCode(error.code) ? error.code : undefined;
-  const retry = retryOfError(error, code);
+function copyOfFailure(failure: Failure, { action }: ErrorContext): ErrorCopy {
+  const { envelope } = failure;
+  const code = isKnownCode(failure.code) ? failure.code : undefined;
+  const retry = retryOfFailure(failure, code);
   const textOfAction = code ? COPY_BY_ACTION[action][code] : undefined;
-  if (textOfAction) return withRef(textOfAction, error.envelope);
-  if (code) return withRef(WORDS_OF_RETRY[retry](COPY_BY_CODE[code]), error.envelope);
-  if (error.envelope) return withRef(copyOfUnknownCode(error.envelope), error.envelope);
+  if (textOfAction) return withRef(textOfAction, envelope);
+  if (code) return withRef(WORDS_OF_RETRY[retry](COPY_BY_CODE[code]), envelope);
+  if (envelope) return withRef(copyOfUnknownCode(envelope), envelope);
   return { text: FALLBACK_BY_ACTION[action] ?? FALLBACK_BY_RETRY[retry] };
 }
 
 /** The copy of an envelope that reached the app on the websocket instead of as a response. */
-export function copyForEnvelope(envelope: ErrorEnvelope): ErrorCopy {
-  const status = HTTP_STATUS_BY_KIND[envelope.kind];
-  return copyFor(new ApiError(status, envelope.error, envelope.error, envelope), { action: 'generic' });
+export function copyOfEnvelope(envelope: ErrorEnvelope, context: ErrorContext): ErrorCopy {
+  return copyOfFailure({ code: envelope.error, status: HTTP_STATUS_BY_KIND[envelope.kind], envelope }, context);
+}
+
+const ADVICE_OF_STUCK_ISSUE = 'restart it when convenient';
+const ADVICE_OF_SELF_CLEARING_ISSUE = 'it may clear by itself';
+
+const ADVICE_BY_DEGRADED_CODE: Record<DegradedCode, string> = {
+  uncaught_exception: ADVICE_OF_STUCK_ISSUE,
+  db_stuck: ADVICE_OF_STUCK_ISSUE,
+  hook_fail_open: ADVICE_OF_SELF_CLEARING_ISSUE,
+  ws_broadcast_failed: ADVICE_OF_SELF_CLEARING_ISSUE,
+  docs_folder_unreadable: ADVICE_OF_SELF_CLEARING_ISSUE,
+};
+
+const withoutTrailingPeriod = (sentence: string) => sentence.replace(/\.$/, '');
+
+/** What a degraded-daemon issue says and what to do about it: restart only when it does not clear by itself. */
+export function copyOfDaemonIssue({ code, message }: DaemonIssue): string {
+  return `${withoutTrailingPeriod(message)} — ${ADVICE_BY_DEGRADED_CODE[code]}`;
 }
 
 /**
@@ -206,6 +231,6 @@ export function copyForEnvelope(envelope: ErrorEnvelope): ErrorCopy {
  * It never shows a raw message, a status number or a code.
  */
 export function copyFor(error: unknown, context: ErrorContext): ErrorCopy {
-  if (error instanceof ApiError) return copyOfApiError(error, context);
+  if (error instanceof ApiError) return copyOfFailure({ code: error.code, status: error.status, envelope: error.envelope }, context);
   return { text: NOT_CONNECTED_BY_ACTION[context.action] ?? DAEMON_UNREACHABLE };
 }

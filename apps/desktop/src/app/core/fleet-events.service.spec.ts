@@ -847,6 +847,25 @@ describe('FleetEventsService daemon issues and background failures', () => {
     expect(service.backgroundFailures()).toHaveLength(1);
   });
 
+  it('lists the newest background failure first', () => {
+    socket.dispatchMessage({ type: 'error', sessionId: 'older', error: envelopeOf('delivery_failed', 'unavailable', 'later') });
+    socket.dispatchMessage({ type: 'error', sessionId: 'newer', error: envelopeOf('delivery_failed', 'unavailable', 'later') });
+
+    expect(service.backgroundFailures().map((failure) => failure.sessionId)).toEqual(['newer', 'older']);
+  });
+
+  it('keeps the 50 newest background failures and drops the older ones', () => {
+    const FAILURES_SENT = 51;
+    for (let number = 1; number <= FAILURES_SENT; number++) {
+      socket.dispatchMessage({ type: 'error', sessionId: `s${number}`, error: envelopeOf('delivery_failed', 'unavailable', 'later') });
+    }
+
+    const sessionIds = service.backgroundFailures().map((failure) => failure.sessionId);
+    expect(sessionIds).toHaveLength(50);
+    expect(sessionIds[0]).toBe('s51');
+    expect(sessionIds).not.toContain('s1');
+  });
+
   it('keeps a message held for review as a background failure', () => {
     socket.dispatchMessage({ type: 'error', sessionId: 's1', error: envelopeOf('message_held_for_review', 'invalid_request', 'never') });
 

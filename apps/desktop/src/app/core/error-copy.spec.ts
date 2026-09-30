@@ -1,7 +1,7 @@
-import { ERROR_CODES, HTTP_STATUS_BY_KIND, retryOf, type ErrorCode, type ErrorEnvelope } from '@openfleet/shared';
+import { ERROR_CODES, HTTP_STATUS_BY_KIND, retryOf, type DaemonIssue, type ErrorCode, type ErrorEnvelope } from '@openfleet/shared';
 import { describe, expect, it } from 'vitest';
 import { ApiError } from './fleet-api.service';
-import { copyFor } from './error-copy';
+import { copyFor, copyOfDaemonIssue, copyOfEnvelope } from './error-copy';
 
 const ALL_CODES = Object.keys(ERROR_CODES) as ErrorCode[];
 
@@ -77,5 +77,42 @@ describe('copyFor', () => {
     const { text } = copyFor(new ApiError(503, 'GET /x', 'brand_new_code'), { action: 'generic' });
 
     expect(text).toMatch(/try again/i);
+  });
+
+  it('adds no ref to an envelope that is not internal, even when it carries an id', () => {
+    const envelope = envelopeOf('harness_exited', { id: '3f9a1c2e' });
+
+    const copy = copyFor(apiErrorOf(envelope), { action: 'generic' });
+
+    expect(copy.text).not.toContain('ref');
+    expect(copy.ref).toBeUndefined();
+  });
+
+  it('follows the retry hint of the envelope rather than the one of the registry', () => {
+    const retriableRejection = envelopeOf('invalid_body', { retry: 'later' });
+    const finalInternalError = envelopeOf('internal_error', { retry: 'never', id: '3f9a1c2e' });
+
+    expect(copyFor(apiErrorOf(retriableRejection), { action: 'generic' }).text).toMatch(/try again/i);
+    expect(copyFor(apiErrorOf(finalInternalError), { action: 'generic' }).text).not.toMatch(/try again/i);
+  });
+
+  describe('copyOfEnvelope', () => {
+    it('reads an envelope that came on the websocket exactly like the same envelope from a response', () => {
+      const envelope = envelopeOf('launch_failed', { id: '3f9a1c2e' });
+
+      expect(copyOfEnvelope(envelope, { action: 'generic' })).toEqual(copyFor(apiErrorOf(envelope), { action: 'generic' }));
+    });
+  });
+
+  describe('copyOfDaemonIssue', () => {
+    const issueOf = (code: DaemonIssue['code']): DaemonIssue => ({ code, since: '2026-09-30T10:00:00.000Z', message: 'Something broke.', id: '3f9a1c2e', count: 1 });
+
+    it.each(['uncaught_exception', 'db_stuck'] as const)('asks for a restart when %s does not clear by itself', (code) => {
+      expect(copyOfDaemonIssue(issueOf(code))).toBe('Something broke — restart it when convenient');
+    });
+
+    it.each(['hook_fail_open', 'ws_broadcast_failed', 'docs_folder_unreadable'] as const)('says %s may clear by itself', (code) => {
+      expect(copyOfDaemonIssue(issueOf(code))).toBe('Something broke — it may clear by itself');
+    });
   });
 });

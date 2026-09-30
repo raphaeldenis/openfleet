@@ -13,6 +13,7 @@ import {
 import { Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { environment } from '../../environments/environment';
 import { detailsTextOf } from '../core/copy-details';
+import { copyOfDaemonIssue } from '../core/error-copy';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { VersionsService } from '../core/versions.service';
 import { BannerComponent } from '../design/banner.component';
@@ -24,8 +25,6 @@ import { DaemonStatusComponent } from './daemon-status.component';
 import { HELM_NAV_ITEMS } from './nav-items';
 
 const RUNNING_STATES = new Set(['generating', 'starting']);
-
-const withoutTrailingPeriod = (sentence: string) => sentence.replace(/\.$/, '');
 
 @Component({
   selector: 'of-app-shell',
@@ -48,6 +47,9 @@ const withoutTrailingPeriod = (sentence: string) => sentence.replace(/\.$/, '');
                     <span class="glyph">{{ item.glyph }}</span><span class="label">{{ item.label }}</span>
                     @if (item.key === 'inbox' && inboxBadge(); as badge) {
                       <span class="nav-badge" data-testid="nav-inbox-badge" role="img" [attr.aria-label]="badge.ariaLabel">{{ badge.text }}</span>
+                    }
+                    @if (item.key === 'inbox' && hasBackgroundFailures()) {
+                      <span class="nav-issue-dot" data-testid="nav-inbox-issue-dot" role="img" aria-label="Inbox has issues"></span>
                     }
                   </a>
                 } @else {
@@ -120,6 +122,7 @@ const withoutTrailingPeriod = (sentence: string) => sentence.replace(/\.$/, '');
     .helm-list { flex-grow: 1.4; flex-shrink: 1; flex-basis: 0; min-height: 0; list-style: none; margin: 0; padding: .375rem; display: flex; flex-direction: column; gap: 1px; overflow-y: auto; }
     .nav-item { display: flex; align-items: center; gap: .5rem; height: 1.75rem; padding: 0 .5rem; border-radius: .375rem; color: var(--fg); }
     .nav-badge { flex: none; min-width: 1rem; height: 1rem; padding: 0 .25rem; border-radius: .5rem; background: var(--accent); color: var(--on-accent); font-size: .625rem; font-weight: 600; display: flex; align-items: center; justify-content: center; }
+    .nav-issue-dot { flex: none; width: .5rem; height: .5rem; border-radius: 50%; background: var(--state-error); }
     a.nav-item { cursor: pointer; }
     a.nav-item:hover, a.nav-item:focus-visible { background: var(--hover); }
     a.nav-item.active { background: var(--active); }
@@ -163,13 +166,16 @@ export class AppShellComponent {
     const itemsNeedingYou = this.events.approvals().length + attentionCount;
     return itemsNeedingYou > 0 ? inboxCountLabelOf(itemsNeedingYou) : undefined;
   });
+  /** Issues inform rather than ask for a decision, so they get a dot and stay out of the count of items needing you. */
+  protected readonly hasBackgroundFailures = computed(() => this.events.backgroundFailures().length > 0);
   protected readonly degraded = computed(() => {
-    const [firstIssue, ...otherIssues] = this.events.daemonIssues();
+    const issues = this.events.daemonIssues();
+    const [firstIssue, ...otherIssues] = issues;
     if (!firstIssue) return undefined;
     const daemonVersion = this.versions.daemonVersion();
     const othersNote = otherIssues.length > 0 ? ` (+${otherIssues.length} more)` : '';
-    const description = `${withoutTrailingPeriod(firstIssue.message)} — restart it when convenient${othersNote}.`;
-    const detailsText = this.events.daemonIssues()
+    const description = `${copyOfDaemonIssue(firstIssue)}${othersNote}.`;
+    const detailsText = issues
       .map((issue) => detailsTextOf({ ref: issue.id, code: issue.code, message: issue.message, at: issue.since, daemonVersion }))
       .join('\n\n');
     return { description, detailsText };

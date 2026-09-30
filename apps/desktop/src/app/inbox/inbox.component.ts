@@ -2,7 +2,7 @@ import { ChangeDetectionStrategy, Component, DestroyRef, ElementRef, Injector, a
 import { ReplyDraftStore } from '../sessions/reply-draft.store';
 import { detailsTextOf } from '../core/copy-details';
 import { decideApproval } from '../core/decide-approval';
-import { copyForEnvelope } from '../core/error-copy';
+import { copyOfEnvelope } from '../core/error-copy';
 import { CopyDetailsButtonComponent } from '../design/copy-details-button.component';
 import { compactElapsedLabel, elapsedSecondsSince } from '../design/elapsed-time';
 import { FleetApiService } from '../core/fleet-api.service';
@@ -56,7 +56,7 @@ function formatInput(toolInput: unknown): FormattedInput {
   template: `
     <section class="inbox" data-testid="inbox">
       <header class="title-row" data-testid="inbox-title-row">
-        <h1 class="title">Inbox @if (pendingCount(); as pending) {<span class="count" data-testid="inbox-count" role="img" [attr.aria-label]="pending.ariaLabel">{{ pending.text }}</span>}</h1>
+        <h1 class="title" tabindex="-1" data-testid="inbox-title">Inbox @if (pendingCount(); as pending) {<span class="count" data-testid="inbox-count" role="img" [attr.aria-label]="pending.ariaLabel">{{ pending.text }}</span>}</h1>
         @if (tab() === 'gates') {
           <div class="filters" data-testid="inbox-filters">
             @for (filter of filters; track filter.key) {
@@ -91,7 +91,7 @@ function formatInput(toolInput: unknown): FormattedInput {
               <p class="issue-copy" data-testid="inbox-issue-copy">{{ issue.copy }}</p>
               <div class="actions">
                 <of-copy-details-button testId="inbox-issue-copy-details" [text]="issue.detailsText" />
-                <button type="button" class="of-btn of-btn--secondary issue-dismiss" data-testid="inbox-issue-dismiss" (click)="events.dismissBackgroundFailure(issue.key)">Dismiss</button>
+                <button type="button" class="of-btn of-btn--secondary issue-dismiss" data-testid="inbox-issue-dismiss" (click)="dismissIssue(issue.key)">Dismiss</button>
               </div>
             </li>
           }
@@ -139,10 +139,12 @@ function formatInput(toolInput: unknown): FormattedInput {
                 </div>
               </article>
             } @empty {
-              <div class="empty" data-testid="inbox-empty">
-                <span class="empty-title">Nothing needs you</span>
-                <span>Gates, questions, budget incidents and manager proposals show up here.</span>
-              </div>
+              @if (issues().length === 0) {
+                <div class="empty" data-testid="inbox-empty">
+                  <span class="empty-title">Nothing needs you</span>
+                  <span>Gates, questions, budget incidents and manager proposals show up here.</span>
+                </div>
+              }
             }
           </div>
         }
@@ -276,7 +278,7 @@ export class InboxComponent {
     const sessionsById = this.sessionsById();
     return this.events.backgroundFailures().map(({ key, sessionId, envelope, at }) => {
       const session = sessionId === undefined ? undefined : sessionsById.get(sessionId);
-      const { text, ref } = copyForEnvelope(envelope);
+      const { text, ref } = copyOfEnvelope(envelope, { action: 'generic' });
       const detailsText = detailsTextOf({ ref, code: envelope.error, message: envelope.message, at });
       const timeLabel = new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       return { key, timeLabel, copy: text, detailsText, sessionName: session && showInvisibleControlsAsEscapes(session.name) };
@@ -286,6 +288,18 @@ export class InboxComponent {
   protected dismissReplyFailure(sessionId: string): void {
     this.replies.dismissFailure(sessionId);
     afterNextRender(() => this.focusNextAfterDismiss(), { injector: this.injector });
+  }
+
+  protected dismissIssue(key: string): void {
+    this.events.dismissBackgroundFailure(key);
+    afterNextRender(() => this.focusNextIssueOrHeading(), { injector: this.injector });
+  }
+
+  private focusNextIssueOrHeading(): void {
+    const host: HTMLElement = this.host.nativeElement;
+    const nextDismiss = host.querySelector<HTMLElement>('[data-testid="inbox-issue-dismiss"]');
+    const heading = host.querySelector<HTMLElement>('[data-testid="inbox-title"]');
+    (nextDismiss ?? heading)?.focus();
   }
 
   private focusNextAfterDismiss(): void {

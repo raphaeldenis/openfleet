@@ -44,6 +44,7 @@ const ANNOUNCE_ROLE: Record<BannerVariant, 'alert' | 'status'> = {
     .banner { align-items: center; }
     .description { min-width: 0; flex: 1; overflow-wrap: anywhere; }
     .title { color: var(--banner-color); font-weight: 600; }
+    .banner[data-variant='error'] .title { color: var(--fg); }
   `,
 })
 export class BannerComponent {
