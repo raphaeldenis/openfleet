@@ -12,9 +12,11 @@ import {
 } from '@angular/core';
 import { Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { environment } from '../../environments/environment';
+import { detailsTextOf } from '../core/copy-details';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { VersionsService } from '../core/versions.service';
 import { BannerComponent } from '../design/banner.component';
+import { CopyDetailsButtonComponent } from '../design/copy-details-button.component';
 import { SessionListComponent } from '../sessions/session-list.component';
 import { attentionItemsOf, inboxCountLabelOf } from '../working-state/attention-items';
 import { CommandPaletteComponent } from './command-palette.component';
@@ -23,10 +25,12 @@ import { HELM_NAV_ITEMS } from './nav-items';
 
 const RUNNING_STATES = new Set(['generating', 'starting']);
 
+const withoutTrailingPeriod = (sentence: string) => sentence.replace(/\.$/, '');
+
 @Component({
   selector: 'of-app-shell',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, RouterLinkActive, RouterOutlet, SessionListComponent, DaemonStatusComponent, CommandPaletteComponent, BannerComponent],
+  imports: [RouterLink, RouterLinkActive, RouterOutlet, SessionListComponent, DaemonStatusComponent, CommandPaletteComponent, BannerComponent, CopyDetailsButtonComponent],
   template: `
     <div class="shell" data-testid="app-shell">
       <div class="body" [attr.inert]="paletteOpen() ? '' : null">
@@ -72,6 +76,16 @@ const RUNNING_STATES = new Set(['generating', 'starting']);
               title="↻ Reconnecting to daemon"
               description="Sessions keep running; the UI shows the last known state."
             />
+          }
+          @if (degraded(); as state) {
+            <of-banner
+              data-testid="degraded-banner"
+              variant="error"
+              title="The daemon hit a problem and is running degraded"
+              [description]="state.description"
+            >
+              <of-copy-details-button testId="degraded-copy-details" [text]="state.detailsText" />
+            </of-banner>
           }
           @if (versions.mismatch(); as mismatch) {
             <of-banner
@@ -148,6 +162,17 @@ export class AppShellComponent {
     const attentionCount = attentionItemsOf(this.events.sessions(), this.events.workingStates()).length;
     const itemsNeedingYou = this.events.approvals().length + attentionCount;
     return itemsNeedingYou > 0 ? inboxCountLabelOf(itemsNeedingYou) : undefined;
+  });
+  protected readonly degraded = computed(() => {
+    const [firstIssue, ...otherIssues] = this.events.daemonIssues();
+    if (!firstIssue) return undefined;
+    const daemonVersion = this.versions.daemonVersion();
+    const othersNote = otherIssues.length > 0 ? ` (+${otherIssues.length} more)` : '';
+    const description = `${withoutTrailingPeriod(firstIssue.message)} — restart it when convenient${othersNote}.`;
+    const detailsText = this.events.daemonIssues()
+      .map((issue) => detailsTextOf({ ref: issue.id, code: issue.code, message: issue.message, at: issue.since, daemonVersion }))
+      .join('\n\n');
+    return { description, detailsText };
   });
   private readonly paletteTrigger = viewChild.required<ElementRef<HTMLButtonElement>>('paletteTrigger');
   private paletteOpener: HTMLElement | null = null;

@@ -32,6 +32,7 @@ const ANNOUNCE_ROLE: Record<BannerVariant, 'alert' | 'status'> = {
     >
       <span class="title">{{ title() }}</span>
       <span class="description">{{ description() }}</span>
+      <ng-content />
     </div>
   `,
   styles: `
@@ -40,7 +41,8 @@ const ANNOUNCE_ROLE: Record<BannerVariant, 'alert' | 'status'> = {
       border: 1px solid color-mix(in oklch, var(--banner-color) 45%, transparent);
       background: color-mix(in oklch, var(--banner-color) 7%, var(--panel));
     }
-    .description { min-width: 0; overflow-wrap: anywhere; }
+    .banner { align-items: center; }
+    .description { min-width: 0; flex: 1; overflow-wrap: anywhere; }
     .title { color: var(--banner-color); font-weight: 600; }
   `,
 })

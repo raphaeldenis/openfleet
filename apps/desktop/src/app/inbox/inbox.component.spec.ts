@@ -247,6 +247,80 @@ describe('InboxComponent', () => {
     expect(screen.queryByTestId('inbox-gate-card')).toBeNull();
   });
 
+  describe('background failures', () => {
+    const deliveryFailure = {
+      key: 'f1', sessionId: 's1', at: '2026-09-30T10:00:00.000Z',
+      envelope: { error: 'delivery_failed', kind: 'unavailable', retry: 'later', message: 'daemon words' },
+    };
+    const internalFailure = {
+      key: 'f2', sessionId: 's1', at: '2026-09-30T10:01:00.000Z',
+      envelope: { error: 'launch_failed', kind: 'internal', retry: 'later', message: 'daemon words', id: '3f9a1c2e' },
+    };
+
+    function eventsWith(failures: unknown[]) {
+      const dismissBackgroundFailure = vi.fn();
+      const events = { ...fakeEvents(), backgroundFailures: signal(failures), dismissBackgroundFailure };
+      return { events, dismissBackgroundFailure };
+    }
+
+    async function renderWith(failures: unknown[]) {
+      const { events, dismissBackgroundFailure } = eventsWith(failures);
+      await render(InboxComponent, { providers: [{ provide: FleetApiService, useValue: { decide: vi.fn() } }, { provide: FleetEventsService, useValue: events }] });
+      return { dismissBackgroundFailure };
+    }
+
+    it('lists a failure as an ISSUE item with the session name and user copy, never the daemon words', async () => {
+      await renderWith([deliveryFailure]);
+
+      const item = screen.getByTestId('inbox-issue');
+      expect(item).toHaveTextContent('ISSUE');
+      expect(item).toHaveTextContent('Gimli');
+      expect(item).toHaveTextContent(/try again/i);
+      expect(item).not.toHaveTextContent('daemon words');
+      expect(item).not.toHaveTextContent('delivery_failed');
+    });
+
+    it('is a plain list item: no live region interrupts the user', async () => {
+      await renderWith([deliveryFailure]);
+
+      expect(screen.getByTestId('inbox-issue').closest('[role="alert"], [aria-live]')).toBeNull();
+    });
+
+    it('shows the ref of an internal failure', async () => {
+      await renderWith([internalFailure]);
+
+      expect(screen.getByTestId('inbox-issue')).toHaveTextContent('(ref 3f9a1c2e)');
+    });
+
+    it('copies the ref, the code, the message and the time with Copy details', async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+      await renderWith([internalFailure]);
+
+      await userEvent.click(screen.getByTestId('inbox-issue-copy-details'));
+
+      const copied = writeText.mock.calls[0]![0] as string;
+      expect(copied).toContain('ref 3f9a1c2e');
+      expect(copied).toContain('launch_failed');
+      expect(copied).toContain('2026-09-30T10:01:00.000Z');
+      vi.unstubAllGlobals();
+    });
+
+    it('dismisses an item on request', async () => {
+      const { dismissBackgroundFailure } = await renderWith([deliveryFailure]);
+
+      await userEvent.click(screen.getByTestId('inbox-issue-dismiss'));
+
+      expect(dismissBackgroundFailure).toHaveBeenCalledWith('f1');
+    });
+
+    it('shows no issue section when nothing failed in the background', async () => {
+      await renderWith([]);
+
+      expect(screen.queryByTestId('inbox-issue')).toBeNull();
+    });
+  });
+
   it('shows a "Nothing needs you" empty state and hides the count pill when there are no gates waiting', async () => {
     // Arrange
     const events = { sessions: signal([]), approvals: signal([]), ...silentWorkingStateSignals() };

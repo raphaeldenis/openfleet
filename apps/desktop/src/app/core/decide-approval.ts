@@ -1,6 +1,5 @@
+import { GENERIC_DECISION_ERROR } from './error-copy';
 import { ApiError, FleetApiService } from './fleet-api.service';
-
-export const GENERIC_DECISION_ERROR = 'Could not send decision — try again.';
 
 export type DecisionOutcome = { outcome: 'ok' } | { outcome: 'already-resolved' } | { outcome: 'failed'; message: string };
 

@@ -1,0 +1,81 @@
+import { ERROR_CODES, HTTP_STATUS_BY_KIND, retryOf, type ErrorCode, type ErrorEnvelope } from '@openfleet/shared';
+import { describe, expect, it } from 'vitest';
+import { ApiError } from './fleet-api.service';
+import { copyFor } from './error-copy';
+
+const ALL_CODES = Object.keys(ERROR_CODES) as ErrorCode[];
+
+function envelopeOf(code: ErrorCode, patch: Partial<ErrorEnvelope> = {}): ErrorEnvelope {
+  return { error: code, kind: ERROR_CODES[code].kind, retry: retryOf(code), message: 'raw daemon message', ...patch };
+}
+
+function apiErrorOf(envelope: ErrorEnvelope): ApiError {
+  return new ApiError(HTTP_STATUS_BY_KIND[envelope.kind], 'GET /x', envelope.error, envelope);
+}
+
+describe('copyFor', () => {
+  describe.each(ALL_CODES)('the code %s', (code) => {
+    const envelope = envelopeOf(code, code === 'internal_error' ? { id: '3f9a1c2e' } : {});
+    const { text } = copyFor(apiErrorOf(envelope), { action: 'generic' });
+
+    it('reads as a sentence: ends with a period and names no code', () => {
+      const isInternal = envelope.kind === 'internal';
+      const sentence = isInternal ? text.replace(/ \(ref [0-9a-f]{8}\)$/, '') : text;
+      expect(sentence.endsWith('.')).toBe(true);
+      expect(text).not.toContain('_');
+    });
+
+    it('never leaks the daemon message or a status number', () => {
+      expect(text).not.toContain('raw daemon message');
+      expect(text).not.toMatch(/\b[45]\d\d\b/);
+    });
+
+    it('says "try again" exactly when a retry can help', () => {
+      const canRetry = envelope.retry !== 'never';
+      expect(/try again/i.test(text)).toBe(canRetry);
+    });
+  });
+
+  it('appends the ref of an internal error and returns it apart', () => {
+    const envelope = envelopeOf('internal_error', { id: '3f9a1c2e' });
+
+    const copy = copyFor(apiErrorOf(envelope), { action: 'generic' });
+
+    expect(copy.text.endsWith('(ref 3f9a1c2e)')).toBe(true);
+    expect(copy.ref).toBe('3f9a1c2e');
+  });
+
+  it('gives a message_held_for_review copy that tells the user to resend without invisible characters', () => {
+    const { text } = copyFor(apiErrorOf(envelopeOf('message_held_for_review')), { action: 'send' });
+
+    expect(text).toMatch(/invisible characters/i);
+    expect(text).not.toMatch(/try again/i);
+  });
+
+  it('prefers the entry of the action over the entry of the code', () => {
+    const envelope = envelopeOf('payload_too_large');
+
+    expect(copyFor(apiErrorOf(envelope), { action: 'create_session' }).text).toContain('shorten the directory or the name');
+    expect(copyFor(apiErrorOf(envelope), { action: 'create_manager' }).text).toContain('shorten the mission');
+  });
+
+  it('tells a lost connection apart from a daemon answer', () => {
+    const { text } = copyFor(new TypeError('Failed to fetch'), { action: 'generic' });
+
+    expect(text).toMatch(/can.t reach the OpenFleet daemon/i);
+  });
+
+  it('falls back to the daemon message and hint for a code from a newer daemon', () => {
+    const newer = { error: 'brand_new_code', kind: 'conflict', retry: 'never', message: 'The vault is locked', hint: 'unlock it first.' } as unknown as ErrorEnvelope;
+
+    const { text } = copyFor(apiErrorOf(newer), { action: 'generic' });
+
+    expect(text).toBe('The vault is locked. Unlock it first.');
+  });
+
+  it('falls back by kind for an unknown code without an envelope', () => {
+    const { text } = copyFor(new ApiError(503, 'GET /x', 'brand_new_code'), { action: 'generic' });
+
+    expect(text).toMatch(/try again/i);
+  });
+});

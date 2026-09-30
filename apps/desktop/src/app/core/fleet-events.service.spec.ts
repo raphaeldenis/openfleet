@@ -1,3 +1,4 @@
+import type { DaemonIssue, ErrorEnvelope } from '@openfleet/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FleetEventsService } from './fleet-events.service';
 
@@ -782,5 +783,90 @@ describe('FleetEventsService closedAt', () => {
 
       expect(service.sessions()[0]!.closedAt).toBeUndefined();
     });
+  });
+});
+
+const issue = (patch: Partial<DaemonIssue> = {}): DaemonIssue => ({
+  code: 'db_stuck', since: '2026-09-30T10:00:00.000Z', message: 'The database is stuck.', id: '3f9a1c2e', count: 1, ...patch,
+});
+
+const envelopeOf = (error: ErrorEnvelope['error'], kind: ErrorEnvelope['kind'], retry: ErrorEnvelope['retry'], id?: string): ErrorEnvelope =>
+  ({ error, kind, retry, message: 'daemon words', ...(id && { id }) });
+
+describe('FleetEventsService daemon issues and background failures', () => {
+  let socket: FakeWebSocket;
+  let service: FleetEventsService;
+
+  beforeEach(async () => {
+    FakeWebSocket.instances = [];
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({ ticket: 'fake-ticket' }) }));
+    service = new FleetEventsService();
+    await service.connect();
+    socket = FakeWebSocket.instances[0]!;
+  });
+
+  it('reports no issue for a daemon that sends none', () => {
+    socket.dispatchMessage({ type: 'snapshot', sessions: [], approvals: [] });
+
+    expect(service.daemonIssues()).toEqual([]);
+  });
+
+  it('seeds the issues from the snapshot', () => {
+    socket.dispatchMessage({ type: 'snapshot', sessions: [], approvals: [], daemonIssues: [issue()] });
+
+    expect(service.daemonIssues()).toEqual([issue()]);
+  });
+
+  it('replaces the issues with the full list of each daemon.issues event, and empties them when the list is empty', () => {
+    socket.dispatchMessage({ type: 'daemon.issues', issues: [issue(), issue({ code: 'hook_fail_open', id: 'aaaaaaaa' })] });
+    expect(service.daemonIssues()).toHaveLength(2);
+
+    socket.dispatchMessage({ type: 'daemon.issues', issues: [] });
+
+    expect(service.daemonIssues()).toEqual([]);
+  });
+
+  it('keeps a background failure announced for a session, and lets the user dismiss it', () => {
+    socket.dispatchMessage({ type: 'error', sessionId: 's1', error: envelopeOf('delivery_failed', 'unavailable', 'later') });
+    const [failure] = service.backgroundFailures();
+    expect(failure).toMatchObject({ sessionId: 's1', envelope: { error: 'delivery_failed' } });
+
+    service.dismissBackgroundFailure(failure!.key);
+
+    expect(service.backgroundFailures()).toEqual([]);
+  });
+
+  it('keeps an internal failure too, and ignores the reply to a request of the user that failed on its own', () => {
+    socket.dispatchMessage({ type: 'error', sessionId: 's1', error: envelopeOf('session_closed', 'conflict', 'never') });
+    socket.dispatchMessage({ type: 'error', error: envelopeOf('invalid_body', 'invalid_request', 'never') });
+    expect(service.backgroundFailures()).toEqual([]);
+
+    socket.dispatchMessage({ type: 'error', sessionId: 's1', error: envelopeOf('launch_failed', 'internal', 'later', '3f9a1c2e') });
+
+    expect(service.backgroundFailures()).toHaveLength(1);
+  });
+
+  it('keeps a message held for review as a background failure', () => {
+    socket.dispatchMessage({ type: 'error', sessionId: 's1', error: envelopeOf('message_held_for_review', 'invalid_request', 'never') });
+
+    expect(service.backgroundFailures()).toHaveLength(1);
+  });
+
+  it('remembers why a session closed, from the event and, for a snapshot, from the conventional exit code', () => {
+    socket.dispatchMessage({ type: 'snapshot', sessions: [{ ...session('s1', { state: 'closed' }), exitCode: -1 }], approvals: [] });
+    expect(service.closeReasonOf('s1')).toBe('resume_timeout');
+
+    socket.dispatchMessage({ type: 'session.closed', sessionId: 's1', exitCode: 137, reason: 'harness_exit' });
+
+    expect(service.closeReasonOf('s1')).toBe('harness_exit');
+  });
+
+  it('forgets the close reason once the session is reopened', () => {
+    socket.dispatchMessage({ type: 'session.closed', sessionId: 's1', exitCode: 137, reason: 'harness_exit' });
+
+    socket.dispatchMessage({ type: 'session.reopened', sessionId: 's1' });
+
+    expect(service.closeReasonOf('s1')).toBeUndefined();
   });
 });

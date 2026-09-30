@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { AppShellComponent } from './app-shell.component';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
-import type { WorkingState } from '@openfleet/shared';
+import type { DaemonIssue, WorkingState } from '@openfleet/shared';
 import { silentWorkingStateSignals, stateOf } from '../working-state/working-state-fixtures';
 import { InboxComponent } from '../inbox/inbox.component';
 
@@ -53,7 +53,7 @@ const testRoutes: Routes = [
   },
 ];
 
-interface ShellOverrides { connected?: boolean; sessions?: unknown[]; approvals?: unknown[]; workingStates?: WorkingState[] }
+interface ShellOverrides { connected?: boolean; sessions?: unknown[]; approvals?: unknown[]; workingStates?: WorkingState[]; issues?: DaemonIssue[] }
 
 function fakeEvents(overrides: ShellOverrides = {}) {
   const workingStates = overrides.workingStates ?? [];
@@ -63,6 +63,7 @@ function fakeEvents(overrides: ShellOverrides = {}) {
     managers: signal([]),
     connected: signal(overrides.connected ?? true),
     ...silentWorkingStateSignals(),
+    daemonIssues: signal<DaemonIssue[]>(overrides.issues ?? []),
     workingStates: signal<ReadonlyMap<string, WorkingState>>(new Map(workingStates.map((state) => [state.sessionId, state]))),
     workingStatesReported: signal(overrides.workingStates !== undefined),
   };
@@ -211,6 +212,83 @@ describe('AppShellComponent', () => {
     const status = root.querySelector('[data-testid="app-topbar"] [data-testid="daemon-status"]');
     expect(status).toHaveTextContent('Reconnecting');
     expect(root.querySelector('[data-testid="banner"]')).toHaveTextContent('Reconnecting');
+  });
+
+  describe('degraded daemon banner', () => {
+    const stuckDatabase: DaemonIssue = { code: 'db_stuck', since: '2026-09-30T10:00:00.000Z', message: 'The database is stuck.', id: '3f9a1c2e', count: 2 };
+
+    function stubClipboard() {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+      return writeText;
+    }
+
+    it('stays away while the daemon reports no issue', async () => {
+      const { root } = await setUp({ issues: [] });
+
+      expect(root.querySelector('[data-testid="degraded-banner"]')).toBeNull();
+    });
+
+    it('tells the user the daemon runs degraded, names the issue and announces it as an alert', async () => {
+      const { root } = await setUp({ issues: [stuckDatabase] });
+
+      const banner = root.querySelector('[data-testid="degraded-banner"] [role="alert"]');
+      expect(banner).toHaveTextContent('The daemon hit a problem and is running degraded');
+      expect(banner).toHaveTextContent('The database is stuck');
+      expect(banner).toHaveTextContent('restart it when convenient');
+    });
+
+    it('never shows the raw code of the issue', async () => {
+      const { root } = await setUp({ issues: [stuckDatabase] });
+
+      expect(root.querySelector('[data-testid="degraded-banner"]')).not.toHaveTextContent('db_stuck');
+    });
+
+    it('mentions the other issues when several are active', async () => {
+      const { root } = await setUp({ issues: [stuckDatabase, { ...stuckDatabase, code: 'hook_fail_open', id: 'aaaaaaaa' }] });
+
+      expect(root.querySelector('[data-testid="degraded-banner"]')).toHaveTextContent('+1 more');
+    });
+
+    it('copies the ref, the code, the message and the time, and nothing else, with Copy details', async () => {
+      const writeText = stubClipboard();
+      const { root } = await setUp({ issues: [stuckDatabase] });
+
+      (root.querySelector('[data-testid="degraded-copy-details"]') as HTMLButtonElement).click();
+
+      const copied = writeText.mock.calls[0]![0] as string;
+      expect(copied).toContain('ref 3f9a1c2e');
+      expect(copied).toContain('db_stuck');
+      expect(copied).toContain('The database is stuck.');
+      expect(copied).toContain('2026-09-30T10:00:00.000Z');
+      expect(copied).not.toMatch(/bearer|token|\/Users\//i);
+    });
+
+    it('lets a keyboard user reach Copy details and confirms the copy', async () => {
+      stubClipboard();
+      const { harness, root } = await setUp({ issues: [stuckDatabase] });
+      const button = root.querySelector('[data-testid="degraded-copy-details"]') as HTMLButtonElement;
+
+      button.focus();
+      button.click();
+      await vi.waitFor(() => {
+        harness.detectChanges();
+        expect(button).toHaveTextContent('Copied');
+      });
+
+      expect(document.activeElement).toBe(button);
+      expect(root.querySelector('[data-testid="degraded-copy-details"]')).toBe(button);
+    });
+
+    it('disappears once the daemon reports an empty list', async () => {
+      const { harness, root } = await setUp({ issues: [stuckDatabase] });
+      const events = TestBed.inject(FleetEventsService) as unknown as { daemonIssues: ReturnType<typeof signal<DaemonIssue[]>> };
+
+      events.daemonIssues.set([]);
+      harness.detectChanges();
+
+      expect(root.querySelector('[data-testid="degraded-banner"]')).toBeNull();
+    });
   });
 
   it('shows a not-tracked spend placeholder in the top bar with its tooltip', async () => {

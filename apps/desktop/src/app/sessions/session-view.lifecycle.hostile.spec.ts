@@ -87,6 +87,32 @@ describe('SessionViewComponent lifecycle banners — real daemon event order', (
     expect((screen.getByTestId('resume-retry') as HTMLButtonElement).disabled).toBe(false);
   });
 
+  it.each([
+    { reason: 'launch_failed', copy: 'failed to launch' },
+    { reason: 'resume_timeout', copy: 'did not come up in time' },
+  ] as const)('a close announced with the reason $reason and no exit code gives Resume failed its reason', async ({ reason, copy }) => {
+    // Arrange
+    const { daemon } = await renderAgainstDaemonEvents(fakeApi(), [session({ state: 'idle' })]);
+
+    // Act
+    await daemon.send({ type: 'session.closed', sessionId: 's1', reason });
+
+    // Assert
+    await waitFor(() => expect(lifecycleBanner()).toHaveAttribute('data-variant', 'error'));
+    expect(screen.getByTestId('resume-error')).toHaveTextContent(copy);
+  });
+
+  it('a session that closed after its agent process crashed says so in the closed strip', async () => {
+    // Arrange
+    const { daemon } = await renderAgainstDaemonEvents(fakeApi(), [session({ state: 'idle' })]);
+
+    // Act
+    await daemon.send({ type: 'session.closed', sessionId: 's1', exitCode: 137, reason: 'harness_exit' });
+
+    // Assert
+    await waitFor(() => expect(screen.getByTestId('session-closed-footer')).toHaveTextContent('The agent process ended unexpectedly'));
+  });
+
   it('a boot-resume (starting with closedAt, no reopen click) shows Resuming, and the banner leaves with the first non-starting state', async () => {
     // Arrange
     const { daemon } = await renderAgainstDaemonEvents(fakeApi(), [session({ state: 'starting', closedAt: CLOSED_AT })]);

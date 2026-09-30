@@ -1,6 +1,7 @@
 import { ChangeDetectionStrategy, Component, DestroyRef, ElementRef, Injector, afterNextRender, computed, effect, inject, input, signal, viewChild } from '@angular/core';
 import type { SessionState } from '@openfleet/shared';
 import { EarlyEscapeHintService } from '../core/early-escape-hint.service';
+import { CLOSE_ERROR, INTERRUPT_ERROR } from '../core/error-copy';
 import { FleetApiService } from '../core/fleet-api.service';
 import { PendingSwitchesService } from '../core/pending-switches.service';
 import { SessionRequestsService } from '../core/session-requests';
@@ -8,8 +9,6 @@ import { SessionRequestsService } from '../core/session-requests';
 const CLOSE_CONFIRM_BODY =
   'The process stops. The worktree, branch and transcript are kept; you can reopen it later with its history.';
 const CLOSE_CONFIRM_PENDING_SWITCH_WARNING = 'Closing cancels the pending model switch.';
-const CLOSE_ERROR = 'Could not close the session — try again.';
-const INTERRUPT_ERROR = 'Could not interrupt the session — try again.';
 const ESCAPE_KEY = '\x1b';
 
 @Component({

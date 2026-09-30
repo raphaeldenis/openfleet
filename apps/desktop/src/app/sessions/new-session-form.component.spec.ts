@@ -1086,14 +1086,15 @@ describe('NewSessionFormComponent', () => {
     it.each([
       ['an empty code', new ApiError(500, 'POST /api/sessions → 500', '')],
       ['a code the app does not know', new ApiError(418, 'POST /api/sessions → 418', 'teapot')],
-    ])('falls back to the HTTP status, without the request line, for %s', async (_label, error) => {
+    ])('falls back to a plain sentence, with neither the request line nor the HTTP status, for %s', async (_label, error) => {
       await renderForm(fakeApi({ createSession: vi.fn().mockRejectedValue(error) }));
       await fillSessionFields();
 
       await userEvent.click(submitButton());
 
       const errorLine = screen.getByTestId('new-session-form-error');
-      expect(errorLine).toHaveTextContent(String(error.status));
+      expect(errorLine).toHaveTextContent('Could not create the session');
+      expect(errorLine).not.toHaveTextContent(String(error.status));
       expect(errorLine).not.toHaveTextContent('/api/sessions');
     });
 
@@ -1126,7 +1127,7 @@ describe('NewSessionFormComponent', () => {
     });
 
     ['constructor', 'toString', '__proto__'].forEach((prototypeKey) => {
-      it(`an error code named "${prototypeKey}" reads as the HTTP status, not as a JavaScript object`, async () => {
+      it(`an error code named "${prototypeKey}" reads as a plain sentence, not as a JavaScript object`, async () => {
         await renderForm(fakeApi({ createSession: vi.fn().mockRejectedValue(new ApiError(500, 'POST /api/sessions → 500', prototypeKey)) }));
         await fillSessionFields();
 
@@ -1134,7 +1135,7 @@ describe('NewSessionFormComponent', () => {
 
         const errorLine = screen.getByTestId('new-session-form-error');
         expect(errorLine).not.toHaveTextContent(/native code|\[object Object\]/);
-        expect(errorLine).toHaveTextContent('500');
+        expect(errorLine).toHaveTextContent('Could not create the session');
       });
     });
 
