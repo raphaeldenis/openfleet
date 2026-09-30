@@ -491,6 +491,182 @@ mod tests {
     assert_eq!(redact(&once, &[]), once);
   }
 
+  // ---- redaction parity with packages/core/src/redact.ts ----
+
+  fn leaked_by(text: &str, leaked: &str) -> bool {
+    redact(text, &[]).contains(leaked)
+  }
+
+  #[test]
+  fn masks_every_bearer_spelling_the_daemon_masks() {
+    let spellings = [
+      "Bearer s3cr3t.tok-EN",
+      "bearer s3cr3t.tok-EN",
+      "BEARER s3cr3t.tok-EN",
+      "Bearer   s3cr3t.tok-EN",
+      "Bearer\ts3cr3t.tok-EN",
+      "Bearer:s3cr3t.tok-EN",
+      "Bearer: s3cr3t.tok-EN",
+      "Bearer=s3cr3t.tok-EN",
+      "Bearer%20s3cr3t.tok-EN",
+      "bearer%20s3cr3t.tok-EN",
+      "Bearer%3As3cr3t.tok-EN",
+      "Bearer%253As3cr3t.tok-EN",
+      "B%65arer s3cr3t.tok-EN",
+      "Authorization:Bearer\ts3cr3t.tok-EN",
+    ];
+
+    let leaking: Vec<&str> = spellings.into_iter().filter(|text| leaked_by(&format!("call with {text} now"), "s3cr3t")).collect();
+
+    assert_eq!(leaking, Vec::<&str>::new());
+  }
+
+  #[test]
+  fn masks_the_whole_bearer_token_even_when_it_holds_percent_signs() {
+    let cases = [
+      ("Bearer abc%2Bdef", "abc", "def"),
+      ("Bearer abc%44EF123", "abc", "EF123"),
+      ("Bearer abc%ZZdef123", "abc", "def123"),
+    ];
+
+    for (text, head, tail) in cases {
+      let masked = redact(text, &[]);
+      assert!(!masked.contains(head) && !masked.contains(tail), "{text} became {masked}");
+    }
+  }
+
+  #[test]
+  fn masks_every_hook_token_spelling_the_daemon_masks() {
+    let spellings = [
+      "/hooks/t0k3nVALUE",
+      "http://127.0.0.1:7331/hooks/t0k3nVALUE/stop?x=1",
+      "%2Fhooks%2Ft0k3nVALUE",
+      "%2fhooks%2ft0k3nVALUE",
+      "/hooks%2Ft0k3nVALUE",
+      "%252Fhooks%252Ft0k3nVALUE",
+      "/HOOKS/t0k3nVALUE",
+      "/%68ooks/t0k3nVALUE",
+      "/hooks/%74t0k3nVALUE",
+      "/hooks/%2574t0k3nVALUE",
+    ];
+
+    let leaking: Vec<&str> = spellings.into_iter().filter(|text| leaked_by(&format!("posted to {text} now"), "t0k3nVALUE")).collect();
+
+    assert_eq!(leaking, Vec::<&str>::new());
+  }
+
+  #[test]
+  fn masks_the_characters_of_a_hook_token_written_with_escapes() {
+    assert!(!leaked_by("/hooks/abc%44EF123", "EF123"));
+    assert!(!leaked_by("/hooks/abc%ZZdef123", "def123"));
+    assert!(!leaked_by("/hooks%252Fabc%2544EF123", "EF123"));
+  }
+
+  #[test]
+  fn keeps_the_hooks_route_pattern_which_is_not_a_secret() {
+    assert_eq!(redact("POST /hooks/:token → 500", &[]), "POST /hooks/:token → 500");
+  }
+
+  #[test]
+  fn masks_a_basic_credential() {
+    let cases = [
+      ("Authorization: Basic dXNlcjpwYXNzd29yZA==", "dXNlcjpwYXNzd29yZA"),
+      ("sent Basic dXNlcjpwYXNz9 to the proxy", "dXNlcjpwYXNz9"),
+      ("failed with Authorization: Basic dXNlcjpwYXNz today", "dXNlcjpwYXNz"),
+      ("failed with Proxy-Authorization: Basic dXNlcjpwYXNz today", "dXNlcjpwYXNz"),
+      ("failed with authorization:Basic dXNlcjpwYXNz today", "dXNlcjpwYXNz"),
+    ];
+
+    for (text, credential) in cases {
+      let masked = redact(text, &[]);
+      assert!(!masked.contains(credential), "{text} became {masked}");
+      assert!(masked.contains("Basic [redacted]"), "{text} became {masked}");
+    }
+  }
+
+  #[test]
+  fn keeps_the_word_basic_in_prose() {
+    for sentence in ["Basic authentication failed", "the Basic plan costs more", "the Basic plan costs more than Basic support", "Basic setup failed"] {
+      assert_eq!(redact(sentence, &[]), sentence);
+    }
+  }
+
+  #[test]
+  fn masks_the_credentials_of_a_url() {
+    let masked = redact("connect https://admin:hunter2longpassword@host/path failed", &[]);
+
+    assert_eq!(masked, "connect https://[redacted]@host/path failed");
+  }
+
+  #[test]
+  fn masks_a_secret_named_query_or_parameter_value() {
+    let cases = [
+      "GET /x?token=t0k3nVALUE&page=2",
+      "GET /x?page=2&access_token=t0k3nVALUE",
+      "ws://127.0.0.1:7331/ws?ticket=t0k3nVALUE",
+      "GET /x?api_key=t0k3nVALUE",
+      "GET /x?api-key=t0k3nVALUE",
+      "GET /x?apiKey=t0k3nVALUE",
+      "GET /x?client_secret=t0k3nVALUE",
+      "GET /x?Authorization=t0k3nVALUE",
+      "GET /x?password=t0k3nVALUE",
+      "GET /x?cookie=t0k3nVALUE",
+      "GET /x;password=t0k3nVALUE",
+      "failed with token=t0k3nVALUE today",
+      "access_token=t0k3nVALUE",
+      "/x?%74oken=t0k3nVALUE",
+      "/x?to%6Ben=t0k3nVALUE",
+      "/x?%2574oken=t0k3nVALUE",
+      "/x?page=2&%70assword=t0k3nVALUE",
+      "/cb?next=%2Fx%3Ftoken%3Dt0k3nVALUE",
+      "/cb?next=%252Fx%253Ftoken%253Dt0k3nVALUE",
+    ];
+
+    let leaking: Vec<&str> = cases.into_iter().filter(|text| leaked_by(text, "t0k3nVALUE")).collect();
+
+    assert_eq!(leaking, Vec::<&str>::new());
+  }
+
+  #[test]
+  fn keeps_the_other_query_parameters() {
+    assert_eq!(redact("GET /x?token=t0k3nVALUE&page=2", &[]), "GET /x?token=[redacted]&page=2");
+    assert_eq!(redact("GET /x?page=2&sort=asc", &[]), "GET /x?page=2&sort=asc");
+    assert!(redact("/cb?next=%2Fx%3Ftoken%3DabcDEF123&page=2", &[]).contains("&page=2"));
+  }
+
+  #[test]
+  fn masks_the_admin_token_in_its_percent_encoded_forms() {
+    let secrets = vec!["abc+def/ghi=jkl_mno".to_string()];
+
+    let masked = redact("a abc%2Bdef%2Fghi%3Djkl_mno b abc%2bdef%2fghi%3djkl_mno c %61%62%63%2B%64ef%2Fghi%3Djkl_mno", &secrets);
+
+    assert_eq!(masked, "a [redacted] b [redacted] c [redacted]");
+  }
+
+  #[test]
+  fn redaction_stays_idempotent_on_every_shape() {
+    let once = redact("Bearer:abc Basic dXNlcjpwYXNzd29yZA== https://u:p@h/ /x?token=t /hooks/tok", &[]);
+
+    assert_eq!(redact(&once, &[]), once);
+  }
+
+  #[test]
+  fn redacts_one_mebibyte_of_hostile_input_in_linear_time() {
+    const MEBIBYTE: usize = 1024 * 1024;
+    let units = ["?", "%", "%25", "/", "Bearer ", "/hooks/", "a", "&", "=", " ", "?a=%25/hooks/Bearer &Basic ", "://", "Basic ", "%2Fhooks%2F", "token=", "a=%3D"];
+    let secrets = vec!["s3cr3t-admin-token".to_string()];
+
+    for unit in units {
+      let hostile = unit.repeat(MEBIBYTE / unit.len() + 1);
+      let started_at = Instant::now();
+
+      redact(&hostile, &secrets);
+
+      let elapsed = started_at.elapsed();
+      assert!(elapsed < Duration::from_secs(1), "{unit:?} x 1 MiB took {elapsed:?}");
+    }
+  }
+
   // ---- tail for the issue report ----
 
   #[test]
