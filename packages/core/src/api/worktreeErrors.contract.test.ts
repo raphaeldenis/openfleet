@@ -14,10 +14,11 @@ import { SessionService } from '../sessions/sessionService.js';
 import { startServer } from './server.js';
 
 const ADMIN_TOKEN = 'admin';
-const MISSING_REPOSITORY = '/nonexistent-openfleet-repository';
 
 let server: Awaited<ReturnType<typeof startServer>>;
 let scratchDirectory: string;
+// An existing directory that is no git repository: git itself refuses it. A missing directory answers directory_missing (restCreatePreconditions.test.ts).
+let notARepository: string;
 let worktreesRoot: string;
 
 beforeEach(async () => {
@@ -25,6 +26,8 @@ beforeEach(async () => {
   scratchDirectory = realpathSync(mkdtempSync(join(tmpdir(), 'of-worktree-errors-')));
   worktreesRoot = join(scratchDirectory, 'worktrees');
   mkdirSync(worktreesRoot);
+  notARepository = join(scratchDirectory, 'not-a-repository');
+  mkdirSync(notARepository);
   const db = openDatabase(':memory:');
   const bus = new EventBus();
   const sessions = new SessionService({ db, bus, harnesses: [new FakeHarness()], baseUrl: 'http://127.0.0.1:0', worktreesRoot });
@@ -47,7 +50,7 @@ async function createSessionInWorktree(branchName: string) {
   const response = await fetch(`${server.url}/api/sessions`, {
     method: 'POST',
     headers: { authorization: `Bearer ${ADMIN_TOKEN}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ directory: scratchDirectory, name: 'worktree session', harness: 'fake', repoPath: MISSING_REPOSITORY, branchName }),
+    body: JSON.stringify({ directory: scratchDirectory, name: 'worktree session', harness: 'fake', repoPath: notARepository, branchName }),
   });
   return { status: response.status, text: await response.text() };
 }
@@ -130,7 +133,7 @@ describe('POST /api/sessions with repoPath and branchName: worktree failures', (
     const { status, text } = await createSessionInWorktree('fresh-branch');
 
     expect({ status, error: JSON.parse(text).error }).toEqual({ status: 500, error: 'internal_error' });
-    expect(text).not.toContain(MISSING_REPOSITORY);
+    expect(text).not.toContain(notARepository);
     expect(text).not.toContain(scratchDirectory);
   });
 });

@@ -68,6 +68,8 @@ const WORKTREE_ENTRY_BY_CODE: Record<WorktreeError['code'], (error: WorktreeErro
   invalid_branch: asIs('invalid_branch_name'),
   exists: () => ({ code: 'worktree_exists', message: 'the worktree already exists.' }),
   git_failed: () => undefined,
+  directory_missing: () => ({ code: 'directory_missing', message: 'the repository directory does not exist.', hint: 'Check the repository path, then create the session again.' }),
+  git_unavailable: () => ({ code: 'git_unavailable', message: 'git is not available to the daemon.', hint: 'Install git or start the daemon from a shell where git runs.' }),
 };
 
 const UNEXPECTED_ENTRY: Entry = { code: 'internal_error', message: 'the daemon hit an unexpected error.' };
