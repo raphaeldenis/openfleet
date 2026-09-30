@@ -8,6 +8,7 @@ import type { ManagerService } from '../managers/managerService.js';
 import type { PulseScheduler } from '../managers/pulseScheduler.js';
 import { listAvailableModels, ModelConfigReadOnlyError, ModelConfigUnreadableError, ModelTablePatchSchema, resolveModel, saveModelPatch, type ModelTable } from '../models.js';
 import { DaemonShuttingDownError, SessionClosedError, SessionReopenError, type SessionService } from '../sessions/sessionService.js';
+import type { HandoverLedger } from '../workingState/handoverLedger.js';
 import type { WorkingStateService } from '../workingState/workingStateService.js';
 import { json, logServerError, Router } from './router.js';
 import type { WsTicketStore } from './wsTicketStore.js';
@@ -30,7 +31,7 @@ const RenameSessionSchema = z
   .object({ name: z.string().trim().min(1).max(100).optional(), emoji: z.string().trim().min(1).max(32).optional() })
   .refine((patch) => patch.name !== undefined || patch.emoji !== undefined, { message: 'name or emoji is required' });
 
-export function registerRestRoutes(router: Router, deps: { sessions: SessionService; approvals: ApprovalService; modelTable: ModelTable; modelConfigPath: string; managers: ManagerService; pulseScheduler: PulseScheduler; wsTickets: WsTicketStore; workingStates?: WorkingStateService }): void {
+export function registerRestRoutes(router: Router, deps: { sessions: SessionService; approvals: ApprovalService; modelTable: ModelTable; modelConfigPath: string; managers: ManagerService; pulseScheduler: PulseScheduler; wsTickets: WsTicketStore; workingStates?: WorkingStateService; handoverLedger?: HandoverLedger }): void {
   const servedRungs = (): ModelTable => {
     const { haiku, sonnet, opus, fable } = deps.modelTable;
     return { haiku, sonnet, opus, fable };
@@ -169,7 +170,15 @@ export function registerRestRoutes(router: Router, deps: { sessions: SessionServ
     });
   }
 
-  router.add('GET', '/api/approvals', ({ res }) => json(res, 200, deps.approvals.listPending()));
+  const { handoverLedger } = deps;
+  if (handoverLedger) {
+    router.add('GET', '/api/sessions/:id/handovers', ({ res, params }) => {
+      if (!deps.sessions.get(params.id!)) return json(res, 404, { error: 'not_found' });
+      json(res, 200, handoverLedger.list(params.id!));
+    });
+  }
+
+  router.add('GET', '/api/approvals', ({ res })=> json(res, 200, deps.approvals.listPending()));
 
   router.add('POST', '/api/approvals/:id/decide', ({ res, params, body }) => {
     const input = z.object({ behavior: z.enum(['allow', 'deny']), reason: z.string().optional() }).parse(body);

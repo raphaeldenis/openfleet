@@ -290,6 +290,8 @@ export class SessionService {
   private shuttingDown = false;
   // Children their own parent asked to close, until the close lands: the parent already knows they ended.
   private readonly idsClosingByParent = new Set<string>();
+  // The prompt the daemon handed each session at launch (a brief or a mission), for the process lifetime: a resume never replays it.
+  private readonly seededPromptBySessionId = new Map<string, string>();
 
   constructor(private readonly deps: SessionServiceDeps) {
     this.repo = new SessionRepository(deps.db);
@@ -309,6 +311,8 @@ export class SessionService {
     // in-between symlink swap from one whose path never resolved to a real directory at all.
     if (existsSync(spec.directory)) this.repo.setDirectoryRealpath(id, realpathSync.native(spec.directory));
     this.warnIfPermissiveSettings(spec.harness, spec.directory);
+    const seededPrompt = spec.seededPrompt?.trim();
+    if (seededPrompt) this.seededPromptBySessionId.set(id, seededPrompt);
     const harness = this.harnessFor(spec.harness);
     this.startPendingRecording(id, spec.model);
     this.conversationsAwaitingFirstPrompt.add(id);
@@ -940,6 +944,12 @@ export class SessionService {
   get(id: string): Session | undefined { return this.repo.get(id); }
   list(): Session[] { return this.repo.list(); }
   directoryRealpathOf(id: string): string | null | undefined { return this.repo.directoryRealpath(id); }
+  /** Returns true when the prompt is the one the daemon launched the session with; the CLI may append to it. */
+  isSeededPrompt(sessionId: string, prompt: string): boolean {
+    const seededPrompt = this.seededPromptBySessionId.get(sessionId);
+    return seededPrompt !== undefined && prompt.trim().startsWith(seededPrompt);
+  }
+
   byHookToken(token: string): Session | undefined { return this.repo.byHookToken(token); }
   transcriptPathOf(id: string): string | undefined { return this.transcriptPaths.get(id); }
   byMcpToken(token: string): Session | undefined { return this.repo.byMcpToken(token); }
