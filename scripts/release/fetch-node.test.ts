@@ -209,6 +209,14 @@ describe('fetchNode', () => {
     await expect(fetchNode({ version: VERSION, target: 'riscv64-unknown-linux-gnu', binariesFolder, fetchBytes, installedVersion: neverInstalled })).rejects.toThrow(/riscv64-unknown-linux-gnu.*aarch64-apple-darwin.*x86_64-apple-darwin/);
   });
 
+  it.each(['constructor', '__proto__', 'toString'])('refuses the object prototype key "%s" as a target before any request', async (target) => {
+    const fetchBytes = vi.fn(async () => Buffer.alloc(0));
+
+    await expect(fetchNode({ version: VERSION, target, binariesFolder, fetchBytes, installedVersion: neverInstalled })).rejects.toThrow(/is not supported/);
+
+    expect(fetchBytes).not.toHaveBeenCalled();
+  });
+
   describe('for x86_64-apple-darwin', () => {
     const X64_TARGET = 'x86_64-apple-darwin';
     const X64_TARBALL_NAME = `node-v${VERSION}-darwin-x64.tar.gz`;
