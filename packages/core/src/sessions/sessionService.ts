@@ -106,6 +106,12 @@ const DEFAULT_FIRST_START_TIMEOUT_MS = 60_000;
 // write before the separate '\r' submits it; upgrade path is confirming the composer holds the full body
 // from the pty output instead of trusting a fixed delay.
 export const SUBMIT_KEYSTROKE_DELAY_MS = 150;
+// Claude Code strips invisible characters (zero-width, bidi controls, BOM...) from a paste; the Enter that would
+// submit such a composer prints this notice and waits for a second Enter instead of sending. The text the model
+// receives is the CLI's own stripped text, so confirming is the faithful answer.
+// ponytail: matches the CLI's notice wording (2.1.284); a reworded notice only brings back the unsubmitted paste.
+const INVISIBLE_CHARACTERS_REVIEW_NOTICE = /review and press Enter to send/;
+const REVIEW_NOTICE_SPLIT_ACROSS_CHUNKS_MARGIN = 64;
 // Bounds how many not-yet-delivered messages one agent can stack on a single peer, so a looping agent
 // cannot flood a target's queue (8 KB each) faster than the target can read.
 export const MAX_PENDING_AGENT_MESSAGES_PER_SENDER = 20;
@@ -322,6 +328,7 @@ export class SessionService {
   private readonly queue: MessageQueue;
   private readonly handles = new Map<string, HarnessHandle>();
   private readonly outputBuffers = new Map<string, string>();
+  private readonly reviewConfirmedMessageIds = new Map<string, string>();
   private readonly resumeTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly deliveries = new Map<string, Delivery>();
   // Message ids whose '\r' reached the pty but whose markDelivered has not succeeded yet.
@@ -1240,6 +1247,23 @@ export class SessionService {
   private appendOutput(sessionId: string, data: string): void {
     const combined = (this.outputBuffers.get(sessionId) ?? '') + data;
     this.outputBuffers.set(sessionId, trimToTail(combined, OUTPUT_BUFFER_LIMIT));
+    this.confirmReviewedPaste(sessionId, combined.slice(-(data.length + REVIEW_NOTICE_SPLIT_ACROSS_CHUNKS_MARGIN)));
+  }
+
+  // One extra Enter per submitted message, only while that message awaits its turn start.
+  private confirmReviewedPaste(sessionId: string, recentOutput: string): void {
+    const { phase } = this.deliveryOf(sessionId);
+    if (phase.name !== 'submitted') return;
+    const isReviewRequested = INVISIBLE_CHARACTERS_REVIEW_NOTICE.test(recentOutput);
+    const isAlreadyConfirmed = this.reviewConfirmedMessageIds.get(sessionId) === phase.messageId;
+    const handle = this.liveHandle(sessionId);
+    if (!isReviewRequested || isAlreadyConfirmed || !handle) return;
+    this.reviewConfirmedMessageIds.set(sessionId, phase.messageId);
+    try {
+      handle.write('\r');
+    } catch (err) {
+      log('error', `delivery: session ${sessionId} failed to confirm the CLI's paste review for message ${phase.messageId}`, err);
+    }
   }
 
   // Moves the session's delivery as far as it can go right now. Nothing is typed or submitted unless the

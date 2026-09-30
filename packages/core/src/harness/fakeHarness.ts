@@ -59,7 +59,8 @@ export class FakeHandle implements HarnessHandle {
     const needsReview = this.reviewsInvisibleCharacters && hasInvisibleCharacters(this.composer);
     if (needsReview && !this.isComposerUnderReview) {
       this.isComposerUnderReview = true;
-      this.emitData('Removed 1 invisible character · review and press Enter to send');
+      // Like a real pty, the CLI's answer arrives after write() returned.
+      queueMicrotask(() => this.emitData('Removed 1 invisible character · review and press Enter to send'));
       return;
     }
     if (this.composer === '') return;
