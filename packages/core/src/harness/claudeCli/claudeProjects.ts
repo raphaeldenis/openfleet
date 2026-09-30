@@ -10,7 +10,7 @@ const READ_CHUNK_BYTES = 64 * 1024;
 // A transcript this long with no user or assistant line yet is not a title-only stub: it counts as a conversation.
 const MAX_BYTES_SCANNED = 4 * 1024 * 1024;
 const BYTE_ORDER_MARK = /^﻿/;
-const CONVERSATION_LINE_TYPES =new Set(['user', 'assistant']);
+const CONVERSATION_LINE_TYPES = new Set(['user', 'assistant']);
 
 // The daemon's own env is what the harness passes through to the CLI child (childEnvironment.ts keeps
 // CLAUDE_CONFIG_DIR — it's user configuration, not a session marker), so it is also the daemon's own
