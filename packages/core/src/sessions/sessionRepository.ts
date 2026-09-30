@@ -121,16 +121,29 @@ export class SessionRepository {
   }
   // Closes and rotates tokens in one statement: a row can never sit closed with its pre-close tokens
   // still live, even for the instant between two separate writes (or if the second one never ran).
-  // A daemon-shutdown close also records a 'daemon_shutdown' event stamped with the same instant as closed_at:
-  // that pairing is what tells the next boot this close was the daemon's, not the user's.
+  // A daemon-shutdown close also records the session's single 'daemon_shutdown' event stamped with the same instant as closed_at:
+  // that event is what tells the next boot this close was the daemon's, not the user's. Every close replaces the session's
+  // previous event, so a later close never matches an earlier shutdown's event.
   setClosed(id: string, exitCode: number | undefined, at: string, hookToken: string, mcpToken: string, options: { closedByDaemonShutdown?: boolean } = {}): void {
     inTransaction(this.db, 'set_session_closed', () => {
       this.db.prepare(`UPDATE sessions SET state = 'closed', state_since = ?, exit_code = ?, closed_at = ?, hook_token = ?, mcp_token = ? WHERE id = ?`)
         .run(at, exitCode ?? null, at, hookToken, mcpToken, id);
+      this.clearShutdownClose(id);
       if (options.closedByDaemonShutdown) this.db.prepare("INSERT INTO session_events (session_id, kind, ts) VALUES (?, 'daemon_shutdown', ?)").run(id, at);
     });
   }
-  /** True when the session's current close is the one a daemon shutdown made (a later close or a reopen breaks the pairing). */
+  /** Forgets that a daemon shutdown closed the session: it stays closed (a user close) or is being resumed. */
+  clearShutdownClose(id: string): void {
+    this.db.prepare("DELETE FROM session_events WHERE session_id = ? AND kind = 'daemon_shutdown'").run(id);
+  }
+  /** Consumes the shutdown close and sets the session back to 'starting' in one transaction. */
+  resumeFromShutdownClose(id: string, since: string): void {
+    inTransaction(this.db, 'resume_from_shutdown_close', () => {
+      this.clearShutdownClose(id);
+      this.setState(id, 'starting', since);
+    });
+  }
+  /** True when the session's current close is the one a daemon shutdown made and no resume or later close has consumed it. */
   wasClosedByDaemonShutdown(id: string): boolean {
     const row = this.db.prepare(`SELECT 1 AS found FROM session_events JOIN sessions ON sessions.id = session_events.session_id
       WHERE session_events.session_id = ? AND session_events.kind = 'daemon_shutdown' AND session_events.ts = sessions.closed_at`).get(id);

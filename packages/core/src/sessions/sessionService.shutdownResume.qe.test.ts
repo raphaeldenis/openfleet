@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -151,12 +151,12 @@ describe('resume after a graceful shutdown, hostile cases', () => {
     expect(third.harness.launches.map((launch) => launch.sessionId)).toEqual([healthy.id]);
   });
 
-  it('records one shutdown event per shutdown and none for sessions that were not open', async () => {
+  it('keeps at most one shutdown event per currently shutdown-closed session across 100 restarts', async () => {
     const db = openDatabase(':memory:');
     const first = bootDaemon(db);
     const session = await newSession(first.service, 'Worker');
     await first.service.closeAll();
-    for (let restart = 0; restart < 3; restart += 1) {
+    for (let restart = 0; restart < 100; restart += 1) {
       vi.setSystemTime(Date.now() + 1000);
       const next = bootDaemon(db);
       await next.service.resumeAll();
@@ -164,12 +164,141 @@ describe('resume after a graceful shutdown, hostile cases', () => {
       await next.service.closeAll();
     }
 
-    expect(shutdownEventsOf(db, session.id)).toBe(4);
+    expect(shutdownEventsOf(db, session.id)).toBe(1);
   });
 
-  // Defect (minor): the pairing is closed_at === event ts, so a user close landing in the same millisecond as the
-  // shutdown close it follows is indistinguishable from that shutdown close. it.fails flips red when fixed.
-  it.fails('keeps closed a session the user closed in the same millisecond as the resume that followed a shutdown', async () => {
+  it('deletes the shutdown event of a session that resumed', async () => {
+    const db = openDatabase(':memory:');
+    const first = bootDaemon(db);
+    const session = await newSession(first.service, 'Worker');
+    await first.service.closeAll();
+
+    await bootDaemon(db).service.resumeAll();
+
+    expect(shutdownEventsOf(db, session.id)).toBe(0);
+  });
+
+  it('keeps closed a shutdown-closed session the user closed while the boot was still resuming an earlier one', async () => {
+    const db = openDatabase(':memory:');
+    const vanishingDirectory = join(scratch, 'vanishing');
+    mkdirSync(vanishingDirectory);
+    const first = bootDaemon(db);
+    await newSession(first.service, 'Orphan', vanishingDirectory);
+    const waiting = await newSession(first.service, 'Waiting');
+    await first.service.closeAll();
+    rmSync(vanishingDirectory, { recursive: true });
+
+    const second = bootDaemon(db);
+    const boot = second.service.resumeAll();
+    const userClose = second.service.close(waiting.id);
+    await Promise.all([boot, userClose]);
+
+    expect(second.harness.launches).toHaveLength(0);
+    expect(second.service.get(waiting.id)!.state).toBe('closed');
+    expect(shutdownEventsOf(db, waiting.id)).toBe(0);
+  });
+
+  it('resumes a session whose user close arrived after the shutdown had already begun closing it', async () => {
+    const db = openDatabase(':memory:');
+    const first = bootDaemon(db);
+    const session = await newSession(first.service, 'Stubborn');
+    first.harness.handles[0]!.ignoresGracefulKill = true;
+
+    const shutdown = first.service.closeAll();
+    const userClose = first.service.close(session.id);
+    await vi.advanceTimersByTimeAsync(60_000);
+    await Promise.all([userClose, shutdown]);
+    const second = bootDaemon(db);
+    await second.service.resumeAll();
+
+    expect(second.harness.launches.map((launch) => launch.sessionId)).toEqual([session.id]);
+  });
+
+  it('resumes the children the shutdown closed while their manager, closed by the user before, stays closed (no cascade on a manager close)', async () => {
+    const db = openDatabase(':memory:');
+    const first = bootDaemon(db);
+    const manager = await first.service.create({ directory: '/tmp', name: 'Manager', harness: 'fake', emoji: '🤖', role: 'manager' });
+    const child = await first.service.create({ directory: '/tmp', name: 'Child', harness: 'fake', emoji: '🤖', parentId: manager.id });
+    await first.service.close(manager.id);
+    const childStateAfterManagerClose = first.service.get(child.id)!.state;
+    await first.service.closeAll();
+
+    const second = bootDaemon(db);
+    await second.service.resumeAll();
+
+    expect(childStateAfterManagerClose).toBe('starting');
+    expect(second.harness.launches.map((launch) => launch.sessionId)).toEqual([child.id]);
+    expect(second.service.get(manager.id)!.state).toBe('closed');
+  });
+
+  describe('the directory guards of reopen() apply to every resumed row', () => {
+    it('closes a session whose directory was replaced by a symlink to another path, and resumes the others in order', async () => {
+      const db = openDatabase(':memory:');
+      const swappedDirectory = join(scratch, 'swapped');
+      const elsewhere = join(scratch, 'elsewhere');
+      mkdirSync(swappedDirectory);
+      mkdirSync(elsewhere);
+      const first = bootDaemon(db);
+      const swapped = await newSession(first.service, 'Swapped', swappedDirectory);
+      const before = await newSession(first.service, 'Before');
+      const after = await newSession(first.service, 'After');
+      await first.service.closeAll();
+      rmSync(swappedDirectory, { recursive: true });
+      symlinkSync(elsewhere, swappedDirectory);
+
+      const second = bootDaemon(db);
+      await second.service.resumeAll();
+      const third = bootDaemon(db);
+      await third.service.resumeAll();
+
+      expect(second.harness.launches.map((launch) => launch.sessionId)).toEqual([before.id, after.id]);
+      expect(second.service.get(swapped.id)!.state).toBe('closed');
+      expect(second.service.get(swapped.id)!.exitCode).toBe(RESUME_LAUNCH_FAILED_EXIT_CODE);
+      expect(third.harness.launches.map((launch) => launch.sessionId)).toEqual([before.id, after.id]);
+    });
+
+    it('closes a session whose directory became unreadable, and resumes the others in order', async () => {
+      const db = openDatabase(':memory:');
+      const lockedDirectory = join(scratch, 'locked');
+      mkdirSync(lockedDirectory);
+      const first = bootDaemon(db);
+      const before = await newSession(first.service, 'Before');
+      const locked = await newSession(first.service, 'Locked', lockedDirectory);
+      const after = await newSession(first.service, 'After');
+      await first.service.closeAll();
+      chmodSync(lockedDirectory, 0o000);
+
+      const second = bootDaemon(db);
+      try {
+        await second.service.resumeAll();
+      } finally {
+        chmodSync(lockedDirectory, 0o700);
+      }
+
+      expect(second.harness.launches.map((launch) => launch.sessionId)).toEqual([before.id, after.id]);
+      expect(second.service.get(locked.id)!.state).toBe('closed');
+      expect(second.service.get(locked.id)!.exitCode).toBe(RESUME_LAUNCH_FAILED_EXIT_CODE);
+    });
+
+    it('closes a session left open by a killed daemon whose directory vanished while the daemon was dead', async () => {
+      const db = openDatabase(':memory:');
+      const vanishingDirectory = join(scratch, 'vanishing');
+      mkdirSync(vanishingDirectory);
+      const first = bootDaemon(db);
+      const orphan = await newSession(first.service, 'Orphan', vanishingDirectory);
+      const healthy = await newSession(first.service, 'Healthy');
+      rmSync(vanishingDirectory, { recursive: true });
+
+      const second = bootDaemon(db);
+      await second.service.resumeAll();
+
+      expect(second.harness.launches.map((launch) => launch.sessionId)).toEqual([healthy.id]);
+      expect(second.service.get(orphan.id)!.state).toBe('closed');
+      expect(second.service.get(orphan.id)!.exitCode).toBe(RESUME_LAUNCH_FAILED_EXIT_CODE);
+    });
+  });
+
+  it('keeps closed a session the user closed in the same millisecond as the resume that followed a shutdown', async () => {
     const db = openDatabase(':memory:');
     const first = bootDaemon(db);
     const session = await newSession(first.service, 'Worker');
@@ -184,8 +313,7 @@ describe('resume after a graceful shutdown, hostile cases', () => {
     expect(third.harness.launches).toHaveLength(0);
   });
 
-  // Defect (minor/major): reopen() refuses a missing directory before launching; resumeAll launches into it.
-  it.fails('does not launch a shutdown-closed session into a directory that no longer exists', async () => {
+  it('does not launch a shutdown-closed session into a directory that no longer exists', async () => {
     const db = openDatabase(':memory:');
     const vanishingDirectory = join(scratch, 'vanishing');
     mkdirSync(vanishingDirectory);
