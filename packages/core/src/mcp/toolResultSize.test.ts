@@ -152,6 +152,16 @@ describe('MCP tool results are compact', () => {
       expect(parsed(result)).toMatchObject({ id: created.id, name: 'Gimli', state: 'starting' });
     });
 
+    it('agent reads the resolved model, the model it drifted from, the worktree and the branch of a child that has them', async () => {
+      const created = parsed(await call('create_session', { directory: existingWorktreeDir('resolved'), name: 'Gimli' }));
+      db.prepare('UPDATE sessions SET resolved_model = ?, model_drifted_from = ?, worktree = ?, branch = ? WHERE id = ?')
+        .run('claude-sonnet-x', 'claude-sonnet-w', '/tmp/of-worktrees/resolved', 'feature/resolved', created.id);
+
+      const status = parsed(await call('get_session_status', { session_id: created.id }));
+
+      expect(status).toMatchObject({ resolvedModel: 'claude-sonnet-x', modelDriftedFrom: 'claude-sonnet-w', worktree: '/tmp/of-worktrees/resolved', branch: 'feature/resolved' });
+    });
+
     it('agent can list ten children within the byte budget, each with id, name and state', async () => {
       await spawnChildren(CHILD_COUNT);
 
