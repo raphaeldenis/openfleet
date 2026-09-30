@@ -244,5 +244,66 @@ describe('InboxComponent questions from agents', () => {
 
       expect(within(cards()[0]).getByTestId('inbox-attention-session')).toHaveTextContent('safe<U+202E>evil');
     });
+
+    it('user sees a bidirectional control in a question or a blocker shown as an escape, not applied', async () => {
+      const rightToLeftOverride = String.fromCharCode(0x202e);
+      await renderInbox([agent('s1')], [stateOf({ sessionId: 's1', questionsForHuman: [`approve${rightToLeftOverride}txt.exe?`], blockers: [`stuck${rightToLeftOverride}on`] })]);
+      await openQuestionsTab();
+
+      const card = cards()[0];
+      expect(within(card).getByTestId('inbox-attention-question')).toHaveTextContent('approve<U+202E>txt.exe?');
+      expect(within(card).getByTestId('inbox-attention-blocker')).toHaveTextContent('stuck<U+202E>on');
+    });
+
+    it('user still reads a question written in Hebrew as it was written', async () => {
+      const hebrew = 'איזה פורט?';
+      await renderInbox([agent('s1')], [stateOf({ sessionId: 's1', questionsForHuman: [hebrew] })]);
+      await openQuestionsTab();
+
+      expect(within(cards()[0]).getByTestId('inbox-attention-question').textContent?.trim()).toBe(hebrew);
+    });
+
+    it('user keeps every character of a question with zero-width characters', async () => {
+      const withZeroWidth = `a${String.fromCharCode(0x200b)}b${String.fromCharCode(0xfeff)}c`;
+      await renderInbox([agent('s1')], [stateOf({ sessionId: 's1', questionsForHuman: [withZeroWidth] })]);
+      await openQuestionsTab();
+
+      expect(within(cards()[0]).getByTestId('inbox-attention-question').textContent?.trim()).toBe(withZeroWidth);
+    });
+
+    it('user hears the true count on the page title while it shows "99+" past 99', async () => {
+      const sessions = Array.from({ length: 120 }, (_, index) => agent(`s${index}`));
+      await renderInbox(sessions, sessions.map((session) => stateOf({ sessionId: session.id, blockers: ['stuck'] })));
+
+      expect(screen.getByTestId('inbox-count')).toHaveTextContent('99+');
+      expect(screen.getByTestId('inbox-count')).toHaveAttribute('aria-label', '120 items need you');
+    });
+
+    it('user keeps a reply typed in a card when another session starts asking above it', async () => {
+      const user = userEvent.setup({ delay: null });
+      const { events, fixture } = await renderInbox([agent('s1'), agent('s2')], [stateOf({ sessionId: 's2', blockers: ['b'] })]);
+      await openQuestionsTab();
+      await user.type(within(cards()[0]).getByTestId('composer-input'), 'half a reply');
+
+      events.workingStates.set(new Map([['s1', stateOf({ sessionId: 's1', blockers: ['a'] })], ['s2', stateOf({ sessionId: 's2', blockers: ['b'], plan: ['refreshed'] })]]));
+      await fixture.whenStable();
+
+      const [firstCard, secondCard] = cards();
+      expect(within(firstCard).getByTestId('composer-input')).toHaveValue('');
+      expect(within(secondCard).getByTestId('composer-input')).toHaveValue('half a reply');
+    });
+
+    it('user sees the same card once when the same snapshot is replayed', async () => {
+      const state = stateOf({ sessionId: 's1', questionsForHuman: ['which port?'] });
+      const { events, fixture } = await renderInbox([agent('s1')], [state]);
+      await openQuestionsTab();
+
+      events.workingStates.set(new Map([['s1', { ...state }]]));
+      events.workingStates.set(new Map([['s1', { ...state }]]));
+      await fixture.whenStable();
+
+      expect(cards()).toHaveLength(1);
+      expect(within(cards()[0]).getAllByTestId('inbox-attention-question')).toHaveLength(1);
+    });
   });
 });
