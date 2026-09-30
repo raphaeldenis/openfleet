@@ -218,7 +218,7 @@ impl<F: LogFs> LogWriter<F> {
   /// Looks for a new admin token on every line while none is known (the file may appear after the first output), then every two seconds.
   fn refresh_secrets(&mut self, now: u64) {
     let no_secret_known_yet = self.secrets.is_empty();
-    let check_is_due = self.secrets_checked_at.is_none_or(|checked_at| now.saturating_sub(checked_at) >= SECRET_CHECK_INTERVAL_SECONDS);
+    let check_is_due = self.secrets_checked_at.map_or(true, |checked_at| now.saturating_sub(checked_at) >= SECRET_CHECK_INTERVAL_SECONDS);
     if !(no_secret_known_yet || check_is_due) {
       return;
     }

@@ -9,7 +9,7 @@ const ESCAPE_LAYERS_DECODED: usize = 3;
 const ESCAPE_PREFIX_LAYERS: usize = 4;
 const NESTED_DECODINGS_CHECKED: usize = 4;
 const SECRET_KEY_WORDS: [&str; 9] = ["token", "secret", "authorization", "password", "cookie", "ticket", "apikey", "api_key", "api-key"];
-const ESCAPED_SEPARATORS: [u8; 4] = [b' ', b':', b'=', b'\t'];
+const ESCAPED_SEPARATORS: &[u8] = b" :=\t";
 
 type Replacement = Option<(usize, String)>;
 
@@ -311,7 +311,7 @@ fn slash_end(bytes: &[u8], index: usize) -> Option<usize> {
 fn is_the_route_pattern(rest: &str) -> bool {
   let bytes = rest.as_bytes();
   let names_the_placeholder = bytes.get(..":token".len()).is_some_and(|word| word.eq_ignore_ascii_case(b":token"));
-  let placeholder_ends_there = bytes.get(":token".len()).is_none_or(|byte| !is_word_byte(*byte) && *byte != b'-');
+  let placeholder_ends_there = bytes.get(":token".len()).map_or(true, |byte| !is_word_byte(*byte) && *byte != b'-');
   names_the_placeholder && placeholder_ends_there
 }
 

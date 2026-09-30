@@ -2,13 +2,17 @@ use crate::log_file::ensure_private_dir;
 use std::ffi::OsStr;
 use std::io;
 use std::path::Path;
-use std::process::Command;
-use std::time::Duration;
+use std::io::Read;
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::time::{Duration, Instant};
 
 pub const NEW_ISSUE_URL: &str = "https://github.com/raphaeldenis/openfleet/issues/new";
 /// GitHub refuses a prefilled URL beyond roughly 8 KB.
 pub const MAX_URL_BYTES: usize = 7500;
 pub const MAX_LINE_CHARS: usize = 400;
+const OPEN_TIMEOUT: Duration = Duration::from_secs(10);
+const SW_VERS_TIMEOUT: Duration = Duration::from_secs(3);
+const COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 pub struct IssueReport {
   pub app_version: String,
@@ -116,24 +120,46 @@ pub fn open_issue_form(report: &IssueReport, open: impl Fn(&str) -> io::Result<(
 }
 
 /// Runs the command and returns what it printed; fails when it exits unsuccessfully or outlives `timeout`, in which case it is killed.
-pub fn run_within(_command: Command, _timeout: Duration) -> io::Result<String> {
-  Err(io::Error::other("not implemented"))
+pub fn run_within(mut command: Command, timeout: Duration) -> io::Result<String> {
+  let mut child = command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn()?;
+  let deadline = Instant::now() + timeout;
+  loop {
+    if let Some(status) = child.try_wait()? {
+      return finished_output(&mut child, status, &command);
+    }
+    if Instant::now() >= deadline {
+      let _ = child.kill();
+      let _ = child.wait();
+      return Err(io::Error::new(io::ErrorKind::TimedOut, format!("{:?} did not finish within {}s", command.get_program(), timeout.as_secs_f32())));
+    }
+    std::thread::sleep(COMMAND_POLL_INTERVAL);
+  }
+}
+
+// ponytail: reads the pipe only after the exit, so a command printing more than a pipe buffer (64 KB) would time out; `open` and `sw_vers` print a line.
+fn finished_output(child: &mut Child, status: ExitStatus, command: &Command) -> io::Result<String> {
+  if !status.success() {
+    return Err(io::Error::other(format!("{:?} exited with {status}", command.get_program())));
+  }
+  let mut printed = String::new();
+  if let Some(mut stdout) = child.stdout.take() {
+    stdout.read_to_string(&mut printed)?;
+  }
+  Ok(printed)
 }
 
 /// Asks macOS to open a folder or URL with its default application.
 pub fn open_with_macos(target: &OsStr) -> io::Result<()> {
-  let status = Command::new("/usr/bin/open").arg(target).status()?;
-  if status.success() {
-    Ok(())
-  } else {
-    Err(io::Error::other(format!("open exited with {status}")))
-  }
+  let mut open = Command::new("/usr/bin/open");
+  open.arg(target);
+  run_within(open, OPEN_TIMEOUT).map(|_| ())
 }
 
-/// Returns the macOS product version, `unknown` when `sw_vers` does not answer.
+/// Returns the macOS product version, `unknown` when `sw_vers` does not answer in time.
 pub fn macos_version() -> String {
-  let answer = Command::new("/usr/bin/sw_vers").arg("-productVersion").output();
-  let version = answer.ok().filter(|output| output.status.success()).map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string());
+  let mut sw_vers = Command::new("/usr/bin/sw_vers");
+  sw_vers.arg("-productVersion");
+  let version = run_within(sw_vers, SW_VERS_TIMEOUT).ok().map(|printed| printed.trim().to_string());
   version.filter(|version| !version.is_empty()).unwrap_or_else(|| "unknown".to_string())
 }
 

@@ -21,7 +21,7 @@ fn read_admin_token(app: tauri::AppHandle) -> Result<String, String> {
 const LOG_LINES_IN_REPORT: usize = 50;
 
 /// Opens the logs folder in Finder. Takes no argument: the webview cannot choose what is opened.
-#[tauri::command]
+#[tauri::command(async)]
 fn reveal_logs(app: tauri::AppHandle) -> Result<(), String> {
   let user_home = app.path().home_dir().map_err(|err| err.to_string())?;
   let logs_folder = log_file::logs_dir(std::env::var("OPENFLEET_HOME").ok(), &user_home);
@@ -29,7 +29,7 @@ fn reveal_logs(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 /// Opens the prefilled GitHub new-issue form in the browser; nothing is sent until the user submits it there.
-#[tauri::command]
+#[tauri::command(async)]
 fn report_issue(app: tauri::AppHandle, daemon: tauri::State<daemon::DaemonState>) -> Result<(), String> {
   let user_home = app.path().home_dir().map_err(|err| err.to_string())?;
   let openfleet_home = std::env::var("OPENFLEET_HOME").ok();
@@ -47,20 +47,6 @@ fn report_issue(app: tauri::AppHandle, daemon: tauri::State<daemon::DaemonState>
     user_home: user_home.to_string_lossy().to_string(),
   };
   issue_report::open_issue_form(&report, |url| issue_report::open_with_macos(url.as_ref()))
-}
-
-#[cfg(test)]
-mod tests {
-  /// A sync command runs on the main thread unless it is declared `async`, and these two read files and wait on child processes.
-  #[test]
-  fn the_support_commands_run_off_the_main_thread_and_take_no_webview_argument() {
-    let source = include_str!("lib.rs");
-
-    for signature in ["fn reveal_logs(app: tauri::AppHandle)", "fn report_issue(app: tauri::AppHandle, daemon: tauri::State<daemon::DaemonState>)"] {
-      let lines_before: Vec<&str> = source.split(signature).next().unwrap().lines().collect();
-      assert_eq!(lines_before.last().copied(), Some("#[tauri::command(async)]"), "{signature}");
-    }
-  }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -119,5 +105,19 @@ fn show_main_window(app: &tauri::AppHandle) {
   let Some(window_config) = app.config().app.windows.first() else { return };
   if let Ok(builder) = tauri::WebviewWindowBuilder::from_config(app, window_config) {
     let _ = builder.build();
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  /// A sync command runs on the main thread unless it is declared `async`, and these two read files and wait on child processes.
+  #[test]
+  fn the_support_commands_run_off_the_main_thread_and_take_no_webview_argument() {
+    let source = include_str!("lib.rs");
+
+    for signature in ["fn reveal_logs(app: tauri::AppHandle)", "fn report_issue(app: tauri::AppHandle, daemon: tauri::State<daemon::DaemonState>)"] {
+      let lines_before: Vec<&str> = source.split(signature).next().unwrap().lines().collect();
+      assert_eq!(lines_before.last().copied(), Some("#[tauri::command(async)]"), "{signature}");
+    }
   }
 }
