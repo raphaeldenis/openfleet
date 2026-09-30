@@ -3503,14 +3503,14 @@ describe('SessionService queued /clear', () => {
     expect(harness.handles[0]!.written).toEqual(['prompt M', '\r']);
   });
 
-  it('keeps a submitted prompt waiting when a compaction SessionStart arrives before its turn start', async () => {
+  it('keeps a submitted /clear waiting when a compaction SessionStart arrives before its own SessionStart', async () => {
     vi.useFakeTimers();
-    const { service, harness, sessionId } = await idleSessionWithQueued(['prompt M', 'prompt N']);
+    const { service, harness, sessionId } = await idleSessionWithQueued(['/clear', 'prompt N']);
     await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
 
     service.applyInput(sessionId, hook(sessionId, { hook_event_name: 'SessionStart', source: 'compact' }));
 
-    expect(harness.handles[0]!.written).toEqual(['prompt M', '\r']);
+    expect(harness.handles[0]!.written).toEqual(['/clear', '\r']);
   });
 
   it('retries a failed typing only after DELIVERY_RETRY_MS when the SessionStart with source clear releases a queued /clear', async () => {
