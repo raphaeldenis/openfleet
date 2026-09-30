@@ -114,6 +114,59 @@ describe('unknown target', () => {
   });
 });
 
+describe('an output folder that holds other people\'s files', () => {
+  it('never deletes a node_modules or a file it did not write', () => {
+    const out = join(makeScratchFolder(), 'shared-folder');
+    const foreignModule = join(out, 'node_modules/someone-elses-package/index.js');
+    const foreignNote = join(out, 'notes.txt');
+    mkdirSync(dirname(foreignModule), { recursive: true });
+    writeFileSync(foreignModule, 'module.exports = 1;');
+    writeFileSync(foreignNote, 'keep me');
+
+    runBundle(['--target', ARM64_TARGET, '--out', out, '--tauri-conf', tauriConf]);
+
+    expect(existsSync(foreignModule)).toBe(true);
+    expect(readFileSync(foreignNote, 'utf8')).toBe('keep me');
+  }, BOOT_TIMEOUT_MS);
+});
+
+describe('a tauri.conf.json without a usable version', () => {
+  it('fails in one line and leaves the previous bundle untouched', () => {
+    const previousDaemon = readFileSync(join(arm64Out, 'daemon.mjs'));
+    const versionlessConf = join(makeScratchFolder(), 'tauri.conf.json');
+    writeFileSync(versionlessConf, JSON.stringify({ productName: 'OpenFleet' }));
+
+    const result = runBundle(['--target', ARM64_TARGET, '--out', arm64Out, '--tauri-conf', versionlessConf]);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr.trim().split('\n')).toHaveLength(1);
+    expect(readFileSync(join(arm64Out, 'daemon.mjs')).equals(previousDaemon)).toBe(true);
+  });
+});
+
+describe('reproducibility', () => {
+  it('produces the same daemon.mjs whatever the working directory of the build', () => {
+    const fromTmp = join(makeScratchFolder(), 'from-tmp');
+    const fromRepo = join(makeScratchFolder(), 'from-repo');
+
+    spawnSync(process.execPath, [SCRIPT, '--target', ARM64_TARGET, '--out', fromTmp, '--tauri-conf', tauriConf], { cwd: tmpdir() });
+    spawnSync(process.execPath, [SCRIPT, '--target', ARM64_TARGET, '--out', fromRepo, '--tauri-conf', tauriConf], { cwd: REPO_ROOT });
+
+    expect(readFileSync(join(fromRepo, 'daemon.mjs')).equals(readFileSync(join(fromTmp, 'daemon.mjs')))).toBe(true);
+  }, BOOT_TIMEOUT_MS);
+});
+
+describe('the documented pnpm command', () => {
+  it('accepts the flags after pnpm\'s "--" separator', () => {
+    const out = join(makeScratchFolder(), 'via-pnpm');
+
+    const result = spawnSync('pnpm', ['--dir', REPO_ROOT, '--filter', '@openfleet/core', 'bundle', '--', '--target', X64_TARGET, '--out', out, '--tauri-conf', tauriConf], { encoding: 'utf8', cwd: tmpdir() });
+
+    expect(result.stderr).not.toContain('unknown argument');
+    expect(existsSync(join(out, 'daemon.mjs'))).toBe(true);
+  }, BOOT_TIMEOUT_MS);
+});
+
 describe('the bundled daemon', () => {
   const LISTENING_LINE = /listening on (http:\/\/127\.0\.0\.1:\d+)/;
   let daemon: ChildProcess | undefined;
