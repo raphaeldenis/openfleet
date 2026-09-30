@@ -71,6 +71,21 @@ describe('ManagerDashboardComponent', () => {
     expect(getComputedStyle(name).overflowWrap).toBe('anywhere');
   });
 
+  it('user reads bidi and zero-width controls in the manager and child names as escapes, in text and tooltip', async () => {
+    const fake = fakeEvents({
+      sessions: [{ ...MANAGER_SESSION, name: 'Le‮ad' }, { ...CHILD_SESSION, name: 'Gim​li' }],
+      managers: [MANAGER_VIEW],
+    });
+    await render(ManagerDashboardComponent, {
+      providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('m1') }, { provide: FleetEventsService, useValue: fake }],
+    });
+
+    const name = screen.getByTestId('manager-dashboard-name');
+    expect(name).toHaveTextContent('Le<U+202E>ad');
+    expect(name).toHaveAttribute('title', 'Le<U+202E>ad');
+    expect(screen.getByTestId('manager-dashboard-child-c1')).toHaveTextContent('Gim<U+200B>li');
+  });
+
   it('shows a loading state before the snapshot has arrived, instead of a blank screen', async () => {
     const fake = fakeEvents({ snapshotReceived: false });
     await render(ManagerDashboardComponent, {

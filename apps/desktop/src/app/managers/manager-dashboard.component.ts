@@ -5,6 +5,7 @@ import { map } from 'rxjs';
 import { MANAGER_ROLE, type ManagerView, type Session } from '@openfleet/shared';
 import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
+import { showInvisibleControlsAsEscapes } from '../inbox/bidi-escapes';
 import { StateChipComponent } from '../design/state-chip.component';
 import { PulseRingComponent } from '../design/pulse-ring.component';
 import { OverdueChipComponent } from '../working-state/overdue-chip.component';
@@ -24,7 +25,7 @@ import { PulseNowAction } from './pulse-now';
           <span class="emoji">{{ session.emoji }}</span>
           <div class="identity">
             <div class="name-row">
-              <span data-testid="manager-dashboard-name" class="name" [attr.title]="session.name">{{ session.name }}</span>
+              <span data-testid="manager-dashboard-name" class="name" [attr.title]="visibleNameOf(session)">{{ visibleNameOf(session) }}</span>
               <span class="role-badge">manager</span>
               <of-state-chip [state]="session.state" />
               <of-overdue-chip [session]="session" />
@@ -86,7 +87,7 @@ import { PulseNowAction } from './pulse-now';
               </div>
               @for (child of children(); track child.id) {
                 <div class="row" [attr.data-testid]="'manager-dashboard-child-' + child.id">
-                  <span class="col-name">{{ child.emoji }} {{ child.name }}</span>
+                  <span class="col-name">{{ child.emoji }} {{ visibleNameOf(child) }}</span>
                   <span class="col-state"><of-state-chip [state]="child.state" /></span>
                   <span class="col-cost mono" title="Cost tracking is not implemented yet">—</span>
                 </div>
@@ -176,6 +177,10 @@ export class ManagerDashboardComponent {
   protected readonly children = computed<Session[]>(() =>
     this.events.sessions().filter((s) => s.parentId === this.managerId()),
   );
+
+  protected visibleNameOf(session: Session): string {
+    return showInvisibleControlsAsEscapes(session.name);
+  }
 
   protected readonly countdownSeconds = computed(() => {
     const manager = this.manager();

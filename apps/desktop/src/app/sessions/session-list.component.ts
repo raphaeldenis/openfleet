@@ -4,6 +4,7 @@ import { Router, RouterLink } from '@angular/router';
 import { MANAGER_ROLE, type Session } from '@openfleet/shared';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { StateChipComponent } from '../design/state-chip.component';
+import { showInvisibleControlsAsEscapes } from '../inbox/bidi-escapes';
 import { ManagerCardComponent } from '../managers/manager-card.component';
 import { OverdueChipComponent } from '../working-state/overdue-chip.component';
 
@@ -24,12 +25,14 @@ import { OverdueChipComponent } from '../working-state/overdue-chip.component';
           [class.child]="!!session.parentId"
           [class.closed]="session.state === 'closed'"
           [attr.data-testid]="'session-' + session.id"
-          [attr.aria-label]="session.name + ' — ' + session.state"
+          [attr.aria-label]="visibleNameOf(session) + ' — ' + session.state"
           (click)="onSessionClick(session)"
         >
-          <span class="name" [attr.title]="session.name">{{ session.emoji }} {{ session.name }}</span>
+          <span class="name" [attr.title]="visibleNameOf(session)">{{ session.emoji }} {{ visibleNameOf(session) }}</span>
           <span class="meta">
-            <of-overdue-chip [session]="session" />
+            @if (!managerOf(session.id)) {
+              <of-overdue-chip [session]="session" />
+            }
             <of-state-chip [state]="session.state" />
             <span class="rung" title="Model rung">{{ session.model || '—' }}</span>
             <span class="cost" title="Cost tracking is not implemented yet">—</span>
@@ -86,6 +89,10 @@ export class SessionListComponent {
 
   childrenOf(parentId: string): Session[] {
     return this.events.sessions().filter((s) => s.parentId === parentId);
+  }
+
+  visibleNameOf(session: Session): string {
+    return showInvisibleControlsAsEscapes(session.name);
   }
 
   managerOf(sessionId: string) {

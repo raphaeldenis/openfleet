@@ -45,6 +45,15 @@ describe('SessionListComponent state overdue chip', () => {
     expect(within(screen.getByTestId('session-c2')).queryByTestId('overdue-chip')).toBeNull();
   });
 
+  it('user sees "state overdue" once for a manager, not on both its row and its pulse card', async () => {
+    const managers = [{ sessionId: 'm1', pulseSeconds: 1800, childrenCap: 2, missionText: 'x', nextPulseAt: new Date().toISOString(), childrenCount: 0 }];
+    const fake = fakeEvents({ sessions: [sessions[0]], managers, workingStatesReported: true });
+
+    await render(SessionListComponent, { providers: [provideRouter([]), { provide: FleetEventsService, useValue: fake }] });
+
+    expect(screen.getAllByTestId('overdue-chip')).toHaveLength(1);
+  });
+
   it('user keeps reading the session name when its row also carries the chip', async () => {
     const fake = fakeEvents({ sessions: [{ id: 'c1', name: 'Gimli', emoji: '⚔️', state: 'generating' }], workingStatesReported: true });
 
@@ -193,6 +202,16 @@ describe('SessionListComponent', () => {
     expect(row).toHaveTextContent('sonnet');
     const cost = row.querySelector('[title="Cost tracking is not implemented yet"]');
     expect(cost).toHaveTextContent('—');
+  });
+
+  it('user reads bidi and zero-width controls of a session name as escapes in the row, its title and its accessible name', async () => {
+    const fake = fakeEvents({ sessions: [{ id: 's1', name: 'Gi‮mli​', emoji: '⚔️', state: 'idle' }] });
+    await render(SessionListComponent, { providers: [provideRouter([]), { provide: FleetEventsService, useValue: fake }] });
+
+    const row = screen.getByTestId('session-s1');
+    expect(row).toHaveTextContent('Gi<U+202E>mli<U+200B>');
+    expect(row).toHaveAttribute('aria-label', 'Gi<U+202E>mli<U+200B> — idle');
+    expect(row.querySelector('.name')).toHaveAttribute('title', 'Gi<U+202E>mli<U+200B>');
   });
 
   it('keeps a long session name on a single line with the full name available in the title attribute', async () => {
