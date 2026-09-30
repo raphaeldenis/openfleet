@@ -56,9 +56,11 @@ describe('FleetEventsService', () => {
     vi.stubGlobal('WebSocket', FakeWebSocket);
     fetchMock = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({ ticket: 'fake-ticket' }) });
     vi.stubGlobal('fetch', fetchMock);
+    vi.useFakeTimers();
     localStorage.clear();
   });
   afterEach(() => {
+    vi.useRealTimers();
     localStorage.clear();
   });
 
@@ -503,6 +505,10 @@ describe('FleetEventsService offline sends (AUD-14)', () => {
     FakeWebSocket.instances = [];
     vi.stubGlobal('WebSocket', FakeWebSocket);
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({ ticket: 'fake-ticket' }) }));
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   function sentTypes(socket: FakeWebSocket) {

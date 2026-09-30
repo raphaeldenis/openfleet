@@ -1,4 +1,5 @@
 import '@testing-library/jest-dom/vitest';
+import './testing/leaked-timers';
 
 // xterm needs a ResizeObserver in jsdom, which doesn't implement one.
 globalThis.ResizeObserver ??= class {
