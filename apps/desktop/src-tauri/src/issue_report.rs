@@ -4,6 +4,7 @@ use std::io;
 use std::path::Path;
 use std::io::Read;
 use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 pub const NEW_ISSUE_URL: &str = "https://github.com/raphaeldenis/openfleet/issues/new";
@@ -108,6 +109,25 @@ fn percent_escaped(text: &str, lowercase_hex: bool) -> String {
   })
 }
 
+/// Clears the busy flag when the job ends, however it ends.
+struct ClearOnDrop<'a>(&'a AtomicBool);
+
+impl Drop for ClearOnDrop<'_> {
+  fn drop(&mut self) {
+    self.0.store(false, Ordering::SeqCst);
+  }
+}
+
+/// Runs the job unless one is already running on the same flag, in which case the call does nothing and succeeds.
+pub fn run_unless_busy(in_flight: &AtomicBool, job: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
+  let another_is_running = in_flight.swap(true, Ordering::SeqCst);
+  if another_is_running {
+    return Ok(());
+  }
+  let _clears_the_flag = ClearOnDrop(in_flight);
+  job()
+}
+
 /// Opens the folder in the file manager.
 pub fn reveal_logs_dir(logs_dir: &Path, open: impl Fn(&Path) -> io::Result<()>) -> Result<(), String> {
   ensure_private_dir(logs_dir).map_err(|err| format!("could not create {}: {err}", logs_dir.display()))?;
@@ -166,6 +186,45 @@ pub fn macos_version() -> String {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn a_second_invocation_is_ignored_while_one_is_running_and_allowed_once_it_ends() {
+    let in_flight = AtomicBool::new(false);
+    let mut nested_runs = 0;
+
+    let outer = run_unless_busy(&in_flight, || {
+      let nested = run_unless_busy(&in_flight, || {
+        nested_runs += 1;
+        Ok(())
+      });
+      assert_eq!(nested, Ok(()));
+      Ok(())
+    });
+    let mut later_runs = 0;
+    let later = run_unless_busy(&in_flight, || {
+      later_runs += 1;
+      Ok(())
+    });
+
+    assert_eq!((outer, later), (Ok(()), Ok(())));
+    assert_eq!(nested_runs, 0, "ignored while the first runs");
+    assert_eq!(later_runs, 1, "allowed again after it ended");
+  }
+
+  #[test]
+  fn the_busy_flag_is_released_when_the_job_fails() {
+    let in_flight = AtomicBool::new(false);
+
+    let failed = run_unless_busy(&in_flight, || Err("boom".to_string()));
+    let mut retried = false;
+    let _ = run_unless_busy(&in_flight, || {
+      retried = true;
+      Ok(())
+    });
+
+    assert_eq!(failed, Err("boom".to_string()));
+    assert!(retried);
+  }
   use std::cell::RefCell;
 
   fn report_with(log_lines: Vec<String>) -> IssueReport {
