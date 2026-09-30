@@ -1,6 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, DestroyRef, ElementRef, inject, InjectionToken, signal } from '@angular/core';
 import { environment } from '../../environments/environment';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
+import { SupportActions } from '../core/support-actions';
 import { VersionsService } from '../core/versions.service';
 import { focusTabAt, nextTabIndex } from '../design/tablist-keyboard';
 
@@ -33,6 +34,15 @@ type ModelSaveState =
   | { kind: 'saving'; change: ModelChange }
   | { kind: 'saved'; rung: string }
   | { kind: 'failed'; change: ModelChange; cause: string };
+
+type SupportAction = 'logs' | 'issue';
+
+const SUPPORT_UNAVAILABLE_TOOLTIP = 'Available in the OpenFleet desktop app';
+
+const SUPPORT_FAILURES: Record<SupportAction, string> = {
+  logs: '✕ Couldn’t open the logs folder.',
+  issue: '✕ Couldn’t open the issue form.',
+};
 
 const GENERIC_SAVE_FAILURE = 'Something went wrong. Your change was not applied.';
 
@@ -133,7 +143,17 @@ function isAvailableModels(body: unknown): body is { models: string[] } {
                 <div class="label"><span class="name">Daemon version</span><span class="detail">Reported by the daemon on {{ daemonAddress }}</span></div>
                 <span class="value mono" data-testid="about-daemon-version">{{ versionLabelOf({ version: versions.daemonVersion(), isSettled: versions.isDaemonVersionSettled() }) }}</span>
               </div>
+              <div class="row">
+                <div class="label"><span class="name">Support</span><span class="detail">Daemon logs stay on this Mac · a report is sent only if you submit it in your browser</span></div>
+                <div class="actions">
+                  <button type="button" class="of-btn of-btn--secondary" data-testid="about-reveal-logs" [disabled]="!support.isAvailable" [attr.title]="supportUnavailableTooltip()" (click)="runSupportAction('logs')">Reveal logs</button>
+                  <button type="button" class="of-btn of-btn--secondary" data-testid="about-report-issue" [disabled]="!support.isAvailable" [attr.title]="supportUnavailableTooltip()" (click)="runSupportAction('issue')">Report an issue</button>
+                </div>
+              </div>
             </div>
+            @if (supportError(); as message) {
+              <p class="error" role="alert" data-testid="about-support-error">{{ message }}</p>
+            }
           </section>
         } @else {
           <section class="panel" data-testid="settings-daemon">
@@ -176,6 +196,7 @@ function isAvailableModels(body: unknown): body is { models: string[] } {
     select.value:focus-visible { outline: 2px solid var(--accent); outline-offset: .125rem; }
     .mono { font-family: var(--mono); }
     .hint { margin: 0; font-size: .75rem; color: var(--mut); }
+    .actions { display: flex; gap: .5rem; }
     .error { margin: 0; color: var(--state-error); }
     .error-card { display: flex; align-items: center; gap: 1rem; padding: .75rem 1rem; border: 1px solid var(--state-error); border-radius: .625rem; background: var(--panel); }
     .error-text { flex: 1; display: flex; flex-direction: column; }
@@ -185,6 +206,7 @@ function isAvailableModels(body: unknown): body is { models: string[] } {
 export class SettingsComponent {
   private readonly api = inject(FleetApiService);
   protected readonly versions = inject(VersionsService);
+  protected readonly support = inject(SupportActions);
   private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
   private readonly settleMs = inject(MODEL_SETTLE_MS);
   private settleTimer: ReturnType<typeof setTimeout> | undefined;
@@ -199,6 +221,7 @@ export class SettingsComponent {
   protected readonly modelTable = signal<Record<string, string> | null>(null);
   protected readonly modelsFailed = signal(false);
   protected readonly availableModels = signal<string[]>([]);
+  protected readonly supportError = signal<string | null>(null);
   protected readonly saveState = signal<ModelSaveState>({ kind: 'idle' });
   protected readonly isSavingModel = computed(() => this.saveState().kind === 'saving');
 
@@ -282,6 +305,19 @@ export class SettingsComponent {
   private showIdInDropdown(rung: string, modelId: string): void {
     const select = this.host.nativeElement.querySelector<HTMLSelectElement>(`select[data-rung="${rung}"]`);
     if (select) select.value = modelId;
+  }
+
+  protected supportUnavailableTooltip(): string | null {
+    return this.support.isAvailable ? null : SUPPORT_UNAVAILABLE_TOOLTIP;
+  }
+
+  protected async runSupportAction(action: SupportAction): Promise<void> {
+    this.supportError.set(null);
+    try {
+      await (action === 'logs' ? this.support.revealLogs() : this.support.reportIssue());
+    } catch {
+      this.supportError.set(SUPPORT_FAILURES[action]);
+    }
   }
 
   protected versionLabelOf({ version, isSettled }: { version: string | null; isSettled: boolean }): string {
