@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -17,7 +17,7 @@ const ADMIN_TOKEN = 'admin';
 
 let server: Awaited<ReturnType<typeof startServer>>;
 let scratchDirectory: string;
-// An existing directory that is no git repository: git itself refuses it. A missing directory answers directory_missing (restCreatePreconditions.test.ts).
+// An existing directory git refuses, whatever repository encloses os.tmpdir(): its broken .git gitfile stops git's search for a parent repository (the git child env drops GIT_CEILING_DIRECTORIES). A missing directory answers directory_missing (restCreatePreconditions.test.ts).
 let notARepository: string;
 let worktreesRoot: string;
 
@@ -28,6 +28,7 @@ beforeEach(async () => {
   mkdirSync(worktreesRoot);
   notARepository = join(scratchDirectory, 'not-a-repository');
   mkdirSync(notARepository);
+  writeFileSync(join(notARepository, '.git'), 'gitdir: ./no-such-git-directory\n');
   const db = openDatabase(':memory:');
   const bus = new EventBus();
   const sessions = new SessionService({ db, bus, harnesses: [new FakeHarness()], baseUrl: 'http://127.0.0.1:0', worktreesRoot });
