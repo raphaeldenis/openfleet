@@ -1,3 +1,5 @@
+import { EXIT_ON_STDIN_EOF_VARIABLE } from './stdinEofShutdown.js';
+
 // ponytail: a nested `claude` inherits its launching tool's session markers and behaves as a
 // child of that tool (transcript saving off, hooks altered, messaging wired to the wrong
 // socket, capabilities hijacked to the wrong session) — strip them. This also covers host
@@ -27,6 +29,8 @@ const SESSION_MARKERS = new Set([
   'SCAPE_EDIT_PUBKEY',
   'SCAPE_EMBEDDED',
   'SCAPE_APP',
+  // The desktop app's private switch to its sidecar: a nested dev daemon that inherits it exits on its first stdin EOF.
+  EXIT_ON_STDIN_EOF_VARIABLE,
 ]);
 
 // HOME and XDG_CONFIG_HOME are never stripped: they are how git is meant to find the user's

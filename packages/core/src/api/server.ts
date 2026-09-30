@@ -100,11 +100,16 @@ function answerLastResort(res: ServerResponse): void {
   }
 }
 
-export async function startServer(deps: ServerDeps): Promise<{ url: string; routes: { method: string; path: string }[]; close(): Promise<void> }> {
+export async function startServer(deps: ServerDeps): Promise<{ url: string; routes: { method: string; path: string }[]; beginShutdown(): void; close(): Promise<void> }> {
   const wsTickets = deps.wsTickets ?? createWsTicketStore();
   const router = new Router();
   // ponytail: unauthenticated readiness probe for CI/e2e webServer checks, which run before the admin token is known
-  router.add('GET', '/health', ({ res }) => json(res, 200, { ok: true, version: DAEMON_VERSION }));
+  let isShuttingDown = false;
+  // The probe's 503 is a readiness answer, not an API error: it carries no error envelope.
+  router.add('GET', '/health', ({ res }) => {
+    const answer = isShuttingDown ? { status: 503, body: { ok: false, status: 'shutting_down' } } : { status: 200, body: { ok: true, version: DAEMON_VERSION } };
+    json(res, answer.status, answer.body);
+  });
   registerRestRoutes(router, { ...deps, wsTickets });
   if (deps.projects) registerProjectRoutes(router, deps.projects);
   if (deps.stores && deps.storeRepo) registerDataStoreRoutes(router, { stores: deps.stores, storeRepo: deps.storeRepo });
@@ -155,6 +160,8 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; rout
   return {
     url: `http://${deps.host}:${port}`,
     routes: router.list(),
+    /** Makes /health answer 503 while the sessions are still closing and the port is still bound. */
+    beginShutdown: () => { isShuttingDown = true; },
     close: () => {
       // closeAllConnections() only ever covered plain HTTP sockets — an upgraded WS connection is not one
       // of "server's" connections any more as far as node:http is concerned, so server.close() would wait

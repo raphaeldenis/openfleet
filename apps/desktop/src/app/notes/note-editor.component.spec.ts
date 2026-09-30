@@ -9,15 +9,18 @@ import type { NoteView } from '@openfleet/shared';
 interface EditorOptions {
   note?: NoteView;
   historyOpen?: boolean;
+  nodesPerChunk?: number;
 }
 
 async function renderEditor(options: EditorOptions = {}) {
   const historyToggle = vi.fn<() => void>();
+  const { nodesPerChunk } = options;
   const { fixture } = await render(NoteEditorComponent, {
     bindings: [
       inputBinding('note', () => options.note ?? aNoteView()),
       inputBinding('historyOpen', () => options.historyOpen ?? false),
       outputBinding<void>('historyToggle', historyToggle),
+      ...(nodesPerChunk === undefined ? [] : [inputBinding('nodesPerChunk', () => nodesPerChunk)]),
     ],
   });
   return { historyToggle, fixture };
@@ -236,13 +239,15 @@ describe('NoteEditorComponent', () => {
     });
 
     it('a single paragraph made of thousands of inline code spans shows the first spans and can be expanded', async () => {
-      const { fixture } = await renderEditor({ note: aNoteView({ bodyMd: 'a`b`'.repeat(2100) }) });
+      const nodesPerChunk = 25;
+      const spanCount = 30;
+      const { fixture } = await renderEditor({ note: aNoteView({ bodyMd: 'a`b`'.repeat(spanCount) }), nodesPerChunk });
 
-      expect(screen.getAllByTestId('note-editor-inline-code')).toHaveLength(1999);
+      expect(screen.getAllByTestId('note-editor-inline-code')).toHaveLength(nodesPerChunk - 1);
       expect(screen.getByTestId('note-editor-show-rest')).toBeInTheDocument();
       await userEvent.setup({ delay: null }).click(screen.getByTestId('note-editor-show-rest'));
       await fixture.whenStable();
-      expect(screen.getAllByTestId('note-editor-inline-code')).toHaveLength(2100);
+      expect(screen.getAllByTestId('note-editor-inline-code')).toHaveLength(spanCount);
     });
 
     it('a paragraph of thousands of empty code spans between plain words reads as one run of text', async () => {
@@ -253,7 +258,8 @@ describe('NoteEditorComponent', () => {
     });
 
     it('a list item holding only a code chip is not shown as an empty bullet when the limit cuts it', async () => {
-      await renderEditor({ note: aNoteView({ bodyMd: `${bodyOfParagraphs(1998)}\n\n- \`x\`\n- y` }) });
+      const nodesPerChunk = 25;
+      await renderEditor({ note: aNoteView({ bodyMd: `${bodyOfParagraphs(nodesPerChunk - 2)}\n\n- \`x\`\n- y` }), nodesPerChunk });
 
       expect(screen.queryAllByTestId('note-editor-list-item')).toHaveLength(0);
       expect(screen.getByTestId('note-editor-show-rest')).toBeInTheDocument();
@@ -311,25 +317,31 @@ describe('NoteEditorComponent', () => {
     });
 
     it('a paragraph made of thousands of bold runs shows the first runs and can be expanded', async () => {
-      const { fixture } = await renderEditor({ note: aNoteView({ bodyMd: 'a**b**'.repeat(2100) }) });
+      const nodesPerChunk = 25;
+      const runCount = 30;
+      const { fixture } = await renderEditor({ note: aNoteView({ bodyMd: 'a**b**'.repeat(runCount) }), nodesPerChunk });
 
-      expect(screen.getAllByTestId('note-editor-bold')).toHaveLength(1999);
+      expect(screen.getAllByTestId('note-editor-bold')).toHaveLength(nodesPerChunk - 1);
       await userEvent.setup({ delay: null }).click(screen.getByTestId('note-editor-show-rest'));
       await fixture.whenStable();
-      expect(screen.getAllByTestId('note-editor-bold')).toHaveLength(2100);
+      expect(screen.getAllByTestId('note-editor-bold')).toHaveLength(runCount);
     });
 
-    it('a quote of thousands of paragraphs stays within the budget and can be expanded', async () => {
-      await renderEditor({ note: aNoteView({ bodyMd: '> x\n>\n'.repeat(2500) }) });
+    it('a quote of more paragraphs than the budget stays within the budget and can be expanded', async () => {
+      const nodesPerChunk = 25;
+      const paragraphCount = 40;
+      await renderEditor({ note: aNoteView({ bodyMd: '> x\n>\n'.repeat(paragraphCount) }), nodesPerChunk });
 
-      expect(screen.getAllByTestId('note-editor-paragraph')).toHaveLength(1999);
-      expect(screen.getByTestId('note-editor-show-rest')).toHaveTextContent('Show the rest (501 more items)');
+      const paragraphsShown = nodesPerChunk - 1;
+      expect(screen.getAllByTestId('note-editor-paragraph')).toHaveLength(paragraphsShown);
+      expect(screen.getByTestId('note-editor-show-rest')).toHaveTextContent(`Show the rest (${paragraphCount - paragraphsShown} more items)`);
       await userEvent.click(screen.getByTestId('note-editor-show-rest'));
-      expect(screen.getAllByTestId('note-editor-paragraph')).toHaveLength(2500);
+      expect(screen.getAllByTestId('note-editor-paragraph')).toHaveLength(paragraphCount);
     });
 
     it('a note within the limit offers nothing to expand', async () => {
-      await renderEditor({ note: aNoteView({ bodyMd: bodyOfParagraphs(2000) }) });
+      const nodesPerChunk = 25;
+      await renderEditor({ note: aNoteView({ bodyMd: bodyOfParagraphs(nodesPerChunk) }), nodesPerChunk });
 
       expect(screen.queryByTestId('note-editor-show-rest')).not.toBeInTheDocument();
     });
