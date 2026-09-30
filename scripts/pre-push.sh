@@ -129,4 +129,8 @@ else
 fi
 run_e2e_when_decided
 
-echo "pre-push: all checks passed in $(($(date +%s) - started_at))s"
+if [ "$OPENFLEET_PREPUSH_DRYRUN" = "1" ]; then
+  echo "pre-push: dry run: nothing executed"
+else
+  echo "pre-push: all checks passed in $(($(date +%s) - started_at))s"
+fi
