@@ -193,6 +193,32 @@ describe('a CLI that ends its own session (SessionEnd)', () => {
     expect(frames.filter(isError)).toEqual([]);
   });
 
+  it('a user close during the grace kills the process exactly once, even when the exit arrives later', async () => {
+    const { server, sessions, harness } = await boot();
+    const session = await sessions.create(spec);
+    await openClient(server);
+    harness.handles[0]!.exitsAsynchronously = true;
+
+    endSession(sessions, session.id);
+    await sessions.close(session.id);
+    await settle();
+
+    expect(harness.handles[0]!.killCount).toBe(1);
+  });
+
+  it('a daemon shutdown during the grace kills the process exactly once, even when the exit arrives later', async () => {
+    const { server, sessions, harness } = await boot();
+    const session = await sessions.create(spec);
+    await openClient(server);
+    harness.handles[0]!.exitsAsynchronously = true;
+
+    endSession(sessions, session.id);
+    await sessions.closeAll();
+    await settle();
+
+    expect(harness.handles[0]!.killCount).toBe(1);
+  });
+
   it('a /clear SessionEnd never closes the session, announces no error and never reports a harness_exit', async () => {
     const { server, sessions, harness } = await boot();
     const session = await sessions.create(spec);

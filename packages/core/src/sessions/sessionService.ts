@@ -1072,7 +1072,8 @@ export class SessionService {
     if (options?.cause === 'session_end') {
       const exitedOnItsOwn = await this.waitForExitWithinGrace(sessionId, handle);
       const isStillTheLiveProcess = this.handles.get(sessionId) === handle;
-      if (exitedOnItsOwn || !isStillTheLiveProcess) return;
+      const anotherCloseOwnsTheKill = this.closeCauses.get(sessionId) !== 'session_end';
+      if (exitedOnItsOwn || !isStillTheLiveProcess || anotherCloseOwnsTheKill) return;
       // The CLI ended its session but never exited: this kill is the daemon's own, so its exit is no failure.
       this.forgetSessionEndCause(sessionId);
     }

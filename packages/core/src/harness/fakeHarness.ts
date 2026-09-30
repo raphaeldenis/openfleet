@@ -9,6 +9,9 @@ export class FakeHandle implements HarnessHandle {
   forceKilled = false;
   // Test-only: simulates a process that doesn't react to a graceful kill, to exercise the SIGKILL escalation.
   ignoresGracefulKill = false;
+  // Test-only: like a real pty, the exit arrives after kill() returned instead of inside it.
+  exitsAsynchronously = false;
+  killCount = 0;
 
   constructor(private readonly onPromptTyped: () => void = () => undefined) {}
 
@@ -23,9 +26,11 @@ export class FakeHandle implements HarnessHandle {
   resize(cols: number, rows: number): void { this.resizes.push({ cols, rows }); }
   kill(options?: { force?: boolean }): void {
     this.killed = true;
+    this.killCount += 1;
     if (options?.force) this.forceKilled = true;
     if (this.ignoresGracefulKill && !options?.force) return;
-    this.emitExit(137);
+    if (this.exitsAsynchronously) setTimeout(() => this.emitExit(137), 0);
+    else this.emitExit(137);
   }
   onData(listener: (d: string) => void): () => void {
     this.dataListeners.push(listener);
