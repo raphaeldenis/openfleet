@@ -343,20 +343,21 @@ function loggableError(error: unknown): unknown {
   return `${maskedSecrets(maskingCutCredential(text.slice(0, MAX_LOGGED_ERROR_CHARS)))}${ELLIPSIS}[truncated ${omittedChars} chars]`;
 }
 
-function logInternalError(error: unknown, { id, scope }: { id: string; scope: ErrorScope }): void {
+function logInternalError(error: unknown, { id, code, scope }: { id: string; code: string; scope: ErrorScope }): void {
   const site = scope.where ?? 'unexpected error';
   const sessionSuffix = scope.sessionId ? ` session=${scope.sessionId}` : '';
   const line = `${site} [${id}]${sessionSuffix}`;
+  const fields = { id, code, ...(scope.sessionId && { sessionId: scope.sessionId }) };
   try {
-    log('error', line, loggableError(error));
+    log('error', line, loggableError(error), fields);
   } catch {
-    tryLogging(`${line} (error cannot be printed)`);
+    tryLogging(`${line} (error cannot be printed)`, fields);
   }
 }
 
-function tryLogging(line: string): void {
+function tryLogging(line: string, fields: { id: string; code: string; sessionId?: string }): void {
   try {
-    log('error', line);
+    log('error', line, undefined, fields);
   } catch {
     // logging is best effort: an unwritable log never stops the answer
   }
@@ -379,7 +380,7 @@ function envelopeFor(entry: Entry, error: unknown, scope: ErrorScope): ErrorEnve
   const { kind } = ERROR_CODES[entry.code];
   const isInternal = kind === 'internal';
   const id = isInternal ? shortId() : undefined;
-  if (id) logInternalError(error, { id, scope });
+  if (id) logInternalError(error, { id, code: entry.code, scope });
   const referenceSentence = id ? `Report ref ${id} if it happens again.` : undefined;
   const hint = [entry.hint, referenceSentence].filter(Boolean).join(' ') || undefined;
   const homes = homePatterns();

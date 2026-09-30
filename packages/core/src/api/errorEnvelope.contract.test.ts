@@ -77,6 +77,16 @@ describe('T2: a handler that throws on any route', () => {
     expect(loggedLines.filter((line) => line.includes(id))).toHaveLength(1);
   });
 
+  it('carries the same id in the logged NDJSON line\'s own id field, with the error code', async () => {
+    makeEveryHandlerThrow(new Error(ERROR_MESSAGE));
+    const response = await callRoute({ method: 'GET', path: '/api/sessions' });
+    const { id } = await response.json() as { id: string };
+    const logged = JSON.parse(String(errorLog.mock.calls[0]![0])) as { id: string; msg: string; code: string };
+    expect(response.headers.get('x-openfleet-error-id')).toBe(id);
+    expect({ id: logged.id, code: logged.code }).toEqual({ id, code: 'internal_error' });
+    expect(logged.msg).toContain(id);
+  });
+
   it('logs exactly one error line per failed request', async () => {
     makeEveryHandlerThrow(new Error(ERROR_MESSAGE));
     await callRoute({ method: 'GET', path: '/api/sessions' });
