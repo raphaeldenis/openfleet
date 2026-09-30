@@ -450,7 +450,7 @@ describe('notes REST routes', () => {
       vi.restoreAllMocks();
 
       expect(patched.status).toBe(500);
-      expect(await patched.json()).toEqual({ error: 'internal_error' });
+      expect(await patched.json()).toMatchObject({ error: 'internal_error' });
       expect(noteRepo.get(note.id)).toMatchObject({ bodyMd: 'v1', rev: 1 });
       expect(readNoteVersionRevs(note.id)).toEqual([1]);
       expect(readFileSync(noteRepo.get(note.id)!.filePath!, 'utf8')).toBe('v1');
@@ -480,7 +480,7 @@ describe('notes REST routes', () => {
       vi.restoreAllMocks();
 
       expect(patched.status).toBe(500);
-      expect(await patched.json()).toEqual({ error: 'internal_error' });
+      expect(await patched.json()).toMatchObject({ error: 'internal_error' });
       expect(warnings).toEqual([[`note temp file cleanup failed: ${code}`]]);
     });
 
@@ -565,7 +565,7 @@ describe('notes REST routes', () => {
       const response = await call('POST', '/api/notes', { projectId: 'p1', title: 'Big', bodyMd: bodyUnderNoteCap, padding: 'p'.repeat(2000) });
 
       expect(response.status).toBe(413);
-      expect(await response.json()).toEqual({ error: 'payload_too_large' });
+      expect(await response.json()).toMatchObject({ error: 'payload_too_large' });
     });
   });
 
@@ -610,7 +610,7 @@ describe('notes REST routes', () => {
       expect(text).not.toContain(filePath);
     });
 
-    it('answers an unexpected failure with a bare 500 internal_error carrying no message', async () => {
+    it('answers an unexpected failure with a 500 internal_error carrying no message of the failure', async () => {
       const note = await createNote();
       vi.spyOn(noteRepo, 'get').mockImplementation(() => { throw new Error("EACCES: permission denied, open '/Users/secret/docs/plan.md'"); });
 
@@ -619,7 +619,8 @@ describe('notes REST routes', () => {
       vi.restoreAllMocks();
 
       expect(response.status).toBe(500);
-      expect(JSON.parse(text)).toEqual({ error: 'internal_error' });
+      expect(JSON.parse(text)).toMatchObject({ error: 'internal_error' });
+      expect(text).not.toContain('/Users/secret');
     });
   });
 

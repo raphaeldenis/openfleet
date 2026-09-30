@@ -42,8 +42,8 @@ export class Router {
   }
 }
 
-export function json(res: ServerResponse, status: number, body: unknown): void {
-  res.writeHead(status, { 'content-type': 'application/json' });
+export function json(res: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}): void {
+  res.writeHead(status, { 'content-type': 'application/json', ...headers });
   res.end(JSON.stringify(body));
 }
 
@@ -61,7 +61,7 @@ export function requestPath(req: IncomingMessage): string {
 // route pattern so a forced 500 never puts it in the log, same spirit as the query string above.
 const HOOK_TOKEN_SEGMENT = /^\/hooks\/[^/]+$/;
 
-function redactedRequestPath(req: IncomingMessage): string {
+export function redactedRequestPath(req: IncomingMessage): string {
   const path = requestPath(req);
   return HOOK_TOKEN_SEGMENT.test(path) ? '/hooks/:token' : path;
 }
