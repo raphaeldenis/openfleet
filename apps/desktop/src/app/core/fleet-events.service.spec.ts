@@ -219,6 +219,23 @@ describe('FleetEventsService', () => {
     expect(service.sessions()).toEqual([session('s1', { name: 'Legolas' })]);
   });
 
+  it('leaves the fleet untouched on a server error event, and a session.closed carrying a reason still closes the session with its exit code', async () => {
+    const service = new FleetEventsService();
+    await service.connect();
+    const socket = FakeWebSocket.instances[0]!;
+    socket.dispatchMessage({ type: 'snapshot', sessions: [session('s1', { state: 'idle' })], approvals: [] });
+    const before = service.sessions();
+
+    socket.dispatchMessage({ type: 'error', sessionId: 's1', error: { error: 'launch_failed', kind: 'internal', retry: 'later', message: 'the session failed to launch.' } });
+    socket.dispatchMessage({ type: 'error', error: { error: 'invalid_body', kind: 'invalid_request', retry: 'never', message: 'the request body is invalid.' } });
+
+    expect(service.sessions()).toBe(before);
+
+    socket.dispatchMessage({ type: 'session.closed', sessionId: 's1', exitCode: -2, reason: 'launch_failed' });
+
+    expect(service.sessions()[0]).toMatchObject({ state: 'closed', exitCode: -2 });
+  });
+
   it('patches a session\'s model on session.model_changed, so the model selector reflects an applied switch', async () => {
     const service = new FleetEventsService();
     await service.connect();

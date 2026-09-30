@@ -1,4 +1,6 @@
-import { describe, expectTypeOf, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
+import type { ErrorEnvelope } from './errors.js';
+import { closeReasonOfExitCode } from './events.js';
 import type { ManagerView } from './managers.js';
 import type { ServerEvent } from './events.js';
 import type { Session } from './session.js';
@@ -27,8 +29,32 @@ describe('ServerEvent', () => {
     expectTypeOf<Extract<ServerEvent, { type: 'manager.pulsed' }>['manager']>().toEqualTypeOf<ManagerView>();
   });
 
+  it('announces an error with an optional sessionId and the ErrorEnvelope', () => {
+    expectTypeOf<Extract<ServerEvent, { type: 'error' }>>().toEqualTypeOf<{ type: 'error'; sessionId?: string; error: ErrorEnvelope }>();
+  });
+
+  it('closes a session with an optional exitCode and an optional reason', () => {
+    expectTypeOf<Extract<ServerEvent, { type: 'session.closed' }>>().toEqualTypeOf<{
+      type: 'session.closed';
+      sessionId: string;
+      exitCode?: number;
+      reason?: 'launch_failed' | 'resume_timeout' | 'harness_exit' | 'closed_by_user';
+    }>();
+  });
+
   it('announces a session update (rename) with the full updated Session', () => {
     expectTypeOf<Extract<ServerEvent, { type: 'session.updated' }>['session']>().toEqualTypeOf<Session>();
+  });
+});
+
+describe('closeReasonOfExitCode', () => {
+  it('recomputes the reasons the -1 and -2 exit code convention encodes', () => {
+    expect(closeReasonOfExitCode(-1)).toBe('resume_timeout');
+    expect(closeReasonOfExitCode(-2)).toBe('launch_failed');
+  });
+
+  it('leaves every other exit code without a reason: the process exit and the user close are indistinguishable there', () => {
+    expect([undefined, 0, 1, 137].map(closeReasonOfExitCode)).toEqual([undefined, undefined, undefined, undefined]);
   });
 });
 

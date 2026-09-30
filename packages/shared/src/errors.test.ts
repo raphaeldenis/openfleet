@@ -52,8 +52,8 @@ describe('the wire contract of the registry', () => {
     duplicate_child: 'conflict/never', no_parent: 'conflict/never', spawn_raced: 'conflict/later',
     store_has_rows: 'conflict/never', duplicate_id: 'conflict/never', no_docs_folder: 'conflict/never', not_file_backed: 'conflict/never',
     payload_too_large: 'too_large/never', note_too_large: 'too_large/never', row_cap: 'too_large/never', state_too_large: 'too_large/never',
-    daemon_shutting_down: 'unavailable/later', daemon_degraded: 'unavailable/later',
-    internal_error: 'internal/later', launch_failed: 'internal/later', resume_timeout: 'internal/later', db_stuck: 'internal/later',
+    daemon_shutting_down: 'unavailable/later', daemon_degraded: 'unavailable/later', delivery_failed: 'unavailable/later',
+    internal_error: 'internal/later', launch_failed: 'internal/later', resume_timeout: 'internal/later', db_stuck: 'internal/later', harness_exited: 'internal/never',
   };
 
   it('gives every code the kind and the retry the spec lists', () => {
