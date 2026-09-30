@@ -10,7 +10,7 @@ const CONSOLE_METHOD_BY_LEVEL: Record<LogLevel, 'log' | 'warn' | 'error'> = { de
 
 const RING_CAPACITY = 2000;
 const MAX_LINE_CHARS = 16 * 1024;
-const MAX_STRING_CHARS = 4 * 1024;
+const MAX_STRING_CHARS = 8 * 1024;
 const MAX_KEY_CHARS = 128;
 const MAX_CHILDREN = 50;
 const MAX_DEPTH = 5;

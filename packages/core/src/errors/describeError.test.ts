@@ -734,17 +734,19 @@ describe('describeError: an internal-kind OpenFleetError', () => {
 
     expect(errorLog).toHaveBeenCalledTimes(1);
     expect(String(errorLog.mock.calls[0]![0])).toContain(envelope.id);
-    expect(errorLog.mock.calls[0]![1]).toBe(error);
+    const loggedRecord = JSON.parse(String(errorLog.mock.calls[0]![0])) as { err: { name: string; message: string; code?: string } };
+    expect(loggedRecord.err).toMatchObject({ name: 'Error', message: expect.stringContaining('SELECT * FROM x') });
   });
 
   describe('when the raw message is far larger than the log cap', () => {
     const MEGABYTE = 1024 * 1024;
     const LOG_CAP_CHARS = 4096;
+    const loggedDetailOfFirstCall = (): string => (JSON.parse(String(errorLog.mock.calls[0]![0])) as { detail: string }).detail;
 
     it('logs a few KiB of it with a truncation suffix that counts the omitted characters', () => {
       describeError(new Error(`sqlite exploded ${'x'.repeat(MEGABYTE)}`));
 
-      const loggedDetail = String(errorLog.mock.calls[0]![1]);
+      const loggedDetail = loggedDetailOfFirstCall();
       expect(loggedDetail.length).toBeLessThan(LOG_CAP_CHARS + 200);
       expect(loggedDetail).toMatch(/…\[truncated \d{6,} chars\]$/);
       expect(loggedDetail).toContain('sqlite exploded');
@@ -753,7 +755,7 @@ describe('describeError: an internal-kind OpenFleetError', () => {
     it('masks a secret in the surviving head before logging it', () => {
       describeError(new Error(`call failed with Bearer abcDEF123 ${'x'.repeat(MEGABYTE)}`));
 
-      const loggedDetail = String(errorLog.mock.calls[0]![1]);
+      const loggedDetail = loggedDetailOfFirstCall();
       expect(loggedDetail).not.toContain('abcDEF123');
       expect(loggedDetail).toContain('Bearer ***');
     });
@@ -763,7 +765,8 @@ describe('describeError: an internal-kind OpenFleetError', () => {
 
       describeError(error);
 
-      expect(errorLog.mock.calls[0]![1]).toBe(error);
+      const loggedRecord = JSON.parse(String(errorLog.mock.calls[0]![0])) as { err: { message: string } };
+      expect(loggedRecord.err.message).toBe('short failure');
     });
   });
 });
