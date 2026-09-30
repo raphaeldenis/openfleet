@@ -48,6 +48,8 @@ export interface ServerDeps {
   sessionStartContext?: SessionStartContext;
   // Without it no handover is recorded and the handovers route does not exist.
   handoverLedger?: HandoverLedger;
+  // Without it the test-only routes (fake-output) do not exist.
+  e2eRoutes?: boolean;
 }
 
 function applyCorsHeaders(req: IncomingMessage, res: ServerResponse): void {

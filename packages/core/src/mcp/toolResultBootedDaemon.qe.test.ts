@@ -2,6 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { E2E_FLAG_ENV, E2E_FLAG_ON } from '@openfleet/shared';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { loadConfig, type Config } from '../config.js';
 import { startDaemon, type Daemon } from '../daemon.js';
@@ -39,7 +40,7 @@ async function bootRootSession() {
 
 beforeEach(async () => {
   const home = tempDirs.make('of-qe-token01-');
-  config = loadConfig({ OPENFLEET_HOME: home, OPENFLEET_PORT: '0' });
+  config = loadConfig({ OPENFLEET_HOME: home, OPENFLEET_PORT: '0', [E2E_FLAG_ENV]: E2E_FLAG_ON });
   daemon = await startDaemon(config);
 });
 afterEach(async () => { await daemon.close(); tempDirs.removeAll(); });

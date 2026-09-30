@@ -18,6 +18,7 @@ import { startServer } from './server.js';
 let server: Awaited<ReturnType<typeof startServer>>;
 let harness: FakeHarness;
 let sessions: SessionService;
+let baseServerDeps: Parameters<typeof startServer>[0];
 
 beforeEach(async () => {
   const db = openDatabase(':memory:');
@@ -28,7 +29,8 @@ beforeEach(async () => {
   const managerRepo = new ManagerRepository(db);
   const pulseScheduler = new PulseScheduler({ managers: managerRepo, sessions, bus });
   const managers = new ManagerService({ managers: managerRepo, sessions, bus, scheduler: pulseScheduler });
-  server = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable: DEFAULT_MODEL_TABLE, modelConfigPath: '/tmp/of-unused/config.json' });
+  baseServerDeps = { host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable: DEFAULT_MODEL_TABLE, modelConfigPath: '/tmp/of-unused/config.json' };
+  server = await startServer({ ...baseServerDeps, e2eRoutes: true });
 });
 afterEach(() => server.close());
 
@@ -176,6 +178,14 @@ describe('REST', () => {
     expect(output.output).toBe('hello from pty');
   });
 
+  it('does not serve fake-output when the server is started without the e2e routes (AUD-18)', async () => {
+    const session = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
+    const serverWithoutE2eRoutes = await startServer(baseServerDeps);
+    const res = await fetch(`${serverWithoutE2eRoutes.url}/api/sessions/${session.id}/fake-output`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer admin' }, body: JSON.stringify({ data: 'x' }) });
+    await serverWithoutE2eRoutes.close();
+    expect(res.status).toBe(404);
+  });
+
   it('rejects fake-output on a non-fake harness session with 404', async () => {
     const claudeCliStub = {
       id: 'claude-cli' as const,
@@ -188,7 +198,7 @@ describe('REST', () => {
     const stubHarnessManagerRepo = new ManagerRepository(stubHarnessDb);
     const stubHarnessScheduler = new PulseScheduler({ managers: stubHarnessManagerRepo, sessions: stubHarnessSessions, bus: stubHarnessBus });
     const stubHarnessManagers = new ManagerService({ managers: stubHarnessManagerRepo, sessions: stubHarnessSessions, bus: stubHarnessBus, scheduler: stubHarnessScheduler });
-    const stubHarnessServer = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions: stubHarnessSessions, approvals: stubHarnessApprovals, managers: stubHarnessManagers, pulseScheduler: stubHarnessScheduler, bus: stubHarnessBus, modelTable: DEFAULT_MODEL_TABLE, modelConfigPath: '/tmp/of-unused/config.json' });
+    const stubHarnessServer = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions: stubHarnessSessions, approvals: stubHarnessApprovals, managers: stubHarnessManagers, pulseScheduler: stubHarnessScheduler, bus: stubHarnessBus, modelTable: DEFAULT_MODEL_TABLE, modelConfigPath: '/tmp/of-unused/config.json', e2eRoutes: true });
     const stubHarnessApi = (path: string, init: RequestInit = {}) =>
       fetch(`${stubHarnessServer.url}${path}`, { ...init, headers: { 'content-type': 'application/json', authorization: 'Bearer admin', ...(init.headers ?? {}) } });
     const session = await (await stubHarnessApi('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'claude-cli' }) })).json();
@@ -200,6 +210,34 @@ describe('REST', () => {
   it('returns 404 for a missing session', async () => {
     const res = await api('/api/sessions/nope/messages', { method: 'POST', body: JSON.stringify({ body: 'x' }) });
     expect(res.status).toBe(404);
+  });
+
+  it.each([
+    ['messages', { body: 'x' }],
+    ['permission-mode', { mode: PERMISSION_MODES[0] }],
+    ['input', { data: 'x' }],
+    ['resize', { cols: 80, rows: 24 }],
+    ['close', {}],
+  ])('answers 404 on %s for an unknown session (AUD-18)', async (route, payload) => {
+    const res = await api(`/api/sessions/nope/${route}`, { method: 'POST', body: JSON.stringify(payload) });
+    expect(res.status).toBe(404);
+  });
+
+  it.each([
+    ['messages', { body: 'x' }],
+    ['permission-mode', { mode: PERMISSION_MODES[0] }],
+  ])('answers 409 on %s for a closed session (AUD-18)', async (route, payload) => {
+    const session = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
+    await api(`/api/sessions/${session.id}/close`, { method: 'POST', body: '{}' });
+    const res = await api(`/api/sessions/${session.id}/${route}`, { method: 'POST', body: JSON.stringify(payload) });
+    expect(res.status).toBe(409);
+  });
+
+  it('keeps closing an already-closed session idempotent with 200 (AUD-18)', async () => {
+    const session = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
+    await api(`/api/sessions/${session.id}/close`, { method: 'POST', body: '{}' });
+    const res = await api(`/api/sessions/${session.id}/close`, { method: 'POST', body: '{}' });
+    expect(res.status).toBe(200);
   });
 
   it('changes a session model and reports relaunching or deferred', async () => {

@@ -1,12 +1,15 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { Server } from 'node:http';
 import { join } from 'node:path';
+import { E2E_FLAG_ENV, E2E_FLAG_ON } from '@openfleet/shared';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { loadConfig, type Config } from './config.js';
 import { startDaemon, type Daemon } from './daemon.js';
 import { openDatabase } from './db/database.js';
+import { makeRepo } from './git/testRepo.js';
 import { ManagerRepository } from './managers/managerRepository.js';
 import { PulseScheduler } from './managers/pulseScheduler.js';
 import { SessionRepository } from './sessions/sessionRepository.js';
@@ -18,10 +21,10 @@ let daemon: Daemon | undefined;
 let adminToken: string;
 let bootedConfig: Config;
 
-async function bootDaemon(configJson?: object, { seedPreviousRun }: { seedPreviousRun?: (config: Config) => void } = {}): Promise<Daemon> {
+async function bootDaemon(configJson?: object, { seedPreviousRun, e2e = true }: { seedPreviousRun?: (config: Config) => void; e2e?: boolean } = {}): Promise<Daemon> {
   const home = tempDirs.make('of-daemon-wiring-');
   if (configJson) writeFileSync(join(home, 'config.json'), JSON.stringify(configJson));
-  const config = loadConfig({ OPENFLEET_HOME: home, OPENFLEET_PORT: '0' });
+  const config = loadConfig({ OPENFLEET_HOME: home, OPENFLEET_PORT: '0', ...(e2e ? { [E2E_FLAG_ENV]: E2E_FLAG_ON } : {}) });
   seedPreviousRun?.(config);
   bootedConfig = config;
   adminToken = config.adminToken;
@@ -47,6 +50,41 @@ async function firstWsFrame(): Promise<{ workingStateMaxAgeMinutes?: number; man
 }
 
 describe('operator gets every daemon feature when the daemon boots from its config', () => {
+  it('offers neither the fake harness nor the fake-output route unless the e2e flag is set (AUD-18)', async () => {
+    await bootDaemon(undefined, { e2e: false });
+
+    const created = await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'Boss', harness: 'fake', emoji: '🤖' }) });
+    const fakeOutput = await api('/api/sessions/any/fake-output', { method: 'POST', body: JSON.stringify({ data: 'x' }) });
+
+    expect(created.status).toBe(400);
+    expect(await created.json()).toMatchObject({ error: 'unknown_harness', detail: expect.stringContaining('fake') });
+    expect(fakeOutput.status).toBe(404);
+    expect(await (await api('/api/sessions')).json()).toEqual([]);
+  });
+
+  it('leaves no git worktree or branch behind when the requested harness is not registered (AUD-18)', async () => {
+    await bootDaemon(undefined, { e2e: false });
+    const repoPath = makeRepo();
+
+    const created = await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: repoPath, name: 'Boss', harness: 'fake', emoji: '🤖', repoPath, branchName: 'task/CCM-9' }) });
+
+    expect(created.status).toBe(400);
+    expect(existsSync(bootedConfig.worktreesRoot) ? readdirSync(bootedConfig.worktreesRoot) : []).toEqual([]);
+    expect(execFileSync('git', ['-C', repoPath, 'branch', '--list', 'task/CCM-9'], { encoding: 'utf8' })).toBe('');
+  });
+
+  it('logs one warning at boot when the e2e test surface is enabled, and none when it is off', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await bootDaemon(undefined, { e2e: false });
+    await daemon!.close();
+    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('e2e test surface enabled'));
+
+    await bootDaemon(undefined, { e2e: true });
+
+    const e2eWarnings = warn.mock.calls.filter(([line]) => String(line).includes('e2e test surface enabled (OPENFLEET_E2E=1): fake harness and fake-output route are registered'));
+    expect(e2eWarnings).toHaveLength(1);
+  });
+
   it('refuses the end of a turn that has no working state', async () => {
     await bootDaemon();
     const session = await createSession();

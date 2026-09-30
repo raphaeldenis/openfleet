@@ -9,3 +9,4 @@ export * from './pagination.js';
 export * from './projects.js';
 export * from './workingState.js';
 export * from './handovers.js';
+export * from './e2e.js';

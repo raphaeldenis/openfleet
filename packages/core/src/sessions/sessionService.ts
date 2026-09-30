@@ -1,4 +1,4 @@
-import { accessSync, constants, existsSync, lstatSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { accessSync, closeSync, constants, existsSync, lstatSync, openSync, readSync, realpathSync, statSync, type Stats } from 'node:fs';
 import { basename, dirname, isAbsolute, join, normalize, sep } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import type { PermissionMode, Session, SessionSpec } from '@openfleet/shared';
@@ -42,6 +42,13 @@ export class TooManyPendingMessagesError extends Error {
 export class SessionReopenError extends Error {
   constructor(public readonly code: 'not_closed' | 'directory_missing' | 'directory_changed' | 'directory_unreadable' | 'launch_failed', message: string) {
     super(message);
+  }
+}
+
+export class UnknownHarnessError extends Error {
+  override readonly name = 'UnknownHarnessError';
+  constructor(harnessId: string) {
+    super(`unknown harness: ${harnessId}`);
   }
 }
 
@@ -95,22 +102,48 @@ export const RESUME_LAUNCH_FAILED_EXIT_CODE = -2;
 // poll interval's latency ever matters.
 export const TRANSCRIPT_INTERRUPT_POLL_MS = 200;
 export const TRANSCRIPT_INTERRUPT_TIMEOUT_MS = 30_000;
+export const TRANSCRIPT_INTERRUPT_MAX_READ_BYTES = 1024 * 1024;
+const TRANSCRIPT_INTERRUPT_MAX_CARRIED_LINE_BYTES = 1024 * 1024;
+const NEWLINE_BYTE = 0x0a;
 const INTERRUPTED_TRANSCRIPT_MARKER = '[Request interrupted by user]';
 
-// ponytail: a watch keeps the transcriptPath and offset it armed with for its whole life — a mid-turn
-// transcript_path change (a later hook naming a different file) is not followed, and the CLI truncating
-// or replacing the file while armed is not detected; both leave the watch tailing something stale.
-// Upgrade path: re-read the current transcriptPaths value each poll and re-arm on a mismatch or a size
-// that shrank.
+// ponytail: a watch keeps the transcriptPath it armed with for its whole life — a mid-turn transcript_path
+// change (a later hook naming a different file) is not followed, and a file that is emptied and regrown past
+// the armed offset between two polls, without changing inode, looks like plain appending.
+// Upgrade path: re-read the current transcriptPaths value each poll and re-arm on a mismatch.
 interface InterruptWatch {
   transcriptPath: string;
   offset: number;
-  // A line split across two polls (the CLI's write straddling the poll boundary) would otherwise be
-  // dropped for good: the tail end read on its own poll is not valid JSON. Carried over and prepended to
-  // the next poll's read, like tail -f line buffering.
-  pendingPartialLine: string;
+  // dev:ino of the file the offset belongs to; null while the file does not exist yet.
+  fileIdentity: string | null;
+  // Raw bytes of a line still waiting for its newline (the CLI's write straddling a poll boundary), kept
+  // undecoded so a multibyte character cut by the boundary is decoded whole once its line completes.
+  pendingLineBytes: Buffer;
   timer: ReturnType<typeof setInterval>;
   timeout: ReturnType<typeof setTimeout>;
+}
+
+function readBytesFrom(path: string, start: number, byteCount: number): Buffer {
+  const buffer = Buffer.alloc(byteCount);
+  const fileDescriptor = openSync(path, 'r');
+  try {
+    const bytesRead = readSync(fileDescriptor, buffer, 0, buffer.length, start);
+    return buffer.subarray(0, bytesRead);
+  } finally {
+    closeSync(fileDescriptor);
+  }
+}
+
+function splitCompleteLines(pendingLineBytes: Buffer, appended: Buffer): { lines: string[]; remainder: Buffer } {
+  const combined = Buffer.concat([pendingLineBytes, appended]);
+  const lastNewline = combined.lastIndexOf(NEWLINE_BYTE);
+  if (lastNewline === -1) return { lines: [], remainder: combined };
+  const lines = combined.subarray(0, lastNewline).toString('utf8').split('\n');
+  return { lines, remainder: combined.subarray(lastNewline + 1) };
+}
+
+function fileIdentityOf(stats: { dev: number; ino: number }): string {
+  return `${stats.dev}:${stats.ino}`;
 }
 
 // Claude Code fires no Stop hook when Escape cancels a turn, but it does append this line to the
@@ -302,6 +335,7 @@ export class SessionService {
 
   async create(spec: SessionSpec, options?: { branch?: string }): Promise<Session> {
     this.assertNotShuttingDown();
+    const harness = this.harnessFor(spec.harness);
     const id = newId();
     const hookToken = newToken();
     const mcpToken = newToken();
@@ -315,7 +349,6 @@ export class SessionService {
     this.warnIfPermissiveSettings(spec.harness, spec.directory);
     const seededPrompt = spec.seededPrompt?.trim();
     if (seededPrompt) this.seededPromptBySessionId.set(id, seededPrompt);
-    const harness = this.harnessFor(spec.harness);
     this.startPendingRecording(id, spec.model);
     this.conversationsAwaitingFirstPrompt.add(id);
     let handle: HarnessHandle;
@@ -352,6 +385,7 @@ export class SessionService {
   }
 
   async createInWorktree(spec: SessionSpec & { repoPath: string; branchName: string }): Promise<Session> {
+    this.harnessFor(spec.harness);
     const worktree = await createWorktree({ repoPath: spec.repoPath, branchName: spec.branchName, worktreesRoot: this.deps.worktreesRoot });
     return this.create({ ...spec, directory: worktree.path }, { branch: worktree.branch });
   }
@@ -854,20 +888,28 @@ export class SessionService {
     // held — including a stale interrupt line from an earlier turn — as soon as the error clears, so the
     // watch must not arm at all.
     let offset: number;
+    let fileIdentity: string | null;
     try {
-      offset = statSync(transcriptPath).size;
+      const stats = statSync(transcriptPath);
+      offset = stats.size;
+      fileIdentity = fileIdentityOf(stats);
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return;
       offset = 0; // no transcript file yet; poll from offset 0 once it's created
+      fileIdentity = null;
     }
     const timer = setInterval(() => this.pollInterruptWatch(sessionId), TRANSCRIPT_INTERRUPT_POLL_MS);
     const timeout = setTimeout(() => this.disarmInterruptWatch(sessionId), TRANSCRIPT_INTERRUPT_TIMEOUT_MS);
-    this.interruptWatches.set(sessionId, { transcriptPath, offset, pendingPartialLine: '', timer, timeout });
+    this.interruptWatches.set(sessionId, { transcriptPath, offset, fileIdentity, pendingLineBytes: Buffer.alloc(0), timer, timeout });
   }
 
-  // Reads only the bytes appended since the watch armed (or since the last poll), never re-scanning the
-  // whole transcript. A byte offset (not a string index) keeps a multi-byte character straddling a poll
-  // boundary from ever being read.
+  // Reads only the bytes appended since the watch armed (or since the last poll), at most
+  // TRANSCRIPT_INTERRUPT_MAX_READ_BYTES per poll, never re-scanning the whole transcript. Raw bytes are
+  // carried across polls and decoded only as complete lines, so a multi-byte character straddling a poll
+  // boundary is decoded whole.
+  //
+  // A file replaced by another one (new inode) holds turns that were already over: the watch skips to its
+  // current end. A file truncated in place is still the CLI's own file: what follows the truncation is new.
   //
   // This is a setInterval callback with nothing above it to catch a throw — an uncaught exception here
   // would crash the whole daemon, taking down every other session's watch with it. isInterruptedTranscriptLine
@@ -884,22 +926,37 @@ export class SessionService {
   private pollInterruptWatchUnsafe(sessionId: string): void {
     const watch = this.interruptWatches.get(sessionId);
     if (!watch) return;
-    let size: number;
+    let stats: Stats;
     try {
-      size = statSync(watch.transcriptPath).size;
+      stats = statSync(watch.transcriptPath);
     } catch {
       return; // e.g. the transcript file vanished this tick; treat as nothing this tick, keep polling until the timeout
     }
-    if (size <= watch.offset) return;
-    let appended: string;
+    const currentIdentity = fileIdentityOf(stats);
+    const transcriptWasReplaced = watch.fileIdentity !== null && watch.fileIdentity !== currentIdentity;
+    watch.fileIdentity = currentIdentity;
+    if (transcriptWasReplaced) {
+      watch.offset = stats.size;
+      watch.pendingLineBytes = Buffer.alloc(0);
+      return;
+    }
+    const transcriptWasTruncated = stats.size < watch.offset;
+    if (transcriptWasTruncated) {
+      watch.offset = 0;
+      watch.pendingLineBytes = Buffer.alloc(0);
+    }
+    const unreadBytes = stats.size - watch.offset;
+    if (unreadBytes <= 0) return;
+    let appended: Buffer;
     try {
-      appended = readFileSync(watch.transcriptPath).subarray(watch.offset, size).toString('utf8');
+      appended = readBytesFrom(watch.transcriptPath, watch.offset, Math.min(unreadBytes, TRANSCRIPT_INTERRUPT_MAX_READ_BYTES));
     } catch {
       return; // e.g. a transient permission/read error; treat as nothing this tick, keep polling until the timeout
     }
-    watch.offset = size;
-    const lines = (watch.pendingPartialLine + appended).split('\n');
-    watch.pendingPartialLine = lines.pop() ?? '';
+    watch.offset += appended.length;
+    const { lines, remainder } = splitCompleteLines(watch.pendingLineBytes, appended);
+    const carriedLineIsTooLong = remainder.length > TRANSCRIPT_INTERRUPT_MAX_CARRIED_LINE_BYTES;
+    watch.pendingLineBytes = carriedLineIsTooLong ? Buffer.alloc(0) : remainder;
     const sawInterruptMarker = lines.some(isInterruptedTranscriptLine);
     if (!sawInterruptMarker) return;
     this.disarmInterruptWatch(sessionId);
@@ -1231,8 +1288,16 @@ export class SessionService {
     this.assertNotShuttingDown();
     const tokens = this.repo.tokens(session.id);
     if (!tokens) return { launched: false, reason: 'session has no stored tokens' }; // defensive: every session row carries its tokens
+    let harness: Harness;
+    try {
+      harness = this.harnessFor(session.harness);
+    } catch (err) {
+      if (!(err instanceof UnknownHarnessError)) throw err;
+      log('error', `resumeOne: session ${session.id} cannot resume: ${err.message}`);
+      this.markClosed(session.id, RESUME_LAUNCH_FAILED_EXIT_CODE);
+      return { launched: false, reason: err.message };
+    }
     this.warnIfPermissiveSettings(session.harness, session.directory);
-    const harness = this.harnessFor(session.harness);
     const permissionMode = this.resolveResumePermissionMode(session);
     // A daemon crash can leave the pre-restart process alive for a moment in its orphaned PTY (ponytail:
     // it can still touch files on disk until it actually exits — persisting the PTY pid and killing its
@@ -1380,7 +1445,7 @@ export class SessionService {
 
   private harnessFor(id: string): Harness {
     const harness = this.deps.harnesses.find((h) => h.id === id);
-    if (!harness) throw new Error(`unknown harness: ${id}`);
+    if (!harness) throw new UnknownHarnessError(id);
     return harness;
   }
 

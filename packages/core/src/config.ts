@@ -1,9 +1,10 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { E2E_FLAG_ENV, E2E_FLAG_ON } from '@openfleet/shared';
 import { newToken } from './ids.js';
 
-export interface Config { host: '127.0.0.1'; port: number; home: string; dbPath: string; worktreesRoot: string; sessionsRoot: string; stateRoot: string; adminToken: string }
+export interface Config { host: '127.0.0.1'; port: number; home: string; dbPath: string; worktreesRoot: string; sessionsRoot: string; stateRoot: string; adminToken: string; e2eEnabled: boolean }
 
 export const resolveHome = (env: NodeJS.ProcessEnv = process.env): string => env.OPENFLEET_HOME ?? join(homedir(), '.openfleet');
 
@@ -29,6 +30,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     dbPath: join(home, 'openfleet.db'),
     worktreesRoot,
     sessionsRoot,
+    e2eEnabled: env[E2E_FLAG_ENV] === E2E_FLAG_ON,
     adminToken: readOrCreateAdminToken(join(home, 'admin.token')),
   };
 }
