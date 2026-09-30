@@ -67,8 +67,13 @@ export class SessionRepository {
       exit_code = CASE WHEN ? THEN exit_code END, closed_at = CASE WHEN ? THEN closed_at END WHERE id = ?`)
       .run(state, since, Number(keepsExitCode), Number(keepsClosedAt), id);
   }
-  recordReopen(id: string, at: string): void {
-    this.db.prepare("INSERT INTO session_events (session_id, kind, ts) VALUES (?, 'reopened', ?)").run(id, at);
+  /** Records a reopen and returns the id of the row it inserted. */
+  recordReopen(id: string, at: string): number {
+    const { lastInsertRowid } = this.db.prepare("INSERT INTO session_events (session_id, kind, ts) VALUES (?, 'reopened', ?)").run(id, at);
+    return Number(lastInsertRowid);
+  }
+  removeReopen(reopenEventId: number): void {
+    this.db.prepare('DELETE FROM session_events WHERE id = ?').run(reopenEventId);
   }
   setModel(id: string, model: string): void {
     this.db.prepare('UPDATE sessions SET model = ? WHERE id = ?').run(model, id);

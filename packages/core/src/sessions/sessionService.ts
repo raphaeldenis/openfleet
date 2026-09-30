@@ -480,11 +480,23 @@ export class SessionService {
     if (!existsSync(session.directory)) throw new SessionReopenError('directory_missing', `session ${sessionId} directory no longer exists: ${session.directory}`);
     this.assertDirectoryUnchanged(session);
     this.assertDirectoryAccessible(session);
-    this.repo.recordReopen(sessionId, new Date().toISOString());
+    const reopenEventId = this.repo.recordReopen(sessionId, new Date().toISOString());
     const outcome = this.resumeOne(session);
-    if (!outcome.launched) throw new SessionReopenError('launch_failed', `session ${sessionId} failed to relaunch: ${outcome.reason}`);
+    if (!outcome.launched) {
+      this.removeReopenRecord({ sessionId, reopenEventId });
+      throw new SessionReopenError('launch_failed', `session ${sessionId} failed to relaunch: ${outcome.reason}`);
+    }
     this.deps.bus.emit({ type: 'session.reopened', sessionId });
     return this.repo.get(sessionId)!;
+  }
+
+  // The child stays closed with its old closed_at after a failed launch, so the reopen it announced must not stay.
+  private removeReopenRecord(input: { sessionId: string; reopenEventId: number }): void {
+    try {
+      this.repo.removeReopen(input.reopenEventId);
+    } catch (err) {
+      log('warn', `reopen: the reopen record ${input.reopenEventId} of session ${input.sessionId} could not be removed after a failed launch`, err);
+    }
   }
 
   // A directory that resolved somewhere at creation and resolves somewhere else now had a path segment
