@@ -398,7 +398,7 @@ export class SessionService {
     } catch (err) {
       // The row above already exists: left alone, it would be a ghost forever — starting, no handle,
       // unclosable and unreopenable. Same treatment as resumeOne's own launch failure.
-      log('error', `create: session ${id} failed to launch`, err);
+      this.logLaunchFailure(`create: session ${id} failed to launch`, err);
       this.markClosed(id, { exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE, reason: 'launch_failed', failure: err });
       throw err;
     }
@@ -1227,9 +1227,7 @@ export class SessionService {
       // A transition that rolled back leaves the row closed with its shutdown marker: markClosed skips a closed row, so the marker is rewritten here.
       const isStillClosedByShutdown = this.repo.wasClosedByDaemonShutdown(sessionId);
       if (isStillClosedByShutdown) {
-        this.repo.failShutdownClose(sessionId, RESUME_LAUNCH_FAILED_EXIT_CODE, new Date().toISOString());
-        this.deps.bus.emit({ type: 'session.closed', sessionId, ...closure });
-        this.announceClosure(sessionId, closure);
+        this.rewriteClosedRowAsFailedLaunch(sessionId, closure);
         return;
       }
       this.markClosed(sessionId, closure);
@@ -1457,8 +1455,15 @@ export class SessionService {
     const error = isNamedLaunchFailure(failure) ? failure
       : failureCode === 'harness_exited'
         ? this.harnessExitedError(sessionId, exitCode)
-        : new OpenFleetError(failureCode, `session closed: ${reason}${exitCode === undefined ? '' : ` (exit code ${exitCode})`}`);
+        : new OpenFleetError(failureCode, `session closed: ${reason}${exitCode === undefined ? '' : ` (exit code ${exitCode})`}`, { cause: failure });
     this.announceError(sessionId, error, `session closed: ${reason}`);
+  }
+
+  // The one record of a launch failure: describeError logs an internal failure with its cause and the ref the client receives;
+  // a named failure is not internal and an unwired describeError logs nothing, so the launch logs those itself.
+  private logLaunchFailure(message: string, failure: unknown): void {
+    const isLoggedByDescribeError = this.deps.describeError !== undefined && !isNamedLaunchFailure(failure);
+    if (!isLoggedByDescribeError) log('error', message, failure);
   }
 
   // harness_exited is not an internal kind (its message reaches the client), so the daemon logs it itself, once.
@@ -1473,9 +1478,18 @@ export class SessionService {
     return new OpenFleetError('harness_exited', `the agent process exited${exitDescription}.`, { hint: REOPEN_HINT });
   }
 
-  private announceLaunchFailureOnClosedRow(sessionId: string, closure: SessionClosure): void {
+  // A launch that fails on a row already closed (an ordinary reopen, a shutdown row a transition rolled back) leaves markClosed
+  // nothing to do: the row is rewritten here so live clients and a fresh snapshot agree on the failed close.
+  private rewriteClosedRowAsFailedLaunch(sessionId: string, closure: SessionClosure): void {
+    this.repo.failClosedRow(sessionId, RESUME_LAUNCH_FAILED_EXIT_CODE, new Date().toISOString());
     this.deps.bus.emit({ type: 'session.closed', sessionId, exitCode: closure.exitCode, reason: closure.reason });
     this.announceClosure(sessionId, closure);
+  }
+
+  private closeAfterFailedLaunch(sessionId: string, closure: SessionClosure): void {
+    const isRowAlreadyClosed = this.repo.get(sessionId)?.state === 'closed';
+    this.markClosed(sessionId, closure);
+    if (isRowAlreadyClosed) this.rewriteClosedRowAsFailedLaunch(sessionId, closure);
   }
 
   private markClosed(sessionId: string, closure: SessionClosure): void {
@@ -1525,8 +1539,8 @@ export class SessionService {
       harness = this.harnessFor(session.harness);
     } catch (err) {
       if (!(err instanceof UnknownHarnessError)) throw err;
-      log('error', `resumeOne: session ${session.id} cannot resume: ${err.message}`);
-      this.markClosed(session.id, { exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE, reason: 'launch_failed' });
+      this.logLaunchFailure(`resumeOne: session ${session.id} cannot resume`, err);
+      this.closeAfterFailedLaunch(session.id, { exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE, reason: 'launch_failed', failure: err });
       return { launched: false, reason: err.message };
     }
     this.warnIfPermissiveSettings(session.harness, session.directory);
@@ -1561,12 +1575,8 @@ export class SessionService {
       // The launch builder refuses to resume with a missing/invalid session id (it would otherwise open
       // the CLI's interactive picker inside the PTY) — close this one row and keep resuming the rest of
       // the fleet rather than letting one bad row abort resumeAll for every other session.
-      log('error', `resumeOne: session ${session.id} failed to launch`, err);
-      const closure: SessionClosure = { exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE, reason: 'launch_failed', failure: err };
-      // A reopened ordinary row is still closed here: markClosed leaves it as it is, so its failure is announced separately.
-      const isRowAlreadyClosed = this.repo.get(session.id)?.state === 'closed';
-      this.markClosed(session.id, closure);
-      if (isRowAlreadyClosed && isNamedLaunchFailure(err)) this.announceLaunchFailureOnClosedRow(session.id, closure);
+      this.logLaunchFailure(`resumeOne: session ${session.id} failed to launch`, err);
+      this.closeAfterFailedLaunch(session.id, { exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE, reason: 'launch_failed', failure: err });
       return { launched: false, reason: (err as Error).message, failure: err };
     }
     this.handles.set(session.id, handle);

@@ -3371,9 +3371,7 @@ describe('SessionService.reopen', () => {
     expect((caught as SessionReopenError).message).toContain('pty spawn ENOENT');
     expect(failingHarness.launches).toHaveLength(1);
     expect(service.get(session.id)!.state).toBe('closed');
-    // Already closed before this reopen attempt: markClosed's own no-op-if-already-closed guard means a
-    // failed reopen leaves the session's original exit reason untouched rather than overwriting it.
-    expect(service.get(session.id)!.exitCode).toBe(0);
+    expect(service.get(session.id)!.exitCode).toBe(RESUME_LAUNCH_FAILED_EXIT_CODE);
     expect(events.some((e) => e.type === 'session.reopened')).toBe(false);
   });
 });
@@ -3559,7 +3557,7 @@ describe('SessionService closure stamps across the reopen lifecycle', () => {
     expect(contradictions).toEqual([]);
   });
 
-  it('leaves the closedAt and the exit code of the earlier close untouched when a reopen fails to launch', async () => {
+  it('stamps a fresh closedAt and the launch-failed exit code when a reopen fails to launch', async () => {
     vi.useFakeTimers();
     const db = openDatabase(':memory:');
     const bus = new EventBus();
@@ -3576,7 +3574,7 @@ describe('SessionService closure stamps across the reopen lifecycle', () => {
 
     expect(snapshotOf(service, session.id).state).toBe('closed');
     expect(snapshotOf(service, session.id).exitCode).toBe(RESUME_LAUNCH_FAILED_EXIT_CODE);
-    expect(snapshotOf(service, session.id).closedAt).toBe(closedBefore.closedAt);
+    expect(snapshotOf(service, session.id).closedAt! > closedBefore.closedAt!).toBe(true);
   });
 });
 

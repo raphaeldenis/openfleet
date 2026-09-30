@@ -81,7 +81,7 @@ const CLAUDE_NOT_FOUND_ENVELOPE = {
 };
 
 describe('reopening a closed claude-cli session when claude is not on the daemon PATH', () => {
-  it('answers the claude_not_found 503 envelope and announces the failure once, leaving the closed row untouched', async () => {
+  it('answers the claude_not_found 503 envelope and announces the failure once, finalizing the closed row as a failed launch', async () => {
     const env = { PATH: binWithClaude };
     const db = openDatabase(':memory:');
     const daemon = bootDaemon(db, env);
@@ -103,7 +103,9 @@ describe('reopening a closed claude-cli session when claude is not on the daemon
       { type: 'session.closed', sessionId: session.id, exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE, reason: 'launch_failed' },
       { type: 'error', sessionId: session.id, error: expect.objectContaining(CLAUDE_NOT_FOUND_ENVELOPE) },
     ]);
-    expect(daemon.sessions.get(session.id)).toMatchObject({ state: 'closed', exitCode: closedRow.exitCode, closedAt: closedRow.closedAt });
+    const failedRow = daemon.sessions.get(session.id)!;
+    expect(failedRow).toMatchObject({ state: 'closed', exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE });
+    expect(failedRow.closedAt! > closedRow.closedAt!).toBe(true);
   });
 
   it('answers the same envelope for a session the daemon shutdown closed, finalizes it -2 and drops the shutdown marker', async () => {

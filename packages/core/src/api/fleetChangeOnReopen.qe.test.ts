@@ -55,7 +55,7 @@ const spawnChild = (name: string, parentId = managerId) => sessions.create({ dir
 const reopen = (id: string) => api(`/api/sessions/${id}/reopen`, { method: 'POST' });
 
 describe('QE probes: reopen as a fleet change', () => {
-  it('does not refuse the manager after a FAILED reopen, since its fleet did not change', async () => {
+  it('refuses the manager once after a FAILED reopen, which closed the child afresh', async () => {
     const child = await spawnChild('Builder-3');
     await tick();
     await sessions.close(child.id);
@@ -71,7 +71,7 @@ describe('QE probes: reopen as a fleet change', () => {
 
     const stopAfterFailedReopen = await stopOf(managerId);
 
-    expect(stopAfterFailedReopen).toEqual({});
+    expect(stopAfterFailedReopen).toMatchObject({ decision: 'block' });
   });
 
   it('names at most 10 fleet changes and counts the rest with reopened and closed kinds mixed', async () => {
