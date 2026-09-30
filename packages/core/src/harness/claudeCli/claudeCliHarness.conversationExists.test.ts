@@ -91,6 +91,31 @@ describe('a user whose CLI conversation transcript may be gone', () => {
     expect(await conversationExists({ cliSessionId: conversationId, directory: sessionDirectory })).toBe('missing');
   });
 
+  it('sees the conversation missing when its first user line is torn, cut off before its end', async () => {
+    writeTranscript('-p', { content: titleOnlyStub + '{"type":"user","message":{"role":"us' });
+
+    expect(await conversationExists({ cliSessionId: conversationId, directory: sessionDirectory })).toBe('missing');
+  });
+
+  it('sees the conversation present once a torn line is followed by a whole user line', async () => {
+    writeTranscript('-p', { content: '{"type":"custom-ti\n' + userLine });
+
+    expect(await conversationExists({ cliSessionId: conversationId, directory: sessionDirectory })).toBe('present');
+  });
+
+  it('sees the conversation present when a byte order mark precedes its first user line', async () => {
+    writeTranscript('-p', { content: '﻿' + userLine });
+
+    expect(await conversationExists({ cliSessionId: conversationId, directory: sessionDirectory })).toBe('present');
+  });
+
+  it('sees the conversation present when more than 4 MB hold no user line at all', async () => {
+    const filler = `{"type":"system","note":"${'x'.repeat(1000)}"}\n`;
+    writeTranscript('-p', { content: filler.repeat(Math.ceil((4 * 1024 * 1024 + 1) / filler.length)) });
+
+    expect(await conversationExists({ cliSessionId: conversationId, directory: sessionDirectory })).toBe('present');
+  });
+
   it('sees the conversation present when another project directory holds the real one behind a stub', async () => {
     writeTranscript(projectDirectoryNameOf(sessionDirectory), { content: titleOnlyStub });
     writeTranscript('-another', { content: userLine });
