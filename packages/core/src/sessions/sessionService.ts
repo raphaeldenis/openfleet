@@ -19,9 +19,10 @@ import { canDeliverNow, isClear, nextState, provesTurnEnded, startsClearedConver
 // Absent, the service still closes sessions with their reason but broadcasts no error events.
 export type DescribeError = (error: unknown, scope: { sessionId?: string; where?: string }) => ErrorEnvelope;
 
-export interface SessionServiceDeps { db: DatabaseSync; bus: EventBus; harnesses: Harness[]; baseUrl: string; worktreesRoot: string; resumeTimeoutMs?: number; firstStartTimeoutMs?: number; submitKeystrokeDelayMs?: number; clearInFlightTimeoutMs?: number; clearFlushGraceMs?: number; sessionEndExitGraceMs?: number; now?: () => number; describeError?: DescribeError }
+export interface SessionServiceDeps { db: DatabaseSync; bus: EventBus; harnesses: Harness[]; baseUrl: string; worktreesRoot: string; resumeTimeoutMs?: number; firstStartTimeoutMs?: number; submitKeystrokeDelayMs?: number; clearInFlightTimeoutMs?: number; clearFlushGraceMs?: number; sessionEndExitGraceMs?: number; now?: () => number; describeError?: DescribeError; env?: NodeJS.ProcessEnv }
 
-interface SessionClosure { exitCode?: number; reason?: SessionCloseReason }
+// `failure`: the typed error that made a launch fail; announced in place of the generic launch_failed when it is not internal.
+interface SessionClosure { exitCode?: number; reason?: SessionCloseReason; failure?: unknown }
 
 // Who made a close happen when the API/MCP/relaunch did not: the daemon shutting down, or the CLI ending itself (SessionEnd).
 // Absent, the close was asked for by a user, a parent or a relaunch.
@@ -31,6 +32,9 @@ type CloseCause = 'shutdown' | 'session_end';
 const FAILURE_CODE_BY_CLOSE_REASON: Partial<Record<SessionCloseReason, ErrorCode>> = {
   launch_failed: 'launch_failed', resume_timeout: 'resume_timeout', harness_exit: 'harness_exited',
 };
+
+// A launch that fails on a known, caller-safe cause (the claude CLI is not on the PATH) names it; any other throw stays launch_failed.
+const isNamedLaunchFailure = (error: unknown): error is OpenFleetError => error instanceof OpenFleetError && error.kind === 'unavailable';
 
 // After SessionEnd the CLI exits within a fraction of a second on its own; the daemon waits this long before it kills a hung one.
 export const SESSION_END_EXIT_GRACE_MS = 2000;
@@ -395,7 +399,7 @@ export class SessionService {
       // The row above already exists: left alone, it would be a ghost forever — starting, no handle,
       // unclosable and unreopenable. Same treatment as resumeOne's own launch failure.
       log('error', `create: session ${id} failed to launch`, err);
-      this.markClosed(id, { exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE, reason: 'launch_failed' });
+      this.markClosed(id, { exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE, reason: 'launch_failed', failure: err });
       throw err;
     }
     this.handles.set(id, handle);
@@ -416,7 +420,7 @@ export class SessionService {
 
   async createInWorktree(spec: SessionSpec & { repoPath: string; branchName: string }): Promise<Session> {
     this.harnessFor(spec.harness);
-    const worktree = await createWorktree({ repoPath: spec.repoPath, branchName: spec.branchName, worktreesRoot: this.deps.worktreesRoot });
+    const worktree = await createWorktree({ repoPath: spec.repoPath, branchName: spec.branchName, worktreesRoot: this.deps.worktreesRoot, env: this.deps.env });
     return this.create({ ...spec, directory: worktree.path }, { branch: worktree.branch });
   }
 
@@ -551,6 +555,7 @@ export class SessionService {
     const outcome = this.resumeOne(session);
     if (!outcome.launched) {
       this.removeReopenRecord({ sessionId, reopenEventId });
+      if (isNamedLaunchFailure(outcome.failure)) throw outcome.failure;
       throw new SessionReopenError('launch_failed', `session ${sessionId} failed to relaunch: ${outcome.reason}`);
     }
     this.deps.bus.emit({ type: 'session.reopened', sessionId });
@@ -1443,12 +1448,13 @@ export class SessionService {
     }
   }
 
-  private announceClosure(sessionId: string, { exitCode, reason }: SessionClosure): void {
+  private announceClosure(sessionId: string, { exitCode, reason, failure }: SessionClosure): void {
     const failureCode = reason && FAILURE_CODE_BY_CLOSE_REASON[reason];
     if (!failureCode) return;
-    const error = failureCode === 'harness_exited'
-      ? this.harnessExitedError(sessionId, exitCode)
-      : new OpenFleetError(failureCode, `session closed: ${reason}${exitCode === undefined ? '' : ` (exit code ${exitCode})`}`);
+    const error = isNamedLaunchFailure(failure) ? failure
+      : failureCode === 'harness_exited'
+        ? this.harnessExitedError(sessionId, exitCode)
+        : new OpenFleetError(failureCode, `session closed: ${reason}${exitCode === undefined ? '' : ` (exit code ${exitCode})`}`);
     this.announceError(sessionId, error, `session closed: ${reason}`);
   }
 
@@ -1462,6 +1468,11 @@ export class SessionService {
     if (wasKilledBySignal) return new OpenFleetError('harness_exited', `the agent process was killed (signal ${exitCode - SIGNAL_EXIT_CODE_BASE}).`, { hint: REOPEN_HINT });
     if (exitedRightAfterLaunch) return new OpenFleetError('harness_exited', `the agent process exited right after launch${exitDescription}.`, { hint: CLI_NOT_FOUND_HINT });
     return new OpenFleetError('harness_exited', `the agent process exited${exitDescription}.`, { hint: REOPEN_HINT });
+  }
+
+  private announceLaunchFailureOnClosedRow(sessionId: string, closure: SessionClosure): void {
+    this.deps.bus.emit({ type: 'session.closed', sessionId, exitCode: closure.exitCode, reason: closure.reason });
+    this.announceClosure(sessionId, closure);
   }
 
   private markClosed(sessionId: string, closure: SessionClosure): void {
@@ -1502,7 +1513,7 @@ export class SessionService {
 
   // Boot resume and reopen both call this, but only reopen acts on the outcome: boot resume keeps its
   // existing "log and mark closed" behaviour for one bad row so the rest of the fleet still comes up.
-  private resumeOne(session: Session): { launched: true } | { launched: false; reason: string } {
+  private resumeOne(session: Session): { launched: true } | { launched: false; reason: string; failure?: unknown } {
     this.assertNotShuttingDown();
     const tokens = this.repo.tokens(session.id);
     if (!tokens) return { launched: false, reason: 'session has no stored tokens' }; // defensive: every session row carries its tokens
@@ -1548,8 +1559,12 @@ export class SessionService {
       // the CLI's interactive picker inside the PTY) — close this one row and keep resuming the rest of
       // the fleet rather than letting one bad row abort resumeAll for every other session.
       log('error', `resumeOne: session ${session.id} failed to launch`, err);
-      this.markClosed(session.id, { exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE, reason: 'launch_failed' });
-      return { launched: false, reason: (err as Error).message };
+      const closure: SessionClosure = { exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE, reason: 'launch_failed', failure: err };
+      // A reopened ordinary row is still closed here: markClosed leaves it as it is, so its failure is announced separately.
+      const isRowAlreadyClosed = this.repo.get(session.id)?.state === 'closed';
+      this.markClosed(session.id, closure);
+      if (isRowAlreadyClosed && isNamedLaunchFailure(err)) this.announceLaunchFailureOnClosedRow(session.id, closure);
+      return { launched: false, reason: (err as Error).message, failure: err };
     }
     this.handles.set(session.id, handle);
     activeHandleBySessionId.set(session.id, handle);

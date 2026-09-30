@@ -1,4 +1,10 @@
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+// createWorktree refuses a repoPath that is not a directory before it runs git.
+const existingRepoPath = mkdtempSync(join(tmpdir(), 'of-exec-env-repo-'));
 
 const execFileCalls: Array<{ options: { env?: NodeJS.ProcessEnv; cwd?: string } }> = [];
 
@@ -26,7 +32,7 @@ describe('git subprocess environment', () => {
     process.env.SCAPE_EDIT_CAP = 'cap-token';
     process.env.CLAUDECODE = '1';
     try {
-      await createWorktree({ repoPath: '/repo', branchName: 'feature/x', worktreesRoot: '/worktrees-does-not-exist' });
+      await createWorktree({ repoPath: existingRepoPath, branchName: 'feature/x', worktreesRoot: '/worktrees-does-not-exist' });
     } finally {
       delete process.env.SCAPE_EDIT_CAP;
       delete process.env.CLAUDECODE;
@@ -45,7 +51,7 @@ describe('git subprocess environment', () => {
     process.env.GIT_DIR = '/decoy/.git';
     process.env.GIT_WORK_TREE = '/decoy';
     try {
-      await createWorktree({ repoPath: '/repo', branchName: 'feature/y', worktreesRoot: '/worktrees-does-not-exist' });
+      await createWorktree({ repoPath: existingRepoPath, branchName: 'feature/y', worktreesRoot: '/worktrees-does-not-exist' });
     } finally {
       delete process.env.GIT_DIR;
       delete process.env.GIT_WORK_TREE;
@@ -64,7 +70,7 @@ describe('git subprocess environment', () => {
     process.env.GIT_CONFIG_GLOBAL = '/decoy.gitconfig';
     process.env.GIT_TRACE = '/decoy-trace.log';
     try {
-      await createWorktree({ repoPath: '/repo', branchName: 'feature/z', worktreesRoot: '/worktrees-does-not-exist' });
+      await createWorktree({ repoPath: existingRepoPath, branchName: 'feature/z', worktreesRoot: '/worktrees-does-not-exist' });
     } finally {
       delete process.env.GIT_CONFIG_GLOBAL;
       delete process.env.GIT_TRACE;
