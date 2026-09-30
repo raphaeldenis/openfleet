@@ -9,8 +9,8 @@ const PATH_MARKER: &str = "__PATH__=";
 
 /// Returns the PATH printed by the login shell, ignoring any noise the shell rc files print around it.
 pub fn parse_path_from_login_shell(output: &str) -> Option<String> {
-  let path_line_values = output.lines().filter_map(|line| line.strip_prefix(PATH_MARKER));
-  let last_value = path_line_values.last()?.trim();
+  let mut path_line_values = output.lines().filter_map(|line| line.strip_prefix(PATH_MARKER));
+  let last_value = path_line_values.next_back()?.trim();
   (!last_value.is_empty()).then(|| last_value.to_string())
 }
 

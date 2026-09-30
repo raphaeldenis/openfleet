@@ -1,3 +1,4 @@
+mod daemon;
 mod path_repair;
 
 use std::path::PathBuf;
@@ -17,8 +18,10 @@ fn read_admin_token(app: tauri::AppHandle) -> Result<String, String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-  tauri::Builder::default()
-    .invoke_handler(tauri::generate_handler![read_admin_token])
+  let application = tauri::Builder::default()
+    .plugin(tauri_plugin_shell::init())
+    .manage(daemon::DaemonState::new())
+    .invoke_handler(tauri::generate_handler![read_admin_token, daemon::daemon_status])
     .setup(|app| {
       if cfg!(debug_assertions) {
         app.handle().plugin(
@@ -27,8 +30,16 @@ pub fn run() {
             .build(),
         )?;
       }
+      daemon::start(app.handle().clone());
       Ok(())
     })
-    .run(tauri::generate_context!())
-    .expect("error while running tauri application");
+    .build(tauri::generate_context!())
+    .expect("error while building tauri application");
+
+  application.run(|app, event| {
+    let is_quitting = matches!(event, tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit);
+    if is_quitting {
+      daemon::stop(app);
+    }
+  });
 }
