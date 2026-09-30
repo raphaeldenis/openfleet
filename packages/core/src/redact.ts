@@ -56,8 +56,22 @@ const maskingSecretParameters = (parameter: string, prefix: string, key: string,
   return isSecretParameter ? `${prefix}${key}=${MASK}` : parameter;
 };
 
+// Credentials that identify themselves by their format, whatever surrounds them: provider keys, JWTs, and PEM private keys (up to their footer, or to the end of a cut text).
+const WELL_KNOWN_CREDENTIAL = new RegExp(
+  [
+    '\\bsk-[A-Za-z0-9_-]{20,}',
+    '\\bgh[pousr]_[A-Za-z0-9]{36,}',
+    '\\bgithub_pat_[A-Za-z0-9_]{50,}',
+    '\\b(?:AKIA|ASIA)[0-9A-Z]{16}\\b',
+    '\\beyJ[A-Za-z0-9_-]{5,}\\.eyJ[A-Za-z0-9_-]{5,}\\.[A-Za-z0-9_-]{5,}',
+    '-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)',
+  ].join('|'),
+  'g',
+);
+
 export function maskedSecrets(text: string): string {
   return text
+    .replace(WELL_KNOWN_CREDENTIAL, MASK)
     .replace(BEARER_TOKEN, `Bearer ${MASK}`)
     .replace(AUTHORIZED_BASIC_CREDENTIAL, `$1Basic ${MASK}`)
     .replace(BASIC_CREDENTIAL, `Basic ${MASK}`)
