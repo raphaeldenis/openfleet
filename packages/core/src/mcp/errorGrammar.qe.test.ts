@@ -25,7 +25,7 @@ import { nodeDocsFolderFs } from '../notes/nodeDocsFolderFs.js';
 import { NoteRepository } from '../notes/noteRepository.js';
 import { NoteService } from '../notes/noteService.js';
 import { ProjectRepository } from '../projects/projectRepository.js';
-import { SessionService } from '../sessions/sessionService.js';
+import { DaemonShuttingDownError, SessionService } from '../sessions/sessionService.js';
 import { DataStoreRepository } from '../stores/dataStoreRepository.js';
 import { DataStoreService } from '../stores/dataStoreService.js';
 import { WorkingStateService } from '../workingState/workingStateService.js';
@@ -290,6 +290,24 @@ describe('MCP error grammar, what a real child reads', () => {
     expect([codeOf(collision), retryOf(collision)]).toEqual(['message_id_reused', 'never']);
   });
 
+  it('reads an update of a closed child\'s model as session_closed (retry: never), never as an unexplained failure', async () => {
+    await call(world.lead, 'close_session', { session_id: world.childId });
+
+    const result = await call(world.lead, 'update_session', { session_id: world.childId, model: 'opus' });
+
+    expect(textOf(result)).toMatch(MCP_ERROR_GRAMMAR);
+    expect([codeOf(result), retryOf(result)]).toEqual(['session_closed', 'never']);
+  });
+
+  it('reads a spawn refused by a daemon that is shutting down as daemon_shutting_down (retry: later)', async () => {
+    vi.spyOn(world.sessions, 'create').mockRejectedValue(new DaemonShuttingDownError());
+
+    const result = await call(world.lead, 'create_session', { directory: world.subdirectory('during-shutdown'), name: 'Late' });
+
+    expect(textOf(result)).toMatch(MCP_ERROR_GRAMMAR);
+    expect([codeOf(result), retryOf(result)]).toEqual(['daemon_shutting_down', 'later']);
+  });
+
   it('reads a spawn outside the caller\'s repository as outside_own_repository (retry: never)', async () => {
     const result = await call(world.child, 'create_session', { directory: makeRepo(), name: 'Elsewhere' });
 
@@ -366,6 +384,54 @@ describe('MCP error grammar, hostile text inside a message', () => {
     expect(text).not.toMatch(ANSI_NUL_AND_BIDI);
     expect(text.length).toBeLessThanOrEqual(MAX_ERROR_LINE_CHARS);
     expect([codeOf(result), retryOf(result)]).toEqual(['directory_missing', 'never']);
+  });
+});
+
+describe('MCP error grammar, refusals raised before a handler runs', () => {
+  // Documented exception: the SDK validates the input before any handler runs, so these keep the SDK's own `MCP error -32602` text (no code, no retry tag).
+  it.each([
+    { name: 'an empty body', tool: 'message_parent', args: { body: '' }, field: 'body' },
+    { name: 'a malformed message_id', tool: 'message_parent', args: { body: 'x', message_id: 'not-a-uuid' }, field: 'message_id' },
+    { name: 'an unknown tool', tool: 'no_such_tool', args: {}, field: 'no_such_tool' },
+  ])('reads $name as the SDK\'s own -32602 text that names $field, and never as a grammar line', async ({ tool, args, field }) => {
+    const result = await call(world.child, tool, args);
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toMatch(/^MCP error -32602: /);
+    expect(textOf(result)).toContain(field);
+    expect(textOf(result)).not.toMatch(LEAKS);
+  });
+});
+
+describe('MCP error grammar, whatever a handler throws', () => {
+  const errorWhoseStackThrows = () => Object.defineProperty(new Error('stack trap'), 'stack', { get: () => { throw new Error('no stack for you'); } });
+  const errorWithCircularCause = () => {
+    const error = new Error('loop') as Error & { cause?: unknown };
+    error.cause = error;
+    return error;
+  };
+  const thrownValues: [string, () => unknown][] = [
+    ['undefined', () => undefined],
+    ['a string', () => 'a plain string'],
+    ['null', () => null],
+    ['an object with no prototype', () => Object.create(null)],
+    ['an error whose stack getter throws', errorWhoseStackThrows],
+    ['an error with a circular cause', errorWithCircularCause],
+  ];
+
+  it.each(thrownValues)('reads %s thrown inside a guarded tool and inside an unguarded one as internal_error (retry: later, ref)', async (_name, makeThrown) => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.spyOn(world.sessions, 'sendMessage').mockImplementation(() => { throw makeThrown(); });
+    vi.spyOn(world.sessions, 'close').mockImplementation(() => { throw makeThrown(); });
+
+    const guardedResult = await call(world.lead, 'send_session_message', { target_uuid: world.childId, body: 'hi' });
+    const unguardedResult = await call(world.lead, 'close_session', { session_id: world.childId });
+
+    for (const result of [guardedResult, unguardedResult]) {
+      expect(textOf(result)).toMatch(MCP_ERROR_GRAMMAR);
+      expect([codeOf(result), retryOf(result)]).toEqual(['internal_error', 'later']);
+      expect(refOf(result)).toMatch(/^[0-9a-f]{8}$/);
+    }
   });
 });
 
