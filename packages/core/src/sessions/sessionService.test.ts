@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readdirSync, rmdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
@@ -8,7 +8,7 @@ import { FakeHandle, FakeHarness } from '../harness/fakeHarness.js';
 import type { Harness, HarnessHandle, HarnessLaunch } from '../harness/harness.js';
 import { EventBus } from '../events/eventBus.js';
 import { makeRepo } from '../git/testRepo.js';
-import { DaemonShuttingDownError, DEFAULT_CLOSE_ESCALATE_MS, DELIVERY_RETRY_MS, MAX_DELIVERY_RETRIES, MAX_PENDING_AGENT_MESSAGES_PER_SENDER, PARKED_RETRY_MS, RESUME_LAUNCH_FAILED_EXIT_CODE, RESUME_TIMEOUT_EXIT_CODE, SessionClosedError, SessionReopenError, SessionService, SUBMIT_KEYSTROKE_DELAY_MS, TRANSCRIPT_INTERRUPT_POLL_MS, TRANSCRIPT_INTERRUPT_TIMEOUT_MS, TURN_START_TIMEOUT_MS } from './sessionService.js';
+import { DaemonShuttingDownError, DEFAULT_CLOSE_ESCALATE_MS, DELIVERY_RETRY_MS, MAX_DELIVERY_RETRIES, MAX_PENDING_AGENT_MESSAGES_PER_SENDER, PARKED_RETRY_MS, RESUME_LAUNCH_FAILED_EXIT_CODE, RESUME_TIMEOUT_EXIT_CODE, SessionClosedError, SessionReopenError, SessionService, SUBMIT_KEYSTROKE_DELAY_MS, TRANSCRIPT_INTERRUPT_MAX_READ_BYTES, TRANSCRIPT_INTERRUPT_POLL_MS, TRANSCRIPT_INTERRUPT_TIMEOUT_MS, TURN_START_TIMEOUT_MS } from './sessionService.js';
 import { MessageQueue } from './messageQueue.js';
 import { SessionRepository } from './sessionRepository.js';
 import { PERMISSION_MODES, type ServerEvent } from '@openfleet/shared';
@@ -1830,7 +1830,7 @@ describe('SessionService submit-keystroke hostile cases', () => {
       expect(service.get(session.id)!.state).toBe('idle');
     });
 
-    it('still catches the interrupt marker after the transcript is truncated and rewritten shorter than the armed offset', async () => {
+    it('reads a transcript truncated in place from byte 0: it is the same file, so what is written after the truncation is new', async () => {
       vi.useFakeTimers();
       const { service } = setup();
       const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
@@ -1845,7 +1845,7 @@ describe('SessionService submit-keystroke hostile cases', () => {
       expect(service.get(session.id)!.state).toBe('idle');
     });
 
-    it('catches a marker line whose bytes arrive split across two polls', async () => {
+    it('regression pin (already green before AUD-15): catches a marker line whose bytes arrive split across two polls', async () => {
       vi.useFakeTimers();
       const { service } = setup();
       const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
@@ -1860,6 +1860,82 @@ describe('SessionService submit-keystroke hostile cases', () => {
       expect(service.get(session.id)!.state).toBe('generating');
 
       appendFileSync(transcriptPath, markerLine.slice(splitAt));
+      await vi.advanceTimersByTimeAsync(TRANSCRIPT_INTERRUPT_POLL_MS);
+
+      expect(service.get(session.id)!.state).toBe('idle');
+    });
+
+    it('ignores the content of a file that replaced the transcript (new inode): a replacement holds old turns, only lines appended after the replacement poll count', async () => {
+      vi.useFakeTimers();
+      const { service } = setup();
+      const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+      const transcriptPath = makeTranscriptFile();
+      appendFileSync(transcriptPath, `${'x'.repeat(9)}\n`);
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: transcriptPath }));
+      service.writeRaw(session.id, '\x1b');
+      const replacementPath = `${transcriptPath}.replacement`;
+      writeFileSync(replacementPath, `${'z'.repeat(20)}\n${interruptedLine()}`); // longer than the armed offset, stale marker past it
+      renameSync(replacementPath, transcriptPath);
+
+      await vi.advanceTimersByTimeAsync(TRANSCRIPT_INTERRUPT_POLL_MS);
+      expect(service.get(session.id)!.state).toBe('generating');
+
+      appendFileSync(transcriptPath, interruptedLine());
+      await vi.advanceTimersByTimeAsync(TRANSCRIPT_INTERRUPT_POLL_MS);
+
+      expect(service.get(session.id)!.state).toBe('idle');
+    });
+
+    it('reads at most the per-poll byte cap and finishes a larger append over the following polls', async () => {
+      vi.useFakeTimers();
+      const { service } = setup();
+      const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+      const transcriptPath = makeTranscriptFile();
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: transcriptPath }));
+      service.writeRaw(session.id, '\x1b');
+      const fillerLineLargerThanTwoPolls = `${'x'.repeat(TRANSCRIPT_INTERRUPT_MAX_READ_BYTES * 2 - 1)}\n`;
+      appendFileSync(transcriptPath, fillerLineLargerThanTwoPolls + interruptedLine());
+
+      await vi.advanceTimersByTimeAsync(TRANSCRIPT_INTERRUPT_POLL_MS);
+      expect(service.get(session.id)!.state).toBe('generating');
+
+      await vi.advanceTimersByTimeAsync(TRANSCRIPT_INTERRUPT_POLL_MS);
+      expect(service.get(session.id)!.state).toBe('generating');
+
+      await vi.advanceTimersByTimeAsync(TRANSCRIPT_INTERRUPT_POLL_MS);
+      expect(service.get(session.id)!.state).toBe('idle');
+    });
+
+    it('keeps watching after a single line grows past the carry cap without a newline, and catches the marker that follows it', async () => {
+      vi.useFakeTimers();
+      const { service } = setup();
+      const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+      const transcriptPath = makeTranscriptFile();
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: transcriptPath }));
+      service.writeRaw(session.id, '\x1b');
+      appendFileSync(transcriptPath, 'x'.repeat(TRANSCRIPT_INTERRUPT_MAX_READ_BYTES * 2 + 1));
+      await vi.advanceTimersByTimeAsync(TRANSCRIPT_INTERRUPT_POLL_MS * 3);
+      expect(service.get(session.id)!.state).toBe('generating');
+
+      appendFileSync(transcriptPath, `\n${interruptedLine()}`);
+      await vi.advanceTimersByTimeAsync(TRANSCRIPT_INTERRUPT_POLL_MS);
+
+      expect(service.get(session.id)!.state).toBe('idle');
+    });
+
+    it('detects the marker in the line after a line whose multibyte character is split across two polls', async () => {
+      vi.useFakeTimers();
+      const { service } = setup();
+      const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+      const transcriptPath = makeTranscriptFile();
+      service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit', transcript_path: transcriptPath }));
+      service.writeRaw(session.id, '\x1b');
+      const lineWithEuroSign = Buffer.from(`${JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'prix: 5€' }] } })}\n`);
+      const insideTheEuroSign = lineWithEuroSign.indexOf(Buffer.from('€')) + 1; // '€' is 3 bytes; cut after its first byte
+      appendFileSync(transcriptPath, lineWithEuroSign.subarray(0, insideTheEuroSign));
+      await vi.advanceTimersByTimeAsync(TRANSCRIPT_INTERRUPT_POLL_MS);
+
+      appendFileSync(transcriptPath, Buffer.concat([lineWithEuroSign.subarray(insideTheEuroSign), Buffer.from(interruptedLine())]));
       await vi.advanceTimersByTimeAsync(TRANSCRIPT_INTERRUPT_POLL_MS);
 
       expect(service.get(session.id)!.state).toBe('idle');
