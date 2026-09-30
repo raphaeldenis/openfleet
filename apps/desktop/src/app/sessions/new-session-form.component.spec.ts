@@ -991,9 +991,9 @@ describe('NewSessionFormComponent', () => {
   describe('create errors', () => {
     it.each([
       ['invalid_body', 400, 'rejected these values'],
-      ['invalid_branch_name', 400, 'branch name'],
-      ['worktree_exists', 409, 'worktree for this branch already exists'],
-      ['internal', 500, 'internal error'],
+      ['invalid_branch_name', 400, 'start with a letter, digit, dot or underscore, and avoid “..”'],
+      ['worktree_exists', 409, 'A folder for this branch already exists'],
+      ['internal_error', 500, 'internal error'],
       ['daemon_shutting_down', 503, 'shutting down'],
     ])('user reads what went wrong in words when the backend rejects the create with %s', async (code, status, readableFragment) => {
       const api = fakeApi({ createSession: vi.fn().mockRejectedValue(new ApiError(status, `POST /api/sessions → ${status}`, code)) });
@@ -1523,7 +1523,7 @@ describe('NewSessionFormComponent', () => {
     });
 
     it('a failed create after a failed open reads as a create failure, not as a session that was created', async () => {
-      const createSession = vi.fn().mockResolvedValueOnce({ id: 's-new' }).mockRejectedValueOnce(new ApiError(500, 'boom', 'internal'));
+      const createSession = vi.fn().mockResolvedValueOnce({ id: 's-new' }).mockRejectedValueOnce(new ApiError(500, 'boom', 'internal_error'));
       await renderFormWhoseFirstNavigationFails(fakeApi({ createSession }));
 
       await userEvent.type(screen.getByTestId('new-session-name'), ' the Second');
