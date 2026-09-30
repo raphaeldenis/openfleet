@@ -24,7 +24,12 @@ Once a packaged app runs on `~/.openfleet` and port 7331, start dev daemons on t
 
 `scripts/release/build-local.sh` fetches the pinned official Node binary (`scripts/release/node-version.txt`, checked against nodejs.org's `SHASUMS256.txt`, cached after the first run), bundles the daemon, runs `tauri build` and prints the dmg path (`apps/desktop/src-tauri/target/release/bundle/dmg/OpenFleet_<version>_aarch64.dmg`). The build is Apple Silicon only, ad-hoc signed, not notarized, with no updater.
 
-Install: open the dmg, drag `OpenFleet.app` to `/Applications`, launch. A dmg built and kept on the same Mac carries no quarantine flag, so Gatekeeper stays silent. The app starts its own daemon; **Quit** stops it (sessions resume on the next launch). To update, quit the app and drag the new `.app` over the old one.
+`tauri-build` requires the Node sidecar and the daemon bundle to exist, so on a fresh clone (or a CI runner) run both before any `cargo` or `tauri` command; `pnpm build:dmg` does it for you:
+
+    node scripts/release/fetch-node.mjs
+    pnpm --filter @openfleet/core bundle
+
+Install: open the dmg, drag `OpenFleet.app` to `/Applications`, launch. A dmg built and kept on the same Mac carries no quarantine flag, so Gatekeeper stays silent. The app starts its own daemon on port 7331 (it reuses one already answering there), and closing the window keeps the app and the daemon running; the Dock icon shows the window again. **Quit** (Cmd+Q) stops the daemon (SIGTERM, then SIGKILL after 12 s) and sessions resume on the next launch. To update, quit the app and drag the new `.app` over the old one.
 
 On another Mac (AirDrop, browser or Messages add the quarantine flag) Gatekeeper refuses the unsigned app once: right-click the app and choose Open (on macOS 15 then System Settings, Privacy & Security, Open Anyway), or clear the flag:
 
