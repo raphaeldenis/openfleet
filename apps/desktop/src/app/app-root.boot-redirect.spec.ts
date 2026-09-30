@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppRoot } from './app-root';
 import { routes } from './app.routes';
 import { FleetEventsService } from './core/fleet-events.service';
+import { silentWorkingStateSignals } from './working-state/working-state-fixtures';
 
 // Black-box suite for the P2-U7 boot redirect: what URL the user is on and what they see, never how AppRoot decides.
 
@@ -46,7 +47,7 @@ function configureAppRoot(appRoutes: Routes = routes) {
       provideRouter(appRoutes, withComponentInputBinding()),
       {
         provide: FleetEventsService,
-        useValue: { connect: vi.fn(), sessions: signal([]), approvals: signal([]), managers: signal([]), connected: signal(true), snapshotReceived: signal(true) },
+        useValue: { connect: vi.fn(), sessions: signal([]), approvals: signal([]), managers: signal([]), connected: signal(true), snapshotReceived: signal(true), ...silentWorkingStateSignals() },
       },
     ],
   });

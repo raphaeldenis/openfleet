@@ -188,7 +188,7 @@ export class NewSessionFormComponent {
   protected readonly harness = signal<HarnessId>('claude-cli');
   protected readonly model = signal<string>('sonnet');
   protected readonly permissionMode = signal<ChosenPermissionMode>(INHERITED_MODE);
-  protected readonly pulseSeconds = signal(1800);
+  protected readonly pulseSeconds = signal<number | null | undefined>(undefined);
   protected readonly childrenCap = signal(2);
   protected readonly mission = signal('');
   protected readonly isMissionTouched = signal(false);
@@ -207,7 +207,9 @@ export class NewSessionFormComponent {
     };
     const seededPrompt = this.embeddedSessionSeed?.prompt().trim();
     if (!this.isManagerMode()) return { kind: 'session' as const, fields: { ...sharedSpec, ...(seededPrompt ? { seededPrompt } : {}) } };
-    const managerFields = { ...sharedSpec, pulseSeconds: this.pulseSeconds(), childrenCap: this.childrenCap(), mission: this.mission().trim() };
+    const pulseSeconds = this.pulseSeconds();
+    const hasEditedPulseSeconds = typeof pulseSeconds === 'number';
+    const managerFields = { ...sharedSpec, ...(hasEditedPulseSeconds ? { pulseSeconds } : {}), childrenCap: this.childrenCap(), mission: this.mission().trim() };
     return { kind: 'manager' as const, fields: managerFields };
   });
   private readonly formFingerprint = computed(() => JSON.stringify(this.spec()));

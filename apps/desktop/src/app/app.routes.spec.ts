@@ -5,6 +5,7 @@ import { RouterTestingHarness } from '@angular/router/testing';
 import { signal } from '@angular/core';
 import { routes } from './app.routes';
 import { FleetEventsService } from './core/fleet-events.service';
+import { silentWorkingStateSignals } from './working-state/working-state-fixtures';
 import { FleetApiService } from './core/fleet-api.service';
 
 function configureTestBed() {
@@ -20,6 +21,7 @@ function configureTestBed() {
           sessions: signal([managerSession, workerSession, secondWorkerSession]),
           approvals: signal([]),
           managers: signal([]),
+          ...silentWorkingStateSignals(),
           connect: () => {},
           connected: signal(true),
           snapshotReceived: signal(true),

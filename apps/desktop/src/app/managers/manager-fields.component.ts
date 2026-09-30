@@ -26,7 +26,7 @@ function utf8ByteLength(text: string): number {
         <input
           #pulseSecondsInput id="manager-pulse-seconds" class="of-input" data-testid="manager-pulse-seconds" name="pulseSeconds" type="number" [readonly]="isLocked()"
           [ngModel]="pulseSeconds()" (ngModelChange)="onPulseSecondsChange($event)"
-          placeholder="Pulse seconds" [attr.min]="pulseSecondsBounds.min" [attr.max]="pulseSecondsBounds.max"
+          placeholder="Daemon default" [attr.min]="pulseSecondsBounds.min" [attr.max]="pulseSecondsBounds.max"
           [attr.aria-invalid]="pulseSecondsError() ? 'true' : null"
           [attr.aria-describedby]="pulseSecondsError() ? 'manager-pulse-seconds-error' : null"
         />
@@ -70,7 +70,8 @@ export class ManagerFieldsComponent implements OnInit {
   protected readonly pulseSecondsBounds = PULSE_SECONDS_BOUNDS;
   protected readonly childrenCapBounds = CHILDREN_CAP_BOUNDS;
   readonly isLocked = input(false);
-  readonly pulseSeconds = model(1800);
+  // Undefined or null (typed then cleared): the daemon applies its own heartbeat default.
+  readonly pulseSeconds = model<number | null | undefined>(undefined);
   readonly childrenCap = model(2);
   readonly mission = model('');
   readonly isMissionTouched = model(false);
@@ -118,7 +119,9 @@ export class ManagerFieldsComponent implements OnInit {
   }
 
   private validatePulseSeconds(): void {
-    this.pulseSecondsError.set(boundedIntegerError('Pulse seconds', this.pulseSeconds(), PULSE_SECONDS_BOUNDS));
+    const pulseSeconds = this.pulseSeconds();
+    const isLeftToDaemonDefault = pulseSeconds === undefined || pulseSeconds === null;
+    this.pulseSecondsError.set(isLeftToDaemonDefault ? '' : boundedIntegerError('Pulse seconds', pulseSeconds, PULSE_SECONDS_BOUNDS));
   }
 
   private validateChildrenCap(): void {

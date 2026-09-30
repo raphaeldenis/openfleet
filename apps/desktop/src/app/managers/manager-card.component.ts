@@ -2,18 +2,22 @@ import { ChangeDetectionStrategy, Component, DestroyRef, computed, inject, input
 import type { ManagerView, Session } from '@openfleet/shared';
 import { FleetApiService } from '../core/fleet-api.service';
 import { PulseRingComponent } from '../design/pulse-ring.component';
+import { OverdueChipComponent } from '../working-state/overdue-chip.component';
 import { countdownLabel, countdownSecondsUntil } from './manager-countdown';
 import { PulseNowAction } from './pulse-now';
 
 @Component({
   selector: 'of-manager-card',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [PulseRingComponent],
+  imports: [PulseRingComponent, OverdueChipComponent],
   template: `
     <div class="card" [attr.data-testid]="'manager-' + manager().sessionId + '-card'">
       <span [attr.data-testid]="'manager-' + manager().sessionId + '-children'">{{ manager().childrenCount }}/{{ manager().childrenCap }}</span>
       <of-pulse-ring [fractionElapsed]="fractionElapsed()" label="Next pulse" />
       <span [attr.data-testid]="'manager-' + manager().sessionId + '-countdown'">{{ countdownDisplay() }}</span>
+      @if (session(); as managerSession) {
+        <of-overdue-chip [session]="managerSession" />
+      }
       <button
         type="button"
         class="of-btn of-btn--secondary"
@@ -31,7 +35,7 @@ import { PulseNowAction } from './pulse-now';
   `,
   styles: `
     .card {
-      display: flex; align-items: center; gap: .5rem;
+      display: flex; flex-wrap: wrap; align-items: center; gap: .25rem .5rem;
       padding: .125rem .5rem .5rem 1.6rem; font-size: .6875rem; color: var(--mut);
     }
   `,

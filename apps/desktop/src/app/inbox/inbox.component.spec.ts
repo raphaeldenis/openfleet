@@ -5,15 +5,26 @@ import { describe, expect, it, vi } from 'vitest';
 import { InboxComponent } from './inbox.component';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
+import { silentWorkingStateSignals } from '../working-state/working-state-fixtures';
 
 function fakeEvents(approval: Record<string, unknown> = {}) {
   return {
+    ...silentWorkingStateSignals(),
     sessions: signal([{ id: 's1', name: 'Gimli', emoji: '⚔️', state: 'waiting_permission' }]),
     approvals: signal([{ id: 'a1', sessionId: 's1', toolName: 'Bash', toolInput: { command: 'rm -rf dist' }, status: 'pending', createdAt: 't', ...approval }]),
   };
 }
 
 describe('InboxComponent', () => {
+  it('shows zero-width and bidirectional controls in the session name of a gate as escapes', async () => {
+    const name = `Gim${String.fromCharCode(0x200b)}li${String.fromCharCode(0x202e)}x`;
+    const events = { ...fakeEvents(), sessions: signal([{ id: 's1', name, emoji: '⚔️', state: 'waiting_permission' }]) };
+
+    await render(InboxComponent, { providers: [{ provide: FleetApiService, useValue: { decide: vi.fn() } }, { provide: FleetEventsService, useValue: events }] });
+
+    expect(screen.getByTestId('inbox-gate-session')).toHaveTextContent('Gim<U+200B>li<U+202E>x');
+  });
+
   it('shows a pending gate as a card with the session label, tool name and formatted arguments, and sends the decision', async () => {
     // Arrange
     const api = { decide: vi.fn().mockResolvedValue({}) };
@@ -224,7 +235,7 @@ describe('InboxComponent', () => {
     }
   });
 
-  it('switching to the Questions tab shows the "coming" notice and renders zero fake items', async () => {
+  it('switching to the Questions tab shows an empty state when no agent asks or is blocked, and renders zero fake items', async () => {
     // Arrange
     await render(InboxComponent, { providers: [{ provide: FleetApiService, useValue: { decide: vi.fn() } }, { provide: FleetEventsService, useValue: fakeEvents() }] });
 
@@ -232,7 +243,8 @@ describe('InboxComponent', () => {
     await userEvent.click(screen.getByTestId('inbox-tab-questions'));
 
     // Assert
-    expect(screen.getByTestId('inbox-questions-coming')).toBeTruthy();
+    expect(screen.getByTestId('inbox-questions-empty')).toBeTruthy();
+    expect(screen.queryByTestId('inbox-attention-card')).toBeNull();
     expect(screen.queryByTestId('inbox-gate-card')).toBeNull();
   });
 
@@ -250,7 +262,7 @@ describe('InboxComponent', () => {
 
   it('shows a centred "Nothing needs you" empty state and hides the count pill when there are no gates waiting', async () => {
     // Arrange
-    const events = { sessions: signal([]), approvals: signal([]) };
+    const events = { sessions: signal([]), approvals: signal([]), ...silentWorkingStateSignals() };
 
     // Act
     await render(InboxComponent, { providers: [{ provide: FleetApiService, useValue: { decide: vi.fn() } }, { provide: FleetEventsService, useValue: events }] });
@@ -307,7 +319,7 @@ describe('InboxComponent', () => {
       { id: 'a1', sessionId: 's1', toolName: 'Bash', toolInput: {}, status: 'pending', createdAt: 't' },
       { id: 'a2', sessionId: 's1', toolName: 'Write', toolInput: {}, status: 'pending', createdAt: 't' },
     ]);
-    const events = { sessions: signal([{ id: 's1', name: 'Gimli', emoji: '⚔️', state: 'waiting_permission' }]), approvals };
+    const events = { sessions: signal([{ id: 's1', name: 'Gimli', emoji: '⚔️', state: 'waiting_permission' }]), approvals, ...silentWorkingStateSignals() };
     const api = { decide: vi.fn(() => new Promise(() => {})) }; // never settles — a1 stays pending
     await render(InboxComponent, { providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: events }] });
     const firstCard = screen.getAllByTestId('inbox-gate-card')[0];
@@ -329,7 +341,7 @@ describe('InboxComponent', () => {
   it('drops a gate the moment it is resolved elsewhere, even with its own decision still in flight', async () => {
     // Arrange
     const approvals = signal([{ id: 'a1', sessionId: 's1', toolName: 'Bash', toolInput: {}, status: 'pending', createdAt: 't' }]);
-    const events = { sessions: signal([{ id: 's1', name: 'Gimli', emoji: '⚔️', state: 'waiting_permission' }]), approvals };
+    const events = { sessions: signal([{ id: 's1', name: 'Gimli', emoji: '⚔️', state: 'waiting_permission' }]), approvals, ...silentWorkingStateSignals() };
     let resolveDecide: (value: unknown) => void = () => {};
     const api = { decide: vi.fn(() => new Promise((resolve) => { resolveDecide = resolve; })) };
     await render(InboxComponent, { providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: events }] });
@@ -353,6 +365,7 @@ describe('InboxComponent', () => {
         { id: 'a1', sessionId: 's1', toolName: 'Bash', toolInput: {}, status: 'pending', createdAt: 't' },
         { id: 'a2', sessionId: 's1', toolName: 'Write', toolInput: {}, status: 'pending', createdAt: 't' },
       ]),
+      ...silentWorkingStateSignals(),
     };
     await render(InboxComponent, { providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: events }] });
 
@@ -423,7 +436,7 @@ describe('InboxComponent', () => {
     await userEvent.keyboard('{ArrowRight}');
     expect(screen.getByTestId('inbox-tab-questions').getAttribute('aria-selected')).toBe('true');
     expect(document.activeElement).toBe(screen.getByTestId('inbox-tab-questions'));
-    expect(screen.getByTestId('inbox-questions-coming')).toBeTruthy();
+    expect(screen.getByTestId('inbox-questions-empty')).toBeTruthy();
 
     await userEvent.keyboard('{ArrowLeft}');
     expect(gatesTab.getAttribute('aria-selected')).toBe('true');
@@ -495,7 +508,7 @@ describe('InboxComponent', () => {
     it('does not re-format unchanged tool arguments when an unrelated session changes, yet keeps session labels live', async () => {
       // Arrange
       const toolInput = { command: 'x'.repeat(50_000) };
-      const events = { sessions: signal(twoSessions()), approvals: signal([{ id: 'a1', sessionId: 's1', toolName: 'Bash', toolInput, status: 'pending', createdAt: 't' }]) };
+      const events = { sessions: signal(twoSessions()), approvals: signal([{ id: 'a1', sessionId: 's1', toolName: 'Bash', toolInput, status: 'pending', createdAt: 't' }]), ...silentWorkingStateSignals() };
       const stringifySpy = vi.spyOn(JSON, 'stringify');
       try {
         const { fixture } = await render(InboxComponent, { providers: [{ provide: FleetApiService, useValue: { decide: vi.fn() } }, { provide: FleetEventsService, useValue: events }] });
@@ -518,7 +531,7 @@ describe('InboxComponent', () => {
 
     it('re-formats the arguments of an approval whose tool input changed', async () => {
       // Arrange
-      const events = { sessions: signal(twoSessions()), approvals: signal([{ id: 'a1', sessionId: 's1', toolName: 'Bash', toolInput: { command: 'ls' }, status: 'pending', createdAt: 't' }]) };
+      const events = { sessions: signal(twoSessions()), approvals: signal([{ id: 'a1', sessionId: 's1', toolName: 'Bash', toolInput: { command: 'ls' }, status: 'pending', createdAt: 't' }]), ...silentWorkingStateSignals() };
       const { fixture } = await render(InboxComponent, { providers: [{ provide: FleetApiService, useValue: { decide: vi.fn() } }, { provide: FleetEventsService, useValue: events }] });
 
       // Act

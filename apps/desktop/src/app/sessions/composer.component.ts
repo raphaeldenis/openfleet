@@ -2,6 +2,7 @@ import { ChangeDetectionStrategy, Component, computed, effect, inject, input, si
 import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { BannerComponent } from '../design/banner.component';
+import { ReplyDraftStore } from './reply-draft.store';
 
 interface PendingMessage { id: string; deliveredImmediately: boolean }
 
@@ -23,9 +24,10 @@ const SEND_ERROR = 'Could not send — your message is kept.';
           data-testid="composer-input"
           [value]="draft()"
           (input)="onInput($event)"
+          aria-label="Message this session"
           [placeholder]="placeholder()"
         ></textarea>
-        <button type="button" class="of-btn of-btn--primary" data-testid="composer-send" (click)="send()">{{ sendLabel() }}</button>
+        <button type="button" class="of-btn of-btn--primary" data-testid="composer-send" [disabled]="isSending()" [attr.aria-busy]="isSending()" (click)="send()">{{ sendLabel() }}</button>
         @if (status(); as status) {
           <span class="status" data-testid="composer-status">{{ status }}</span>
         }
@@ -47,20 +49,23 @@ export class ComposerComponent {
   readonly busy = input<boolean>(false);
   private readonly api = inject(FleetApiService);
   private readonly events = inject(FleetEventsService);
-  protected readonly draft = signal('');
+  private readonly replies = inject(ReplyDraftStore);
+  protected readonly draft = computed(() => this.replies.draftOf(this.sessionId()));
   private readonly pending = signal<PendingMessage | null>(null);
-  protected readonly sendError = signal<string | null>(null);
-  protected readonly sendLabel = computed(() => (this.busy() ? 'Queue' : 'Send'));
+  protected readonly sendError = computed(() => this.replies.failureOf(this.sessionId()) ?? null);
+  protected readonly isSending = computed(() => this.replies.isSending(this.sessionId()));
+  protected readonly sendLabel = computed(() => {
+    if (this.isSending()) return 'Sending…';
+    return this.busy() ? 'Queue' : 'Send';
+  });
   protected readonly placeholder = computed(() => (this.busy() ? BUSY_PLACEHOLDER : IDLE_PLACEHOLDER));
 
   constructor() {
     // A route param change reuses this component instance, so a session switch must not leak
-    // the previous session's unsent draft, delivery status or send error into the one now shown.
+    // the previous session's delivery status into the one now shown (drafts and errors are keyed by session).
     effect(() => {
       this.sessionId();
-      this.draft.set('');
       this.pending.set(null);
-      this.sendError.set(null);
     });
   }
 
@@ -72,22 +77,27 @@ export class ComposerComponent {
   });
 
   onInput(event: Event): void {
-    this.draft.set((event.target as HTMLTextAreaElement).value);
+    this.replies.setDraft(this.sessionId(), (event.target as HTMLTextAreaElement).value);
   }
 
   async send(): Promise<void> {
-    const body = this.draft().trim();
-    if (!body) return;
     const sessionIdAtSend = this.sessionId();
-    this.sendError.set(null);
+    const draftAtSend = this.draft();
+    const body = draftAtSend.trim();
+    const isAlreadySending = this.replies.isSending(sessionIdAtSend);
+    if (!body || isAlreadySending) return;
+    this.replies.dismissFailure(sessionIdAtSend);
+    this.replies.markSending(sessionIdAtSend, true);
+    this.pending.set(null);
     try {
       const result = await this.api.sendMessage(sessionIdAtSend, body);
-      if (this.sessionId() !== sessionIdAtSend) return;
-      this.draft.set('');
-      this.pending.set({ id: result.messageId, deliveredImmediately: result.status === 'delivered' });
+      this.replies.clearSentText(sessionIdAtSend, draftAtSend);
+      if (this.sessionId() === sessionIdAtSend) this.pending.set({ id: result.messageId, deliveredImmediately: result.status === 'delivered' });
     } catch {
-      if (this.sessionId() !== sessionIdAtSend) return;
-      this.sendError.set(SEND_ERROR);
+      if (this.sessionId() === sessionIdAtSend) this.pending.set(null);
+      this.replies.markFailed(sessionIdAtSend, SEND_ERROR);
+    } finally {
+      this.replies.markSending(sessionIdAtSend, false);
     }
   }
 }
