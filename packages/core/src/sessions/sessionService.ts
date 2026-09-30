@@ -535,6 +535,8 @@ export class SessionService {
     if (session.state !== 'closed') throw new SessionReopenError('not_closed', `session ${sessionId} is not closed`);
     this.assertDirectoryLaunchable(session);
     const reopenEventId = this.repo.recordReopen(sessionId, new Date().toISOString());
+    // Consumed with the 'starting' transition, like a boot resume: a failed launch then closes the row afresh and no boot retries it.
+    if (this.repo.wasClosedByDaemonShutdown(sessionId)) this.repo.resumeFromShutdownClose(sessionId, new Date().toISOString());
     const outcome = this.resumeOne(session);
     if (!outcome.launched) {
       this.removeReopenRecord({ sessionId, reopenEventId });
@@ -1053,6 +1055,8 @@ export class SessionService {
     const isSessionEndOfACloseAlreadyRequested = options?.cause === 'session_end' && this.isCloseRequested(sessionId);
     if (isSessionEndOfACloseAlreadyRequested) return;
     if (options?.closedByParent) this.idsClosingByParent.add(sessionId);
+    const isExplicitClose = options?.cause === undefined;
+    if (isExplicitClose) this.idsClosingForDaemonShutdown.delete(sessionId); // someone asked: the close is theirs, not the shutdown's
     this.recordCloseCause(sessionId, options?.cause);
     // Disarmed eagerly, like retireForRelaunch, before the SIGTERM->SIGKILL grace window even starts: a
     // watch left armed through that window could still see a marker and flip session state while the
@@ -1073,7 +1077,7 @@ export class SessionService {
       // No process to kill (this instance never launched or resumed one for this row), but the caller
       // still asked this session closed: markClosed is itself a no-op for an unknown or already-closed
       // id (MIN-04), so this only ever closes a real open-but-handle-less row instead of leaving it stuck.
-      this.repo.clearShutdownClose(sessionId); // a close the user asks for on a row the shutdown closed wins over its resume
+      if (isExplicitClose) this.repo.clearShutdownClose(sessionId); // a close the user asks for on a row the shutdown closed wins over its resume
       this.markClosed(sessionId, { reason: this.reasonOfRequestedClose(sessionId) });
       return;
     }
@@ -1173,8 +1177,8 @@ export class SessionService {
       if (this.handles.has(session.id)) continue; // already resumed by an earlier resumeAll() on this instance
       // Back to 'starting' before the launch: a failed resume then closes the row afresh (new closed_at, exit code),
       // which is what stops the next boot from retrying it.
-      if (wasInterruptedByShutdown) this.repo.resumeFromShutdownClose(session.id, new Date().toISOString());
       try {
+        if (wasInterruptedByShutdown) this.repo.resumeFromShutdownClose(session.id, new Date().toISOString());
         this.assertDirectoryLaunchable(session);
         this.resumeOne(session);
       } catch (err) {
@@ -1463,7 +1467,7 @@ export class SessionService {
     // session once it is closed — defence in depth alongside byHookToken/byMcpToken's own state filter,
     // which is what actually protects a row a pre-patch build already left closed. reopen() issues its own
     // fresh pair on the way back up (resumeOne), so this never collides with that rotation.
-    const closedByDaemonShutdown = isClosingForShutdown;
+    const closedByDaemonShutdown = isClosingForShutdown && closure.reason !== 'resume_timeout'; // a resume that timed out failed: no boot retries it
     this.repo.setClosed(sessionId, exitCode, new Date().toISOString(), newToken(), newToken(), { closedByDaemonShutdown });
     this.handles.delete(sessionId);
     activeHandleBySessionId.delete(sessionId);

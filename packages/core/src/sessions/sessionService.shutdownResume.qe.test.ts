@@ -198,7 +198,7 @@ describe('resume after a graceful shutdown, hostile cases', () => {
     expect(shutdownEventsOf(db, waiting.id)).toBe(0);
   });
 
-  it('resumes a session whose user close arrived after the shutdown had already begun closing it', async () => {
+  it('keeps closed a session whose user close arrived after the shutdown had already begun closing it', async () => {
     const db = openDatabase(':memory:');
     const first = bootDaemon(db);
     const session = await newSession(first.service, 'Stubborn');
@@ -211,7 +211,8 @@ describe('resume after a graceful shutdown, hostile cases', () => {
     const second = bootDaemon(db);
     await second.service.resumeAll();
 
-    expect(second.harness.launches.map((launch) => launch.sessionId)).toEqual([session.id]);
+    expect(second.harness.launches).toHaveLength(0);
+    expect(second.service.get(session.id)!.state).toBe('closed');
   });
 
   it('resumes the children the shutdown closed while their manager, closed by the user before, stays closed (no cascade on a manager close)', async () => {
