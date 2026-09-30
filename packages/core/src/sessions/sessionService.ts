@@ -296,6 +296,16 @@ function waitForExit(handle: HarnessHandle): Promise<void> {
 
 const LOW_SURROGATE_RANGE = { min: 0xdc00, max: 0xdfff };
 
+// Reads the code and message of any thrown value (null, a primitive, an object with throwing getters) without ever throwing.
+function readThrownDetail(thrown: unknown): string {
+  try {
+    const { code, message } = Object(thrown) as { code?: unknown; message?: unknown };
+    return `${code ?? ''} ${message ?? ''}`.trim();
+  } catch {
+    return 'unreadable error';
+  }
+}
+
 function trimToTail(text: string, maxLength: number): string {
   if (text.length <= maxLength) return text;
   const start = text.length - maxLength;
@@ -341,6 +351,7 @@ export class SessionService {
   // Set once closeAll() starts; refuses any new launch (create, reopen, resumeOne, a relaunch) so it can
   // never spawn a process outside closeAll's own snapshot and survive daemon shutdown.
   private shuttingDown = false;
+  private readonly idsClosingForDaemonShutdown = new Set<string>();
   // The one place a close records why it is not a plain user close; markClosed forgets it. The reason is read from here when the exit is known.
   private readonly closeCauses = new Map<string, CloseCause>();
   // Cancels the wait a SessionEnd close gives the CLI to exit on its own (shutdown, a user close, the exit itself).
@@ -532,10 +543,11 @@ export class SessionService {
     this.assertNotShuttingDown();
     const session = this.require(sessionId);
     if (session.state !== 'closed') throw new SessionReopenError('not_closed', `session ${sessionId} is not closed`);
-    if (!existsSync(session.directory)) throw new SessionReopenError('directory_missing', `session ${sessionId} directory no longer exists: ${session.directory}`);
-    this.assertDirectoryUnchanged(session);
-    this.assertDirectoryAccessible(session);
-    const reopenEventId = this.repo.recordReopen(sessionId, new Date().toISOString());
+    this.assertDirectoryLaunchable(session);
+    // Consumed with the 'starting' transition, like a boot resume: a failed launch then closes the row afresh and no boot retries it.
+    const isClosedByShutdown = this.repo.wasClosedByDaemonShutdown(sessionId);
+    const reopenedAt = new Date().toISOString();
+    const reopenEventId = isClosedByShutdown ? this.repo.reopenFromShutdownClose(sessionId, reopenedAt) : this.repo.recordReopen(sessionId, reopenedAt);
     const outcome = this.resumeOne(session);
     if (!outcome.launched) {
       this.removeReopenRecord({ sessionId, reopenEventId });
@@ -543,6 +555,14 @@ export class SessionService {
     }
     this.deps.bus.emit({ type: 'session.reopened', sessionId });
     return this.repo.get(sessionId)!;
+  }
+
+  // Every launch of a closed or interrupted row (reopen and boot resume) passes this: the directory exists, still
+  // resolves where it did at creation, and is readable.
+  private assertDirectoryLaunchable(session: Session): void {
+    if (!existsSync(session.directory)) throw new SessionReopenError('directory_missing', `session ${session.id} directory no longer exists: ${session.directory}`);
+    this.assertDirectoryUnchanged(session);
+    this.assertDirectoryAccessible(session);
   }
 
   // The child stays closed with its old closed_at after a failed launch, so the reopen it announced must not stay.
@@ -1046,6 +1066,8 @@ export class SessionService {
     const isSessionEndOfACloseAlreadyRequested = options?.cause === 'session_end' && this.isCloseRequested(sessionId);
     if (isSessionEndOfACloseAlreadyRequested) return;
     if (options?.closedByParent) this.idsClosingByParent.add(sessionId);
+    const isExplicitClose = options?.cause === undefined;
+    if (isExplicitClose) this.idsClosingForDaemonShutdown.delete(sessionId); // someone asked: the close is theirs, not the shutdown's
     this.recordCloseCause(sessionId, options?.cause);
     // Disarmed eagerly, like retireForRelaunch, before the SIGTERM->SIGKILL grace window even starts: a
     // watch left armed through that window could still see a marker and flip session state while the
@@ -1066,6 +1088,7 @@ export class SessionService {
       // No process to kill (this instance never launched or resumed one for this row), but the caller
       // still asked this session closed: markClosed is itself a no-op for an unknown or already-closed
       // id (MIN-04), so this only ever closes a real open-but-handle-less row instead of leaving it stuck.
+      if (isExplicitClose) this.repo.clearShutdownClose(sessionId); // a close the user asks for on a row the shutdown closed wins over its resume
       this.markClosed(sessionId, { reason: this.reasonOfRequestedClose(sessionId) });
       return;
     }
@@ -1135,6 +1158,9 @@ export class SessionService {
     // guarantees the snapshot stays complete for the rest of this method.
     this.shuttingDown = true;
     const openSessionIds = new Set([...this.handles.keys(), ...this.relaunches.keys()]);
+    // A session the user already asked to close stays the user's close: only the rest are marked for the next boot.
+    const idsInterruptedByShutdown = [...openSessionIds].filter((id) => this.deliveryOf(id).phase.name !== 'closing');
+    for (const id of idsInterruptedByShutdown) this.idsClosingForDaemonShutdown.add(id);
     await Promise.all([...openSessionIds].map((id) => this.close(id, { cause: 'shutdown' })));
   }
   get(id: string): Session | undefined { return this.repo.get(id); }
@@ -1150,15 +1176,26 @@ export class SessionService {
   transcriptPathOf(id: string): string | undefined { return this.transcriptPaths.get(id); }
   byMcpToken(token: string): Session | undefined { return this.repo.byMcpToken(token); }
 
+  // Boot resume decides here which rows come back: every row still open (a daemon killed without a graceful
+  // close) and every row whose latest close was the daemon's own shutdown. A user close, a failed resume or a
+  // session closed before the shutdown stays closed.
   async resumeAll(): Promise<void> {
-    for (const session of this.repo.list()) {
-      if (session.state === 'closed') continue;
+    for (const { id } of this.repo.list()) {
+      const session = this.repo.get(id); // read again: a close that landed while an earlier row was resuming wins
+      if (!session) continue;
+      const wasInterruptedByShutdown = session.state === 'closed' && this.repo.wasClosedByDaemonShutdown(session.id);
+      if (session.state === 'closed' && !wasInterruptedByShutdown) continue;
       if (this.handles.has(session.id)) continue; // already resumed by an earlier resumeAll() on this instance
+      // Back to 'starting' before the launch: a failed resume then closes the row afresh (new closed_at, exit code),
+      // which is what stops the next boot from retrying it.
       try {
+        if (wasInterruptedByShutdown) this.repo.resumeFromShutdownClose(session.id, new Date().toISOString());
+        this.assertDirectoryLaunchable(session);
         this.resumeOne(session);
-      } catch {
+      } catch (err) {
         // A failure anywhere past the launch itself (e.g. the state-machine DB write) must not abort
         // resuming the rest of the fleet — kill the process we already launched and move on.
+        log('warn', `resume: session ${session.id} is closed instead of resumed: ${readThrownDetail(err)}`);
         await this.failResume(session.id);
       }
     }
@@ -1177,10 +1214,19 @@ export class SessionService {
         log('error', `resume: session ${sessionId} could not kill its process after a resume error`, err);
       }
     }
+    const closure: SessionClosure = { exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE, reason: 'launch_failed' };
     try {
-      this.markClosed(sessionId, { exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE, reason: 'launch_failed' });
+      // A transition that rolled back leaves the row closed with its shutdown marker: markClosed skips a closed row, so the marker is rewritten here.
+      const isStillClosedByShutdown = this.repo.wasClosedByDaemonShutdown(sessionId);
+      if (isStillClosedByShutdown) {
+        this.repo.failShutdownClose(sessionId, RESUME_LAUNCH_FAILED_EXIT_CODE, new Date().toISOString());
+        this.deps.bus.emit({ type: 'session.closed', sessionId, ...closure });
+        this.announceClosure(sessionId, closure);
+        return;
+      }
+      this.markClosed(sessionId, closure);
     } catch (err) {
-      // markClosed's own DB write can itself fail; one bad row's cleanup must not stop the rest of the fleet.
+      // The close's own DB write can itself fail; one bad row's cleanup must not stop the rest of the fleet.
       log('error', `resumeAll: failed to close session ${sessionId} after a resume error`, err);
     }
   }
@@ -1431,6 +1477,7 @@ export class SessionService {
     this.unfinishedTurns.delete(sessionId);
     this.releaseClearHold(sessionId);
     this.clearStartedAt.delete(sessionId);
+    const isClosingForShutdown = this.idsClosingForDaemonShutdown.delete(sessionId);
     this.closeCauses.delete(sessionId);
     this.cancelSessionEndGraces.get(sessionId)?.();
     const session = this.repo.get(sessionId);
@@ -1440,7 +1487,8 @@ export class SessionService {
     // session once it is closed — defence in depth alongside byHookToken/byMcpToken's own state filter,
     // which is what actually protects a row a pre-patch build already left closed. reopen() issues its own
     // fresh pair on the way back up (resumeOne), so this never collides with that rotation.
-    this.repo.setClosed(sessionId, exitCode, new Date().toISOString(), newToken(), newToken());
+    const closedByDaemonShutdown = isClosingForShutdown && closure.reason !== 'resume_timeout'; // a resume that timed out failed: no boot retries it
+    this.repo.setClosed(sessionId, exitCode, new Date().toISOString(), newToken(), newToken(), { closedByDaemonShutdown });
     this.handles.delete(sessionId);
     activeHandleBySessionId.delete(sessionId);
     try {

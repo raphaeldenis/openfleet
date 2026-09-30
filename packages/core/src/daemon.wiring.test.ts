@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { Server } from 'node:http';
 import { join } from 'node:path';
 import { E2E_FLAG_ENV, E2E_FLAG_ON } from '@openfleet/shared';
@@ -345,6 +345,7 @@ function seedPreviousRun(config: Config, { sessions = [], managerIds = [], pendi
   for (const { id, state, createdAt = OLD_TIMESTAMP, parentId, role } of sessions) {
     sessionRepository.insert({ id, name: id, emoji: '🤖', directory: '/tmp', worktree: null, model: null, parent_id: parentId ?? null, role: role ?? null, harness: 'fake',
       state: state as never, state_since: OLD_TIMESTAMP, hook_token: `hook-${id}`, mcp_token: `mcp-${id}`, permission_mode: null, branch: null, created_at: createdAt });
+    sessionRepository.setDirectoryRealpath(id, realpathSync.native('/tmp'));
   }
   for (const sessionId of managerIds) new ManagerRepository(db).insert({ sessionId, pulseSeconds: 3600, childrenCap: 2, missionText: 'lead', createdAt: OLD_TIMESTAMP });
   if (pendingApprovalOf) db.prepare("INSERT INTO approvals (id, session_id, tool_name, tool_input_json, status, created_at) VALUES ('old-approval', ?, 'Bash', 'null', 'pending', ?)").run(pendingApprovalOf, OLD_TIMESTAMP);
