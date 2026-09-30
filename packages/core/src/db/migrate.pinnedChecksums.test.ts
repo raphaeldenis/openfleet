@@ -23,6 +23,7 @@ const SHIPPED_MIGRATION_CHECKSUMS: Record<string, string> = {
   '014_session_cli_ids': '604d2c2eaf674815bfce180542353f34f37a1c904649aa41fcddc235b000b235',
   '015_handovers': 'bdd9164d79d37ab3e883413646afc4ac4b82bf1be6f00cff763bce24e4914ce2',
   '016_session_prompted_events_index': '02acbf348e70452f32eba84d6ad6a8fd961975b71d08c5a4bed6ab4d0771481a',
+  '017_session_context_notice': '3f2b58190992f9c7b5d804b01fe461a8cd5029a85503277a9a355f93b66ec578',
 };
 
 const migrationVersionsOnDisk = () =>
