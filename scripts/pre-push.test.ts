@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -34,8 +34,13 @@ const commitFiles = (...paths: string[]): string => {
   return git('rev-parse', 'HEAD');
 };
 
-const runLib = (script: string, { stdin = '', env = {} }: { stdin?: string; env?: Record<string, string> } = {}): string[] => {
+const runLibCapturingAll = (script: string, { stdin = '', env = {} }: { stdin?: string; env?: Record<string, string> } = {}) => {
   const result = spawnSync('sh', ['-c', `. "${LIB}"; ${script}`], { cwd: repo, input: stdin, encoding: 'utf8', env: cleanEnv(env) });
+  return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+};
+
+const runLib = (script: string, { stdin = '', env = {} }: { stdin?: string; env?: Record<string, string> } = {}): string[] => {
+  const result = runLibCapturingAll(script, { stdin, env });
   if (result.status !== 0) throw new Error(`sh failed: ${result.stderr}`);
   return result.stdout.split('\n').filter(Boolean);
 };
@@ -82,12 +87,52 @@ describe('pushed_files', () => {
     expect(files).toEqual(['docs/a.md']);
   });
 
-  it('ignores a deleted ref', () => {
+  it('ignores a deleted ref without calling git on it', () => {
     commitFiles('docs/a.md');
 
-    const files = runLib('pushed_files', { stdin: pushLine({ localRef: '(delete)', localSha: ZEROS, remoteSha: 'a'.repeat(40) }) });
+    const { stdout, stderr } = runLibCapturingAll('pushed_files', { stdin: pushLine({ localRef: '(delete)', localSha: ZEROS, remoteSha: 'a'.repeat(40) }) });
 
-    expect(files).toEqual([]);
+    expect(stdout).toBe('');
+    expect(stderr).toBe('');
+  });
+
+  it('lists the old path of a file renamed out of its folder', () => {
+    const remoteSha = commitFiles('apps/desktop/src-tauri/src/lib.rs');
+    mkdirSync(join(repo, 'other'));
+    git('mv', 'apps/desktop/src-tauri/src/lib.rs', 'other/lib.rs');
+    git('commit', '-q', '-m', 'move out');
+    const localSha = git('rev-parse', 'HEAD');
+
+    const files = runLib('pushed_files', { stdin: pushLine({ localSha, remoteSha }) });
+
+    expect(files).toEqual(['apps/desktop/src-tauri/src/lib.rs', 'other/lib.rs']);
+  });
+
+  it('lists the old path of a file renamed out of its folder on a new branch', () => {
+    git('checkout', '-q', 'main');
+    commitFiles('apps/desktop/src-tauri/src/lib.rs');
+    git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+    git('checkout', '-q', '-b', 'mover');
+    mkdirSync(join(repo, 'other'));
+    git('mv', 'apps/desktop/src-tauri/src/lib.rs', 'other/lib.rs');
+    git('commit', '-q', '-m', 'move out');
+    const localSha = git('rev-parse', 'HEAD');
+
+    const files = runLib('pushed_files', { stdin: pushLine({ localSha }) });
+
+    expect(files).toEqual(['apps/desktop/src-tauri/src/lib.rs', 'other/lib.rs']);
+  });
+
+  it.each([
+    { label: 'an accent', path: 'apps/desktop/src/café.ts' },
+    { label: 'a space', path: 'apps/desktop/src/my file.ts' },
+    { label: 'a tab', path: 'apps/desktop/src/tab\there.ts' },
+  ])('prints a path with $label unquoted', ({ path }) => {
+    const localSha = commitFiles(path);
+
+    const files = runLib('pushed_files', { stdin: pushLine({ localSha }) });
+
+    expect(files).toEqual([path]);
   });
 
   it('merges several refs without duplicates', () => {
@@ -152,8 +197,87 @@ describe('steps_for_files', () => {
     expect(steps).toEqual(['cargo', 'e2e']);
   });
 
+  it('runs e2e for an accented file name in desktop src', () => {
+    const localSha = commitFiles('apps/desktop/src/café.ts');
+
+    expect(stepsForPush(pushLine({ localSha }))).toEqual(['e2e']);
+  });
+
+  it('runs cargo when a file is moved out of src-tauri', () => {
+    const remoteSha = commitFiles('apps/desktop/src-tauri/src/lib.rs');
+    mkdirSync(join(repo, 'other'));
+    git('mv', 'apps/desktop/src-tauri/src/lib.rs', 'other/lib.rs');
+    git('commit', '-q', '-m', 'move out');
+    const localSha = git('rev-parse', 'HEAD');
+
+    expect(stepsForPush(pushLine({ localSha, remoteSha }))).toEqual(['cargo']);
+  });
+
   it('runs nothing for a deleted ref', () => {
     expect(stepsForPush(pushLine({ localRef: '(delete)', localSha: ZEROS, remoteSha: 'a'.repeat(40) }))).toEqual([]);
+  });
+});
+
+describe('claude_free_core_tests', () => {
+  let fakeBin: string;
+
+  const installFakeTool = (name: string, body: string) => {
+    writeFileSync(join(fakeBin, name), `#!/bin/sh\n${body}\n`);
+    chmodSync(join(fakeBin, name), 0o755);
+  };
+
+  const installFakePnpm = ({ versionExitCode, suiteExitCode }: { versionExitCode: number; suiteExitCode: number }) => {
+    installFakeTool('node', 'exit 0');
+    installFakeTool('pnpm', `[ "$1" = "--version" ] && exit ${versionExitCode}\necho "suite args=$* tmpdir=$TMPDIR corepack=$COREPACK_ENABLE_DOWNLOAD_PROMPT claude=$(command -v claude)"\nexit ${suiteExitCode}`);
+  };
+
+  const runClaudeFreeCoreTests = (prefix = '') => runLibCapturingAll(`${prefix}claude_free_core_tests`, { env: { PATH: `${fakeBin}:/usr/bin:/bin` } });
+
+  beforeEach(() => {
+    fakeBin = mkdtempSync(join(tmpdir(), 'pre-push-fakebin-'));
+  });
+
+  afterEach(() => {
+    rmSync(fakeBin, { recursive: true, force: true });
+  });
+
+  it('runs the core suite in a minimal environment without claude and without corepack prompts', () => {
+    installFakePnpm({ versionExitCode: 0, suiteExitCode: 0 });
+
+    const { status, stdout } = runClaudeFreeCoreTests();
+
+    expect(status).toBe(0);
+    expect(stdout).toContain('suite args=--filter @openfleet/core test');
+    expect(stdout).toContain('corepack=0');
+    expect(stdout).toContain('claude=\n');
+  });
+
+  it('skips with a warning instead of failing when pnpm cannot run in the minimal environment', () => {
+    installFakePnpm({ versionExitCode: 1, suiteExitCode: 1 });
+
+    const { status, stdout, stderr } = runClaudeFreeCoreTests();
+
+    expect(status).toBe(0);
+    expect(stdout).not.toContain('suite args');
+    expect(stderr).toContain('pnpm cannot run in a minimal PATH here: claude-free check skipped');
+  });
+
+  it('blames neither claude nor anything specific when the suite fails', () => {
+    installFakePnpm({ versionExitCode: 0, suiteExitCode: 1 });
+
+    const { status, stderr } = runClaudeFreeCoreTests();
+
+    expect(status).toBe(1);
+    expect(stderr).toContain('the core tests fail without claude on the PATH (a test may depend on claude being installed, or on TMPDIR/HOME): see the output above');
+    expect(stderr).not.toContain('depends on claude being installed: CI');
+  });
+
+  it('gives the suite an absolute TMPDIR when the caller has none', () => {
+    installFakePnpm({ versionExitCode: 0, suiteExitCode: 0 });
+
+    const { stdout } = runClaudeFreeCoreTests('unset TMPDIR; ');
+
+    expect(stdout).toMatch(/tmpdir=\/\S+/);
   });
 });
 
