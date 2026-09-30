@@ -996,6 +996,8 @@ export class SessionService {
       this.enter(sessionId, { name: 'closing' });
       return relaunch;
     }
+    // Entered before the flush grace is awaited: nothing is typed or submitted once the close was requested.
+    if (this.handles.has(sessionId)) this.enter(sessionId, { name: 'closing' });
     const clearFlush = this.clearFlushOf(sessionId);
     if (clearFlush) await clearFlush;
     const handle = this.handles.get(sessionId);
@@ -1006,8 +1008,6 @@ export class SessionService {
       this.markClosed(sessionId, undefined);
       return;
     }
-    // The process may take the whole escalation window to exit: nothing is typed or submitted into it meanwhile.
-    this.enter(sessionId, { name: 'closing' });
     await this.killWithEscalation(handle, options?.escalateAfterMs ?? DEFAULT_CLOSE_ESCALATE_MS);
   }
 
