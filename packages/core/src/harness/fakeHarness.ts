@@ -35,23 +35,36 @@ export class FakeHandle implements HarnessHandle {
   // Test-only: like Claude Code, a composer holding invisible characters strips them and answers the Enter
   // that would submit it with a notice, submitting only on the next Enter.
   reviewsInvisibleCharacters = false;
+  // Test-only: how the review step behaves. The real CLI 2.1.284 shows its notice 3 ms after the Enter and ignores
+  // every Enter for the next ~100-150 ms (measured live); `neverAcceptsEnter` is a composer that never leaves the review.
+  reviewTiming = { noticeDelayMs: 0, ignoresEnterForMs: 0, neverAcceptsEnter: false };
   // Test-only: the bodies the fake CLI actually submitted (an Enter consumed by the review notice is not one).
   readonly submitted: string[] = [];
+  // Test-only: called with each body the fake CLI submitted (a test plays the hooks of the turn it starts).
+  onSubmit: (body: string) => void = () => undefined;
+  // Test-only: how often a double Escape emptied a composer that held text.
+  composerClearCount = 0;
   private composer = '';
   private isComposerUnderReview = false;
+  private noticeShownAt: number | undefined;
+  private lastEscapeAt: number | undefined;
 
   constructor(private readonly onPromptTyped: () => void = () => undefined) {}
+
+  // Test-only: what the composer holds right now.
+  get composerText(): string { return this.composer; }
 
   write(data: string): void {
     this.written.push(data);
     if (data === '\r') this.pressEnter();
+    if (data === '\u001b') this.pressEscape();
   }
   // Records the plain, unframed body: bracketed-paste framing is a ClaudeCliHarness-only concern (see
   // claudeCliHarness.test.ts), so sessionService's state-machine tests read message bodies back exactly
-  // as typeNextMessage passed them in.
+  // as typeNextMessage passed them in. Like the real composer, a paste lands after whatever it already holds.
   typeMessage(data: string): void {
     this.written.push(data);
-    this.composer = data;
+    this.composer += data;
     this.isComposerUnderReview = false;
     this.onPromptTyped();
   }
@@ -59,13 +72,37 @@ export class FakeHandle implements HarnessHandle {
     const needsReview = this.reviewsInvisibleCharacters && hasInvisibleCharacters(this.composer);
     if (needsReview && !this.isComposerUnderReview) {
       this.isComposerUnderReview = true;
+      this.noticeShownAt = undefined;
+      const showNotice = () => {
+        this.noticeShownAt = Date.now();
+        this.emitData('Removed 1 invisible character · review and press Enter to send');
+      };
       // Like a real pty, the CLI's answer arrives after write() returned.
-      queueMicrotask(() => this.emitData('Removed 1 invisible character · review and press Enter to send'));
+      if (this.reviewTiming.noticeDelayMs === 0) queueMicrotask(showNotice);
+      else setTimeout(showNotice, this.reviewTiming.noticeDelayMs);
       return;
     }
+    if (needsReview) {
+      const isIgnored = this.reviewTiming.neverAcceptsEnter
+        || this.noticeShownAt === undefined
+        || Date.now() - this.noticeShownAt < this.reviewTiming.ignoresEnterForMs;
+      if (isIgnored) return;
+    }
     if (this.composer === '') return;
-    this.submitted.push(this.composer);
+    const body = this.composer;
+    this.submitted.push(body);
     this.composer = '';
+    this.isComposerUnderReview = false;
+    this.onSubmit(body);
+  }
+  // Like Claude Code: Escape twice in a row empties the composer (a single Escape leaves it alone).
+  private pressEscape(): void {
+    const isSecondEscape = this.lastEscapeAt !== undefined && Date.now() - this.lastEscapeAt <= 1000;
+    this.lastEscapeAt = isSecondEscape ? undefined : Date.now();
+    if (!isSecondEscape || this.composer === '') return;
+    this.composer = '';
+    this.isComposerUnderReview = false;
+    this.composerClearCount += 1;
   }
   resize(cols: number, rows: number): void { this.resizes.push({ cols, rows }); }
   kill(options?: { force?: boolean }): void {

@@ -109,9 +109,16 @@ export const SUBMIT_KEYSTROKE_DELAY_MS = 150;
 // Claude Code strips invisible characters (zero-width, bidi controls, BOM...) from a paste; the Enter that would
 // submit such a composer prints this notice and waits for a second Enter instead of sending. The text the model
 // receives is the CLI's own stripped text, so confirming is the faithful answer.
+// Measured live (2.1.284): the notice follows the Enter by ~3 ms and the CLI ignores every Enter for the next
+// ~100-150 ms, accepting one from 150 ms on; an accepted Enter starts the turn ~55 ms later.
 // ponytail: matches the CLI's notice wording (2.1.284); a reworded notice only brings back the unsubmitted paste.
 const INVISIBLE_CHARACTERS_REVIEW_NOTICE = /review and press Enter to send/;
 const REVIEW_NOTICE_SPLIT_ACROSS_CHUNKS_MARGIN = 64;
+export const REVIEW_SETTLE_MS = 300;
+export const REVIEW_CONFIRMATION_PATIENCE_MS = 700;
+export const MAX_REVIEW_CONFIRMATIONS = 3;
+export const REVIEW_NOTICE_WINDOW_MS = 500;
+export const COMPOSER_CLEAR_GAP_MS = 300;
 // Bounds how many not-yet-delivered messages one agent can stack on a single peer, so a looping agent
 // cannot flood a target's queue (8 KB each) faster than the target can read.
 export const MAX_PENDING_AGENT_MESSAGES_PER_SENDER = 20;
