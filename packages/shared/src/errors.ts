@@ -19,6 +19,7 @@ export const ERROR_CODES = {
   invalid_body: { kind: 'invalid_request' },
   invalid_json: { kind: 'invalid_request' },
   invalid_url: { kind: 'invalid_request' },
+  invalid_branch_name: { kind: 'invalid_request' },
   unknown_harness: { kind: 'invalid_request' },
   message_too_long: { kind: 'invalid_request' },
   query_too_long: { kind: 'invalid_request' },
@@ -42,6 +43,7 @@ export const ERROR_CODES = {
   file_unreadable: { kind: 'conflict', retry: 'later' },
   path_escapes_docs_folder: { kind: 'conflict', retry: 'never' },
   duplicate_name: { kind: 'conflict', retry: 'never' },
+  worktree_exists: { kind: 'conflict', retry: 'never' },
   // Decision D10 moves this to invalid_request (400); it stays a conflict (409) until that lands.
   constraint_violation: { kind: 'conflict', retry: 'never' },
   not_closed: { kind: 'conflict', retry: 'never' },

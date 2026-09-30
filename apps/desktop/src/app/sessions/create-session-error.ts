@@ -11,6 +11,8 @@ const PAYLOAD_TOO_LARGE_ADVICE: Record<CreatedKind, string> = {
 function createErrorMessages(kind: CreatedKind): Record<string, string> {
   return {
     invalid_body: 'The daemon rejected these values — check the directory and the other fields.',
+    invalid_branch_name: 'The branch name is not valid — use letters, digits, dots, dashes, underscores and slashes only.',
+    worktree_exists: 'A worktree for this branch already exists — pick another branch name or remove that worktree.',
     payload_too_large: `The request is too large — ${PAYLOAD_TOO_LARGE_ADVICE[kind]}.`,
     unauthorized: 'The daemon refused the app’s credentials — check the admin token.',
     daemon_shutting_down: 'The daemon is shutting down — try again in a moment.',

@@ -991,6 +991,8 @@ describe('NewSessionFormComponent', () => {
   describe('create errors', () => {
     it.each([
       ['invalid_body', 400, 'rejected these values'],
+      ['invalid_branch_name', 400, 'branch name'],
+      ['worktree_exists', 409, 'worktree for this branch already exists'],
       ['internal', 500, 'internal error'],
       ['daemon_shutting_down', 503, 'shutting down'],
     ])('user reads what went wrong in words when the backend rejects the create with %s', async (code, status, readableFragment) => {

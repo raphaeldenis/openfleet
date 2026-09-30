@@ -37,14 +37,14 @@ describe('the error registry', () => {
 
 describe('the wire contract of the registry', () => {
   const KIND_AND_RETRY_BY_CODE: Record<ErrorCode, string> = {
-    invalid_body: 'invalid_request/never', invalid_json: 'invalid_request/never', invalid_url: 'invalid_request/never', unknown_harness: 'invalid_request/never',
+    invalid_body: 'invalid_request/never', invalid_json: 'invalid_request/never', invalid_url: 'invalid_request/never', invalid_branch_name: 'invalid_request/never', unknown_harness: 'invalid_request/never',
     message_too_long: 'invalid_request/never', query_too_long: 'invalid_request/never',
     unauthorized: 'unauthorized/never',
     not_found: 'not_found/never', project_not_found: 'not_found/never', no_state: 'not_found/never', session_not_found: 'not_found/never',
     note_not_found: 'not_found/never', store_not_found: 'not_found/never', view_not_found: 'not_found/never', row_not_found: 'not_found/never',
     manager_not_found: 'not_found/never',
     session_closed: 'conflict/never', stale_revision: 'conflict/after_refresh', file_backed: 'conflict/never', file_unreadable: 'conflict/later',
-    path_escapes_docs_folder: 'conflict/never', duplicate_name: 'conflict/never', constraint_violation: 'conflict/never',
+    path_escapes_docs_folder: 'conflict/never', duplicate_name: 'conflict/never', worktree_exists: 'conflict/never', constraint_violation: 'conflict/never',
     not_closed: 'conflict/never', directory_missing: 'conflict/never', directory_changed: 'conflict/never',
     directory_unreadable: 'conflict/never', already_resolved: 'conflict/never', config_unreadable: 'conflict/never',
     config_read_only: 'conflict/never', message_id_reused: 'conflict/never', too_many_pending: 'conflict/later', children_cap: 'conflict/later',

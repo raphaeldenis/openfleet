@@ -61,10 +61,11 @@ const REOPEN_ENTRY_BY_CODE: Record<SessionReopenError['code'], Omit<Entry, 'code
   launch_failed: { message: 'the session failed to launch.' },
 };
 
+// Wire change: POST /api/sessions with repoPath + branchName answered 500 internal_error for these two before ERR-01; it now answers 400 / 409.
 // A failed git command stays internal: its message is git's own output.
 const WORKTREE_ENTRY_BY_CODE: Record<WorktreeError['code'], (error: WorktreeError) => Entry | undefined> = {
-  invalid_branch: asIs('invalid_body'),
-  exists: () => ({ code: 'duplicate_name', message: 'the worktree already exists.' }),
+  invalid_branch: asIs('invalid_branch_name'),
+  exists: () => ({ code: 'worktree_exists', message: 'the worktree already exists.' }),
   git_failed: () => undefined,
 };
 
