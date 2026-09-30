@@ -245,6 +245,23 @@ describe('MCP tool results are compact', () => {
     });
   });
 
+  describe('session tool descriptions', () => {
+    const descriptionOf = async (name: string) => (await client.listTools()).tools.find((tool) => tool.name === name)!.description!;
+
+    it.each(['create_session', 'get_session_status', 'list_children', 'list_sessions'])('%s tells the agent it gets a compact session with its directory and no echoed permissionMode', async (name) => {
+      const description = await descriptionOf(name);
+
+      expect(description).toMatch(/compact/i);
+      expect(description).toContain('directory');
+      expect(description).toContain('permissionMode');
+    });
+
+    it('list_sessions tells the agent each session carries its parentId while list_children omits it', async () => {
+      expect(await descriptionOf('list_sessions')).toContain('parentId');
+      expect(await descriptionOf('list_children')).toMatch(/no parentId|without parentId/);
+    });
+  });
+
   describe('note tools', () => {
     it('agent can list twenty notes within the byte budget, each with id, title, rev and folder', async () => {
       for (let index = 0; index < NOTE_COUNT; index += 1) await call('create_note', { title: `Note ${index}`, body_md: `body ${index}` });
@@ -316,6 +333,28 @@ describe('MCP tool results are compact', () => {
 
       expect(note.bodyMd).toBe(`see @note:${mentioned.id}`);
       expect(note.expandedBody).toContain('target body');
+    });
+
+    it('agent sees the mention line and the expanded text of a note whose only mention was cut by the byte budget', async () => {
+      const huge = parsed(await call('create_note', { title: 'Huge', body_md: 'x'.repeat(70 * 1024), shared: true }));
+      const created = parsed(await call('create_note', { title: 'Source', body_md: `see @note:${huge.id}` }));
+
+      const note = parsed(await call('get_note', { note: created.id }));
+
+      expect(note.bodyMd).toBe(`see @note:${huge.id}`);
+      expect(note.expandedBody).toContain(`@note:${huge.id}: not expanded (budget)`);
+    });
+
+    it('agent sees the mention line and the expanded text of a note whose mention chain was cut by the depth limit', async () => {
+      const third = parsed(await call('create_note', { title: 'Third', body_md: 'third body', shared: true }));
+      const second = parsed(await call('create_note', { title: 'Second', body_md: `then @note:${third.id}`, shared: true }));
+      const first = parsed(await call('create_note', { title: 'First', body_md: `then @note:${second.id}`, shared: true }));
+      const created = parsed(await call('create_note', { title: 'Source', body_md: `see @note:${first.id}` }));
+
+      const note = parsed(await call('get_note', { note: created.id }));
+
+      expect(note.expandedBody).toContain(`@note:${third.id}: not expanded (depth)`);
+      expect(note.expandedBody).not.toContain('third body');
     });
   });
 

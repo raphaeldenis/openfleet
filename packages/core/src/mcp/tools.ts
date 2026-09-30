@@ -101,15 +101,17 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     return false;
   };
 
-  server.registerTool('get_session_status', { description: 'State of your session or one in your lineage', inputSchema: { session_id: z.string().optional() } }, async ({ session_id }) => {
+  const COMPACT_SESSION = 'Returns a compact session: id, name, emoji, directory, state, stateSince, model, role, exitCode, closedAt, plus resolvedModel, modelDriftedFrom, worktree and branch when set; permissionMode and harness are not echoed';
+
+  server.registerTool('get_session_status', { description: `State of your session or one in your lineage. ${COMPACT_SESSION}`, inputSchema: { session_id: z.string().optional() } }, async ({ session_id }) => {
     const target = sessions.get(session_id ?? caller.id);
     if (!target || !isInLineage(target)) return fail('session not found or outside your lineage');
     return ok(sessionView(target));
   });
 
-  server.registerTool('list_children', { description: 'Sessions you spawned', inputSchema: {} }, async () => ok(sessions.list().filter((s) => s.parentId === caller.id).map(sessionView)));
+  server.registerTool('list_children', { description: `Sessions you spawned. ${COMPACT_SESSION}; no parentId, they are all yours`, inputSchema: {} }, async () => ok(sessions.list().filter((s) => s.parentId === caller.id).map(sessionView)));
 
-  server.registerTool('list_sessions', { description: 'You, your children, and every descendant beneath them', inputSchema: {} }, async () =>
+  server.registerTool('list_sessions', { description: `You, your children, and every descendant beneath them. ${COMPACT_SESSION}; each session also carries its parentId`, inputSchema: {} }, async () =>
     ok(sessions.list().filter((s) => s.id === caller.id || isDescendant(s)).map(lineageSessionView)),
   );
 
@@ -138,7 +140,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     }
   });
 
-  server.registerTool('create_session', { description: 'Spawn a child coding session in a directory (use create_worktree first)', inputSchema: {
+  server.registerTool('create_session', { description: `Spawn a child coding session in a directory (use create_worktree first). ${COMPACT_SESSION}`, inputSchema: {
     directory: z.string(), name: z.string().refine((name) => name.trim().length > 0, 'name must not be blank'), emoji: z.string().optional(), model: ModelIdSchema.optional(),
     seeded_prompt: z.string().optional(), role: z.string().optional(), permission_mode: z.enum(PERMISSION_MODES).optional(),
     allow_duplicate: z.boolean().optional(),
