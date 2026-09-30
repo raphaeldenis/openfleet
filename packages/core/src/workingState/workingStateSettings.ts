@@ -2,6 +2,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import { Script } from 'node:vm';
 import { z } from 'zod';
 import { readableConfigReason } from '../configReason.js';
+import { log } from '../logger.js';
+import { KNOWN_MODELS } from '../models.js';
 
 export const DEFAULT_WORKING_STATE_MAX_BYTES = 6144;
 const MIN_WORKING_STATE_MAX_BYTES = 1024;
@@ -106,6 +108,11 @@ const SECTION_KEYS = ['workingState', 'managers', 'contextNotice'];
 const spelledLoosely = (key: string) => key.toLowerCase().replace(/s$/, '');
 const misspelledSectionKey = (key: string) => SECTION_KEYS.find((section) => key !== section && spelledLoosely(key) === spelledLoosely(section));
 
+function warnAboutUnknownModelAliases(models: ContextNoticeSettings['models']): void {
+  const unknownAliases = Object.keys(models).filter((alias) => !KNOWN_MODELS.includes(alias));
+  for (const alias of unknownAliases) log('warn', `contextNotice.models.${alias} is no known model, so no session follows it`);
+}
+
 // A malformed value fails the boot loudly, like the model table: a typo must not run every session on a setting nobody chose.
 export function loadDaemonSettings(configPath: string): DaemonSettings {
   const defaults: DaemonSettings = { workingState: DEFAULT_WORKING_STATE_SETTINGS, managers: DEFAULT_MANAGER_SETTINGS, contextNotice: DEFAULT_CONTEXT_NOTICE_SETTINGS };
@@ -115,6 +122,7 @@ export function loadDaemonSettings(configPath: string): DaemonSettings {
     const parsed = ConfigFileSchema.parse(rawConfig);
     const misspelledKey = Object.keys(rawConfig).find(misspelledSectionKey);
     if (misspelledKey) throw new Error(`unknown key "${misspelledKey}", the key is "${misspelledSectionKey(misspelledKey)}"`);
+    warnAboutUnknownModelAliases(parsed.contextNotice?.models ?? {});
     const { handoverPatterns, ...scalarSettings } = parsed.workingState ?? {};
     const compiledPatterns = handoverPatterns?.map(compileHandoverPattern);
     return {
