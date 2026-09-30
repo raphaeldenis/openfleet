@@ -1,4 +1,5 @@
-import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, rmdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readdirSync, rmdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
@@ -2919,6 +2920,48 @@ describe('SessionService.createInWorktree', () => {
     const { service } = setup();
     const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
     expect(session.branch).toBeUndefined();
+  });
+});
+
+describe('SessionService with a harness that is not registered', () => {
+  const serviceWithoutFakeHarness = () => {
+    const worktreesRoot = mkdtempSync(join(tmpdir(), 'of-wt-'));
+    const db = openDatabase(':memory:');
+    const service = new SessionService({ db, bus: new EventBus(), harnesses: [], baseUrl: 'http://127.0.0.1:7331', worktreesRoot });
+    return { db, service, worktreesRoot };
+  };
+
+  it('refuses create with UnknownHarnessError naming the harness, before writing any session row', async () => {
+    const { service } = serviceWithoutFakeHarness();
+
+    await expect(service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' })).rejects.toMatchObject({ name: 'UnknownHarnessError', message: expect.stringContaining('fake') });
+
+    expect(service.list()).toEqual([]);
+  });
+
+  it('refuses createInWorktree before creating a git worktree or a branch', async () => {
+    const { service, worktreesRoot } = serviceWithoutFakeHarness();
+    const repoPath = makeRepo();
+
+    await expect(service.createInWorktree({ directory: repoPath, name: 'G', harness: 'fake', emoji: '🤖', repoPath, branchName: 'task/CCM-9' })).rejects.toMatchObject({ name: 'UnknownHarnessError' });
+
+    expect(readdirSync(worktreesRoot)).toEqual([]);
+    expect(execFileSync('git', ['-C', repoPath, 'branch', '--list', 'task/CCM-9'], { encoding: 'utf8' })).toBe('');
+    expect(service.list()).toEqual([]);
+  });
+
+  it('closes a leftover row of that harness at boot with the launch-failed exit code instead of throwing', async () => {
+    vi.useFakeTimers();
+    const db = openDatabase(':memory:');
+    const bus = new EventBus();
+    const e2eRun = new SessionService({ db, bus, harnesses: [new FakeHarness()], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+    const leftover = await e2eRun.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    const normalBoot = new SessionService({ db, bus, harnesses: [], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+
+    await expect(normalBoot.resumeAll()).resolves.toBeUndefined();
+
+    expect(normalBoot.get(leftover.id)!.state).toBe('closed');
+    expect(normalBoot.get(leftover.id)!.exitCode).toBe(RESUME_LAUNCH_FAILED_EXIT_CODE);
   });
 });
 

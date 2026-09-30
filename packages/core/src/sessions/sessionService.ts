@@ -45,6 +45,13 @@ export class SessionReopenError extends Error {
   }
 }
 
+export class UnknownHarnessError extends Error {
+  override readonly name = 'UnknownHarnessError';
+  constructor(harnessId: string) {
+    super(`unknown harness: ${harnessId}`);
+  }
+}
+
 export class DaemonShuttingDownError extends Error {
   constructor() {
     super('daemon is shutting down');
@@ -313,6 +320,7 @@ export class SessionService {
 
   async create(spec: SessionSpec, options?: { branch?: string }): Promise<Session> {
     this.assertNotShuttingDown();
+    const harness = this.harnessFor(spec.harness);
     const id = newId();
     const hookToken = newToken();
     const mcpToken = newToken();
@@ -326,7 +334,6 @@ export class SessionService {
     this.warnIfPermissiveSettings(spec.harness, spec.directory);
     const seededPrompt = spec.seededPrompt?.trim();
     if (seededPrompt) this.seededPromptBySessionId.set(id, seededPrompt);
-    const harness = this.harnessFor(spec.harness);
     this.startPendingRecording(id, spec.model);
     this.conversationsAwaitingFirstPrompt.add(id);
     let handle: HarnessHandle;
@@ -363,6 +370,7 @@ export class SessionService {
   }
 
   async createInWorktree(spec: SessionSpec & { repoPath: string; branchName: string }): Promise<Session> {
+    this.harnessFor(spec.harness);
     const worktree = await createWorktree({ repoPath: spec.repoPath, branchName: spec.branchName, worktreesRoot: this.deps.worktreesRoot });
     return this.create({ ...spec, directory: worktree.path }, { branch: worktree.branch });
   }
@@ -1247,8 +1255,16 @@ export class SessionService {
     this.assertNotShuttingDown();
     const tokens = this.repo.tokens(session.id);
     if (!tokens) return { launched: false, reason: 'session has no stored tokens' }; // defensive: every session row carries its tokens
+    let harness: Harness;
+    try {
+      harness = this.harnessFor(session.harness);
+    } catch (err) {
+      if (!(err instanceof UnknownHarnessError)) throw err;
+      log('error', `resumeOne: session ${session.id} cannot resume: ${err.message}`);
+      this.markClosed(session.id, RESUME_LAUNCH_FAILED_EXIT_CODE);
+      return { launched: false, reason: err.message };
+    }
     this.warnIfPermissiveSettings(session.harness, session.directory);
-    const harness = this.harnessFor(session.harness);
     const permissionMode = this.resolveResumePermissionMode(session);
     // A daemon crash can leave the pre-restart process alive for a moment in its orphaned PTY (ponytail:
     // it can still touch files on disk until it actually exits — persisting the PTY pid and killing its
@@ -1396,7 +1412,7 @@ export class SessionService {
 
   private harnessFor(id: string): Harness {
     const harness = this.deps.harnesses.find((h) => h.id === id);
-    if (!harness) throw new Error(`unknown harness: ${id}`);
+    if (!harness) throw new UnknownHarnessError(id);
     return harness;
   }
 

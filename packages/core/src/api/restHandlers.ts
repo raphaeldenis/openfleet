@@ -7,7 +7,7 @@ import type { FakeHandle } from '../harness/fakeHarness.js';
 import type { ManagerService } from '../managers/managerService.js';
 import type { PulseScheduler } from '../managers/pulseScheduler.js';
 import { listAvailableModels, ModelConfigReadOnlyError, ModelConfigUnreadableError, ModelTablePatchSchema, resolveModel, saveModelPatch, type ModelTable } from '../models.js';
-import { DaemonShuttingDownError, SessionClosedError, SessionReopenError, type SessionService } from '../sessions/sessionService.js';
+import { DaemonShuttingDownError, SessionClosedError, SessionReopenError, UnknownHarnessError, type SessionService } from '../sessions/sessionService.js';
 import type { HandoverLedger } from '../workingState/handoverLedger.js';
 import type { WorkingStateService } from '../workingState/workingStateService.js';
 import { json, logServerError, Router } from './router.js';
@@ -74,6 +74,7 @@ export function registerRestRoutes(router: Router, deps: { sessions: SessionServ
           : await deps.sessions.create(spec);
       json(res, 201, session);
     } catch (error) {
+      if (error instanceof UnknownHarnessError) return json(res, 400, { error: 'unknown_harness', detail: error.message });
       if (!(error instanceof DaemonShuttingDownError)) throw error;
       json(res, 503, { error: 'daemon_shutting_down' });
     }
