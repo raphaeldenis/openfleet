@@ -127,14 +127,17 @@ export class NoteEditorComponent {
 
   private readonly title = viewChild.required<ElementRef<HTMLElement>>('title');
   private readonly historyButton = viewChild.required<ElementRef<HTMLElement>>('historyButton');
-  private readonly renderBudget = signal(NODES_PER_CHUNK);
+  readonly nodesPerChunk = input(NODES_PER_CHUNK);
+
+  private readonly chunksShown = signal(1);
+  private readonly renderBudget = computed(() => this.chunksShown() * this.nodesPerChunk());
   private readonly allBlocks = computed(() => parseMarkdownBlocks(this.note().bodyMd));
   protected readonly blocks = computed(() => takeWithinRenderBudget(this.allBlocks(), this.renderBudget()));
   protected readonly hiddenItemCount = computed(() => countRenderCost(this.allBlocks()) - countRenderCost(this.blocks()));
   protected readonly displayTitle = computed(() => displayTitleOf(this.note().title));
 
   protected showNextChunk(): void {
-    this.renderBudget.update((budget) => budget + NODES_PER_CHUNK);
+    this.chunksShown.update((chunks) => chunks + 1);
   }
 
   focus(): void {

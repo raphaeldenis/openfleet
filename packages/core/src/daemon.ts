@@ -43,11 +43,13 @@ export interface Daemon {
 }
 
 // Builds every service from the config and starts serving; a throw at any point refuses the boot, after closing whatever already started.
-export async function startDaemon(config: Config): Promise<Daemon> {
+// `claudeConfigPath` redirects the folder trust writes of the claude CLI harness; the default is the user's ~/.claude.json.
+export async function startDaemon(config: Config, options: { claudeConfigPath?: string } = {}): Promise<Daemon> {
   const db = openDatabase(config.dbPath);
   const bus = new EventBus();
   const baseUrl = `http://${config.host}:${config.port}`;
-  const harnesses = config.e2eEnabled ? [new ClaudeCliHarness(config.sessionsRoot), new FakeHarness()] : [new ClaudeCliHarness(config.sessionsRoot)];
+  const claudeCliHarness = new ClaudeCliHarness(config.sessionsRoot, process.env, options.claudeConfigPath);
+  const harnesses = config.e2eEnabled ? [claudeCliHarness, new FakeHarness()] : [claudeCliHarness];
   if (config.e2eEnabled) log('warn', 'e2e test surface enabled (OPENFLEET_E2E=1): fake harness and fake-output route are registered');
   const sessions = new SessionService({ db, bus, harnesses, baseUrl, worktreesRoot: config.worktreesRoot, describeError });
   const approvals = new ApprovalService({ db, bus });
@@ -81,6 +83,7 @@ export async function startDaemon(config: Config): Promise<Daemon> {
   // token indefinitely; every resume below rewrites its own launch dir from scratch with rotated tokens
   // anyway, so nothing here is worth preserving across a restart (AUD-11).
   const close = async () => {
+    server.beginShutdown();
     pulseScheduler.stop();
     contextNotice.stop();
     await sessions.closeAll();

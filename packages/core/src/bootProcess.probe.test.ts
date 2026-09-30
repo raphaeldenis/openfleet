@@ -81,6 +81,30 @@ describe('probe: valid boot then signal', () => {
   }, 40_000);
 });
 
+describe('probe: parent closing the stdin pipe', () => {
+  it('shuts down with exit 0 and frees the port when OPENFLEET_EXIT_ON_STDIN_EOF=1', async () => {
+    const { daemon, port } = await bootOnFreePort({ OPENFLEET_HOME: homeWith(), OPENFLEET_EXIT_ON_STDIN_EOF: '1' });
+    await waitFor(() => daemon.stdout().includes('openfleet core listening on'), 'banner');
+
+    daemon.child.stdin!.end();
+    const { code } = await daemon.exited;
+
+    expect(code).toBe(0);
+    expect(await canConnect(port)).toBe(true);
+  });
+
+  it('keeps serving when the variable is not set', async () => {
+    const { daemon, port } = await bootOnFreePort({ OPENFLEET_HOME: homeWith() });
+    await waitFor(() => daemon.stdout().includes('openfleet core listening on'), 'banner');
+
+    daemon.child.stdin!.end();
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    expect(daemon.child.exitCode).toBeNull();
+    expect(await canConnect(port)).toBe(false);
+  });
+});
+
 describe('probe: signal while the sessions are still resuming', () => {
   const SESSION_SERVICE = pathToFileURL(join(CORE_ROOT, 'src', 'sessions', 'sessionService.ts')).href;
   const SHUTDOWN_GUARD_MS = 10_000;
@@ -139,6 +163,27 @@ describe('probe: signal while the sessions are still resuming', () => {
     expect(closeCalls).toBe(1);
     expect(code).toBe(0);
     expect(Date.now() - firstSignalAt).toBeGreaterThanOrEqual(closeMs);
+  }, 40_000);
+
+  const shutdownTriggers: [string, (daemon: Booted) => void][] = [
+    ['SIGTERM', (daemon) => { daemon.child.kill('SIGTERM'); }],
+    ['SIGINT', (daemon) => { daemon.child.kill('SIGINT'); }],
+    ['stdin EOF', (daemon) => { daemon.child.stdin!.end(); }],
+  ];
+
+  it.each(shutdownTriggers)('/health answers 503 shutting_down as soon as %s starts the shutdown, and 200 before', async (_name, trigger) => {
+    const { daemon, port } = await bootOnFreePort({ OPENFLEET_HOME: homeWith(), OPENFLEET_EXIT_ON_STDIN_EOF: '1' }, slowSessionsPreload({ resumeMs: 0, closeMs: 1500 }));
+    await waitFor(() => daemon.stdout().includes('listening'), 'banner');
+    const healthBefore = await fetch(`http://127.0.0.1:${port}/health`);
+
+    trigger(daemon);
+    await waitFor(() => daemon.stdout().includes('closeAll called'), 'the close to start');
+    const healthDuring = await fetch(`http://127.0.0.1:${port}/health`);
+
+    expect(healthBefore.status).toBe(200);
+    expect(healthDuring.status).toBe(503);
+    expect(await healthDuring.json()).toEqual({ ok: false, status: 'shutting_down' });
+    expect((await daemon.exited).code).toBe(0);
   }, 40_000);
 
   it('a resume that outlasts the shutdown guard exits 1 at the guard instead of hanging', async () => {

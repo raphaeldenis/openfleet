@@ -18,6 +18,7 @@ export class ClaudeCliHarness implements Harness {
   constructor(
     private readonly sessionsRoot: string = join(homedir(), '.openfleet', 'sessions'),
     private readonly env: NodeJS.ProcessEnv = globalThis.process.env,
+    private readonly claudeConfigPath: string = join(homedir(), '.claude.json'),
   ) {}
 
   conversationExists(conversation: { cliSessionId: string; directory: string }): ConversationPresence {
@@ -30,7 +31,7 @@ export class ClaudeCliHarness implements Harness {
     // under OPENFLEET_HOME, or one the operator pointed the daemon at) — Claude
     // Code's first-run folder-trust dialog would otherwise block the PTY
     // forever waiting for a keypress nothing ever sends.
-    markDirectoryTrusted(join(homedir(), '.claude.json'), launch.directory);
+    markDirectoryTrusted(this.claudeConfigPath, launch.directory);
     // A fresh per-launch directory (not just per-session) so a resume, reopen, or crash-recovery relaunch
     // never collides with a file an earlier, not-yet-cleaned-up launch of the same session left behind.
     const tokenFilesDir = tokenFilesDirFor(this.sessionsRoot, launch.sessionId);

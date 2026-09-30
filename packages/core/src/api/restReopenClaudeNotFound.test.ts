@@ -75,13 +75,14 @@ const createSession = (daemon: ReturnType<typeof bootDaemon>) => daemon.sessions
 const reopenOverRest = (sessionId: string) => fetch(`${server!.url}/api/sessions/${sessionId}/reopen`, { method: 'POST', headers: { authorization: 'Bearer admin' } });
 const failureEventsAfter = (events: Array<Record<string, unknown>>, from: number) => events.slice(from).filter((event) => ['session.closed', 'error', 'session.reopened'].includes(String(event.type)));
 
+const CLOCK_TICK_MS = 5;
 const CLAUDE_NOT_FOUND_ENVELOPE = {
   error: 'claude_not_found', kind: 'unavailable', retry: 'never',
   message: 'the claude CLI is not on the daemon PATH.', hint: 'Install Claude Code or start the daemon from a shell where claude runs.',
 };
 
 describe('reopening a closed claude-cli session when claude is not on the daemon PATH', () => {
-  it('answers the claude_not_found 503 envelope and announces the failure once, leaving the closed row untouched', async () => {
+  it('answers the claude_not_found 503 envelope and announces the failure once, finalizing the closed row as a failed launch', async () => {
     const env = { PATH: binWithClaude };
     const db = openDatabase(':memory:');
     const daemon = bootDaemon(db, env);
@@ -91,6 +92,7 @@ describe('reopening a closed claude-cli session when claude is not on the daemon
     await serve(daemon);
     env.PATH = emptyBin;
     const eventCountBeforeReopen = daemon.events.length;
+    await new Promise((resolve) => setTimeout(resolve, CLOCK_TICK_MS));
 
     const res = await reopenOverRest(session.id);
     const body = await res.json();
@@ -103,7 +105,9 @@ describe('reopening a closed claude-cli session when claude is not on the daemon
       { type: 'session.closed', sessionId: session.id, exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE, reason: 'launch_failed' },
       { type: 'error', sessionId: session.id, error: expect.objectContaining(CLAUDE_NOT_FOUND_ENVELOPE) },
     ]);
-    expect(daemon.sessions.get(session.id)).toMatchObject({ state: 'closed', exitCode: closedRow.exitCode, closedAt: closedRow.closedAt });
+    const failedRow = daemon.sessions.get(session.id)!;
+    expect(failedRow).toMatchObject({ state: 'closed', exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE });
+    expect(failedRow.closedAt! > closedRow.closedAt!).toBe(true);
   });
 
   it('answers the same envelope for a session the daemon shutdown closed, finalizes it -2 and drops the shutdown marker', async () => {

@@ -463,11 +463,15 @@ describe('user can trust the framing of the injection against text forged by age
 
   it('keeps the whole state and lists no child, with "and N more", when the state and a long transcript path leave no room', async () => {
     const items = Array.from({ length: 53 }, (_, index) => `item ${String(index).padStart(2, '0')} ${'s'.repeat(140)}`);
+    items[items.length - 1] += 's'.repeat(settings.maxBytes - sizeInBytes(stateWith({ plan: items })));
     const largestState = stateWith({ plan: items });
-    expect(sizeInBytes(largestState)).toBeLessThanOrEqual(settings.maxBytes);
+    expect(sizeInBytes(largestState)).toBe(settings.maxBytes);
     writeStateWrittenMinutesAgo(0, largestState);
     for (const name of ['Alpha', 'Beta', 'Gamma']) await spawnChild(name);
-    const longTranscript = transcriptPathNamed(`${'t'.repeat(230)}.jsonl`);
+    const longTranscriptLength = 250;
+    const fileNameLength = longTranscriptLength - join(claudeConfigDir, 'projects', '-tmp-manager', '.jsonl').length;
+    const longTranscript = transcriptPathNamed(`${'t'.repeat(fileNameLength)}.jsonl`);
+    expect(longTranscript).toHaveLength(longTranscriptLength);
     await postHook({ hook_event_name: 'UserPromptSubmit', transcript_path: longTranscript });
 
     const context = contextOf(await sessionStarted('clear', { transcript_path: transcriptPathNamed('new.jsonl') }));
