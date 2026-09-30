@@ -1,6 +1,6 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -30,10 +30,10 @@ const WORKTREES_ROOT = '/tmp/of-wt';
 const CHILD_COUNT = 10;
 
 const BYTE_BUDGET = {
-  createSession: 150,
-  getSessionStatus: 150,
-  listChildren: 1560,
-  listSessions: 2250,
+  createSession: 210,
+  getSessionStatus: 205,
+  listChildren: 2130,
+  listSessions: 2850,
   getArgusStatus: 1640,
   listNotes: 2680,
   searchNotes: 3090,
@@ -48,6 +48,7 @@ const ROW_COUNT = 50;
 let server: Awaited<ReturnType<typeof startServer>>;
 let db: DatabaseSync;
 let sessions: SessionService;
+let harness: FakeHarness;
 let client: Client;
 let createdDirectories: string[] = [];
 let parentId: string;
@@ -68,7 +69,7 @@ const bytesOf = (result: unknown) => Buffer.byteLength(rawText(result), 'utf8');
 beforeEach(async () => {
   db = openDatabase(':memory:');
   const bus = new EventBus();
-  const harness = new FakeHarness();
+  harness = new FakeHarness();
   sessions = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:0', worktreesRoot: WORKTREES_ROOT, submitKeystrokeDelayMs: 0 });
   const managerRepo = new ManagerRepository(db);
   const pulseScheduler = new PulseScheduler({ managers: managerRepo, sessions, bus });
@@ -100,10 +101,14 @@ afterEach(async () => {
 
 const call = (name: string, args: Record<string, unknown> = {}) => client.callTool({ name, arguments: args });
 
-async function spawnChildren(count: number) {
+async function spawnChildren(count: number): Promise<string[]> {
+  const directories: string[] = [];
   for (let index = 0; index < count; index += 1) {
-    await call('create_session', { directory: existingWorktreeDir(`child-${index}`), name: `Worker ${index}`, emoji: '🛠️', seeded_prompt: 'do the task' });
+    const directory = existingWorktreeDir(`child-${index}`);
+    await call('create_session', { directory, name: `Worker ${index}`, emoji: '🛠️', seeded_prompt: 'do the task' });
+    directories.push(directory);
   }
+  return directories;
 }
 
 async function seedTable() {
@@ -129,7 +134,9 @@ const keysOf = (value: object) => Object.keys(value).sort();
 describe('MCP tool results are compact', () => {
   describe('session tools', () => {
     it('agent can read a spawned child in a compact result that keeps its id, name and state', async () => {
-      const result = await call('create_session', { directory: existingWorktreeDir('measured'), name: 'Gimli', emoji: '⚔️' });
+      const directory = existingWorktreeDir('measured');
+
+      const result = await call('create_session', { directory, name: 'Gimli', emoji: '⚔️' });
 
       expect(isCompactJson(result)).toBe(true);
       expect(bytesOf(result)).toBeLessThanOrEqual(BYTE_BUDGET.createSession);
@@ -137,19 +144,20 @@ describe('MCP tool results are compact', () => {
       expect(child).toMatchObject({ name: 'Gimli', emoji: '⚔️', state: 'starting' });
       expect(child.id).toEqual(expect.any(String));
       expect(child.stateSince).toEqual(expect.any(String));
-      expect(child).not.toHaveProperty('directory');
+      expect(child.directory).toBe(realpathSync.native(directory));
       expect(child).not.toHaveProperty('harness');
       expect(child).not.toHaveProperty('createdAt');
       expect(child).not.toHaveProperty('permissionMode');
     });
 
     it('agent can read a child status within the byte budget', async () => {
-      const created = parsed(await call('create_session', { directory: existingWorktreeDir('status'), name: 'Gimli' }));
+      const directory = existingWorktreeDir('status');
+      const created = parsed(await call('create_session', { directory, name: 'Gimli' }));
 
       const result = await call('get_session_status', { session_id: created.id });
 
       expect(bytesOf(result)).toBeLessThanOrEqual(BYTE_BUDGET.getSessionStatus);
-      expect(parsed(result)).toMatchObject({ id: created.id, name: 'Gimli', state: 'starting' });
+      expect(parsed(result)).toMatchObject({ id: created.id, name: 'Gimli', state: 'starting', directory: realpathSync.native(directory) });
     });
 
     it('agent reads the resolved model, the model it drifted from, the worktree and the branch of a child that has them', async () => {
@@ -163,7 +171,7 @@ describe('MCP tool results are compact', () => {
     });
 
     it('agent can list ten children within the byte budget, each with id, name and state', async () => {
-      await spawnChildren(CHILD_COUNT);
+      const directories = await spawnChildren(CHILD_COUNT);
 
       const result = await call('list_children');
 
@@ -176,6 +184,7 @@ describe('MCP tool results are compact', () => {
         expect(child.id).toEqual(expect.any(String));
         expect(child.name).toEqual(expect.any(String));
       }
+      expect(children.map((child: { directory: string }) => child.directory).sort()).toEqual(directories.map((directory) => realpathSync.native(directory)).sort());
     });
 
     it('agent can list its descendants within the byte budget, each with its parentId', async () => {
@@ -188,6 +197,21 @@ describe('MCP tool results are compact', () => {
       expect(listed).toHaveLength(CHILD_COUNT + 1);
       const children = listed.filter((session: { id: string }) => session.id !== parentId);
       for (const child of children) expect(child.parentId).toBe(parentId);
+    });
+
+    it('agent finds where a grandchild it never spawned is running', async () => {
+      const [childDirectory] = await spawnChildren(1);
+      const childToken = harness.launches.find((launch) => launch.directory === realpathSync.native(childDirectory!))!.mcpToken;
+      const childClient = new Client({ name: 'child', version: '0.0.0' });
+      await childClient.connect(new StreamableHTTPClientTransport(new URL(`${server.url}/mcp`), { requestInit: { headers: { Authorization: `Bearer ${childToken}` } } }));
+      const grandchildDirectory = existingWorktreeDir('grandchild');
+      await childClient.callTool({ name: 'create_session', arguments: { directory: grandchildDirectory, name: 'Pippin' } });
+
+      const listed = parsed(await call('list_sessions'));
+
+      const grandchild = listed.find((session: { name: string }) => session.name === 'Pippin');
+      expect(grandchild.directory).toBe(realpathSync.native(grandchildDirectory));
+      await childClient.close();
     });
 
     it('agent can read the fleet status within the byte budget, with each child id, name, state and queued count', async () => {

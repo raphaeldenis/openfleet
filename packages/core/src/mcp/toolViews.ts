@@ -1,8 +1,8 @@
 import type { DataStore, ManagerView, DsColumn, DsRow, DsRowHistoryEntry, DsView, Session, WorkingState } from '@openfleet/shared';
 
-/** A session as an agent needs it to act: identity, lifecycle state and model, without the paths and settings it supplied itself. */
+/** A session as an agent needs it to act: identity, where it runs, lifecycle state and model, without the settings it supplied itself. */
 export const sessionView = (session: Session) => ({
-  id: session.id, name: session.name, emoji: session.emoji, state: session.state, stateSince: session.stateSince,
+  id: session.id, name: session.name, emoji: session.emoji, directory: session.directory, state: session.state, stateSince: session.stateSince,
   model: session.model, resolvedModel: session.resolvedModel, modelDriftedFrom: session.modelDriftedFrom,
   role: session.role, worktree: session.worktree, branch: session.branch, exitCode: session.exitCode, closedAt: session.closedAt,
 });
