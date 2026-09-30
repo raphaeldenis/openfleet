@@ -296,6 +296,30 @@ describe('QE: a user closing sessions while /clear graces run', () => {
   });
 });
 
+describe('QE: a session with a message queued behind a /clear, closed inside the flush grace', () => {
+  it('sees no Enter sent once the close was requested, the session end closed and a reopen give no lost notice', async () => {
+    await rebootOnFakeClock({ clearInFlightTimeoutMs: 600, clearFlushGraceMs: 300 });
+    const id = await runningSession();
+    const handle = harness.handles.at(-1)!;
+    service.sendMessage({ sessionId: id, body: '/clear' });
+    service.sendMessage({ sessionId: id, body: 'next task' });
+    await advance(0);
+    await sessionEndByClear(id);
+    await sessionStartByClear(id);
+
+    const writtenBeforeClose = handle.written.length;
+    const userClose = service.close(id);
+    await advance(300);
+    await userClose;
+
+    const writtenAfterCloseRequest = handle.written.slice(writtenBeforeClose);
+    expect(writtenAfterCloseRequest).toEqual([]);
+    expect(service.get(id)?.state).toBe('closed');
+    await postJson(`/api/sessions/${id}/reopen`);
+    expect(noticeCount()).toBe(0);
+  });
+});
+
 describe('QE: a user closing over HTTP while a flush grace runs', () => {
   it('sees /close answer 200 only after the grace, and a second /close of the closed session answer 200 at once', async () => {
     await server.close();
