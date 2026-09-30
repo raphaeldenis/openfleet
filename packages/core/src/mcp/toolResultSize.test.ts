@@ -404,6 +404,13 @@ describe('MCP tool results are compact', () => {
         expect(properties.mentions_only?.type).toBe('boolean');
         expect(getNoteTool.description).toContain('mentionBlocks');
       });
+
+      it('agent reads in the get_note description that the body still counts against the 64 KiB budget with mentions_only', async () => {
+        const { tools } = await client.listTools();
+        const getNoteTool = tools.find((tool) => tool.name === 'get_note')!;
+
+        expect(getNoteTool.description).toContain('the body still counts against the 64 KiB budget');
+      });
     });
 
     it('agent sees the mention line and the expanded text of a note whose only mention was cut by the byte budget', async () => {
@@ -470,18 +477,13 @@ describe('MCP tool results are compact', () => {
 
       const columnarQuery = (args: Record<string, unknown>) => call('query_data_store', { format: 'columnar', ...args });
 
-      const rowsRebuiltFromColumnar = (columnar: { columns: string[]; rows: unknown[][] }, { withUpdatedAt }: { withUpdatedAt: boolean }) => {
-        const firstValueIndex = withUpdatedAt ? 2 : 1;
-        return columnar.rows.map((cells) => ({
-          id: cells[0],
-          data: Object.fromEntries(columnar.columns.map((columnId, index) => [columnId, cells[firstValueIndex + index]]).filter(([, value]) => value !== null)),
-          ...(withUpdatedAt ? { updatedAt: cells[1] } : {}),
-        }));
-      };
+      /** Zips the header with each row, so no position is ever counted by hand. */
+      const rowObjectsFromColumnar = (columnar: { columns: string[]; rows: unknown[][] }) => columnar.rows.map((cells) => Object.fromEntries(columnar.columns.map((header, index) => [header, cells[index]])));
 
-      const withoutNullCells = (row: { id: string; data: Record<string, unknown>; updatedAt?: string }) => ({
-        ...row, data: Object.fromEntries(Object.entries(row.data).filter(([, value]) => value !== null)),
-      });
+      /** The row objects of the default format, every cell of `columnIds` present, a missing one as null. */
+      const rowsWithEveryCell = (rows: { id: string; data: Record<string, unknown>; updatedAt?: string }[], columnIds: string[]) => rows.map((row) => ({
+        id: row.id, updatedAt: row.updatedAt, ...Object.fromEntries(columnIds.map((columnId) => [columnId, row.data[columnId] ?? null])),
+      }));
 
       async function seedMixedTypeTable(rowCount: number) {
         const store = parsed(await call('create_data_store', { display_name: 'mixed' }));
@@ -511,32 +513,48 @@ describe('MCP tool results are compact', () => {
         expect(isCompactJson(result)).toBe(true);
         expect(bytesOf(result)).toBeLessThanOrEqual(BYTE_BUDGET.queryDataStoreColumnar);
         const { columns, rows, count, truncated } = parsed(result);
-        expect(columns).toHaveLength(COLUMN_COUNT);
+        expect(columns).toHaveLength(2 + COLUMN_COUNT);
+        expect(columns.slice(0, 2)).toEqual(['id', 'updatedAt']);
         expect(rows).toHaveLength(ROW_COUNT);
         expect(count).toBe(ROW_COUNT);
         expect(truncated).toBe(false);
-        for (const row of rows) expect(row).toHaveLength(2 + COLUMN_COUNT);
+        for (const row of rows) expect(row).toHaveLength(columns.length);
       });
 
-      it('agent rebuilds exactly the row objects from the columnar rows, for every column type, empty cells and unicode', async () => {
-        const { storeId } = await seedMixedTypeTable(ROW_COUNT);
+      it('agent rebuilds exactly the row objects from the columnar header and rows, for every column type, empty cells and unicode', async () => {
+        const { storeId, columnIds } = await seedMixedTypeTable(ROW_COUNT);
         const asObjects = parsed(await call('query_data_store', { store: storeId, limit: ROW_COUNT }));
 
         const columnar = parsed(await columnarQuery({ store: storeId, limit: ROW_COUNT }));
 
         expect(columnar.rows).toHaveLength(ROW_COUNT);
-        expect(rowsRebuiltFromColumnar(columnar, { withUpdatedAt: true })).toEqual(asObjects.rows.map(withoutNullCells));
+        expect(rowObjectsFromColumnar(columnar)).toEqual(rowsWithEveryCell(asObjects.rows, columnIds));
         expect(columnar.count).toBe(asObjects.count);
         expect(columnar.truncated).toBe(asObjects.truncated);
       });
 
-      it('agent gets empty columns and rows from a store with no rows in both formats', async () => {
+      it('agent sees a missing cell as null in columnar while the rows format omits it, and keeps an explicit null as null in both', async () => {
+        const { storeId, columnIds: [textId, numberId] } = await seedMixedTypeTable(0);
+        await call('insert_data_store_rows', { store: storeId, rows: [{ [textId]: 'missing number' }, { [textId]: 'null number', [numberId]: null }] });
+
+        const asObjects = parsed(await call('query_data_store', { store: storeId, columns: [textId, numberId] }));
+        const columnar = parsed(await columnarQuery({ store: storeId, columns: [textId, numberId], include_updated_at: false }));
+
+        expect(asObjects.rows[0].data).toEqual({ [textId]: 'missing number' });
+        expect(asObjects.rows[0].data).not.toHaveProperty(numberId);
+        expect(columnar.rows.map((cells: unknown[]) => cells.slice(1))).toEqual([['missing number', null], ['null number', null]]);
+        expect(asObjects.rows[1].data[numberId] ?? null).toBeNull();
+      });
+
+      it('agent gets a header and no rows from a store with no rows in both formats, the header naming id, updatedAt and every column', async () => {
         const { storeId, columnIds } = await seedMixedTypeTable(0);
 
         const columnar = parsed(await columnarQuery({ store: storeId }));
         const asObjects = parsed(await call('query_data_store', { store: storeId }));
 
-        expect(columnar).toEqual({ columns: columnIds, rows: [], truncated: false, count: 0 });
+        expect(columnar).toEqual({
+          columns: ['id', 'updatedAt', ...columnIds], names: ['id', 'updatedAt', 'title', 'points', 'due', 'extra', 'status'], rows: [], truncated: false, count: 0,
+        });
         expect(asObjects).toEqual({ rows: [], truncated: false, count: 0 });
       });
 
@@ -546,22 +564,59 @@ describe('MCP tool results are compact', () => {
         const columnar = parsed(await columnarQuery({ store: storeId, columns: ['points', textId] }));
         const asObjects = parsed(await call('query_data_store', { store: storeId, columns: [textId, 'points'] }));
 
-        expect(columnar.columns).toEqual([numberId, textId]);
-        for (const row of columnar.rows) expect(row).toHaveLength(2 + 2);
+        expect(columnar.columns).toEqual(['id', 'updatedAt', numberId, textId]);
+        for (const row of columnar.rows) expect(row).toHaveLength(columnar.columns.length);
         for (const row of asObjects.rows) expect(Object.keys(row.data).every((key) => [textId, numberId].includes(key))).toBe(true);
         expect(asObjects.rows.some((row: { data: object }) => textId in row.data)).toBe(true);
       });
 
-      it('agent is told which column is unknown, in both formats, in the existing error style', async () => {
+      it('agent matches a column name whatever its case, in both formats, while ids stay exact', async () => {
+        const { storeId, columnIds: [textId, , , , selectId] } = await seedMixedTypeTable(2);
+
+        const columnar = parsed(await columnarQuery({ store: storeId, columns: ['STATUS', 'Title'] }));
+        const asObjects = parsed(await call('query_data_store', { store: storeId, columns: ['sTaTuS'] }));
+        const wrongCaseId = await columnarQuery({ store: storeId, columns: [selectId.toLowerCase() === selectId ? selectId.toUpperCase() : selectId.toLowerCase()] });
+
+        expect(columnar.columns).toEqual(['id', 'updatedAt', selectId, textId]);
+        expect(Object.keys(asObjects.rows[0].data)).toEqual([selectId]);
+        expect(wrongCaseId.isError).toBe(true);
+      });
+
+      it('agent labels every position of the header with names, whether it asked by name, by id, mixed or with duplicates', async () => {
+        const { storeId, columnIds: [textId, numberId] } = await seedMixedTypeTable(1);
+        const namedColumnar = (args: Record<string, unknown>) => columnarQuery({ store: storeId, ...args }).then(parsed);
+
+        const byName = await namedColumnar({ columns: ['points', 'title'] });
+        const byId = await namedColumnar({ columns: [numberId, textId] });
+        const mixed = await namedColumnar({ columns: ['points', textId] });
+        const deduplicated = await namedColumnar({ columns: ['Title', textId, 'title', numberId] });
+        const withoutUpdatedAt = await namedColumnar({ columns: ['points'], include_updated_at: false });
+        const everyColumn = await namedColumnar({});
+
+        for (const columnar of [byName, byId, mixed]) {
+          expect(columnar.columns).toEqual(['id', 'updatedAt', numberId, textId]);
+          expect(columnar.names).toEqual(['id', 'updatedAt', 'points', 'title']);
+        }
+        expect(deduplicated.columns).toEqual(['id', 'updatedAt', textId, numberId]);
+        expect(deduplicated.names).toEqual(['id', 'updatedAt', 'title', 'points']);
+        expect(withoutUpdatedAt.columns).toEqual(['id', numberId]);
+        expect(withoutUpdatedAt.names).toEqual(['id', 'points']);
+        expect(everyColumn.names).toHaveLength(everyColumn.columns.length);
+        expect(everyColumn.names.slice(2)).toEqual(['title', 'points', 'due', 'extra', 'status']);
+      });
+
+      it('agent is told which columns it sent are unknown, as columns and not as ids, while where and order_by keep the existing id error', async () => {
         const { storeId } = await seedMixedTypeTable(1);
 
-        const columnar = await columnarQuery({ store: storeId, columns: ['title', 'no such column'] });
+        const columnar = await columnarQuery({ store: storeId, columns: ['title', 'no such column', 'Nope'] });
         const asObjects = await call('query_data_store', { store: storeId, columns: ['no such column'] });
+        const badWhere = await call('query_data_store', { store: storeId, where: [{ columnId: 'Title', op: 'eq', value: 'x' }] });
 
         expect(columnar.isError).toBe(true);
-        expect(rawText(columnar)).toBe('Unknown column ids: no such column');
+        expect(rawText(columnar)).toBe('Unknown columns: no such column, Nope');
         expect(asObjects.isError).toBe(true);
-        expect(rawText(asObjects)).toBe('Unknown column ids: no such column');
+        expect(rawText(asObjects)).toBe('Unknown columns: no such column');
+        expect(rawText(badWhere)).toBe('Unknown column ids: Title');
       });
 
       it('agent keeps the existing store error when the store does not exist, with or without the new arguments', async () => {
@@ -580,9 +635,13 @@ describe('MCP tool results are compact', () => {
         const columnarWith = parsed(await columnarQuery({ store: storeId, include_updated_at: true }));
         const objectsWith = parsed(await call('query_data_store', { store: storeId }));
 
-        for (const row of columnarWithout.rows) expect(row).toHaveLength(1 + columnarWithout.columns.length);
+        expect(columnarWithout.columns.slice(0, 2)).toEqual(['id', columnarWith.columns[2]]);
+        expect(columnarWithout.columns).toHaveLength(columnarWith.columns.length - 1);
+        expect(columnarWithout.names.slice(0, 2)).toEqual(['id', columnarWith.names[2]]);
+        for (const row of columnarWithout.rows) expect(row).toHaveLength(columnarWithout.columns.length);
         for (const row of objectsWithout.rows) expect(keysOf(row)).toEqual(['data', 'id']);
-        for (const row of columnarWith.rows) expect(row).toHaveLength(2 + columnarWith.columns.length);
+        expect(columnarWith.columns.slice(0, 2)).toEqual(['id', 'updatedAt']);
+        for (const row of columnarWith.rows) expect(row).toHaveLength(columnarWith.columns.length);
         for (const row of objectsWith.rows) expect(keysOf(row)).toEqual(['data', 'id', 'updatedAt']);
       });
 
@@ -616,46 +675,55 @@ describe('MCP tool results are compact', () => {
         expect(asObjects.count).toBe(HUGE_ROW_COUNT);
       });
 
-      describe('columns header in the byte budget', () => {
+      describe('serialized result size against the byte budget', () => {
         const ONE_MEBIBYTE = 1024 * 1024;
         const FILLED_ROW_COUNT = 20;
 
-        const bytesOfJson = (value: unknown) => Buffer.byteLength(JSON.stringify(value), 'utf8');
-
-        /** Seeds rows whose columnar rows add up to exactly `1 MiB - header + overshootBytes`. */
+        /** Seeds twenty rows whose whole serialized columnar result is exactly `1 MiB + overshootBytes`. */
         async function seedRowsFillingBudget({ overshootBytes }: { overshootBytes: number }) {
           const store = parsed(await call('create_data_store', { display_name: 'filled' }));
           const bodyId = parsed(await call('add_data_store_column', { store: store.id, display_name: 'body', column_type: 'text' })).id as string;
-          const columnarArgs = { store: store.id, include_updated_at: false };
-          await call('insert_data_store_rows', { store: store.id, rows: [{ [bodyId]: '' }] });
-          const probe = parsed(await columnarQuery(columnarArgs));
-          const columnsHeaderBytes = bytesOfJson(probe.columns);
-          const emptyRowBytes = bytesOfJson(probe.rows[0]);
-          const bodyBytesToSpread = ONE_MEBIBYTE - columnsHeaderBytes + overshootBytes - FILLED_ROW_COUNT * emptyRowBytes;
+          const columnarArgs = { store: store.id, include_updated_at: false, limit: FILLED_ROW_COUNT };
+          await call('insert_data_store_rows', { store: store.id, rows: Array.from({ length: FILLED_ROW_COUNT }, () => ({ [bodyId]: '' })) });
+          const emptyResult = await columnarQuery(columnarArgs);
+          const bodyBytesToSpread = ONE_MEBIBYTE + overshootBytes - bytesOf(emptyResult);
           const evenBodyBytes = Math.floor(bodyBytesToSpread / FILLED_ROW_COUNT);
           const lastBodyBytes = bodyBytesToSpread - evenBodyBytes * (FILLED_ROW_COUNT - 1);
-          const bodyBytesPerRow = Array.from({ length: FILLED_ROW_COUNT }, (_, index) => (index === FILLED_ROW_COUNT - 1 ? lastBodyBytes : evenBodyBytes));
-          await call('delete_data_store_row', { row_id: probe.rows[0][0] });
-          for (const bodyBytes of bodyBytesPerRow) await call('insert_data_store_rows', { store: store.id, rows: [{ [bodyId]: 'x'.repeat(bodyBytes) }] });
+          const rowIds = parsed(emptyResult).rows.map((cells: unknown[]) => cells[0]);
+          const updates = rowIds.map((rowId: string, index: number) => ({ row_id: rowId, patch: { [bodyId]: 'x'.repeat(index === FILLED_ROW_COUNT - 1 ? lastBodyBytes : evenBodyBytes) } }));
+          await call('update_data_store_rows', { store: store.id, updates });
           return columnarArgs;
         }
 
-        it('agent keeps every row when the columns header plus the rows add up to exactly the budget', async () => {
+        it('agent gets every row in a serialized result of exactly the budget', async () => {
           const columnarArgs = await seedRowsFillingBudget({ overshootBytes: 0 });
 
-          const result = parsed(await columnarQuery({ ...columnarArgs, limit: FILLED_ROW_COUNT }));
+          const result = await columnarQuery(columnarArgs);
 
-          expect(result.truncated).toBe(false);
-          expect(result.count).toBe(FILLED_ROW_COUNT);
+          expect(bytesOf(result)).toBe(ONE_MEBIBYTE);
+          expect(parsed(result).truncated).toBe(false);
+          expect(parsed(result).count).toBe(FILLED_ROW_COUNT);
         });
 
-        it('agent loses the last row when the columns header pushes the result one byte past the budget', async () => {
+        it('agent loses the last row and stays within the budget when the whole result would be one byte past it', async () => {
           const columnarArgs = await seedRowsFillingBudget({ overshootBytes: 1 });
 
-          const result = parsed(await columnarQuery({ ...columnarArgs, limit: FILLED_ROW_COUNT }));
+          const result = await columnarQuery(columnarArgs);
 
-          expect(result.truncated).toBe(true);
-          expect(result.count).toBe(FILLED_ROW_COUNT - 1);
+          expect(bytesOf(result)).toBeLessThanOrEqual(ONE_MEBIBYTE);
+          expect(parsed(result).truncated).toBe(true);
+          expect(parsed(result).count).toBe(FILLED_ROW_COUNT - 1);
+        });
+
+        it('agent never gets a serialized result past the budget from a table of large rows', async () => {
+          const store = parsed(await call('create_data_store', { display_name: 'huge' }));
+          const bodyId = parsed(await call('add_data_store_column', { store: store.id, display_name: 'body', column_type: 'text' })).id;
+          for (let index = 0; index < HUGE_ROW_COUNT; index += 1) await call('insert_data_store_rows', { store: store.id, rows: [{ [bodyId]: 'y'.repeat(HUGE_CELL_BYTES + index) }] });
+
+          const result = await columnarQuery({ store: store.id, limit: HUGE_ROW_COUNT });
+
+          expect(parsed(result).truncated).toBe(true);
+          expect(bytesOf(result)).toBeLessThanOrEqual(ONE_MEBIBYTE);
         });
       });
 
@@ -675,8 +743,10 @@ describe('MCP tool results are compact', () => {
         const description = tools.find((tool) => tool.name === 'query_data_store')!.description!;
 
         expect(description).toContain('an empty list keeps NO data columns');
-        expect(description).toContain('columnar rows are [rowId, updatedAt]');
+        expect(description).toContain('columnar rows are [rowId, updatedAt] or [rowId] with include_updated_at false');
         expect(description).toContain('rows format has data: {}');
+        expect(description).toContain('columns lists id, updatedAt (unless dropped) then the data column ids, names labels the same positions');
+        expect(description).toContain('where and order_by take column ids only');
         expect(description).toContain('names resolve to ids');
         expect(description).toContain('an id wins over a name');
         expect(description).toContain('duplicates are dropped');
@@ -703,7 +773,7 @@ describe('MCP tool results are compact', () => {
 
         const columnar = parsed(await columnarQuery({ store: storeId, columns: ['gamma', 'alpha'], include_updated_at: false, order_by: [{ columnId: alphaId, dir: 'asc' }] }));
 
-        expect(columnar.columns).toEqual([gammaId, alphaId]);
+        expect(columnar.columns).toEqual(['id', gammaId, alphaId]);
         expect(columnar.rows.map((row: unknown[]) => row.slice(1))).toEqual([['g1', 'a1'], ['g2', 'a2']]);
       });
 
@@ -713,7 +783,7 @@ describe('MCP tool results are compact', () => {
         const columnar = parsed(await columnarQuery({ store: storeId, columns: ['alpha', alphaId, 'alpha'] }));
         const asObjects = parsed(await call('query_data_store', { store: storeId, columns: ['alpha', alphaId, 'alpha'] }));
 
-        expect(columnar.columns).toEqual([alphaId]);
+        expect(columnar.columns).toEqual(['id', 'updatedAt', alphaId]);
         for (const row of columnar.rows) expect(row).toHaveLength(3);
         expect(Object.keys(asObjects.rows[0].data)).toEqual([alphaId]);
       });
@@ -725,7 +795,7 @@ describe('MCP tool results are compact', () => {
 
         const columnar = parsed(await columnarQuery({ store: storeId, columns: [alphaId], include_updated_at: false }));
 
-        expect(columnar.columns).toEqual([alphaId]);
+        expect(columnar.columns).toEqual(['id', alphaId]);
         expect(columnar.rows.map((row: unknown[]) => row[1])).toEqual(['a1', 'a2', null]);
       });
 
@@ -735,7 +805,8 @@ describe('MCP tool results are compact', () => {
         const columnar = parsed(await columnarQuery({ store: storeId, columns: [] }));
         const asObjects = parsed(await call('query_data_store', { store: storeId, columns: [] }));
 
-        expect(columnar.columns).toEqual([]);
+        expect(columnar.columns).toEqual(['id', 'updatedAt']);
+        expect(columnar.names).toEqual(['id', 'updatedAt']);
         for (const row of columnar.rows) expect(row).toHaveLength(2);
         for (const row of asObjects.rows) expect(row.data).toEqual({});
       });
@@ -746,6 +817,8 @@ describe('MCP tool results are compact', () => {
         const columnar = parsed(await columnarQuery({ store: storeId, columns: [], include_updated_at: false }));
 
         expect(columnar.count).toBe(2);
+        expect(columnar.columns).toEqual(['id']);
+        expect(columnar.names).toEqual(['id']);
         for (const row of columnar.rows) expect(row).toHaveLength(1);
       });
 
