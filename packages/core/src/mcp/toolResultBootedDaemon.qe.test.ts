@@ -144,4 +144,26 @@ describe('QE — a booted daemon serves compact MCP results on the real route', 
 
     expect(keysOf(note)).toEqual(['bodyMd', 'createdAt', 'docsRelativePath', 'fileBacked', 'folder', 'id', 'projectId', 'rev', 'shared', 'title', 'updatedAt']);
   });
+
+  it('REST keeps its full session shape while MCP is compact: an operator reading a session over HTTP still gets harness, createdAt and permissionMode', async () => {
+    const root = await connectAs(await bootRootSession());
+    await root.callTool({ name: 'create_session', arguments: { directory: childDirectory('kid'), name: 'Kid' } });
+
+    const sessions = (await (await adminApi('/api/sessions')).json()) as { name: string }[];
+
+    expect(keysOf(sessions.find((session) => session.name === 'Kid')!)).toEqual(['createdAt', 'directory', 'emoji', 'harness', 'id', 'name', 'parentId', 'permissionMode', 'state', 'stateSince']);
+  });
+
+  it('REST keeps its full row and row history shapes while MCP is compact: an operator still gets storeId and createdAt on rows, and rowId and id on changes', async () => {
+    const root = await connectAs(await bootRootSession());
+    const store = parsed(await root.callTool({ name: 'create_data_store', arguments: { display_name: 'T' } }));
+    const column = parsed(await root.callTool({ name: 'add_data_store_column', arguments: { store: store.id, display_name: 'c', column_type: 'text' } }));
+    const inserted = parsed(await root.callTool({ name: 'insert_data_store_rows', arguments: { store: store.id, rows: [{ [column.id]: 'v' }] } }));
+
+    const rows = (await (await adminApi(`/api/data-stores/${store.id}/rows?projectId=p1`)).json()) as { items: object[] };
+    const changes = (await (await adminApi(`/api/data-stores/${store.id}/rows/${inserted.ids[0]}/changes?projectId=p1`)).json()) as { items: object[] };
+
+    expect(keysOf(rows.items[0]!)).toEqual(['createdAt', 'data', 'id', 'storeId', 'updatedAt']);
+    expect(keysOf(changes.items[0]!)).toEqual(['actorKind', 'actorLabel', 'change', 'createdAt', 'id', 'rowId']);
+  });
 });
