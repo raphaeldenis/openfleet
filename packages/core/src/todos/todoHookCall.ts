@@ -1,16 +1,17 @@
-import { MAX_HOOK_LIST_ENTRIES, MAX_TODO_TEXT, MAX_TRACKED_TASKS, TODO_TOOL_NAMES, type ClaudeHookEvent, type TodoToolName } from '@openfleet/shared';
+import { MAX_HOOK_LIST_ENTRIES, MAX_TODO_ITEMS, TODO_TOOL_NAMES, type ClaudeHookEvent, type TodoToolName } from '@openfleet/shared';
 import type { ZodError } from 'zod';
+import { normalisedTodoText } from './todoText.js';
 
 const MAX_TOOL_USE_ID_LENGTH = 128;
-/** A text is head-cut to twice the stored cap before anything reads it: room for the whitespace and masking that shrink it. */
-export const TODO_TEXT_HEAD_LENGTH = MAX_TODO_TEXT * 2;
+/** A status or an id is only ever compared with a short token, so a longer value is never read. */
+const SHORT_TOKEN_HEAD_LENGTH = 64;
 
 export type TodoTaskId = string | number;
 
 export interface TodoEntry { id?: TodoTaskId; subject?: string; status?: string }
 export interface TodoWriteEntry { content?: string; status?: string; activeForm?: string }
 
-/** The scalars the reducer reads from a call's input, each head-cut; everything else in the input is never read. */
+/** The scalars the reducer reads from a call's input, texts already normalised and masked; everything else in the input is never read. */
 export interface TodoCallInput {
   subject?: string;
   activeForm?: string;
@@ -38,8 +39,13 @@ type PlainObject = Record<string, unknown>;
 const isPlainObject = (value: unknown): value is PlainObject => typeof value === 'object' && value !== null && !Array.isArray(value);
 const isTodoToolName = (name: unknown): name is TodoToolName => (TODO_TOOL_NAMES as readonly unknown[]).includes(name);
 
-const headOfString = (value: unknown): string | undefined => (typeof value === 'string' ? value.slice(0, TODO_TEXT_HEAD_LENGTH) : undefined);
-const idOf = (value: unknown): TodoTaskId | undefined => (typeof value === 'number' && Number.isFinite(value) ? value : headOfString(value));
+const textOf = (value: unknown): string | undefined => {
+  if (typeof value !== 'string') return undefined;
+  const text = normalisedTodoText(value);
+  return text.length > 0 ? text : undefined;
+};
+const headOfShortToken = (value: unknown): string | undefined => (typeof value === 'string' ? value.slice(0, SHORT_TOKEN_HEAD_LENGTH) : undefined);
+const idOf = (value: unknown): TodoTaskId | undefined => (typeof value === 'number' && Number.isFinite(value) ? value : headOfShortToken(value));
 const flagOf = (value: unknown): boolean | undefined => (typeof value === 'boolean' ? value : undefined);
 
 /** Builds an object holding only the defined entries, so `toEqual` and JSON see exactly what was read. */
@@ -53,21 +59,21 @@ const firstEntriesOf = <T>(list: unknown, limit: number, readEntry: (entry: unkn
 
 const todoEntryOf = (entry: unknown): TodoEntry => {
   if (!isPlainObject(entry)) return {};
-  return withoutUndefined({ id: idOf(entry.id), subject: headOfString(entry.subject), status: headOfString(entry.status) });
+  return withoutUndefined({ id: idOf(entry.id), subject: textOf(entry.subject), status: headOfShortToken(entry.status) });
 };
 
 const todoWriteEntryOf = (entry: unknown): TodoWriteEntry => {
   if (!isPlainObject(entry)) return {};
-  return withoutUndefined({ content: headOfString(entry.content), status: headOfString(entry.status), activeForm: headOfString(entry.activeForm) });
+  return withoutUndefined({ content: textOf(entry.content), status: headOfShortToken(entry.status), activeForm: textOf(entry.activeForm) });
 };
 
 const narrowedInput = (input: unknown): TodoCallInput => {
   if (!isPlainObject(input)) return {};
-  const todos = firstEntriesOf(input.todos, MAX_TRACKED_TASKS, todoWriteEntryOf);
+  const todos = firstEntriesOf(input.todos, MAX_TODO_ITEMS, todoWriteEntryOf);
   return withoutUndefined({
-    subject: headOfString(input.subject),
-    activeForm: headOfString(input.activeForm),
-    status: headOfString(input.status),
+    subject: textOf(input.subject),
+    activeForm: textOf(input.activeForm),
+    status: headOfShortToken(input.status),
     taskId: idOf(input.taskId),
     todos: todos?.entries,
     todosBeyondCap: todos && todos.beyondCap > 0 ? todos.beyondCap : undefined,
@@ -79,10 +85,10 @@ const narrowedResponse = (response: unknown): TodoCallResponse | undefined => {
   const { task, statusChange } = response;
   const tasks = firstEntriesOf(response.tasks, MAX_HOOK_LIST_ENTRIES, todoEntryOf);
   return withoutUndefined({
-    task: isPlainObject(task) ? withoutUndefined({ id: idOf(task.id), subject: headOfString(task.subject) }) : undefined,
+    task: isPlainObject(task) ? withoutUndefined({ id: idOf(task.id), subject: textOf(task.subject) }) : undefined,
     taskId: idOf(response.taskId),
     success: flagOf(response.success),
-    toStatus: isPlainObject(statusChange) ? headOfString(statusChange.to) : undefined,
+    toStatus: isPlainObject(statusChange) ? headOfShortToken(statusChange.to) : undefined,
     tasks: tasks?.entries,
     tasksBeyondCap: tasks && tasks.beyondCap > 0 ? tasks.beyondCap : undefined,
   });

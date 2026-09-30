@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { MAX_TODO_ITEMS, MAX_TODO_TEXT, MAX_TRACKED_TASKS, SEEN_CALLS_KEPT, type TodoToolName } from '@openfleet/shared';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { applyCompletedCall, createTodoFold, foldHookPayload, foldTranscriptText, normalisedTodoText, snapshotOf, type TodoFold } from './todoFold.js';
 import { narrowTodoHookCall, type TodoHookCall } from './todoHookCall.js';
 
@@ -431,6 +431,112 @@ describe('the list stays bounded', () => {
     expect(snapshot(fold).counts.total).toBe(MAX_TRACKED_TASKS);
     expect(snapshot(fold).omitted).toBe(MAX_TRACKED_TASKS - MAX_TODO_ITEMS + 1);
   });
+
+  it('counts an untracked id once however many times it is updated', () => {
+    const fold = newFold();
+    tenThousandCreates().slice(0, MAX_TRACKED_TASKS).forEach((call) => foldHookPayload(fold, call));
+
+    ['u1', 'u2', 'u3', 'u4', 'u5'].forEach((id) => foldHookPayload(fold, hookCall('TaskUpdate', id, { taskId: 'new', status: 'in_progress' }, { success: true, taskId: 'new' })));
+    foldHookPayload(fold, hookCall('TaskUpdate', 'u6', { taskId: 'other', status: 'completed' }, { success: true, taskId: 'other' }));
+
+    expect(snapshot(fold).omitted).toBe(MAX_TRACKED_TASKS - MAX_TODO_ITEMS + 2);
+  });
+
+  it('counts the entries of a TodoWrite beyond the cap as omitted', () => {
+    const written = Array.from({ length: MAX_TRACKED_TASKS + 100 }, (_, index) => ({ content: `T${index}`, status: 'pending' }));
+    const fold = newFold();
+
+    applyCompletedCall(fold, { toolUseId: 'w1', name: 'TodoWrite', input: { todos: written }, response: undefined });
+
+    expect(snapshot(fold).counts.total).toBe(MAX_TRACKED_TASKS);
+    expect(snapshot(fold).omitted).toBe(MAX_TRACKED_TASKS + 100 - MAX_TODO_ITEMS);
+  });
+
+  it('forgets the overflow of earlier creates when a TaskList replaces the list', () => {
+    const fold = newFold();
+    tenThousandCreates().slice(0, MAX_TRACKED_TASKS + 10).forEach((call) => foldHookPayload(fold, call));
+    expect(snapshot(fold).omitted).toBeGreaterThan(MAX_TRACKED_TASKS - MAX_TODO_ITEMS);
+
+    foldHookPayload(fold, hookCall('TaskList', 'l1', {}, { tasks: [{ id: '1', subject: 'A', status: 'pending' }, { id: '2', subject: 'B', status: 'pending' }, { id: '3', subject: 'C', status: 'pending' }] }));
+
+    expect(snapshot(fold).omitted).toBe(0);
+  });
+
+  it('forgets the overflow of an earlier long TaskList when a shorter one replaces it', () => {
+    const tasksOf = (count: number) => Array.from({ length: count }, (_, index) => ({ id: String(index), subject: `T${index}`, status: 'pending' }));
+    const fold = newFold();
+    foldHookPayload(fold, hookCall('TaskList', 'l1', {}, { tasks: tasksOf(MAX_TRACKED_TASKS + 100) }));
+    expect(snapshot(fold).omitted).toBeGreaterThan(MAX_TRACKED_TASKS - MAX_TODO_ITEMS);
+
+    foldHookPayload(fold, hookCall('TaskList', 'l2', {}, { tasks: tasksOf(3) }));
+
+    expect(snapshot(fold).omitted).toBe(0);
+  });
+
+  it('remembers at most MAX_TRACKED_TASKS untracked ids and still counts every further one', () => {
+    const fold = newFold();
+    tenThousandCreates().slice(0, MAX_TRACKED_TASKS).forEach((call) => foldHookPayload(fold, call));
+    const untrackedCount = MAX_TRACKED_TASKS + 100;
+
+    Array.from({ length: untrackedCount }, (_, index) => `x${index}`).forEach((taskId) => {
+      foldHookPayload(fold, hookCall('TaskUpdate', `u-${taskId}`, { taskId, status: 'pending' }, { success: true, taskId }));
+    });
+
+    expect(fold.untrackedTaskIds.size).toBe(MAX_TRACKED_TASKS);
+    expect(snapshot(fold).omitted).toBe(MAX_TRACKED_TASKS - MAX_TODO_ITEMS + untrackedCount);
+  });
+
+  it('frees the count of an untracked task that is deleted', () => {
+    const fold = newFold();
+    tenThousandCreates().slice(0, MAX_TRACKED_TASKS).forEach((call) => foldHookPayload(fold, call));
+    foldHookPayload(fold, hookCall('TaskUpdate', 'u1', { taskId: 'new', status: 'in_progress' }, { success: true, taskId: 'new' }));
+
+    foldHookPayload(fold, hookCall('TaskUpdate', 'u2', { taskId: 'new', status: 'deleted' }, { success: true, taskId: 'new' }));
+
+    expect(snapshot(fold).omitted).toBe(MAX_TRACKED_TASKS - MAX_TODO_ITEMS);
+  });
+});
+
+describe('the calls waiting for their result hold masked, bounded text', () => {
+  it('keeps no credential in clear while a TaskCreate waits for its result', () => {
+    const fold = foldedFrom([assistantLine('c1', 'TaskCreate', { subject: 'rotate sk-proj-AbCdEfGhIjKlMnOpQrStUvWxYz0123', activeForm: 'rotating sk-proj-AbCdEfGhIjKlMnOpQrStUvWxYz0123' })]);
+
+    expect(JSON.stringify([...fold.pendingCalls.values()])).not.toContain('AbCdEf');
+  });
+
+  it('holds about MAX_TODO_ITEMS short texts per pending TodoWrite: 100 pending writes of 500 entries of 500 characters stay within 3 MB', () => {
+    const todos = Array.from({ length: 500 }, () => ({ content: 'x'.repeat(500), status: 'pending' }));
+    const fold = foldedFrom(Array.from({ length: 100 }, (_, index) => assistantLine(`w${index}`, 'TodoWrite', { todos })));
+
+    const heldCharacters = JSON.stringify([...fold.pendingCalls.values()]).length;
+
+    expect(fold.pendingCalls.size).toBe(100);
+    expect(heldCharacters).toBeLessThan(3_000_000);
+  });
+
+  it('folds a pending TodoWrite of 500 entries into MAX_TODO_ITEMS shown rows and the rest omitted', () => {
+    const todos = Array.from({ length: 500 }, (_, index) => ({ content: `T${index}`, status: 'pending' }));
+    const fold = foldedFrom([assistantLine('w1', 'TodoWrite', { todos }), resultLine('w1', {})]);
+
+    expect(snapshot(fold).items).toHaveLength(MAX_TODO_ITEMS);
+    expect(snapshot(fold).omitted).toBe(500 - MAX_TODO_ITEMS);
+  });
+});
+
+describe('the transcript prefilter', () => {
+  it('parses a tool_result line only when it names a pending tool_use_id', () => {
+    const fold = foldedFrom([assistantLine('pending-1', 'TaskCreate', { subject: 'A' })]);
+    const unrelatedResult = resultLine('read-1', { file: 'x' });
+    const parse = vi.spyOn(JSON, 'parse');
+
+    foldLines(fold, [unrelatedResult]);
+    const parsedTheUnrelatedLine = parse.mock.calls.some(([text]) => text === unrelatedResult);
+    foldLines(fold, [resultLine('pending-1', { task: { id: '1', subject: 'A' } })]);
+    parse.mockRestore();
+
+    expect(parsedTheUnrelatedLine).toBe(false);
+    expect(rowsOf(fold)).toEqual(['1:pending:A']);
+  });
 });
 
 describe('text normalisation', () => {
@@ -542,6 +648,29 @@ describe('the updatedAt stamp', () => {
     const other = createTodoFold({ now: () => NOW, notBefore: new Date('2026-09-30T16:00:00.000Z') });
     foldLines(other, stamped('not a date'));
     expect(snapshot(other).updatedAt).toBe(NOW.toISOString());
+  });
+
+  const stampOfCompletedCallAt = (at: string): string | null => {
+    const fold = newFold();
+    applyCompletedCall(fold, { toolUseId: 'c1', name: 'TaskCreate', input: { subject: 'A' }, response: { task: { id: '1' } }, at });
+    return snapshot(fold).updatedAt;
+  };
+
+  it('keeps the stamp of a call completed within the clock tolerance ahead of the daemon clock', () => {
+    const thirtySecondsAhead = new Date(NOW.getTime() + 30_000).toISOString();
+
+    expect(stampOfCompletedCallAt(thirtySecondsAhead)).toBe(thirtySecondsAhead);
+  });
+
+  it('falls back to the daemon clock for a timestamp more than the tolerance ahead', () => {
+    expect(stampOfCompletedCallAt(new Date(NOW.getTime() + 120_000).toISOString())).toBe(NOW.toISOString());
+  });
+
+  it('falls back to the daemon clock for a timestamp string of 10 000 characters, even one that starts as a date', () => {
+    const aParseableDateWithALongComment = `Wed, 30 Sep 2026 16:30:00 GMT (${'x'.repeat(10_000)})`;
+    expect(Number.isFinite(Date.parse(aParseableDateWithALongComment))).toBe(true);
+
+    expect(stampOfCompletedCallAt(aParseableDateWithALongComment)).toBe(NOW.toISOString());
   });
 });
 

@@ -1,7 +1,6 @@
 import {
   MAX_PENDING_CALLS,
   MAX_TODO_ITEMS,
-  MAX_TODO_TEXT,
   MAX_TRACKED_TASKS,
   SEEN_CALLS_KEPT,
   TODO_STATUSES,
@@ -12,8 +11,10 @@ import {
   type TodoStatus,
   type TodoToolName,
 } from '@openfleet/shared';
-import { maskedSecrets, maskingCutCredential } from '../redact.js';
-import { narrowTodoCall, TODO_TEXT_HEAD_LENGTH, type TodoCallInput, type TodoCallResponse, type TodoHookCall } from './todoHookCall.js';
+import { narrowTodoCall, type TodoCallInput, type TodoCallResponse, type TodoHookCall } from './todoHookCall.js';
+import { normalisedTodoText, TODO_TEXT_HEAD_LENGTH } from './todoText.js';
+
+export { normalisedTodoText };
 
 const MAX_TRANSCRIPT_LINE_CHARS = 1024 * 1024;
 const MAX_TOOL_USE_ID_LENGTH = 128;
@@ -21,15 +22,6 @@ const FUTURE_TOLERANCE_MS = 60_000;
 const TASK_ID = /^[A-Za-z0-9_.:-]{1,32}$/;
 const CREATED_TASK_ID_IN_RESULT_TEXT = /Task #(\d{1,9})\b/;
 const DELETED_STATUS = 'deleted';
-const ELLIPSIS = '…';
-
-// C0 and C1 controls, DEL, line and paragraph separators, bidi marks, embeddings, overrides and isolates: each run of them, and any whitespace, becomes one space.
-const CONTROL_CODE_POINT_RANGES: readonly (readonly [first: number, last: number])[] = [
-  [0x00, 0x1f], [0x7f, 0x9f], [0x200e, 0x200f], [0x2028, 0x2029], [0x202a, 0x202e], [0x2066, 0x2069],
-];
-const codePointRange = ([first, last]: readonly [number, number]) => `\\u{${first.toString(16)}}-\\u{${last.toString(16)}}`;
-const CONTROLS_AND_WHITESPACE = new RegExp(`[${CONTROL_CODE_POINT_RANGES.map(codePointRange).join('')}\\s]+`, 'gu');
-const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
 
 interface TaskRow { id: string; content: string; status: TodoStatus; activeForm?: string; unnamed?: true }
 interface PendingCall { name: TodoToolName; input: TodoCallInput }
@@ -38,8 +30,10 @@ export interface TodoFold {
   readonly now: () => Date;
   readonly notBefore: Date | undefined;
   tasks: Map<string, TaskRow>;
-  /** Tasks the fold could not store: they count as omitted, never as tracked. */
+  /** Tasks the fold could not store that no id names (the overflow of a list): they count as omitted, never as tracked. */
   untrackedTasks: number;
+  /** The ids of the tasks the fold had no room for, so that updating one id many times counts it once. Bounded by MAX_TRACKED_TASKS. */
+  untrackedTaskIds: Set<string>;
   /** The `tool_use_id`s already folded, oldest first: a call delivered by both sources folds once. */
   seenCalls: Set<string>;
   pendingCalls: Map<string, PendingCall>;
@@ -63,6 +57,7 @@ export function createTodoFold(options: { now?: () => Date; notBefore?: Date } =
     notBefore: options.notBefore,
     tasks: new Map(),
     untrackedTasks: 0,
+    untrackedTaskIds: new Set(),
     seenCalls: new Set(),
     pendingCalls: new Map(),
     source: null,
@@ -73,22 +68,6 @@ export function createTodoFold(options: { now?: () => Date; notBefore?: Date } =
 type PlainObject = Record<string, unknown>;
 const isPlainObject = (value: unknown): value is PlainObject => typeof value === 'object' && value !== null && !Array.isArray(value);
 const isTodoToolName = (name: unknown): name is TodoToolName => (TODO_TOOL_NAMES as readonly unknown[]).includes(name);
-const isHighSurrogate = (codeUnit: number) => codeUnit >= 0xd800 && codeUnit <= 0xdbff;
-
-const cutToMaxText = (text: string): string => {
-  if (text.length <= MAX_TODO_TEXT) return text;
-  const room = MAX_TODO_TEXT - ELLIPSIS.length;
-  const cutsASurrogatePair = isHighSurrogate(text.charCodeAt(room - 1));
-  return `${text.slice(0, cutsASurrogatePair ? room - 1 : room)}${ELLIPSIS}`;
-};
-
-/** Makes a todo text safe to store, log and draw: one line, no control or bidi character, masked, at most MAX_TODO_TEXT long. */
-export function normalisedTodoText(raw: string): string {
-  const wasCutByTheHead = raw.length >= TODO_TEXT_HEAD_LENGTH;
-  const oneLine = raw.slice(0, TODO_TEXT_HEAD_LENGTH).replace(LONE_SURROGATE, '�').normalize('NFC').replace(CONTROLS_AND_WHITESPACE, ' ').trim();
-  const withoutCutCredential = wasCutByTheHead ? maskingCutCredential(oneLine) : oneLine;
-  return cutToMaxText(maskedSecrets(withoutCutCredential));
-}
 
 const optionalText = (value: unknown): string | undefined => {
   if (typeof value !== 'string') return undefined;
@@ -110,6 +89,20 @@ const rowOf = (fields: { id: string; content: string; status: TodoStatus; active
 
 const countOfExcess = (value: unknown): number => (typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : 0);
 const hasRoomForANewTask = (fold: TodoFold) => fold.tasks.size < MAX_TRACKED_TASKS;
+
+/** Counts a task the fold has no room for once per id; past MAX_TRACKED_TASKS distinct ids the set stops growing and each further one counts as a plain overflow. */
+const countAsUntracked = (fold: TodoFold, id: string): void => {
+  const isAlreadyCounted = fold.untrackedTaskIds.has(id);
+  if (isAlreadyCounted) return;
+  const hasRoomToRememberTheId = fold.untrackedTaskIds.size < MAX_TRACKED_TASKS;
+  if (hasRoomToRememberTheId) fold.untrackedTaskIds.add(id);
+  else fold.untrackedTasks += 1;
+};
+
+const forgetUntrackedTasks = (fold: TodoFold, overflow: number): void => {
+  fold.untrackedTaskIds.clear();
+  fold.untrackedTasks = overflow;
+};
 
 const stampOf = (fold: TodoFold, at: string | undefined): string => {
   const now = fold.now();
@@ -138,7 +131,7 @@ const applyTaskCreate: Applier = (fold, input, response) => {
   }
   if (!content) return false;
   if (!hasRoomForANewTask(fold)) {
-    fold.untrackedTasks += 1;
+    countAsUntracked(fold, id);
     return true;
   }
   fold.tasks.set(id, rowOf({ id, content, status: 'pending', activeForm }));
@@ -152,6 +145,7 @@ const applyTaskUpdate: Applier = (fold, input, response) => {
   const requestedStatus = typeof input.status === 'string' ? input.status : response.toStatus;
   if (requestedStatus === DELETED_STATUS) {
     fold.tasks.delete(id);
+    fold.untrackedTaskIds.delete(id);
     return true;
   }
   const status = statusOf(requestedStatus);
@@ -168,7 +162,7 @@ const applyTaskUpdate: Applier = (fold, input, response) => {
     return true;
   }
   if (!hasRoomForANewTask(fold)) {
-    fold.untrackedTasks += 1;
+    countAsUntracked(fold, id);
     return true;
   }
   fold.tasks.set(id, rowOf({ id, content: subject ?? `Task #${id}`, status: status ?? 'pending', activeForm, unnamed: subject ? undefined : true }));
@@ -189,7 +183,7 @@ const applyTaskList: Applier = (fold, _input, response) => {
     replacement.set(id, rowOf({ id, content, status, activeForm: fold.tasks.get(id)?.activeForm }));
   }
   fold.tasks = replacement;
-  fold.untrackedTasks = Math.max(0, listed.length - entries.length) + countOfExcess(response?.tasksBeyondCap);
+  forgetUntrackedTasks(fold, Math.max(0, listed.length - entries.length) + countOfExcess(response?.tasksBeyondCap));
   return true;
 };
 
@@ -206,7 +200,7 @@ const applyTodoWrite: Applier = (fold, input) => {
     replacement.set(id, rowOf({ id, content, status: statusOf(entry.status) ?? 'pending', activeForm: optionalText(entry.activeForm) }));
   });
   fold.tasks = replacement;
-  fold.untrackedTasks = Math.max(0, written.length - entries.length) + countOfExcess(input.todosBeyondCap);
+  forgetUntrackedTasks(fold, Math.max(0, written.length - entries.length) + countOfExcess(input.todosBeyondCap));
   return true;
 };
 
@@ -299,8 +293,8 @@ const settlePendingCall = (fold: TodoFold, block: PlainObject, record: PlainObje
 
 const mightConcernTheList = (fold: TodoFold, line: string): boolean => {
   const namesATodoTool = TODO_TOOL_NAMES.some((name) => line.includes(name));
-  const mayHoldAPendingResult = fold.pendingCalls.size > 0 && line.includes('"tool_result"');
-  return namesATodoTool || mayHoldAPendingResult;
+  const namesAPendingToolUseId = [...fold.pendingCalls.keys()].some((toolUseId) => line.includes(toolUseId));
+  return namesATodoTool || namesAPendingToolUseId;
 };
 
 const foldTranscriptLine = (fold: TodoFold, line: string): void => {
@@ -334,7 +328,7 @@ export function snapshotOf(fold: TodoFold, sessionId: string): SessionTodos {
     sessionId,
     items,
     counts: { total: rows.length, completed: countOf('completed'), inProgress: countOf('in_progress'), pending: countOf('pending') },
-    omitted: rows.length - items.length + fold.untrackedTasks,
+    omitted: rows.length - items.length + fold.untrackedTasks + fold.untrackedTaskIds.size,
     source: fold.source,
     updatedAt: fold.updatedAt,
     ...(hasUnnamedRow ? { incomplete: true as const } : {}),

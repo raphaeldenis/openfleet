@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { ClaudeHookEventSchema, MAX_HOOK_LIST_ENTRIES, MAX_TODO_TEXT, type ClaudeHookEvent } from '@openfleet/shared';
+import { ClaudeHookEventSchema, MAX_HOOK_LIST_ENTRIES, MAX_TODO_ITEMS, MAX_TODO_TEXT, type ClaudeHookEvent } from '@openfleet/shared';
 import { describe, expect, it } from 'vitest';
 import { narrowTodoHookCall, withoutTodoPayload, zodIssueCodes } from './todoHookCall.js';
 
@@ -114,10 +114,28 @@ describe('narrowTodoHookCall on hostile payloads', () => {
     expect(call?.input).toEqual({});
   });
 
-  it('head-cuts a 5 MiB subject before anything else can read it', () => {
+  it('cuts a 5 MiB subject to MAX_TODO_TEXT before anything else can read it', () => {
     const call = narrowTodoHookCall(postToolUse({ tool_name: 'TaskCreate', tool_input: { subject: 'a'.repeat(5 * 1024 * 1024) }, tool_response: { task: { id: '1' } } }));
 
-    expect(call?.input.subject).toHaveLength(MAX_TODO_TEXT * 2);
+    expect(call?.input.subject).toHaveLength(MAX_TODO_TEXT);
+  });
+
+  it('holds no credential in clear: every text of the input and of the result leaves narrowing masked', () => {
+    const key = 'sk-proj-AbCdEfGhIjKlMnOpQrStUvWxYz0123';
+    const create = narrowTodoHookCall(postToolUse({ tool_name: 'TaskCreate', tool_input: { subject: `rotate ${key}`, activeForm: `rotating ${key}` }, tool_response: { task: { id: '1', subject: `rotate ${key}` } } }));
+    const write = narrowTodoHookCall(postToolUse({ tool_name: 'TodoWrite', tool_input: { todos: [{ content: `rotate ${key}`, status: 'pending', activeForm: `rotating ${key}` }] }, tool_response: {} }));
+    const list = narrowTodoHookCall(postToolUse({ tool_name: 'TaskList', tool_input: {}, tool_response: { tasks: [{ id: '1', subject: `rotate ${key}`, status: 'pending' }] } }));
+
+    expect(JSON.stringify([create, write, list])).not.toContain('AbCdEf');
+  });
+
+  it('reads the first MAX_TODO_ITEMS entries of a TodoWrite and counts the rest', () => {
+    const todos = Array.from({ length: 600 }, (_, index) => ({ content: `T${index}`, status: 'pending' }));
+
+    const call = narrowTodoHookCall(postToolUse({ tool_name: 'TodoWrite', tool_input: { todos }, tool_response: {} }));
+
+    expect(call?.input.todos).toHaveLength(MAX_TODO_ITEMS);
+    expect(call?.input.todosBeyondCap).toBe(600 - MAX_TODO_ITEMS);
   });
 
   it('reads the first MAX_HOOK_LIST_ENTRIES entries of a 10 000-entry list and counts the rest', () => {
@@ -181,5 +199,12 @@ describe('zodIssueCodes', () => {
     expect(description).toContain('invalid_type@session_id');
     expect(description).not.toContain('abc123secret');
     expect(description).not.toContain('12345');
+  });
+
+  it('lists exactly one code@path entry per issue, with no message text', () => {
+    const result = ClaudeHookEventSchema.safeParse({ session_id: 's', hook_event_name: 'PostToolUse', tool_name: 42 });
+    if (result.success) throw new Error('the body should not parse');
+
+    expect(zodIssueCodes(result.error)).toEqual(['invalid_type@tool_name']);
   });
 });
