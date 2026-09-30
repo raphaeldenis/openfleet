@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { chmodSync, mkdtempSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, statSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -111,6 +111,25 @@ describe('probe: refused boots', () => {
     expect(blocker.listening).toBe(true);
   }, 40_000);
 
+  it('a failure after the server listens (a stale launch directory that cannot be swept) → exit 1, one stderr line, port free', async () => {
+    const home = homeWith();
+    const lockedDirectory = join(home, 'sessions', 'stale-session', 'locked');
+    mkdirSync(lockedDirectory, { recursive: true });
+    writeFileSync(join(lockedDirectory, 'settings.json'), '{}');
+    chmodSync(lockedDirectory, 0o500);
+    const port = await freePort();
+    const daemon = spawnDaemon({ OPENFLEET_HOME: home, OPENFLEET_PORT: String(port) });
+
+    const { code } = await daemon.exited;
+    chmodSync(lockedDirectory, 0o700);
+
+    const lines = daemon.stderr().trimEnd().split('\n');
+    expect(code).toBe(1);
+    expect(lines, daemon.stderr()).toHaveLength(1);
+    expect(lines[0]).toMatch(/^openfleet: refusing to boot \(config: .*config\.json\): /);
+    expect(daemon.stdout()).toContain('listening');
+    expect(await canConnect(port)).toBe(true);
+  }, 40_000);
 });
 
 describe('probe: boot ordering and reasons', () => {
