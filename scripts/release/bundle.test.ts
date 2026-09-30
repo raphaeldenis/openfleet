@@ -1,10 +1,11 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { describeUnsupportedNode } from './bundle-daemon.mjs';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), 'bundle-daemon.mjs');
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -33,7 +34,12 @@ const writeTauriConf = (folder: string, version: string) => {
   return path;
 };
 
-const runBundle = (arguments_: string[]) => spawnSync(process.execPath, [SCRIPT, ...arguments_], { encoding: 'utf8', cwd: tmpdir() });
+const MARKER_NAME = '.openfleet-daemon-bundle';
+const BUNDLE_ENTRIES = ['daemon.bundle.mjs', 'daemon.mjs', 'migrations', 'node_modules'];
+
+const runBundle = (arguments_: string[], env?: NodeJS.ProcessEnv) => spawnSync(process.execPath, [SCRIPT, ...arguments_], { encoding: 'utf8', cwd: tmpdir(), env });
+const bundleInto = (out: string) => runBundle(['--target', ARM64_TARGET, '--out', out, '--tauri-conf', tauriConf]);
+const topLevelEntriesIn = (folder: string) => readdirSync(folder).sort();
 const sqlFilesIn = (folder: string) => readdirSync(folder).filter((name) => name.endsWith('.sql')).sort();
 const prebuildFoldersIn = (out: string) => readdirSync(join(out, 'node_modules/node-pty/prebuilds')).sort();
 
@@ -55,8 +61,17 @@ afterAll(() => {
 });
 
 describe('bundle layout', () => {
-  it('writes daemon.mjs at the root of the output folder', () => {
+  it('writes the daemon.mjs launcher, the daemon.bundle.mjs bundle and the marker, and nothing else at the top level besides migrations and node_modules', () => {
     expect(statSync(join(arm64Out, 'daemon.mjs')).size).toBeGreaterThan(0);
+    expect(statSync(join(arm64Out, 'daemon.bundle.mjs')).size).toBeGreaterThan(0);
+    expect(topLevelEntriesIn(arm64Out)).toEqual([MARKER_NAME, ...BUNDLE_ENTRIES].sort());
+  });
+
+  it('records the target and every top-level entry it wrote in the marker', () => {
+    const marker = JSON.parse(readFileSync(join(arm64Out, MARKER_NAME), 'utf8'));
+
+    expect(marker.target).toBe(ARM64_TARGET);
+    expect([...marker.entries].sort()).toEqual(BUNDLE_ENTRIES);
   });
 
   it('copies every migration byte for byte and no other file', () => {
@@ -128,6 +143,110 @@ describe('an output folder that holds other people\'s files', () => {
     expect(existsSync(foreignModule)).toBe(true);
     expect(readFileSync(foreignNote, 'utf8')).toBe('keep me');
   }, BOOT_TIMEOUT_MS);
+
+  it('refuses a non-empty folder it did not write, in one line, and changes nothing', () => {
+    const out = join(makeScratchFolder(), 'unmarked');
+    mkdirSync(join(out, 'node_modules/keepme'), { recursive: true });
+    writeFileSync(join(out, 'daemon.mjs'), 'someone elses daemon');
+
+    const result = bundleInto(out);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr.trim().split('\n')).toHaveLength(1);
+    expect(result.stderr).toContain(out);
+    expect(topLevelEntriesIn(out)).toEqual(['daemon.mjs', 'node_modules']);
+    expect(readFileSync(join(out, 'daemon.mjs'), 'utf8')).toBe('someone elses daemon');
+    expect(existsSync(join(out, 'node_modules/keepme'))).toBe(true);
+  });
+
+  it('bundles into an existing empty folder', () => {
+    const out = join(makeScratchFolder(), 'empty');
+    mkdirSync(out);
+
+    const result = bundleInto(out);
+
+    expect(result.status).toBe(0);
+    expect(existsSync(join(out, 'daemon.bundle.mjs'))).toBe(true);
+  }, BOOT_TIMEOUT_MS);
+
+  it('replaces exactly the previous bundle on a second run and leaves foreign files alone', () => {
+    const out = join(makeScratchFolder(), 'rerun');
+    bundleInto(out);
+    writeFileSync(join(out, 'notes.txt'), 'keep me');
+    writeFileSync(join(out, 'migrations/stale-from-previous-run.sql'), 'select 1;');
+    writeFileSync(join(out, 'node_modules/node-pty/stale.txt'), 'stale');
+
+    const result = bundleInto(out);
+
+    expect(result.status).toBe(0);
+    expect(topLevelEntriesIn(out)).toEqual([MARKER_NAME, 'notes.txt', ...BUNDLE_ENTRIES].sort());
+    expect(readFileSync(join(out, 'notes.txt'), 'utf8')).toBe('keep me');
+    expect(existsSync(join(out, 'migrations/stale-from-previous-run.sql'))).toBe(false);
+    expect(existsSync(join(out, 'node_modules/node-pty/stale.txt'))).toBe(false);
+    expect(sqlFilesIn(join(out, 'migrations'))).toEqual(sqlFilesIn(SOURCE_MIGRATIONS));
+  }, BOOT_TIMEOUT_MS);
+
+  it('trusts only the entries it knows how to write when the marker is tampered with', () => {
+    const out = join(makeScratchFolder(), 'tampered');
+    mkdirSync(join(out, 'precious'), { recursive: true });
+    writeFileSync(join(out, MARKER_NAME), JSON.stringify({ entries: ['precious'] }));
+
+    const result = bundleInto(out);
+
+    expect(result.status).toBe(1);
+    expect(existsSync(join(out, 'precious'))).toBe(true);
+  });
+
+  it('refuses an output folder that is a symbolic link and leaves its target alone', () => {
+    const scratchFolder = makeScratchFolder();
+    const target = join(scratchFolder, 'real-target');
+    mkdirSync(target);
+    const link = join(scratchFolder, 'link');
+    symlinkSync(target, link);
+
+    const result = bundleInto(link);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr.trim().split('\n')).toHaveLength(1);
+    expect(readdirSync(target)).toEqual([]);
+  });
+});
+
+describe('a protected output folder', () => {
+  const fakeHomeEnv = (home: string) => ({ ...process.env, HOME: home });
+
+  it('refuses the home folder even when it is empty, and writes nothing into it', () => {
+    const home = makeScratchFolder();
+
+    const result = runBundle(['--target', ARM64_TARGET, '--out', home, '--tauri-conf', tauriConf], fakeHomeEnv(home));
+
+    expect(result.status).toBe(1);
+    expect(result.stderr.trim().split('\n')).toHaveLength(1);
+    expect(readdirSync(home)).toEqual([]);
+  });
+
+  it('refuses the repository root and deletes nothing in it', () => {
+    const result = bundleInto(REPO_ROOT);
+
+    expect(result.status).toBe(1);
+    expect(existsSync(join(REPO_ROOT, MARKER_NAME))).toBe(false);
+    expect(existsSync(join(REPO_ROOT, 'package.json'))).toBe(true);
+  });
+
+  it('refuses the filesystem root and writes nothing into it', () => {
+    const result = bundleInto('/');
+
+    expect(result.status).toBe(1);
+    expect(existsSync(`/${MARKER_NAME}`)).toBe(false);
+    expect(existsSync('/daemon.bundle.mjs')).toBe(false);
+  });
+
+  it('refuses a folder that contains the scripts folder', () => {
+    const result = bundleInto(join(REPO_ROOT, 'scripts', '..'));
+
+    expect(result.status).toBe(1);
+    expect(existsSync(join(REPO_ROOT, MARKER_NAME))).toBe(false);
+  });
 });
 
 describe('a tauri.conf.json without a usable version', () => {
@@ -152,7 +271,85 @@ describe('reproducibility', () => {
     spawnSync(process.execPath, [SCRIPT, '--target', ARM64_TARGET, '--out', fromTmp, '--tauri-conf', tauriConf], { cwd: tmpdir() });
     spawnSync(process.execPath, [SCRIPT, '--target', ARM64_TARGET, '--out', fromRepo, '--tauri-conf', tauriConf], { cwd: REPO_ROOT });
 
-    expect(readFileSync(join(fromRepo, 'daemon.mjs')).equals(readFileSync(join(fromTmp, 'daemon.mjs')))).toBe(true);
+    for (const name of ['daemon.mjs', 'daemon.bundle.mjs']) {
+      expect(readFileSync(join(fromRepo, name)).equals(readFileSync(join(fromTmp, name)))).toBe(true);
+    }
+  }, BOOT_TIMEOUT_MS);
+
+  it('produces the same bundle whatever the depth of the output folder', () => {
+    const deepOut = join(makeScratchFolder(), 'a', 'b', 'c', 'deep');
+    mkdirSync(dirname(deepOut), { recursive: true });
+
+    bundleInto(deepOut);
+
+    expect(readFileSync(join(deepOut, 'daemon.bundle.mjs')).equals(readFileSync(join(arm64Out, 'daemon.bundle.mjs')))).toBe(true);
+  }, BOOT_TIMEOUT_MS);
+
+  it('embeds no machine path in the bundle, its inline sourcemap or the launcher', () => {
+    const machinePaths = [REPO_ROOT, tmpdir(), process.env.HOME ?? REPO_ROOT];
+    const sourcemapBase64 = /sourceMappingURL=data:application\/json;base64,(\S+)/.exec(readFileSync(join(arm64Out, 'daemon.bundle.mjs'), 'utf8'))![1]!;
+    const sourcemap = Buffer.from(sourcemapBase64, 'base64').toString('utf8');
+
+    for (const content of [readFileSync(join(arm64Out, 'daemon.bundle.mjs'), 'utf8'), sourcemap, readFileSync(join(arm64Out, 'daemon.mjs'), 'utf8')]) {
+      for (const machinePath of machinePaths) expect(content).not.toContain(machinePath);
+    }
+  });
+});
+
+describe('the node version guard', () => {
+  const engineMinimumMajor = Number(/>=\s*(\d+)/.exec(JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8')).engines.node)![1]);
+
+  it('says in one line which Node the daemon needs and which it found', () => {
+    expect(describeUnsupportedNode('22.4.1', 26)).toBe('openfleet: the daemon needs Node 26 or newer (found 22.4.1)');
+  });
+
+  it('accepts the minimum major and anything newer', () => {
+    expect(describeUnsupportedNode('26.0.0', 26)).toBe('');
+    expect(describeUnsupportedNode('27.1.0', 26)).toBe('');
+  });
+
+  it('demands exactly the Node major the repository engines field requires', () => {
+    const launcher = readFileSync(join(arm64Out, 'daemon.mjs'), 'utf8');
+
+    expect(launcher).toContain(`describeUnsupportedNode(process.versions.node, ${engineMinimumMajor})`);
+  });
+
+  it('runs before anything is imported: the launcher has a single dynamic import and no static import', () => {
+    const launcher = readFileSync(join(arm64Out, 'daemon.mjs'), 'utf8');
+
+    expect(launcher).not.toMatch(/^\s*import\s/m);
+    expect(launcher.match(/import\(/g)).toHaveLength(1);
+    expect(launcher).toContain("await import('./daemon.bundle.mjs')");
+  });
+
+  // Booting the launcher on a genuinely old Node is not possible here (process.versions is read-only and no old Node is installed), so the guard is covered by the unit tests above.
+});
+
+describe('the flags after a bare "--"', () => {
+  it('are accepted as if the separator were absent', () => {
+    const out = join(makeScratchFolder(), 'after-separator');
+
+    const result = runBundle(['--', '--target', ARM64_TARGET, '--out', out, '--tauri-conf', tauriConf]);
+
+    expect(result.stderr).toBe('');
+    expect(existsSync(join(out, 'daemon.bundle.mjs'))).toBe(true);
+  }, BOOT_TIMEOUT_MS);
+});
+
+describe('the spawn-helper permissions', () => {
+  it('are set to 755 in the output whatever the mode in the node-pty folder', () => {
+    const nodePtyCopy = join(makeScratchFolder(), 'node-pty');
+    const sourceNodePty = join(REPO_ROOT, 'packages/core/node_modules/node-pty');
+    cpSync(sourceNodePty, nodePtyCopy, { recursive: true, dereference: true });
+    const copiedHelper = join(nodePtyCopy, 'prebuilds/darwin-arm64/spawn-helper');
+    chmodSync(copiedHelper, 0o644);
+    const out = join(makeScratchFolder(), 'chmod');
+
+    const result = runBundle(['--target', ARM64_TARGET, '--out', out, '--tauri-conf', tauriConf, '--node-pty-dir', nodePtyCopy]);
+
+    expect(result.status).toBe(0);
+    expect(statSync(join(out, 'node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper')).mode & 0o777).toBe(SPAWN_HELPER_MODE);
+    expect(statSync(copiedHelper).mode & 0o777).toBe(0o644);
   }, BOOT_TIMEOUT_MS);
 });
 
