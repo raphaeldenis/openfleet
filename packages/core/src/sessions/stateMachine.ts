@@ -52,6 +52,11 @@ export function isClear(event: ClaudeHookEvent): boolean {
   return event.hook_event_name === 'SessionEnd' && event.reason === 'clear';
 }
 
+// The SessionStart with source 'clear' proves the /clear typed into the composer was processed, whatever state it leaves.
+export function startsClearedConversation(event: ClaudeHookEvent): boolean {
+  return event.hook_event_name === 'SessionStart' && event.source === 'clear';
+}
+
 // A hook that only fires while the CLI waits on its composer proves the last turn is over, even when the
 // recorded state already says idle because that turn's UserPromptSubmit never arrived.
 export function provesTurnEnded(input: SessionInput): boolean {

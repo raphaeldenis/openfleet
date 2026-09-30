@@ -3453,3 +3453,21 @@ describe('SessionService shutdown', () => {
     await closing;
   });
 });
+
+describe('SessionService queued /clear', () => {
+  it('types the prompt queued behind a /clear right after the SessionStart with source clear, not a turn-start timeout later', async () => {
+    vi.useFakeTimers();
+    const { service, harness } = setup();
+    const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
+    service.sendMessage({ sessionId: session.id, body: '/clear' });
+    const queuedBehindClear = service.sendMessage({ sessionId: session.id, body: 'after the clear' });
+    await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
+    expect(queuedBehindClear.status).toBe('queued');
+
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionEnd', reason: 'clear' }));
+    service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart', source: 'clear', session_id: '3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e' }));
+
+    expect(harness.handles[0]!.written).toEqual(['/clear', '\r', 'after the clear']);
+  });
+});

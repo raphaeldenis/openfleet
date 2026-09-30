@@ -13,7 +13,7 @@ import { MessageQueue } from './messageQueue.js';
 import { findResolvedModel, readTranscriptTail } from './resolvedModel.js';
 import { wrapAgentMessage } from './messageEnvelope.js';
 import { normalizePermissionMode, SessionRepository } from './sessionRepository.js';
-import { canDeliverNow, isClear, nextState, provesTurnEnded, type SessionInput } from './stateMachine.js';
+import { canDeliverNow, isClear, nextState, provesTurnEnded, startsClearedConversation, type SessionInput } from './stateMachine.js';
 
 export interface SessionServiceDeps { db: DatabaseSync; bus: EventBus; harnesses: Harness[]; baseUrl: string; worktreesRoot: string; resumeTimeoutMs?: number; firstStartTimeoutMs?: number; submitKeystrokeDelayMs?: number; clearInFlightTimeoutMs?: number; clearFlushGraceMs?: number }
 
@@ -604,6 +604,12 @@ export class SessionService {
     if (endsUnfinishedTurn) this.unfinishedTurns.delete(sessionId);
     const state = nextState(session.state, input);
     if (state === session.state) {
+      // A queued /clear never reports a turn start: its SessionStart is the only proof it was processed.
+      const startsClearedConversationWhileSubmitted = input.kind === 'hook' && startsClearedConversation(input.event) && this.isAwaitingTurnStart(sessionId);
+      if (startsClearedConversationWhileSubmitted) {
+        this.enter(sessionId, READY);
+        this.guarded(sessionId, () => this.advance(sessionId));
+      }
       // The turn's start was never reported, but its end still releases a relaunch held behind it.
       if (endsUnfinishedTurn) this.guarded(sessionId, () => this.advance(sessionId));
       return;
@@ -614,8 +620,7 @@ export class SessionService {
     // Any real transition away from 'generating' (Stop, a permission prompt, the idle_prompt self-heal,
     // the session closing) makes an armed interrupt watch moot — never let a late-firing one override it.
     this.disarmInterruptWatch(sessionId);
-    const isAwaitingTurnStart = this.deliveryOf(sessionId).phase.name === 'submitted';
-    if (isAwaitingTurnStart) this.enter(sessionId, READY); // any real transition proves the submitted turn started
+    if (this.isAwaitingTurnStart(sessionId)) this.enter(sessionId, READY); // any real transition proves the submitted turn started
     if (state === 'closed') {
       // harness_exit means the process already died — markClosed only records it. Any other path to
       // closed (SessionEnd, etc.) is not proof the process actually exited, so it must go through the
@@ -628,6 +633,10 @@ export class SessionService {
     this.repo.setState(sessionId, state, since);
     this.deps.bus.emit({ type: 'session.state', sessionId, state, stateSince: since });
     this.guarded(sessionId, () => this.advance(sessionId));
+  }
+
+  private isAwaitingTurnStart(sessionId: string): boolean {
+    return this.deliveryOf(sessionId).phase.name === 'submitted';
   }
 
   private holdRelaunchesFor(sessionId: string, holdMs: number, options: { isFlushGrace: boolean } = { isFlushGrace: false }): void {
