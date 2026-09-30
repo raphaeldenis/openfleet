@@ -123,11 +123,11 @@ function hasChecksumColumn(db: DatabaseSync): boolean {
 // tampered with — refusing beats silently running against a schema nothing here has verified. Only
 // checked against the real on-disk migrations (never against a caller-supplied `sources` override,
 // which exists solely so tests can inject a migration that was never really "shipped").
-function rejectUnknownAppliedVersions(db: DatabaseSync, applied: Set<string>, knownSources: MigrationSource[]): void {
+function rejectUnknownAppliedVersions(applied: Set<string>, knownSources: MigrationSource[], databasePath: string | undefined): void {
   const knownVersions = new Set(knownSources.map((s) => s.version));
   const unknownVersions = [...applied].filter((version) => !knownVersions.has(version)).sort();
   if (unknownVersions.length > 0) {
-    throw new SchemaNewerThanCodeError(unknownVersions, restoreHintFor(db));
+    throw new SchemaNewerThanCodeError(unknownVersions, restoreHintFor(databasePath));
   }
 }
 
@@ -138,9 +138,9 @@ export class SchemaNewerThanCodeError extends Error {
   }
 }
 
-function restoreHintFor(db: DatabaseSync): string {
-  const dbFile = db.location();
-  const backupsFolder = dbFile ? join(dirname(dbFile), BACKUPS_FOLDER_NAME) : `the ${BACKUPS_FOLDER_NAME} folder next to openfleet.db`;
+function restoreHintFor(databasePath: string | undefined): string {
+  const hasRealPath = databasePath !== undefined && databasePath !== ':memory:';
+  const backupsFolder = hasRealPath ? join(dirname(databasePath), BACKUPS_FOLDER_NAME) : `the ${BACKUPS_FOLDER_NAME} folder next to openfleet.db`;
   return `restore the newest file in ${backupsFolder} over openfleet.db with the app quit, or install the newer app`;
 }
 
@@ -190,14 +190,14 @@ function reconcileChecksums(db: DatabaseSync, sources: MigrationSource[]): void 
 // The unknown-version guard only runs when `sources` is left at its default — a test that overrides it
 // with a synthetic migration is deliberately not exercising "the database has real files this code
 // doesn't ship", so it's exempt by construction rather than something the guard has to reason about.
-export function applyMigrations(db: DatabaseSync, sources?: MigrationSource[]): void {
+export function applyMigrations(db: DatabaseSync, sources?: MigrationSource[], databasePath?: string): void {
   const usingDefaultSources = sources === undefined;
   const effectiveSources = sources ?? readMigrationSources(migrationsDir);
 
   db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY, applied_at TEXT NOT NULL)`);
   const applied = new Set((db.prepare('SELECT version FROM schema_migrations').all() as { version: string }[]).map((r) => r.version));
 
-  if (usingDefaultSources) rejectUnknownAppliedVersions(db, applied, effectiveSources);
+  if (usingDefaultSources) rejectUnknownAppliedVersions(applied, effectiveSources, databasePath);
 
   for (const { version, sql } of effectiveSources) {
     if (applied.has(version)) continue;

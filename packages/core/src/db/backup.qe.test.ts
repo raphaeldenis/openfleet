@@ -56,7 +56,7 @@ describe('pre-migration backup folder permissions', () => {
 });
 
 describe('pre-migration backup retention order', () => {
-  it.fails('keeps the newest three when more than nine backups share one millisecond', () => {
+  it('keeps the newest three when more than nine backups share one millisecond', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-05-05T05:05:05.005Z'));
     for (let boot = 0; boot < 11; boot++) bootOneMigrationBehindDatabase();
@@ -89,12 +89,12 @@ describe('pre-migration backup retention order', () => {
 
     bootOneMigrationBehindDatabase();
 
-    expect(databaseBackups()).toEqual([`${stem}-10.db`, `${stem}-8.db`, `${stem}-9.db`]);
+    expect(databaseBackups()).toEqual([`${stem}-10.db`, `${stem}-11.db`, `${stem}-9.db`]);
   });
 });
 
 describe('pre-migration backup pruning around strange entries', () => {
-  it.fails('boots and leaves a directory named like a backup alone', () => {
+  it('boots and leaves a directory named like a backup alone', () => {
     mkdirSync(backupsDir, { recursive: true });
     const strangerDirectory = join(backupsDir, 'openfleet-015_x-2026-01-01T00-00-00-000Z.db');
     mkdirSync(strangerDirectory);
@@ -106,6 +106,22 @@ describe('pre-migration backup pruning around strange entries', () => {
     expect(() => bootOneMigrationBehindDatabase()).not.toThrow();
 
     expect(readFileSync(join(strangerDirectory, 'mine.txt'), 'utf8')).toBe('mine');
+  });
+
+  it('ignores a stale temp file left by a crashed backup: never counted toward the newest three, never fatal', () => {
+    mkdirSync(backupsDir, { recursive: true });
+    const staleTemp = join(backupsDir, 'openfleet-015_x-2026-01-01T00-00-00-000Z.db.partial');
+    writeFileSync(staleTemp, '');
+    for (const day of ['02', '03', '04']) writeFileSync(join(backupsDir, `openfleet-015_x-2026-01-${day}T00-00-00-000Z.db`), 'old');
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-02-01T00:00:00.000Z'));
+
+    expect(() => bootOneMigrationBehindDatabase()).not.toThrow();
+
+    const remaining = databaseBackups();
+    expect(remaining).toHaveLength(3);
+    expect(remaining.some((name) => name.includes('2026-02-01T00-00-00-000Z'))).toBe(true);
+    expect(existsSync(staleTemp)).toBe(true);
   });
 
   it('removes a symlink named like an old backup without touching what it points to', () => {
@@ -167,7 +183,7 @@ describe('the refusal line for a database newer than the code', () => {
     expect(line).toMatch(/over openfleet\.db with the app quit, or install the newer app\)\n$/);
   });
 
-  it.fails('names the backups folder next to the database path it was given when openfleet.db is a symlink', async () => {
+  it('names the backups folder next to the database path it was given when openfleet.db is a symlink', async () => {
     const realFolder = join(home, 'real');
     mkdirSync(realFolder);
     createFutureDatabaseAt(join(realFolder, 'openfleet.db'));
