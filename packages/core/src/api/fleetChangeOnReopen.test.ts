@@ -59,6 +59,12 @@ const spawnChild = (name: string, parentId = managerId) => sessions.create({ dir
 const reopen = (sessionId: string) => api(`/api/sessions/${sessionId}/reopen`, { method: 'POST' });
 const fleetChangedAtOf = async (id: string) => ((await (await api(`/api/sessions/${id}/working-state`)).json()) as { fleetChangedAt?: string }).fleetChangedAt;
 const listedSession = async (id: string) => ((await (await api('/api/sessions')).json()) as { id: string; closedAt?: string; state: string }[]).find((session) => session.id === id)!;
+const reopenRowCountOf = (id: string) => (db.prepare("SELECT COUNT(*) AS count FROM session_events WHERE session_id = ? AND kind = 'reopened'").get(id) as { count: number }).count;
+class FailingHarness implements Harness {
+  readonly id = 'fake' as const;
+  start(_launch: HarnessLaunch): HarnessHandle { throw new Error('pty spawn ENOENT'); }
+}
+const makeEveryLaunchFail = () => { (sessions as unknown as { harnessFor: (id: string) => Harness }).harnessFor = () => new FailingHarness(); };
 const childReachesIdle = (childId: string) => postHook(childId, { hook_event_name: 'SessionStart', source: 'startup' });
 
 const closeChildThenWriteManagerStateThenReopen = async (childId: string) => {
@@ -209,26 +215,48 @@ describe('user can see the fleet change of a reopen on the state of the manager'
     expect(afterSecondClose! >= afterReopenAndIdle!).toBe(true);
   });
 
-  it('keeps the manager state stale, never fresher than the close, when a reopen fails to launch', async () => {
+  it('leaves the manager state fresh and the child closed with its old closed time when a reopen fails to launch', async () => {
+    const child = await spawnChild('Builder-3');
+    await tick();
+    await sessions.close(child.id);
+    const closedAtBeforeFailure = (await listedSession(child.id)).closedAt;
+    await tick();
+    workingStates.update(managerId, STATE);
+    await tick();
+    makeEveryLaunchFail();
+
+    const failedReopen = await reopen(child.id);
+
+    expect(failedReopen.status).toBe(500);
+    expect((await listedSession(child.id)).state).toBe('closed');
+    expect((await listedSession(child.id)).closedAt).toBe(closedAtBeforeFailure);
+    expect(reopenRowCountOf(child.id)).toBe(0);
+    expect(await stopOf(managerId)).toEqual({});
+  });
+
+  it('keeps the reopen row of a successful reopen', async () => {
+    const child = await spawnChild('Builder-3');
+    await closeChildThenWriteManagerStateThenReopen(child.id);
+
+    expect(reopenRowCountOf(child.id)).toBe(1);
+    expect((await stopOf(managerId)).decision).toBe('block');
+  });
+
+  it('keeps the reopen row of an earlier successful reopen when a later reopen of the same child fails', async () => {
     const child = await spawnChild('Builder-3');
     await tick();
     await sessions.close(child.id);
     await tick();
-    workingStates.update(managerId, STATE);
+    await reopen(child.id);
+    await childReachesIdle(child.id);
     await tick();
-    class FailingHarness implements Harness {
-      readonly id = 'fake' as const;
-      start(_launch: HarnessLaunch): HarnessHandle { throw new Error('pty spawn ENOENT'); }
-    }
-    (sessions as unknown as { harnessFor: (id: string) => Harness }).harnessFor = () => new FailingHarness();
+    await sessions.close(child.id);
+    await tick();
+    makeEveryLaunchFail();
 
-    const failedReopen = await reopen(child.id);
-    const fleetChangedAt = await fleetChangedAtOf(managerId);
+    await reopen(child.id);
 
-    expect(failedReopen.status).toBe(500);
-    expect((await listedSession(child.id)).state).toBe('closed');
-    expect(fleetChangedAt! >= (await listedSession(child.id)).closedAt!).toBe(true);
-    expect((await stopOf(managerId)).decision).toBe('block');
+    expect(reopenRowCountOf(child.id)).toBe(1);
   });
 
   it('does not stale a manager when a child of another manager is reopened', async () => {
