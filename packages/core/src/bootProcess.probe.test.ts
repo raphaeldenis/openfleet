@@ -75,6 +75,7 @@ describe('probe: valid boot then signal', () => {
 
     expect(code).toBe(0);
     expect(daemon.stdout()).toContain(`http://127.0.0.1:${port}`);
+    expect(daemon.stdout()).toContain('version: dev');
     expect(daemon.stderr()).toBe('');
     expect(await canConnect(port)).toBe(true);
   }, 40_000);

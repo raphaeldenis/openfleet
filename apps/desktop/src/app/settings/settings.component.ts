@@ -1,13 +1,15 @@
 import { ChangeDetectionStrategy, Component, computed, DestroyRef, ElementRef, inject, InjectionToken, signal } from '@angular/core';
 import { environment } from '../../environments/environment';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
+import { VersionsService } from '../core/versions.service';
 import { focusTabAt, nextTabIndex } from '../design/tablist-keyboard';
 
-type SettingsTab = 'models' | 'daemon';
+type SettingsTab = 'models' | 'daemon' | 'about';
 
 const SETTINGS_TABS: ReadonlyArray<{ key: SettingsTab; label: string }> = [
   { key: 'models', label: 'Models' },
   { key: 'daemon', label: 'Daemon' },
+  { key: 'about', label: 'About' },
 ];
 
 const MODEL_RUNGS: ReadonlyArray<{ rung: string; description: string }> = [
@@ -119,6 +121,20 @@ function isAvailableModels(body: unknown): body is { models: string[] } {
               <p class="detail" data-testid="models-loading">Loading…</p>
             }
           </section>
+        } @else if (activeTab() === 'about') {
+          <section class="panel" data-testid="settings-about">
+            <h1>About</h1>
+            <div class="rows">
+              <div class="row">
+                <div class="label"><span class="name">App version</span></div>
+                <span class="value mono" data-testid="about-app-version">{{ versionLabelOf({ version: versions.appVersion(), isSettled: versions.isAppVersionSettled() }) }}</span>
+              </div>
+              <div class="row">
+                <div class="label"><span class="name">Daemon version</span><span class="detail">Reported by the daemon on {{ daemonAddress }}</span></div>
+                <span class="value mono" data-testid="about-daemon-version">{{ versionLabelOf({ version: versions.daemonVersion(), isSettled: versions.isDaemonVersionSettled() }) }}</span>
+              </div>
+            </div>
+          </section>
         } @else {
           <section class="panel" data-testid="settings-daemon">
             <h1>Daemon</h1>
@@ -168,6 +184,7 @@ function isAvailableModels(body: unknown): body is { models: string[] } {
 })
 export class SettingsComponent {
   private readonly api = inject(FleetApiService);
+  protected readonly versions = inject(VersionsService);
   private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
   private readonly settleMs = inject(MODEL_SETTLE_MS);
   private settleTimer: ReturnType<typeof setTimeout> | undefined;
@@ -211,6 +228,7 @@ export class SettingsComponent {
 
   constructor() {
     inject(DestroyRef).onDestroy(() => this.savePendingChange());
+    void this.versions.loadAppVersion();
     void this.loadModelTable();
   }
 
@@ -264,6 +282,11 @@ export class SettingsComponent {
   private showIdInDropdown(rung: string, modelId: string): void {
     const select = this.host.nativeElement.querySelector<HTMLSelectElement>(`select[data-rung="${rung}"]`);
     if (select) select.value = modelId;
+  }
+
+  protected versionLabelOf({ version, isSettled }: { version: string | null; isSettled: boolean }): string {
+    if (version !== null) return version;
+    return isSettled ? 'unknown' : '…';
   }
 
   protected onTabKeydown(event: KeyboardEvent): void {

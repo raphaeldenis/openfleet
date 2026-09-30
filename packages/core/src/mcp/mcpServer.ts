@@ -13,6 +13,7 @@ import type { NoteService } from '../notes/noteService.js';
 import type { SessionService } from '../sessions/sessionService.js';
 import type { DataStoreRepository } from '../stores/dataStoreRepository.js';
 import type { DataStoreService } from '../stores/dataStoreService.js';
+import { DAEMON_VERSION } from '../version.js';
 import type { WorkingStateService } from '../workingState/workingStateService.js';
 import { registerNoteTools } from './noteTools.js';
 import { registerNoteVersionTools } from './noteVersionTools.js';
@@ -39,7 +40,7 @@ export function createMcpHandler(deps: { sessions: SessionService; approvals: Ap
     if (!caller) return json(res, 401, { error: 'unauthorized' });
 
     // ponytail: one McpServer per request (stateless); pool them if profiling says so
-    const server = new McpServer({ name: 'openfleet', version: '0.1.0' });
+    const server = new McpServer({ name: 'openfleet', version: DAEMON_VERSION });
     const toolServer = answeringThrowsInGrammar(server, caller);
     registerTools(toolServer, { ...deps, caller });
     registerTableTools(toolServer, { stores: deps.stores, storeRepo: deps.storeRepo, caller });

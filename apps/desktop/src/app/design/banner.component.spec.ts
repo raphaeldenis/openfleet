@@ -44,6 +44,13 @@ describe('BannerComponent', () => {
     expect(screen.getByRole('status')).toHaveTextContent('t');
   });
 
+  it('announces the mismatch variant as a polite status update, not an interrupting alert', async () => {
+    await render(BannerComponent, {
+      bindings: [inputBinding('variant', () => 'mismatch'), inputBinding('title', () => 't'), inputBinding('description', () => 'd')],
+    });
+    expect(screen.getByRole('status')).toHaveTextContent('t');
+  });
+
   it('announces the done variant as a polite status update, not an interrupting alert', async () => {
     await render(BannerComponent, {
       bindings: [inputBinding('variant', () => 'done'), inputBinding('title', () => 't'), inputBinding('description', () => 'd')],

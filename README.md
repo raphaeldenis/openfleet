@@ -16,6 +16,10 @@ Requires Node >=26 — `nvm use` in this repo picks up Homebrew's Node via `.nvm
     pnpm dev:core          # daemon on 127.0.0.1:7331
     pnpm dev               # daemon + Tauri window
 
+### Version
+
+`apps/desktop/src-tauri/tauri.conf.json` is the single source of the app version. `node scripts/release/set-version.mjs <semver>` writes it and every copy (`Cargo.toml`, `Cargo.lock`, the three `package.json`). Unlike the spec's `cargo update -p app`, it edits the app crate's `Cargo.lock` entry directly, so it works offline and without cargo.
+
 ### Pre-push hook
 
 `pnpm install` installs a husky `pre-push` hook (`scripts/pre-push.sh`) that runs what CI runs: `pnpm typecheck`, `pnpm test`, `pnpm --filter @openfleet/desktop test`, stopping at the first failure. It puts `/opt/homebrew/bin` first in `PATH` when present and refuses a Node older than 26.
