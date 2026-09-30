@@ -11,3 +11,4 @@ export * from './workingState.js';
 export * from './handovers.js';
 export * from './e2e.js';
 export * from './errors.js';
+export * from './daemonIssues.js';

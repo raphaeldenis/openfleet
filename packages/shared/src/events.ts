@@ -1,3 +1,4 @@
+import type { DaemonIssue } from './daemonIssues.js';
 import type { ErrorEnvelope } from './errors.js';
 import type { ManagerView } from './managers.js';
 import type { Approval, PermissionMode, Session, SessionState } from './session.js';
@@ -12,7 +13,7 @@ export const closeReasonOfExitCode = (exitCode: number | undefined): SessionClos
   exitCode === undefined ? undefined : REASON_BY_CONVENTIONAL_EXIT_CODE[exitCode];
 
 export type ServerEvent =
-  | { type: 'snapshot'; sessions: Session[]; approvals: Approval[]; managers: ManagerView[]; workingStates?: WorkingState[]; workingStateMaxAgeMinutes?: number; workingStateMaxBytes?: number }
+  | { type: 'snapshot'; sessions: Session[]; approvals: Approval[]; managers: ManagerView[]; workingStates?: WorkingState[]; workingStateMaxAgeMinutes?: number; workingStateMaxBytes?: number; daemonIssues?: DaemonIssue[] }
   | { type: 'session.created'; session: Session }
   | { type: 'session.state'; sessionId: string; state: SessionState; stateSince: string }
   | { type: 'session.closed'; sessionId: string; exitCode?: number; reason?: SessionCloseReason }
@@ -30,4 +31,5 @@ export type ServerEvent =
   | { type: 'session.working_state'; state: WorkingState }
   | { type: 'manager.created'; manager: ManagerView }
   | { type: 'manager.pulsed'; manager: ManagerView }
-  | { type: 'error'; sessionId?: string; error: ErrorEnvelope };
+  | { type: 'error'; sessionId?: string; error: ErrorEnvelope }
+  | { type: 'daemon.issues'; issues: DaemonIssue[] };
