@@ -9,7 +9,14 @@ export const DEFAULT_WORKING_STATE_MAX_AGE_MINUTES = 30;
 const MIN_MAX_AGE_MINUTES = 1;
 const MAX_MAX_AGE_MINUTES = 1440;
 
-export interface WorkingStateSettings { maxBytes: number; enforce: boolean; maxAgeMinutes: number }
+const MAX_HANDOVER_PATTERNS = 10;
+const MAX_HANDOVER_PATTERN_LENGTH = 200;
+// ponytail: catches a quantified group that holds a quantifier, like (a+)+. Overlapping alternations like (a|a)* pass; a
+// linear-time engine is the upgrade if operators start writing patterns of that shape.
+const NESTED_QUANTIFIER = /\((?:\\.|[^()\\])*(?:[+*]|\{\d+,\d*\})(?:\\.|[^()\\])*\)(?:[+*]|\{\d+,?\d*\})/;
+
+/** `handoverPatterns` is unset when the operator keeps the built-in patterns. */
+export interface WorkingStateSettings { maxBytes: number; enforce: boolean; maxAgeMinutes: number; handoverPatterns?: RegExp[] }
 
 const DEFAULT_SETTINGS: WorkingStateSettings = { maxBytes: DEFAULT_WORKING_STATE_MAX_BYTES, enforce: true, maxAgeMinutes: DEFAULT_WORKING_STATE_MAX_AGE_MINUTES };
 
@@ -18,8 +25,22 @@ const ConfigFileSchema = z.object({
     maxBytes: z.number().int().min(MIN_WORKING_STATE_MAX_BYTES).max(MAX_WORKING_STATE_MAX_BYTES).optional(),
     enforce: z.boolean().optional(),
     maxAgeMinutes: z.number().int().min(MIN_MAX_AGE_MINUTES).max(MAX_MAX_AGE_MINUTES).optional(),
+    handoverPatterns: z.array(z.string().max(MAX_HANDOVER_PATTERN_LENGTH)).max(MAX_HANDOVER_PATTERNS).optional(),
   }).strict().optional(),
 });
+
+function compileHandoverPattern(source: string, position: number): RegExp {
+  const label = `handoverPatterns[${position}] "${source}"`;
+  let compiled: RegExp;
+  try {
+    compiled = new RegExp(source, 'g');
+  } catch (error) {
+    throw new Error(`${label} is not a valid regular expression: ${(error as Error).message}`);
+  }
+  if (NESTED_QUANTIFIER.test(source)) throw new Error(`${label} risks catastrophic backtracking (a quantifier inside a quantified group)`);
+  if (new RegExp(source).test('')) throw new Error(`${label} matches the empty string`);
+  return compiled;
+}
 
 const definedOnly = <T extends object>(values: T): Partial<T> => Object.fromEntries(Object.entries(values).filter(([, value]) => value !== undefined)) as Partial<T>;
 
@@ -33,7 +54,9 @@ export function loadWorkingStateSettings(configPath: string): WorkingStateSettin
     const parsed = ConfigFileSchema.parse(rawConfig);
     const misspelledKey = Object.keys(rawConfig).find(isMisspelledWorkingStateKey);
     if (misspelledKey) throw new Error(`unknown key "${misspelledKey}", the key is "workingState"`);
-    return { ...DEFAULT_SETTINGS, ...definedOnly(parsed.workingState ?? {}) };
+    const { handoverPatterns, ...scalarSettings } = parsed.workingState ?? {};
+    const compiledPatterns = handoverPatterns?.map(compileHandoverPattern);
+    return { ...DEFAULT_SETTINGS, ...definedOnly(scalarSettings), ...(compiledPatterns && { handoverPatterns: compiledPatterns }) };
   } catch (error) {
     throw new Error(`invalid workingState config at ${configPath}: ${(error as Error).message}`);
   }
