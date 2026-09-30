@@ -88,6 +88,21 @@ describe('SessionViewComponent State panel', () => {
     expect(screen.getByTestId('state-section-plan')).toHaveTextContent('second plan');
   });
 
+  it('user keeps the State panel open while the same session goes from idle to generating', async () => {
+    const events = eventsWithStates([session({ state: 'idle' })], [stateOf({ plan: ['ship it'] })]);
+    const { fixture } = await render(SessionViewComponent, {
+      bindings: [inputBinding('sessionId', () => 's1')],
+      providers: [{ provide: FleetApiService, useValue: fakeApi() }, { provide: FleetEventsService, useValue: events }],
+    });
+    await userEvent.click(screen.getByTestId('state-panel-toggle'));
+
+    events.sessions.set([session({ state: 'generating', stateSince: 't2' })]);
+    await fixture.whenStable();
+
+    expect(screen.getByTestId('state-panel-toggle')).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByTestId('state-section-plan')).toHaveTextContent('ship it');
+  });
+
   it('user still finds the State panel on a closed session', async () => {
     await render(SessionViewComponent, {
       bindings: [inputBinding('sessionId', () => 's1')],

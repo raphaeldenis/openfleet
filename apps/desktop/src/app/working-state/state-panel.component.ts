@@ -79,7 +79,8 @@ export class StatePanelComponent {
   protected readonly bodyId = BODY_ID;
   protected readonly sectionKeys = WORKING_STATE_SECTIONS;
   protected readonly headings = SECTION_HEADINGS;
-  protected readonly isOpen = linkedSignal<string, boolean>({ source: () => this.session().id, computation: () => false });
+  private readonly sessionId = computed(() => this.session().id);
+  protected readonly isOpen = linkedSignal<string, boolean>({ source: this.sessionId, computation: () => false });
   protected readonly overdue = injectOverdue(() => this.session());
   protected readonly state = computed(() => this.events.workingStates().get(this.session().id));
 
