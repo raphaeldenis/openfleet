@@ -55,7 +55,7 @@ const spawnChild = (name: string, parentId = managerId) => sessions.create({ dir
 const reopen = (id: string) => api(`/api/sessions/${id}/reopen`, { method: 'POST' });
 
 describe('QE probes: reopen as a fleet change', () => {
-  it('lets a manager satisfy the refusal after a FAILED reopen by updating its state (no infinite refusal loop)', async () => {
+  it('does not refuse the manager after a FAILED reopen, since its fleet did not change', async () => {
     const child = await spawnChild('Builder-3');
     await tick();
     await sessions.close(child.id);
@@ -69,13 +69,9 @@ describe('QE probes: reopen as a fleet change', () => {
     (sessions as unknown as { harnessFor: (id: string) => Harness }).harnessFor = () => new FailingHarness();
     await reopen(child.id);
 
-    const refusedWhileStale = await stopOf(managerId);
-    await tick();
-    workingStates.update(managerId, STATE);
-    const acceptedAfterUpdate = await stopOf(managerId);
+    const stopAfterFailedReopen = await stopOf(managerId);
 
-    expect(refusedWhileStale.decision).toBe('block');
-    expect(acceptedAfterUpdate).toEqual({});
+    expect(stopAfterFailedReopen).toEqual({});
   });
 
   it('names at most 10 fleet changes and counts the rest with reopened and closed kinds mixed', async () => {
