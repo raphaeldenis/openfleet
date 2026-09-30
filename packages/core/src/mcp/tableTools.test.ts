@@ -109,7 +109,7 @@ describe('table tools', () => {
     expect((result.content as { text: string }[])[0]!.text).toMatch(/no project/i);
   });
 
-  it('surfaces an unexpected error as "request failed" with no internal text, and logs it', async () => {
+  it('surfaces an unexpected error as "error internal_error" with no internal text, and logs it', async () => {
     const client = await connect(scopedToken);
     const store = await createStore(client);
     vi.spyOn(stores, 'query').mockImplementation(() => {
@@ -120,7 +120,7 @@ describe('table tools', () => {
     const result = await client.callTool({ name: 'query_data_store', arguments: { store: store.id } });
 
     expect(result.isError).toBe(true);
-    expect((result.content as { text: string }[])[0]!.text).toBe('request failed');
+    expect((result.content as { text: string }[])[0]!.text).toMatch(/^error internal_error: .* \(retry: later, ref [0-9a-f]{8}\)$/);
     expect(logged).toHaveBeenCalled();
   });
 
@@ -164,7 +164,7 @@ describe('table tools', () => {
     const store = await createStore(client);
     const result = await client.callTool({ name: 'add_data_store_column', arguments: { store: store.id, display_name: 'status', column_type: 'select', options: [] } });
     expect(result.isError).toBe(true);
-    expect((result.content as { text: string }[])[0]!.text).toBe('A select column needs at least one option, each with an id and a label');
+    expect((result.content as { text: string }[])[0]!.text).toBe('error invalid_body: A select column needs at least one option, each with an id and a label (retry: never)');
   });
 
   it('insert_data_store_rows attributes actor_kind: agent with the caller\'s emoji and name', async () => {

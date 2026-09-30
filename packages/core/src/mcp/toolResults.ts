@@ -1,4 +1,5 @@
-import { log } from '../logger.js';
+import { OpenFleetError, type ErrorCode, type ErrorEnvelope, type Session } from '@openfleet/shared';
+import { describeError, type ErrorScope } from '../errors/describeError.js';
 import {
   ConstraintError, DaemonSetColumnError, DataStoreWriteError, DuplicateIdError, InvalidActorError, InvalidCellValueError, InvalidColumnDefinitionError, InvalidNameError,
   InvalidQueryError, InvalidViewConfigError, StoreHasRowsError, StoreRowCapError, ViewNotFoundError,
@@ -9,7 +10,21 @@ import { NoteFileUnreadableError } from '../notes/docsFolderService.js';
 import { SectionError } from '../notes/noteSections.js';
 
 export const ok = (payload: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(payload) }] });
-export const fail = (message: string) => ({ content: [{ type: 'text' as const, text: message }], isError: true });
+
+// The tag is the last group of the line, so a "(retry:" inside a message or a hint is escaped: the text never carries a second one.
+const withoutRetryTag = (text: string) => text.replaceAll('(retry:', '(retry\\:');
+
+/** `error <code>: <message> <hint> (retry: <never|after_refresh|later>[, ref <id>])`: one line, code first, tag last. */
+export function errorText(envelope: ErrorEnvelope): string {
+  const sentences = [envelope.message, envelope.hint].filter((sentence): sentence is string => Boolean(sentence)).map(withoutRetryTag).join(' ');
+  const reference = envelope.id ? `, ref ${envelope.id}` : '';
+  return `error ${envelope.error}: ${sentences} (retry: ${envelope.retry}${reference})`;
+}
+
+export const fail = (envelope: ErrorEnvelope) => ({ content: [{ type: 'text' as const, text: errorText(envelope) }], isError: true });
+
+/** A refusal the tool itself decides: the registry code fixes the retry tag, the message is caller-safe text. */
+export const refuse = (code: ErrorCode, message: string, hint?: string) => fail(describeError(new OpenFleetError(code, message, { hint })));
 
 /** Keeps items until adding the next one would push the serialized result past maxBytes; always keeps at least one. `bytesBetweenItems` counts the separator serialized between two items. */
 export function truncateToByteBudget<T>(items: T[], maxBytes: number, { bytesBetweenItems = 0 }: { bytesBetweenItems?: number } = {}): { items: T[]; truncated: boolean } {
@@ -24,35 +39,70 @@ export function truncateToByteBudget<T>(items: T[], maxBytes: number, { bytesBet
   return { items: kept, truncated: false };
 }
 
-// The error's own message names the file path, which stays out of the caller's reach.
-const FILE_UNREADABLE_MESSAGE =
-  'note is file-backed and its file or docs folder cannot be read; nothing was written. Restore the docs folder or the file permissions, then retry.';
+interface ToolWording { code?: ErrorCode; message: string; hint?: string }
+
+// A store, view, row or note outside the caller's project reads identically to one that never existed: the id stays out of the words.
+const FIXED_WORDING: [new (...args: never[]) => Error, ToolWording][] = [
+  [StoreNotFoundError, { code: 'store_not_found', message: 'data store not found' }],
+  [ViewNotFoundError, { code: 'view_not_found', message: 'view not found' }],
+  [RowNotFoundError, { code: 'row_not_found', message: 'row not found' }],
+  [NoteNotFoundError, { code: 'note_not_found', message: 'note not found' }],
+  [FileBackedNoteError, { message: 'note is file-backed; this operation is not supported for file-backed notes' }],
+  // The error's own message names the file path, which stays out of the caller's reach.
+  [NoteFileUnreadableError, { message: 'note is file-backed and its file or docs folder cannot be read; nothing was written.', hint: 'Restore the docs folder or the file permissions, then retry.' }],
+];
 
 // Typed errors whose message was written for the caller and carries no SQL or internal state.
 const CALLER_SAFE_ERRORS = [
-  ConstraintError, DaemonSetColumnError, DataStoreWriteError, DuplicateIdError, DuplicateNameError, InvalidActorError, InvalidCellValueError, InvalidColumnDefinitionError,
+  ConstraintError, DaemonSetColumnError, DuplicateIdError, DuplicateNameError, InvalidActorError, InvalidCellValueError, InvalidColumnDefinitionError,
   InvalidNameError, InvalidQueryError, InvalidViewConfigError, StoreHasRowsError, StoreRowCapError, UnknownColumnError,
   NoteTooLargeError, SectionError, VersionNotFoundError,
 ];
 
+const STALE_REVISION_HINT = 'Reload the note, then write again.';
+const WRITE_FAILED_MESSAGE = 'The write failed.';
+
+function toolWordingOf(error: unknown): ToolWording | undefined {
+  const fixed = FIXED_WORDING.find(([ErrorClass]) => error instanceof ErrorClass);
+  if (fixed) return fixed[1];
+  if (error instanceof StaleRevisionError) return { message: `the note revision is stale, current rev: ${error.currentRev}.`, hint: STALE_REVISION_HINT };
+  if (CALLER_SAFE_ERRORS.some((safeError) => error instanceof safeError)) return { message: (error as Error).message };
+  return undefined;
+}
+
 /**
- * Runs a table-tool body, mapping typed service/repository errors to a non-throwing `fail()`. A store, view or row
- * outside the caller's project reads identically to one that never existed. Any other error is logged and reads as
- * an opaque 'request failed' so no SQL or internal text reaches the caller.
+ * The envelope an agent reads: the shared mapping, with the words the tools have always used for the typed errors above.
+ * A failed data-store write keeps its safe message on the internal envelope: the id and the log line come from the mapping.
  */
-export function guarded<T>(work: () => T) {
+export function describeToolError(error: unknown, scope: ErrorScope = {}): ErrorEnvelope {
+  const described = describeError(error, scope);
+  if (error instanceof DataStoreWriteError) return { ...described, message: WRITE_FAILED_MESSAGE };
+  const wording = toolWordingOf(error);
+  if (!wording) return described;
+  const { code = described.error, message, hint = described.hint } = wording;
+  return describeError(new OpenFleetError(code, message, { hint }), scope);
+}
+
+const scopeOf = (caller: Session): ErrorScope => ({ sessionId: caller.id, where: 'mcp tool failed' });
+
+/** Runs a tool body, mapping any thrown value to a non-throwing `fail()`: no SQL or internal text reaches the caller, an unexpected error is logged with the ref the caller reads. */
+export function guarded<T>(work: () => T, scope: ErrorScope = { where: 'mcp tool failed' }) {
   try {
     return ok(work());
   } catch (error) {
-    if (error instanceof StoreNotFoundError) return fail('data store not found');
-    if (error instanceof ViewNotFoundError) return fail('view not found');
-    if (error instanceof RowNotFoundError) return fail('row not found');
-    if (error instanceof NoteNotFoundError) return fail('note not found');
-    if (error instanceof StaleRevisionError) return fail(`409 stale_revision, current rev: ${error.currentRev}`);
-    if (error instanceof FileBackedNoteError) return fail('note is file-backed; this operation is not supported for file-backed notes');
-    if (error instanceof NoteFileUnreadableError) return fail(FILE_UNREADABLE_MESSAGE);
-    if (CALLER_SAFE_ERRORS.some((safeError) => error instanceof safeError)) return fail((error as Error).message);
-    log('error', 'mcp tool failed', error);
-    return fail('request failed');
+    return fail(describeToolError(error, scope));
   }
 }
+
+/** `guarded` for one caller, so the log line of an unexpected error names the session. */
+export const guardedFor = (caller: Session) => <T>(work: () => T) => guarded(work, scopeOf(caller));
+
+/** Wraps a tool handler so that a throw, sync or async, answers in the grammar instead of reaching the SDK's own error text. */
+export const catchingToolErrors = (caller: Session) => <Args extends unknown[], Result>(handler: (...args: Args) => Result | Promise<Result>) =>
+  async (...args: Args): Promise<Result | ReturnType<typeof fail>> => {
+    try {
+      return await handler(...args);
+    } catch (error) {
+      return fail(describeToolError(error, scopeOf(caller)));
+    }
+  };

@@ -261,7 +261,7 @@ describe('MCP', () => {
     const refused = await child.callTool({ name: 'message_parent', arguments: { body: 'one too many' } });
 
     expect(refused.isError).toBe(true);
-    expect((refused.content as { text: string }[])[0]!.text).toBe(`too many pending messages to ${parentId}: 20 already queued, wait for delivery`);
+    expect((refused.content as { text: string }[])[0]!.text).toBe(`error too_many_pending: too many pending messages to ${parentId}: 20 already queued, wait for delivery (retry: later)`);
     expect(sessions.queuedMessageCount(parentId)).toBe(MAX_PENDING_AGENT_MESSAGES_PER_SENDER);
   });
 
@@ -274,7 +274,7 @@ describe('MCP', () => {
     const refused = await parent.callTool({ name: 'send_session_message', arguments: { target_uuid: created.id, body: 'one too many' } });
 
     expect(refused.isError).toBe(true);
-    expect((refused.content as { text: string }[])[0]!.text).toBe(`too many pending messages to ${created.id}: 20 already queued, wait for delivery`);
+    expect((refused.content as { text: string }[])[0]!.text).toBe(`error too_many_pending: too many pending messages to ${created.id}: 20 already queued, wait for delivery (retry: later)`);
     expect(sessions.queuedMessageCount(created.id)).toBe(MAX_PENDING_AGENT_MESSAGES_PER_SENDER);
   });
 
@@ -284,7 +284,7 @@ describe('MCP', () => {
     const oversizedBody = 'x'.repeat(8193);
     const result = await parent.callTool({ name: 'send_session_message', arguments: { target_uuid: created.id, body: oversizedBody } });
     expect(result.isError).toBe(true);
-    expect((result.content as { text: string }[])[0]!.text).toBe('message too long: 8193 bytes, max 8192');
+    expect((result.content as { text: string }[])[0]!.text).toBe('error message_too_long: message too long: 8193 bytes, max 8192 (retry: never)');
   });
 
   it('refuses a body over the 8192-byte cap through message_parent', async () => {
@@ -295,7 +295,7 @@ describe('MCP', () => {
     const oversizedBody = 'x'.repeat(8193);
     const result = await child.callTool({ name: 'message_parent', arguments: { body: oversizedBody } });
     expect(result.isError).toBe(true);
-    expect((result.content as { text: string }[])[0]!.text).toBe('message too long: 8193 bytes, max 8192');
+    expect((result.content as { text: string }[])[0]!.text).toBe('error message_too_long: message too long: 8193 bytes, max 8192 (retry: never)');
   });
 
   it('accepts a body at exactly the 8192-byte cap through send_session_message', async () => {
@@ -314,7 +314,7 @@ describe('MCP', () => {
     const multiByteBody = 'é'.repeat(4097);
     const result = await parent.callTool({ name: 'send_session_message', arguments: { target_uuid: created.id, body: multiByteBody } });
     expect(result.isError).toBe(true);
-    expect((result.content as { text: string }[])[0]!.text).toBe('message too long: 8194 bytes, max 8192');
+    expect((result.content as { text: string }[])[0]!.text).toBe('error message_too_long: message too long: 8194 bytes, max 8192 (retry: never)');
   });
 
   it('refuses to message a session outside the caller lineage', async () => {

@@ -3,7 +3,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { RowNotFoundError, StoreNotFoundError, UnknownColumnReferenceError, type DataStoreRepository, type RowActor } from '../stores/dataStoreRepository.js';
 import type { DataStoreService } from '../stores/dataStoreService.js';
-import { fail, guarded, truncateToByteBudget } from './toolResults.js';
+import { guardedFor, refuse, truncateToByteBudget } from './toolResults.js';
 import { columnarRowView, columnView, rowView, storeView } from './toolViews.js';
 
 // Task 15 caps (see the plan's Review Focus #3 and Lead amendment on P3-T11): a batch write is capped so
@@ -24,6 +24,7 @@ const agentActor = (caller: Session): RowActor => ({ kind: 'agent', label: `${ca
 
 export function registerTableTools(server: McpServer, deps: RegisterTableToolsDeps): void {
   const { stores, storeRepo, caller } = deps;
+  const guarded = guardedFor(caller);
 
   function requireProject(): { projectId: string } | undefined {
     return caller.projectId ? { projectId: caller.projectId } : undefined;
@@ -34,7 +35,7 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
     inputSchema: { display_name: z.string().min(1) },
   }, async ({ display_name }) => {
     const scope = requireProject();
-    if (!scope) return fail('this session has no project');
+    if (!scope) return refuse('project_not_found', 'this session has no project');
     return guarded(() => storeView(stores.createStore({ ...scope, displayName: display_name })));
   });
 
@@ -43,7 +44,7 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
     inputSchema: { store: z.string().min(1) },
   }, async ({ store }) => {
     const scope = requireProject();
-    if (!scope) return fail('this session has no project');
+    if (!scope) return refuse('project_not_found', 'this session has no project');
     return guarded(() => {
       const dataStore = storeRepo.findStore(store);
       if (!dataStore || dataStore.projectId !== scope.projectId) throw new StoreNotFoundError(store);
@@ -56,7 +57,7 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
     inputSchema: { store: z.string().min(1), display_name: z.string().min(1), column_type: ColumnTypeSchema, options: z.array(SelectOptionSchema).optional(), auto_value: AutoValueSchema.optional() },
   }, async ({ store, display_name, column_type, options, auto_value }) => {
     const scope = requireProject();
-    if (!scope) return fail('this session has no project');
+    if (!scope) return refuse('project_not_found', 'this session has no project');
     return guarded(() => columnView(stores.addColumn(store, { ...scope, displayName: display_name, columnType: column_type, options, autoValue: auto_value })));
   });
 
@@ -65,7 +66,7 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
     inputSchema: { store: z.string().min(1), rows: z.array(z.record(z.string(), z.unknown())).max(MAX_BATCH_ROWS) },
   }, async ({ store, rows }) => {
     const scope = requireProject();
-    if (!scope) return fail('this session has no project');
+    if (!scope) return refuse('project_not_found', 'this session has no project');
     return guarded(() => {
       const ignored = stores.ignoredDaemonSetColumnIds(store, { ...scope, items: rows });
       const inserted = stores.insertRows(store, { ...scope, items: rows, actor: agentActor(caller) });
@@ -81,7 +82,7 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
     },
   }, async ({ store, updates }) => {
     const scope = requireProject();
-    if (!scope) return fail('this session has no project');
+    if (!scope) return refuse('project_not_found', 'this session has no project');
     const items = updates.map(({ row_id, patch }) => ({ rowId: row_id, patch }));
     return guarded(() => {
       const updated = stores.updateRows(store, { ...scope, items, actor: agentActor(caller) });
@@ -94,7 +95,7 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
     inputSchema: { row_id: z.string().min(1) },
   }, async ({ row_id }) => {
     const scope = requireProject();
-    if (!scope) return fail('this session has no project');
+    if (!scope) return refuse('project_not_found', 'this session has no project');
     return guarded(() => {
       const storeId = storeRepo.findRowStoreId(row_id);
       const owningStore = storeId ? storeRepo.findStore(storeId) : undefined;
@@ -121,7 +122,7 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
     },
   }, async ({ store, where, order_by, limit, format, columns: requestedColumns, include_updated_at }) => {
     const scope = requireProject();
-    if (!scope) return fail('this session has no project');
+    if (!scope) return refuse('project_not_found', 'this session has no project');
     return guarded(() => {
       const rows = stores.query(store, { ...scope, where, orderBy: order_by, limit: limit ?? DEFAULT_QUERY_LIMIT });
       const includeUpdatedAt = include_updated_at ?? true;
