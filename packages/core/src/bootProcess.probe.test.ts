@@ -65,22 +65,25 @@ describe('probe: valid boot then signal', () => {
 });
 
 describe('probe: refused boots', () => {
-  const cases: [string, () => { env: Record<string, string>; configPathHome?: string }][] = [
-    ['maxAgeMinutes 0', () => ({ env: { OPENFLEET_HOME: homeWith('{"workingState":{"maxAgeMinutes":0}}') } })],
-    ['heartbeatDefaultSeconds 0', () => ({ env: { OPENFLEET_HOME: homeWith('{"managers":{"heartbeatDefaultSeconds":0}}') } })],
-    ['unknown key in section', () => ({ env: { OPENFLEET_HOME: homeWith('{"workingState":{"maxAgeMinuts":5}}') } })],
-    ['unknown key in managers', () => ({ env: { OPENFLEET_HOME: homeWith('{"managers":{"nope":5}}') } })],
-    ['invalid JSON', () => ({ env: { OPENFLEET_HOME: homeWith('{ not json') } })],
-    ['catastrophic handoverPatterns', () => ({ env: { OPENFLEET_HOME: homeWith('{"workingState":{"handoverPatterns":["(a+)+$"]}}') } })],
-    ['unreadable config.json', () => { const home = homeWith('{}'); chmodSync(join(home, 'config.json'), 0o000); return { env: { OPENFLEET_HOME: home } }; }],
-    ['non-numeric port', () => ({ env: { OPENFLEET_HOME: homeWith(), OPENFLEET_PORT: 'abc' } })],
-    ['short admin token', () => { const home = homeWith(); writeFileSync(join(home, 'admin.token'), 'short'); return { env: { OPENFLEET_HOME: home } }; }],
-    ['home is a file', () => { const home = homeWith(); const file = join(home, 'afile'); writeFileSync(file, 'x'); return { env: { OPENFLEET_HOME: join(file, 'sub') } }; }],
-    ['home dir not writable', () => { const parent = homeWith(); chmodSync(parent, 0o500); return { env: { OPENFLEET_HOME: join(parent, 'home') } }; }],
-    ['malformed models section', () => ({ env: { OPENFLEET_HOME: homeWith('{"models":{"haiku":123}}') } })],
+  const CONFIG_LINE = /^openfleet: refusing to boot \(config: .*config\.json\): /;
+  const GENERIC_LINE = /^openfleet: refusing to boot: /;
+  const cases: [string, RegExp, () => { env: Record<string, string> }][] = [
+    ['maxAgeMinutes 0', CONFIG_LINE, () => ({ env: { OPENFLEET_HOME: homeWith('{"workingState":{"maxAgeMinutes":0}}') } })],
+    ['heartbeatDefaultSeconds 0', CONFIG_LINE, () => ({ env: { OPENFLEET_HOME: homeWith('{"managers":{"heartbeatDefaultSeconds":0}}') } })],
+    ['unknown key in section', CONFIG_LINE, () => ({ env: { OPENFLEET_HOME: homeWith('{"workingState":{"maxAgeMinuts":5}}') } })],
+    ['unknown key in managers', CONFIG_LINE, () => ({ env: { OPENFLEET_HOME: homeWith('{"managers":{"nope":5}}') } })],
+    ['invalid JSON', CONFIG_LINE, () => ({ env: { OPENFLEET_HOME: homeWith('{ not json') } })],
+    ['catastrophic handoverPatterns', CONFIG_LINE, () => ({ env: { OPENFLEET_HOME: homeWith('{"workingState":{"handoverPatterns":["(a+)+$"]}}') } })],
+    ['unreadable config.json', CONFIG_LINE, () => { const home = homeWith('{}'); chmodSync(join(home, 'config.json'), 0o000); return { env: { OPENFLEET_HOME: home } }; }],
+    ['malformed models section', CONFIG_LINE, () => ({ env: { OPENFLEET_HOME: homeWith('{"models":{"haiku":123}}') } })],
+    ['non-numeric port', GENERIC_LINE, () => ({ env: { OPENFLEET_HOME: homeWith(), OPENFLEET_PORT: 'abc' } })],
+    ['short admin token', GENERIC_LINE, () => { const home = homeWith(); writeFileSync(join(home, 'admin.token'), 'short'); return { env: { OPENFLEET_HOME: home } }; }],
+    ['home is a file', GENERIC_LINE, () => { const home = homeWith(); const file = join(home, 'afile'); writeFileSync(file, 'x'); return { env: { OPENFLEET_HOME: join(file, 'sub') } }; }],
+    ['database file that cannot be opened', GENERIC_LINE, () => { const home = homeWith(); mkdirSync(join(home, 'openfleet.db')); return { env: { OPENFLEET_HOME: home } }; }],
+    ['home dir not writable', GENERIC_LINE, () => { const parent = homeWith(); chmodSync(parent, 0o500); return { env: { OPENFLEET_HOME: join(parent, 'home') } }; }],
   ];
 
-  it.each(cases)('%s → exit 1, exactly one stderr line, no stack, no raw zod, port free', async (_name, build) => {
+  it.each(cases)('%s → exit 1, exactly one line, no stack, no raw zod, port free', async (_name, expectedLine, build) => {
     const { env } = build();
     const port = await freePort();
     const daemon = spawnDaemon({ OPENFLEET_PORT: String(port), ...env });
@@ -90,13 +93,32 @@ describe('probe: refused boots', () => {
     const lines = daemon.stderr().trimEnd().split('\n');
     expect(code).toBe(1);
     expect(lines, daemon.stderr()).toHaveLength(1);
-    expect(lines[0]).toMatch(/^openfleet: refusing to boot \(config: .*config\.json\): /);
+    expect(lines[0]).toMatch(expectedLine);
     expect(daemon.stderr()).not.toMatch(/\n\s+at |Error:|"code"|"origin"|daemon continuing/);
     expect(daemon.stdout()).not.toContain('listening');
     expect(await canConnect(port)).toBe(true);
   }, 40_000);
 
-  it('port already in use → exit 1, one stderr line, other listener untouched', async () => {
+  it('a database file that cannot be opened → names its path and asks to check its permissions', async () => {
+    const home = homeWith();
+    mkdirSync(join(home, 'openfleet.db'));
+    const daemon = spawnDaemon({ OPENFLEET_HOME: home, OPENFLEET_PORT: String(await freePort()) });
+
+    await daemon.exited;
+
+    expect(daemon.stderr()).toContain(`(check the permissions of ${join(home, 'openfleet.db')})`);
+  }, 40_000);
+
+  it('an OPENFLEET_PORT that is not a number → says how to set it, without blaming config.json', async () => {
+    const daemon = spawnDaemon({ OPENFLEET_HOME: homeWith(), OPENFLEET_PORT: 'abc' });
+
+    await daemon.exited;
+
+    expect(daemon.stderr()).toContain('set OPENFLEET_PORT to a port between 0 and 65535');
+    expect(daemon.stderr()).not.toContain('config');
+  }, 40_000);
+
+  it('port already in use → exit 1, one stderr line naming the port and how to recover, other listener untouched', async () => {
     const blocker = createServer();
     servers.push(blocker);
     await new Promise<void>((resolve) => blocker.listen(0, '127.0.0.1', resolve));
@@ -106,12 +128,11 @@ describe('probe: refused boots', () => {
     const { code } = await daemon.exited;
 
     expect(code).toBe(1);
-    expect(daemon.stderr().trimEnd().split('\n')).toHaveLength(1);
-    expect(daemon.stderr()).toContain(`port ${port} is already in use`);
+    expect(daemon.stderr()).toBe(`openfleet: refusing to boot: port ${port} is already in use (stop the other process or set OPENFLEET_PORT)\n`);
     expect(blocker.listening).toBe(true);
   }, 40_000);
 
-  it('a failure after the server listens (a stale launch directory that cannot be swept) → exit 1, one stderr line, port free', async () => {
+  it('a failure after the server listens (a stale launch directory that cannot be swept) → exit 1, one line naming the path to check, port free', async () => {
     const home = homeWith();
     const lockedDirectory = join(home, 'sessions', 'stale-session', 'locked');
     mkdirSync(lockedDirectory, { recursive: true });
@@ -126,7 +147,9 @@ describe('probe: refused boots', () => {
     const lines = daemon.stderr().trimEnd().split('\n');
     expect(code).toBe(1);
     expect(lines, daemon.stderr()).toHaveLength(1);
-    expect(lines[0]).toMatch(/^openfleet: refusing to boot \(config: .*config\.json\): /);
+    expect(lines[0]).toMatch(/^openfleet: refusing to boot: /);
+    expect(lines[0]).toContain('check the permissions of');
+    expect(lines[0]).not.toContain('config');
     expect(daemon.stdout()).toContain('listening');
     expect(await canConnect(port)).toBe(true);
   }, 40_000);

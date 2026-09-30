@@ -8,6 +8,7 @@ import type { ModelTable } from '../models.js';
 import type { DocsFolderService } from '../notes/docsFolderService.js';
 import type { NoteRepository } from '../notes/noteRepository.js';
 import type { NoteService } from '../notes/noteService.js';
+import { PortInUseError } from './portInUseError.js';
 import type { ProjectRepository } from '../projects/projectRepository.js';
 import type { SessionService } from '../sessions/sessionService.js';
 import type { DataStoreRepository } from '../stores/dataStoreRepository.js';
@@ -126,7 +127,7 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; rout
   await new Promise<void>((resolve, reject) => {
     const rejectListenFailure = (error: NodeJS.ErrnoException) => {
       const isPortTaken = error.code === 'EADDRINUSE';
-      reject(isPortTaken ? new Error(`port ${deps.port} is already in use`) : error);
+      reject(isPortTaken ? new PortInUseError(deps.port) : error);
     };
     server.once('error', rejectListenFailure);
     server.listen(deps.port, deps.host, () => { server.off('error', rejectListenFailure); resolve(); });

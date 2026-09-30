@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import { startServer } from './api/server.js';
 import type { Config } from './config.js';
+import { readingConfigFile } from './configFileError.js';
 import { openDatabase } from './db/database.js';
 import { EventBus } from './events/eventBus.js';
 import { ApprovalService } from './governance/approvalService.js';
@@ -46,8 +47,8 @@ export async function startDaemon(config: Config): Promise<Daemon> {
   // process that would have decided it is gone with the old daemon.
   approvals.expireAllPending('daemon restarted');
   const modelConfigPath = join(config.home, 'config.json');
-  const modelTable = loadModelTable(modelConfigPath);
-  const { workingState: workingStateSettings, managers: managerSettings } = loadDaemonSettings(modelConfigPath);
+  const modelTable = readingConfigFile(() => loadModelTable(modelConfigPath));
+  const { workingState: workingStateSettings, managers: managerSettings } = readingConfigFile(() => loadDaemonSettings(modelConfigPath));
   const managerRepository = new ManagerRepository(db);
   const pulseScheduler = new PulseScheduler({ managers: managerRepository, sessions, bus });
   const managers = new ManagerService({ managers: managerRepository, sessions, bus, scheduler: pulseScheduler, heartbeatDefaultSeconds: managerSettings.heartbeatDefaultSeconds });

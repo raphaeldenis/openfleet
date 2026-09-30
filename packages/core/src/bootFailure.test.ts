@@ -7,6 +7,8 @@ import { describe, expect, it } from 'vitest';
 import { loadModelTable } from './models.js';
 import { loadDaemonSettings } from './workingState/workingStateSettings.js';
 import { refuseBootOnFailure } from './bootFailure.js';
+import { ConfigFileError, readingConfigFile } from './configFileError.js';
+import { PortInUseError } from './api/portInUseError.js';
 
 const CORE_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -44,11 +46,45 @@ describe('refuseBootOnFailure', () => {
     return { written, exitCodes };
   };
 
-  it('prints the message and the config path on one line and exits 1', async () => {
-    const { written, exitCodes } = await runFailingBoot(new Error('admin token is too short'));
+  it('prints the config path and the reason on one line and exits 1 when the config file is the cause', async () => {
+    const { written, exitCodes } = await runFailingBoot(new ConfigFileError(new Error('workingState.maxAgeMinutes: too small')));
 
     expect(exitCodes).toEqual([1]);
-    expect(written.join('')).toBe('openfleet: refusing to boot (config: /home/of/config.json): admin token is too short\n');
+    expect(written.join('')).toBe('openfleet: refusing to boot (config: /home/of/config.json): workingState.maxAgeMinutes: too small\n');
+  });
+
+  it('names only the reason, never the config path, when the cause is not the config file', async () => {
+    const { written } = await runFailingBoot(new Error('admin token is too short'));
+
+    expect(written.join('')).toBe('openfleet: refusing to boot: admin token is too short\n');
+  });
+
+  it('tells how to recover when the port is in use', async () => {
+    const { written } = await runFailingBoot(new PortInUseError(7331));
+
+    expect(written.join('')).toBe('openfleet: refusing to boot: port 7331 is already in use (stop the other process or set OPENFLEET_PORT)\n');
+  });
+
+  it('tells how to recover when OPENFLEET_PORT is not a valid port', async () => {
+    const badPort = Object.assign(new RangeError('options.port should be >= 0 and < 65536. Received type number (NaN).'), { code: 'ERR_SOCKET_BAD_PORT' });
+
+    const { written } = await runFailingBoot(badPort);
+
+    expect(written.join('')).toContain('(set OPENFLEET_PORT to a port between 0 and 65535)');
+  });
+
+  it.each(['EACCES', 'EPERM', 'EROFS'])('names the unreadable path and asks to check its permissions on %s', async (code) => {
+    const denied = Object.assign(new Error(`${code}: denied, rmdir '/home/of/sessions/x'`), { code, path: '/home/of/sessions/x' });
+
+    const { written } = await runFailingBoot(denied);
+
+    expect(written.join('')).toBe(`openfleet: refusing to boot: ${code}: denied, rmdir '/home/of/sessions/x' (check the permissions of /home/of/sessions/x)\n`);
+  });
+
+  it('gives no hint for a permission error that carries no path', async () => {
+    const { written } = await runFailingBoot(Object.assign(new Error('listen EACCES'), { code: 'EACCES' }));
+
+    expect(written.join('')).toBe('openfleet: refusing to boot: listen EACCES\n');
   });
 
   it('keeps only the first line of a multi-line reason and never prints a stack', async () => {
@@ -68,26 +104,25 @@ describe('refuseBootOnFailure', () => {
   ])('prints a sensible reason when the boot throws %s', async (_name, thrown, expectedReason) => {
     const { written } = await runFailingBoot(thrown);
 
-    expect(written.join('')).toBe(`openfleet: refusing to boot (config: /home/of/config.json): ${expectedReason}\n`);
+    expect(written.join('')).toBe(`openfleet: refusing to boot: ${expectedReason}\n`);
   });
 
-  it('caps the reason at 200 characters', async () => {
-    const { written } = await runFailingBoot(new Error('x'.repeat(500)));
+  it('caps the reason at 200 characters and still appends the recovery hint', async () => {
+    const { written } = await runFailingBoot(Object.assign(new Error('x'.repeat(500)), { code: 'EACCES', path: '/h/p' }));
 
-    const reason = written.join('').split('): ')[1]!.trimEnd();
-    expect(reason).toHaveLength(200);
+    expect(written.join('')).toBe(`openfleet: refusing to boot: ${'x'.repeat(200)} (check the permissions of /h/p)\n`);
   });
 
   it('strips control characters so a reason cannot rewrite the terminal', async () => {
     const { written } = await runFailingBoot(new Error('bad\u001b[31m\u0007 value\r'));
 
-    expect(written.join('')).toBe('openfleet: refusing to boot (config: /home/of/config.json): bad[31m value\n');
+    expect(written.join('')).toBe('openfleet: refusing to boot: bad[31m value\n');
   });
 
   it('never shows a snippet of a broken config.json, only its path and the position', async () => {
     const home = mkdtempSync(join(tmpdir(), 'of-boot-secret-'));
     writeFileSync(join(home, 'config.json'), '{ "adminToken": FAKESECRET-123 }');
-    const bootError = (() => { try { loadModelTable(join(home, 'config.json')); } catch (error) { return error; } })();
+    const bootError = (() => { try { readingConfigFile(() => loadModelTable(join(home, 'config.json'))); } catch (error) { return error; } })();
 
     const { written } = await runFailingBoot(bootError);
 
