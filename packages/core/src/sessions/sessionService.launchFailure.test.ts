@@ -111,6 +111,7 @@ describe('reopening an ordinary closed row whose harness is missing', () => {
     const { db, service, events, sessionId, closedAtBeforeReopen } = await closedSession();
     db.prepare("UPDATE sessions SET harness = 'gone' WHERE id = ?").run(sessionId);
     vi.spyOn(console, 'error').mockImplementation(() => {});
+    await new Promise((resolve) => setTimeout(resolve, 5));
 
     expect(() => service.reopen(sessionId)).toThrow(SessionReopenError);
 
