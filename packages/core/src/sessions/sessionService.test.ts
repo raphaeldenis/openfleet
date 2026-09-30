@@ -8,7 +8,7 @@ import { FakeHandle, FakeHarness } from '../harness/fakeHarness.js';
 import type { Harness, HarnessHandle, HarnessLaunch } from '../harness/harness.js';
 import { EventBus } from '../events/eventBus.js';
 import { makeRepo } from '../git/testRepo.js';
-import { DaemonShuttingDownError, DEFAULT_CLOSE_ESCALATE_MS, DELIVERY_RETRY_MS, MAX_DELIVERY_RETRIES, MAX_PENDING_AGENT_MESSAGES_PER_SENDER, PARKED_RETRY_MS, RESUME_LAUNCH_FAILED_EXIT_CODE, RESUME_TIMEOUT_EXIT_CODE, SessionClosedError, SessionReopenError, SessionService, SUBMIT_KEYSTROKE_DELAY_MS, TRANSCRIPT_INTERRUPT_MAX_READ_BYTES, TRANSCRIPT_INTERRUPT_POLL_MS, TRANSCRIPT_INTERRUPT_TIMEOUT_MS, TURN_START_TIMEOUT_MS } from './sessionService.js';
+import { DaemonShuttingDownError, DEFAULT_CLOSE_ESCALATE_MS, DELIVERY_RETRY_MS, MAX_DELIVERY_RETRIES, MAX_PENDING_AGENT_MESSAGES_PER_SENDER, PARKED_RETRY_MS, RESUME_LAUNCH_FAILED_EXIT_CODE, RESUME_TIMEOUT_EXIT_CODE, SessionClosedError, SessionReopenError, SessionService, SESSION_END_EXIT_GRACE_MS, SUBMIT_KEYSTROKE_DELAY_MS, TRANSCRIPT_INTERRUPT_MAX_READ_BYTES, TRANSCRIPT_INTERRUPT_POLL_MS, TRANSCRIPT_INTERRUPT_TIMEOUT_MS, TURN_START_TIMEOUT_MS } from './sessionService.js';
 import { MessageQueue } from './messageQueue.js';
 import { SessionRepository } from './sessionRepository.js';
 import { PERMISSION_MODES, type ServerEvent } from '@openfleet/shared';
@@ -157,11 +157,14 @@ describe('SessionService', () => {
     expect(service.get(session.id)?.exitCode).toBe(1);
   });
 
-  it('kills the harness on SessionEnd even if the process has not exited on its own', async () => {
+  it('kills the harness once the SessionEnd grace ends if the process has not exited on its own', async () => {
+    vi.useFakeTimers();
     const { service, harness } = setup();
     const session = await service.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
     harness.handles[0]!.ignoresGracefulKill = true;
     service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionEnd' }));
+    expect(harness.handles[0]!.killed).toBe(false);
+    await vi.advanceTimersByTimeAsync(SESSION_END_EXIT_GRACE_MS);
     expect(harness.handles[0]!.killed).toBe(true);
   });
 
@@ -1762,7 +1765,7 @@ describe('SessionService submit-keystroke hostile cases', () => {
       // SessionEnd additionally starts an async close() with its own escalation timer, unrelated to the
       // interrupt watch; let that settle (it clears itself once the fake handle's kill() resolves) before
       // asserting only the interrupt watch's own timers are gone.
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(SESSION_END_EXIT_GRACE_MS);
 
       expect(vi.getTimerCount()).toBe(timersBeforeArm);
     });

@@ -33,7 +33,7 @@ beforeEach(async () => {
   bus.subscribe((event) => {
     if (event.type === 'message.delivered') deliveredByThisTestsBus.push(event.messageId);
   });
-  sessions = new SessionService({ db, bus, harnesses: [new FakeHarness()], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt', submitKeystrokeDelayMs: 0 });
+  sessions = new SessionService({ db, bus, harnesses: [new FakeHarness()], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt', submitKeystrokeDelayMs: 0, sessionEndExitGraceMs: 20 });
   const approvals = new ApprovalService({ db, bus });
   const managerRepo = new ManagerRepository(db);
   const pulseScheduler = new PulseScheduler({ managers: managerRepo, sessions, bus });
@@ -168,6 +168,7 @@ describe('a session that really ends', () => {
       await sendHook(id, { hook_event_name: 'SessionStart' });
 
       await sendHook(id, sessionEnd(reason));
+      await new Promise((resolve) => setTimeout(resolve, 60)); // the daemon gives a CLI that ended its session a short grace to exit before it kills it
 
       expect((await listed(id)).state).toBe('closed');
       expect((await sendMessage(id)).status).toBe(409);

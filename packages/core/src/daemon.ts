@@ -3,6 +3,7 @@ import { startServer } from './api/server.js';
 import type { Config } from './config.js';
 import { readingConfigFile } from './configFileError.js';
 import { openDatabase } from './db/database.js';
+import { describeError } from './errors/describeError.js';
 import { EventBus } from './events/eventBus.js';
 import { ApprovalService } from './governance/approvalService.js';
 import { ClaudeCliHarness } from './harness/claudeCli/claudeCliHarness.js';
@@ -48,7 +49,7 @@ export async function startDaemon(config: Config): Promise<Daemon> {
   const baseUrl = `http://${config.host}:${config.port}`;
   const harnesses = config.e2eEnabled ? [new ClaudeCliHarness(config.sessionsRoot), new FakeHarness()] : [new ClaudeCliHarness(config.sessionsRoot)];
   if (config.e2eEnabled) log('warn', 'e2e test surface enabled (OPENFLEET_E2E=1): fake harness and fake-output route are registered');
-  const sessions = new SessionService({ db, bus, harnesses, baseUrl, worktreesRoot: config.worktreesRoot });
+  const sessions = new SessionService({ db, bus, harnesses, baseUrl, worktreesRoot: config.worktreesRoot, describeError });
   const approvals = new ApprovalService({ db, bus });
   // A row still 'pending' from before this boot has no live waiter any more (AUD-07): the pre-restart
   // process that would have decided it is gone with the old daemon.

@@ -76,6 +76,10 @@ export const ERROR_CODES = {
 
   daemon_shutting_down: { kind: 'unavailable' },
   daemon_degraded: { kind: 'unavailable' },
+  // The daemon keeps retrying a queued message on its own; the caller only waits.
+  delivery_failed: { kind: 'unavailable', retry: 'later' },
+  // The process is gone: the same call cannot help, only reopening the session can. Not internal, so its actionable message reaches the client.
+  harness_exited: { kind: 'unavailable', retry: 'never' },
 
   internal_error: { kind: 'internal' },
   launch_failed: { kind: 'internal' },
