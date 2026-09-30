@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PERMISSION_MODES } from '@openfleet/shared';
 import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
+import { forceNdjsonLogging } from '../forceNdjsonLogging.js';
 import { FakeHarness } from '../harness/fakeHarness.js';
 import type { Harness, HarnessHandle, HarnessLaunch } from '../harness/harness.js';
 import { ApprovalService } from '../governance/approvalService.js';
@@ -516,6 +517,7 @@ describe('REST', () => {
     // reopen call the running server handles goes through a harness that throws on start.
     (sessions as unknown as { harnessFor: (id: string) => Harness }).harnessFor = () => new FailingHarness();
 
+    forceNdjsonLogging();
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const res = await api(`/api/sessions/${created.id}/reopen`, { method: 'POST' });
     expect(res.status).toBe(500);
@@ -533,6 +535,7 @@ describe('REST', () => {
     const listSpy = vi.spyOn(sessions, 'list').mockImplementation(() => {
       throw new Error('sqlite: database is locked');
     });
+    forceNdjsonLogging();
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     const res = await fetch(`${server.url}/api/sessions?secret=leak-me`, { headers: { authorization: 'Bearer admin', 'x-super-secret-header': 'do-not-log-me' } });
