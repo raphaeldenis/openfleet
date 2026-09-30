@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
+import { Script } from 'node:vm';
 import { z } from 'zod';
 
 export const DEFAULT_WORKING_STATE_MAX_BYTES = 6144;
@@ -11,9 +12,18 @@ const MAX_MAX_AGE_MINUTES = 1440;
 
 const MAX_HANDOVER_PATTERNS = 10;
 const MAX_HANDOVER_PATTERN_LENGTH = 200;
-// ponytail: catches a quantified group that holds a quantifier, like (a+)+. Overlapping alternations like (a|a)* pass; a
-// linear-time engine is the upgrade if operators start writing patterns of that shape.
-const NESTED_QUANTIFIER = /\((?:\\.|[^()\\])*(?:[+*]|\{\d+,\d*\})(?:\\.|[^()\\])*\)(?:[+*]|\{\d+,?\d*\})/;
+const UNBOUNDED_QUANTIFIER = String.raw`(?:[+*]|\{\d+,\})\??`;
+const SINGLE_ATOM = String.raw`(?:\\[pP]\{[^}]*\}|\\.|\[(?:\\.|[^\]\\])*\]|[^\\()|\[\]+*?{}])`;
+// ponytail: static heuristics on the source text, not a parser. Groups nested inside groups escape them; the boot self-test below is the net.
+const BACKTRACKING_RISKS = [
+  { reason: 'a quantifier inside a quantified group', pattern: /\((?:\\.|[^()\\])*(?:[+*]|\{\d+,\d*\})(?:\\.|[^()\\])*\)(?:[+*]|\{\d+,?\d*\})/ },
+  { reason: 'an alternation inside a group repeated without an upper bound', pattern: /\((?:\\.|[^()\\])*\|(?:\\.|[^()\\])*\)(?:[+*]|\{\d+,\})/ },
+  { reason: 'two unbounded quantifiers on adjacent atoms', pattern: new RegExp(`${SINGLE_ATOM}${UNBOUNDED_QUANTIFIER}${SINGLE_ATOM}${UNBOUNDED_QUANTIFIER}`) },
+];
+const SELF_TEST_TEXT_LENGTH = 2000;
+const SELF_TEST_BUDGET_MS = 50;
+const SELF_TEST_ADVERSARIAL_TEXTS = [`${'a'.repeat(SELF_TEST_TEXT_LENGTH)}b`, 'ab'.repeat(SELF_TEST_TEXT_LENGTH / 2), 'a'.repeat(SELF_TEST_TEXT_LENGTH)];
+const HANDOVER_PATTERN_FLAGS = 'gu';
 
 export const DEFAULT_HEARTBEAT_SECONDS = 1800;
 const MIN_HEARTBEAT_SECONDS = 1;
@@ -39,16 +49,30 @@ const ConfigFileSchema = z.object({
   }).strict().optional(),
 });
 
+// The vm timeout interrupts a runaway regex, so a catastrophic pattern refuses the boot instead of freezing it.
+function scansAdversarialTextsWithinBudget(source: string): boolean {
+  const scan = new Script('text.match(new RegExp(source, flags))');
+  try {
+    for (const text of SELF_TEST_ADVERSARIAL_TEXTS) scan.runInNewContext({ text, source, flags: HANDOVER_PATTERN_FLAGS }, { timeout: SELF_TEST_BUDGET_MS });
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ERR_SCRIPT_EXECUTION_TIMEOUT') return false;
+    throw error;
+  }
+}
+
 function compileHandoverPattern(source: string, position: number): RegExp {
   const label = `handoverPatterns[${position}] "${source}"`;
   let compiled: RegExp;
   try {
-    compiled = new RegExp(source, 'g');
+    compiled = new RegExp(source, HANDOVER_PATTERN_FLAGS);
   } catch (error) {
     throw new Error(`${label} is not a valid regular expression: ${(error as Error).message}`);
   }
-  if (NESTED_QUANTIFIER.test(source)) throw new Error(`${label} risks catastrophic backtracking (a quantifier inside a quantified group)`);
-  if (new RegExp(source).test('')) throw new Error(`${label} matches the empty string`);
+  const backtrackingRisk = BACKTRACKING_RISKS.find(({ pattern }) => pattern.test(source));
+  if (backtrackingRisk) throw new Error(`${label} risks catastrophic backtracking (${backtrackingRisk.reason})`);
+  if (new RegExp(source, 'u').test('')) throw new Error(`${label} matches the empty string`);
+  if (!scansAdversarialTextsWithinBudget(source)) throw new Error(`${label} takes more than ${SELF_TEST_BUDGET_MS} ms to scan a ${SELF_TEST_TEXT_LENGTH}-character adversarial text (catastrophic backtracking)`);
   return compiled;
 }
 

@@ -1,5 +1,6 @@
 import type { Handover, HandoverKind } from '@openfleet/shared';
 import type { DatabaseSync } from 'node:sqlite';
+import { inTransaction } from '../db/transaction.js';
 import { newId } from '../ids.js';
 import { AGENT_MESSAGE_BEGIN } from '../sessions/messageEnvelope.js';
 
@@ -9,11 +10,16 @@ const MAX_VALUE_LENGTH = 500;
 const MAX_LISTED_HANDOVERS = 50;
 // ponytail: a prompt is scanned up to this length. A link past it is not recorded; raise it if a real paste needs it.
 const MAX_SCANNED_PROMPT_LENGTH = 20_000;
+// ponytail: a custom pattern scans each line up to this length, so a pattern that slipped past the boot checks stays bounded.
+const MAX_CUSTOM_PATTERN_LINE_LENGTH = 2000;
+const DESIGN_LINK_PREFIX = 'https://claude.ai/design/';
 
 const TOKEN_CHAR = '[^\\s"\'<>()`\\[\\]]';
 const START_OF_TOKEN = `(?<!${TOKEN_CHAR})`;
+// `.md` ends the token, optionally followed by sentence punctuation: specs/a.mdx and plans/b.md5 do not match.
+const END_OF_MD_EXTENSION = `(?=[.,;:!?}]*(?!${TOKEN_CHAR}))`;
 const DESIGN_LINK_PATTERN = new RegExp(`https://claude\\.ai/design/${TOKEN_CHAR}+`, 'g');
-const DOC_PATH_PATTERN = new RegExp(`${START_OF_TOKEN}(?:${TOKEN_CHAR}{0,300}/)?(?:specs|plans)/${TOKEN_CHAR}{0,300}\\.md`, 'g');
+const DOC_PATH_PATTERN = new RegExp(`${START_OF_TOKEN}(?:${TOKEN_CHAR}{0,300}/)?(?:specs|plans)/${TOKEN_CHAR}{0,300}\\.md${END_OF_MD_EXTENSION}`, 'g');
 export const DEFAULT_HANDOVER_PATTERNS: RegExp[] = [DESIGN_LINK_PATTERN, DOC_PATH_PATTERN];
 
 const TRAILING_PUNCTUATION = /[.,;:!?)\]}>'"`]+$/;
@@ -21,27 +27,34 @@ const LINK_SCHEME = /^https?:\/\//;
 
 export interface HandoverLedgerDeps { db: DatabaseSync; clock: () => string; patterns?: RegExp[] }
 
+interface ScanWindow { text: string; offset: number; endsMidToken: boolean }
+interface FoundValue { index: number; value: string }
+
 interface HandoverRow { id: string; session_id: string; kind: HandoverKind; value: string; created_at: string }
 
 /** Records the links and spec paths a human hands to a session, once per session and value. */
 export class HandoverLedger {
   private readonly patterns: RegExp[];
+  private readonly hasCustomPatterns: boolean;
 
   constructor(private readonly deps: HandoverLedgerDeps) {
     this.patterns = deps.patterns ?? DEFAULT_HANDOVER_PATTERNS;
+    this.hasCustomPatterns = deps.patterns !== undefined;
   }
 
   /** Records the values new to the session found in a human prompt and returns them; agent envelopes and pulses record nothing. */
   record({ sessionId, prompt }: { sessionId: string; prompt: string | undefined }): Handover[] {
     if (prompt === undefined || !isTypedByHuman(prompt)) return [];
 
-    const recorded: Handover[] = [];
-    for (const value of this.valuesFoundIn(prompt)) {
-      if (recorded.length === MAX_NEW_HANDOVERS_PER_PROMPT) break;
-      const handover = this.insertIfNew({ sessionId, value });
-      if (handover) recorded.push(handover);
-    }
-    return recorded;
+    return inTransaction(this.deps.db, 'record_handovers', () => {
+      const recorded: Handover[] = [];
+      for (const value of this.valuesFoundIn(prompt)) {
+        if (recorded.length === MAX_NEW_HANDOVERS_PER_PROMPT) break;
+        const handover = this.insertIfNew({ sessionId, value });
+        if (handover) recorded.push(handover);
+      }
+      return recorded;
+    });
   }
 
   /** Returns the session's handovers, newest first, 50 at most. */
@@ -52,11 +65,24 @@ export class HandoverLedger {
   }
 
   private valuesFoundIn(prompt: string): string[] {
-    const scanned = prompt.slice(0, MAX_SCANNED_PROMPT_LENGTH);
-    const matches = this.patterns.flatMap((pattern) => [...scanned.matchAll(pattern)].map((match) => ({ index: match.index, value: match[0].replace(TRAILING_PUNCTUATION, '') })));
+    const matches = this.scanWindowsOf(prompt).flatMap((window) => this.patterns.flatMap((pattern) => findValuesIn(window, pattern)));
     const valuesInPromptOrder = matches.sort((a, b) => a.index - b.index).map((match) => match.value);
-    const isStorable = (value: string) => value !== '' && value.length <= MAX_VALUE_LENGTH;
+    const isStorable = (value: string) => value !== '' && value !== DESIGN_LINK_PREFIX && value.length <= MAX_VALUE_LENGTH;
     return valuesInPromptOrder.filter(isStorable);
+  }
+
+  private scanWindowsOf(prompt: string): ScanWindow[] {
+    const scannedLength = Math.min(prompt.length, MAX_SCANNED_PROMPT_LENGTH);
+    if (!this.hasCustomPatterns) return [scanWindow({ prompt, start: 0, end: scannedLength })];
+
+    const windows: ScanWindow[] = [];
+    let lineStart = 0;
+    for (const line of prompt.slice(0, scannedLength).split('\n')) {
+      const scannedLineLength = Math.min(line.length, MAX_CUSTOM_PATTERN_LINE_LENGTH);
+      windows.push(scanWindow({ prompt, start: lineStart, end: lineStart + scannedLineLength }));
+      lineStart += line.length + 1;
+    }
+    return windows;
   }
 
   private insertIfNew({ sessionId, value }: { sessionId: string; value: string }): Handover | undefined {
@@ -69,7 +95,23 @@ export class HandoverLedger {
 
 /** Builds the line that reminds the agent to open its backlog row for each new handover. */
 export function handoverReminder(handovers: Handover[]): string {
-  return handovers.map(({ value }) => `Handover recorded: ${value}. Open or update its backlog row in this turn.`).join('\n');
+  return handovers.map(({ value }) => `Handover recorded: ${oneLine(value)}. Open or update its backlog row in this turn.`).join('\n');
+}
+
+const LINE_BREAKING_OR_INVISIBLE_CHARACTERS = /[\s\p{Cc}\p{Cf}\u0085\u2028\u2029]+/gu;
+const oneLine = (value: string) => value.replace(LINE_BREAKING_OR_INVISIBLE_CHARACTERS, ' ').trim();
+
+function scanWindow({ prompt, start, end }: { prompt: string; start: number; end: number }): ScanWindow {
+  const nextCharacter = prompt[end];
+  const endsMidToken = nextCharacter !== undefined && !/\s/.test(nextCharacter);
+  return { text: prompt.slice(start, end), offset: start, endsMidToken };
+}
+
+function findValuesIn(window: ScanWindow, pattern: RegExp): FoundValue[] {
+  const touchesCutEnd = (match: RegExpMatchArray) => window.endsMidToken && match.index! + match[0].length === window.text.length;
+  return [...window.text.matchAll(pattern)]
+    .filter((match) => !touchesCutEnd(match))
+    .map((match) => ({ index: window.offset + match.index!, value: match[0].replace(TRAILING_PUNCTUATION, '') }));
 }
 
 function isTypedByHuman(prompt: string): boolean {

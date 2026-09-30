@@ -21,7 +21,7 @@ describe('the operator sets the handover patterns in config.json', () => {
   it('boots with valid patterns, compiled once into global regular expressions, and with an empty list', () => {
     const settings = loadDaemonSettings(configWithPatterns(['TICKET-\\d+', 'https://figma\\.com/file/[^\\s]+'])).workingState;
 
-    expect(settings.handoverPatterns).toEqual([/TICKET-\d+/g, /https:\/\/figma\.com\/file\/[^\s]+/g]);
+    expect(settings.handoverPatterns).toEqual([/TICKET-\d+/gu, /https:\/\/figma\.com\/file\/[^\s]+/gu]);
     expect(loadDaemonSettings(configWithPatterns([])).workingState.handoverPatterns).toEqual([]);
   });
 
