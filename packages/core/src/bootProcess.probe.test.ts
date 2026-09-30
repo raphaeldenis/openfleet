@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:net';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { refuseBootOnFailure } from './bootFailure.js';
 import { createTempDirTracker } from './tempDirTracker.js';
@@ -75,6 +75,42 @@ describe('probe: valid boot then signal', () => {
 
     expect(code).toBe(0);
     expect(daemon.stdout()).toContain(`http://127.0.0.1:${port}`);
+    expect(daemon.stderr()).toBe('');
+    expect(await canConnect(port)).toBe(true);
+  }, 40_000);
+});
+
+describe('probe: signal while the sessions are still resuming', () => {
+  const SESSION_SERVICE = pathToFileURL(join(CORE_ROOT, 'src', 'sessions', 'sessionService.ts')).href;
+  const RESUME_DURATION_MS = 1500;
+  const slowResumePreload = () => {
+    const preload = join(tempDirs.make('of-preload-'), 'slowResume.mjs');
+    writeFileSync(preload, `
+      import { SessionService } from ${JSON.stringify(SESSION_SERVICE)};
+      const { resumeAll, closeAll } = SessionService.prototype;
+      SessionService.prototype.resumeAll = async function (...args) {
+        console.log('resumeAll started');
+        await new Promise((resolve) => setTimeout(resolve, ${RESUME_DURATION_MS}));
+        return resumeAll.apply(this, args);
+      };
+      SessionService.prototype.closeAll = function (...args) {
+        console.log('closeAll called');
+        return closeAll.apply(this, args);
+      };
+    `);
+    return preload;
+  };
+
+  it.each(['SIGTERM', 'SIGINT'] as const)('%s during the resume exits 0 after closing the sessions and freeing the port', async (signal) => {
+    const { daemon, port } = await bootOnFreePort({ OPENFLEET_HOME: homeWith() }, slowResumePreload());
+    await waitFor(() => daemon.stdout().includes('resumeAll started'), 'the resume to start');
+
+    daemon.child.kill(signal);
+    const { code, signal: killedBy } = await daemon.exited;
+
+    expect(killedBy).toBeNull();
+    expect(code).toBe(0);
+    expect(daemon.stdout()).toContain('closeAll called');
     expect(daemon.stderr()).toBe('');
     expect(await canConnect(port)).toBe(true);
   }, 40_000);
