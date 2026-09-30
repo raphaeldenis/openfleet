@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { MAX_QUERY_CHARS, MAX_QUERY_TERMS, MAX_SEARCH_RESULTS, buildFtsQuery } from '../notes/ftsQuery.js';
 import { FileBackedNoteError } from '../notes/noteService.js';
 import { createNoteToolSupport, type NoteToolDeps } from './noteToolSupport.js';
-import { fail, guarded } from './toolResults.js';
+import { guardedFor, refuse } from './toolResults.js';
 
 const MAX_LIST_RESULTS = 200;
 
@@ -12,6 +12,7 @@ export type RegisterNoteToolsDeps = NoteToolDeps;
 
 export function registerNoteTools(server: McpServer, deps: RegisterNoteToolsDeps): void {
   const { notes, noteRepo } = deps;
+  const guarded = guardedFor(deps.caller);
   const { author, requireProject, requireOwnNote, writeBody, noteSummary, noteView, noteMentionBlocksView } =createNoteToolSupport(deps);
 
   server.registerTool('create_note', {
@@ -19,7 +20,7 @@ export function registerNoteTools(server: McpServer, deps: RegisterNoteToolsDeps
     inputSchema: { title: TitleSchema, body_md: z.string(), folder: NoteFolderSchema.optional(), shared: z.boolean().optional() },
   }, async ({ title, body_md, folder, shared }) => {
     const scope = requireProject();
-    if (!scope) return fail('this session has no project');
+    if (!scope) return refuse('project_not_found', 'this session has no project');
     return guarded(() => noteSummary(notes.create({ ...scope, title, bodyMd: body_md, folder, shared, author: author() })));
   });
 
@@ -29,7 +30,7 @@ export function registerNoteTools(server: McpServer, deps: RegisterNoteToolsDeps
     inputSchema: { note: z.string().min(1), mentions_only: z.boolean().optional() },
   }, async ({ note, mentions_only }) => {
     const scope = requireProject();
-    if (!scope) return fail('this session has no project');
+    if (!scope) return refuse('project_not_found', 'this session has no project');
     return guarded(() => {
       requireOwnNote(scope.projectId, note);
       const viewerScope = { viewerProjectId: scope.projectId };
@@ -47,7 +48,7 @@ export function registerNoteTools(server: McpServer, deps: RegisterNoteToolsDeps
     inputSchema: { note: z.string().min(1), body_md: z.string(), expected_rev: z.number().int() },
   }, async ({ note, body_md, expected_rev }) => {
     const scope = requireProject();
-    if (!scope) return fail('this session has no project');
+    if (!scope) return refuse('project_not_found', 'this session has no project');
     return guarded(() => noteSummary(writeBody(requireOwnNote(scope.projectId, note), body_md, expected_rev)));
   });
 
@@ -56,7 +57,7 @@ export function registerNoteTools(server: McpServer, deps: RegisterNoteToolsDeps
     inputSchema: { note: z.string().min(1) },
   }, async ({ note }) => {
     const scope = requireProject();
-    if (!scope) return fail('this session has no project');
+    if (!scope) return refuse('project_not_found', 'this session has no project');
     return guarded(() => {
       const current = requireOwnNote(scope.projectId, note);
       if (current.filePath) throw new FileBackedNoteError(note);
@@ -70,7 +71,7 @@ export function registerNoteTools(server: McpServer, deps: RegisterNoteToolsDeps
     inputSchema: { note: z.string().min(1), folder: NoteFolderSchema.nullable() },
   }, async ({ note, folder }) => {
     const scope = requireProject();
-    if (!scope) return fail('this session has no project');
+    if (!scope) return refuse('project_not_found', 'this session has no project');
     return guarded(() => {
       requireOwnNote(scope.projectId, note);
       return noteSummary(notes.move(note, folder));
@@ -82,7 +83,7 @@ export function registerNoteTools(server: McpServer, deps: RegisterNoteToolsDeps
     inputSchema: { folder: NoteFolderSchema.optional() },
   }, async ({ folder }) => {
     const scope = requireProject();
-    if (!scope) return fail('this session has no project');
+    if (!scope) return refuse('project_not_found', 'this session has no project');
     return guarded(() => {
       const all = noteRepo.list(scope.projectId).filter((n) => folder === undefined || n.folder === folder);
       const shown = all.slice(0, MAX_LIST_RESULTS).map(noteSummary);
@@ -95,10 +96,10 @@ export function registerNoteTools(server: McpServer, deps: RegisterNoteToolsDeps
     inputSchema: { query: z.string() },
   }, async ({ query }) => {
     const scope = requireProject();
-    if (!scope) return fail('this session has no project');
-    if (query.length > MAX_QUERY_CHARS) return fail(`query too long (max ${MAX_QUERY_CHARS} characters)`);
+    if (!scope) return refuse('project_not_found', 'this session has no project');
+    if (query.length > MAX_QUERY_CHARS) return refuse('query_too_long', `query too long (max ${MAX_QUERY_CHARS} characters)`);
     const ftsQuery = buildFtsQuery(query);
-    if (ftsQuery.outcome === 'too_many_terms') return fail(`too many terms in query (max ${MAX_QUERY_TERMS})`);
+    if (ftsQuery.outcome === 'too_many_terms') return refuse('query_too_long', `too many terms in query (max ${MAX_QUERY_TERMS})`);
     return guarded(() => {
       if (ftsQuery.outcome === 'blank') return { results: [], count: 0 };
       const hits = noteRepo.search(ftsQuery.match, { projectId: scope.projectId, limit: MAX_SEARCH_RESULTS });

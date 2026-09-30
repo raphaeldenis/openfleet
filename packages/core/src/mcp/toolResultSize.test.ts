@@ -311,7 +311,7 @@ describe('MCP tool results are compact', () => {
       const stale = await call('update_note', { note: created.id, body_md: '# v3', expected_rev: 1 });
 
       expect(stale.isError).toBe(true);
-      expect(rawText(stale)).toBe('409 stale_revision, current rev: 2');
+      expect(rawText(stale)).toMatch(/^error stale_revision: .*current rev: 2\. .* \(retry: after_refresh\)$/);
     });
 
     it('agent reads a note without a duplicated expandedBody when no mention was expanded', async () => {
@@ -613,18 +613,18 @@ describe('MCP tool results are compact', () => {
         const badWhere = await call('query_data_store', { store: storeId, where: [{ columnId: 'Title', op: 'eq', value: 'x' }] });
 
         expect(columnar.isError).toBe(true);
-        expect(rawText(columnar)).toBe('Unknown columns: no such column, Nope');
+        expect(rawText(columnar)).toBe('error invalid_body: Unknown columns: no such column, Nope (retry: never)');
         expect(asObjects.isError).toBe(true);
-        expect(rawText(asObjects)).toBe('Unknown columns: no such column');
-        expect(rawText(badWhere)).toBe('Unknown column ids: Title');
+        expect(rawText(asObjects)).toBe('error invalid_body: Unknown columns: no such column (retry: never)');
+        expect(rawText(badWhere)).toBe('error invalid_body: Unknown column ids: Title (retry: never)');
       });
 
       it('agent keeps the existing store error when the store does not exist, with or without the new arguments', async () => {
         const plain = await call('query_data_store', { store: 'nope' });
         const columnar = await columnarQuery({ store: 'nope', columns: ['title'], include_updated_at: false });
 
-        expect(rawText(plain)).toBe('data store not found');
-        expect(rawText(columnar)).toBe('data store not found');
+        expect(rawText(plain)).toBe('error store_not_found: data store not found (retry: never)');
+        expect(rawText(columnar)).toBe('error store_not_found: data store not found (retry: never)');
       });
 
       it('agent drops updatedAt from every row in both formats with include_updated_at false and keeps it otherwise', async () => {

@@ -3,7 +3,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { RowNotFoundError, type DataStoreRepository } from '../stores/dataStoreRepository.js';
 import type { DataStoreService } from '../stores/dataStoreService.js';
-import { fail, guarded, truncateToByteBudget } from './toolResults.js';
+import { guardedFor, refuse, truncateToByteBudget } from './toolResults.js';
 import { rowChangeView, savedView } from './toolViews.js';
 
 // Rule 3 of the plan's Task 16: a page an agent can actually read, never a whole trail dump.
@@ -19,6 +19,7 @@ export interface RegisterTableViewToolsDeps {
 
 export function registerTableViewTools(server: McpServer, deps: RegisterTableViewToolsDeps): void {
   const { stores, storeRepo, caller } = deps;
+  const guarded = guardedFor(caller);
 
   function requireProject(): { projectId: string } | undefined {
     return caller.projectId ? { projectId: caller.projectId } : undefined;
@@ -29,7 +30,7 @@ export function registerTableViewTools(server: McpServer, deps: RegisterTableVie
     inputSchema: { store: z.string().min(1), display_name: z.string().min(1), view_type: ViewTypeSchema, config: DsViewConfigSchema.optional() },
   }, async ({ store, display_name, view_type, config }) => {
     const scope = requireProject();
-    if (!scope) return fail('this session has no project');
+    if (!scope) return refuse('project_not_found', 'this session has no project');
     return guarded(() => savedView(stores.createView(store, { ...scope, displayName: display_name, viewType: view_type, config })));
   });
 
@@ -38,7 +39,7 @@ export function registerTableViewTools(server: McpServer, deps: RegisterTableVie
     inputSchema: { store: z.string().min(1) },
   }, async ({ store }) => {
     const scope = requireProject();
-    if (!scope) return fail('this session has no project');
+    if (!scope) return refuse('project_not_found', 'this session has no project');
     return guarded(() => stores.listViews(store, scope).map(savedView));
   });
 
@@ -47,7 +48,7 @@ export function registerTableViewTools(server: McpServer, deps: RegisterTableVie
     inputSchema: { view: z.string().min(1), config: DsViewConfigSchema },
   }, async ({ view, config }) => {
     const scope = requireProject();
-    if (!scope) return fail('this session has no project');
+    if (!scope) return refuse('project_not_found', 'this session has no project');
     return guarded(() => savedView(stores.updateView(view, { ...scope, config })));
   });
 
@@ -56,7 +57,7 @@ export function registerTableViewTools(server: McpServer, deps: RegisterTableVie
     inputSchema: { view: z.string().min(1) },
   }, async ({ view }) => {
     const scope = requireProject();
-    if (!scope) return fail('this session has no project');
+    if (!scope) return refuse('project_not_found', 'this session has no project');
     return guarded(() => {
       stores.deleteView(view, scope);
       return { deleted: view };
@@ -68,7 +69,7 @@ export function registerTableViewTools(server: McpServer, deps: RegisterTableVie
     inputSchema: { row_id: z.string().min(1), limit: z.number().int().min(1).max(MAX_HISTORY_LIMIT).optional() },
   }, async ({ row_id, limit }) => {
     const scope = requireProject();
-    if (!scope) return fail('this session has no project');
+    if (!scope) return refuse('project_not_found', 'this session has no project');
     return guarded(() => {
       const history = storeRepo.rowHistory(row_id, { projectId: scope.projectId, limit: limit ?? DEFAULT_HISTORY_LIMIT });
       if (history.length === 0) throw new RowNotFoundError(row_id);
