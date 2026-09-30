@@ -142,8 +142,8 @@ const SECRET_KEY = /token|secret|authorization|password/i;
 const MASK = '***';
 const escapedForRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-/** A percent-escape however many times it is encoded (%2F, %252F, …). */
-const ESCAPE_PREFIX = '%(?:25)*';
+/** A percent-escape encoded up to five times (%2F, %252F, …); the bound keeps every scan linear. */
+const ESCAPE_PREFIX = '%(?:25){0,4}';
 const hexOf = (character: string) => character.charCodeAt(0).toString(16).padStart(2, '0');
 
 /** Matches `word` with any of its characters written as a percent-escape. */
@@ -157,7 +157,9 @@ const BEARER_SEPARATOR = `(?:[\\s:=]|${ESCAPE_PREFIX}(?:20|3A|3D|09))+`;
 // A token segment keeps every escape, valid or not: masking the whole segment is what hides a token spelled with escapes.
 const BEARER_TOKEN = new RegExp(`${spelledWithEscapes('Bearer')}${BEARER_SEPARATOR}[A-Za-z0-9._~+/=%-]+`, 'gi');
 const HOOK_TOKEN = new RegExp(`${SLASH}${spelledWithEscapes('hooks')}${SLASH}[^/\\s"'\`&]+`, 'gi');
-const QUERY_PARAMETER = /([?&])([^=&\s"'`#]*)=([^&\s"'`]*)/g;
+const BASIC_CREDENTIAL = /\bBasic\s+(?=[A-Za-z0-9+/]*[0-9+/=])[A-Za-z0-9+/]{8,}={0,2}/g;
+// The key class excludes every character that can start a parameter: a run of them stays linear.
+const QUERY_PARAMETER = /(^|[?&;\s])([^=&?;\s"'`#]*)=([^&;\s"'`]*)/g;
 
 /** Decodes every well-formed percent-escape, up to three layers deep; a malformed one stays as it is and nothing throws. */
 function withEscapesDecoded(text: string): string {
@@ -170,8 +172,24 @@ function withEscapesDecoded(text: string): string {
   return decoded;
 }
 
-const maskingSecretParameters = (parameter: string, prefix: string, key: string): string =>
-  SECRET_KEY.test(withEscapesDecoded(key)) ? `${prefix}${key}=${MASK}` : parameter;
+/** A value that decodes to a URL or header carrying a secret (`next=%2Fx%3Ftoken%3D…`) hides that secret behind its escapes. */
+const hidesSecretBehindEscapes = (value: string): boolean => {
+  const decoded = withEscapesDecoded(value);
+  return decoded !== value && maskedSecrets(decoded) !== decoded;
+};
+
+const maskingSecretParameters = (parameter: string, prefix: string, key: string, value: string): string => {
+  const isSecretParameter = SECRET_KEY.test(withEscapesDecoded(key)) || hidesSecretBehindEscapes(value);
+  return isSecretParameter ? `${prefix}${key}=${MASK}` : parameter;
+};
+
+function maskedSecrets(text: string): string {
+  return text
+    .replace(BEARER_TOKEN, `Bearer ${MASK}`)
+    .replace(BASIC_CREDENTIAL, `Basic ${MASK}`)
+    .replace(QUERY_PARAMETER, maskingSecretParameters)
+    .replace(HOOK_TOKEN, `/hooks/${MASK}`);
+}
 
 const realpathOrSelf = (path: string): string => {
   try {
@@ -194,12 +212,19 @@ const homePrefixes = (): string[] => {
 
 const startsPathSegment = (home: string) => new RegExp(`(?<![\\w.~-])${escapedForRegExp(home)}(?![\\w-])(?!\\.\\w)`, 'g');
 
-function redactedAndShortened(text: string): string {
-  const withoutSecrets = text
-    .replace(BEARER_TOKEN, `Bearer ${MASK}`)
-    .replace(QUERY_PARAMETER, (parameter, prefix: string, key: string) => maskingSecretParameters(parameter, prefix, key))
-    .replace(HOOK_TOKEN, `/hooks/${MASK}`);
-  return homePrefixes().reduce((shortened, home) => shortened.replace(startsPathSegment(home), '~'), withoutSecrets);
+/** The home patterns are built once per described error, not once per string. */
+const homePatterns = (): RegExp[] => homePrefixes().map(startsPathSegment);
+
+function redactedAndShortened(text: string, homes: RegExp[]): string {
+  return homes.reduce((shortened, home) => shortened.replace(home, '~'), maskedSecrets(text));
+}
+
+// Redaction only ever sees the head of a text: what a cap cuts off is never scanned. The raw head is wider than the cap so that
+// removed characters (control characters, a masked token) do not leave the capped text short.
+const RAW_HEAD_FACTOR = 4;
+function headBeforeRedaction(text: string, maxChars: number): string {
+  const rawLimit = maxChars * RAW_HEAD_FACTOR;
+  return text.length > rawLimit ? text.slice(0, rawLimit) + ELLIPSIS : text;
 }
 
 // Control, format (bidi, zero-width, BOM) and line/paragraph separator characters: the desktop renders what is left.
@@ -216,12 +241,12 @@ function truncated(text: string, maxChars: number): string {
 
 const jsonBytes = (value: unknown): number => Buffer.byteLength(JSON.stringify(value));
 
-function cappedText(text: string, maxChars: number): string {
-  return truncated(redactedAndShortened(oneLine(text)), maxChars);
+function cappedText(text: string, maxChars: number, homes: RegExp[]): string {
+  return truncated(redactedAndShortened(oneLine(headBeforeRedaction(text, maxChars)), homes), maxChars);
 }
 
-function cappedDetailText(text: string): string {
-  const clean = redactedAndShortened(keepingLines(text));
+function cappedDetailText(text: string, homes: RegExp[]): string {
+  const clean = redactedAndShortened(keepingLines(headBeforeRedaction(text, MAX_DETAIL_BYTES)), homes);
   let chars = MAX_DETAIL_BYTES;
   let candidate = truncated(clean, chars);
   while (jsonBytes(candidate) > MAX_DETAIL_BYTES && chars > 1) {
@@ -231,7 +256,7 @@ function cappedDetailText(text: string): string {
   return candidate;
 }
 
-const cleanedText = (text: string) => redactedAndShortened(keepingLines(text));
+const cleanedText = (text: string, homes: RegExp[]) => redactedAndShortened(keepingLines(headBeforeRedaction(text, MAX_DETAIL_BYTES)), homes);
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -244,37 +269,58 @@ function unboxed(value: unknown): unknown {
   return value;
 }
 
-const withCleanedKeys = (value: Record<string, unknown>): Record<string, unknown> =>
-  Object.fromEntries(Object.entries(value).map(([key, entry]) => [cleanedText(key), entry]));
+/**
+ * A key that needs no cleaning keeps its name. A cleaned key that would land on a name already taken gets a ` (2)`, ` (3)`, … suffix,
+ * so cleaning never drops an entry.
+ */
+function withCleanedKeys(value: Record<string, unknown>, homes: RegExp[]): Record<string, unknown> {
+  const entries = Object.entries(value).map(([key, entry]) => ({ key, entry, cleanedKey: cleanedText(key, homes) }));
+  const takenKeys = new Set(entries.filter(({ key, cleanedKey }) => key === cleanedKey).map(({ key }) => key));
+  const nextSuffixByCleanedKey = new Map<string, number>();
+  const distinctKeyFor = (cleanedKey: string): string => {
+    let suffix = nextSuffixByCleanedKey.get(cleanedKey) ?? 1;
+    let candidate = suffix === 1 ? cleanedKey : `${cleanedKey} (${suffix})`;
+    while (takenKeys.has(candidate)) {
+      suffix += 1;
+      candidate = `${cleanedKey} (${suffix})`;
+    }
+    nextSuffixByCleanedKey.set(cleanedKey, suffix + 1);
+    takenKeys.add(candidate);
+    return candidate;
+  };
+  return Object.fromEntries(entries.map(({ key, entry, cleanedKey }) => [key === cleanedKey ? key : distinctKeyFor(cleanedKey), entry]));
+}
 
-const sanitizingKeysAndValues = (key: string, rawValue: unknown): unknown => {
+const sanitizerOfKeysAndValues = (homes: RegExp[]) => (key: string, rawValue: unknown): unknown => {
   if (SECRET_KEY.test(key)) return MASK;
   const value = unboxed(rawValue);
-  if (typeof value === 'string') return cleanedText(value);
-  return isPlainObject(value) ? withCleanedKeys(value) : value;
+  if (typeof value === 'string') return cleanedText(value, homes);
+  return isPlainObject(value) ? withCleanedKeys(value, homes) : value;
 };
 
-function parsedOrText(serialized: string): unknown {
+function parsedOrText(serialized: string, homes: RegExp[]): unknown {
   try {
     return JSON.parse(serialized);
   } catch {
-    return cappedDetailText(serialized);
+    return cappedDetailText(serialized, homes);
   }
 }
 
 /**
  * A string is cleaned and cut at 2 KiB serialized. A structure is serialized once, with every key and string value cleaned and every secret key masked,
- * then the serialized text is redacted a last time whatever its size: one that fits is answered as that parsed copy (as text when the redaction broke the JSON),
- * one that does not is cut to text; one that cannot be serialized is dropped.
+ * then the serialized text is redacted a last time: one that fits is answered as that parsed copy (as text when the redaction broke the JSON),
+ * one that does not is cut to text, and only its head is scanned; one that cannot be serialized is dropped.
  */
-function cappedDetail(detail: unknown): unknown {
+function cappedDetail(detail: unknown, homes: RegExp[]): unknown {
   if (detail === undefined) return undefined;
-  if (typeof detail === 'string') return cappedDetailText(detail);
+  if (typeof detail === 'string') return cappedDetailText(detail, homes);
   try {
-    const serialized = JSON.stringify(detail, sanitizingKeysAndValues);
+    const serialized = JSON.stringify(detail, sanitizerOfKeysAndValues(homes));
     if (serialized === undefined) return undefined;
-    const redacted = redactedAndShortened(serialized);
-    return Buffer.byteLength(redacted) <= MAX_DETAIL_BYTES ? parsedOrText(redacted) : cappedDetailText(redacted);
+    const exceedsCapWhateverTheRedaction = serialized.length > MAX_DETAIL_BYTES * RAW_HEAD_FACTOR;
+    if (exceedsCapWhateverTheRedaction) return cappedDetailText(serialized, homes);
+    const redacted = redactedAndShortened(serialized, homes);
+    return Buffer.byteLength(redacted) <= MAX_DETAIL_BYTES ? parsedOrText(redacted, homes) : cappedDetailText(redacted, homes);
   } catch {
     return undefined;
   }
@@ -319,13 +365,14 @@ function envelopeFor(entry: Entry, error: unknown, scope: ErrorScope): ErrorEnve
   if (id) logInternalError(error, { id, scope });
   const referenceSentence = id ? `Report ref ${id} if it happens again.` : undefined;
   const hint = [entry.hint, referenceSentence].filter(Boolean).join(' ') || undefined;
+  const homes = homePatterns();
   return {
     error: entry.code,
     kind,
     retry: retryOf(entry.code),
-    message: cappedText(entry.message, MAX_MESSAGE_CHARS),
-    ...(hint && { hint: cappedText(hint, MAX_HINT_CHARS) }),
-    ...(entry.detail !== undefined && { detail: cappedDetail(entry.detail) }),
+    message: cappedText(entry.message, MAX_MESSAGE_CHARS, homes),
+    ...(hint && { hint: cappedText(hint, MAX_HINT_CHARS, homes) }),
+    ...(entry.detail !== undefined && { detail: cappedDetail(entry.detail, homes) }),
     ...(id && { id }),
   };
 }

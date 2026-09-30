@@ -20,9 +20,10 @@ export class WorktreeError extends Error {
 }
 
 const SAFE_BRANCH = /^[A-Za-z0-9._][A-Za-z0-9._\/-]*$/;
+const MAX_BRANCH_NAME_CHARS = 255;
 
 export async function createWorktree(input: { repoPath: string; branchName: string; worktreesRoot: string }): Promise<{ path: string; branch: string }> {
-  const isValidBranch = SAFE_BRANCH.test(input.branchName) && !input.branchName.includes('..');
+  const isValidBranch = input.branchName.length <= MAX_BRANCH_NAME_CHARS && SAFE_BRANCH.test(input.branchName) && !input.branchName.includes('..');
   if (!isValidBranch) throw new WorktreeError('invalid_branch', `invalid branch name: ${input.branchName}`);
 
   const worktreePath = join(input.worktreesRoot, input.branchName.replaceAll('/', '-'));

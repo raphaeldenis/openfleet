@@ -422,9 +422,99 @@ describe('describeError: encoded credentials', () => {
   });
 });
 
+describe('describeError: credential shapes beyond Bearer and hooks', () => {
+  const carrying = (text: string) => new OpenFleetError('row_cap', text, { hint: text, detail: text });
+
+  it.each([
+    ['a Basic Authorization header', 'Authorization: Basic dXNlcjpwYXNzd29yZA==', 'dXNlcjpwYXNzd29yZA'],
+    ['a Basic credential alone', 'sent Basic dXNlcjpwYXNz9 to the proxy', 'dXNlcjpwYXNz9'],
+    ['a bare token assignment', 'failed with token=abcDEF123 today', 'abcDEF123'],
+    ['a bare access_token assignment', 'access_token=abcDEF123', 'abcDEF123'],
+    ['a bare password assignment after a semicolon', 'GET /x;password=abcDEF123', 'abcDEF123'],
+    ['a nested encoded URL holding a token', '/cb?next=%2Fx%3Ftoken%3DabcDEF123', 'abcDEF123'],
+    ['a doubly encoded nested URL holding a token', '/cb?next=%252Fx%253Ftoken%253DabcDEF123', 'abcDEF123'],
+  ])('masks %s in the message, the hint and the detail', (_label, text, leaked) => {
+    const envelope = describeError(carrying(text));
+
+    expect([envelope.message, envelope.hint, envelope.detail].map(String).filter((field) => field.includes(leaked))).toEqual([]);
+  });
+
+  it('keeps the other query parameters when it masks a nested encoded URL', () => {
+    expect(describeError(carrying('/cb?next=%2Fx%3Ftoken%3DabcDEF123&page=2')).message).toContain('page=2');
+  });
+
+  it('leaves the word Basic alone when no credential follows', () => {
+    expect(describeError(carrying('Basic setup failed')).message).toBe('Basic setup failed');
+  });
+});
+
+describe('describeError: large inputs stay fast', () => {
+  const LARGE_INPUT_CHARS = 1024 * 1024;
+  const MAX_MILLISECONDS = 500;
+  const repeated = (unit: string) => unit.repeat(Math.ceil(LARGE_INPUT_CHARS / unit.length));
+  const largeInputs: [string, string][] = [
+    ['question marks', '?'], ['percent signs', '%'], ['encoded layers', '%25'], ['slashes', '/'], ['Bearer words', 'Bearer '],
+    ['hook segments', '/hooks/'], ['letters', 'a'], ['ampersands', '&'], ['equal signs', '='], ['spaces', ' '], ['mixed shapes', '?a=%25/hooks/Bearer &Basic '],
+  ].map(([label, unit]) => [label!, repeated(unit!)]);
+  const fieldsCarrying: [string, (text: string) => OpenFleetError][] = [
+    ['message', (text) => new OpenFleetError('row_cap', text)],
+    ['hint', (text) => new OpenFleetError('row_cap', 'full.', { hint: text })],
+    ['string detail', (text) => new OpenFleetError('row_cap', 'full.', { detail: text })],
+    ['detail value', (text) => new OpenFleetError('row_cap', 'full.', { detail: { value: text } })],
+    ['detail key', (text) => new OpenFleetError('row_cap', 'full.', { detail: { [text]: 1 } })],
+  ];
+  const cases = largeInputs.flatMap(([inputLabel, text]) => fieldsCarrying.map(([fieldLabel, build]): [string, string, string, () => OpenFleetError] => [inputLabel, fieldLabel, `${inputLabel} in the ${fieldLabel}`, () => build(text)]));
+
+  it.each(cases)('describes 1 MiB of %s in the %s within the time bound', (_input, _field, _label, buildError) => {
+    const error = buildError();
+    const startedAt = performance.now();
+
+    describeError(error);
+
+    expect(performance.now() - startedAt).toBeLessThan(MAX_MILLISECONDS);
+  });
+
+  it('answers invalid_branch_name for a 1 MiB worktree branch name of question marks within the time bound', () => {
+    const error = new WorktreeError('invalid_branch', `invalid branch name: ${repeated('?')}`);
+    const startedAt = performance.now();
+
+    const envelope = describeError(error);
+
+    expect({ code: envelope.error, elapsed: performance.now() - startedAt < MAX_MILLISECONDS }).toEqual({ code: 'invalid_branch_name', elapsed: true });
+  });
+
+  it('still masks a token that starts the text when 1 MiB of filler follows it', () => {
+    const envelope = describeError(new OpenFleetError('row_cap', `Bearer abcDEF123 ${repeated('x')}`, { detail: `/hooks/abcDEF123 ${repeated('x')}` }));
+
+    expect(JSON.stringify(envelope)).not.toContain('abcDEF123');
+  });
+
+  it('describes a detail of 100 000 short strings within the time bound', () => {
+    const error = new OpenFleetError('row_cap', 'full.', { detail: Array.from({ length: 100_000 }, (_, index) => `s${index}`) });
+    const startedAt = performance.now();
+
+    describeError(error);
+
+    expect(performance.now() - startedAt).toBeLessThan(MAX_MILLISECONDS);
+  });
+});
+
 describe('describeError: structured detail keys and boxed values', () => {
   const detailCarrying = (detail: unknown) => new OpenFleetError('row_cap', 'the store is full.', { detail });
   const home = homedir();
+
+  it('keeps distinct keys distinct when cleaning would make them equal', () => {
+    const { detail } = describeError(detailCarrying({ '/hooks/aaa': 1, '/hooks/bbb': 2, 'Bearer abcDEF123': 3, 'Bearer ghiJKL456': 4 }));
+
+    expect(Object.values(detail as Record<string, number>).sort()).toEqual([1, 2, 3, 4]);
+  });
+
+  it('keeps a key that needs no cleaning as it is, even beside a cleaned twin', () => {
+    const { detail } = describeError(detailCarrying({ '/hooks/***': 1, '/hooks/abc': 2 }));
+
+    expect(detail).toMatchObject({ '/hooks/***': 1 });
+    expect(Object.keys(detail as object)).toHaveLength(2);
+  });
 
   it('masks a secret and shortens a path in the KEYS of a small detail', () => {
     const { detail } = describeError(detailCarrying({ 'Bearer abcDEF123': 'x', [`${home}/private`]: 'y' }));
@@ -511,7 +601,7 @@ describe('describeError: paths under a symlinked home', () => {
     expect(messageOf(`${linkedHome}/a and ${realHome}/b`)).toBe('~/a and ~/b');
   });
 
-  it('shortens a realpath even when the configured home is a relative path that does not exist', () => {
+  it('shortens nothing unrelated when the configured home is a relative path that does not exist', () => {
     vi.stubEnv('OPENFLEET_HOME', 'nowhere/at/all');
 
     expect(messageOf('kept /opt/other/x')).toBe('kept /opt/other/x');
