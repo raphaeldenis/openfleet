@@ -1,8 +1,8 @@
 import { Injectable } from '@angular/core';
-import { isErrorEnvelope } from '@openfleet/shared';
+import { SessionTodosSchema, isErrorEnvelope } from '@openfleet/shared';
 import type {
   Approval, CreateNoteRequest, DataStore, DataStoreDetail, DsRow, DsRowHistoryEntry, DsView, ErrorEnvelope, HarnessId, NoteSummary,
-  NoteVersionSummary, NoteView, OrderTerm, Page, PermissionMode, Project, RestoreNoteRequest, Session, SessionSpec,
+  NoteVersionSummary, NoteView, OrderTerm, Page, PermissionMode, Project, RestoreNoteRequest, Session, SessionSpec, SessionTodos,
   UpdateNoteRequest, WhereClause,
 } from '@openfleet/shared';
 import { environment } from '../../environments/environment';
@@ -113,6 +113,12 @@ export class FleetApiService {
   updatePermissionMode(id: string, mode: PermissionMode) { return this.post<{ status: 'relaunching' | 'deferred' }>(`/api/sessions/${id}/permission-mode`, { mode }); }
   renameSession(id: string, patch: { name?: string; emoji?: string }) { return this.patch<Session>(`/api/sessions/${id}`, patch); }
   reopenSession(id: string) { return this.post<Session>(`/api/sessions/${id}/reopen`, {}); }
+  async getSessionTodos(id: string): Promise<SessionTodos> {
+    const path = `/api/sessions/${encodeURIComponent(id)}/todos`;
+    const parsed = SessionTodosSchema.safeParse(await this.call<unknown>(path));
+    if (!parsed.success) throw new ApiError(200, `GET ${path} → unreadable todo list`);
+    return parsed.data;
+  }
   decide(id: string, behavior: 'allow' | 'deny') { return this.post<Approval>(`/api/approvals/${id}/decide`, { behavior }); }
 
   private noteUrl(noteId: string, suffix = '', query: Record<string, string> = {}): string {

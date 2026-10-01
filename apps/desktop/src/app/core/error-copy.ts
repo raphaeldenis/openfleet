@@ -2,7 +2,7 @@ import { ERROR_CODES, HTTP_STATUS_BY_KIND, retryOf, type DaemonIssue, type Degra
 import { ApiError } from './fleet-api.service';
 
 /** What the user was doing when the error came back: it decides the advice ("shorten the mission" vs "shorten the name"). */
-export type ErrorAction = 'generic' | 'send' | 'create_session' | 'create_manager' | 'resume';
+export type ErrorAction = 'generic' | 'send' | 'create_session' | 'create_manager' | 'resume' | 'load_todos';
 
 export interface ErrorContext {
   action: ErrorAction;
@@ -112,6 +112,12 @@ const FALLBACK_BY_RETRY: Record<ErrorRetry, string> = {
   after_refresh: 'Something changed — reload, then try again.',
 };
 
+const LOAD_TODOS_FAILED_BY_RETRY: Record<ErrorRetry, string> = {
+  never: "Can't load the todos.",
+  later: "Can't load the todos — try again.",
+  after_refresh: "Can't load the todos — reload, then try again.",
+};
+
 const SHORTEN_BY_ACTION: Record<'create_session' | 'create_manager', string> = {
   create_session: 'shorten the directory or the name',
   create_manager: 'shorten the mission',
@@ -145,6 +151,7 @@ const COPY_BY_ACTION: Record<ErrorAction, ActionCopy> = {
     directory_unreadable: "This session's directory can't be read — check its permissions.",
     launch_failed: 'The harness failed to relaunch — try again.',
   },
+  load_todos: {},
 };
 
 const FALLBACK_BY_ACTION: Partial<Record<ErrorAction, string>> = {
@@ -199,7 +206,15 @@ function copyOfFailure(failure: Failure, { action }: ErrorContext): ErrorCopy {
   if (textOfAction) return withRef(textOfAction, envelope);
   if (code) return withRef(WORDS_OF_RETRY[retry](COPY_BY_CODE[code]), envelope);
   if (envelope) return withRef(copyOfUnknownCode(envelope), envelope);
+  if (action === 'load_todos') return { text: LOAD_TODOS_FAILED_BY_RETRY[retry] };
   return { text: FALLBACK_BY_ACTION[action] ?? FALLBACK_BY_RETRY[retry] };
+}
+
+/** Whether trying again can help: the same decision the sentence of `copyFor` ends on. */
+export function retryOfError(error: unknown): ErrorRetry {
+  if (!(error instanceof ApiError)) return 'later';
+  const code = isKnownCode(error.code) ? error.code : undefined;
+  return retryOfFailure({ code: error.code, status: error.status, envelope: error.envelope }, code);
 }
 
 /** The copy of an envelope that reached the app on the websocket instead of as a response. */

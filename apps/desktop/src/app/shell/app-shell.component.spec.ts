@@ -7,6 +7,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import { AppShellComponent } from './app-shell.component';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
+import { InMemorySessionTodosSource, SESSION_TODOS_SOURCE } from './todos/session-todos-source';
 import { VersionsService } from '../core/versions.service';
 import type { DaemonIssue, WorkingState } from '@openfleet/shared';
 import { silentWorkingStateSignals, stateOf } from '../working-state/working-state-fixtures';
@@ -76,6 +77,7 @@ async function setUp(overrides: ShellOverrides = {}) {
     providers: [
       provideRouter(testRoutes, withComponentInputBinding()),
       { provide: FleetEventsService, useValue: fakeEvents(overrides) },
+      { provide: SESSION_TODOS_SOURCE, useValue: new InMemorySessionTodosSource() },
     ],
   });
   const harness = await RouterTestingHarness.create('');
@@ -699,5 +701,20 @@ describe('AppShellComponent', () => {
     await harness.fixture.whenStable();
 
     expect(router.url).toBe('/');
+  });
+
+  it('keeps the right panel closed until the top-bar toggle opens it beside the session view', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => undefined });
+    const { harness, root } = await setUp();
+    const toggle = root.querySelector('[data-testid="app-topbar"] [data-testid="right-panel-toggle"]') as HTMLElement;
+    expect(root.querySelector('[data-testid="right-panel"]')).toBeNull();
+
+    toggle.click();
+    await harness.fixture.whenStable();
+
+    const panel = root.querySelector('[data-testid="right-panel"]') as HTMLElement;
+    expect(panel).not.toBeNull();
+    expect(panel.querySelector('[data-testid="todos-no-session"]')).not.toBeNull();
+    vi.unstubAllGlobals();
   });
 });
