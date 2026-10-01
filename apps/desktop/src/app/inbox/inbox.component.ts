@@ -1,6 +1,9 @@
 import { ChangeDetectionStrategy, Component, DestroyRef, ElementRef, Injector, afterNextRender, computed, effect, inject, signal } from '@angular/core';
 import { ReplyDraftStore } from '../sessions/reply-draft.store';
+import { detailsTextOf } from '../core/copy-details';
 import { decideApproval } from '../core/decide-approval';
+import { copyOfEnvelope } from '../core/error-copy';
+import { CopyDetailsButtonComponent } from '../design/copy-details-button.component';
 import { compactElapsedLabel, elapsedSecondsSince } from '../design/elapsed-time';
 import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
@@ -49,11 +52,11 @@ function formatInput(toolInput: unknown): FormattedInput {
 @Component({
   selector: 'of-inbox',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [KindBadgeComponent, AttentionCardComponent],
+  imports: [KindBadgeComponent, AttentionCardComponent, CopyDetailsButtonComponent],
   template: `
     <section class="inbox" data-testid="inbox">
       <header class="title-row" data-testid="inbox-title-row">
-        <h1 class="title">Inbox @if (pendingCount(); as pending) {<span class="count" data-testid="inbox-count" role="img" [attr.aria-label]="pending.ariaLabel">{{ pending.text }}</span>}</h1>
+        <h1 class="title" tabindex="-1" data-testid="inbox-title">Inbox @if (pendingCount(); as pending) {<span class="count" data-testid="inbox-count" role="img" [attr.aria-label]="pending.ariaLabel">{{ pending.text }}</span>}</h1>
         @if (tab() === 'gates') {
           <div class="filters" data-testid="inbox-filters">
             @for (filter of filters; track filter.key) {
@@ -75,6 +78,24 @@ function formatInput(toolInput: unknown): FormattedInput {
           <pre class="reply-failure-draft" data-testid="inbox-reply-failure-draft">{{ failure.draft }}</pre>
           <button type="button" class="of-btn of-btn--secondary" data-testid="inbox-reply-failure-dismiss" (click)="dismissReplyFailure(failure.sessionId)">Dismiss</button>
         </div>
+      }
+      @if (issues().length > 0) {
+        <ul class="issue-list" aria-label="Issues">
+          @for (issue of issues(); track issue.key) {
+            <li class="issue" data-testid="inbox-issue">
+              <div class="gate-meta">
+                <of-kind-badge kind="issue" />
+                @if (issue.sessionName) { <span class="session-label" data-testid="inbox-issue-session">{{ issue.sessionName }}</span> }
+                <span class="age">{{ issue.timeLabel }}</span>
+              </div>
+              <p class="issue-copy" data-testid="inbox-issue-copy">{{ issue.copy }}</p>
+              <div class="actions">
+                <of-copy-details-button testId="inbox-issue-copy-details" [text]="issue.detailsText" />
+                <button type="button" class="of-btn of-btn--secondary issue-dismiss" data-testid="inbox-issue-dismiss" (click)="dismissIssue(issue.key)">Dismiss</button>
+              </div>
+            </li>
+          }
+        </ul>
       }
       <nav class="tabs" role="tablist" aria-label="Inbox sections" (keydown)="onTabKeydown($event)">
         @for (entry of tabs; track entry.key) {
@@ -118,10 +139,12 @@ function formatInput(toolInput: unknown): FormattedInput {
                 </div>
               </article>
             } @empty {
-              <div class="empty" data-testid="inbox-empty">
-                <span class="empty-title">Nothing needs you</span>
-                <span>Gates, questions, budget incidents and manager proposals show up here.</span>
-              </div>
+              @if (issues().length === 0) {
+                <div class="empty" data-testid="inbox-empty">
+                  <span class="empty-title">Nothing needs you</span>
+                  <span>Gates, questions, budget incidents and manager proposals show up here.</span>
+                </div>
+              }
             }
           </div>
         }
@@ -153,6 +176,10 @@ function formatInput(toolInput: unknown): FormattedInput {
     .reply-failure { display: flex; flex-direction: column; align-items: flex-start; gap: .375rem; min-width: 0; padding: .625rem .875rem; border: 1px solid var(--state-error); border-radius: .625rem; background: var(--panel); }
     .reply-failure-title { margin: 0; color: var(--state-error); overflow-wrap: anywhere; }
     .reply-failure-draft { margin: 0; max-width: 100%; max-height: 10rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+    .issue-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .5rem; }
+    .issue { display: flex; flex-direction: column; gap: .375rem; min-width: 0; padding: .625rem .875rem; border: 1px solid var(--line); border-radius: .625rem; background: var(--panel); }
+    .issue-copy { margin: 0; overflow-wrap: anywhere; }
+    .issue-dismiss { flex: none; height: 1.5rem; padding: 0 .625rem; font-size: .6875rem; }
     .tabs { display: flex; gap: .25rem; border-bottom: 1px solid var(--line); }
     .tab { height: 1.875rem; padding: 0 .75rem; border: 0; border-bottom: 1px solid transparent; background: transparent; color: var(--mut); cursor: pointer; font: inherit; }
     .tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
@@ -247,9 +274,32 @@ export class InboxComponent {
       });
   });
 
+  protected readonly issues = computed(() => {
+    const sessionsById = this.sessionsById();
+    return this.events.backgroundFailures().map(({ key, sessionId, envelope, at }) => {
+      const session = sessionId === undefined ? undefined : sessionsById.get(sessionId);
+      const { text, ref } = copyOfEnvelope(envelope, { action: 'generic' });
+      const detailsText = detailsTextOf({ ref, code: envelope.error, message: envelope.message, at });
+      const timeLabel = new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      return { key, timeLabel, copy: text, detailsText, sessionName: session && showInvisibleControlsAsEscapes(session.name) };
+    });
+  });
+
   protected dismissReplyFailure(sessionId: string): void {
     this.replies.dismissFailure(sessionId);
     afterNextRender(() => this.focusNextAfterDismiss(), { injector: this.injector });
+  }
+
+  protected dismissIssue(key: string): void {
+    this.events.dismissBackgroundFailure(key);
+    afterNextRender(() => this.focusNextIssueOrHeading(), { injector: this.injector });
+  }
+
+  private focusNextIssueOrHeading(): void {
+    const host: HTMLElement = this.host.nativeElement;
+    const nextDismiss = host.querySelector<HTMLElement>('[data-testid="inbox-issue-dismiss"]');
+    const heading = host.querySelector<HTMLElement>('[data-testid="inbox-title"]');
+    (nextDismiss ?? heading)?.focus();
   }
 
   private focusNextAfterDismiss(): void {

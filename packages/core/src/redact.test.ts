@@ -7,6 +7,12 @@ const millisecondsToMask = (text: string): number => {
   return performance.now() - start;
 };
 
+const millisecondsToMaskCut = (text: string): number => {
+  const start = performance.now();
+  maskingCutCredential(text);
+  return performance.now() - start;
+};
+
 describe('maskedSecrets: ReDoS guard on the well-known formats', () => {
   const hostileInputs = [
     ['a run of JWT starts', '-eyJ'],
@@ -161,5 +167,148 @@ describe('maskingCutCredential: a well-known credential the head cut left in par
     const fourTimesLarger = millisecondsFor(32768);
     expect(fourTimesLarger / small).toBeLessThan(8);
     expect(fourTimesLarger).toBeLessThan(500);
+  });
+});
+
+describe('maskedSecrets: a secret parameter nested inside another parameter or a URL fragment', () => {
+  it.each([
+    ['a nested query parameter', 'GET /cb?page=a?token=SECRETVAL1', 'GET /cb?page=a?token=***'],
+    ['a nested parameter at the start of the text', 'page=a?token=SECRETVAL1', 'page=a?token=***'],
+    ['a nested parameter two levels deep', 'GET /cb?next=a?x=b?password=SECRETVAL1', 'GET /cb?next=a?x=b?password=***'],
+    ['a nested parameter in a fragment of a value', 'page=a#access_token=SECRETVAL1', 'page=a#access_token=***'],
+    ['an OAuth fragment', 'GET /cb#access_token=SECRETVAL1', 'GET /cb#access_token=***'],
+    ['an OAuth fragment after other fragment parameters', 'GET /cb#state=1&access_token=SECRETVAL1', 'GET /cb#state=1&access_token=***'],
+    ['a fragment that starts the text', '#token=SECRETVAL1', '#token=***'],
+    ['a secret key that keeps its whole value, question mark included', 'GET /x?password=ab?cdSECRETVAL1', 'GET /x?password=***'],
+    ['a value nested deeper than the check reaches', 'GET /x?page=a?b=c?d=e?f=g?h=i?j=SECRETVAL1', 'GET /x?page=***'],
+  ])('masks %s', (_name, text, expected) => {
+    expect(maskedSecrets(text)).toBe(expected);
+  });
+
+  it.each([['GET /docs#section=intro'], ['GET /x?a=1?b=2'], ['GET /x?page=a#top'], ['see issue #42 and ?q=tokenless']])('leaves %s alone', (text) => {
+    expect(maskedSecrets(text)).toBe(text);
+  });
+});
+
+describe('maskedSecrets: a Bearer prefix written more than once', () => {
+  it.each([
+    ['Authorization: Bearer Bearer SECRETVAL1', 'Authorization: Bearer ***'],
+    ['Authorization: bearer:BEARER=Bearer SECRETVAL1', 'Authorization: Bearer ***'],
+    ['Authorization: Bearer%20Bearer%20SECRETVAL1', 'Authorization: Bearer ***'],
+  ])('masks the token behind %s', (text, expected) => {
+    expect(maskedSecrets(text)).toBe(expected);
+  });
+
+  it('leaves the word Bearer in prose alone', () => {
+    expect(maskedSecrets('BearerAuth failed, a Bearer')).toBe('BearerAuth failed, a Bearer');
+  });
+});
+
+describe('maskedSecrets: a URL password holding a raw at-sign', () => {
+  it('masks up to the last at-sign of the authority', () => {
+    expect(maskedSecrets('connect https://u:p@ssSECRETVAL1@host/x failed')).toBe(`connect https://${MASK}@host/x failed`);
+  });
+
+  it('leaves a path holding an at-sign alone', () => {
+    expect(maskedSecrets('GET https://host/users/a@b')).toBe('GET https://host/users/a@b');
+  });
+});
+
+describe('maskedSecrets: provider key formats added after the first round', () => {
+  const credentials = [
+    ['a Slack rotation token', `xoxe-1-${'1234567890'.repeat(2)}`],
+    ['a Slack configuration token', `xoxe.xoxp-1-${'1234567890'.repeat(2)}`],
+    ['a Slack cookie token', 'xoxd-aB3dE6gH9j%2BaB3dE6gH9j'],
+    ['a Slack client token', `xoxc-${'1234567890'.repeat(2)}`],
+    ['a Hugging Face token', `hf_${'aB3dE6gH9j'.repeat(3)}aB3d`],
+    ['a Stripe test secret key', `sk_test_${'aB3dE6gH9j'.repeat(2)}`],
+    ['a Stripe restricted test key', `rk_test_${'aB3dE6gH9j'.repeat(2)}`],
+    ['a Stripe webhook secret', `whsec_${'aB3dE6gH9j'.repeat(3)}`],
+    ['a Google API key with a longer tail', `AIza${'AbCdEfGhIj'.repeat(3)}_-AbCdEfGhIj`],
+    ['a routable GitLab token', `glpat-${'aB3dE6gH9j'.repeat(2)}.01.aB3dE6gH9`],
+  ] as const;
+
+  it.each(credentials)('masks %s', (_name, credential) => {
+    expect(maskedSecrets(`use ${credential} now`)).toBe(`use ${MASK} now`);
+  });
+
+  it.each([
+    ['task and risk words', 'the task-list and risk-register, a chf_ value, whsec alone, hf_transfer_enabled and a sk_testing run'],
+    ['a short Hugging Face look-alike', 'hf_abcdef is not a token'],
+    ['a short whsec look-alike', 'whsec_short is not a secret'],
+  ])('leaves %s alone', (_name, plain) => {
+    expect(maskedSecrets(plain)).toBe(plain);
+  });
+
+  it.each([
+    ['a Slack rotation token', 'xoxe-1-123456'],
+    ['a Slack cookie token', 'xoxd-aB3dE6gH9j'],
+    ['a Slack configuration token', 'xoxe.xoxp-1-1234'],
+    ['a Hugging Face token', 'hf_aB3dE6gH9j'],
+    ['a Stripe test secret key', 'sk_test_aB3dE6'],
+    ['a Stripe webhook secret', 'whsec_aB3dE6gH'],
+  ])('masks %s at the very end of a head cut', (_name, credential) => {
+    expect(maskingCutCredential(`Fix CI ${credential}`)).toBe(`Fix CI ${MASK}`);
+  });
+
+  it('masks a Slack cookie token cut inside its escapes', () => {
+    expect(maskingCutCredential('token xoxd-abc%2Fde')).toBe(`token ${MASK}`);
+  });
+
+  it('keeps a long run of escapes before a cut linear', () => {
+    const escapes = '%2F'.repeat(200_000);
+    const small = Math.max(millisecondsToMaskCut(escapes.slice(0, 50_000)), 5);
+    const large = millisecondsToMaskCut(escapes);
+
+    expect(large / small).toBeLessThan(8);
+  });
+});
+
+describe('maskedSecrets: a regression to quadratic time fails fast', () => {
+  const nestedParameterShapes = ['a=?', 'a=#', '?#', 'a=b?c=d?e=f?g=h&', 'a=', 'a=%3F', 'a=%2525%2525%25'];
+  const repeatedTo = (unit: string, size: number) => unit.repeat(Math.ceil(size / unit.length));
+
+  it.each(nestedParameterShapes)('masks %j at 64 KiB and 256 KiB with 4x the input costing less than 8x', (unit) => {
+    const small = Math.max(millisecondsToMask(repeatedTo(unit, 64 * 1024)), 5);
+    const large = millisecondsToMask(repeatedTo(unit, 256 * 1024));
+
+    expect(large / small).toBeLessThan(8);
+  });
+
+  // Each nested `a=` peels three layers off the deep escape, so the decoding recursion runs once per pair.
+  const chainBeforeDeepEscape = (pairs: number) => `${'a='.repeat(pairs)}%${'25'.repeat(3 * pairs)}41`;
+
+  it('masks a 64 KiB chain of nested parameters before a deeply escaped byte without throwing', () => {
+    expect(() => maskedSecrets(chainBeforeDeepEscape(8_000))).not.toThrow();
+  });
+
+  it('masks a chain of nested parameters before a deeply escaped byte in linear time', () => {
+    const small = Math.max(millisecondsToMask(chainBeforeDeepEscape(1_000)), 5);
+    const large = millisecondsToMask(chainBeforeDeepEscape(4_000));
+
+    expect(large / small).toBeLessThan(8);
+  });
+
+  it('masks a value whose escapes nest deeper than the check reaches', () => {
+    expect(maskedSecrets(chainBeforeDeepEscape(6))).toBe(`a=${MASK}`);
+  });
+});
+
+describe('maskedSecrets: the hardened rules stay linear', () => {
+  const hostileUnits = [
+    '?a=', 'page=a?', 'a=?a=', '#a=', 'a=#a=', 'page=%25?', 'a=%2F?#', 'token=a?',
+    'Bearer Bearer ', 'Bearer Bearer', 'Bearer %42earer ',
+    '://a@', '://a@@', '://@', '://a@a/',
+    'xoxe.', 'xoxe.xoxp-', 'xoxd-', 'hf_', 'whsec_', 'sk_test_', '-AIza', 'glpat-aaaaaaaaaaaaaaaaaaaa.01.',
+  ];
+  const repeatedTo = (unit: string, size: number) => unit.repeat(Math.ceil(size / unit.length));
+  const fastestMillisecondsFor = (text: string) => Math.min(...[0, 1, 2].map(() => millisecondsToMask(text)));
+
+  it.each(hostileUnits)('masks %j at 256 KiB and 1 MiB with 4x the input costing less than 8x', (unit) => {
+    const small = Math.max(fastestMillisecondsFor(repeatedTo(unit, 256 * 1024)), 5);
+    const large = fastestMillisecondsFor(repeatedTo(unit, 1024 * 1024));
+
+    expect(large / small).toBeLessThan(8);
+    expect(large).toBeLessThan(2000);
   });
 });

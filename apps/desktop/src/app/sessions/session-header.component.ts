@@ -1,5 +1,6 @@
 import { ChangeDetectionStrategy, Component, computed, inject, input } from '@angular/core';
 import type { Session } from '@openfleet/shared';
+import { RENAME_ERROR } from '../core/error-copy';
 import { FleetApiService } from '../core/fleet-api.service';
 import { SessionRequestsService } from '../core/session-requests';
 import { StateChipComponent } from '../design/state-chip.component';
@@ -7,8 +8,6 @@ import { ModelSelectorComponent } from './model-selector.component';
 import { PermissionModePickerComponent } from './permission-mode-picker.component';
 import { SessionActionsComponent } from './session-actions.component';
 import { exitCodeLabel } from './session-close-status';
-
-const RENAME_ERROR = 'Could not rename — try again.';
 
 @Component({
   selector: 'of-session-header',
