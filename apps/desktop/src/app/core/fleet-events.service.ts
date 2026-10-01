@@ -1,6 +1,6 @@
 import { Injectable, signal } from '@angular/core';
 import { closeReasonOfExitCode } from '@openfleet/shared';
-import type { Approval, DaemonIssue, ErrorEnvelope, ManagerView, ServerEvent, Session, SessionCloseReason, WorkingState } from '@openfleet/shared';
+import type { Approval, DaemonIssue, ErrorEnvelope, ManagerView, ServerEvent, Session, SessionCloseReason, SessionTodos, TodoSummary, WorkingState } from '@openfleet/shared';
 import { Subject } from 'rxjs';
 import { environment } from '../../environments/environment';
 import { isUserTyping } from './terminal-keystrokes';
@@ -64,6 +64,12 @@ export class FleetEventsService {
   readonly workingStateMaxAgeMinutes = signal<number | undefined>(undefined);
   readonly workingStateMaxBytes = signal<number | undefined>(undefined);
   readonly connected = signal(false);
+  /** The last list received for each session, from a session.todos event or a REST read. */
+  readonly todos = signal<ReadonlyMap<string, SessionTodos>>(new Map());
+  readonly todoSummaries = signal<ReadonlyMap<string, TodoSummary>>(new Map());
+  // A daemon that predates todos sends no summaries: a missing list then means "not reported", never "empty".
+  readonly todosReported = signal(false);
+  private readonly todoEventCounts = new Map<string, number>();
   /** What keeps the daemon running degraded; empty while it is healthy or when an older daemon reports none. */
   readonly daemonIssues = signal<DaemonIssue[]>([]);
   /** Failures the daemon announced that no request of the user caused, newest first, until the user dismisses them. */
@@ -220,9 +226,12 @@ export class FleetEventsService {
         this.workingStateMaxAgeMinutes.set(event.workingStateMaxAgeMinutes);
         this.workingStateMaxBytes.set(event.workingStateMaxBytes);
         this.daemonIssues.set(event.daemonIssues ?? []);
+        this.todosReported.set(event.todoSummaries !== undefined);
+        this.todoSummaries.set(new Map((event.todoSummaries ?? []).map((summary) => [summary.sessionId, summary])));
         this.closeReasons.set(closeReasonsOfSnapshot(event.sessions));
         this.snapshotReceived.set(true);
         return;
+      case 'session.todos': return this.receiveTodosEvent(event.todos);
       case 'session.working_state': return this.workingStates.update((all) => new Map(all).set(event.state.sessionId, event.state));
       case 'session.created': return this.upsertSession(event.session);
       case 'session.state': return this.patchSession(event.sessionId, { state: event.state, stateSince: event.stateSince });
@@ -255,6 +264,23 @@ export class FleetEventsService {
   /** Why a session closed, as the daemon announced it; a snapshot only carries the two reasons the exit code encodes. */
   closeReasonOf(sessionId: string): SessionCloseReason | undefined {
     return this.closeReasons().get(sessionId);
+  }
+
+  /** How many session.todos events arrived for a session: a REST answer is stale when this moved since its request left. */
+  todoEventCount(sessionId: string): number {
+    return this.todoEventCounts.get(sessionId) ?? 0;
+  }
+
+  storeFetchedTodos(todos: SessionTodos): void {
+    this.todos.update((all) => new Map(all).set(todos.sessionId, todos));
+  }
+
+  private receiveTodosEvent(todos: SessionTodos): void {
+    this.todoEventCounts.set(todos.sessionId, this.todoEventCount(todos.sessionId) + 1);
+    this.storeFetchedTodos(todos);
+    if (todos.updatedAt === null) return;
+    const summary: TodoSummary = { sessionId: todos.sessionId, counts: todos.counts, updatedAt: todos.updatedAt };
+    this.todoSummaries.update((all) => new Map(all).set(todos.sessionId, summary));
   }
 
   dismissBackgroundFailure(key: string): void {

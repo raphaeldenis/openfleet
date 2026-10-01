@@ -1,25 +1,33 @@
-import { InjectionToken, signal, type Signal, type WritableSignal } from '@angular/core';
+import { InjectionToken, inject, signal, type Signal, type WritableSignal } from '@angular/core';
+import { LiveSessionTodosSource } from './live-session-todos-source';
 import type { SessionTodos } from './todos.adapter';
 
 export type TodosLoad =
   | { kind: 'loading' }
-  | { kind: 'error' }
+  | { kind: 'error'; text: string; retryable: boolean }
   | { kind: 'unsupported' }
   | { kind: 'ready'; todos: SessionTodos | null };
 
-/** Port: what the Todos tab reads. The HTTP/WS adapter (TODOS-03 part 2) implements it. */
+/** Port: what the Todos tab reads. The REST + WebSocket adapter implements it. */
 export interface SessionTodosSource {
   loadOf(sessionId: string): Signal<TodosLoad>;
+  /** Names the one session worth keeping fresh; `undefined` when none is shown. */
+  watch(sessionId: string | undefined): void;
   retry(sessionId: string): void;
 }
 
-/** In-memory source for tests and the dev fixture; an unknown session reads as "no list yet". */
+/** In-memory source for tests; an unknown session reads as "no list yet". */
 export class InMemorySessionTodosSource implements SessionTodosSource {
   readonly retried: string[] = [];
+  readonly watched: (string | undefined)[] = [];
   private readonly loads = new Map<string, WritableSignal<TodosLoad>>();
 
   loadOf(sessionId: string): Signal<TodosLoad> {
     return this.signalOf(sessionId);
+  }
+
+  watch(sessionId: string | undefined): void {
+    this.watched.push(sessionId);
   }
 
   retry(sessionId: string): void {
@@ -41,5 +49,5 @@ export class InMemorySessionTodosSource implements SessionTodosSource {
 
 export const SESSION_TODOS_SOURCE = new InjectionToken<SessionTodosSource>('SESSION_TODOS_SOURCE', {
   providedIn: 'root',
-  factory: () => new InMemorySessionTodosSource(),
+  factory: () => inject(LiveSessionTodosSource),
 });

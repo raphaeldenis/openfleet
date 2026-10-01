@@ -1,10 +1,11 @@
-import { ChangeDetectionStrategy, Component, computed, inject, input } from '@angular/core';
+import { ChangeDetectionStrategy, Component, DestroyRef, computed, effect, inject, input } from '@angular/core';
 import { showInvisibleControlsAsEscapes } from '../../inbox/bidi-escapes';
 import { SESSION_TODOS_SOURCE, type TodosLoad } from './session-todos-source';
 import { TODO_STATUS_PRESENTATION } from './todo-status';
 import { MAX_TODO_ITEMS, type SessionTodos, type TodoItem } from './todos.adapter';
 
 const UNNAMED_SUFFIX = 'name not seen yet';
+const UNVERIFIED_HINT = 'from history, not confirmed yet';
 
 interface TodoRow {
   readonly id: string;
@@ -13,7 +14,12 @@ interface TodoRow {
   readonly statusLabel: string;
   readonly text: string;
   readonly unnamed: boolean;
+  readonly unverified: boolean;
   readonly accessibleName: string;
+}
+
+function clockTimeOf(isoDate: string): string {
+  return new Date(isoDate).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
 }
 
 @Component({
@@ -30,8 +36,10 @@ interface TodoRow {
           }
           @case ('error') {
             <div class="message" role="alert" data-testid="todos-error">
-              <p>Can't load the todos — try again.</p>
-              <button type="button" class="of-btn" data-testid="todos-retry" (click)="retry()">Try again</button>
+              <p>{{ errorText() }}</p>
+              @if (isRetryable()) {
+                <button type="button" class="of-btn" data-testid="todos-retry" (click)="retry()">Try again</button>
+              }
             </div>
           }
           @case ('unsupported') {
@@ -40,7 +48,7 @@ interface TodoRow {
           @default {
             @if (list(); as todos) {
               @if (sessionClosed()) {
-                <p class="note" role="status" data-testid="todos-closed-note">This session is closed: last known list</p>
+                <p class="note" role="status" data-testid="todos-closed-note">{{ closedNote() }}</p>
               }
               @if (staleNote(); as note) {
                 <p class="note" role="status" data-testid="todos-stale-note">{{ note }}</p>
@@ -67,6 +75,9 @@ interface TodoRow {
                       <span class="text" data-testid="todo-item-text" [title]="row.text">{{ row.text }}</span>
                       @if (row.unnamed) {
                         <span class="unnamed" data-testid="todo-item-unnamed">— {{ unnamedSuffix }}</span>
+                      }
+                      @if (row.unverified) {
+                        <span class="unnamed" data-testid="todo-item-unverified">{{ unverifiedHint }}</span>
                       }
                     </li>
                   }
@@ -113,6 +124,12 @@ export class TodosTabComponent {
 
   private readonly source = inject(SESSION_TODOS_SOURCE);
   protected readonly unnamedSuffix = UNNAMED_SUFFIX;
+  protected readonly unverifiedHint = UNVERIFIED_HINT;
+
+  constructor() {
+    effect(() => this.source.watch(this.sessionId()));
+    inject(DestroyRef).onDestroy(() => this.source.watch(undefined));
+  }
 
   protected readonly load = computed<TodosLoad>(() => {
     const id = this.sessionId();
@@ -124,10 +141,22 @@ export class TodosTabComponent {
     const hasTasks = load.todos.counts.total > 0;
     return hasTasks ? load.todos : undefined;
   });
+  protected readonly errorText = computed(() => {
+    const load = this.load();
+    return load.kind === 'error' ? load.text : '';
+  });
+  protected readonly isRetryable = computed(() => {
+    const load = this.load();
+    return load.kind === 'error' && load.retryable;
+  });
   protected readonly emptyText = computed(() => {
     const load = this.load();
     const isClosedWithoutKeptList = this.sessionClosed() && load.kind === 'ready' && load.todos === null;
-    return isClosedWithoutKeptList ? "This list isn't kept once the daemon restarts." : 'No tasks yet';
+    return isClosedWithoutKeptList ? "This list isn't kept once the daemon restarts." : "No todos yet — this session hasn't made a list.";
+  });
+  protected readonly closedNote = computed(() => {
+    const updatedAt = this.list()?.updatedAt;
+    return updatedAt ? `Session closed — list as of ${clockTimeOf(updatedAt)}.` : 'Session closed — last known list.';
   });
   protected readonly staleNote = computed(() => {
     if (this.list()?.stale) return "Last known list — the session's transcript can't be read right now.";
@@ -135,7 +164,7 @@ export class TodosTabComponent {
   });
   protected readonly progressText = computed(() => {
     const counts = this.list()?.counts;
-    return counts ? `${counts.completed} of ${counts.total} done` : '';
+    return counts ? `${counts.completed} of ${counts.total} completed` : '';
   });
   protected readonly progressPercent = computed(() => {
     const counts = this.list()?.counts;
@@ -174,6 +203,8 @@ function rowOf(item: TodoItem): TodoRow {
   const isActiveForm = item.status === 'in_progress' && item.activeForm !== undefined;
   const text = showInvisibleControlsAsEscapes(isActiveForm ? (item.activeForm as string) : item.content);
   const unnamed = item.unnamed === true;
-  const spokenText = unnamed ? `${text} — ${UNNAMED_SUFFIX}` : text;
-  return { id: item.id, status: item.status, glyph, statusLabel: label, text, unnamed, accessibleName: `${label}: ${spokenText}` };
+  const unverified = item.unverified === true;
+  const spokenParts = [unnamed ? `${text} — ${UNNAMED_SUFFIX}` : text, unverified ? UNVERIFIED_HINT : ''];
+  const spokenText = spokenParts.filter((part) => part !== '').join(', ');
+  return { id: item.id, status: item.status, glyph, statusLabel: label, text, unnamed, unverified, accessibleName: `${label}: ${spokenText}` };
 }

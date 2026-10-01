@@ -2,7 +2,7 @@ import { ERROR_CODES, HTTP_STATUS_BY_KIND, retryOf, type DaemonIssue, type Degra
 import { ApiError } from './fleet-api.service';
 
 /** What the user was doing when the error came back: it decides the advice ("shorten the mission" vs "shorten the name"). */
-export type ErrorAction = 'generic' | 'send' | 'create_session' | 'create_manager' | 'resume';
+export type ErrorAction = 'generic' | 'send' | 'create_session' | 'create_manager' | 'resume' | 'load_todos';
 
 export interface ErrorContext {
   action: ErrorAction;
@@ -145,6 +145,7 @@ const COPY_BY_ACTION: Record<ErrorAction, ActionCopy> = {
     directory_unreadable: "This session's directory can't be read — check its permissions.",
     launch_failed: 'The harness failed to relaunch — try again.',
   },
+  load_todos: {},
 };
 
 const FALLBACK_BY_ACTION: Partial<Record<ErrorAction, string>> = {
