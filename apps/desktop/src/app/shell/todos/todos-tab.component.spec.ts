@@ -58,20 +58,20 @@ describe('TodosTabComponent', () => {
       expect(loading.textContent).toContain('Loading todos…');
     });
 
-    it('says "No tasks yet" when the session has no list', async () => {
+    it('says the session has not made a list when it has none', async () => {
       await renderTab({ kind: 'ready', todos: null });
 
-      expect(screen.getByTestId('todos-empty').textContent).toContain('No tasks yet');
+      expect(screen.getByTestId('todos-empty').textContent).toContain("No todos yet — this session hasn't made a list.");
     });
 
-    it('says "No tasks yet" when the list holds zero tasks', async () => {
+    it('says the session has not made a list when the list holds zero tasks', async () => {
       await renderTab({ kind: 'ready', todos: todosOf([]) });
 
-      expect(screen.getByTestId('todos-empty').textContent).toContain('No tasks yet');
+      expect(screen.getByTestId('todos-empty').textContent).toContain("No todos yet — this session hasn't made a list.");
     });
 
-    it('shows an error alert with a "Try again" action that retries the watched session', async () => {
-      const { source } = await renderTab({ kind: 'error' });
+    it('shows the error copy in an alert with a "Try again" action that retries the watched session', async () => {
+      const { source } = await renderTab({ kind: 'error', text: "Can't load the todos — try again.", retryable: true });
 
       const alert = screen.getByTestId('todos-error');
       expect(alert.getAttribute('role')).toBe('alert');
@@ -79,6 +79,13 @@ describe('TodosTabComponent', () => {
       await userEvent.click(screen.getByTestId('todos-retry'));
 
       expect(source.retried).toEqual([SESSION_ID]);
+    });
+
+    it('offers no "Try again" when retrying cannot help', async () => {
+      await renderTab({ kind: 'error', text: 'That item no longer exists.', retryable: false });
+
+      expect(screen.getByTestId('todos-error').textContent).toContain('That item no longer exists.');
+      expect(screen.queryByTestId('todos-retry')).toBeNull();
     });
 
     it('tells an old daemon does not report todos', async () => {
@@ -92,7 +99,7 @@ describe('TodosTabComponent', () => {
 
       const note = screen.getByTestId('todos-closed-note');
       expect(note.getAttribute('role')).toBe('status');
-      expect(note.textContent).toContain('This session is closed: last known list');
+      expect(note.textContent).toMatch(/Session closed — list as of \d{2}:\d{2}\./);
       expect(screen.getAllByTestId('todo-item')).toHaveLength(2);
       expect(screen.queryByTestId('todos-retry')).toBeNull();
     });
@@ -135,8 +142,57 @@ describe('TodosTabComponent', () => {
     });
   });
 
+  describe('rows rebuilt from history', () => {
+    it('says "from history, not confirmed yet" on an unverified row and on that row only', async () => {
+      const unverified = item('1', 'pending', 'Write the spec', { unverified: true });
+      await renderTab({ kind: 'ready', todos: todosOf([unverified, item('2', 'pending', 'Ship it')]) });
+
+      const [unverifiedRow, confirmedRow] = screen.getAllByTestId('todo-item');
+      expect(within(unverifiedRow).getByTestId('todo-item-unverified').textContent).toContain('from history, not confirmed yet');
+      expect(unverifiedRow.getAttribute('aria-label')).toContain('from history, not confirmed yet');
+      expect(within(confirmedRow).queryByTestId('todo-item-unverified')).toBeNull();
+    });
+
+    it('still shows the status word and the counts of an unverified row', async () => {
+      const unverified = item('1', 'in_progress', 'Write the spec', { unverified: true });
+      await renderTab({ kind: 'ready', todos: todosOf([unverified, item('2', 'completed')]) });
+
+      const row = screen.getAllByTestId('todo-item')[0];
+      expect(within(row).getByTestId('todo-item-status').textContent).toContain('In progress');
+      expect(screen.getByTestId('todos-progress').textContent).toContain('1 of 2 completed');
+    });
+
+    it('shows no calm hint when the whole list is confirmed', async () => {
+      await renderTab({ kind: 'ready', todos: todosOf([item('1', 'pending')]) });
+
+      expect(screen.queryByTestId('todo-item-unverified')).toBeNull();
+    });
+  });
+
+  describe('watching', () => {
+    it('asks the source to watch the session it shows', async () => {
+      const { source } = await renderTab({ kind: 'loading' });
+
+      expect(source.watched).toEqual([SESSION_ID]);
+    });
+
+    it('stops watching when the tab goes away', async () => {
+      const { source, view } = await renderTab({ kind: 'loading' });
+
+      view.fixture.destroy();
+
+      expect(source.watched.at(-1)).toBeUndefined();
+    });
+
+    it('watches nothing without a session', async () => {
+      const { source } = await renderTab(undefined, { sessionId: undefined });
+
+      expect(source.watched.every((id) => id === undefined)).toBe(true);
+    });
+  });
+
   describe('progress', () => {
-    it('shows "2 of 5 done" as text and as a progressbar with the same numbers', async () => {
+    it('shows "2 of 5 completed" as text and as a progressbar with the same numbers', async () => {
       const items = [item('1', 'completed'), item('2', 'completed'), item('3', 'in_progress'), item('4', 'pending'), item('5', 'pending')];
       await renderTab({ kind: 'ready', todos: todosOf(items) });
 
@@ -144,8 +200,8 @@ describe('TodosTabComponent', () => {
       expect(bar.getAttribute('aria-valuemin')).toBe('0');
       expect(bar.getAttribute('aria-valuemax')).toBe('5');
       expect(bar.getAttribute('aria-valuenow')).toBe('2');
-      expect(bar.getAttribute('aria-valuetext')).toBe('2 of 5 done');
-      expect(screen.getByTestId('todos-progress').textContent).toContain('2 of 5 done');
+      expect(bar.getAttribute('aria-valuetext')).toBe('2 of 5 completed');
+      expect(screen.getByTestId('todos-progress').textContent).toContain('2 of 5 completed');
       expect(screen.getByTestId('todos-progress-detail').textContent).toContain('1 in progress · 2 pending');
     });
 
@@ -155,7 +211,7 @@ describe('TodosTabComponent', () => {
       await renderTab({ kind: 'ready', todos });
 
       expect(screen.getByRole('progressbar').getAttribute('aria-valuemax')).toBe('120');
-      expect(screen.getByTestId('todos-progress').textContent).toContain('30 of 120 done');
+      expect(screen.getByTestId('todos-progress').textContent).toContain('30 of 120 completed');
     });
   });
 

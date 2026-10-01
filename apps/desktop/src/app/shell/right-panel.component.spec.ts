@@ -247,7 +247,7 @@ describe('RightPanelComponent', () => {
       const { source } = await setUp({ url: '/session/s1', storage, sessions: [{ id: 's1', state: 'closed' }] });
       source.publish('s1', { kind: 'ready', todos: todosOf('s1') });
 
-      expect((await screen.findByTestId('todos-closed-note')).textContent).toContain('This session is closed: last known list');
+      expect((await screen.findByTestId('todos-closed-note')).textContent).toMatch(/Session closed — list as of \d{2}:\d{2}\./);
     });
 
     it('marks the list stale when the socket is down', async () => {
