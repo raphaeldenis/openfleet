@@ -2,6 +2,7 @@ import { accessSync, closeSync, constants, existsSync, lstatSync, openSync, read
 import { basename, dirname, isAbsolute, join, normalize, sep } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { OpenFleetError, type ErrorCode, type ErrorEnvelope, type PermissionMode, type Session, type SessionCloseReason, type SessionSpec } from '@openfleet/shared';
+import { carryLoggedRef, rememberLoggedRef } from '../errors/loggedRef.js';
 import { EventBus } from '../events/eventBus.js';
 import { createWorktree } from '../git/worktrees.js';
 import type { Harness, HarnessHandle } from '../harness/harness.js';
@@ -106,6 +107,36 @@ const DEFAULT_FIRST_START_TIMEOUT_MS = 60_000;
 // write before the separate '\r' submits it; upgrade path is confirming the composer holds the full body
 // from the pty output instead of trusting a fixed delay.
 export const SUBMIT_KEYSTROKE_DELAY_MS = 150;
+// Claude Code strips invisible characters (zero-width, bidi controls, BOM...) from a paste; the Enter that would
+// submit such a composer prints this notice and waits for a second Enter instead of sending. The text the model
+// receives is the CLI's own stripped text, so confirming is the faithful answer.
+// Measured live (2.1.284): the notice follows the Enter by ~3 ms and the CLI ignores every Enter for the next
+// ~100-150 ms, accepting one from 150 ms on; an accepted Enter starts the turn ~55 ms later.
+// ponytail: matches the CLI's notice wording (2.1.284); a reworded notice only brings back the unsubmitted paste.
+// The pty output is read with its escape sequences removed and its words allowed to be separated by anything (a wrap, a
+// cursor move, a style change), so a notice wrapped by a narrow terminal still matches.
+// A narrow terminal truncates the notice with an ellipsis instead of wrapping it ("… review and press Enter …" at 60
+// columns, "… press Enter to s…" at 64), so its stable start "Removed <N> invisible character(s)" is the main anchor.
+const INVISIBLE_CHARACTERS_REVIEW_NOTICE_SOURCE = String.raw`Removed\s*\d+\s*invisible\s*characters?|review\s*and\s*press\s*Enter\s*to\s*send|press\s*Enter\s*(?:to\s*s?)?\s*…`;
+const INVISIBLE_CHARACTERS_REVIEW_NOTICE = new RegExp(INVISIBLE_CHARACTERS_REVIEW_NOTICE_SOURCE, 'g');
+const GENERATING_MARKER = /esc\s*to\s*interrupt/g;
+const TERMINAL_ESCAPE_SEQUENCES = /\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b\][^\u0007]*\u0007/g;
+const REVIEW_NOTICE_SPLIT_ACROSS_CHUNKS_MARGIN = 256;
+export const REVIEW_SETTLE_MS = 300;
+export const REVIEW_CONFIRMATION_PATIENCE_MS = 700;
+export const MAX_REVIEW_CONFIRMATIONS = 3;
+export const REVIEW_NOTICE_WINDOW_MS = 500;
+export const COMPOSER_CLEAR_GAP_MS = 300;
+// ponytail: a review the CLI neither accepted (no turn-start hook) nor showed still holding the paste keeps the queue
+// gated this long, then is released without pressing any key: nothing proves the composer holds the paste, and an
+// Escape into a CLI that took it would interrupt its turn. Ceiling: a CLI that really holds the paste for good gets the
+// next message typed on top of it after this delay; upgrade path is reading the composer back from the pty output.
+export const REVIEW_UNCONFIRMED_RELEASE_MS = 60_000;
+const ESCAPE_KEY = '\u001b';
+const INTERRUPT_KEYS = ['\u001b', '\u0003'];
+// A superset of what the CLI strips from a paste (format, separator and control characters): a body holding one of
+// them waits for the review window before it counts as delivered; the CLI's own notice stays the only proof.
+const MAY_BE_STRIPPED_BY_THE_CLI = /[\p{Cf}\p{Zl}\p{Zp}\p{Cc}]/u;
 // Bounds how many not-yet-delivered messages one agent can stack on a single peer, so a looping agent
 // cannot flood a target's queue (8 KB each) faster than the target can read.
 export const MAX_PENDING_AGENT_MESSAGES_PER_SENDER = 20;
@@ -276,6 +307,31 @@ const activeHandleBySessionId = new Map<string, HarnessHandle>();
 // so it can never land ahead of the Enter that submits it. It rides on the phase object itself: closing or
 // relaunching replaces the phase wholesale, so a dead or replaced pty never receives it.
 interface TypedPhase { name: 'typed'; messageId: string; handle: HarnessHandle; deferredRaw: string[] }
+// The CLI may answer the submit Enter with its invisible-characters notice instead of sending. Nothing else is typed
+// while the session is here, and the message is reported delivered only once the CLI accepted it (its turn started).
+// 'watching': a body that may draw the notice was submitted, the notice has not shown yet.
+// 'confirming': the notice showed; Enter is pressed after a settle delay, then again after each patience delay.
+// 'clearing': the confirmations ran out with proof the composer still holds the paste; the first Escape of the pair
+// that empties it was pressed.
+// 'exhausted': the confirmations ran out without that proof; nothing is pressed, the queue stays gated until a turn
+// starts or REVIEW_UNCONFIRMED_RELEASE_MS passes.
+// The three flags are updated in place by the pty output (and raw input) read while the phase lasts.
+interface ReviewingPhase {
+  name: 'reviewing';
+  messageId: string;
+  handle: HarnessHandle;
+  stage: 'watching' | 'confirming' | 'clearing' | 'exhausted';
+  confirmations: number;
+  isDeliveryRecorded: boolean;
+  // Raw input typed meanwhile waits here, so it is never submitted together with the held message.
+  deferredRaw: string[];
+  // The notice was drawn again since the last confirmation Enter: the composer still holds the paste.
+  isNoticeRedrawn: boolean;
+  // The CLI drew its generating marker: it took the message.
+  isGeneratingSeen: boolean;
+  // A human Escape or Ctrl-C reached the pty: the composer is no longer the one the review knows.
+  isHumanInterruptPassedThrough: boolean;
+}
 type DeliveryPhase =
   | { name: 'ready' }
   | { name: 'typing'; messageId: string; handle: HarnessHandle; deferredRaw: string[] }
@@ -285,6 +341,7 @@ type DeliveryPhase =
   // upgrade path is reading the composer back from the pty output before submitting.
   | TypedPhase
   | { name: 'submitted'; messageId: string }
+  | ReviewingPhase
   | { name: 'closing' }
   | { name: 'relaunching' };
 
@@ -297,6 +354,14 @@ function waitForExit(handle: HarnessHandle): Promise<void> {
     const unsubscribe = handle.onExit(() => { unsubscribe(); resolve(); });
   });
 }
+
+function heldForReviewError(): OpenFleetError {
+  return new OpenFleetError('message_held_for_review', 'the message was not sent: the CLI held it for review because it contains invisible characters and never confirmed it.', { hint: 'resend the message without invisible characters (zero-width spaces, direction marks, byte order marks).' });
+}
+
+// What the pty drew, without its escape sequences.
+const textDrawnBy = (rawOutput: string) => rawOutput.replace(TERMINAL_ESCAPE_SEQUENCES, '');
+const countMatches = (pattern: RegExp, rawOutput: string) => textDrawnBy(rawOutput).match(pattern)?.length ?? 0;
 
 const LOW_SURROGATE_RANGE = { min: 0xdc00, max: 0xdfff };
 
@@ -326,6 +391,10 @@ export class SessionService {
   private readonly deliveries = new Map<string, Delivery>();
   // Message ids whose '\r' reached the pty but whose markDelivered has not succeeded yet.
   private readonly unrecordedDeliveries = new Map<string, string>();
+  // Messages the CLI held for review and the daemon gave up on: a replay of the same message_id must not report them delivered.
+  // ponytail: in memory only, so a daemon restart forgets them and a replay then reads the stored status. Ceiling: a sender
+  // that replays across a restart is told "delivered"; upgrade path is a 'failed' status in message_queue.
+  private readonly abandonedMessageIds = new Set<string>();
   // Sessions whose updateModel() could not relaunch immediately (a turn, a permission prompt, or an
   // in-flight delivery was in the way); advance() consumes this the next time the session is deliverable.
   private readonly pendingRelaunches = new Set<string>();
@@ -398,7 +467,7 @@ export class SessionService {
     } catch (err) {
       // The row above already exists: left alone, it would be a ghost forever — starting, no handle,
       // unclosable and unreopenable. Same treatment as resumeOne's own launch failure.
-      log('error', `create: session ${id} failed to launch`, err);
+      this.logLaunchFailure(`create: session ${id} failed to launch`, err);
       this.markClosed(id, { exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE, reason: 'launch_failed', failure: err });
       throw err;
     }
@@ -431,7 +500,7 @@ export class SessionService {
   // Rewrites a queued message that no delivery has touched yet; false once it is typed, submitted or gone.
   replaceQueuedMessageBody(input: { sessionId: string; messageId: string; body: string }): boolean {
     const { phase } = this.deliveryOf(input.sessionId);
-    const isBeingDelivered = (phase.name === 'typing' || phase.name === 'typed') && phase.messageId === input.messageId;
+    const isBeingDelivered = (phase.name === 'typing' || phase.name === 'typed' || phase.name === 'reviewing') && phase.messageId === input.messageId;
     const isSubmittedAwaitingRecord = this.unrecordedDeliveries.get(input.sessionId) === input.messageId;
     if (isBeingDelivered || isSubmittedAwaitingRecord) return false;
     return this.queue.replaceQueuedBody(input.messageId, input.body);
@@ -462,6 +531,7 @@ export class SessionService {
         // collision, not a retry, and must fail loudly — never return a stranger's status, never drop the
         // new send on the floor.
         const isSameSend = existing.sessionId === session.id && existing.fromSessionId === input.fromSessionId && existing.body === body;
+        if (isSameSend && this.abandonedMessageIds.has(existing.id)) throw heldForReviewError();
         if (isSameSend) return { status: existing.status, messageId: existing.id };
         throw new MessageIdAlreadyUsedError(input.messageId);
       }
@@ -556,7 +626,9 @@ export class SessionService {
     if (!outcome.launched) {
       this.removeReopenRecord({ sessionId, reopenEventId });
       if (isNamedLaunchFailure(outcome.failure)) throw outcome.failure;
-      throw new SessionReopenError('launch_failed', `session ${sessionId} failed to relaunch: ${outcome.reason}`);
+      const launchFailure = new SessionReopenError('launch_failed', `session ${sessionId} failed to relaunch: ${outcome.reason}`);
+      carryLoggedRef(outcome.failure, launchFailure);
+      throw launchFailure;
     }
     this.deps.bus.emit({ type: 'session.reopened', sessionId });
     return this.repo.get(sessionId)!;
@@ -713,7 +785,13 @@ export class SessionService {
     // Any real transition away from 'generating' (Stop, a permission prompt, the idle_prompt self-heal,
     // the session closing) makes an armed interrupt watch moot — never let a late-firing one override it.
     this.disarmInterruptWatch(sessionId);
-    if (this.isAwaitingTurnStart(sessionId)) this.enter(sessionId, READY); // any real transition proves the submitted turn started
+    // A reviewed message is only proven taken by a turn start (UserPromptSubmit lands in generating): any other transition
+    // (input asked, a late Stop, the session ending) says nothing about a composer that still holds it, and leaves the review as it is.
+    const { phase: deliveryPhase } = this.deliveryOf(sessionId);
+    const isTurnStart = state === 'generating' || state === 'waiting_permission';
+    if (deliveryPhase.name === 'reviewing') {
+      if (isTurnStart) this.acceptReviewedMessage(sessionId, deliveryPhase);
+    } else if (this.isAwaitingTurnStart(sessionId)) this.enter(sessionId, READY); // any real transition proves the submitted turn started
     if (state === 'closed') {
       // harness_exit means the process already died — markClosed only records it. Any other path to
       // closed (SessionEnd, etc.) is not proof the process actually exited, so it must go through the
@@ -944,6 +1022,17 @@ export class SessionService {
     }
     const handle = this.handles.get(sessionId);
     if (!handle) return;
+    if (phase.name === 'reviewing') {
+      // Typed text would be submitted together with the held message by the confirmation Enter: it waits for the review's end.
+      // An Escape or Ctrl-C is the human's intent to interrupt and goes through at once, after what was typed before it.
+      const isInterruptIntent = INTERRUPT_KEYS.some((key) => data.includes(key));
+      if (!isInterruptIntent) {
+        phase.deferredRaw.push(data);
+        return;
+      }
+      phase.isHumanInterruptPassedThrough = true;
+      this.flushDeferredRaw(sessionId, handle, phase.deferredRaw.splice(0));
+    }
     this.writeRawChunkAndArm(sessionId, handle, data);
   }
 
@@ -1074,6 +1163,8 @@ export class SessionService {
     const isExplicitClose = options?.cause === undefined;
     if (isExplicitClose) this.idsClosingForDaemonShutdown.delete(sessionId); // someone asked: the close is theirs, not the shutdown's
     this.recordCloseCause(sessionId, options?.cause);
+    // A requested close owns the exit from here on: a start timeout still armed would kill again and close as resume_timeout.
+    this.clearResumeTimer(sessionId);
     // Disarmed eagerly, like retireForRelaunch, before the SIGTERM->SIGKILL grace window even starts: a
     // watch left armed through that window could still see a marker and flip session state while the
     // process is on its way out (or wedged and never exiting at all).
@@ -1179,6 +1270,19 @@ export class SessionService {
 
   byHookToken(token: string): Session | undefined { return this.repo.byHookToken(token); }
   transcriptPathOf(id: string): string | undefined { return this.transcriptPaths.get(id); }
+
+  // The resolved path of the session's current transcript when it passes the same checks as the two readers above, else undefined. Never throws.
+  trustedTranscriptFileOf(sessionId: string): string | undefined {
+    const transcriptPath = this.transcriptPaths.get(sessionId);
+    if (transcriptPath === undefined) return undefined;
+    try {
+      if (!isTrustedTranscriptPath(transcriptPath) || !this.isTranscriptOfSession(sessionId, transcriptPath)) return undefined;
+      const resolvedPath = existsSync(transcriptPath) ? realpathSync(transcriptPath) : transcriptPath;
+      return this.isTranscriptOfSession(sessionId, resolvedPath) ? resolvedPath : undefined;
+    } catch {
+      return undefined;
+    }
+  }
   byMcpToken(token: string): Session | undefined { return this.repo.byMcpToken(token); }
 
   // Boot resume decides here which rows come back: every row still open (a daemon killed without a graceful
@@ -1224,9 +1328,7 @@ export class SessionService {
       // A transition that rolled back leaves the row closed with its shutdown marker: markClosed skips a closed row, so the marker is rewritten here.
       const isStillClosedByShutdown = this.repo.wasClosedByDaemonShutdown(sessionId);
       if (isStillClosedByShutdown) {
-        this.repo.failShutdownClose(sessionId, RESUME_LAUNCH_FAILED_EXIT_CODE, new Date().toISOString());
-        this.deps.bus.emit({ type: 'session.closed', sessionId, ...closure });
-        this.announceClosure(sessionId, closure);
+        this.rewriteClosedRowAsFailedLaunch(sessionId, closure);
         return;
       }
       this.markClosed(sessionId, closure);
@@ -1238,8 +1340,130 @@ export class SessionService {
 
   // ponytail: 200 KB ring buffer, persist scrollback to disk if replays matter more
   private appendOutput(sessionId: string, data: string): void {
-    const combined = (this.outputBuffers.get(sessionId) ?? '') + data;
+    const previousOutput = this.outputBuffers.get(sessionId) ?? '';
+    const combined = previousOutput + data;
     this.outputBuffers.set(sessionId, trimToTail(combined, OUTPUT_BUFFER_LIMIT));
+    // Only what this chunk added counts: a notice the margin still holds from an earlier chunk is not drawn again.
+    const drawnAgain = (pattern: RegExp) => {
+      const inThisChunkAndMargin = countMatches(pattern, combined.slice(-(data.length + REVIEW_NOTICE_SPLIT_ACROSS_CHUNKS_MARGIN)));
+      const inMarginAlone = countMatches(pattern, previousOutput.slice(-REVIEW_NOTICE_SPLIT_ACROSS_CHUNKS_MARGIN));
+      return inThisChunkAndMargin > inMarginAlone;
+    };
+    const isNoticeDrawn = drawnAgain(INVISIBLE_CHARACTERS_REVIEW_NOTICE);
+    const isGeneratingMarkerDrawn = drawnAgain(GENERATING_MARKER);
+    if (!isNoticeDrawn && !isGeneratingMarkerDrawn) return;
+    const { phase } = this.deliveryOf(sessionId);
+    if (phase.name === 'reviewing') {
+      phase.isNoticeRedrawn ||= isNoticeDrawn;
+      phase.isGeneratingSeen ||= isGeneratingMarkerDrawn;
+    }
+    if (isNoticeDrawn) this.startConfirmingReview(sessionId);
+  }
+
+  // The notice is redrawn as often as the CLI repaints: only the first one of a submitted message starts the confirmations.
+  private startConfirmingReview(sessionId: string): void {
+    const { phase } = this.deliveryOf(sessionId);
+    const handle = this.liveHandle(sessionId);
+    if (!handle) return;
+    const isReviewOfSubmittedMessage = phase.name === 'submitted';
+    const isReviewOfWatchedMessage = phase.name === 'reviewing' && phase.stage === 'watching';
+    if (!isReviewOfSubmittedMessage && !isReviewOfWatchedMessage) return;
+    // A message that quotes the notice's own words makes the CLI's echo of it look like the notice.
+    const isEchoOfTheBody = isReviewOfSubmittedMessage && countMatches(INVISIBLE_CHARACTERS_REVIEW_NOTICE, this.queue.getById(phase.messageId)?.body ?? '') > 0;
+    if (isEchoOfTheBody) return;
+    const carried = isReviewOfWatchedMessage ? phase : undefined;
+    const settle = this.schedule(sessionId, REVIEW_SETTLE_MS, () => this.confirmReview(sessionId));
+    this.enter(sessionId, {
+      name: 'reviewing', messageId: phase.messageId, handle, stage: 'confirming', confirmations: 0, isDeliveryRecorded: isReviewOfSubmittedMessage,
+      deferredRaw: carried?.deferredRaw ?? [], isNoticeRedrawn: false, isGeneratingSeen: carried?.isGeneratingSeen ?? false, isHumanInterruptPassedThrough: carried?.isHumanInterruptPassedThrough ?? false,
+    }, settle);
+  }
+
+  private confirmReview(sessionId: string): void {
+    const { phase } = this.deliveryOf(sessionId);
+    if (phase.name !== 'reviewing' || phase.stage !== 'confirming') return;
+    const isHandleReplaced = this.liveHandle(sessionId) !== phase.handle;
+    if (isHandleReplaced) {
+      this.enter(sessionId, READY);
+      return;
+    }
+    const isOutOfConfirmations = phase.confirmations >= MAX_REVIEW_CONFIRMATIONS;
+    if (isOutOfConfirmations) {
+      this.endConfirmations(sessionId, phase);
+      return;
+    }
+    phase.isNoticeRedrawn = false;
+    phase.handle.write('\r');
+    const patience = this.schedule(sessionId, REVIEW_CONFIRMATION_PATIENCE_MS, () => this.confirmReview(sessionId));
+    this.enter(sessionId, { ...phase, confirmations: phase.confirmations + 1 }, patience);
+  }
+
+  // Only a notice drawn again after the last Enter, with no sign the CLI took the message, proves the composer still holds the paste.
+  private endConfirmations(sessionId: string, phase: ReviewingPhase): void {
+    const isComposerProvenHeld = phase.isNoticeRedrawn && !phase.isGeneratingSeen && !phase.isHumanInterruptPassedThrough;
+    if (isComposerProvenHeld) {
+      this.clearStuckComposer(sessionId, phase);
+      return;
+    }
+    const release = this.schedule(sessionId, REVIEW_UNCONFIRMED_RELEASE_MS, () => this.releaseUnconfirmedReview(sessionId));
+    this.enter(sessionId, { ...phase, stage: 'exhausted' }, release);
+  }
+
+  private releaseUnconfirmedReview(sessionId: string): void {
+    const { phase } = this.deliveryOf(sessionId);
+    if (phase.name !== 'reviewing' || phase.stage !== 'exhausted') return;
+    this.giveUpOnReview(sessionId, phase);
+  }
+
+  // Claude Code empties its composer on two Escapes in a row; one alone leaves the text.
+  private clearStuckComposer(sessionId: string, phase: ReviewingPhase): void {
+    phase.handle.write(ESCAPE_KEY);
+    const secondEscape = this.schedule(sessionId, COMPOSER_CLEAR_GAP_MS, () => this.abandonReview(sessionId));
+    this.enter(sessionId, { ...phase, stage: 'clearing' }, secondEscape);
+  }
+
+  private abandonReview(sessionId: string): void {
+    const { phase } = this.deliveryOf(sessionId);
+    if (phase.name !== 'reviewing' || phase.stage !== 'clearing') return;
+    const isHandleReplaced = this.liveHandle(sessionId) !== phase.handle;
+    const isTakenByTheCliMeanwhile = phase.isGeneratingSeen || phase.isHumanInterruptPassedThrough;
+    if (!isHandleReplaced && !isTakenByTheCliMeanwhile) phase.handle.write(ESCAPE_KEY);
+    this.giveUpOnReview(sessionId, phase);
+  }
+
+  private giveUpOnReview(sessionId: string, phase: ReviewingPhase): void {
+    this.unfinishedTurns.delete(sessionId);
+    this.enter(sessionId, READY);
+    this.releaseDeferredRaw(sessionId, phase);
+    // Out of the queue, or it is typed again and again: it was not submitted, so no message.delivered follows.
+    try {
+      if (!phase.isDeliveryRecorded) this.queue.markDelivered(phase.messageId);
+    } catch (err) {
+      log('error', `delivery: session ${sessionId} could not take the unsent message ${phase.messageId} out of the queue`, err);
+    }
+    this.abandonedMessageIds.add(phase.messageId);
+    this.announceError(sessionId, heldForReviewError(), 'delivery failed');
+    this.advance(sessionId);
+  }
+
+  // What the human typed during the review goes to the pty now, on the handle that held the message (never on a replaced one).
+  private releaseDeferredRaw(sessionId: string, phase: ReviewingPhase): void {
+    const isHandleReplaced = this.liveHandle(sessionId) !== phase.handle;
+    const deferredRaw = phase.deferredRaw.splice(0);
+    if (!isHandleReplaced) this.flushDeferredRaw(sessionId, phase.handle, deferredRaw);
+  }
+
+  // The turn the CLI started proves it accepted the Enter: only now a reviewed message counts as delivered.
+  private acceptReviewedMessage(sessionId: string, phase: ReviewingPhase): void {
+    this.enter(sessionId, READY);
+    this.releaseDeferredRaw(sessionId, phase);
+    if (phase.isDeliveryRecorded) return;
+    this.unrecordedDeliveries.set(sessionId, phase.messageId);
+    try {
+      this.recordDelivery(sessionId);
+    } catch (err) {
+      log('error', `delivery: session ${sessionId} submitted message ${phase.messageId}, recording it failed and is retried before the next message`, err);
+    }
   }
 
   // Moves the session's delivery as far as it can go right now. Nothing is typed or submitted unless the
@@ -1249,8 +1473,12 @@ export class SessionService {
     const session = this.repo.get(sessionId);
     const isDeliverable = session !== undefined && canDeliverNow(session.state);
     if (!isDeliverable) return;
-    const { phase } = this.deliveryOf(sessionId);
+    const { phase, failedAttempts } = this.deliveryOf(sessionId);
     if (phase.name === 'typed') this.submit(sessionId, phase);
+    // A review whose step threw keeps its phase: the retry resumes it (a review that is not failing is moved by its own timer).
+    const isReviewStepFailed = phase.name === 'reviewing' && failedAttempts > 0;
+    if (isReviewStepFailed && phase.stage === 'confirming') this.confirmReview(sessionId);
+    if (isReviewStepFailed && phase.stage === 'clearing') this.abandonReview(sessionId);
     if (phase.name !== 'ready') return;
     // A deferred relaunch always wins over the next queued message: it was requested first, and typing
     // into a handle we're about to kill would just be retyped into the resumed one anyway.
@@ -1314,19 +1542,53 @@ export class SessionService {
     phase.handle.write('\r');
     // The '\r' reached the pty: the delivery is committed here, before the deferred flush below, so nothing
     // past this line may lead to a second '\r' — a throwing flush must never look like a failed submit.
-    this.unrecordedDeliveries.set(sessionId, phase.messageId);
     this.unfinishedTurns.add(sessionId);
-    const turnStartTimeout = this.schedule(sessionId, TURN_START_TIMEOUT_MS, () => this.stopAwaitingTurnStart(sessionId));
-    this.enter(sessionId, { name: 'submitted', messageId: phase.messageId }, turnStartTimeout);
-    try {
-      this.recordDelivery(sessionId);
-    } catch (err) {
-      log('error', `delivery: session ${sessionId} submitted message ${phase.messageId}, recording it failed and is retried before the next message`, err);
+    if (this.mayDrawReviewNotice(phase.messageId)) {
+      this.watchForReviewNotice(sessionId, phase); // the deferred raw input rides on the review and is flushed when it ends
+      return;
     }
+    this.commitSubmission(sessionId, phase.messageId);
     // Flushed right after the Enter, in arrival order: whatever was deferred behind this message now goes
     // straight through, on the same handle that just received the Enter. The delivery above is already
     // committed, so a throwing write here only drops the rest of this best-effort flush.
     this.flushDeferredRaw(sessionId, phase.handle, phase.deferredRaw);
+  }
+
+  private commitSubmission(sessionId: string, messageId: string): void {
+    this.unrecordedDeliveries.set(sessionId, messageId);
+    const turnStartTimeout = this.schedule(sessionId, TURN_START_TIMEOUT_MS, () => this.stopAwaitingTurnStart(sessionId));
+    this.enter(sessionId, { name: 'submitted', messageId }, turnStartTimeout);
+    try {
+      this.recordDelivery(sessionId);
+    } catch (err) {
+      log('error', `delivery: session ${sessionId} submitted message ${messageId}, recording it failed and is retried before the next message`, err);
+    }
+  }
+
+  private mayDrawReviewNotice(messageId: string): boolean {
+    const body = this.queue.getById(messageId)?.body ?? '';
+    return MAY_BE_STRIPPED_BY_THE_CLI.test(body.replace(/[\n\r\t]/g, ''));
+  }
+
+  // The notice follows the Enter within milliseconds; once its window passed without one, the CLI took the body as is.
+  private watchForReviewNotice(sessionId: string, phase: TypedPhase): void {
+    const window = this.schedule(sessionId, REVIEW_NOTICE_WINDOW_MS, () => this.settleWithoutNotice(sessionId));
+    this.enter(sessionId, {
+      name: 'reviewing', messageId: phase.messageId, handle: phase.handle, stage: 'watching', confirmations: 0, isDeliveryRecorded: false,
+      deferredRaw: phase.deferredRaw, isNoticeRedrawn: false, isGeneratingSeen: false, isHumanInterruptPassedThrough: false,
+    }, window);
+  }
+
+  private settleWithoutNotice(sessionId: string): void {
+    const { phase } = this.deliveryOf(sessionId);
+    if (phase.name !== 'reviewing' || phase.stage !== 'watching') return;
+    const isHandleReplaced = this.liveHandle(sessionId) !== phase.handle;
+    if (isHandleReplaced) {
+      this.enter(sessionId, READY);
+      return;
+    }
+    this.commitSubmission(sessionId, phase.messageId);
+    this.releaseDeferredRaw(sessionId, phase);
   }
 
   // Deferred raw input is best-effort keystrokes, never part of a delivery's commit: a throwing write stops
@@ -1363,7 +1625,20 @@ export class SessionService {
     }
   }
 
+  // A body the CLI may have held for review, with no turn started: whatever notice it drew (unknown wording, hidden by the
+  // terminal width), the composer may still hold it, so the queue stays gated one more step and nothing is pressed.
   private stopAwaitingTurnStart(sessionId: string): void {
+    const { phase } = this.deliveryOf(sessionId);
+    const handle = this.liveHandle(sessionId);
+    const isUnprovenReview = phase.name === 'submitted' && handle !== undefined && this.mayDrawReviewNotice(phase.messageId);
+    if (isUnprovenReview) {
+      const release = this.schedule(sessionId, REVIEW_UNCONFIRMED_RELEASE_MS, () => this.releaseUnconfirmedReview(sessionId));
+      this.enter(sessionId, {
+        name: 'reviewing', messageId: phase.messageId, handle, stage: 'exhausted', confirmations: 0, isDeliveryRecorded: true,
+        deferredRaw: [], isNoticeRedrawn: false, isGeneratingSeen: false, isHumanInterruptPassedThrough: false,
+      }, release);
+      return;
+    }
     this.enter(sessionId, READY);
     this.advance(sessionId);
   }
@@ -1438,13 +1713,17 @@ export class SessionService {
   }
 
   // Best effort: an announcement that cannot be built or sent never stops the launch, close or delivery flow that raised it.
-  private announceError(sessionId: string, error: OpenFleetError, where: string): void {
+  // Returns the ref the watchers received, when the error is internal and so was logged under one.
+  private announceError(sessionId: string, error: OpenFleetError, where: string): string | undefined {
     const describe = this.deps.describeError;
-    if (!describe) return;
+    if (!describe) return undefined;
     try {
-      this.deps.bus.emit({ type: 'error', sessionId, error: describe(error, { sessionId, where }) });
+      const envelope = describe(error, { sessionId, where });
+      this.deps.bus.emit({ type: 'error', sessionId, error: envelope });
+      return envelope.id;
     } catch (announceFailure) {
       log('warn', `${where}: the error event could not be broadcast`, { code: (announceFailure as { code?: string }).code });
+      return undefined;
     }
   }
 
@@ -1454,8 +1733,16 @@ export class SessionService {
     const error = isNamedLaunchFailure(failure) ? failure
       : failureCode === 'harness_exited'
         ? this.harnessExitedError(sessionId, exitCode)
-        : new OpenFleetError(failureCode, `session closed: ${reason}${exitCode === undefined ? '' : ` (exit code ${exitCode})`}`);
-    this.announceError(sessionId, error, `session closed: ${reason}`);
+        : new OpenFleetError(failureCode, `session closed: ${reason}${exitCode === undefined ? '' : ` (exit code ${exitCode})`}`, { cause: failure });
+    const watchersRef = this.announceError(sessionId, error, `session closed: ${reason}`);
+    if (watchersRef) rememberLoggedRef(failure, watchersRef); // the REST answer for the same failure reuses this ref instead of logging again
+  }
+
+  // The one record of a launch failure: describeError logs an internal failure with its cause and the ref the client receives;
+  // a named failure is not internal and an unwired describeError logs nothing, so the launch logs those itself.
+  private logLaunchFailure(message: string, failure: unknown): void {
+    const isLoggedByDescribeError = this.deps.describeError !== undefined && !isNamedLaunchFailure(failure);
+    if (!isLoggedByDescribeError) log('error', message, failure);
   }
 
   // harness_exited is not an internal kind (its message reaches the client), so the daemon logs it itself, once.
@@ -1470,9 +1757,18 @@ export class SessionService {
     return new OpenFleetError('harness_exited', `the agent process exited${exitDescription}.`, { hint: REOPEN_HINT });
   }
 
-  private announceLaunchFailureOnClosedRow(sessionId: string, closure: SessionClosure): void {
+  // A launch that fails on a row already closed (an ordinary reopen, a shutdown row a transition rolled back) leaves markClosed
+  // nothing to do: the row is rewritten here so live clients and a fresh snapshot agree on the failed close.
+  private rewriteClosedRowAsFailedLaunch(sessionId: string, closure: SessionClosure): void {
+    this.repo.failClosedRow(sessionId, RESUME_LAUNCH_FAILED_EXIT_CODE, new Date().toISOString());
     this.deps.bus.emit({ type: 'session.closed', sessionId, exitCode: closure.exitCode, reason: closure.reason });
     this.announceClosure(sessionId, closure);
+  }
+
+  private closeAfterFailedLaunch(sessionId: string, closure: SessionClosure): void {
+    const isRowAlreadyClosed = this.repo.get(sessionId)?.state === 'closed';
+    this.markClosed(sessionId, closure);
+    if (isRowAlreadyClosed) this.rewriteClosedRowAsFailedLaunch(sessionId, closure);
   }
 
   private markClosed(sessionId: string, closure: SessionClosure): void {
@@ -1498,7 +1794,8 @@ export class SessionService {
     // session once it is closed — defence in depth alongside byHookToken/byMcpToken's own state filter,
     // which is what actually protects a row a pre-patch build already left closed. reopen() issues its own
     // fresh pair on the way back up (resumeOne), so this never collides with that rotation.
-    const closedByDaemonShutdown = isClosingForShutdown && closure.reason !== 'resume_timeout'; // a resume that timed out failed: no boot retries it
+    const isFailedStart = closure.reason === 'resume_timeout' || closure.reason === 'launch_failed'; // a start that failed stays closed: no boot retries it
+    const closedByDaemonShutdown = isClosingForShutdown && !isFailedStart;
     this.repo.setClosed(sessionId, exitCode, new Date().toISOString(), newToken(), newToken(), { closedByDaemonShutdown });
     this.handles.delete(sessionId);
     activeHandleBySessionId.delete(sessionId);
@@ -1522,9 +1819,9 @@ export class SessionService {
       harness = this.harnessFor(session.harness);
     } catch (err) {
       if (!(err instanceof UnknownHarnessError)) throw err;
-      log('error', `resumeOne: session ${session.id} cannot resume: ${err.message}`);
-      this.markClosed(session.id, { exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE, reason: 'launch_failed' });
-      return { launched: false, reason: err.message };
+      this.logLaunchFailure(`resumeOne: session ${session.id} cannot resume`, err);
+      this.closeAfterFailedLaunch(session.id, { exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE, reason: 'launch_failed', failure: err });
+      return { launched: false, reason: err.message, failure: err };
     }
     this.warnIfPermissiveSettings(session.harness, session.directory);
     const permissionMode = this.resolveResumePermissionMode(session);
@@ -1558,12 +1855,8 @@ export class SessionService {
       // The launch builder refuses to resume with a missing/invalid session id (it would otherwise open
       // the CLI's interactive picker inside the PTY) — close this one row and keep resuming the rest of
       // the fleet rather than letting one bad row abort resumeAll for every other session.
-      log('error', `resumeOne: session ${session.id} failed to launch`, err);
-      const closure: SessionClosure = { exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE, reason: 'launch_failed', failure: err };
-      // A reopened ordinary row is still closed here: markClosed leaves it as it is, so its failure is announced separately.
-      const isRowAlreadyClosed = this.repo.get(session.id)?.state === 'closed';
-      this.markClosed(session.id, closure);
-      if (isRowAlreadyClosed && isNamedLaunchFailure(err)) this.announceLaunchFailureOnClosedRow(session.id, closure);
+      this.logLaunchFailure(`resumeOne: session ${session.id} failed to launch`, err);
+      this.closeAfterFailedLaunch(session.id, { exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE, reason: 'launch_failed', failure: err });
       return { launched: false, reason: (err as Error).message, failure: err };
     }
     this.handles.set(session.id, handle);

@@ -115,6 +115,111 @@ describe('second target', () => {
   if (!hasX64Prebuild) it('SKIPPED: node-pty ships no darwin-x64 prebuild in this install', () => {});
 });
 
+describe('node-pty prebuild guard', () => {
+  const MACH_O_64_MAGIC = 0xfeedfacf;
+  const CPU_TYPE_X86_64 = 0x01000007;
+  const CPU_TYPE_ARM64 = 0x0100000c;
+
+  const machOHeader = (cpuType: number) => {
+    const header = Buffer.alloc(32);
+    header.writeUInt32LE(MACH_O_64_MAGIC, 0);
+    header.writeUInt32LE(cpuType, 4);
+    return header;
+  };
+
+  const writeFakeNodePty = ({
+    prebuildCpuType,
+    withPrebuild = true,
+    ptyNodeContents = machOHeader(prebuildCpuType),
+    spawnHelperContents = machOHeader(prebuildCpuType),
+  }: {
+    prebuildCpuType: number;
+    withPrebuild?: boolean;
+    ptyNodeContents?: Buffer | 'directory';
+    spawnHelperContents?: Buffer;
+  }) => {
+    const nodePtyFolder = join(makeScratchFolder(), 'node-pty');
+    mkdirSync(join(nodePtyFolder, 'lib'), { recursive: true });
+    writeFileSync(join(nodePtyFolder, 'package.json'), JSON.stringify({ name: 'node-pty', version: '1.1.0' }));
+    writeFileSync(join(nodePtyFolder, 'lib/index.js'), '');
+    if (withPrebuild) {
+      const prebuildFolder = join(nodePtyFolder, 'prebuilds/darwin-x64');
+      mkdirSync(prebuildFolder, { recursive: true });
+      if (ptyNodeContents === 'directory') mkdirSync(join(prebuildFolder, 'pty.node'));
+      else writeFileSync(join(prebuildFolder, 'pty.node'), ptyNodeContents);
+      writeFileSync(join(prebuildFolder, 'spawn-helper'), spawnHelperContents);
+    }
+    return nodePtyFolder;
+  };
+
+  const previousBundleOut = () => {
+    const out = join(makeScratchFolder(), 'previous');
+    cpSync(arm64Out, out, { recursive: true });
+    return out;
+  };
+
+  const bundleX64With = ({ nodePtyDir, out }: { nodePtyDir: string; out: string }) =>
+    runBundle(['--target', X64_TARGET, '--out', out, '--tauri-conf', tauriConf, '--node-pty-dir', nodePtyDir]);
+
+  it('bundles a node-pty whose darwin-x64 prebuild is a x86_64 Mach-O and ships only that prebuild', () => {
+    const out = join(makeScratchFolder(), 'x64');
+
+    const result = bundleX64With({ nodePtyDir: writeFakeNodePty({ prebuildCpuType: CPU_TYPE_X86_64 }), out });
+
+    expect(result.stderr).toBe('');
+    expect(result.status).toBe(0);
+    expect(prebuildFoldersIn(out)).toEqual(['darwin-x64']);
+  }, BOOT_TIMEOUT_MS);
+
+  it('fails loudly and keeps the previous bundle when node-pty has no darwin-x64 prebuild', () => {
+    const out = previousBundleOut();
+
+    const result = bundleX64With({ nodePtyDir: writeFakeNodePty({ prebuildCpuType: CPU_TYPE_X86_64, withPrebuild: false }), out });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr.trim().split('\n')).toHaveLength(1);
+    expect(result.stderr).toContain('darwin-x64');
+    expect(prebuildFoldersIn(out)).toEqual(['darwin-arm64']);
+  }, BOOT_TIMEOUT_MS);
+
+  it('fails loudly and keeps the previous bundle when the darwin-x64 prebuild is an arm64 Mach-O', () => {
+    const out = previousBundleOut();
+
+    const result = bundleX64With({ nodePtyDir: writeFakeNodePty({ prebuildCpuType: CPU_TYPE_ARM64 }), out });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(/arm64/);
+    expect(result.stderr).toContain('x86_64-apple-darwin');
+    expect(prebuildFoldersIn(out)).toEqual(['darwin-arm64']);
+  }, BOOT_TIMEOUT_MS);
+
+  const fatHeader = () => {
+    const header = Buffer.alloc(32);
+    header.writeUInt32BE(0xcafebabe, 0);
+    return header;
+  };
+
+  const refusedPrebuilds: Array<{ name: string; ptyNodeContents?: Buffer | 'directory'; spawnHelperContents?: Buffer; mentions: string }> = [
+    { name: 'a good pty.node with a wrong spawn-helper only', spawnHelperContents: machOHeader(CPU_TYPE_ARM64), mentions: 'spawn-helper' },
+    { name: 'a pty.node that is not a Mach-O', ptyNodeContents: Buffer.from('#!/bin/sh\necho not a binary, but long enough to fill a header\n'), mentions: 'pty.node' },
+    { name: 'a pty.node that is a fat/universal Mach-O', ptyNodeContents: fatHeader(), mentions: 'pty.node' },
+    { name: 'a pty.node truncated below the header size', ptyNodeContents: Buffer.from([0xcf, 0xfa]), mentions: 'pty.node' },
+    { name: 'an empty pty.node', ptyNodeContents: Buffer.alloc(0), mentions: 'pty.node' },
+    { name: 'a pty.node that is a directory', ptyNodeContents: 'directory', mentions: 'pty.node' },
+  ];
+
+  it.each(refusedPrebuilds)('refuses $name with a one-line error and keeps the previous bundle', ({ ptyNodeContents, spawnHelperContents, mentions }) => {
+    const out = previousBundleOut();
+
+    const result = bundleX64With({ nodePtyDir: writeFakeNodePty({ prebuildCpuType: CPU_TYPE_X86_64, ptyNodeContents, spawnHelperContents }), out });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr.trim().split('\n')).toHaveLength(1);
+    expect(result.stderr).toContain(mentions);
+    expect(prebuildFoldersIn(out)).toEqual(['darwin-arm64']);
+  }, BOOT_TIMEOUT_MS);
+});
+
 describe('unknown target', () => {
   it('is refused with a one-line error and nothing is written', () => {
     const out = join(makeScratchFolder(), 'never-created');
@@ -125,6 +230,17 @@ describe('unknown target', () => {
     expect(result.stdout).toBe('');
     expect(result.stderr.trim().split('\n')).toHaveLength(1);
     expect(result.stderr).toContain('riscv64-unknown-linux-gnu');
+    expect(existsSync(out)).toBe(false);
+  });
+
+  it.each(['constructor', '__proto__', 'toString'])('refuses the object prototype key "%s" as an unknown target', (target) => {
+    const out = join(makeScratchFolder(), 'never-created');
+
+    const result = runBundle(['--target', target, '--out', out, '--tauri-conf', tauriConf]);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr.trim().split('\n')).toHaveLength(1);
+    expect(result.stderr).toContain('unknown target');
     expect(existsSync(out)).toBe(false);
   });
 });
@@ -401,7 +517,7 @@ describe('the bundled daemon', () => {
     daemon.kill('SIGTERM');
     const exitCode = await Promise.race([exited, new Promise<string>((resolve) => setTimeout(() => resolve('timeout'), SHUTDOWN_TIMEOUT_MS))]);
 
-    expect(health).toEqual({ ok: true, version: TEST_VERSION });
+    expect(health).toEqual({ ok: true, version: TEST_VERSION, status: 'ok', issues: 0 });
     expect(appliedCount).toBe(sqlFilesIn(SOURCE_MIGRATIONS).length);
     expect(exitCode).toBe(0);
   }, BOOT_TIMEOUT_MS);

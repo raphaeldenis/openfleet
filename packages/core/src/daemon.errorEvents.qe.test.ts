@@ -23,7 +23,7 @@ describe('a booted daemon tells its clients why a session failed', () => {
     const home = tempDirs.make('of-daemon-error-events-');
     writeFileSync(join(home, 'config.json'), '{}');
     const config = loadConfig({ OPENFLEET_HOME: home, OPENFLEET_PORT: '0' });
-    daemon = await startDaemon(config);
+    daemon = await startDaemon(config, { claudeConfigPath: join(home, '.claude.json') });
     const { ticket } = (await (await fetch(`${daemon.server.url}/api/ws-ticket`, { method: 'POST', headers: { authorization: `Bearer ${config.adminToken}` } })).json()) as { ticket: string };
     const socket = new WebSocket(`${daemon.server.url.replace('http', 'ws')}/ws?ticket=${ticket}`);
     openSockets.push(socket);

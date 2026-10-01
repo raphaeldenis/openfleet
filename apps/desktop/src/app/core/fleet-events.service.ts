@@ -1,11 +1,37 @@
 import { Injectable, signal } from '@angular/core';
-import type { Approval, ManagerView, ServerEvent, Session, WorkingState } from '@openfleet/shared';
+import { closeReasonOfExitCode } from '@openfleet/shared';
+import type { Approval, DaemonIssue, ErrorEnvelope, ManagerView, ServerEvent, Session, SessionCloseReason, WorkingState } from '@openfleet/shared';
 import { Subject } from 'rxjs';
 import { environment } from '../../environments/environment';
 import { isUserTyping } from './terminal-keystrokes';
 
 const INITIAL_RECONNECT_DELAY_MS = 1000;
 const MAX_RECONNECT_DELAY_MS = 10_000;
+const MAX_BACKGROUND_FAILURES = 50;
+
+export interface BackgroundFailure {
+  key: string;
+  sessionId?: string;
+  envelope: ErrorEnvelope;
+  at: string;
+}
+
+// The daemon sends an `error` event both to answer a client message that failed and to announce a failure nobody asked for.
+// The reply to a rejected request (session_closed, invalid_body…) is the user's own doing; only a daemon-side failure,
+// or a message the CLI held for review, is news.
+function isBackgroundFailure({ kind, error }: ErrorEnvelope): boolean {
+  const isDaemonSideFailure = kind === 'internal' || kind === 'unavailable';
+  return isDaemonSideFailure || error === 'message_held_for_review';
+}
+
+function closeReasonsOfSnapshot(sessions: Session[]): ReadonlyMap<string, SessionCloseReason> {
+  const reasons = new Map<string, SessionCloseReason>();
+  for (const { id, state, exitCode } of sessions) {
+    const reason = state === 'closed' ? closeReasonOfExitCode(exitCode) : undefined;
+    if (reason) reasons.set(id, reason);
+  }
+  return reasons;
+}
 
 // The daemon never clears closedAt, so a live session keeps the stamp of a close it has long recovered
 // from. closedAt only means something while the session is closed or coming back (starting): drop it once live.
@@ -38,6 +64,12 @@ export class FleetEventsService {
   readonly workingStateMaxAgeMinutes = signal<number | undefined>(undefined);
   readonly workingStateMaxBytes = signal<number | undefined>(undefined);
   readonly connected = signal(false);
+  /** What keeps the daemon running degraded; empty while it is healthy or when an older daemon reports none. */
+  readonly daemonIssues = signal<DaemonIssue[]>([]);
+  /** Failures the daemon announced that no request of the user caused, newest first, until the user dismisses them. */
+  readonly backgroundFailures = signal<BackgroundFailure[]>([]);
+  private readonly closeReasons = signal<ReadonlyMap<string, SessionCloseReason>>(new Map());
+  private nextFailureNumber = 1;
   // A direct load of a route that never mounts App (e.g. /manager/:id) still needs to know
   // whether the first snapshot has arrived, so it can show a loading state instead of "not found".
   readonly snapshotReceived = signal(false);
@@ -187,12 +219,16 @@ export class FleetEventsService {
         this.workingStatesReported.set(event.workingStates !== undefined);
         this.workingStateMaxAgeMinutes.set(event.workingStateMaxAgeMinutes);
         this.workingStateMaxBytes.set(event.workingStateMaxBytes);
+        this.daemonIssues.set(event.daemonIssues ?? []);
+        this.closeReasons.set(closeReasonsOfSnapshot(event.sessions));
         this.snapshotReceived.set(true);
         return;
       case 'session.working_state': return this.workingStates.update((all) => new Map(all).set(event.state.sessionId, event.state));
       case 'session.created': return this.upsertSession(event.session);
       case 'session.state': return this.patchSession(event.sessionId, { state: event.state, stateSince: event.stateSince });
-      case 'session.closed': return this.patchSession(event.sessionId, { state: 'closed', exitCode: event.exitCode });
+      case 'session.closed':
+        this.rememberCloseReason(event.sessionId, event.reason ?? closeReasonOfExitCode(event.exitCode));
+        return this.patchSession(event.sessionId, { state: 'closed', exitCode: event.exitCode });
       case 'session.updated': return this.upsertSession(event.session);
       case 'session.output':
         this.output(event.sessionId).next(event.data);
@@ -210,9 +246,34 @@ export class FleetEventsService {
       case 'approval.resolved': return this.approvals.update((all) => all.filter((a) => a.id !== event.approval.id));
       case 'manager.created': return this.upsertManager(event.manager);
       case 'manager.pulsed': return this.upsertManager(event.manager);
-      case 'error': return; // no desktop surface reads a server error event yet
+      case 'error': return this.recordBackgroundFailure(event.error, event.sessionId);
+      case 'daemon.issues': return this.daemonIssues.set(event.issues);
       default: return;
     }
+  }
+
+  /** Why a session closed, as the daemon announced it; a snapshot only carries the two reasons the exit code encodes. */
+  closeReasonOf(sessionId: string): SessionCloseReason | undefined {
+    return this.closeReasons().get(sessionId);
+  }
+
+  dismissBackgroundFailure(key: string): void {
+    this.backgroundFailures.update((all) => all.filter((failure) => failure.key !== key));
+  }
+
+  private rememberCloseReason(sessionId: string, reason: SessionCloseReason | undefined): void {
+    this.closeReasons.update((all) => {
+      const next = new Map(all);
+      if (reason === undefined) next.delete(sessionId);
+      else next.set(sessionId, reason);
+      return next;
+    });
+  }
+
+  private recordBackgroundFailure(envelope: ErrorEnvelope, sessionId: string | undefined): void {
+    if (!isBackgroundFailure(envelope)) return;
+    const failure: BackgroundFailure = { key: `failure-${this.nextFailureNumber++}`, sessionId, envelope, at: new Date().toISOString() };
+    this.backgroundFailures.update((all) => [failure, ...all].slice(0, MAX_BACKGROUND_FAILURES));
   }
 
   private upsertSession(incoming: Session): void {
@@ -238,6 +299,7 @@ export class FleetEventsService {
   // A session closed while this client was connected never received a closedAt from the daemon; stamping it on
   // reopen keeps "closed, now coming back" recognisable for the whole starting window.
   private markReopened(id: string): void {
+    this.rememberCloseReason(id, undefined);
     const reopenedAt = new Date().toISOString();
     this.sessions.update((all) =>
       all.map((s) => (s.id === id ? { ...s, state: 'starting', exitCode: undefined, closedAt: s.closedAt ?? reopenedAt } : s)),

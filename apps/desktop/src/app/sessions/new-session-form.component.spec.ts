@@ -675,14 +675,16 @@ describe('NewSessionFormComponent', () => {
         expect(screen.getByTestId('manager-mission')).toHaveFocus();
       });
 
-      it('user is taken to the pulse seconds before the mission when both are invalid', async () => {
+      it('user with an invalid pulse cannot submit, so the mission is not flagged yet while the pulse alert stays up', async () => {
         await renderForm(fakeApi(), { mode: 'manager' });
         await fillSessionFields({ name: 'Lead' });
         await setNumberField('manager-pulse-seconds', '0');
 
         await userEvent.click(submitButton());
 
-        expect(screen.getByTestId('manager-pulse-seconds')).toHaveFocus();
+        expect(submitButton()).toBeDisabled();
+        expect(screen.getByTestId('manager-pulse-seconds-error')).toBeTruthy();
+        expect(screen.queryByTestId('manager-mission-error')).toBeNull();
       });
     });
   });
@@ -1084,14 +1086,15 @@ describe('NewSessionFormComponent', () => {
     it.each([
       ['an empty code', new ApiError(500, 'POST /api/sessions → 500', '')],
       ['a code the app does not know', new ApiError(418, 'POST /api/sessions → 418', 'teapot')],
-    ])('falls back to the HTTP status, without the request line, for %s', async (_label, error) => {
+    ])('falls back to a plain sentence, with neither the request line nor the HTTP status, for %s', async (_label, error) => {
       await renderForm(fakeApi({ createSession: vi.fn().mockRejectedValue(error) }));
       await fillSessionFields();
 
       await userEvent.click(submitButton());
 
       const errorLine = screen.getByTestId('new-session-form-error');
-      expect(errorLine).toHaveTextContent(String(error.status));
+      expect(errorLine).toHaveTextContent('Could not create the session');
+      expect(errorLine).not.toHaveTextContent(String(error.status));
       expect(errorLine).not.toHaveTextContent('/api/sessions');
     });
 
@@ -1124,7 +1127,7 @@ describe('NewSessionFormComponent', () => {
     });
 
     ['constructor', 'toString', '__proto__'].forEach((prototypeKey) => {
-      it(`an error code named "${prototypeKey}" reads as the HTTP status, not as a JavaScript object`, async () => {
+      it(`an error code named "${prototypeKey}" reads as a plain sentence, not as a JavaScript object`, async () => {
         await renderForm(fakeApi({ createSession: vi.fn().mockRejectedValue(new ApiError(500, 'POST /api/sessions → 500', prototypeKey)) }));
         await fillSessionFields();
 
@@ -1132,7 +1135,7 @@ describe('NewSessionFormComponent', () => {
 
         const errorLine = screen.getByTestId('new-session-form-error');
         expect(errorLine).not.toHaveTextContent(/native code|\[object Object\]/);
-        expect(errorLine).toHaveTextContent('500');
+        expect(errorLine).toHaveTextContent('Could not create the session');
       });
     });
 
@@ -1644,7 +1647,7 @@ describe('NewSessionFormComponent', () => {
       ['combobox', /harness/i],
       ['combobox', /model/i],
       ['radiogroup', /permission mode/i],
-      ['spinbutton', /pulse seconds/i],
+      ['spinbutton', /pulse cadence/i],
       ['spinbutton', /children cap/i],
       ['textbox', /mission/i],
     ] as const)('gives the %s named %s an accessible name for screen reader users', async (role, name) => {
@@ -1678,10 +1681,10 @@ describe('NewSessionFormComponent', () => {
       await setNumberField('manager-children-cap', '65');
       await userEvent.tab();
 
-      expect(screen.getByTestId('manager-pulse-seconds')).toHaveAccessibleName('Pulse seconds');
-      expect(screen.getByTestId('manager-pulse-seconds')).toHaveAccessibleDescription(/whole number between 1 and 86400/);
+      expect(screen.getByTestId('manager-pulse-seconds')).toHaveAccessibleName('Pulse cadence');
+      expect(screen.getByTestId('manager-pulse-seconds')).toHaveAccessibleDescription(/Pulse must be at least 1 s/);
       expect(screen.getByTestId('manager-children-cap')).toHaveAccessibleName('Children cap');
-      expect(screen.getByTestId('manager-children-cap')).toHaveAccessibleDescription(/whole number between 1 and 64/);
+      expect(screen.getByTestId('manager-children-cap')).toHaveAccessibleDescription(/between 1 and 64 — enter a whole number/);
     });
   });
 });

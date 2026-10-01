@@ -1,5 +1,5 @@
 import { signal } from '@angular/core';
-import type { Session, WorkingState } from '@openfleet/shared';
+import type { DaemonIssue, Session, WorkingState } from '@openfleet/shared';
 
 export const NOW_ISO = '2026-09-30T10:00:00.000Z';
 const MINUTE_MS = 60_000;
@@ -34,9 +34,13 @@ export function stateOf(patch: Partial<WorkingState> = {}): WorkingState {
   };
 }
 
-/** Working-state signals of a daemon that reports none, to spread into a spec's own FleetEventsService fake. */
+/** What a daemon that reports no working state, no degraded issue and no failure gives a spec's own FleetEventsService fake. */
 export function silentWorkingStateSignals() {
   return {
+    daemonIssues: signal<DaemonIssue[]>([]),
+    backgroundFailures: signal<unknown[]>([]),
+    dismissBackgroundFailure: () => undefined,
+    closeReasonOf: () => undefined,
     workingStates: signal<ReadonlyMap<string, WorkingState>>(new Map()),
     workingStatesReported: signal(false),
     workingStateMaxAgeMinutes: signal<number | undefined>(undefined),
@@ -56,6 +60,7 @@ interface FakeEventsOptions {
 export function fakeWorkingStateEvents(options: FakeEventsOptions = {}) {
   const { sessions = [sessionOf()], states = [], reported = true } = options;
   return {
+    ...silentWorkingStateSignals(),
     sessions: signal(sessions),
     approvals: signal<unknown[]>([]),
     managers: signal<unknown[]>([]),

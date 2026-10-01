@@ -292,6 +292,26 @@ describe('log — TTY printer', () => {
     });
   });
 
+  it('prints the cause chain of an error in the pretty line, redacted and cut after three causes', async () => {
+    setTerminalIsTty(true);
+    const { log } = await loadLogger();
+    const fifthCause = new Error('cause-5-too-deep');
+    const fourthCause = new Error('cause-4-too-deep', { cause: fifthCause });
+    const thirdCause = new Error('cause-3', { cause: fourthCause });
+    const secondCause = new Error('cause-2 token=hunter2secretvalue', { cause: thirdCause });
+    const firstCause = new Error('cause-1 spawn ENOENT', { cause: secondCause });
+
+    log('error', 'session closed', new Error('outer failure', { cause: firstCause }));
+
+    const [printed] = errorSpy.mock.calls[0] as [string];
+    expect(printed).toContain('outer failure');
+    expect(printed).toContain('cause-1 spawn ENOENT');
+    expect(printed).toContain('cause-2 token=***');
+    expect(printed).not.toContain('hunter2secretvalue');
+    expect(printed).toContain('cause-3');
+    expect(printed).not.toContain('cause-4-too-deep');
+  });
+
   it('prints NDJSON when stdout is not a TTY', async () => {
     setTerminalIsTty(false);
     const { log } = await loadLogger();

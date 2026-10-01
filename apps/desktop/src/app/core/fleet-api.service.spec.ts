@@ -25,6 +25,19 @@ describe('FleetApiService', () => {
     await expect(api.reopenSession('s1')).rejects.toMatchObject({ status: 409, code: 'not_closed' });
   });
 
+  it('keeps the whole error envelope of the daemon next to the code', async () => {
+    const envelope = { error: 'session_closed', kind: 'conflict', retry: 'never', message: 'The session is closed.' };
+    fetchMock.mockResolvedValue(fakeResponse({ ok: false, status: 409, json: () => Promise.resolve(envelope) }));
+
+    await expect(api.reopenSession('s1')).rejects.toMatchObject({ status: 409, code: 'session_closed', envelope });
+  });
+
+  it('keeps no envelope for a body that is not one', async () => {
+    fetchMock.mockResolvedValue(fakeResponse({ ok: false, status: 500, json: () => Promise.resolve({ error: 'internal_error' }) }));
+
+    await expect(api.reopenSession('s1')).rejects.toMatchObject({ code: 'internal_error', envelope: undefined });
+  });
+
   it('leaves the error code undefined for a non-JSON error body', async () => {
     fetchMock.mockResolvedValue(fakeResponse({ ok: false, status: 500, json: () => Promise.reject(new SyntaxError('Unexpected end of input')) }));
 

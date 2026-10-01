@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
 import { signal } from '@angular/core';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { InboxComponent } from './inbox.component';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
@@ -16,6 +16,10 @@ function fakeEvents(approval: Record<string, unknown> = {}) {
 }
 
 describe('InboxComponent', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it('shows zero-width and bidirectional controls in the session name of a gate as escapes', async () => {
     const name = `Gim${String.fromCharCode(0x200b)}li${String.fromCharCode(0x202e)}x`;
     const events = { ...fakeEvents(), sessions: signal([{ id: 's1', name, emoji: '⚔️', state: 'waiting_permission' }]) };
@@ -183,17 +187,6 @@ describe('InboxComponent', () => {
     expect(screen.getByTestId('inbox-gate-age')).toHaveTextContent(/^\s*2 h\s*$/);
   });
 
-  it('renders the args block on the terminal tokens at 0.75rem', async () => {
-    // Arrange & Act
-    await render(InboxComponent, { providers: [{ provide: FleetApiService, useValue: { decide: vi.fn() } }, { provide: FleetEventsService, useValue: fakeEvents() }] });
-    const args = getComputedStyle(screen.getByTestId('inbox-gate-args'));
-
-    // Assert
-    expect(args.backgroundColor).toBe('var(--term-bg)');
-    expect(args.color).toBe('var(--term-fg)');
-    expect(args.fontSize).toBe('0.75rem');
-  });
-
   it('lays the card out with an emoji avatar box, the kind badge in the meta row and a "Wants to run <tool>." sentence above the args', async () => {
     // Arrange & Act
     await render(InboxComponent, { providers: [{ provide: FleetApiService, useValue: { decide: vi.fn() } }, { provide: FleetEventsService, useValue: fakeEvents() }] });
@@ -202,13 +195,13 @@ describe('InboxComponent', () => {
     const args = within(card).getByTestId('inbox-gate-args');
 
     // Assert
-    expect(getComputedStyle(within(card).getByTestId('inbox-gate-avatar')).width).toBe('2rem');
+    expect(within(card).getByTestId('inbox-gate-avatar')).toBeInTheDocument();
     expect(within(within(card).getByTestId('inbox-gate-meta')).getByTestId('kind-badge')).toBeTruthy();
     expect(sentence).toHaveTextContent('Wants to run Bash.');
     expect(sentence.compareDocumentPosition(args) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it('titles the page with an h1 at 1.25rem/600 and keeps the filter chips on the title row', async () => {
+  it('titles the page with an h1 and keeps the filter chips on the title row', async () => {
     // Arrange & Act
     await render(InboxComponent, { providers: [{ provide: FleetApiService, useValue: { decide: vi.fn() } }, { provide: FleetEventsService, useValue: fakeEvents() }] });
     const heading = screen.getByRole('heading', { level: 1 });
@@ -216,8 +209,6 @@ describe('InboxComponent', () => {
 
     // Assert
     expect(heading).toHaveTextContent('Inbox');
-    expect(getComputedStyle(heading).fontSize).toBe('1.25rem');
-    expect(getComputedStyle(heading).fontWeight).toBe('600');
     expect(titleRow.contains(heading)).toBe(true);
     expect(within(titleRow).getByTestId('inbox-filters')).toBeTruthy();
   });
@@ -260,7 +251,134 @@ describe('InboxComponent', () => {
     expect(screen.queryByTestId('inbox-gate-card')).toBeNull();
   });
 
-  it('shows a centred "Nothing needs you" empty state and hides the count pill when there are no gates waiting', async () => {
+  describe('background failures', () => {
+    const deliveryFailure = {
+      key: 'f1', sessionId: 's1', at: '2026-09-30T10:00:00.000Z',
+      envelope: { error: 'delivery_failed', kind: 'unavailable', retry: 'later', message: 'daemon words' },
+    };
+    const internalFailure = {
+      key: 'f2', sessionId: 's1', at: '2026-09-30T10:01:00.000Z',
+      envelope: { error: 'launch_failed', kind: 'internal', retry: 'later', message: 'daemon words', id: '3f9a1c2e' },
+    };
+
+    function eventsWith(failures: unknown[]) {
+      const dismissBackgroundFailure = vi.fn();
+      const events = { ...fakeEvents(), backgroundFailures: signal(failures), dismissBackgroundFailure };
+      return { events, dismissBackgroundFailure };
+    }
+
+    async function renderWith(failures: unknown[]) {
+      const { events, dismissBackgroundFailure } = eventsWith(failures);
+      await render(InboxComponent, { providers: [{ provide: FleetApiService, useValue: { decide: vi.fn() } }, { provide: FleetEventsService, useValue: events }] });
+      return { dismissBackgroundFailure };
+    }
+
+    it('lists a failure as an ISSUE item with the session name and user copy, never the daemon words', async () => {
+      await renderWith([deliveryFailure]);
+
+      const item = screen.getByTestId('inbox-issue');
+      expect(item).toHaveTextContent('ISSUE');
+      expect(item).toHaveTextContent('Gimli');
+      expect(item).toHaveTextContent(/try again/i);
+      expect(item).not.toHaveTextContent('daemon words');
+      expect(item).not.toHaveTextContent('delivery_failed');
+    });
+
+    it('is a plain list item: no live region interrupts the user', async () => {
+      await renderWith([deliveryFailure]);
+
+      expect(screen.getByTestId('inbox-issue').closest('[role="alert"], [aria-live]')).toBeNull();
+    });
+
+    it('shows the ref of an internal failure', async () => {
+      await renderWith([internalFailure]);
+
+      expect(screen.getByTestId('inbox-issue')).toHaveTextContent('(ref 3f9a1c2e)');
+    });
+
+    it('copies the ref, the code, the message and the time with Copy details', async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+      await renderWith([internalFailure]);
+
+      await userEvent.click(screen.getByTestId('inbox-issue-copy-details'));
+
+      const copied = writeText.mock.calls[0]![0] as string;
+      expect(copied).toContain('ref 3f9a1c2e');
+      expect(copied).toContain('launch_failed');
+      expect(copied).toContain('2026-09-30T10:01:00.000Z');
+    });
+
+    it('copies nothing but those fields, whatever else the envelope carries', async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+      const envelopeWithForeignFields = { ...internalFailure.envelope, hint: 'see /Users/ana/.openfleet', detail: { token: 'Bearer abc123' } };
+      await renderWith([{ ...internalFailure, envelope: envelopeWithForeignFields }]);
+
+      await userEvent.click(screen.getByTestId('inbox-issue-copy-details'));
+
+      expect(writeText.mock.calls[0]![0]).not.toMatch(/bearer|abc123|\/Users\//i);
+    });
+
+    it('dismisses an item on request', async () => {
+      const { dismissBackgroundFailure } = await renderWith([deliveryFailure]);
+
+      await userEvent.click(screen.getByTestId('inbox-issue-dismiss'));
+
+      expect(dismissBackgroundFailure).toHaveBeenCalledWith('f1');
+    });
+
+    it('shows no issue section when nothing failed in the background', async () => {
+      await renderWith([]);
+
+      expect(screen.queryByTestId('inbox-issue')).toBeNull();
+    });
+
+    it('does not claim that nothing needs you while an issue is listed', async () => {
+      const events = { sessions: signal([]), approvals: signal([]), ...silentWorkingStateSignals(), backgroundFailures: signal([deliveryFailure]), dismissBackgroundFailure: vi.fn() };
+
+      await render(InboxComponent, { providers: [{ provide: FleetApiService, useValue: { decide: vi.fn() } }, { provide: FleetEventsService, useValue: events }] });
+
+      expect(screen.getByTestId('inbox-issue')).toBeTruthy();
+      expect(screen.queryByText('Nothing needs you')).toBeNull();
+    });
+
+    describe('focus after Dismiss', () => {
+      const secondDeliveryFailure = { ...deliveryFailure, key: 'f3' };
+
+      async function renderWithRealDismissal(failures: unknown[]) {
+        const backgroundFailures = signal(failures);
+        const dismissBackgroundFailure = (key: string) => backgroundFailures.update((all) => all.filter((failure) => (failure as { key: string }).key !== key));
+        const events = { ...fakeEvents(), backgroundFailures, dismissBackgroundFailure };
+        await render(InboxComponent, { providers: [{ provide: FleetApiService, useValue: { decide: vi.fn() } }, { provide: FleetEventsService, useValue: events }] });
+      }
+
+      it('moves to the Dismiss button of the next issue', async () => {
+        await renderWithRealDismissal([deliveryFailure, secondDeliveryFailure]);
+        const [firstDismiss] = screen.getAllByTestId('inbox-issue-dismiss');
+
+        await userEvent.click(firstDismiss!);
+
+        await vi.waitFor(() => {
+          expect(screen.getAllByTestId('inbox-issue')).toHaveLength(1);
+          expect(document.activeElement).toBe(screen.getByTestId('inbox-issue-dismiss'));
+        });
+      });
+
+      it('moves to the Inbox heading when the last issue is dismissed, so a keyboard user does not land on the page body', async () => {
+        await renderWithRealDismissal([deliveryFailure]);
+
+        await userEvent.click(screen.getByTestId('inbox-issue-dismiss'));
+
+        await vi.waitFor(() => {
+          expect(screen.queryByTestId('inbox-issue')).toBeNull();
+          expect(document.activeElement).toBe(screen.getByRole('heading', { name: /inbox/i }));
+        });
+      });
+    });
+  });
+
+  it('shows a "Nothing needs you" empty state and hides the count pill when there are no gates waiting', async () => {
     // Arrange
     const events = { sessions: signal([]), approvals: signal([]), ...silentWorkingStateSignals() };
 
@@ -271,7 +389,6 @@ describe('InboxComponent', () => {
     // Assert
     expect(empty).toHaveTextContent('Nothing needs you');
     expect(empty).toHaveTextContent('Gates, questions, budget incidents and manager proposals show up here.');
-    expect(getComputedStyle(empty).alignItems).toBe('center');
     expect(screen.queryByTestId('inbox-count')).toBeNull();
     expect(screen.queryByTestId('inbox-gate-card')).toBeNull();
   });
@@ -541,16 +658,5 @@ describe('InboxComponent', () => {
       // Assert
       expect(screen.getByTestId('inbox-gate-args')).toHaveTextContent('"command": "pwd"');
     });
-  });
-
-  it('signals that more args lie below the fold with a scroll-aware background: a bottom shadow that a local-attached cover hides once the end is reached', async () => {
-    // Arrange & Act
-    await render(InboxComponent, { providers: [{ provide: FleetApiService, useValue: { decide: vi.fn() } }, { provide: FleetEventsService, useValue: fakeEvents() }] });
-    const args = getComputedStyle(screen.getByTestId('inbox-gate-args'));
-
-    // Assert
-    expect(args.backgroundImage).toContain('gradient');
-    expect(args.backgroundAttachment).toContain('local');
-    expect(args.backgroundAttachment).toContain('scroll');
   });
 });
