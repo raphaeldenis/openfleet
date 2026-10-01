@@ -3,6 +3,7 @@ import { HTTP_STATUS_BY_KIND, OpenFleetError } from '@openfleet/shared';
 import type { EventBus } from '../events/eventBus.js';
 import type { ApprovalService } from '../governance/approvalService.js';
 import { tokensMatch } from '../ids.js';
+import { log } from '../logger.js';
 import type { ManagerService } from '../managers/managerService.js';
 import type { PulseScheduler } from '../managers/pulseScheduler.js';
 import type { ModelTable } from '../models.js';
@@ -16,6 +17,7 @@ import type { ProjectRepository } from '../projects/projectRepository.js';
 import type { SessionService } from '../sessions/sessionService.js';
 import type { DataStoreRepository } from '../stores/dataStoreRepository.js';
 import type { DataStoreService } from '../stores/dataStoreService.js';
+import type { TodoTracker } from '../todos/todoTracker.js';
 import type { WorkingStateService } from '../workingState/workingStateService.js';
 import { ALLOWED_ORIGINS } from './allowedOrigins.js';
 import { answerError } from './answerError.js';
@@ -56,6 +58,8 @@ export interface ServerDeps {
   contextNotice?: ContextNotice;
   // Without it the daemon reports no degraded state: /health says ok and the snapshot carries no daemonIssues.
   degraded?: DegradedRegistry;
+  // Without it the todos route, event and snapshot field do not exist and the hooks leave the todo tools alone.
+  todos?: TodoTracker;
   // Without it the test-only routes (fake-output) do not exist.
   e2eRoutes?: boolean;
 }
@@ -69,8 +73,10 @@ function applyCorsHeaders(req: IncomingMessage, res: ServerResponse): void {
 }
 
 async function handleHookRequest(req: IncomingMessage, res: ServerResponse, hookToken: string, deps: ServerDeps): Promise<void> {
-  if (!deps.sessions.byHookToken(hookToken)) return json(res, 200, {});
-  const body = await readJson(req);
+  const session = deps.sessions.byHookToken(hookToken);
+  if (!session) return json(res, 200, {});
+  const warnAboutTheIgnoredBody = (bytes: number) => log('warn', 'hook body over 1 MiB ignored', undefined, { code: 'hook_body_too_large', sessionId: session.id, bytes });
+  const body = await readJson(req, undefined, { skipOversized: true, onSkipped: warnAboutTheIgnoredBody });
   await hooksHandler(deps)({ req, res, params: { hookToken }, body });
 }
 

@@ -1270,6 +1270,19 @@ export class SessionService {
 
   byHookToken(token: string): Session | undefined { return this.repo.byHookToken(token); }
   transcriptPathOf(id: string): string | undefined { return this.transcriptPaths.get(id); }
+
+  // The resolved path of the session's current transcript when it passes the same checks as the two readers above, else undefined. Never throws.
+  trustedTranscriptFileOf(sessionId: string): string | undefined {
+    const transcriptPath = this.transcriptPaths.get(sessionId);
+    if (transcriptPath === undefined) return undefined;
+    try {
+      if (!isTrustedTranscriptPath(transcriptPath) || !this.isTranscriptOfSession(sessionId, transcriptPath)) return undefined;
+      const resolvedPath = existsSync(transcriptPath) ? realpathSync(transcriptPath) : transcriptPath;
+      return this.isTranscriptOfSession(sessionId, resolvedPath) ? resolvedPath : undefined;
+    } catch {
+      return undefined;
+    }
+  }
   byMcpToken(token: string): Session | undefined { return this.repo.byMcpToken(token); }
 
   // Boot resume decides here which rows come back: every row still open (a daemon killed without a graceful

@@ -1,4 +1,6 @@
-import { ClaudeHookEventSchema, WORKING_STATE_TOOL_NAMES, type ClaudeHookEvent, type ContextHookOutput, type StopHookOutput } from '@openfleet/shared';
+import { ClaudeHookEventSchema, TODO_TOOL_NAMES, WORKING_STATE_TOOL_NAMES, type ClaudeHookEvent, type ContextHookOutput, type StopHookOutput } from '@openfleet/shared';
+import { narrowTodoHookCall, withoutTodoPayload, type TodoHookCall } from '../todos/todoHookCall.js';
+import type { TodoTracker } from '../todos/todoTracker.js';
 import type { ContextNotice } from '../workingState/contextNotice.js';
 import type { SessionStartContext, SessionStartRequest } from '../workingState/sessionStartContext.js';
 import type { ApprovalService } from '../governance/approvalService.js';
@@ -20,7 +22,21 @@ function failingOpen<T>(degraded: DegradedRegistry | undefined, failure: string,
   }
 }
 
-export function hooksHandler(deps: { sessions: SessionService; approvals: ApprovalService; stopRefusal?: StopRefusal; sessionStartContext?: SessionStartContext; handoverLedger?: HandoverLedger; contextNotice?: ContextNotice; degraded?: DegradedRegistry }): Handler {
+// Only enqueues: the fold and the reads run after the hook is answered, on the session's own queue.
+function trackTodosFailingOpen(todos: TodoTracker | undefined, sessionId: string, event: ClaudeHookEvent, todoCall: TodoHookCall | undefined): void {
+  try {
+    if (!todos) return;
+    const isTodoToolCall = event.hook_event_name === 'PostToolUse' && (TODO_TOOL_NAMES as readonly string[]).includes(event.tool_name);
+    if (isTodoToolCall && todoCall) todos.applyHook(sessionId, todoCall);
+    if (isTodoToolCall && !todoCall) todos.readAfterHookWithoutPayload(sessionId);
+    if (event.hook_event_name === 'SessionStart' && event.source === 'resume') todos.repair(sessionId);
+    if (event.hook_event_name === 'Stop' || event.hook_event_name === 'SessionEnd') todos.catchUp(sessionId);
+  } catch {
+    log('warn', 'todos: a hook could not be handed to the todo tracker, changing nothing', undefined, { code: 'todo_notify_failed', sessionId });
+  }
+}
+
+export function hooksHandler(deps: { sessions: SessionService; approvals: ApprovalService; stopRefusal?: StopRefusal; sessionStartContext?: SessionStartContext; handoverLedger?: HandoverLedger; contextNotice?: ContextNotice; todos?: TodoTracker; degraded?: DegradedRegistry }): Handler {
   const decideStopRefusalFailingOpen = (sessionId: string, stopHookActive: boolean): StopHookOutput | undefined =>
     failingOpen(deps.degraded, 'stop refusal check failed, letting the turn end', () => deps.stopRefusal?.decide({ sessionId, stopHookActive }));
 
@@ -48,7 +64,8 @@ export function hooksHandler(deps: { sessions: SessionService; approvals: Approv
     const isIgnorable = !session || !parsed.success || session.state === 'closed';
     if (isIgnorable) return json(res, 200, {});
 
-    const event = parsed.data;
+    const todoCall = parsed.data.hook_event_name === 'PostToolUse' ? narrowTodoHookCall(parsed.data) : undefined;
+    const event = withoutTodoPayload(parsed.data);
     const stopRefusal = event.hook_event_name === 'Stop' ? decideStopRefusalFailingOpen(session.id, event.stop_hook_active === true) : undefined;
     const previousTranscriptPath = deps.sessions.transcriptPathOf(session.id);
     const sessionStartContext = event.hook_event_name === 'SessionStart' ? buildSessionStartContextFailingOpen({ sessionId: session.id, source: event.source, previousTranscriptPath }) : undefined;
@@ -56,6 +73,7 @@ export function hooksHandler(deps: { sessions: SessionService; approvals: Approv
     const handoverReminderOutput = event.hook_event_name === 'UserPromptSubmit' && !isDaemonSeededPrompt ? recordHandoversFailingOpen({ sessionId: session.id, prompt: event.prompt }) : undefined;
     deps.sessions.applyInput(session.id, { kind: 'hook', event, turnContinues: stopRefusal !== undefined });
     trackContextNoticeFailingOpen(session.id, event);
+    trackTodosFailingOpen(deps.todos, session.id, event, todoCall);
     if (stopRefusal) return json(res, 200, stopRefusal);
     if (sessionStartContext) return json(res, 200, sessionStartContext);
     if (handoverReminderOutput) return json(res, 200, handoverReminderOutput);

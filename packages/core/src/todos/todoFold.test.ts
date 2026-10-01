@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { MAX_TODO_ITEMS, MAX_TODO_TEXT, MAX_TRACKED_TASKS, SEEN_CALLS_KEPT, type TodoToolName } from '@openfleet/shared';
 import { describe, expect, it, vi } from 'vitest';
-import { applyCompletedCall, createTodoFold, foldHookPayload, foldTranscriptText, normalisedTodoText, snapshotOf, type TodoFold } from './todoFold.js';
+import { applyCompletedCall, createTodoFold, foldHookPayload, foldTranscriptText, markRowsUnverified, normalisedTodoText, snapshotOf, type TodoFold } from './todoFold.js';
 import { narrowTodoHookCall, type TodoHookCall } from './todoHookCall.js';
 
 const NOW = new Date('2026-09-30T17:00:00.000Z');
@@ -800,5 +800,72 @@ describe('hostile input never throws and never pollutes', () => {
 
     expect(snapshot(fold).items).toHaveLength(MAX_TODO_ITEMS);
     expect(snapshot(fold).items.every((item) => item.content.length <= MAX_TODO_TEXT)).toBe(true);
+  });
+});
+
+describe('after a resume the CLI restarts its task ids at #1 while the fold still holds the old rows', () => {
+  const foldOldRowsFromHistory = () => {
+    const fold = newFold();
+    foldLines(fold, [...createLines('toolu_old1', '1', 'Old one'), ...updateLines('toolu_old1u', '1', 'completed'), ...createLines('toolu_old2', '2', 'Old two')]);
+    markRowsUnverified(fold);
+    return fold;
+  };
+
+  it('replaces the row entirely when a create reuses its id, so the new task is pending with the new subject and activeForm', () => {
+    const fold = foldOldRowsFromHistory();
+
+    foldHookPayload(fold, hookCall('TaskCreate', 'toolu_new1', { subject: 'New one', activeForm: 'Doing new one' }, { task: { id: '1', subject: 'New one' } }));
+
+    expect(snapshot(fold).items).toEqual([
+      { id: '1', content: 'New one', status: 'pending', activeForm: 'Doing new one' },
+      { id: '2', content: 'Old two', status: 'pending', unverified: true },
+    ]);
+  });
+
+  it('drops the old activeForm when the replacing create carries none', () => {
+    const fold = newFold();
+    foldHookPayload(fold, hookCall('TaskCreate', 'toolu_a', { subject: 'A', activeForm: 'Doing A' }, { task: { id: '1' } }));
+
+    foldHookPayload(fold, hookCall('TaskCreate', 'toolu_b', { subject: 'B' }, { task: { id: '1' } }));
+
+    expect(snapshot(fold).items).toEqual([{ id: '1', content: 'B', status: 'pending' }]);
+  });
+
+  it('marks every row rebuilt from history as unverified', () => {
+    expect(snapshot(foldOldRowsFromHistory()).items.every((item) => item.unverified === true)).toBe(true);
+  });
+
+  it('clears the marker of one row when a live update names its id, and keeps the others', () => {
+    const fold = foldOldRowsFromHistory();
+
+    foldHookPayload(fold, hookCall('TaskUpdate', 'toolu_live', { taskId: '2', status: 'in_progress' }, { success: true, taskId: '2', statusChange: { from: 'pending', to: 'in_progress' } }));
+
+    expect(snapshot(fold).items.map((item) => `${item.id}:${item.unverified ?? false}`)).toEqual(['1:true', '2:false']);
+  });
+
+  it('replaces the list, with no marker left, when a TaskList answers', () => {
+    const fold = foldOldRowsFromHistory();
+
+    foldHookPayload(fold, hookCall('TaskList', 'toolu_list', {}, { tasks: [{ id: '2', subject: 'Old two', status: 'pending' }] }));
+
+    expect(snapshot(fold).items).toEqual([{ id: '2', content: 'Old two', status: 'pending' }]);
+  });
+
+  it('removes an unverified ghost row, without a warning, when the CLI answers success:false for its id', () => {
+    const fold = foldOldRowsFromHistory();
+
+    const isApplied = foldHookPayload(fold, hookCall('TaskUpdate', 'toolu_ghost', { taskId: '1', status: 'completed' }, { success: false, taskId: '1', error: 'Task not found' }));
+
+    expect(isApplied).toBe(true);
+    expect(rowsOf(fold)).toEqual(['2:pending:Old two']);
+  });
+
+  it('keeps a verified row when a failed update names its id', () => {
+    const fold = newFold();
+    foldHookPayload(fold, hookCall('TaskCreate', 'toolu_a', { subject: 'A' }, { task: { id: '1' } }));
+
+    foldHookPayload(fold, hookCall('TaskUpdate', 'toolu_f', { taskId: '1', status: 'completed' }, { success: false, taskId: '1' }));
+
+    expect(rowsOf(fold)).toEqual(['1:pending:A']);
   });
 });

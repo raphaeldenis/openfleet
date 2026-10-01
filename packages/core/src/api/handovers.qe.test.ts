@@ -186,10 +186,10 @@ describe('user is protected at the scan and size caps (QE hostile)', () => {
     expect(await valuesOf(sessionId)).toEqual([]);
   });
 
-  it('refuses a hook body over 1 MiB with an error status and records nothing (router limit, outside the ledger)', async () => {
+  it('answers a hook body over 1 MiB with 200 and records nothing (router limit, outside the ledger)', async () => {
     const response = await fetch(`${fx.server.url}/hooks/${hookToken}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ session_id: 'c', hook_event_name: 'UserPromptSubmit', prompt: `${DESIGN_LINK} ${'a'.repeat(1_100_000)}` }) });
 
-    expect(response.status).toBe(413);
+    expect(response.status).toBe(200);
     expect(await valuesOf(sessionId)).toEqual([]);
   });
 });
