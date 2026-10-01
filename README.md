@@ -52,6 +52,10 @@ Cost: the claude-free step runs the core tests a second time (about 35 s more). 
 
 `git push --no-verify` is the only bypass. The hook path is shared by all worktrees through the common `.git/config`; each worktree needs one `pnpm install` (or `pnpm prepare`) to generate its untracked `.husky/_`.
 
+### Todos tab (right panel)
+
+The daemon reads a session's todo list from the Claude CLI's task tools (`TaskCreate`, `TaskUpdate`, `TaskList`). The `PostToolUse` hook is the primary source: each call updates the list as it happens, and secrets in the text are masked before it leaves the daemon. The session transcript repairs what the hooks missed (daemon restart, dropped hook) with a read window of at most 64 MiB. Limits you can hit: lists live in memory only (a closed session keeps its last list until the daemon restarts, for 50 sessions); a manager shows its direct children only, not grandchildren (the panel lists the first 20 and counts the rest in the sum); the panel shows up to 100 rows per list while counts cover up to 500 tasks; after a resume, rows rebuilt from history read `from history, not confirmed yet` until the agent names them again or lists its tasks.
+
 ### Autonomous Claude Code sessions (local opt-in only)
 
 The repo ships no `.claude/settings.json` and no auto-approve hook: a clone of this public repo must not grant any agent a permission bypass by default. If you want an autonomous session in your own checkout, add your own `.claude/settings.local.json` (already gitignored) with a `permissions.defaultMode` and any `PreToolUse`/`PermissionRequest` hook you're comfortable with — it stays local to your machine and is never committed.
