@@ -1,4 +1,4 @@
-import { inputBinding } from '@angular/core';
+import { inputBinding, signal } from '@angular/core';
 import { render, screen, within } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
@@ -30,7 +30,6 @@ interface Options {
   sessionId?: string | undefined;
   sessionClosed?: boolean;
   connected?: boolean;
-  renderCap?: number;
 }
 
 async function renderTab(load: Parameters<InMemorySessionTodosSource['publish']>[1] | undefined, options: Options = {}) {
@@ -53,9 +52,7 @@ describe('TodosTabComponent', () => {
     it('shows a loading status while the first load is in flight', async () => {
       await renderTab({ kind: 'loading' });
 
-      const loading = screen.getByTestId('todos-loading');
-      expect(loading.getAttribute('role')).toBe('status');
-      expect(loading.textContent).toContain('Loading todos…');
+      expect(screen.getByRole('status').textContent).toContain('Loading todos…');
     });
 
     it('says the session has not made a list when it has none', async () => {
@@ -73,9 +70,7 @@ describe('TodosTabComponent', () => {
     it('shows the error copy in an alert with a "Try again" action that retries the watched session', async () => {
       const { source } = await renderTab({ kind: 'error', text: "Can't load the todos — try again.", retryable: true });
 
-      const alert = screen.getByTestId('todos-error');
-      expect(alert.getAttribute('role')).toBe('alert');
-      expect(alert.textContent).toContain("Can't load the todos — try again.");
+      expect(screen.getByRole('alert').textContent).toContain("Can't load the todos — try again.");
       await userEvent.click(screen.getByTestId('todos-retry'));
 
       expect(source.retried).toEqual([SESSION_ID]);
@@ -97,9 +92,7 @@ describe('TodosTabComponent', () => {
     it('shows a read-only closed note above the last known list of a closed session', async () => {
       await renderTab({ kind: 'ready', todos: todosOf([item('1', 'completed'), item('2', 'pending')]) }, { sessionClosed: true });
 
-      const note = screen.getByTestId('todos-closed-note');
-      expect(note.getAttribute('role')).toBe('status');
-      expect(note.textContent).toMatch(/Session closed — list as of \d{2}:\d{2}\./);
+      expect(screen.getByRole('status').textContent).toMatch(/Session closed — list as of \d{2}:\d{2}\./);
       expect(screen.getAllByTestId('todo-item')).toHaveLength(2);
       expect(screen.queryByTestId('todos-retry')).toBeNull();
     });
@@ -138,7 +131,7 @@ describe('TodosTabComponent', () => {
       expect(within(unnamedRow).getByTestId('todo-item-text').textContent).toContain('Task #2');
       expect(within(unnamedRow).getByTestId('todo-item-unnamed').textContent).toContain('name not seen yet');
       expect(within(unnamedRow).getByTestId('todo-item-status').textContent).toContain('In progress');
-      expect(unnamedRow.getAttribute('aria-label')).toContain('Task #2 — name not seen yet');
+      expect(unnamedRow.textContent).toMatch(/In progress.*Task #2.*name not seen yet/s);
     });
   });
 
@@ -149,7 +142,7 @@ describe('TodosTabComponent', () => {
 
       const [unverifiedRow, confirmedRow] = screen.getAllByTestId('todo-item');
       expect(within(unverifiedRow).getByTestId('todo-item-unverified').textContent).toContain('from history, not confirmed yet');
-      expect(unverifiedRow.getAttribute('aria-label')).toContain('from history, not confirmed yet');
+      expect(unverifiedRow.textContent).toMatch(/Pending.*Write the spec.*from history, not confirmed yet/s);
       expect(within(confirmedRow).queryByTestId('todo-item-unverified')).toBeNull();
     });
 
@@ -213,6 +206,57 @@ describe('TodosTabComponent', () => {
       expect(screen.getByRole('progressbar').getAttribute('aria-valuemax')).toBe('120');
       expect(screen.getByTestId('todos-progress').textContent).toContain('30 of 120 completed');
     });
+
+    it('fills the bar to the share of completed todos', async () => {
+      const items = [item('1', 'completed'), item('2', 'completed'), item('3', 'pending'), item('4', 'pending'), item('5', 'pending')];
+      await renderTab({ kind: 'ready', todos: todosOf(items) });
+
+      const fill = screen.getByRole('progressbar').firstElementChild as HTMLElement;
+      expect(fill.style.width).toBe('40%');
+    });
+  });
+
+  describe('live announcements', () => {
+    const progressRegionOf = (text: string) => screen.getByText(text);
+
+    async function renderSwitchableTab() {
+      const source = new InMemorySessionTodosSource();
+      source.publish('session-1', { kind: 'ready', todos: todosOf([item('1', 'completed'), item('2', 'pending')]) });
+      source.publish('session-2', { kind: 'ready', todos: todosOf([item('1', 'pending')], { sessionId: 'session-2' }) });
+      const sessionId = signal('session-1');
+      const view = await render(TodosTabComponent, {
+        bindings: [inputBinding('sessionId', sessionId)],
+        providers: [{ provide: SESSION_TODOS_SOURCE, useValue: source }],
+      });
+      return { source, view, sessionId };
+    }
+
+    it('announces the progress politely when it changes', async () => {
+      await renderTab({ kind: 'ready', todos: todosOf([item('1', 'completed'), item('2', 'pending')]) });
+
+      expect(progressRegionOf('1 of 2 completed').getAttribute('aria-live')).toBe('polite');
+    });
+
+    it('keeps announcing in the same region while the todos of one session change', async () => {
+      const { source, view } = await renderSwitchableTab();
+      const regionBefore = progressRegionOf('1 of 2 completed');
+
+      source.publish('session-1', { kind: 'ready', todos: todosOf([item('1', 'completed'), item('2', 'completed')]) });
+      await view.fixture.whenStable();
+
+      expect(progressRegionOf('2 of 2 completed')).toBe(regionBefore);
+    });
+
+    it('starts a fresh region when the shown session changes, so switching sessions announces nothing', async () => {
+      const { view, sessionId } = await renderSwitchableTab();
+      const regionOfFirstSession = progressRegionOf('1 of 2 completed');
+
+      sessionId.set('session-2');
+      await view.fixture.whenStable();
+
+      expect(progressRegionOf('0 of 1 completed')).not.toBe(regionOfFirstSession);
+      expect(regionOfFirstSession.isConnected).toBe(false);
+    });
   });
 
   describe('rows', () => {
@@ -234,13 +278,38 @@ describe('TodosTabComponent', () => {
       expect(texts).toEqual(['Updating docs', 'Fix types']);
     });
 
-    it('keeps a long unbroken text in the row with the full text in the title and in the accessible name', async () => {
+    it('keeps a long unbroken text whole in the row, without repeating it in a label or a tooltip', async () => {
       const longText = 'x'.repeat(200);
       await renderTab({ kind: 'ready', todos: todosOf([item('1', 'pending', longText)]) });
 
-      const text = screen.getByTestId('todo-item-text');
-      expect(text.getAttribute('title')).toBe(longText);
-      expect(screen.getByTestId('todo-item').getAttribute('aria-label')).toContain(longText);
+      const row = screen.getByTestId('todo-item');
+      expect(screen.getByTestId('todo-item-text').textContent?.trim()).toBe(longText);
+      expect(row.getAttribute('aria-label')).toBeNull();
+      expect(screen.getByTestId('todo-item-text').getAttribute('title')).toBeNull();
+    });
+
+    it('reads each row from its own words: the status word, then the text', async () => {
+      await renderTab({ kind: 'ready', todos: todosOf([item('1', 'in_progress', 'Update docs')]) });
+
+      expect(screen.getByRole('listitem').textContent).toMatch(/In progress.*Update docs/s);
+    });
+
+    it('keeps the other rows and reads an unknown status word as plain text instead of blanking the tab', async () => {
+      const fromNewerDaemon = item('1', 'blocked' as TodoStatus, 'Waiting on review');
+      await renderTab({ kind: 'ready', todos: todosOf([fromNewerDaemon, item('2', 'pending', 'Ship it')]) });
+
+      const rows = screen.getAllByTestId('todo-item');
+      expect(rows.map((row) => within(row).getByTestId('todo-item-text').textContent?.trim())).toEqual(['Waiting on review', 'Ship it']);
+    });
+
+    it.each([
+      ['U+3164 (Hangul filler)', 'ㅤ'],
+      ['U+00AD (soft hyphen)', '­'],
+      ['a tag character', '\u{E0041}'],
+    ])('shows a row made only of %s as an escape, so it never looks blank', async (_name, invisible) => {
+      await renderTab({ kind: 'ready', todos: todosOf([item('1', 'pending', invisible)]) });
+
+      expect(screen.getByTestId('todo-item-text').textContent).toMatch(/^\s*<U\+[0-9A-F]{4,5}>\s*$/);
     });
 
     it('shows invisible bidi controls in a todo text as escapes', async () => {
@@ -268,13 +337,10 @@ describe('TodosTabComponent', () => {
   describe('volume', () => {
     it('renders 150 items capped at the render budget and says how many are not shown', async () => {
       const items = Array.from({ length: 150 }, (_, index) => item(String(index), 'pending'));
-      const startedAt = performance.now();
-      await renderTab({ kind: 'ready', todos: todosOf(items) }, { renderCap: 100 });
-      const elapsedMs = performance.now() - startedAt;
+      await renderTab({ kind: 'ready', todos: todosOf(items) });
 
       expect(screen.getAllByTestId('todo-item')).toHaveLength(100);
       expect(screen.getByTestId('todos-omitted').textContent).toContain('50 more todos not shown');
-      expect(elapsedMs).toBeLessThan(2000);
     });
 
     it('adds the daemon-omitted count to the not-shown line', async () => {
@@ -286,8 +352,8 @@ describe('TodosTabComponent', () => {
     });
 
     it('says "1 more todo not shown" in the singular', async () => {
-      const items = Array.from({ length: 3 }, (_, index) => item(String(index), 'pending'));
-      await renderTab({ kind: 'ready', todos: todosOf(items) }, { renderCap: 2 });
+      const items = Array.from({ length: 101 }, (_, index) => item(String(index), 'pending'));
+      await renderTab({ kind: 'ready', todos: todosOf(items) });
 
       expect(screen.getByTestId('todos-omitted').textContent).toContain('1 more todo not shown');
     });

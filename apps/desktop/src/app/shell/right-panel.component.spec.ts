@@ -73,7 +73,8 @@ async function setUp(options: SetUpOptions = {}) {
 
 const toggle = () => screen.getByTestId('right-panel-toggle');
 const panel = () => screen.queryByTestId('right-panel');
-const pressShortcut = () => document.dispatchEvent(new KeyboardEvent('keydown', { key: '∫', code: 'KeyB', altKey: true, metaKey: true, bubbles: true }));
+const press = (init: KeyboardEventInit) => document.dispatchEvent(new KeyboardEvent('keydown', { key: '∫', code: 'KeyB', bubbles: true, cancelable: true, ...init }));
+const pressShortcut = () => press({ altKey: true, metaKey: true });
 
 describe('RightPanelComponent', () => {
   beforeEach(() => vi.unstubAllGlobals());
@@ -132,6 +133,52 @@ describe('RightPanelComponent', () => {
       pressShortcut();
       await harness.fixture.whenStable();
       expect(panel()).toBeNull();
+    });
+
+    it.each([
+      ['plain Cmd+B, which an editor may use for bold', { metaKey: true }],
+      ['Ctrl+Alt+B, the VoiceOver chord', { altKey: true, ctrlKey: true }],
+      ['AltGr+B, which arrives as Ctrl+Alt+Cmd', { altKey: true, ctrlKey: true, metaKey: true }],
+      ['Option+Cmd with another key', { altKey: true, metaKey: true, code: 'KeyA' }],
+    ])('ignores %s', async (_name, init) => {
+      const { harness } = await setUp();
+
+      press(init);
+      await harness.fixture.whenStable();
+
+      expect(panel()).toBeNull();
+    });
+
+    it('ignores the repeats of a key held down', async () => {
+      const { harness } = await setUp();
+      pressShortcut();
+      await harness.fixture.whenStable();
+
+      press({ altKey: true, metaKey: true, repeat: true });
+      await harness.fixture.whenStable();
+
+      expect(panel()).not.toBeNull();
+    });
+
+    it('ignores the shortcut while a modal such as the command palette makes the page inert', async () => {
+      const { harness } = await setUp();
+      harness.fixture.nativeElement.setAttribute('inert', '');
+
+      pressShortcut();
+      await harness.fixture.whenStable();
+
+      expect(panel()).toBeNull();
+    });
+
+    it('returns focus to the toggle when the shortcut closes the panel from inside', async () => {
+      const { harness } = await setUp({ storage: memoryStorage({ [OPEN_KEY]: 'true' }) });
+      screen.getByRole('tab', { name: /Todos/ }).focus();
+
+      pressShortcut();
+      await harness.fixture.whenStable();
+
+      expect(panel()).toBeNull();
+      expect(document.activeElement).toBe(toggle());
     });
 
     it('closes with Escape when focus is inside and returns focus to the toggle', async () => {

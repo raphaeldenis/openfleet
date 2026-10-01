@@ -168,6 +168,22 @@ describe('LiveSessionTodosSource', () => {
       expect(loadOf('s1')).toEqual({ kind: 'error', text: 'That item no longer exists.', retryable: false });
     });
 
+    it('offers no retry when the code alone says it cannot pass, even without a well-formed envelope', async () => {
+      getSessionTodos.mockRejectedValue(new ApiError(404, 'GET', 'not_found'));
+      source.watch('s1');
+      await settle();
+
+      expect(loadOf('s1')).toEqual({ kind: 'error', text: 'That item no longer exists.', retryable: false });
+    });
+
+    it('says it cannot load the todos when the daemon sends nothing more specific', async () => {
+      getSessionTodos.mockRejectedValue(new ApiError(502, 'GET'));
+      source.watch('s1');
+      await settle();
+
+      expect(loadOf('s1')).toEqual({ kind: 'error', text: "Can't load the todos — try again.", retryable: true });
+    });
+
     it('says the daemon cannot be reached when the request never got an answer', async () => {
       getSessionTodos.mockRejectedValue(new TypeError('fetch failed'));
       source.watch('s1');
@@ -218,5 +234,61 @@ describe('LiveSessionTodosSource', () => {
 
       expect(getSessionTodos).toHaveBeenCalledTimes(1);
     });
+
+    it('reloads even when events were seen before the reconnect', async () => {
+      socket().dispatchMessage({ type: 'session.todos', todos: todosOf('s1', 1, 3) });
+      source.watch('s1');
+      await settle();
+      expect(getSessionTodos).not.toHaveBeenCalled();
+
+      await reconnect();
+
+      expect(getSessionTodos).toHaveBeenCalledTimes(1);
+    });
+
+    it('exposes the cached list as ready and stale when the reload after a reconnect fails', async () => {
+      source.watch('s1');
+      await settle();
+      getSessionTodos.mockRejectedValue(new TypeError('fetch failed'));
+
+      await reconnect();
+
+      expect(loadOf('s1')).toMatchObject({ kind: 'ready', todos: { sessionId: 's1', counts: { total: 3 }, stale: true } });
+    });
+
+    it('shows the empty copy instead of the cached list when the reload says the session is gone', async () => {
+      source.watch('s1');
+      await settle();
+      getSessionTodos.mockRejectedValue(new ApiError(404, 'GET', 'not_found', envelopeOf({ error: 'not_found', kind: 'not_found', retry: 'never' })));
+
+      await reconnect();
+
+      expect(loadOf('s1')).toEqual({ kind: 'ready', todos: null });
+    });
+
+    it('reads the list as fresh again once a later event replaces the stale one', async () => {
+      source.watch('s1');
+      await settle();
+      getSessionTodos.mockRejectedValue(new TypeError('fetch failed'));
+      await reconnect();
+
+      socket().dispatchMessage({ type: 'session.todos', todos: todosOf('s1', 2, 3) });
+
+      const load = loadOf('s1');
+      expect(load).toMatchObject({ kind: 'ready', todos: { counts: { completed: 2 } } });
+      expect(load.kind === 'ready' && load.todos?.stale).toBeUndefined();
+    });
+  });
+
+  it('asks once for a session shown again on the same connection', async () => {
+    source.watch('s1');
+    await settle();
+    source.watch(undefined);
+    await settle();
+
+    source.watch('s1');
+    await settle();
+
+    expect(getSessionTodos).toHaveBeenCalledTimes(1);
   });
 });

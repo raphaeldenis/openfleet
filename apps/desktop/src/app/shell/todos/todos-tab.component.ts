@@ -1,7 +1,7 @@
 import { ChangeDetectionStrategy, Component, DestroyRef, computed, effect, inject, input } from '@angular/core';
 import { showInvisibleControlsAsEscapes } from '../../inbox/bidi-escapes';
 import { SESSION_TODOS_SOURCE, type TodosLoad } from './session-todos-source';
-import { TODO_STATUS_PRESENTATION } from './todo-status';
+import { TODO_STATUS_PRESENTATION, UNKNOWN_STATUS_PRESENTATION } from './todo-status';
 import { MAX_TODO_ITEMS, type SessionTodos, type TodoItem } from './todos.adapter';
 
 const UNNAMED_SUFFIX = 'name not seen yet';
@@ -15,7 +15,6 @@ interface TodoRow {
   readonly text: string;
   readonly unnamed: boolean;
   readonly unverified: boolean;
-  readonly accessibleName: string;
 }
 
 function clockTimeOf(isoDate: string): string {
@@ -57,7 +56,9 @@ function clockTimeOf(isoDate: string): string {
                 <p class="note" role="status" data-testid="todos-incomplete-note">Some tasks aren't named yet — the list completes when the agent lists its tasks.</p>
               }
               <section class="progress" data-testid="todos-progress">
-                <p class="progress-text" aria-live="polite">{{ progressText() }}</p>
+                @for (shownSession of [sessionId()]; track shownSession) {
+                  <p class="progress-text" aria-live="polite">{{ progressText() }}</p>
+                }
                 <div class="track" role="progressbar" aria-label="Todo progress" aria-valuemin="0"
                      [attr.aria-valuemax]="todos.counts.total" [attr.aria-valuenow]="todos.counts.completed" [attr.aria-valuetext]="progressText()">
                   <div class="fill" [style.width.%]="progressPercent()"></div>
@@ -69,10 +70,10 @@ function clockTimeOf(isoDate: string): string {
               <div class="list-region" role="region" aria-label="Todo list" tabindex="0" data-testid="todos-list">
                 <ul class="rows" role="list">
                   @for (row of rows(); track row.id) {
-                    <li class="row" data-testid="todo-item" [attr.data-status]="row.status" [attr.aria-label]="row.accessibleName">
+                    <li class="row" data-testid="todo-item" [attr.data-status]="row.status">
                       <span class="glyph" aria-hidden="true">{{ row.glyph }}</span>
                       <span class="status" data-testid="todo-item-status">{{ row.statusLabel }}</span>
-                      <span class="text" data-testid="todo-item-text" [title]="row.text">{{ row.text }}</span>
+                      <span class="text" data-testid="todo-item-text">{{ row.text }}</span>
                       @if (row.unnamed) {
                         <span class="unnamed" data-testid="todo-item-unnamed">— {{ unnamedSuffix }}</span>
                       }
@@ -103,7 +104,7 @@ function clockTimeOf(isoDate: string): string {
     .progress { display: flex; flex-direction: column; gap: .25rem; flex: none; }
     .progress-text { font-weight: 600; }
     .track { height: .375rem; border-radius: .1875rem; background: var(--sunk); border: 1px solid var(--line); overflow: hidden; }
-    .fill { height: 100%; min-width: .25rem; background: var(--accent); }
+    .fill { height: 100%; min-width: .25rem; background: var(--state-waiting-permission); }
     .detail { color: var(--mut); }
     .list-region { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: .5rem; }
     .list-region:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
@@ -120,7 +121,6 @@ export class TodosTabComponent {
   readonly sessionId = input<string | undefined>(undefined);
   readonly sessionClosed = input(false);
   readonly connected = input(true);
-  readonly renderCap = input(MAX_TODO_ITEMS);
 
   private readonly source = inject(SESSION_TODOS_SOURCE);
   protected readonly unnamedSuffix = UNNAMED_SUFFIX;
@@ -181,12 +181,12 @@ export class TodosTabComponent {
   });
   protected readonly rows = computed<TodoRow[]>(() => {
     const items = this.list()?.items ?? [];
-    return items.slice(0, this.renderCap()).map(rowOf);
+    return items.slice(0, MAX_TODO_ITEMS).map(rowOf);
   });
   protected readonly notShownText = computed(() => {
     const todos = this.list();
     if (!todos) return '';
-    const beyondRenderCap = Math.max(0, todos.items.length - this.renderCap());
+    const beyondRenderCap = Math.max(0, todos.items.length - MAX_TODO_ITEMS);
     const notShown = todos.omitted + beyondRenderCap;
     if (notShown === 0) return '';
     return `${notShown} more ${notShown === 1 ? 'todo' : 'todos'} not shown`;
@@ -199,12 +199,8 @@ export class TodosTabComponent {
 }
 
 function rowOf(item: TodoItem): TodoRow {
-  const { glyph, label } = TODO_STATUS_PRESENTATION[item.status];
+  const { glyph, label } = TODO_STATUS_PRESENTATION[item.status] ?? UNKNOWN_STATUS_PRESENTATION;
   const isActiveForm = item.status === 'in_progress' && item.activeForm !== undefined;
   const text = showInvisibleControlsAsEscapes(isActiveForm ? (item.activeForm as string) : item.content);
-  const unnamed = item.unnamed === true;
-  const unverified = item.unverified === true;
-  const spokenParts = [unnamed ? `${text} — ${UNNAMED_SUFFIX}` : text, unverified ? UNVERIFIED_HINT : ''];
-  const spokenText = spokenParts.filter((part) => part !== '').join(', ');
-  return { id: item.id, status: item.status, glyph, statusLabel: label, text, unnamed, unverified, accessibleName: `${label}: ${spokenText}` };
+  return { id: item.id, status: item.status, glyph, statusLabel: label, text, unnamed: item.unnamed === true, unverified: item.unverified === true };
 }

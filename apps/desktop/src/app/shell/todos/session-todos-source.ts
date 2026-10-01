@@ -1,5 +1,4 @@
-import { InjectionToken, inject, signal, type Signal, type WritableSignal } from '@angular/core';
-import { LiveSessionTodosSource } from './live-session-todos-source';
+import { InjectionToken, signal, type Signal, type WritableSignal } from '@angular/core';
 import type { SessionTodos } from './todos.adapter';
 
 export type TodosLoad =
@@ -47,7 +46,4 @@ export class InMemorySessionTodosSource implements SessionTodosSource {
   }
 }
 
-export const SESSION_TODOS_SOURCE = new InjectionToken<SessionTodosSource>('SESSION_TODOS_SOURCE', {
-  providedIn: 'root',
-  factory: () => inject(LiveSessionTodosSource),
-});
+export const SESSION_TODOS_SOURCE = new InjectionToken<SessionTodosSource>('SESSION_TODOS_SOURCE');

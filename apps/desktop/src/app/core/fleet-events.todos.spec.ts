@@ -86,6 +86,26 @@ describe('FleetEventsService todos', () => {
     expect(service.todoEventCount('s2')).toBe(0);
   });
 
+  it('drops a session.todos event whose list is not valid, and keeps the list it already had', () => {
+    socket.dispatchMessage({ type: 'session.todos', todos: todosOf('s1', 1, 3) });
+    const withUnknownStatus = { ...todosOf('s1', 3, 3), items: [{ id: '1', content: 'Wait', status: 'blocked' }] };
+
+    socket.dispatchMessage({ type: 'session.todos', todos: withUnknownStatus });
+
+    expect(service.todos().get('s1')?.counts.completed).toBe(1);
+    expect(service.todoEventCount('s1')).toBe(1);
+  });
+
+  it('drops the todo summaries that are not valid and keeps the valid ones', () => {
+    const valid = { sessionId: 's1', counts: { total: 3, completed: 1, inProgress: 0, pending: 2 }, updatedAt: 't' };
+    const invalid = { sessionId: 's2', counts: 'many', updatedAt: 't' };
+
+    socket.dispatchMessage({ type: 'snapshot', sessions: [], approvals: [], todoSummaries: [valid, invalid] });
+
+    expect(service.todosReported()).toBe(true);
+    expect([...service.todoSummaries().keys()]).toEqual(['s1']);
+  });
+
   it('stores a list fetched over REST for a session', () => {
     service.storeFetchedTodos(todosOf('s1', 1, 3));
 

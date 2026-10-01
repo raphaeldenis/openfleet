@@ -9,6 +9,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { RightPanelComponent, RightPanelToggleComponent } from './right-panel.component';
+import { LiveSessionTodosSource } from './todos/live-session-todos-source';
+import { SESSION_TODOS_SOURCE } from './todos/session-todos-source';
 
 @Component({
   selector: 'test-host',
@@ -33,7 +35,13 @@ describe('Right panel wired to the daemon', () => {
   beforeEach(() => {
     vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => undefined });
     getSessionTodos = vi.fn((sessionId: string) => Promise.resolve(todosOf(sessionId, [`Todo of ${sessionId}`])));
-    TestBed.configureTestingModule({ providers: [provideRouter(routes), { provide: FleetApiService, useValue: { getSessionTodos } }] });
+    TestBed.configureTestingModule({
+      providers: [
+        provideRouter(routes),
+        { provide: FleetApiService, useValue: { getSessionTodos } },
+        { provide: SESSION_TODOS_SOURCE, useExisting: LiveSessionTodosSource },
+      ],
+    });
     const events = TestBed.inject(FleetEventsService);
     events.snapshotReceived.set(true);
     events.todosReported.set(true);

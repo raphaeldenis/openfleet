@@ -1,8 +1,10 @@
-const BIDI_CONTROL_CHARACTERS = /[؜‎‏‪-‮⁦-⁩]/g;
-const ZERO_WIDTH_CHARACTERS = /[​-‍⁠﻿]/g;
+const BIDI_CONTROL_CHARACTERS = /[؜‎‏‪-‮⁦-⁩]/gu;
+const ZERO_WIDTH_CHARACTERS = /[​-‍⁠﻿]/gu;
+const BLANK_LOOKING_CHARACTERS = /[­͏ᅟᅠ឴឵᠎⁡-⁤⁪-⁯ㅤ︀-️ﾠ\u{E0000}-\u{E007F}]/gu;
 
 function asEscape(character: string): string {
-  return `<U+${character.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}>`;
+  const codePoint = character.codePointAt(0) as number;
+  return `<U+${codePoint.toString(16).toUpperCase().padStart(4, '0')}>`;
 }
 
 export function showBidiControlsAsEscapes(text: string): string {
@@ -10,5 +12,5 @@ export function showBidiControlsAsEscapes(text: string): string {
 }
 
 export function showInvisibleControlsAsEscapes(text: string): string {
-  return showBidiControlsAsEscapes(text).replace(ZERO_WIDTH_CHARACTERS, asEscape);
+  return showBidiControlsAsEscapes(text).replace(ZERO_WIDTH_CHARACTERS, asEscape).replace(BLANK_LOOKING_CHARACTERS, asEscape);
 }

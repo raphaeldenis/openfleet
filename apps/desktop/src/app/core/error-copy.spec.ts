@@ -1,7 +1,7 @@
 import { ERROR_CODES, HTTP_STATUS_BY_KIND, retryOf, type DaemonIssue, type ErrorCode, type ErrorEnvelope } from '@openfleet/shared';
 import { describe, expect, it } from 'vitest';
 import { ApiError } from './fleet-api.service';
-import { copyFor, copyOfDaemonIssue, copyOfEnvelope } from './error-copy';
+import { copyFor, copyOfDaemonIssue, copyOfEnvelope, retryOfError } from './error-copy';
 
 const ALL_CODES = Object.keys(ERROR_CODES) as ErrorCode[];
 
@@ -101,6 +101,30 @@ describe('copyFor', () => {
       const envelope = envelopeOf('launch_failed', { id: '3f9a1c2e' });
 
       expect(copyOfEnvelope(envelope, { action: 'generic' })).toEqual(copyFor(apiErrorOf(envelope), { action: 'generic' }));
+    });
+  });
+
+  describe('loading the todos', () => {
+    it('says it cannot load the todos and invites a retry when the failure can pass', () => {
+      expect(copyFor(new ApiError(502, 'GET /x'), { action: 'load_todos' }).text).toBe("Can't load the todos — try again.");
+    });
+
+    it('says it cannot load the todos without inviting a retry when it cannot pass', () => {
+      expect(copyFor(new ApiError(200, 'GET /x'), { action: 'load_todos' }).text).toBe("Can't load the todos.");
+    });
+  });
+
+  describe('retryOfError', () => {
+    it('reads the retry hint of the envelope', () => {
+      expect(retryOfError(apiErrorOf(envelopeOf('internal_error', { retry: 'never' })))).toBe('never');
+    });
+
+    it('reads the retry of a known code that came without an envelope', () => {
+      expect(retryOfError(new ApiError(404, 'GET /x', 'not_found'))).toBe('never');
+    });
+
+    it('says a request that got no answer is worth retrying', () => {
+      expect(retryOfError(new TypeError('Failed to fetch'))).toBe('later');
     });
   });
 

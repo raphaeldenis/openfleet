@@ -1,5 +1,5 @@
 import { Injectable, signal } from '@angular/core';
-import { closeReasonOfExitCode } from '@openfleet/shared';
+import { SessionTodosSchema, TodoSummarySchema, closeReasonOfExitCode } from '@openfleet/shared';
 import type { Approval, DaemonIssue, ErrorEnvelope, ManagerView, ServerEvent, Session, SessionCloseReason, SessionTodos, TodoSummary, WorkingState } from '@openfleet/shared';
 import { Subject } from 'rxjs';
 import { environment } from '../../environments/environment';
@@ -22,6 +22,11 @@ export interface BackgroundFailure {
 function isBackgroundFailure({ kind, error }: ErrorEnvelope): boolean {
   const isDaemonSideFailure = kind === 'internal' || kind === 'unavailable';
   return isDaemonSideFailure || error === 'message_held_for_review';
+}
+
+function readableTodoSummaries(received: unknown[] | undefined): TodoSummary[] {
+  const results = (received ?? []).map((summary) => TodoSummarySchema.safeParse(summary));
+  return results.flatMap((result) => (result.success ? [result.data] : []));
 }
 
 function closeReasonsOfSnapshot(sessions: Session[]): ReadonlyMap<string, SessionCloseReason> {
@@ -227,7 +232,7 @@ export class FleetEventsService {
         this.workingStateMaxBytes.set(event.workingStateMaxBytes);
         this.daemonIssues.set(event.daemonIssues ?? []);
         this.todosReported.set(event.todoSummaries !== undefined);
-        this.todoSummaries.set(new Map((event.todoSummaries ?? []).map((summary) => [summary.sessionId, summary])));
+        this.todoSummaries.set(new Map(readableTodoSummaries(event.todoSummaries).map((summary) => [summary.sessionId, summary])));
         this.closeReasons.set(closeReasonsOfSnapshot(event.sessions));
         this.snapshotReceived.set(true);
         return;
@@ -275,7 +280,10 @@ export class FleetEventsService {
     this.todos.update((all) => new Map(all).set(todos.sessionId, todos));
   }
 
-  private receiveTodosEvent(todos: SessionTodos): void {
+  private receiveTodosEvent(payload: unknown): void {
+    const parsed = SessionTodosSchema.safeParse(payload);
+    if (!parsed.success) return;
+    const todos = parsed.data;
     this.todoEventCounts.set(todos.sessionId, this.todoEventCount(todos.sessionId) + 1);
     this.storeFetchedTodos(todos);
     if (todos.updatedAt === null) return;

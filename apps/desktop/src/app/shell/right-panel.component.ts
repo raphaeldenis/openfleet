@@ -142,8 +142,10 @@ export class RightPanelComponent {
   @HostListener('document:keydown', ['$event'])
   onShortcut(event: KeyboardEvent): void {
     // `key` is a symbol under Option on macOS, so the physical key is matched.
-    const isOptionCommandB = event.altKey && (event.metaKey || event.ctrlKey) && event.code === 'KeyB';
-    if (!isOptionCommandB) return;
+    const isOptionCommandB = event.altKey && event.metaKey && !event.ctrlKey && event.code === 'KeyB';
+    if (!isOptionCommandB || event.repeat) return;
+    const isBehindAModal = this.host.nativeElement.closest('[inert]') !== null;
+    if (isBehindAModal) return;
     event.preventDefault();
     const focusWasInsidePanel = this.host.nativeElement.contains(document.activeElement);
     this.state.toggle();

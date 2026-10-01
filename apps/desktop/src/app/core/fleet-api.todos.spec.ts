@@ -27,11 +27,22 @@ describe('FleetApiService.getSessionTodos', () => {
   });
 
   it('escapes the session id in the path', async () => {
-    fetchMock.mockResolvedValue(fakeResponse({ ok: true, status: 200, json: () => Promise.resolve({}) }));
+    const body = { sessionId: 'a/b', items: [], counts: { total: 0, completed: 0, inProgress: 0, pending: 0 }, omitted: 0, source: null, updatedAt: null };
+    fetchMock.mockResolvedValue(fakeResponse({ ok: true, status: 200, json: () => Promise.resolve(body) }));
 
     await api.getSessionTodos('a/b');
 
     expect(String(fetchMock.mock.calls[0]![0])).toContain('/api/sessions/a%2Fb/todos');
+  });
+
+  it('rejects an answer that is not a todo list, such as one with a status this app does not know', async () => {
+    const fromNewerDaemon = {
+      sessionId: 's1', items: [{ id: '1', content: 'Wait', status: 'blocked' }],
+      counts: { total: 1, completed: 0, inProgress: 0, pending: 1 }, omitted: 0, source: 'task_tools', updatedAt: 't',
+    };
+    fetchMock.mockResolvedValue(fakeResponse({ ok: true, status: 200, json: () => Promise.resolve(fromNewerDaemon) }));
+
+    await expect(api.getSessionTodos('s1')).rejects.toBeInstanceOf(ApiError);
   });
 
   it('rejects with the error envelope of the daemon when the session is unknown', async () => {
