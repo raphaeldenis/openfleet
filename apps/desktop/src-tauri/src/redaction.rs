@@ -8,6 +8,8 @@ const ESCAPE_LAYERS_DECODED: usize = 3;
 /// A percent-escape may itself be encoded up to four more times (`%2F`, `%252F`, …).
 const ESCAPE_PREFIX_LAYERS: usize = 4;
 const NESTED_DECODINGS_CHECKED: usize = 4;
+/// A plain parameter value may nest up to this many `?` or `#` before the whole value is masked.
+const NESTED_PARAMETERS_CHECKED: usize = 4;
 const SECRET_KEY_WORDS: [&str; 9] = ["token", "secret", "authorization", "password", "cookie", "ticket", "apikey", "api_key", "api-key"];
 const ESCAPED_SEPARATORS: &[u8] = b" :=\t";
 
@@ -135,17 +137,39 @@ fn bearer_separator_len_at(text: &str, index: usize) -> usize {
   }
 }
 
-fn bearer_token_at(text: &str, index: usize) -> Replacement {
-  let bytes = text.as_bytes();
-  let marker_end = word_end(bytes, index, "bearer")?;
-  let mut token_start = marker_end;
-  while bearer_separator_len_at(text, token_start) > 0 {
-    token_start += bearer_separator_len_at(text, token_start);
+fn skip_bearer_separators(text: &str, from: usize) -> usize {
+  let mut cursor = from;
+  while bearer_separator_len_at(text, cursor) > 0 {
+    cursor += bearer_separator_len_at(text, cursor);
   }
-  let has_separator = token_start > marker_end;
+  cursor
+}
+
+/// Returns where the token starts: after the first `Bearer` and its separators, and after each repeated `Bearer` + separators that a token follows
+/// (otherwise the repeated word is the token, as the backtracking regex settles it).
+fn bearer_token_start(text: &str, marker_end: usize) -> Option<usize> {
+  let first_token_start = skip_bearer_separators(text, marker_end);
+  let has_separator = first_token_start > marker_end;
   if !has_separator {
     return None;
   }
+  let mut token_start = first_token_start;
+  while let Some(repeated_marker_end) = word_end(text.as_bytes(), token_start, "bearer") {
+    let after_repeated_separators = skip_bearer_separators(text, repeated_marker_end);
+    let repeated_marker_has_separator = after_repeated_separators > repeated_marker_end;
+    let token_follows = text.as_bytes().get(after_repeated_separators).is_some_and(|byte| is_bearer_token_byte(*byte));
+    if !(repeated_marker_has_separator && token_follows) {
+      break;
+    }
+    token_start = after_repeated_separators;
+  }
+  Some(token_start)
+}
+
+fn bearer_token_at(text: &str, index: usize) -> Replacement {
+  let bytes = text.as_bytes();
+  let marker_end = word_end(bytes, index, "bearer")?;
+  let token_start = bearer_token_start(text, marker_end)?;
   let token_length = bytes[token_start..].iter().take_while(|byte| is_bearer_token_byte(**byte)).count();
   (token_length > 0).then(|| (token_start + token_length, format!("{} {MASK}", &text[index..marker_end])))
 }
@@ -204,23 +228,32 @@ fn authorized_basic_credential_at(text: &str, index: usize) -> Replacement {
 
 // ---- URL credentials ----
 
-/// Masks `user:pass` between `://` and the `@`; the scan stops at the next `/`, so runs never overlap.
+/// Masks `user:pass` between `://` and the last `@` before the next `/` (a password may hold a raw `@`, not a raw `/`); runs never overlap.
 fn url_credentials_at(text: &str, index: usize) -> Replacement {
   if !text.as_bytes()[index..].starts_with(b"://") {
     return None;
   }
-  let credentials_start = index + "://".len();
-  let ends_the_credentials = |character: char| character.is_whitespace() || character == '\u{feff}' || "/@\"'`".contains(character);
-  let credentials_length = text[credentials_start..].find(ends_the_credentials).unwrap_or(text.len() - credentials_start);
-  let at_sign = credentials_start + credentials_length;
-  let is_followed_by_an_at_sign = text.as_bytes().get(at_sign) == Some(&b'@');
-  (credentials_length > 0 && is_followed_by_an_at_sign).then(|| (at_sign + 1, format!("://{MASK}@")))
+  let authority_start = index + "://".len();
+  let ends_the_authority = |character: char| character.is_whitespace() || character == '\u{feff}' || "/\"'`".contains(character);
+  let authority_length = text[authority_start..].find(ends_the_authority).unwrap_or(text.len() - authority_start);
+  let authority = &text[authority_start..authority_start + authority_length];
+  let last_at_sign = authority.rfind('@').filter(|position| *position > 0)?;
+  Some((authority_start + last_at_sign + 1, format!("://{MASK}@")))
 }
 
 // ---- secret-named parameters ----
 
 fn is_a_parameter_delimiter(text: &str, index: usize) -> bool {
-  space_len_at(text, index) > 0 || matches!(text.as_bytes().get(index), Some(b'?' | b'&' | b';'))
+  space_len_at(text, index) > 0 || matches!(text.as_bytes().get(index), Some(b'?' | b'&' | b';' | b'#'))
+}
+
+fn starts_a_nested_parameter(character: char) -> bool {
+  character == '?' || character == '#'
+}
+
+/// A value holding more nested `?` or `#` than the check reaches is masked whole; the bound keeps the rescans of one value linear.
+fn nests_more_parameters_than_checked(value: &str) -> bool {
+  value.chars().filter(|character| starts_a_nested_parameter(*character)).nth(NESTED_PARAMETERS_CHECKED).is_some()
 }
 
 fn ends_a_parameter_key(character: char) -> bool {
@@ -251,9 +284,13 @@ fn parameter_from(text: &str, match_start: usize, key_start: usize, depth: usize
   let value_end = value_start + value_length;
   let key = &text[key_start..key_end];
   let value = &text[value_start..value_end];
-  let is_secret_parameter = is_secret_key(key) || hides_secret_behind_escapes(value, depth);
-  let replacement = if is_secret_parameter { format!("{}{key}={MASK}", &text[match_start..key_start]) } else { text[match_start..value_end].to_string() };
-  Some((value_end, replacement))
+  let is_secret_parameter = is_secret_key(key) || nests_more_parameters_than_checked(value) || hides_secret_behind_escapes(value, depth);
+  if is_secret_parameter {
+    return Some((value_end, format!("{}{key}={MASK}", &text[match_start..key_start])));
+  }
+  let kept_value_length = value.find(starts_a_nested_parameter).unwrap_or(value.len());
+  let kept_end = value_start + kept_value_length;
+  Some((kept_end, text[match_start..kept_end].to_string()))
 }
 
 fn is_secret_key(key: &str) -> bool {
