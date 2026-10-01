@@ -1,4 +1,5 @@
 import { ChangeDetectionStrategy, Component, computed, effect, inject, input, signal } from '@angular/core';
+import { copyFor } from '../core/error-copy';
 import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { BannerComponent } from '../design/banner.component';
@@ -8,7 +9,6 @@ interface PendingMessage { id: string; deliveredImmediately: boolean }
 
 const IDLE_PLACEHOLDER = 'Message this session…';
 const BUSY_PLACEHOLDER = 'This session is busy — your message is delivered on the next idle turn';
-const SEND_ERROR = 'Could not send — your message is kept.';
 
 @Component({
   selector: 'of-composer',
@@ -93,9 +93,9 @@ export class ComposerComponent {
       const result = await this.api.sendMessage(sessionIdAtSend, body);
       this.replies.clearSentText(sessionIdAtSend, draftAtSend);
       if (this.sessionId() === sessionIdAtSend) this.pending.set({ id: result.messageId, deliveredImmediately: result.status === 'delivered' });
-    } catch {
+    } catch (error) {
       if (this.sessionId() === sessionIdAtSend) this.pending.set(null);
-      this.replies.markFailed(sessionIdAtSend, SEND_ERROR);
+      this.replies.markFailed(sessionIdAtSend, copyFor(error, { action: 'send' }).text);
     } finally {
       this.replies.markSending(sessionIdAtSend, false);
     }

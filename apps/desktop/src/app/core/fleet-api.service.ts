@@ -1,6 +1,7 @@
 import { Injectable } from '@angular/core';
+import { isErrorEnvelope } from '@openfleet/shared';
 import type {
-  Approval, CreateNoteRequest, DataStore, DataStoreDetail, DsRow, DsRowHistoryEntry, DsView, HarnessId, NoteSummary,
+  Approval, CreateNoteRequest, DataStore, DataStoreDetail, DsRow, DsRowHistoryEntry, DsView, ErrorEnvelope, HarnessId, NoteSummary,
   NoteVersionSummary, NoteView, OrderTerm, Page, PermissionMode, Project, RestoreNoteRequest, Session, SessionSpec,
   UpdateNoteRequest, WhereClause,
 } from '@openfleet/shared';
@@ -18,10 +19,16 @@ const pageParams = ({ limit, offset }: PageRequest): Record<string, string> => (
   ...(offset === undefined ? {} : { offset: String(offset) }),
 });
 
+function errorCodeOf(body: unknown): string | undefined {
+  const isObject = body !== null && typeof body === 'object';
+  return isObject && 'error' in body && typeof body.error === 'string' ? body.error : undefined;
+}
+
 export class ApiError extends Error {
   // `code` is the REST error body's `error` field (e.g. `not_closed`, `directory_missing`) when the
   // server sent one — undefined for a response with no JSON body or no recognizable `error` field.
-  constructor(public readonly status: number, message: string, public readonly code?: string) {
+  // `envelope` is the whole body when it is a well-formed error envelope.
+  constructor(public readonly status: number, message: string, public readonly code?: string, public readonly envelope?: ErrorEnvelope) {
     super(message);
   }
 }
@@ -42,11 +49,10 @@ export class FleetApiService {
       headers: { 'content-type': 'application/json', authorization: `Bearer ${environment.adminToken}`, ...(init.headers ?? {}) },
     });
     if (!response.ok) {
-      const code = await response
-        .json()
-        .then((body: unknown) => (body && typeof body === 'object' && 'error' in body && typeof body.error === 'string' ? body.error : undefined))
-        .catch(() => undefined);
-      throw new ApiError(response.status, `${init.method ?? 'GET'} ${path} → ${response.status}`, code);
+      const body: unknown = await response.json().catch(() => undefined);
+      const code = errorCodeOf(body);
+      const envelope = isErrorEnvelope(body) ? body : undefined;
+      throw new ApiError(response.status, `${init.method ?? 'GET'} ${path} → ${response.status}`, code, envelope);
     }
     return (await response.json()) as T;
   }

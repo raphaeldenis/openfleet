@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { inputBinding, signal } from '@angular/core';
 import { Subject } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
-import type { Approval, Session } from '@openfleet/shared';
+import { closeReasonOfExitCode, type Approval, type Session } from '@openfleet/shared';
 import { SessionViewComponent } from './session-view.component';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
@@ -24,6 +24,7 @@ function approval(patch: Partial<Approval> = {}): Approval {
 function fakeEvents(sessions: Session[], approvals: Approval[] = []) {
   return {
     ...silentWorkingStateSignals(),
+    closeReasonOf: (sessionId: string) => closeReasonOfExitCode(sessions.find((s) => s.id === sessionId)?.exitCode),
     sessions: signal(sessions), approvals: signal(approvals), managers: signal([]),
     connected: signal(true), reconnectCount: signal(0), deliveredMessageIds: signal(new Set<string>()),
     output: () => new Subject<string>(), sendInput: vi.fn(), sendResize: vi.fn(), sendAttach: vi.fn(), dropQueuedSendsFor: vi.fn(),

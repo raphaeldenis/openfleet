@@ -1,12 +1,13 @@
 import { NgTemplateOutlet } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, effect, inject, input, signal, untracked } from '@angular/core';
 import { EarlyEscapeHintService } from '../core/early-escape-hint.service';
-import { ApiError, FleetApiService } from '../core/fleet-api.service';
+import { copyFor } from '../core/error-copy';
+import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { SessionRequestsService } from '../core/session-requests';
 import { ComposerComponent } from './composer.component';
 import { PermissionGateCardComponent } from './permission-gate-card.component';
-import { type ClosedStripCopy, closedStripCopyFor, reopenErrorMessage, resumeFailureReasonFor } from './session-close-status';
+import { type ClosedStripCopy, closedStripCopyFor, resumeFailureCopyFor } from './session-close-status';
 import { SessionHeaderComponent } from './session-header.component';
 import { TerminalComponent } from './terminal.component';
 import { StatePanelComponent } from '../working-state/state-panel.component';
@@ -151,7 +152,7 @@ export class SessionViewComponent {
     const isClosedSessionRelaunching = session.state === 'starting' && session.closedAt !== undefined;
     if (isReopenRequestInFlight || isClosedSessionRelaunching) return { kind: 'resuming' };
     if (session.state !== 'closed') return undefined;
-    const reason = this.resumeError() ?? resumeFailureReasonFor(session.exitCode);
+    const reason = this.resumeError() ?? resumeFailureCopyFor(this.events.closeReasonOf(session.id));
     return reason ? { kind: 'resume_failed', reason } : undefined;
   });
 
@@ -163,7 +164,7 @@ export class SessionViewComponent {
   protected readonly closedStrip = computed<ClosedStrip | undefined>(() => {
     const session = this.session();
     if (!session || session.state !== 'closed' || this.lifecycleBanner()) return undefined;
-    const copy = closedStripCopyFor(session.exitCode);
+    const copy = closedStripCopyFor(session.exitCode, this.events.closeReasonOf(session.id));
     const isFailureJustSeen = copy.variant === 'error' && this.watchedOpenSessionId() === session.id;
     return { ...copy, role: isFailureJustSeen ? 'alert' : null };
   });
@@ -185,7 +186,7 @@ export class SessionViewComponent {
   }
 
   async resume(sessionId: string): Promise<void> {
-    const reopenErrorFor = (error: unknown) => reopenErrorMessage(error instanceof ApiError ? error.code : undefined);
+    const reopenErrorFor = (error: unknown) => copyFor(error, { action: 'resume' }).text;
     await this.requests.run({ sessionId, kind: 'resume', message: reopenErrorFor, action: () => this.api.reopenSession(sessionId) });
   }
 }

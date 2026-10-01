@@ -1,8 +1,9 @@
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 
-export type InboxKind = 'gate' | 'question' | 'law' | 'permission' | 'resource';
+export type InboxKind = 'gate' | 'question' | 'law' | 'permission' | 'resource' | 'issue';
 
 const COLOR_VAR: Record<InboxKind, string> = {
+  issue: '--state-error',
   gate: '--state-waiting-permission',
   question: '--state-waiting-input',
   law: '--state-thinking',
