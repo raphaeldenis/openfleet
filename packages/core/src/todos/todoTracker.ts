@@ -1,7 +1,7 @@
 import { CLOSED_SNAPSHOTS_KEPT, EMIT_COALESCE_MS, MAX_FOLD_BYTES, MAX_QUEUED_HOOKS, TODO_CHUNK_BYTES, TODO_GET_WAIT_MS, type SessionTodos, type TodoSummary } from '@openfleet/shared';
 import type { EventBus } from '../events/eventBus.js';
 import { log } from '../logger.js';
-import { createTodoFold, foldHookPayload, foldTranscriptText, snapshotOf, type TodoFold } from './todoFold.js';
+import { createTodoFold, foldHookPayload, foldTranscriptText, markRowsUnverified, snapshotOf, type TodoFold } from './todoFold.js';
 import type { TodoHookCall } from './todoHookCall.js';
 import { readTranscriptChunk } from './transcriptChunkReader.js';
 
@@ -38,6 +38,7 @@ interface SessionState {
   sessionId: string;
   fold: TodoFold;
   cursor: Cursor | undefined;
+  hasReadTheHistory: boolean;
   tasks: Task[];
   hasQueuedARead: boolean;
   isRunning: boolean;
@@ -152,7 +153,7 @@ export class TodoTracker {
     const notBefore = createdAt !== undefined && Number.isFinite(Date.parse(createdAt)) ? new Date(createdAt) : undefined;
     const fold = createTodoFold({ now: this.deps.now, notBefore });
     const state: SessionState = {
-      sessionId, fold, cursor: undefined, tasks: [], hasQueuedARead: false, isRunning: false, isClosing: false, isStale: false,
+      sessionId, fold, cursor: undefined, hasReadTheHistory: false, tasks: [], hasQueuedARead: false, isRunning: false, isClosing: false, isStale: false,
       lastEmittedKey: keyOf(snapshotOf(fold, sessionId)), isEmitPending: false, fallback: undefined, warnedReasons: new Set(), idleWaiters: [],
     };
     this.states.set(sessionId, state);
@@ -242,6 +243,8 @@ export class TodoTracker {
         state.fold = target;
         state.cursor = cursor;
       }
+      if (!state.hasReadTheHistory) markRowsUnverified(state.fold);
+      state.hasReadTheHistory = true;
       state.isStale = false;
     });
   }

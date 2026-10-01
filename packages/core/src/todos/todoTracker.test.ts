@@ -633,3 +633,32 @@ describe('the GETs that timed out', () => {
     expect(statesOf(tracker).get(SESSION)!.idleWaiters).toHaveLength(0);
   });
 });
+
+describe('after a resume the rows rebuilt from the old transcript are unverified until a live call confirms them', () => {
+  it('marks the repaired rows unverified, and clears the marker of the id a live create replaces', async () => {
+    const tracker = newTracker();
+    paths.set(SESSION, transcriptPath('resumed.jsonl'));
+    writeFileSync(transcriptPath('resumed.jsonl'), `${[...transcriptCreate('toolu_h1', '1', 'Old one'), ...transcriptCreate('toolu_h2', '2', 'Old two')].join('\n')}\n`);
+
+    tracker.repair(SESSION);
+    await nextTurns();
+    const afterRepair = tracker.get(SESSION);
+    tracker.applyHook(SESSION, createCall('toolu_live', '1', 'New one'));
+    await nextTurns();
+
+    expect(afterRepair?.items.map((item) => item.unverified)).toEqual([true, true]);
+    expect(tracker.get(SESSION)?.items).toEqual([
+      { id: '1', content: 'New one', status: 'pending' },
+      { id: '2', content: 'Old two', status: 'pending', unverified: true },
+    ]);
+  });
+
+  it('does not mark a row the hooks created in a session that never had history', async () => {
+    const tracker = newTracker();
+
+    tracker.applyHook(SESSION, createCall('toolu_1', '1', 'Fresh'));
+    await nextTurns();
+
+    expect(tracker.get(SESSION)?.items).toEqual([{ id: '1', content: 'Fresh', status: 'pending' }]);
+  });
+});

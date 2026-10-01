@@ -32,6 +32,8 @@ export const TodoItemSchema = z.object({
   activeForm: TodoTextSchema.optional(),
   /** A placeholder row: an update named this id before any create or list did. */
   unnamed: z.literal(true).optional(),
+  /** A row rebuilt from the transcript history that no live call or list has confirmed since the session resumed. */
+  unverified: z.literal(true).optional(),
 });
 export type TodoItem = z.infer<typeof TodoItemSchema>;
 

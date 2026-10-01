@@ -23,7 +23,7 @@ const TASK_ID = /^[A-Za-z0-9_.:-]{1,32}$/;
 const CREATED_TASK_ID_IN_RESULT_TEXT = /Task #(\d{1,9})\b/;
 const DELETED_STATUS = 'deleted';
 
-interface TaskRow { id: string; content: string; status: TodoStatus; activeForm?: string; unnamed?: true }
+interface TaskRow { id: string; content: string; status: TodoStatus; activeForm?: string; unnamed?: true; unverified?: true }
 interface PendingCall { name: TodoToolName; input: TodoCallInput }
 
 export interface TodoFold {
@@ -113,7 +113,19 @@ const stampOf = (fold: TodoFold, at: string | undefined): string => {
   return isPlausible ? new Date(claimedTime).toISOString() : now.toISOString();
 };
 
-type Applier = (fold: TodoFold, input: TodoCallInput, response: TodoCallResponse | undefined) => boolean;
+/** Flags every row as rebuilt from history: after a resume the CLI's own store may be empty. */
+export const markRowsUnverified = (fold: TodoFold): void => {
+  for (const row of fold.tasks.values()) row.unverified = true;
+};
+
+/** The CLI answered that the id does not exist: only a row no live call confirmed is dropped. Returns whether a row was dropped. */
+const forgetGhostRow = (fold: TodoFold, id: string): boolean => {
+  const isGhost = fold.tasks.get(id)?.unverified === true;
+  if (isGhost) fold.tasks.delete(id);
+  return isGhost;
+};
+
+type Applier =(fold: TodoFold, input: TodoCallInput, response: TodoCallResponse | undefined) => boolean;
 
 const applyTaskCreate: Applier = (fold, input, response) => {
   const id = taskIdOf(response?.task?.id);
@@ -121,14 +133,17 @@ const applyTaskCreate: Applier = (fold, input, response) => {
   const content = optionalText(input.subject) ?? optionalText(response?.task?.subject);
   const activeForm = optionalText(input.activeForm);
   const existing = fold.tasks.get(id);
-  if (existing) {
-    if (content) {
-      existing.content = content;
-      delete existing.unnamed;
-    }
-    if (activeForm) existing.activeForm = activeForm;
+  const isNamingAPlaceholder = existing?.unnamed === true && content !== undefined;
+  if (isNamingAPlaceholder) {
+    fold.tasks.set(id, rowOf({ id, content, status: existing.status, activeForm: activeForm ?? existing.activeForm }));
     return true;
   }
+  const isReplacingARow = existing !== undefined && content !== undefined;
+  if (isReplacingARow) {
+    fold.tasks.set(id, rowOf({ id, content, status: 'pending', activeForm }));
+    return true;
+  }
+  if (existing) return true;
   if (!content) return false;
   if (!hasRoomForANewTask(fold)) {
     countAsUntracked(fold, id);
@@ -140,9 +155,10 @@ const applyTaskCreate: Applier = (fold, input, response) => {
 };
 
 const applyTaskUpdate: Applier = (fold, input, response) => {
-  if (!response || response.success === false) return false;
+  if (!response) return false;
   const id = taskIdOf(response.taskId) ?? taskIdOf(input.taskId);
   if (id === undefined) return false;
+  if (response.success === false) return forgetGhostRow(fold, id);
   const requestedStatus = typeof input.status === 'string' ? input.status : response.toStatus;
   if (requestedStatus === DELETED_STATUS) {
     fold.tasks.delete(id);
@@ -154,6 +170,7 @@ const applyTaskUpdate: Applier = (fold, input, response) => {
   const activeForm = optionalText(input.activeForm);
   const existing = fold.tasks.get(id);
   if (existing) {
+    delete existing.unverified;
     if (status) existing.status = status;
     if (subject) {
       existing.content = subject;
