@@ -2,7 +2,8 @@ import { Injectable, computed, effect, inject, signal, untracked, type Signal } 
 import { ApiError, FleetApiService } from '../../core/fleet-api.service';
 import { copyFor, retryOfError } from '../../core/error-copy';
 import { FleetEventsService } from '../../core/fleet-events.service';
-import type { SessionTodosSource, TodosLoad } from './session-todos-source';
+import { childrenProgressOf } from './children-progress';
+import type { ChildrenLoad, SessionTodosSource, TodosLoad } from './session-todos-source';
 import type { SessionTodos } from './todos.adapter';
 
 type FailedLoad = Extract<TodosLoad, { kind: 'error' }>;
@@ -31,6 +32,7 @@ export class LiveSessionTodosSource implements SessionTodosSource {
   private readonly watchedSessionId = signal<string | undefined>(undefined);
   private readonly failures = signal<ReadonlyMap<string, Failure>>(new Map());
   private readonly loadsBySession = new Map<string, Signal<TodosLoad>>();
+  private readonly childrenBySession = new Map<string, Signal<ChildrenLoad>>();
   private readonly connectionEpochOfLastRequest = new Map<string, number>();
 
   constructor() {
@@ -46,6 +48,18 @@ export class LiveSessionTodosSource implements SessionTodosSource {
     if (existing) return existing;
     const created = computed(() => this.readLoad(sessionId));
     this.loadsBySession.set(sessionId, created);
+    return created;
+  }
+
+  childrenOf(managerId: string): Signal<ChildrenLoad> {
+    const existing = this.childrenBySession.get(managerId);
+    if (existing) return existing;
+    const created = computed<ChildrenLoad>(() => {
+      const isSnapshotWithoutTodos = this.events.snapshotReceived() && !this.events.todosReported();
+      if (isSnapshotWithoutTodos) return { kind: 'unsupported' };
+      return { kind: 'ready', children: childrenProgressOf(managerId, this.events.sessions(), this.events.todoSummaries()) };
+    });
+    this.childrenBySession.set(managerId, created);
     return created;
   }
 
