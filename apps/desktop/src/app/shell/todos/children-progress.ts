@@ -1,13 +1,15 @@
-import { MANAGER_ROLE, type Session, type TodoSummary } from '@openfleet/shared';
+import { MANAGER_ROLE, type Session, type SessionState, type TodoSummary } from '@openfleet/shared';
 import type { ChildProgress } from './session-todos-source';
 
-const CLOSED_STATE = 'closed';
+export const CLOSED_STATE: SessionState = 'closed';
+const UNREADABLE_DATE_SORTS_LAST = Number.MAX_SAFE_INTEGER;
 
 function createdAtMillis(session: Session): number {
   const millis = Date.parse(session.createdAt);
-  return Number.isNaN(millis) ? 0 : millis;
+  return Number.isNaN(millis) ? UNREADABLE_DATE_SORTS_LAST : millis;
 }
 
+/** Counts exist only for a child whose list holds at least one task. */
 function progressOf(child: Session, summaries: ReadonlyMap<string, TodoSummary>): ChildProgress {
   const counts = summaries.get(child.id)?.counts;
   const hasList = counts !== undefined && counts.total > 0;

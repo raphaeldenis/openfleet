@@ -49,7 +49,7 @@ describe('manager children progress', () => {
   });
 
   it('says no child has todos when none has a list, instead of a sum of zeros', async () => {
-    await renderManagerTab([child('gimli', null), child('balin', 0, 0)]);
+    await renderManagerTab([child('gimli', null), child('balin', null)]);
 
     expect(summary()).toBe('Children · no todos yet');
   });
@@ -109,6 +109,18 @@ describe('manager children progress', () => {
     await renderManagerTab([child('gimli', 2, 5)]);
 
     expect(within(rowOf('GIMLI')).queryByRole('progressbar')).toBeNull();
+    expect(rowOf('GIMLI').querySelector('of-todo-progress [aria-hidden="true"]')).not.toBeNull();
+  });
+
+  it('updates a row in place when its child reports progress, keeping the same DOM node', async () => {
+    const { source, view } = await renderManagerTab([child('gimli', 2, 5), child('balin', 1, 2)]);
+    const gimliRowBefore = rowOf('GIMLI');
+
+    source.publishChildren(MANAGER_ID, { kind: 'ready', children: [child('ori', null), child('gimli', 4, 5), child('balin', 1, 2)] });
+    await view.fixture.whenStable();
+
+    expect(rowOf('GIMLI')).toBe(gimliRowBefore);
+    expect(within(gimliRowBefore).getByTestId('manager-child-progress-text').textContent).toBe('4/5 done');
   });
 
   describe('navigation', () => {
@@ -138,12 +150,22 @@ describe('manager children progress', () => {
       expect(TestBed.inject(Router).url).toBe('/session/balin');
     });
 
-    it('marks the child being shown as the current page', async () => {
-      await renderManagerTab([child('gimli', 2, 5), child('balin', 1, 2)]);
-      await TestBed.inject(Router).navigateByUrl('/session/gimli');
+    it('moves the focus to the todos panel when a worker child is opened, so it is not lost with the link', async () => {
+      await renderManagerTab([child('gimli', 2, 5)]);
 
-      expect(within(rowOf('GIMLI')).getByRole('link').getAttribute('aria-current')).toBe('page');
-      expect(within(rowOf('BALIN')).getByRole('link').getAttribute('aria-current')).toBeNull();
+      await userEvent.tab();
+      await userEvent.keyboard('{Enter}');
+
+      expect(document.activeElement).toBe(screen.getByRole('region', { name: 'Todos' }));
+    });
+
+    it('moves the focus to the todos panel when a child manager is opened', async () => {
+      await renderManagerTab([child('sub', 1, 3, { isManager: true })]);
+
+      await userEvent.tab();
+      await userEvent.keyboard('{Enter}');
+
+      expect(document.activeElement).toBe(screen.getByRole('region', { name: 'Todos' }));
     });
   });
 
@@ -159,6 +181,20 @@ describe('manager children progress', () => {
       await renderManagerTab([child('gimli', 2, 5, { name: 'pay‮gnp' })]);
 
       expect(screen.getByTestId('manager-child-link').textContent).toContain('<U+202E>');
+    });
+
+    it('escapes invisible bidi controls in the tooltip too', async () => {
+      await renderManagerTab([child('gimli', 2, 5, { name: 'pay‮gnp' })]);
+
+      expect(screen.getByTestId('manager-child-link').getAttribute('title')).toContain('<U+202E>');
+    });
+
+    it('shows a name made only of an invisible letter as an escape, in the text and the tooltip', async () => {
+      await renderManagerTab([child('gimli', 2, 5, { name: 'ㅤ' })]);
+
+      const link = screen.getByTestId('manager-child-link');
+      expect(link.textContent?.trim()).toContain('<U+3164>');
+      expect(link.getAttribute('title')).toContain('<U+3164>');
     });
 
     it('renders a name as plain text, never as markup', async () => {
@@ -189,6 +225,40 @@ describe('manager children progress', () => {
       await renderManagerTab(manyChildren(21));
 
       expect(screen.getByTestId('manager-children-more').textContent).toBe('1 more child not shown');
+    });
+
+    const linkTexts = () => rows().map((row) => within(row).getByTestId('manager-child-link').textContent?.trim());
+    const closedUnfinished = (id: string) => child(id, 1, 4, { state: 'closed' });
+    const closedDone = (id: string) => child(id, 4, 4, { state: 'closed' });
+
+    it('keeps closed children with unfinished work among the 20 rows, shown after the open ones', async () => {
+      const open = Array.from({ length: 22 }, (_, index) => child(`open${index}`, 1, 2));
+      await renderManagerTab([...open, closedUnfinished('late1'), closedUnfinished('late2'), closedUnfinished('late3')]);
+
+      expect(rows()).toHaveLength(20);
+      expect(linkTexts().slice(-3)).toEqual(['LATE1', 'LATE2', 'LATE3']);
+      expect(linkTexts().slice(0, 17)).toEqual(open.slice(0, 17).map((c) => c.name));
+      expect(screen.getByTestId('manager-children-more').textContent).toBe('5 more children not shown');
+    });
+
+    it('fills the rows with open children before closed children whose work is done', async () => {
+      const open = Array.from({ length: 18 }, (_, index) => child(`open${index}`, 1, 2));
+      await renderManagerTab([...open, closedDone('done1'), closedDone('done2'), closedDone('done3'), closedUnfinished('late1'), closedUnfinished('late2')]);
+
+      expect(linkTexts()).toEqual([...open.map((c) => c.name), 'LATE1', 'LATE2']);
+      expect(screen.getByTestId('manager-children-more').textContent).toBe('3 more children not shown');
+    });
+
+    it('says how many of the hidden children are unfinished', async () => {
+      await renderManagerTab(Array.from({ length: 25 }, (_, index) => closedUnfinished(`late${index}`)));
+
+      expect(screen.getByTestId('manager-children-more').textContent).toBe('5 more children not shown, 5 unfinished');
+    });
+
+    it('says "1 more child not shown, 1 unfinished" in the singular', async () => {
+      await renderManagerTab(Array.from({ length: 21 }, (_, index) => closedUnfinished(`late${index}`)));
+
+      expect(screen.getByTestId('manager-children-more').textContent).toBe('1 more child not shown, 1 unfinished');
     });
 
     it('shows no "more" line at exactly 20 children', async () => {

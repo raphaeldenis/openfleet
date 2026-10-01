@@ -1,4 +1,5 @@
 import { InjectionToken, signal, type Signal, type WritableSignal } from '@angular/core';
+import type { SessionState } from '@openfleet/shared';
 import type { SessionTodos, TodoCounts } from './todos.adapter';
 
 export type TodosLoad =
@@ -12,7 +13,7 @@ export interface ChildProgress {
   readonly id: string;
   readonly name: string;
   readonly emoji: string;
-  readonly state: string;
+  readonly state: SessionState;
   readonly isManager: boolean;
   readonly counts: TodoCounts | null;
 }

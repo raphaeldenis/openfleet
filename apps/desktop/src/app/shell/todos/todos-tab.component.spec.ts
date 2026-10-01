@@ -247,7 +247,7 @@ describe('TodosTabComponent', () => {
       expect(progressRegionOf('2 of 2 completed')).toBe(regionBefore);
     });
 
-    it('starts a fresh region when the shown session changes, so switching sessions announces nothing', async () => {
+    it('replaces the region instead of mutating it when the shown session changes', async () => {
       const { view, sessionId } = await renderSwitchableTab();
       const regionOfFirstSession = progressRegionOf('1 of 2 completed');
 

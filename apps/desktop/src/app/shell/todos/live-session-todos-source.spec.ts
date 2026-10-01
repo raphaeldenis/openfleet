@@ -345,10 +345,27 @@ describe('LiveSessionTodosSource', () => {
       expect(readyChildren().map((child) => child.isManager)).toEqual([true, false]);
     });
 
-    it('reads as unsupported when the daemon reports no todo summaries', () => {
-      socket().dispatchMessage({ type: 'snapshot', sessions: [sessionOf('a')], approvals: [] });
+    it('sorts a child whose creation date cannot be read after the others, whatever the order they arrive in', () => {
+      socket().dispatchMessage({
+        type: 'snapshot',
+        sessions: [sessionOf('undated', { createdAt: 'not a date' }), sessionOf('late', { createdAt: '2026-10-01T11:00:00.000Z' }), sessionOf('early', { createdAt: '2026-10-01T08:00:00.000Z' })],
+        approvals: [],
+        todoSummaries: [],
+      });
+
+      expect(readyChildren().map((child) => child.id)).toEqual(['early', 'late', 'undated']);
+    });
+
+    it('reads a manager as unsupported when the daemon reports no todo summaries', () => {
+      socket().dispatchMessage({ type: 'snapshot', sessions: [sessionOf('m1', { role: 'manager', parentId: undefined }), sessionOf('a')], approvals: [] });
 
       expect(childrenOf()).toEqual({ kind: 'unsupported' });
+    });
+
+    it('reads a worker as having no children, not as unsupported, when the daemon reports no todo summaries', () => {
+      socket().dispatchMessage({ type: 'snapshot', sessions: [sessionOf('worker-1', { parentId: undefined })], approvals: [] });
+
+      expect(childrenOf('worker-1')).toEqual({ kind: 'ready', children: [] });
     });
 
     it('reads as no children for a manager nobody parents', () => {

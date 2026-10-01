@@ -1,6 +1,7 @@
-import { ChangeDetectionStrategy, Component, DestroyRef, computed, effect, inject, input } from '@angular/core';
+import { ChangeDetectionStrategy, Component, DestroyRef, ElementRef, computed, effect, inject, input, viewChild } from '@angular/core';
 import { showInvisibleControlsAsEscapes } from '../../inbox/bidi-escapes';
 import { ManagerChildrenComponent } from './manager-children.component';
+import { plural } from './plural';
 import { SESSION_TODOS_SOURCE, type ChildrenLoad, type TodosLoad } from './session-todos-source';
 import { TodoProgressComponent } from './todo-progress.component';
 import { TODO_STATUS_PRESENTATION, UNKNOWN_STATUS_PRESENTATION } from './todo-status';
@@ -28,7 +29,7 @@ function clockTimeOf(isoDate: string): string {
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [ManagerChildrenComponent, TodoProgressComponent],
   template: `
-    <div class="tab" data-testid="todos-tab">
+    <div #tab class="tab" role="region" aria-label="Todos" tabindex="-1" data-testid="todos-tab">
       @if (!sessionId()) {
         <p class="message" data-testid="todos-no-session">Select a session to see its todos.</p>
       } @else {
@@ -92,12 +93,13 @@ function clockTimeOf(isoDate: string): string {
             }
           }
         }
-        <of-manager-children [load]="childrenLoad()" />
+        <of-manager-children [load]="childrenLoad()" (opened)="focusPanel()" />
       }
     </div>
   `,
   styles: `
     :host { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+    .tab:focus { outline: none; }
     .tab { display: flex; flex-direction: column; flex: 1; min-height: 0; gap: .5rem; padding: .625rem; color: var(--fg); font-size: .8125rem; }
     .message, .note, .detail, .progress-text { margin: 0; }
     .message { display: flex; flex-direction: column; align-items: flex-start; gap: .5rem; color: var(--mut); }
@@ -130,7 +132,9 @@ export class TodosTabComponent {
     inject(DestroyRef).onDestroy(() => this.source.watch(undefined));
   }
 
-  /** One live region per shown session: switching session replaces the region, so the switch itself announces nothing. */
+  private readonly tab = viewChild<ElementRef<HTMLElement>>('tab');
+
+  /** One live region per shown session: switching session replaces the region instead of mutating it in place. */
   protected readonly liveRegionPerSession = computed(() => [{ sessionId: this.sessionId() }]);
   protected readonly load = computed<TodosLoad>(() => {
     const id = this.sessionId();
@@ -190,8 +194,13 @@ export class TodosTabComponent {
     const beyondRenderCap = Math.max(0, todos.items.length - MAX_TODO_ITEMS);
     const notShown = todos.omitted + beyondRenderCap;
     if (notShown === 0) return '';
-    return `${notShown} more ${notShown === 1 ? 'todo' : 'todos'} not shown`;
+    return `${notShown} more ${plural(notShown, 'todo', 'todos')} not shown`;
   });
+
+  /** Keeps the keyboard focus inside the panel once a child's link, which disappears with the route change, was used. */
+  focusPanel(): void {
+    this.tab()?.nativeElement.focus();
+  }
 
   retry(): void {
     const id = this.sessionId();

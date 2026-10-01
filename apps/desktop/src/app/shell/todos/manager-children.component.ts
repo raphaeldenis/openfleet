@@ -1,17 +1,18 @@
-import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
-import { RouterLink, RouterLinkActive } from '@angular/router';
+import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
+import { RouterLink } from '@angular/router';
 import { StateChipComponent } from '../../design/state-chip.component';
 import { showInvisibleControlsAsEscapes } from '../../inbox/bidi-escapes';
+import { CLOSED_STATE } from './children-progress';
+import { plural } from './plural';
 import type { ChildProgress, ChildrenLoad } from './session-todos-source';
 import { TodoProgressComponent } from './todo-progress.component';
 
 const MAX_CHILD_ROWS = 20;
-const CLOSED_STATE = 'closed';
 
 interface ChildRow {
   readonly child: ChildProgress;
   readonly displayName: string;
-  readonly link: readonly string[];
+  readonly link: string;
   readonly progressText: string;
   readonly isClosedWithUnfinishedWork: boolean;
 }
@@ -22,21 +23,26 @@ function rowOf(child: ChildProgress): ChildRow {
   return {
     child,
     displayName: showInvisibleControlsAsEscapes(child.name),
-    link: [child.isManager ? '/manager' : '/session', child.id],
+    link: `${child.isManager ? '/manager' : '/session'}/${child.id}`,
     progressText: counts ? `${counts.completed}/${counts.total} done` : 'no todos',
     isClosedWithUnfinishedWork,
   };
 }
 
-function plural(count: number, singular: string, pluralForm: string): string {
-  return count === 1 ? singular : pluralForm;
+const PRIORITY_CLOSED_UNFINISHED = 0;
+const PRIORITY_OPEN = 1;
+const PRIORITY_CLOSED_OTHER = 2;
+
+function keepPriorityOf(row: ChildRow): number {
+  if (row.isClosedWithUnfinishedWork) return PRIORITY_CLOSED_UNFINISHED;
+  return row.child.state === CLOSED_STATE ? PRIORITY_CLOSED_OTHER : PRIORITY_OPEN;
 }
 
 /** The progress of a manager's direct children: one line per child, each leading to that child's own session. */
 @Component({
   selector: 'of-manager-children',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, RouterLinkActive, StateChipComponent, TodoProgressComponent],
+  imports: [RouterLink, StateChipComponent, TodoProgressComponent],
   template: `
     @if (load(); as current) {
       @if (current.kind === 'unsupported') {
@@ -48,7 +54,7 @@ function plural(count: number, singular: string, pluralForm: string): string {
             @for (row of shownRows(); track row.child.id) {
               <li class="row" data-testid="manager-child">
                 <span class="emoji" aria-hidden="true">{{ row.child.emoji }}</span>
-                <a class="name" data-testid="manager-child-link" [routerLink]="row.link" routerLinkActive ariaCurrentWhenActive="page" [title]="row.displayName">{{ row.displayName }}</a>
+                <a class="name" data-testid="manager-child-link" [routerLink]="row.link" [title]="row.displayName" (click)="opened.emit()">{{ row.displayName }}</a>
                 <of-state-chip [state]="row.child.state" />
                 <span class="progress-text" data-testid="manager-child-progress-text">{{ row.progressText }}</span>
                 @if (row.isClosedWithUnfinishedWork) {
@@ -83,23 +89,33 @@ function plural(count: number, singular: string, pluralForm: string): string {
 })
 export class ManagerChildrenComponent {
   readonly load = input.required<ChildrenLoad>();
+  /** Emits when a child's link is activated. */
+  readonly opened = output<void>();
 
-  private readonly children = computed(() => {
+  protected readonly rows = computed(() => {
     const load = this.load();
-    const children = load.kind === 'ready' ? load.children : [];
-    return children.map((child) => (child.counts && child.counts.total > 0 ? child : { ...child, counts: null }));
+    return (load.kind === 'ready' ? load.children : []).map(rowOf);
   });
-  protected readonly rows = computed(() => this.children().map(rowOf));
-  protected readonly shownRows = computed(() => this.rows().slice(0, MAX_CHILD_ROWS));
+  /** Fills the visible rows by priority, then lists the kept ones in the order the source gives. */
+  private readonly keptRows = computed(() => {
+    const rows = this.rows();
+    if (rows.length <= MAX_CHILD_ROWS) return { shown: rows, hidden: [] };
+    const keptByPriority = new Set([...rows].sort((a, b) => keepPriorityOf(a) - keepPriorityOf(b)).slice(0, MAX_CHILD_ROWS));
+    return { shown: rows.filter((row) => keptByPriority.has(row)), hidden: rows.filter((row) => !keptByPriority.has(row)) };
+  });
+  protected readonly shownRows = computed(() => this.keptRows().shown);
   protected readonly summary = computed(() => {
-    const withList = this.children().flatMap((child) => (child.counts ? [child.counts] : []));
+    const withList = this.rows().flatMap((row) => (row.child.counts ? [row.child.counts] : []));
     if (withList.length === 0) return 'Children · no todos yet';
     const done = withList.reduce((sum, counts) => sum + counts.completed, 0);
     const total = withList.reduce((sum, counts) => sum + counts.total, 0);
     return `Children · ${done} of ${total} done across ${withList.length} ${plural(withList.length, 'child', 'children')}`;
   });
   protected readonly notShownText = computed(() => {
-    const notShown = this.rows().length - MAX_CHILD_ROWS;
-    return notShown > 0 ? `${notShown} more ${plural(notShown, 'child', 'children')} not shown` : '';
+    const { hidden } = this.keptRows();
+    if (hidden.length === 0) return '';
+    const unfinished = hidden.filter((row) => row.isClosedWithUnfinishedWork).length;
+    const unfinishedSuffix = unfinished > 0 ? `, ${unfinished} unfinished` : '';
+    return `${hidden.length} more ${plural(hidden.length, 'child', 'children')} not shown${unfinishedSuffix}`;
   });
 }
