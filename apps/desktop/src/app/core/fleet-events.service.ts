@@ -30,10 +30,21 @@ function readableTodoSummaries(received: unknown[] | undefined): TodoSummary[] {
   return results.flatMap((result) => (result.success ? [result.data] : []));
 }
 
-function closeReasonsOfSnapshot(sessions: Session[]): ReadonlyMap<string, SessionCloseReason> {
+interface KnownCloses {
+  sessions: Session[];
+  reasons: ReadonlyMap<string, SessionCloseReason>;
+}
+
+// A snapshot carries exit codes but no reason. The two reasons the conventional exit codes encode are recomputed; any other reason
+// learned live (a harness_exit that exited 143, say) survives while the snapshot shows the same session closed with the same exit code.
+function closeReasonsOfSnapshot(sessions: Session[], known: KnownCloses): ReadonlyMap<string, SessionCloseReason> {
   const reasons = new Map<string, SessionCloseReason>();
   for (const { id, state, exitCode } of sessions) {
-    const reason = state === 'closed' ? closeReasonOfExitCode(exitCode) : undefined;
+    if (state !== 'closed') continue;
+    const learnedLive = known.reasons.get(id);
+    const knownSession = known.sessions.find((session) => session.id === id);
+    const isSameCloseAsLearnedLive = knownSession?.state === 'closed' && knownSession.exitCode === exitCode;
+    const reason = closeReasonOfExitCode(exitCode) ?? (isSameCloseAsLearnedLive ? learnedLive : undefined);
     if (reason) reasons.set(id, reason);
   }
   return reasons;
@@ -226,7 +237,8 @@ export class FleetEventsService {
 
   private reduce(event: ServerEvent): void {
     switch (event.type) {
-      case 'snapshot':
+      case 'snapshot': {
+        const knownCloses: KnownCloses = { sessions: this.sessions(), reasons: this.closeReasons() };
         this.sessions.set(event.sessions.map(withoutStaleClosure));
         this.approvals.set(event.approvals);
         this.managers.set(event.managers ?? []);
@@ -239,9 +251,10 @@ export class FleetEventsService {
         const summaries = new Map(readableTodoSummaries(event.todoSummaries).map((summary) => [summary.sessionId, summary]));
         this.todoSummaries.set(summaries);
         this.reconcileTodosWithSnapshot(summaries);
-        this.closeReasons.set(closeReasonsOfSnapshot(event.sessions));
+        this.closeReasons.set(closeReasonsOfSnapshot(event.sessions, knownCloses));
         this.snapshotReceived.set(true);
         return;
+      }
       case 'session.todos': return this.receiveTodosEvent(event.todos);
       case 'session.working_state': return this.workingStates.update((all) => new Map(all).set(event.state.sessionId, event.state));
       case 'session.created': return this.upsertSession(event.session);

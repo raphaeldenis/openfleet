@@ -1,5 +1,6 @@
 import type { DaemonIssue, ErrorEnvelope } from '@openfleet/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { closedStripCopyFor } from '../sessions/session-close-status';
 import { FleetEventsService } from './fleet-events.service';
 
 class FakeWebSocket {
@@ -887,5 +888,60 @@ describe('FleetEventsService daemon issues and background failures', () => {
     socket.dispatchMessage({ type: 'session.reopened', sessionId: 's1' });
 
     expect(service.closeReasonOf('s1')).toBeUndefined();
+  });
+
+  describe('a reconnect snapshot after a close the app saw live', () => {
+    const SIGTERM_EXIT_CODE = 143;
+    const closedSnapshotOf = (exitCode: number) => ({ type: 'snapshot', sessions: [{ ...session('s1', { state: 'closed' }), exitCode }], approvals: [] });
+
+    beforeEach(() => {
+      socket.dispatchMessage({ type: 'snapshot', sessions: [session('s1')], approvals: [] });
+      socket.dispatchMessage({ type: 'session.closed', sessionId: 's1', exitCode: SIGTERM_EXIT_CODE, reason: 'harness_exit' });
+    });
+
+    it('keeps the harness_exit reason of a crash whose exit code looks like a user close (143)', () => {
+      socket.dispatchMessage(closedSnapshotOf(SIGTERM_EXIT_CODE));
+
+      expect(service.closeReasonOf('s1')).toBe('harness_exit');
+    });
+
+    it('keeps the "ended unexpectedly" strip of that crash instead of the neutral one', () => {
+      socket.dispatchMessage(closedSnapshotOf(SIGTERM_EXIT_CODE));
+
+      const strip = closedStripCopyFor(SIGTERM_EXIT_CODE, service.closeReasonOf('s1'));
+
+      expect(strip).toMatchObject({ variant: 'error', description: expect.stringContaining('ended unexpectedly') });
+    });
+
+    it('keeps the reason of a close across two snapshots', () => {
+      socket.dispatchMessage(closedSnapshotOf(SIGTERM_EXIT_CODE));
+      socket.dispatchMessage(closedSnapshotOf(SIGTERM_EXIT_CODE));
+
+      expect(service.closeReasonOf('s1')).toBe('harness_exit');
+    });
+
+    it('drops the reason when the snapshot shows the session live again', () => {
+      socket.dispatchMessage({ type: 'snapshot', sessions: [session('s1', { state: 'idle' })], approvals: [] });
+
+      expect(service.closeReasonOf('s1')).toBeUndefined();
+    });
+
+    it('drops the reason when the snapshot reports another exit code than the one seen live', () => {
+      socket.dispatchMessage(closedSnapshotOf(1));
+
+      expect(service.closeReasonOf('s1')).toBeUndefined();
+    });
+
+    it('drops the reason of a session the snapshot no longer lists', () => {
+      socket.dispatchMessage({ type: 'snapshot', sessions: [], approvals: [] });
+
+      expect(service.closeReasonOf('s1')).toBeUndefined();
+    });
+
+    it('prefers the reason the exit code of the snapshot encodes (resume_timeout)', () => {
+      socket.dispatchMessage(closedSnapshotOf(-1));
+
+      expect(service.closeReasonOf('s1')).toBe('resume_timeout');
+    });
   });
 });
