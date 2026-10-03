@@ -36,7 +36,17 @@ const CPU_NAME_BY_TARGET = { 'aarch64-apple-darwin': 'arm64', 'x86_64-apple-darw
 // esbuild output is ESM, but bundled CommonJS dependencies (ws, zod, the MCP SDK) still call require().
 const REQUIRE_SHIM = "import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);";
 
-class BundleError extends Error {}
+const homeAsTilde = (text) => {
+  const home = homedir();
+  const hasMeaningfulHome = home !== '' && home !== '/';
+  return hasMeaningfulHome ? text.replaceAll(home, '~') : text;
+};
+
+class BundleError extends Error {
+  constructor(message) {
+    super(homeAsTilde(message));
+  }
+}
 
 const hostTarget = () => (process.arch === 'arm64' ? 'aarch64-apple-darwin' : 'x86_64-apple-darwin');
 
@@ -151,8 +161,17 @@ function describeMachOCpu(path) {
   return isThin64BitMachO ? (MACH_O_CPU_NAMES[header.readUInt32LE(4)] ?? 'unknown') : 'not a thin 64-bit Mach-O';
 }
 
+/** Throws when a folder on the way to the prebuild is a symlink, because copying and chmod would then act on files outside node-pty. */
+function refuseLinkedPrebuildFolders({ nodePtyFolder, prebuildFolder }) {
+  for (const relativeFolder of ['prebuilds', `prebuilds/${prebuildFolder}`]) {
+    const isSymlink = lstatSync(join(nodePtyFolder, relativeFolder), { throwIfNoEntry: false })?.isSymbolicLink() === true;
+    if (isSymlink) throw new BundleError(`node-pty ${relativeFolder} is a symlink, a self-contained bundle needs the folder itself`);
+  }
+}
+
 /** Throws unless node-pty ships the prebuild folder for the target and each of its binaries is a Mach-O for the target's CPU. Runs before anything is cleared. */
 function assertPrebuildMatchesTarget({ nodePtyFolder, prebuildFolder, target }) {
+  refuseLinkedPrebuildFolders({ nodePtyFolder, prebuildFolder });
   const folder = join(nodePtyFolder, 'prebuilds', prebuildFolder);
   const expectedCpu = CPU_NAME_BY_TARGET[target];
   for (const binaryName of PREBUILD_BINARIES) {
@@ -224,7 +243,7 @@ async function main() {
     const { out, version, target } = await bundleDaemon(parseArguments(process.argv.slice(2)));
     console.log(`bundled daemon ${version} for ${target} into ${out}`);
   } catch (error) {
-    console.error(`bundle-daemon: ${String(error.message).split('\n')[0]}`);
+    console.error(`bundle-daemon: ${homeAsTilde(String(error.message).split('\n')[0])}`);
     process.exitCode = 1;
   }
 }
