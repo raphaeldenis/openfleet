@@ -1,7 +1,7 @@
 import { CLOSED_SNAPSHOTS_KEPT, EMIT_COALESCE_MS, MAX_FOLD_BYTES, MAX_QUEUED_HOOKS, TODO_CHUNK_BYTES, TODO_GET_WAIT_MS, type SessionTodos, type TodoSummary } from '@openfleet/shared';
 import type { EventBus } from '../events/eventBus.js';
 import { log } from '../logger.js';
-import { createTodoFold, foldHookPayload, foldTranscriptText, markRowsUnverified, snapshotOf, type TodoFold } from './todoFold.js';
+import { confirmSeenCall, createTodoFold, foldHookPayload, foldTranscriptText, markRowsUnverified, snapshotOf, type TodoFold } from './todoFold.js';
 import type { TodoHookCall } from './todoHookCall.js';
 import { readTranscriptChunk } from './transcriptChunkReader.js';
 
@@ -39,6 +39,8 @@ interface SessionState {
   fold: TodoFold;
   cursor: Cursor | undefined;
   hasReadTheHistory: boolean;
+  /** The hook calls folded live before any history was read: replayed after the history when it is finally read. */
+  hooksFoldedBeforeTheHistory: TodoHookCall[];
   tasks: Task[];
   hasQueuedARead: boolean;
   isRunning: boolean;
@@ -49,6 +51,7 @@ interface SessionState {
   fallback: Fallback | undefined;
   warnedReasons: Set<string>;
   idleWaiters: (() => void)[];
+  cancelTimers: Set<() => void>;
 }
 
 const realSchedule: Schedule = (run, delayMs) => {
@@ -85,7 +88,7 @@ export class TodoTracker {
     this.getWaitMs = deps.getWaitMs ?? TODO_GET_WAIT_MS;
     this.unsubscribeFromBus = deps.bus.subscribe((event) => {
       if (event.type === 'session.closed') this.closeSession(event.sessionId);
-      if (event.type === 'session.reopened') this.closedSnapshots.delete(event.sessionId);
+      if (event.type === 'session.reopened') this.reopenSession(event.sessionId);
     });
   }
 
@@ -153,8 +156,8 @@ export class TodoTracker {
     const notBefore = createdAt !== undefined && Number.isFinite(Date.parse(createdAt)) ? new Date(createdAt) : undefined;
     const fold = createTodoFold({ now: this.deps.now, notBefore });
     const state: SessionState = {
-      sessionId, fold, cursor: undefined, hasReadTheHistory: false, tasks: [], hasQueuedARead: false, isRunning: false, isClosing: false, isStale: false,
-      lastEmittedKey: keyOf(snapshotOf(fold, sessionId)), isEmitPending: false, fallback: undefined, warnedReasons: new Set(), idleWaiters: [],
+      sessionId, fold, cursor: undefined, hasReadTheHistory: false, hooksFoldedBeforeTheHistory: [], tasks: [], hasQueuedARead: false, isRunning: false, isClosing: false, isStale: false,
+      lastEmittedKey: keyOf(snapshotOf(fold, sessionId)), isEmitPending: false, fallback: undefined, warnedReasons: new Set(), idleWaiters: [], cancelTimers: new Set(),
     };
     this.states.set(sessionId, state);
     return state;
@@ -202,9 +205,23 @@ export class TodoTracker {
 
   private foldHook(state: SessionState, call: TodoHookCall): void {
     const wasAlreadyFolded = state.fold.seenCalls.has(call.toolUseId);
+    if (wasAlreadyFolded) confirmSeenCall(state.fold, call);
+    if (!state.hasReadTheHistory) this.rememberHookFoldedBeforeTheHistory(state, call);
     const isApplied = foldHookPayload(state.fold, call);
     const wasRejectedByTheCli = call.response?.success === false;
     if (!isApplied && !wasAlreadyFolded && !wasRejectedByTheCli) this.startFallback(state, call.toolUseId);
+  }
+
+  private rememberHookFoldedBeforeTheHistory(state: SessionState, call: TodoHookCall): void {
+    state.hooksFoldedBeforeTheHistory.push(call);
+    if (state.hooksFoldedBeforeTheHistory.length > MAX_QUEUED_HOOKS) state.hooksFoldedBeforeTheHistory.shift();
+  }
+
+  private replayHooks(fold: TodoFold, calls: TodoHookCall[]): void {
+    for (const call of calls) {
+      if (fold.seenCalls.has(call.toolUseId)) confirmSeenCall(fold, call);
+      else foldHookPayload(fold, call);
+    }
   }
 
   private async readTranscript(state: SessionState): Promise<void> {
@@ -212,9 +229,11 @@ export class TodoTracker {
       const path = this.deps.sessions.trustedTranscriptFileOf(state.sessionId);
       if (path === undefined) return;
       const hasMovedToAnotherFile = state.cursor !== undefined && state.cursor.path !== path;
-      let cursor = hasMovedToAnotherFile ? undefined : state.cursor;
-      let target = state.fold;
-      let isRebuilding = false;
+      const isFirstRead = !state.hasReadTheHistory;
+      const mustRebuildUnderLiveHooks = isFirstRead && state.hooksFoldedBeforeTheHistory.length > 0;
+      let cursor = hasMovedToAnotherFile || mustRebuildUnderLiveHooks ? undefined : state.cursor;
+      let target = mustRebuildUnderLiveHooks ? createTodoFold({ now: this.deps.now, notBefore: state.fold.notBefore }) : state.fold;
+      let isRebuilding = mustRebuildUnderLiveHooks;
       let sizeAtStart: number | undefined;
       let chunksRead = 0;
       for (;;) {
@@ -243,7 +262,10 @@ export class TodoTracker {
         state.fold = target;
         state.cursor = cursor;
       }
-      if (!state.hasReadTheHistory) markRowsUnverified(state.fold);
+      const rowsComeFromHistory = hasReadTheReplacement || (isFirstRead && !mustRebuildUnderLiveHooks);
+      if (rowsComeFromHistory) markRowsUnverified(state.fold);
+      if (hasReadTheReplacement && isFirstRead) this.replayHooks(state.fold, state.hooksFoldedBeforeTheHistory);
+      if (isFirstRead) state.hooksFoldedBeforeTheHistory = [];
       state.hasReadTheHistory = true;
       state.isStale = false;
     });
@@ -265,12 +287,10 @@ export class TodoTracker {
   private requestEmit(state: SessionState): void {
     if (state.isEmitPending) return;
     state.isEmitPending = true;
-    const cancel = this.schedule(() => {
-      this.cancelPending.delete(cancel);
+    this.scheduleFor(state, () => {
       state.isEmitPending = false;
       this.failingStale(state, 'todo_emit_failed', () => this.emitIfChanged(state));
     }, EMIT_COALESCE_MS);
-    this.cancelPending.add(cancel);
   }
 
   private emitIfChanged(state: SessionState): void {
@@ -305,13 +325,34 @@ export class TodoTracker {
     }
     if (fallback.isTimerPending) return;
     fallback.isTimerPending = true;
-    const cancel = this.schedule(() => {
-      this.cancelPending.delete(cancel);
+    this.scheduleFor(state, () => {
       fallback.isTimerPending = false;
       fallback.attempt += 1;
       this.failingStale(state, 'todo_read_failed', () => this.enqueueRead(state, 'fallback'));
     }, delay);
+  }
+
+  private isCurrent(state: SessionState): boolean {
+    return this.states.get(state.sessionId) === state;
+  }
+
+  /** Arms a timer that only runs while its session state is the live one: a closed or replaced state never acts. */
+  private scheduleFor(state: SessionState, run: () => void, delayMs: number): void {
+    const cancel = this.schedule(() => {
+      this.cancelPending.delete(cancel);
+      state.cancelTimers.delete(cancel);
+      if (this.isCurrent(state) && !state.isClosing) run();
+    }, delayMs);
     this.cancelPending.add(cancel);
+    state.cancelTimers.add(cancel);
+  }
+
+  private cancelTimersOf(state: SessionState): void {
+    for (const cancel of state.cancelTimers) {
+      cancel();
+      this.cancelPending.delete(cancel);
+    }
+    state.cancelTimers.clear();
   }
 
   private continueFallback(state: SessionState): void {
@@ -363,11 +404,22 @@ export class TodoTracker {
     const state = this.states.get(sessionId);
     if (!state) return;
     state.isClosing = true;
+    this.cancelTimersOf(state);
     if (!state.isRunning && state.tasks.length === 0) this.finalizeClosedSession(state);
+  }
+
+  /** The reopened session starts from a state of its own: the closing one, possibly still reading, is detached and never finalizes. */
+  private reopenSession(sessionId: string): void {
+    this.closedSnapshots.delete(sessionId);
+    const closing = this.states.get(sessionId);
+    if (!closing?.isClosing) return;
+    this.states.delete(sessionId);
+    for (const resolve of closing.idleWaiters.splice(0)) resolve();
   }
 
   /** Frees the fold of a closed session and keeps its last snapshot, for at most CLOSED_SNAPSHOTS_KEPT closed sessions. */
   private finalizeClosedSession(state: SessionState): void {
+    if (!this.isCurrent(state)) return;
     this.emitIfChanged(state);
     this.closedSnapshots.set(state.sessionId, this.snapshotOfState(state));
     this.states.delete(state.sessionId);

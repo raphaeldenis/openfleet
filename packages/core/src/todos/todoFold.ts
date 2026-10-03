@@ -118,6 +118,24 @@ export const markRowsUnverified = (fold: TodoFold): void => {
   for (const row of fold.tasks.values()) row.unverified = true;
 };
 
+const clearUnverified = (fold: TodoFold, id: string | undefined): void => {
+  const row = id === undefined ? undefined : fold.tasks.get(id);
+  if (row) delete row.unverified;
+};
+
+/** A live hook names a call the history already folded: the rows the call concerns are confirmed without replaying its mutation. */
+export function confirmSeenCall(fold: TodoFold, call: TodoHookCall): void {
+  if (call.response?.success === false) return;
+  const listed = Array.isArray(call.response?.tasks) ? call.response.tasks.map((entry) => (isPlainObject(entry) ? taskIdOf(entry.id) : undefined)) : [];
+  const concernedIds: Record<TodoToolName, (string | undefined)[]> = {
+    TaskCreate: [taskIdOf(call.response?.task?.id)],
+    TaskUpdate: [taskIdOf(call.response?.taskId) ?? taskIdOf(call.input.taskId)],
+    TaskList: listed,
+    TodoWrite: [...fold.tasks.keys()],
+  };
+  concernedIds[call.name].forEach((id) => clearUnverified(fold, id));
+}
+
 /** The CLI answered that the id does not exist: only a row no live call confirmed is dropped. Returns whether a row was dropped. */
 const forgetGhostRow = (fold: TodoFold, id: string): boolean => {
   const isGhost = fold.tasks.get(id)?.unverified === true;
