@@ -80,7 +80,7 @@ import { exitCodeLabel } from './session-close-status';
       font-size: .75rem; color: var(--mut); border: 1px solid var(--line); border-radius: .375rem; padding: 0 .5rem;
     }
     .directory { font-family: var(--mono); font-size: .6875rem; color: var(--mut); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 16rem; }
-    .cost { font-style: italic; color: var(--faint); font-size: .75rem; }
+    .cost { font-style: italic; color: var(--mut); font-size: .75rem; }
     .spacer { flex: 1; min-width: .5rem; }
   `,
 })

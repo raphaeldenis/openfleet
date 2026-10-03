@@ -132,7 +132,7 @@ import { PulseNowAction } from './pulse-now';
     .title { font-weight: 600; flex: 1 }
     .table { display: flex; flex-direction: column }
     .row { display: flex; align-items: center; gap: .5rem; padding: .5rem .875rem; border-bottom: 1px solid var(--line); font-size: .75rem }
-    .row.head { color: var(--faint); font-size: .6875rem }
+    .row.head { color: var(--mut); font-size: .6875rem }
     .col-name { flex: 1.5; display: flex; align-items: center; gap: .375rem; font-weight: 500 }
     .col-state { flex: 1 }
     .col-cost { width: 4rem; text-align: right }

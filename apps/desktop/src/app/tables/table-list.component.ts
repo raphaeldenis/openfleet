@@ -25,7 +25,7 @@ import type { DataStore } from '@openfleet/shared';
       font: inherit; font-size: .75rem; cursor: pointer;
     }
     .pill.active { background: var(--active) }
-    .add { padding: 0 .5rem; color: var(--faint) }
+    .add { padding: 0 .5rem; color: var(--mut) }
     .pill:focus-visible, .add:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
   `,
 })

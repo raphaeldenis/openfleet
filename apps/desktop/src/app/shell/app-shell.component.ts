@@ -121,7 +121,7 @@ const RUNNING_STATES = new Set(['generating', 'starting']);
     .brand { height: 2.75rem; flex: none; display: flex; align-items: center; padding: 0 .875rem; font-weight: 600; letter-spacing: -.01em; border-bottom: 1px solid var(--line); }
     .sessions { flex-grow: 2; flex-shrink: 1; flex-basis: 0; min-height: 0; overflow: hidden; display: flex; flex-direction: column; border-bottom: 1px solid var(--line); }
     .section-title { display: flex; align-items: center; gap: .375rem; height: 1.875rem; padding: 0 .75rem; font-size: .6875rem; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--mut); }
-    .section-title .mono { margin-left: auto; font-family: var(--mono); font-weight: 400; letter-spacing: 0; color: var(--faint); }
+    .section-title .mono { margin-left: auto; font-family: var(--mono); font-weight: 400; letter-spacing: 0; color: var(--mut); }
     .helm-list { flex-grow: 1.4; flex-shrink: 1; flex-basis: 0; min-height: 0; list-style: none; margin: 0; padding: .375rem; display: flex; flex-direction: column; gap: 1px; overflow-y: auto; }
     .nav-item { display: flex; align-items: center; gap: .5rem; height: 1.75rem; padding: 0 .5rem; border-radius: .375rem; color: var(--fg); }
     .nav-badge { flex: none; min-width: 1rem; height: 1rem; padding: 0 .25rem; border-radius: .5rem; background: var(--accent); color: var(--on-accent); font-size: .625rem; font-weight: 600; display: flex; align-items: center; justify-content: center; }
@@ -132,11 +132,11 @@ const RUNNING_STATES = new Set(['generating', 'starting']);
     .nav-item.disabled { color: var(--faint); }
     .nav-item .label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .nav-item .glyph { width: 1rem; text-align: center; font-family: var(--mono); font-size: .75rem; }
-    .nav-item .availability { font-size: .625rem; color: var(--faint); white-space: nowrap; }
+    .nav-item .availability { font-size: .625rem; color: var(--mut); white-space: nowrap; }
     .main-column { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
     .topbar { height: 2.75rem; flex: none; display: flex; align-items: center; gap: .75rem; padding: 0 .875rem; border-bottom: 1px solid var(--line); background: var(--panel); }
     .brand-mark { font-weight: 600; }
-    .search-trigger { flex: none; width: 22rem; display: flex; align-items: center; gap: .5rem; color: var(--faint); cursor: pointer; }
+    .search-trigger { flex: none; width: 22rem; display: flex; align-items: center; gap: .5rem; color: var(--mut); cursor: pointer; }
     .search-trigger .placeholder { flex: 1; text-align: left; }
     .search-trigger .shortcut { font-size: .6875rem; padding: 0 .3125rem; border: 1px solid var(--line-2); border-radius: .25rem; }
     .spacer { flex: 1; }

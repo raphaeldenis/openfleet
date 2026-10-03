@@ -45,7 +45,7 @@ export interface KanbanGroup {
     .column-header { display: flex; gap: .375rem; padding: .125rem .25rem; font-size: .75rem; font-weight: 600 }
     .dot { color: var(--faint) }
     .label { flex: 1 }
-    .count { color: var(--faint); font-weight: 400 }
+    .count { color: var(--mut); font-weight: 400 }
     .card {
       display: flex; flex-direction: column; gap: .375rem; padding: .625rem; text-align: left;
       min-width: 0; max-height: 12rem; overflow: hidden;

@@ -97,8 +97,8 @@ const NODES_PER_CHUNK = 2000;
     .header { flex: none; display: flex; align-items: center; gap: .75rem; padding: .625rem 1.25rem; border-bottom: 1px solid var(--line); background: var(--panel) }
     .title { min-width: 0; margin: 0; font-size: inherit; font-weight: 600; outline: 0; overflow-wrap: anywhere }
     .show-rest { align-self: flex-start }
-    .empty-body { color: var(--faint); font-style: italic }
-    .path { font-family: var(--mono); font-size: .6875rem; color: var(--faint) }
+    .empty-body { color: var(--mut); font-style: italic }
+    .path { font-family: var(--mono); font-size: .6875rem; color: var(--mut) }
     .spacer { flex: 1 }
     .history-toggle {
       height: 1.625rem; padding: 0 .625rem; border: 1px solid var(--line); border-radius: .375rem; background: var(--panel);

@@ -163,10 +163,10 @@ function requestedUrlFrom(navigationState: unknown): string {
     .skip { color: var(--mut); font-size: .75rem; text-decoration: none }
     .skip:focus-visible { outline: 2px solid var(--accent); outline-offset: .125rem }
     .stepper { display: flex; flex: none; align-items: flex-start; gap: .25rem; width: 56rem; max-width: calc(100% - 4rem); margin: 0 auto; padding: 0 0 .5rem; box-sizing: border-box; list-style: none }
-    .step { display: flex; flex: 1 1 0; flex-direction: column; gap: .375rem; min-width: 0; font-size: .6875rem; color: var(--faint) }
+    .step { display: flex; flex: 1 1 0; flex-direction: column; gap: .375rem; min-width: 0; font-size: .6875rem; color: var(--mut) }
     .step .bar { height: .25rem; border-radius: .125rem; background: var(--line) }
     .step-name { display: flex; align-items: center; gap: .25rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
-    .step-later { font-size: .625rem; color: var(--faint) }
+    .step-later { font-size: .625rem; color: var(--mut) }
     .step[data-state='done'] { color: var(--mut) }
     .step[data-state='done'] .bar { background: var(--state-idle) }
     .step[data-state='current'] { color: var(--fg) }
@@ -185,7 +185,7 @@ function requestedUrlFrom(navigationState: unknown): string {
     .command-row { display: flex; align-items: center; gap: .5rem }
     .terminal { flex: 1; padding: .5rem .75rem; border-radius: .375rem; background: var(--term-bg); color: var(--term-fg); font-family: var(--mono); font-size: .75rem }
     .command-row .of-btn { height: 2rem; padding: 0 .75rem; white-space: nowrap }
-    .fine-print { font-size: .6875rem; color: var(--faint) }
+    .fine-print { font-size: .6875rem; color: var(--mut) }
     .of-field { display: flex; flex-direction: column; gap: .25rem }
     .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap }
     .seeded-prompt { margin: 0; font-size: .75rem; color: var(--mut) }
