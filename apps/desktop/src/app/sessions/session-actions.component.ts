@@ -1,7 +1,7 @@
 import { ChangeDetectionStrategy, Component, DestroyRef, ElementRef, Injector, afterNextRender, computed, effect, inject, input, signal, viewChild } from '@angular/core';
 import type { SessionState } from '@openfleet/shared';
 import { EarlyEscapeHintService } from '../core/early-escape-hint.service';
-import { CLOSE_ERROR, INTERRUPT_ERROR } from '../core/error-copy';
+import { copyFor, INTERRUPT_ERROR } from '../core/error-copy';
 import { FleetApiService } from '../core/fleet-api.service';
 import { PendingSwitchesService } from '../core/pending-switches.service';
 import { SessionRequestsService } from '../core/session-requests';
@@ -169,7 +169,8 @@ export class SessionActionsComponent {
   // Only the failure of the latest of the two actions is shown.
   private async close(sessionId: string): Promise<void> {
     this.requests.clearError(sessionId, 'interrupt');
-    await this.requests.run({ sessionId, kind: 'close', message: CLOSE_ERROR, action: () => this.api.closeSession(sessionId) });
+    const closeErrorFor = (error: unknown) => copyFor(error, { action: 'close' }).text;
+    await this.requests.run({ sessionId, kind: 'close', message: closeErrorFor, action: () => this.api.closeSession(sessionId) });
   }
 
   async interrupt(): Promise<void> {

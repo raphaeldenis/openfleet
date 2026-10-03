@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it, onTestFinished, vi } from 'v
 import type { SessionState } from '@openfleet/shared';
 import { SessionActionsComponent } from './session-actions.component';
 import { EarlyEscapeHintService } from '../core/early-escape-hint.service';
-import { FleetApiService } from '../core/fleet-api.service';
+import { ApiError, FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { PendingSwitchesService } from '../core/pending-switches.service';
 import { deferred, settleRequests } from '../testing/session-view.testing';
@@ -285,6 +285,17 @@ describe('SessionActionsComponent', () => {
 
       await waitFor(() => expect(screen.getByTestId('session-action-error')).toHaveTextContent(/could not close/i));
     });
+  });
+
+  it('tells the user a close of a vanished session cannot be retried', async () => {
+    const sessionGone = new ApiError(404, 'DELETE /sessions/s1', 'session_not_found');
+    const api = { closeSession: vi.fn().mockRejectedValue(sessionGone), sendInput: vi.fn() };
+    await render(SessionActionsComponent, { bindings: bindingsFor('idle'), providers: [{ provide: FleetApiService, useValue: api }] });
+
+    await userEvent.click(screen.getByTestId('session-close'));
+    await userEvent.click(screen.getByTestId('close-confirm-submit'));
+
+    await waitFor(() => expect(screen.getByTestId('session-action-error')).toHaveTextContent('That session no longer exists.'));
   });
 
   describe.each([
