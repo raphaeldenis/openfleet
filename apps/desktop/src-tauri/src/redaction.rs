@@ -64,10 +64,10 @@ fn masked_at_depth(text: &str, depth: usize) -> String {
   let without_authorized_basic = replacing_matches(&without_bearer_tokens, authorized_basic_credential_at);
   let without_basic = replacing_matches(&without_authorized_basic, basic_credential_at);
   let without_url_credentials = replacing_matches(&without_basic, url_credentials_at);
-  let without_hook_tokens = replacing_matches(&without_url_credentials, hook_token_at);
-  let without_colon_values = replacing_matches(&without_hook_tokens, colon_value_at);
+  let without_colon_values = replacing_matches(&without_url_credentials, colon_value_at);
   let without_cookie_values = replacing_matches(&without_colon_values, cookie_header_at);
-  replacing_matches(&without_cookie_values, |text, index| query_parameter_at(text, index, depth))
+  let without_secret_parameters = replacing_matches(&without_cookie_values, |text, index| query_parameter_at(text, index, depth));
+  replacing_matches(&without_secret_parameters, hook_token_at)
 }
 
 /// Rebuilds the text, replacing each match `replacement_at` finds with the text it returns; a match never overlaps the previous one.
@@ -1000,12 +1000,26 @@ mod tests {
 
   #[test]
   fn masks_only_the_bounded_start_of_a_quoted_value_that_never_closes() {
-    let endless = format!("{{\"token\":\"{}", "a".repeat(40_000));
+    let endless = format!("{{\"token\":\"{}", "a".repeat(100_000));
 
     let result = masked(&endless);
 
     assert!(result.starts_with("{\"token\":\"[redacted]"));
-    assert!(result.len() < endless.len());
+    assert!(result.ends_with(&"a".repeat(20_000)));
+  }
+
+  #[test]
+  fn masks_a_quoted_value_of_ten_thousand_characters_whole() {
+    assert_eq!(masked(&format!("{{\"token\":\"{}\"}}", "a".repeat(10_000))), "{\"token\":\"[redacted]\"}");
+  }
+
+  #[test]
+  fn masks_the_shapes_that_a_mask_makes_readable_as_a_new_secret_the_same_way_twice() {
+    for text in ["Authorization::=", "token:[redacted]}z=", "/hooks/=/token="] {
+      let once = masked(text);
+
+      assert_eq!(masked(&once), once, "{text}");
+    }
   }
 
   #[test]

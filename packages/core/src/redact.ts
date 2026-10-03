@@ -221,8 +221,8 @@ function maskedSecretsOnce(text: string, depth: number): string {
     .replace(AUTHORIZED_BASIC_CREDENTIAL, `$1Basic ${MASK}`)
     .replace(BASIC_CREDENTIAL, `Basic ${MASK}`)
     .replace(URL_CREDENTIALS, `$1${MASK}@`);
-  const withoutHookTokens = withoutUrlCredentials.replace(HOOK_TOKEN, `/hooks/${MASK}`);
-  return maskingQueryParameters(maskingCookieHeaders(maskingColonValues(withoutHookTokens)), depth);
+  const withoutSecretParameters = maskingQueryParameters(maskingCookieHeaders(maskingColonValues(withoutUrlCredentials)), depth);
+  return withoutSecretParameters.replace(HOOK_TOKEN, `/hooks/${MASK}`);
 }
 
 // A mask can leave text that reads as a new secret to an earlier rule (a hook segment, then `/token=`; `Authorization::=`): passes repeat until the text settles, so masking twice equals masking once.

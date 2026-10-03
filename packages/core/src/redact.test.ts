@@ -381,12 +381,26 @@ describe('maskedSecrets: the JSON and colon forms under a secret-named key', () 
     expect(maskedSecrets('{"token":"SYNTHETIC_SECRET_123\nnext line')).toBe(`{"token":"${MASK}\nnext line`);
   });
 
-  it('masks only the bounded start of a quoted value that never closes', () => {
-    const endless = `{"token":"${'a'.repeat(40_000)}`;
+  it('masks a quoted value of 10000 characters whole', () => {
+    expect(maskedSecrets(`{"token":"${'a'.repeat(10_000)}"}`)).toBe(`{"token":"${MASK}"}`);
+  });
+
+  it('masks only a bounded start of a quoted value that never closes', () => {
+    const endless = `{"token":"${'a'.repeat(100_000)}`;
     const masked = maskedSecrets(endless);
 
-    expect(masked.length).toBeLessThan(endless.length);
     expect(masked.startsWith(`{"token":"${MASK}`)).toBe(true);
+    expect(masked.endsWith('a'.repeat(20_000))).toBe(true);
+  });
+
+  it('ends an unquoted value at an ampersand', () => {
+    expect(maskedSecrets('token: SYNTHETIC_SECRET_123&page=2')).toBe(`token: ${MASK}&page=2`);
+  });
+
+  it.each([['Authorization::='], ['token:***}z='], ['/hooks/=/token=']])('masks %j the same way twice', (text) => {
+    const once = maskedSecrets(text);
+
+    expect(maskedSecrets(once)).toBe(once);
   });
 
   it.each(['token:', 'token: ', '"token":"', 'token:"', 'token:\\', 'a:', 'token:token:', 'token:***', "password: '", 'token:\\"a', 'api_key:1', 'a:b ', ':'])(
