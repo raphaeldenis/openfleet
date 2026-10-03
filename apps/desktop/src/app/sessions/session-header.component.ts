@@ -15,38 +15,43 @@ import { exitCodeLabel } from './session-close-status';
   imports: [StateChipComponent, ModelSelectorComponent, PermissionModePickerComponent, SessionActionsComponent],
   template: `
     <header class="session-header" data-testid="session-header">
-      <input
-        #emojiInput
-        class="emoji"
-        data-testid="session-emoji-input"
-        title="Change emoji"
-        maxlength="8"
-        [value]="session().emoji"
-        (change)="renameEmoji(emojiInput.value)"
-        (keydown.escape)="cancelEmojiEdit(emojiInput)"
-      />
-      <input
-        #nameInput
-        class="name"
-        data-testid="session-name-input"
-        aria-label="Session name"
-        [attr.title]="session().name"
-        [value]="session().name"
-        (change)="renameName(nameInput.value)"
-        (keydown.escape)="cancelNameEdit(nameInput)"
-      />
-      @if (renameError(); as error) {
-        <span role="alert" data-testid="session-rename-error" class="of-error">✕ {{ error }}</span>
-      }
-      <of-state-chip [state]="session().state" [since]="session().stateSince" />
-      @if (session().state === 'closed') {
-        <span class="exit-code" data-testid="session-exit-code">{{ exitCodeLabel(session().exitCode) }}</span>
-      }
-      <span class="harness" data-testid="session-harness" title="Harness">{{ session().harness }}</span>
+      <div class="identity-row" data-testid="session-header-row">
+        <input
+          #emojiInput
+          class="emoji"
+          data-testid="session-emoji-input"
+          title="Change emoji"
+          maxlength="8"
+          [value]="session().emoji"
+          (change)="renameEmoji(emojiInput.value)"
+          (keydown.escape)="cancelEmojiEdit(emojiInput)"
+        />
+        <input
+          #nameInput
+          class="name"
+          data-testid="session-name-input"
+          aria-label="Session name"
+          [attr.title]="session().name"
+          [value]="session().name"
+          (change)="renameName(nameInput.value)"
+          (keydown.escape)="cancelNameEdit(nameInput)"
+        />
+        @if (renameError(); as error) {
+          <span role="alert" data-testid="session-rename-error" class="of-error">✕ {{ error }}</span>
+        }
+        <of-state-chip [state]="session().state" [since]="session().stateSince" />
+        @if (session().modelDriftedFrom; as previousModel) {
+          <span class="drift-chip" data-testid="session-drift-chip" [attr.title]="'The model changed under this session; it was ' + previousModel">⇄ drift</span>
+        }
+        @if (session().state === 'closed') {
+          <span class="exit-code" data-testid="session-exit-code">{{ exitCodeLabel(session().exitCode) }}</span>
+        }
+        <span class="harness" data-testid="session-harness" title="Harness">{{ session().harness }}</span>
+        <span class="directory" data-testid="session-directory" [attr.title]="session().directory">{{ session().directory }}</span>
+        <span class="cost" data-testid="session-cost" title="Cost tracking is not implemented yet">—</span>
+      </div>
       <of-model-selector [sessionId]="session().id" />
       <of-permission-mode-picker [sessionId]="session().id" [currentMode]="session().permissionMode" />
-      <span class="directory" data-testid="session-directory" [attr.title]="session().directory">{{ session().directory }}</span>
-      <span class="cost" data-testid="session-cost" title="Cost tracking is not implemented yet">—</span>
       <span class="spacer"></span>
       <of-session-actions [sessionId]="session().id" [state]="session().state" [stateSince]="session().stateSince" [sessionName]="session().name" />
     </header>
@@ -56,20 +61,24 @@ import { exitCodeLabel } from './session-close-status';
       display: flex; align-items: center; gap: .625rem; flex-wrap: wrap;
       padding: .5rem .75rem; border-bottom: 1px solid var(--line); background: var(--panel);
     }
+    .identity-row { display: flex; align-items: center; gap: .625rem; flex-wrap: wrap; min-height: 2rem; min-width: 0; }
     .emoji, .name {
       border: 1px solid transparent; border-radius: .375rem; background: transparent; color: var(--fg);
-      font-family: inherit; padding: 0 .25rem; height: 1.75rem;
+      font-family: inherit; padding: 0 .25rem; height: 2rem;
     }
-    .emoji, .name, of-state-chip, .harness { align-self: flex-start; }
-    .emoji, .name { margin-top: .125rem; }
-    of-state-chip { margin-top: .25rem; }
-    .harness { margin-top: .394rem; }
+    .drift-chip {
+      height: 1.5rem; display: inline-flex; align-items: center; padding: 0 .5rem; border-radius: .375rem;
+      background: var(--sunk); color: var(--fg); font-family: var(--mono); font-size: .75rem;
+    }
     .emoji:hover, .name:hover { border-color: var(--line); }
     .emoji:focus, .name:focus { border-color: var(--accent); outline: 0; }
     .emoji { font-size: 1.125rem; width: 2.25rem; text-align: center; }
     .name { font-weight: 600; font-size: 1rem; width: 9rem; text-overflow: ellipsis; }
     .exit-code { font-family: var(--mono); font-size: .75rem; color: var(--state-closed); }
-    .harness { font-size: .75rem; color: var(--mut); border: 1px solid var(--line); border-radius: .375rem; padding: 0 .5rem; }
+    .harness {
+      display: inline-flex; align-items: center; height: 1.5rem;
+      font-size: .75rem; color: var(--mut); border: 1px solid var(--line); border-radius: .375rem; padding: 0 .5rem;
+    }
     .directory { font-family: var(--mono); font-size: .6875rem; color: var(--mut); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 16rem; }
     .cost { font-style: italic; color: var(--faint); font-size: .75rem; }
     .spacer { flex: 1; min-width: .5rem; }
