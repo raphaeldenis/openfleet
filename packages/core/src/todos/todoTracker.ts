@@ -1,4 +1,4 @@
-import { CLOSED_SNAPSHOTS_KEPT, EMIT_COALESCE_MS, MAX_FOLD_BYTES, MAX_QUEUED_HOOKS, TODO_CHUNK_BYTES, TODO_GET_WAIT_MS, type SessionTodos, type TodoSummary } from '@openfleet/shared';
+import { CLOSED_SNAPSHOTS_KEPT, EMIT_COALESCE_MS, MAX_FOLD_BYTES, MAX_QUEUED_HOOKS, SEEN_CALLS_KEPT, TODO_CHUNK_BYTES, TODO_GET_WAIT_MS, type SessionTodos, type TodoSummary } from '@openfleet/shared';
 import type { EventBus } from '../events/eventBus.js';
 import { log } from '../logger.js';
 import { confirmSeenCall, createTodoFold, foldHookPayload, foldTranscriptText, markRowsUnverified, snapshotOf, type TodoFold } from './todoFold.js';
@@ -29,8 +29,7 @@ export interface TodoTrackerDeps {
   getWaitMs?: number;
 }
 
-type ReadReason = 'repair' | 'catch_up' | 'fallback';
-type Task = { kind: 'hook'; call: TodoHookCall } | { kind: 'read'; reason: ReadReason };
+type Task = { kind: 'hook'; call: TodoHookCall } | { kind: 'read' };
 interface Cursor { path: string; inode: number; offset: number }
 interface Fallback { toolUseIds: Set<string>; attempt: number; isTimerPending: boolean; snapshotKeyAtStart: string }
 
@@ -38,9 +37,12 @@ interface SessionState {
   sessionId: string;
   fold: TodoFold;
   cursor: Cursor | undefined;
-  hasReadTheHistory: boolean;
-  /** The hook calls folded live before any history was read: replayed after the history when it is finally read. */
-  hooksFoldedBeforeTheHistory: TodoHookCall[];
+  /** True once a read returned history text and the live calls folded before it were replayed over it. An empty or missing transcript reconciles nothing. */
+  hasReconciledTheHistory: boolean;
+  /** The newest live calls folded before the history was reconciled: replayed over the history when it arrives. */
+  liveCallsAwaitingTheHistory: TodoHookCall[];
+  /** The live calls pushed out of that buffer: the list stays stale until the history holds them. */
+  evictedLiveCallIds: Set<string>;
   tasks: Task[];
   hasQueuedARead: boolean;
   isRunning: boolean;
@@ -100,19 +102,19 @@ export class TodoTracker {
   /** Queues the fold of one completed todo call, delivered by its PostToolUse hook. Never folds inline. A state that never read its transcript reads it first, so the hook folds after the history. */
   applyHook(sessionId: string, call: TodoHookCall): void {
     const state = this.stateOf(sessionId);
-    if (!state.hasQueuedARead) this.enqueueRead(state, 'repair');
+    if (!state.hasQueuedARead) this.enqueueRead(state);
     this.enqueue(state, { kind: 'hook', call });
   }
 
   /** Queues a read of the whole current transcript (a session that resumed after a restart). */
   repair(sessionId: string): void {
-    this.enqueueRead(this.stateOf(sessionId), 'repair');
+    this.enqueueRead(this.stateOf(sessionId));
   }
 
   /** Queues a read of what the transcript gained since the last read, for a session that already has a list. */
   catchUp(sessionId: string): void {
     const state = this.states.get(sessionId);
-    if (state) this.enqueueRead(state, 'catch_up');
+    if (state) this.enqueueRead(state);
   }
 
   /** A todo hook came without a usable payload: reads the transcript after growing delays, until the call shows up there. */
@@ -156,7 +158,7 @@ export class TodoTracker {
     const notBefore = createdAt !== undefined && Number.isFinite(Date.parse(createdAt)) ? new Date(createdAt) : undefined;
     const fold = createTodoFold({ now: this.deps.now, notBefore });
     const state: SessionState = {
-      sessionId, fold, cursor: undefined, hasReadTheHistory: false, hooksFoldedBeforeTheHistory: [], tasks: [], hasQueuedARead: false, isRunning: false, isClosing: false, isStale: false,
+      sessionId, fold, cursor: undefined, hasReconciledTheHistory: false, liveCallsAwaitingTheHistory: [], evictedLiveCallIds: new Set(), tasks: [], hasQueuedARead: false, isRunning: false, isClosing: false, isStale: false,
       lastEmittedKey: keyOf(snapshotOf(fold, sessionId)), isEmitPending: false, fallback: undefined, warnedReasons: new Set(), idleWaiters: [], cancelTimers: new Set(),
     };
     this.states.set(sessionId, state);
@@ -165,7 +167,8 @@ export class TodoTracker {
 
   private snapshotOfState(state: SessionState): SessionTodos {
     const snapshot = snapshotOf(state.fold, state.sessionId);
-    return state.isStale ? { ...snapshot, stale: true } : snapshot;
+    const hasUnrecoveredLiveCalls = state.evictedLiveCallIds.size > 0;
+    return state.isStale || hasUnrecoveredLiveCalls ? { ...snapshot, stale: true } : snapshot;
   }
 
   private enqueue(state: SessionState, task: Task): void {
@@ -173,15 +176,15 @@ export class TodoTracker {
     const hookCount = state.tasks.filter((queued) => queued.kind === 'hook').length;
     if (hookCount > MAX_QUEUED_HOOKS) {
       state.tasks.splice(state.tasks.findIndex((queued) => queued.kind === 'hook'), 1);
-      this.enqueueRead(state, 'catch_up');
+      this.enqueueRead(state);
     }
     this.scheduleRun(state);
   }
 
-  private enqueueRead(state: SessionState, reason: ReadReason): void {
+  private enqueueRead(state: SessionState): void {
     state.hasQueuedARead = true;
     const hasReadQueued = state.tasks.some((queued) => queued.kind === 'read');
-    if (!hasReadQueued) this.enqueue(state, { kind: 'read', reason });
+    if (!hasReadQueued) this.enqueue(state, { kind: 'read' });
   }
 
   private scheduleRun(state: SessionState): void {
@@ -206,22 +209,37 @@ export class TodoTracker {
   private foldHook(state: SessionState, call: TodoHookCall): void {
     const wasAlreadyFolded = state.fold.seenCalls.has(call.toolUseId);
     if (wasAlreadyFolded) confirmSeenCall(state.fold, call);
-    if (!state.hasReadTheHistory) this.rememberHookFoldedBeforeTheHistory(state, call);
+    if (!state.hasReconciledTheHistory) this.keepLiveCallUntilTheHistoryIsReconciled(state, call);
     const isApplied = foldHookPayload(state.fold, call);
     const wasRejectedByTheCli = call.response?.success === false;
     if (!isApplied && !wasAlreadyFolded && !wasRejectedByTheCli) this.startFallback(state, call.toolUseId);
   }
 
-  private rememberHookFoldedBeforeTheHistory(state: SessionState, call: TodoHookCall): void {
-    state.hooksFoldedBeforeTheHistory.push(call);
-    if (state.hooksFoldedBeforeTheHistory.length > MAX_QUEUED_HOOKS) state.hooksFoldedBeforeTheHistory.shift();
+  private keepLiveCallUntilTheHistoryIsReconciled(state: SessionState, call: TodoHookCall): void {
+    state.liveCallsAwaitingTheHistory.push(call);
+    if (state.liveCallsAwaitingTheHistory.length <= MAX_QUEUED_HOOKS) return;
+    const evicted = state.liveCallsAwaitingTheHistory.shift();
+    if (evicted) this.rememberEvictedLiveCall(state, evicted.toolUseId);
   }
 
-  private replayHooks(fold: TodoFold, calls: TodoHookCall[]): void {
-    for (const call of calls) {
-      if (fold.seenCalls.has(call.toolUseId)) confirmSeenCall(fold, call);
-      else foldHookPayload(fold, call);
+  private rememberEvictedLiveCall(state: SessionState, toolUseId: string): void {
+    state.evictedLiveCallIds.add(toolUseId);
+    if (state.evictedLiveCallIds.size <= SEEN_CALLS_KEPT) return;
+    const oldest = state.evictedLiveCallIds.values().next().value;
+    if (oldest !== undefined) state.evictedLiveCallIds.delete(oldest);
+  }
+
+  /** The history is the base, the live calls it does not hold replay over it in arrival order, and an evicted live call the history holds is recovered. */
+  private reconcileLiveCallsWithTheHistory(state: SessionState): void {
+    for (const call of state.liveCallsAwaitingTheHistory) {
+      if (state.fold.seenCalls.has(call.toolUseId)) confirmSeenCall(state.fold, call);
+      else foldHookPayload(state.fold, call);
     }
+    for (const toolUseId of state.evictedLiveCallIds) {
+      if (state.fold.seenCalls.has(toolUseId)) state.evictedLiveCallIds.delete(toolUseId);
+    }
+    state.liveCallsAwaitingTheHistory = [];
+    state.hasReconciledTheHistory = true;
   }
 
   private async readTranscript(state: SessionState): Promise<void> {
@@ -229,11 +247,12 @@ export class TodoTracker {
       const path = this.deps.sessions.trustedTranscriptFileOf(state.sessionId);
       if (path === undefined) return;
       const hasMovedToAnotherFile = state.cursor !== undefined && state.cursor.path !== path;
-      const isFirstRead = !state.hasReadTheHistory;
-      const mustRebuildUnderLiveHooks = isFirstRead && state.hooksFoldedBeforeTheHistory.length > 0;
-      let cursor = hasMovedToAnotherFile || mustRebuildUnderLiveHooks ? undefined : state.cursor;
-      let target = mustRebuildUnderLiveHooks ? createTodoFold({ now: this.deps.now, notBefore: state.fold.notBefore }) : state.fold;
-      let isRebuilding = mustRebuildUnderLiveHooks;
+      const isAwaitingTheHistory = !state.hasReconciledTheHistory;
+      const mustRebuildUnderLiveCalls = isAwaitingTheHistory && state.liveCallsAwaitingTheHistory.length > 0;
+      let cursor = hasMovedToAnotherFile || mustRebuildUnderLiveCalls ? undefined : state.cursor;
+      let target = mustRebuildUnderLiveCalls ? createTodoFold({ now: this.deps.now, notBefore: state.fold.notBefore }) : state.fold;
+      let isRebuilding = mustRebuildUnderLiveCalls;
+      let hasReadHistoryText = false;
       let sizeAtStart: number | undefined;
       let chunksRead = 0;
       for (;;) {
@@ -247,6 +266,7 @@ export class TodoTracker {
           continue;
         }
         foldTranscriptText(target, read.text);
+        hasReadHistoryText ||= read.text.length > 0;
         const madeProgress = read.nextOffset > (cursor?.offset ?? 0);
         cursor = { path, inode: read.inode, offset: read.nextOffset };
         if (!isRebuilding) state.cursor = cursor;
@@ -257,16 +277,15 @@ export class TodoTracker {
         if (hasReadWhatWasThereAtStart || hasSpentTheBudgetOfARead || !madeProgress) break;
         await nextTurnOfTheEventLoop();
       }
-      const hasReadTheReplacement = isRebuilding && cursor !== undefined;
+      const historyArrivedForTheFirstTime = isAwaitingTheHistory && hasReadHistoryText;
+      const hasReadTheReplacement = isRebuilding && cursor !== undefined && (!isAwaitingTheHistory || hasReadHistoryText);
       if (hasReadTheReplacement) {
         state.fold = target;
         state.cursor = cursor;
       }
-      const rowsComeFromHistory = hasReadTheReplacement || (isFirstRead && !mustRebuildUnderLiveHooks);
+      const rowsComeFromHistory = hasReadTheReplacement || historyArrivedForTheFirstTime;
       if (rowsComeFromHistory) markRowsUnverified(state.fold);
-      if (hasReadTheReplacement && isFirstRead) this.replayHooks(state.fold, state.hooksFoldedBeforeTheHistory);
-      if (isFirstRead) state.hooksFoldedBeforeTheHistory = [];
-      state.hasReadTheHistory = true;
+      if (historyArrivedForTheFirstTime) this.reconcileLiveCallsWithTheHistory(state);
       state.isStale = false;
     });
   }
@@ -328,7 +347,7 @@ export class TodoTracker {
     this.scheduleFor(state, () => {
       fallback.isTimerPending = false;
       fallback.attempt += 1;
-      this.failingStale(state, 'todo_read_failed', () => this.enqueueRead(state, 'fallback'));
+      this.failingStale(state, 'todo_read_failed', () => this.enqueueRead(state));
     }, delay);
   }
 
@@ -336,12 +355,17 @@ export class TodoTracker {
     return this.states.get(state.sessionId) === state;
   }
 
-  /** Arms a timer that only runs while its session state is the live one: a closed or replaced state never acts. */
+  private isLive(state: SessionState): boolean {
+    return this.isCurrent(state) && !state.isClosing;
+  }
+
+  /** Arms a timer that only runs while its session state is the live one: a closed or replaced state arms none and never acts. */
   private scheduleFor(state: SessionState, run: () => void, delayMs: number): void {
+    if (!this.isLive(state)) return;
     const cancel = this.schedule(() => {
       this.cancelPending.delete(cancel);
       state.cancelTimers.delete(cancel);
-      if (this.isCurrent(state) && !state.isClosing) run();
+      if (this.isLive(state)) run();
     }, delayMs);
     this.cancelPending.add(cancel);
     state.cancelTimers.add(cancel);

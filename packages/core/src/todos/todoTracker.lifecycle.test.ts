@@ -1,9 +1,12 @@
 import { EMIT_COALESCE_MS, type SessionTodos } from '@openfleet/shared';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { EventBus } from '../events/eventBus.js';
 import { narrowTodoHookCall, type TodoHookCall } from './todoHookCall.js';
 import { TodoTracker, type Schedule } from './todoTracker.js';
-import type { readTranscriptChunk } from './transcriptChunkReader.js';
+import { readTranscriptChunk } from './transcriptChunkReader.js';
 
 const NOW = new Date('2026-10-01T12:00:00.000Z');
 const SESSION = 'session-1';
@@ -284,5 +287,226 @@ describe('F4 a history rebuilt after the file was replaced', () => {
 
     expect(rowsAfterTheRebuild[0]?.unverified).toBe(true);
     expect(tracker.get(SESSION)?.counts.total).toBe(0);
+  });
+});
+
+describe('F2 history that is reconciled only once it has been read', () => {
+  const OLD_HISTORY = historyCreate('oldCreate', '1', 'Ship') + historyList('oldList', [{ id: '1', subject: 'Ship', status: 'pending' }]) + historyComplete('liveUpdate', '1');
+  const statusOfFirstRow = (tracker: TodoTracker) => tracker.get(SESSION)?.items[0]?.status;
+  let temporaryDirectory: string;
+
+  beforeEach(() => { temporaryDirectory = mkdtempSync(join(tmpdir(), 'todo-tracker-')); });
+  afterEach(() => { rmSync(temporaryDirectory, { recursive: true, force: true }); });
+
+  const readerAnsweringFirst = (firstAnswer: ReturnType<typeof readTranscriptChunk>): { reader: typeof readTranscriptChunk; historyArrives: () => void } => {
+    let hasHistory = false;
+    return { reader: () => (hasHistory ? chunkOf(OLD_HISTORY) : firstAnswer), historyArrives: () => { hasHistory = true; } };
+  };
+
+  it.each([
+    { name: 'an empty chunk', firstAnswer: chunkOf('') },
+    { name: 'a nothing answer', firstAnswer: { kind: 'nothing' } as const },
+  ])('keeps a live completion folded after $name when the old history arrives later', async ({ firstAnswer }) => {
+    const { reader, historyArrives } = readerAnsweringFirst(firstAnswer);
+    const { tracker } = newTracker({ readChunk: reader });
+    tracker.applyHook(SESSION, completeCall('liveUpdate', '1'));
+    await nextTurns();
+    expect(statusOfFirstRow(tracker)).toBe('completed');
+
+    historyArrives();
+    tracker.catchUp(SESSION);
+    await nextTurns();
+
+    expect(statusOfFirstRow(tracker)).toBe('completed');
+  });
+
+  it('keeps the buffered live completion through an intermediate trusted read that finds nothing', async () => {
+    const { reader, historyArrives } = readerAnsweringFirst({ kind: 'nothing' });
+    const { tracker } = newTracker({ readChunk: reader });
+    path = undefined;
+    tracker.applyHook(SESSION, completeCall('liveUpdate', '1'));
+    await nextTurns();
+    path = TRANSCRIPT;
+    tracker.catchUp(SESSION);
+    await nextTurns();
+
+    historyArrives();
+    tracker.catchUp(SESSION);
+    await nextTurns();
+
+    expect(statusOfFirstRow(tracker)).toBe('completed');
+  });
+
+  it('keeps a live completion when the real reader meets an empty file that is later filled with the history', async () => {
+    const file = join(temporaryDirectory, 'session.jsonl');
+    writeFileSync(file, '');
+    path = file;
+    const { tracker } = newTracker({ readChunk: readTranscriptChunk });
+    tracker.applyHook(SESSION, completeCall('liveUpdate', '1'));
+    await nextTurns();
+    expect(statusOfFirstRow(tracker)).toBe('completed');
+
+    writeFileSync(file, OLD_HISTORY);
+    tracker.catchUp(SESSION);
+    await nextTurns();
+
+    expect(statusOfFirstRow(tracker)).toBe('completed');
+  });
+
+  it('keeps a newer status of the history over the older live call it also holds', async () => {
+    const reopenedLater = historyCreate('oldCreate', '1', 'Ship') + historyComplete('liveUpdate', '1') + transcriptOf('later', 'TaskUpdate', { taskId: '1', status: 'pending' }, { success: true, taskId: '1' });
+    let hasHistory = false;
+    const { tracker } = newTracker({ readChunk: () => (hasHistory ? chunkOf(reopenedLater) : chunkOf('')) });
+    tracker.applyHook(SESSION, completeCall('liveUpdate', '1'));
+    await nextTurns();
+
+    hasHistory = true;
+    tracker.catchUp(SESSION);
+    await nextTurns();
+
+    expect(statusOfFirstRow(tracker)).toBe('pending');
+  });
+
+  it('keeps the live rows visible while the reads find no history', async () => {
+    const { tracker } = newTracker({ readChunk: () => chunkOf('') });
+    tracker.applyHook(SESSION, createCall('live', '1', 'Live task'));
+    await nextTurns();
+
+    tracker.catchUp(SESSION);
+    await nextTurns();
+
+    expect(contentsOf(tracker.get(SESSION))).toEqual(['Live task']);
+    expect(tracker.get(SESSION)?.items[0]?.unverified).toBeUndefined();
+  });
+});
+
+describe('F2 a resumed session whose first repair finds no history', () => {
+  const GHOST_HISTORY = historyCreate('old', '1', 'Ghost');
+  const answers: { name: string; firstAnswer: ReturnType<typeof readTranscriptChunk> }[] = [
+    { name: 'an empty chunk', firstAnswer: chunkOf('') },
+    { name: 'a nothing answer', firstAnswer: { kind: 'nothing' } },
+  ];
+
+  it.each(answers)('marks the rows of the history that arrives later unverified after $name, so a rejected update removes the ghost', async ({ firstAnswer }) => {
+    let hasHistory = false;
+    const { tracker } = newTracker({ readChunk: () => (hasHistory ? chunkOf(GHOST_HISTORY) : firstAnswer) });
+    tracker.repair(SESSION);
+    await nextTurns();
+
+    hasHistory = true;
+    tracker.catchUp(SESSION);
+    await nextTurns();
+    expect(tracker.get(SESSION)?.items[0]?.unverified).toBe(true);
+    tracker.applyHook(SESSION, rejectedUpdateCall('failed', '1'));
+    await nextTurns();
+
+    expect(tracker.get(SESSION)?.counts.total).toBe(0);
+  });
+
+  it.each(answers)('keeps a row verified that a live hook confirmed after $name', async ({ firstAnswer }) => {
+    let hasHistory = false;
+    const { tracker } = newTracker({ readChunk: () => (hasHistory ? chunkOf(GHOST_HISTORY) : firstAnswer) });
+    tracker.repair(SESSION);
+    await nextTurns();
+    tracker.applyHook(SESSION, createCall('old', '1', 'Ghost'));
+    await nextTurns();
+
+    hasHistory = true;
+    tracker.catchUp(SESSION);
+    await nextTurns();
+
+    expect(tracker.get(SESSION)?.items[0]?.unverified).toBeUndefined();
+  });
+
+  it('marks nothing unverified for an ordinary session whose own live calls reach the transcript later', async () => {
+    let hasHistory = false;
+    const { tracker } = newTracker({ readChunk: () => (hasHistory ? chunkOf(historyCreate('live', '1', 'Fresh task')) : chunkOf('')) });
+    tracker.applyHook(SESSION, createCall('live', '1', 'Fresh task'));
+    await nextTurns();
+
+    hasHistory = true;
+    tracker.catchUp(SESSION);
+    await nextTurns();
+
+    expect(tracker.get(SESSION)?.items.map((item) => item.unverified)).toEqual([undefined]);
+  });
+});
+
+describe('F3 the live calls evicted from the replay buffer', () => {
+  const CAPACITY_OF_THE_REPLAY_BUFFER = 200;
+  const foldLiveCreateThenSequentialUpdates = async (tracker: TodoTracker) => {
+    tracker.applyHook(SESSION, createCall('evicted', '1', 'Live only'));
+    await nextTurns();
+    for (let index = 0; index < CAPACITY_OF_THE_REPLAY_BUFFER; index += 1) {
+      tracker.applyHook(SESSION, completeCall(`update-${index}`, 'other'));
+      await nextTurns(3);
+    }
+  };
+
+  it('marks the list stale while no history has reconciled the evicted call (sequential, not a burst)', async () => {
+    const { tracker } = newTracker();
+    path = undefined;
+
+    await foldLiveCreateThenSequentialUpdates(tracker);
+
+    expect(tracker.get(SESSION)?.items.some((item) => item.id === '1')).toBe(true);
+    expect(tracker.get(SESSION)?.stale).toBe(true);
+  });
+
+  it('keeps the list stale after a history that does not hold the evicted call', async () => {
+    const { tracker } = newTracker({ readChunk: () => chunkOf(historyCreate('old', 'history', 'Historical')) });
+    path = undefined;
+    await foldLiveCreateThenSequentialUpdates(tracker);
+
+    path = TRANSCRIPT;
+    tracker.catchUp(SESSION);
+    await nextTurns();
+
+    expect(tracker.get(SESSION)?.stale).toBe(true);
+  });
+
+  it('clears the stale mark once the history holds the evicted call', async () => {
+    const { tracker } = newTracker({ readChunk: () => chunkOf(historyCreate('evicted', '1', 'Live only')) });
+    path = undefined;
+    await foldLiveCreateThenSequentialUpdates(tracker);
+
+    path = TRANSCRIPT;
+    tracker.catchUp(SESSION);
+    await nextTurns();
+
+    expect(tracker.get(SESSION)?.stale).toBeUndefined();
+    expect(contentsOf(tracker.get(SESSION))).toContain('Live only');
+  });
+});
+
+describe('F4 a payloadless hook that runs after its session closed', () => {
+  const cancelSetSizesOf = (tracker: TodoTracker, sessionState: { cancelTimers: Set<unknown> } | undefined) => ({
+    ofTheTracker: (tracker as unknown as { cancelPending: Set<unknown> }).cancelPending.size,
+    ofTheState: sessionState?.cancelTimers.size,
+  });
+  const stateOf = (tracker: TodoTracker) => (tracker as unknown as { states: Map<string, { cancelTimers: Set<unknown> }> }).states.get(SESSION);
+
+  it('arms no timer and retains no cancel closure when the session closed and reopened first', async () => {
+    const { tracker, clock } = newTracker();
+    tracker.applyHook(SESSION, callWithoutPayload('missing'));
+    const detached = stateOf(tracker);
+    closeSession();
+    reopenSession();
+
+    await nextTurns();
+
+    expect(clock.pendingCount()).toBe(0);
+    expect(cancelSetSizesOf(tracker, detached)).toEqual({ ofTheTracker: 0, ofTheState: 0 });
+  });
+
+  it('arms no timer and retains no cancel closure when the session only closed', async () => {
+    const { tracker, clock } = newTracker();
+    tracker.applyHook(SESSION, callWithoutPayload('missing'));
+    closeSession();
+
+    await nextTurns();
+
+    expect(clock.pendingCount()).toBe(0);
+    expect(cancelSetSizesOf(tracker, undefined).ofTheTracker).toBe(0);
   });
 });
