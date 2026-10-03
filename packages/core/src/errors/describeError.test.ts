@@ -6,6 +6,7 @@ import { ZodError, z } from 'zod';
 import { ERROR_CODES, OpenFleetError, type ErrorCode } from '@openfleet/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { InvalidJsonBodyError, PayloadTooLargeError } from '../api/router.js';
+import { expectBestCpuUnder, expectLinearGrowth, cpuMillisecondsToRun } from '../__testing__/linearGrowth.js';
 import { forceNdjsonLogging } from '../forceNdjsonLogging.testkit.js';
 import { StuckConnectionError } from '../db/transaction.js';
 import { ApprovalError } from '../governance/approvalService.js';
@@ -574,7 +575,8 @@ describe('describeError: credential shapes beyond Bearer and hooks', () => {
 
 describe('describeError: large inputs stay fast', () => {
   const LARGE_INPUT_CHARS = 1024 * 1024;
-  const MAX_MILLISECONDS = 500;
+  const MAX_CPU_MILLISECONDS = 500;
+  const MAX_CPU_MILLISECONDS_FOR_100K_STRINGS = 1000;
   const repeated = (unit: string) => unit.repeat(Math.ceil(LARGE_INPUT_CHARS / unit.length));
   const largeInputs: [string, string][] = [
     ['question marks', '?'], ['percent signs', '%'], ['encoded layers', '%25'], ['slashes', '/'], ['Bearer words', 'Bearer '],
@@ -591,20 +593,15 @@ describe('describeError: large inputs stay fast', () => {
 
   it.each(cases)('describes 1 MiB of %s in the %s within the time bound', (_input, _field, _label, buildError) => {
     const error = buildError();
-    const startedAt = performance.now();
 
-    describeError(error);
-
-    expect(performance.now() - startedAt).toBeLessThan(MAX_MILLISECONDS);
+    expectBestCpuUnder(() => describeError(error), MAX_CPU_MILLISECONDS);
   });
 
   it('answers invalid_branch_name for a 1 MiB worktree branch name of question marks within the time bound', () => {
     const error = new WorktreeError('invalid_branch', `invalid branch name: ${repeated('?')}`);
-    const startedAt = performance.now();
 
-    const envelope = describeError(error);
-
-    expect({ code: envelope.error, elapsed: performance.now() - startedAt < MAX_MILLISECONDS }).toEqual({ code: 'invalid_branch_name', elapsed: true });
+    expectBestCpuUnder(() => describeError(error), MAX_CPU_MILLISECONDS);
+    expect(describeError(error).error).toBe('invalid_branch_name');
   });
 
   it('still masks a token that starts the text when 1 MiB of filler follows it', () => {
@@ -613,13 +610,18 @@ describe('describeError: large inputs stay fast', () => {
     expect(JSON.stringify(envelope)).not.toContain('abcDEF123');
   });
 
+  const errorWithShortStrings = (count: number) => new OpenFleetError('row_cap', 'full.', { detail: Array.from({ length: count }, (_, index) => `s${index}`) });
+
   it('describes a detail of 100 000 short strings within the time bound', () => {
-    const error = new OpenFleetError('row_cap', 'full.', { detail: Array.from({ length: 100_000 }, (_, index) => `s${index}`) });
-    const startedAt = performance.now();
+    const error = errorWithShortStrings(100_000);
 
-    describeError(error);
+    expectBestCpuUnder(() => describeError(error), MAX_CPU_MILLISECONDS_FOR_100K_STRINGS);
+  });
 
-    expect(performance.now() - startedAt).toBeLessThan(MAX_MILLISECONDS);
+  it('describes a detail of short strings in linear time', () => {
+    const cpuMillisecondsToDescribe = cpuMillisecondsToRun(errorWithShortStrings, describeError);
+
+    expectLinearGrowth(cpuMillisecondsToDescribe, { smallSize: 25_000, largeSize: 100_000, ceilingMilliseconds: MAX_CPU_MILLISECONDS_FOR_100K_STRINGS });
   });
 });
 

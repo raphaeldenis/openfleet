@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ServerEvent, WorkingState, WorkingStateSections } from '@openfleet/shared';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { cpuMillisecondsOfAsync } from '../__testing__/linearGrowth.js';
 import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
 import { ApprovalService } from '../governance/approvalService.js';
@@ -241,15 +242,14 @@ describe('working-state load and size', () => {
     for (let i = 0; i < 100; i++) created.push(await createSession(`S${i}`));
     created.forEach((session, i) => workingStates.update(session.id, sections({ plan: [`n${i}`] })));
 
-    const startedAt = performance.now();
-    const first = await connect();
-    const elapsedMs = performance.now() - startedAt;
+    let first!: Awaited<ReturnType<typeof connect>>;
+    const cpuMilliseconds = await cpuMillisecondsOfAsync(async () => { first = await connect(); });
     const second = await connect();
 
     expect(first.snapshot.workingStates).toHaveLength(100);
     expect(first.snapshot.workingStates.map((state) => state.sessionId)).toEqual(second.snapshot.workingStates.map((state) => state.sessionId));
     expect(first.snapshot.workingStates.map((state) => state.sessionId)).toEqual(first.snapshot.sessions.filter((s) => s.state !== 'closed').map((s) => s.id));
-    expect(elapsedMs).toBeLessThan(1000);
+    expect(cpuMilliseconds).toBeLessThan(1000);
     first.ws.close();
     second.ws.close();
   });

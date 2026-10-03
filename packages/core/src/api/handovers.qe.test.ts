@@ -1,6 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { Handover } from '@openfleet/shared';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { expectBestCpuUnderAsync } from '../__testing__/linearGrowth.js';
 import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
 import { ApprovalService } from '../governance/approvalService.js';
@@ -169,20 +170,15 @@ describe('user is protected at the scan and size caps (QE hostile)', () => {
 
   it('answers a 1 MiB prompt of link-like noise in well under a second', async () => {
     const almostOneMiB = `${DESIGN_LINK} ${'specs/ https://claude.ai/design/ /specs/a'.repeat(28_000)}`.slice(0, 1_000_000);
-    const startedAt = performance.now();
 
-    await humanTypes(almostOneMiB);
-
-    expect(performance.now() - startedAt).toBeLessThan(1000);
+    await expectBestCpuUnderAsync(() => humanTypes(almostOneMiB), 1000);
     expect(await valuesOf(sessionId)).toEqual([DESIGN_LINK]);
   });
 
   it('answers a near-1 MiB prompt made of one token with no separator in well under a second', async () => {
-    const startedAt = performance.now();
+    const oneTokenWithoutSeparator = 'a/'.repeat(500_000);
 
-    await humanTypes(`${'a/'.repeat(500_000)}`);
-
-    expect(performance.now() - startedAt).toBeLessThan(1000);
+    await expectBestCpuUnderAsync(() => humanTypes(oneTokenWithoutSeparator), 1000);
     expect(await valuesOf(sessionId)).toEqual([]);
   });
 

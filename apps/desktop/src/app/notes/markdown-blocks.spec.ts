@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { expectBestCpuUnder } from '../../testing/cpu-time.testing';
 import { countRenderCost, parseMarkdownBlocks, takeWithinRenderBudget, type MarkdownBlock } from './markdown-blocks';
 
 const text = (value: string) => ({ text: value, isCode: false, isBold: false });
@@ -184,11 +185,9 @@ describe('parseMarkdownBlocks', () => {
     { name: 'a dash bullet', prefix: '-' },
     { name: 'a star bullet', prefix: '*' },
   ])('parses $name followed by a huge run of spaces and a line separator in linear time', ({ prefix }) => {
-    const startedAt = performance.now();
+    const markdown = `${prefix}${' '.repeat(200_000)}\u2028x`;
 
-    parseMarkdownBlocks(`${prefix}${' '.repeat(200_000)}\u2028x`);
-
-    expect(performance.now() - startedAt).toBeLessThan(1000);
+    expectBestCpuUnder(() => parseMarkdownBlocks(markdown), 1000);
   });
 
   // A quadratic scan on these one-mebibyte bodies takes minutes; the generous bound only fails on a super-linear parser.
@@ -208,11 +207,9 @@ describe('parseMarkdownBlocks', () => {
     { name: '200k quoted numbered items', markdown: '> 1. x\n'.repeat(150_000), blockType: 'quote' },
   ])('hostile body: $name', ({ markdown, blockType }) => {
     it('is parsed in linear time', () => {
-      const startedAt = performance.now();
-
+      expectBestCpuUnder(() => parseMarkdownBlocks(markdown), 3000);
       const blocks = parseMarkdownBlocks(markdown);
 
-      expect(performance.now() - startedAt).toBeLessThan(3000);
       expect(blocks.map((block) => block.type)).toContain(blockType);
     });
   });

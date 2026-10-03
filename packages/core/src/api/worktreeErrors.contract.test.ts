@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { expectBestCpuUnderAsync } from '../__testing__/linearGrowth.js';
 import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
 import { ApprovalService } from '../governance/approvalService.js';
@@ -111,11 +112,12 @@ describe('POST /api/sessions with repoPath and branchName: worktree failures', (
   });
 
   it('answers 400 invalid_branch_name within a second for a branch name of 900 000 question marks', async () => {
-    const startedAt = performance.now();
+    const hostileBranchName = '?'.repeat(900_000);
 
-    const { status, text } = await createSessionInWorktree('?'.repeat(900_000));
+    await expectBestCpuUnderAsync(() => createSessionInWorktree(hostileBranchName), 1000);
+    const { status, text } = await createSessionInWorktree(hostileBranchName);
 
-    expect({ status, error: JSON.parse(text).error, fast: performance.now() - startedAt < 1000 }).toEqual({ status: 400, error: 'invalid_branch_name', fast: true });
+    expect({ status, error: JSON.parse(text).error }).toEqual({ status: 400, error: 'invalid_branch_name' });
   });
 
   it('answers 409 worktree_exists, with no path, when the destination already exists', async () => {

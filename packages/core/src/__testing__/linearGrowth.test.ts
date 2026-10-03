@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cpuMillisecondsToRun, expectLinearGrowth, linearGrowthProblems, type MillisecondsAtSize } from './linearGrowth.js';
+import { cpuMillisecondsOfAsync, cpuMillisecondsToRun, expectBestCpuUnder, expectLinearGrowth, linearGrowthProblems, type MillisecondsAtSize } from './linearGrowth.js';
 
 const budget = { smallSize: 1000, largeSize: 4000 };
 const linearCost: MillisecondsAtSize = (size) => size / 10;
@@ -80,6 +80,50 @@ describe('cpuMillisecondsToRun', () => {
 
     expect(linearGrowthProblems(measure, budgetOfRealWork)).not.toEqual([]);
   }, 30_000);
+});
+
+describe('the shape of a list-of-short-strings test, as in describeError', () => {
+  const shortStrings = (count: number) => Array.from({ length: count }, (_, index) => `s${index}`);
+  const dedupedInLinearTime = (items: string[]) => [...new Set(items)];
+  const dedupedInQuadraticTime = (items: string[]) => items.filter((item, index) => items.indexOf(item) === index);
+  const budgetOfShortStrings = { smallSize: 5_000, largeSize: 20_000 };
+
+  it('passes when the work on the strings is linear', () => {
+    const measure = cpuMillisecondsToRun(shortStrings, dedupedInLinearTime);
+
+    expect(() => expectLinearGrowth(measure, budgetOfShortStrings)).not.toThrow();
+  }, 30_000);
+
+  it('fails when the work on the strings is quadratic', () => {
+    const measure = cpuMillisecondsToRun(shortStrings, dedupedInQuadraticTime);
+
+    expect(() => expectLinearGrowth(measure, budgetOfShortStrings)).toThrow('Growth is not linear');
+  }, 60_000);
+
+  it('fails an absolute ceiling the quadratic work exceeds, whatever the load', () => {
+    const items = shortStrings(20_000);
+
+    expect(() => expectBestCpuUnder(() => dedupedInQuadraticTime(items), 1)).toThrow('the ceiling is 1 ms');
+  }, 60_000);
+});
+
+describe('expectBestCpuUnder', () => {
+  it('passes work far below the ceiling', () => {
+    expect(() => expectBestCpuUnder(() => 1 + 1, 100)).not.toThrow();
+  });
+
+  it('keeps the cheapest run: one expensive first run does not fail it', () => {
+    let runs = 0;
+    const expensiveOnlyOnTheFirstRun = () => { if (runs++ === 0) for (let step = 0; step < 3e8; step++); };
+
+    expect(() => expectBestCpuUnder(expensiveOnlyOnTheFirstRun, 50)).not.toThrow();
+  }, 30_000);
+
+  it('does not count time spent waiting, only CPU time', async () => {
+    const cpuMilliseconds = await cpuMillisecondsOfAsync(() => new Promise((resolve) => setTimeout(resolve, 200)));
+
+    expect(cpuMilliseconds).toBeLessThan(50);
+  });
 });
 
 describe('expectLinearGrowth', () => {

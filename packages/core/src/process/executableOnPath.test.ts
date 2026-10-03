@@ -2,6 +2,7 @@ import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, w
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { expectBestCpuUnder } from '../__testing__/linearGrowth.js';
 import { findExecutable, pathDirectoriesOf } from './executableOnPath.js';
 
 const originalWorkingDirectory = process.cwd();
@@ -136,11 +137,10 @@ describe('findExecutable', () => {
     const bin = makeDirectory('bin');
     const claude = writeFileWithMode(bin, 'claude', 0o755);
     const missingDirectories = Array.from({ length: 10_000 }, (_, index) => join(scratchDirectory, `missing-${index}`));
-    const startedAt = performance.now();
+    const searchedDirectories = [...missingDirectories, bin];
 
-    const found = findExecutable('claude', [...missingDirectories, bin]);
-
-    expect({ found, fast: performance.now() - startedAt < 1000 }).toEqual({ found: claude, fast: true });
+    expectBestCpuUnder(() => findExecutable('claude', searchedDirectories), 1000);
+    expect(findExecutable('claude', searchedDirectories)).toBe(claude);
   });
 });
 

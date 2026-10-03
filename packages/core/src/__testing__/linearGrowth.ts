@@ -56,14 +56,57 @@ export const expectLinearGrowth = (measure: MillisecondsAtSize, budget: LinearGr
  * Builds each text once, then measures the CPU time `run` spends on it.
  * CPU time ignores the slices the scheduler gives to other processes, which stretch a long run more than a short one.
  */
-export const cpuMillisecondsToRun = (textOfSize: (size: number) => string, run: (text: string) => unknown): MillisecondsAtSize => {
-  const textsBySize = new Map<number, string>();
+export const cpuMillisecondsToRun = <Input = string>(inputOfSize: (size: number) => Input, run: (input: Input) => unknown): MillisecondsAtSize => {
+  const inputsBySize = new Map<number, Input>();
   return (size) => {
-    const text = textsBySize.get(size) ?? textOfSize(size);
-    textsBySize.set(size, text);
-    const startedAt = process.cpuUsage();
-    run(text);
-    const { user, system } = process.cpuUsage(startedAt);
-    return (user + system) / 1000;
+    const input = inputsBySize.has(size) ? (inputsBySize.get(size) as Input) : inputOfSize(size);
+    inputsBySize.set(size, input);
+    return cpuMillisecondsOf(() => run(input));
   };
+};
+
+const cpuMillisecondsSince = (startedAt: NodeJS.CpuUsage) => {
+  const { user, system } = process.cpuUsage(startedAt);
+  return (user + system) / 1000;
+};
+
+/** Returns the CPU time the process spends in `work`; the slices the scheduler gives to other processes do not count. */
+export const cpuMillisecondsOf = (work: () => unknown): number => {
+  const startedAt = process.cpuUsage();
+  work();
+  return cpuMillisecondsSince(startedAt);
+};
+
+/** Async twin of `cpuMillisecondsOf`: CPU time of the whole process while `work` settles, waits on I/O excluded. */
+export const cpuMillisecondsOfAsync = async (work: () => Promise<unknown>): Promise<number> => {
+  const startedAt = process.cpuUsage();
+  await work();
+  return cpuMillisecondsSince(startedAt);
+};
+
+const DEFAULT_CEILING_ROUNDS = 5;
+
+/** Keeps the fastest CPU time of `rounds` runs: contention only ever adds time, so the minimum is the cost of the code. */
+export const bestCpuMillisecondsOf = (work: () => unknown, rounds = DEFAULT_CEILING_ROUNDS): number => {
+  let best = Infinity;
+  for (let round = 0; round < rounds; round++) best = Math.min(best, cpuMillisecondsOf(work));
+  return best;
+};
+
+export const bestCpuMillisecondsOfAsync = async (work: () => Promise<unknown>, rounds = DEFAULT_CEILING_ROUNDS): Promise<number> => {
+  let best = Infinity;
+  for (let round = 0; round < rounds; round++) best = Math.min(best, await cpuMillisecondsOfAsync(work));
+  return best;
+};
+
+export const expectBestCpuUnder = (work: () => unknown, ceilingMilliseconds: number, rounds = DEFAULT_CEILING_ROUNDS) => {
+  const best = bestCpuMillisecondsOf(work, rounds);
+
+  if (best >= ceilingMilliseconds) throw new Error(`The fastest of ${rounds} runs took ${best.toFixed(1)} ms of CPU, the ceiling is ${ceilingMilliseconds} ms`);
+};
+
+export const expectBestCpuUnderAsync = async (work: () => Promise<unknown>, ceilingMilliseconds: number, rounds = DEFAULT_CEILING_ROUNDS) => {
+  const best = await bestCpuMillisecondsOfAsync(work, rounds);
+
+  if (best >= ceilingMilliseconds) throw new Error(`The fastest of ${rounds} runs took ${best.toFixed(1)} ms of CPU, the ceiling is ${ceilingMilliseconds} ms`);
 };

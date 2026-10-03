@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { ActivatedRoute, convertToParamMap, provideRouter } from '@angular/router';
 import { BehaviorSubject } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
+import { cpuMillisecondsOfAsync } from '../../testing/cpu-time.testing';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
 import { DirectoryOpener } from './directory-opener';
 import { NotesViewComponent } from './notes-view.component';
@@ -942,19 +943,15 @@ describe('notes view renders unusual markdown', () => {
   });
 
   it('a very long line that looks like a mention renders in under two seconds', async () => {
-    const startedAt = performance.now();
+    const cpuMilliseconds = await cpuMillisecondsOfAsync(() => renderNoteWithBody(`--- from note @note:a (${', '.repeat(150_000)}`));
 
-    await renderNoteWithBody(`--- from note @note:a (${', '.repeat(150_000)}`);
-
-    expect(performance.now() - startedAt).toBeLessThan(2000);
+    expect(cpuMilliseconds).toBeLessThan(2000);
   });
 
   it.each(['#', '-'])('a huge run of spaces after "%s" and a line separator renders in under two seconds', async (marker) => {
-    const startedAt = performance.now();
+    const cpuMilliseconds = await cpuMillisecondsOfAsync(() => renderNoteWithBody(`${marker}${' '.repeat(200_000)}\u2028x`));
 
-    await renderNoteWithBody(`${marker}${' '.repeat(200_000)}\u2028x`);
-
-    expect(performance.now() - startedAt).toBeLessThan(2000);
+    expect(cpuMilliseconds).toBeLessThan(2000);
   });
 
   it('three thousand nested mention blocks still render', async () => {
