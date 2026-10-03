@@ -342,6 +342,7 @@ impl DaemonLog {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::linear_growth::{cpu_time_to_run_on_repeated, linear_growth_problems, thread_cpu_time_of, LinearGrowthBudget};
   use std::collections::HashMap;
   use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
   use std::sync::mpsc;
@@ -815,7 +816,6 @@ mod tests {
     const SMALL_INPUT: usize = 16 * KIBIBYTE;
     const LARGE_INPUT: usize = 4 * SMALL_INPUT;
     const MEBIBYTE: usize = 1024 * KIBIBYTE;
-    const NOISE_FLOOR: Duration = Duration::from_millis(20);
     const GENEROUS_CEILING: Duration = Duration::from_secs(20);
     let units = [
       "?", "%", "%25", "/", "Bearer ", "/hooks/", "a", "&", "=", " ", "?a=%25/hooks/Bearer &Basic ", "://", "Basic ", "%2Fhooks%2F", "token=", "a=%3D",
@@ -823,25 +823,17 @@ mod tests {
       "Bearer Bearer ", "Bearer Bearer", "Bearer %42earer ", "://a@", "://a@@", "://@", "://a@a/",
     ];
     let secrets = vec!["s3cr3t-admin-token".to_string()];
-    let fastest_redaction_of = |unit: &str, size: usize| {
-      let hostile = unit.repeat(size / unit.len() + 1);
-      (0..3)
-        .map(|_| {
-          let started_at = Instant::now();
-          redact(&hostile, &secrets);
-          started_at.elapsed()
-        })
-        .min()
-        .unwrap()
-    };
-
     for unit in units {
-      let time_at_small_input = fastest_redaction_of(unit, SMALL_INPUT).max(NOISE_FLOOR);
-      let time_at_large_input = fastest_redaction_of(unit, LARGE_INPUT);
-      assert!(time_at_large_input < time_at_small_input * 8, "{unit:?}: 4x the input took {time_at_large_input:?} against {time_at_small_input:?}");
+      let cpu_time_to_redact = cpu_time_to_run_on_repeated(unit, |hostile| {
+        redact(hostile, &secrets);
+      });
+      let problems = linear_growth_problems(cpu_time_to_redact, &LinearGrowthBudget::between(SMALL_INPUT, LARGE_INPUT));
+      assert!(problems.is_empty(), "{unit:?}: {problems:?}");
 
-      let time_at_one_mebibyte = fastest_redaction_of(unit, MEBIBYTE);
-      assert!(time_at_one_mebibyte < GENEROUS_CEILING, "{unit:?} x 1 MiB took {time_at_one_mebibyte:?}");
+      let cpu_time_at_one_mebibyte = thread_cpu_time_of(|| {
+        redact(&unit.repeat(MEBIBYTE / unit.len() + 1), &secrets);
+      });
+      assert!(cpu_time_at_one_mebibyte < GENEROUS_CEILING, "{unit:?} x 1 MiB took {cpu_time_at_one_mebibyte:?}");
     }
   }
 
