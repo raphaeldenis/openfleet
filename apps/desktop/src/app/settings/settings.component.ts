@@ -1,4 +1,6 @@
 import { ChangeDetectionStrategy, Component, computed, DestroyRef, ElementRef, inject, InjectionToken, signal } from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { ActivatedRoute } from '@angular/router';
 import { environment } from '../../environments/environment';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
 import { SupportActions } from '../core/support-actions';
@@ -209,6 +211,7 @@ export class SettingsComponent {
   protected readonly support = inject(SupportActions);
   private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
   private readonly settleMs = inject(MODEL_SETTLE_MS);
+  private readonly route = inject(ActivatedRoute, { optional: true });
   private settleTimer: ReturnType<typeof setTimeout> | undefined;
 
   protected readonly tabs = SETTINGS_TABS;
@@ -253,6 +256,10 @@ export class SettingsComponent {
     inject(DestroyRef).onDestroy(() => this.savePendingChange());
     void this.versions.loadAppVersion();
     void this.loadModelTable();
+    this.route?.queryParamMap.pipe(takeUntilDestroyed()).subscribe((params) => {
+      const requestedTab = SETTINGS_TABS.find((tab) => tab.key === params.get('tab'));
+      if (requestedTab) this.activeTab.set(requestedTab.key);
+    });
   }
 
   // A native select fires `change` on every arrow step and type-ahead match, so only the id the user settles

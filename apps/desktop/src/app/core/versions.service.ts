@@ -1,10 +1,6 @@
 import { computed, inject, Injectable, signal } from '@angular/core';
 import { APP_VERSION_READER } from './app-version';
-
-export interface VersionMismatch {
-  appVersion: string;
-  daemonVersion: string;
-}
+import { versionMismatchOf } from './version-mismatch';
 
 const MAX_VERSION_LENGTH = 64;
 
@@ -23,13 +19,7 @@ export class VersionsService {
   readonly isAppVersionSettled = signal(false);
   /** True once the boot health check has answered or failed. */
   readonly isDaemonVersionSettled = signal(false);
-  readonly mismatch = computed<VersionMismatch | null>(() => {
-    const appVersion = this.appVersion();
-    const daemonVersion = this.daemonVersion();
-    const isEitherUnknown = appVersion === null || daemonVersion === null;
-    if (isEitherUnknown || appVersion === daemonVersion) return null;
-    return { appVersion, daemonVersion };
-  });
+  readonly mismatch = computed(() => versionMismatchOf({ appVersion: this.appVersion(), daemonVersion: this.daemonVersion() }));
 
   /** Reads the app version once; every later call returns the same promise. */
   loadAppVersion(): Promise<void> {

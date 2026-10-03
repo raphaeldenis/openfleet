@@ -71,15 +71,20 @@ const RUNNING_STATES = new Set(['generating', 'starting']);
             </button>
             <span class="spacer"></span>
             <of-right-panel-toggle />
-            <of-daemon-status [connected]="events.connected()" />
+            <of-daemon-status [connected]="events.connected()" [mismatchedDaemonVersion]="versions.mismatch()?.daemonVersion ?? null" />
             <span class="spend" data-testid="spend-today" title="Cost tracking is not implemented yet">— today</span>
           </header>
-          @if (!events.connected()) {
+          @if (versionMismatch(); as mismatch) {
             <of-banner
-              variant="reconnecting"
-              title="↻ Reconnecting to daemon"
-              description="Sessions keep running; the UI shows the last known state."
-            />
+              data-testid="version-mismatch-banner"
+              variant="mismatch"
+              glyph="!"
+              title="Version mismatch"
+              [description]="mismatch.description"
+            >
+              <of-copy-details-button testId="version-mismatch-copy-details" [text]="mismatch.detailsText" />
+              <button type="button" class="of-btn of-btn--link about-link" data-testid="version-mismatch-about" (click)="openAbout()">About…</button>
+            </of-banner>
           }
           @if (degraded(); as state) {
             <of-banner
@@ -91,12 +96,11 @@ const RUNNING_STATES = new Set(['generating', 'starting']);
               <of-copy-details-button testId="degraded-copy-details" [text]="state.detailsText" />
             </of-banner>
           }
-          @if (versions.mismatch(); as mismatch) {
+          @if (!events.connected()) {
             <of-banner
-              data-testid="version-mismatch-banner"
-              variant="mismatch"
-              title="Version mismatch"
-              [description]="'The daemon on ' + daemonAddress + ' is ' + mismatch.daemonVersion + ', this app is ' + mismatch.appVersion"
+              variant="reconnecting"
+              title="↻ Reconnecting to daemon"
+              description="Sessions keep running; the UI shows the last known state."
             />
           }
           <main class="outlet" data-testid="app-outlet">
@@ -106,7 +110,7 @@ const RUNNING_STATES = new Set(['generating', 'starting']);
         <of-right-panel />
       </div>
       <footer class="statusbar" data-testid="app-statusbar" [attr.inert]="paletteOpen() ? '' : null">
-        <of-daemon-status [connected]="events.connected()" />
+        <of-daemon-status [connected]="events.connected()" [mismatchedDaemonVersion]="versions.mismatch()?.daemonVersion ?? null" />
         <span class="mono">{{ daemonAddress }}</span>
         <span class="spacer"></span>
         <span class="limits" data-testid="status-limits" title="Provider limits are not tracked yet">—</span>
@@ -144,6 +148,7 @@ const RUNNING_STATES = new Set(['generating', 'starting']);
     .outlet { flex: 1; min-height: 0; min-width: 0; display: flex; overflow-y: auto; overflow-x: hidden; }
     .statusbar { flex: none; height: 1.625rem; display: flex; align-items: center; gap: .75rem; padding: 0 .75rem; border-top: 1px solid var(--line); background: var(--side); font-size: .6875rem; color: var(--mut); }
     .limits { font-style: italic; }
+    .about-link { flex: none; height: 1.5rem; padding: 0 .5rem; font-size: .6875rem; white-space: nowrap; }
     .mono { font-family: var(--mono); }
     /* Terminal-first collapse order at 1200×800 (handoff Q10): status bar details, then header
        density — there is no persistent right panel yet in this shell to collapse first. */
@@ -183,6 +188,21 @@ export class AppShellComponent {
       .join('\n\n');
     return { description, detailsText };
   });
+  protected readonly versionMismatch = computed(() => {
+    const mismatch = this.versions.mismatch();
+    if (!mismatch) return undefined;
+    const { daemonVersion, appVersion } = mismatch;
+    const description = `The daemon on ${this.daemonAddress} is ${daemonVersion}, this app is ${appVersion} — restart the daemon so both match.`;
+    const detailsText = detailsTextOf({
+      ref: `OF-${crypto.randomUUID().slice(0, 6)}`,
+      code: 'version_mismatch',
+      daemonVersion,
+      appVersion,
+      address: this.daemonAddress,
+      at: new Date().toISOString(),
+    });
+    return { description, detailsText };
+  });
   private readonly paletteTrigger = viewChild.required<ElementRef<HTMLButtonElement>>('paletteTrigger');
   private paletteOpener: HTMLElement | null = null;
 
@@ -192,6 +212,10 @@ export class AppShellComponent {
 
   onSessionSelected(sessionId: string): void {
     void this.router.navigate(['/session', sessionId]);
+  }
+
+  protected openAbout(): void {
+    void this.router.navigate(['/settings'], { queryParams: { tab: 'about' } });
   }
 
   openPalette(): void {
