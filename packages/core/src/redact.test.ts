@@ -318,10 +318,12 @@ const GENEROUS_CEILING_MILLISECONDS = 2000;
 const hostileTextOf = (unit: string, size: number) => unit.repeat(Math.ceil(size / unit.length));
 const fastestOfThree = (measure: () => number) => Math.min(measure(), measure(), measure());
 
-/** Times `mask` on the unit repeated to 64 KiB and 256 KiB: 4x the input must cost less than 8x, whatever the machine's speed. */
-const expectLinearGrowth = (unit: string, mask: (text: string) => string) => {
+/** Times `mask` on a hostile text of 64 KiB and 256 KiB: 4x the input must cost less than 8x, whatever the machine's speed. */
+const expectLinearGrowth = (unit: string, mask: (text: string) => string) => expectLinearGrowthOn((size) => hostileTextOf(unit, size), mask);
+
+const expectLinearGrowthOn = (hostileTextOfSize: (size: number) => string, mask: (text: string) => string) => {
   const millisecondsFor = (size: number) => {
-    const hostile = hostileTextOf(unit, size);
+    const hostile = hostileTextOfSize(size);
     return fastestOfThree(() => {
       const startedAt = performance.now();
       mask(hostile);
@@ -444,6 +446,12 @@ describe('maskedSecrets: Cookie and Set-Cookie headers', () => {
 
     expect(maskedSecrets(once)).toBe(once);
   });
+
+  it.each([
+    ['one long name followed by an empty value', (size: number) => `Cookie: ${'a'.repeat(size)}=;`],
+    ['one long name with no value mark', (size: number) => `Cookie: ${'a'.repeat(size)}`],
+    ['one long first name of a Set-Cookie header', (size: number) => `Set-Cookie: ${'a'.repeat(size)}=;`],
+  ])('masks %s at 64 KiB and 256 KiB with 4x the input costing less than 8x', (_name, hostileTextOfSize) => expectLinearGrowthOn(hostileTextOfSize, maskedSecrets));
 
   it.each(['Cookie: ', 'Cookie: a=', 'Set-Cookie: a=b;', 'Cookie:a=b;c', 'Cookie', 'Cookie:   ', 'Set-Cookie: a=b; c=d; e', 'Cookie: aaaaaaaaaaaaaaaa'])(
     'masks %j at 64 KiB and 256 KiB with 4x the input costing less than 8x',
