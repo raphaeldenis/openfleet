@@ -132,6 +132,13 @@ export function registerRestRoutes(router: Router, deps: { sessions: SessionServ
       (deps.sessions.harnessHandle(params.id!) as FakeHandle | undefined)?.emitData(data);
       json(res, 200, {});
     });
+
+    router.add('POST', '/api/managers/:id/fail-next-pulses', ({ res, params, body }) => {
+      if (!deps.managers.get(params.id!)) throw notFound('manager');
+      const { count } = z.object({ count: z.number().int().min(1).max(100) }).parse(body);
+      deps.pulseScheduler.failNextTicks(params.id!, count);
+      json(res, 200, {});
+    });
   }
 
   router.add('POST', '/api/sessions/:id/close', async ({ res, params }) => {
