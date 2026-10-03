@@ -35,8 +35,14 @@ export class LiveSessionTodosSource implements SessionTodosSource {
   private readonly loadsBySession = new Map<string, Signal<TodosLoad>>();
   private readonly childrenBySession = new Map<string, Signal<ChildrenLoad>>();
   private readonly connectionEpochOfLastRequest = new Map<string, number>();
+  private readonly latestRequestNumberBySession = new Map<string, number>();
+  private requestCount = 0;
 
   constructor() {
+    effect(() => {
+      const retainedSessionIds = this.events.sessionIdsWithRetainedTodos();
+      untracked(() => this.releaseSessionsOutsideTheDaemonsRetention(retainedSessionIds));
+    });
     effect(() => {
       const sessionId = this.watchedSessionId();
       const connectionEpoch = this.events.reconnectCount();
@@ -67,6 +73,7 @@ export class LiveSessionTodosSource implements SessionTodosSource {
 
   watch(sessionId: string | undefined): void {
     this.watchedSessionId.set(sessionId);
+    this.events.keepTodosOf(sessionId);
   }
 
   retry(sessionId: string): void {
@@ -101,13 +108,27 @@ export class LiveSessionTodosSource implements SessionTodosSource {
     this.connectionEpochOfLastRequest.set(sessionId, connectionEpoch);
     const eventsSeenBeforeRequest = this.events.todoEventCount(sessionId);
     const listBeforeRequest = this.events.todos().get(sessionId);
+    const requestNumber = ++this.requestCount;
+    this.latestRequestNumberBySession.set(sessionId, requestNumber);
+    const isSupersededByANewerRequest = () => this.latestRequestNumberBySession.get(sessionId) !== requestNumber;
     try {
       const todos = await this.api.getSessionTodos(sessionId);
       const wasOvertakenByAnEvent = this.events.todoEventCount(sessionId) !== eventsSeenBeforeRequest;
-      if (!wasOvertakenByAnEvent) this.events.storeFetchedTodos(todos);
+      if (isSupersededByANewerRequest() || wasOvertakenByAnEvent) return;
+      this.events.storeFetchedTodos(todos);
     } catch (error) {
+      if (isSupersededByANewerRequest()) return;
       this.failures.update((all) => new Map(all).set(sessionId, failureOf(error, listBeforeRequest)));
     }
+  }
+
+  private releaseSessionsOutsideTheDaemonsRetention(retainedSessionIds: ReadonlySet<string>): void {
+    const watchedSessionId = this.watchedSessionId();
+    const isReleased = (sessionId: string) => !retainedSessionIds.has(sessionId) && sessionId !== watchedSessionId;
+    for (const perSession of [this.loadsBySession, this.connectionEpochOfLastRequest, this.latestRequestNumberBySession]) {
+      for (const sessionId of [...perSession.keys()]) if (isReleased(sessionId)) perSession.delete(sessionId);
+    }
+    this.failures.update((all) => new Map([...all].filter(([sessionId]) => !isReleased(sessionId))));
   }
 }
 

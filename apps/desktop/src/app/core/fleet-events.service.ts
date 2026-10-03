@@ -1,8 +1,9 @@
 import { Injectable, signal } from '@angular/core';
-import { SessionTodosSchema, TodoSummarySchema, closeReasonOfExitCode } from '@openfleet/shared';
+import { TodoSummarySchema, closeReasonOfExitCode } from '@openfleet/shared';
 import type { Approval, DaemonIssue, ErrorEnvelope, ManagerView, ServerEvent, Session, SessionCloseReason, SessionTodos, TodoSummary, WorkingState } from '@openfleet/shared';
 import { Subject } from 'rxjs';
 import { environment } from '../../environments/environment';
+import { parseSessionTodos } from './session-todos-parser';
 import { isUserTyping } from './terminal-keystrokes';
 
 const INITIAL_RECONNECT_DELAY_MS = 1000;
@@ -74,7 +75,10 @@ export class FleetEventsService {
   readonly todoSummaries = signal<ReadonlyMap<string, TodoSummary>>(new Map());
   // A daemon that predates todos sends no summaries: a missing list then means "not reported", never "empty".
   readonly todosReported = signal(false);
+  /** The sessions whose todos the last full snapshot left in the caches: the daemon retains at most CLOSED_SNAPSHOTS_KEPT closed ones. */
+  readonly sessionIdsWithRetainedTodos = signal<ReadonlySet<string>>(new Set());
   private readonly todoEventCounts = new Map<string, number>();
+  private sessionIdWhoseTodosAreKept?: string;
   /** What keeps the daemon running degraded; empty while it is healthy or when an older daemon reports none. */
   readonly daemonIssues = signal<DaemonIssue[]>([]);
   /** Failures the daemon announced that no request of the user caused, newest first, until the user dismisses them. */
@@ -232,7 +236,9 @@ export class FleetEventsService {
         this.workingStateMaxBytes.set(event.workingStateMaxBytes);
         this.daemonIssues.set(event.daemonIssues ?? []);
         this.todosReported.set(event.todoSummaries !== undefined);
-        this.todoSummaries.set(new Map(readableTodoSummaries(event.todoSummaries).map((summary) => [summary.sessionId, summary])));
+        const summaries = new Map(readableTodoSummaries(event.todoSummaries).map((summary) => [summary.sessionId, summary]));
+        this.todoSummaries.set(summaries);
+        this.reconcileTodosWithSnapshot(summaries);
         this.closeReasons.set(closeReasonsOfSnapshot(event.sessions));
         this.snapshotReceived.set(true);
         return;
@@ -276,14 +282,27 @@ export class FleetEventsService {
     return this.todoEventCounts.get(sessionId) ?? 0;
   }
 
+  /** Names the session on screen: a snapshot keeps its list even when the daemon reports no summary for it. */
+  keepTodosOf(sessionId: string | undefined): void {
+    this.sessionIdWhoseTodosAreKept = sessionId;
+  }
+
   storeFetchedTodos(todos: SessionTodos): void {
     this.todos.update((all) => new Map(all).set(todos.sessionId, todos));
   }
 
+  /** Forgets the lists of the sessions a full snapshot no longer reports, so an evicted list is read again instead of shown as fresh. */
+  private reconcileTodosWithSnapshot(summaries: ReadonlyMap<string, TodoSummary>): void {
+    const retainedSessionIds = new Set(summaries.keys());
+    if (this.sessionIdWhoseTodosAreKept) retainedSessionIds.add(this.sessionIdWhoseTodosAreKept);
+    this.todos.update((all) => new Map([...all].filter(([sessionId]) => retainedSessionIds.has(sessionId))));
+    for (const sessionId of [...this.todoEventCounts.keys()]) if (!retainedSessionIds.has(sessionId)) this.todoEventCounts.delete(sessionId);
+    this.sessionIdsWithRetainedTodos.set(retainedSessionIds);
+  }
+
   private receiveTodosEvent(payload: unknown): void {
-    const parsed = SessionTodosSchema.safeParse(payload);
-    if (!parsed.success) return;
-    const todos = parsed.data;
+    const todos = parseSessionTodos(payload);
+    if (!todos) return;
     this.todoEventCounts.set(todos.sessionId, this.todoEventCount(todos.sessionId) + 1);
     this.storeFetchedTodos(todos);
     if (todos.updatedAt === null) return;

@@ -1,11 +1,12 @@
 import { Injectable } from '@angular/core';
-import { SessionTodosSchema, isErrorEnvelope } from '@openfleet/shared';
+import { isErrorEnvelope } from '@openfleet/shared';
 import type {
   Approval, CreateNoteRequest, DataStore, DataStoreDetail, DsRow, DsRowHistoryEntry, DsView, ErrorEnvelope, HarnessId, NoteSummary,
   NoteVersionSummary, NoteView, OrderTerm, Page, PermissionMode, Project, RestoreNoteRequest, Session, SessionSpec, SessionTodos,
   UpdateNoteRequest, WhereClause,
 } from '@openfleet/shared';
 import { environment } from '../../environments/environment';
+import { parseSessionTodos } from './session-todos-parser';
 
 export type PageRequest = Partial<Pick<Page<unknown>, 'limit' | 'offset'>>;
 type NoteChange = Omit<UpdateNoteRequest, 'projectId'>;
@@ -115,9 +116,9 @@ export class FleetApiService {
   reopenSession(id: string) { return this.post<Session>(`/api/sessions/${id}/reopen`, {}); }
   async getSessionTodos(id: string): Promise<SessionTodos> {
     const path = `/api/sessions/${encodeURIComponent(id)}/todos`;
-    const parsed = SessionTodosSchema.safeParse(await this.call<unknown>(path));
-    if (!parsed.success) throw new ApiError(200, `GET ${path} → unreadable todo list`);
-    return parsed.data;
+    const todos = parseSessionTodos(await this.call<unknown>(path));
+    if (!todos) throw new ApiError(200, `GET ${path} → unreadable todo list`);
+    return todos;
   }
   decide(id: string, behavior: 'allow' | 'deny') { return this.post<Approval>(`/api/approvals/${id}/decide`, { behavior }); }
 
