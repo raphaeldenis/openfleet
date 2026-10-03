@@ -380,6 +380,79 @@ describe('SessionHeaderComponent', () => {
     expect(screen.getByTestId('close-confirm-pending-switch')).toBeTruthy();
   });
 
+  describe('identity row', () => {
+    const leadingItemTestIds = [
+      'session-emoji-input', 'session-name-input', 'state-chip', 'session-exit-code', 'session-harness', 'session-directory', 'session-cost',
+    ];
+
+    async function renderClosedSession(patch: Partial<Session> = {}) {
+      const session = baseSession({ state: 'closed', exitCode: 1, ...patch });
+      await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
+    }
+
+    it('lays the leading items out in one centred row at least 2rem tall', async () => {
+      await renderClosedSession();
+
+      const row = getComputedStyle(screen.getByTestId('session-header-row'));
+
+      expect(row.display).toBe('flex');
+      expect(row.alignItems).toBe('center');
+      expect(row.minHeight).toBe('2rem');
+    });
+
+    it('holds every leading item inside that row', async () => {
+      await renderClosedSession();
+
+      const row = screen.getByTestId('session-header-row');
+
+      for (const testId of leadingItemTestIds) expect(row).toContainElement(screen.getByTestId(testId));
+    });
+
+    it('makes the emoji and name fields 2rem tall', async () => {
+      await renderClosedSession();
+
+      expect(getComputedStyle(screen.getByTestId('session-emoji-input')).height).toBe('2rem');
+      expect(getComputedStyle(screen.getByTestId('session-name-input')).height).toBe('2rem');
+    });
+
+    it('lets the row decide the vertical alignment instead of per-item top margins', async () => {
+      await renderClosedSession();
+
+      for (const testId of leadingItemTestIds) {
+        const item = screen.getByTestId(testId);
+        const chipHost = testId === 'state-chip' ? item.parentElement! : item;
+        const style = getComputedStyle(chipHost);
+        expect([testId, style.marginTop, style.alignSelf]).toEqual([testId, '', '']);
+      }
+    });
+
+    it('wraps onto a second line when the items do not fit', async () => {
+      await renderClosedSession();
+
+      expect(getComputedStyle(screen.getByTestId('session-header-row')).flexWrap).toBe('wrap');
+    });
+  });
+
+  describe('model drift chip', () => {
+    it('shows a drift chip, with the previous model in its tooltip, when the model changed under the session', async () => {
+      const session = baseSession({ modelDriftedFrom: 'claude-opus-4-0' });
+      await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
+
+      const chip = screen.getByTestId('session-drift-chip');
+
+      expect(chip).toHaveTextContent('⇄ drift');
+      expect(chip).toHaveAttribute('title', expect.stringContaining('claude-opus-4-0'));
+      expect(screen.getByTestId('session-header-row')).toContainElement(chip);
+    });
+
+    it('shows no drift chip when the model did not drift', async () => {
+      const session = baseSession();
+      await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
+
+      expect(screen.queryByTestId('session-drift-chip')).toBeNull();
+    });
+  });
+
   describe('elapsed time', () => {
     beforeEach(() => vi.useFakeTimers());
     afterEach(() => vi.useRealTimers());
