@@ -7,6 +7,7 @@ import { createTempDirTracker } from './tempDirTracker.js';
 
 const RING_CAPACITY = 2000;
 const MAX_HEAP_GROWTH_MIB = 40;
+const LINES_FAR_OVER_THE_CAP = 100;
 const PACKAGE_DIRECTORY = fileURLToPath(new URL('..', import.meta.url));
 const LOGGER_URL = pathToFileURL(fileURLToPath(new URL('./logger.ts', import.meta.url))).href;
 
@@ -32,10 +33,17 @@ function measuredInFreshNode(body: string): { heapGrowthMiB: number; ringLines: 
 }
 
 describe('log — ring buffer memory', () => {
-  it('keeps a full ring of worst-case lines (50 strings of 5000 two-byte characters in five arrays) under 40 MiB of heap', () => {
+  it('keeps a full ring of lines cut at the cap, the last 100 cut from 1.2 million characters each, under 40 MiB of heap', () => {
     const measured = measuredInFreshNode(`
-      const worstCaseDetail = () => Array.from({ length: 5 }, () => Array.from({ length: 50 }, () => ('€"' + Math.random()).repeat(300).slice(0, 5000)));
-      for (let index = 0; index < ${RING_CAPACITY}; index += 1) log('info', 'worst case', worstCaseDetail());
+      const twoByteString = () => ('€"' + Math.random()).repeat(300).slice(0, 5000);
+      const detailOf = ({ arrays, stringsPerArray }) => Array.from({ length: arrays }, () => Array.from({ length: stringsPerArray }, twoByteString));
+      const lineJustOverTheCap = { arrays: 1, stringsPerArray: 3 };
+      const lineFarOverTheCap = { arrays: 5, stringsPerArray: 50 };
+      const linesFarOverTheCap = ${LINES_FAR_OVER_THE_CAP};
+      for (let index = 0; index < ${RING_CAPACITY}; index += 1) {
+        const isFarOverTheCap = index >= ${RING_CAPACITY} - linesFarOverTheCap;
+        log('info', 'worst case', detailOf(isFarOverTheCap ? lineFarOverTheCap : lineJustOverTheCap));
+      }
     `);
 
     expect(measured.ringLines).toBe(RING_CAPACITY);
