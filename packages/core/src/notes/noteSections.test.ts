@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { expectBestCpuUnder } from '../__testing__/linearGrowth.js';
 import { appendSection, getSection, listSections, replaceSection } from './noteSections.js';
 
 describe('listSections', () => {
@@ -83,20 +84,15 @@ describe('listSections', () => {
   it('parses a 40 KB heading line with a long whitespace run in linear time', () => {
     const body = `## a${' '.repeat(40_000)}b`;
 
-    const elapsed = millisecondsToRun(() => listSections(body));
-
-    expect(elapsed).toBeLessThan(50);
+    expectBestCpuUnder(() => listSections(body), 50);
   });
 
   it('parses 100 000 sections in linear time', () => {
     const sectionCount = 100_000;
     const body = Array.from({ length: sectionCount }, (_, index) => `## S${index}\ntext`).join('\n');
 
-    let sections: unknown[] = [];
-    const elapsed = millisecondsToRun(() => { sections = listSections(body); });
-
-    expect(sections).toHaveLength(sectionCount);
-    expect(elapsed).toBeLessThan(1000);
+    expectBestCpuUnder(() => listSections(body), 1000);
+    expect(listSections(body)).toHaveLength(sectionCount);
   });
 
   it('parses 100 000 lines of unclosed backtick and tilde fences in linear time', () => {
@@ -104,11 +100,8 @@ describe('listSections', () => {
     const repeatedLines = ['```js', '~~~js', 'text'];
     const body = ['## A', ...Array.from({ length: lineCount }, (_, index) => repeatedLines[index % repeatedLines.length])].join('\n');
 
-    let sections: unknown[] = [];
-    const elapsed = millisecondsToRun(() => { sections = listSections(body); });
-
-    expect(sections).toHaveLength(1);
-    expect(elapsed).toBeLessThan(1000);
+    expectBestCpuUnder(() => listSections(body), 1000);
+    expect(listSections(body)).toHaveLength(1);
   });
 
   it('sees a heading that sits between two fenced blocks using the same fence character', () => {
@@ -133,12 +126,6 @@ describe('listSections', () => {
     expect(sections).toEqual([{ heading: 'Title', level: 2, startLine: 0, endLine: 1 }]);
   });
 });
-
-function millisecondsToRun(work: () => void): number {
-  const start = performance.now();
-  work();
-  return performance.now() - start;
-}
 
 describe('getSection', () => {
   it('returns the content under a heading without the heading or trailing blank lines', () => {

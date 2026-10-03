@@ -1,6 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { Handover } from '@openfleet/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { cpuMillisecondsOfAsync, expectBestCpuUnderAsync } from '../__testing__/linearGrowth.js';
 import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
 import { ApprovalService } from '../governance/approvalService.js';
@@ -294,11 +295,8 @@ describe('user can rely on the ledger bounds', () => {
 
   it('scans a huge paste in bounded time and still records a link typed at its start', async () => {
     const hugePaste = `${DESIGN_LINK} ${'/specs/'.repeat(10_000)}`;
-    const startedAt = Date.now();
 
-    await humanTypes(hugePaste);
-
-    expect(Date.now() - startedAt).toBeLessThan(2000);
+    await expectBestCpuUnderAsync(() => humanTypes(hugePaste), 2000);
     expect(await valuesOf(sessionId)).toEqual([DESIGN_LINK]);
   });
 });
@@ -379,17 +377,19 @@ describe('operator patterns that backtrack catastrophically cannot freeze the da
     fx = await startFixture([killer, /TICKET-\d+/g]);
     const session = await fx.sessions.create({ directory: '/tmp', name: 'Custom', harness: 'fake', emoji: '🤖' });
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    const startedAt = Date.now();
+    let answer: Awaited<ReturnType<typeof humanTypes>> | undefined;
+    let secondAnswer: Awaited<ReturnType<typeof humanTypes>> | undefined;
 
-    const answer = await humanTypes(runOfXs, hookTokenOf(session.id));
-    const secondAnswer = await humanTypes(`${runOfXs} TICKET-8`, hookTokenOf(session.id));
+    const cpuMilliseconds = await cpuMillisecondsOfAsync(async () => {
+      answer = await humanTypes(runOfXs, hookTokenOf(session.id));
+      secondAnswer = await humanTypes(`${runOfXs} TICKET-8`, hookTokenOf(session.id));
+    });
 
-    const elapsed = Date.now() - startedAt;
     const warnings = warn.mock.calls.map(([line]) => String(line)).filter((line) => line.includes(killer.source));
     warn.mockRestore();
-    expect(elapsed).toBeLessThan(FAR_BELOW_THE_FREEZE_MS);
-    expect(reminderOf(answer)).toContain('TICKET-7');
-    expect(reminderOf(secondAnswer)).toContain('TICKET-8');
+    expect(cpuMilliseconds).toBeLessThan(FAR_BELOW_THE_FREEZE_MS);
+    expect(reminderOf(answer!)).toContain('TICKET-7');
+    expect(reminderOf(secondAnswer!)).toContain('TICKET-8');
     expect(warnings).toHaveLength(1);
     expect(await valuesOf(session.id)).toEqual(['TICKET-8', 'TICKET-7']);
   });

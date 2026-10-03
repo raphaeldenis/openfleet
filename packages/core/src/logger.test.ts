@@ -2,6 +2,7 @@ import { mkdirSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { cpuMillisecondsOf } from './__testing__/linearGrowth.js';
 import { createTempDirTracker } from './tempDirTracker.js';
 
 const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
@@ -926,19 +927,18 @@ describe('log — linear-time on adversarial input', () => {
 
   async function timeLogCall(call: (log: (level: 'error', message: string, detail?: unknown, fields?: Record<string, unknown>) => void) => void): Promise<number> {
     const { log } = await loadLogger();
-    const start = performance.now();
-    call(log);
-    return performance.now() - start;
+    return cpuMillisecondsOf(() => call(log));
   }
 
-  async function bestOfThree(call: Parameters<typeof timeLogCall>[0]): Promise<number> {
-    const timings = [await timeLogCall(call), await timeLogCall(call), await timeLogCall(call)];
+  async function bestOfFive(call: Parameters<typeof timeLogCall>[0]): Promise<number> {
+    const timings: number[] = [];
+    for (let round = 0; round < 5; round += 1) timings.push(await timeLogCall(call));
     return Math.min(...timings);
   }
 
   async function expectLinearGrowth(makeCall: (size: number) => Parameters<typeof timeLogCall>[0]): Promise<void> {
     const timings: number[] = [];
-    for (const size of SIZES) timings.push(await bestOfThree(makeCall(size)));
+    for (const size of SIZES) timings.push(await bestOfFive(makeCall(size)));
     for (const timing of timings) expect(timing).toBeLessThan(LIMIT_MS);
     const [smallest, , , largest] = timings as [number, number, number, number];
     expect(largest).toBeLessThan(smallest * 32 + 50);

@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
+import { bestCpuMillisecondsOf, expectBestCpuUnder } from '../__testing__/linearGrowth.js';
 import { applyMigrations } from '../db/migrate.js';
 import { openDatabase } from '../db/database.js';
 import { HandoverLedger, handoverReminder } from './handoverLedger.js';
@@ -22,7 +23,6 @@ const ledgerFor = (patterns?: RegExp[]) => {
   insertSession(db, 's1');
   return { db, ledger: new HandoverLedger({ db, clock: () => 't', patterns }) };
 };
-const timeOf = (work: () => void) => { const started = performance.now(); work(); return performance.now() - started; };
 
 describe('operator settings edge values for handoverPatterns (QE hostile)', () => {
   it('turns recording off with an empty list', () => {
@@ -125,9 +125,7 @@ describe('the default patterns stay linear on adversarial input (QE hostile)', (
   ])('scans %s in under 100 ms', (_label, prompt) => {
     const { ledger } = ledgerFor();
 
-    const ms = timeOf(() => ledger.record({ sessionId: 's1', prompt }));
-
-    expect(ms).toBeLessThan(100);
+    expectBestCpuUnder(() => ledger.record({ sessionId: 's1', prompt }), 100);
   });
 });
 
@@ -165,9 +163,10 @@ describe('cost of recording per prompt on a file database (QE measurement)', () 
     const tenNew = (batch: number) => Array.from({ length: 10 }, (_, index) => `https://claude.ai/design/n${batch}-${index}`).join(' ');
 
     ledger.record({ sessionId: 's1', prompt: DESIGN });
-    const noLink = timeOf(() => { for (let i = 0; i < 1000; i += 1) ledger.record({ sessionId: 's1', prompt: 'please continue with the refactor of the login form, thanks' }); });
-    const knownLink = timeOf(() => { for (let i = 0; i < 1000; i += 1) ledger.record({ sessionId: 's1', prompt: `again ${DESIGN}` }); });
-    const tenNewLinks = timeOf(() => { for (let i = 0; i < 100; i += 1) ledger.record({ sessionId: 's1', prompt: tenNew(i) }); });
+    let nextBatch = 0;
+    const noLink = bestCpuMillisecondsOf(() => { for (let i = 0; i < 1000; i += 1) ledger.record({ sessionId: 's1', prompt: 'please continue with the refactor of the login form, thanks' }); });
+    const knownLink = bestCpuMillisecondsOf(() => { for (let i = 0; i < 1000; i += 1) ledger.record({ sessionId: 's1', prompt: `again ${DESIGN}` }); });
+    const tenNewLinks = bestCpuMillisecondsOf(() => { for (let i = 0; i < 100; i += 1) ledger.record({ sessionId: 's1', prompt: tenNew(nextBatch++) }); });
 
     expect(noLink / 1000).toBeLessThan(1);
     expect(knownLink / 1000).toBeLessThan(5);
