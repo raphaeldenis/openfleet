@@ -848,6 +848,28 @@ describe('FleetEventsService daemon issues and background failures', () => {
     expect(service.backgroundFailures()).toHaveLength(1);
   });
 
+  describe('the scope the daemon puts on an error event', () => {
+    it('ignores the reply to a request of the user even when it looks like a daemon-side failure', () => {
+      socket.dispatchMessage({ type: 'error', sessionId: 's1', scope: 'reply', error: envelopeOf('daemon_shutting_down', 'unavailable', 'later') });
+      socket.dispatchMessage({ type: 'error', sessionId: 's1', scope: 'reply', error: envelopeOf('internal_error', 'internal', 'later', '3f9a1c2e') });
+
+      expect(service.backgroundFailures()).toEqual([]);
+    });
+
+    it('keeps a broadcast whatever its kind', () => {
+      socket.dispatchMessage({ type: 'error', sessionId: 's1', scope: 'broadcast', error: envelopeOf('invalid_body', 'invalid_request', 'never') });
+
+      expect(service.backgroundFailures()).toHaveLength(1);
+    });
+
+    it('falls back to the kind of the error when a daemon sends no scope', () => {
+      socket.dispatchMessage({ type: 'error', sessionId: 's1', error: envelopeOf('daemon_shutting_down', 'unavailable', 'later') });
+      socket.dispatchMessage({ type: 'error', sessionId: 's1', error: envelopeOf('session_closed', 'conflict', 'never') });
+
+      expect(service.backgroundFailures().map((failure) => failure.envelope.error)).toEqual(['daemon_shutting_down']);
+    });
+  });
+
   it('lists the newest background failure first', () => {
     socket.dispatchMessage({ type: 'error', sessionId: 'older', error: envelopeOf('delivery_failed', 'unavailable', 'later') });
     socket.dispatchMessage({ type: 'error', sessionId: 'newer', error: envelopeOf('delivery_failed', 'unavailable', 'later') });

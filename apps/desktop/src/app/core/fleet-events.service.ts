@@ -1,6 +1,6 @@
 import { Injectable, signal } from '@angular/core';
 import { TodoSummarySchema, closeReasonOfExitCode } from '@openfleet/shared';
-import type { Approval, DaemonIssue, ErrorEnvelope, ManagerView, ServerEvent, Session, SessionCloseReason, SessionTodos, TodoSummary, WorkingState } from '@openfleet/shared';
+import type { Approval, DaemonIssue, ErrorEnvelope, ErrorEventScope, ManagerView, ServerEvent, Session, SessionCloseReason, SessionTodos, TodoSummary, WorkingState } from '@openfleet/shared';
 import { Subject } from 'rxjs';
 import { environment } from '../../environments/environment';
 import { parseSessionTodos } from './session-todos-parser';
@@ -18,11 +18,12 @@ export interface BackgroundFailure {
 }
 
 // The daemon sends an `error` event both to answer a client message that failed and to announce a failure nobody asked for.
-// The reply to a rejected request (session_closed, invalid_body…) is the user's own doing; only a daemon-side failure,
-// or a message the CLI held for review, is news.
-function isBackgroundFailure({ kind, error }: ErrorEnvelope): boolean {
-  const isDaemonSideFailure = kind === 'internal' || kind === 'unavailable';
-  return isDaemonSideFailure || error === 'message_held_for_review';
+// A daemon that says which one (`scope`) is believed. One that does not is read by the kind: the reply to a rejected request
+// (session_closed, invalid_body…) is the user's own doing; only a daemon-side failure, or a message the CLI held for review, is news.
+function isBackgroundFailure({ error: envelope, scope }: { error: ErrorEnvelope; scope?: ErrorEventScope }): boolean {
+  if (scope) return scope === 'broadcast';
+  const isDaemonSideFailure = envelope.kind === 'internal' || envelope.kind === 'unavailable';
+  return isDaemonSideFailure || envelope.error === 'message_held_for_review';
 }
 
 function readableTodoSummaries(received: unknown[] | undefined): TodoSummary[] {
@@ -279,7 +280,7 @@ export class FleetEventsService {
       case 'approval.resolved': return this.approvals.update((all) => all.filter((a) => a.id !== event.approval.id));
       case 'manager.created': return this.upsertManager(event.manager);
       case 'manager.pulsed': return this.upsertManager(event.manager);
-      case 'error': return this.recordBackgroundFailure(event.error, event.sessionId);
+      case 'error': return this.recordBackgroundFailure(event);
       case 'daemon.issues': return this.daemonIssues.set(event.issues);
       default: return;
     }
@@ -336,9 +337,9 @@ export class FleetEventsService {
     });
   }
 
-  private recordBackgroundFailure(envelope: ErrorEnvelope, sessionId: string | undefined): void {
-    if (!isBackgroundFailure(envelope)) return;
-    const failure: BackgroundFailure = { key: `failure-${this.nextFailureNumber++}`, sessionId, envelope, at: new Date().toISOString() };
+  private recordBackgroundFailure(event: { error: ErrorEnvelope; sessionId?: string; scope?: ErrorEventScope }): void {
+    if (!isBackgroundFailure(event)) return;
+    const failure: BackgroundFailure = { key: `failure-${this.nextFailureNumber++}`, sessionId: event.sessionId, envelope: event.error, at: new Date().toISOString() };
     this.backgroundFailures.update((all) => [failure, ...all].slice(0, MAX_BACKGROUND_FAILURES));
   }
 

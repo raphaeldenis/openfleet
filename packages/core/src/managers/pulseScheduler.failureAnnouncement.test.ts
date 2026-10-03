@@ -58,6 +58,7 @@ describe('PulseScheduler — a failing pulse tick is announced to the clients', 
     expect(errorEvents).toHaveLength(1);
     const { sessionId, error } = errorEvents[0]!;
     expect(sessionId).toBe(managerId);
+    expect(errorEvents[0]).toMatchObject({ scope: 'broadcast' });
     expect(error).toMatchObject({ error: 'internal_error', kind: 'internal', retry: 'later', message: 'the daemon hit an unexpected error.' });
     expect(error.id).toMatch(/^[0-9a-f]{8}$/);
     expect(JSON.stringify(error)).not.toContain('secret');

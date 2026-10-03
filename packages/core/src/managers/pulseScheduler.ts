@@ -182,7 +182,7 @@ export class PulseScheduler {
     if (!describe) return false;
     try {
       const envelope = describe(error, { sessionId, where: `pulse: manager ${sessionId} tick failed; re-arming instead of losing its cadence` });
-      this.deps.bus.emit({ type: 'error', sessionId, error: envelope });
+      this.deps.bus.emit({ type: 'error', sessionId, scope: 'broadcast', error: envelope });
       return true;
     } catch (announceFailure) {
       log('warn', 'pulse: the error event could not be broadcast', { code: (announceFailure as { code?: string }).code });
