@@ -30,7 +30,7 @@ const ANNOUNCE_ROLE: Record<BannerVariant, 'alert' | 'status'> = {
       [style.--banner-color]="'var(' + colorVar() + ')'"
       class="banner"
     >
-      <span class="title">{{ title() }}</span>
+      <span class="title">@if (glyph(); as leadingGlyph) {<span class="glyph">{{ leadingGlyph }}</span>{{ ' ' }}}{{ title() }}</span>
       <span class="description">{{ description() }}</span>
       <ng-content />
     </div>
@@ -44,11 +44,14 @@ const ANNOUNCE_ROLE: Record<BannerVariant, 'alert' | 'status'> = {
     .banner { align-items: center; }
     .description { min-width: 0; flex: 1; overflow-wrap: anywhere; }
     .title { color: var(--banner-color); font-weight: 600; }
-    .banner[data-variant='error'] .title { color: var(--fg); }
+    .banner[data-variant='error'] .title, .banner[data-variant='mismatch'] .title { color: var(--fg); }
+    .glyph { color: var(--banner-color); }
   `,
 })
 export class BannerComponent {
   readonly variant = input.required<BannerVariant>();
+  /** A symbol drawn in the banner colour before the title, such as "!". */
+  readonly glyph = input<string>('');
   readonly title = input.required<string>();
   readonly description = input.required<string>();
   protected readonly colorVar = computed(() => COLOR_VAR[this.variant()]);

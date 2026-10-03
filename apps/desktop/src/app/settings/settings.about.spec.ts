@@ -1,4 +1,6 @@
 import { TestBed } from '@angular/core/testing';
+import { ActivatedRoute, convertToParamMap } from '@angular/router';
+import { of } from 'rxjs';
 import { render, screen } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -31,6 +33,30 @@ describe('Settings → About', () => {
     const tabNames = screen.getAllByRole('tab').map((tab) => tab.textContent?.trim());
 
     expect(tabNames).toEqual(['Models', 'Daemon', 'About']);
+  });
+
+  it('opens on About when the route asks for tab=about', async () => {
+    const route = { queryParamMap: of(convertToParamMap({ tab: 'about' })) };
+    await render(SettingsComponent, {
+      providers: [
+        { provide: APP_VERSION_READER, useValue: () => Promise.resolve('0.2.0') },
+        { provide: ActivatedRoute, useValue: route },
+      ],
+    });
+
+    expect(screen.getByRole('tab', { name: 'About' })).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('stays on Models when the route asks for a tab that does not exist', async () => {
+    const route = { queryParamMap: of(convertToParamMap({ tab: 'nope' })) };
+    await render(SettingsComponent, {
+      providers: [
+        { provide: APP_VERSION_READER, useValue: () => Promise.resolve('0.2.0') },
+        { provide: ActivatedRoute, useValue: route },
+      ],
+    });
+
+    expect(screen.getByRole('tab', { name: 'Models' })).toHaveAttribute('aria-selected', 'true');
   });
 
   it('shows the app version and the daemon version', async () => {

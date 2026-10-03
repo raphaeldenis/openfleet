@@ -17,13 +17,23 @@ import { environment } from '../../environments/environment';
 })
 export class DaemonStatusComponent {
   readonly connected = input.required<boolean>();
+  /** The daemon version when it differs from the app version; null otherwise. */
+  readonly mismatchedDaemonVersion = input<string | null>(null);
 
-  protected readonly state = computed(() => (this.connected() ? 'connected' : 'reconnecting'));
-  protected readonly label = computed(() => (this.connected() ? 'Connected' : 'Reconnecting'));
-  protected readonly dotColorVar = computed(() => (this.connected() ? 'var(--state-idle)' : 'var(--state-waiting-permission)'));
-  protected readonly tooltip = computed(() =>
-    this.connected()
+  private readonly isMismatched = computed(() => this.connected() && this.mismatchedDaemonVersion() !== null);
+  protected readonly state = computed(() => {
+    if (this.isMismatched()) return 'mismatch';
+    return this.connected() ? 'connected' : 'reconnecting';
+  });
+  protected readonly label = computed(() => {
+    if (this.isMismatched()) return `Daemon ${this.mismatchedDaemonVersion()}`;
+    return this.connected() ? 'Connected' : 'Reconnecting';
+  });
+  protected readonly dotColorVar = computed(() => (this.connected() && !this.isMismatched() ? 'var(--state-idle)' : 'var(--state-waiting-permission)'));
+  protected readonly tooltip = computed(() => {
+    if (this.isMismatched()) return 'Daemon and app versions differ — restart the daemon';
+    return this.connected()
       ? `Connected to the daemon on ${environment.daemonAddress}`
-      : `Reconnecting to the daemon on ${environment.daemonAddress}`,
-  );
+      : `Reconnecting to the daemon on ${environment.daemonAddress}`;
+  });
 }
