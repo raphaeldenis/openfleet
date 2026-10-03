@@ -248,7 +248,6 @@ const CREDENTIAL_CHARACTER = /[A-Za-z0-9_.%-]/;
 const LONGEST_CUT_CREDENTIAL_TAIL = 512;
 
 const JWT_SEGMENT_CHARACTER = /[A-Za-z0-9_-]/;
-const UNFINISHED_JWT_PAYLOAD = /^[A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]*)?$/;
 const JWT_PAYLOAD_MARK = '.eyJ';
 const JWT_HEADER_MARK = 'eyJ';
 
@@ -258,16 +257,12 @@ const startOfFinalCredentialRun = (head: string): number => {
   return runStart;
 };
 
-/** Where the final run holds `eyJ<header>.eyJ<payload prefix>` with the signature missing or cut, whatever the payload length; -1 when it does not. */
+/** Where the final run holds `eyJ<header>.eyJ<payload prefix>` with the signature missing or cut, whatever the payload length; -1 when it does not (a mark before the final run leaves the header scan empty). */
 const startOfUnfinishedJwt = (head: string, finalRunStart: number): number => {
   const payloadMarkAt = head.lastIndexOf(JWT_PAYLOAD_MARK);
-  const isInFinalRun = payloadMarkAt >= finalRunStart;
-  if (!isInFinalRun) return -1;
-  const endsLikeAPayload = UNFINISHED_JWT_PAYLOAD.test(head.slice(payloadMarkAt + JWT_PAYLOAD_MARK.length));
-  if (!endsLikeAPayload) return -1;
   let headerStart = payloadMarkAt;
   while (headerStart > finalRunStart && JWT_SEGMENT_CHARACTER.test(head.charAt(headerStart - 1))) headerStart -= 1;
-  const startsWithAJwtHeader = head.startsWith(JWT_HEADER_MARK, headerStart) && payloadMarkAt - headerStart >= JWT_HEADER_MARK.length;
+  const startsWithAJwtHeader = payloadMarkAt - headerStart >= JWT_HEADER_MARK.length && head.startsWith(JWT_HEADER_MARK, headerStart);
   return startsWithAJwtHeader ? headerStart : -1;
 };
 

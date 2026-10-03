@@ -482,6 +482,10 @@ describe('maskingCutCredential: an incomplete JWT tail, whatever the length of i
     expect(maskedSecrets(maskingCutCredential(head))).toBe(`Fix CI ${MASK}`);
   });
 
+  it('masks a header, a long payload prefix and a cut signature that holds an escape', () => {
+    expect(maskingCutCredential(`Fix CI ${header}.eyJ${'a'.repeat(600)}.sig%2Fbb`)).toBe(`Fix CI ${MASK}`);
+  });
+
   it('masks a payload prefix too short for the ordinary JWT rule', () => {
     expect(maskingCutCredential(`Fix CI ${header}.eyJab`)).toBe(`Fix CI ${MASK}`);
   });
