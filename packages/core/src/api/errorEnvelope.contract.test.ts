@@ -111,12 +111,12 @@ describe('T2: a handler that throws on any route', () => {
 
 describe('the REST catch-all keeps its existing wire values', () => {
   it('answers a typed domain error with its code, its kind and no id or header', async () => {
-    makeEveryHandlerThrow(new InvalidJsonBodyError('Unexpected token }'));
+    makeEveryHandlerThrow(new InvalidJsonBodyError());
     const response = await callRoute({ method: 'POST', path: '/api/sessions' });
     expect({ status: response.status, header: response.headers.get('x-openfleet-error-id'), body: await response.json() }).toEqual({
       status: 400,
       header: null,
-      body: { error: 'invalid_json', kind: 'invalid_request', retry: 'never', message: expect.any(String), detail: 'Unexpected token }' },
+      body: { error: 'invalid_json', kind: 'invalid_request', retry: 'never', message: expect.any(String), detail: 'the request body could not be parsed as JSON' },
     });
     expect(errorLog).not.toHaveBeenCalled();
   });

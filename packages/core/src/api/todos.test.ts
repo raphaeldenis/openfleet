@@ -257,7 +257,7 @@ describe('the transcript catches up what the hooks missed, and never folds a cal
     expect(rowsOf(todos)).toEqual(['1:completed:Review pull request', '2:pending:Update documentation']);
   });
 
-  it('folds once a call whose hook arrives after the repair already read it', async () => {
+  it('folds once a call whose hook arrives after the repair already read it, and sends the one event that confirms its row', async () => {
     const id = await createSession();
     writeTranscript(RUN_B_CLI_ID, linesOf(10, 29));
     await resume(id, RUN_B_CLI_ID);
@@ -270,7 +270,8 @@ describe('the transcript catches up what the hooks missed, and never folds a cal
     await untilQuiet();
 
     expect(rowsOf(await getTodos(id))).toEqual(['1:completed:Review pull request', '2:pending:Update documentation']);
-    expect(updates).toHaveLength(eventsAfterTheRepair);
+    expect(updates).toHaveLength(eventsAfterTheRepair + 1);
+    expect(updates.at(-1)!.items.find((item) => item.id === lateHook.input.taskId)?.unverified).toBeUndefined();
   });
 
   it('keeps the same list after /clear: the new transcript file has no TaskCreate of the earlier tasks, and the list is never shown empty', async () => {

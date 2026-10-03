@@ -89,7 +89,7 @@ const domainErrorCodes: [string, () => unknown, ErrorCode][] = [
   ['WorktreeError git_failed', () => new WorktreeError('git_failed', 'fatal: /w/a is not a repository'), 'internal_error'],
   ['WorktreeError exists',() => new WorktreeError('exists', 'worktree already exists: /w/a'), 'worktree_exists'],
   ['PayloadTooLargeError', () => new PayloadTooLargeError('body exceeds 1 bytes'), 'payload_too_large'],
-  ['InvalidJsonBodyError', () => new InvalidJsonBodyError('Unexpected token'), 'invalid_json'],
+  ['InvalidJsonBodyError', () => new InvalidJsonBodyError(), 'invalid_json'],
   ['a SQLite foreign key failure', foreignKeyError, 'project_not_found'],
   ['the stuck-connection error', () => new StuckConnectionError(new Error('disk I/O error')), 'db_stuck'],
   ['an OpenFleetError', () => new OpenFleetError('outside_lineage', 'not your child.'), 'outside_lineage'],
@@ -145,8 +145,8 @@ describe('describeError: T3 domain classes', () => {
     expect(envelope).toMatchObject({ error: 'invalid_body', kind: 'invalid_request', retry: 'never', detail: expect.stringContaining('name') });
   });
 
-  it('keeps the json parser message as detail of an invalid_json, as the REST body does today', () => {
-    expect(describeError(new InvalidJsonBodyError('Unexpected token }')).detail).toBe('Unexpected token }');
+  it('gives the fixed parse diagnostic as detail of an invalid_json', () => {
+    expect(describeError(new InvalidJsonBodyError()).detail).toBe('the request body could not be parsed as JSON');
   });
 
   it('keeps the constraint message as detail of a constraint_violation, as the REST body does today', () => {
