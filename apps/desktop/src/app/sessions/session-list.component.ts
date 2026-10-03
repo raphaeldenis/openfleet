@@ -69,7 +69,7 @@ import { OverdueChipComponent } from '../working-state/overdue-chip.component';
     .row.closed { opacity: .5 }
     .row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
     .row .name { flex: 1 1 6rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
-    .row .meta { display: flex; flex-wrap: wrap; align-items: center; gap: .125rem .375rem; flex: 0 1 auto; min-width: 0; font-size: .6875rem; color: var(--faint); font-family: var(--mono) }
+    .row .meta { display: flex; flex-wrap: wrap; align-items: center; gap: .125rem .375rem; flex: 0 1 auto; min-width: 0; font-size: .6875rem; color: var(--mut); font-family: var(--mono) }
     .new-links { display: flex; flex: none; gap: .375rem; padding: .6rem }
     .new-links a { flex: 1; justify-content: center; text-decoration: none }
   `,

@@ -40,7 +40,7 @@ const formatValue = (value: unknown) => (value === null || value === undefined ?
     .body { flex: 1; min-width: 0; display: flex; flex-direction: column }
     .who { font-weight: 500; overflow-wrap: anywhere }
     .what { color: var(--mut); overflow-wrap: anywhere }
-    .when { font-family: var(--mono); font-size: .625rem; color: var(--faint) }
+    .when { font-family: var(--mono); font-size: .625rem; color: var(--mut) }
     .empty { padding: .375rem .875rem; font-size: .75rem; color: var(--mut) }
   `,
 })
