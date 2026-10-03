@@ -281,17 +281,15 @@ export class OnboardingComponent {
   constructor() {
     this.firstSessionSeed.name.set(FIRST_SESSION_NAME);
     this.firstSessionSeed.prompt.set(FIRST_SESSION_SEEDED_PROMPT);
-    let advanceTimer: ReturnType<typeof setTimeout> | undefined;
     inject(DestroyRef).onDestroy(() => {
       this.isDestroyed = true;
-      clearTimeout(advanceTimer);
     });
     effect(() => this.failureHeading()?.nativeElement.focus());
-    effect(() => {
+    effect((onCleanup) => {
       const isWaitingOnDaemonStep = this.currentStepId() === 'daemon';
-      const isFirstTimeDaemonIsUp = this.isDaemonUp() && advanceTimer === undefined;
-      if (!isWaitingOnDaemonStep || !isFirstTimeDaemonIsUp) return;
-      advanceTimer = setTimeout(() => void this.recordDaemonVersionThenLeave(), DAEMON_READY_BEAT_MS);
+      if (!isWaitingOnDaemonStep || !this.isDaemonUp()) return;
+      const advanceTimer = setTimeout(() => void this.leaveOnceDaemonAnswersHealth(), DAEMON_READY_BEAT_MS);
+      onCleanup(() => clearTimeout(advanceTimer));
     });
     effect((onCleanup) => {
       const isWaitingForDaemon = this.currentStepId() === 'daemon';
@@ -326,11 +324,11 @@ export class OnboardingComponent {
     if (!this.isDaemonUp()) this.checkResult.set(STILL_NOT_RUNNING_COPY);
   }
 
-  private async recordDaemonVersionThenLeave(): Promise<void> {
-    const reportedVersion = this.observedStatus()?.daemonVersion;
-    const health = reportedVersion ? { ok: true as const, version: reportedVersion } : await this.api.health().catch(() => null);
+  private async leaveOnceDaemonAnswersHealth(): Promise<void> {
+    const freshHealth = await this.api.health().catch(() => null);
     if (this.isDestroyed) return;
-    if (health) this.versions.recordDaemonHealth(health);
+    if (!freshHealth) return void this.daemon.refresh();
+    this.versions.recordDaemonHealth(freshHealth);
     await this.leaveDaemonStep(() => this.isDestroyed);
   }
 
