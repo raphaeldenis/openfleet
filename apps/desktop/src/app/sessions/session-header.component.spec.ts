@@ -4,7 +4,7 @@ import { inputBinding, signal } from '@angular/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Session } from '@openfleet/shared';
 import { SessionHeaderComponent } from './session-header.component';
-import { FleetApiService } from '../core/fleet-api.service';
+import { ApiError, FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
 
 function baseSession(patch: Partial<Session> = {}): Session {
@@ -223,6 +223,17 @@ describe('SessionHeaderComponent', () => {
     fireEvent.change(nameInput, { target: { value: 'Gimli · T7' } });
 
     await waitFor(() => expect(screen.getByTestId('session-rename-error')).toHaveTextContent(/could not rename/i));
+  });
+
+  it('tells the user a rename of a vanished session cannot be retried', async () => {
+    const session = baseSession();
+    const sessionGone = new ApiError(404, 'PATCH /sessions/s1', 'session_not_found');
+    const api = fakeApi({ renameSession: vi.fn().mockRejectedValue(sessionGone) });
+    await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session, api) });
+
+    fireEvent.change(screen.getByTestId('session-name-input'), { target: { value: 'Gimli · T7' } });
+
+    await waitFor(() => expect(screen.getByTestId('session-rename-error')).toHaveTextContent('That session no longer exists.'));
   });
 
   it('drops the failure of a name edit once the next emoji edit starts', async () => {

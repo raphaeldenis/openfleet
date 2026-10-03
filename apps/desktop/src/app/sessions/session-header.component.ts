@@ -1,6 +1,6 @@
 import { ChangeDetectionStrategy, Component, computed, inject, input } from '@angular/core';
 import type { Session } from '@openfleet/shared';
-import { RENAME_ERROR } from '../core/error-copy';
+import { copyFor } from '../core/error-copy';
 import { FleetApiService } from '../core/fleet-api.service';
 import { SessionRequestsService } from '../core/session-requests';
 import { StateChipComponent } from '../design/state-chip.component';
@@ -112,6 +112,7 @@ export class SessionHeaderComponent {
     const sessionId = this.session().id;
     const otherKind = kind === 'renameName' ? 'renameEmoji' : 'renameName';
     this.requests.clearError(sessionId, otherKind);
-    await this.requests.run({ sessionId, kind, message: RENAME_ERROR, action: () => this.api.renameSession(sessionId, patch) });
+    const renameErrorFor = (error: unknown) => copyFor(error, { action: 'rename' }).text;
+    await this.requests.run({ sessionId, kind, message: renameErrorFor, action: () => this.api.renameSession(sessionId, patch) });
   }
 }

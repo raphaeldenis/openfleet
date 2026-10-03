@@ -47,6 +47,7 @@ export class PulseScheduler {
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly queuedWakes = new Map<string, QueuedWake>();
   private readonly managerIdsInFailureStreak = new Set<string>();
+  private readonly forcedTickFailuresLeftByManager = new Map<string, number>();
   private isStopped = false;
 
   constructor(deps: PulseSchedulerDeps) {
@@ -76,6 +77,11 @@ export class PulseScheduler {
     const record = this.deps.managers.getWithinBounds(sessionId);
     if (!record) return; // not a manager: nothing to re-arm
     this.arm(record);
+  }
+
+  /** Test-only: the next `count` ticks of this manager throw before pulsing. */
+  failNextTicks(sessionId: string, count: number): void {
+    this.forcedTickFailuresLeftByManager.set(sessionId, count);
   }
 
   pulseNow(sessionId: string): { coalesced: boolean } | undefined {
@@ -133,6 +139,7 @@ export class PulseScheduler {
     this.isStopped = true;
     this.queuedWakes.clear();
     this.managerIdsInFailureStreak.clear();
+    this.forcedTickFailuresLeftByManager.clear();
     for (const timer of this.timers.values()) clearTimeout(timer);
     this.timers.clear();
   }
@@ -158,6 +165,7 @@ export class PulseScheduler {
     // would escape as an uncaught exception and, worse, never re-arm — this manager's cadence would be
     // dead until the next daemon restart. Logged and re-armed instead, so one bad tick doesn't end it.
     try {
+      this.throwWhenTickFailureIsForced(sessionId);
       this.fire(record);
     } catch (error) {
       this.reportTickFailure(sessionId, error);
@@ -166,6 +174,13 @@ export class PulseScheduler {
       // hot-loop the retry every tick instead of waiting out the cadence.
       this.armAfter(sessionId, record.pulseSeconds * 1000);
     }
+  }
+
+  private throwWhenTickFailureIsForced(sessionId: string): void {
+    const failuresLeft = this.forcedTickFailuresLeftByManager.get(sessionId) ?? 0;
+    if (failuresLeft === 0) return;
+    this.forcedTickFailuresLeftByManager.set(sessionId, failuresLeft - 1);
+    throw new Error('forced pulse tick failure');
   }
 
   // The first failure of a streak is broadcast (the mapper logs it under the ref the clients receive); the next ones of the

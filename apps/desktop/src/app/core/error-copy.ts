@@ -3,7 +3,7 @@ import { readableDaemonText } from './daemon-text';
 import { ApiError } from './fleet-api.service';
 
 /** What the user was doing when the error came back: it decides the advice ("shorten the mission" vs "shorten the name"). */
-export type ErrorAction = 'generic' | 'send' | 'create_session' | 'create_manager' | 'resume' | 'load_todos';
+export type ErrorAction = 'generic' | 'send' | 'create_session' | 'create_manager' | 'resume' | 'load_todos' | 'rename' | 'close';
 
 export interface ErrorContext {
   action: ErrorAction;
@@ -17,9 +17,7 @@ export interface ErrorCopy {
 }
 
 // Fixed copy of the actions that fail with no error worth telling apart.
-export const CLOSE_ERROR = 'Could not close the session — try again.';
 export const INTERRUPT_ERROR = 'Could not interrupt the session — try again.';
-export const RENAME_ERROR = 'Could not rename — try again.';
 export const SEND_ERROR = 'Could not send — your message is kept.';
 export const GENERIC_DECISION_ERROR = 'Could not send decision — try again.';
 export const GENERIC_REOPEN_ERROR = 'Could not resume the session — try again.';
@@ -158,10 +156,14 @@ const COPY_BY_ACTION: Record<ErrorAction, ActionCopy> = {
     launch_failed: { what: 'The harness failed to relaunch', isRetryableAtOnce: true },
   },
   load_todos: {},
+  rename: {},
+  close: {},
 };
 
 const FALLBACK_BY_ACTION: Partial<Record<ErrorAction, string>> = {
   send: SEND_ERROR,
+  rename: 'Could not rename — try again.',
+  close: 'Could not close the session — try again.',
   create_session: 'Could not create the session — try again.',
   create_manager: 'Could not create the manager — try again.',
   resume: GENERIC_REOPEN_ERROR,
@@ -172,6 +174,8 @@ const NOT_CONNECTED_BY_ACTION: Partial<Record<ErrorAction, string>> = {
   create_session: 'Could not create the session — check your connection, then try again.',
   create_manager: 'Could not create the manager — check your connection, then try again.',
   resume: GENERIC_REOPEN_ERROR,
+  rename: 'Could not rename — check your connection, then try again.',
+  close: 'Could not close the session — check your connection, then try again.',
 };
 
 const isKnownCode = (code: string | undefined): code is ErrorCode => code !== undefined && Object.hasOwn(ERROR_CODES, code);
