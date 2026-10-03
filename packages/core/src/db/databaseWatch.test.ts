@@ -99,6 +99,29 @@ describe('the database watch of inTransaction', () => {
     expect(watch.unavailable).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining('stuck') }));
   });
 
+  it('reports the connection stuck at once when a ROLLBACK fails, before any later transaction, and still throws the original error', () => {
+    const { db, control } = failableDatabase();
+    const originalError = Object.assign(new Error('constraint failed'), { errcode: 19 });
+    const rollbackFailure = Object.assign(new Error('disk I/O error'), { errcode: 10 });
+
+    const failingTransaction = () => inTransaction(db, 'a', () => { control.failWith = rollbackFailure; throw originalError; });
+
+    expect(failingTransaction).toThrow(originalError);
+    expect(watch.unavailable).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ message: expect.stringContaining('stuck') }));
+  });
+
+  it('does not report a failed nested rollback: the outer transaction owns it', () => {
+    const { db, control } = failableDatabase();
+    const rollbackFailure = Object.assign(new Error('disk I/O error'), { errcode: 10 });
+
+    inTransaction(db, 'outer', () => {
+      expect(() => inTransaction(db, 'inner', () => { control.failWith = rollbackFailure; throw new Error('inner failed'); })).toThrow('inner failed');
+      control.failWith = undefined;
+    });
+
+    expect(watch.unavailable).not.toHaveBeenCalled();
+  });
+
   it('keeps working without any watch', () => {
     unwatch();
     const { db } = failableDatabase();
