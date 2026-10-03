@@ -605,8 +605,7 @@ fn is_authorization_scheme_before_mask(value: &str, text: &str, value_end: usize
 fn looks_like_a_credential(value: &str, text: &str, value_end: usize) -> bool {
   let is_long_enough = value.chars().count() >= UNQUOTED_VALUE_MINIMUM_LENGTH;
   let is_usage_counter_or_literal = is_a_plain_number(value) || LITERALS_THAT_HOLD_NO_SECRET.contains(&value.to_ascii_lowercase().as_str());
-  let is_masked_already = value == MASK;
-  is_long_enough && !is_masked_already && !is_usage_counter_or_literal && !is_authorization_scheme_before_mask(value, text, value_end)
+  is_long_enough && !is_usage_counter_or_literal && !is_authorization_scheme_before_mask(value, text, value_end)
 }
 
 /// Returns where the unquoted value that starts at `start` ends; a mask inside it (`[redacted]`, whose brackets would end it) belongs to the value.
@@ -659,7 +658,7 @@ fn quoted_value_from(text: &str, content_start: usize, quote: u8, is_opening_quo
     content_end -= 1;
   }
   let content = &text[content_start..content_end];
-  ColonValue { start: content_start, end: content_end, is_credential: !content.is_empty() && content != MASK }
+  ColonValue { start: content_start, end: content_end, is_credential: !content.is_empty() }
 }
 
 /// The value after `key": ` or `key: `, or None when no colon follows the key; a cookie header's unquoted value belongs to the cookie rule.

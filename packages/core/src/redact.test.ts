@@ -497,7 +497,7 @@ describe('maskingCutCredential: an incomplete JWT tail, whatever the length of i
   });
 
   it('leaves a dotted run whose first segment is not a JWT header alone', () => {
-    const plain = `Fix CI config.${'a'.repeat(900)}`;
+    const plain = `Fix CI config.eyJ${'a'.repeat(900)}`;
 
     expect(maskingCutCredential(plain)).toBe(plain);
   });

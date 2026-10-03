@@ -162,7 +162,7 @@ const quotedValueFrom = (text: string, contentStart: number, quote: string, isOp
   let contentEnd = Math.min(end, limit);
   while (isOpeningQuoteEscaped && contentEnd > contentStart && text.charAt(contentEnd - 1) === '\\') contentEnd -= 1;
   const content = text.slice(contentStart, contentEnd);
-  return { start: contentStart, end: contentEnd, isCredential: content.length > 0 && content !== MASK };
+  return { start: contentStart, end: contentEnd, isCredential: content.length > 0 };
 };
 
 const isAuthorizationSchemeBeforeMask = (value: string, text: string, valueEnd: number): boolean =>
@@ -170,9 +170,8 @@ const isAuthorizationSchemeBeforeMask = (value: string, text: string, valueEnd: 
 
 const looksLikeCredential = (value: string, text: string, valueEnd: number): boolean => {
   const isLongEnough = Array.from(value).length >= UNQUOTED_VALUE_MINIMUM_LENGTH;
-  const isMaskedAlready = value === MASK;
   const isUsageCounterOrLiteral = PLAIN_NUMBER.test(value) || LITERALS_THAT_HOLD_NO_SECRET.has(value.toLowerCase());
-  return isLongEnough && !isMaskedAlready && !isUsageCounterOrLiteral && !isAuthorizationSchemeBeforeMask(value, text, valueEnd);
+  return isLongEnough && !isUsageCounterOrLiteral && !isAuthorizationSchemeBeforeMask(value, text, valueEnd);
 };
 
 const unquotedValueFrom = (text: string, start: number): ColonValue => {
