@@ -68,7 +68,14 @@ export const MAX_BODY_BYTES = 1024 * 1024;
 
 export class PayloadTooLargeError extends Error {}
 
-export class InvalidJsonBodyError extends Error {}
+/** Names no part of the body: the parser's own message quotes an excerpt of it. */
+const INVALID_JSON_DIAGNOSTIC = 'the request body could not be parsed as JSON';
+
+export class InvalidJsonBodyError extends Error {
+  constructor() {
+    super(INVALID_JSON_DIAGNOSTIC);
+  }
+}
 
 /** A body that `skipOversized` reads to its end and throws away is still refused past this size: the connection is cut instead of drained. */
 const MAX_DRAINED_BODY_BYTES = 64 * 1024 * 1024;
@@ -94,7 +101,7 @@ export async function readJson(req: IncomingMessage, maxBytes = MAX_BODY_BYTES, 
   if (!text) return undefined;
   try {
     return JSON.parse(text);
-  } catch (error) {
-    throw new InvalidJsonBodyError((error as Error).message);
+  } catch {
+    throw new InvalidJsonBodyError();
   }
 }
