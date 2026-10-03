@@ -30,8 +30,8 @@ describe('ServerEvent', () => {
     expectTypeOf<Extract<ServerEvent, { type: 'manager.pulsed' }>['manager']>().toEqualTypeOf<ManagerView>();
   });
 
-  it('announces an error with an optional sessionId and the ErrorEnvelope', () => {
-    expectTypeOf<Extract<ServerEvent, { type: 'error' }>>().toEqualTypeOf<{ type: 'error'; sessionId?: string; error: ErrorEnvelope }>();
+  it('announces an error with an optional sessionId, an optional reply or broadcast scope and the ErrorEnvelope', () => {
+    expectTypeOf<Extract<ServerEvent, { type: 'error' }>>().toEqualTypeOf<{ type: 'error'; sessionId?: string; scope?: 'reply' | 'broadcast'; error: ErrorEnvelope }>();
   });
 
   it('closes a session with an optional exitCode and an optional reason', () => {
