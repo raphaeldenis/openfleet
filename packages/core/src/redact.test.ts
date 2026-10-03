@@ -775,6 +775,52 @@ describe('maskedSecrets: a collection under a key that merely holds a secret wor
     expect(maskedSecrets(text)).toBe(expected);
   });
 
+  it.each([
+    ['an array of strings', 'tokens: ["a","b"]', `tokens: ${MASK}`],
+    ['an object holding a string', '{"tokens":{"a":"x"}}', `{"tokens":${MASK}}`],
+    ['an array mixing a number and a string', '{"tokens":[1,"a"]}', `{"tokens":${MASK}}`],
+    ['a string nested deep', '{"tokens":[[1],{"deep":["s"]}],"next":1}', `{"tokens":${MASK},"next":1}`],
+    ['secrets', '{"secrets":["a"]}', `{"secrets":${MASK}}`],
+    ['passwords', '{"passwords":{"admin":"x"}}', `{"passwords":${MASK}}`],
+    ['credentials', '{"credentials":{"user":"u"}}', `{"credentials":${MASK}}`],
+    ['cookies', '{"cookies":["a=b"]}', `{"cookies":${MASK}}`],
+    ['tickets', '{"tickets":["T-1"]}', `{"tickets":${MASK}}`],
+    ['authTokens', '{"authTokens":["a"]}', `{"authTokens":${MASK}}`],
+    ['a padded string', '{"tokens":[ "a" ]}', `{"tokens":${MASK}}`],
+    ['a string of an escaped document', '{"body":"{\\"tokens\\":[\\"a\\"]}"}', `{"body":"{\\"tokens\\":${MASK}}"}`],
+    ['a string that never closes', '{"tokens":[1,2,"a', `{"tokens":${MASK}`],
+  ])('masks a plural credential noun holding %s', (_name, text, expected) => {
+    expect(maskedSecrets(text)).toBe(expected);
+  });
+
+  it.each([
+    ['tokens: [1,2]'],
+    ['tokens: [true,null]'],
+    ['{"tokens":{"in":12,"out":30}}'],
+    ['{"tokens":[1.5,-2,false]}'],
+    ['{"tokens":{ "in" : 12 }}'],
+    ['{"maxTokens":{"count":1}}'],
+    ['{"secrets":[]}'],
+    ['{"credentials":{}}'],
+    ['{"tickets":[[1],{"a":[2,null]}]}'],
+  ])('leaves %j readable: a plural credential noun holding no string', (text) => {
+    expect(maskedSecrets(text)).toBe(text);
+  });
+
+  it('masks a plural collection nested deeper than the limit, which it cannot read to the end', () => {
+    expect(maskedSecrets(`{"tokens":${'['.repeat(40)}1${']'.repeat(40)},"after":1}`)).toBe(`{"tokens":${MASK}`);
+  });
+
+  it('masks the whole plural collection when a credential sits inside it', () => {
+    expect(maskedSecrets('{"tokens":{"password":"SYNTHETIC_SECRET_123","in":1}}')).toBe(`{"tokens":${MASK}}`);
+    expect(maskedSecrets('{"tokens":{"in":{"password":"SYNTHETIC_SECRET_123"}}}')).toBe(`{"tokens":${MASK}}`);
+    expect(maskedSecrets('{"tokens":{"in":1,"password":12345678}}')).toBe('{"tokens":{"in":1,"password":12345678}}');
+  });
+
+  it.each(['tokens:[1,"', 'tokens:[1,2,', 'tokens:{"a":', 'tokens:{"a":1,', 'tokens:[ "', 'tokens:["a" ', 'tokens:[[[[', 'secrets:{"'])('masks %j at 64 KiB and 256 KiB with 4x the input costing less than 8x', (unit) =>
+    expectUnitGrowsLinearly(unit, maskedSecrets),
+  );
+
   it('keeps masking a secret nested inside a collection under a plain key', () => {
     expect(maskedSecrets('{"tokenizer":{"token":"SYNTHETIC_SECRET_123"}}')).toBe(`{"tokenizer":{"token":"${MASK}"}}`);
   });

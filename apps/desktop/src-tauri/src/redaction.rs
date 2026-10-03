@@ -26,8 +26,10 @@ const LITERALS_THAT_HOLD_NO_SECRET: [&str; 4] = ["null", "true", "false", "undef
 const AUTHORIZATION_SCHEMES: [&str; 2] = ["bearer", "basic"];
 const SECRET_KEY_WORDS: [&str; 9] = ["token", "secret", "authorization", "password", "cookie", "ticket", "apikey", "api_key", "api-key"];
 /// The last noun of a key that names a credential (`accessToken`, `client_secret`), for the rule that masks a whole collection.
-const CREDENTIAL_WORDS: [&str; 13] = ["token", "secret", "secrets", "password", "passwords", "passwd", "authorization", "credential", "credentials", "cookie", "cookies", "ticket", "apikey"];
-const CREDENTIAL_WORD_PAIRS: [&str; 3] = ["api key", "private key", "secret key"];
+const SINGULAR_CREDENTIAL_NOUNS: [&str; 9] = ["token", "secret", "password", "passwd", "authorization", "credential", "cookie", "ticket", "apikey"];
+/// A plural noun also counts things (`tokens: [1,2]`): its collection is a credential only when it holds a string.
+const PLURAL_CREDENTIAL_NOUNS: [&str; 6] = ["tokens", "secrets", "passwords", "credentials", "cookies", "tickets"];
+const CREDENTIAL_NOUN_PAIRS: [&str; 3] = ["api key", "private key", "secret key"];
 /// `token_value`, `secretData`: the noun after the credential word only says how the credential is held.
 const CONTAINER_WORDS: [&str; 7] = ["value", "values", "string", "data", "list", "map", "json"];
 const ESCAPED_SEPARATORS: &[u8] = b" :=\t";
@@ -360,16 +362,30 @@ fn key_words(key: &str) -> Vec<String> {
   words
 }
 
-/// A key whose last noun is a credential: `token`, `accessToken`, `x-api-key`, `private_key`, `token_value`. `tokenizer`, `maxTokens`, `password_policy`, `ticketCount` and `secretary`
-/// only hold a secret word inside another word or before another noun: they describe a credential, they are not one.
-fn names_a_credential(key: &str) -> bool {
+#[derive(PartialEq)]
+enum CredentialNoun {
+  Singular,
+  Plural,
+  None,
+}
+
+/// The last noun of a key: `token`, `accessToken`, `x-api-key`, `private_key`, `token_value` end on a credential; `tokens` and `authTokens` end on a plural one.
+/// `tokenizer`, `password_policy`, `ticketCount` and `secretary` only hold a secret word inside another word or before another noun: they describe a credential, they are not one.
+fn credential_noun_of(key: &str) -> CredentialNoun {
   let mut words = key_words(key);
   while words.last().is_some_and(|word| CONTAINER_WORDS.contains(&word.as_str())) {
     words.pop();
   }
   let last_word = words.last().map(String::as_str).unwrap_or_default();
   let last_pair = words[words.len().saturating_sub(2)..].join(" ");
-  CREDENTIAL_WORDS.contains(&last_word) || CREDENTIAL_WORD_PAIRS.contains(&last_pair.as_str())
+  if SINGULAR_CREDENTIAL_NOUNS.contains(&last_word) || CREDENTIAL_NOUN_PAIRS.contains(&last_pair.as_str()) {
+    return CredentialNoun::Singular;
+  }
+  if PLURAL_CREDENTIAL_NOUNS.contains(&last_word) {
+    CredentialNoun::Plural
+  } else {
+    CredentialNoun::None
+  }
 }
 
 fn with_one_layer_decoded(bytes: &[u8]) -> Vec<u8> {
@@ -773,14 +789,22 @@ fn quote_delimiter_at(bytes: &[u8], at: usize, are_quotes_escaped: bool) -> Opti
   (byte == b'\\' && is_a_quote_byte(next_byte)).then_some(next_byte)
 }
 
+struct Collection {
+  end: usize,
+  holds_a_string: bool,
+}
+
 /// Returns where the `[…]` or `{…}` that opens at `start` closes, strings and nesting included; one that never balances, nests deeper than the limit
-/// or runs past the length limit is cut at the limit.
-fn end_of_collection(text: &str, start: usize, are_quotes_escaped: bool) -> usize {
+/// or runs past the length limit is cut at the limit. It also says whether a string value sits inside (an object key does not count;
+/// a string cut by the limit or a collection cut by the depth limit does).
+fn collection_from(text: &str, start: usize, are_quotes_escaped: bool) -> Collection {
   let bytes = text.as_bytes();
   let limit = bounded_limit(text, start);
   let delimiter_width = if are_quotes_escaped { 2 } else { 1 };
   let mut depth = 0;
   let mut open_quote: Option<u8> = None;
+  let mut holds_a_string = false;
+  let mut is_last_string_a_key_or_a_value = false;
   let mut at = start;
   while at < limit {
     let byte = bytes[at];
@@ -790,9 +814,15 @@ fn end_of_collection(text: &str, start: usize, are_quotes_escaped: bool) -> usiz
       let escapes_the_next_byte = byte == b'\\' && !are_quotes_escaped;
       if closes_the_string {
         open_quote = None;
+        is_last_string_a_key_or_a_value = true;
       }
       at += if closes_the_string { delimiter_width } else if escapes_the_next_byte { 2 } else { 1 };
       continue;
+    }
+    let is_string_just_closed = is_last_string_a_key_or_a_value && text.is_char_boundary(at) && space_len_at(text, at) == 0;
+    if is_string_just_closed {
+      holds_a_string |= byte != b':';
+      is_last_string_a_key_or_a_value = false;
     }
     if delimiter.is_some() {
       open_quote = delimiter;
@@ -803,17 +833,18 @@ fn end_of_collection(text: &str, start: usize, are_quotes_escaped: bool) -> usiz
       depth += 1;
     }
     if depth > COLLECTION_DEPTH_LIMIT {
-      return limit;
+      return Collection { end: limit, holds_a_string: true };
     }
     if matches!(byte, b']' | b'}') {
       depth -= 1;
     }
     if depth == 0 {
-      return at + 1;
+      return Collection { end: at + 1, holds_a_string };
     }
     at += 1;
   }
-  limit
+  let is_string_cut_by_the_limit = open_quote.is_some() || is_last_string_a_key_or_a_value;
+  Collection { end: limit, holds_a_string: holds_a_string || is_string_cut_by_the_limit }
 }
 
 /// Returns where the line after the line break at `line_break_at` starts when it continues the header (it starts with a space or a tab).
@@ -944,9 +975,14 @@ fn colon_value_after(text: &str, key_end: usize, key: &str) -> Option<ColonValue
   }
   let is_the_mask = text[quote_at..].starts_with(MASK);
   let opens_collection = !is_opening_quote_escaped && !is_the_mask && matches!(bytes.get(quote_at), Some(b'[' | b'{'));
-  if opens_collection && names_a_credential(key) {
+  let credential_noun = credential_noun_of(key);
+  if opens_collection && credential_noun != CredentialNoun::None {
     let is_inside_an_escaped_document = text[key_end..after_closing_quote].contains('\\');
-    return Some(ColonValue { start: value_start, end: end_of_collection(text, value_start, is_inside_an_escaped_document), is_credential: true });
+    let collection = collection_from(text, value_start, is_inside_an_escaped_document);
+    let is_counter_collection = credential_noun == CredentialNoun::Plural && !collection.holds_a_string;
+    if !is_counter_collection {
+      return Some(ColonValue { start: value_start, end: collection.end, is_credential: true });
+    }
   }
   let is_key_known_to_quoted_and_collection_rules_only = !is_secret_key(key);
   if is_opening_quote_escaped || is_a_cookie_header_name(key) || is_key_known_to_quoted_and_collection_rules_only {
@@ -964,7 +1000,7 @@ fn colon_value_at(text: &str, index: usize) -> Replacement {
   }
   let key_end = index + run_length(bytes, index, is_key_byte);
   let key = &text[index..key_end];
-  if !is_secret_key(key) && !names_a_credential(key) {
+  if !is_secret_key(key) && credential_noun_of(key) == CredentialNoun::None {
     return None;
   }
   let value = colon_value_after(text, key_end, key)?;
@@ -1585,6 +1621,60 @@ mod tests {
   }
 
   #[test]
+  fn masks_a_collection_under_a_plural_credential_noun_when_it_holds_a_string() {
+    let cases = [
+      (r#"tokens: ["a","b"]"#, "tokens: [redacted]"),
+      (r#"{"tokens":{"a":"x"}}"#, r#"{"tokens":[redacted]}"#),
+      (r#"{"tokens":[1,"a"]}"#, r#"{"tokens":[redacted]}"#),
+      (r#"{"tokens":[[1],{"deep":["s"]}],"next":1}"#, r#"{"tokens":[redacted],"next":1}"#),
+      (r#"{"secrets":["a"]}"#, r#"{"secrets":[redacted]}"#),
+      (r#"{"passwords":{"admin":"x"}}"#, r#"{"passwords":[redacted]}"#),
+      (r#"{"credentials":{"user":"u"}}"#, r#"{"credentials":[redacted]}"#),
+      (r#"{"cookies":["a=b"]}"#, r#"{"cookies":[redacted]}"#),
+      (r#"{"tickets":["T-1"]}"#, r#"{"tickets":[redacted]}"#),
+      (r#"{"authTokens":["a"]}"#, r#"{"authTokens":[redacted]}"#),
+      (r#"{"tokens":[ "a" ]}"#, r#"{"tokens":[redacted]}"#),
+      (r#"{"body":"{\"tokens\":[\"a\"]}"}"#, r#"{"body":"{\"tokens\":[redacted]}"}"#),
+      (r#"{"tokens":[1,2,"a"#, r#"{"tokens":[redacted]"#),
+    ];
+
+    for (text, expected) in cases {
+      assert_eq!(masked(text), expected, "{text}");
+    }
+  }
+
+  #[test]
+  fn leaves_a_collection_under_a_plural_credential_noun_readable_when_it_holds_no_string() {
+    for plain in [
+      "tokens: [1,2]",
+      "tokens: [true,null]",
+      r#"{"tokens":{"in":12,"out":30}}"#,
+      r#"{"tokens":[1.5,-2,false]}"#,
+      r#"{"tokens":{ "in" : 12 }}"#,
+      r#"{"maxTokens":{"count":1}}"#,
+      r#"{"secrets":[]}"#,
+      r#"{"credentials":{}}"#,
+      r#"{"tickets":[[1],{"a":[2,null]}]}"#,
+    ] {
+      assert_eq!(masked(plain), plain);
+    }
+  }
+
+  #[test]
+  fn masks_a_plural_collection_nested_deeper_than_the_limit_which_it_cannot_read_to_the_end() {
+    let deeper_than_the_limit = format!(r#"{{"tokens":{}1{},"after":1}}"#, "[".repeat(40), "]".repeat(40));
+
+    assert_eq!(masked(&deeper_than_the_limit), r#"{"tokens":[redacted]"#);
+  }
+
+  #[test]
+  fn masks_a_credential_nested_in_a_plural_collection_whole_and_in_a_readable_one_on_its_own() {
+    assert_eq!(masked(r#"{"tokens":{"password":"SYNTHETIC_SECRET_123","in":1}}"#), r#"{"tokens":[redacted]}"#);
+    assert_eq!(masked(r#"{"tokens":{"in":{"password":"SYNTHETIC_SECRET_123"}}}"#), r#"{"tokens":[redacted]}"#);
+    assert_eq!(masked(r#"{"tokens":{"in":1,"password":12345678}}"#), r#"{"tokens":{"in":1,"password":12345678}}"#);
+  }
+
+  #[test]
   fn keeps_masking_what_sits_inside_or_after_a_key_that_merely_holds_a_secret_word() {
     assert_eq!(masked(r#"{"tokenizer":{"token":"SYNTHETIC_SECRET_123"}}"#), r#"{"tokenizer":{"token":"[redacted]"}}"#);
     assert_eq!(masked(r#"{"tokenizer":"SYNTHETIC_SECRET_123"}"#), r#"{"tokenizer":"[redacted]"}"#);
@@ -1774,6 +1864,7 @@ mod tests {
       "token:[", "token:{\"a\":[", "token:[\"", "token:[\\\"", "{\"token\":[", "token: [[[[[[[[[[", "\"token\":{\"token\":", "token:[]", "token:['", "\\\"token\\\":[\\\"", "token:[}", "Bearer %3A", "Bearer%3A%3A", "Bearer\u{85}=",
       "Authorization: Digest a = \"", "Authorization: Digest a = \"b\" , ", "Authorization: Digest a=\t \t\"", "Authorization: Digest a =                \"", "Authorization: Digest a =\\\"",
       "Authorization: Token a\r\n ", "Authorization:\r\n ", "Authorization: Token\r\n \r\n ", "Authorization:\n\t", "Authorization: Token a\n\tb ", "Proxy-Authorization:\r\n Token\r\n a\r\n ", "Authorization: Digest a=\"b\",\r\n ",
+      "tokens:[1,\"", "tokens:[1,2,", "tokens:{\"a\":", "tokens:{\"a\":1,", "tokens:[ \"", "tokens:[\"a\" ", "tokens:[[[[", "secrets:{\"", "tokens:[\"é\"\u{a0}",
       "tokenizer:[", "maxTokens:{", "password_policy: [", "tokens:[1,", "x-api-key:[", "aB:[tokenizer:{", "Authorization: Token é\r\n ", "Authorization: Digest a = \"日",
     ];
     for unit in units {

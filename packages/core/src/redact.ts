@@ -5,7 +5,7 @@
 // - A quoted value, a Cookie or Authorization value longer than QUOTED_VALUE_LIMIT is masked by its first 16 KiB per pass; four passes leave a finite prefix masked (the desktop masker counts bytes, this one UTF-16 units).
 // - A collection that runs past QUOTED_VALUE_LIMIT is cut there: what follows the cut (a second element, a suffix object) stays readable.
 // - A short, numeric or literal-looking unquoted value (`token: abc`, `token: 123456789`, `token: null`) and a backtick-quoted value stay readable: they cannot be told from a counter or prose.
-// - A collection is masked only under a key whose last noun is a credential (`token`, `accessToken`, `x-api-key`, `token_value`); `tokenizer`, `maxTokens`, `tokens`, `password_policy` and `ticketCount` are diagnostics, so their collections stay readable (a list of secrets under `tokens` is not recognised). A string under such a key (`tokenizer: cl100k_base`) is still masked: any key holding a secret word hides its string.
+// - A collection is masked only under a key whose last noun is a credential (`token`, `accessToken`, `x-api-key`, `token_value`) and, under a plural one (`tokens`, `secrets`, `credentials`), only when it holds a string value: `tokens: [1,2]` and `maxTokens: {"in":12}` count things and stay readable, `maxTokens: {"model":"x"}` is masked. `tokenizer`, `password_policy` and `ticketCount` are diagnostics whatever they hold. A string under such a key (`tokenizer: cl100k_base`) is still masked: any key holding a secret word hides its string.
 
 // Any key naming a credential, in any case and anywhere in the name: `token`, `authTokens`, `refreshTokenString`, `TOKENS`, …
 export const SECRET_KEY = /token|secret|authorization|password|cookie|ticket|api[_-]?key/i;
@@ -266,21 +266,27 @@ const AUTHORIZATION_HEADER_NAME = /(?:^|[^A-Za-z0-9])authorization$/i;
 const AUTHORIZATION_SCHEME = /^[A-Za-z0-9._~+/-]{3,}$/;
 const COLLECTION_OPENERS = '[{';
 const COLLECTION_CLOSERS = ']}';
+const COLLECTION_WHITESPACE = new RegExp(`[${WHITESPACE}]`);
 
 // The words of a key (`accessToken`, `x-api-key`, `API_KEY`, `auth.token` → access token, x api key, …); each alternative stops where the next one starts, so a long run is split in one pass.
 const KEY_WORD = /[A-Z]?[a-z]+|[A-Z]+(?![a-z])|\d+/g;
-const SECRET_WORDS = new Set(['token', 'secret', 'secrets', 'password', 'passwords', 'passwd', 'authorization', 'credential', 'credentials', 'cookie', 'cookies', 'ticket', 'apikey']);
-const SECRET_WORD_PAIRS = new Set(['api key', 'private key', 'secret key']);
+const SINGULAR_CREDENTIAL_NOUNS = new Set(['token', 'secret', 'password', 'passwd', 'authorization', 'credential', 'cookie', 'ticket', 'apikey']);
+// A plural noun also counts things (`tokens: [1,2]`): its collection is a credential only when it holds a string.
+const PLURAL_CREDENTIAL_NOUNS = new Set(['tokens', 'secrets', 'passwords', 'credentials', 'cookies', 'tickets']);
+const CREDENTIAL_NOUN_PAIRS = new Set(['api key', 'private key', 'secret key']);
 // `token_value`, `secretData`: the noun after the secret word only says how the credential is held.
 const CONTAINER_WORDS = new Set(['value', 'values', 'string', 'data', 'list', 'map', 'json']);
 
-/** A key whose last noun is a credential: `token`, `accessToken`, `x-api-key`, `private_key`, `token_value`. `tokenizer`, `maxTokens`, `password_policy`, `ticketCount` and `secretary` only hold a secret word inside another word or before another noun: they describe a credential, they are not one. A collection under the first kind is a credential, a collection under the second kind is a diagnostic. */
-const namesACredential = (keyName: string): boolean => {
+type CredentialNoun = 'singular' | 'plural' | 'none';
+
+/** The last noun of a key: `token`, `accessToken`, `x-api-key`, `private_key`, `token_value` end on a credential; `tokens` and `authTokens` end on a plural one. `tokenizer`, `maxTokens`-as-a-counter, `password_policy`, `ticketCount` and `secretary` only hold a secret word inside another word or before another noun: they describe a credential, they are not one. */
+const credentialNounOf = (keyName: string): CredentialNoun => {
   const words = (keyName.match(KEY_WORD) ?? []).map((word) => word.toLowerCase());
   while (CONTAINER_WORDS.has(words[words.length - 1] ?? '')) words.pop();
   const lastWord = words[words.length - 1] ?? '';
   const lastPair = words.slice(-2).join(' ');
-  return SECRET_WORDS.has(lastWord) || SECRET_WORD_PAIRS.has(lastPair);
+  if (SINGULAR_CREDENTIAL_NOUNS.has(lastWord) || CREDENTIAL_NOUN_PAIRS.has(lastPair)) return 'singular';
+  return PLURAL_CREDENTIAL_NOUNS.has(lastWord) ? 'plural' : 'none';
 };
 
 type ColonValue = { start: number; end: number; isCredential: boolean };
@@ -330,12 +336,16 @@ const quoteDelimiterAt = (text: string, at: number, areQuotesEscaped: boolean): 
   return character === '\\' && QUOTE_CHARACTER.test(nextCharacter) ? nextCharacter : '';
 };
 
-/** Where the `[…]` or `{…}` that opens at `start` closes, strings and nesting included; one that never balances, nests deeper than the limit or runs past the length limit is cut at the limit. */
-const endOfCollection = (text: string, start: number, areQuotesEscaped: boolean): number => {
+type Collection = { end: number; holdsAString: boolean };
+
+/** Where the `[…]` or `{…}` that opens at `start` closes, strings and nesting included; one that never balances, nests deeper than the limit or runs past the length limit is cut at the limit. It also says whether a string value sits inside (an object key does not count; a string cut by the limit or a collection cut by the depth limit does). */
+const collectionFrom = (text: string, start: number, areQuotesEscaped: boolean): Collection => {
   const limit = Math.min(text.length, start + QUOTED_VALUE_LIMIT);
   const delimiterWidth = areQuotesEscaped ? 2 : 1;
   let depth = 0;
   let openQuote = '';
+  let holdsAString = false;
+  let isLastStringAKeyOrAValue = false;
   for (let at = start; at < limit; at += 1) {
     const character = text.charAt(at);
     const delimiter = quoteDelimiterAt(text, at, areQuotesEscaped);
@@ -344,9 +354,16 @@ const endOfCollection = (text: string, start: number, areQuotesEscaped: boolean)
       const closesTheString = delimiter === openQuote;
       const escapesTheNextCharacter = character === '\\' && !areQuotesEscaped;
       if (closesTheString) openQuote = '';
+      if (closesTheString) isLastStringAKeyOrAValue = true;
       if (closesTheString) at += delimiterWidth - 1;
       else if (escapesTheNextCharacter) at += 1;
       continue;
+    }
+    const isStringJustClosed = isLastStringAKeyOrAValue && !COLLECTION_WHITESPACE.test(character);
+    if (isStringJustClosed) {
+      const isAKey = character === ':';
+      holdsAString ||= !isAKey;
+      isLastStringAKeyOrAValue = false;
     }
     if (delimiter) {
       openQuote = delimiter;
@@ -354,11 +371,12 @@ const endOfCollection = (text: string, start: number, areQuotesEscaped: boolean)
       continue;
     }
     if (COLLECTION_OPENERS.includes(character)) depth += 1;
-    if (depth > COLLECTION_DEPTH_LIMIT) return limit;
+    if (depth > COLLECTION_DEPTH_LIMIT) return { end: limit, holdsAString: true };
     if (COLLECTION_CLOSERS.includes(character)) depth -= 1;
-    if (depth === 0) return at + 1;
+    if (depth === 0) return { end: at + 1, holdsAString };
   }
-  return limit;
+  const isStringCutByTheLimit = openQuote !== '' || isLastStringAKeyOrAValue;
+  return { end: limit, holdsAString: holdsAString || isStringCutByTheLimit };
 };
 
 /** `response = "…"`: the quote at `at` follows an equals sign, whatever padding sits between them. */
@@ -426,9 +444,12 @@ const colonValueAfter = (text: string, keyEnd: number, keyName: string): ColonVa
   const opensQuotedValue = quote === '"' || quote === "'";
   if (opensQuotedValue) return quotedValueFrom(text, quoteAt + 1, quote, isOpeningQuoteEscaped);
   const opensCollection = !isOpeningQuoteEscaped && quote !== '' && COLLECTION_OPENERS.includes(quote);
-  if (opensCollection && namesACredential(keyName)) {
+  const credentialNoun = credentialNounOf(keyName);
+  if (opensCollection && credentialNoun !== 'none') {
     const isInsideAnEscapedDocument = text.slice(keyEnd, afterKeyQuotes).includes('\\');
-    return { start: valueStart, end: endOfCollection(text, valueStart, isInsideAnEscapedDocument), isCredential: true };
+    const collection = collectionFrom(text, valueStart, isInsideAnEscapedDocument);
+    const isCounterCollection = credentialNoun === 'plural' && !collection.holdsAString;
+    if (!isCounterCollection) return { start: valueStart, end: collection.end, isCredential: true };
   }
   const isCookieHeaderValue = COOKIE_HEADER_NAME.test(keyName);
   const isKeyKnownToQuotedAndCollectionRulesOnly = !SECRET_KEY.test(keyName);
@@ -443,7 +464,7 @@ const maskingColonValues = (text: string): string => {
   let copiedUpTo = 0;
   for (let key = keys.exec(text); key; key = keys.exec(text)) {
     const [keyName = ''] = key;
-    if (!SECRET_KEY.test(keyName) && !namesACredential(keyName)) continue;
+    if (!SECRET_KEY.test(keyName) && credentialNounOf(keyName) === 'none') continue;
     const value = colonValueAfter(text, key.index + keyName.length, keyName);
     if (!value) continue;
     keys.lastIndex = value.end;
