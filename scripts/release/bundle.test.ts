@@ -218,6 +218,24 @@ describe('node-pty prebuild guard', () => {
     expect(result.stderr).toContain(mentions);
     expect(prebuildFoldersIn(out)).toEqual(['darwin-arm64']);
   }, BOOT_TIMEOUT_MS);
+
+  it.each(['spawn-helper', 'pty.node'])('refuses a symlinked %s with a one-line error and keeps the previous bundle', (binaryName) => {
+    const out = previousBundleOut();
+    const nodePtyDir = writeFakeNodePty({ prebuildCpuType: CPU_TYPE_X86_64 });
+    const externalBinary = join(makeScratchFolder(), 'external-binary');
+    writeFileSync(externalBinary, machOHeader(CPU_TYPE_X86_64));
+    const prebuildBinary = join(nodePtyDir, 'prebuilds/darwin-x64', binaryName);
+    rmSync(prebuildBinary);
+    symlinkSync(externalBinary, prebuildBinary);
+
+    const result = bundleX64With({ nodePtyDir, out });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr.trim().split('\n')).toHaveLength(1);
+    expect(result.stderr).toContain(binaryName);
+    expect(result.stderr).toMatch(/symlink/);
+    expect(prebuildFoldersIn(out)).toEqual(['darwin-arm64']);
+  }, BOOT_TIMEOUT_MS);
 });
 
 describe('unknown target', () => {
