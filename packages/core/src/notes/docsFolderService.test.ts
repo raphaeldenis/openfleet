@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import type { Note } from '@openfleet/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDatabase } from '../db/database.js';
 import { createDegradedRegistry, type DegradedRegistry } from '../process/degradedRegistry.js';
@@ -471,6 +472,59 @@ describe('DocsFolderService and the degraded state', () => {
     docs.reconcileOnBoot('p1');
 
     expect(codesOf(degraded)).toEqual([]);
+  });
+
+  it('forgets an unreadable path whose file was then removed: a missing file no longer holds the issue', () => {
+    const degraded = createDegradedRegistry();
+    const { fakeFs, docs } = setup({ degraded });
+    const note = docs.createFileBackedNote({ projectId: 'p1', folder: 'specs', title: 'x', bodyMd: 'v1', author: AUTHOR });
+    fakeFs.unreadableFiles.set(note.filePath!, 'EACCES');
+    docs.reconcileOnBoot('p1');
+
+    fakeFs.unreadableFiles.delete(note.filePath!);
+    fakeFs.files.delete(note.filePath!);
+    docs.reconcileOnBoot('p1');
+
+    expect(codesOf(degraded)).toEqual([]);
+  });
+
+  describe('with more unreadable paths than the tracking bound', () => {
+    const TRACKED_PATHS_BOUND = 100;
+    const unreadableNoteCount = TRACKED_PATHS_BOUND + 1;
+
+    function setupWithEveryNoteUnreadable() {
+      const degraded = createDegradedRegistry();
+      const { fakeFs, docs } = setup({ degraded });
+      const notes = Array.from({ length: unreadableNoteCount }, (_, index) =>
+        docs.createFileBackedNote({ projectId: 'p1', folder: 'specs', title: `note ${index}`, bodyMd: 'v1', author: AUTHOR }));
+      for (const note of notes) fakeFs.unreadableFiles.set(note.filePath!, 'EACCES');
+      docs.reconcileOnBoot('p1');
+      const [firstNote, ...laterNotes] = notes;
+      return { degraded, fakeFs, docs, firstNote: firstNote!, laterNotes };
+    }
+
+    const readAgain = ({ fakeFs, docs }: ReturnType<typeof setupWithEveryNoteUnreadable>, note: Note) => {
+      fakeFs.unreadableFiles.delete(note.filePath!);
+      docs.writeThrough(note.id, { bodyMd: 'v2', expectedRev: note.rev, author: AUTHOR });
+    };
+
+    it('stays marked when only the tracked paths recover and the evicted one is still unreadable', () => {
+      const scenario = setupWithEveryNoteUnreadable();
+
+      for (const note of scenario.laterNotes) readAgain(scenario, note);
+
+      expect(codesOf(scenario.degraded)).toEqual(['docs_folder_unreadable']);
+    });
+
+    it('clears once a full reconciliation finds every note readable', () => {
+      const scenario = setupWithEveryNoteUnreadable();
+      for (const note of scenario.laterNotes) readAgain(scenario, note);
+
+      scenario.fakeFs.unreadableFiles.delete(scenario.firstNote.filePath!);
+      scenario.docs.reconcileOnBoot('p1');
+
+      expect(codesOf(scenario.degraded)).toEqual([]);
+    });
   });
 });
 

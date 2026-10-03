@@ -38,7 +38,8 @@ function reportWhenUnavailable(error: unknown): void {
  * nested inside a caller's transaction, so a batch is all-or-nothing without ending an outer transaction.
  * Rolls back only if a transaction is still active. A failing rollback is logged and never masks the
  * original error; a failed top-level ROLLBACK marks the connection stuck, and every later call retries the
- * ROLLBACK first and throws, without running its work, while that keeps failing.
+ * ROLLBACK first and throws, without running its work, while that keeps failing. The watch hears about the
+ * stuck connection the moment the ROLLBACK fails, not when a later call finds it.
  * A failed nested rollback leaves the outer transaction to its owner.
  * All production code goes through `inTransaction`: a raw BEGIN outside it is a bug.
  * `name` must be distinct per call site so nested savepoints never collide.
@@ -89,6 +90,8 @@ function rollBackKeepingOriginalError(db: DatabaseSync, { name, isNested }: { na
     }
   } catch (rollbackError) {
     log('error', 'transaction rollback failed', rollbackError);
-    if (!isNested) connectionsStuckInTransaction.add(db);
+    if (isNested) return;
+    connectionsStuckInTransaction.add(db);
+    databaseWatch?.unavailable(new StuckConnectionError(rollbackError));
   }
 }

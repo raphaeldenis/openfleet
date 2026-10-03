@@ -135,6 +135,7 @@ interface ImportCandidate {
  */
 export class DocsFolderService {
   private readonly unreadablePaths = new Set<string>();
+  private hasUntrackedUnreadablePaths = false;
 
   constructor(private readonly deps: DocsFolderServiceDeps) {}
 
@@ -231,6 +232,7 @@ export class DocsFolderService {
     const fileBackedNotes = this.deps.noteRepo.list(projectId).filter((note) => note.filePath !== null);
     const report: ReconcileReport = { applied: [], oversized: [], missing: [], unreadable: [], escaped: [] };
     for (const note of fileBackedNotes) this.reconcileNote(note, report);
+    this.settleUntrackedFailuresAfter(report);
     return report;
   }
 
@@ -337,23 +339,47 @@ export class DocsFolderService {
       return body;
     } catch (error) {
       const isFileMissing = (error as NodeJS.ErrnoException).code === 'ENOENT';
-      if (isFileMissing) return undefined;
+      if (isFileMissing) {
+        this.readable(path);
+        return undefined;
+      }
       throw this.unreadable(path, error);
     }
   }
 
-  /** Builds the typed error and marks the docs folder unreadable until every path that failed has been read again. */
+  /**
+   * Builds the typed error and marks the docs folder unreadable until every path that failed has been read again.
+   * Past the memory bound the oldest path is forgotten, and the issue then also waits for a clean full reconciliation.
+   */
   private unreadable(path: string, cause: unknown): NoteFileUnreadableError {
     this.unreadablePaths.add(path);
-    if (this.unreadablePaths.size > MAX_TRACKED_UNREADABLE_PATHS) this.unreadablePaths.delete(this.unreadablePaths.values().next().value!);
+    const isBeyondTrackingBound = this.unreadablePaths.size > MAX_TRACKED_UNREADABLE_PATHS;
+    if (isBeyondTrackingBound) {
+      const oldestPath = this.unreadablePaths.values().next().value!;
+      this.unreadablePaths.delete(oldestPath);
+      this.hasUntrackedUnreadablePaths = true;
+    }
     this.deps.degraded?.mark('docs_folder_unreadable', 'a note file or the docs folder cannot be read.', { cause });
     return new NoteFileUnreadableError(path, cause);
   }
 
-  /** A successful read or write of a path that failed clears it; the last one to recover clears the issue. */
+  /** A successful read or write of a path that failed, or the discovery that its file is gone, forgets that failure. */
   private readable(path: string): void {
-    if (!this.unreadablePaths.delete(path)) return;
-    if (this.unreadablePaths.size === 0) this.deps.degraded?.clear('docs_folder_unreadable');
+    const wasTracked = this.unreadablePaths.delete(path);
+    if (wasTracked) this.clearIssueWhenNoFailureRemains();
+  }
+
+  private clearIssueWhenNoFailureRemains(): void {
+    const hasRemainingFailure = this.unreadablePaths.size > 0 || this.hasUntrackedUnreadablePaths;
+    if (!hasRemainingFailure) this.deps.degraded?.clear('docs_folder_unreadable');
+  }
+
+  /** A reconciliation that reads every file-backed note without a failure proves the paths forgotten past the bound recovered too. */
+  private settleUntrackedFailuresAfter(report: ReconcileReport): void {
+    const isFullReconciliationClean = report.unreadable.length === 0;
+    if (!isFullReconciliationClean) return;
+    this.hasUntrackedUnreadablePaths = false;
+    this.clearIssueWhenNoFailureRemains();
   }
 
   private importCandidate(projectId: string, candidate: ImportCandidate): Note[] {
