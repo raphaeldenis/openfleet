@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -86,13 +86,13 @@ describe('fetchNode', () => {
     expect(existsSync(installedBinary())).toBe(false);
   });
 
-  it('records the verified tarball sha256 and the installed binary sha256 next to the binary', async () => {
+  it('records the verified tarball sha256, the installed binary sha256, the version and the target next to the binary', async () => {
     const tarball = buildTarball();
     const { fetchBytes } = serve({ tarball, shasums: shasumsFor(tarball) });
 
     await fetchNode({ version: VERSION, binariesFolder, fetchBytes, installedVersion: neverInstalled });
 
-    expect(readFileSync(checksumRecord(), 'utf8')).toBe(`tarball ${sha256(tarball)}\nbinary ${sha256(Buffer.from(FAKE_NODE_BODY))}\n`);
+    expect(readFileSync(checksumRecord(), 'utf8')).toBe(`tarball ${sha256(tarball)}\nbinary ${sha256(Buffer.from(FAKE_NODE_BODY))}\nversion ${VERSION}\ntarget aarch64-apple-darwin\n`);
   });
 
   const installBinaryWithRecord = ({ body, recordedBinaryBody = body }: { body: string; recordedBinaryBody?: string }) => {
@@ -101,13 +101,13 @@ describe('fetchNode', () => {
     writeFileSync(checksumRecord(), `tarball ${'c'.repeat(64)}\nbinary ${sha256(Buffer.from(recordedBinaryBody))}\n`);
   };
 
-  it('skips without any network call when the installed binary reports the pinned version and hashes to the recorded binary sha256', async () => {
+  it('skips without any network call when a legacy-record binary hashes to the recorded sha256 and reports the pinned version on a host that can run it', async () => {
     installBinaryWithRecord({ body: 'existing' });
     const fetchBytes = vi.fn(async () => {
       throw new Error('offline');
     });
 
-    const result = await fetchNode({ version: VERSION, binariesFolder, fetchBytes, installedVersion: () => `v${VERSION}` });
+    const result = await fetchNode({ version: VERSION, binariesFolder, fetchBytes, installedVersion: () => `v${VERSION}`, hostTarget: 'aarch64-apple-darwin' });
 
     expect(result).toEqual({ status: 'skipped', path: installedBinary() });
     expect(readFileSync(installedBinary(), 'utf8')).toBe('existing');
@@ -231,7 +231,7 @@ describe('fetchNode', () => {
 
       expect(result).toEqual({ status: 'installed', path: x64Binary() });
       expect(requestedUrls).toContain(`${BASE_URL}/${X64_TARBALL_NAME}`);
-      expect(readFileSync(`${x64Binary()}.sha256`, 'utf8')).toBe(`tarball ${sha256(tarball)}\nbinary ${sha256(Buffer.from(FAKE_NODE_BODY))}\n`);
+      expect(readFileSync(`${x64Binary()}.sha256`, 'utf8')).toBe(`tarball ${sha256(tarball)}\nbinary ${sha256(Buffer.from(FAKE_NODE_BODY))}\nversion ${VERSION}\ntarget ${X64_TARGET}\n`);
       expect(statSync(x64Binary()).mode & 0o777).toBe(0o755);
     });
 
@@ -245,7 +245,7 @@ describe('fetchNode', () => {
       expect(existsSync(x64Binary())).toBe(false);
     });
 
-    it('skips offline on its own record and leaves the arm64 sidecar untouched', async () => {
+    it('skips offline on its own legacy record, validated by running it on an Intel host, and leaves the arm64 sidecar untouched', async () => {
       mkdirSync(binariesFolder, { recursive: true });
       writeFileSync(x64Binary(), 'existing-x64');
       writeFileSync(`${x64Binary()}.sha256`, `tarball ${'c'.repeat(64)}\nbinary ${sha256(Buffer.from('existing-x64'))}\n`);
@@ -253,10 +253,153 @@ describe('fetchNode', () => {
         throw new Error('offline');
       });
 
-      const result = await fetchNode({ version: VERSION, target: X64_TARGET, binariesFolder, fetchBytes, installedVersion: () => `v${VERSION}` });
+      const result = await fetchNode({ version: VERSION, target: X64_TARGET, binariesFolder, fetchBytes, installedVersion: () => `v${VERSION}`, hostTarget: X64_TARGET });
 
       expect(result).toEqual({ status: 'skipped', path: x64Binary() });
       expect(fetchBytes).not.toHaveBeenCalled();
+      expect(existsSync(installedBinary())).toBe(false);
+    });
+  });
+
+  describe('never executes the cached binary before its integrity is checked', () => {
+    const executionMarker = () => join(workFolder, 'cached-binary-executed');
+    const offline = vi.fn(async () => {
+      throw new Error('offline');
+    });
+    const installMarkerWritingBinary = (record?: string) => {
+      mkdirSync(binariesFolder, { recursive: true });
+      writeFileSync(installedBinary(), `#!/bin/sh\necho executed > '${executionMarker()}'\necho v${VERSION}\n`, { mode: 0o755 });
+      if (record !== undefined) writeFileSync(checksumRecord(), record);
+    };
+
+    it('does not run a cached binary whose hash differs from the recorded one, and goes back to the download', async () => {
+      installMarkerWritingBinary(`binary ${'0'.repeat(64)}\n`);
+
+      await expect(fetchNode({ version: VERSION, binariesFolder, fetchBytes: offline })).rejects.toThrow('offline');
+
+      expect(existsSync(executionMarker())).toBe(false);
+      expect(offline).toHaveBeenCalled();
+    });
+
+    it('does not run a cached binary that has no checksum record', async () => {
+      installMarkerWritingBinary();
+
+      await expect(fetchNode({ version: VERSION, binariesFolder, fetchBytes: offline })).rejects.toThrow('offline');
+
+      expect(existsSync(executionMarker())).toBe(false);
+    });
+  });
+
+  describe('offline skip of a cache recorded with its validated version and target', () => {
+    const APPLE_SILICON = 'aarch64-apple-darwin';
+    const INTEL = 'x86_64-apple-darwin';
+    const intelBinary = () => join(binariesFolder, `node-${INTEL}`);
+    const offline = () => vi.fn(async () => {
+      throw new Error('offline');
+    });
+    const installIntelCache = ({ recordedBody = 'intel-node', recordedVersion = VERSION, recordedTarget = INTEL }: { recordedBody?: string; recordedVersion?: string; recordedTarget?: string } = {}) => {
+      mkdirSync(binariesFolder, { recursive: true });
+      writeFileSync(intelBinary(), 'intel-node');
+      writeFileSync(`${intelBinary()}.sha256`, `tarball ${'c'.repeat(64)}\nbinary ${sha256(Buffer.from(recordedBody))}\nversion ${recordedVersion}\ntarget ${recordedTarget}\n`);
+    };
+
+    it('skips an Intel cache on an Apple Silicon host without executing it, when digest, version and target match', async () => {
+      installIntelCache();
+      const fetchBytes = offline();
+      const installedVersion = vi.fn(() => undefined);
+
+      const result = await fetchNode({ version: VERSION, target: INTEL, binariesFolder, fetchBytes, installedVersion, hostTarget: APPLE_SILICON });
+
+      expect(result).toEqual({ status: 'skipped', path: intelBinary() });
+      expect(fetchBytes).not.toHaveBeenCalled();
+      expect(installedVersion).not.toHaveBeenCalled();
+    });
+
+    it('still refuses the cache when its digest differs from the recorded one', async () => {
+      installIntelCache({ recordedBody: 'something else' });
+      const fetchBytes = offline();
+
+      await expect(fetchNode({ version: VERSION, target: INTEL, binariesFolder, fetchBytes, installedVersion: () => undefined, hostTarget: APPLE_SILICON })).rejects.toThrow('offline');
+
+      expect(fetchBytes).toHaveBeenCalled();
+    });
+
+    it.each([
+      ['another version', { recordedVersion: '25.0.0' }],
+      ['another target', { recordedTarget: APPLE_SILICON }],
+    ])('downloads again when the record was validated for %s', async (_name, recordOptions) => {
+      installIntelCache(recordOptions);
+      const fetchBytes = offline();
+
+      await expect(fetchNode({ version: VERSION, target: INTEL, binariesFolder, fetchBytes, installedVersion: () => `v${VERSION}`, hostTarget: APPLE_SILICON })).rejects.toThrow('offline');
+
+      expect(fetchBytes).toHaveBeenCalled();
+    });
+
+    it('does not execute a foreign-CPU cache that carries an old record without version, and downloads again', async () => {
+      mkdirSync(binariesFolder, { recursive: true });
+      writeFileSync(intelBinary(), 'intel-node');
+      writeFileSync(`${intelBinary()}.sha256`, `tarball ${'c'.repeat(64)}\nbinary ${sha256(Buffer.from('intel-node'))}\n`);
+      const fetchBytes = offline();
+      const installedVersion = vi.fn(() => `v${VERSION}`);
+
+      await expect(fetchNode({ version: VERSION, target: INTEL, binariesFolder, fetchBytes, installedVersion, hostTarget: APPLE_SILICON })).rejects.toThrow('offline');
+
+      expect(installedVersion).not.toHaveBeenCalled();
+    });
+
+    it('records the validated version and target next to the installed digest', async () => {
+      const tarball = buildTarball('darwin-x64');
+      const shasums = `${sha256(tarball)}  node-v${VERSION}-darwin-x64.tar.gz\n`;
+      const { fetchBytes } = serve({ tarball, shasums, tarballName: `node-v${VERSION}-darwin-x64.tar.gz` });
+
+      await fetchNode({ version: VERSION, target: INTEL, binariesFolder, fetchBytes, installedVersion: neverInstalled, hostTarget: APPLE_SILICON });
+
+      expect(readFileSync(`${intelBinary()}.sha256`, 'utf8')).toBe(`tarball ${sha256(tarball)}\nbinary ${sha256(Buffer.from(FAKE_NODE_BODY))}\nversion ${VERSION}\ntarget ${INTEL}\n`);
+    });
+  });
+
+  describe('refuses an extracted node that is not a regular single-link file, before any chmod or rename', () => {
+    const buildTarballWithNodeSymlink = (externalFile: string): Buffer => {
+      const stage = join(workFolder, 'symlink-stage');
+      const packageFolder = join(stage, `node-v${VERSION}-darwin-arm64`);
+      mkdirSync(join(packageFolder, 'bin'), { recursive: true });
+      symlinkSync(externalFile, join(packageFolder, 'bin/node'));
+      const tarball = join(workFolder, 'symlink.tar.gz');
+      spawnSync('tar', ['-czf', tarball, '-C', stage, `node-v${VERSION}-darwin-arm64/bin/node`]);
+      return readFileSync(tarball);
+    };
+    const externalFile = () => join(workFolder, 'external-node');
+    const writeExternalFile = () => writeFileSync(externalFile(), '#!/bin/sh\necho v26.9.0\n', { mode: 0o600 });
+
+    it('fails with a one-line error naming the member when it is a symlink, and leaves the external file mode alone', async () => {
+      writeExternalFile();
+      const tarball = buildTarballWithNodeSymlink(externalFile());
+      const { fetchBytes } = serve({ tarball, shasums: shasumsFor(tarball) });
+
+      const failure = await fetchNode({ version: VERSION, binariesFolder, fetchBytes, installedVersion: neverInstalled }).catch((error: Error) => error);
+
+      expect(failure).toBeInstanceOf(Error);
+      expect((failure as Error).message.trim().split('\n')).toHaveLength(1);
+      expect((failure as Error).message).toContain(`node-v${VERSION}-darwin-arm64/bin/node`);
+      expect(statSync(externalFile()).mode & 0o777).toBe(0o600);
+      expect(existsSync(installedBinary())).toBe(false);
+      expect(leftovers()).toEqual([]);
+    });
+
+    it('fails when the member has a second hard link, and leaves the external file mode alone', async () => {
+      writeExternalFile();
+      const tarball = buildTarball();
+      const { fetchBytes } = serve({ tarball, shasums: shasumsFor(tarball) });
+      const extractBinary = ({ packageName, scratchFolder }: { packageName: string; scratchFolder: string }) => {
+        mkdirSync(join(scratchFolder, packageName, 'bin'), { recursive: true });
+        linkSync(externalFile(), join(scratchFolder, packageName, 'bin/node'));
+        return join(scratchFolder, packageName, 'bin/node');
+      };
+
+      await expect(fetchNode({ version: VERSION, binariesFolder, fetchBytes, installedVersion: neverInstalled, extractBinary })).rejects.toThrow(`node-v${VERSION}-darwin-arm64/bin/node`);
+
+      expect(statSync(externalFile()).mode & 0o777).toBe(0o600);
       expect(existsSync(installedBinary())).toBe(false);
     });
   });

@@ -16,7 +16,7 @@ const NODE_PLATFORM_BY_TARGET = { 'aarch64-apple-darwin': 'darwin-arm64', 'x86_6
 const PLAIN_SEMVER = /^\d+\.\d+\.\d+$/;
 const EXECUTABLE_MODE = 0o755;
 const FETCH_TIMEOUT_MS = 60_000;
-const CHECKSUM_RECORD_LINE = /^(tarball|binary) ([0-9a-f]{64})$/;
+const RECORD_LINE = /^(tarball|binary|version|target) (\S+)$/;
 
 class FetchNodeError extends Error {}
 
@@ -54,16 +54,25 @@ export function extractNodeBinary({ tarball, packageName, scratchFolder }) {
   return join(scratchFolder, packageName, 'bin/node');
 }
 
-/** @returns {{ tarball?: string, binary?: string }} the `tarball <sha>` / `binary <sha>` lines of the record; empty when it is missing or in another format. */
+/** @returns {{ tarball?: string, binary?: string, version?: string, target?: string }} the lines of the record; empty when it is missing or in another format. Records written before version and target were stored carry only the two checksums. */
 const readChecksumRecord = (recordPath) => {
   try {
     const lines = readFileSync(recordPath, 'utf8').split('\n');
-    const matches = lines.map((line) => CHECKSUM_RECORD_LINE.exec(line.trim())).filter((match) => match !== null);
-    return Object.fromEntries(matches.map(([, kind, checksum]) => [kind, checksum]));
+    const matches = lines.map((line) => RECORD_LINE.exec(line.trim())).filter((match) => match !== null);
+    return Object.fromEntries(matches.map(([, kind, value]) => [kind, value]));
   } catch {
     return {};
   }
 };
+
+const hostTargetOf = (arch) => (arch === 'arm64' ? 'aarch64-apple-darwin' : arch === 'x64' ? 'x86_64-apple-darwin' : undefined);
+
+/** Throws unless the extracted member is a regular file with a single link: a symlink or hardlink would make chmod and rename act on a file outside the staging folder. */
+function refuseNonRegularMember({ extractedBinary, packageName }) {
+  const memberStat = lstatSync(extractedBinary, { throwIfNoEntry: false });
+  const isSingleLinkRegularFile = memberStat?.isFile() === true && memberStat.nlink === 1;
+  if (!isSingleLinkRegularFile) throw new FetchNodeError(`${packageName}/bin/node is not a regular single-link file in the archive`);
+}
 
 const sha256OfFile = (path) => {
   try {
@@ -73,15 +82,24 @@ const sha256OfFile = (path) => {
   }
 };
 
-/** True when the binary reports the pinned version and hashes to the sha256 recorded when it was installed; needs no network. */
-const isInstalledBinaryTheRecordedOne = ({ destination, checksumRecord, version, installedVersion }) => {
-  if (installedVersion(destination) !== `v${version}`) return false;
-  const { binary: recordedBinaryChecksum } = readChecksumRecord(checksumRecord);
-  return recordedBinaryChecksum !== undefined && sha256OfFile(destination) === recordedBinaryChecksum;
+/**
+ * True when the binary hashes to the sha256 recorded at its verified install and was validated for this version and target; needs no network.
+ * The binary is hashed first and executed only when the record predates version and target, and only on a host CPU that can run it.
+ */
+const isInstalledBinaryTheRecordedOne = ({ destination, checksumRecord, version, target, installedVersion, hostTarget }) => {
+  const { binary: recordedBinaryChecksum, version: recordedVersion, target: recordedTarget } = readChecksumRecord(checksumRecord);
+  const isHashingToTheRecordedBinary = recordedBinaryChecksum !== undefined && sha256OfFile(destination) === recordedBinaryChecksum;
+  if (!isHashingToTheRecordedBinary) return false;
+
+  const hasValidatedVersionAndTarget = recordedVersion !== undefined && recordedTarget !== undefined;
+  if (hasValidatedVersionAndTarget) return recordedVersion === version && recordedTarget === target;
+
+  const canHostExecuteTarget = hostTarget === target;
+  return canHostExecuteTarget && installedVersion(destination) === `v${version}`;
 };
 
-/** Installs the pinned Node binary as the sidecar unless the installed one reports that version and hashes to the binary sha256 recorded at its verified install. */
-export async function fetchNode({ version, target = DEFAULT_TARGET, binariesFolder = DEFAULT_BINARIES_FOLDER, fetchBytes = downloadBytes, installedVersion = runInstalledVersion, extractBinary = extractNodeBinary }) {
+/** Installs the pinned Node binary as the sidecar unless the installed one hashes to the binary sha256 recorded at its verified install, for this version and target. */
+export async function fetchNode({ version, target = DEFAULT_TARGET, binariesFolder = DEFAULT_BINARIES_FOLDER, fetchBytes = downloadBytes, installedVersion = runInstalledVersion, extractBinary = extractNodeBinary, hostTarget = hostTargetOf(process.arch) }) {
   if (!PLAIN_SEMVER.test(version)) throw new FetchNodeError(`version "${version}" is not a plain x.y.z`);
   const nodePlatform = Object.hasOwn(NODE_PLATFORM_BY_TARGET, target) ? NODE_PLATFORM_BY_TARGET[target] : undefined;
   if (nodePlatform === undefined) throw new FetchNodeError(`target "${target}" is not supported, expected: ${Object.keys(NODE_PLATFORM_BY_TARGET).join(' or ')}`);
@@ -90,7 +108,7 @@ export async function fetchNode({ version, target = DEFAULT_TARGET, binariesFold
   const checksumRecord = `${destination}.sha256`;
   refuseSymlink(destination);
   refuseSymlink(checksumRecord);
-  if (isInstalledBinaryTheRecordedOne({ destination, checksumRecord, version, installedVersion })) return { status: 'skipped', path: destination };
+  if (isInstalledBinaryTheRecordedOne({ destination, checksumRecord, version, target, installedVersion, hostTarget })) return { status: 'skipped', path: destination };
 
   const packageName = `node-v${version}-${nodePlatform}`;
   const tarballName = `${packageName}.tar.gz`;
@@ -105,12 +123,13 @@ export async function fetchNode({ version, target = DEFAULT_TARGET, binariesFold
   const scratchFolder = mkdtempSync(join(binariesFolder, '.fetch-node-'));
   try {
     const extractedBinary = extractBinary({ tarball, packageName, scratchFolder });
+    refuseNonRegularMember({ extractedBinary, packageName });
     const stagedBinary = join(scratchFolder, 'staged-node');
     renameSync(extractedBinary, stagedBinary);
     chmodSync(stagedBinary, EXECUTABLE_MODE);
     refuseSymlink(destination);
     renameSync(stagedBinary, destination);
-    writeFileSync(checksumRecord, `tarball ${downloadedChecksum}\nbinary ${sha256OfFile(destination)}\n`);
+    writeFileSync(checksumRecord, `tarball ${downloadedChecksum}\nbinary ${sha256OfFile(destination)}\nversion ${version}\ntarget ${target}\n`);
   } finally {
     rmSync(scratchFolder, { recursive: true, force: true });
   }

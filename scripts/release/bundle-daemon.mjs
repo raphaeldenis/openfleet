@@ -2,7 +2,7 @@
 // Bundles the daemon into a self-contained folder: daemon.mjs (launcher), daemon.bundle.mjs, migrations/ and node_modules/node-pty.
 // A non-empty --out is only cleared when it holds this script's .openfleet-daemon-bundle marker; an older unmarked bundle folder is refused once and must be removed by hand.
 // Usage: node scripts/release/bundle-daemon.mjs [--target aarch64-apple-darwin|x86_64-apple-darwin] [--out <dir>] [--tauri-conf <file>] [--node-pty-dir <dir>]
-import { chmodSync, closeSync, cpSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, cpSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
@@ -157,7 +157,9 @@ function assertPrebuildMatchesTarget({ nodePtyFolder, prebuildFolder, target }) 
   const expectedCpu = CPU_NAME_BY_TARGET[target];
   for (const binaryName of PREBUILD_BINARIES) {
     const binaryPath = join(folder, binaryName);
-    const isRegularFile = statSync(binaryPath, { throwIfNoEntry: false })?.isFile() === true;
+    const binaryStat = lstatSync(binaryPath, { throwIfNoEntry: false });
+    if (binaryStat?.isSymbolicLink()) throw new BundleError(`node-pty prebuilds/${prebuildFolder}/${binaryName} is a symlink, a self-contained bundle needs the binary itself`);
+    const isRegularFile = binaryStat?.isFile() === true;
     if (!isRegularFile) throw new BundleError(`node-pty ${readNodePtyVersion(nodePtyFolder)} has no prebuilds/${prebuildFolder}/${binaryName}, required for ${target}`);
     const actualCpu = describeMachOCpu(binaryPath);
     if (actualCpu !== expectedCpu) throw new BundleError(`node-pty prebuilds/${prebuildFolder}/${binaryName} is ${actualCpu}, required ${expectedCpu} for ${target}`);
