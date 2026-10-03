@@ -2,8 +2,10 @@
 //
 // Documented ceilings, left readable on purpose:
 // - A JWT payload that does not start with `eyJ` (valid JSON whitespace before its first key) is not recognised by format.
-// - A quoted value longer than QUOTED_VALUE_LIMIT is masked by its first 16 KiB per pass; four passes leave a finite prefix masked (the desktop masker counts bytes, this one UTF-16 units).
+// - A quoted value, a Cookie or Authorization value longer than QUOTED_VALUE_LIMIT is masked by its first 16 KiB per pass; four passes leave a finite prefix masked (the desktop masker counts bytes, this one UTF-16 units).
+// - A collection that runs past QUOTED_VALUE_LIMIT is cut there: what follows the cut (a second element, a suffix object) stays readable.
 // - A short, numeric or literal-looking unquoted value (`token: abc`, `token: 123456789`, `token: null`) and a backtick-quoted value stay readable: they cannot be told from a counter or prose.
+// - A collection is masked only under a key whose last noun is a credential (`token`, `accessToken`, `x-api-key`, `token_value`) and, under a plural one (`tokens`, `secrets`, `credentials`), only when it holds a string value: `tokens: [1,2]` and `maxTokens: {"in":12}` count things and stay readable, `maxTokens: {"model":"x"}` is masked. `tokenizer`, `password_policy` and `ticketCount` are diagnostics whatever they hold. A string under such a key (`tokenizer: cl100k_base`) is still masked: any key holding a secret word hides its string.
 
 // Any key naming a credential, in any case and anywhere in the name: `token`, `authTokens`, `refreshTokenString`, `TOKENS`, …
 export const SECRET_KEY = /token|secret|authorization|password|cookie|ticket|api[_-]?key/i;
@@ -144,7 +146,15 @@ const closingQuoteAt = (text: string, contentStart: number, scan: QuoteScan): nu
   return Math.min(at, scan.limit);
 };
 
-/** A header continues on the next line when that line starts with a space or a tab (the legacy folded form). */
+const NOT_FOLDED = -1;
+
+/** A header continues on the next line when that line starts with a space or a tab (the legacy folded form): where that line starts after the line break at `lineBreakAt`, or NOT_FOLDED. */
+const startOfFoldedLineAfter = (text: string, lineBreakAt: number): number => {
+  const nextLineStart = text.charAt(lineBreakAt) === '\r' && text.charAt(lineBreakAt + 1) === '\n' ? lineBreakAt + 2 : lineBreakAt + 1;
+  const isFoldedLine = text.charAt(nextLineStart) === ' ' || text.charAt(nextLineStart) === '\t';
+  return isFoldedLine ? nextLineStart : NOT_FOLDED;
+};
+
 const endOfHeaderValue = (text: string, from: number): number => {
   let at = from;
   while (at < text.length) {
@@ -154,12 +164,28 @@ const endOfHeaderValue = (text: string, from: number): number => {
       at += 1;
       continue;
     }
-    const nextLineStart = character === '\r' && text.charAt(at + 1) === '\n' ? at + 2 : at + 1;
-    const isFoldedLine = text.charAt(nextLineStart) === ' ' || text.charAt(nextLineStart) === '\t';
-    if (!isFoldedLine) return at;
-    at = nextLineStart;
+    const foldedLineStart = startOfFoldedLineAfter(text, at);
+    if (foldedLineStart === NOT_FOLDED) return at;
+    at = foldedLineStart;
   }
   return text.length;
+};
+
+/** Skips the spaces, tabs and folded line breaks of a header, up to the length limit. */
+const endOfFoldedPadding = (text: string, from: number): number => {
+  const limit = Math.min(text.length, from + QUOTED_VALUE_LIMIT);
+  let at = from;
+  while (at < limit) {
+    if (PADDING_CHARACTER.test(text.charAt(at))) {
+      at += 1;
+      continue;
+    }
+    const foldedLineStart = startOfFoldedLineAfter(text, at);
+    const isFoldedLineBreak = (text.charAt(at) === '\n' || text.charAt(at) === '\r') && foldedLineStart !== NOT_FOLDED;
+    if (!isFoldedLineBreak) break;
+    at = foldedLineStart;
+  }
+  return at;
 };
 
 type CookieValue = { start: number; end: number; next: number };
@@ -233,12 +259,35 @@ const AUTHORIZATION_SCHEMES = new Set(['bearer', 'basic']);
 // A shorter unquoted value is a word of the sentence (`the token: is expired`), not a credential.
 const UNQUOTED_VALUE_MINIMUM_LENGTH = 4;
 const PADDING_CHARACTER = /[ \t]/;
+const HEADER_WHITESPACE_CHARACTER = /[ \t\r\n]/;
 const COLLECTION_DEPTH_LIMIT = 32;
 // The key of a header such as `Authorization` or `Proxy-Authorization`, not `myauthorization`.
 const AUTHORIZATION_HEADER_NAME = /(?:^|[^A-Za-z0-9])authorization$/i;
 const AUTHORIZATION_SCHEME = /^[A-Za-z0-9._~+/-]{3,}$/;
 const COLLECTION_OPENERS = '[{';
 const COLLECTION_CLOSERS = ']}';
+const COLLECTION_WHITESPACE = new RegExp(`[${WHITESPACE}]`);
+
+// The words of a key (`accessToken`, `x-api-key`, `API_KEY`, `auth.token` → access token, x api key, …); each alternative stops where the next one starts, so a long run is split in one pass.
+const KEY_WORD = /[A-Z]?[a-z]+|[A-Z]+(?![a-z])|\d+/g;
+const SINGULAR_CREDENTIAL_NOUNS = new Set(['token', 'secret', 'password', 'passwd', 'authorization', 'credential', 'cookie', 'ticket', 'apikey']);
+// A plural noun also counts things (`tokens: [1,2]`): its collection is a credential only when it holds a string.
+const PLURAL_CREDENTIAL_NOUNS = new Set(['tokens', 'secrets', 'passwords', 'credentials', 'cookies', 'tickets']);
+const CREDENTIAL_NOUN_PAIRS = new Set(['api key', 'private key', 'secret key']);
+// `token_value`, `secretData`: the noun after the secret word only says how the credential is held.
+const CONTAINER_WORDS = new Set(['value', 'values', 'string', 'data', 'list', 'map', 'json']);
+
+type CredentialNoun = 'singular' | 'plural' | 'none';
+
+/** The last noun of a key: `token`, `accessToken`, `x-api-key`, `private_key`, `token_value` end on a credential; `tokens` and `authTokens` end on a plural one. `tokenizer`, `maxTokens`-as-a-counter, `password_policy`, `ticketCount` and `secretary` only hold a secret word inside another word or before another noun: they describe a credential, they are not one. */
+const credentialNounOf = (keyName: string): CredentialNoun => {
+  const words = (keyName.match(KEY_WORD) ?? []).map((word) => word.toLowerCase());
+  while (CONTAINER_WORDS.has(words[words.length - 1] ?? '')) words.pop();
+  const lastWord = words[words.length - 1] ?? '';
+  const lastPair = words.slice(-2).join(' ');
+  if (SINGULAR_CREDENTIAL_NOUNS.has(lastWord) || CREDENTIAL_NOUN_PAIRS.has(lastPair)) return 'singular';
+  return PLURAL_CREDENTIAL_NOUNS.has(lastWord) ? 'plural' : 'none';
+};
 
 type ColonValue = { start: number; end: number; isCredential: boolean };
 
@@ -287,12 +336,16 @@ const quoteDelimiterAt = (text: string, at: number, areQuotesEscaped: boolean): 
   return character === '\\' && QUOTE_CHARACTER.test(nextCharacter) ? nextCharacter : '';
 };
 
-/** Where the `[…]` or `{…}` that opens at `start` closes, strings and nesting included; one that never balances, nests deeper than the limit or runs past the length limit is cut at the limit. */
-const endOfCollection = (text: string, start: number, areQuotesEscaped: boolean): number => {
+type Collection = { end: number; holdsAString: boolean };
+
+/** Where the `[…]` or `{…}` that opens at `start` closes, strings and nesting included; one that never balances, nests deeper than the limit or runs past the length limit is cut at the limit. It also says whether a string value sits inside (an object key does not count; a string cut by the limit or a collection cut by the depth limit does). */
+const collectionFrom = (text: string, start: number, areQuotesEscaped: boolean): Collection => {
   const limit = Math.min(text.length, start + QUOTED_VALUE_LIMIT);
   const delimiterWidth = areQuotesEscaped ? 2 : 1;
   let depth = 0;
   let openQuote = '';
+  let holdsAString = false;
+  let isLastStringAKeyOrAValue = false;
   for (let at = start; at < limit; at += 1) {
     const character = text.charAt(at);
     const delimiter = quoteDelimiterAt(text, at, areQuotesEscaped);
@@ -301,9 +354,16 @@ const endOfCollection = (text: string, start: number, areQuotesEscaped: boolean)
       const closesTheString = delimiter === openQuote;
       const escapesTheNextCharacter = character === '\\' && !areQuotesEscaped;
       if (closesTheString) openQuote = '';
+      if (closesTheString) isLastStringAKeyOrAValue = true;
       if (closesTheString) at += delimiterWidth - 1;
       else if (escapesTheNextCharacter) at += 1;
       continue;
+    }
+    const isStringJustClosed = isLastStringAKeyOrAValue && !COLLECTION_WHITESPACE.test(character);
+    if (isStringJustClosed) {
+      const isAKey = character === ':';
+      holdsAString ||= !isAKey;
+      isLastStringAKeyOrAValue = false;
     }
     if (delimiter) {
       openQuote = delimiter;
@@ -311,25 +371,39 @@ const endOfCollection = (text: string, start: number, areQuotesEscaped: boolean)
       continue;
     }
     if (COLLECTION_OPENERS.includes(character)) depth += 1;
-    if (depth > COLLECTION_DEPTH_LIMIT) return limit;
+    if (depth > COLLECTION_DEPTH_LIMIT) return { end: limit, holdsAString: true };
     if (COLLECTION_CLOSERS.includes(character)) depth -= 1;
-    if (depth === 0) return at + 1;
+    if (depth === 0) return { end: at + 1, holdsAString };
   }
-  return limit;
+  const isStringCutByTheLimit = openQuote !== '' || isLastStringAKeyOrAValue;
+  return { end: limit, holdsAString: holdsAString || isStringCutByTheLimit };
 };
 
-/** Where the credentials of an authorization scheme end: at a line break, a closing bracket, a quote that opens no parameter value (`response="…"` belongs to them) or the limit; trailing padding stays out. */
+/** `response = "…"`: the quote at `at` follows an equals sign, whatever padding sits between them. */
+const followsAnEqualsSign = (text: string, at: number, credentialsStart: number): boolean => {
+  let beforePadding = at;
+  while (beforePadding > credentialsStart && PADDING_CHARACTER.test(text.charAt(beforePadding - 1))) beforePadding -= 1;
+  return text.charAt(beforePadding - 1) === '=';
+};
+
+/** Where the credentials of an authorization scheme end: at a line break that no folded line follows, a closing bracket, a quote that opens no parameter value (`response="…"` belongs to them) or the limit; trailing whitespace stays out. */
 const endOfAuthorizationCredentials = (text: string, start: number): number => {
   const limit = Math.min(text.length, start + QUOTED_VALUE_LIMIT);
   let at = start;
   while (at < limit) {
     const character = text.charAt(at);
     const endsTheLine = character === '\n' || character === '\r';
+    const foldedLineStart = endsTheLine ? startOfFoldedLineAfter(text, at) : NOT_FOLDED;
+    const isFoldedLineBreak = foldedLineStart !== NOT_FOLDED;
+    if (isFoldedLineBreak) {
+      at = foldedLineStart;
+      continue;
+    }
     const isEscapedQuote = character === '\\' && QUOTE_CHARACTER.test(text.charAt(at + 1));
     const quote = isEscapedQuote ? text.charAt(at + 1) : character;
     const quoteWidth = isEscapedQuote ? 2 : 1;
     const isQuote = QUOTE_CHARACTER.test(quote);
-    const opensAParameterValue = isQuote && text.charAt(at - 1) === '=';
+    const opensAParameterValue = isQuote && followsAnEqualsSign(text, at, start);
     if (endsTheLine || COLLECTION_CLOSERS.includes(character) || (isQuote && !opensAParameterValue)) break;
     if (!opensAParameterValue) {
       at += 1;
@@ -340,7 +414,7 @@ const endOfAuthorizationCredentials = (text: string, start: number): number => {
     at = isClosed ? closingAt + quoteWidth : closingAt;
   }
   let end = at;
-  while (end > start && PADDING_CHARACTER.test(text.charAt(end - 1))) end -= 1;
+  while (end > start && HEADER_WHITESPACE_CHARACTER.test(text.charAt(end - 1))) end -= 1;
   return end;
 };
 
@@ -350,7 +424,7 @@ const authorizationCredentialsFrom = (text: string, valueStart: number, keyName:
   const schemeEnd = endOfMatchAt(UNQUOTED_VALUE, text, valueStart);
   const scheme = text.slice(valueStart, schemeEnd);
   const isGenericScheme = AUTHORIZATION_SCHEME.test(scheme) && !AUTHORIZATION_SCHEMES.has(scheme.toLowerCase());
-  const credentialsStart = endOfMatchAt(PADDING, text, schemeEnd);
+  const credentialsStart = endOfFoldedPadding(text, schemeEnd);
   if (!isGenericScheme || credentialsStart === schemeEnd) return null;
   const credentialsEnd = endOfAuthorizationCredentials(text, credentialsStart);
   if (credentialsEnd <= credentialsStart) return null;
@@ -362,19 +436,24 @@ const colonValueAfter = (text: string, keyEnd: number, keyName: string): ColonVa
   const afterKeyQuotes = endOfMatchAt(QUOTES_AND_BACKSLASHES, text, keyEnd);
   const colonAt = endOfMatchAt(PADDING, text, afterKeyQuotes);
   if (text.charAt(colonAt) !== ':') return null;
-  const valueStart = endOfMatchAt(PADDING, text, colonAt + 1);
+  const isAuthorizationHeader = AUTHORIZATION_HEADER_NAME.test(keyName);
+  const valueStart = isAuthorizationHeader ? endOfFoldedPadding(text, colonAt + 1) : endOfMatchAt(PADDING, text, colonAt + 1);
   const quoteAt = endOfMatchAt(BACKSLASHES, text, valueStart);
   const isOpeningQuoteEscaped = quoteAt > valueStart;
   const quote = text.charAt(quoteAt);
   const opensQuotedValue = quote === '"' || quote === "'";
   if (opensQuotedValue) return quotedValueFrom(text, quoteAt + 1, quote, isOpeningQuoteEscaped);
   const opensCollection = !isOpeningQuoteEscaped && quote !== '' && COLLECTION_OPENERS.includes(quote);
-  if (opensCollection) {
+  const credentialNoun = credentialNounOf(keyName);
+  if (opensCollection && credentialNoun !== 'none') {
     const isInsideAnEscapedDocument = text.slice(keyEnd, afterKeyQuotes).includes('\\');
-    return { start: valueStart, end: endOfCollection(text, valueStart, isInsideAnEscapedDocument), isCredential: true };
+    const collection = collectionFrom(text, valueStart, isInsideAnEscapedDocument);
+    const isCounterCollection = credentialNoun === 'plural' && !collection.holdsAString;
+    if (!isCounterCollection) return { start: valueStart, end: collection.end, isCredential: true };
   }
   const isCookieHeaderValue = COOKIE_HEADER_NAME.test(keyName);
-  if (isOpeningQuoteEscaped || isCookieHeaderValue) return null;
+  const isKeyKnownToQuotedAndCollectionRulesOnly = !SECRET_KEY.test(keyName);
+  if (isOpeningQuoteEscaped || isCookieHeaderValue || isKeyKnownToQuotedAndCollectionRulesOnly) return null;
   return authorizationCredentialsFrom(text, valueStart, keyName) ?? unquotedValueFrom(text, valueStart);
 };
 
@@ -385,7 +464,7 @@ const maskingColonValues = (text: string): string => {
   let copiedUpTo = 0;
   for (let key = keys.exec(text); key; key = keys.exec(text)) {
     const [keyName = ''] = key;
-    if (!SECRET_KEY.test(keyName)) continue;
+    if (!SECRET_KEY.test(keyName) && credentialNounOf(keyName) === 'none') continue;
     const value = colonValueAfter(text, key.index + keyName.length, keyName);
     if (!value) continue;
     keys.lastIndex = value.end;

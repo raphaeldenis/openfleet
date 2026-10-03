@@ -651,6 +651,197 @@ describe('maskedSecrets: collections under a secret-named key', () => {
   );
 });
 
+describe('maskedSecrets: an authorization header with padding around its parameters', () => {
+  it.each([
+    ['spaces around the equals sign', 'Authorization: Digest response = "SYNTHETIC_SECRET_123"', `Authorization: Digest ${MASK}`],
+    ['spaces around the equals sign of every parameter', 'Authorization: Digest username = "USER_SECRET_123", response = "SYNTHETIC_SECRET_123"', `Authorization: Digest ${MASK}`],
+    ['a tab after the equals sign', 'Authorization: Digest response=\t"SYNTHETIC_SECRET_123"', `Authorization: Digest ${MASK}`],
+    ['a space after the equals sign', 'Authorization: Digest response= "SYNTHETIC_SECRET_123"', `Authorization: Digest ${MASK}`],
+    ['a space before the equals sign', 'Authorization: Digest response ="SYNTHETIC_SECRET_123"', `Authorization: Digest ${MASK}`],
+    ['mixed padding and an unquoted parameter', 'Authorization: Digest qop = auth, response \t= \t"SYNTHETIC_SECRET_123", opaque = "OP"', `Authorization: Digest ${MASK}`],
+    ['a single-quoted padded value', "Authorization: Digest response = 'SYNTHETIC_SECRET_123'", `Authorization: Digest ${MASK}`],
+    ['a padded value followed by the next header line', 'Authorization: Digest response = "SYNTHETIC_SECRET_123"\nHost: example.com', `Authorization: Digest ${MASK}\nHost: example.com`],
+    ['a header written inside a JSON message', '{"msg":"Authorization: Digest response = \\"SECRET_VALUE_1\\"","level":"info"}', `{"msg":"Authorization: Digest ${MASK}","level":"info"}`],
+  ])('masks %s', (_name, text, expected) => {
+    expect(maskedSecrets(text)).toBe(expected);
+  });
+
+  it('still ends the credentials at a quote that follows a word and no equals sign', () => {
+    expect(maskedSecrets('Authorization: Token SYNTHETIC_SECRET_123 "after"')).toBe(`Authorization: Token ${MASK} "after"`);
+  });
+
+  it.each([['Authorization: Digest response = "SYNTHETIC_SECRET_123"'], ['Authorization: Digest username\t=\t"U", response = "X"']])('masks %j the same way twice', (text) => {
+    const once = maskedSecrets(text);
+
+    expect(maskedSecrets(once)).toBe(once);
+  });
+
+  it.each(['Authorization: Digest a = "', 'Authorization: Digest a = "b" , ', 'Authorization: Digest a=\t \t"', 'Authorization: Digest a =                "', 'Authorization: Digest a =\\"'])(
+    'masks %j at 64 KiB and 256 KiB with 4x the input costing less than 8x',
+    (unit) => expectUnitGrowsLinearly(unit, maskedSecrets),
+  );
+});
+
+describe('maskedSecrets: an authorization header folded over several lines', () => {
+  it.each([
+    ['a credential folded after the first word', 'Authorization: Token X\r\n SYNTHETIC_SECRET_123', `Authorization: Token ${MASK}`],
+    ['a credential folded after the scheme', 'Authorization: Token\r\n SYNTHETIC_SECRET_123', `Authorization: Token\r\n ${MASK}`],
+    ['a scheme folded after the colon', 'Authorization:\r\n Token SYNTHETIC_SECRET_123', `Authorization:\r\n Token ${MASK}`],
+    ['a continuation folded with a bare line feed and a tab', 'Authorization: Token X\n\tSYNTHETIC_SECRET_123', `Authorization: Token ${MASK}`],
+    ['several continuation lines', 'Authorization: Token X\r\n Y\r\n\tSYNTHETIC_SECRET_123', `Authorization: Token ${MASK}`],
+    ['a Proxy-Authorization header', 'Proxy-Authorization: Token X\r\n SYNTHETIC_SECRET_123', `Proxy-Authorization: Token ${MASK}`],
+    ['a folded Digest parameter list', 'Authorization: Digest username="U",\r\n response="SYNTHETIC_SECRET_123"', `Authorization: Digest ${MASK}`],
+    ['the next unfolded header, kept readable', 'Authorization: Token X\r\n SYNTHETIC_SECRET_123\r\nHost: example.com', `Authorization: Token ${MASK}\r\nHost: example.com`],
+    ['a folded line holding an equals sign', 'Authorization: Token X\r\n Y=Z', `Authorization: Token ${MASK}`],
+    ['a folded multibyte continuation', 'Authorization: Token X\r\n é日😀SECRET', `Authorization: Token ${MASK}`],
+  ])('masks %s', (_name, text, expected) => {
+    expect(maskedSecrets(text)).toBe(expected);
+  });
+
+  it.each([
+    ['an already masked folded credential', `Authorization: Token\r\n ${MASK}`],
+    ['a folded line after prose', 'the authorization:\r\n is required'],
+  ])('leaves %s alone', (_name, text) => {
+    expect(maskedSecrets(text).includes('SYNTHETIC')).toBe(false);
+    expect(maskedSecrets(text)).toBe(text);
+  });
+
+  it.each([['Authorization: Token X\r\n SYNTHETIC_SECRET_123'], ['Authorization:\r\n Token SYNTHETIC_SECRET_123'], ['Authorization: Token\r\n SYNTHETIC_SECRET_123']])('masks %j the same way twice', (text) => {
+    const once = maskedSecrets(text);
+
+    expect(maskedSecrets(once)).toBe(once);
+  });
+
+  it.each([
+    'Authorization: Token a\r\n ',
+    'Authorization:\r\n ',
+    'Authorization: Token\r\n \r\n ',
+    'Authorization:\n\t',
+    'Authorization: Token a\n\tb ',
+    'Proxy-Authorization:\r\n Token\r\n a\r\n ',
+    'Authorization: Digest a="b",\r\n ',
+  ])('masks %j at 64 KiB and 256 KiB with 4x the input costing less than 8x', (unit) => expectUnitGrowsLinearly(unit, maskedSecrets));
+});
+
+describe('maskedSecrets: a collection under a key that merely holds a secret word', () => {
+  it.each([
+    ['a tokenizer object', 'tokenizer: {"count":1}'],
+    ['a maxTokens object', 'maxTokens: {"count":1}'],
+    ['a tokens counter array', 'tokens: [1,2]'],
+    ['a password_policy object', 'password_policy: {"count":1}'],
+    ['a keyboard array', 'keyboard: [1,2]'],
+    ['an author object', 'author: {"count":1}'],
+    ['a JSON tokenizer object', '{"tokenizer":{"count":1}}'],
+    ['a JSON maxTokens object', '{"maxTokens":{"count":1}}'],
+    ['a JSON tokens array', '{"tokens":[1,2]}'],
+    ['a JSON password_policy object', '{"password_policy":{"minLength":8}}'],
+    ['a secretary object', 'secretary: {"count":1}'],
+    ['a ticketCount array', 'ticketCount: [1,2]'],
+    ['a cookiejar object', '{"cookiejar":{"size":2}}'],
+    ['a numeric counter', 'maxTokens: 4096'],
+    ['a token_count object', '{"token_count":{"input":1}}'],
+    ['an authorization_policy object', 'authorization_policy: {"mode":"strict"}'],
+  ])('leaves %s readable', (_name, text) => {
+    expect(maskedSecrets(text)).toBe(text);
+  });
+
+  it.each([
+    ['a token array', '{"token":["a"]}', `{"token":${MASK}}`],
+    ['an api_key object', '{"api_key":{"a":"b"}}', `{"api_key":${MASK}}`],
+    ['an accessToken array', '{"accessToken":["a"]}', `{"accessToken":${MASK}}`],
+    ['an x-api-key array', 'x-api-key: ["a","b"]', `x-api-key: ${MASK}`],
+    ['an apiKey array', '{"apiKey":["a"]}', `{"apiKey":${MASK}}`],
+    ['an API_KEY array', '{"API_KEY":["a"]}', `{"API_KEY":${MASK}}`],
+    ['an APIKey array', '{"APIKey":["a"]}', `{"APIKey":${MASK}}`],
+    ['an apikey array', '{"apikey":["a"]}', `{"apikey":${MASK}}`],
+    ['a private_key array', '{"private_key":["a"]}', `{"private_key":${MASK}}`],
+    ['a privateKey object', '{"privateKey":{"a":"b"}}', `{"privateKey":${MASK}}`],
+    ['a client_secret array', '{"client_secret":["a"]}', `{"client_secret":${MASK}}`],
+    ['a password object', '{"password":{"a":"b"}}', `{"password":${MASK}}`],
+    ['a passwd array', '{"passwd":["a"]}', `{"passwd":${MASK}}`],
+    ['a credentials object', '{"credentials":{"user":"u"}}', `{"credentials":${MASK}}`],
+    ['a credential array', '{"credential":["a"]}', `{"credential":${MASK}}`],
+    ['an authorization array', '{"authorization":["a"]}', `{"authorization":${MASK}}`],
+    ['a dotted key', '{"auth.token":["a"]}', `{"auth.token":${MASK}}`],
+    ['a SCREAMING_SNAKE key', '{"ACCESS_TOKEN":["a"]}', `{"ACCESS_TOKEN":${MASK}}`],
+    ['a secrets array', '{"secrets":["a"]}', `{"secrets":${MASK}}`],
+    ['a passwords array', '{"passwords":["a"]}', `{"passwords":${MASK}}`],
+    ['a cookie object', '{"cookie":{"a":"b"}}', `{"cookie":${MASK}}`],
+    ['a ticket array', '{"ticket":["a"]}', `{"ticket":${MASK}}`],
+    ['a token_value array', '{"token_value":["a"]}', `{"token_value":${MASK}}`],
+    ['a secret_key array', '{"secret_key":["a"]}', `{"secret_key":${MASK}}`],
+    ['a secretData object', '{"secretData":{"a":"b"}}', `{"secretData":${MASK}}`],
+  ])('masks %s', (_name, text, expected) => {
+    expect(maskedSecrets(text)).toBe(expected);
+  });
+
+  it.each([
+    ['an array of strings', 'tokens: ["a","b"]', `tokens: ${MASK}`],
+    ['an object holding a string', '{"tokens":{"a":"x"}}', `{"tokens":${MASK}}`],
+    ['an array mixing a number and a string', '{"tokens":[1,"a"]}', `{"tokens":${MASK}}`],
+    ['a string nested deep', '{"tokens":[[1],{"deep":["s"]}],"next":1}', `{"tokens":${MASK},"next":1}`],
+    ['secrets', '{"secrets":["a"]}', `{"secrets":${MASK}}`],
+    ['passwords', '{"passwords":{"admin":"x"}}', `{"passwords":${MASK}}`],
+    ['credentials', '{"credentials":{"user":"u"}}', `{"credentials":${MASK}}`],
+    ['cookies', '{"cookies":["a=b"]}', `{"cookies":${MASK}}`],
+    ['tickets', '{"tickets":["T-1"]}', `{"tickets":${MASK}}`],
+    ['authTokens', '{"authTokens":["a"]}', `{"authTokens":${MASK}}`],
+    ['a padded string', '{"tokens":[ "a" ]}', `{"tokens":${MASK}}`],
+    ['a string of an escaped document', '{"body":"{\\"tokens\\":[\\"a\\"]}"}', `{"body":"{\\"tokens\\":${MASK}}"}`],
+    ['a string that never closes', '{"tokens":[1,2,"a', `{"tokens":${MASK}`],
+  ])('masks a plural credential noun holding %s', (_name, text, expected) => {
+    expect(maskedSecrets(text)).toBe(expected);
+  });
+
+  it.each([
+    ['tokens: [1,2]'],
+    ['tokens: [true,null]'],
+    ['{"tokens":{"in":12,"out":30}}'],
+    ['{"tokens":[1.5,-2,false]}'],
+    ['{"tokens":{ "in" : 12 }}'],
+    ['{"maxTokens":{"count":1}}'],
+    ['{"secrets":[]}'],
+    ['{"credentials":{}}'],
+    ['{"tickets":[[1],{"a":[2,null]}]}'],
+  ])('leaves %j readable: a plural credential noun holding no string', (text) => {
+    expect(maskedSecrets(text)).toBe(text);
+  });
+
+  it('masks a plural collection nested deeper than the limit, which it cannot read to the end', () => {
+    expect(maskedSecrets(`{"tokens":${'['.repeat(40)}1${']'.repeat(40)},"after":1}`)).toBe(`{"tokens":${MASK}`);
+  });
+
+  it('masks the whole plural collection when a credential sits inside it', () => {
+    expect(maskedSecrets('{"tokens":{"password":"SYNTHETIC_SECRET_123","in":1}}')).toBe(`{"tokens":${MASK}}`);
+    expect(maskedSecrets('{"tokens":{"in":{"password":"SYNTHETIC_SECRET_123"}}}')).toBe(`{"tokens":${MASK}}`);
+    expect(maskedSecrets('{"tokens":{"in":1,"password":12345678}}')).toBe('{"tokens":{"in":1,"password":12345678}}');
+  });
+
+  it.each(['tokens:[1,"', 'tokens:[1,2,', 'tokens:{"a":', 'tokens:{"a":1,', 'tokens:[ "', 'tokens:["a" ', 'tokens:[[[[', 'secrets:{"'])('masks %j at 64 KiB and 256 KiB with 4x the input costing less than 8x', (unit) =>
+    expectUnitGrowsLinearly(unit, maskedSecrets),
+  );
+
+  it('keeps masking a secret nested inside a collection under a plain key', () => {
+    expect(maskedSecrets('{"tokenizer":{"token":"SYNTHETIC_SECRET_123"}}')).toBe(`{"tokenizer":{"token":"${MASK}"}}`);
+  });
+
+  it('keeps masking the quoted value under a key that holds a secret word', () => {
+    expect(maskedSecrets('{"tokenizer":"SYNTHETIC_SECRET_123"}')).toBe(`{"tokenizer":"${MASK}"}`);
+  });
+
+  it.each(['tokenizer:[', 'maxTokens:{', 'password_policy: [', 'tokens:[1,', 'x-api-key:[', 'aB:[tokenizer:{'])('masks %j at 64 KiB and 256 KiB with 4x the input costing less than 8x', (unit) =>
+    expectUnitGrowsLinearly(unit, maskedSecrets),
+  );
+
+  it.each([
+    ['one long camel-case key', (size: number) => `${'token'.repeat(Math.ceil(size / 5))}:[`],
+    ['one long upper-case key', (size: number) => `${'TOKEN'.repeat(Math.ceil(size / 5))}:[`],
+    ['one long mixed-case key', (size: number) => `${'aTokenB'.repeat(Math.ceil(size / 7))}:[`],
+    ['one long upper-case key followed by a lower-case letter', (size: number) => `${'A'.repeat(size)}a:[`],
+    ['one long digit key', (size: number) => `token${'1'.repeat(size)}:[`],
+  ])('masks %s at 64 KiB and 256 KiB with 4x the input costing less than 8x', (_name, textOfSize) => expectLinearGrowthOn(textOfSize, maskedSecrets));
+});
+
 describe('maskedSecrets: shapes the desktop masker settles the same way', () => {
   it.each([
     ['a mask followed by a fragment of the secret, behind a collection', 'token: ***B', `token: ${MASK}`],

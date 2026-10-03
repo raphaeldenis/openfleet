@@ -25,6 +25,13 @@ const UNQUOTED_VALUE_MINIMUM_LENGTH: usize = 4;
 const LITERALS_THAT_HOLD_NO_SECRET: [&str; 4] = ["null", "true", "false", "undefined"];
 const AUTHORIZATION_SCHEMES: [&str; 2] = ["bearer", "basic"];
 const SECRET_KEY_WORDS: [&str; 9] = ["token", "secret", "authorization", "password", "cookie", "ticket", "apikey", "api_key", "api-key"];
+/// The last noun of a key that names a credential (`accessToken`, `client_secret`), for the rule that masks a whole collection.
+const SINGULAR_CREDENTIAL_NOUNS: [&str; 9] = ["token", "secret", "password", "passwd", "authorization", "credential", "cookie", "ticket", "apikey"];
+/// A plural noun also counts things (`tokens: [1,2]`): its collection is a credential only when it holds a string.
+const PLURAL_CREDENTIAL_NOUNS: [&str; 6] = ["tokens", "secrets", "passwords", "credentials", "cookies", "tickets"];
+const CREDENTIAL_NOUN_PAIRS: [&str; 3] = ["api key", "private key", "secret key"];
+/// `token_value`, `secretData`: the noun after the credential word only says how the credential is held.
+const CONTAINER_WORDS: [&str; 7] = ["value", "values", "string", "data", "list", "map", "json"];
 const ESCAPED_SEPARATORS: &[u8] = b" :=\t";
 
 type Replacement = Option<(usize, String)>;
@@ -326,6 +333,59 @@ fn parameter_from(text: &str, match_start: usize, key_start: usize, depth: usize
 fn is_secret_key(key: &str) -> bool {
   let decoded_key = with_escapes_decoded(key.as_bytes()).to_ascii_lowercase();
   SECRET_KEY_WORDS.iter().any(|word| decoded_key.windows(word.len()).any(|window| window == word.as_bytes()))
+}
+
+/// Splits a key into the words of its camel case, snake case, kebab case and dotted spelling (`accessToken`, `x-api-key`, `API_KEY`, `APIKey` → access token, x api key, api key, api key).
+fn key_words(key: &str) -> Vec<String> {
+  let bytes = key.as_bytes();
+  let mut words = Vec::new();
+  let mut at = 0;
+  while at < bytes.len() {
+    let byte = bytes[at];
+    let word_end = if byte.is_ascii_digit() {
+      at + run_length(bytes, at, |next| next.is_ascii_digit())
+    } else if byte.is_ascii_lowercase() {
+      at + run_length(bytes, at, |next| next.is_ascii_lowercase())
+    } else if byte.is_ascii_uppercase() && bytes.get(at + 1).is_some_and(u8::is_ascii_lowercase) {
+      at + 1 + run_length(bytes, at + 1, |next| next.is_ascii_lowercase())
+    } else if byte.is_ascii_uppercase() {
+      let upper_run_end = at + run_length(bytes, at, |next| next.is_ascii_uppercase());
+      let last_upper_starts_a_word = bytes.get(upper_run_end).is_some_and(u8::is_ascii_lowercase);
+      if last_upper_starts_a_word { upper_run_end - 1 } else { upper_run_end }
+    } else {
+      at += 1;
+      continue;
+    };
+    words.push(key[at..word_end].to_ascii_lowercase());
+    at = word_end;
+  }
+  words
+}
+
+#[derive(PartialEq)]
+enum CredentialNoun {
+  Singular,
+  Plural,
+  None,
+}
+
+/// The last noun of a key: `token`, `accessToken`, `x-api-key`, `private_key`, `token_value` end on a credential; `tokens` and `authTokens` end on a plural one.
+/// `tokenizer`, `password_policy`, `ticketCount` and `secretary` only hold a secret word inside another word or before another noun: they describe a credential, they are not one.
+fn credential_noun_of(key: &str) -> CredentialNoun {
+  let mut words = key_words(key);
+  while words.last().is_some_and(|word| CONTAINER_WORDS.contains(&word.as_str())) {
+    words.pop();
+  }
+  let last_word = words.last().map(String::as_str).unwrap_or_default();
+  let last_pair = words[words.len().saturating_sub(2)..].join(" ");
+  if SINGULAR_CREDENTIAL_NOUNS.contains(&last_word) || CREDENTIAL_NOUN_PAIRS.contains(&last_pair.as_str()) {
+    return CredentialNoun::Singular;
+  }
+  if PLURAL_CREDENTIAL_NOUNS.contains(&last_word) {
+    CredentialNoun::Plural
+  } else {
+    CredentialNoun::None
+  }
 }
 
 fn with_one_layer_decoded(bytes: &[u8]) -> Vec<u8> {
@@ -729,14 +789,22 @@ fn quote_delimiter_at(bytes: &[u8], at: usize, are_quotes_escaped: bool) -> Opti
   (byte == b'\\' && is_a_quote_byte(next_byte)).then_some(next_byte)
 }
 
+struct Collection {
+  end: usize,
+  holds_a_string: bool,
+}
+
 /// Returns where the `[…]` or `{…}` that opens at `start` closes, strings and nesting included; one that never balances, nests deeper than the limit
-/// or runs past the length limit is cut at the limit.
-fn end_of_collection(text: &str, start: usize, are_quotes_escaped: bool) -> usize {
+/// or runs past the length limit is cut at the limit. It also says whether a string value sits inside (an object key does not count;
+/// a string cut by the limit or a collection cut by the depth limit does).
+fn collection_from(text: &str, start: usize, are_quotes_escaped: bool) -> Collection {
   let bytes = text.as_bytes();
   let limit = bounded_limit(text, start);
   let delimiter_width = if are_quotes_escaped { 2 } else { 1 };
   let mut depth = 0;
   let mut open_quote: Option<u8> = None;
+  let mut holds_a_string = false;
+  let mut is_last_string_a_key_or_a_value = false;
   let mut at = start;
   while at < limit {
     let byte = bytes[at];
@@ -746,9 +814,15 @@ fn end_of_collection(text: &str, start: usize, are_quotes_escaped: bool) -> usiz
       let escapes_the_next_byte = byte == b'\\' && !are_quotes_escaped;
       if closes_the_string {
         open_quote = None;
+        is_last_string_a_key_or_a_value = true;
       }
       at += if closes_the_string { delimiter_width } else if escapes_the_next_byte { 2 } else { 1 };
       continue;
+    }
+    let is_string_just_closed = is_last_string_a_key_or_a_value && text.is_char_boundary(at) && space_len_at(text, at) == 0;
+    if is_string_just_closed {
+      holds_a_string |= byte != b':';
+      is_last_string_a_key_or_a_value = false;
     }
     if delimiter.is_some() {
       open_quote = delimiter;
@@ -759,21 +833,60 @@ fn end_of_collection(text: &str, start: usize, are_quotes_escaped: bool) -> usiz
       depth += 1;
     }
     if depth > COLLECTION_DEPTH_LIMIT {
-      return limit;
+      return Collection { end: limit, holds_a_string: true };
     }
     if matches!(byte, b']' | b'}') {
       depth -= 1;
     }
     if depth == 0 {
-      return at + 1;
+      return Collection { end: at + 1, holds_a_string };
     }
     at += 1;
   }
-  limit
+  let is_string_cut_by_the_limit = open_quote.is_some() || is_last_string_a_key_or_a_value;
+  Collection { end: limit, holds_a_string: holds_a_string || is_string_cut_by_the_limit }
 }
 
-/// Returns where the credentials of an authorization scheme end: at a line break, a closing bracket, a quote that opens no parameter value
-/// (`response="…"` belongs to them) or the limit; trailing padding stays out.
+/// Returns where the line after the line break at `line_break_at` starts when it continues the header (it starts with a space or a tab).
+fn start_of_folded_line_after(bytes: &[u8], line_break_at: usize) -> Option<usize> {
+  let next_line_start = if bytes[line_break_at] == b'\r' && bytes.get(line_break_at + 1) == Some(&b'\n') { line_break_at + 2 } else { line_break_at + 1 };
+  matches!(bytes.get(next_line_start), Some(b' ' | b'\t')).then_some(next_line_start)
+}
+
+/// Skips the spaces, tabs and folded line breaks of a header, up to the length limit.
+fn end_of_folded_padding(text: &str, from: usize) -> usize {
+  let bytes = text.as_bytes();
+  let limit = bounded_limit(text, from);
+  let mut at = from;
+  while at < limit {
+    if is_padding_byte(bytes[at]) {
+      at += 1;
+      continue;
+    }
+    let is_a_line_break = matches!(bytes[at], b'\r' | b'\n');
+    let Some(folded_line_start) = is_a_line_break.then(|| start_of_folded_line_after(bytes, at)).flatten() else {
+      break;
+    };
+    at = folded_line_start;
+  }
+  at
+}
+
+/// `response = "…"`: the quote at `at` follows an equals sign, whatever padding sits between them.
+fn follows_an_equals_sign(bytes: &[u8], at: usize, credentials_start: usize) -> bool {
+  let mut before_padding = at;
+  while before_padding > credentials_start && is_padding_byte(bytes[before_padding - 1]) {
+    before_padding -= 1;
+  }
+  before_padding > 0 && bytes[before_padding - 1] == b'='
+}
+
+fn is_header_whitespace_byte(byte: u8) -> bool {
+  matches!(byte, b' ' | b'\t' | b'\r' | b'\n')
+}
+
+/// Returns where the credentials of an authorization scheme end: at a line break that no folded line follows, a closing bracket, a quote that opens no parameter value
+/// (`response="…"` belongs to them) or the limit; trailing whitespace stays out.
 fn end_of_authorization_credentials(text: &str, start: usize) -> usize {
   let bytes = text.as_bytes();
   let limit = bounded_limit(text, start);
@@ -785,10 +898,15 @@ fn end_of_authorization_credentials(text: &str, start: usize) -> usize {
       continue;
     }
     let ends_the_line = byte == b'\n' || byte == b'\r';
+    let folded_line_start = ends_the_line.then(|| start_of_folded_line_after(bytes, at)).flatten();
+    if let Some(folded_line_start) = folded_line_start {
+      at = folded_line_start;
+      continue;
+    }
     let escaped_quote = if byte == b'\\' { bytes.get(at + 1).copied().filter(|next_byte| is_a_quote_byte(*next_byte)) } else { None };
     let quote = escaped_quote.or_else(|| is_a_quote_byte(byte).then_some(byte));
     let quote_width = if escaped_quote.is_some() { 2 } else { 1 };
-    let opens_a_parameter_value = quote.is_some() && at > 0 && bytes[at - 1] == b'=';
+    let opens_a_parameter_value = quote.is_some() && follows_an_equals_sign(bytes, at, start);
     let is_a_closing_bracket = matches!(byte, b']' | b'}');
     let is_a_quote_that_opens_no_value = quote.is_some() && !opens_a_parameter_value;
     if ends_the_line || is_a_closing_bracket || is_a_quote_that_opens_no_value {
@@ -804,7 +922,7 @@ fn end_of_authorization_credentials(text: &str, start: usize) -> usize {
     at = if closes_with_the_quote { closing_at + quote_width } else { closing_at };
   }
   let mut end = at;
-  while end > start && is_padding_byte(bytes[end - 1]) {
+  while end > start && is_header_whitespace_byte(bytes[end - 1]) {
     end -= 1;
   }
   end
@@ -832,7 +950,7 @@ fn authorization_credentials_from(text: &str, value_start: usize, key: &str) -> 
     return None;
   }
   let scheme_end = unquoted_value_end(text, value_start);
-  let credentials_start = scheme_end + run_length(text.as_bytes(), scheme_end, is_padding_byte);
+  let credentials_start = end_of_folded_padding(text, scheme_end);
   let has_credentials_after_padding = credentials_start > scheme_end;
   if !(has_credentials_after_padding && is_a_generic_authorization_scheme(&text[value_start..scheme_end])) {
     return None;
@@ -849,7 +967,7 @@ fn colon_value_after(text: &str, key_end: usize, key: &str) -> Option<ColonValue
   if bytes.get(colon_at) != Some(&b':') {
     return None;
   }
-  let value_start = colon_at + 1 + run_length(bytes, colon_at + 1, is_padding_byte);
+  let value_start = if is_an_authorization_header_name(key) { end_of_folded_padding(text, colon_at + 1) } else { colon_at + 1 + run_length(bytes, colon_at + 1, is_padding_byte) };
   let quote_at = value_start + run_length(bytes, value_start, |byte| byte == b'\\');
   let is_opening_quote_escaped = quote_at > value_start;
   if let Some(quote) = bytes.get(quote_at).copied().filter(|byte| matches!(byte, b'"' | b'\'')) {
@@ -857,11 +975,17 @@ fn colon_value_after(text: &str, key_end: usize, key: &str) -> Option<ColonValue
   }
   let is_the_mask = text[quote_at..].starts_with(MASK);
   let opens_collection = !is_opening_quote_escaped && !is_the_mask && matches!(bytes.get(quote_at), Some(b'[' | b'{'));
-  if opens_collection {
+  let credential_noun = credential_noun_of(key);
+  if opens_collection && credential_noun != CredentialNoun::None {
     let is_inside_an_escaped_document = text[key_end..after_closing_quote].contains('\\');
-    return Some(ColonValue { start: value_start, end: end_of_collection(text, value_start, is_inside_an_escaped_document), is_credential: true });
+    let collection = collection_from(text, value_start, is_inside_an_escaped_document);
+    let is_counter_collection = credential_noun == CredentialNoun::Plural && !collection.holds_a_string;
+    if !is_counter_collection {
+      return Some(ColonValue { start: value_start, end: collection.end, is_credential: true });
+    }
   }
-  if is_opening_quote_escaped || is_a_cookie_header_name(key) {
+  let is_key_known_to_quoted_and_collection_rules_only = !is_secret_key(key);
+  if is_opening_quote_escaped || is_a_cookie_header_name(key) || is_key_known_to_quoted_and_collection_rules_only {
     return None;
   }
   authorization_credentials_from(text, value_start, key).or_else(|| Some(unquoted_value_from(text, value_start)))
@@ -876,7 +1000,7 @@ fn colon_value_at(text: &str, index: usize) -> Replacement {
   }
   let key_end = index + run_length(bytes, index, is_key_byte);
   let key = &text[index..key_end];
-  if !is_secret_key(key) {
+  if !is_secret_key(key) && credential_noun_of(key) == CredentialNoun::None {
     return None;
   }
   let value = colon_value_after(text, key_end, key)?;
@@ -958,12 +1082,10 @@ fn end_of_header_value(text: &str, from: usize) -> usize {
       at += 1;
       continue;
     }
-    let next_line_start = if bytes[at] == b'\r' && bytes.get(at + 1) == Some(&b'\n') { at + 2 } else { at + 1 };
-    let is_a_folded_line = matches!(bytes.get(next_line_start), Some(b' ' | b'\t'));
-    if !is_a_folded_line {
+    let Some(folded_line_start) = start_of_folded_line_after(bytes, at) else {
       return at;
-    }
-    at = next_line_start;
+    };
+    at = folded_line_start;
   }
   bytes.len()
 }
@@ -991,7 +1113,7 @@ fn cookie_header_at(text: &str, index: usize) -> Replacement {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::linear_growth::{cpu_time_to_run_on_repeated, linear_growth_problems, LinearGrowthBudget};
+  use crate::linear_growth::{cpu_time_to_run_on_repeated, linear_growth_problems, thread_cpu_time_of, LinearGrowthBudget};
 
   fn masked(text: &str) -> String {
     redact(text, &[])
@@ -1371,6 +1493,211 @@ mod tests {
     }
   }
 
+  // ---- an authorization header with padding around its parameters ----
+
+  #[test]
+  fn masks_the_digest_parameters_written_with_padding_around_the_equals_sign() {
+    let cases = [
+      (r#"Authorization: Digest response = "SYNTHETIC_SECRET_123""#, "Authorization: Digest [redacted]"),
+      (r#"Authorization: Digest username = "USER_SECRET_123", response = "SYNTHETIC_SECRET_123""#, "Authorization: Digest [redacted]"),
+      ("Authorization: Digest response=\t\"SYNTHETIC_SECRET_123\"", "Authorization: Digest [redacted]"),
+      (r#"Authorization: Digest response= "SYNTHETIC_SECRET_123""#, "Authorization: Digest [redacted]"),
+      (r#"Authorization: Digest response ="SYNTHETIC_SECRET_123""#, "Authorization: Digest [redacted]"),
+      ("Authorization: Digest qop = auth, response \t= \t\"SYNTHETIC_SECRET_123\", opaque = \"OP\"", "Authorization: Digest [redacted]"),
+      ("Authorization: Digest response = 'SYNTHETIC_SECRET_123'", "Authorization: Digest [redacted]"),
+      ("Authorization: Digest response = \"SYNTHETIC_SECRET_123\"\nHost: example.com", "Authorization: Digest [redacted]\nHost: example.com"),
+      (r#"{"msg":"Authorization: Digest response = \"SECRET_VALUE_1\"","level":"info"}"#, r#"{"msg":"Authorization: Digest [redacted]","level":"info"}"#),
+      (r#"Authorization: Token SYNTHETIC_SECRET_123 "after""#, r#"Authorization: Token [redacted] "after""#),
+    ];
+
+    for (text, expected) in cases {
+      assert_eq!(masked(text), expected, "{text}");
+    }
+  }
+
+  // ---- an authorization header folded over several lines ----
+
+  #[test]
+  fn masks_the_credentials_of_an_authorization_header_folded_over_several_lines() {
+    let cases = [
+      ("Authorization: Token X\r\n SYNTHETIC_SECRET_123", "Authorization: Token [redacted]"),
+      ("Authorization: Token\r\n SYNTHETIC_SECRET_123", "Authorization: Token\r\n [redacted]"),
+      ("Authorization:\r\n Token SYNTHETIC_SECRET_123", "Authorization:\r\n Token [redacted]"),
+      ("Authorization: Token X\n\tSYNTHETIC_SECRET_123", "Authorization: Token [redacted]"),
+      ("Authorization: Token X\r\n Y\r\n\tSYNTHETIC_SECRET_123", "Authorization: Token [redacted]"),
+      ("Proxy-Authorization: Token X\r\n SYNTHETIC_SECRET_123", "Proxy-Authorization: Token [redacted]"),
+      ("Authorization: Digest username=\"U\",\r\n response=\"SYNTHETIC_SECRET_123\"", "Authorization: Digest [redacted]"),
+      ("Authorization: Token X\r\n SYNTHETIC_SECRET_123\r\nHost: example.com", "Authorization: Token [redacted]\r\nHost: example.com"),
+      ("Authorization: Token X\r\n Y=Z", "Authorization: Token [redacted]"),
+      ("Authorization: Token X\r\n é日😀SECRET", "Authorization: Token [redacted]"),
+    ];
+
+    for (text, expected) in cases {
+      assert_eq!(masked(text), expected, "{text:?}");
+    }
+  }
+
+  #[test]
+  fn leaves_the_folded_authorization_forms_that_hold_no_credential_alone() {
+    for plain in ["Authorization: Token\r\n [redacted]", "Authorization: Token\r\n ***", "the authorization:\r\n is required"] {
+      assert_eq!(masked(plain), plain, "{plain:?}");
+    }
+  }
+
+  #[test]
+  fn masks_the_folded_and_padded_authorization_forms_the_same_way_twice() {
+    for text in [
+      "Authorization: Token X\r\n SYNTHETIC_SECRET_123",
+      "Authorization:\r\n Token SYNTHETIC_SECRET_123",
+      "Authorization: Token\r\n SYNTHETIC_SECRET_123",
+      r#"Authorization: Digest response = "SYNTHETIC_SECRET_123""#,
+      "Authorization: Digest username\t=\t\"U\", response = \"X\"",
+    ] {
+      let once = masked(text);
+
+      assert_eq!(masked(&once), once, "{text:?}");
+    }
+  }
+
+  // ---- collections under a key that merely holds a secret word ----
+
+  #[test]
+  fn leaves_the_collection_under_a_key_that_merely_holds_a_secret_word_readable() {
+    for plain in [
+      r#"tokenizer: {"count":1}"#,
+      r#"maxTokens: {"count":1}"#,
+      "tokens: [1,2]",
+      r#"password_policy: {"count":1}"#,
+      "keyboard: [1,2]",
+      r#"author: {"count":1}"#,
+      r#"{"tokenizer":{"count":1}}"#,
+      r#"{"maxTokens":{"count":1}}"#,
+      r#"{"tokens":[1,2]}"#,
+      r#"{"password_policy":{"minLength":8}}"#,
+      r#"secretary: {"count":1}"#,
+      "ticketCount: [1,2]",
+      r#"{"cookiejar":{"size":2}}"#,
+      "maxTokens: 4096",
+      r#"{"token_count":{"input":1}}"#,
+      r#"authorization_policy: {"mode":"strict"}"#,
+    ] {
+      assert_eq!(masked(plain), plain);
+    }
+  }
+
+  #[test]
+  fn masks_the_collection_under_a_key_whose_last_noun_is_a_credential() {
+    let cases = [
+      (r#"{"token":["a"]}"#, r#"{"token":[redacted]}"#),
+      (r#"{"api_key":{"a":"b"}}"#, r#"{"api_key":[redacted]}"#),
+      (r#"{"accessToken":["a"]}"#, r#"{"accessToken":[redacted]}"#),
+      (r#"x-api-key: ["a","b"]"#, "x-api-key: [redacted]"),
+      (r#"{"apiKey":["a"]}"#, r#"{"apiKey":[redacted]}"#),
+      (r#"{"API_KEY":["a"]}"#, r#"{"API_KEY":[redacted]}"#),
+      (r#"{"APIKey":["a"]}"#, r#"{"APIKey":[redacted]}"#),
+      (r#"{"apikey":["a"]}"#, r#"{"apikey":[redacted]}"#),
+      (r#"{"private_key":["a"]}"#, r#"{"private_key":[redacted]}"#),
+      (r#"{"privateKey":{"a":"b"}}"#, r#"{"privateKey":[redacted]}"#),
+      (r#"{"client_secret":["a"]}"#, r#"{"client_secret":[redacted]}"#),
+      (r#"{"password":{"a":"b"}}"#, r#"{"password":[redacted]}"#),
+      (r#"{"passwd":["a"]}"#, r#"{"passwd":[redacted]}"#),
+      (r#"{"credentials":{"user":"u"}}"#, r#"{"credentials":[redacted]}"#),
+      (r#"{"credential":["a"]}"#, r#"{"credential":[redacted]}"#),
+      (r#"{"authorization":["a"]}"#, r#"{"authorization":[redacted]}"#),
+      (r#"{"auth.token":["a"]}"#, r#"{"auth.token":[redacted]}"#),
+      (r#"{"ACCESS_TOKEN":["a"]}"#, r#"{"ACCESS_TOKEN":[redacted]}"#),
+      (r#"{"secrets":["a"]}"#, r#"{"secrets":[redacted]}"#),
+      (r#"{"passwords":["a"]}"#, r#"{"passwords":[redacted]}"#),
+      (r#"{"cookie":{"a":"b"}}"#, r#"{"cookie":[redacted]}"#),
+      (r#"{"ticket":["a"]}"#, r#"{"ticket":[redacted]}"#),
+      (r#"{"token_value":["a"]}"#, r#"{"token_value":[redacted]}"#),
+      (r#"{"secret_key":["a"]}"#, r#"{"secret_key":[redacted]}"#),
+      (r#"{"secretData":{"a":"b"}}"#, r#"{"secretData":[redacted]}"#),
+    ];
+
+    for (text, expected) in cases {
+      assert_eq!(masked(text), expected, "{text}");
+    }
+  }
+
+  #[test]
+  fn masks_a_collection_under_a_plural_credential_noun_when_it_holds_a_string() {
+    let cases = [
+      (r#"tokens: ["a","b"]"#, "tokens: [redacted]"),
+      (r#"{"tokens":{"a":"x"}}"#, r#"{"tokens":[redacted]}"#),
+      (r#"{"tokens":[1,"a"]}"#, r#"{"tokens":[redacted]}"#),
+      (r#"{"tokens":[[1],{"deep":["s"]}],"next":1}"#, r#"{"tokens":[redacted],"next":1}"#),
+      (r#"{"secrets":["a"]}"#, r#"{"secrets":[redacted]}"#),
+      (r#"{"passwords":{"admin":"x"}}"#, r#"{"passwords":[redacted]}"#),
+      (r#"{"credentials":{"user":"u"}}"#, r#"{"credentials":[redacted]}"#),
+      (r#"{"cookies":["a=b"]}"#, r#"{"cookies":[redacted]}"#),
+      (r#"{"tickets":["T-1"]}"#, r#"{"tickets":[redacted]}"#),
+      (r#"{"authTokens":["a"]}"#, r#"{"authTokens":[redacted]}"#),
+      (r#"{"tokens":[ "a" ]}"#, r#"{"tokens":[redacted]}"#),
+      (r#"{"body":"{\"tokens\":[\"a\"]}"}"#, r#"{"body":"{\"tokens\":[redacted]}"}"#),
+      (r#"{"tokens":[1,2,"a"#, r#"{"tokens":[redacted]"#),
+    ];
+
+    for (text, expected) in cases {
+      assert_eq!(masked(text), expected, "{text}");
+    }
+  }
+
+  #[test]
+  fn leaves_a_collection_under_a_plural_credential_noun_readable_when_it_holds_no_string() {
+    for plain in [
+      "tokens: [1,2]",
+      "tokens: [true,null]",
+      r#"{"tokens":{"in":12,"out":30}}"#,
+      r#"{"tokens":[1.5,-2,false]}"#,
+      r#"{"tokens":{ "in" : 12 }}"#,
+      r#"{"maxTokens":{"count":1}}"#,
+      r#"{"secrets":[]}"#,
+      r#"{"credentials":{}}"#,
+      r#"{"tickets":[[1],{"a":[2,null]}]}"#,
+    ] {
+      assert_eq!(masked(plain), plain);
+    }
+  }
+
+  #[test]
+  fn masks_a_plural_collection_nested_deeper_than_the_limit_which_it_cannot_read_to_the_end() {
+    let deeper_than_the_limit = format!(r#"{{"tokens":{}1{},"after":1}}"#, "[".repeat(40), "]".repeat(40));
+
+    assert_eq!(masked(&deeper_than_the_limit), r#"{"tokens":[redacted]"#);
+  }
+
+  #[test]
+  fn masks_a_credential_nested_in_a_plural_collection_whole_and_in_a_readable_one_on_its_own() {
+    assert_eq!(masked(r#"{"tokens":{"password":"SYNTHETIC_SECRET_123","in":1}}"#), r#"{"tokens":[redacted]}"#);
+    assert_eq!(masked(r#"{"tokens":{"in":{"password":"SYNTHETIC_SECRET_123"}}}"#), r#"{"tokens":[redacted]}"#);
+    assert_eq!(masked(r#"{"tokens":{"in":1,"password":12345678}}"#), r#"{"tokens":{"in":1,"password":12345678}}"#);
+  }
+
+  #[test]
+  fn keeps_masking_what_sits_inside_or_after_a_key_that_merely_holds_a_secret_word() {
+    assert_eq!(masked(r#"{"tokenizer":{"token":"SYNTHETIC_SECRET_123"}}"#), r#"{"tokenizer":{"token":"[redacted]"}}"#);
+    assert_eq!(masked(r#"{"tokenizer":"SYNTHETIC_SECRET_123"}"#), r#"{"tokenizer":"[redacted]"}"#);
+  }
+
+  #[test]
+  fn splits_a_key_into_its_words_whatever_its_spelling() {
+    let cases = [
+      ("accessToken", vec!["access", "token"]),
+      ("x-api-key", vec!["x", "api", "key"]),
+      ("API_KEY", vec!["api", "key"]),
+      ("APIKey", vec!["api", "key"]),
+      ("auth.token2", vec!["auth", "token", "2"]),
+      ("TOKENS", vec!["tokens"]),
+      ("aTokenB", vec!["a", "token", "b"]),
+      ("日token", vec!["token"]),
+    ];
+
+    for (key, expected) in cases {
+      assert_eq!(key_words(key), expected, "{key}");
+    }
+  }
+
   // ---- collections under a secret-named key ----
 
   #[test]
@@ -1498,6 +1825,7 @@ mod tests {
       "?", "#", "@", "://", "=", "&", ";", ":", "%", "%3F", "%23", "%40", "é", "日", "😀", "\u{85}", "\u{feff}", "Bearer", "Basic", "Authorization:", "token", "a=", "/hooks/", "[redacted]",
       " ", "\n", "\"", "'", "\\\"", "{", "}", ",", "Cookie: ", "Set-Cookie: ", "password: ", "\"token\":", "eyJabcdef.eyJabcdef", "sk-", "xxxxxxxxxxxxxxxxxxxxxxxx", "-----BEGIN PRIVATE KEY-----", "-----END PRIVATE KEY-----",
       "Token ", "Digest ", "[\"", "{\"a\":", "]", "Authorization: ", "Proxy-Authorization: ", "response=\"", "\r\n ", "***", "=\\\"", "\\\"]", "\\\"token\\\":",
+      " = ", "\t", "\n\t", "tokenizer: ", "passwd: ", "\"private_key\":", "[1,2]",
     ];
     let mut seed: u32 = 139;
     let mut next = move || {
@@ -1534,6 +1862,10 @@ mod tests {
       "Cookie: a=\"", "Set-Cookie: a=\"", "Cookie: a=\"b\"; ", "Cookie: a=\\\"", "Cookie: a='", "Cookie: a=1;\r\n ", "Cookie:\r\n \r\n ", "Cookie: \"", "Cookie: a=\"\\", "Cookie: é=\"日",
       "Authorization: Token ", "Authorization: Digest a=\"", "Authorization: Digest a=\"b\", ", "Proxy-Authorization: Token a b ", "Authorization: aaa ", "Authorization: Digest a=\\\"", "Authorization: Token \"", "authorization: aaa}",
       "token:[", "token:{\"a\":[", "token:[\"", "token:[\\\"", "{\"token\":[", "token: [[[[[[[[[[", "\"token\":{\"token\":", "token:[]", "token:['", "\\\"token\\\":[\\\"", "token:[}", "Bearer %3A", "Bearer%3A%3A", "Bearer\u{85}=",
+      "Authorization: Digest a = \"", "Authorization: Digest a = \"b\" , ", "Authorization: Digest a=\t \t\"", "Authorization: Digest a =                \"", "Authorization: Digest a =\\\"",
+      "Authorization: Token a\r\n ", "Authorization:\r\n ", "Authorization: Token\r\n \r\n ", "Authorization:\n\t", "Authorization: Token a\n\tb ", "Proxy-Authorization:\r\n Token\r\n a\r\n ", "Authorization: Digest a=\"b\",\r\n ",
+      "tokens:[1,\"", "tokens:[1,2,", "tokens:{\"a\":", "tokens:{\"a\":1,", "tokens:[ \"", "tokens:[\"a\" ", "tokens:[[[[", "secrets:{\"", "tokens:[\"é\"\u{a0}",
+      "tokenizer:[", "maxTokens:{", "password_policy: [", "tokens:[1,", "x-api-key:[", "aB:[tokenizer:{", "Authorization: Token é\r\n ", "Authorization: Digest a = \"日",
     ];
     for unit in units {
       let cpu_time_to_mask = cpu_time_to_run_on_repeated(unit, |hostile| {
@@ -1543,6 +1875,32 @@ mod tests {
       let problems = linear_growth_problems(cpu_time_to_mask, &LinearGrowthBudget::between(SMALL_INPUT, LARGE_INPUT));
 
       assert!(problems.is_empty(), "{unit:?}: {problems:?}");
+    }
+  }
+
+  #[test]
+  fn splits_one_endless_key_into_words_in_linear_time() {
+    const SMALL_INPUT: usize = 64 * 1024;
+    const LARGE_INPUT: usize = 256 * 1024;
+    type HostileKeyShape = (&'static str, fn(usize) -> String);
+    let texts_of_size: [HostileKeyShape; 5] = [
+      ("camel", |size| format!("{}:[", "token".repeat(size / 5))),
+      ("upper", |size| format!("{}:[", "TOKEN".repeat(size / 5))),
+      ("mixed", |size| format!("{}:[", "aTokenB".repeat(size / 7))),
+      ("upper then lower", |size| format!("{}a:[", "A".repeat(size))),
+      ("digits", |size| format!("token{}:[", "1".repeat(size))),
+    ];
+    for (name, text_of_size) in texts_of_size {
+      let cpu_time_to_mask = |size: usize| {
+        let hostile = text_of_size(size);
+        thread_cpu_time_of(|| {
+          masked(&hostile);
+        })
+      };
+
+      let problems = linear_growth_problems(cpu_time_to_mask, &LinearGrowthBudget::between(SMALL_INPUT, LARGE_INPUT));
+
+      assert!(problems.is_empty(), "{name}: {problems:?}");
     }
   }
 }
