@@ -1,15 +1,21 @@
 import { describe, expect, it } from 'vitest';
+import { expectLinearGrowth, cpuMillisecondsToRun } from './__testing__/linearGrowth.js';
 import { MASK, maskedSecrets, maskingCutCredential } from './redact.js';
+
+const repeatedTo = (unit: string, size: number) => unit.repeat(Math.ceil(size / unit.length));
+
+const expectLinearGrowthOn = (
+  textOfSize: (size: number) => string,
+  run: (text: string) => unknown,
+  budget: { smallSize: number; largeSize: number; ceilingMilliseconds?: number } = { smallSize: 64 * 1024, largeSize: 256 * 1024 },
+) => expectLinearGrowth(cpuMillisecondsToRun(textOfSize, run), budget);
+
+/** Times `run` on a hostile text of 64 KiB and 256 KiB: 4x the input must stay under the growth bound, whatever the machine's load. */
+const expectUnitGrowsLinearly = (unit: string, run: (text: string) => unknown) => expectLinearGrowthOn((size) => repeatedTo(unit, size), run);
 
 const millisecondsToMask = (text: string): number => {
   const start = performance.now();
   maskedSecrets(text);
-  return performance.now() - start;
-};
-
-const millisecondsToMaskCut = (text: string): number => {
-  const start = performance.now();
-  maskingCutCredential(text);
   return performance.now() - start;
 };
 
@@ -33,12 +39,7 @@ describe('maskedSecrets: ReDoS guard on the well-known formats', () => {
   });
 
   it('scales linearly: a 4x longer run of JWT starts costs less than 8x', () => {
-    const unit = '-eyJ';
-    millisecondsToMask(unit.repeat(1024));
-    const small = Math.max(millisecondsToMask(unit.repeat(16_384)), 0.5);
-    const large = millisecondsToMask(unit.repeat(65_536));
-
-    expect(large / small).toBeLessThan(8);
+    expectLinearGrowthOn((repeats) => '-eyJ'.repeat(repeats), maskedSecrets, { smallSize: 16_384, largeSize: 65_536 });
   });
 });
 
@@ -157,16 +158,7 @@ describe('maskingCutCredential: a well-known credential the head cut left in par
   });
 
   it('stays linear on a long run of repeated prefixes ending in a non-credential character', () => {
-    const millisecondsFor = (repeats: number) => {
-      const hostile = `${'sk-'.repeat(repeats)}!`;
-      const startedAt = performance.now();
-      maskingCutCredential(hostile);
-      return performance.now() - startedAt;
-    };
-    const small = Math.max(millisecondsFor(8192), 1);
-    const fourTimesLarger = millisecondsFor(32768);
-    expect(fourTimesLarger / small).toBeLessThan(8);
-    expect(fourTimesLarger).toBeLessThan(500);
+    expectLinearGrowthOn((repeats) => `${'sk-'.repeat(repeats)}!`, maskingCutCredential, { smallSize: 8192, largeSize: 32768, ceilingMilliseconds: 500 });
   });
 });
 
@@ -257,23 +249,14 @@ describe('maskedSecrets: provider key formats added after the first round', () =
 
   it('keeps a long run of escapes before a cut linear', () => {
     const escapes = '%2F'.repeat(200_000);
-    const small = Math.max(millisecondsToMaskCut(escapes.slice(0, 50_000)), 5);
-    const large = millisecondsToMaskCut(escapes);
-
-    expect(large / small).toBeLessThan(8);
+    expectLinearGrowthOn((size) => escapes.slice(0, size), maskingCutCredential, { smallSize: 50_000, largeSize: 200_000 });
   });
 });
 
 describe('maskedSecrets: a regression to quadratic time fails fast', () => {
   const nestedParameterShapes = ['a=?', 'a=#', '?#', 'a=b?c=d?e=f?g=h&', 'a=', 'a=%3F', 'a=%2525%2525%25'];
-  const repeatedTo = (unit: string, size: number) => unit.repeat(Math.ceil(size / unit.length));
 
-  it.each(nestedParameterShapes)('masks %j at 64 KiB and 256 KiB with 4x the input costing less than 8x', (unit) => {
-    const small = Math.max(millisecondsToMask(repeatedTo(unit, 64 * 1024)), 5);
-    const large = millisecondsToMask(repeatedTo(unit, 256 * 1024));
-
-    expect(large / small).toBeLessThan(8);
-  });
+  it.each(nestedParameterShapes)('masks %j at 64 KiB and 256 KiB with 4x the input costing less than 8x', (unit) => expectUnitGrowsLinearly(unit, maskedSecrets));
 
   // Each nested `a=` peels three layers off the deep escape, so the decoding recursion runs once per pair.
   const chainBeforeDeepEscape = (pairs: number) => `${'a='.repeat(pairs)}%${'25'.repeat(3 * pairs)}41`;
@@ -283,10 +266,7 @@ describe('maskedSecrets: a regression to quadratic time fails fast', () => {
   });
 
   it('masks a chain of nested parameters before a deeply escaped byte in linear time', () => {
-    const small = Math.max(millisecondsToMask(chainBeforeDeepEscape(1_000)), 5);
-    const large = millisecondsToMask(chainBeforeDeepEscape(4_000));
-
-    expect(large / small).toBeLessThan(8);
+    expectLinearGrowthOn(chainBeforeDeepEscape, maskedSecrets, { smallSize: 1_000, largeSize: 4_000 });
   });
 
   it('masks a value whose escapes nest deeper than the check reaches', () => {
@@ -301,41 +281,11 @@ describe('maskedSecrets: the hardened rules stay linear', () => {
     '://a@', '://a@@', '://@', '://a@a/',
     'xoxe.', 'xoxe.xoxp-', 'xoxd-', 'hf_', 'whsec_', 'sk_test_', '-AIza', 'glpat-aaaaaaaaaaaaaaaaaaaa.01.',
   ];
-  const repeatedTo = (unit: string, size: number) => unit.repeat(Math.ceil(size / unit.length));
-  const fastestMillisecondsFor = (text: string) => Math.min(...[0, 1, 2].map(() => millisecondsToMask(text)));
 
-  it.each(hostileUnits)('masks %j at 256 KiB and 1 MiB with 4x the input costing less than 8x', (unit) => {
-    const small = Math.max(fastestMillisecondsFor(repeatedTo(unit, 256 * 1024)), 5);
-    const large = fastestMillisecondsFor(repeatedTo(unit, 1024 * 1024));
-
-    expect(large / small).toBeLessThan(8);
-    expect(large).toBeLessThan(2000);
-  });
+  it.each(hostileUnits)('masks %j at 256 KiB and 1 MiB with 4x the input costing less than 8x', (unit) =>
+    expectLinearGrowthOn((size) => repeatedTo(unit, size), maskedSecrets, { smallSize: 256 * 1024, largeSize: 1024 * 1024 }),
+  );
 });
-
-const NOISE_FLOOR_MILLISECONDS = 5;
-const GENEROUS_CEILING_MILLISECONDS = 2000;
-const hostileTextOf = (unit: string, size: number) => unit.repeat(Math.ceil(size / unit.length));
-const fastestOfThree = (measure: () => number) => Math.min(measure(), measure(), measure());
-
-/** Times `mask` on a hostile text of 64 KiB and 256 KiB: 4x the input must cost less than 8x, whatever the machine's speed. */
-const expectLinearGrowth = (unit: string, mask: (text: string) => string) => expectLinearGrowthOn((size) => hostileTextOf(unit, size), mask);
-
-const expectLinearGrowthOn = (hostileTextOfSize: (size: number) => string, mask: (text: string) => string) => {
-  const millisecondsFor = (size: number) => {
-    const hostile = hostileTextOfSize(size);
-    return fastestOfThree(() => {
-      const startedAt = performance.now();
-      mask(hostile);
-      return performance.now() - startedAt;
-    });
-  };
-  const small = Math.max(millisecondsFor(64 * 1024), NOISE_FLOOR_MILLISECONDS);
-  const large = millisecondsFor(256 * 1024);
-
-  expect(large / small).toBeLessThan(8);
-  expect(large).toBeLessThan(GENEROUS_CEILING_MILLISECONDS);
-};
 
 describe('maskedSecrets: the JSON and colon forms under a secret-named key', () => {
   it.each([
@@ -407,7 +357,7 @@ describe('maskedSecrets: the JSON and colon forms under a secret-named key', () 
 
   it.each(['token:', 'token: ', '"token":"', 'token:"', 'token:\\', 'a:', 'token:token:', 'token:***', "password: '", 'token:\\"a', 'api_key:1', 'a:b ', ':'])(
     'masks %j at 64 KiB and 256 KiB with 4x the input costing less than 8x',
-    (unit) => expectLinearGrowth(unit, maskedSecrets),
+    (unit) => expectUnitGrowsLinearly(unit, maskedSecrets),
   );
 });
 
@@ -455,7 +405,7 @@ describe('maskedSecrets: Cookie and Set-Cookie headers', () => {
 
   it.each(['Cookie: ', 'Cookie: a=', 'Set-Cookie: a=b;', 'Cookie:a=b;c', 'Cookie', 'Cookie:   ', 'Set-Cookie: a=b; c=d; e', 'Cookie: aaaaaaaaaaaaaaaa'])(
     'masks %j at 64 KiB and 256 KiB with 4x the input costing less than 8x',
-    (unit) => expectLinearGrowth(unit, maskedSecrets),
+    (unit) => expectUnitGrowsLinearly(unit, maskedSecrets),
   );
 });
 
@@ -476,7 +426,7 @@ describe('maskedSecrets: a JWT whose signature is missing', () => {
   });
 
   it.each(['eyJ', '-eyJaaaaaa.eyJaaaaaa.', 'eyJaaaaaa.eyJaaaaaa', 'eyJaaaaaa.eyJ.'])('masks %j at 64 KiB and 256 KiB with 4x the input costing less than 8x', (unit) =>
-    expectLinearGrowth(unit, maskedSecrets),
+    expectUnitGrowsLinearly(unit, maskedSecrets),
   );
 });
 
@@ -516,7 +466,7 @@ describe('maskingCutCredential: an incomplete JWT tail, whatever the length of i
 
   it.each(['-eyJ', '.eyJ', 'eyJa.eyJ', 'eyJaaaaaaaa.eyJ', 'sk-', 'a.', '%2F', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'])(
     'cuts %j at 64 KiB and 256 KiB with 4x the input costing less than 8x',
-    (unit) => expectLinearGrowth(unit, maskingCutCredential),
+    (unit) => expectUnitGrowsLinearly(unit, maskingCutCredential),
   );
 });
 
@@ -540,7 +490,7 @@ describe('maskedSecrets: one rule for the next-line character (U+0085)', () => {
   });
 
   it.each([['\u0085'], ['Bearer\u0085'], ['a=\u0085token=']])('masks %j at 64 KiB and 256 KiB with 4x the input costing less than 8x', (unit) =>
-    expectLinearGrowth(unit, maskedSecrets),
+    expectUnitGrowsLinearly(unit, maskedSecrets),
   );
 });
 
@@ -590,7 +540,7 @@ describe('maskedSecrets: quoted and folded cookie values', () => {
 
   it.each(['Cookie: a="', 'Set-Cookie: a="', 'Cookie: a="b"; ', 'Cookie: a=\\"', "Cookie: a='", 'Cookie: a=1;\r\n ', 'Cookie:\r\n \r\n ', 'Cookie: "', 'Cookie: a="\\'])(
     'masks %j at 64 KiB and 256 KiB with 4x the input costing less than 8x',
-    (unit) => expectLinearGrowth(unit, maskedSecrets),
+    (unit) => expectUnitGrowsLinearly(unit, maskedSecrets),
   );
 });
 
@@ -641,7 +591,7 @@ describe('maskedSecrets: authorization schemes other than Basic and Bearer', () 
     'Authorization: Digest a=\\"',
     'Authorization: Token "',
     'authorization: aaa}',
-  ])('masks %j at 64 KiB and 256 KiB with 4x the input costing less than 8x', (unit) => expectLinearGrowth(unit, maskedSecrets));
+  ])('masks %j at 64 KiB and 256 KiB with 4x the input costing less than 8x', (unit) => expectUnitGrowsLinearly(unit, maskedSecrets));
 });
 
 describe('maskedSecrets: collections under a secret-named key', () => {
@@ -697,7 +647,7 @@ describe('maskedSecrets: collections under a secret-named key', () => {
 
   it.each(['token:[', 'token:{"a":[', 'token:["', 'token:[\\"', '{"token":[', 'token: [[[[[[[[[[', '"token":{"token":', 'token:[]', 'token:[\'', '\\"token\\":[\\"', 'token:[}'])(
     'masks %j at 64 KiB and 256 KiB with 4x the input costing less than 8x',
-    (unit) => expectLinearGrowth(unit, maskedSecrets),
+    (unit) => expectUnitGrowsLinearly(unit, maskedSecrets),
   );
 });
 

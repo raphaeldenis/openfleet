@@ -991,7 +991,7 @@ fn cookie_header_at(text: &str, index: usize) -> Replacement {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use std::time::{Duration, Instant};
+  use crate::linear_growth::{cpu_time_to_run_on_repeated, linear_growth_problems, LinearGrowthBudget};
 
   fn masked(text: &str) -> String {
     redact(text, &[])
@@ -1525,10 +1525,8 @@ mod tests {
   fn masks_the_hardened_rules_in_linear_time() {
     const SMALL_INPUT: usize = 64 * 1024;
     const LARGE_INPUT: usize = 256 * 1024;
-    const NOISE_FLOOR: Duration = Duration::from_millis(20);
-    const GENEROUS_CEILING: Duration = Duration::from_secs(20);
     let units = [
-      "token:", "token: ", "\"token\":\"", "token:\"", "token:\\", "a:", "token:token:", "token:[redacted]", "password: '", "token:\\\"a", "api_key:1", "a:b ", ":",
+      "token:","token: ", "\"token\":\"", "token:\"", "token:\\", "a:", "token:token:", "token:[redacted]", "password: '", "token:\\\"a", "api_key:1", "a:b ", ":",
       "Cookie: ", "Cookie: a=", "Set-Cookie: a=b;", "Cookie:a=b;c", "Cookie", "Cookie:   ", "Set-Cookie: a=b; c=d; e", "Cookie: aaaaaaaaaaaaaaaa",
       "eyJ", "-eyJaaaaaa.eyJaaaaaa.", "eyJaaaaaa.eyJaaaaaa", "eyJaaaaaa.eyJ.", "sk-", "-sk-", "ghp_", "github_pat_", "AKIA", "AKIAAAAAAAAAAAAAAAAA", "xoxe.", "xoxe.xoxp-", "xoxd-",
       "xapp-", "AIza", "npm_", "glpat-", "glpat-aaaaaaaaaaaaaaaaaaaa.01.", "sk_live_", "whsec_", "hf_", "-----BEGIN PRIVATE KEY-----", "-----BEGIN A A A A ", "-----BEGIN PRIVATE KEY-----\n-----END ",
@@ -1537,24 +1535,14 @@ mod tests {
       "Authorization: Token ", "Authorization: Digest a=\"", "Authorization: Digest a=\"b\", ", "Proxy-Authorization: Token a b ", "Authorization: aaa ", "Authorization: Digest a=\\\"", "Authorization: Token \"", "authorization: aaa}",
       "token:[", "token:{\"a\":[", "token:[\"", "token:[\\\"", "{\"token\":[", "token: [[[[[[[[[[", "\"token\":{\"token\":", "token:[]", "token:['", "\\\"token\\\":[\\\"", "token:[}", "Bearer %3A", "Bearer%3A%3A", "Bearer\u{85}=",
     ];
-    let fastest_masking_of = |unit: &str, size: usize| {
-      let hostile = unit.repeat(size / unit.len() + 1);
-      (0..3)
-        .map(|_| {
-          let started_at = Instant::now();
-          masked(&hostile);
-          started_at.elapsed()
-        })
-        .min()
-        .unwrap()
-    };
-
     for unit in units {
-      let time_at_small_input = fastest_masking_of(unit, SMALL_INPUT).max(NOISE_FLOOR);
-      let time_at_large_input = fastest_masking_of(unit, LARGE_INPUT);
+      let cpu_time_to_mask = cpu_time_to_run_on_repeated(unit, |hostile| {
+        masked(hostile);
+      });
 
-      assert!(time_at_large_input < time_at_small_input * 8, "{unit:?}: 4x the input took {time_at_large_input:?} against {time_at_small_input:?}");
-      assert!(time_at_large_input < GENEROUS_CEILING, "{unit:?} x 256 KiB took {time_at_large_input:?}");
+      let problems = linear_growth_problems(cpu_time_to_mask, &LinearGrowthBudget::between(SMALL_INPUT, LARGE_INPUT));
+
+      assert!(problems.is_empty(), "{unit:?}: {problems:?}");
     }
   }
 }
