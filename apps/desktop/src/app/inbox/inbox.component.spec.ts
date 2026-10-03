@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { InboxComponent } from './inbox.component';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
+import { VersionsService } from '../core/versions.service';
 import { silentWorkingStateSignals } from '../working-state/working-state-fixtures';
 
 function fakeEvents(approval: Record<string, unknown> = {}) {
@@ -309,6 +310,33 @@ describe('InboxComponent', () => {
       expect(copied).toContain('2026-09-30T10:01:00.000Z');
     });
 
+    describe('the daemon version line of Copy details', () => {
+      async function copiedDetailsWith(daemonVersion: string | null): Promise<string> {
+        const writeText = vi.fn().mockResolvedValue(undefined);
+        vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+        const { events } = eventsWith([internalFailure]);
+        await render(InboxComponent, {
+          providers: [
+            { provide: FleetApiService, useValue: { decide: vi.fn() } },
+            { provide: FleetEventsService, useValue: events },
+            { provide: VersionsService, useValue: { daemonVersion: signal(daemonVersion) } },
+          ],
+        });
+
+        await userEvent.click(screen.getByTestId('inbox-issue-copy-details'));
+
+        return writeText.mock.calls[0]![0] as string;
+      }
+
+      it('names the daemon version when it is known', async () => {
+        expect(await copiedDetailsWith('1.2.3')).toContain('daemon: 1.2.3');
+      });
+
+      it('leaves the daemon line out when the version is unknown', async () => {
+        expect(await copiedDetailsWith(null)).not.toContain('daemon:');
+      });
+    });
+
     it('copies nothing but those fields, whatever else the envelope carries', async () => {
       const writeText = vi.fn().mockResolvedValue(undefined);
       vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
@@ -318,6 +346,36 @@ describe('InboxComponent', () => {
       await userEvent.click(screen.getByTestId('inbox-issue-copy-details'));
 
       expect(writeText.mock.calls[0]![0]).not.toMatch(/bearer|abc123|\/Users\//i);
+    });
+
+    describe('daemon words of a hostile envelope', () => {
+      const hostileEnvelope = {
+        error: 'future_failure', kind: 'internal', retry: 'never', id: 'c0ffee01',
+        message: 'open /Users/review-user/private; Authorization: Bearer SYNTHETIC_TOKEN_123; safe‮evil​',
+        hint: 'hint⁦hidden⁩',
+      };
+      const hostileFailure = { key: 'f9', sessionId: 's1', at: '2026-09-30T10:02:00.000Z', envelope: hostileEnvelope };
+
+      it('shows the message of an unknown code without credentials or home path, and its invisible characters as escapes', async () => {
+        await renderWith([hostileFailure]);
+
+        const copy = screen.getByTestId('inbox-issue-copy');
+        expect(copy).toHaveTextContent('safe<U+202E>evil<U+200B>');
+        expect(copy).toHaveTextContent('Hint<U+2066>hidden<U+2069>');
+        expect(copy.textContent).not.toMatch(/SYNTHETIC_TOKEN_123|review-user|[‮​⁦⁩]/);
+      });
+
+      it('copies the message of a known code without credentials, home path or raw invisible characters', async () => {
+        const writeText = vi.fn().mockResolvedValue(undefined);
+        vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+        await renderWith([{ ...hostileFailure, envelope: { ...hostileEnvelope, error: 'launch_failed' } }]);
+
+        await userEvent.click(screen.getByTestId('inbox-issue-copy-details'));
+
+        const copied = writeText.mock.calls[0]![0] as string;
+        expect(copied).toContain('safe<U+202E>evil<U+200B>');
+        expect(copied).not.toMatch(/SYNTHETIC_TOKEN_123|review-user|[‮​]/);
+      });
     });
 
     it('dismisses an item on request', async () => {

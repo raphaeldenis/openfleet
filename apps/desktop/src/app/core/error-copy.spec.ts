@@ -73,6 +73,18 @@ describe('copyFor', () => {
     expect(text).toBe('The vault is locked. Unlock it first.');
   });
 
+  it('masks credentials, shortens home paths and shows invisible characters in the message and the hint of a code from a newer daemon', () => {
+    const hostile = {
+      error: 'future_failure', kind: 'internal', retry: 'never', id: 'c0ffee01',
+      message: 'open /Users/review-user/private/project; Authorization: Bearer SYNTHETIC_TOKEN_123; safe‮evil​',
+      hint: 'hint⁦hidden⁩ see /home/review-user/notes',
+    } as unknown as ErrorEnvelope;
+
+    const { text } = copyFor(apiErrorOf(hostile), { action: 'generic' });
+
+    expect(text).toBe('Open ~/private/project; Authorization: Bearer ***; safe<U+202E>evil<U+200B>. Hint<U+2066>hidden<U+2069> see ~/notes. (ref c0ffee01)');
+  });
+
   it('falls back by kind for an unknown code without an envelope', () => {
     const { text } = copyFor(new ApiError(503, 'GET /x', 'brand_new_code'), { action: 'generic' });
 
@@ -94,6 +106,54 @@ describe('copyFor', () => {
 
     expect(copyFor(apiErrorOf(retriableRejection), { action: 'generic' }).text).toMatch(/try again/i);
     expect(copyFor(apiErrorOf(finalInternalError), { action: 'generic' }).text).not.toMatch(/try again/i);
+  });
+
+  describe('the retry of the envelope decides the ending of every action', () => {
+    const ACTIONS = ['generic', 'send', 'create_session', 'create_manager', 'resume'] as const;
+    const RETRIES = ['never', 'later', 'after_refresh'] as const;
+    const wordsOfEnvelope = (code: ErrorCode, retry: ErrorEnvelope['retry'], action: (typeof ACTIONS)[number]) => {
+      const envelope = envelopeOf(code, { retry, ...(ERROR_CODES[code].kind === 'internal' && { id: '3f9a1c2e' }) });
+      return copyFor(apiErrorOf(envelope), { action }).text.replace(/ \(ref [0-9a-f]{8}\)$/, '');
+    };
+    const violationsOf = (action: (typeof ACTIONS)[number], retry: ErrorEnvelope['retry']) =>
+      ALL_CODES.flatMap((code) => {
+        const text = wordsOfEnvelope(code, retry, action);
+        const invitesRetry = /try again/i.test(text);
+        const invitesReload = /reload|refresh/i.test(text);
+        const problems = [
+          invitesRetry !== (retry !== 'never') && `${retry === 'never' ? 'invites' : 'omits'} a retry`,
+          invitesReload !== (retry === 'after_refresh') && `${retry === 'after_refresh' ? 'omits' : 'invites'} a reload`,
+        ].filter(Boolean);
+        return problems.map((problem) => `${code}: ${problem} — "${text}"`);
+      });
+
+    it('covers every code, action and retry once (915 cases)', () => {
+      expect(ALL_CODES.length * ACTIONS.length * RETRIES.length).toBe(915);
+    });
+
+    describe.each(ACTIONS)('the action %s', (action) => {
+      it.each(RETRIES)('invites a retry exactly when the envelope retry is not never, and a reload exactly for after_refresh (envelope retry %s)', (retry) => {
+        expect(violationsOf(action, retry)).toEqual([]);
+      });
+    });
+
+    it('does not invite a retry that an internal error of the envelope forbids while creating a session', () => {
+      const envelope = envelopeOf('internal_error', { retry: 'never', id: '3f9a1c2e' });
+
+      expect(copyFor(apiErrorOf(envelope), { action: 'create_session' }).text).toBe('The daemon hit an internal error while creating the session. (ref 3f9a1c2e)');
+    });
+
+    it('tells to reload when the envelope says so, whatever the action says by default', () => {
+      const envelope = envelopeOf('launch_failed', { retry: 'after_refresh', id: '3f9a1c2e' });
+
+      expect(copyFor(apiErrorOf(envelope), { action: 'resume' }).text).toBe('The harness failed to relaunch — reload, then try again. (ref 3f9a1c2e)');
+    });
+
+    it('ends a retriable rejection of a creation with a retry', () => {
+      const envelope = envelopeOf('invalid_body', { retry: 'later' });
+
+      expect(copyFor(apiErrorOf(envelope), { action: 'create_manager' }).text).toBe('The daemon rejected these values — check the directory and the other fields, then try again.');
+    });
   });
 
   describe('copyOfEnvelope', () => {
@@ -137,6 +197,12 @@ describe('copyFor', () => {
 
     it.each(['hook_fail_open', 'ws_broadcast_failed', 'docs_folder_unreadable'] as const)('says %s may clear by itself', (code) => {
       expect(copyOfDaemonIssue(issueOf(code))).toBe('Something broke — it may clear by itself');
+    });
+
+    it('masks credentials, shortens home paths and shows invisible characters in the message of the issue', () => {
+      const hostile: DaemonIssue = { ...issueOf('db_stuck'), message: 'Cannot open /Users/review-user/db; Bearer SYNTHETIC_TOKEN_123; safe‮evil​.' };
+
+      expect(copyOfDaemonIssue(hostile)).toBe('Cannot open ~/db; Bearer ***; safe<U+202E>evil<U+200B> — restart it when convenient');
     });
   });
 });

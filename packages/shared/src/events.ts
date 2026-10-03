@@ -5,6 +5,9 @@ import type { Approval, PermissionMode, Session, SessionState } from './session.
 import type { SessionTodos, TodoSummary } from './todos.js';
 import type { WorkingState } from './workingState.js';
 
+/** `reply` answers a client message that failed, on that socket only; `broadcast` announces a failure nobody asked for, to every client. A daemon that predates the field sends neither. */
+export type ErrorEventScope = 'reply' | 'broadcast';
+
 export type SessionCloseReason = 'launch_failed' | 'resume_timeout' | 'harness_exit' | 'closed_by_user' | 'daemon_shutdown';
 
 // The exit code convention that predates `reason`: a snapshot carries exit codes but no reason, so this recomputes the two it encodes.
@@ -33,5 +36,5 @@ export type ServerEvent =
   | { type: 'session.todos'; todos: SessionTodos }
   | { type: 'manager.created'; manager: ManagerView }
   | { type: 'manager.pulsed'; manager: ManagerView }
-  | { type: 'error'; sessionId?: string; error: ErrorEnvelope }
+  | { type: 'error'; sessionId?: string; scope?: ErrorEventScope; error: ErrorEnvelope }
   | { type: 'daemon.issues'; issues: DaemonIssue[] };

@@ -62,7 +62,7 @@ function send(socket: WebSocket, event: ServerEvent): void {
 
 function replyWithError(socket: WebSocket, error: unknown, sessionId: string | undefined): void {
   const envelope = describeError(error, { sessionId, where: 'ws client message' });
-  send(socket, { type: 'error', ...(sessionId !== undefined && { sessionId }), error: envelope });
+  send(socket, { type: 'error', ...(sessionId !== undefined && { sessionId }), scope: 'reply', error: envelope });
 }
 
 function assertSessionAcceptsInput(sessions: SessionService, sessionId: string): void {

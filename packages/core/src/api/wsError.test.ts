@@ -65,7 +65,7 @@ describe('WS client message errors', () => {
     const event = await waitForFrame(sender.frames, isError);
     await settle();
 
-    expect(event).toEqual({ type: 'error', sessionId: session.id, error: expect.objectContaining({ error: 'session_closed', kind: 'conflict', retry: 'never' }) });
+    expect(event).toEqual({ type: 'error', sessionId: session.id, scope: 'reply', error: expect.objectContaining({ error: 'session_closed', kind: 'conflict', retry: 'never' }) });
     expect(bystander.frames.filter(isError)).toEqual([]);
   });
 
@@ -75,7 +75,7 @@ describe('WS client message errors', () => {
     socket.send(JSON.stringify({ type: 'input', sessionId: 'nope', data: 'x' }));
     const event = await waitForFrame(frames, isError);
 
-    expect(event).toEqual({ type: 'error', sessionId: 'nope', error: expect.objectContaining({ error: 'session_not_found', kind: 'not_found' }) });
+    expect(event).toEqual({ type: 'error', sessionId: 'nope', scope: 'reply', error: expect.objectContaining({ error: 'session_not_found', kind: 'not_found' }) });
   });
 
   it('answers a frame that is not JSON with invalid_body, without a session id, and keeps the socket open', async () => {
@@ -84,7 +84,7 @@ describe('WS client message errors', () => {
     socket.send('{not json');
     const event = await waitForFrame(frames, isError);
 
-    expect(event).toEqual({ type: 'error', error: expect.objectContaining({ error: 'invalid_body', kind: 'invalid_request' }) });
+    expect(event).toEqual({ type: 'error', scope: 'reply', error: expect.objectContaining({ error: 'invalid_body', kind: 'invalid_request' }) });
     expect(socket.readyState).toBe(WebSocket.OPEN);
   });
 

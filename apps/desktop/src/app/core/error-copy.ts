@@ -1,4 +1,5 @@
 import { ERROR_CODES, HTTP_STATUS_BY_KIND, retryOf, type DaemonIssue, type DegradedCode, type ErrorCode, type ErrorEnvelope, type ErrorRetry } from '@openfleet/shared';
+import { readableDaemonText } from './daemon-text';
 import { ApiError } from './fleet-api.service';
 
 /** What the user was doing when the error came back: it decides the advice ("shorten the mission" vs "shorten the name"). */
@@ -28,6 +29,8 @@ export const DAEMON_UNREACHABLE = 'Can’t reach the OpenFleet daemon — check 
 interface CodeCopy {
   what: string;
   fix?: string;
+  /** A retry of an action the user just made needs no waiting: "try again" instead of "try again in a moment". */
+  isRetryableAtOnce?: boolean;
 }
 
 const COPY_BY_CODE: Record<ErrorCode, CodeCopy> = {
@@ -102,7 +105,10 @@ const COPY_BY_CODE: Record<ErrorCode, CodeCopy> = {
 
 const WORDS_OF_RETRY: Record<ErrorRetry, (copy: CodeCopy) => string> = {
   never: ({ what, fix }) => (fix ? `${what} — ${fix}.` : `${what}.`),
-  later: ({ what, fix }) => (fix ? `${what} — ${fix}, then try again.` : `${what} — try again in a moment.`),
+  later: ({ what, fix, isRetryableAtOnce }) => {
+    if (fix) return `${what} — ${fix}, then try again.`;
+    return isRetryableAtOnce ? `${what} — try again.` : `${what} — try again in a moment.`;
+  },
   after_refresh: ({ what }) => `${what} — reload, then try again.`,
 };
 
@@ -124,18 +130,18 @@ const SHORTEN_BY_ACTION: Record<'create_session' | 'create_manager', string> = {
 };
 
 const BRANCH_NAME_RULES =
-  'The branch name is not valid — use up to 250 letters, digits, dots, dashes, underscores or slashes, start with a letter, digit or underscore, and avoid “..”, “//”, a trailing “.”, a part starting with “.” and the “.lock” ending.';
+  'use up to 250 letters, digits, dots, dashes, underscores or slashes, start with a letter, digit or underscore, and avoid “..”, “//”, a trailing “.”, a part starting with “.” and the “.lock” ending';
 
-type ActionCopy = Partial<Record<ErrorCode, string>>;
+type ActionCopy = Partial<Record<ErrorCode, CodeCopy>>;
 
 function createCopy(kind: 'session' | 'manager'): ActionCopy {
   const action = kind === 'session' ? 'create_session' : 'create_manager';
   return {
-    invalid_body: 'The daemon rejected these values — check the directory and the other fields.',
-    invalid_branch_name: BRANCH_NAME_RULES,
-    worktree_exists: 'A folder for this branch already exists — pick another branch name.',
-    payload_too_large: `The request is too large — ${SHORTEN_BY_ACTION[action]}.`,
-    internal_error: `The daemon hit an internal error while creating the ${kind} — try again.`,
+    invalid_body: { what: 'The daemon rejected these values', fix: 'check the directory and the other fields' },
+    invalid_branch_name: { what: 'The branch name is not valid', fix: BRANCH_NAME_RULES },
+    worktree_exists: { what: 'A folder for this branch already exists', fix: 'pick another branch name' },
+    payload_too_large: { what: 'The request is too large', fix: SHORTEN_BY_ACTION[action] },
+    internal_error: { what: `The daemon hit an internal error while creating the ${kind}`, isRetryableAtOnce: true },
   };
 }
 
@@ -145,11 +151,11 @@ const COPY_BY_ACTION: Record<ErrorAction, ActionCopy> = {
   create_session: createCopy('session'),
   create_manager: createCopy('manager'),
   resume: {
-    not_closed: 'This session is not closed — nothing to resume.',
-    directory_missing: "This session's directory no longer exists — nothing to resume into.",
-    directory_changed: "This session's directory changed since it closed — resume refused for safety.",
-    directory_unreadable: "This session's directory can't be read — check its permissions.",
-    launch_failed: 'The harness failed to relaunch — try again.',
+    not_closed: { what: 'This session is not closed', fix: 'nothing to resume' },
+    directory_missing: { what: "This session's directory no longer exists", fix: 'nothing to resume into' },
+    directory_changed: { what: "This session's directory changed since it closed", fix: 'resume refused for safety' },
+    directory_unreadable: { what: "This session's directory can't be read", fix: 'check its permissions' },
+    launch_failed: { what: 'The harness failed to relaunch', isRetryableAtOnce: true },
   },
   load_todos: {},
 };
@@ -175,8 +181,9 @@ const capitalized = (sentence: string) => sentence.charAt(0).toUpperCase() + sen
 
 /** A code this app has never heard of: the daemon's own caller-safe words, when it sent an envelope. */
 function copyOfUnknownCode(envelope: ErrorEnvelope): string {
-  const message = endsWithPeriod(capitalized(envelope.message));
-  return envelope.hint ? `${message} ${endsWithPeriod(capitalized(envelope.hint))}` : message;
+  const sentenceOf = (daemonWords: string) => endsWithPeriod(capitalized(readableDaemonText(daemonWords)));
+  const message = sentenceOf(envelope.message);
+  return envelope.hint ? `${message} ${sentenceOf(envelope.hint)}` : message;
 }
 
 /** What the copy is built from: the same facts whether the failure came as a response or as a websocket envelope. */
@@ -202,9 +209,7 @@ function copyOfFailure(failure: Failure, { action }: ErrorContext): ErrorCopy {
   const { envelope } = failure;
   const code = isKnownCode(failure.code) ? failure.code : undefined;
   const retry = retryOfFailure(failure, code);
-  const textOfAction = code ? COPY_BY_ACTION[action][code] : undefined;
-  if (textOfAction) return withRef(textOfAction, envelope);
-  if (code) return withRef(WORDS_OF_RETRY[retry](COPY_BY_CODE[code]), envelope);
+  if (code) return withRef(WORDS_OF_RETRY[retry](COPY_BY_ACTION[action][code] ?? COPY_BY_CODE[code]), envelope);
   if (envelope) return withRef(copyOfUnknownCode(envelope), envelope);
   if (action === 'load_todos') return { text: LOAD_TODOS_FAILED_BY_RETRY[retry] };
   return { text: FALLBACK_BY_ACTION[action] ?? FALLBACK_BY_RETRY[retry] };
@@ -237,7 +242,7 @@ const withoutTrailingPeriod = (sentence: string) => sentence.replace(/\.$/, '');
 
 /** What a degraded-daemon issue says and what to do about it: restart only when it does not clear by itself. */
 export function copyOfDaemonIssue({ code, message }: DaemonIssue): string {
-  return `${withoutTrailingPeriod(message)} — ${ADVICE_BY_DEGRADED_CODE[code]}`;
+  return `${withoutTrailingPeriod(readableDaemonText(message))} — ${ADVICE_BY_DEGRADED_CODE[code]}`;
 }
 
 /**

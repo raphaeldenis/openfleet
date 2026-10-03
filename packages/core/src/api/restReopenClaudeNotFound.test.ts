@@ -103,7 +103,7 @@ describe('reopening a closed claude-cli session when claude is not on the daemon
     expect(JSON.stringify(body)).not.toContain(emptyBin);
     expect(failureEventsAfter(daemon.events, eventCountBeforeReopen)).toEqual([
       { type: 'session.closed', sessionId: session.id, exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE, reason: 'launch_failed' },
-      { type: 'error', sessionId: session.id, error: expect.objectContaining(CLAUDE_NOT_FOUND_ENVELOPE) },
+      { type: 'error', sessionId: session.id, scope: 'broadcast', error: expect.objectContaining(CLAUDE_NOT_FOUND_ENVELOPE) },
     ]);
     const failedRow = daemon.sessions.get(session.id)!;
     expect(failedRow).toMatchObject({ state: 'closed', exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE });
@@ -130,7 +130,7 @@ describe('reopening a closed claude-cli session when claude is not on the daemon
     expect(body).toMatchObject(CLAUDE_NOT_FOUND_ENVELOPE);
     expect(failureEventsAfter(secondDaemon.events, eventCountBeforeReopen)).toEqual([
       { type: 'session.closed', sessionId: session.id, exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE, reason: 'launch_failed' },
-      { type: 'error', sessionId: session.id, error: expect.objectContaining(CLAUDE_NOT_FOUND_ENVELOPE) },
+      { type: 'error', sessionId: session.id, scope: 'broadcast', error: expect.objectContaining(CLAUDE_NOT_FOUND_ENVELOPE) },
     ]);
     expect(secondDaemon.sessions.get(session.id)).toMatchObject({ state: 'closed', exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE });
     expect(spawn.mock.calls.length).toBe(spawnsAfterReopen);
@@ -167,7 +167,7 @@ describe('booting the daemon when claude is not on the PATH', () => {
     for (const { id } of [first, second]) {
       expect(bootingDaemon.sessions.get(id)).toMatchObject({ state: 'closed', exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE });
       expect(bootingDaemon.events.filter((event) => event.type === 'error' && event.sessionId === id)).toEqual([
-        { type: 'error', sessionId: id, error: expect.objectContaining(CLAUDE_NOT_FOUND_ENVELOPE) },
+        { type: 'error', sessionId: id, scope: 'broadcast', error: expect.objectContaining(CLAUDE_NOT_FOUND_ENVELOPE) },
       ]);
       expect(bootingDaemon.events.filter((event) => event.type === 'session.closed' && event.sessionId === id)).toHaveLength(1);
     }

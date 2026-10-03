@@ -273,6 +273,40 @@ describe('AppShellComponent', () => {
       expect(copied).not.toMatch(/bearer|abc123|\/Users\//i);
     });
 
+    describe('daemon words of a hostile issue', () => {
+      const hostileIssue: DaemonIssue = { ...stuckDatabase, message: 'Cannot open /Users/review-user/db; Bearer SYNTHETIC_TOKEN_123; safe‮evil​.' };
+
+      it('shows the message without credentials or home path, and its invisible characters as escapes', async () => {
+        const { root } = await setUp({ issues: [hostileIssue] });
+
+        const banner = root.querySelector('[data-testid="degraded-banner"]');
+        expect(banner).toHaveTextContent('Cannot open ~/db; Bearer ***; safe<U+202E>evil<U+200B>');
+        expect(banner!.textContent).not.toMatch(/SYNTHETIC_TOKEN_123|review-user|[‮​]/);
+      });
+
+      it('copies the message without credentials, home path or raw invisible characters', async () => {
+        const writeText = stubClipboard();
+        const { root } = await setUp({ issues: [hostileIssue] });
+
+        (root.querySelector('[data-testid="degraded-copy-details"]') as HTMLButtonElement).click();
+
+        const copied = writeText.mock.calls[0]![0] as string;
+        expect(copied).toContain('Cannot open ~/db; Bearer ***; safe<U+202E>evil<U+200B>');
+        expect(copied).not.toMatch(/SYNTHETIC_TOKEN_123|review-user|[‮​]/);
+      });
+
+      it('copies the daemon version without raw invisible characters', async () => {
+        const writeText = stubClipboard();
+        const { harness, root } = await setUp({ issues: [stuckDatabase] });
+        TestBed.inject(VersionsService).daemonVersion.set('1.4.2‮');
+        harness.detectChanges();
+
+        (root.querySelector('[data-testid="degraded-copy-details"]') as HTMLButtonElement).click();
+
+        expect(writeText.mock.calls[0]![0]).toContain('daemon: 1.4.2<U+202E>');
+      });
+    });
+
     it('adds the daemon version to the copied details when it is known', async () => {
       const writeText = stubClipboard();
       const { harness, root } = await setUp({ issues: [stuckDatabase] });

@@ -1719,7 +1719,7 @@ export class SessionService {
     if (!describe) return undefined;
     try {
       const envelope = describe(error, { sessionId, where });
-      this.deps.bus.emit({ type: 'error', sessionId, error: envelope });
+      this.deps.bus.emit({ type: 'error', sessionId, scope: 'broadcast', error: envelope });
       return envelope.id;
     } catch (announceFailure) {
       log('warn', `${where}: the error event could not be broadcast`, { code: (announceFailure as { code?: string }).code });
