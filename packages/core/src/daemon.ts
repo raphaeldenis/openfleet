@@ -72,7 +72,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   const modelTable = readingConfigFile(() => loadModelTable(modelConfigPath));
   const { workingState: workingStateSettings, managers: managerSettings, contextNotice: contextNoticeSettings } = readingConfigFile(() => loadDaemonSettings(modelConfigPath));
   const managerRepository = new ManagerRepository(db);
-  const pulseScheduler = new PulseScheduler({ managers: managerRepository, sessions, bus });
+  const pulseScheduler = new PulseScheduler({ managers: managerRepository, sessions, bus, describeError });
   const managers = new ManagerService({ managers: managerRepository, sessions, bus, scheduler: pulseScheduler, heartbeatDefaultSeconds: managerSettings.heartbeatDefaultSeconds });
   const storeRepo = new DataStoreRepository(db);
   const stores = new DataStoreService({ repo: storeRepo, db, clock: () => new Date().toISOString(), newId });

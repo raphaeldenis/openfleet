@@ -1,6 +1,6 @@
 import type { EventBus } from '../events/eventBus.js';
 import { log } from '../logger.js';
-import type { SessionService } from '../sessions/sessionService.js';
+import type { DescribeError, SessionService } from '../sessions/sessionService.js';
 import type { ManagerRecord, ManagerRepository } from './managerRepository.js';
 import { toManagerView } from './managerView.js';
 import { nextPulseAt } from './pulseTiming.js';
@@ -38,12 +38,15 @@ export interface PulseSchedulerDeps {
   managers: ManagerRepository;
   sessions: SessionService;
   bus: EventBus;
+  /** Absent, a failing tick is only logged: no error event reaches the clients. */
+  describeError?: DescribeError;
 }
 
 export class PulseScheduler {
   private readonly deps: PulseSchedulerDeps;
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly queuedWakes = new Map<string, QueuedWake>();
+  private readonly managerIdsInFailureStreak = new Set<string>();
   private isStopped = false;
 
   constructor(deps: PulseSchedulerDeps) {
@@ -129,6 +132,7 @@ export class PulseScheduler {
   stop(): void {
     this.isStopped = true;
     this.queuedWakes.clear();
+    this.managerIdsInFailureStreak.clear();
     for (const timer of this.timers.values()) clearTimeout(timer);
     this.timers.clear();
   }
@@ -156,11 +160,33 @@ export class PulseScheduler {
     try {
       this.fire(record);
     } catch (error) {
-      log('error', `pulse: manager ${sessionId} tick failed; re-arming instead of losing its cadence`, error);
+      this.reportTickFailure(sessionId, error);
       // Re-arms a full cadence from now, never via nextPulseAt(record): fire() threw before persisting
       // lastPulseAt, so record's base is stale — computing off it would land in the past (delayMs 0) and
       // hot-loop the retry every tick instead of waiting out the cadence.
       this.armAfter(sessionId, record.pulseSeconds * 1000);
+    }
+  }
+
+  // The first failure of a streak is broadcast (the mapper logs it under the ref the clients receive); the next ones of the
+  // same streak only log, so a persistent failure never floods the Inbox. A pulse that goes through ends the streak.
+  private reportTickFailure(sessionId: string, error: unknown): void {
+    const isNewFailureStreak = !this.managerIdsInFailureStreak.has(sessionId);
+    this.managerIdsInFailureStreak.add(sessionId);
+    const isAnnounced = isNewFailureStreak && this.announceTickFailure(sessionId, error);
+    if (!isAnnounced) log('error', `pulse: manager ${sessionId} tick failed; re-arming instead of losing its cadence`, error);
+  }
+
+  private announceTickFailure(sessionId: string, error: unknown): boolean {
+    const describe = this.deps.describeError;
+    if (!describe) return false;
+    try {
+      const envelope = describe(error, { sessionId, where: `pulse: manager ${sessionId} tick failed; re-arming instead of losing its cadence` });
+      this.deps.bus.emit({ type: 'error', sessionId, error: envelope });
+      return true;
+    } catch (announceFailure) {
+      log('warn', 'pulse: the error event could not be broadcast', { code: (announceFailure as { code?: string }).code });
+      return false;
     }
   }
 
@@ -188,6 +214,7 @@ export class PulseScheduler {
     const childrenCount = this.deps.sessions.list().filter((s) => s.parentId === record.sessionId && s.state !== 'closed').length;
     this.deps.bus.emit({ type: 'manager.pulsed', manager: toManagerView(updated, childrenCount) });
     this.arm(updated);
+    this.managerIdsInFailureStreak.delete(record.sessionId);
     return { coalesced };
   }
 
