@@ -564,7 +564,7 @@ mod tests {
   #[test]
   fn redacts_a_bearer_token_in_any_letter_case() {
     assert_eq!(redact("Authorization: Bearer abc.DEF-123_x/y=", &[]), "Authorization: Bearer [redacted]");
-    assert_eq!(redact("authorization: bearer abc123", &[]), "authorization: bearer [redacted]");
+    assert_eq!(redact("authorization: bearer abc123", &[]), "authorization: Bearer [redacted]");
   }
 
   #[test]
@@ -770,7 +770,7 @@ mod tests {
   fn masks_the_token_behind_a_bearer_prefix_written_more_than_once() {
     let cases = [
       ("Authorization: Bearer Bearer SECRETVAL1", "Authorization: Bearer [redacted]"),
-      ("Authorization: bearer:BEARER=Bearer SECRETVAL1", "Authorization: bearer [redacted]"),
+      ("Authorization: bearer:BEARER=Bearer SECRETVAL1", "Authorization: Bearer [redacted]"),
       ("Authorization: Bearer%20Bearer%20SECRETVAL1", "Authorization: Bearer [redacted]"),
     ];
 

@@ -1,6 +1,9 @@
 //! Masks credentials in a log line. A scanning port of packages/core/src/redact.ts: no regex, so every pass is linear.
+//! The documented ceilings of that file (non-`eyJ` JWT payloads, quoted values past the limit, short or literal-looking values) hold here too.
 
 pub const MASK: &str = "[redacted]";
+/// The mask of packages/core/src/redact.ts: the daemon's output carries it, so a masked text from either side is recognised.
+const CORE_MASK: &str = "***";
 // ponytail: a secret shorter than this would redact innocent text; the admin token is far longer.
 const MIN_SECRET_LENGTH: usize = 8;
 /// A percent-escape is decoded up to three layers deep, like `withEscapesDecoded`.
@@ -13,6 +16,10 @@ const NESTED_PARAMETERS_CHECKED: usize = 4;
 const MASKING_PASSES_UNTIL_SETTLED: usize = 4;
 /// A quoted value after a secret-named key is masked up to its closing quote, the end of its line or this many bytes.
 const QUOTED_VALUE_LIMIT: usize = 16 * 1024;
+/// A collection under a secret-named key (`"token":["A",{"b":"C"}]`) nests up to this deep before it is masked to the limit.
+const COLLECTION_DEPTH_LIMIT: usize = 32;
+/// An authorization scheme (`Token`, `Digest`, …) is at least this long; a shorter word is prose (`the authorization: is required`).
+const AUTHORIZATION_SCHEME_MINIMUM_LENGTH: usize = 3;
 /// A shorter unquoted value is a word of the sentence (`the token: is expired`), not a credential.
 const UNQUOTED_VALUE_MINIMUM_LENGTH: usize = 4;
 const LITERALS_THAT_HOLD_NO_SECRET: [&str; 4] = ["null", "true", "false", "undefined"];
@@ -160,41 +167,41 @@ fn bearer_separator_len_at(text: &str, index: usize) -> usize {
   }
 }
 
-fn skip_bearer_separators(text: &str, from: usize) -> usize {
+/// Returns where a token starts after the separators that follow `from`: the longest run of separators that a token byte follows, as the backtracking regex settles it
+/// (`Bearer %3A` and `Bearer<U+0085>=` hold a token made of the last separator-like characters, which is masked).
+fn token_start_after_separators(text: &str, from: usize) -> Option<usize> {
   let mut cursor = from;
+  let mut token_start = None;
   while bearer_separator_len_at(text, cursor) > 0 {
     cursor += bearer_separator_len_at(text, cursor);
+    let token_follows = text.as_bytes().get(cursor).is_some_and(|byte| is_bearer_token_byte(*byte));
+    if token_follows {
+      token_start = Some(cursor);
+    }
   }
-  cursor
+  token_start
 }
 
 /// Returns where the token starts: after the first `Bearer` and its separators, and after each repeated `Bearer` + separators that a token follows
 /// (otherwise the repeated word is the token, as the backtracking regex settles it).
 fn bearer_token_start(text: &str, marker_end: usize) -> Option<usize> {
-  let first_token_start = skip_bearer_separators(text, marker_end);
-  let has_separator = first_token_start > marker_end;
-  if !has_separator {
-    return None;
-  }
-  let mut token_start = first_token_start;
+  let mut token_start = token_start_after_separators(text, marker_end)?;
   while let Some(repeated_marker_end) = word_end(text.as_bytes(), token_start, "bearer") {
-    let after_repeated_separators = skip_bearer_separators(text, repeated_marker_end);
-    let repeated_marker_has_separator = after_repeated_separators > repeated_marker_end;
-    let token_follows = text.as_bytes().get(after_repeated_separators).is_some_and(|byte| is_bearer_token_byte(*byte));
-    if !(repeated_marker_has_separator && token_follows) {
+    let Some(after_repeated_separators) = token_start_after_separators(text, repeated_marker_end) else {
       break;
-    }
+    };
     token_start = after_repeated_separators;
   }
   Some(token_start)
 }
 
+/// Masks the token and writes the word canonically as `Bearer`, whatever its case or escapes, like the core masker.
 fn bearer_token_at(text: &str, index: usize) -> Replacement {
   let bytes = text.as_bytes();
   let marker_end = word_end(bytes, index, "bearer")?;
   let token_start = bearer_token_start(text, marker_end)?;
   let token_length = bytes[token_start..].iter().take_while(|byte| is_bearer_token_byte(**byte)).count();
-  (token_length > 0).then(|| (token_start + token_length, format!("{} {MASK}", &text[index..marker_end])))
+  (token_length > 0).then(|| (token_start + token_length, format!("Bearer {MASK}")))
 }
 
 // ---- Basic ----
@@ -364,7 +371,13 @@ fn hides_secret_behind_escapes(value: &str, depth: usize) -> bool {
     return true;
   }
   let decoded_text = String::from_utf8_lossy(&decoded);
-  masked_at_depth(&decoded_text, depth + 1).as_str() != &*decoded_text
+  let masked_text = masked_at_depth(&decoded_text, depth + 1);
+  spelled_with_the_core_mask(&masked_text) != spelled_with_the_core_mask(&decoded_text)
+}
+
+/// Writes every mask of this masker as the mask of the core masker: a text a rule only respells (`***` → `[redacted]`) holds no new secret.
+fn spelled_with_the_core_mask(text: &str) -> String {
+  text.replace(MASK, CORE_MASK)
 }
 
 // ---- hook tokens ----
@@ -597,9 +610,17 @@ fn is_a_cookie_header_name(key: &str) -> bool {
   before_the_word.bytes().last().map_or(true, |byte| !is_word_byte(byte))
 }
 
+fn is_a_mask(text: &str) -> bool {
+  text == MASK || text == CORE_MASK
+}
+
+fn starts_with_a_mask(text: &str) -> bool {
+  text.starts_with(MASK) || text.starts_with(CORE_MASK)
+}
+
 fn is_authorization_scheme_before_mask(value: &str, text: &str, value_end: usize) -> bool {
   let is_a_scheme = AUTHORIZATION_SCHEMES.contains(&value.to_ascii_lowercase().as_str());
-  is_a_scheme && text[value_end..].trim_start_matches([' ', '\t']).starts_with(MASK)
+  is_a_scheme && starts_with_a_mask(text[value_end..].trim_start_matches([' ', '\t']))
 }
 
 fn looks_like_a_credential(value: &str, text: &str, value_end: usize) -> bool {
@@ -661,6 +682,165 @@ fn quoted_value_from(text: &str, content_start: usize, quote: u8, is_opening_quo
   ColonValue { start: content_start, end: content_end, is_credential: !content.is_empty() }
 }
 
+fn is_a_quote_byte(byte: u8) -> bool {
+  matches!(byte, b'"' | b'\'' | b'`')
+}
+
+/// Returns the last byte index a bounded scan from `from` may reach, on a character boundary.
+fn bounded_limit(text: &str, from: usize) -> usize {
+  let mut limit = (from + QUOTED_VALUE_LIMIT).min(text.len());
+  while !text.is_char_boundary(limit) {
+    limit -= 1;
+  }
+  limit
+}
+
+struct QuoteScan {
+  quote: u8,
+  limit: usize,
+  are_line_breaks_part_of_the_string: bool,
+  are_quotes_escaped: bool,
+}
+
+/// Returns where the string whose content starts at `content_start` closes: at its closing quote (a backslash and a quote inside an escaped JSON document),
+/// or at the line break (when line breaks end the string) or the limit when it never closes; a backslash escapes the next byte of a plain string.
+fn closing_quote_at(bytes: &[u8], content_start: usize, scan: &QuoteScan) -> usize {
+  let mut at = content_start;
+  while at < scan.limit {
+    let byte = bytes[at];
+    let is_line_break = byte == b'\n' || byte == b'\r';
+    let closes_the_string = if scan.are_quotes_escaped { byte == b'\\' && bytes.get(at + 1) == Some(&scan.quote) } else { byte == scan.quote };
+    if closes_the_string || (is_line_break && !scan.are_line_breaks_part_of_the_string) {
+      return at;
+    }
+    let escapes_the_next_byte = byte == b'\\' && !scan.are_quotes_escaped;
+    at += if escapes_the_next_byte { 2 } else { 1 };
+  }
+  at.min(scan.limit)
+}
+
+/// Returns the quote delimiting a string at `at`: a plain quote, or, inside an escaped JSON document, a backslash and a quote.
+fn quote_delimiter_at(bytes: &[u8], at: usize, are_quotes_escaped: bool) -> Option<u8> {
+  let byte = bytes[at];
+  if !are_quotes_escaped {
+    return is_a_quote_byte(byte).then_some(byte);
+  }
+  let next_byte = bytes.get(at + 1).copied()?;
+  (byte == b'\\' && is_a_quote_byte(next_byte)).then_some(next_byte)
+}
+
+/// Returns where the `[…]` or `{…}` that opens at `start` closes, strings and nesting included; one that never balances, nests deeper than the limit
+/// or runs past the length limit is cut at the limit.
+fn end_of_collection(text: &str, start: usize, are_quotes_escaped: bool) -> usize {
+  let bytes = text.as_bytes();
+  let limit = bounded_limit(text, start);
+  let delimiter_width = if are_quotes_escaped { 2 } else { 1 };
+  let mut depth = 0;
+  let mut open_quote: Option<u8> = None;
+  let mut at = start;
+  while at < limit {
+    let byte = bytes[at];
+    let delimiter = quote_delimiter_at(bytes, at, are_quotes_escaped);
+    if let Some(quote) = open_quote {
+      let closes_the_string = delimiter == Some(quote);
+      let escapes_the_next_byte = byte == b'\\' && !are_quotes_escaped;
+      if closes_the_string {
+        open_quote = None;
+      }
+      at += if closes_the_string { delimiter_width } else if escapes_the_next_byte { 2 } else { 1 };
+      continue;
+    }
+    if delimiter.is_some() {
+      open_quote = delimiter;
+      at += delimiter_width;
+      continue;
+    }
+    if matches!(byte, b'[' | b'{') {
+      depth += 1;
+    }
+    if depth > COLLECTION_DEPTH_LIMIT {
+      return limit;
+    }
+    if matches!(byte, b']' | b'}') {
+      depth -= 1;
+    }
+    if depth == 0 {
+      return at + 1;
+    }
+    at += 1;
+  }
+  limit
+}
+
+/// Returns where the credentials of an authorization scheme end: at a line break, a closing bracket, a quote that opens no parameter value
+/// (`response="…"` belongs to them) or the limit; trailing padding stays out.
+fn end_of_authorization_credentials(text: &str, start: usize) -> usize {
+  let bytes = text.as_bytes();
+  let limit = bounded_limit(text, start);
+  let mut at = start;
+  while at < limit {
+    let byte = bytes[at];
+    if bytes[at..].starts_with(MASK.as_bytes()) {
+      at += MASK.len();
+      continue;
+    }
+    let ends_the_line = byte == b'\n' || byte == b'\r';
+    let escaped_quote = if byte == b'\\' { bytes.get(at + 1).copied().filter(|next_byte| is_a_quote_byte(*next_byte)) } else { None };
+    let quote = escaped_quote.or_else(|| is_a_quote_byte(byte).then_some(byte));
+    let quote_width = if escaped_quote.is_some() { 2 } else { 1 };
+    let opens_a_parameter_value = quote.is_some() && at > 0 && bytes[at - 1] == b'=';
+    let is_a_closing_bracket = matches!(byte, b']' | b'}');
+    let is_a_quote_that_opens_no_value = quote.is_some() && !opens_a_parameter_value;
+    if ends_the_line || is_a_closing_bracket || is_a_quote_that_opens_no_value {
+      break;
+    }
+    let Some(quote) = quote else {
+      at += 1;
+      continue;
+    };
+    let scan = QuoteScan { quote, limit, are_line_breaks_part_of_the_string: false, are_quotes_escaped: escaped_quote.is_some() };
+    let closing_at = closing_quote_at(bytes, at + quote_width, &scan);
+    let closes_with_the_quote = if escaped_quote.is_some() { bytes.get(closing_at) == Some(&b'\\') && bytes.get(closing_at + 1) == Some(&quote) } else { bytes.get(closing_at) == Some(&quote) };
+    at = if closes_with_the_quote { closing_at + quote_width } else { closing_at };
+  }
+  let mut end = at;
+  while end > start && is_padding_byte(bytes[end - 1]) {
+    end -= 1;
+  }
+  end
+}
+
+/// The key of a header such as `Authorization` or `Proxy-Authorization`, not `myauthorization`.
+fn is_an_authorization_header_name(key: &str) -> bool {
+  const AUTHORIZATION: &str = "authorization";
+  let lowercase_key = key.to_ascii_lowercase();
+  let Some(before_the_word) = lowercase_key.strip_suffix(AUTHORIZATION) else {
+    return false;
+  };
+  before_the_word.bytes().last().map_or(true, |byte| !byte.is_ascii_alphanumeric())
+}
+
+fn is_a_generic_authorization_scheme(scheme: &str) -> bool {
+  let is_long_enough = scheme.len() >= AUTHORIZATION_SCHEME_MINIMUM_LENGTH;
+  let holds_scheme_characters = scheme.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"._~+/-".contains(&byte));
+  is_long_enough && holds_scheme_characters && !AUTHORIZATION_SCHEMES.contains(&scheme.to_ascii_lowercase().as_str())
+}
+
+/// `Token X` or `Digest username="U", …` behind an authorization header: the scheme word stays readable, everything it introduces is the credential.
+fn authorization_credentials_from(text: &str, value_start: usize, key: &str) -> Option<ColonValue> {
+  if !is_an_authorization_header_name(key) {
+    return None;
+  }
+  let scheme_end = unquoted_value_end(text, value_start);
+  let credentials_start = scheme_end + run_length(text.as_bytes(), scheme_end, is_padding_byte);
+  let has_credentials_after_padding = credentials_start > scheme_end;
+  if !(has_credentials_after_padding && is_a_generic_authorization_scheme(&text[value_start..scheme_end])) {
+    return None;
+  }
+  let credentials_end = end_of_authorization_credentials(text, credentials_start);
+  (credentials_end > credentials_start).then(|| ColonValue { start: credentials_start, end: credentials_end, is_credential: !is_a_mask(&text[credentials_start..credentials_end]) })
+}
+
 /// The value after `key": ` or `key: `, or None when no colon follows the key; a cookie header's unquoted value belongs to the cookie rule.
 fn colon_value_after(text: &str, key_end: usize, key: &str) -> Option<ColonValue> {
   let bytes = text.as_bytes();
@@ -675,10 +855,16 @@ fn colon_value_after(text: &str, key_end: usize, key: &str) -> Option<ColonValue
   if let Some(quote) = bytes.get(quote_at).copied().filter(|byte| matches!(byte, b'"' | b'\'')) {
     return Some(quoted_value_from(text, quote_at + 1, quote, is_opening_quote_escaped));
   }
+  let is_the_mask = text[quote_at..].starts_with(MASK);
+  let opens_collection = !is_opening_quote_escaped && !is_the_mask && matches!(bytes.get(quote_at), Some(b'[' | b'{'));
+  if opens_collection {
+    let is_inside_an_escaped_document = text[key_end..after_closing_quote].contains('\\');
+    return Some(ColonValue { start: value_start, end: end_of_collection(text, value_start, is_inside_an_escaped_document), is_credential: true });
+  }
   if is_opening_quote_escaped || is_a_cookie_header_name(key) {
     return None;
   }
-  Some(unquoted_value_from(text, value_start))
+  authorization_credentials_from(text, value_start, key).or_else(|| Some(unquoted_value_from(text, value_start)))
 }
 
 /// Masks the value that follows a secret-named key with a colon (`{"token":"…"}`, `password: …`); a match starts at the first byte of a run of key characters.
@@ -711,6 +897,26 @@ fn ends_a_cookie_value(character: char) -> bool {
   character == ';' || is_a_space(character) || is_a_cookie_quote(character)
 }
 
+struct CookieValue {
+  start: usize,
+  end: usize,
+  next: usize,
+}
+
+/// A quoted value is masked between its quotes; one that never closes is masked to the end of the header or the limit.
+fn cookie_value_from(pairs: &str, value_start: usize) -> CookieValue {
+  let bytes = pairs.as_bytes();
+  let Some(quote) = bytes.get(value_start).copied().filter(|byte| is_a_quote_byte(*byte)) else {
+    let length = pairs[value_start..].find(ends_a_cookie_value).unwrap_or(pairs.len() - value_start);
+    return CookieValue { start: value_start, end: value_start + length, next: value_start + length };
+  };
+  let content_start = value_start + 1;
+  let scan = QuoteScan { quote, limit: bounded_limit(pairs, content_start), are_line_breaks_part_of_the_string: true, are_quotes_escaped: false };
+  let content_end = closing_quote_at(bytes, content_start, &scan);
+  let is_closed = bytes.get(content_end) == Some(&quote);
+  CookieValue { start: content_start, end: content_end, next: if is_closed { content_end + 1 } else { content_end } }
+}
+
 /// Masks the value of every `name=value` pair (`Cookie`), or of the first one only (`Set-Cookie`, whose attributes stay readable).
 fn masked_cookie_pairs(pairs: &str, first_pair_only: bool) -> String {
   let mut masked = String::with_capacity(pairs.len());
@@ -726,21 +932,40 @@ fn masked_cookie_pairs(pairs: &str, first_pair_only: bool) -> String {
       continue;
     }
     let name_end = cursor + name_length;
-    let value_start = name_end + 1;
     let has_a_value_mark = pairs.as_bytes().get(name_end) == Some(&b'=');
-    let value_length = if has_a_value_mark { pairs[value_start..].find(ends_a_cookie_value).unwrap_or(pairs.len() - value_start) } else { 0 };
-    if value_length > 0 {
-      masked.push_str(&pairs[copied_up_to..value_start]);
+    let value_with_content = has_a_value_mark.then(|| cookie_value_from(pairs, name_end + 1)).filter(|value| value.end > value.start);
+    if let Some(value) = &value_with_content {
+      masked.push_str(&pairs[copied_up_to..value.start]);
       masked.push_str(MASK);
-      copied_up_to = value_start + value_length;
+      copied_up_to = value.end;
     }
     if first_pair_only {
       break;
     }
-    cursor = if value_length > 0 { copied_up_to } else { name_end };
+    cursor = value_with_content.map_or(name_end, |value| value.next);
   }
   masked.push_str(&pairs[copied_up_to..]);
   masked
+}
+
+/// Returns where a header value ends: a header continues on the next line when that line starts with a space or a tab (the legacy folded form).
+fn end_of_header_value(text: &str, from: usize) -> usize {
+  let bytes = text.as_bytes();
+  let mut at = from;
+  while at < bytes.len() {
+    let is_a_line_break = matches!(bytes[at], b'\r' | b'\n');
+    if !is_a_line_break {
+      at += 1;
+      continue;
+    }
+    let next_line_start = if bytes[at] == b'\r' && bytes.get(at + 1) == Some(&b'\n') { at + 2 } else { at + 1 };
+    let is_a_folded_line = matches!(bytes.get(next_line_start), Some(b' ' | b'\t'));
+    if !is_a_folded_line {
+      return at;
+    }
+    at = next_line_start;
+  }
+  bytes.len()
 }
 
 fn cookie_header_at(text: &str, index: usize) -> Replacement {
@@ -758,8 +983,7 @@ fn cookie_header_at(text: &str, index: usize) -> Replacement {
     return None;
   }
   let pairs_start = colon_at + 1 + run_length(bytes, colon_at + 1, is_padding_byte);
-  let pairs_length = text[pairs_start..].find(['\r', '\n']).unwrap_or(text.len() - pairs_start);
-  let pairs_end = pairs_start + pairs_length;
+  let pairs_end = end_of_header_value(text, pairs_start);
   let masked_pairs = masked_cookie_pairs(&text[pairs_start..pairs_end], is_set_cookie);
   Some((pairs_end, format!("{}{masked_pairs}", &text[index..pairs_start])))
 }
@@ -1071,6 +1295,185 @@ mod tests {
     }
   }
 
+  // ---- quoted and folded cookie values ----
+
+  #[test]
+  fn masks_the_quoted_and_folded_cookie_values() {
+    let cases = [
+      (r#"Cookie: session="SYNTHETIC_SECRET_123""#, r#"Cookie: session="[redacted]""#),
+      (r#"Set-Cookie: session="SYNTHETIC_SECRET_123"; Path=/; Max-Age=3600; HttpOnly"#, r#"Set-Cookie: session="[redacted]"; Path=/; Max-Age=3600; HttpOnly"#),
+      (r#"Cookie: session=abc; other="SECOND_SECRET_456""#, r#"Cookie: session=[redacted]; other="[redacted]""#),
+      ("Cookie: session='SYNTHETIC_SECRET_123'", "Cookie: session='[redacted]'"),
+      (r#"Cookie: s="AAA;b=BBB"; t=2"#, r#"Cookie: s="[redacted]"; t=[redacted]"#),
+      (r#"Cookie: s="AA\"BBSECRET"; t=2"#, r#"Cookie: s="[redacted]"; t=[redacted]"#),
+      ("Cookie: a=1;\r\n session=SYNTHETIC_SECRET_123", "Cookie: a=[redacted];\r\n session=[redacted]"),
+      ("Cookie: a=1;\n\tsession=SYNTHETIC_SECRET_123", "Cookie: a=[redacted];\n\tsession=[redacted]"),
+      ("Cookie: a=\"SECRET_ONE\r\n SECRET_TWO\"; b=2", "Cookie: a=\"[redacted]\"; b=[redacted]"),
+      (r#"Cookie: s="SYNTHETIC_SECRET_123; more"#, r#"Cookie: s="[redacted]"#),
+      (r#"Set-Cookie: s="SYNTHETIC_SECRET_123"#, r#"Set-Cookie: s="[redacted]"#),
+      (r#"Cookie: s="é日😀SECRET"; t=é"#, r#"Cookie: s="[redacted]"; t=[redacted]"#),
+      ("Cookie: s=\"SECRET_VALUE_1\nnext=plain", "Cookie: s=\"[redacted]\nnext=plain"),
+    ];
+
+    for (text, expected) in cases {
+      assert_eq!(masked(text), expected, "{text}");
+    }
+  }
+
+  #[test]
+  fn leaves_the_cookie_headers_that_hold_no_quoted_content_alone() {
+    for plain in [r#"Cookie: s=""; t="""#, r#"Cookie: s="[redacted]""#, "Cookie: a=\nsession=plain"] {
+      assert_eq!(masked(plain), plain);
+    }
+  }
+
+  #[test]
+  fn masks_only_the_bounded_start_of_a_cookie_value_that_never_closes() {
+    let result = masked(&format!("Cookie: s=\"{}", "a".repeat(100_000)));
+
+    assert!(result.starts_with("Cookie: s=\"[redacted]"));
+    assert!(result.ends_with(&"a".repeat(20_000)));
+  }
+
+  // ---- authorization schemes other than Basic and Bearer ----
+
+  #[test]
+  fn masks_the_credentials_of_an_authorization_scheme_and_keeps_the_scheme_readable() {
+    let cases = [
+      ("Authorization: Token SYNTHETIC_SECRET_123", "Authorization: Token [redacted]"),
+      ("Proxy-Authorization: Token SYNTHETIC_SECRET_123", "Proxy-Authorization: Token [redacted]"),
+      ("authorization: token SYNTHETIC_SECRET_123", "authorization: token [redacted]"),
+      (r#"Authorization: Digest username="USER_SECRET_123", response="SYNTHETIC_SECRET_123""#, "Authorization: Digest [redacted]"),
+      (
+        r#"Authorization: Digest username="USER_SECRET_123", realm="api", nonce="N0NCE", uri="/x", algorithm=SHA-256, qop=auth, cnonce="CN", nc=1, response="SYNTHETIC_SECRET_123", opaque="OP""#,
+        "Authorization: Digest [redacted]",
+      ),
+      ("Authorization: AWS4-HMAC-SHA256 Credential=SYNTHETIC/20260101/s3, Signature=abc123", "Authorization: AWS4-HMAC-SHA256 [redacted]"),
+      ("Authorization: Token SYNTHETIC_SECRET_123\nHost: example.com", "Authorization: Token [redacted]\nHost: example.com"),
+      (r#"{"msg":"Authorization: Token SYNTHETIC_SECRET_123","level":"info"}"#, r#"{"msg":"Authorization: Token [redacted]","level":"info"}"#),
+      (r#"{"msg":"Authorization: Digest response=\"SECRET_VALUE_1\"","level":"info"}"#, r#"{"msg":"Authorization: Digest [redacted]","level":"info"}"#),
+      ("Authorization: Token SYNTHETIC_SECRET_123  ", "Authorization: Token [redacted]  "),
+      ("Authorization: Basic c3ludGhldGljOmNyZWQ=", "Authorization: Basic [redacted]"),
+      ("Authorization: Bearer SYNTHETIC_SECRET_123", "Authorization: Bearer [redacted]"),
+      ("Authorization: SYNTHETIC_SECRET_123", "Authorization: [redacted]"),
+      ("Authorization: Token", "Authorization: [redacted]"),
+    ];
+
+    for (text, expected) in cases {
+      assert_eq!(masked(text), expected, "{text}");
+    }
+  }
+
+  #[test]
+  fn leaves_the_authorization_forms_that_hold_no_credential_alone() {
+    for plain in ["Authorization: Token [redacted]", "Authorization: Token ***", "Authorization: Bearer [redacted]", "Authorization: Bearer ***", "the authorization: is required"] {
+      assert_eq!(masked(plain), plain);
+    }
+  }
+
+  // ---- collections under a secret-named key ----
+
+  #[test]
+  fn masks_the_whole_collection_under_a_secret_named_key_and_keeps_the_key_readable() {
+    let deeper_than_the_limit = format!(r#"{{"token":{}"S"{},"after":1}}"#, "[".repeat(40), "]".repeat(40));
+    let cases = [
+      (r#"{"token":["SYNTHETIC_SECRET_123","SECOND_SECRET_456"]}"#.to_string(), r#"{"token":[redacted]}"#.to_string()),
+      (r#"{"token":{"value":"SYNTHETIC_SECRET_123","nested":["Y"]}}"#.to_string(), r#"{"token":[redacted]}"#.to_string()),
+      (r#"{"user":"ada","token":["A","B"],"retry":3}"#.to_string(), r#"{"user":"ada","token":[redacted],"retry":3}"#.to_string()),
+      (r#"{"token":["A]B","SECRET_TAIL"],"next":1}"#.to_string(), r#"{"token":[redacted],"next":1}"#.to_string()),
+      ("{'token':{'a':'}SECRET_TAIL'},'next':1}".to_string(), "{'token':[redacted],'next':1}".to_string()),
+      (r#"{"token":["A\"]SECRET_TAIL"],"next":1}"#.to_string(), r#"{"token":[redacted],"next":1}"#.to_string()),
+      (r#"{"body":"{\"token\":[\"A\",\"B\"]}"}"#.to_string(), r#"{"body":"{\"token\":[redacted]}"}"#.to_string()),
+      (r#"{"body":"{\"token\":[\"A]\",\"SECRET_TAIL\"]}"}"#.to_string(), r#"{"body":"{\"token\":[redacted]}"}"#.to_string()),
+      (r#"{"api_key": ["K1", "K2"]}"#.to_string(), r#"{"api_key": [redacted]}"#.to_string()),
+      (r#"{"cookie":{"session":"SYNTHETIC_SECRET_123"}}"#.to_string(), r#"{"cookie":[redacted]}"#.to_string()),
+      ("{\n  \"token\": {\n    \"value\": \"SYNTHETIC_SECRET_123\"\n  },\n  \"next\": 1\n}".to_string(), "{\n  \"token\": [redacted],\n  \"next\": 1\n}".to_string()),
+      (r#"token: ["A", "B"] and more"#.to_string(), "token: [redacted] and more".to_string()),
+      (r#"{"token":["A","B""#.to_string(), r#"{"token":[redacted]"#.to_string()),
+      (deeper_than_the_limit, r#"{"token":[redacted]"#.to_string()),
+    ];
+
+    for (text, expected) in cases {
+      assert_eq!(masked(&text), expected, "{text}");
+    }
+  }
+
+  #[test]
+  fn leaves_the_values_that_only_look_like_a_collection_or_a_counter_alone() {
+    for plain in ["maxTokens: 4096", r#"{"max_tokens": 4096}"#, "keyboard: us", r#"{"items":[1,2,3],"name":"x"}"#, "the token: is expired", r#"{"token":[redacted]}"#, r#"{"token":***}"#] {
+      assert_eq!(masked(plain), plain);
+    }
+  }
+
+  #[test]
+  fn keeps_masking_a_plain_value_after_a_required_marker_the_way_it_did_before() {
+    assert_eq!(masked("password: required"), "password: [redacted]");
+  }
+
+  #[test]
+  fn masks_only_the_bounded_start_of_an_array_that_never_closes() {
+    assert!(masked(&format!("token: [{}", "a".repeat(100_000))).starts_with("token: [redacted]"));
+  }
+
+  #[test]
+  fn keeps_the_text_after_the_bound_of_an_array_that_never_closes_readable() {
+    assert!(masked(&format!("{{\"token\":[\"A\",{} tail", "y".repeat(20_000))).ends_with(" tail"));
+  }
+
+  #[test]
+  fn reads_its_own_mask_as_an_atom_and_not_as_the_start_of_a_collection() {
+    assert_eq!(masked("token: [redacted]B"), "token: [redacted]");
+    assert_eq!(masked(r#"{"token\":["A]B"]"#), r#"{"token\":[redacted]"]"#);
+    assert_eq!(masked("Authorization:{]://,[\"/hooks/"), "Authorization:[redacted],[\"/hooks/");
+  }
+
+  #[test]
+  fn does_not_take_a_respelled_core_mask_for_a_newly_found_secret_behind_escapes() {
+    for plain in ["=%3F/hooks/***", "a=%2F%2F***%40x"] {
+      assert_eq!(spelled_with_the_core_mask(&masked(plain)), plain, "{plain}");
+    }
+  }
+
+  // ---- Bearer parity with the core masker ----
+
+  #[test]
+  fn masks_a_bearer_made_of_separator_like_characters_the_way_the_core_masker_does() {
+    for (text, expected) in [("Bearer %3A", "Bearer [redacted]"), ("Bearer\u{85}=", "Bearer [redacted]"), ("Bearer%3A%3A", "Bearer [redacted]")] {
+      assert_eq!(masked(text), expected, "{text:?}");
+    }
+  }
+
+  #[test]
+  fn writes_the_bearer_word_canonically_whatever_its_case() {
+    assert_eq!(masked("authorization: bearer SYNTHETIC_SECRET_123"), "authorization: Bearer [redacted]");
+    assert_eq!(masked("BEARER SYNTHETIC_SECRET_123"), "Bearer [redacted]");
+    assert_eq!(masked("%42earer SYNTHETIC_SECRET_123"), "Bearer [redacted]");
+  }
+
+  #[test]
+  fn recognises_the_mask_of_the_core_masker_before_a_scheme() {
+    assert_eq!(masked("Authorization: Bearer ***"), "Authorization: Bearer ***");
+    assert_eq!(masked("authorization: bearer ***"), "authorization: bearer ***");
+  }
+
+  // ---- UTF-8 boundaries of the bounded scans ----
+
+  #[test]
+  fn cuts_the_new_bounded_scans_on_a_character_boundary() {
+    let templates = ["Cookie: s=\"{}", "Set-Cookie: s=\"{}", "Cookie: s=\\\"{}", "Authorization: Digest a=\"{}", "Authorization: Token {}", "token: [\"{}", "token: {\"a\":[\"{}", "token: [\\\"{}"];
+
+    for template in templates {
+      for filler in ["é", "日", "😀", "\\é", "\\😀"] {
+        for offset in 0..5 {
+          let body = format!("{}{}", "a".repeat(offset), filler.repeat(20_000));
+          let result = masked(&template.replace("{}", &body));
+
+          assert!(result.contains(MASK), "{template} {filler} {offset}");
+        }
+      }
+    }
+  }
+
   // ---- idempotence and UTF-8 safety ----
 
   #[test]
@@ -1094,6 +1497,7 @@ mod tests {
     let pieces = [
       "?", "#", "@", "://", "=", "&", ";", ":", "%", "%3F", "%23", "%40", "é", "日", "😀", "\u{85}", "\u{feff}", "Bearer", "Basic", "Authorization:", "token", "a=", "/hooks/", "[redacted]",
       " ", "\n", "\"", "'", "\\\"", "{", "}", ",", "Cookie: ", "Set-Cookie: ", "password: ", "\"token\":", "eyJabcdef.eyJabcdef", "sk-", "xxxxxxxxxxxxxxxxxxxxxxxx", "-----BEGIN PRIVATE KEY-----", "-----END PRIVATE KEY-----",
+      "Token ", "Digest ", "[\"", "{\"a\":", "]", "Authorization: ", "Proxy-Authorization: ", "response=\"", "\r\n ", "***", "=\\\"", "\\\"]", "\\\"token\\\":",
     ];
     let mut seed: u32 = 139;
     let mut next = move || {
@@ -1129,6 +1533,9 @@ mod tests {
       "eyJ", "-eyJaaaaaa.eyJaaaaaa.", "eyJaaaaaa.eyJaaaaaa", "eyJaaaaaa.eyJ.", "sk-", "-sk-", "ghp_", "github_pat_", "AKIA", "AKIAAAAAAAAAAAAAAAAA", "xoxe.", "xoxe.xoxp-", "xoxd-",
       "xapp-", "AIza", "npm_", "glpat-", "glpat-aaaaaaaaaaaaaaaaaaaa.01.", "sk_live_", "whsec_", "hf_", "-----BEGIN PRIVATE KEY-----", "-----BEGIN A A A A ", "-----BEGIN PRIVATE KEY-----\n-----END ",
       "-----END ", "\u{85}", "Bearer\u{85}", "a=\u{85}token=", "é\"token\":\"", "日token: ",
+      "Cookie: a=\"", "Set-Cookie: a=\"", "Cookie: a=\"b\"; ", "Cookie: a=\\\"", "Cookie: a='", "Cookie: a=1;\r\n ", "Cookie:\r\n \r\n ", "Cookie: \"", "Cookie: a=\"\\", "Cookie: é=\"日",
+      "Authorization: Token ", "Authorization: Digest a=\"", "Authorization: Digest a=\"b\", ", "Proxy-Authorization: Token a b ", "Authorization: aaa ", "Authorization: Digest a=\\\"", "Authorization: Token \"", "authorization: aaa}",
+      "token:[", "token:{\"a\":[", "token:[\"", "token:[\\\"", "{\"token\":[", "token: [[[[[[[[[[", "\"token\":{\"token\":", "token:[]", "token:['", "\\\"token\\\":[\\\"", "token:[}", "Bearer %3A", "Bearer%3A%3A", "Bearer\u{85}=",
     ];
     let fastest_masking_of = |unit: &str, size: usize| {
       let hostile = unit.repeat(size / unit.len() + 1);
