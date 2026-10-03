@@ -1008,6 +1008,18 @@ mod tests {
   }
 
   #[test]
+  fn masks_a_jwt_only_from_five_characters_after_each_eyj() {
+    for plain in ["eyJabcd.eyJabcde.sig", "eyJabcde.eyJabcd.sig"] {
+      assert_eq!(masked(plain), plain);
+    }
+  }
+
+  #[test]
+  fn keeps_a_mask_inside_an_unquoted_value_as_part_of_it() {
+    assert_eq!(masked("token: abcd[redacted]efgh"), "token: [redacted]");
+  }
+
+  #[test]
   fn masks_a_quoted_value_of_ten_thousand_characters_whole() {
     assert_eq!(masked(&format!("{{\"token\":\"{}\"}}", "a".repeat(10_000))), "{\"token\":\"[redacted]\"}");
   }
