@@ -312,3 +312,267 @@ describe('maskedSecrets: the hardened rules stay linear', () => {
     expect(large).toBeLessThan(2000);
   });
 });
+
+const NOISE_FLOOR_MILLISECONDS = 5;
+const GENEROUS_CEILING_MILLISECONDS = 2000;
+const hostileTextOf = (unit: string, size: number) => unit.repeat(Math.ceil(size / unit.length));
+const fastestOfThree = (measure: () => number) => Math.min(measure(), measure(), measure());
+
+/** Times `mask` on a hostile text of 64 KiB and 256 KiB: 4x the input must cost less than 8x, whatever the machine's speed. */
+const expectLinearGrowth = (unit: string, mask: (text: string) => string) => expectLinearGrowthOn((size) => hostileTextOf(unit, size), mask);
+
+const expectLinearGrowthOn = (hostileTextOfSize: (size: number) => string, mask: (text: string) => string) => {
+  const millisecondsFor = (size: number) => {
+    const hostile = hostileTextOfSize(size);
+    return fastestOfThree(() => {
+      const startedAt = performance.now();
+      mask(hostile);
+      return performance.now() - startedAt;
+    });
+  };
+  const small = Math.max(millisecondsFor(64 * 1024), NOISE_FLOOR_MILLISECONDS);
+  const large = millisecondsFor(256 * 1024);
+
+  expect(large / small).toBeLessThan(8);
+  expect(large).toBeLessThan(GENEROUS_CEILING_MILLISECONDS);
+};
+
+describe('maskedSecrets: the JSON and colon forms under a secret-named key', () => {
+  it.each([
+    ['a JSON string value', '{"token":"SYNTHETIC_SECRET_123"}', `{"token":"${MASK}"}`],
+    ['a JSON value after a space, next to a plain field', '{"password": "SYNTHETIC_SECRET_123", "user": "ada"}', `{"password": "${MASK}", "user": "ada"}`],
+    ['a single-quoted value', "{'api_key': 'SYNTHETIC_SECRET_123'}", `{'api_key': '${MASK}'}`],
+    ['a value holding an escaped quote', '{"token":"SYNTHETIC\\"SECRET_123"}', `{"token":"${MASK}"}`],
+    ['a JSON document escaped inside a JSON string', '{"body":"{\\"token\\":\\"SYNTHETIC_SECRET_123\\"}"}', `{"body":"{\\"token\\":\\"${MASK}\\"}"}`],
+    ['a quoted value cut by the end of the text', '{"token":"SYNTHETIC_SECRET_123', `{"token":"${MASK}`],
+    ['a colon form', 'token: SYNTHETIC_SECRET_123', `token: ${MASK}`],
+    ['a password in a sentence', 'login failed, password: SYNTHETIC_SECRET_123 rejected', `login failed, password: ${MASK} rejected`],
+    ['an environment dump', 'AWS_SECRET_ACCESS_KEY: SYNTHETIC_SECRET_123', `AWS_SECRET_ACCESS_KEY: ${MASK}`],
+    ['an api_key colon form', 'api_key: SYNTHETIC_SECRET_123', `api_key: ${MASK}`],
+    ['an API key header', 'X-Api-Key: SYNTHETIC_SECRET_123', `X-Api-Key: ${MASK}`],
+    ['a YAML dump', 'client_secret: SYNTHETIC_SECRET_123\nretries: 3', `client_secret: ${MASK}\nretries: 3`],
+    ['a value ended by a comma', 'token: SYNTHETIC_SECRET_123, retry in 5s', `token: ${MASK}, retry in 5s`],
+    ['a value with no space after the colon', 'token:SYNTHETIC_SECRET_123', `token:${MASK}`],
+  ])('masks %s', (_name, text, expected) => {
+    expect(maskedSecrets(text)).toBe(expected);
+  });
+
+  it.each([
+    ['prose where a short word follows the colon', 'the token: is expired'],
+    ['a usage counter', 'tokens: 450000'],
+    ['a usage counter in JSON', '{"max_tokens": 4096}'],
+    ['a null value', '{"token": null}'],
+    ['a boolean value', '{"hasToken": true}'],
+    ['an empty value', '{"token":""}'],
+    ['a key with no value', 'Enter your password:'],
+    ['a colon whose key names no secret', 'host: localhost:7331 at 12:30:45'],
+    ['an already masked colon form', 'password: ***'],
+    ['an already masked JSON value', '{"token":"***"}'],
+    ['an already masked Authorization header', 'Authorization: Bearer ***'],
+  ])('leaves %s alone', (_name, text) => {
+    expect(maskedSecrets(text)).toBe(text);
+  });
+
+  it.each([['{"token":"SYNTHETIC_SECRET_123"}'], ['password: SYNTHETIC_SECRET_123'], ['Authorization: Bearer SYNTHETIC_SECRET_123']])('masks %j the same way twice', (text) => {
+    const once = maskedSecrets(text);
+
+    expect(maskedSecrets(once)).toBe(once);
+  });
+
+  it('masks a quoted value that holds a line break up to the line break only', () => {
+    expect(maskedSecrets('{"token":"SYNTHETIC_SECRET_123\nnext line')).toBe(`{"token":"${MASK}\nnext line`);
+  });
+
+  it('masks a quoted value of 10000 characters whole', () => {
+    expect(maskedSecrets(`{"token":"${'a'.repeat(10_000)}"}`)).toBe(`{"token":"${MASK}"}`);
+  });
+
+  it('masks only a bounded start of a quoted value that never closes', () => {
+    const endless = `{"token":"${'a'.repeat(100_000)}`;
+    const masked = maskedSecrets(endless);
+
+    expect(masked.startsWith(`{"token":"${MASK}`)).toBe(true);
+    expect(masked.endsWith('a'.repeat(20_000))).toBe(true);
+  });
+
+  it('ends an unquoted value at an ampersand', () => {
+    expect(maskedSecrets('token: SYNTHETIC_SECRET_123&page=2')).toBe(`token: ${MASK}&page=2`);
+  });
+
+  it.each([['Authorization::='], ['token:***}z='], ['/hooks/=/token=']])('masks %j the same way twice', (text) => {
+    const once = maskedSecrets(text);
+
+    expect(maskedSecrets(once)).toBe(once);
+  });
+
+  it.each(['token:', 'token: ', '"token":"', 'token:"', 'token:\\', 'a:', 'token:token:', 'token:***', "password: '", 'token:\\"a', 'api_key:1', 'a:b ', ':'])(
+    'masks %j at 64 KiB and 256 KiB with 4x the input costing less than 8x',
+    (unit) => expectLinearGrowth(unit, maskedSecrets),
+  );
+});
+
+describe('maskedSecrets: Cookie and Set-Cookie headers', () => {
+  it.each([
+    ['a Cookie header', 'Cookie: session=SYNTHETIC_SECRET_123', `Cookie: session=${MASK}`],
+    ['every pair of a Cookie header', 'Cookie: a=SECRETVAL1; b=SECRETVAL2; c=SECRETVAL3', `Cookie: a=${MASK}; b=${MASK}; c=${MASK}`],
+    ['a Set-Cookie header, keeping its attributes', 'Set-Cookie: session=SYNTHETIC_SECRET_123; HttpOnly', `Set-Cookie: session=${MASK}; HttpOnly`],
+    [
+      'a Set-Cookie header with Path and Max-Age',
+      'Set-Cookie: sid=SECRETVAL1; Path=/; Max-Age=3600; Secure; SameSite=Lax',
+      `Set-Cookie: sid=${MASK}; Path=/; Max-Age=3600; Secure; SameSite=Lax`,
+    ],
+    ['a Set-Cookie header with an Expires date', 'set-cookie: id=SECRETVAL1; Expires=Wed, 21 Oct 2026 07:28:00 GMT', `set-cookie: id=${MASK}; Expires=Wed, 21 Oct 2026 07:28:00 GMT`],
+    ['a header inside a dumped response', '< Set-Cookie: session=SECRETVAL1; HttpOnly\r\n< Content-Type: text/html', `< Set-Cookie: session=${MASK}; HttpOnly\r\n< Content-Type: text/html`],
+    ['a value holding an equals sign', 'Cookie: sid=SECRETVAL1==', `Cookie: sid=${MASK}`],
+  ])('masks %s', (_name, text, expected) => {
+    expect(maskedSecrets(text)).toBe(expected);
+  });
+
+  it.each([
+    ['a cookie that deletes itself', 'Set-Cookie: session=; Max-Age=0'],
+    ['the word cookie in prose', 'Cookie banner accepted'],
+    ['a Cookie header with no value', 'Cookie: '],
+    ['an already masked Cookie header', 'Cookie: session=***; theme=***'],
+  ])('leaves %s alone', (_name, text) => {
+    expect(maskedSecrets(text)).toBe(text);
+  });
+
+  it('does not touch the next line of a Cookie header', () => {
+    expect(maskedSecrets('Cookie: a=SECRETVAL1\nx=plain')).toBe(`Cookie: a=${MASK}\nx=plain`);
+  });
+
+  it.each([['Cookie: session=SECRETVAL1; theme=dark'], ['Set-Cookie: sid=SECRETVAL1; Path=/']])('masks %j the same way twice', (text) => {
+    const once = maskedSecrets(text);
+
+    expect(maskedSecrets(once)).toBe(once);
+  });
+
+  it.each([
+    ['one long name followed by an empty value', (size: number) => `Cookie: ${'a'.repeat(size)}=;`],
+    ['one long name with no value mark', (size: number) => `Cookie: ${'a'.repeat(size)}`],
+    ['one long first name of a Set-Cookie header', (size: number) => `Set-Cookie: ${'a'.repeat(size)}=;`],
+  ])('masks %s at 64 KiB and 256 KiB with 4x the input costing less than 8x', (_name, hostileTextOfSize) => expectLinearGrowthOn(hostileTextOfSize, maskedSecrets));
+
+  it.each(['Cookie: ', 'Cookie: a=', 'Set-Cookie: a=b;', 'Cookie:a=b;c', 'Cookie', 'Cookie:   ', 'Set-Cookie: a=b; c=d; e', 'Cookie: aaaaaaaaaaaaaaaa'])(
+    'masks %j at 64 KiB and 256 KiB with 4x the input costing less than 8x',
+    (unit) => expectLinearGrowth(unit, maskedSecrets),
+  );
+});
+
+describe('maskedSecrets: a JWT whose signature is missing', () => {
+  const header = 'eyJhbGciOiJIUzI1NiJ9';
+  const payload = 'eyJzdWIiOiIxMjM0NTY3ODkw';
+
+  it.each([
+    ['a JWT cut before its signature', `${header}.${payload}`],
+    ['an unsigned JWT with an empty signature', `${header}.${payload}.`],
+    ['a JWT with a signature shorter than the usual minimum', `${header}.${payload}.ab`],
+  ])('masks %s', (_name, jwt) => {
+    expect(maskedSecrets(`use ${jwt} now`)).toBe(`use ${MASK} now`);
+  });
+
+  it('leaves a lone JWT header alone', () => {
+    expect(maskedSecrets(`header ${header} only`)).toBe(`header ${header} only`);
+  });
+
+  it.each(['eyJ', '-eyJaaaaaa.eyJaaaaaa.', 'eyJaaaaaa.eyJaaaaaa', 'eyJaaaaaa.eyJ.'])('masks %j at 64 KiB and 256 KiB with 4x the input costing less than 8x', (unit) =>
+    expectLinearGrowth(unit, maskedSecrets),
+  );
+});
+
+describe('maskingCutCredential: an incomplete JWT tail, whatever the length of its payload', () => {
+  const header = 'eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9';
+
+  it.each([100, 508, 512, 600, 5000, 5100])('masks a header followed by a %i character payload prefix with no signature', (payloadLength) => {
+    const head = `Fix CI ${header}.eyJ${'a'.repeat(payloadLength)}`;
+
+    expect(maskingCutCredential(head)).toBe(`Fix CI ${MASK}`);
+    expect(maskedSecrets(maskingCutCredential(head))).toBe(`Fix CI ${MASK}`);
+  });
+
+  it('masks a header, a long payload prefix and a cut signature that holds an escape', () => {
+    expect(maskingCutCredential(`Fix CI ${header}.eyJ${'a'.repeat(600)}.sig%2Fbb`)).toBe(`Fix CI ${MASK}`);
+  });
+
+  it('masks a payload prefix too short for the ordinary JWT rule', () => {
+    expect(maskingCutCredential(`Fix CI ${header}.eyJab`)).toBe(`Fix CI ${MASK}`);
+  });
+
+  it('keeps what precedes the JWT header', () => {
+    expect(maskingCutCredential(`user=ada token=${header}.eyJ${'b'.repeat(900)}`)).toBe(`user=ada token=${MASK}`);
+  });
+
+  it('leaves a long ordinary run of word characters alone', () => {
+    const plain = `Fix CI ${'a'.repeat(5000)}`;
+
+    expect(maskingCutCredential(plain)).toBe(plain);
+  });
+
+  it('leaves a dotted run whose first segment is not a JWT header alone', () => {
+    const plain = `Fix CI config.eyJ${'a'.repeat(900)}`;
+
+    expect(maskingCutCredential(plain)).toBe(plain);
+  });
+
+  it.each(['-eyJ', '.eyJ', 'eyJa.eyJ', 'eyJaaaaaaaa.eyJ', 'sk-', 'a.', '%2F', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'])(
+    'cuts %j at 64 KiB and 256 KiB with 4x the input costing less than 8x',
+    (unit) => expectLinearGrowth(unit, maskingCutCredential),
+  );
+});
+
+describe('maskedSecrets: one rule for the next-line character (U+0085)', () => {
+  const nextLine = '\u0085';
+
+  it('masks a Bearer token after a next-line separator', () => {
+    expect(maskedSecrets(`Bearer${nextLine}SYNTHETIC_SECRET_123`)).toBe(`Bearer ${MASK}`);
+  });
+
+  it('masks a secret parameter that follows a next-line character', () => {
+    expect(maskedSecrets(`a=x${nextLine}token=SECRETVAL1`)).toBe(`a=x${nextLine}token=${MASK}`);
+  });
+
+  it('ends a URL authority at a next-line character', () => {
+    expect(maskedSecrets(`https://u:p${nextLine}x@host/`)).toBe(`https://u:p${nextLine}x@host/`);
+  });
+
+  it('ends a hook token at a next-line character', () => {
+    expect(maskedSecrets(`/hooks/tok123${nextLine}keep`)).toBe(`/hooks/${MASK}${nextLine}keep`);
+  });
+
+  it.each([['\u0085'], ['Bearer\u0085'], ['a=\u0085token=']])('masks %j at 64 KiB and 256 KiB with 4x the input costing less than 8x', (unit) =>
+    expectLinearGrowth(unit, maskedSecrets),
+  );
+});
+
+describe('maskedSecrets: idempotence', () => {
+  it('masks a hook segment whose leftover looks like a parameter the same way twice', () => {
+    const once = maskedSecrets('/hooks/=/token=');
+
+    expect(maskedSecrets(once)).toBe(once);
+  });
+
+  it('keeps masking the secret parameter that follows a masked hook token', () => {
+    expect(maskedSecrets('/hooks/=/token=')).toBe(`/hooks/${MASK}/token=${MASK}`);
+  });
+
+  const pieces = [
+    '?', '#', '@', '://', '=', '&', ';', ':', '%', '%3F', '%23', '%40', 'é', '日', '\u0085', '﻿', 'Bearer', 'Basic', 'Authorization:', 'token', 'a=', '/hooks/',
+    '***', ' ', '\n', '"', "'", '\\"', '{', '}', ',', 'Cookie: ', 'Set-Cookie: ', 'password: ', '"token":', 'eyJabcdef.eyJabcdef', 'sk-', 'x'.repeat(24),
+  ];
+  const corpusOf = (count: number) => {
+    let seed = 139;
+    const next = () => {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+      return seed;
+    };
+    return Array.from({ length: count }, () =>
+      Array.from({ length: next() % 30 }, () => pieces[next() % pieces.length]).join(''),
+    );
+  };
+
+  it('masks every vector of a 6000-vector corpus the same way twice', () => {
+    const notIdempotent = corpusOf(6000).filter((text) => maskedSecrets(maskedSecrets(text)) !== maskedSecrets(text));
+
+    expect(notIdempotent).toEqual([]);
+  });
+});
