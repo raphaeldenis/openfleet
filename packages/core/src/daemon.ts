@@ -8,7 +8,7 @@ import { EventBus } from './events/eventBus.js';
 import { ApprovalService } from './governance/approvalService.js';
 import { ClaudeCliHarness } from './harness/claudeCli/claudeCliHarness.js';
 import { sweepStaleSessions } from './harness/claudeCli/tokenFiles.js';
-import { FakeHarness } from './harness/fakeHarness.js';
+import { FakeHarness, postSessionStartHook } from './harness/fakeHarness.js';
 import { newId } from './ids.js';
 import { log } from './logger.js';
 import { DAEMON_VERSION } from './version.js';
@@ -61,7 +61,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   const bus = new EventBus();
   const baseUrl = `http://${config.host}:${config.port}`;
   const claudeCliHarness = new ClaudeCliHarness(config.sessionsRoot, process.env, options.claudeConfigPath);
-  const harnesses = config.e2eEnabled ? [claudeCliHarness, new FakeHarness()] : [claudeCliHarness];
+  const harnesses = config.e2eEnabled ? [claudeCliHarness, new FakeHarness({ reportSessionStart: postSessionStartHook })] : [claudeCliHarness];
   if (config.e2eEnabled) log('warn', 'e2e test surface enabled (OPENFLEET_E2E=1): fake harness and fake-output route are registered');
   const sessions = new SessionService({ db, bus, harnesses, baseUrl, worktreesRoot: config.worktreesRoot, describeError });
   const approvals = new ApprovalService({ db, bus });

@@ -1,3 +1,4 @@
+import { log } from '../logger.js';
 import type { ConversationPresence, Harness, HarnessHandle, HarnessLaunch } from './harness.js';
 
 // What Claude Code 2.1.284 strips from a paste (measured live): zero-width and bidi format characters, BOM, soft
@@ -149,6 +150,19 @@ export class FakeHandle implements HarnessHandle {
   emitExit(code: number): void { for (const l of this.exitListeners) l(code); }
 }
 
+// What the fake's CLI does after a relaunch: POSTs its SessionStart to the hook URL, like Claude Code's command hook.
+export async function postSessionStartHook({ hookUrl, sessionId }: HarnessLaunch): Promise<void> {
+  try {
+    await fetch(hookUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId, hook_event_name: 'SessionStart', source: 'resume' }),
+    });
+  } catch (err) {
+    log('warn', `fake harness: SessionStart hook not delivered for session ${sessionId}`, err);
+  }
+}
+
 export class FakeHarness implements Harness {
   readonly id = 'fake' as const;
   readonly handles: FakeHandle[] = [];
@@ -160,6 +174,12 @@ export class FakeHarness implements Harness {
   // Like the real CLI (--session-id writes no transcript until the first prompt), a conversation started fresh has
   // no file until a prompt reaches it; a resumed or cleared one already has its file.
   private readonly freshConversationsWithoutPrompt = new Set<string>();
+  private readonly reportSessionStart: ((launch: HarnessLaunch) => void) | undefined;
+
+  // `reportSessionStart`: how the fake's CLI delivers its SessionStart hook after a relaunch (the daemon posts it to the launch's hook URL).
+  constructor({ reportSessionStart }: { reportSessionStart?: (launch: HarnessLaunch) => void } = {}) {
+    this.reportSessionStart = reportSessionStart;
+  }
 
   // Test-only: a prompt reached this conversation from somewhere the fake cannot see (the raw terminal).
   markPrompted(cliSessionId: string): void {
@@ -178,6 +198,10 @@ export class FakeHarness implements Harness {
     const handle = new FakeHandle(() => this.markPrompted(conversationId));
     this.handles.push(handle);
     this.launches.push(launch);
+    // A launch that names its conversation is a relaunch of an existing session (boot resume, reopen, relaunch):
+    // its CLI reports SessionStart on its own, which is what stops the resume timeout. A first launch names none.
+    const isRelaunch = launch.cliSessionId !== undefined;
+    if (isRelaunch && this.reportSessionStart) queueMicrotask(() => this.reportSessionStart?.(launch));
     return handle;
   }
 }
