@@ -1,7 +1,7 @@
 import { inputBinding, signal } from '@angular/core';
 import { render, screen, within } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { InMemorySessionTodosSource, SESSION_TODOS_SOURCE } from './session-todos-source';
 import type { SessionTodos, TodoItem, TodoStatus } from './todos.adapter';
 import { TodosTabComponent } from './todos-tab.component';
@@ -247,7 +247,7 @@ describe('TodosTabComponent', () => {
       expect(progressRegionOf('2 of 2 completed')).toBe(regionBefore);
     });
 
-    it('starts a fresh region when the shown session changes, so switching sessions announces nothing', async () => {
+    it('replaces the region instead of mutating it when the shown session changes', async () => {
       const { view, sessionId } = await renderSwitchableTab();
       const regionOfFirstSession = progressRegionOf('1 of 2 completed');
 
@@ -256,6 +256,18 @@ describe('TodosTabComponent', () => {
 
       expect(progressRegionOf('0 of 1 completed')).not.toBe(regionOfFirstSession);
       expect(regionOfFirstSession.isConnected).toBe(false);
+    });
+
+    it('logs no Angular warning when the shown session changes', async () => {
+      const warnings = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const { view, sessionId } = await renderSwitchableTab();
+
+      sessionId.set('session-2');
+      await view.fixture.whenStable();
+
+      const angularWarnings = warnings.mock.calls.map((call) => String(call[0])).filter((text) => text.includes('NG0'));
+      warnings.mockRestore();
+      expect(angularWarnings).toEqual([]);
     });
   });
 

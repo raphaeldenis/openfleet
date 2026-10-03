@@ -291,4 +291,85 @@ describe('LiveSessionTodosSource', () => {
 
     expect(getSessionTodos).toHaveBeenCalledTimes(1);
   });
+
+  describe('children progress of a manager', () => {
+    const sessionOf = (id: string, patch: Record<string, unknown> = {}) => ({ id, name: id.toUpperCase(), emoji: '⛏️', state: 'idle', createdAt: '2026-10-01T09:00:00.000Z', parentId: 'm1', ...patch });
+    const summaryOf = (sessionId: string, completed: number, total: number) => ({ sessionId, counts: { total, completed, inProgress: 0, pending: total - completed }, updatedAt: '2026-10-01T10:00:00.000Z' });
+    const childrenOf = (managerId = 'm1') => source.childrenOf(managerId)();
+    const readyChildren = () => {
+      const load = childrenOf();
+      return load.kind === 'ready' ? load.children : [];
+    };
+
+    it('lists the direct children only, open ones first then closed ones, each group in creation order', () => {
+      socket().dispatchMessage({
+        type: 'snapshot',
+        sessions: [
+          sessionOf('late-open', { createdAt: '2026-10-01T11:00:00.000Z' }),
+          sessionOf('closed-early', { state: 'closed', createdAt: '2026-10-01T08:00:00.000Z' }),
+          sessionOf('early-open', { createdAt: '2026-10-01T09:00:00.000Z' }),
+          sessionOf('stranger-child', { parentId: 'other-manager' }),
+          sessionOf('grandchild', { parentId: 'early-open' }),
+        ],
+        approvals: [],
+        todoSummaries: [],
+      });
+
+      expect(readyChildren().map((child) => child.id)).toEqual(['early-open', 'late-open', 'closed-early']);
+    });
+
+    it('gives each child its own counts, and no counts to a child without a list', () => {
+      socket().dispatchMessage({ type: 'snapshot', sessions: [sessionOf('a'), sessionOf('b'), sessionOf('c')], approvals: [], todoSummaries: [summaryOf('a', 2, 5), summaryOf('c', 0, 0)] });
+
+      expect(readyChildren().map((child) => child.counts?.completed ?? null)).toEqual([2, null, null]);
+      expect(readyChildren().map((child) => child.counts?.total ?? null)).toEqual([5, null, null]);
+    });
+
+    it('keeps the counts of a closed child', () => {
+      socket().dispatchMessage({ type: 'snapshot', sessions: [sessionOf('a', { state: 'closed' })], approvals: [], todoSummaries: [summaryOf('a', 3, 4)] });
+
+      expect(readyChildren()).toMatchObject([{ id: 'a', state: 'closed', counts: { completed: 3, total: 4 } }]);
+    });
+
+    it('follows a session.todos event of a child live', () => {
+      socket().dispatchMessage({ type: 'snapshot', sessions: [sessionOf('a')], approvals: [], todoSummaries: [summaryOf('a', 1, 5)] });
+
+      socket().dispatchMessage({ type: 'session.todos', todos: todosOf('a', 4, 5) });
+
+      expect(readyChildren()[0]?.counts?.completed).toBe(4);
+    });
+
+    it('says a child is a manager so the row can open its dashboard', () => {
+      socket().dispatchMessage({ type: 'snapshot', sessions: [sessionOf('sub', { role: 'manager' }), sessionOf('worker')], approvals: [], todoSummaries: [] });
+
+      expect(readyChildren().map((child) => child.isManager)).toEqual([true, false]);
+    });
+
+    it('sorts a child whose creation date cannot be read after the others, whatever the order they arrive in', () => {
+      socket().dispatchMessage({
+        type: 'snapshot',
+        sessions: [sessionOf('undated', { createdAt: 'not a date' }), sessionOf('late', { createdAt: '2026-10-01T11:00:00.000Z' }), sessionOf('early', { createdAt: '2026-10-01T08:00:00.000Z' })],
+        approvals: [],
+        todoSummaries: [],
+      });
+
+      expect(readyChildren().map((child) => child.id)).toEqual(['early', 'late', 'undated']);
+    });
+
+    it('reads a manager as unsupported when the daemon reports no todo summaries', () => {
+      socket().dispatchMessage({ type: 'snapshot', sessions: [sessionOf('m1', { role: 'manager', parentId: undefined }), sessionOf('a')], approvals: [] });
+
+      expect(childrenOf()).toEqual({ kind: 'unsupported' });
+    });
+
+    it('reads a worker as having no children, not as unsupported, when the daemon reports no todo summaries', () => {
+      socket().dispatchMessage({ type: 'snapshot', sessions: [sessionOf('worker-1', { parentId: undefined })], approvals: [] });
+
+      expect(childrenOf('worker-1')).toEqual({ kind: 'ready', children: [] });
+    });
+
+    it('reads as no children for a manager nobody parents', () => {
+      expect(readyChildren()).toEqual([]);
+    });
+  });
 });

@@ -1,8 +1,10 @@
 import { Injectable, computed, effect, inject, signal, untracked, type Signal } from '@angular/core';
-import { ApiError, FleetApiService } from '../../core/fleet-api.service';
+import { MANAGER_ROLE } from '@openfleet/shared';
+import { ApiError,FleetApiService } from '../../core/fleet-api.service';
 import { copyFor, retryOfError } from '../../core/error-copy';
 import { FleetEventsService } from '../../core/fleet-events.service';
-import type { SessionTodosSource, TodosLoad } from './session-todos-source';
+import { childrenProgressOf } from './children-progress';
+import type { ChildrenLoad, SessionTodosSource, TodosLoad } from './session-todos-source';
 import type { SessionTodos } from './todos.adapter';
 
 type FailedLoad = Extract<TodosLoad, { kind: 'error' }>;
@@ -31,6 +33,7 @@ export class LiveSessionTodosSource implements SessionTodosSource {
   private readonly watchedSessionId = signal<string | undefined>(undefined);
   private readonly failures = signal<ReadonlyMap<string, Failure>>(new Map());
   private readonly loadsBySession = new Map<string, Signal<TodosLoad>>();
+  private readonly childrenBySession = new Map<string, Signal<ChildrenLoad>>();
   private readonly connectionEpochOfLastRequest = new Map<string, number>();
 
   constructor() {
@@ -49,6 +52,19 @@ export class LiveSessionTodosSource implements SessionTodosSource {
     return created;
   }
 
+  childrenOf(managerId: string): Signal<ChildrenLoad> {
+    const existing = this.childrenBySession.get(managerId);
+    if (existing) return existing;
+    const created = computed<ChildrenLoad>(() => {
+      const sessions = this.events.sessions();
+      const isManager = sessions.some((session) => session.id === managerId && session.role === MANAGER_ROLE);
+      if (isManager && this.daemonLacksTodos()) return { kind: 'unsupported' };
+      return { kind: 'ready', children: childrenProgressOf(managerId, sessions, this.events.todoSummaries()) };
+    });
+    this.childrenBySession.set(managerId, created);
+    return created;
+  }
+
   watch(sessionId: string | undefined): void {
     this.watchedSessionId.set(sessionId);
   }
@@ -58,9 +74,12 @@ export class LiveSessionTodosSource implements SessionTodosSource {
     void this.request(sessionId, this.events.reconnectCount());
   }
 
+  private daemonLacksTodos(): boolean {
+    return this.events.snapshotReceived() && !this.events.todosReported();
+  }
+
   private readLoad(sessionId: string): TodosLoad {
-    const isSnapshotWithoutTodos = this.events.snapshotReceived() && !this.events.todosReported();
-    if (isSnapshotWithoutTodos) return { kind: 'unsupported' };
+    if (this.daemonLacksTodos()) return { kind: 'unsupported' };
     const cached = this.events.todos().get(sessionId);
     const failure = this.failures().get(sessionId);
     const isFailureOfCurrentList = failure !== undefined && failure.listWhenFailed === cached;

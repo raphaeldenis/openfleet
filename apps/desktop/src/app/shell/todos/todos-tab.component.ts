@@ -1,6 +1,9 @@
-import { ChangeDetectionStrategy, Component, DestroyRef, computed, effect, inject, input } from '@angular/core';
+import { ChangeDetectionStrategy, Component, DestroyRef, ElementRef, computed, effect, inject, input, viewChild } from '@angular/core';
 import { showInvisibleControlsAsEscapes } from '../../inbox/bidi-escapes';
-import { SESSION_TODOS_SOURCE, type TodosLoad } from './session-todos-source';
+import { ManagerChildrenComponent } from './manager-children.component';
+import { plural } from './plural';
+import { SESSION_TODOS_SOURCE, type ChildrenLoad, type TodosLoad } from './session-todos-source';
+import { TodoProgressComponent } from './todo-progress.component';
 import { TODO_STATUS_PRESENTATION, UNKNOWN_STATUS_PRESENTATION } from './todo-status';
 import { MAX_TODO_ITEMS, type SessionTodos, type TodoItem } from './todos.adapter';
 
@@ -24,8 +27,9 @@ function clockTimeOf(isoDate: string): string {
 @Component({
   selector: 'of-todos-tab',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [ManagerChildrenComponent, TodoProgressComponent],
   template: `
-    <div class="tab" data-testid="todos-tab">
+    <div #tab class="tab" role="region" aria-label="Todos" tabindex="-1" data-testid="todos-tab">
       @if (!sessionId()) {
         <p class="message" data-testid="todos-no-session">Select a session to see its todos.</p>
       } @else {
@@ -56,13 +60,10 @@ function clockTimeOf(isoDate: string): string {
                 <p class="note" role="status" data-testid="todos-incomplete-note">Some tasks aren't named yet — the list completes when the agent lists its tasks.</p>
               }
               <section class="progress" data-testid="todos-progress">
-                @for (shownSession of [sessionId()]; track shownSession) {
+                @for (region of liveRegionPerSession(); track region.sessionId) {
                   <p class="progress-text" aria-live="polite">{{ progressText() }}</p>
                 }
-                <div class="track" role="progressbar" aria-label="Todo progress" aria-valuemin="0"
-                     [attr.aria-valuemax]="todos.counts.total" [attr.aria-valuenow]="todos.counts.completed" [attr.aria-valuetext]="progressText()">
-                  <div class="fill" [style.width.%]="progressPercent()"></div>
-                </div>
+                <of-todo-progress [counts]="todos.counts" ariaLabel="Todo progress" [valueText]="progressText()" />
                 @if (progressDetail(); as detail) {
                   <p class="detail" data-testid="todos-progress-detail">{{ detail }}</p>
                 }
@@ -92,19 +93,19 @@ function clockTimeOf(isoDate: string): string {
             }
           }
         }
+        <of-manager-children [load]="childrenLoad()" (opened)="focusPanel()" />
       }
     </div>
   `,
   styles: `
     :host { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+    .tab:focus { outline: none; }
     .tab { display: flex; flex-direction: column; flex: 1; min-height: 0; gap: .5rem; padding: .625rem; color: var(--fg); font-size: .8125rem; }
     .message, .note, .detail, .progress-text { margin: 0; }
     .message { display: flex; flex-direction: column; align-items: flex-start; gap: .5rem; color: var(--mut); }
     .note { padding: .375rem .5rem; border: 1px solid var(--line); border-radius: .375rem; background: var(--sunk); color: var(--fg); }
     .progress { display: flex; flex-direction: column; gap: .25rem; flex: none; }
     .progress-text { font-weight: 600; }
-    .track { height: .375rem; border-radius: .1875rem; background: var(--sunk); border: 1px solid var(--line); overflow: hidden; }
-    .fill { height: 100%; min-width: .25rem; background: var(--state-waiting-permission); }
     .detail { color: var(--mut); }
     .list-region { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: .5rem; }
     .list-region:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
@@ -131,6 +132,10 @@ export class TodosTabComponent {
     inject(DestroyRef).onDestroy(() => this.source.watch(undefined));
   }
 
+  private readonly tab = viewChild<ElementRef<HTMLElement>>('tab');
+
+  /** One live region per shown session: switching session replaces the region instead of mutating it in place. */
+  protected readonly liveRegionPerSession = computed(() => [{ sessionId: this.sessionId() }]);
   protected readonly load = computed<TodosLoad>(() => {
     const id = this.sessionId();
     return id ? this.source.loadOf(id)() : { kind: 'loading' };
@@ -140,6 +145,10 @@ export class TodosTabComponent {
     if (load.kind !== 'ready' || load.todos === null) return undefined;
     const hasTasks = load.todos.counts.total > 0;
     return hasTasks ? load.todos : undefined;
+  });
+  protected readonly childrenLoad = computed<ChildrenLoad>(() => {
+    const id = this.sessionId();
+    return id ? this.source.childrenOf(id)() : { kind: 'ready', children: [] };
   });
   protected readonly errorText = computed(() => {
     const load = this.load();
@@ -166,10 +175,6 @@ export class TodosTabComponent {
     const counts = this.list()?.counts;
     return counts ? `${counts.completed} of ${counts.total} completed` : '';
   });
-  protected readonly progressPercent = computed(() => {
-    const counts = this.list()?.counts;
-    return counts && counts.total > 0 ? (counts.completed / counts.total) * 100 : 0;
-  });
   protected readonly progressDetail = computed(() => {
     const counts = this.list()?.counts;
     if (!counts) return '';
@@ -189,8 +194,13 @@ export class TodosTabComponent {
     const beyondRenderCap = Math.max(0, todos.items.length - MAX_TODO_ITEMS);
     const notShown = todos.omitted + beyondRenderCap;
     if (notShown === 0) return '';
-    return `${notShown} more ${notShown === 1 ? 'todo' : 'todos'} not shown`;
+    return `${notShown} more ${plural(notShown, 'todo', 'todos')} not shown`;
   });
+
+  /** Keeps the keyboard focus inside the panel once a child's link, which disappears with the route change, was used. */
+  focusPanel(): void {
+    this.tab()?.nativeElement.focus();
+  }
 
   retry(): void {
     const id = this.sessionId();

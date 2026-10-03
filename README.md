@@ -4,6 +4,16 @@ Open-source desktop workspace for fleets of AI coding agents: sessions in git wo
 
 Status: phase 1 (foundation). See `docs/` for the phase smoke checklist; design lives in the author's superpowers folder for now.
 
+## Todos tab
+
+The daemon reads a session's todo list from the Claude CLI's task tools (`TaskCreate`, `TaskUpdate`, `TaskList`). The `PostToolUse` hook is the primary source: each call updates the list as it happens, and known secret formats are masked before the text leaves the daemon. The session transcript repairs what the hooks missed (daemon restart, dropped hook) with a read window of at most 64 MiB.
+
+Limits you can hit:
+- Lists live in memory only: the last 50 closed sessions keep their list until the daemon restarts.
+- A manager shows its direct children only, not grandchildren. The panel lists at most 20 children: closed children with unfinished work first, then open ones, then the other closed ones, displayed open first. The sum counts every child, and the `N more children not shown` line says how many hidden ones are unfinished.
+- The panel shows up to 100 rows per list while counts cover up to 500 tasks.
+- After a resume, rows rebuilt from history read `from history, not confirmed yet` until the agent names them again or lists its tasks.
+
 ## Dev
 
 Requires Node >=26 — `nvm use` in this repo picks up Homebrew's Node via `.nvmrc` (`system`); on a shell where nvm's `default` alias points elsewhere, prefix commands with `PATH="/opt/homebrew/bin:$PATH"` instead of changing the global alias.
