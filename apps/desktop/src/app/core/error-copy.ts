@@ -1,4 +1,5 @@
 import { ERROR_CODES, HTTP_STATUS_BY_KIND, retryOf, type DaemonIssue, type DegradedCode, type ErrorCode, type ErrorEnvelope, type ErrorRetry } from '@openfleet/shared';
+import { readableDaemonText } from './daemon-text';
 import { ApiError } from './fleet-api.service';
 
 /** What the user was doing when the error came back: it decides the advice ("shorten the mission" vs "shorten the name"). */
@@ -180,8 +181,9 @@ const capitalized = (sentence: string) => sentence.charAt(0).toUpperCase() + sen
 
 /** A code this app has never heard of: the daemon's own caller-safe words, when it sent an envelope. */
 function copyOfUnknownCode(envelope: ErrorEnvelope): string {
-  const message = endsWithPeriod(capitalized(envelope.message));
-  return envelope.hint ? `${message} ${endsWithPeriod(capitalized(envelope.hint))}` : message;
+  const sentenceOf = (daemonWords: string) => endsWithPeriod(capitalized(readableDaemonText(daemonWords)));
+  const message = sentenceOf(envelope.message);
+  return envelope.hint ? `${message} ${sentenceOf(envelope.hint)}` : message;
 }
 
 /** What the copy is built from: the same facts whether the failure came as a response or as a websocket envelope. */
@@ -240,7 +242,7 @@ const withoutTrailingPeriod = (sentence: string) => sentence.replace(/\.$/, '');
 
 /** What a degraded-daemon issue says and what to do about it: restart only when it does not clear by itself. */
 export function copyOfDaemonIssue({ code, message }: DaemonIssue): string {
-  return `${withoutTrailingPeriod(message)} — ${ADVICE_BY_DEGRADED_CODE[code]}`;
+  return `${withoutTrailingPeriod(readableDaemonText(message))} — ${ADVICE_BY_DEGRADED_CODE[code]}`;
 }
 
 /**

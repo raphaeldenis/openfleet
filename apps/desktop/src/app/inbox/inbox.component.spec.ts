@@ -320,6 +320,36 @@ describe('InboxComponent', () => {
       expect(writeText.mock.calls[0]![0]).not.toMatch(/bearer|abc123|\/Users\//i);
     });
 
+    describe('daemon words of a hostile envelope', () => {
+      const hostileEnvelope = {
+        error: 'future_failure', kind: 'internal', retry: 'never', id: 'c0ffee01',
+        message: 'open /Users/review-user/private; Authorization: Bearer SYNTHETIC_TOKEN_123; safe‮evil​',
+        hint: 'hint⁦hidden⁩',
+      };
+      const hostileFailure = { key: 'f9', sessionId: 's1', at: '2026-09-30T10:02:00.000Z', envelope: hostileEnvelope };
+
+      it('shows the message of an unknown code without credentials or home path, and its invisible characters as escapes', async () => {
+        await renderWith([hostileFailure]);
+
+        const copy = screen.getByTestId('inbox-issue-copy');
+        expect(copy).toHaveTextContent('safe<U+202E>evil<U+200B>');
+        expect(copy).toHaveTextContent('Hint<U+2066>hidden<U+2069>');
+        expect(copy.textContent).not.toMatch(/SYNTHETIC_TOKEN_123|review-user|[‮​⁦⁩]/);
+      });
+
+      it('copies the message of a known code without credentials, home path or raw invisible characters', async () => {
+        const writeText = vi.fn().mockResolvedValue(undefined);
+        vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+        await renderWith([{ ...hostileFailure, envelope: { ...hostileEnvelope, error: 'launch_failed' } }]);
+
+        await userEvent.click(screen.getByTestId('inbox-issue-copy-details'));
+
+        const copied = writeText.mock.calls[0]![0] as string;
+        expect(copied).toContain('safe<U+202E>evil<U+200B>');
+        expect(copied).not.toMatch(/SYNTHETIC_TOKEN_123|review-user|[‮​]/);
+      });
+    });
+
     it('dismisses an item on request', async () => {
       const { dismissBackgroundFailure } = await renderWith([deliveryFailure]);
 

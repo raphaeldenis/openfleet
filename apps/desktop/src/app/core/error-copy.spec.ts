@@ -73,6 +73,18 @@ describe('copyFor', () => {
     expect(text).toBe('The vault is locked. Unlock it first.');
   });
 
+  it('masks credentials, shortens home paths and shows invisible characters in the message and the hint of a code from a newer daemon', () => {
+    const hostile = {
+      error: 'future_failure', kind: 'internal', retry: 'never', id: 'c0ffee01',
+      message: 'open /Users/review-user/private/project; Authorization: Bearer SYNTHETIC_TOKEN_123; safe‮evil​',
+      hint: 'hint⁦hidden⁩ see /home/review-user/notes',
+    } as unknown as ErrorEnvelope;
+
+    const { text } = copyFor(apiErrorOf(hostile), { action: 'generic' });
+
+    expect(text).toBe('Open ~/private/project; Authorization: Bearer ***; safe<U+202E>evil<U+200B>. Hint<U+2066>hidden<U+2069> see ~/notes. (ref c0ffee01)');
+  });
+
   it('falls back by kind for an unknown code without an envelope', () => {
     const { text } = copyFor(new ApiError(503, 'GET /x', 'brand_new_code'), { action: 'generic' });
 
@@ -185,6 +197,12 @@ describe('copyFor', () => {
 
     it.each(['hook_fail_open', 'ws_broadcast_failed', 'docs_folder_unreadable'] as const)('says %s may clear by itself', (code) => {
       expect(copyOfDaemonIssue(issueOf(code))).toBe('Something broke — it may clear by itself');
+    });
+
+    it('masks credentials, shortens home paths and shows invisible characters in the message of the issue', () => {
+      const hostile: DaemonIssue = { ...issueOf('db_stuck'), message: 'Cannot open /Users/review-user/db; Bearer SYNTHETIC_TOKEN_123; safe‮evil​.' };
+
+      expect(copyOfDaemonIssue(hostile)).toBe('Cannot open ~/db; Bearer ***; safe<U+202E>evil<U+200B> — restart it when convenient');
     });
   });
 });
