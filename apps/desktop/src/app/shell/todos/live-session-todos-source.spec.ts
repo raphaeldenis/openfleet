@@ -266,6 +266,56 @@ describe('LiveSessionTodosSource', () => {
       expect(loadOf('s1')).toEqual({ kind: 'ready', todos: null });
     });
 
+    describe('while the answer of the request sent before the reconnect is still on its way', () => {
+      let answerBeforeReconnect!: { resolve: (todos: SessionTodos) => void; reject: (error: unknown) => void };
+      let answerAfterReconnect!: (todos: SessionTodos) => void;
+
+      beforeEach(async () => {
+        getSessionTodos
+          .mockReturnValueOnce(new Promise<SessionTodos>((resolve, reject) => { answerBeforeReconnect = { resolve, reject }; }))
+          .mockReturnValueOnce(new Promise<SessionTodos>((resolve) => { answerAfterReconnect = resolve; }));
+        source.watch('s1');
+        await settle();
+        await reconnect();
+        answerAfterReconnect(todosOf('s1', 3, 3));
+        await settle();
+      });
+
+      it('ignores the older answer when it arrives after the newer one was stored', async () => {
+        answerBeforeReconnect.resolve(todosOf('s1', 1, 3));
+        await settle();
+
+        expect(loadOf('s1')).toMatchObject({ kind: 'ready', todos: { counts: { completed: 3 } } });
+      });
+
+      it('ignores the older failure when it arrives after the newer answer was stored', async () => {
+        answerBeforeReconnect.reject(new TypeError('fetch failed'));
+        await settle();
+
+        const load = loadOf('s1');
+        expect(load).toMatchObject({ kind: 'ready', todos: { counts: { completed: 3 } } });
+        expect(load.kind === 'ready' && load.todos?.stale).toBeUndefined();
+      });
+    });
+
+    it('does not mark the list stale when the failure belongs to a request a newer one has replaced', async () => {
+      source.watch('s1');
+      await settle();
+      let failBeforeRetry!: (error: unknown) => void;
+      getSessionTodos
+        .mockReturnValueOnce(new Promise<SessionTodos>((_, reject) => { failBeforeRetry = reject; }))
+        .mockReturnValueOnce(new Promise<SessionTodos>(() => {}));
+      await reconnect();
+      source.retry('s1');
+
+      failBeforeRetry(new TypeError('fetch failed'));
+      await settle();
+
+      const load = loadOf('s1');
+      expect(load).toMatchObject({ kind: 'ready', todos: { counts: { total: 3 } } });
+      expect(load.kind === 'ready' && load.todos?.stale).toBeUndefined();
+    });
+
     it('reads the list as fresh again once a later event replaces the stale one', async () => {
       source.watch('s1');
       await settle();
@@ -290,6 +340,48 @@ describe('LiveSessionTodosSource', () => {
     await settle();
 
     expect(getSessionTodos).toHaveBeenCalledTimes(1);
+  });
+
+  describe('when a snapshot stops reporting a closed session', () => {
+    const summaryOf = (sessionId: string) => ({ sessionId, counts: { total: 3, completed: 1, inProgress: 0, pending: 2 }, updatedAt: '2026-10-01T10:00:00.000Z' });
+
+    it('reads the evicted closed list over REST again instead of showing the old one as fresh', async () => {
+      socket().dispatchMessage({ type: 'session.todos', todos: todosOf('old', 1, 3) });
+      socket().dispatchMessage({ type: 'snapshot', sessions: [], approvals: [], todoSummaries: [summaryOf('other')] });
+      getSessionTodos.mockResolvedValue(todosOf('old', 3, 3));
+
+      source.watch('old');
+      expect(loadOf('old')).toEqual({ kind: 'loading' });
+      await settle();
+
+      expect(getSessionTodos).toHaveBeenCalledWith('old');
+      expect(loadOf('old')).toMatchObject({ kind: 'ready', todos: { counts: { completed: 3 } } });
+    });
+
+    it('reads a session again over REST when it comes back on the same connection after the snapshot forgot it', async () => {
+      source.watch('old');
+      await settle();
+      source.watch(undefined);
+      await settle();
+      socket().dispatchMessage({ type: 'snapshot', sessions: [], approvals: [], todoSummaries: [] });
+      await settle();
+
+      source.watch('old');
+      await settle();
+
+      expect(getSessionTodos).toHaveBeenCalledTimes(2);
+    });
+
+    it('keeps the list of the session on screen', async () => {
+      source.watch('s1');
+      await settle();
+
+      socket().dispatchMessage({ type: 'snapshot', sessions: [], approvals: [], todoSummaries: [] });
+      await settle();
+
+      expect(getSessionTodos).toHaveBeenCalledTimes(1);
+      expect(loadOf('s1')).toMatchObject({ kind: 'ready', todos: { counts: { total: 3 } } });
+    });
   });
 
   describe('children progress of a manager', () => {

@@ -35,12 +35,29 @@ describe('FleetApiService.getSessionTodos', () => {
     expect(String(fetchMock.mock.calls[0]![0])).toContain('/api/sessions/a%2Fb/todos');
   });
 
-  it('rejects an answer that is not a todo list, such as one with a status this app does not know', async () => {
-    const fromNewerDaemon = {
-      sessionId: 's1', items: [{ id: '1', content: 'Wait', status: 'blocked' }],
-      counts: { total: 1, completed: 0, inProgress: 0, pending: 1 }, omitted: 0, source: 'task_tools', updatedAt: 't',
-    };
-    fetchMock.mockResolvedValue(fakeResponse({ ok: true, status: 200, json: () => Promise.resolve(fromNewerDaemon) }));
+  const countsOf = (total: number) => ({ total, completed: 0, inProgress: 0, pending: total });
+  const answerWith = (body: unknown) => fetchMock.mockResolvedValue(fakeResponse({ ok: true, status: 200, json: () => Promise.resolve(body) }));
+
+  it('keeps an item whose status a newer daemon added, so the row can read as Other', async () => {
+    const fromNewerDaemon = { sessionId: 's1', items: [{ id: '1', content: 'Wait', status: 'blocked' }], counts: countsOf(1), omitted: 0, source: 'task_tools', updatedAt: 't' };
+    answerWith(fromNewerDaemon);
+
+    await expect(api.getSessionTodos('s1')).resolves.toEqual(fromNewerDaemon);
+  });
+
+  it('keeps the valid and unknown-status items of a list and drops only the malformed one', async () => {
+    const valid = { id: '1', content: 'Write', status: 'completed' };
+    const unknownStatus = { id: '2', content: 'Wait', status: 'blocked' };
+    const malformed = { id: '3', status: 'pending' };
+    answerWith({ sessionId: 's1', items: [valid, malformed, unknownStatus], counts: countsOf(3), omitted: 0, source: 'task_tools', updatedAt: 't' });
+
+    const todos = await api.getSessionTodos('s1');
+
+    expect(todos.items).toEqual([valid, unknownStatus]);
+  });
+
+  it('rejects an answer that is not a todo list', async () => {
+    answerWith({ sessionId: 's1', items: 'none' });
 
     await expect(api.getSessionTodos('s1')).rejects.toBeInstanceOf(ApiError);
   });

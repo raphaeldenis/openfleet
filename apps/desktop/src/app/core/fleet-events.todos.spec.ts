@@ -86,14 +86,52 @@ describe('FleetEventsService todos', () => {
     expect(service.todoEventCount('s2')).toBe(0);
   });
 
-  it('drops a session.todos event whose list is not valid, and keeps the list it already had', () => {
-    socket.dispatchMessage({ type: 'session.todos', todos: todosOf('s1', 1, 3) });
-    const withUnknownStatus = { ...todosOf('s1', 3, 3), items: [{ id: '1', content: 'Wait', status: 'blocked' }] };
+  it('keeps a session.todos list with an item of a status this app does not know', () => {
+    const unknownStatus = { id: '1', content: 'Wait', status: 'blocked' };
 
-    socket.dispatchMessage({ type: 'session.todos', todos: withUnknownStatus });
+    socket.dispatchMessage({ type: 'session.todos', todos: { ...todosOf('s1', 0, 1), items: [unknownStatus] } });
+
+    expect(service.todos().get('s1')?.items).toEqual([unknownStatus]);
+  });
+
+  it('keeps the valid and unknown-status items of a session.todos list and drops only the malformed one', () => {
+    const valid = { id: '1', content: 'Write', status: 'completed' };
+    const unknownStatus = { id: '2', content: 'Wait', status: 'blocked' };
+    const malformed = { id: '3', status: 'pending' };
+
+    socket.dispatchMessage({ type: 'session.todos', todos: { ...todosOf('s1', 0, 3), items: [valid, malformed, unknownStatus] } });
+
+    expect(service.todos().get('s1')?.items).toEqual([valid, unknownStatus]);
+  });
+
+  it('drops a session.todos event whose payload is not a list, and keeps the list it already had', () => {
+    socket.dispatchMessage({ type: 'session.todos', todos: todosOf('s1', 1, 3) });
+
+    socket.dispatchMessage({ type: 'session.todos', todos: { ...todosOf('s1', 3, 3), items: 'none' } });
 
     expect(service.todos().get('s1')?.counts.completed).toBe(1);
     expect(service.todoEventCount('s1')).toBe(1);
+  });
+
+  it('forgets the list and the event count of a session a full snapshot no longer reports', () => {
+    socket.dispatchMessage({ type: 'session.todos', todos: todosOf('evicted', 1, 3) });
+    socket.dispatchMessage({ type: 'session.todos', todos: todosOf('kept', 1, 3) });
+    const keptSummary = { sessionId: 'kept', counts: { total: 3, completed: 1, inProgress: 0, pending: 2 }, updatedAt: 't' };
+
+    socket.dispatchMessage({ type: 'snapshot', sessions: [], approvals: [], todoSummaries: [keptSummary] });
+
+    expect([...service.todos().keys()]).toEqual(['kept']);
+    expect(service.todoEventCount('evicted')).toBe(0);
+    expect(service.todoEventCount('kept')).toBe(1);
+  });
+
+  it('keeps the list of the watched session through a snapshot that reports no summary for it', () => {
+    service.storeFetchedTodos(todosOf('watched', 1, 3));
+    service.keepTodosOf('watched');
+
+    socket.dispatchMessage({ type: 'snapshot', sessions: [], approvals: [], todoSummaries: [] });
+
+    expect(service.todos().get('watched')?.counts.total).toBe(3);
   });
 
   it('drops the todo summaries that are not valid and keeps the valid ones', () => {
