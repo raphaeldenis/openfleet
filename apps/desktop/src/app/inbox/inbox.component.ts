@@ -7,6 +7,7 @@ import { CopyDetailsButtonComponent } from '../design/copy-details-button.compon
 import { compactElapsedLabel, elapsedSecondsSince } from '../design/elapsed-time';
 import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
+import { VersionsService } from '../core/versions.service';
 import { KindBadgeComponent } from '../design/kind-badge.component';
 import { focusTabAt, nextTabIndex } from '../design/tablist-keyboard';
 import { attentionItemsOf, inboxCountLabelOf } from '../working-state/attention-items';
@@ -210,6 +211,7 @@ export class InboxComponent {
   readonly events = inject(FleetEventsService);
   private readonly api = inject(FleetApiService);
   private readonly replies = inject(ReplyDraftStore);
+  private readonly versions = inject(VersionsService);
   private readonly injector = inject(Injector);
   private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
   protected readonly filters = FILTERS;
@@ -276,10 +278,11 @@ export class InboxComponent {
 
   protected readonly issues = computed(() => {
     const sessionsById = this.sessionsById();
+    const daemonVersion = this.versions.daemonVersion();
     return this.events.backgroundFailures().map(({ key, sessionId, envelope, at }) => {
       const session = sessionId === undefined ? undefined : sessionsById.get(sessionId);
       const { text, ref } = copyOfEnvelope(envelope, { action: 'generic' });
-      const detailsText = detailsTextOf({ ref, code: envelope.error, message: envelope.message, at });
+      const detailsText = detailsTextOf({ ref, code: envelope.error, message: envelope.message, at, daemonVersion });
       const timeLabel = new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       return { key, timeLabel, copy: text, detailsText, sessionName: session && showInvisibleControlsAsEscapes(session.name) };
     });
