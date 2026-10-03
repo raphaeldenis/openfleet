@@ -57,6 +57,28 @@ async function letTimePass(milliseconds: number, fixture: { whenStable: () => Pr
   await fixture.whenStable();
 }
 
+/** Lets the legacy HTTP poll fail once (at 2 s), so only the ready beat (armed at 1 s, ending at 2.2 s) can react to the daemon answering. */
+async function letReadyBeatEnd(fixture: { whenStable: () => Promise<unknown> }, afterLegacyPollFailed: () => void): Promise<void> {
+  await letTimePass(POLL_INTERVAL_MS, fixture);
+  afterLegacyPollFailed();
+  await letTimePass(READY_BEAT_MS - POLL_INTERVAL_MS, fixture);
+}
+
+function deferredStatusPort(initial: DaemonStatus) {
+  const answers: Array<(status: DaemonStatus) => void> = [];
+  let isFirstRead = true;
+  const read = vi.fn(() => {
+    if (isFirstRead) {
+      isFirstRead = false;
+      return Promise.resolve(initial);
+    }
+    return new Promise<DaemonStatus>((resolve) => answers.push(resolve));
+  });
+  return { port: { read }, answers };
+}
+
+const healthRequestsOf = (fetchMock: ReturnType<typeof vi.fn>) => fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/health')).length;
+
 describe('OnboardingComponent daemon step under Tauri', () => {
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
@@ -89,6 +111,7 @@ describe('OnboardingComponent daemon step under Tauri', () => {
   });
 
   it('user sees the daemon ready, then the project step after a short beat', async () => {
+    const http = stubDaemonHttp();
     const { port, report } = fakeDaemonStatusPort({ state: 'starting' });
     const { fixture } = await renderUnderTauri(port);
 
@@ -96,7 +119,7 @@ describe('OnboardingComponent daemon step under Tauri', () => {
     await letTimePass(POLL_INTERVAL_MS, fixture);
     expect(screen.getByRole('status')).toHaveTextContent('Daemon ready · core 0.9.2');
     expect(screen.queryByRole('heading', { name: PROJECT_STEP_HEADING })).toBeNull();
-    await letTimePass(READY_BEAT_MS, fixture);
+    await letReadyBeatEnd(fixture, () => Object.assign(http, { isUp: true, version: '0.9.2' }));
 
     expect(screen.getByRole('heading', { name: PROJECT_STEP_HEADING })).toBeInTheDocument();
   });
@@ -193,16 +216,100 @@ describe('OnboardingComponent daemon step under Tauri', () => {
     expect(screen.getByRole('button', { name: 'Check again' })).toHaveFocus();
   });
 
-  it('user sees the daemon version recorded when the status, not the health check, lets them in', async () => {
+  it('user sees the daemon version of the fresh health answer recorded, not the one the status reported earlier', async () => {
+    const http = stubDaemonHttp();
     const { port, report } = fakeDaemonStatusPort({ state: 'starting' });
     const { fixture } = await renderUnderTauri(port);
 
     report({ state: 'ready', daemonVersion: '0.9.2' });
     await letTimePass(POLL_INTERVAL_MS, fixture);
-    await letTimePass(READY_BEAT_MS, fixture);
+    await letReadyBeatEnd(fixture, () => Object.assign(http, { isUp: true, version: '0.9.5' }));
 
     expect(screen.getByRole('heading', { name: PROJECT_STEP_HEADING })).toBeInTheDocument();
-    expect(TestBed.inject(VersionsService).daemonVersion()).toBe('0.9.2');
+    expect(TestBed.inject(VersionsService).daemonVersion()).toBe('0.9.5');
+  });
+
+  it('user whose daemon exits during the ready beat stays on the daemon step and sees the failure, with no version recorded', async () => {
+    stubDaemonHttp();
+    const { port, report } = fakeDaemonStatusPort({ state: 'starting' });
+    const { fixture } = await renderUnderTauri(port);
+    report({ state: 'ready', daemonVersion: '0.9.2' });
+    await letTimePass(POLL_INTERVAL_MS, fixture);
+
+    report({ state: 'failed', lastLine: 'process exited', daemonVersion: '0.9.2' });
+    await letTimePass(READY_BEAT_MS, fixture);
+
+    expect(screen.getByRole('heading', { name: FAILED_HEADING })).toBeInTheDocument();
+    expect(screen.getByTestId('daemon-last-line')).toHaveTextContent('process exited');
+    expect(screen.queryByRole('heading', { name: PROJECT_STEP_HEADING })).toBeNull();
+    expect(TestBed.inject(VersionsService).daemonVersion()).toBeNull();
+  });
+
+  it('user leaving the daemon step through the health check is not asked for a second health answer by the ready beat', async () => {
+    const http = stubDaemonHttp();
+    const fetchMock = vi.mocked(fetch) as unknown as ReturnType<typeof vi.fn>;
+    const { port, report } = fakeDaemonStatusPort({ state: 'starting' });
+    const { fixture } = await renderUnderTauri(port);
+    report({ state: 'ready' });
+    await letTimePass(POLL_INTERVAL_MS, fixture);
+
+    http.isUp = true;
+    await letTimePass(POLL_INTERVAL_MS, fixture);
+    const healthRequestsWhenLeft = healthRequestsOf(fetchMock);
+    await letTimePass(READY_BEAT_MS * 3, fixture);
+
+    expect(screen.getByRole('heading', { name: PROJECT_STEP_HEADING })).toBeInTheDocument();
+    expect(healthRequestsOf(fetchMock)).toBe(healthRequestsWhenLeft);
+  });
+
+  it('user closing the page during the ready beat triggers no health request afterwards', async () => {
+    const http = stubDaemonHttp();
+    const fetchMock = vi.mocked(fetch) as unknown as ReturnType<typeof vi.fn>;
+    const { port, report } = fakeDaemonStatusPort({ state: 'starting' });
+    const { fixture } = await renderUnderTauri(port);
+    report({ state: 'ready' });
+    await letTimePass(POLL_INTERVAL_MS, fixture);
+    http.isUp = false;
+
+    fixture.destroy();
+    const healthRequestsAtClose = healthRequestsOf(fetchMock);
+    await vi.advanceTimersByTimeAsync(READY_BEAT_MS * 3);
+
+    expect(healthRequestsOf(fetchMock)).toBe(healthRequestsAtClose);
+  });
+
+  it.each([
+    ['the newer failure answers first', ['newer', 'older']],
+    ['the older ready answer comes first', ['older', 'newer']],
+  ] as const)('user pressing Check again twice keeps the newest answer (failed) when %s', async (_name, answerOrder) => {
+    const { port, answers } = deferredStatusPort({ state: 'failed', lastLine: 'boom' });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const { fixture } = await renderAfterFirstStatusRead(port);
+    await user.click(screen.getByRole('button', { name: 'Check again' }));
+    await user.click(screen.getByRole('button', { name: 'Check again' }));
+    const answerFor = { older: () => answers[0]({ state: 'ready' }), newer: () => answers[1]({ state: 'failed', lastLine: 'process exited' }) };
+
+    answerOrder.forEach((which) => answerFor[which]());
+    await letTimePass(0, fixture);
+
+    expect(screen.getByRole('heading', { name: FAILED_HEADING })).toBeInTheDocument();
+    expect(screen.getByTestId('daemon-last-line')).toHaveTextContent('process exited');
+    expect(screen.queryByText('Continuing in a moment…')).toBeNull();
+  });
+
+  it('user pressing Check again twice sees the newest answer (ready) even when the older failure answers last', async () => {
+    const { port, answers } = deferredStatusPort({ state: 'failed', lastLine: 'boom' });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const { fixture } = await renderAfterFirstStatusRead(port);
+    await user.click(screen.getByRole('button', { name: 'Check again' }));
+    await user.click(screen.getByRole('button', { name: 'Check again' }));
+
+    answers[1]({ state: 'ready' });
+    answers[0]({ state: 'failed', lastLine: 'stale failure' });
+    await letTimePass(0, fixture);
+
+    expect(screen.getByRole('status')).toHaveTextContent('Daemon ready');
+    expect(screen.queryByRole('heading', { name: FAILED_HEADING })).toBeNull();
   });
 
   it('user sees the daemon version fetched over HTTP when the status reports the daemon ready without one', async () => {
@@ -277,7 +384,7 @@ describe('OnboardingComponent daemon step under Tauri', () => {
     const { fixture } = await renderUnderTauri(port);
 
     report(settled);
-    await letTimePass(POLL_INTERVAL_MS, fixture);
+    await letTimePass(POLL_INTERVAL_MS + READY_BEAT_MS + POLL_INTERVAL_MS, fixture);
     const readsWhenSettled = read.mock.calls.length;
     await letTimePass(POLL_INTERVAL_MS * 10, fixture);
 

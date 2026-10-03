@@ -55,6 +55,7 @@ export class DaemonStatusService {
   private pollsLeft = POLL_CAP_MS / POLL_INTERVAL_MS;
   private nextReadTimer: ReturnType<typeof setTimeout> | undefined;
   private isDestroyed = false;
+  private latestReadGeneration = 0;
 
   readonly isUnderTauri = this.port !== null;
   readonly status = signal<ObservedDaemon>({ state: 'starting' });
@@ -75,8 +76,10 @@ export class DaemonStatusService {
 
   private async readThenScheduleNextRead(): Promise<void> {
     if (!this.port) return;
+    const thisReadGeneration = ++this.latestReadGeneration;
     const observed = await this.port.read().then(observedFrom, (): ObservedDaemon => ({ state: 'unavailable' }));
-    if (this.isDestroyed) return;
+    const isSupersededByNewerRead = thisReadGeneration !== this.latestReadGeneration;
+    if (this.isDestroyed || isSupersededByNewerRead) return;
     this.status.set(observed);
     const isSettled = SETTLED_PHASES.includes(observed.state);
     const isCapReached = this.pollsLeft-- <= 0;
