@@ -96,6 +96,54 @@ describe('copyFor', () => {
     expect(copyFor(apiErrorOf(finalInternalError), { action: 'generic' }).text).not.toMatch(/try again/i);
   });
 
+  describe('the retry of the envelope decides the ending of every action', () => {
+    const ACTIONS = ['generic', 'send', 'create_session', 'create_manager', 'resume'] as const;
+    const RETRIES = ['never', 'later', 'after_refresh'] as const;
+    const wordsOfEnvelope = (code: ErrorCode, retry: ErrorEnvelope['retry'], action: (typeof ACTIONS)[number]) => {
+      const envelope = envelopeOf(code, { retry, ...(ERROR_CODES[code].kind === 'internal' && { id: '3f9a1c2e' }) });
+      return copyFor(apiErrorOf(envelope), { action }).text.replace(/ \(ref [0-9a-f]{8}\)$/, '');
+    };
+    const violationsOf = (action: (typeof ACTIONS)[number], retry: ErrorEnvelope['retry']) =>
+      ALL_CODES.flatMap((code) => {
+        const text = wordsOfEnvelope(code, retry, action);
+        const invitesRetry = /try again/i.test(text);
+        const invitesReload = /reload|refresh/i.test(text);
+        const problems = [
+          invitesRetry !== (retry !== 'never') && `${retry === 'never' ? 'invites' : 'omits'} a retry`,
+          invitesReload !== (retry === 'after_refresh') && `${retry === 'after_refresh' ? 'omits' : 'invites'} a reload`,
+        ].filter(Boolean);
+        return problems.map((problem) => `${code}: ${problem} — "${text}"`);
+      });
+
+    it('covers every code, action and retry once (915 cases)', () => {
+      expect(ALL_CODES.length * ACTIONS.length * RETRIES.length).toBe(915);
+    });
+
+    describe.each(ACTIONS)('the action %s', (action) => {
+      it.each(RETRIES)('invites a retry exactly when the envelope retry is not never, and a reload exactly for after_refresh (envelope retry %s)', (retry) => {
+        expect(violationsOf(action, retry)).toEqual([]);
+      });
+    });
+
+    it('does not invite a retry that an internal error of the envelope forbids while creating a session', () => {
+      const envelope = envelopeOf('internal_error', { retry: 'never', id: '3f9a1c2e' });
+
+      expect(copyFor(apiErrorOf(envelope), { action: 'create_session' }).text).toBe('The daemon hit an internal error while creating the session. (ref 3f9a1c2e)');
+    });
+
+    it('tells to reload when the envelope says so, whatever the action says by default', () => {
+      const envelope = envelopeOf('launch_failed', { retry: 'after_refresh', id: '3f9a1c2e' });
+
+      expect(copyFor(apiErrorOf(envelope), { action: 'resume' }).text).toBe('The harness failed to relaunch — reload, then try again. (ref 3f9a1c2e)');
+    });
+
+    it('ends a retriable rejection of a creation with a retry', () => {
+      const envelope = envelopeOf('invalid_body', { retry: 'later' });
+
+      expect(copyFor(apiErrorOf(envelope), { action: 'create_manager' }).text).toBe('The daemon rejected these values — check the directory and the other fields, then try again.');
+    });
+  });
+
   describe('copyOfEnvelope', () => {
     it('reads an envelope that came on the websocket exactly like the same envelope from a response', () => {
       const envelope = envelopeOf('launch_failed', { id: '3f9a1c2e' });
