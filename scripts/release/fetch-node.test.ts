@@ -404,6 +404,138 @@ describe('fetchNode', () => {
     });
   });
 
+  describe('treats a malformed record as an absent record', () => {
+    const DIGEST = sha256(Buffer.from('existing'));
+    const validLines = [`tarball ${'c'.repeat(64)}`, `binary ${DIGEST}`, `version ${VERSION}`, 'target aarch64-apple-darwin'];
+    const malformedRecords: Array<[string, string]> = [
+      ['a duplicated version line', [...validLines, 'version 25.0.0'].join('\n') + '\n'],
+      ['a duplicated version replacing the target line', [validLines[0], validLines[1], 'version 25.0.0', `version ${VERSION}`].join('\n') + '\n'],
+      ['a duplicated binary line', [...validLines, `binary ${DIGEST}`].join('\n') + '\n'],
+      ['CRLF line endings', validLines.join('\r\n') + '\r\n'],
+      ['an unknown key', [...validLines, 'extra value'].join('\n') + '\n'],
+      ['an over-long line', [...validLines, `x ${'y'.repeat(600)}`].join('\n') + '\n'],
+      ['a missing target line', validLines.slice(0, 3).join('\n') + '\n'],
+      ['a missing tarball line', validLines.slice(1).join('\n') + '\n'],
+      ['a version that is not a plain semver', [validLines[0], validLines[1], 'version v26.9.0', validLines[3]].join('\n') + '\n'],
+      ['a target that is not a supported triple', [validLines[0], validLines[1], validLines[2], 'target riscv64-unknown-linux-gnu'].join('\n') + '\n'],
+      ['a binary digest that is not 64 lowercase hex characters', [validLines[0], `binary ${DIGEST.toUpperCase()}`, validLines[2], validLines[3]].join('\n') + '\n'],
+    ];
+
+    it.each(malformedRecords)('downloads again for %s', async (_name, record) => {
+      const tarball = buildTarball();
+      mkdirSync(binariesFolder, { recursive: true });
+      writeFileSync(installedBinary(), 'existing');
+      writeFileSync(checksumRecord(), record);
+      const { fetchBytes, requestedUrls } = serve({ tarball, shasums: shasumsFor(tarball) });
+
+      const result = await fetchNode({ version: VERSION, binariesFolder, fetchBytes, installedVersion: () => `v${VERSION}`, hostTarget: 'aarch64-apple-darwin' });
+
+      expect(result.status).toBe('installed');
+      expect(requestedUrls.length).toBeGreaterThan(0);
+    });
+
+    it('skips for the same record when it is well formed', async () => {
+      mkdirSync(binariesFolder, { recursive: true });
+      writeFileSync(installedBinary(), 'existing');
+      writeFileSync(checksumRecord(), validLines.join('\n') + '\n');
+      const fetchBytes = vi.fn(async () => {
+        throw new Error('offline');
+      });
+
+      const result = await fetchNode({ version: VERSION, binariesFolder, fetchBytes, installedVersion: neverInstalled });
+
+      expect(result.status).toBe('skipped');
+    });
+  });
+
+  describe('binds the record to the installed binary', () => {
+    it('does not write the record when the installed binary cannot be verified, so a half-written install never has a matching record', async () => {
+      const tarball = buildTarball();
+      const { fetchBytes } = serve({ tarball, shasums: shasumsFor(tarball) });
+      const extractBinary = ({ packageName, scratchFolder }: { packageName: string; scratchFolder: string }) => {
+        mkdirSync(join(scratchFolder, packageName, 'bin'), { recursive: true });
+        writeFileSync(join(scratchFolder, packageName, 'bin/node'), FAKE_NODE_BODY);
+        return join(scratchFolder, packageName, 'bin/node');
+      };
+      const crashBeforeRecord = vi.fn(() => {
+        throw new Error('crash after install');
+      });
+
+      await expect(fetchNode({ version: VERSION, binariesFolder, fetchBytes, installedVersion: neverInstalled, extractBinary, afterInstall: crashBeforeRecord })).rejects.toThrow('crash after install');
+
+      expect(existsSync(checksumRecord())).toBe(false);
+    });
+
+    it('writes the record through a temporary file renamed over the destination, leaving no temporary file behind', async () => {
+      const tarball = buildTarball();
+      const { fetchBytes } = serve({ tarball, shasums: shasumsFor(tarball) });
+
+      await fetchNode({ version: VERSION, binariesFolder, fetchBytes, installedVersion: neverInstalled });
+
+      expect(leftovers()).toEqual([]);
+      expect(lstatSync(checksumRecord()).isFile()).toBe(true);
+    });
+  });
+
+  describe('a record symlink introduced while the download is awaited', () => {
+    it('is replaced by a regular record and never followed to the external file', async () => {
+      const tarball = buildTarball();
+      const externalFile = join(workFolder, 'external-record');
+      writeFileSync(externalFile, 'keep');
+      mkdirSync(binariesFolder, { recursive: true });
+      const { fetchBytes } = serve({ tarball, shasums: shasumsFor(tarball) });
+      const racingFetch = async (url: string) => {
+        if (url.endsWith('SHASUMS256.txt')) symlinkSync(externalFile, checksumRecord());
+        return fetchBytes(url);
+      };
+
+      await fetchNode({ version: VERSION, binariesFolder, fetchBytes: racingFetch, installedVersion: neverInstalled });
+
+      expect(readFileSync(externalFile, 'utf8')).toBe('keep');
+      expect(lstatSync(checksumRecord()).isFile()).toBe(true);
+      expect(readFileSync(checksumRecord(), 'utf8')).toMatch(/^tarball /);
+    });
+  });
+
+  describe('executes a legacy-record binary from the bytes that were hashed', () => {
+    it('runs a private copy, so replacing the cached file after the hash cannot change what runs', async () => {
+      const good = `#!/bin/sh\necho v${VERSION}\n`;
+      const marker = join(workFolder, 'swapped-executed');
+      const bad = `#!/bin/sh\necho yes > '${marker}'\necho v${VERSION}\n`;
+      mkdirSync(binariesFolder, { recursive: true });
+      writeFileSync(installedBinary(), good, { mode: 0o755 });
+      writeFileSync(checksumRecord(), `tarball ${'c'.repeat(64)}\nbinary ${sha256(Buffer.from(good))}\n`);
+      const executedPaths: string[] = [];
+      const installedVersion = (path: string) => {
+        executedPaths.push(path);
+        writeFileSync(installedBinary(), bad, { mode: 0o755 });
+        return runInstalledVersion(path);
+      };
+
+      const result = await fetchNode({ version: VERSION, binariesFolder, fetchBytes: async () => Buffer.alloc(0), installedVersion, hostTarget: 'aarch64-apple-darwin' });
+
+      expect(result.status).toBe('skipped');
+      expect(executedPaths).toHaveLength(1);
+      expect(executedPaths[0]).not.toBe(installedBinary());
+      expect(existsSync(marker)).toBe(false);
+      expect(existsSync(executedPaths[0])).toBe(false);
+    });
+  });
+
+  describe('error messages never print the home folder', () => {
+    it('shows ~ instead of $HOME when it refuses a symlink at the destination', async () => {
+      vi.stubEnv('HOME', workFolder);
+      mkdirSync(binariesFolder, { recursive: true });
+      symlinkSync(join(workFolder, 'absent'), installedBinary());
+
+      const failure = await fetchNode({ version: VERSION, binariesFolder, fetchBytes: async () => Buffer.alloc(0), installedVersion: neverInstalled }).catch((error: Error) => error);
+
+      expect((failure as Error).message).not.toContain(workFolder);
+      expect((failure as Error).message).toContain(`~/binaries/${BINARY_NAME} is a symlink`);
+      vi.unstubAllEnvs();
+    });
+  });
+
   it('refuses a version that is not a plain semver', async () => {
     const fetchBytes = async () => Buffer.alloc(0);
 

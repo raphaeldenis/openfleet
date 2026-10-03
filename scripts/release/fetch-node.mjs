@@ -5,6 +5,7 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -17,8 +18,22 @@ const PLAIN_SEMVER = /^\d+\.\d+\.\d+$/;
 const EXECUTABLE_MODE = 0o755;
 const FETCH_TIMEOUT_MS = 60_000;
 const RECORD_LINE = /^(tarball|binary|version|target) (\S+)$/;
+const SHA256_HEX = /^[0-9a-f]{64}$/;
+const MAXIMUM_RECORD_LINE_BYTES = 512;
+const CHECKSUM_KEYS = ['tarball', 'binary'];
+const FULL_RECORD_KEYS = [...CHECKSUM_KEYS, 'version', 'target'];
 
-class FetchNodeError extends Error {}
+const homeAsTilde = (text) => {
+  const home = homedir();
+  const hasMeaningfulHome = home !== '' && home !== '/';
+  return hasMeaningfulHome ? text.replaceAll(home, '~') : text;
+};
+
+class FetchNodeError extends Error {
+  constructor(message) {
+    super(homeAsTilde(message));
+  }
+}
 
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 
@@ -54,12 +69,30 @@ export function extractNodeBinary({ tarball, packageName, scratchFolder }) {
   return join(scratchFolder, packageName, 'bin/node');
 }
 
-/** @returns {{ tarball?: string, binary?: string, version?: string, target?: string }} the lines of the record; empty when it is missing or in another format. Records written before version and target were stored carry only the two checksums. */
+const isWellFormedRecordValue = ({ key, value }) => {
+  if (key === 'version') return PLAIN_SEMVER.test(value);
+  if (key === 'target') return Object.hasOwn(NODE_PLATFORM_BY_TARGET, value);
+  return SHA256_HEX.test(value);
+};
+
+/** @returns {{ tarball?: string, binary?: string, version?: string, target?: string }} the entries of a strictly formatted record; empty when it is missing, malformed, duplicated, partial or over-long. A record carries either the two checksums alone or all four keys. */
 const readChecksumRecord = (recordPath) => {
   try {
-    const lines = readFileSync(recordPath, 'utf8').split('\n');
-    const matches = lines.map((line) => RECORD_LINE.exec(line.trim())).filter((match) => match !== null);
-    return Object.fromEntries(matches.map(([, kind, value]) => [kind, value]));
+    const text = readFileSync(recordPath, 'utf8');
+    const lines = text.split('\n');
+    const endsWithNewline = lines.pop() === '';
+    const hasOverLongLine = lines.some((line) => Buffer.byteLength(line) > MAXIMUM_RECORD_LINE_BYTES);
+    if (!endsWithNewline || text.includes('\r') || hasOverLongLine) return {};
+
+    const entries = lines.map((line) => RECORD_LINE.exec(line));
+    if (entries.includes(null)) return {};
+    const keys = entries.map(([, key]) => key);
+    const isChecksumsOnly = keys.length === CHECKSUM_KEYS.length && CHECKSUM_KEYS.every((key) => keys.includes(key));
+    const isFullRecord = keys.length === FULL_RECORD_KEYS.length && FULL_RECORD_KEYS.every((key) => keys.includes(key));
+    if (!(isChecksumsOnly || isFullRecord)) return {};
+
+    const isEveryValueWellFormed = entries.every(([, key, value]) => isWellFormedRecordValue({ key, value }));
+    return isEveryValueWellFormed ? Object.fromEntries(entries.map(([, key, value]) => [key, value])) : {};
   } catch {
     return {};
   }
@@ -74,32 +107,51 @@ function refuseNonRegularMember({ extractedBinary, packageName }) {
   if (!isSingleLinkRegularFile) throw new FetchNodeError(`${packageName}/bin/node is not a regular single-link file in the archive`);
 }
 
-const sha256OfFile = (path) => {
+const readBytesOrUndefined = (path) => {
   try {
-    return sha256(readFileSync(path));
+    return readFileSync(path);
   } catch {
     return undefined;
   }
 };
 
+const sha256OfFile = (path) => {
+  const bytes = readBytesOrUndefined(path);
+  return bytes === undefined ? undefined : sha256(bytes);
+};
+
+/** Runs the version check on a private copy of the hashed bytes, so replacing the cached file after the hash cannot change what is executed. */
+const installedVersionOfCopy = ({ bytes, installedVersion }) => {
+  const privateFolder = mkdtempSync(join(tmpdir(), 'fetch-node-run-'));
+  try {
+    const copyPath = join(privateFolder, 'node');
+    writeFileSync(copyPath, bytes, { mode: 0o700 });
+    chmodSync(copyPath, 0o700);
+    return installedVersion(copyPath);
+  } finally {
+    rmSync(privateFolder, { recursive: true, force: true });
+  }
+};
+
 /**
  * True when the binary hashes to the sha256 recorded at its verified install and was validated for this version and target; needs no network.
- * The binary is hashed first and executed only when the record predates version and target, and only on a host CPU that can run it.
+ * The binary is hashed first and executed only when the record carries no version and target, only on a host CPU that can run it, and only from a copy of the hashed bytes.
  */
 const isInstalledBinaryTheRecordedOne = ({ destination, checksumRecord, version, target, installedVersion, hostTarget }) => {
   const { binary: recordedBinaryChecksum, version: recordedVersion, target: recordedTarget } = readChecksumRecord(checksumRecord);
-  const isHashingToTheRecordedBinary = recordedBinaryChecksum !== undefined && sha256OfFile(destination) === recordedBinaryChecksum;
+  const installedBytes = readBytesOrUndefined(destination);
+  const isHashingToTheRecordedBinary = recordedBinaryChecksum !== undefined && installedBytes !== undefined && sha256(installedBytes) === recordedBinaryChecksum;
   if (!isHashingToTheRecordedBinary) return false;
 
   const hasValidatedVersionAndTarget = recordedVersion !== undefined && recordedTarget !== undefined;
   if (hasValidatedVersionAndTarget) return recordedVersion === version && recordedTarget === target;
 
   const canHostExecuteTarget = hostTarget === target;
-  return canHostExecuteTarget && installedVersion(destination) === `v${version}`;
+  return canHostExecuteTarget && installedVersionOfCopy({ bytes: installedBytes, installedVersion }) === `v${version}`;
 };
 
 /** Installs the pinned Node binary as the sidecar unless the installed one hashes to the binary sha256 recorded at its verified install, for this version and target. */
-export async function fetchNode({ version, target = DEFAULT_TARGET, binariesFolder = DEFAULT_BINARIES_FOLDER, fetchBytes = downloadBytes, installedVersion = runInstalledVersion, extractBinary = extractNodeBinary, hostTarget = hostTargetOf(process.arch) }) {
+export async function fetchNode({ version, target = DEFAULT_TARGET, binariesFolder = DEFAULT_BINARIES_FOLDER, fetchBytes = downloadBytes, installedVersion = runInstalledVersion, extractBinary = extractNodeBinary, hostTarget = hostTargetOf(process.arch), afterInstall = () => {} }) {
   if (!PLAIN_SEMVER.test(version)) throw new FetchNodeError(`version "${version}" is not a plain x.y.z`);
   const nodePlatform = Object.hasOwn(NODE_PLATFORM_BY_TARGET, target) ? NODE_PLATFORM_BY_TARGET[target] : undefined;
   if (nodePlatform === undefined) throw new FetchNodeError(`target "${target}" is not supported, expected: ${Object.keys(NODE_PLATFORM_BY_TARGET).join(' or ')}`);
@@ -127,9 +179,16 @@ export async function fetchNode({ version, target = DEFAULT_TARGET, binariesFold
     const stagedBinary = join(scratchFolder, 'staged-node');
     renameSync(extractedBinary, stagedBinary);
     chmodSync(stagedBinary, EXECUTABLE_MODE);
+    const stagedChecksum = sha256OfFile(stagedBinary);
     refuseSymlink(destination);
     renameSync(stagedBinary, destination);
-    writeFileSync(checksumRecord, `tarball ${downloadedChecksum}\nbinary ${sha256OfFile(destination)}\nversion ${version}\ntarget ${target}\n`);
+    const isInstalledBinaryTheStagedOne = sha256OfFile(destination) === stagedChecksum;
+    if (!isInstalledBinaryTheStagedOne) throw new FetchNodeError(`${destination} changed while it was installed`);
+    afterInstall();
+    const record = `tarball ${downloadedChecksum}\nbinary ${stagedChecksum}\nversion ${version}\ntarget ${target}\n`;
+    const stagedRecord = join(scratchFolder, 'staged-record');
+    writeFileSync(stagedRecord, record);
+    renameSync(stagedRecord, checksumRecord);
   } finally {
     rmSync(scratchFolder, { recursive: true, force: true });
   }
@@ -142,7 +201,7 @@ async function main() {
     const { status, path } = await fetchNode({ version, target });
     console.log(`node ${version}: ${status} ${path}`);
   } catch (error) {
-    console.error(`fetch-node: ${String(error.message).split('\n')[0]}`);
+    console.error(`fetch-node: ${homeAsTilde(String(error.message).split('\n')[0])}`);
     process.exitCode = 1;
   }
 }

@@ -236,6 +236,49 @@ describe('node-pty prebuild guard', () => {
     expect(result.stderr).toMatch(/symlink/);
     expect(prebuildFoldersIn(out)).toEqual(['darwin-arm64']);
   }, BOOT_TIMEOUT_MS);
+
+  describe.each([{ linkedFolder: 'prebuilds/darwin-x64' }, { linkedFolder: 'prebuilds' }])('refuses a symlinked $linkedFolder', ({ linkedFolder }) => {
+    const nodePtyDirWithLinked = (): { nodePtyDir: string; externalSpawnHelper: string } => {
+      const nodePtyDir = writeFakeNodePty({ prebuildCpuType: CPU_TYPE_X86_64 });
+      const externalFolder = join(makeScratchFolder(), 'external');
+      cpSync(join(nodePtyDir, linkedFolder), externalFolder, { recursive: true });
+      const externalSpawnHelper = join(externalFolder, linkedFolder === 'prebuilds' ? 'darwin-x64/spawn-helper' : 'spawn-helper');
+      chmodSync(externalSpawnHelper, 0o600);
+      rmSync(join(nodePtyDir, linkedFolder), { recursive: true });
+      symlinkSync(externalFolder, join(nodePtyDir, linkedFolder));
+      return { nodePtyDir, externalSpawnHelper };
+    };
+
+    it('with a one-line error naming only the relative path, keeping the previous bundle and the external file mode', () => {
+      const out = previousBundleOut();
+      const { nodePtyDir, externalSpawnHelper } = nodePtyDirWithLinked();
+
+      const result = bundleX64With({ nodePtyDir, out });
+
+      expect(result.status).toBe(1);
+      expect(result.stderr.trim().split('\n')).toHaveLength(1);
+      expect(result.stderr).toContain(`node-pty ${linkedFolder} is a symlink`);
+      expect(result.stderr).not.toContain(nodePtyDir);
+      expect(statSync(externalSpawnHelper).mode & 0o777).toBe(0o600);
+      expect(prebuildFoldersIn(out)).toEqual(['darwin-arm64']);
+    }, BOOT_TIMEOUT_MS);
+  });
+});
+
+describe('error messages never print the home folder', () => {
+  it('shows ~ instead of $HOME in a refusal that names the --out path', () => {
+    const home = makeScratchFolder();
+    const target = join(home, 'real-out');
+    mkdirSync(target);
+    const link = join(home, 'linked-out');
+    symlinkSync(target, link);
+
+    const result = runBundle(['--target', ARM64_TARGET, '--out', link, '--tauri-conf', tauriConf], { ...process.env, HOME: home });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).not.toContain(home);
+    expect(result.stderr).toContain('refusing --out ~/linked-out');
+  }, BOOT_TIMEOUT_MS);
 });
 
 describe('unknown target', () => {
