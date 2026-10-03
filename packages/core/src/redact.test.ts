@@ -544,6 +544,189 @@ describe('maskedSecrets: one rule for the next-line character (U+0085)', () => {
   );
 });
 
+describe('maskedSecrets: quoted and folded cookie values', () => {
+  it.each([
+    ['a quoted Cookie value', 'Cookie: session="SYNTHETIC_SECRET_123"', `Cookie: session="${MASK}"`],
+    ['a quoted Set-Cookie value, keeping its attributes', 'Set-Cookie: session="SYNTHETIC_SECRET_123"; Path=/; Max-Age=3600; HttpOnly', `Set-Cookie: session="${MASK}"; Path=/; Max-Age=3600; HttpOnly`],
+    ['a quoted value after a plain one', 'Cookie: session=abc; other="SECOND_SECRET_456"', `Cookie: session=${MASK}; other="${MASK}"`],
+    ['a single-quoted value', "Cookie: session='SYNTHETIC_SECRET_123'", `Cookie: session='${MASK}'`],
+    ['a quoted value holding a semicolon and an equals sign', 'Cookie: s="AAA;b=BBB"; t=2', `Cookie: s="${MASK}"; t=${MASK}`],
+    ['a quoted value holding an escaped quote', 'Cookie: s="AA\\"BBSECRET"; t=2', `Cookie: s="${MASK}"; t=${MASK}`],
+    ['a folded Cookie header', 'Cookie: a=1;\r\n session=SYNTHETIC_SECRET_123', `Cookie: a=${MASK};\r\n session=${MASK}`],
+    ['a folded Cookie header folded with a tab and a bare line feed', 'Cookie: a=1;\n\tsession=SYNTHETIC_SECRET_123', `Cookie: a=${MASK};\n\tsession=${MASK}`],
+    ['a quoted value folded over two lines', 'Cookie: a="SECRET_ONE\r\n SECRET_TWO"; b=2', `Cookie: a="${MASK}"; b=${MASK}`],
+    ['a quoted value cut by the end of the header', 'Cookie: s="SYNTHETIC_SECRET_123; more', `Cookie: s="${MASK}`],
+    ['a quoted value cut by the end of the text', 'Set-Cookie: s="SYNTHETIC_SECRET_123', `Set-Cookie: s="${MASK}`],
+    ['a quoted multibyte value', 'Cookie: s="é日😀SECRET"; t=é', `Cookie: s="${MASK}"; t=${MASK}`],
+  ])('masks %s', (_name, text, expected) => {
+    expect(maskedSecrets(text)).toBe(expected);
+  });
+
+  it.each([
+    ['an empty quoted value', 'Cookie: s=""; t=""'],
+    ['a deleting Set-Cookie header', 'Set-Cookie: session=; Max-Age=0'],
+    ['an already masked quoted value', `Cookie: s="${MASK}"`],
+    ['the next unfolded line', 'Cookie: a=\nsession=plain'],
+  ])('leaves %s alone', (_name, text) => {
+    expect(maskedSecrets(text)).toBe(text);
+  });
+
+  it('stops an unterminated quoted value at the end of its header line', () => {
+    expect(maskedSecrets('Cookie: s="SECRET_VALUE_1\nnext=plain')).toBe(`Cookie: s="${MASK}\nnext=plain`);
+  });
+
+  it('masks only a bounded start of a quoted value that never closes', () => {
+    const masked = maskedSecrets(`Cookie: s="${'a'.repeat(100_000)}`);
+
+    expect(masked.startsWith(`Cookie: s="${MASK}`)).toBe(true);
+    expect(masked.endsWith('a'.repeat(20_000))).toBe(true);
+  });
+
+  it.each([['Cookie: s="SYNTHETIC_SECRET_123"; t=x'], ['Set-Cookie: s="SYNTHETIC_SECRET_123"; Path=/'], ['Cookie: a=1;\r\n session=SYNTHETIC_SECRET_123']])('masks %j the same way twice', (text) => {
+    const once = maskedSecrets(text);
+
+    expect(maskedSecrets(once)).toBe(once);
+  });
+
+  it.each(['Cookie: a="', 'Set-Cookie: a="', 'Cookie: a="b"; ', 'Cookie: a=\\"', "Cookie: a='", 'Cookie: a=1;\r\n ', 'Cookie:\r\n \r\n ', 'Cookie: "', 'Cookie: a="\\'])(
+    'masks %j at 64 KiB and 256 KiB with 4x the input costing less than 8x',
+    (unit) => expectLinearGrowth(unit, maskedSecrets),
+  );
+});
+
+describe('maskedSecrets: authorization schemes other than Basic and Bearer', () => {
+  it.each([
+    ['a Token credential', 'Authorization: Token SYNTHETIC_SECRET_123', `Authorization: Token ${MASK}`],
+    ['a Proxy-Authorization Token credential', 'Proxy-Authorization: Token SYNTHETIC_SECRET_123', `Proxy-Authorization: Token ${MASK}`],
+    ['a lowercase scheme', 'authorization: token SYNTHETIC_SECRET_123', `authorization: token ${MASK}`],
+    ['a Digest response, keeping the scheme', 'Authorization: Digest username="USER_SECRET_123", response="SYNTHETIC_SECRET_123"', `Authorization: Digest ${MASK}`],
+    [
+      'every parameter of a full Digest header',
+      'Authorization: Digest username="USER_SECRET_123", realm="api", nonce="N0NCE", uri="/x", algorithm=SHA-256, qop=auth, cnonce="CN", nc=1, response="SYNTHETIC_SECRET_123", opaque="OP"',
+      `Authorization: Digest ${MASK}`,
+    ],
+    ['a signature scheme', 'Authorization: AWS4-HMAC-SHA256 Credential=SYNTHETIC/20260101/s3, Signature=abc123', `Authorization: AWS4-HMAC-SHA256 ${MASK}`],
+    ['a credential followed by another header line', 'Authorization: Token SYNTHETIC_SECRET_123\nHost: example.com', `Authorization: Token ${MASK}\nHost: example.com`],
+    ['a header written inside a JSON message', '{"msg":"Authorization: Token SYNTHETIC_SECRET_123","level":"info"}', `{"msg":"Authorization: Token ${MASK}","level":"info"}`],
+    ['a Digest header written inside a JSON message', '{"msg":"Authorization: Digest response=\\"SECRET_VALUE_1\\"","level":"info"}', `{"msg":"Authorization: Digest ${MASK}","level":"info"}`],
+    ['a credential followed by trailing padding', 'Authorization: Token SYNTHETIC_SECRET_123  ', `Authorization: Token ${MASK}  `],
+    ['a Basic credential', 'Authorization: Basic c3ludGhldGljOmNyZWQ=', `Authorization: Basic ${MASK}`],
+    ['a Bearer credential', 'Authorization: Bearer SYNTHETIC_SECRET_123', `Authorization: Bearer ${MASK}`],
+    ['a raw credential with no scheme', 'Authorization: SYNTHETIC_SECRET_123', `Authorization: ${MASK}`],
+    ['a lone word, read as a raw credential', 'Authorization: Token', `Authorization: ${MASK}`],
+  ])('masks %s', (_name, text, expected) => {
+    expect(maskedSecrets(text)).toBe(expected);
+  });
+
+  it.each([
+    ['an already masked Token credential', `Authorization: Token ${MASK}`],
+    ['an already masked Bearer credential', `Authorization: Bearer ${MASK}`],
+    ['prose where a short word follows the key', 'the authorization: is required'],
+  ])('leaves %s alone', (_name, text) => {
+    expect(maskedSecrets(text)).toBe(text);
+  });
+
+  it.each([['Authorization: Token SYNTHETIC_SECRET_123'], ['Proxy-Authorization: Digest response="SYNTHETIC_SECRET_123"']])('masks %j the same way twice', (text) => {
+    const once = maskedSecrets(text);
+
+    expect(maskedSecrets(once)).toBe(once);
+  });
+
+  it.each([
+    'Authorization: Token ',
+    'Authorization: Digest a="',
+    'Authorization: Digest a="b", ',
+    'Proxy-Authorization: Token a b ',
+    'Authorization: aaa ',
+    'Authorization: Digest a=\\"',
+    'Authorization: Token "',
+    'authorization: aaa}',
+  ])('masks %j at 64 KiB and 256 KiB with 4x the input costing less than 8x', (unit) => expectLinearGrowth(unit, maskedSecrets));
+});
+
+describe('maskedSecrets: collections under a secret-named key', () => {
+  it.each([
+    ['an array of strings', '{"token":["SYNTHETIC_SECRET_123","SECOND_SECRET_456"]}', `{"token":${MASK}}`],
+    ['an object holding a nested array', '{"token":{"value":"SYNTHETIC_SECRET_123","nested":["Y"]}}', `{"token":${MASK}}`],
+    ['a collection between plain fields', '{"user":"ada","token":["A","B"],"retry":3}', `{"user":"ada","token":${MASK},"retry":3}`],
+    ['a closing bracket inside a string', '{"token":["A]B","SECRET_TAIL"],"next":1}', `{"token":${MASK},"next":1}`],
+    ['a closing brace inside a single-quoted string', "{'token':{'a':'}SECRET_TAIL'},'next':1}", `{'token':${MASK},'next':1}`],
+    ['an escaped quote inside a string', '{"token":["A\\"]SECRET_TAIL"],"next":1}', `{"token":${MASK},"next":1}`],
+    ['a JSON document escaped inside a JSON string', '{"body":"{\\"token\\":[\\"A\\",\\"B\\"]}"}', `{"body":"{\\"token\\":${MASK}}"}`],
+    ['a bracket inside a string of an escaped document', '{"body":"{\\"token\\":[\\"A]\\",\\"SECRET_TAIL\\"]}"}', `{"body":"{\\"token\\":${MASK}}"}`],
+    ['an array under an API key', '{"api_key": ["K1", "K2"]}', `{"api_key": ${MASK}}`],
+    ['a cookie object', '{"cookie":{"session":"SYNTHETIC_SECRET_123"}}', `{"cookie":${MASK}}`],
+    ['a pretty-printed object', '{\n  "token": {\n    "value": "SYNTHETIC_SECRET_123"\n  },\n  "next": 1\n}', `{\n  "token": ${MASK},\n  "next": 1\n}`],
+    ['a collection of a colon form', 'token: ["A", "B"] and more', `token: ${MASK} and more`],
+    ['an array that never closes', '{"token":["A","B"', `{"token":${MASK}`],
+    ['a collection nested deeper than the limit', `{"token":${'['.repeat(40)}"S"${']'.repeat(40)},"after":1}`, `{"token":${MASK}`],
+  ])('masks %s', (_name, text, expected) => {
+    expect(maskedSecrets(text)).toBe(expected);
+  });
+
+  it.each([
+    ['a counter whose key holds the word tokens', 'maxTokens: 4096'],
+    ['a counter in JSON', '{"max_tokens": 4096}'],
+    ['a keyboard layout', 'keyboard: us'],
+    ['a collection under a plain key', '{"items":[1,2,3],"name":"x"}'],
+    ['prose', 'the token: is expired'],
+    ['an already masked collection', `{"token":${MASK}}`],
+  ])('leaves %s alone', (_name, text) => {
+    expect(maskedSecrets(text)).toBe(text);
+  });
+
+  it('keeps masking a plain value after a required marker the way it did before', () => {
+    expect(maskedSecrets('password: required')).toBe(`password: ${MASK}`);
+  });
+
+  it('masks only a bounded start of an array that never closes', () => {
+    const masked = maskedSecrets(`token: [${'a'.repeat(100_000)}`);
+
+    expect(masked.startsWith(`token: ${MASK}`)).toBe(true);
+  });
+
+  it('keeps the text after the bound of an array that never closes readable', () => {
+    expect(maskedSecrets(`{"token":["A",${'y'.repeat(20_000)} tail`).endsWith(' tail')).toBe(true);
+  });
+
+  it.each([['{"token":["SYNTHETIC_SECRET_123","SECOND_SECRET_456"]}'], ['{"token":{"value":"X","nested":["Y"]}}'], ['{"body":"{\\"token\\":[\\"A\\"]}"}']])('masks %j the same way twice', (text) => {
+    const once = maskedSecrets(text);
+
+    expect(maskedSecrets(once)).toBe(once);
+  });
+
+  it.each(['token:[', 'token:{"a":[', 'token:["', 'token:[\\"', '{"token":[', 'token: [[[[[[[[[[', '"token":{"token":', 'token:[]', 'token:[\'', '\\"token\\":[\\"', 'token:[}'])(
+    'masks %j at 64 KiB and 256 KiB with 4x the input costing less than 8x',
+    (unit) => expectLinearGrowth(unit, maskedSecrets),
+  );
+});
+
+describe('maskedSecrets: shapes the desktop masker settles the same way', () => {
+  it.each([
+    ['a mask followed by a fragment of the secret, behind a collection', 'token: ***B', `token: ${MASK}`],
+    ['a closing bracket inside a string of a half-escaped document', '{"token\\":["A]B"]', `{"token\\":${MASK}"]`],
+    ['a mismatched closer after an opener', 'Authorization:{]://,["/hooks/', `Authorization:${MASK},["/hooks/`],
+  ])('masks %s', (_name, text, expected) => {
+    expect(maskedSecrets(text)).toBe(expected);
+  });
+
+  it.each([['=%3F/hooks/***'], ['a=%2F%2F***%40x']])('leaves the already masked %j alone', (text) => {
+    expect(maskedSecrets(text)).toBe(text);
+  });
+});
+
+describe('maskedSecrets: Bearer parity with the desktop masker', () => {
+  it.each([
+    ['a percent-escaped separator after the word', 'Bearer %3A', `Bearer ${MASK}`],
+    ['a next-line character followed by an equals sign', 'Bearer\u0085=', `Bearer ${MASK}`],
+    ['two percent-escaped separators glued to the word', 'Bearer%3A%3A', `Bearer ${MASK}`],
+    ['the lowercase word, written canonically', 'authorization: bearer SYNTHETIC_SECRET_123', `authorization: Bearer ${MASK}`],
+    ['the uppercase word, written canonically', 'BEARER SYNTHETIC_SECRET_123', `Bearer ${MASK}`],
+  ])('masks %s', (_name, text, expected) => {
+    expect(maskedSecrets(text)).toBe(expected);
+  });
+});
+
 describe('maskedSecrets: idempotence', () => {
   it('masks a hook segment whose leftover looks like a parameter the same way twice', () => {
     const once = maskedSecrets('/hooks/=/token=');

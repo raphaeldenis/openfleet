@@ -1,4 +1,9 @@
 // The masking rules shared by the error envelope (describeError) and the structured logger, so both hide the same secrets.
+//
+// Documented ceilings, left readable on purpose:
+// - A JWT payload that does not start with `eyJ` (valid JSON whitespace before its first key) is not recognised by format.
+// - A quoted value longer than QUOTED_VALUE_LIMIT is masked by its first 16 KiB per pass; four passes leave a finite prefix masked (the desktop masker counts bytes, this one UTF-16 units).
+// - A short, numeric or literal-looking unquoted value (`token: abc`, `token: 123456789`, `token: null`) and a backtick-quoted value stay readable: they cannot be told from a counter or prose.
 
 // Any key naming a credential, in any case and anywhere in the name: `token`, `authTokens`, `refreshTokenString`, `TOKENS`, …
 export const SECRET_KEY = /token|secret|authorization|password|cookie|ticket|api[_-]?key/i;
@@ -111,20 +116,109 @@ const WELL_KNOWN_CREDENTIAL = new RegExp(
   'g',
 );
 
-const COOKIE_NAME_CHARACTER = `[^=;${WHITESPACE}${QUOTES}]`;
-const COOKIE_VALUE = `[^;${WHITESPACE}${QUOTES}]+`;
-const COOKIE_HEADER = /\b(Set-Cookie|Cookie)[ \t]*:[ \t]*([^\r\n]*)/gi;
-// The lookbehind leaves one start per run of name characters, so a run without `=` is scanned once.
-const COOKIE_PAIRS = new RegExp(`(?<!${COOKIE_NAME_CHARACTER})(${COOKIE_NAME_CHARACTER}+)=${COOKIE_VALUE}`, 'g');
-const FIRST_COOKIE_PAIR = new RegExp(`^(${COOKIE_NAME_CHARACTER}+)=${COOKIE_VALUE}`);
+const QUOTED_VALUE_LIMIT = 16 * 1024;
+const COOKIE_NAME_CHARACTER = new RegExp(`[^=;${WHITESPACE}${QUOTES}]`);
+const COOKIE_VALUE_CHARACTER = new RegExp(`[^;${WHITESPACE}${QUOTES}]`);
+const QUOTE_CHARACTER = new RegExp(`[${QUOTES}]`);
+const COOKIE_HEADER_START = /\b(Set-Cookie|Cookie)[ \t]*:[ \t]*/gi;
+
+const endOfRun = (text: string, from: number, isRunCharacter: RegExp): number => {
+  let end = from;
+  while (end < text.length && isRunCharacter.test(text.charAt(end))) end += 1;
+  return end;
+};
+
+type QuoteScan = { quote: string; limit: number; areLineBreaksPartOfTheString: boolean; areQuotesEscaped: boolean };
+
+/** Where the string whose content starts at `contentStart` closes: at its closing quote (a backslash and a quote inside an escaped JSON document), or at the line break (when line breaks end the string) or the limit when it never closes; a backslash escapes the next character of a plain string. */
+const closingQuoteAt = (text: string, contentStart: number, scan: QuoteScan): number => {
+  let at = contentStart;
+  while (at < scan.limit) {
+    const character = text.charAt(at);
+    const isLineBreak = character === '\n' || character === '\r';
+    const closesTheString = scan.areQuotesEscaped ? character === '\\' && text.charAt(at + 1) === scan.quote : character === scan.quote;
+    if (closesTheString || (isLineBreak && !scan.areLineBreaksPartOfTheString)) return at;
+    const escapesTheNextCharacter = character === '\\' && !scan.areQuotesEscaped;
+    at += escapesTheNextCharacter ? 2 : 1;
+  }
+  return Math.min(at, scan.limit);
+};
+
+/** A header continues on the next line when that line starts with a space or a tab (the legacy folded form). */
+const endOfHeaderValue = (text: string, from: number): number => {
+  let at = from;
+  while (at < text.length) {
+    const character = text.charAt(at);
+    const isLineBreak = character === '\n' || character === '\r';
+    if (!isLineBreak) {
+      at += 1;
+      continue;
+    }
+    const nextLineStart = character === '\r' && text.charAt(at + 1) === '\n' ? at + 2 : at + 1;
+    const isFoldedLine = text.charAt(nextLineStart) === ' ' || text.charAt(nextLineStart) === '\t';
+    if (!isFoldedLine) return at;
+    at = nextLineStart;
+  }
+  return text.length;
+};
+
+type CookieValue = { start: number; end: number; next: number };
+
+/** A quoted value is masked between its quotes; one that never closes is masked to the end of the header or the limit. */
+const cookieValueFrom = (pairs: string, valueStart: number): CookieValue => {
+  const quote = pairs.charAt(valueStart);
+  if (!QUOTE_CHARACTER.test(quote)) {
+    const end = endOfRun(pairs, valueStart, COOKIE_VALUE_CHARACTER);
+    return { start: valueStart, end, next: end };
+  }
+  const contentStart = valueStart + 1;
+  const limit = Math.min(pairs.length, contentStart + QUOTED_VALUE_LIMIT);
+  const contentEnd = closingQuoteAt(pairs, contentStart, { quote, limit, areLineBreaksPartOfTheString: true, areQuotesEscaped: false });
+  const isClosed = pairs.charAt(contentEnd) === quote;
+  return { start: contentStart, end: contentEnd, next: isClosed ? contentEnd + 1 : contentEnd };
+};
+
+/** Masks the value of every `name=value` pair (`Cookie`), or of the first one only (`Set-Cookie`, whose attributes stay readable). */
+const maskedCookiePairs = (pairs: string, isSetCookie: boolean): string => {
+  let masked = '';
+  let copiedUpTo = 0;
+  let cursor = 0;
+  while (cursor < pairs.length) {
+    const nameEnd = endOfRun(pairs, cursor, COOKIE_NAME_CHARACTER);
+    if (nameEnd === cursor) {
+      if (isSetCookie) break;
+      cursor += 1;
+      continue;
+    }
+    const hasValueMark = pairs.charAt(nameEnd) === '=';
+    const value = hasValueMark ? cookieValueFrom(pairs, nameEnd + 1) : null;
+    const hasContent = value !== null && value.end > value.start;
+    if (value && hasContent) {
+      masked += pairs.slice(copiedUpTo, value.start) + MASK;
+      copiedUpTo = value.end;
+    }
+    if (isSetCookie) break;
+    cursor = value && hasContent ? value.next : nameEnd;
+  }
+  return masked + pairs.slice(copiedUpTo);
+};
 
 /** Masks the value of every cookie, whatever its name: a `Cookie` header lists pairs, a `Set-Cookie` header starts with one pair and goes on with readable attributes (Path, HttpOnly, Max-Age, …). */
-const maskingCookieHeaders = (text: string): string =>
-  text.replace(COOKIE_HEADER, (header, headerName: string, pairs: string) => {
+const maskingCookieHeaders = (text: string): string => {
+  const headers = new RegExp(COOKIE_HEADER_START.source, 'gi');
+  let masked = '';
+  let copiedUpTo = 0;
+  for (let header = headers.exec(text); header; header = headers.exec(text)) {
+    const [headerStart = '', headerName = ''] = header;
+    const pairsStart = header.index + headerStart.length;
+    const pairsEnd = endOfHeaderValue(text, pairsStart);
     const isSetCookie = headerName.length > 'Cookie'.length;
-    const maskedPairs = pairs.replace(isSetCookie ? FIRST_COOKIE_PAIR : COOKIE_PAIRS, `$1=${MASK}`);
-    return header.slice(0, header.length - pairs.length) + maskedPairs;
-  });
+    masked += text.slice(copiedUpTo, pairsStart) + maskedCookiePairs(text.slice(pairsStart, pairsEnd), isSetCookie);
+    copiedUpTo = pairsEnd;
+    headers.lastIndex = pairsEnd;
+  }
+  return masked + text.slice(copiedUpTo);
+};
 
 const KEY_RUN = /[A-Za-z0-9_.-]+/g;
 // The header names the cookie rule matches: `Cookie`, `Set-Cookie`, `X-Cookie`, … but not `mycookie`.
@@ -138,7 +232,13 @@ const LITERALS_THAT_HOLD_NO_SECRET = new Set(['null', 'true', 'false', 'undefine
 const AUTHORIZATION_SCHEMES = new Set(['bearer', 'basic']);
 // A shorter unquoted value is a word of the sentence (`the token: is expired`), not a credential.
 const UNQUOTED_VALUE_MINIMUM_LENGTH = 4;
-const QUOTED_VALUE_LIMIT = 16 * 1024;
+const PADDING_CHARACTER = /[ \t]/;
+const COLLECTION_DEPTH_LIMIT = 32;
+// The key of a header such as `Authorization` or `Proxy-Authorization`, not `myauthorization`.
+const AUTHORIZATION_HEADER_NAME = /(?:^|[^A-Za-z0-9])authorization$/i;
+const AUTHORIZATION_SCHEME = /^[A-Za-z0-9._~+/-]{3,}$/;
+const COLLECTION_OPENERS = '[{';
+const COLLECTION_CLOSERS = ']}';
 
 type ColonValue = { start: number; end: number; isCredential: boolean };
 
@@ -179,9 +279,88 @@ const unquotedValueFrom = (text: string, start: number): ColonValue => {
   return { start, end, isCredential: looksLikeCredential(text.slice(start, end), text, end) };
 };
 
+/** The quote delimiting a string at `at`: a plain quote, or, inside an escaped JSON document, a backslash and a quote; empty when none starts there. */
+const quoteDelimiterAt = (text: string, at: number, areQuotesEscaped: boolean): string => {
+  const character = text.charAt(at);
+  if (!areQuotesEscaped) return QUOTE_CHARACTER.test(character) ? character : '';
+  const nextCharacter = text.charAt(at + 1);
+  return character === '\\' && QUOTE_CHARACTER.test(nextCharacter) ? nextCharacter : '';
+};
+
+/** Where the `[…]` or `{…}` that opens at `start` closes, strings and nesting included; one that never balances, nests deeper than the limit or runs past the length limit is cut at the limit. */
+const endOfCollection = (text: string, start: number, areQuotesEscaped: boolean): number => {
+  const limit = Math.min(text.length, start + QUOTED_VALUE_LIMIT);
+  const delimiterWidth = areQuotesEscaped ? 2 : 1;
+  let depth = 0;
+  let openQuote = '';
+  for (let at = start; at < limit; at += 1) {
+    const character = text.charAt(at);
+    const delimiter = quoteDelimiterAt(text, at, areQuotesEscaped);
+    const isInsideAString = openQuote !== '';
+    if (isInsideAString) {
+      const closesTheString = delimiter === openQuote;
+      const escapesTheNextCharacter = character === '\\' && !areQuotesEscaped;
+      if (closesTheString) openQuote = '';
+      if (closesTheString) at += delimiterWidth - 1;
+      else if (escapesTheNextCharacter) at += 1;
+      continue;
+    }
+    if (delimiter) {
+      openQuote = delimiter;
+      at += delimiterWidth - 1;
+      continue;
+    }
+    if (COLLECTION_OPENERS.includes(character)) depth += 1;
+    if (depth > COLLECTION_DEPTH_LIMIT) return limit;
+    if (COLLECTION_CLOSERS.includes(character)) depth -= 1;
+    if (depth === 0) return at + 1;
+  }
+  return limit;
+};
+
+/** Where the credentials of an authorization scheme end: at a line break, a closing bracket, a quote that opens no parameter value (`response="…"` belongs to them) or the limit; trailing padding stays out. */
+const endOfAuthorizationCredentials = (text: string, start: number): number => {
+  const limit = Math.min(text.length, start + QUOTED_VALUE_LIMIT);
+  let at = start;
+  while (at < limit) {
+    const character = text.charAt(at);
+    const endsTheLine = character === '\n' || character === '\r';
+    const isEscapedQuote = character === '\\' && QUOTE_CHARACTER.test(text.charAt(at + 1));
+    const quote = isEscapedQuote ? text.charAt(at + 1) : character;
+    const quoteWidth = isEscapedQuote ? 2 : 1;
+    const isQuote = QUOTE_CHARACTER.test(quote);
+    const opensAParameterValue = isQuote && text.charAt(at - 1) === '=';
+    if (endsTheLine || COLLECTION_CLOSERS.includes(character) || (isQuote && !opensAParameterValue)) break;
+    if (!opensAParameterValue) {
+      at += 1;
+      continue;
+    }
+    const closingAt = closingQuoteAt(text, at + quoteWidth, { quote, limit, areLineBreaksPartOfTheString: false, areQuotesEscaped: isEscapedQuote });
+    const isClosed = text.startsWith(isEscapedQuote ? `\\${quote}` : quote, closingAt);
+    at = isClosed ? closingAt + quoteWidth : closingAt;
+  }
+  let end = at;
+  while (end > start && PADDING_CHARACTER.test(text.charAt(end - 1))) end -= 1;
+  return end;
+};
+
+/** `Token X` or `Digest username="U", …` behind an authorization header: the scheme word stays readable, everything it introduces is the credential. */
+const authorizationCredentialsFrom = (text: string, valueStart: number, keyName: string): ColonValue | null => {
+  if (!AUTHORIZATION_HEADER_NAME.test(keyName)) return null;
+  const schemeEnd = endOfMatchAt(UNQUOTED_VALUE, text, valueStart);
+  const scheme = text.slice(valueStart, schemeEnd);
+  const isGenericScheme = AUTHORIZATION_SCHEME.test(scheme) && !AUTHORIZATION_SCHEMES.has(scheme.toLowerCase());
+  const credentialsStart = endOfMatchAt(PADDING, text, schemeEnd);
+  if (!isGenericScheme || credentialsStart === schemeEnd) return null;
+  const credentialsEnd = endOfAuthorizationCredentials(text, credentialsStart);
+  if (credentialsEnd <= credentialsStart) return null;
+  return { start: credentialsStart, end: credentialsEnd, isCredential: text.slice(credentialsStart, credentialsEnd) !== MASK };
+};
+
 /** The value after `key": ` or `key: `, or null when no colon follows the key; a cookie header's unquoted value belongs to the cookie rule. */
 const colonValueAfter = (text: string, keyEnd: number, keyName: string): ColonValue | null => {
-  const colonAt = endOfMatchAt(PADDING, text, endOfMatchAt(QUOTES_AND_BACKSLASHES, text, keyEnd));
+  const afterKeyQuotes = endOfMatchAt(QUOTES_AND_BACKSLASHES, text, keyEnd);
+  const colonAt = endOfMatchAt(PADDING, text, afterKeyQuotes);
   if (text.charAt(colonAt) !== ':') return null;
   const valueStart = endOfMatchAt(PADDING, text, colonAt + 1);
   const quoteAt = endOfMatchAt(BACKSLASHES, text, valueStart);
@@ -189,9 +368,14 @@ const colonValueAfter = (text: string, keyEnd: number, keyName: string): ColonVa
   const quote = text.charAt(quoteAt);
   const opensQuotedValue = quote === '"' || quote === "'";
   if (opensQuotedValue) return quotedValueFrom(text, quoteAt + 1, quote, isOpeningQuoteEscaped);
+  const opensCollection = !isOpeningQuoteEscaped && quote !== '' && COLLECTION_OPENERS.includes(quote);
+  if (opensCollection) {
+    const isInsideAnEscapedDocument = text.slice(keyEnd, afterKeyQuotes).includes('\\');
+    return { start: valueStart, end: endOfCollection(text, valueStart, isInsideAnEscapedDocument), isCredential: true };
+  }
   const isCookieHeaderValue = COOKIE_HEADER_NAME.test(keyName);
   if (isOpeningQuoteEscaped || isCookieHeaderValue) return null;
-  return unquotedValueFrom(text, valueStart);
+  return authorizationCredentialsFrom(text, valueStart, keyName) ?? unquotedValueFrom(text, valueStart);
 };
 
 /** Masks the value that follows a secret-named key with a colon (`{"token":"…"}`, `password: …`); the scan visits each key run once and resumes after the value it read. */
