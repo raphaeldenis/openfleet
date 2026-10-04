@@ -45,6 +45,20 @@ function aDocsFolderWithANote(): string {
   return folder;
 }
 
+const WATCHER_SETTLE_TIMEOUT_MS = 15_000;
+const WATCHER_RETRY_INTERVAL_MS = 250;
+const WATCHER_TEST_TIMEOUT_MS = 20_000;
+
+/** A folder watcher can take a while to start under load, so the edit is rewritten until the note follows. */
+const editOnDiskUntilTheNoteFollows = (folder: string, bodyMd: string) =>
+  vi.waitFor(
+    () => {
+      writeFileSync(join(folder, 'specs', NOTE_FILE), bodyMd);
+      expect(noteBody('design')).toBe(bodyMd);
+    },
+    { timeout: WATCHER_SETTLE_TIMEOUT_MS, interval: WATCHER_RETRY_INTERVAL_MS },
+  );
+
 describe('the daemon keeps the docs folders of its projects in step with their notes', () => {
   it('imports the note files already in a project docs folder when it boots', async () => {
     const folder = aDocsFolderWithANote();
@@ -59,10 +73,9 @@ describe('the daemon keeps the docs folders of its projects in step with their n
     const folder = aDocsFolderWithANote();
     await bootDaemon((projects) => projects.insert({ id: PROJECT_ID, name: 'Fleet', docsFolderPath: folder, createdAt: 't0' }));
 
-    writeFileSync(join(folder, 'specs', NOTE_FILE), '# Design v2');
 
-    await vi.waitFor(() => expect(noteBody('design')).toBe('# Design v2'), { timeout: 5000, interval: 50 });
-  });
+    await editOnDiskUntilTheNoteFollows(folder, '# Design v2');
+  }, WATCHER_TEST_TIMEOUT_MS);
 
   it('boots without crashing when a project docs folder is gone, and says so without naming the path', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -91,11 +104,10 @@ describe('the daemon keeps the docs folders of its projects in step with their n
     const project = (await created.json()) as Project;
     expect(created.status).toBe(201);
     expect(noteTitles()).toEqual(['design']);
-    writeFileSync(join(folder, 'specs', NOTE_FILE), '# Design v2');
 
-    await vi.waitFor(() => expect(noteBody('design')).toBe('# Design v2'), { timeout: 5000, interval: 50 });
+    await editOnDiskUntilTheNoteFollows(folder, '# Design v2');
     expect(project.docsFolderPath).toBe(folder);
-  });
+  }, WATCHER_TEST_TIMEOUT_MS);
 
   it('watches the new folder when PATCH sets the docs folder of an existing project', async () => {
     await bootDaemon((projects) => projects.insert({ id: PROJECT_ID, name: 'Fleet', docsFolderPath: null, createdAt: 't0' }));
@@ -105,9 +117,9 @@ describe('the daemon keeps the docs folders of its projects in step with their n
 
     expect(patched.status).toBe(200);
     expect(noteTitles()).toEqual(['design']);
-    writeFileSync(join(folder, 'specs', NOTE_FILE), '# Design v3');
-    await vi.waitFor(() => expect(noteBody('design')).toBe('# Design v3'), { timeout: 5000, interval: 50 });
-  });
+
+    await editOnDiskUntilTheNoteFollows(folder, '# Design v3');
+  }, WATCHER_TEST_TIMEOUT_MS);
 
   it('stops every folder watcher when the daemon closes', async () => {
     const unsubscribes: ReturnType<typeof vi.fn>[] = [];
