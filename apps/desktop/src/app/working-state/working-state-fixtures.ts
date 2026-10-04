@@ -42,7 +42,6 @@ export function silentWorkingStateSignals() {
     dismissBackgroundFailure: () => undefined,
     silentBlocks: signal<SilentBlock[]>([]),
     dismissSilentBlock: () => undefined,
-    closeReasonOf: () => undefined,
     workingStates: signal<ReadonlyMap<string, WorkingState>>(new Map()),
     workingStatesReported: signal(false),
     workingStateMaxAgeMinutes: signal<number | undefined>(undefined),
