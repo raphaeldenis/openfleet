@@ -113,6 +113,7 @@ is_planned e2e && e2e_touched=yes
 
 started_at=$(date +%s)
 
+run_step "architecture" pnpm arch
 run_step "typecheck" pnpm typecheck
 run_step "root tests" pnpm test
 if command -v claude >/dev/null 2>&1; then

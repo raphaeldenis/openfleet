@@ -52,9 +52,31 @@ On another Mac (AirDrop, browser or Messages add the quarantine flag) Gatekeeper
 
 `apps/desktop/src-tauri/tauri.conf.json` is the single source of the app version. `node scripts/release/set-version.mjs <semver>` writes it and every copy (`Cargo.toml`, `Cargo.lock`, the three `package.json`). Unlike the spec's `cargo update -p app`, it edits the app crate's `Cargo.lock` entry directly, so it works offline and without cargo.
 
+### Architecture checks
+
+`pnpm arch` runs [dependency-cruiser](https://github.com/sverweij/dependency-cruiser) (`.dependency-cruiser.cjs`) over `packages/core/src`, `packages/shared/src` and `apps/desktop/src`; it takes about a second. It is the first step of the pre-push hook and runs in CI. Test files (`*.test.ts`, `*.spec.ts`, testkits, fixtures, `__testing__/`) are exempt from the layering rules.
+
+| Rule | Forbids |
+| --- | --- |
+| `no-circular-dependencies` | import cycles |
+| `no-unresolvable-imports` | an import the resolver cannot follow |
+| `shared-never-imports-node-builtins`, `shared-imports-only-zod` | `packages/shared` importing anything but zod (it ships to the browser) |
+| `core-never-imports-desktop`, `desktop-never-imports-core` | the daemon and the app importing each other (only `@openfleet/shared` is common) |
+| `packages-are-imported-through-their-entry-point` | importing another package's `src/` files instead of its entry point |
+| `only-the-daemon-wires-the-api` | any core file but `daemon.ts` / `main.ts` importing `api/` |
+| `only-the-harness-folder-touches-the-claude-cli` | any core file but `harness/`, `daemon.ts` / `main.ts` importing `harness/claudeCli/` (the adapter of the `harness.ts` port) |
+| `design-system-is-a-leaf` | `app/design/` importing the rest of the app |
+| `app-services-import-no-feature` | `app/core/` importing a feature or `shell/` |
+| `features-never-import-the-shell` | `design/`, `core/` or a feature importing `shell/` |
+| `production-code-never-imports-test-helpers` | production code importing test code |
+
+A violation reads `error <rule>: <importing file> → <imported file>`; the rule's `comment` in `.dependency-cruiser.cjs` gives the reason. Fix the import rather than the rule.
+
+Existing debt is frozen in `.dependency-cruiser-known-violations.json` (`--ignore-known`), so only new violations fail. The baseline only shrinks: when you fix a listed violation, regenerate it with `pnpm exec depcruise packages/core/src packages/shared/src apps/desktop/src --config .dependency-cruiser.cjs --output-type baseline --output-to .dependency-cruiser-known-violations.json`; `scripts/arch.test.ts` fails while the file lists an entry that no longer occurs. Never regenerate it to admit a new violation. Known debt without a rule: the desktop features import each other in cycles (sessions, inbox, managers).
+
 ### Pre-push hook
 
-`pnpm install` installs a husky `pre-push` hook (`scripts/pre-push.sh`) that runs what CI runs: `pnpm typecheck`, `pnpm test`, `pnpm --filter @openfleet/desktop test`, stopping at the first failure. It also re-runs the core tests without `claude` in `PATH` (CI has none; skipped when `claude` is not installed), runs `cargo test` and `cargo clippy -- -D warnings` when the push touches `apps/desktop/src-tauri`, and runs the e2e when it touches `apps/desktop/src`, `packages/core/src/api` or `packages/shared/src` and ports 1420/7332 are free (`OPENFLEET_PREPUSH_E2E=1` forces it, `=0` skips it). `OPENFLEET_PREPUSH_DRYRUN=1 sh scripts/pre-push.sh` lists the steps without running them. It puts `/opt/homebrew/bin` first in `PATH` when present and refuses a Node older than 26.
+`pnpm install` installs a husky `pre-push` hook (`scripts/pre-push.sh`) that runs what CI runs: `pnpm arch`, `pnpm typecheck`, `pnpm test`, `pnpm --filter @openfleet/desktop test`, stopping at the first failure. It also re-runs the core tests without `claude` in `PATH` (CI has none; skipped when `claude` is not installed), runs `cargo test` and `cargo clippy -- -D warnings` when the push touches `apps/desktop/src-tauri`, and runs the e2e when it touches `apps/desktop/src`, `packages/core/src/api` or `packages/shared/src` and ports 1420/7332 are free (`OPENFLEET_PREPUSH_E2E=1` forces it, `=0` skips it). `OPENFLEET_PREPUSH_DRYRUN=1 sh scripts/pre-push.sh` lists the steps without running them. It puts `/opt/homebrew/bin` first in `PATH` when present and refuses a Node older than 26.
 
 The e2e runs automatically when the pushed range touches `apps/desktop/src`, `packages/core/src/api` or `packages/shared/src` and ports 1420 and 7332 are free; `OPENFLEET_PREPUSH_E2E=1 git push` forces it (fails on busy ports), `OPENFLEET_PREPUSH_E2E=0` skips it.
 
