@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import type { HandoffContent, ServerEvent, Session } from '@openfleet/shared';
+import type { HandoffContent, ServerEvent, Session, WorkingStateSections } from '@openfleet/shared';
 import { openDatabase } from '../db/database.js';
 import { ProjectRepository } from '../projects/projectRepository.js';
 import type { DocsFolderFs } from './docsFolderFs.js';
 import { DocsFolderService } from './docsFolderService.js';
+import { createHandoffDraftBuilder } from './handoffDraft.js';
 import { HandoffService, SessionNotFoundForHandoffError, registerHandoffOnClose, type GitPort } from './handoffService.js';
 import { expandMentions } from './mentionExpander.js';
 import { NoteRepository } from './noteRepository.js';
@@ -67,7 +68,11 @@ const fullContent = (overrides: Partial<HandoffContent> = {}): HandoffContent =>
   goal: 'Ship X', state: 'idle', decisions: 'used approach A', filesTouched: 'a.ts', nextSteps: 'none', openQuestions: 'none', ...overrides,
 });
 
-function setup({ docsFolderPath = '/docs' as string | null, sessions = [aSession()], projectName = 'Project One' } = {}) {
+const aWorkingState = (overrides: Partial<WorkingStateSections> = {}): WorkingStateSections => ({
+  plan: ['Ship X'], todo: ['write the tests'], remaining: ['wire the routes'], questionsForHuman: ['Which folder?'], internalQuestions: [], blockers: [], ...overrides,
+});
+
+function setup({ docsFolderPath = '/docs' as string | null, sessions = [aSession()], projectName = 'Project One', workingStates = {} as Record<string, WorkingStateSections> } = {}) {
   const db = openDatabase(':memory:');
   const projects = new ProjectRepository(db);
   projects.insert({ id: 'p1', name: projectName, docsFolderPath, createdAt: 't0' });
@@ -80,7 +85,14 @@ function setup({ docsFolderPath = '/docs' as string | null, sessions = [aSession
   const git = new FakeGit();
   let nowMs = Date.parse(NOW);
   const byId = new Map(sessions.map((s) => [s.id, s]));
-  const handoffs = new HandoffService({ docs, projects, sessions: { get: (id) => byId.get(id) }, git, clock: () => new Date(nowMs).toISOString() });
+  const buildDraft = createHandoffDraftBuilder({
+    sessions: { get: (id) => byId.get(id), list: () => [...byId.values()] },
+    workingStates: { get: (id) => workingStates[id] },
+    todos: { get: () => undefined },
+    managers: { get: () => undefined },
+    git,
+  });
+  const handoffs = new HandoffService({ docs, projects, sessions: { get: (id) => byId.get(id) }, buildDraft, clock: () => new Date(nowMs).toISOString() });
   return { handoffs, fs, git, noteRepo, advanceMinutes: (m: number) => { nowMs += m * MINUTE_MS; }, addSession: (s: Session) => byId.set(s.id, s) };
 }
 
@@ -269,18 +281,28 @@ describe('HandoffService.writeAutoOnClose', () => {
     expect(handoffs.writeAutoOnClose('s1')).toBeDefined();
   });
 
-  it('fills state, branch and files touched from structured data and git, the rest is (not recorded)', () => {
+  it('fills state, branch and files touched from structured data and git, the sections nobody recorded are (none)', () => {
     const { handoffs, git } = setup();
 
     const note = handoffs.writeAutoOnClose('s1')!;
 
     expect(note.folder).toBe('handoffs');
     expect(git.askedDirectories).toEqual(['/repo/.worktrees/alpha']);
-    expect(note.bodyMd).toMatch(/## Goal\n\(not recorded\)/);
-    expect(note.bodyMd).toMatch(/## State\n[\s\S]*idle[\s\S]*feat\/alpha[\s\S]*## Decisions\n\(not recorded\)/);
-    expect(note.bodyMd).toMatch(/## Files touched\n[\s\S]*M src\/a\.ts[\s\S]*\?\? src\/b\.ts[\s\S]*1 file changed[\s\S]*## Next steps\n\(not recorded\)/);
-    expect(note.bodyMd).toMatch(/## Open questions\n\(not recorded\)/);
+    expect(note.bodyMd).toMatch(/## Goal\n\(none\)/);
+    expect(note.bodyMd).toMatch(/## State\n[\s\S]*idle[\s\S]*feat\/alpha[\s\S]*## Decisions\n\(none\)/);
+    expect(note.bodyMd).toMatch(/## Files touched\n[\s\S]*M src\/a\.ts[\s\S]*\?\? src\/b\.ts[\s\S]*1 file changed[\s\S]*## Next steps\n\(none\)/);
+    expect(note.bodyMd).toMatch(/## Open questions\n\(none\)/);
     expect(headingsOf(note.bodyMd)).toHaveLength(6);
+  });
+
+  it('carries the working state of the closing session: goal, next steps and open questions', () => {
+    const { handoffs } = setup({ workingStates: { s1: aWorkingState() } });
+
+    const note = handoffs.writeAutoOnClose('s1')!;
+
+    expect(note.bodyMd).toMatch(/## Goal\nShip X\n/);
+    expect(note.bodyMd).toMatch(/## Next steps\n- write the tests\n- wire the routes\n/);
+    expect(note.bodyMd).toMatch(/## Open questions\n- Which folder\?\n/);
   });
 
   it('falls back to the session directory when there is no worktree', () => {
@@ -373,7 +395,7 @@ describe('HandoffService.writeAutoOnClose', () => {
     const note = handoffs.writeAutoOnClose('s1');
 
     expect(note).toBeDefined();
-    expect(note!.bodyMd).toContain('(5800 more)');
+    expect(note!.bodyMd).toContain('(truncated)');
     expect(sectionHeadingsOf(note!.bodyMd)).toEqual(SIX_SECTIONS);
   });
 
