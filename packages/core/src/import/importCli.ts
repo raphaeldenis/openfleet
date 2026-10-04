@@ -17,6 +17,7 @@ const FLAGS = {
   project: { type: 'string' },
   'scape-dir': { type: 'string' },
   'report-dir': { type: 'string' },
+  'state-dir': { type: 'string' },
   'allow-reimport': { type: 'boolean' },
   help: { type: 'boolean' },
 } as const;
@@ -25,13 +26,14 @@ const REIMPORT_WARNING =
   'This importer is made for a FIRST import onto a virgin OpenFleet database. A re-import is NOT yet safe against OpenFleet-side deletions or renames, nor against Scape-side column or option changes (planned: MIG-01B).';
 
 const USAGE = [
-  'usage: import scape --home <OPENFLEET_HOME> [--dry-run] [--project <name>] [--scape-dir <dir>] [--report-dir <dir>] [--allow-reimport]',
+  'usage: import scape --home <OPENFLEET_HOME> [--dry-run] [--project <name>] [--scape-dir <dir>] [--report-dir <dir>] [--state-dir <dir>] [--allow-reimport]',
   '',
   '  --home            the OpenFleet home holding openfleet.db (defaults to $OPENFLEET_HOME)',
   '  --dry-run         prints what would be written; writes nothing',
   '  --project         imports only the Scape project of that name',
   '  --scape-dir       the Scape home to read (default ~/.scape; only snapshots of it are opened)',
   '  --report-dir      where import-report.md goes (default: the home)',
+  '  --state-dir       the folder of the Scape manager state files <manager name>.md that seed the working states (default ~/Documents/scape-team/state)',
   '  --allow-reimport  runs a real import although the target already holds imported projects',
   '',
   REIMPORT_WARNING,
@@ -62,6 +64,7 @@ function importOptionsFrom({ values, positionals }: ParsedFlags, environment: Cl
     dryRun: values['dry-run'] ?? false,
     projectName: values.project,
     reportDir: values['report-dir'],
+    stateDir: values['state-dir'] ?? join(environment.homeDirectory, 'Documents', 'scape-team', 'state'),
     refuseReimport: !allowsReimport,
   };
   return { options, allowsReimport };
