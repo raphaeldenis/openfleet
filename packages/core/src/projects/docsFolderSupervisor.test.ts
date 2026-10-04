@@ -27,12 +27,25 @@ function setup(projectRecords: ProjectRecord[]) {
 }
 
 describe('DocsFolderSupervisor start', () => {
-  it('reconciles, imports and watches each project that has a docs folder, and skips the others', () => {
+  it('watches, reconciles and imports each project that has a docs folder, and skips the others', () => {
     const { supervisor, calls } = setup([aProject('p1', '/docs/one'), aProject('p2', null), aProject('p3', '/docs/three')]);
 
     supervisor.start();
 
-    expect(calls).toEqual(['reconcile:p1', 'attach:p1', 'watch:p1', 'reconcile:p3', 'attach:p3', 'watch:p3']);
+    expect(calls).toEqual(['watch:p1', 'reconcile:p1', 'attach:p1', 'watch:p3', 'reconcile:p3', 'attach:p3']);
+  });
+
+  it('watches before it imports, so an edit during the import is not lost', () => {
+    const { supervisor, docs } = setup([aProject('p1', '/docs/one')]);
+    let isWatchingWhenImportRuns = false;
+    docs.attachFolder.mockImplementation(() => {
+      isWatchingWhenImportRuns = docs.watch.mock.calls.length > 0;
+      return [];
+    });
+
+    supervisor.start();
+
+    expect(isWatchingWhenImportRuns).toBe(true);
   });
 
   it('imports from the folder the project stores', () => {
@@ -75,7 +88,7 @@ describe('DocsFolderSupervisor watchProject', () => {
 
     supervisor.watchProject('p1');
 
-    expect(calls).toEqual(['reconcile:p1', 'attach:p1', 'watch:p1']);
+    expect(calls).toEqual(['watch:p1', 'reconcile:p1', 'attach:p1']);
   });
 
   it('stops the previous watcher of a project before it watches again', () => {
