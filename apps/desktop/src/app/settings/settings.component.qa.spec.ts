@@ -18,12 +18,20 @@ async function renderSettings(models: () => Promise<unknown> = () => Promise.res
   return { ...view, models: modelsSpy };
 }
 
+function generalTab() {
+  return screen.getByRole('tab', { name: 'General' });
+}
+
 function modelsTab() {
   return screen.getByRole('tab', { name: 'Models' });
 }
 
 function daemonTab() {
   return screen.getByRole('tab', { name: 'Daemon' });
+}
+
+function diagnosticsTab() {
+  return screen.getByRole('tab', { name: 'Diagnostics' });
 }
 
 function aboutTab() {
@@ -34,21 +42,26 @@ async function openDaemonTab() {
   await userEvent.click(daemonTab());
 }
 
+async function openModelsTab() {
+  await userEvent.click(modelsTab());
+}
+
 describe('SettingsComponent — tab bar', () => {
   beforeEach(() => localStorage.clear());
   afterEach(() => localStorage.clear());
 
-  it('starts on Models: Models is the selected tab and Daemon is not', async () => {
+  it('starts on General: General is the selected tab and Models is not', async () => {
     await renderSettings();
 
-    expect(modelsTab()).toHaveAttribute('aria-selected', 'true');
-    expect(daemonTab()).toHaveAttribute('aria-selected', 'false');
-    expect(screen.getByTestId('settings-models')).toBeTruthy();
-    expect(screen.queryByTestId('settings-daemon')).toBeNull();
+    expect(generalTab()).toHaveAttribute('aria-selected', 'true');
+    expect(modelsTab()).toHaveAttribute('aria-selected', 'false');
+    expect(screen.getByTestId('settings-general')).toBeTruthy();
+    expect(screen.queryByTestId('settings-models')).toBeNull();
   });
 
-  it('moves the selection and the panel together when Daemon is picked, then back again without refetching the table', async () => {
+  it('moves the selection and the panel together when Daemon is picked, then back to Models without refetching the table', async () => {
     const { models } = await renderSettings();
+    await openModelsTab();
     await screen.findByTestId('model-row-haiku');
 
     await openDaemonTab();
@@ -58,10 +71,25 @@ describe('SettingsComponent — tab bar', () => {
     expect(screen.queryByTestId('settings-models')).toBeNull();
     expect(screen.getByTestId('settings-daemon')).toBeTruthy();
 
-    await userEvent.click(modelsTab());
+    await openModelsTab();
 
-    expect(screen.getByTestId('model-select-haiku')).toHaveValue('claude-haiku-4-5');
+    expect(screen.getByTestId('model-trigger-haiku')).toHaveTextContent('claude-haiku-4-5');
     expect(models).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['General', 'settings-general'],
+    ['Models', 'settings-models'],
+    ['Daemon', 'settings-daemon'],
+    ['Diagnostics', 'settings-diagnostics'],
+    ['About', 'settings-about'],
+  ])('shows the %s section when its tab is picked', async (name, sectionTestId) => {
+    await renderSettings();
+
+    await userEvent.click(screen.getByRole('tab', { name }));
+
+    expect(screen.getByTestId(sectionTestId)).toBeTruthy();
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(name);
   });
 
   it('keeps focus on the tab that was just picked instead of dropping it to the body', async () => {
@@ -88,32 +116,35 @@ describe('SettingsComponent — tab bar', () => {
     await renderSettings();
 
     expect(screen.getByRole('tablist', { name: /settings/i })).toHaveAttribute('aria-orientation', 'vertical');
-    expect(modelsTab()).toHaveAttribute('tabindex', '0');
+    expect(generalTab()).toHaveAttribute('tabindex', '0');
     expect(daemonTab()).toHaveAttribute('tabindex', '-1');
-    const panelId = modelsTab().getAttribute('aria-controls');
+    const panelId = generalTab().getAttribute('aria-controls');
     const panel = panelId ? document.getElementById(panelId) : null;
     expect(panel).toHaveAttribute('role', 'tabpanel');
-    expect(panel).toHaveAttribute('aria-labelledby', modelsTab().id);
+    expect(panel).toHaveAttribute('aria-labelledby', generalTab().id);
   });
 
   it('moves selection and focus with the arrow keys, wrapping around', async () => {
     await renderSettings();
-    modelsTab().focus();
+    generalTab().focus();
+
+    await userEvent.keyboard('{ArrowDown}');
+    expect(modelsTab()).toHaveAttribute('aria-selected', 'true');
+    expect(document.activeElement).toBe(modelsTab());
 
     await userEvent.keyboard('{ArrowDown}');
     expect(daemonTab()).toHaveAttribute('aria-selected', 'true');
-    expect(document.activeElement).toBe(daemonTab());
 
     await userEvent.keyboard('{ArrowDown}');
-    expect(screen.getByRole('tab', { name: 'Diagnostics' })).toHaveAttribute('aria-selected', 'true');
+    expect(diagnosticsTab()).toHaveAttribute('aria-selected', 'true');
 
     await userEvent.keyboard('{ArrowDown}');
     expect(aboutTab()).toHaveAttribute('aria-selected', 'true');
     expect(document.activeElement).toBe(aboutTab());
 
     await userEvent.keyboard('{ArrowDown}');
-    expect(modelsTab()).toHaveAttribute('aria-selected', 'true');
-    expect(document.activeElement).toBe(modelsTab());
+    expect(generalTab()).toHaveAttribute('aria-selected', 'true');
+    expect(document.activeElement).toBe(generalTab());
 
     await userEvent.keyboard('{ArrowUp}');
     expect(aboutTab()).toHaveAttribute('aria-selected', 'true');
@@ -124,10 +155,10 @@ describe('SettingsComponent — tab bar', () => {
     await renderSettings();
     const modifiedArrow = new KeyboardEvent('keydown', { key: 'ArrowDown', altKey: true, bubbles: true, cancelable: true });
 
-    modelsTab().dispatchEvent(modifiedArrow);
+    generalTab().dispatchEvent(modifiedArrow);
 
     expect(modifiedArrow.defaultPrevented).toBe(false);
-    expect(modelsTab()).toHaveAttribute('aria-selected', 'true');
+    expect(generalTab()).toHaveAttribute('aria-selected', 'true');
   });
 });
 
@@ -137,6 +168,7 @@ describe('SettingsComponent — Models tab', () => {
 
   it('lists the rungs cheapest to most capable, never more than the four it knows', async () => {
     await renderSettings(() => Promise.resolve({ ...MODEL_TABLE, gpt: 'gpt-4', secret: 'leaked-extra-key' }));
+    await openModelsTab();
     await screen.findByTestId('model-row-haiku');
 
     const renderedRungOrder = screen.getAllByTestId(/^model-row-/).map((row) => row.getAttribute('data-testid'));
@@ -147,41 +179,47 @@ describe('SettingsComponent — Models tab', () => {
 
   it('renders a model id as inert text, never as markup', async () => {
     await renderSettings(() => Promise.resolve({ ...MODEL_TABLE, opus: '<img src=x onerror="window.__pwned=1">' }));
+    await openModelsTab();
     const opusRow = await screen.findByTestId('model-row-opus');
 
     expect(opusRow.querySelector('img')).toBeNull();
     expect(opusRow).toHaveTextContent('<img src=x onerror="window.__pwned=1">');
   });
 
-  it('offers exactly four dropdowns and no free-text field inside the model table', async () => {
+  it('offers exactly four id pickers and no free-text field inside the model table', async () => {
     await renderSettings();
+    await openModelsTab();
     await screen.findByTestId('model-row-haiku');
 
     const modelsPanel = screen.getByTestId('settings-models');
 
-    expect(within(modelsPanel).getAllByRole('combobox')).toHaveLength(4);
-    expect(modelsPanel.querySelectorAll('input, textarea, [contenteditable]')).toHaveLength(0);
+    expect(within(modelsPanel).getAllByRole('button', { name: /model:/ })).toHaveLength(4);
+    expect(modelsPanel.querySelectorAll('input, textarea, select, [contenteditable]')).toHaveLength(0);
   });
 
-  it('labels each dropdown with its rung name for screen readers', async () => {
+  it('labels each id picker with its rung name and current id for screen readers', async () => {
     await renderSettings();
+    await openModelsTab();
     await screen.findByTestId('model-row-haiku');
 
-    for (const rung of ['haiku', 'sonnet', 'opus', 'fable']) {
-      expect(screen.getByRole('combobox', { name: new RegExp(rung, 'i') })).toBeTruthy();
+    for (const [rung, modelId] of Object.entries(MODEL_TABLE)) {
+      expect(screen.getByRole('button', { name: `${rung} model: ${modelId}` })).toBeTruthy();
     }
   });
 
-  it('shows Loading… while the daemon has not answered yet, and no table', async () => {
+  it('shows a skeleton of four rows while the daemon has not answered yet, and no table', async () => {
     await renderSettings(() => new Promise(() => {}));
+    await openModelsTab();
 
     expect(screen.getByTestId('models-loading')).toBeTruthy();
+    expect(screen.getByTestId('models-loading').children).toHaveLength(4);
     expect(screen.queryByTestId('model-row-haiku')).toBeNull();
     expect(screen.queryByTestId('models-error')).toBeNull();
   });
 
   it('replaces Loading… with an announced error, and no table, when the daemon is unreachable', async () => {
     await renderSettings(() => Promise.reject(new TypeError('Failed to fetch')));
+    await openModelsTab();
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/couldn.t load the model table/i);
     expect(screen.getByTestId('models-error')).toBeTruthy();
@@ -191,6 +229,7 @@ describe('SettingsComponent — Models tab', () => {
 
   it('keeps the error visible after leaving and re-entering the Models tab', async () => {
     await renderSettings(() => Promise.reject(new Error('down')));
+    await openModelsTab();
     await screen.findByTestId('models-error');
 
     await openDaemonTab();
@@ -202,6 +241,7 @@ describe('SettingsComponent — Models tab', () => {
 
   it('shows the error, and no table or Loading…, when the daemon answers with something that is not a table', async () => {
     await renderSettings(() => Promise.resolve(null));
+    await openModelsTab();
 
     expect(await screen.findByTestId('models-error')).toBeTruthy();
     expect(screen.queryByTestId('models-loading')).toBeNull();
@@ -210,6 +250,7 @@ describe('SettingsComponent — Models tab', () => {
 
   it('shows a dash, never an empty cell, for a rung the daemon did not send', async () => {
     await renderSettings(() => Promise.resolve({ haiku: 'claude-haiku-4-5' }));
+    await openModelsTab();
     await screen.findByTestId('model-row-haiku');
 
     expect(within(screen.getByTestId('model-row-sonnet')).getByText('—')).toBeTruthy();
@@ -223,9 +264,10 @@ describe('SettingsComponent — Daemon tab', () => {
     vi.unstubAllGlobals();
   });
 
-  it('labels the token line as a stored token that is found, without revealing any of its characters, on either tab', async () => {
+  it('says the admin token is found, without revealing any of its characters, on either tab', async () => {
     localStorage.setItem('openfleet.adminToken', ADMIN_TOKEN);
     await renderSettings();
+    await openModelsTab();
     await screen.findByTestId('model-row-haiku');
     const modelsTabMarkup = document.body.innerHTML;
 
@@ -238,8 +280,16 @@ describe('SettingsComponent — Daemon tab', () => {
       expect(markup).not.toContain('3f9a');
     }
     expect(screen.getByTestId('admin-token-status')).toHaveTextContent(/^found$/);
-    expect(screen.getByTestId('settings-daemon')).toHaveTextContent('Stored admin token');
-    expect(screen.getByTestId('settings-daemon')).not.toHaveTextContent('admin.token');
+    expect(screen.getByTestId('settings-daemon')).toHaveTextContent('Admin token');
+    expect(screen.getByTestId('settings-daemon')).toHaveTextContent('Read from ~/.openfleet/admin.token · created on first daemon start');
+  });
+
+  it('shows the daemon log path', async () => {
+    await renderSettings();
+
+    await openDaemonTab();
+
+    expect(screen.getByTestId('daemon-log-path')).toHaveTextContent('~/.openfleet/logs/daemon.log');
   });
 
   it('exposes the token status in no title, aria-label, aria-description or value attribute', async () => {
@@ -253,13 +303,13 @@ describe('SettingsComponent — Daemon tab', () => {
     expect(document.querySelectorAll('input, textarea')).toHaveLength(0);
   });
 
-  it.each([['spaces', '   '], ['a newline', '\n'], ['a tab and a space', '\t ']])('reports not found when the stored token is only %s', async (_label, blankToken) => {
+  it.each([['spaces', '   '], ['a newline', '\n'], ['a tab and a space', '\t ']])('reports the token as missing when the stored token is only %s', async (_label, blankToken) => {
     localStorage.setItem('openfleet.adminToken', blankToken);
     await renderSettings();
 
     await openDaemonTab();
 
-    expect(screen.getByTestId('admin-token-status')).toHaveTextContent(/^not found$/);
+    expect(screen.getByTestId('admin-token-status')).toHaveTextContent(/^missing$/);
   });
 
   it.each([['localhost', 'http://localhost:7331', 'localhost:7331'], ['IPv6 loopback', 'http://[::1]:7331', '[::1]:7331']])('captions the %s address as "Local only"', async (_label, apiUrl, shownAddress) => {
@@ -278,6 +328,7 @@ describe('SettingsComponent — Daemon tab', () => {
     const fetchSpy = vi.fn((_url: string) => Promise.resolve(new Response(JSON.stringify(MODEL_TABLE))));
     vi.stubGlobal('fetch', fetchSpy);
     await render(SettingsComponent);
+    await openModelsTab();
     await screen.findByTestId('model-row-haiku');
 
     await openDaemonTab();
