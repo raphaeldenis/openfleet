@@ -7,7 +7,6 @@ import { EventBus } from '../events/eventBus.js';
 import { createWorktree } from '../git/worktrees.js';
 import type { Harness, HarnessHandle } from '../harness/harness.js';
 import { claudeProjectsDir } from '../harness/claudeProjectsDir.js';
-import { findPermissiveSettingsWarning } from '../harness/claudeCli/permissiveSettings.js';
 import { newId, newToken } from '../ids.js';
 import { log } from '../logger.js';
 import { MessageQueue } from './messageQueue.js';
@@ -453,7 +452,7 @@ export class SessionService {
     // Captured now so a later reopen can tell a directory that still resolves the same way apart from an
     // in-between symlink swap from one whose path never resolved to a real directory at all.
     if (existsSync(spec.directory)) this.repo.setDirectoryRealpath(id, realpathSync.native(spec.directory));
-    this.warnIfPermissiveSettings(spec.harness, spec.directory);
+    this.warnIfPermissiveSettings(harness, spec.directory);
     const seededPrompt = spec.seededPrompt?.trim();
     if (seededPrompt) this.seededPromptBySessionId.set(id, seededPrompt);
     this.startPendingRecording(id, spec.model);
@@ -1823,7 +1822,7 @@ export class SessionService {
       this.closeAfterFailedLaunch(session.id, { exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE, reason: 'launch_failed', failure: err });
       return { launched: false, reason: err.message, failure: err };
     }
-    this.warnIfPermissiveSettings(session.harness, session.directory);
+    this.warnIfPermissiveSettings(harness, session.directory);
     const permissionMode = this.resolveResumePermissionMode(session);
     // A daemon crash can leave the pre-restart process alive for a moment in its orphaned PTY (ponytail:
     // it can still touch files on disk until it actually exits — persisting the PTY pid and killing its
@@ -1911,10 +1910,9 @@ export class SessionService {
   // Read-only, best-effort informational signal: a worktree can carry a .claude settings file with a
   // permission bypass, but launchConfig's `--setting-sources user` (AUD-28) keeps claude-cli from ever
   // loading it, so this can no longer let a session skip the daemon's own approval gate. Only claude-cli
-  // would otherwise read those settings, so a 'fake' harness launch is never inspected.
-  private warnIfPermissiveSettings(harnessId: Session['harness'], directory: string): void {
-    if (harnessId !== 'claude-cli') return;
-    const warning = findPermissiveSettingsWarning(directory);
+  // would otherwise read those settings, so a harness that offers no such check (the 'fake' one) is never inspected.
+  private warnIfPermissiveSettings(harness: Harness, directory: string): void {
+    const warning = harness.findProjectSettingsWarning?.(directory);
     if (warning) console.warn(`session directory ${directory} has permissive Claude settings, but OpenFleet ignores project settings: ${warning}`);
   }
 

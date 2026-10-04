@@ -37,4 +37,7 @@ export interface Harness {
   // Whether a resume of this conversation can succeed: the CLI refuses (exit 1) a conversation it has no file for.
   // A harness that cannot tell omits it and its conversations are assumed to exist.
   conversationExists?(conversation: { cliSessionId: string; directory: string }): ConversationPresence;
+  // Read-only: a description of the project-level settings in `directory` that would loosen the harness's permission gate, if its
+  // CLI would read them. A harness whose CLI reads no project settings omits it.
+  findProjectSettingsWarning?(directory: string): string | undefined;
 }

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { openDatabase } from '../db/database.js';
+import { findPermissiveSettingsWarning } from '../harness/claudeCli/permissiveSettings.js';
 import { FakeHandle, FakeHarness } from '../harness/fakeHarness.js';
 import type { Harness, HarnessHandle, HarnessLaunch } from '../harness/harness.js';
 import { EventBus } from '../events/eventBus.js';
@@ -812,6 +813,9 @@ describe('SessionService resume', () => {
     class FakeClaudeCliHarness implements Harness {
       readonly id = 'claude-cli' as const;
       readonly launches: HarnessLaunch[] = [];
+      findProjectSettingsWarning(directory: string): string | undefined {
+        return findPermissiveSettingsWarning(directory);
+      }
       start(launch: HarnessLaunch): HarnessHandle {
         this.launches.push(launch);
         return new FakeHandle();
