@@ -1,7 +1,7 @@
 import { Injectable } from '@angular/core';
-import { isErrorEnvelope } from '@openfleet/shared';
+import { DIAGNOSTICS_PATH, isErrorEnvelope } from '@openfleet/shared';
 import type {
-  Approval, CreateNoteRequest, DataStore, DataStoreDetail, DsRow, DsRowHistoryEntry, DsView, ErrorEnvelope, HarnessId, NoteSummary,
+  Approval, CreateNoteRequest, DataStore, DataStoreDetail, DiagnosticsDocument, DsRow, DsRowHistoryEntry, DsView, ErrorEnvelope, HarnessId, NoteSummary,
   NoteVersionSummary, NoteView, OrderTerm, Page, PermissionMode, Project, RestoreNoteRequest, Session, SessionSpec, SessionTodos,
   UpdateNoteRequest, WhereClause,
 } from '@openfleet/shared';
@@ -93,6 +93,7 @@ export class FleetApiService {
     const reportedVersion = typeof body.version === 'string' && body.version !== '' ? body.version : undefined;
     return { ok: true, version: reportedVersion };
   }
+  diagnostics() { return this.call<DiagnosticsDocument>(DIAGNOSTICS_PATH); }
   listSessions() { return this.getWithin<Session[]>('/api/sessions', DAEMON_ANSWER_TIMEOUT_MS); }
   models() { return this.call<Record<string, string>>('/api/models'); }
   availableModels() { return this.call<{ models: string[] }>('/api/models/available'); }
