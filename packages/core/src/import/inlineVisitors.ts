@@ -12,7 +12,7 @@ const FORMAT_STRIKETHROUGH = 4;
 const FORMAT_CODE = 16;
 const KNOWN_FORMAT_MASK = FORMAT_BOLD | FORMAT_ITALIC | FORMAT_STRIKETHROUGH | FORMAT_CODE;
 
-const wrapInlineCode = (code: string): string => {
+export const wrapInlineCode = (code: string): string => {
   const delimiter = delimiterLongerThanAnyBacktickRunIn(code, { minimumLength: 1 });
   const touchesBacktick = code.startsWith('`') || code.endsWith('`');
   const padding = touchesBacktick ? ' ' : '';

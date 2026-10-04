@@ -74,7 +74,7 @@ function foldersOfManagersKept(plan: ImportPlan, outcomes: Map<string, UpsertOut
 function writeToTarget(plan: ImportPlan, options: ImportScapeOptions): ImportReport {
   const dryRun = options.dryRun ?? false;
   const scratchRoot = options.scratchRoot ?? tmpdir();
-  const report = emptyReport({ dryRun });
+  const report = { ...emptyReport({ dryRun }), ...plan.sourceLosses };
   const databaseExistedBefore = existsSync(join(options.home, DATABASE_FILE_NAME));
   const mustBackUpBeforeCommit = () => {
     const isOverwritingAnExistingDatabase = !dryRun && databaseExistedBefore && hasChanges(report);

@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, renameSync, symlinkSync, truncateSync, unlinkSync, writeFileSync } from 'node:fs';
+import { linkSync, mkdirSync, readFileSync, renameSync, symlinkSync, truncateSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -67,6 +67,36 @@ afterEach(async () => {
 });
 
 describe('handoff picker HTTP contract', () => {
+  it('omits hardlinks and refuses to seed their outside contents', async () => {
+    const path = addHandoff();
+    const outside = join(root, 'outside.md');
+    writeFileSync(outside, 'OUTSIDE SECRET');
+    unlinkSync(path);
+    linkSync(outside, path);
+
+    expect(await (await get()).json()).toMatchObject({ items: [] });
+    const response = await create({ handoffFile: 'gimli.md' });
+
+    expect(response.status).toBe(404);
+    expect(await response.json()).toMatchObject({ error: 'handoff_not_found' });
+    expect(sessionCount()).toBe(0);
+    expect(harness.launches).toHaveLength(0);
+    expect(readFileSync(outside, 'utf8')).toBe('OUTSIDE SECRET');
+  });
+
+  it.each(['\u061c', '\u200e', '\u200f', '\u202a', '\u202b', '\u202c', '\u202d', '\u202e', '\u2066', '\u2067', '\u2068', '\u2069'])('strips bidi control %j from the fence while looking up the original filename', async (control) => {
+    const file = `gim${control}li.md`;
+    addHandoff({ file, text: 'ACTUAL CONTEXT' });
+
+    const response = await create({ handoffFile: file });
+
+    expect(response.status).toBe(201);
+    const seed = harness.launches[0]!.seededPrompt!;
+    expect(seed).toContain('file="handoffs/gimli.md"');
+    expect(seed).toContain('ACTUAL CONTEXT');
+    expect(seed).not.toContain(control);
+  });
+
   it('lists an empty project', async () => {
     const response = await get();
     expect(response.status).toBe(200);

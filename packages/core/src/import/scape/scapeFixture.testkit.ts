@@ -38,11 +38,11 @@ export interface ScapeFixture {
 
 const NOTES_SCHEMA = `
   CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, isArchived BOOLEAN NOT NULL DEFAULT 0, createdAt DOUBLE NOT NULL, updatedAt DOUBLE NOT NULL, isSystemProject BOOLEAN NOT NULL DEFAULT 0);
-  CREATE TABLE notes (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', content TEXT NOT NULL DEFAULT '{}', createdAt DOUBLE NOT NULL, updatedAt DOUBLE NOT NULL, noteNumber INTEGER, contentFormat TEXT NOT NULL DEFAULT 'lexical', isShared INTEGER NOT NULL DEFAULT 0);
+  CREATE TABLE notes (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', content TEXT NOT NULL DEFAULT '{}', createdAt DOUBLE NOT NULL, updatedAt DOUBLE NOT NULL, noteNumber INTEGER, contentFormat TEXT NOT NULL DEFAULT 'lexical', isShared INTEGER NOT NULL DEFAULT 0, isArchived INTEGER NOT NULL DEFAULT 0);
   CREATE TABLE note_versions (id TEXT PRIMARY KEY, noteID TEXT NOT NULL, title TEXT NOT NULL, content TEXT NOT NULL, contentFormat TEXT NOT NULL, createdAt DOUBLE NOT NULL, source TEXT NOT NULL);
   CREATE TABLE project_items (id TEXT PRIMARY KEY, projectID TEXT NOT NULL, kind TEXT NOT NULL, noteID TEXT);
   CREATE TABLE data_store_meta (id TEXT PRIMARY KEY, projectID TEXT NOT NULL, displayName TEXT NOT NULL, createdAt REAL NOT NULL, updatedAt REAL NOT NULL);
-  CREATE TABLE data_store_column (id TEXT PRIMARY KEY, storeID TEXT NOT NULL, displayName TEXT NOT NULL, columnType TEXT NOT NULL, sortOrder INTEGER NOT NULL DEFAULT 0, options TEXT);
+  CREATE TABLE data_store_column (id TEXT PRIMARY KEY, storeID TEXT NOT NULL, displayName TEXT NOT NULL, columnType TEXT NOT NULL, sortOrder INTEGER NOT NULL DEFAULT 0, options TEXT, format TEXT);
   CREATE TABLE data_store_view (id TEXT PRIMARY KEY, storeID TEXT NOT NULL, name TEXT NOT NULL, viewType TEXT NOT NULL, sortOrder INTEGER NOT NULL DEFAULT 0, config TEXT NOT NULL, createdAt REAL NOT NULL, updatedAt REAL NOT NULL);
 `;
 

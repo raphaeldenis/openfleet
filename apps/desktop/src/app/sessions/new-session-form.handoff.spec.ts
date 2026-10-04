@@ -39,6 +39,22 @@ const fillFields = async () => {
 };
 
 describe('New session handoff picker', () => {
+  it('strips bidi controls from labels and chips while submitting the actual filename', async () => {
+    const file = 'gim\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069li.md';
+    const api = await renderForm({ listHandoffs: vi.fn().mockResolvedValue(page([{ ...HANDOFF, file }])) });
+    await chooseProject();
+    await openPicker();
+
+    const option = await screen.findByRole('option', { name: /gimli.md/ });
+    expect(option.textContent).not.toMatch(/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/);
+    await userEvent.click(option);
+    expect(screen.getByText('@file handoffs/gimli.md')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Remove handoff gimli.md' })).toBeVisible();
+    await fillFields();
+    await userEvent.click(screen.getByTestId('new-session-submit'));
+    expect(api.createSession).toHaveBeenCalledWith(expect.objectContaining({ handoffFile: file }));
+  });
+
   it('explains why it is disabled without a project or docs folder', async () => {
     await renderForm();
     expect(screen.getByText('Choose a project with a docs folder to start from a handoff.')).toBeVisible();
