@@ -368,8 +368,11 @@ describe('table view tools', () => {
       const titleId = await addTextColumn(client, store.id);
       const [rowId] = text(await client.callTool({ name: 'insert_data_store_rows', arguments: { store: store.id, rows: [{ [titleId]: 'x' }] } })).ids;
       const mediumCells = ['a', 'b'].map((letter) => letter.repeat(1200));
-      for (let update = 0; update < 520; update++) {
-        await client.callTool({ name: 'update_data_store_rows', arguments: { store: store.id, updates: [{ row_id: rowId, patch: { [titleId]: mediumCells[update % 2] } }] } });
+      const updatesPerBatch = 260;
+      const batchesOfAlternatingUpdates = [0, 1].map(() =>
+        Array.from({ length: updatesPerBatch }, (_, update) => ({ row_id: rowId, patch: { [titleId]: mediumCells[update % 2] } })));
+      for (const updates of batchesOfAlternatingUpdates) {
+        await client.callTool({ name: 'update_data_store_rows', arguments: { store: store.id, updates } });
       }
 
       const result = text(await client.callTool({ name: 'list_row_changes', arguments: { row_id: rowId, limit: 500 } }));
