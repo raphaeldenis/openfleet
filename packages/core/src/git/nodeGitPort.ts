@@ -7,7 +7,7 @@ const GIT_TIMEOUT_MS = 2_000;
 const MAX_OUTPUT_BYTES = 256 * 1024;
 const OUTPUT_OVERFLOW_CODE = 'ENOBUFS';
 
-/** Neutralises what a repository's own config or the user's global config could make git do: spawn a monitor, page, colour, or run an external diff. */
+/** Neutralises what a repository's own config or the user's global config could make git do: spawn a filesystem monitor, page, or colour the output. */
 const NON_INTERACTIVE_CONFIG = ['-c', 'core.fsmonitor=false', '-c', 'core.pager=cat', '-c', 'color.ui=never'];
 
 export interface NodeGitPortOptions {
@@ -42,7 +42,7 @@ export function createNodeGitPort(options: NodeGitPortOptions = {}): GitPort {
     } catch (error) {
       const outputOverflowed = (error as NodeJS.ErrnoException).code === OUTPUT_OVERFLOW_CODE;
       const partialOutput = (error as { stdout?: unknown }).stdout;
-      if (outputOverflowed && typeof partialOutput === 'string') return keepCompleteLines(partialOutput);
+      if (outputOverflowed && typeof partialOutput === 'string') return keepCompleteLines(partialOutput, maxBufferBytes);
       throw error;
     }
   };
@@ -71,7 +71,9 @@ function assertExistingAbsoluteDirectory(directory: string): void {
   if (!stats.isDirectory()) throw new Error('git directory is not a directory');
 }
 
-function keepCompleteLines(output: string): string {
-  const endOfLastCompleteLine = output.lastIndexOf('\n');
-  return endOfLastCompleteLine === -1 ? '' : output.slice(0, endOfLastCompleteLine + 1);
+/** Node hands back the chunk that crossed the cap, so the cap is re-applied here before dropping the cut line. */
+function keepCompleteLines(output: string, maxBytes: number): string {
+  const withinCap = Buffer.from(output).subarray(0, maxBytes).toString('utf8');
+  const endOfLastCompleteLine = withinCap.lastIndexOf('\n');
+  return endOfLastCompleteLine === -1 ? '' : withinCap.slice(0, endOfLastCompleteLine + 1);
 }
