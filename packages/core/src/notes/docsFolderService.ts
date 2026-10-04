@@ -71,6 +71,18 @@ export interface CreateFileBackedNoteInput {
   author: string;
 }
 
+export interface PreviewNewNotePathInput {
+  projectId: string;
+  folder: NoteFolder;
+  title: string;
+}
+
+export type NewNotePathPreview =
+  | { outcome: 'ready'; relativePath: string }
+  | { outcome: 'no_project' }
+  | { outcome: 'no_docs_folder' }
+  | { outcome: 'unusable' };
+
 export interface WriteThroughInput {
   bodyMd: string;
   expectedRev: number;
@@ -175,6 +187,26 @@ export class DocsFolderService {
     } catch (error) {
       this.deps.fs.unlinkSync(filePath);
       throw error;
+    }
+  }
+
+  /**
+   * Where `createFileBackedNote` would put a note now, collision suffix included, without writing anything.
+   * A configured folder that cannot be resolved, escapes the docs folder or is read-only is `unusable`; this never throws.
+   */
+  previewNewNotePath(input: PreviewNewNotePathInput): NewNotePathPreview {
+    const project = this.deps.projects.get(input.projectId);
+    if (!project) return { outcome: 'no_project' };
+    if (!project.docsFolderPath) return { outcome: 'no_docs_folder' };
+    try {
+      const realDocsFolderPath = this.deps.fs.realpathSync(project.docsFolderPath);
+      const realFolderDir = this.assertContained(realDocsFolderPath, join(project.docsFolderPath, input.folder));
+      if (!this.deps.fs.isWritableSync(realFolderDir)) return { outcome: 'unusable' };
+      const dateStamp = this.deps.clock().slice(0, 10);
+      const filename = this.uniqueFileName(realFolderDir, dateStamp, input.title);
+      return { outcome: 'ready', relativePath: `${input.folder}/${filename}` };
+    } catch {
+      return { outcome: 'unusable' };
     }
   }
 
@@ -436,11 +468,14 @@ export class DocsFolderService {
   }
 
   private uniqueFilePath(realFolderDir: string, dateStamp: string, title: string): string {
+    return join(realFolderDir, this.uniqueFileName(realFolderDir, dateStamp, title));
+  }
+
+  private uniqueFileName(realFolderDir: string, dateStamp: string, title: string): string {
     const slug = kebabSlug(title);
     for (let suffix = 0; suffix < MAX_SLUG_SUFFIX_ATTEMPTS; suffix++) {
       const filename = suffix === 0 ? `${dateStamp}-${slug}.md` : `${dateStamp}-${slug}-${suffix + 1}.md`;
-      const candidate = join(realFolderDir, filename);
-      if (!this.deps.fs.existsSync(candidate)) return candidate;
+      if (!this.deps.fs.existsSync(join(realFolderDir, filename))) return filename;
     }
     throw new Error(`could not find a free filename for "${title}" under ${realFolderDir}`);
   }

@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { createHandoffRouteDeps } from './api/handoffRoutes.js';
 import { startServer } from './api/server.js';
 import type { Config } from './config.js';
 import { readingConfigFile } from './configFileError.js';
@@ -11,6 +12,7 @@ import { ClaudeCliHarness } from './harness/claudeCli/claudeCliHarness.js';
 import { sweepStaleSessions } from './harness/claudeCli/tokenFiles.js';
 import { FakeHarness, postSessionStartHook } from './harness/fakeHarness.js';
 import { newId } from './ids.js';
+import { createNodeGitPort } from './git/nodeGitPort.js';
 import { log } from './logger.js';
 import { DAEMON_VERSION } from './version.js';
 import { ManagerRepository } from './managers/managerRepository.js';
@@ -19,6 +21,7 @@ import { PulseScheduler } from './managers/pulseScheduler.js';
 import { createMcpHandler } from './mcp/mcpServer.js';
 import { loadModelTable } from './models.js';
 import { DocsFolderService } from './notes/docsFolderService.js';
+import { loadHandoffSettings } from './notes/handoffSettings.js';
 import { expandMentions } from './notes/mentionExpander.js';
 import { nodeDocsFolderFs } from './notes/nodeDocsFolderFs.js';
 import { NoteRepository } from './notes/noteRepository.js';
@@ -87,11 +90,12 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   const handoverLedger = new HandoverLedger({ db, clock: () => new Date().toISOString(), patterns: workingStateSettings.handoverPatterns });
   const contextNotice = new ContextNotice({ sessions, managers: managerRepository, settings: contextNoticeSettings });
   const todos = new TodoTracker({ sessions, bus });
+  const handoff = createHandoffRouteDeps({ sessions, managers, workingStates, todos, docs, projects, git: createNodeGitPort(), settings: loadHandoffSettings(modelConfigPath), clock: () => new Date().toISOString() });
 
   // The server must be listening before any resumed CLI can POST its first hook — resuming first risks a
   // fast process hitting a port nothing is serving yet.
   const diagnostics = () => buildDiagnosticsDocument({ db, degraded, listSessions: () => sessions.list(), port: config.port, e2eEnabled: config.e2eEnabled });
-  const server = await startServer({ ...config, e2eRoutes: config.e2eEnabled, degraded, diagnostics, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, stores, storeRepo, projects, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, workingStates, worktreesRoot: config.worktreesRoot }) });
+  const server = await startServer({ ...config, e2eRoutes: config.e2eEnabled, degraded, diagnostics, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, stores, storeRepo, projects, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, workingStates, worktreesRoot: config.worktreesRoot }) });
   log('info', `openfleet core listening on ${server.url} (version: ${DAEMON_VERSION}, home: ${config.home})`);
 
   const unwatchDatabase = watchDatabaseHealth(degraded);

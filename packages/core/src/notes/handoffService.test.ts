@@ -35,6 +35,7 @@ class FakeFs implements DocsFolderFs {
   existsSync(path: string): boolean { return this.files.has(path); }
   mkdirSync(): void {}
   realpathSync(path: string): string { return path; }
+  isWritableSync(): boolean { return true; }
   listFilesSync(): string[] { return []; }
   watch(): () => void { return () => {}; }
 }

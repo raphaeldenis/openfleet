@@ -69,6 +69,10 @@ class FakeDocsFolderFs implements DocsFolderFs {
     return this.symlinks.get(path) ?? path;
   }
 
+  isWritableSync(): boolean {
+    return true;
+  }
+
   listFilesSync(dirPath: string): string[] {
     const prefix = `${dirPath}/`;
     return [...this.files.keys(), ...this.symlinks.keys()]

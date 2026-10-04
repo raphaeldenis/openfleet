@@ -28,6 +28,7 @@ import type { HandoverLedger } from '../workingState/handoverLedger.js';
 import type { StopRefusal } from '../workingState/stopRefusal.js';
 import { hooksHandler } from './hooksHandler.js';
 import { registerDiagnosticsRoutes } from './diagnosticsRoutes.js';
+import { registerHandoffRoutes, type HandoffRouteDeps } from './handoffRoutes.js';
 import { registerNoteRoutes } from './noteRoutes.js';
 import { registerProjectRoutes } from './projectRoutes.js';
 import { registerRestRoutes } from './restHandlers.js';
@@ -50,6 +51,8 @@ export interface ServerDeps {
   stores?: DataStoreService; storeRepo?: DataStoreRepository; projects?: ProjectRepository;
   // The working-state route, event and snapshot fields exist only when the daemon hands over the service.
   workingStates?: WorkingStateService; workingStateMaxAgeMinutes?: number;
+  // Without it the read-only handoff preview and target routes do not exist.
+  handoff?: HandoffRouteDeps;
   // Without it every Stop is answered {}, as before the working state existed.
   stopRefusal?: StopRefusal;
   // Without it every SessionStart is answered {}, as before the working state existed.
@@ -129,6 +132,7 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; rout
   if (deps.diagnostics) registerDiagnosticsRoutes(router, deps.diagnostics);
   if (deps.projects) registerProjectRoutes(router, deps.projects);
   if (deps.stores && deps.storeRepo) registerDataStoreRoutes(router, { stores: deps.stores, storeRepo: deps.storeRepo });
+  if (deps.handoff) registerHandoffRoutes(router, deps.handoff);
   if (deps.notes && deps.noteRepo && deps.docs) registerNoteRoutes(router, { notes: deps.notes, noteRepo: deps.noteRepo, docs: deps.docs });
 
   const server = createServer(async (req, res) => {
