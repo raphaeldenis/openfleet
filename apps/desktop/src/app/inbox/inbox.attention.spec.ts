@@ -166,7 +166,7 @@ describe('InboxComponent questions from agents', () => {
       await user.click(within(secondCard).getByTestId('composer-send'));
 
       expect(api.sendMessage).toHaveBeenCalledTimes(1);
-      expect(api.sendMessage).toHaveBeenCalledWith('s2', 'use the staging token');
+      expect(api.sendMessage).toHaveBeenCalledWith('s2', 'use the staging token', expect.stringMatching(/^[0-9a-f-]{36}$/));
     });
 
     it('user keeps a reply typed in one card apart from the other cards', async () => {
@@ -224,7 +224,7 @@ describe('InboxComponent questions from agents', () => {
         await rendered.user.click(sendButton());
 
         expect(rendered.api.sendMessage).toHaveBeenCalledTimes(1);
-        expect(sendButton()).toBeDisabled();
+        expect(sendButton()).toHaveAttribute('aria-disabled', 'true');
       });
 
       it('user finds an empty reply field after a reply was delivered while looking at the Gates tab', async () => {
