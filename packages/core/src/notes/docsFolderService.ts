@@ -130,7 +130,8 @@ interface ImportCandidate {
  * a failed CAS, an oversized body, a vanished docs folder or a failed rename leaves neither the DB nor
  * the visible file changed (the revision and version row roll back with the failed rename). A docs folder
  * or subfolder that disappeared (ENOENT, ENOTDIR) surfaces as `NoteFileUnreadableError`; any other fs
- * failure (ENOSPC, EROFS, EACCES, EXDEV) propagates unchanged, so the caller sees an internal error.
+ * permission refusal (EACCES, EROFS, EPERM) surfaces as `DocsFolderNotWritableError`; other fs
+ * failures (ENOSPC, EXDEV) propagate unchanged, so the caller sees an internal error.
  *
  * `writeThrough` refuses to run inside an outer transaction: an outer rollback could not undo the rename.
  *
@@ -266,12 +267,12 @@ export class DocsFolderService {
     const targetPath = current.filePath!;
     const project = this.requireProject(current.projectId);
     const docsFolderPath = this.requireDocsFolderPath(project);
-    const realDocsFolderPath = this.orUnreadable(docsFolderPath, () => this.deps.fs.realpathSync(docsFolderPath));
+    const realDocsFolderPath = this.asDocsFolderFailure(docsFolderPath, () => this.deps.fs.realpathSync(docsFolderPath));
     if (!this.isFileWithinDocsFolder(realDocsFolderPath, targetPath)) throw new PathEscapesDocsFolderError(targetPath);
     this.assertWithinCap(input.bodyMd);
     this.refuseIfDiskEditIsUnreconciled(current);
 
-    const tempPath = this.orUnreadable(targetPath, () => this.writeTempFile(targetPath, input.bodyMd));
+    const tempPath = this.asDocsFolderFailure(targetPath, () => this.writeTempFile(targetPath, input.bodyMd));
     try {
       return this.deps.notes.runAtomically(() => {
         const note = this.deps.notes.updateFileBacked(noteId, {
@@ -280,7 +281,7 @@ export class DocsFolderService {
           expectedRev: input.expectedRev,
           author: input.author,
         });
-        this.orUnreadable(targetPath, () => this.deps.fs.renameSync(tempPath, targetPath));
+        this.asDocsFolderFailure(targetPath, () => this.deps.fs.renameSync(tempPath, targetPath));
         return note;
       });
     } catch (error) {
