@@ -1,0 +1,15 @@
+e2e_surface_enabled e2e test surface enabled (OPENFLEET_E2E=1): fake harness and fake-output route are registered
+pulse_error_event_not_broadcast pulse: the error event could not be broadcast
+working_state_temp_file_not_removed working state temporary file not removed
+claude_not_executable claude is not executable in any PATH directory of the daemon
+db_connection_stuck refusing to run: connection is stuck in a transaction
+db_rollback_failed transaction rollback failed
+ws_write_failed ws: write failed
+ws_send_failed ws: send failed
+ws_upgrade_unparsable ws: rejecting an unparsable upgrade request
+todos_hook_not_handed todos: a hook could not be handed to the todo tracker, changing nothing
+hook_body_too_large hook body over 1 MiB ignored
+degraded_listener_threw degraded registry: a listener threw
+degraded_mark_failed degraded registry: mark failed
+degraded_clear_failed degraded registry: clear failed
+log_record_unserializable [unserializable log record]

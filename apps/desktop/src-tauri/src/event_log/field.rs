@@ -590,14 +590,108 @@ pub struct KnownCode(&'static str);
 
 impl KnownCode {
   pub fn from_name(name: &str) -> Self {
-    let listed_name = KNOWN_CODES.iter().find(|listed| **listed == name);
-    Self(listed_name.copied().unwrap_or(OTHER_CODE))
+    Self(listed_or_other(KNOWN_CODES, name))
   }
 }
 
 impl fmt::Display for KnownCode {
   fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
     formatter.write_str(self.0)
+  }
+}
+
+fn listed_or_other(list: &'static [&'static str], name: &str) -> &'static str {
+  list.iter().find(|listed| **listed == name).copied().unwrap_or(OTHER_CODE)
+}
+
+const KNOWN_ERROR_NAMES: &[&str] = &[
+  "Error", "TypeError", "RangeError", "SyntaxError", "ReferenceError", "EvalError", "URIError", "AggregateError", "SqliteError", "AbortError", "TimeoutError",
+];
+
+/// An `Error.name` from the closed list of JavaScript built-ins and the database driver; every other name is `other`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct KnownErrorName(&'static str);
+
+impl KnownErrorName {
+  pub fn from_name(name: &str) -> Self {
+    Self(listed_or_other(KNOWN_ERROR_NAMES, name))
+  }
+}
+
+impl fmt::Display for KnownErrorName {
+  fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    formatter.write_str(self.0)
+  }
+}
+
+/// The id of a daemon message literal listed in the catalogue; only the catalogue constructs one.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CatalogueId(&'static str);
+
+impl CatalogueId {
+  pub(super) fn new(id: &'static str) -> Self {
+    Self(id)
+  }
+}
+
+/// A daemon `msg`: readable when the literal is in the catalogue, otherwise reduced to its length and tag.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum DaemonMessage {
+  Catalogued(CatalogueId),
+  Unlisted(Opaque),
+}
+
+impl fmt::Display for DaemonMessage {
+  fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    match self {
+      DaemonMessage::Catalogued(CatalogueId(id)) => formatter.write_str(id),
+      DaemonMessage::Unlisted(opaque) => write!(formatter, "{opaque}"),
+    }
+  }
+}
+
+const MAX_FRAMES: usize = 8;
+const MAX_FRAMES_RENDERED_BYTES: usize = 64;
+const FRAME_SEPARATOR_BYTES: usize = 1;
+
+/// Source positions (`line:column`) of the daemon bundle's own stack frames, rendered `L:C/L:C`.
+/// Holds at most 8 positions and at most 64 rendered bytes, the longest value a log line allows.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StackFrames {
+  positions: [(u32, u32); MAX_FRAMES],
+  count: usize,
+  rendered_bytes: usize,
+}
+
+impl StackFrames {
+  pub fn empty() -> Self {
+    Self { positions: [(0, 0); MAX_FRAMES], count: 0, rendered_bytes: 0 }
+  }
+
+  pub fn is_empty(&self) -> bool {
+    self.count == 0
+  }
+
+  /// Adds a position and returns true, or returns false when the frames are full or the rendering would pass 64 bytes.
+  pub fn push(&mut self, line: u32, column: u32) -> bool {
+    let separator_bytes = if self.is_empty() { 0 } else { FRAME_SEPARATOR_BYTES };
+    let position_bytes = format!("{line}:{column}").len();
+    let rendered_bytes_with_position = self.rendered_bytes + separator_bytes + position_bytes;
+    let has_room = self.count < MAX_FRAMES && rendered_bytes_with_position <= MAX_FRAMES_RENDERED_BYTES;
+    if !has_room {
+      return false;
+    }
+    self.positions[self.count] = (line, column);
+    self.count += 1;
+    self.rendered_bytes = rendered_bytes_with_position;
+    true
+  }
+}
+
+impl fmt::Display for StackFrames {
+  fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    let rendered: Vec<String> = self.positions[..self.count].iter().map(|(line, column)| format!("{line}:{column}")).collect();
+    formatter.write_str(&rendered.join("/"))
   }
 }
 
