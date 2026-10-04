@@ -21,3 +21,25 @@ test('the top-bar toggle switches the chrome between the light and dark panel to
 
   await expect(topBar).toHaveCSS('background-color', DARK_PANEL);
 });
+
+test('the toggle names the current theme and is pressed exactly while the theme is dark', async ({ page }) => {
+  await page.addInitScript(([t, a]) => {
+    localStorage.setItem('openfleet.adminToken', t);
+    localStorage.setItem('openfleet.apiUrl', a);
+    localStorage.setItem('openfleet.theme', 'light');
+  }, [token, api]);
+  await page.goto('/');
+  const lightToggle = page.getByRole('button', { name: '☀ Light' });
+  await expect(lightToggle).toHaveAttribute('aria-pressed', 'false');
+  await expect(lightToggle).toHaveAttribute('title', 'Switch to dark theme');
+
+  await lightToggle.click();
+
+  const darkToggle = page.getByRole('button', { name: '☾ Dark' });
+  await expect(darkToggle).toHaveAttribute('aria-pressed', 'true');
+  await expect(darkToggle).toHaveAttribute('title', 'Switch to light theme');
+
+  await darkToggle.click();
+
+  await expect(page.getByRole('button', { name: '☀ Light' })).toHaveAttribute('aria-pressed', 'false');
+});

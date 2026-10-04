@@ -197,6 +197,33 @@ describe('REST', () => {
     expect(res.status).toBe(404);
   });
 
+  it('closes a fake-harness session with the exit code of fake-exit', async () => {
+    const session = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
+
+    const res = await api(`/api/sessions/${session.id}/fake-exit`, { method: 'POST', body: JSON.stringify({ code: 1 }) });
+
+    const closed = (await (await api('/api/sessions')).json()).find((listed: { id: string }) => listed.id === session.id);
+    expect(res.status).toBe(200);
+    expect(closed).toMatchObject({ state: 'closed', exitCode: 1, closeReason: 'harness_exit' });
+  });
+
+  it('closes a fake-harness session as conversation_not_found when fake-exit says the conversation is gone', async () => {
+    const session = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
+
+    await api(`/api/sessions/${session.id}/fake-exit`, { method: 'POST', body: JSON.stringify({ code: 1, conversationNotFound: true }) });
+
+    const closed = (await (await api('/api/sessions')).json()).find((listed: { id: string }) => listed.id === session.id);
+    expect(closed).toMatchObject({ state: 'closed', closeReason: 'conversation_not_found' });
+  });
+
+  it('does not serve fake-exit when the server is started without the e2e routes', async () => {
+    const session = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
+    const serverWithoutE2eRoutes = await startServer(baseServerDeps);
+    const res = await fetch(`${serverWithoutE2eRoutes.url}/api/sessions/${session.id}/fake-exit`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer admin' }, body: JSON.stringify({ code: 1 }) });
+    await serverWithoutE2eRoutes.close();
+    expect(res.status).toBe(404);
+  });
+
   it('rejects fake-output on a non-fake harness session with 404', async () => {
     const claudeCliStub = {
       id: 'claude-cli' as const,
