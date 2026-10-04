@@ -190,6 +190,50 @@ describe('SessionHeaderComponent write handoff', () => {
     expect(getHandoffPreview).toHaveBeenCalledTimes(2);
   });
 
+  describe('while the panel is open', () => {
+    const detailsToggle = () => screen.getByRole('button', { name: 'Details' });
+
+    it('keeps the details open: the Details toggle is aria-disabled and does not hide the Write handoff button', async () => {
+      await renderHeader(aSession());
+      await openDetails();
+      await userEvent.click(writeHandoffButton());
+      await screen.findByRole('textbox', { name: /Goal/ });
+
+      await userEvent.click(detailsToggle());
+
+      expect(detailsToggle()).toHaveAttribute('aria-disabled', 'true');
+      expect(detailsToggle()).toHaveAttribute('aria-expanded', 'true');
+      expect(writeHandoffButton()).toBeTruthy();
+    });
+
+    it('lets the user collapse the details again once the panel is closed', async () => {
+      await renderHeader(aSession());
+      await openDetails();
+      await userEvent.click(writeHandoffButton());
+      await screen.findByRole('textbox', { name: /Goal/ });
+      await userEvent.click(detailsToggle());
+      await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+      await vi.waitFor(() => expect(panel()).toBeNull());
+
+      await userEvent.click(detailsToggle());
+
+      expect(detailsToggle()).toHaveAttribute('aria-expanded', 'false');
+      expect(detailsToggle()).not.toHaveAttribute('aria-disabled', 'true');
+    });
+
+    it('gives focus back to the button on Cancel after an attempt to collapse the details', async () => {
+      await renderHeader(aSession());
+      await openDetails();
+      await userEvent.click(writeHandoffButton());
+      await screen.findByRole('textbox', { name: /Goal/ });
+      await userEvent.click(detailsToggle());
+
+      await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+      await vi.waitFor(() => expect(document.activeElement).toBe(writeHandoffButton()));
+    });
+  });
+
   describe('when the session shown changes', () => {
     it('drops the open panel instead of showing the preview of the other session', async () => {
       const { session } = await renderHeader(aSession({ id: 's1' }));

@@ -54,10 +54,15 @@ import { readRememberedHeaderChoice, rememberHeaderChoice } from './session-head
           data-testid="session-header-toggle"
           [attr.aria-expanded]="isOpen()"
           [attr.aria-controls]="detailsId()"
+          [attr.aria-disabled]="isHandoffOpen() ? 'true' : null"
+          [attr.aria-describedby]="isHandoffOpen() ? detailsLockedReasonId : null"
           (click)="toggleDetails()"
         >
           <span aria-hidden="true">{{ isOpen() ? '▴' : '▾' }}</span> Details
         </button>
+        @if (isHandoffOpen()) {
+          <span class="visually-hidden" [id]="detailsLockedReasonId">Details stay open while the handoff panel is open.</span>
+        }
         <span class="spacer"></span>
         <of-session-actions
           [sessionId]="session().id"
@@ -128,6 +133,8 @@ import { readRememberedHeaderChoice, rememberHeaderChoice } from './session-head
       height: 1.5rem; padding: 0 .5rem; border: 1px solid var(--line2); border-radius: .375rem;
       background: transparent; color: var(--fg); font-family: var(--sans); font-size: .6875rem; cursor: pointer;
     }
+    .details-toggle[aria-disabled='true'] { opacity: .6; cursor: default; }
+    .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
     .details-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
   `,
 })
@@ -155,8 +162,8 @@ export class SessionHeaderComponent {
     source: () => this.session().id,
     computation: readRememberedHeaderChoice,
   });
-  /** The user's choice wins; without one, the header is open exactly while something needs attention. */
-  protected readonly isOpen = computed(() => this.userChoice() ?? this.needsAttention());
+  /** The user's choice wins; without one, the header is open exactly while something needs attention. An open handoff panel keeps it open so its button stays reachable. */
+  protected readonly isOpen = computed(() => this.isHandoffOpen() || (this.userChoice() ?? this.needsAttention()));
   private lastSeenAttention: { sessionId: string; needsAttention: boolean } | null = null;
 
   constructor() {
@@ -176,6 +183,7 @@ export class SessionHeaderComponent {
     });
   }
 
+  protected readonly detailsLockedReasonId = 'session-header-details-locked-reason';
   private readonly sessionId = computed(() => this.session().id);
   protected readonly isHandoffOpen = signal(false);
   protected readonly handoffPanelId = computed(() => `session-handoff-panel-${this.sessionId()}`);
@@ -193,6 +201,7 @@ export class SessionHeaderComponent {
   }
 
   protected toggleDetails(): void {
+    if (this.isHandoffOpen()) return;
     const open = !this.isOpen();
     this.userChoice.set(open);
     rememberHeaderChoice(this.session().id, open);
