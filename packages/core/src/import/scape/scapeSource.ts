@@ -32,11 +32,12 @@ export const cellKeyOf = (columnId: string) => `${CELL_KEY_PREFIX}${withoutHyphe
  * of a store come from the same moment.
  */
 export class ScapeSource {
-  private readonly scratchDir = mkdtempSync(join(tmpdir(), 'openfleet-scape-snapshot-'));
+  private readonly scratchDir: string;
   private readonly notesDb: DatabaseSync;
   private readonly datastoreDbs = new Map<string, DatabaseSync | null>();
 
-  constructor(private readonly scapeDir: string) {
+  constructor(private readonly scapeDir: string, scratchRoot: string = tmpdir()) {
+    this.scratchDir = mkdtempSync(join(scratchRoot, 'openfleet-scape-snapshot-'));
     const notesPath = join(scapeDir, NOTES_DATABASE_NAME);
     if (!existsSync(notesPath)) {
       this.close();

@@ -1,10 +1,10 @@
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { backUpBeforeMigrating } from '../../db/backup.js';
 import { openDatabase } from '../../db/database.js';
 import { latestShippedMigration } from '../../db/migrate.js';
+import { inTransaction } from '../../db/transaction.js';
 import { ScapeImportError } from './scapeImportError.js';
 import { snapshotSqliteDatabase } from './sqliteSnapshot.js';
 
@@ -35,6 +35,8 @@ export interface TargetDatabase {
  * SQLite refuses an exclusive lock on a WAL database while another connection is open on it, so a
  * daemon (or any process) using the database is detected without a lock file or a port.
  */
+const isLockedDatabaseError = (error: unknown) => /database (table )?is locked|busy/i.test((error as Error).message);
+
 function assertNoOtherProcessHolds(databasePath: string): void {
   if (!existsSync(databasePath)) return;
   const probe = new DatabaseSync(databasePath);
@@ -43,6 +45,7 @@ function assertNoOtherProcessHolds(databasePath: string): void {
     probe.prepare('SELECT count(*) FROM sqlite_master').get();
     probe.exec('BEGIN IMMEDIATE; ROLLBACK');
   } catch (cause) {
+    if (!isLockedDatabaseError(cause)) throw cause;
     throw new ScapeImportError({ code: 'DAEMON_RUNNING', message: `another process holds ${databasePath} (is the OpenFleet daemon running?): quit it and run the import again`, cause });
   } finally {
     probe.close();
@@ -70,13 +73,18 @@ export function backUpCommittedState(input: { home: string }): void {
 }
 
 /** Opens a throw-away snapshot of the home's database (or a fresh one) so a dry run computes real outcomes without touching the home. */
-export function openDryRunTarget(home: string): TargetDatabase {
-  const scratchDir = mkdtempSync(join(tmpdir(), 'openfleet-import-dry-run-'));
-  const databasePath = join(home, DATABASE_FILE_NAME);
+export function openDryRunTarget(input: { home: string; scratchRoot: string }): TargetDatabase {
+  const scratchDir = mkdtempSync(join(input.scratchRoot, 'openfleet-import-dry-run-'));
+  const databasePath = join(input.home, DATABASE_FILE_NAME);
   const scratchPath = join(scratchDir, DATABASE_FILE_NAME);
-  if (existsSync(databasePath)) snapshotSqliteDatabase({ sourcePath: databasePath, targetPath: scratchPath });
-  const db = openDatabase(scratchPath);
-  return { db, dispose: () => { db.close(); rmSync(scratchDir, { recursive: true, force: true }); } };
+  try {
+    if (existsSync(databasePath)) snapshotSqliteDatabase({ sourcePath: databasePath, targetPath: scratchPath });
+    const db = openDatabase(scratchPath);
+    return { db, dispose: () => { db.close(); rmSync(scratchDir, { recursive: true, force: true }); } };
+  } catch (error) {
+    rmSync(scratchDir, { recursive: true, force: true });
+    throw error;
+  }
 }
 
 /** Inserts the record, or compares it with the stored one and lets the policy decide what a difference means. */
@@ -100,6 +108,12 @@ function insertRecord(db: DatabaseSync, input: { table: string; id: string; reco
   if (!mayInsert) return 'conflict';
   const columns = Object.keys(input.record);
   const placeholders = ['?', ...columns.map(() => '?')].join(', ');
-  db.prepare(`INSERT INTO ${input.table} (id, ${columns.join(', ')}) VALUES (${placeholders})`).run(input.id, ...Object.values(input.record));
+  try {
+    inTransaction(db, 'importScapeInsert', () => db.prepare(`INSERT INTO ${input.table} (id, ${columns.join(', ')}) VALUES (${placeholders})`).run(input.id, ...Object.values(input.record)));
+  } catch (error) {
+    const isNameTakenInOpenFleet = /UNIQUE constraint failed/i.test((error as Error).message);
+    if (isNameTakenInOpenFleet) return 'conflict';
+    throw error;
+  }
   return 'written';
 }

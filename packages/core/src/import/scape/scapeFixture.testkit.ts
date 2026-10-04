@@ -1,7 +1,8 @@
-import { mkdirSync, mkdtempSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { afterEach } from 'vitest';
 
 export const CCM_PROJECT_ID = 'AAAA0001-0000-0000-0000-000000000001';
 export const OPENFLEET_PROJECT_ID = 'BBBB0002-0000-0000-0000-000000000002';
@@ -140,9 +141,17 @@ export const editScapeDatastore = (fixture: ScapeFixture, work: (db: DatabaseSyn
 export const scapeBacklogTable = storeTable(BACKLOG_STORE_ID);
 export const scapeTitleCellKey = columnKey(TITLE_COLUMN_ID);
 
-/** Builds a synthetic Scape home (notes.sqlite + datastores/*.sqlite) in a fresh temp dir; holds no real Scape content. */
+const createdWorkDirs: string[] = [];
+
+// Registered when a test file imports this kit: every fixture a test builds is removed after that test.
+afterEach(() => {
+  createdWorkDirs.splice(0).forEach((workDir) => rmSync(workDir, { recursive: true, force: true }));
+});
+
+/** Builds a synthetic Scape home (notes.sqlite + datastores/*.sqlite) in a fresh temp dir, removed after the test; holds no real Scape content. */
 export function buildScapeFixture(): ScapeFixture {
   const workDir = mkdtempSync(join(tmpdir(), 'openfleet-scape-import-'));
+  createdWorkDirs.push(workDir);
   const scapeDir = join(workDir, 'scape');
   mkdirSync(join(scapeDir, 'datastores'), { recursive: true });
 

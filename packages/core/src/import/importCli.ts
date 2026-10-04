@@ -17,7 +17,26 @@ const FLAGS = {
   project: { type: 'string' },
   'scape-dir': { type: 'string' },
   'report-dir': { type: 'string' },
+  'allow-reimport': { type: 'boolean' },
+  help: { type: 'boolean' },
 } as const;
+
+const REIMPORT_WARNING =
+  'This importer is made for a FIRST import onto a virgin OpenFleet database. A re-import is NOT yet safe against OpenFleet-side deletions or renames, nor against Scape-side column or option changes (planned: MIG-01B).';
+
+const USAGE = [
+  'usage: import scape --home <OPENFLEET_HOME> [--dry-run] [--project <name>] [--scape-dir <dir>] [--report-dir <dir>] [--allow-reimport]',
+  '',
+  '  --home            the OpenFleet home holding openfleet.db (defaults to $OPENFLEET_HOME)',
+  '  --dry-run         prints what would be written; writes nothing',
+  '  --project         imports only the Scape project of that name',
+  '  --scape-dir       the Scape home to read (default ~/.scape; only snapshots of it are opened)',
+  '  --report-dir      where import-report.md goes (default: the home)',
+  '  --allow-reimport  runs a real import although the target already holds imported projects',
+  '',
+  REIMPORT_WARNING,
+  '',
+].join('\n');
 
 const invalidArguments = (message: string) => new ScapeImportError({ code: 'INVALID_ARGUMENTS', message });
 
@@ -29,31 +48,42 @@ function parseFlags(argv: string[]) {
   }
 }
 
-function parseImportOptions(argv: string[], environment: CliEnvironment): ImportScapeOptions {
-  const { values, positionals } = parseFlags(argv);
-  if (positionals.join(' ') !== 'scape') throw invalidArguments('usage: import scape --home <OPENFLEET_HOME> [--dry-run] [--project <name>] [--scape-dir <dir>] [--report-dir <dir>]');
+type ParsedFlags = ReturnType<typeof parseFlags>;
+
+function importOptionsFrom({ values, positionals }: ParsedFlags, environment: CliEnvironment) {
+  if (positionals.join(' ') !== 'scape') throw invalidArguments(USAGE);
   const home = values.home ?? environment.env.OPENFLEET_HOME;
   if (home === undefined || home === '') throw invalidArguments('--home <OPENFLEET_HOME> is required (or set OPENFLEET_HOME)');
-  return {
+  const allowsReimport = values['allow-reimport'] ?? false;
+  const options: ImportScapeOptions = {
     home,
     scapeDir: values['scape-dir'] ?? join(environment.homeDirectory, '.scape'),
     superpowersRoot: join(environment.homeDirectory, 'Documents', 'superpowers'),
     dryRun: values['dry-run'] ?? false,
     projectName: values.project,
     reportDir: values['report-dir'],
+    refuseReimport: !allowsReimport,
   };
+  return { options, allowsReimport };
 }
+
+const oneLine = (text: string) => text.replace(/\s+/g, ' ').trim();
 
 /** Runs `import scape` with the given arguments and never exits, so the entry point owns the process. Import failures come back as an exit code and their code; a bug propagates. */
 export function runImportCli(argv: string[], environment: CliEnvironment): CliResult {
   try {
-    const options = parseImportOptions(argv, environment);
+    const flags = parseFlags(argv);
+    if (flags.values.help) return { exitCode: EXIT_OK, output: USAGE };
+    const { options, allowsReimport } = importOptionsFrom(flags, environment);
     const report = importScape(options);
-    const output = report.dryRun ? renderImportReport(report) : `Import written. Report: ${report.reportPath}\n`;
-    return { exitCode: EXIT_OK, output };
+    const warning = allowsReimport && !report.dryRun ? `WARNING: ${REIMPORT_WARNING}\n` : '';
+    const summary = report.dryRun ? renderImportReport(report) : `Import written. Report: ${report.reportPath}\n`;
+    return { exitCode: EXIT_OK, output: `${warning}${summary}` };
   } catch (error) {
     if (!(error instanceof ScapeImportError)) throw error;
     const exitCode = error.code === 'INVALID_ARGUMENTS' ? EXIT_INVALID_ARGUMENTS : EXIT_IMPORT_FAILED;
-    return { exitCode, output: `${error.code}: ${error.message}\n` };
+    const message = error.code === 'INVALID_ARGUMENTS' ? error.message : oneLine(error.message);
+    const hint = error.code === 'ALREADY_IMPORTED' ? ' Pass --allow-reimport to run it anyway.' : '';
+    return { exitCode, output: `${error.code}: ${message}${hint}\n` };
   }
 }

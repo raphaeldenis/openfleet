@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync } from 'node:fs';
+import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -25,7 +25,10 @@ describe('snapshotSqliteDatabase', () => {
     writer.exec('PRAGMA journal_mode = WAL; CREATE TABLE t (x); INSERT INTO t VALUES (1), (2);');
   });
 
-  afterEach(() => writer?.close());
+  afterEach(() => {
+    writer?.close();
+    rmSync(workDir, { recursive: true, force: true });
+  });
 
   it('holds the committed rows that only live in the WAL of a database a writer keeps open', () => {
     const targetPath = join(workDir, 'copy.db');

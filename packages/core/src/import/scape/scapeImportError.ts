@@ -5,6 +5,7 @@ export const SCAPE_IMPORT_ERROR_CODES = [
   'UNKNOWN_PROJECT',
   'IMPORT_WRITE_FAILED',
   'DAEMON_RUNNING',
+  'ALREADY_IMPORTED',
 ] as const;
 
 export type ScapeImportErrorCode = (typeof SCAPE_IMPORT_ERROR_CODES)[number];

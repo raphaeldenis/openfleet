@@ -31,16 +31,21 @@ function writeEntities<Extra>(input: FamilyInput<Extra>): Map<string, UpsertOutc
 const hasUnconvertedTypes = (extra: { unconvertedTypes: string[] }) => extra.unconvertedTypes.length > 0;
 const wasWrittenByTheImporter = (stored: RecordValues) => stored.author === IMPORT_AUTHOR;
 
+// The prefix is compared by position, so the match is case sensitive (LIKE would ignore case).
+const NOT_WRITTEN_BY_THE_IMPORTER = `substr(actor_label, 1, ${ACTOR_LABEL_PREFIX.length}) <> ?`;
+
 function hasOpenFleetSideVersion(db: DatabaseSync, noteId: string): boolean {
   return db.prepare('SELECT 1 FROM note_versions WHERE note_id = ? AND author <> ? LIMIT 1').get(noteId, IMPORT_AUTHOR) !== undefined;
 }
 
 function hasHistoryFromOpenFleet(db: DatabaseSync, rowId: string): boolean {
-  return db.prepare(`SELECT 1 FROM ds_row_history WHERE row_id = ? AND actor_label NOT LIKE ? LIMIT 1`).get(rowId, `${ACTOR_LABEL_PREFIX}%`) !== undefined;
+  return db.prepare(`SELECT 1 FROM ds_row_history WHERE row_id = ? AND ${NOT_WRITTEN_BY_THE_IMPORTER} LIMIT 1`).get(rowId, ACTOR_LABEL_PREFIX) !== undefined;
 }
 
 function hasRowDeletedInOpenFleet(db: DatabaseSync, rowId: string): boolean {
-  const deletion = db.prepare(`SELECT 1 FROM ds_row_history WHERE row_id = ? AND actor_label NOT LIKE ? AND json_extract(change_json, '$.kind') = 'delete' LIMIT 1`).get(rowId, `${ACTOR_LABEL_PREFIX}%`);
+  const deletion = db
+    .prepare(`SELECT 1 FROM ds_row_history WHERE row_id = ? AND ${NOT_WRITTEN_BY_THE_IMPORTER} AND json_extract(change_json, '$.kind') = 'delete' LIMIT 1`)
+    .get(rowId, ACTOR_LABEL_PREFIX);
   return deletion !== undefined;
 }
 
@@ -86,32 +91,57 @@ function writeNotes(db: DatabaseSync, plan: ImportPlan, report: ImportReport): v
   }
 }
 
-function writeDataStoreDefinitions(db: DatabaseSync, plan: ImportPlan, report: ImportReport): void {
+const isStored = (db: DatabaseSync, table: string, id: string) => db.prepare(`SELECT 1 FROM ${table} WHERE id = ?`).get(id) !== undefined;
+
+/** The stores whose own record or one of whose columns could not be created because OpenFleet holds the name: nothing may hang on them. */
+function storesBlockedByANameCollision(db: DatabaseSync, plan: ImportPlan): Set<string> {
+  const missingStores = plan.dataStores.filter((store) => !isStored(db, 'data_stores', store.id)).map((store) => store.id);
+  const storesMissingAColumn = plan.columns.filter((column) => !isStored(db, 'ds_columns', column.id)).map((column) => String(column.record.store_id));
+  return new Set([...missingStores, ...storesMissingAColumn]);
+}
+
+function writeDataStoreDefinitions(db: DatabaseSync, plan: ImportPlan, report: ImportReport): Set<string> {
   writeEntities({
     db, entity: 'dataStores', table: 'data_stores', planned: plan.dataStores, report,
     policyOf: (store) => ({ decideOnDifference: (stored) => (String(stored.updated_at) <= String(store.record.updated_at) ? 'overwrite' : 'conflict') }),
   });
-  writeEntities({ db, entity: 'columns', table: 'ds_columns', planned: plan.columns, report, policyOf: () => REPORT_DIFFERENCE_AS_CONFLICT });
-  writeEntities({ db, entity: 'views', table: 'ds_views', planned: plan.views, report, policyOf: () => REPORT_DIFFERENCE_AS_CONFLICT, isNotConverted: (extra) => extra.hasDroppedFields });
+  const storesWithoutRecord = new Set(plan.dataStores.filter((store) => !isStored(db, 'data_stores', store.id)).map((store) => store.id));
+  const onlyWhereTheStoreExists = (planned: PlannedRecord): WritePolicy => ({
+    ...REPORT_DIFFERENCE_AS_CONFLICT,
+    canInsert: () => !storesWithoutRecord.has(String(planned.record.store_id)),
+  });
+  writeEntities({ db, entity: 'columns', table: 'ds_columns', planned: plan.columns, report, policyOf: onlyWhereTheStoreExists });
+  writeEntities({ db, entity: 'views', table: 'ds_views', planned: plan.views, report, policyOf: onlyWhereTheStoreExists, isNotConverted: (extra) => extra.hasDroppedFields });
   report.counts.views.expected += plan.skippedViewCount;
   report.counts.views.notConverted += plan.skippedViewCount;
+  return storesBlockedByANameCollision(db, plan);
 }
 
-function writeRows(db: DatabaseSync, plan: ImportPlan, report: ImportReport): void {
-  writeEntities({
+function writeRows(db: DatabaseSync, plan: ImportPlan, report: ImportReport, blockedStores: Set<string>): Map<string, UpsertOutcome> {
+  return writeEntities({
     db, entity: 'rows', table: 'ds_rows', planned: plan.rows, report, isNotConverted: (extra) => extra.hasStaleSelectValue,
-    policyOf: (row) => ({
-      canInsert: () => !hasRowDeletedInOpenFleet(db, row.id),
-      decideOnDifference: (stored) => {
-        const isNewerInOpenFleet = String(stored.updated_at) > String(row.record.updated_at);
-        return isNewerInOpenFleet || hasHistoryFromOpenFleet(db, row.id) ? 'conflict' : 'overwrite';
-      },
-    }),
+    policyOf: (row) => {
+      const isBlocked = blockedStores.has(String(row.record.store_id));
+      return {
+        canInsert: () => !isBlocked && !hasRowDeletedInOpenFleet(db, row.id),
+        decideOnDifference: (stored) => {
+          const isNewerInOpenFleet = String(stored.updated_at) > String(row.record.updated_at);
+          return isBlocked || isNewerInOpenFleet || hasHistoryFromOpenFleet(db, row.id) ? 'conflict' : 'overwrite';
+        },
+      };
+    },
   });
 }
 
-function writeHistory(db: DatabaseSync, plan: ImportPlan, report: ImportReport): void {
-  writeEntities({ db, entity: 'history', table: 'ds_row_history', planned: plan.history, report, policyOf: () => KEEP_STORED_RECORD });
+function writeHistory(db: DatabaseSync, plan: ImportPlan, report: ImportReport, input: { blockedStores: Set<string>; rowOutcomes: Map<string, UpsertOutcome> }): void {
+  writeEntities({
+    db, entity: 'history', table: 'ds_row_history', planned: plan.history, report,
+    policyOf: (entry) => {
+      const isOfABlockedStore = input.blockedStores.has(String(entry.record.store_id));
+      const isOfARowLeftAlone = input.rowOutcomes.get(String(entry.record.row_id)) === 'conflict';
+      return { ...KEEP_STORED_RECORD, canInsert: () => !isOfABlockedStore && !isOfARowLeftAlone };
+    },
+  });
   report.counts.history.expected += plan.skippedHistoryCount;
   report.counts.history.notConverted += plan.skippedHistoryCount;
 }
@@ -121,9 +151,9 @@ export function writePlan(db: DatabaseSync, plan: ImportPlan, report: ImportRepo
   inTransaction(db, 'importScape', () => {
     inTransaction(db, 'importScapeProjects', () => writeProjects(db, plan, report));
     inTransaction(db, 'importScapeNotes', () => writeNotes(db, plan, report));
-    inTransaction(db, 'importScapeDataStores', () => writeDataStoreDefinitions(db, plan, report));
-    inTransaction(db, 'importScapeRows', () => writeRows(db, plan, report));
-    inTransaction(db, 'importScapeHistory', () => writeHistory(db, plan, report));
+    const blockedStores = inTransaction(db, 'importScapeDataStores', () => writeDataStoreDefinitions(db, plan, report));
+    const rowOutcomes = inTransaction(db, 'importScapeRows', () => writeRows(db, plan, report, blockedStores));
+    inTransaction(db, 'importScapeHistory', () => writeHistory(db, plan, report, { blockedStores, rowOutcomes }));
     beforeCommit();
   });
 }
