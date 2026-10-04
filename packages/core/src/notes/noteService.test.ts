@@ -430,7 +430,7 @@ describe('NoteService move', () => {
     const { service } = setup();
     const note = service.create({ projectId: 'p1', title: 'Title', bodyMd: 'body', author: AUTHOR });
 
-    const moved = service.move(note.id, 'plans');
+    const moved = service.move(note.id, 'plans', { author: AUTHOR });
 
     expect(moved.folder).toBe('plans');
   });
@@ -439,7 +439,7 @@ describe('NoteService move', () => {
     const { service } = setup();
     const note = service.create({ projectId: 'p1', title: 'Title', bodyMd: 'body', folder: 'specs', author: AUTHOR });
 
-    const moved = service.move(note.id, null);
+    const moved = service.move(note.id, null, { author: AUTHOR });
 
     expect(moved.folder).toBeNull();
   });
@@ -447,17 +447,66 @@ describe('NoteService move', () => {
   it('throws NoteNotFoundError for an unknown note', () => {
     const { service } = setup();
 
-    expect(() => service.move('nope', 'plans')).toThrow(NoteNotFoundError);
+    expect(() => service.move('nope', 'plans', { author: AUTHOR })).toThrow(NoteNotFoundError);
   });
 
-  it('writes no version row for a move', () => {
-    const { service, repo } = setup();
+  it('bumps the revision and the update time, and keeps the body', () => {
+    const { service } = setup();
     const note = service.create({ projectId: 'p1', title: 'Title', bodyMd: 'body', author: AUTHOR });
-    const versionsBefore = repo.listVersions(note.id).length;
 
-    service.move(note.id, 'plans');
+    const moved = service.move(note.id, 'plans', { author: AUTHOR });
 
-    expect(repo.listVersions(note.id)).toHaveLength(versionsBefore);
+    expect(moved).toMatchObject({ rev: note.rev + 1, bodyMd: 'body' });
+    expect(moved.updatedAt).not.toBe(note.updatedAt);
+  });
+
+  it('records one version row for the new revision, with the mover as author', () => {
+    const { service, repo } = setup();
+    const note = service.create({ projectId: 'p1', title: 'Title', bodyMd: 'body', author: 'creator' });
+
+    service.move(note.id, 'plans', { author: 'mover' });
+
+    const versions = repo.listVersions(note.id);
+    expect(versions).toHaveLength(2);
+    expect(versions[1]).toMatchObject({ rev: 2, bodyMd: 'body', author: 'mover' });
+  });
+
+  it('moves under the current revision when the caller gives no expectedRev', () => {
+    const { service } = setup();
+    const note = service.create({ projectId: 'p1', title: 'Title', bodyMd: 'v1', author: AUTHOR });
+    service.update(note.id, { bodyMd: 'v2', expectedRev: note.rev, author: AUTHOR });
+
+    const moved = service.move(note.id, 'plans', { author: AUTHOR });
+
+    expect(moved).toMatchObject({ folder: 'plans', rev: 3 });
+  });
+
+  it('moves when expectedRev matches the current revision', () => {
+    const { service } = setup();
+    const note = service.create({ projectId: 'p1', title: 'Title', bodyMd: 'body', author: AUTHOR });
+
+    const moved = service.move(note.id, 'plans', { author: AUTHOR, expectedRev: note.rev });
+
+    expect(moved).toMatchObject({ folder: 'plans', rev: 2 });
+  });
+
+  it('refuses a stale expectedRev with the current revision, and changes nothing', () => {
+    const { service, repo } = setup();
+    const note = service.create({ projectId: 'p1', title: 'Title', bodyMd: 'v1', author: AUTHOR });
+    service.update(note.id, { bodyMd: 'v2', expectedRev: note.rev, author: AUTHOR });
+
+    expect(() => service.move(note.id, 'plans', { author: AUTHOR, expectedRev: note.rev })).toThrow(StaleRevisionError);
+
+    expect(repo.get(note.id)).toMatchObject({ folder: null, rev: 2 });
+    expect(repo.listVersions(note.id)).toHaveLength(2);
+  });
+
+  it('makes a concurrent editor holding the pre-move revision stale', () => {
+    const { service } = setup();
+    const note = service.create({ projectId: 'p1', title: 'Title', bodyMd: 'v1', author: AUTHOR });
+    service.move(note.id, 'plans', { author: AUTHOR });
+
+    expect(() => service.update(note.id, { bodyMd: 'v2', expectedRev: note.rev, author: AUTHOR })).toThrow(StaleRevisionError);
   });
 });
 
@@ -600,9 +649,10 @@ describe('NoteService refuses plain writes on a file-backed note', () => {
     const { service, repo } = setup();
     const note = service.createFileBacked({ projectId: 'p1', title: 'Title', bodyMd: 'body', filePath: '/docs/a.md', sourceHash: 'h1', author: AUTHOR });
 
-    expect(() => service.move(note.id, 'plans')).toThrow(FileBackedNoteError);
+    expect(() => service.move(note.id, 'plans', { author: AUTHOR })).toThrow(FileBackedNoteError);
 
-    expect(repo.get(note.id)).toMatchObject({ folder: null });
+    expect(repo.get(note.id)).toMatchObject({ folder: null, rev: 1 });
+    expect(repo.listVersions(note.id)).toHaveLength(1);
   });
 
   it('does not affect updateFileBacked, which still writes through the file-backed CAS path', () => {

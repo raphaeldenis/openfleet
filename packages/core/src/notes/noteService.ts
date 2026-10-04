@@ -95,6 +95,11 @@ export interface RenameNoteInput {
   author: string;
 }
 
+export interface MoveNoteInput {
+  expectedRev?: number;
+  author: string;
+}
+
 export interface GetExpandedOptions {
   viewerProjectId: string;
 }
@@ -229,11 +234,14 @@ export class NoteService {
       this.repo.updateBodyAndTitle(id, { bodyMd: input.bodyMd, title: input.title, expectedRev: input.expectedRev, updatedAt }));
   }
 
-  move(id: string, folder: NoteFolder | null): Note {
+  /** A move is a revisioned write: without `expectedRev` it applies to the revision current inside the transaction. */
+  move(id: string, folder: NoteFolder | null, input: MoveNoteInput): Note {
     this.assertNotFileBacked(id);
-    const wasMoved = this.repo.move(id, folder);
-    if (!wasMoved) throw new NoteNotFoundError(id);
-    return this.repo.get(id)!;
+    return this.inTransaction(() => {
+      const expectedRev = input.expectedRev ?? this.require(id).rev;
+      return this.writeThroughCas(id, input.author, (updatedAt) =>
+        this.repo.move(id, { folder, expectedRev, updatedAt }));
+    });
   }
 
   /** Runs `work` in one transaction: a throw inside it rolls back every note write it made. */
