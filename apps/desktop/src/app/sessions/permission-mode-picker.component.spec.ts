@@ -219,6 +219,14 @@ describe('PermissionModePickerComponent', () => {
       );
     });
 
+    it('draws "Turn off checks" with the shared danger style', async () => {
+      await renderPicker();
+
+      await askForBypass();
+
+      expect(screen.getByRole('button', { name: 'Turn off checks' })).toHaveClass('of-btn', 'of-btn--danger');
+    });
+
     it('puts focus on "Keep asking" when it opens', async () => {
       await renderPicker();
 

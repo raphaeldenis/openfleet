@@ -134,15 +134,15 @@ const RUNNING_STATES = new Set(['generating', 'starting']);
     .section-title .mono { margin-left: auto; font-family: var(--mono); font-weight: 400; letter-spacing: 0; color: var(--mut); }
     .helm-list { flex-grow: 1.4; flex-shrink: 1; flex-basis: 0; min-height: 0; list-style: none; margin: 0; padding: .375rem; display: flex; flex-direction: column; gap: 1px; overflow-y: auto; }
     .nav-item { display: flex; align-items: center; gap: .5rem; height: 1.75rem; padding: 0 .5rem 0 .375rem; border-left: 2px solid transparent; border-radius: .375rem; color: var(--fg); }
-    .nav-badge { flex: none; min-width: 1rem; height: 1rem; padding: 0 .25rem; border-radius: .5rem; background: var(--accent); color: var(--on-accent); font-size: .625rem; font-weight: 600; display: flex; align-items: center; justify-content: center; }
+    .nav-badge { flex: none; min-width: 1rem; height: 1rem; padding: 0 .25rem; border-radius: .5rem; background: var(--accent); color: var(--on-accent); font-size: .6875rem; font-weight: 600; display: flex; align-items: center; justify-content: center; }
     .nav-issue-dot { flex: none; width: .5rem; height: .5rem; border-radius: 50%; background: var(--state-error); }
     a.nav-item { cursor: pointer; }
     a.nav-item:hover, a.nav-item:focus-visible { background: var(--hover); }
     a.nav-item.active { background: var(--active); border-left-color: var(--accent); font-weight: 500; }
-    .nav-item.disabled { color: var(--faint); }
+    .nav-item.disabled { color: var(--mut); }
     .nav-item .label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .nav-item .glyph { width: 1rem; text-align: center; font-family: var(--mono); font-size: .75rem; }
-    .nav-item .availability { font-size: .625rem; color: var(--mut); white-space: nowrap; }
+    .nav-item .availability { font-size: .6875rem; color: var(--mut); white-space: nowrap; }
     .main-column { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
     .topbar { height: 2.75rem; flex: none; display: flex; align-items: center; gap: .75rem; padding: 0 .875rem; border-bottom: 1px solid var(--line); background: var(--panel); }
     .brand-mark { font-weight: 600; }

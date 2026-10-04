@@ -189,7 +189,7 @@ const describeCreateFailure = (error: unknown, displayName: string): string => {
     .actions { display: flex; gap: .5rem }
     .history { position: relative; width: 20rem; flex: none; border-left: 1px solid var(--line); background: var(--panel); overflow: auto; display: flex; flex-direction: column }
     .history-error { padding: 2.5rem .875rem .875rem; font-size: .75rem; color: var(--state-error) }
-    .close { position: absolute; top: .5rem; right: .5rem; border: 0; background: transparent; color: var(--faint); cursor: pointer }
+    .close { position: absolute; top: .5rem; right: .5rem; border: 0; background: transparent; color: var(--mut); cursor: pointer }
     .banner { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; margin-bottom: .75rem; padding: .5rem .75rem; border: 1px solid var(--line); border-radius: .5rem; background: var(--panel); font-size: .75rem }
   `,
 })

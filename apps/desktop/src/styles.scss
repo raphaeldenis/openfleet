@@ -14,6 +14,8 @@
   --state-generating: oklch(0.5 0.07 240); --state-thinking: oklch(0.5 0.07 240);
   --state-waiting-permission: oklch(0.62 0.18 45); --state-waiting-input: oklch(0.62 0.18 45);
   --state-idle: oklch(0.52 0.11 145); --state-error: oklch(0.54 0.17 28); --state-closed: #85837d;
+  // Fills behind a label (design tokens --s-err-fill / --s-perm-fill / --on-state, named --state-* here).
+  --state-error-fill: oklch(0.48 0.17 28); --state-permission-fill: oklch(0.5 0.15 50); --on-state: #fff;
   --shadow: 0 10px 30px rgba(30, 28, 20, .16);
 }
 
@@ -26,6 +28,7 @@
   --state-generating: oklch(0.74 0.07 240); --state-thinking: oklch(0.74 0.07 240);
   --state-waiting-permission: oklch(0.72 0.16 50); --state-waiting-input: oklch(0.72 0.16 50);
   --state-idle: oklch(0.76 0.12 145); --state-error: oklch(0.7 0.15 28); --state-closed: #8f8c84;
+  --state-error-fill: oklch(0.76 0.14 28); --state-permission-fill: oklch(0.78 0.14 60); --on-state: #141413;
   --shadow: 0 12px 40px rgba(0, 0, 0, .5);
 }
 
@@ -66,8 +69,8 @@ a.of-btn { display: inline-flex; align-items: center; text-decoration: none; }
 .of-btn--primary { border: 1px solid var(--accent); background: var(--accent); color: var(--on-accent); }
 .of-btn--secondary { border: 1px solid var(--line-2); background: var(--panel); color: var(--fg); }
 .of-btn--link { border: 0; background: transparent; color: var(--accent); }
-.of-btn--danger { border: 1px solid var(--state-error); background: var(--state-error); color: var(--on-accent); }
-.of-btn:disabled, .of-btn[aria-disabled='true'] { border-color: var(--line); background: var(--sunk); color: var(--faint); cursor: not-allowed; }
+.of-btn--danger { border: 1px solid var(--state-error-fill); background: var(--state-error-fill); color: var(--on-state); }
+.of-btn:disabled, .of-btn[aria-disabled='true'] { border-color: var(--line); background: var(--sunk); color: var(--mut); cursor: not-allowed; }
 .of-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .of-focus-ring:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
