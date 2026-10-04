@@ -1,4 +1,3 @@
-import { NgTemplateOutlet } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, effect, inject, input, signal, untracked } from '@angular/core';
 import { EarlyEscapeHintService } from '../core/early-escape-hint.service';
 import { copyFor } from '../core/error-copy';
@@ -7,7 +6,7 @@ import { FleetEventsService } from '../core/fleet-events.service';
 import { SessionRequestsService } from '../core/session-requests';
 import { ComposerComponent } from './composer.component';
 import { PermissionGateCardComponent } from './permission-gate-card.component';
-import { type ClosedStripCopy, closedStripCopyFor, resumeFailureCopyFor } from './session-close-status';
+import { type LifecycleStrip, closedSessionPresentationFor } from './closed-session-presentation';
 import { SessionHeaderComponent } from './session-header.component';
 import { TerminalComponent } from './terminal.component';
 import { RightPanelSessionToggleComponent } from '../shell/right-panel.component';
@@ -15,25 +14,15 @@ import { StatePanelComponent } from '../working-state/state-panel.component';
 
 const REOPEN_FRESH_UNAVAILABLE_REASON = 'Not available yet — the daemon cannot relaunch a session without its previous conversation.';
 
-type LifecycleBanner = { kind: 'resuming' } | { kind: 'resume_failed'; reason: string };
-
-type ClosedStrip = ClosedStripCopy & { role: 'alert' | null };
+type LifecycleBanner = { kind: 'resuming' } | { kind: 'strip'; strip: LifecycleStrip; role: 'alert' | null };
 
 @Component({
   selector: 'of-session-view',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgTemplateOutlet, SessionHeaderComponent, StatePanelComponent, TerminalComponent, PermissionGateCardComponent, ComposerComponent, RightPanelSessionToggleComponent],
+  imports: [SessionHeaderComponent, StatePanelComponent, TerminalComponent, PermissionGateCardComponent, ComposerComponent, RightPanelSessionToggleComponent],
   template: `
     @if (session(); as s) {
       <div class="session-view" data-testid="session-view">
-        <ng-template #reopenFreshUnavailable let-testId let-isCompact="isCompact">
-          <span class="reopen-fresh">
-            <button type="button" class="of-btn of-btn--secondary" [class.of-btn--compact]="isCompact" [attr.data-testid]="testId" aria-disabled="true" [attr.aria-describedby]="testId + '-reason'">
-              Reopen fresh
-            </button>
-            <span class="reopen-fresh-reason" [id]="testId + '-reason'">{{ reopenFreshUnavailableReason }}</span>
-          </span>
-        </ng-template>
         <of-session-header [session]="s" />
         <of-state-panel [session]="s" />
         <div class="lifecycle-live-region" data-testid="lifecycle-live-region" aria-live="polite">
@@ -51,12 +40,10 @@ type ClosedStrip = ClosedStripCopy & { role: 'alert' | null };
           }
         </div>
         @if (lifecycleBanner(); as banner) {
-          @if (banner.kind === 'resume_failed') {
-            <div class="lifecycle-banner" data-testid="lifecycle-banner" data-variant="error" role="alert">
-              <span class="lifecycle-title">✕ Resume failed</span>
-              <span class="lifecycle-body" data-testid="resume-error">{{ banner.reason }}</span>
-              <button type="button" class="of-btn of-btn--primary of-btn--compact" data-testid="resume-retry" (click)="resume(s.id)">↻ Retry</button>
-              <ng-container [ngTemplateOutlet]="reopenFreshUnavailable" [ngTemplateOutletContext]="{ $implicit: 'resume-failed-reopen-fresh', isCompact: true }" />
+          @if (banner.kind === 'strip') {
+            <div class="lifecycle-banner" data-testid="lifecycle-banner" [attr.data-variant]="banner.strip.variant" [attr.role]="banner.role">
+              <span class="lifecycle-title">{{ banner.strip.icon }} {{ banner.strip.title }}</span>
+              <span class="lifecycle-body" data-testid="lifecycle-message">{{ banner.strip.message }}</span>
             </div>
           }
         }
@@ -69,25 +56,23 @@ type ClosedStrip = ClosedStripCopy & { role: 'alert' | null };
             <of-permission-gate-card [approval]="approval" />
           }
         </div>
-        @if (s.state === 'closed') {
-          @let strip = closedStrip();
-          <div
-            class="closed-footer"
-            data-testid="session-closed-footer"
-            [class.closed-footer--strip]="!!strip"
-            [attr.data-variant]="strip?.variant ?? null"
-            [attr.role]="strip?.role ?? null"
-          >
-            @if (strip) {
-              <span class="closed-title">{{ strip.title }}</span>
-              <span class="closed-body">{{ strip.description }}</span>
+        @if (closedPresentation(); as closed) {
+          <div class="closed-card" data-testid="session-closed-footer" [attr.data-variant]="closed.cardTone">
+            <span class="closed-title">■ {{ closed.cardTitle }}</span>
+            @if (closed.cardBody) {
+              <span class="closed-body">{{ closed.cardBody }}</span>
             }
-            <button type="button" class="of-btn of-btn--primary" data-testid="resume-session" [disabled]="resuming()" (click)="resume(s.id)">
-              ↻ Resume in worktree
-            </button>
-            @if (strip) {
-              <ng-container [ngTemplateOutlet]="reopenFreshUnavailable" [ngTemplateOutletContext]="{ $implicit: 'reopen-fresh-session' }" />
-            }
+            <span class="closed-actions">
+              <button type="button" class="of-btn of-btn--primary" data-testid="resume-session" [disabled]="resuming()" (click)="resume(s.id)">
+                ↻ Resume in worktree
+              </button>
+              <span class="reopen-fresh">
+                <button type="button" class="of-btn of-btn--secondary" data-testid="reopen-fresh-session" aria-disabled="true" aria-describedby="reopen-fresh-session-reason">
+                  Reopen fresh
+                </button>
+                <span class="reopen-fresh-reason" id="reopen-fresh-session-reason">{{ reopenFreshUnavailableReason }}</span>
+              </span>
+            </span>
           </div>
         } @else {
           <of-composer [sessionId]="s.id" [busy]="s.state === 'generating'" />
@@ -101,15 +86,15 @@ type ClosedStrip = ClosedStripCopy & { role: 'alert' | null };
     .session-view { display: flex; flex-direction: column; height: 100%; min-height: 0; }
     .terminal-area { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: .625rem; padding: .5rem; }
     .terminal-tab-bar { flex: none; display: flex; align-items: center; justify-content: flex-end; padding: .25rem .5rem; background: var(--term-bg); color: var(--term-fg); }
-    .closed-footer { display: flex; align-items: center; justify-content: flex-end; gap: .75rem; margin: 0 1rem 1rem; }
-    .closed-footer--strip {
-      justify-content: flex-start; padding: .75rem 1rem; border: 1px solid var(--line-2); border-radius: .5rem;
-      background: var(--panel); font-size: .8125rem; --closed-color: var(--state-closed);
+    .closed-card {
+      display: flex; align-items: center; gap: .75rem; margin: 0 1rem 1rem; padding: .75rem 1rem;
+      border: 1px solid var(--line-2); border-radius: .5rem; background: var(--panel); font-size: .8125rem; --closed-color: var(--state-closed);
     }
-    .closed-footer--strip[data-variant='error'] { --closed-color: var(--state-error); border-color: color-mix(in oklch, var(--state-error) 55%, transparent); }
+    .closed-card[data-variant='error'] { --closed-color: var(--state-error); border-color: color-mix(in oklch, var(--state-error) 55%, transparent); }
     .closed-title { color: var(--closed-color); font-weight: 600; }
     .closed-body { flex: 1; min-width: 0; color: var(--mut); }
-    .lifecycle-banner .of-btn { flex: none; }
+    .closed-actions { display: flex; align-items: center; gap: .75rem; margin-left: auto; }
+    .closed-card .of-btn { white-space: nowrap; }
     .lifecycle-banner {
       display: flex; align-items: center; gap: .75rem; padding: .5rem 1rem;
       border-bottom: 1px solid var(--line); font-size: .75rem;
@@ -117,17 +102,16 @@ type ClosedStrip = ClosedStripCopy & { role: 'alert' | null };
       background: color-mix(in oklch, var(--lifecycle-color) 10%, var(--panel));
     }
     .lifecycle-banner[data-variant='error'] { --lifecycle-color: var(--state-error); }
+    .lifecycle-banner[data-variant='attention'] { --lifecycle-color: var(--state-waiting-permission); }
     .lifecycle-title { flex: none; color: var(--lifecycle-color); font-weight: 600; font-family: var(--mono); }
-    .lifecycle-body { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .lifecycle-banner[data-variant='hint'] .lifecycle-body { white-space: normal; }
+    .lifecycle-body { flex: 1; min-width: 0; }
     .reopen-fresh { position: relative; display: inline-flex; flex: none; }
     .reopen-fresh-reason {
       position: absolute; right: 0; z-index: 1; width: max-content; max-width: 18rem; padding: .375rem .5rem;
       border: 1px solid var(--line-2); border-radius: .375rem; background: var(--panel); color: var(--mut);
       font-size: .6875rem; font-weight: 400; white-space: normal; visibility: hidden;
     }
-    .closed-footer .reopen-fresh-reason { bottom: calc(100% + .25rem); }
-    .lifecycle-banner .reopen-fresh-reason { top: calc(100% + .25rem); }
+    .closed-card .reopen-fresh-reason { bottom: calc(100% + .25rem); }
     .reopen-fresh:hover .reopen-fresh-reason, .reopen-fresh:focus-within .reopen-fresh-reason { visibility: visible; }
   `,
 })
@@ -148,28 +132,29 @@ export class SessionViewComponent {
   // a session that was already closed when opened is not.
   private readonly watchedOpenSessionId = signal<string | undefined>(undefined);
 
+  protected readonly closedPresentation = computed(() => {
+    const session = this.session();
+    if (!session || session.state !== 'closed') return undefined;
+    const reason = this.events.closeReasonOf(session.id);
+    return closedSessionPresentationFor({ exitCode: session.exitCode, reason, resumeRequestError: this.resumeError() ?? undefined });
+  });
+
   protected readonly lifecycleBanner = computed<LifecycleBanner | undefined>(() => {
     const session = this.session();
     if (!session) return undefined;
     const isReopenRequestInFlight = this.resuming();
     const isClosedSessionRelaunching = session.state === 'starting' && session.closedAt !== undefined;
     if (isReopenRequestInFlight || isClosedSessionRelaunching) return { kind: 'resuming' };
-    if (session.state !== 'closed') return undefined;
-    const reason = this.resumeError() ?? resumeFailureCopyFor(this.events.closeReasonOf(session.id));
-    return reason ? { kind: 'resume_failed', reason } : undefined;
+    const strip = this.closedPresentation()?.strip;
+    if (!strip) return undefined;
+    const isFailureJustSeen = strip.variant === 'error' && this.watchedOpenSessionId() === session.id;
+    const isAnnounced = strip.isResumeFailure || isFailureJustSeen;
+    return { kind: 'strip', strip, role: isAnnounced && strip.variant === 'error' ? 'alert' : null };
   });
 
   protected readonly isEarlyEscapeHintShown = computed(() => {
     const session = this.session();
     return session !== undefined && this.earlyEscapeHint.isHinting(session);
-  });
-
-  protected readonly closedStrip = computed<ClosedStrip | undefined>(() => {
-    const session = this.session();
-    if (!session || session.state !== 'closed' || this.lifecycleBanner()) return undefined;
-    const copy = closedStripCopyFor(session.exitCode, this.events.closeReasonOf(session.id));
-    const isFailureJustSeen = copy.variant === 'error' && this.watchedOpenSessionId() === session.id;
-    return { ...copy, role: isFailureJustSeen ? 'alert' : null };
   });
 
   protected readonly pendingApproval = computed(() => {

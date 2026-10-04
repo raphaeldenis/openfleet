@@ -1,26 +1,25 @@
 import { describe, expect, it } from 'vitest';
-import { closedStripCopyFor } from './session-close-status';
+import { closeStatusFor, exitCodeLabel } from './session-close-status';
 
 const SIGTERM_EXIT_CODE = 143;
 const SIGKILL_EXIT_CODE = 137;
 
-describe('the strip a closed session shows', () => {
+describe('the close status of an exit code', () => {
   it.each([
-    { label: 'a clean exit', exitCode: 0 },
-    { label: 'a SIGTERM death (user close, parent close, daemon shutdown)', exitCode: SIGTERM_EXIT_CODE },
-  ])('is neutral for $label', ({ exitCode }) => {
-    const strip = closedStripCopyFor(exitCode);
-
-    expect(strip.variant).toBe('neutral');
-    expect(strip.description).not.toContain('exited with an error');
+    { label: 'a clean exit', exitCode: 0, kind: 'clean' },
+    { label: 'a SIGTERM death (user close, parent close, daemon shutdown)', exitCode: SIGTERM_EXIT_CODE, kind: 'clean' },
+    { label: 'a SIGKILL death of a hung CLI', exitCode: SIGKILL_EXIT_CODE, kind: 'failed' },
+    { label: 'a plain failure', exitCode: 1, kind: 'failed' },
+    { label: 'no exit code', exitCode: undefined, kind: 'unknown' },
+  ] as const)('is $kind for $label', ({ exitCode, kind }) => {
+    expect(closeStatusFor(exitCode).kind).toBe(kind);
   });
 
   it.each([
-    { label: 'a SIGKILL death of a hung CLI', exitCode: SIGKILL_EXIT_CODE },
-    { label: 'a plain failure', exitCode: 1 },
-  ])('is an error for $label', ({ exitCode }) => {
-    const strip = closedStripCopyFor(exitCode);
-
-    expect(strip).toMatchObject({ variant: 'error', title: `■ Closed · exit ${exitCode}` });
+    { exitCode: 0, label: 'closed · exit 0' },
+    { exitCode: 1, label: 'closed · exit 1' },
+    { exitCode: undefined, label: 'closed' },
+  ])('is labelled "$label" for exit code $exitCode', ({ exitCode, label }) => {
+    expect(exitCodeLabel(exitCode)).toBe(label);
   });
 });
