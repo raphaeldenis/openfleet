@@ -10,7 +10,7 @@ const OTHER_THEME = { dark: 'light', light: 'dark' } as const;
   selector: 'of-theme-toggle-button',
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <button type="button" class="of-btn of-btn--secondary theme-toggle" data-testid="theme-toggle" [title]="switchTitle()" (click)="toggled.emit()">
+    <button type="button" class="of-btn of-btn--secondary theme-toggle" data-testid="theme-toggle" [title]="switchTitle()" [attr.aria-pressed]="isDark()" (click)="toggled.emit()">
       {{ label() }}
     </button>
   `,
@@ -21,6 +21,7 @@ const OTHER_THEME = { dark: 'light', light: 'dark' } as const;
 export class ThemeToggleButtonComponent {
   readonly theme = input.required<ShownTheme>();
   readonly toggled = output<void>();
+  protected readonly isDark = computed(() => this.theme() === 'dark');
   protected readonly label = computed(() => LABEL_BY_THEME[this.theme()]);
   protected readonly switchTitle = computed(() => `Switch to ${OTHER_THEME[this.theme()]} theme`);
 }
