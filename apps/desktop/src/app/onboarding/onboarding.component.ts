@@ -84,8 +84,8 @@ function requestedUrlFrom(navigationState: unknown): string {
                   @if (lastLine(); as lastLine) {
                     <pre class="terminal last-line" tabindex="0" data-testid="daemon-last-line">{{ lastLine }}</pre>
                   }
-                  @if (pathHint(); as pathHint) {
-                    <span class="hint" data-testid="daemon-path-hint">claude may not be on the daemon PATH — the login shell’s PATH could not be read. @if (pathHint.pathTried) {PATH tried: <code>{{ pathHint.pathTried }}</code>}</span>
+                  @if (showsPathHint()) {
+                    <span class="hint" data-testid="daemon-path-hint">claude may not be on the daemon PATH — the login shell’s PATH could not be read. The built-in fallback PATH was used instead (Homebrew, /usr/local/bin, ~/.local/bin, /usr/bin, /bin).</span>
                   }
                   <div class="command-row"><button type="button" class="of-btn of-btn--primary" (click)="checkDaemonAgain()">Check again</button>@if (support.isAvailable) {<button type="button" class="of-btn of-btn--secondary" (click)="revealLog()">Reveal log</button>}</div>
                   <span class="hint" role="status" data-testid="daemon-check-result">{{ checkResult() }}</span>
@@ -274,11 +274,11 @@ export class OnboardingComponent {
     return this.lastLine() ? FAILED_WITH_LAST_LINE_COPY : FAILED_WITHOUT_LAST_LINE_COPY;
   });
   // The PATH hint appears only when the failure itself names claude; a fallback PATH alone proves nothing.
-  protected readonly pathHint = computed(() => {
+  protected readonly showsPathHint = computed(() => {
     const status = this.observedStatus();
     const isFallbackPath = status?.pathSource === 'fallback';
     const failureNamesClaude = /claude/i.test(status?.lastLine ?? '');
-    return isFallbackPath && failureNamesClaude ? { pathTried: status?.pathTried } : null;
+    return isFallbackPath && failureNamesClaude;
   });
   private readonly observedStatus = computed(() => {
     const status = this.daemon.status();

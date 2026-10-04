@@ -7,7 +7,6 @@ export type DaemonPhase = (typeof KNOWN_PHASES)[number];
 export interface DaemonStatus {
   state: DaemonPhase;
   lastLine?: string;
-  pathTried?: string;
   pathSource?: 'shell' | 'fallback';
   daemonVersion?: string;
 }

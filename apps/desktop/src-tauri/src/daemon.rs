@@ -5,7 +5,8 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
-use std::path::Path;
+use crate::status_line::webview_safe_line;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager, State};
@@ -46,8 +47,6 @@ pub struct DaemonStatus {
   #[serde(skip_serializing_if = "Option::is_none")]
   pub last_line: Option<String>,
   #[serde(skip_serializing_if = "Option::is_none")]
-  pub path_tried: Option<String>,
-  #[serde(skip_serializing_if = "Option::is_none")]
   pub path_source: Option<PathSource>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub daemon_version: Option<String>,
@@ -57,7 +56,7 @@ pub struct DaemonStatus {
 
 impl DaemonStatus {
   fn starting() -> Self {
-    Self { state: DaemonPhase::Starting, last_line: None, path_tried: None, path_source: None, daemon_version: None, started_seconds_ago: None }
+    Self { state: DaemonPhase::Starting, last_line: None, path_source: None, daemon_version: None, started_seconds_ago: None }
   }
 }
 
@@ -196,6 +195,21 @@ struct Inner {
   child: Option<RunningChild>,
   spawned_at: Option<Instant>,
   daemon_log: Option<DaemonLog>,
+  scrub_scope: ScrubScope,
+}
+
+/// What `snapshot` needs to make the last line safe for the webview.
+#[derive(Default, Clone)]
+struct ScrubScope {
+  user_home: String,
+  admin_token_path: Option<PathBuf>,
+}
+
+impl ScrubScope {
+  fn safe_line(&self, raw_line: &str) -> String {
+    let secrets = self.admin_token_path.as_deref().map(admin_token_secrets).unwrap_or_default();
+    webview_safe_line(raw_line, &self.user_home, &secrets)
+  }
 }
 
 /// Tauri state: the daemon's status for the webview and the sidecar handle to stop on quit.
@@ -205,7 +219,11 @@ pub struct DaemonState {
 
 impl DaemonState {
   pub fn new() -> Self {
-    Self { inner: Mutex::new(Inner { status: DaemonStatus::starting(), last_stderr_line: None, boot_refusal_line: None, child: None, spawned_at: None, daemon_log: None }) }
+    Self { inner: Mutex::new(Inner { status: DaemonStatus::starting(), last_stderr_line: None, boot_refusal_line: None, child: None, spawned_at: None, daemon_log: None, scrub_scope: ScrubScope::default() }) }
+  }
+
+  fn record_scrub_scope(&self, scrub_scope: ScrubScope) {
+    self.inner.lock().unwrap().scrub_scope = scrub_scope;
   }
 
   fn record_daemon_log(&self, daemon_log: DaemonLog) {
@@ -216,12 +234,16 @@ impl DaemonState {
     self.inner.lock().unwrap().daemon_log.clone()
   }
 
-  /// Returns the status as the webview sees it at `now`.
+  /// Returns the status as the webview sees it at `now`: its last line is masked, shortened, escaped and capped.
   pub fn snapshot(&self, now: Instant) -> DaemonStatus {
-    let inner = self.inner.lock().unwrap();
-    let mut status = inner.status.clone();
-    let is_booting = matches!(status.state, DaemonPhase::Starting | DaemonPhase::Slow);
-    status.started_seconds_ago = inner.spawned_at.filter(|_| is_booting).map(|spawned_at| now.saturating_duration_since(spawned_at).as_secs());
+    let (mut status, scrub_scope) = {
+      let inner = self.inner.lock().unwrap();
+      let mut status = inner.status.clone();
+      let is_booting = matches!(status.state, DaemonPhase::Starting | DaemonPhase::Slow);
+      status.started_seconds_ago = inner.spawned_at.filter(|_| is_booting).map(|spawned_at| now.saturating_duration_since(spawned_at).as_secs());
+      (status, inner.scrub_scope.clone())
+    };
+    status.last_line = status.last_line.map(|raw_line| scrub_scope.safe_line(&raw_line));
     status
   }
 
@@ -240,7 +262,6 @@ impl DaemonState {
     let mut inner = self.inner.lock().unwrap();
     inner.child = Some(child);
     inner.spawned_at = Some(spawned_at);
-    inner.status.path_tried = Some(repaired_path.path);
     inner.status.path_source = Some(repaired_path.source);
   }
 
@@ -347,6 +368,7 @@ pub fn stop_daemon(state: &DaemonState, signals: &impl Signals, grace: Duration)
 
 fn boot(app: &AppHandle) {
   let state = app.state::<DaemonState>();
+  state.record_scrub_scope(scrub_scope_of(app));
   if let Some(answer) = probe_health(HEALTH_ADDRESS, PROBE_TIMEOUT) {
     log::info!("a daemon already answers on {HEALTH_ADDRESS}, reusing it");
     state.on_reused(answer.version);
@@ -360,6 +382,12 @@ fn boot(app: &AppHandle) {
       state.on_start_failed(reason);
     }
   }
+}
+
+fn scrub_scope_of(app: &AppHandle) -> ScrubScope {
+  let Ok(user_home) = app.path().home_dir() else { return ScrubScope::default() };
+  let token_path = admin_token_path(std::env::var("OPENFLEET_HOME").ok(), &user_home);
+  ScrubScope { user_home: user_home.to_string_lossy().to_string(), admin_token_path: Some(token_path) }
 }
 
 /// Polls `/health` for `ready_timeout`, then keeps polling for `extra_budget` in the Slow state; Failed only comes from the process side.
@@ -556,11 +584,11 @@ mod tests {
 
   #[test]
   fn serializes_a_failed_status_with_camel_case_keys() {
-    let status = DaemonStatus { last_line: Some("boom".into()), path_tried: Some("/a:/b".into()), state: DaemonPhase::Failed, ..DaemonStatus::starting() };
+    let status = DaemonStatus { last_line: Some("boom".into()), path_source: Some(PathSource::Fallback), state: DaemonPhase::Failed, ..DaemonStatus::starting() };
 
     let json = serde_json::to_string(&status).unwrap();
 
-    assert_eq!(json, r#"{"state":"failed","lastLine":"boom","pathTried":"/a:/b"}"#);
+    assert_eq!(json, r#"{"state":"failed","lastLine":"boom","pathSource":"fallback"}"#);
   }
 
   #[test]
@@ -1021,13 +1049,38 @@ mod tests {
   }
 
   #[test]
-  fn the_status_carries_the_path_that_was_tried_and_where_it_came_from() {
+  fn the_status_carries_where_the_path_came_from_and_never_the_path_itself() {
     let state = state_with_a_spawned_child();
 
     let status = state.snapshot(Instant::now());
+    let json = serde_json::to_string(&status).unwrap();
 
-    assert_eq!(status.path_tried.as_deref(), Some("/a:/b"));
     assert_eq!(status.path_source, Some(PathSource::Shell));
+    assert!(!json.contains("/a:/b"), "{json}");
+  }
+
+  #[test]
+  fn the_snapshot_masks_shortens_and_caps_the_last_line_while_the_stored_line_stays_raw() {
+    let state = DaemonState::new();
+    state.record_scrub_scope(ScrubScope { user_home: "/Users/jdoe".into(), admin_token_path: None });
+    let raw_line = format!("crash in /Users/jdoe/app Authorization: Bearer abcdefghijklmnop1234567890 {}", "z".repeat(400));
+
+    state.on_start_failed(raw_line.clone());
+    let last_line = state.snapshot(Instant::now()).last_line.unwrap();
+
+    assert!(last_line.starts_with("crash in ~/app "), "{last_line}");
+    assert!(!last_line.contains("abcdefghijklmnop1234567890"), "{last_line}");
+    assert_eq!(last_line.chars().count(), crate::status_line::MAX_STATUS_LINE_CHARS);
+    assert_eq!(state.inner.lock().unwrap().status.last_line, Some(raw_line));
+  }
+
+  #[test]
+  fn the_snapshot_escapes_bidi_controls_in_a_boot_refusal() {
+    let state = DaemonState::new();
+
+    state.on_stderr("openfleet: refusing to boot: \u{202E}evil\n");
+
+    assert_eq!(state.snapshot(Instant::now()).last_line.as_deref(), Some("openfleet: refusing to boot: \\u{202e}evil"));
   }
 
   #[test]
