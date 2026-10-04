@@ -34,7 +34,7 @@ import type { NoteVersionSummary } from '@openfleet/shared';
       }
     </ul>
     <div class="actions">
-      <button type="button" class="restore" data-testid="note-history-restore" [disabled]="!canRestoreSelection()" (click)="restoreSelected()">
+      <button type="button" class="of-btn of-btn--secondary restore" data-testid="note-history-restore" [disabled]="!canRestoreSelection()" (click)="restoreSelected()">
         Restore selected version
       </button>
     </div>
@@ -56,12 +56,7 @@ import type { NoteVersionSummary } from '@openfleet/shared';
     .error { display: flex; flex-direction: column; gap: .5rem; padding: .625rem .875rem; font-size: .75rem; color: var(--mut) }
     .error { color: var(--state-error) }
     .actions { padding: .75rem .875rem }
-    .restore {
-      width: 100%; height: 1.75rem; border: 1px solid var(--line-2); border-radius: .375rem; background: var(--panel);
-      color: var(--fg); font: inherit; font-size: .75rem; cursor: pointer;
-    }
-    .restore:disabled { border-color: var(--line); background: var(--sunk); color: var(--faint); cursor: not-allowed }
-    .restore:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
+    .restore { width: 100% }
   `,
 })
 export class NoteHistoryComponent {

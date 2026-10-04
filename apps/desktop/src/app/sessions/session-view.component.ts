@@ -26,9 +26,9 @@ type ClosedStrip = ClosedStripCopy & { role: 'alert' | null };
   template: `
     @if (session(); as s) {
       <div class="session-view" data-testid="session-view">
-        <ng-template #reopenFreshUnavailable let-testId>
+        <ng-template #reopenFreshUnavailable let-testId let-isCompact="isCompact">
           <span class="reopen-fresh">
-            <button type="button" class="of-btn of-btn--secondary" [attr.data-testid]="testId" aria-disabled="true" [attr.aria-describedby]="testId + '-reason'">
+            <button type="button" class="of-btn of-btn--secondary" [class.of-btn--compact]="isCompact" [attr.data-testid]="testId" aria-disabled="true" [attr.aria-describedby]="testId + '-reason'">
               Reopen fresh
             </button>
             <span class="reopen-fresh-reason" [id]="testId + '-reason'">{{ reopenFreshUnavailableReason }}</span>
@@ -55,8 +55,8 @@ type ClosedStrip = ClosedStripCopy & { role: 'alert' | null };
             <div class="lifecycle-banner" data-testid="lifecycle-banner" data-variant="error" role="alert">
               <span class="lifecycle-title">✕ Resume failed</span>
               <span class="lifecycle-body" data-testid="resume-error">{{ banner.reason }}</span>
-              <button type="button" class="of-btn of-btn--primary" data-testid="resume-retry" (click)="resume(s.id)">↻ Retry</button>
-              <ng-container [ngTemplateOutlet]="reopenFreshUnavailable" [ngTemplateOutletContext]="{ $implicit: 'resume-failed-reopen-fresh' }" />
+              <button type="button" class="of-btn of-btn--primary of-btn--compact" data-testid="resume-retry" (click)="resume(s.id)">↻ Retry</button>
+              <ng-container [ngTemplateOutlet]="reopenFreshUnavailable" [ngTemplateOutletContext]="{ $implicit: 'resume-failed-reopen-fresh', isCompact: true }" />
             </div>
           }
         }
@@ -109,8 +109,7 @@ type ClosedStrip = ClosedStripCopy & { role: 'alert' | null };
     .closed-footer--strip[data-variant='error'] { --closed-color: var(--state-error); border-color: color-mix(in oklch, var(--state-error) 55%, transparent); }
     .closed-title { color: var(--closed-color); font-weight: 600; }
     .closed-body { flex: 1; min-width: 0; color: var(--mut); }
-    .closed-footer .of-btn { height: 1.75rem; padding: 0 .75rem; font-size: .75rem; white-space: nowrap; }
-    .lifecycle-banner .of-btn { flex: none; height: 1.5rem; padding: 0 .625rem; font-size: .6875rem; white-space: nowrap; }
+    .lifecycle-banner .of-btn { flex: none; }
     .lifecycle-banner {
       display: flex; align-items: center; gap: .75rem; padding: .5rem 1rem;
       border-bottom: 1px solid var(--line); font-size: .75rem;
@@ -122,7 +121,6 @@ type ClosedStrip = ClosedStripCopy & { role: 'alert' | null };
     .lifecycle-body { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .lifecycle-banner[data-variant='hint'] .lifecycle-body { white-space: normal; }
     .reopen-fresh { position: relative; display: inline-flex; flex: none; }
-    .reopen-fresh .of-btn[aria-disabled='true'] { border-color: var(--line); background: var(--sunk); color: var(--faint); cursor: not-allowed; }
     .reopen-fresh-reason {
       position: absolute; right: 0; z-index: 1; width: max-content; max-width: 18rem; padding: .375rem .5rem;
       border: 1px solid var(--line-2); border-radius: .375rem; background: var(--panel); color: var(--mut);

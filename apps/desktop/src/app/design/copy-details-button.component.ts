@@ -8,17 +8,19 @@ const IDLE_LABEL = 'Copy details';
   selector: 'of-copy-details-button',
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <button type="button" class="of-btn of-btn--secondary copy-details" [attr.data-testid]="testId()" (click)="copy()">{{ label() }}</button>
+    <button type="button" class="of-btn of-btn--secondary copy-details" [class.of-btn--compact]="isCompact()" [attr.data-testid]="testId()" (click)="copy()">{{ label() }}</button>
     <span class="visually-hidden" role="status">{{ announcement() }}</span>
   `,
   styles: `
-    .copy-details { flex: none; height: 1.5rem; padding: 0 .625rem; font-size: .6875rem; white-space: nowrap; }
+    .copy-details { flex: none; }
     .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap }
   `,
 })
 export class CopyDetailsButtonComponent {
   readonly text = input.required<string>();
   readonly testId = input.required<string>();
+  /** The compact button belongs in strips; cards use the standard size. */
+  readonly isCompact = input(false);
   protected readonly label = signal(IDLE_LABEL);
   protected readonly announcement = signal('');
   private resetTimer: ReturnType<typeof setTimeout> | undefined;

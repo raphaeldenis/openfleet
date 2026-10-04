@@ -41,7 +41,7 @@ function clockTimeOf(isoDate: string): string {
             <div class="message" role="alert" data-testid="todos-error">
               <p>{{ errorText() }}</p>
               @if (isRetryable()) {
-                <button type="button" class="of-btn" data-testid="todos-retry" (click)="retry()">Try again</button>
+                <button type="button" class="of-btn of-btn--secondary of-btn--compact" data-testid="todos-retry" (click)="retry()">Try again</button>
               }
             </div>
           }

@@ -54,13 +54,13 @@ const describeCreateFailure = (error: unknown, displayName: string): string => {
         <button type="button" class="of-focus-ring" data-testid="tables-toggle-grid" [class.on]="viewMode() === 'grid'" [attr.aria-pressed]="viewMode() === 'grid'" (click)="viewMode.set('grid')">▦ Grid</button>
         <button type="button" class="of-focus-ring" data-testid="tables-toggle-kanban" [class.on]="viewMode() === 'kanban'" [attr.aria-pressed]="viewMode() === 'kanban'" (click)="viewMode.set('kanban')">▥ Kanban</button>
       </div>
-      <button type="button" class="of-btn of-btn--primary compact" data-testid="tables-add-row" [disabled]="!activeStoreId() || isClearingMismatches()" (click)="addRow()">+ Row</button>
+      <button type="button" class="of-btn of-btn--primary" data-testid="tables-add-row" [disabled]="!activeStoreId() || isClearingMismatches()" (click)="addRow()">+ Row</button>
     </div>
 
     @if (isCreatingTable()) {
       <form class="create-table" (submit)="$event.preventDefault(); createTable()">
         <input class="of-input" data-testid="tables-new-name" aria-label="Table name" [attr.maxlength]="tableNameMaxLength" placeholder="Table name" [value]="newTableName()" (input)="newTableName.set($any($event.target).value)" />
-        <button type="submit" class="of-btn of-btn--primary compact" data-testid="tables-create" [disabled]="newTableName().trim() === ''">Create</button>
+        <button type="submit" class="of-btn of-btn--primary" data-testid="tables-create" [disabled]="newTableName().trim() === ''">Create</button>
         @if (createError(); as message) {
           <span class="create-error" role="status" data-testid="tables-create-error">{{ message }}</span>
         }
@@ -76,14 +76,14 @@ const describeCreateFailure = (error: unknown, displayName: string): string => {
         @if (isViewingMismatchedRows()) {
           <div class="banner" role="region" aria-label="Schema mismatch" data-testid="tables-mismatch-banner">
             <span class="muted">{{ mismatchSummary() }}</span>
-            <button #clearMismatchesShortcut type="button" class="of-btn of-btn--secondary compact" data-testid="tables-clear-mismatches" [disabled]="isClearingMismatches()" (click)="clearMismatchedValues()">Clear those values</button>
+            <button #clearMismatchesShortcut type="button" class="of-btn of-btn--secondary" data-testid="tables-clear-mismatches" [disabled]="isClearingMismatches()" (click)="clearMismatchedValues()">Clear those values</button>
           </div>
         }
         @if (loadFailure(); as failure) {
           <div class="card" role="status" data-testid="tables-load-error">
             <span class="card-title">✕ {{ failureTitle() }}</span>
             <span class="muted">{{ failure.reason }}</span>
-            <div class="actions"><button type="button" class="of-btn of-btn--secondary compact" data-testid="tables-retry" (click)="retry()">Retry</button></div>
+            <div class="actions"><button type="button" class="of-btn of-btn--secondary" data-testid="tables-retry" (click)="retry()">Retry</button></div>
           </div>
         } @else if (hasNoProject()) {
           <div class="message" data-testid="tables-no-project">
@@ -106,8 +106,8 @@ const describeCreateFailure = (error: unknown, displayName: string): string => {
             <span class="card-title">✕ Schema mismatch in “{{ activeStoreName() }}”</span>
             <span class="muted">{{ mismatchSummary() }}</span>
             <div class="actions">
-              <button type="button" class="of-btn of-btn--secondary compact" data-testid="tables-clear-mismatches" [disabled]="isClearingMismatches()" (click)="clearMismatchedValues()">Clear those values</button>
-              <button type="button" class="of-btn of-btn--secondary compact" data-testid="tables-view-rows" (click)="viewRowsAnyway()">View rows</button>
+              <button type="button" class="of-btn of-btn--secondary" data-testid="tables-clear-mismatches" [disabled]="isClearingMismatches()" (click)="clearMismatchedValues()">Clear those values</button>
+              <button type="button" class="of-btn of-btn--secondary" data-testid="tables-view-rows" (click)="viewRowsAnyway()">View rows</button>
             </div>
           </div>
         } @else if (rows().length === 0) {
@@ -134,7 +134,7 @@ const describeCreateFailure = (error: unknown, displayName: string): string => {
         @if (hasMoreRows()) {
           <div class="truncated" data-testid="tables-rows-truncated">
             <span>Showing {{ rows().length }} of {{ rowTotal() }}</span>
-            <button type="button" class="of-btn of-btn--secondary compact" data-testid="tables-load-more" (click)="loadMoreRows()">Load more</button>
+            <button type="button" class="of-btn of-btn--secondary" data-testid="tables-load-more" (click)="loadMoreRows()">Load more</button>
           </div>
         }
       </div>
@@ -168,7 +168,6 @@ const describeCreateFailure = (error: unknown, displayName: string): string => {
       color: var(--fg); font: inherit; font-size: .75rem; cursor: pointer; white-space: nowrap;
     }
     .toggle button.on { background: var(--panel) }
-    .compact { height: 1.625rem; font-size: .75rem; padding: 0 .625rem; white-space: nowrap }
     .create-table { flex: none; display: flex; align-items: center; gap: .5rem; padding: .5rem 1rem; border-bottom: 1px solid var(--line) }
     .create-error, .action-error { color: var(--state-error); font-size: .75rem }
     .action-error { flex: none; padding: .375rem 1rem; border-bottom: 1px solid var(--line) }

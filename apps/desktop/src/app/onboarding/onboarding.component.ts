@@ -191,7 +191,6 @@ function requestedUrlFrom(navigationState: unknown): string {
     code { padding: 0 .25rem; border-radius: .25rem; background: var(--sunk); font-family: var(--mono); overflow-wrap: anywhere }
     .command-row { display: flex; align-items: center; gap: .5rem }
     .terminal { flex: 1; padding: .5rem .75rem; border-radius: .375rem; background: var(--term-bg); color: var(--term-fg); font-family: var(--mono); font-size: .75rem }
-    .command-row .of-btn { height: 2rem; padding: 0 .75rem; white-space: nowrap }
     .fine-print { font-size: .6875rem; color: var(--mut) }
     .of-field { display: flex; flex-direction: column; gap: .25rem }
     .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap }
@@ -199,7 +198,6 @@ function requestedUrlFrom(navigationState: unknown): string {
     .project-form { display: flex; flex-direction: column; gap: 1rem }
     .footer { display: flex; align-items: center; justify-content: space-between }
     .footer-note { font-size: .75rem; color: var(--mut) }
-    .footer .of-btn, .back { height: 2rem; padding: 0 1rem }
     .back { margin-right: auto }
     .mono { font-family: var(--mono) }
     h2 { margin: 0; font-size: .875rem; font-weight: 500 }
