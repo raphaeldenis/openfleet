@@ -6,7 +6,7 @@ import { KindBadgeComponent } from '../design/kind-badge.component';
 import { ComposerComponent } from '../sessions/composer.component';
 import { tickingNow } from '../working-state/working-state-freshness';
 import type { AttentionItem } from '../working-state/attention-items';
-import { showBidiControlsAsEscapes, showInvisibleControlsAsEscapes } from './bidi-escapes';
+import { showBidiControlsAsEscapes, showInvisibleControlsAsEscapes } from '../core/bidi-escapes';
 
 @Component({
   selector: 'of-attention-card',

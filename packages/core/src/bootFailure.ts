@@ -1,4 +1,4 @@
-import { PortInUseError } from './api/portInUseError.js';
+import { PortInUseError } from './errors/portInUseError.js';
 import { ConfigFileError } from './configFileError.js';
 import { readableConfigReason } from './configReason.js';
 import { MigrationFailedError, SchemaNewerThanCodeError } from './db/migrate.js';

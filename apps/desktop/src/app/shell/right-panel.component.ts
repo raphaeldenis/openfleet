@@ -14,8 +14,8 @@ import { toSignal } from '@angular/core/rxjs-interop';
 import { NavigationEnd, Router } from '@angular/router';
 import { filter, map } from 'rxjs';
 import { FleetEventsService } from '../core/fleet-events.service';
+import { RIGHT_PANEL_HIDE_TITLE, RightPanelState } from '../core/right-panel-state';
 import { focusTabAt, nextTabIndex } from '../design/tablist-keyboard';
-import { RightPanelState } from './right-panel-state';
 import { TodosTabComponent } from './todos/todos-tab.component';
 
 const WATCHED_SESSION_URL = /^\/(?:session|manager)\/([^/?#]+)/;
@@ -28,37 +28,12 @@ export function watchedSessionIdOf(url: string): string | undefined {
 interface PanelTab { readonly key: string; readonly label: string; readonly enabled: boolean }
 
 const COMING_SOON = 'Coming soon';
-const SHOW_TITLE = 'Show the right panel (⌥⌘B)';
-const HIDE_TITLE = 'Hide the right panel (⌥⌘B)';
 const RAIL_TITLE = 'Show the right panel — sessions, todos, usage (⌥⌘B)';
 const PANEL_TABS: readonly PanelTab[] = [
   { key: 'sessions', label: 'Sessions', enabled: false },
   { key: 'usage', label: 'Usage', enabled: false },
   { key: 'todos', label: 'Todos', enabled: true },
 ];
-
-/** The ◨ button of the session terminal tab bar: it shows the state of the right panel and toggles it. */
-@Component({
-  selector: 'of-right-panel-session-toggle',
-  changeDetection: ChangeDetectionStrategy.OnPush,
-  template: `
-    <button type="button" class="toggle" data-testid="right-panel-session-toggle"
-            aria-label="Right panel" aria-controls="right-panel" aria-keyshortcuts="Alt+Meta+B"
-            [attr.title]="state.open() ? hideTitle : showTitle"
-            [attr.aria-pressed]="state.open()" (click)="state.toggle()">◨</button>
-  `,
-  styles: `
-    .toggle { width: 1.75rem; height: 1.75rem; flex: none; border: 1px solid rgba(255, 255, 255, .18); border-radius: .375rem; background: transparent; color: var(--term-fg); font-size: .875rem; cursor: pointer; }
-    .toggle[aria-pressed='true'] { border-color: var(--accent); color: var(--accent); background: color-mix(in oklch, var(--accent) 18%, transparent); }
-    .toggle:hover { background: rgba(255, 255, 255, .08); }
-    .toggle:focus-visible { outline: 0; box-shadow: 0 0 0 2px var(--accent); }
-  `,
-})
-export class RightPanelSessionToggleComponent {
-  protected readonly state = inject(RightPanelState);
-  protected readonly showTitle = SHOW_TITLE;
-  protected readonly hideTitle = HIDE_TITLE;
-}
 
 @Component({
   selector: 'of-right-panel',
@@ -121,7 +96,7 @@ export class RightPanelComponent {
   private readonly rail = viewChild<ElementRef<HTMLButtonElement>>('rail');
 
   protected readonly railTitle = RAIL_TITLE;
-  protected readonly hideTitle = HIDE_TITLE;
+  protected readonly hideTitle = RIGHT_PANEL_HIDE_TITLE;
   protected readonly tabs = PANEL_TABS;
   protected readonly comingSoon = COMING_SOON;
   protected readonly activeKey = signal('todos');

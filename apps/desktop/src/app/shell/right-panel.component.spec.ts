@@ -6,7 +6,8 @@ import { screen, within } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FleetEventsService } from '../core/fleet-events.service';
-import { RightPanelComponent, RightPanelSessionToggleComponent, watchedSessionIdOf } from './right-panel.component';
+import { RightPanelSessionToggleComponent } from '../sessions/right-panel-session-toggle.component';
+import { RightPanelComponent, watchedSessionIdOf } from './right-panel.component';
 import { InMemorySessionTodosSource, SESSION_TODOS_SOURCE } from './todos/session-todos-source';
 import type { SessionTodos } from './todos/todos.adapter';
 

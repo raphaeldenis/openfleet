@@ -1,7 +1,7 @@
 import { closeSync, existsSync, fstatSync, openSync, readdirSync, readSync, realpathSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { log } from '../../logger.js';
+import { claudeProjectsDir } from '../claudeProjectsDir.js';
 import type { ConversationPresence } from '../harness.js';
 
 const CONVERSATION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -11,14 +11,6 @@ const READ_CHUNK_BYTES = 64 * 1024;
 const MAX_BYTES_SCANNED = 4 * 1024 * 1024;
 const BYTE_ORDER_MARK = /^﻿/;
 const CONVERSATION_LINE_TYPES = new Set(['user', 'assistant']);
-
-// The daemon's own env is what the harness passes through to the CLI child (childEnvironment.ts keeps
-// CLAUDE_CONFIG_DIR — it's user configuration, not a session marker), so it is also the daemon's own
-// source of truth for where that CLI writes transcripts.
-export function claudeProjectsDir(): string {
-  const configDir = process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude');
-  return join(configDir, 'projects');
-}
 
 // The CLI names a project's directory after its cwd with every non-alphanumeric character turned into '-'.
 // ponytail: that naming is a CLI internal; when a transcript is not under the name derived here,

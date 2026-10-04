@@ -12,7 +12,7 @@ import type { NoteRepository } from '../notes/noteRepository.js';
 import type { NoteService } from '../notes/noteService.js';
 import type { DegradedRegistry } from '../process/degradedRegistry.js';
 import { DAEMON_VERSION } from '../version.js';
-import { PortInUseError } from './portInUseError.js';
+import { PortInUseError } from '../errors/portInUseError.js';
 import type { ProjectRepository } from '../projects/projectRepository.js';
 import type { SessionService } from '../sessions/sessionService.js';
 import type { DataStoreRepository } from '../stores/dataStoreRepository.js';

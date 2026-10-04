@@ -1,5 +1,5 @@
 import { ChangeDetectionStrategy, Component, DestroyRef, ElementRef, computed, effect, inject, input, viewChild } from '@angular/core';
-import { showInvisibleControlsAsEscapes } from '../../inbox/bidi-escapes';
+import { showInvisibleControlsAsEscapes } from '../../core/bidi-escapes';
 import { ManagerChildrenComponent } from './manager-children.component';
 import { plural } from './plural';
 import { SESSION_TODOS_SOURCE, type ChildrenLoad, type TodosLoad } from './session-todos-source';

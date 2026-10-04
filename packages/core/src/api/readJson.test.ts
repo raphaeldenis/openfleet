@@ -1,7 +1,8 @@
 import type { IncomingMessage } from 'node:http';
 import { describe, expect, it } from 'vitest';
 import { describeError } from '../errors/describeError.js';
-import { InvalidJsonBodyError, readJson } from './router.js';
+import { InvalidJsonBodyError } from '../errors/requestBodyErrors.js';
+import { readJson } from './router.js';
 
 const requestWithBody = (body: string) => ({ async *[Symbol.asyncIterator]() { yield Buffer.from(body); } }) as unknown as IncomingMessage;
 

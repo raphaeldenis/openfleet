@@ -5,7 +5,7 @@ import { map } from 'rxjs';
 import { MANAGER_ROLE, type ManagerView, type Session } from '@openfleet/shared';
 import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
-import { showInvisibleControlsAsEscapes } from '../inbox/bidi-escapes';
+import { showInvisibleControlsAsEscapes } from '../core/bidi-escapes';
 import { StateChipComponent } from '../design/state-chip.component';
 import { PulseRingComponent } from '../design/pulse-ring.component';
 import { OverdueChipComponent } from '../working-state/overdue-chip.component';

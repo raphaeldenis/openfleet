@@ -9,6 +9,7 @@ import { log } from '../../logger.js';
 import { frameForPaste } from './bracketedPaste.js';
 import { conversationPresence } from './claudeProjects.js';
 import { buildClaudeLaunchConfig } from './launchConfig.js';
+import { findPermissiveSettingsWarning } from './permissiveSettings.js';
 import { deleteTokenFiles, pathsIn, tokenFilesDirFor, writeTokenFiles } from './tokenFiles.js';
 import { markDirectoryTrusted } from './trustDirectory.js';
 
@@ -23,6 +24,10 @@ export class ClaudeCliHarness implements Harness {
 
   conversationExists(conversation: { cliSessionId: string; directory: string }): ConversationPresence {
     return conversationPresence(conversation);
+  }
+
+  findProjectSettingsWarning(directory: string): string | undefined {
+    return findPermissiveSettingsWarning(directory);
   }
 
   start(launch: HarnessLaunch): HarnessHandle {

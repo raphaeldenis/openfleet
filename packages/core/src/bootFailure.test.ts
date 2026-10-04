@@ -8,7 +8,7 @@ import { loadDaemonSettings } from './workingState/workingStateSettings.js';
 import { refuseBootOnFailure } from './bootFailure.js';
 import { createTempDirTracker } from './tempDirTracker.js';
 import { ConfigFileError, readingConfigFile } from './configFileError.js';
-import { PortInUseError } from './api/portInUseError.js';
+import { PortInUseError } from './errors/portInUseError.js';
 
 const tempDirs = createTempDirTracker();
 afterEach(() => tempDirs.removeAll());

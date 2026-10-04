@@ -1,5 +1,8 @@
 import { Injectable, signal } from '@angular/core';
 
+export const RIGHT_PANEL_SHOW_TITLE = 'Show the right panel (⌥⌘B)';
+export const RIGHT_PANEL_HIDE_TITLE = 'Hide the right panel (⌥⌘B)';
+
 const OPEN_STORAGE_KEY = 'openfleet.rightPanel.open';
 
 function readRememberedOpen(): boolean {

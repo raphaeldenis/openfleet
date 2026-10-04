@@ -12,7 +12,7 @@ import { KindBadgeComponent } from '../design/kind-badge.component';
 import { focusTabAt, nextTabIndex } from '../design/tablist-keyboard';
 import { attentionItemsOf, inboxCountLabelOf } from '../working-state/attention-items';
 import { AttentionCardComponent } from './attention-card.component';
-import { showBidiControlsAsEscapes, showInvisibleControlsAsEscapes } from './bidi-escapes';
+import { showBidiControlsAsEscapes, showInvisibleControlsAsEscapes } from '../core/bidi-escapes';
 
 type InboxTab = 'gates' | 'questions' | 'proposals';
 type FilterKey = 'all' | 'unread' | 'mine' | 'blocked' | 'recent';

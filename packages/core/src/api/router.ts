@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { InvalidJsonBodyError, PayloadTooLargeError } from '../errors/requestBodyErrors.js';
 
 export type Handler = (ctx: { req: IncomingMessage; res: ServerResponse; params: Record<string, string>; body: unknown }) => Promise<void> | void;
 interface Route { method: string; path: string; pattern: RegExp; keys: string[]; handler: Handler }
@@ -65,17 +66,6 @@ export function redactedRequestPath(req: IncomingMessage): string {
 }
 
 export const MAX_BODY_BYTES = 1024 * 1024;
-
-export class PayloadTooLargeError extends Error {}
-
-/** Names no part of the body: the parser's own message quotes an excerpt of it. */
-const INVALID_JSON_DIAGNOSTIC = 'the request body could not be parsed as JSON';
-
-export class InvalidJsonBodyError extends Error {
-  constructor() {
-    super(INVALID_JSON_DIAGNOSTIC);
-  }
-}
 
 /** A body that `skipOversized` reads to its end and throws away is still refused past this size: the connection is cut instead of drained. */
 const MAX_DRAINED_BODY_BYTES = 64 * 1024 * 1024;

@@ -2,7 +2,7 @@ import { realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute } from 'node:path';
 import { ERROR_CODES, OpenFleetError, retryOf, type ErrorCode, type ErrorEnvelope } from '@openfleet/shared';
-import { InvalidJsonBodyError, PayloadTooLargeError } from '../api/router.js';
+import { InvalidJsonBodyError, PayloadTooLargeError } from './requestBodyErrors.js';
 import { resolveHome } from '../config.js';
 import { isDatabaseUnavailableError } from '../db/databaseFailure.js';
 import { StuckConnectionError } from '../db/transaction.js';
