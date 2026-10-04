@@ -5,6 +5,7 @@
   "license": "Apache-2.0",
   "scripts": {
     "dev": "tsx src/main.ts",
+    "import:scape": "tsx src/import/cli.ts scape",
     "test": "NODE_OPTIONS=--no-warnings=ExperimentalWarning vitest run",
     "test:live": "OPENFLEET_LIVE=1 NODE_OPTIONS=--no-warnings=ExperimentalWarning vitest run src/harness/claudeCli/claudeCliHarness.live.test.ts",
     "bundle": "node ../../scripts/release/bundle-daemon.mjs",
