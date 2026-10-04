@@ -90,6 +90,14 @@ describe('ManagerDashboardComponent write handoff', () => {
     expect(document.querySelector('[data-density]')).toHaveAttribute('data-density', 'roomy');
   });
 
+  it('asks what this manager was for in the Goal placeholder', async () => {
+    await renderDashboard();
+
+    await userEvent.click(writeHandoffButton());
+
+    expect(await screen.findByRole('textbox', { name: /Goal/ })).toHaveAttribute('placeholder', 'What this manager was for');
+  });
+
   it('tells where the draft comes from, without claiming the conversation was read', async () => {
     await renderDashboard();
 

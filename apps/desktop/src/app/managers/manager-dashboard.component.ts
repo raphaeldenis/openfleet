@@ -88,7 +88,7 @@ const HANDOFF_TARGET_AVAILABLE_HINT = 'Saved handoffs appear in Notes › handof
         </header>
         @if (isHandoffOpen()) {
           <div [id]="handoffPanelId" data-testid="manager-dashboard-handoff-panel">
-            <of-handoff-preview [sessionId]="session.id" density="roomy" [targetAvailableHint]="handoffTargetAvailableHint" (dismissed)="closeHandoff()" />
+            <of-handoff-preview [sessionId]="session.id" density="roomy" subject="manager" [targetAvailableHint]="handoffTargetAvailableHint" (dismissed)="closeHandoff()" />
           </div>
         }
 

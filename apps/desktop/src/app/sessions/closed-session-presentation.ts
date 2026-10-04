@@ -45,7 +45,7 @@ const LAUNCH_FAILED_STRIP = {
   copyableCode: 'launch_failed',
 } satisfies LifecycleStrip;
 const CONVERSATION_NOT_FOUND_STRIP = {
-  variant: 'error', icon: '✕', title: 'Conversation not found',
+  variant: 'error', icon: '■', title: 'Conversation not found',
   message: 'The transcript for this session is gone; start a new session from its handoff.', isResumeFailure: true,
   copyableCode: 'conversation_not_found',
 } satisfies LifecycleStrip;

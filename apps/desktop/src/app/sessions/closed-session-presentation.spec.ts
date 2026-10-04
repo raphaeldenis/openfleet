@@ -79,6 +79,10 @@ describe('what a closed session shows', () => {
     expect(closedSessionPresentationFor(facts).strip?.copyableCode).toBe(code);
   });
 
+  it('marks a missing conversation with the stop square', () => {
+    expect(closedSessionPresentationFor({ exitCode: 1, reason: 'conversation_not_found' }).strip?.icon).toBe('■');
+  });
+
   it('names a non-zero exit without reason like an unexpected agent exit', () => {
     expect(closedSessionPresentationFor({ exitCode: 1 }).strip?.copyableCode).toBe('harness_exit');
   });
