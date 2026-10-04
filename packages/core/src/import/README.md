@@ -57,3 +57,25 @@ are listed but never read. A metadata store without a backing table is listed
 separately from an empty table. The report also identifies display formats
 (`url`, `longText`, `rank`, `datetime`) and view settings such as kanban
 `columnOrder` that OpenFleet does not preserve; cell values remain imported.
+
+## Lexical to Markdown policy
+
+Ordinary text keeps its authored Markdown characters, including `*`, `_`,
+links, backslashes and HTML-looking text. The converter applies the explicit
+Lexical bold/italic/strike/code wrappers without globally escaping text.
+This preserves Markdown already authored in Scape; an unformatted `*word*`
+can therefore become emphasis in a Markdown renderer. Markdown notes bypass
+conversion entirely. Mentions use OpenFleet's explicit reference syntax.
+
+Headings fold linebreaks into spaces so all text stays in one heading.
+Nested-list wrappers attach to the preceding parent item; a leading wrapper
+gets an empty parent item, including its ordered-list number.
+
+Tables use the first row as their header and pad every row to the widest row.
+They never discard extra cells. Pipes are escaped, including pipes after an
+even run of backslashes; an already escaped pipe is left alone. Cells flatten
+block boundaries and linebreaks to `<br>`. Cell headings keep their text,
+lists keep their textual markers, and fenced code becomes one inline code
+span per line. Code language and block layout inside cells are not preserved.
+Empty tables with no cells are omitted. These are Markdown export rules;
+the desktop's lightweight preview does not render all Markdown features.

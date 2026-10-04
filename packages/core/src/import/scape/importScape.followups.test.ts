@@ -7,7 +7,7 @@ import { renderImportReport } from './importReport.js';
 import { importScape } from './importScape.js';
 import {
   buildScapeFixture, CCM_PROJECT_ID, DUE_COLUMN_ID, editScapeDatastore, editScapeNotes,
-  KANBAN_VIEW_ID, LOG_STORE_ID, MARKDOWN_NOTE_ID, OPENFLEET_PROJECT_ID, PRIORITY_COLUMN_ID,
+  KANBAN_VIEW_ID, LEXICAL_NOTE_ID, LOG_STORE_ID, MARKDOWN_NOTE_ID, OPENFLEET_PROJECT_ID, PRIORITY_COLUMN_ID,
   STATUS_COLUMN_ID, TITLE_COLUMN_ID, type ScapeFixture,
 } from './scapeFixture.testkit.js';
 
@@ -134,5 +134,28 @@ describe('Scape import cutover follow-ups', () => {
     expect(result.output).toContain(join(reportDir, 'import-report.md'));
     expect(readFileSync(join(reportDir, 'import-report.md'), 'utf8')).toContain('| rows | 3 | 3 |');
     expect(existsSync(join(home, 'import-report.md'))).toBe(false);
+  });
+
+  it('stores the converted heading and ragged table from a synthetic Lexical note and leaves them unchanged on re-import', () => {
+    const text = (value: string) => ({ type: 'text', text: value });
+    const cell = (value: string) => ({ type: 'tablecell', children: [{ type: 'paragraph', children: [text(value)] }] });
+    const content = JSON.stringify({ root: { type: 'root', children: [
+      { type: 'heading', tag: 'h2', children: [text('First'), { type: 'linebreak' }, text('second')] },
+      { type: 'table', children: [
+        { type: 'tablerow', children: [cell('Header')] },
+        { type: 'tablerow', children: [cell('left|right'), cell('extra')] },
+      ] },
+    ] } });
+    editScapeNotes(fixture, (db) => db.prepare('UPDATE notes SET content = ? WHERE id = ?').run(content, LEXICAL_NOTE_ID));
+
+    const first = run();
+    const second = run();
+
+    expect(targetRows(`SELECT body_md FROM notes WHERE id = '${LEXICAL_NOTE_ID}'`)).toEqual([
+      { body_md: '## First second\n\n| Header |  |\n| --- | --- |\n| left\\|right | extra |' },
+    ]);
+    expect(first.counts.notes.notConverted).toBe(0);
+    expect(second.counts.notes).toMatchObject({ written: 0, updated: 0, conflict: 0, alreadyPresent: 5 });
+    expect(readdirSync(scratchRoot)).toEqual([]);
   });
 });
