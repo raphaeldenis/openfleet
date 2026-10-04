@@ -16,6 +16,7 @@ import { detailsTextOf } from '../core/copy-details';
 import { versionMismatchNoticeOf } from '../core/version-mismatch-notice';
 import { copyOfDaemonIssue } from '../core/error-copy';
 import { FleetEventsService } from '../core/fleet-events.service';
+import { ThemeService } from '../core/theme.service';
 import { VersionsService } from '../core/versions.service';
 import { BannerComponent } from '../design/banner.component';
 import { CopyDetailsButtonComponent } from '../design/copy-details-button.component';
@@ -76,7 +77,7 @@ const RUNNING_STATES = new Set(['generating', 'starting']);
             <span class="spacer"></span>
             <of-daemon-status [connected]="events.connected()" [mismatchedDaemonVersion]="versions.mismatch()?.daemonVersion ?? null" />
             <span class="spend" data-testid="spend-today" title="Cost tracking is not implemented yet">— today</span>
-            <of-theme-toggle-button />
+            <of-theme-toggle-button [theme]="themeService.theme()" (toggled)="themeService.toggle()" />
           </header>
           @if (versionMismatch(); as mismatch) {
             <of-banner
@@ -166,6 +167,7 @@ const RUNNING_STATES = new Set(['generating', 'starting']);
 export class AppShellComponent {
   protected readonly events = inject(FleetEventsService);
   protected readonly versions = inject(VersionsService);
+  protected readonly themeService = inject(ThemeService);
   private readonly router = inject(Router);
   private readonly injector = inject(Injector);
   protected readonly navItems = HELM_NAV_ITEMS;

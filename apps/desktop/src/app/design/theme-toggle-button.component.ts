@@ -1,14 +1,16 @@
-import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/core';
-import { ThemeService, otherTheme } from '../core/theme.service';
+import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
+
+type ShownTheme = 'dark' | 'light';
 
 const LABEL_BY_THEME = { dark: '☾ Dark', light: '☀ Light' } as const;
+const OTHER_THEME = { dark: 'light', light: 'dark' } as const;
 
-/** Top-bar button that names the current theme and switches to the other one on click. */
+/** Top-bar button that names the current theme and asks to switch to the other one on click. */
 @Component({
   selector: 'of-theme-toggle-button',
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <button type="button" class="of-btn of-btn--secondary theme-toggle" data-testid="theme-toggle" [title]="switchTitle()" (click)="theme.toggle()">
+    <button type="button" class="of-btn of-btn--secondary theme-toggle" data-testid="theme-toggle" [title]="switchTitle()" (click)="toggled.emit()">
       {{ label() }}
     </button>
   `,
@@ -17,7 +19,8 @@ const LABEL_BY_THEME = { dark: '☾ Dark', light: '☀ Light' } as const;
   `,
 })
 export class ThemeToggleButtonComponent {
-  protected readonly theme = inject(ThemeService);
-  protected readonly label = computed(() => LABEL_BY_THEME[this.theme.theme()]);
-  protected readonly switchTitle = computed(() => `Switch to ${otherTheme(this.theme.theme())} theme`);
+  readonly theme = input.required<ShownTheme>();
+  readonly toggled = output<void>();
+  protected readonly label = computed(() => LABEL_BY_THEME[this.theme()]);
+  protected readonly switchTitle = computed(() => `Switch to ${OTHER_THEME[this.theme()]} theme`);
 }
