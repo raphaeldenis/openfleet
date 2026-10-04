@@ -10,6 +10,7 @@ const NOTES_DATABASE_NAME = 'notes.sqlite';
 const DATASTORES_FOLDER_NAME = 'datastores';
 
 export interface ScapeProject { id: string; name: string; createdAt: unknown }
+export interface ScapePlaybook { id: string; name: string; lexicalContent: string; secrets: string; createdAt: unknown; updatedAt: unknown }
 export interface ScapeNote { id: string; projectId: string; title: string; content: string; contentFormat: string; createdAt: unknown; updatedAt: unknown; isShared: boolean }
 export interface ScapeNoteVersion { id: string; noteId: string; content: string; contentFormat: string; createdAt: number; source: string }
 export interface ScapeStore { id: string; projectId: string; displayName: string; createdAt: unknown; updatedAt: unknown }
@@ -77,6 +78,19 @@ export class ScapeSource {
 
   versionsOf(noteId: string): ScapeNoteVersion[] {
     return this.query(`SELECT id, noteID AS noteId, content, contentFormat, createdAt, source FROM note_versions WHERE noteID = ? ORDER BY createdAt, id`, noteId) as unknown as ScapeNoteVersion[];
+  }
+
+  playbooksOf(projectId: string): ScapePlaybook[] {
+    const hasPlaybooks = this.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'playbooks'").length > 0;
+    if (!hasPlaybooks) return [];
+    return this.query(`SELECT b.id, i.displayName AS name, b.lexicalContent, b.secrets, b.createdAt, b.updatedAt
+      FROM playbooks b JOIN project_items i ON i.id = b.id WHERE i.kind = 'playbook' AND i.projectID = ? ORDER BY i.displayName, b.id`, projectId) as unknown as ScapePlaybook[];
+  }
+
+  playbookSecretNames(): string[] {
+    const hasCatalog = this.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'trigger_secret_catalog'").length > 0;
+    if (!hasCatalog) return [];
+    return this.query('SELECT name FROM trigger_secret_catalog ORDER BY name').map((row) => String(row.name));
   }
 
   storesOf(projectId: string): ScapeStore[] {

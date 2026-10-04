@@ -6,6 +6,7 @@ import type { ImportPlan, PlannedRecord } from './scapePlan.js';
 import { writeManagers } from './scapeManagersWriter.js';
 import { writeWorkingStates } from './scapeWorkingStatesWriter.js';
 import { KEEP_STORED_RECORD, REPORT_DIFFERENCE_AS_CONFLICT, upsertRecord, type RecordValues, type UpsertOutcome, type WritePolicy } from './scapeTarget.js';
+import { writePlaybookArchives } from './playbookArchive.js';
 
 interface FamilyInput<Extra> {
   db: DatabaseSync;
@@ -153,6 +154,7 @@ export function writePlan(db: DatabaseSync, plan: ImportPlan, report: ImportRepo
   inTransaction(db, 'importScape', () => {
     inTransaction(db, 'importScapeProjects', () => writeProjects(db, plan, report));
     inTransaction(db, 'importScapeNotes', () => writeNotes(db, plan, report));
+    inTransaction(db, 'importScapePlaybooks', () => writePlaybookArchives({ db, archives: plan.playbookArchives, report }));
     const blockedStores = inTransaction(db, 'importScapeDataStores', () => writeDataStoreDefinitions(db, plan, report));
     const rowOutcomes = inTransaction(db, 'importScapeRows', () => writeRows(db, plan, report, blockedStores));
     inTransaction(db, 'importScapeHistory', () => writeHistory(db, plan, report, { blockedStores, rowOutcomes }));
