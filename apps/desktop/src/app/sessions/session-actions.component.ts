@@ -181,6 +181,8 @@ export class SessionActionsComponent {
   private readonly cancelButton = viewChild<ElementRef<HTMLButtonElement>>('cancelButton');
   private readonly dialog = viewChild<ElementRef<HTMLElement>>('dialog');
   private closingSessionId = '';
+  /** Numbers each opening of the dialog; cancelling, confirming or leaving the session moves it on, so only the live opening's answer counts. */
+  private dialogOpening = 0;
   private wasClosed = false;
 
   constructor() {
@@ -188,7 +190,9 @@ export class SessionActionsComponent {
       if (this.confirmingClose()) this.cancelButton()?.nativeElement.focus();
     });
     effect(() => {
-      if (this.closed()) this.confirmingClose.set(false);
+      if (!this.closed()) return;
+      this.dialogOpening++;
+      this.confirmingClose.set(false);
     });
     effect(() => {
       const isClosed = this.closed();
@@ -200,6 +204,7 @@ export class SessionActionsComponent {
     // confirm dialog showing over the new session.
     effect(() => {
       this.sessionId();
+      this.dialogOpening++;
       this.confirmingClose.set(false);
     });
   }
@@ -209,10 +214,10 @@ export class SessionActionsComponent {
     this.closingSessionId = this.sessionId();
     this.handoffFailure.set(null);
     this.confirmingClose.set(true);
-    void this.loadHandoffTarget(this.closingSessionId);
+    void this.loadHandoffTarget({ sessionId: this.closingSessionId, opening: ++this.dialogOpening });
   }
 
-  private async loadHandoffTarget(sessionId: string): Promise<void> {
+  private async loadHandoffTarget({ sessionId, opening }: { sessionId: string; opening: number }): Promise<void> {
     this.handoffTargetState.set({ status: 'loading' });
     this.writeHandoff.set(false);
     let target: HandoffTarget | null;
@@ -221,8 +226,8 @@ export class SessionActionsComponent {
     } catch {
       target = null;
     }
-    const dialogHasMovedOn = this.closingSessionId !== sessionId;
-    if (dialogHasMovedOn) return;
+    const isAnswerOfAnEarlierOpening = opening !== this.dialogOpening;
+    if (isAnswerOfAnEarlierOpening) return;
     if (target === null) return this.handoffTargetState.set({ status: 'check_failed' });
     if (!target.available) return this.handoffTargetState.set({ status: 'unavailable', reason: unavailableReasonOf(target) });
     this.handoffTargetState.set({ status: 'usable', relativePath: target.relativePath ?? '' });
@@ -230,6 +235,7 @@ export class SessionActionsComponent {
   }
 
   cancelClose(): void {
+    this.dialogOpening++;
     this.confirmingClose.set(false);
     this.focusCloseTriggerAfterRender();
   }
@@ -237,6 +243,7 @@ export class SessionActionsComponent {
   confirmClose(): void {
     const sessionId = this.closingSessionId;
     const shouldWriteHandoff = this.canChooseHandoff() && this.writeHandoff();
+    this.dialogOpening++;
     this.confirmingClose.set(false);
     void this.close({ sessionId, shouldWriteHandoff }).then(() => {
       const closeFailedOnCurrentSession = this.closeError() !== null && !this.hasLeftSession(sessionId);

@@ -156,8 +156,12 @@ export function registerRestRoutes(router: Router, deps: { sessions: SessionServ
     const sessionId = params.id!;
     requireSession(sessionId);
     const { writeHandoff } = CloseSessionRequestSchema.parse(body ?? {});
-    const handoff = writeHandoff ? (deps.handoff?.writeHandoffOnClose(sessionId) ?? NO_HANDOFF_TARGET) : undefined;
-    await deps.sessions.close(sessionId);
+    let handoff: CloseHandoffResult | undefined;
+    try {
+      if (writeHandoff) handoff = deps.handoff?.writeHandoffOnClose(sessionId) ?? NO_HANDOFF_TARGET;
+    } finally {
+      await deps.sessions.close(sessionId);
+    }
     json(res, 200, handoff ? { handoff } : {});
   });
 

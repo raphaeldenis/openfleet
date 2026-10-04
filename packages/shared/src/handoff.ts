@@ -47,7 +47,7 @@ export interface HandoffTarget {
 export const CloseSessionRequestSchema = z.object({ writeHandoff: z.boolean().optional() }).strict();
 export type CloseSessionRequest = z.infer<typeof CloseSessionRequestSchema>;
 
-export type HandoffSkipReason = 'recent_manual_handoff' | 'target_unavailable' | 'already_written';
+export type HandoffSkipReason = 'recent_manual_handoff' | 'target_unavailable' | 'already_written' | 'already_closed';
 
 /** What the close response says about the handoff the request asked for. */
 export type CloseHandoffResult =

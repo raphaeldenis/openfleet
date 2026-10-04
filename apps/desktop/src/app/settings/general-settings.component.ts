@@ -35,7 +35,7 @@ export class GeneralSettingsComponent {
   private readonly router = inject(Router);
 
   protected readonly docsRoot = { testId: 'general-docs-root', value: '—', reason: 'Not configurable in this build yet' };
-  protected readonly handoffOnClose = { testId: 'general-handoff-on-close', value: 'Off', reason: 'Set handoff.writeOnClose in config.json' };
+  protected readonly handoffOnClose = { testId: 'general-handoff-on-close', value: 'Set in config.json', reason: 'Set handoff.writeOnClose in config.json' };
   protected readonly replyLanguage = { testId: 'general-reply-language', value: '—', reason: 'Not available yet — no language setting in the daemon' };
   protected readonly themeLabel = computed(() => THEME_LABELS[this.theme.theme()]);
   protected readonly themeButtonLabel = computed(() => `Theme: ${this.themeLabel()} · switch`);

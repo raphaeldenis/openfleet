@@ -27,7 +27,7 @@ export function parseHandoffTarget(payload: unknown): HandoffTarget | undefined 
 
 const isErrorCode = (value: unknown): value is ErrorCode => typeof value === 'string' && Object.hasOwn(ERROR_CODES, value);
 
-const SKIP_REASONS: readonly HandoffSkipReason[] = ['recent_manual_handoff', 'target_unavailable', 'already_written'];
+const SKIP_REASONS: readonly HandoffSkipReason[] = ['recent_manual_handoff', 'target_unavailable', 'already_written', 'already_closed'];
 
 /** Reads what the daemon did with the handoff a close asked for; returns undefined when the payload is not a known result. */
 export function parseCloseHandoffResult(payload: unknown): CloseHandoffResult | undefined {

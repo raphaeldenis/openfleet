@@ -3,6 +3,7 @@ import type { ProjectRepository } from '../projects/projectRepository.js';
 import type { DocsFolderService } from './docsFolderService.js';
 import type { BuildHandoffDraft } from './handoffDraft.js';
 import { SessionNotFoundForHandoffError } from './handoffErrors.js';
+import { maskedSecrets } from '../redact.js';
 import { neutralizeSectionText } from './sectionText.js';
 
 export { SessionNotFoundForHandoffError } from './handoffErrors.js';
@@ -107,7 +108,7 @@ export class HandoffService {
   private createHandoffNote(session: Session, projectId: string, content: HandoffContent, author: string): Note {
     const projectName = this.deps.projects.get(projectId)?.name ?? NOT_RECORDED;
     const bodyMd = renderBody({ session, projectName, date: this.deps.clock().slice(0, DATE_LENGTH), content });
-    return this.deps.docs.createFileBackedNote({ projectId, folder: 'handoffs', title: session.name, bodyMd, author });
+    return this.deps.docs.createFileBackedNote({ projectId, folder: 'handoffs', title: maskedSecrets(session.name), bodyMd, author });
   }
 }
 
@@ -140,10 +141,10 @@ export function registerHandoffOnClose(
 function renderBody(input: { session: Session; projectName: string; date: string; content: HandoffContent }): string {
   const { session, projectName, date, content } = input;
   const header = [
-    `Session: ${singleLine(session.name)}`,
+    `Session: ${singleLine(maskedSecrets(session.name))}`,
     `Session id: ${singleLine(session.id)}`,
-    `Project: ${singleLine(projectName)}`,
-    `Branch: ${singleLine(session.branch ?? NOT_RECORDED)}`,
+    `Project: ${singleLine(maskedSecrets(projectName))}`,
+    `Branch: ${singleLine(maskedSecrets(session.branch ?? NOT_RECORDED))}`,
     `Date: ${date}`,
   ].join('\n');
 

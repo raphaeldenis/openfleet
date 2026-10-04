@@ -230,6 +230,41 @@ describe('SessionActionsComponent close dialog: write a handoff', () => {
     });
   });
 
+  describe('a late answer for an earlier opening of the dialog, on the same session', () => {
+    it('never flips the choice the user made in the current opening', async () => {
+      const firstOpeningTarget = deferred<HandoffTarget>();
+      const secondOpeningTarget = deferred<HandoffTarget>();
+      const api = { ...apiWith(), getHandoffTarget: vi.fn().mockReturnValueOnce(firstOpeningTarget.promise).mockReturnValueOnce(secondOpeningTarget.promise) };
+      const { fixture } = await renderIdle(api);
+      await openCloseDialog();
+      await userEvent.click(screen.getByTestId('close-confirm-cancel'));
+      await openCloseDialog();
+      secondOpeningTarget.resolve(USABLE_TARGET);
+      await checkboxReady();
+      await userEvent.click(checkbox());
+      expect(checkbox()).not.toBeChecked();
+
+      firstOpeningTarget.resolve(USABLE_TARGET);
+      await settleRequests(fixture);
+
+      expect(checkbox()).not.toBeChecked();
+    });
+
+    it('never fills a dialog that was cancelled before the answer arrived', async () => {
+      const slowTarget = deferred<HandoffTarget>();
+      const api = { ...apiWith(), getHandoffTarget: vi.fn().mockReturnValueOnce(slowTarget.promise).mockReturnValueOnce(new Promise(() => {})) };
+      const { fixture } = await renderIdle(api);
+      await openCloseDialog();
+      await userEvent.click(screen.getByTestId('close-confirm-cancel'));
+      await openCloseDialog();
+
+      slowTarget.resolve(USABLE_TARGET);
+      await settleRequests(fixture);
+
+      expect(checkbox()).toBeDisabled();
+    });
+  });
+
   describe('a late answer for another session', () => {
     it('never decides the checkbox of the dialog opened for the current session', async () => {
       const sessionId = signal('s1');

@@ -8,7 +8,7 @@ interface UnavailableRow { testId: string; value: string; reason: string }
 const DISABLED_ROWS: Record<string, UnavailableRow[]> = {
   General: [
     { testId: 'general-docs-root', value: '—', reason: 'Not configurable in this build yet' },
-    { testId: 'general-handoff-on-close', value: 'Off', reason: 'Set handoff.writeOnClose in config.json' },
+    { testId: 'general-handoff-on-close', value: 'Set in config.json', reason: 'Set handoff.writeOnClose in config.json' },
     { testId: 'general-reply-language', value: '—', reason: 'Not available yet — no language setting in the daemon' },
   ],
   Diagnostics: [
