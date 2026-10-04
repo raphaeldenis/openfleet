@@ -12,6 +12,7 @@ const REPOSITORY_PATH = '/Users/me/repo';
 const DAEMON_STEP_HEADING = 'Start the OpenFleet daemon';
 const PROJECT_STEP_HEADING = 'Define the project';
 const FIRST_SESSION_STEP_HEADING = 'Start your first session';
+const PROJECT = { id: '3f2b8c1e-5d4a-4b6e-9a7c-1d2e3f4a5b6c', name: 'Fleet', docsFolderPath: null };
 
 const daemonStepHeading = () => screen.getByRole('heading', { name: DAEMON_STEP_HEADING });
 const projectStepHeading = () => screen.getByRole('heading', { name: PROJECT_STEP_HEADING });
@@ -34,6 +35,7 @@ function stubDaemon({ isUp = false } = {}) {
   const fetchMock = vi.fn((url: string, init?: RequestInit) => {
     if (url.endsWith('/health')) return daemon.answerHealth(init);
     if (url.endsWith('/api/sessions')) return init?.method === 'POST' ? daemon.answerCreateSession() : daemon.answerListSessions();
+    if (new URL(url).pathname === '/api/projects') return Promise.resolve(response({ body: init?.method === 'POST' ? PROJECT : { items: [PROJECT], total: 1 } }));
     return Promise.reject(new Error(`unexpected request to ${url}`));
   });
   vi.stubGlobal('fetch', fetchMock);
@@ -74,6 +76,7 @@ async function reachFirstSessionStep({ repositoryPath = REPOSITORY_PATH, canOpen
   const view = await reachProjectStep({ canOpenSessions });
   const user = newUser();
   await user.type(screen.getByLabelText('Repository path'), repositoryPath);
+  await createOnboardingProject(user);
   await user.click(screen.getByRole('button', { name: 'Continue' }));
   return { ...view, user };
 }
@@ -348,6 +351,7 @@ describe('Onboarding — hostile black-box suite', () => {
         emoji: '🤖',
         model: 'sonnet',
         harness: 'claude-cli',
+        projectId: PROJECT.id,
         seededPrompt: expect.stringMatching(/do not modify/i),
       });
     });
@@ -373,6 +377,7 @@ describe('Onboarding — hostile black-box suite', () => {
       await letTimePass(0, fixture);
       const user = newUser();
       await user.type(screen.getByLabelText('Repository path'), REPOSITORY_PATH);
+      await createOnboardingProject(user);
       await user.click(screen.getByRole('button', { name: 'Continue' }));
       expect(router.url).toBe('/onboarding?mode=manager');
 
@@ -485,6 +490,13 @@ describe('Onboarding — hostile black-box suite', () => {
 async function reachProjectStepAndType() {
   const view = await reachProjectStep();
   const user = newUser();
+  await createOnboardingProject(user);
   await user.type(screen.getByLabelText('Repository path'), REPOSITORY_PATH);
   return { ...view, user };
+}
+
+async function createOnboardingProject(user: ReturnType<typeof newUser>): Promise<void> {
+  await user.type(screen.getByLabelText('Name'), PROJECT.name);
+  await user.click(screen.getByRole('button', { name: 'Create project' }));
+  await screen.findByText(PROJECT.name, { exact: true });
 }

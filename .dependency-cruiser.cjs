@@ -26,7 +26,7 @@ const TEST_CODE = [
 const CORE_SRC = '^packages/core/src/';
 const CORE_COMPOSITION_ROOT = '^packages/core/src/(daemon|main)\\.ts$';
 const DESKTOP_APP = '^apps/desktop/src/app/';
-const DESKTOP_FEATURE_FOLDERS = 'inbox|managers|notes|onboarding|sessions|settings|tables|working-state';
+const DESKTOP_FEATURE_FOLDERS = 'inbox|managers|notes|onboarding|projects|sessions|settings|tables|working-state';
 
 /** @type {import('dependency-cruiser').IConfiguration} */
 module.exports = {
