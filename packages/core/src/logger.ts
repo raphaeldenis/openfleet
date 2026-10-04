@@ -81,6 +81,11 @@ function redactString(value: string, { keepNewlines = false } = {}): string {
   return shortenPaths(maskedSecrets(printable));
 }
 
+/** Runs the logger's own redaction on a text that did not come through `log`: masked secrets, shortened home paths, no control characters. */
+export function redactedText(text: string, options: { keepNewlines?: boolean } = {}): string {
+  return redactString(text, options);
+}
+
 const attempt = <T>(read: () => T): T | undefined => {
   try { return read(); } catch { return undefined; }
 };

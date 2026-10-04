@@ -13,3 +13,4 @@ export * from './handovers.js';
 export * from './e2e.js';
 export * from './errors.js';
 export * from './daemonIssues.js';
+export * from './diagnostics.js';
