@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { basename } from 'node:path';
-import { HandoffFileSchema, OpenFleetError, type HandoffSummary, type Page } from '@openfleet/shared';
+import { handoffFileLabel, HandoffFileSchema, OpenFleetError, type HandoffSummary, type Page } from '@openfleet/shared';
 import type { ProjectRepository } from '../projects/projectRepository.js';
 import { ProjectNotFoundError } from '../projects/projectErrors.js';
 import { maskedSecrets } from '../redact.js';
@@ -30,7 +30,8 @@ function cappedContext({ text, totalBytes }: { text: string; totalBytes: number 
 
 export function buildHandoffBlock({ file, text, nonce = randomBytes(4).toString('hex') }: { file: string; text: string; nonce?: string }): string {
   const safeText = text.replaceAll(`handoff-${nonce}`, `handoff-[escaped-${nonce}]`);
-  return `${HANDOFF_PREAMBLE}\n<handoff-${nonce} file="handoffs/${file}">\n${safeText}\n</handoff-${nonce}>`;
+  const fileLabel = handoffFileLabel(file);
+  return `${HANDOFF_PREAMBLE}\n<handoff-${nonce} file="handoffs/${fileLabel}">\n${safeText}\n</handoff-${nonce}>`;
 }
 
 export class HandoffSeed {

@@ -16,6 +16,12 @@ export interface HandoffSummary {
   updatedAt: string;
 }
 
+const BIDI_CONTROLS = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
+
+export function handoffFileLabel(file: string): string {
+  return file.replace(BIDI_CONTROLS, '');
+}
+
 const HandoffSectionTextSchema = z.string().max(HANDOFF_SECTION_MAX_CHARACTERS);
 
 export const HandoffContentSchema = z

@@ -1,7 +1,6 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { mkdtempSync, readFileSync, renameSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { chmodSync, mkdirSync, readFileSync, readdirSync, renameSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -22,6 +21,7 @@ import { NoteRepository } from '../notes/noteRepository.js';
 import { NoteService } from '../notes/noteService.js';
 import { ProjectRepository } from '../projects/projectRepository.js';
 import { SessionService } from '../sessions/sessionService.js';
+import { createTempDirTracker } from '../tempDirTracker.js';
 import { WorkingStateService } from '../workingState/workingStateService.js';
 import { DataStoreRepository } from '../stores/dataStoreRepository.js';
 import { DataStoreService } from '../stores/dataStoreService.js';
@@ -29,6 +29,8 @@ import { startServer } from './server.js';
 
 const ADMIN = { authorization: 'Bearer admin', 'content-type': 'application/json' };
 const ONE_MIB = 1024 * 1024;
+const tempDirs = createTempDirTracker();
+const isRoot = process.getuid?.() === 0;
 
 let server: Awaited<ReturnType<typeof startServer>>;
 let docs: DocsFolderService;
@@ -37,6 +39,7 @@ let mcpToken: string;
 let fileBackedProjectId: string;
 let docsFolderPath: string;
 let db: DatabaseSync;
+let sessions: SessionService;
 
 const call = (method: string, path: string, body?: unknown, headers: Record<string, string> = ADMIN) =>
   fetch(`${server.url}${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
@@ -44,10 +47,12 @@ const createNote = async (overrides: Record<string, unknown> = {}) =>
   (await call('POST', '/api/notes', { projectId: 'p1', title: 'Plan', bodyMd: '## Log\nentry 1', ...overrides })).json() as Promise<Record<string, any>>;
 
 beforeEach(async () => {
+  const root = tempDirs.make('of-note-routes-');
+  const worktreesRoot = join(root, 'worktrees');
   db = openDatabase(':memory:');
   const bus = new EventBus();
   const harness = new FakeHarness();
-  const sessions = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt', submitKeystrokeDelayMs: 0 });
+  sessions = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:0', worktreesRoot, submitKeystrokeDelayMs: 0 });
   const managerRepo = new ManagerRepository(db);
   const pulseScheduler = new PulseScheduler({ managers: managerRepo, sessions, bus });
   const managers = new ManagerService({ managers: managerRepo, sessions, bus, scheduler: pulseScheduler });
@@ -58,7 +63,8 @@ beforeEach(async () => {
   projects.insert({ id: 'p1', name: 'One', docsFolderPath: null, createdAt: 't0' });
   projects.insert({ id: 'p2', name: 'Two', docsFolderPath: null, createdAt: 't0' });
   fileBackedProjectId = 'p-fb';
-  docsFolderPath = mkdtempSync(join(tmpdir(), 'of-docs-'));
+  docsFolderPath = join(root, 'docs');
+  mkdirSync(docsFolderPath);
   projects.insert({ id: fileBackedProjectId, name: 'FileBacked', docsFolderPath, createdAt: 't0' });
 
   const storeRepo = new DataStoreRepository(db);
@@ -69,16 +75,22 @@ beforeEach(async () => {
   docs.ensureLayout(docsFolderPath);
 
   server = await startServer({
-    host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath: '/tmp/of-unused/config.json',
+    host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath: join(root, 'config.json'),
     notes, noteRepo, docs, stores, storeRepo, projects,
-    mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, worktreesRoot: '/tmp/of-wt', stores, storeRepo, notes, noteRepo, docs, workingStates: new WorkingStateService({ db, clock: () => new Date().toISOString(), stateRoot: '/tmp/of-unused/state', maxBytes: 6144 }) }),
+    mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, worktreesRoot, stores, storeRepo, notes, noteRepo, docs, workingStates: new WorkingStateService({ db, clock: () => new Date().toISOString(), stateRoot: join(root, 'state'), maxBytes: 6144 }) }),
   });
 
-  const session = await sessions.create({ directory: '/tmp', name: 'Gimli', harness: 'fake', emoji: '⛏️' });
+  const session = await sessions.create({ directory: root, name: 'Gimli', harness: 'fake', emoji: '⛏️' });
   db.prepare('UPDATE sessions SET project_id = ? WHERE id = ?').run('p1', session.id);
   mcpToken = harness.launches[0]!.mcpToken;
 });
-afterEach(() => server.close());
+afterEach(async () => {
+  vi.restoreAllMocks();
+  await sessions.closeAll();
+  await server.close();
+  db.close();
+  tempDirs.removeAll();
+});
 
 describe('notes REST routes', () => {
   it('refuses every registered /api route without the admin token', async () => {
@@ -450,7 +462,7 @@ describe('notes REST routes', () => {
       expect(readNoteVersionRevs(note.id)).toEqual([1]);
     });
 
-    it.each(['EXDEV', 'EACCES', 'ENOSPC'])('answers 500 and keeps the old body, revision and version list when the file swap fails with %s', async (code) => {
+    it.each(['EXDEV', 'ENOSPC'])('answers 500 and keeps the old body, revision and version list when the file swap fails with %s', async (code) => {
       const note = seedFileBackedNote();
       vi.spyOn(nodeDocsFolderFs, 'renameSync').mockImplementation(() => { throw Object.assign(new Error(code), { code }); });
 
@@ -462,6 +474,46 @@ describe('notes REST routes', () => {
       expect(noteRepo.get(note.id)).toMatchObject({ bodyMd: 'v1', rev: 1 });
       expect(readNoteVersionRevs(note.id)).toEqual([1]);
       expect(readFileSync(noteRepo.get(note.id)!.filePath!, 'utf8')).toBe('v1');
+    });
+
+    it.skipIf(isRoot)('answers a retryable conflict for a read-only note folder and saves after permissions recover', async () => {
+      const note = seedFileBackedNote();
+      const folder = join(docsFolderPath, 'specs');
+      chmodSync(folder, 0o500);
+      try {
+        const response = await call('PATCH', `/api/notes/${note.id}`, { projectId: fileBackedProjectId, expectedRev: 1, bodyMd: 'v2' });
+
+        expect(response.status).toBe(409);
+        expect(await response.json()).toMatchObject({ error: 'docs_folder_not_writable', kind: 'conflict', retry: 'later' });
+        expect(noteRepo.get(note.id)).toMatchObject({ bodyMd: 'v1', rev: 1 });
+        expect(readFileSync(note.filePath!, 'utf8')).toBe('v1');
+        expect(readNoteVersionRevs(note.id)).toEqual([1]);
+        expect(readdirSync(folder)).toHaveLength(1);
+      } finally {
+        chmodSync(folder, 0o700);
+      }
+      const retried = await call('PATCH', `/api/notes/${note.id}`, { projectId: fileBackedProjectId, expectedRev: 1, bodyMd: 'v2' });
+      expect(retried.status).toBe(200);
+      expect(await retried.json()).toMatchObject({ bodyMd: 'v2', rev: 2 });
+    });
+
+    it.each(['realpathSync', 'writeFileExclusiveSync', 'renameSync'] as const)('maps permission refusals from %s without committing or leaking a path', async (operation) => {
+      const note = seedFileBackedNote();
+      for (const code of ['EACCES', 'EROFS', 'EPERM']) {
+        const fault = vi.spyOn(nodeDocsFolderFs, operation).mockImplementation(() => { throw Object.assign(new Error(`${code}: ${docsFolderPath}`), { code }); });
+
+        const response = await call('PATCH', `/api/notes/${note.id}`, { projectId: fileBackedProjectId, expectedRev: 1, bodyMd: 'v2' });
+        fault.mockRestore();
+
+        expect(response.status).toBe(409);
+        const envelope = await response.json();
+        expect(envelope).toMatchObject({ error: 'docs_folder_not_writable', kind: 'conflict', retry: 'later' });
+        expect(JSON.stringify(envelope)).not.toContain(docsFolderPath);
+        expect(noteRepo.get(note.id)).toMatchObject({ bodyMd: 'v1', rev: 1 });
+        expect(readNoteVersionRevs(note.id)).toEqual([1]);
+        expect(readFileSync(note.filePath!, 'utf8')).toBe('v1');
+        expect(readdirSync(join(docsFolderPath, 'specs'))).toHaveLength(1);
+      }
     });
 
     it.each(['ENOENT', 'ENOTDIR'])('answers 409 file_unreadable and rolls back when the file swap fails with %s', async (code) => {
@@ -602,7 +654,7 @@ describe('notes REST routes', () => {
   describe('errors never leak paths', () => {
     it('answers 409 path_escapes_docs_folder, without the path, when the note file now points outside the docs folder', async () => {
       const fileBacked = docs.createFileBackedNote({ projectId: fileBackedProjectId, folder: 'specs', title: 'log', bodyMd: 'v1', author: 'seed' });
-      const outsideDir = mkdtempSync(join(tmpdir(), 'of-outside-'));
+      const outsideDir = tempDirs.make('of-outside-');
       const outsideFile = join(outsideDir, 'secret.md');
       writeFileSync(outsideFile, 'v1');
       const filePath = noteRepo.get(fileBacked.id)!.filePath!;
