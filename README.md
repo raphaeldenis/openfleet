@@ -52,7 +52,7 @@ On another Mac (AirDrop, browser or Messages add the quarantine flag) Gatekeeper
 
 ### Version
 
-`apps/desktop/src-tauri/tauri.conf.json` is the single source of the app version. `node scripts/release/set-version.mjs <semver>` writes it and every copy (`Cargo.toml`, `Cargo.lock`, the three `package.json`). Unlike the spec's `cargo update -p app`, it edits the app crate's `Cargo.lock` entry directly, so it works offline and without cargo.
+`apps/desktop/src-tauri/tauri.conf.json` is the single source of the app version. `node scripts/release/set-version.mjs <semver>` writes it and every copy (`Cargo.toml`, `Cargo.lock`, the three `package.json`). Unlike the spec's `cargo update -p app`, it edits the app crate's `Cargo.lock` entry directly, so it works offline and without cargo. `node scripts/release/prepare.mjs <semver>` prepares a whole release (bump, checks, release notes stub, next git commands, never commits or pushes); the full local flow is in [RELEASING.md](RELEASING.md).
 
 ### Architecture checks
 

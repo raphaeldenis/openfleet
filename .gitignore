@@ -15,4 +15,5 @@ apps/desktop/src-tauri/binaries/
 test-results/
 playwright-report/
 .scratch/
+/release-notes-v*.md
 .claude/settings.local.json
