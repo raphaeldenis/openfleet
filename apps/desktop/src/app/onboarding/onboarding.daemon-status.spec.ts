@@ -4,6 +4,7 @@ import { render, screen } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DAEMON_STATUS_PORT, DaemonStatus } from '../core/daemon-status.service';
+import { SupportActions } from '../core/support-actions';
 import { VersionsService } from '../core/versions.service';
 import { OnboardingComponent } from './onboarding.component';
 
@@ -39,9 +40,10 @@ function fakeDaemonStatusPort(initial: DaemonStatus) {
   return { port: { read }, read, report: (status: DaemonStatus | Error) => (next = status) };
 }
 
-function renderUnderTauri(port: { read: () => Promise<DaemonStatus> } | null) {
+function renderUnderTauri(port: { read: () => Promise<DaemonStatus> } | null, { support = undefined as Partial<SupportActions> | undefined } = {}) {
+  const supportProviders = support ? [{ provide: SupportActions, useValue: support }] : [];
   return render(OnboardingComponent, {
-    providers: [provideRouter([{ path: '**', children: [] }]), { provide: DAEMON_STATUS_PORT, useValue: port }],
+    providers: [provideRouter([{ path: '**', children: [] }]), { provide: DAEMON_STATUS_PORT, useValue: port }, ...supportProviders],
   });
 }
 
@@ -154,6 +156,74 @@ describe('OnboardingComponent daemon step under Tauri', () => {
     expect(container).toHaveTextContent(MANUAL_CARD_COMMAND);
     expect(container).not.toHaveTextContent('may not be on the daemon PATH');
     expect(screen.queryByRole('button', { name: 'Reveal log' })).toBeNull();
+  });
+
+  it('user with a failed daemon sees the failure card above the "Start it yourself" card', async () => {
+    const { port } = fakeDaemonStatusPort({ state: 'failed', lastLine: 'boom' });
+
+    await renderAfterFirstStatusRead(port);
+
+    const failureHeading = screen.getByRole('heading', { name: FAILED_HEADING });
+    const manualHeading = screen.getByRole('heading', { name: 'Start it yourself' });
+    expect(failureHeading.compareDocumentPosition(manualHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByText('No daemon on 127.0.0.1:7331')).toBeNull();
+    expect(screen.getByText('Checking again every 2 s…')).toBeInTheDocument();
+  });
+
+  it('user sees the real last line of the daemon, escaped, and never the mockup sample sentence', async () => {
+    const { port } = fakeDaemonStatusPort({ state: 'failed', lastLine: '<img src=x onerror=alert(1)> exited' });
+
+    const { container } = await renderAfterFirstStatusRead(port);
+
+    expect(screen.getByTestId('daemon-last-line')).toHaveTextContent('<img src=x onerror=alert(1)> exited');
+    expect(container.querySelector('img')).toBeNull();
+    expect(container).not.toHaveTextContent('sample line');
+  });
+
+  it('user whose daemon printed nothing sees no last-line block and is told so', async () => {
+    const { port } = fakeDaemonStatusPort({ state: 'failed' });
+
+    const { container } = await renderAfterFirstStatusRead(port);
+
+    expect(screen.queryByTestId('daemon-last-line')).toBeNull();
+    expect(container).toHaveTextContent('printed nothing');
+  });
+
+  it('user copying the command after a failure reads Copied and has it announced', async () => {
+    const { port } = fakeDaemonStatusPort({ state: 'failed', lastLine: 'boom' });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    await renderAfterFirstStatusRead(port);
+
+    await user.click(screen.getByRole('button', { name: 'Copy command' }));
+
+    expect(await navigator.clipboard.readText()).toBe('pnpm dev:core');
+    expect(screen.getByRole('button', { name: 'Copied ✓' })).toBeInTheDocument();
+    expect(screen.getAllByRole('status').some((status) => status.textContent?.includes('copied'))).toBe(true);
+  });
+
+  it('user can reveal the daemon log from the failure card when the desktop app offers it', async () => {
+    const { port } = fakeDaemonStatusPort({ state: 'failed', lastLine: 'boom' });
+    const support = { isAvailable: true, revealLogs: vi.fn(() => Promise.resolve()) };
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    await renderUnderTauri(port, { support });
+    await vi.advanceTimersByTimeAsync(0);
+
+    await user.click(screen.getByRole('button', { name: 'Reveal log' }));
+
+    expect(support.revealLogs).toHaveBeenCalledOnce();
+  });
+
+  it('user is told when the daemon log folder could not be opened', async () => {
+    const { port } = fakeDaemonStatusPort({ state: 'failed', lastLine: 'boom' });
+    const support = { isAvailable: true, revealLogs: vi.fn(() => Promise.reject(new Error('no finder'))) };
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const { fixture } = await renderUnderTauri(port, { support });
+    await vi.advanceTimersByTimeAsync(0);
+
+    await user.click(screen.getByRole('button', { name: 'Reveal log' }));
+    await fixture.whenStable();
+
+    expect(screen.getByTestId('daemon-check-result')).toHaveTextContent('Couldn’t open the logs folder');
   });
 
   it('user is told claude may be missing from the PATH only when the fallback PATH was used and the last line names claude', async () => {
