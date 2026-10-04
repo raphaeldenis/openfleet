@@ -13,6 +13,7 @@ import {
 import { Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { environment } from '../../environments/environment';
 import { detailsTextOf } from '../core/copy-details';
+import { versionMismatchNoticeOf } from '../core/version-mismatch-notice';
 import { copyOfDaemonIssue } from '../core/error-copy';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { VersionsService } from '../core/versions.service';
@@ -194,17 +195,12 @@ export class AppShellComponent {
   protected readonly versionMismatch = computed(() => {
     const mismatch = this.versions.mismatch();
     if (!mismatch) return undefined;
-    const { daemonVersion, appVersion } = mismatch;
-    const description = `The daemon on ${this.daemonAddress} is ${daemonVersion}, this app is ${appVersion} — restart the daemon so both match.`;
-    const detailsText = detailsTextOf({
-      ref: `OF-${crypto.randomUUID().slice(0, 6)}`,
-      code: 'version_mismatch',
-      daemonVersion,
-      appVersion,
+    return versionMismatchNoticeOf({
+      mismatch,
       address: this.daemonAddress,
       at: new Date().toISOString(),
+      ref: `OF-${crypto.randomUUID().slice(0, 6)}`,
     });
-    return { description, detailsText };
   });
   private readonly paletteTrigger = viewChild.required<ElementRef<HTMLButtonElement>>('paletteTrigger');
   private paletteOpener: HTMLElement | null = null;

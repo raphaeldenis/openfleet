@@ -120,7 +120,7 @@ describe('Settings navigation', () => {
 
   it('shows the load error, not an endless Loading…, when /settings is opened while the daemon is down', async () => {
     vi.stubGlobal('fetch', daemonUnreachable());
-    const { harness, root } = await openApp('/settings');
+    const { harness, root } = await openApp('/settings?tab=models');
 
     await vi.waitFor(() => {
       harness.detectChanges();
