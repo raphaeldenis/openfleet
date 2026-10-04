@@ -72,7 +72,7 @@ On another Mac (AirDrop, browser or Messages add the quarantine flag) Gatekeeper
 
 A violation reads `error <rule>: <importing file> → <imported file>`; the rule's `comment` in `.dependency-cruiser.cjs` gives the reason. Fix the import rather than the rule.
 
-Existing debt is frozen in `.dependency-cruiser-known-violations.json` (`--ignore-known`), so only new violations fail. The baseline only shrinks: when you fix a listed violation, regenerate it with `pnpm exec depcruise packages/core/src packages/shared/src apps/desktop/src --config .dependency-cruiser.cjs --output-type baseline --output-to .dependency-cruiser-known-violations.json`; `scripts/arch.test.ts` fails while the file lists an entry that no longer occurs. Never regenerate it to admit a new violation. Known debt without a rule: the desktop features import each other in cycles (sessions, inbox, managers).
+The repo has no known violation: `.dependency-cruiser-known-violations.json` (`--ignore-known`) is empty and any violation fails. A baseline entry is debt, and it only shrinks: when you fix a listed violation, regenerate it with `pnpm exec depcruise packages/core/src packages/shared/src apps/desktop/src --config .dependency-cruiser.cjs --output-type baseline --output-to .dependency-cruiser-known-violations.json`; `scripts/arch.test.ts` fails while the file lists an entry that no longer occurs. Never regenerate it to admit a new violation. Known debt without a rule: the desktop features import each other in cycles (sessions, inbox, managers).
 
 ### Pre-push hook
 
