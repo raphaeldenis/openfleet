@@ -2,6 +2,7 @@ mod admin_token;
 mod app_exit;
 mod daemon;
 mod diagnostics_bundle;
+mod event_log;
 mod issue_report;
 #[cfg(test)]
 mod linear_growth;
