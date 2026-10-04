@@ -10,6 +10,7 @@ export * from './projects.js';
 export * from './workingState.js';
 export * from './todos.js';
 export * from './handovers.js';
+export * from './handoff.js';
 export * from './e2e.js';
 export * from './errors.js';
 export * from './daemonIssues.js';

@@ -26,6 +26,13 @@ export class ProjectHasNoDocsFolderError extends Error {
   }
 }
 
+/** The docs folder exists but refuses writes (EACCES, EROFS, EPERM). */
+export class DocsFolderNotWritableError extends Error {
+  constructor(docsFolderPath: string, cause: unknown) {
+    super(`docs folder is not writable: ${docsFolderPath}`, { cause });
+  }
+}
+
 export class NoteIsNotFileBackedError extends Error {
   constructor(noteId: string) {
     super(`note ${noteId} is not file-backed`);

@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import type { ServerEvent, Session } from '@openfleet/shared';
+import type { HandoffContent, ServerEvent, Session } from '@openfleet/shared';
 import { openDatabase } from '../db/database.js';
 import { ProjectRepository } from '../projects/projectRepository.js';
 import type { DocsFolderFs } from './docsFolderFs.js';
 import { DocsFolderService } from './docsFolderService.js';
-import { HandoffService, SessionNotFoundForHandoffError, registerHandoffOnClose, type GitPort, type HandoffContent } from './handoffService.js';
+import { HandoffService, SessionNotFoundForHandoffError, registerHandoffOnClose, type GitPort } from './handoffService.js';
 import { expandMentions } from './mentionExpander.js';
 import { NoteRepository } from './noteRepository.js';
 import { listSections } from './noteSections.js';

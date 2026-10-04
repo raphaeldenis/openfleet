@@ -1,4 +1,4 @@
-import type { Note, ServerEvent, Session } from '@openfleet/shared';
+import type { HandoffContent, Note, ServerEvent, Session } from '@openfleet/shared';
 import type { ProjectRepository } from '../projects/projectRepository.js';
 import type { DocsFolderService } from './docsFolderService.js';
 import { canClose, canOpen, fenceOf, type Fence } from './noteSections.js';
@@ -24,15 +24,6 @@ const SECTION_TITLES = {
 /** The parser in noteSections.ts treats `#` and `##` (up to three leading spaces) outside code fences as section headings. */
 const TOP_LEVEL_HEADING_LINE = /^ {0,3}#{1,2}(?:[ \t]|$)/;
 
-export interface HandoffContent {
-  goal: string;
-  state: string;
-  decisions: string;
-  filesTouched: string;
-  nextSteps: string;
-  openQuestions: string;
-}
-
 /** Read-only git access for a session's working directory; implementations throw when git is unavailable. */
 export interface GitPort {
   /** Output of `git status --short`. */
@@ -50,6 +41,12 @@ export class SessionNotFoundForHandoffError extends Error {
 export class SessionHasNoProjectError extends Error {
   constructor(sessionId: string) {
     super(`session ${sessionId} has no project, so it has no docs folder to write a handoff into`);
+  }
+}
+
+export class HandoffNotFoundError extends Error {
+  constructor(file: string) {
+    super(`handoff not found: ${file}`);
   }
 }
 

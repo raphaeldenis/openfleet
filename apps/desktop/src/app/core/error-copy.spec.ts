@@ -52,6 +52,18 @@ describe('copyFor', () => {
     expect(text).not.toMatch(/try again/i);
   });
 
+  it('tells the user to fix the folder permissions, then try again, when the docs folder is not writable', () => {
+    const { text } = copyFor(apiErrorOf(envelopeOf('docs_folder_not_writable')), { action: 'generic' });
+
+    expect(text).toBe('The docs folder is not writable — fix the folder permissions, then try again.');
+  });
+
+  it('tells the user to pick another handoff, without a retry, when the handoff is gone', () => {
+    const { text } = copyFor(apiErrorOf(envelopeOf('handoff_not_found')), { action: 'create_session' });
+
+    expect(text).toBe('That handoff is no longer in the docs folder — pick another handoff or remove it.');
+  });
+
   it('prefers the entry of the action over the entry of the code', () => {
     const envelope = envelopeOf('payload_too_large');
 
@@ -127,8 +139,8 @@ describe('copyFor', () => {
         return problems.map((problem) => `${code}: ${problem} — "${text}"`);
       });
 
-    it('covers every code, action and retry once (1281 cases)', () => {
-      expect(ALL_CODES.length * ACTIONS.length * RETRIES.length).toBe(1281);
+    it('covers every code, action and retry once (1323 cases)', () => {
+      expect(ALL_CODES.length * ACTIONS.length * RETRIES.length).toBe(1323);
     });
 
     describe.each(ACTIONS)('the action %s', (action) => {

@@ -21,8 +21,8 @@ import {
   ConstraintError, DaemonSetColumnError, DuplicateIdError, InvalidActorError, InvalidCellValueError, InvalidColumnDefinitionError, InvalidNameError, InvalidQueryError,
   InvalidViewConfigError, ReferencedRecordMissingError, StoreHasRowsError, StoreRowCapError, ViewNotFoundError,
 } from '../stores/dataStoreService.js';
-import { NoteIsNotFileBackedError, ProjectHasNoDocsFolderError } from '../notes/docsFolderService.js';
-import { SessionHasNoProjectError, SessionNotFoundForHandoffError } from '../notes/handoffService.js';
+import { DocsFolderNotWritableError, NoteIsNotFileBackedError, ProjectHasNoDocsFolderError } from '../notes/docsFolderService.js';
+import { HandoffNotFoundError, SessionHasNoProjectError, SessionNotFoundForHandoffError } from '../notes/handoffService.js';
 import { SectionError } from '../notes/noteSections.js';
 import { WorktreeError } from '../git/worktrees.js';
 import { WorkingStateTooLargeError } from '../workingState/workingStateService.js';
@@ -83,9 +83,11 @@ const domainErrorCodes: [string, () => unknown, ErrorCode][] = [
   ['SectionError', () => new SectionError('section "Plan" not found'), 'invalid_body'],
   ['WorkingStateTooLargeError', () => new WorkingStateTooLargeError(9000, 8000), 'state_too_large'],
   ['SessionNotFoundForHandoffError', () => new SessionNotFoundForHandoffError('s1'), 'session_not_found'],
-  ['SessionHasNoProjectError', () => new SessionHasNoProjectError('s1'), 'project_not_found'],
+  ['SessionHasNoProjectError', () => new SessionHasNoProjectError('s1'), 'no_docs_folder'],
   ['ProjectHasNoDocsFolderError', () => new ProjectHasNoDocsFolderError('p1'), 'no_docs_folder'],
   ['NoteIsNotFileBackedError', () => new NoteIsNotFileBackedError('n1'), 'not_file_backed'],
+  ['DocsFolderNotWritableError', () => new DocsFolderNotWritableError('/somewhere/docs', new Error('EACCES')), 'docs_folder_not_writable'],
+  ['HandoffNotFoundError', () => new HandoffNotFoundError('2026-10-04-gimli.md'), 'handoff_not_found'],
   ['WorktreeError invalid_branch', () => new WorktreeError('invalid_branch', 'invalid branch name: a b'), 'invalid_branch_name'],
   ['WorktreeError git_failed', () => new WorktreeError('git_failed', 'fatal: /w/a is not a repository'), 'internal_error'],
   ['WorktreeError exists',() => new WorktreeError('exists', 'worktree already exists: /w/a'), 'worktree_exists'],
@@ -124,6 +126,23 @@ describe('describeError: every Error subclass of core is mapped or internal on p
 describe('describeError: T3 domain classes', () => {
   it.each(domainErrorCodes)('maps %s to its code', (_label, makeError, code) => {
     expect(describeError(makeError()).error).toBe(code);
+  });
+
+  it('answers an unwritable docs folder with fixed words that carry no path', () => {
+    const envelope = describeError(new DocsFolderNotWritableError('/Users/someone/docs', new Error('EACCES')));
+
+    expect(envelope).toMatchObject({
+      error: 'docs_folder_not_writable', kind: 'conflict', retry: 'later',
+      message: 'the docs folder is not writable.', hint: 'fix the folder permissions, then try again.',
+    });
+    expect(JSON.stringify(envelope)).not.toContain('/Users/someone');
+  });
+
+  it('answers a missing handoff as a 404 that is never retried, with no file name', () => {
+    const envelope = describeError(new HandoffNotFoundError('2026-10-04-gimli.md'));
+
+    expect(envelope).toMatchObject({ error: 'handoff_not_found', kind: 'not_found', retry: 'never', message: 'the handoff does not exist.' });
+    expect(JSON.stringify(envelope)).not.toContain('gimli');
   });
 
   it('derives kind and retry from the registry', () => {

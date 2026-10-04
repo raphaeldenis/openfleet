@@ -14,9 +14,9 @@ import { ModelConfigReadOnlyError, ModelConfigUnreadableError } from '../models.
 import { escapedForRegExp, isSecretEntry, MASK, maskedSecrets, maskingCutCredential } from '../redact.js';
 import { WorktreeError } from '../git/worktrees.js';
 import {
-  NoteFileUnreadableError, NoteIsNotFileBackedError, PathEscapesDocsFolderError, ProjectHasNoDocsFolderError, ProjectNotFoundError,
+  DocsFolderNotWritableError, NoteFileUnreadableError, NoteIsNotFileBackedError, PathEscapesDocsFolderError, ProjectHasNoDocsFolderError, ProjectNotFoundError,
 } from '../notes/docsFolderService.js';
-import { SessionHasNoProjectError, SessionNotFoundForHandoffError } from '../notes/handoffService.js';
+import { HandoffNotFoundError, SessionHasNoProjectError, SessionNotFoundForHandoffError } from '../notes/handoffService.js';
 import { SectionError } from '../notes/noteSections.js';
 import { WorkingStateTooLargeError } from '../workingState/workingStateService.js';
 import { FileBackedNoteError, NoteNotFoundError, NoteTooLargeError, StaleRevisionError, VersionNotFoundError } from '../notes/noteService.js';
@@ -77,6 +77,13 @@ const WORKTREE_ENTRY_BY_CODE: Record<WorktreeError['code'], (error: WorktreeErro
 // A database that cannot take work answers internal (500): waiting a second fixes nothing, a restart may.
 const DB_STUCK_ENTRY: Entry = { code: 'db_stuck', message: 'the database is not accepting work.', hint: 'restart the daemon.' };
 
+// The folder path stays out of the words: the log carries it.
+const DOCS_FOLDER_NOT_WRITABLE_ENTRY: Entry = {
+  code: 'docs_folder_not_writable',
+  message: 'the docs folder is not writable.',
+  hint: 'fix the folder permissions, then try again.',
+};
+
 const UNEXPECTED_ENTRY: Entry = { code: 'internal_error', message: 'the daemon hit an unexpected error.' };
 
 // An internal error never forwards its own words: the log carries them, the caller gets the generic sentence and the id.
@@ -134,8 +141,10 @@ const RULES: Rule[] = [
 
   when(WorkingStateTooLargeError, asIs('state_too_large')),
   when(SessionNotFoundForHandoffError, asIs('session_not_found')),
-  when(SessionHasNoProjectError, asIs('project_not_found')),
+  when(SessionHasNoProjectError, asIs('no_docs_folder')),
   when(ProjectHasNoDocsFolderError, asIs('no_docs_folder')),
+  when(DocsFolderNotWritableError, () => DOCS_FOLDER_NOT_WRITABLE_ENTRY),
+  when(HandoffNotFoundError, () => ({ code: 'handoff_not_found', message: 'the handoff does not exist.' })),
   when(NoteIsNotFileBackedError, asIs('not_file_backed')),
   when(WorktreeError, (error) => WORKTREE_ENTRY_BY_CODE[error.code](error)),
 ];
