@@ -6,6 +6,7 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import { ALLOWED_ORIGINS } from './allowedOrigins.js';
 import { describeError } from '../errors/describeError.js';
 import type { ApprovalService } from '../governance/approvalService.js';
+import type { SilentBlockDetector } from '../governance/silentBlockDetector.js';
 import type { EventBus } from '../events/eventBus.js';
 import { log } from '../logger.js';
 import type { ManagerService } from '../managers/managerService.js';
@@ -92,7 +93,7 @@ export interface WsHandler {
 const DEFAULT_WS_CLOSE_GRACE_MS = 250;
 const NO_CLIENT_ISSUE_EXPIRY_MS = 5 * 60_000;
 
-export function createWsHandler(deps: { bus: EventBus; sessions: SessionService; approvals: ApprovalService; managers: ManagerService; wsTickets: WsTicketStore; wsCloseGraceMs?: number; workingStates?: WorkingStateService; workingStateMaxAgeMinutes?: number; degraded?: DegradedRegistry; todos?: TodoTracker; clock?: () => number }): WsHandler {
+export function createWsHandler(deps: { bus: EventBus; sessions: SessionService; approvals: ApprovalService; managers: ManagerService; wsTickets: WsTicketStore; wsCloseGraceMs?: number; workingStates?: WorkingStateService; workingStateMaxAgeMinutes?: number; degraded?: DegradedRegistry; todos?: TodoTracker; silentBlocks?: SilentBlockDetector; clock?: () => number }): WsHandler {
   const wss = new WebSocketServer({ noServer: true });
   const clock = deps.clock ?? Date.now;
   const isBroadcastIssueOlderThanExpiry = () => {
@@ -153,6 +154,7 @@ export function createWsHandler(deps: { bus: EventBus; sessions: SessionService;
       ...workingStateSnapshotFields(),
       ...(deps.degraded && { daemonIssues: deps.degraded.list() }),
       ...(deps.todos ? { todoSummaries: deps.todos.summaries() } : {}),
+      ...(deps.silentBlocks && { silentBlocks: deps.silentBlocks.list() }),
     });
     socket.on('message', (raw) => {
       let frame: unknown;

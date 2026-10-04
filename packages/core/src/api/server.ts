@@ -26,6 +26,7 @@ import type { SessionStartContext } from '../workingState/sessionStartContext.js
 import type { ContextNotice } from '../workingState/contextNotice.js';
 import type { HandoverLedger } from '../workingState/handoverLedger.js';
 import type { StopRefusal } from '../workingState/stopRefusal.js';
+import type { SilentBlockDetector } from '../governance/silentBlockDetector.js';
 import { hooksHandler } from './hooksHandler.js';
 import { registerDiagnosticsRoutes } from './diagnosticsRoutes.js';
 import { registerHandoffRoutes, type HandoffRouteDeps } from './handoffRoutes.js';
@@ -51,6 +52,8 @@ export interface ServerDeps {
   stores?: DataStoreService; storeRepo?: DataStoreRepository; projects?: ProjectRepository;
   // The working-state route, event and snapshot fields exist only when the daemon hands over the service.
   workingStates?: WorkingStateService; workingStateMaxAgeMinutes?: number;
+  // Without it the snapshot reports no silent blocks.
+  silentBlocks?: SilentBlockDetector;
   // Without it the read-only handoff preview and target routes do not exist.
   handoff?: HandoffRouteDeps;
   // Without it every Stop is answered {}, as before the working state existed.
