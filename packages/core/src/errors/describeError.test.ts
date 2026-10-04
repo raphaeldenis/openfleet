@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { ZodError, z } from 'zod';
 import { ERROR_CODES, OpenFleetError, type ErrorCode } from '@openfleet/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { InvalidJsonBodyError, PayloadTooLargeError } from '../api/router.js';
+import { InvalidJsonBodyError, PayloadTooLargeError } from './requestBodyErrors.js';
 import { expectBestCpuUnder, expectLinearGrowth, cpuMillisecondsToRun } from '../__testing__/linearGrowth.js';
 import { forceNdjsonLogging } from '../forceNdjsonLogging.testkit.js';
 import { StuckConnectionError } from '../db/transaction.js';

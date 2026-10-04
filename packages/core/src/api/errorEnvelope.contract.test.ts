@@ -9,7 +9,8 @@ import { ManagerService } from '../managers/managerService.js';
 import { PulseScheduler } from '../managers/pulseScheduler.js';
 import { DEFAULT_MODEL_TABLE } from '../models.js';
 import { SessionService } from '../sessions/sessionService.js';
-import { InvalidJsonBodyError, Router } from './router.js';
+import { InvalidJsonBodyError } from '../errors/requestBodyErrors.js';
+import { Router } from './router.js';
 import { startServer } from './server.js';
 
 const ADMIN_TOKEN = 'admin';
