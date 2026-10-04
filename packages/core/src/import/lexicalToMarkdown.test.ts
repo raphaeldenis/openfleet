@@ -48,6 +48,12 @@ describe('convertLexicalToMarkdown', () => {
 
       expect(markdown).toBe('a  \nb');
     });
+
+    it('keeps heading linebreaks inside one heading line', () => {
+      const markdown = markdownOf(heading('h2', text('First'), { type: 'linebreak' }, text('second')));
+
+      expect(markdown).toBe('## First second');
+    });
   });
 
   describe('text formatting', () => {
@@ -94,6 +100,22 @@ describe('convertLexicalToMarkdown', () => {
 
       expect(markdown).toBe('- parent\n  - child');
     });
+
+    it('keeps a leading nested list under an empty parent item', () => {
+      const markdown = markdownOf(bulletList(listItem(bulletList(listItem(text('child')))), listItem(text('next'))));
+
+      expect(markdown).toBe('- \n  - child\n- next');
+    });
+
+    it('counts a leading empty numbered parent but does not count nested wrappers after it', () => {
+      const markdown = markdownOf(numberedList(9,
+        listItem(bulletList(listItem(text('first child')))),
+        listItem(bulletList(listItem(text('second child')))),
+        listItem(text('next')),
+      ));
+
+      expect(markdown).toBe('9. \n   - first child\n   - second child\n10. next');
+    });
   });
 
   describe('quote', () => {
@@ -131,6 +153,47 @@ describe('convertLexicalToMarkdown', () => {
       });
 
       expect(markdown).toBe('| Name | Value |\n| --- | --- |\n| a\\|b | 1<br>2 |');
+    });
+
+    it('pads every row and the separator to the widest source row without discarding cells', () => {
+      const markdown = markdownOf({ type: 'table', children: [
+        tableRow(tableCell(paragraph(text('Header')))),
+        tableRow(tableCell(paragraph(text('one'))), tableCell(paragraph(text('two'))), tableCell(paragraph(text('three')))),
+        tableRow(tableCell(paragraph(text('short')))),
+      ] });
+
+      expect(markdown).toBe('| Header |  |  |\n| --- | --- | --- |\n| one | two | three |\n| short |  |  |');
+    });
+
+    it('does not double escape an escaped pipe and protects a pipe after an even backslash run', () => {
+      const markdown = markdownOf({ type: 'table', children: [
+        tableRow(tableCell(paragraph(text(String.raw`a\|b`))), tableCell(paragraph(text(String.raw`c\\|d`)))),
+      ] });
+
+      expect(markdown).toBe(String.raw`| a\|b | c\\\|d |` + '\n| --- | --- |');
+    });
+
+    it('flattens block content into cells while keeping code as inline code and escaping its pipes', () => {
+      const markdown = markdownOf({ type: 'table', children: [tableRow(tableCell(
+        heading('h2', text('Title')),
+        paragraph(text('a'), { type: 'linebreak' }, text('b')),
+        bulletList(listItem(text('item'))),
+        { type: 'code', children: [text('left|right'), { type: 'linebreak' }, text('last')] },
+      ))] });
+
+      expect(markdown).toBe('| Title<br>a<br>b<br>- item<br>`left\\|right`<br>`last` |\n| --- |');
+    });
+
+    it('renders a table with no cells as nothing', () => {
+      expect(markdownOf({ type: 'table', children: [tableRow(), tableRow()] })).toBe('');
+    });
+  });
+
+  describe('authored Markdown policy', () => {
+    it('keeps authored Markdown in ordinary text and applies only the explicit Lexical formatting wrappers', () => {
+      const markdown = markdownOf(paragraph(text('[docs](https://example.test) *literal* #tag'), text(' **authored** ', FORMAT.bold)));
+
+      expect(markdown).toBe('[docs](https://example.test) *literal* #tag ****authored**** ');
     });
   });
 

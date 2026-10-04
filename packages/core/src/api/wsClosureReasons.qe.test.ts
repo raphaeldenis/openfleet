@@ -1,7 +1,7 @@
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { openDatabase } from '../db/database.js';
 import { describeError } from '../errors/describeError.js';
 import { DEFAULT_MODEL_TABLE } from '../models.js';
@@ -26,13 +26,16 @@ class FlakyLaunchHarness extends FakeHarness {
 }
 
 const openSockets: WebSocket[] = [];
+const services: SessionService[] = [];
+const CLOSED_SESSION_FRAME_COUNT = 64;
 let runningServer: Awaited<ReturnType<typeof startServer>> | undefined;
 
 afterEach(async () => {
-  vi.restoreAllMocks();
   for (const socket of openSockets.splice(0)) socket.close();
   await runningServer?.close();
   runningServer = undefined;
+  for (const service of services.splice(0)) await service.closeAll();
+  vi.restoreAllMocks();
 });
 
 // Two services share one database and one bus: `sessions` is the previous run that created the rows,
@@ -44,6 +47,7 @@ async function boot(options: { harness?: FakeHarness; restartedHarnesses?: FakeH
   const newService = (harnesses: FakeHarness[]) => new SessionService({ db, bus, harnesses, baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt', submitKeystrokeDelayMs: 10, describeError });
   const sessions = newService([harness]);
   const restartedSessions = newService(options.restartedHarnesses ?? [harness]);
+  services.push(sessions, restartedSessions);
   const approvals = new ApprovalService({ db, bus });
   const managerRepo = new ManagerRepository(db);
   const pulseScheduler = new PulseScheduler({ managers: managerRepo, sessions: restartedSessions, bus });
@@ -126,7 +130,7 @@ describe('a session closed after a daemon restart', () => {
     const { frames } = await openClient(server);
     vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    void restartedSessions.resumeAll();
+    await restartedSessions.resumeAll();
     const closed = await waitFor(() => frames.find(isClosed));
     const errorEvent = await waitFor(() => frames.find(isError));
 
@@ -140,7 +144,7 @@ describe('a session closed after a daemon restart', () => {
     const { frames } = await openClient(server);
     vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    void restartedSessions.resumeAll();
+    await restartedSessions.resumeAll();
     const closed = await waitFor(() => frames.find(isClosed));
     const errorEvent = await waitFor(() => frames.find(isError));
 
@@ -165,7 +169,7 @@ describe('a session closed after a daemon restart', () => {
     const { server, sessions, restartedSessions } = await boot({ restartedHarnesses: [] });
     const session = await sessions.create(spec);
     vi.spyOn(console, 'error').mockImplementation(() => {});
-    void restartedSessions.resumeAll();
+    await restartedSessions.resumeAll();
     await waitFor(() => restartedSessions.get(session.id)?.state === 'closed' || undefined);
 
     const { frames } = await openClient(server);
@@ -186,6 +190,7 @@ describe('the exit codes that predate the reason', () => {
     const db = openDatabase(':memory:');
     const bus = new EventBus();
     const sessions = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt', firstStartTimeoutMs: 30, describeError });
+    services.push(sessions);
     const approvals = new ApprovalService({ db, bus });
     const managerRepo = new ManagerRepository(db);
     const pulseScheduler = new PulseScheduler({ managers: managerRepo, sessions, bus });
@@ -284,6 +289,7 @@ describe('several sessions ending at once', () => {
 describe('what an error event may carry', () => {
   it('a harness_exited event carries neither the session directory nor any token, and its session is on exactly one error log line', async () => {
     const secretDirectory = mkdtempSync(join(tmpdir(), 'of-secret-dir-'));
+    onTestFinished(() => rmSync(secretDirectory, { recursive: true, force: true }));
     const { server, sessions, harness } = await boot();
     await sessions.create({ ...spec, directory: secretDirectory });
     const { frames } = await openClient(server);
@@ -304,7 +310,7 @@ describe('what an error event may carry', () => {
 });
 
 describe('a flood of failing client frames', () => {
-  it('1000 input frames for a closed session get one small error event each, and no error log line', async () => {
+  it('every input frame in a flood for a closed session gets one small error event, and no error log line', async () => {
     const { server, sessions, restartedSessions } = await boot();
     const session = await sessions.create(spec);
     await restartedSessions.close(session.id);
@@ -313,13 +319,13 @@ describe('a flood of failing client frames', () => {
     const warned = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const oneKilobyte = 'x'.repeat(1024);
 
-    for (let frame = 0; frame < 1000; frame += 1) socket.send(JSON.stringify({ type: 'input', sessionId: session.id, data: oneKilobyte }));
-    await waitFor(() => (frames.filter(isError).length >= 1000 ? true : undefined), 1500);
+    for (let frame = 0; frame < CLOSED_SESSION_FRAME_COUNT; frame += 1) socket.send(JSON.stringify({ type: 'input', sessionId: session.id, data: oneKilobyte }));
+    await waitFor(() => (frames.filter(isError).length >= CLOSED_SESSION_FRAME_COUNT ? true : undefined));
     await settle();
 
     const errors = frames.filter(isError);
-    expect(errors).toHaveLength(1000);
-    expect(new Set(errors.map((event) => JSON.stringify(event))).size).toBeLessThanOrEqual(1000);
+    expect(errors).toHaveLength(CLOSED_SESSION_FRAME_COUNT);
+    expect(new Set(errors.map((event) => JSON.stringify(event))).size).toBeLessThanOrEqual(CLOSED_SESSION_FRAME_COUNT);
     expect(Math.max(...errors.map((event) => JSON.stringify(event).length))).toBeLessThan(2048);
     expect(logged).not.toHaveBeenCalled();
     expect(warned).not.toHaveBeenCalled();

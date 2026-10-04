@@ -29,8 +29,12 @@ installed_targets="$(rustup target list --installed)"
 grep -qx "$target" <<<"$installed_targets" || { echo "build-local: the Rust target $target is missing, run: rustup target add $target" >&2; exit 1; }
 
 node scripts/release/fetch-node.mjs "$(cat scripts/release/node-version.txt)" "$target"
+node scripts/release/verify-architecture.mjs "$target" "apps/desktop/src-tauri/binaries/node-$target"
 pnpm --filter @openfleet/core bundle --target "$target"
 pnpm --filter @openfleet/desktop tauri build --target "$target"
+
+app_folder="apps/desktop/src-tauri/target/$target/release/bundle/macos/OpenFleet.app"
+node scripts/release/verify-architecture.mjs "$target" "$app_folder/Contents/MacOS/node" "$app_folder/Contents/MacOS/app"
 
 version="$(node -p "require('./apps/desktop/src-tauri/tauri.conf.json').version")"
 dmg_folder="apps/desktop/src-tauri/target/$target/release/bundle/dmg"

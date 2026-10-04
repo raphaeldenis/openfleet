@@ -15,7 +15,18 @@ export interface EntityCounts {
   notConverted: number;
 }
 
-export interface ImportReport {
+export interface SourceLosses {
+  orphanDatastoreFiles: string[];
+  storesWithoutTables: string[];
+  droppedColumnFormats: { columnId: string; format: string }[];
+  droppedViewFields: { viewId: string; fields: string[] }[];
+}
+
+export const emptySourceLosses = (): SourceLosses => ({
+  orphanDatastoreFiles: [], storesWithoutTables: [], droppedColumnFormats: [], droppedViewFields: [],
+});
+
+export interface ImportReport extends SourceLosses {
   dryRun: boolean;
   counts: Record<EntityName, EntityCounts>;
   projectsWithoutDocsFolder: string[];
@@ -39,6 +50,7 @@ export function countOutcome(counts: EntityCounts, outcome: RecordOutcome, amoun
 }
 
 export const emptyReport = (input: { dryRun: boolean }): ImportReport => ({
+  ...emptySourceLosses(),
   dryRun: input.dryRun,
   counts: Object.fromEntries(ENTITY_NAMES.map((name) => [name, emptyCounts()])) as Record<EntityName, EntityCounts>,
   projectsWithoutDocsFolder: [],
@@ -57,6 +69,8 @@ const bulletList = (items: string[]) => (items.length === 0 ? ['none'] : items.m
 
 export function renderImportReport(report: ImportReport): string {
   const unconvertedNodeTypes = Object.entries(report.unconvertedNodeTypes).map(([type, count]) => `${type}: ${count}`);
+  const droppedColumnFormats = report.droppedColumnFormats.map(({ columnId, format }) => `${columnId}: ${format}`);
+  const droppedViewFields = report.droppedViewFields.map(({ viewId, fields }) => `${viewId}: ${fields.join(', ')}`);
   return [
     `# Scape import report${report.dryRun ? ' (dry run: nothing written)' : ''}`,
     '',
@@ -70,7 +84,23 @@ export function renderImportReport(report: ImportReport): string {
     '',
     'Removed in Scape: the last import wrote the record and the Scape source no longer holds it; it stays in OpenFleet. Not counted by a run limited to one project.',
     '',
-    'Not converted: notes and versions holding at least one lexical node without a markdown form; playbooks archived as inert text in one note per project (playbook counts follow the archive write outcome); kanban views whose card fields were dropped or that could not be mapped; rows holding a select value that is not one of the column options; log entries that changed nothing; managers whose mission note is outside the import or whose mission is unusable, whose model is not a known alias, or whose granted note or table is not imported.',
+    'Not converted: notes and versions holding at least one lexical node without a markdown form; playbooks archived as inert text in one note per project (playbook counts follow the archive write outcome); columns whose display format is dropped; views whose settings are dropped or that cannot be mapped; rows holding a select value that is not one of the column options; log entries that changed nothing; managers whose mission note is outside the import or whose mission is unusable, whose model is not a known alias, or whose granted note or table is not imported.',
+    '',
+    '## Orphan datastore files — ignored',
+    'These files have no project in the Scape project catalog. Their tables are not read or imported.',
+    ...bulletList(report.orphanDatastoreFiles),
+    '',
+    '## Stores without a backing table',
+    'The store definitions are imported; no rows can be read. An empty existing table is not listed here.',
+    ...bulletList(report.storesWithoutTables),
+    '',
+    '## Column display formats not converted',
+    'Values and column types are kept; the Scape display formats have no OpenFleet equivalent.',
+    ...bulletList(droppedColumnFormats),
+    '',
+    '## View settings not converted',
+    'OpenFleet keeps the kanban group-by column. Card fields, columnOrder and other source settings listed below are dropped.',
+    ...bulletList(droppedViewFields),
     '',
     '## Lexical node types not converted',
     ...bulletList(unconvertedNodeTypes),

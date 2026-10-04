@@ -1,5 +1,5 @@
 import { afterNextRender, ChangeDetectionStrategy, Component, computed, DestroyRef, effect, ElementRef, inject, Injector, input, linkedSignal, output, signal, viewChild } from '@angular/core';
-import type { HandoffSummary, Project } from '@openfleet/shared';
+import { handoffFileLabel, type HandoffSummary, type Project } from '@openfleet/shared';
 import { FleetApiService } from '../core/fleet-api.service';
 import { ErrorLineComponent } from '../design/error-line.component';
 import { moveFocusWithinListbox } from '../design/listbox-keyboard';
@@ -25,8 +25,8 @@ interface HandoffListState {
       }
       @if (file(); as selectedFile) {
         <div class="chip-row">
-          <span class="file" title="Added to the first prompt as read-only context">@file handoffs/{{ selectedFile }}</span>
-          <button type="button" class="of-btn of-btn--compact of-btn--secondary" [attr.aria-label]="'Remove handoff ' + selectedFile" [disabled]="isLocked()" (click)="remove()">Remove</button>
+          <span class="file" title="Added to the first prompt as read-only context">@file handoffs/{{ handoffFileLabel(selectedFile) }}</span>
+          <button type="button" class="of-btn of-btn--compact of-btn--secondary" [attr.aria-label]="'Remove handoff ' + handoffFileLabel(selectedFile)" [disabled]="isLocked()" (click)="remove()">Remove</button>
         </div>
       }
       @if (isExpanded()) {
@@ -41,7 +41,7 @@ interface HandoffListState {
           <div #listbox [id]="listId" role="listbox" aria-label="Handoffs" [attr.aria-busy]="phase() === 'loading'" (keydown)="moveFocus($event)">
             @for (handoff of filteredItems(); track handoff.noteId) {
               <button type="button" class="handoff-option" role="option" tabindex="-1" [attr.aria-selected]="file() === handoff.file" [disabled]="isLocked()" (click)="choose(handoff.file)">
-                <span class="file">{{ handoff.file }}</span><span>{{ handoff.title }}</span><span class="caption">{{ relativeDate(handoff.updatedAt) }}</span>
+                <span class="file">{{ handoffFileLabel(handoff.file) }}</span><span>{{ handoff.title }}</span><span class="caption">{{ relativeDate(handoff.updatedAt) }}</span>
               </button>
             }
           </div>
@@ -69,6 +69,7 @@ interface HandoffListState {
   `,
 })
 export class HandoffPickerComponent {
+  protected readonly handoffFileLabel = handoffFileLabel;
   readonly project = input<Project | undefined>();
   readonly file = input<string | undefined>();
   readonly isLocked = input(false);
@@ -89,7 +90,7 @@ export class HandoffPickerComponent {
   protected readonly phase = computed(() => this.listState().projectId === this.project()?.id ? this.listState().phase : 'loading');
   protected readonly filteredItems = computed(() => {
     const query = this.search().trim().toLocaleLowerCase();
-    return this.items().filter((handoff) => `${handoff.file} ${handoff.title}`.toLocaleLowerCase().includes(query));
+    return this.items().filter((handoff) => `${handoffFileLabel(handoff.file)} ${handoff.title}`.toLocaleLowerCase().includes(query));
   });
   private requestVersion = 0;
 

@@ -13,7 +13,8 @@ function safePath({ docsFolder, filePath }: { docsFolder: string; filePath: stri
     if (!isHandoffFolder || !HandoffFileSchema.safeParse(basename(filePath)).success) return undefined;
     const isLinkedFolder = lstatSync(handoffFolder).isSymbolicLink();
     const fileStat = lstatSync(filePath);
-    if (isLinkedFolder || fileStat.isSymbolicLink() || !fileStat.isFile()) return undefined;
+    const isHardlinkedFile = fileStat.nlink > 1;
+    if (isLinkedFolder || fileStat.isSymbolicLink() || !fileStat.isFile() || isHardlinkedFile) return undefined;
     const actualPath = realpathSync(filePath);
     const relativePath = relative(handoffFolder, actualPath);
     const isOutsideHandoffs = relativePath.startsWith(`..${sep}`) || relativePath === '..' || dirname(actualPath) !== handoffFolder;
@@ -28,6 +29,8 @@ function read({ filePath, maxBytes }: { filePath: string; maxBytes: number }): {
   try {
     const stat = fstatSync(descriptor);
     if (!stat.isFile()) throw new Error('handoff is not a regular file');
+    const isHardlinkedFile = stat.nlink > 1;
+    if (isHardlinkedFile) throw new Error('handoff has multiple links');
     const buffer = Buffer.alloc(Math.min(stat.size, maxBytes));
     let bytesRead = 0;
     while (bytesRead < buffer.length) {

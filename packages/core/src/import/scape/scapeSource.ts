@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -14,7 +14,7 @@ export interface ScapePlaybook { id: string; name: string; lexicalContent: strin
 export interface ScapeNote { id: string; projectId: string; title: string; content: string; contentFormat: string; createdAt: unknown; updatedAt: unknown; isShared: boolean }
 export interface ScapeNoteVersion { id: string; noteId: string; content: string; contentFormat: string; createdAt: number; source: string }
 export interface ScapeStore { id: string; projectId: string; displayName: string; createdAt: unknown; updatedAt: unknown }
-export interface ScapeColumn { id: string; storeId: string; displayName: string; columnType: string; sortOrder: number; options: string | null }
+export interface ScapeColumn { id: string; storeId: string; displayName: string; columnType: string; sortOrder: number; options: string | null; format: string | null }
 export interface ScapeView { id: string; storeId: string; name: string; viewType: string; sortOrder: number; config: string; createdAt: unknown }
 export interface ScapeRow { id: string; createdAt: number; updatedAt: number; cells: Record<string, unknown> }
 export interface ScapeRowChange { seq: number; storeId: string; rowId: string; kind: 'insert' | 'update' | 'delete'; oldValues: string | null; newValues: string | null; source: string; createdAt: number }
@@ -72,13 +72,13 @@ export class ScapeSource {
   }
 
   projects(): ScapeProject[] {
-    return this.query(`SELECT id, name, createdAt FROM projects WHERE isSystemProject = 0 AND name <> 'Uncategorized' ORDER BY name`) as unknown as ScapeProject[];
+    return this.query(`SELECT id, name, createdAt FROM projects WHERE isArchived = 0 AND isSystemProject = 0 AND name <> 'Uncategorized' ORDER BY name`) as unknown as ScapeProject[];
   }
 
   notesOf(projectId: string): ScapeNote[] {
     const rows = this.query(
       `SELECT n.id, i.projectID AS projectId, n.title, n.content, n.contentFormat, n.createdAt, n.updatedAt, n.isShared
-         FROM project_items i JOIN notes n ON n.id = i.noteID WHERE i.kind = 'note' AND i.projectID = ? ORDER BY n.noteNumber, n.id`,
+         FROM project_items i JOIN notes n ON n.id = i.noteID WHERE n.isArchived = 0 AND i.kind = 'note' AND i.projectID = ? ORDER BY n.noteNumber, n.id`,
       projectId,
     );
     return rows.map((row) => ({ ...row, isShared: row.isShared === 1 })) as unknown as ScapeNote[];
@@ -106,7 +106,7 @@ export class ScapeSource {
   }
 
   columnsOf(storeId: string): ScapeColumn[] {
-    return this.query(`SELECT id, storeID AS storeId, displayName, columnType, sortOrder, options FROM data_store_column WHERE storeID = ? ORDER BY sortOrder, id`, storeId) as unknown as ScapeColumn[];
+    return this.query(`SELECT id, storeID AS storeId, displayName, columnType, sortOrder, options, format FROM data_store_column WHERE storeID = ? ORDER BY sortOrder, id`, storeId) as unknown as ScapeColumn[];
   }
 
   viewsOf(storeId: string): ScapeView[] {
@@ -115,8 +115,7 @@ export class ScapeSource {
 
   rowsOf(store: { id: string; projectId: string }): ScapeRow[] {
     const datastore = this.datastoreOf(store.projectId);
-    const hasTable = datastore?.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(storeTableName(store.id)) !== undefined;
-    if (!datastore || !hasTable) return [];
+    if (!datastore || !this.hasStoreTable(store)) return [];
     const rawRows = datastore.prepare(`SELECT * FROM "${storeTableName(store.id)}" ORDER BY row_created_at, row_id`).all() as Record<string, unknown>[];
     return rawRows.map((raw) => ({
       id: raw.row_id as string,
@@ -124,6 +123,21 @@ export class ScapeSource {
       updatedAt: raw.row_updated_at as number,
       cells: Object.fromEntries(Object.entries(raw).filter(([key]) => !ROW_BOOKKEEPING_COLUMNS.has(key))),
     }));
+  }
+
+  hasStoreTable(store: { id: string; projectId: string }): boolean {
+    const datastore = this.datastoreOf(store.projectId);
+    return datastore?.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(storeTableName(store.id)) !== undefined;
+  }
+
+  orphanDatastoreFiles(): string[] {
+    const folder = join(this.scapeDir, DATASTORES_FOLDER_NAME);
+    if (!existsSync(folder)) return [];
+    const projectFiles = new Set(this.query('SELECT id FROM projects').map((project) => `${String(project.id).toLowerCase()}.sqlite`));
+    return readdirSync(folder, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.endsWith('.sqlite') && !projectFiles.has(entry.name.toLowerCase()))
+      .map((entry) => entry.name)
+      .sort();
   }
 
   changesOf(store: { id: string; projectId: string }): ScapeRowChange[] {
