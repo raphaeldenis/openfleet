@@ -114,7 +114,7 @@ function writeDataStoreDefinitions(input: { db: DatabaseSync; ledger: ImportLedg
   writeEntities({ ...input, entity: 'dataStores', kind: 'data_store', table: 'data_stores', planned: plan.dataStores, policyOf: () => ({ ignoredColumns: ['updated_at'] }) });
   const storesWithoutRecord = new Set(plan.dataStores.filter((store) => !isStored(db, 'data_stores', store.id)).map((store) => store.id));
   const onlyWhereTheStoreExists = (planned: PlannedRecord): WritePolicy => ({ canInsert: () => !storesWithoutRecord.has(String(planned.record.store_id)) });
-  writeEntities({ ...input, entity: 'columns', kind: 'column', table: 'ds_columns', planned: plan.columns, policyOf: onlyWhereTheStoreExists });
+  writeEntities({ ...input, entity: 'columns', kind: 'column', table: 'ds_columns', planned: plan.columns, policyOf: onlyWhereTheStoreExists, isNotConverted: (extra) => extra.hasDroppedFormat });
   writeEntities({ ...input, entity: 'views', kind: 'view', table: 'ds_views', planned: plan.views, policyOf: onlyWhereTheStoreExists, isNotConverted: (extra) => extra.hasDroppedFields });
   report.counts.views.expected += plan.skippedViewCount;
   report.counts.views.notConverted += plan.skippedViewCount;

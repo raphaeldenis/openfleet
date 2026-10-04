@@ -11,6 +11,9 @@ const FORGE_REPORT_NOTE_TITLE = /^Forge report/;
 
 type SelectOption = { id: string; label: string };
 type OpenFleetColumnType = 'text' | 'number' | 'date' | 'select';
+const NATIVE_FORMAT_BY_COLUMN_TYPE: Record<OpenFleetColumnType, string> = {
+  text: 'singleLine', number: 'number', date: 'date', select: 'singleSelect',
+};
 
 export interface MappedColumn {
   id: string;
@@ -19,6 +22,7 @@ export interface MappedColumn {
   columnType: OpenFleetColumnType;
   options: SelectOption[] | null;
   sortOrder: number;
+  droppedFormat: string | null;
 }
 
 export type ColumnsByCellKey = Map<string, MappedColumn>;
@@ -115,7 +119,9 @@ export function mapColumn(column: ScapeColumn): MappedColumn {
   const isKnownType = ['text', 'number', 'date'].includes(column.columnType);
   if (!isKnownType) throw unreadable(`unsupported Scape column type "${column.columnType}" on column ${column.id}`);
   const columnType = isTextWithOptions ? 'select' : (column.columnType as OpenFleetColumnType);
-  return { id: column.id, storeId: column.storeId, displayName: column.displayName, columnType, options: isTextWithOptions ? options : null, sortOrder: column.sortOrder };
+  const hasNativeFormat = column.format === NATIVE_FORMAT_BY_COLUMN_TYPE[columnType];
+  const droppedFormat = hasNativeFormat ? null : column.format || null;
+  return { id: column.id, storeId: column.storeId, displayName: column.displayName, columnType, options: isTextWithOptions ? options : null, sortOrder: column.sortOrder, droppedFormat };
 }
 
 export const columnsByCellKey = (columns: MappedColumn[]): ColumnsByCellKey => new Map(columns.map((column) => [cellKeyOf(column.id), column]));
@@ -187,7 +193,7 @@ export function mapView(view: ScapeView, columns: MappedColumn[]) {
   if (isKanban && groupByColumn?.columnType !== 'select') return undefined;
 
   const config = isKanban ? { groupByColumnId } : {};
-  const droppedFieldCount = Object.keys(scapeConfig).filter((key) => !(isKanban && key === 'groupByColumnID')).length;
+  const droppedFields = Object.keys(scapeConfig).filter((key) => !(isKanban && key === 'groupByColumnID'));
   const record = {
     store_id: view.storeId,
     display_name: view.name,
@@ -196,5 +202,5 @@ export function mapView(view: ScapeView, columns: MappedColumn[]) {
     sort_order: view.sortOrder,
     created_at: scapeNotesDateToIso(view.createdAt),
   };
-  return { record, hasDroppedFields: droppedFieldCount > 0 };
+  return { record, hasDroppedFields: droppedFields.length > 0, droppedFields };
 }
