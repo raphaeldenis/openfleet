@@ -40,10 +40,15 @@ describe('snapshotSqliteDatabase', () => {
 
   it('rolls back, in the copy, a write a rollback-journal source has not committed: the journal travels with the database', () => {
     writer!.exec('PRAGMA journal_mode = DELETE');
+    const committedRowCount = 64;
+    const bytesPerRow = 2000;
     const insertRow = writer!.prepare('INSERT INTO t VALUES (?)');
-    for (let row = 0; row < 3000; row++) insertRow.run('x'.repeat(2000));
+    const committedValue = 'x'.repeat(bytesPerRow);
+    writer!.exec('BEGIN');
+    for (let row = 0; row < committedRowCount; row += 1) insertRow.run(committedValue);
+    writer!.exec('COMMIT');
     writer!.exec('PRAGMA cache_size = 10; BEGIN');
-    writer!.prepare('UPDATE t SET x = ?').run('y'.repeat(2000));
+    writer!.prepare('UPDATE t SET x = ?').run('y'.repeat(bytesPerRow));
     const targetPath = join(workDir, 'copy.db');
 
     snapshotSqliteDatabase({ sourcePath, targetPath });
