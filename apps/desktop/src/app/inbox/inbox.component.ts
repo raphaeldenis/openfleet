@@ -10,6 +10,7 @@ import { compactElapsedLabel, elapsedSecondsSince } from '../design/elapsed-time
 import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService, silentBlockKey } from '../core/fleet-events.service';
 import { VersionsService } from '../core/versions.service';
+import { ErrorLineComponent } from '../design/error-line.component';
 import { KindBadgeComponent } from '../design/kind-badge.component';
 import { focusTabAt, nextTabIndex } from '../design/tablist-keyboard';
 import { attentionItemsOf, inboxCountLabelOf } from '../working-state/attention-items';
@@ -71,7 +72,7 @@ function formatInput(toolInput: unknown): FormattedInput {
 @Component({
   selector: 'of-inbox',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [KindBadgeComponent, AttentionCardComponent, CopyDetailsButtonComponent, RouterLink],
+  imports: [ErrorLineComponent, KindBadgeComponent,AttentionCardComponent, CopyDetailsButtonComponent, RouterLink],
   template: `
     <section class="inbox" data-testid="inbox">
       <header class="title-row" data-testid="inbox-title-row">
@@ -170,7 +171,7 @@ function formatInput(toolInput: unknown): FormattedInput {
                     <button type="button" class="of-btn of-btn--secondary" data-testid="inbox-deny" [disabled]="item.pending" (click)="decide(item.id, 'deny')">Deny</button>
                   </div>
                   @if (item.error; as error) {
-                    <p class="of-error" data-testid="inbox-error">{{ error }}</p>
+                    <p><of-error-line data-testid="inbox-error" [glyph]="false">{{ error }}</of-error-line></p>
                   }
                 </div>
               </article>
@@ -210,7 +211,7 @@ function formatInput(toolInput: unknown): FormattedInput {
     .title { margin: 0; flex: 1; font-size: 1.25rem; font-weight: 600; }
     .count { display: inline-flex; min-width: 1rem; height: 1rem; padding: 0 .25rem; margin-left: .5rem; border-radius: .5rem; background: var(--accent-bg); color: var(--fg); font-size: .6875rem; font-weight: 600; align-items: center; justify-content: center; }
     .reply-failure { display: flex; flex-direction: column; align-items: flex-start; gap: .375rem; min-width: 0; padding: .625rem .875rem; border: 1px solid var(--state-error); border-radius: .625rem; background: var(--panel); }
-    .reply-failure-title { margin: 0; color: var(--state-error); overflow-wrap: anywhere; }
+    .reply-failure-title { margin: 0; color: var(--fg); overflow-wrap: anywhere; }
     .reply-failure-draft { margin: 0; max-width: 100%; max-height: 10rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
     .issue-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .5rem; }
     .issue { display: flex; flex-direction: column; gap: .375rem; min-width: 0; padding: .625rem .875rem; border: 1px solid var(--line); border-radius: .625rem; background: var(--panel); }

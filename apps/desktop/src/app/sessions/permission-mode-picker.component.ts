@@ -1,5 +1,6 @@
 import { ChangeDetectionStrategy, Component, computed, inject, input, linkedSignal } from '@angular/core';
 import { PERMISSION_MODES, type PermissionMode } from '@openfleet/shared';
+import { ErrorLineComponent } from '../design/error-line.component';
 import { moveFocusWithinListbox } from '../design/listbox-keyboard';
 import { PopoverComponent } from '../design/popover.component';
 import { PendingSwitchesService, SWITCH_STATUS_LABEL } from '../core/pending-switches.service';
@@ -30,7 +31,7 @@ const MODES_WITH_BYPASS_LAST: readonly PermissionMode[] = [
 @Component({
   selector: 'of-permission-mode-picker',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [PopoverComponent],
+  imports: [ErrorLineComponent, PopoverComponent],
   template: `
     <div class="permission-mode-picker" data-testid="permission-mode-picker">
       <of-popover
@@ -81,13 +82,13 @@ const MODES_WITH_BYPASS_LAST: readonly PermissionMode[] = [
         <span class="switch-status" data-testid="permission-mode-switch-status">{{ statusLabel[status] }}</span>
       }
       @if (switchError(); as error) {
-        <span role="alert" data-testid="permission-mode-switch-error" class="of-error">✕ {{ error }}</span>
+        <of-error-line role="alert" data-testid="permission-mode-switch-error">{{ error }}</of-error-line>
       }
     </div>
   `,
   styles: `
     .permission-mode-picker { display: flex; align-items: center; gap: .375rem; flex-wrap: wrap; }
-    .switch-status { font-size: .6875rem; color: var(--state-waiting-permission); }
+    .switch-status { font-size: .6875rem; color: var(--fg); }
     .mode-row {
       display: flex; align-items: flex-start; gap: .5rem; padding: .375rem .5rem; border: 0; border-radius: .375rem;
       background: transparent; color: var(--fg); font: inherit; text-align: left; cursor: pointer;
@@ -95,7 +96,7 @@ const MODES_WITH_BYPASS_LAST: readonly PermissionMode[] = [
     .mode-row[aria-selected='true'], .mode-row:hover { background: var(--hover); }
     .mode-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
     .mode-name { flex: none; width: 8.5rem; font-family: var(--mono); font-size: .75rem; }
-    .mode-row--danger .mode-name { color: var(--state-error); }
+    .mode-row--danger .mode-name::before { content: '! '; font-weight: 700; color: var(--state-error); }
     .mode-explanation { flex: 1; font-size: .6875rem; color: var(--mut); text-wrap: pretty; }
     .check { color: var(--accent); }
     .apply-note { margin: 0; padding: .375rem .5rem 0; font-size: .6875rem; color: var(--mut); }

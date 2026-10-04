@@ -15,4 +15,14 @@ describe('ActorBadgeComponent', () => {
 
     expect(screen.getByTestId('actor-badge')).toHaveTextContent(label);
   });
+
+  it('writes the label in the foreground colour and carries the actor colour on a dot', async () => {
+    await render(ActorBadgeComponent, { bindings: [inputBinding('kind', () => 'agent')] });
+
+    const badge = screen.getByTestId('actor-badge');
+
+    expect(getComputedStyle(badge).color).toBe('var(--fg)');
+    expect(badge.style.getPropertyValue('--actor-color')).toBe('var(--state-generating)');
+    expect(badge.querySelector('[aria-hidden="true"]')).not.toBeNull();
+  });
 });

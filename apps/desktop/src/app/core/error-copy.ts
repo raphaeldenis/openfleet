@@ -184,7 +184,7 @@ const NOT_CONNECTED_BY_ACTION: Partial<Record<ErrorAction, string>> = {
   resume: GENERIC_REOPEN_ERROR,
   rename: 'Could not rename — check your connection, then try again.',
   close: 'Could not close the session — check your connection, then try again.',
-  load_handoff: 'The handoff preview could not be collected — check your connection, then try again.',
+  load_handoff: 'The preview could not be loaded — check your connection, then try again.',
   save_handoff: 'The handoff was not written — check your connection, then try again.',
 };
 

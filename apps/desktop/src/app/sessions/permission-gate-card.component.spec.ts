@@ -29,6 +29,20 @@ describe('PermissionGateCardComponent', () => {
     expect(screen.getByTestId('gate-tool-input')).toHaveTextContent('"command": "git push -u origin t6"');
   });
 
+  it('writes the warning in the foreground colour behind an amber glyph', async () => {
+    await render(PermissionGateCardComponent, {
+      bindings: [inputBinding('approval', () => approval())],
+      providers: [{ provide: FleetApiService, useValue: { decide: vi.fn() } }],
+    });
+
+    const warning = screen.getByTestId('gate-warning');
+    const glyph = warning.querySelector('[aria-hidden="true"]') as Element;
+
+    expect(warning).toHaveTextContent('Permission needed');
+    expect(getComputedStyle(warning).color).toBe('var(--fg)');
+    expect(getComputedStyle(glyph).color).toBe('var(--state-waiting-permission)');
+  });
+
   it('approves by calling decide(id, "allow")', async () => {
     const api = { decide: vi.fn().mockResolvedValue({}) };
     await render(PermissionGateCardComponent, {

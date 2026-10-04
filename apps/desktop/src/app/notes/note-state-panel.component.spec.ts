@@ -48,6 +48,16 @@ describe('NoteStatePanelComponent', () => {
       expect(screen.getByTestId('note-error-reason')).toHaveTextContent('not valid UTF-8');
     });
 
+    it('writes the failure title in the foreground colour behind a red ✕ glyph', async () => {
+      await renderPanel('error', invalidFile);
+
+      const title = screen.getByTestId('note-error-title');
+      const glyph = title.querySelector('[aria-hidden="true"]') as Element;
+
+      expect(getComputedStyle(title).color).toBe('var(--fg)');
+      expect(getComputedStyle(glyph).color).toBe('var(--state-error)');
+    });
+
     it('user can retry opening the note', async () => {
       const { retry } = await renderPanel('error', invalidFile);
 

@@ -1,4 +1,5 @@
 import { ChangeDetectionStrategy, Component, computed, inject, input, linkedSignal } from '@angular/core';
+import { ErrorLineComponent } from '../design/error-line.component';
 import { moveFocusWithinListbox } from '../design/listbox-keyboard';
 import { PopoverComponent } from '../design/popover.component';
 import { FleetEventsService } from '../core/fleet-events.service';
@@ -16,7 +17,7 @@ const NO_MODEL_LABEL = 'default';
 @Component({
   selector: 'of-model-selector',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [PopoverComponent],
+  imports: [ErrorLineComponent, PopoverComponent],
   template: `
     <div class="model-selector" data-testid="model-selector">
       <of-popover
@@ -62,7 +63,7 @@ const NO_MODEL_LABEL = 'default';
         }
       }
       @if (switchError(); as error) {
-        <span role="alert" data-testid="model-switch-error" class="of-error">✕ {{ error }}</span>
+        <of-error-line role="alert" data-testid="model-switch-error">{{ error }}</of-error-line>
       }
       @if (session(); as current) {
         <div class="resolution">

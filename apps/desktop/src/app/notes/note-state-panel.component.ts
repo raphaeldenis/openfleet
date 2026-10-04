@@ -1,4 +1,5 @@
 import { ChangeDetectionStrategy, Component, input, output } from '@angular/core';
+import { ErrorLineComponent } from '../design/error-line.component';
 
 export type NotePaneState = 'loading' | 'error' | 'empty';
 
@@ -7,6 +8,7 @@ const SKELETON_BAR_WIDTHS = ['40%', '90%', '85%', '60%', '95%', '70%'];
 @Component({
   selector: 'of-note-state-panel',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [ErrorLineComponent],
   template: `
     @switch (state()) {
       @case ('loading') {
@@ -18,7 +20,7 @@ const SKELETON_BAR_WIDTHS = ['40%', '90%', '85%', '60%', '95%', '70%'];
       }
       @case ('error') {
         <div class="error" role="alert" data-testid="note-error">
-          <span class="error-title" data-testid="note-error-title">✕ Couldn’t open “{{ title() }}”</span>
+          <of-error-line class="error-title" data-testid="note-error-title">Couldn’t open “{{ title() }}”</of-error-line>
           <span class="error-reason" [attr.title]="reasonDetail() || null" data-testid="note-error-reason">{{ reason() }}</span>
           <div class="actions">
             @if (canOpenInFinder()) {
@@ -45,7 +47,7 @@ const SKELETON_BAR_WIDTHS = ['40%', '90%', '85%', '60%', '95%', '70%'];
       margin: 2rem auto; width: 28rem; max-width: calc(100% - 2rem); display: flex; flex-direction: column; gap: .5rem;
       padding: 1.25rem; border: 1px solid var(--line); border-radius: .625rem; background: var(--panel);
     }
-    .error-title { color: var(--state-error); font-weight: 600 }
+    .error-title { font-weight: 600 }
     .error-reason { color: var(--mut) }
     .actions { display: flex; gap: .5rem }
     .empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .5rem; color: var(--mut); text-align: center; padding: 1rem }

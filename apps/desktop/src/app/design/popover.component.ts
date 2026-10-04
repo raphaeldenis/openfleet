@@ -69,7 +69,7 @@ function nextIndexInCycle({ currentIndex, count, isBackwards }: { currentIndex: 
       font-family: var(--mono); font-size: .6875rem; cursor: pointer;
     }
     .trigger--danger {
-      border-color: var(--state-error); color: var(--state-error);
+      border-color: var(--state-error);
       background: color-mix(in oklch, var(--state-error) 12%, transparent);
     }
     .trigger[aria-disabled='true'] { cursor: not-allowed; opacity: .7; }

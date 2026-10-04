@@ -6,10 +6,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { NewSessionFormComponent } from './new-session-form.component';
 import { FleetApiService } from '../core/fleet-api.service';
 
-const PULSE_TOO_LOW_ERROR = '✕ Pulse must be at least 1 s';
-const PULSE_TOO_HIGH_ERROR = '✕ Pulse must be at most 86 400 s (24 h)';
-const PULSE_FRACTION_ERROR = '✕ Pulse cadence must be between 1 and 86,400 seconds — enter a whole number in that range';
-const CAP_RANGE_ERROR = '✕ Children cap must be between 1 and 64 — enter a whole number in that range';
+const PULSE_TOO_LOW_ERROR = 'Pulse must be at least 1 s';
+const PULSE_TOO_HIGH_ERROR = 'Pulse must be at most 86 400 s (24 h)';
+const PULSE_FRACTION_ERROR = 'Pulse cadence must be between 1 and 86,400 seconds — enter a whole number in that range';
+const CAP_RANGE_ERROR = 'Children cap must be between 1 and 64 — enter a whole number in that range';
 
 function fakeApi() {
   return {
