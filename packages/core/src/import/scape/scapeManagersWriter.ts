@@ -55,15 +55,19 @@ function writeManager(db: DatabaseSync, repositories: Repositories, planned: Pla
 }
 
 /** Writes each planned manager as a closed manager session plus its managers row, through the session and manager repositories. A stored manager that differs is left as it is. */
-export function writeManagers(db: DatabaseSync, plan: ImportPlan, report: ImportReport): void {
+export function writeManagers(db: DatabaseSync, plan: ImportPlan, report: ImportReport): Map<string, UpsertOutcome> {
   const repositories: Repositories = { sessions: new SessionRepository(db), managers: new ManagerRepository(db) };
   const counts = report.counts.managers;
+  const outcomes = new Map<string, UpsertOutcome>();
   for (const planned of plan.managers) {
     const outcome = writeManager(db, repositories, planned);
+    outcomes.set(planned.id, outcome);
     counts.expected++;
     counts[outcome]++;
-    if (planned.hasUnconvertedGrant) counts.notConverted++;
+    if (planned.isNotFullyConverted) counts.notConverted++;
+    report.pendingPlaybookMentions += planned.pendingPlaybookMentionCount;
   }
   counts.expected += plan.skippedManagerCount;
   counts.notConverted += plan.skippedManagerCount;
+  return outcomes;
 }

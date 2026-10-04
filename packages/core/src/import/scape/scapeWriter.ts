@@ -148,14 +148,14 @@ function writeHistory(db: DatabaseSync, plan: ImportPlan, report: ImportReport, 
 }
 
 /** The whole write phase is one transaction, each entity family a savepoint inside it: any failure undoes the run. */
-export function writePlan(db: DatabaseSync, plan: ImportPlan, report: ImportReport, beforeCommit: () => void): void {
+export function writePlan(db: DatabaseSync, plan: ImportPlan, report: ImportReport, beforeCommit: (managerOutcomes: Map<string, UpsertOutcome>) => void): void {
   inTransaction(db, 'importScape', () => {
     inTransaction(db, 'importScapeProjects', () => writeProjects(db, plan, report));
     inTransaction(db, 'importScapeNotes', () => writeNotes(db, plan, report));
     const blockedStores = inTransaction(db, 'importScapeDataStores', () => writeDataStoreDefinitions(db, plan, report));
     const rowOutcomes = inTransaction(db, 'importScapeRows', () => writeRows(db, plan, report, blockedStores));
     inTransaction(db, 'importScapeHistory', () => writeHistory(db, plan, report, { blockedStores, rowOutcomes }));
-    inTransaction(db, 'importScapeManagers', () => writeManagers(db, plan, report));
-    beforeCommit();
+    const managerOutcomes = inTransaction(db, 'importScapeManagers', () => writeManagers(db, plan, report));
+    beforeCommit(managerOutcomes);
   });
 }

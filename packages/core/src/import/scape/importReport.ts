@@ -16,6 +16,8 @@ export interface ImportReport {
   counts: Record<EntityName, EntityCounts>;
   projectsWithoutDocsFolder: string[];
   unconvertedNodeTypes: Record<string, number>;
+  /** Playbook mentions in manager missions: the playbooks are not imported before MIG-05. */
+  pendingPlaybookMentions: number;
   reportPath?: string;
 }
 
@@ -26,6 +28,7 @@ export const emptyReport = (input: { dryRun: boolean }): ImportReport => ({
   counts: Object.fromEntries(ENTITY_NAMES.map((name) => [name, emptyCounts()])) as Record<EntityName, EntityCounts>,
   projectsWithoutDocsFolder: [],
   unconvertedNodeTypes: {},
+  pendingPlaybookMentions: 0,
 });
 
 const countsRow = (name: EntityName, counts: EntityCounts) =>
@@ -47,10 +50,13 @@ export function renderImportReport(report: ImportReport): string {
     '',
     'Conflict: the record was changed in OpenFleet (newer row, foreign history entry or note version, higher note rev, renamed definition, deleted row) and is left as it is.',
     '',
-    'Not converted: notes and versions holding at least one lexical node without a markdown form; kanban views whose card fields were dropped or that could not be mapped; rows holding a select value that is not one of the column options; log entries that changed nothing.',
+    'Not converted: notes and versions holding at least one lexical node without a markdown form; kanban views whose card fields were dropped or that could not be mapped; rows holding a select value that is not one of the column options; log entries that changed nothing; managers whose mission note is outside the import or whose mission is unusable, whose model is not a known alias, or whose granted note or table is not imported.',
     '',
     '## Lexical node types not converted',
     ...bulletList(unconvertedNodeTypes),
+    '',
+    '## Playbook mentions pending MIG-05',
+    `${report.pendingPlaybookMentions} playbook mention(s) in manager missions point at playbooks that are not imported yet (MIG-05); they read "not resolved" until then.`,
     '',
     '## Projects without a docs folder',
     ...bulletList(report.projectsWithoutDocsFolder),

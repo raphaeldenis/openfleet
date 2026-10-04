@@ -5,6 +5,9 @@ import { ScapeImportError } from './scapeImportError.js';
 
 export const ARGUSES_FILE_NAME = 'arguses.json';
 
+/** An Argus id becomes a session id and may end up in a folder name: letters, digits, `_` and `-`, never starting with `-`. */
+const SAFE_ID = /^[A-Za-z0-9_][A-Za-z0-9_-]*$/;
+
 const GovernanceRequestSchema = z.object({
   kind: z.string(),
   status: z.string(),
@@ -22,7 +25,7 @@ const ResourceGrantSchema = z.object({
 });
 
 const ArgusSchema = z.object({
-  id: z.string().min(1),
+  id: z.string().regex(SAFE_ID),
   name: z.string().min(1),
   model: z.string().optional(),
   harnessId: z.string(),
@@ -56,5 +59,8 @@ export function readArguses(scapeDir: string): ScapeArgus[] {
   if (!existsSync(path)) return [];
   const parsed = ArgusesFileSchema.safeParse(parseFile(path));
   if (!parsed.success) throw unreadable(`${ARGUSES_FILE_NAME} does not have the expected shape: ${parsed.error.issues.map((issue) => issue.path.join('.')).join(', ')}`, parsed.error);
+  const ids = parsed.data.arguses.map((argus) => argus.id);
+  const hasDuplicateId = new Set(ids).size !== ids.length;
+  if (hasDuplicateId) throw unreadable(`${ARGUSES_FILE_NAME} lists the same Argus id twice`);
   return parsed.data.arguses;
 }

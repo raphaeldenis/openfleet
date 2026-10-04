@@ -116,7 +116,8 @@ export function buildImportPlan(source: ScapeSource, options: PlanOptions): Impo
     planNotes(plan, source, project);
     planStores(plan, source, project);
   }
-  const managersPlan = planManagers({ arguses: source.arguses(), notes: plan.notes, managersRoot: options.managersRoot });
+  const availableResources = { noteIds: new Set(plan.notes.map((note) => note.id)), tableIds: new Set(plan.dataStores.map((store) => store.id)) };
+  const managersPlan = planManagers({ arguses: source.arguses(), notes: plan.notes, availableResources, managersRoot: options.managersRoot });
   plan.managers = managersPlan.managers;
   plan.skippedManagerCount = managersPlan.skippedCount;
   return plan;
