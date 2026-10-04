@@ -12,6 +12,8 @@ export interface DocsFolderFs {
   existsSync(path: string): boolean;
   mkdirSync(path: string): void;
   realpathSync(path: string): string;
+  /** True when the path (symlinks followed) is a directory; false for a file or a missing path; never throws. */
+  isDirectorySync(path: string): boolean;
   /** True when the current process can create files in the directory; never throws. */
   isWritableSync(dirPath: string): boolean;
   /** Filenames directly under `dirPath` — not recursive, empty for a directory that does not exist. */

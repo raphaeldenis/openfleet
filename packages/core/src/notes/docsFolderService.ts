@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import { NOTE_FOLDERS, type Note, type NoteFolder } from '@openfleet/shared';
 import type { DegradedRegistry } from '../process/degradedRegistry.js';
+import { ProjectNotFoundError } from '../projects/projectErrors.js';
 import type { ProjectRecord, ProjectRepository } from '../projects/projectRepository.js';
 import type { DocsFolderFs } from './docsFolderFs.js';
 import { MAX_BODY_BYTES, NoteNotFoundError, NoteTooLargeError, StaleRevisionError, type NoteService } from './noteService.js';
@@ -14,15 +15,18 @@ const DEBOUNCE_MS = 50;
 const MAX_SLUG_SUFFIX_ATTEMPTS = 1000;
 const FILENAME_DATE_PREFIX = /^\d{4}-\d{2}-\d{2}-/;
 
-export class ProjectNotFoundError extends Error {
-  constructor(projectId: string) {
-    super(`project not found: ${projectId}`);
-  }
-}
+export { ProjectNotFoundError };
 
 export class ProjectHasNoDocsFolderError extends Error {
   constructor(projectId: string) {
     super(`project ${projectId} has no docs folder configured`);
+  }
+}
+
+/** The path given as a docs folder is not an absolute path to an existing directory. The message never carries the path. */
+export class InvalidDocsFolderError extends Error {
+  constructor() {
+    super('the docs folder must be an absolute path to an existing directory.');
   }
 }
 
@@ -60,6 +64,8 @@ export interface DocsFolderServiceDeps {
   clock: () => string;
   /** Hears when a note file cannot be read and when a read succeeds again. */
   degraded?: Pick<DegradedRegistry, 'mark' | 'clear'>;
+  /** Hears a reconcile that fails inside a watcher's timer, where nobody could catch it. Without it the failure is thrown from the timer. */
+  onWatchError?: (error: unknown) => void;
 }
 
 export interface CreateFileBackedNoteInput {
@@ -160,6 +166,41 @@ export class DocsFolderService {
 
   ensureLayout(docsFolderPath: string): void {
     for (const folder of NOTE_FOLDERS) this.deps.fs.mkdirSync(join(docsFolderPath, folder));
+  }
+
+  /**
+   * Accepts `docsFolderPath` as a project's docs folder: an absolute path to an existing, writable directory.
+   * Creates the four docs subfolders inside it, never the folder itself and never anything that resolves outside it.
+   */
+  prepareFolder(docsFolderPath: string): void {
+    const realDocsFolderPath = this.resolveUsableFolder(docsFolderPath);
+    for (const folder of NOTE_FOLDERS) this.assertSubfolderStaysInside(realDocsFolderPath, folder);
+    this.ensureLayout(realDocsFolderPath);
+  }
+
+  private resolveUsableFolder(docsFolderPath: string): string {
+    if (!isAbsolute(docsFolderPath)) throw new InvalidDocsFolderError();
+    const realDocsFolderPath = this.realpathOfConfiguredFolder(docsFolderPath);
+    if (!this.deps.fs.isDirectorySync(realDocsFolderPath)) throw new InvalidDocsFolderError();
+    if (!this.deps.fs.isWritableSync(realDocsFolderPath)) throw new DocsFolderNotWritableError(docsFolderPath, undefined);
+    return realDocsFolderPath;
+  }
+
+  private realpathOfConfiguredFolder(docsFolderPath: string): string {
+    try {
+      return this.deps.fs.realpathSync(docsFolderPath);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      const isPermissionRefusal = code === 'EACCES' || code === 'EPERM';
+      throw isPermissionRefusal ? new DocsFolderNotWritableError(docsFolderPath, error) : new InvalidDocsFolderError();
+    }
+  }
+
+  private assertSubfolderStaysInside(realDocsFolderPath: string, folder: NoteFolder): void {
+    const subfolderPath = join(realDocsFolderPath, folder);
+    const isMissingYet = !this.deps.fs.existsSync(subfolderPath);
+    if (isMissingYet) return;
+    this.assertContained(realDocsFolderPath, subfolderPath);
   }
 
   createFileBackedNote(input: CreateFileBackedNoteInput): Note {
@@ -278,12 +319,13 @@ export class DocsFolderService {
   /** Watches the project's docs folder; each changed path is debounced and reconciled. Returns an unsubscribe that cancels pending work too. */
   watch(projectId: string): () => void {
     const project = this.requireProject(projectId);
-    const docsFolderPath = this.requireDocsFolderPath(project);
+    const realDocsFolderPath = this.deps.fs.realpathSync(this.requireDocsFolderPath(project));
     const timers = new Map<string, ReturnType<typeof setTimeout>>();
 
-    const stopWatching = this.deps.fs.watch(docsFolderPath, (_eventType, relativePath) => {
+    // Notes store the real path of their file, so an event path must be joined to the real folder, not to a symlink that leads to it.
+    const stopWatching = this.deps.fs.watch(realDocsFolderPath, (_eventType, relativePath) => {
       if (relativePath === null) return;
-      this.scheduleReconcile(join(docsFolderPath, relativePath), timers);
+      this.scheduleReconcile(join(realDocsFolderPath, relativePath), timers);
     });
 
     return () => {
@@ -300,9 +342,19 @@ export class DocsFolderService {
       absolutePath,
       setTimeout(() => {
         timers.delete(absolutePath);
-        this.reconcilePath(absolutePath);
+        this.reconcilePathReportingFailure(absolutePath);
       }, DEBOUNCE_MS),
     );
+  }
+
+  private reconcilePathReportingFailure(absolutePath: string): void {
+    const { onWatchError } = this.deps;
+    if (!onWatchError) return this.reconcilePath(absolutePath);
+    try {
+      this.reconcilePath(absolutePath);
+    } catch (error) {
+      onWatchError(error);
+    }
   }
 
   private reconcilePath(absolutePath: string): void {
@@ -449,7 +501,8 @@ export class DocsFolderService {
   private scanImportCandidates(realDocsFolderPath: string): ImportCandidate[] {
     return NOTE_FOLDERS.flatMap((folder) => {
       const declaredFolderDir = join(realDocsFolderPath, folder);
-      const realFolderDir = this.deps.fs.realpathSync(declaredFolderDir);
+      const realFolderDir = this.realpathOfSubfolder(declaredFolderDir);
+      if (realFolderDir === undefined) return [];
       return this.deps.fs
         .listFilesSync(declaredFolderDir)
         .filter((filename) => filename.endsWith('.md'))
@@ -458,6 +511,17 @@ export class DocsFolderService {
           return { folder, realFilePath, title: this.titleFromFilename(filename) };
         });
     });
+  }
+
+  /** A docs subfolder that does not exist holds no notes; any other failure to resolve it propagates. */
+  private realpathOfSubfolder(declaredFolderDir: string): string | undefined {
+    try {
+      return this.deps.fs.realpathSync(declaredFolderDir);
+    } catch (error) {
+      const isSubfolderMissing = (error as NodeJS.ErrnoException).code === 'ENOENT';
+      if (isSubfolderMissing) return undefined;
+      throw error;
+    }
   }
 
   /** The filename on disk is left exactly as it is — only the derived title is NFC-normalized. */

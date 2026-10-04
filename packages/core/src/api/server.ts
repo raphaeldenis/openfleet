@@ -14,6 +14,7 @@ import type { DegradedRegistry } from '../process/degradedRegistry.js';
 import { DAEMON_VERSION } from '../version.js';
 import { PortInUseError } from '../errors/portInUseError.js';
 import type { ProjectRepository } from '../projects/projectRepository.js';
+import type { ProjectService } from '../projects/projectService.js';
 import type { SessionService } from '../sessions/sessionService.js';
 import type { DataStoreRepository } from '../stores/dataStoreRepository.js';
 import type { DataStoreService } from '../stores/dataStoreService.js';
@@ -50,6 +51,8 @@ export interface ServerDeps {
   // The notes and data-store REST routes exist only when the daemon hands over their services.
   notes?: NoteService; noteRepo?: NoteRepository; docs?: DocsFolderService;
   stores?: DataStoreService; storeRepo?: DataStoreRepository; projects?: ProjectRepository;
+  // Without it the project routes are read-only: no project is created and no docs folder is set.
+  projectService?: ProjectService;
   // The working-state route, event and snapshot fields exist only when the daemon hands over the service.
   workingStates?: WorkingStateService; workingStateMaxAgeMinutes?: number;
   // Without it the snapshot reports no silent blocks.
@@ -133,7 +136,7 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; rout
   });
   registerRestRoutes(router, { ...deps, wsTickets });
   if (deps.diagnostics) registerDiagnosticsRoutes(router, deps.diagnostics);
-  if (deps.projects) registerProjectRoutes(router, deps.projects);
+  if (deps.projects) registerProjectRoutes(router, { projects: deps.projects, projectService: deps.projectService });
   if (deps.stores && deps.storeRepo) registerDataStoreRoutes(router, { stores: deps.stores, storeRepo: deps.storeRepo });
   if (deps.handoff) registerHandoffRoutes(router, deps.handoff);
   if (deps.notes && deps.noteRepo && deps.docs) registerNoteRoutes(router, { notes: deps.notes, noteRepo: deps.noteRepo, docs: deps.docs });

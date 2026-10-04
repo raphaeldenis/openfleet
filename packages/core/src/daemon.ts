@@ -31,7 +31,9 @@ import { NoteService } from './notes/noteService.js';
 import { closeWithin } from './process/boundedClose.js';
 import { createDegradedRegistry, type DegradedRegistry } from './process/degradedRegistry.js';
 import { watchDatabaseHealth } from './process/watchDatabaseHealth.js';
+import { DocsFolderSupervisor } from './projects/docsFolderSupervisor.js';
 import { ProjectRepository } from './projects/projectRepository.js';
+import { ProjectService } from './projects/projectService.js';
 import { SessionService } from './sessions/sessionService.js';
 import { DataStoreRepository } from './stores/dataStoreRepository.js';
 import { DataStoreService } from './stores/dataStoreService.js';
@@ -51,6 +53,13 @@ const scheduleOnRealClock = (callback: () => void, delayMs: number): (() => void
   const timer = setTimeout(callback, delayMs);
   timer.unref();
   return () => clearTimeout(timer);
+};
+
+// The line names the project and the step, never the folder: an error message can carry a path.
+const logDocsFolderFailure = (step: string, projectId?: string) => (error: unknown): void => {
+  const errorCode = (error as NodeJS.ErrnoException | undefined)?.code ?? (error as Error | undefined)?.name;
+  const project = projectId ? ` for project ${projectId}` : '';
+  log('warn', `docs folder ${step} failed${project}`, undefined, { code: 'docs_folder_step_failed', step, errorCode });
 };
 
 export interface Daemon {
@@ -92,7 +101,9 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   const projects = new ProjectRepository(db);
   const noteRepo = new NoteRepository(db);
   const notes = new NoteService({ repo: noteRepo, db, expandMentions, clock: () => new Date().toISOString(), newId });
-  const docs = new DocsFolderService({ notes, noteRepo, projects, fs: nodeDocsFolderFs, clock: () => new Date().toISOString(), degraded });
+  const docs = new DocsFolderService({ notes, noteRepo, projects, fs: nodeDocsFolderFs, clock: () => new Date().toISOString(), degraded, onWatchError: logDocsFolderFailure('watch') });
+  const docsFolders = new DocsFolderSupervisor({ projects, docs, onError: ({ projectId, step, error }) => logDocsFolderFailure(step, projectId)(error) });
+  const projectService = new ProjectService({ projects, docs, clock: () => new Date().toISOString(), newId, onDocsFolderSet: (projectId) => docsFolders.watchProject(projectId) });
   const workingStates = new WorkingStateService({ db, clock: () => new Date().toISOString(), stateRoot: config.stateRoot, maxBytes: workingStateSettings.maxBytes });
   const stopRefusal = new StopRefusal({ db, workingStates, settings: workingStateSettings, clock: () => new Date().toISOString() });
   const sessionStartContext = new SessionStartContext({ db, workingStates, settings: workingStateSettings, clock: () => new Date().toISOString() });
@@ -107,7 +118,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   // The server must be listening before any resumed CLI can POST its first hook — resuming first risks a
   // fast process hitting a port nothing is serving yet.
   const diagnostics = () => buildDiagnosticsDocument({ db, degraded, listSessions: () => sessions.list(), port: config.port, e2eEnabled: config.e2eEnabled });
-  const server = await startServer({ ...config, e2eRoutes: config.e2eEnabled, degraded, diagnostics, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, stores, storeRepo, projects, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, workingStates, worktreesRoot: config.worktreesRoot }) });
+  const server = await startServer({ ...config, e2eRoutes: config.e2eEnabled, degraded, diagnostics, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, stores, storeRepo, projects, projectService, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, workingStates, worktreesRoot: config.worktreesRoot }) });
   log('info', `openfleet core listening on ${server.url} (version: ${DAEMON_VERSION}, home: ${config.home})`);
 
   const unwatchDatabase = watchDatabaseHealth(degraded);
@@ -121,6 +132,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     pulseScheduler.stop();
     contextNotice.stop();
     silentBlocks.stop();
+    docsFolders.stop();
     await sessions.closeAll();
     todos.stop();
     await server.close();
@@ -130,6 +142,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     // token indefinitely; every resume below rewrites its own launch dir from scratch with rotated tokens
     // anyway, so nothing here is worth preserving across a restart (AUD-11).
     sweepStaleSessions(config.sessionsRoot);
+    docsFolders.start();
     await sessions.resumeAll();
     pulseScheduler.start();
   } catch (error) {

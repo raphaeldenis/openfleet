@@ -69,6 +69,10 @@ class FakeDocsFolderFs implements DocsFolderFs {
     return this.symlinks.get(path) ?? path;
   }
 
+  isDirectorySync(path: string): boolean {
+    return this.dirs.has(path);
+  }
+
   isWritableSync(): boolean {
     return true;
   }
@@ -94,7 +98,7 @@ class FakeDocsFolderFs implements DocsFolderFs {
   }
 }
 
-function setup({ docsFolderPath = '/docs', degraded }: { docsFolderPath?: string | null; degraded?: DegradedRegistry } = {}) {
+function setup({ docsFolderPath = '/docs', degraded, onWatchError }: { docsFolderPath?: string | null; degraded?: DegradedRegistry; onWatchError?: (error: unknown) => void } = {}) {
   const db = openDatabase(':memory:');
   const projects = new ProjectRepository(db);
   projects.insert({ id: 'p1', name: 'P1', docsFolderPath, createdAt: 't0' });
@@ -107,7 +111,7 @@ function setup({ docsFolderPath = '/docs', degraded }: { docsFolderPath?: string
   const notes = new NoteService({ repo: noteRepo, db, expandMentions, clock, newId });
 
   const fakeFs = new FakeDocsFolderFs();
-  const docs = new DocsFolderService({ notes, noteRepo, projects, fs: fakeFs, clock: () => FIXED_DOCS_CLOCK, degraded });
+  const docs = new DocsFolderService({ notes, noteRepo, projects, fs: fakeFs, clock: () => FIXED_DOCS_CLOCK, degraded, onWatchError });
 
   return { db, projects, noteRepo, notes, fakeFs, docs };
 }
@@ -752,5 +756,39 @@ describe('DocsFolderService watch', () => {
     vi.runAllTimers();
 
     expect(noteRepo.listVersions(note.id)).toHaveLength(1); // only the create — nothing was ever applied
+  });
+
+  it('finds the note of a changed file when the docs folder is reached through a symlink', () => {
+    vi.useFakeTimers();
+    const { fakeFs, noteRepo, docs } = setup({ docsFolderPath: '/docs-link' });
+    fakeFs.symlinks.set('/docs-link', '/docs');
+    fakeFs.symlinks.set('/docs-link/specs', '/docs/specs');
+    const note = docs.createFileBackedNote({ projectId: 'p1', folder: 'specs', title: 'x', bodyMd: 'v1', author: AUTHOR });
+    fakeFs.files.set(note.filePath!, 'edited on disk');
+
+    const unsubscribe = docs.watch('p1');
+    fakeFs.emit('/docs-link', 'specs/2026-01-15-x.md');
+    fakeFs.emit('/docs', 'specs/2026-01-15-x.md');
+    vi.runAllTimers();
+
+    expect(noteRepo.get(note.id)).toMatchObject({ bodyMd: 'edited on disk', rev: 2 });
+    unsubscribe();
+  });
+
+  it('hands a reconcile that fails inside the watcher to onWatchError instead of throwing out of the timer', () => {
+    vi.useFakeTimers();
+    const onWatchError = vi.fn();
+    const { fakeFs, docs } = setup({ onWatchError });
+    const note = docs.createFileBackedNote({ projectId: 'p1', folder: 'specs', title: 'x', bodyMd: 'v1', author: AUTHOR });
+    const unsubscribe = docs.watch('p1');
+    const folderGone = errnoError('ENOENT', '/docs');
+    vi.spyOn(fakeFs, 'realpathSync').mockImplementation(() => { throw folderGone; });
+
+    fakeFs.emit('/docs', 'specs/2026-01-15-x.md');
+    expect(() => vi.runAllTimers()).not.toThrow();
+
+    expect(onWatchError).toHaveBeenCalledExactlyOnceWith(folderGone);
+    expect(note.filePath).toBeTruthy();
+    unsubscribe();
   });
 });

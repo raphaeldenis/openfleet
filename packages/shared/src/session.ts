@@ -29,6 +29,7 @@ export const SessionSpecSchema = z.object({
   model: ModelIdSchema.optional(),
   seededPrompt: z.string().optional(),
   parentId: z.string().optional(),
+  projectId: z.uuid().optional(),
   role: z.string().optional(),
   harness: z.enum(HARNESSES).default('claude-cli'),
   permissionMode: z.enum(PERMISSION_MODES).optional(),

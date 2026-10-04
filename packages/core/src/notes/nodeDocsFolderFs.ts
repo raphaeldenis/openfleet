@@ -1,6 +1,6 @@
 import {
   accessSync, closeSync, constants, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync,
-  realpathSync, renameSync, unlinkSync, watch, writeFileSync,
+  realpathSync, renameSync, statSync, unlinkSync, watch, writeFileSync,
 } from 'node:fs';
 import { dirname } from 'node:path';
 import type { DocsFolderFs } from './docsFolderFs.js';
@@ -19,6 +19,13 @@ export const nodeDocsFolderFs: DocsFolderFs = {
   existsSync: (path) => existsSync(path),
   mkdirSync: (path) => mkdirSync(path, { recursive: true }),
   realpathSync: (path) => realpathSync(path),
+  isDirectorySync: (path) => {
+    try {
+      return statSync(path).isDirectory();
+    } catch {
+      return false;
+    }
+  },
   isWritableSync: (dirPath) => {
     try {
       accessSync(dirPath, constants.W_OK);
