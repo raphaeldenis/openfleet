@@ -1,4 +1,4 @@
-import { render, screen, waitFor, fireEvent } from '@testing-library/angular/zoneless';
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
 import { inputBinding, signal } from '@angular/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -21,6 +21,202 @@ async function pickRung(rung: string) {
 }
 
 describe('ModelSelectorComponent', () => {
+  describe('exact model id', () => {
+    async function renderPicker({ model = 'sonnet', state = 'idle', updateModel = vi.fn().mockResolvedValue({ status: 'relaunching' }) } = {}) {
+      const sessionId = signal('s1');
+      const events = { sessions: signal([{ id: 's1', name: 'Gimli', emoji: '⚔️', model, state }, { id: 's2', name: 'Legolas', emoji: '🏹', model: 'haiku', state: 'idle' }]), approvals: signal([]), managers: signal([]) };
+      const api = { models: vi.fn().mockResolvedValue({ sonnet: 'mapped-sonnet' }), updateModel, saveModels: vi.fn() };
+      const rendered = await render(ModelSelectorComponent, {
+        bindings: [inputBinding('sessionId', sessionId)],
+        providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: events }],
+      });
+      await openRungs();
+      return { ...rendered, api, sessionId };
+    }
+
+    const exactIdField = () => screen.getByRole('textbox', { name: 'Exact model id' });
+    const useIdButton = () => screen.getByRole('button', { name: 'Use id' });
+
+    it('uses a trimmed exact id on Enter, closes the popover and announces the restart', async () => {
+      const { api } = await renderPicker();
+
+      await userEvent.type(exactIdField(), '  custom-model-v2  {Enter}');
+
+      expect(api.updateModel).toHaveBeenCalledExactlyOnceWith('s1', 'custom-model-v2');
+      expect(api.saveModels).not.toHaveBeenCalled();
+      expect(rungList()).toBeNull();
+      expect(modelButton()).toHaveFocus();
+      expect(await screen.findByTestId('model-switch-status')).toHaveTextContent('restarting…');
+    });
+
+    it.each(['', '   ', '-flag', 'two words', 'x'.repeat(101), 'id\u202e'])('refuses invalid id %j even when Enter is dispatched', async (id) => {
+      const { api } = await renderPicker();
+
+      fireEvent.input(exactIdField(), { target: { value: id } });
+      await waitFor(() => expect(useIdButton()).toBeDisabled());
+      fireEvent.keyDown(exactIdField(), { key: 'Enter' });
+
+      expect(api.updateModel).not.toHaveBeenCalled();
+      expect(rungList()).not.toBeNull();
+    });
+
+    it('closes without sending a switch for the exact id already in force', async () => {
+      const { api } = await renderPicker({ model: 'custom-model-v2' });
+      await userEvent.type(exactIdField(), 'custom-model-v2');
+
+      await userEvent.click(useIdButton());
+
+      expect(api.updateModel).not.toHaveBeenCalled();
+      expect(rungList()).toBeNull();
+    });
+
+    it('sends one exact-id switch on a double click and displays a deferred switch', async () => {
+      let resolveUpdate!: (value: { status: 'deferred' }) => void;
+      const response = new Promise<{ status: 'deferred' }>((resolve) => { resolveUpdate = resolve; });
+      const { api } = await renderPicker({ state: 'generating', updateModel: vi.fn().mockReturnValue(response) });
+      await userEvent.type(exactIdField(), 'custom-model-v2');
+      const button = useIdButton();
+
+      fireEvent.click(button);
+      fireEvent.click(button);
+      resolveUpdate({ status: 'deferred' });
+      await response;
+
+      expect(api.updateModel).toHaveBeenCalledExactlyOnceWith('s1', 'custom-model-v2');
+      expect(await screen.findByTestId('model-switch-status')).toHaveTextContent('switch pending → custom-model-v2');
+    });
+
+    it('keeps the active model selected after a refused exact-id switch', async () => {
+      await renderPicker({ model: 'current-id', updateModel: vi.fn().mockRejectedValue(new Error('refused')) });
+      await userEvent.type(exactIdField(), 'refused-id');
+
+      await userEvent.click(useIdButton());
+
+      expect(await screen.findByTestId('model-switch-error')).toBeVisible();
+      await openRungs();
+      expect(await rungNamed('current-id')).toHaveAttribute('aria-selected', 'true');
+      expect(screen.queryByRole('option', { name: 'refused-id' })).toBeNull();
+    });
+
+    it('clears the exact-id draft on navigation and switches the displayed session', async () => {
+      const { api, sessionId, fixture } = await renderPicker();
+      await userEvent.type(exactIdField(), 'old-draft-id');
+
+      sessionId.set('s2');
+      await fixture.whenStable();
+      await screen.findByRole('button', { name: 'Model: haiku' });
+
+      expect(rungList()).toBeNull();
+      await openRungs();
+      expect(exactIdField()).toHaveValue('');
+      await userEvent.type(exactIdField(), 'new-session-id');
+      await userEvent.click(useIdButton());
+      expect(api.updateModel).toHaveBeenCalledExactlyOnceWith('s2', 'new-session-id');
+    });
+  });
+
+  it('shows the current daemon mapping for each rung and keeps the exact active id selected', async () => {
+    const models = { haiku: 'haiku-live-id', sonnet: 'sonnet-live-id', opus: 'opus-live-id', fable: 'fable-live-id' };
+    await render(ModelSelectorComponent, {
+      bindings: [inputBinding('sessionId', () => 's1')],
+      providers: [{ provide: FleetApiService, useValue: { models: vi.fn().mockResolvedValue(models), updateModel: vi.fn() } }, { provide: FleetEventsService, useValue: fakeEvents('custom-active-id') }],
+    });
+
+    await openRungs();
+
+    for (const [rung, id] of Object.entries(models)) {
+      const option = await rungNamed(rung);
+      expect(await within(option).findByText(id)).toBeVisible();
+      expect(option).toHaveAccessibleDescription(id);
+      expect(option).toHaveAttribute('aria-selected', 'false');
+    }
+    expect(await rungNamed('custom-active-id')).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('refetches the mapping when reopening after Settings changes', async () => {
+    const api = { models: vi.fn().mockResolvedValueOnce({ sonnet: 'first-id' }).mockResolvedValue({ sonnet: 'new-id' }), updateModel: vi.fn() };
+    await render(ModelSelectorComponent, {
+      bindings: [inputBinding('sessionId', () => 's1')],
+      providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: fakeEvents('sonnet') }],
+    });
+    await openRungs();
+    expect(await screen.findByText('first-id')).toBeVisible();
+    await userEvent.keyboard('{Escape}');
+
+    await openRungs();
+
+    expect(await screen.findByText('new-id')).toBeVisible();
+    expect(screen.queryByText('first-id')).toBeNull();
+  });
+
+  it('keeps rung selection available when the mapping fails and retries the mapping', async () => {
+    const api = { models: vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValue({ sonnet: 'recovered-id' }), updateModel: vi.fn() };
+    await render(ModelSelectorComponent, {
+      bindings: [inputBinding('sessionId', () => 's1')],
+      providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: fakeEvents('sonnet') }],
+    });
+
+    await openRungs();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Model ids could not be loaded');
+    expect(await rungNamed('sonnet')).toHaveAttribute('aria-selected', 'true');
+    await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByText('recovered-id')).toBeVisible();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it.each(['success', 'failure'])('ignores an older mapping %s after reopening', async (outcome) => {
+    let resolveOld!: (value: Record<string, string>) => void;
+    let rejectOld!: (reason: Error) => void;
+    const oldRequest = new Promise<Record<string, string>>((resolve, reject) => { resolveOld = resolve; rejectOld = reject; });
+    const api = { models: vi.fn().mockReturnValueOnce(oldRequest).mockResolvedValue({ sonnet: 'current-id' }), updateModel: vi.fn() };
+    const { fixture } = await render(ModelSelectorComponent, {
+      bindings: [inputBinding('sessionId', () => 's1')],
+      providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: fakeEvents('sonnet') }],
+    });
+    await openRungs();
+    expect(await screen.findByText('Loading model ids…')).toBeVisible();
+    await userEvent.keyboard('{Escape}');
+    await openRungs();
+    expect(await screen.findByText('current-id')).toBeVisible();
+
+    if (outcome === 'success') resolveOld({ sonnet: 'obsolete-id' });
+    else rejectOld(new Error('old failure'));
+    await oldRequest.catch(() => undefined);
+    await fixture.whenStable();
+
+    expect(screen.getByText('current-id')).toBeVisible();
+    expect(screen.queryByText('obsolete-id')).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('keeps the new mapping loading until its own response arrives', async () => {
+    let resolveOld!: (value: Record<string, string>) => void;
+    let resolveCurrent!: (value: Record<string, string>) => void;
+    const oldRequest = new Promise<Record<string, string>>((resolve) => { resolveOld = resolve; });
+    const currentRequest = new Promise<Record<string, string>>((resolve) => { resolveCurrent = resolve; });
+    const api = { models: vi.fn().mockReturnValueOnce(oldRequest).mockReturnValueOnce(currentRequest), updateModel: vi.fn() };
+    const { fixture } = await render(ModelSelectorComponent, {
+      bindings: [inputBinding('sessionId', () => 's1')],
+      providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: fakeEvents('sonnet') }],
+    });
+    await openRungs();
+    expect(await screen.findByText('Loading model ids…')).toBeVisible();
+    await userEvent.keyboard('{Escape}');
+    await openRungs();
+    expect(await screen.findByText('Loading model ids…')).toBeVisible();
+
+    resolveOld({ sonnet: 'obsolete-id' });
+    await oldRequest;
+    await fixture.whenStable();
+
+    expect(screen.getByText('Loading model ids…')).toBeVisible();
+    expect(screen.queryByText('obsolete-id')).toBeNull();
+    resolveCurrent({ sonnet: 'current-id' });
+    expect(await screen.findByText('current-id')).toBeVisible();
+    expect(screen.queryByText('Loading model ids…')).toBeNull();
+  });
+
   it('shows the session\'s current model, or "default" when none is set', async () => {
     await render(ModelSelectorComponent, {
       bindings: [inputBinding('sessionId', () => 's1')],
