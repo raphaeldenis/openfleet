@@ -57,7 +57,7 @@ describe('playbook migration', () => {
     expect(body).not.toContain('<script>');
     expect(notes.map((note) => note.body_md).join('\n')).not.toContain('NEVER_EXPORT');
     expect(report.counts).toHaveProperty('playbooks', expect.objectContaining({ expected: 3, written: 3, notConverted: 3 }));
-    expect(readFileSync(report.reportPath!, 'utf8')).toContain('| playbooks | 3 | 3 | 0 | 0 | 0 | 3 |');
+    expect(readFileSync(report.reportPath!, 'utf8')).toContain('| playbooks | 3 | 3 | 0 | 0 | 0 | 0 | 0 | 3 |');
     expect(readdirSync(options.scratchRoot)).toEqual([]);
   });
 
@@ -121,5 +121,30 @@ describe('playbook migration', () => {
     expect(report.counts).toHaveProperty('playbooks', expect.objectContaining({ conflict: 2, alreadyPresent: 1 }));
     const body = withTarget(options.home, (db) => db.prepare("SELECT body_md FROM notes WHERE title = 'Playbooks (ex-Scape)' AND project_id = ?").get(OPENFLEET_PROJECT_ID));
     expect(body).toEqual(expect.objectContaining({ body_md: 'human edit' }));
+  });
+
+  it('follows a playbook changed in Scape into an archive OpenFleet left alone, then settles', () => {
+    const { options, fixture } = fixtureWithPlaybooks();
+    importScape(options);
+    editScapeNotes(fixture, (db) => db.prepare("UPDATE playbooks SET lexicalContent = replace(lexicalContent, 'check', 'checked again') WHERE id = 'pb-verify'").run());
+
+    const report = importScape(options);
+    const settled = importScape(options);
+
+    const archive = withTarget(options.home, (db) => db.prepare("SELECT body_md FROM notes WHERE title = 'Playbooks (ex-Scape)' AND project_id = ?").get(OPENFLEET_PROJECT_ID)) as { body_md: string };
+    expect(archive.body_md).toContain('checked again');
+    expect(report.counts.playbooks).toMatchObject({ updated: 2, alreadyPresent: 1, conflict: 0 });
+    expect(settled.counts.playbooks).toMatchObject({ alreadyPresent: 3, updated: 0 });
+  });
+
+  it('never writes again an archive deleted in OpenFleet, and counts its playbooks as conflicts deleted in OpenFleet', () => {
+    const { options } = fixtureWithPlaybooks();
+    importScape(options);
+    withTarget(options.home, (db) => db.prepare("DELETE FROM notes WHERE title = 'Playbooks (ex-Scape)' AND project_id = ?").run(OPENFLEET_PROJECT_ID));
+
+    const report = importScape(options);
+
+    expect(report.counts.playbooks).toMatchObject({ conflict: 2, deletedInOpenFleet: 2, written: 0 });
+    expect(withTarget(options.home, (db) => db.prepare("SELECT count(*) AS n FROM notes WHERE title = 'Playbooks (ex-Scape)'").get())).toEqual({ n: 1 });
   });
 });

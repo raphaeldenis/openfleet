@@ -5,25 +5,34 @@ import { backUpBeforeMigrating } from '../../db/backup.js';
 import { openDatabase } from '../../db/database.js';
 import { latestShippedMigration } from '../../db/migrate.js';
 import { inTransaction } from '../../db/transaction.js';
+import type { RecordOutcome } from './importReport.js';
 import { ScapeImportError } from './scapeImportError.js';
+import { hashOfValues, withoutColumns, type ImportLedger, type LedgerKind } from './scapeLedger.js';
 import { snapshotSqliteDatabase } from './sqliteSnapshot.js';
 
 const DATABASE_FILE_NAME = 'openfleet.db';
 
-export type UpsertOutcome = 'written' | 'updated' | 'alreadyPresent' | 'conflict';
+export type UpsertOutcome = RecordOutcome;
 export type RecordValues = Record<string, string | number | null>;
 
-/** What to do with a stored record that differs from the planned one. */
-export type DifferenceDecision = 'overwrite' | 'conflict' | 'ignore';
+/** A record counts as left alone when the import neither wrote nor changed it. */
+export const isLeftAlone = (outcome: UpsertOutcome | undefined): boolean => outcome === 'conflict' || outcome === 'deletedInOpenFleet';
 
 export interface WritePolicy {
-  decideOnDifference(stored: RecordValues): DifferenceDecision;
-  /** False when the record must not be created (for instance a row deleted in OpenFleet). */
+  /** False when the record must not be created (a row of a store OpenFleet holds under another name, for instance). */
   canInsert?(): boolean;
+  /** False when the record must not be changed although OpenFleet has not touched its own columns (a note with a version from someone else, for instance). */
+  canUpdate?(): boolean;
+  /** Columns OpenFleet maintains itself: they take no part in telling an OpenFleet edit from none. */
+  ignoredColumns?: readonly string[];
 }
 
-export const REPORT_DIFFERENCE_AS_CONFLICT: WritePolicy = { decideOnDifference: () => 'conflict' };
-export const KEEP_STORED_RECORD: WritePolicy = { decideOnDifference: () => 'ignore' };
+/** Reads, creates and changes one stored record; `insert` throws the database error of a taken name. */
+export interface RecordGateway {
+  readStored(): RecordValues | undefined;
+  insert(): void;
+  update(input: { stored: RecordValues }): void;
+}
 
 export interface TargetDatabase {
   db: DatabaseSync;
@@ -87,33 +96,76 @@ export function openDryRunTarget(input: { home: string; scratchRoot: string }): 
   }
 }
 
-/** Inserts the record, or compares it with the stored one and lets the policy decide what a difference means. */
-export function upsertRecord(db: DatabaseSync, input: { table: string; id: string; record: RecordValues; policy: WritePolicy }): UpsertOutcome {
-  const columns = Object.keys(input.record);
-  const stored = db.prepare(`SELECT ${columns.join(', ')} FROM ${input.table} WHERE id = ?`).get(input.id) as RecordValues | undefined;
-  if (stored === undefined) return insertRecord(db, input);
+export interface ReconcileInput {
+  ledger: ImportLedger;
+  kind: LedgerKind;
+  id: string;
+  planned: RecordValues;
+  policy: WritePolicy;
+  gateway: RecordGateway;
+}
 
-  const changedColumns = columns.filter((column) => stored[column] !== input.record[column]);
-  if (changedColumns.length === 0) return 'alreadyPresent';
-  const decision = input.policy.decideOnDifference(stored);
-  if (decision === 'ignore') return 'alreadyPresent';
-  if (decision === 'conflict') return 'conflict';
-  const assignments = changedColumns.map((column) => `${column} = ?`).join(', ');
-  db.prepare(`UPDATE ${input.table} SET ${assignments} WHERE id = ?`).run(...changedColumns.map((column) => input.record[column]!), input.id);
+/**
+ * The 3-way compare of a re-import: the stored record against the planned one and against what the last import wrote (the ledger).
+ * A stored record equal to the last import is untouched in OpenFleet, so a Scape change is applied; any other difference is an OpenFleet edit.
+ */
+export function reconcileRecord(input: ReconcileInput): UpsertOutcome {
+  const { ledger, kind, id, policy, gateway } = input;
+  const ignoredColumns = policy.ignoredColumns ?? [];
+  const hashOfRecord = (record: RecordValues) => hashOfValues(withoutColumns(record, ignoredColumns));
+  const plannedHash = hashOfRecord(input.planned);
+  const lastImportedHash = ledger.hashOf(kind, id);
+
+  const stored = gateway.readStored();
+  if (stored === undefined) {
+    const isDeletedInOpenFleet = lastImportedHash !== undefined;
+    if (isDeletedInOpenFleet) return 'deletedInOpenFleet';
+    return insertRecord({ ...input, plannedHash });
+  }
+
+  const storedHash = hashOfRecord(stored);
+  if (storedHash === plannedHash) {
+    ledger.remember({ kind, id, hash: plannedHash });
+    return 'alreadyPresent';
+  }
+  const isUntouchedInOpenFleet = storedHash === lastImportedHash;
+  const mayUpdate = isUntouchedInOpenFleet && (policy.canUpdate?.() ?? true);
+  if (!mayUpdate) return 'conflict';
+  gateway.update({ stored });
+  ledger.remember({ kind, id, hash: plannedHash });
   return 'updated';
 }
 
-function insertRecord(db: DatabaseSync, input: { table: string; id: string; record: RecordValues; policy: WritePolicy }): UpsertOutcome {
+function insertRecord(input: ReconcileInput & { plannedHash: string }): UpsertOutcome {
   const mayInsert = input.policy.canInsert?.() ?? true;
   if (!mayInsert) return 'conflict';
-  const columns = Object.keys(input.record);
-  const placeholders = ['?', ...columns.map(() => '?')].join(', ');
   try {
-    inTransaction(db, 'importScapeInsert', () => db.prepare(`INSERT INTO ${input.table} (id, ${columns.join(', ')}) VALUES (${placeholders})`).run(input.id, ...Object.values(input.record)));
+    input.gateway.insert();
   } catch (error) {
     const isNameTakenInOpenFleet = /UNIQUE constraint failed/i.test((error as Error).message);
     if (isNameTakenInOpenFleet) return 'conflict';
     throw error;
   }
+  input.ledger.remember({ kind: input.kind, id: input.id, hash: input.plannedHash });
   return 'written';
+}
+
+export interface UpsertInput { table: string; kind: LedgerKind; id: string; record: RecordValues; policy?: WritePolicy; ledger: ImportLedger }
+
+/** Reconciles one record of a table of the target. */
+export function upsertRecord(db: DatabaseSync, input: UpsertInput): UpsertOutcome {
+  const columns = Object.keys(input.record);
+  const gateway: RecordGateway = {
+    readStored: () => db.prepare(`SELECT ${columns.join(', ')} FROM ${input.table} WHERE id = ?`).get(input.id) as RecordValues | undefined,
+    insert: () => {
+      const placeholders = ['?', ...columns.map(() => '?')].join(', ');
+      inTransaction(db, 'importScapeInsert', () => db.prepare(`INSERT INTO ${input.table} (id, ${columns.join(', ')}) VALUES (${placeholders})`).run(input.id, ...Object.values(input.record)));
+    },
+    update: ({ stored }) => {
+      const changedColumns = columns.filter((column) => stored[column] !== input.record[column]);
+      const assignments = changedColumns.map((column) => `${column} = ?`).join(', ');
+      db.prepare(`UPDATE ${input.table} SET ${assignments} WHERE id = ?`).run(...changedColumns.map((column) => input.record[column]!), input.id);
+    },
+  };
+  return reconcileRecord({ ledger: input.ledger, kind: input.kind, id: input.id, planned: input.record, policy: input.policy ?? {}, gateway });
 }

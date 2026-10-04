@@ -83,7 +83,7 @@ describe('runImportCli', () => {
   });
 
   describe('a second real import', () => {
-    it('is refused with ALREADY_IMPORTED, because a re-import is not yet safe', () => {
+    it('is refused with ALREADY_IMPORTED unless --allow-reimport is passed, and the hint points at --dry-run', () => {
       runImportCli(argv(), { homeDirectory, env: {} });
 
       const result = runImportCli(argv(), { homeDirectory, env: {} });
@@ -91,16 +91,25 @@ describe('runImportCli', () => {
       expect(result.exitCode).toBe(1);
       expect(result.output).toContain('ALREADY_IMPORTED');
       expect(result.output).toContain('--allow-reimport');
+      expect(result.output).toContain('--dry-run');
     });
 
-    it('goes through with --allow-reimport and prints the warning', () => {
+    it('goes through with --allow-reimport and says where to read the conflicts', () => {
       runImportCli(argv(), { homeDirectory, env: {} });
 
       const result = runImportCli(argv('--allow-reimport'), { homeDirectory, env: {} });
 
       expect(result.exitCode).toBe(0);
-      expect(result.output).toContain('WARNING');
-      expect(result.output).toContain('MIG-01B');
+      expect(result.output).toContain('Re-import');
+      expect(result.output).toContain('removed in Scape');
+    });
+
+    it('previews the outcome of the re-import per entity with --dry-run, without --allow-reimport', () => {
+      runImportCli(argv(), { homeDirectory, env: {} });
+
+      const result = runImportCli(argv('--dry-run'), { homeDirectory, env: {} });
+
+      expect(result.output).toContain('| notes | 5 | 0 | 0 | 5 | 0 | 0 | 0 | 0 |');
     });
 
     it('can still be previewed with --dry-run', () => {
@@ -112,13 +121,13 @@ describe('runImportCli', () => {
     });
   });
 
-  it('prints the usage with the first-import-only warning on --help', () => {
+  it('prints the usage with the re-import rules on --help', () => {
     const result = runImportCli(['--help'], { homeDirectory, env: {} });
 
     expect(result.exitCode).toBe(0);
     expect(result.output).toContain('--allow-reimport');
-    expect(result.output).toMatch(/first import/i);
-    expect(result.output).toContain('MIG-01B');
+    expect(result.output).toMatch(/re-import compares/i);
+    expect(result.output).toContain('deleted in OpenFleet');
   });
 
   it('ends a home that cannot be opened with one IMPORT_WRITE_FAILED line and no stack trace', () => {

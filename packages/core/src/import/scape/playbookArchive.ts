@@ -1,9 +1,12 @@
 import type { DatabaseSync } from 'node:sqlite';
-import type { ImportReport } from './importReport.js';
+import { countOutcome, type ImportReport } from './importReport.js';
+import type { ImportLedger } from './scapeLedger.js';
 import { IMPORT_AUTHOR } from './scapeMappers.js';
 import type { ScapePlaybook, ScapeProject } from './scapeSource.js';
-import { REPORT_DIFFERENCE_AS_CONFLICT, upsertRecord, type RecordValues } from './scapeTarget.js';
+import { isLeftAlone, upsertRecord, type RecordValues } from './scapeTarget.js';
 import { scapeNotesDateToIso } from './scapeTime.js';
+
+export const playbookArchiveVersionIdOf = (archiveId: string) => `${archiveId}@rev1`;
 
 export interface PlannedPlaybookArchive { id: string; record: RecordValues; extra: { playbookCount: number } }
 
@@ -75,21 +78,22 @@ export function planPlaybookArchive(input: { project: ScapeProject; playbooks: S
   };
 }
 
-export function writePlaybookArchives(input: { db: DatabaseSync; archives: PlannedPlaybookArchive[]; report: ImportReport }): void {
+export function writePlaybookArchives(input: { db: DatabaseSync; ledger: ImportLedger; archives: PlannedPlaybookArchive[]; report: ImportReport }): void {
+  const { db, ledger, report } = input;
   for (const archive of input.archives) {
-    const outcome = upsertRecord(input.db, { table: 'notes', id: archive.id, record: archive.record, policy: REPORT_DIFFERENCE_AS_CONFLICT });
-    const counts = input.report.counts.playbooks;
+    const outcome = upsertRecord(db, { table: 'notes', kind: 'playbook_archive', id: archive.id, record: archive.record, ledger });
+    const counts = report.counts.playbooks;
     counts.expected += archive.extra.playbookCount;
     counts.notConverted += archive.extra.playbookCount;
-    counts[outcome] += archive.extra.playbookCount;
-    if (outcome === 'conflict') continue;
+    countOutcome(counts, outcome, archive.extra.playbookCount);
+    if (isLeftAlone(outcome)) continue;
     const versionRecord = {
       note_id: archive.id, rev: 1, body_md: archive.record.body_md!, author: IMPORT_AUTHOR,
       change_summary: 'playbooks archive', created_at: archive.record.updated_at!,
     };
-    const versionOutcome = upsertRecord(input.db, { table: 'note_versions', id: `${archive.id}@rev1`, record: versionRecord, policy: REPORT_DIFFERENCE_AS_CONFLICT });
-    input.report.counts.noteVersions.expected++;
-    input.report.counts.noteVersions[versionOutcome]++;
-    input.report.counts.noteVersions.notConverted++;
+    const versionOutcome = upsertRecord(db, { table: 'note_versions', kind: 'note_version', id: playbookArchiveVersionIdOf(archive.id), record: versionRecord, ledger });
+    report.counts.noteVersions.expected++;
+    countOutcome(report.counts.noteVersions, versionOutcome);
+    report.counts.noteVersions.notConverted++;
   }
 }
