@@ -1,8 +1,8 @@
 import { expect, test, type Page } from '@playwright/test';
-import { readFileSync } from 'node:fs';
+import { readE2eAdminToken } from '../../../scripts/e2e/e2eHome';
 
 const api = 'http://127.0.0.1:7332';
-const token = readFileSync('/tmp/of-e2e/admin.token', 'utf8').trim();
+const token = readE2eAdminToken();
 
 const THEMES = ['light', 'dark'] as const;
 const VIEWPORT = { width: 1440, height: 900 };

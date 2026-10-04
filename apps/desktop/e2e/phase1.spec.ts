@@ -1,11 +1,12 @@
 import { expect, test } from '@playwright/test';
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { e2eConfigPath, readE2eAdminToken } from '../../../scripts/e2e/e2eHome';
 
 const api = 'http://127.0.0.1:7332';
-const token = readFileSync('/tmp/of-e2e/admin.token', 'utf8').trim();
+const token = readE2eAdminToken();
 const headers = { 'content-type': 'application/json', authorization: `Bearer ${token}` };
 
-const configPath = '/tmp/of-e2e/config.json';
+const configPath = e2eConfigPath();
 
 test('a model picked in Settings is written to config.json and served by the running daemon', async ({ page, request }) => {
   await page.addInitScript(([t, a]) => { localStorage.setItem('openfleet.adminToken', t); localStorage.setItem('openfleet.apiUrl', a); }, [token, api]);

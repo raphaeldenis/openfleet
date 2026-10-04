@@ -1,5 +1,8 @@
 import { defineConfig } from '@playwright/test';
 import { E2E_FLAG_ENV, E2E_FLAG_ON } from '../../packages/shared/src/e2e';
+import { ensureE2eHome } from '../../scripts/e2e/e2eHome';
+
+const e2eHome = ensureE2eHome();
 
 export default defineConfig({
   testDir: './e2e',
@@ -10,7 +13,7 @@ export default defineConfig({
       cwd: '../..',
       url: 'http://127.0.0.1:7332/health',
       reuseExistingServer: false,
-      env: { OPENFLEET_HOME: '/tmp/of-e2e', OPENFLEET_PORT: '7332', [E2E_FLAG_ENV]: E2E_FLAG_ON },
+      env: { OPENFLEET_HOME: e2eHome, OPENFLEET_PORT: '7332', [E2E_FLAG_ENV]: E2E_FLAG_ON },
     },
     {
       command: 'pnpm start',
