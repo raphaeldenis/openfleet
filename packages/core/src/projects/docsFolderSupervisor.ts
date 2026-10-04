@@ -17,8 +17,8 @@ export interface DocsFolderSupervisorDeps {
 }
 
 /**
- * Keeps every project's docs folder in step with its notes: reconciles the known notes, imports the files nobody knows yet,
- * then watches the folder for later edits. A step that fails (a deleted folder, a permission change) is reported and
+ * Keeps every project's docs folder in step with its notes: watches the folder for edits, reconciles the known notes,
+ * then imports the files nobody knows yet. A step that fails (a deleted folder, a permission change) is reported and
  * never stops the next step or the next project.
  */
 export class DocsFolderSupervisor {
@@ -31,17 +31,17 @@ export class DocsFolderSupervisor {
     for (const { id } of this.deps.projects.list()) this.watchProject(id);
   }
 
-  /** Reconciles, imports and (re)watches the project's docs folder; a project without a folder is left alone. */
+  /** (Re)watches the project's docs folder first, so an edit made during the import is seen, then reconciles and imports it; a project without a folder is left alone. */
   watchProject(projectId: string): void {
     if (this.isStopped) return;
     const docsFolderPath = this.deps.projects.get(projectId)?.docsFolderPath;
     if (!docsFolderPath) return;
 
     this.stopWatching(projectId);
-    this.attempt(projectId, 'reconcile', () => this.deps.docs.reconcileOnBoot(projectId));
-    this.attempt(projectId, 'import', () => this.deps.docs.attachFolder(projectId, docsFolderPath));
     const unwatch = this.attempt(projectId, 'watch', () => this.deps.docs.watch(projectId));
     if (unwatch) this.unwatchByProjectId.set(projectId, unwatch);
+    this.attempt(projectId, 'reconcile', () => this.deps.docs.reconcileOnBoot(projectId));
+    this.attempt(projectId, 'import', () => this.deps.docs.attachFolder(projectId, docsFolderPath));
   }
 
   stop(): void {

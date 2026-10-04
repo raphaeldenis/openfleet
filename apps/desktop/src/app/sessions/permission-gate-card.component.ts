@@ -2,18 +2,20 @@ import { ChangeDetectionStrategy, Component, computed, effect, inject, input, si
 import type { Approval } from '@openfleet/shared';
 import { decideApproval } from '../core/decide-approval';
 import { FleetApiService } from '../core/fleet-api.service';
+import { ErrorLineComponent } from '../design/error-line.component';
 
 const ALWAYS_ALLOW_TOOLTIP = 'Always-allow lists for a session are a later phase feature.';
 
 @Component({
   selector: 'of-permission-gate-card',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [ErrorLineComponent],
   // Keeps its natural height as a flex sibling of the terminal instead of being shrunk with it.
   host: { style: 'display: block; flex: none;' },
   template: `
     <div class="gate-card" data-testid="permission-gate-card">
       <div class="gate-header">
-        <span class="gate-warning">! Permission needed</span>
+        <span class="gate-warning" data-testid="gate-warning"><span class="gate-glyph" aria-hidden="true">!</span> Permission needed</span>
         <span class="gate-tool" data-testid="gate-tool-name">{{ approval().toolName }}</span>
       </div>
       <pre class="gate-input" data-testid="gate-tool-input">{{ formattedInput() }}</pre>
@@ -25,7 +27,7 @@ const ALWAYS_ALLOW_TOOLTIP = 'Always-allow lists for a session are a later phase
         </button>
       </div>
       @if (error(); as error) {
-        <span role="alert" data-testid="gate-decision-error" class="of-error">✕ {{ error }}</span>
+        <of-error-line role="alert" data-testid="gate-decision-error">{{ error }}</of-error-line>
       }
     </div>
   `,
@@ -36,7 +38,8 @@ const ALWAYS_ALLOW_TOOLTIP = 'Always-allow lists for a session are a later phase
       border-radius: .5rem; background: color-mix(in oklch, var(--state-waiting-permission) 8%, var(--panel));
     }
     .gate-header { display: flex; align-items: center; gap: .5rem; }
-    .gate-warning { color: var(--state-waiting-permission); font-weight: 600; }
+    .gate-warning { color: var(--fg); font-weight: 600; }
+    .gate-glyph { color: var(--state-waiting-permission); }
     .gate-tool { font-family: var(--mono); font-size: .75rem; padding: 0 .375rem; border-radius: .25rem; background: var(--sunk); }
     .gate-input { font-family: var(--mono); font-size: .8125rem; padding: .5rem .625rem; border-radius: .375rem; background: var(--sunk); border: 1px solid var(--line); white-space: pre-wrap; margin: 0; }
     .gate-actions { display: flex; gap: .5rem; }

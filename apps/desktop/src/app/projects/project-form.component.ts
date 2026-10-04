@@ -2,6 +2,7 @@ import { afterNextRender, ChangeDetectionStrategy, Component, computed, DestroyR
 import { type CreateProjectRequest, MAX_PROJECT_NAME_CHARS, type Project, type UpdateProjectRequest } from '@openfleet/shared';
 import { copyFor } from '../core/error-copy';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
+import { ErrorLineComponent } from '../design/error-line.component';
 
 const DOCS_FOLDER_ERROR_CODES: ReadonlySet<string> = new Set(['invalid_body', 'docs_folder_not_writable', 'path_escapes_docs_folder']);
 const NAME_REQUIRED = 'Name is required';
@@ -27,13 +28,14 @@ let nextFormSequence = 0;
 @Component({
   selector: 'of-project-form',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [ErrorLineComponent],
   template: `
     <div class="project-form" role="group" [attr.aria-label]="groupLabel()" [attr.aria-busy]="pending() || null" (keydown.escape)="cancelOnEscape($event)">
       <div class="of-field">
         <label class="of-label" [for]="nameId">Name</label>
         <input #nameInput [id]="nameId" class="of-input" data-testid="project-name" [value]="name()" [readonly]="pending()" (input)="editName($event)" (keydown.enter)="saveOnEnter($event)" [attr.aria-invalid]="nameError() ? 'true' : null" [attr.aria-describedby]="nameError() ? nameErrorId : null" />
         @if (nameError(); as error) {
-          <span [id]="nameErrorId" role="alert" class="of-error">{{ error }}</span>
+          <of-error-line [id]="nameErrorId" role="alert">{{ error }}</of-error-line>
         }
       </div>
       <div class="of-field">
@@ -41,7 +43,7 @@ let nextFormSequence = 0;
         <input #docsFolderInput [id]="docsFolderId" class="of-input" data-testid="project-docs-folder" placeholder="/path/to/docs" [value]="docsFolder()" [readonly]="pending()" (input)="editDocsFolder($event)" (keydown.enter)="saveOnEnter($event)" [attr.aria-invalid]="isDocsFolderInvalid() ? 'true' : null" [attr.aria-describedby]="docsFolderDescribedBy()" />
         <span [id]="docsFolderHintId" class="hint">Optional. Type the absolute path of an existing folder — there is no folder picker yet.</span>
         @if (docsFolderMessage(); as message) {
-          <span [id]="docsFolderErrorId" role="alert" class="of-error" data-testid="project-form-error">{{ message }}</span>
+          <of-error-line [id]="docsFolderErrorId" role="alert" data-testid="project-form-error">{{ message }}</of-error-line>
         }
       </div>
       <div class="actions">
@@ -54,7 +56,6 @@ let nextFormSequence = 0;
     :host { display: block; }
     .project-form { display: flex; flex-direction: column; gap: 1rem; }
     .hint { font-size: .75rem; color: var(--mut); }
-    .of-error::before { content: '✕ '; }
     .actions { display: flex; justify-content: flex-end; gap: .5rem; }
   `,
 })

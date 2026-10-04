@@ -342,6 +342,12 @@ describe('SessionHeaderComponent', () => {
     expect(screen.getByTestId('session-exit-code')).toHaveTextContent('closed · exit 1');
   });
 
+  it('writes the exit code in the muted text colour', async () => {
+    const session = baseSession({ state: 'closed', exitCode: 1 });
+    await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
+    expect(getComputedStyle(screen.getByTestId('session-exit-code')).color).toBe('var(--mut)');
+  });
+
   it('shows a bare "closed" with no exit number when the daemon omits the exit code', async () => {
     const session = baseSession({ state: 'closed' });
     await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });

@@ -1,6 +1,7 @@
 import { afterNextRender, ChangeDetectionStrategy, Component, computed, effect, ElementRef, inject, Injector, input, linkedSignal, signal, untracked, viewChild } from '@angular/core';
 import { MAX_ROW_BATCH, type DataStore, type DsColumn, type DsRow, type DsRowHistoryEntry, type DsView, type Project } from '@openfleet/shared';
 import { ApiError, FleetApiService, type StoreScope } from '../core/fleet-api.service';
+import { ErrorLineComponent } from '../design/error-line.component';
 import { RowHistoryComponent } from './row-history.component';
 import { TableGridComponent } from './table-grid.component';
 import { isBlank, selectColumnsWithOptions, titleOf } from './table-cells';
@@ -38,7 +39,7 @@ const describeCreateFailure = (error: unknown, displayName: string): string => {
   selector: 'of-tables-view',
   changeDetection: ChangeDetectionStrategy.OnPush,
   host: { 'data-testid': 'tables-view' },
-  imports: [TableListComponent, TableGridComponent, TableKanbanComponent, RowHistoryComponent],
+  imports: [ErrorLineComponent, TableListComponent, TableGridComponent, TableKanbanComponent, RowHistoryComponent],
   template: `
     <div class="toolbar">
       @if (projects().length > 0) {
@@ -62,13 +63,13 @@ const describeCreateFailure = (error: unknown, displayName: string): string => {
         <input class="of-input" data-testid="tables-new-name" aria-label="Table name" [attr.maxlength]="tableNameMaxLength" placeholder="Table name" [value]="newTableName()" (input)="newTableName.set($any($event.target).value)" />
         <button type="submit" class="of-btn of-btn--primary" data-testid="tables-create" [disabled]="newTableName().trim() === ''">Create</button>
         @if (createError(); as message) {
-          <span class="create-error" role="status" data-testid="tables-create-error">{{ message }}</span>
+          <of-error-line role="status" data-testid="tables-create-error" [glyph]="false">{{ message }}</of-error-line>
         }
       </form>
     }
 
     @if (actionError(); as message) {
-      <div class="action-error" role="status" data-testid="tables-action-error">{{ message }}</div>
+      <div class="action-error" role="status" data-testid="tables-action-error"><of-error-line [glyph]="false">{{ message }}</of-error-line></div>
     }
 
     <div class="body">
@@ -81,7 +82,7 @@ const describeCreateFailure = (error: unknown, displayName: string): string => {
         }
         @if (loadFailure(); as failure) {
           <div class="card" role="status" data-testid="tables-load-error">
-            <span class="card-title">✕ {{ failureTitle() }}</span>
+            <of-error-line class="card-title">{{ failureTitle() }}</of-error-line>
             <span class="muted">{{ failure.reason }}</span>
             <div class="actions"><button type="button" class="of-btn of-btn--secondary" data-testid="tables-retry" (click)="retry()">Retry</button></div>
           </div>
@@ -103,7 +104,7 @@ const describeCreateFailure = (error: unknown, displayName: string): string => {
           </div>
         } @else if (mustResolveMismatches()) {
           <div class="card" role="region" [attr.aria-label]="'Schema mismatch in ' + activeStoreName()" data-testid="tables-schema-mismatch">
-            <span class="card-title">✕ Schema mismatch in “{{ activeStoreName() }}”</span>
+            <of-error-line class="card-title">Schema mismatch in “{{ activeStoreName() }}”</of-error-line>
             <span class="muted">{{ mismatchSummary() }}</span>
             <div class="actions">
               <button type="button" class="of-btn of-btn--secondary" data-testid="tables-clear-mismatches" [disabled]="isClearingMismatches()" (click)="clearMismatchedValues()">Clear those values</button>
@@ -143,7 +144,7 @@ const describeCreateFailure = (error: unknown, displayName: string): string => {
         <aside #historyPanel class="history of-focus-ring" tabindex="-1" aria-label="Row history" data-testid="tables-history" (keydown.escape)="closeHistory()">
           <button type="button" class="close of-focus-ring" data-testid="tables-history-close" aria-label="Close history" (click)="closeHistory()">✕</button>
           @if (historyFailed()) {
-            <div class="history-error" data-testid="tables-history-error">The history of this row could not be loaded.</div>
+            <div class="history-error" data-testid="tables-history-error"><of-error-line>The history of this row could not be loaded.</of-error-line></div>
           } @else {
             <of-row-history [entries]="history()" [columns]="columns()" [heading]="selectedRowTitle()" />
           }
@@ -169,7 +170,6 @@ const describeCreateFailure = (error: unknown, displayName: string): string => {
     }
     .toggle button.on { background: var(--panel) }
     .create-table { flex: none; display: flex; align-items: center; gap: .5rem; padding: .5rem 1rem; border-bottom: 1px solid var(--line) }
-    .create-error, .action-error { color: var(--state-error); font-size: .75rem }
     .action-error { flex: none; padding: .375rem 1rem; border-bottom: 1px solid var(--line) }
     .body { flex: 1; min-height: 0; display: flex }
     .main { flex: 1; min-width: 0; overflow: auto; padding: 1rem }
@@ -183,12 +183,12 @@ const describeCreateFailure = (error: unknown, displayName: string): string => {
       max-width: 30rem; margin: 2rem auto; display: flex; flex-direction: column; gap: .5rem; padding: 1.25rem;
       border: 1px solid var(--line); border-radius: .625rem; background: var(--panel);
     }
-    .card-title { color: var(--state-error); font-weight: 600 }
+    .card-title { font-weight: 600 }
     .truncated { display: flex; align-items: center; justify-content: center; gap: .75rem; padding: .75rem; font-size: .75rem; color: var(--mut) }
     .muted { color: var(--mut) }
     .actions { display: flex; gap: .5rem }
     .history { position: relative; width: 20rem; flex: none; border-left: 1px solid var(--line); background: var(--panel); overflow: auto; display: flex; flex-direction: column }
-    .history-error { padding: 2.5rem .875rem .875rem; font-size: .75rem; color: var(--state-error) }
+    .history-error { padding: 2.5rem .875rem .875rem }
     .close { position: absolute; top: .5rem; right: .5rem; border: 0; background: transparent; color: var(--mut); cursor: pointer }
     .banner { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; margin-bottom: .75rem; padding: .5rem .75rem; border: 1px solid var(--line); border-radius: .5rem; background: var(--panel); font-size: .75rem }
   `,

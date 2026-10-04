@@ -3,6 +3,7 @@ import { copyFor } from '../core/error-copy';
 import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { BannerComponent } from '../design/banner.component';
+import { ErrorLineComponent } from '../design/error-line.component';
 import { ReplyDraftStore } from './reply-draft.store';
 
 interface PendingMessage { id: string; deliveredImmediately: boolean }
@@ -13,7 +14,7 @@ const BUSY_PLACEHOLDER = 'This session is busy — your message is delivered on 
 @Component({
   selector: 'of-composer',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [BannerComponent],
+  imports: [BannerComponent, ErrorLineComponent],
   template: `
     @if (disabledReason(); as reason) {
       <of-banner variant="reconnecting" title="Composer disabled" [description]="reason" />
@@ -32,7 +33,7 @@ const BUSY_PLACEHOLDER = 'This session is busy — your message is delivered on 
           <span class="status" data-testid="composer-status">{{ status }}</span>
         }
         @if (sendError(); as error) {
-          <span role="alert" data-testid="composer-send-error" class="of-error">✕ {{ error }}</span>
+          <of-error-line role="alert" data-testid="composer-send-error">{{ error }}</of-error-line>
         }
       </div>
     }

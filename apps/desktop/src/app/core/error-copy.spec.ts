@@ -202,7 +202,7 @@ describe('copyFor', () => {
     it('asks to check the connection when the daemon cannot be reached while collecting the preview', () => {
       const { text } = copyFor(new TypeError('Failed to fetch'), { action: 'load_handoff' });
 
-      expect(text).toBe('The handoff preview could not be collected — check your connection, then try again.');
+      expect(text).toBe('The preview could not be loaded — check your connection, then try again.');
     });
 
     it('asks to check the connection when the daemon cannot be reached while saving', () => {

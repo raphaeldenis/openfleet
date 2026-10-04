@@ -1,5 +1,6 @@
 import { ChangeDetectionStrategy, Component, DestroyRef, ElementRef, Injector, afterNextRender, computed, effect, inject, input, signal, viewChild } from '@angular/core';
 import type { SessionState } from '@openfleet/shared';
+import { ErrorLineComponent } from '../design/error-line.component';
 import { EarlyEscapeHintService } from '../core/early-escape-hint.service';
 import { copyFor, INTERRUPT_ERROR } from '../core/error-copy';
 import { FleetApiService } from '../core/fleet-api.service';
@@ -14,6 +15,7 @@ const ESCAPE_KEY = '\x1b';
 @Component({
   selector: 'of-session-actions',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [ErrorLineComponent],
   template: `
     <div class="session-actions" data-testid="session-actions" [attr.inert]="confirmingClose() ? '' : null">
       @if (!closed()) {
@@ -37,7 +39,7 @@ const ESCAPE_KEY = '\x1b';
         }
       }
       @if (error(); as error) {
-        <span role="alert" data-testid="session-action-error" class="of-error">✕ {{ error }}</span>
+        <of-error-line role="alert" data-testid="session-action-error">{{ error }}</of-error-line>
       }
     </div>
     @if (confirmingClose()) {
@@ -46,7 +48,7 @@ const ESCAPE_KEY = '\x1b';
           <span id="close-confirm-title" class="close-confirm-title">Close {{ sessionName() }}?</span>
           <p class="close-confirm-body">{{ closeConfirmBody }}</p>
           @if (isModelSwitchDeferred()) {
-            <p class="close-confirm-warning" role="alert" data-testid="close-confirm-pending-switch">{{ closeConfirmPendingSwitchWarning }}</p>
+            <p class="close-confirm-warning" role="alert" data-testid="close-confirm-pending-switch"><span class="warning-glyph" aria-hidden="true">!</span> {{ closeConfirmPendingSwitchWarning }}</p>
           }
           <div class="close-confirm-actions">
             <button #cancelButton type="button" class="of-btn of-btn--secondary" data-testid="close-confirm-cancel" (click)="cancelClose()">
@@ -63,7 +65,8 @@ const ESCAPE_KEY = '\x1b';
   styles: `
     .session-actions { display: flex; align-items: center; gap: .375rem; }
     .interrupt-glyph { color: var(--state-waiting-permission); }
-    .interrupt.of-btn--compact { border-color: var(--state-waiting-permission); background: transparent; }
+    .interrupt { border-color: var(--state-waiting-permission); }
+    .interrupt.of-btn--compact { background: transparent; }
     .close-confirm-overlay {
       position: fixed; inset: 0; z-index: 30;
       display: flex; align-items: center; justify-content: center;
@@ -76,7 +79,8 @@ const ESCAPE_KEY = '\x1b';
     }
     .close-confirm-title { font-size: .9375rem; font-weight: 600; }
     .close-confirm-body { margin: 0; color: var(--mut); }
-    .close-confirm-warning { margin: 0; color: var(--state-waiting-permission); }
+    .close-confirm-warning { margin: 0; color: var(--fg); }
+    .warning-glyph { font-weight: 700; color: var(--state-waiting-permission); }
     .close-confirm-actions { display: flex; gap: .5rem; justify-content: flex-end; }
   `,
 })

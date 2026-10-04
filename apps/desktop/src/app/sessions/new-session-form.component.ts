@@ -5,6 +5,7 @@ import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, type ParamMap, Router, RouterLink } from '@angular/router';
 import { type HarnessId, type Project, type Session } from '@openfleet/shared';
 import { FleetApiService } from '../core/fleet-api.service';
+import { ErrorLineComponent } from '../design/error-line.component';
 import { ManagerFieldsComponent } from '../managers/manager-fields.component';
 import { ProjectFormComponent } from '../projects/project-form.component';
 import { createdButNotOpenedMessage, createSessionErrorMessage } from './create-session-error';
@@ -47,7 +48,7 @@ function creationModeFrom(queryParams: ParamMap | undefined): CreationMode {
 @Component({
   selector: 'of-new-session-form',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FormsModule, RouterLink, ManagerFieldsComponent, PermissionModeListComponent, ProjectFormComponent],
+  imports: [ErrorLineComponent, FormsModule, RouterLink, ManagerFieldsComponent, PermissionModeListComponent, ProjectFormComponent],
   host: { '[class.embedded]': 'isEmbedded' },
   template: `
     <form class="of-form" data-testid="new-session-form" [attr.aria-busy]="pending() || null" (ngSubmit)="submit()" novalidate>
@@ -67,7 +68,7 @@ function creationModeFrom(queryParams: ParamMap | undefined): CreationMode {
         <label class="of-label" for="new-session-directory">Directory</label>
         <input #directoryInput id="new-session-directory" class="of-input" data-testid="new-session-directory" name="directory" [readonly]="pending()" [ngModel]="directory()" (ngModelChange)="directory.set($event)" placeholder="/path/to/worktree" [attr.aria-invalid]="directoryError() ? 'true' : null" [attr.aria-describedby]="directoryError() ? 'new-session-directory-error' : null" />
         @if (directoryError(); as error) {
-          <span id="new-session-directory-error" role="alert" data-testid="new-session-directory-error" class="of-error">✕ {{ error }}</span>
+          <of-error-line id="new-session-directory-error" role="alert" data-testid="new-session-directory-error">{{ error }}</of-error-line>
         }
       </div>
       @if (projects().length > 0) {
@@ -124,7 +125,7 @@ function creationModeFrom(queryParams: ParamMap | undefined): CreationMode {
           <label class="of-label" for="new-session-name">Name</label>
           <input #nameInput id="new-session-name" class="of-input" data-testid="new-session-name" name="name" [readonly]="pending()" [ngModel]="name()" (ngModelChange)="name.set($event)" placeholder="e.g. Dwalin · T9" [attr.aria-invalid]="nameError() ? 'true' : null" [attr.aria-describedby]="nameError() ? 'new-session-name-error' : null" />
           @if (nameError(); as error) {
-            <span id="new-session-name-error" role="alert" data-testid="new-session-name-error" class="of-error">✕ {{ error }}</span>
+            <of-error-line id="new-session-name-error" role="alert" data-testid="new-session-name-error">{{ error }}</of-error-line>
           }
         </div>
       </div>
@@ -137,7 +138,7 @@ function creationModeFrom(queryParams: ParamMap | undefined): CreationMode {
 
       <div class="footer">
         @if (serverError(); as error) {
-          <p role="alert" data-testid="new-session-form-error" class="of-error">✕ {{ error }}</p>
+          <p role="alert" data-testid="new-session-form-error" class="form-error"><of-error-line>{{ error }}</of-error-line></p>
         }
         <div class="actions">
           <span class="creating" role="status" data-testid="new-session-status">@if (statusText()) {{{ statusText() }}}</span>
@@ -165,7 +166,7 @@ function creationModeFrom(queryParams: ParamMap | undefined): CreationMode {
     .mode-toggle button[aria-disabled='true'] { color: var(--mut); cursor: not-allowed }
     .mode-toggle button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
     .card { display: flex; flex-direction: column; gap: 1.25rem; min-width: 0; margin: 0; padding: 1.25rem; border: 1px solid var(--line); border-radius: .75rem; background: var(--panel) }
-    .of-error { margin: 0 }
+    .form-error { margin: 0 }
     .project-note { margin: 0; font-size: .75rem; color: var(--mut) }
     .project-empty { display: flex; align-items: center; gap: .25rem; margin: 0; font-size: .75rem; color: var(--mut) }
     .project-empty .of-btn { padding: 0 .25rem }

@@ -1,4 +1,5 @@
 import { ChangeDetectionStrategy, Component, inject } from '@angular/core';
+import { ErrorLineComponent } from '../design/error-line.component';
 import { moveFocusWithinListbox } from '../design/listbox-keyboard';
 import { PopoverComponent } from '../design/popover.component';
 import { MODEL_RUNGS, type ModelChange, ModelRungsState } from './model-rungs.state';
@@ -11,11 +12,11 @@ const NO_MODEL_ID_LABEL = '—';
 @Component({
   selector: 'of-models-settings',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [SettingsSectionComponent, SettingsRowComponent, PopoverComponent],
+  imports: [ErrorLineComponent, SettingsSectionComponent, SettingsRowComponent, PopoverComponent],
   template: `
     <of-settings-section heading="Models" testId="settings-models">
       @if (state.hasFailedToLoad()) {
-        <p class="error" role="alert" data-testid="models-error">✕ Couldn’t load the model table from the daemon.</p>
+        <p class="error" role="alert" data-testid="models-error"><of-error-line>Couldn’t load the model table from the daemon.</of-error-line></p>
       } @else if (state.modelTable()) {
         <div class="rows">
           @for (row of rungs; track row.rung) {
@@ -54,7 +55,7 @@ const NO_MODEL_ID_LABEL = '—';
         @if (failedSave(); as failure) {
           <div class="error-card" role="alert" data-testid="models-save-error">
             <div class="error-text">
-              <span class="error-title">✕ Couldn’t save {{ failure.change.rung }}</span>
+              <of-error-line class="error-title">Couldn’t save {{ failure.change.rung }}</of-error-line>
               <span class="detail">{{ failure.cause }}</span>
             </div>
             <button type="button" class="of-btn of-btn--secondary" (click)="state.retry(failure.change)">Retry</button>
@@ -84,7 +85,7 @@ const NO_MODEL_ID_LABEL = '—';
     .skeleton { height: 3rem; border-radius: .5rem; background: var(--sunk); }
     .error-card { display: flex; align-items: center; gap: 1rem; padding: .75rem 1rem; border: 1px solid var(--state-error); border-radius: .625rem; background: var(--panel); }
     .error-text { flex: 1; display: flex; flex-direction: column; }
-    .error-title { color: var(--state-error); font-weight: 500; }
+    .error-title { font-weight: 500; }
   `,
 })
 export class ModelsSettingsComponent {

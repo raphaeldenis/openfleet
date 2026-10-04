@@ -30,13 +30,13 @@ type LifecycleBanner = { kind: 'resuming' } | { kind: 'strip'; strip: LifecycleS
         <div class="lifecycle-live-region" data-testid="lifecycle-live-region" aria-live="polite">
           @if (lifecycleBanner()?.kind === 'resuming') {
             <div class="lifecycle-banner" data-testid="lifecycle-banner" data-variant="resuming">
-              <span class="lifecycle-title">↻ Resuming…</span>
+              <span class="lifecycle-title"><span class="glyph" aria-hidden="true">↻</span> Resuming…</span>
               <span class="lifecycle-body">Reattaching to the same conversation in the same worktree.</span>
             </div>
           }
           @if (isEarlyEscapeHintShown()) {
             <div class="lifecycle-banner" data-testid="early-escape-hint" data-variant="hint">
-              <span class="lifecycle-title"><span aria-hidden="true">↩</span> Cancelled before a reply?</span>
+              <span class="lifecycle-title"><span class="glyph" aria-hidden="true">↩</span> Cancelled before a reply?</span>
               <span class="lifecycle-body">Claude may have put your prompt back — press Enter in the terminal to resend it, or edit it first.</span>
             </div>
           }
@@ -44,7 +44,7 @@ type LifecycleBanner = { kind: 'resuming' } | { kind: 'strip'; strip: LifecycleS
         @if (lifecycleBanner(); as banner) {
           @if (banner.kind === 'strip') {
             <div class="lifecycle-banner" data-testid="lifecycle-banner" [attr.data-variant]="banner.strip.variant" [attr.role]="banner.role">
-              <span class="lifecycle-title">{{ banner.strip.icon }} {{ banner.strip.title }}</span>
+              <span class="lifecycle-title" data-testid="lifecycle-title"><span class="glyph" aria-hidden="true">{{ banner.strip.icon }}</span> {{ banner.strip.title }}</span>
               <span class="lifecycle-body" data-testid="lifecycle-message">{{ banner.strip.message }}</span>
               @if (stripDetailsText(); as detailsText) {
                 <of-copy-details-button testId="lifecycle-copy-details" [text]="detailsText" [isCompact]="true" />
@@ -63,7 +63,7 @@ type LifecycleBanner = { kind: 'resuming' } | { kind: 'strip'; strip: LifecycleS
         </div>
         @if (closedPresentation(); as closed) {
           <div class="closed-card" data-testid="session-closed-footer" [attr.data-variant]="closed.cardTone">
-            <span class="closed-title">■ {{ closed.cardTitle }}</span>
+            <span class="closed-title" data-testid="session-closed-title"><span class="glyph" aria-hidden="true">■</span> {{ closed.cardTitle }}</span>
             @if (closed.cardBody) {
               <span class="closed-body">{{ closed.cardBody }}</span>
             }
@@ -98,7 +98,8 @@ type LifecycleBanner = { kind: 'resuming' } | { kind: 'strip'; strip: LifecycleS
       border: 1px solid var(--line-2); border-radius: .5rem; background: var(--panel); font-size: .8125rem; --closed-color: var(--state-closed);
     }
     .closed-card[data-variant='error'] { --closed-color: var(--state-error); border-color: color-mix(in oklch, var(--state-error) 55%, transparent); }
-    .closed-title { color: var(--closed-color); font-weight: 600; }
+    .closed-title { color: var(--fg); font-weight: 600; }
+    .closed-title .glyph { color: var(--closed-color); }
     .closed-body { flex: 1; min-width: 0; color: var(--mut); }
     .closed-actions { display: flex; align-items: center; gap: .75rem; margin-left: auto; }
     .closed-card .of-btn { white-space: nowrap; }
@@ -110,7 +111,8 @@ type LifecycleBanner = { kind: 'resuming' } | { kind: 'strip'; strip: LifecycleS
     }
     .lifecycle-banner[data-variant='error'] { --lifecycle-color: var(--state-error); }
     .lifecycle-banner[data-variant='attention'] { --lifecycle-color: var(--state-waiting-permission); }
-    .lifecycle-title { flex: none; color: var(--lifecycle-color); font-weight: 600; font-family: var(--mono); }
+    .lifecycle-title { flex: none; color: var(--fg); font-weight: 600; font-family: var(--mono); }
+    .lifecycle-title .glyph { color: var(--lifecycle-color); }
     .lifecycle-body { flex: 1; min-width: 0; }
     .reopen-fresh { position: relative; display: inline-flex; flex: none; }
     .reopen-fresh-reason {

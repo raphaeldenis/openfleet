@@ -177,12 +177,12 @@ describe('SessionHeaderComponent write handoff', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('That session no longer exists.');
   });
 
-  it('says the preview could not be collected when the daemon cannot be reached, and collects it again on Try again', async () => {
+  it('says the preview could not be loaded when the daemon cannot be reached, and collects it again on Try again', async () => {
     const getHandoffPreview = vi.fn().mockRejectedValueOnce(new TypeError('Failed to fetch')).mockResolvedValueOnce(previewFor('s1'));
     await renderHeader(aSession(), getHandoffPreview);
     await openDetails();
     await userEvent.click(writeHandoffButton());
-    expect(await screen.findByRole('alert')).toHaveTextContent('The handoff preview could not be collected — check your connection, then try again.');
+    expect(await screen.findByRole('alert')).toHaveTextContent('The preview could not be loaded — check your connection, then try again.');
 
     await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
 
