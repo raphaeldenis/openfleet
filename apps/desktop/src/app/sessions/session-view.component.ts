@@ -60,6 +60,9 @@ type ClosedStrip = ClosedStripCopy & { role: 'alert' | null };
             </div>
           }
         }
+        <div class="terminal-tab-bar" data-testid="terminal-tab-bar">
+          <of-right-panel-session-toggle />
+        </div>
         <div class="terminal-area">
           <of-terminal [sessionId]="s.id" />
           @if (pendingApproval(); as approval) {
@@ -89,9 +92,6 @@ type ClosedStrip = ClosedStripCopy & { role: 'alert' | null };
         } @else {
           <of-composer [sessionId]="s.id" [busy]="s.state === 'generating'" />
         }
-        <div class="terminal-tab-bar" data-testid="terminal-tab-bar">
-          <of-right-panel-session-toggle />
-        </div>
       </div>
     } @else {
       <p data-testid="session-view-not-found">Session not found.</p>

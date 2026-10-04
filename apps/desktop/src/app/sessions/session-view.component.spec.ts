@@ -115,14 +115,14 @@ describe('SessionViewComponent State panel', () => {
 });
 
 describe('SessionViewComponent right panel toggle', () => {
-  it('user finds the right panel toggle on the bar under the terminal and presses it', async () => {
+  it('user finds the right panel toggle on the bar above the terminal and presses it', async () => {
     vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => undefined });
     await render(SessionViewComponent, {
       bindings: [inputBinding('sessionId', () => 's1')],
       providers: [{ provide: FleetApiService, useValue: fakeApi() }, { provide: FleetEventsService, useValue: fakeEvents([session()]) }],
     });
     const toggle = screen.getByRole('button', { name: 'Right panel' });
-    expect(screen.getByTestId('terminal').compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(toggle.compareDocumentPosition(screen.getByTestId('terminal')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(toggle.getAttribute('aria-pressed')).toBe('false');
 
     await userEvent.click(toggle);
