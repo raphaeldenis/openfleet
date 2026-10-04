@@ -90,7 +90,7 @@ describe('CommandPaletteComponent', () => {
   it('wraps focus from the last item back to the first on Tab', async () => {
     await render(CommandPaletteComponent, { bindings: [inputBinding('open', () => true)], providers: [provideRouter(routes())] });
     const first = screen.getByTestId('palette-item-sessions');
-    const last = screen.getByTestId('palette-item-components');
+    const last = screen.getByTestId('palette-item-toggle-theme');
     last.focus();
 
     await userEvent.tab();
@@ -101,7 +101,7 @@ describe('CommandPaletteComponent', () => {
   it('wraps focus from the first item back to the last on Shift+Tab', async () => {
     await render(CommandPaletteComponent, { bindings: [inputBinding('open', () => true)], providers: [provideRouter(routes())] });
     const first = screen.getByTestId('palette-item-sessions');
-    const last = screen.getByTestId('palette-item-components');
+    const last = screen.getByTestId('palette-item-toggle-theme');
     first.focus();
 
     await userEvent.tab({ shift: true });

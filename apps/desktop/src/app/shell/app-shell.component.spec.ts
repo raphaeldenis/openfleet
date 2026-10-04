@@ -90,7 +90,7 @@ describe('AppShellComponent', () => {
     const expectedOrder = [
       'nav-inbox', 'nav-project', 'nav-toolkit', 'nav-audit', 'nav-mgrprofile', 'nav-profiles',
       'nav-calendar', 'nav-notes', 'nav-tables', 'nav-triggers', 'nav-integrations', 'nav-usage',
-      'nav-settings', 'nav-components',
+      'nav-components',
     ];
     const found = Array.from(root.querySelectorAll('[data-testid^="nav-"]')).map((el) => el.getAttribute('data-testid'));
 

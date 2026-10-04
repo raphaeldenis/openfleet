@@ -21,6 +21,7 @@ const AVAILABILITY_BY_SECTION: Readonly<Record<string, string>> = {
 };
 
 // Order and labels mirror the Helm section of specs/design/OpenFleet.dc.html's `navDef` array.
+// Settings is deliberately absent: it opens from the sidebar footer gear, ⌘, and the palette.
 // A null route means the backend this section needs hasn't landed yet — it still renders,
 // disabled, with the phase text from AVAILABILITY_BY_SECTION explaining when it will.
 const HELM_SECTIONS: ReadonlyArray<{ key: string; glyph: string; label: string; route: string | null }> = [
@@ -36,7 +37,6 @@ const HELM_SECTIONS: ReadonlyArray<{ key: string; glyph: string; label: string; 
   { key: 'triggers', glyph: '⚡', label: 'Triggers & Playbooks', route: null },
   { key: 'integrations', glyph: '⇄', label: 'Integrations', route: null },
   { key: 'usage', glyph: '$', label: 'Usage', route: null },
-  { key: 'settings', glyph: '⚙', label: 'Settings', route: '/settings' },
   { key: 'components', glyph: '◈', label: 'Component sheet', route: '/components' },
 ];
 
