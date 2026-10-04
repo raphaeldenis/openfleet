@@ -178,7 +178,13 @@ describe('convertLexicalToMarkdown', () => {
 
       const markdown = markdownOf(bulletList(listItem(text('Push branches'), lawBound)));
 
-      expect(markdown).toBe('- Push branches\n  Permission: repo openfleet / CI green / main branch');
+      expect(markdown).toBe('- Push branches  \n  Permission: repo openfleet / CI green / main branch');
+    });
+
+    it('omits a bound whose three parts are all empty', () => {
+      const emptyBound = { type: 'mission-law-bound', scope: '', condition: '', exclusions: '' };
+
+      expect(markdownOf(bulletList(listItem(text('Push branches'), emptyBound)))).toBe('- Push branches');
     });
 
     it('shows a dash for each empty part so the three positions stay readable', () => {
@@ -228,7 +234,132 @@ describe('convertLexicalToMarkdown', () => {
     });
   });
 
+  describe('real shapes', () => {
+    it('renders a mention and a law bound inside a collapsible list item', () => {
+      const lawBound = { type: 'mission-law-bound', scope: 'repo', condition: 'CI green', exclusions: 'main' };
+      const item = collapsibleListItem(text('Follow '), mention({ mentionKind: 'note', mentionNoteID: 'N1', text: '@Rules' }), lawBound);
+
+      expect(markdownOf(bulletList(item))).toBe('- Follow @note:N1  \n  Permission: repo / CI green / main');
+    });
+  });
+
+  describe('defaults', () => {
+    it('renders a heading without tag at level 1', () => {
+      expect(markdownOf({ type: 'heading', children: [text('Untagged')] })).toBe('# Untagged');
+    });
+
+    it('numbers an ordered list from 1 when it has no start', () => {
+      const markdown = markdownOf({ type: 'list', listType: 'number', children: [listItem(text('a')), listItem(text('b'))] });
+
+      expect(markdown).toBe('1. a\n2. b');
+    });
+
+    it('renders an empty table as nothing', () => {
+      expect(markdownOf({ type: 'table', children: [] }, paragraph(text('after')))).toBe('after');
+    });
+
+    it('falls back to mentionId for a note mention without mentionNoteID', () => {
+      const markdown = markdownOf(paragraph(mention({ mentionKind: 'note', mentionId: 'N7', text: '@x' })));
+
+      expect(markdown).toBe('@note:N7');
+    });
+  });
+
+  describe('inline code delimiters', () => {
+    it('uses a delimiter longer than the longest backtick run of the code', () => {
+      expect(markdownOf(paragraph(text('a`b', FORMAT.code)))).toBe('``a`b``');
+    });
+
+    it('pads the code with spaces when it starts or ends with a backtick', () => {
+      expect(markdownOf(paragraph(text('`x', FORMAT.code)))).toBe('`` `x ``');
+      expect(markdownOf(paragraph(text('x`', FORMAT.code)))).toBe('`` x` ``');
+    });
+  });
+
+  describe('fenced code delimiters', () => {
+    it('uses a fence longer than the longest backtick run of the code', () => {
+      const markdown = markdownOf({ type: 'code', children: [text('before'), { type: 'linebreak' }, text('```'), { type: 'linebreak' }, text('after')] });
+
+      expect(markdown).toBe('````\nbefore\n```\nafter\n````');
+    });
+  });
+
+  describe('unknown text format bits', () => {
+    it('marks a run carrying a format bit it cannot render and reports it', () => {
+      const underline = 8;
+
+      const result = convertLexicalToMarkdown(documentOf(paragraph(text('u', underline))));
+
+      expect(result).toEqual({ markdown: 'u[non converti: text-format:8]', unconvertedTypes: ['text-format:8'] });
+    });
+
+    it('still applies the known bits of a run that also carries an unknown one', () => {
+      const result = convertLexicalToMarkdown(documentOf(paragraph(text('u', FORMAT.bold | 32))));
+
+      expect(result.markdown).toBe('**u**[non converti: text-format:32]');
+    });
+  });
+
+  describe('prototype-named keys', () => {
+    it('treats a node type named like an Object.prototype key as unknown', () => {
+      const result = convertLexicalToMarkdown(documentOf({ type: 'constructor' }));
+
+      expect(result).toEqual({ markdown: '[non converti: constructor]', unconvertedTypes: ['constructor'] });
+    });
+
+    it('renders a mission body whose section is named like an Object.prototype key without heading', () => {
+      expect(markdownOf(missionBody('toString', paragraph(text('kept'))))).toBe('kept');
+    });
+  });
+
+  describe('document shape', () => {
+    it('throws when the root node is not a root', () => {
+      expect(() => convertLexicalToMarkdown({ root: { type: 'paragraph', children: [] } })).toThrow();
+    });
+
+    it('throws when the root has no children array', () => {
+      expect(() => convertLexicalToMarkdown({ root: { type: 'root' } })).toThrow();
+      expect(() => convertLexicalToMarkdown({ root: { type: 'root', children: 'x' } })).toThrow();
+    });
+  });
+
+  describe('mention neighbours', () => {
+    it('separates a mention from a word character that precedes it', () => {
+      const markdown = markdownOf(paragraph(text('voir'), mention({ mentionKind: 'note', mentionNoteID: 'N1', text: '@x' })));
+
+      expect(markdown).toBe('voir @note:N1');
+    });
+
+    it('separates a mention from a word character that follows it', () => {
+      const markdown = markdownOf(paragraph(mention({ mentionKind: 'note', mentionNoteID: 'N1', text: '@x' }), text('suite')));
+
+      expect(markdown).toBe('@note:N1 suite');
+    });
+
+    it('leaves a mention next to whitespace or punctuation untouched', () => {
+      const markdown = markdownOf(paragraph(text('('), mention({ mentionKind: 'note', mentionNoteID: 'N1', text: '@x' }), text('), ok')));
+
+      expect(markdown).toBe('(@note:N1), ok');
+    });
+  });
+
   describe('unknown nodes', () => {
+    it('keeps the inline children of an unknown node after its marker', () => {
+      const link = { type: 'link', url: 'https://example.test', children: [text('docs')] };
+
+      const result = convertLexicalToMarkdown(documentOf(paragraph(text('see '), link)));
+
+      expect(result).toEqual({ markdown: 'see [non converti: link]docs', unconvertedTypes: ['link'] });
+    });
+
+    it('keeps the block children of an unknown node after its marker', () => {
+      const callout = { type: 'callout', children: [paragraph(text('inside'))] };
+
+      const result = convertLexicalToMarkdown(documentOf(callout));
+
+      expect(result).toEqual({ markdown: '[non converti: callout]\n\ninside', unconvertedTypes: ['callout'] });
+    });
+
     it('replaces an unknown block by a marker and reports its type once', () => {
       const result = convertLexicalToMarkdown(documentOf({ type: 'widget' }, paragraph(text('ok')), { type: 'widget' }));
 

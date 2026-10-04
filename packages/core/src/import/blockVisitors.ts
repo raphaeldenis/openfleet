@@ -1,5 +1,8 @@
 import { childrenOf, numberField, stringField, type LexicalNode, type NodeVisitor, type RenderContext } from './lexicalNode.js';
 
+import { delimiterLongerThanAnyBacktickRunIn } from './markdownFences.js';
+
+const MINIMUM_FENCE_LENGTH = 3;
 const DEFAULT_HEADING_LEVEL = 1;
 const TABLE_CELL_LINE_BREAK = '<br>';
 
@@ -29,7 +32,8 @@ export const visitCode: NodeVisitor = (node) => {
   const codeText = childrenOf(node)
     .map((child) => (child.type === 'linebreak' ? '\n' : stringField(child, 'text')))
     .join('');
-  return `\`\`\`${stringField(node, 'language')}\n${codeText}\n\`\`\``;
+  const fence = delimiterLongerThanAnyBacktickRunIn(codeText, { minimumLength: MINIMUM_FENCE_LENGTH });
+  return `${fence}${stringField(node, 'language')}\n${codeText}\n${fence}`;
 };
 
 const renderListItemLines = (item: LexicalNode, context: RenderContext): string[] => {

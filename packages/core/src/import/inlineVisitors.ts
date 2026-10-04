@@ -1,15 +1,31 @@
 import { MENTION_KINDS, type MentionKind } from '@openfleet/shared';
-import { numberField, stringField, type NodeVisitor } from './lexicalNode.js';
+import { numberField, stringField, type LexicalNode, type NodeVisitor } from './lexicalNode.js';
+import { delimiterLongerThanAnyBacktickRunIn } from './markdownFences.js';
 
-const HARD_BREAK = '  \n';
+export const HARD_BREAK = '  \n';
 const EMPTY_PART = '—';
 const MENTION_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 
-const TEXT_FORMAT_MARKERS = [
-  { bit: 16, marker: '`' },
-  { bit: 1, marker: '**' },
-  { bit: 2, marker: '*' },
-  { bit: 4, marker: '~~' },
+const FORMAT_BOLD = 1;
+const FORMAT_ITALIC = 2;
+const FORMAT_STRIKETHROUGH = 4;
+const FORMAT_CODE = 16;
+const KNOWN_FORMAT_MASK = FORMAT_BOLD | FORMAT_ITALIC | FORMAT_STRIKETHROUGH | FORMAT_CODE;
+
+const wrapInlineCode = (code: string): string => {
+  const delimiter = delimiterLongerThanAnyBacktickRunIn(code, { minimumLength: 1 });
+  const touchesBacktick = code.startsWith('`') || code.endsWith('`');
+  const padding = touchesBacktick ? ' ' : '';
+  return `${delimiter}${padding}${code}${padding}${delimiter}`;
+};
+
+const wrapWith = (marker: string) => (value: string) => `${marker}${value}${marker}`;
+
+const TEXT_FORMAT_WRAPPERS = [
+  { bit: FORMAT_CODE, wrap: wrapInlineCode },
+  { bit: FORMAT_BOLD, wrap: wrapWith('**') },
+  { bit: FORMAT_ITALIC, wrap: wrapWith('*') },
+  { bit: FORMAT_STRIKETHROUGH, wrap: wrapWith('~~') },
 ] as const;
 
 const OPENFLEET_KIND_BY_SCAPE_KIND: Record<string, MentionKind> = {
@@ -19,28 +35,42 @@ const OPENFLEET_KIND_BY_SCAPE_KIND: Record<string, MentionKind> = {
   repo: 'repo',
 };
 
-const wrapKeepingOuterWhitespace = (value: string, marker: string): string => {
+const wrapKeepingOuterWhitespace = (value: string, wrap: (core: string) => string): string => {
   const [, leading = '', core = '', trailing = ''] = /^(\s*)(.*?)(\s*)$/s.exec(value) ?? [];
   const hasNothingToWrap = core === '';
   if (hasNothingToWrap) return value;
-  return `${leading}${marker}${core}${marker}${trailing}`;
+  return `${leading}${wrap(core)}${trailing}`;
 };
 
-export const visitText: NodeVisitor = (node) => {
+export const visitText: NodeVisitor = (node, context) => {
   const format = numberField(node, 'format', 0);
-  const activeMarkers = TEXT_FORMAT_MARKERS.filter(({ bit }) => (format & bit) !== 0);
-  return activeMarkers.reduce((wrapped, { marker }) => wrapKeepingOuterWhitespace(wrapped, marker), stringField(node, 'text'));
+  const activeWrappers = TEXT_FORMAT_WRAPPERS.filter(({ bit }) => (format & bit) !== 0);
+  const formattedText = activeWrappers.reduce(
+    (wrapped, { wrap }) => wrapKeepingOuterWhitespace(wrapped, wrap),
+    stringField(node, 'text'),
+  );
+
+  const unknownFormatBits = format & ~KNOWN_FORMAT_MASK;
+  const hasUnknownFormat = unknownFormatBits !== 0;
+  if (!hasUnknownFormat) return formattedText;
+  return formattedText + context.renderUnconverted(`text-format:${unknownFormatBits}`);
 };
 
 export const visitLinebreak: NodeVisitor = () => HARD_BREAK;
 
+const mentionedIdOf = (node: LexicalNode, scapeKind: string): string => {
+  const genericId = stringField(node, 'mentionId');
+  if (scapeKind !== 'note') return genericId;
+  return stringField(node, 'mentionNoteID') || genericId;
+};
+
 export const visitMention: NodeVisitor = (node, context) => {
   const scapeKind = stringField(node, 'mentionKind');
-  const openFleetKind = OPENFLEET_KIND_BY_SCAPE_KIND[scapeKind];
+  const openFleetKind = Object.hasOwn(OPENFLEET_KIND_BY_SCAPE_KIND, scapeKind) ? OPENFLEET_KIND_BY_SCAPE_KIND[scapeKind] : undefined;
   const isSupportedKind = openFleetKind !== undefined && MENTION_KINDS.includes(openFleetKind);
   if (!isSupportedKind) return context.renderUnconverted(`mention:${scapeKind}`);
 
-  const mentionedId = stringField(node, scapeKind === 'note' ? 'mentionNoteID' : 'mentionId') || stringField(node, 'mentionId');
+  const mentionedId = mentionedIdOf(node, scapeKind);
   const idFitsMentionSyntax = MENTION_ID_PATTERN.test(mentionedId);
   if (!idFitsMentionSyntax) return context.renderUnconverted(`mention:${scapeKind}`);
 
@@ -48,6 +78,10 @@ export const visitMention: NodeVisitor = (node, context) => {
 };
 
 export const visitMissionLawBound: NodeVisitor = (node) => {
-  const parts = ['scope', 'condition', 'exclusions'].map((field) => stringField(node, field) || EMPTY_PART);
-  return `\nPermission: ${parts.join(' / ')}`;
+  const parts = ['scope', 'condition', 'exclusions'].map((field) => stringField(node, field));
+  const isEmptyBound = parts.every((part) => part === '');
+  if (isEmptyBound) return '';
+
+  const readableParts = parts.map((part) => part || EMPTY_PART);
+  return `${HARD_BREAK}Permission: ${readableParts.join(' / ')}`;
 };
