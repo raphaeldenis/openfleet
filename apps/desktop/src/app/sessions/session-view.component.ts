@@ -9,7 +9,7 @@ import { PermissionGateCardComponent } from './permission-gate-card.component';
 import { type LifecycleStrip, closedSessionPresentationFor } from './closed-session-presentation';
 import { SessionHeaderComponent } from './session-header.component';
 import { TerminalComponent } from './terminal.component';
-import { RightPanelSessionToggleComponent } from '../shell/right-panel.component';
+import { RightPanelSessionToggleComponent } from './right-panel-session-toggle.component';
 import { StatePanelComponent } from '../working-state/state-panel.component';
 
 const REOPEN_FRESH_UNAVAILABLE_REASON = 'Not available yet — the daemon cannot relaunch a session without its previous conversation.';
