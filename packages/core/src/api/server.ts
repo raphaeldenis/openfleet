@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { HTTP_STATUS_BY_KIND, OpenFleetError } from '@openfleet/shared';
+import { HTTP_STATUS_BY_KIND, OpenFleetError, type DiagnosticsDocument } from '@openfleet/shared';
 import type { EventBus } from '../events/eventBus.js';
 import type { ApprovalService } from '../governance/approvalService.js';
 import { tokensMatch } from '../ids.js';
@@ -27,6 +27,7 @@ import type { ContextNotice } from '../workingState/contextNotice.js';
 import type { HandoverLedger } from '../workingState/handoverLedger.js';
 import type { StopRefusal } from '../workingState/stopRefusal.js';
 import { hooksHandler } from './hooksHandler.js';
+import { registerDiagnosticsRoutes } from './diagnosticsRoutes.js';
 import { registerNoteRoutes } from './noteRoutes.js';
 import { registerProjectRoutes } from './projectRoutes.js';
 import { registerRestRoutes } from './restHandlers.js';
@@ -58,6 +59,8 @@ export interface ServerDeps {
   contextNotice?: ContextNotice;
   // Without it the daemon reports no degraded state: /health says ok and the snapshot carries no daemonIssues.
   degraded?: DegradedRegistry;
+  // Without it GET /api/diagnostics does not exist.
+  diagnostics?: () => DiagnosticsDocument;
   // Without it the todos route, event and snapshot field do not exist and the hooks leave the todo tools alone.
   todos?: TodoTracker;
   // Without it the test-only routes (fake-output) do not exist.
@@ -123,6 +126,7 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; rout
     json(res, answer.status, answer.body);
   });
   registerRestRoutes(router, { ...deps, wsTickets });
+  if (deps.diagnostics) registerDiagnosticsRoutes(router, deps.diagnostics);
   if (deps.projects) registerProjectRoutes(router, deps.projects);
   if (deps.stores && deps.storeRepo) registerDataStoreRoutes(router, { stores: deps.stores, storeRepo: deps.storeRepo });
   if (deps.notes && deps.noteRepo && deps.docs) registerNoteRoutes(router, { notes: deps.notes, noteRepo: deps.noteRepo, docs: deps.docs });

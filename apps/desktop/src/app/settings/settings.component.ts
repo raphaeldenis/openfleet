@@ -6,12 +6,14 @@ import { ApiError, FleetApiService } from '../core/fleet-api.service';
 import { SupportActions } from '../core/support-actions';
 import { VersionsService } from '../core/versions.service';
 import { focusTabAt, nextTabIndex } from '../design/tablist-keyboard';
+import { DiagnosticsSettingsComponent } from './diagnostics-settings.component';
 
-type SettingsTab = 'models' | 'daemon' | 'about';
+type SettingsTab = 'models' | 'daemon' | 'diagnostics' | 'about';
 
 const SETTINGS_TABS: ReadonlyArray<{ key: SettingsTab; label: string }> = [
   { key: 'models', label: 'Models' },
   { key: 'daemon', label: 'Daemon' },
+  { key: 'diagnostics', label: 'Diagnostics' },
   { key: 'about', label: 'About' },
 ];
 
@@ -69,6 +71,7 @@ function isAvailableModels(body: unknown): body is { models: string[] } {
 
 @Component({
   selector: 'of-settings',
+  imports: [DiagnosticsSettingsComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="settings" data-testid="settings">
@@ -133,6 +136,8 @@ function isAvailableModels(body: unknown): body is { models: string[] } {
               <p class="detail" data-testid="models-loading">Loading…</p>
             }
           </section>
+        } @else if (activeTab() === 'diagnostics') {
+          <of-diagnostics-settings />
         } @else if (activeTab() === 'about') {
           <section class="panel" data-testid="settings-about">
             <h1>About</h1>
