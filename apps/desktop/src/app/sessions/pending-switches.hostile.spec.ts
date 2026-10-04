@@ -1,5 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/angular/zoneless';
-import userEvent from '@testing-library/user-event';
+import { render, waitFor } from '@testing-library/angular/zoneless';
 import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
 import { describe, expect, it, vi } from 'vitest';
 import type { PermissionMode, SessionState } from '@openfleet/shared';
@@ -7,7 +6,18 @@ import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { ModelSelectorComponent } from './model-selector.component';
 import { PermissionModePickerComponent } from './permission-mode-picker.component';
-import { SWITCH_KINDS, applyButtonOf, deferred, errorOf, noteOf, requestSwitch, settleRequests } from '../testing/session-view.testing';
+import {
+  SWITCH_KINDS,
+  deferred,
+  errorOf,
+  expectOptionIsSelected,
+  expectSwitchBusy,
+  expectSwitchFree,
+  noteOf,
+  requestAnotherSwitch,
+  requestSwitch,
+  settleRequests,
+} from '../testing/session-view.testing';
 
 interface FakeSession { id: string; name: string; emoji: string; model: string; state: SessionState; permissionMode: PermissionMode }
 
@@ -101,8 +111,8 @@ describe('PendingSwitchesService through the model selector and the permission-m
       await goTo('s1');
       expect(modelNote()).toBeTruthy();
       expect(permissionModeNote()).toBeTruthy();
-      expect((screen.getByTestId('model-select') as HTMLSelectElement).value).toBe('opus');
-      expect((screen.getByTestId('permission-mode-select') as HTMLSelectElement).value).toBe('acceptEdits');
+      await expectOptionIsSelected(modelSwitch, 'opus');
+      await expectOptionIsSelected(permissionModeSwitch, 'acceptEdits');
 
       sessions.update((all) => all.map((s) => (s.id === 's1' ? { ...s, state: 'idle' as const } : s)));
 
@@ -127,8 +137,8 @@ describe('PendingSwitchesService through the model selector and the permission-m
 
       expect(modelNote()).toHaveTextContent('switch pending');
       expect(permissionModeNote()).toHaveTextContent('switch pending');
-      expect((screen.getByTestId('model-select') as HTMLSelectElement).value).toBe('opus');
-      expect((screen.getByTestId('permission-mode-select') as HTMLSelectElement).value).toBe('acceptEdits');
+      await expectOptionIsSelected(modelSwitch, 'opus');
+      await expectOptionIsSelected(permissionModeSwitch, 'acceptEdits');
     });
 
     it('shows no note on return when the selectors were destroyed with no switch pending', async () => {
@@ -172,7 +182,7 @@ describe('PendingSwitchesService through the model selector and the permission-m
       await fixture.whenStable();
 
       expect(modelNote()).toHaveTextContent('switch pending');
-      expect((screen.getByTestId('model-select') as HTMLSelectElement).value).toBe('opus');
+      await expectOptionIsSelected(modelSwitch, 'opus');
     });
 
     it('never lets a switch of A show up on B or C during a fast A → B → C → A walk', async () => {
@@ -201,11 +211,11 @@ describe('PendingSwitchesService through the model selector and the permission-m
 
       await goTo('s1');
       expect(modelNote()).toBeNull();
-      expect((screen.getByTestId('model-select') as HTMLSelectElement).value).toBe('claude-sonnet-5');
+      await expectOptionIsSelected(modelSwitch, 'claude-sonnet-5');
 
       await goTo('s2');
       expect(modelNote()).toHaveTextContent('switch pending');
-      expect((screen.getByTestId('model-select') as HTMLSelectElement).value).toBe('opus');
+      await expectOptionIsSelected(modelSwitch, 'opus');
     });
   });
 
@@ -283,26 +293,24 @@ describe('PendingSwitchesService through the model selector and the permission-m
   describe('a switch reply or a request that outlives the session view', () => {
     describe.each(SWITCH_KINDS)('the $kind switch request of A', (kind) => {
       const { apiMethod } = kind;
-      const applyButton = () => applyButtonOf(kind);
-
-      it('keeps Apply disabled after A → B → A until the reply lands, then shows the note and lets Apply send again', async () => {
+      it('keeps the switch busy after A → B → A until the reply lands, then shows the note and lets another switch be sent', async () => {
         const reply = deferred<{ status: 'deferred' }>();
         const { fixture, goTo, api } = await renderSelectors({ api: { [apiMethod]: vi.fn(() => reply.promise) } });
         await requestSwitch(kind);
         await goTo('s2');
         await goTo('s1');
-        expect(applyButton()).toBeDisabled();
+        expectSwitchBusy(kind);
 
         reply.resolve({ status: 'deferred' });
         await settleRequests(fixture);
 
         expect(noteOf(kind)).toHaveTextContent('switch pending');
-        expect(applyButton()).toBeEnabled();
-        await userEvent.click(applyButton());
+        expectSwitchFree(kind);
+        await requestAnotherSwitch(kind);
         expect(api[apiMethod]).toHaveBeenCalledTimes(2);
       });
 
-      it('shows the error on A when the reply fails after A → B → A, and lets Apply send again', async () => {
+      it('shows the error on A when the reply fails after A → B → A, and lets the switch be sent again', async () => {
         const reply = deferred<{ status: 'deferred' }>();
         const { fixture, goTo } = await renderSelectors({ api: { [apiMethod]: vi.fn(() => reply.promise) } });
         await requestSwitch(kind);
@@ -314,7 +322,7 @@ describe('PendingSwitchesService through the model selector and the permission-m
 
         expect(errorOf(kind)).toHaveTextContent(/could not/i);
         expect(noteOf(kind)).toBeNull();
-        expect(applyButton()).toBeEnabled();
+        expectSwitchFree(kind);
       });
 
       it.each([
@@ -332,7 +340,7 @@ describe('PendingSwitchesService through the model selector and the permission-m
         settle(replyOfA);
         await settleRequests(fixture);
 
-        expect(applyButton()).toBeDisabled();
+        expectSwitchBusy(kind);
         expect(errorOf(kind)).toBeNull();
         replyOfB.resolve({ status: 'deferred' });
       });
@@ -430,7 +438,7 @@ describe('PendingSwitchesService through the model selector and the permission-m
       await waitFor(() => expect(noteOf(kind)).toHaveTextContent('restarting…'));
       setStateOf(sessions, 's1', 'starting');
       await fixture.whenStable();
-      await userEvent.click(applyButtonOf(kind));
+      await requestAnotherSwitch(kind);
       await settleRequests(fixture);
 
       // Act — the first relaunch is done

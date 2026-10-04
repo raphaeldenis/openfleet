@@ -2,7 +2,7 @@ import { screen } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
 import { Component, input, type DebugElement } from '@angular/core';
 import type { TestBed } from '@angular/core/testing';
-import { onTestFinished, vi } from 'vitest';
+import { expect, onTestFinished, vi } from 'vitest';
 import type { ServerEvent } from '@openfleet/shared';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { SessionViewComponent } from '../sessions/session-view.component';
@@ -79,20 +79,38 @@ export async function settleRequests(fixture: Pick<Rendered, 'whenStable'>) {
 }
 
 export const SWITCH_KINDS = [
-  { kind: 'model', select: 'model-select', valueInForce: 'claude-sonnet-5', option: 'opus', apply: 'apply-model', note: 'model-switch-status', error: 'model-switch-error', apiMethod: 'updateModel' },
-  { kind: 'permission-mode', select: 'permission-mode-select', valueInForce: 'manual', option: 'acceptEdits', apply: 'apply-permission-mode', note: 'permission-mode-switch-status', error: 'permission-mode-switch-error', apiMethod: 'updatePermissionMode' },
+  { kind: 'model', trigger: 'model-trigger', valueInForce: 'claude-sonnet-5', option: 'opus', otherOption: 'haiku', note: 'model-switch-status', error: 'model-switch-error', apiMethod: 'updateModel' },
+  { kind: 'permission-mode', trigger: 'permission-mode-trigger', valueInForce: 'manual', option: 'acceptEdits', otherOption: 'plan', note: 'permission-mode-switch-status', error: 'permission-mode-switch-error', apiMethod: 'updatePermissionMode' },
 ] as const;
 export type SwitchKind = (typeof SWITCH_KINDS)[number];
 
-export async function requestSwitch({ select, option, apply }: SwitchKind) {
-  await userEvent.selectOptions(screen.getByTestId(select), option);
-  await userEvent.click(screen.getByTestId(apply));
+const optionNamed = (value: string, extra: { selected?: boolean } = {}) =>
+  screen.findByRole('option', { name: new RegExp(`^${value}`), ...extra });
+
+/** Opens the kind's popover and picks an option (by default its `option`), as a user switching the session would. */
+export async function requestSwitch({ trigger, option }: SwitchKind, optionToPick: string = option) {
+  await userEvent.click(screen.getByTestId(trigger));
+  await userEvent.click(await optionNamed(optionToPick));
 }
+
+/** Requests the kind's `otherOption`: a value different from the one `requestSwitch` picks by default. */
+export const requestAnotherSwitch = (kind: SwitchKind) => requestSwitch(kind, kind.otherOption);
 
 export const noteOf = ({ note }: SwitchKind) => screen.queryByTestId(note);
 export const errorOf = ({ error }: SwitchKind) => screen.queryByTestId(error);
-export const applyButtonOf = ({ apply }: SwitchKind) => screen.getByTestId(apply) as HTMLButtonElement;
-export const selectedValueOf = ({ select }: SwitchKind) => (screen.getByTestId(select) as HTMLSelectElement).value;
+export const triggerOf = ({ trigger }: SwitchKind) => screen.getByTestId(trigger);
+const isBusy = (kind: SwitchKind) => triggerOf(kind).getAttribute('aria-disabled') === 'true';
+export const expectSwitchBusy = (kind: SwitchKind) => expect(isBusy(kind), `${kind.kind} switch is busy`).toBe(true);
+export const expectSwitchFree = (kind: SwitchKind) => expect(isBusy(kind), `${kind.kind} switch is free`).toBe(false);
+
+/** Opens the popover to check that it marks `value` as the option in force, then closes it again. */
+export async function expectOptionIsSelected(kind: SwitchKind, value: string) {
+  await userEvent.click(triggerOf(kind));
+  expect(await optionNamed(value, { selected: true })).toBeTruthy();
+  await userEvent.keyboard('{Escape}');
+}
+
+export const expectValueInForceIsSelected = (kind: SwitchKind) => expectOptionIsSelected(kind, kind.valueInForce);
 
 class FakeWebSocket {
   static latest: FakeWebSocket | undefined;

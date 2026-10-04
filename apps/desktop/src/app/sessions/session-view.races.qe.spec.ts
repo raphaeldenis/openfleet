@@ -8,15 +8,17 @@ import { FleetApiService } from '../core/fleet-api.service';
 import {
   SWITCH_KINDS,
   type SwitchKind,
-  applyButtonOf,
   connectFakeDaemon,
   deferred,
   errorOf,
+  expectSwitchBusy,
+  expectSwitchFree,
+  expectValueInForceIsSelected,
   leaveSessionHeadersOpen,
   noteOf,
   requestSwitch,
-  selectedValueOf,
   settleRequests,
+  triggerOf,
   withoutRealTerminal,
 } from '../testing/session-view.testing';
 
@@ -133,10 +135,10 @@ describe('a switch request through A → B → A → B chains', () => {
       // Assert — B shows nothing of A's request
       expect(noteOf(kind)).toBeNull();
       expect(errorOf(kind)).toBeNull();
-      expect(applyButtonOf(kind)).toBeEnabled();
+      expectSwitchFree(kind);
       await goTo('s1');
       expect(noteOf(kind)).toHaveTextContent(SWITCH_PENDING_NOTE);
-      expect(applyButtonOf(kind)).toBeEnabled();
+      expectSwitchFree(kind);
     });
 
     it('keeps A busy through A → B → A → B → A while the reply is pending, and sends nothing more', async () => {
@@ -149,9 +151,9 @@ describe('a switch request through A → B → A → B chains', () => {
       await goTo('s2');
       await goTo('s1');
 
-      await userEvent.click(applyButtonOf(kind));
+      await userEvent.click(triggerOf(kind));
 
-      expect(applyButtonOf(kind)).toBeDisabled();
+      expectSwitchBusy(kind);
       expect(api[kind.apiMethod]).toHaveBeenCalledTimes(1);
       reply.resolve({ status: 'deferred' });
     });
@@ -171,12 +173,12 @@ describe('a switch request through A → B → A → B chains', () => {
 
       replyOfA.resolve({ status: 'deferred' });
       await settleRequests(fixture);
-      expect(applyButtonOf(kind)).toBeDisabled();
+      expectSwitchBusy(kind);
       expect(noteOf(kind)).toBeNull();
 
       replyOfB.resolve({ status: 'deferred' });
       await settleRequests(fixture);
-      expect(applyButtonOf(kind)).toBeEnabled();
+      expectSwitchFree(kind);
       expect(noteOf(kind)).toHaveTextContent(SWITCH_PENDING_NOTE);
       await goTo('s1');
       expect(noteOf(kind)).toHaveTextContent(SWITCH_PENDING_NOTE);
@@ -219,15 +221,15 @@ describe('a switch request that fails while the user is on B, then a retry on A'
 
       expect(errorOf(kind)).toBeNull();
       expect(noteOf(kind)).toBeNull();
-      expect(applyButtonOf(kind)).toBeEnabled();
+      expectSwitchFree(kind);
     });
 
     it('leaves A free to retry: back on A the select shows the value in force again, the request is sent again and its answer shows the note', async () => {
       const { fixture, goTo, api, secondReply } = await renderWithAFailingThenAnAnsweredRequest();
       await goTo('s1');
       expect(noteOf(kind)).toBeNull();
-      expect(applyButtonOf(kind)).toBeEnabled();
-      expect((screen.getByTestId(kind.select) as HTMLSelectElement).value).toBe(kind.valueInForce);
+      expectSwitchFree(kind);
+      await expectValueInForceIsSelected(kind);
 
       await requestSwitch(kind);
       secondReply.resolve({ status: 'deferred' });
@@ -332,8 +334,8 @@ describe('two different request kinds on one session', () => {
 
     // Assert
     expect(errorOf(modelSwitch)).toHaveTextContent(/could not switch model/i);
-    expect(applyButtonOf(modelSwitch)).toBeEnabled();
-    expect(applyButtonOf(permissionModeSwitch)).toBeDisabled();
+    expectSwitchFree(modelSwitch);
+    expectSwitchBusy(permissionModeSwitch);
     expect(errorOf(permissionModeSwitch)).toBeNull();
 
     permissionModeReply.resolve({ status: 'deferred' });
@@ -660,11 +662,11 @@ describe('leaving the session view and coming back with a switch request in flig
 
       expect(errorOf(kind)).toHaveTextContent(/could not/i);
       expect(noteOf(kind)).toBeNull();
-      expect(selectedValueOf(kind)).toBe(kind.valueInForce);
-      expect(applyButtonOf(kind)).toBeEnabled();
+      await expectValueInForceIsSelected(kind);
+      expectSwitchFree(kind);
     });
 
-    it('keeps Apply disabled on return until the first reply lands, and sends no second request', async () => {
+    it('keeps the switch busy on return until the first reply lands, and sends no second request', async () => {
       const reply = deferred<SwitchReply>();
       const api = Object.assign(fakeApi(), { [kind.apiMethod]: vi.fn(() => reply.promise) });
       const { leaveTheSessionView, comeBackToTheSessionView } = await renderFleet(api, [gimli()]);
@@ -672,8 +674,8 @@ describe('leaving the session view and coming back with a switch request in flig
       await leaveTheSessionView();
       await comeBackToTheSessionView();
 
-      expect(applyButtonOf(kind)).toBeDisabled();
-      await userEvent.click(applyButtonOf(kind));
+      expectSwitchBusy(kind);
+      await userEvent.click(triggerOf(kind));
       expect(api[kind.apiMethod]).toHaveBeenCalledTimes(1);
       reply.resolve({ status: 'deferred' });
     });
