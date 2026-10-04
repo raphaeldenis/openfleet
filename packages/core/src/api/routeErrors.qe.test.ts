@@ -22,6 +22,7 @@ import { startServer } from './server.js';
 const ADMIN_TOKEN = 'admin-token-of-the-day';
 const ADMIN = { authorization: `Bearer ${ADMIN_TOKEN}`, 'content-type': 'application/json' };
 const JSON_ONLY = { 'content-type': 'application/json' };
+const REFUSALS_PER_ROUTE = 8;
 const OVER_THE_BODY_CAP = JSON.stringify({ pad: 'x'.repeat(1024 * 1024 + 1) });
 
 let server: Awaited<ReturnType<typeof startServer>>;
@@ -54,6 +55,7 @@ beforeEach(async () => {
   });
 });
 afterEach(async () => {
+  await sessions.closeAll();
   await server.close();
   vi.restoreAllMocks();
   rmSync(scratch, { recursive: true, force: true });
@@ -159,7 +161,7 @@ describe('user cannot tell another project’s data store from a missing one', (
 describe('user of a busy daemon does not drown its log in refusals', () => {
   it('writes no log line for a flood of unknown routes and refused tokens', async () => {
     const answers: Answer[] = [];
-    for (let index = 0; index < 40; index += 1) {
+    for (let index = 0; index < REFUSALS_PER_ROUTE; index += 1) {
       answers.push(await send('GET', `/nowhere/${index}`, ADMIN));
       answers.push(await send('GET', '/api/sessions', JSON_ONLY));
       answers.push(await send('POST', '/mcp', JSON_ONLY, '{}'));

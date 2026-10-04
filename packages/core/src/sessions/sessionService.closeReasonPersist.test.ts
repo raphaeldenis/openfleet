@@ -1,5 +1,5 @@
 import type { ServerEvent, SessionCloseReason } from '@openfleet/shared';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDatabase } from '../db/database.js';
 import { describeError } from '../errors/describeError.js';
 import { EventBus } from '../events/eventBus.js';
@@ -7,13 +7,25 @@ import { FakeHarness } from '../harness/fakeHarness.js';
 import { SessionService, type SessionServiceDeps } from './sessionService.js';
 
 const START_TIMEOUT_MS = 25;
-const WAIT_PAST_START_TIMEOUT_MS = 60;
 const CLI_EXIT_CODE_OF_A_REFUSED_RESUME = 1;
 const spec = { name: 'worker', emoji: '🤖', directory: '/tmp', harness: 'fake' } as const;
 
 type Database = ReturnType<typeof openDatabase>;
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const services: SessionService[] = [];
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+});
+
+afterEach(async () => {
+  for (const service of services.splice(0)) await service.closeAll();
+  expect(vi.getTimerCount()).toBe(0);
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
 function bootDaemon(db: Database, overrides: Partial<SessionServiceDeps> = {}) {
   const harness = new FakeHarness();
@@ -22,6 +34,7 @@ function bootDaemon(db: Database, overrides: Partial<SessionServiceDeps> = {}) {
   bus.subscribe((event) => events.push(event));
   const service = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt', describeError,
     firstStartTimeoutMs: START_TIMEOUT_MS, resumeTimeoutMs: START_TIMEOUT_MS, ...overrides });
+  services.push(service);
   return { harness, service, events };
 }
 
@@ -53,7 +66,7 @@ const closedByDaemonShutdown = async (): Promise<ClosedSession> => {
 const closedByStartTimeout = async (): Promise<ClosedSession> => {
   const { service, events } = bootDaemon(openDatabase(':memory:'));
   const { id } = await service.create(spec);
-  await sleep(WAIT_PAST_START_TIMEOUT_MS);
+  await vi.advanceTimersByTimeAsync(START_TIMEOUT_MS);
   return { service, events, sessionId: id };
 };
 
@@ -72,7 +85,7 @@ const closedByRefusedResume = async (): Promise<ClosedSession> => {
   await service.close(id);
   harness.conversationsRefusedOnResume.add(id);
   service.reopen(id);
-  await sleep(5);
+  await Promise.resolve();
   return { service, events, sessionId: id };
 };
 
