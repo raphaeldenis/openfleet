@@ -1,5 +1,5 @@
-import type { ManagerSpec, SessionSpec } from '@openfleet/shared';
-import { ModelIdSchema, OpenFleetError, PERMISSION_MODES, SessionSpecSchema } from '@openfleet/shared';
+import type { CloseHandoffResult, ManagerSpec, SessionSpec } from '@openfleet/shared';
+import { CloseSessionRequestSchema, ModelIdSchema, OpenFleetError, PERMISSION_MODES, SessionSpecSchema } from '@openfleet/shared';
 import { z } from 'zod';
 import type { ApprovalService } from '../governance/approvalService.js';
 import type { FakeHandle } from '../harness/fakeHarness.js';
@@ -10,8 +10,11 @@ import type { SessionService } from '../sessions/sessionService.js';
 import type { TodoTracker } from '../todos/todoTracker.js';
 import type { HandoverLedger } from '../workingState/handoverLedger.js';
 import type { WorkingStateService } from '../workingState/workingStateService.js';
+import type { HandoffRouteDeps } from './handoffRoutes.js';
 import { json, Router } from './router.js';
 import type { WsTicketStore } from './wsTicketStore.js';
+
+const NO_HANDOFF_TARGET: CloseHandoffResult = { status: 'skipped', reason: 'target_unavailable' };
 
 const notFound = (what: string) => new OpenFleetError('not_found', `the ${what} does not exist.`);
 
@@ -21,7 +24,7 @@ const RenameSessionSchema = z
   .object({ name: z.string().trim().min(1).max(100).optional(), emoji: z.string().trim().min(1).max(32).optional() })
   .refine((patch) => patch.name !== undefined || patch.emoji !== undefined, { message: 'name or emoji is required' });
 
-export function registerRestRoutes(router: Router, deps: { sessions: SessionService; approvals: ApprovalService; modelTable: ModelTable; modelConfigPath: string; managers: ManagerService; pulseScheduler: PulseScheduler; wsTickets: WsTicketStore; workingStates?: WorkingStateService; handoverLedger?: HandoverLedger; todos?: TodoTracker; e2eRoutes?: boolean }): void {
+export function registerRestRoutes(router: Router, deps: { sessions: SessionService; approvals: ApprovalService; modelTable: ModelTable; modelConfigPath: string; managers: ManagerService; pulseScheduler: PulseScheduler; wsTickets: WsTicketStore; workingStates?: WorkingStateService; handoverLedger?: HandoverLedger; todos?: TodoTracker; handoff?: Pick<HandoffRouteDeps, 'writeHandoffOnClose'>; e2eRoutes?: boolean }): void {
   const servedRungs = (): ModelTable => {
     const { haiku, sonnet, opus, fable } = deps.modelTable;
     return { haiku, sonnet, opus, fable };
@@ -149,10 +152,17 @@ export function registerRestRoutes(router: Router, deps: { sessions: SessionServ
     });
   }
 
-  router.add('POST', '/api/sessions/:id/close', async ({ res, params }) => {
-    requireSession(params.id!);
-    await deps.sessions.close(params.id!);
-    json(res, 200, {});
+  router.add('POST', '/api/sessions/:id/close', async ({ res, params, body }) => {
+    const sessionId = params.id!;
+    requireSession(sessionId);
+    const { writeHandoff } = CloseSessionRequestSchema.parse(body ?? {});
+    let handoff: CloseHandoffResult | undefined;
+    try {
+      if (writeHandoff) handoff = deps.handoff?.writeHandoffOnClose(sessionId) ?? NO_HANDOFF_TARGET;
+    } finally {
+      await deps.sessions.close(sessionId);
+    }
+    json(res, 200, handoff ? { handoff } : {});
   });
 
   const { workingStates } = deps;

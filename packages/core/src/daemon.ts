@@ -23,6 +23,7 @@ import { PulseScheduler } from './managers/pulseScheduler.js';
 import { createMcpHandler } from './mcp/mcpServer.js';
 import { loadModelTable } from './models.js';
 import { DocsFolderService } from './notes/docsFolderService.js';
+import { registerHandoffOnClose } from './notes/handoffService.js';
 import { loadHandoffSettings } from './notes/handoffSettings.js';
 import { expandMentions } from './notes/mentionExpander.js';
 import { nodeDocsFolderFs } from './notes/nodeDocsFolderFs.js';
@@ -113,7 +114,9 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   const { silentBlockMinutes } = loadPermissionSettings(modelConfigPath);
   const silentBlocks = new SilentBlockDetector({ thresholdMinutes: silentBlockMinutes, schedule: scheduleOnRealClock, onChange: (blocks) => bus.emit({ type: 'permission.silent_blocks', blocks }) });
   bus.subscribe((event) => silentBlocks.handle(event));
-  const handoff = createHandoffRouteDeps({ sessions, managers, workingStates, todos, docs, projects, git: createNodeGitPort(), settings: loadHandoffSettings(modelConfigPath), clock: () => new Date().toISOString() });
+  const handoffSettings = loadHandoffSettings(modelConfigPath);
+  const handoff = createHandoffRouteDeps({ sessions, managers, workingStates, todos, docs, projects, git: createNodeGitPort(), settings: handoffSettings, clock: () => new Date().toISOString() });
+  const stopHandoffOnClose = registerHandoffOnClose(bus, handoff.handoffs, { writeOnClose: handoffSettings.writeOnClose, onError: (error) => log('warn', `automatic handoff not written: ${describeError(error).error}`) });
 
   // The server must be listening before any resumed CLI can POST its first hook — resuming first risks a
   // fast process hitting a port nothing is serving yet.
@@ -132,6 +135,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     pulseScheduler.stop();
     contextNotice.stop();
     silentBlocks.stop();
+    stopHandoffOnClose();
     docsFolders.stop();
     await sessions.closeAll();
     todos.stop();

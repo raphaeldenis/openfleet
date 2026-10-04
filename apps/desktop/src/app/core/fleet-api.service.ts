@@ -1,12 +1,12 @@
 import { Injectable } from '@angular/core';
 import { DIAGNOSTICS_PATH, isErrorEnvelope } from '@openfleet/shared';
 import type {
-  Approval, CreateNoteRequest, CreateProjectRequest, DataStore, DataStoreDetail, DiagnosticsDocument, DsRow, DsRowHistoryEntry, DsView, ErrorEnvelope, HandoffPreview, HandoffTarget, HarnessId, NoteSummary,
+  Approval, CloseHandoffResult, CloseSessionRequest, CreateNoteRequest, CreateProjectRequest, DataStore, DataStoreDetail, DiagnosticsDocument, DsRow, DsRowHistoryEntry, DsView, ErrorEnvelope, HandoffPreview, HandoffTarget, HarnessId, NoteSummary,
   NoteVersionSummary, NoteView, OrderTerm, Page, PermissionMode, Project, RestoreNoteRequest, Session, SessionSpec, SessionTodos,
   UpdateNoteRequest, UpdateProjectRequest, WhereClause,
 } from '@openfleet/shared';
 import { environment } from '../../environments/environment';
-import { parseHandoffPreview, parseHandoffTarget } from './handoff-response-parser';
+import { parseCloseHandoffResult, parseHandoffPreview, parseHandoffTarget } from './handoff-response-parser';
 import { parseProject } from './project-response-parser';
 import { parseSessionTodos } from './session-todos-parser';
 
@@ -112,7 +112,11 @@ export class FleetApiService {
   sendMessage(id: string, body: string, messageId?: string) { return this.post<{ status: 'delivered' | 'queued'; messageId: string }>(`/api/sessions/${id}/messages`, { body, messageId }); }
   sendInput(id: string, data: string) { return this.post(`/api/sessions/${id}/input`, { data }); }
   resize(id: string, cols: number, rows: number) { return this.post(`/api/sessions/${id}/resize`, { cols, rows }); }
-  closeSession(id: string) { return this.post(`/api/sessions/${id}/close`, {}); }
+  async closeSession(id: string, request: CloseSessionRequest = {}): Promise<{ handoff?: CloseHandoffResult }> {
+    const answer = await this.post<{ handoff?: unknown } | undefined>(`/api/sessions/${id}/close`, request);
+    const handoff = parseCloseHandoffResult(answer?.handoff);
+    return handoff ? { handoff } : {};
+  }
   updateModel(id: string, model: string) { return this.post<{ status: 'relaunching' | 'deferred' }>(`/api/sessions/${id}/model`, { model }); }
   updatePermissionMode(id: string, mode: PermissionMode) { return this.post<{ status: 'relaunching' | 'deferred' }>(`/api/sessions/${id}/permission-mode`, { mode }); }
   renameSession(id: string, patch: { name?: string; emoji?: string }) { return this.patch<Session>(`/api/sessions/${id}`, patch); }

@@ -1,6 +1,6 @@
-import { chmodSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import type { HandoffContent, HandoffPreview, HandoffTarget, NoteSummary, Session } from '@openfleet/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -421,20 +421,24 @@ describe('POST /api/sessions/:id/handoff', () => {
   });
 
   it('keeps the file inside the handoffs folder whatever the session name contains', async () => {
-    makeProject('p-docs', docsFolder);
-    docs.ensureLayout(docsFolder);
+    const sandbox = mkdtempSync(join(tmpdir(), 'of-name-escape-'));
+    const sandboxedDocsFolder = join(sandbox, 'docs');
+    mkdirSync(sandboxedDocsFolder);
+    makeProject('p-docs', sandboxedDocsFolder);
+    docs.ensureLayout(sandboxedDocsFolder);
     const session = await createSession('../../escape/..\\attempt');
     attachProject(session.id, 'p-docs');
-    const docsFolderEntriesBefore = readdirSync(docsFolder).sort();
+    const docsFolderEntriesBefore = readdirSync(sandboxedDocsFolder).sort();
 
     const res = await saveHandoff(session.id, SECTIONS);
     const { relativePath } = (await res.json()) as { relativePath: string };
 
     expect(res.status).toBe(201);
     expect(relativePath).toMatch(/^handoffs\/[a-z0-9-]+\.md$/);
-    expect(handoffFiles()).toHaveLength(1);
-    expect(readdirSync(docsFolder).sort()).toEqual(docsFolderEntriesBefore);
-    expect(readdirSync(dirname(docsFolder)).filter((entry) => entry.startsWith('escape'))).toEqual([]);
+    expect(readdirSync(join(sandboxedDocsFolder, 'handoffs'))).toHaveLength(1);
+    expect(readdirSync(sandboxedDocsFolder).sort()).toEqual(docsFolderEntriesBefore);
+    expect(readdirSync(sandbox)).toEqual(['docs']);
+    rmSync(sandbox, { recursive: true, force: true });
   });
 
   describe('path safety', () => {

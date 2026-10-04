@@ -451,27 +451,60 @@ describe('registerHandoffOnClose', () => {
     };
   }
 
-  it('writes an automatic handoff when a session closes and ignores other events', () => {
+  const crashOf = (sessionId: string): ServerEvent => ({ type: 'session.closed', sessionId, reason: 'harness_exit' });
+  const WRITE_ON_CLOSE = { writeOnClose: true };
+
+  it('writes an automatic handoff when the agent process ends unexpectedly and ignores other events', () => {
     const calls: string[] = [];
     const bus = fakeBus();
-    registerHandoffOnClose(bus, { writeAutoOnClose: (id) => { calls.push(id); return undefined; }, forgetAutoHandoff: () => {} });
+    registerHandoffOnClose(bus, { writeAutoOnClose: (id) => { calls.push(id); return undefined; }, forgetAutoHandoff: () => {} }, WRITE_ON_CLOSE);
 
     bus.emit({ type: 'session.state', sessionId: 's1', state: 'idle', stateSince: 't' });
-    bus.emit({ type: 'session.closed', sessionId: 's1' });
+    bus.emit(crashOf('s1'));
 
     expect(calls).toEqual(['s1']);
+  });
+
+  it.each(['closed_by_user', 'daemon_shutdown', 'launch_failed', 'resume_timeout'] as const)('writes nothing when a session closes with reason %s', (reason) => {
+    const calls: string[] = [];
+    const bus = fakeBus();
+    registerHandoffOnClose(bus, { writeAutoOnClose: (id) => { calls.push(id); return undefined; }, forgetAutoHandoff: () => {} }, WRITE_ON_CLOSE);
+
+    bus.emit({ type: 'session.closed', sessionId: 's1', reason });
+
+    expect(calls).toEqual([]);
+  });
+
+  it('writes nothing when a session closes without a reason', () => {
+    const calls: string[] = [];
+    const bus = fakeBus();
+    registerHandoffOnClose(bus, { writeAutoOnClose: (id) => { calls.push(id); return undefined; }, forgetAutoHandoff: () => {} }, WRITE_ON_CLOSE);
+
+    bus.emit({ type: 'session.closed', sessionId: 's1' });
+
+    expect(calls).toEqual([]);
+  });
+
+  it('writes nothing on a crash when the write-on-close setting is off', () => {
+    const calls: string[] = [];
+    const bus = fakeBus();
+    registerHandoffOnClose(bus, { writeAutoOnClose: (id) => { calls.push(id); return undefined; }, forgetAutoHandoff: () => {} }, { writeOnClose: false });
+
+    bus.emit(crashOf('s1'));
+
+    expect(calls).toEqual([]);
   });
 
   it('writes a second automatic handoff when a session is reopened and closed again, but only one for a double close', () => {
     const { handoffs, noteRepo } = setup();
     const bus = fakeBus();
-    registerHandoffOnClose(bus, handoffs);
+    registerHandoffOnClose(bus, handoffs, WRITE_ON_CLOSE);
 
-    bus.emit({ type: 'session.closed', sessionId: 's1' });
-    bus.emit({ type: 'session.closed', sessionId: 's1' });
+    bus.emit(crashOf('s1'));
+    bus.emit(crashOf('s1'));
     expect(noteRepo.list('p1')).toHaveLength(1);
     bus.emit({ type: 'session.reopened', sessionId: 's1' });
-    bus.emit({ type: 'session.closed', sessionId: 's1' });
+    bus.emit(crashOf('s1'));
 
     expect(noteRepo.list('p1')).toHaveLength(2);
   });
@@ -479,40 +512,40 @@ describe('registerHandoffOnClose', () => {
   it('writes an automatic handoff for the work done after a reopen even when a manual handoff predates the reopen', () => {
     const { handoffs, noteRepo, advanceMinutes } = setup();
     const bus = fakeBus();
-    registerHandoffOnClose(bus, handoffs);
+    registerHandoffOnClose(bus, handoffs, WRITE_ON_CLOSE);
 
     handoffs.write('s1', fullContent(), { author: AUTHOR });
     advanceMinutes(1);
-    bus.emit({ type: 'session.closed', sessionId: 's1' });
+    bus.emit(crashOf('s1'));
     expect(noteRepo.list('p1')).toHaveLength(1);
     bus.emit({ type: 'session.reopened', sessionId: 's1' });
     advanceMinutes(2);
-    bus.emit({ type: 'session.closed', sessionId: 's1' });
+    bus.emit(crashOf('s1'));
 
     expect(noteRepo.list('p1')).toHaveLength(2);
   });
 
   it('never lets a handoff failure escape into the bus', () => {
     const bus = fakeBus();
-    registerHandoffOnClose(bus, { writeAutoOnClose: () => { throw new Error('disk full'); }, forgetAutoHandoff: () => {} });
+    registerHandoffOnClose(bus, { writeAutoOnClose: () => { throw new Error('disk full'); }, forgetAutoHandoff: () => {} }, WRITE_ON_CLOSE);
 
-    expect(() => bus.emit({ type: 'session.closed', sessionId: 's1' })).not.toThrow();
+    expect(() => bus.emit(crashOf('s1'))).not.toThrow();
   });
 
   it('reports a handoff failure to onError', () => {
     const bus = fakeBus();
     const failure = new Error('disk full');
     const reported: unknown[] = [];
-    registerHandoffOnClose(bus, { writeAutoOnClose: () => { throw failure; }, forgetAutoHandoff: () => {} }, (error) => reported.push(error));
+    registerHandoffOnClose(bus, { writeAutoOnClose: () => { throw failure; }, forgetAutoHandoff: () => {} }, { ...WRITE_ON_CLOSE, onError: (error) => reported.push(error) });
 
-    bus.emit({ type: 'session.closed', sessionId: 's1' });
+    bus.emit(crashOf('s1'));
 
     expect(reported).toEqual([failure]);
   });
 
   it('returns an unsubscribe', () => {
     const bus = fakeBus();
-    const unsubscribe = registerHandoffOnClose(bus, { writeAutoOnClose: () => undefined, forgetAutoHandoff: () => {} });
+    const unsubscribe = registerHandoffOnClose(bus, { writeAutoOnClose: () => undefined, forgetAutoHandoff: () => {} }, WRITE_ON_CLOSE);
 
     unsubscribe();
 

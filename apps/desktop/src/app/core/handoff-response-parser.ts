@@ -1,5 +1,5 @@
-import { HANDOFF_SECTION_KEYS, HandoffContentSchema } from '@openfleet/shared';
-import type { HandoffPreview, HandoffSectionKey, HandoffSectionSource, HandoffTarget, HandoffTargetUnavailableReason } from '@openfleet/shared';
+import { ERROR_CODES, HANDOFF_SECTION_KEYS, HandoffContentSchema } from '@openfleet/shared';
+import type { CloseHandoffResult, ErrorCode, HandoffPreview, HandoffSectionKey, HandoffSkipReason, HandoffSectionSource, HandoffTarget, HandoffTargetUnavailableReason } from '@openfleet/shared';
 
 const SECTION_SOURCES: readonly HandoffSectionSource[] = ['working_state', 'git', 'session', 'manager', 'none'];
 const UNAVAILABLE_REASONS: readonly HandoffTargetUnavailableReason[] = ['no_project', 'no_docs_folder', 'docs_folder_unusable'];
@@ -23,6 +23,20 @@ export function parseHandoffTarget(payload: unknown): HandoffTarget | undefined 
     target.relativePath = relativePath;
   }
   return target;
+}
+
+const isErrorCode = (value: unknown): value is ErrorCode => typeof value === 'string' && Object.hasOwn(ERROR_CODES, value);
+
+const SKIP_REASONS: readonly HandoffSkipReason[] = ['recent_manual_handoff', 'target_unavailable', 'already_written', 'already_closed'];
+
+/** Reads what the daemon did with the handoff a close asked for; returns undefined when the payload is not a known result. */
+export function parseCloseHandoffResult(payload: unknown): CloseHandoffResult | undefined {
+  if (!isRecord(payload)) return undefined;
+  const { status, relativePath, reason, error, message } = payload;
+  if (status === 'written' && typeof relativePath === 'string') return { status, relativePath };
+  if (status === 'skipped' && isOneOf(SKIP_REASONS, reason)) return { status, reason };
+  if (status === 'failed' && isErrorCode(error) && typeof message === 'string') return { status, error, message };
+  return undefined;
 }
 
 function parseSources(candidate: unknown): HandoffPreview['sources'] | undefined {

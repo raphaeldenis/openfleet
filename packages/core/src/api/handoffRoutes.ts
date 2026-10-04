@@ -1,4 +1,6 @@
 import { HANDOFF_SECTION_KEYS, HandoffContentSchema, type HandoffContent, type HandoffPreview, type HandoffTarget, type Session } from '@openfleet/shared';
+import { withGitTimeBudget } from '../git/timeBudgetedGitPort.js';
+import { createCloseHandoffWriter, type WriteHandoffOnClose } from '../notes/closeHandoffWriter.js';
 import type { DocsFolderService } from '../notes/docsFolderService.js';
 import { createHandoffDraftBuilder, type BuildHandoffDraft, type HandoffDraftDeps } from '../notes/handoffDraft.js';
 import { SessionNotFoundForHandoffError } from '../notes/handoffErrors.js';
@@ -12,13 +14,16 @@ import { summaryOf } from './noteRoutes.js';
 import { json, type Router } from './router.js';
 
 const HANDOFF_AUTHOR = 'You';
+/** The most time the git calls of one handoff written while a session closes may take together; git is synchronous, so this is how long the event loop can be held. */
+const CLOSE_HANDOFF_GIT_BUDGET_MS = 4_000;
 
 export interface HandoffRouteDeps {
   sessions: { get(id: string): Session | undefined };
   managers: { get(sessionId: string): unknown };
   buildDraft: BuildHandoffDraft;
   resolveTarget: ResolveHandoffTarget;
-  handoffs: Pick<HandoffService, 'write'>;
+  handoffs: Pick<HandoffService, 'write' | 'writeAutoOnClose' | 'forgetAutoHandoff' | 'reasonToSkipAutoHandoff'>;
+  writeHandoffOnClose: WriteHandoffOnClose;
   docs: Pick<DocsFolderService, 'docsRelativePath'>;
   identicalGuard: IdenticalHandoffGuard;
   clock: () => string;
@@ -34,12 +39,16 @@ export interface HandoffWiring extends HandoffDraftDeps {
 /** Builds the dependencies of the handoff routes, and the `HandoffService` behind the save route, from the services the daemon already holds. */
 export function createHandoffRouteDeps(wiring: HandoffWiring): HandoffRouteDeps {
   const buildDraft = createHandoffDraftBuilder(wiring);
+  const buildDraftWithinGitBudget: BuildHandoffDraft = (sessionId) =>
+    createHandoffDraftBuilder({ ...wiring, git: withGitTimeBudget(wiring.git, { budgetMs: CLOSE_HANDOFF_GIT_BUDGET_MS, nowMs: wiring.nowMs }) })(sessionId);
+  const handoffs = new HandoffService({ docs: wiring.docs, projects: wiring.projects, sessions: wiring.sessions, buildDraft: buildDraftWithinGitBudget, clock: wiring.clock });
   return {
     sessions: wiring.sessions,
     managers: wiring.managers,
     buildDraft,
     resolveTarget: createHandoffTargetResolver({ docs: wiring.docs, settings: wiring.settings }),
-    handoffs: new HandoffService({ docs: wiring.docs, projects: wiring.projects, sessions: wiring.sessions, buildDraft, clock: wiring.clock }),
+    handoffs,
+    writeHandoffOnClose: createCloseHandoffWriter({ sessions: wiring.sessions, handoffs, docs: wiring.docs }),
     docs: wiring.docs,
     identicalGuard: new IdenticalHandoffGuard(wiring.clock),
     clock: wiring.clock,
