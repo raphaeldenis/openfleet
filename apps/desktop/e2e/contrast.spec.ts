@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import { readE2eAdminToken } from '../../../scripts/e2e/e2eHome';
 
 const api = 'http://127.0.0.1:7332';
@@ -46,6 +46,77 @@ async function measureContrastRatio(page: Page, testIdOrSelector: string): Promi
     const [lighter, darker] = [luminance(textColor), luminance(backgroundColor)].sort((a, b) => b - a);
     return (lighter + 0.05) / (darker + 0.05);
   }, testIdOrSelector);
+}
+
+const headers = { 'content-type': 'application/json', authorization: `Bearer ${token}` };
+
+let createdSessionId: string | undefined;
+
+test.afterEach(async ({ request }) => {
+  if (!createdSessionId) return;
+  await request.post(`${api}/api/sessions/${createdSessionId}/close`, { headers });
+  createdSessionId = undefined;
+});
+
+async function openSessionUnderTheme(page: Page, request: APIRequestContext, theme: Theme, viewport: { width: number; height: number }) {
+  await page.setViewportSize(viewport);
+  await page.addInitScript(([adminToken, apiUrl, chosenTheme]) => {
+    localStorage.setItem('openfleet.adminToken', adminToken);
+    localStorage.setItem('openfleet.apiUrl', apiUrl);
+    document.documentElement.setAttribute('data-theme', chosenTheme);
+  }, [token, api, theme satisfies Theme]);
+  const created = await request.post(`${api}/api/sessions`, { headers, data: { directory: '/tmp', name: 'Danger contrast', emoji: '🛑', harness: 'fake' } });
+  createdSessionId = (await created.json()).id;
+  await page.goto(`/session/${createdSessionId}`);
+  await page.evaluate((chosenTheme) => document.documentElement.setAttribute('data-theme', chosenTheme), theme);
+  await expect(page.getByTestId('session-header')).toBeVisible();
+  const detailsToggle = page.getByTestId('session-header-toggle');
+  const areDetailsCollapsed = (await detailsToggle.getAttribute('aria-expanded')) === 'false';
+  if (areDetailsCollapsed) await detailsToggle.click();
+  await expect(detailsToggle).toHaveAttribute('aria-expanded', 'true');
+}
+
+async function resolveTokenFillColor(page: Page, tokenName: string): Promise<string> {
+  return page.evaluate((name) => {
+    const probe = document.createElement('span');
+    probe.style.backgroundColor = `var(${name})`;
+    document.body.appendChild(probe);
+    const resolved = getComputedStyle(probe).backgroundColor;
+    probe.remove();
+    return resolved;
+  }, tokenName);
+}
+
+async function expectDangerButtonReadable(page: Page, testId: string) {
+  const dangerButton = page.getByTestId(testId);
+  await expect(dangerButton).toBeVisible();
+  const expectedFill = await resolveTokenFillColor(page, '--state-error-fill');
+  const expectedLabel = await resolveTokenFillColor(page, '--on-state');
+
+  await expect(dangerButton).toHaveCSS('background-color', expectedFill);
+  await expect(dangerButton).toHaveCSS('color', expectedLabel);
+  expect(await measureContrastRatio(page, `[data-testid="${testId}"]`)).toBeGreaterThanOrEqual(MINIMUM_TEXT_CONTRAST);
+}
+
+for (const theme of THEMES) {
+  for (const viewport of VIEWPORTS) {
+    test(`the Close session danger button reaches 4.5:1 on the error fill under the ${theme} theme at ${viewport.width}×${viewport.height}`, async ({ page, request }) => {
+      await openSessionUnderTheme(page, request, theme, viewport);
+
+      await page.getByTestId('session-close').click();
+
+      await expectDangerButtonReadable(page, 'close-confirm-submit');
+    });
+
+    test(`the Turn off checks danger button reaches 4.5:1 on the error fill under the ${theme} theme at ${viewport.width}×${viewport.height}`, async ({ page, request }) => {
+      await openSessionUnderTheme(page, request, theme, viewport);
+
+      await page.getByTestId('permission-mode-trigger').click();
+      await page.getByRole('option', { name: /bypassPermissions/ }).click();
+
+      await expectDangerButtonReadable(page, 'permission-mode-bypass-confirm');
+    });
+  }
 }
 
 for (const theme of THEMES) {

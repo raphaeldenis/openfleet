@@ -170,7 +170,7 @@ function requestedUrlFrom(navigationState: unknown): string {
     .step { display: flex; flex: 1 1 0; flex-direction: column; gap: .375rem; min-width: 0; font-size: .6875rem; color: var(--mut) }
     .step .bar { height: .25rem; border-radius: .125rem; background: var(--line) }
     .step-name { display: flex; align-items: center; gap: .25rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
-    .step-later { font-size: .625rem; color: var(--mut) }
+    .step-later { font-size: .6875rem; color: var(--mut) }
     .step[data-state='done'] { color: var(--mut) }
     .step[data-state='done'] .bar { background: var(--state-idle) }
     .step[data-state='current'] { color: var(--fg) }

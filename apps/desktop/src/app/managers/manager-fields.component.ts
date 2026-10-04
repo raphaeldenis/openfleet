@@ -114,7 +114,7 @@ function utf8ByteLength(text: string): number {
     .cap-input { flex: none; width: 4rem; text-align: center; font-family: var(--mono); appearance: textfield; -moz-appearance: textfield }
     .cap-input::-webkit-inner-spin-button, .cap-input::-webkit-outer-spin-button { appearance: none; margin: 0 }
     .step { flex: none; width: 2rem; height: 2rem; border: 1px solid var(--line); border-radius: .375rem; background: var(--panel); color: var(--fg); font: inherit; cursor: pointer }
-    .step:disabled { color: var(--faint); cursor: not-allowed }
+    .step:disabled { color: var(--mut); cursor: not-allowed }
     .hint { font-size: .6875rem; color: var(--mut); white-space: nowrap }
     .maximum { font-size: .75rem; color: var(--fg) }
     .maximum-icon { font-weight: 700; color: var(--state-waiting-permission) }

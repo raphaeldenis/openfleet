@@ -160,6 +160,15 @@ describe('SessionActionsComponent', () => {
       );
     });
 
+    it('draws the Close session confirm button with the shared danger style', async () => {
+      const api = { closeSession: vi.fn(), sendInput: vi.fn() };
+      await render(SessionActionsComponent, { bindings: bindingsFor('idle'), providers: [{ provide: FleetApiService, useValue: api }] });
+
+      await userEvent.click(screen.getByTestId('session-close'));
+
+      expect(screen.getByTestId('close-confirm-submit')).toHaveClass('of-btn', 'of-btn--danger');
+    });
+
     it('traps Tab focus between Cancel and Close session while the dialog is open', async () => {
       const api = { closeSession: vi.fn(), sendInput: vi.fn() };
       await render(SessionActionsComponent, { bindings: bindingsFor('idle'), providers: [{ provide: FleetApiService, useValue: api }] });

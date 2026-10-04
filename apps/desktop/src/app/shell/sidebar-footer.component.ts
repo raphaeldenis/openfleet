@@ -25,7 +25,7 @@ import { RouterLink, RouterLinkActive } from '@angular/router';
   `,
   styles: `
     .footer { flex: none; display: flex; align-items: center; gap: .5rem; padding: .5rem .75rem; border-top: 1px solid var(--line); }
-    .avatar { flex: none; width: 1.75rem; height: 1.75rem; border-radius: 50%; background: var(--accent-bg); color: var(--accent); display: flex; align-items: center; justify-content: center; font-size: .625rem; font-weight: 600; }
+    .avatar { flex: none; width: 1.75rem; height: 1.75rem; border-radius: 50%; background: var(--accent-bg); color: var(--accent); display: flex; align-items: center; justify-content: center; font-size: .6875rem; font-weight: 600; }
     .name { flex: 1; min-width: 0; font-weight: 500; }
     .gear { flex: none; width: 1.75rem; height: 1.75rem; border: 1px solid transparent; border-radius: .375rem; background: transparent; color: var(--mut); font-size: .875rem; cursor: pointer; outline: 0; }
     .gear:hover { background: var(--hover); color: var(--fg); }

@@ -88,7 +88,7 @@ function destinationIndex(key: string, current: number, count: number): number |
     .title { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
     .meta { font-size: .6875rem; color: var(--mut) }
     .hint { padding: 1rem .5rem; font-size: .75rem; color: var(--mut) }
-    .new:disabled { color: var(--faint); cursor: not-allowed }
+    .new:disabled { color: var(--mut); cursor: not-allowed }
   `,
 })
 export class NoteListComponent {

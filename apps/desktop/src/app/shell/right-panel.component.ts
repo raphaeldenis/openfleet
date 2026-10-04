@@ -78,7 +78,7 @@ const PANEL_TABS: readonly PanelTab[] = [
     .tab[aria-selected='true'] { color: var(--fg); font-weight: 600; border-bottom-color: var(--accent); }
     .tab[aria-disabled='true'] { cursor: not-allowed; }
     .tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-    .soon { font-size: .625rem; font-weight: 400; color: var(--mut); }
+    .soon { font-size: .6875rem; font-weight: 400; color: var(--mut); }
     .edge-button { flex: none; width: 1.375rem; height: 1.375rem; padding: 0; display: flex; align-items: center; justify-content: center; border: 1px solid var(--line-2); border-radius: .375rem; background: var(--panel); color: var(--fg); font: inherit; line-height: 1; cursor: pointer; }
     .edge-button:hover { background: var(--hover); }
     .edge-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

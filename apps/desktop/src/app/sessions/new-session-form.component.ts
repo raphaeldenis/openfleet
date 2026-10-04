@@ -136,7 +136,7 @@ function creationModeFrom(queryParams: ParamMap | undefined): CreationMode {
     .mode-toggle { display: flex; padding: .125rem; border: 1px solid var(--line); border-radius: .5rem; background: var(--sunk) }
     .mode-toggle button { height: 1.625rem; padding: 0 .75rem; border: 0; border-radius: .375rem; background: transparent; color: var(--fg); font: inherit; font-size: .75rem; cursor: pointer }
     .mode-toggle button[aria-pressed='true'] { background: var(--panel) }
-    .mode-toggle button[aria-disabled='true'] { color: var(--faint); cursor: not-allowed }
+    .mode-toggle button[aria-disabled='true'] { color: var(--mut); cursor: not-allowed }
     .mode-toggle button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
     .card { display: flex; flex-direction: column; gap: 1.25rem; min-width: 0; margin: 0; padding: 1.25rem; border: 1px solid var(--line); border-radius: .75rem; background: var(--panel) }
     .of-error { margin: 0 }
