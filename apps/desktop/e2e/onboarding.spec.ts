@@ -15,6 +15,8 @@ async function reachFirstSessionStepWithACreateThatFails(page: Page) {
   });
   await page.goto('/onboarding');
   await page.getByLabel('Repository path').fill('/tmp');
+  await page.getByLabel('Name', { exact: true }).fill('Onboarding project');
+  await page.getByRole('button', { name: 'Create project', exact: true }).click();
   await page.getByRole('button', { name: 'Continue' }).click();
 }
 

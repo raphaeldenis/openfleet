@@ -47,6 +47,8 @@ const FIXTURE_FILES: Record<string, string> = {
   'apps/desktop/src/app/design/pure.ts': 'export const pure = 1;',
   'apps/desktop/src/app/core/pure.ts': 'export const pure = 1;',
   'apps/desktop/src/app/core/api.ts': "import '../notes/noteList';\nexport const api = 1;",
+  'apps/desktop/src/app/core/usesProjects.ts': "import '../projects/projectForm';\nexport const usesProjects = 1;",
+  'apps/desktop/src/app/projects/projectForm.ts': 'export const projectForm = 1;',
   'apps/desktop/src/app/core/usesDaemon.ts': "import '../../../../../packages/core/src/notes/noteService';\nexport const usesDaemon = 1;",
   'apps/desktop/src/app/notes/noteList.ts': "import '../testing/fake';\nexport const noteList = 1;",
   'apps/desktop/src/app/testing/fake.ts': 'export const fake = 1;',
@@ -65,6 +67,7 @@ const EXPECTED_VIOLATIONS: Array<{ rule: string; from: string; to: string }> = [
   { rule: 'design-system-is-a-leaf', from: 'apps/desktop/src/app/design/badge.ts', to: 'apps/desktop/src/app/sessions/sessionList.ts' },
   { rule: 'features-never-import-the-shell', from: 'apps/desktop/src/app/sessions/sessionList.ts', to: 'apps/desktop/src/app/shell/rightPanel.ts' },
   { rule: 'app-services-import-no-feature', from: 'apps/desktop/src/app/core/api.ts', to: 'apps/desktop/src/app/notes/noteList.ts' },
+  { rule: 'app-services-import-no-feature', from: 'apps/desktop/src/app/core/usesProjects.ts', to: 'apps/desktop/src/app/projects/projectForm.ts' },
   { rule: 'production-code-never-imports-test-helpers', from: 'packages/core/src/notes/usesTestHelper.ts', to: 'packages/core/src/__testing__/helper.ts' },
   { rule: 'production-code-never-imports-test-helpers', from: 'apps/desktop/src/app/notes/noteList.ts', to: 'apps/desktop/src/app/testing/fake.ts' },
 ];

@@ -21,6 +21,7 @@ function stubDaemon() {
   const fetchMock = vi.fn((url: string) => {
     if (url.endsWith('/health')) return daemon.isUp ? Promise.resolve(jsonResponse({ ok: true, version: daemon.version })) : Promise.reject(new TypeError('Failed to fetch'));
     if (url.endsWith('/api/sessions')) return Promise.resolve(jsonResponse([]));
+    if (url.endsWith('/api/projects')) return Promise.resolve(jsonResponse({ id: '3f2b8c1e-5d4a-4b6e-9a7c-1d2e3f4a5b6c', name: 'Fleet', docsFolderPath: null }));
     return Promise.reject(new Error(`unexpected request to ${url}`));
   });
   vi.stubGlobal('fetch', fetchMock);
@@ -150,7 +151,7 @@ describe('OnboardingComponent', () => {
     expect(healthRequestCount()).toBe(requestsAtLeave);
   });
 
-  it('user cannot continue from the project step without typing the repository path', async () => {
+  it('user cannot continue from the project step without a repository path and a saved project', async () => {
     const { daemon } = stubDaemon();
     const { fixture } = await renderOnboarding();
     daemon.isUp = true;
@@ -158,7 +159,12 @@ describe('OnboardingComponent', () => {
 
     expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
 
-    await userEvent.setup({ advanceTimers: vi.advanceTimersByTime }).type(screen.getByLabelText('Repository path'), '/Users/me/repo');
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    await user.type(screen.getByLabelText('Repository path'), '/Users/me/repo');
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
+    await user.type(screen.getByLabelText('Name'), 'Fleet');
+    await user.click(screen.getByRole('button', { name: 'Create project' }));
+    await screen.findByText('Fleet', { exact: true });
 
     expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled();
   });

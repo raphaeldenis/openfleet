@@ -2,11 +2,13 @@ import { Location } from '@angular/common';
 import { ChangeDetectionStrategy, Component, DestroyRef, ElementRef, computed, effect, inject, signal, untracked, viewChild } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
+import type { Project } from '@openfleet/shared';
 import { environment } from '../../environments/environment';
 import { DaemonStatusService } from '../core/daemon-status.service';
 import { FleetApiService } from '../core/fleet-api.service';
 import { SupportActions } from '../core/support-actions';
 import { VersionsService } from '../core/versions.service';
+import { ProjectFormComponent } from '../projects/project-form.component';
 import { EmbeddedSessionSeed, NewSessionFormComponent } from '../sessions/new-session-form.component';
 
 type StepId = 'daemon' | 'providers' | 'project' | 'playbooks' | 'team' | 'first-session';
@@ -49,7 +51,7 @@ function requestedUrlFrom(navigationState: unknown): string {
 @Component({
   selector: 'of-onboarding',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FormsModule, RouterLink, NewSessionFormComponent],
+  imports: [FormsModule, RouterLink, NewSessionFormComponent, ProjectFormComponent],
   providers: [DaemonStatusService],
   viewProviders: [EmbeddedSessionSeed],
   template: `
@@ -131,6 +133,11 @@ function requestedUrlFrom(navigationState: unknown): string {
               </header>
               <form class="project-form" (ngSubmit)="continueToFirstSession()">
                 <div class="card">
+                  @if (savedProject(); as project) {
+                    <p>Project ready: <strong>{{ project.name }}</strong></p>
+                  } @else {
+                    <of-project-form (saved)="rememberProject($event)" (cancelled)="cancelProjectSetup()" />
+                  }
                   <label class="of-field">
                     <span class="of-label">Repository path</span>
                     <input class="of-input" name="repositoryPath" [ngModel]="repositoryPath()" (ngModelChange)="repositoryPath.set($event)" placeholder="/path/to/repository" />
@@ -138,7 +145,7 @@ function requestedUrlFrom(navigationState: unknown): string {
                 </div>
                 <div class="footer">
                   <span class="footer-note">Next: start your first session</span>
-                  <button type="submit" class="of-btn of-btn--primary" [disabled]="!hasRepositoryPath()">Continue</button>
+                  <button type="submit" class="of-btn of-btn--primary" [disabled]="!canContinueToFirstSession()">Continue</button>
                 </div>
               </form>
             </section>
@@ -230,6 +237,11 @@ export class OnboardingComponent {
   protected readonly currentStepId = signal<StepId>('daemon');
   protected readonly repositoryPath = signal('');
   protected readonly hasRepositoryPath = computed(() => this.repositoryPath().trim() !== '');
+  protected readonly savedProject = signal<Project | undefined>(undefined);
+  protected readonly canContinueToFirstSession = computed(() => {
+    const hasSavedProject = this.savedProject() !== undefined;
+    return this.hasRepositoryPath() && hasSavedProject;
+  });
   protected readonly hasCopiedCommand = signal(false);
   protected readonly copyFailureMessage = signal('');
   protected readonly copyStatusMessage = computed(() => this.copyFailureMessage() || (this.hasCopiedCommand() ? COPIED_ANNOUNCEMENT : ''));
@@ -355,8 +367,17 @@ export class OnboardingComponent {
     }
   }
 
+  protected rememberProject(project: Project): void {
+    this.savedProject.set(project);
+    this.firstSessionSeed.projectId.set(project.id);
+  }
+
+  protected cancelProjectSetup(): void {
+    void this.router.navigateByUrl(this.returnUrl);
+  }
+
   protected continueToFirstSession(): void {
-    if (!this.hasRepositoryPath()) return;
+    if (!this.canContinueToFirstSession()) return;
     this.firstSessionSeed.directory.set(this.repositoryPath().trim());
     this.currentStepId.set('first-session');
   }
