@@ -3,6 +3,7 @@ import { FleetApiService } from '../core/fleet-api.service';
 import { DiagnosticsExport } from '../core/diagnostics-export';
 import { buildBundle, sizeLabelOf } from './diagnostics-bundle';
 import { copiedReferencesLabel, referenceListText, referencesOf } from './diagnostics-references';
+import { SettingsRowComponent } from './settings-row.component';
 
 type ExportState =
   | { kind: 'idle' }
@@ -29,6 +30,7 @@ const COPY_FAILURE_TEXT = {
 @Component({
   selector: 'of-diagnostics-settings',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [SettingsRowComponent],
   template: `
     <section class="panel" data-testid="settings-diagnostics">
       <h1>Diagnostics</h1>
@@ -55,6 +57,7 @@ const COPY_FAILURE_TEXT = {
           </div>
           <button type="button" class="of-btn of-btn--secondary" data-testid="diagnostics-copy-references" [disabled]="isCopying()" (click)="copyReferences()">Copy</button>
         </div>
+        <of-settings-row name="Last crash" detail="Path and time of the last daemon crash log" [unavailable]="lastCrash" />
       </div>
       @if (savedState(); as saved) {
         <p class="line" role="status" data-testid="diagnostics-saved"><span class="ok">✓</span> Saved {{ saved.fileName }} · {{ saved.sizeLabel }}</p>
@@ -91,6 +94,7 @@ export class DiagnosticsSettingsComponent {
   private readonly api = inject(FleetApiService);
   protected readonly exporter = inject(DiagnosticsExport);
   protected readonly unavailableTooltip = UNAVAILABLE_TOOLTIP;
+  protected readonly lastCrash = { testId: 'diagnostics-last-crash', value: '—', reason: 'Not available yet — crash logs are not collected' };
 
   protected readonly exportState = signal<ExportState>({ kind: 'idle' });
   protected readonly copyOutcome = signal<CopyOutcome>({ kind: 'none' });

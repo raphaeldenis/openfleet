@@ -7,6 +7,9 @@ import { SETTINGS_VALUE_STYLES } from './settings-value-styles';
 /** Where the desktop app writes the daemon log when `OPENFLEET_HOME` is not set. */
 export const DAEMON_LOG_PATH = '~/.openfleet/logs/daemon.log';
 
+/** Where the daemon reads its hand-edited configuration when `OPENFLEET_HOME` is not set. */
+const DAEMON_CONFIG_PATH = '~/.openfleet/config.json';
+
 @Component({
   selector: 'of-daemon-settings',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -23,6 +26,9 @@ export const DAEMON_LOG_PATH = '~/.openfleet/logs/daemon.log';
         <of-settings-row name="Log">
           <span class="value mono" data-testid="daemon-log-path">{{ logPath }}</span>
         </of-settings-row>
+        <of-settings-row name="Config file" detail="Edited by hand for now · restart the daemon after changes">
+          <span class="value mono" data-testid="daemon-config-path">{{ configPath }}</span>
+        </of-settings-row>
       </div>
     </of-settings-section>
   `,
@@ -31,6 +37,7 @@ export const DAEMON_LOG_PATH = '~/.openfleet/logs/daemon.log';
 export class DaemonSettingsComponent {
   protected readonly daemonAddress = environment.daemonAddress;
   protected readonly logPath = DAEMON_LOG_PATH;
+  protected readonly configPath = DAEMON_CONFIG_PATH;
   /** Says whether the app holds a token; the token itself is never read into the view. */
   protected readonly adminTokenStatus = environment.adminToken.trim() !== '' ? 'found' : 'missing';
 }
