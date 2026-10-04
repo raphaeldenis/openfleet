@@ -12,7 +12,11 @@ const PULSE_FRACTION_ERROR = '✕ Pulse cadence must be between 1 and 86,400 sec
 const CAP_RANGE_ERROR = '✕ Children cap must be between 1 and 64 — enter a whole number in that range';
 
 function fakeApi() {
-  return { createSession: vi.fn().mockResolvedValue({ id: 's-new' }), createManagerSession: vi.fn().mockResolvedValue({ id: 'm-new' }) };
+  return {
+    listProjects: vi.fn().mockResolvedValue({ items: [], total: 0, limit: 200, offset: 0 }),
+    createSession: vi.fn().mockResolvedValue({ id: 's-new' }),
+    createManagerSession: vi.fn().mockResolvedValue({ id: 'm-new' }),
+  };
 }
 
 async function renderManagerForm(api = fakeApi()) {

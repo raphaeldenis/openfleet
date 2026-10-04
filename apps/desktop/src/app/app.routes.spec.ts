@@ -142,10 +142,11 @@ describe('app.routes', () => {
     await user.type(field('new-session-name'), 'Gimli');
     await user.click(field('new-session-submit'));
 
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const sentRequests = () => (fetchMock.mock.calls as unknown as [string, RequestInit][]).map(([, request]) => request);
+    const createRequestSent = () => sentRequests().find((request) => request.method === 'POST');
+    await vi.waitFor(() => expect(createRequestSent()).toBeDefined());
     await harness.fixture.whenStable();
-    const [, createRequest] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    expect(JSON.parse(createRequest.body as string)).toStrictEqual({ directory: '/tmp/wt', name: 'Gimli', emoji: '🤖', model: 'sonnet', harness: 'claude-cli' });
+    expect(JSON.parse(createRequestSent()!.body as string)).toStrictEqual({ directory: '/tmp/wt', name: 'Gimli', emoji: '🤖', model: 'sonnet', harness: 'claude-cli' });
     vi.unstubAllGlobals();
     // A loaded CI runner needs more than Vitest's 5 s default for the lazy route, the typing and the submit.
   }, 20_000);

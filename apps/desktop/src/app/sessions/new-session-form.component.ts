@@ -3,7 +3,7 @@ import { afterNextRender, ChangeDetectionStrategy, Component, computed, DestroyR
 import { toSignal } from '@angular/core/rxjs-interop';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, type ParamMap, Router, RouterLink } from '@angular/router';
-import { type HarnessId, type Session } from '@openfleet/shared';
+import { type HarnessId, type Project, type Session } from '@openfleet/shared';
 import { FleetApiService } from '../core/fleet-api.service';
 import { ManagerFieldsComponent } from '../managers/manager-fields.component';
 import { createdButNotOpenedMessage, createSessionErrorMessage } from './create-session-error';
@@ -15,6 +15,8 @@ type CreatedSession = { id: string; formFingerprint: string };
 type ServerFailure = { message: string; formFingerprint: string };
 
 const NOT_AVAILABLE_YET = 'not available yet';
+const NO_PROJECT_LABEL = 'No project';
+const NO_PROJECT_ID = '';
 const SESSION_DEFAULT_EMOJI = '🤖';
 const MANAGER_DEFAULT_EMOJI = '🧭';
 const HARNESS_OPTIONS: ReadonlyArray<{ id: string; label: string; isAvailable: boolean }> = [
@@ -66,6 +68,20 @@ function creationModeFrom(queryParams: ParamMap | undefined): CreationMode {
           <span id="new-session-directory-error" role="alert" data-testid="new-session-directory-error" class="of-error">✕ {{ error }}</span>
         }
       </div>
+      @if (projects().length > 0) {
+        <label class="of-field">
+          <span class="of-label">Project</span>
+          <select class="of-input" data-testid="new-session-project" name="project" [attr.disabled]="pending() ? '' : null" [ngModel]="projectId()" (ngModelChange)="projectId.set($event)">
+            <option [value]="noProjectId">{{ noProjectLabel }}</option>
+            @for (project of projects(); track project.id) {
+              <option [value]="project.id">{{ project.name }}</option>
+            }
+          </select>
+        </label>
+      }
+      @if (hasProjectsLoadFailed()) {
+        <p class="project-note" role="status" data-testid="new-session-project-note">Couldn't load your projects. You can still create a session without one.</p>
+      }
 
       <div class="of-section-title">Agent</div>
       <label class="of-field">
@@ -140,6 +156,7 @@ function creationModeFrom(queryParams: ParamMap | undefined): CreationMode {
     .mode-toggle button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
     .card { display: flex; flex-direction: column; gap: 1.25rem; min-width: 0; margin: 0; padding: 1.25rem; border: 1px solid var(--line); border-radius: .75rem; background: var(--panel) }
     .of-error { margin: 0 }
+    .project-note { margin: 0; font-size: .75rem; color: var(--mut) }
     .of-row { display: flex; gap: 1rem }
     .of-row .of-field { flex: 1 }
     .of-row .of-field--emoji { flex: none; width: 3.5rem }
@@ -165,6 +182,8 @@ export class NewSessionFormComponent {
   protected readonly harnessOptions = HARNESS_OPTIONS;
   protected readonly notAvailableYet = NOT_AVAILABLE_YET;
   protected readonly modelRungs = MODEL_RUNGS;
+  protected readonly noProjectLabel = NO_PROJECT_LABEL;
+  protected readonly noProjectId = NO_PROJECT_ID;
 
   private readonly embeddedSessionSeed = inject(EmbeddedSessionSeed, { optional: true });
   protected readonly isEmbedded = this.embeddedSessionSeed !== null;
@@ -184,6 +203,9 @@ export class NewSessionFormComponent {
   protected readonly typedEmoji = signal<string | null>(null);
   private readonly defaultEmoji = computed(() => (this.isManagerMode() ? MANAGER_DEFAULT_EMOJI : SESSION_DEFAULT_EMOJI));
   protected readonly emoji = computed(() => this.typedEmoji() ?? this.defaultEmoji());
+  protected readonly projects = signal<readonly Project[]>([]);
+  protected readonly hasProjectsLoadFailed = signal(false);
+  protected readonly projectId = signal(NO_PROJECT_ID);
   protected readonly harness = signal<HarnessId>('claude-cli');
   protected readonly model = signal<string>('sonnet');
   protected readonly permissionMode = signal<ChosenPermissionMode>(INHERITED_MODE);
@@ -196,6 +218,7 @@ export class NewSessionFormComponent {
   private readonly serverFailure = signal<ServerFailure | undefined>(undefined);
   private readonly spec = computed(() => {
     const chosenMode = this.permissionMode();
+    const chosenProjectId = this.projectId();
     const sharedSpec = {
       directory: this.directory().trim(),
       name: this.name().trim(),
@@ -203,6 +226,7 @@ export class NewSessionFormComponent {
       model: this.model(),
       harness: this.harness(),
       ...(chosenMode === INHERITED_MODE ? {} : { permissionMode: chosenMode }),
+      ...(chosenProjectId === NO_PROJECT_ID ? {} : { projectId: chosenProjectId }),
     };
     const seededPrompt = this.embeddedSessionSeed?.prompt().trim();
     if (!this.isManagerMode()) return { kind: 'session' as const, fields: { ...sharedSpec, ...(seededPrompt ? { seededPrompt } : {}) } };
@@ -222,11 +246,23 @@ export class NewSessionFormComponent {
 
   constructor() {
     this.destroyRef.onDestroy(() => (this.hasBeenDestroyed = true));
+    void this.loadProjects();
     effect(() => {
       const editedFormFingerprint = this.formFingerprint();
       const isCreatedSessionOfAnotherForm = untracked(() => this.createdSession()?.formFingerprint !== editedFormFingerprint);
       if (isCreatedSessionOfAnotherForm) untracked(() => this.createdSession.set(undefined));
     });
+  }
+
+  private async loadProjects(): Promise<void> {
+    try {
+      const page = await this.api.listProjects();
+      const isPageOfProjects = Array.isArray(page?.items);
+      if (!isPageOfProjects) return this.hasProjectsLoadFailed.set(true);
+      this.projects.set(page.items);
+    } catch {
+      this.hasProjectsLoadFailed.set(true);
+    }
   }
 
   protected chooseMode(chosenMode: CreationMode): void {
