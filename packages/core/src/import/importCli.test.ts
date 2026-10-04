@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { runImportCli } from './importCli.js';
+import { anArgus, writeArguses } from './scape/scapeArguses.testkit.js';
 import { buildScapeFixture, type ScapeFixture } from './scape/scapeFixture.testkit.js';
 
 describe('runImportCli', () => {
@@ -53,6 +54,32 @@ describe('runImportCli', () => {
     const result = runImportCli(argv('--dry-run', '--project', 'OpenFleet'), { homeDirectory, env: {} });
 
     expect(result.output).toContain('| notes | 1 | 1 | 0 | 0 | 0 | 0 |');
+  });
+
+  describe('the working states of the managers', () => {
+    const writeAlphaStateFileIn = (stateDirectory: string) => {
+      mkdirSync(stateDirectory, { recursive: true });
+      writeFileSync(join(stateDirectory, 'alpha.md'), '## Plan\n- a synthetic plan item');
+    };
+
+    it('seeds them from the folder named by --state-dir', () => {
+      writeArguses(fixture, [anArgus({ name: 'Alpha' })]);
+      const stateDirectory = join(fixture.workDir, 'chosen-state');
+      writeAlphaStateFileIn(stateDirectory);
+
+      const result = runImportCli(argv('--dry-run', '--state-dir', stateDirectory), { homeDirectory, env: {} });
+
+      expect(result.output).toContain('| workingStates | 1 | 1 | 0 | 0 | 0 | 0 |');
+    });
+
+    it('seeds them from scape-team/state in the Documents of the user by default', () => {
+      writeArguses(fixture, [anArgus({ name: 'Alpha' })]);
+      writeAlphaStateFileIn(join(homeDirectory, 'Documents', 'scape-team', 'state'));
+
+      const result = runImportCli(argv('--dry-run'), { homeDirectory, env: {} });
+
+      expect(result.output).toContain('| workingStates | 1 | 1 | 0 | 0 | 0 | 0 |');
+    });
   });
 
   describe('a second real import', () => {
