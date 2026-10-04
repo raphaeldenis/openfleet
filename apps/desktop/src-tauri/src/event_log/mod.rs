@@ -7,6 +7,8 @@ mod event;
 mod field;
 mod grammar;
 mod hash;
+#[cfg(test)]
+mod hostile_corpus;
 mod salt;
 
 pub use daemon_line::DaemonLineAssembler;
