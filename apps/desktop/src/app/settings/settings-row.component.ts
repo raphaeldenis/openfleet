@@ -36,7 +36,7 @@ let nextReasonSequence = 0;
     :host(:last-child) { border-bottom: 0; }
     .label { flex: 1; display: flex; flex-direction: column; }
     .name { font-weight: 500; }
-    .detail { font-size: .75rem; color: var(--mut); }
+    .detail { font-size: .75rem; color: var(--mut); overflow-wrap: anywhere; }
     .reason { display: flex; align-items: center; gap: .375rem; font-size: .75rem; color: var(--mut); }
     .dot { width: .375rem; height: .375rem; border-radius: 50%; background: var(--state-closed); }
     button.unavailable { border-width: 1px; border-style: dashed; border-color: var(--line-2); opacity: .6; cursor: not-allowed; }

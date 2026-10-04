@@ -21,7 +21,7 @@ const DISABLED_ROWS: DisabledRow[] = [
 ];
 
 const ROW_NAMES_BY_SECTION: Record<'General' | 'Daemon' | 'Diagnostics', string[]> = {
-  General: ['Setup', 'Theme', 'Docs folder root', 'Write a handoff when a session closes', 'Agents reply and write in'],
+  General: ['Setup', 'Theme', 'Docs folder root', 'Write a handoff when a session closes', 'Agents reply and write in', 'Projects'],
   Daemon: ['Address', 'Admin token', 'Log', 'Config file'],
   Diagnostics: ['Export diagnostics bundle…', 'Copy reference list', 'Last crash'],
 };

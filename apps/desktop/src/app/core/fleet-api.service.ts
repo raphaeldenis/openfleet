@@ -1,12 +1,13 @@
 import { Injectable } from '@angular/core';
 import { DIAGNOSTICS_PATH, isErrorEnvelope } from '@openfleet/shared';
 import type {
-  Approval, CreateNoteRequest, DataStore, DataStoreDetail, DiagnosticsDocument, DsRow, DsRowHistoryEntry, DsView, ErrorEnvelope, HandoffPreview, HandoffTarget, HarnessId, NoteSummary,
+  Approval, CreateNoteRequest, CreateProjectRequest, DataStore, DataStoreDetail, DiagnosticsDocument, DsRow, DsRowHistoryEntry, DsView, ErrorEnvelope, HandoffPreview, HandoffTarget, HarnessId, NoteSummary,
   NoteVersionSummary, NoteView, OrderTerm, Page, PermissionMode, Project, RestoreNoteRequest, Session, SessionSpec, SessionTodos,
-  UpdateNoteRequest, WhereClause,
+  UpdateNoteRequest, UpdateProjectRequest, WhereClause,
 } from '@openfleet/shared';
 import { environment } from '../../environments/environment';
 import { parseHandoffPreview, parseHandoffTarget } from './handoff-response-parser';
+import { parseProject } from './project-response-parser';
 import { parseSessionTodos } from './session-todos-parser';
 
 export type PageRequest = Partial<Pick<Page<unknown>, 'limit' | 'offset'>>;
@@ -143,6 +144,18 @@ export class FleetApiService {
   }
   listProjects(page?: PageRequest) {
     return page ? this.call<Page<Project>>(`/api/projects?${new URLSearchParams(pageParams(page))}`) : this.listAllPages<Project>('/api/projects', {});
+  }
+  async createProject(request: CreateProjectRequest): Promise<Project> {
+    return this.readProject('POST', '/api/projects', await this.post<unknown>('/api/projects', request));
+  }
+  async updateProject(projectId: string, patch: UpdateProjectRequest): Promise<Project> {
+    const path = `/api/projects/${encodeURIComponent(projectId)}`;
+    return this.readProject('PATCH', path, await this.patch<unknown>(path, patch));
+  }
+  private readProject(method: string, path: string, payload: unknown): Project {
+    const project = parseProject(payload);
+    if (!project) throw new ApiError(200, `${method} ${path} → unreadable project`);
+    return project;
   }
   listNotes(projectId: string, page: PageRequest = {}) { return this.call<Page<NoteSummary>>(`/api/notes?${new URLSearchParams({ projectId, ...pageParams(page) })}`); }
   getNote(projectId: string, noteId: string) { return this.call<NoteView>(this.noteUrl(noteId, '', { projectId })); }

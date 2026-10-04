@@ -6,6 +6,7 @@ import { ActivatedRoute, type ParamMap, Router, RouterLink } from '@angular/rout
 import { type HarnessId, type Project, type Session } from '@openfleet/shared';
 import { FleetApiService } from '../core/fleet-api.service';
 import { ManagerFieldsComponent } from '../managers/manager-fields.component';
+import { ProjectFormComponent } from '../projects/project-form.component';
 import { createdButNotOpenedMessage, createSessionErrorMessage } from './create-session-error';
 import { MODEL_RUNGS } from './model-selector.component';
 import { type ChosenPermissionMode, INHERITED_MODE, PermissionModeListComponent } from './permission-mode-list.component';
@@ -17,6 +18,7 @@ type ServerFailure = { message: string; formFingerprint: string };
 const NOT_AVAILABLE_YET = 'not available yet';
 const NO_PROJECT_LABEL = 'No project';
 const NO_PROJECT_ID = '';
+const PROJECT_CREATED_NOTICE = 'Project created';
 const SESSION_DEFAULT_EMOJI = '🤖';
 const MANAGER_DEFAULT_EMOJI = '🧭';
 const HARNESS_OPTIONS: ReadonlyArray<{ id: string; label: string; isAvailable: boolean }> = [
@@ -45,7 +47,7 @@ function creationModeFrom(queryParams: ParamMap | undefined): CreationMode {
 @Component({
   selector: 'of-new-session-form',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FormsModule, RouterLink, ManagerFieldsComponent, PermissionModeListComponent],
+  imports: [FormsModule, RouterLink, ManagerFieldsComponent, PermissionModeListComponent, ProjectFormComponent],
   host: { '[class.embedded]': 'isEmbedded' },
   template: `
     <form class="of-form" data-testid="new-session-form" [attr.aria-busy]="pending() || null" (ngSubmit)="submit()" novalidate>
@@ -71,13 +73,21 @@ function creationModeFrom(queryParams: ParamMap | undefined): CreationMode {
       @if (projects().length > 0) {
         <label class="of-field">
           <span class="of-label">Project</span>
-          <select class="of-input" data-testid="new-session-project" name="project" [attr.disabled]="pending() ? '' : null" [ngModel]="projectId()" (ngModelChange)="projectId.set($event)">
+          <select #projectSelect class="of-input" data-testid="new-session-project" name="project" [attr.disabled]="pending() ? '' : null" [ngModel]="projectId()" (ngModelChange)="projectId.set($event)">
             <option [value]="noProjectId">{{ noProjectLabel }}</option>
             @for (project of projects(); track project.id) {
               <option [value]="project.id">{{ project.name }}</option>
             }
           </select>
         </label>
+      } @else if (hasLoadedProjects()) {
+        <div class="of-field" data-testid="new-session-no-projects">
+          <span class="of-label">Project</span>
+          <p class="project-empty">No projects yet — <button #createProjectTrigger type="button" class="of-btn of-btn--link" [attr.aria-expanded]="isCreatingProject()" [attr.aria-disabled]="ariaDisabled()" (click)="openProjectForm()">Create a project…</button></p>
+        </div>
+      }
+      @if (isCreatingProject()) {
+        <of-project-form (saved)="selectCreatedProject($event)" (cancelled)="closeProjectForm()" />
       }
       @if (hasProjectsLoadFailed()) {
         <p class="project-note" role="status" data-testid="new-session-project-note">Couldn't load your projects. You can still create a session without one.</p>
@@ -130,7 +140,7 @@ function creationModeFrom(queryParams: ParamMap | undefined): CreationMode {
           <p role="alert" data-testid="new-session-form-error" class="of-error">✕ {{ error }}</p>
         }
         <div class="actions">
-          <span class="creating" role="status">@if (pending()) {Creating {{ mode() }}…}</span>
+          <span class="creating" role="status" data-testid="new-session-status">@if (statusText()) {{{ statusText() }}}</span>
           <ng-content />
           @if (!isEmbedded) {
             <a class="of-btn of-btn--secondary" routerLink="/" data-testid="new-session-cancel">Cancel</a>
@@ -157,6 +167,8 @@ function creationModeFrom(queryParams: ParamMap | undefined): CreationMode {
     .card { display: flex; flex-direction: column; gap: 1.25rem; min-width: 0; margin: 0; padding: 1.25rem; border: 1px solid var(--line); border-radius: .75rem; background: var(--panel) }
     .of-error { margin: 0 }
     .project-note { margin: 0; font-size: .75rem; color: var(--mut) }
+    .project-empty { display: flex; align-items: center; gap: .25rem; margin: 0; font-size: .75rem; color: var(--mut) }
+    .project-empty .of-btn { padding: 0 .25rem }
     .of-row { display: flex; gap: 1rem }
     .of-row .of-field { flex: 1 }
     .of-row .of-field--emoji { flex: none; width: 3.5rem }
@@ -178,6 +190,8 @@ export class NewSessionFormComponent {
   private readonly directoryInput = viewChild<ElementRef<HTMLInputElement>>('directoryInput');
   private readonly nameInput = viewChild<ElementRef<HTMLInputElement>>('nameInput');
   private readonly submitButton = viewChild<ElementRef<HTMLButtonElement>>('submitButton');
+  private readonly projectSelect = viewChild<ElementRef<HTMLSelectElement>>('projectSelect');
+  private readonly createProjectTrigger = viewChild<ElementRef<HTMLButtonElement>>('createProjectTrigger');
   private hasBeenDestroyed = false;
   protected readonly harnessOptions = HARNESS_OPTIONS;
   protected readonly notAvailableYet = NOT_AVAILABLE_YET;
@@ -190,6 +204,7 @@ export class NewSessionFormComponent {
   protected readonly pending = signal(false);
   readonly isPending = this.pending.asReadonly();
   protected readonly ariaDisabled = computed(() => (this.pending() ? 'true' : null));
+  protected readonly statusText = computed(() => (this.pending() ? `Creating ${this.mode()}…` : this.projectCreatedNotice()));
   private readonly createdSession = this.embeddedSessionSeed?.createdSession ?? signal<CreatedSession | undefined>(undefined);
   private readonly modeFromUrl = linkedSignal<{ urlMode: CreationMode; isHoldingMode: boolean }, CreationMode>({
     source: () => ({ urlMode: creationModeFrom(this.queryParams()), isHoldingMode: this.pending() || this.createdSession() !== undefined }),
@@ -204,7 +219,10 @@ export class NewSessionFormComponent {
   private readonly defaultEmoji = computed(() => (this.isManagerMode() ? MANAGER_DEFAULT_EMOJI : SESSION_DEFAULT_EMOJI));
   protected readonly emoji = computed(() => this.typedEmoji() ?? this.defaultEmoji());
   protected readonly projects = signal<readonly Project[]>([]);
+  protected readonly hasLoadedProjects = signal(false);
   protected readonly hasProjectsLoadFailed = signal(false);
+  protected readonly isCreatingProject = signal(false);
+  protected readonly projectCreatedNotice = signal('');
   protected readonly projectId = signal(NO_PROJECT_ID);
   protected readonly harness = signal<HarnessId>('claude-cli');
   protected readonly model = signal<string>('sonnet');
@@ -260,9 +278,29 @@ export class NewSessionFormComponent {
       const isPageOfProjects = Array.isArray(page?.items);
       if (!isPageOfProjects) return this.hasProjectsLoadFailed.set(true);
       this.projects.set(page.items);
+      this.hasLoadedProjects.set(true);
     } catch {
       this.hasProjectsLoadFailed.set(true);
     }
+  }
+
+  protected openProjectForm(): void {
+    if (this.pending()) return;
+    this.projectCreatedNotice.set('');
+    this.isCreatingProject.set(true);
+  }
+
+  protected closeProjectForm(): void {
+    this.isCreatingProject.set(false);
+    this.focusAfterRender(() => this.createProjectTrigger()?.nativeElement.focus());
+  }
+
+  protected selectCreatedProject(createdProject: Project): void {
+    this.projects.update((projects) => [...projects, createdProject]);
+    this.projectId.set(createdProject.id);
+    this.isCreatingProject.set(false);
+    this.projectCreatedNotice.set(PROJECT_CREATED_NOTICE);
+    this.focusAfterRender(() => this.projectSelect()?.nativeElement.focus());
   }
 
   protected chooseMode(chosenMode: CreationMode): void {
