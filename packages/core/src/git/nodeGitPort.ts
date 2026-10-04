@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { statSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
-import type { GitPort } from '../notes/handoffService.js';
+import type { GitCallOptions, GitPort } from '../notes/gitPort.js';
 
 const GIT_TIMEOUT_MS = 2_000;
 const MAX_OUTPUT_BYTES = 256 * 1024;
@@ -27,15 +27,16 @@ export interface NodeGitPortOptions {
 export function createNodeGitPort(options: NodeGitPortOptions = {}): GitPort {
   const { timeoutMs = GIT_TIMEOUT_MS, maxBufferBytes = MAX_OUTPUT_BYTES, gitExecutable = 'git' } = options;
 
-  const runGit = (directory: string, subcommand: string[]): string => {
+  const runGit = (directory: string, subcommand: string[], callOptions: GitCallOptions = {}): string => {
     assertExistingAbsoluteDirectory(directory);
+    const callTimeoutMs = Math.min(timeoutMs, callOptions.timeoutMs ?? timeoutMs);
     try {
       return execFileSync(gitExecutable, [...NON_INTERACTIVE_CONFIG, ...subcommand], {
         cwd: directory,
         env: minimalGitEnvironment(),
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'ignore'],
-        timeout: timeoutMs,
+        timeout: callTimeoutMs,
         killSignal: 'SIGKILL',
         maxBuffer: maxBufferBytes,
       });
@@ -48,8 +49,8 @@ export function createNodeGitPort(options: NodeGitPortOptions = {}): GitPort {
   };
 
   return {
-    statusShort: (directory) => runGit(directory, ['status', '--short']),
-    diffStatOf: (directory) => runGit(directory, ['diff', '--stat', '--no-ext-diff', '--no-textconv']),
+    statusShort: (directory, callOptions) => runGit(directory, ['status', '--short'], callOptions),
+    diffStatOf: (directory, callOptions) => runGit(directory, ['diff', '--stat', '--no-ext-diff', '--no-textconv'], callOptions),
   };
 }
 

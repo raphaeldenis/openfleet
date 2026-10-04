@@ -3,6 +3,7 @@ import { inTransaction } from '../../db/transaction.js';
 import type { EntityName, ImportReport } from './importReport.js';
 import { ACTOR_LABEL_PREFIX, IMPORT_AUTHOR } from './scapeMappers.js';
 import type { ImportPlan, PlannedRecord } from './scapePlan.js';
+import { writeManagers } from './scapeManagersWriter.js';
 import { KEEP_STORED_RECORD, REPORT_DIFFERENCE_AS_CONFLICT, upsertRecord, type RecordValues, type UpsertOutcome, type WritePolicy } from './scapeTarget.js';
 import { writePlaybookArchives } from './playbookArchive.js';
 
@@ -148,7 +149,7 @@ function writeHistory(db: DatabaseSync, plan: ImportPlan, report: ImportReport, 
 }
 
 /** The whole write phase is one transaction, each entity family a savepoint inside it: any failure undoes the run. */
-export function writePlan(db: DatabaseSync, plan: ImportPlan, report: ImportReport, beforeCommit: () => void): void {
+export function writePlan(db: DatabaseSync, plan: ImportPlan, report: ImportReport, beforeCommit: (managerOutcomes: Map<string, UpsertOutcome>) => void): void {
   inTransaction(db, 'importScape', () => {
     inTransaction(db, 'importScapeProjects', () => writeProjects(db, plan, report));
     inTransaction(db, 'importScapeNotes', () => writeNotes(db, plan, report));
@@ -156,6 +157,7 @@ export function writePlan(db: DatabaseSync, plan: ImportPlan, report: ImportRepo
     const blockedStores = inTransaction(db, 'importScapeDataStores', () => writeDataStoreDefinitions(db, plan, report));
     const rowOutcomes = inTransaction(db, 'importScapeRows', () => writeRows(db, plan, report, blockedStores));
     inTransaction(db, 'importScapeHistory', () => writeHistory(db, plan, report, { blockedStores, rowOutcomes }));
-    beforeCommit();
+    const managerOutcomes = inTransaction(db, 'importScapeManagers', () => writeManagers(db, plan, report));
+    beforeCommit(managerOutcomes);
   });
 }

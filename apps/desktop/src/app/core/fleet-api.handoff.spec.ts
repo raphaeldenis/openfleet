@@ -79,6 +79,47 @@ describe('FleetApiService handoff routes', () => {
     await expect(api.getHandoffTarget('s1')).rejects.toBeInstanceOf(ApiError);
   });
 
+  describe('closeSession', () => {
+    const bodySent = () => JSON.parse(String((fetchMock.mock.calls[0]![1] as RequestInit).body));
+
+    it('asks for the handoff and answers what the daemon did with it', async () => {
+      const failed = { status: 'failed', error: 'docs_folder_not_writable', message: 'the docs folder is not writable.' };
+      answerWith({ handoff: failed });
+
+      await expect(api.closeSession('s1', { writeHandoff: true })).resolves.toEqual({ handoff: failed });
+
+      expect(bodySent()).toEqual({ writeHandoff: true });
+    });
+
+    it('sends an empty body when no handoff is asked for', async () => {
+      answerWith({});
+
+      await expect(api.closeSession('s1')).resolves.toEqual({});
+
+      expect(bodySent()).toEqual({});
+    });
+
+    it.each([
+      ['written', { status: 'written', relativePath: 'handoffs/a.md' }],
+      ['skipped', { status: 'skipped', reason: 'target_unavailable' }],
+    ])('reads a %s handoff', async (_status, handoff) => {
+      answerWith({ handoff });
+
+      await expect(api.closeSession('s1', { writeHandoff: true })).resolves.toEqual({ handoff });
+    });
+
+    it.each([
+      ['an unknown status', { status: 'maybe' }],
+      ['a failure without its message', { status: 'failed', error: 'docs_folder_not_writable' }],
+      ['a failure with an unknown code', { status: 'failed', error: 'because', message: 'x' }],
+      ['a handoff that is not an object', 'written'],
+    ])('ignores a handoff with %s and still reports the close', async (_label, handoff) => {
+      answerWith({ handoff });
+
+      await expect(api.closeSession('s1', { writeHandoff: true })).resolves.toEqual({});
+    });
+  });
+
   it('rejects with the error envelope of the daemon when the session is unknown', async () => {
     const envelope = { error: 'session_not_found', kind: 'not_found', retry: 'never', message: 'No such session.' };
     fetchMock.mockResolvedValue(fakeResponse({ ok: false, status: 404, json: () => Promise.resolve(envelope) }));

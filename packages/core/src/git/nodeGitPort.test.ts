@@ -112,6 +112,14 @@ describe('createNodeGitPort', () => {
 
       expect(Date.now() - startedAt).toBeLessThan(2_000);
     });
+
+    it('lets one call ask for a shorter timeout than the port default', () => {
+      const repo = makeRepoWithCommittedFile();
+      const port = createNodeGitPort();
+
+      expect(() => port.statusShort(repo, { timeoutMs: 1 })).toThrow();
+      expect(() => port.diffStatOf(repo, { timeoutMs: 1 })).toThrow();
+    });
   });
 
   describe('when the output exceeds the buffer cap', () => {

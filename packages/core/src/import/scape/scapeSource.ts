@@ -2,6 +2,7 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { readArguses, type ScapeArgus } from './scapeArguses.js';
 import { ScapeImportError } from './scapeImportError.js';
 import { snapshotSqliteDatabase } from './sqliteSnapshot.js';
 
@@ -56,6 +57,10 @@ export class ScapeSource {
     this.notesDb?.close();
     this.datastoreDbs.forEach((db) => db?.close());
     rmSync(this.scratchDir, { recursive: true, force: true });
+  }
+
+  arguses(): ScapeArgus[] {
+    return readArguses(this.scapeDir);
   }
 
   projects(): ScapeProject[] {

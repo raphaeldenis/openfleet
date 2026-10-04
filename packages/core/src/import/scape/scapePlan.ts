@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { columnsByCellKey, mapChange, mapColumn, mapNote, mapRow, mapVersions, mapView, type MappedColumn } from './scapeMappers.js';
 import type { RecordValues } from './scapeTarget.js';
 import { ScapeImportError } from './scapeImportError.js';
+import { planManagers, type PlannedManager } from './scapeManagers.js';
 import type { ScapeProject, ScapeSource } from './scapeSource.js';
 import { scapeNotesDateToIso } from './scapeTime.js';
 import { planPlaybookArchive, type PlannedPlaybookArchive } from './playbookArchive.js';
@@ -22,9 +23,11 @@ export interface ImportPlan {
   rows: PlannedRecord<{ hasStaleSelectValue: boolean }>[];
   history: PlannedRecord[];
   skippedHistoryCount: number;
+  managers: PlannedManager[];
+  skippedManagerCount: number;
 }
 
-export interface PlanOptions { projectName: string | undefined; superpowersRoot: string }
+export interface PlanOptions { projectName: string | undefined; superpowersRoot: string; managersRoot: string }
 
 const directoryNamesIn = (root: string): string[] =>
   existsSync(root) ? readdirSync(root, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name) : [];
@@ -45,7 +48,7 @@ function selectProjects(source: ScapeSource, projectName: string | undefined): S
   return selected;
 }
 
-const emptyPlan = (): ImportPlan => ({ playbookArchives: [], projects: [], notes: [], noteVersions: [], dataStores: [], columns: [], views: [], skippedViewCount: 0, rows: [], history: [], skippedHistoryCount: 0 });
+const emptyPlan = (): ImportPlan => ({ playbookArchives: [], projects: [], notes: [], noteVersions: [], dataStores: [], columns: [], views: [], skippedViewCount: 0, rows: [], history: [], skippedHistoryCount: 0, managers: [], skippedManagerCount: 0 });
 
 function planNotes(plan: ImportPlan, source: ScapeSource, project: ScapeProject): void {
   for (const note of source.notesOf(project.id)) {
@@ -117,5 +120,9 @@ export function buildImportPlan(source: ScapeSource, options: PlanOptions): Impo
     if (archive !== undefined) plan.playbookArchives.push(archive);
     planStores(plan, source, project);
   }
+  const availableResources = { noteIds: new Set(plan.notes.map((note) => note.id)), tableIds: new Set(plan.dataStores.map((store) => store.id)) };
+  const managersPlan = planManagers({ arguses: source.arguses(), notes: plan.notes, availableResources, managersRoot: options.managersRoot });
+  plan.managers = managersPlan.managers;
+  plan.skippedManagerCount = managersPlan.skippedCount;
   return plan;
 }

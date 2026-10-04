@@ -15,7 +15,7 @@ interface DisabledRow {
 
 const DISABLED_ROWS: DisabledRow[] = [
   { section: 'General', name: 'Docs folder root', buttonTestId: 'general-docs-root', value: '—', reason: 'Not configurable in this build yet' },
-  { section: 'General', name: 'Write a handoff when a session closes', buttonTestId: 'general-handoff-on-close', value: 'Off', reason: 'Not available yet — the daemon has no close hook' },
+  { section: 'General', name: 'Write a handoff when a session closes', buttonTestId: 'general-handoff-on-close', value: 'Set in config.json', reason: 'Set handoff.writeOnClose in config.json' },
   { section: 'General', name: 'Agents reply and write in', buttonTestId: 'general-reply-language', value: '—', reason: 'Not available yet — no language setting in the daemon' },
   { section: 'Diagnostics', name: 'Last crash', buttonTestId: 'diagnostics-last-crash', value: '—', reason: 'Not available yet — crash logs are not collected' },
 ];

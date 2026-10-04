@@ -1,4 +1,4 @@
-export const ENTITY_NAMES = ['projects', 'notes', 'noteVersions', 'playbooks', 'dataStores', 'columns', 'views', 'rows', 'history'] as const;
+export const ENTITY_NAMES = ['projects', 'notes', 'noteVersions', 'playbooks', 'dataStores', 'columns', 'views', 'rows', 'history', 'managers'] as const;
 export type EntityName = (typeof ENTITY_NAMES)[number];
 
 export interface EntityCounts {
@@ -16,6 +16,8 @@ export interface ImportReport {
   counts: Record<EntityName, EntityCounts>;
   projectsWithoutDocsFolder: string[];
   unconvertedNodeTypes: Record<string, number>;
+  /** Playbook mentions in manager missions that have no native resource to resolve. */
+  pendingPlaybookMentions: number;
   reportPath?: string;
 }
 
@@ -26,6 +28,7 @@ export const emptyReport = (input: { dryRun: boolean }): ImportReport => ({
   counts: Object.fromEntries(ENTITY_NAMES.map((name) => [name, emptyCounts()])) as Record<EntityName, EntityCounts>,
   projectsWithoutDocsFolder: [],
   unconvertedNodeTypes: {},
+  pendingPlaybookMentions: 0,
 });
 
 const countsRow = (name: EntityName, counts: EntityCounts) =>
@@ -47,10 +50,13 @@ export function renderImportReport(report: ImportReport): string {
     '',
     'Conflict: the record was changed in OpenFleet (newer row, foreign history entry or note version, higher note rev, renamed definition, deleted row) and is left as it is.',
     '',
-    'Not converted: notes and versions holding at least one lexical node without a markdown form; playbooks archived as inert text in one note per project (playbook counts follow the archive write outcome); kanban views whose card fields were dropped or that could not be mapped; rows holding a select value that is not one of the column options; log entries that changed nothing.',
+    'Not converted: notes and versions holding at least one lexical node without a markdown form; playbooks archived as inert text in one note per project (playbook counts follow the archive write outcome); kanban views whose card fields were dropped or that could not be mapped; rows holding a select value that is not one of the column options; log entries that changed nothing; managers whose mission note is outside the import or whose mission is unusable, whose model is not a known alias, or whose granted note or table is not imported.',
     '',
     '## Lexical node types not converted',
     ...bulletList(unconvertedNodeTypes),
+    '',
+    '## Playbook mentions — MIG-05 archives and native resolution',
+    `${report.pendingPlaybookMentions} playbook mention(s) in manager missions have no native playbook resource to resolve. MIG-05 archives their authoring text as notes; native playbook mentions remain "not resolved".`,
     '',
     '## Projects without a docs folder',
     ...bulletList(report.projectsWithoutDocsFolder),

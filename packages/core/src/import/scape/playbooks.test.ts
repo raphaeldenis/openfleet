@@ -5,6 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 import { importScape } from './importScape.js';
 import { buildScapeFixture, editScapeNotes, OPENFLEET_PROJECT_ID, CCM_PROJECT_ID } from './scapeFixture.testkit.js';
+import { anArgus, LEAD_ARGUS_ID, writeArguses } from './scapeArguses.testkit.js';
 
 function fixtureWithPlaybooks() {
   const fixture = buildScapeFixture();
@@ -61,13 +62,20 @@ describe('playbook migration', () => {
   });
 
   it('writes zero on the second run and preserves note versions', () => {
-    const { options } = fixtureWithPlaybooks();
-    importScape(options);
+    const { options, fixture } = fixtureWithPlaybooks();
+    writeArguses(fixture, [anArgus()]);
+    const first = importScape(options);
+    expect(first.counts.managers).toMatchObject({ expected: 1, written: 1 });
+    expect(existsSync(join(options.home, 'managers', 'Alpha'))).toBe(true);
+    const managerIds = withTarget(options.home, (db) => db.prepare('SELECT session_id FROM managers').all());
+    expect(managerIds).toEqual([{ session_id: LEAD_ARGUS_ID }]);
     const firstNotes = withTarget(options.home, (db) => db.prepare('SELECT * FROM notes ORDER BY id').all());
     const firstVersions = withTarget(options.home, (db) => db.prepare('SELECT * FROM note_versions ORDER BY id').all());
     const second = importScape(options);
     expect(Object.values(second.counts).every((counts) => counts.written === 0 && counts.updated === 0)).toBe(true);
     expect(second.counts).toHaveProperty('playbooks', expect.objectContaining({ alreadyPresent: 3 }));
+    expect(second.counts.managers).toMatchObject({ alreadyPresent: 1, written: 0 });
+    expect(withTarget(options.home, (db) => db.prepare('SELECT session_id FROM managers').all())).toEqual(managerIds);
     expect(withTarget(options.home, (db) => db.prepare('SELECT * FROM notes ORDER BY id').all())).toEqual(firstNotes);
     expect(withTarget(options.home, (db) => db.prepare('SELECT * FROM note_versions ORDER BY id').all())).toEqual(firstVersions);
     expect(readdirSync(options.scratchRoot)).toEqual([]);
