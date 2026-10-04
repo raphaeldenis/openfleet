@@ -35,6 +35,7 @@ const HARNESS_OPTIONS: ReadonlyArray<{ id: string; label: string; isAvailable: b
 // destroys and mounts again opens that session instead of creating a second one.
 @Injectable()
 export class EmbeddedSessionSeed {
+  readonly projectId = signal('');
   readonly directory = signal('');
   readonly name = signal('');
   readonly prompt = signal('');
@@ -224,7 +225,7 @@ export class NewSessionFormComponent {
   protected readonly hasProjectsLoadFailed = signal(false);
   protected readonly isCreatingProject = signal(false);
   protected readonly projectCreatedNotice = signal('');
-  protected readonly projectId = signal(NO_PROJECT_ID);
+  protected readonly projectId = signal(this.embeddedSessionSeed?.projectId() ?? NO_PROJECT_ID);
   protected readonly harness = signal<HarnessId>('claude-cli');
   protected readonly model = signal<string>('sonnet');
   protected readonly permissionMode = signal<ChosenPermissionMode>(INHERITED_MODE);
