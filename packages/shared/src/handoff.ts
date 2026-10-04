@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import * as z from 'zod';
 import type { ErrorCode } from './errors.js';
 
 export const HANDOFF_SECTION_KEYS = ['goal', 'state', 'decisions', 'filesTouched', 'nextSteps', 'openQuestions'] as const;

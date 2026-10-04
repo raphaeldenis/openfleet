@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import * as z from 'zod';
 
 export const WORKING_STATE_SECTIONS = ['plan', 'todo', 'remaining', 'questionsForHuman', 'internalQuestions', 'blockers'] as const;
 export type WorkingStateSectionKey = (typeof WORKING_STATE_SECTIONS)[number];

@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import * as z from 'zod';
 
 export const DEFAULT_PAGE_LIMIT = 100;
 export const MAX_NOTE_PAGE_LIMIT = 200;
