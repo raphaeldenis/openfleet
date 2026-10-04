@@ -30,6 +30,20 @@ export const withoutRealTerminal = {
 
 export const RENDER_FRAME_MS = 20;
 
+const SESSION_HEADER_CHOICE_KEY_PREFIX = 'openfleet.sessionHeader.open.';
+
+/** Makes every session's header start expanded, as if the user had left it open: the switch and action controls live in it. */
+export function leaveSessionHeadersOpen() {
+  const storedValueOf = Storage.prototype.getItem;
+  vi.spyOn(Storage.prototype, 'getItem').mockImplementation(function (this: Storage, key: string) {
+    const isHeaderChoice = key.startsWith(SESSION_HEADER_CHOICE_KEY_PREFIX);
+    return isHeaderChoice ? 'true' : storedValueOf.call(this, key);
+  });
+  onTestFinished(() => {
+    vi.restoreAllMocks();
+  });
+}
+
 /**
  * Returns an `elapse(ms)` for a fixture under fake timers: it advances the clock by `ms`, then waits for the render.
  * A timer that fires on the very last millisecond schedules a render that only a further tick of the clock runs, so while
