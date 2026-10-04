@@ -5,6 +5,7 @@ import { VersionsService } from '../core/versions.service';
 import { versionMismatchNoticeOf } from '../core/version-mismatch-notice';
 import { BannerComponent } from '../design/banner.component';
 import { CopyDetailsButtonComponent } from '../design/copy-details-button.component';
+import { ErrorLineComponent } from '../design/error-line.component';
 import { DAEMON_LOG_PATH } from './daemon-settings.component';
 import { SettingsRowComponent } from './settings-row.component';
 import { SettingsSectionComponent } from './settings-section.component';
@@ -22,7 +23,7 @@ const SUPPORT_FAILURES: Record<SupportAction, string> = {
 @Component({
   selector: 'of-about-settings',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [SettingsSectionComponent, SettingsRowComponent, BannerComponent, CopyDetailsButtonComponent],
+  imports: [SettingsSectionComponent, SettingsRowComponent, BannerComponent, CopyDetailsButtonComponent, ErrorLineComponent],
   template: `
     <of-settings-section heading="About" testId="settings-about">
       @if (mismatchNotice(); as notice) {
@@ -45,7 +46,7 @@ const SUPPORT_FAILURES: Record<SupportAction, string> = {
         </of-settings-row>
       </div>
       @if (supportError(); as message) {
-        <p class="error" role="alert" data-testid="about-support-error">{{ message }}</p>
+        <p class="error" role="alert" data-testid="about-support-error"><of-error-line>{{ message }}</of-error-line></p>
       }
     </of-settings-section>
   `,

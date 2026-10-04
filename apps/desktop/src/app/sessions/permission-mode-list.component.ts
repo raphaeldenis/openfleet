@@ -1,5 +1,6 @@
 import { afterNextRender, ChangeDetectionStrategy, Component, computed, ElementRef, inject, Injector, input, model, signal, viewChild } from '@angular/core';
 import { PERMISSION_MODES, type PermissionMode } from '@openfleet/shared';
+import { ErrorLineComponent } from '../design/error-line.component';
 import { INHERITED_EXPLANATION, PERMISSION_MODE_EXPLANATIONS } from './permission-mode-picker.component';
 
 export const INHERITED_MODE = '';
@@ -25,6 +26,7 @@ const ARROW_KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
 @Component({
   selector: 'of-permission-mode-list',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [ErrorLineComponent],
   template: `
     <div class="permission-mode-list" (keydown.escape)="cancelDangerousModeOnEscape()">
       <span class="of-label" id="permission-mode-list-label">Permission mode</span>
@@ -36,6 +38,7 @@ const ARROW_KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
               [attr.aria-labelledby]="'permission-mode-name-' + option.label" [attr.aria-describedby]="'permission-mode-explanation-' + option.label"
               (change)="choose(option)"
             />
+            @if (option.isDangerous) {<span class="danger-glyph" aria-hidden="true">!</span>}
             <span class="name" [id]="'permission-mode-name-' + option.label">{{ option.label }}</span>
             <span class="explanation" [id]="'permission-mode-explanation-' + option.label">{{ option.explanation }}</span>
           </label>
@@ -43,9 +46,9 @@ const ARROW_KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
       </div>
       @if (isConfirmingDangerousMode()) {
         <div class="confirm" data-testid="new-session-permission-mode-bypass-confirm-row">
-          <span role="alert" class="of-error">✕ {{ dangerousModeWarning }}</span>
+          <of-error-line role="alert">{{ dangerousModeWarning }}</of-error-line>
           @if (isAnswerDemanded()) {
-            <span role="status" class="of-error" data-testid="new-session-permission-mode-answer-hint">Confirm or cancel this warning before creating.</span>
+            <of-error-line role="status" data-testid="new-session-permission-mode-answer-hint" [glyph]="false">Confirm or cancel this warning before creating.</of-error-line>
           }
           <button type="button" class="of-btn of-btn--secondary" (click)="cancelDangerousMode()">Cancel</button>
           <button #confirmButton type="button" class="of-btn of-btn--primary" (click)="confirmDangerousMode()">Confirm</button>
@@ -58,7 +61,7 @@ const ARROW_KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
     .options { display: flex; flex-direction: column; gap: .125rem }
     .option { display: flex; align-items: center; gap: .5rem; height: 1.625rem; padding: 0 .5rem; border: 1px solid var(--line); border-radius: .375rem; cursor: pointer }
     .option[data-selected='1'] { border-color: var(--accent); background: var(--accent-bg) }
-    .option[data-dangerous='1'] .name { color: var(--state-error) }
+    .danger-glyph { flex: none; margin-right: -.25rem; font-weight: 700; color: var(--state-error) }
     .option[data-dangerous='1'][data-selected='1'] { border-color: var(--state-error); background: color-mix(in oklch, var(--state-error) 12%, transparent) }
     .option:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: -2px }
     input { flex: none; margin: 0; accent-color: var(--accent) }

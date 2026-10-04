@@ -2,6 +2,7 @@ import { ChangeDetectionStrategy, Component, Injector, afterNextRender, computed
 import { toSignal } from '@angular/core/rxjs-interop';
 import { ActivatedRoute } from '@angular/router';
 import { ApiError, FleetApiService, type PageRequest } from '../core/fleet-api.service';
+import { ErrorLineComponent } from '../design/error-line.component';
 import { DirectoryOpener } from './directory-opener';
 import { ageLabel } from './note-age';
 import { NoteConflictBannerComponent, type ConflictingVersion, type ConflictResolution } from './note-conflict-banner.component';
@@ -61,7 +62,7 @@ async function fetchAllPages<T>(fetchPage: (request: PageRequest) => Promise<Pag
 
 @Component({
   selector: 'of-notes-view',
-  imports: [NoteListComponent, NoteEditorComponent, NoteHistoryComponent, NoteConflictBannerComponent, NoteStatePanelComponent],
+  imports: [ErrorLineComponent, NoteListComponent, NoteEditorComponent, NoteHistoryComponent, NoteConflictBannerComponent, NoteStatePanelComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   host: { 'data-testid': 'notes-view' },
   template: `
@@ -85,7 +86,7 @@ async function fetchAllPages<T>(fetchPage: (request: PageRequest) => Promise<Pag
     <section class="pane">
       @if (actionFailure(); as failure) {
         <div class="action-failure" role="alert" data-testid="note-action-error">
-          <span class="action-failure-title" data-testid="note-action-error-title">✕ {{ failure.title }}</span>
+          <of-error-line class="action-failure-title" data-testid="note-action-error-title">{{ failure.title }}</of-error-line>
           <span class="action-failure-reason" [attr.title]="failure.detail || null" data-testid="note-action-error-reason">{{ failure.reason }}</span>
           <button type="button" class="of-btn of-btn--secondary" data-testid="note-action-error-dismiss" (click)="actionFailure.set(null)">Dismiss</button>
         </div>
@@ -149,7 +150,7 @@ async function fetchAllPages<T>(fetchPage: (request: PageRequest) => Promise<Pag
     .project-select:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
     .pane { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column }
     .action-failure { flex: none; display: flex; align-items: center; gap: .75rem; padding: .5rem 1.25rem; border-bottom: 1px solid var(--line); font-size: .75rem }
-    .action-failure-title { color: var(--state-error); font-weight: 600 }
+    .action-failure-title { font-weight: 600 }
     .action-failure-reason { flex: 1; color: var(--mut) }
     .no-project { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .5rem; color: var(--mut) }
     .no-project-headline { color: var(--fg); font-weight: 500 }

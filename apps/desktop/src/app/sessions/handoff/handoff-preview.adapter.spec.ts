@@ -45,7 +45,7 @@ describe('createHandoffPreviewApi', () => {
 
     const failure = await createHandoffPreviewApi(fleetApi).getPreview('s1').catch((error: unknown) => error);
 
-    expect(failure).toMatchObject({ copy: 'The handoff preview could not be collected — check your connection, then try again.' });
+    expect(failure).toMatchObject({ copy: 'The preview could not be loaded — check your connection, then try again.' });
   });
 
   it('refuses to save: saving handoffs is not available yet', async () => {

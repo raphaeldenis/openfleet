@@ -11,7 +11,7 @@ const CURRENT_USER_AUTHOR = 'You';
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div #bar class="bar" role="alert" tabindex="-1" data-testid="note-conflict-bar">
-      <span class="label">! Edit conflict</span>
+      <span class="label" data-testid="note-conflict-label"><span class="glyph" aria-hidden="true">!</span> Edit conflict</span>
       <span class="message" data-testid="note-conflict-message">{{ message() }}</span>
       @if (restoreRev() !== null) {
         <button type="button" class="of-btn of-btn--primary of-btn--compact" data-testid="note-conflict-keep-current" (click)="resolve.emit('theirs')">Keep current</button>
@@ -38,7 +38,8 @@ const CURRENT_USER_AUTHOR = 'You';
       background: color-mix(in oklch, var(--state-waiting-permission) 12%, var(--panel));
       border-bottom: 1px solid var(--line);
     }
-    .label { color: var(--state-waiting-permission); font-weight: 600 }
+    .label { color: var(--fg); font-weight: 600 }
+    .glyph { color: var(--state-waiting-permission) }
     .message { flex: 1; min-width: 0; overflow-wrap: anywhere }
     .bar:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
     .versions { display: flex; flex-direction: column; gap: .5rem; padding: .75rem 1.25rem; font-size: .8125rem }

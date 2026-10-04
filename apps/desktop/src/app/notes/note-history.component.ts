@@ -1,16 +1,18 @@
 import { ChangeDetectionStrategy, Component, computed, input, linkedSignal, output } from '@angular/core';
+import { ErrorLineComponent } from '../design/error-line.component';
 import { absoluteDateLabel, ageLabel } from './note-age';
 import type { NoteVersionSummary } from '@openfleet/shared';
 
 @Component({
   selector: 'of-note-history',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [ErrorLineComponent],
   host: { '(keydown.escape)': 'close.emit()' },
   template: `
     <div class="title">History</div>
     @if (error()) {
       <div class="error" role="alert" data-testid="note-history-error">
-        <span [attr.title]="errorDetail() || null">Couldn’t load the history: {{ error() }}</span>
+        <of-error-line [attr.title]="errorDetail() || null">Couldn’t load the history: {{ error() }}</of-error-line>
         <button type="button" class="of-btn of-btn--secondary" data-testid="note-history-retry" (click)="retry.emit()">Retry</button>
       </div>
     }
@@ -54,7 +56,6 @@ import type { NoteVersionSummary } from '@openfleet/shared';
     .author { font-weight: 500; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
     .when, .rev { font-family: var(--mono); font-size: .6875rem; color: var(--mut) }
     .error { display: flex; flex-direction: column; gap: .5rem; padding: .625rem .875rem; font-size: .75rem; color: var(--mut) }
-    .error { color: var(--state-error) }
     .actions { padding: .75rem .875rem }
     .restore { width: 100% }
   `,

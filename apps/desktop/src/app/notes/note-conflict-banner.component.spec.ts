@@ -28,6 +28,17 @@ describe('NoteConflictBannerComponent', () => {
     expect(screen.getByTestId('note-conflict-theirs')).toHaveTextContent('Retry with jitter and replay missed events.');
   });
 
+  it('writes the conflict label in the foreground colour behind an amber glyph', async () => {
+    await renderBanner();
+
+    const label = screen.getByTestId('note-conflict-label');
+    const glyph = label.querySelector('[aria-hidden="true"]') as Element;
+
+    expect(label).toHaveTextContent('Edit conflict');
+    expect(getComputedStyle(label).color).toBe('var(--fg)');
+    expect(getComputedStyle(glyph).color).toBe('var(--state-waiting-permission)');
+  });
+
   it('offers its choices as compact buttons, the merge being the primary one', async () => {
     await renderBanner();
 

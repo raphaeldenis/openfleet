@@ -4,6 +4,7 @@ import { copyFor } from '../core/error-copy';
 import { FleetApiService } from '../core/fleet-api.service';
 import { PendingSwitchesService } from '../core/pending-switches.service';
 import { SessionRequestsService } from '../core/session-requests';
+import { ErrorLineComponent } from '../design/error-line.component';
 import { StateChipComponent } from '../design/state-chip.component';
 import { ModelSelectorComponent } from './model-selector.component';
 import { PermissionModePickerComponent } from './permission-mode-picker.component';
@@ -17,7 +18,7 @@ import { readRememberedHeaderChoice, rememberHeaderChoice } from './session-head
 @Component({
   selector: 'of-session-header',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [StateChipComponent, ModelSelectorComponent, PermissionModePickerComponent, SessionActionsComponent, HandoffPreviewHostComponent],
+  imports: [ErrorLineComponent, StateChipComponent, ModelSelectorComponent, PermissionModePickerComponent, SessionActionsComponent, HandoffPreviewHostComponent],
   template: `
     <header class="session-header" data-testid="session-header">
       <div class="identity-row" data-testid="session-header-row">
@@ -42,7 +43,7 @@ import { readRememberedHeaderChoice, rememberHeaderChoice } from './session-head
           (keydown.escape)="cancelNameEdit(nameInput)"
         />
         @if (renameError(); as error) {
-          <span role="alert" data-testid="session-rename-error" class="of-error">✕ {{ error }}</span>
+          <of-error-line role="alert" data-testid="session-rename-error">{{ error }}</of-error-line>
         }
         <of-state-chip [state]="session().state" [since]="session().stateSince" />
         @if (session().state === 'closed') {
@@ -121,7 +122,7 @@ import { readRememberedHeaderChoice, rememberHeaderChoice } from './session-head
     .emoji:focus, .name:focus { border-color: var(--accent); outline: 0; }
     .emoji { font-size: 1.125rem; width: 2.25rem; text-align: center; }
     .name { font-weight: 600; font-size: 1rem; width: 9rem; text-overflow: ellipsis; }
-    .exit-code { font-family: var(--mono); font-size: .75rem; color: var(--state-closed); }
+    .exit-code { font-family: var(--mono); font-size: .75rem; color: var(--mut); }
     .harness {
       display: inline-flex; align-items: center; height: 1.5rem;
       font-size: .75rem; color: var(--mut); border: 1px solid var(--line); border-radius: .375rem; padding: 0 .5rem;

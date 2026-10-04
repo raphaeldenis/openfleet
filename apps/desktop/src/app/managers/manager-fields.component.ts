@@ -1,5 +1,6 @@
 import { ChangeDetectionStrategy, Component, computed, ElementRef, input, model, OnInit, signal, viewChild } from '@angular/core';
 import { ControlContainer, FormsModule, NgForm } from '@angular/forms';
+import { ErrorLineComponent } from '../design/error-line.component';
 
 const PULSE_SECONDS_BOUNDS = { min: 1, max: 86_400 };
 const CHILDREN_CAP_BOUNDS = { min: 1, max: 64 };
@@ -41,7 +42,7 @@ function utf8ByteLength(text: string): number {
 @Component({
   selector: 'of-manager-fields',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FormsModule],
+  imports: [FormsModule, ErrorLineComponent],
   viewProviders: [{ provide: ControlContainer, useExisting: NgForm }],
   template: `
     <div class="of-row">
@@ -63,7 +64,7 @@ function utf8ByteLength(text: string): number {
           <span id="manager-pulse-seconds-bounds" class="hint">seconds · 1 – 86,400</span>
         </div>
         @if (pulseSecondsError(); as error) {
-          <span id="manager-pulse-seconds-error" role="alert" data-testid="manager-pulse-seconds-error" class="of-error">✕ {{ error }}</span>
+          <of-error-line id="manager-pulse-seconds-error" role="alert" data-testid="manager-pulse-seconds-error">{{ error }}</of-error-line>
         }
       </div>
       <div class="of-field">
@@ -84,7 +85,7 @@ function utf8ByteLength(text: string): number {
           <span id="manager-children-cap-maximum" role="status" data-testid="manager-children-cap-maximum" class="maximum"><span class="maximum-icon" aria-hidden="true">!</span> 64 is the daemon maximum</span>
         }
         @if (childrenCapError(); as error) {
-          <span id="manager-children-cap-error" role="alert" data-testid="manager-children-cap-error" class="of-error">✕ {{ error }}</span>
+          <of-error-line id="manager-children-cap-error" role="alert" data-testid="manager-children-cap-error">{{ error }}</of-error-line>
         }
       </div>
     </div>
@@ -96,7 +97,7 @@ function utf8ByteLength(text: string): number {
         [attr.aria-describedby]="missionError() ? 'manager-mission-error' : null"
       ></textarea>
       @if (missionError(); as error) {
-        <span id="manager-mission-error" role="alert" data-testid="manager-mission-error" class="of-error">✕ {{ error }}</span>
+        <of-error-line id="manager-mission-error" role="alert" data-testid="manager-mission-error">{{ error }}</of-error-line>
       }
     </div>
   `,

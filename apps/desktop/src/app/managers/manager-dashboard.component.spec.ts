@@ -58,6 +58,19 @@ describe('ManagerDashboardComponent', () => {
     expect(screen.getByTestId('manager-dashboard-cap')).toHaveTextContent('1/2');
   });
 
+  it('draws the manager role badge at 11px, not in the 10px one-badge size', async () => {
+    const fake = fakeEvents({ sessions: [MANAGER_SESSION], managers: [MANAGER_VIEW] });
+    await render(ManagerDashboardComponent, {
+      providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('m1') }, { provide: FleetEventsService, useValue: fake }],
+    });
+
+    const roleBadge = screen.getByTestId('manager-role-badge');
+
+    expect(roleBadge).toHaveTextContent('manager');
+    expect(roleBadge).not.toHaveClass('of-badge');
+    expect(getComputedStyle(roleBadge).fontSize).toBe('0.6875rem');
+  });
+
   it('gives an unbroken long manager name a tooltip and lets it wrap instead of being clipped', async () => {
     const longName = 'A'.repeat(80);
     const fake = fakeEvents({ sessions: [{ ...MANAGER_SESSION, name: longName }], managers: [MANAGER_VIEW] });

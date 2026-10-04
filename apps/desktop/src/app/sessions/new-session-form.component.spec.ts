@@ -1670,9 +1670,9 @@ describe('NewSessionFormComponent', () => {
 
       await userEvent.click(submitButton());
 
-      expect(screen.getByTestId('new-session-directory')).toHaveAccessibleDescription('✕ Directory is required');
-      expect(screen.getByTestId('new-session-name')).toHaveAccessibleDescription('✕ Name is required');
-      expect(screen.getByTestId('manager-mission')).toHaveAccessibleDescription('✕ A manager needs a mission');
+      expect(screen.getByTestId('new-session-directory')).toHaveAccessibleDescription('Directory is required');
+      expect(screen.getByTestId('new-session-name')).toHaveAccessibleDescription('Name is required');
+      expect(screen.getByTestId('manager-mission')).toHaveAccessibleDescription('A manager needs a mission');
     });
 
     it('describes the pulse seconds and children cap fields with their errors while keeping their names', async () => {

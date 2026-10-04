@@ -30,7 +30,7 @@ const HANDOFF_TARGET_AVAILABLE_HINT = 'Saved handoffs appear in Notes › handof
           <div class="identity">
             <div class="name-row">
               <span data-testid="manager-dashboard-name" class="name" [attr.title]="visibleNameOf(session)">{{ visibleNameOf(session) }}</span>
-              <span class="of-badge role-badge">manager</span>
+              <span class="role-badge" data-testid="manager-role-badge">manager</span>
               <of-state-chip [state]="session.state" />
               <of-overdue-chip [session]="session" />
             </div>
@@ -138,7 +138,10 @@ const HANDOFF_TARGET_AVAILABLE_HINT = 'Saved handoffs appear in Notes › handof
     .identity { display: flex; flex-direction: column; min-width: 0 }
     .name-row { display: flex; align-items: center; gap: .5rem; min-width: 0 }
     .name { font-size: 1rem; font-weight: 600; min-width: 0; overflow-wrap: anywhere }
-    .role-badge { border: 1px solid var(--line-2); color: var(--mut) }
+    .role-badge {
+      display: inline-flex; align-items: center; height: 1rem; padding: 0 .375rem; border-radius: .25rem; white-space: nowrap;
+      border: 1px solid var(--line-2); color: var(--mut); font-size: .6875rem;
+    }
     .meta-line { font-size: .75rem; color: var(--mut) }
     .cap { display: flex; flex-direction: column; gap: .25rem; width: 8rem; font-size: .6875rem; color: var(--mut) }
     .cap-bar { height: .375rem; border-radius: .25rem; background: var(--sunk); overflow: hidden }

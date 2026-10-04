@@ -54,6 +54,22 @@ describe('SessionActionsComponent', () => {
     expect(screen.getByTestId('session-interrupt')).toBeTruthy();
   });
 
+  describe('the Interrupt look', () => {
+    const renderGeneratingWith = (isCompact: boolean) =>
+      render(SessionActionsComponent, {
+        bindings: [...bindingsFor('generating'), inputBinding('isCompact', () => isCompact)],
+        providers: [{ provide: FleetApiService, useValue: { closeSession: vi.fn(), sendInput: vi.fn() } }],
+      });
+
+    it.each([{ isCompact: false }, { isCompact: true }])('paints only the glyph amber (compact: $isCompact)', async ({ isCompact }) => {
+      await renderGeneratingWith(isCompact);
+
+      const glyph = screen.getByTestId('session-interrupt').querySelector('[aria-hidden="true"]') as Element;
+
+      expect(getComputedStyle(glyph).color).toBe('var(--state-waiting-permission)');
+    });
+  });
+
   it('shows neither action once the session is closed', async () => {
     await render(SessionActionsComponent, {
       bindings: bindingsFor('closed'),
@@ -113,6 +129,17 @@ describe('SessionActionsComponent', () => {
         await userEvent.click(screen.getByTestId('session-close'));
 
         expect(screen.getByTestId('close-confirm-pending-switch')).toHaveTextContent('Closing cancels the pending model switch.');
+      });
+
+      it('writes the warning in the foreground colour behind an amber glyph', async () => {
+        await renderWithAModelSwitchAnswered('deferred');
+
+        await userEvent.click(screen.getByTestId('session-close'));
+
+        const warning = screen.getByTestId('close-confirm-pending-switch');
+        const glyph = warning.querySelector('[aria-hidden="true"]') as Element;
+        expect(getComputedStyle(warning).color).toBe('var(--fg)');
+        expect(getComputedStyle(glyph).color).toBe('var(--state-waiting-permission)');
       });
 
       it('stays hidden when the model switch relaunches at once', async () => {

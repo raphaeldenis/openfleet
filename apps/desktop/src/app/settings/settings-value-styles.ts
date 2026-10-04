@@ -7,5 +7,5 @@ export const SETTINGS_VALUE_STYLES = `
   button.value:focus-visible { outline: 2px solid var(--accent); outline-offset: .125rem; }
   .mono { font-family: var(--mono); }
   .hint { margin: 0; font-size: .75rem; color: var(--mut); }
-  .error { margin: 0; color: var(--state-error); }
+  .error { margin: 0; }
 `;
