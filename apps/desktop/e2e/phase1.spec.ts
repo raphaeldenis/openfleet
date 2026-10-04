@@ -17,7 +17,9 @@ test('a model picked in Settings is written to config.json and served by the run
     await page.goto('/');
     await page.getByRole('button', { name: 'Settings' }).click();
 
-    await page.getByTestId('model-select-opus').selectOption(differentKnownModel);
+    await page.getByRole('tab', { name: 'Models' }).click();
+    await page.getByTestId('model-trigger-opus').click();
+    await page.getByRole('option', { name: differentKnownModel, exact: true }).click();
 
     await expect(page.getByTestId('models-save-status')).toHaveText(/^✓ Saved opus\.$/);
     expect((await (await request.get(`${api}/api/models`, { headers })).json()).opus).toBe(differentKnownModel);
