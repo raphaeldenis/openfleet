@@ -95,7 +95,7 @@ function formatInput(toolInput: unknown): FormattedInput {
         <div class="reply-failure" role="alert" data-testid="inbox-reply-failure">
           <p class="reply-failure-title">Your reply to {{ failure.sessionName }} was not sent. Your text is kept here.</p>
           <pre class="reply-failure-draft" data-testid="inbox-reply-failure-draft">{{ failure.draft }}</pre>
-          <button type="button" class="of-btn of-btn--secondary" data-testid="inbox-reply-failure-dismiss" (click)="dismissReplyFailure(failure.sessionId)">Dismiss</button>
+          <button type="button" class="of-btn of-btn--secondary of-btn--compact" data-testid="inbox-reply-failure-dismiss" (click)="dismissReplyFailure(failure.sessionId)">Dismiss</button>
         </div>
       }
       @if (issues().length > 0) {
@@ -113,8 +113,8 @@ function formatInput(toolInput: unknown): FormattedInput {
               </div>
               <p class="issue-copy" data-testid="inbox-issue-copy">{{ issue.copy }}</p>
               <div class="actions">
-                <of-copy-details-button testId="inbox-issue-copy-details" [text]="issue.detailsText" />
-                <button type="button" class="of-btn of-btn--secondary issue-dismiss" data-testid="inbox-issue-dismiss" (click)="dismissIssue(issue)">Dismiss</button>
+                <of-copy-details-button testId="inbox-issue-copy-details" [text]="issue.detailsText" [isCompact]="true" />
+                <button type="button" class="of-btn of-btn--secondary of-btn--compact issue-dismiss" data-testid="inbox-issue-dismiss" (click)="dismissIssue(issue)">Dismiss</button>
               </div>
             </li>
           }
@@ -208,7 +208,7 @@ function formatInput(toolInput: unknown): FormattedInput {
     .inbox { display: flex; flex-direction: column; gap: .75rem; padding: 1rem; width: 100%; box-sizing: border-box; }
     .title-row { display: flex; align-items: center; gap: .375rem; flex-wrap: wrap; }
     .title { margin: 0; flex: 1; font-size: 1.25rem; font-weight: 600; }
-    .count { display: inline-flex; min-width: 1rem; height: 1rem; padding: 0 .25rem; margin-left: .5rem; border-radius: .5rem; background: var(--accent-bg); color: var(--fg); font-size: .625rem; font-weight: 600; align-items: center; justify-content: center; }
+    .count { display: inline-flex; min-width: 1rem; height: 1rem; padding: 0 .25rem; margin-left: .5rem; border-radius: .5rem; background: var(--accent-bg); color: var(--fg); font-size: .6875rem; font-weight: 600; align-items: center; justify-content: center; }
     .reply-failure { display: flex; flex-direction: column; align-items: flex-start; gap: .375rem; min-width: 0; padding: .625rem .875rem; border: 1px solid var(--state-error); border-radius: .625rem; background: var(--panel); }
     .reply-failure-title { margin: 0; color: var(--state-error); overflow-wrap: anywhere; }
     .reply-failure-draft { margin: 0; max-width: 100%; max-height: 10rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
@@ -220,12 +220,12 @@ function formatInput(toolInput: unknown): FormattedInput {
     .tab { height: 1.875rem; padding: 0 .75rem; border: 0; border-bottom: 1px solid transparent; background: transparent; color: var(--mut); cursor: pointer; font: inherit; }
     .tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
     .tab.active { color: var(--fg); border-bottom-color: var(--accent); }
-    .tab-count { display: inline-flex; min-width: 1rem; height: 1rem; padding: 0 .25rem; margin-left: .25rem; border-radius: .5rem; background: var(--sunk); color: var(--fg); font-size: .625rem; font-weight: 600; align-items: center; justify-content: center; }
+    .tab-count { display: inline-flex; min-width: 1rem; height: 1rem; padding: 0 .25rem; margin-left: .25rem; border-radius: .5rem; background: var(--sunk); color: var(--fg); font-size: .6875rem; font-weight: 600; align-items: center; justify-content: center; }
     .tabpanel { display: flex; flex-direction: column; gap: .75rem; }
     .filters { display: flex; flex-wrap: wrap; gap: .375rem; }
     .filter-chip { height: 1.625rem; padding: 0 .625rem; border: 1px solid var(--line); border-radius: 1rem; background: var(--panel); color: var(--fg); font-size: .75rem; cursor: pointer; }
     .filter-chip.active { background: var(--active); }
-    .filter-chip:disabled { color: var(--faint); cursor: not-allowed; }
+    .filter-chip:disabled { color: var(--mut); cursor: not-allowed; }
     .gate-list { display: flex; flex-direction: column; gap: .5rem; min-width: 0; }
     .gate-card { display: flex; gap: .75rem; min-width: 0; padding: .875rem 1rem; border: 1px solid var(--line); border-radius: .625rem; background: var(--panel); }
     .avatar { display: flex; align-items: center; justify-content: center; flex: none; width: 2rem; height: 2rem; border-radius: .5rem; border: 1px solid var(--line); background: var(--sunk); }

@@ -261,6 +261,20 @@ describe('InboxComponent questions from agents', () => {
         expect(screen.queryByTestId('inbox-reply-failure')).toBeNull();
       });
 
+      it('draws the Dismiss of the failure notice as a compact secondary action', async () => {
+        const rendered = await renderWithDeferredSend();
+        const { user, fixture, rejectSend } = rendered;
+        await user.type(replyField(), 'use staging');
+        await user.click(sendButton());
+        await fixture.whenStable();
+        await showTab(rendered, 'gates');
+
+        rejectSend(new Error('boom'));
+        await fixture.whenStable();
+
+        expect(await screen.findByTestId('inbox-reply-failure-dismiss')).toHaveClass('of-btn--compact');
+      });
+
       it('user sees the failure and the reply when the session closes before the send fails', async () => {
         const { user, fixture, events, rejectSend } = await renderWithDeferredSend();
         await user.type(replyField(), 'use staging');

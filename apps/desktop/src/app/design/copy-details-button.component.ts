@@ -19,7 +19,7 @@ const IDLE_LABEL = 'Copy details';
 export class CopyDetailsButtonComponent {
   readonly text = input.required<string>();
   readonly testId = input.required<string>();
-  /** The compact button belongs in strips; cards use the standard size. */
+  /** The compact button belongs in strips and in cards as a secondary action; a primary action or a decision keeps the standard size. */
   readonly isCompact = input(false);
   protected readonly label = signal(IDLE_LABEL);
   protected readonly announcement = signal('');

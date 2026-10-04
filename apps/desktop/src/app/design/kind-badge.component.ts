@@ -1,11 +1,12 @@
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 
-export type InboxKind = 'gate' | 'question' | 'law' | 'permission' | 'resource' | 'issue' | 'notice';
+export type InboxKind = 'gate' | 'question' | 'law' | 'permission' | 'resource' | 'issue' | 'notice' | 'blocking';
 
 const COLOR_VAR: Record<InboxKind, string> = {
   issue: '--state-error',
   notice: '--state-idle',
   gate: '--state-waiting-permission',
+  blocking: '--state-waiting-permission',
   question: '--state-waiting-input',
   law: '--state-thinking',
   permission: '--state-generating',
@@ -23,7 +24,7 @@ const COLOR_VAR: Record<InboxKind, string> = {
   styles: `
     .kind-badge {
       gap: .25rem; color: var(--fg); font-family: var(--mono);
-      border: 1px solid color-mix(in oklch, var(--kind-color) 40%, transparent);
+      border: 1px solid color-mix(in oklch, var(--kind-color) 45%, transparent);
       background: color-mix(in oklch, var(--kind-color) 14%, transparent);
     }
     .dot { width: .375rem; height: .375rem; border-radius: 50%; background: var(--kind-color); }

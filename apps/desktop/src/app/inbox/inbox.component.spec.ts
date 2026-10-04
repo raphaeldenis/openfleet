@@ -55,6 +55,13 @@ describe('InboxComponent', () => {
     expect(api.decide).toHaveBeenCalledWith('a1', 'deny');
   });
 
+  it('keeps the decision pair at the standard button size', async () => {
+    await render(InboxComponent, { providers: [{ provide: FleetApiService, useValue: { decide: vi.fn() } }, { provide: FleetEventsService, useValue: fakeEvents() }] });
+
+    expect(screen.getByTestId('inbox-allow')).not.toHaveClass('of-btn--compact');
+    expect(screen.getByTestId('inbox-deny')).not.toHaveClass('of-btn--compact');
+  });
+
   it('disables the buttons while the decision is in flight, and re-enables once it settles', async () => {
     // Arrange
     let resolveDecide: (value: unknown) => void = () => {};
@@ -378,11 +385,11 @@ describe('InboxComponent', () => {
       });
     });
 
-    it('draws the card actions at the standard button size, as the Inbox design does', async () => {
+    it('draws Dismiss and Copy details as compact secondary actions, as the Inbox design does', async () => {
       await renderWith([deliveryFailure]);
 
-      expect(screen.getByTestId('inbox-issue-dismiss')).not.toHaveClass('of-btn--compact');
-      expect(screen.getByTestId('inbox-issue-copy-details')).not.toHaveClass('of-btn--compact');
+      expect(screen.getByTestId('inbox-issue-dismiss')).toHaveClass('of-btn--compact');
+      expect(screen.getByTestId('inbox-issue-copy-details')).toHaveClass('of-btn--compact');
     });
 
     it('dismisses an item on request', async () => {
