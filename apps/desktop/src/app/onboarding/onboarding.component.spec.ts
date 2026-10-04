@@ -74,6 +74,8 @@ describe('OnboardingComponent', () => {
 
     expect(screen.getByText('No daemon on 127.0.0.1:7331')).toBeInTheDocument();
     expect(screen.queryByText('Daemon not found')).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'The daemon could not start' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Start it yourself' })).toBeNull();
   });
 
   it('user is told to start the daemon with pnpm dev:core, with no CLI install or token to paste', async () => {
