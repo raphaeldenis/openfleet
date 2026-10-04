@@ -17,7 +17,7 @@ pub fn read_admin_token_at(token_path: &Path) -> Result<String, String> {
     .map_err(|err| format!("could not read {}: {err}", token_path.display()))
 }
 
-/// Returns the admin token as a list a redaction pass can use: empty when the token cannot be read yet.
+/// Returns the admin token as a list the status line scrub can use: empty when the token cannot be read yet. The event log never reads it.
 pub fn admin_token_secrets(token_path: &Path) -> Vec<String> {
   read_admin_token_at(token_path).into_iter().filter(|token| !token.is_empty()).collect()
 }
