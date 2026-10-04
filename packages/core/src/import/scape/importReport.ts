@@ -1,4 +1,4 @@
-export const ENTITY_NAMES = ['projects', 'notes', 'noteVersions', 'dataStores', 'columns', 'views', 'rows', 'history'] as const;
+export const ENTITY_NAMES = ['projects', 'notes', 'noteVersions', 'dataStores', 'columns', 'views', 'rows', 'history', 'managers'] as const;
 export type EntityName = (typeof ENTITY_NAMES)[number];
 
 export interface EntityCounts {

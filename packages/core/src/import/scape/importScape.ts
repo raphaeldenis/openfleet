@@ -11,6 +11,8 @@ import { writePlan } from './scapeWriter.js';
 
 export const IMPORT_REPORT_FILE_NAME = 'import-report.md';
 const DATABASE_FILE_NAME = 'openfleet.db';
+const MANAGERS_FOLDER_NAME = 'managers';
+const PRIVATE_FOLDER_MODE = 0o700;
 
 export interface ImportScapeOptions {
   /** The Scape home to read (`~/.scape`); only a snapshot of it is ever opened. */
@@ -27,7 +29,11 @@ export interface ImportScapeOptions {
   scratchRoot?: string;
   /** Refuses a real run when the target already holds one of the projects to import. */
   refuseReimport?: boolean;
+  /** Where each imported manager gets its own working folder (created by a real run only); defaults to `managers` in the home. */
+  managersRoot?: string;
 }
+
+const managersRootOf = (options: ImportScapeOptions) => options.managersRoot ?? join(options.home, MANAGERS_FOLDER_NAME);
 
 function writeReportFile(report: ImportReport, directory: string): string {
   mkdirSync(directory, { recursive: true });
@@ -38,7 +44,7 @@ function writeReportFile(report: ImportReport, directory: string): string {
 
 function planFromScape(source: ScapeSource, options: ImportScapeOptions): ImportPlan {
   try {
-    return buildImportPlan(source, { projectName: options.projectName, superpowersRoot: options.superpowersRoot });
+    return buildImportPlan(source, { projectName: options.projectName, superpowersRoot: options.superpowersRoot, managersRoot: managersRootOf(options) });
   } catch (cause) {
     if (cause instanceof ScapeImportError) throw cause;
     throw new ScapeImportError({ code: 'SCAPE_SOURCE_UNREADABLE', message: `the Scape data cannot be read: ${(cause as Error).message}`, cause });
@@ -55,6 +61,10 @@ function assertNoProjectImportedYet(db: DatabaseSync, plan: ImportPlan): void {
   });
 }
 
+function createManagerFolders(plan: ImportPlan): void {
+  for (const { session } of plan.managers) mkdirSync(session.directory, { recursive: true, mode: PRIVATE_FOLDER_MODE });
+}
+
 function writeToTarget(plan: ImportPlan, options: ImportScapeOptions): ImportReport {
   const dryRun = options.dryRun ?? false;
   const scratchRoot = options.scratchRoot ?? tmpdir();
@@ -69,6 +79,7 @@ function writeToTarget(plan: ImportPlan, options: ImportScapeOptions): ImportRep
     target = dryRun ? openDryRunTarget({ home: options.home, scratchRoot }) : openWritableTarget(options.home);
     if (options.refuseReimport && !dryRun) assertNoProjectImportedYet(target.db, plan);
     writePlan(target.db, plan, report, mustBackUpBeforeCommit);
+    if (!dryRun) createManagerFolders(plan);
     return report;
   } catch (cause) {
     if (cause instanceof ScapeImportError) throw cause;

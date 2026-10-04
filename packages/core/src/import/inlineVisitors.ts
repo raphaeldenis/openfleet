@@ -64,24 +64,37 @@ const mentionedIdOf = (node: LexicalNode, scapeKind: string): string => {
   return stringField(node, 'mentionNoteID') || genericId;
 };
 
-export const visitMention: NodeVisitor = (node, context) => {
-  const scapeKind = stringField(node, 'mentionKind');
+/** The mention kind OpenFleet gives a Scape item kind (`dataStore` is a `table`), or undefined when OpenFleet has no mention for it. */
+export function openFleetMentionKindOf(scapeKind: string): MentionKind | undefined {
   const openFleetKind = Object.hasOwn(OPENFLEET_KIND_BY_SCAPE_KIND, scapeKind) ? OPENFLEET_KIND_BY_SCAPE_KIND[scapeKind] : undefined;
   const isSupportedKind = openFleetKind !== undefined && MENTION_KINDS.includes(openFleetKind);
-  if (!isSupportedKind) return context.renderUnconverted(`mention:${scapeKind}`);
+  return isSupportedKind ? openFleetKind : undefined;
+}
+
+export const fitsMentionSyntax = (id: string): boolean => MENTION_ID_PATTERN.test(id);
+
+export const visitMention: NodeVisitor = (node, context) => {
+  const scapeKind = stringField(node, 'mentionKind');
+  const openFleetKind = openFleetMentionKindOf(scapeKind);
+  if (openFleetKind === undefined) return context.renderUnconverted(`mention:${scapeKind}`);
 
   const mentionedId = mentionedIdOf(node, scapeKind);
-  const idFitsMentionSyntax = MENTION_ID_PATTERN.test(mentionedId);
-  if (!idFitsMentionSyntax) return context.renderUnconverted(`mention:${scapeKind}`);
+  if (!fitsMentionSyntax(mentionedId)) return context.renderUnconverted(`mention:${scapeKind}`);
 
   return `@${openFleetKind}:${mentionedId}`;
 };
 
-export const visitMissionLawBound: NodeVisitor = (node) => {
-  const parts = ['scope', 'condition', 'exclusions'].map((field) => stringField(node, field));
+/** Reads "Permission: scope / condition / exclusions", or undefined when the bound says nothing. */
+export function describePermissionBound(bound: { scope: string; condition: string; exclusions: string }): string | undefined {
+  const parts = [bound.scope, bound.condition, bound.exclusions];
   const isEmptyBound = parts.every((part) => part === '');
-  if (isEmptyBound) return '';
+  if (isEmptyBound) return undefined;
 
   const readableParts = parts.map((part) => part || EMPTY_PART);
-  return `${HARD_BREAK}Permission: ${readableParts.join(' / ')}`;
+  return `Permission: ${readableParts.join(' / ')}`;
+}
+
+export const visitMissionLawBound: NodeVisitor = (node) => {
+  const description = describePermissionBound({ scope: stringField(node, 'scope'), condition: stringField(node, 'condition'), exclusions: stringField(node, 'exclusions') });
+  return description === undefined ? '' : `${HARD_BREAK}${description}`;
 };

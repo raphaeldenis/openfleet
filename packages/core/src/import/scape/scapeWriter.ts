@@ -3,6 +3,7 @@ import { inTransaction } from '../../db/transaction.js';
 import type { EntityName, ImportReport } from './importReport.js';
 import { ACTOR_LABEL_PREFIX, IMPORT_AUTHOR } from './scapeMappers.js';
 import type { ImportPlan, PlannedRecord } from './scapePlan.js';
+import { writeManagers } from './scapeManagersWriter.js';
 import { KEEP_STORED_RECORD, REPORT_DIFFERENCE_AS_CONFLICT, upsertRecord, type RecordValues, type UpsertOutcome, type WritePolicy } from './scapeTarget.js';
 
 interface FamilyInput<Extra> {
@@ -154,6 +155,7 @@ export function writePlan(db: DatabaseSync, plan: ImportPlan, report: ImportRepo
     const blockedStores = inTransaction(db, 'importScapeDataStores', () => writeDataStoreDefinitions(db, plan, report));
     const rowOutcomes = inTransaction(db, 'importScapeRows', () => writeRows(db, plan, report, blockedStores));
     inTransaction(db, 'importScapeHistory', () => writeHistory(db, plan, report, { blockedStores, rowOutcomes }));
+    inTransaction(db, 'importScapeManagers', () => writeManagers(db, plan, report));
     beforeCommit();
   });
 }
