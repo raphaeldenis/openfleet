@@ -49,6 +49,7 @@ let writeOnCloseSetting: boolean;
 let unsubscribeHandoffOnClose: () => unknown;
 let temporaryPaths: string[];
 let projectReadsFail: boolean;
+let writerBreaks: boolean;
 let events: string[];
 let gitCalls: GitCall[];
 let gitClockMs: number;
@@ -105,10 +106,14 @@ async function boot(): Promise<void> {
   const settings = { writeOnClose: writeOnCloseSetting };
   const handoff = createHandoffRouteDeps({ sessions, managers, workingStates, todos, docs, projects: projectsRead, git, settings, clock: () => CLOCK, nowMs: () => gitClockMs });
   unsubscribeHandoffOnClose = registerHandoffOnClose(bus, handoff.handoffs, { writeOnClose: settings.writeOnClose });
+  const writeHandoffOnClose: typeof handoff.writeHandoffOnClose = (sessionId) => {
+    if (writerBreaks) throw new Error('writer broke');
+    return handoff.writeHandoffOnClose(sessionId);
+  };
 
   server = await startServer({
     host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable: { ...DEFAULT_MODEL_TABLE }, modelConfigPath: '/tmp/of-unused/config.json',
-    handoff,
+    handoff: { ...handoff, writeHandoffOnClose },
   });
 }
 
@@ -123,6 +128,7 @@ beforeEach(async () => {
   temporaryPaths = [];
   writeOnCloseSetting = true;
   projectReadsFail = false;
+  writerBreaks = false;
   events = [];
   gitCalls = [];
   gitClockMs = 0;
@@ -210,6 +216,15 @@ describe('POST /api/sessions/:id/close with writeHandoff', () => {
 
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ handoff: { status: 'failed' } });
+    expect(sessions.get(session.id)?.state).toBe('closed');
+  });
+
+  it('closes the session at the route even when the handoff writer itself breaks', async () => {
+    const session = await sessionWithDocsFolder();
+    writerBreaks = true;
+
+    await closeSession(session.id, { writeHandoff: true });
+
     expect(sessions.get(session.id)?.state).toBe('closed');
   });
 
