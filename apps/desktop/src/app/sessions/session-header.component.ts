@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, effect, inject, input, linkedSignal, untracked } from '@angular/core';
+import { ChangeDetectionStrategy, Component, ElementRef, Injector, computed, effect, inject, input, linkedSignal, signal, untracked, viewChild } from '@angular/core';
 import type { Session } from '@openfleet/shared';
 import { copyFor } from '../core/error-copy';
 import { FleetApiService } from '../core/fleet-api.service';
@@ -8,6 +8,8 @@ import { StateChipComponent } from '../design/state-chip.component';
 import { ModelSelectorComponent } from './model-selector.component';
 import { PermissionModePickerComponent } from './permission-mode-picker.component';
 import { SessionActionsComponent } from './session-actions.component';
+import { restoreFocusWhenFree } from './handoff/handoff-focus';
+import { HandoffPreviewHostComponent } from './handoff/handoff-preview-host.component';
 import { exitCodeLabel } from './session-close-status';
 import { needsAttention } from './session-header-attention';
 import { readRememberedHeaderChoice, rememberHeaderChoice } from './session-header-choice';
@@ -15,7 +17,7 @@ import { readRememberedHeaderChoice, rememberHeaderChoice } from './session-head
 @Component({
   selector: 'of-session-header',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [StateChipComponent, ModelSelectorComponent, PermissionModePickerComponent, SessionActionsComponent],
+  imports: [StateChipComponent, ModelSelectorComponent, PermissionModePickerComponent, SessionActionsComponent, HandoffPreviewHostComponent],
   template: `
     <header class="session-header" data-testid="session-header">
       <div class="identity-row" data-testid="session-header-row">
@@ -75,9 +77,25 @@ import { readRememberedHeaderChoice, rememberHeaderChoice } from './session-head
           <span class="cost" data-testid="session-cost" title="Cost tracking is not implemented yet">—</span>
           <of-model-selector [sessionId]="session().id" />
           <of-permission-mode-picker [sessionId]="session().id" [currentMode]="session().permissionMode" />
+          <button
+            #handoffButton
+            type="button"
+            class="of-btn of-btn--secondary"
+            data-testid="session-write-handoff"
+            [attr.aria-expanded]="isHandoffOpen()"
+            [attr.aria-controls]="handoffPanelId()"
+            (click)="toggleHandoff()"
+          >
+            Write handoff
+          </button>
         }
       </div>
     </header>
+    @if (isHandoffOpen()) {
+      <div [id]="handoffPanelId()" data-testid="session-handoff-panel">
+        <of-handoff-preview [sessionId]="session().id" density="compact" (dismissed)="closeHandoff()" />
+      </div>
+    }
   `,
   styles: `
     .session-header {
@@ -142,6 +160,11 @@ export class SessionHeaderComponent {
   private lastSeenAttention: { sessionId: string; needsAttention: boolean } | null = null;
 
   constructor() {
+    // A route param change reuses this component instance: a preview collected for one session must not stay over another.
+    effect(() => {
+      this.sessionId();
+      untracked(() => this.isHandoffOpen.set(false));
+    });
     effect(() => {
       const sessionId = this.session().id;
       const needsAttentionNow = this.needsAttention();
@@ -151,6 +174,22 @@ export class SessionHeaderComponent {
       const hasAttentionJustAppeared = isSameSession && !previous.needsAttention && needsAttentionNow;
       if (hasAttentionJustAppeared) untracked(() => this.userChoice.set(true));
     });
+  }
+
+  private readonly sessionId = computed(() => this.session().id);
+  protected readonly isHandoffOpen = signal(false);
+  protected readonly handoffPanelId = computed(() => `session-handoff-panel-${this.sessionId()}`);
+  private readonly handoffButton = viewChild<ElementRef<HTMLButtonElement>>('handoffButton');
+  private readonly injector = inject(Injector);
+
+  protected toggleHandoff(): void {
+    if (this.isHandoffOpen()) return this.closeHandoff();
+    this.isHandoffOpen.set(true);
+  }
+
+  protected closeHandoff(): void {
+    this.isHandoffOpen.set(false);
+    restoreFocusWhenFree({ target: () => this.handoffButton()?.nativeElement, injector: this.injector });
   }
 
   protected toggleDetails(): void {

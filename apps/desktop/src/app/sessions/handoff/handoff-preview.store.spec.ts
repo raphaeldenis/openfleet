@@ -1,6 +1,6 @@
 import type { HandoffContent, HandoffPreview } from '@openfleet/shared';
 import { describe, expect, it, vi } from 'vitest';
-import type { HandoffPreviewApi } from './handoff-preview.api';
+import { HandoffPreviewApiError, type HandoffPreviewApi } from './handoff-preview.api';
 import { HandoffPreviewStore } from './handoff-preview.store';
 
 const SESSION_ID = 's1';
@@ -76,6 +76,26 @@ describe('HandoffPreviewStore', () => {
     expect(store.saveDisabledReason()).toBeUndefined();
   });
 
+  it('knows the target is usable once the preview arrives, and not before nor after a reset', async () => {
+    const store = new HandoffPreviewStore(apiWith());
+    expect(store.isTargetAvailable()).toBe(false);
+
+    await store.open(SESSION_ID);
+    expect(store.isTargetAvailable()).toBe(true);
+
+    store.reset();
+    expect(store.isTargetAvailable()).toBe(false);
+  });
+
+  it('knows the target is unusable when the preview says so', async () => {
+    const target = { available: false, reason: 'no_project' as const, writeOnCloseDefault: false };
+    const store = new HandoffPreviewStore(apiWith({ getPreview: vi.fn().mockResolvedValue(previewWith({ target })) }));
+
+    await store.open(SESSION_ID);
+
+    expect(store.isTargetAvailable()).toBe(false);
+  });
+
   it('is loadFailed with a message when the preview cannot be collected', async () => {
     const store = new HandoffPreviewStore(apiWith({ getPreview: vi.fn().mockRejectedValue(new Error('boom')) }));
 
@@ -83,6 +103,27 @@ describe('HandoffPreviewStore', () => {
 
     expect(store.state()).toBe('loadFailed');
     expect(store.error()).toBeTruthy();
+  });
+
+  it('shows the copy the adapter supplies when the preview cannot be collected', async () => {
+    const getPreview = vi.fn().mockRejectedValue(new HandoffPreviewApiError('That session no longer exists.'));
+    const store = new HandoffPreviewStore(apiWith({ getPreview }));
+
+    await store.open(SESSION_ID);
+
+    expect(store.state()).toBe('loadFailed');
+    expect(store.error()).toBe('That session no longer exists.');
+  });
+
+  it('shows the copy the adapter supplies when the save fails', async () => {
+    const save = vi.fn().mockRejectedValue(new HandoffPreviewApiError('Saving handoffs is not available yet.'));
+    const store = new HandoffPreviewStore(apiWith({ save }));
+    await store.open(SESSION_ID);
+
+    await store.save();
+
+    expect(store.state()).toBe('error');
+    expect(store.error()).toBe('Saving handoffs is not available yet.');
   });
 
   it('collects the preview again when retrying after a load failure', async () => {

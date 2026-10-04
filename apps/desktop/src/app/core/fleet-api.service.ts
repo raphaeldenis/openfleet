@@ -1,11 +1,12 @@
 import { Injectable } from '@angular/core';
 import { DIAGNOSTICS_PATH, isErrorEnvelope } from '@openfleet/shared';
 import type {
-  Approval, CreateNoteRequest, DataStore, DataStoreDetail, DiagnosticsDocument, DsRow, DsRowHistoryEntry, DsView, ErrorEnvelope, HarnessId, NoteSummary,
+  Approval, CreateNoteRequest, DataStore, DataStoreDetail, DiagnosticsDocument, DsRow, DsRowHistoryEntry, DsView, ErrorEnvelope, HandoffPreview, HandoffTarget, HarnessId, NoteSummary,
   NoteVersionSummary, NoteView, OrderTerm, Page, PermissionMode, Project, RestoreNoteRequest, Session, SessionSpec, SessionTodos,
   UpdateNoteRequest, WhereClause,
 } from '@openfleet/shared';
 import { environment } from '../../environments/environment';
+import { parseHandoffPreview, parseHandoffTarget } from './handoff-response-parser';
 import { parseSessionTodos } from './session-todos-parser';
 
 export type PageRequest = Partial<Pick<Page<unknown>, 'limit' | 'offset'>>;
@@ -120,6 +121,18 @@ export class FleetApiService {
     const todos = parseSessionTodos(await this.call<unknown>(path));
     if (!todos) throw new ApiError(200, `GET ${path} → unreadable todo list`);
     return todos;
+  }
+  async getHandoffPreview(id: string): Promise<HandoffPreview> {
+    const path = `/api/sessions/${encodeURIComponent(id)}/handoff-preview`;
+    const preview = parseHandoffPreview(await this.call<unknown>(path));
+    if (!preview) throw new ApiError(200, `GET ${path} → unreadable handoff preview`);
+    return preview;
+  }
+  async getHandoffTarget(id: string): Promise<HandoffTarget> {
+    const path = `/api/sessions/${encodeURIComponent(id)}/handoff-target`;
+    const target = parseHandoffTarget(await this.call<unknown>(path));
+    if (!target) throw new ApiError(200, `GET ${path} → unreadable handoff target`);
+    return target;
   }
   decide(id: string, behavior: 'allow' | 'deny') { return this.post<Approval>(`/api/approvals/${id}/decide`, { behavior }); }
 
