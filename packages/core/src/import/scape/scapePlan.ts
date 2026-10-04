@@ -1,6 +1,6 @@
 import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { columnsByCellKey, mapChange, mapColumn, mapNote, mapRow, mapVersions, mapView, type MappedColumn } from './scapeMappers.js';
+import { columnsByCellKey, mapChange, mapColumn, mapNote, mapRow, mapVersions, mapView, type MappedColumn, type SelectedOption } from './scapeMappers.js';
 import type { RecordValues } from './scapeTarget.js';
 import { ScapeImportError } from './scapeImportError.js';
 import { planManagers, type PlannedManager } from './scapeManagers.js';
@@ -21,7 +21,7 @@ export interface ImportPlan {
   columns: PlannedRecord[];
   views: PlannedRecord<{ hasDroppedFields: boolean }>[];
   skippedViewCount: number;
-  rows: PlannedRecord<{ hasStaleSelectValue: boolean }>[];
+  rows: PlannedRecord<{ hasStaleSelectValue: boolean; selectedOptions: SelectedOption[] }>[];
   history: PlannedRecord[];
   skippedHistoryCount: number;
   managers: PlannedManager[];
@@ -98,7 +98,7 @@ function planStores(plan: ImportPlan, source: ScapeSource, project: ScapeProject
     }
     for (const row of source.rowsOf(store)) {
       const mapped = mapRow(row, cellColumns);
-      plan.rows.push({ id: row.id, record: { store_id: store.id, ...mapped.record }, extra: { hasStaleSelectValue: mapped.hasStaleSelectValue } });
+      plan.rows.push({ id: row.id, record: { store_id: store.id, ...mapped.record }, extra: { hasStaleSelectValue: mapped.hasStaleSelectValue, selectedOptions: mapped.selectedOptions } });
     }
     for (const change of source.changesOf(store)) {
       const mapped = mapChange(change, cellColumns);

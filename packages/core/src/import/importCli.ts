@@ -22,8 +22,8 @@ const FLAGS = {
   help: { type: 'boolean' },
 } as const;
 
-const REIMPORT_WARNING =
-  'This importer is made for a FIRST import onto a virgin OpenFleet database. A re-import is NOT yet safe against OpenFleet-side deletions or renames, nor against Scape-side column or option changes (planned: MIG-01B).';
+const REIMPORT_NOTE =
+  'A re-import compares each record with what the last import wrote: a Scape change is applied to a record OpenFleet left alone; a record edited or deleted in OpenFleet is a conflict and is kept (a deleted one is never written again); a record removed in Scape is reported and kept. Run --dry-run first to see the outcome per entity.';
 
 const USAGE = [
   'usage: import scape --home <OPENFLEET_HOME> [--dry-run] [--project <name>] [--scape-dir <dir>] [--report-dir <dir>] [--state-dir <dir>] [--allow-reimport]',
@@ -34,9 +34,9 @@ const USAGE = [
   '  --scape-dir       the Scape home to read (default ~/.scape; only snapshots of it are opened)',
   '  --report-dir      where import-report.md goes (default: the home)',
   '  --state-dir       the folder of the Scape manager state files <manager name>.md that seed the working states (default ~/Documents/scape-team/state)',
-  '  --allow-reimport  runs a real import although the target already holds imported projects',
+  '  --allow-reimport  runs a real import although the target already holds imported projects (a dry run never needs it)',
   '',
-  REIMPORT_WARNING,
+  REIMPORT_NOTE,
   '',
 ].join('\n');
 
@@ -86,7 +86,7 @@ export function runImportCli(argv: string[], environment: CliEnvironment): CliRe
     if (flags.values.help) return { exitCode: EXIT_OK, output: USAGE };
     const { options, allowsReimport } = importOptionsFrom(flags, environment);
     const report = importScape(options);
-    const warning = allowsReimport && !report.dryRun ? `WARNING: ${REIMPORT_WARNING}\n` : '';
+    const warning = allowsReimport && !report.dryRun ? `Re-import: ${REIMPORT_NOTE} Check the report for the conflicts, the records deleted in OpenFleet and the records removed in Scape.\n` : '';
     const summary = report.dryRun ? renderImportReport(report) : `Import written. Report: ${report.reportPath}\n`;
     return { exitCode: EXIT_OK, output: `${warning}${summary}` };
   } catch (error) {

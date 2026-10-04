@@ -23,6 +23,9 @@ export interface MappedColumn {
 
 export type ColumnsByCellKey = Map<string, MappedColumn>;
 
+/** A row value that is one of the options of its select column in Scape. */
+export interface SelectedOption { columnId: string; optionId: string }
+
 const unreadable = (message: string) => new ScapeImportError({ code: 'SCAPE_SOURCE_UNREADABLE', message });
 
 function parseJson<T>(text: string, whatIsParsed: string): T {
@@ -127,15 +130,18 @@ const isStaleSelectValue = (value: unknown, column: MappedColumn) => column.colu
 
 export function mapRow(row: ScapeRow, columns: ColumnsByCellKey) {
   const data: Record<string, unknown> = {};
+  const selectedOptions: SelectedOption[] = [];
   let hasStaleSelectValue = false;
   for (const [key, column] of [...columns.entries()].sort(([, a], [, b]) => a.id.localeCompare(b.id))) {
     const cell = mapCell(row.cells[key], column);
     if (cell === undefined) continue;
     data[column.id] = cell;
-    hasStaleSelectValue ||= isStaleSelectValue(cell, column);
+    const isStale = isStaleSelectValue(cell, column);
+    hasStaleSelectValue ||= isStale;
+    if (column.columnType === 'select' && !isStale) selectedOptions.push({ columnId: column.id, optionId: String(cell) });
   }
   const record = { data_json: JSON.stringify(data), created_at: unixSecondsToIso(row.createdAt), updated_at: unixSecondsToIso(row.updatedAt) };
-  return { record, hasStaleSelectValue };
+  return { record, hasStaleSelectValue, selectedOptions };
 }
 
 const parseValues = (json: string | null): Record<string, unknown> => (json === null ? {} : parseJson<Record<string, unknown>>(json, 'a row change log value'));

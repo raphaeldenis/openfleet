@@ -38,6 +38,26 @@ describe('snapshotSqliteDatabase', () => {
     expect(countIn(targetPath)).toBe(2);
   });
 
+  it('rolls back, in the copy, a write a rollback-journal source has not committed: the journal travels with the database', () => {
+    writer!.exec('PRAGMA journal_mode = DELETE');
+    const insertRow = writer!.prepare('INSERT INTO t VALUES (?)');
+    for (let row = 0; row < 3000; row++) insertRow.run('x'.repeat(2000));
+    writer!.exec('PRAGMA cache_size = 10; BEGIN');
+    writer!.prepare('UPDATE t SET x = ?').run('y'.repeat(2000));
+    const targetPath = join(workDir, 'copy.db');
+
+    snapshotSqliteDatabase({ sourcePath, targetPath });
+
+    const copy = new DatabaseSync(targetPath);
+    try {
+      const uncommittedRows = (copy.prepare(`SELECT count(*) AS n FROM t WHERE x LIKE 'y%'`).get() as { n: number }).n;
+      expect(readdirSync(workDir)).toContain('source.db-journal');
+      expect(uncommittedRows).toBe(0);
+    } finally {
+      copy.close();
+    }
+  });
+
   it('creates no file beside a source that has none of the WAL side files', () => {
     writer!.close();
     writer = undefined;

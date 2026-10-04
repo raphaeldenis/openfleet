@@ -6,8 +6,12 @@ export interface EntityCounts {
   written: number;
   updated: number;
   alreadyPresent: number;
-  /** Records left as they are because OpenFleet holds a newer or foreign change. */
+  /** Records left as they are because OpenFleet holds a foreign change or deleted the record. */
   conflict: number;
+  /** The conflicts that are records the last import wrote and OpenFleet has since deleted: never written again. */
+  deletedInOpenFleet: number;
+  /** Records the last import wrote that the Scape source no longer holds: reported, never deleted from OpenFleet. */
+  removedInScape: number;
   notConverted: number;
 }
 
@@ -23,7 +27,16 @@ export interface ImportReport {
   reportPath?: string;
 }
 
-export const emptyCounts = (): EntityCounts => ({ expected: 0, written: 0, updated: 0, alreadyPresent: 0, conflict: 0, notConverted: 0 });
+export const emptyCounts = (): EntityCounts => ({ expected: 0, written: 0, updated: 0, alreadyPresent: 0, conflict: 0, deletedInOpenFleet: 0, removedInScape: 0, notConverted: 0 });
+
+/** What a record write came to; a record deleted in OpenFleet is a conflict of its own kind. */
+export type RecordOutcome = 'written' | 'updated' | 'alreadyPresent' | 'conflict' | 'deletedInOpenFleet';
+
+export function countOutcome(counts: EntityCounts, outcome: RecordOutcome, amount = 1): void {
+  const isDeletedInOpenFleet = outcome === 'deletedInOpenFleet';
+  counts[isDeletedInOpenFleet ? 'conflict' : outcome] += amount;
+  if (isDeletedInOpenFleet) counts.deletedInOpenFleet += amount;
+}
 
 export const emptyReport = (input: { dryRun: boolean }): ImportReport => ({
   dryRun: input.dryRun,
@@ -35,7 +48,7 @@ export const emptyReport = (input: { dryRun: boolean }): ImportReport => ({
 });
 
 const countsRow = (name: EntityName, counts: EntityCounts) =>
-  `| ${name} | ${counts.expected} | ${counts.written} | ${counts.updated} | ${counts.alreadyPresent} | ${counts.conflict} | ${counts.notConverted} |`;
+  `| ${name} | ${counts.expected} | ${counts.written} | ${counts.updated} | ${counts.alreadyPresent} | ${counts.conflict} | ${counts.deletedInOpenFleet} | ${counts.removedInScape} | ${counts.notConverted} |`;
 
 export const hasChanges = (report: ImportReport): boolean =>
   ENTITY_NAMES.some((name) => report.counts[name].written + report.counts[name].updated > 0);
@@ -47,11 +60,15 @@ export function renderImportReport(report: ImportReport): string {
   return [
     `# Scape import report${report.dryRun ? ' (dry run: nothing written)' : ''}`,
     '',
-    '| entity | expected | written | updated | already present | conflict | not converted |',
-    '| --- | --- | --- | --- | --- | --- | --- |',
+    '| entity | expected | written | updated | already present | conflict | of which deleted in OpenFleet | removed in Scape | not converted |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- |',
     ...ENTITY_NAMES.map((name) => countsRow(name, report.counts[name])),
     '',
-    'Conflict: the record was changed in OpenFleet (newer row, foreign history entry or note version, higher note rev, renamed definition, deleted row) and is left as it is.',
+    'Updated: the record was changed in Scape and not in OpenFleet since the last import, so the Scape change is applied.',
+    '',
+    'Conflict: the record was changed in OpenFleet since the last import (edited, renamed, foreign history entry or note version) or deleted there, or OpenFleet holds a record of the same name that the import did not write; it is left as it is, and a record deleted in OpenFleet is never written again.',
+    '',
+    'Removed in Scape: the last import wrote the record and the Scape source no longer holds it; it stays in OpenFleet. Not counted by a run limited to one project.',
     '',
     'Not converted: notes and versions holding at least one lexical node without a markdown form; playbooks archived as inert text in one note per project (playbook counts follow the archive write outcome); kanban views whose card fields were dropped or that could not be mapped; rows holding a select value that is not one of the column options; log entries that changed nothing; managers whose mission note is outside the import or whose mission is unusable, whose model is not a known alias, or whose granted note or table is not imported.',
     '',

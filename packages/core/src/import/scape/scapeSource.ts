@@ -25,6 +25,14 @@ const ROW_BOOKKEEPING_COLUMNS = new Set(['row_id', 'row_created_at', 'row_update
 const withoutHyphens = (id: string) => id.replaceAll('-', '');
 const storeTableName = (storeId: string) => `store_${withoutHyphens(storeId)}`;
 
+/** A copy taken while Scape was writing its file can be torn: it is refused rather than read. */
+function assertConsistent(snapshot: DatabaseSync, sourcePath: string): void {
+  const verdict = (snapshot.prepare('PRAGMA quick_check').get() as { quick_check: string }).quick_check;
+  if (verdict === 'ok') return;
+  snapshot.close();
+  throw new ScapeImportError({ code: 'SCAPE_SOURCE_UNREADABLE', message: `the copy of ${sourcePath} is not consistent (is Scape writing it? quit Scape and run the import again)` });
+}
+
 /** The key a cell of a Scape datastore file carries for a column id. */
 export const cellKeyOf = (columnId: string) => `${CELL_KEY_PREFIX}${withoutHyphens(columnId)}`;
 
@@ -138,8 +146,11 @@ export class ScapeSource {
     const targetPath = join(this.scratchDir, `${this.datastoreDbs.size}-${basename(sourcePath)}`);
     try {
       snapshotSqliteDatabase({ sourcePath, targetPath });
-      return new DatabaseSync(targetPath);
+      const snapshot = new DatabaseSync(targetPath);
+      assertConsistent(snapshot, sourcePath);
+      return snapshot;
     } catch (cause) {
+      if (cause instanceof ScapeImportError) throw cause;
       throw new ScapeImportError({ code: 'SCAPE_SOURCE_UNREADABLE', message: `cannot snapshot ${sourcePath}: ${(cause as Error).message}`, cause });
     }
   }

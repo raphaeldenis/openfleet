@@ -326,8 +326,8 @@ describe('importScape', () => {
 
       expect(report.reportPath).toBe(join(home, 'import-report.md'));
       const markdown = readFileSync(report.reportPath!, 'utf8');
-      expect(markdown).toContain('| notes | 5 | 5 | 0 | 0 | 0 | 0 |');
-      expect(markdown).toContain('| views | 1 | 1 | 0 | 0 | 0 | 1 |');
+      expect(markdown).toContain('| notes | 5 | 5 | 0 | 0 | 0 | 0 | 0 | 0 |');
+      expect(markdown).toContain('| views | 1 | 1 | 0 | 0 | 0 | 0 | 0 | 1 |');
       expect(markdown).toContain('ccm-project');
     });
 

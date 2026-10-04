@@ -61,11 +61,11 @@ function assertNoProjectImportedYet(db: DatabaseSync, plan: ImportPlan): void {
   const names = alreadyImported.map((project) => project.extra.projectName).join(', ');
   throw new ScapeImportError({
     code: 'ALREADY_IMPORTED',
-    message: `the target already holds imported projects (${names}); a re-import is not yet safe against OpenFleet-side deletions or renames and Scape-side column or option changes (MIG-01B).`,
+    message: `the target already holds imported projects (${names}); a re-import applies the Scape changes to the records OpenFleet left alone and reports the others as conflicts. Preview it with --dry-run first.`,
   });
 }
 
-const MANAGER_OUTCOMES_NEEDING_A_FOLDER: UpsertOutcome[] = ['written', 'alreadyPresent'];
+const MANAGER_OUTCOMES_NEEDING_A_FOLDER: UpsertOutcome[] = ['written', 'updated', 'alreadyPresent'];
 
 function foldersOfManagersKept(plan: ImportPlan, outcomes: Map<string, UpsertOutcome>): string[] {
   return plan.managers.filter((manager) => MANAGER_OUTCOMES_NEEDING_A_FOLDER.includes(outcomes.get(manager.id)!)).map((manager) => manager.session.directory);
@@ -90,7 +90,7 @@ function writeToTarget(plan: ImportPlan, options: ImportScapeOptions): ImportRep
   try {
     target = dryRun ? openDryRunTarget({ home: options.home, scratchRoot }) : openWritableTarget(options.home);
     if (options.refuseReimport && !dryRun) assertNoProjectImportedYet(target.db, plan);
-    writePlan(target.db, plan, report, prepareFoldersBeforeCommit);
+    writePlan(target.db, plan, report, { coversEveryProject: options.projectName === undefined }, prepareFoldersBeforeCommit);
     return report;
   } catch (cause) {
     preparedFolders?.rollback();
