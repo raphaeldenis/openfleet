@@ -1,6 +1,6 @@
 import { Injectable, computed, signal } from '@angular/core';
-import { TodoSummarySchema, closeReasonOfExitCode } from '@openfleet/shared';
-import type { Approval, DaemonIssue, ErrorEnvelope, ErrorEventScope, ManagerView, ServerEvent, Session, SessionCloseReason, SessionTodos, SilentBlock, TodoSummary, WorkingState } from '@openfleet/shared';
+import { TodoSummarySchema, closeReasonOfExitCode, parseSessionCloseReason } from '@openfleet/shared';
+import type { Approval, DaemonIssue, ErrorEnvelope, ErrorEventScope, ManagerView, ServerEvent, Session, SessionTodos, SilentBlock, TodoSummary, WorkingState } from '@openfleet/shared';
 import { Subject } from 'rxjs';
 import { environment } from '../../environments/environment';
 import { parseSessionTodos } from './session-todos-parser';
@@ -34,24 +34,12 @@ function readableTodoSummaries(received: unknown[] | undefined): TodoSummary[] {
   return results.flatMap((result) => (result.success ? [result.data] : []));
 }
 
-interface KnownCloses {
-  sessions: Session[];
-  reasons: ReadonlyMap<string, SessionCloseReason>;
-}
-
-// A snapshot carries exit codes but no reason. The two reasons the conventional exit codes encode are recomputed; any other reason
-// learned live (a harness_exit that exited 143, say) survives while the snapshot shows the same session closed with the same exit code.
-function closeReasonsOfSnapshot(sessions: Session[], known: KnownCloses): ReadonlyMap<string, SessionCloseReason> {
-  const reasons = new Map<string, SessionCloseReason>();
-  for (const { id, state, exitCode } of sessions) {
-    if (state !== 'closed') continue;
-    const learnedLive = known.reasons.get(id);
-    const knownSession = known.sessions.find((session) => session.id === id);
-    const isSameCloseAsLearnedLive = knownSession?.state === 'closed' && knownSession.exitCode === exitCode;
-    const reason = closeReasonOfExitCode(exitCode) ?? (isSameCloseAsLearnedLive ? learnedLive : undefined);
-    if (reason) reasons.set(id, reason);
-  }
-  return reasons;
+// The close reason lives on the session, whether it arrived live (session.closed) or in a snapshot / full row. A reason this version
+// does not know reads as absent, and a close without a stored reason (recorded by an older daemon) falls back to what its exit code encodes.
+function withReadableCloseReason(session: Session): Session {
+  const isClosed = session.state === 'closed';
+  const closeReason = isClosed ? (parseSessionCloseReason(session.closeReason) ?? closeReasonOfExitCode(session.exitCode)) : undefined;
+  return closeReason === session.closeReason ? session : { ...session, closeReason };
 }
 
 // The daemon never clears closedAt, so a live session keeps the stamp of a close it has long recovered
@@ -102,7 +90,6 @@ export class FleetEventsService {
   private readonly dismissedSilentBlockKeys = signal<ReadonlySet<string>>(new Set());
   /** Sessions the daemon says sit on a permission prompt nobody decided, minus the ones the user dismissed; empty for a daemon that reports none. */
   readonly silentBlocks = computed(() => this.reportedSilentBlocks().filter((block) => !this.dismissedSilentBlockKeys().has(silentBlockKey(block))));
-  private readonly closeReasons = signal<ReadonlyMap<string, SessionCloseReason>>(new Map());
   private nextFailureNumber = 1;
   // A direct load of a route that never mounts App (e.g. /manager/:id) still needs to know
   // whether the first snapshot has arrived, so it can show a loading state instead of "not found".
@@ -246,8 +233,7 @@ export class FleetEventsService {
   private reduce(event: ServerEvent): void {
     switch (event.type) {
       case 'snapshot': {
-        const knownCloses: KnownCloses = { sessions: this.sessions(), reasons: this.closeReasons() };
-        this.sessions.set(event.sessions.map(withoutStaleClosure));
+        this.sessions.set(event.sessions.map((session) => withReadableCloseReason(withoutStaleClosure(session))));
         this.approvals.set(event.approvals);
         this.managers.set(event.managers ?? []);
         this.workingStates.set(new Map((event.workingStates ?? []).map((state) => [state.sessionId, state])));
@@ -260,7 +246,6 @@ export class FleetEventsService {
         const summaries = new Map(readableTodoSummaries(event.todoSummaries).map((summary) => [summary.sessionId, summary]));
         this.todoSummaries.set(summaries);
         this.reconcileTodosWithSnapshot(summaries);
-        this.closeReasons.set(closeReasonsOfSnapshot(event.sessions, knownCloses));
         this.snapshotReceived.set(true);
         return;
       }
@@ -269,8 +254,7 @@ export class FleetEventsService {
       case 'session.created': return this.upsertSession(event.session);
       case 'session.state': return this.patchSession(event.sessionId, { state: event.state, stateSince: event.stateSince });
       case 'session.closed':
-        this.rememberCloseReason(event.sessionId, event.reason ?? closeReasonOfExitCode(event.exitCode));
-        return this.patchSession(event.sessionId, { state: 'closed', exitCode: event.exitCode });
+        return this.patchSession(event.sessionId, { state: 'closed', exitCode: event.exitCode, closeReason: parseSessionCloseReason(event.reason) });
       case 'session.updated': return this.upsertSession(event.session);
       case 'session.output':
         this.output(event.sessionId).next(event.data);
@@ -293,11 +277,6 @@ export class FleetEventsService {
       case 'permission.silent_blocks': return this.reportSilentBlocks(event.blocks);
       default: return;
     }
-  }
-
-  /** Why a session closed, as the daemon announced it; a snapshot only carries the two reasons the exit code encodes. */
-  closeReasonOf(sessionId: string): SessionCloseReason | undefined {
-    return this.closeReasons().get(sessionId);
   }
 
   /** How many session.todos events arrived for a session: a REST answer is stale when this moved since its request left. */
@@ -348,15 +327,6 @@ export class FleetEventsService {
     this.backgroundFailures.update((all) => all.filter((failure) => failure.key !== key));
   }
 
-  private rememberCloseReason(sessionId: string, reason: SessionCloseReason | undefined): void {
-    this.closeReasons.update((all) => {
-      const next = new Map(all);
-      if (reason === undefined) next.delete(sessionId);
-      else next.set(sessionId, reason);
-      return next;
-    });
-  }
-
   private recordBackgroundFailure(event: { error: ErrorEnvelope; sessionId?: string; scope?: ErrorEventScope }): void {
     if (!isBackgroundFailure(event)) return;
     const failure: BackgroundFailure = { key: `failure-${this.nextFailureNumber++}`, sessionId: event.sessionId, envelope: event.error, at: new Date().toISOString() };
@@ -366,7 +336,7 @@ export class FleetEventsService {
   private upsertSession(incoming: Session): void {
     this.sessions.update((all) => {
       const local = all.find((s) => s.id === incoming.id);
-      const session = withoutClosureNotVouchedFor(incoming, local);
+      const session = withReadableCloseReason(withoutClosureNotVouchedFor(incoming, local));
       return local ? all.map((s) => (s.id === session.id ? session : s)) : [...all, session];
     });
   }
@@ -380,16 +350,15 @@ export class FleetEventsService {
   }
 
   private patchSession(id: string, patch: Partial<Session>): void {
-    this.sessions.update((all) => all.map((s) => (s.id === id ? withoutStaleClosure({ ...s, ...patch }) : s)));
+    this.sessions.update((all) => all.map((s) => (s.id === id ? withReadableCloseReason(withoutStaleClosure({ ...s, ...patch })) : s)));
   }
 
   // A session closed while this client was connected never received a closedAt from the daemon; stamping it on
   // reopen keeps "closed, now coming back" recognisable for the whole starting window.
   private markReopened(id: string): void {
-    this.rememberCloseReason(id, undefined);
     const reopenedAt = new Date().toISOString();
     this.sessions.update((all) =>
-      all.map((s) => (s.id === id ? { ...s, state: 'starting', exitCode: undefined, closedAt: s.closedAt ?? reopenedAt } : s)),
+      all.map((s) => (s.id === id ? { ...s, state: 'starting', exitCode: undefined, closeReason: undefined, closedAt: s.closedAt ?? reopenedAt } : s)),
     );
   }
 

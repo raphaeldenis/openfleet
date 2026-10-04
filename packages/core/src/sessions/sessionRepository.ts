@@ -1,17 +1,17 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { inTransaction } from '../db/transaction.js';
-import { PERMISSION_MODES, type HarnessId, type PermissionMode, type Session, type SessionState } from '@openfleet/shared';
+import { PERMISSION_MODES, parseSessionCloseReason, type HarnessId, type PermissionMode, type Session, type SessionCloseReason, type SessionState } from '@openfleet/shared';
 
 interface Row {
   id: string; name: string; emoji: string; directory: string; worktree: string | null; model: string | null;
   parent_id: string | null; role: string | null; harness: HarnessId; state: SessionState; state_since: string;
-  exit_code: number | null; hook_token: string; mcp_token: string; permission_mode: string | null; branch: string | null;
+  exit_code: number | null; close_reason: string | null; hook_token: string; mcp_token: string; permission_mode: string | null; branch: string | null;
   created_at: string; closed_at: string | null; project_id: string | null;
   resolved_model: string | null; cli_version: string | null; model_drifted_from: string | null; resolved_for_model: string | null;
   context_notice_tokens: number | null;
 }
 
-type NewSessionRow = Omit<Row, 'exit_code' | 'closed_at' | 'project_id' | 'resolved_model' | 'cli_version' | 'model_drifted_from' | 'resolved_for_model' | 'context_notice_tokens'> & { project_id?: string | null };
+type NewSessionRow = Omit<Row, 'exit_code' | 'close_reason' | 'closed_at' | 'project_id' | 'resolved_model' | 'cli_version' | 'model_drifted_from' | 'resolved_for_model' | 'context_notice_tokens'> & { project_id?: string | null };
 
 export interface NormalizedPermissionMode { mode: PermissionMode | undefined; wasRecognized: boolean }
 
@@ -38,6 +38,7 @@ const toSession = (r: Row): Session => ({
   contextNoticeTokens: r.context_notice_tokens ?? undefined,
   parentId: r.parent_id ?? undefined, projectId: r.project_id ?? undefined, role: r.role ?? undefined, harness: r.harness,
   state: r.state, stateSince: r.state_since, exitCode: r.exit_code ?? undefined,
+  closeReason: parseSessionCloseReason(r.close_reason),
   permissionMode: normalizePermissionMode(r.permission_mode).mode,
   createdAt: r.created_at, closedAt: r.closed_at ?? undefined,
 });
@@ -57,17 +58,17 @@ export class SessionRepository {
   list(): Session[] {
     return (this.db.prepare('SELECT * FROM sessions ORDER BY created_at').all() as unknown as Row[]).map(toSession);
   }
-  // exit_code describes a close, so it goes as soon as the session leaves 'closed'. closed_at also marks a
+  // exit_code and close_reason describe a close, so they go as soon as the session leaves 'closed'. closed_at also marks a
   // reopened session as "closed, coming back" for the whole 'starting' window, so it only goes once the
   // session is live (any state past 'starting').
   setState(id: string, state: SessionState, since: string): void {
     const isClosed = state === 'closed';
     const isComingBack = state === 'starting';
-    const keepsExitCode = isClosed;
+    const keepsCloseDescription = isClosed;
     const keepsClosedAt = isClosed || isComingBack;
     this.db.prepare(`UPDATE sessions SET state = ?, state_since = ?,
-      exit_code = CASE WHEN ? THEN exit_code END, closed_at = CASE WHEN ? THEN closed_at END WHERE id = ?`)
-      .run(state, since, Number(keepsExitCode), Number(keepsClosedAt), id);
+      exit_code = CASE WHEN ? THEN exit_code END, close_reason = CASE WHEN ? THEN close_reason END, closed_at = CASE WHEN ? THEN closed_at END WHERE id = ?`)
+      .run(state, since, Number(keepsCloseDescription), Number(keepsCloseDescription), Number(keepsClosedAt), id);
   }
   /** Records a reopen and returns the id of the row it inserted. */
   recordReopen(id: string, at: string): number {
@@ -124,10 +125,10 @@ export class SessionRepository {
   // A daemon-shutdown close also records the session's single 'daemon_shutdown' event stamped with the same instant as closed_at:
   // that event is what tells the next boot this close was the daemon's, not the user's. Every close replaces the session's
   // previous event, so a later close never matches an earlier shutdown's event.
-  setClosed(id: string, exitCode: number | undefined, at: string, hookToken: string, mcpToken: string, options: { closedByDaemonShutdown?: boolean } = {}): void {
+  setClosed(id: string, exitCode: number | undefined, at: string, hookToken: string, mcpToken: string, options: { closedByDaemonShutdown?: boolean; closeReason?: SessionCloseReason } = {}): void {
     inTransaction(this.db, 'set_session_closed', () => {
-      this.db.prepare(`UPDATE sessions SET state = 'closed', state_since = ?, exit_code = ?, closed_at = ?, hook_token = ?, mcp_token = ? WHERE id = ?`)
-        .run(at, exitCode ?? null, at, hookToken, mcpToken, id);
+      this.db.prepare(`UPDATE sessions SET state = 'closed', state_since = ?, exit_code = ?, close_reason = ?, closed_at = ?, hook_token = ?, mcp_token = ? WHERE id = ?`)
+        .run(at, exitCode ?? null, options.closeReason ?? null, at, hookToken, mcpToken, id);
       this.clearShutdownClose(id);
       if (options.closedByDaemonShutdown) this.db.prepare("INSERT INTO session_events (session_id, kind, ts) VALUES (?, 'daemon_shutdown', ?)").run(id, at);
     });
@@ -150,11 +151,11 @@ export class SessionRepository {
       return this.recordReopen(id, at);
     });
   }
-  /** Rewrites a closed row as a failed close in one transaction: the given exit code, a fresh closed_at, no shutdown marker. */
-  failClosedRow(id: string, exitCode: number, at: string): void {
+  /** Rewrites a closed row as a failed close in one transaction: the given exit code and reason, a fresh closed_at, no shutdown marker. */
+  failClosedRow(id: string, exitCode: number, at: string, options: { closeReason?: SessionCloseReason } = {}): void {
     inTransaction(this.db, 'fail_shutdown_close', () => {
       this.clearShutdownClose(id);
-      this.db.prepare('UPDATE sessions SET state_since = ?, exit_code = ?, closed_at = ? WHERE id = ?').run(at, exitCode, at, id);
+      this.db.prepare('UPDATE sessions SET state_since = ?, exit_code = ?, close_reason = ?, closed_at = ? WHERE id = ?').run(at, exitCode, options.closeReason ?? null, at, id);
     });
   }
   /** True when the session's current close is the one a daemon shutdown made and no resume or later close has consumed it. */

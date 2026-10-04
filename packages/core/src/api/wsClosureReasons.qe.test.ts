@@ -80,6 +80,45 @@ const isError = isType('error');
 const isClosed = isType('session.closed');
 const spec = { name: 'a', emoji: '🤖', directory: '/tmp', harness: 'fake' } as const;
 
+describe('a client that connects after a session closed', () => {
+  it('receives the close reason in its snapshot, the same one the live clients were told', async () => {
+    const { server, sessions, restartedSessions } = await boot();
+    const session = await sessions.create(spec);
+    const liveClient = await openClient(server);
+    await restartedSessions.close(session.id);
+    const liveClosure = await waitFor(() => liveClient.frames.find(isClosed));
+
+    const lateClient = await openClient(server);
+
+    const snapshot = lateClient.frames.find(isType('snapshot')) as { sessions: { id: string; state: string; closeReason?: string }[] };
+    expect(snapshot.sessions.find((candidate) => candidate.id === session.id)).toMatchObject({ state: 'closed', closeReason: liveClosure.reason });
+    expect(liveClosure.reason).toBe('closed_by_user');
+  });
+
+  it('reads the close reason from the REST session list', async () => {
+    const { server, sessions, restartedSessions } = await boot();
+    const session = await sessions.create(spec);
+    await restartedSessions.close(session.id);
+
+    const response = await fetch(`${server.url}/api/sessions`, { headers: { authorization: 'Bearer admin' } });
+    const listed = (await response.json()) as { id: string; closeReason?: string }[];
+
+    expect(listed.find((candidate) => candidate.id === session.id)?.closeReason).toBe('closed_by_user');
+  });
+
+  it('receives no close reason for the session once it is reopened', async () => {
+    const { server, sessions, restartedSessions } = await boot();
+    const session = await sessions.create(spec);
+    await restartedSessions.close(session.id);
+    restartedSessions.reopen(session.id);
+
+    const lateClient = await openClient(server);
+
+    const snapshot = lateClient.frames.find(isType('snapshot')) as { sessions: { id: string; closeReason?: string }[] };
+    expect(snapshot.sessions.find((candidate) => candidate.id === session.id)?.closeReason).toBeUndefined();
+  });
+});
+
 describe('a session closed after a daemon restart', () => {
   it('a row whose harness is no longer registered closes with exit -2, reason launch_failed and the launch_failed envelope', async () => {
     const { server, sessions, restartedSessions } = await boot({ restartedHarnesses: [] });

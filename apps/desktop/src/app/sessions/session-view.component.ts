@@ -135,8 +135,7 @@ export class SessionViewComponent {
   protected readonly closedPresentation = computed(() => {
     const session = this.session();
     if (!session || session.state !== 'closed') return undefined;
-    const reason = this.events.closeReasonOf(session.id);
-    return closedSessionPresentationFor({ exitCode: session.exitCode, reason, resumeRequestError: this.resumeError() ?? undefined });
+    return closedSessionPresentationFor({ exitCode: session.exitCode, reason: session.closeReason, resumeRequestError: this.resumeError() ?? undefined });
   });
 
   protected readonly lifecycleBanner = computed<LifecycleBanner | undefined>(() => {

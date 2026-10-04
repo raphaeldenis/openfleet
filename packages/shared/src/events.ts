@@ -1,16 +1,14 @@
 import type { DaemonIssue } from './daemonIssues.js';
 import type { ErrorEnvelope } from './errors.js';
 import type { ManagerView } from './managers.js';
-import type { Approval, PermissionMode, Session, SessionState } from './session.js';
+import type { Approval, PermissionMode, Session, SessionCloseReason, SessionState } from './session.js';
 import type { SessionTodos, TodoSummary } from './todos.js';
 import type { WorkingState } from './workingState.js';
 
 /** `reply` answers a client message that failed, on that socket only; `broadcast` announces a failure nobody asked for, to every client. A daemon that predates the field sends neither. */
 export type ErrorEventScope = 'reply' | 'broadcast';
 
-export type SessionCloseReason = 'launch_failed' | 'resume_timeout' | 'conversation_not_found' | 'harness_exit' | 'closed_by_user' | 'daemon_shutdown';
-
-// The exit code convention that predates `reason`: a snapshot carries exit codes but no reason, so this recomputes the two it encodes.
+// The exit code convention that predates `reason`: a close recorded before the reason was stored carries an exit code only, so this recomputes the two it encodes.
 const REASON_BY_CONVENTIONAL_EXIT_CODE: Record<number, SessionCloseReason> = { [-1]: 'resume_timeout', [-2]: 'launch_failed' };
 
 export const closeReasonOfExitCode = (exitCode: number | undefined): SessionCloseReason | undefined =>

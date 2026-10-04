@@ -24,8 +24,7 @@ function approval(patch: Partial<Approval> = {}): Approval {
 function fakeEvents(sessions: Session[], approvals: Approval[] = []) {
   return {
     ...silentWorkingStateSignals(),
-    closeReasonOf: (sessionId: string) => closeReasonOfExitCode(sessions.find((s) => s.id === sessionId)?.exitCode),
-    sessions: signal(sessions), approvals: signal(approvals), managers: signal([]),
+    sessions: signal(sessions.map((s) => ({ ...s, closeReason: s.closeReason ?? closeReasonOfExitCode(s.exitCode) }))), approvals: signal(approvals), managers: signal([]),
     connected: signal(true), reconnectCount: signal(0), deliveredMessageIds: signal(new Set<string>()),
     output: () => new Subject<string>(), sendInput: vi.fn(), sendResize: vi.fn(), sendAttach: vi.fn(), dropQueuedSendsFor: vi.fn(),
   };
