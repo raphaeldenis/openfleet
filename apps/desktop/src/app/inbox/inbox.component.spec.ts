@@ -378,6 +378,13 @@ describe('InboxComponent', () => {
       });
     });
 
+    it('draws the card actions at the standard button size, as the Inbox design does', async () => {
+      await renderWith([deliveryFailure]);
+
+      expect(screen.getByTestId('inbox-issue-dismiss')).not.toHaveClass('of-btn--compact');
+      expect(screen.getByTestId('inbox-issue-copy-details')).not.toHaveClass('of-btn--compact');
+    });
+
     it('dismisses an item on request', async () => {
       const { dismissBackgroundFailure } = await renderWith([deliveryFailure]);
 

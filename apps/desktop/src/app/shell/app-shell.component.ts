@@ -85,8 +85,8 @@ const RUNNING_STATES = new Set(['generating', 'starting']);
               title="Version mismatch"
               [description]="mismatch.description"
             >
-              <of-copy-details-button testId="version-mismatch-copy-details" [text]="mismatch.detailsText" />
-              <button type="button" class="of-btn of-btn--link about-link" data-testid="version-mismatch-about" (click)="openAbout()">About…</button>
+              <of-copy-details-button testId="version-mismatch-copy-details" [text]="mismatch.detailsText" [isCompact]="true" />
+              <button type="button" class="of-btn of-btn--link of-btn--compact about-link" data-testid="version-mismatch-about" (click)="openAbout()">About…</button>
             </of-banner>
           }
           @if (degraded(); as state) {
@@ -96,7 +96,7 @@ const RUNNING_STATES = new Set(['generating', 'starting']);
               title="The daemon hit a problem and is running degraded"
               [description]="state.description"
             >
-              <of-copy-details-button testId="degraded-copy-details" [text]="state.detailsText" />
+              <of-copy-details-button testId="degraded-copy-details" [text]="state.detailsText" [isCompact]="true" />
             </of-banner>
           }
           @if (!events.connected()) {
@@ -151,7 +151,7 @@ const RUNNING_STATES = new Set(['generating', 'starting']);
     .outlet { flex: 1; min-height: 0; min-width: 0; display: flex; overflow-y: auto; overflow-x: hidden; }
     .statusbar { flex: none; height: 1.625rem; display: flex; align-items: center; gap: .75rem; padding: 0 .75rem; border-top: 1px solid var(--line); background: var(--side); font-size: .6875rem; color: var(--mut); }
     .limits { font-style: italic; }
-    .about-link { flex: none; height: 1.5rem; padding: 0 .5rem; font-size: .6875rem; white-space: nowrap; }
+    .about-link { flex: none; }
     .mono { font-family: var(--mono); }
     /* Terminal-first collapse order at 1200×800 (handoff Q10): status bar details, then header
        density — there is no persistent right panel yet in this shell to collapse first. */

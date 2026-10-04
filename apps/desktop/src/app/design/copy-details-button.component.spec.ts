@@ -6,8 +6,10 @@ import { CopyDetailsButtonComponent } from './copy-details-button.component';
 
 const CONFIRMATION_MS = 2000;
 
-async function renderButton() {
-  const { fixture } = await render(CopyDetailsButtonComponent, { bindings: [inputBinding('text', () => 'ref 3f9a1c2e'), inputBinding('testId', () => 'copy')] });
+async function renderButton({ isCompact = false }: { isCompact?: boolean } = {}) {
+  const { fixture } = await render(CopyDetailsButtonComponent, {
+    bindings: [inputBinding('text', () => 'ref 3f9a1c2e'), inputBinding('testId', () => 'copy'), inputBinding('isCompact', () => isCompact)],
+  });
   const button = screen.getByTestId('copy');
   const settle = () => fixture.detectChanges();
   return { button, settle };
@@ -21,6 +23,19 @@ describe('CopyDetailsButtonComponent', () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+
+  it('is the standard secondary button on a card', async () => {
+    const { button } = await renderButton();
+
+    expect(button).toHaveClass('of-btn', 'of-btn--secondary');
+    expect(button).not.toHaveClass('of-btn--compact');
+  });
+
+  it('is the compact button in a strip', async () => {
+    const { button } = await renderButton({ isCompact: true });
+
+    expect(button).toHaveClass('of-btn', 'of-btn--secondary', 'of-btn--compact');
   });
 
   it('says Copied, and announces it politely, once the text is on the clipboard', async () => {

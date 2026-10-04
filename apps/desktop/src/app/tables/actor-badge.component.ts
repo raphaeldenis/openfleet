@@ -11,14 +11,10 @@ const COLOR_VAR: Record<RowActorKind, string> = {
   selector: 'of-actor-badge',
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <span data-testid="actor-badge" [style.color]="'var(' + colorVar() + ')'" class="badge">{{ kind().toUpperCase() }}</span>
+    <span data-testid="actor-badge" [style.color]="'var(' + colorVar() + ')'" class="of-badge actor-badge">{{ kind().toUpperCase() }}</span>
   `,
   styles: `
-    .badge {
-      display: inline-flex; padding: 0 .25rem; border-radius: .1875rem;
-      background: color-mix(in oklch, currentColor 16%, transparent);
-      font-family: var(--mono); font-size: .5625rem; font-weight: 600; letter-spacing: .04em;
-    }
+    .actor-badge { background: color-mix(in oklch, currentColor 16%, transparent); font-family: var(--mono); }
   `,
 })
 export class ActorBadgeComponent {

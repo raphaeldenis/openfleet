@@ -69,6 +69,15 @@ describe('AppShellComponent version mismatch banner', () => {
     expect(banner.querySelector('[data-testid="banner"]')).toHaveAttribute('role', 'status');
   });
 
+  it('offers its actions as compact buttons', async () => {
+    const { daemonAnswersBootCheckWith } = await openShell({ appVersion: '0.2.0' });
+
+    await daemonAnswersBootCheckWith({ version: '0.2.0-dev' });
+
+    expect(screen.getByTestId('version-mismatch-copy-details')).toHaveClass('of-btn--compact');
+    expect(screen.getByTestId('version-mismatch-about')).toHaveClass('of-btn--compact');
+  });
+
   it('shows nothing when the daemon and the app run the same version', async () => {
     const { daemonAnswersBootCheckWith } = await openShell({ appVersion: '0.2.0' });
 
