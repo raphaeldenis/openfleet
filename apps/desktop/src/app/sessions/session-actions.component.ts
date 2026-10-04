@@ -22,9 +22,11 @@ const ESCAPE_KEY = '\x1b';
             Interrupt
           </button>
         }
-        <button #closeTrigger type="button" class="of-btn of-btn--secondary" data-testid="session-close" [disabled]="closing()" (click)="requestClose()">
-          Close
-        </button>
+        @if (closeVisible()) {
+          <button #closeTrigger type="button" class="of-btn of-btn--secondary" data-testid="session-close" [disabled]="closing()" (click)="requestClose()">
+            Close
+          </button>
+        }
       }
       @if (error(); as error) {
         <span role="alert" data-testid="session-action-error" class="of-error">✕ {{ error }}</span>
@@ -73,6 +75,7 @@ export class SessionActionsComponent {
   readonly state = input.required<SessionState>();
   readonly stateSince = input.required<string>();
   readonly sessionName = input.required<string>();
+  readonly closeVisible = input(true);
   private readonly api = inject(FleetApiService);
   private readonly earlyEscapeHint = inject(EarlyEscapeHintService);
   private readonly pendingSwitches = inject(PendingSwitchesService);

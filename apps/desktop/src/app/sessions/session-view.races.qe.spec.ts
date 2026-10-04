@@ -12,6 +12,7 @@ import {
   connectFakeDaemon,
   deferred,
   errorOf,
+  leaveSessionHeadersOpen,
   noteOf,
   requestSwitch,
   selectedValueOf,
@@ -26,6 +27,8 @@ import {
  */
 
 type SwitchReply = { status: 'relaunching' | 'deferred' };
+
+beforeEach(() => leaveSessionHeadersOpen());
 
 function session(patch: Partial<Session> = {}): Session {
   return {

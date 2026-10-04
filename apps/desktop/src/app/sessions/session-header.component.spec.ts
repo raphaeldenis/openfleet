@@ -32,12 +32,24 @@ function providersFor(session: Session, api: ReturnType<typeof fakeApi> = fakeAp
   ];
 }
 
+async function openDetails() {
+  await userEvent.click(screen.getByRole('button', { name: 'Details' }));
+}
+
 describe('SessionHeaderComponent', () => {
-  it('renders the session name, state and harness', async () => {
+  beforeEach(() => localStorage.clear());
+
+  it('renders the session name and state', async () => {
     const session = baseSession();
     await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
     expect((screen.getByTestId('session-name-input') as HTMLInputElement).value).toBe('Gimli · T6');
     expect(screen.getByTestId('state-chip')).toHaveTextContent('idle');
+  });
+
+  it('renders the harness once the details are open', async () => {
+    const session = baseSession();
+    await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
+    await openDetails();
     expect(screen.getByTestId('session-harness')).toHaveTextContent('claude-cli');
   });
 
@@ -340,36 +352,42 @@ describe('SessionHeaderComponent', () => {
   it('renders the worktree directory', async () => {
     const session = baseSession();
     await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
+    await openDetails();
     expect(screen.getByTestId('session-directory')).toHaveTextContent('/repo/.worktrees/t6');
   });
 
   it('shows the italic "not tracked" cost placeholder', async () => {
     const session = baseSession();
     await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
+    await openDetails();
     expect(screen.getByTestId('session-cost')).toHaveAttribute('title', 'Cost tracking is not implemented yet');
   });
 
   it('renders the model selector for this session', async () => {
     const session = baseSession();
     await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
+    await openDetails();
     expect(screen.getByTestId('current-model')).toHaveTextContent('claude-sonnet-5');
   });
 
   it('renders the permission mode, read-only', async () => {
     const session = baseSession();
     await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
+    await openDetails();
     expect(screen.getByTestId('permission-mode')).toHaveTextContent('manual');
   });
 
   it('offers a Close action for an open session', async () => {
     const session = baseSession();
     await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
+    await openDetails();
     expect(screen.getByTestId('session-close')).toBeTruthy();
   });
 
   it('warns the close-confirm dialog of a pending model switch reported by the model selector', async () => {
     const session = baseSession();
     await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
+    await openDetails();
 
     await userEvent.selectOptions(screen.getByTestId('model-select'), 'opus');
     await userEvent.click(screen.getByTestId('apply-model'));
@@ -381,9 +399,7 @@ describe('SessionHeaderComponent', () => {
   });
 
   describe('identity row', () => {
-    const leadingItemTestIds = [
-      'session-emoji-input', 'session-name-input', 'state-chip', 'session-exit-code', 'session-harness', 'session-directory', 'session-cost',
-    ];
+    const leadingItemTestIds = ['session-emoji-input', 'session-name-input', 'state-chip', 'session-exit-code', 'session-header-toggle'];
 
     async function renderClosedSession(patch: Partial<Session> = {}) {
       const session = baseSession({ state: 'closed', exitCode: 1, ...patch });
@@ -442,12 +458,12 @@ describe('SessionHeaderComponent', () => {
 
       expect(chip).toHaveTextContent('⇄ drift');
       expect(chip).toHaveAttribute('title', expect.stringContaining('claude-opus-4-0'));
-      expect(screen.getByTestId('session-header-row')).toContainElement(chip);
     });
 
     it('shows no drift chip when the model did not drift', async () => {
       const session = baseSession();
       await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
+      await openDetails();
 
       expect(screen.queryByTestId('session-drift-chip')).toBeNull();
     });
