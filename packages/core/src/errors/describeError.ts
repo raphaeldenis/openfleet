@@ -14,7 +14,7 @@ import { ModelConfigReadOnlyError, ModelConfigUnreadableError } from '../models.
 import { escapedForRegExp, isSecretEntry, MASK, maskedSecrets, maskingCutCredential } from '../redact.js';
 import { WorktreeError } from '../git/worktrees.js';
 import {
-  DocsFolderNotWritableError, NoteFileUnreadableError, NoteIsNotFileBackedError, PathEscapesDocsFolderError, ProjectHasNoDocsFolderError, ProjectNotFoundError,
+  DocsFolderNotWritableError, InvalidDocsFolderError, NoteFileUnreadableError, NoteIsNotFileBackedError, PathEscapesDocsFolderError, ProjectHasNoDocsFolderError, ProjectNotFoundError,
 } from '../notes/docsFolderService.js';
 import { HandoffNotFoundError, SessionHasNoProjectError, SessionNotFoundForHandoffError } from '../notes/handoffService.js';
 import { SectionError } from '../notes/noteSections.js';
@@ -144,6 +144,7 @@ const RULES: Rule[] = [
   when(SessionHasNoProjectError, asIs('no_docs_folder')),
   when(ProjectHasNoDocsFolderError, asIs('no_docs_folder')),
   when(DocsFolderNotWritableError, () => DOCS_FOLDER_NOT_WRITABLE_ENTRY),
+  when(InvalidDocsFolderError, asIs('invalid_body')),
   when(HandoffNotFoundError, () => ({ code: 'handoff_not_found', message: 'the handoff does not exist.' })),
   when(NoteIsNotFileBackedError, asIs('not_file_backed')),
   when(WorktreeError, (error) => WORKTREE_ENTRY_BY_CODE[error.code](error)),

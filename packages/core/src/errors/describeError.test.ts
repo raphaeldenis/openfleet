@@ -21,7 +21,7 @@ import {
   ConstraintError, DaemonSetColumnError, DuplicateIdError, InvalidActorError, InvalidCellValueError, InvalidColumnDefinitionError, InvalidNameError, InvalidQueryError,
   InvalidViewConfigError, ReferencedRecordMissingError, StoreHasRowsError, StoreRowCapError, ViewNotFoundError,
 } from '../stores/dataStoreService.js';
-import { DocsFolderNotWritableError, NoteIsNotFileBackedError, ProjectHasNoDocsFolderError } from '../notes/docsFolderService.js';
+import { DocsFolderNotWritableError, InvalidDocsFolderError, NoteIsNotFileBackedError, ProjectHasNoDocsFolderError } from '../notes/docsFolderService.js';
 import { HandoffNotFoundError, SessionHasNoProjectError, SessionNotFoundForHandoffError } from '../notes/handoffService.js';
 import { SectionError } from '../notes/noteSections.js';
 import { WorktreeError } from '../git/worktrees.js';
@@ -87,6 +87,7 @@ const domainErrorCodes: [string, () => unknown, ErrorCode][] = [
   ['ProjectHasNoDocsFolderError', () => new ProjectHasNoDocsFolderError('p1'), 'no_docs_folder'],
   ['NoteIsNotFileBackedError', () => new NoteIsNotFileBackedError('n1'), 'not_file_backed'],
   ['DocsFolderNotWritableError', () => new DocsFolderNotWritableError('/somewhere/docs', new Error('EACCES')), 'docs_folder_not_writable'],
+  ['InvalidDocsFolderError', () => new InvalidDocsFolderError(), 'invalid_body'],
   ['HandoffNotFoundError', () => new HandoffNotFoundError('2026-10-04-gimli.md'), 'handoff_not_found'],
   ['WorktreeError invalid_branch', () => new WorktreeError('invalid_branch', 'invalid branch name: a b'), 'invalid_branch_name'],
   ['WorktreeError git_failed', () => new WorktreeError('git_failed', 'fatal: /w/a is not a repository'), 'internal_error'],

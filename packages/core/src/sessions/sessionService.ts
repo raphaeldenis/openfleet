@@ -9,6 +9,8 @@ import type { Harness, HarnessHandle } from '../harness/harness.js';
 import { claudeProjectsDir } from '../harness/claudeProjectsDir.js';
 import { newId, newToken } from '../ids.js';
 import { log } from '../logger.js';
+import { ProjectNotFoundError } from '../projects/projectErrors.js';
+import { ProjectRepository } from '../projects/projectRepository.js';
 import { MessageQueue } from './messageQueue.js';
 import { findLatestContextTokens, findResolvedModel, readTranscriptTail } from './resolvedModel.js';
 import { wrapAgentMessage } from './messageEnvelope.js';
@@ -381,6 +383,7 @@ function trimToTail(text: string, maxLength: number): string {
 
 export class SessionService {
   private readonly repo: SessionRepository;
+  private readonly projects: ProjectRepository;
   private readonly queue: MessageQueue;
   private readonly handles = new Map<string, HarnessHandle>();
   private readonly outputBuffers = new Map<string, string>();
@@ -434,19 +437,21 @@ export class SessionService {
 
   constructor(private readonly deps: SessionServiceDeps) {
     this.repo = new SessionRepository(deps.db);
+    this.projects = new ProjectRepository(deps.db);
     this.queue = new MessageQueue(deps.db);
   }
 
   async create(spec: SessionSpec, options?: { branch?: string }): Promise<Session> {
     this.assertNotShuttingDown();
     const harness = this.harnessFor(spec.harness);
+    this.assertProjectExists(spec.projectId);
     const id = newId();
     const hookToken = newToken();
     const mcpToken = newToken();
     const now = new Date().toISOString();
     this.repo.insert({ id, name: spec.name, emoji: spec.emoji, directory: spec.directory, worktree: null, model: spec.model ?? null,
       parent_id: spec.parentId ?? null, role: spec.role ?? null, harness: spec.harness, state: 'starting', state_since: now, hook_token: hookToken, mcp_token: mcpToken,
-      permission_mode: spec.permissionMode ?? null, branch: options?.branch ?? null, created_at: now });
+      permission_mode: spec.permissionMode ?? null, branch: options?.branch ?? null, project_id: spec.projectId ?? null, created_at: now });
     // Captured now so a later reopen can tell a directory that still resolves the same way apart from an
     // in-between symlink swap from one whose path never resolved to a real directory at all.
     if (existsSync(spec.directory)) this.repo.setDirectoryRealpath(id, realpathSync.native(spec.directory));
@@ -486,8 +491,14 @@ export class SessionService {
 
   async createInWorktree(spec: SessionSpec & { repoPath: string; branchName: string }): Promise<Session> {
     this.harnessFor(spec.harness);
+    this.assertProjectExists(spec.projectId);
     const worktree = await createWorktree({ repoPath: spec.repoPath, branchName: spec.branchName, worktreesRoot: this.deps.worktreesRoot, env: this.deps.env });
     return this.create({ ...spec, directory: worktree.path }, { branch: worktree.branch });
+  }
+
+  private assertProjectExists(projectId: string | undefined): void {
+    const isLinkedToProject = projectId !== undefined;
+    if (isLinkedToProject && !this.projects.get(projectId)) throw new ProjectNotFoundError(projectId);
   }
 
   hasQueuedMessage(sessionId: string, body: string): boolean {

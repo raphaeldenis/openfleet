@@ -100,10 +100,10 @@ export class FleetApiService {
   availableModels() { return this.call<{ models: string[] }>('/api/models/available'); }
   saveModels(patch: Record<string, string>) { return this.put<{ models: Record<string, string> }>('/api/models', patch); }
   createSession(spec: Partial<SessionSpec> & { directory: string; name: string; repoPath?: string; branchName?: string }) { return this.post<Session>('/api/sessions', spec); }
-  createManagerSession(spec: { directory: string; name: string; emoji?: string; model?: string; harness?: HarnessId; permissionMode?: PermissionMode; pulseSeconds?: number; childrenCap: number; mission: string }) {
+  createManagerSession(spec: { directory: string; name: string; emoji?: string; model?: string; harness?: HarnessId; permissionMode?: PermissionMode; projectId?: string; pulseSeconds?: number; childrenCap: number; mission: string }) {
     return this.post<Session>('/api/sessions', {
       directory: spec.directory, name: spec.name, emoji: spec.emoji, model: spec.model,
-      harness: spec.harness, permissionMode: spec.permissionMode,
+      harness: spec.harness, permissionMode: spec.permissionMode, projectId: spec.projectId,
       manager: { pulseSeconds: spec.pulseSeconds, childrenCap: spec.childrenCap, mission: spec.mission },
     });
   }

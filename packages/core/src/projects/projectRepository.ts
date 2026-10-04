@@ -24,6 +24,15 @@ export class ProjectRepository {
     this.db.prepare('INSERT INTO projects (id, name, docs_folder_path, created_at) VALUES (?, ?, ?, ?)')
       .run(record.id, record.name, record.docsFolderPath, record.createdAt);
   }
+  update(id: string, patch: { name?: string; docsFolderPath?: string }): void {
+    const current = this.get(id);
+    if (!current) return;
+    this.db.prepare('UPDATE projects SET name = ?, docs_folder_path = ? WHERE id = ?')
+      .run(patch.name ?? current.name, patch.docsFolderPath ?? current.docsFolderPath, id);
+  }
+  delete(id: string): void {
+    this.db.prepare('DELETE FROM projects WHERE id = ?').run(id);
+  }
   get(id: string): ProjectRecord | undefined {
     const row = this.db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as Row | undefined;
     return row ? toProject(row) : undefined;

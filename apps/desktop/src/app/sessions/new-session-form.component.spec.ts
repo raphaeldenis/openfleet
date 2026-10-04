@@ -12,6 +12,7 @@ const MISSION_MAX_BYTES = 64 * 1024;
 
 function fakeApi(overrides: Record<string, unknown> = {}) {
   return {
+    listProjects: vi.fn().mockResolvedValue({ items: [], total: 0, limit: 200, offset: 0 }),
     createSession: vi.fn().mockResolvedValue({ id: 's-new' }),
     createManagerSession: vi.fn().mockResolvedValue({ id: 'm-new' }),
     ...overrides,

@@ -102,6 +102,33 @@ describe('FleetApiService', () => {
     expect(JSON.parse(init.body as string)).toEqual({ opus: 'new' });
   });
 
+  describe('creating a session in a project', () => {
+    const projectId = '3f2b8c1e-5d4a-4b6e-9a7c-1d2e3f4a5b6c';
+    const sentBody = () => JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string) as Record<string, unknown>;
+
+    beforeEach(() => {
+      fetchMock.mockResolvedValue(fakeResponse({ ok: true, status: 201, json: () => Promise.resolve({ id: 's1' }) }));
+    });
+
+    it('sends the project id of a session', async () => {
+      await api.createSession({ directory: '/tmp/wt', name: 'Gimli', projectId });
+
+      expect(sentBody()).toMatchObject({ directory: '/tmp/wt', name: 'Gimli', projectId });
+    });
+
+    it('sends the project id of a manager session next to its manager block', async () => {
+      await api.createManagerSession({ directory: '/tmp/wt', name: 'Lead', childrenCap: 2, mission: 'Ship', projectId });
+
+      expect(sentBody()).toMatchObject({ projectId, manager: { childrenCap: 2, mission: 'Ship' } });
+    });
+
+    it('sends no project id for a manager session without one', async () => {
+      await api.createManagerSession({ directory: '/tmp/wt', name: 'Lead', childrenCap: 2, mission: 'Ship' });
+
+      expect(sentBody()).not.toHaveProperty('projectId');
+    });
+  });
+
   it('sends the admin bearer token and JSON content type on every request', async () => {
     fetchMock.mockResolvedValue(fakeResponse({ ok: true, status: 200, json: () => Promise.resolve({}) }));
 

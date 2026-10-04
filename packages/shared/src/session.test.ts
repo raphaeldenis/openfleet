@@ -40,6 +40,17 @@ describe('SessionSpecSchema', () => {
     expect(PERMISSION_MODES).toEqual(['manual', 'acceptEdits', 'plan', 'auto', 'bypassPermissions', 'dontAsk']);
   });
 
+  it('leaves projectId unset by default and keeps a uuid project id', () => {
+    const projectId = '3f2b8c1e-5d4a-4b6e-9a7c-1d2e3f4a5b6c';
+
+    expect(SessionSpecSchema.parse({ directory: '/tmp/x', name: 'Gimli' }).projectId).toBeUndefined();
+    expect(SessionSpecSchema.parse({ directory: '/tmp/x', name: 'Gimli', projectId }).projectId).toBe(projectId);
+  });
+
+  it.each(['', 'not-a-uuid', 42])('rejects the malformed project id %j', (projectId) => {
+    expect(() => SessionSpecSchema.parse({ directory: '/tmp/x', name: 'Gimli', projectId })).toThrow();
+  });
+
   it('rejects a manager block missing childrenCap', () => {
     expect(() =>
       SessionSpecSchema.parse({ directory: '/tmp/x', name: 'Lead', manager: { pulseSeconds: 1800, mission: 'Ship it' } }),

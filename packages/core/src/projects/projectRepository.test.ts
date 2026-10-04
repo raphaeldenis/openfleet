@@ -33,6 +33,25 @@ describe('ProjectRepository', () => {
     expect(repository.list().map((project) => project.id)).toEqual(['p1', 'p2']);
   });
 
+  it('updates only the fields it is given', () => {
+    const repository = new ProjectRepository(openDatabase(':memory:'));
+    repository.insert({ id: 'p1', name: 'OpenFleet', docsFolderPath: '/docs/a', createdAt: 't0' });
+
+    repository.update('p1', { name: 'Renamed' });
+    repository.update('p1', { docsFolderPath: '/docs/b' });
+
+    expect(repository.get('p1')).toEqual({ id: 'p1', name: 'Renamed', docsFolderPath: '/docs/b', createdAt: 't0' });
+  });
+
+  it('deletes a project', () => {
+    const repository = new ProjectRepository(openDatabase(':memory:'));
+    repository.insert({ id: 'p1', name: 'OpenFleet', docsFolderPath: null, createdAt: 't0' });
+
+    repository.delete('p1');
+
+    expect(repository.get('p1')).toBeUndefined();
+  });
+
   it('indexes sessions by project', () => {
     const db = openDatabase(':memory:');
 
