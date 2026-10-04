@@ -7,6 +7,7 @@ mod issue_report;
 #[cfg(test)]
 mod linear_growth;
 mod log_file;
+mod panic_hook;
 mod path_repair;
 mod redaction;
 mod status_line;
@@ -45,16 +46,12 @@ const DEFAULT_NAME_HEADER: &str = "x-default-name";
 /// The bundle the user saved last: the only file `reveal_diagnostics_bundle` can show, so the webview chooses no path.
 static LAST_SAVED_BUNDLE: Mutex<Option<PathBuf>> = Mutex::new(None);
 
-/// Returns the tail of the desktop's daemon log with secrets masked and the home folder shortened to `~`.
+/// Returns the tail of `desktop.log` as stored: the log holds only allowlisted fields, so nothing is masked or shortened on the way out.
 #[tauri::command(async)]
 fn read_desktop_log(app: tauri::AppHandle) -> Result<String, String> {
   let user_home = app.path().home_dir().map_err(|err| err.to_string())?;
-  let openfleet_home = std::env::var("OPENFLEET_HOME").ok();
-  let secrets = admin_token::admin_token_secrets(&admin_token::admin_token_path(openfleet_home.clone(), &user_home));
-  let log_path = log_file::logs_dir(openfleet_home, &user_home).join(log_file::LOG_FILE_NAME);
-  let lines = log_file::last_redacted_lines(&log_path, DESKTOP_LOG_LINES_IN_BUNDLE, &secrets);
-  let user_home = user_home.to_string_lossy().to_string();
-  Ok(lines.iter().map(|line| issue_report::with_home_shortened(line, &user_home)).collect::<Vec<_>>().join("\n"))
+  let log_path = log_file::logs_dir(std::env::var("OPENFLEET_HOME").ok(), &user_home).join(log_file::LOG_FILE_NAME);
+  Ok(log_file::last_lines(&log_path, DESKTOP_LOG_LINES_IN_BUNDLE).join("\n"))
 }
 
 /// Shows the native save sheet and writes the zip the webview sends as the raw body; answers `saved` with the path or `cancelled`.
@@ -91,9 +88,7 @@ fn report_issue(app: tauri::AppHandle, daemon: tauri::State<daemon::DaemonState>
 
 fn open_prefilled_issue(app: &tauri::AppHandle, daemon: &daemon::DaemonState) -> Result<(), String> {
   let user_home = app.path().home_dir().map_err(|err| err.to_string())?;
-  let openfleet_home = std::env::var("OPENFLEET_HOME").ok();
-  let secrets = admin_token::admin_token_secrets(&admin_token::admin_token_path(openfleet_home.clone(), &user_home));
-  let log_path = log_file::logs_dir(openfleet_home, &user_home).join(log_file::LOG_FILE_NAME);
+  let log_path = log_file::logs_dir(std::env::var("OPENFLEET_HOME").ok(), &user_home).join(log_file::LOG_FILE_NAME);
   let status = daemon.snapshot(std::time::Instant::now());
   let daemon_state = serde_json::to_value(status.state).ok().and_then(|state| state.as_str().map(str::to_string)).unwrap_or_default();
   let report = issue_report::IssueReport {
@@ -102,14 +97,26 @@ fn open_prefilled_issue(app: &tauri::AppHandle, daemon: &daemon::DaemonState) ->
     daemon_state,
     macos_version: issue_report::macos_version(),
     arch: std::env::consts::ARCH.to_string(),
-    log_lines: log_file::last_redacted_lines(&log_path, LOG_LINES_IN_REPORT, &secrets),
+    log_lines: log_file::last_lines(&log_path, LOG_LINES_IN_REPORT),
     user_home: user_home.to_string_lossy().to_string(),
   };
   issue_report::open_issue_form(&report, |url| issue_report::open_with_macos(url.as_ref()))
 }
 
+const FOREIGN_RECORDS_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Writes the counts of third-party `log::` records to `desktop.log` once per `interval`.
+fn record_foreign_records_every(interval: std::time::Duration, app: tauri::AppHandle) {
+  std::thread::spawn(move || loop {
+    std::thread::sleep(interval);
+    daemon::record_foreign_records_of(&app);
+  });
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+  let _ = event_log::install_foreign_logger();
+  panic_hook::install();
   let application = tauri::Builder::default()
     .plugin(tauri_plugin_shell::init())
     .manage(daemon::DaemonState::new())
@@ -121,14 +128,8 @@ pub fn run() {
     })
     .invoke_handler(tauri::generate_handler![read_admin_token, daemon::daemon_status, reveal_logs, report_issue, read_desktop_log, save_diagnostics_bundle, reveal_diagnostics_bundle])
     .setup(|app| {
-      if cfg!(debug_assertions) {
-        app.handle().plugin(
-          tauri_plugin_log::Builder::default()
-            .level(log::LevelFilter::Info)
-            .build(),
-        )?;
-      }
       daemon::start(app.handle().clone());
+      record_foreign_records_every(FOREIGN_RECORDS_INTERVAL, app.handle().clone());
       Ok(())
     })
     .build(tauri::generate_context!())

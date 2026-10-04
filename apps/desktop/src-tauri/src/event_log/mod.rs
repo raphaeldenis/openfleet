@@ -5,6 +5,7 @@
 mod daemon_line;
 mod event;
 mod field;
+mod foreign;
 mod grammar;
 mod hash;
 #[cfg(test)]
@@ -17,6 +18,7 @@ pub use field::{
   Bool, Bytes, CatalogueId, Count, DaemonMessage, DaemonPhase, DurationMs, EventName, ExitCode, IoFailure, IoKind, JsonFailure, KnownCode, KnownErrorName,
   KnownPaths, Level, Opaque, PathClass, PathSource, Pid, SessionId, ShortId, StackFrames, StopOutcome, Stream, Ts,
 };
+pub use foreign::{install_foreign_logger, AllowlistLogger, FOREIGN_RECORDS};
 pub use grammar::{allowed_keys_of, validate, GrammarViolation, SanitizedLine};
 pub use hash::Hash8;
 pub use salt::{Salt, SALT_FILE_NAME};
