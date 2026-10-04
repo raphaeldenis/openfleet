@@ -166,6 +166,9 @@ importers:
 
   .:
     devDependencies:
+      '@openfleet/shared':
+        specifier: workspace:*
+        version: link:packages/shared
       '@types/node':
         specifier: ^26.0.0
         version: 26.6.2

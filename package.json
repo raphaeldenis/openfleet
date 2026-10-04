@@ -11,6 +11,7 @@
     "test": "vitest run",
     "typecheck": "pnpm -r --filter './packages/*' exec tsc --noEmit && pnpm --filter @openfleet/desktop exec tsc -p tsconfig.app.json --noEmit",
     "arch": "depcruise packages/core/src packages/shared/src apps/desktop/src --config .dependency-cruiser.cjs --ts-pre-compilation-deps --ignore-known .dependency-cruiser-known-violations.json",
+    "docs:errors": "pnpm --filter @openfleet/core exec tsx ../../scripts/errors/generateErrorReference.ts",
     "dev:core": "pnpm --filter @openfleet/core dev",
     "dev:desktop": "pnpm --filter @openfleet/desktop tauri dev",
     "dev": "concurrently -k \"pnpm dev:core\" \"pnpm dev:desktop\"",
@@ -21,6 +22,7 @@
     "prepare": "husky"
   },
   "devDependencies": {
+    "@openfleet/shared": "workspace:*",
     "@types/node": "^26.0.0",
     "concurrently": "^10.0.5",
     "dependency-cruiser": "^18.5.0",
