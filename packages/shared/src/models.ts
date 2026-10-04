@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import * as z from 'zod';
 
 // A model id becomes the value of the claude CLI's `--model <value>` flag (see launchConfig.ts): a leading
 // '-' would be read as another flag, and whitespace or control characters could inject one. Every entry

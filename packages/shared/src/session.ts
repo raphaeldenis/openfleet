@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import * as z from 'zod';
 import { ManagerSpecSchema } from './managers.js';
 import { ModelIdSchema } from './models.js';
 

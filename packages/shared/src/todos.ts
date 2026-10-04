@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import * as z from 'zod';
 
 export const TODO_STATUSES = ['pending', 'in_progress', 'completed'] as const;
 export type TodoStatus = (typeof TODO_STATUSES)[number];

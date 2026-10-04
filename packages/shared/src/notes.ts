@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import * as z from 'zod';
 
 export const NOTE_FOLDERS = ['specs', 'plans', 'handoffs', 'reports'] as const;
 export const NoteFolderSchema = z.enum(NOTE_FOLDERS);

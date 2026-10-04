@@ -26,6 +26,8 @@ Requires Node >=26 — `nvm use` in this repo picks up Homebrew's Node via `.nvm
     pnpm dev:core          # daemon on 127.0.0.1:7331
     pnpm dev               # daemon + Tauri window
 
+Build budget: the production initial bundle measures about 425 kB (warning at 470 kB, error at 600 kB, set in `apps/desktop/angular.json`). Schemas import zod as `import * as z from 'zod'` so the bundler drops its unused locales and JSON-schema code; `import { z } from 'zod'` ships all of it (+330 kB).
+
 Once a packaged app runs on `~/.openfleet` and port 7331, start dev daemons on their own home and port: `OPENFLEET_HOME=~/.openfleet-dev OPENFLEET_PORT=7332 pnpm dev:core`. A dev daemon that migrates the packaged app's database makes the packaged app refuse to boot. The packaged app reuses any daemon it finds on 7331.
 
 ### Build the dmg

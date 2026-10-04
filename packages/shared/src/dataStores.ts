@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import * as z from 'zod';
 
 export const COLUMN_TYPES = ['text', 'number', 'date', 'select', 'json'] as const;
 export const ColumnTypeSchema = z.enum(COLUMN_TYPES);
