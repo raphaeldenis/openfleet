@@ -1,4 +1,4 @@
-import type { HandoffContent, Note, ServerEvent, Session } from '@openfleet/shared';
+import type { HandoffContent, HandoffSkipReason, Note, ServerEvent, Session } from '@openfleet/shared';
 import type { ProjectRepository } from '../projects/projectRepository.js';
 import type { DocsFolderService } from './docsFolderService.js';
 import type { BuildHandoffDraft } from './handoffDraft.js';
@@ -72,17 +72,24 @@ export class HandoffService {
 
   /** Deterministic fallback for a closing session: no LLM, only the draft built from session data, working state and git. */
   writeAutoOnClose(sessionId: string): Note | undefined {
-    const session = this.deps.sessions.get(sessionId);
-    if (!session?.projectId) return undefined;
-    if (this.hasRecentManualHandoff(sessionId)) return undefined;
-    if (this.sessionsWithAutoHandoff.has(sessionId)) return undefined;
-    const hasDocsFolder = Boolean(this.deps.projects.get(session.projectId)?.docsFolderPath);
-    if (!hasDocsFolder) return undefined;
+    if (this.reasonToSkipAutoHandoff(sessionId)) return undefined;
+    const session = this.deps.sessions.get(sessionId)!;
 
     const { content } = this.deps.buildDraft(sessionId);
-    const note = this.createHandoffNote(session, session.projectId, content, AUTO_HANDOFF_AUTHOR);
+    const note = this.createHandoffNote(session, session.projectId!, content, AUTO_HANDOFF_AUTHOR);
     this.sessionsWithAutoHandoff.add(sessionId);
     return note;
+  }
+
+  /** Why `writeAutoOnClose` would write nothing for this session right now; `undefined` when it would write. */
+  reasonToSkipAutoHandoff(sessionId: string): HandoffSkipReason | undefined {
+    const session = this.deps.sessions.get(sessionId);
+    const projectId = session?.projectId;
+    const hasDocsFolder = projectId !== undefined && Boolean(this.deps.projects.get(projectId)?.docsFolderPath);
+    if (!hasDocsFolder) return 'target_unavailable';
+    if (this.hasRecentManualHandoff(sessionId)) return 'recent_manual_handoff';
+    if (this.sessionsWithAutoHandoff.has(sessionId)) return 'already_written';
+    return undefined;
   }
 
   /** Lets a reopened session get an automatic handoff again on its next close. */
@@ -104,12 +111,15 @@ export class HandoffService {
   }
 }
 
-/** Calls `handoffs.writeAutoOnClose` on every `session.closed` event and re-arms the session on `session.reopened`. Returns the unsubscribe. */
-// Not called from main.ts on purpose: P3-DOCS-WIRE registers it together with the docs-folder wiring.
+/**
+ * Writes the automatic handoff of a session whose agent process ended unexpectedly (`session.closed` with reason `harness_exit`)
+ * when `writeOnClose` is on, and re-arms the session on `session.reopened`. A close the user requested carries its own
+ * `writeHandoff` choice, and a shutdown or a failed launch is no end of work. Returns the unsubscribe.
+ */
 export function registerHandoffOnClose(
   bus: { subscribe(listener: (event: ServerEvent) => void): () => unknown },
   handoffs: Pick<HandoffService, 'writeAutoOnClose' | 'forgetAutoHandoff'>,
-  onError: (error: unknown) => void = () => {},
+  { writeOnClose, onError = () => {} }: { writeOnClose: boolean; onError?: (error: unknown) => void },
 ): () => unknown {
   return bus.subscribe((event) => {
     if (event.type === 'session.reopened') {
@@ -117,6 +127,8 @@ export function registerHandoffOnClose(
       return;
     }
     if (event.type !== 'session.closed') return;
+    const isCrash = event.reason === 'harness_exit';
+    if (!isCrash || !writeOnClose) return;
     try {
       handoffs.writeAutoOnClose(event.sessionId);
     } catch (error) {
