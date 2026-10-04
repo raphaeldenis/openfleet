@@ -25,10 +25,11 @@ export interface NoteRouteDeps {
   docs: DocsFolderService;
 }
 
+export const summaryOf = (note: Note): NoteSummary => ({
+  id: note.id, title: note.title, folder: note.folder, rev: note.rev, shared: note.shared, fileBacked: note.filePath !== null, updatedAt: note.updatedAt,
+});
+
 export function registerNoteRoutes(router: Router, { notes, noteRepo, docs }: NoteRouteDeps): void {
-  const summaryOf = (note: Note): NoteSummary => ({
-    id: note.id, title: note.title, folder: note.folder, rev: note.rev, shared: note.shared, fileBacked: note.filePath !== null, updatedAt: note.updatedAt,
-  });
   const viewOf = (note: Note): NoteView => ({
     ...summaryOf(note), projectId: note.projectId, bodyMd: note.bodyMd, createdAt: note.createdAt, docsRelativePath: docs.docsRelativePath(note),
   });

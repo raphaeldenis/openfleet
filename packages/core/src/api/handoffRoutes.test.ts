@@ -1,8 +1,8 @@
-import { chmodSync, mkdtempSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import type { HandoffPreview, HandoffTarget, Session } from '@openfleet/shared';
+import type { HandoffContent, HandoffPreview, HandoffTarget, NoteSummary, Session } from '@openfleet/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
@@ -41,6 +41,7 @@ let docs: DocsFolderService;
 let git: { statusShort: ReturnType<typeof vi.fn<GitPort['statusShort']>>; diffStatOf: ReturnType<typeof vi.fn<GitPort['diffStatOf']>> };
 let docsFolder: string;
 let configWriteOnClose: boolean;
+let handoffClock: string;
 
 const get = (path: string, headers: Record<string, string> = ADMIN) => fetch(`${server.url}${path}`, { headers });
 const getJson = async <T>(path: string) => (await get(path)).json() as Promise<T>;
@@ -74,7 +75,7 @@ async function boot(): Promise<void> {
   const notes = new NoteService({ repo: noteRepo, db, expandMentions, clock: () => CLOCK, newId });
   docs = new DocsFolderService({ notes, noteRepo, projects, fs: nodeDocsFolderFs, clock: () => CLOCK });
   git = { statusShort: vi.fn(() => ' M src/app.ts'), diffStatOf: vi.fn(() => ' 1 file changed') };
-  const handoff = createHandoffRouteDeps({ sessions, managers, workingStates, todos, docs, projects, git, settings: { writeOnClose: configWriteOnClose }, clock: () => CLOCK });
+  const handoff = createHandoffRouteDeps({ sessions, managers, workingStates, todos, docs, projects, git, settings: { writeOnClose: configWriteOnClose }, clock: () => handoffClock });
 
   server = await startServer({
     host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable: { ...DEFAULT_MODEL_TABLE }, modelConfigPath: '/tmp/of-unused/config.json',
@@ -85,6 +86,7 @@ async function boot(): Promise<void> {
 beforeEach(async () => {
   docsFolder = mkdtempSync(join(tmpdir(), 'of-handoff-docs-'));
   configWriteOnClose = true;
+  handoffClock = CLOCK;
   await boot();
 });
 afterEach(() => server.close());
@@ -295,6 +297,280 @@ describe('GET /api/sessions/:id/handoff-target', () => {
     const res = await get(`/api/sessions/${session.id}/handoff-target`, {});
 
     expect(res.status).toBe(401);
+  });
+});
+
+const SECTIONS: HandoffContent = {
+  goal: 'Ship the handoff save',
+  state: 'Route written, tests green',
+  decisions: 'Keep the guard in memory',
+  filesTouched: 'handoffRoutes.ts',
+  nextSteps: 'Wire the desktop panel',
+  openQuestions: 'None',
+};
+const IDENTICAL_BODY_WINDOW_MS = 60_000;
+
+const saveHandoff = (sessionId: string, body: unknown, headers: Record<string, string> = ADMIN) =>
+  fetch(`${server.url}/api/sessions/${sessionId}/handoff`, { method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify(body) });
+const handoffFiles = () => readdirSync(join(docsFolder, 'handoffs'));
+const afterMs = (ms: number) => new Date(Date.parse(CLOCK) + ms).toISOString();
+
+describe('POST /api/sessions/:id/handoff', () => {
+  it('writes the handoff file in the docs folder and answers 201 with the note and its relative path', async () => {
+    const session = await sessionWithDocsFolder();
+
+    const res = await saveHandoff(session.id, SECTIONS);
+    const saved = (await res.json()) as { note: NoteSummary; relativePath: string };
+
+    expect(res.status).toBe(201);
+    expect(saved.relativePath).toBe('handoffs/2026-10-04-gimli.md');
+    expect(saved.note).toMatchObject({ title: 'Gimli', folder: 'handoffs', fileBacked: true });
+    const fileText = readFileSync(join(docsFolder, saved.relativePath), 'utf8');
+    expect(fileText).toContain('## Goal\nShip the handoff save');
+    expect(fileText).toContain('## Open questions\nNone');
+  });
+
+  it('stores the handoff as a file-backed note of the handoffs folder', async () => {
+    const session = await sessionWithDocsFolder();
+    const { note } = (await (await saveHandoff(session.id, SECTIONS)).json()) as { note: NoteSummary };
+
+    const row = db.prepare('SELECT folder, project_id, file_path FROM notes WHERE id = ?').get(note.id) as { folder: string; project_id: string; file_path: string };
+
+    expect(row).toMatchObject({ folder: 'handoffs', project_id: 'p-docs' });
+    expect(row.file_path.endsWith('/handoffs/2026-10-04-gimli.md')).toBe(true);
+  });
+
+  it('gives a second save with a different body its own file', async () => {
+    const session = await sessionWithDocsFolder();
+    await saveHandoff(session.id, SECTIONS);
+
+    const res = await saveHandoff(session.id, { ...SECTIONS, goal: 'A different goal' });
+
+    expect(res.status).toBe(201);
+    expect(((await res.json()) as { relativePath: string }).relativePath).toBe('handoffs/2026-10-04-gimli-2.md');
+    expect(handoffFiles()).toHaveLength(2);
+  });
+
+  describe('identical body guard', () => {
+    it('answers an identical body within the window with 200 and the first note, without a new file or note row', async () => {
+      const session = await sessionWithDocsFolder();
+      const first = (await (await saveHandoff(session.id, SECTIONS)).json()) as { note: NoteSummary; relativePath: string };
+      const notesAfterFirst = noteCount();
+      handoffClock = afterMs(IDENTICAL_BODY_WINDOW_MS - 1_000);
+
+      const res = await saveHandoff(session.id, SECTIONS);
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual(first);
+      expect(handoffFiles()).toHaveLength(1);
+      expect(noteCount()).toBe(notesAfterFirst);
+    });
+
+    it('writes a new file once the window has passed', async () => {
+      const session = await sessionWithDocsFolder();
+      await saveHandoff(session.id, SECTIONS);
+      handoffClock = afterMs(IDENTICAL_BODY_WINDOW_MS + 1_000);
+
+      const res = await saveHandoff(session.id, SECTIONS);
+
+      expect(res.status).toBe(201);
+      expect(handoffFiles()).toHaveLength(2);
+    });
+
+    it('does not apply to a body that differs in a single section', async () => {
+      const session = await sessionWithDocsFolder();
+      await saveHandoff(session.id, SECTIONS);
+
+      const res = await saveHandoff(session.id, { ...SECTIONS, openQuestions: 'One more question' });
+
+      expect(res.status).toBe(201);
+    });
+
+    it('does not apply across sessions', async () => {
+      const first = await sessionWithDocsFolder('Gimli');
+      const second = await createSession('Legolas');
+      attachProject(second.id, 'p-docs');
+      await saveHandoff(first.id, SECTIONS);
+
+      const res = await saveHandoff(second.id, SECTIONS);
+
+      expect(res.status).toBe(201);
+      expect(handoffFiles()).toHaveLength(2);
+    });
+
+    it('treats two bodies that differ only by a masked secret as identical', async () => {
+      const session = await sessionWithDocsFolder();
+      await saveHandoff(session.id, { ...SECTIONS, state: `token ${SECRET}` });
+
+      const res = await saveHandoff(session.id, { ...SECTIONS, state: `token ${SECRET}` });
+
+      expect(res.status).toBe(200);
+    });
+  });
+
+  it('masks a secret in the file and in the response', async () => {
+    const session = await sessionWithDocsFolder();
+
+    const res = await saveHandoff(session.id, { ...SECTIONS, state: `call the API with ${SECRET}` });
+    const responseText = await res.text();
+
+    expect(responseText).not.toContain(SECRET);
+    const savedFiles = handoffFiles().map((name) => readFileSync(join(docsFolder, 'handoffs', name), 'utf8'));
+    expect(savedFiles.join('')).not.toContain(SECRET);
+    expect(savedFiles.join('')).toContain('call the API with');
+  });
+
+  it('keeps the file inside the handoffs folder whatever the session name contains', async () => {
+    makeProject('p-docs', docsFolder);
+    docs.ensureLayout(docsFolder);
+    const session = await createSession('../../escape/..\\attempt');
+    attachProject(session.id, 'p-docs');
+    const docsFolderEntriesBefore = readdirSync(docsFolder).sort();
+
+    const res = await saveHandoff(session.id, SECTIONS);
+    const { relativePath } = (await res.json()) as { relativePath: string };
+
+    expect(res.status).toBe(201);
+    expect(relativePath).toMatch(/^handoffs\/[a-z0-9-]+\.md$/);
+    expect(handoffFiles()).toHaveLength(1);
+    expect(readdirSync(docsFolder).sort()).toEqual(docsFolderEntriesBefore);
+    expect(readdirSync(dirname(docsFolder)).filter((entry) => entry.startsWith('escape'))).toEqual([]);
+  });
+
+  describe('path safety', () => {
+    it('refuses a handoffs folder that is a symlink leaving the docs folder, and writes nothing outside', async () => {
+      makeProject('p-escape', docsFolder);
+      const outside = mkdtempSync(join(tmpdir(), 'of-outside-'));
+      symlinkSync(outside, join(docsFolder, 'handoffs'));
+      const session = await createSession();
+      attachProject(session.id, 'p-escape');
+      const notesBefore = noteCount();
+
+      const res = await saveHandoff(session.id, SECTIONS);
+
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({ error: 'path_escapes_docs_folder', kind: 'conflict', retry: 'never' });
+      expect(readdirSync(outside)).toEqual([]);
+      expect(noteCount()).toBe(notesBefore);
+    });
+
+    it('does not leak the path in the error', async () => {
+      makeProject('p-escape', docsFolder);
+      symlinkSync(mkdtempSync(join(tmpdir(), 'of-outside-')), join(docsFolder, 'handoffs'));
+      const session = await createSession();
+      attachProject(session.id, 'p-escape');
+
+      const text = await (await saveHandoff(session.id, SECTIONS)).text();
+
+      expect(text).not.toContain(docsFolder);
+    });
+  });
+
+  describe('docs folder failures', () => {
+    it.skipIf(isRoot)('maps a read-only handoffs folder to docs_folder_not_writable and writes nothing', async () => {
+      const session = await sessionWithDocsFolder();
+      const notesBefore = noteCount();
+      chmodSync(join(docsFolder, 'handoffs'), 0o555);
+
+      try {
+        const res = await saveHandoff(session.id, SECTIONS);
+
+        expect(res.status).toBe(409);
+        expect(await res.json()).toMatchObject({ error: 'docs_folder_not_writable', kind: 'conflict', retry: 'later' });
+        expect(noteCount()).toBe(notesBefore);
+        expect(handoffFiles()).toEqual([]);
+      } finally {
+        chmodSync(join(docsFolder, 'handoffs'), 0o755);
+      }
+    });
+
+    it.skipIf(isRoot)('saves the same body once the folder is writable again, a failed save is not remembered by the guard', async () => {
+      const session = await sessionWithDocsFolder();
+      chmodSync(join(docsFolder, 'handoffs'), 0o555);
+      try {
+        await saveHandoff(session.id, SECTIONS);
+      } finally {
+        chmodSync(join(docsFolder, 'handoffs'), 0o755);
+      }
+
+      const res = await saveHandoff(session.id, SECTIONS);
+
+      expect(res.status).toBe(201);
+    });
+
+    it('maps a docs folder deleted since it was configured to file_unreadable', async () => {
+      const session = await sessionWithDocsFolder();
+      rmSync(docsFolder, { recursive: true });
+
+      const res = await saveHandoff(session.id, SECTIONS);
+
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({ error: 'file_unreadable', kind: 'conflict', retry: 'later' });
+    });
+
+    it('maps a missing handoffs subfolder to file_unreadable', async () => {
+      const session = await sessionWithDocsFolder();
+      rmSync(join(docsFolder, 'handoffs'), { recursive: true });
+
+      const res = await saveHandoff(session.id, SECTIONS);
+
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({ error: 'file_unreadable' });
+    });
+  });
+
+  describe('refusals', () => {
+    it('answers no_docs_folder for a session without a project', async () => {
+      const session = await createSession();
+
+      const res = await saveHandoff(session.id, SECTIONS);
+
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({ error: 'no_docs_folder', kind: 'conflict', retry: 'never' });
+    });
+
+    it('answers no_docs_folder for a project without a docs folder', async () => {
+      makeProject('p-bare', null);
+      const session = await createSession();
+      attachProject(session.id, 'p-bare');
+
+      const res = await saveHandoff(session.id, SECTIONS);
+
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({ error: 'no_docs_folder' });
+    });
+
+    it('answers session_not_found for an unknown session', async () => {
+      const res = await saveHandoff('nope', SECTIONS);
+
+      expect(res.status).toBe(404);
+      expect(await res.json()).toMatchObject({ error: 'session_not_found' });
+    });
+
+    it.each([
+      ['an unknown key', { ...SECTIONS, path: '../../etc/passwd' }],
+      ['a missing section', { goal: 'only a goal' }],
+      ['a non-string section', { ...SECTIONS, goal: 42 }],
+      ['a section over 20 000 characters', { ...SECTIONS, goal: 'x'.repeat(20_001) }],
+      ['no body', undefined],
+    ])('answers invalid_body for %s and writes nothing', async (_label, body) => {
+      const session = await sessionWithDocsFolder();
+
+      const res = await saveHandoff(session.id, body);
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ error: 'invalid_body' });
+      expect(handoffFiles()).toEqual([]);
+    });
+
+    it('refuses a request without the admin token', async () => {
+      const session = await sessionWithDocsFolder();
+
+      const res = await saveHandoff(session.id, SECTIONS, {});
+
+      expect(res.status).toBe(401);
+      expect(handoffFiles()).toEqual([]);
+    });
   });
 });
 

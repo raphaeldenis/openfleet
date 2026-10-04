@@ -36,8 +36,8 @@ export class HandoffNotFoundError extends Error {
 }
 
 export interface HandoffServiceDeps {
-  docs: DocsFolderService;
-  projects: ProjectRepository;
+  docs: Pick<DocsFolderService, 'createFileBackedNote'>;
+  projects: Pick<ProjectRepository, 'get'>;
   sessions: { get(id: string): Session | undefined };
   /** Builds the draft the automatic handoff on close writes. */
   buildDraft: BuildHandoffDraft;

@@ -1,45 +1,76 @@
-import type { HandoffPreview, HandoffTarget, Session } from '@openfleet/shared';
+import { HANDOFF_SECTION_KEYS, HandoffContentSchema, type HandoffContent, type HandoffPreview, type HandoffTarget, type Session } from '@openfleet/shared';
 import type { DocsFolderService } from '../notes/docsFolderService.js';
 import { createHandoffDraftBuilder, type BuildHandoffDraft, type HandoffDraftDeps } from '../notes/handoffDraft.js';
 import { SessionNotFoundForHandoffError } from '../notes/handoffErrors.js';
+import { HandoffService } from '../notes/handoffService.js';
 import type { HandoffSettings } from '../notes/handoffSettings.js';
 import { createHandoffTargetResolver, type ResolveHandoffTarget } from '../notes/handoffTarget.js';
+import { IdenticalHandoffGuard } from '../notes/identicalHandoffGuard.js';
 import type { ProjectRepository } from '../projects/projectRepository.js';
+import { maskedSecrets } from '../redact.js';
+import { summaryOf } from './noteRoutes.js';
 import { json, type Router } from './router.js';
+
+const HANDOFF_AUTHOR = 'You';
 
 export interface HandoffRouteDeps {
   sessions: { get(id: string): Session | undefined };
   managers: { get(sessionId: string): unknown };
   buildDraft: BuildHandoffDraft;
   resolveTarget: ResolveHandoffTarget;
+  handoffs: Pick<HandoffService, 'write'>;
+  docs: Pick<DocsFolderService, 'docsRelativePath'>;
+  identicalGuard: IdenticalHandoffGuard;
   clock: () => string;
 }
 
 export interface HandoffWiring extends HandoffDraftDeps {
-  docs: Pick<DocsFolderService, 'previewNewNotePath'>;
+  docs: Pick<DocsFolderService, 'previewNewNotePath' | 'createFileBackedNote' | 'docsRelativePath'>;
   projects: Pick<ProjectRepository, 'get'>;
   settings: HandoffSettings;
   clock: () => string;
 }
 
-/** Builds the dependencies of the handoff routes from the services the daemon already holds. */
+/** Builds the dependencies of the handoff routes, and the `HandoffService` behind the save route, from the services the daemon already holds. */
 export function createHandoffRouteDeps(wiring: HandoffWiring): HandoffRouteDeps {
+  const buildDraft = createHandoffDraftBuilder(wiring);
   return {
     sessions: wiring.sessions,
     managers: wiring.managers,
-    buildDraft: createHandoffDraftBuilder(wiring),
+    buildDraft,
     resolveTarget: createHandoffTargetResolver({ docs: wiring.docs, settings: wiring.settings }),
+    handoffs: new HandoffService({ docs: wiring.docs, projects: wiring.projects, sessions: wiring.sessions, buildDraft, clock: wiring.clock }),
+    docs: wiring.docs,
+    identicalGuard: new IdenticalHandoffGuard(wiring.clock),
     clock: wiring.clock,
   };
 }
 
-/** Read-only handoff routes: neither writes a file, a note row or any session state. */
+function maskedContent(content: HandoffContent): HandoffContent {
+  const entries = HANDOFF_SECTION_KEYS.map((key) => [key, maskedSecrets(content[key])]);
+  return Object.fromEntries(entries) as HandoffContent;
+}
+
+/** The preview and target routes are read-only: neither writes a file, a note row or any session state. The save route writes the handoff file and its note. */
 export function registerHandoffRoutes(router: Router, deps: HandoffRouteDeps): void {
   const requireSession = (id: string): Session => {
     const session = deps.sessions.get(id);
     if (!session) throw new SessionNotFoundForHandoffError(id);
     return session;
   };
+
+  router.add('POST', '/api/sessions/:id/handoff', ({ res, params, body }) => {
+    const session = requireSession(params.id!);
+    const content = maskedContent(HandoffContentSchema.parse(body));
+
+    const recentSave = deps.identicalGuard.recentSaveOf(session.id, content);
+    if (recentSave) return json(res, 200, { note: summaryOf(recentSave.note), relativePath: recentSave.relativePath });
+
+    const note = deps.handoffs.write(session.id, content, { author: HANDOFF_AUTHOR });
+    const relativePath = deps.docs.docsRelativePath(note)!;
+    deps.identicalGuard.remember(session.id, content, { note, relativePath });
+    json(res, 201, { note: summaryOf(note), relativePath });
+  });
 
   router.add('GET', '/api/sessions/:id/handoff-preview', ({ res, params }) => {
     const session = requireSession(params.id!);
