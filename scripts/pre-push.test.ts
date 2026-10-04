@@ -157,10 +157,22 @@ describe('steps_for_files', () => {
     expect(stepsForPush(pushLine({ localSha }))).toEqual(['cargo']);
   });
 
-  it('runs e2e only when desktop src is touched', () => {
+  it('runs the desktop build and e2e when desktop src is touched', () => {
     const localSha = commitFiles('apps/desktop/src/app/app-root.ts');
 
-    expect(stepsForPush(pushLine({ localSha }))).toEqual(['e2e']);
+    expect(stepsForPush(pushLine({ localSha }))).toEqual(['desktop-build', 'e2e']);
+  });
+
+  it('runs the desktop build when the desktop package files are touched', () => {
+    const localSha = commitFiles('apps/desktop/angular.json');
+
+    expect(stepsForPush(pushLine({ localSha }))).toEqual(['desktop-build']);
+  });
+
+  it('does not build the desktop for e2e specs only', () => {
+    const localSha = commitFiles('apps/desktop/e2e/phase1.spec.ts');
+
+    expect(stepsForPush(pushLine({ localSha }))).toEqual([]);
   });
 
   it('runs e2e when core api is touched', () => {
@@ -169,10 +181,10 @@ describe('steps_for_files', () => {
     expect(stepsForPush(pushLine({ localSha }))).toEqual(['e2e']);
   });
 
-  it('runs e2e when shared src is touched', () => {
+  it('runs the desktop build and e2e when shared src is touched', () => {
     const localSha = commitFiles('packages/shared/src/index.ts');
 
-    expect(stepsForPush(pushLine({ localSha }))).toEqual(['e2e']);
+    expect(stepsForPush(pushLine({ localSha }))).toEqual(['desktop-build', 'e2e']);
   });
 
   it('runs nothing extra for docs only', () => {
@@ -194,13 +206,13 @@ describe('steps_for_files', () => {
 
     const steps = stepsForPush(pushLine({ localSha: firstSha }) + pushLine({ localRef: 'refs/heads/second', remoteRef: 'refs/heads/second', localSha: secondSha }));
 
-    expect(steps).toEqual(['cargo', 'e2e']);
+    expect(steps).toEqual(['cargo', 'desktop-build', 'e2e']);
   });
 
   it('runs e2e for an accented file name in desktop src', () => {
     const localSha = commitFiles('apps/desktop/src/café.ts');
 
-    expect(stepsForPush(pushLine({ localSha }))).toEqual(['e2e']);
+    expect(stepsForPush(pushLine({ localSha }))).toEqual(['desktop-build', 'e2e']);
   });
 
   it('runs cargo when a file is moved out of src-tauri', () => {
@@ -215,6 +227,51 @@ describe('steps_for_files', () => {
 
   it('runs nothing for a deleted ref', () => {
     expect(stepsForPush(pushLine({ localRef: '(delete)', localSha: ZEROS, remoteSha: 'a'.repeat(40) }))).toEqual([]);
+  });
+});
+
+describe('untracked_test_inputs', () => {
+  it('lists untracked files under packages, apps and scripts', () => {
+    mkdirSync(join(repo, 'packages/core/src'), { recursive: true });
+    writeFileSync(join(repo, 'packages/core/src/forgotten.ts'), 'x\n');
+    mkdirSync(join(repo, 'scripts'), { recursive: true });
+    writeFileSync(join(repo, 'scripts/helper.sh'), 'x\n');
+
+    expect(runLib('untracked_test_inputs')).toEqual(['packages/core/src/forgotten.ts', 'scripts/helper.sh']);
+  });
+
+  it('ignores gitignored files and untracked files outside the test directories', () => {
+    commitFiles('.gitignore');
+    writeFileSync(join(repo, '.gitignore'), 'dist/\n');
+    mkdirSync(join(repo, 'apps/desktop/dist'), { recursive: true });
+    writeFileSync(join(repo, 'apps/desktop/dist/main.js'), 'x\n');
+    writeFileSync(join(repo, 'notes.md'), 'x\n');
+
+    expect(runLib('untracked_test_inputs')).toEqual([]);
+  });
+
+  it('prints a path with a space unquoted', () => {
+    mkdirSync(join(repo, 'apps'), { recursive: true });
+    writeFileSync(join(repo, 'apps/my file.ts'), 'x\n');
+
+    expect(runLib('untracked_test_inputs')).toEqual(['apps/my file.ts']);
+  });
+});
+
+describe('uncommitted_test_inputs', () => {
+  it('lists tracked files modified in the working tree under the test directories', () => {
+    commitFiles('packages/core/src/a.ts', 'docs/b.md');
+    writeFileSync(join(repo, 'packages/core/src/a.ts'), 'changed\n');
+    writeFileSync(join(repo, 'docs/b.md'), 'changed\n');
+
+    expect(runLib('uncommitted_test_inputs')).toEqual(['packages/core/src/a.ts']);
+  });
+
+  it('ignores untracked files', () => {
+    mkdirSync(join(repo, 'apps'), { recursive: true });
+    writeFileSync(join(repo, 'apps/new.ts'), 'x\n');
+
+    expect(runLib('uncommitted_test_inputs')).toEqual([]);
   });
 });
 

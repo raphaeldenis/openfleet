@@ -3,6 +3,8 @@
 
 ZERO_SHA=0000000000000000000000000000000000000000
 CARGO_TRIGGER_PATTERN='^apps/desktop/src-tauri/'
+DESKTOP_BUILD_TRIGGER_PATTERN='^(apps/desktop/(src/|[^/]+$)|packages/shared/)'
+TEST_INPUT_DIRS='packages apps scripts'
 E2E_TRIGGER_PATTERN='^(apps/desktop/src/|packages/core/src/api/|packages/shared/src/)'
 
 # Reads git's pre-push stdin (<local ref> <local sha> <remote ref> <remote sha>) and prints the files each ref would publish.
@@ -31,12 +33,23 @@ files_since_origin_main() {
   fi
 }
 
-# Reads file names on stdin and prints the optional steps they call for: cargo, e2e.
+# Reads file names on stdin and prints the optional steps they call for: cargo, desktop-build, e2e.
 steps_for_files() {
   pushed_file_names=$(cat)
   printf '%s\n' "$pushed_file_names" | grep -Eq "$CARGO_TRIGGER_PATTERN" && echo cargo
+  printf '%s\n' "$pushed_file_names" | grep -Eq "$DESKTOP_BUILD_TRIGGER_PATTERN" && echo desktop-build
   printf '%s\n' "$pushed_file_names" | grep -Eq "$E2E_TRIGGER_PATTERN" && echo e2e
   return 0
+}
+
+# Prints the untracked, non-ignored files the tests could read: a clean CI clone does not have them.
+untracked_test_inputs() {
+  git ls-files -z --others --exclude-standard -- $TEST_INPUT_DIRS | tr '\0' '\n'
+}
+
+# Prints the tracked files modified since HEAD that the tests read: the hook tests them, CI tests the pushed commit.
+uncommitted_test_inputs() {
+  git diff -z --name-only HEAD -- $TEST_INPUT_DIRS | tr '\0' '\n'
 }
 
 # Prints the caller's TMPDIR, else the OS per-user temp dir (macOS), else /tmp.

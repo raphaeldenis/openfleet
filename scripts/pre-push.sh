@@ -50,6 +50,22 @@ is_planned() {
   printf '%s\n' "$planned_steps" | grep -qx "$1"
 }
 
+comma_separated_head() {
+  head -n 5 | paste -sd, - | sed 's/,/, /g'
+}
+
+assert_no_untracked_test_inputs() {
+  untracked_files=$(untracked_test_inputs | comma_separated_head)
+  [ -z "$untracked_files" ] ||
+    fail "untracked files the tests could read, absent from CI's clean clone: $untracked_files — git add them or list them in .gitignore"
+}
+
+warn_about_uncommitted_test_inputs() {
+  uncommitted_files=$(uncommitted_test_inputs | comma_separated_head)
+  [ -z "$uncommitted_files" ] ||
+    echo "pre-push: warning — the tests run on uncommitted changes that CI will not see: $uncommitted_files"
+}
+
 build_tauri_inputs_when_missing() {
   [ -e "$TAURI_DIR/binaries/node-aarch64-apple-darwin" ] || run_step "fetch node sidecar" node scripts/release/fetch-node.mjs
   [ -d "$TAURI_DIR/resources/daemon" ] || run_step "bundle daemon" pnpm --filter @openfleet/core bundle
@@ -111,10 +127,18 @@ planned_steps=$(printf '%s\n' "$pushed_refs" | pushed_files | steps_for_files)
 e2e_touched=no
 is_planned e2e && e2e_touched=yes
 
+assert_no_untracked_test_inputs
+warn_about_uncommitted_test_inputs
+
 started_at=$(date +%s)
 
 run_step "architecture" pnpm arch
 run_step "typecheck" pnpm typecheck
+if is_planned desktop-build; then
+  run_step "desktop build" pnpm --filter @openfleet/desktop build
+else
+  echo "pre-push: desktop build skipped — the push touches neither apps/desktop nor packages/shared"
+fi
 run_step "root tests" pnpm test
 if command -v claude >/dev/null 2>&1; then
   run_step "core tests without claude" claude_free_core_tests
