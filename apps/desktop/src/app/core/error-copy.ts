@@ -53,6 +53,7 @@ const COPY_BY_CODE: Record<ErrorCode, CodeCopy> = {
   view_not_found: { what: 'That view no longer exists' },
   row_not_found: { what: 'That row no longer exists' },
   manager_not_found: { what: 'That manager no longer exists' },
+  handoff_not_found: { what: 'That handoff is no longer in the docs folder', fix: 'pick another handoff or remove it' },
 
   session_closed: { what: 'The session is closed', fix: 'resume it first' },
   stale_revision: { what: 'This note changed since you opened it' },
@@ -81,6 +82,7 @@ const COPY_BY_CODE: Record<ErrorCode, CodeCopy> = {
   duplicate_id: { what: 'That id already exists' },
   no_docs_folder: { what: 'No docs folder is set', fix: 'set one first' },
   not_file_backed: { what: 'This note does not live in a file' },
+  docs_folder_not_writable: { what: 'The docs folder is not writable', fix: 'fix the folder permissions' },
 
   payload_too_large: { what: 'The request is too large', fix: 'shorten it' },
   note_too_large: { what: 'This note is too large', fix: 'shorten it' },

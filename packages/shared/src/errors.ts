@@ -38,6 +38,7 @@ export const ERROR_CODES = {
   view_not_found: { kind: 'not_found' },
   row_not_found: { kind: 'not_found' },
   manager_not_found: { kind: 'not_found' },
+  handoff_not_found: { kind: 'not_found' },
 
   // A conflict retries `never` unless a reload (stale_revision) or waiting (file_unreadable, too_many_pending, children_cap) can change the answer.
   session_closed: { kind: 'conflict', retry: 'never' },
@@ -68,6 +69,8 @@ export const ERROR_CODES = {
   duplicate_id: { kind: 'conflict', retry: 'never' },
   no_docs_folder: { kind: 'conflict', retry: 'never' },
   not_file_backed: { kind: 'conflict', retry: 'never' },
+  // The permissions can be fixed while the app stays open: the same save succeeds afterwards.
+  docs_folder_not_writable: { kind: 'conflict', retry: 'later' },
 
   payload_too_large: { kind: 'too_large' },
   note_too_large: { kind: 'too_large' },

@@ -50,6 +50,7 @@ describe('the wire contract of the registry', () => {
     outside_lineage: 'conflict/never', not_a_manager: 'conflict/never', directory_in_use: 'conflict/never',
     duplicate_child: 'conflict/never', no_parent: 'conflict/never', spawn_raced: 'conflict/later',
     store_has_rows: 'conflict/never', duplicate_id: 'conflict/never', no_docs_folder: 'conflict/never', not_file_backed: 'conflict/never',
+    docs_folder_not_writable: 'conflict/later', handoff_not_found: 'not_found/never',
     payload_too_large: 'too_large/never', note_too_large: 'too_large/never', row_cap: 'too_large/never', state_too_large: 'too_large/never',
     daemon_shutting_down: 'unavailable/later', daemon_degraded: 'unavailable/later', delivery_failed: 'unavailable/later', harness_exited: 'unavailable/never',
     claude_not_found: 'unavailable/never', git_unavailable: 'unavailable/never',
