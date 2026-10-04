@@ -5,7 +5,7 @@ import { describeError } from '../errors/describeError.js';
 import { EventBus } from '../events/eventBus.js';
 import { FakeHarness, type FakeHandle } from '../harness/fakeHarness.js';
 import { SessionRepository } from './sessionRepository.js';
-import { RESUME_LAUNCH_FAILED_EXIT_CODE, SessionService, type SessionServiceDeps } from './sessionService.js';
+import { SessionService, type SessionServiceDeps } from './sessionService.js';
 
 const START_TIMEOUT_MS = 25;
 const WAIT_PAST_START_TIMEOUT_MS = 60;
@@ -142,7 +142,9 @@ describe('a daemon shutdown that lands while a failed resume kills its process',
     await Promise.all([resuming, closing]);
     setState.mockRestore();
 
-    expect(resumingDaemon.service.get(session.id)).toMatchObject({ state: 'closed', exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE });
+    const closedSession = resumingDaemon.service.get(session.id)!;
+    expect(closedSession).toMatchObject({ state: 'closed' });
+    expect(closedSession.exitCode).toBeUndefined();
     expect(resumingDaemon.events.filter((event) => event.type === 'session.closed')).toMatchObject([{ reason: 'launch_failed' }]);
     expect(shutdownMarkersOf(db, session.id)).toBe(0);
     const nextBoot = bootDaemon(db);

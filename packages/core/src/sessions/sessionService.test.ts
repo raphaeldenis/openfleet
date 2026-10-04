@@ -9,7 +9,7 @@ import { FakeHandle, FakeHarness } from '../harness/fakeHarness.js';
 import type { Harness, HarnessHandle, HarnessLaunch } from '../harness/harness.js';
 import { EventBus } from '../events/eventBus.js';
 import { makeRepo } from '../git/testRepo.js';
-import { DaemonShuttingDownError, DEFAULT_CLOSE_ESCALATE_MS, DELIVERY_RETRY_MS, MAX_DELIVERY_RETRIES, MAX_PENDING_AGENT_MESSAGES_PER_SENDER, PARKED_RETRY_MS, RESUME_LAUNCH_FAILED_EXIT_CODE, RESUME_TIMEOUT_EXIT_CODE, SessionClosedError, SessionReopenError, SessionService, SESSION_END_EXIT_GRACE_MS, SUBMIT_KEYSTROKE_DELAY_MS, TRANSCRIPT_INTERRUPT_MAX_READ_BYTES, TRANSCRIPT_INTERRUPT_POLL_MS, TRANSCRIPT_INTERRUPT_TIMEOUT_MS, TURN_START_TIMEOUT_MS } from './sessionService.js';
+import { DaemonShuttingDownError, DEFAULT_CLOSE_ESCALATE_MS, DELIVERY_RETRY_MS, MAX_DELIVERY_RETRIES, MAX_PENDING_AGENT_MESSAGES_PER_SENDER, PARKED_RETRY_MS, SessionClosedError, SessionReopenError, SessionService, SESSION_END_EXIT_GRACE_MS, SUBMIT_KEYSTROKE_DELAY_MS, TRANSCRIPT_INTERRUPT_MAX_READ_BYTES, TRANSCRIPT_INTERRUPT_POLL_MS, TRANSCRIPT_INTERRUPT_TIMEOUT_MS, TURN_START_TIMEOUT_MS } from './sessionService.js';
 import { MessageQueue } from './messageQueue.js';
 import { SessionRepository } from './sessionRepository.js';
 import { PERMISSION_MODES, type ServerEvent } from '@openfleet/shared';
@@ -523,7 +523,7 @@ describe('SessionService resume', () => {
     expect(restarted.get(session.id)!.state).not.toBe('closed');
   });
 
-  it('marks a session closed with RESUME_TIMEOUT_EXIT_CODE if no hook arrives before the resume times out', async () => {
+  it('marks a session closed with undefined exitCode if no hook arrives before the resume times out', async () => {
     const db = openDatabase(':memory:');
     const bus = new EventBus();
     const firstRunHarness = new FakeHarness();
@@ -539,7 +539,7 @@ describe('SessionService resume', () => {
     await vi.advanceTimersByTimeAsync(51);
 
     expect(restarted.get(session.id)!.state).toBe('closed');
-    expect(restarted.get(session.id)!.exitCode).toBe(RESUME_TIMEOUT_EXIT_CODE);
+    expect(restarted.get(session.id)!.exitCode).toBeUndefined();
   });
 
   it('a SessionStart hook after resume cancels the resume timeout, so the session is not later closed', async () => {
@@ -574,7 +574,7 @@ describe('SessionService resume', () => {
     await vi.advanceTimersByTimeAsync(51);
 
     expect(restarted.get(session.id)!.state).toBe('closed');
-    expect(restarted.get(session.id)!.exitCode).toBe(RESUME_TIMEOUT_EXIT_CODE);
+    expect(restarted.get(session.id)!.exitCode).toBeUndefined();
   });
 
   it('a resume timeout escalates to a force kill when the process ignores the graceful signal, before closing the session', async () => {
@@ -593,7 +593,7 @@ describe('SessionService resume', () => {
 
     expect(restartHarness.handles[0]!.forceKilled).toBe(true);
     expect(restarted.get(session.id)!.state).toBe('closed');
-    expect(restarted.get(session.id)!.exitCode).toBe(RESUME_TIMEOUT_EXIT_CODE);
+    expect(restarted.get(session.id)!.exitCode).toBeUndefined();
   });
 
   it('a session resumes with the model that was changed via SessionRepository.setModel after it was created', async () => {
@@ -656,8 +656,9 @@ describe('SessionService resume', () => {
     setStateSpy.mockRestore();
 
     expect(restartHarness.handles[0]!.killed).toBe(true);
-    expect(restarted.get(badSession.id)!.state).toBe('closed');
-    expect(restarted.get(badSession.id)!.exitCode).toBe(RESUME_LAUNCH_FAILED_EXIT_CODE);
+    const badSessionClosed = restarted.get(badSession.id)!;
+    expect(badSessionClosed.state).toBe('closed');
+    expect(badSessionClosed.exitCode).toBeUndefined();
     expect(restarted.get(goodSession.id)!.state).toBe('starting');
   });
 
@@ -989,7 +990,7 @@ describe('SessionService launch failure and manual close (AUD-06)', () => {
 
     const [ghost] = service.list();
     expect(ghost!.state).toBe('closed');
-    expect(ghost!.exitCode).toBe(RESUME_LAUNCH_FAILED_EXIT_CODE);
+    expect(ghost!.exitCode).toBeUndefined();
   });
 
   it('close() on a session this instance holds no handle for marks it closed instead of silently no-op-ing', async () => {
@@ -1028,7 +1029,7 @@ describe('SessionService launch failure and manual close (AUD-06)', () => {
     await vi.advanceTimersByTimeAsync(51);
 
     expect(service.get(session.id)!.state).toBe('closed');
-    expect(service.get(session.id)!.exitCode).toBe(RESUME_TIMEOUT_EXIT_CODE);
+    expect(service.get(session.id)!.exitCode).toBeUndefined();
   });
 
   it('does not close a freshly created session at the (smaller) resumeTimeoutMs — first launch has its own timeout (AUD-06)', async () => {
@@ -1248,7 +1249,7 @@ describe('SessionService.updateModel hostile cases', () => {
     await vi.advanceTimersByTimeAsync(51);
 
     expect(service.get(session.id)!.state).toBe('closed');
-    expect(service.get(session.id)!.exitCode).toBe(RESUME_TIMEOUT_EXIT_CODE);
+    expect(service.get(session.id)!.exitCode).toBeUndefined();
     expect(service.get(session.id)!.model).toBe('claude-opus-5-5'); // recorded even though the process resumed under it never actually ran
     expect(service.hasQueuedMessage(session.id, 'still pending')).toBe(true); // the queue is untouched by markClosed
   });
@@ -1393,7 +1394,7 @@ describe('SessionService relaunch against the delivery machine', () => {
     await vi.advanceTimersByTimeAsync(0);
 
     expect(service.get(session.id)!.state).toBe('closed');
-    expect(service.get(session.id)!.exitCode).toBe(RESUME_LAUNCH_FAILED_EXIT_CODE);
+    expect(service.get(session.id)!.exitCode).toBeUndefined();
     expect(errors).toHaveBeenCalledTimes(1);
   });
 
@@ -1414,7 +1415,7 @@ describe('SessionService relaunch against the delivery machine', () => {
     await vi.advanceTimersByTimeAsync(2 * DEFAULT_CLOSE_ESCALATE_MS + 1);
 
     expect(service.get(session.id)!.state).toBe('closed');
-    expect(service.get(session.id)!.exitCode).toBe(RESUME_LAUNCH_FAILED_EXIT_CODE);
+    expect(service.get(session.id)!.exitCode).toBeUndefined();
   });
 
   it('never relaunches on a mid-turn compaction SessionStart: the state stays generating until a real Stop', async () => {
@@ -1485,7 +1486,7 @@ describe('SessionService relaunch against the delivery machine', () => {
 
     expect(harness.launches).toHaveLength(2);
     expect(service.get(session.id)!.state).toBe('closed');
-    expect(service.get(session.id)!.exitCode).toBe(RESUME_LAUNCH_FAILED_EXIT_CODE);
+    expect(service.get(session.id)!.exitCode).toBeUndefined();
     expect(vi.getTimerCount()).toBe(0);
     expect(errors).toHaveBeenCalledTimes(2); // the resume failure, then the kill failure: once each
     await expect(service.close(session.id)).resolves.toBeUndefined();
@@ -3044,7 +3045,7 @@ describe('SessionService with a harness that is not registered', () => {
     await expect(normalBoot.resumeAll()).resolves.toBeUndefined();
 
     expect(normalBoot.get(leftover.id)!.state).toBe('closed');
-    expect(normalBoot.get(leftover.id)!.exitCode).toBe(RESUME_LAUNCH_FAILED_EXIT_CODE);
+    expect(normalBoot.get(leftover.id)!.exitCode).toBeUndefined();
   });
 });
 
@@ -3375,13 +3376,14 @@ describe('SessionService.reopen', () => {
     expect((caught as SessionReopenError).message).toContain('pty spawn ENOENT');
     expect(failingHarness.launches).toHaveLength(1);
     expect(service.get(session.id)!.state).toBe('closed');
-    expect(service.get(session.id)!.exitCode).toBe(RESUME_LAUNCH_FAILED_EXIT_CODE);
+    expect(service.get(session.id)!.exitCode).toBeUndefined();
     expect(events.some((e) => e.type === 'session.reopened')).toBe(false);
   });
 });
 
 describe('SessionService closure stamps of a reopened session', () => {
   const snapshotOf = (service: SessionService, id: string) => service.list().find((s) => s.id === id)!;
+  const LEGACY_LAUNCH_FAILED_EXIT_CODE = -2; // Simulates legacy stored value
 
   async function closedThenReopened(exitCode: number) {
     vi.useFakeTimers();
@@ -3435,7 +3437,7 @@ describe('SessionService closure stamps of a reopened session', () => {
   });
 
   it('drops the exit code of the earlier close from the snapshot once the reopened session is live', async () => {
-    const { service, id } = await closedThenReopened(RESUME_LAUNCH_FAILED_EXIT_CODE);
+    const { service, id } = await closedThenReopened(LEGACY_LAUNCH_FAILED_EXIT_CODE);
 
     service.applyInput(id, hook(id, { hook_event_name: 'SessionStart' }));
 
@@ -3443,14 +3445,14 @@ describe('SessionService closure stamps of a reopened session', () => {
   });
 
   it('drops the exit code of the earlier close from the snapshot as soon as the reopened session is starting', async () => {
-    const { service, id } = await closedThenReopened(RESUME_LAUNCH_FAILED_EXIT_CODE);
+    const { service, id } = await closedThenReopened(LEGACY_LAUNCH_FAILED_EXIT_CODE);
 
     expect(snapshotOf(service, id).state).toBe('starting');
     expect(snapshotOf(service, id).exitCode).toBeUndefined();
   });
 
   it('stamps a fresh closedAt and the new exit code when the reopened session closes again', async () => {
-    const { service, harness, id } = await closedThenReopened(RESUME_LAUNCH_FAILED_EXIT_CODE);
+    const { service, harness, id } = await closedThenReopened(LEGACY_LAUNCH_FAILED_EXIT_CODE);
     service.applyInput(id, hook(id, { hook_event_name: 'SessionStart' }));
 
     harness.handles[1]!.emitExit(0);
@@ -3461,7 +3463,7 @@ describe('SessionService closure stamps of a reopened session', () => {
   });
 
   it('closes a once-failed, reopened session at daemon shutdown without leaving the earlier failure on it', async () => {
-    const { service, id } = await closedThenReopened(RESUME_LAUNCH_FAILED_EXIT_CODE);
+    const { service, id } = await closedThenReopened(LEGACY_LAUNCH_FAILED_EXIT_CODE);
     service.applyInput(id, hook(id, { hook_event_name: 'SessionStart' }));
 
     const shuttingDown = service.closeAll();
@@ -3469,7 +3471,7 @@ describe('SessionService closure stamps of a reopened session', () => {
     await shuttingDown;
 
     expect(snapshotOf(service, id).state).toBe('closed');
-    expect(snapshotOf(service, id).exitCode).not.toBe(RESUME_LAUNCH_FAILED_EXIT_CODE);
+    expect(snapshotOf(service, id).exitCode).not.toBe(LEGACY_LAUNCH_FAILED_EXIT_CODE);
   });
 
   it('keeps closedAt for a reopened session still starting when the daemon restarts', async () => {
@@ -3525,7 +3527,7 @@ describe('SessionService closure stamps across the reopen lifecycle', () => {
     await vi.advanceTimersByTimeAsync(DEFAULT_CLOSE_ESCALATE_MS + 60_000);
 
     expect(snapshotOf(service, id).state).toBe('closed');
-    expect(snapshotOf(service, id).exitCode).toBe(RESUME_TIMEOUT_EXIT_CODE);
+    expect(snapshotOf(service, id).exitCode).toBeUndefined();
     expect(Date.parse(snapshotOf(service, id).closedAt!)).toBeGreaterThan(Date.parse(firstClosedAt));
   });
 
@@ -3536,6 +3538,7 @@ describe('SessionService closure stamps across the reopen lifecycle', () => {
     const id = session.id;
     const announcedStates: string[] = [];
     const contradictions: string[] = [];
+    const LEGACY_LAUNCH_FAILED_EXIT_CODE = -2; // Simulates legacy stored value
     bus.subscribe((event) => {
       if (event.type !== 'session.state' && event.type !== 'session.closed') return;
       const announcedState = event.type === 'session.closed' ? 'closed' : event.state;
@@ -3547,7 +3550,7 @@ describe('SessionService closure stamps across the reopen lifecycle', () => {
       if (announcedState !== 'closed' && row.exitCode !== undefined) contradictions.push(`${announcedState}: row still has exitCode ${row.exitCode}`);
     });
 
-    harness.handles[0]!.emitExit(RESUME_LAUNCH_FAILED_EXIT_CODE);
+    harness.handles[0]!.emitExit(LEGACY_LAUNCH_FAILED_EXIT_CODE);
     service.reopen(id);
     service.applyInput(id, hook(id, { hook_event_name: 'SessionStart' }));
     service.updateModel(id, 'claude-opus-5-5');
@@ -3561,14 +3564,15 @@ describe('SessionService closure stamps across the reopen lifecycle', () => {
     expect(contradictions).toEqual([]);
   });
 
-  it('stamps a fresh closedAt and the launch-failed exit code when a reopen fails to launch', async () => {
+  it('stamps a fresh closedAt and undefined exitCode when a reopen fails to launch', async () => {
     vi.useFakeTimers();
     const db = openDatabase(':memory:');
     const bus = new EventBus();
     const firstRunHarness = new FakeHarness();
     const original = new SessionService({ db, bus, harnesses: [firstRunHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
     const session = await original.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
-    firstRunHarness.handles[0]!.emitExit(RESUME_LAUNCH_FAILED_EXIT_CODE);
+    const LEGACY_LAUNCH_FAILED_EXIT_CODE = -2; // Simulates legacy stored value
+    firstRunHarness.handles[0]!.emitExit(LEGACY_LAUNCH_FAILED_EXIT_CODE);
     const closedBefore = snapshotOf(original, session.id);
     const refusingHarness: Harness = { id: 'fake', start: () => { throw new Error('pty spawn ENOENT'); } };
     const service = new SessionService({ db, bus, harnesses: [refusingHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
@@ -3577,7 +3581,7 @@ describe('SessionService closure stamps across the reopen lifecycle', () => {
     expect(() => service.reopen(session.id)).toThrow(SessionReopenError);
 
     expect(snapshotOf(service, session.id).state).toBe('closed');
-    expect(snapshotOf(service, session.id).exitCode).toBe(RESUME_LAUNCH_FAILED_EXIT_CODE);
+    expect(snapshotOf(service, session.id).exitCode).toBeUndefined();
     expect(snapshotOf(service, session.id).closedAt! > closedBefore.closedAt!).toBe(true);
   });
 });

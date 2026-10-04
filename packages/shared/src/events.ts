@@ -8,7 +8,8 @@ import type { WorkingState } from './workingState.js';
 /** `reply` answers a client message that failed, on that socket only; `broadcast` announces a failure nobody asked for, to every client. A daemon that predates the field sends neither. */
 export type ErrorEventScope = 'reply' | 'broadcast';
 
-// The exit code convention that predates `reason`: a close recorded before the reason was stored carries an exit code only, so this recomputes the two it encodes.
+// Legacy only: daemons before ERR-09 encoded resume_timeout as exit code -1 and launch_failed as -2, and daemons before the persisted
+// `closeReason` (migration 019) sent neither on a snapshot. A desktop talking to one of them recovers the reason here; current daemons never send these codes.
 const REASON_BY_CONVENTIONAL_EXIT_CODE: Record<number, SessionCloseReason> = { [-1]: 'resume_timeout', [-2]: 'launch_failed' };
 
 export const closeReasonOfExitCode = (exitCode: number | undefined): SessionCloseReason | undefined =>

@@ -10,7 +10,7 @@ import type { HarnessHandle, HarnessLaunch } from '../harness/harness.js';
 import { ManagerRepository } from '../managers/managerRepository.js';
 import { ManagerService } from '../managers/managerService.js';
 import { PulseScheduler } from '../managers/pulseScheduler.js';
-import { RESUME_LAUNCH_FAILED_EXIT_CODE, RESUME_TIMEOUT_EXIT_CODE, SessionService } from '../sessions/sessionService.js';
+import { SessionService } from '../sessions/sessionService.js';
 import { startServer } from './server.js';
 
 type Frame = Record<string, unknown>;
@@ -81,7 +81,8 @@ describe('session-scoped error broadcasts', () => {
     const closed = await waitForFrame(frames, isType('session.closed'));
     const errorEvent = await waitForFrame(frames, isErrorEvent);
 
-    expect(closed).toMatchObject({ exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE, reason: 'launch_failed' });
+    expect(closed).toMatchObject({ reason: 'launch_failed' });
+    expect(closed.exitCode).toBeUndefined();
     expect(errorEvent).toMatchObject({ sessionId: closed.sessionId, error: { error: 'launch_failed', kind: 'internal', id: expect.stringMatching(/^[0-9a-f]{8}$/) } });
     expect(JSON.stringify(errorEvent)).not.toContain('secret-dir');
   });
@@ -110,7 +111,7 @@ describe('session-scoped error broadcasts', () => {
     const closed = await waitForFrame(frames, isType('session.closed'));
     const errorEvent = await waitForFrame(frames, isErrorEvent);
 
-    expect(closed).toEqual({ type: 'session.closed', sessionId: session.id, exitCode: RESUME_TIMEOUT_EXIT_CODE, reason: 'resume_timeout' });
+    expect(closed).toEqual({ type: 'session.closed', sessionId: session.id, reason: 'resume_timeout' });
     expect(errorEvent).toMatchObject({ sessionId: session.id, error: { error: 'resume_timeout', kind: 'internal' } });
   });
 

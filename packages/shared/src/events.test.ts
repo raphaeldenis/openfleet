@@ -56,7 +56,20 @@ describe('ServerEvent', () => {
   });
 });
 
-describe('closeReasonOfExitCode', () => {
+describe('the session.closed event', () => {
+  type SessionClosed = Extract<ServerEvent, { type: 'session.closed' }>;
+
+  it('types the shape of an older daemon (sentinel exit code, no reason), the shape of a current one (reason, no exit code) and a real exit', () => {
+    const olderDaemon: SessionClosed = { type: 'session.closed', sessionId: 's1', exitCode: -2 };
+    const currentDaemonWithoutProcessExit: SessionClosed = { type: 'session.closed', sessionId: 's1', reason: 'launch_failed' };
+    const currentDaemonWithProcessExit: SessionClosed = { type: 'session.closed', sessionId: 's1', exitCode: 1, reason: 'harness_exit' };
+
+    expectTypeOf([olderDaemon, currentDaemonWithoutProcessExit, currentDaemonWithProcessExit]).toEqualTypeOf<SessionClosed[]>();
+    expectTypeOf<SessionClosed['exitCode']>().toEqualTypeOf<number | undefined>();
+  });
+});
+
+describe('closeReasonOfExitCode (legacy fallback for daemons that encode the reason as -1 / -2)', () => {
   it('recomputes the reasons the -1 and -2 exit code convention encodes', () => {
     expect(closeReasonOfExitCode(-1)).toBe('resume_timeout');
     expect(closeReasonOfExitCode(-2)).toBe('launch_failed');

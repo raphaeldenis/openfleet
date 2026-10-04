@@ -120,7 +120,7 @@ describe('a client that connects after a session closed', () => {
 });
 
 describe('a session closed after a daemon restart', () => {
-  it('a row whose harness is no longer registered closes with exit -2, reason launch_failed and the launch_failed envelope', async () => {
+  it('a row whose harness is no longer registered closes with undefined exitCode, reason launch_failed and the launch_failed envelope', async () => {
     const { server, sessions, restartedSessions } = await boot({ restartedHarnesses: [] });
     const session = await sessions.create(spec);
     const { frames } = await openClient(server);
@@ -130,11 +130,11 @@ describe('a session closed after a daemon restart', () => {
     const closed = await waitFor(() => frames.find(isClosed));
     const errorEvent = await waitFor(() => frames.find(isError));
 
-    expect(closed).toEqual({ type: 'session.closed', sessionId: session.id, exitCode: -2, reason: 'launch_failed' });
+    expect(closed).toEqual({ type: 'session.closed', sessionId: session.id, reason: 'launch_failed' });
     expect(errorEvent).toMatchObject({ sessionId: session.id, error: { error: 'launch_failed', kind: 'internal' } });
   });
 
-  it('a row whose harness refuses to start closes with exit -2, reason launch_failed and the launch_failed envelope', async () => {
+  it('a row whose harness refuses to start closes with undefined exitCode, reason launch_failed and the launch_failed envelope', async () => {
     const { server, sessions, restartedSessions } = await boot({ restartedHarnesses: [new FlakyLaunchHarness()] });
     const session = await sessions.create(spec);
     const { frames } = await openClient(server);
@@ -144,7 +144,7 @@ describe('a session closed after a daemon restart', () => {
     const closed = await waitFor(() => frames.find(isClosed));
     const errorEvent = await waitFor(() => frames.find(isError));
 
-    expect(closed).toEqual({ type: 'session.closed', sessionId: session.id, exitCode: -2, reason: 'launch_failed' });
+    expect(closed).toEqual({ type: 'session.closed', sessionId: session.id, reason: 'launch_failed' });
     expect(errorEvent).toMatchObject({ sessionId: session.id, error: { error: 'launch_failed' } });
   });
 
@@ -172,14 +172,16 @@ describe('a session closed after a daemon restart', () => {
     await settle();
 
     const snapshot = frames.find(isType('snapshot')) as { sessions: { id: string; state: string; exitCode?: number }[] };
-    expect(snapshot.sessions).toEqual([expect.objectContaining({ id: session.id, state: 'closed', exitCode: -2 })]);
+    const snapshotSession = snapshot.sessions.find((s) => s.id === session.id)!;
+    expect(snapshotSession).toMatchObject({ state: 'closed' });
+    expect(snapshotSession.exitCode).toBeUndefined();
     expect(frames.filter(isError)).toEqual([]);
     expect(frames.filter(isClosed)).toEqual([]);
   });
 });
 
 describe('the exit codes that predate the reason', () => {
-  it('a session that never reports a hook closes with exit -1 and reason resume_timeout', async () => {
+  it('a session that never reports a hook closes with undefined exitCode and reason resume_timeout', async () => {
     const harness = new FakeHarness();
     const db = openDatabase(':memory:');
     const bus = new EventBus();
@@ -195,7 +197,7 @@ describe('the exit codes that predate the reason', () => {
     const session = await sessions.create(spec);
     const closed = await waitFor(() => frames.find(isClosed));
 
-    expect(closed).toEqual({ type: 'session.closed', sessionId: session.id, exitCode: -1, reason: 'resume_timeout' });
+    expect(closed).toEqual({ type: 'session.closed', sessionId: session.id, reason: 'resume_timeout' });
   });
 });
 
@@ -238,8 +240,9 @@ describe('a session reopened after a launch failure', () => {
     await restartedSessions.close(sessionId);
     const closings = await waitFor(() => (frames.filter(isClosed).length >= 2 ? frames.filter(isClosed) : undefined));
 
-    expect(closings[0]).toMatchObject({ exitCode: -2, reason: 'launch_failed' });
-    expect(closings[1]).toMatchObject({ reason: 'closed_by_user' });
+    expect(closings[0]!).toMatchObject({ reason: 'launch_failed' });
+    expect(closings[0]!.exitCode).toBeUndefined();
+    expect(closings[1]!).toMatchObject({ reason: 'closed_by_user' });
     expect(frames.filter(isError)).toHaveLength(1);
   });
 });

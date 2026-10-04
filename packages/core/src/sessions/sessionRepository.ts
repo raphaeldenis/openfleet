@@ -30,6 +30,17 @@ export function normalizePermissionMode(stored: string | null | undefined): Norm
   return { mode: undefined, wasRecognized: false };
 }
 
+// Daemons before ERR-09 stored -1 (resume_timeout) and -2 (launch_failed) as the exit code. When the row also carries a reason, the sentinel
+// says nothing a reason does not, so it reads as absent. A row with no stored reason keeps its code: the desktop fallback still decodes it.
+const LEGACY_SENTINEL_EXIT_CODES: readonly number[] = [-1, -2];
+
+function exitCodeOf(r: Row): number | undefined {
+  if (r.exit_code === null) return undefined;
+  const closeReason = parseSessionCloseReason(r.close_reason);
+  const isSentinelBesideItsReason = closeReason !== undefined && closeReason !== 'harness_exit' && LEGACY_SENTINEL_EXIT_CODES.includes(r.exit_code);
+  return isSentinelBesideItsReason ? undefined : r.exit_code;
+}
+
 const toSession = (r: Row): Session => ({
   id: r.id, name: r.name, emoji: r.emoji, directory: r.directory, worktree: r.worktree ?? undefined,
   branch: r.branch ?? undefined,
@@ -37,7 +48,7 @@ const toSession = (r: Row): Session => ({
   resolvedModel: r.resolved_model ?? undefined, cliVersion: r.cli_version ?? undefined, modelDriftedFrom: r.model_drifted_from ?? undefined,
   contextNoticeTokens: r.context_notice_tokens ?? undefined,
   parentId: r.parent_id ?? undefined, projectId: r.project_id ?? undefined, role: r.role ?? undefined, harness: r.harness,
-  state: r.state, stateSince: r.state_since, exitCode: r.exit_code ?? undefined,
+  state: r.state, stateSince: r.state_since, exitCode: exitCodeOf(r),
   closeReason: parseSessionCloseReason(r.close_reason),
   permissionMode: normalizePermissionMode(r.permission_mode).mode,
   createdAt: r.created_at, closedAt: r.closed_at ?? undefined,
@@ -151,11 +162,11 @@ export class SessionRepository {
       return this.recordReopen(id, at);
     });
   }
-  /** Rewrites a closed row as a failed close in one transaction: the given exit code and reason, a fresh closed_at, no shutdown marker. */
-  failClosedRow(id: string, exitCode: number, at: string, options: { closeReason?: SessionCloseReason } = {}): void {
+  /** Rewrites a closed row as a failed close in one transaction: the given reason with no exit code (no process ran), a fresh closed_at, no shutdown marker. */
+  failClosedRow(id: string, at: string, options: { closeReason?: SessionCloseReason } = {}): void {
     inTransaction(this.db, 'fail_shutdown_close', () => {
       this.clearShutdownClose(id);
-      this.db.prepare('UPDATE sessions SET state_since = ?, exit_code = ?, close_reason = ?, closed_at = ? WHERE id = ?').run(at, exitCode, options.closeReason ?? null, at, id);
+      this.db.prepare('UPDATE sessions SET state_since = ?, exit_code = NULL, close_reason = ?, closed_at = ? WHERE id = ?').run(at, options.closeReason ?? null, at, id);
     });
   }
   /** True when the session's current close is the one a daemon shutdown made and no resume or later close has consumed it. */
