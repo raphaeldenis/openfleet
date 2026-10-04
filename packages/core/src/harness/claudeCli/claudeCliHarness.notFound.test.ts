@@ -6,7 +6,7 @@ import { OpenFleetError } from '@openfleet/shared';
 import { openDatabase } from '../../db/database.js';
 import { describeError } from '../../errors/describeError.js';
 import { EventBus } from '../../events/eventBus.js';
-import { RESUME_LAUNCH_FAILED_EXIT_CODE, SessionService } from '../../sessions/sessionService.js';
+import { SessionService } from '../../sessions/sessionService.js';
 
 const spawn = vi.fn();
 vi.mock('node-pty', () => ({ spawn }));
@@ -52,8 +52,12 @@ describe('creating a claude-cli session when claude is not on the daemon PATH', 
     expect(failure).toBeInstanceOf(OpenFleetError);
     expect((failure as OpenFleetError).code).toBe('claude_not_found');
     expect(spawn).not.toHaveBeenCalled();
-    expect(sessions.list()[0]).toMatchObject({ state: 'closed', exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE });
-    expect(events.find((event) => event.type === 'session.closed')).toMatchObject({ exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE, reason: 'launch_failed' });
+    const session = sessions.list()[0]!;
+    expect(session).toMatchObject({ state: 'closed' });
+    expect(session.exitCode).toBeUndefined();
+    const closedEvent = events.find((event) => event.type === 'session.closed')!;
+    expect(closedEvent).toMatchObject({ reason: 'launch_failed' });
+    expect(closedEvent.exitCode).toBeUndefined();
   });
 
   it('broadcasts the claude_not_found envelope with message and hint, and no PATH', async () => {

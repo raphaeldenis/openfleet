@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
 import { FakeHarness } from '../harness/fakeHarness.js';
-import { RESUME_LAUNCH_FAILED_EXIT_CODE, RESUME_TIMEOUT_EXIT_CODE, SessionService } from './sessionService.js';
+import { SessionService } from './sessionService.js';
 
 type Db = ReturnType<typeof openDatabase>;
 
@@ -74,7 +74,7 @@ describe('resume after a graceful shutdown, adversarial review findings', () => 
     await third.service.resumeAll();
 
     expect(second.service.get(session.id)!.state).toBe('closed');
-    expect(second.service.get(session.id)!.exitCode).toBe(RESUME_LAUNCH_FAILED_EXIT_CODE);
+    expect(second.service.get(session.id)!.exitCode).toBeUndefined();
     expect(shutdownEventsOf(db, session.id)).toBe(0);
     expect(third.harness.launches).toHaveLength(0);
   });
@@ -94,10 +94,10 @@ describe('resume after a graceful shutdown, adversarial review findings', () => 
 
     expect(second.harness.launches.map((launch) => launch.sessionId)).toEqual([healthy.id]);
     expect(second.service.get(broken.id)!.state).toBe('closed');
-    expect(second.service.get(broken.id)!.exitCode).toBe(RESUME_LAUNCH_FAILED_EXIT_CODE);
+    expect(second.service.get(broken.id)!.exitCode).toBeUndefined();
     expect(second.service.get(broken.id)!.closedAt).not.toBe(closedAtBeforeBoot);
     expect(shutdownEventsOf(db, broken.id)).toBe(0);
-    expect(second.events).toContainEqual(expect.objectContaining({ type: 'session.closed', sessionId: broken.id, exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE, reason: 'launch_failed' }));
+    expect(second.events).toContainEqual(expect.objectContaining({ type: 'session.closed', sessionId: broken.id, reason: 'launch_failed' }));
 
     db.exec('DROP TRIGGER fail_start');
     const third = bootDaemon(db);
@@ -206,7 +206,9 @@ describe('resume after a graceful shutdown, adversarial review findings', () => 
 
     expect(second.harness.launches.map((launch) => launch.sessionId)).toEqual([broken.id, healthy.id]);
     expect(second.harness.handles[0]!.killed).toBe(true);
-    expect(second.service.get(broken.id)).toMatchObject({ state: 'closed', exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE });
+    const brokenSession = second.service.get(broken.id)!;
+    expect(brokenSession).toMatchObject({ state: 'closed' });
+    expect(brokenSession.exitCode).toBeUndefined();
     expect(second.service.get(healthy.id)!.state).not.toBe('closed');
   });
 
@@ -227,7 +229,7 @@ describe('resume after a graceful shutdown, adversarial review findings', () => 
     const third = bootDaemon(db);
     await third.service.resumeAll();
 
-    expect(second.service.get(session.id)!.exitCode).toBe(RESUME_TIMEOUT_EXIT_CODE);
+    expect(second.service.get(session.id)!.exitCode).toBeUndefined();
     expect(shutdownEventsOf(db, session.id)).toBe(0);
     expect(third.harness.launches).toHaveLength(0);
   });
@@ -267,7 +269,7 @@ describe('resume after a graceful shutdown, adversarial review findings', () => 
 
       expect(second.harness.launches).toHaveLength(0);
       expect(second.service.get(session.id)!.state).toBe('closed');
-      expect(second.service.get(session.id)!.exitCode).toBe(RESUME_LAUNCH_FAILED_EXIT_CODE);
+      expect(second.service.get(session.id)!.exitCode).toBeUndefined();
     } finally {
       rmSync(scratch, { recursive: true, force: true });
     }

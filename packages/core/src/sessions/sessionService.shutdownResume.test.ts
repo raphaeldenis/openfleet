@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
 import { FakeHarness } from '../harness/fakeHarness.js';
-import { RESUME_LAUNCH_FAILED_EXIT_CODE, SessionService } from './sessionService.js';
+import { SessionService } from './sessionService.js';
 
 // A daemon "boot" is a fresh SessionService over the same, already-populated database.
 function bootDaemon(db: ReturnType<typeof openDatabase>) {
@@ -151,7 +151,7 @@ describe('sessions across a daemon restart', () => {
     await third.service.resumeAll();
 
     expect(second.service.get(session.id)!.state).toBe('closed');
-    expect(second.service.get(session.id)!.exitCode).toBe(RESUME_LAUNCH_FAILED_EXIT_CODE);
+    expect(second.service.get(session.id)!.exitCode).toBeUndefined();
     expect(third.harness.launches).toHaveLength(0);
   });
 });

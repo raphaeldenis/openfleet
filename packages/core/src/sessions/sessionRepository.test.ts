@@ -73,9 +73,11 @@ describe('SessionRepository close reason', () => {
     const { repo } = openRepository();
     repo.setClosed('s1', undefined, 't1', 'h2', 'm2', { closeReason: 'daemon_shutdown', closedByDaemonShutdown: true });
 
-    repo.failClosedRow('s1', -2, 't2', { closeReason: 'launch_failed' });
+    repo.failClosedRow('s1', 't2', { closeReason: 'launch_failed' });
 
-    expect(repo.get('s1')).toMatchObject({ exitCode: -2, closeReason: 'launch_failed' });
+    const row = repo.get('s1')!;
+    expect(row.exitCode).toBeUndefined();
+    expect(row.closeReason).toBe('launch_failed');
   });
 
   it('reads a reason written by a future version as absent instead of throwing, from get() and list()', () => {

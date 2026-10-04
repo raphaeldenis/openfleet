@@ -151,8 +151,6 @@ export const TURN_START_TIMEOUT_MS = 5000;
 export const DELIVERY_RETRY_MS = 5000;
 export const MAX_DELIVERY_RETRIES = 3;
 export const PARKED_RETRY_MS = 60_000;
-export const RESUME_TIMEOUT_EXIT_CODE = -1;
-export const RESUME_LAUNCH_FAILED_EXIT_CODE = -2;
 // ponytail: fixed-interval poll on the transcript file's size instead of fs.watch — fs.watch coalesces or
 // drops events on some platforms (notably network/tmpfs mounts) and this only ever needs to catch one
 // appended line within the timeout below; upgrade to fs.watch (or tailing over the hook channel) if the
@@ -467,7 +465,7 @@ export class SessionService {
       // The row above already exists: left alone, it would be a ghost forever — starting, no handle,
       // unclosable and unreopenable. Same treatment as resumeOne's own launch failure.
       this.logLaunchFailure(`create: session ${id} failed to launch`, err);
-      this.markClosed(id, { exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE, reason: 'launch_failed', failure: err });
+      this.markClosed(id, { reason: 'launch_failed', failure: err });
       throw err;
     }
     this.handles.set(id, handle);
@@ -1315,7 +1313,7 @@ export class SessionService {
     const handle = this.handles.get(sessionId);
     if (handle) {
       // Detach first, same reasoning as armResumeTimeout: the handle's own onExit must not record
-      // whatever exit code the harness reports over RESUME_LAUNCH_FAILED_EXIT_CODE below.
+      // whatever exit code the harness reports over the launch_failed closure below.
       activeHandleBySessionId.delete(sessionId);
       try {
         await this.killWithEscalation(handle, DEFAULT_CLOSE_ESCALATE_MS);
@@ -1324,7 +1322,7 @@ export class SessionService {
         log('error', `resume: session ${sessionId} could not kill its process after a resume error`, err);
       }
     }
-    const closure: SessionClosure = { exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE, reason: 'launch_failed' };
+    const closure: SessionClosure = { reason: 'launch_failed' };
     try {
       // A transition that rolled back leaves the row closed with its shutdown marker: markClosed skips a closed row, so the marker is rewritten here.
       const isStillClosedByShutdown = this.repo.wasClosedByDaemonShutdown(sessionId);
@@ -1761,8 +1759,8 @@ export class SessionService {
   // A launch that fails on a row already closed (an ordinary reopen, a shutdown row a transition rolled back) leaves markClosed
   // nothing to do: the row is rewritten here so live clients and a fresh snapshot agree on the failed close.
   private rewriteClosedRowAsFailedLaunch(sessionId: string, closure: SessionClosure): void {
-    this.repo.failClosedRow(sessionId, RESUME_LAUNCH_FAILED_EXIT_CODE, new Date().toISOString(), { closeReason: closure.reason });
-    this.deps.bus.emit({ type: 'session.closed', sessionId, exitCode: closure.exitCode, reason: closure.reason });
+    this.repo.failClosedRow(sessionId, new Date().toISOString(), { closeReason: closure.reason });
+    this.deps.bus.emit({ type: 'session.closed', sessionId, reason: closure.reason });
     this.announceClosure(sessionId, closure);
   }
 
@@ -1801,7 +1799,7 @@ export class SessionService {
     this.handles.delete(sessionId);
     activeHandleBySessionId.delete(sessionId);
     try {
-      this.deps.bus.emit({ type: 'session.closed', sessionId, exitCode, ...(reason && { reason }) });
+      this.deps.bus.emit({ type: 'session.closed', sessionId, ...(exitCode !== undefined && { exitCode }), ...(reason && { reason }) });
       this.announceClosure(sessionId, closure);
     } finally {
       this.idsClosingByParent.delete(sessionId);
@@ -1821,7 +1819,7 @@ export class SessionService {
     } catch (err) {
       if (!(err instanceof UnknownHarnessError)) throw err;
       this.logLaunchFailure(`resumeOne: session ${session.id} cannot resume`, err);
-      this.closeAfterFailedLaunch(session.id, { exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE, reason: 'launch_failed', failure: err });
+      this.closeAfterFailedLaunch(session.id, { reason: 'launch_failed', failure: err });
       return { launched: false, reason: err.message, failure: err };
     }
     this.warnIfPermissiveSettings(harness, session.directory);
@@ -1857,7 +1855,7 @@ export class SessionService {
       // the CLI's interactive picker inside the PTY) — close this one row and keep resuming the rest of
       // the fleet rather than letting one bad row abort resumeAll for every other session.
       this.logLaunchFailure(`resumeOne: session ${session.id} failed to launch`, err);
-      this.closeAfterFailedLaunch(session.id, { exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE, reason: 'launch_failed', failure: err });
+      this.closeAfterFailedLaunch(session.id, { reason: 'launch_failed', failure: err });
       return { launched: false, reason: (err as Error).message, failure: err };
     }
     this.handles.set(session.id, handle);
@@ -1940,7 +1938,7 @@ export class SessionService {
     const timer = setTimeout(() => {
       if (activeHandleBySessionId.get(sessionId) !== handle) return; // already replaced or closed by something else
       // Detach first so the handle's own onExit (fired by killWithEscalation below) can't race this
-      // timeout's own RESUME_TIMEOUT_EXIT_CODE with whatever exit code the harness happens to report.
+      // timeout's own resume_timeout closure with whatever exit code the harness happens to report.
       activeHandleBySessionId.delete(sessionId);
       void this.killWithEscalation(handle, DEFAULT_CLOSE_ESCALATE_MS).then(() => {
         // Re-check: killWithEscalation can run for up to DEFAULT_CLOSE_ESCALATE_MS, long enough for another
@@ -1948,7 +1946,7 @@ export class SessionService {
         // under a new handle. Our own deletion above already left this slot empty — that's the expected,
         // common case and must still proceed to markClosed; only a handle claimed by someone else means skip.
         if (activeHandleBySessionId.has(sessionId)) return;
-        this.markClosed(sessionId, { exitCode: RESUME_TIMEOUT_EXIT_CODE, reason: 'resume_timeout' });
+        this.markClosed(sessionId, { reason: 'resume_timeout' });
       });
     }, timeoutMs);
     this.resumeTimers.set(sessionId, timer);

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
 import { FakeHarness } from '../harness/fakeHarness.js';
-import { RESUME_LAUNCH_FAILED_EXIT_CODE, SessionService } from './sessionService.js';
+import { SessionService } from './sessionService.js';
 
 type Db = ReturnType<typeof openDatabase>;
 
@@ -146,7 +146,7 @@ describe('resume after a graceful shutdown, hostile cases', () => {
     await third.service.resumeAll();
 
     expect(second.service.get(orphan.id)!.state).toBe('closed');
-    expect(second.service.get(orphan.id)!.exitCode).toBe(RESUME_LAUNCH_FAILED_EXIT_CODE);
+    expect(second.service.get(orphan.id)!.exitCode).toBeUndefined();
     expect(second.service.get(healthy.id)!.state).toBe('starting');
     expect(third.harness.launches.map((launch) => launch.sessionId)).toEqual([healthy.id]);
   });
@@ -254,7 +254,7 @@ describe('resume after a graceful shutdown, hostile cases', () => {
 
       expect(second.harness.launches.map((launch) => launch.sessionId)).toEqual([before.id, after.id]);
       expect(second.service.get(swapped.id)!.state).toBe('closed');
-      expect(second.service.get(swapped.id)!.exitCode).toBe(RESUME_LAUNCH_FAILED_EXIT_CODE);
+      expect(second.service.get(swapped.id)!.exitCode).toBeUndefined();
       expect(third.harness.launches.map((launch) => launch.sessionId)).toEqual([before.id, after.id]);
     });
 
@@ -278,7 +278,7 @@ describe('resume after a graceful shutdown, hostile cases', () => {
 
       expect(second.harness.launches.map((launch) => launch.sessionId)).toEqual([before.id, after.id]);
       expect(second.service.get(locked.id)!.state).toBe('closed');
-      expect(second.service.get(locked.id)!.exitCode).toBe(RESUME_LAUNCH_FAILED_EXIT_CODE);
+      expect(second.service.get(locked.id)!.exitCode).toBeUndefined();
     });
 
     it('closes a session left open by a killed daemon whose directory vanished while the daemon was dead', async () => {
@@ -295,7 +295,7 @@ describe('resume after a graceful shutdown, hostile cases', () => {
 
       expect(second.harness.launches.map((launch) => launch.sessionId)).toEqual([healthy.id]);
       expect(second.service.get(orphan.id)!.state).toBe('closed');
-      expect(second.service.get(orphan.id)!.exitCode).toBe(RESUME_LAUNCH_FAILED_EXIT_CODE);
+      expect(second.service.get(orphan.id)!.exitCode).toBeUndefined();
     });
   });
 

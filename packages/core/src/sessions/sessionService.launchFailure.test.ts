@@ -5,7 +5,7 @@ import { describeError } from '../errors/describeError.js';
 import { EventBus } from '../events/eventBus.js';
 import { FakeHarness } from '../harness/fakeHarness.js';
 import { recentLogLines } from '../logger.js';
-import { RESUME_LAUNCH_FAILED_EXIT_CODE, SessionReopenError, SessionService } from './sessionService.js';
+import { SessionReopenError, SessionService } from './sessionService.js';
 
 const spec = { name: 'worker', emoji: '🤖', directory: '/tmp', harness: 'fake' } as const;
 const SPAWN_FAILURE_MESSAGE = 'synthetic spawn failure';
@@ -75,7 +75,7 @@ describe.each([
   { kind: 'generic', failure: () => new Error(SPAWN_FAILURE_MESSAGE), thrown: SessionReopenError, errorCode: 'launch_failed' },
   { kind: 'named unavailable', failure: claudeNotFound, thrown: OpenFleetError, errorCode: 'claude_not_found' },
 ])('a $kind launch failure on reopening an ordinary closed row', ({ failure, thrown, errorCode }) => {
-  it('finalizes the row like a failed resume: exit -2, a fresh closed_at, one session.closed and one error event, the error reaching the caller', async () => {
+  it('finalizes the row like a failed resume: no exit code, a fresh closed_at, one session.closed and one error event, the error reaching the caller', async () => {
     const { harness, service, events, sessionId, closedAtBeforeReopen } = await closedSession();
     failLaunchWith(harness, failure());
     vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -83,23 +83,22 @@ describe.each([
 
     expect(() => service.reopen(sessionId)).toThrow(thrown);
 
-    expect(closuresOf(events)).toEqual([{ type: 'session.closed', sessionId, exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE, reason: 'launch_failed' }]);
+    expect(closuresOf(events)).toEqual([{ type: 'session.closed', sessionId, reason: 'launch_failed' }]);
     expect(errorsOf(events)).toMatchObject([{ sessionId, error: { error: errorCode } }]);
     const row = service.get(sessionId)!;
     expect(row.state).toBe('closed');
-    expect(row.exitCode).toBe(RESUME_LAUNCH_FAILED_EXIT_CODE);
+    expect(row.exitCode).toBeUndefined();
     expect(row.closedAt! > closedAtBeforeReopen!).toBe(true);
   });
 
-  it('shows a reconnecting client the exit code the live clients were told', async () => {
-    const { harness, service, events, sessionId } = await closedSession();
+  it('shows a reconnecting client no exit code, like the live clients were told', async () => {
+    const { harness, service, sessionId } = await closedSession();
     failLaunchWith(harness, failure());
     vi.spyOn(console, 'error').mockImplementation(() => {});
 
     expect(() => service.reopen(sessionId)).toThrow(thrown);
 
-    const liveExitCode = (closuresOf(events)[0] as { exitCode: number }).exitCode;
-    expect(service.get(sessionId)!.exitCode).toBe(liveExitCode);
+    expect(service.get(sessionId)!.exitCode).toBeUndefined();
   });
 
   it('is not resumed by the next boot when the row was closed by a daemon shutdown', async () => {
@@ -130,10 +129,10 @@ describe('reopening an ordinary closed row whose harness is missing', () => {
 
     expect(() => service.reopen(sessionId)).toThrow(SessionReopenError);
 
-    expect(closuresOf(events)).toEqual([{ type: 'session.closed', sessionId, exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE, reason: 'launch_failed' }]);
+    expect(closuresOf(events)).toEqual([{ type: 'session.closed', sessionId, reason: 'launch_failed' }]);
     expect(errorsOf(events)).toMatchObject([{ sessionId, error: { error: 'launch_failed' } }]);
     const row = service.get(sessionId)!;
-    expect(row.exitCode).toBe(RESUME_LAUNCH_FAILED_EXIT_CODE);
+    expect(row.exitCode).toBeUndefined();
     expect(row.closedAt! > closedAtBeforeReopen!).toBe(true);
   });
 });

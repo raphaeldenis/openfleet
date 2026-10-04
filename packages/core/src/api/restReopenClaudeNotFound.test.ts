@@ -10,7 +10,7 @@ import { ManagerRepository } from '../managers/managerRepository.js';
 import { ManagerService } from '../managers/managerService.js';
 import { PulseScheduler } from '../managers/pulseScheduler.js';
 import { DEFAULT_MODEL_TABLE } from '../models.js';
-import { RESUME_LAUNCH_FAILED_EXIT_CODE, SessionService } from '../sessions/sessionService.js';
+import { SessionService } from '../sessions/sessionService.js';
 import { startServer } from './server.js';
 
 const spawn = vi.fn();
@@ -102,11 +102,12 @@ describe('reopening a closed claude-cli session when claude is not on the daemon
     expect(body).not.toHaveProperty('id');
     expect(JSON.stringify(body)).not.toContain(emptyBin);
     expect(failureEventsAfter(daemon.events, eventCountBeforeReopen)).toEqual([
-      { type: 'session.closed', sessionId: session.id, exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE, reason: 'launch_failed' },
+      { type: 'session.closed', sessionId: session.id, reason: 'launch_failed' },
       { type: 'error', sessionId: session.id, scope: 'broadcast', error: expect.objectContaining(CLAUDE_NOT_FOUND_ENVELOPE) },
     ]);
     const failedRow = daemon.sessions.get(session.id)!;
-    expect(failedRow).toMatchObject({ state: 'closed', exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE });
+    expect(failedRow).toMatchObject({ state: 'closed' });
+    expect(failedRow.exitCode).toBeUndefined();
     expect(failedRow.closedAt! > closedRow.closedAt!).toBe(true);
   });
 
@@ -129,10 +130,12 @@ describe('reopening a closed claude-cli session when claude is not on the daemon
     expect(res.status).toBe(503);
     expect(body).toMatchObject(CLAUDE_NOT_FOUND_ENVELOPE);
     expect(failureEventsAfter(secondDaemon.events, eventCountBeforeReopen)).toEqual([
-      { type: 'session.closed', sessionId: session.id, exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE, reason: 'launch_failed' },
+      { type: 'session.closed', sessionId: session.id, reason: 'launch_failed' },
       { type: 'error', sessionId: session.id, scope: 'broadcast', error: expect.objectContaining(CLAUDE_NOT_FOUND_ENVELOPE) },
     ]);
-    expect(secondDaemon.sessions.get(session.id)).toMatchObject({ state: 'closed', exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE });
+    const secondSession = secondDaemon.sessions.get(session.id)!;
+    expect(secondSession).toMatchObject({ state: 'closed' });
+    expect(secondSession.exitCode).toBeUndefined();
     expect(spawn.mock.calls.length).toBe(spawnsAfterReopen);
   });
 
@@ -165,7 +168,9 @@ describe('booting the daemon when claude is not on the PATH', () => {
     await bootingDaemon.sessions.resumeAll();
 
     for (const { id } of [first, second]) {
-      expect(bootingDaemon.sessions.get(id)).toMatchObject({ state: 'closed', exitCode: RESUME_LAUNCH_FAILED_EXIT_CODE });
+      const session = bootingDaemon.sessions.get(id)!;
+      expect(session).toMatchObject({ state: 'closed' });
+      expect(session.exitCode).toBeUndefined();
       expect(bootingDaemon.events.filter((event) => event.type === 'error' && event.sessionId === id)).toEqual([
         { type: 'error', sessionId: id, scope: 'broadcast', error: expect.objectContaining(CLAUDE_NOT_FOUND_ENVELOPE) },
       ]);

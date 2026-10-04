@@ -64,8 +64,8 @@ function appliedMigrations(db: DatabaseSync): DiagnosticsMigration[] {
 }
 
 function describedSession(session: Session): DiagnosticsSession {
-  const { id, name, state, harness, model, parentId, exitCode, closedAt, directory } = session;
-  const reason = closeReasonOfExitCode(exitCode);
+  const { id, name, state, harness, model, parentId, exitCode, closeReason, closedAt, directory } = session;
+  const reason = closeReason ?? closeReasonOfExitCode(exitCode);
   return { id, name, state, harness, ...(model && { model }), ...(parentId && { parentId }), ...(exitCode !== undefined && { exitCode }), ...(reason && { reason }), ...(closedAt && { closedAt }), directory };
 }
 
