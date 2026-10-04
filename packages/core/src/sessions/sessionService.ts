@@ -6,7 +6,7 @@ import { carryLoggedRef, rememberLoggedRef } from '../errors/loggedRef.js';
 import { EventBus } from '../events/eventBus.js';
 import { createWorktree } from '../git/worktrees.js';
 import type { Harness, HarnessHandle } from '../harness/harness.js';
-import { claudeProjectsDir } from '../harness/claudeCli/claudeProjects.js';
+import { claudeProjectsDir } from '../harness/claudeProjectsDir.js';
 import { findPermissiveSettingsWarning } from '../harness/claudeCli/permissiveSettings.js';
 import { newId, newToken } from '../ids.js';
 import { log } from '../logger.js';
