@@ -8,16 +8,18 @@ import type { SessionTodos } from '@openfleet/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
-import { RightPanelComponent, RightPanelToggleComponent } from './right-panel.component';
+import { RightPanelComponent } from './right-panel.component';
 import { LiveSessionTodosSource } from './todos/live-session-todos-source';
 import { SESSION_TODOS_SOURCE } from './todos/session-todos-source';
 
 @Component({
   selector: 'test-host',
-  imports: [RightPanelToggleComponent, RightPanelComponent],
-  template: `<of-right-panel-toggle /><of-right-panel />`,
+  imports: [RightPanelComponent],
+  template: `<of-right-panel />`,
 })
 class HostComponent {}
+
+const showRightPanel = () => userEvent.click(screen.getByRole('button', { name: 'Show the right panel' }));
 
 const routes: Routes = [
   { path: '', pathMatch: 'full', component: HostComponent },
@@ -64,7 +66,7 @@ describe('Right panel wired to the daemon', () => {
   it('loads and shows the todos of the session in the route once the panel opens', async () => {
     await open('/session/s1');
 
-    await userEvent.click(screen.getByTestId('right-panel-toggle'));
+    await showRightPanel();
 
     expect((await screen.findByTestId('todo-item-text')).textContent).toContain('Todo of s1');
     expect(getSessionTodos.mock.calls).toEqual([['s1']]);
@@ -72,7 +74,7 @@ describe('Right panel wired to the daemon', () => {
 
   it('follows the route and asks for the newly selected session only', async () => {
     const harness = await open('/session/s1');
-    await userEvent.click(screen.getByTestId('right-panel-toggle'));
+    await showRightPanel();
     await screen.findByText('Todo of s1');
 
     await harness.navigateByUrl('/session/s2');
@@ -84,7 +86,7 @@ describe('Right panel wired to the daemon', () => {
   it('shows the error copy and a Try again that loads the list when the daemon fails once', async () => {
     getSessionTodos.mockRejectedValueOnce(new TypeError('fetch failed'));
     await open('/session/s1');
-    await userEvent.click(screen.getByTestId('right-panel-toggle'));
+    await showRightPanel();
 
     expect((await screen.findByTestId('todos-error')).textContent).toContain('Can’t reach the OpenFleet daemon');
     await userEvent.click(screen.getByTestId('todos-retry'));
@@ -96,7 +98,7 @@ describe('Right panel wired to the daemon', () => {
     TestBed.inject(FleetEventsService).todosReported.set(false);
     await open('/session/s1');
 
-    await userEvent.click(screen.getByTestId('right-panel-toggle'));
+    await showRightPanel();
 
     expect(await screen.findByTestId('todos-unsupported')).not.toBeNull();
   });

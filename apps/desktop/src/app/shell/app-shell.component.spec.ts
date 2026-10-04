@@ -737,13 +737,23 @@ describe('AppShellComponent', () => {
     expect(router.url).toBe('/');
   });
 
-  it('keeps the right panel closed until the top-bar toggle opens it beside the session view', async () => {
+  it('has no Panel button in the top bar', async () => {
+    const { root } = await setUp();
+    const topbar = root.querySelector('[data-testid="app-topbar"]') as HTMLElement;
+
+    const topbarButtonLabels = Array.from(topbar.querySelectorAll('button')).map((button) => button.textContent);
+
+    expect(topbarButtonLabels.some((label) => label?.includes('Panel'))).toBe(false);
+    expect(topbar.querySelector('[aria-controls="right-panel"]')).toBeNull();
+  });
+
+  it('keeps the right panel closed until the rail button opens it beside the session view', async () => {
     vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => undefined });
     const { harness, root } = await setUp();
-    const toggle = root.querySelector('[data-testid="app-topbar"] [data-testid="right-panel-toggle"]') as HTMLElement;
+    const rail = root.querySelector('[aria-label="Show the right panel"]') as HTMLElement;
     expect(root.querySelector('[data-testid="right-panel"]')).toBeNull();
 
-    toggle.click();
+    rail.click();
     await harness.fixture.whenStable();
 
     const panel = root.querySelector('[data-testid="right-panel"]') as HTMLElement;

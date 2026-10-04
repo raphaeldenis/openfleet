@@ -1,9 +1,9 @@
 import {
   ChangeDetectionStrategy,
   Component,
-  DestroyRef,
   ElementRef,
   HostListener,
+  Injector,
   afterNextRender,
   computed,
   inject,
@@ -28,31 +28,36 @@ export function watchedSessionIdOf(url: string): string | undefined {
 interface PanelTab { readonly key: string; readonly label: string; readonly enabled: boolean }
 
 const COMING_SOON = 'Coming soon';
+const SHOW_TITLE = 'Show the right panel (⌥⌘B)';
+const HIDE_TITLE = 'Hide the right panel (⌥⌘B)';
+const RAIL_TITLE = 'Show the right panel — sessions, todos, usage (⌥⌘B)';
 const PANEL_TABS: readonly PanelTab[] = [
   { key: 'sessions', label: 'Sessions', enabled: false },
   { key: 'usage', label: 'Usage', enabled: false },
   { key: 'todos', label: 'Todos', enabled: true },
 ];
 
+/** The ◨ button of the session terminal tab bar: it shows the state of the right panel and toggles it. */
 @Component({
-  selector: 'of-right-panel-toggle',
+  selector: 'of-right-panel-session-toggle',
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <button type="button" class="of-btn" data-testid="right-panel-toggle" #button
-            aria-controls="right-panel" aria-keyshortcuts="Alt+Meta+B" title="Toggle right panel (⌥⌘B)"
-            [attr.aria-expanded]="state.open()" (click)="state.toggle()">
-      <span aria-hidden="true">▤</span> Panel
-    </button>
+    <button type="button" class="toggle" data-testid="right-panel-session-toggle"
+            aria-label="Right panel" aria-controls="right-panel" aria-keyshortcuts="Alt+Meta+B"
+            [attr.title]="state.open() ? hideTitle : showTitle"
+            [attr.aria-pressed]="state.open()" (click)="state.toggle()">◨</button>
+  `,
+  styles: `
+    .toggle { width: 1.75rem; height: 1.75rem; flex: none; border: 1px solid rgba(255, 255, 255, .18); border-radius: .375rem; background: transparent; color: var(--term-fg); font-size: .875rem; cursor: pointer; }
+    .toggle[aria-pressed='true'] { border-color: var(--accent); color: var(--accent); background: color-mix(in oklch, var(--accent) 18%, transparent); }
+    .toggle:hover { background: rgba(255, 255, 255, .08); }
+    .toggle:focus-visible { outline: 0; box-shadow: 0 0 0 2px var(--accent); }
   `,
 })
-export class RightPanelToggleComponent {
+export class RightPanelSessionToggleComponent {
   protected readonly state = inject(RightPanelState);
-  private readonly button = viewChild.required<ElementRef<HTMLButtonElement>>('button');
-
-  constructor() {
-    afterNextRender(() => { this.state.toggleButton = this.button().nativeElement; });
-    inject(DestroyRef).onDestroy(() => { this.state.toggleButton = null; });
-  }
+  protected readonly showTitle = SHOW_TITLE;
+  protected readonly hideTitle = HIDE_TITLE;
 }
 
 @Component({
@@ -60,6 +65,11 @@ export class RightPanelToggleComponent {
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [TodosTabComponent],
   template: `
+    @if (!state.open()) {
+      <button type="button" class="edge-button rail" data-testid="right-panel-rail" #rail
+              aria-controls="right-panel" aria-keyshortcuts="Alt+Meta+B" aria-label="Show the right panel"
+              aria-expanded="false" [attr.title]="railTitle" (click)="state.toggle()">‹</button>
+    }
     @if (state.open()) {
       <aside class="panel" id="right-panel" data-testid="right-panel" aria-label="Right panel" (keydown.escape)="collapse()">
         <header class="head">
@@ -74,7 +84,9 @@ export class RightPanelToggleComponent {
               </button>
             }
           </div>
-          <button type="button" class="of-btn collapse" aria-label="Collapse panel" aria-expanded="true" (click)="collapse()">›</button>
+          <button type="button" class="edge-button collapse" data-testid="right-panel-collapse"
+                  aria-controls="right-panel" aria-label="Hide the right panel" aria-expanded="true"
+                  [attr.title]="hideTitle" (click)="collapse()">›</button>
         </header>
         <div class="tabpanel" role="tabpanel" id="right-panel-tabpanel" aria-labelledby="right-panel-tab-todos">
           <of-todos-tab [sessionId]="watchedSessionId()" [sessionClosed]="watchedSessionClosed()" [connected]="events.connected()" />
@@ -90,9 +102,12 @@ export class RightPanelToggleComponent {
     .tab { display: flex; flex-direction: column; align-items: flex-start; padding: .25rem .5rem; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--mut); font: inherit; font-size: .8125rem; cursor: pointer; }
     .tab[aria-selected='true'] { color: var(--fg); font-weight: 600; border-bottom-color: var(--accent); }
     .tab[aria-disabled='true'] { cursor: not-allowed; }
-    .tab:focus-visible, .collapse:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+    .tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
     .soon { font-size: .625rem; font-weight: 400; color: var(--mut); }
-    .collapse { flex: none; }
+    .edge-button { flex: none; width: 1.375rem; height: 1.375rem; padding: 0; display: flex; align-items: center; justify-content: center; border: 1px solid var(--line-2); border-radius: .375rem; background: var(--panel); color: var(--fg); font: inherit; line-height: 1; cursor: pointer; }
+    .edge-button:hover { background: var(--hover); }
+    .edge-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .rail { align-self: flex-start; margin: .75rem .25rem 0; }
     .tabpanel { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   `,
 })
@@ -101,8 +116,12 @@ export class RightPanelComponent {
   protected readonly events = inject(FleetEventsService);
   private readonly router = inject(Router);
   private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
+  private readonly injector = inject(Injector);
   private readonly tabList = viewChild<ElementRef<HTMLElement>>('tabList');
+  private readonly rail = viewChild<ElementRef<HTMLButtonElement>>('rail');
 
+  protected readonly railTitle = RAIL_TITLE;
+  protected readonly hideTitle = HIDE_TITLE;
   protected readonly tabs = PANEL_TABS;
   protected readonly comingSoon = COMING_SOON;
   protected readonly activeKey = signal('todos');
@@ -125,7 +144,12 @@ export class RightPanelComponent {
 
   collapse(): void {
     this.state.close();
-    this.state.focusToggle();
+    this.focusRailAfterRender();
+  }
+
+  /** The rail only exists once the panel is closed and rendered, so focus waits for that render. */
+  private focusRailAfterRender(): void {
+    afterNextRender(() => this.rail()?.nativeElement.focus(), { injector: this.injector });
   }
 
   onTabKeydown(event: KeyboardEvent): void {
@@ -149,6 +173,6 @@ export class RightPanelComponent {
     event.preventDefault();
     const focusWasInsidePanel = this.host.nativeElement.contains(document.activeElement);
     this.state.toggle();
-    if (focusWasInsidePanel && !this.state.open()) this.state.focusToggle();
+    if (focusWasInsidePanel && !this.state.open()) this.focusRailAfterRender();
   }
 }

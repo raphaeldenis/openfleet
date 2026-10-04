@@ -21,8 +21,6 @@ function rememberOpen(open: boolean): void {
 @Injectable({ providedIn: 'root' })
 export class RightPanelState {
   readonly open = signal(readRememberedOpen());
-  /** The top-bar toggle registers itself here so Escape and Collapse can hand focus back to it. */
-  toggleButton: HTMLElement | null = null;
 
   toggle(): void {
     this.setOpen(!this.open());
@@ -30,10 +28,6 @@ export class RightPanelState {
 
   close(): void {
     this.setOpen(false);
-  }
-
-  focusToggle(): void {
-    this.toggleButton?.focus();
   }
 
   private setOpen(open: boolean): void {

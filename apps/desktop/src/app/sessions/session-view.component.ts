@@ -10,6 +10,7 @@ import { PermissionGateCardComponent } from './permission-gate-card.component';
 import { type ClosedStripCopy, closedStripCopyFor, resumeFailureCopyFor } from './session-close-status';
 import { SessionHeaderComponent } from './session-header.component';
 import { TerminalComponent } from './terminal.component';
+import { RightPanelSessionToggleComponent } from '../shell/right-panel.component';
 import { StatePanelComponent } from '../working-state/state-panel.component';
 
 const REOPEN_FRESH_UNAVAILABLE_REASON = 'Not available yet — the daemon cannot relaunch a session without its previous conversation.';
@@ -21,7 +22,7 @@ type ClosedStrip = ClosedStripCopy & { role: 'alert' | null };
 @Component({
   selector: 'of-session-view',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgTemplateOutlet, SessionHeaderComponent, StatePanelComponent, TerminalComponent, PermissionGateCardComponent, ComposerComponent],
+  imports: [NgTemplateOutlet, SessionHeaderComponent, StatePanelComponent, TerminalComponent, PermissionGateCardComponent, ComposerComponent, RightPanelSessionToggleComponent],
   template: `
     @if (session(); as s) {
       <div class="session-view" data-testid="session-view">
@@ -59,6 +60,9 @@ type ClosedStrip = ClosedStripCopy & { role: 'alert' | null };
             </div>
           }
         }
+        <div class="terminal-tab-bar" data-testid="terminal-tab-bar">
+          <of-right-panel-session-toggle />
+        </div>
         <div class="terminal-area">
           <of-terminal [sessionId]="s.id" />
           @if (pendingApproval(); as approval) {
@@ -96,6 +100,7 @@ type ClosedStrip = ClosedStripCopy & { role: 'alert' | null };
   styles: `
     .session-view { display: flex; flex-direction: column; height: 100%; min-height: 0; }
     .terminal-area { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: .625rem; padding: .5rem; }
+    .terminal-tab-bar { flex: none; display: flex; align-items: center; justify-content: flex-end; padding: .25rem .5rem; background: var(--term-bg); color: var(--term-fg); }
     .closed-footer { display: flex; align-items: center; justify-content: flex-end; gap: .75rem; margin: 0 1rem 1rem; }
     .closed-footer--strip {
       justify-content: flex-start; padding: .75rem 1rem; border: 1px solid var(--line-2); border-radius: .5rem;
