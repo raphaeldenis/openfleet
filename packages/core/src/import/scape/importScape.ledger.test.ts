@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -295,6 +295,61 @@ describe('importScape re-import against the ledger of the last import', () => {
       expect(report.counts.notes.updated).toBe(1);
       expect(report.counts.rows.deletedInOpenFleet).toBe(1);
       expect(valueOf<{ hashes: string }>('SELECT group_concat(record_hash) AS hashes FROM scape_import_ledger ORDER BY kind, id').hashes).toBe(ledgerBefore);
+    });
+  });
+
+  describe('the temporary snapshot folders', () => {
+    const scratchEntries = () => readdirSync(scratchRoot);
+
+    it('are removed after a real run and after a dry run', () => {
+      run();
+      run({ dryRun: true });
+
+      expect(scratchEntries()).toEqual([]);
+    });
+
+    it('are removed after a run that fails while writing', () => {
+      run();
+      editTarget(`CREATE TRIGGER refuse_notes BEFORE UPDATE ON notes BEGIN SELECT RAISE(ABORT, 'refused'); END`);
+      changeNoteInScape();
+
+      expect(() => run()).toThrow(expect.objectContaining({ code: 'IMPORT_WRITE_FAILED' }));
+
+      expect(scratchEntries()).toEqual([]);
+    });
+
+    it('are removed after a dry run that fails while writing', () => {
+      run();
+      editTarget(`CREATE TRIGGER refuse_notes BEFORE UPDATE ON notes BEGIN SELECT RAISE(ABORT, 'refused'); END`);
+      changeNoteInScape();
+
+      expect(() => run({ dryRun: true })).toThrow(expect.objectContaining({ code: 'IMPORT_WRITE_FAILED' }));
+
+      expect(scratchEntries()).toEqual([]);
+    });
+
+    it('are removed when a Scape file is refused as torn', () => {
+      const datastorePath = join(fixture.scapeDir, 'datastores', `${CCM_PROJECT_ID}.sqlite`);
+      const bytes = readFileSync(datastorePath);
+      bytes.fill(0xff, 4096, 8192);
+      writeFileSync(datastorePath, bytes);
+
+      expect(() => run()).toThrow(expect.objectContaining({ code: 'SCAPE_SOURCE_UNREADABLE' }));
+
+      expect(scratchEntries()).toEqual([]);
+    });
+  });
+
+  describe('a dry run on an existing home', () => {
+    it('leaves the database file byte for byte as it was', () => {
+      run();
+      changeNoteInScape();
+      const databasePath = join(home, 'openfleet.db');
+      const bytesBefore = readFileSync(databasePath);
+
+      run({ dryRun: true });
+
+      expect(readFileSync(databasePath).equals(bytesBefore)).toBe(true);
     });
   });
 
