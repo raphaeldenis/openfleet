@@ -58,6 +58,16 @@ export interface NoteListOptions {
   offset: number;
 }
 
+export interface HandoffFileRecord {
+  id: string;
+  filePath: string;
+  title: string;
+  updatedAt: string;
+}
+
+interface HandoffFileRow { id: string; file_path: string; title: string; updated_at: string }
+const handoffFileOf = (row: HandoffFileRow): HandoffFileRecord => ({ id: row.id, filePath: row.file_path, title: row.title, updatedAt: row.updated_at });
+
 export interface NoteSearchOptions {
   projectId: string;
   limit: number;
@@ -116,6 +126,23 @@ export class NoteRepository {
   list(projectId: string): Note[] {
     const rows = this.db.prepare('SELECT * FROM notes WHERE project_id = ? ORDER BY created_at, id').all(projectId) as unknown as Row[];
     return rows.map(toNote);
+  }
+  listHandoffFiles(projectId: string, { limit, offset }: { limit: number; offset: number }): HandoffFileRecord[] {
+    const rows = this.db.prepare(`SELECT id, file_path, title, updated_at FROM notes
+      WHERE project_id = ? AND folder = 'handoffs' AND file_path IS NOT NULL
+      ORDER BY updated_at DESC, id DESC LIMIT ? OFFSET ?`).all(projectId, limit, offset) as unknown as HandoffFileRow[];
+    return rows.map(handoffFileOf);
+  }
+  countHandoffFiles(projectId: string): number {
+    const row = this.db.prepare("SELECT COUNT(*) AS n FROM notes WHERE project_id = ? AND folder = 'handoffs' AND file_path IS NOT NULL").get(projectId) as { n: number };
+    return row.n;
+  }
+  findHandoffFile({ projectId, file }: { projectId: string; file: string }): HandoffFileRecord | undefined {
+    const suffix = `/${file}`;
+    const row = this.db.prepare(`SELECT id, file_path, title, updated_at FROM notes
+      WHERE project_id = ? AND folder = 'handoffs' AND substr(file_path, -?) = ?
+      ORDER BY updated_at DESC, id DESC LIMIT 1`).get(projectId, suffix.length, suffix) as HandoffFileRow | undefined;
+    return row ? handoffFileOf(row) : undefined;
   }
   /** One page of summaries, bodies never read; `folder` narrows the page. */
   listSummaries(projectId: string, { folder, limit, offset }: NoteListOptions): NoteSummary[] {

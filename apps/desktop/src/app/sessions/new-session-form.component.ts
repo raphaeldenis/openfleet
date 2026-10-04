@@ -9,6 +9,8 @@ import { ErrorLineComponent } from '../design/error-line.component';
 import { ManagerFieldsComponent } from '../managers/manager-fields.component';
 import { ProjectFormComponent } from '../projects/project-form.component';
 import { createdButNotOpenedMessage, createSessionErrorMessage } from './create-session-error';
+import { HandoffPickerComponent } from './handoff-picker.component';
+import { ApiError } from '../core/fleet-api.service';
 import { MODEL_RUNGS } from './model-selector.component';
 import { type ChosenPermissionMode, INHERITED_MODE, PermissionModeListComponent } from './permission-mode-list.component';
 
@@ -49,7 +51,7 @@ function creationModeFrom(queryParams: ParamMap | undefined): CreationMode {
 @Component({
   selector: 'of-new-session-form',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [ErrorLineComponent, FormsModule, RouterLink, ManagerFieldsComponent, PermissionModeListComponent, ProjectFormComponent],
+  imports: [ErrorLineComponent, FormsModule, RouterLink, ManagerFieldsComponent, PermissionModeListComponent, ProjectFormComponent, HandoffPickerComponent],
   host: { '[class.embedded]': 'isEmbedded' },
   template: `
     <form class="of-form" data-testid="new-session-form" [attr.aria-busy]="pending() || null" (ngSubmit)="submit()" novalidate>
@@ -93,6 +95,9 @@ function creationModeFrom(queryParams: ParamMap | undefined): CreationMode {
       }
       @if (hasProjectsLoadFailed()) {
         <p class="project-note" role="status" data-testid="new-session-project-note">Couldn't load your projects. You can still create a session without one.</p>
+      }
+      @if (!isManagerMode()) {
+        <of-handoff-picker [project]="selectedProject()" [file]="handoffFile()" [isLocked]="pending()" (fileChange)="handoffFile.set($event)" />
       }
 
       <div class="of-section-title">Agent</div>
@@ -226,6 +231,12 @@ export class NewSessionFormComponent {
   protected readonly isCreatingProject = signal(false);
   protected readonly projectCreatedNotice = signal('');
   protected readonly projectId = signal(this.embeddedSessionSeed?.projectId() ?? NO_PROJECT_ID);
+  protected readonly selectedProject = computed(() => this.projects().find((project) => project.id === this.projectId()));
+  protected readonly handoffFile = linkedSignal<string | undefined>(() => {
+    this.projectId();
+    this.isManagerMode();
+    return undefined;
+  });
   protected readonly harness = signal<HarnessId>('claude-cli');
   protected readonly model = signal<string>('sonnet');
   protected readonly permissionMode = signal<ChosenPermissionMode>(INHERITED_MODE);
@@ -249,7 +260,8 @@ export class NewSessionFormComponent {
       ...(chosenProjectId === NO_PROJECT_ID ? {} : { projectId: chosenProjectId }),
     };
     const seededPrompt = this.embeddedSessionSeed?.prompt().trim();
-    if (!this.isManagerMode()) return { kind: 'session' as const, fields: { ...sharedSpec, ...(seededPrompt ? { seededPrompt } : {}) } };
+    const handoffFile = this.handoffFile();
+    if (!this.isManagerMode()) return { kind: 'session' as const, fields: { ...sharedSpec, ...(seededPrompt ? { seededPrompt } : {}), ...(handoffFile ? { handoffFile } : {}) } };
     const pulseSeconds = this.pulseSeconds();
     const hasEditedPulseSeconds = typeof pulseSeconds === 'number';
     const managerFields = { ...sharedSpec, ...(hasEditedPulseSeconds ? { pulseSeconds } : {}), childrenCap: this.childrenCap(), mission: this.mission().trim() };
@@ -342,7 +354,12 @@ export class NewSessionFormComponent {
   }
 
   private showCreateFailed(error: unknown, focusWhenSubmitted: Element | null): void {
-    this.showServerError(createSessionErrorMessage(error, this.mode()), focusWhenSubmitted);
+    const file = this.handoffFile();
+    const isMissingHandoff = error instanceof ApiError && error.code === 'handoff_not_found' && file !== undefined;
+    const message = isMissingHandoff
+      ? `handoffs/${file} is no longer in the docs folder – pick another handoff or remove it.`
+      : createSessionErrorMessage(error, this.mode());
+    this.showServerError(message, focusWhenSubmitted);
   }
 
   private showServerError(message: string, focusWhenSubmitted: Element | null): void {

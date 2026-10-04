@@ -11,6 +11,9 @@ import { newId, newToken } from '../ids.js';
 import { log } from '../logger.js';
 import { ProjectNotFoundError } from '../projects/projectErrors.js';
 import { ProjectRepository } from '../projects/projectRepository.js';
+import { HandoffSeed } from '../notes/handoffSeed.js';
+import { NoteRepository } from '../notes/noteRepository.js';
+import { nodeHandoffFileReader } from '../notes/nodeHandoffFileReader.js';
 import { MessageQueue } from './messageQueue.js';
 import { findLatestContextTokens, findResolvedModel, readTranscriptTail } from './resolvedModel.js';
 import { wrapAgentMessage } from './messageEnvelope.js';
@@ -386,6 +389,7 @@ function trimToTail(text: string, maxLength: number): string {
 export class SessionService {
   private readonly repo: SessionRepository;
   private readonly projects: ProjectRepository;
+  private readonly handoffSeed: HandoffSeed;
   private readonly queue: MessageQueue;
   private readonly handles = new Map<string, HarnessHandle>();
   private readonly outputBuffers = new Map<string, string>();
@@ -440,13 +444,21 @@ export class SessionService {
   constructor(private readonly deps: SessionServiceDeps) {
     this.repo = new SessionRepository(deps.db);
     this.projects = new ProjectRepository(deps.db);
+    this.handoffSeed = new HandoffSeed({ notes: new NoteRepository(deps.db), projects: this.projects, files: nodeHandoffFileReader });
     this.queue = new MessageQueue(deps.db);
+  }
+
+  private seededPromptWithHandoff({ projectId, handoffFile, seededPrompt }: SessionSpec): string | undefined {
+    const isStartedFromHandoff = handoffFile !== undefined && projectId !== undefined;
+    if (!isStartedFromHandoff) return seededPrompt;
+    return this.handoffSeed.build({ projectId, file: handoffFile, seededPrompt });
   }
 
   async create(spec: SessionSpec, options?: { branch?: string }): Promise<Session> {
     this.assertNotShuttingDown();
     const harness = this.harnessFor(spec.harness);
     this.assertProjectExists(spec.projectId);
+    const seededPrompt = this.seededPromptWithHandoff(spec);
     const id = newId();
     const hookToken = newToken();
     const mcpToken = newToken();
@@ -458,13 +470,12 @@ export class SessionService {
     // in-between symlink swap from one whose path never resolved to a real directory at all.
     if (existsSync(spec.directory)) this.repo.setDirectoryRealpath(id, realpathSync.native(spec.directory));
     this.warnIfPermissiveSettings(harness, spec.directory);
-    const seededPrompt = spec.seededPrompt?.trim();
-    if (seededPrompt) this.seededPromptBySessionId.set(id, seededPrompt);
+    if (seededPrompt?.trim()) this.seededPromptBySessionId.set(id, seededPrompt.trim());
     this.startPendingRecording(id, spec.model);
     let handle: HarnessHandle;
     try {
       handle = harness.start({
-        sessionId: id, directory: spec.directory, model: spec.model, seededPrompt: spec.seededPrompt,
+        sessionId: id, directory: spec.directory, model: spec.model, seededPrompt,
         hookUrl: `${this.deps.baseUrl}/hooks/${hookToken}`, mcpUrl: `${this.deps.baseUrl}/mcp`, mcpToken, displayName: `${spec.emoji} ${spec.name}`,
         permissionMode: spec.permissionMode,
       });

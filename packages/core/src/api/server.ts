@@ -33,6 +33,9 @@ import { registerDiagnosticsRoutes } from './diagnosticsRoutes.js';
 import { registerHandoffRoutes, type HandoffRouteDeps } from './handoffRoutes.js';
 import { registerNoteRoutes } from './noteRoutes.js';
 import { registerProjectRoutes } from './projectRoutes.js';
+import { registerHandoffPickerRoutes } from './handoffPickerRoutes.js';
+import { HandoffSeed } from '../notes/handoffSeed.js';
+import { nodeHandoffFileReader } from '../notes/nodeHandoffFileReader.js';
 import { registerRestRoutes } from './restHandlers.js';
 import { decodeParams, json, readJson, redactedRequestPath, Router } from './router.js';
 import { createWsHandler } from './wsHandler.js';
@@ -137,6 +140,7 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; rout
   registerRestRoutes(router, { ...deps, wsTickets });
   if (deps.diagnostics) registerDiagnosticsRoutes(router, deps.diagnostics);
   if (deps.projects) registerProjectRoutes(router, { projects: deps.projects, projectService: deps.projectService });
+  if (deps.projects && deps.noteRepo) registerHandoffPickerRoutes(router, new HandoffSeed({ projects: deps.projects, notes: deps.noteRepo, files: nodeHandoffFileReader }));
   if (deps.stores && deps.storeRepo) registerDataStoreRoutes(router, { stores: deps.stores, storeRepo: deps.storeRepo });
   if (deps.handoff) registerHandoffRoutes(router, deps.handoff);
   if (deps.notes && deps.noteRepo && deps.docs) registerNoteRoutes(router, { notes: deps.notes, noteRepo: deps.noteRepo, docs: deps.docs });
