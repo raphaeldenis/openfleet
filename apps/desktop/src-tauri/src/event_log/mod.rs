@@ -2,16 +2,18 @@
 //! A line is a `DesktopEvent` rendered into a `SanitizedLine` that has passed the grammar.
 #![allow(dead_code, unused_imports)]
 
+mod daemon_line;
 mod event;
 mod field;
 mod grammar;
 mod hash;
 mod salt;
 
+pub use daemon_line::DaemonLineAssembler;
 pub use event::{DaemonLineFields, DaemonTextClass, DesktopEvent, ForeignTarget, SpawnFailure};
 pub use field::{
-  Bool, Bytes, Count, DaemonPhase, DurationMs, EventName, ExitCode, IoFailure, IoKind, JsonFailure, KnownCode, KnownPaths, Level, Opaque, PathClass, PathSource,
-  Pid, SessionId, ShortId, StopOutcome, Stream, Ts,
+  Bool, Bytes, CatalogueId, Count, DaemonMessage, DaemonPhase, DurationMs, EventName, ExitCode, IoFailure, IoKind, JsonFailure, KnownCode, KnownErrorName,
+  KnownPaths, Level, Opaque, PathClass, PathSource, Pid, SessionId, ShortId, StackFrames, StopOutcome, Stream, Ts,
 };
 pub use grammar::{allowed_keys_of, validate, GrammarViolation, SanitizedLine};
 pub use hash::Hash8;

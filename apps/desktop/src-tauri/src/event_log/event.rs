@@ -1,6 +1,6 @@
 use super::field::{
-  Bool, Bytes, Count, DaemonPhase, EventName, ExitCode, IoFailure, KnownCode, Level, Opaque, PathClass, PathSource, Pid, SessionId, ShortId, StopOutcome,
-  Stream, Ts,
+  Bool, Bytes, Count, DaemonMessage, DaemonPhase, EventName, ExitCode, IoFailure, KnownCode, KnownErrorName, Level, Opaque, PathClass, PathSource, Pid,
+  SessionId, ShortId, StackFrames, StopOutcome, Stream, Ts,
 };
 use super::grammar::{seal, SanitizedLine};
 use std::fmt::{self, Display};
@@ -67,14 +67,17 @@ pub struct DaemonLineFields {
   pub id: Option<ShortId>,
   pub session: Option<SessionId>,
   pub code: Option<KnownCode>,
-  pub message: Option<Opaque>,
+  pub message: Option<DaemonMessage>,
+  pub error_name: Option<KnownErrorName>,
   pub error_code: Option<KnownCode>,
   pub error_message: Option<Opaque>,
+  pub frames: Option<StackFrames>,
   pub extra_fields: Count,
 }
 
 /// Everything the desktop says about itself. No variant holds a `String` or a `&str`: free text enters only as `Opaque`.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[allow(clippy::large_enum_variant)]
 pub enum DesktopEvent {
   DaemonReused,
   DaemonSpawnFailed { failure: SpawnFailure },
@@ -259,8 +262,10 @@ fn write_daemon_line(line: &mut LineBuilder, fields: &DaemonLineFields) {
   line.pair_if_present("session", fields.session);
   line.pair_if_present("code", fields.code);
   line.pair_if_present("msg", fields.message);
+  line.pair_if_present("err_name", fields.error_name);
   line.pair_if_present("err_code", fields.error_code);
   line.pair_if_present("err_msg", fields.error_message);
+  line.pair_if_present("frames", fields.frames);
   line.pair("extra_fields", fields.extra_fields);
 }
 
@@ -298,11 +303,19 @@ mod tests {
       id: ShortId::parse("0a1b2c3d"),
       session: SessionId::parse("123e4567-e89b-42d3-a456-426614174000"),
       code: Some(KnownCode::from_name("session_not_found")),
-      message: Some(opaque(text)),
+      message: Some(DaemonMessage::Unlisted(opaque(text))),
+      error_name: Some(KnownErrorName::from_name("TypeError")),
       error_code: Some(KnownCode::from_name("ENOENT")),
       error_message: Some(opaque(text)),
+      frames: Some(frames_at(&[(120, 5), (88, 13)])),
       extra_fields: Count(3),
     }
+  }
+
+  fn frames_at(positions: &[(u32, u32)]) -> StackFrames {
+    let mut frames = StackFrames::empty();
+    positions.iter().for_each(|(line, column)| assert!(frames.push(*line, *column)));
+    frames
   }
 
   /// One event per variant, and several for the variants with alternatives, each carrying `text` in every Opaque-capable field.
@@ -329,8 +342,10 @@ mod tests {
         session: None,
         code: None,
         message: None,
+        error_name: None,
         error_code: None,
         error_message: None,
+        frames: None,
         ..daemon_line(text)
       }),
       DesktopEvent::PathRepaired { source: PathSource::Fallback },
@@ -435,8 +450,10 @@ mod tests {
         session: None,
         code: None,
         message: None,
+        error_name: None,
         error_code: None,
         error_message: None,
+        frames: None,
         ..daemon_line("x")
       };
 
@@ -537,9 +554,11 @@ mod tests {
             random.lowercase_hex(12)
           )),
           code: Some(KnownCode::from_name(&hostile_name)),
-          message: Some(opaque),
+          message: Some(DaemonMessage::Unlisted(opaque)),
+          error_name: Some(KnownErrorName::from_name(&hostile_name)),
           error_code: Some(KnownCode::from_name("EACCES")),
           error_message: Some(opaque),
+          frames: Some(frames_at(&[(words[0] as u32, words[1] as u32)])),
           extra_fields: Count(words[2]),
         }),
         DesktopEvent::IssueReportOpened { lines: Count(words[0]), url_bytes: Bytes(words[1]) },

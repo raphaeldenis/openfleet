@@ -108,7 +108,7 @@ pub fn allowed_keys_of(event: EventName) -> &'static [&'static str] {
     EventName::DaemonExited => &["code"],
     EventName::SidecarFailed => &["reason"],
     EventName::DaemonText => &["stream", "class", "text"],
-    EventName::DaemonLine => &["id", "session", "code", "msg", "err_code", "err_msg", "extra_fields"],
+    EventName::DaemonLine => &["id", "session", "code", "msg", "err_name", "err_code", "err_msg", "frames", "extra_fields"],
     EventName::PathRepaired => &["source"],
     EventName::IssueReportOpened => &["lines", "url_bytes"],
     EventName::BundleSaved => &["bytes"],
