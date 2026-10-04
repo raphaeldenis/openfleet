@@ -5,11 +5,13 @@ import type { RecordValues } from './scapeTarget.js';
 import { ScapeImportError } from './scapeImportError.js';
 import type { ScapeProject, ScapeSource } from './scapeSource.js';
 import { scapeNotesDateToIso } from './scapeTime.js';
+import { planPlaybookArchive, type PlannedPlaybookArchive } from './playbookArchive.js';
 
 export interface PlannedRecord<Extra = object> { id: string; record: RecordValues; extra: Extra }
 
 /** Everything a run intends to write, computed from the Scape sources before any write. */
 export interface ImportPlan {
+  playbookArchives: PlannedPlaybookArchive[];
   projects: PlannedRecord<{ projectName: string; hasDocsFolder: boolean }>[];
   notes: PlannedRecord<{ unconvertedTypes: string[]; currentVersionId: string }>[];
   noteVersions: PlannedRecord<{ unconvertedTypes: string[] }>[];
@@ -43,7 +45,7 @@ function selectProjects(source: ScapeSource, projectName: string | undefined): S
   return selected;
 }
 
-const emptyPlan = (): ImportPlan => ({ projects: [], notes: [], noteVersions: [], dataStores: [], columns: [], views: [], skippedViewCount: 0, rows: [], history: [], skippedHistoryCount: 0 });
+const emptyPlan = (): ImportPlan => ({ playbookArchives: [], projects: [], notes: [], noteVersions: [], dataStores: [], columns: [], views: [], skippedViewCount: 0, rows: [], history: [], skippedHistoryCount: 0 });
 
 function planNotes(plan: ImportPlan, source: ScapeSource, project: ScapeProject): void {
   for (const note of source.notesOf(project.id)) {
@@ -111,6 +113,8 @@ export function buildImportPlan(source: ScapeSource, options: PlanOptions): Impo
       extra: { projectName: project.name, hasDocsFolder: docsFolder !== undefined },
     });
     planNotes(plan, source, project);
+    const archive = planPlaybookArchive({ project, playbooks: source.playbooksOf(project.id), secretNames: source.playbookSecretNames() });
+    if (archive !== undefined) plan.playbookArchives.push(archive);
     planStores(plan, source, project);
   }
   return plan;
