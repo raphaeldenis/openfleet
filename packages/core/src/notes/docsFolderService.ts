@@ -190,9 +190,7 @@ export class DocsFolderService {
     try {
       return this.deps.fs.realpathSync(docsFolderPath);
     } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      const isPermissionRefusal = code === 'EACCES' || code === 'EPERM';
-      throw isPermissionRefusal ? new DocsFolderNotWritableError(docsFolderPath, error) : new InvalidDocsFolderError();
+      throw isPermissionRefusal(error) ? new DocsFolderNotWritableError(docsFolderPath, error) : new InvalidDocsFolderError();
     }
   }
 
@@ -207,13 +205,7 @@ export class DocsFolderService {
     this.assertWithinCap(input.bodyMd);
     const project = this.requireProject(input.projectId);
     const docsFolderPath = this.requireDocsFolderPath(project);
-    const realDocsFolderPath = this.deps.fs.realpathSync(docsFolderPath);
-    const realFolderDir = this.assertContained(realDocsFolderPath, join(docsFolderPath, input.folder));
-    const dateStamp = this.deps.clock().slice(0, 10);
-    const filePath = this.uniqueFilePath(realFolderDir, dateStamp, input.title);
-
-    const tempPath = this.writeTempFile(filePath, input.bodyMd);
-    this.deps.fs.renameSync(tempPath, filePath);
+    const filePath = this.asDocsFolderFailure(docsFolderPath, () => this.placeNewNoteFile(docsFolderPath, input));
     try {
       return this.deps.notes.createFileBacked({
         projectId: input.projectId,
@@ -229,6 +221,23 @@ export class DocsFolderService {
       this.deps.fs.unlinkSync(filePath);
       throw error;
     }
+  }
+
+  /** Writes the note's file under the real, contained folder directory and returns its real path. */
+  private placeNewNoteFile(docsFolderPath: string, input: CreateFileBackedNoteInput): string {
+    const realDocsFolderPath = this.deps.fs.realpathSync(docsFolderPath);
+    const realFolderDir = this.assertContained(realDocsFolderPath, join(docsFolderPath, input.folder));
+    const dateStamp = this.deps.clock().slice(0, 10);
+    const filePath = this.uniqueFilePath(realFolderDir, dateStamp, input.title);
+
+    const tempPath = this.writeTempFile(filePath, input.bodyMd);
+    try {
+      this.deps.fs.renameSync(tempPath, filePath);
+    } catch (error) {
+      this.removeTempFileQuietly(tempPath);
+      throw error;
+    }
+    return filePath;
   }
 
   /**
@@ -558,6 +567,16 @@ export class DocsFolderService {
     }
   }
 
+  /** A vanished folder reads as an unreadable note file, a permission refusal (EACCES, EROFS, EPERM) as a docs folder that is not writable; every other failure propagates unchanged. */
+  private asDocsFolderFailure<T>(docsFolderPath: string, run: () => T): T {
+    try {
+      return this.orUnreadable(docsFolderPath, run);
+    } catch (error) {
+      if (isPermissionRefusal(error)) throw new DocsFolderNotWritableError(docsFolderPath, error);
+      throw error;
+    }
+  }
+
   /** A temp file already gone (ENOENT) needs no cleanup; any other unlink failure is warned with its code only, never the path. */
   private removeTempFileQuietly(tempPath: string): void {
     try {
@@ -626,7 +645,13 @@ export class DocsFolderService {
   }
 }
 
-const ASCII_ONLY_PATTERN = /[^a-z0-9]+/g;
+const PERMISSION_REFUSAL_CODES: ReadonlySet<string | undefined> = new Set(['EACCES', 'EROFS', 'EPERM']);
+
+function isPermissionRefusal(error: unknown): boolean {
+  return PERMISSION_REFUSAL_CODES.has((error as NodeJS.ErrnoException).code);
+}
+
+const ASCII_ONLY_PATTERN =/[^a-z0-9]+/g;
 const DIACRITIC_MARKS_PATTERN = /[̀-ͯ]/g;
 const SLUG_FALLBACK = 'note';
 
