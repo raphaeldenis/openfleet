@@ -37,7 +37,9 @@ Signing identity, notarization, publication and the update server are not part o
 
        pnpm build:dmg:all
 
-   It builds Intel first and Apple Silicon last (`scripts/release/build-local.sh`; one dmg at a time with `pnpm build:dmg` or `pnpm build:dmg --target x86_64-apple-darwin`). Each build fetches the pinned Node sidecar (`scripts/release/node-version.txt`), bundles the daemon and runs `tauri build`. The dmgs land in `apps/desktop/src-tauri/target/<target>/release/bundle/dmg/`.
+   It builds Intel first and Apple Silicon last (`scripts/release/build-local.sh`; one dmg at a time with `pnpm build:dmg` or `pnpm build:dmg --target x86_64-apple-darwin`). Each build fetches the pinned Node sidecar (`scripts/release/node-version.txt`), verifies its Mach-O CPU against the target, bundles the daemon and runs `tauri build`. It then verifies both the packaged Node and app executables against that same target before reporting success. The dmgs land in `apps/desktop/src-tauri/target/<target>/release/bundle/dmg/`.
+
+   Install the `aarch64` dmg on Apple Silicon and the `x64` dmg on Intel. An Intel app and its Node sidecar cannot run on Apple Silicon without Rosetta.
 
 5. **Try the Apple Silicon dmg** (see the checklist), then the Intel one if an Intel Mac is available.
 
