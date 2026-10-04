@@ -75,10 +75,10 @@ describe('Settings → General', () => {
     expect(screen.getByText(/Not configurable in this build yet/)).toBeInTheDocument();
   });
 
-  it('offers no handoff or language row, since the daemon has no such setting', async () => {
+  it('shows the handoff-on-close and reply-language rows disabled, since the daemon has no such setting', async () => {
     await renderGeneralSection();
 
-    expect(screen.queryByText(/Write a handoff when a session closes/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/Agents reply and write in/)).not.toBeInTheDocument();
+    expect(screen.getByTestId('general-handoff-on-close')).toBeDisabled();
+    expect(screen.getByTestId('general-reply-language')).toBeDisabled();
   });
 });

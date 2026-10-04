@@ -6,7 +6,6 @@ import { SettingsSectionComponent } from './settings-section.component';
 import { SETTINGS_VALUE_STYLES } from './settings-value-styles';
 
 const THEME_LABELS = { light: 'Light', dark: 'Dark' } as const;
-const DOCS_ROOT_UNAVAILABLE = 'Not configurable in this build yet';
 
 @Component({
   selector: 'of-general-settings',
@@ -21,9 +20,9 @@ const DOCS_ROOT_UNAVAILABLE = 'Not configurable in this build yet';
         <of-settings-row name="Theme" detail="Follows the toolbar toggle">
           <button type="button" class="value" data-testid="general-theme" [attr.aria-label]="themeButtonLabel()" (click)="theme.toggle()">{{ themeLabel() }}</button>
         </of-settings-row>
-        <of-settings-row name="Docs folder root" [detail]="docsRootDetail">
-          <button type="button" class="value mono" data-testid="general-docs-root" disabled>—</button>
-        </of-settings-row>
+        <of-settings-row name="Docs folder root" detail="Each project gets <root>/<project>/ with specs, plans, handoffs, reports" [unavailable]="docsRoot" />
+        <of-settings-row name="Write a handoff when a session closes" detail="Saved to handoffs/YYYY-MM-DD-<session>.md; offered in the close dialog" [unavailable]="handoffOnClose" />
+        <of-settings-row name="Agents reply and write in" detail="Applies to sessions started afterwards · code and commits follow House rules" [unavailable]="replyLanguage" />
       </div>
     </of-settings-section>
   `,
@@ -33,7 +32,9 @@ export class GeneralSettingsComponent {
   protected readonly theme = inject(ThemeService);
   private readonly router = inject(Router);
 
-  protected readonly docsRootDetail = `Each project gets <root>/<project>/ with specs, plans, handoffs, reports · ${DOCS_ROOT_UNAVAILABLE}`;
+  protected readonly docsRoot = { testId: 'general-docs-root', value: '—', reason: 'Not configurable in this build yet' };
+  protected readonly handoffOnClose = { testId: 'general-handoff-on-close', value: 'Off', reason: 'Not available yet — the daemon has no close hook' };
+  protected readonly replyLanguage = { testId: 'general-reply-language', value: '—', reason: 'Not available yet — no language setting in the daemon' };
   protected readonly themeLabel = computed(() => THEME_LABELS[this.theme.theme()]);
   protected readonly themeButtonLabel = computed(() => `Theme: ${this.themeLabel()} · switch`);
 
