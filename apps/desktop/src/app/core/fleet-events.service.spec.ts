@@ -1,6 +1,6 @@
 import type { DaemonIssue, ErrorEnvelope } from '@openfleet/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { closedStripCopyFor } from '../sessions/session-close-status';
+import { closedSessionPresentationFor } from '../sessions/closed-session-presentation';
 import { FleetEventsService } from './fleet-events.service';
 
 class FakeWebSocket {
@@ -930,9 +930,9 @@ describe('FleetEventsService daemon issues and background failures', () => {
     it('keeps the "ended unexpectedly" strip of that crash instead of the neutral one', () => {
       socket.dispatchMessage(closedSnapshotOf(SIGTERM_EXIT_CODE));
 
-      const strip = closedStripCopyFor(SIGTERM_EXIT_CODE, service.closeReasonOf('s1'));
+      const { strip } = closedSessionPresentationFor({ exitCode: SIGTERM_EXIT_CODE, reason: service.closeReasonOf('s1') });
 
-      expect(strip).toMatchObject({ variant: 'error', description: expect.stringContaining('ended unexpectedly') });
+      expect(strip).toMatchObject({ variant: 'error', message: expect.stringContaining('ended unexpectedly') });
     });
 
     it('keeps the reason of a close across two snapshots', () => {

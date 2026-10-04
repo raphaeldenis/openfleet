@@ -83,14 +83,14 @@ describe('SessionViewComponent lifecycle banners — real daemon event order', (
 
     // Assert
     await waitFor(() => expect(lifecycleBanner()).toHaveAttribute('data-variant', 'error'));
-    expect(screen.getByTestId('resume-error')).toHaveTextContent('failed to launch');
-    expect((screen.getByTestId('resume-retry') as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.getByTestId('lifecycle-message')).toHaveTextContent('The agent could not start');
+    expect((screen.getByTestId('resume-session') as HTMLButtonElement).disabled).toBe(false);
   });
 
   it.each([
-    { reason: 'launch_failed', copy: 'failed to launch' },
-    { reason: 'resume_timeout', copy: 'did not come up in time' },
-  ] as const)('a close announced with the reason $reason and no exit code gives Resume failed its reason', async ({ reason, copy }) => {
+    { reason: 'launch_failed', copy: 'The agent could not start' },
+    { reason: 'resume_timeout', copy: 'did not come back in time' },
+  ] as const)('a close announced with the reason $reason and no exit code gives the strip its reason', async ({ reason, copy }) => {
     // Arrange
     const { daemon } = await renderAgainstDaemonEvents(fakeApi(), [session({ state: 'idle' })]);
 
@@ -99,10 +99,10 @@ describe('SessionViewComponent lifecycle banners — real daemon event order', (
 
     // Assert
     await waitFor(() => expect(lifecycleBanner()).toHaveAttribute('data-variant', 'error'));
-    expect(screen.getByTestId('resume-error')).toHaveTextContent(copy);
+    expect(screen.getByTestId('lifecycle-message')).toHaveTextContent(copy);
   });
 
-  it('a session that closed after its agent process crashed says so in the closed strip', async () => {
+  it('a session that closed after its agent process crashed says so in the lifecycle strip', async () => {
     // Arrange
     const { daemon } = await renderAgainstDaemonEvents(fakeApi(), [session({ state: 'idle' })]);
 
@@ -110,7 +110,7 @@ describe('SessionViewComponent lifecycle banners — real daemon event order', (
     await daemon.send({ type: 'session.closed', sessionId: 's1', exitCode: 137, reason: 'harness_exit' });
 
     // Assert
-    await waitFor(() => expect(screen.getByTestId('session-closed-footer')).toHaveTextContent('The agent process ended unexpectedly'));
+    await waitFor(() => expect(lifecycleBanner()).toHaveTextContent('The agent process ended unexpectedly'));
   });
 
   it('a boot-resume (starting with closedAt, no reopen click) shows Resuming, and the banner leaves with the first non-starting state', async () => {
@@ -134,7 +134,7 @@ describe('SessionViewComponent lifecycle banners — real daemon event order', (
       session({ id: 's1', state: 'closed', exitCode: -1, closedAt: CLOSED_AT }),
       session({ id: 's2', name: 'Legolas', state: 'closed', exitCode: 0, closedAt: CLOSED_AT }),
     ]);
-    await userEvent.click(screen.getByTestId('resume-retry'));
+    await userEvent.click(screen.getByTestId('resume-session'));
     sessionId.set('s2');
     await fixture.whenStable();
 
@@ -147,7 +147,7 @@ describe('SessionViewComponent lifecycle banners — real daemon event order', (
     sessionId.set('s1');
     await fixture.whenStable();
     expect(lifecycleBanner()).toHaveAttribute('data-variant', 'error');
-    expect((screen.getByTestId('resume-retry') as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByTestId('resume-session') as HTMLButtonElement).disabled).toBe(false);
   });
 });
 
@@ -195,7 +195,7 @@ describe('SessionViewComponent lifecycle banners — accessibility', () => {
 
     // Assert
     expect(screen.getAllByRole('alert')).toHaveLength(1);
-    expect(screen.getByTestId('session-closed-footer')).toHaveAttribute('role', 'alert');
+    expect(lifecycleBanner()).toHaveAttribute('role', 'alert');
   });
 
   it('raises no alert when the user navigates to a session that failed while they were looking at another one', async () => {
@@ -215,12 +215,12 @@ describe('SessionViewComponent lifecycle banners — accessibility', () => {
   });
 
   it.each([
-    { scenario: 'the Resume failed banner', exitCode: -1, testId: 'resume-failed-reopen-fresh' },
-    { scenario: 'the closed footer', exitCode: 0, testId: 'reopen-fresh-session' },
-  ])('keeps the unavailable "Reopen fresh" of $scenario focusable and describes why it is unavailable', async ({ exitCode, testId }) => {
+    { scenario: 'a failed resume', exitCode: -1 },
+    { scenario: 'a clean close', exitCode: 0 },
+  ])('keeps the unavailable "Reopen fresh" of $scenario focusable and describes why it is unavailable', async ({ exitCode }) => {
     // Arrange
     await renderAgainstDaemonEvents(fakeApi(), [session({ state: 'closed', exitCode, closedAt: CLOSED_AT })]);
-    const reopenFresh = screen.getByTestId(testId);
+    const reopenFresh = screen.getByTestId('reopen-fresh-session');
 
     // Act
     reopenFresh.focus();
@@ -396,8 +396,8 @@ describe('SessionViewComponent lifecycle banners — sessions that closed long a
 
     // Assert
     expect(lifecycleBanner()).toHaveAttribute('data-variant', 'error');
-    expect(screen.getByTestId('resume-error')).toHaveTextContent('failed to launch');
-    expect(screen.getByTestId('resume-error')).not.toHaveTextContent('not closed');
+    expect(screen.getByTestId('lifecycle-message')).toHaveTextContent('The agent could not start');
+    expect(screen.getByTestId('lifecycle-message')).not.toHaveTextContent('not closed');
   });
 });
 
@@ -449,7 +449,7 @@ describe('SessionViewComponent reopen — a request that outlives a session swit
     await settleRequests(fixture);
 
     expect(lifecycleBanner()).toHaveAttribute('data-variant', 'error');
-    expect(screen.getByTestId('resume-retry')).toBeEnabled();
+    expect(screen.getByTestId('resume-session')).toBeEnabled();
   });
 
   it('leaves B clean when the reopen of A resolves while B is shown', async () => {

@@ -210,11 +210,11 @@ describe('SessionViewComponent', () => {
     });
 
     await userEvent.click(screen.getByTestId('resume-session'));
-    await waitFor(() => expect(screen.getByTestId('resume-error')).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('lifecycle-message')).toBeTruthy());
 
     sessionId.set('s2');
 
-    await waitFor(() => expect(screen.queryByTestId('resume-error')).toBeNull());
+    await waitFor(() => expect(screen.queryByTestId('lifecycle-message')).toBeNull());
   });
 
   it('a resume request for a previous session settling late does not surface its error on the new session, nor release the new session\'s own busy flag', async () => {
@@ -249,7 +249,7 @@ describe('SessionViewComponent', () => {
     rejectA(new ApiError(409, 'boom', 'not_closed'));
     await settleRequests(fixture);
 
-    expect(screen.queryByTestId('resume-error')).toBeNull();
+    expect(screen.queryByTestId('lifecycle-message')).toBeNull();
     expect(resumeButton.disabled).toBe(true); // B's own in-flight request must still be tracked as busy
 
     resolveB({});
@@ -272,7 +272,7 @@ describe('SessionViewComponent', () => {
 
     await userEvent.click(screen.getByTestId('resume-session'));
 
-    await waitFor(() => expect(screen.getByTestId('resume-error')).toHaveTextContent(message));
+    await waitFor(() => expect(screen.getByTestId('lifecycle-message')).toHaveTextContent(message));
   });
 
   it('shows a generic error for a reopen failure with no recognized code', async () => {
@@ -285,7 +285,7 @@ describe('SessionViewComponent', () => {
 
     await userEvent.click(screen.getByTestId('resume-session'));
 
-    await waitFor(() => expect(screen.getByTestId('resume-error')).toHaveTextContent('Could not resume the session — try again.'));
+    await waitFor(() => expect(screen.getByTestId('lifecycle-message')).toHaveTextContent('Could not resume the session — try again.'));
   });
 
   it('shows an error banner when the session closed with a non-zero exit code', async () => {
@@ -369,20 +369,20 @@ describe('SessionViewComponent', () => {
 
       await waitFor(() => expect(screen.getByTestId('lifecycle-banner')).toHaveAttribute('data-variant', 'error'));
       expect(screen.getByTestId('lifecycle-banner')).toHaveTextContent('Resume failed');
-      expect(screen.getByTestId('resume-error')).toHaveTextContent("This session's directory no longer exists");
+      expect(screen.getByTestId('lifecycle-message')).toHaveTextContent("This session's directory no longer exists");
     });
 
     it.each([
-      [-1, 'timed out'],
-      [-2, 'failed to launch'],
-    ] as const)('shows a Resume failed banner for a session the daemon closed with resume exit code %i', async (exitCode, reason) => {
+      [-1, 'Resume timed out', 'The session did not come back in time — try again.'],
+      [-2, 'Agent could not start', 'The agent could not start — check that the claude CLI is installed'],
+    ] as const)('names the failure of a session the daemon closed with resume exit code %i', async (exitCode, title, message) => {
       await render(SessionViewComponent, {
         bindings: [inputBinding('sessionId', () => 's1')],
         providers: [{ provide: FleetApiService, useValue: fakeApi() }, { provide: FleetEventsService, useValue: fakeEvents([session({ state: 'closed', exitCode, closedAt: CLOSED_AT })]) }],
       });
 
-      expect(screen.getByTestId('lifecycle-banner')).toHaveTextContent('Resume failed');
-      expect(screen.getByTestId('resume-error')).toHaveTextContent(reason);
+      expect(screen.getByTestId('lifecycle-banner')).toHaveTextContent(title);
+      expect(screen.getByTestId('lifecycle-message')).toHaveTextContent(message);
     });
 
     it('does not call an ordinary non-zero exit a failed resume', async () => {
@@ -391,10 +391,11 @@ describe('SessionViewComponent', () => {
         providers: [{ provide: FleetApiService, useValue: fakeApi() }, { provide: FleetEventsService, useValue: fakeEvents([session({ state: 'closed', exitCode: 1, closedAt: CLOSED_AT })]) }],
       });
 
-      expect(screen.queryByTestId('lifecycle-banner')).toBeNull();
+      expect(screen.getByTestId('lifecycle-banner')).toHaveTextContent('Agent process exited');
+      expect(screen.getByTestId('lifecycle-banner')).not.toHaveTextContent(/resume (failed|timed out)/i);
     });
 
-    it('retries the reopen from the Resume failed banner and swaps it for the Resuming banner', async () => {
+    it('retries the reopen from the closed card after a Resume failed and swaps the strip for the Resuming banner', async () => {
       let resolveRetry: (value: unknown) => void = () => {};
       const api = fakeApi();
       api.reopenSession = vi.fn()
@@ -407,7 +408,7 @@ describe('SessionViewComponent', () => {
       await userEvent.click(screen.getByTestId('resume-session'));
       await waitFor(() => expect(screen.getByTestId('lifecycle-banner')).toHaveTextContent('Resume failed'));
 
-      await userEvent.click(screen.getByTestId('resume-retry'));
+      await userEvent.click(screen.getByTestId('resume-session'));
 
       expect(api.reopenSession).toHaveBeenCalledTimes(2);
       expect(screen.getByTestId('lifecycle-banner')).toHaveTextContent('Resuming…');
