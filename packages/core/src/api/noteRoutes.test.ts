@@ -190,6 +190,14 @@ describe('notes REST routes', () => {
       expect(response.status).toBe(400);
     });
 
+    it('rejects a note created in an unknown folder with 400, and stores nothing', async () => {
+      const response = await call('POST', '/api/notes', { projectId: 'p1', title: 'T', bodyMd: 'x', folder: 'not-a-folder' });
+
+      const listed = await (await call('GET', '/api/notes?projectId=p1')).json();
+      expect(response.status).toBe(400);
+      expect(JSON.stringify(listed)).not.toContain('not-a-folder');
+    });
+
     it('answers 404 project_not_found when the project does not exist', async () => {
       const response = await call('POST', '/api/notes', { projectId: 'ghost', title: 'T', bodyMd: '' });
 

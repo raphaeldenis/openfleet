@@ -6,7 +6,13 @@ const ESC = '\x1b';
 // (measured: consistently reproducible past ~1KB). The body's own ESC bytes are stripped first: left in,
 // an embedded paste-end sequence (literal "ESC[201~") would close the paste early and spill the rest of
 // the body onto the terminal as ordinary keystrokes, submitting whatever follows a stray '\r'.
+// Line breaks (CRLF, lone CR) become one '\n' each so lines never merge; every other C0/C1 control
+// character goes too (ETX, CSI 0x9b...) except tab and newline.
+const LINE_BREAK = /\r\n?/g;
+const CONTROL_CHARACTERS_EXCEPT_TAB_AND_NEWLINE = /[\x00-\x08\x0b-\x1f\x7f-\x9f]/g;
+
 export function frameForPaste(body: string): string {
-  const withoutEscapeBytes = body.replaceAll(ESC, '');
-  return `${ESC}[200~${withoutEscapeBytes}${ESC}[201~`;
+  const withNewlineLineBreaks = body.replace(LINE_BREAK, '\n');
+  const withoutControlCharacters = withNewlineLineBreaks.replace(CONTROL_CHARACTERS_EXCEPT_TAB_AND_NEWLINE, '');
+  return `${ESC}[200~${withoutControlCharacters}${ESC}[201~`;
 }
