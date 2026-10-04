@@ -370,7 +370,7 @@ describe('SessionHeaderComponent', () => {
     expect(screen.getByTestId('current-model')).toHaveTextContent('claude-sonnet-5');
   });
 
-  it('renders the permission mode, read-only', async () => {
+  it('renders the permission mode on its popover button', async () => {
     const session = baseSession();
     await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
     await openDetails();
@@ -389,8 +389,8 @@ describe('SessionHeaderComponent', () => {
     await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
     await openDetails();
 
-    await userEvent.selectOptions(screen.getByTestId('model-select'), 'opus');
-    await userEvent.click(screen.getByTestId('apply-model'));
+    await userEvent.click(screen.getByTestId('model-trigger'));
+    await userEvent.click(await screen.findByRole('option', { name: 'opus' }));
     await waitFor(() => expect(screen.getByTestId('model-switch-status')).toHaveTextContent('switch pending'));
 
     await userEvent.click(screen.getByTestId('session-close'));

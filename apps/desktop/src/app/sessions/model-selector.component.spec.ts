@@ -10,6 +10,16 @@ function fakeEvents(model?: string) {
   return { sessions: signal([{ id: 's1', name: 'Gimli', emoji: '⚔️', model, state: 'idle' }]), approvals: signal([]), managers: signal([]) };
 }
 
+const modelButton = () => screen.getByRole('button', { name: /^Model:/ });
+const openRungs = () => userEvent.click(modelButton());
+const rungNamed = (name: string) => screen.findByRole('option', { name });
+const rungList = () => screen.queryByRole('listbox', { name: 'Model' });
+
+async function pickRung(rung: string) {
+  await openRungs();
+  await userEvent.click(await rungNamed(rung));
+}
+
 describe('ModelSelectorComponent', () => {
   it('shows the session\'s current model, or "default" when none is set', async () => {
     await render(ModelSelectorComponent, {
@@ -19,197 +29,320 @@ describe('ModelSelectorComponent', () => {
     expect(screen.getByTestId('current-model')).toHaveTextContent('default');
   });
 
-  it('applies the selected rung to the session', async () => {
-    const api = { updateModel: vi.fn().mockResolvedValue({ status: 'relaunching' }) };
-    await render(ModelSelectorComponent, {
-      bindings: [inputBinding('sessionId', () => 's1')],
-      providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: fakeEvents('claude-sonnet-5') }],
+  describe('the rung popover', () => {
+    async function renderOn(model: string | undefined, api: Record<string, unknown> = { updateModel: vi.fn() }) {
+      return render(ModelSelectorComponent, {
+        bindings: [inputBinding('sessionId', () => 's1')],
+        providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: fakeEvents(model) }],
+      });
+    }
+
+    it('starts closed and opens on the model button, which announces the popup and its state', async () => {
+      await renderOn('sonnet');
+      expect(rungList()).toBeNull();
+      expect(modelButton()).toHaveAttribute('aria-haspopup', 'listbox');
+      expect(modelButton()).toHaveAttribute('aria-expanded', 'false');
+
+      await openRungs();
+
+      expect(rungList()).toBeTruthy();
+      expect(modelButton()).toHaveAttribute('aria-expanded', 'true');
     });
-    expect(screen.getByTestId('current-model')).toHaveTextContent('claude-sonnet-5');
 
-    await userEvent.selectOptions(screen.getByTestId('model-select'), 'opus');
-    await userEvent.click(screen.getByTestId('apply-model'));
+    it('lists the four rungs and marks the session\'s own as selected', async () => {
+      await renderOn('sonnet');
 
-    expect(api.updateModel).toHaveBeenCalledWith('s1', 'opus');
+      await openRungs();
+
+      const rungs = (await screen.findAllByRole('option')).map((option) => option.textContent?.replace('✓', '').trim());
+      expect(rungs).toEqual(['haiku', 'sonnet', 'opus', 'fable']);
+      expect(await rungNamed('sonnet')).toHaveAttribute('aria-selected', 'true');
+      expect(await rungNamed('opus')).toHaveAttribute('aria-selected', 'false');
+    });
+
+    it('lists a model that is not one of the fixed rungs as an extra row, selected, instead of silently mismatching it', async () => {
+      await renderOn('claude-opus-5-5');
+
+      await openRungs();
+
+      const rungs = (await screen.findAllByRole('option')).map((option) => option.textContent?.replace('✓', '').trim());
+      expect(rungs).toEqual(['haiku', 'sonnet', 'opus', 'fable', 'claude-opus-5-5']);
+      expect(await rungNamed('claude-opus-5-5')).toHaveAttribute('aria-selected', 'true');
+    });
+
+    it('explains that a switch restarts the session on the new model with its history', async () => {
+      await renderOn('sonnet');
+
+      await openRungs();
+
+      expect(screen.getByText(/Switching restarts this session on the new model with its history/)).toBeTruthy();
+    });
+
+    it('switches the session to the chosen rung, closes the popover and gives focus back to the model button', async () => {
+      const api = { updateModel: vi.fn().mockResolvedValue({ status: 'relaunching' }) };
+      await renderOn('claude-sonnet-5', api);
+
+      await pickRung('opus');
+
+      expect(api.updateModel).toHaveBeenCalledWith('s1', 'opus');
+      expect(rungList()).toBeNull();
+      expect(modelButton()).toHaveFocus();
+    });
+
+    it('sends nothing when the rung already in force is chosen, and just closes', async () => {
+      const api = { updateModel: vi.fn().mockResolvedValue({ status: 'relaunching' }) };
+      await renderOn('sonnet', api);
+
+      await pickRung('sonnet');
+
+      expect(api.updateModel).not.toHaveBeenCalled();
+      expect(rungList()).toBeNull();
+    });
+
+    it('closes on Escape and gives focus back to the model button', async () => {
+      await renderOn('sonnet');
+      await openRungs();
+      await waitFor(() => expect(screen.getByRole('option', { name: 'sonnet' })).toHaveFocus());
+
+      await userEvent.keyboard('{Escape}');
+
+      expect(rungList()).toBeNull();
+      expect(modelButton()).toHaveFocus();
+    });
+
+    it('closes on a click outside, without taking focus back', async () => {
+      await renderOn('sonnet');
+      await openRungs();
+      await rungNamed('sonnet');
+
+      await userEvent.click(document.body);
+
+      expect(rungList()).toBeNull();
+      expect(modelButton()).not.toHaveFocus();
+    });
+
+    it('closes when the model button is pressed again', async () => {
+      await renderOn('sonnet');
+      await openRungs();
+      await rungNamed('sonnet');
+
+      await openRungs();
+
+      expect(rungList()).toBeNull();
+    });
+
+    it('puts focus on the selected rung when it opens, and moves it with the arrow keys, wrapping at both ends', async () => {
+      await renderOn('sonnet');
+      await openRungs();
+      await waitFor(() => expect(screen.getByRole('option', { name: 'sonnet' })).toHaveFocus());
+
+      await userEvent.keyboard('{ArrowDown}');
+      expect(screen.getByRole('option', { name: 'opus' })).toHaveFocus();
+
+      await userEvent.keyboard('{End}');
+      expect(screen.getByRole('option', { name: 'fable' })).toHaveFocus();
+
+      await userEvent.keyboard('{ArrowDown}');
+      expect(screen.getByRole('option', { name: 'haiku' })).toHaveFocus();
+
+      await userEvent.keyboard('{ArrowUp}');
+      expect(screen.getByRole('option', { name: 'fable' })).toHaveFocus();
+
+      await userEvent.keyboard('{Home}');
+      expect(screen.getByRole('option', { name: 'haiku' })).toHaveFocus();
+    });
+
+    it('lets the keyboard choose a rung with Enter', async () => {
+      const api = { updateModel: vi.fn().mockResolvedValue({ status: 'relaunching' }) };
+      await renderOn('sonnet', api);
+      await openRungs();
+      await waitFor(() => expect(screen.getByRole('option', { name: 'sonnet' })).toHaveFocus());
+
+      await userEvent.keyboard('{ArrowDown}{Enter}');
+
+      expect(api.updateModel).toHaveBeenCalledWith('s1', 'opus');
+    });
+
+    it('keeps the model button inert while the request is in flight, then frees it', async () => {
+      let resolveUpdate: (value: unknown) => void = () => {};
+      const api = { updateModel: vi.fn(() => new Promise((resolve) => { resolveUpdate = resolve; })) };
+      await renderOn('claude-sonnet-5', api);
+
+      await pickRung('opus');
+      await waitFor(() => expect(modelButton()).toHaveAttribute('aria-disabled', 'true'));
+      await userEvent.click(modelButton());
+      expect(rungList()).toBeNull();
+
+      resolveUpdate({ status: 'relaunching' });
+      await waitFor(() => expect(modelButton()).not.toHaveAttribute('aria-disabled'));
+    });
+
+    it('sends only one updateModel call when a rung is double-clicked before the request resolves', async () => {
+      // Arrange
+      let resolveUpdate: (value: unknown) => void = () => {};
+      const api = { updateModel: vi.fn(() => new Promise((resolve) => { resolveUpdate = resolve; })) };
+      await renderOn('claude-sonnet-5', api);
+      await openRungs();
+      const opus = await rungNamed('opus');
+
+      // Act — two clicks land before Angular flushes the busy state to the DOM
+      fireEvent.click(opus);
+      fireEvent.click(opus);
+      resolveUpdate({ status: 'relaunching' });
+      await waitFor(() => expect(modelButton()).not.toHaveAttribute('aria-disabled'));
+
+      // Assert
+      expect(api.updateModel).toHaveBeenCalledTimes(1);
+    });
+
+    it('surfaces an error instead of silently discarding a failed model switch', async () => {
+      const api = { updateModel: vi.fn().mockRejectedValue(new Error('session_closed')) };
+      await renderOn('claude-sonnet-5', api);
+
+      await pickRung('opus');
+
+      await waitFor(() => expect(screen.queryByTestId('model-switch-error')).toBeTruthy());
+    });
+
+    it('marks the session\'s actual model as selected again after a failed switch, instead of the rejected choice', async () => {
+      // Arrange
+      const api = { updateModel: vi.fn().mockRejectedValue(new Error('session_closed')) };
+      await renderOn('claude-opus-5-5', api);
+
+      // Act
+      await pickRung('sonnet');
+      await waitFor(() => expect(screen.queryByTestId('model-switch-error')).toBeTruthy());
+      await openRungs();
+
+      // Assert
+      expect(await rungNamed('claude-opus-5-5')).toHaveAttribute('aria-selected', 'true');
+      expect(await rungNamed('sonnet')).toHaveAttribute('aria-selected', 'false');
+    });
   });
 
-  it('disables Apply while the request is in flight', async () => {
-    let resolveUpdate: (value: unknown) => void = () => {};
-    const api = { updateModel: vi.fn(() => new Promise((resolve) => { resolveUpdate = resolve; })) };
-    await render(ModelSelectorComponent, {
-      bindings: [inputBinding('sessionId', () => 's1')],
-      providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: fakeEvents('claude-sonnet-5') }],
-    });
-    const applyButton = screen.getByTestId('apply-model') as HTMLButtonElement;
+  describe('the switch status next to the model button', () => {
+    async function renderWith({ status, state = 'idle' }: { status: 'relaunching' | 'deferred'; state?: string }) {
+      const api = { updateModel: vi.fn().mockResolvedValue({ status }) };
+      const events = { sessions: signal([{ id: 's1', name: 'Gimli', emoji: '⚔️', model: 'claude-sonnet-5', state }]), approvals: signal([]), managers: signal([]) };
+      const rendered = await render(ModelSelectorComponent, {
+        bindings: [inputBinding('sessionId', () => 's1')],
+        providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: events }],
+      });
+      return { ...rendered, events };
+    }
 
-    await userEvent.click(applyButton);
-    await waitFor(() => expect(applyButton.disabled).toBe(true));
+    it('shows "restarting…" once the switch relaunches the session immediately', async () => {
+      await renderWith({ status: 'relaunching' });
 
-    resolveUpdate({ status: 'relaunching' });
-    await waitFor(() => expect(applyButton.disabled).toBe(false));
-  });
+      await pickRung('opus');
 
-  it('sends only one updateModel call when Apply is double-clicked before the request resolves', async () => {
-    // Arrange
-    let resolveUpdate: (value: unknown) => void = () => {};
-    const api = { updateModel: vi.fn(() => new Promise((resolve) => { resolveUpdate = resolve; })) };
-    await render(ModelSelectorComponent, {
-      bindings: [inputBinding('sessionId', () => 's1')],
-      providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: fakeEvents('claude-sonnet-5') }],
-    });
-    const applyButton = screen.getByTestId('apply-model') as HTMLButtonElement;
-
-    // Act — two clicks land before Angular flushes the `applying` signal to the DOM's disabled attribute
-    fireEvent.click(applyButton);
-    fireEvent.click(applyButton);
-    resolveUpdate({ status: 'relaunching' });
-    await waitFor(() => expect(applyButton.disabled).toBe(false));
-
-    // Assert
-    expect(api.updateModel).toHaveBeenCalledTimes(1);
-  });
-
-  it('surfaces an error instead of silently discarding a failed model switch', async () => {
-    // Arrange
-    const api = { updateModel: vi.fn().mockRejectedValue(new Error('session_closed')) };
-    await render(ModelSelectorComponent, {
-      bindings: [inputBinding('sessionId', () => 's1')],
-      providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: fakeEvents('claude-sonnet-5') }],
+      await waitFor(() => expect(screen.getByTestId('model-switch-status')).toHaveTextContent('restarting…'));
     });
 
-    // Act
-    await userEvent.click(screen.getByTestId('apply-model'));
+    it('shows the pending chip with the requested rung when the switch waits for the turn to end', async () => {
+      await renderWith({ status: 'deferred', state: 'generating' });
 
-    // Assert
-    await waitFor(() => expect(screen.queryByTestId('model-switch-error')).toBeTruthy());
-  });
+      await pickRung('opus');
 
-  it('shows "restarting…" once the switch relaunches the session immediately', async () => {
-    const api = { updateModel: vi.fn().mockResolvedValue({ status: 'relaunching' }) };
-    await render(ModelSelectorComponent, {
-      bindings: [inputBinding('sessionId', () => 's1')],
-      providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: fakeEvents('claude-sonnet-5') }],
+      await waitFor(() =>
+        expect(screen.getByTestId('model-switch-status')).toHaveTextContent('switch pending → opus · happens when this turn ends'),
+      );
     });
-    await userEvent.click(screen.getByTestId('apply-model'));
-    await waitFor(() => expect(screen.getByTestId('model-switch-status')).toHaveTextContent('restarting…'));
-  });
 
-  it('shows the deferred switch note when the switch waits for the turn to end', async () => {
-    const api = { updateModel: vi.fn().mockResolvedValue({ status: 'deferred' }) };
-    await render(ModelSelectorComponent, {
-      bindings: [inputBinding('sessionId', () => 's1')],
-      providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: fakeEvents('claude-sonnet-5') }],
+    it('explains in the chip\'s tooltip that closing the session first cancels the switch', async () => {
+      await renderWith({ status: 'deferred', state: 'generating' });
+
+      await pickRung('opus');
+
+      const chip = await screen.findByTestId('model-switch-status');
+      expect(chip).toHaveAttribute(
+        'title',
+        'The switch restarts the session on the new model as soon as this turn ends. Closing the session first cancels the switch: it ends closed.',
+      );
     });
-    await userEvent.click(screen.getByTestId('apply-model'));
-    await waitFor(() => expect(screen.getByTestId('model-switch-status')).toHaveTextContent('switch pending: happens when this turn ends'));
-  });
 
-  it('does not keep the previous session\'s switch status visible after navigating to a different session', async () => {
-    // Arrange — same instance reused across a `session/:sessionId` route param change (no destroy/recreate)
-    const sessionId = signal('s1');
-    const api = { updateModel: vi.fn().mockResolvedValue({ status: 'relaunching' }) };
-    const events = { sessions: signal([{ id: 's1', name: 'Gimli', emoji: '⚔️', model: 'claude-sonnet-5', state: 'idle' }, { id: 's2', name: 'Legolas', emoji: '🏹', model: 'claude-haiku-4-5', state: 'idle' }]), approvals: signal([]), managers: signal([]) };
-    await render(ModelSelectorComponent, {
-      bindings: [inputBinding('sessionId', sessionId)],
-      providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: events }],
+    it('marks the requested rung as selected while the switch is pending', async () => {
+      await renderWith({ status: 'deferred', state: 'generating' });
+      await pickRung('opus');
+      await screen.findByTestId('model-switch-status');
+
+      await openRungs();
+
+      expect(await rungNamed('opus')).toHaveAttribute('aria-selected', 'true');
     });
-    await userEvent.click(screen.getByTestId('apply-model'));
-    await waitFor(() => expect(screen.getByTestId('model-switch-status')).toHaveTextContent('restarting…'));
 
-    // Act — navigate to a different session that never triggered a switch
-    sessionId.set('s2');
+    it('clears the pending chip once the session reaches idle', async () => {
+      const { events } = await renderWith({ status: 'deferred', state: 'generating' });
+      await pickRung('opus');
+      await waitFor(() => expect(screen.getByTestId('model-switch-status')).toHaveTextContent('switch pending'));
 
-    // Assert
-    await waitFor(() => expect(screen.queryByTestId('model-switch-status')).toBeNull());
-  });
+      events.sessions.set([{ id: 's1', name: 'Gimli', emoji: '⚔️', model: 'claude-sonnet-5', state: 'idle' }]);
 
-  it('keeps "restarting…" visible when the daemon reports the model change before the relaunch settles', async () => {
-    const api = { updateModel: vi.fn().mockResolvedValue({ status: 'relaunching' }) };
-    const events = { sessions: signal([{ id: 's1', name: 'Gimli', emoji: '⚔️', model: 'claude-sonnet-5', state: 'idle' }]), approvals: signal([]), managers: signal([]) };
-    const { fixture } = await render(ModelSelectorComponent, {
-      bindings: [inputBinding('sessionId', () => 's1')],
-      providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: events }],
+      await waitFor(() => expect(screen.queryByTestId('model-switch-status')).toBeNull());
     });
-    await userEvent.click(screen.getByTestId('apply-model'));
-    await waitFor(() => expect(screen.getByTestId('model-switch-status')).toHaveTextContent('restarting…'));
 
-    // The daemon persists the model and emits session.model_changed right away, before/while the relaunch starts.
-    events.sessions.set([{ id: 's1', name: 'Gimli', emoji: '⚔️', model: 'claude-opus-5-5', state: 'idle' }]);
-    await fixture.whenStable();
-    expect(screen.getByTestId('model-switch-status')).toHaveTextContent('restarting…');
+    it('clears the switch status once the session closes', async () => {
+      const { events } = await renderWith({ status: 'relaunching', state: 'starting' });
+      await pickRung('opus');
+      await waitFor(() => expect(screen.getByTestId('model-switch-status')).toHaveTextContent('restarting…'));
 
-    events.sessions.set([{ id: 's1', name: 'Gimli', emoji: '⚔️', model: 'claude-opus-5-5', state: 'starting' }]);
-    await fixture.whenStable();
-    expect(screen.getByTestId('model-switch-status')).toHaveTextContent('restarting…');
+      events.sessions.set([{ id: 's1', name: 'Gimli', emoji: '⚔️', model: 'claude-sonnet-5', state: 'closed' }]);
 
-    events.sessions.set([{ id: 's1', name: 'Gimli', emoji: '⚔️', model: 'claude-opus-5-5', state: 'idle' }]);
-    await waitFor(() => expect(screen.queryByTestId('model-switch-status')).toBeNull());
-  });
-
-  it('clears "switch pending" once the session reaches idle', async () => {
-    const api = { updateModel: vi.fn().mockResolvedValue({ status: 'deferred' }) };
-    const events = { sessions: signal([{ id: 's1', name: 'Gimli', emoji: '⚔️', model: 'claude-sonnet-5', state: 'generating' }]), approvals: signal([]), managers: signal([]) };
-    await render(ModelSelectorComponent, {
-      bindings: [inputBinding('sessionId', () => 's1')],
-      providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: events }],
+      await waitFor(() => expect(screen.queryByTestId('model-switch-status')).toBeNull());
     });
-    await userEvent.click(screen.getByTestId('apply-model'));
-    await waitFor(() => expect(screen.getByTestId('model-switch-status')).toHaveTextContent('switch pending'));
 
-    events.sessions.set([{ id: 's1', name: 'Gimli', emoji: '⚔️', model: 'claude-sonnet-5', state: 'idle' }]);
+    it('keeps "restarting…" visible when the daemon reports the model change before the relaunch settles', async () => {
+      const { fixture, events } = await renderWith({ status: 'relaunching' });
+      await pickRung('opus');
+      await waitFor(() => expect(screen.getByTestId('model-switch-status')).toHaveTextContent('restarting…'));
 
-    await waitFor(() => expect(screen.queryByTestId('model-switch-status')).toBeNull());
-  });
+      // The daemon persists the model and emits session.model_changed right away, before/while the relaunch starts.
+      events.sessions.set([{ id: 's1', name: 'Gimli', emoji: '⚔️', model: 'claude-opus-5-5', state: 'idle' }]);
+      await fixture.whenStable();
+      expect(screen.getByTestId('model-switch-status')).toHaveTextContent('restarting…');
 
-  it('clears the switch status once the session closes', async () => {
-    const api = { updateModel: vi.fn().mockResolvedValue({ status: 'relaunching' }) };
-    const events = { sessions: signal([{ id: 's1', name: 'Gimli', emoji: '⚔️', model: 'claude-sonnet-5', state: 'starting' }]), approvals: signal([]), managers: signal([]) };
-    await render(ModelSelectorComponent, {
-      bindings: [inputBinding('sessionId', () => 's1')],
-      providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: events }],
+      events.sessions.set([{ id: 's1', name: 'Gimli', emoji: '⚔️', model: 'claude-opus-5-5', state: 'starting' }]);
+      await fixture.whenStable();
+      expect(screen.getByTestId('model-switch-status')).toHaveTextContent('restarting…');
+
+      events.sessions.set([{ id: 's1', name: 'Gimli', emoji: '⚔️', model: 'claude-opus-5-5', state: 'idle' }]);
+      await waitFor(() => expect(screen.queryByTestId('model-switch-status')).toBeNull());
     });
-    await userEvent.click(screen.getByTestId('apply-model'));
-    await waitFor(() => expect(screen.getByTestId('model-switch-status')).toHaveTextContent('restarting…'));
 
-    events.sessions.set([{ id: 's1', name: 'Gimli', emoji: '⚔️', model: 'claude-sonnet-5', state: 'closed' }]);
+    it('does not keep the previous session\'s switch status visible after navigating to a different session', async () => {
+      // Arrange — same instance reused across a `session/:sessionId` route param change (no destroy/recreate)
+      const sessionId = signal('s1');
+      const api = { updateModel: vi.fn().mockResolvedValue({ status: 'relaunching' }) };
+      const events = { sessions: signal([{ id: 's1', name: 'Gimli', emoji: '⚔️', model: 'claude-sonnet-5', state: 'idle' }, { id: 's2', name: 'Legolas', emoji: '🏹', model: 'claude-haiku-4-5', state: 'idle' }]), approvals: signal([]), managers: signal([]) };
+      await render(ModelSelectorComponent, {
+        bindings: [inputBinding('sessionId', sessionId)],
+        providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: events }],
+      });
+      await pickRung('opus');
+      await waitFor(() => expect(screen.getByTestId('model-switch-status')).toHaveTextContent('restarting…'));
 
-    await waitFor(() => expect(screen.queryByTestId('model-switch-status')).toBeNull());
-  });
+      // Act — navigate to a different session that never triggered a switch
+      sessionId.set('s2');
 
-  it('reverts the select to the previously confirmed rung after a failed switch, instead of keeping the rejected choice', async () => {
-    // Arrange
-    const api = { updateModel: vi.fn().mockRejectedValue(new Error('session_closed')) };
-    await render(ModelSelectorComponent, {
-      bindings: [inputBinding('sessionId', () => 's1')],
-      providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: fakeEvents('claude-opus-5-5') }],
+      // Assert
+      await waitFor(() => expect(screen.queryByTestId('model-switch-status')).toBeNull());
     });
-    const select = screen.getByTestId('model-select') as HTMLSelectElement;
 
-    // Act
-    await userEvent.selectOptions(select, 'sonnet');
-    await userEvent.click(screen.getByTestId('apply-model'));
-    await waitFor(() => expect(screen.queryByTestId('model-switch-error')).toBeTruthy());
+    it('closes an open rung list when navigating to a different session', async () => {
+      const sessionId = signal('s1');
+      const events = { sessions: signal([{ id: 's1', name: 'Gimli', emoji: '⚔️', model: 'sonnet', state: 'idle' }, { id: 's2', name: 'Legolas', emoji: '🏹', model: 'haiku', state: 'idle' }]), approvals: signal([]), managers: signal([]) };
+      const { fixture } = await render(ModelSelectorComponent, {
+        bindings: [inputBinding('sessionId', sessionId)],
+        providers: [{ provide: FleetApiService, useValue: { updateModel: vi.fn() } }, { provide: FleetEventsService, useValue: events }],
+      });
+      await openRungs();
+      await rungNamed('sonnet');
 
-    // Assert — reverts to the session's actual model, not a hardcoded 'sonnet'
-    expect(select.value).toBe('claude-opus-5-5');
-  });
+      sessionId.set('s2');
+      await fixture.whenStable();
 
-  it('initialises the select to the session\'s actual model instead of a hardcoded "sonnet" default', async () => {
-    await render(ModelSelectorComponent, {
-      bindings: [inputBinding('sessionId', () => 's1')],
-      providers: [{ provide: FleetApiService, useValue: { updateModel: vi.fn() } }, { provide: FleetEventsService, useValue: fakeEvents('claude-opus-5-5') }],
+      expect(rungList()).toBeNull();
     });
-    const select = screen.getByTestId('model-select') as HTMLSelectElement;
-    expect(select.value).toBe('claude-opus-5-5');
-  });
-
-  it('shows a model not among the fixed rungs as an extra option instead of silently mismatching it', async () => {
-    await render(ModelSelectorComponent, {
-      bindings: [inputBinding('sessionId', () => 's1')],
-      providers: [{ provide: FleetApiService, useValue: { updateModel: vi.fn() } }, { provide: FleetEventsService, useValue: fakeEvents('claude-opus-5-5') }],
-    });
-    const options = screen.getAllByRole('option').map((o) => (o as HTMLOptionElement).value);
-    expect(options).toEqual(['haiku', 'sonnet', 'opus', 'fable', 'claude-opus-5-5']);
   });
 
   describe('a pending switch belongs to its session', () => {
@@ -228,8 +361,7 @@ describe('ModelSelectorComponent', () => {
         bindings: [inputBinding('sessionId', sessionId)],
         providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: events }],
       });
-      await userEvent.selectOptions(screen.getByTestId('model-select'), 'opus');
-      await userEvent.click(screen.getByTestId('apply-model'));
+      await pickRung('opus');
       await waitFor(() => expect(screen.getByTestId('model-switch-status')).toHaveTextContent('switch pending'));
 
       const goTo = async (id: string) => {
@@ -239,17 +371,18 @@ describe('ModelSelectorComponent', () => {
       return { goTo, events };
     }
 
-    it('shows session A\'s deferred switch again, with the requested rung selected, after coming back', async () => {
+    it('shows session A\'s pending chip again, with the requested rung selected, after coming back', async () => {
       const { goTo } = await renderSwitchedAwayFromAndBackTo();
       await goTo('s2');
 
       await goTo('s1');
 
-      expect(screen.getByTestId('model-switch-status')).toHaveTextContent('switch pending: happens when this turn ends');
-      expect((screen.getByTestId('model-select') as HTMLSelectElement).value).toBe('opus');
+      expect(screen.getByTestId('model-switch-status')).toHaveTextContent('switch pending → opus · happens when this turn ends');
+      await openRungs();
+      expect(await rungNamed('opus')).toHaveAttribute('aria-selected', 'true');
     });
 
-    it('lifts the restored note once the turn ends', async () => {
+    it('lifts the restored chip once the turn ends', async () => {
       const { goTo, events } = await renderSwitchedAwayFromAndBackTo();
       await goTo('s2');
       await goTo('s1');
@@ -259,7 +392,7 @@ describe('ModelSelectorComponent', () => {
       await waitFor(() => expect(screen.queryByTestId('model-switch-status')).toBeNull());
     });
 
-    it('shows no note on return when the turn ended while the user was away', async () => {
+    it('shows no chip on return when the turn ended while the user was away', async () => {
       const { goTo, events } = await renderSwitchedAwayFromAndBackTo();
       await goTo('s2');
       events.sessions.update((all) => all.map((s) => (s.id === 's1' ? { ...s, state: 'idle' } : s)));
@@ -383,14 +516,18 @@ describe('ModelSelectorComponent', () => {
       bindings: [inputBinding('sessionId', () => 's1')],
       providers: [{ provide: FleetApiService, useValue: { updateModel: vi.fn() } }, { provide: FleetEventsService, useValue: fakeEvents('claude-sonnet-5') }],
     });
+    await openRungs();
+    await rungNamed('opus');
     expect(document.body.textContent).not.toContain('/model');
   });
 
-  it('gives the rung select an accessible name', async () => {
+  it('gives the model button and its rung list accessible names', async () => {
     await render(ModelSelectorComponent, {
       bindings: [inputBinding('sessionId', () => 's1')],
       providers: [{ provide: FleetApiService, useValue: { updateModel: vi.fn() } }, { provide: FleetEventsService, useValue: fakeEvents('claude-sonnet-5') }],
     });
-    expect(screen.getByRole('combobox', { name: 'Model' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Model: claude-sonnet-5' })).toBeTruthy();
+    await openRungs();
+    expect(await screen.findByRole('listbox', { name: 'Model' })).toBeTruthy();
   });
 });
