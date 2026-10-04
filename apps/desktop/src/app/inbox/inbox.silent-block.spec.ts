@@ -108,14 +108,14 @@ describe('InboxComponent silent blocks', () => {
     expect(copied).not.toContain('Gimli');
   });
 
-  it('draws the card actions at the standard button size', async () => {
+  it('draws Dismiss and Copy details as compact secondary actions', async () => {
     atMinutesAfterPrompt(5);
     const { events } = eventsWith();
 
     await renderInbox(events);
 
-    expect(screen.getByTestId('inbox-issue-dismiss')).not.toHaveClass('of-btn--compact');
-    expect(screen.getByTestId('inbox-issue-copy-details')).not.toHaveClass('of-btn--compact');
+    expect(screen.getByTestId('inbox-issue-dismiss')).toHaveClass('of-btn--compact');
+    expect(screen.getByTestId('inbox-issue-copy-details')).toHaveClass('of-btn--compact');
   });
 
   it('dismisses the item on request', async () => {
