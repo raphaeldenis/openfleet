@@ -19,7 +19,7 @@ describe('ComposerComponent', () => {
     });
     await userEvent.type(screen.getByTestId('composer-input'), 'go');
     await userEvent.click(screen.getByTestId('composer-send'));
-    expect(api.sendMessage).toHaveBeenCalledWith('s1', 'go');
+    expect(api.sendMessage).toHaveBeenCalledWith('s1', 'go', expect.stringMatching(/^[0-9a-f-]{36}$/));
   });
 
   it('shows "sent" once the API confirms immediate delivery', async () => {
@@ -159,7 +159,18 @@ describe('ComposerComponent', () => {
       await fixture.whenStable();
 
       expect(api.sendMessage).toHaveBeenCalledTimes(1);
-      expect(screen.getByTestId('composer-send')).toBeDisabled();
+      expect(screen.getByTestId('composer-send')).toHaveAttribute('aria-disabled', 'true');
+    });
+
+    it('user who clicks Send keeps keyboard focus on the button while the response arrives', async () => {
+      const { user, fixture } = await renderWithPendingSend();
+      await user.type(screen.getByTestId('composer-input'), 'approve staging');
+
+      await user.click(screen.getByTestId('composer-send'));
+      await fixture.whenStable();
+
+      expect(screen.getByTestId('composer-send')).toHaveFocus();
+      expect(screen.getByTestId('composer-send')).not.toBeDisabled();
     });
 
     it('user can send again once a failed send is over', async () => {
@@ -169,9 +180,37 @@ describe('ComposerComponent', () => {
 
       rejectSend(new Error('boom'));
 
-      await waitFor(() => expect(screen.getByTestId('composer-send')).toBeEnabled());
+      await waitFor(() => expect(screen.getByTestId('composer-send')).not.toHaveAttribute('aria-disabled', 'true'));
       await user.click(screen.getByTestId('composer-send'));
       expect(api.sendMessage).toHaveBeenCalledTimes(2);
+    });
+
+    it('user who retries the same text after a failed send reuses the message id, so a lost response cannot duplicate it', async () => {
+      const { user, api, rejectSend } = await renderWithPendingSend();
+      await user.type(screen.getByTestId('composer-input'), 'approve staging');
+      await user.click(screen.getByTestId('composer-send'));
+      rejectSend(new Error('boom'));
+      await waitFor(() => expect(screen.getByTestId('composer-send')).not.toHaveAttribute('aria-disabled', 'true'));
+
+      await user.click(screen.getByTestId('composer-send'));
+
+      const [firstAttempt, secondAttempt] = api.sendMessage.mock.calls as unknown as [string, string, string][];
+      expect(firstAttempt[2]).toMatch(/^[0-9a-f-]{36}$/);
+      expect(secondAttempt[2]).toBe(firstAttempt[2]);
+    });
+
+    it('user who edits the text after a failed send gets a fresh message id', async () => {
+      const { user, api, rejectSend } = await renderWithPendingSend();
+      await user.type(screen.getByTestId('composer-input'), 'approve staging');
+      await user.click(screen.getByTestId('composer-send'));
+      rejectSend(new Error('boom'));
+      await waitFor(() => expect(screen.getByTestId('composer-send')).not.toHaveAttribute('aria-disabled', 'true'));
+      await user.type(screen.getByTestId('composer-input'), ' now');
+
+      await user.click(screen.getByTestId('composer-send'));
+
+      const [firstAttempt, secondAttempt] = api.sendMessage.mock.calls as unknown as [string, string, string][];
+      expect(secondAttempt[2]).not.toBe(firstAttempt[2]);
     });
 
     it('user keeps the text typed after Send while the response arrives, and loses only what was sent', async () => {
