@@ -2,7 +2,7 @@ import { ChangeDetectionStrategy, Component, effect, inject, input, output, untr
 import { FleetApiService } from '../../core/fleet-api.service';
 import { createHandoffPreviewApi } from './handoff-preview.adapter';
 import { HandoffPreviewStore } from './handoff-preview.store';
-import { HandoffPreviewPanelComponent, type HandoffPanelDensity } from './handoff-preview-panel.component';
+import { HandoffPreviewPanelComponent, type HandoffPanelDensity, type HandoffSubject } from './handoff-preview-panel.component';
 
 export const HANDOFF_PREVIEW_META_TEXT = 'From the state panel and git status · edit before saving';
 
@@ -21,6 +21,7 @@ export const HANDOFF_PREVIEW_META_TEXT = 'From the state panel and git status ·
       [error]="store.error()"
       [saveDisabledReason]="store.saveDisabledReason()"
       [density]="density()"
+      [subject]="subject()"
       (sectionsChange)="store.edit($event)"
       (save)="store.save()"
       (retry)="store.retry()"
@@ -40,6 +41,7 @@ export const HANDOFF_PREVIEW_META_TEXT = 'From the state panel and git status ·
 export class HandoffPreviewHostComponent {
   readonly sessionId = input.required<string>();
   readonly density = input<HandoffPanelDensity>('compact');
+  readonly subject = input<HandoffSubject>('session');
   /** Shown under the panel while the target can receive the handoff. */
   readonly targetAvailableHint = input<string>();
   readonly dismissed = output<void>();

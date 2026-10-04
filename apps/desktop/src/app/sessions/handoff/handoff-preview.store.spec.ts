@@ -102,7 +102,7 @@ describe('HandoffPreviewStore', () => {
     await store.open(SESSION_ID);
 
     expect(store.state()).toBe('loadFailed');
-    expect(store.error()).toBeTruthy();
+    expect(store.error()).toBe('The preview could not be loaded — the daemon did not answer in time.');
   });
 
   it('shows the copy the adapter supplies when the preview cannot be collected', async () => {

@@ -5,14 +5,21 @@ import type { HandoffPreviewState } from './handoff-preview.store';
 
 export type HandoffPanelDensity = 'compact' | 'roomy';
 
-const SECTION_LABELS: ReadonlyArray<{ key: HandoffSectionKey; label: string }> = [
-  { key: 'goal', label: 'Goal' },
-  { key: 'state', label: 'State' },
-  { key: 'decisions', label: 'Decisions' },
-  { key: 'filesTouched', label: 'Files touched' },
-  { key: 'nextSteps', label: 'Next steps' },
-  { key: 'openQuestions', label: 'Open questions' },
+export type HandoffSubject = 'session' | 'manager';
+
+const SECTION_LABELS: ReadonlyArray<{ key: HandoffSectionKey; label: string; placeholder: string }> = [
+  { key: 'goal', label: 'Goal', placeholder: '' },
+  { key: 'state', label: 'State', placeholder: 'Where things stand' },
+  { key: 'decisions', label: 'Decisions', placeholder: 'Choices made and why' },
+  { key: 'filesTouched', label: 'Files touched', placeholder: 'Changed files' },
+  { key: 'nextSteps', label: 'Next steps', placeholder: 'What the next session should do first' },
+  { key: 'openQuestions', label: 'Open questions', placeholder: 'Anything unresolved' },
 ];
+
+const GOAL_PLACEHOLDER_BY_SUBJECT: Record<HandoffSubject, string> = {
+  session: 'What this session was for',
+  manager: 'What this manager was for',
+};
 
 const STATES_WITH_FIELDS: ReadonlySet<HandoffPreviewState> = new Set(['ready', 'saving', 'saved', 'error']);
 const STATES_THAT_CAN_SAVE: ReadonlySet<HandoffPreviewState> = new Set(['ready', 'error']);
@@ -71,9 +78,10 @@ let nextPanelId = 0;
 
       @if (showsFields()) {
         <div class="fields">
-          @for (section of sectionLabels; track section.key) {
+          @for (section of sectionFields(); track section.key) {
             <of-handoff-section-field
               [label]="section.label"
+              [placeholder]="section.placeholder"
               [value]="sections()[section.key]"
               [source]="sources()[section.key]"
               [disabled]="isLocked()"
@@ -138,6 +146,7 @@ export class HandoffPreviewPanelComponent {
   readonly error = input<string>();
   readonly saveDisabledReason = input<string>();
   readonly density = input<HandoffPanelDensity>('compact');
+  readonly subject = input<HandoffSubject>('session');
   readonly autoCloseDelayMs = input(DEFAULT_AUTO_CLOSE_DELAY_MS);
 
   readonly save = output<void>();
@@ -149,7 +158,9 @@ export class HandoffPreviewPanelComponent {
   readonly openSaved = output<void>();
   readonly sectionsChange = output<HandoffContent>();
 
-  protected readonly sectionLabels = SECTION_LABELS;
+  protected readonly sectionFields = computed(() =>
+    SECTION_LABELS.map((section) => (section.key === 'goal' ? { ...section, placeholder: GOAL_PLACEHOLDER_BY_SUBJECT[this.subject()] } : section)),
+  );
   protected readonly titleId = `of-handoff-title-${nextPanelId}`;
   protected readonly reasonId = `of-handoff-reason-${nextPanelId++}`;
 

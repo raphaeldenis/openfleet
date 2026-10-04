@@ -4,8 +4,8 @@ import { HANDOFF_SECTION_MAX_CHARACTERS, type HandoffSectionSource } from '@open
 const SOURCE_CAPTION: Record<HandoffSectionSource, string> = {
   working_state: 'from the state panel',
   git: 'from git',
-  session: 'from the session',
-  manager: 'from the mission',
+  session: 'from the state panel',
+  manager: 'from the state panel',
   none: 'write it here',
 };
 
@@ -18,8 +18,9 @@ let nextFieldId = 0;
     <label class="label" [attr.for]="textareaId">{{ label() }}</label>
     <textarea
       class="text"
-      rows="5"
+      rows="3"
       [id]="textareaId"
+      [attr.placeholder]="placeholder() || null"
       [attr.maxlength]="maxCharacters"
       [value]="value()"
       [disabled]="disabled()"
@@ -32,19 +33,20 @@ let nextFieldId = 0;
   `,
   styles: `
     :host { display: flex; flex-direction: column; gap: .25rem; min-width: 0; }
-    .label { color: var(--mut); font-size: .625rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+    .label { color: var(--mut); font-size: .6875rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
     .text {
-      width: 100%; box-sizing: border-box; resize: vertical; padding: .375rem .5rem;
-      border: 1px solid var(--line); border-radius: .375rem; background: var(--panel); color: var(--fg);
-      font: inherit; font-size: .75rem;
+      width: 100%; box-sizing: border-box; resize: vertical; min-height: 3.5rem; padding: .375rem .5rem;
+      border: 1px solid var(--line); border-radius: .375rem; background: var(--sunk); color: var(--fg);
+      font: inherit; font-size: .75rem; line-height: 1.45;
     }
-    .caption { color: var(--mut); font-size: .625rem; }
+    .caption { color: var(--mut); font-size: .6875rem; }
   `,
 })
 export class HandoffSectionFieldComponent {
   readonly label = input.required<string>();
   readonly value = input.required<string>();
   readonly source = input<HandoffSectionSource>();
+  readonly placeholder = input('');
   readonly disabled = input(false);
   readonly valueChange = output<string>();
 

@@ -187,10 +187,10 @@ describe('copyFor', () => {
       expect(text).toBe('That handoff is no longer in the docs folder — pick another handoff or remove it.');
     });
 
-    it('says the preview could not be collected when the daemon gives no reason', () => {
+    it('says the daemon did not answer in time when the preview could not be loaded and the daemon gives no reason', () => {
       const { text } = copyFor(new ApiError(500, 'GET /x'), { action: 'load_handoff' });
 
-      expect(text).toBe('The handoff preview could not be collected — try again.');
+      expect(text).toBe('The preview could not be loaded — the daemon did not answer in time.');
     });
 
     it('says the handoff was not written when the daemon gives no reason', () => {
