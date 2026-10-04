@@ -1,13 +1,16 @@
-import { ChangeDetectionStrategy, Component, computed, inject, input } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, effect, inject, input, linkedSignal, untracked } from '@angular/core';
 import type { Session } from '@openfleet/shared';
 import { copyFor } from '../core/error-copy';
 import { FleetApiService } from '../core/fleet-api.service';
+import { PendingSwitchesService } from '../core/pending-switches.service';
 import { SessionRequestsService } from '../core/session-requests';
 import { StateChipComponent } from '../design/state-chip.component';
 import { ModelSelectorComponent } from './model-selector.component';
 import { PermissionModePickerComponent } from './permission-mode-picker.component';
 import { SessionActionsComponent } from './session-actions.component';
 import { exitCodeLabel } from './session-close-status';
+import { needsAttention } from './session-header-attention';
+import { readRememberedHeaderChoice, rememberHeaderChoice } from './session-header-choice';
 
 @Component({
   selector: 'of-session-header',
@@ -40,20 +43,40 @@ import { exitCodeLabel } from './session-close-status';
           <span role="alert" data-testid="session-rename-error" class="of-error">✕ {{ error }}</span>
         }
         <of-state-chip [state]="session().state" [since]="session().stateSince" />
-        @if (session().modelDriftedFrom; as previousModel) {
-          <span class="drift-chip" data-testid="session-drift-chip" [attr.title]="'The model changed under this session; it was ' + previousModel">⇄ drift</span>
-        }
         @if (session().state === 'closed') {
           <span class="exit-code" data-testid="session-exit-code">{{ exitCodeLabel(session().exitCode) }}</span>
         }
-        <span class="harness" data-testid="session-harness" title="Harness">{{ session().harness }}</span>
-        <span class="directory" data-testid="session-directory" [attr.title]="session().directory">{{ session().directory }}</span>
-        <span class="cost" data-testid="session-cost" title="Cost tracking is not implemented yet">—</span>
+        <button
+          type="button"
+          class="details-toggle"
+          data-testid="session-header-toggle"
+          [attr.aria-expanded]="isOpen()"
+          [attr.aria-controls]="detailsId()"
+          (click)="toggleDetails()"
+        >
+          <span aria-hidden="true">{{ isOpen() ? '▴' : '▾' }}</span> Details
+        </button>
+        <span class="spacer"></span>
+        <of-session-actions
+          [sessionId]="session().id"
+          [state]="session().state"
+          [stateSince]="session().stateSince"
+          [sessionName]="session().name"
+          [closeVisible]="isOpen()"
+        />
       </div>
-      <of-model-selector [sessionId]="session().id" />
-      <of-permission-mode-picker [sessionId]="session().id" [currentMode]="session().permissionMode" />
-      <span class="spacer"></span>
-      <of-session-actions [sessionId]="session().id" [state]="session().state" [stateSince]="session().stateSince" [sessionName]="session().name" />
+      <div class="details" data-testid="session-header-details" [id]="detailsId()">
+        @if (isOpen()) {
+          @if (session().modelDriftedFrom; as previousModel) {
+            <span class="drift-chip" data-testid="session-drift-chip" [attr.title]="'The model changed under this session; it was ' + previousModel">⇄ drift</span>
+          }
+          <span class="harness" data-testid="session-harness" title="Harness">{{ session().harness }}</span>
+          <span class="directory" data-testid="session-directory" [attr.title]="session().directory">{{ session().directory }}</span>
+          <span class="cost" data-testid="session-cost" title="Cost tracking is not implemented yet">—</span>
+          <of-model-selector [sessionId]="session().id" />
+          <of-permission-mode-picker [sessionId]="session().id" [currentMode]="session().permissionMode" />
+        }
+      </div>
     </header>
   `,
   styles: `
@@ -82,6 +105,12 @@ import { exitCodeLabel } from './session-close-status';
     .directory { font-family: var(--mono); font-size: .6875rem; color: var(--mut); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 16rem; }
     .cost { font-style: italic; color: var(--mut); font-size: .75rem; }
     .spacer { flex: 1; min-width: .5rem; }
+    .details { display: contents; }
+    .details-toggle {
+      height: 1.5rem; padding: 0 .5rem; border: 1px solid var(--line2); border-radius: .375rem;
+      background: transparent; color: var(--fg); font-family: var(--sans); font-size: .6875rem; cursor: pointer;
+    }
+    .details-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
   `,
 })
 export class SessionHeaderComponent {
@@ -94,6 +123,41 @@ export class SessionHeaderComponent {
     const sessionId = this.session().id;
     return this.requests.errorOf(sessionId, 'renameName') ?? this.requests.errorOf(sessionId, 'renameEmoji');
   });
+
+  private readonly pendingSwitches = inject(PendingSwitchesService);
+  protected readonly detailsId = computed(() => `session-header-details-${this.session().id}`);
+  private readonly needsAttention = computed(() =>
+    needsAttention({
+      hasPendingModelSwitch: this.pendingSwitches.pendingOf(this.session().id, 'model') !== undefined,
+      permissionMode: this.session().permissionMode,
+      modelDriftedFrom: this.session().modelDriftedFrom,
+    }),
+  );
+  private readonly userChoice = linkedSignal<string, boolean | null>({
+    source: () => this.session().id,
+    computation: readRememberedHeaderChoice,
+  });
+  /** The user's choice wins; without one, the header is open exactly while something needs attention. */
+  protected readonly isOpen = computed(() => this.userChoice() ?? this.needsAttention());
+  private lastSeenAttention: { sessionId: string; needsAttention: boolean } | null = null;
+
+  constructor() {
+    effect(() => {
+      const sessionId = this.session().id;
+      const needsAttentionNow = this.needsAttention();
+      const previous = this.lastSeenAttention;
+      this.lastSeenAttention = { sessionId, needsAttention: needsAttentionNow };
+      const isSameSession = previous?.sessionId === sessionId;
+      const hasAttentionJustAppeared = isSameSession && !previous.needsAttention && needsAttentionNow;
+      if (hasAttentionJustAppeared) untracked(() => this.userChoice.set(true));
+    });
+  }
+
+  protected toggleDetails(): void {
+    const open = !this.isOpen();
+    this.userChoice.set(open);
+    rememberHeaderChoice(this.session().id, open);
+  }
 
   renameName(value: string): void {
     const trimmed = value.trim();
