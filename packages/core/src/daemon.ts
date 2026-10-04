@@ -8,6 +8,8 @@ import { buildDiagnosticsDocument } from './diagnostics/diagnosticsDocument.js';
 import { describeError } from './errors/describeError.js';
 import { EventBus } from './events/eventBus.js';
 import { ApprovalService } from './governance/approvalService.js';
+import { loadPermissionSettings } from './governance/permissionSettings.js';
+import { SilentBlockDetector } from './governance/silentBlockDetector.js';
 import { ClaudeCliHarness } from './harness/claudeCli/claudeCliHarness.js';
 import { sweepStaleSessions } from './harness/claudeCli/tokenFiles.js';
 import { FakeHarness, postSessionStartHook } from './harness/fakeHarness.js';
@@ -43,6 +45,13 @@ import { loadDaemonSettings } from './workingState/workingStateSettings.js';
 
 const REFUSED_BOOT_CLOSE_TIMEOUT_MS = 5000;
 const ISSUE_EXPIRY_SWEEP_MS = 30_000;
+
+// An unref'd timer never keeps the daemon alive on its own.
+const scheduleOnRealClock = (callback: () => void, delayMs: number): (() => void) => {
+  const timer = setTimeout(callback, delayMs);
+  timer.unref();
+  return () => clearTimeout(timer);
+};
 
 export interface Daemon {
   server: Awaited<ReturnType<typeof startServer>>;
@@ -90,12 +99,15 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   const handoverLedger = new HandoverLedger({ db, clock: () => new Date().toISOString(), patterns: workingStateSettings.handoverPatterns });
   const contextNotice = new ContextNotice({ sessions, managers: managerRepository, settings: contextNoticeSettings });
   const todos = new TodoTracker({ sessions, bus });
+  const { silentBlockMinutes } = loadPermissionSettings(modelConfigPath);
+  const silentBlocks = new SilentBlockDetector({ thresholdMinutes: silentBlockMinutes, schedule: scheduleOnRealClock, onChange: (blocks) => bus.emit({ type: 'permission.silent_blocks', blocks }) });
+  bus.subscribe((event) => silentBlocks.handle(event));
   const handoff = createHandoffRouteDeps({ sessions, managers, workingStates, todos, docs, projects, git: createNodeGitPort(), settings: loadHandoffSettings(modelConfigPath), clock: () => new Date().toISOString() });
 
   // The server must be listening before any resumed CLI can POST its first hook — resuming first risks a
   // fast process hitting a port nothing is serving yet.
   const diagnostics = () => buildDiagnosticsDocument({ db, degraded, listSessions: () => sessions.list(), port: config.port, e2eEnabled: config.e2eEnabled });
-  const server = await startServer({ ...config, e2eRoutes: config.e2eEnabled, degraded, diagnostics, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, stores, storeRepo, projects, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, workingStates, worktreesRoot: config.worktreesRoot }) });
+  const server = await startServer({ ...config, e2eRoutes: config.e2eEnabled, degraded, diagnostics, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, stores, storeRepo, projects, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, workingStates, worktreesRoot: config.worktreesRoot }) });
   log('info', `openfleet core listening on ${server.url} (version: ${DAEMON_VERSION}, home: ${config.home})`);
 
   const unwatchDatabase = watchDatabaseHealth(degraded);
@@ -108,6 +120,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     unwatchDatabase();
     pulseScheduler.stop();
     contextNotice.stop();
+    silentBlocks.stop();
     await sessions.closeAll();
     todos.stop();
     await server.close();

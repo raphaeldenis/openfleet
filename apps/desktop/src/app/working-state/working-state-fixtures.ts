@@ -1,5 +1,5 @@
 import { signal } from '@angular/core';
-import type { DaemonIssue, Session, WorkingState } from '@openfleet/shared';
+import type { DaemonIssue, Session, SilentBlock, WorkingState } from '@openfleet/shared';
 
 export const NOW_ISO = '2026-09-30T10:00:00.000Z';
 const MINUTE_MS = 60_000;
@@ -40,6 +40,8 @@ export function silentWorkingStateSignals() {
     daemonIssues: signal<DaemonIssue[]>([]),
     backgroundFailures: signal<unknown[]>([]),
     dismissBackgroundFailure: () => undefined,
+    silentBlocks: signal<SilentBlock[]>([]),
+    dismissSilentBlock: () => undefined,
     closeReasonOf: () => undefined,
     workingStates: signal<ReadonlyMap<string, WorkingState>>(new Map()),
     workingStatesReported: signal(false),

@@ -16,8 +16,14 @@ const REASON_BY_CONVENTIONAL_EXIT_CODE: Record<number, SessionCloseReason> = { [
 export const closeReasonOfExitCode = (exitCode: number | undefined): SessionCloseReason | undefined =>
   exitCode === undefined ? undefined : REASON_BY_CONVENTIONAL_EXIT_CODE[exitCode];
 
+/** A session that has sat on one permission prompt past the silent-block threshold; `waitingSince` is when that prompt appeared and names it. */
+export interface SilentBlock {
+  sessionId: string;
+  waitingSince: string;
+}
+
 export type ServerEvent =
-  | { type: 'snapshot'; sessions: Session[]; approvals: Approval[]; managers: ManagerView[]; workingStates?: WorkingState[]; workingStateMaxAgeMinutes?: number; workingStateMaxBytes?: number; todoSummaries?: TodoSummary[]; daemonIssues?: DaemonIssue[] }
+  | { type: 'snapshot'; sessions: Session[]; approvals: Approval[]; managers: ManagerView[]; workingStates?: WorkingState[]; workingStateMaxAgeMinutes?: number; workingStateMaxBytes?: number; todoSummaries?: TodoSummary[]; daemonIssues?: DaemonIssue[]; silentBlocks?: SilentBlock[] }
   | { type: 'session.created'; session: Session }
   | { type: 'session.state'; sessionId: string; state: SessionState; stateSince: string }
   | { type: 'session.closed'; sessionId: string; exitCode?: number; reason?: SessionCloseReason }
@@ -37,4 +43,5 @@ export type ServerEvent =
   | { type: 'manager.created'; manager: ManagerView }
   | { type: 'manager.pulsed'; manager: ManagerView }
   | { type: 'error'; sessionId?: string; scope?: ErrorEventScope; error: ErrorEnvelope }
-  | { type: 'daemon.issues'; issues: DaemonIssue[] };
+  | { type: 'daemon.issues'; issues: DaemonIssue[] }
+  | { type: 'permission.silent_blocks'; blocks: SilentBlock[] };
