@@ -6,14 +6,14 @@ import { screen, within } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FleetEventsService } from '../core/fleet-events.service';
-import { RightPanelComponent, RightPanelToggleComponent, watchedSessionIdOf } from './right-panel.component';
+import { RightPanelComponent, RightPanelSessionToggleComponent, watchedSessionIdOf } from './right-panel.component';
 import { InMemorySessionTodosSource, SESSION_TODOS_SOURCE } from './todos/session-todos-source';
 import type { SessionTodos } from './todos/todos.adapter';
 
 @Component({
   selector: 'test-host',
-  imports: [RightPanelToggleComponent, RightPanelComponent],
-  template: `<button type="button" data-testid="outside-button">outside</button><of-right-panel-toggle /><of-right-panel />`,
+  imports: [RightPanelSessionToggleComponent, RightPanelComponent],
+  template: `<button type="button" data-testid="outside-button">outside</button><of-right-panel-session-toggle /><of-right-panel />`,
 })
 class HostComponent {}
 
@@ -71,7 +71,9 @@ async function setUp(options: SetUpOptions = {}) {
   return { source, events, harness };
 }
 
-const toggle = () => screen.getByTestId('right-panel-toggle');
+const showButton = () => screen.queryByRole('button', { name: 'Show the right panel' });
+const hideButton = () => screen.queryByRole('button', { name: 'Hide the right panel' });
+const sessionToggle = () => screen.getByRole('button', { name: 'Right panel' });
 const panel = () => screen.queryByTestId('right-panel');
 const press = (init: KeyboardEventInit) => document.dispatchEvent(new KeyboardEvent('keydown', { key: '∫', code: 'KeyB', bubbles: true, cancelable: true, ...init }));
 const pressShortcut = () => press({ altKey: true, metaKey: true });
@@ -85,25 +87,75 @@ describe('RightPanelComponent', () => {
       await setUp();
 
       expect(panel()).toBeNull();
-      expect(toggle().getAttribute('aria-expanded')).toBe('false');
+      expect(showButton()?.getAttribute('aria-expanded')).toBe('false');
+      expect(sessionToggle().getAttribute('aria-pressed')).toBe('false');
     });
 
-    it('opens and closes from the top-bar toggle', async () => {
+    it('opens from the rail button and closes from the panel header button', async () => {
       await setUp();
 
-      await userEvent.click(toggle());
+      await userEvent.click(showButton()!);
       expect(panel()).not.toBeNull();
-      expect(toggle().getAttribute('aria-expanded')).toBe('true');
+      expect(showButton()).toBeNull();
+      expect(hideButton()?.getAttribute('aria-expanded')).toBe('true');
 
-      await userEvent.click(toggle());
+      await userEvent.click(hideButton()!);
       expect(panel()).toBeNull();
+      expect(hideButton()).toBeNull();
+    });
+
+    it('opens and closes from the session toggle, which reports its state with aria-pressed', async () => {
+      await setUp();
+
+      await userEvent.click(sessionToggle());
+      expect(panel()).not.toBeNull();
+      expect(sessionToggle().getAttribute('aria-pressed')).toBe('true');
+
+      await userEvent.click(sessionToggle());
+      expect(panel()).toBeNull();
+      expect(sessionToggle().getAttribute('aria-pressed')).toBe('false');
+    });
+
+    it('toggles from the session toggle with the keyboard', async () => {
+      await setUp();
+      sessionToggle().focus();
+
+      await userEvent.keyboard('{Enter}');
+      expect(panel()).not.toBeNull();
+
+      await userEvent.keyboard(' ');
+      expect(panel()).toBeNull();
+    });
+
+    it('keeps the rail, the header button and the session toggle in sync with the shortcut', async () => {
+      const { harness } = await setUp();
+
+      pressShortcut();
+      await harness.fixture.whenStable();
+      expect(hideButton()).not.toBeNull();
+      expect(sessionToggle().getAttribute('aria-pressed')).toBe('true');
+
+      pressShortcut();
+      await harness.fixture.whenStable();
+      expect(showButton()).not.toBeNull();
+      expect(sessionToggle().getAttribute('aria-pressed')).toBe('false');
+    });
+
+    it('describes the controls with their shortcut', async () => {
+      await setUp();
+
+      expect(showButton()?.getAttribute('title')).toBe('Show the right panel — sessions, todos, usage (⌥⌘B)');
+      expect(sessionToggle().getAttribute('title')).toBe('Show the right panel (⌥⌘B)');
+      await userEvent.click(sessionToggle());
+      expect(hideButton()?.getAttribute('title')).toBe('Hide the right panel (⌥⌘B)');
+      expect(sessionToggle().getAttribute('title')).toBe('Hide the right panel (⌥⌘B)');
     });
 
     it('remembers that it was opened', async () => {
       const storage = memoryStorage();
       await setUp({ storage });
 
-      await userEvent.click(toggle());
+      await userEvent.click(showButton()!);
 
       expect(storage.getItem(OPEN_KEY)).toBe('true');
     });
@@ -118,7 +170,7 @@ describe('RightPanelComponent', () => {
       await setUp({ storage: throwingStorage() });
       expect(panel()).toBeNull();
 
-      await userEvent.click(toggle());
+      await userEvent.click(showButton()!);
 
       expect(panel()).not.toBeNull();
     });
@@ -170,7 +222,7 @@ describe('RightPanelComponent', () => {
       expect(panel()).toBeNull();
     });
 
-    it('returns focus to the toggle when the shortcut closes the panel from inside', async () => {
+    it('returns focus to the rail button when the shortcut closes the panel from inside', async () => {
       const { harness } = await setUp({ storage: memoryStorage({ [OPEN_KEY]: 'true' }) });
       screen.getByRole('tab', { name: /Todos/ }).focus();
 
@@ -178,17 +230,17 @@ describe('RightPanelComponent', () => {
       await harness.fixture.whenStable();
 
       expect(panel()).toBeNull();
-      expect(document.activeElement).toBe(toggle());
+      expect(document.activeElement).toBe(showButton());
     });
 
-    it('closes with Escape when focus is inside and returns focus to the toggle', async () => {
+    it('closes with Escape when focus is inside and returns focus to the rail button', async () => {
       await setUp({ storage: memoryStorage({ [OPEN_KEY]: 'true' }) });
       screen.getByRole('tab', { name: /Todos/ }).focus();
 
       await userEvent.keyboard('{Escape}');
 
       expect(panel()).toBeNull();
-      expect(document.activeElement).toBe(toggle());
+      expect(document.activeElement).toBe(showButton());
     });
 
     it('ignores Escape when focus is outside the panel', async () => {
@@ -200,13 +252,13 @@ describe('RightPanelComponent', () => {
       expect(panel()).not.toBeNull();
     });
 
-    it('closes from its collapse button and returns focus to the toggle', async () => {
+    it('returns focus to the rail button when the header button closes the panel', async () => {
       await setUp({ storage: memoryStorage({ [OPEN_KEY]: 'true' }) });
 
-      await userEvent.click(screen.getByRole('button', { name: 'Collapse panel' }));
+      await userEvent.click(hideButton()!);
 
       expect(panel()).toBeNull();
-      expect(document.activeElement).toBe(toggle());
+      expect(document.activeElement).toBe(showButton());
     });
   });
 

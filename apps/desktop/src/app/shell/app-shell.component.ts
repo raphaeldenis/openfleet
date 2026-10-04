@@ -23,14 +23,14 @@ import { attentionItemsOf, inboxCountLabelOf } from '../working-state/attention-
 import { CommandPaletteComponent } from './command-palette.component';
 import { DaemonStatusComponent } from './daemon-status.component';
 import { HELM_NAV_ITEMS } from './nav-items';
-import { RightPanelComponent, RightPanelToggleComponent } from './right-panel.component';
+import { RightPanelComponent } from './right-panel.component';
 
 const RUNNING_STATES = new Set(['generating', 'starting']);
 
 @Component({
   selector: 'of-app-shell',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, RouterLinkActive, RouterOutlet, SessionListComponent, DaemonStatusComponent, CommandPaletteComponent, BannerComponent, CopyDetailsButtonComponent, RightPanelComponent, RightPanelToggleComponent],
+  imports: [RouterLink, RouterLinkActive, RouterOutlet, SessionListComponent, DaemonStatusComponent, CommandPaletteComponent, BannerComponent, CopyDetailsButtonComponent, RightPanelComponent],
   template: `
     <div class="shell" data-testid="app-shell">
       <div class="body" [attr.inert]="paletteOpen() ? '' : null">
@@ -70,7 +70,6 @@ const RUNNING_STATES = new Set(['generating', 'starting']);
               <span>⌕</span><span class="placeholder">Search or run a command…</span><span class="shortcut mono">⌘K</span>
             </button>
             <span class="spacer"></span>
-            <of-right-panel-toggle />
             <of-daemon-status [connected]="events.connected()" [mismatchedDaemonVersion]="versions.mismatch()?.daemonVersion ?? null" />
             <span class="spend" data-testid="spend-today" title="Cost tracking is not implemented yet">— today</span>
           </header>
