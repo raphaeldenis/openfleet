@@ -66,7 +66,7 @@ describe('what a closed session shows, per close reason', () => {
     else expect(strip()).toBeNull();
   });
 
-  it.each(CLOSE_SCENARIOS)('for $label: the situation is said once and the card has only a title, a body or actions', async ({ closes }) => {
+  it.each(CLOSE_SCENARIOS)('for $label: the situation is said once and the card has only a title, a body or actions', async ({ closes, label }) => {
     // Arrange
     const { daemon } = await renderOpenSession();
 
@@ -78,10 +78,11 @@ describe('what a closed session shows, per close reason', () => {
     if (strip()) expect(card().textContent).not.toContain(screen.getByTestId('lifecycle-message').textContent);
     else expect(card()).toHaveTextContent('Worktree kept');
     const buttons = within(card()).getAllByRole('button');
-    expect(buttons.map((button) => button.textContent?.trim())).toEqual(['↻ Resume in worktree', 'Reopen fresh']);
+    const expectedButtons = label === 'conversation_not_found' ? ['Reopen fresh'] : ['↻ Resume in worktree', 'Reopen fresh'];
+    expect(buttons.map((button) => button.textContent?.trim())).toEqual(expectedButtons);
   });
 
-  it.each(CLOSE_SCENARIOS)('for $label: "Reopen fresh" is disabled and says why, "Resume in worktree" is enabled', async ({ closes }) => {
+  it.each(CLOSE_SCENARIOS)('for $label: "Reopen fresh" is disabled and says why, "Resume in worktree" is enabled when it is offered', async ({ closes, label }) => {
     // Arrange
     const { daemon } = await renderOpenSession();
 
@@ -90,10 +91,74 @@ describe('what a closed session shows, per close reason', () => {
 
     // Assert
     await waitFor(() => expect(card()).toBeTruthy());
-    expect(screen.getByRole('button', { name: /resume in worktree/i })).toBeEnabled();
+    if (label !== 'conversation_not_found') expect(screen.getByRole('button', { name: /resume in worktree/i })).toBeEnabled();
     const reopenFresh = screen.getByRole('button', { name: /reopen fresh/i });
     expect(reopenFresh).toHaveAttribute('aria-disabled', 'true');
     expect(reopenFresh).toHaveAccessibleDescription(/not available yet/i);
+  });
+
+  it('for conversation_not_found: does not offer to resume a conversation that is gone', async () => {
+    // Arrange
+    const { daemon } = await renderOpenSession();
+
+    // Act
+    await daemon.send({ type: 'session.closed', sessionId: 's1', exitCode: 1, reason: 'conversation_not_found' });
+
+    // Assert
+    await waitFor(() => expect(card()).toBeTruthy());
+    expect(screen.queryByRole('button', { name: /resume in worktree/i })).toBeNull();
+    expect(screen.getByRole('button', { name: /reopen fresh/i })).toHaveAttribute('aria-disabled', 'true');
+  });
+
+  it('for conversation_not_found: the strip says the transcript is gone, with a semicolon', async () => {
+    // Arrange
+    const { daemon } = await renderOpenSession();
+
+    // Act
+    await daemon.send({ type: 'session.closed', sessionId: 's1', exitCode: 1, reason: 'conversation_not_found' });
+
+    // Assert
+    expect(await screen.findByTestId('lifecycle-message')).toHaveTextContent('The transcript for this session is gone; start a new session from its handoff.');
+  });
+
+  it.each([
+    ['conversation_not_found', { exitCode: 1, reason: 'conversation_not_found' }],
+    ['launch_failed', { reason: 'launch_failed' }],
+    ['resume_timeout', { reason: 'resume_timeout' }],
+    ['harness_exit', { exitCode: 1, reason: 'harness_exit' }],
+  ] as const)('for %s: a compact Copy details on the strip copies the session ref and the code', async (code, closes) => {
+    // Arrange
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+    const { daemon } = await renderOpenSession();
+    await daemon.send({ type: 'session.closed', sessionId: 's1', ...closes });
+    const copyDetails = await within(await screen.findByTestId('lifecycle-banner')).findByRole('button', { name: 'Copy details' });
+
+    // Act
+    await userEvent.click(copyDetails);
+
+    // Assert
+    expect(copyDetails).toHaveClass('of-btn--compact');
+    expect(writeText).toHaveBeenCalledTimes(1);
+    const copied = writeText.mock.calls[0]![0] as string;
+    expect(copied).toContain('ref s1');
+    expect(copied).toContain(`code: ${code}`);
+    vi.unstubAllGlobals();
+  });
+
+  it.each([
+    ['daemon_shutdown', { exitCode: SIGTERM_EXIT_CODE, reason: 'daemon_shutdown' }],
+    ['a clean exit', { exitCode: 0 }],
+  ] as const)('for %s: no Copy details button', async (_label, closes) => {
+    // Arrange
+    const { daemon } = await renderOpenSession();
+
+    // Act
+    await daemon.send({ type: 'session.closed', sessionId: 's1', ...closes });
+
+    // Assert
+    await waitFor(() => expect(card()).toBeTruthy());
+    expect(screen.queryByRole('button', { name: 'Copy details' })).toBeNull();
   });
 
   it('for a refused reopen request: says why on the strip, and never calls it a timeout', async () => {

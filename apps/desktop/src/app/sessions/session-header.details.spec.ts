@@ -76,6 +76,42 @@ describe('SessionHeaderComponent collapsible details', () => {
 
       expect(screen.queryByTestId('session-interrupt')).toBeNull();
     });
+
+    it('draws a compact Interrupt, explained by its title, while the header is collapsed and the session generates', async () => {
+      await renderHeader(aSession({ state: 'generating' }));
+
+      const interrupt = screen.getByRole('button', { name: 'Interrupt' });
+      expect(interrupt).toHaveClass('of-btn--compact');
+      expect(interrupt).toHaveAttribute('title', 'Interrupt the current turn (esc)');
+    });
+
+    it('draws the standard Interrupt while the header is expanded and the session generates', async () => {
+      await renderHeader(aSession({ state: 'generating' }));
+
+      await userEvent.click(toggle());
+
+      expect(screen.getByRole('button', { name: 'Interrupt' })).not.toHaveClass('of-btn--compact');
+    });
+
+    it('never shows two Interrupt buttons while the header collapses and expands', async () => {
+      await renderHeader(aSession({ state: 'generating' }));
+
+      expect(screen.getAllByRole('button', { name: 'Interrupt' })).toHaveLength(1);
+      await userEvent.click(toggle());
+      expect(screen.getAllByRole('button', { name: 'Interrupt' })).toHaveLength(1);
+      await userEvent.click(toggle());
+      expect(screen.getAllByRole('button', { name: 'Interrupt' })).toHaveLength(1);
+    });
+  });
+
+  describe('Write handoff', () => {
+    it('is offered on a closed session once the header is expanded', async () => {
+      await renderHeader(aSession({ state: 'closed', exitCode: 0 }));
+
+      await userEvent.click(toggle());
+
+      expect(screen.getByRole('button', { name: 'Write handoff' })).toBeTruthy();
+    });
   });
 
   describe('toggle', () => {

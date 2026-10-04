@@ -4,7 +4,7 @@ import { HandoffPreviewApiError, type HandoffPreviewApi } from './handoff-previe
 
 export type HandoffPreviewState = 'idle' | 'loading' | 'ready' | 'saving' | 'saved' | 'error' | 'loadFailed';
 
-export const LOAD_FAILED_MESSAGE = 'The handoff preview could not be collected — try again.';
+export const LOAD_FAILED_MESSAGE = 'The preview could not be loaded — the daemon did not answer in time.';
 export const SAVE_FAILED_MESSAGE = 'The handoff was not written — try again.';
 
 const SAVE_OFF_NO_DOCS_FOLDER = 'Save is off: this project has no docs folder yet.';

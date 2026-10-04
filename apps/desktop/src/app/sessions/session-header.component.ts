@@ -70,6 +70,7 @@ import { readRememberedHeaderChoice, rememberHeaderChoice } from './session-head
           [stateSince]="session().stateSince"
           [sessionName]="session().name"
           [closeVisible]="isOpen()"
+          [isCompact]="!isOpen()"
         />
       </div>
       <div class="details" data-testid="session-header-details" [id]="detailsId()">

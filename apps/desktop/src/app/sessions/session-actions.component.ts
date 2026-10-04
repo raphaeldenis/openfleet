@@ -18,8 +18,16 @@ const ESCAPE_KEY = '\x1b';
     <div class="session-actions" data-testid="session-actions" [attr.inert]="confirmingClose() ? '' : null">
       @if (!closed()) {
         @if (busy()) {
-          <button type="button" class="of-btn of-btn--secondary" data-testid="session-interrupt" [disabled]="interrupting() || closing()" (click)="interrupt()">
-            Interrupt
+          <button
+            type="button"
+            class="of-btn of-btn--secondary interrupt"
+            data-testid="session-interrupt"
+            title="Interrupt the current turn (esc)"
+            [class.of-btn--compact]="isCompact()"
+            [disabled]="interrupting() || closing()"
+            (click)="interrupt()"
+          >
+            <span class="interrupt-glyph" aria-hidden="true">◼</span> Interrupt
           </button>
         }
         @if (closeVisible()) {
@@ -54,6 +62,8 @@ const ESCAPE_KEY = '\x1b';
   `,
   styles: `
     .session-actions { display: flex; align-items: center; gap: .375rem; }
+    .interrupt-glyph { color: var(--state-waiting-permission); }
+    .interrupt.of-btn--compact { border-color: var(--state-waiting-permission); background: transparent; }
     .close-confirm-overlay {
       position: fixed; inset: 0; z-index: 30;
       display: flex; align-items: center; justify-content: center;
@@ -76,6 +86,8 @@ export class SessionActionsComponent {
   readonly stateSince = input.required<string>();
   readonly sessionName = input.required<string>();
   readonly closeVisible = input(true);
+  /** Draws Interrupt on the 24px line the collapsed header uses. */
+  readonly isCompact = input(false);
   private readonly api = inject(FleetApiService);
   private readonly earlyEscapeHint = inject(EarlyEscapeHintService);
   private readonly pendingSwitches = inject(PendingSwitchesService);

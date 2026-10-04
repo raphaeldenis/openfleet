@@ -173,7 +173,7 @@ const FALLBACK_BY_ACTION: Partial<Record<ErrorAction, string>> = {
   create_session: 'Could not create the session — try again.',
   create_manager: 'Could not create the manager — try again.',
   resume: GENERIC_REOPEN_ERROR,
-  load_handoff: 'The handoff preview could not be collected — try again.',
+  load_handoff: 'The preview could not be loaded — the daemon did not answer in time.',
   save_handoff: 'The handoff was not written — try again.',
 };
 

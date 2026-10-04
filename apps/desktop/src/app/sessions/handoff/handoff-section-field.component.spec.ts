@@ -51,8 +51,8 @@ describe('HandoffSectionFieldComponent', () => {
   it.each([
     ['working_state', 'from the state panel'],
     ['git', 'from git'],
-    ['session', 'from the session'],
-    ['manager', 'from the mission'],
+    ['session', 'from the state panel'],
+    ['manager', 'from the state panel'],
     ['none', 'write it here'],
   ] as const)('describes a %s source in words, not colour', async (source, caption) => {
     await render(HandoffSectionFieldComponent, {
@@ -60,6 +60,22 @@ describe('HandoffSectionFieldComponent', () => {
     });
 
     expect(screen.getByRole('textbox', { name: 'Goal' })).toHaveAccessibleDescription(caption);
+  });
+
+  it('is three lines tall', async () => {
+    await render(HandoffSectionFieldComponent, {
+      bindings: [inputBinding('label', () => 'Goal'), inputBinding('value', () => '')],
+    });
+
+    expect(screen.getByRole('textbox', { name: 'Goal' })).toHaveAttribute('rows', '3');
+  });
+
+  it('shows the placeholder while the text is empty', async () => {
+    await render(HandoffSectionFieldComponent, {
+      bindings: [inputBinding('label', () => 'State'), inputBinding('value', () => ''), inputBinding('placeholder', () => 'Where things stand')],
+    });
+
+    expect(screen.getByPlaceholderText('Where things stand')).toBe(screen.getByRole('textbox', { name: 'State' }));
   });
 
   it('shows no caption when the source is unknown', async () => {

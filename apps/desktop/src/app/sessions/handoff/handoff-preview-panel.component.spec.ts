@@ -33,6 +33,7 @@ interface PanelOptions {
   density?: 'compact' | 'roomy';
   sections?: HandoffContent;
   metaText?: string;
+  subject?: 'session' | 'manager';
 }
 
 async function renderPanel(options: PanelOptions = {}) {
@@ -54,6 +55,7 @@ async function renderPanel(options: PanelOptions = {}) {
       inputBinding('error', () => options.error),
       inputBinding('saveDisabledReason', () => options.saveDisabledReason),
       inputBinding('density', () => options.density ?? 'compact'),
+      inputBinding('subject', () => options.subject ?? 'session'),
       outputBinding('save', outputs.save),
       outputBinding('cancel', outputs.cancel),
       outputBinding('retry', outputs.retry),
@@ -130,6 +132,31 @@ describe('HandoffPreviewPanelComponent', () => {
 
       expect(screen.getByRole('textbox', { name: 'Files touched' })).toHaveAccessibleDescription('from git');
       expect(screen.getByRole('textbox', { name: 'Goal' })).toHaveAccessibleDescription('write it here');
+    });
+
+    it('names the state panel as the source of a section the session wrote itself', async () => {
+      await renderPanel();
+
+      expect(screen.getByRole('textbox', { name: 'State' })).toHaveAccessibleDescription('from the state panel');
+    });
+
+    it.each([
+      ['Goal', 'What this session was for'],
+      ['State', 'Where things stand'],
+      ['Decisions', 'Choices made and why'],
+      ['Files touched', 'Changed files'],
+      ['Next steps', 'What the next session should do first'],
+      ['Open questions', 'Anything unresolved'],
+    ])('hints at what to write in %s', async (label, placeholder) => {
+      await renderPanel({ sections: { goal: '', state: '', decisions: '', filesTouched: '', nextSteps: '', openQuestions: '' } });
+
+      expect(screen.getByRole('textbox', { name: label })).toHaveAttribute('placeholder', placeholder);
+    });
+
+    it('asks what a manager was for when the panel belongs to a manager', async () => {
+      await renderPanel({ subject: 'manager' });
+
+      expect(screen.getByRole('textbox', { name: 'Goal' })).toHaveAttribute('placeholder', 'What this manager was for');
     });
 
     it('emits all six sections with the edited one changed', async () => {
@@ -328,7 +355,7 @@ describe('HandoffPreviewPanelComponent', () => {
   });
 
   describe('loadFailed', () => {
-    const LOAD_ERROR = 'The handoff preview could not be collected — try again.';
+    const LOAD_ERROR = 'The preview could not be loaded — the daemon did not answer in time.';
 
     it('shows the error with Try again, no fields and no Save', async () => {
       await renderPanel({ state: 'loadFailed', error: LOAD_ERROR });
