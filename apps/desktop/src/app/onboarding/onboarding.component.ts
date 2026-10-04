@@ -5,6 +5,7 @@ import { Router, RouterLink } from '@angular/router';
 import { environment } from '../../environments/environment';
 import { DaemonStatusService } from '../core/daemon-status.service';
 import { FleetApiService } from '../core/fleet-api.service';
+import { SupportActions } from '../core/support-actions';
 import { VersionsService } from '../core/versions.service';
 import { EmbeddedSessionSeed, NewSessionFormComponent } from '../sessions/new-session-form.component';
 
@@ -21,7 +22,10 @@ const FAILED_WITH_LAST_LINE_COPY = 'The daemon did not start — its last line:'
 const FAILED_WITHOUT_LAST_LINE_COPY = 'The daemon did not start and printed nothing — check again in a moment.';
 const UNKNOWN_TITLE = 'The daemon status is unknown';
 const UNKNOWN_STATE_COPY = 'The daemon reports an unknown state — check the last line, then try again';
-const STILL_NOT_RUNNING_COPY = 'Still not running — check the last line above, then try again';
+const STILL_NOT_RUNNING_COPY = 'Still not running — check the last line above, then try again.';
+const MANUAL_CARD_TITLE_AFTER_FAILURE = 'Start it yourself';
+const COPIED_ANNOUNCEMENT = 'Command copied';
+const REVEAL_FAILURE_MESSAGE = 'Couldn’t open the logs folder';
 const COPY_FAILURE_MESSAGE = 'Couldn’t copy — select the command and copy it by hand';
 const DEFERRED_STEP_LABEL = 'Available in a later phase';
 const FIRST_SESSION_NAME = 'First session';
@@ -74,8 +78,8 @@ function requestedUrlFrom(navigationState: unknown): string {
                 <p>The daemon runs your agents in the background so they keep working when this window is closed.</p>
               </header>
               @if (showsFailureCard()) {
-                <div class="card" data-testid="daemon-failed">
-                  <div class="card-head"><span class="failure-mark" aria-hidden="true">✕</span><h2 #failureHeading tabindex="-1">{{ failedTitle() }}</h2></div>
+                <div class="card card--failed" data-testid="daemon-failed">
+                  <div class="card-head"><span class="dot dot--error" aria-hidden="true"></span><h2 #failureHeading tabindex="-1">{{ failedTitle() }}</h2></div>
                   <span class="hint-strong">{{ failedCopy() }}</span>
                   @if (lastLine(); as lastLine) {
                     <pre class="terminal last-line" tabindex="0" data-testid="daemon-last-line">{{ lastLine }}</pre>
@@ -83,7 +87,7 @@ function requestedUrlFrom(navigationState: unknown): string {
                   @if (pathHint(); as pathHint) {
                     <span class="hint" data-testid="daemon-path-hint">claude may not be on the daemon PATH — the login shell’s PATH could not be read. @if (pathHint.pathTried) {PATH tried: <code>{{ pathHint.pathTried }}</code>}</span>
                   }
-                  <div class="command-row"><button type="button" class="of-btn of-btn--primary" (click)="checkDaemonAgain()">Check again</button></div>
+                  <div class="command-row"><button type="button" class="of-btn of-btn--primary" (click)="checkDaemonAgain()">Check again</button>@if (support.isAvailable) {<button type="button" class="of-btn of-btn--secondary" (click)="revealLog()">Reveal log</button>}</div>
                   <span class="hint" role="status" data-testid="daemon-check-result">{{ checkResult() }}</span>
                 </div>
               } @else if (showsProgress()) {
@@ -106,13 +110,13 @@ function requestedUrlFrom(navigationState: unknown): string {
               }
               @if (showsManualCard()) {
                 <div class="card" data-testid="daemon-manual">
-                  <div class="card-head"><span class="dot"></span><span>No daemon on {{ daemonAddress }}</span></div>
+                  <div class="card-head"><span class="dot" [class.dot--error]="!showsFailureCard()" [class.dot--amber]="showsFailureCard()" aria-hidden="true"></span><h2>{{ manualCardTitle() }}</h2></div>
                   <span class="hint">Start the daemon: <code>{{ startDaemonCommand }}</code> in the OpenFleet folder. The first start creates <code>~/.openfleet/admin.token</code>; the app reads it by itself.</span>
                   <div class="command-row">
                     <div class="terminal">$ {{ startDaemonCommand }}</div>
-                    <button type="button" class="of-btn of-btn--secondary" (click)="copyCommand()">{{ hasCopiedCommand() ? 'Copied' : 'Copy command' }}</button>
+                    <button type="button" class="of-btn of-btn--secondary" (click)="copyCommand()">{{ hasCopiedCommand() ? 'Copied ✓' : 'Copy command' }}</button>
                   </div>
-                  <span class="fine-print" [class.visually-hidden]="!copyFailureMessage()" role="status">{{ copyFailureMessage() }}</span>
+                  <span class="fine-print" [class.visually-hidden]="!copyFailureMessage()" role="status">{{ copyStatusMessage() }}</span>
                   <span class="fine-print">Checking again every 2 s…</span>
                 </div>
               }
@@ -179,7 +183,10 @@ function requestedUrlFrom(navigationState: unknown): string {
     header p { margin: 0; color: var(--mut); font-size: .875rem }
     .card { display: flex; flex-direction: column; gap: .625rem; padding: 1rem; border: 1px solid var(--line); border-radius: .625rem; background: var(--panel) }
     .card-head { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; font-weight: 500 }
-    .card-head .dot { width: .5rem; height: .5rem; border-radius: 50%; background: var(--state-error) }
+    .card--failed { border-color: color-mix(in srgb, var(--state-error) 42%, var(--line)); background: color-mix(in srgb, var(--state-error) 10%, var(--panel)) }
+    .dot { flex: none; width: .5rem; height: .5rem; border-radius: 50% }
+    .dot--error { background: var(--state-error) }
+    .dot--amber { background: var(--state-waiting-permission) }
     .hint { font-size: .75rem; color: var(--mut) }
     code { padding: 0 .25rem; border-radius: .25rem; background: var(--sunk); font-family: var(--mono); overflow-wrap: anywhere }
     .command-row { display: flex; align-items: center; gap: .5rem }
@@ -197,7 +204,6 @@ function requestedUrlFrom(navigationState: unknown): string {
     .mono { font-family: var(--mono) }
     h2 { margin: 0; font-size: .875rem; font-weight: 500 }
     h2:focus-visible { outline: 2px solid var(--accent); outline-offset: .125rem }
-    .failure-mark { color: var(--state-error); font-weight: 600 }
     .ready-mark { color: var(--fg); font-weight: 600 }
     .hint-strong { font-size: .75rem; color: var(--fg) }
     .last-line { margin: 0; max-height: 7.5rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text }
@@ -228,6 +234,9 @@ export class OnboardingComponent {
   protected readonly hasRepositoryPath = computed(() => this.repositoryPath().trim() !== '');
   protected readonly hasCopiedCommand = signal(false);
   protected readonly copyFailureMessage = signal('');
+  protected readonly copyStatusMessage = computed(() => this.copyFailureMessage() || (this.hasCopiedCommand() ? COPIED_ANNOUNCEMENT : ''));
+  protected readonly support = inject(SupportActions);
+  protected readonly manualCardTitle = computed(() => (this.showsFailureCard() ? MANUAL_CARD_TITLE_AFTER_FAILURE : `No daemon on ${this.daemonAddress}`));
   protected readonly steps = computed(() => {
     const currentIndex = STEPS.findIndex((step) => step.id === this.currentStepId());
     return STEPS.map((step, index) => {
@@ -330,6 +339,11 @@ export class OnboardingComponent {
     if (!freshHealth) return void this.daemon.refresh();
     this.versions.recordDaemonHealth(freshHealth);
     await this.leaveDaemonStep(() => this.isDestroyed);
+  }
+
+  protected async revealLog(): Promise<void> {
+    this.checkResult.set('');
+    await this.support.revealLogs().catch(() => this.checkResult.set(REVEAL_FAILURE_MESSAGE));
   }
 
   protected async copyCommand(): Promise<void> {
