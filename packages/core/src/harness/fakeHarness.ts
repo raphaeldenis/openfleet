@@ -1,5 +1,7 @@
 import { log } from '../logger.js';
-import type { ConversationPresence, Harness, HarnessHandle, HarnessLaunch } from './harness.js';
+import type { ConversationPresence, Harness, HarnessExit, HarnessHandle, HarnessLaunch } from './harness.js';
+
+const CLI_EXIT_CODE_OF_A_REFUSED_RESUME = 1;
 
 // What Claude Code 2.1.284 strips from a paste (measured live): zero-width and bidi format characters, BOM, soft
 // hyphen, tag characters, C0 NUL and bell, the line separator; a zero-width (non-)joiner only between plain letters.
@@ -25,7 +27,7 @@ export class FakeHandle implements HarnessHandle {
   readonly written: string[] = [];
   readonly resizes: { cols: number; rows: number }[] = [];
   private dataListeners: ((d: string) => void)[] = [];
-  private exitListeners: ((c: number) => void)[] = [];
+  private exitListeners: ((c: number, exit: HarnessExit) => void)[] = [];
   killed = false;
   forceKilled = false;
   // Test-only: simulates a process that doesn't react to a graceful kill, to exercise the SIGKILL escalation.
@@ -142,12 +144,12 @@ export class FakeHandle implements HarnessHandle {
     this.dataListeners.push(listener);
     return () => { this.dataListeners = this.dataListeners.filter((l) => l !== listener); };
   }
-  onExit(listener: (c: number) => void): () => void {
+  onExit(listener: (c: number, exit: HarnessExit) => void): () => void {
     this.exitListeners.push(listener);
     return () => { this.exitListeners = this.exitListeners.filter((l) => l !== listener); };
   }
   emitData(data: string): void { for (const l of this.dataListeners) l(data); }
-  emitExit(code: number): void { for (const l of this.exitListeners) l(code); }
+  emitExit(code: number, exit: HarnessExit = { wasConversationNotFound: false }): void { for (const l of this.exitListeners) l(code, exit); }
 }
 
 // What the fake's CLI does after a relaunch: POSTs its SessionStart to the hook URL, like Claude Code's command hook.
@@ -171,6 +173,8 @@ export class FakeHarness implements Harness {
   readonly missingConversations = new Set<string>();
   // Test-only: conversations whose transcript the fake CLI cannot inspect (a permission error).
   readonly unreadableConversations = new Set<string>();
+  // Test-only: conversations the fake CLI looks present, then refuses on resume with "No conversation found" (exit 1).
+  readonly conversationsRefusedOnResume = new Set<string>();
   // Like the real CLI (--session-id writes no transcript until the first prompt), a conversation started fresh has
   // no file until a prompt reaches it; a resumed or cleared one already has its file.
   private readonly freshConversationsWithoutPrompt = new Set<string>();
@@ -201,7 +205,9 @@ export class FakeHarness implements Harness {
     // A launch that names its conversation is a relaunch of an existing session (boot resume, reopen, relaunch):
     // its CLI reports SessionStart on its own, which is what stops the resume timeout. A first launch names none.
     const isRelaunch = launch.cliSessionId !== undefined;
-    if (isRelaunch && this.reportSessionStart) queueMicrotask(() => this.reportSessionStart?.(launch));
+    const isResumeRefused = launch.resuming === true && this.conversationsRefusedOnResume.has(conversationId);
+    if (isResumeRefused) queueMicrotask(() => handle.emitExit(CLI_EXIT_CODE_OF_A_REFUSED_RESUME, { wasConversationNotFound: true }));
+    else if (isRelaunch && this.reportSessionStart) queueMicrotask(() => this.reportSessionStart?.(launch));
     return handle;
   }
 }

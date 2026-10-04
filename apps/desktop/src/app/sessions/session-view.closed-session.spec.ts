@@ -49,6 +49,7 @@ const CLOSE_SCENARIOS: CloseScenario[] = [
   { label: 'launch_failed', closes: { reason: 'launch_failed' }, cardTitle: 'Not running', stripText: 'Agent could not start' },
   { label: 'daemon_shutdown', closes: { exitCode: SIGTERM_EXIT_CODE, reason: 'daemon_shutdown' }, cardTitle: 'Closed', stripText: 'Daemon stopped' },
   { label: 'resume_timeout', closes: { reason: 'resume_timeout' }, cardTitle: 'Not running', stripText: 'Resume timed out' },
+  { label: 'conversation_not_found', closes: { exitCode: 1, reason: 'conversation_not_found' }, cardTitle: 'Not running', stripText: 'Conversation not found' },
 ];
 
 describe('what a closed session shows, per close reason', () => {

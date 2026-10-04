@@ -38,6 +38,10 @@ const LAUNCH_FAILED_STRIP = {
   variant: 'error', icon: '✕', title: 'Agent could not start',
   message: 'The agent could not start — check that the claude CLI is installed and on the PATH the daemon runs with.', isResumeFailure: true,
 } satisfies LifecycleStrip;
+const CONVERSATION_NOT_FOUND_STRIP = {
+  variant: 'error', icon: '✕', title: 'Conversation not found',
+  message: 'The transcript for this session is gone — start a new session from its handoff.', isResumeFailure: true,
+} satisfies LifecycleStrip;
 const DAEMON_STOPPED_STRIP = {
   variant: 'attention', icon: '■', title: 'Daemon stopped', message: 'The daemon stopped — the session resumes when it starts again.', isResumeFailure: false,
 } satisfies LifecycleStrip;
@@ -54,6 +58,7 @@ export function closedSessionPresentationFor({ exitCode, reason, resumeRequestEr
   }
   if (reason === 'resume_timeout') return { strip: RESUME_TIMED_OUT_STRIP, cardTitle: NOT_RUNNING_CARD_TITLE, cardTone: 'error' };
   if (reason === 'launch_failed') return { strip: LAUNCH_FAILED_STRIP, cardTitle: NOT_RUNNING_CARD_TITLE, cardTone: 'error' };
+  if (reason === 'conversation_not_found') return { strip: CONVERSATION_NOT_FOUND_STRIP, cardTitle: NOT_RUNNING_CARD_TITLE, cardTone: 'error' };
   if (reason === 'daemon_shutdown') return { strip: DAEMON_STOPPED_STRIP, cardTitle: CLOSED_CARD_TITLE, cardTone: 'neutral' };
 
   const status = closeStatusFor(exitCode);

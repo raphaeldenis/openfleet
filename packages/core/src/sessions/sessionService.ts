@@ -807,9 +807,11 @@ export class SessionService {
 
   private watchProcessExit(sessionId: string, handle: HarnessHandle): void {
     this.launchedAtBySessionId.set(sessionId, this.now());
-    handle.onExit((exitCode) => {
+    handle.onExit((exitCode, { wasConversationNotFound }) => {
       if (activeHandleBySessionId.get(sessionId) !== handle) return; // a stale process we already replaced
-      this.markClosed(sessionId, { exitCode, reason: this.reasonOfProcessExit(sessionId, exitCode) });
+      const reasonOfExit = this.reasonOfProcessExit(sessionId, exitCode);
+      const isRefusedResume = wasConversationNotFound && reasonOfExit === 'harness_exit';
+      this.markClosed(sessionId, { exitCode, reason: isRefusedResume ? 'conversation_not_found' : reasonOfExit });
     });
   }
 

@@ -15,6 +15,12 @@ export interface HarnessLaunch {
   resuming?: boolean;
 }
 
+/** What the harness knows about why its process ended, beyond the exit code. */
+export interface HarnessExit {
+  /** True when a resume ended because the CLI has no conversation under the id it was asked to resume. */
+  wasConversationNotFound: boolean;
+}
+
 export interface HarnessHandle {
   write(data: string): void;
   // Types a queued message's full body as one paste rather than raw keystrokes (see
@@ -24,7 +30,7 @@ export interface HarnessHandle {
   resize(cols: number, rows: number): void;
   kill(options?: { force?: boolean }): void;
   onData(listener: (data: string) => void): () => void;
-  onExit(listener: (exitCode: number) => void): () => void;
+  onExit(listener: (exitCode: number, exit: HarnessExit) => void): () => void;
 }
 
 // 'unknown' is a conversation the harness could not inspect (a permission or filesystem error): it is neither

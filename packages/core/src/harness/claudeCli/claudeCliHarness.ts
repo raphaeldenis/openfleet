@@ -65,13 +65,14 @@ export class ClaudeCliHarness implements Harness {
         log('error', `claudeCliHarness: failed to delete session token files at ${tokenFilesDir}`, err);
       }
     });
+    const resumeOutput = launch.resuming ? watchForConversationNotFound(process) : undefined;
     return {
       write: (data) => process.write(data),
       typeMessage: (body) => process.write(frameForPaste(body)),
       resize: (cols, rows) => process.resize(cols, rows),
       kill: (options) => process.kill(options?.force ? 'SIGKILL' : 'SIGTERM'),
       onData: (listener) => process.onData(listener).dispose,
-      onExit: (listener) => process.onExit((exit) => listener(exitCodeOf(exit))).dispose,
+      onExit: (listener) => process.onExit((exit) => listener(exitCodeOf(exit), { wasConversationNotFound: resumeOutput?.hasConversationNotFound() ?? false })).dispose,
     };
   }
 
@@ -86,6 +87,19 @@ export class ClaudeCliHarness implements Harness {
 
 const CLAUDE_COMMAND = 'claude';
 const SIGNAL_EXIT_CODE_BASE = 128;
+// The CLI prints this, followed by the conversation id, when asked to resume a conversation it has no transcript for.
+const CONVERSATION_NOT_FOUND_PHRASE = 'No conversation found with session ID';
+const RESUME_OUTPUT_TAIL_LENGTH = 2048;
+const ANSI_ESCAPE_SEQUENCE = /\u001b\[[0-9;?]*[A-Za-z]/g;
+
+// Reads the pty output of a resume, keeping only a bounded tail, so a phrase split across chunks or colored still matches.
+function watchForConversationNotFound(process: pty.IPty): { hasConversationNotFound(): boolean } {
+  let outputTail = '';
+  process.onData((data) => { outputTail = (outputTail + data).slice(-RESUME_OUTPUT_TAIL_LENGTH); });
+  return {
+    hasConversationNotFound: () => outputTail.replace(ANSI_ESCAPE_SEQUENCE, '').replace(/\s+/g, ' ').includes(CONVERSATION_NOT_FOUND_PHRASE),
+  };
+}
 
 // node-pty reports a signal death as exitCode 0 plus the signal; the shell convention (128 + signal) keeps it distinguishable from a clean exit.
 function exitCodeOf({ exitCode, signal }: { exitCode: number; signal?: number }): number {
