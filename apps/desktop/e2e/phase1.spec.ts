@@ -15,7 +15,7 @@ test('a model picked in Settings is written to config.json and served by the run
   const differentKnownModel: string = availableModels.find((modelId: string) => modelId !== modelsBefore.opus);
   try {
     await page.goto('/');
-    await page.getByTestId('nav-settings').click();
+    await page.getByRole('button', { name: 'Settings' }).click();
 
     await page.getByTestId('model-select-opus').selectOption(differentKnownModel);
 

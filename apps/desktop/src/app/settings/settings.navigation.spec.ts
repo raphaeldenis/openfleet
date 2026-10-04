@@ -2,6 +2,7 @@ import { signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { provideRouter, Router, withComponentInputBinding } from '@angular/router';
 import { RouterTestingHarness } from '@angular/router/testing';
+import { screen } from '@testing-library/angular/zoneless';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { routes } from '../app.routes';
 import { FleetEventsService } from '../core/fleet-events.service';
@@ -56,10 +57,11 @@ describe('Settings navigation', () => {
     vi.unstubAllGlobals();
   });
 
-  it('marks Settings as a live /settings link with no availability caption left over', () => {
-    const settingsItem = HELM_NAV_ITEMS.find((item) => item.key === 'settings');
+  it('keeps Settings out of the Helm nav list', async () => {
+    const { root } = await openApp('/inbox');
 
-    expect(settingsItem).toMatchObject({ route: '/settings', availability: null });
+    expect(root.querySelector('[data-testid="nav-settings"]')).toBeNull();
+    expect(HELM_NAV_ITEMS.map((item) => item.label)).not.toContain('Settings');
   });
 
   it.each([
@@ -75,21 +77,45 @@ describe('Settings navigation', () => {
     expect(harness.routeNativeElement?.querySelector('[data-testid="not-found"]')).toBeNull();
   });
 
-  it('opens the settings screen from the sidebar link and highlights only that link', async () => {
+  it('opens the settings screen from the sidebar gear and presses only the gear', async () => {
     vi.stubGlobal('fetch', daemonAnswering(MODEL_TABLE));
     const { harness, root, router } = await openApp('/inbox');
-    const settingsLink = root.querySelector('[data-testid="nav-settings"]') as HTMLAnchorElement;
+    const gear = screen.getByRole('button', { name: 'Settings' });
     const inboxLink = root.querySelector('[data-testid="nav-inbox"]') as HTMLAnchorElement;
-    expect(inboxLink.classList).toContain('active');
+    expect(gear).toHaveAttribute('aria-pressed', 'false');
+    expect(inboxLink).toHaveAttribute('aria-current', 'page');
 
-    settingsLink.click();
+    gear.click();
+    await harness.fixture.whenStable();
+    harness.detectChanges();
+
+    expect(router.url).toBe('/settings');
+    expect(root.querySelector('[data-testid="settings"]')).toBeTruthy();
+    expect(gear).toHaveAttribute('aria-pressed', 'true');
+    expect(inboxLink).not.toHaveAttribute('aria-current');
+  });
+
+  it('opens the settings screen on ⌘,', async () => {
+    vi.stubGlobal('fetch', daemonAnswering(MODEL_TABLE));
+    const { harness, root, router } = await openApp('/inbox');
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: ',', metaKey: true, bubbles: true }));
     await harness.fixture.whenStable();
 
     expect(router.url).toBe('/settings');
     expect(root.querySelector('[data-testid="settings"]')).toBeTruthy();
-    expect(root.querySelector('[data-testid="app-nav"]')).toBeTruthy();
-    expect(settingsLink.classList).toContain('active');
-    expect(inboxLink.classList).not.toContain('active');
+  });
+
+  it('opens the settings screen from the palette Settings entry', async () => {
+    vi.stubGlobal('fetch', daemonAnswering(MODEL_TABLE));
+    const { harness, root, router } = await openApp('/inbox');
+
+    pressCommandK();
+    harness.detectChanges();
+    (root.querySelector('[data-testid="palette-item-settings"]') as HTMLButtonElement).click();
+    await harness.fixture.whenStable();
+
+    expect(router.url).toBe('/settings');
   });
 
   it('shows the load error, not an endless Loading…, when /settings is opened while the daemon is down', async () => {

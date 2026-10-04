@@ -18,19 +18,21 @@ import { FleetEventsService } from '../core/fleet-events.service';
 import { VersionsService } from '../core/versions.service';
 import { BannerComponent } from '../design/banner.component';
 import { CopyDetailsButtonComponent } from '../design/copy-details-button.component';
+import { ThemeToggleButtonComponent } from '../design/theme-toggle-button.component';
 import { SessionListComponent } from '../sessions/session-list.component';
 import { attentionItemsOf, inboxCountLabelOf } from '../working-state/attention-items';
 import { CommandPaletteComponent } from './command-palette.component';
 import { DaemonStatusComponent } from './daemon-status.component';
 import { HELM_NAV_ITEMS } from './nav-items';
 import { RightPanelComponent } from './right-panel.component';
+import { SidebarFooterComponent } from './sidebar-footer.component';
 
 const RUNNING_STATES = new Set(['generating', 'starting']);
 
 @Component({
   selector: 'of-app-shell',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, RouterLinkActive, RouterOutlet, SessionListComponent, DaemonStatusComponent, CommandPaletteComponent, BannerComponent, CopyDetailsButtonComponent, RightPanelComponent],
+  imports: [RouterLink, RouterLinkActive, RouterOutlet, SessionListComponent, DaemonStatusComponent, CommandPaletteComponent, BannerComponent, CopyDetailsButtonComponent, RightPanelComponent, SidebarFooterComponent, ThemeToggleButtonComponent],
   template: `
     <div class="shell" data-testid="app-shell">
       <div class="body" [attr.inert]="paletteOpen() ? '' : null">
@@ -44,7 +46,7 @@ const RUNNING_STATES = new Set(['generating', 'starting']);
             @for (item of navItems; track item.key) {
               <li>
                 @if (item.route) {
-                  <a class="nav-item" [routerLink]="item.route" routerLinkActive="active" [attr.data-testid]="'nav-' + item.key">
+                  <a class="nav-item" [routerLink]="item.route" routerLinkActive="active" ariaCurrentWhenActive="page" [attr.data-testid]="'nav-' + item.key">
                     <span class="glyph">{{ item.glyph }}</span><span class="label">{{ item.label }}</span>
                     @if (item.key === 'inbox' && inboxBadge(); as badge) {
                       <span class="nav-badge" data-testid="nav-inbox-badge" role="img" [attr.aria-label]="badge.ariaLabel">{{ badge.text }}</span>
@@ -62,6 +64,7 @@ const RUNNING_STATES = new Set(['generating', 'starting']);
               </li>
             }
           </ul>
+          <of-sidebar-footer />
         </nav>
         <div class="main-column">
           <header class="topbar" data-testid="app-topbar">
@@ -72,6 +75,7 @@ const RUNNING_STATES = new Set(['generating', 'starting']);
             <span class="spacer"></span>
             <of-daemon-status [connected]="events.connected()" [mismatchedDaemonVersion]="versions.mismatch()?.daemonVersion ?? null" />
             <span class="spend" data-testid="spend-today" title="Cost tracking is not implemented yet">— today</span>
+            <of-theme-toggle-button />
           </header>
           @if (versionMismatch(); as mismatch) {
             <of-banner
@@ -126,12 +130,12 @@ const RUNNING_STATES = new Set(['generating', 'starting']);
     .section-title { display: flex; align-items: center; gap: .375rem; height: 1.875rem; padding: 0 .75rem; font-size: .6875rem; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--mut); }
     .section-title .mono { margin-left: auto; font-family: var(--mono); font-weight: 400; letter-spacing: 0; color: var(--mut); }
     .helm-list { flex-grow: 1.4; flex-shrink: 1; flex-basis: 0; min-height: 0; list-style: none; margin: 0; padding: .375rem; display: flex; flex-direction: column; gap: 1px; overflow-y: auto; }
-    .nav-item { display: flex; align-items: center; gap: .5rem; height: 1.75rem; padding: 0 .5rem; border-radius: .375rem; color: var(--fg); }
+    .nav-item { display: flex; align-items: center; gap: .5rem; height: 1.75rem; padding: 0 .5rem 0 .375rem; border-left: 2px solid transparent; border-radius: .375rem; color: var(--fg); }
     .nav-badge { flex: none; min-width: 1rem; height: 1rem; padding: 0 .25rem; border-radius: .5rem; background: var(--accent); color: var(--on-accent); font-size: .625rem; font-weight: 600; display: flex; align-items: center; justify-content: center; }
     .nav-issue-dot { flex: none; width: .5rem; height: .5rem; border-radius: 50%; background: var(--state-error); }
     a.nav-item { cursor: pointer; }
     a.nav-item:hover, a.nav-item:focus-visible { background: var(--hover); }
-    a.nav-item.active { background: var(--active); }
+    a.nav-item.active { background: var(--active); border-left-color: var(--accent); font-weight: 500; }
     .nav-item.disabled { color: var(--faint); }
     .nav-item .label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .nav-item .glyph { width: 1rem; text-align: center; font-family: var(--mono); font-size: .75rem; }
@@ -239,7 +243,14 @@ export class AppShellComponent {
 
   @HostListener('document:keydown', ['$event'])
   onKeydown(event: KeyboardEvent): void {
-    const isCommandOrCtrlK = (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k';
+    const hasCommandModifier = event.metaKey || event.ctrlKey;
+    const isCommandOrCtrlK = hasCommandModifier && event.key.toLowerCase() === 'k';
+    const isCommandOrCtrlComma = hasCommandModifier && event.key === ',';
+    if (isCommandOrCtrlComma) {
+      event.preventDefault();
+      void this.router.navigate(['/settings']);
+      return;
+    }
     if (isCommandOrCtrlK) {
       event.preventDefault();
       if (this.paletteOpen()) this.closePalette();

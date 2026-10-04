@@ -1,5 +1,6 @@
 import { afterRenderEffect, ChangeDetectionStrategy, Component, ElementRef, inject, input, output, viewChild } from '@angular/core';
 import { Router } from '@angular/router';
+import { ThemeService } from '../core/theme.service';
 import { PALETTE_PAGES } from './nav-items';
 
 @Component({
@@ -19,6 +20,14 @@ import { PALETTE_PAGES } from './nav-items';
                 </button>
               </li>
             }
+          </ul>
+          <div class="group-label">Actions</div>
+          <ul class="items">
+            <li>
+              <button type="button" data-testid="palette-item-toggle-theme" (click)="toggleTheme()">
+                <span class="icon">◐</span><span>Toggle theme</span>
+              </button>
+            </li>
           </ul>
         </div>
       </div>
@@ -42,6 +51,7 @@ export class CommandPaletteComponent {
   readonly sessionEpoch = input<number>(0);
   readonly closed = output<void>();
   private readonly router = inject(Router);
+  private readonly theme = inject(ThemeService);
   protected readonly pages = PALETTE_PAGES;
   private readonly panel = viewChild<ElementRef<HTMLElement>>('panel');
 
@@ -79,6 +89,11 @@ export class CommandPaletteComponent {
     } finally {
       if (this.sessionEpoch() === epochAtClick) this.closed.emit();
     }
+  }
+
+  toggleTheme(): void {
+    this.theme.toggle();
+    this.closed.emit();
   }
 
   stopPropagation(event: Event): void {
