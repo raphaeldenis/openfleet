@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 import { importScape } from './importScape.js';
-import { buildScapeFixture, editScapeNotes, OPENFLEET_PROJECT_ID, CCM_PROJECT_ID } from './scapeFixture.testkit.js';
+import { buildScapeFixture, editScapeDatastore, editScapeNotes, scapeBacklogTable, OPENFLEET_PROJECT_ID, CCM_PROJECT_ID } from './scapeFixture.testkit.js';
 import { anArgus, LEAD_ARGUS_ID, writeArguses } from './scapeArguses.testkit.js';
 
 function fixtureWithPlaybooks() {
@@ -93,6 +93,23 @@ describe('playbook migration', () => {
     expect(hash()).toBe(sourceHash);
     expect(readdirSync(options.scapeDir)).toEqual(sourceFiles);
     expect(readdirSync(options.scratchRoot)).toEqual([]);
+  });
+
+  it('rolls back the archives written earlier in the run when a later family fails', () => {
+    const { options, fixture } = fixtureWithPlaybooks();
+    importScape(options);
+    const archiveNotes = "title = 'Playbooks (ex-Scape)'";
+    withTarget(options.home, (db) => {
+      db.exec(`DELETE FROM note_versions WHERE note_id IN (SELECT id FROM notes WHERE ${archiveNotes})`);
+      db.exec(`DELETE FROM notes WHERE ${archiveNotes}`);
+      db.exec(`CREATE TRIGGER refuse_rows BEFORE INSERT ON ds_rows BEGIN SELECT RAISE(ABORT, 'refused'); END`);
+    });
+    editScapeDatastore(fixture, (db) => db.prepare(`INSERT INTO ${scapeBacklogTable} (row_id, row_created_at, row_updated_at) VALUES ('R-new', 1790246300, 1790246300)`).run());
+
+    expect(() => importScape(options)).toThrow(expect.objectContaining({ code: 'IMPORT_WRITE_FAILED' }));
+
+    const archiveCount = withTarget(options.home, (db) => db.prepare(`SELECT count(*) AS n FROM notes WHERE ${archiveNotes}`).get());
+    expect(archiveCount).toEqual({ n: 0 });
   });
 
   it('reports every playbook as a conflict when its archive is edited in OpenFleet', () => {

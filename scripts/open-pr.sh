@@ -5,9 +5,11 @@ repository=''
 title=''
 body_file=''
 base='main'
+head=''
+worktree='.'
 
 usage() {
-  echo 'Usage: bash scripts/open-pr.sh --repo <owner/repo> --title <title> --body-file <file> [--base <branch>]' >&2
+  echo 'Usage: bash scripts/open-pr.sh --repo <owner/repo> --title <title> --body-file <file> --head <published-branch> [--base <branch>] [--worktree <dir>]' >&2
   exit 2
 }
 
@@ -18,6 +20,8 @@ while [ "$#" -gt 0 ]; do
     --title) title="$2" ;;
     --body-file) body_file="$2" ;;
     --base) base="$2" ;;
+    --head) head="$2" ;;
+    --worktree) worktree="$2" ;;
     *) usage ;;
   esac
   shift 2
@@ -27,5 +31,10 @@ done
 [ -n "$title" ] || usage
 [ -f "$body_file" ] || usage
 [ -n "$base" ] || usage
+[ -n "$head" ] || usage
 
-gh pr create --repo "$repository" --title "$title" --body-file "$body_file" --base "$base"
+source "$(dirname "${BASH_SOURCE[0]}")/shim-guards.sh"
+require_git_worktree "$worktree"
+require_published_branch "$worktree" "$head"
+
+gh pr create --repo "$repository" --title "$title" --body-file "$body_file" --base "$base" --head "$head"

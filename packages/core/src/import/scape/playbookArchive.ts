@@ -16,7 +16,18 @@ const SHIM_PATHS: Readonly<Record<string, string>> = {
   'qa-browser': '~/Documents/scape-team/openfleet/qa-browser.sh',
 };
 
-const escapeText = (text: string): string => text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+const numericEntity = (character: string): string => `&#${character.codePointAt(0)};`;
+const LINE_START_BLOCK_MARKER = /^[`#*+|-]/gm;
+const LINE_START_ORDERED_ITEM_DOT = /^(\d{1,9})\./gm;
+
+const escapeText = (text: string): string =>
+  text
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('@', numericEntity('@'))
+    .replace(LINE_START_BLOCK_MARKER, numericEntity)
+    .replace(LINE_START_ORDERED_ITEM_DOT, (_, digits: string) => `${digits}${numericEntity('.')}`);
 const textBlock = (text: string): string => `<pre>${escapeText(text)}</pre>`;
 
 type LexicalNode = { type?: string; text?: string; kind?: string; label?: string; args?: unknown; children?: LexicalNode[] };

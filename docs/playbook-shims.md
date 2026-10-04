@@ -27,12 +27,27 @@ or machine script is copied into git.
 | dev-servers-stop | `~/Documents/scape-team/openfleet/dev-servers-stop.sh` | `bash "$HOME/Documents/scape-team/openfleet/dev-servers-stop.sh"` |
 | github-issue | `~/Documents/scape-team/openfleet/github-issue.sh` | `NUMBER=123 bash "$HOME/Documents/scape-team/openfleet/github-issue.sh"` |
 | qa-browser | `~/Documents/scape-team/openfleet/qa-browser.sh` | `bash "$HOME/Documents/scape-team/openfleet/qa-browser.sh"` |
-| open-pr | `scripts/open-pr.sh` | `bash scripts/open-pr.sh --repo owner/repo --title "$PR_TITLE" --body-file "$PR_BODY_FILE" --base main` |
+| open-pr | `scripts/open-pr.sh` | `bash scripts/open-pr.sh --repo owner/repo --title "$PR_TITLE" --body-file "$PR_BODY_FILE" --base main --head "$BRANCH"` |
 
 `verify.sh` runs architecture, strict type checking and the full core suite,
 stopping at the first failure. It does not start servers or run browser e2e.
-The push hook owns local e2e decisions. `open-pr.sh` sends an existing body
-file to `gh`; authentication stays with the user's configured GitHub CLI.
+The push hook owns local e2e decisions. Both shims first check with
+`git rev-parse --is-inside-work-tree` that the directory is a worktree
+(`verify.sh` takes it as its argument, `open-pr.sh` as `--worktree`, default
+the current directory); bare repositories and paths outside a repository are
+refused with exit 2 before `pnpm` or `gh` run.
+
+`open-pr.sh` never pushes. Publish the branch separately (`git push -u origin
+"$BRANCH"`), then pass it with `--head`. The shim refuses a missing `--head`,
+a branch absent from `origin` and a local branch whose commit differs from
+`origin/<branch>` (it reads the local remote-tracking ref, so fetch after
+pushing from another clone). It then calls `gh pr create --head`, which keeps
+`gh` from offering to push or fork. It sends an existing body file;
+authentication stays with the user's configured GitHub CLI.
+
+The importer archives playbook text with `@` and line-start Markdown markers
+written as numeric entities, so an archived `@note:…` never expands and no
+description renders as a code, heading, list or quote block.
 
 ### Child permissions
 
