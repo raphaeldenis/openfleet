@@ -8,17 +8,19 @@ import type { ScapeProject, ScapeSource } from './scapeSource.js';
 import { scapeNotesDateToIso } from './scapeTime.js';
 import { planPlaybookArchive, type PlannedPlaybookArchive } from './playbookArchive.js';
 import { planWorkingStates, type PlannedWorkingState } from './scapeWorkingStates.js';
+import { emptySourceLosses, type SourceLosses } from './importReport.js';
 
 export interface PlannedRecord<Extra = object> { id: string; record: RecordValues; extra: Extra }
 
 /** Everything a run intends to write, computed from the Scape sources before any write. */
 export interface ImportPlan {
+  sourceLosses: SourceLosses;
   playbookArchives: PlannedPlaybookArchive[];
   projects: PlannedRecord<{ projectName: string; hasDocsFolder: boolean }>[];
   notes: PlannedRecord<{ unconvertedTypes: string[]; currentVersionId: string }>[];
   noteVersions: PlannedRecord<{ unconvertedTypes: string[] }>[];
   dataStores: PlannedRecord[];
-  columns: PlannedRecord[];
+  columns: PlannedRecord<{ hasDroppedFormat: boolean }>[];
   views: PlannedRecord<{ hasDroppedFields: boolean }>[];
   skippedViewCount: number;
   rows: PlannedRecord<{ hasStaleSelectValue: boolean; selectedOptions: SelectedOption[] }>[];
@@ -50,7 +52,7 @@ function selectProjects(source: ScapeSource, projectName: string | undefined): S
   return selected;
 }
 
-const emptyPlan = (): ImportPlan => ({ playbookArchives: [], projects: [], notes: [], noteVersions: [], dataStores: [], columns: [], views: [], skippedViewCount: 0, rows: [], history: [], skippedHistoryCount: 0, managers: [], skippedManagerCount: 0, workingStates: [] });
+const emptyPlan = (): ImportPlan => ({ sourceLosses: emptySourceLosses(), playbookArchives: [], projects: [], notes: [], noteVersions: [], dataStores: [], columns: [], views: [], skippedViewCount: 0, rows: [], history: [], skippedHistoryCount: 0, managers: [], skippedManagerCount: 0, workingStates: [] });
 
 function planNotes(plan: ImportPlan, source: ScapeSource, project: ScapeProject): void {
   for (const note of source.notesOf(project.id)) {
@@ -75,13 +77,16 @@ function planStoreColumns(plan: ImportPlan, source: ScapeSource, store: { id: st
       sort_order: column.sortOrder,
       created_at: store.createdAt,
     };
-    plan.columns.push({ id: column.id, record, extra: {} });
+    const hasDroppedFormat = column.droppedFormat !== null;
+    if (column.droppedFormat !== null) plan.sourceLosses.droppedColumnFormats.push({ columnId: column.id, format: column.droppedFormat });
+    plan.columns.push({ id: column.id, record, extra: { hasDroppedFormat } });
   }
   return columns;
 }
 
 function planStores(plan: ImportPlan, source: ScapeSource, project: ScapeProject): void {
   for (const store of source.storesOf(project.id)) {
+    if (!source.hasStoreTable(store)) plan.sourceLosses.storesWithoutTables.push(store.id);
     const createdAt = scapeNotesDateToIso(store.createdAt);
     plan.dataStores.push({
       id: store.id,
@@ -94,6 +99,7 @@ function planStores(plan: ImportPlan, source: ScapeSource, project: ScapeProject
     for (const view of source.viewsOf(store.id)) {
       const mapped = mapView(view, columns);
       if (mapped === undefined) { plan.skippedViewCount++; continue; }
+      if (mapped.hasDroppedFields) plan.sourceLosses.droppedViewFields.push({ viewId: view.id, fields: mapped.droppedFields });
       plan.views.push({ id: view.id, record: mapped.record, extra: { hasDroppedFields: mapped.hasDroppedFields } });
     }
     for (const row of source.rowsOf(store)) {
@@ -110,6 +116,7 @@ function planStores(plan: ImportPlan, source: ScapeSource, project: ScapeProject
 
 export function buildImportPlan(source: ScapeSource, options: PlanOptions): ImportPlan {
   const plan = emptyPlan();
+  plan.sourceLosses.orphanDatastoreFiles = source.orphanDatastoreFiles();
   for (const project of selectProjects(source, options.projectName)) {
     const docsFolder = resolveDocsFolder({ superpowersRoot: options.superpowersRoot, projectName: project.name });
     plan.projects.push({
