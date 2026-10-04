@@ -48,7 +48,7 @@ const SCENARIOS: Scenario[] = [
   {
     label: 'conversation_not_found', exitCode: 1, reason: 'conversation_not_found', cardTitle: 'Not running', hasCardBody: false, cardTone: 'error',
     stripTitle: 'Conversation not found',
-    stripMessage: 'The transcript for this session is gone — start a new session from its handoff.',
+    stripMessage: 'The transcript for this session is gone; start a new session from its handoff.',
   },
   {
     label: 'a refused reopen request', exitCode: 0, resumeRequestError: 'This session’s directory no longer exists — nothing to resume into.',
@@ -68,6 +68,35 @@ describe('what a closed session shows', () => {
     expect(presentation.cardTitle).toBe(scenario.cardTitle);
     expect(presentation.cardBody !== undefined).toBe(scenario.hasCardBody);
     expect(presentation.cardTone).toBe(scenario.cardTone);
+  });
+
+  it.each([
+    ['launch_failed', { reason: 'launch_failed' }],
+    ['resume_timeout', { reason: 'resume_timeout' }],
+    ['conversation_not_found', { reason: 'conversation_not_found', exitCode: 1 }],
+    ['harness_exit', { reason: 'harness_exit', exitCode: 137 }],
+  ] as const)('offers to copy the details of a %s close under that code', (code, facts) => {
+    expect(closedSessionPresentationFor(facts).strip?.copyableCode).toBe(code);
+  });
+
+  it('names a non-zero exit without reason like an unexpected agent exit', () => {
+    expect(closedSessionPresentationFor({ exitCode: 1 }).strip?.copyableCode).toBe('harness_exit');
+  });
+
+  it.each([
+    ['a daemon shutdown', { reason: 'daemon_shutdown' }],
+    ['a clean close', { exitCode: 0, reason: 'closed_by_user' }],
+    ['a refused reopen request', { exitCode: 0, resumeRequestError: 'Nothing to resume into.' }],
+  ] as const)('offers no details to copy for %s', (_label, facts) => {
+    expect(closedSessionPresentationFor(facts).strip?.copyableCode).toBeUndefined();
+  });
+
+  it('offers to resume every closed session except one whose conversation is gone', () => {
+    const resumable = SCENARIOS.filter((scenario) => presentationOf(scenario).isResumeOffered).map((scenario) => scenario.label);
+    const notResumable = SCENARIOS.filter((scenario) => !presentationOf(scenario).isResumeOffered).map((scenario) => scenario.label);
+
+    expect(notResumable).toEqual(['conversation_not_found']);
+    expect(resumable).toHaveLength(SCENARIOS.length - 1);
   });
 
   it('never explains a close on the strip and on the card body at once', () => {

@@ -1,5 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, effect, inject, input, signal, untracked } from '@angular/core';
+import { detailsTextOf } from '../core/copy-details';
 import { EarlyEscapeHintService } from '../core/early-escape-hint.service';
+import { CopyDetailsButtonComponent } from '../design/copy-details-button.component';
 import { copyFor } from '../core/error-copy';
 import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
@@ -19,7 +21,7 @@ type LifecycleBanner = { kind: 'resuming' } | { kind: 'strip'; strip: LifecycleS
 @Component({
   selector: 'of-session-view',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [SessionHeaderComponent, StatePanelComponent, TerminalComponent, PermissionGateCardComponent, ComposerComponent, RightPanelSessionToggleComponent],
+  imports: [SessionHeaderComponent, StatePanelComponent, TerminalComponent, PermissionGateCardComponent, ComposerComponent, RightPanelSessionToggleComponent, CopyDetailsButtonComponent],
   template: `
     @if (session(); as s) {
       <div class="session-view" data-testid="session-view">
@@ -44,6 +46,9 @@ type LifecycleBanner = { kind: 'resuming' } | { kind: 'strip'; strip: LifecycleS
             <div class="lifecycle-banner" data-testid="lifecycle-banner" [attr.data-variant]="banner.strip.variant" [attr.role]="banner.role">
               <span class="lifecycle-title">{{ banner.strip.icon }} {{ banner.strip.title }}</span>
               <span class="lifecycle-body" data-testid="lifecycle-message">{{ banner.strip.message }}</span>
+              @if (stripDetailsText(); as detailsText) {
+                <of-copy-details-button testId="lifecycle-copy-details" [text]="detailsText" [isCompact]="true" />
+              }
             </div>
           }
         }
@@ -63,9 +68,11 @@ type LifecycleBanner = { kind: 'resuming' } | { kind: 'strip'; strip: LifecycleS
               <span class="closed-body">{{ closed.cardBody }}</span>
             }
             <span class="closed-actions">
-              <button type="button" class="of-btn of-btn--primary" data-testid="resume-session" [disabled]="resuming()" (click)="resume(s.id)">
-                ↻ Resume in worktree
-              </button>
+              @if (closed.isResumeOffered) {
+                <button type="button" class="of-btn of-btn--primary" data-testid="resume-session" [disabled]="resuming()" (click)="resume(s.id)">
+                  ↻ Resume in worktree
+                </button>
+              }
               <span class="reopen-fresh">
                 <button type="button" class="of-btn of-btn--secondary" data-testid="reopen-fresh-session" aria-disabled="true" aria-describedby="reopen-fresh-session-reason">
                   Reopen fresh
@@ -149,6 +156,16 @@ export class SessionViewComponent {
     const isFailureJustSeen = strip.variant === 'error' && this.watchedOpenSessionId() === session.id;
     const isAnnounced = strip.isResumeFailure || isFailureJustSeen;
     return { kind: 'strip', strip, role: isAnnounced && strip.variant === 'error' ? 'alert' : null };
+  });
+
+  /** What a user pastes into a bug report for the strip on screen: the session as ref, the close reason as code, no daemon words. */
+  protected readonly stripDetailsText = computed(() => {
+    const session = this.session();
+    const banner = this.lifecycleBanner();
+    if (!session || banner?.kind !== 'strip') return undefined;
+    const code = banner.strip.copyableCode;
+    if (code === undefined) return undefined;
+    return detailsTextOf({ ref: session.id, code, at: session.closedAt ?? session.stateSince });
   });
 
   protected readonly isEarlyEscapeHintShown = computed(() => {
