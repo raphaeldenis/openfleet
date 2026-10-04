@@ -15,7 +15,7 @@ import { ManagerService } from '../managers/managerService.js';
 import { PulseScheduler } from '../managers/pulseScheduler.js';
 import { DEFAULT_MODEL_TABLE } from '../models.js';
 import { SessionService } from '../sessions/sessionService.js';
-import { TodoTracker } from '../todos/todoTracker.js';
+import { TodoTracker, type Schedule } from '../todos/todoTracker.js';
 import { startServer } from './server.js';
 
 const fixtureLines = (name: string) => readFileSync(new URL(`../todos/__fixtures__/${name}`, import.meta.url), 'utf8').split('\n').filter(Boolean);
@@ -39,14 +39,33 @@ let updates: SessionTodos[];
 let projectsDirectory: string;
 const originalConfigDir = process.env.CLAUDE_CONFIG_DIR;
 
-const boot = async () => {
+/** A scheduler that holds every timer until the test closes the window: what the clients are told is then independent of how fast the machine is. */
+const manualSchedule = () => {
+  let held: (() => void)[] = [];
+  const schedule: Schedule = (run) => {
+    held.push(run);
+    return () => { held = held.filter((pending) => pending !== run); };
+  };
+  const closeTheWindow = () => held.splice(0).forEach((run) => run());
+  return { schedule, closeTheWindow };
+};
+
+const restartWithManualEmitWindow = async () => {
+  tracker.stop();
+  await server.close();
+  const emitWindow = manualSchedule();
+  await boot({ schedule: emitWindow.schedule });
+  return emitWindow;
+};
+
+const boot = async (options: { schedule?: Schedule } = {}) => {
   const bus = new EventBus();
   sessions = new SessionService({ db, bus, harnesses: [new FakeHarness()], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt' });
   const approvals = new ApprovalService({ db, bus });
   const managerRepo = new ManagerRepository(db);
   const pulseScheduler = new PulseScheduler({ managers: managerRepo, sessions, bus });
   const managers = new ManagerService({ managers: managerRepo, sessions, bus, scheduler: pulseScheduler });
-  tracker = new TodoTracker({ sessions, bus });
+  tracker = new TodoTracker({ sessions, bus, schedule: options.schedule });
   updates = [];
   tracker.onUpdate((todos) => updates.push(todos));
   server = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable: DEFAULT_MODEL_TABLE, modelConfigPath: '/tmp/of-unused/config.json', todos: tracker });
@@ -164,15 +183,18 @@ describe('GET /api/sessions/:id/todos', () => {
 
 describe('the list follows the hooks, with no transcript line written yet', () => {
   it('tells the clients of each change once, and of nothing when a TaskList repeats what they already know', async () => {
+    const emitWindow = await restartWithManualEmitWindow();
     const id = await createSession();
 
     await postTodoHook(id, todoHookOf(realHookBodies[0]!));
     await postTodoHook(id, todoHookOf(realHookBodies[1]!));
     await postTodoHook(id, todoHookOf(realHookBodies[2]!));
-    await untilQuiet();
+    await getTodos(id);
+    emitWindow.closeTheWindow();
     const afterTheBurst = updates.length;
     await postTodoHook(id, listHook('toolu_list_1', [{ id: '1', subject: 'Review user feedback', status: 'pending' }, { id: '2', subject: 'Update documentation', status: 'pending' }, { id: '3', subject: 'Run performance tests', status: 'pending' }]));
-    await untilQuiet();
+    await getTodos(id);
+    emitWindow.closeTheWindow();
 
     expect(afterTheBurst).toBe(1);
     expect(rowsOf(updates[0]!)).toEqual(['1:pending:Review user feedback', '2:pending:Update documentation', '3:pending:Run performance tests']);
@@ -232,15 +254,17 @@ describe('the list follows the hooks, with no transcript line written yet', () =
 
 describe('the transcript catches up what the hooks missed, and never folds a call twice', () => {
   it('shows each call once when its transcript line lands after its hook (real hook and transcript samples)', async () => {
+    const emitWindow = await restartWithManualEmitWindow();
     const id = await createSession();
     for (const body of realHookBodies) await postTodoHook(id, todoHookOf(body), { cliId: id });
-    await untilQuiet();
+    await getTodos(id);
+    emitWindow.closeTheWindow();
     const eventsAfterTheHooks = updates.length;
 
     writeTranscript(id, linesOf(0, 9));
     await stop(id);
     const todos = await getTodos(id);
-    await untilQuiet();
+    emitWindow.closeTheWindow();
 
     expect(rowsOf(todos)).toEqual(['1:completed:Review user feedback', '2:pending:Update documentation', '3:pending:Run performance tests']);
     expect(updates).toHaveLength(eventsAfterTheHooks);
@@ -258,16 +282,18 @@ describe('the transcript catches up what the hooks missed, and never folds a cal
   });
 
   it('folds once a call whose hook arrives after the repair already read it, and sends the one event that confirms its row', async () => {
+    const emitWindow = await restartWithManualEmitWindow();
     const id = await createSession();
     writeTranscript(RUN_B_CLI_ID, linesOf(10, 29));
     await resume(id, RUN_B_CLI_ID);
     await getTodos(id);
-    await untilQuiet();
+    emitWindow.closeTheWindow();
     const eventsAfterTheRepair = updates.length;
 
     const lateHook = JSON.parse(linesOf(18, 19)[0]!).message.content[0] as { id: string; input: Record<string, unknown> };
     await postTodoHook(id, { tool_name: 'TaskUpdate', tool_use_id: lateHook.id, tool_input: lateHook.input, tool_response: { success: true, taskId: lateHook.input.taskId, statusChange: { to: 'in_progress' } } }, { cliId: RUN_B_CLI_ID });
-    await untilQuiet();
+    await getTodos(id);
+    emitWindow.closeTheWindow();
 
     expect(rowsOf(await getTodos(id))).toEqual(['1:completed:Review pull request', '2:pending:Update documentation']);
     expect(updates).toHaveLength(eventsAfterTheRepair + 1);
