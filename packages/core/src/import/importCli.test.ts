@@ -18,7 +18,7 @@ describe('runImportCli', () => {
   });
 
   it('imports and tells where the report is', () => {
-    const result = runImportCli(argv(), { homeDirectory });
+    const result = runImportCli(argv(), { homeDirectory, env: {} });
 
     expect(result.exitCode).toBe(0);
     expect(result.output).toContain(join(home, 'import-report.md'));
@@ -26,21 +26,37 @@ describe('runImportCli', () => {
   });
 
   it('prints the report and writes nothing on --dry-run', () => {
-    const result = runImportCli(argv('--dry-run'), { homeDirectory });
+    const result = runImportCli(argv('--dry-run'), { homeDirectory, env: {} });
 
     expect(result.exitCode).toBe(0);
-    expect(result.output).toContain('| notes | 5 | 5 | 0 | 0 | 0 |');
+    expect(result.output).toContain('| notes | 5 | 5 | 0 | 0 | 0 | 0 |');
     expect(existsSync(home)).toBe(false);
   });
 
-  it('limits the import to the project named by --project', () => {
-    const result = runImportCli(argv('--dry-run', '--project', 'OpenFleet'), { homeDirectory });
+  it('takes the home from OPENFLEET_HOME when --home is absent', () => {
+    const result = runImportCli(['scape', '--scape-dir', fixture.scapeDir], { homeDirectory, env: { OPENFLEET_HOME: home } });
 
-    expect(result.output).toContain('| notes | 1 | 1 | 0 | 0 | 0 |');
+    expect(result.exitCode).toBe(0);
+    expect(existsSync(join(home, 'openfleet.db'))).toBe(true);
+  });
+
+  it('prefers --home over OPENFLEET_HOME', () => {
+    const otherHome = join(fixture.workDir, 'other-home');
+
+    runImportCli(argv(), { homeDirectory, env: { OPENFLEET_HOME: otherHome } });
+
+    expect(existsSync(join(home, 'openfleet.db'))).toBe(true);
+    expect(existsSync(otherHome)).toBe(false);
+  });
+
+  it('limits the import to the project named by --project', () => {
+    const result = runImportCli(argv('--dry-run', '--project', 'OpenFleet'), { homeDirectory, env: {} });
+
+    expect(result.output).toContain('| notes | 1 | 1 | 0 | 0 | 0 | 0 |');
   });
 
   it('exits 1 with the error code when the import fails', () => {
-    const result = runImportCli(argv('--project', 'nope'), { homeDirectory });
+    const result = runImportCli(argv('--project', 'nope'), { homeDirectory, env: {} });
 
     expect(result.exitCode).toBe(1);
     expect(result.output).toContain('UNKNOWN_PROJECT');
@@ -51,7 +67,7 @@ describe('runImportCli', () => {
     ['an unknown flag', ['scape', '--home', 'x', '--nope']],
     ['another source than scape', ['notion', '--home', 'x']],
   ])('exits 2 with INVALID_ARGUMENTS on %s', (_label, args) => {
-    const result = runImportCli(args, { homeDirectory });
+    const result = runImportCli(args, { homeDirectory, env: {} });
 
     expect(result.exitCode).toBe(2);
     expect(result.output).toContain('INVALID_ARGUMENTS');

@@ -4,6 +4,7 @@ export const SCAPE_IMPORT_ERROR_CODES = [
   'SCAPE_SOURCE_UNREADABLE',
   'UNKNOWN_PROJECT',
   'IMPORT_WRITE_FAILED',
+  'DAEMON_RUNNING',
 ] as const;
 
 export type ScapeImportErrorCode = (typeof SCAPE_IMPORT_ERROR_CODES)[number];

@@ -9,7 +9,7 @@ import { importScape } from './importScape.js';
 import {
   BACKLOG_ROW_ID, BACKLOG_STORE_ID, buildScapeFixture, CCM_PROJECT_ID, DUE_COLUMN_ID, EMPTY_LEXICAL_VERSION_ID, KANBAN_VIEW_ID, LEXICAL_NOTE_ID, MARKDOWN_NOTE_ID, MISLABELED_VERSION_ID, OPENFLEET_NOTE_ID,
   OPENFLEET_PROJECT_ID, PLAN_NOTE_ID, PRIORITY_COLUMN_ID, REPORT_NOTE_ID, STATUS_COLUMN_ID, STATUS_DONE_OPTION_ID, STATUS_TODO_OPTION_ID, TITLE_COLUMN_ID,
-  UNCATEGORIZED_PROJECT_ID, type ScapeFixture,
+  SYSTEM_PROJECT_ID, UNCATEGORIZED_PROJECT_ID, type ScapeFixture,
 } from './scapeFixture.testkit.js';
 
 const sha256OfFile = (path: string) => createHash('sha256').update(readFileSync(path)).digest('hex');
@@ -30,11 +30,15 @@ describe('importScape', () => {
     return db;
   };
 
-  afterEach(() => {
-    openConnections.splice(0).forEach((db) => db.close());
-  });
-  const run = (overrides: Partial<Parameters<typeof importScape>[0]> = {}) =>
-    importScape({ scapeDir: fixture.scapeDir, home, superpowersRoot, ...overrides });
+  const closeOpenConnections = () => openConnections.splice(0).forEach((db) => db.close());
+
+  afterEach(closeOpenConnections);
+
+  // An open connection stands for a running daemon, which the importer refuses: a test reads, then runs again.
+  const run = (overrides: Partial<Parameters<typeof importScape>[0]> = {}) => {
+    closeOpenConnections();
+    return importScape({ scapeDir: fixture.scapeDir, home, superpowersRoot, ...overrides });
+  };
 
   beforeEach(() => {
     fixture = buildScapeFixture();
@@ -44,13 +48,14 @@ describe('importScape', () => {
   });
 
   describe('projects', () => {
-    it('imports the real projects under their Scape id and ignores Uncategorized', () => {
+    it('imports the real projects under their Scape id and ignores Uncategorized by name and system projects by flag', () => {
       run();
 
       const db = openTarget();
       const ids = rowsOf<{ id: string; name: string }>(db, 'SELECT id, name FROM projects ORDER BY name').map((project) => project.id);
       expect(ids.sort()).toEqual([CCM_PROJECT_ID, OPENFLEET_PROJECT_ID].sort());
       expect(ids).not.toContain(UNCATEGORIZED_PROJECT_ID);
+      expect(ids).not.toContain(SYSTEM_PROJECT_ID);
     });
 
     it('resolves docs_folder_path against existing directories only and reports the projects left without one', () => {
@@ -109,7 +114,7 @@ describe('importScape', () => {
       expect(lexical).toEqual({ rev: 2, created_at: '2026-09-14T13:57:17.173Z' });
     });
 
-    it('imports the versions with a rev increasing by creation date, the scape-import author and the source as summary', () => {
+    it('imports the versions with a rev increasing by creation date, then the current body as the version of the note rev', () => {
       run();
 
       const db = openTarget();
@@ -119,7 +124,18 @@ describe('importScape', () => {
       expect(versions).toEqual([
         { id: 'ver-a', rev: 1, body_md: '# Rules v1', author: 'scape-import', change_summary: 'user' },
         { id: 'ver-b', rev: 2, body_md: '# Rules v2', author: 'scape-import', change_summary: 'mcp_append' },
+        { id: `${MARKDOWN_NOTE_ID}@rev3`, rev: 3, body_md: '# Rules\n\nbe kind', author: 'scape-import', change_summary: 'current' },
       ]);
+    });
+
+    it('gives a note without any Scape version the rev 1 and a version holding its body', () => {
+      run();
+
+      const db = openTarget();
+      const note = db.prepare('SELECT rev FROM notes WHERE id = ?').get(OPENFLEET_NOTE_ID) as { rev: number };
+      const versions = rowsOf<{ id: string; rev: number; body_md: string }>(db, 'SELECT id, rev, body_md FROM note_versions WHERE note_id = ?', OPENFLEET_NOTE_ID);
+      expect(note.rev).toBe(1);
+      expect(versions).toEqual([{ id: `${OPENFLEET_NOTE_ID}@rev1`, rev: 1, body_md: 'of body' }]);
     });
 
     it('keeps as markdown a version labelled lexical whose content is not a lexical document', () => {
@@ -210,6 +226,16 @@ describe('importScape', () => {
     });
   });
 
+  describe('change log entries that changed nothing', () => {
+    it('are left out of the history and counted as not converted', () => {
+      const report = run();
+
+      expect(report.counts.history).toMatchObject({ expected: 4, written: 3, notConverted: 1 });
+      const emptyChanges = rowsOf<{ id: string }>(openTarget(), `SELECT id FROM ds_row_history WHERE change_json = '{}'`);
+      expect(emptyChanges).toEqual([]);
+    });
+  });
+
   describe('idempotence', () => {
     it('writes nothing on a second run and leaves every table count unchanged', () => {
       const first = run();
@@ -219,7 +245,8 @@ describe('importScape', () => {
 
       expect(snapshotCounts(openTarget())).toEqual(countsAfterFirstRun);
       expect(first.counts.rows.written).toBe(2 + 1);
-      Object.values(second.counts).forEach((counts) => expect(counts).toMatchObject({ written: 0, updated: 0, alreadyPresent: counts.expected }));
+      Object.values(second.counts).forEach((counts) => expect(counts).toMatchObject({ written: 0, updated: 0, conflict: 0 }));
+      expect(second.counts.notes.alreadyPresent).toBe(second.counts.notes.expected);
     });
 
     it('updates a row that changed in Scape and reports it as updated, not written', () => {
@@ -299,8 +326,8 @@ describe('importScape', () => {
 
       expect(report.reportPath).toBe(join(home, 'import-report.md'));
       const markdown = readFileSync(report.reportPath!, 'utf8');
-      expect(markdown).toContain('| notes | 5 | 5 | 0 | 0 | 0 |');
-      expect(markdown).toContain('| views | 1 | 1 | 0 | 0 | 1 |');
+      expect(markdown).toContain('| notes | 5 | 5 | 0 | 0 | 0 | 0 |');
+      expect(markdown).toContain('| views | 1 | 1 | 0 | 0 | 0 | 1 |');
       expect(markdown).toContain('ccm-project');
     });
 

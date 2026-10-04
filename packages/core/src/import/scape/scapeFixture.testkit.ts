@@ -6,6 +6,7 @@ import { DatabaseSync } from 'node:sqlite';
 export const CCM_PROJECT_ID = 'AAAA0001-0000-0000-0000-000000000001';
 export const OPENFLEET_PROJECT_ID = 'BBBB0002-0000-0000-0000-000000000002';
 export const UNCATEGORIZED_PROJECT_ID = 'CCCC0003-0000-0000-0000-000000000003';
+export const SYSTEM_PROJECT_ID = 'DDDD0004-0000-0000-0000-000000000004';
 export const MARKDOWN_NOTE_ID = 'N0000001-0000-0000-0000-000000000001';
 export const LEXICAL_NOTE_ID = 'N0000002-0000-0000-0000-000000000002';
 export const PLAN_NOTE_ID = 'N0000003-0000-0000-0000-000000000003';
@@ -61,7 +62,8 @@ function seedNotes(db: DatabaseSync): void {
   const insertProject = db.prepare('INSERT INTO projects (id, name, isSystemProject, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?)');
   insertProject.run(CCM_PROJECT_ID, 'ccm-project', 0, '2026-09-14 13:17:40.319', '2026-09-14 13:17:40.319');
   insertProject.run(OPENFLEET_PROJECT_ID, 'OpenFleet', 0, '2026-09-24 10:35:01.519', '2026-09-24 10:35:01.519');
-  insertProject.run(UNCATEGORIZED_PROJECT_ID, 'Uncategorized', 1, '2026-09-24 13:57:47.628', '2026-09-24 13:57:47.628');
+  insertProject.run(UNCATEGORIZED_PROJECT_ID, 'Uncategorized', 0, '2026-09-24 13:57:47.628', '2026-09-24 13:57:47.628');
+  insertProject.run(SYSTEM_PROJECT_ID, 'Scape internals', 1, '2026-09-24 13:57:47.628', '2026-09-24 13:57:47.628');
 
   const lexicalBody = JSON.stringify({ root: { type: 'root', children: [{ type: 'paragraph', children: [{ type: 'text', text: 'lexical hello', format: 0 }] }] } });
   const insertNote = db.prepare('INSERT INTO notes (id, title, content, createdAt, updatedAt, noteNumber, contentFormat, isShared) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
@@ -114,8 +116,29 @@ function seedDatastoreFile(path: string): void {
   insertChange.run(BACKLOG_STORE_ID, BACKLOG_ROW_ID, 'insert', null, JSON.stringify({ [columnKey(TITLE_COLUMN_ID)]: 'first task', [columnKey(STATUS_COLUMN_ID)]: STATUS_TODO_OPTION_ID }), 'mcp', UNIX_SECONDS);
   insertChange.run(BACKLOG_STORE_ID, BACKLOG_ROW_ID, 'update', JSON.stringify({ [columnKey(STATUS_COLUMN_ID)]: STATUS_TODO_OPTION_ID }), JSON.stringify({ [columnKey(STATUS_COLUMN_ID)]: STATUS_DONE_OPTION_ID }), 'mcp', UNIX_SECONDS + 5);
   insertChange.run(BACKLOG_STORE_ID, 'R0000009-0000-0000-0000-000000000009', 'delete', JSON.stringify({ [columnKey(TITLE_COLUMN_ID)]: 'gone' }), null, 'mcp', UNIX_SECONDS + 6);
+  const unchangedTitle = JSON.stringify({ [columnKey(TITLE_COLUMN_ID)]: 'first task' });
+  insertChange.run(BACKLOG_STORE_ID, BACKLOG_ROW_ID, 'update', unchangedTitle, unchangedTitle, 'mcp', UNIX_SECONDS + 7);
   db.close();
 }
+
+const withDatabase = (path: string, work: (db: DatabaseSync) => void) => {
+  const db = new DatabaseSync(path);
+  try {
+    work(db);
+  } finally {
+    db.close();
+  }
+};
+
+/** Runs statements against the fixture's notes.sqlite (a test changing Scape between two imports). */
+export const editScapeNotes = (fixture: ScapeFixture, work: (db: DatabaseSync) => void) => withDatabase(join(fixture.scapeDir, 'notes.sqlite'), work);
+
+/** Runs statements against the fixture's CCM datastore file. */
+export const editScapeDatastore = (fixture: ScapeFixture, work: (db: DatabaseSync) => void) =>
+  withDatabase(join(fixture.scapeDir, 'datastores', `${CCM_PROJECT_ID}.sqlite`), work);
+
+export const scapeBacklogTable = storeTable(BACKLOG_STORE_ID);
+export const scapeTitleCellKey = columnKey(TITLE_COLUMN_ID);
 
 /** Builds a synthetic Scape home (notes.sqlite + datastores/*.sqlite) in a fresh temp dir; holds no real Scape content. */
 export function buildScapeFixture(): ScapeFixture {

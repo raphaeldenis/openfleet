@@ -1,7 +1,9 @@
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { basename, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { ScapeImportError } from './scapeImportError.js';
+import { snapshotSqliteDatabase } from './sqliteSnapshot.js';
 
 const NOTES_DATABASE_NAME = 'notes.sqlite';
 const DATASTORES_FOLDER_NAME = 'datastores';
@@ -24,28 +26,34 @@ const storeTableName = (storeId: string) => `store_${withoutHyphens(storeId)}`;
 /** The key a cell of a Scape datastore file carries for a column id. */
 export const cellKeyOf = (columnId: string) => `${CELL_KEY_PREFIX}${withoutHyphens(columnId)}`;
 
-function openReadOnly(path: string): DatabaseSync {
-  try {
-    return new DatabaseSync(path, { readOnly: true });
-  } catch (cause) {
-    throw new ScapeImportError({ code: 'SCAPE_SOURCE_UNREADABLE', message: `cannot open ${path} read-only`, cause });
-  }
-}
-
-/** Reads a Scape home through read-only connections: nothing here can write to it. */
+/**
+ * Reads a snapshot of a Scape home: each database is copied once to a temp folder and read there, so the
+ * Scape files are never opened for writing, no file appears beside them, and the rows and the change log
+ * of a store come from the same moment.
+ */
 export class ScapeSource {
+  private readonly scratchDir = mkdtempSync(join(tmpdir(), 'openfleet-scape-snapshot-'));
   private readonly notesDb: DatabaseSync;
   private readonly datastoreDbs = new Map<string, DatabaseSync | null>();
 
   constructor(private readonly scapeDir: string) {
     const notesPath = join(scapeDir, NOTES_DATABASE_NAME);
-    if (!existsSync(notesPath)) throw new ScapeImportError({ code: 'SCAPE_SOURCE_MISSING', message: `no ${NOTES_DATABASE_NAME} in ${scapeDir}` });
-    this.notesDb = openReadOnly(notesPath);
+    if (!existsSync(notesPath)) {
+      this.close();
+      throw new ScapeImportError({ code: 'SCAPE_SOURCE_MISSING', message: `no ${NOTES_DATABASE_NAME} in ${scapeDir}` });
+    }
+    try {
+      this.notesDb = this.openSnapshotOf(notesPath);
+    } catch (cause) {
+      this.close();
+      throw cause;
+    }
   }
 
   close(): void {
-    this.notesDb.close();
+    this.notesDb?.close();
     this.datastoreDbs.forEach((db) => db?.close());
+    rmSync(this.scratchDir, { recursive: true, force: true });
   }
 
   projects(): ScapeProject[] {
@@ -101,9 +109,19 @@ export class ScapeSource {
   private datastoreOf(projectId: string): DatabaseSync | null {
     if (this.datastoreDbs.has(projectId)) return this.datastoreDbs.get(projectId) ?? null;
     const path = join(this.scapeDir, DATASTORES_FOLDER_NAME, `${projectId}.sqlite`);
-    const db = existsSync(path) ? openReadOnly(path) : null;
+    const db = existsSync(path) ? this.openSnapshotOf(path) : null;
     this.datastoreDbs.set(projectId, db);
     return db;
+  }
+
+  private openSnapshotOf(sourcePath: string): DatabaseSync {
+    const targetPath = join(this.scratchDir, `${this.datastoreDbs.size}-${basename(sourcePath)}`);
+    try {
+      snapshotSqliteDatabase({ sourcePath, targetPath });
+      return new DatabaseSync(targetPath);
+    } catch (cause) {
+      throw new ScapeImportError({ code: 'SCAPE_SOURCE_UNREADABLE', message: `cannot snapshot ${sourcePath}: ${(cause as Error).message}`, cause });
+    }
   }
 
   private query(sql: string, ...params: string[]): Record<string, unknown>[] {

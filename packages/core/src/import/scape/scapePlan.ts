@@ -11,7 +11,7 @@ export interface PlannedRecord<Extra = object> { id: string; record: RecordValue
 /** Everything a run intends to write, computed from the Scape sources before any write. */
 export interface ImportPlan {
   projects: PlannedRecord<{ projectName: string; hasDocsFolder: boolean }>[];
-  notes: PlannedRecord<{ unconvertedTypes: string[] }>[];
+  notes: PlannedRecord<{ unconvertedTypes: string[]; currentVersionId: string }>[];
   noteVersions: PlannedRecord<{ unconvertedTypes: string[] }>[];
   dataStores: PlannedRecord[];
   columns: PlannedRecord[];
@@ -19,6 +19,7 @@ export interface ImportPlan {
   skippedViewCount: number;
   rows: PlannedRecord<{ hasStaleSelectValue: boolean }>[];
   history: PlannedRecord[];
+  skippedHistoryCount: number;
 }
 
 export interface PlanOptions { projectName: string | undefined; superpowersRoot: string }
@@ -42,16 +43,17 @@ function selectProjects(source: ScapeSource, projectName: string | undefined): S
   return selected;
 }
 
-const emptyPlan = (): ImportPlan => ({ projects: [], notes: [], noteVersions: [], dataStores: [], columns: [], views: [], skippedViewCount: 0, rows: [], history: [] });
+const emptyPlan = (): ImportPlan => ({ projects: [], notes: [], noteVersions: [], dataStores: [], columns: [], views: [], skippedViewCount: 0, rows: [], history: [], skippedHistoryCount: 0 });
 
 function planNotes(plan: ImportPlan, source: ScapeSource, project: ScapeProject): void {
   for (const note of source.notesOf(project.id)) {
     const versions = mapVersions(source.versionsOf(note.id));
     const mapped = mapNote(note, versions.length);
-    plan.notes.push({ id: note.id, record: mapped.record, extra: { unconvertedTypes: mapped.unconvertedTypes } });
+    plan.notes.push({ id: note.id, record: mapped.record, extra: { unconvertedTypes: mapped.unconvertedTypes, currentVersionId: mapped.currentVersion.id } });
     for (const version of versions) {
       plan.noteVersions.push({ id: version.id, record: version.record, extra: { unconvertedTypes: version.unconvertedTypes } });
     }
+    plan.noteVersions.push({ id: mapped.currentVersion.id, record: mapped.currentVersion.record, extra: { unconvertedTypes: mapped.unconvertedTypes } });
   }
 }
 
@@ -93,6 +95,7 @@ function planStores(plan: ImportPlan, source: ScapeSource, project: ScapeProject
     }
     for (const change of source.changesOf(store)) {
       const mapped = mapChange(change, cellColumns);
+      if (mapped === undefined) { plan.skippedHistoryCount++; continue; }
       plan.history.push({ id: mapped.id, record: mapped.record, extra: {} });
     }
   }

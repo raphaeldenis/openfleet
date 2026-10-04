@@ -4,7 +4,7 @@ import { cellKeyOf, type ScapeColumn, type ScapeNote, type ScapeNoteVersion, typ
 import { scapeNotesDateToIso, unixSecondsToIso } from './scapeTime.js';
 
 export const IMPORT_AUTHOR = 'scape-import';
-const ACTOR_LABEL_PREFIX = 'scape-import:';
+export const ACTOR_LABEL_PREFIX = 'scape-import:';
 const EMPTY_LEXICAL_DOCUMENT = '{}';
 const PLAN_NOTE_TITLE = /^Plan CCM-/;
 const FORGE_REPORT_NOTE_TITLE = /^Forge report/;
@@ -25,15 +25,33 @@ export type ColumnsByCellKey = Map<string, MappedColumn>;
 
 const unreadable = (message: string) => new ScapeImportError({ code: 'SCAPE_SOURCE_UNREADABLE', message });
 
+function parseJson<T>(text: string, whatIsParsed: string): T {
+  try {
+    return JSON.parse(text) as T;
+  } catch (cause) {
+    throw new ScapeImportError({ code: 'SCAPE_SOURCE_UNREADABLE', message: `${whatIsParsed} is not valid JSON`, cause });
+  }
+}
+
+const convertLexical = (content: string) => {
+  try {
+    const { markdown, unconvertedTypes } = convertLexicalToMarkdown(content);
+    return { markdown, unconvertedTypes };
+  } catch (cause) {
+    throw new ScapeImportError({ code: 'SCAPE_SOURCE_UNREADABLE', message: `a lexical document cannot be read: ${(cause as Error).message}`, cause });
+  }
+};
+
 const bodyMarkdownOf = (input: { content: string; contentFormat: string }): { markdown: string; unconvertedTypes: string[] } => {
   const looksLikeLexicalJson = input.content.trimStart().startsWith('{');
   const isLexical = input.contentFormat === 'lexical' && looksLikeLexicalJson;
   if (!isLexical) return { markdown: input.content, unconvertedTypes: [] };
   const isEmptyDocument = input.content.trim() === EMPTY_LEXICAL_DOCUMENT;
   if (isEmptyDocument) return { markdown: '', unconvertedTypes: [] };
-  const { markdown, unconvertedTypes } = convertLexicalToMarkdown(input.content);
-  return { markdown, unconvertedTypes };
+  return convertLexical(input.content);
 };
+
+export const currentVersionIdOf = (noteId: string, rev: number) => `${noteId}@rev${rev}`;
 
 const folderOf = (title: string): 'plans' | 'reports' | null => {
   if (PLAN_NOTE_TITLE.test(title)) return 'plans';
@@ -41,19 +59,26 @@ const folderOf = (title: string): 'plans' | 'reports' | null => {
   return null;
 };
 
+/** The note at rev n+1 (n Scape versions) and the version row holding its current body, as OpenFleet keeps one version per rev. */
 export function mapNote(note: ScapeNote, versionCount: number) {
   const body = bodyMarkdownOf(note);
+  const rev = versionCount + 1;
+  const updatedAt = scapeNotesDateToIso(note.updatedAt);
   const record = {
     project_id: note.projectId,
     title: note.title,
     body_md: body.markdown,
     folder: folderOf(note.title),
-    rev: versionCount + 1,
+    rev,
     shared: note.isShared ? 1 : 0,
     created_at: scapeNotesDateToIso(note.createdAt),
-    updated_at: scapeNotesDateToIso(note.updatedAt),
+    updated_at: updatedAt,
   };
-  return { record, unconvertedTypes: body.unconvertedTypes };
+  const currentVersion = {
+    id: currentVersionIdOf(note.id, rev),
+    record: { note_id: note.id, rev, body_md: body.markdown, author: IMPORT_AUTHOR, change_summary: 'current', created_at: updatedAt },
+  };
+  return { record, currentVersion, unconvertedTypes: body.unconvertedTypes };
 }
 
 /** Versions ordered by creation date get the revs 1..n. */
@@ -77,7 +102,7 @@ export function mapVersions(versions: ScapeNoteVersion[]) {
 
 function parseSelectOptions(rawOptions: string | null): SelectOption[] | null {
   if (rawOptions === null) return null;
-  const parsed = JSON.parse(rawOptions) as { id: string; label: string }[];
+  const parsed = parseJson<{ id: string; label: string }[]>(rawOptions, 'a column options list');
   return parsed.length === 0 ? null : parsed.map(({ id, label }) => ({ id, label }));
 }
 
@@ -113,7 +138,7 @@ export function mapRow(row: ScapeRow, columns: ColumnsByCellKey) {
   return { record, hasStaleSelectValue };
 }
 
-const parseValues = (json: string | null): Record<string, unknown> => (json === null ? {} : (JSON.parse(json) as Record<string, unknown>));
+const parseValues = (json: string | null): Record<string, unknown> => (json === null ? {} : parseJson<Record<string, unknown>>(json, 'a row change log value'));
 
 function updateDiffOf(change: ScapeRowChange, columns: ColumnsByCellKey): Record<string, { from: unknown; to: unknown }> {
   const oldValues = parseValues(change.oldValues);
@@ -129,8 +154,11 @@ function updateDiffOf(change: ScapeRowChange, columns: ColumnsByCellKey): Record
   return diff;
 }
 
+/** Returns undefined for an update that changed no value: it has nothing to tell. */
 export function mapChange(change: ScapeRowChange, columns: ColumnsByCellKey) {
   const changeBody = change.kind === 'insert' ? { kind: 'create' } : change.kind === 'delete' ? { kind: 'delete' } : updateDiffOf(change, columns);
+  const isUpdateWithoutChange = Object.keys(changeBody).length === 0;
+  if (isUpdateWithoutChange) return undefined;
   return {
     id: `${change.storeId}#${change.seq}`,
     record: {
@@ -146,7 +174,7 @@ export function mapChange(change: ScapeRowChange, columns: ColumnsByCellKey) {
 
 /** Returns undefined for a kanban view whose group-by column is not a select column of the store: it cannot be rendered. */
 export function mapView(view: ScapeView, columns: MappedColumn[]) {
-  const scapeConfig = JSON.parse(view.config) as Record<string, unknown>;
+  const scapeConfig = parseJson<Record<string, unknown>>(view.config, `the config of view ${view.id}`);
   const isKanban = view.viewType === 'kanban';
   const groupByColumnId = typeof scapeConfig.groupByColumnID === 'string' ? scapeConfig.groupByColumnID : undefined;
   const groupByColumn = columns.find((column) => column.id === groupByColumnId);
