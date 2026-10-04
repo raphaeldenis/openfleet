@@ -147,6 +147,15 @@ describe('AppShellComponent', () => {
     expect(tables.getAttribute('href')).toBe('/tables');
   });
 
+  it('counts a context notice of an open session in the sidebar Inbox badge, and ignores the one of a closed session', async () => {
+    const openSession = { id: 's1', name: 'Gimli', state: 'idle', contextNoticeTokens: 300_000 };
+    const closedSession = { id: 's2', name: 'Legolas', state: 'closed', contextNoticeTokens: 400_000 };
+
+    const { root } = await setUp({ sessions: [openSession, closedSession] });
+
+    expect(root.querySelector('[data-testid="nav-inbox-badge"]')).toHaveTextContent('1');
+  });
+
   it('drops the sidebar Inbox badge count when the Inbox dismisses an already-resolved gate', async () => {
     // Arrange
     const events = fakeEvents({
