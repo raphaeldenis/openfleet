@@ -10,6 +10,7 @@
   "scripts": {
     "test": "vitest run",
     "typecheck": "pnpm -r --filter './packages/*' exec tsc --noEmit && pnpm --filter @openfleet/desktop exec tsc -p tsconfig.app.json --noEmit",
+    "arch": "depcruise packages/core/src packages/shared/src apps/desktop/src --config .dependency-cruiser.cjs --ts-pre-compilation-deps --ignore-known .dependency-cruiser-known-violations.json",
     "dev:core": "pnpm --filter @openfleet/core dev",
     "dev:desktop": "pnpm --filter @openfleet/desktop tauri dev",
     "dev": "concurrently -k \"pnpm dev:core\" \"pnpm dev:desktop\"",
@@ -22,6 +23,7 @@
   "devDependencies": {
     "@types/node": "^26.0.0",
     "concurrently": "^10.0.5",
+    "dependency-cruiser": "^18.5.0",
     "husky": "^9.1.7",
     "typescript": "^5.9.0",
     "vitest": "^4.0.0"
