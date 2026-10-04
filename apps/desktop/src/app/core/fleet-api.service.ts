@@ -1,7 +1,7 @@
 import { Injectable } from '@angular/core';
 import { DIAGNOSTICS_PATH, isErrorEnvelope } from '@openfleet/shared';
 import type {
-  Approval, CloseHandoffResult, CloseSessionRequest, CreateNoteRequest, CreateProjectRequest, DataStore, DataStoreDetail, DiagnosticsDocument, DsRow, DsRowHistoryEntry, DsView, ErrorEnvelope, HandoffPreview, HandoffTarget, HarnessId, NoteSummary,
+  Approval, CloseHandoffResult, CloseSessionRequest, CreateNoteRequest, CreateProjectRequest, DataStore, DataStoreDetail, DiagnosticsDocument, DsRow, DsRowHistoryEntry, DsView, ErrorEnvelope, HandoffPreview, HandoffSummary, HandoffTarget, HarnessId, NoteSummary,
   NoteVersionSummary, NoteView, OrderTerm, Page, PermissionMode, Project, RestoreNoteRequest, Session, SessionSpec, SessionTodos,
   UpdateNoteRequest, UpdateProjectRequest, WhereClause,
 } from '@openfleet/shared';
@@ -42,6 +42,18 @@ const REQUEST_TIMEOUT_MS = 60_000;
 
 @Injectable({ providedIn: 'root' })
 export class FleetApiService {
+  async listHandoffs(projectId: string): Promise<Page<HandoffSummary>> {
+    const items: HandoffSummary[] = [];
+    let offset = 0;
+    let total = 0;
+    do {
+      const page = await this.call<Page<HandoffSummary>>(`/api/projects/${encodeURIComponent(projectId)}/handoffs${queryString({ limit: LIST_PAGE_LIMIT, offset })}`);
+      items.push(...page.items);
+      total = page.total;
+      offset += LIST_PAGE_LIMIT;
+    } while (offset < total);
+    return { items, total: items.length, limit: LIST_PAGE_LIMIT, offset: 0 };
+  }
   // ponytail: fetch over HttpClient — no interceptors needed yet
   private async call<T>(path: string, init: RequestInit = {}): Promise<T> {
     const requestTimeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
