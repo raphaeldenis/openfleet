@@ -1,5 +1,5 @@
 import {
-  closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync,
+  accessSync, closeSync, constants, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync,
   realpathSync, renameSync, unlinkSync, watch, writeFileSync,
 } from 'node:fs';
 import { dirname } from 'node:path';
@@ -19,6 +19,14 @@ export const nodeDocsFolderFs: DocsFolderFs = {
   existsSync: (path) => existsSync(path),
   mkdirSync: (path) => mkdirSync(path, { recursive: true }),
   realpathSync: (path) => realpathSync(path),
+  isWritableSync: (dirPath) => {
+    try {
+      accessSync(dirPath, constants.W_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  },
   listFilesSync: (dirPath) => {
     try {
       return readdirSync(dirPath);
