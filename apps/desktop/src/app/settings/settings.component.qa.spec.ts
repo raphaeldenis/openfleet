@@ -289,7 +289,7 @@ describe('SettingsComponent — Daemon tab', () => {
 
     await openDaemonTab();
 
-    expect(screen.getByTestId('daemon-log-path')).toHaveTextContent('~/.openfleet/logs/daemon.log');
+    expect(screen.getByTestId('daemon-log-path')).toHaveTextContent('~/.openfleet/logs/desktop.log');
   });
 
   it('exposes the token status in no title, aria-label, aria-description or value attribute', async () => {

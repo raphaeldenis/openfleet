@@ -5,7 +5,7 @@ import { SettingsSectionComponent } from './settings-section.component';
 import { SETTINGS_VALUE_STYLES } from './settings-value-styles';
 
 /** Where the desktop app writes the daemon log when `OPENFLEET_HOME` is not set. */
-export const DAEMON_LOG_PATH = '~/.openfleet/logs/daemon.log';
+export const DAEMON_LOG_PATH = '~/.openfleet/logs/desktop.log';
 
 /** Where the daemon reads its hand-edited configuration when `OPENFLEET_HOME` is not set. */
 const DAEMON_CONFIG_PATH = '~/.openfleet/config.json';

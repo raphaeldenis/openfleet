@@ -1,5 +1,6 @@
 use crate::admin_token::openfleet_home_dir;
-use crate::redaction::redact;
+use crate::event_log::{Bool, DaemonLineAssembler, DesktopEvent, IoFailure, Opaque, Salt, SanitizedLine, Stream, Ts, Count};
+use std::ffi::OsStr;
 use std::io::{self, Write};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
@@ -10,17 +11,12 @@ use std::time::{Duration, Instant};
 
 pub const MAX_LOG_BYTES: u64 = 5 * 1024 * 1024;
 pub const KEPT_FILES: usize = 3;
-pub const LOG_FILE_NAME: &str = "daemon.log";
+pub const LOG_FILE_NAME: &str = "desktop.log";
+const LEGACY_LOG_FILE_NAME: &str = "daemon.log";
 const CHANNEL_CAPACITY: usize = 2048;
 const PRIVATE_DIR_MODE: u32 = 0o700;
 const PRIVATE_FILE_MODE: u32 = 0o600;
-const SECONDS_PER_DAY: u64 = 86_400;
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Stream {
-  Out,
-  Err,
-}
+const CLOSE_POLL_INTERVAL: Duration = Duration::from_millis(1);
 
 /// The filesystem operations rotation needs; the seam that lets rotation run against a fake.
 pub trait LogFs {
@@ -75,7 +71,7 @@ impl<F: LogFs> RotatingLog<F> {
   }
 
   /// Writes the line and a newline; a failing rotation is skipped, never raised.
-  pub fn append_line(&mut self, line: &str) -> io::Result<()> {
+  pub fn append_line(&mut self, line: &SanitizedLine) -> io::Result<()> {
     let bytes = self.line_bytes(line);
     let would_pass_the_limit = self.size + bytes.len() as u64 > self.max_bytes;
     let has_content_to_rotate = self.size > 0;
@@ -87,10 +83,12 @@ impl<F: LogFs> RotatingLog<F> {
     Ok(())
   }
 
-  fn line_bytes(&self, line: &str) -> Vec<u8> {
+  /// A line is ASCII by the grammar, so the cut that keeps the file within its limit never splits a character.
+  fn line_bytes(&self, line: &SanitizedLine) -> Vec<u8> {
     let room_for_the_text = self.max_bytes.saturating_sub(1) as usize;
-    let text = truncated_at_char_boundary(line, room_for_the_text);
-    format!("{text}\n").into_bytes()
+    let text = line.as_str().as_bytes();
+    let kept_text = &text[..room_for_the_text.min(text.len())];
+    [kept_text, b"\n"].concat()
   }
 
   // ponytail: when the current file cannot be renamed it keeps growing past the limit until a rename works again.
@@ -115,51 +113,13 @@ fn numbered(path: &Path, generation: usize) -> PathBuf {
   PathBuf::from(name)
 }
 
-fn truncated_at_char_boundary(text: &str, max_bytes: usize) -> &str {
-  let mut end = max_bytes.min(text.len());
-  while !text.is_char_boundary(end) {
-    end -= 1;
-  }
-  &text[..end]
-}
-
-/// Returns the line as the log stores it: `<ts> [out|err] <line>`, a daemon NDJSON line untouched.
-pub fn format_line(stream: Stream, line: &str, unix_seconds: u64) -> String {
-  let is_daemon_ndjson_line = serde_json::from_str::<serde_json::Value>(line.trim()).is_ok_and(|value| value.is_object());
-  if is_daemon_ndjson_line {
-    return line.to_string();
-  }
-  let stream_label = match stream {
-    Stream::Out => "out",
-    Stream::Err => "err",
-  };
-  format!("{} [{stream_label}] {line}", iso_utc(unix_seconds))
-}
-
-/// Formats seconds since the epoch as `YYYY-MM-DDTHH:MM:SSZ` (civil-from-days, proleptic Gregorian).
-fn iso_utc(unix_seconds: u64) -> String {
-  let seconds_of_day = unix_seconds % SECONDS_PER_DAY;
-  let days_since_epoch = (unix_seconds / SECONDS_PER_DAY) as i64;
-  let shifted_days = days_since_epoch + 719_468;
-  let era = shifted_days.div_euclid(146_097);
-  let day_of_era = shifted_days.rem_euclid(146_097);
-  let year_of_era = (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-  let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-  let month_index = (5 * day_of_year + 2) / 153;
-  let day = day_of_year - (153 * month_index + 2) / 5 + 1;
-  let month = if month_index < 10 { month_index + 3 } else { month_index - 9 };
-  let year = year_of_era + era * 400 + i64::from(month <= 2);
-  let (hour, minute, second) = (seconds_of_day / 3_600, seconds_of_day % 3_600 / 60, seconds_of_day % 60);
-  format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
-}
-
-/// Returns the last `count` lines of the log (topping up from `path.1`), redacted.
-pub fn last_redacted_lines(path: &Path, count: usize, secrets: &[String]) -> Vec<String> {
+/// Returns the last `count` lines of the log, topping up from `path.1`.
+pub fn last_lines(path: &Path, count: usize) -> Vec<String> {
   let current = lines_of(path);
   let rotated = if current.len() < count { lines_of(&numbered(path, 1)) } else { Vec::new() };
   let all_lines: Vec<String> = rotated.into_iter().chain(current).collect();
   let first_kept = all_lines.len().saturating_sub(count);
-  all_lines[first_kept..].iter().map(|line| redact(line, secrets)).collect()
+  all_lines[first_kept..].to_vec()
 }
 
 // ponytail: reads the whole file (at most 5 MB); seek from the end if this ever shows up in a profile.
@@ -168,35 +128,54 @@ fn lines_of(path: &Path) -> Vec<String> {
   String::from_utf8_lossy(&bytes).lines().map(str::to_string).collect()
 }
 
+/// Deletes `daemon.log`, `daemon.log.1`, … written by an earlier version: a pattern masker wrote them and they can hold secrets.
+pub fn delete_legacy_logs(logs_dir: &Path) {
+  let Ok(entries) = std::fs::read_dir(logs_dir) else { return };
+  for entry in entries.flatten().filter(|entry| is_legacy_log_name(&entry.file_name())) {
+    let _ = std::fs::remove_file(entry.path());
+  }
+}
+
+fn is_legacy_log_name(file_name: &OsStr) -> bool {
+  let Some(name) = file_name.to_str() else { return false };
+  let Some(suffix) = name.strip_prefix(LEGACY_LOG_FILE_NAME) else { return false };
+  let is_current_file = suffix.is_empty();
+  let is_rotated_generation = suffix.strip_prefix('.').is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit()));
+  is_current_file || is_rotated_generation
+}
+
+fn timestamp_at(unix_seconds: u64) -> Ts {
+  Ts::from_unix_seconds(unix_seconds).unwrap_or_else(|| Ts::from_unix_seconds(0).expect("the epoch is a valid timestamp"))
+}
+
 enum Message {
-  Line(Stream, String),
-  /// Stops the writer once every line queued before it is written, then acknowledges.
+  Event(Box<DesktopEvent>),
+  DaemonChunk(Stream, Vec<u8>),
+  /// Stops the writer once every message queued before it is written, then acknowledges.
   Close(mpsc::Sender<()>),
 }
 
-/// The admin token is checked again at most this often once one is known.
-const SECRET_CHECK_INTERVAL_SECONDS: u64 = 2;
-const MAX_SECRETS_KEPT: usize = 8;
-const CLOSE_POLL_INTERVAL: Duration = Duration::from_millis(1);
-
-/// The writer thread's state: rotating file, secrets to redact, and what it failed to write.
+/// The writer thread's state: rotating file, the line assemblers of the two daemon streams, and what it failed to write.
 struct LogWriter<F: LogFs> {
   log: RotatingLog<F>,
-  poll_secrets: Box<dyn FnMut() -> Option<Vec<String>> + Send>,
+  salt: Option<Arc<Salt>>,
   clock: Box<dyn Fn() -> u64 + Send>,
-  secrets: Vec<String>,
-  secrets_checked_at: Option<u64>,
-  lines_dropped_by_the_queue: Arc<AtomicU64>,
+  out_assembler: DaemonLineAssembler,
+  err_assembler: DaemonLineAssembler,
+  messages_dropped_by_the_queue: Arc<AtomicU64>,
   lines_lost_to_write_errors: u64,
-  last_write_error: Option<io::Error>,
+  last_write_failure: Option<IoFailure>,
 }
 
 impl<F: LogFs> LogWriter<F> {
   fn run(mut self, messages: mpsc::Receiver<Message>) {
     for message in messages {
       match message {
-        Message::Line(stream, line) => self.write(stream, &line),
+        Message::Event(event) => self.write_events(&[*event]),
+        Message::DaemonChunk(stream, bytes) => self.write_daemon_chunk(stream, &bytes),
         Message::Close(acknowledge) => {
+          self.write_unfinished_daemon_lines();
+          self.write_events(&[DesktopEvent::DaemonLogFlushed { drained: Bool(true) }]);
           let _ = acknowledge.send(());
           return;
         }
@@ -204,102 +183,115 @@ impl<F: LogFs> LogWriter<F> {
     }
   }
 
-  fn write(&mut self, stream: Stream, line: &str) {
-    let now = (self.clock)();
-    self.refresh_secrets(now);
+  fn write_daemon_chunk(&mut self, stream: Stream, bytes: &[u8]) {
+    let salt = self.salt.as_deref();
+    let assembler = match stream {
+      Stream::Out => &mut self.out_assembler,
+      Stream::Err => &mut self.err_assembler,
+    };
+    let events = assembler.push_chunk(bytes, salt);
+    self.write_events(&events);
+  }
+
+  fn write_unfinished_daemon_lines(&mut self) {
+    let salt = self.salt.as_deref();
+    let unfinished_events: Vec<DesktopEvent> = [&mut self.out_assembler, &mut self.err_assembler].into_iter().filter_map(|assembler| assembler.flush(salt)).collect();
+    self.write_events(&unfinished_events);
+  }
+
+  fn write_events(&mut self, events: &[DesktopEvent]) {
+    let now = timestamp_at((self.clock)());
     self.report_lost_lines(now);
-    let stored_line = format_line(stream, &redact(line, &self.secrets), now);
-    if let Err(error) = self.log.append_line(&stored_line) {
-      self.lines_lost_to_write_errors += 1;
-      self.last_write_error = Some(error);
+    for event in events {
+      self.append(&event.render(now));
     }
   }
 
-  /// Looks for a new admin token on every line while none is known (the file may appear after the first output), then every two seconds.
-  fn refresh_secrets(&mut self, now: u64) {
-    let no_secret_known_yet = self.secrets.is_empty();
-    let check_is_due = self.secrets_checked_at.map_or(true, |checked_at| now.saturating_sub(checked_at) >= SECRET_CHECK_INTERVAL_SECONDS);
-    if !(no_secret_known_yet || check_is_due) {
-      return;
-    }
-    self.secrets_checked_at = Some(now);
-    for secret in (self.poll_secrets)().unwrap_or_default() {
-      if !self.secrets.contains(&secret) {
-        self.secrets.push(secret);
+  fn append(&mut self, line: &SanitizedLine) -> bool {
+    match self.log.append_line(line) {
+      Ok(()) => true,
+      Err(error) => {
+        self.lines_lost_to_write_errors += 1;
+        self.last_write_failure = Some(IoFailure::of(&error));
+        false
       }
     }
-    let surplus = self.secrets.len().saturating_sub(MAX_SECRETS_KEPT);
-    self.secrets.drain(..surplus);
   }
 
   /// Writes one notice per cause; a count is cleared only once its notice is in the file.
-  fn report_lost_lines(&mut self, now: u64) {
-    let dropped = self.lines_dropped_by_the_queue.load(Ordering::SeqCst);
-    if dropped > 0 && self.append_notice(now, &format!("{dropped} lines dropped: the log writer fell behind")) {
-      self.lines_dropped_by_the_queue.fetch_sub(dropped, Ordering::SeqCst);
+  fn report_lost_lines(&mut self, now: Ts) {
+    let dropped = self.messages_dropped_by_the_queue.load(Ordering::SeqCst);
+    if dropped > 0 && self.append_notice(now, DesktopEvent::WriterDropped { count: Count(dropped) }) {
+      self.messages_dropped_by_the_queue.fetch_sub(dropped, Ordering::SeqCst);
     }
     if self.lines_lost_to_write_errors > 0 {
-      let cause = self.last_write_error.as_ref().map_or_else(String::new, |error| format!(" ({error})"));
-      let notice = format!("{} lines lost: could not write the log file{cause}", self.lines_lost_to_write_errors);
-      if self.append_notice(now, &notice) {
+      let failure = self.last_write_failure.unwrap_or_else(|| IoFailure::of(&io::Error::from(io::ErrorKind::Other)));
+      let notice = DesktopEvent::WriterLost { count: Count(self.lines_lost_to_write_errors), failure };
+      if self.append_notice(now, notice) {
         self.lines_lost_to_write_errors = 0;
-        self.last_write_error = None;
+        self.last_write_failure = None;
       }
     }
   }
 
-  fn append_notice(&mut self, now: u64, text: &str) -> bool {
-    self.log.append_line(&format!("{} [log] {text}", iso_utc(now))).is_ok()
+  fn append_notice(&mut self, now: Ts, notice: DesktopEvent) -> bool {
+    self.log.append_line(&notice.render(now)).is_ok()
   }
 }
 
-/// Hands daemon output to a writer thread; never blocks the caller and counts what it had to drop.
+/// Hands desktop events and daemon output to a writer thread; never blocks the caller and counts what it had to drop.
+/// The only way into the file is a typed event or a daemon chunk, which the writer projects onto the allowlist.
 #[derive(Clone)]
-pub struct DaemonLog {
+pub struct DesktopLog {
   sender: SyncSender<Message>,
-  lines_dropped_by_the_queue: Arc<AtomicU64>,
+  salt: Option<Arc<Salt>>,
+  messages_dropped_by_the_queue: Arc<AtomicU64>,
   output_ended: Arc<AtomicBool>,
 }
 
-impl DaemonLog {
-  /// `poll_secrets` returns the secrets to add when the admin token changed, None while it is as it was.
-  pub fn start<F: LogFs + Send + 'static>(
-    log: RotatingLog<F>,
-    poll_secrets: impl FnMut() -> Option<Vec<String>> + Send + 'static,
-    clock: impl Fn() -> u64 + Send + 'static,
-  ) -> Self {
-    Self::start_with_capacity(log, poll_secrets, clock, CHANNEL_CAPACITY)
+impl DesktopLog {
+  /// `salt` keys the tag of every free text; without one a text is reduced to its length.
+  pub fn start<F: LogFs + Send + 'static>(log: RotatingLog<F>, salt: Option<Salt>, clock: impl Fn() -> u64 + Send + 'static) -> Self {
+    Self::start_with_capacity(log, salt, clock, CHANNEL_CAPACITY)
   }
 
-  pub fn start_with_capacity<F: LogFs + Send + 'static>(
-    log: RotatingLog<F>,
-    poll_secrets: impl FnMut() -> Option<Vec<String>> + Send + 'static,
-    clock: impl Fn() -> u64 + Send + 'static,
-    capacity: usize,
-  ) -> Self {
+  pub fn start_with_capacity<F: LogFs + Send + 'static>(log: RotatingLog<F>, salt: Option<Salt>, clock: impl Fn() -> u64 + Send + 'static, capacity: usize) -> Self {
     let (sender, receiver) = sync_channel::<Message>(capacity);
-    let lines_dropped_by_the_queue = Arc::new(AtomicU64::new(0));
+    let salt = salt.map(Arc::new);
+    let messages_dropped_by_the_queue = Arc::new(AtomicU64::new(0));
     let writer = LogWriter {
       log,
-      poll_secrets: Box::new(poll_secrets),
+      salt: salt.clone(),
       clock: Box::new(clock),
-      secrets: Vec::new(),
-      secrets_checked_at: None,
-      lines_dropped_by_the_queue: lines_dropped_by_the_queue.clone(),
+      out_assembler: DaemonLineAssembler::new(Stream::Out),
+      err_assembler: DaemonLineAssembler::new(Stream::Err),
+      messages_dropped_by_the_queue: messages_dropped_by_the_queue.clone(),
       lines_lost_to_write_errors: 0,
-      last_write_error: None,
+      last_write_failure: None,
     };
     std::thread::spawn(move || writer.run(receiver));
-    Self { sender, lines_dropped_by_the_queue, output_ended: Arc::new(AtomicBool::new(false)) }
+    Self { sender, salt, messages_dropped_by_the_queue, output_ended: Arc::new(AtomicBool::new(false)) }
   }
 
-  /// Queues every non-blank line of a chunk of daemon output.
-  pub fn record(&self, stream: Stream, chunk: &str) {
-    for line in chunk.lines().filter(|line| !line.trim().is_empty()) {
-      let queue_is_full = matches!(self.sender.try_send(Message::Line(stream, line.to_string())), Err(TrySendError::Full(_)));
-      if queue_is_full {
-        self.lines_dropped_by_the_queue.fetch_add(1, Ordering::SeqCst);
-      }
+  /// Reduces a free text to its length and its tag under this install's salt.
+  pub fn opaque(&self, text: &[u8]) -> Opaque {
+    Opaque::of(text, self.salt.as_deref())
+  }
+
+  /// Queues an event; the writer stamps it with its clock.
+  pub fn record_event(&self, event: DesktopEvent) {
+    self.queue(Message::Event(Box::new(event)));
+  }
+
+  /// Queues a chunk of the daemon's output; the writer joins chunks into lines and logs each line projected onto the allowlist.
+  pub fn ingest_daemon_chunk(&self, stream: Stream, chunk: &[u8]) {
+    self.queue(Message::DaemonChunk(stream, chunk.to_vec()));
+  }
+
+  fn queue(&self, message: Message) {
+    let queue_is_full = matches!(self.sender.try_send(message), Err(TrySendError::Full(_)));
+    if queue_is_full {
+      self.messages_dropped_by_the_queue.fetch_add(1, Ordering::SeqCst);
     }
   }
 
@@ -317,7 +309,7 @@ impl DaemonLog {
     self.flush_and_close(timeout / 2)
   }
 
-  /// Drains the queue and stops the writer; false when it did not finish within `timeout`.
+  /// Drains the queue, writes the unfinished daemon lines and a `daemon_log_flushed` line, and stops the writer; false when it did not finish within `timeout`.
   pub fn flush_and_close(&self, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     let (acknowledge, acknowledged) = mpsc::channel();
@@ -339,17 +331,29 @@ impl DaemonLog {
   }
 }
 
+/// Starts the desktop log of an install: deletes the files an earlier version wrote, loads or creates the salt in `openfleet_home`,
+/// and appends to `<openfleet_home>/logs/desktop.log`.
+pub fn start_on_disk(openfleet_home: &Path, clock: impl Fn() -> u64 + Send + 'static) -> DesktopLog {
+  let logs_folder = openfleet_home.join("logs");
+  delete_legacy_logs(&logs_folder);
+  let salt = ensure_private_dir(openfleet_home).ok().and_then(|()| Salt::load_or_create(openfleet_home));
+  let rotating_log = RotatingLog::open(DiskFs, logs_folder.join(LOG_FILE_NAME), MAX_LOG_BYTES, KEPT_FILES);
+  DesktopLog::start(rotating_log, salt, clock)
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::linear_growth::{cpu_time_to_run_on_repeated, linear_growth_problems, thread_cpu_time_of, LinearGrowthBudget};
+  use crate::event_log::{DaemonTextClass, Pid, SALT_FILE_NAME};
   use std::collections::HashMap;
-  use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+  use std::sync::atomic::{AtomicUsize, Ordering};
   use std::sync::mpsc;
   use std::sync::Mutex;
-  use std::time::{Duration, Instant};
 
-  const LOG: &str = "/logs/daemon.log";
+  const LOG: &str = "/logs/desktop.log";
+  const EPOCH_PREFIX: &str = "1970-01-01T00:00:00Z";
+  /// `<ts> info daemon_stop_requested pid=N` plus its newline, for a one-digit pid.
+  const ONE_LINE_BYTES: u64 = 54;
 
   #[derive(Default)]
   struct FakeFs {
@@ -414,6 +418,28 @@ mod tests {
     }
   }
 
+  /// A folder under the system temp dir that is removed when the guard drops, whatever the test outcome.
+  struct ScratchFolder(PathBuf);
+
+  impl ScratchFolder {
+    fn new(name: &str) -> Self {
+      let folder = std::env::temp_dir().join(format!("of-log-file-{name}-{}", std::process::id()));
+      let _ = std::fs::remove_dir_all(&folder);
+      std::fs::create_dir_all(&folder).unwrap();
+      Self(folder)
+    }
+
+    fn path(&self) -> &Path {
+      &self.0
+    }
+  }
+
+  impl Drop for ScratchFolder {
+    fn drop(&mut self) {
+      let _ = std::fs::remove_dir_all(&self.0);
+    }
+  }
+
   fn rotating(fs: &Arc<FakeFs>, max_bytes: u64) -> RotatingLog<Arc<FakeFs>> {
     RotatingLog::open(fs.clone(), PathBuf::from(LOG), max_bytes, KEPT_FILES)
   }
@@ -426,11 +452,17 @@ mod tests {
     }
   }
 
-  fn scratch_folder(name: &str) -> PathBuf {
-    let folder = std::env::temp_dir().join(format!("of-log-file-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&folder);
-    std::fs::create_dir_all(&folder).unwrap();
-    folder
+  fn stop_requested(pid: u32) -> DesktopEvent {
+    DesktopEvent::DaemonStopRequested { pid: Pid(pid) }
+  }
+
+  /// The line the writer stores for `stop_requested(pid)` at the epoch.
+  fn stop_requested_line(pid: u32) -> SanitizedLine {
+    stop_requested(pid).render(timestamp_at(0))
+  }
+
+  fn stored_stop_requested(pid: u32) -> String {
+    format!("{EPOCH_PREFIX} info daemon_stop_requested pid={pid}")
   }
 
   // ---- rotation ----
@@ -438,77 +470,77 @@ mod tests {
   #[test]
   fn appends_lines_to_the_current_file() {
     let fs = Arc::new(FakeFs::default());
-    let mut log = rotating(&fs, 100);
+    let mut log = rotating(&fs, 1000);
 
-    log.append_line("one").unwrap();
-    log.append_line("two").unwrap();
+    log.append_line(&stop_requested_line(1)).unwrap();
+    log.append_line(&stop_requested_line(2)).unwrap();
 
-    assert_eq!(fs.lines(LOG), vec!["one", "two"]);
+    assert_eq!(fs.lines(LOG), vec![stored_stop_requested(1), stored_stop_requested(2)]);
   }
 
   #[test]
   fn keeps_writing_in_the_current_file_up_to_exactly_the_limit() {
     let fs = Arc::new(FakeFs::default());
-    let mut log = rotating(&fs, 8);
+    let mut log = rotating(&fs, 2 * ONE_LINE_BYTES);
 
-    log.append_line("abc").unwrap();
-    log.append_line("def").unwrap();
+    log.append_line(&stop_requested_line(1)).unwrap();
+    log.append_line(&stop_requested_line(2)).unwrap();
 
-    assert_eq!(fs.text(LOG), "abc\ndef\n");
-    assert!(!fs.exists("/logs/daemon.log.1"));
+    assert_eq!(fs.lines(LOG).len(), 2);
+    assert!(!fs.exists("/logs/desktop.log.1"));
   }
 
   #[test]
   fn rotates_before_the_line_that_would_pass_the_limit() {
     let fs = Arc::new(FakeFs::default());
-    let mut log = rotating(&fs, 8);
-    log.append_line("abc").unwrap();
-    log.append_line("def").unwrap();
+    let mut log = rotating(&fs, 2 * ONE_LINE_BYTES);
+    log.append_line(&stop_requested_line(1)).unwrap();
+    log.append_line(&stop_requested_line(2)).unwrap();
 
-    log.append_line("g").unwrap();
+    log.append_line(&stop_requested_line(3)).unwrap();
 
-    assert_eq!(fs.text(LOG), "g\n");
-    assert_eq!(fs.text("/logs/daemon.log.1"), "abc\ndef\n");
+    assert_eq!(fs.lines(LOG), vec![stored_stop_requested(3)]);
+    assert_eq!(fs.lines("/logs/desktop.log.1"), vec![stored_stop_requested(1), stored_stop_requested(2)]);
   }
 
   #[test]
   fn keeps_the_current_file_and_two_rotated_ones_and_drops_the_oldest() {
     let fs = Arc::new(FakeFs::default());
-    let mut log = rotating(&fs, 4);
+    let mut log = rotating(&fs, ONE_LINE_BYTES);
 
-    for line in ["aaa", "bbb", "ccc", "ddd"] {
-      log.append_line(line).unwrap();
+    for pid in 1..=4 {
+      log.append_line(&stop_requested_line(pid)).unwrap();
     }
 
-    assert_eq!(fs.text(LOG), "ddd\n");
-    assert_eq!(fs.text("/logs/daemon.log.1"), "ccc\n");
-    assert_eq!(fs.text("/logs/daemon.log.2"), "bbb\n");
-    assert!(!fs.exists("/logs/daemon.log.3"));
+    assert_eq!(fs.lines(LOG), vec![stored_stop_requested(4)]);
+    assert_eq!(fs.lines("/logs/desktop.log.1"), vec![stored_stop_requested(3)]);
+    assert_eq!(fs.lines("/logs/desktop.log.2"), vec![stored_stop_requested(2)]);
+    assert!(!fs.exists("/logs/desktop.log.3"));
   }
 
   #[test]
   fn resumes_from_the_size_of_an_existing_file() {
     let fs = Arc::new(FakeFs::default());
-    fs.seed(LOG, "abc\n");
-    let mut log = rotating(&fs, 8);
+    fs.seed(LOG, &format!("{}\n", stored_stop_requested(1)));
+    let mut log = rotating(&fs, 2 * ONE_LINE_BYTES);
 
-    log.append_line("def").unwrap();
-    log.append_line("g").unwrap();
+    log.append_line(&stop_requested_line(2)).unwrap();
+    log.append_line(&stop_requested_line(3)).unwrap();
 
-    assert_eq!(fs.text("/logs/daemon.log.1"), "abc\ndef\n");
+    assert_eq!(fs.lines("/logs/desktop.log.1"), vec![stored_stop_requested(1), stored_stop_requested(2)]);
   }
 
   #[test]
   fn a_failing_rename_neither_raises_nor_loses_the_line() {
     let fs = Arc::new(FakeFs::default());
-    let mut log = rotating(&fs, 4);
-    log.append_line("aaa").unwrap();
+    let mut log = rotating(&fs, ONE_LINE_BYTES);
+    log.append_line(&stop_requested_line(1)).unwrap();
     fs.rename_fails.store(true, Ordering::SeqCst);
 
-    let outcome = log.append_line("bbb");
+    let outcome = log.append_line(&stop_requested_line(2));
 
     assert!(outcome.is_ok());
-    assert_eq!(fs.text(LOG), "aaa\nbbb\n");
+    assert_eq!(fs.lines(LOG), vec![stored_stop_requested(1), stored_stop_requested(2)]);
   }
 
   #[test]
@@ -516,359 +548,48 @@ mod tests {
     let fs = Arc::new(FakeFs::default());
     let mut log = rotating(&fs, 10);
 
-    log.append_line(&"x".repeat(50)).unwrap();
+    log.append_line(&stop_requested_line(1)).unwrap();
 
-    assert_eq!(fs.text(LOG), format!("{}\n", "x".repeat(9)));
+    assert_eq!(fs.text(LOG), format!("{}\n", &EPOCH_PREFIX[..9]));
   }
+
+  // ---- reading the tail ----
 
   #[test]
-  fn a_cut_never_splits_a_multibyte_character() {
-    let fs = Arc::new(FakeFs::default());
-    let mut log = rotating(&fs, 10);
-
-    log.append_line(&"é".repeat(20)).unwrap();
-
-    assert_eq!(fs.text(LOG), format!("{}\n", "é".repeat(4)));
-  }
-
-  // ---- prefixing ----
-
-  #[test]
-  fn prefixes_a_plain_line_with_the_timestamp_and_the_stream() {
-    assert_eq!(format_line(Stream::Out, "hello", 0), "1970-01-01T00:00:00Z [out] hello");
-    assert_eq!(format_line(Stream::Err, "boom", 1_700_000_000), "2023-11-14T22:13:20Z [err] boom");
-  }
-
-  #[test]
-  fn keeps_a_daemon_ndjson_line_intact() {
-    let ndjson = r#"{"ts":"2026-09-30T10:00:00.000Z","level":"info","msg":"listening"}"#;
-
-    assert_eq!(format_line(Stream::Out, ndjson, 0), ndjson);
-  }
-
-  #[test]
-  fn prefixes_a_line_that_only_looks_like_json() {
-    assert_eq!(format_line(Stream::Err, "{ not json }", 0), "1970-01-01T00:00:00Z [err] { not json }");
-  }
-
-  // ---- redaction ----
-
-  #[test]
-  fn redacts_the_admin_token_wherever_it_appears() {
-    let secrets = vec!["s3cr3t-admin-token".to_string()];
-
-    let line = redact("token=s3cr3t-admin-token and again s3cr3t-admin-token", &secrets);
-
-    assert_eq!(line, "token=[redacted] and again [redacted]");
-  }
-
-  #[test]
-  fn redacts_a_bearer_token_in_any_letter_case() {
-    assert_eq!(redact("Authorization: Bearer abc.DEF-123_x/y=", &[]), "Authorization: Bearer [redacted]");
-    assert_eq!(redact("authorization: bearer abc123", &[]), "authorization: Bearer [redacted]");
-  }
-
-  #[test]
-  fn redacts_a_hook_token_path_segment() {
-    assert_eq!(redact("POST /hooks/9f8e7d6c5b4a/pre-tool 200", &[]), "POST /hooks/[redacted]/pre-tool 200");
-  }
-
-  #[test]
-  fn leaves_a_line_without_secrets_alone() {
-    assert_eq!(redact("listening on 127.0.0.1:7331 (Bearer)", &[]), "listening on 127.0.0.1:7331 (Bearer)");
-  }
-
-  #[test]
-  fn ignores_a_secret_too_short_to_be_a_token() {
-    assert_eq!(redact("a b c", &["a".to_string(), String::new()]), "a b c");
-  }
-
-  #[test]
-  fn redaction_is_idempotent() {
-    let once = redact("Bearer abc123 /hooks/tok123", &[]);
-
-    assert_eq!(redact(&once, &[]), once);
-  }
-
-  // ---- redaction parity with packages/core/src/redact.ts ----
-
-  fn leaked_by(text: &str, leaked: &str) -> bool {
-    redact(text, &[]).contains(leaked)
-  }
-
-  #[test]
-  fn masks_every_bearer_spelling_the_daemon_masks() {
-    let spellings = [
-      "Bearer s3cr3t.tok-EN",
-      "bearer s3cr3t.tok-EN",
-      "BEARER s3cr3t.tok-EN",
-      "Bearer   s3cr3t.tok-EN",
-      "Bearer\ts3cr3t.tok-EN",
-      "Bearer:s3cr3t.tok-EN",
-      "Bearer: s3cr3t.tok-EN",
-      "Bearer=s3cr3t.tok-EN",
-      "Bearer%20s3cr3t.tok-EN",
-      "bearer%20s3cr3t.tok-EN",
-      "Bearer%3As3cr3t.tok-EN",
-      "Bearer%253As3cr3t.tok-EN",
-      "B%65arer s3cr3t.tok-EN",
-      "Authorization:Bearer\ts3cr3t.tok-EN",
-    ];
-
-    let leaking: Vec<&str> = spellings.into_iter().filter(|text| leaked_by(&format!("call with {text} now"), "s3cr3t")).collect();
-
-    assert_eq!(leaking, Vec::<&str>::new());
-  }
-
-  #[test]
-  fn masks_the_whole_bearer_token_even_when_it_holds_percent_signs() {
-    let cases = [
-      ("Bearer abc%2Bdef", "abc", "def"),
-      ("Bearer abc%44EF123", "abc", "EF123"),
-      ("Bearer abc%ZZdef123", "abc", "def123"),
-    ];
-
-    for (text, head, tail) in cases {
-      let masked = redact(text, &[]);
-      assert!(!masked.contains(head) && !masked.contains(tail), "{text} became {masked}");
-    }
-  }
-
-  #[test]
-  fn masks_every_hook_token_spelling_the_daemon_masks() {
-    let spellings = [
-      "/hooks/t0k3nVALUE",
-      "http://127.0.0.1:7331/hooks/t0k3nVALUE/stop?x=1",
-      "%2Fhooks%2Ft0k3nVALUE",
-      "%2fhooks%2ft0k3nVALUE",
-      "/hooks%2Ft0k3nVALUE",
-      "%252Fhooks%252Ft0k3nVALUE",
-      "/HOOKS/t0k3nVALUE",
-      "/%68ooks/t0k3nVALUE",
-      "/hooks/%74t0k3nVALUE",
-      "/hooks/%2574t0k3nVALUE",
-    ];
-
-    let leaking: Vec<&str> = spellings.into_iter().filter(|text| leaked_by(&format!("posted to {text} now"), "t0k3nVALUE")).collect();
-
-    assert_eq!(leaking, Vec::<&str>::new());
-  }
-
-  #[test]
-  fn masks_the_characters_of_a_hook_token_written_with_escapes() {
-    assert!(!leaked_by("/hooks/abc%44EF123", "EF123"));
-    assert!(!leaked_by("/hooks/abc%ZZdef123", "def123"));
-    assert!(!leaked_by("/hooks%252Fabc%2544EF123", "EF123"));
-  }
-
-  #[test]
-  fn keeps_the_hooks_route_pattern_which_is_not_a_secret() {
-    assert_eq!(redact("POST /hooks/:token → 500", &[]), "POST /hooks/:token → 500");
-  }
-
-  #[test]
-  fn masks_a_basic_credential() {
-    let cases = [
-      ("Authorization: Basic dXNlcjpwYXNzd29yZA==", "dXNlcjpwYXNzd29yZA"),
-      ("sent Basic dXNlcjpwYXNz9 to the proxy", "dXNlcjpwYXNz9"),
-      ("failed with Authorization: Basic dXNlcjpwYXNz today", "dXNlcjpwYXNz"),
-      ("failed with Proxy-Authorization: Basic dXNlcjpwYXNz today", "dXNlcjpwYXNz"),
-      ("failed with authorization:Basic dXNlcjpwYXNz today", "dXNlcjpwYXNz"),
-    ];
-
-    for (text, credential) in cases {
-      let masked = redact(text, &[]);
-      assert!(!masked.contains(credential), "{text} became {masked}");
-      assert!(masked.contains("Basic [redacted]"), "{text} became {masked}");
-    }
-  }
-
-  #[test]
-  fn keeps_the_word_basic_in_prose() {
-    for sentence in ["Basic authentication failed", "the Basic plan costs more", "the Basic plan costs more than Basic support", "Basic setup failed"] {
-      assert_eq!(redact(sentence, &[]), sentence);
-    }
-  }
-
-  #[test]
-  fn masks_the_credentials_of_a_url() {
-    let masked = redact("connect https://admin:hunter2longpassword@host/path failed", &[]);
-
-    assert_eq!(masked, "connect https://[redacted]@host/path failed");
-  }
-
-  #[test]
-  fn masks_a_secret_named_query_or_parameter_value() {
-    let cases = [
-      "GET /x?token=t0k3nVALUE&page=2",
-      "GET /x?page=2&access_token=t0k3nVALUE",
-      "ws://127.0.0.1:7331/ws?ticket=t0k3nVALUE",
-      "GET /x?api_key=t0k3nVALUE",
-      "GET /x?api-key=t0k3nVALUE",
-      "GET /x?apiKey=t0k3nVALUE",
-      "GET /x?client_secret=t0k3nVALUE",
-      "GET /x?Authorization=t0k3nVALUE",
-      "GET /x?password=t0k3nVALUE",
-      "GET /x?cookie=t0k3nVALUE",
-      "GET /x;password=t0k3nVALUE",
-      "failed with token=t0k3nVALUE today",
-      "access_token=t0k3nVALUE",
-      "/x?%74oken=t0k3nVALUE",
-      "/x?to%6Ben=t0k3nVALUE",
-      "/x?%2574oken=t0k3nVALUE",
-      "/x?page=2&%70assword=t0k3nVALUE",
-      "/cb?next=%2Fx%3Ftoken%3Dt0k3nVALUE",
-      "/cb?next=%252Fx%253Ftoken%253Dt0k3nVALUE",
-    ];
-
-    let leaking: Vec<&str> = cases.into_iter().filter(|text| leaked_by(text, "t0k3nVALUE")).collect();
-
-    assert_eq!(leaking, Vec::<&str>::new());
-  }
-
-  #[test]
-  fn masks_a_secret_parameter_nested_inside_another_parameter_or_a_fragment() {
-    let cases = [
-      ("GET /cb?page=a?token=SECRETVAL1", "GET /cb?page=a?token=[redacted]"),
-      ("page=a?token=SECRETVAL1", "page=a?token=[redacted]"),
-      ("GET /cb?next=a?x=b?password=SECRETVAL1", "GET /cb?next=a?x=b?password=[redacted]"),
-      ("page=a#access_token=SECRETVAL1", "page=a#access_token=[redacted]"),
-      ("GET /cb#access_token=SECRETVAL1", "GET /cb#access_token=[redacted]"),
-      ("GET /cb#state=1&access_token=SECRETVAL1", "GET /cb#state=1&access_token=[redacted]"),
-      ("#token=SECRETVAL1", "#token=[redacted]"),
-      ("GET /x?password=ab?cdSECRETVAL1", "GET /x?password=[redacted]"),
-      ("GET /x?page=a?b=c?d=e?f=g?h=i?j=SECRETVAL1", "GET /x?page=[redacted]"),
-    ];
-
-    for (text, expected) in cases {
-      assert_eq!(redact(text, &[]), expected);
-    }
-  }
-
-  #[test]
-  fn still_checks_a_value_holding_exactly_four_nested_question_marks() {
-    assert_eq!(redact("page=a?b=c?d=e?f=g?token=SECRETVAL1", &[]), "page=a?b=c?d=e?f=g?token=[redacted]");
-  }
-
-  #[test]
-  fn masks_the_token_after_a_repeated_bearer_marker_followed_by_no_token_byte() {
-    assert_eq!(redact("Bearer Bearer !", &[]), "Bearer [redacted] !");
-  }
-
-  #[test]
-  fn keeps_a_url_whose_authority_starts_with_an_at_sign() {
-    assert_eq!(redact("GET ://@x", &[]), "GET ://@x");
-  }
-
-  #[test]
-  fn keeps_the_parameters_and_fragments_that_hold_no_secret() {
-    for text in ["GET /docs#section=intro", "GET /x?a=1?b=2", "GET /x?page=a#top", "see issue #42 and ?q=tokenless"] {
-      assert_eq!(redact(text, &[]), text);
-    }
-  }
-
-  #[test]
-  fn masks_the_token_behind_a_bearer_prefix_written_more_than_once() {
-    let cases = [
-      ("Authorization: Bearer Bearer SECRETVAL1", "Authorization: Bearer [redacted]"),
-      ("Authorization: bearer:BEARER=Bearer SECRETVAL1", "Authorization: Bearer [redacted]"),
-      ("Authorization: Bearer%20Bearer%20SECRETVAL1", "Authorization: Bearer [redacted]"),
-    ];
-
-    for (text, expected) in cases {
-      assert_eq!(redact(text, &[]), expected);
-    }
-    assert_eq!(redact("BearerAuth failed, a Bearer", &[]), "BearerAuth failed, a Bearer");
-  }
-
-  #[test]
-  fn masks_a_url_password_holding_a_raw_at_sign_up_to_the_last_at_sign_of_the_authority() {
-    assert_eq!(redact("connect https://u:p@ssSECRETVAL1@host/x failed", &[]), "connect https://[redacted]@host/x failed");
-    assert_eq!(redact("GET https://host/users/a@b", &[]), "GET https://host/users/a@b");
-  }
-
-  #[test]
-  fn keeps_the_other_query_parameters() {
-    assert_eq!(redact("GET /x?token=t0k3nVALUE&page=2", &[]), "GET /x?token=[redacted]&page=2");
-    assert_eq!(redact("GET /x?page=2&sort=asc", &[]), "GET /x?page=2&sort=asc");
-    assert!(redact("/cb?next=%2Fx%3Ftoken%3DabcDEF123&page=2", &[]).contains("&page=2"));
-  }
-
-  #[test]
-  fn masks_the_admin_token_in_its_percent_encoded_forms() {
-    let secrets = vec!["abc+def/ghi=jkl_mno".to_string()];
-
-    let masked = redact("a abc%2Bdef%2Fghi%3Djkl_mno b abc%2bdef%2fghi%3djkl_mno c %61%62%63%2B%64%65%66%2F%67%68%69%3D%6A%6B%6C%5F%6D%6E%6F", &secrets);
-
-    assert_eq!(masked, "a [redacted] b [redacted] c [redacted]");
-  }
-
-  #[test]
-  fn redaction_stays_idempotent_on_every_shape() {
-    let once = redact("Bearer:abc Basic dXNlcjpwYXNzd29yZA== https://u:p@h/ /x?token=t /hooks/tok", &[]);
-
-    assert_eq!(redact(&once, &[]), once);
-  }
-
-  #[test]
-  fn redacts_hostile_input_in_linear_time() {
-    const KIBIBYTE: usize = 1024;
-    const SMALL_INPUT: usize = 16 * KIBIBYTE;
-    const LARGE_INPUT: usize = 4 * SMALL_INPUT;
-    const MEBIBYTE: usize = 1024 * KIBIBYTE;
-    const GENEROUS_CEILING: Duration = Duration::from_secs(20);
-    let units = [
-      "?", "%", "%25", "/", "Bearer ", "/hooks/", "a", "&", "=", " ", "?a=%25/hooks/Bearer &Basic ", "://", "Basic ", "%2Fhooks%2F", "token=", "a=%3D",
-      "Bearer", "%42earer", "Basic/", "Basic+", "bearerx", "Authorization: Basic", "?a=", "page=a?", "a=?a=", "#a=", "a=#a=", "page=%25?", "a=%2F?#", "token=a?",
-      "Bearer Bearer ", "Bearer Bearer", "Bearer %42earer ", "://a@", "://a@@", "://@", "://a@a/",
-    ];
-    let secrets = vec!["s3cr3t-admin-token".to_string()];
-    for unit in units {
-      let cpu_time_to_redact = cpu_time_to_run_on_repeated(unit, |hostile| {
-        redact(hostile, &secrets);
-      });
-      let problems = linear_growth_problems(cpu_time_to_redact, &LinearGrowthBudget::between(SMALL_INPUT, LARGE_INPUT));
-      assert!(problems.is_empty(), "{unit:?}: {problems:?}");
-
-      let cpu_time_at_one_mebibyte = thread_cpu_time_of(|| {
-        redact(&unit.repeat(MEBIBYTE / unit.len() + 1), &secrets);
-      });
-      assert!(cpu_time_at_one_mebibyte < GENEROUS_CEILING, "{unit:?} x 1 MiB took {cpu_time_at_one_mebibyte:?}");
-    }
-  }
-
-  // ---- tail for the issue report ----
-
-  #[test]
-  fn returns_the_last_lines_redacted() {
-    let folder = scratch_folder("tail");
-    let path = folder.join(LOG_FILE_NAME);
+  fn returns_the_last_lines_as_stored() {
+    let folder = ScratchFolder::new("tail");
+    let path = folder.path().join(LOG_FILE_NAME);
     std::fs::write(&path, "first\nBearer abc123\nlast\n").unwrap();
 
-    let lines = last_redacted_lines(&path, 2, &[]);
+    let lines = last_lines(&path, 2);
 
-    assert_eq!(lines, vec!["Bearer [redacted]", "last"]);
-    std::fs::remove_dir_all(folder).unwrap();
+    assert_eq!(lines, vec!["Bearer abc123", "last"]);
   }
 
   #[test]
   fn tops_up_from_the_rotated_file_when_the_current_one_is_short() {
-    let folder = scratch_folder("topup");
-    std::fs::write(folder.join("daemon.log.1"), "old1\nold2\n").unwrap();
-    std::fs::write(folder.join(LOG_FILE_NAME), "new1\n").unwrap();
+    let folder = ScratchFolder::new("topup");
+    std::fs::write(folder.path().join("desktop.log.1"), "old1\nold2\n").unwrap();
+    std::fs::write(folder.path().join(LOG_FILE_NAME), "new1\n").unwrap();
 
-    let lines = last_redacted_lines(&folder.join(LOG_FILE_NAME), 3, &[]);
+    let lines = last_lines(&folder.path().join(LOG_FILE_NAME), 3);
 
     assert_eq!(lines, vec!["old1", "old2", "new1"]);
-    std::fs::remove_dir_all(folder).unwrap();
   }
 
   #[test]
   fn returns_nothing_when_there_is_no_log_yet() {
-    let folder = scratch_folder("nolog");
+    let folder = ScratchFolder::new("nolog");
 
-    assert!(last_redacted_lines(&folder.join(LOG_FILE_NAME), 50, &[]).is_empty());
-    std::fs::remove_dir_all(folder).unwrap();
+    assert!(last_lines(&folder.path().join(LOG_FILE_NAME), 50).is_empty());
+  }
+
+  #[test]
+  fn never_reads_the_files_of_an_earlier_version() {
+    let folder = ScratchFolder::new("legacy-unread");
+    std::fs::write(folder.path().join("daemon.log"), "an old masked line\n").unwrap();
+
+    assert!(last_lines(&folder.path().join(LOG_FILE_NAME), 50).is_empty());
   }
 
   // ---- location and permissions ----
@@ -882,8 +603,8 @@ mod tests {
   #[test]
   fn the_disk_log_is_private_to_the_owner() {
     use std::os::unix::fs::PermissionsExt;
-    let folder = scratch_folder("perms");
-    let logs = folder.join("logs");
+    let folder = ScratchFolder::new("perms");
+    let logs = folder.path().join("logs");
     let path = logs.join(LOG_FILE_NAME);
 
     DiskFs.append(&path, b"line\n").unwrap();
@@ -891,259 +612,237 @@ mod tests {
     assert_eq!(std::fs::metadata(&logs).unwrap().permissions().mode() & 0o777, 0o700);
     assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
     assert_eq!(DiskFs.size(&path).unwrap(), 5);
-    std::fs::remove_dir_all(folder).unwrap();
   }
 
   // ---- the writer ----
 
-  fn writer_over(fs: &Arc<FakeFs>, max_bytes: u64, secrets: Vec<String>, capacity: usize) -> DaemonLog {
-    let mut secrets_not_yet_polled = Some(secrets);
-    DaemonLog::start_with_capacity(rotating(fs, max_bytes), move || secrets_not_yet_polled.take(), || 0, capacity)
+  fn salt() -> Salt {
+    let home = ScratchFolder::new("salt");
+    Salt::load_or_create(home.path()).expect("a salt in a writable folder")
+  }
+
+  fn writer_over(fs: &Arc<FakeFs>, max_bytes: u64, salt: Option<Salt>, capacity: usize) -> DesktopLog {
+    DesktopLog::start_with_capacity(rotating(fs, max_bytes), salt, || 0, capacity)
+  }
+
+  fn ingest(log: &DesktopLog, stream: Stream, text: &str) {
+    log.ingest_daemon_chunk(stream, text.as_bytes());
   }
 
   #[test]
-  fn the_writer_prefixes_and_redacts_each_line_of_a_chunk() {
+  fn the_writer_projects_each_line_of_a_chunk_onto_the_allowlist_and_skips_blank_lines() {
     let fs = Arc::new(FakeFs::default());
-    let log = writer_over(&fs, 1000, vec!["s3cr3t-admin-token".to_string()], 16);
+    let log = writer_over(&fs, 100_000, None, 16);
 
-    log.record(Stream::Out, "hello\n\nworld s3cr3t-admin-token\n");
-    log.record(Stream::Err, "Bearer abc123");
+    ingest(&log, Stream::Out, "hello\n\n{\"level\":\"warn\",\"msg\":\"world\"}\n");
+    ingest(&log, Stream::Err, "Bearer abc123\n");
 
     wait_until(|| fs.lines(LOG).len() == 3);
     assert_eq!(
       fs.lines(LOG),
-      vec!["1970-01-01T00:00:00Z [out] hello", "1970-01-01T00:00:00Z [out] world [redacted]", "1970-01-01T00:00:00Z [err] Bearer [redacted]"]
+      vec![
+        format!("{EPOCH_PREFIX} info daemon_text stream=out class=other text=[text:5]"),
+        format!("{EPOCH_PREFIX} warn daemon_line msg=[text:5] extra_fields=0"),
+        format!("{EPOCH_PREFIX} warn daemon_text stream=err class=other text=[text:13]"),
+      ]
     );
+  }
+
+  #[test]
+  fn the_writer_joins_a_line_split_across_chunks_of_the_same_stream_only() {
+    let fs = Arc::new(FakeFs::default());
+    let log = writer_over(&fs, 100_000, None, 16);
+
+    ingest(&log, Stream::Out, "hel");
+    ingest(&log, Stream::Err, "boom\n");
+    ingest(&log, Stream::Out, "lo\n");
+
+    wait_until(|| fs.lines(LOG).len() == 2);
+    assert_eq!(
+      fs.lines(LOG),
+      vec![
+        format!("{EPOCH_PREFIX} warn daemon_text stream=err class=other text=[text:4]"),
+        format!("{EPOCH_PREFIX} info daemon_text stream=out class=other text=[text:5]"),
+      ]
+    );
+  }
+
+  #[test]
+  fn the_writer_tags_free_text_under_the_install_salt_and_never_stores_it() {
+    let fs = Arc::new(FakeFs::default());
+    let log = writer_over(&fs, 100_000, Some(salt()), 16);
+    let secret = "ghp_0123456789abcdefghijklmnopqrstuvwxyzAB";
+
+    ingest(&log, Stream::Err, &format!("{secret}\n"));
+    log.record_event(DesktopEvent::SidecarFailed { reason: log.opaque(secret.as_bytes()) });
+
+    wait_until(|| fs.lines(LOG).len() == 2);
+    let expected_tag = log.opaque(secret.as_bytes()).to_string();
+    assert_eq!(fs.lines(LOG)[0], format!("{EPOCH_PREFIX} warn daemon_text stream=err class=other text={expected_tag}"));
+    assert_eq!(fs.lines(LOG)[1], format!("{EPOCH_PREFIX} error sidecar_failed reason={expected_tag}"));
+    assert!(!fs.text(LOG).contains("ghp_"));
+  }
+
+  #[test]
+  fn a_typed_event_is_stored_with_the_writer_clock() {
+    let fs = Arc::new(FakeFs::default());
+    let log = DesktopLog::start_with_capacity(rotating(&fs, 100_000), None, || 1_700_000_000, 16);
+
+    log.record_event(DesktopEvent::DaemonExited { code: Some(crate::event_log::ExitCode(1)) });
+
+    wait_until(|| fs.lines(LOG).len() == 1);
+    assert_eq!(fs.lines(LOG), vec!["2023-11-14T22:13:20Z warn daemon_exited code=1"]);
   }
 
   #[test]
   fn interleaved_stdout_and_stderr_lines_stay_whole() {
     let fs = Arc::new(FakeFs::default());
-    let log = writer_over(&fs, 1_000_000, vec![], 4096);
+    let log = writer_over(&fs, 1_000_000, None, 4096);
     let out = log.clone();
     let err = log.clone();
 
-    let out_thread = std::thread::spawn(move || (0..200).for_each(|n| out.record(Stream::Out, &format!("out-line-{n}-{}", "o".repeat(40)))));
-    let err_thread = std::thread::spawn(move || (0..200).for_each(|n| err.record(Stream::Err, &format!("err-line-{n}-{}", "e".repeat(40)))));
+    let out_thread = std::thread::spawn(move || (0..200).for_each(|n| ingest(&out, Stream::Out, &format!("out-line-{n}-{}\n", "o".repeat(40)))));
+    let err_thread = std::thread::spawn(move || (0..200).for_each(|n| ingest(&err, Stream::Err, &format!("err-line-{n}-{}\n", "e".repeat(40)))));
     out_thread.join().unwrap();
     err_thread.join().unwrap();
 
     wait_until(|| fs.lines(LOG).len() == 400);
     let is_whole = |line: &String| {
-      let is_out = line.contains("[out] out-line-") && line.ends_with(&"o".repeat(40));
-      let is_err = line.contains("[err] err-line-") && line.ends_with(&"e".repeat(40));
-      is_out || is_err
+      let is_out = line.starts_with(&format!("{EPOCH_PREFIX} info daemon_text stream=out class=other text=[text:"));
+      let is_err = line.starts_with(&format!("{EPOCH_PREFIX} warn daemon_text stream=err class=other text=[text:"));
+      (is_out || is_err) && line.ends_with("]")
     };
     assert!(fs.lines(LOG).iter().all(is_whole));
   }
 
-  #[test]
-  fn a_slow_disk_drops_lines_and_the_next_write_says_how_many() {
-    let fs = Arc::new(FakeFs::default());
+  fn hold_the_first_append(fs: &Arc<FakeFs>) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
     let (entered_sender, entered) = mpsc::channel();
     let (release, release_receiver) = mpsc::channel();
     *fs.first_append_gate.lock().unwrap() = Some((entered_sender, release_receiver));
-    let log = writer_over(&fs, 10_000, vec![], 1);
-    log.record(Stream::Out, "first");
+    (entered, release)
+  }
+
+  #[test]
+  fn a_slow_disk_drops_messages_and_the_next_write_says_how_many() {
+    let fs = Arc::new(FakeFs::default());
+    let (entered, release) = hold_the_first_append(&fs);
+    let log = writer_over(&fs, 10_000, None, 1);
+    ingest(&log, Stream::Out, "first\n");
     entered.recv().unwrap();
 
     for n in 0..4 {
-      log.record(Stream::Out, &format!("burst-{n}"));
+      ingest(&log, Stream::Out, &format!("burst-{n}\n"));
     }
     release.send(()).unwrap();
 
     wait_until(|| fs.lines(LOG).len() == 3);
     let lines = fs.lines(LOG);
-    assert!(lines[0].ends_with("[out] first"));
-    assert!(lines[1].ends_with("[log] 3 lines dropped: the log writer fell behind"));
-    assert!(lines[2].ends_with("[out] burst-0"));
-  }
-
-  #[test]
-  fn the_writer_picks_the_secrets_up_once_they_exist() {
-    let fs = Arc::new(FakeFs::default());
-    let secrets = Arc::new(Mutex::new(None::<Vec<String>>));
-    let shared = secrets.clone();
-    let log = DaemonLog::start_with_capacity(rotating(&fs, 1000), move || shared.lock().unwrap().take(), || 0, 16);
-
-    log.record(Stream::Out, "before");
-    wait_until(|| fs.lines(LOG).len() == 1);
-    *secrets.lock().unwrap() = Some(vec!["s3cr3t-admin-token".to_string()]);
-    log.record(Stream::Out, "token s3cr3t-admin-token");
-
-    wait_until(|| fs.lines(LOG).len() == 2);
-    assert!(fs.lines(LOG)[1].ends_with("token [redacted]"));
-  }
-
-  // ---- a token that changes while the writer runs ----
-
-  struct ChangingToken {
-    next: Arc<Mutex<Option<Vec<String>>>>,
-    seconds: Arc<AtomicU64>,
-    polls: Arc<AtomicUsize>,
-  }
-
-  impl ChangingToken {
-    fn start(fs: &Arc<FakeFs>) -> (Self, DaemonLog) {
-      let changing = Self { next: Arc::default(), seconds: Arc::default(), polls: Arc::default() };
-      let (next, seconds, polls) = (changing.next.clone(), changing.seconds.clone(), changing.polls.clone());
-      let poll = move || {
-        polls.fetch_add(1, Ordering::SeqCst);
-        next.lock().unwrap().take()
-      };
-      let log = DaemonLog::start_with_capacity(rotating(fs, 100_000), poll, move || seconds.load(Ordering::SeqCst), 64);
-      (changing, log)
-    }
-    fn rotate_to(&self, token: &str) {
-      *self.next.lock().unwrap() = Some(vec![token.to_string()]);
-    }
-    fn advance(&self, seconds: u64) {
-      self.seconds.fetch_add(seconds, Ordering::SeqCst);
-    }
-  }
-
-  #[test]
-  fn a_token_rotated_while_the_writer_runs_is_masked_and_the_old_one_stays_masked() {
-    let fs = Arc::new(FakeFs::default());
-    let (token, log) = ChangingToken::start(&fs);
-    token.rotate_to("old-admin-token-1");
-    log.record(Stream::Out, "first old-admin-token-1");
-    wait_until(|| fs.lines(LOG).len() == 1);
-
-    token.rotate_to("new-admin-token-2");
-    token.advance(3);
-    log.record(Stream::Out, "then new-admin-token-2 and old-admin-token-1");
-
-    wait_until(|| fs.lines(LOG).len() == 2);
-    assert!(fs.lines(LOG)[1].ends_with("then [redacted] and [redacted]"), "{:?}", fs.lines(LOG));
-  }
-
-  #[test]
-  fn the_writer_looks_for_a_new_token_at_most_every_two_seconds_once_it_knows_one() {
-    let fs = Arc::new(FakeFs::default());
-    let (token, log) = ChangingToken::start(&fs);
-    token.rotate_to("old-admin-token-1");
-
-    for (line_count, advance_by) in [(1, 0), (2, 1), (3, 1)] {
-      token.advance(advance_by);
-      log.record(Stream::Out, "a line");
-      wait_until(|| fs.lines(LOG).len() == line_count);
-    }
-
-    assert_eq!(token.polls.load(Ordering::SeqCst), 2, "polls at 0 s (nothing known yet) and at 2 s, not at 1 s");
-  }
-
-  #[test]
-  fn the_writer_keeps_only_the_last_eight_tokens() {
-    let fs = Arc::new(FakeFs::default());
-    let (token, log) = ChangingToken::start(&fs);
-    let names: Vec<String> = (1..=10).map(|n| format!("admin-token-{n:02}")).collect();
-
-    for (index, name) in names.iter().enumerate() {
-      token.rotate_to(name);
-      token.advance(2);
-      log.record(Stream::Out, &format!("rotated {name}"));
-      wait_until(|| fs.lines(LOG).len() == index + 1);
-    }
-    token.advance(2);
-    log.record(Stream::Out, &format!("all {}", names.join(" ")));
-
-    wait_until(|| fs.lines(LOG).len() == 11);
-    let last_line = fs.lines(LOG).pop().unwrap();
-    assert!(last_line.contains("admin-token-01 admin-token-02 [redacted] [redacted]"), "{last_line}");
-    assert!(last_line.ends_with("[redacted] [redacted]"), "{last_line}");
+    assert!(lines[0].contains("daemon_text stream=out"));
+    assert_eq!(lines[1], format!("{EPOCH_PREFIX} warn writer_dropped count=3"));
+    assert!(lines[2].contains("daemon_text stream=out"));
   }
 
   // ---- drop accounting ----
 
   #[test]
-  fn a_failed_write_is_counted_as_lost_and_not_blamed_on_a_slow_writer() {
+  fn a_failed_write_is_counted_as_lost_by_kind_and_not_blamed_on_a_slow_writer() {
     let fs = Arc::new(FakeFs::default());
-    let log = writer_over(&fs, 10_000, vec![], 16);
+    let log = writer_over(&fs, 10_000, None, 16);
     fs.fail_appends_containing("");
 
-    log.record(Stream::Out, "lost-1");
-    log.record(Stream::Out, "lost-2");
+    ingest(&log, Stream::Out, "lost-1\n");
+    ingest(&log, Stream::Out, "lost-2\n");
     wait_until(|| fs.failed_append_count() >= 3);
     fs.stop_failing_appends();
-    log.record(Stream::Out, "fine");
+    ingest(&log, Stream::Out, "fine\n");
 
     wait_until(|| fs.lines(LOG).len() == 2);
     let lines = fs.lines(LOG);
-    assert!(lines[0].ends_with("[log] 2 lines lost: could not write the log file (disk full)"), "{lines:?}");
-    assert!(lines[1].ends_with("[out] fine"));
-    assert!(!lines.iter().any(|line| line.contains("fell behind")));
+    assert_eq!(lines[0], format!("{EPOCH_PREFIX} error writer_lost count=2 kind=other errno=none"));
+    assert!(lines[1].contains("daemon_text stream=out"));
+    assert!(!fs.text(LOG).contains("disk full"));
+    assert!(!lines.iter().any(|line| line.contains("writer_dropped")));
   }
 
   #[test]
   fn a_full_queue_is_blamed_on_the_writer_and_not_on_the_disk() {
     let fs = Arc::new(FakeFs::default());
-    let (entered_sender, entered) = mpsc::channel();
-    let (release, release_receiver) = mpsc::channel();
-    *fs.first_append_gate.lock().unwrap() = Some((entered_sender, release_receiver));
-    let log = writer_over(&fs, 10_000, vec![], 1);
-    log.record(Stream::Out, "first");
+    let (entered, release) = hold_the_first_append(&fs);
+    let log = writer_over(&fs, 10_000, None, 1);
+    ingest(&log, Stream::Out, "first\n");
     entered.recv().unwrap();
     for n in 0..3 {
-      log.record(Stream::Out, &format!("burst-{n}"));
+      ingest(&log, Stream::Out, &format!("burst-{n}\n"));
     }
     release.send(()).unwrap();
 
     wait_until(|| fs.lines(LOG).len() == 3);
     let lines = fs.lines(LOG);
-    assert!(lines[1].ends_with("[log] 2 lines dropped: the log writer fell behind"), "{lines:?}");
-    assert!(!lines.iter().any(|line| line.contains("could not write")));
+    assert_eq!(lines[1], format!("{EPOCH_PREFIX} warn writer_dropped count=2"));
+    assert!(!lines.iter().any(|line| line.contains("writer_lost")));
   }
 
   #[test]
-  fn the_lost_count_survives_a_notice_that_could_not_be_written() {
+  fn the_dropped_count_survives_a_notice_that_could_not_be_written() {
     let fs = Arc::new(FakeFs::default());
-    let (entered_sender, entered) = mpsc::channel();
-    let (release, release_receiver) = mpsc::channel();
-    *fs.first_append_gate.lock().unwrap() = Some((entered_sender, release_receiver));
-    let log = writer_over(&fs, 10_000, vec![], 1);
-    log.record(Stream::Out, "first");
+    let (entered, release) = hold_the_first_append(&fs);
+    let log = writer_over(&fs, 10_000, None, 1);
+    ingest(&log, Stream::Out, "first\n");
     entered.recv().unwrap();
     for n in 0..4 {
-      log.record(Stream::Out, &format!("burst-{n}"));
+      ingest(&log, Stream::Out, &format!("burst-{n}\n"));
     }
-    fs.fail_appends_containing("lines dropped");
+    fs.fail_appends_containing("writer_dropped");
     release.send(()).unwrap();
     wait_until(|| fs.lines(LOG).len() == 2);
 
     fs.stop_failing_appends();
-    log.record(Stream::Out, "after");
+    ingest(&log, Stream::Out, "after\n");
 
     wait_until(|| fs.lines(LOG).len() == 4);
     let lines = fs.lines(LOG);
-    assert!(lines[2].ends_with("[log] 3 lines dropped: the log writer fell behind"), "{lines:?}");
-    assert!(lines[3].ends_with("[out] after"));
+    assert_eq!(lines[2], format!("{EPOCH_PREFIX} warn writer_dropped count=3"));
+    assert!(lines[3].contains("daemon_text stream=out"));
   }
 
   // ---- flush on exit ----
 
   #[test]
-  fn flush_and_close_writes_every_queued_line_before_it_returns() {
+  fn flush_and_close_writes_every_queued_line_then_the_flushed_marker() {
     let fs = Arc::new(FakeFs::default());
-    let log = writer_over(&fs, 100_000, vec![], 64);
+    let log = writer_over(&fs, 100_000, None, 64);
     for n in 0..30 {
-      log.record(Stream::Out, &format!("line {n}"));
+      ingest(&log, Stream::Out, &format!("line {n}\n"));
     }
 
     let drained = log.flush_and_close(Duration::from_secs(2));
 
     assert!(drained);
-    assert_eq!(fs.lines(LOG).len(), 30);
+    let lines = fs.lines(LOG);
+    assert_eq!(lines.len(), 31);
+    assert_eq!(lines[30], format!("{EPOCH_PREFIX} info daemon_log_flushed drained=true"));
+  }
+
+  #[test]
+  fn flush_and_close_writes_the_unfinished_line_of_each_stream() {
+    let fs = Arc::new(FakeFs::default());
+    let log = writer_over(&fs, 100_000, None, 64);
+    ingest(&log, Stream::Out, "no newline out");
+    ingest(&log, Stream::Err, "no newline err");
+
+    log.flush_and_close(Duration::from_secs(2));
+
+    let lines = fs.lines(LOG);
+    assert_eq!(lines.len(), 3);
+    assert!(lines[0].contains("stream=out") && lines[1].contains("stream=err"));
   }
 
   #[test]
   fn flush_and_close_gives_up_within_its_timeout_when_the_disk_is_stuck() {
     let fs = Arc::new(FakeFs::default());
-    let (entered_sender, entered) = mpsc::channel();
-    let (release, release_receiver) = mpsc::channel();
-    *fs.first_append_gate.lock().unwrap() = Some((entered_sender, release_receiver));
-    let log = writer_over(&fs, 10_000, vec![], 4);
-    log.record(Stream::Out, "stuck");
+    let (entered, release) = hold_the_first_append(&fs);
+    let log = writer_over(&fs, 10_000, None, 4);
+    ingest(&log, Stream::Out, "stuck\n");
     entered.recv().unwrap();
     let started_at = Instant::now();
 
@@ -1157,13 +856,11 @@ mod tests {
   #[test]
   fn flush_and_close_returns_when_the_queue_is_full_and_the_disk_is_stuck() {
     let fs = Arc::new(FakeFs::default());
-    let (entered_sender, entered) = mpsc::channel();
-    let (release, release_receiver) = mpsc::channel();
-    *fs.first_append_gate.lock().unwrap() = Some((entered_sender, release_receiver));
-    let log = writer_over(&fs, 10_000, vec![], 1);
-    log.record(Stream::Out, "stuck");
+    let (entered, release) = hold_the_first_append(&fs);
+    let log = writer_over(&fs, 10_000, None, 1);
+    ingest(&log, Stream::Out, "stuck\n");
     entered.recv().unwrap();
-    log.record(Stream::Out, "fills the queue");
+    ingest(&log, Stream::Out, "fills the queue\n");
     let started_at = Instant::now();
 
     let drained = log.flush_and_close(Duration::from_millis(100));
@@ -1176,31 +873,146 @@ mod tests {
   #[test]
   fn the_exit_waits_for_the_last_event_of_the_output_pipe() {
     let fs = Arc::new(FakeFs::default());
-    let log = writer_over(&fs, 100_000, vec![], 64);
+    let log = writer_over(&fs, 100_000, None, 64);
     let pipe = log.clone();
     std::thread::spawn(move || {
       std::thread::sleep(Duration::from_millis(50));
-      pipe.record(Stream::Err, "the daemon exited with code Some(0)");
+      pipe.record_event(DesktopEvent::DaemonExited { code: Some(crate::event_log::ExitCode(0)) });
       pipe.mark_output_ended();
     });
 
     let drained = log.close_after_output_ends(Duration::from_secs(2));
 
     assert!(drained);
-    assert!(fs.lines(LOG).last().is_some_and(|line| line.ends_with("the daemon exited with code Some(0)")), "{:?}", fs.lines(LOG));
+    let lines = fs.lines(LOG);
+    assert!(lines.iter().any(|line| line.contains("daemon_exited code=0")), "{lines:?}");
   }
 
   #[test]
   fn the_exit_does_not_wait_for_ever_for_a_pipe_that_never_ends() {
     let fs = Arc::new(FakeFs::default());
-    let log = writer_over(&fs, 100_000, vec![], 64);
-    log.record(Stream::Out, "queued");
+    let log = writer_over(&fs, 100_000, None, 64);
+    ingest(&log, Stream::Out, "queued\n");
     let started_at = Instant::now();
 
     let drained = log.close_after_output_ends(Duration::from_millis(400));
 
     assert!(drained);
     assert!(started_at.elapsed() < Duration::from_secs(1));
-    assert_eq!(fs.lines(LOG).len(), 1);
+    assert_eq!(fs.lines(LOG).len(), 2);
+  }
+
+  #[test]
+  fn a_class_of_text_stays_reachable_through_the_event_vocabulary() {
+    let fs = Arc::new(FakeFs::default());
+    let log = writer_over(&fs, 100_000, None, 16);
+
+    log.record_event(DesktopEvent::DaemonText { stream: Stream::Err, class: DaemonTextClass::NodeFatal, text: log.opaque(b"x") });
+
+    wait_until(|| fs.lines(LOG).len() == 1);
+    assert!(fs.lines(LOG)[0].contains("class=node_fatal"));
+  }
+
+  // ---- the files of an earlier version, on a real disk ----
+
+  fn write_file(path: &Path, content: &str) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, content).unwrap();
+  }
+
+  fn names_in(folder: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(folder).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().to_string()).collect();
+    names.sort();
+    names
+  }
+
+  #[test]
+  fn the_first_start_deletes_every_file_an_earlier_version_wrote() {
+    let home = ScratchFolder::new("legacy-delete");
+    let logs = home.path().join("logs");
+    for name in ["daemon.log", "daemon.log.1", "daemon.log.2", "daemon.log.10"] {
+      write_file(&logs.join(name), "Authorization: Bearer leftover-secret-0123456789\n");
+    }
+    for kept in ["desktop.log.1", "daemon.log.bak", "daemon.logs", "mydaemon.log", "daemon.log.", "notes.txt"] {
+      write_file(&logs.join(kept), "unrelated\n");
+    }
+
+    let log = start_on_disk(home.path(), || 0);
+    assert!(log.flush_and_close(Duration::from_secs(5)));
+
+    let names = names_in(&logs);
+    assert_eq!(names, vec!["daemon.log.", "daemon.log.bak", "daemon.logs", "desktop.log", "desktop.log.1", "mydaemon.log", "notes.txt"]);
+  }
+
+  #[test]
+  fn a_start_without_a_logs_folder_or_legacy_files_just_works() {
+    let home = ScratchFolder::new("fresh-install");
+
+    let log = start_on_disk(home.path(), || 0);
+    log.ingest_daemon_chunk(Stream::Out, b"hello\n");
+    assert!(log.flush_and_close(Duration::from_secs(5)));
+
+    let stored = std::fs::read_to_string(home.path().join("logs").join(LOG_FILE_NAME)).unwrap();
+    assert_eq!(stored.lines().count(), 2);
+  }
+
+  #[test]
+  fn the_secrets_of_an_earlier_version_never_reach_the_new_file_or_the_tail_readers() {
+    let home = ScratchFolder::new("legacy-secret");
+    let logs = home.path().join("logs");
+    write_file(&logs.join("daemon.log"), "leftover-secret-0123456789\n");
+
+    let log = start_on_disk(home.path(), || 0);
+    log.ingest_daemon_chunk(Stream::Err, b"openfleet: refusing to boot: port in use\n");
+    assert!(log.flush_and_close(Duration::from_secs(5)));
+
+    let tail = last_lines(&logs.join(LOG_FILE_NAME), 100).join("\n");
+    assert!(!tail.contains("leftover-secret"), "{tail}");
+    assert!(tail.contains("class=boot_refusal"), "{tail}");
+  }
+
+  #[test]
+  fn the_file_and_the_salt_are_private_and_the_salt_lives_outside_the_logs_folder() {
+    use std::os::unix::fs::PermissionsExt;
+    let home = ScratchFolder::new("private-install");
+
+    let log = start_on_disk(home.path(), || 0);
+    log.ingest_daemon_chunk(Stream::Out, b"hello\n");
+    assert!(log.flush_and_close(Duration::from_secs(5)));
+
+    let mode_of = |path: PathBuf| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode_of(home.path().join(SALT_FILE_NAME)), 0o600);
+    assert_eq!(mode_of(home.path().join("logs").join(LOG_FILE_NAME)), 0o600);
+    assert_eq!(mode_of(home.path().join("logs")), 0o700);
+    assert_eq!(names_in(&home.path().join("logs")), vec!["desktop.log"]);
+  }
+
+  #[test]
+  fn the_tags_of_two_starts_of_one_install_agree() {
+    let home = ScratchFolder::new("stable-tags");
+    let tag_after_a_start = || {
+      let log = start_on_disk(home.path(), || 0);
+      let tag = log.opaque(b"same message").to_string();
+      assert!(log.flush_and_close(Duration::from_secs(5)));
+      tag
+    };
+
+    let first_start = tag_after_a_start();
+    let second_start = tag_after_a_start();
+
+    assert_eq!(first_start, second_start);
+    assert!(first_start.matches(':').count() == 2, "{first_start}");
+  }
+
+  #[test]
+  fn an_unwritable_home_still_logs_with_lengths_only() {
+    let folder = ScratchFolder::new("no-salt");
+    let blocked_home = folder.path().join("a-file-not-a-folder");
+    std::fs::write(&blocked_home, "x").unwrap();
+
+    let log = start_on_disk(&blocked_home, || 0);
+
+    assert_eq!(log.opaque(b"abcd").to_string(), "[text:4]");
+    assert!(log.flush_and_close(Duration::from_secs(5)));
   }
 }

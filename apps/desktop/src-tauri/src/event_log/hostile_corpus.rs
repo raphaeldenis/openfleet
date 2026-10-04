@@ -1,13 +1,13 @@
 //! Acceptance skeleton of the allowlist: no byte sequence of the hostile corpus, nor any decoded form of it, may appear in a line the log emits.
 //!
 //! Two sinks run the same property:
-//! - `ProjectionSink` (the fake sink) is the allowlist path as built today: line assembler, projection, render, grammar. Its tests are green.
-//! - `LegacySink` is the production path still wired today: `DaemonLog::record` and the pattern masker. Its tests are red,
-//!   declared through `red_until_ra04!` (one ignore reason) and listed in `RED_UNTIL_RA04`; the cutover un-ignores every one of them.
+//! - `ProjectionSink` (the fake sink) is the projection alone: line assembler, projection, render, grammar.
+//! - `WriterSink` is the production path: the daemon's chunks go through `DesktopLog::ingest_daemon_chunk`, the desktop's own failures
+//!   through the constructors `daemon.rs` uses, and the stored file is read back.
 
 use super::salt::SALT_LEN;
-use super::{validate, DaemonLineAssembler, DesktopEvent, EventName, IoFailure, KnownPaths, Opaque, PathClass, Salt, SpawnFailure, Stream, Ts};
-use crate::log_file::{DaemonLog, RotatingLog, Stream as LegacyStream, KEPT_FILES, MAX_LOG_BYTES};
+use super::{validate, DaemonLineAssembler, DesktopEvent, EventName, KnownPaths, PathClass, Salt, Stream, Ts};
+use crate::log_file::{DesktopLog, RotatingLog, KEPT_FILES, MAX_LOG_BYTES};
 use serde_json::{json, Value};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -27,26 +27,6 @@ const BOUNDARY_ANCHORS: [usize; 6] = [16_383, 16_384, 16_385, ASSEMBLER_CAP_BYTE
 const BOUNDARY_PADDINGS: [char; 4] = ['a', 'é', '日', '😀'];
 const WRITER_CLOSE_TIMEOUT: Duration = Duration::from_secs(60);
 const BENIGN_FIRST_LINE: &[u8] = b"benign line before the hostile one\r\n";
-
-/// Every case the legacy sink is expected to fail until the writer cutover; `red_until_ra04!` invocations must match this list one for one.
-const RED_UNTIL_RA04: [&str; 6] = [
-  "legacy_sink_keeps_provider_credentials_out_of_every_kind",
-  "legacy_sink_keeps_credential_schemes_out_of_every_kind",
-  "legacy_sink_keeps_codex_vectors_out_of_every_kind",
-  "legacy_sink_keeps_boundary_straddling_secrets_out",
-  "legacy_sink_keeps_random_token_shapes_out",
-  "legacy_sink_keeps_secrets_out_of_a_five_mib_line",
-];
-
-macro_rules! red_until_ra04 {
-  ($name:ident, $scenarios:expr) => {
-    #[test]
-    #[ignore = "red until RA-04: the legacy DaemonLog masks by pattern and copies the rest, so this corpus leaks until the allowlist writer replaces it"]
-    fn $name() {
-      assert_allowlist_property(&LegacySink, &$scenarios);
-    }
-  };
-}
 
 // ---- the corpus ----
 
@@ -577,20 +557,6 @@ impl ProjectionSink {
     Self { salt: None }
   }
 
-  fn event_of_notice(&self, kind: FreeTextKind, text: &str) -> DesktopEvent {
-    let opaque = Opaque::of(text.as_bytes(), self.salt.as_ref());
-    match kind {
-      FreeTextKind::SidecarReason => DesktopEvent::SidecarFailed { reason: opaque },
-      FreeTextKind::IoErrorText => DesktopEvent::DaemonSpawnFailed { failure: SpawnFailure::Io(IoFailure::of(&io::Error::other(text.to_string()))) },
-      FreeTextKind::SpawnFailurePath => {
-        let home = Path::new("/home/synthetic/.openfleet");
-        let known = KnownPaths { openfleet_home: home, logs_dir: home, admin_token: home, daemon_bundle: home, user_home: Path::new("/home/synthetic") };
-        DesktopEvent::DaemonSpawnFailed { failure: SpawnFailure::BundleNotFound(PathClass::classify(Path::new(text), &known)) }
-      }
-      other => unreachable!("{other:?} is delivered on a daemon pipe"),
-    }
-  }
-
   fn line_of(event: &DesktopEvent) -> String {
     let line = event.render(fixed_now());
     let rendered_event = if line.is_rejection() { EventName::RejectedRecord } else { event.name() };
@@ -599,10 +565,28 @@ impl ProjectionSink {
   }
 }
 
+/// The event the desktop records when `text` reaches it through a desktop-made notice; `opaque` is the tag of `text` under the sink's salt.
+fn notice_event(kind: FreeTextKind, text: &str, opaque: super::Opaque) -> DesktopEvent {
+  use super::{IoFailure, SpawnFailure};
+  match kind {
+    FreeTextKind::SidecarReason => DesktopEvent::SidecarFailed { reason: opaque },
+    FreeTextKind::IoErrorText => DesktopEvent::DaemonSpawnFailed { failure: SpawnFailure::Io(IoFailure::of(&io::Error::other(text.to_string()))) },
+    FreeTextKind::SpawnFailurePath => {
+      let home = Path::new("/home/synthetic/.openfleet");
+      let known = KnownPaths { openfleet_home: home, logs_dir: home, admin_token: home, daemon_bundle: home, user_home: Path::new("/home/synthetic") };
+      DesktopEvent::DaemonSpawnFailed { failure: SpawnFailure::BundleNotFound(PathClass::classify(Path::new(text), &known)) }
+    }
+    other => unreachable!("{other:?} is delivered on a daemon pipe"),
+  }
+}
+
 impl Sink for ProjectionSink {
   fn emitted_lines(&self, delivery: &Delivery) -> Vec<String> {
     match delivery {
-      Delivery::DesktopNotice { kind, text } => vec![Self::line_of(&self.event_of_notice(*kind, text))],
+      Delivery::DesktopNotice { kind, text } => {
+        let opaque = super::Opaque::of(text.as_bytes(), self.salt.as_ref());
+        vec![Self::line_of(&notice_event(*kind, text, opaque))]
+      }
       Delivery::DaemonPipe { stream, chunks } => {
         let mut assembler = DaemonLineAssembler::new(*stream);
         let mut events: Vec<DesktopEvent> = chunks.iter().flat_map(|chunk| assembler.push_chunk(chunk, self.salt.as_ref())).collect();
@@ -613,8 +597,20 @@ impl Sink for ProjectionSink {
   }
 }
 
-/// The production path wired today: every chunk goes to `DaemonLog::record`, and the stored file is read back.
-struct LegacySink;
+/// The production path: chunks go to `DesktopLog::ingest_daemon_chunk`, notices to `record_event`, and the stored file is read back.
+struct WriterSink {
+  salt: Option<Salt>,
+}
+
+impl WriterSink {
+  fn with_salt() -> Self {
+    Self { salt: Some(Salt::from_bytes([7; SALT_LEN])) }
+  }
+
+  fn without_salt() -> Self {
+    Self { salt: None }
+  }
+}
 
 #[derive(Clone, Default)]
 struct MemoryFs(Arc<Mutex<Vec<u8>>>);
@@ -634,28 +630,16 @@ impl crate::log_file::LogFs for MemoryFs {
   }
 }
 
-impl Sink for LegacySink {
+impl Sink for WriterSink {
   fn emitted_lines(&self, delivery: &Delivery) -> Vec<String> {
     let fs = MemoryFs::default();
-    let log = RotatingLog::open(fs.clone(), PathBuf::from("/logs/daemon.log"), MAX_LOG_BYTES, KEPT_FILES);
-    let daemon_log = DaemonLog::start(log, || None, || 0);
+    let rotating_log = RotatingLog::open(fs.clone(), PathBuf::from("/logs/desktop.log"), MAX_LOG_BYTES, KEPT_FILES);
+    let log = DesktopLog::start(rotating_log, self.salt.clone(), || 0);
     match delivery {
-      Delivery::DaemonPipe { stream, chunks } => {
-        let legacy_stream = match stream {
-          Stream::Out => LegacyStream::Out,
-          Stream::Err => LegacyStream::Err,
-        };
-        chunks.iter().for_each(|chunk| daemon_log.record(legacy_stream, &String::from_utf8_lossy(chunk)));
-      }
-      Delivery::DesktopNotice { kind, text } => {
-        let notice = match kind {
-          FreeTextKind::SpawnFailurePath => format!("daemon bundle not found at {text}"),
-          _ => text.clone(),
-        };
-        daemon_log.record(LegacyStream::Err, &notice);
-      }
+      Delivery::DaemonPipe { stream, chunks } => chunks.iter().for_each(|chunk| log.ingest_daemon_chunk(*stream, chunk)),
+      Delivery::DesktopNotice { kind, text } => log.record_event(notice_event(*kind, text, log.opaque(text.as_bytes()))),
     }
-    assert!(daemon_log.flush_and_close(WRITER_CLOSE_TIMEOUT), "the legacy writer did not drain");
+    assert!(log.flush_and_close(WRITER_CLOSE_TIMEOUT), "the writer did not drain");
     let stored = fs.0.lock().unwrap().clone();
     String::from_utf8_lossy(&stored).lines().map(str::to_string).collect()
   }
@@ -859,26 +843,91 @@ mod tests {
     }
   }
 
-  mod the_red_cases {
+  mod the_writer_sink {
     use super::*;
 
-    red_until_ra04!(legacy_sink_keeps_provider_credentials_out_of_every_kind, provider_credentials_scenarios());
-    red_until_ra04!(legacy_sink_keeps_credential_schemes_out_of_every_kind, credential_schemes_scenarios());
-    red_until_ra04!(legacy_sink_keeps_codex_vectors_out_of_every_kind, codex_vectors_scenarios());
-    red_until_ra04!(legacy_sink_keeps_boundary_straddling_secrets_out, boundary_scenarios());
-    red_until_ra04!(legacy_sink_keeps_random_token_shapes_out, random_token_scenarios());
-    red_until_ra04!(legacy_sink_keeps_secrets_out_of_a_five_mib_line, five_mib_line_scenarios());
+    #[test]
+    fn keeps_every_provider_credential_out_of_every_kind_and_placement() {
+      assert_allowlist_property(&WriterSink::with_salt(), &provider_credentials_scenarios());
+    }
 
     #[test]
-    fn are_exactly_the_cases_named_in_the_red_list() {
-      let source = include_str!("hostile_corpus.rs");
-      let invocation = ["red_until_ra04", "!("].concat();
-      let invocation_count = source.matches(invocation.as_str()).count();
+    fn keeps_every_credential_scheme_out_of_every_kind_and_placement() {
+      assert_allowlist_property(&WriterSink::with_salt(), &credential_schemes_scenarios());
+    }
 
-      let unlisted: Vec<&str> = RED_UNTIL_RA04.into_iter().filter(|name| !source.contains(&format!("{invocation}{name},"))).collect();
+    #[test]
+    fn keeps_every_codex_vector_out_of_every_kind_and_placement() {
+      assert_allowlist_property(&WriterSink::with_salt(), &codex_vectors_scenarios());
+    }
 
-      assert_eq!(unlisted, Vec::<&str>::new());
-      assert_eq!(invocation_count, RED_UNTIL_RA04.len());
+    #[test]
+    fn keeps_boundary_straddling_secrets_out() {
+      assert_allowlist_property(&WriterSink::with_salt(), &boundary_scenarios());
+    }
+
+    #[test]
+    fn keeps_random_token_shapes_out() {
+      assert_allowlist_property(&WriterSink::with_salt(), &random_token_scenarios());
+    }
+
+    #[test]
+    fn keeps_secrets_out_of_a_five_mib_line() {
+      assert_allowlist_property(&WriterSink::with_salt(), &five_mib_line_scenarios());
+    }
+
+    #[test]
+    fn keeps_the_corpus_out_when_the_install_has_no_salt() {
+      assert_allowlist_property(&WriterSink::without_salt(), &provider_credentials_scenarios());
+      assert_allowlist_property(&WriterSink::without_salt(), &codex_vectors_scenarios());
+    }
+
+    fn event_named(line: &str) -> EventName {
+      let name = line.split(' ').nth(2).unwrap_or("");
+      EventName::ALL.into_iter().find(|event| event.as_str() == name).unwrap_or_else(|| panic!("a stored line names no known event: {line}"))
+    }
+
+    #[test]
+    fn stores_only_lines_that_pass_the_grammar() {
+      for scenario in codex_vectors_scenarios().iter().chain(credential_schemes_scenarios().iter()) {
+        for line in WriterSink::with_salt().emitted_lines(&scenario.delivery) {
+          assert_eq!(validate(event_named(&line), &line), Ok(()), "{}: {line}", scenario.name);
+        }
+      }
+    }
+
+    #[test]
+    fn stores_one_line_per_record_then_the_flushed_marker() {
+      let record = |number: usize| format!("{{\"level\":\"info\",\"msg\":\"ws: write failed\",\"step\":{number}}}\n");
+      let chunks: Vec<Vec<u8>> = (0..25).map(|number| record(number).into_bytes()).collect();
+
+      let lines = WriterSink::with_salt().emitted_lines(&Delivery::DaemonPipe { stream: Stream::Out, chunks });
+
+      assert_eq!(lines.len(), 26);
+      assert!(lines[25].ends_with("info daemon_log_flushed drained=true"), "{}", lines[25]);
+    }
+
+    #[test]
+    fn stores_the_same_lines_for_the_same_input_and_salt() {
+      let scenarios = codex_vectors_scenarios();
+
+      let first_run: Vec<Vec<String>> = scenarios.iter().map(|scenario| WriterSink::with_salt().emitted_lines(&scenario.delivery)).collect();
+      let second_run: Vec<Vec<String>> = scenarios.iter().map(|scenario| WriterSink::with_salt().emitted_lines(&scenario.delivery)).collect();
+
+      assert_eq!(first_run, second_run);
+    }
+
+    #[test]
+    fn stores_a_secret_split_across_two_chunks_as_one_text_record() {
+      let secret = "ghp_aB3aB3aB3aB3aB3aB3aB3aB3aB3aB3aB3aB3";
+      let (head, tail) = secret.split_at(secret.len() / 2);
+      let chunks = vec![format!("note {head}").into_bytes(), format!("{tail}\n").into_bytes()];
+
+      let lines = WriterSink::with_salt().emitted_lines(&Delivery::DaemonPipe { stream: Stream::Err, chunks });
+
+      assert_eq!(lines.len(), 2);
+      assert!(lines[0].contains(" daemon_text stream=err "), "{}", lines[0]);
+      assert_eq!(leaked_form_in(&lines, secret), None);
     }
   }
 }
