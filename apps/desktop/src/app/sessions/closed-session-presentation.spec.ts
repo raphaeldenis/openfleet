@@ -46,6 +46,11 @@ const SCENARIOS: Scenario[] = [
     stripTitle: 'Resume timed out', stripMessage: 'The session did not come back in time — try again.',
   },
   {
+    label: 'conversation_not_found', exitCode: 1, reason: 'conversation_not_found', cardTitle: 'Not running', hasCardBody: false, cardTone: 'error',
+    stripTitle: 'Conversation not found',
+    stripMessage: 'The transcript for this session is gone — start a new session from its handoff.',
+  },
+  {
     label: 'a refused reopen request', exitCode: 0, resumeRequestError: 'This session’s directory no longer exists — nothing to resume into.',
     cardTitle: 'Not running', hasCardBody: false, cardTone: 'error',
     stripTitle: 'Resume failed', stripMessage: 'This session’s directory no longer exists — nothing to resume into.',
@@ -72,9 +77,18 @@ describe('what a closed session shows', () => {
   });
 
   it('never gives a card title an exit code for a start or a resume that never happened', () => {
-    const neverRunning = (['launch_failed', 'resume_timeout', 'daemon_shutdown'] as const).map((reason) => closedSessionPresentationFor({ exitCode: 0, reason }).cardTitle);
+    const neverRunning = (['launch_failed', 'resume_timeout', 'conversation_not_found', 'daemon_shutdown'] as const).map((reason) => closedSessionPresentationFor({ exitCode: 0, reason }).cardTitle);
 
     expect(neverRunning.filter((title) => title.includes('exit'))).toEqual([]);
+  });
+
+  it('degrades a reason this client does not know to the plain agent-exited presentation', () => {
+    const futureReason = 'quota_exceeded' as unknown as SessionCloseReason;
+
+    const presentation = closedSessionPresentationFor({ exitCode: 1, reason: futureReason });
+
+    expect(presentation.strip?.title).toBe('Agent process exited');
+    expect(presentation.cardTitle).toBe('Closed · exit 1');
   });
 
   it('never calls a refused-reopen strip a timeout', () => {
