@@ -227,12 +227,12 @@ describe('OnboardingComponent daemon step under Tauri', () => {
   });
 
   it('user is told claude may be missing from the PATH only when the fallback PATH was used and the last line names claude', async () => {
-    const { port } = fakeDaemonStatusPort({ state: 'failed', lastLine: 'claude: command not found', pathSource: 'fallback', pathTried: '/opt/homebrew/bin:/usr/bin' });
+    const { port } = fakeDaemonStatusPort({ state: 'failed', lastLine: 'claude: command not found', pathSource: 'fallback' });
 
     const { container } = await renderAfterFirstStatusRead(port);
 
     expect(container).toHaveTextContent('claude may not be on the daemon PATH');
-    expect(container).toHaveTextContent('/opt/homebrew/bin:/usr/bin');
+    expect(container).toHaveTextContent('The built-in fallback PATH was used instead');
   });
 
   it('user is not told about the PATH when the fallback PATH was used but the failure is something else', async () => {

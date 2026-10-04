@@ -8,6 +8,7 @@ mod linear_growth;
 mod log_file;
 mod path_repair;
 mod redaction;
+mod status_line;
 
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
