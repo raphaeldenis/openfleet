@@ -75,7 +75,7 @@ describe('groupCommits', () => {
   });
 
   it('skips the chore(release) bookkeeping commits', () => {
-    const allHashes = groupCommits(commits).flatMap(({ entries }) => entries.map(({ hash }) => hash));
+    const allHashes = groupCommits(commits).flatMap(({ entries }) => entries.map(({ hash }: { hash: string }) => hash));
 
     expect(allHashes).not.toContain('e5');
   });

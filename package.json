@@ -9,7 +9,7 @@
   },
   "scripts": {
     "test": "vitest run",
-    "typecheck": "pnpm -r --filter './packages/*' exec tsc --noEmit && pnpm --filter @openfleet/desktop exec tsc -p tsconfig.app.json --noEmit",
+    "typecheck": "pnpm -r --filter './packages/*' exec tsc --noEmit && pnpm --filter @openfleet/desktop exec tsc -p tsconfig.app.json --noEmit && tsc -p scripts/tsconfig.json",
     "arch": "depcruise packages/core/src packages/shared/src apps/desktop/src --config .dependency-cruiser.cjs --ts-pre-compilation-deps --ignore-known .dependency-cruiser-known-violations.json",
     "docs:errors": "pnpm --filter @openfleet/core exec tsx ../../scripts/errors/generateErrorReference.ts",
     "dev:core": "pnpm --filter @openfleet/core dev",

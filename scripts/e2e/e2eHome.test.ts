@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { E2E_HOME_ENV, E2E_HOME_PREFIX, e2eConfigPath, e2eHomePath, ensureE2eHome, isRemovableE2eHome, readE2eAdminToken, removeE2eHome } from './e2eHome';
+import { E2E_HOME_ENV, E2E_HOME_PREFIX, e2eConfigPath, e2eHomePath, ensureE2eHome, isRemovableE2eHome, readE2eAdminToken, removeE2eHome } from './e2eHome.js';
 
 describe('removeE2eHome', () => {
   let tempRoot: string;

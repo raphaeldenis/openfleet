@@ -21,10 +21,10 @@ const ciPnpmCommands = (): CiCommand[] => {
   const commands: CiCommand[] = [];
   let currentJob = '';
   for (const line of readRepoFile('.github/workflows/ci.yml').split('\n')) {
-    const jobHeader = line.match(/^ {2}([\w-]+):\s*$/);
-    if (jobHeader) currentJob = jobHeader[1];
-    const runStep = line.match(/^\s*- run: (pnpm .+?)\s*$/);
-    if (runStep) commands.push({ job: currentJob, command: runStep[1] });
+    const jobName = line.match(/^ {2}([\w-]+):\s*$/)?.[1];
+    if (jobName) currentJob = jobName;
+    const pnpmCommand = line.match(/^\s*- run: (pnpm .+?)\s*$/)?.[1];
+    if (pnpmCommand) commands.push({ job: currentJob, command: pnpmCommand });
   }
   return commands;
 };

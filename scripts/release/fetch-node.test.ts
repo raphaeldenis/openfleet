@@ -516,9 +516,10 @@ describe('fetchNode', () => {
 
       expect(result.status).toBe('skipped');
       expect(executedPaths).toHaveLength(1);
-      expect(executedPaths[0]).not.toBe(installedBinary());
+      const [executedPath = ''] = executedPaths;
+      expect(executedPath).not.toBe(installedBinary());
       expect(existsSync(marker)).toBe(false);
-      expect(existsSync(executedPaths[0])).toBe(false);
+      expect(existsSync(executedPath)).toBe(false);
     });
   });
 
