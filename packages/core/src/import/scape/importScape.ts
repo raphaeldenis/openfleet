@@ -33,6 +33,8 @@ export interface ImportScapeOptions {
   managersRoot?: string;
   /** The folder of the Scape manager state files (`<manager name>.md`) that seed the working states; none given, none seeded. Only its regular files are read. */
   stateDir?: string;
+  /** The folder the state folder must be inside, with no link between the two; defaults to the parent of the state folder, so that only the folder itself must not be a link. */
+  stateRoot?: string;
 }
 
 const managersRootOf = (options: ImportScapeOptions) => options.managersRoot ?? join(options.home, MANAGERS_FOLDER_NAME);
@@ -46,7 +48,7 @@ function writeReportFile(report: ImportReport, directory: string): string {
 
 function planFromScape(source: ScapeSource, options: ImportScapeOptions): ImportPlan {
   try {
-    return buildImportPlan(source, { projectName: options.projectName, superpowersRoot: options.superpowersRoot, managersRoot: managersRootOf(options), stateDir: options.stateDir });
+    return buildImportPlan(source, { projectName: options.projectName, superpowersRoot: options.superpowersRoot, managersRoot: managersRootOf(options), stateDir: options.stateDir, stateRoot: options.stateRoot });
   } catch (cause) {
     if (cause instanceof ScapeImportError) throw cause;
     throw new ScapeImportError({ code: 'SCAPE_SOURCE_UNREADABLE', message: `the Scape data cannot be read: ${(cause as Error).message}`, cause });

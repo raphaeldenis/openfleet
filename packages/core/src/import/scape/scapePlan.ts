@@ -27,7 +27,7 @@ export interface ImportPlan {
   workingStates: PlannedWorkingState[];
 }
 
-export interface PlanOptions { projectName: string | undefined; superpowersRoot: string; managersRoot: string; stateDir: string | undefined }
+export interface PlanOptions { projectName: string | undefined; superpowersRoot: string; managersRoot: string; stateDir: string | undefined; stateRoot: string | undefined }
 
 const directoryNamesIn = (root: string): string[] =>
   existsSync(root) ? readdirSync(root, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name) : [];
@@ -122,6 +122,6 @@ export function buildImportPlan(source: ScapeSource, options: PlanOptions): Impo
   const managersPlan = planManagers({ arguses: source.arguses(), notes: plan.notes, availableResources, managersRoot: options.managersRoot });
   plan.managers = managersPlan.managers;
   plan.skippedManagerCount = managersPlan.skippedCount;
-  plan.workingStates = planWorkingStates({ stateDir: options.stateDir, managers: plan.managers });
+  plan.workingStates = planWorkingStates({ stateDir: options.stateDir, stateRoot: options.stateRoot, managers: plan.managers });
   return plan;
 }

@@ -103,7 +103,33 @@ describe('parseWorkingStateFile', () => {
     expect(WorkingStateSectionsSchema.safeParse(parsed.sections).success).toBe(true);
   });
 
-  it('gives six empty sections for a file without any heading', () => {
-    expect(parseWorkingStateFile('just words\nno heading').sections).toEqual({ plan: [], todo: [], remaining: [], questionsForHuman: [], internalQuestions: [], blockers: [] });
+  it('gives six empty sections for a file without any heading, and says its words were not converted', () => {
+    const parsed = parseWorkingStateFile('just words\nno heading');
+
+    expect(parsed.sections).toEqual({ plan: [], todo: [], remaining: [], questionsForHuman: [], internalQuestions: [], blockers: [] });
+    expect(parsed.isNotFullyConverted).toBe(true);
+  });
+
+  it('counts a file made of a title only as fully converted, and an empty file too', () => {
+    expect(parseWorkingStateFile('# Only a title\n').isNotFullyConverted).toBe(false);
+    expect(parseWorkingStateFile('').isNotFullyConverted).toBe(false);
+  });
+
+  it('says text before the first heading was not converted', () => {
+    expect(parseWorkingStateFile('# Title\nstray words\n## Plan\n- item').isNotFullyConverted).toBe(true);
+  });
+
+  it('normalizes the title of a folded section like an item, so that the working state accepts it', () => {
+    const parsed = parseWorkingStateFile(fileOf('## Extra\u0007heading', '- value'));
+
+    expect(parsed.sections.plan).toEqual(['[Extra heading]', 'value']);
+    expect(WorkingStateSectionsSchema.safeParse(parsed.sections).success).toBe(true);
+  });
+
+  it.each(['constructor', '__proto__', 'toString', 'hasOwnProperty'])('treats the heading "%s" as an unknown heading folded into the plan', (heading) => {
+    const parsed = parseWorkingStateFile(fileOf(`## ${heading}`, '- synthetic'));
+
+    expect(parsed.sections.plan).toEqual([`[${heading}]`, 'synthetic']);
+    expect(parsed.mergedSectionCount).toBe(1);
   });
 });

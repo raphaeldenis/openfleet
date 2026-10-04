@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
-import { WORKING_STATE_SECTIONS, type WorkingStateSections } from '@openfleet/shared';
+import { WORKING_STATE_SECTIONS, WorkingStateSectionsSchema, type WorkingStateSections } from '@openfleet/shared';
 import type { ImportReport } from './importReport.js';
 import type { ImportPlan } from './scapePlan.js';
 import type { UpsertOutcome } from './scapeTarget.js';
@@ -18,10 +18,12 @@ export function writeWorkingStates(db: DatabaseSync, plan: ImportPlan, report: I
   for (const planned of plan.workingStates) {
     counts.expected++;
     report.mergedStateSections += planned.mergedSectionCount;
-    if (planned.isNotFullyConverted) counts.notConverted++;
 
+    const isRefusedByTheWorkingState = !WorkingStateSectionsSchema.safeParse(planned.sections).success;
     const managerOutcome = managerOutcomes.get(planned.managerId);
     const isManagerOurs = managerOutcome !== undefined && MANAGER_OUTCOMES_THAT_OWN_THEIR_STATE.includes(managerOutcome);
+    if (planned.isNotFullyConverted || isRefusedByTheWorkingState || !isManagerOurs) counts.notConverted++;
+    if (isRefusedByTheWorkingState) continue;
     if (!isManagerOurs) { counts.conflict++; continue; }
 
     const stored = db.prepare('SELECT sections_json FROM session_working_states WHERE session_id = ?').get(planned.managerId) as { sections_json: string } | undefined;

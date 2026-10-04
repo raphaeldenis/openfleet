@@ -1,7 +1,7 @@
 import { WORKING_STATE_SECTIONS, type ContextHookOutput, type WorkingState, type WorkingStateSections } from '@openfleet/shared';
 import type { DatabaseSync } from 'node:sqlite';
 import { log } from '../logger.js';
-import { buildMissionBlock } from './missionBlock.js';
+import { buildMissionBlock, MISSION_PREVIEW_BYTES } from './missionBlock.js';
 import { renderWorkingState } from './renderWorkingState.js';
 import { ageInWholeMinutes, ageMsOf, isOlderThanLimit, isWrittenBeforeFleetChanged, minutesLabel } from './stateFreshness.js';
 import type { WorkingStateService } from './workingStateService.js';
@@ -9,6 +9,7 @@ import type { WorkingStateSettings } from './workingStateSettings.js';
 
 const CONTEXT_BUDGET_CHARACTERS = 9_000;
 const MAX_LIVE_CHILDREN_LISTED = 40;
+const PREVIEW_LINE_BREAK_CHARACTERS = 1;
 const SOURCES_THAT_LOST_CONTEXT = ['clear', 'compact', 'resume'];
 const SOURCES_THAT_NEED_CONTEXT_FOR_A_MANAGER = [...SOURCES_THAT_LOST_CONTEXT, 'startup'];
 const EVENT_OF_SOURCE: Record<string, string> = { resume: 'The session was resumed', startup: 'The session started' };
@@ -61,15 +62,17 @@ export class SessionStartContext {
 
     const state = this.deps.workingStates.get(sessionId);
     const hasPreviousTranscript = SOURCES_WITH_PREVIOUS_TRANSCRIPT.includes(source) && previousTranscriptPath !== undefined;
-    const mission = isManager ? buildMissionBlock(missionText) : undefined;
-    if (mission?.oversizeWarning) log('warn', `session ${sessionId}: ${mission.oversizeWarning}`);
+    const missionOf = (maxPreviewBytes: number) => buildMissionBlock(missionText ?? '', { maxPreviewBytes });
+    const fullPreviewMission = isManager ? missionOf(MISSION_PREVIEW_BYTES) : undefined;
+    if (fullPreviewMission?.oversizeWarning) log('warn', `session ${sessionId}: ${fullPreviewMission.oversizeWarning}`);
     const fixedBlocks = {
-      firstLine: [this.firstLine(source, state), mission?.oversizeWarning].filter((part) => part !== undefined).join(' '),
-      missionBlock: mission?.text,
+      firstLine: [this.firstLine(source, state), fullPreviewMission?.oversizeWarning].filter((part) => part !== undefined).join(' '),
+      missionBlock: fullPreviewMission?.text,
       stateBlock: this.stateBlock(state),
       transcriptBlock: hasPreviousTranscript ? `# Previous transcript (path only)\n${toSingleLine(previousTranscriptPath)}` : undefined,
     };
-    const additionalContext = this.assembleWithinBudget(fixedBlocks, this.liveChildLines(sessionId));
+    const missionBlockOf = isManager ? (maxPreviewBytes: number) => missionOf(maxPreviewBytes).text : undefined;
+    const additionalContext = this.assembleWithinBudget({ fixedBlocks, childLines: this.liveChildLines(sessionId), missionBlockOf });
     return { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext } };
   }
 
@@ -108,14 +111,26 @@ export class SessionStartContext {
     });
   }
 
-  private assembleWithinBudget(fixedBlocks: FixedBlocks, childLines: string[]): string {
-    const assembleShowing = (shownCount: number) => this.assemble(fixedBlocks, childLines, shownCount);
+  /**
+   * Fits the context in the character budget by giving up, in this order: live children (down to "and N more"), then the mission preview
+   * (down to its header and truncation marker). The state, the transcript path and the trusted lines are never cut, so a context whose
+   * state alone fills the budget stays above it.
+   */
+  private assembleWithinBudget({ fixedBlocks, childLines, missionBlockOf }: { fixedBlocks: FixedBlocks; childLines: string[]; missionBlockOf: ((maxPreviewBytes: number) => string) | undefined }): string {
+    const assembleShowing = (shownCount: number, missionBlock = fixedBlocks.missionBlock) => this.assemble({ ...fixedBlocks, missionBlock }, childLines, shownCount);
     const mostChildrenListable = Math.min(childLines.length, MAX_LIVE_CHILDREN_LISTED);
     for (let shownCount = mostChildrenListable; shownCount > 0; shownCount -= 1) {
       const candidate = assembleShowing(shownCount);
       if (candidate.length <= CONTEXT_BUDGET_CHARACTERS) return candidate;
     }
-    return assembleShowing(0);
+    const withoutChildren = assembleShowing(0);
+    const fitsWithoutChildren = withoutChildren.length <= CONTEXT_BUDGET_CHARACTERS;
+    if (fitsWithoutChildren || missionBlockOf === undefined) return withoutChildren;
+
+    const withoutPreview = assembleShowing(0, missionBlockOf(0));
+    const roomForPreview = CONTEXT_BUDGET_CHARACTERS - withoutPreview.length - PREVIEW_LINE_BREAK_CHARACTERS;
+    const previewBytes = Math.max(0, Math.min(MISSION_PREVIEW_BYTES, roomForPreview));
+    return assembleShowing(0, missionBlockOf(previewBytes));
   }
 
   private assemble(fixedBlocks: FixedBlocks, childLines: string[], shownCount: number): string {

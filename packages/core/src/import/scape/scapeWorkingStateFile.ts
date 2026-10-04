@@ -2,21 +2,23 @@ import { WORKING_STATE_MAX_ITEMS_PER_SECTION, WORKING_STATE_MAX_ITEM_CHARACTERS,
 import { renderWorkingState } from '../../workingState/renderWorkingState.js';
 import { DEFAULT_WORKING_STATE_MAX_BYTES } from '../../workingState/workingStateSettings.js';
 
-const SECTION_OF_HEADING: Record<string, WorkingStateSectionKey> = {
-  plan: 'plan',
-  todo: 'todo',
-  'reste à faire': 'remaining',
-  'questions pour raphaël': 'questionsForHuman',
-  "questions pour l'humain": 'questionsForHuman',
-  'questions internes': 'internalQuestions',
-  blocages: 'blockers',
-};
-const SECTION_RECEIVING_FOLDED_HEADING: Record<string, WorkingStateSectionKey> = {
-  'ordres permanents': 'plan',
-  'décisions raphaël': 'plan',
-  'main et pr': 'remaining',
-  'enfants vivants': 'remaining',
-};
+const SECTION_OF_HEADING = new Map<string, WorkingStateSectionKey>([
+  ['plan', 'plan'],
+  ['todo', 'todo'],
+  ['reste à faire', 'remaining'],
+  ['questions pour raphaël', 'questionsForHuman'],
+  ["questions pour l'humain", 'questionsForHuman'],
+  ['questions internes', 'internalQuestions'],
+  ['blocages', 'blockers'],
+]);
+const SECTION_RECEIVING_FOLDED_HEADING = new Map<string, WorkingStateSectionKey>([
+  ['ordres permanents', 'plan'],
+  ['décisions raphaël', 'plan'],
+  ['main et pr', 'remaining'],
+  ['enfants vivants', 'remaining'],
+]);
+const UNTITLED_HEADING = 'untitled';
+const TITLE_LINE = /^#\s/;
 const SECTION_RECEIVING_ANY_OTHER_HEADING: WorkingStateSectionKey = 'plan';
 
 const HEADING_LINE = /^#{2,}\s+(.*)$/;
@@ -46,8 +48,12 @@ const sizeInBytes = (sections: WorkingStateSections) => Buffer.byteLength(render
 
 const headingTextOf = (line: string): string | undefined => {
   const heading = HEADING_LINE.exec(line)?.[1];
-  return heading?.replace(TRAILING_PARENTHESIS, '').trim();
+  if (heading === undefined) return undefined;
+  const withoutParenthesis = heading.replace(TRAILING_PARENTHESIS, '').trim().replace(LEADING_HASHES, '');
+  return withRefusedCharactersAsSpaces(withoutParenthesis).trim() || UNTITLED_HEADING;
 };
+
+const isStrayText = (line: string) => line.trim() !== '' && !TITLE_LINE.test(line);
 
 function itemTextOf(line: string): string {
   return withRefusedCharactersAsSpaces(line.replace(BULLET_PREFIX, '').trim().replace(LEADING_HASHES, '')).trim();
@@ -77,15 +83,18 @@ export function parseWorkingStateFile(text: string): ParsedWorkingState {
     const heading = headingTextOf(line);
     const isHeading = heading !== undefined;
     if (isHeading) {
-      const ownSection = SECTION_OF_HEADING[heading.toLowerCase()];
-      target = ownSection ?? SECTION_RECEIVING_FOLDED_HEADING[heading.toLowerCase()] ?? SECTION_RECEIVING_ANY_OTHER_HEADING;
+      const ownSection = SECTION_OF_HEADING.get(heading.toLowerCase());
+      target = ownSection ?? SECTION_RECEIVING_FOLDED_HEADING.get(heading.toLowerCase()) ?? SECTION_RECEIVING_ANY_OTHER_HEADING;
       if (ownSection === undefined) {
         sections[target].push(`[${heading}]`);
         mergedSectionCount++;
       }
       continue;
     }
-    if (target === undefined) continue;
+    if (target === undefined) {
+      isNotFullyConverted ||= isStrayText(line);
+      continue;
+    }
     const item = itemTextOf(line);
     const isNoItem = item === '' || item === EMPTY_SECTION_PLACEHOLDER;
     if (!isNoItem) sections[target].push(item);

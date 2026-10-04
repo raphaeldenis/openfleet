@@ -1,4 +1,4 @@
-import { join } from 'node:path';
+import { join, relative, resolve, sep } from 'node:path';
 import { parseArgs } from 'node:util';
 import { renderImportReport } from './scape/importReport.js';
 import { importScape, type ImportScapeOptions } from './scape/importScape.js';
@@ -52,6 +52,13 @@ function parseFlags(argv: string[]) {
 
 type ParsedFlags = ReturnType<typeof parseFlags>;
 
+/** A state folder inside the home of the user must be reached with no link below the home; one elsewhere only has to be no link itself. */
+function stateFolderOptionsOf(stateDirFlag: string | undefined, homeDirectory: string): Pick<ImportScapeOptions, 'stateDir' | 'stateRoot'> {
+  const stateDir = stateDirFlag ?? join(homeDirectory, 'Documents', 'scape-team', 'state');
+  const isInsideHome = relative(homeDirectory, resolve(stateDir)).split(sep)[0] !== '..';
+  return { stateDir, stateRoot: isInsideHome ? homeDirectory : undefined };
+}
+
 function importOptionsFrom({ values, positionals }: ParsedFlags, environment: CliEnvironment) {
   if (positionals.join(' ') !== 'scape') throw invalidArguments(USAGE);
   const home = values.home ?? environment.env.OPENFLEET_HOME;
@@ -64,7 +71,7 @@ function importOptionsFrom({ values, positionals }: ParsedFlags, environment: Cl
     dryRun: values['dry-run'] ?? false,
     projectName: values.project,
     reportDir: values['report-dir'],
-    stateDir: values['state-dir'] ?? join(environment.homeDirectory, 'Documents', 'scape-team', 'state'),
+    ...stateFolderOptionsOf(values['state-dir'], environment.homeDirectory),
     refuseReimport: !allowsReimport,
   };
   return { options, allowsReimport };

@@ -199,6 +199,95 @@ describe('importScape: working states of the managers', () => {
     expect(stateCount()).toBe(0);
   });
 
+  it('imports a state file whose headings are named like properties of every object, with nothing left over', () => {
+    writeStateFile('alpha.md', ['## constructor', '- synthetic one', '## __proto__', '- synthetic two'].join('\n'));
+
+    const report = run();
+
+    expect(JSON.parse(storedState(LEAD_ARGUS_ID)!.sections_json).plan).toEqual(['[constructor]', 'synthetic one', '[__proto__]', 'synthetic two']);
+    expect(report.counts.workingStates.written).toBe(1);
+    expect(({} as Record<string, unknown>).synthetic).toBeUndefined();
+  });
+
+  describe('a state folder that is reached through a link', () => {
+    const makeOutsideFolderWithState = () => {
+      const outside = join(fixture.workDir, 'outside');
+      mkdirSync(outside);
+      writeFileSync(join(outside, 'alpha.md'), '## Plan\n- secret outside item');
+      return outside;
+    };
+
+    it('is refused when the folder itself is a link, and nothing is written', () => {
+      const linkedFolder = join(fixture.workDir, 'linked-state');
+      symlinkSync(makeOutsideFolderWithState(), linkedFolder);
+
+      expect(() => run({ stateDir: linkedFolder })).toThrow(expect.objectContaining({ code: 'INVALID_ARGUMENTS' }));
+      expect(existsSync(home)).toBe(false);
+    });
+
+    it('is refused when a parent of the folder below the allowed root is a link, and nothing is written', () => {
+      const outside = makeOutsideFolderWithState();
+      symlinkSync(outside, join(fixture.workDir, 'linked-parent'));
+      mkdirSync(join(outside, 'state'));
+      writeFileSync(join(outside, 'state', 'alpha.md'), '## Plan\n- secret outside item');
+
+      expect(() => run({ stateDir: join(fixture.workDir, 'linked-parent', 'state'), stateRoot: fixture.workDir })).toThrow(expect.objectContaining({ code: 'INVALID_ARGUMENTS' }));
+      expect(existsSync(home)).toBe(false);
+    });
+
+    it('is refused when the folder is outside the allowed root', () => {
+      expect(() => run({ stateDir, stateRoot: join(fixture.workDir, 'somewhere-else') })).toThrow(expect.objectContaining({ code: 'INVALID_ARGUMENTS' }));
+    });
+
+    it('is accepted when no part of the path below the allowed root is a link', () => {
+      writeStateFile('alpha.md');
+
+      run({ stateRoot: fixture.workDir });
+
+      expect(storedState(LEAD_ARGUS_ID)).toBeDefined();
+    });
+  });
+
+  describe('a state file larger than the read limit', () => {
+    const BEYOND_THE_LIMIT_ITEM = 'item beyond the read limit';
+    const writeOversizedStateFile = () => {
+      const filler = Array.from({ length: 5_000 }, () => `- ${'f'.repeat(100)}`).join('\n');
+      writeStateFile('alpha.md', ['## Plan', '- item before the limit', '## Todo', filler, '## Blocages', `- ${BEYOND_THE_LIMIT_ITEM}`].join('\n'));
+    };
+
+    it('is read up to the limit only and counted as not converted', () => {
+      writeOversizedStateFile();
+
+      const report = run();
+
+      expect(storedState(LEAD_ARGUS_ID)!.sections_json).not.toContain(BEYOND_THE_LIMIT_ITEM);
+      expect(storedState(LEAD_ARGUS_ID)!.sections_json).toContain('item before the limit');
+      expect(report.counts.workingStates.notConverted).toBe(1);
+    });
+
+    it('is counted as not converted on a dry run too', () => {
+      writeOversizedStateFile();
+
+      expect(run({ dryRun: true }).counts.workingStates.notConverted).toBe(1);
+    });
+  });
+
+  it('counts a state file without any heading as not converted', () => {
+    writeStateFile('alpha.md', 'only words, no heading');
+
+    expect(run().counts.workingStates.notConverted).toBe(1);
+  });
+
+  it('counts the state of a manager left as it is as not converted, as the report says', () => {
+    writeStateFile('alpha.md');
+    run();
+    openTarget().prepare('UPDATE managers SET mission_text = ? WHERE session_id = ?').run('edited in OpenFleet', LEAD_ARGUS_ID);
+
+    const secondReport = run({ refuseReimport: false });
+
+    expect(secondReport.counts.workingStates).toMatchObject({ conflict: 1, notConverted: 1 });
+  });
+
   it('puts the merged sections and the working states in the report', () => {
     writeStateFile('alpha.md');
 
