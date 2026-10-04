@@ -4,7 +4,7 @@ import { Router, RouterLink } from '@angular/router';
 import { MANAGER_ROLE, type Session } from '@openfleet/shared';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { StateChipComponent } from '../design/state-chip.component';
-import { showInvisibleControlsAsEscapes } from '../inbox/bidi-escapes';
+import { showInvisibleControlsAsEscapes } from '../core/bidi-escapes';
 import { ManagerCardComponent } from '../managers/manager-card.component';
 import { OverdueChipComponent } from '../working-state/overdue-chip.component';
 

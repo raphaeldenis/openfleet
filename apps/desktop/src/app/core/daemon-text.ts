@@ -1,4 +1,4 @@
-import { showInvisibleControlsAsEscapes } from '../inbox/bidi-escapes';
+import { showInvisibleControlsAsEscapes } from './bidi-escapes';
 
 const MASK = '***';
 

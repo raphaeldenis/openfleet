@@ -1,7 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { StateChipComponent } from '../../design/state-chip.component';
-import { showInvisibleControlsAsEscapes } from '../../inbox/bidi-escapes';
+import { showInvisibleControlsAsEscapes } from '../../core/bidi-escapes';
 import { CLOSED_STATE } from './children-progress';
 import { plural } from './plural';
 import type { ChildProgress, ChildrenLoad } from './session-todos-source';
