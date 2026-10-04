@@ -3,7 +3,7 @@ import { readableDaemonText } from './daemon-text';
 import { ApiError } from './fleet-api.service';
 
 /** What the user was doing when the error came back: it decides the advice ("shorten the mission" vs "shorten the name"). */
-export type ErrorAction = 'generic' | 'send' | 'create_session' | 'create_manager' | 'resume' | 'load_todos' | 'rename' | 'close' | 'load_handoff' | 'save_handoff';
+export type ErrorAction = 'generic' | 'send' | 'create_session' | 'create_manager' | 'resume' | 'load_todos' | 'rename' | 'close' | 'load_handoff' | 'save_handoff' | 'save_project';
 
 export interface ErrorContext {
   action: ErrorAction;
@@ -164,6 +164,11 @@ const COPY_BY_ACTION: Record<ErrorAction, ActionCopy> = {
   save_handoff: {
     docs_folder_not_writable: { what: 'The handoff was not written: the docs folder is not writable', fix: 'fix the folder permissions' },
   },
+  save_project: {
+    invalid_body: { what: 'That folder cannot be used: use an existing absolute folder path' },
+    docs_folder_not_writable: { what: 'That folder is not writable', fix: 'fix its permissions' },
+    path_escapes_docs_folder: { what: 'That folder contains a link that leads outside it', fix: 'pick a folder without one' },
+  },
 };
 
 const FALLBACK_BY_ACTION: Partial<Record<ErrorAction, string>> = {
@@ -175,6 +180,7 @@ const FALLBACK_BY_ACTION: Partial<Record<ErrorAction, string>> = {
   resume: GENERIC_REOPEN_ERROR,
   load_handoff: 'The preview could not be loaded — the daemon did not answer in time.',
   save_handoff: 'The handoff was not written — try again.',
+  save_project: 'The project was not saved — try again.',
 };
 
 const NOT_CONNECTED_BY_ACTION: Partial<Record<ErrorAction, string>> = {
@@ -186,6 +192,7 @@ const NOT_CONNECTED_BY_ACTION: Partial<Record<ErrorAction, string>> = {
   close: 'Could not close the session — check your connection, then try again.',
   load_handoff: 'The preview could not be loaded — check your connection, then try again.',
   save_handoff: 'The handoff was not written — check your connection, then try again.',
+  save_project: 'The project was not saved — check your connection, then try again.',
 };
 
 const isKnownCode = (code: string | undefined): code is ErrorCode => code !== undefined && Object.hasOwn(ERROR_CODES, code);

@@ -4,7 +4,7 @@ import { ActivatedRoute, convertToParamMap, provideRouter, Router } from '@angul
 import type { Page, Project } from '@openfleet/shared';
 import { BehaviorSubject } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
-import { FleetApiService } from '../core/fleet-api.service';
+import { ApiError, FleetApiService } from '../core/fleet-api.service';
 import { NewSessionFormComponent } from './new-session-form.component';
 
 const FLEET: Project = { id: '3f2b8c1e-5d4a-4b6e-9a7c-1d2e3f4a5b6c', name: 'Fleet', docsFolderPath: '/work/fleet-docs' };
@@ -17,6 +17,7 @@ function fakeApi(listProjects: () => Promise<Page<Project>> = () => Promise.reso
     listProjects: vi.fn(listProjects),
     createSession: vi.fn().mockResolvedValue({ id: 's-new' }),
     createManagerSession: vi.fn().mockResolvedValue({ id: 'm-new' }),
+    createProject: vi.fn(),
   };
 }
 
@@ -141,17 +142,127 @@ describe('the Project field of the New session form', () => {
   });
 
   describe('when the user has no project yet', () => {
-    it('shows no Project field and no note, and creates the session as before', async () => {
-      const api = fakeApi(() => Promise.resolve(pageOf([])));
+    const noProjectsApi = () => fakeApi(() => Promise.resolve(pageOf([])));
+    const createProjectTrigger = () => screen.getByRole('button', { name: 'Create a project…' });
+    const projectForm = () => within(screen.getByRole('group', { name: 'Create a project' }));
+    const projectNameField = () => projectForm().getByRole<HTMLInputElement>('textbox', { name: 'Name' });
+    const projectDocsFolderField = () => projectForm().getByRole<HTMLInputElement>('textbox', { name: 'Docs folder' });
+    const submitProjectForm = () => userEvent.click(projectForm().getByRole('button', { name: 'Create project' }));
+
+    it('shows no Project select but offers to create a project, and creates the session as before', async () => {
+      const api = noProjectsApi();
       await renderForm(api);
-      await waitFor(() => expect(api.listProjects).toHaveBeenCalled());
+      await waitFor(() => expect(createProjectTrigger()).toBeInTheDocument());
 
       await fillSessionFields();
       await userEvent.click(submitButton());
 
+      expect(screen.getByText(/No projects yet/)).toBeInTheDocument();
       expect(projectSelectIfShown()).not.toBeInTheDocument();
       expect(projectNote()).not.toBeInTheDocument();
       expect(api.createSession.mock.calls[0]![0]).not.toHaveProperty('projectId');
+    });
+
+    it('does not claim there is no project while the projects are still loading', async () => {
+      await renderForm(fakeApi(() => new Promise(() => undefined)));
+
+      expect(screen.queryByText(/No projects yet/)).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Create a project…' })).not.toBeInTheDocument();
+    });
+
+    it('offers no project creation when the projects could not be loaded, since there may be some', async () => {
+      await renderForm(fakeApi(() => Promise.reject(new Error('daemon unreachable'))));
+      await waitFor(() => expect(projectNote()).toBeInTheDocument());
+
+      expect(screen.queryByRole('button', { name: 'Create a project…' })).not.toBeInTheDocument();
+    });
+
+    it('opens the project form, with the cursor in its Name field, when "Create a project…" is pressed', async () => {
+      await renderForm(noProjectsApi());
+      await waitFor(() => expect(createProjectTrigger()).toBeInTheDocument());
+
+      await userEvent.click(createProjectTrigger());
+
+      expect(screen.getByRole('group', { name: 'Create a project' })).toBeInTheDocument();
+      await waitFor(() => expect(projectNameField()).toHaveFocus());
+      expect(createProjectTrigger()).toHaveAttribute('aria-expanded', 'true');
+    });
+
+    it('gives the cursor back to "Create a project…" when the user cancels', async () => {
+      await renderForm(noProjectsApi());
+      await waitFor(() => expect(createProjectTrigger()).toBeInTheDocument());
+      await userEvent.click(createProjectTrigger());
+
+      await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+      expect(screen.queryByRole('group', { name: 'Create a project' })).not.toBeInTheDocument();
+      await waitFor(() => expect(createProjectTrigger()).toHaveFocus());
+    });
+
+    it('selects the new project in a Project select that replaces the link, announces it, and moves the cursor to the select', async () => {
+      const api = noProjectsApi();
+      const created: Project = { id: 'p-new', name: 'Fleet', docsFolderPath: '/work/fleet-docs' };
+      const createProject = vi.fn().mockResolvedValue(created);
+      await renderForm({ ...api, createProject } as ReturnType<typeof fakeApi>);
+      await waitFor(() => expect(createProjectTrigger()).toBeInTheDocument());
+      await userEvent.click(createProjectTrigger());
+
+      await userEvent.type(projectNameField(), 'Fleet');
+      await userEvent.type(projectDocsFolderField(), '/work/fleet-docs');
+      await submitProjectForm();
+
+      await waitFor(() => expect(projectSelect()).toBeInTheDocument());
+      expect(createProject).toHaveBeenCalledExactlyOnceWith({ name: 'Fleet', docsFolderPath: '/work/fleet-docs' });
+      expect(optionLabels()).toEqual(['No project', 'Fleet']);
+      expect(projectSelect().value).toBe('p-new');
+      expect(screen.getByRole('status')).toHaveTextContent('Project created');
+      expect(screen.queryByRole('group', { name: 'Create a project' })).not.toBeInTheDocument();
+      expect(screen.queryByText(/No projects yet/)).not.toBeInTheDocument();
+      await waitFor(() => expect(projectSelect()).toHaveFocus());
+    });
+
+    it('creates the session in the project the user just created', async () => {
+      const api = noProjectsApi();
+      const created: Project = { id: 'p-new', name: 'Fleet', docsFolderPath: null };
+      await renderForm({ ...api, createProject: vi.fn().mockResolvedValue(created) } as ReturnType<typeof fakeApi>);
+      await waitFor(() => expect(createProjectTrigger()).toBeInTheDocument());
+      await userEvent.click(createProjectTrigger());
+      await userEvent.type(projectNameField(), 'Fleet');
+      await submitProjectForm();
+      await waitFor(() => expect(projectSelect()).toBeInTheDocument());
+
+      await fillSessionFields();
+      await userEvent.click(submitButton());
+
+      expect(api.createSession).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ projectId: 'p-new' }));
+    });
+
+    it('keeps the project form open with the daemon refusal, and creates no session, when Enter is pressed in its fields', async () => {
+      const api = noProjectsApi();
+      const createProject = vi.fn().mockRejectedValue(new ApiError(400, 'POST /api/projects', 'invalid_body'));
+      await renderForm({ ...api, createProject } as ReturnType<typeof fakeApi>);
+      await waitFor(() => expect(createProjectTrigger()).toBeInTheDocument());
+      await userEvent.click(createProjectTrigger());
+      await userEvent.type(projectNameField(), 'Fleet');
+
+      await userEvent.type(projectDocsFolderField(), 'relative{Enter}');
+
+      expect(await screen.findByText('That folder cannot be used: use an existing absolute folder path.')).toBeInTheDocument();
+      expect(createProject).toHaveBeenCalledOnce();
+      expect(api.createSession).not.toHaveBeenCalled();
+      expect(screen.getByRole('group', { name: 'Create a project' })).toBeInTheDocument();
+    });
+
+    it('closes only the project form when Escape is pressed in it', async () => {
+      const api = noProjectsApi();
+      await renderForm(api);
+      await waitFor(() => expect(createProjectTrigger()).toBeInTheDocument());
+      await userEvent.click(createProjectTrigger());
+
+      await userEvent.keyboard('{Escape}');
+
+      expect(screen.queryByRole('group', { name: 'Create a project' })).not.toBeInTheDocument();
+      expect(screen.getByTestId('new-session-form')).toBeInTheDocument();
     });
   });
 

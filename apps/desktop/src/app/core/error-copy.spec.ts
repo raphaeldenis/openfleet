@@ -121,7 +121,7 @@ describe('copyFor', () => {
   });
 
   describe('the retry of the envelope decides the ending of every action', () => {
-    const ACTIONS = ['generic', 'send', 'create_session', 'create_manager', 'resume', 'rename', 'close', 'load_handoff', 'save_handoff'] as const;
+    const ACTIONS = ['generic', 'send', 'create_session', 'create_manager', 'resume', 'rename', 'close', 'load_handoff', 'save_handoff', 'save_project'] as const;
     const RETRIES = ['never', 'later', 'after_refresh'] as const;
     const wordsOfEnvelope = (code: ErrorCode, retry: ErrorEnvelope['retry'], action: (typeof ACTIONS)[number]) => {
       const envelope = envelopeOf(code, { retry, ...(ERROR_CODES[code].kind === 'internal' && { id: '3f9a1c2e' }) });
@@ -139,8 +139,8 @@ describe('copyFor', () => {
         return problems.map((problem) => `${code}: ${problem} — "${text}"`);
       });
 
-    it('covers every code, action and retry once (1701 cases)', () => {
-      expect(ALL_CODES.length * ACTIONS.length * RETRIES.length).toBe(1701);
+    it('covers every code, action and retry once (1890 cases)', () => {
+      expect(ALL_CODES.length * ACTIONS.length * RETRIES.length).toBe(1890);
     });
 
     describe.each(ACTIONS)('the action %s', (action) => {
@@ -209,6 +209,35 @@ describe('copyFor', () => {
       const { text } = copyFor(new TypeError('Failed to fetch'), { action: 'save_handoff' });
 
       expect(text).toBe('The handoff was not written — check your connection, then try again.');
+    });
+  });
+
+  describe('the project actions', () => {
+    const copyOfProjectFailure = (code: ErrorCode, retry: ErrorEnvelope['retry']) =>
+      copyFor(apiErrorOf(envelopeOf(code, { retry })), { action: 'save_project' }).text;
+
+    it('tells the user to use an existing absolute folder path when the daemon rejects the values and a retry cannot help', () => {
+      expect(copyOfProjectFailure('invalid_body', 'never')).toBe('That folder cannot be used: use an existing absolute folder path.');
+    });
+
+    it('tells the user the folder is not writable, and to fix its permissions, then try again', () => {
+      expect(copyOfProjectFailure('docs_folder_not_writable', 'later')).toBe('That folder is not writable — fix its permissions, then try again.');
+    });
+
+    it('tells the user a path inside the folder leaves it, without a retry', () => {
+      expect(copyOfProjectFailure('path_escapes_docs_folder', 'never')).toBe('That folder contains a link that leads outside it — pick a folder without one.');
+    });
+
+    it('tells the user the project is gone when it was deleted meanwhile', () => {
+      expect(copyOfProjectFailure('project_not_found', 'never')).toBe('That project no longer exists.');
+    });
+
+    it('says the project was not saved when the daemon gives no reason', () => {
+      expect(copyFor(new ApiError(500, 'POST /x'), { action: 'save_project' }).text).toBe('The project was not saved — try again.');
+    });
+
+    it('asks to check the connection when the daemon cannot be reached', () => {
+      expect(copyFor(new TypeError('Failed to fetch'), { action: 'save_project' }).text).toBe('The project was not saved — check your connection, then try again.');
     });
   });
 

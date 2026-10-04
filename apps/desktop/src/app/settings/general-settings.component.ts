@@ -1,6 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/core';
 import { Router } from '@angular/router';
 import { ThemeService } from '../core/theme.service';
+import { ProjectsSettingsComponent } from './projects-settings.component';
 import { SettingsRowComponent } from './settings-row.component';
 import { SettingsSectionComponent } from './settings-section.component';
 import { SETTINGS_VALUE_STYLES } from './settings-value-styles';
@@ -10,7 +11,7 @@ const THEME_LABELS = { light: 'Light', dark: 'Dark' } as const;
 @Component({
   selector: 'of-general-settings',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [SettingsSectionComponent, SettingsRowComponent],
+  imports: [SettingsSectionComponent, SettingsRowComponent, ProjectsSettingsComponent],
   template: `
     <of-settings-section heading="General" testId="settings-general">
       <div class="rows">
@@ -24,6 +25,7 @@ const THEME_LABELS = { light: 'Light', dark: 'Dark' } as const;
         <of-settings-row name="Write a handoff when a session closes" detail="Saved to handoffs/YYYY-MM-DD-<session>.md; offered in the close dialog" [unavailable]="handoffOnClose" />
         <of-settings-row name="Agents reply and write in" detail="Applies to sessions started afterwards · code and commits follow House rules" [unavailable]="replyLanguage" />
       </div>
+      <of-projects-settings />
     </of-settings-section>
   `,
   styles: SETTINGS_VALUE_STYLES,
