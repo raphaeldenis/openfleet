@@ -1,3 +1,5 @@
+#![deny(clippy::disallowed_macros, clippy::disallowed_methods)]
+
 mod admin_token;
 mod app_exit;
 mod daemon;
@@ -11,6 +13,8 @@ mod panic_hook;
 mod path_repair;
 mod redaction;
 mod status_line;
+
+pub use event_log::SanitizedLine;
 
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -117,6 +121,8 @@ fn record_foreign_records_every(interval: std::time::Duration, app: tauri::AppHa
 pub fn run() {
   let _ = event_log::install_foreign_logger();
   panic_hook::install();
+  #[allow(clippy::disallowed_macros)]
+  let context = tauri::generate_context!();
   let application = tauri::Builder::default()
     .plugin(tauri_plugin_shell::init())
     .manage(daemon::DaemonState::new())
@@ -132,7 +138,7 @@ pub fn run() {
       record_foreign_records_every(FOREIGN_RECORDS_INTERVAL, app.handle().clone());
       Ok(())
     })
-    .build(tauri::generate_context!())
+    .build(context)
     .expect("error while building tauri application");
 
   application.run(|app, event| {

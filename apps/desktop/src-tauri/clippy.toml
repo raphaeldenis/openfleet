@@ -1,0 +1,5 @@
+disallowed-macros = [
+  "log::trace", "log::debug", "log::info", "log::warn", "log::error", "log::log",
+  "std::println", "std::eprintln", "std::print", "std::eprint", "std::dbg",
+]
+disallowed-methods = ["std::fs::File::create", "std::fs::OpenOptions::new"]
