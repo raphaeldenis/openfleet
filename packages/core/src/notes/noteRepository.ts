@@ -25,6 +25,12 @@ export interface NoteTitleUpdate {
   updatedAt: string;
 }
 
+export interface NoteFolderUpdate {
+  folder: NoteFolder | null;
+  expectedRev: number;
+  updatedAt: string;
+}
+
 export interface NoteVersionInsert {
   id: string;
   noteId: string;
@@ -148,9 +154,11 @@ export class NoteRepository {
       [bodyMd, title, updatedAt], id, expectedRev,
     );
   }
-  move(id: string, folder: NoteFolder | null): boolean {
-    const { changes } = this.db.prepare('UPDATE notes SET folder = ? WHERE id = ?').run(folder, id);
-    return Number(changes) > 0;
+  move(id: string, { folder, expectedRev, updatedAt }: NoteFolderUpdate): NoteUpdateResult {
+    return this.compareAndSet(
+      'UPDATE notes SET folder = ?, rev = rev + 1, updated_at = ? WHERE id = ? AND rev = ? RETURNING *',
+      [folder, updatedAt], id, expectedRev,
+    );
   }
   delete(id: string): boolean {
     const { changes } = this.db.prepare('DELETE FROM notes WHERE id = ?').run(id);

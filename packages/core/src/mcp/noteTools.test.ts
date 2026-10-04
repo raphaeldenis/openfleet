@@ -323,12 +323,43 @@ describe('note tools', () => {
       expect(movedBack.folder).toBeNull();
     });
 
+    it('is a new revision with its own version row', async () => {
+      const client = await connect(scopedToken);
+      const note = await createNote(client);
+
+      const moved = text(await client.callTool({ name: 'move_note', arguments: { note: note.id, folder: 'plans' } }));
+
+      expect(moved.rev).toBe(note.rev + 1);
+      expect(noteRepo.listVersions(note.id)).toHaveLength(2);
+    });
+
+    it('on a stale expected_rev returns a non-throwing error result with the current rev, and does not move', async () => {
+      const client = await connect(scopedToken);
+      const note = await createNote(client);
+      await client.callTool({ name: 'update_note', arguments: { note: note.id, body_md: 'v2', expected_rev: note.rev } });
+
+      const result = await client.callTool({ name: 'move_note', arguments: { note: note.id, folder: 'plans', expected_rev: note.rev } });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toMatch(/^error stale_revision: .*current rev: 2\. .* \(retry: after_refresh\)$/);
+      expect(noteRepo.get(note.id)).toMatchObject({ folder: null, rev: 2 });
+    });
+
+    it('moves when expected_rev matches', async () => {
+      const client = await connect(scopedToken);
+      const note = await createNote(client);
+
+      const moved = text(await client.callTool({ name: 'move_note', arguments: { note: note.id, folder: 'plans', expected_rev: note.rev } }));
+
+      expect(moved).toMatchObject({ folder: 'plans', rev: note.rev + 1 });
+    });
+
     it('on another project\'s note fails exactly like a missing note', async () => {
       const owner = await connect(scopedToken);
       const note = await createNote(owner);
       const stranger = await connect(otherToken);
 
-      const strangerResult = await stranger.callTool({ name: 'move_note', arguments: { note: note.id, folder: 'plans' } });
+      const strangerResult = await stranger.callTool({ name: 'move_note',arguments: { note: note.id, folder: 'plans' } });
       const missingResult = await stranger.callTool({ name: 'move_note', arguments: { note: 'does-not-exist', folder: 'plans' } });
 
       expect(strangerResult.isError).toBe(true);

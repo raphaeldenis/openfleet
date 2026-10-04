@@ -300,7 +300,7 @@ describe('MCP tool results are compact', () => {
       const moved = parsed(await call('move_note', { note: created.id, folder: null }));
       const restored = parsed(await call('restore_note_version', { note: created.id, rev: 1 }));
 
-      expect([updated.rev, appended.rev, sectioned.rev, moved.rev, restored.rev]).toEqual([2, 3, 4, 4, 5]);
+      expect([updated.rev, appended.rev, sectioned.rev, moved.rev, restored.rev]).toEqual([2, 3, 4, 5, 6]);
       for (const ack of [updated, appended, sectioned, moved, restored]) expect(ack).not.toHaveProperty('bodyMd');
     });
 

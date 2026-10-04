@@ -67,14 +67,14 @@ export function registerNoteTools(server: McpServer, deps: RegisterNoteToolsDeps
   });
 
   server.registerTool('move_note', {
-    description: 'Move a note to a different folder, or to no folder (null); refused for file-backed notes, whose folder is fixed by their file path; returns id, title, folder, rev, shared and fileBacked, not the body',
-    inputSchema: { note: z.string().min(1), folder: NoteFolderSchema.nullable() },
-  }, async ({ note, folder }) => {
+    description: 'Move a note to a different folder, or to no folder (null); a move is a new revision, rejected with the current rev if expected_rev is given and stale; refused for file-backed notes, whose folder is fixed by their file path; returns id, title, folder, rev, shared and fileBacked, not the body',
+    inputSchema: { note: z.string().min(1), folder: NoteFolderSchema.nullable(), expected_rev: z.number().int().optional() },
+  }, async ({ note, folder, expected_rev }) => {
     const scope = requireProject();
     if (!scope) return refuse('project_not_found', 'this session has no project');
     return guarded(() => {
       requireOwnNote(scope.projectId, note);
-      return noteSummary(notes.move(note, folder));
+      return noteSummary(notes.move(note, folder, { expectedRev: expected_rev, author: author() }));
     });
   });
 

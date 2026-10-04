@@ -223,20 +223,21 @@ describe('NoteRepository updateFileBacked', () => {
 });
 
 describe('NoteRepository move', () => {
-  it('changes the folder without touching the body, the revision or the update time', () => {
+  it('changes the folder, bumps the revision and stamps the update time, keeping the body', () => {
     const { repository } = openRepositoryWithProjects('p1');
     repository.insert(aNote({ folder: null, bodyMd: 'keep', rev: 4, updatedAt: 't3' }));
 
-    repository.move('n1', 'plans');
+    const result = repository.move('n1', { folder: 'plans', expectedRev: 4, updatedAt: 't9' });
 
-    expect(repository.get('n1')).toEqual(aNote({ folder: 'plans', bodyMd: 'keep', rev: 4, updatedAt: 't3' }));
+    expect(result).toEqual({ outcome: 'updated', note: aNote({ folder: 'plans', bodyMd: 'keep', rev: 5, updatedAt: 't9' }) });
+    expect(repository.get('n1')).toEqual(aNote({ folder: 'plans', bodyMd: 'keep', rev: 5, updatedAt: 't9' }));
   });
 
   it('moves a note out of its folder', () => {
     const { repository } = openRepositoryWithProjects('p1');
     repository.insert(aNote({ folder: 'specs' }));
 
-    repository.move('n1', null);
+    repository.move('n1', { folder: null, expectedRev: 1, updatedAt: 't1' });
 
     expect(repository.get('n1')!.folder).toBeNull();
   });
@@ -246,17 +247,25 @@ describe('NoteRepository move', () => {
     repository.insert(aNote({ id: 'n1', folder: null }));
     repository.insert(aNote({ id: 'n2', folder: 'specs' }));
 
-    repository.move('n1', 'plans');
+    repository.move('n1', { folder: 'plans', expectedRev: 1, updatedAt: 't1' });
 
     expect(repository.get('n2')!.folder).toBe('specs');
   });
 
-  it('reports whether a note was found', () => {
+  it('reports a stale revision with the current one and changes nothing', () => {
     const { repository } = openRepositoryWithProjects('p1');
-    repository.insert(aNote());
+    repository.insert(aNote({ folder: null, rev: 3 }));
 
-    expect(repository.move('n1', 'plans')).toBe(true);
-    expect(repository.move('nope', 'plans')).toBe(false);
+    const result = repository.move('n1', { folder: 'plans', expectedRev: 1, updatedAt: 't1' });
+
+    expect(result).toEqual({ outcome: 'stale_revision', currentRev: 3 });
+    expect(repository.get('n1')).toMatchObject({ folder: null, rev: 3 });
+  });
+
+  it('reports a missing note', () => {
+    const { repository } = openRepositoryWithProjects('p1');
+
+    expect(repository.move('nope', { folder: 'plans', expectedRev: 1, updatedAt: 't1' })).toEqual({ outcome: 'not_found' });
   });
 });
 
