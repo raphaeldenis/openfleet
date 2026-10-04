@@ -13,6 +13,7 @@ import { VersionsService } from '../core/versions.service';
 import { KindBadgeComponent } from '../design/kind-badge.component';
 import { focusTabAt, nextTabIndex } from '../design/tablist-keyboard';
 import { attentionItemsOf, inboxCountLabelOf } from '../working-state/attention-items';
+import { contextNoticeCopyOf, contextNoticesOf } from '../working-state/context-notices';
 import { AttentionCardComponent } from './attention-card.component';
 import { minutesWaiting, silentBlockCopyOf, silentBlockDetailsMessageOf } from './silent-block-copy';
 import { showBidiControlsAsEscapes, showInvisibleControlsAsEscapes } from '../core/bidi-escapes';
@@ -119,6 +120,19 @@ function formatInput(toolInput: unknown): FormattedInput {
           }
         </ul>
       }
+      @if (contextNotices().length > 0) {
+        <ul class="issue-list" aria-label="Notices">
+          @for (notice of contextNotices(); track notice.sessionId) {
+            <li class="issue" data-testid="inbox-notice">
+              <div class="gate-meta">
+                <of-kind-badge kind="notice" />
+                <a class="session-label session-link" data-testid="inbox-notice-session" [routerLink]="notice.sessionRoute">{{ notice.sessionName }}</a>
+              </div>
+              <p class="issue-copy" data-testid="inbox-notice-copy">{{ notice.copy }}</p>
+            </li>
+          }
+        </ul>
+      }
       <nav class="tabs" role="tablist" aria-label="Inbox sections" (keydown)="onTabKeydown($event)">
         @for (entry of tabs; track entry.key) {
           <button
@@ -161,7 +175,7 @@ function formatInput(toolInput: unknown): FormattedInput {
                 </div>
               </article>
             } @empty {
-              @if (issues().length === 0) {
+              @if (issues().length === 0 && contextNotices().length === 0) {
                 <div class="empty" data-testid="inbox-empty">
                   <span class="empty-title">Nothing needs you</span>
                   <span>Gates, questions, budget incidents and manager proposals show up here.</span>
@@ -327,6 +341,14 @@ export class InboxComponent {
 
   protected readonly issues = computed(() => [...this.silentBlockIssues(), ...this.backgroundFailureIssues()]);
 
+  protected readonly contextNotices = computed(() =>
+    contextNoticesOf(this.events.sessions()).map(({ session, tokens }) => {
+      const sessionName = showInvisibleControlsAsEscapes(session.name);
+      const sessionRoute = [session.role === MANAGER_ROLE ? '/manager' : '/session', session.id];
+      return { sessionId: session.id, sessionName, sessionRoute, copy: contextNoticeCopyOf({ sessionName, tokens }) };
+    }),
+  );
+
   protected dismissReplyFailure(sessionId: string): void {
     this.replies.dismissFailure(sessionId);
     afterNextRender(() => this.focusNextAfterDismiss(), { injector: this.injector });
@@ -352,7 +374,7 @@ export class InboxComponent {
   }
 
   protected readonly pendingCount = computed(() => {
-    const count = this.events.approvals().length + this.attentionItems().length;
+    const count = this.events.approvals().length + this.attentionItems().length + this.contextNotices().length;
     return count > 0 ? inboxCountLabelOf(count) : undefined;
   });
 

@@ -23,6 +23,7 @@ import { CopyDetailsButtonComponent } from '../design/copy-details-button.compon
 import { ThemeToggleButtonComponent } from '../design/theme-toggle-button.component';
 import { SessionListComponent } from '../sessions/session-list.component';
 import { attentionItemsOf, inboxCountLabelOf } from '../working-state/attention-items';
+import { contextNoticesOf } from '../working-state/context-notices';
 import { CommandPaletteComponent } from './command-palette.component';
 import { DaemonStatusComponent } from './daemon-status.component';
 import { HELM_NAV_ITEMS } from './nav-items';
@@ -177,7 +178,8 @@ export class AppShellComponent {
   protected readonly runningCount = computed(() => this.events.sessions().filter((s) => RUNNING_STATES.has(s.state)).length);
   protected readonly inboxBadge = computed(() => {
     const attentionCount = attentionItemsOf(this.events.sessions(), this.events.workingStates()).length;
-    const itemsNeedingYou = this.events.approvals().length + attentionCount;
+    const contextNoticeCount = contextNoticesOf(this.events.sessions()).length;
+    const itemsNeedingYou = this.events.approvals().length + attentionCount + contextNoticeCount;
     return itemsNeedingYou > 0 ? inboxCountLabelOf(itemsNeedingYou) : undefined;
   });
   /** Issues inform rather than ask for a decision, so they get a dot and stay out of the count of items needing you. */
