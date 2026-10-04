@@ -1,4 +1,4 @@
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::{self, Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
@@ -52,7 +52,9 @@ fn random_salt() -> io::Result<Salt> {
   Ok(Salt(bytes))
 }
 
+#[allow(clippy::disallowed_methods)]
 fn write_private_file(path: &Path, salt: &Salt) -> io::Result<()> {
+  use std::fs::OpenOptions;
   let mut file = OpenOptions::new().write(true).create_new(true).mode(OWNER_READ_WRITE_ONLY).open(path)?;
   file.write_all(&salt.0)?;
   file.sync_all()

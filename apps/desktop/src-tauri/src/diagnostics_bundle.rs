@@ -1,5 +1,4 @@
 use std::ffi::OsString;
-use std::fs::OpenOptions;
 use std::io::{self, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -82,7 +81,9 @@ pub fn validate_destination(path: &Path) -> Result<(), String> {
 }
 
 /// Writes the file readable by its owner only, whether or not it existed (an existing file keeps its old mode otherwise).
+#[allow(clippy::disallowed_methods)]
 pub fn write_private_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
+  use std::fs::OpenOptions;
   let mut file = OpenOptions::new().write(true).create(true).truncate(true).mode(PRIVATE_FILE_MODE).open(path)?;
   file.set_permissions(std::fs::Permissions::from_mode(PRIVATE_FILE_MODE))?;
   file.write_all(bytes)?;
@@ -120,11 +121,27 @@ pub fn choose_destination_with_macos(default_name: &str) -> DialogOutcome {
 mod tests {
   use super::*;
 
-  fn scratch_folder(label: &str) -> PathBuf {
+  struct ScratchFolder(PathBuf);
+
+  impl std::ops::Deref for ScratchFolder {
+    type Target = Path;
+
+    fn deref(&self) -> &Self::Target {
+      &self.0
+    }
+  }
+
+  impl Drop for ScratchFolder {
+    fn drop(&mut self) {
+      let _ = std::fs::remove_dir_all(&self.0);
+    }
+  }
+
+  fn scratch_folder(label: &str) -> ScratchFolder {
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
     let folder = std::env::temp_dir().join(format!("openfleet-bundle-test-{label}-{}-{nanos}", std::process::id()));
     std::fs::create_dir_all(&folder).unwrap();
-    folder
+    ScratchFolder(folder)
   }
 
   #[test]
@@ -216,7 +233,7 @@ mod tests {
     let outcome = save_bundle("openfleet-diagnostics-x.zip", b"PK", |_| DialogOutcome::Cancelled).unwrap();
 
     assert_eq!(outcome, SaveOutcome::Cancelled);
-    assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 0);
+    assert_eq!(std::fs::read_dir(&*folder).unwrap().count(), 0);
   }
 
   #[test]

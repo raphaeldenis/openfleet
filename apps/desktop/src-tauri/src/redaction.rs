@@ -1,4 +1,5 @@
-//! Masks credentials in a log line. A scanning port of packages/core/src/redact.ts: no regex, so every pass is linear.
+//! Frozen: the event log never calls this module (the allowlist keeps free text out by construction); only the status line shown to the webview masks with it.
+//! Masks credentials in a line of text. A scanning port of packages/core/src/redact.ts: no regex, so every pass is linear.
 //! The documented ceilings of that file (non-`eyJ` JWT payloads, quoted values past the limit, short or literal-looking values) hold here too.
 
 pub const MASK: &str = "[redacted]";

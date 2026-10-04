@@ -32,6 +32,7 @@ impl LogFs for DiskFs {
     std::fs::metadata(path).map(|metadata| metadata.len())
   }
 
+  #[allow(clippy::disallowed_methods)]
   fn append(&self, path: &Path, bytes: &[u8]) -> io::Result<()> {
     if let Some(folder) = path.parent() {
       ensure_private_dir(folder)?;

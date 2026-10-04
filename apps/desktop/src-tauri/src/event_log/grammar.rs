@@ -8,6 +8,22 @@ const HEADER_TOKENS: usize = 3;
 
 /// A finished log line: the only thing the writer accepts.
 /// Its text is private and `seal` is its only constructor, so every line has passed the grammar; there is no `From<String>` and no `Default`.
+///
+/// ```
+/// use app_lib::SanitizedLine;
+/// fn read_line(line: &SanitizedLine) -> &str { line.as_str() }
+/// ```
+///
+/// ```compile_fail,E0277
+/// use app_lib::SanitizedLine;
+/// let line: SanitizedLine = "raw secret".into();
+/// ```
+///
+/// ```compile_fail,E0308
+/// use app_lib::SanitizedLine;
+/// fn append_line(line: &SanitizedLine) {}
+/// append_line("raw secret");
+/// ```
 #[derive(Clone, Debug, PartialEq)]
 pub struct SanitizedLine {
   text: String,

@@ -2,6 +2,8 @@
 //! A line is a `DesktopEvent` rendered into a `SanitizedLine` that has passed the grammar.
 #![allow(dead_code, unused_imports)]
 
+#[cfg(test)]
+mod arch_test;
 mod daemon_line;
 mod event;
 mod field;
