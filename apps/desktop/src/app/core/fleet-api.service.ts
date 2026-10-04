@@ -108,7 +108,7 @@ export class FleetApiService {
     });
   }
   pulseNow(sessionId: string) { return this.post<{ pulsed: boolean; coalesced?: boolean }>(`/api/managers/${sessionId}/pulse`, {}); }
-  sendMessage(id: string, body: string) { return this.post<{ status: 'delivered' | 'queued'; messageId: string }>(`/api/sessions/${id}/messages`, { body }); }
+  sendMessage(id: string, body: string, messageId?: string) { return this.post<{ status: 'delivered' | 'queued'; messageId: string }>(`/api/sessions/${id}/messages`, { body, messageId }); }
   sendInput(id: string, data: string) { return this.post(`/api/sessions/${id}/input`, { data }); }
   resize(id: string, cols: number, rows: number) { return this.post(`/api/sessions/${id}/resize`, { cols, rows }); }
   closeSession(id: string) { return this.post(`/api/sessions/${id}/close`, {}); }

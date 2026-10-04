@@ -27,7 +27,7 @@ const BUSY_PLACEHOLDER = 'This session is busy — your message is delivered on 
           aria-label="Message this session"
           [placeholder]="placeholder()"
         ></textarea>
-        <button type="button" class="of-btn of-btn--primary" data-testid="composer-send" [disabled]="isSending()" [attr.aria-busy]="isSending()" (click)="send()">{{ sendLabel() }}</button>
+        <button type="button" class="of-btn of-btn--primary" data-testid="composer-send" [attr.aria-disabled]="isSending() ? 'true' : null" [attr.aria-busy]="isSending()" (click)="send()">{{ sendLabel() }}</button>
         @if (status(); as status) {
           <span class="status" data-testid="composer-status">{{ status }}</span>
         }
@@ -89,8 +89,10 @@ export class ComposerComponent {
     this.replies.dismissFailure(sessionIdAtSend);
     this.replies.markSending(sessionIdAtSend, true);
     this.pending.set(null);
+    const messageId = this.replies.messageIdFor(sessionIdAtSend, body);
     try {
-      const result = await this.api.sendMessage(sessionIdAtSend, body);
+      const result = await this.api.sendMessage(sessionIdAtSend, body, messageId);
+      this.replies.confirmSent(sessionIdAtSend);
       this.replies.clearSentText(sessionIdAtSend, draftAtSend);
       if (this.sessionId() === sessionIdAtSend) this.pending.set({ id: result.messageId, deliveredImmediately: result.status === 'delivered' });
     } catch (error) {
