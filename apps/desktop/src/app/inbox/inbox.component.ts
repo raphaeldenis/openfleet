@@ -180,7 +180,7 @@ function formatInput(toolInput: unknown): FormattedInput {
     .issue-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .5rem; }
     .issue { display: flex; flex-direction: column; gap: .375rem; min-width: 0; padding: .625rem .875rem; border: 1px solid var(--line); border-radius: .625rem; background: var(--panel); }
     .issue-copy { margin: 0; overflow-wrap: anywhere; }
-    .issue-dismiss { flex: none; height: 1.5rem; padding: 0 .625rem; font-size: .6875rem; }
+    .issue-dismiss { flex: none; }
     .tabs { display: flex; gap: .25rem; border-bottom: 1px solid var(--line); }
     .tab { height: 1.875rem; padding: 0 .75rem; border: 0; border-bottom: 1px solid transparent; background: transparent; color: var(--mut); cursor: pointer; font: inherit; }
     .tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }

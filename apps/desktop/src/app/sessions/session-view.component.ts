@@ -94,7 +94,7 @@ type LifecycleBanner = { kind: 'resuming' } | { kind: 'strip'; strip: LifecycleS
     .closed-title { color: var(--closed-color); font-weight: 600; }
     .closed-body { flex: 1; min-width: 0; color: var(--mut); }
     .closed-actions { display: flex; align-items: center; gap: .75rem; margin-left: auto; }
-    .closed-card .of-btn { height: 1.75rem; padding: 0 .75rem; font-size: .75rem; white-space: nowrap; }
+    .closed-card .of-btn { white-space: nowrap; }
     .lifecycle-banner {
       display: flex; align-items: center; gap: .75rem; padding: .5rem 1rem;
       border-bottom: 1px solid var(--line); font-size: .75rem;
@@ -106,7 +106,6 @@ type LifecycleBanner = { kind: 'resuming' } | { kind: 'strip'; strip: LifecycleS
     .lifecycle-title { flex: none; color: var(--lifecycle-color); font-weight: 600; font-family: var(--mono); }
     .lifecycle-body { flex: 1; min-width: 0; }
     .reopen-fresh { position: relative; display: inline-flex; flex: none; }
-    .reopen-fresh .of-btn[aria-disabled='true'] { border-color: var(--line); background: var(--sunk); color: var(--faint); cursor: not-allowed; }
     .reopen-fresh-reason {
       position: absolute; right: 0; z-index: 1; width: max-content; max-width: 18rem; padding: .375rem .5rem;
       border: 1px solid var(--line-2); border-radius: .375rem; background: var(--panel); color: var(--mut);

@@ -145,8 +145,6 @@ function creationModeFrom(queryParams: ParamMap | undefined): CreationMode {
     .of-row .of-field--emoji { flex: none; width: 3.5rem }
     .actions { display: flex; justify-content: flex-end; align-items: center; gap: .5rem }
     .creating { flex: 1; font-size: .75rem; color: var(--mut) }
-    .actions .of-btn { height: 2rem }
-    .actions .of-btn--primary { padding: 0 1rem }
     .actions a { display: inline-flex; align-items: center; text-decoration: none }
   `,
 })

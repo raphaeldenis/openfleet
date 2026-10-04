@@ -14,12 +14,12 @@ const CURRENT_USER_AUTHOR = 'You';
       <span class="label">! Edit conflict</span>
       <span class="message" data-testid="note-conflict-message">{{ message() }}</span>
       @if (restoreRev() !== null) {
-        <button type="button" class="choice choice--primary" data-testid="note-conflict-keep-current" (click)="resolve.emit('theirs')">Keep current</button>
-        <button type="button" class="choice" data-testid="note-conflict-restore" (click)="resolve.emit('restore')">Restore rev {{ restoreRev() }} anyway</button>
+        <button type="button" class="of-btn of-btn--primary of-btn--compact" data-testid="note-conflict-keep-current" (click)="resolve.emit('theirs')">Keep current</button>
+        <button type="button" class="of-btn of-btn--secondary of-btn--compact" data-testid="note-conflict-restore" (click)="resolve.emit('restore')">Restore rev {{ restoreRev() }} anyway</button>
       } @else {
-        <button type="button" class="choice" data-testid="note-conflict-keep-mine" (click)="resolve.emit('mine')">Keep mine</button>
-        <button type="button" class="choice" data-testid="note-conflict-take-theirs" (click)="resolve.emit('theirs')">{{ takeTheirsLabel() }}</button>
-        <button type="button" class="choice choice--primary" data-testid="note-conflict-merge" (click)="resolve.emit('merge')">Merge both</button>
+        <button type="button" class="of-btn of-btn--secondary of-btn--compact" data-testid="note-conflict-keep-mine" (click)="resolve.emit('mine')">Keep mine</button>
+        <button type="button" class="of-btn of-btn--secondary of-btn--compact" data-testid="note-conflict-take-theirs" (click)="resolve.emit('theirs')">{{ takeTheirsLabel() }}</button>
+        <button type="button" class="of-btn of-btn--primary of-btn--compact" data-testid="note-conflict-merge" (click)="resolve.emit('merge')">Merge both</button>
       }
     </div>
     <div class="versions">
@@ -40,13 +40,7 @@ const CURRENT_USER_AUTHOR = 'You';
     }
     .label { color: var(--state-waiting-permission); font-weight: 600 }
     .message { flex: 1; min-width: 0; overflow-wrap: anywhere }
-    .choice {
-      height: 1.5rem; padding: 0 .625rem; border: 1px solid var(--line-2); border-radius: .375rem;
-      background: var(--panel); color: var(--fg); cursor: pointer; font: inherit; font-size: .75rem;
-    }
-    .choice--primary { border-color: var(--accent); background: var(--accent); color: var(--on-accent) }
     .bar:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
-    .choice:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
     .versions { display: flex; flex-direction: column; gap: .5rem; padding: .75rem 1.25rem; font-size: .8125rem }
     .version {
       max-height: 9rem; overflow: auto; overflow-wrap: anywhere; padding: .625rem .75rem;

@@ -76,6 +76,12 @@ describe('TodosTabComponent', () => {
       expect(source.retried).toEqual([SESSION_ID]);
     });
 
+    it('shows the "Try again" action as a compact secondary button', async () => {
+      await renderTab({ kind: 'error', text: "Can't load the todos — try again.", retryable: true });
+
+      expect(screen.getByTestId('todos-retry')).toHaveClass('of-btn', 'of-btn--secondary', 'of-btn--compact');
+    });
+
     it('offers no "Try again" when retrying cannot help', async () => {
       await renderTab({ kind: 'error', text: 'That item no longer exists.', retryable: false });
 

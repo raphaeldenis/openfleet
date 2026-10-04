@@ -37,6 +37,7 @@ const BANNERS: { variant: BannerVariant; title: string; description: string }[] 
         <button class="of-btn of-btn--secondary" data-testid="sheet-btn-secondary">Secondary</button>
         <button class="of-btn of-btn--link" data-testid="sheet-btn-link">Link</button>
         <button class="of-btn of-btn--primary" disabled data-testid="sheet-btn-disabled">Disabled</button>
+        <button class="of-btn of-btn--secondary of-btn--compact" data-testid="sheet-btn-compact">Compact</button>
       </section>
     </div>
   `,

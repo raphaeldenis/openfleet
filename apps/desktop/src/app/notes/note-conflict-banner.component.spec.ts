@@ -28,6 +28,15 @@ describe('NoteConflictBannerComponent', () => {
     expect(screen.getByTestId('note-conflict-theirs')).toHaveTextContent('Retry with jitter and replay missed events.');
   });
 
+  it('offers its choices as compact buttons, the merge being the primary one', async () => {
+    await renderBanner();
+
+    const choices = ['note-conflict-keep-mine', 'note-conflict-take-theirs', 'note-conflict-merge'].map((testId) => screen.getByTestId(testId));
+
+    for (const choice of choices) expect(choice).toHaveClass('of-btn', 'of-btn--compact');
+    expect(screen.getByTestId('note-conflict-merge')).toHaveClass('of-btn--primary');
+  });
+
   it('user can keep their own version', async () => {
     const { resolve } = await renderBanner();
 
