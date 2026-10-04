@@ -1,6 +1,6 @@
-import { Injectable, signal } from '@angular/core';
+import { Injectable, computed, signal } from '@angular/core';
 import { TodoSummarySchema, closeReasonOfExitCode } from '@openfleet/shared';
-import type { Approval, DaemonIssue, ErrorEnvelope, ErrorEventScope, ManagerView, ServerEvent, Session, SessionCloseReason, SessionTodos, TodoSummary, WorkingState } from '@openfleet/shared';
+import type { Approval, DaemonIssue, ErrorEnvelope, ErrorEventScope, ManagerView, ServerEvent, Session, SessionCloseReason, SessionTodos, SilentBlock, TodoSummary, WorkingState } from '@openfleet/shared';
 import { Subject } from 'rxjs';
 import { environment } from '../../environments/environment';
 import { parseSessionTodos } from './session-todos-parser';
@@ -25,6 +25,9 @@ function isBackgroundFailure({ error: envelope, scope }: { error: ErrorEnvelope;
   const isDaemonSideFailure = envelope.kind === 'internal' || envelope.kind === 'unavailable';
   return isDaemonSideFailure || envelope.error === 'message_held_for_review';
 }
+
+/** Names one prompt of one session: the same prompt keeps its key for as long as it stays undecided. */
+export const silentBlockKey = ({ sessionId, waitingSince }: SilentBlock): string => `${sessionId}@${waitingSince}`;
 
 function readableTodoSummaries(received: unknown[] | undefined): TodoSummary[] {
   const results = (received ?? []).map((summary) => TodoSummarySchema.safeParse(summary));
@@ -95,6 +98,10 @@ export class FleetEventsService {
   readonly daemonIssues = signal<DaemonIssue[]>([]);
   /** Failures the daemon announced that no request of the user caused, newest first, until the user dismisses them. */
   readonly backgroundFailures = signal<BackgroundFailure[]>([]);
+  private readonly reportedSilentBlocks = signal<SilentBlock[]>([]);
+  private readonly dismissedSilentBlockKeys = signal<ReadonlySet<string>>(new Set());
+  /** Sessions the daemon says sit on a permission prompt nobody decided, minus the ones the user dismissed; empty for a daemon that reports none. */
+  readonly silentBlocks = computed(() => this.reportedSilentBlocks().filter((block) => !this.dismissedSilentBlockKeys().has(silentBlockKey(block))));
   private readonly closeReasons = signal<ReadonlyMap<string, SessionCloseReason>>(new Map());
   private nextFailureNumber = 1;
   // A direct load of a route that never mounts App (e.g. /manager/:id) still needs to know
@@ -248,6 +255,7 @@ export class FleetEventsService {
         this.workingStateMaxAgeMinutes.set(event.workingStateMaxAgeMinutes);
         this.workingStateMaxBytes.set(event.workingStateMaxBytes);
         this.daemonIssues.set(event.daemonIssues ?? []);
+        this.reportSilentBlocks(event.silentBlocks ?? []);
         this.todosReported.set(event.todoSummaries !== undefined);
         const summaries = new Map(readableTodoSummaries(event.todoSummaries).map((summary) => [summary.sessionId, summary]));
         this.todoSummaries.set(summaries);
@@ -282,6 +290,7 @@ export class FleetEventsService {
       case 'manager.pulsed': return this.upsertManager(event.manager);
       case 'error': return this.recordBackgroundFailure(event);
       case 'daemon.issues': return this.daemonIssues.set(event.issues);
+      case 'permission.silent_blocks': return this.reportSilentBlocks(event.blocks);
       default: return;
     }
   }
@@ -322,6 +331,17 @@ export class FleetEventsService {
     if (todos.updatedAt === null) return;
     const summary: TodoSummary = { sessionId: todos.sessionId, counts: todos.counts, updatedAt: todos.updatedAt };
     this.todoSummaries.update((all) => new Map(all).set(todos.sessionId, summary));
+  }
+
+  dismissSilentBlock(key: string): void {
+    this.dismissedSilentBlockKeys.update((keys) => new Set(keys).add(key));
+  }
+
+  /** A dismissal is forgotten once its prompt is no longer reported, so the list never keeps keys of decided prompts. */
+  private reportSilentBlocks(blocks: SilentBlock[]): void {
+    const reportedKeys = new Set(blocks.map(silentBlockKey));
+    this.dismissedSilentBlockKeys.update((keys) => new Set([...keys].filter((key) => reportedKeys.has(key))));
+    this.reportedSilentBlocks.set(blocks);
   }
 
   dismissBackgroundFailure(key: string): void {

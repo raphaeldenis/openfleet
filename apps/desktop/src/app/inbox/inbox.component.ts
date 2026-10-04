@@ -1,4 +1,6 @@
 import { ChangeDetectionStrategy, Component, DestroyRef, ElementRef, Injector, afterNextRender, computed, effect, inject, signal } from '@angular/core';
+import { RouterLink } from '@angular/router';
+import { MANAGER_ROLE } from '@openfleet/shared';
 import { ReplyDraftStore } from '../sessions/reply-draft.store';
 import { detailsTextOf } from '../core/copy-details';
 import { decideApproval } from '../core/decide-approval';
@@ -6,12 +8,13 @@ import { copyOfEnvelope } from '../core/error-copy';
 import { CopyDetailsButtonComponent } from '../design/copy-details-button.component';
 import { compactElapsedLabel, elapsedSecondsSince } from '../design/elapsed-time';
 import { FleetApiService } from '../core/fleet-api.service';
-import { FleetEventsService } from '../core/fleet-events.service';
+import { FleetEventsService, silentBlockKey } from '../core/fleet-events.service';
 import { VersionsService } from '../core/versions.service';
 import { KindBadgeComponent } from '../design/kind-badge.component';
 import { focusTabAt, nextTabIndex } from '../design/tablist-keyboard';
 import { attentionItemsOf, inboxCountLabelOf } from '../working-state/attention-items';
 import { AttentionCardComponent } from './attention-card.component';
+import { minutesWaiting, silentBlockCopyOf, silentBlockDetailsMessageOf } from './silent-block-copy';
 import { showBidiControlsAsEscapes, showInvisibleControlsAsEscapes } from '../core/bidi-escapes';
 
 type InboxTab = 'gates' | 'questions' | 'proposals';
@@ -46,6 +49,20 @@ interface FormattedInput {
   readonly text: string;
 }
 
+interface IssueItem {
+  readonly key: string;
+  readonly timeLabel: string;
+  readonly copy: string;
+  readonly detailsText: string;
+  readonly sessionName: string | undefined;
+  readonly sessionRoute: readonly string[] | undefined;
+  readonly dismiss: () => void;
+}
+
+const SILENT_BLOCK_CODE = 'permission_silent_block';
+
+const timeLabelOf = (isoTime: string): string => new Date(isoTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
 function formatInput(toolInput: unknown): FormattedInput {
   return { toolInput, text: showBidiControlsAsEscapes(JSON.stringify(toolInput, null, 2) ?? '') };
 }
@@ -53,7 +70,7 @@ function formatInput(toolInput: unknown): FormattedInput {
 @Component({
   selector: 'of-inbox',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [KindBadgeComponent, AttentionCardComponent, CopyDetailsButtonComponent],
+  imports: [KindBadgeComponent, AttentionCardComponent, CopyDetailsButtonComponent, RouterLink],
   template: `
     <section class="inbox" data-testid="inbox">
       <header class="title-row" data-testid="inbox-title-row">
@@ -86,13 +103,17 @@ function formatInput(toolInput: unknown): FormattedInput {
             <li class="issue" data-testid="inbox-issue">
               <div class="gate-meta">
                 <of-kind-badge kind="issue" />
-                @if (issue.sessionName) { <span class="session-label" data-testid="inbox-issue-session">{{ issue.sessionName }}</span> }
+                @if (issue.sessionRoute; as sessionRoute) {
+                  <a class="session-label session-link" data-testid="inbox-issue-session" [routerLink]="sessionRoute">{{ issue.sessionName }}</a>
+                } @else if (issue.sessionName) {
+                  <span class="session-label" data-testid="inbox-issue-session">{{ issue.sessionName }}</span>
+                }
                 <span class="age">{{ issue.timeLabel }}</span>
               </div>
               <p class="issue-copy" data-testid="inbox-issue-copy">{{ issue.copy }}</p>
               <div class="actions">
                 <of-copy-details-button testId="inbox-issue-copy-details" [text]="issue.detailsText" />
-                <button type="button" class="of-btn of-btn--secondary issue-dismiss" data-testid="inbox-issue-dismiss" (click)="dismissIssue(issue.key)">Dismiss</button>
+                <button type="button" class="of-btn of-btn--secondary issue-dismiss" data-testid="inbox-issue-dismiss" (click)="dismissIssue(issue)">Dismiss</button>
               </div>
             </li>
           }
@@ -197,6 +218,8 @@ function formatInput(toolInput: unknown): FormattedInput {
     .gate-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: .5rem; }
     .gate-meta { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
     .session-label { font-weight: 500; }
+    .session-link { color: var(--fg); overflow-wrap: anywhere; }
+    .session-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
     .gate-sentence { margin: 0; }
     .tool-name { font-family: var(--mono); font-size: .75rem; padding: 0 .375rem; border-radius: .25rem; background: var(--sunk); }
     .age { margin-left: auto; font-size: .6875rem; color: var(--mut); }
@@ -276,25 +299,41 @@ export class InboxComponent {
       });
   });
 
-  protected readonly issues = computed(() => {
+  private readonly silentBlockIssues = computed((): IssueItem[] => {
+    const sessionsById = this.sessionsById();
+    const daemonVersion = this.versions.daemonVersion();
+    const nowMs = this.now();
+    return this.events.silentBlocks().map((block) => {
+      const session = sessionsById.get(block.sessionId);
+      const minutes = minutesWaiting(block.waitingSince, nowMs);
+      const sessionName = session ? showInvisibleControlsAsEscapes(session.name) : undefined;
+      const copy = silentBlockCopyOf({ minutes, sessionName: sessionName ?? 'The session' });
+      const detailsText = detailsTextOf({ code: SILENT_BLOCK_CODE, message: silentBlockDetailsMessageOf(minutes), at: block.waitingSince, daemonVersion });
+      const sessionRoute = session && [session.role === MANAGER_ROLE ? '/manager' : '/session', session.id];
+      return { key: `silent-block:${silentBlockKey(block)}`, timeLabel: timeLabelOf(block.waitingSince), copy, detailsText, sessionName, sessionRoute, dismiss: () => this.events.dismissSilentBlock(silentBlockKey(block)) };
+    });
+  });
+
+  private readonly backgroundFailureIssues = computed((): IssueItem[] => {
     const sessionsById = this.sessionsById();
     const daemonVersion = this.versions.daemonVersion();
     return this.events.backgroundFailures().map(({ key, sessionId, envelope, at }) => {
       const session = sessionId === undefined ? undefined : sessionsById.get(sessionId);
       const { text, ref } = copyOfEnvelope(envelope, { action: 'generic' });
       const detailsText = detailsTextOf({ ref, code: envelope.error, message: envelope.message, at, daemonVersion });
-      const timeLabel = new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      return { key, timeLabel, copy: text, detailsText, sessionName: session && showInvisibleControlsAsEscapes(session.name) };
+      return { key, timeLabel: timeLabelOf(at), copy: text, detailsText, sessionName: session && showInvisibleControlsAsEscapes(session.name), sessionRoute: undefined, dismiss: () => this.events.dismissBackgroundFailure(key) };
     });
   });
+
+  protected readonly issues = computed(() => [...this.silentBlockIssues(), ...this.backgroundFailureIssues()]);
 
   protected dismissReplyFailure(sessionId: string): void {
     this.replies.dismissFailure(sessionId);
     afterNextRender(() => this.focusNextAfterDismiss(), { injector: this.injector });
   }
 
-  protected dismissIssue(key: string): void {
-    this.events.dismissBackgroundFailure(key);
+  protected dismissIssue(issue: IssueItem): void {
+    issue.dismiss();
     afterNextRender(() => this.focusNextIssueOrHeading(), { injector: this.injector });
   }
 

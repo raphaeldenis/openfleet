@@ -1,7 +1,7 @@
 import type { DaemonIssue, ErrorEnvelope } from '@openfleet/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { closedSessionPresentationFor } from '../sessions/closed-session-presentation';
-import { FleetEventsService } from './fleet-events.service';
+import { FleetEventsService, silentBlockKey } from './fleet-events.service';
 
 class FakeWebSocket {
   static instances: FakeWebSocket[] = [];
@@ -139,6 +139,64 @@ describe('FleetEventsService', () => {
 
       expect(FakeWebSocket.instances).toHaveLength(0);
       expect(service.connected()).toBe(false);
+    });
+  });
+
+  describe('silent blocks', () => {
+    const block = { sessionId: 's1', waitingSince: '2026-10-04T10:00:00.000Z' };
+
+    async function connectedSocket() {
+      const service = new FleetEventsService();
+      await service.connect();
+      return { service, socket: FakeWebSocket.instances[0]! };
+    }
+
+    it('takes the silent blocks of the snapshot', async () => {
+      const { service, socket } = await connectedSocket();
+
+      socket.dispatchMessage({ type: 'snapshot', sessions: [], approvals: [], silentBlocks: [block] });
+
+      expect(service.silentBlocks()).toEqual([block]);
+    });
+
+    it('lists none for a daemon whose snapshot reports none', async () => {
+      const { service, socket } = await connectedSocket();
+
+      socket.dispatchMessage({ type: 'snapshot', sessions: [], approvals: [] });
+
+      expect(service.silentBlocks()).toEqual([]);
+    });
+
+    it('follows the list of every permission.silent_blocks event, so a decided prompt leaves', async () => {
+      const { service, socket } = await connectedSocket();
+
+      socket.dispatchMessage({ type: 'permission.silent_blocks', blocks: [block] });
+      expect(service.silentBlocks()).toEqual([block]);
+      socket.dispatchMessage({ type: 'permission.silent_blocks', blocks: [] });
+
+      expect(service.silentBlocks()).toEqual([]);
+    });
+
+    it('hides a dismissed block while its prompt stays undecided', async () => {
+      const { service, socket } = await connectedSocket();
+      socket.dispatchMessage({ type: 'permission.silent_blocks', blocks: [block] });
+
+      service.dismissSilentBlock(silentBlockKey(block));
+      socket.dispatchMessage({ type: 'permission.silent_blocks', blocks: [block, { sessionId: 's2', waitingSince: 't2' }] });
+
+      expect(service.silentBlocks().map((shown) => shown.sessionId)).toEqual(['s2']);
+    });
+
+    it('shows a later prompt of a session whose earlier block was dismissed', async () => {
+      const { service, socket } = await connectedSocket();
+      socket.dispatchMessage({ type: 'permission.silent_blocks', blocks: [block] });
+      service.dismissSilentBlock(silentBlockKey(block));
+      socket.dispatchMessage({ type: 'permission.silent_blocks', blocks: [] });
+
+      const laterPrompt = { sessionId: 's1', waitingSince: '2026-10-04T11:00:00.000Z' };
+      socket.dispatchMessage({ type: 'permission.silent_blocks', blocks: [laterPrompt] });
+
+      expect(service.silentBlocks()).toEqual([laterPrompt]);
     });
   });
 
