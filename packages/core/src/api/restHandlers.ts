@@ -77,8 +77,8 @@ export function registerRestRoutes(router: Router, deps: { sessions: SessionServ
 
   router.add('POST', '/api/sessions/:id/messages', ({ res, params, body }) => {
     requireSession(params.id!);
-    const { body: text } = z.object({ body: z.string().min(1) }).parse(body);
-    json(res, 200, deps.sessions.sendMessage({ sessionId: params.id!, body: text }));
+    const { body: text, messageId } = z.object({ body: z.string().min(1), messageId: z.uuid().optional() }).parse(body);
+    json(res, 200, deps.sessions.sendMessage({ sessionId: params.id!, body: text, messageId }));
   });
 
   router.add('POST', '/api/sessions/:id/reopen', ({ res, params }) => {

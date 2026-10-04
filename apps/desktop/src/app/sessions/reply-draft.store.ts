@@ -18,6 +18,7 @@ export class ReplyDraftStore {
   private readonly drafts = signal<BySessionId<string>>(new Map());
   private readonly sendingSessionIds = signal<ReadonlySet<string>>(new Set());
   private readonly failedSends = signal<BySessionId<string>>(new Map());
+  private readonly unconfirmedAttempts = new Map<string, { body: string; messageId: string }>();
 
   readonly failedSessionIds = computed(() => [...this.failedSends().keys()]);
 
@@ -34,6 +35,20 @@ export class ReplyDraftStore {
     const current = this.draftOf(sessionId);
     const remaining = current.startsWith(sentText) ? current.slice(sentText.length).trimStart() : current;
     this.setDraft(sessionId, remaining);
+  }
+
+  /** Returns the id of the last unconfirmed attempt to send this exact body, or a fresh uuid when the body differs. */
+  messageIdFor(sessionId: string, body: string): string {
+    const lastAttempt = this.unconfirmedAttempts.get(sessionId);
+    const isRetryOfSameBody = lastAttempt?.body === body;
+    if (isRetryOfSameBody) return lastAttempt.messageId;
+    const messageId = crypto.randomUUID();
+    this.unconfirmedAttempts.set(sessionId, { body, messageId });
+    return messageId;
+  }
+
+  confirmSent(sessionId: string): void {
+    this.unconfirmedAttempts.delete(sessionId);
   }
 
   isSending(sessionId: string): boolean {
