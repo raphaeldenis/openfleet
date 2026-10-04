@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, DestroyRef, computed, effect, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, DestroyRef, ElementRef, Injector, computed, effect, inject, signal, untracked, viewChild } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, Router } from '@angular/router';
 import { map } from 'rxjs';
@@ -8,14 +8,18 @@ import { FleetEventsService } from '../core/fleet-events.service';
 import { showInvisibleControlsAsEscapes } from '../core/bidi-escapes';
 import { StateChipComponent } from '../design/state-chip.component';
 import { PulseRingComponent } from '../design/pulse-ring.component';
+import { restoreFocusWhenFree } from '../sessions/handoff/handoff-focus';
+import { HandoffPreviewHostComponent } from '../sessions/handoff/handoff-preview-host.component';
 import { OverdueChipComponent } from '../working-state/overdue-chip.component';
 import { countdownLabel, countdownSecondsUntil } from './manager-countdown';
 import { PulseNowAction } from './pulse-now';
 
+const HANDOFF_TARGET_AVAILABLE_HINT = 'Saved handoffs appear in Notes › handoffs and in the New-session picker.';
+
 @Component({
   selector: 'of-manager-dashboard',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [StateChipComponent, PulseRingComponent, OverdueChipComponent],
+  imports: [StateChipComponent, PulseRingComponent, OverdueChipComponent, HandoffPreviewHostComponent],
   template: `
     @if (!hasSnapshot()) {
       <p class="state-message" data-testid="manager-dashboard-loading">Loading…</p>
@@ -66,6 +70,15 @@ import { PulseNowAction } from './pulse-now';
             data-testid="manager-dashboard-terminal"
             (click)="openTerminal()"
           >Terminal</button>
+          <button
+            #handoffButton
+            type="button"
+            class="of-btn of-btn--secondary"
+            data-testid="manager-dashboard-write-handoff"
+            [attr.aria-expanded]="isHandoffOpen()"
+            [attr.aria-controls]="handoffPanelId"
+            (click)="toggleHandoff()"
+          >Write handoff</button>
           @if (displayedPulseMessage(); as message) {
             <span
               data-testid="manager-dashboard-pulse-message"
@@ -73,6 +86,11 @@ import { PulseNowAction } from './pulse-now';
             >{{ message.text }}</span>
           }
         </header>
+        @if (isHandoffOpen()) {
+          <div [id]="handoffPanelId" data-testid="manager-dashboard-handoff-panel">
+            <of-handoff-preview [sessionId]="session.id" density="roomy" [targetAvailableHint]="handoffTargetAvailableHint" (dismissed)="closeHandoff()" />
+          </div>
+        }
 
         <section class="children">
           <div class="section-head">
@@ -162,6 +180,27 @@ export class ManagerDashboardComponent {
       this.managerId();
       this.pulse.reset();
     });
+    // The same reuse must not leave the preview of one manager over another.
+    effect(() => {
+      this.managerId();
+      untracked(() => this.isHandoffOpen.set(false));
+    });
+  }
+
+  protected readonly handoffPanelId = 'manager-dashboard-handoff-panel';
+  protected readonly handoffTargetAvailableHint = HANDOFF_TARGET_AVAILABLE_HINT;
+  protected readonly isHandoffOpen = signal(false);
+  private readonly handoffButton = viewChild<ElementRef<HTMLButtonElement>>('handoffButton');
+  private readonly injector = inject(Injector);
+
+  protected toggleHandoff(): void {
+    if (this.isHandoffOpen()) return this.closeHandoff();
+    this.isHandoffOpen.set(true);
+  }
+
+  protected closeHandoff(): void {
+    this.isHandoffOpen.set(false);
+    restoreFocusWhenFree({ target: () => this.handoffButton()?.nativeElement, injector: this.injector });
   }
 
   protected readonly hasSnapshot = computed(() => this.events.snapshotReceived());

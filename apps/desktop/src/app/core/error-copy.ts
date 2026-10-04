@@ -3,7 +3,7 @@ import { readableDaemonText } from './daemon-text';
 import { ApiError } from './fleet-api.service';
 
 /** What the user was doing when the error came back: it decides the advice ("shorten the mission" vs "shorten the name"). */
-export type ErrorAction = 'generic' | 'send' | 'create_session' | 'create_manager' | 'resume' | 'load_todos' | 'rename' | 'close';
+export type ErrorAction = 'generic' | 'send' | 'create_session' | 'create_manager' | 'resume' | 'load_todos' | 'rename' | 'close' | 'load_handoff' | 'save_handoff';
 
 export interface ErrorContext {
   action: ErrorAction;
@@ -160,6 +160,10 @@ const COPY_BY_ACTION: Record<ErrorAction, ActionCopy> = {
   load_todos: {},
   rename: {},
   close: {},
+  load_handoff: {},
+  save_handoff: {
+    docs_folder_not_writable: { what: 'The handoff was not written: the docs folder is not writable', fix: 'fix the folder permissions' },
+  },
 };
 
 const FALLBACK_BY_ACTION: Partial<Record<ErrorAction, string>> = {
@@ -169,6 +173,8 @@ const FALLBACK_BY_ACTION: Partial<Record<ErrorAction, string>> = {
   create_session: 'Could not create the session — try again.',
   create_manager: 'Could not create the manager — try again.',
   resume: GENERIC_REOPEN_ERROR,
+  load_handoff: 'The handoff preview could not be collected — try again.',
+  save_handoff: 'The handoff was not written — try again.',
 };
 
 const NOT_CONNECTED_BY_ACTION: Partial<Record<ErrorAction, string>> = {
@@ -178,6 +184,8 @@ const NOT_CONNECTED_BY_ACTION: Partial<Record<ErrorAction, string>> = {
   resume: GENERIC_REOPEN_ERROR,
   rename: 'Could not rename — check your connection, then try again.',
   close: 'Could not close the session — check your connection, then try again.',
+  load_handoff: 'The handoff preview could not be collected — check your connection, then try again.',
+  save_handoff: 'The handoff was not written — check your connection, then try again.',
 };
 
 const isKnownCode = (code: string | undefined): code is ErrorCode => code !== undefined && Object.hasOwn(ERROR_CODES, code);

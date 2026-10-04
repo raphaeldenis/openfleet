@@ -121,7 +121,7 @@ describe('copyFor', () => {
   });
 
   describe('the retry of the envelope decides the ending of every action', () => {
-    const ACTIONS = ['generic', 'send', 'create_session', 'create_manager', 'resume', 'rename', 'close'] as const;
+    const ACTIONS = ['generic', 'send', 'create_session', 'create_manager', 'resume', 'rename', 'close', 'load_handoff', 'save_handoff'] as const;
     const RETRIES = ['never', 'later', 'after_refresh'] as const;
     const wordsOfEnvelope = (code: ErrorCode, retry: ErrorEnvelope['retry'], action: (typeof ACTIONS)[number]) => {
       const envelope = envelopeOf(code, { retry, ...(ERROR_CODES[code].kind === 'internal' && { id: '3f9a1c2e' }) });
@@ -139,8 +139,8 @@ describe('copyFor', () => {
         return problems.map((problem) => `${code}: ${problem} — "${text}"`);
       });
 
-    it('covers every code, action and retry once (1323 cases)', () => {
-      expect(ALL_CODES.length * ACTIONS.length * RETRIES.length).toBe(1323);
+    it('covers every code, action and retry once (1701 cases)', () => {
+      expect(ALL_CODES.length * ACTIONS.length * RETRIES.length).toBe(1701);
     });
 
     describe.each(ACTIONS)('the action %s', (action) => {
@@ -165,6 +165,50 @@ describe('copyFor', () => {
       const envelope = envelopeOf('invalid_body', { retry: 'later' });
 
       expect(copyFor(apiErrorOf(envelope), { action: 'create_manager' }).text).toBe('The daemon rejected these values — check the directory and the other fields, then try again.');
+    });
+  });
+
+  describe('the handoff actions', () => {
+    it('tells the user the folder is not writable when the handoff save is refused for it', () => {
+      const { text } = copyFor(apiErrorOf(envelopeOf('docs_folder_not_writable')), { action: 'save_handoff' });
+
+      expect(text).toBe('The handoff was not written: the docs folder is not writable — fix the folder permissions, then try again.');
+    });
+
+    it('tells the user the session is gone, without a retry, when the preview is asked for an unknown session', () => {
+      const { text } = copyFor(apiErrorOf(envelopeOf('session_not_found')), { action: 'load_handoff' });
+
+      expect(text).toBe('That session no longer exists.');
+    });
+
+    it('tells the user the handoff file is gone, without a retry', () => {
+      const { text } = copyFor(apiErrorOf(envelopeOf('handoff_not_found')), { action: 'load_handoff' });
+
+      expect(text).toBe('That handoff is no longer in the docs folder — pick another handoff or remove it.');
+    });
+
+    it('says the preview could not be collected when the daemon gives no reason', () => {
+      const { text } = copyFor(new ApiError(500, 'GET /x'), { action: 'load_handoff' });
+
+      expect(text).toBe('The handoff preview could not be collected — try again.');
+    });
+
+    it('says the handoff was not written when the daemon gives no reason', () => {
+      const { text } = copyFor(new ApiError(500, 'POST /x'), { action: 'save_handoff' });
+
+      expect(text).toBe('The handoff was not written — try again.');
+    });
+
+    it('asks to check the connection when the daemon cannot be reached while collecting the preview', () => {
+      const { text } = copyFor(new TypeError('Failed to fetch'), { action: 'load_handoff' });
+
+      expect(text).toBe('The handoff preview could not be collected — check your connection, then try again.');
+    });
+
+    it('asks to check the connection when the daemon cannot be reached while saving', () => {
+      const { text } = copyFor(new TypeError('Failed to fetch'), { action: 'save_handoff' });
+
+      expect(text).toBe('The handoff was not written — check your connection, then try again.');
     });
   });
 

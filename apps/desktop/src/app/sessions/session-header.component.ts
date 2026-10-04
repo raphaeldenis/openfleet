@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, effect, inject, input, linkedSignal, untracked } from '@angular/core';
+import { ChangeDetectionStrategy, Component, ElementRef, Injector, computed, effect, inject, input, linkedSignal, signal, untracked, viewChild } from '@angular/core';
 import type { Session } from '@openfleet/shared';
 import { copyFor } from '../core/error-copy';
 import { FleetApiService } from '../core/fleet-api.service';
@@ -8,6 +8,8 @@ import { StateChipComponent } from '../design/state-chip.component';
 import { ModelSelectorComponent } from './model-selector.component';
 import { PermissionModePickerComponent } from './permission-mode-picker.component';
 import { SessionActionsComponent } from './session-actions.component';
+import { restoreFocusWhenFree } from './handoff/handoff-focus';
+import { HandoffPreviewHostComponent } from './handoff/handoff-preview-host.component';
 import { exitCodeLabel } from './session-close-status';
 import { needsAttention } from './session-header-attention';
 import { readRememberedHeaderChoice, rememberHeaderChoice } from './session-header-choice';
@@ -15,7 +17,7 @@ import { readRememberedHeaderChoice, rememberHeaderChoice } from './session-head
 @Component({
   selector: 'of-session-header',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [StateChipComponent, ModelSelectorComponent, PermissionModePickerComponent, SessionActionsComponent],
+  imports: [StateChipComponent, ModelSelectorComponent, PermissionModePickerComponent, SessionActionsComponent, HandoffPreviewHostComponent],
   template: `
     <header class="session-header" data-testid="session-header">
       <div class="identity-row" data-testid="session-header-row">
@@ -52,10 +54,15 @@ import { readRememberedHeaderChoice, rememberHeaderChoice } from './session-head
           data-testid="session-header-toggle"
           [attr.aria-expanded]="isOpen()"
           [attr.aria-controls]="detailsId()"
+          [attr.aria-disabled]="isHandoffOpen() ? 'true' : null"
+          [attr.aria-describedby]="isHandoffOpen() ? detailsLockedReasonId : null"
           (click)="toggleDetails()"
         >
           <span aria-hidden="true">{{ isOpen() ? '▴' : '▾' }}</span> Details
         </button>
+        @if (isHandoffOpen()) {
+          <span class="visually-hidden" [id]="detailsLockedReasonId">Details stay open while the handoff panel is open.</span>
+        }
         <span class="spacer"></span>
         <of-session-actions
           [sessionId]="session().id"
@@ -75,9 +82,25 @@ import { readRememberedHeaderChoice, rememberHeaderChoice } from './session-head
           <span class="cost" data-testid="session-cost" title="Cost tracking is not implemented yet">—</span>
           <of-model-selector [sessionId]="session().id" />
           <of-permission-mode-picker [sessionId]="session().id" [currentMode]="session().permissionMode" />
+          <button
+            #handoffButton
+            type="button"
+            class="of-btn of-btn--secondary"
+            data-testid="session-write-handoff"
+            [attr.aria-expanded]="isHandoffOpen()"
+            [attr.aria-controls]="handoffPanelId()"
+            (click)="toggleHandoff()"
+          >
+            Write handoff
+          </button>
         }
       </div>
     </header>
+    @if (isHandoffOpen()) {
+      <div [id]="handoffPanelId()" data-testid="session-handoff-panel">
+        <of-handoff-preview [sessionId]="session().id" density="compact" (dismissed)="closeHandoff()" />
+      </div>
+    }
   `,
   styles: `
     .session-header {
@@ -110,6 +133,8 @@ import { readRememberedHeaderChoice, rememberHeaderChoice } from './session-head
       height: 1.5rem; padding: 0 .5rem; border: 1px solid var(--line2); border-radius: .375rem;
       background: transparent; color: var(--fg); font-family: var(--sans); font-size: .6875rem; cursor: pointer;
     }
+    .details-toggle[aria-disabled='true'] { opacity: .6; cursor: default; }
+    .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
     .details-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
   `,
 })
@@ -137,11 +162,16 @@ export class SessionHeaderComponent {
     source: () => this.session().id,
     computation: readRememberedHeaderChoice,
   });
-  /** The user's choice wins; without one, the header is open exactly while something needs attention. */
-  protected readonly isOpen = computed(() => this.userChoice() ?? this.needsAttention());
+  /** The user's choice wins; without one, the header is open exactly while something needs attention. An open handoff panel keeps it open so its button stays reachable. */
+  protected readonly isOpen = computed(() => this.isHandoffOpen() || (this.userChoice() ?? this.needsAttention()));
   private lastSeenAttention: { sessionId: string; needsAttention: boolean } | null = null;
 
   constructor() {
+    // A route param change reuses this component instance: a preview collected for one session must not stay over another.
+    effect(() => {
+      this.sessionId();
+      untracked(() => this.isHandoffOpen.set(false));
+    });
     effect(() => {
       const sessionId = this.session().id;
       const needsAttentionNow = this.needsAttention();
@@ -153,7 +183,25 @@ export class SessionHeaderComponent {
     });
   }
 
+  protected readonly detailsLockedReasonId = 'session-header-details-locked-reason';
+  private readonly sessionId = computed(() => this.session().id);
+  protected readonly isHandoffOpen = signal(false);
+  protected readonly handoffPanelId = computed(() => `session-handoff-panel-${this.sessionId()}`);
+  private readonly handoffButton = viewChild<ElementRef<HTMLButtonElement>>('handoffButton');
+  private readonly injector = inject(Injector);
+
+  protected toggleHandoff(): void {
+    if (this.isHandoffOpen()) return this.closeHandoff();
+    this.isHandoffOpen.set(true);
+  }
+
+  protected closeHandoff(): void {
+    this.isHandoffOpen.set(false);
+    restoreFocusWhenFree({ target: () => this.handoffButton()?.nativeElement, injector: this.injector });
+  }
+
   protected toggleDetails(): void {
+    if (this.isHandoffOpen()) return;
     const open = !this.isOpen();
     this.userChoice.set(open);
     rememberHeaderChoice(this.session().id, open);

@@ -1,6 +1,6 @@
 import { signal } from '@angular/core';
 import type { HandoffContent, HandoffSectionKey, HandoffSectionSource, HandoffTargetUnavailableReason } from '@openfleet/shared';
-import type { HandoffPreviewApi } from './handoff-preview.api';
+import { HandoffPreviewApiError, type HandoffPreviewApi } from './handoff-preview.api';
 
 export type HandoffPreviewState = 'idle' | 'loading' | 'ready' | 'saving' | 'saved' | 'error' | 'loadFailed';
 
@@ -34,6 +34,7 @@ export class HandoffPreviewStore {
   private readonly relativePathSignal = signal<string | undefined>(undefined);
   private readonly saveDisabledReasonSignal = signal<string | undefined>(undefined);
   private readonly errorSignal = signal<string | undefined>(undefined);
+  private readonly isTargetAvailableSignal = signal(false);
   private sessionId = '';
   private loadSequence = 0;
 
@@ -43,6 +44,8 @@ export class HandoffPreviewStore {
   readonly relativePath = this.relativePathSignal.asReadonly();
   readonly saveDisabledReason = this.saveDisabledReasonSignal.asReadonly();
   readonly error = this.errorSignal.asReadonly();
+  /** Whether the collected preview can be saved to the docs folder. */
+  readonly isTargetAvailable = this.isTargetAvailableSignal.asReadonly();
 
   constructor(private readonly api: HandoffPreviewApi) {}
 
@@ -51,6 +54,7 @@ export class HandoffPreviewStore {
     const thisLoad = ++this.loadSequence;
     this.stateSignal.set('loading');
     this.errorSignal.set(undefined);
+    this.isTargetAvailableSignal.set(false);
     try {
       const preview = await this.api.getPreview(sessionId);
       const isSupersededByAnotherOpen = thisLoad !== this.loadSequence;
@@ -59,11 +63,12 @@ export class HandoffPreviewStore {
       this.sourcesSignal.set(preview.sources);
       this.relativePathSignal.set(preview.target.relativePath);
       this.saveDisabledReasonSignal.set(saveDisabledReasonOf(preview));
+      this.isTargetAvailableSignal.set(preview.target.available);
       this.stateSignal.set('ready');
-    } catch {
+    } catch (failure) {
       const isSupersededByAnotherOpen = thisLoad !== this.loadSequence;
       if (isSupersededByAnotherOpen) return;
-      this.errorSignal.set(LOAD_FAILED_MESSAGE);
+      this.errorSignal.set(copyOfFailure(failure, LOAD_FAILED_MESSAGE));
       this.stateSignal.set('loadFailed');
     }
   }
@@ -83,8 +88,8 @@ export class HandoffPreviewStore {
       const { relativePath } = await this.api.save(this.sessionId, this.sections());
       this.relativePathSignal.set(relativePath);
       this.stateSignal.set('saved');
-    } catch {
-      this.errorSignal.set(SAVE_FAILED_MESSAGE);
+    } catch (failure) {
+      this.errorSignal.set(copyOfFailure(failure, SAVE_FAILED_MESSAGE));
       this.stateSignal.set('error');
     }
   }
@@ -102,9 +107,14 @@ export class HandoffPreviewStore {
     this.sourcesSignal.set(NO_SOURCES);
     this.relativePathSignal.set(undefined);
     this.saveDisabledReasonSignal.set(undefined);
+    this.isTargetAvailableSignal.set(false);
     this.errorSignal.set(undefined);
     this.stateSignal.set('idle');
   }
+}
+
+function copyOfFailure(failure: unknown, fallback: string): string {
+  return failure instanceof HandoffPreviewApiError ? failure.copy : fallback;
 }
 
 function saveDisabledReasonOf({ target }: { target: { available: boolean; reason?: HandoffTargetUnavailableReason } }): string | undefined {
