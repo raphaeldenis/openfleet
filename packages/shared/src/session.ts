@@ -5,7 +5,18 @@ import { ModelIdSchema } from './models.js';
 export const SESSION_STATES = ['starting', 'generating', 'waiting_permission', 'waiting_input', 'idle', 'closed'] as const;
 export type SessionState = (typeof SESSION_STATES)[number];
 
-export const HARNESSES = ['claude-cli', 'fake'] as const;
+export const SESSION_CLOSE_REASONS = ['launch_failed', 'resume_timeout', 'conversation_not_found', 'harness_exit', 'closed_by_user', 'daemon_shutdown'] as const;
+export type SessionCloseReason = (typeof SESSION_CLOSE_REASONS)[number];
+
+const SessionCloseReasonSchema = z.enum(SESSION_CLOSE_REASONS);
+
+/** Returns the reason when it is one this version knows, and undefined for anything else (a reason a newer daemon introduced, a malformed value). */
+export const parseSessionCloseReason = (value: unknown): SessionCloseReason | undefined => {
+  const parsed = SessionCloseReasonSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
+};
+
+export const HARNESSES =['claude-cli', 'fake'] as const;
 export type HarnessId = (typeof HARNESSES)[number];
 
 export const PERMISSION_MODES = ['manual', 'acceptEdits', 'plan', 'auto', 'bypassPermissions', 'dontAsk'] as const;
@@ -46,6 +57,8 @@ export interface Session {
   state: SessionState;
   stateSince: string;
   exitCode?: number;
+  /** Why the session is closed; absent while it is live, for a close recorded before the reason was stored, and for a reason this version does not know. */
+  closeReason?: SessionCloseReason;
   createdAt: string;
   closedAt?: string;
 }

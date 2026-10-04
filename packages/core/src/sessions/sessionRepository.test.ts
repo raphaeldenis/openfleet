@@ -27,6 +27,67 @@ describe('SessionRepository.setContextNoticeTokens', () => {
   });
 });
 
+describe('SessionRepository close reason', () => {
+  const openRepository = () => {
+    const db = openDatabase(':memory:');
+    const repo = new SessionRepository(db);
+    repo.insert({ id: 's1', name: 'G', emoji: '🤖', directory: '/tmp', worktree: null, model: null, parent_id: null, role: null, harness: 'fake', state: 'idle', state_since: 't', hook_token: 'h', mcp_token: 'm', permission_mode: null, branch: null, created_at: 't' });
+    return { db, repo };
+  };
+
+  it('stores the reason in the same write as the close', () => {
+    const { repo } = openRepository();
+
+    repo.setClosed('s1', 143, 't1', 'h2', 'm2', { closeReason: 'harness_exit' });
+
+    expect(repo.get('s1')).toMatchObject({ state: 'closed', exitCode: 143, closeReason: 'harness_exit' });
+  });
+
+  it('leaves the reason absent for a close that gives none', () => {
+    const { repo } = openRepository();
+
+    repo.setClosed('s1', undefined, 't1', 'h2', 'm2');
+
+    expect(repo.get('s1')?.closeReason).toBeUndefined();
+  });
+
+  it('drops the reason together with the exit code when the session starts again', () => {
+    const { repo } = openRepository();
+    repo.setClosed('s1', 1, 't1', 'h2', 'm2', { closeReason: 'harness_exit' });
+
+    repo.setState('s1', 'starting', 't2');
+
+    expect(repo.get('s1')?.closeReason).toBeUndefined();
+  });
+
+  it('keeps the reason while the row stays closed', () => {
+    const { repo } = openRepository();
+    repo.setClosed('s1', 1, 't1', 'h2', 'm2', { closeReason: 'harness_exit' });
+
+    repo.setState('s1', 'closed', 't2');
+
+    expect(repo.get('s1')?.closeReason).toBe('harness_exit');
+  });
+
+  it('rewrites the reason when a closed row is rewritten as a failed close', () => {
+    const { repo } = openRepository();
+    repo.setClosed('s1', undefined, 't1', 'h2', 'm2', { closeReason: 'daemon_shutdown', closedByDaemonShutdown: true });
+
+    repo.failClosedRow('s1', -2, 't2', { closeReason: 'launch_failed' });
+
+    expect(repo.get('s1')).toMatchObject({ exitCode: -2, closeReason: 'launch_failed' });
+  });
+
+  it('reads a reason written by a future version as absent instead of throwing, from get() and list()', () => {
+    const { db, repo } = openRepository();
+    repo.setClosed('s1', 1, 't1', 'h2', 'm2');
+    db.prepare("UPDATE sessions SET close_reason = 'quota_exhausted' WHERE id = 's1'").run();
+
+    expect(repo.get('s1')?.closeReason).toBeUndefined();
+    expect(repo.list().map((session) => session.closeReason)).toEqual([undefined]);
+  });
+});
+
 const currentCliSessionIdInRow =(db: ReturnType<typeof openDatabase>, id: string) =>
   (db.prepare('SELECT cli_session_id FROM sessions WHERE id = ?').get(id) as { cli_session_id: string | null }).cli_session_id;
 

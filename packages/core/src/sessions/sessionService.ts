@@ -1761,7 +1761,7 @@ export class SessionService {
   // A launch that fails on a row already closed (an ordinary reopen, a shutdown row a transition rolled back) leaves markClosed
   // nothing to do: the row is rewritten here so live clients and a fresh snapshot agree on the failed close.
   private rewriteClosedRowAsFailedLaunch(sessionId: string, closure: SessionClosure): void {
-    this.repo.failClosedRow(sessionId, RESUME_LAUNCH_FAILED_EXIT_CODE, new Date().toISOString());
+    this.repo.failClosedRow(sessionId, RESUME_LAUNCH_FAILED_EXIT_CODE, new Date().toISOString(), { closeReason: closure.reason });
     this.deps.bus.emit({ type: 'session.closed', sessionId, exitCode: closure.exitCode, reason: closure.reason });
     this.announceClosure(sessionId, closure);
   }
@@ -1797,7 +1797,7 @@ export class SessionService {
     // fresh pair on the way back up (resumeOne), so this never collides with that rotation.
     const isFailedStart = closure.reason === 'resume_timeout' || closure.reason === 'launch_failed'; // a start that failed stays closed: no boot retries it
     const closedByDaemonShutdown = isClosingForShutdown && !isFailedStart;
-    this.repo.setClosed(sessionId, exitCode, new Date().toISOString(), newToken(), newToken(), { closedByDaemonShutdown });
+    this.repo.setClosed(sessionId, exitCode, new Date().toISOString(), newToken(), newToken(), { closedByDaemonShutdown, closeReason: reason });
     this.handles.delete(sessionId);
     activeHandleBySessionId.delete(sessionId);
     try {

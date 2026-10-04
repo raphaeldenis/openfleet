@@ -1,6 +1,6 @@
 import type { DaemonIssue } from './daemonIssues.js';
 import type { HarnessId, SessionState } from './session.js';
-import type { SessionCloseReason } from './events.js';
+import type { SessionCloseReason } from './session.js';
 
 export const DIAGNOSTICS_PATH = '/api/diagnostics';
 

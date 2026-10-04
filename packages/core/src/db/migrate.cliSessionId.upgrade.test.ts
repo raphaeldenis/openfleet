@@ -28,7 +28,7 @@ describe('the CLI session id migration upgrading a database that predates it', (
     applyMigrations(db);
 
     const rowsAfterUpgrade = db.prepare('SELECT * FROM sessions ORDER BY id').all();
-    expect(rowsAfterUpgrade).toEqual(rowsBeforeUpgrade.map((row) => ({ ...row, cli_session_id: null, prompted: 0, context_notice_tokens: null })));
+    expect(rowsAfterUpgrade).toEqual(rowsBeforeUpgrade.map((row) => ({ ...row, cli_session_id: null, prompted: 0, context_notice_tokens: null, close_reason: null })));
     expect(db.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
   });
 });
