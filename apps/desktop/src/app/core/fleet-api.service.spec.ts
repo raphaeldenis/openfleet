@@ -80,6 +80,15 @@ describe('FleetApiService', () => {
     expect(init.method).toBeUndefined();
   });
 
+  it('advances handoff pages by the database window when deleted files leave an empty page', async () => {
+    const handoff = { noteId: 'n1', file: 'gimli.md', title: 'Gimli', updatedAt: '2026-10-04' };
+    fetchMock.mockResolvedValueOnce(fakeResponse({ ok: true, status: 200, json: async () => ({ items: [], total: 201, limit: 200, offset: 0 }) }))
+      .mockResolvedValueOnce(fakeResponse({ ok: true, status: 200, json: async () => ({ items: [handoff], total: 201, limit: 200, offset: 200 }) }));
+
+    await expect(api.listHandoffs('p1')).resolves.toMatchObject({ items: [handoff], total: 1 });
+    expect(fetchMock.mock.calls.map(([url]) => new URL(url as string).searchParams.get('offset'))).toEqual(['0', '200']);
+  });
+
   it('reads the selectable model ids from GET /api/models/available', async () => {
     fetchMock.mockResolvedValue(fakeResponse({ ok: true, status: 200, json: () => Promise.resolve({ models: ['a', 'b'] }) }));
 

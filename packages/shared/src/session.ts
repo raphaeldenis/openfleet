@@ -1,6 +1,7 @@
 import * as z from 'zod';
 import { ManagerSpecSchema } from './managers.js';
 import { ModelIdSchema } from './models.js';
+import { HandoffFileSchema } from './handoff.js';
 
 export const SESSION_STATES = ['starting', 'generating', 'waiting_permission', 'waiting_input', 'idle', 'closed'] as const;
 export type SessionState = (typeof SESSION_STATES)[number];
@@ -30,10 +31,13 @@ export const SessionSpecSchema = z.object({
   seededPrompt: z.string().optional(),
   parentId: z.string().optional(),
   projectId: z.uuid().optional(),
+  handoffFile: HandoffFileSchema.optional(),
   role: z.string().optional(),
   harness: z.enum(HARNESSES).default('claude-cli'),
   permissionMode: z.enum(PERMISSION_MODES).optional(),
   manager: ManagerSpecSchema.optional(),
+}).refine((spec) => spec.handoffFile === undefined || spec.projectId !== undefined, {
+  message: 'a handoff requires a project', path: ['handoffFile'],
 });
 export type SessionSpec = z.infer<typeof SessionSpecSchema>;
 

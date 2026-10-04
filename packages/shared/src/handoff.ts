@@ -6,6 +6,16 @@ export type HandoffSectionKey = (typeof HANDOFF_SECTION_KEYS)[number];
 
 export const HANDOFF_SECTION_MAX_CHARACTERS = 20_000;
 
+export const HandoffFileSchema = z.string().regex(/^[^/\\\0%\x01-\x1f\x7f"<>]{1,200}\.md$/)
+  .refine((file) => !file.includes('..'), 'must be a basename without traversal');
+
+export interface HandoffSummary {
+  noteId: string;
+  file: string;
+  title: string;
+  updatedAt: string;
+}
+
 const HandoffSectionTextSchema = z.string().max(HANDOFF_SECTION_MAX_CHARACTERS);
 
 export const HandoffContentSchema = z
