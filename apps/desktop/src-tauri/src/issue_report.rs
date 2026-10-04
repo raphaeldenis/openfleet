@@ -55,7 +55,7 @@ fn home_spellings(user_home: &str) -> Vec<String> {
 }
 
 /// Replaces the home folder with `~` wherever a whole folder name ends, so `/Users/jdoe2` is not taken for `/Users/jdoe`.
-fn with_home_shortened(text: &str, user_home: &str) -> String {
+pub fn with_home_shortened(text: &str, user_home: &str) -> String {
   home_spellings(user_home).iter().fold(text.to_string(), |shortened, spelling| with_folder_shortened(&shortened, spelling))
 }
 
@@ -172,6 +172,13 @@ fn finished_output(child: &mut Child, status: ExitStatus, command: &Command) -> 
 pub fn open_with_macos(target: &OsStr) -> io::Result<()> {
   let mut open = Command::new("/usr/bin/open");
   open.arg(target);
+  run_within(open, OPEN_TIMEOUT).map(|_| ())
+}
+
+/// Asks macOS to show a file selected in Finder.
+pub fn reveal_in_macos(target: &OsStr) -> io::Result<()> {
+  let mut open = Command::new("/usr/bin/open");
+  open.arg("-R").arg(target);
   run_within(open, OPEN_TIMEOUT).map(|_| ())
 }
 
