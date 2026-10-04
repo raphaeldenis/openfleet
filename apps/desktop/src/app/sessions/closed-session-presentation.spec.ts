@@ -76,8 +76,8 @@ describe('what a closed session shows', () => {
     expect(explainedTwice).toEqual([]);
   });
 
-  it('never gives a card title an exit code for a start or a resume that never happened', () => {
-    const neverRunning = (['launch_failed', 'resume_timeout', 'conversation_not_found', 'daemon_shutdown'] as const).map((reason) => closedSessionPresentationFor({ exitCode: 0, reason }).cardTitle);
+  it.each([0, -1, -2, undefined])('never gives a card title an exit code (%s) for a start or a resume that never happened', (exitCode) => {
+    const neverRunning = (['launch_failed', 'resume_timeout', 'conversation_not_found', 'daemon_shutdown'] as const).map((reason) => closedSessionPresentationFor({ exitCode, reason }).cardTitle);
 
     expect(neverRunning.filter((title) => title.includes('exit'))).toEqual([]);
   });

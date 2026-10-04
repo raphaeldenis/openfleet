@@ -992,6 +992,20 @@ describe('FleetEventsService daemon issues and background failures', () => {
       expect(closeReasonOf('s1')).toBe('resume_timeout');
     });
 
+    it('falls back to launch_failed for the legacy exit code -2 of an older daemon, in a snapshot and on a live session.closed', () => {
+      socket.dispatchMessage(snapshotOf(closedSessionWith({ exitCode: -2 }), session('live')));
+      socket.dispatchMessage({ type: 'session.closed', sessionId: 'live', exitCode: -2 });
+
+      expect([closeReasonOf('s1'), closeReasonOf('live')]).toEqual(['launch_failed', 'launch_failed']);
+    });
+
+    it.each(['launch_failed', 'resume_timeout'] as const)('reads %s from a current daemon that sends no exit code at all', (reason) => {
+      socket.dispatchMessage(snapshotOf(session('live')));
+      socket.dispatchMessage({ type: 'session.closed', sessionId: 'live', reason });
+
+      expect(service.sessions().find((candidate) => candidate.id === 'live')).toMatchObject({ state: 'closed', closeReason: reason, exitCode: undefined });
+    });
+
     it('stays absent for a close with a plain exit code and no stored reason', () => {
       socket.dispatchMessage(snapshotOf(closedSessionWith({ exitCode: 1 })));
 
