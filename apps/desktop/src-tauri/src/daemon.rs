@@ -1,9 +1,10 @@
-use crate::admin_token::{admin_token_path, admin_token_secrets};
-use crate::log_file::{logs_dir, DaemonLog, DiskFs, RotatingLog, Stream, KEPT_FILES, LOG_FILE_NAME, MAX_LOG_BYTES};
+use crate::admin_token::{admin_token_path, admin_token_secrets, openfleet_home_dir};
+use crate::event_log::{self, DesktopEvent, ExitCode, IoFailure, KnownPaths, Opaque, PathClass, Pid, SpawnFailure, Stream};
+use crate::log_file::{logs_dir, start_on_disk, DesktopLog};
 use crate::path_repair::{repair_path, run_login_shell, PathSource, RepairedPath, LOGIN_SHELL_TIMEOUT};
 use serde::Serialize;
 use std::collections::HashMap;
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use crate::status_line::webview_safe_line;
 use std::path::{Path, PathBuf};
@@ -60,10 +61,40 @@ impl DaemonStatus {
   }
 }
 
+impl DaemonPhase {
+  fn as_logged(self) -> event_log::DaemonPhase {
+    match self {
+      DaemonPhase::Starting => event_log::DaemonPhase::Starting,
+      DaemonPhase::Slow => event_log::DaemonPhase::Slow,
+      DaemonPhase::Ready => event_log::DaemonPhase::Ready,
+      DaemonPhase::Failed => event_log::DaemonPhase::Failed,
+      DaemonPhase::Reused => event_log::DaemonPhase::Reused,
+    }
+  }
+}
+
+impl PathSource {
+  fn as_logged(self) -> event_log::PathSource {
+    match self {
+      PathSource::Shell => event_log::PathSource::Shell,
+      PathSource::Fallback => event_log::PathSource::Fallback,
+    }
+  }
+}
+
 #[derive(Debug, PartialEq)]
 pub enum StopOutcome {
   ExitedOnSigterm,
   KilledAfterGrace,
+}
+
+impl StopOutcome {
+  fn as_logged(&self) -> event_log::StopOutcome {
+    match self {
+      StopOutcome::ExitedOnSigterm => event_log::StopOutcome::ExitedOnSigterm,
+      StopOutcome::KilledAfterGrace => event_log::StopOutcome::KilledAfterGrace,
+    }
+  }
 }
 
 /// What a daemon answers on `GET /health`.
@@ -194,8 +225,22 @@ struct Inner {
   boot_refusal_line: Option<String>,
   child: Option<RunningChild>,
   spawned_at: Option<Instant>,
-  daemon_log: Option<DaemonLog>,
+  daemon_log: Option<DesktopLog>,
   scrub_scope: ScrubScope,
+}
+
+impl Inner {
+  /// Moves the status to `to` and logs the move; staying in the same phase logs nothing.
+  fn change_phase(&mut self, to: DaemonPhase) {
+    let from = self.status.state;
+    self.status.state = to;
+    if from == to {
+      return;
+    }
+    if let Some(daemon_log) = &self.daemon_log {
+      daemon_log.record_event(DesktopEvent::DaemonPhaseChanged { from: from.as_logged(), to: to.as_logged() });
+    }
+  }
 }
 
 /// What `snapshot` needs to make the last line safe for the webview.
@@ -226,12 +271,33 @@ impl DaemonState {
     self.inner.lock().unwrap().scrub_scope = scrub_scope;
   }
 
-  fn record_daemon_log(&self, daemon_log: DaemonLog) {
+  fn record_daemon_log(&self, daemon_log: DesktopLog) {
     self.inner.lock().unwrap().daemon_log = Some(daemon_log);
   }
 
-  fn daemon_log(&self) -> Option<DaemonLog> {
+  fn daemon_log(&self) -> Option<DesktopLog> {
     self.inner.lock().unwrap().daemon_log.clone()
+  }
+
+  fn record_event(&self, event: DesktopEvent) {
+    if let Some(daemon_log) = self.daemon_log() {
+      daemon_log.record_event(event);
+    }
+  }
+
+  /// Reduces a free text to its length and its tag; a length alone while no log runs.
+  fn opaque(&self, text: &[u8]) -> Opaque {
+    match self.daemon_log() {
+      Some(daemon_log) => daemon_log.opaque(text),
+      None => Opaque::of(text, None),
+    }
+  }
+
+  /// Tells the log that no daemon output is coming (a reused daemon, a failed spawn), so the exit does not wait for it.
+  fn mark_output_ended(&self) {
+    if let Some(daemon_log) = self.daemon_log() {
+      daemon_log.mark_output_ended();
+    }
   }
 
   /// Returns the status as the webview sees it at `now`: its last line is masked, shortened, escaped and capped.
@@ -272,7 +338,7 @@ impl DaemonState {
 
   fn on_reused(&self, daemon_version: Option<String>) {
     let mut inner = self.inner.lock().unwrap();
-    inner.status.state = DaemonPhase::Reused;
+    inner.change_phase(DaemonPhase::Reused);
     inner.status.daemon_version = daemon_version;
   }
 
@@ -283,7 +349,7 @@ impl DaemonState {
     if !is_booting {
       return;
     }
-    inner.status.state = DaemonPhase::Ready;
+    inner.change_phase(DaemonPhase::Ready);
     inner.status.last_line = None;
     inner.status.daemon_version = daemon_version;
   }
@@ -291,13 +357,13 @@ impl DaemonState {
   fn on_slow(&self) {
     let mut inner = self.inner.lock().unwrap();
     if inner.status.state == DaemonPhase::Starting {
-      inner.status.state = DaemonPhase::Slow;
+      inner.change_phase(DaemonPhase::Slow);
     }
   }
 
   fn on_start_failed(&self, reason: String) {
     let mut inner = self.inner.lock().unwrap();
-    inner.status.state = DaemonPhase::Failed;
+    inner.change_phase(DaemonPhase::Failed);
     inner.status.last_line = Some(reason);
   }
 
@@ -317,7 +383,7 @@ impl DaemonState {
     inner.boot_refusal_line = Some(refusal_line.clone());
     let is_booting = matches!(inner.status.state, DaemonPhase::Starting | DaemonPhase::Slow);
     if is_booting {
-      inner.status.state = DaemonPhase::Failed;
+      inner.change_phase(DaemonPhase::Failed);
       inner.status.last_line = Some(refusal_line);
     }
   }
@@ -327,7 +393,7 @@ impl DaemonState {
     let mut inner = self.inner.lock().unwrap();
     inner.child = None;
     let reason = inner.boot_refusal_line.clone().or_else(|| inner.last_stderr_line.clone()).unwrap_or_else(|| format!("the daemon exited with code {exit_code:?}"));
-    inner.status.state = DaemonPhase::Failed;
+    inner.change_phase(DaemonPhase::Failed);
     inner.status.last_line = Some(reason);
   }
 }
@@ -345,42 +411,70 @@ pub fn start(app: AppHandle) {
 /// Stops the sidecar with SIGTERM, then SIGKILL after the grace; leaves a reused daemon alone.
 pub fn stop(app: &AppHandle) {
   let state = app.state::<DaemonState>();
-  match stop_daemon(&state, &OsSignals, GRACE_BEFORE_SIGKILL) {
-    Some(outcome) => log::info!("daemon stopped: {outcome:?}"),
-    None => log::info!("no daemon of ours to stop"),
+  let outcome = stop_daemon(&state, &OsSignals, GRACE_BEFORE_SIGKILL);
+  state.record_event(DesktopEvent::DaemonStopped { outcome: outcome.as_ref().map(StopOutcome::as_logged) });
+}
+
+/// Writes the daemon's last output and the foreign records still counted to `desktop.log`, then stops the writer; waits at most `LOG_FLUSH_TIMEOUT`. Call it after `stop`.
+pub fn flush_log(app: &AppHandle) {
+  let Some(daemon_log) = app.state::<DaemonState>().daemon_log() else { return };
+  record_foreign_records(&daemon_log);
+  daemon_log.close_after_output_ends(LOG_FLUSH_TIMEOUT);
+}
+
+/// Writes the foreign records counted so far to the log, when one runs.
+pub fn record_foreign_records_of(app: &AppHandle) {
+  if let Some(daemon_log) = app.state::<DaemonState>().daemon_log() {
+    record_foreign_records(&daemon_log);
   }
 }
 
-/// Writes the daemon's last output lines to `daemon.log` and stops the writer; waits at most `LOG_FLUSH_TIMEOUT`. Call it after `stop`.
-pub fn flush_log(app: &AppHandle) {
-  let Some(daemon_log) = app.state::<DaemonState>().daemon_log() else { return };
-  let drained = daemon_log.close_after_output_ends(LOG_FLUSH_TIMEOUT);
-  log::info!("daemon log flushed: {drained}");
+/// Writes one `foreign_records` line per (level, crate) a third-party `log::` record was counted under since the last call.
+fn record_foreign_records(daemon_log: &DesktopLog) {
+  for event in event_log::FOREIGN_RECORDS.drain_events() {
+    daemon_log.record_event(event);
+  }
 }
 
 /// Takes the child out of the state once and stops it; returns None when there is nothing to stop.
 pub fn stop_daemon(state: &DaemonState, signals: &impl Signals, grace: Duration) -> Option<StopOutcome> {
   let child = state.take_child()?;
   let pid = child.pid;
-  log::info!("stopping the daemon (pid {pid})");
+  state.record_event(DesktopEvent::DaemonStopRequested { pid: Pid(pid) });
   Some(terminate_gracefully(signals, pid, grace, || !signals.is_alive(pid)))
 }
 
 fn boot(app: &AppHandle) {
   let state = app.state::<DaemonState>();
   state.record_scrub_scope(scrub_scope_of(app));
+  if let Ok(user_home) = app.path().home_dir() {
+    let daemon_log = start_daemon_log(&user_home);
+    crate::panic_hook::attach_log(daemon_log.clone());
+    state.record_daemon_log(daemon_log);
+  }
   if let Some(answer) = probe_health(HEALTH_ADDRESS, PROBE_TIMEOUT) {
-    log::info!("a daemon already answers on {HEALTH_ADDRESS}, reusing it");
+    state.record_event(DesktopEvent::DaemonReused);
     state.on_reused(answer.version);
+    state.mark_output_ended();
     return;
   }
   wait_while_shutting_down(HEALTH_ADDRESS, SHUTTING_DOWN_DAEMON_WAIT);
   match spawn_sidecar(app) {
     Ok(()) => wait_for_ready(&state, HEALTH_ADDRESS, READY_TIMEOUT, SLOW_START_EXTRA_BUDGET),
-    Err(reason) => {
-      log::error!("could not start the daemon: {reason}");
-      state.on_start_failed(reason);
+    Err(failure) => {
+      state.record_event(DesktopEvent::DaemonSpawnFailed { failure });
+      state.on_start_failed(reason_for_the_webview(&failure));
+      state.mark_output_ended();
     }
+  }
+}
+
+/// Describes a failed spawn to the user in the terms the log keeps: typed causes, never the text of an error.
+fn reason_for_the_webview(failure: &SpawnFailure) -> String {
+  match failure {
+    SpawnFailure::BundleNotFound(_) => "daemon bundle not found (run: pnpm --filter @openfleet/core bundle)".to_string(),
+    SpawnFailure::Io(io_failure) => format!("could not start the daemon: {io_failure}"),
+    SpawnFailure::Unclassified(opaque) => format!("could not start the daemon: {opaque}"),
   }
 }
 
@@ -414,69 +508,84 @@ pub fn sidecar_env(parent_env: impl IntoIterator<Item = (String, String)>, repai
   env
 }
 
-fn spawn_sidecar(app: &AppHandle) -> Result<(), String> {
-  let daemon_script = app.path().resource_dir().map_err(|err| err.to_string())?.join("resources/daemon/daemon.mjs");
+fn spawn_sidecar(app: &AppHandle) -> Result<(), SpawnFailure> {
+  let state = app.state::<DaemonState>();
+  let user_home = app.path().home_dir().map_err(|error| spawn_failure_of_tauri(&state, &error))?;
+  let resource_dir = app.path().resource_dir().map_err(|error| spawn_failure_of_tauri(&state, &error))?;
+  let daemon_script = resource_dir.join("resources/daemon/daemon.mjs");
   if !daemon_script.exists() {
-    return Err(format!("daemon bundle not found at {} (run: pnpm --filter @openfleet/core bundle)", daemon_script.display()));
+    return Err(SpawnFailure::BundleNotFound(class_of_missing_bundle(&daemon_script, &user_home)));
   }
-  let home = app.path().home_dir().map_err(|err| err.to_string())?;
+  let Some(daemon_log) = state.daemon_log() else { return Err(SpawnFailure::Io(IoFailure::of(&io::Error::from(io::ErrorKind::NotFound)))) };
   let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
-  let repaired_path = repair_path(|| run_login_shell(&shell, LOGIN_SHELL_TIMEOUT), &home.to_string_lossy());
+  let repaired_path = repair_path(|| run_login_shell(&shell, LOGIN_SHELL_TIMEOUT), &user_home.to_string_lossy());
+  state.record_event(DesktopEvent::PathRepaired { source: repaired_path.source.as_logged() });
   let environment = sidecar_env(std::env::vars(), &repaired_path.path);
 
-  let (events, child) = app
-    .shell()
-    .sidecar("node")
-    .map_err(|err| err.to_string())?
+  let sidecar = app.shell().sidecar("node").map_err(|error| spawn_failure_of_shell(&state, &error))?;
+  let (events, child) = sidecar
     .args([daemon_script.to_string_lossy().to_string()])
     .env_clear()
     .envs(environment)
     .spawn()
-    .map_err(|err| err.to_string())?;
-  let state = app.state::<DaemonState>();
+    .map_err(|error| spawn_failure_of_shell(&state, &error))?;
   state.record_spawn(RunningChild::of_sidecar(child), repaired_path, Instant::now());
   let app_for_events = app.clone();
-  let daemon_log = start_daemon_log(&home);
-  state.record_daemon_log(daemon_log.clone());
   tauri::async_runtime::spawn(async move { pipe_daemon_output(app_for_events, events, daemon_log).await });
   Ok(())
 }
 
-/// Starts the writer that appends the sidecar's output, redacted, to `<OPENFLEET_HOME or ~/.openfleet>/logs/daemon.log`.
-fn start_daemon_log(user_home: &Path) -> DaemonLog {
-  let openfleet_home = std::env::var("OPENFLEET_HOME").ok();
-  let log_path = logs_dir(openfleet_home.clone(), user_home).join(LOG_FILE_NAME);
-  let token_path = admin_token_path(openfleet_home, user_home);
-  let rotating_log = RotatingLog::open(DiskFs, log_path, MAX_LOG_BYTES, KEPT_FILES);
-  DaemonLog::start(rotating_log, move || Some(admin_token_secrets(&token_path)), unix_seconds_now)
+fn class_of_missing_bundle(daemon_script: &Path, user_home: &Path) -> PathClass {
+  let openfleet_home = openfleet_home_dir(std::env::var("OPENFLEET_HOME").ok(), user_home);
+  let logs_folder = logs_dir(std::env::var("OPENFLEET_HOME").ok(), user_home);
+  let token_path = admin_token_path(std::env::var("OPENFLEET_HOME").ok(), user_home);
+  let known_paths = KnownPaths { openfleet_home: &openfleet_home, logs_dir: &logs_folder, admin_token: &token_path, daemon_bundle: daemon_script, user_home };
+  PathClass::classify(daemon_script, &known_paths)
+}
+
+/// The io kind and OS error number when the error wraps an `io::Error`; otherwise the length and tag of its text.
+fn spawn_failure_of_tauri(state: &DaemonState, error: &tauri::Error) -> SpawnFailure {
+  match error {
+    tauri::Error::Io(io_error) => SpawnFailure::Io(IoFailure::of(io_error)),
+    other => SpawnFailure::Unclassified(state.opaque(other.to_string().as_bytes())),
+  }
+}
+
+fn spawn_failure_of_shell(state: &DaemonState, error: &tauri_plugin_shell::Error) -> SpawnFailure {
+  match error {
+    tauri_plugin_shell::Error::Io(io_error) => SpawnFailure::Io(IoFailure::of(io_error)),
+    other => SpawnFailure::Unclassified(state.opaque(other.to_string().as_bytes())),
+  }
+}
+
+/// Starts the writer that appends the desktop's events and the projected sidecar output to `<OPENFLEET_HOME or ~/.openfleet>/logs/desktop.log`.
+fn start_daemon_log(user_home: &Path) -> DesktopLog {
+  let openfleet_home = openfleet_home_dir(std::env::var("OPENFLEET_HOME").ok(), user_home);
+  let daemon_log = start_on_disk(&openfleet_home, unix_seconds_now);
+  daemon_log.record_event(DesktopEvent::WriterHeader { started: started_at_now() });
+  daemon_log
+}
+
+fn started_at_now() -> event_log::Ts {
+  event_log::Ts::from_unix_seconds(unix_seconds_now()).unwrap_or_else(|| event_log::Ts::from_unix_seconds(0).expect("the epoch is a valid timestamp"))
 }
 
 fn unix_seconds_now() -> u64 {
   SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |elapsed| elapsed.as_secs())
 }
 
-async fn pipe_daemon_output(app: AppHandle, mut events: tauri::async_runtime::Receiver<CommandEvent>, daemon_log: DaemonLog) {
+async fn pipe_daemon_output(app: AppHandle, mut events: tauri::async_runtime::Receiver<CommandEvent>, daemon_log: DesktopLog) {
   let state = app.state::<DaemonState>();
   while let Some(event) = events.recv().await {
     match event {
-      CommandEvent::Stdout(bytes) => {
-        let chunk = String::from_utf8_lossy(&bytes).to_string();
-        log::info!("[daemon] {}", chunk.trim_end());
-        daemon_log.record(Stream::Out, &chunk);
-      }
+      CommandEvent::Stdout(bytes) => daemon_log.ingest_daemon_chunk(Stream::Out, &bytes),
       CommandEvent::Stderr(bytes) => {
-        let chunk = String::from_utf8_lossy(&bytes).to_string();
-        log::warn!("[daemon] {}", chunk.trim_end());
-        daemon_log.record(Stream::Err, &chunk);
-        state.on_stderr(&chunk);
+        daemon_log.ingest_daemon_chunk(Stream::Err, &bytes);
+        state.on_stderr(&String::from_utf8_lossy(&bytes));
       }
-      CommandEvent::Error(reason) => {
-        log::error!("[daemon] {reason}");
-        daemon_log.record(Stream::Err, &format!("sidecar error: {reason}"));
-      }
+      CommandEvent::Error(reason) => daemon_log.record_event(DesktopEvent::SidecarFailed { reason: daemon_log.opaque(reason.as_bytes()) }),
       CommandEvent::Terminated(payload) => {
-        log::warn!("[daemon] exited with code {:?}", payload.code);
-        daemon_log.record(Stream::Err, &format!("the daemon exited with code {:?}", payload.code));
+        daemon_log.record_event(DesktopEvent::DaemonExited { code: payload.code.map(ExitCode) });
         state.on_terminated(payload.code);
       }
       _ => {}
@@ -488,6 +597,7 @@ async fn pipe_daemon_output(app: AppHandle, mut events: tauri::async_runtime::Re
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::log_file::RotatingLog;
   use std::cell::RefCell;
   use std::io::{BufRead, BufReader};
   use std::net::TcpListener;
@@ -1165,5 +1275,188 @@ mod tests {
     assert_eq!(env.get("OPENFLEET_HOME").map(String::as_str), Some("/tmp/home"));
     assert_eq!(env.get("PATH").map(String::as_str), Some("/repaired/bin"));
     assert_eq!(env.get("OPENFLEET_EXIT_ON_STDIN_EOF").map(String::as_str), Some("1"));
+  }
+
+  // ---- what the daemon's life writes to desktop.log ----
+
+  #[derive(Clone, Default)]
+  struct MemoryFs(Arc<std::sync::Mutex<Vec<u8>>>);
+
+  impl crate::log_file::LogFs for MemoryFs {
+    fn size(&self, _path: &Path) -> io::Result<u64> {
+      Ok(self.0.lock().unwrap().len() as u64)
+    }
+    fn append(&self, _path: &Path, bytes: &[u8]) -> io::Result<()> {
+      self.0.lock().unwrap().extend_from_slice(bytes);
+      Ok(())
+    }
+    fn rename(&self, _from: &Path, _to: &Path) -> io::Result<()> {
+      Ok(())
+    }
+  }
+
+  const EPOCH: &str = "1970-01-01T00:00:00Z";
+
+  fn state_writing_to_a_log() -> (DaemonState, DesktopLog, MemoryFs) {
+    let fs = MemoryFs::default();
+    let rotating_log = RotatingLog::open(fs.clone(), PathBuf::from("/logs/desktop.log"), 1 << 20, 3);
+    let daemon_log = DesktopLog::start(rotating_log, None, || 0);
+    let state = DaemonState::new();
+    state.record_daemon_log(daemon_log.clone());
+    (state, daemon_log, fs)
+  }
+
+  /// The lines stored once the writer drained, without the closing `daemon_log_flushed` marker.
+  fn stored_lines(daemon_log: &DesktopLog, fs: &MemoryFs) -> Vec<String> {
+    assert!(daemon_log.flush_and_close(Duration::from_secs(5)));
+    let stored = String::from_utf8_lossy(&fs.0.lock().unwrap()).to_string();
+    let mut lines: Vec<String> = stored.lines().map(str::to_string).collect();
+    assert_eq!(lines.pop(), Some(format!("{EPOCH} info daemon_log_flushed drained=true")));
+    lines
+  }
+
+  fn phase_change(level: &str, from: &str, to: &str) -> String {
+    format!("{EPOCH} {level} daemon_phase_changed from={from} to={to}")
+  }
+
+  #[test]
+  fn each_phase_the_status_moves_through_is_logged_in_order() {
+    let (state, daemon_log, fs) = state_writing_to_a_log();
+
+    state.on_slow();
+    state.on_health_answered(None);
+
+    assert_eq!(stored_lines(&daemon_log, &fs), vec![phase_change("info", "starting", "slow"), phase_change("info", "slow", "ready")]);
+  }
+
+  #[test]
+  fn staying_in_a_phase_logs_nothing() {
+    let (state, daemon_log, fs) = state_writing_to_a_log();
+
+    state.on_start_failed("first".to_string());
+    state.on_start_failed("second".to_string());
+    state.on_slow();
+
+    assert_eq!(stored_lines(&daemon_log, &fs), vec![phase_change("info", "starting", "failed")]);
+  }
+
+  #[test]
+  fn a_reused_daemon_logs_the_move_to_reused() {
+    let (state, daemon_log, fs) = state_writing_to_a_log();
+
+    state.on_reused(Some("1.0.0".to_string()));
+
+    assert_eq!(stored_lines(&daemon_log, &fs), vec![phase_change("info", "starting", "reused")]);
+  }
+
+  #[test]
+  fn a_boot_refusal_and_a_termination_log_the_move_to_failed_once() {
+    let (state, daemon_log, fs) = state_writing_to_a_log();
+
+    state.on_stderr("openfleet: refusing to boot: port 7331 is already in use\n");
+    state.on_terminated(Some(1));
+
+    assert_eq!(stored_lines(&daemon_log, &fs), vec![phase_change("info", "starting", "failed")]);
+  }
+
+  #[test]
+  fn the_status_text_and_the_version_reach_no_line() {
+    let (state, daemon_log, fs) = state_writing_to_a_log();
+
+    state.on_start_failed("Authorization: Bearer ghp_0123456789abcdefghijklmnopqrstuvwxyz".to_string());
+    state.on_reused(Some("ghp_0123456789abcdefghijklmnopqrstuvwxyz".to_string()));
+
+    let lines = stored_lines(&daemon_log, &fs).join("\n");
+    assert!(!lines.contains("ghp_") && !lines.contains("Bearer"), "{lines}");
+  }
+
+  #[test]
+  fn a_stop_logs_the_pid_it_signals() {
+    let (state, daemon_log, fs) = state_writing_to_a_log();
+    state.record_spawn(RunningChild::holding(PID, ()), RepairedPath { path: "/a".to_string(), source: PathSource::Shell }, Instant::now());
+
+    stop_daemon(&state, &RecordingSignals::answering_alive(vec![false]), Duration::from_secs(5));
+
+    assert_eq!(stored_lines(&daemon_log, &fs), vec![format!("{EPOCH} info daemon_stop_requested pid={PID}")]);
+  }
+
+  #[test]
+  fn a_state_without_a_log_records_events_silently() {
+    let state = DaemonState::new();
+
+    state.record_event(DesktopEvent::DaemonReused);
+    state.on_slow();
+    state.mark_output_ended();
+
+    assert_eq!(state.phase(), DaemonPhase::Slow);
+  }
+
+  #[test]
+  fn the_pipe_of_a_log_that_never_gets_a_daemon_does_not_hold_the_exit() {
+    let (state, daemon_log, _fs) = state_writing_to_a_log();
+    state.mark_output_ended();
+    let started_at = Instant::now();
+
+    assert!(daemon_log.close_after_output_ends(Duration::from_secs(2)));
+
+    assert!(started_at.elapsed() < Duration::from_millis(500));
+  }
+
+  #[test]
+  fn the_foreign_records_counted_so_far_are_written_once() {
+    use log::Log;
+    let (_state, daemon_log, fs) = state_writing_to_a_log();
+    event_log::FOREIGN_RECORDS.log(&log::Record::builder().level(log::Level::Error).target("wry::webview").args(format_args!("secret text")).build());
+
+    record_foreign_records(&daemon_log);
+    record_foreign_records(&daemon_log);
+
+    assert_eq!(stored_lines(&daemon_log, &fs), vec![format!("{EPOCH} error foreign_records target=wry count=1")]);
+  }
+
+  // ---- why a spawn failed ----
+
+  #[test]
+  fn a_missing_bundle_is_told_to_the_user_without_its_path() {
+    let reason = reason_for_the_webview(&SpawnFailure::BundleNotFound(PathClass::DaemonBundle));
+
+    assert_eq!(reason, "daemon bundle not found (run: pnpm --filter @openfleet/core bundle)");
+  }
+
+  #[test]
+  fn an_io_failure_is_told_by_its_kind_and_os_error_number_only() {
+    let failure = SpawnFailure::Io(IoFailure::of(&io::Error::new(io::ErrorKind::PermissionDenied, "open /Users/jdoe/secret-path failed")));
+
+    let reason = reason_for_the_webview(&failure);
+
+    assert_eq!(reason, "could not start the daemon: kind=permission_denied errno=none");
+  }
+
+  #[test]
+  fn an_error_of_another_kind_is_told_by_its_length_and_tag() {
+    let state = DaemonState::new();
+    let error = tauri_plugin_shell::Error::UnknownProgramName("/Users/jdoe/ghp_0123456789abcdefghijklmnopqrstuvwxyz".to_string());
+
+    let failure = spawn_failure_of_shell(&state, &error);
+
+    assert_eq!(reason_for_the_webview(&failure), format!("could not start the daemon: [text:{}]", error.to_string().len()));
+  }
+
+  #[test]
+  fn a_shell_error_wrapping_an_io_error_keeps_its_kind_and_drops_its_text() {
+    let state = DaemonState::new();
+    let error = tauri_plugin_shell::Error::Io(io::Error::from_raw_os_error(2));
+
+    let failure = spawn_failure_of_shell(&state, &error);
+
+    assert_eq!(failure, SpawnFailure::Io(IoFailure::of(&io::Error::from_raw_os_error(2))));
+  }
+
+  #[test]
+  fn a_path_error_of_the_bundle_is_classified_never_copied() {
+    let user_home = Path::new("/Users/jdoe");
+    let bundle = Path::new("/Applications/OpenFleet.app/Contents/Resources/resources/daemon/daemon.mjs");
+
+    assert_eq!(class_of_missing_bundle(bundle, user_home), PathClass::DaemonBundle);
   }
 }

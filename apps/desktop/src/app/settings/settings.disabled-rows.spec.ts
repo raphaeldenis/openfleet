@@ -127,13 +127,13 @@ describe('Settings → rows without a backing setting', () => {
     it('shows the real daemon log path on Daemon › Log', async () => {
       await renderSettingsOn('Daemon');
 
-      expect(screen.getByTestId('daemon-log-path')).toHaveTextContent('~/.openfleet/logs/daemon.log');
+      expect(screen.getByTestId('daemon-log-path')).toHaveTextContent('~/.openfleet/logs/desktop.log');
     });
 
     it('names the real daemon log path in the About › Logs description', async () => {
       await renderSettingsOn('About');
 
-      expect(screen.getByText(/~\/\.openfleet\/logs\/daemon\.log and the app log/)).toBeInTheDocument();
+      expect(screen.getByText(/~\/\.openfleet\/logs\/desktop\.log and the app log/)).toBeInTheDocument();
     });
   });
 });

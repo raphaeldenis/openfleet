@@ -65,7 +65,7 @@ test('the Daemon section shows the log and the hand-edited config file as read-o
 
   await sectionTab(page, 'Daemon').click();
 
-  await expect(page.getByTestId('daemon-log-path')).toHaveText('~/.openfleet/logs/daemon.log');
+  await expect(page.getByTestId('daemon-log-path')).toHaveText('~/.openfleet/logs/desktop.log');
   await expect(page.getByTestId('daemon-config-path')).toHaveText('~/.openfleet/config.json');
   await expect(page.getByText('Edited by hand for now · restart the daemon after changes')).toBeVisible();
   await expect(page.getByTestId('admin-token-status')).toHaveText('found');
