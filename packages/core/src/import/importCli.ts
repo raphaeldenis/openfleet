@@ -1,4 +1,4 @@
-import { join } from 'node:path';
+import { join, relative, resolve, sep } from 'node:path';
 import { parseArgs } from 'node:util';
 import { renderImportReport } from './scape/importReport.js';
 import { importScape, type ImportScapeOptions } from './scape/importScape.js';
@@ -17,6 +17,7 @@ const FLAGS = {
   project: { type: 'string' },
   'scape-dir': { type: 'string' },
   'report-dir': { type: 'string' },
+  'state-dir': { type: 'string' },
   'allow-reimport': { type: 'boolean' },
   help: { type: 'boolean' },
 } as const;
@@ -25,13 +26,14 @@ const REIMPORT_WARNING =
   'This importer is made for a FIRST import onto a virgin OpenFleet database. A re-import is NOT yet safe against OpenFleet-side deletions or renames, nor against Scape-side column or option changes (planned: MIG-01B).';
 
 const USAGE = [
-  'usage: import scape --home <OPENFLEET_HOME> [--dry-run] [--project <name>] [--scape-dir <dir>] [--report-dir <dir>] [--allow-reimport]',
+  'usage: import scape --home <OPENFLEET_HOME> [--dry-run] [--project <name>] [--scape-dir <dir>] [--report-dir <dir>] [--state-dir <dir>] [--allow-reimport]',
   '',
   '  --home            the OpenFleet home holding openfleet.db (defaults to $OPENFLEET_HOME)',
   '  --dry-run         prints what would be written; writes nothing',
   '  --project         imports only the Scape project of that name',
   '  --scape-dir       the Scape home to read (default ~/.scape; only snapshots of it are opened)',
   '  --report-dir      where import-report.md goes (default: the home)',
+  '  --state-dir       the folder of the Scape manager state files <manager name>.md that seed the working states (default ~/Documents/scape-team/state)',
   '  --allow-reimport  runs a real import although the target already holds imported projects',
   '',
   REIMPORT_WARNING,
@@ -50,6 +52,13 @@ function parseFlags(argv: string[]) {
 
 type ParsedFlags = ReturnType<typeof parseFlags>;
 
+/** A state folder inside the home of the user must be reached with no link below the home; one elsewhere only has to be no link itself. */
+function stateFolderOptionsOf(stateDirFlag: string | undefined, homeDirectory: string): Pick<ImportScapeOptions, 'stateDir' | 'stateRoot'> {
+  const stateDir = stateDirFlag ?? join(homeDirectory, 'Documents', 'scape-team', 'state');
+  const isInsideHome = relative(homeDirectory, resolve(stateDir)).split(sep)[0] !== '..';
+  return { stateDir, stateRoot: isInsideHome ? homeDirectory : undefined };
+}
+
 function importOptionsFrom({ values, positionals }: ParsedFlags, environment: CliEnvironment) {
   if (positionals.join(' ') !== 'scape') throw invalidArguments(USAGE);
   const home = values.home ?? environment.env.OPENFLEET_HOME;
@@ -62,6 +71,7 @@ function importOptionsFrom({ values, positionals }: ParsedFlags, environment: Cl
     dryRun: values['dry-run'] ?? false,
     projectName: values.project,
     reportDir: values['report-dir'],
+    ...stateFolderOptionsOf(values['state-dir'], environment.homeDirectory),
     refuseReimport: !allowsReimport,
   };
   return { options, allowsReimport };
