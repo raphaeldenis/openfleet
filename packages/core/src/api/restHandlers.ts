@@ -133,6 +133,14 @@ export function registerRestRoutes(router: Router, deps: { sessions: SessionServ
       json(res, 200, {});
     });
 
+    router.add('POST', '/api/sessions/:id/fake-exit', ({ res, params, body }) => {
+      const session = deps.sessions.get(params.id!);
+      if (!session || session.harness !== 'fake') throw notFound('session');
+      const { code, conversationNotFound } = z.object({ code: z.number().int(), conversationNotFound: z.boolean().optional() }).parse(body);
+      (deps.sessions.harnessHandle(params.id!) as FakeHandle | undefined)?.emitExit(code, { wasConversationNotFound: conversationNotFound ?? false });
+      json(res, 200, {});
+    });
+
     router.add('POST', '/api/managers/:id/fail-next-pulses', ({ res, params, body }) => {
       if (!deps.managers.get(params.id!)) throw notFound('manager');
       const { count } = z.object({ count: z.number().int().min(1).max(100) }).parse(body);
