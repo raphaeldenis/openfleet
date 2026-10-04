@@ -3,6 +3,7 @@ import { startServer } from './api/server.js';
 import type { Config } from './config.js';
 import { readingConfigFile } from './configFileError.js';
 import { openDatabase } from './db/database.js';
+import { buildDiagnosticsDocument } from './diagnostics/diagnosticsDocument.js';
 import { describeError } from './errors/describeError.js';
 import { EventBus } from './events/eventBus.js';
 import { ApprovalService } from './governance/approvalService.js';
@@ -89,7 +90,8 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
 
   // The server must be listening before any resumed CLI can POST its first hook — resuming first risks a
   // fast process hitting a port nothing is serving yet.
-  const server = await startServer({ ...config, e2eRoutes: config.e2eEnabled, degraded, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, stores, storeRepo, projects, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, workingStates, worktreesRoot: config.worktreesRoot }) });
+  const diagnostics = () => buildDiagnosticsDocument({ db, degraded, listSessions: () => sessions.list(), port: config.port, e2eEnabled: config.e2eEnabled });
+  const server = await startServer({ ...config, e2eRoutes: config.e2eEnabled, degraded, diagnostics, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, stores, storeRepo, projects, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, workingStates, worktreesRoot: config.worktreesRoot }) });
   log('info', `openfleet core listening on ${server.url} (version: ${DAEMON_VERSION}, home: ${config.home})`);
 
   const unwatchDatabase = watchDatabaseHealth(degraded);

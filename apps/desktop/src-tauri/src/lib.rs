@@ -1,6 +1,7 @@
 mod admin_token;
 mod app_exit;
 mod daemon;
+mod diagnostics_bundle;
 mod issue_report;
 #[cfg(test)]
 mod linear_growth;
@@ -8,7 +9,9 @@ mod log_file;
 mod path_repair;
 mod redaction;
 
+use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
+use std::sync::Mutex;
 use tauri::Manager;
 
 #[cfg(target_os = "macos")]
@@ -32,6 +35,49 @@ fn reveal_logs(app: tauri::AppHandle) -> Result<(), String> {
     let logs_folder = log_file::logs_dir(std::env::var("OPENFLEET_HOME").ok(), &user_home);
     issue_report::reveal_logs_dir(&logs_folder, |folder| issue_report::open_with_macos(folder.as_os_str()))
   })
+}
+
+const DESKTOP_LOG_LINES_IN_BUNDLE: usize = 2000;
+const DEFAULT_NAME_HEADER: &str = "x-default-name";
+
+/// The bundle the user saved last: the only file `reveal_diagnostics_bundle` can show, so the webview chooses no path.
+static LAST_SAVED_BUNDLE: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+/// Returns the tail of the desktop's daemon log with secrets masked and the home folder shortened to `~`.
+#[tauri::command(async)]
+fn read_desktop_log(app: tauri::AppHandle) -> Result<String, String> {
+  let user_home = app.path().home_dir().map_err(|err| err.to_string())?;
+  let openfleet_home = std::env::var("OPENFLEET_HOME").ok();
+  let secrets = admin_token::admin_token_secrets(&admin_token::admin_token_path(openfleet_home.clone(), &user_home));
+  let log_path = log_file::logs_dir(openfleet_home, &user_home).join(log_file::LOG_FILE_NAME);
+  let lines = log_file::last_redacted_lines(&log_path, DESKTOP_LOG_LINES_IN_BUNDLE, &secrets);
+  let user_home = user_home.to_string_lossy().to_string();
+  Ok(lines.iter().map(|line| issue_report::with_home_shortened(line, &user_home)).collect::<Vec<_>>().join("\n"))
+}
+
+/// Shows the native save sheet and writes the zip the webview sends as the raw body; answers `saved` with the path or `cancelled`.
+#[tauri::command(async)]
+fn save_diagnostics_bundle(request: tauri::ipc::Request<'_>) -> Result<serde_json::Value, String> {
+  let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+    return Err("the bundle must be sent as raw bytes".to_string());
+  };
+  let default_name = request.headers().get(DEFAULT_NAME_HEADER).and_then(|value| value.to_str().ok()).unwrap_or_default();
+  match diagnostics_bundle::save_bundle(default_name, bytes, diagnostics_bundle::choose_destination_with_macos)? {
+    diagnostics_bundle::SaveOutcome::Cancelled => Ok(serde_json::json!({ "status": "cancelled" })),
+    diagnostics_bundle::SaveOutcome::Saved(path) => {
+      let shown = path.to_string_lossy().to_string();
+      *LAST_SAVED_BUNDLE.lock().map_err(|err| err.to_string())? = Some(path);
+      Ok(serde_json::json!({ "status": "saved", "path": shown }))
+    }
+  }
+}
+
+/// Shows the bundle saved last in Finder. Takes no argument: the webview cannot choose what is revealed.
+#[tauri::command(async)]
+fn reveal_diagnostics_bundle() -> Result<(), String> {
+  let saved = LAST_SAVED_BUNDLE.lock().map_err(|err| err.to_string())?.clone();
+  let path = saved.ok_or_else(|| "no bundle was saved yet".to_string())?;
+  issue_report::reveal_in_macos(path.as_os_str()).map_err(|err| format!("could not reveal the bundle: {err}"))
 }
 
 /// Opens the prefilled GitHub new-issue form in the browser; nothing is sent until the user submits it there.
@@ -71,7 +117,7 @@ pub fn run() {
         let _ = window.hide();
       }
     })
-    .invoke_handler(tauri::generate_handler![read_admin_token, daemon::daemon_status, reveal_logs, report_issue])
+    .invoke_handler(tauri::generate_handler![read_admin_token, daemon::daemon_status, reveal_logs, report_issue, read_desktop_log, save_diagnostics_bundle, reveal_diagnostics_bundle])
     .setup(|app| {
       if cfg!(debug_assertions) {
         app.handle().plugin(

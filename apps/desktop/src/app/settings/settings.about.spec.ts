@@ -32,7 +32,7 @@ describe('Settings → About', () => {
 
     const tabNames = screen.getAllByRole('tab').map((tab) => tab.textContent?.trim());
 
-    expect(tabNames).toEqual(['Models', 'Daemon', 'About']);
+    expect(tabNames).toEqual(['Models', 'Daemon', 'Diagnostics', 'About']);
   });
 
   it('opens on About when the route asks for tab=about', async () => {

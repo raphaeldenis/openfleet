@@ -105,6 +105,9 @@ describe('SettingsComponent — tab bar', () => {
     expect(document.activeElement).toBe(daemonTab());
 
     await userEvent.keyboard('{ArrowDown}');
+    expect(screen.getByRole('tab', { name: 'Diagnostics' })).toHaveAttribute('aria-selected', 'true');
+
+    await userEvent.keyboard('{ArrowDown}');
     expect(aboutTab()).toHaveAttribute('aria-selected', 'true');
     expect(document.activeElement).toBe(aboutTab());
 
