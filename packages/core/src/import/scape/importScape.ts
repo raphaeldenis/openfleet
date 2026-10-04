@@ -3,14 +3,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { emptyReport, hasChanges, renderImportReport, type ImportReport } from './importReport.js';
+import { prepareManagerFolders, type PreparedManagerFolders } from './managerFolders.js';
 import { ScapeImportError } from './scapeImportError.js';
 import { buildImportPlan, type ImportPlan } from './scapePlan.js';
 import { ScapeSource } from './scapeSource.js';
-import { backUpCommittedState, openDryRunTarget, openWritableTarget, type TargetDatabase } from './scapeTarget.js';
+import { backUpCommittedState, openDryRunTarget, openWritableTarget, type TargetDatabase, type UpsertOutcome } from './scapeTarget.js';
 import { writePlan } from './scapeWriter.js';
 
 export const IMPORT_REPORT_FILE_NAME = 'import-report.md';
 const DATABASE_FILE_NAME = 'openfleet.db';
+const MANAGERS_FOLDER_NAME = 'managers';
 
 export interface ImportScapeOptions {
   /** The Scape home to read (`~/.scape`); only a snapshot of it is ever opened. */
@@ -27,7 +29,11 @@ export interface ImportScapeOptions {
   scratchRoot?: string;
   /** Refuses a real run when the target already holds one of the projects to import. */
   refuseReimport?: boolean;
+  /** Where each imported manager gets its own working folder (created by a real run only); defaults to `managers` in the home. */
+  managersRoot?: string;
 }
+
+const managersRootOf = (options: ImportScapeOptions) => options.managersRoot ?? join(options.home, MANAGERS_FOLDER_NAME);
 
 function writeReportFile(report: ImportReport, directory: string): string {
   mkdirSync(directory, { recursive: true });
@@ -38,7 +44,7 @@ function writeReportFile(report: ImportReport, directory: string): string {
 
 function planFromScape(source: ScapeSource, options: ImportScapeOptions): ImportPlan {
   try {
-    return buildImportPlan(source, { projectName: options.projectName, superpowersRoot: options.superpowersRoot });
+    return buildImportPlan(source, { projectName: options.projectName, superpowersRoot: options.superpowersRoot, managersRoot: managersRootOf(options) });
   } catch (cause) {
     if (cause instanceof ScapeImportError) throw cause;
     throw new ScapeImportError({ code: 'SCAPE_SOURCE_UNREADABLE', message: `the Scape data cannot be read: ${(cause as Error).message}`, cause });
@@ -55,6 +61,12 @@ function assertNoProjectImportedYet(db: DatabaseSync, plan: ImportPlan): void {
   });
 }
 
+const MANAGER_OUTCOMES_NEEDING_A_FOLDER: UpsertOutcome[] = ['written', 'alreadyPresent'];
+
+function foldersOfManagersKept(plan: ImportPlan, outcomes: Map<string, UpsertOutcome>): string[] {
+  return plan.managers.filter((manager) => MANAGER_OUTCOMES_NEEDING_A_FOLDER.includes(outcomes.get(manager.id)!)).map((manager) => manager.session.directory);
+}
+
 function writeToTarget(plan: ImportPlan, options: ImportScapeOptions): ImportReport {
   const dryRun = options.dryRun ?? false;
   const scratchRoot = options.scratchRoot ?? tmpdir();
@@ -64,13 +76,20 @@ function writeToTarget(plan: ImportPlan, options: ImportScapeOptions): ImportRep
     const isOverwritingAnExistingDatabase = !dryRun && databaseExistedBefore && hasChanges(report);
     if (isOverwritingAnExistingDatabase) backUpCommittedState({ home: options.home });
   };
+  let preparedFolders: PreparedManagerFolders | undefined;
+  const prepareFoldersBeforeCommit = (managerOutcomes: Map<string, UpsertOutcome>) => {
+    if (dryRun) return;
+    preparedFolders = prepareManagerFolders({ managersRoot: managersRootOf(options), directories: foldersOfManagersKept(plan, managerOutcomes), forbiddenRoot: options.scapeDir });
+    mustBackUpBeforeCommit();
+  };
   let target: TargetDatabase | undefined;
   try {
     target = dryRun ? openDryRunTarget({ home: options.home, scratchRoot }) : openWritableTarget(options.home);
     if (options.refuseReimport && !dryRun) assertNoProjectImportedYet(target.db, plan);
-    writePlan(target.db, plan, report, mustBackUpBeforeCommit);
+    writePlan(target.db, plan, report, prepareFoldersBeforeCommit);
     return report;
   } catch (cause) {
+    preparedFolders?.rollback();
     if (cause instanceof ScapeImportError) throw cause;
     throw new ScapeImportError({ code: 'IMPORT_WRITE_FAILED', message: `the import could not write to ${options.home}: ${(cause as Error).message}`, cause });
   } finally {
