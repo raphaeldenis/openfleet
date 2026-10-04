@@ -5,10 +5,11 @@ export type PopoverTone = 'neutral' | 'danger';
 
 const INITIAL_FOCUS_SELECTOR = '[data-initial-focus]';
 const FOCUSABLE_SELECTOR = 'button:not(:disabled), input:not(:disabled), select:not(:disabled), [href]';
+const OUTLET_MARGIN = 8;
 
 function focusInitialElementOf(panel: HTMLElement): void {
   const initialElement = panel.querySelector<HTMLElement>(INITIAL_FOCUS_SELECTOR);
-  (initialElement ?? panel).focus();
+  (initialElement ?? panel).focus({ preventScroll: true });
 }
 
 function nextIndexInCycle({ currentIndex, count, isBackwards }: { currentIndex: number; count: number; isBackwards: boolean }): number {
@@ -29,6 +30,7 @@ function nextIndexInCycle({ currentIndex, count, isBackwards }: { currentIndex: 
     '(document:click)': 'closeWhenClickedOutside($event)',
     '(keydown.escape)': 'closeOnEscape($event)',
     '(keydown)': 'trapTabInsideAlertDialog($event)',
+    '(window:resize)': 'positionPanel()',
   },
   template: `
     <button
@@ -104,12 +106,38 @@ export class PopoverComponent {
   private readonly panel = viewChild<ElementRef<HTMLElement>>('panel');
 
   constructor() {
-    // Reads `isAlertDialog` so that swapping the panel to the alert dialog moves focus onto its own initial element.
-    afterRenderEffect(() => {
+    afterRenderEffect((onCleanup) => {
       this.isAlertDialog();
+      this.width();
       const panel = this.panel()?.nativeElement;
-      if (panel) focusInitialElementOf(panel);
+      if (!panel) return;
+      this.positionPanel();
+      focusInitialElementOf(panel);
+      if (typeof ResizeObserver === 'undefined') return;
+      const observer = new ResizeObserver(() => this.positionPanel());
+      observer.observe(this.host.nativeElement);
+      const outlet = this.host.nativeElement.closest('main');
+      if (outlet) observer.observe(outlet);
+      onCleanup(() => observer.disconnect());
     });
+  }
+
+  protected positionPanel(): void {
+    const panel = this.panel()?.nativeElement;
+    if (!panel) return;
+    const host = this.host.nativeElement;
+    const outlet = host.closest('main');
+    const outletBounds = outlet?.getBoundingClientRect();
+    const visibleLeft = Math.max(0, outletBounds?.left ?? 0) + OUTLET_MARGIN;
+    const visibleRight = Math.min(window.innerWidth, outletBounds?.right ?? window.innerWidth) - OUTLET_MARGIN;
+    const availableWidth = visibleRight - visibleLeft;
+    if (availableWidth <= 0) return;
+    panel.style.maxWidth = `${availableWidth}px`;
+    const anchorLeft = host.getBoundingClientRect().left;
+    const panelWidth = panel.getBoundingClientRect().width;
+    const rightmostLeft = visibleRight - panelWidth;
+    const panelLeft = Math.max(visibleLeft, Math.min(anchorLeft, rightmostLeft));
+    panel.style.left = `${panelLeft - anchorLeft}px`;
   }
 
   /** Closes the panel and puts focus back on the trigger. */

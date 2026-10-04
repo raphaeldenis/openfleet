@@ -1,7 +1,7 @@
 import { accessSync, closeSync, constants, existsSync, lstatSync, openSync, readSync, realpathSync, statSync, type Stats } from 'node:fs';
 import { basename, dirname, isAbsolute, join, normalize, sep } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import { OpenFleetError, type ErrorCode, type ErrorEnvelope, type PermissionMode, type Session, type SessionCloseReason, type SessionSpec } from '@openfleet/shared';
+import { MAX_MISSION_BYTES, OpenFleetError, type ErrorCode, type ErrorEnvelope, type PermissionMode, type Session, type SessionCloseReason, type SessionSpec } from '@openfleet/shared';
 import { carryLoggedRef, rememberLoggedRef } from '../errors/loggedRef.js';
 import { EventBus } from '../events/eventBus.js';
 import { createWorktree } from '../git/worktrees.js';
@@ -24,7 +24,9 @@ import { canDeliverNow, isClear, nextState, provesTurnEnded, startsClearedConver
 // Absent, the service still closes sessions with their reason but broadcasts no error events.
 export type DescribeError = (error: unknown, scope: { sessionId?: string; where?: string }) => ErrorEnvelope;
 
-export interface SessionServiceDeps { db: DatabaseSync; bus: EventBus; harnesses: Harness[]; baseUrl: string; worktreesRoot: string; resumeTimeoutMs?: number; firstStartTimeoutMs?: number; submitKeystrokeDelayMs?: number; clearInFlightTimeoutMs?: number; clearFlushGraceMs?: number; sessionEndExitGraceMs?: number; now?: () => number; describeError?: DescribeError; env?: NodeJS.ProcessEnv }
+export interface SessionServiceDeps { db: DatabaseSync; bus: EventBus; harnesses: Harness[]; baseUrl: string; worktreesRoot: string; resumeTimeoutMs?: number; firstStartTimeoutMs?: number; submitKeystrokeDelayMs?: number; clearInFlightTimeoutMs?: number; clearFlushGraceMs?: number; sessionEndExitGraceMs?: number; now?: () => number; describeError?: DescribeError; env?: NodeJS.ProcessEnv;
+  /** The mission of a manager session (none for another session): handed over as the first prompt of a conversation the manager starts from nothing. */
+  missionOf?: (sessionId: string) => string | undefined }
 
 // `failure`: the typed error that made a launch fail; announced in place of the generic launch_failed when it is not internal.
 interface SessionClosure { exitCode?: number; reason?: SessionCloseReason; failure?: unknown }
@@ -1859,9 +1861,11 @@ export class SessionService {
     let isNewConversationAnnounced = false;
     try {
       const conversation = this.conversationToLaunch(session, harness);
+      const seededPrompt = conversation.isResumed ? undefined : this.missionToSeed(session.id);
       handle = harness.start({
         sessionId: session.id,
         cliSessionId: conversation.cliSessionId,
+        seededPrompt,
         directory: session.directory,
         model: session.model,
         hookUrl: `${this.deps.baseUrl}/hooks/${hookToken}`,
@@ -1895,6 +1899,20 @@ export class SessionService {
     this.repo.setState(session.id, 'starting', startingSince);
     this.deps.bus.emit({ type: 'session.state', sessionId: session.id, state: 'starting', stateSince: startingSince });
     return { launched: true };
+  }
+
+  // A manager that starts a conversation from nothing (an imported manager's first start, or a lost conversation) is handed its
+  // whole mission as its first prompt, like a freshly created one. A mission above the maximum is never put on the command line.
+  private missionToSeed(sessionId: string): string | undefined {
+    const mission = this.deps.missionOf?.(sessionId)?.trim();
+    if (!mission) return undefined;
+    const isAboveMaximum = Buffer.byteLength(mission, 'utf8') > MAX_MISSION_BYTES;
+    if (isAboveMaximum) {
+      log('warn', `session ${sessionId}: the mission is above ${MAX_MISSION_BYTES} bytes, it is not given as the first prompt`);
+      return undefined;
+    }
+    this.seededPromptBySessionId.set(sessionId, mission);
+    return mission;
   }
 
   // The CLI exits with code 1 on a conversation it has no file for, which would close the session on every

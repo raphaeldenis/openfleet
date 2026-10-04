@@ -1,4 +1,4 @@
-export const ENTITY_NAMES = ['projects', 'notes', 'noteVersions', 'dataStores', 'columns', 'views', 'rows', 'history', 'managers'] as const;
+export const ENTITY_NAMES = ['projects', 'notes', 'noteVersions', 'dataStores', 'columns', 'views', 'rows', 'history', 'managers', 'workingStates'] as const;
 export type EntityName = (typeof ENTITY_NAMES)[number];
 
 export interface EntityCounts {
@@ -18,6 +18,8 @@ export interface ImportReport {
   unconvertedNodeTypes: Record<string, number>;
   /** Playbook mentions in manager missions: the playbooks are not imported before MIG-05. */
   pendingPlaybookMentions: number;
+  /** Sections of the manager state files that are no working state section and were folded into one under their heading. */
+  mergedStateSections: number;
   reportPath?: string;
 }
 
@@ -29,6 +31,7 @@ export const emptyReport = (input: { dryRun: boolean }): ImportReport => ({
   projectsWithoutDocsFolder: [],
   unconvertedNodeTypes: {},
   pendingPlaybookMentions: 0,
+  mergedStateSections: 0,
 });
 
 const countsRow = (name: EntityName, counts: EntityCounts) =>
@@ -57,6 +60,9 @@ export function renderImportReport(report: ImportReport): string {
     '',
     '## Playbook mentions pending MIG-05',
     `${report.pendingPlaybookMentions} playbook mention(s) in manager missions point at playbooks that are not imported yet (MIG-05); they read "not resolved" until then.`,
+    '',
+    '## Working states',
+    `${report.mergedStateSections} section(s) of the state files were merged into a working state section under a line carrying their heading. Not converted: a state file with an item cut, items dropped for the item limit or the size cap, or a manager whose own record was left as it is.`,
     '',
     '## Projects without a docs folder',
     ...bulletList(report.projectsWithoutDocsFolder),

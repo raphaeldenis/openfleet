@@ -13,7 +13,7 @@
   --term-bg: #1c1c1a; --term-fg: #e8e5dc; --term-mut: #8f8c84;
   --state-generating: oklch(0.5 0.07 240); --state-thinking: oklch(0.5 0.07 240);
   --state-waiting-permission: oklch(0.62 0.18 45); --state-waiting-input: oklch(0.62 0.18 45);
-  --state-idle: oklch(0.52 0.11 145); --state-error: oklch(0.54 0.17 28); --state-closed: #85837d;
+  --state-idle: oklch(0.52 0.11 145); --state-error: oklch(0.54 0.17 28); --state-closed: oklch(0.565 0.01 90);
   // Fills behind a label (design tokens --s-err-fill / --s-perm-fill / --on-state, named --state-* here).
   --state-error-fill: oklch(0.48 0.17 28); --state-permission-fill: oklch(0.5 0.15 50); --on-state: #fff;
   --shadow: 0 10px 30px rgba(30, 28, 20, .16);

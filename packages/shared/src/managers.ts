@@ -4,7 +4,7 @@ export const MANAGER_ROLE = 'manager';
 
 const ONE_DAY_SECONDS = 86400;
 const MAX_CHILDREN_CAP = 64;
-const MAX_MISSION_BYTES = 64 * 1024;
+export const MAX_MISSION_BYTES = 64 * 1024;
 
 export const ManagerSpecSchema = z.object({
   pulseSeconds: z.number().int().min(1).max(ONE_DAY_SECONDS).optional(),
