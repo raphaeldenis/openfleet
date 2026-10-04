@@ -1,4 +1,4 @@
-//! Acceptance skeleton of the allowlist: no byte sequence of the hostile corpus, nor any decoded form of it, may appear in a line the log emits.
+//! Acceptance of the allowlist through the public writer and an in-memory filesystem.
 //!
 //! Two sinks run the same property:
 //! - `ProjectionSink` (the fake sink) is the projection alone: line assembler, projection, render, grammar.
@@ -6,9 +6,11 @@
 //!   through the constructors `daemon.rs` uses, and the stored file is read back.
 
 use super::salt::SALT_LEN;
+use super::field::{SessionId, ShortId};
 use super::{validate, DaemonLineAssembler, DesktopEvent, EventName, KnownPaths, PathClass, Salt, Stream, Ts};
 use crate::log_file::{DesktopLog, RotatingLog, KEPT_FILES, MAX_LOG_BYTES};
 use serde_json::{json, Value};
+use std::collections::HashSet;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -27,6 +29,8 @@ const BOUNDARY_ANCHORS: [usize; 6] = [16_383, 16_384, 16_385, ASSEMBLER_CAP_BYTE
 const BOUNDARY_PADDINGS: [char; 4] = ['a', 'é', '日', '😀'];
 const WRITER_CLOSE_TIMEOUT: Duration = Duration::from_secs(60);
 const BENIGN_FIRST_LINE: &[u8] = b"benign line before the hostile one\r\n";
+const SCENARIOS_PER_WRITER: usize = 64;
+const BOUNDARY_SECRET: &str = "SyntheticBoundarySecret0123456789";
 
 // ---- the corpus ----
 
@@ -343,17 +347,21 @@ enum Placement {
   Prefix,
   Middle,
   Suffix,
+  InsideJsonString,
+  AsJsonKey,
   EscapedJson,
   SplitAcrossTwoChunks,
   AfterCrlf,
 }
 
 impl Placement {
-  const ALL: [Placement; 7] = [
+  const ALL: [Placement; 9] = [
     Placement::SoleValue,
     Placement::Prefix,
     Placement::Middle,
     Placement::Suffix,
+    Placement::InsideJsonString,
+    Placement::AsJsonKey,
     Placement::EscapedJson,
     Placement::SplitAcrossTwoChunks,
     Placement::AfterCrlf,
@@ -365,7 +373,9 @@ impl Placement {
       Placement::Prefix => format!("{hostile_text} {NEIGHBOUR}"),
       Placement::Middle => format!("{NEIGHBOUR}{hostile_text} {NEIGHBOUR}"),
       Placement::Suffix => format!("{NEIGHBOUR}{hostile_text}"),
-      Placement::EscapedJson => Value::String(hostile_text.to_string()).to_string(),
+      Placement::InsideJsonString => json!({ "value": hostile_text }).to_string(),
+      Placement::AsJsonKey => json!({ hostile_text: "value" }).to_string(),
+      Placement::EscapedJson => Value::String(Value::String(hostile_text.to_string()).to_string()).to_string(),
       Placement::SoleValue | Placement::SplitAcrossTwoChunks | Placement::AfterCrlf => hostile_text.to_string(),
     }
   }
@@ -408,45 +418,110 @@ struct Scenario {
   name: String,
   delivery: Delivery,
   secret: String,
+  typed_id_projection: Option<String>,
+}
+
+/// The oracle's single documented exception: a daemon-minted id that the typed parser accepts is stored as itself.
+/// It covers only the `sessionId` and `id` fields, only when the secret is the whole field value, and only the exact `field=value` token.
+fn typed_id_projection_of(kind: FreeTextKind, field_value: &str) -> Option<String> {
+  match kind {
+    FreeTextKind::SessionId if SessionId::parse(field_value).is_some() => Some(format!("session={field_value}")),
+    FreeTextKind::Id if ShortId::parse(field_value).is_some() => Some(format!("id={field_value}")),
+    _ => None,
+  }
 }
 
 fn scenario_of(item: &HostileItem, kind: FreeTextKind, placement: Placement) -> Scenario {
   let text = placement.text_around(&item.text);
   let delivery = kind.delivery_of(&text).shaped_by(placement);
-  Scenario { name: format!("{} | {kind:?} | {placement:?}", item.name), delivery, secret: item.secret.clone() }
+  let secret_is_the_whole_field_value = text == item.secret;
+  let typed_id_projection = if secret_is_the_whole_field_value { typed_id_projection_of(kind, &text) } else { None };
+  Scenario { name: format!("{} | {kind:?} | {placement:?}", item.name), delivery, secret: item.secret.clone(), typed_id_projection }
 }
 
-fn every_kind_and_placement(items: &[HostileItem]) -> Vec<Scenario> {
+fn every_kind_and_placement(items: Vec<HostileItem>) -> impl Iterator<Item = Scenario> {
   items
-    .iter()
-    .flat_map(|item| FreeTextKind::ALL.into_iter().flat_map(move |kind| Placement::ALL.into_iter().map(move |placement| scenario_of(item, kind, placement))))
-    .collect()
+    .into_iter()
+    .flat_map(|item| FreeTextKind::ALL.into_iter().flat_map(move |kind| {
+      let item = item.clone();
+      Placement::ALL.into_iter().map(move |placement| scenario_of(&item, kind, placement))
+    }))
 }
 
-fn kinds_and_middle_placement(items: &[HostileItem], kinds: &[FreeTextKind]) -> Vec<Scenario> {
-  items.iter().flat_map(|item| kinds.iter().map(move |kind| scenario_of(item, *kind, Placement::Middle))).collect()
+fn provider_credentials_scenarios() -> impl Iterator<Item = Scenario> {
+  every_kind_and_placement(the_twenty_nine_provider_credentials())
 }
 
-fn provider_credentials_scenarios() -> Vec<Scenario> {
-  every_kind_and_placement(&the_twenty_nine_provider_credentials())
+fn credential_schemes_scenarios() -> impl Iterator<Item = Scenario> {
+  every_kind_and_placement(credential_schemes())
 }
 
-fn credential_schemes_scenarios() -> Vec<Scenario> {
-  every_kind_and_placement(&credential_schemes())
-}
-
-fn codex_vectors_scenarios() -> Vec<Scenario> {
-  every_kind_and_placement(&codex_vectors())
+fn codex_vectors_scenarios() -> impl Iterator<Item = Scenario> {
+  every_kind_and_placement(codex_vectors())
 }
 
 const KINDS_CARRYING_FREE_TEXT_ON_A_PIPE: [FreeTextKind; 3] = [FreeTextKind::DaemonMsg, FreeTextKind::StdoutNonJson, FreeTextKind::ErrMessage];
 
-fn boundary_scenarios() -> Vec<Scenario> {
-  kinds_and_middle_placement(&boundary_straddling_items(), &[FreeTextKind::DaemonMsg, FreeTextKind::StdoutNonJson])
+fn boundary_scenarios() -> impl Iterator<Item = Scenario> {
+  every_kind_and_placement(boundary_straddling_items())
 }
 
-fn random_token_scenarios() -> Vec<Scenario> {
-  kinds_and_middle_placement(&random_token_shapes(), &KINDS_CARRYING_FREE_TEXT_ON_A_PIPE)
+struct BoundaryCase {
+  kind: FreeTextKind,
+  anchor: usize,
+  padding: char,
+  secret_byte: usize,
+}
+
+fn secret_position_in(delivery: &Delivery, secret: &str) -> usize {
+  let bytes = match delivery {
+    Delivery::DaemonPipe { chunks, .. } => chunks.concat(),
+    Delivery::DesktopNotice { text, .. } => text.as_bytes().to_vec(),
+  };
+  bytes.windows(secret.len()).position(|window| window == secret.as_bytes()).expect("the input contains the secret")
+}
+
+/// Pads until the chosen secret byte sits on the anchor; the envelope length depends on the padding because JSON object keys are sorted.
+fn delivery_with_secret_byte_on_anchor(case: &BoundaryCase) -> Delivery {
+  const SETTLING_ROUNDS: usize = 3;
+  let mut padding_bytes = 0;
+  for _ in 0..SETTLING_ROUNDS {
+    let text = format!("{}{BOUNDARY_SECRET}", padding_of_exact_bytes(case.padding, padding_bytes));
+    let delivery = case.kind.delivery_of(&text);
+    let envelope_bytes = secret_position_in(&delivery, BOUNDARY_SECRET) - padding_bytes;
+    let anchored_secret_byte = secret_position_in(&delivery, BOUNDARY_SECRET) + case.secret_byte;
+    if anchored_secret_byte == case.anchor { return delivery; }
+    padding_bytes = case.anchor - case.secret_byte - envelope_bytes;
+  }
+  let text = format!("{}{BOUNDARY_SECRET}", padding_of_exact_bytes(case.padding, padding_bytes));
+  case.kind.delivery_of(&text)
+}
+
+fn exact_boundary_scenario(case: BoundaryCase) -> Scenario {
+  let delivery = delivery_with_secret_byte_on_anchor(&case);
+  let anchored_secret_byte = secret_position_in(&delivery, BOUNDARY_SECRET) + case.secret_byte;
+  assert_eq!(anchored_secret_byte, case.anchor, "the byte crosses the actual input boundary");
+  let delivery = match delivery {
+    Delivery::DaemonPipe { stream, chunks } => {
+      let bytes = chunks.concat();
+      let (head, tail) = bytes.split_at(case.anchor);
+      Delivery::DaemonPipe { stream, chunks: vec![head.to_vec(), tail.to_vec()] }
+    }
+    notice => notice,
+  };
+  Scenario { name: format!("actual boundary {} byte {} behind {} | {:?}", case.anchor, case.secret_byte, case.padding, case.kind), delivery, secret: BOUNDARY_SECRET.to_string(), typed_id_projection: None }
+}
+
+fn exact_boundary_scenarios() -> impl Iterator<Item = Scenario> {
+  FreeTextKind::ALL.into_iter().flat_map(|kind| BOUNDARY_ANCHORS.into_iter().flat_map(move |anchor| {
+    BOUNDARY_PADDINGS.into_iter().flat_map(move |padding| [0, BOUNDARY_SECRET.len() / 2, BOUNDARY_SECRET.len() - 1].into_iter().map(move |secret_byte| {
+      exact_boundary_scenario(BoundaryCase { kind, anchor, padding, secret_byte })
+    }))
+  }))
+}
+
+fn random_token_scenarios() -> impl Iterator<Item = Scenario> {
+  every_kind_and_placement(random_token_shapes())
 }
 
 fn five_mib_line_scenarios() -> Vec<Scenario> {
@@ -459,6 +534,43 @@ fn five_mib_line_scenarios() -> Vec<Scenario> {
       KINDS_CARRYING_FREE_TEXT_ON_A_PIPE.map(|kind| scenario_of(&giant_item, kind, Placement::SoleValue))
     })
     .collect()
+}
+
+fn all_hostile_items() -> Vec<HostileItem> {
+  the_twenty_nine_provider_credentials().into_iter()
+    .chain(credential_schemes())
+    .chain(codex_vectors())
+    .chain(boundary_straddling_items())
+    .chain(random_token_shapes())
+    .collect()
+}
+
+fn assert_corpus_in_giant_lines(sink: &dyn Sink) {
+  let items = all_hostile_items();
+  let mut remaining = items.as_slice();
+  while !remaining.is_empty() {
+    let mut text = String::new();
+    let mut included_items = 0;
+    for item in remaining {
+      let embedded = Value::String(item.text.clone()).to_string();
+      let fits_this_batch = text.len() + embedded.len() < FIVE_MIB;
+      if !fits_this_batch { break; }
+      text.push_str(&embedded);
+      included_items += 1;
+    }
+    assert!(included_items > 0);
+    text.push_str(&"a".repeat(FIVE_MIB - text.len()));
+    for kind in FreeTextKind::ALL {
+      let delivery = kind.delivery_of(&text);
+      let lines = sink.emitted_lines(&delivery);
+      for item in &remaining[..included_items] {
+        let name = format!("{} | {kind:?} | InsideFiveMibLine", item.name);
+        assert_stored_lines(&name, &item.secret, None, &lines);
+      }
+      assert_eq!(lines.len(), record_count_of(&delivery) + sink.flush_marker_count());
+    }
+    remaining = &remaining[included_items..];
+  }
 }
 
 // ---- the forbidden forms ----
@@ -504,12 +616,7 @@ fn json_unicode_escaped(text: &str) -> String {
 }
 
 fn windows_of(secret: &str) -> Vec<String> {
-  let characters: Vec<char> = secret.chars().collect();
-  let window_chars = WINDOW_BYTES;
-  if characters.len() < window_chars {
-    return Vec::new();
-  }
-  characters.windows(window_chars).map(|window| window.iter().collect()).collect()
+  secret.as_bytes().windows(WINDOW_BYTES).filter_map(|window| std::str::from_utf8(window).ok().map(str::to_string)).collect()
 }
 
 /// Lowercased text a stored line must not contain: the raw secret and each decoded form of it.
@@ -537,13 +644,19 @@ fn forbidden_forms_of(secret: &str) -> Vec<String> {
 
 trait Sink {
   fn emitted_lines(&self, delivery: &Delivery) -> Vec<String>;
+
+  fn emitted_batch(&self, deliveries: &[&Delivery]) -> Vec<Vec<String>> {
+    deliveries.iter().map(|delivery| self.emitted_lines(delivery)).collect()
+  }
+
+  fn flush_marker_count(&self) -> usize { 0 }
 }
 
 fn fixed_now() -> Ts {
   Ts::parse(NOW).expect("a valid timestamp")
 }
 
-/// The fake sink: the allowlist path as it exists before the writer cutover.
+/// The projection, independent of the writer thread and filesystem.
 struct ProjectionSink {
   salt: Option<Salt>,
 }
@@ -632,36 +745,233 @@ impl crate::log_file::LogFs for MemoryFs {
 
 impl Sink for WriterSink {
   fn emitted_lines(&self, delivery: &Delivery) -> Vec<String> {
+    self.emitted_batch(&[delivery]).remove(0)
+  }
+
+  fn flush_marker_count(&self) -> usize { 1 }
+
+  fn emitted_batch(&self, deliveries: &[&Delivery]) -> Vec<Vec<String>> {
     let fs = MemoryFs::default();
     let rotating_log = RotatingLog::open(fs.clone(), PathBuf::from("/logs/desktop.log"), MAX_LOG_BYTES, KEPT_FILES);
-    let log = DesktopLog::start(rotating_log, self.salt.clone(), || 0);
-    match delivery {
-      Delivery::DaemonPipe { stream, chunks } => chunks.iter().for_each(|chunk| log.ingest_daemon_chunk(*stream, chunk)),
-      Delivery::DesktopNotice { kind, text } => log.record_event(notice_event(*kind, text, log.opaque(text.as_bytes()))),
+    let queued_messages = deliveries.iter().map(|delivery| match delivery {
+      Delivery::DaemonPipe { chunks, .. } => chunks.len(),
+      Delivery::DesktopNotice { .. } => 1,
+    }).sum::<usize>();
+    let capacity_including_close = queued_messages + 1;
+    let log = DesktopLog::start_with_capacity(rotating_log, self.salt.clone(), || 0, capacity_including_close);
+    for delivery in deliveries {
+      match delivery {
+        Delivery::DaemonPipe { stream, chunks } => chunks.iter().for_each(|chunk| log.ingest_daemon_chunk(*stream, chunk)),
+        Delivery::DesktopNotice { kind, text } => log.record_event(notice_event(*kind, text, log.opaque(text.as_bytes()))),
+      }
     }
     assert!(log.flush_and_close(WRITER_CLOSE_TIMEOUT), "the writer did not drain");
     let stored = fs.0.lock().unwrap().clone();
-    String::from_utf8_lossy(&stored).lines().map(str::to_string).collect()
+    let mut lines: Vec<String> = String::from_utf8_lossy(&stored).lines().map(str::to_string).collect();
+    let marker = lines.pop().expect("the flushed marker");
+    assert!(marker.ends_with("info daemon_log_flushed drained=true"), "{marker}");
+    let expected_records = deliveries.iter().map(|delivery| record_count_of(delivery)).sum::<usize>();
+    assert_eq!(lines.len(), expected_records, "every input record is stored");
+    let mut next_line = 0;
+    deliveries.iter().map(|delivery| {
+      let end = next_line + record_count_of(delivery);
+      let mut scenario_lines = lines[next_line..end].to_vec();
+      next_line = end;
+      scenario_lines.push(marker.clone());
+      scenario_lines
+    }).collect()
   }
+}
+
+fn record_count_of(delivery: &Delivery) -> usize {
+  let Delivery::DaemonPipe { chunks, .. } = delivery else { return 1 };
+  let joined_chunks = chunks.concat();
+  String::from_utf8_lossy(&joined_chunks).lines().filter(|line| !line.is_empty()).count()
 }
 
 // ---- the property ----
 
 fn leaked_form_in(lines: &[String], secret: &str) -> Option<String> {
   let folded_lines: Vec<String> = lines.iter().map(|line| line.to_lowercase()).collect();
-  forbidden_forms_of(secret).into_iter().find(|form| folded_lines.iter().any(|line| line.contains(form.as_str())))
+  let encoded_leak = forbidden_forms_of(secret).into_iter().find(|form| folded_lines.iter().any(|line| line.contains(form.as_str())));
+  if encoded_leak.is_some() { return encoded_leak; }
+  let folded_secret = secret.to_ascii_lowercase();
+  let watched_windows: HashSet<&[u8]> = secret.as_bytes().windows(WINDOW_BYTES).chain(folded_secret.as_bytes().windows(WINDOW_BYTES)).collect();
+  for view in lines.iter().flat_map(|line| decoded_views_of(line)) {
+    for window in view.windows(WINDOW_BYTES) {
+      if watched_windows.contains(window) {
+        return Some(format!("12-byte window {}", hex_of(window)));
+      }
+    }
+  }
+  None
+}
+
+fn hex_decoded(text: &[u8]) -> Option<Vec<u8>> {
+  text.chunks_exact(2).map(|pair| std::str::from_utf8(pair).ok().and_then(|pair| u8::from_str_radix(pair, 16).ok())).collect()
+}
+
+fn percent_decoded(text: &[u8]) -> Vec<u8> {
+  let mut decoded = Vec::with_capacity(text.len());
+  let mut index = 0;
+  while index < text.len() {
+    let encoded_byte = (text[index] == b'%').then(|| text.get(index + 1..index + 3).and_then(hex_decoded).and_then(|pair| pair.first().copied())).flatten();
+    if let Some(byte) = encoded_byte {
+      decoded.push(byte);
+      index += 3;
+      continue;
+    }
+    decoded.push(text[index]);
+    index += 1;
+  }
+  decoded
+}
+
+fn base64_decoded(token: &[u8]) -> Vec<u8> {
+  let value_of = |byte: u8| match byte {
+    b'-' | b'+' => Some(62u32),
+    b'_' | b'/' => Some(63u32),
+    other => BASE64_STANDARD.as_bytes().iter().position(|candidate| *candidate == other).map(|index| index as u32),
+  };
+  let sextets: Vec<u32> = token.iter().filter_map(|byte| value_of(*byte)).collect();
+  sextets.chunks(4).flat_map(|group| {
+    let packed = group.iter().enumerate().fold(0u32, |total, (index, sextet)| total | (sextet << (18 - 6 * index as u32)));
+    (0..group.len().saturating_sub(1)).map(move |index| (packed >> (16 - 8 * index as u32)) as u8)
+  }).collect()
+}
+
+fn decoded_views_of(line: &str) -> Vec<Vec<u8>> {
+  let raw = line.as_bytes();
+  let percent_once = percent_decoded(raw);
+  let percent_twice = percent_decoded(&percent_once);
+  let mut views = vec![raw.to_vec(), percent_once, percent_twice];
+  let unicode_view = serde_json::from_str::<String>(&format!("\"{}\"", line.replace('"', "\\\""))).ok();
+  if let Some(decoded) = unicode_view { views.push(decoded.into_bytes()); }
+  for token in line.split([' ', '=', '[', ']', ':']) {
+    let bytes = token.as_bytes();
+    for alignment in 0..4.min(bytes.len() + 1) {
+      views.push(base64_decoded(&bytes[alignment..]));
+    }
+    views.extend(hex_decoded(bytes));
+  }
+  let folded: Vec<Vec<u8>> = views.iter().map(|view| view.to_ascii_lowercase()).collect();
+  views.extend(folded);
+  views
 }
 
 /// Panics, naming every scenario that leaks, when a stored line contains the secret or a decoded form of it.
-fn assert_allowlist_property(sink: &dyn Sink, scenarios: &[Scenario]) {
-  let leaking: Vec<String> = scenarios
-    .iter()
-    .filter_map(|scenario| {
-      let lines = sink.emitted_lines(&scenario.delivery);
-      leaked_form_in(&lines, &scenario.secret).map(|form| format!("{} leaks `{}`", scenario.name, form.chars().take(40).collect::<String>()))
-    })
-    .collect();
-  assert_eq!(leaking.len(), 0, "{} of {} scenarios leak:\n{}", leaking.len(), scenarios.len(), leaking.iter().take(20).cloned().collect::<Vec<_>>().join("\n"));
+fn assert_allowlist_property(sink: &dyn Sink, scenarios: impl IntoIterator<Item = Scenario>) {
+  let mut scenarios = scenarios.into_iter();
+  loop {
+    let batch: Vec<Scenario> = scenarios.by_ref().take(SCENARIOS_PER_WRITER).collect();
+    if batch.is_empty() { return; }
+    let deliveries: Vec<&Delivery> = batch.iter().map(|scenario| &scenario.delivery).collect();
+    let emitted = sink.emitted_batch(&deliveries);
+    assert_eq!(emitted.len(), batch.len(), "every scenario receives a result");
+    for (scenario, lines) in batch.iter().zip(emitted) {
+      assert_eq!(lines.len(), record_count_of(&scenario.delivery) + sink.flush_marker_count(), "{}: record count", scenario.name);
+      assert_stored_lines(&scenario.name, &scenario.secret, scenario.typed_id_projection.as_deref(), &lines);
+    }
+  }
+}
+
+fn assert_stored_lines(name: &str, secret: &str, typed_id_projection: Option<&str>, lines: &[String]) {
+  for line in lines {
+    let event_name = line.split(' ').nth(2).unwrap_or_default();
+    let event = EventName::ALL.into_iter().find(|event| event.as_str() == event_name).expect("a known event");
+    assert_eq!(validate(event, line), Ok(()), "{name}: {line}");
+  }
+  let lines_without_the_typed_id: Vec<String> = match typed_id_projection {
+    Some(token) => lines.iter().map(|line| line.replacen(token, "", 1)).collect(),
+    None => lines.to_vec(),
+  };
+  let leak = leaked_form_in(&lines_without_the_typed_id, secret);
+  assert_eq!(leak, None, "{name} leaks into {lines:?}");
+}
+
+#[derive(Default)]
+struct WriterCpuSamples {
+  first_append: Option<Duration>,
+  last_append: Duration,
+  records: usize,
+}
+
+#[derive(Clone, Default)]
+struct CpuTimedFs(Arc<Mutex<WriterCpuSamples>>);
+
+fn current_thread_cpu_time() -> Duration {
+  let mut clock = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+  let status = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut clock) };
+  assert_eq!(status, 0);
+  Duration::new(clock.tv_sec as u64, clock.tv_nsec as u32)
+}
+
+impl crate::log_file::LogFs for CpuTimedFs {
+  fn size(&self, _: &Path) -> io::Result<u64> { Ok(0) }
+  fn rename(&self, _: &Path, _: &Path) -> io::Result<()> { Ok(()) }
+  fn append(&self, _: &Path, _: &[u8]) -> io::Result<()> {
+    let now = current_thread_cpu_time();
+    let mut samples = self.0.lock().unwrap();
+    samples.first_append.get_or_insert(now);
+    samples.last_append = now;
+    samples.records += 1;
+    Ok(())
+  }
+}
+
+struct CpuWorkload<'a> {
+  chunk: &'a [u8],
+  repetitions: usize,
+  expected_records: usize,
+}
+
+fn writer_cpu_time_of(workload: CpuWorkload<'_>) -> Duration {
+  let fs = CpuTimedFs::default();
+  let rotating = RotatingLog::open(fs.clone(), PathBuf::from("/memory/desktop.log"), MAX_LOG_BYTES, KEPT_FILES);
+  let queue_capacity = workload.repetitions + 2;
+  let log = DesktopLog::start_with_capacity(rotating, Some(Salt::from_bytes([7; SALT_LEN])), || 0, queue_capacity);
+  log.record_event(DesktopEvent::DaemonReused);
+  for _ in 0..workload.repetitions {
+    log.ingest_daemon_chunk(Stream::Out, workload.chunk);
+  }
+  assert!(log.flush_and_close(WRITER_CLOSE_TIMEOUT));
+  let samples = fs.0.lock().unwrap();
+  let records_including_cpu_markers = workload.expected_records * workload.repetitions + 2;
+  assert_eq!(samples.records, records_including_cpu_markers);
+  samples.last_append - samples.first_append.unwrap()
+}
+
+#[derive(Clone, Copy, Debug)]
+enum HostileWorkload {
+  DeepArrays,
+  QuoteFlood,
+  UnicodeEscapes,
+  ManyKeys,
+}
+
+impl HostileWorkload {
+  const ALL: [Self; 4] = [Self::DeepArrays, Self::QuoteFlood, Self::UnicodeEscapes, Self::ManyKeys];
+
+  fn chunk_of(self, byte_budget: usize) -> Vec<u8> {
+    let text = match self {
+      Self::DeepArrays => format!("{{\"nested\":{}0{}}}", "[".repeat(byte_budget / 2), "]".repeat(byte_budget / 2)),
+      Self::QuoteFlood => "\"".repeat(byte_budget),
+      Self::UnicodeEscapes => format!("{{\"msg\":\"{}\"}}", "\\u0000".repeat(byte_budget / 6)),
+      Self::ManyKeys => {
+        let pairs: Vec<String> = (0..byte_budget / 20).map(|index| format!("\"key{index:010}\":0")).collect();
+        format!("{{{}}}", pairs.join(","))
+      }
+    };
+    format!("{text}\n").into_bytes()
+  }
+}
+
+fn require_cpu_budget(measured: Duration, ceiling: Duration) {
+  assert!(measured < ceiling, "writer CPU time {measured:?} exceeds {ceiling:?}");
+}
+
+fn require_linear_writer_cpu(measure: impl FnMut(usize) -> Duration, budget: &crate::linear_growth::LinearGrowthBudget) {
+  crate::linear_growth::assert_linear_growth(measure, budget);
 }
 
 #[cfg(test)]
@@ -729,7 +1039,7 @@ mod tests {
     }
 
     #[test]
-    fn cover_every_twelve_character_window() {
+    fn cover_every_twelve_byte_window() {
       let forms = forbidden_forms_of("ABCDEFGHIJKLMNOP");
 
       assert!(forms.contains(&"abcdefghijkl".to_string()) && forms.contains(&"efghijklmnop".to_string()));
@@ -743,6 +1053,51 @@ mod tests {
 
   mod the_property {
     use super::*;
+
+    #[test]
+    fn detects_encoded_twelve_byte_tails_at_every_alignment() {
+      let secret = "SyntheticSecretValue0123";
+      let tail = &secret[secret.len() - WINDOW_BYTES..];
+      let mut encodings = vec![hex_of(tail.as_bytes()), percent_encoded(tail, true), json_unicode_escaped(tail)];
+      encodings.push(percent_encoded(&percent_encoded(tail, false), true));
+      for alphabet in [BASE64_STANDARD, BASE64_URL] {
+        for prefix_bytes in 0..3 {
+          encodings.push(base64_of(format!("{}{tail}", "x".repeat(prefix_bytes)).as_bytes(), alphabet));
+        }
+      }
+      for encoding in encodings {
+        assert!(leaked_form_in(&[format!("text={encoding}")], secret).is_some(), "missed {encoding}");
+      }
+    }
+
+    #[test]
+    fn detects_windows_of_twelve_bytes_inside_multibyte_secrets() {
+      let secret = "日😀éSyntheticTail";
+      let window = std::str::from_utf8(&secret.as_bytes()[..WINDOW_BYTES]).unwrap();
+      assert!(leaked_form_in(&[window.to_string()], secret).is_some());
+    }
+
+    #[test]
+    #[should_panic(expected = "record count")]
+    fn rejects_a_sink_that_silently_drops_a_record() {
+      struct EmptySink;
+      impl Sink for EmptySink {
+        fn emitted_lines(&self, _: &Delivery) -> Vec<String> { Vec::new() }
+      }
+      let item = HostileItem::bare("dropped", "SyntheticSecretValue0123".to_string());
+      assert_allowlist_property(&EmptySink, [scenario_of(&item, FreeTextKind::SidecarReason, Placement::SoleValue)]);
+    }
+
+    #[test]
+    #[should_panic(expected = "ForbiddenByte")]
+    fn rejects_a_stored_line_outside_the_grammar() {
+      struct UngrammaticalSink;
+      impl Sink for UngrammaticalSink {
+        fn emitted_lines(&self, _: &Delivery) -> Vec<String> { vec![format!("{NOW} info daemon_text stream=out class=other text=%")] }
+      }
+      let item = HostileItem::bare("grammar", "SyntheticSecretValue0123".to_string());
+      assert_allowlist_property(&UngrammaticalSink, [scenario_of(&item, FreeTextKind::SidecarReason, Placement::SoleValue)]);
+    }
 
     #[test]
     fn detects_a_secret_copied_into_a_line() {
@@ -771,53 +1126,160 @@ mod tests {
     }
   }
 
+  mod the_typed_id_exception {
+    use super::*;
+
+    struct FixedLinesSink(Vec<String>);
+
+    impl Sink for FixedLinesSink {
+      fn emitted_lines(&self, _: &Delivery) -> Vec<String> { self.0.clone() }
+    }
+
+    fn random_uuid() -> HostileItem {
+      random_token_shapes().into_iter().find(|item| item.name.starts_with("random uuid")).expect("a random uuid item")
+    }
+
+    fn line_with(fields: &str) -> String {
+      format!("1970-01-01T00:00:00Z info daemon_line {fields} extra_fields=0")
+    }
+
+    #[test]
+    fn stores_a_uuid_in_the_session_field_as_the_typed_id_and_nothing_else() {
+      let uuid = random_uuid();
+      let scenario = scenario_of(&uuid, FreeTextKind::SessionId, Placement::SoleValue);
+
+      let lines = WriterSink::with_salt().emitted_lines(&scenario.delivery);
+
+      assert_eq!(lines[0], format!("1970-01-01T00:00:00Z info daemon_line session={} msg=ws_write_failed extra_fields=0", uuid.secret));
+      assert_eq!(scenario.typed_id_projection, Some(format!("session={}", uuid.secret)));
+    }
+
+    #[test]
+    fn accepts_the_typed_id_in_the_session_field_for_the_writer() {
+      let scenario = scenario_of(&random_uuid(), FreeTextKind::SessionId, Placement::SoleValue);
+
+      assert_allowlist_property(&WriterSink::with_salt(), [scenario]);
+    }
+
+    #[test]
+    fn covers_no_other_kind() {
+      let uuid = random_uuid();
+
+      let kinds_with_an_exception: Vec<FreeTextKind> = FreeTextKind::ALL
+        .into_iter()
+        .filter(|kind| Placement::ALL.into_iter().any(|placement| scenario_of(&uuid, *kind, placement).typed_id_projection.is_some()))
+        .collect();
+
+      assert_eq!(kinds_with_an_exception, vec![FreeTextKind::SessionId]);
+    }
+
+    #[test]
+    fn covers_no_other_placement_of_the_session_field() {
+      let uuid = random_uuid();
+
+      let placements_with_an_exception: Vec<Placement> = Placement::ALL
+        .into_iter()
+        .filter(|placement| scenario_of(&uuid, FreeTextKind::SessionId, *placement).typed_id_projection.is_some())
+        .collect();
+
+      assert_eq!(placements_with_an_exception, vec![Placement::SoleValue, Placement::SplitAcrossTwoChunks, Placement::AfterCrlf]);
+    }
+
+    #[test]
+    fn covers_a_short_id_only_in_the_id_field() {
+      let eight_hex = HostileItem::bare("eight hex", "0a1b2c3d".to_string());
+
+      assert_eq!(scenario_of(&eight_hex, FreeTextKind::Id, Placement::SoleValue).typed_id_projection, Some("id=0a1b2c3d".to_string()));
+      assert_eq!(scenario_of(&eight_hex, FreeTextKind::SessionId, Placement::SoleValue).typed_id_projection, None);
+    }
+
+    #[test]
+    #[should_panic(expected = "leaks into")]
+    fn turns_red_when_the_uuid_is_also_copied_into_another_field() {
+      let uuid = random_uuid();
+      let scenario = scenario_of(&uuid, FreeTextKind::SessionId, Placement::SoleValue);
+      let sink = FixedLinesSink(vec![line_with(&format!("session={0} msg={0}", uuid.secret))]);
+
+      assert_allowlist_property(&sink, [scenario]);
+    }
+
+    #[test]
+    #[should_panic(expected = "leaks into")]
+    fn turns_red_when_the_exception_is_widened_to_the_message_kind() {
+      let uuid = random_uuid();
+      let scenario = scenario_of(&uuid, FreeTextKind::DaemonMsg, Placement::SoleValue);
+      let sink = FixedLinesSink(vec![line_with(&format!("session={}", uuid.secret))]);
+
+      assert_allowlist_property(&sink, [scenario]);
+    }
+
+    #[test]
+    #[should_panic(expected = "leaks into")]
+    fn turns_red_when_the_exception_is_widened_to_the_id_kind() {
+      let uuid = random_uuid();
+      let scenario = scenario_of(&uuid, FreeTextKind::Id, Placement::SoleValue);
+      let sink = FixedLinesSink(vec![line_with(&format!("id={}", uuid.secret))]);
+
+      assert_allowlist_property(&sink, [scenario]);
+    }
+
+    #[test]
+    #[should_panic(expected = "leaks into")]
+    fn turns_red_when_the_uuid_is_copied_from_a_prefixed_session_field() {
+      let uuid = random_uuid();
+      let scenario = scenario_of(&uuid, FreeTextKind::SessionId, Placement::Prefix);
+      let sink = FixedLinesSink(vec![line_with(&format!("session={}", uuid.secret))]);
+
+      assert_allowlist_property(&sink, [scenario]);
+    }
+  }
+
   mod the_projection_sink {
     use super::*;
 
     #[test]
     fn keeps_every_provider_credential_out_of_every_kind_and_placement() {
-      assert_allowlist_property(&ProjectionSink::with_salt(), &provider_credentials_scenarios());
+      assert_allowlist_property(&ProjectionSink::with_salt(), provider_credentials_scenarios());
     }
 
     #[test]
     fn keeps_every_credential_scheme_out_of_every_kind_and_placement() {
-      assert_allowlist_property(&ProjectionSink::with_salt(), &credential_schemes_scenarios());
+      assert_allowlist_property(&ProjectionSink::with_salt(), credential_schemes_scenarios());
     }
 
     #[test]
     fn keeps_every_codex_vector_out_of_every_kind_and_placement() {
-      assert_allowlist_property(&ProjectionSink::with_salt(), &codex_vectors_scenarios());
+      assert_allowlist_property(&ProjectionSink::with_salt(), codex_vectors_scenarios());
     }
 
     #[test]
     fn keeps_boundary_straddling_secrets_out() {
-      assert_allowlist_property(&ProjectionSink::with_salt(), &boundary_scenarios());
+      assert_allowlist_property(&ProjectionSink::with_salt(), boundary_scenarios());
     }
 
     #[test]
     fn keeps_random_token_shapes_out() {
-      assert_allowlist_property(&ProjectionSink::with_salt(), &random_token_scenarios());
+      assert_allowlist_property(&ProjectionSink::with_salt(), random_token_scenarios());
     }
 
     #[test]
     fn keeps_secrets_out_of_a_five_mib_line() {
-      assert_allowlist_property(&ProjectionSink::with_salt(), &five_mib_line_scenarios());
+      assert_allowlist_property(&ProjectionSink::with_salt(), five_mib_line_scenarios());
     }
 
     #[test]
     fn keeps_the_corpus_out_when_the_install_has_no_salt() {
-      assert_allowlist_property(&ProjectionSink::without_salt(), &provider_credentials_scenarios());
-      assert_allowlist_property(&ProjectionSink::without_salt(), &codex_vectors_scenarios());
+      assert_allowlist_property(&ProjectionSink::without_salt(), provider_credentials_scenarios());
+      assert_allowlist_property(&ProjectionSink::without_salt(), codex_vectors_scenarios());
     }
 
     #[test]
     fn emits_the_same_lines_for_the_same_input_and_salt() {
-      let scenarios = codex_vectors_scenarios();
-
-      let first_run: Vec<Vec<String>> = scenarios.iter().map(|scenario| ProjectionSink::with_salt().emitted_lines(&scenario.delivery)).collect();
-      let second_run: Vec<Vec<String>> = scenarios.iter().map(|scenario| ProjectionSink::with_salt().emitted_lines(&scenario.delivery)).collect();
-
-      assert_eq!(first_run, second_run);
+      for scenario in codex_vectors_scenarios() {
+        let first = ProjectionSink::with_salt().emitted_lines(&scenario.delivery);
+        let second = ProjectionSink::with_salt().emitted_lines(&scenario.delivery);
+        assert_eq!(first, second, "{}", scenario.name);
+      }
     }
 
     #[test]
@@ -848,38 +1310,40 @@ mod tests {
 
     #[test]
     fn keeps_every_provider_credential_out_of_every_kind_and_placement() {
-      assert_allowlist_property(&WriterSink::with_salt(), &provider_credentials_scenarios());
+      assert_allowlist_property(&WriterSink::with_salt(), provider_credentials_scenarios());
     }
 
     #[test]
     fn keeps_every_credential_scheme_out_of_every_kind_and_placement() {
-      assert_allowlist_property(&WriterSink::with_salt(), &credential_schemes_scenarios());
+      assert_allowlist_property(&WriterSink::with_salt(), credential_schemes_scenarios());
     }
 
     #[test]
     fn keeps_every_codex_vector_out_of_every_kind_and_placement() {
-      assert_allowlist_property(&WriterSink::with_salt(), &codex_vectors_scenarios());
+      assert_allowlist_property(&WriterSink::with_salt(), codex_vectors_scenarios());
     }
 
     #[test]
     fn keeps_boundary_straddling_secrets_out() {
-      assert_allowlist_property(&WriterSink::with_salt(), &boundary_scenarios());
+      assert_allowlist_property(&WriterSink::with_salt(), boundary_scenarios());
+      assert_allowlist_property(&WriterSink::with_salt(), exact_boundary_scenarios());
     }
 
     #[test]
     fn keeps_random_token_shapes_out() {
-      assert_allowlist_property(&WriterSink::with_salt(), &random_token_scenarios());
+      assert_allowlist_property(&WriterSink::with_salt(), random_token_scenarios());
     }
 
     #[test]
     fn keeps_secrets_out_of_a_five_mib_line() {
-      assert_allowlist_property(&WriterSink::with_salt(), &five_mib_line_scenarios());
+      assert_allowlist_property(&WriterSink::with_salt(), five_mib_line_scenarios());
+      assert_corpus_in_giant_lines(&WriterSink::with_salt());
     }
 
     #[test]
     fn keeps_the_corpus_out_when_the_install_has_no_salt() {
-      assert_allowlist_property(&WriterSink::without_salt(), &provider_credentials_scenarios());
-      assert_allowlist_property(&WriterSink::without_salt(), &codex_vectors_scenarios());
+      assert_allowlist_property(&WriterSink::without_salt(), every_kind_and_placement(all_hostile_items()).chain(exact_boundary_scenarios()));
+      assert_corpus_in_giant_lines(&WriterSink::without_salt());
     }
 
     fn event_named(line: &str) -> EventName {
@@ -889,7 +1353,7 @@ mod tests {
 
     #[test]
     fn stores_only_lines_that_pass_the_grammar() {
-      for scenario in codex_vectors_scenarios().iter().chain(credential_schemes_scenarios().iter()) {
+      for scenario in codex_vectors_scenarios().chain(credential_schemes_scenarios()) {
         for line in WriterSink::with_salt().emitted_lines(&scenario.delivery) {
           assert_eq!(validate(event_named(&line), &line), Ok(()), "{}: {line}", scenario.name);
         }
@@ -909,12 +1373,11 @@ mod tests {
 
     #[test]
     fn stores_the_same_lines_for_the_same_input_and_salt() {
-      let scenarios = codex_vectors_scenarios();
-
-      let first_run: Vec<Vec<String>> = scenarios.iter().map(|scenario| WriterSink::with_salt().emitted_lines(&scenario.delivery)).collect();
-      let second_run: Vec<Vec<String>> = scenarios.iter().map(|scenario| WriterSink::with_salt().emitted_lines(&scenario.delivery)).collect();
-
-      assert_eq!(first_run, second_run);
+      for scenario in codex_vectors_scenarios() {
+        let first = WriterSink::with_salt().emitted_lines(&scenario.delivery);
+        let second = WriterSink::with_salt().emitted_lines(&scenario.delivery);
+        assert_eq!(first, second, "{}", scenario.name);
+      }
     }
 
     #[test]
@@ -928,6 +1391,61 @@ mod tests {
       assert_eq!(lines.len(), 2);
       assert!(lines[0].contains(" daemon_text stream=err "), "{}", lines[0]);
       assert_eq!(leaked_form_in(&lines, secret), None);
+    }
+  }
+
+  mod writer_cpu_cost {
+    use super::*;
+    use crate::linear_growth::LinearGrowthBudget;
+
+    const SMALL_INPUT_BYTES: usize = 16 * 1024;
+    const LARGE_INPUT_BYTES: usize = 64 * 1024;
+    const ONE_MIB: usize = 1024 * 1024;
+    const REPETITIONS_TO_CLEAR_THE_NOISE_FLOOR: usize = 32;
+    const CPU_CEILING: Duration = Duration::from_secs(20);
+
+    #[test]
+    fn hostile_ingestion_grows_linearly_on_the_writer_thread() {
+      for workload in HostileWorkload::ALL {
+        let measure = |size| {
+          let chunk = workload.chunk_of(size);
+          writer_cpu_time_of(CpuWorkload { chunk: &chunk, repetitions: REPETITIONS_TO_CLEAR_THE_NOISE_FLOOR, expected_records: 1 })
+        };
+        require_linear_writer_cpu(measure, &LinearGrowthBudget::between(SMALL_INPUT_BYTES, LARGE_INPUT_BYTES));
+      }
+    }
+
+    #[test]
+    fn one_mib_and_five_mib_hostile_lines_stay_within_the_cpu_ceiling() {
+      for size in [ONE_MIB, FIVE_MIB] {
+        for workload in HostileWorkload::ALL {
+          let chunk = workload.chunk_of(size);
+          let measured = writer_cpu_time_of(CpuWorkload { chunk: &chunk, repetitions: 1, expected_records: 1 });
+          require_cpu_budget(measured, CPU_CEILING);
+        }
+      }
+    }
+
+    #[test]
+    fn one_hundred_thousand_tiny_records_grow_linearly() {
+      let measure = |records| {
+        let chunk = b"{\"msg\":\"ws: write failed\"}\n".repeat(records);
+        writer_cpu_time_of(CpuWorkload { chunk: &chunk, repetitions: 1, expected_records: records })
+      };
+      require_linear_writer_cpu(measure, &LinearGrowthBudget::between(25_000, 100_000));
+    }
+
+    #[test]
+    #[should_panic(expected = "writer CPU time")]
+    fn rejects_a_cpu_time_above_the_ceiling() {
+      require_cpu_budget(Duration::from_secs(21), CPU_CEILING);
+    }
+
+    #[test]
+    #[should_panic(expected = "growth is not linear")]
+    fn rejects_quadratic_cpu_growth() {
+      let measure = |size: usize| Duration::from_micros((size * size / 10) as u64);
+      require_linear_writer_cpu(measure, &LinearGrowthBudget::between(1_000, 4_000));
     }
   }
 }
