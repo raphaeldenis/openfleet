@@ -72,6 +72,13 @@ export class PulseScheduler {
     this.arm(record);
   }
 
+  /** A new cadence takes effect at once: a live manager waits one full new interval from now. */
+  onManagerUpdated(record: ManagerRecord): void {
+    if (this.isStopped) return;
+    if (!this.isManagerAlive(record.sessionId)) return;
+    this.armAfter(record.sessionId, record.pulseSeconds * 1000);
+  }
+
   private onSessionReopened(sessionId: string): void {
     if (this.isStopped) return;
     const record = this.deps.managers.getWithinBounds(sessionId);

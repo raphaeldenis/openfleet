@@ -1,4 +1,4 @@
-import { MANAGER_ROLE, type ManagerSpec, type ManagerView, type Session, type SessionSpec } from '@openfleet/shared';
+import { MANAGER_ROLE, type ManagerProfile, type ManagerSpec, type ManagerView, type ScapeImportStatus, type Session, type SessionSpec, type UpdateManager } from '@openfleet/shared';
 import type { EventBus } from '../events/eventBus.js';
 import type { SessionService } from '../sessions/sessionService.js';
 import type { ManagerRecord, ManagerRepository } from './managerRepository.js';
@@ -7,6 +7,7 @@ import { toManagerView } from './managerView.js';
 
 export interface PulseSchedulerLike {
   onManagerCreated(record: ManagerRecord): void;
+  onManagerUpdated(record: ManagerRecord): void;
 }
 
 export interface ManagerServiceDeps {
@@ -15,6 +16,8 @@ export interface ManagerServiceDeps {
   bus: EventBus;
   scheduler: PulseSchedulerLike;
   heartbeatDefaultSeconds?: number;
+  /** Absent, no manager counts as imported. */
+  scapeImportStatusOf?: (sessionId: string) => ScapeImportStatus;
 }
 
 export class ManagerService {
@@ -45,6 +48,27 @@ export class ManagerService {
 
   get(sessionId: string): ManagerRecord | undefined {
     return this.deps.managers.get(sessionId);
+  }
+
+  /** Changes the pulse, cap or mission of a manager; undefined when the session has no manager row. */
+  update(sessionId: string, patch: UpdateManager): ManagerView | undefined {
+    if (!this.deps.managers.get(sessionId)) return undefined;
+    const { mission, model, ...cadenceAndCap } = patch;
+    if (model !== undefined) this.deps.sessions.changeModel(sessionId, model);
+    this.deps.managers.update(sessionId, { ...cadenceAndCap, missionText: mission });
+    const updated = this.deps.managers.get(sessionId)!;
+    const view = this.view(updated);
+    this.deps.bus.emit({ type: 'manager.updated', manager: view });
+    this.deps.scheduler.onManagerUpdated(updated);
+    return view;
+  }
+
+  /** The manager as the profile page shows it: its view, and where it stands against a Scape re-import. */
+  profile(sessionId: string): ManagerProfile | undefined {
+    const record = this.deps.managers.get(sessionId);
+    if (!record) return undefined;
+    const scapeImport = this.deps.scapeImportStatusOf?.(sessionId) ?? 'not_imported';
+    return { manager: this.view(record), scapeImport };
   }
 
   listViews(): ManagerView[] {

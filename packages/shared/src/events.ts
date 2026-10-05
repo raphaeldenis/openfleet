@@ -41,6 +41,7 @@ export type ServerEvent =
   | { type: 'session.todos'; todos: SessionTodos }
   | { type: 'manager.created'; manager: ManagerView }
   | { type: 'manager.pulsed'; manager: ManagerView }
+  | { type: 'manager.updated'; manager: ManagerView }
   | { type: 'error'; sessionId?: string; scope?: ErrorEventScope; error: ErrorEnvelope }
   | { type: 'daemon.issues'; issues: DaemonIssue[] }
   | { type: 'permission.silent_blocks'; blocks: SilentBlock[] };

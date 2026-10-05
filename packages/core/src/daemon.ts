@@ -17,6 +17,7 @@ import { newId } from './ids.js';
 import { createNodeGitPort } from './git/nodeGitPort.js';
 import { log } from './logger.js';
 import { DAEMON_VERSION } from './version.js';
+import { scapeImportStatusOfManager } from './import/scape/scapeManagerEditStatus.js';
 import { ManagerRepository } from './managers/managerRepository.js';
 import { ManagerService } from './managers/managerService.js';
 import { PulseScheduler } from './managers/pulseScheduler.js';
@@ -96,7 +97,10 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   const modelTable = readingConfigFile(() => loadModelTable(modelConfigPath));
   const { workingState: workingStateSettings, managers: managerSettings, contextNotice: contextNoticeSettings } = readingConfigFile(() => loadDaemonSettings(modelConfigPath));
   const pulseScheduler = new PulseScheduler({ managers: managerRepository, sessions, bus, describeError });
-  const managers = new ManagerService({ managers: managerRepository, sessions, bus, scheduler: pulseScheduler, heartbeatDefaultSeconds: managerSettings.heartbeatDefaultSeconds });
+  const managers = new ManagerService({
+    managers: managerRepository, sessions, bus, scheduler: pulseScheduler, heartbeatDefaultSeconds: managerSettings.heartbeatDefaultSeconds,
+    scapeImportStatusOf: (sessionId) => scapeImportStatusOfManager(db, sessionId),
+  });
   const storeRepo = new DataStoreRepository(db);
   const stores = new DataStoreService({ repo: storeRepo, db, clock: () => new Date().toISOString(), newId });
   const projects = new ProjectRepository(db);

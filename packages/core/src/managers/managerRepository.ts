@@ -18,6 +18,8 @@ const toManager = (r: Row): ManagerRecord => ({
   missionText: r.mission_text, lastPulseAt: r.last_pulse_at ?? undefined, createdAt: r.created_at,
 });
 
+const definedFieldsOf = <T extends object>(fields: T): Partial<T> => Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined)) as Partial<T>;
+
 export class ManagerRepository {
   private readonly db: DatabaseSync;
 
@@ -46,6 +48,14 @@ export class ManagerRepository {
     if (validation.success) return true;
     log('warn', `ManagerRepository: skipping manager row for session ${record.sessionId} — out of bounds`);
     return false;
+  }
+  /** Changes the given fields of an existing manager row; the others stay as they are. */
+  update(sessionId: string, fields: Partial<Pick<ManagerRecord, 'pulseSeconds' | 'childrenCap' | 'missionText'>>): void {
+    const current = this.get(sessionId);
+    if (!current) return;
+    const next = { ...current, ...definedFieldsOf(fields) };
+    this.db.prepare('UPDATE managers SET pulse_seconds = ?, children_cap = ?, mission_text = ? WHERE session_id = ?')
+      .run(next.pulseSeconds, next.childrenCap, next.missionText, sessionId);
   }
   setLastPulseAt(sessionId: string, at: string): void {
     this.db.prepare('UPDATE managers SET last_pulse_at = ? WHERE session_id = ?').run(at, sessionId);
