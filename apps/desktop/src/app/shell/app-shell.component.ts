@@ -107,7 +107,7 @@ const RUNNING_STATES = new Set(['generating', 'starting']);
     .nav-item { display: flex; align-items: center; gap: .5rem; height: 1.75rem; padding: 0 .5rem 0 .375rem; border-left: 2px solid transparent; border-radius: .375rem; color: var(--fg); }
     .nav-badge { flex: none; min-width: 1rem; height: 1rem; padding: 0 .25rem; border-radius: .5rem; background: var(--accent); color: var(--on-accent); font-size: .6875rem; font-weight: 600; display: flex; align-items: center; justify-content: center; }
     .nav-issue-dot { flex: none; width: .5rem; height: .5rem; border-radius: 50%; background: var(--state-error); }
-    a.nav-item { cursor: pointer; }
+    a.nav-item { cursor: pointer; text-decoration: none; }
     a.nav-item:hover, a.nav-item:focus-visible { background: var(--hover); }
     a.nav-item.active { background: var(--active); border-left-color: var(--accent); font-weight: 500; }
     .nav-item.disabled { color: var(--mut); }
