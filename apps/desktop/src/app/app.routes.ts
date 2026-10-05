@@ -20,6 +20,8 @@ export const routes: Routes = [
       // --- Tables (P3-T18) ---
       { path: 'tables', loadComponent: () => import('./tables/tables-view.component').then((m) => m.TablesViewComponent) },
       // --- end Tables ---
+      { path: 'project', loadComponent: () => import('./projects/project-home.component').then((m) => m.ProjectHomeComponent) },
+      { path: 'project/:id', loadComponent: () => import('./projects/project-home.component').then((m) => m.ProjectHomeComponent) },
       { path: 'manager/:id', loadComponent: () => import('./managers/manager-dashboard.component').then((m) => m.ManagerDashboardComponent) },
       { path: 'session/:sessionId', loadComponent: () => import('./sessions/session-view.component').then((m) => m.SessionViewComponent) },
       { path: '**', loadComponent: () => import('./shell/not-found.component').then((m) => m.NotFoundComponent) },

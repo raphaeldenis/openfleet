@@ -230,7 +230,7 @@ export class NewSessionFormComponent {
   protected readonly hasProjectsLoadFailed = signal(false);
   protected readonly isCreatingProject = signal(false);
   protected readonly projectCreatedNotice = signal('');
-  protected readonly projectId = signal(this.embeddedSessionSeed?.projectId() ?? NO_PROJECT_ID);
+  protected readonly projectId = signal(this.embeddedSessionSeed?.projectId() ?? this.queryParams()?.get('projectId') ?? NO_PROJECT_ID);
   protected readonly selectedProject = computed(() => this.projects().find((project) => project.id === this.projectId()));
   protected readonly handoffFile = linkedSignal<string | undefined>(() => {
     this.projectId();

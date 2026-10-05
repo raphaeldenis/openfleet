@@ -6,10 +6,8 @@ export interface NavItem {
   readonly availability: string | null;
 }
 
-// Single source of truth for when a not-yet-built section unlocks (per Capitaine, backlog
-// task P3-T02 for Projects) — update this map only.
+// Single source of truth for when a not-yet-built section unlocks — update this map only.
 const AVAILABILITY_BY_SECTION: Readonly<Record<string, string>> = {
-  project: 'Available in phase 3',
   toolkit: 'Available in phase 4',
   audit: 'Available in phase 4',
   mgrprofile: 'Available in phase 4',
@@ -26,7 +24,7 @@ const AVAILABILITY_BY_SECTION: Readonly<Record<string, string>> = {
 // disabled, with the phase text from AVAILABILITY_BY_SECTION explaining when it will.
 const HELM_SECTIONS: ReadonlyArray<{ key: string; glyph: string; label: string; route: string | null }> = [
   { key: 'inbox', glyph: '◫', label: 'Inbox', route: '/inbox' },
-  { key: 'project', glyph: '⌂', label: 'Project home', route: null },
+  { key: 'project', glyph: '⌂', label: 'Project home', route: '/project' },
   { key: 'toolkit', glyph: '⚒', label: 'Toolkit', route: null },
   { key: 'audit', glyph: '≣', label: 'Audit', route: null },
   { key: 'mgrprofile', glyph: '◎', label: 'Manager profile', route: null },
