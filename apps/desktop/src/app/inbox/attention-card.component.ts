@@ -4,6 +4,7 @@ import { MANAGER_ROLE } from '@openfleet/shared';
 import { compactElapsedLabel, elapsedSecondsSince } from '../design/elapsed-time';
 import { KindBadgeComponent } from '../design/kind-badge.component';
 import { ComposerComponent } from '../sessions/composer.component';
+import { REPLY_DELIVERED_COPY } from '../sessions/reply-delivered-copy';
 import { tickingNow } from '../working-state/working-state-freshness';
 import type { AttentionItem } from '../working-state/attention-items';
 import { showBidiControlsAsEscapes, showInvisibleControlsAsEscapes } from '../core/bidi-escapes';
@@ -35,7 +36,11 @@ import { showBidiControlsAsEscapes, showInvisibleControlsAsEscapes } from '../co
             }
           </ul>
         }
-        <of-composer [sessionId]="item().session.id" [busy]="item().session.state === 'generating'" />
+        @if (isReplyDelivered()) {
+          <p class="delivered" role="status" data-testid="inbox-attention-delivered">{{ replyDeliveredCopy }}</p>
+        } @else {
+          <of-composer [sessionId]="item().session.id" [busy]="item().session.state === 'generating'" />
+        }
       </div>
     </article>
   `,
@@ -52,10 +57,13 @@ import { showBidiControlsAsEscapes, showInvisibleControlsAsEscapes } from '../co
     .lines--blockers { color: var(--mut); }
     .line { min-width: 0; overflow-wrap: anywhere; }
     of-composer { display: block; margin: 0 -.75rem; }
+    .delivered { margin: 0; font-size: .75rem; color: var(--mut); }
   `,
 })
 export class AttentionCardComponent {
   readonly item = input.required<AttentionItem>();
+  readonly isReplyDelivered = input(false);
+  protected readonly replyDeliveredCopy = REPLY_DELIVERED_COPY;
   private readonly now = tickingNow();
   private readonly sessionLink = viewChild.required<ElementRef<HTMLAnchorElement>>('sessionLink');
   protected readonly sessionName = computed(() => showInvisibleControlsAsEscapes(this.item().session.name));

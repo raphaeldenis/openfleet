@@ -9,12 +9,16 @@ export interface AttentionItem {
   readonly isAnswered: boolean;
   /** When the reply that answered the lines reached the agent; undefined while unanswered. */
   readonly answeredAt: string | undefined;
+  /** The reply that answered the lines, when it is known; undefined while unanswered. */
+  readonly replyText: string | undefined;
 }
 
 /** What the human replied to: the lines the agent showed when the reply was delivered. */
 export interface AnsweredReply {
   readonly deliveredAt: string;
   readonly answeredLines: readonly string[];
+  /** The reply that was sent, trimmed and capped; absent on entries stored before replies were kept. */
+  readonly replyText?: string;
 }
 
 const MAX_SHOWN_COUNT = 99;
@@ -40,7 +44,8 @@ export function attentionItemsOf(
     const answeredReply = answeredReplyBySessionId.get(session.id);
     const isAnswered = answeredReply !== undefined && linesAsked.every((line) => answeredReply.answeredLines.includes(line));
     const answeredAt = isAnswered ? answeredReply.deliveredAt : undefined;
-    return [{ session, questions: state.questionsForHuman, blockers: state.blockers, updatedAt: state.updatedAt, isAnswered, answeredAt }];
+    const replyText = isAnswered ? answeredReply.replyText : undefined;
+    return [{ session, questions: state.questionsForHuman, blockers: state.blockers, updatedAt: state.updatedAt, isAnswered, answeredAt, replyText }];
   });
 }
 

@@ -4,7 +4,15 @@ import { linesAskedOf, type AnsweredReply } from './attention-items';
 
 const STORAGE_KEY = 'openfleet.answeredReplies';
 
+const REPLY_TEXT_MAX_CHARS = 500;
+
 type BySessionId = ReadonlyMap<string, AnsweredReply>;
+
+function cappedReplyTextOf(replyText: string): string {
+  const trimmed = replyText.trim();
+  const isWithinCap = trimmed.length <= REPLY_TEXT_MAX_CHARS;
+  return isWithinCap ? trimmed : `${trimmed.slice(0, REPLY_TEXT_MAX_CHARS)}…`;
+}
 
 function isAnsweredReply(value: unknown): value is AnsweredReply {
   const candidate = value as Partial<AnsweredReply> | null;
@@ -52,12 +60,13 @@ export class AnsweredRepliesStore {
   }
 
   /** Records that the reply to the lines the agent shows right now reached the agent. */
-  markReplyDelivered(sessionId: string, at: string): void {
+  markReplyDelivered(sessionId: string, delivery: { readonly at: string; readonly replyText: string }): void {
     const state = this.events.workingStates().get(sessionId);
     const answeredLines = state ? linesAskedOf(state) : [];
     const hadNothingToAnswer = answeredLines.length === 0;
     if (hadNothingToAnswer) return;
-    this.save(new Map(this.replies()).set(sessionId, { deliveredAt: at, answeredLines }));
+    const replyText = cappedReplyTextOf(delivery.replyText);
+    this.save(new Map(this.replies()).set(sessionId, { deliveredAt: delivery.at, answeredLines, replyText }));
   }
 
   private forget(sessionId: string): void {

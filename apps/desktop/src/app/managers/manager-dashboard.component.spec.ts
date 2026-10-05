@@ -171,16 +171,52 @@ describe('ManagerDashboardComponent', () => {
     expect(screen.getByTestId('manager-dashboard-cap')).toHaveTextContent('1/2');
   });
 
-  it('stops the countdown and disables "Pulse now", with a reason, once the manager session is closed', async () => {
-    const closedManagerSession = { ...MANAGER_SESSION, state: 'closed' };
-    const fake = fakeEvents({ sessions: [closedManagerSession], managers: [MANAGER_VIEW] });
-    await render(ManagerDashboardComponent, {
-      providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('m1') }, { provide: FleetEventsService, useValue: fake }],
+  describe('screen order', () => {
+    const profileApi = {
+      getManagerProfile: vi.fn().mockResolvedValue({ manager: MANAGER_VIEW, scapeImport: 'not_imported' }),
+      listProjects: vi.fn().mockResolvedValue({ items: [] }),
+    };
+    const renderManager = (session: Record<string, unknown>) =>
+      render(ManagerDashboardComponent, {
+        providers: [
+          provideRouter([]),
+          { provide: ActivatedRoute, useValue: activatedRouteFor('m1') },
+          { provide: FleetApiService, useValue: profileApi },
+          { provide: FleetEventsService, useValue: fakeEvents({ sessions: [session, CHILD_SESSION], managers: [MANAGER_VIEW] }) },
+        ],
+      });
+    const isBefore = (first: HTMLElement, second: HTMLElement) => Boolean(first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING);
+
+    it('user reads the profile of a live manager above its dashboard', async () => {
+      const { fixture } = await renderManager(MANAGER_SESSION);
+      await fixture.whenStable();
+
+      const profile = await screen.findByRole('heading', { name: 'Profile' });
+      expect(isBefore(profile, screen.getByTestId('manager-dashboard-live'))).toBe(true);
+      expect(screen.getByTestId('manager-dashboard-child-c1')).toBeTruthy();
     });
 
-    expect(screen.getByTestId('manager-dashboard-countdown')).toHaveTextContent(/closed|—/i);
-    expect(screen.getByTestId('manager-dashboard-pulse')).toBeDisabled();
-    expect(screen.getByTestId('manager-dashboard-pulse-message')).toHaveTextContent(/closed/i);
+    it('user sees a closed manager as its profile only: no dashboard controls, no Children card, no journal notice', async () => {
+      const { fixture } = await renderManager({ ...MANAGER_SESSION, state: 'closed' });
+      await fixture.whenStable();
+
+      expect(await screen.findByRole('heading', { name: 'Profile' })).toBeTruthy();
+      expect(screen.queryByTestId('manager-dashboard-live')).toBeNull();
+      expect(screen.queryByTestId('manager-dashboard-pulse')).toBeNull();
+      expect(screen.queryByTestId('manager-dashboard-terminal')).toBeNull();
+      expect(screen.queryByTestId('manager-dashboard-countdown')).toBeNull();
+      expect(screen.queryByRole('heading', { name: 'Children' })).toBeNull();
+      expect(screen.queryByText('Children')).toBeNull();
+      expect(screen.queryByTestId('manager-dashboard-governance-notice')).toBeNull();
+    });
+
+    it('user can still reopen, resume or write a handoff for a closed manager', async () => {
+      await renderManager({ ...MANAGER_SESSION, state: 'closed' });
+
+      expect(screen.getByTestId('manager-dashboard-reopen')).toBeEnabled();
+      expect(screen.getByTestId('manager-dashboard-resume')).toBeEnabled();
+      expect(screen.getByTestId('manager-dashboard-write-handoff')).toBeEnabled();
+    });
   });
 
   it('resets the pulse action state when the route id changes from one manager to another', async () => {
@@ -285,8 +321,10 @@ describe('ManagerDashboardComponent', () => {
       ],
     });
 
-    await userEvent.tab();
-    expect(screen.getByTestId('manager-dashboard-pulse')).toHaveFocus();
+    const pulseButton = screen.getByTestId('manager-dashboard-pulse');
+    const maxTabStopsBeforePulse = 6;
+    for (let tabStops = 0; tabStops < maxTabStopsBeforePulse && document.activeElement !== pulseButton; tabStops++) await userEvent.tab();
+    expect(pulseButton).toHaveFocus();
     await userEvent.keyboard('{Enter}');
 
     expect(api.pulseNow).toHaveBeenCalledWith('m1');

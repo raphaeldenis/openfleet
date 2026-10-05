@@ -45,34 +45,8 @@ const HANDOFF_TARGET_AVAILABLE_HINT = 'Saved handoffs appear in Notes › handof
               <span title="Cost tracking is not implemented yet">—</span>
             </div>
           </div>
-          @if (manager(); as manager) {
-            <div class="cap" title="Children cap headroom">
-              <span>Children</span>
-              <span data-testid="manager-dashboard-cap" class="mono">{{ children().length }}/{{ manager.childrenCap }}</span>
-              <div
-                class="cap-bar" role="meter"
-                [attr.aria-valuenow]="children().length" [attr.aria-valuemin]="0" [attr.aria-valuemax]="manager.childrenCap"
-                [attr.aria-label]="children().length + ' of ' + manager.childrenCap + ' children'"
-              ><div class="cap-bar-fill" [style.width.%]="capacityPercent()"></div></div>
-            </div>
-            <div class="pulse">
-              <of-pulse-ring [fractionElapsed]="fractionElapsed()" label="Next pulse" />
-              <span data-testid="manager-dashboard-countdown" class="mono">{{ countdownDisplay() }}</span>
-            </div>
-          }
-          <button
-            type="button"
-            class="of-btn of-btn--primary"
-            data-testid="manager-dashboard-pulse"
-            [disabled]="pulse.pending() || isSessionClosed()"
-            (click)="pulseNow()"
-          >Pulse now</button>
-          <button
-            type="button"
-            class="of-btn of-btn--secondary"
-            data-testid="manager-dashboard-terminal"
-            (click)="openTerminal()"
-          >Terminal</button>
+        </header>
+        <div class="actions">
           <button
             #handoffButton
             type="button"
@@ -104,13 +78,7 @@ const HANDOFF_TARGET_AVAILABLE_HINT = 'Saved handoffs appear in Notes › handof
           @if (reopening.errorText(); as errorText) {
             <of-error-line role="alert" data-testid="manager-dashboard-reopen-error">{{ errorText }}</of-error-line>
           }
-          @if (displayedPulseMessage(); as message) {
-            <span
-              data-testid="manager-dashboard-pulse-message"
-              [attr.role]="message.kind === 'error' ? 'alert' : 'status'"
-            >{{ message.text }}</span>
-          }
-        </header>
+        </div>
         @if (isHandoffOpen()) {
           <div [id]="handoffPanelId" data-testid="manager-dashboard-handoff-panel">
             <of-handoff-preview [sessionId]="session.id" density="roomy" subject="manager" [targetAvailableHint]="handoffTargetAvailableHint" (dismissed)="closeHandoff()" />
@@ -119,31 +87,70 @@ const HANDOFF_TARGET_AVAILABLE_HINT = 'Saved handoffs appear in Notes › handof
 
         <of-manager-profile [session]="session" />
 
-        <section class="children">
-          <div class="section-head">
-            <span class="title">Children</span>
-          </div>
-          @if (children().length > 0) {
-            <div class="table">
-              <div class="row head">
-                <span class="col-name">Name</span>
-                <span class="col-state">State</span>
-                <span class="col-cost">Cost</span>
+        @if (!isSessionClosed()) {
+          <div class="live-controls" data-testid="manager-dashboard-live">
+            @if (manager(); as manager) {
+              <div class="cap" title="Children cap headroom">
+                <span>Children</span>
+                <span data-testid="manager-dashboard-cap" class="mono">{{ children().length }}/{{ manager.childrenCap }}</span>
+                <div
+                  class="cap-bar" role="meter"
+                  [attr.aria-valuenow]="children().length" [attr.aria-valuemin]="0" [attr.aria-valuemax]="manager.childrenCap"
+                  [attr.aria-label]="children().length + ' of ' + manager.childrenCap + ' children'"
+                ><div class="cap-bar-fill" [style.width.%]="capacityPercent()"></div></div>
               </div>
-              @for (child of children(); track child.id) {
-                <div class="row" [attr.data-testid]="'manager-dashboard-child-' + child.id">
-                  <span class="col-name">{{ child.emoji }} {{ visibleNameOf(child) }}</span>
-                  <span class="col-state"><of-state-chip [state]="child.state" /></span>
-                  <span class="col-cost mono" title="Cost tracking is not implemented yet">—</span>
-                </div>
-              }
-            </div>
-          } @else {
-            <p class="empty">No children yet — the manager spawns workers on its next pulse.</p>
-          }
-        </section>
+              <div class="pulse">
+                <of-pulse-ring [fractionElapsed]="fractionElapsed()" label="Next pulse" />
+                <span data-testid="manager-dashboard-countdown" class="mono">{{ countdownLabelText() }}</span>
+              </div>
+            }
+            <button
+              type="button"
+              class="of-btn of-btn--primary"
+              data-testid="manager-dashboard-pulse"
+              [disabled]="pulse.pending()"
+              (click)="pulseNow()"
+            >Pulse now</button>
+            <button
+              type="button"
+              class="of-btn of-btn--secondary"
+              data-testid="manager-dashboard-terminal"
+              (click)="openTerminal()"
+            >Terminal</button>
+            @if (pulse.message(); as message) {
+              <span
+                data-testid="manager-dashboard-pulse-message"
+                [attr.role]="message.kind === 'error' ? 'alert' : 'status'"
+              >{{ message.text }}</span>
+            }
+          </div>
 
-        <p class="notice" data-testid="manager-dashboard-governance-notice">Journal and proposals are coming once notes/governance land.</p>
+          <section class="children">
+            <div class="section-head">
+              <span class="title">Children</span>
+            </div>
+            @if (children().length > 0) {
+              <div class="table">
+                <div class="row head">
+                  <span class="col-name">Name</span>
+                  <span class="col-state">State</span>
+                  <span class="col-cost">Cost</span>
+                </div>
+                @for (child of children(); track child.id) {
+                  <div class="row" [attr.data-testid]="'manager-dashboard-child-' + child.id">
+                    <span class="col-name">{{ child.emoji }} {{ visibleNameOf(child) }}</span>
+                    <span class="col-state"><of-state-chip [state]="child.state" /></span>
+                    <span class="col-cost mono" title="Cost tracking is not implemented yet">—</span>
+                  </div>
+                }
+              </div>
+            } @else {
+              <p class="empty">No children yet — the manager spawns workers on its next pulse.</p>
+            }
+          </section>
+
+          <p class="notice" data-testid="manager-dashboard-governance-notice">Journal and proposals are coming once notes/governance land.</p>
+        }
       } @else {
         <div class="state-block" data-testid="manager-dashboard-not-manager">
           <span class="state-headline">This session is not a manager</span>
@@ -160,7 +167,9 @@ const HANDOFF_TARGET_AVAILABLE_HINT = 'Saved handoffs appear in Notes › handof
     }
   `,
   styles: `
-    .header { display: flex; align-items: center; flex-wrap: wrap; gap: .625rem .75rem; padding: .875rem 1.25rem; border-bottom: 1px solid var(--line); background: var(--panel) }
+    .header { display: flex; align-items: center; flex-wrap: wrap; gap: .625rem .75rem; padding: .875rem 1.25rem .5rem; background: var(--panel) }
+    .actions { display: flex; align-items: center; flex-wrap: wrap; gap: .625rem .75rem; padding: 0 1.25rem .875rem; border-bottom: 1px solid var(--line); background: var(--panel); margin-bottom: 1.25rem }
+    .live-controls { display: flex; align-items: center; flex-wrap: wrap; gap: .625rem .75rem; margin: 0 1.25rem }
     .emoji { width: 2.5rem; height: 2.5rem; border-radius: .5rem; border: 1px solid var(--line); background: var(--sunk); display: flex; align-items: center; justify-content: center; font-size: 1.25rem }
     .identity { display: flex; flex-direction: column; min-width: 0 }
     .name-row { display: flex; align-items: center; gap: .5rem; min-width: 0 }
@@ -262,11 +271,7 @@ export class ManagerDashboardComponent {
 
   protected readonly isSessionClosed = computed(() => this.session()?.state === 'closed');
 
-  protected readonly countdownDisplay = computed(() => (this.isSessionClosed() ? 'closed' : countdownLabel(this.countdownSeconds())));
-
-  protected readonly displayedPulseMessage = computed(() =>
-    this.pulse.message() ?? (this.isSessionClosed() ? { text: 'This session is closed', kind: 'info' as const } : null),
-  );
+  protected readonly countdownLabelText = computed(() => countdownLabel(this.countdownSeconds()));
 
   protected readonly fractionElapsed = computed(() => {
     const manager = this.manager();

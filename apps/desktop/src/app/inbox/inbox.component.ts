@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, DestroyRef, ElementRef, Injector, afterNextRender, computed, effect, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, DestroyRef, ElementRef, Injector, afterNextRender, computed, effect, inject, signal, untracked } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { MANAGER_ROLE } from '@openfleet/shared';
 import { ReplyDraftStore } from '../sessions/reply-draft.store';
@@ -29,6 +29,7 @@ interface FilterOption {
   readonly disabled: boolean;
 }
 
+const DELIVERED_REPLY_SHOWN_MS = 2500;
 const NEEDS_BACKEND_SUPPORT = 'needs backend support';
 
 // Only "All" runs against real data (the backend has no read-tracking, assignee or blocking
@@ -188,8 +189,8 @@ function formatInput(toolInput: unknown): FormattedInput {
         }
         @case ('questions') {
           <div class="gate-list" data-testid="inbox-attention-list">
-            @for (item of attentionItemsNeedingYou(); track item.session.id) {
-              <of-attention-card [item]="item" />
+            @for (item of attentionCards(); track item.session.id) {
+              <of-attention-card [item]="item" [isReplyDelivered]="item.isAnswered" />
             } @empty {
               <div class="empty" data-testid="inbox-questions-empty">
                 <span class="empty-title">No agent is waiting on you</span>
@@ -214,6 +215,9 @@ function formatInput(toolInput: unknown): FormattedInput {
                             <li data-testid="inbox-answered-question">{{ line }}</li>
                           }
                         </ul>
+                        @if (entry.replyText; as replyText) {
+                          <p class="answered-reply" data-testid="inbox-answered-reply">↳ {{ replyText }}</p>
+                        }
                       </li>
                     }
                   </ul>
@@ -254,6 +258,7 @@ function formatInput(toolInput: unknown): FormattedInput {
     .answered-entry { display: flex; flex-direction: column; gap: .25rem; min-width: 0; padding: .5rem .875rem; border: 1px solid var(--line); border-radius: .625rem; background: var(--panel); opacity: .7; }
     .answered-status { font-size: .6875rem; color: var(--mut); }
     .answered-lines { margin: 0; padding: 0 0 0 1rem; overflow-wrap: anywhere; }
+    .answered-reply { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
     .tabpanel { display: flex; flex-direction: column; gap: .75rem; }
     .filters { display: flex; flex-wrap: wrap; gap: .375rem; }
     .filter-chip { height: 1.625rem; padding: 0 .625rem; border: 1px solid var(--line); border-radius: 1rem; background: var(--panel); color: var(--fg); font-size: .75rem; cursor: pointer; }
@@ -296,7 +301,14 @@ export class InboxComponent {
 
   constructor() {
     const tick = setInterval(() => this.now.set(Date.now()), 1000);
-    inject(DestroyRef).onDestroy(() => clearInterval(tick));
+    inject(DestroyRef).onDestroy(() => {
+      clearInterval(tick);
+      this.deliveredReplyTimers.forEach((timer) => clearTimeout(timer));
+    });
+    effect(() => {
+      this.answeredReplies.answeredReplyBySessionId();
+      untracked(() => this.syncDeliveredReplies());
+    });
     effect(() => {
       const closedSessionIds = this.events.sessions().filter((session) => session.state === 'closed').map((session) => session.id);
       this.replies.failedSessionIds();
@@ -344,8 +356,49 @@ export class InboxComponent {
       sessionRoute: [item.session.role === MANAGER_ROLE ? '/manager' : '/session', item.session.id],
       timeLabel: timeLabelOf(item.answeredAt ?? item.updatedAt),
       lines: [...item.questions, ...item.blockers].map(showBidiControlsAsEscapes),
+      replyText: item.replyText === undefined ? undefined : showBidiControlsAsEscapes(item.replyText),
     })),
   );
+
+  private readonly sessionIdsWithDeliveredReplyShown = signal<ReadonlySet<string>>(new Set());
+  private readonly deliveredReplyTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly deliveryTimeBySessionId = new Map(
+    [...this.answeredReplies.answeredReplyBySessionId()].map(([sessionId, reply]) => [sessionId, reply.deliveredAt]),
+  );
+
+  /** The cards to draw: those needing the human, plus those whose delivered reply is still being acknowledged. */
+  protected readonly attentionCards = computed(() => {
+    const sessionIdsAcknowledged = this.sessionIdsWithDeliveredReplyShown();
+    return this.attentionItems().filter((item) => !item.isAnswered || sessionIdsAcknowledged.has(item.session.id));
+  });
+
+  private showDeliveredReplyBriefly(sessionId: string): void {
+    clearTimeout(this.deliveredReplyTimers.get(sessionId));
+    this.sessionIdsWithDeliveredReplyShown.update((ids) => new Set(ids).add(sessionId));
+    this.deliveredReplyTimers.set(sessionId, setTimeout(() => this.stopShowingDeliveredReply(sessionId), DELIVERED_REPLY_SHOWN_MS));
+  }
+
+  private stopShowingDeliveredReply(sessionId: string): void {
+    clearTimeout(this.deliveredReplyTimers.get(sessionId));
+    this.deliveredReplyTimers.delete(sessionId);
+    this.sessionIdsWithDeliveredReplyShown.update((ids) => new Set([...ids].filter((id) => id !== sessionId)));
+  }
+
+  private syncDeliveredReplies(): void {
+    const replyBySessionId = this.answeredReplies.answeredReplyBySessionId();
+    [...this.deliveryTimeBySessionId.keys()]
+      .filter((sessionId) => !replyBySessionId.has(sessionId))
+      .forEach((sessionId) => {
+        this.deliveryTimeBySessionId.delete(sessionId);
+        this.stopShowingDeliveredReply(sessionId);
+      });
+    replyBySessionId.forEach((reply, sessionId) => {
+      const isNewDelivery = this.deliveryTimeBySessionId.get(sessionId) !== reply.deliveredAt;
+      if (!isNewDelivery) return;
+      this.deliveryTimeBySessionId.set(sessionId, reply.deliveredAt);
+      this.showDeliveredReplyBriefly(sessionId);
+    });
+  }
 
   /** Failed replies whose card is not on screen: the session closed, left the list, or another tab is open. */
   protected readonly unseenReplyFailures = computed(() => {
