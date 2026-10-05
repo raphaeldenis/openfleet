@@ -21,12 +21,6 @@ async function renderGroup(sessions: unknown[], managers: unknown[]) {
 }
 
 describe('ManagerGroupComponent', () => {
-  it('user sees the heading "Managers"', async () => {
-    await renderGroup([forge], [managerView('m2')]);
-
-    expect(screen.getByRole('heading', { name: 'Managers' })).toBeTruthy();
-  });
-
   it('user sees every manager, a closed one included', async () => {
     await renderGroup([capitaine, forge], [managerView('m1'), managerView('m2')]);
 
@@ -47,11 +41,11 @@ describe('ManagerGroupComponent', () => {
     expect(within(screen.getByTestId('manager-row-m2')).getByTestId('manager-row-m2-children')).toHaveTextContent('2/4');
   });
 
-  it('user sees the next pulse countdown of an open manager and "closed" for a closed one', async () => {
+  it('user sees the next pulse countdown of an open manager and a dash for a closed one', async () => {
     await renderGroup([capitaine, forge], [managerView('m1'), managerView('m2')]);
 
-    expect(within(screen.getByTestId('manager-row-m1')).getByTestId('manager-row-m1-countdown')).toHaveTextContent('closed');
-    expect(within(screen.getByTestId('manager-row-m2')).getByTestId('manager-row-m2-countdown')).not.toHaveTextContent('closed');
+    expect(within(screen.getByTestId('manager-row-m1')).getByTestId('manager-row-m1-countdown')).toHaveTextContent('◎ —');
+    expect(within(screen.getByTestId('manager-row-m2')).getByTestId('manager-row-m2-countdown')).toHaveTextContent(/^◎ \d+:\d{2}$/);
   });
 
   it('user opens the manager dashboard by clicking a closed manager', async () => {

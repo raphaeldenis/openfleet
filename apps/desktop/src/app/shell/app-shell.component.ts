@@ -1,5 +1,6 @@
 import { ChangeDetectionStrategy, Component, HostListener, computed, inject } from '@angular/core';
 import { Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
+import { MANAGER_ROLE } from '@openfleet/shared';
 import { environment } from '../../environments/environment';
 import { detailsTextOf } from '../core/copy-details';
 import { versionMismatchNoticeOf } from '../core/version-mismatch-notice';
@@ -16,45 +17,53 @@ import { contextNoticesOf } from '../working-state/context-notices';
 import { HELM_NAV_ITEMS } from './nav-items';
 import { RightPanelComponent } from './right-panel.component';
 import { SidebarFooterComponent } from './sidebar-footer.component';
+import { SidebarGroupComponent } from './sidebar-group.component';
 
 const RUNNING_STATES = new Set(['generating', 'starting']);
 
 @Component({
   selector: 'of-app-shell',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, RouterLinkActive, RouterOutlet, SessionListComponent, ManagerGroupComponent, BannerComponent, CopyDetailsButtonComponent, RightPanelComponent, SidebarFooterComponent],
+  imports: [RouterLink, RouterLinkActive, RouterOutlet, SessionListComponent, ManagerGroupComponent, BannerComponent, CopyDetailsButtonComponent, RightPanelComponent, SidebarFooterComponent, SidebarGroupComponent],
   template: `
     <div class="shell" data-testid="app-shell">
       <div class="body">
         <nav class="sidebar" data-testid="app-nav">
           <div class="brand">OpenFleet</div>
-          <of-manager-group />
-          <section class="sessions">
-            <div class="section-title"><span>Sessions</span><span class="mono">{{ runningCount() }} running</span></div>
-            <of-session-list (selected)="onSessionSelected($event)" />
-          </section>
-          <ul class="helm-list">
-            @for (item of navItems; track item.key) {
-              <li>
-                @if (item.route) {
-                  <a class="nav-item" [routerLink]="item.route" routerLinkActive="active" ariaCurrentWhenActive="page" [attr.data-testid]="'nav-' + item.key">
-                    <span class="glyph">{{ item.glyph }}</span><span class="label">{{ item.label }}</span>
-                    @if (item.key === 'inbox' && inboxBadge(); as badge) {
-                      <span class="nav-badge" data-testid="nav-inbox-badge" role="img" [attr.aria-label]="badge.ariaLabel">{{ badge.text }}</span>
+          <div class="groups">
+            <of-sidebar-group groupKey="sessions" title="Sessions" [summary]="runningCount() + ' running'" [growWhenOpen]="2">
+              <a groupAction class="group-action" routerLink="/new" aria-label="New session" title="New session">+</a>
+              <of-session-list (selected)="onSessionSelected($event)" />
+            </of-sidebar-group>
+            <of-sidebar-group groupKey="managers" title="Managers" [summary]="managerCount()" bodyMaxHeight="11rem">
+              <a groupAction class="group-action" routerLink="/new" [queryParams]="{ mode: 'manager' }" aria-label="New manager" title="New manager">+</a>
+              <of-manager-group />
+            </of-sidebar-group>
+            <of-sidebar-group groupKey="helm" title="Helm" [growWhenOpen]="1.4">
+              <ul class="helm-list">
+                @for (item of navItems; track item.key) {
+                  <li>
+                    @if (item.route) {
+                      <a class="nav-item" [routerLink]="item.route" routerLinkActive="active" ariaCurrentWhenActive="page" [attr.data-testid]="'nav-' + item.key">
+                        <span class="glyph">{{ item.glyph }}</span><span class="label">{{ item.label }}</span>
+                        @if (item.key === 'inbox' && inboxBadge(); as badge) {
+                          <span class="nav-badge" data-testid="nav-inbox-badge" role="img" [attr.aria-label]="badge.ariaLabel">{{ badge.text }}</span>
+                        }
+                        @if (item.key === 'inbox' && hasBackgroundFailures()) {
+                          <span class="nav-issue-dot" data-testid="nav-inbox-issue-dot" role="img" aria-label="Inbox has issues"></span>
+                        }
+                      </a>
+                    } @else {
+                      <span class="nav-item disabled" aria-disabled="true" [title]="item.availability" [attr.data-testid]="'nav-' + item.key">
+                        <span class="glyph">{{ item.glyph }}</span><span class="label">{{ item.label }}</span>
+                        <span class="availability">{{ item.availability }}</span>
+                      </span>
                     }
-                    @if (item.key === 'inbox' && hasBackgroundFailures()) {
-                      <span class="nav-issue-dot" data-testid="nav-inbox-issue-dot" role="img" aria-label="Inbox has issues"></span>
-                    }
-                  </a>
-                } @else {
-                  <span class="nav-item disabled" aria-disabled="true" [title]="item.availability" [attr.data-testid]="'nav-' + item.key">
-                    <span class="glyph">{{ item.glyph }}</span><span class="label">{{ item.label }}</span>
-                    <span class="availability">{{ item.availability }}</span>
-                  </span>
+                  </li>
                 }
-              </li>
-            }
-          </ul>
+              </ul>
+            </of-sidebar-group>
+          </div>
           <of-sidebar-footer />
         </nav>
         <div class="main-column">
@@ -100,10 +109,10 @@ const RUNNING_STATES = new Set(['generating', 'starting']);
     .body { flex: 1; min-height: 0; display: flex; }
     .sidebar { width: 17.5rem; flex: none; display: flex; flex-direction: column; background: var(--side); border-right: 1px solid var(--line); min-height: 0; overflow-y: auto; }
     .brand { height: 2.75rem; flex: none; display: flex; align-items: center; padding: 0 .875rem; font-weight: 600; letter-spacing: -.01em; border-bottom: 1px solid var(--line); }
-    .sessions { flex-grow: 2; flex-shrink: 1; flex-basis: 0; min-height: 0; overflow: hidden; display: flex; flex-direction: column; border-bottom: 1px solid var(--line); }
-    .section-title { display: flex; align-items: center; gap: .375rem; height: 1.875rem; padding: 0 .75rem; font-size: .6875rem; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--mut); }
-    .section-title .mono { margin-left: auto; font-family: var(--mono); font-weight: 400; letter-spacing: 0; color: var(--mut); }
-    .helm-list { flex-grow: 1.4; flex-shrink: 1; flex-basis: 0; min-height: 0; list-style: none; margin: 0; padding: .375rem; display: flex; flex-direction: column; gap: 1px; overflow-y: auto; }
+    .groups { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+    .group-action { flex: none; padding: 0 .25rem; color: var(--mut); font-size: .875rem; line-height: 1; text-decoration: none; }
+    .group-action:hover, .group-action:focus-visible { color: var(--fg); }
+    .helm-list { list-style: none; margin: 0; padding: .375rem; display: flex; flex-direction: column; gap: 1px; }
     .nav-item { display: flex; align-items: center; gap: .5rem; height: 1.75rem; padding: 0 .5rem 0 .375rem; border-left: 2px solid transparent; border-radius: .375rem; color: var(--fg); }
     .nav-badge { flex: none; min-width: 1rem; height: 1rem; padding: 0 .25rem; border-radius: .5rem; background: var(--accent); color: var(--on-accent); font-size: .6875rem; font-weight: 600; display: flex; align-items: center; justify-content: center; }
     .nav-issue-dot { flex: none; width: .5rem; height: .5rem; border-radius: 50%; background: var(--state-error); }
@@ -128,6 +137,7 @@ export class AppShellComponent {
   protected readonly navItems = HELM_NAV_ITEMS;
   protected readonly daemonAddress = environment.daemonAddress;
   protected readonly runningCount = computed(() => this.events.sessions().filter((s) => RUNNING_STATES.has(s.state)).length);
+  protected readonly managerCount = computed(() => String(this.events.sessions().filter((s) => s.role === MANAGER_ROLE).length));
   protected readonly inboxBadge = computed(() => {
     const attentionItems = attentionItemsOf(this.events.sessions(), this.events.workingStates(), this.answeredReplies.answeredReplyBySessionId());
     const attentionCount = itemsNeedingYouOf(attentionItems).length;

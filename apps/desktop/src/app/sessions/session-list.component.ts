@@ -27,7 +27,15 @@ import { OverdueChipComponent } from '../working-state/overdue-chip.component';
     <ul class="sessions">
       @for (group of groups(); track group.projectId) {
         @if (group.label) {
-          <li class="group-title"><h3>{{ group.label }}</h3></li>
+          <li class="group-title">
+            @if (group.projectId; as projectId) {
+              <h3><a class="project-home" [routerLink]="['/project', projectId]" title="Open project home">⌂ {{ group.label }}</a></h3>
+              <a class="new-in-project" routerLink="/new" [queryParams]="{ projectId }" [attr.aria-label]="'New session in ' + group.label" [title]="'New session in ' + group.label">+</a>
+            } @else {
+              <h3>{{ group.label }}</h3>
+              <a class="new-in-project" routerLink="/new" aria-label="New session without a project" title="New session without a project">+</a>
+            }
+          </li>
         }
         @for (session of group.sessions; track session.id) {
           <ng-container [ngTemplateOutlet]="node" [ngTemplateOutletContext]="{ $implicit: session }" />
@@ -73,10 +81,6 @@ import { OverdueChipComponent } from '../working-state/overdue-chip.component';
         }
       }
     </ng-template>
-    <div class="new-links">
-      <a class="of-btn of-btn--secondary" routerLink="/new" data-testid="new-session-link">+ New session</a>
-      <a class="of-btn of-btn--secondary" routerLink="/new" [queryParams]="{ mode: 'manager' }" data-testid="new-manager-link">+ New manager</a>
-    </div>
   `,
   styles: `
     :host { display: flex; flex-direction: column; flex: 1; min-height: 0 }
@@ -88,7 +92,12 @@ import { OverdueChipComponent } from '../working-state/overdue-chip.component';
       font: inherit; color: inherit; text-align: left; min-width: 0;
     }
     .show-closed { align-self: flex-start; margin: .25rem .75rem }
-    .group-title h3 { margin: 0; padding: .4rem .75rem .125rem; font-size: .6875rem; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--mut) }
+    .group-title { display: flex; align-items: center; gap: .375rem; padding: .4rem .75rem .125rem }
+    .group-title h3 { flex: 1; min-width: 0; margin: 0; font-size: .6875rem; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--mut) }
+    .project-home { color: inherit; text-decoration: none }
+    .project-home:hover, .project-home:focus-visible { color: var(--fg) }
+    .new-in-project { flex: none; padding: 0 .25rem; color: var(--mut); font-size: .875rem; line-height: 1; text-decoration: none }
+    .new-in-project:hover, .new-in-project:focus-visible { color: var(--fg) }
     .empty { padding: .4rem .75rem; font-size: .75rem; color: var(--mut) }
     .row:hover { background: var(--hover) }
     .row[aria-current='true'] { background: var(--active); box-shadow: inset 2px 0 0 var(--accent); font-weight: 500 }
@@ -96,8 +105,6 @@ import { OverdueChipComponent } from '../working-state/overdue-chip.component';
     .row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
     .row .name { flex: 1 1 6rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
     .row .meta { display: flex; flex-wrap: wrap; align-items: center; gap: .125rem .375rem; flex: 0 1 auto; min-width: 0; font-size: .6875rem; color: var(--mut); font-family: var(--mono) }
-    .new-links { display: flex; flex: none; gap: .375rem; padding: .6rem }
-    .new-links a { flex: 1; justify-content: center; text-decoration: none }
   `,
 })
 export class SessionListComponent {
