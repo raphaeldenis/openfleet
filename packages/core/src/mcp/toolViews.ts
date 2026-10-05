@@ -21,24 +21,41 @@ export const columnView = (column: DsColumn) => ({
   ...(column.autoValue ? { autoValue: column.autoValue } : {}),
 });
 
+/** What an agent reads for a stored cell of a column. */
+export type CellReader = (columnId: string, storedCell: unknown) => unknown;
+
+/** Reads a select cell as its option label (the raw value when no option has that id) and every other cell as stored. */
+export function cellReaderFor(columns: DsColumn[]): CellReader {
+  const optionsByColumnId = new Map(columns.filter((column) => column.columnType === 'select').map((column) => [column.id, column.options ?? []]));
+  return (columnId, storedCell) => {
+    const options = optionsByColumnId.get(columnId);
+    if (!options || typeof storedCell !== 'string') return storedCell;
+    return options.find((option) => option.id === storedCell)?.label ?? storedCell;
+  };
+}
+
 export interface RowProjection {
   /** The column ids a row keeps, in order; undefined keeps the whole row. */
   columnIds?: string[];
   includeUpdatedAt: boolean;
+  cellOf: CellReader;
 }
 
 /** A row as an object keyed by column id, limited to the projected columns. */
-export const rowView = (row: DsRow, { columnIds, includeUpdatedAt }: RowProjection) => ({
-  id: row.id,
-  data: columnIds ? Object.fromEntries(columnIds.filter((columnId) => columnId in row.data).map((columnId) => [columnId, row.data[columnId]])) : row.data,
-  ...(includeUpdatedAt ? { updatedAt: row.updatedAt } : {}),
-});
+export const rowView = (row: DsRow, { columnIds, includeUpdatedAt, cellOf }: RowProjection) => {
+  const keptColumnIds = columnIds ? columnIds.filter((columnId) => columnId in row.data) : Object.keys(row.data);
+  return {
+    id: row.id,
+    data: Object.fromEntries(keptColumnIds.map((columnId) => [columnId, cellOf(columnId, row.data[columnId])])),
+    ...(includeUpdatedAt ? { updatedAt: row.updatedAt } : {}),
+  };
+};
 
 /** A row as `[rowId, updatedAt?, ...one cell per column id]`, an empty cell being null; the result header names every one of these positions. */
-export const columnarRowView = (row: DsRow, { columnIds, includeUpdatedAt }: Required<RowProjection>) => [
+export const columnarRowView = (row: DsRow, { columnIds, includeUpdatedAt, cellOf }: Required<RowProjection>) => [
   row.id,
   ...(includeUpdatedAt ? [row.updatedAt] : []),
-  ...columnIds.map((columnId) => row.data[columnId] ?? null),
+  ...columnIds.map((columnId) => cellOf(columnId, row.data[columnId] ?? null)),
 ];
 
 export const rowChangeView = (entry: DsRowHistoryEntry) => ({

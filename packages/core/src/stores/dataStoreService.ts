@@ -13,6 +13,13 @@ export class InvalidCellValueError extends Error {
     super(`Invalid value for column ${columnId}`);
   }
 }
+/** A value refused for a column, with the words that tell the caller what would be accepted. */
+export class CellValueRejectedError extends InvalidCellValueError {
+  constructor(columnId: string, reason: string) {
+    super(columnId);
+    this.message = reason;
+  }
+}
 export class InvalidNameError extends Error {}
 export class InvalidColumnDefinitionError extends Error {}
 export class InvalidQueryError extends Error {}
@@ -26,12 +33,37 @@ export class AmbiguousNaturalKeyError extends InvalidQueryError {
     super('Several rows hold that natural key; address the row by row_id');
   }
 }
+export class NaturalKeyMissingError extends InvalidQueryError {
+  constructor() {
+    super('The row needs a value for the natural key of the data store');
+  }
+}
+export class NaturalKeyOnSeveralRowsError extends InvalidQueryError {
+  constructor(matchedRowCount: number) {
+    super(`The natural key cannot be set on several rows at once; the filter matches ${matchedRowCount} rows`);
+  }
+}
+export class NaturalKeyNotFoundError extends InvalidQueryError {
+  constructor(key: string) {
+    super(`No row holds the natural key "${key}"`);
+  }
+}
 export class DaemonSetColumnError extends Error {}
 export class InvalidViewConfigError extends Error {}
 export class InvalidActorError extends Error {}
 export class DuplicateIdError extends Error {}
 export class ConstraintError extends Error {}
 export class ReferencedRecordMissingError extends ConstraintError {}
+export class NaturalKeyConflictError extends ConstraintError {
+  constructor(key: string) {
+    super(`Another row already holds the natural key "${key}"`);
+  }
+}
+export class NaturalKeyNotUniqueError extends ConstraintError {
+  constructor() {
+    super('Rows of this data store already share a value in that column, so it cannot be its natural key');
+  }
+}
 export class DataStoreWriteError extends Error {
   constructor(message: string, options: { cause: unknown }) {
     super(message, options);
@@ -62,6 +94,8 @@ export interface DataStoreServiceDeps {
 }
 export interface KanbanGroup { option: SelectOption; rows: DsRow[] }
 type Scope = { projectId: string };
+export const SAVE_MODES = ['create', 'upsert', 'update'] as const;
+export type SaveMode = (typeof SAVE_MODES)[number];
 
 const BATCH_SAVEPOINT = 'data_store_batch';
 const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})?)?$/;
@@ -83,7 +117,7 @@ function isIsoDate(value: string): boolean {
   return calendarDay.getUTCFullYear() === year && calendarDay.getUTCMonth() === month - 1 && calendarDay.getUTCDate() === day;
 }
 
-function isValidCell(column: DsColumn, value: unknown): boolean {
+export function isValidCell(column: DsColumn, value: unknown): boolean {
   if (value === null) return true;
   switch (column.columnType) {
     case 'text': return typeof value === 'string' && !exceedsCellByteCap(value);
@@ -142,6 +176,7 @@ function matches(column: DsColumn, cell: unknown, clause: WhereClause): boolean 
   switch (op) {
     case 'eq': return isSameValue(cell, value);
     case 'neq': return !isSameValue(cell, value);
+    case 'in': return Array.isArray(value) && value.some((candidate) => isSameValue(cell, candidate));
     case 'contains': return typeof cell === 'string' && typeof value === 'string' && cell.toLowerCase().includes(value.toLowerCase());
     default: {
       const order = orderOf(column, cell, value);
@@ -198,6 +233,9 @@ export class DataStoreService {
     if (columnId !== null) {
       const column = this.repo.listColumns(storeId).find((storeColumn) => storeColumn.id === columnId);
       if (column?.columnType !== 'text') throw new InvalidColumnDefinitionError('The natural key must be a text column of this data store');
+      const heldValues = this.repo.listRows(storeId).map((row) => row.data[columnId]).filter((value) => typeof value === 'string');
+      const sharesValueBetweenRows = new Set(heldValues).size !== heldValues.length;
+      if (sharesValueBetweenRows) throw new NaturalKeyNotUniqueError();
     }
     this.guarded(() => this.repo.setNaturalKeyColumn(storeId, { columnId, at: this.clock() }));
   }
@@ -214,6 +252,43 @@ export class DataStoreService {
     return matchingRow;
   }
 
+  /**
+   * Writes one row according to what the store's natural key says about it: `create` inserts and refuses a key already held, `upsert` inserts or overwrites
+   * the supplied cells, `update` overwrites and refuses an absent key. A store with no natural key inserts plainly (`update` is refused).
+   */
+  saveRow(storeId: string, input: Scope & { data: Record<string, unknown>; actor: RowActor; mode: SaveMode }): { outcome: 'inserted' | 'updated'; row: DsRow } {
+    this.authorize(storeId, input.projectId);
+    const { data, mode } = input;
+    const insert = () => ({ outcome: 'inserted' as const, row: this.insertRow(storeId, input) });
+
+    const naturalKeyColumnId = this.repo.findStore(storeId)?.naturalKeyColumnId;
+    const hasNaturalKey = naturalKeyColumnId !== undefined;
+    if (!hasNaturalKey) {
+      if (mode === 'update') throw new NoNaturalKeyError();
+      return insert();
+    }
+
+    const key = data[naturalKeyColumnId];
+    const isKeyless = key === undefined || key === null;
+    if (isKeyless) {
+      if (mode !== 'create') throw new NaturalKeyMissingError();
+      return insert();
+    }
+    if (typeof key !== 'string') throw new InvalidCellValueError(naturalKeyColumnId);
+
+    const [rowHoldingKey, otherRowHoldingKey] = this.runQuery(storeId, { where: [{ columnId: naturalKeyColumnId, op: 'eq', value: key }], limit: 2 });
+    if (otherRowHoldingKey !== undefined) throw new AmbiguousNaturalKeyError();
+    if (rowHoldingKey === undefined) {
+      if (mode === 'update') throw new NaturalKeyNotFoundError(key);
+      return insert();
+    }
+    if (mode === 'create') throw new NaturalKeyConflictError(key);
+
+    const daemonSetColumnIds = new Set(this.daemonSetColumns(this.repo.listColumns(storeId)).map((column) => column.id));
+    const patch = Object.fromEntries(Object.entries(data).filter(([columnId]) => !daemonSetColumnIds.has(columnId)));
+    return { outcome: 'updated', row: this.updateRow(storeId, rowHoldingKey.id, { ...input, patch }) };
+  }
+
   insertRow(storeId: string, input: Scope & { data: Record<string, unknown>; actor: RowActor }): DsRow {
     this.authorize(storeId, input.projectId);
     const at = this.clock();
@@ -228,6 +303,7 @@ export class DataStoreService {
     this.authorize(storeId, input.projectId);
     this.refuseDaemonSetCells(storeId, input.patch);
     this.validateCells(this.repo.listColumns(storeId), input.patch);
+    this.refuseNaturalKeyHeldByAnotherRow(storeId, rowId, input.patch);
     return this.guarded(() => this.repo.updateRow(rowId, { storeId, patch: input.patch, actor: input.actor, at: this.clock() }));
   }
 
@@ -259,6 +335,24 @@ export class DataStoreService {
     return this.inTransaction(() => stampedRows.map(({ data, at }) => this.repo.insertRow(storeId, { id: this.newId(), data, actor: input.actor, at })));
   }
 
+  /**
+   * Sets the same cells on every row matching the `where` equalities, all or nothing: an invalid cell refuses the call even when no row matches,
+   * a failing write undoes the others. The natural key cannot be set through a filter matching several rows.
+   */
+  updateRowsWhere(storeId: string, input: Scope & { where: WhereClause[]; set: Record<string, unknown>; actor: RowActor }): { matched: number; updated: DsRow[] } {
+    this.authorize(storeId, input.projectId);
+    this.refuseDaemonSetCells(storeId, input.set);
+    this.validateCells(this.repo.listColumns(storeId), input.set);
+
+    const matchedRows = this.runQuery(storeId, { where: input.where });
+    const naturalKeyColumnId = this.repo.findStore(storeId)?.naturalKeyColumnId;
+    const setsNaturalKey = naturalKeyColumnId !== undefined && Object.hasOwn(input.set, naturalKeyColumnId);
+    if (setsNaturalKey && matchedRows.length > 1) throw new NaturalKeyOnSeveralRowsError(matchedRows.length);
+
+    const updated = this.updateRows(storeId, { ...input, items: matchedRows.map((row) => ({ rowId: row.id, patch: input.set })) });
+    return { matched: matchedRows.length, updated };
+  }
+
   /** The daemon-set columns that the given rows try to fill: they are dropped at insert, and the caller reports them. */
   ignoredDaemonSetColumnIds(storeId: string, input: Scope & { items: Record<string, unknown>[] }): string[] {
     this.authorize(storeId, input.projectId);
@@ -272,7 +366,10 @@ export class DataStoreService {
       this.refuseDaemonSetCells(storeId, patch);
       this.validateCells(columns, patch);
     }
-    return this.inTransaction(() => input.items.map(({ rowId, patch }) => this.repo.updateRow(rowId, { storeId, patch, actor: input.actor, at: this.clock() })));
+    return this.inTransaction(() => input.items.map(({ rowId, patch }) => {
+      this.refuseNaturalKeyHeldByAnotherRow(storeId, rowId, patch);
+      return this.repo.updateRow(rowId, { storeId, patch, actor: input.actor, at: this.clock() });
+    }));
   }
 
   query(storeId: string, input: Scope & { where?: WhereClause[]; orderBy?: OrderTerm[]; limit?: number }): DsRow[] {
@@ -313,6 +410,16 @@ export class DataStoreService {
 
     const rows = this.runQuery(view.storeId, { where: view.config.where, orderBy: view.config.orderBy });
     return (groupBy.options ?? []).map((option) => ({ option, rows: rows.filter((row) => row.data[groupBy.id] === option.id) }));
+  }
+
+  /** Refuses a patch that would give a row the natural key value another row of the store holds. */
+  private refuseNaturalKeyHeldByAnotherRow(storeId: string, rowId: string, patch: Record<string, unknown>): void {
+    const naturalKeyColumnId = this.repo.findStore(storeId)?.naturalKeyColumnId;
+    const patchedKey = naturalKeyColumnId === undefined ? undefined : patch[naturalKeyColumnId];
+    if (typeof patchedKey !== 'string') return;
+    const rowsHoldingKey = this.runQuery(storeId, { where: [{ columnId: naturalKeyColumnId!, op: 'eq', value: patchedKey }] });
+    const isHeldByAnotherRow = rowsHoldingKey.some((row) => row.id !== rowId);
+    if (isHeldByAnotherRow) throw new NaturalKeyConflictError(patchedKey);
   }
 
   private authorize(storeId: string, projectId: string): void {

@@ -162,6 +162,7 @@ const hostileCallByTool = (w: World): Record<string, { client: Client; args: Rec
   describe_data_store: { client: w.lead, args: { store: UNKNOWN }, code: 'store_not_found' },
   add_data_store_column: { client: w.lead, args: { store: UNKNOWN, display_name: 'c', column_type: 'text' }, code: 'store_not_found' },
   insert_data_store_rows: { client: w.lead, args: { store: UNKNOWN, rows: [{}] }, code: 'store_not_found' },
+  set_data_store_natural_key: { client: w.lead, args: { store: UNKNOWN, column: 'c' }, code: 'store_not_found' },
   list_projects: { client: w.lead, args: {} },
   list_project_folders: { client: w.stranger, args: { project: UNKNOWN }, code: 'project_not_found' },
   update_data_store_row: { client: w.lead, args: { store: UNKNOWN, row_id: 'r', values: { c: 1 } }, code: 'store_not_found' },

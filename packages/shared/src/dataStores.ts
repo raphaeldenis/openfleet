@@ -53,7 +53,7 @@ export interface DsRowHistoryEntry {
   createdAt: string;
 }
 
-export const WHERE_OPERATORS = ['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'contains'] as const;
+export const WHERE_OPERATORS = ['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'contains', 'in'] as const;
 
 export const WhereClauseSchema = z.object({
   columnId: z.string().min(1),
