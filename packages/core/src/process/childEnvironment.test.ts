@@ -292,4 +292,48 @@ describe('childEnvironmentForClaudeCli', () => {
     expect(Object.prototype.hasOwnProperty.call(result, 'OPTIONAL_VAR')).toBe(false);
     expect(result.PATH).toBe('/usr/bin');
   });
+
+  describe('host terminal identity, which describes the terminal that launched the daemon and not the embedded xterm.js the CLI draws into', () => {
+    it.each([
+      'TERM_PROGRAM',
+      'TERM_PROGRAM_VERSION',
+      'TERM_SESSION_ID',
+      'LC_TERMINAL',
+      'LC_TERMINAL_VERSION',
+      'VTE_VERSION',
+      'WT_SESSION',
+      'TMUX',
+      'STY',
+      '__CFBundleIdentifier',
+    ])('drops the exact variable %s', (name) => {
+      const parentEnv = { [name]: 'host-terminal', PATH: '/usr/bin' };
+
+      expect(childEnvironmentForClaudeCli(parentEnv)).toEqual({ PATH: '/usr/bin' });
+    });
+
+    it.each(['KITTY_', 'GHOSTTY_', 'WEZTERM_', 'ITERM_', 'ALACRITTY_'])('drops every variable prefixed %s', (prefix) => {
+      const parentEnv = { [`${prefix}WINDOW_ID`]: '1', [`${prefix}ANYTHING_ELSE`]: 'x', PATH: '/usr/bin' };
+
+      expect(childEnvironmentForClaudeCli(parentEnv)).toEqual({ PATH: '/usr/bin' });
+    });
+
+    it('keeps variables that only look similar, so the match is a strict prefix or exact name', () => {
+      const parentEnv = { MY_KITTY_PATH: '/x', TERM_PROGRAMS: 'x', TMUX_TMPDIR: '/tmp/tmux', COLORTERM: 'truecolor', PATH: '/usr/bin' };
+
+      expect(childEnvironmentForClaudeCli(parentEnv)).toEqual(parentEnv);
+    });
+
+    it('keeps PATH, HOME, locale and the auth variables the CLI needs', () => {
+      const parentEnv = {
+        PATH: '/usr/bin',
+        HOME: '/Users/someone',
+        LANG: 'en_US.UTF-8',
+        LC_ALL: 'en_US.UTF-8',
+        ANTHROPIC_API_KEY: 'sk-test',
+        CLAUDE_CODE_OAUTH_TOKEN: 'token',
+      };
+
+      expect(childEnvironmentForClaudeCli(parentEnv)).toEqual(parentEnv);
+    });
+  });
 });
