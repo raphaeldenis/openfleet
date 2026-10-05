@@ -97,6 +97,23 @@ export function registerRestRoutes(router: Router, deps: { sessions: SessionServ
     json(res, 200, deps.sessions.sendMessage({ sessionId: params.id!, body: text, messageId }));
   });
 
+  router.add('GET', '/api/sessions/:id/held-messages', ({ res, params }) => {
+    requireSession(params.id!);
+    json(res, 200, deps.sessions.heldMessagesOf(params.id!));
+  });
+
+  router.add('POST', '/api/sessions/:id/held-messages/:messageId/discard', ({ res, params }) => {
+    requireSession(params.id!);
+    if (!deps.sessions.discardHeldMessage(params.id!, params.messageId!)) throw notFound('held message');
+    json(res, 200, {});
+  });
+
+  router.add('POST', '/api/sessions/:id/held-messages/:messageId/release', ({ res, params }) => {
+    requireSession(params.id!);
+    if (!deps.sessions.releaseHeldMessage(params.id!, params.messageId!)) throw notFound('held message');
+    json(res, 200, {});
+  });
+
   router.add('POST', '/api/sessions/:id/reopen', ({ res, params, body }) => {
     requireSession(params.id!);
     const { mode } = ReopenRequestSchema.parse(body ?? {});
