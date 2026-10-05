@@ -39,13 +39,14 @@ export class UnknownColumnReferenceError extends UnknownColumnError {
 }
 
 interface ViewRow { id: string; store_id: string; display_name: string; view_type: ViewType; config_json: string; sort_order: number }
-interface StoreRow { id: string; project_id: string; display_name: string; created_at: string; updated_at: string }
+interface StoreRow { id: string; project_id: string; display_name: string; natural_key_column_id: string | null; created_at: string; updated_at: string }
 interface ColumnRow { id: string; store_id: string; display_name: string; column_type: ColumnType; options_json: string | null; sort_order: number; auto_value: AutoValue | null }
 interface RowRow { id: string; store_id: string; data_json: string; created_at: string; updated_at: string }
 interface HistoryRow { id: string; row_id: string; actor_kind: RowActorKind; actor_label: string; change_json: string; created_at: string }
 
 const toStore = (r: StoreRow): DataStore => ({
   id: r.id, projectId: r.project_id, displayName: r.display_name, createdAt: r.created_at, updatedAt: r.updated_at,
+  ...(r.natural_key_column_id === null ? {} : { naturalKeyColumnId: r.natural_key_column_id }),
 });
 const toColumn = (r: ColumnRow): DsColumn => ({
   id: r.id, storeId: r.store_id, displayName: r.display_name, columnType: r.column_type,
@@ -95,6 +96,12 @@ export class DataStoreRepository {
     this.db.prepare('INSERT INTO data_stores (id, project_id, display_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
       .run(input.id, input.projectId, input.displayName, input.at, input.at);
     return { id: input.id, projectId: input.projectId, displayName: input.displayName, createdAt: input.at, updatedAt: input.at };
+  }
+
+  /** `null` clears the natural key. The caller (service) has already checked the column. */
+  setNaturalKeyColumn(storeId: string, input: { columnId: string | null; at: string }): void {
+    this.refuseMissingStore(storeId);
+    this.db.prepare('UPDATE data_stores SET natural_key_column_id = ?, updated_at = ? WHERE id = ?').run(input.columnId, input.at, storeId);
   }
 
   addColumn(storeId: string, input: { id: string; displayName: string; columnType: ColumnType; options?: SelectOption[]; autoValue?: AutoValue; at: string }): DsColumn {

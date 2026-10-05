@@ -33,6 +33,8 @@ export interface ImportReport extends SourceLosses {
   unconvertedNodeTypes: Record<string, number>;
   /** Playbook mentions in manager missions that have no native resource to resolve. */
   pendingPlaybookMentions: number;
+  /** Scape tool references in manager missions: renamed to the OpenFleet tool, pointed at the playbook shims, or left because OpenFleet has no equivalent (name -> occurrences). */
+  missionToolReferences: { renamed: number; pointedAtPlaybookShims: number; withoutEquivalent: Record<string, number> };
   /** Sections of the manager state files that are no working state section and were folded into one under their heading. */
   mergedStateSections: number;
   reportPath?: string;
@@ -56,6 +58,7 @@ export const emptyReport = (input: { dryRun: boolean }): ImportReport => ({
   projectsWithoutDocsFolder: [],
   unconvertedNodeTypes: {},
   pendingPlaybookMentions: 0,
+  missionToolReferences: { renamed: 0, pointedAtPlaybookShims: 0, withoutEquivalent: {} },
   mergedStateSections: 0,
 });
 
@@ -69,6 +72,7 @@ const bulletList = (items: string[]) => (items.length === 0 ? ['none'] : items.m
 
 export function renderImportReport(report: ImportReport): string {
   const unconvertedNodeTypes = Object.entries(report.unconvertedNodeTypes).map(([type, count]) => `${type}: ${count}`);
+  const toolsWithoutEquivalent = Object.entries(report.missionToolReferences.withoutEquivalent).map(([toolName, count]) => `${toolName}: ${count}`);
   const droppedColumnFormats = report.droppedColumnFormats.map(({ columnId, format }) => `${columnId}: ${format}`);
   const droppedViewFields = report.droppedViewFields.map(({ viewId, fields }) => `${viewId}: ${fields.join(', ')}`);
   return [
@@ -107,6 +111,10 @@ export function renderImportReport(report: ImportReport): string {
     '',
     '## Playbook mentions — MIG-05 archives and native resolution',
     `${report.pendingPlaybookMentions} playbook mention(s) in manager missions have no native playbook resource to resolve. MIG-05 archives their authoring text as notes; native playbook mentions remain "not resolved".`,
+    '',
+    '## Scape tool references in manager missions',
+    `${report.missionToolReferences.renamed} reference(s) renamed to the OpenFleet tool, ${report.missionToolReferences.pointedAtPlaybookShims} playbook tool reference(s) pointed at docs/playbook-shims.md. Left as they are, no OpenFleet equivalent:`,
+    ...bulletList(toolsWithoutEquivalent),
     '',
     '## Working states',
     `${report.mergedStateSections} section(s) of the state files were merged into a working state section under a line carrying their heading. Not converted: a state file with an item cut, items dropped for the item limit or the size cap, or a manager whose own record was left as it is.`,

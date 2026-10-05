@@ -10,7 +10,10 @@ export const sessionView = (session: Session) => ({
 /** A session inside a lineage listing, where the parent link is what places it in the tree. */
 export const lineageSessionView = (session: Session) => ({ ...sessionView(session), parentId: session.parentId });
 
-export const storeView = (store: DataStore) => ({ id: store.id, displayName: store.displayName });
+export const storeView = (store: DataStore) => ({
+  id: store.id, displayName: store.displayName,
+  ...(store.naturalKeyColumnId ? { naturalKeyColumnId: store.naturalKeyColumnId } : {}),
+});
 
 export const columnView = (column: DsColumn) => ({
   id: column.id, displayName: column.displayName, columnType: column.columnType,

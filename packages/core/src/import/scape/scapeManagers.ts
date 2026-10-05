@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import { ManagerSpecSchema, type HarnessId, type MentionKind } from '@openfleet/shared';
 import type { ScapeArgus } from './scapeArguses.js';
 import { ScapeImportError } from './scapeImportError.js';
-import { composeMission, type ResourceAvailability } from './scapeManagerMission.js';
+import { composeMission, type MissionToolReferences, type ResourceAvailability } from './scapeManagerMission.js';
 import type { RecordValues } from './scapeTarget.js';
 import { appleReferenceToIso } from './scapeTime.js';
 
@@ -22,6 +22,7 @@ export interface PlannedManager {
   manager: { pulseSeconds: number; childrenCap: number; missionText: string };
   isNotFullyConverted: boolean;
   pendingPlaybookMentionCount: number;
+  toolReferences: MissionToolReferences;
 }
 
 export interface ManagersPlan {
@@ -116,6 +117,7 @@ export function planManagers(input: PlanManagersInput): ManagersPlan {
       manager: { pulseSeconds: argus.pulseInterval, childrenCap: argus.childrenCap, missionText: mission.text },
       isNotFullyConverted: mission.hasUnconvertedGrant || !isModelRecognized,
       pendingPlaybookMentionCount: mission.pendingPlaybookMentionCount,
+      toolReferences: mission.toolReferences,
     });
   }
   return { managers, skippedCount };

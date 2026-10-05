@@ -6,7 +6,7 @@ import {
 } from '@openfleet/shared';
 import { z } from 'zod';
 import { inTransaction as runInTransaction } from '../db/transaction.js';
-import { DuplicateNameError, StoreNotFoundError, UnknownColumnError, type DataStoreRepository, type RowActor } from './dataStoreRepository.js';
+import { DuplicateNameError, RowNotFoundError, StoreNotFoundError, UnknownColumnError, type DataStoreRepository, type RowActor } from './dataStoreRepository.js';
 
 export class InvalidCellValueError extends Error {
   constructor(readonly columnId: string) {
@@ -16,6 +16,16 @@ export class InvalidCellValueError extends Error {
 export class InvalidNameError extends Error {}
 export class InvalidColumnDefinitionError extends Error {}
 export class InvalidQueryError extends Error {}
+export class NoNaturalKeyError extends InvalidQueryError {
+  constructor() {
+    super('The data store has no natural key; address the row by row_id');
+  }
+}
+export class AmbiguousNaturalKeyError extends InvalidQueryError {
+  constructor() {
+    super('Several rows hold that natural key; address the row by row_id');
+  }
+}
 export class DaemonSetColumnError extends Error {}
 export class InvalidViewConfigError extends Error {}
 export class InvalidActorError extends Error {}
@@ -179,6 +189,29 @@ export class DataStoreService {
     return this.guarded(() => this.repo.addColumn(storeId, {
       id: this.newId(), displayName, columnType: input.columnType, ...(options ? { options } : {}), autoValue: input.autoValue, at: this.clock(),
     }));
+  }
+
+  /** Makes a text column of the store its natural key, or clears the key with `null`. */
+  setNaturalKey(storeId: string, input: Scope & { columnId: string | null }): void {
+    this.authorize(storeId, input.projectId);
+    const { columnId } = input;
+    if (columnId !== null) {
+      const column = this.repo.listColumns(storeId).find((storeColumn) => storeColumn.id === columnId);
+      if (column?.columnType !== 'text') throw new InvalidColumnDefinitionError('The natural key must be a text column of this data store');
+    }
+    this.guarded(() => this.repo.setNaturalKeyColumn(storeId, { columnId, at: this.clock() }));
+  }
+
+  /** The one row whose natural key cell equals `key` exactly. */
+  findRowByNaturalKey(storeId: string, input: Scope & { key: string }): DsRow {
+    this.authorize(storeId, input.projectId);
+    const naturalKeyColumnId = this.repo.findStore(storeId)?.naturalKeyColumnId;
+    if (naturalKeyColumnId === undefined) throw new NoNaturalKeyError();
+    const matchingRows = this.runQuery(storeId, { where: [{ columnId: naturalKeyColumnId, op: 'eq', value: input.key }], limit: 2 });
+    const [matchingRow, otherMatchingRow] = matchingRows;
+    if (matchingRow === undefined) throw new RowNotFoundError(input.key);
+    if (otherMatchingRow !== undefined) throw new AmbiguousNaturalKeyError();
+    return matchingRow;
   }
 
   insertRow(storeId: string, input: Scope & { data: Record<string, unknown>; actor: RowActor }): DsRow {

@@ -68,6 +68,14 @@ function writeManager(input: { db: DatabaseSync; ledger: ImportLedger; repositor
   });
 }
 
+function addToolReferencesToReport(report: ImportReport, planned: PlannedManager): void {
+  const { renamedCount, playbookPointerCount, unmappedToolNames } = planned.toolReferences;
+  const references = report.missionToolReferences;
+  references.renamed += renamedCount;
+  references.pointedAtPlaybookShims += playbookPointerCount;
+  for (const toolName of unmappedToolNames) references.withoutEquivalent[toolName] = (references.withoutEquivalent[toolName] ?? 0) + 1;
+}
+
 /** Writes each planned manager as a closed manager session plus its managers row, through the session and manager repositories. A stored manager that OpenFleet changed is left as it is. */
 export function writeManagers(db: DatabaseSync, plan: ImportPlan, report: ImportReport): Map<string, UpsertOutcome> {
   const repositories: Repositories = { sessions: new SessionRepository(db), managers: new ManagerRepository(db) };
@@ -81,6 +89,7 @@ export function writeManagers(db: DatabaseSync, plan: ImportPlan, report: Import
     countOutcome(counts, outcome);
     if (planned.isNotFullyConverted) counts.notConverted++;
     report.pendingPlaybookMentions += planned.pendingPlaybookMentionCount;
+    addToolReferencesToReport(report, planned);
   }
   counts.expected += plan.skippedManagerCount;
   counts.notConverted += plan.skippedManagerCount;
