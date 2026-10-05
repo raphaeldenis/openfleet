@@ -13,7 +13,7 @@ export interface ScapeProject { id: string; name: string; createdAt: unknown }
 export interface ScapePlaybook { id: string; name: string; lexicalContent: string; secrets: string; createdAt: unknown; updatedAt: unknown }
 export interface ScapeNote { id: string; projectId: string; title: string; content: string; contentFormat: string; createdAt: unknown; updatedAt: unknown; isShared: boolean }
 export interface ScapeNoteVersion { id: string; noteId: string; content: string; contentFormat: string; createdAt: number; source: string }
-export interface ScapeStore { id: string; projectId: string; displayName: string; createdAt: unknown; updatedAt: unknown }
+export interface ScapeStore { id: string; projectId: string; displayName: string; naturalKeyColumnId: string | null; createdAt: unknown; updatedAt: unknown }
 export interface ScapeColumn { id: string; storeId: string; displayName: string; columnType: string; sortOrder: number; options: string | null; format: string | null }
 export interface ScapeView { id: string; storeId: string; name: string; viewType: string; sortOrder: number; config: string; createdAt: unknown }
 export interface ScapeRow { id: string; createdAt: number; updatedAt: number; cells: Record<string, unknown> }
@@ -102,7 +102,7 @@ export class ScapeSource {
   }
 
   storesOf(projectId: string): ScapeStore[] {
-    return this.query(`SELECT id, projectID AS projectId, displayName, createdAt, updatedAt FROM data_store_meta WHERE projectID = ? ORDER BY displayName`, projectId) as unknown as ScapeStore[];
+    return this.query(`SELECT id, projectID AS projectId, displayName, naturalKeyColumnID AS naturalKeyColumnId, createdAt, updatedAt FROM data_store_meta WHERE projectID = ? ORDER BY displayName`, projectId) as unknown as ScapeStore[];
   }
 
   columnsOf(storeId: string): ScapeColumn[] {

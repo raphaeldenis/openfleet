@@ -18,7 +18,7 @@ import {
 } from '../sessions/sessionService.js';
 import { DuplicateNameError, RowNotFoundError, StoreNotFoundError, UnknownColumnError, UnknownColumnReferenceError } from '../stores/dataStoreRepository.js';
 import {
-  ConstraintError, DaemonSetColumnError, DuplicateIdError, InvalidActorError, InvalidCellValueError, InvalidColumnDefinitionError, InvalidNameError, InvalidQueryError,
+  ConstraintError, DaemonSetColumnError, DuplicateIdError, InvalidActorError, InvalidCellValueError, InvalidColumnDefinitionError, InvalidNameError, InvalidQueryError, NoNaturalKeyError, AmbiguousNaturalKeyError,
   InvalidViewConfigError, ReferencedRecordMissingError, StoreHasRowsError, StoreRowCapError, ViewNotFoundError,
 } from '../stores/dataStoreService.js';
 import { DocsFolderNotWritableError, InvalidDocsFolderError, NoteIsNotFileBackedError, ProjectHasNoDocsFolderError } from '../notes/docsFolderService.js';
@@ -72,6 +72,8 @@ const domainErrorCodes: [string, () => unknown, ErrorCode][] = [
   ['InvalidCellValueError', () => new InvalidCellValueError('c1'), 'invalid_body'],
   ['InvalidNameError', () => new InvalidNameError('x'), 'invalid_body'],
   ['InvalidQueryError', () => new InvalidQueryError('x'), 'invalid_body'],
+  ['NoNaturalKeyError', () => new NoNaturalKeyError(), 'invalid_body'],
+  ['AmbiguousNaturalKeyError', () => new AmbiguousNaturalKeyError(), 'invalid_body'],
   ['UnknownColumnError', () => new UnknownColumnError(['c1']), 'invalid_body'],
   ['UnknownColumnReferenceError', () => new UnknownColumnReferenceError(['c1']), 'invalid_body'],
   ['ReferencedRecordMissingError', () => new ReferencedRecordMissingError('parent row missing'), 'constraint_violation'],

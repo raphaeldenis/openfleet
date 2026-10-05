@@ -151,6 +151,12 @@ export class NoteRepository {
     ).all(projectId, folder ?? null, folder ?? null, limit, offset) as unknown as SummaryRow[];
     return rows.map(toSummary);
   }
+  /** The first `limit` summaries of the notes filed in no folder. */
+  listUnfiledSummaries(projectId: string, limit: number): NoteSummary[] {
+    const rows = this.db.prepare(`SELECT ${SUMMARY_COLUMNS} FROM notes WHERE project_id = ? AND folder IS NULL ORDER BY created_at, id LIMIT ?`)
+      .all(projectId, limit) as unknown as SummaryRow[];
+    return rows.map(toSummary);
+  }
   count(projectId: string, folder?: NoteFolder): number {
     const { n } = this.db.prepare('SELECT COUNT(*) AS n FROM notes WHERE project_id = ? AND (? IS NULL OR folder = ?)')
       .get(projectId, folder ?? null, folder ?? null) as { n: number };

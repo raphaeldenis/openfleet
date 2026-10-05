@@ -7,7 +7,7 @@ import { latestShippedMigration } from '../../db/migrate.js';
 import { inTransaction } from '../../db/transaction.js';
 import type { RecordOutcome } from './importReport.js';
 import { ScapeImportError } from './scapeImportError.js';
-import { hashOfValues, withoutColumns, type ImportLedger, type LedgerKind } from './scapeLedger.js';
+import { hashOfValues, withoutColumns, withoutColumnsHoldingNull, type ImportLedger, type LedgerKind } from './scapeLedger.js';
 import { snapshotSqliteDatabase } from './sqliteSnapshot.js';
 
 const DATABASE_FILE_NAME = 'openfleet.db';
@@ -25,6 +25,8 @@ export interface WritePolicy {
   canUpdate?(): boolean;
   /** Columns OpenFleet maintains itself: they take no part in telling an OpenFleet edit from none. */
   ignoredColumns?: readonly string[];
+  /** Columns added after records were first imported: left out of the hash while null, so those records still match what the ledger holds. */
+  columnsOmittedFromHashWhenNull?: readonly string[];
 }
 
 /** Reads, creates and changes one stored record; `insert` throws the database error of a taken name. */
@@ -112,7 +114,8 @@ export interface ReconcileInput {
 export function reconcileRecord(input: ReconcileInput): UpsertOutcome {
   const { ledger, kind, id, policy, gateway } = input;
   const ignoredColumns = policy.ignoredColumns ?? [];
-  const hashOfRecord = (record: RecordValues) => hashOfValues(withoutColumns(record, ignoredColumns));
+  const columnsOmittedWhenNull = policy.columnsOmittedFromHashWhenNull ?? [];
+  const hashOfRecord = (record: RecordValues) => hashOfValues(withoutColumnsHoldingNull(withoutColumns(record, ignoredColumns), columnsOmittedWhenNull));
   const plannedHash = hashOfRecord(input.planned);
   const lastImportedHash = ledger.hashOf(kind, id);
 

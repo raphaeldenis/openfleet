@@ -103,7 +103,7 @@ beforeEach(async () => {
   const workingStates = new WorkingStateService({ db, clock: () => new Date().toISOString(), stateRoot: '/tmp/of-unused/state', maxBytes: 6144 });
   server = await startServer({
     host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath: '/tmp/of-unused/config.json',
-    mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, workingStates, worktreesRoot: WORKTREES_ROOT }),
+    mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: WORKTREES_ROOT }),
   });
 
   const repo = makeRepo();
@@ -132,7 +132,7 @@ afterEach(() => {
   return server.close();
 });
 
-const NEVER_REFUSES = ['list_children', 'list_sessions', 'get_argus_status'];
+const NEVER_REFUSES = ['list_children', 'list_sessions', 'get_argus_status', 'list_projects'];
 const UNKNOWN = 'missing';
 const hostileCallByTool = (w: World): Record<string, { client: Client; args: Record<string, unknown>; code?: string }> => ({
   get_session_status: { client: w.lead, args: { session_id: w.strangerId }, code: 'outside_lineage' },
@@ -162,6 +162,9 @@ const hostileCallByTool = (w: World): Record<string, { client: Client; args: Rec
   describe_data_store: { client: w.lead, args: { store: UNKNOWN }, code: 'store_not_found' },
   add_data_store_column: { client: w.lead, args: { store: UNKNOWN, display_name: 'c', column_type: 'text' }, code: 'store_not_found' },
   insert_data_store_rows: { client: w.lead, args: { store: UNKNOWN, rows: [{}] }, code: 'store_not_found' },
+  list_projects: { client: w.lead, args: {} },
+  list_project_folders: { client: w.stranger, args: { project: UNKNOWN }, code: 'project_not_found' },
+  update_data_store_row: { client: w.lead, args: { store: UNKNOWN, row_id: 'r', values: { c: 1 } }, code: 'store_not_found' },
   update_data_store_rows: { client: w.lead, args: { store: UNKNOWN, updates: [{ row_id: 'r', patch: {} }] }, code: 'store_not_found' },
   delete_data_store_row: { client: w.lead, args: { row_id: UNKNOWN }, code: 'row_not_found' },
   query_data_store: { client: w.lead, args: { store: UNKNOWN }, code: 'store_not_found' },

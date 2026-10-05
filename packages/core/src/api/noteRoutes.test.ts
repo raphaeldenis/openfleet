@@ -77,7 +77,7 @@ beforeEach(async () => {
   server = await startServer({
     host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath: join(root, 'config.json'),
     notes, noteRepo, docs, stores, storeRepo, projects,
-    mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, worktreesRoot, stores, storeRepo, notes, noteRepo, docs, workingStates: new WorkingStateService({ db, clock: () => new Date().toISOString(), stateRoot: join(root, 'state'), maxBytes: 6144 }) }),
+    mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, worktreesRoot, stores, storeRepo, notes, noteRepo, docs, projects, workingStates: new WorkingStateService({ db, clock: () => new Date().toISOString(), stateRoot: join(root, 'state'), maxBytes: 6144 }) }),
   });
 
   const session = await sessions.create({ directory: root, name: 'Gimli', harness: 'fake', emoji: '⛏️' });

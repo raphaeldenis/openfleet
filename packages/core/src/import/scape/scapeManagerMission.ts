@@ -1,6 +1,7 @@
 import type { MentionKind } from '@openfleet/shared';
 import { describePermissionBound, fitsMentionSyntax, openFleetMentionKindOf } from '../inlineVisitors.js';
 import type { ScapeGovernanceRequest, ScapeResourceGrant } from './scapeArguses.js';
+import { rewriteScapeToolReferences, type RewrittenToolReferences } from './scapeToolNames.js';
 
 const APPROVED = 'approved';
 const SECTION_SEPARATOR = '\n\n';
@@ -18,10 +19,13 @@ export interface MissionParts {
   availabilityOf: (resource: { kind: MentionKind; id: string }) => ResourceAvailability;
 }
 
+export type MissionToolReferences = Omit<RewrittenToolReferences, 'text'>;
+
 export interface Mission {
   text: string;
   hasUnconvertedGrant: boolean;
   pendingPlaybookMentionCount: number;
+  toolReferences: MissionToolReferences;
 }
 
 interface ExposedResource { line: string; isConverted: boolean; isPendingPlaybook: boolean }
@@ -82,15 +86,18 @@ function closedNoteBody(noteBody: string): string {
   return openFence === undefined ? body : `${body}\n${openFence}`;
 }
 
-/** Builds the mission of an imported manager: the mission note body, the approved laws and permissions in prose, and the exposed resources as mentions. */
+/** Builds the mission of an imported manager: the mission note body, the approved laws and permissions in prose, and the exposed resources as mentions, with Scape tool references rewritten for OpenFleet. */
 export function composeMission(parts: MissionParts): Mission {
   const exposedResources = parts.resourceGrants.map((grant) => exposedResourceOf(grant, parts.availabilityOf));
   const exposedResourcesSection = exposedResources.length === 0 ? [] : [['## Exposed Resources', ...exposedResources.map(({ line }) => line)].join('\n')];
   const noteBody = closedNoteBody(parts.noteBody);
   const noteSection = noteBody === '' ? [] : [noteBody];
+  const composedText = [...noteSection, ...lawsSections(parts.governanceRequests), ...exposedResourcesSection].join(SECTION_SEPARATOR);
+  const { text, renamedCount, playbookPointerCount, unmappedToolNames } = rewriteScapeToolReferences(composedText);
   return {
-    text: [...noteSection, ...lawsSections(parts.governanceRequests), ...exposedResourcesSection].join(SECTION_SEPARATOR),
+    text,
     hasUnconvertedGrant: exposedResources.some(({ isConverted }) => !isConverted),
     pendingPlaybookMentionCount: exposedResources.filter(({ isPendingPlaybook }) => isPendingPlaybook).length,
+    toolReferences: { renamedCount, playbookPointerCount, unmappedToolNames },
   };
 }
