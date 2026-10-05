@@ -1,8 +1,10 @@
-import { Component, inject, output } from '@angular/core';
+import { Component, computed, inject, output, signal } from '@angular/core';
 import { NgTemplateOutlet } from '@angular/common';
 import { Router, RouterLink } from '@angular/router';
 import { MANAGER_ROLE, type Session } from '@openfleet/shared';
+import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
+import { childrenOfInList, closedSessionCountOf, groupByProject, readShowClosedPreference, rootsOfSessionList, writeShowClosedPreference } from './session-filter';
 import { StateChipComponent } from '../design/state-chip.component';
 import { showInvisibleControlsAsEscapes } from '../core/bidi-escapes';
 import { ManagerCardComponent } from '../managers/manager-card.component';
@@ -12,9 +14,26 @@ import { OverdueChipComponent } from '../working-state/overdue-chip.component';
   selector: 'of-session-list',
   imports: [RouterLink, NgTemplateOutlet, StateChipComponent, ManagerCardComponent, OverdueChipComponent],
   template: `
+    @if (closedCount() > 0 || showClosed()) {
+      <button
+        type="button"
+        class="of-btn of-btn--secondary of-btn--compact show-closed"
+        data-testid="show-closed-toggle"
+        [attr.aria-pressed]="showClosed()"
+        (click)="toggleShowClosed()"
+      >Show closed ({{ closedCount() }})</button>
+    }
     <ul class="sessions">
-      @for (session of roots(); track session.id) {
-        <ng-container [ngTemplateOutlet]="node" [ngTemplateOutletContext]="{ $implicit: session }" />
+      @for (group of groups(); track group.projectId) {
+        @if (group.label) {
+          <li class="group-title"><h3>{{ group.label }}</h3></li>
+        }
+        @for (session of group.sessions; track session.id) {
+          <ng-container [ngTemplateOutlet]="node" [ngTemplateOutletContext]="{ $implicit: session }" />
+        }
+      }
+      @if (roots().length === 0) {
+        <li class="empty">{{ emptyMessage() }}</li>
       }
     </ul>
     <ng-template #node let-session>
@@ -66,6 +85,9 @@ import { OverdueChipComponent } from '../working-state/overdue-chip.component';
       padding: .4rem .6rem; cursor: pointer; width: 100%; border: none; background: none;
       font: inherit; color: inherit; text-align: left; min-width: 0;
     }
+    .show-closed { align-self: flex-start; margin: .25rem .75rem }
+    .group-title h3 { margin: 0; padding: .4rem .75rem .125rem; font-size: .6875rem; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--mut) }
+    .empty { padding: .4rem .75rem; font-size: .75rem; color: var(--mut) }
     .row.closed { opacity: .5 }
     .row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
     .row .name { flex: 1 1 6rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
@@ -79,16 +101,36 @@ export class SessionListComponent {
   private readonly router = inject(Router);
   readonly selected = output<string>();
 
-  roots(): Session[] {
-    const sessions = this.events.sessions();
-    const sessionIds = new Set(sessions.map((s) => s.id));
-    const hasNoParent = (session: Session) => !session.parentId;
-    const isOrphanedChild = (session: Session) => !!session.parentId && !sessionIds.has(session.parentId);
-    return sessions.filter((session) => hasNoParent(session) || isOrphanedChild(session));
+  private readonly api = inject(FleetApiService);
+  protected readonly showClosed = signal(readShowClosedPreference());
+  private readonly projectNames = signal<ReadonlyMap<string, string>>(new Map());
+
+  protected readonly roots = computed(() => rootsOfSessionList(this.events.sessions(), { showClosed: this.showClosed() }));
+  protected readonly groups = computed(() => groupByProject(this.roots(), this.projectNames()));
+  protected readonly closedCount = computed(() => closedSessionCountOf(this.events.sessions()));
+  protected readonly emptyMessage = computed(() => (this.showClosed() ? 'No sessions' : 'No active sessions'));
+
+  constructor() {
+    void this.loadProjectNames();
+  }
+
+  private async loadProjectNames(): Promise<void> {
+    try {
+      const { items } = await this.api.listProjects();
+      this.projectNames.set(new Map(items.map((project) => [project.id, project.name])));
+    } catch {
+      // Group headers fall back to "Unknown project" until the next load succeeds.
+    }
+  }
+
+  protected toggleShowClosed(): void {
+    const showClosed = !this.showClosed();
+    this.showClosed.set(showClosed);
+    writeShowClosedPreference(showClosed);
   }
 
   childrenOf(parentId: string): Session[] {
-    return this.events.sessions().filter((s) => s.parentId === parentId);
+    return childrenOfInList(this.events.sessions(), parentId, { showClosed: this.showClosed() });
   }
 
   visibleNameOf(session: Session): string {
