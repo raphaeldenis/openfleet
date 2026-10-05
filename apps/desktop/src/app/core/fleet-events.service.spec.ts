@@ -412,6 +412,15 @@ describe('FleetEventsService managers', () => {
     expect(service.managers()).toEqual([manager('m1', { nextPulseAt: 'later', childrenCount: 1 })]);
   });
 
+  it('upserts on manager.updated, so an edit shows the new next pulse', async () => {
+    const service = new FleetEventsService();
+    await service.connect();
+    const socket = FakeWebSocket.instances[0]!;
+    socket.dispatchMessage({ type: 'snapshot', sessions: [], approvals: [], managers: [manager('m1', { nextPulseAt: 'in an hour' })] });
+    socket.dispatchMessage({ type: 'manager.updated', manager: manager('m1', { nextPulseAt: 'in five minutes' }) });
+    expect(service.managers()).toEqual([manager('m1', { nextPulseAt: 'in five minutes' })]);
+  });
+
   it('adds a manager announced by manager.pulsed that the client has not seen before, instead of dropping the event', async () => {
     const service = new FleetEventsService();
     await service.connect();

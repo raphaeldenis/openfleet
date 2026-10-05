@@ -272,6 +272,7 @@ export class FleetEventsService {
       case 'approval.resolved': return this.approvals.update((all) => all.filter((a) => a.id !== event.approval.id));
       case 'manager.created': return this.upsertManager(event.manager);
       case 'manager.pulsed': return this.upsertManager(event.manager);
+      case 'manager.updated': return this.upsertManager(event.manager);
       case 'error': return this.recordBackgroundFailure(event);
       case 'daemon.issues': return this.daemonIssues.set(event.issues);
       case 'permission.silent_blocks': return this.reportSilentBlocks(event.blocks);

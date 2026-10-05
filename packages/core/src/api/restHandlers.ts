@@ -1,5 +1,5 @@
 import type { CloseHandoffResult, ManagerSpec, SessionSpec } from '@openfleet/shared';
-import { CloseSessionRequestSchema, ModelIdSchema, OpenFleetError, PERMISSION_MODES, SessionSpecSchema } from '@openfleet/shared';
+import { CloseSessionRequestSchema, ModelIdSchema, OpenFleetError, PERMISSION_MODES, ReopenRequestSchema, SessionSpecSchema, UpdateManagerSchema } from '@openfleet/shared';
 import { z } from 'zod';
 import type { ApprovalService } from '../governance/approvalService.js';
 import type { FakeHandle } from '../harness/fakeHarness.js';
@@ -72,6 +72,19 @@ export function registerRestRoutes(router: Router, deps: { sessions: SessionServ
     json(res, 200, result.coalesced ? { pulsed: false, coalesced: true } : { pulsed: true });
   });
 
+  router.add('GET', '/api/managers/:id', ({ res, params }) => {
+    const profile = deps.managers.profile(params.id!);
+    if (!profile) throw notFound('manager');
+    json(res, 200, profile);
+  });
+
+  router.add('PATCH', '/api/managers/:id', ({ res, params, body }) => {
+    if (!deps.managers.get(params.id!)) throw notFound('manager');
+    const { model, ...managerFields } = UpdateManagerSchema.parse(body);
+    const patch = model === undefined ? managerFields : { ...managerFields, model: resolveModel(deps.modelTable, model) };
+    json(res, 200, deps.managers.update(params.id!, patch));
+  });
+
   router.add('PATCH', '/api/sessions/:id', ({ res, params, body }) => {
     requireSession(params.id!);
     const patch = RenameSessionSchema.parse(body);
@@ -84,9 +97,10 @@ export function registerRestRoutes(router: Router, deps: { sessions: SessionServ
     json(res, 200, deps.sessions.sendMessage({ sessionId: params.id!, body: text, messageId }));
   });
 
-  router.add('POST', '/api/sessions/:id/reopen', ({ res, params }) => {
+  router.add('POST', '/api/sessions/:id/reopen', ({ res, params, body }) => {
     requireSession(params.id!);
-    json(res, 200, deps.sessions.reopen(params.id!));
+    const { mode } = ReopenRequestSchema.parse(body ?? {});
+    json(res, 200, deps.sessions.reopen(params.id!, { mode }));
   });
 
   router.add('POST', '/api/sessions/:id/permission-mode', ({ res, params, body }) => {

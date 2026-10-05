@@ -41,7 +41,14 @@ async function renderDashboard({ session = MANAGER_SESSION, getHandoffPreview = 
     providers: [
       provideRouter([]),
       { provide: ActivatedRoute, useValue: { paramMap: managerId.pipe(map((id) => convertToParamMap({ id }))) } },
-      { provide: FleetApiService, useValue: { pulseNow: vi.fn(), getHandoffPreview } },
+      {
+        provide: FleetApiService,
+        useValue: {
+          pulseNow: vi.fn(), getHandoffPreview,
+          getManagerProfile: vi.fn().mockResolvedValue({ manager: MANAGER_VIEW, scapeImport: 'not_imported' }),
+          listProjects: vi.fn().mockResolvedValue({ items: [], total: 0, limit: 200, offset: 0 }),
+        },
+      },
       {
         provide: FleetEventsService,
         useValue: {

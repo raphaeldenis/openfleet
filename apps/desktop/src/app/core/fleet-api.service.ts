@@ -2,11 +2,12 @@ import { Injectable } from '@angular/core';
 import { DIAGNOSTICS_PATH, isErrorEnvelope } from '@openfleet/shared';
 import type {
   Approval, CloseHandoffResult, CloseSessionRequest, CreateNoteRequest, CreateProjectRequest, DataStore, DataStoreDetail, DiagnosticsDocument, DsRow, DsRowHistoryEntry, DsView, ErrorEnvelope, HandoffPreview, HandoffSummary, HandoffTarget, HarnessId, NoteSummary,
-  NoteVersionSummary, NoteView, OrderTerm, Page, PermissionMode, Project, RestoreNoteRequest, Session, SessionSpec, SessionTodos,
-  UpdateNoteRequest, UpdateProjectRequest, WhereClause,
+  ManagerProfile, ManagerView, NoteVersionSummary, NoteView, OrderTerm, Page, PermissionMode, Project, ReopenMode, RestoreNoteRequest, Session, SessionSpec, SessionTodos,
+  UpdateManager, UpdateNoteRequest, UpdateProjectRequest, WhereClause,
 } from '@openfleet/shared';
 import { environment } from '../../environments/environment';
 import { parseCloseHandoffResult, parseHandoffPreview, parseHandoffTarget } from './handoff-response-parser';
+import { parseManagerProfile } from './manager-profile-parser';
 import { parseProject } from './project-response-parser';
 import { parseSessionTodos } from './session-todos-parser';
 
@@ -132,7 +133,14 @@ export class FleetApiService {
   updateModel(id: string, model: string) { return this.post<{ status: 'relaunching' | 'deferred' }>(`/api/sessions/${id}/model`, { model }); }
   updatePermissionMode(id: string, mode: PermissionMode) { return this.post<{ status: 'relaunching' | 'deferred' }>(`/api/sessions/${id}/permission-mode`, { mode }); }
   renameSession(id: string, patch: { name?: string; emoji?: string }) { return this.patch<Session>(`/api/sessions/${id}`, patch); }
-  reopenSession(id: string) { return this.post<Session>(`/api/sessions/${id}/reopen`, {}); }
+  reopenSession(id: string, mode: ReopenMode = 'resume') { return this.post<Session>(`/api/sessions/${id}/reopen`, { mode }); }
+  async getManagerProfile(id: string): Promise<ManagerProfile> {
+    const path = `/api/managers/${encodeURIComponent(id)}`;
+    const profile = parseManagerProfile(await this.call<unknown>(path));
+    if (!profile) throw new ApiError(200, `GET ${path} → unreadable manager profile`);
+    return profile;
+  }
+  updateManager(id: string, patch: UpdateManager) { return this.patch<ManagerView>(`/api/managers/${encodeURIComponent(id)}`, patch); }
   async getSessionTodos(id: string): Promise<SessionTodos> {
     const path = `/api/sessions/${encodeURIComponent(id)}/todos`;
     const todos = parseSessionTodos(await this.call<unknown>(path));

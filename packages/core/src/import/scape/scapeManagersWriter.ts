@@ -13,7 +13,7 @@ import { reconcileRecord, type RecordValues, type UpsertOutcome } from './scapeT
 const MANAGER_EMOJI = '🤖';
 const STORED_MANAGER_STATE = 'closed';
 
-interface Repositories { sessions: SessionRepository; managers: ManagerRepository }
+export interface Repositories { sessions: SessionRepository; managers: ManagerRepository }
 
 function insertManager(db: DatabaseSync, repositories: Repositories, planned: PlannedManager): void {
   const { session, manager } = planned;
@@ -41,7 +41,7 @@ function plannedValuesOf(planned: PlannedManager): RecordValues {
   return ownedValuesOf({ ...planned.manager, model: planned.session.model });
 }
 
-function storedValuesOf(repositories: Repositories, id: string): RecordValues | undefined {
+export function storedValuesOf(repositories: Repositories, id: string): RecordValues | undefined {
   const storedSession = repositories.sessions.get(id);
   const storedManager = repositories.managers.get(id);
   const isTheImportedManager = storedSession?.role === MANAGER_ROLE && storedManager !== undefined;

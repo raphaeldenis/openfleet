@@ -1,7 +1,7 @@
 import { accessSync, closeSync, constants, existsSync, lstatSync, openSync, readSync, realpathSync, statSync, type Stats } from 'node:fs';
 import { basename, dirname, isAbsolute, join, normalize, sep } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import { MAX_MISSION_BYTES, OpenFleetError, type ErrorCode, type ErrorEnvelope, type PermissionMode, type Session, type SessionCloseReason, type SessionSpec } from '@openfleet/shared';
+import { MANAGER_ROLE, MAX_MISSION_BYTES, OpenFleetError, type ReopenMode, type ErrorCode, type ErrorEnvelope, type PermissionMode, type Session, type SessionCloseReason, type SessionSpec } from '@openfleet/shared';
 import { carryLoggedRef, rememberLoggedRef } from '../errors/loggedRef.js';
 import { EventBus } from '../events/eventBus.js';
 import { createWorktree } from '../git/worktrees.js';
@@ -75,7 +75,7 @@ export class TooManyPendingMessagesError extends Error {
 }
 
 export class SessionReopenError extends Error {
-  constructor(public readonly code: 'not_closed' | 'directory_missing' | 'directory_changed' | 'directory_unreadable' | 'launch_failed', message: string) {
+  constructor(public readonly code: 'not_closed' | 'directory_missing' | 'directory_changed' | 'directory_unreadable' | 'launch_failed' | 'not_a_manager' | 'mission_missing' | 'mission_too_large', message: string) {
     super(message);
   }
 }
@@ -646,6 +646,18 @@ export class SessionService {
     return this.relaunchOrDefer(sessionId, session.state);
   }
 
+  // A closed session has no process to relaunch: its next launch takes the model. A live one goes through updateModel.
+  changeModel(sessionId: string, model: string): void {
+    const session = this.require(sessionId);
+    const isLive = session.state !== 'closed';
+    if (isLive) {
+      this.updateModel(sessionId, model);
+      return;
+    }
+    this.repo.setModel(sessionId, model);
+    this.deps.bus.emit({ type: 'session.model_changed', sessionId, model });
+  }
+
   // Same relaunch machinery as updateModel: the mode is only picked up on the next --resume launch
   // (resolveResumePermissionMode), never typed into the terminal, so a busy session defers it instead.
   updatePermissionMode(sessionId: string, mode: PermissionMode): { status: 'relaunching' | 'deferred' } {
@@ -691,16 +703,19 @@ export class SessionService {
   // been removed (e.g. its worktree was cleaned up) rather than launching into a missing cwd, whose
   // directory now resolves somewhere else than it did when the session was created, or whose harness fails
   // to launch — the last leaves the session closed rather than reporting a fake success.
-  reopen(sessionId: string): Session {
+  // `fresh` (managers only) starts a new conversation seeded with the whole mission instead of resuming the stored one.
+  reopen(sessionId: string, { mode = 'resume' }: { mode?: ReopenMode } = {}): Session {
     this.assertNotShuttingDown();
     const session = this.require(sessionId);
     if (session.state !== 'closed') throw new SessionReopenError('not_closed', `session ${sessionId} is not closed`);
+    const isFresh = mode === 'fresh';
+    if (isFresh) this.assertMissionSeedable(session);
     this.assertDirectoryLaunchable(session);
     // Consumed with the 'starting' transition, like a boot resume: a failed launch then closes the row afresh and no boot retries it.
     const isClosedByShutdown = this.repo.wasClosedByDaemonShutdown(sessionId);
     const reopenedAt = new Date().toISOString();
     const reopenEventId = isClosedByShutdown ? this.repo.reopenFromShutdownClose(sessionId, reopenedAt) : this.repo.recordReopen(sessionId, reopenedAt);
-    const outcome = this.resumeOne(session);
+    const outcome = this.resumeOne(session, { isConversationFresh: isFresh });
     if (!outcome.launched) {
       this.removeReopenRecord({ sessionId, reopenEventId });
       if (isNamedLaunchFailure(outcome.failure)) throw outcome.failure;
@@ -710,6 +725,14 @@ export class SessionService {
     }
     this.deps.bus.emit({ type: 'session.reopened', sessionId });
     return this.repo.get(sessionId)!;
+  }
+
+  private assertMissionSeedable(session: Session): void {
+    if (session.role !== MANAGER_ROLE) throw new SessionReopenError('not_a_manager', `session ${session.id} is not a manager`);
+    const mission = this.deps.missionOf?.(session.id)?.trim();
+    if (!mission) throw new SessionReopenError('mission_missing', `manager ${session.id} has no mission to start from`);
+    const isAboveMaximum = Buffer.byteLength(mission, 'utf8') > MAX_MISSION_BYTES;
+    if (isAboveMaximum) throw new SessionReopenError('mission_too_large', `the mission of manager ${session.id} is above ${MAX_MISSION_BYTES} bytes`);
   }
 
   // Every launch of a closed or interrupted row (reopen and boot resume) passes this: the directory exists, still
@@ -1898,7 +1921,7 @@ export class SessionService {
 
   // Boot resume and reopen both call this, but only reopen acts on the outcome: boot resume keeps its
   // existing "log and mark closed" behaviour for one bad row so the rest of the fleet still comes up.
-  private resumeOne(session: Session): { launched: true } | { launched: false; reason: string; failure?: unknown } {
+  private resumeOne(session: Session, { isConversationFresh = false }: { isConversationFresh?: boolean } = {}): { launched: true } | { launched: false; reason: string; failure?: unknown } {
     this.assertNotShuttingDown();
     const tokens = this.repo.tokens(session.id);
     if (!tokens) return { launched: false, reason: 'session has no stored tokens' }; // defensive: every session row carries its tokens
@@ -1925,7 +1948,7 @@ export class SessionService {
     let handle: HarnessHandle;
     let isNewConversationAnnounced = false;
     try {
-      const conversation = this.conversationToLaunch(session, harness);
+      const conversation = isConversationFresh ? { cliSessionId: newId(), isResumed: false, isNewConversationAnnounced: false } : this.conversationToLaunch(session, harness);
       const seededPrompt = conversation.isResumed ? undefined : this.missionToSeed(session.id);
       handle = harness.start({
         sessionId: session.id,
@@ -1941,6 +1964,7 @@ export class SessionService {
         resuming: conversation.isResumed,
       });
       isNewConversationAnnounced = conversation.isNewConversationAnnounced;
+      if (isConversationFresh) this.rememberFreshConversation(session.id, conversation.cliSessionId);
     } catch (err) {
       // The launch builder refuses to resume with a missing/invalid session id (it would otherwise open
       // the CLI's interactive picker inside the PTY) — close this one row and keep resuming the rest of
@@ -2000,6 +2024,11 @@ export class SessionService {
     this.repo.setCurrentConversationPrompted(session.id, false);
     log('warn', `resume: conversation not found: session ${session.id}, missing ${currentCliSessionId}, started ${freshCliSessionId}`);
     return { cliSessionId: freshCliSessionId, isResumed: false, isNewConversationAnnounced: true };
+  }
+
+  private rememberFreshConversation(sessionId: string, cliSessionId: string): void {
+    this.repo.setCliSessionId(sessionId, cliSessionId);
+    this.repo.setCurrentConversationPrompted(sessionId, false);
   }
 
   // A failing listener (e.g. a WS client on a closing socket) must not undo a launch that already happened.

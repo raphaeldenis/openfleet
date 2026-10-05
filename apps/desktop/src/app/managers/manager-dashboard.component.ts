@@ -2,16 +2,19 @@ import { ChangeDetectionStrategy, Component, DestroyRef, ElementRef, Injector, c
 import { toSignal } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, Router } from '@angular/router';
 import { map } from 'rxjs';
-import { MANAGER_ROLE, type ManagerView, type Session } from '@openfleet/shared';
+import { MANAGER_ROLE, type ManagerView, type ReopenMode, type Session } from '@openfleet/shared';
 import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { showInvisibleControlsAsEscapes } from '../core/bidi-escapes';
+import { ErrorLineComponent } from '../design/error-line.component';
 import { StateChipComponent } from '../design/state-chip.component';
 import { PulseRingComponent } from '../design/pulse-ring.component';
 import { restoreFocusWhenFree } from '../sessions/handoff/handoff-focus';
 import { HandoffPreviewHostComponent } from '../sessions/handoff/handoff-preview-host.component';
 import { OverdueChipComponent } from '../working-state/overdue-chip.component';
 import { countdownLabel, countdownSecondsUntil } from './manager-countdown';
+import { ManagerProfileComponent } from './manager-profile.component';
+import { ManagerReopenAction } from './manager-reopen';
 import { PulseNowAction } from './pulse-now';
 
 const HANDOFF_TARGET_AVAILABLE_HINT = 'Saved handoffs appear in Notes › handoffs and in the New-session picker.';
@@ -19,7 +22,7 @@ const HANDOFF_TARGET_AVAILABLE_HINT = 'Saved handoffs appear in Notes › handof
 @Component({
   selector: 'of-manager-dashboard',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [StateChipComponent, PulseRingComponent, OverdueChipComponent, HandoffPreviewHostComponent],
+  imports: [StateChipComponent, PulseRingComponent, OverdueChipComponent, HandoffPreviewHostComponent, ErrorLineComponent, ManagerProfileComponent],
   template: `
     @if (!hasSnapshot()) {
       <p class="state-message" data-testid="manager-dashboard-loading">Loading…</p>
@@ -79,6 +82,28 @@ const HANDOFF_TARGET_AVAILABLE_HINT = 'Saved handoffs appear in Notes › handof
             [attr.aria-controls]="handoffPanelId"
             (click)="toggleHandoff()"
           >Write handoff</button>
+          <button
+            type="button"
+            class="of-btn of-btn--secondary"
+            data-testid="manager-dashboard-reopen"
+            title="Start a new conversation from the manager's mission"
+            [disabled]="isReopenUnavailable()"
+            (click)="reopen('fresh')"
+          >Reopen</button>
+          <button
+            type="button"
+            class="of-btn of-btn--secondary"
+            data-testid="manager-dashboard-resume"
+            title="Go back into the manager's previous conversation"
+            [disabled]="isReopenUnavailable()"
+            (click)="reopen('resume')"
+          >Resume</button>
+          @if (!isSessionClosed()) {
+            <span class="reopen-hint">This manager is running — close it to reopen or resume it.</span>
+          }
+          @if (reopening.errorText(); as errorText) {
+            <of-error-line role="alert" data-testid="manager-dashboard-reopen-error">{{ errorText }}</of-error-line>
+          }
           @if (displayedPulseMessage(); as message) {
             <span
               data-testid="manager-dashboard-pulse-message"
@@ -91,6 +116,8 @@ const HANDOFF_TARGET_AVAILABLE_HINT = 'Saved handoffs appear in Notes › handof
             <of-handoff-preview [sessionId]="session.id" density="roomy" subject="manager" [targetAvailableHint]="handoffTargetAvailableHint" (dismissed)="closeHandoff()" />
           </div>
         }
+
+        <of-manager-profile [session]="session" />
 
         <section class="children">
           <div class="section-head">
@@ -143,6 +170,7 @@ const HANDOFF_TARGET_AVAILABLE_HINT = 'Saved handoffs appear in Notes › handof
       border: 1px solid var(--line-2); color: var(--mut); font-size: .6875rem;
     }
     .meta-line { font-size: .75rem; color: var(--mut) }
+    .reopen-hint { font-size: .75rem; color: var(--mut) }
     .cap { display: flex; flex-direction: column; gap: .25rem; width: 8rem; font-size: .6875rem; color: var(--mut) }
     .cap-bar { height: .375rem; border-radius: .25rem; background: var(--sunk); overflow: hidden }
     .cap-bar-fill { height: 100%; background: var(--accent) }
@@ -170,7 +198,9 @@ export class ManagerDashboardComponent {
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
   private readonly events = inject(FleetEventsService);
-  protected readonly pulse = new PulseNowAction(inject(FleetApiService));
+  private readonly api = inject(FleetApiService);
+  protected readonly pulse = new PulseNowAction(this.api);
+  protected readonly reopening = new ManagerReopenAction(this.api);
   private readonly managerId = toSignal(this.route.paramMap.pipe(map((params) => params.get('id') ?? '')), { initialValue: '' });
   private readonly now = signal(Date.now());
 
@@ -182,6 +212,7 @@ export class ManagerDashboardComponent {
     effect(() => {
       this.managerId();
       this.pulse.reset();
+      this.reopening.reset();
     });
     // The same reuse must not leave the preview of one manager over another.
     effect(() => {
@@ -249,6 +280,12 @@ export class ManagerDashboardComponent {
     if (!manager || manager.childrenCap <= 0) return 0;
     return Math.min(100, (this.children().length / manager.childrenCap) * 100);
   });
+
+  protected readonly isReopenUnavailable = computed(() => this.reopening.pending() || !this.isSessionClosed());
+
+  protected reopen(mode: ReopenMode): void {
+    void this.reopening.run({ sessionId: this.managerId(), mode });
+  }
 
   pulseNow(): void {
     void this.pulse.run(this.managerId());

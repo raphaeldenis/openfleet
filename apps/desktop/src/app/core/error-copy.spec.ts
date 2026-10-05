@@ -121,7 +121,7 @@ describe('copyFor', () => {
   });
 
   describe('the retry of the envelope decides the ending of every action', () => {
-    const ACTIONS = ['generic', 'send', 'create_session', 'create_manager', 'resume', 'rename', 'close', 'load_handoff', 'save_handoff', 'save_project'] as const;
+    const ACTIONS = ['generic', 'send', 'create_session', 'create_manager', 'resume', 'rename', 'close', 'load_handoff', 'save_handoff', 'save_project', 'reopen_manager', 'save_manager'] as const;
     const RETRIES = ['never', 'later', 'after_refresh'] as const;
     const wordsOfEnvelope = (code: ErrorCode, retry: ErrorEnvelope['retry'], action: (typeof ACTIONS)[number]) => {
       const envelope = envelopeOf(code, { retry, ...(ERROR_CODES[code].kind === 'internal' && { id: '3f9a1c2e' }) });
@@ -139,8 +139,8 @@ describe('copyFor', () => {
         return problems.map((problem) => `${code}: ${problem} — "${text}"`);
       });
 
-    it('covers every code, action and retry once (1890 cases)', () => {
-      expect(ALL_CODES.length * ACTIONS.length * RETRIES.length).toBe(1890);
+    it('covers every code, action and retry once (2340 cases)', () => {
+      expect(ALL_CODES.length * ACTIONS.length * RETRIES.length).toBe(2340);
     });
 
     describe.each(ACTIONS)('the action %s', (action) => {

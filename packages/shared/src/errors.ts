@@ -60,6 +60,9 @@ export const ERROR_CODES = {
   children_cap: { kind: 'conflict', retry: 'later' },
   outside_lineage: { kind: 'conflict', retry: 'never' },
   not_a_manager: { kind: 'conflict', retry: 'never' },
+  // Editing the mission on the manager's profile fixes either one: the same reopen then succeeds.
+  mission_missing: { kind: 'conflict', retry: 'never' },
+  mission_too_large: { kind: 'conflict', retry: 'never' },
   directory_in_use: { kind: 'conflict', retry: 'never' },
   duplicate_child: { kind: 'conflict', retry: 'never' },
   no_parent: { kind: 'conflict', retry: 'never' },

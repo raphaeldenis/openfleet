@@ -15,7 +15,7 @@ function setup() {
   const bus = new EventBus();
   const sessions = new SessionService({ db, bus, harnesses: [new FakeHarness()], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
   const managerRepo = new ManagerRepository(db);
-  const scheduler = { onManagerCreated: vi.fn(), pulseNow: vi.fn(), start: vi.fn(), stop: vi.fn() };
+  const scheduler = { onManagerCreated: vi.fn(), onManagerUpdated: vi.fn(), pulseNow: vi.fn(), start: vi.fn(), stop: vi.fn() };
   const service = new ManagerService({ managers: managerRepo, sessions, bus, scheduler });
   return { db, bus, sessions, managerRepo, scheduler, service };
 }
@@ -88,7 +88,7 @@ describe('ManagerService.createManagerSession — worktrees', () => {
     const bus = new EventBus();
     const sessions = new SessionService({ db, bus, harnesses: [new FakeHarness()], baseUrl: 'http://127.0.0.1:7331', worktreesRoot });
     const managerRepo = new ManagerRepository(db);
-    const scheduler = { onManagerCreated: vi.fn(), pulseNow: vi.fn(), start: vi.fn(), stop: vi.fn() };
+    const scheduler = { onManagerCreated: vi.fn(), onManagerUpdated: vi.fn(), pulseNow: vi.fn(), start: vi.fn(), stop: vi.fn() };
     const service = new ManagerService({ managers: managerRepo, sessions, bus, scheduler });
 
     const session = await service.createManagerSession({
@@ -98,6 +98,51 @@ describe('ManagerService.createManagerSession — worktrees', () => {
 
     expect(session.directory).toBe(join(worktreesRoot, 'task-CCM-6'));
     expect(session.role).toBe('manager');
+  });
+});
+
+describe('ManagerService.update', () => {
+  async function aManager() {
+    const world = setup();
+    const session = await world.service.createManagerSession({
+      directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake',
+      manager: { pulseSeconds: 600, childrenCap: 4, mission: 'Ship phase 2' },
+    } as never);
+    return { ...world, managerId: session.id };
+  }
+
+  it('persists the edited pulse, cap and mission, and keeps the fields it was not given', async () => {
+    const { service, managerRepo, managerId } = await aManager();
+
+    service.update(managerId, { pulseSeconds: 300, childrenCap: 8 });
+    service.update(managerId, { mission: 'Ship phase 3' });
+
+    expect(managerRepo.get(managerId)).toMatchObject({ pulseSeconds: 300, childrenCap: 8, missionText: 'Ship phase 3' });
+  });
+
+  it('announces the edited manager to the clients', async () => {
+    const { service, bus, managerId } = await aManager();
+    const events: unknown[] = [];
+    bus.subscribe((event) => events.push(event));
+
+    service.update(managerId, { childrenCap: 8 });
+
+    expect(events).toContainEqual({ type: 'manager.updated', manager: expect.objectContaining({ sessionId: managerId, childrenCap: 8, pulseSeconds: 600 }) });
+  });
+
+  it('tells the pulse scheduler about the new cadence', async () => {
+    const { service, scheduler, managerRepo, managerId } = await aManager();
+
+    service.update(managerId, { pulseSeconds: 300 });
+
+    expect(scheduler.onManagerUpdated).toHaveBeenCalledWith(expect.objectContaining({ sessionId: managerId, pulseSeconds: 300 }));
+    expect(managerRepo.get(managerId)?.pulseSeconds).toBe(300);
+  });
+
+  it('answers nothing for a session that is no manager', () => {
+    const { service } = setup();
+
+    expect(service.update('nobody', { childrenCap: 2 })).toBeUndefined();
   });
 });
 
