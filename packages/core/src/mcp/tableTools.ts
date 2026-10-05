@@ -6,6 +6,7 @@ import { InvalidColumnDefinitionError, SAVE_MODES, type DataStoreService } from 
 import { guardedFor, refusalReasonOf, refuse, truncateToByteBudget } from './toolResults.js';
 import { cellsKeyedByColumnId, coerceFilterValue, columnLookupFor, requireColumn } from './rowValues.js';
 import { writeRowByRow, type RowBatchReport } from './rowBatch.js';
+import { AggregateSchema, aggregatedRows } from './queryAggregation.js';
 import { orderTermsOf, QueryOrderTermSchema, QueryWhereClauseSchema, whereClausesOf } from './queryArguments.js';
 import { cellReaderFor, columnarRowView, columnView, rowView, storeView } from './toolViews.js';
 
@@ -202,6 +203,8 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
       + 'select is another name for columns (pass one of them). store is its id or display name. '
       + 'where [{column, op, value}] and order_by [{column, dir}] name a column by id or display name (any case; columnId stays accepted); op is eq, ne (or neq), gt, gte, lt, lte, contains, or in (value is a list). '
       + 'A select column compares by option label (any case) or id, a numeric string is read as a number, and a select cell is returned as its option label. '
+      + 'group_by [column, ...] and aggregates [{op, column?, as?}] return one row per group instead of the rows: {group columns by display name, then each aggregate under its alias} '
+      + '(op count, sum, avg, min, max; count without column counts the rows, count with a column its non-empty cells; sum and avg need a number column; the alias defaults to count or op_ColumnName; with no aggregate the rows are counted; limit caps the groups; not combinable with format, select or columns). '
       + 'include_updated_at false drops updatedAt from every row. Unknown arguments are ignored',
     inputSchema: {
       store: z.string().min(1),
@@ -211,21 +214,31 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
       format: z.enum(['rows', 'columnar']).optional(),
       columns: z.array(z.string().min(1)).optional(),
       select: z.array(z.string().min(1)).optional(),
+      group_by: z.array(z.string().min(1)).optional(),
+      aggregates: z.array(AggregateSchema).optional(),
       include_updated_at: z.boolean().optional(),
     },
-  }, async ({ store, where, order_by, limit, format, columns, select, include_updated_at }) => {
+  }, async ({ store, where, order_by, limit, format, columns, select, group_by, aggregates, include_updated_at }) => {
     const scope = requireProject();
     if (!scope) return refuse('project_not_found', 'this session has no project');
     if (columns !== undefined && select !== undefined) return refuse('invalid_body', 'pass either select or columns, not both');
     const requestedColumns = columns ?? select;
+    const isAggregation = group_by !== undefined || aggregates !== undefined;
+    const shapesRowsItself = format !== undefined || requestedColumns !== undefined;
+    if (isAggregation && shapesRowsItself) return refuse('invalid_body', 'group_by and aggregates return one row per group, so they cannot be combined with format, select or columns');
     return guarded(() => {
       const ownStore = ownStoreOf(store, scope);
       const storeColumns = storeRepo.listColumns(ownStore.id);
-      const rows = stores.query(ownStore.id, {
-        ...scope, where: whereClausesOf(storeColumns, where ?? []), orderBy: orderTermsOf(storeColumns, order_by ?? []), limit: limit ?? DEFAULT_QUERY_LIMIT,
-      });
-      const includeUpdatedAt = include_updated_at ?? true;
       const cellOf = cellReaderFor(storeColumns);
+      const rows = stores.query(ownStore.id, {
+        ...scope, where: whereClausesOf(storeColumns, where ?? []), orderBy: orderTermsOf(storeColumns, order_by ?? []), limit: isAggregation ? undefined : limit ?? DEFAULT_QUERY_LIMIT,
+      });
+      if (isAggregation) {
+        const groups = aggregatedRows({ columns: storeColumns, rows, groupBy: group_by ?? [], aggregates: aggregates ?? [], cellOf }).slice(0, limit ?? DEFAULT_QUERY_LIMIT);
+        const { items, truncated } = truncateToByteBudget(groups, MAX_QUERY_RESULT_BYTES);
+        return { rows: items, truncated, count: items.length };
+      }
+      const includeUpdatedAt = include_updated_at ?? true;
       const isColumnar = format === 'columnar';
       if (isColumnar) {
         const dataColumns = resolveColumns(ownStore.id, requestedColumns);
