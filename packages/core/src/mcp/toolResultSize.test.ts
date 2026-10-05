@@ -553,9 +553,9 @@ describe('MCP tool results are compact', () => {
         const asObjects = parsed(await call('query_data_store', { store: storeId }));
 
         expect(columnar).toEqual({
-          columns: ['id', 'updatedAt', ...columnIds], names: ['id', 'updatedAt', 'title', 'points', 'due', 'extra', 'status'], rows: [], truncated: false, count: 0,
+          columns: ['id', 'updatedAt', ...columnIds], names: ['id', 'updatedAt', 'title', 'points', 'due', 'extra', 'status'], rows: [], truncated: false, count: 0, total: 0, next_offset: null,
         });
-        expect(asObjects).toEqual({ rows: [], truncated: false, count: 0 });
+        expect(asObjects).toEqual({ rows: [], truncated: false, count: 0, total: 0, next_offset: null });
       });
 
       it('agent selects columns by id or by name, in the order asked, in both formats', async () => {

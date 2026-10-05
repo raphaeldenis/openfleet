@@ -106,9 +106,9 @@ describe('finding a row by natural key', () => {
   });
 
   it('refuses a key held by several rows', () => {
-    const { service, store, idColumn } = setup();
+    const { repo, service, store, idColumn } = setup();
     service.setNaturalKey(store.id, { ...scope, columnId: idColumn.id });
-    service.insertRows(store.id, { ...scope, actor: human, items: [{ [idColumn.id]: 'IT-1' }, { [idColumn.id]: 'IT-1' }] });
+    for (const id of ['legacy-first', 'legacy-second']) repo.insertRow(store.id, { id, actor: human, at: '2026-01-01T00:00:00.000Z', data: { [idColumn.id]: 'IT-1' } });
 
     const findDuplicated = () => service.findRowByNaturalKey(store.id, { ...scope, key: 'IT-1' });
 

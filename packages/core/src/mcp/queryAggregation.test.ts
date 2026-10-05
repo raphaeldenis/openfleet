@@ -25,6 +25,40 @@ async function backlogOfFourRows() {
 }
 
 describe('query_data_store group_by and aggregates', () => {
+  it('refuses overflowing sums explicitly and keeps a finite average of large finite cells', async () => {
+    const { json: store } = await kit.call('create_data_store', { display_name: 'Large numbers' });
+    await kit.call('add_data_store_column', { store: store.id, display_name: 'Amount', column_type: 'number' });
+    await kit.call('insert_data_store_rows', { store: store.id, rows: [{ Amount: 1e308 }, { Amount: 1e308 }] });
+
+    const sum = await kit.call('query_data_store', { store: store.id, aggregates: [{ op: 'sum', column: 'Amount' }] });
+    const average = await kit.call('query_data_store', { store: store.id, aggregates: [{ op: 'avg', column: 'Amount' }] });
+
+    expect(sum.isError).toBe(true);
+    expect(sum.text).toMatch(/invalid_body/);
+    expect(sum.text).toMatch(/finite/i);
+    expect(average.json.rows).toEqual([{ avg_Amount: 1e308 }]);
+  });
+  it('returns zero and null aggregates for an empty ungrouped store and no grouped rows', async () => {
+    const { json: store } = await kit.call('create_data_store', { display_name: 'Empty' });
+    await kit.call('add_data_store_column', { store: store.id, display_name: 'Points', column_type: 'number' });
+    const aggregates = ['count', 'sum', 'avg', 'min', 'max'].map((op) => ({ op, column: 'Points' }));
+
+    const ungrouped = await kit.call('query_data_store', { store: store.id, aggregates });
+    const grouped = await kit.call('query_data_store', { store: store.id, aggregates, group_by: ['Points'] });
+
+    expect(ungrouped.json.rows).toEqual([{ count_Points: 0, sum_Points: 0, avg_Points: null, min_Points: null, max_Points: null }]);
+    expect(grouped.json.rows).toEqual([]);
+  });
+  it('counts non-empty select and json cells', async () => {
+    const store = await backlogOfFourRows();
+    await kit.call('add_data_store_column', { store, display_name: 'Metadata', column_type: 'json' });
+    await kit.call('insert_data_store_rows', { store, rows: [{ Metadata: { active: true } }] });
+
+    const result = await kit.call('query_data_store', { store, aggregates: [{ op: 'count', column: 'Status' }, { op: 'count', column: 'Metadata' }] });
+
+    expect(result.isError).toBe(false);
+    expect(result.json.rows).toEqual([{ count_Status: 3, count_Metadata: 1 }]);
+  });
   it('counts the rows of each group, naming a select group by its label', async () => {
     const storeId = await backlogOfFourRows();
 
