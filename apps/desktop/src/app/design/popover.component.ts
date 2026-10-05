@@ -6,6 +6,7 @@ export type PopoverTone = 'neutral' | 'danger';
 const INITIAL_FOCUS_SELECTOR = '[data-initial-focus]';
 const FOCUSABLE_SELECTOR = 'button:not(:disabled), input:not(:disabled), select:not(:disabled), [href]';
 const OUTLET_MARGIN = 8;
+const BOUNDARY_SELECTOR = 'main, aside';
 
 function focusInitialElementOf(panel: HTMLElement): void {
   const initialElement = panel.querySelector<HTMLElement>(INITIAL_FOCUS_SELECTOR);
@@ -20,6 +21,7 @@ function nextIndexInCycle({ currentIndex, count, isBackwards }: { currentIndex: 
 /**
  * A trigger button that opens a panel under it. The panel template is the single projected `<ng-template>`.
  * Escape closes the panel and returns focus to the trigger, a click outside closes it, and an alert dialog panel traps Tab.
+ * The panel stays inside the nearest `main` or `aside` (the outlet or the right panel), whichever holds the trigger.
  * The element marked `data-initial-focus` inside the panel receives focus when the panel opens.
  */
 @Component({
@@ -116,8 +118,8 @@ export class PopoverComponent {
       if (typeof ResizeObserver === 'undefined') return;
       const observer = new ResizeObserver(() => this.positionPanel());
       observer.observe(this.host.nativeElement);
-      const outlet = this.host.nativeElement.closest('main');
-      if (outlet) observer.observe(outlet);
+      const boundary = this.host.nativeElement.closest(BOUNDARY_SELECTOR);
+      if (boundary) observer.observe(boundary);
       onCleanup(() => observer.disconnect());
     });
   }
@@ -126,10 +128,9 @@ export class PopoverComponent {
     const panel = this.panel()?.nativeElement;
     if (!panel) return;
     const host = this.host.nativeElement;
-    const outlet = host.closest('main');
-    const outletBounds = outlet?.getBoundingClientRect();
-    const visibleLeft = Math.max(0, outletBounds?.left ?? 0) + OUTLET_MARGIN;
-    const visibleRight = Math.min(window.innerWidth, outletBounds?.right ?? window.innerWidth) - OUTLET_MARGIN;
+    const boundaryBounds = host.closest(BOUNDARY_SELECTOR)?.getBoundingClientRect();
+    const visibleLeft = Math.max(0, boundaryBounds?.left ?? 0) + OUTLET_MARGIN;
+    const visibleRight = Math.min(window.innerWidth, boundaryBounds?.right ?? window.innerWidth) - OUTLET_MARGIN;
     const availableWidth = visibleRight - visibleLeft;
     if (availableWidth <= 0) return;
     panel.style.maxWidth = `${availableWidth}px`;

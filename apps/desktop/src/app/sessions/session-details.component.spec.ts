@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { inputBinding, signal } from '@angular/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Session } from '@openfleet/shared';
-import { SessionHeaderComponent } from './session-header.component';
+import { SessionDetailsComponent } from './session-details.component';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
 
@@ -32,37 +32,32 @@ function providersFor(session: Session, api: ReturnType<typeof fakeApi> = fakeAp
   ];
 }
 
-async function openDetails() {
-  await userEvent.click(screen.getByRole('button', { name: 'Details' }));
-}
-
-describe('SessionHeaderComponent', () => {
+describe('SessionDetailsComponent', () => {
   beforeEach(() => localStorage.clear());
 
   it('renders the session name and state', async () => {
     const session = baseSession();
-    await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
+    await render(SessionDetailsComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
     expect((screen.getByTestId('session-name-input') as HTMLInputElement).value).toBe('Gimli · T6');
     expect(screen.getByTestId('state-chip')).toHaveTextContent('idle');
   });
 
-  it('renders the harness once the details are open', async () => {
+  it('renders the harness right away', async () => {
     const session = baseSession();
-    await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
-    await openDetails();
+    await render(SessionDetailsComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
     expect(screen.getByTestId('session-harness')).toHaveTextContent('claude-cli');
   });
 
   it('truncates a name wider than the field with an ellipsis instead of clipping it', async () => {
     const session = baseSession({ name: 'Gimli · T6 · make the desktop client reconnect to the daemon with exponential backoff' });
-    await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
+    await render(SessionDetailsComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
     expect(getComputedStyle(screen.getByTestId('session-name-input')).textOverflow).toBe('ellipsis');
   });
 
   it('renames the session when the name field is committed', async () => {
     const session = baseSession();
     const api = fakeApi({ renameSession: vi.fn().mockResolvedValue({ ...session, name: 'Gimli · T7' }) });
-    await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session, api) });
+    await render(SessionDetailsComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session, api) });
 
     const nameInput = screen.getByTestId('session-name-input') as HTMLInputElement;
     fireEvent.change(nameInput, { target: { value: 'Gimli · T7' } });
@@ -73,7 +68,7 @@ describe('SessionHeaderComponent', () => {
   it('changes the emoji when the emoji field is committed', async () => {
     const session = baseSession();
     const api = fakeApi({ renameSession: vi.fn().mockResolvedValue({ ...session, emoji: '🦉' }) });
-    await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session, api) });
+    await render(SessionDetailsComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session, api) });
 
     const emojiInput = screen.getByTestId('session-emoji-input') as HTMLInputElement;
     fireEvent.change(emojiInput, { target: { value: '🦉' } });
@@ -84,7 +79,7 @@ describe('SessionHeaderComponent', () => {
   it('does not send a request when the name field is committed unchanged', async () => {
     const session = baseSession();
     const api = fakeApi();
-    await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session, api) });
+    await render(SessionDetailsComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session, api) });
 
     const nameInput = screen.getByTestId('session-name-input') as HTMLInputElement;
     fireEvent.change(nameInput, { target: { value: session.name } });
@@ -95,7 +90,7 @@ describe('SessionHeaderComponent', () => {
   it('does not send a request when the name field is committed as whitespace only', async () => {
     const session = baseSession();
     const api = fakeApi();
-    await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session, api) });
+    await render(SessionDetailsComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session, api) });
 
     const nameInput = screen.getByTestId('session-name-input') as HTMLInputElement;
     fireEvent.change(nameInput, { target: { value: '   ' } });
@@ -106,7 +101,7 @@ describe('SessionHeaderComponent', () => {
   it('does not send a request when the emoji field is committed as whitespace only', async () => {
     const session = baseSession();
     const api = fakeApi();
-    await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session, api) });
+    await render(SessionDetailsComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session, api) });
 
     const emojiInput = screen.getByTestId('session-emoji-input') as HTMLInputElement;
     fireEvent.change(emojiInput, { target: { value: '  ' } });
@@ -118,7 +113,7 @@ describe('SessionHeaderComponent', () => {
     let resolveRename: (value: unknown) => void = () => {};
     const api = fakeApi({ renameSession: vi.fn(() => new Promise((resolve) => { resolveRename = resolve; })) });
     const session = baseSession();
-    await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session, api) });
+    await render(SessionDetailsComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session, api) });
 
     const nameInput = screen.getByTestId('session-name-input') as HTMLInputElement;
     fireEvent.change(nameInput, { target: { value: 'Gimli · T7' } });
@@ -134,7 +129,7 @@ describe('SessionHeaderComponent', () => {
     const sessionB = baseSession({ id: 's2', name: 'Legolas' });
     const currentSession = signal<Session>(sessionA);
     const api = fakeApi({ renameSession: vi.fn().mockRejectedValue(new Error('boom')) });
-    await render(SessionHeaderComponent, { bindings: [inputBinding('session', currentSession)], providers: providersFor(sessionA, api) });
+    await render(SessionDetailsComponent, { bindings: [inputBinding('session', currentSession)], providers: providersFor(sessionA, api) });
 
     const nameInput = screen.getByTestId('session-name-input') as HTMLInputElement;
     fireEvent.change(nameInput, { target: { value: 'Gimli renamed' } });
@@ -148,7 +143,7 @@ describe('SessionHeaderComponent', () => {
   it('restores the committed name and blurs without renaming when Escape is pressed', async () => {
     const session = baseSession();
     const api = fakeApi();
-    await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session, api) });
+    await render(SessionDetailsComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session, api) });
     const nameInput = screen.getByTestId('session-name-input') as HTMLInputElement;
 
     await userEvent.clear(nameInput);
@@ -163,7 +158,7 @@ describe('SessionHeaderComponent', () => {
   it('restores the committed emoji and blurs without renaming when Escape is pressed', async () => {
     const session = baseSession();
     const api = fakeApi();
-    await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session, api) });
+    await render(SessionDetailsComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session, api) });
     const emojiInput = screen.getByTestId('session-emoji-input') as HTMLInputElement;
 
     await userEvent.clear(emojiInput);
@@ -178,7 +173,7 @@ describe('SessionHeaderComponent', () => {
   it('still commits the next real rename after an Escape cancels a previous edit', async () => {
     const session = baseSession();
     const api = fakeApi();
-    await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session, api) });
+    await render(SessionDetailsComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session, api) });
     const nameInput = screen.getByTestId('session-name-input') as HTMLInputElement;
 
     await userEvent.clear(nameInput);
@@ -195,7 +190,7 @@ describe('SessionHeaderComponent', () => {
   it('still commits the next real emoji change after an Escape cancels a previous edit', async () => {
     const session = baseSession();
     const api = fakeApi();
-    await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session, api) });
+    await render(SessionDetailsComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session, api) });
     const emojiInput = screen.getByTestId('session-emoji-input') as HTMLInputElement;
 
     await userEvent.clear(emojiInput);
@@ -214,7 +209,7 @@ describe('SessionHeaderComponent', () => {
     const sessionB = baseSession({ id: 's2', name: 'Legolas' });
     const currentSession = signal<Session>(sessionA);
     const api = fakeApi();
-    await render(SessionHeaderComponent, { bindings: [inputBinding('session', currentSession)], providers: providersFor(sessionA, api) });
+    await render(SessionDetailsComponent, { bindings: [inputBinding('session', currentSession)], providers: providersFor(sessionA, api) });
     const nameInput = screen.getByTestId('session-name-input') as HTMLInputElement;
 
     await userEvent.clear(nameInput);
@@ -229,7 +224,7 @@ describe('SessionHeaderComponent', () => {
   it('shows an inline error when renaming fails', async () => {
     const session = baseSession();
     const api = fakeApi({ renameSession: vi.fn().mockRejectedValue(new Error('boom')) });
-    await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session, api) });
+    await render(SessionDetailsComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session, api) });
 
     const nameInput = screen.getByTestId('session-name-input') as HTMLInputElement;
     fireEvent.change(nameInput, { target: { value: 'Gimli · T7' } });
@@ -241,7 +236,7 @@ describe('SessionHeaderComponent', () => {
     const session = baseSession();
     const sessionGone = new ApiError(404, 'PATCH /sessions/s1', 'session_not_found');
     const api = fakeApi({ renameSession: vi.fn().mockRejectedValue(sessionGone) });
-    await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session, api) });
+    await render(SessionDetailsComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session, api) });
 
     fireEvent.change(screen.getByTestId('session-name-input'), { target: { value: 'Gimli · T7' } });
 
@@ -251,7 +246,7 @@ describe('SessionHeaderComponent', () => {
   it('drops the failure of a name edit once the next emoji edit starts', async () => {
     const session = baseSession();
     const api = fakeApi({ renameSession: vi.fn().mockRejectedValueOnce(new Error('boom')).mockResolvedValue({}) });
-    await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session, api) });
+    await render(SessionDetailsComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session, api) });
     fireEvent.change(screen.getByTestId('session-name-input'), { target: { value: 'Gimli · T7' } });
     await waitFor(() => expect(screen.getByTestId('session-rename-error')).toBeTruthy());
 
@@ -270,7 +265,7 @@ describe('SessionHeaderComponent', () => {
       .mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectA = reject; }))
       .mockImplementationOnce(() => new Promise((resolve) => { resolveB = resolve; }));
     const api = fakeApi({ renameSession });
-    const { fixture } = await render(SessionHeaderComponent, { bindings: [inputBinding('session', currentSession)], providers: providersFor(sessionA, api) });
+    const { fixture } = await render(SessionDetailsComponent, { bindings: [inputBinding('session', currentSession)], providers: providersFor(sessionA, api) });
     const nameInput = screen.getByTestId('session-name-input') as HTMLInputElement;
 
     fireEvent.change(nameInput, { target: { value: 'Gimli renamed' } }); // session A's rename is now in flight, unresolved
@@ -299,7 +294,7 @@ describe('SessionHeaderComponent', () => {
     const currentSession = signal<Session>(sessionA);
     let rejectRename: (reason?: unknown) => void = () => {};
     const renameSession = vi.fn(() => new Promise((_resolve, reject) => { rejectRename = reject; }));
-    const { fixture } = await render(SessionHeaderComponent, {
+    const { fixture } = await render(SessionDetailsComponent, {
       bindings: [inputBinding('session', currentSession)],
       providers: providersFor(sessionA, fakeApi({ renameSession })),
     });
@@ -321,7 +316,7 @@ describe('SessionHeaderComponent', () => {
     const renameSession = vi.fn(() => new Promise((resolve) => { resolveNameRename = resolve; }));
     const api = fakeApi({ renameSession });
     const session = baseSession();
-    await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session, api) });
+    await render(SessionDetailsComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session, api) });
     const nameInput = screen.getByTestId('session-name-input') as HTMLInputElement;
     const emojiInput = screen.getByTestId('session-emoji-input') as HTMLInputElement;
 
@@ -338,62 +333,50 @@ describe('SessionHeaderComponent', () => {
 
   it('shows the exit code next to the chip once the session is closed', async () => {
     const session = baseSession({ state: 'closed', exitCode: 1 });
-    await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
+    await render(SessionDetailsComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
     expect(screen.getByTestId('session-exit-code')).toHaveTextContent('closed · exit 1');
   });
 
   it('writes the exit code in the muted text colour', async () => {
     const session = baseSession({ state: 'closed', exitCode: 1 });
-    await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
+    await render(SessionDetailsComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
     expect(getComputedStyle(screen.getByTestId('session-exit-code')).color).toBe('var(--mut)');
   });
 
   it('shows a bare "closed" with no exit number when the daemon omits the exit code', async () => {
     const session = baseSession({ state: 'closed' });
-    await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
+    await render(SessionDetailsComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
     expect(screen.getByTestId('session-exit-code')).toHaveTextContent('closed');
     expect(screen.getByTestId('session-exit-code')).not.toHaveTextContent('exit');
   });
 
   it('renders the worktree directory', async () => {
     const session = baseSession();
-    await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
-    await openDetails();
+    await render(SessionDetailsComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
     expect(screen.getByTestId('session-directory')).toHaveTextContent('/repo/.worktrees/t6');
-  });
-
-  it('shows the italic "not tracked" cost placeholder', async () => {
-    const session = baseSession();
-    await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
-    await openDetails();
-    expect(screen.getByTestId('session-cost')).toHaveAttribute('title', 'Cost tracking is not implemented yet');
   });
 
   it('renders the model selector for this session', async () => {
     const session = baseSession();
-    await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
-    await openDetails();
+    await render(SessionDetailsComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
     expect(screen.getByTestId('current-model')).toHaveTextContent('claude-sonnet-5');
   });
 
   it('renders the permission mode on its popover button', async () => {
     const session = baseSession();
-    await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
-    await openDetails();
+    await render(SessionDetailsComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
     expect(screen.getByTestId('permission-mode')).toHaveTextContent('manual');
   });
 
   it('offers a Close action for an open session', async () => {
     const session = baseSession();
-    await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
-    await openDetails();
+    await render(SessionDetailsComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
     expect(screen.getByTestId('session-close')).toBeTruthy();
   });
 
   it('warns the close-confirm dialog of a pending model switch reported by the model selector', async () => {
     const session = baseSession();
-    await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
-    await openDetails();
+    await render(SessionDetailsComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
 
     await userEvent.click(screen.getByTestId('model-trigger'));
     await userEvent.click(await screen.findByRole('option', { name: 'opus' }));
@@ -404,61 +387,71 @@ describe('SessionHeaderComponent', () => {
     expect(screen.getByTestId('close-confirm-pending-switch')).toBeTruthy();
   });
 
-  describe('identity row', () => {
-    const leadingItemTestIds = ['session-emoji-input', 'session-name-input', 'state-chip', 'session-exit-code', 'session-header-toggle'];
+  describe('always open', () => {
+    it('shows harness, directory, model, permission mode, Write handoff and Close right away', async () => {
+      const session = baseSession();
+      await render(SessionDetailsComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
 
-    async function renderClosedSession(patch: Partial<Session> = {}) {
-      const session = baseSession({ state: 'closed', exitCode: 1, ...patch });
-      await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
-    }
-
-    it('lays the leading items out in one centred row at least 2rem tall', async () => {
-      await renderClosedSession();
-
-      const row = getComputedStyle(screen.getByTestId('session-header-row'));
-
-      expect(row.display).toBe('flex');
-      expect(row.alignItems).toBe('center');
-      expect(row.minHeight).toBe('2rem');
+      expect(screen.getByTestId('session-details')).toBeTruthy();
+      for (const visibleTestId of ['session-harness', 'session-directory', 'current-model', 'permission-mode', 'session-write-handoff', 'session-close']) {
+        expect(screen.getByTestId(visibleTestId)).toBeTruthy();
+      }
     });
 
-    it('holds every leading item inside that row', async () => {
-      await renderClosedSession();
+    it('offers no Details toggle', async () => {
+      const session = baseSession();
+      await render(SessionDetailsComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
 
-      const row = screen.getByTestId('session-header-row');
+      expect(screen.queryByRole('button', { name: 'Details' })).toBeNull();
+    });
 
-      for (const testId of leadingItemTestIds) expect(row).toContainElement(screen.getByTestId(testId));
+    it('shows the permission mode picker for the bypassPermissions mode', async () => {
+      const session = baseSession({ permissionMode: 'bypassPermissions' });
+      await render(SessionDetailsComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
+
+      expect(screen.getByTestId('permission-mode')).toBeTruthy();
+    });
+
+    it('offers Write handoff on a closed session', async () => {
+      const session = baseSession({ state: 'closed', exitCode: 0 });
+      await render(SessionDetailsComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
+
+      expect(screen.getByRole('button', { name: 'Write handoff' })).toBeTruthy();
+    });
+
+    it('shows no Interrupt button even while generating (it lives in the terminal tab bar)', async () => {
+      const session = baseSession({ state: 'generating' });
+      await render(SessionDetailsComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
+
+      expect(screen.queryByRole('button', { name: 'Interrupt' })).toBeNull();
+      expect(screen.queryByTestId('session-interrupt')).toBeNull();
+    });
+  });
+
+  describe('identity row', () => {
+    it('holds the emoji and name fields', async () => {
+      const session = baseSession();
+      await render(SessionDetailsComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
+
+      const row = screen.getByTestId('session-details-identity');
+
+      expect(row).toContainElement(screen.getByTestId('session-emoji-input'));
+      expect(row).toContainElement(screen.getByTestId('session-name-input'));
     });
 
     it('makes the emoji and name fields 2rem tall', async () => {
-      await renderClosedSession();
+      const session = baseSession();
+      await render(SessionDetailsComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
 
       expect(getComputedStyle(screen.getByTestId('session-emoji-input')).height).toBe('2rem');
       expect(getComputedStyle(screen.getByTestId('session-name-input')).height).toBe('2rem');
     });
-
-    it('lets the row decide the vertical alignment instead of per-item top margins', async () => {
-      await renderClosedSession();
-
-      for (const testId of leadingItemTestIds) {
-        const item = screen.getByTestId(testId);
-        const chipHost = testId === 'state-chip' ? item.parentElement! : item;
-        const style = getComputedStyle(chipHost);
-        expect([testId, style.marginTop, style.alignSelf]).toEqual([testId, '', '']);
-      }
-    });
-
-    it('wraps onto a second line when the items do not fit', async () => {
-      await renderClosedSession();
-
-      expect(getComputedStyle(screen.getByTestId('session-header-row')).flexWrap).toBe('wrap');
-    });
   });
 
   describe('model drift chip', () => {
-    it('shows a drift chip, with the previous model in its tooltip, when the model changed under the session', async () => {
+    it('shows the drift chip, with the previous model in its tooltip, when the model changed under the session', async () => {
       const session = baseSession({ modelDriftedFrom: 'claude-opus-4-0' });
-      await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
+      await render(SessionDetailsComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
 
       const chip = screen.getByTestId('session-drift-chip');
 
@@ -468,9 +461,8 @@ describe('SessionHeaderComponent', () => {
 
     it('shows no drift chip when the model did not drift', async () => {
       const session = baseSession();
-      await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
-      await openDetails();
-
+      await render(SessionDetailsComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
+  
       expect(screen.queryByTestId('session-drift-chip')).toBeNull();
     });
   });
@@ -482,7 +474,7 @@ describe('SessionHeaderComponent', () => {
     it('shows the time elapsed since the state last changed, next to the state chip', async () => {
       vi.setSystemTime(new Date('2026-09-26T10:00:40.000Z'));
       const session = baseSession({ stateSince: '2026-09-26T10:00:00.000Z' });
-      await render(SessionHeaderComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
+      await render(SessionDetailsComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
       expect(screen.getByTestId('state-chip-elapsed')).toHaveTextContent('0:40');
     });
   });

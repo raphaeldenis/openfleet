@@ -92,7 +92,7 @@ test('the About section resolves both versions and keeps Reveal logs off outside
   await expect(page.getByTestId('about-reveal-logs')).toBeDisabled();
 });
 
-test('the Theme row of General switches the theme and the top-bar toggle follows', async ({ page }) => {
+test('the Theme row of General switches the theme and the sidebar footer toggle follows', async ({ page }) => {
   await signInAsAdmin(page, { theme: 'light' });
   await page.goto('/');
   await page.getByRole('button', { name: 'Settings' }).click();

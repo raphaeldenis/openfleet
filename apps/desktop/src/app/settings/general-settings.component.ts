@@ -18,7 +18,7 @@ const THEME_LABELS = { light: 'Light', dark: 'Dark' } as const;
         <of-settings-row name="Setup" detail="Replay the first-run stepper; each step shows current values with Keep / Change">
           <button type="button" class="value" data-testid="general-run-setup" (click)="runSetupAgain()">Run setup again →</button>
         </of-settings-row>
-        <of-settings-row name="Theme" detail="Follows the toolbar toggle">
+        <of-settings-row name="Theme" detail="Also switchable from the sidebar footer">
           <button type="button" class="value" data-testid="general-theme" [attr.aria-label]="themeButtonLabel()" (click)="theme.toggle()">{{ themeLabel() }}</button>
         </of-settings-row>
         <of-settings-row name="Docs folder root" detail="Each project gets <root>/<project>/ with specs, plans, handoffs, reports" [unavailable]="docsRoot" />

@@ -13,7 +13,6 @@ const previewPathOf = (sessionId: string) => `/api/sessions/${sessionId}/handoff
 
 async function openHandoffPanel(page: Page, sessionId: string) {
   await page.goto(`/session/${sessionId}`);
-  await page.getByTestId('session-header-toggle').click();
   await page.getByRole('button', { name: 'Write handoff' }).click();
   return page.getByRole('dialog', { name: 'Handoff preview' });
 }
@@ -70,20 +69,6 @@ test('cancelling the handoff hides the panel and puts the focus back on Write ha
 
   await expect(panel).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Write handoff' })).toBeFocused();
-});
-
-test('while the handoff panel is open the header details cannot be collapsed and the toggle says why', async ({ page, request }) => {
-  const session = await fakeSessions.create(request, { name: 'Handoff locks details' });
-  await session.hooks.announceIdle();
-  const panel = await openHandoffPanel(page, session.id);
-  await expect(panel).toBeVisible();
-
-  const detailsToggle = page.getByTestId('session-header-toggle');
-  await detailsToggle.click({ force: true });
-
-  await expect(detailsToggle).toHaveAttribute('aria-expanded', 'true');
-  await expect(detailsToggle).toHaveAttribute('aria-disabled', 'true');
-  await expect(detailsToggle).toHaveAccessibleDescription('Details stay open while the handoff panel is open.');
 });
 
 test('a daemon that does not answer shows the load-failed row, with no fields and no save, and Try again recovers', async ({ page, request }) => {

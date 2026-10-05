@@ -12,12 +12,14 @@ export const adminHeaders = { 'content-type': 'application/json', authorization:
 
 const CORS_HEADERS = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': '*' };
 
-export async function signInAsAdmin(page: Page, { theme }: { theme?: 'light' | 'dark' } = {}): Promise<void> {
-  await page.addInitScript(([adminToken, apiUrl, chosenTheme]) => {
+/** The right panel starts open, the way a user who works with a session's details keeps it, unless `rightPanel` says otherwise. */
+export async function signInAsAdmin(page: Page, { theme, rightPanel = 'open' }: { theme?: 'light' | 'dark'; rightPanel?: 'open' | 'closed' } = {}): Promise<void> {
+  await page.addInitScript(([adminToken, apiUrl, chosenTheme, rightPanelChoice]) => {
     localStorage.setItem('openfleet.adminToken', adminToken);
     localStorage.setItem('openfleet.apiUrl', apiUrl);
+    localStorage.setItem('openfleet.rightPanel.open', String(rightPanelChoice === 'open'));
     if (chosenTheme) localStorage.setItem('openfleet.theme', chosenTheme);
-  }, [token, api, theme ?? ''] as const);
+  }, [token, api, theme ?? '', rightPanel] as const);
 }
 
 interface FakeSessionSpec { name: string; emoji?: string; directory?: string; model?: string; manager?: { pulseSeconds: number; childrenCap: number; mission: string } }
@@ -79,8 +81,8 @@ export async function interceptDaemonGet(page: Page, pathname: string, respond: 
 export const fulfillWithJson = (route: Route, status: number, body: unknown) =>
   route.fulfill({ status, headers: CORS_HEADERS, contentType: 'application/json', body: JSON.stringify(body) });
 
-/** The state label of the open session's header; the sidebar lists one chip per session, so the page-wide test id is ambiguous. */
-export const headerStateLabel = (page: Page) => page.getByTestId('session-header').getByTestId('state-chip-label');
+/** The state label of the open session in the right panel's Session tab; the sidebar lists one chip per session, so the page-wide test id is ambiguous. */
+export const sessionStateLabel = (page: Page) => page.getByTestId('session-details').getByTestId('state-chip-label');
 
 /** Size of an element as a user sees it: height and font size in px. */
 export async function sizeOf(locator: ReturnType<Page['getByTestId']>): Promise<{ height: number; fontSize: number }> {

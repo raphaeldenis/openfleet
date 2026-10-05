@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { routes } from '../app.routes';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { silentWorkingStateSignals } from '../working-state/working-state-fixtures';
-import { HELM_NAV_ITEMS, PALETTE_PAGES } from '../shell/nav-items';
+import { HELM_NAV_ITEMS } from '../shell/nav-items';
 
 const MODEL_TABLE = { haiku: 'claude-haiku-4-5', sonnet: 'claude-sonnet-5', opus: 'claude-opus-5-5', fable: 'claude-fable-5-1' };
 
@@ -46,10 +46,6 @@ async function openApp(startUrl: string) {
   return { harness, root, router: TestBed.inject(Router) };
 }
 
-function pressCommandK() {
-  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }));
-}
-
 describe('Settings navigation', () => {
   beforeEach(() => localStorage.clear());
   afterEach(() => {
@@ -64,10 +60,7 @@ describe('Settings navigation', () => {
     expect(HELM_NAV_ITEMS.map((item) => item.label)).not.toContain('Settings');
   });
 
-  it.each([
-    ...HELM_NAV_ITEMS.filter((item) => item.route).map((item) => [`nav item ${item.key}`, item.route as string] as const),
-    ...PALETTE_PAGES.map((page) => [`palette page ${page.key}`, page.route] as const),
-  ])('routes %s (%s) to a real screen rather than the not-found page', async (_label, route) => {
+  it.each(HELM_NAV_ITEMS.filter((item) => item.route).map((item) => [`nav item ${item.key}`, item.route as string] as const))('routes %s (%s) to a real screen rather than the not-found page', async (_label, route) => {
     vi.stubGlobal('fetch', daemonAnswering(MODEL_TABLE));
     const { harness } = await openApp('');
 
@@ -106,18 +99,6 @@ describe('Settings navigation', () => {
     expect(root.querySelector('[data-testid="settings"]')).toBeTruthy();
   });
 
-  it('opens the settings screen from the palette Settings entry', async () => {
-    vi.stubGlobal('fetch', daemonAnswering(MODEL_TABLE));
-    const { harness, root, router } = await openApp('/inbox');
-
-    pressCommandK();
-    harness.detectChanges();
-    (root.querySelector('[data-testid="palette-item-settings"]') as HTMLButtonElement).click();
-    await harness.fixture.whenStable();
-
-    expect(router.url).toBe('/settings');
-  });
-
   it('shows the load error, not an endless Loading…, when /settings is opened while the daemon is down', async () => {
     vi.stubGlobal('fetch', daemonUnreachable());
     const { harness, root } = await openApp('/settings?tab=models');
@@ -131,28 +112,13 @@ describe('Settings navigation', () => {
     expect(root.querySelector('[data-testid="model-row-haiku"]')).toBeNull();
   });
 
-  it('leaves the settings screen when a command-palette page is picked', async () => {
-    vi.stubGlobal('fetch', daemonAnswering(MODEL_TABLE));
-    const { harness, root, router } = await openApp('/settings');
-
-    pressCommandK();
-    harness.detectChanges();
-    (root.querySelector('[data-testid="palette-item-inbox"]') as HTMLButtonElement).click();
-    await harness.fixture.whenStable();
-    harness.detectChanges();
-
-    expect(router.url).toBe('/inbox');
-    expect(root.querySelector('[data-testid="settings"]')).toBeNull();
-    expect(root.querySelector('[data-testid="command-palette"]')).toBeNull();
-  });
-
-  it('offers Settings as a page in the command palette', async () => {
-    vi.stubGlobal('fetch', daemonAnswering(MODEL_TABLE));
+  it('has no command palette: ⌘K opens nothing', async () => {
     const { harness, root } = await openApp('/inbox');
 
-    pressCommandK();
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }));
     harness.detectChanges();
 
-    expect(root.querySelector('[data-testid="palette-item-settings"]')).toBeTruthy();
+    expect(root.querySelector('[role="dialog"]')).toBeNull();
+    expect(root.querySelector('[data-testid="open-palette"]')).toBeNull();
   });
 });

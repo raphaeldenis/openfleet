@@ -1,9 +1,9 @@
 import { render, screen } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
 import { inputBinding, signal } from '@angular/core';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { HandoffPreview, Session } from '@openfleet/shared';
-import { SessionHeaderComponent } from './session-header.component';
+import { SessionDetailsComponent } from './session-details.component';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
 
@@ -39,10 +39,10 @@ function envelopeError(code: string, status: number) {
   return new ApiError(status, 'GET /x', code, envelope as never);
 }
 
-async function renderHeader(session: Session, getHandoffPreview = vi.fn((id: string) => Promise.resolve(previewFor(id)))) {
+async function renderDetails(session: Session, getHandoffPreview = vi.fn((id: string) => Promise.resolve(previewFor(id)))) {
   const currentSession = signal(session);
   const api = { updateModel: vi.fn(), closeSession: vi.fn(), sendInput: vi.fn(), renameSession: vi.fn(), getHandoffPreview };
-  await render(SessionHeaderComponent, {
+  await render(SessionDetailsComponent, {
     bindings: [inputBinding('session', currentSession)],
     providers: [
       { provide: FleetApiService, useValue: api },
@@ -52,32 +52,21 @@ async function renderHeader(session: Session, getHandoffPreview = vi.fn((id: str
   return { session: currentSession, getHandoffPreview };
 }
 
-const openDetails = () => userEvent.click(screen.getByRole('button', { name: 'Details' }));
 const writeHandoffButton = () => screen.getByRole('button', { name: 'Write handoff' });
 const panel = () => screen.queryByRole('dialog', { name: 'Handoff preview' });
 
-describe('SessionHeaderComponent write handoff', () => {
-  beforeEach(() => localStorage.clear());
-
+describe('SessionDetailsComponent write handoff', () => {
   it.each([
     ['an open session', aSession({ state: 'idle' })],
     ['a closed session', aSession({ state: 'closed', exitCode: 1 })],
-  ])('offers the Write handoff button in the open details of %s', async (_label, session) => {
-    await renderHeader(session);
-    await openDetails();
+  ])('offers the Write handoff button right away on %s', async (_label, session) => {
+    await renderDetails(session);
 
     expect(writeHandoffButton()).toHaveAttribute('aria-expanded', 'false');
   });
 
-  it('keeps the Write handoff button out of the collapsed header', async () => {
-    await renderHeader(aSession());
-
-    expect(screen.queryByRole('button', { name: 'Write handoff' })).toBeNull();
-  });
-
   it('asks the daemon for nothing, and shows no panel, until the button is pressed', async () => {
-    const { getHandoffPreview } = await renderHeader(aSession());
-    await openDetails();
+    const { getHandoffPreview } = await renderDetails(aSession());
 
     expect(getHandoffPreview).not.toHaveBeenCalled();
     expect(panel()).toBeNull();
@@ -85,8 +74,7 @@ describe('SessionHeaderComponent write handoff', () => {
 
   it('shows the collecting state while the preview is being fetched', async () => {
     const pending = deferred<HandoffPreview>();
-    await renderHeader(aSession(), vi.fn(() => pending.promise));
-    await openDetails();
+    await renderDetails(aSession(), vi.fn(() => pending.promise));
 
     await userEvent.click(writeHandoffButton());
 
@@ -96,8 +84,7 @@ describe('SessionHeaderComponent write handoff', () => {
   });
 
   it('shows the six sections of the preview of this session once collected, as a dialog whose title takes focus', async () => {
-    const { getHandoffPreview } = await renderHeader(aSession());
-    await openDetails();
+    const { getHandoffPreview } = await renderDetails(aSession());
 
     await userEvent.click(writeHandoffButton());
 
@@ -109,8 +96,7 @@ describe('SessionHeaderComponent write handoff', () => {
   });
 
   it('keeps Save off with the reason when the session has no docs folder', async () => {
-    await renderHeader(aSession());
-    await openDetails();
+    await renderDetails(aSession());
 
     await userEvent.click(writeHandoffButton());
 
@@ -122,8 +108,7 @@ describe('SessionHeaderComponent write handoff', () => {
 
   it('says saving is not available yet when the daemon target is usable and Save is pressed', async () => {
     const usable = previewFor('s1', { target: { available: true, relativePath: 'handoffs/2026-10-04-gimli.md', writeOnCloseDefault: true } });
-    await renderHeader(aSession(), vi.fn(() => Promise.resolve(usable)));
-    await openDetails();
+    await renderDetails(aSession(), vi.fn(() => Promise.resolve(usable)));
     await userEvent.click(writeHandoffButton());
 
     await screen.findByRole('textbox', { name: /Goal/ });
@@ -134,8 +119,7 @@ describe('SessionHeaderComponent write handoff', () => {
   });
 
   it('closes the panel and gives focus back to the button on Cancel', async () => {
-    await renderHeader(aSession());
-    await openDetails();
+    await renderDetails(aSession());
     await userEvent.click(writeHandoffButton());
 
     await userEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
@@ -146,8 +130,7 @@ describe('SessionHeaderComponent write handoff', () => {
   });
 
   it('closes the panel and gives focus back to the button on Escape', async () => {
-    await renderHeader(aSession());
-    await openDetails();
+    await renderDetails(aSession());
     await userEvent.click(writeHandoffButton());
     await screen.findByRole('textbox', { name: /Goal/ });
 
@@ -158,8 +141,7 @@ describe('SessionHeaderComponent write handoff', () => {
   });
 
   it('closes the panel when the button is pressed again', async () => {
-    await renderHeader(aSession());
-    await openDetails();
+    await renderDetails(aSession());
     await userEvent.click(writeHandoffButton());
     await screen.findByRole('dialog', { name: 'Handoff preview' });
 
@@ -169,8 +151,7 @@ describe('SessionHeaderComponent write handoff', () => {
   });
 
   it('says the session is gone, in the words of the error table, when the daemon does not know it', async () => {
-    await renderHeader(aSession(), vi.fn(() => Promise.reject(envelopeError('session_not_found', 404))));
-    await openDetails();
+    await renderDetails(aSession(), vi.fn(() => Promise.reject(envelopeError('session_not_found', 404))));
 
     await userEvent.click(writeHandoffButton());
 
@@ -179,8 +160,7 @@ describe('SessionHeaderComponent write handoff', () => {
 
   it('says the preview could not be loaded when the daemon cannot be reached, and collects it again on Try again', async () => {
     const getHandoffPreview = vi.fn().mockRejectedValueOnce(new TypeError('Failed to fetch')).mockResolvedValueOnce(previewFor('s1'));
-    await renderHeader(aSession(), getHandoffPreview);
-    await openDetails();
+    await renderDetails(aSession(), getHandoffPreview);
     await userEvent.click(writeHandoffButton());
     expect(await screen.findByRole('alert')).toHaveTextContent('The preview could not be loaded — check your connection, then try again.');
 
@@ -190,55 +170,10 @@ describe('SessionHeaderComponent write handoff', () => {
     expect(getHandoffPreview).toHaveBeenCalledTimes(2);
   });
 
-  describe('while the panel is open', () => {
-    const detailsToggle = () => screen.getByRole('button', { name: 'Details' });
-
-    it('keeps the details open: the Details toggle is aria-disabled and does not hide the Write handoff button', async () => {
-      await renderHeader(aSession());
-      await openDetails();
-      await userEvent.click(writeHandoffButton());
-      await screen.findByRole('textbox', { name: /Goal/ });
-
-      await userEvent.click(detailsToggle());
-
-      expect(detailsToggle()).toHaveAttribute('aria-disabled', 'true');
-      expect(detailsToggle()).toHaveAttribute('aria-expanded', 'true');
-      expect(writeHandoffButton()).toBeTruthy();
-    });
-
-    it('lets the user collapse the details again once the panel is closed', async () => {
-      await renderHeader(aSession());
-      await openDetails();
-      await userEvent.click(writeHandoffButton());
-      await screen.findByRole('textbox', { name: /Goal/ });
-      await userEvent.click(detailsToggle());
-      await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-      await vi.waitFor(() => expect(panel()).toBeNull());
-
-      await userEvent.click(detailsToggle());
-
-      expect(detailsToggle()).toHaveAttribute('aria-expanded', 'false');
-      expect(detailsToggle()).not.toHaveAttribute('aria-disabled', 'true');
-    });
-
-    it('gives focus back to the button on Cancel after an attempt to collapse the details', async () => {
-      await renderHeader(aSession());
-      await openDetails();
-      await userEvent.click(writeHandoffButton());
-      await screen.findByRole('textbox', { name: /Goal/ });
-      await userEvent.click(detailsToggle());
-
-      await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-
-      await vi.waitFor(() => expect(document.activeElement).toBe(writeHandoffButton()));
-    });
-  });
-
   describe('when the session shown changes', () => {
     it('drops the open panel instead of showing the preview of the other session', async () => {
-      const { session } = await renderHeader(aSession({ id: 's1' }));
-      await openDetails();
-      await userEvent.click(writeHandoffButton());
+      const { session } = await renderDetails(aSession({ id: 's1' }));
+        await userEvent.click(writeHandoffButton());
       await screen.findByRole('textbox', { name: /Goal/ });
 
       session.set(aSession({ id: 's2' }));
@@ -248,9 +183,8 @@ describe('SessionHeaderComponent write handoff', () => {
     });
 
     it('never opens the panel by itself for the new session', async () => {
-      const { session, getHandoffPreview } = await renderHeader(aSession({ id: 's1' }));
-      await openDetails();
-      await userEvent.click(writeHandoffButton());
+      const { session, getHandoffPreview } = await renderDetails(aSession({ id: 's1' }));
+        await userEvent.click(writeHandoffButton());
       await screen.findByRole('textbox', { name: /Goal/ });
 
       session.set(aSession({ id: 's2' }));
@@ -263,16 +197,14 @@ describe('SessionHeaderComponent write handoff', () => {
     it('ignores a preview of the old session that arrives after the switch', async () => {
       const slow = deferred<HandoffPreview>();
       const getHandoffPreview = vi.fn((id: string) => (id === 's1' ? slow.promise : Promise.resolve(previewFor(id))));
-      const { session } = await renderHeader(aSession({ id: 's1' }), getHandoffPreview);
-      await openDetails();
-      await userEvent.click(writeHandoffButton());
+      const { session } = await renderDetails(aSession({ id: 's1' }), getHandoffPreview);
+        await userEvent.click(writeHandoffButton());
       await screen.findByText('Collecting the state…');
 
       session.set(aSession({ id: 's2' }));
       await vi.waitFor(() => expect(panel()).toBeNull());
       slow.resolve(previewFor('s1'));
-      await openDetails();
-      await userEvent.click(writeHandoffButton());
+        await userEvent.click(writeHandoffButton());
 
       expect(await screen.findByRole('textbox', { name: /Goal/ })).toHaveValue('Goal of s2');
       expect(screen.queryByDisplayValue('Goal of s1')).toBeNull();

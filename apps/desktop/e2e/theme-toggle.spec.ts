@@ -1,25 +1,28 @@
 import { expect, test } from '@playwright/test';
 import { readE2eAdminToken } from '../../../scripts/e2e/e2eHome';
+import { api } from './support/daemon';
 
-const api = 'http://127.0.0.1:7332';
 const token = readE2eAdminToken();
 
-const DARK_PANEL = 'rgb(34, 34, 32)';
-const LIGHT_PANEL = 'rgb(245, 244, 241)';
+const DARK_SIDEBAR = 'rgb(29, 29, 28)';
+const LIGHT_SIDEBAR = 'rgb(227, 226, 221)';
 
-test('the top-bar toggle switches the chrome between the light and dark panel tokens', async ({ page }) => {
+test('the sidebar footer toggle switches the chrome between the light and dark panel tokens', async ({ page }) => {
   await page.addInitScript(([t, a]) => {
     localStorage.setItem('openfleet.adminToken', t);
     localStorage.setItem('openfleet.apiUrl', a);
     localStorage.setItem('openfleet.theme', 'light');
   }, [token, api]);
   await page.goto('/');
-  const topBar = page.getByTestId('app-topbar');
-  await expect(topBar).toHaveCSS('background-color', LIGHT_PANEL);
+  const sidebar = page.getByTestId('app-nav');
+  const toggle = page.getByTestId('sidebar-footer').getByTestId('theme-toggle');
+  await expect(toggle).toHaveText('☀ Light');
+  await expect(sidebar).toHaveCSS('background-color', LIGHT_SIDEBAR);
 
-  await page.getByRole('button', { name: '☀ Light' }).click();
+  await toggle.click();
 
-  await expect(topBar).toHaveCSS('background-color', DARK_PANEL);
+  await expect(toggle).toHaveText('☾ Dark');
+  await expect(sidebar).toHaveCSS('background-color', DARK_SIDEBAR);
 });
 
 test('the toggle names the current theme and is pressed exactly while the theme is dark', async ({ page }) => {
@@ -42,4 +45,31 @@ test('the toggle names the current theme and is pressed exactly while the theme 
   await darkToggle.click();
 
   await expect(page.getByRole('button', { name: '☀ Light' })).toHaveAttribute('aria-pressed', 'false');
+});
+
+test('the shell shows no top bar, no status bar, no search trigger and no connection chip while the daemon answers', async ({ page }) => {
+  await page.addInitScript(([t, a]) => {
+    localStorage.setItem('openfleet.adminToken', t);
+    localStorage.setItem('openfleet.apiUrl', a);
+  }, [token, api]);
+
+  await page.goto('/');
+
+  await expect(page.getByTestId('app-shell')).toBeVisible();
+  await expect(page.getByTestId('app-topbar')).toHaveCount(0);
+  await expect(page.getByTestId('app-statusbar')).toHaveCount(0);
+  await expect(page.getByTestId('open-palette')).toHaveCount(0);
+  await expect(page.getByTestId('daemon-status')).toHaveCount(0);
+});
+
+test('⌘K opens no command palette', async ({ page }) => {
+  await page.addInitScript(([t, a]) => {
+    localStorage.setItem('openfleet.adminToken', t);
+    localStorage.setItem('openfleet.apiUrl', a);
+  }, [token, api]);
+  await page.goto('/');
+
+  await page.keyboard.press('Meta+k');
+
+  await expect(page.getByRole('dialog')).toHaveCount(0);
 });

@@ -40,11 +40,11 @@ describe('Settings → General', () => {
     expect(navigate).toHaveBeenCalledWith('/onboarding', { state: { returnUrl: '/settings' } });
   });
 
-  it('says the theme follows the toolbar toggle and names the current theme', async () => {
+  it('says the theme is also switchable from the sidebar footer and names the current theme', async () => {
     localStorage.setItem('openfleet.theme', 'light');
     await renderGeneralSection();
 
-    expect(screen.getByText('Follows the toolbar toggle')).toBeInTheDocument();
+    expect(screen.getByText('Also switchable from the sidebar footer')).toBeInTheDocument();
     expect(screen.getByTestId('general-theme')).toHaveTextContent('Light');
   });
 
@@ -58,7 +58,7 @@ describe('Settings → General', () => {
     expect(screen.getByTestId('general-theme')).toHaveTextContent('Dark');
   });
 
-  it('follows a theme switched from the toolbar while Settings is open', async () => {
+  it('follows a theme switched from the sidebar footer while Settings is open', async () => {
     localStorage.setItem('openfleet.theme', 'light');
     await renderGeneralSection();
 

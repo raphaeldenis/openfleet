@@ -10,7 +10,6 @@ const BYPASS_CONFIRM_TITLE = 'Turn off permission checks for this session?';
 async function openSessionWithDetails(page: Page, sessionId: string): Promise<void> {
   await signInAsAdmin(page);
   await page.goto(`/session/${sessionId}`);
-  await page.getByTestId('session-header-toggle').click();
 }
 
 test('the model popover lists the four rungs, explains a switch and closes on Escape with focus back on its trigger', async ({ page, request }) => {

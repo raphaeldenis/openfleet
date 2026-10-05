@@ -7,7 +7,8 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { RightPanelSessionToggleComponent } from '../sessions/right-panel-session-toggle.component';
-import { RightPanelComponent, watchedSessionIdOf } from './right-panel.component';
+import { silentWorkingStateSignals } from '../working-state/working-state-fixtures';
+import { RightPanelComponent } from './right-panel.component';
 import { InMemorySessionTodosSource, SESSION_TODOS_SOURCE } from './todos/session-todos-source';
 import type { SessionTodos } from './todos/todos.adapter';
 
@@ -59,7 +60,7 @@ interface SetUpOptions { url?: string; storage?: Storage; sessions?: { id: strin
 async function setUp(options: SetUpOptions = {}) {
   vi.stubGlobal('localStorage', options.storage ?? memoryStorage());
   const source = new InMemorySessionTodosSource();
-  const events = { sessions: signal(options.sessions ?? []), connected: signal(options.connected ?? true) };
+  const events = { sessions: signal(options.sessions ?? []), connected: signal(options.connected ?? true), ...silentWorkingStateSignals() };
   TestBed.configureTestingModule({
     providers: [
       provideRouter(routes),
@@ -145,7 +146,7 @@ describe('RightPanelComponent', () => {
     it('describes the controls with their shortcut', async () => {
       await setUp();
 
-      expect(showButton()?.getAttribute('title')).toBe('Show the right panel — sessions, todos, usage (⌥⌘B)');
+      expect(showButton()?.getAttribute('title')).toBe('Show the right panel — session, todos, usage (⌥⌘B)');
       expect(sessionToggle().getAttribute('title')).toBe('Show the right panel (⌥⌘B)');
       await userEvent.click(sessionToggle());
       expect(hideButton()?.getAttribute('title')).toBe('Hide the right panel (⌥⌘B)');
@@ -213,7 +214,7 @@ describe('RightPanelComponent', () => {
       expect(panel()).not.toBeNull();
     });
 
-    it('ignores the shortcut while a modal such as the command palette makes the page inert', async () => {
+    it('ignores the shortcut while a modal such as the close-session dialog makes the page inert', async () => {
       const { harness } = await setUp();
       harness.fixture.nativeElement.setAttribute('inert', '');
 
@@ -266,12 +267,29 @@ describe('RightPanelComponent', () => {
   describe('tabs', () => {
     const openPanel = () => setUp({ storage: memoryStorage({ [OPEN_KEY]: 'true' }) });
 
-    it('lists Sessions, Usage and Todos with Todos selected', async () => {
+    it('lists Session, Sessions, Usage and Todos with Todos selected while no session is watched', async () => {
       await openPanel();
 
       const tabs = within(screen.getByRole('tablist', { name: 'Right panel' })).getAllByRole('tab');
-      expect(tabs.map((tab) => tab.getAttribute('data-testid'))).toEqual(['right-panel-tab-sessions', 'right-panel-tab-usage', 'right-panel-tab-todos']);
-      expect(tabs.map((tab) => tab.getAttribute('aria-selected'))).toEqual(['false', 'false', 'true']);
+      expect(tabs.map((tab) => tab.getAttribute('data-testid'))).toEqual(['right-panel-tab-session', 'right-panel-tab-sessions', 'right-panel-tab-usage', 'right-panel-tab-todos']);
+      expect(tabs.map((tab) => tab.getAttribute('aria-selected'))).toEqual(['false', 'false', 'false', 'true']);
+    });
+
+    it('selects the Session tab by default while a session is watched', async () => {
+      await setUp({ url: '/session/s1', storage: memoryStorage({ [OPEN_KEY]: 'true' }) });
+
+      expect(screen.getByTestId('right-panel-tab-session').getAttribute('aria-selected')).toBe('true');
+      expect(screen.getByRole('tabpanel', { name: /Session/ })).not.toBeNull();
+      expect(screen.getByTestId('session-tab')).not.toBeNull();
+    });
+
+    it('keeps the tab the user picked when the route moves to another session', async () => {
+      const { harness } = await setUp({ url: '/session/s1', storage: memoryStorage({ [OPEN_KEY]: 'true' }) });
+      await userEvent.click(screen.getByTestId('right-panel-tab-todos'));
+
+      await harness.navigateByUrl('/session/s2');
+
+      expect(screen.getByTestId('right-panel-tab-todos').getAttribute('aria-selected')).toBe('true');
     });
 
     it('announces Sessions and Usage as disabled with the visible label "Coming soon"', async () => {
@@ -283,6 +301,7 @@ describe('RightPanelComponent', () => {
         expect(tab.textContent).toContain('Coming soon');
         expect(tab.getAttribute('title')).toBe('Coming soon');
       }
+      expect(screen.getByTestId('right-panel-tab-session').getAttribute('aria-disabled')).toBeNull();
       expect(screen.getByTestId('right-panel-tab-todos').getAttribute('aria-disabled')).toBeNull();
     });
 
@@ -296,18 +315,18 @@ describe('RightPanelComponent', () => {
       expect(screen.getByRole('tabpanel')).not.toBeNull();
     });
 
-    it('moves focus across the three tabs with arrows, Home and End', async () => {
+    it('moves focus across the four tabs with arrows, Home and End', async () => {
       await openPanel();
       screen.getByTestId('right-panel-tab-todos').focus();
 
       await userEvent.keyboard('{ArrowLeft}');
       expect(document.activeElement).toBe(screen.getByTestId('right-panel-tab-usage'));
       await userEvent.keyboard('{Home}');
-      expect(document.activeElement).toBe(screen.getByTestId('right-panel-tab-sessions'));
+      expect(document.activeElement).toBe(screen.getByTestId('right-panel-tab-session'));
       await userEvent.keyboard('{End}');
       expect(document.activeElement).toBe(screen.getByTestId('right-panel-tab-todos'));
       await userEvent.keyboard('{ArrowRight}');
-      expect(document.activeElement).toBe(screen.getByTestId('right-panel-tab-sessions'));
+      expect(document.activeElement).toBe(screen.getByTestId('right-panel-tab-session'));
     });
 
     it('labels the tabpanel by the Todos tab', async () => {
@@ -318,17 +337,27 @@ describe('RightPanelComponent', () => {
   });
 
   describe('watched session', () => {
+    const showTodosTab = () => userEvent.click(screen.getByTestId('right-panel-tab-todos'));
+
     it('shows the todos of the session in the route', async () => {
       const storage = memoryStorage({ [OPEN_KEY]: 'true' });
       const { source } = await setUp({ url: '/session/s1', storage });
+      await showTodosTab();
       source.publish('s1', { kind: 'ready', todos: todosOf('s1') });
 
       expect(await screen.findAllByTestId('todo-item')).toHaveLength(2);
     });
 
+    it('asks to select a session in the Session tab when the route shows an unknown session', async () => {
+      await setUp({ url: '/session/ghost', storage: memoryStorage({ [OPEN_KEY]: 'true' }) });
+
+      expect(screen.getByTestId('session-tab-no-session')).not.toBeNull();
+    });
+
     it('follows the route to another session', async () => {
       const storage = memoryStorage({ [OPEN_KEY]: 'true' });
       const { source, harness } = await setUp({ url: '/session/s1', storage });
+      await showTodosTab();
       source.publish('s1', { kind: 'ready', todos: todosOf('s1') });
       await harness.navigateByUrl('/session/s2');
 
@@ -345,6 +374,7 @@ describe('RightPanelComponent', () => {
     it('marks the list read-only when the watched session is closed', async () => {
       const storage = memoryStorage({ [OPEN_KEY]: 'true' });
       const { source } = await setUp({ url: '/session/s1', storage, sessions: [{ id: 's1', state: 'closed' }] });
+      await showTodosTab();
       source.publish('s1', { kind: 'ready', todos: todosOf('s1') });
 
       expect((await screen.findByTestId('todos-closed-note')).textContent).toMatch(/Session closed — list as of \d{2}:\d{2}\./);
@@ -353,22 +383,10 @@ describe('RightPanelComponent', () => {
     it('marks the list stale when the socket is down', async () => {
       const storage = memoryStorage({ [OPEN_KEY]: 'true' });
       const { source } = await setUp({ url: '/session/s1', storage, connected: false });
+      await showTodosTab();
       source.publish('s1', { kind: 'ready', todos: todosOf('s1') });
 
       expect((await screen.findByTestId('todos-stale-note')).textContent).toContain('reconnecting to the daemon');
-    });
-  });
-
-  describe('watchedSessionIdOf', () => {
-    it.each([
-      ['/session/abc', 'abc'],
-      ['/manager/m1', 'm1'],
-      ['/session/abc?x=1#frag', 'abc'],
-      ['/', undefined],
-      ['/inbox', undefined],
-      ['/session', undefined],
-    ])('reads %s as %s', (url, expected) => {
-      expect(watchedSessionIdOf(url)).toBe(expected);
     });
   });
 });

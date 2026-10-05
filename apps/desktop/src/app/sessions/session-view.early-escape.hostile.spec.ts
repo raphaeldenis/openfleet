@@ -1,8 +1,9 @@
 import { fireEvent, render, screen, within } from '@testing-library/angular/zoneless';
-import { inputBinding, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ServerEvent, Session } from '@openfleet/shared';
+import { SessionTabComponent } from './session-tab.component';
 import { SessionViewComponent } from './session-view.component';
 import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
@@ -37,13 +38,22 @@ function fakeApi() {
   return { closeSession: vi.fn().mockResolvedValue({}), sendInput: vi.fn().mockResolvedValue({}) };
 }
 
+@Component({
+  selector: 'of-view-with-details-host',
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [SessionViewComponent, SessionTabComponent],
+  template: `<of-session-view [sessionId]="sessionId()" /><of-session-tab [sessionId]="sessionId()" />`,
+})
+class ViewWithDetailsHostComponent {
+  readonly sessionId = signal('s1');
+}
+
 async function renderViewing({ api = fakeApi(), sessions = [gimli(), boromir()] } = {}) {
-  const sessionId = signal('s1');
-  const { fixture } = await render(SessionViewComponent, {
-    bindings: [inputBinding('sessionId', sessionId)],
+  const { fixture } = await render(ViewWithDetailsHostComponent, {
     providers: [{ provide: FleetApiService, useValue: api }],
     ...withoutRealTerminal,
   });
+  const sessionId = fixture.componentInstance.sessionId;
   const daemon = await connectFakeDaemon(fixture);
   await daemon.send({ type: 'snapshot', sessions, approvals: [], managers: [] });
   vi.useFakeTimers();

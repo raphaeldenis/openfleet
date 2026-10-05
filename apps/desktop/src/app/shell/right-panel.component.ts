@@ -10,26 +10,19 @@ import {
   signal,
   viewChild,
 } from '@angular/core';
-import { toSignal } from '@angular/core/rxjs-interop';
-import { NavigationEnd, Router } from '@angular/router';
-import { filter, map } from 'rxjs';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { RIGHT_PANEL_HIDE_TITLE, RightPanelState } from '../core/right-panel-state';
+import { WatchedSession } from '../core/watched-session';
 import { focusTabAt, nextTabIndex } from '../design/tablist-keyboard';
+import { SessionTabComponent } from '../sessions/session-tab.component';
 import { TodosTabComponent } from './todos/todos-tab.component';
-
-const WATCHED_SESSION_URL = /^\/(?:session|manager)\/([^/?#]+)/;
-
-/** Returns the id of the session or manager the route shows, if any. */
-export function watchedSessionIdOf(url: string): string | undefined {
-  return WATCHED_SESSION_URL.exec(url)?.[1];
-}
 
 interface PanelTab { readonly key: string; readonly label: string; readonly enabled: boolean }
 
 const COMING_SOON = 'Coming soon';
-const RAIL_TITLE = 'Show the right panel — sessions, todos, usage (⌥⌘B)';
+const RAIL_TITLE = 'Show the right panel — session, todos, usage (⌥⌘B)';
 const PANEL_TABS: readonly PanelTab[] = [
+  { key: 'session', label: 'Session', enabled: true },
   { key: 'sessions', label: 'Sessions', enabled: false },
   { key: 'usage', label: 'Usage', enabled: false },
   { key: 'todos', label: 'Todos', enabled: true },
@@ -38,7 +31,7 @@ const PANEL_TABS: readonly PanelTab[] = [
 @Component({
   selector: 'of-right-panel',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [TodosTabComponent],
+  imports: [SessionTabComponent, TodosTabComponent],
   template: `
     @if (!state.open()) {
       <button type="button" class="edge-button rail" data-testid="right-panel-rail" #rail
@@ -63,8 +56,12 @@ const PANEL_TABS: readonly PanelTab[] = [
                   aria-controls="right-panel" aria-label="Hide the right panel" aria-expanded="true"
                   [attr.title]="hideTitle" (click)="collapse()">›</button>
         </header>
-        <div class="tabpanel" role="tabpanel" id="right-panel-tabpanel" aria-labelledby="right-panel-tab-todos">
-          <of-todos-tab [sessionId]="watchedSessionId()" [sessionClosed]="watchedSessionClosed()" [connected]="events.connected()" />
+        <div class="tabpanel" role="tabpanel" id="right-panel-tabpanel" [attr.aria-labelledby]="'right-panel-tab-' + activeKey()">
+          @if (activeKey() === 'session') {
+            <of-session-tab [sessionId]="watchedSessionId()" />
+          } @else {
+            <of-todos-tab [sessionId]="watchedSessionId()" [sessionClosed]="watchedSessionClosed()" [connected]="events.connected()" />
+          }
         </div>
       </aside>
     }
@@ -89,7 +86,6 @@ const PANEL_TABS: readonly PanelTab[] = [
 export class RightPanelComponent {
   protected readonly state = inject(RightPanelState);
   protected readonly events = inject(FleetEventsService);
-  private readonly router = inject(Router);
   private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
   private readonly injector = inject(Injector);
   private readonly tabList = viewChild<ElementRef<HTMLElement>>('tabList');
@@ -99,22 +95,17 @@ export class RightPanelComponent {
   protected readonly hideTitle = RIGHT_PANEL_HIDE_TITLE;
   protected readonly tabs = PANEL_TABS;
   protected readonly comingSoon = COMING_SOON;
-  protected readonly activeKey = signal('todos');
-
-  protected readonly watchedSessionId = toSignal(
-    this.router.events.pipe(
-      filter((event) => event instanceof NavigationEnd),
-      map(() => watchedSessionIdOf(this.router.url)),
-    ),
-    { initialValue: watchedSessionIdOf(this.router.url) },
-  );
+  protected readonly watchedSessionId = inject(WatchedSession).id;
+  private readonly chosenKey = signal<string | undefined>(undefined);
+  /** Until the user picks a tab, a watched session opens on its Session tab and everything else on Todos. */
+  protected readonly activeKey = computed(() => this.chosenKey() ?? (this.watchedSessionId() ? 'session' : 'todos'));
   protected readonly watchedSessionClosed = computed(() => {
     const watchedId = this.watchedSessionId();
     return this.events.sessions().some((session) => session.id === watchedId && session.state === 'closed');
   });
 
   activate(tab: PanelTab): void {
-    if (tab.enabled) this.activeKey.set(tab.key);
+    if (tab.enabled) this.chosenKey.set(tab.key);
   }
 
   collapse(): void {
