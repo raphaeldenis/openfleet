@@ -2,7 +2,8 @@ import { ChangeDetectionStrategy, Component, DestroyRef, ElementRef, Injector, c
 import { toSignal } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, Router } from '@angular/router';
 import { map } from 'rxjs';
-import { MANAGER_ROLE, type ManagerView, type ReopenMode, type Session } from '@openfleet/shared';
+import { MANAGER_ROLE, type ManagerView, type Project, type ReopenMode, type Session } from '@openfleet/shared';
+import { compactElapsedLabel, elapsedSecondsSince } from '../design/elapsed-time';
 import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { showInvisibleControlsAsEscapes } from '../core/bidi-escapes';
@@ -17,6 +18,8 @@ import { ManagerProfileComponent } from './manager-profile.component';
 import { ManagerReopenAction } from './manager-reopen';
 import { PulseNowAction } from './pulse-now';
 
+const REOPEN_EXPLANATION =
+  'Reopen starts a fresh conversation seeded with the mission; Resume continues the previous one. Reopening replaces the saved conversation id, so Resume only resumes the latest.';
 const HANDOFF_TARGET_AVAILABLE_HINT = 'Saved handoffs appear in Notes › handoffs and in the New-session picker.';
 
 @Component({
@@ -33,7 +36,9 @@ const HANDOFF_TARGET_AVAILABLE_HINT = 'Saved handoffs appear in Notes › handof
           <div class="identity">
             <div class="name-row">
               <span data-testid="manager-dashboard-name" class="name" [attr.title]="visibleNameOf(session)">{{ visibleNameOf(session) }}</span>
-              <span class="role-badge" data-testid="manager-role-badge">manager</span>
+              @if (projectName(); as projectName) {
+                <span class="project-name" data-testid="manager-dashboard-project">{{ projectName }}</span>
+              }
               <of-state-chip [state]="session.state" />
               <of-overdue-chip [session]="session" />
             </div>
@@ -42,38 +47,41 @@ const HANDOFF_TARGET_AVAILABLE_HINT = 'Saved handoffs appear in Notes › handof
               <span> · </span>
               <span>{{ session.model || '—' }}</span>
               <span> · </span>
-              <span title="Cost tracking is not implemented yet">—</span>
+              <span data-testid="manager-dashboard-last-activity">last activity {{ lastActivityLabel() }}</span>
             </div>
           </div>
+          <div class="actions">
+            <button
+              #handoffButton
+              type="button"
+              class="of-btn of-btn--secondary"
+              data-testid="manager-dashboard-write-handoff"
+              [attr.aria-expanded]="isHandoffOpen()"
+              [attr.aria-controls]="handoffPanelId"
+              (click)="toggleHandoff()"
+            >Write handoff</button>
+            <button
+              type="button"
+              class="of-btn of-btn--primary"
+              data-testid="manager-dashboard-reopen"
+              title="Start a new conversation from the manager's mission"
+              [disabled]="isReopenUnavailable()"
+              (click)="reopen('fresh')"
+            >Reopen</button>
+            <button
+              type="button"
+              class="of-btn of-btn--secondary"
+              data-testid="manager-dashboard-resume"
+              title="Go back into the manager's previous conversation"
+              [disabled]="isReopenUnavailable()"
+              (click)="reopen('resume')"
+            >Resume</button>
+          </div>
         </header>
-        <div class="actions">
-          <button
-            #handoffButton
-            type="button"
-            class="of-btn of-btn--secondary"
-            data-testid="manager-dashboard-write-handoff"
-            [attr.aria-expanded]="isHandoffOpen()"
-            [attr.aria-controls]="handoffPanelId"
-            (click)="toggleHandoff()"
-          >Write handoff</button>
-          <button
-            type="button"
-            class="of-btn of-btn--secondary"
-            data-testid="manager-dashboard-reopen"
-            title="Start a new conversation from the manager's mission"
-            [disabled]="isReopenUnavailable()"
-            (click)="reopen('fresh')"
-          >Reopen</button>
-          <button
-            type="button"
-            class="of-btn of-btn--secondary"
-            data-testid="manager-dashboard-resume"
-            title="Go back into the manager's previous conversation"
-            [disabled]="isReopenUnavailable()"
-            (click)="reopen('resume')"
-          >Resume</button>
+        <div class="reopen-notes">
+          <p class="reopen-explanation" data-testid="manager-dashboard-reopen-explanation">${REOPEN_EXPLANATION}</p>
           @if (!isSessionClosed()) {
-            <span class="reopen-hint">This manager is running — close it to reopen or resume it.</span>
+            <p class="reopen-hint">This manager is running — close it to reopen or resume it.</p>
           }
           @if (reopening.errorText(); as errorText) {
             <of-error-line role="alert" data-testid="manager-dashboard-reopen-error">{{ errorText }}</of-error-line>
@@ -168,16 +176,16 @@ const HANDOFF_TARGET_AVAILABLE_HINT = 'Saved handoffs appear in Notes › handof
   `,
   styles: `
     .header { display: flex; align-items: center; flex-wrap: wrap; gap: .625rem .75rem; padding: .875rem 1.25rem .5rem; background: var(--panel) }
-    .actions { display: flex; align-items: center; flex-wrap: wrap; gap: .625rem .75rem; padding: 0 1.25rem .875rem; border-bottom: 1px solid var(--line); background: var(--panel); margin-bottom: 1.25rem }
+    .actions { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; margin-left: auto }
+    .reopen-notes { display: flex; flex-direction: column; gap: .5rem; padding: 0 1.25rem .875rem; border-bottom: 1px solid var(--line); background: var(--panel); margin-bottom: 1.25rem }
+    .reopen-notes p { margin: 0 }
+    .reopen-explanation { font-size: .75rem; color: var(--mut) }
     .live-controls { display: flex; align-items: center; flex-wrap: wrap; gap: .625rem .75rem; margin: 0 1.25rem }
     .emoji { width: 2.5rem; height: 2.5rem; border-radius: .5rem; border: 1px solid var(--line); background: var(--sunk); display: flex; align-items: center; justify-content: center; font-size: 1.25rem }
     .identity { display: flex; flex-direction: column; min-width: 0 }
     .name-row { display: flex; align-items: center; gap: .5rem; min-width: 0 }
     .name { font-size: 1rem; font-weight: 600; min-width: 0; overflow-wrap: anywhere }
-    .role-badge {
-      display: inline-flex; align-items: center; height: 1rem; padding: 0 .375rem; border-radius: .25rem; white-space: nowrap;
-      border: 1px solid var(--line-2); color: var(--mut); font-size: .6875rem;
-    }
+    .project-name { font-size: .75rem; color: var(--mut) }
     .meta-line { font-size: .75rem; color: var(--mut) }
     .reopen-hint { font-size: .75rem; color: var(--mut) }
     .cap { display: flex; flex-direction: column; gap: .25rem; width: 8rem; font-size: .6875rem; color: var(--mut) }
@@ -216,6 +224,7 @@ export class ManagerDashboardComponent {
   constructor() {
     const tick = setInterval(() => this.now.set(Date.now()), 1000);
     inject(DestroyRef).onDestroy(() => clearInterval(tick));
+    void this.loadProjects();
     // A card's PulseNowAction is created once per component instance; navigating from one
     // manager to another reuses that instance, so its pending/message state must reset by hand.
     effect(() => {
@@ -228,6 +237,14 @@ export class ManagerDashboardComponent {
       this.managerId();
       untracked(() => this.isHandoffOpen.set(false));
     });
+  }
+
+  private async loadProjects(): Promise<void> {
+    try {
+      this.projects.set((await this.api.listProjects()).items);
+    } catch {
+      // The header simply omits the project name.
+    }
   }
 
   protected readonly handoffPanelId = 'manager-dashboard-handoff-panel';
@@ -267,6 +284,16 @@ export class ManagerDashboardComponent {
   protected readonly countdownSeconds = computed(() => {
     const manager = this.manager();
     return manager ? countdownSecondsUntil(manager.nextPulseAt, this.now()) : null;
+  });
+
+  private readonly projects = signal<readonly Project[]>([]);
+
+  protected readonly projectName = computed(() => this.projects().find((project) => project.id === this.session()?.projectId)?.name);
+
+  protected readonly lastActivityLabel = computed(() => {
+    const stateSince = this.session()?.stateSince;
+    const elapsed = stateSince === undefined ? null : compactElapsedLabel(elapsedSecondsSince(stateSince, this.now()));
+    return elapsed === null ? '—' : `${elapsed} ago`;
   });
 
   protected readonly isSessionClosed = computed(() => this.session()?.state === 'closed');

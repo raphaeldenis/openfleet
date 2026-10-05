@@ -37,7 +37,7 @@ import { showBidiControlsAsEscapes, showInvisibleControlsAsEscapes } from '../co
           </ul>
         }
         @if (isReplyDelivered()) {
-          <p class="delivered" role="status" data-testid="inbox-attention-delivered">{{ replyDeliveredCopy }}</p>
+          <p class="delivered" role="status" data-testid="inbox-attention-delivered"><span class="delivered-check" aria-hidden="true">✓</span>{{ replyDeliveredCopy }}</p>
         } @else {
           <of-composer [sessionId]="item().session.id" [busy]="item().session.state === 'generating'" />
         }
@@ -50,14 +50,15 @@ import { showBidiControlsAsEscapes, showInvisibleControlsAsEscapes } from '../co
     .avatar { display: flex; align-items: center; justify-content: center; flex: none; width: 2rem; height: 2rem; border-radius: .5rem; border: 1px solid var(--line); background: var(--sunk); }
     .body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: .5rem; }
     .meta { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; min-width: 0; }
-    .session-link { min-width: 0; font-weight: 500; color: var(--fg); overflow-wrap: anywhere; }
+    .session-link { min-width: 0; font-weight: 500; color: var(--fg); text-decoration: none; overflow-wrap: anywhere; }
     .session-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
     .age { margin-left: auto; font-size: .6875rem; color: var(--mut); }
     .lines { margin: 0; padding: 0 0 0 1rem; display: flex; flex-direction: column; gap: .125rem; }
     .lines--blockers { color: var(--mut); }
     .line { min-width: 0; overflow-wrap: anywhere; }
     of-composer { display: block; margin: 0 -.75rem; }
-    .delivered { margin: 0; font-size: .75rem; color: var(--mut); }
+    .delivered { display: flex; align-items: center; gap: .5rem; margin: 0; padding: .375rem .625rem; border: 1px solid var(--line); border-radius: .375rem; background: var(--sunk); font-size: .75rem; }
+    .delivered-check { color: var(--state-idle); }
   `,
 })
 export class AttentionCardComponent {

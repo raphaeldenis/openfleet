@@ -10,7 +10,7 @@ const MODEL_RUNGS = ['haiku', 'sonnet', 'opus', 'fable'] as const;
 const LIVE_MISSION_NOTE =
   'A running manager does not re-read its mission when you save it: it reads the edited mission only at its next fresh start (Reopen).';
 
-/** What the user edits of a manager: its pulse, children cap, mission and model; saving sends only what changed. */
+/** The always-open form for a manager's pulse, children cap, mission and model; saving sends only what changed. */
 @Component({
   selector: 'of-manager-profile-editor',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -31,8 +31,8 @@ const LIVE_MISSION_NOTE =
         <of-error-line role="alert">{{ error }}</of-error-line>
       }
       <div class="actions">
-        <button type="submit" class="of-btn of-btn--primary" [disabled]="isSaving()">Save</button>
-        <button type="button" class="of-btn of-btn--secondary" [disabled]="isSaving()" (click)="cancelled.emit()">Cancel</button>
+        <button type="submit" class="of-btn of-btn--primary" [disabled]="isSaving() || changedFieldCount() === 0">Save</button>
+        <span class="changes" role="status" data-testid="manager-changes-count">{{ changesLabel() }}</span>
       </div>
     </form>
   `,
@@ -40,7 +40,8 @@ const LIVE_MISSION_NOTE =
     .of-form { display: flex; flex-direction: column; gap: 1rem }
     .note { margin: 0; font-size: .75rem; color: var(--mut) }
     .model { width: auto; min-width: 10rem }
-    .actions { display: flex; gap: .5rem }
+    .actions { display: flex; align-items: center; gap: .75rem }
+    .changes { font-size: .75rem; color: var(--mut) }
   `,
 })
 export class ManagerProfileEditorComponent {
@@ -48,7 +49,6 @@ export class ManagerProfileEditorComponent {
   readonly manager = input.required<ManagerView>();
   readonly currentModel = input<string | undefined>(undefined);
   readonly saved = output<ManagerView>();
-  readonly cancelled = output<void>();
 
   private readonly api = inject(FleetApiService);
   private readonly fields = viewChild(ManagerFieldsComponent);
@@ -79,11 +79,8 @@ export class ManagerProfileEditorComponent {
       return;
     }
     const changes = this.changes();
-    const hasNoChange = Object.keys(changes).length === 0;
-    if (hasNoChange) {
-      this.cancelled.emit();
-      return;
-    }
+    const hasNoChange = this.changedFieldCount() === 0;
+    if (hasNoChange) return;
     this.isSaving.set(true);
     this.saveError.set(null);
     try {
@@ -95,7 +92,7 @@ export class ManagerProfileEditorComponent {
     }
   }
 
-  private changes(): UpdateManager {
+  private readonly changes = computed((): UpdateManager => {
     const manager = this.manager();
     const pulseSeconds = this.pulseSeconds();
     const isPulseChosen = pulseSeconds !== undefined && pulseSeconds !== null;
@@ -105,5 +102,8 @@ export class ManagerProfileEditorComponent {
       ...(this.mission() !== manager.missionText && { mission: this.mission() }),
       ...(this.model() !== undefined && this.model() !== this.currentModel() && { model: this.model() }),
     };
-  }
+  });
+
+  protected readonly changedFieldCount = computed(() => Object.keys(this.changes()).length);
+  protected readonly changesLabel = computed(() => (this.changedFieldCount() === 0 ? 'No changes' : `${this.changedFieldCount()} changed`));
 }

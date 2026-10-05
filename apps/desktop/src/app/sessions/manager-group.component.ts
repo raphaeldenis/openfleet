@@ -38,13 +38,18 @@ const NO_PULSE_LABEL = '—';
                 [attr.aria-label]="visibleNameOf(row.session) + ' — ' + row.session.state"
                 (click)="open(row.session)"
               >
-                <span class="name" [attr.title]="visibleNameOf(row.session)">{{ row.session.emoji }} {{ visibleNameOf(row.session) }}</span>
-                <span class="meta">
-                  <of-state-chip [state]="row.session.state" />
-                  @if (row.view; as view) {
-                    <span [attr.data-testid]="'manager-row-' + row.session.id + '-children'" title="Children">{{ view.childrenCount }}/{{ view.childrenCap }}</span>
-                    <span [attr.data-testid]="'manager-row-' + row.session.id + '-countdown'" [title]="row.countdownTip">◎ {{ row.countdown }}</span>
-                  }
+                <span class="tile" aria-hidden="true">{{ row.session.emoji }}</span>
+                <span class="text">
+                  <span class="name" [attr.title]="visibleNameOf(row.session)">{{ visibleNameOf(row.session) }}</span>
+                  <span class="detail-line">
+                    <of-state-chip [state]="row.session.state" />
+                    @if (row.view; as view) {
+                      <span class="pulse-meta">
+                        <span [attr.data-testid]="'manager-row-' + row.session.id + '-children'" title="Children">{{ view.childrenCount }}/{{ view.childrenCap }}</span>
+                        <span [attr.data-testid]="'manager-row-' + row.session.id + '-countdown'" [title]="row.countdownTip">◎ {{ row.countdown }}</span>
+                      </span>
+                    }
+                  </span>
                 </span>
               </button>
             </li>
@@ -58,16 +63,19 @@ const NO_PULSE_LABEL = '—';
     ul { list-style: none; padding: 0; margin: 0 }
     .empty { margin: 0; padding: .25rem .75rem .5rem; font-size: .75rem; color: var(--mut) }
     .row {
-      display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .125rem .5rem;
+      display: flex; align-items: center; gap: .5rem;
       padding: .4rem .6rem; cursor: pointer; width: 100%; border: none; background: none;
       font: inherit; color: var(--fg); text-align: left; min-width: 0;
     }
+    .tile { display: flex; flex: none; align-items: center; justify-content: center; width: 1.5rem; height: 1.5rem; border: 1px solid var(--line); border-radius: 50%; background: var(--sunk) }
+    .text { display: flex; flex-direction: column; flex: 1; gap: .125rem; min-width: 0 }
+    .detail-line { display: flex; align-items: center; justify-content: space-between; gap: .375rem; --chip-height: 1.125rem; --chip-font-size: .6875rem }
+    .pulse-meta { display: flex; gap: .375rem; font-size: .6875rem; color: var(--mut); font-family: var(--mono) }
     .row:hover { background: var(--hover) }
     .row[aria-current='true'] { background: var(--active); box-shadow: inset 2px 0 0 var(--accent); font-weight: 500 }
     .row.closed { opacity: .5 }
     .row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
-    .row .name { flex: 1 1 6rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
-    .row .meta { display: flex; flex-wrap: wrap; align-items: center; gap: .125rem .375rem; font-size: .6875rem; color: var(--mut); font-family: var(--mono) }
+    .row .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
   `,
 })
 export class ManagerGroupComponent {

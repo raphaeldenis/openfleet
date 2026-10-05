@@ -85,24 +85,31 @@ describe('the manager profile', () => {
   });
 
   describe('what the user reads about the manager', () => {
-    it('user sees the project, harness, model, pulse interval, children cap and last activity', async () => {
+    it('user reads the project, harness, model and last activity in the header', async () => {
+      await openProfile();
+
+      await waitFor(() => expect(screen.getByTestId('manager-dashboard-project')).toHaveTextContent('Fleet'));
+      const meta = screen.getByTestId('manager-dashboard-meta');
+      expect(meta).toHaveTextContent('claude-cli');
+      expect(meta).toHaveTextContent('sonnet');
+      expect(meta).toHaveTextContent('last activity 10 min ago');
+    });
+
+    it('user sees the pulse interval, children cap and model as facts', async () => {
       await openProfile();
       await screen.findByRole('region', { name: 'Profile' });
 
-      await waitFor(() => expect(factOf('Project')).toHaveTextContent('Fleet'));
-      expect(factOf('Harness')).toHaveTextContent('claude-cli');
-      expect(factOf('Model')).toHaveTextContent('sonnet');
-      expect(factOf('Pulse')).toHaveTextContent('every 10 min');
+      expect(factOf('Pulse interval')).toHaveTextContent('10 min');
       expect(factOf('Children cap')).toHaveTextContent('4');
-      expect(factOf('Last activity')).toHaveTextContent('10 min ago');
+      expect(factOf('Model')).toHaveTextContent('sonnet');
     });
 
-    it('user still sees the profile when the project name cannot be loaded', async () => {
+    it('user still sees the profile, without a project name, when the projects cannot be loaded', async () => {
       await openProfile({ api: fakeApi({ listProjects: vi.fn().mockRejectedValue(new Error('down')) }) });
 
       await screen.findByRole('region', { name: 'Profile' });
 
-      expect(factOf('Project')).toHaveTextContent('—');
+      expect(screen.queryByTestId('manager-dashboard-project')).toBeNull();
     });
 
     it('user reads the mission as rendered text, not as markdown source', async () => {
@@ -147,9 +154,28 @@ describe('the manager profile', () => {
   describe('editing the manager', () => {
     const openEditor = async (api = fakeApi()) => {
       await openProfile({ api });
-      await userEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+      await screen.findByRole('button', { name: 'Save' });
       return api;
     };
+
+    it('user finds the edit form already open, with Save off until something changes', async () => {
+      await openEditor();
+
+      expect(screen.getByRole('spinbutton', { name: 'Children cap' })).toHaveValue(4);
+      expect(screen.getByRole('textbox', { name: 'Mission' })).toHaveValue(MISSION);
+      expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+      expect(screen.getByTestId('manager-changes-count')).toHaveTextContent('No changes');
+    });
+
+    it('user sees how many fields they changed', async () => {
+      await openEditor();
+
+      await userEvent.click(screen.getByRole('button', { name: 'Increase children cap' }));
+      await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Model' }), 'opus');
+
+      expect(screen.getByTestId('manager-changes-count')).toHaveTextContent('2 changed');
+      expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
+    });
 
     it('user changes the children cap and saves it, and only that', async () => {
       const api = await openEditor();
@@ -174,7 +200,7 @@ describe('the manager profile', () => {
       const mission = await screen.findByRole('region', { name: 'Mission' });
       expect(await within(mission).findByText('Ship the roadmap.')).toBeInTheDocument();
       expect(within(mission).getByText('Edited here — a Scape re-import will not overwrite it.')).toBeInTheDocument();
-      expect(screen.queryByRole('button', { name: 'Save' })).toBeNull();
+      await waitFor(() => expect(screen.getByTestId('manager-changes-count')).toHaveTextContent('No changes'));
     });
 
     it('user changes the model and saves it', async () => {
@@ -204,7 +230,8 @@ describe('the manager profile', () => {
 
     it('user sees the daemon refusal when the save fails, keeps the form, and saves again', async () => {
       const updateManager = vi.fn().mockRejectedValueOnce(apiFailure('invalid_body', 400)).mockResolvedValue(managerViewOf({ childrenCap: 5 }));
-      const api = await openEditor(fakeApi({ updateManager }));
+      const getManagerProfile = vi.fn().mockResolvedValueOnce(profileOf()).mockResolvedValue(profileOf({ childrenCap: 5 }));
+      const api = await openEditor(fakeApi({ updateManager, getManagerProfile }));
 
       await userEvent.click(screen.getByRole('button', { name: 'Increase children cap' }));
       await userEvent.click(screen.getByRole('button', { name: 'Save' }));
@@ -214,21 +241,17 @@ describe('the manager profile', () => {
       await userEvent.click(screen.getByRole('button', { name: 'Save' }));
 
       await waitFor(() => expect(api.updateManager).toHaveBeenCalledTimes(2));
-      await waitFor(() => expect(screen.queryByRole('button', { name: 'Save' })).toBeNull());
-    });
-
-    it('user cancels the edit and sees the manager as it was', async () => {
-      const api = await openEditor();
-
-      await userEvent.click(screen.getByRole('button', { name: 'Increase children cap' }));
-      await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-
-      expect(screen.queryByRole('button', { name: 'Save' })).toBeNull();
-      expect(api.updateManager).not.toHaveBeenCalled();
+      await waitFor(() => expect(screen.getByTestId('manager-changes-count')).toHaveTextContent('No changes'));
     });
   });
 
   describe('reopening a closed manager', () => {
+    it('user is told what Reopen and Resume each do', async () => {
+      await openProfile();
+
+      expect(await screen.findByTestId('manager-dashboard-reopen-explanation')).toHaveTextContent('Reopen starts a fresh conversation seeded with the mission; Resume continues the previous one.');
+    });
+
     it('user reopens it fresh, from its mission', async () => {
       const api = await openProfile();
 

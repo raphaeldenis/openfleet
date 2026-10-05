@@ -36,8 +36,8 @@ const LOOK: Record<ChipState, ChipLook> = {
   styles: `
     .chip {
       display: inline-flex; align-items: center; gap: .375rem;
-      height: 1.5rem; padding: 0 .5rem; border-radius: .375rem;
-      font-family: var(--mono); font-size: .75rem; font-weight: 500;
+      height: var(--chip-height, 1.5rem); padding: 0 .5rem; border-radius: .375rem;
+      font-family: var(--mono); font-size: var(--chip-font-size, .75rem); font-weight: 500;
     }
     .elapsed { color: var(--mut); }
   `,

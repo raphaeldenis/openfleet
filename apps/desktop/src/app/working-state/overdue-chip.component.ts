@@ -26,7 +26,7 @@ import { injectOverdue } from './working-state-overdue';
       background: color-mix(in oklch, var(--state-waiting-permission) 14%, transparent);
     }
     .chip > span[aria-hidden] { color: var(--state-waiting-permission); }
-    .chip.compact { justify-content: center; width: 1.25rem; padding: 0; border-radius: 50%; }
+    .chip.compact { justify-content: center; width: 1.25rem; padding: 0; border-radius: .25rem; border: 1px solid color-mix(in oklch, var(--state-waiting-permission) 60%, transparent); }
   `,
 })
 export class OverdueChipComponent {

@@ -31,13 +31,15 @@ const BUSY_NOTE = 'This session is mid-turn — your message is delivered next t
           aria-label="Message this session"
           [placeholder]="placeholder()"
         ></textarea>
-        <button type="button" class="of-btn of-btn--primary" data-testid="composer-send" [attr.aria-disabled]="isSending() ? 'true' : null" [attr.aria-busy]="isSending()" (click)="send()">{{ sendLabel() }}</button>
-        @if (busy()) {
-          <span class="status" data-testid="composer-busy-note">{{ busyNote }}</span>
-        }
-        @if (status(); as status) {
-          <span class="status" data-testid="composer-status">{{ status }}</span>
-        }
+        <div class="actions">
+          <button type="button" class="of-btn of-btn--primary" data-testid="composer-send" [attr.aria-disabled]="isSending() ? 'true' : null" [attr.aria-busy]="isSending()" (click)="send()">{{ sendLabel() }}</button>
+          @if (busy()) {
+            <span class="status" data-testid="composer-busy-note">{{ busyNote }}</span>
+          }
+          @if (status(); as status) {
+            <span class="status" data-testid="composer-status">{{ status }}</span>
+          }
+        </div>
         @if (sendError(); as error) {
           <of-error-line role="alert" data-testid="composer-send-error">{{ error }}</of-error-line>
         }
@@ -45,8 +47,8 @@ const BUSY_NOTE = 'This session is mid-turn — your message is delivered next t
     }
   `,
   styles: `
-    .composer { display: flex; align-items: flex-end; flex-wrap: wrap; gap: .625rem; padding: .5rem .75rem; }
-    .of-input--textarea { flex: 1; }
+    .composer { display: flex; flex-direction: column; align-items: stretch; gap: .5rem; padding: .5rem .75rem; }
+    .actions { display: flex; align-items: center; flex-wrap: wrap; gap: .625rem; }
     .status { font-size: .6875rem; color: var(--mut); flex: 0 1 auto; min-width: 0; }
   `,
 })

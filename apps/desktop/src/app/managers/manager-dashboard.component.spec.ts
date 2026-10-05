@@ -58,19 +58,6 @@ describe('ManagerDashboardComponent', () => {
     expect(screen.getByTestId('manager-dashboard-cap')).toHaveTextContent('1/2');
   });
 
-  it('draws the manager role badge at 11px, not in the 10px one-badge size', async () => {
-    const fake = fakeEvents({ sessions: [MANAGER_SESSION], managers: [MANAGER_VIEW] });
-    await render(ManagerDashboardComponent, {
-      providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('m1') }, { provide: FleetEventsService, useValue: fake }],
-    });
-
-    const roleBadge = screen.getByTestId('manager-role-badge');
-
-    expect(roleBadge).toHaveTextContent('manager');
-    expect(roleBadge).not.toHaveClass('of-badge');
-    expect(getComputedStyle(roleBadge).fontSize).toBe('0.6875rem');
-  });
-
   it('gives an unbroken long manager name a tooltip and lets it wrap instead of being clipped', async () => {
     const longName = 'A'.repeat(80);
     const fake = fakeEvents({ sessions: [{ ...MANAGER_SESSION, name: longName }], managers: [MANAGER_VIEW] });
@@ -191,7 +178,7 @@ describe('ManagerDashboardComponent', () => {
       const { fixture } = await renderManager(MANAGER_SESSION);
       await fixture.whenStable();
 
-      const profile = await screen.findByRole('heading', { name: 'Profile' });
+      const profile = await screen.findByRole('region', { name: 'Profile' });
       expect(isBefore(profile, screen.getByTestId('manager-dashboard-live'))).toBe(true);
       expect(screen.getByTestId('manager-dashboard-child-c1')).toBeTruthy();
     });
@@ -200,7 +187,7 @@ describe('ManagerDashboardComponent', () => {
       const { fixture } = await renderManager({ ...MANAGER_SESSION, state: 'closed' });
       await fixture.whenStable();
 
-      expect(await screen.findByRole('heading', { name: 'Profile' })).toBeTruthy();
+      expect(await screen.findByRole('region', { name: 'Profile' })).toBeTruthy();
       expect(screen.queryByTestId('manager-dashboard-live')).toBeNull();
       expect(screen.queryByTestId('manager-dashboard-pulse')).toBeNull();
       expect(screen.queryByTestId('manager-dashboard-terminal')).toBeNull();
@@ -390,8 +377,8 @@ describe('ManagerDashboardComponent', () => {
     expect(api.pulseNow).toHaveBeenCalledWith('m1');
   });
 
-  it('shows the harness, model rung and cost under the manager name', async () => {
-    const managerSessionWithModel = { ...MANAGER_SESSION, model: 'opus' };
+  it('shows the harness, model rung and last activity under the manager name', async () => {
+    const managerSessionWithModel = { ...MANAGER_SESSION, model: 'opus', stateSince: new Date(Date.now() - 3 * 3600_000).toISOString() };
     const fake = fakeEvents({ sessions: [managerSessionWithModel], managers: [MANAGER_VIEW] });
     await render(ManagerDashboardComponent, {
       providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('m1') }, { provide: FleetEventsService, useValue: fake }],
@@ -400,7 +387,7 @@ describe('ManagerDashboardComponent', () => {
     const meta = screen.getByTestId('manager-dashboard-meta');
     expect(meta).toHaveTextContent('claude-cli');
     expect(meta).toHaveTextContent('opus');
-    expect(meta.querySelector('[title="Cost tracking is not implemented yet"]')).toHaveTextContent('—');
+    expect(meta).toHaveTextContent('last activity 3 h ago');
   });
 
   it('opens the manager\'s own session terminal when "Terminal" is clicked', async () => {

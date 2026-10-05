@@ -6,6 +6,7 @@ import { map } from 'rxjs';
 import { showInvisibleControlsAsEscapes } from '../core/bidi-escapes';
 import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
+import { compactElapsedLabel } from '../design/elapsed-time';
 import { ErrorLineComponent } from '../design/error-line.component';
 import { moveFocusWithinListbox } from '../design/listbox-keyboard';
 import { PopoverComponent } from '../design/popover.component';
@@ -169,7 +170,7 @@ function rememberLastVisitedProjectId(projectId: string): void {
                           <span class="emoji-tile" aria-hidden="true">{{ manager.emoji }}</span>
                           <span class="name">{{ visibleNameOf(manager) }}</span>
                           <of-state-chip [state]="manager.state" />
-                          <span class="meta">{{ manager.model }}</span>
+                          <span class="meta" data-testid="manager-row-meta">{{ managerMetaOf(manager) }}</span>
                         </a>
                       </li>
                     }
@@ -324,6 +325,13 @@ export class ProjectHomeComponent {
   protected readyTotalOf(index: number): number {
     const count = this.counts()[index];
     return count?.status === 'ready' ? count.total : 0;
+  }
+
+  protected managerMetaOf(session: Session): string {
+    const view = this.events.managers().find((candidate) => candidate.sessionId === session.id);
+    const model = session.model ?? '';
+    if (!view) return model;
+    return [model, `pulse ${compactElapsedLabel(view.pulseSeconds)}`, `${view.childrenCount}/${view.childrenCap}`].filter(Boolean).join(' · ');
   }
 
   protected visibleNameOf(session: Session): string {

@@ -40,7 +40,8 @@ test('a fake session appears in the sidebar, shows output, and its permission ga
   const created = await request.post(`${api}/api/sessions`, { headers, data: { directory: '/tmp', name: 'Gimli', emoji: '⚔️', harness: 'fake' } });
   const session = await created.json();
   const sessionRow = page.getByTestId(`session-${session.id}`);
-  await expect(sessionRow).toContainText('⚔️ Gimli');
+  await expect(sessionRow).toContainText('⚔️');
+  await expect(sessionRow).toContainText('Gimli');
 
   const hookToken = (await (await request.get(`${api}/api/sessions/${session.id}/tokens`, { headers })).json()).hookToken;
   await request.post(`${api}/hooks/${hookToken}`, { data: { session_id: 'x', hook_event_name: 'SessionStart' } });
