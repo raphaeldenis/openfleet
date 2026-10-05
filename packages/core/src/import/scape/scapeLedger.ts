@@ -21,6 +21,10 @@ export function hashOfValues(values: Record<string, HashableValue>): string {
 export const withoutColumns = <T extends Record<string, HashableValue>>(values: T, ignoredColumns: readonly string[]): Record<string, HashableValue> =>
   Object.fromEntries(Object.entries(values).filter(([column]) => !ignoredColumns.includes(column)));
 
+/** Drops the listed columns that hold null, so a column added after a record was imported does not change the hash of a record that leaves it empty. */
+export const withoutColumnsHoldingNull = <T extends Record<string, HashableValue>>(values: T, columns: readonly string[]): Record<string, HashableValue> =>
+  Object.fromEntries(Object.entries(values).filter(([column, value]) => !(columns.includes(column) && value === null)));
+
 /** What the last import wrote, per entity: the hash of the source record. It is the common ancestor of the 3-way compare on a re-import. */
 export class ImportLedger {
   constructor(private readonly db: DatabaseSync) {}

@@ -24,6 +24,8 @@ export interface DataStore {
   id: string;
   projectId: string;
   displayName: string;
+  /** The text column whose value names a row, when the store has one. */
+  naturalKeyColumnId?: string;
   createdAt: string;
   updatedAt: string;
 }

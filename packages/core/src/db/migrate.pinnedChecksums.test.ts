@@ -27,6 +27,7 @@ const SHIPPED_MIGRATION_CHECKSUMS: Record<string, string> = {
   '018_notes_folder_check': '0d0551435968615ae6c9e9b114364ecb5adf10c9aad91e2718a356606f156543',
   '019_session_close_reason': '99e755ad0905083669c3c6d68aa9e18ad034d1eb96070ea071165914b984745d',
   '020_scape_import_ledger': 'a5d945b68185461ff9644482244bf8d76fbe4d689b90635139e7eeb882102c6a',
+  '021_data_store_natural_key': 'ce4c6061c7937bc7268709fe0e2368cb62fa7a4f57bd486e09d83cd858857d7d',
 };
 
 const migrationVersionsOnDisk = () =>

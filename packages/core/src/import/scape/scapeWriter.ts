@@ -109,9 +109,11 @@ function storesBlockedByAMissingDefinition(db: DatabaseSync, plan: ImportPlan): 
   return new Set([...missingStores, ...storesMissingAColumn]);
 }
 
+const DATA_STORE_WRITE_POLICY: WritePolicy = { ignoredColumns: ['updated_at'], columnsOmittedFromHashWhenNull: ['natural_key_column_id'] };
+
 function writeDataStoreDefinitions(input: { db: DatabaseSync; ledger: ImportLedger; plan: ImportPlan; report: ImportReport }): Set<string> {
   const { db, plan, report } = input;
-  writeEntities({ ...input, entity: 'dataStores', kind: 'data_store', table: 'data_stores', planned: plan.dataStores, policyOf: () => ({ ignoredColumns: ['updated_at'] }) });
+  writeEntities({ ...input, entity: 'dataStores', kind: 'data_store', table: 'data_stores', planned: plan.dataStores, policyOf: () => DATA_STORE_WRITE_POLICY });
   const storesWithoutRecord = new Set(plan.dataStores.filter((store) => !isStored(db, 'data_stores', store.id)).map((store) => store.id));
   const onlyWhereTheStoreExists = (planned: PlannedRecord): WritePolicy => ({ canInsert: () => !storesWithoutRecord.has(String(planned.record.store_id)) });
   writeEntities({ ...input, entity: 'columns', kind: 'column', table: 'ds_columns', planned: plan.columns, policyOf: onlyWhereTheStoreExists, isNotConverted: (extra) => extra.hasDroppedFormat });

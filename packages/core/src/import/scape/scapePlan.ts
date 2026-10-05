@@ -90,7 +90,10 @@ function planStores(plan: ImportPlan, source: ScapeSource, project: ScapeProject
     const createdAt = scapeNotesDateToIso(store.createdAt);
     plan.dataStores.push({
       id: store.id,
-      record: { project_id: project.id, display_name: store.displayName, created_at: createdAt, updated_at: scapeNotesDateToIso(store.updatedAt) },
+      record: {
+        project_id: project.id, display_name: store.displayName, natural_key_column_id: store.naturalKeyColumnId,
+        created_at: createdAt, updated_at: scapeNotesDateToIso(store.updatedAt),
+      },
       extra: {},
     });
     const columns = planStoreColumns(plan, source, { id: store.id, createdAt });
