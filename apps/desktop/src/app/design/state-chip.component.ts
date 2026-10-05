@@ -31,7 +31,7 @@ const LOOK: Record<ChipState, ChipLook> = {
       [attr.data-stale]="stale() ? '1' : null"
       [style.background]="'color-mix(in oklch, var(' + look().colorVar + ') 14%, transparent)'"
       class="chip"
-    ><span [style.color]="'var(' + look().colorVar + ')'">{{ look().icon }}</span><span data-testid="state-chip-label" style="color: var(--fg)">{{ look().label }}</span>@if (elapsedDisplay(); as elapsed) {<span data-testid="state-chip-elapsed" class="elapsed">{{ elapsed }}</span>}</span>
+    ><span [style.color]="'var(' + look().colorVar + ')'">{{ look().icon }}</span><span data-testid="state-chip-label" style="color: var(--fg)">{{ look().label }}{{ detail() ? ' · ' + detail() : '' }}</span>@if (elapsedDisplay(); as elapsed) {<span data-testid="state-chip-elapsed" class="elapsed">{{ elapsed }}</span>}</span>
   `,
   styles: `
     .chip {
@@ -46,6 +46,10 @@ export class StateChipComponent {
   readonly state = input.required<string>();
   readonly stale = input(false);
   readonly since = input<string | undefined>(undefined);
+  /** A short qualifier written after the label, such as "exit 1". */
+  readonly detail = input<string | undefined>(undefined);
+  /** Draws the chip in the error colour and blinks it, whatever its state. */
+  readonly isFailure = input(false);
   private readonly now = signal(Date.now());
 
   constructor() {
@@ -53,11 +57,16 @@ export class StateChipComponent {
     inject(DestroyRef).onDestroy(() => clearInterval(tick));
   }
 
-  protected readonly look = computed((): ChipLook => {
+  private readonly stateLook = computed((): ChipLook => {
     const state = this.state();
     return Object.hasOwn(LOOK, state)
       ? LOOK[state as ChipState]
       : { icon: '?', label: state, colorVar: '--state-closed', live: false, errBlink: false };
+  });
+
+  protected readonly look = computed((): ChipLook => {
+    const look = this.stateLook();
+    return this.isFailure() ? { ...look, colorVar: '--state-error', live: false, errBlink: true } : look;
   });
 
   protected readonly elapsedDisplay = computed(() => {

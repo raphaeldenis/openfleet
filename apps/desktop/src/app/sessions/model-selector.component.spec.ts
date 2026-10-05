@@ -611,7 +611,7 @@ describe('ModelSelectorComponent', () => {
     it('user can see the resolved model id, the CLI version and the previous id when the model drifted', async () => {
       await renderWithSession({ resolvedModel: 'claude-opus-5-5', cliVersion: '2.1.284', modelDriftedFrom: 'claude-opus-5-4' });
 
-      expect(screen.getByTestId('resolved-model')).toHaveTextContent('resolved claude-opus-5-5');
+      expect(screen.getByTestId('resolved-model')).toHaveTextContent('resolved · claude-opus-5-5');
       expect(screen.getByTestId('cli-version')).toHaveTextContent('CLI 2.1.284');
       expect(screen.getByTestId('model-drift')).toHaveTextContent('changed from claude-opus-5-4');
     });
@@ -682,7 +682,7 @@ describe('ModelSelectorComponent', () => {
 
         // Assert — the still-running process stays visible next to the pending model
         expect(screen.getByTestId('current-model')).toHaveTextContent('sonnet');
-        expect(screen.getByTestId('resolved-model')).toHaveTextContent('resolved claude-opus-5-5');
+        expect(screen.getByTestId('resolved-model')).toHaveTextContent('resolved · claude-opus-5-5');
         expect(screen.getByTestId('model-drift')).toHaveTextContent('changed from claude-opus-5-4');
         expect(screen.getByTestId('cli-version')).toHaveTextContent('CLI 2.1.284');
 
@@ -700,7 +700,7 @@ describe('ModelSelectorComponent', () => {
         await fixture.whenStable();
 
         // Assert
-        expect(screen.getByTestId('resolved-model')).toHaveTextContent('resolved claude-sonnet-5-5');
+        expect(screen.getByTestId('resolved-model')).toHaveTextContent('resolved · claude-sonnet-5-5');
         expect(screen.getByTestId('cli-version')).toHaveTextContent('CLI 2.1.290');
         expect(screen.queryByTestId('model-drift')).toBeNull();
       });

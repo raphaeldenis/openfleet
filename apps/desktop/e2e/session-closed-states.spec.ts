@@ -32,8 +32,9 @@ test('an agent that exits with an error closes the session with the error strip,
 
   await exitFakeCli(request, session.id, { code: 1 });
 
-  await expect(sessionStateLabel(page)).toHaveText('closed');
-  await expect(page.getByTestId('session-exit-code')).toHaveText('closed · exit 1');
+  await expect(sessionStateLabel(page)).toHaveText('closed · exit 1');
+  await expect(page.getByTestId('session-details').getByTestId('state-chip')).toHaveAttribute('data-errblink', '1');
+  await expect(page.getByTestId('session-exit-code')).toHaveText(/^exit 1 · \d{2}[:.]\d{2}$/);
   await expect(lifecycleStrip(page)).toHaveAttribute('data-variant', 'error');
   await expect(lifecycleStrip(page)).toHaveAttribute('role', 'alert');
   await expect(page.getByTestId('lifecycle-title')).toContainText('Agent process exited');
@@ -52,7 +53,8 @@ test('a session that ends cleanly closes with a neutral card, no strip and the w
 
   await exitFakeCli(request, session.id, { code: 0 });
 
-  await expect(sessionStateLabel(page)).toHaveText('closed');
+  await expect(sessionStateLabel(page)).toHaveText('closed · exit 0');
+  await expect(page.getByTestId('session-details').getByTestId('state-chip')).not.toHaveAttribute('data-errblink', '1');
   await expect(page.getByTestId('session-closed-title')).toContainText('Closed · exit 0');
   await expect(closedCard(page)).toContainText('Worktree kept · transcript is read-only.');
   await expect(closedCard(page)).toHaveAttribute('data-variant', 'neutral');
@@ -61,13 +63,27 @@ test('a session that ends cleanly closes with a neutral card, no strip and the w
   await expectReopenFreshUnavailableWithItsReason(page);
 });
 
+test('a closed session keeps showing its last state, read-only, in the State card', async ({ page, request }) => {
+  const session = await fakeSessions.create(request, { name: 'Left a state' });
+  const lastState = { sessionId: session.id, updatedAt: new Date().toISOString(), plan: ['Ship the card layout'], todo: [], remaining: [], questionsForHuman: [], internalQuestions: [], blockers: [] };
+  await page.route(`**/api/sessions/${session.id}/working-state`, (route) => route.fulfill({ json: lastState }));
+  await openSessionThatIsIdle(page, session);
+
+  await exitFakeCli(request, session.id, { code: 0 });
+
+  const stateCard = page.getByTestId('state-panel');
+  await expect(stateCard.getByTestId('state-panel-updated')).toHaveText(/^last state · read-only · \d{2}[:.]\d{2}$/);
+  await expect(stateCard.getByTestId('state-section-plan')).toContainText('Ship the card layout');
+  await expect(stateCard).not.toContainText('State not shown');
+});
+
 test('a refused resume closes the session as conversation not found, explains it once and offers no resume', async ({ page, request }) => {
   const session = await fakeSessions.create(request, { name: 'Lost transcript' });
   await openSessionThatIsIdle(page, session);
 
   await exitFakeCli(request, session.id, { code: 1, conversationNotFound: true });
 
-  await expect(sessionStateLabel(page)).toHaveText('closed');
+  await expect(sessionStateLabel(page)).toHaveText('closed · exit 1');
   await expect(lifecycleStrip(page)).toHaveAttribute('data-variant', 'error');
   await expect(page.getByTestId('lifecycle-title')).toContainText('Conversation not found');
   await expect(page.getByTestId('lifecycle-message')).toHaveText('The transcript for this session is gone; start a new session from its handoff.');
@@ -84,7 +100,7 @@ test('a resume the daemon refuses shows the Resume failed strip and keeps the re
     const session = await fakeSessions.create(request, { name: 'Vanished directory', directory });
     await openSessionThatIsIdle(page, session);
     await exitFakeCli(request, session.id, { code: 0 });
-    await expect(sessionStateLabel(page)).toHaveText('closed');
+    await expect(sessionStateLabel(page)).toHaveText('closed · exit 0');
     rmSync(directory, { recursive: true, force: true });
 
     await closedCard(page).getByRole('button', { name: /Resume in worktree/ }).click();
@@ -95,7 +111,7 @@ test('a resume the daemon refuses shows the Resume failed strip and keeps the re
     await expect(page.getByTestId('session-closed-title')).toHaveText(/Not running/);
     await expect(closedCard(page)).toHaveAttribute('data-variant', 'error');
     await expect(closedCard(page).getByRole('button', { name: /Resume in worktree/ })).toBeEnabled();
-    await expect(sessionStateLabel(page)).toHaveText('closed');
+    await expect(sessionStateLabel(page)).toHaveText('closed · exit 0');
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

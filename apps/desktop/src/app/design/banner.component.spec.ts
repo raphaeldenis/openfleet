@@ -16,6 +16,13 @@ describe('BannerComponent', () => {
     expect(screen.getByTestId('banner')).toHaveTextContent('Approve or deny in the terminal.');
   });
 
+  it('is a card unless it is asked to be a strip', async () => {
+    await render(BannerComponent, {
+      bindings: [inputBinding('variant', () => 'mismatch'), inputBinding('title', () => 't'), inputBinding('description', () => 'd')],
+    });
+    expect(screen.getByTestId('banner')).toHaveAttribute('data-layout', 'card');
+  });
+
   it('accepts the error variant without throwing', async () => {
     await render(BannerComponent, {
       bindings: [inputBinding('variant', () => 'error'), inputBinding('title', () => 't'), inputBinding('description', () => 'd')],

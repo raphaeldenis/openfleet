@@ -67,7 +67,25 @@ describe('PermissionModePickerComponent', () => {
     const options = await screen.findAllByRole('option');
     const expectedModes = ['manual', 'acceptEdits', 'plan', 'auto', 'dontAsk', 'bypassPermissions'];
     expect(options).toHaveLength(expectedModes.length);
-    expectedModes.forEach((mode, index) => expect(options[index]).toHaveTextContent(new RegExp(`^${mode}`)));
+    expectedModes.forEach((mode, index) => expect(options[index]).toHaveAccessibleName(new RegExp(`^${mode}`)));
+  });
+
+  it('puts a check mark on the mode in force, and none on the others', async () => {
+    await renderPicker({ currentMode: 'plan' });
+
+    await openModes();
+
+    expect(await modeNamed('plan')).toHaveTextContent('✓');
+    expect(await modeNamed('manual')).not.toHaveTextContent('✓');
+  });
+
+  it('writes a "!" right after bypassPermissions and after no other mode', async () => {
+    await renderPicker();
+
+    await openModes();
+
+    expect((await modeNamed('bypassPermissions')).textContent).toMatch(/bypassPermissions\s*!/);
+    expect((await modeNamed('dontAsk')).textContent).not.toContain('!');
   });
 
   it('announces the popup and its state on the button, and marks the session\'s mode as selected', async () => {
@@ -83,12 +101,12 @@ describe('PermissionModePickerComponent', () => {
   });
 
   const EXPLANATIONS = [
-    ['manual', 'Asks before risky tools, except those you already allowed in your Claude settings.'],
-    ['acceptEdits', 'File edits run without asking; shell and network still gate.'],
-    ['plan', 'Read-only: the agent plans and asks before any change.'],
-    ['auto', 'The harness decides from the project allow-list; unknown tools gate.'],
-    ['dontAsk', 'Gated tools are denied instead of asked — never blocks, never escalates.'],
-    ['bypassPermissions', 'Everything runs. Only for throwaway worktrees; audited and flagged red.'],
+    ['manual', 'Asks before risky tools, except those already allowed in your Claude settings.'],
+    ['acceptEdits', 'Edits are applied without asking; other tools still ask.'],
+    ['plan', 'Read-only: the agent plans, never writes.'],
+    ['auto', 'Risky tools are decided by the daemon policy.'],
+    ['dontAsk', 'Never asks; denied tools fail silently.'],
+    ['bypassPermissions', 'Every tool runs without a check — only in a sandbox.'],
   ] as const;
 
   it.each(EXPLANATIONS)('explains %s as "%s" on the button\'s tooltip', async (mode, explanation) => {

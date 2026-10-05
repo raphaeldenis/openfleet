@@ -828,7 +828,7 @@ describe('NewSessionFormComponent', () => {
 
     it.each([
       ['inherited', /the CLI uses your own default/],
-      ['acceptEdits', /File edits run without asking/],
+      ['acceptEdits', /Edits are applied without asking/],
     ])('the %s radio is named by its label only and announces its own description', async (mode, description) => {
       await renderForm(fakeApi());
 
@@ -839,7 +839,7 @@ describe('NewSessionFormComponent', () => {
     it('shows the full description of a mode as a tooltip, since the row shows one ellipsized line', async () => {
       await renderForm(fakeApi());
 
-      const fullDescription = screen.getByText(/File edits run without asking/).textContent!.trim();
+      const fullDescription = screen.getByText(/Edits are applied without asking/).textContent!.trim();
 
       expect(screen.getByTitle(fullDescription)).toBeTruthy();
     });
@@ -921,7 +921,7 @@ describe('NewSessionFormComponent', () => {
 
         await userEvent.keyboard('{ArrowDown}{ArrowDown}{ArrowDown}{ArrowDown}{ArrowDown}{ArrowDown}');
         expect(radio('bypassPermissions')).toBeChecked();
-        expect(screen.getByRole('alert')).toHaveTextContent('Everything runs');
+        expect(screen.getByRole('alert')).toHaveTextContent('Every tool runs without a check');
         await userEvent.tab();
         expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus();
         await userEvent.tab();
@@ -975,7 +975,7 @@ describe('NewSessionFormComponent', () => {
         await userEvent.click(screen.getByTestId('new-session-mode-manager'));
         await fillManagerMission();
 
-        expect(screen.getByRole('alert')).toHaveTextContent('Everything runs');
+        expect(screen.getByRole('alert')).toHaveTextContent('Every tool runs without a check');
         expect(radio('bypassPermissions')).toBeChecked();
         await userEvent.click(screen.getByRole('button', { name: 'Confirm' }));
         await userEvent.click(submitButton());

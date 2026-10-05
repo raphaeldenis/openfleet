@@ -270,6 +270,6 @@ describe('the New manager form: pulse cadence and children cap', () => {
   it('lists the New session "manual" permission mode with the design 1.2 wording', async () => {
     await renderManagerForm();
 
-    expect(screen.getByRole('radio', { name: 'manual' })).toHaveAccessibleDescription('Asks before risky tools, except those you already allowed in your Claude settings.');
+    expect(screen.getByRole('radio', { name: 'manual' })).toHaveAccessibleDescription('Asks before risky tools, except those already allowed in your Claude settings.');
   });
 });

@@ -116,9 +116,9 @@ test('a closed session offers Resume in its Session tab and its state chip carri
 
   await exitFakeCli(request, session.id, { code: 0 });
 
-  await expect(sessionStateLabel(page)).toHaveText('closed');
+  await expect(sessionStateLabel(page)).toHaveText('closed · exit 0');
   const details = page.getByTestId('session-details');
   await expect(details.getByRole('button', { name: /Resume/ })).toBeEnabled();
   await expect(details.getByTestId('state-chip-elapsed')).toHaveCount(0);
-  await expect(page.getByTestId('state-panel-body')).toContainText('State not shown for a closed session');
+  await expect(page.getByTestId('state-panel-body')).toContainText('No state was recorded before this session closed.');
 });

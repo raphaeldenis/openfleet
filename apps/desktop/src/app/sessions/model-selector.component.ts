@@ -30,6 +30,7 @@ const NO_MODEL_LABEL = 'default';
         [triggerTitle]="'Model: ' + modelLabel()"
         width="19rem"
         [disabled]="applying()"
+        [fillsRow]="true"
       >
         <span popoverTrigger class="current" data-testid="current-model">{{ modelLabel() }}</span>
         <ng-template>
@@ -103,7 +104,7 @@ const NO_MODEL_LABEL = 'default';
       @if (session(); as current) {
         <div class="resolution">
           @if (current.resolvedModel) {
-            <span data-testid="resolved-model">resolved {{ current.resolvedModel }}</span>
+            <span data-testid="resolved-model">resolved · {{ current.resolvedModel }}</span>
           }
           @if (current.cliVersion) {
             <span data-testid="cli-version">CLI {{ current.cliVersion }}</span>
