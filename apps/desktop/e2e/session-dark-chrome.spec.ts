@@ -16,7 +16,7 @@ test.afterEach(async ({ request }) => {
 });
 
 for (const viewport of [{ width: 1200, height: 800 }, { width: 1440, height: 900 }]) {
-  test(`the session details sit on the dark panel token under the dark theme at ${viewport.width}×${viewport.height}`, async ({ page, request }) => {
+  test(`the three session cards sit on the dark panel token under the dark theme at ${viewport.width}×${viewport.height}`, async ({ page, request }) => {
     await page.setViewportSize(viewport);
     await page.addInitScript(([t, a]) => {
       localStorage.setItem('openfleet.adminToken', t);
@@ -30,6 +30,8 @@ for (const viewport of [{ width: 1200, height: 800 }, { width: 1440, height: 900
 
     await expect(page.getByTestId('session-details')).toBeVisible();
     await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'));
-    await expect(page.getByTestId('session-details')).toHaveCSS('background-color', DARK_PANEL);
+    for (const card of ['session-details-identity', 'session-facts', 'state-panel']) {
+      await expect(page.getByTestId(card)).toHaveCSS('background-color', DARK_PANEL);
+    }
   });
 }

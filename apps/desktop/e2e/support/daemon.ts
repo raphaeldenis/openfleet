@@ -22,7 +22,7 @@ export async function signInAsAdmin(page: Page, { theme, rightPanel = 'open' }: 
   }, [token, api, theme ?? '', rightPanel] as const);
 }
 
-interface FakeSessionSpec { name: string; emoji?: string; directory?: string; model?: string; manager?: { pulseSeconds: number; childrenCap: number; mission: string } }
+interface FakeSessionSpec { name: string; emoji?: string; directory?: string; model?: string; permissionMode?: string; manager?: { pulseSeconds: number; childrenCap: number; mission: string } }
 
 /** Hooks of a fake session, played the way the Claude CLI would post them. */
 export interface SessionHooks {
@@ -44,8 +44,8 @@ export function useFakeSessions() {
   });
 
   return {
-    async create(request: APIRequestContext, { name, emoji = '🧪', directory = '/tmp', model, manager }: FakeSessionSpec): Promise<FakeSession> {
-      const created = await request.post(`${api}/api/sessions`, { headers: adminHeaders, data: { directory, name, emoji, harness: 'fake', ...(model ? { model } : {}), ...(manager ? { manager } : {}) } });
+    async create(request: APIRequestContext, { name, emoji = '🧪', directory = '/tmp', model, permissionMode, manager }: FakeSessionSpec): Promise<FakeSession> {
+      const created = await request.post(`${api}/api/sessions`, { headers: adminHeaders, data: { directory, name, emoji, harness: 'fake', ...(model ? { model } : {}), ...(permissionMode ? { permissionMode } : {}), ...(manager ? { manager } : {}) } });
       const { id } = await created.json();
       createdIds.push(id);
       const { hookToken } = await (await request.get(`${api}/api/sessions/${id}/tokens`, { headers: adminHeaders })).json();

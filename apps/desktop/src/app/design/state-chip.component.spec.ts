@@ -28,6 +28,22 @@ describe('StateChipComponent', () => {
     expect(screen.getByTestId('state-chip')).toHaveAttribute('data-errblink', '1');
   });
 
+  it('writes a detail after the label', async () => {
+    await render(StateChipComponent, { bindings: [inputBinding('state', () => 'closed'), inputBinding('detail', () => 'exit 0')] });
+
+    expect(screen.getByTestId('state-chip-label')).toHaveTextContent('closed · exit 0');
+    expect(screen.getByTestId('state-chip')).not.toHaveAttribute('data-errblink');
+  });
+
+  it('draws a failure as a blinking error chip that keeps the state label', async () => {
+    await render(StateChipComponent, {
+      bindings: [inputBinding('state', () => 'closed'), inputBinding('detail', () => 'exit 1'), inputBinding('isFailure', () => true)],
+    });
+
+    expect(screen.getByTestId('state-chip-label')).toHaveTextContent('closed · exit 1');
+    expect(screen.getByTestId('state-chip')).toHaveAttribute('data-errblink', '1');
+  });
+
   it('marks generating and thinking as live (pulsing)', async () => {
     await render(StateChipComponent, { bindings: [inputBinding('state', () => 'generating')] });
     expect(screen.getByTestId('state-chip')).toHaveAttribute('data-live', '1');

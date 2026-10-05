@@ -21,10 +21,11 @@ const NOTHING_LINE = '(rien)';
   `,
   styles: `
     :host { display: block; min-width: 0; }
-    .section { display: flex; flex-direction: column; gap: .25rem; min-width: 0; }
-    .heading { margin: 0; font-size: .6875rem; font-weight: 600; color: var(--mut); text-transform: none; }
-    .items { margin: 0; padding: 0 0 0 1rem; display: flex; flex-direction: column; gap: .125rem; }
-    .item { font-size: .75rem; min-width: 0; overflow-wrap: anywhere; }
+    .section { display: flex; flex-direction: column; gap: .125rem; min-width: 0; }
+    .heading { margin: 0; font-size: .6875rem; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--mut); }
+    .items { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: .125rem; }
+    .item { display: flex; gap: .375rem; font-size: .75rem; min-width: 0; overflow-wrap: anywhere; text-wrap: pretty; }
+    .item::before { content: '–'; flex: none; color: var(--mut); }
     .empty { margin: 0; font-size: .75rem; color: var(--mut); }
   `,
 })

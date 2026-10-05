@@ -1,4 +1,4 @@
-import { render, screen, waitFor, fireEvent } from '@testing-library/angular/zoneless';
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
 import { inputBinding, signal } from '@angular/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -331,29 +331,63 @@ describe('SessionDetailsComponent', () => {
     resolveNameRename({});
   });
 
-  it('shows the exit code next to the chip once the session is closed', async () => {
+  it('writes "closed · exit 1" on a red blinking chip when the session failed', async () => {
     const session = baseSession({ state: 'closed', exitCode: 1 });
     await render(SessionDetailsComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
-    expect(screen.getByTestId('session-exit-code')).toHaveTextContent('closed · exit 1');
+
+    expect(screen.getByTestId('state-chip-label')).toHaveTextContent('closed · exit 1');
+    expect(screen.getByTestId('state-chip')).toHaveAttribute('data-errblink', '1');
   });
 
-  it('writes the exit code in the muted text colour', async () => {
-    const session = baseSession({ state: 'closed', exitCode: 1 });
+  it('writes "closed · exit 0" on a calm chip when the session exited cleanly', async () => {
+    const session = baseSession({ state: 'closed', exitCode: 0 });
     await render(SessionDetailsComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
-    expect(getComputedStyle(screen.getByTestId('session-exit-code')).color).toBe('var(--mut)');
+
+    expect(screen.getByTestId('state-chip-label')).toHaveTextContent('closed · exit 0');
+    expect(screen.getByTestId('state-chip')).not.toHaveAttribute('data-errblink');
+  });
+
+  it('writes the exit code and the closing time beside a closed session\'s chip', async () => {
+    const session = baseSession({ state: 'closed', exitCode: 1, stateSince: new Date(2026, 9, 5, 14, 2).toISOString() });
+    await render(SessionDetailsComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
+
+    expect(screen.getByTestId('session-exit-code').textContent).toMatch(/^exit 1 · 14[:.]02$/);
   });
 
   it('shows a bare "closed" with no exit number when the daemon omits the exit code', async () => {
     const session = baseSession({ state: 'closed' });
     await render(SessionDetailsComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
-    expect(screen.getByTestId('session-exit-code')).toHaveTextContent('closed');
-    expect(screen.getByTestId('session-exit-code')).not.toHaveTextContent('exit');
+
+    expect(screen.getByTestId('state-chip-label')).toHaveTextContent(/^closed$/);
+    expect(screen.queryByTestId('session-exit-code')).toBeNull();
   });
 
   it('renders the worktree directory', async () => {
     const session = baseSession();
     await render(SessionDetailsComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
     expect(screen.getByTestId('session-directory')).toHaveTextContent('/repo/.worktrees/t6');
+  });
+
+  it('labels the harness, directory, model and permission rows inside the facts card', async () => {
+    const session = baseSession();
+    await render(SessionDetailsComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
+
+    const facts = within(screen.getByTestId('session-facts'));
+
+    for (const label of ['Harness', 'Directory', 'Model', 'Permission']) expect(facts.getByText(label)).toBeTruthy();
+    expect(facts.getByTestId('session-harness')).toHaveTextContent('claude-cli');
+    expect(facts.getByTestId('current-model')).toBeTruthy();
+    expect(facts.getByTestId('permission-mode')).toHaveTextContent('manual');
+  });
+
+  it('keeps the identity in a card of its own, apart from the facts', async () => {
+    const session = baseSession();
+    await render(SessionDetailsComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
+
+    const identity = screen.getByTestId('session-details-identity');
+
+    expect(identity).toContainElement(screen.getByTestId('state-chip'));
+    expect(identity).not.toContainElement(screen.getByTestId('session-facts'));
   });
 
   it('renders the model selector for this session', async () => {
@@ -428,23 +462,15 @@ describe('SessionDetailsComponent', () => {
     });
   });
 
-  describe('identity row', () => {
+  describe('identity card', () => {
     it('holds the emoji and name fields', async () => {
       const session = baseSession();
       await render(SessionDetailsComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
 
-      const row = screen.getByTestId('session-details-identity');
+      const card = screen.getByTestId('session-details-identity');
 
-      expect(row).toContainElement(screen.getByTestId('session-emoji-input'));
-      expect(row).toContainElement(screen.getByTestId('session-name-input'));
-    });
-
-    it('makes the emoji and name fields 2rem tall', async () => {
-      const session = baseSession();
-      await render(SessionDetailsComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
-
-      expect(getComputedStyle(screen.getByTestId('session-emoji-input')).height).toBe('2rem');
-      expect(getComputedStyle(screen.getByTestId('session-name-input')).height).toBe('2rem');
+      expect(card).toContainElement(screen.getByTestId('session-emoji-input'));
+      expect(card).toContainElement(screen.getByTestId('session-name-input'));
     });
   });
 

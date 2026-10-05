@@ -44,7 +44,7 @@ describe('Theme', () => {
     await mountShell();
 
     expect(rootTheme()).toBe('dark');
-    expect(screen.getByRole('button', { name: '☾ Dark' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Dark theme' })).toBeTruthy();
   });
 
   it('follows a light system preference when nothing is remembered', async () => {
@@ -68,31 +68,31 @@ describe('Theme', () => {
     stubSystemPrefersDark(false);
     const harness = await mountShell();
 
-    screen.getByRole('button', { name: '☀ Light' }).click();
+    screen.getByRole('button', { name: 'Light theme' }).click();
     harness.detectChanges();
 
     expect(rootTheme()).toBe('dark');
-    expect(screen.getByRole('button', { name: '☾ Dark' })).toHaveAttribute('title', 'Switch to light theme');
+    expect(screen.getByRole('button', { name: 'Dark theme' })).toHaveAttribute('title', 'Switch to light theme');
   });
 
   it('reports the toggle as pressed only while the shown theme is dark', async () => {
     stubSystemPrefersDark(true);
     const harness = await mountShell();
-    expect(screen.getByRole('button', { name: '☾ Dark' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'Dark theme' })).toHaveAttribute('aria-pressed', 'true');
 
-    screen.getByRole('button', { name: '☾ Dark' }).click();
+    screen.getByRole('button', { name: 'Dark theme' }).click();
     harness.detectChanges();
-    expect(screen.getByRole('button', { name: '☀ Light' })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: 'Light theme' })).toHaveAttribute('aria-pressed', 'false');
 
-    screen.getByRole('button', { name: '☀ Light' }).click();
+    screen.getByRole('button', { name: 'Light theme' }).click();
     harness.detectChanges();
-    expect(screen.getByRole('button', { name: '☾ Dark' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'Dark theme' })).toHaveAttribute('aria-pressed', 'true');
   });
 
   it('keeps the chosen theme after the app is mounted again, whatever the system prefers', async () => {
     stubSystemPrefersDark(false);
     const firstMount = await mountShell();
-    screen.getByRole('button', { name: '☀ Light' }).click();
+    screen.getByRole('button', { name: 'Light theme' }).click();
     firstMount.detectChanges();
     document.documentElement.removeAttribute('data-theme');
 
@@ -107,6 +107,7 @@ describe('Theme', () => {
 
     const footerToggle = within(screen.getByTestId('sidebar-footer')).getByTestId('theme-toggle');
 
-    expect(footerToggle).toHaveTextContent('☀ Light');
+    expect(footerToggle).toHaveAccessibleName('Light theme');
+    expect(footerToggle.textContent?.trim()).toBe('☀');
   });
 });

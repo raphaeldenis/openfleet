@@ -219,5 +219,14 @@ describe('AppShellComponent version mismatch banner', () => {
       const bannerOrder = screen.getAllByTestId('banner').map((banner) => banner.getAttribute('data-variant'));
       expect(bannerOrder).toEqual(['mismatch', 'error', 'reconnecting']);
     });
+
+    it('runs every shell banner as a flat full-width strip, not a boxed card', async () => {
+      const { daemonAnswersBootCheckWith } = await openShell({ appVersion: '1.2.0', isConnected: false, daemonIssues: [stuckDatabase] });
+
+      await daemonAnswersBootCheckWith({ version: '0.9.2' });
+
+      const layouts = screen.getAllByTestId('banner').map((banner) => banner.getAttribute('data-layout'));
+      expect(layouts).toEqual(['strip', 'strip', 'strip']);
+    });
   });
 });

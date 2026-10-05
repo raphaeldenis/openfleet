@@ -7,12 +7,12 @@ import { PendingSwitchesService, SWITCH_STATUS_LABEL } from '../core/pending-swi
 import { SessionRequestsService } from '../core/session-requests';
 
 export const PERMISSION_MODE_EXPLANATIONS: Record<PermissionMode, string> = {
-  manual: 'Asks before risky tools, except those you already allowed in your Claude settings.',
-  acceptEdits: 'File edits run without asking; shell and network still gate.',
-  plan: 'Read-only: the agent plans and asks before any change.',
-  auto: 'The harness decides from the project allow-list; unknown tools gate.',
-  dontAsk: 'Gated tools are denied instead of asked — never blocks, never escalates.',
-  bypassPermissions: 'Everything runs. Only for throwaway worktrees; audited and flagged red.',
+  manual: 'Asks before risky tools, except those already allowed in your Claude settings.',
+  acceptEdits: 'Edits are applied without asking; other tools still ask.',
+  plan: 'Read-only: the agent plans, never writes.',
+  auto: 'Risky tools are decided by the daemon policy.',
+  dontAsk: 'Never asks; denied tools fail silently.',
+  bypassPermissions: 'Every tool runs without a check — only in a sandbox.',
 };
 
 const INHERITED_LABEL = 'inherited';
@@ -21,7 +21,7 @@ const BYPASS_CONFIRM_TITLE = 'Turn off permission checks for this session?';
 const BYPASS_CONFIRM_BODY =
   'bypassPermissions lets the agent run every tool — shell, network, file deletes — without asking you. Gates stop appearing in the Inbox and the Audit log is the only record. It applies on the next turn.';
 const APPLY_NOTE = 'Changing the mode applies on the next turn (harness restarts if it must).';
-const LIST_WIDTH = '22rem';
+const LIST_WIDTH = '17rem';
 const BYPASS_CONFIRM_WIDTH = '24rem';
 const MODES_WITH_BYPASS_LAST: readonly PermissionMode[] = [
   ...PERMISSION_MODES.filter((mode) => mode !== 'bypassPermissions'),
@@ -45,8 +45,9 @@ const MODES_WITH_BYPASS_LAST: readonly PermissionMode[] = [
         [isAlertDialog]="confirmingBypass()"
         panelLabel="Turn off permission checks"
         [disabled]="applying()"
+        [fillsRow]="true"
       >
-        <span popoverTrigger class="mode" data-testid="permission-mode" [attr.data-warning]="isDangerous() ? '1' : null">🛡 {{ label() }}</span>
+        <span popoverTrigger class="mode" data-testid="permission-mode" [attr.data-warning]="isDangerous() ? '1' : null">{{ label() }}</span>
         <ng-template>
           @if (confirmingBypass()) {
             <div class="confirm-title"><span class="confirm-icon" aria-hidden="true">!</span>{{ bypassConfirmTitle }}</div>
@@ -62,15 +63,19 @@ const MODES_WITH_BYPASS_LAST: readonly PermissionMode[] = [
                   type="button"
                   role="option"
                   class="mode-row"
-                  [class.mode-row--danger]="mode === 'bypassPermissions'"
                   [attr.aria-selected]="mode === modeInForce()"
                   [attr.tabindex]="index === focusableModeIndex() ? 0 : -1"
                   [attr.data-initial-focus]="index === focusableModeIndex() ? '' : null"
                   (click)="choose(mode, popover)"
                 >
-                  <span class="mode-name">{{ mode }}</span>
+                  <span class="mode-head">
+                    <span class="check" aria-hidden="true">{{ mode === modeInForce() ? '✓' : '' }}</span>
+                    <span class="mode-name">{{ mode }}</span>
+                    @if (mode === dangerousMode) {
+                      <span class="danger-mark" aria-hidden="true">!</span>
+                    }
+                  </span>
                   <span class="mode-explanation">{{ explanations[mode] }}</span>
-                  <span class="check" aria-hidden="true">{{ mode === modeInForce() ? '✓' : '' }}</span>
                 </button>
               }
             </div>
@@ -87,18 +92,19 @@ const MODES_WITH_BYPASS_LAST: readonly PermissionMode[] = [
     </div>
   `,
   styles: `
+    :host { flex: 1; min-width: 0; }
     .permission-mode-picker { display: flex; align-items: center; gap: .375rem; flex-wrap: wrap; }
     .switch-status { font-size: .6875rem; color: var(--fg); }
     .mode-row {
-      display: flex; align-items: flex-start; gap: .5rem; padding: .375rem .5rem; border: 0; border-radius: .375rem;
+      display: flex; flex-direction: column; align-items: flex-start; gap: .0625rem; width: 100%; padding: .375rem .5rem; border: 0; border-radius: .375rem;
       background: transparent; color: var(--fg); font: inherit; text-align: left; cursor: pointer;
     }
     .mode-row[aria-selected='true'], .mode-row:hover { background: var(--hover); }
     .mode-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-    .mode-name { flex: none; width: 8.5rem; font-family: var(--mono); font-size: .75rem; }
-    .mode-row--danger .mode-name::before { content: '! '; font-weight: 700; color: var(--state-error); }
-    .mode-explanation { flex: 1; font-size: .6875rem; color: var(--mut); text-wrap: pretty; }
-    .check { color: var(--accent); }
+    .mode-head { display: flex; align-items: center; gap: .5rem; font-family: var(--mono); font-size: .75rem; }
+    .mode-explanation { padding-left: 1.25rem; font-size: .75rem; color: var(--mut); text-wrap: pretty; }
+    .danger-mark { font-weight: 700; color: var(--state-error); }
+    .check { width: .75rem; color: var(--accent); }
     .apply-note { margin: 0; padding: .375rem .5rem 0; font-size: .6875rem; color: var(--mut); }
     .confirm-title { display: flex; align-items: center; gap: .5rem; font-weight: 600; }
     .confirm-icon { color: var(--state-error); }
@@ -114,6 +120,7 @@ export class PermissionModePickerComponent {
 
   protected readonly modes = MODES_WITH_BYPASS_LAST;
   protected readonly explanations = PERMISSION_MODE_EXPLANATIONS;
+  protected readonly dangerousMode: PermissionMode = 'bypassPermissions';
   protected readonly statusLabel = SWITCH_STATUS_LABEL;
   protected readonly bypassConfirmTitle = BYPASS_CONFIRM_TITLE;
   protected readonly bypassConfirmBody = BYPASS_CONFIRM_BODY;

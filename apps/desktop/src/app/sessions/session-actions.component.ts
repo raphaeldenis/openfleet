@@ -53,7 +53,7 @@ const unavailableReasonOf = (target: HandoffTarget): string =>
         }
         @if (closeVisible()) {
           <button #closeTrigger type="button" class="of-btn of-btn--secondary" data-testid="session-close" [disabled]="closing()" (click)="requestClose()">
-            Close
+            Close…
           </button>
         }
       }
