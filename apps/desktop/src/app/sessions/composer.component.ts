@@ -25,6 +25,7 @@ const BUSY_PLACEHOLDER = 'This session is busy — your message is delivered on 
           data-testid="composer-input"
           [value]="draft()"
           (input)="onInput($event)"
+          (keydown.enter)="onEnter($any($event))"
           aria-label="Message this session"
           [placeholder]="placeholder()"
         ></textarea>
@@ -79,6 +80,14 @@ export class ComposerComponent {
 
   onInput(event: Event): void {
     this.replies.setDraft(this.sessionId(), (event.target as HTMLTextAreaElement).value);
+  }
+
+  onEnter(event: KeyboardEvent): void {
+    const isNewlineRequest = event.shiftKey;
+    const isConfirmingImeCandidate = event.isComposing;
+    if (isNewlineRequest || isConfirmingImeCandidate) return;
+    event.preventDefault();
+    void this.send();
   }
 
   async send(): Promise<void> {

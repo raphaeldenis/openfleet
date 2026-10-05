@@ -6,7 +6,6 @@ import { copyFor } from '../core/error-copy';
 import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { SessionRequestsService } from '../core/session-requests';
-import { ComposerComponent } from './composer.component';
 import { PermissionGateCardComponent } from './permission-gate-card.component';
 import { type LifecycleStrip, closedSessionPresentationFor } from './closed-session-presentation';
 import { SessionHeaderComponent } from './session-header.component';
@@ -21,7 +20,7 @@ type LifecycleBanner = { kind: 'resuming' } | { kind: 'strip'; strip: LifecycleS
 @Component({
   selector: 'of-session-view',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [SessionHeaderComponent, StatePanelComponent, TerminalComponent, PermissionGateCardComponent, ComposerComponent, RightPanelSessionToggleComponent, CopyDetailsButtonComponent],
+  imports: [SessionHeaderComponent, StatePanelComponent, TerminalComponent, PermissionGateCardComponent,RightPanelSessionToggleComponent, CopyDetailsButtonComponent],
   template: `
     @if (session(); as s) {
       <div class="session-view" data-testid="session-view">
@@ -81,8 +80,6 @@ type LifecycleBanner = { kind: 'resuming' } | { kind: 'strip'; strip: LifecycleS
               </span>
             </span>
           </div>
-        } @else {
-          <of-composer [sessionId]="s.id" [busy]="s.state === 'generating'" />
         }
       </div>
     } @else {
