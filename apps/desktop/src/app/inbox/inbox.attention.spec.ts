@@ -504,6 +504,96 @@ describe('InboxComponent questions from agents', () => {
         expect(screen.getByTestId('inbox-answered-toggle')).toHaveTextContent('Answered (1)');
       });
 
+      describe('when the question changes before the reply is delivered', () => {
+        const askingAnotherQuestion = new Map([['s1', stateOf({ sessionId: 's1', questionsForHuman: ['Delete the database?'] })]]);
+
+        it('user still sees the new question needing them after a queued reply to the old one is delivered', async () => {
+          const view = await renderInbox([agent('s1', { state: 'generating' })], asking);
+          view.api.sendMessage.mockResolvedValue({ status: 'queued', messageId: 'm9' });
+          await replyFromCard(view);
+
+          view.events.workingStates.set(askingAnotherQuestion);
+          view.events.deliveredMessageIds.set(new Set(['m9']));
+          await waitForDeliveryAcknowledgementToEnd(view);
+
+          expect(cards()).toHaveLength(1);
+          expect(within(cards()[0]).getByTestId('inbox-attention-question')).toHaveTextContent('Delete the database?');
+          expect(screen.getByTestId('inbox-count')).toHaveTextContent('1');
+          expect(screen.queryByTestId('inbox-answered-toggle')).toBeNull();
+        });
+
+        it('user still sees the new question needing them when the reply is delivered while its request is still in flight', async () => {
+          const view = await renderInbox([agent('s1')], asking);
+          let resolveSend: (value: unknown) => void = () => {};
+          view.api.sendMessage.mockImplementation(() => new Promise((resolve) => { resolveSend = resolve; }));
+          await replyFromCard(view);
+
+          view.events.workingStates.set(askingAnotherQuestion);
+          resolveSend({ status: 'delivered', messageId: 'm9' });
+          await waitForDeliveryAcknowledgementToEnd(view);
+
+          expect(cards()).toHaveLength(1);
+          expect(screen.getByTestId('inbox-count')).toHaveTextContent('1');
+          expect(screen.queryByTestId('inbox-answered-toggle')).toBeNull();
+        });
+      });
+
+      it('user sees a queued reply answer its question after leaving the Inbox and coming back once it is delivered', async () => {
+        const view = await renderInbox([agent('s1', { state: 'generating' })], asking);
+        view.api.sendMessage.mockResolvedValue({ status: 'queued', messageId: 'm9' });
+        await replyFromCard(view);
+
+        view.fixture.destroy();
+        view.events.deliveredMessageIds.set(new Set(['m9']));
+        TestBed.tick();
+        const returned = TestBed.createComponent(InboxComponent);
+        await returned.whenStable();
+
+        expect(cards()).toHaveLength(0);
+        expect(screen.getByTestId('inbox-answered-toggle')).toHaveTextContent('Answered (1)');
+      });
+
+      it('user sees the card come back when the app reloads after the agent asked the same question again', async () => {
+        const view = await renderInbox([agent('s1')], asking);
+        await replyFromCard(view);
+        closeApp(view);
+
+        const askedAgainLater = [stateOf({ sessionId: 's1', questionsForHuman: ['which port?'], updatedAt: new Date(Date.now() + 60_000).toISOString() })];
+        await renderInbox([agent('s1')], askedAgainLater);
+        await showOnlyQuestions();
+
+        expect(cards()).toHaveLength(1);
+        expect(screen.getByTestId('inbox-count')).toHaveTextContent('1');
+      });
+
+      describe('with several tabs open', () => {
+        const ANSWERED_REPLIES_KEY = 'openfleet.answeredReplies';
+        const answerStoredByAnotherTab = (sessionId: string, line: string) => ({ [sessionId]: { deliveredAt: new Date().toISOString(), answeredLines: [line] } });
+
+        it('user sees a question answered in another tab move to Answered here', async () => {
+          const view = await renderInbox([agent('s1')], asking);
+          await showOnlyQuestions();
+          vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+
+          localStorage.setItem(ANSWERED_REPLIES_KEY, JSON.stringify(answerStoredByAnotherTab('s1', 'which port?')));
+          window.dispatchEvent(new StorageEvent('storage', { key: ANSWERED_REPLIES_KEY, storageArea: localStorage }));
+          await waitForDeliveryAcknowledgementToEnd(view);
+
+          expect(cards()).toHaveLength(0);
+          expect(screen.getByTestId('inbox-answered-toggle')).toHaveTextContent('Answered (1)');
+        });
+
+        it('user keeps the answer another tab stored for a different session when replying here', async () => {
+          const view = await renderInbox([agent('s1'), agent('s2')], [stateOf({ sessionId: 's1', questionsForHuman: ['which port?'] })]);
+          localStorage.setItem(ANSWERED_REPLIES_KEY, JSON.stringify(answerStoredByAnotherTab('s2', 'which host?')));
+
+          await replyFromCard(view);
+
+          const storedSessionIds = Object.keys(JSON.parse(localStorage.getItem(ANSWERED_REPLIES_KEY) ?? '{}'));
+          expect(storedSessionIds.sort()).toEqual(['s1', 's2']);
+        });
+      });
+
       it('user sees the card still asking, with the failure, when the reply fails', async () => {
         const view = await renderInbox([agent('s1')], asking);
         view.api.sendMessage.mockRejectedValue(new Error('boom'));

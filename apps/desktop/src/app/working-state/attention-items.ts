@@ -19,6 +19,11 @@ export interface AnsweredReply {
   readonly answeredLines: readonly string[];
   /** The reply that was sent, trimmed and capped; absent on entries stored before replies were kept. */
   readonly replyText?: string;
+  /**
+   * True when this client watched the lines stay on screen since the delivery. A reply remembered from an earlier
+   * run of the app has no such witness, so the agent writing its state after the delivery counts as asking again.
+   */
+  readonly isWatchedSinceDelivery?: boolean;
 }
 
 const MAX_SHOWN_COUNT = 99;
@@ -26,6 +31,14 @@ const MAX_SHOWN_COUNT = 99;
 /** The questions and blockers the agent shows the human, trimmed so a rewrite with the same words compares equal. */
 export function linesAskedOf(state: WorkingState): string[] {
   return [...state.questionsForHuman, ...state.blockers].map((line) => line.trim());
+}
+
+function isAnsweredBy(reply: AnsweredReply, shown: { readonly linesAsked: readonly string[]; readonly stateUpdatedAt: string }): boolean {
+  const areAllLinesAnswered = shown.linesAsked.every((line) => reply.answeredLines.includes(line));
+  if (!areAllLinesAnswered) return false;
+  const isStateWrittenAfterDelivery = Date.parse(shown.stateUpdatedAt) > Date.parse(reply.deliveredAt);
+  const isSameAskNotProvenAnymore = isStateWrittenAfterDelivery && !reply.isWatchedSinceDelivery;
+  return !isSameAskNotProvenAnymore;
 }
 
 /** The open sessions whose state asks the human something or reports a blocker, in session order. */
@@ -42,7 +55,7 @@ export function attentionItemsOf(
     const needsHuman = linesAsked.length > 0;
     if (!needsHuman) return [];
     const answeredReply = answeredReplyBySessionId.get(session.id);
-    const isAnswered = answeredReply !== undefined && linesAsked.every((line) => answeredReply.answeredLines.includes(line));
+    const isAnswered = answeredReply !== undefined && isAnsweredBy(answeredReply, { linesAsked, stateUpdatedAt: state.updatedAt });
     const answeredAt = isAnswered ? answeredReply.deliveredAt : undefined;
     const replyText = isAnswered ? answeredReply.replyText : undefined;
     return [{ session, questions: state.questionsForHuman, blockers: state.blockers, updatedAt: state.updatedAt, isAnswered, answeredAt, replyText }];

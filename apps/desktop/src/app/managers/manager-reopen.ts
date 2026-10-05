@@ -8,23 +8,28 @@ export class ManagerReopenAction {
   readonly pending = signal(false);
   readonly errorText = signal<string | null>(null);
 
+  private currentRequestToken = 0;
+
   constructor(private readonly api: FleetApiService) {}
 
   reset(): void {
+    this.currentRequestToken++;
     this.pending.set(false);
     this.errorText.set(null);
   }
 
   async run(input: { sessionId: string; mode: ReopenMode }): Promise<void> {
     if (this.pending()) return;
+    const requestToken = ++this.currentRequestToken;
+    const isStillCurrent = () => requestToken === this.currentRequestToken;
     this.pending.set(true);
     this.errorText.set(null);
     try {
       await this.api.reopenSession(input.sessionId, input.mode);
     } catch (error) {
-      this.errorText.set(copyFor(error, { action: 'reopen_manager' }).text);
+      if (isStillCurrent()) this.errorText.set(copyFor(error, { action: 'reopen_manager' }).text);
     } finally {
-      this.pending.set(false);
+      if (isStillCurrent()) this.pending.set(false);
     }
   }
 }

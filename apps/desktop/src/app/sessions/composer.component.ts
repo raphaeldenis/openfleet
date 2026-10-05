@@ -1,14 +1,13 @@
-import { ChangeDetectionStrategy, Component, computed, effect, inject, input, signal, untracked } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, effect, inject, input, signal } from '@angular/core';
 import { copyFor } from '../core/error-copy';
 import { FleetApiService } from '../core/fleet-api.service';
-import { FleetEventsService } from '../core/fleet-events.service';
 import { BannerComponent } from '../design/banner.component';
 import { ErrorLineComponent } from '../design/error-line.component';
 import { AnsweredRepliesStore } from '../working-state/answered-replies.store';
 import { ReplyDraftStore } from './reply-draft.store';
 import { REPLY_DELIVERED_COPY } from './reply-delivered-copy';
 
-interface PendingMessage { id: string; body: string; deliveredImmediately: boolean }
+interface PendingMessage { id: string }
 
 const DEFAULT_PLACEHOLDER = 'Your answer goes to the session as a message · Enter sends, Shift+Enter for a new line';
 const WORKING_ON_REPLY_PLACEHOLDER = REPLY_DELIVERED_COPY;
@@ -56,7 +55,6 @@ export class ComposerComponent {
   readonly disabledReason = input<string | null>(null);
   readonly busy = input<boolean>(false);
   private readonly api = inject(FleetApiService);
-  private readonly events = inject(FleetEventsService);
   private readonly replies = inject(ReplyDraftStore);
   private readonly answeredReplies = inject(AnsweredRepliesStore);
   protected readonly draft = computed(() => this.replies.draftOf(this.sessionId()));
@@ -74,12 +72,6 @@ export class ComposerComponent {
   });
 
   constructor() {
-    effect(() => {
-      const deliveredBody = this.status() === 'sent' ? this.pending()?.body : undefined;
-      if (deliveredBody === undefined) return;
-      untracked(() => this.answeredReplies.markReplyDelivered(this.sessionId(), { at: new Date().toISOString(), replyText: deliveredBody }));
-    });
-
     // A route param change reuses this component instance, so a session switch must not leak
     // the previous session's delivery status into the one now shown (drafts and errors are keyed by session).
     effect(() => {
@@ -91,8 +83,8 @@ export class ComposerComponent {
   protected readonly status = computed(() => {
     const pending = this.pending();
     if (!pending) return null;
-    const delivered = pending.deliveredImmediately || this.events.deliveredMessageIds().has(pending.id);
-    return delivered ? 'sent' : 'queued';
+    const isDelivered = this.answeredReplies.isReplyDelivered(pending.id);
+    return isDelivered ? 'sent' : 'queued';
   });
 
   onInput(event: Event): void {
@@ -117,11 +109,13 @@ export class ComposerComponent {
     this.replies.markSending(sessionIdAtSend, true);
     this.pending.set(null);
     const messageId = this.replies.messageIdFor(sessionIdAtSend, body);
+    const answeredLines = this.answeredReplies.linesAskedNow(sessionIdAtSend);
     try {
       const result = await this.api.sendMessage(sessionIdAtSend, body, messageId);
       this.replies.confirmSent(sessionIdAtSend);
       this.replies.clearSentText(sessionIdAtSend, draftAtSend);
-      if (this.sessionId() === sessionIdAtSend) this.pending.set({ id: result.messageId, body, deliveredImmediately: result.status === 'delivered' });
+      this.answeredReplies.trackSentReply(result.messageId, { sessionId: sessionIdAtSend, replyText: body, answeredLines, isDeliveredImmediately: result.status === 'delivered' });
+      if (this.sessionId() === sessionIdAtSend) this.pending.set({ id: result.messageId });
     } catch (error) {
       if (this.sessionId() === sessionIdAtSend) this.pending.set(null);
       this.replies.markFailed(sessionIdAtSend, copyFor(error, { action: 'send' }).text);
