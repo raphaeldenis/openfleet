@@ -373,7 +373,7 @@ describe('early-escape hint — several sessions', () => {
     await viewSession('s1');
 
     // Assert
-    expect(screen.getByTestId('composer-input')).toBeTruthy();
+    expect(screen.getByTestId('terminal')).toBeTruthy();
     expect(hint()).toBeNull();
   });
 
@@ -475,7 +475,7 @@ describe('early-escape hint — the session lives on around it', () => {
     await send({ type: 'session.reopened', sessionId: 's1' });
     await send({ type: 'session.state', sessionId: 's1', state: 'generating', stateSince: 't3' });
     await elapse(GENEROUS_QUIET_MS);
-    expect(screen.getByTestId('composer-input')).toBeTruthy();
+    expect(screen.getByTestId('terminal')).toBeTruthy();
     expect(hint()).toBeNull();
   });
 
@@ -508,7 +508,7 @@ describe('early-escape hint — the session lives on around it', () => {
     await elapse(GENEROUS_QUIET_MS);
 
     // Assert
-    expect(screen.getByTestId('composer-input')).toBeTruthy();
+    expect(screen.getByTestId('terminal')).toBeTruthy();
     expect(hint()).toBeNull();
   });
 
@@ -556,7 +556,7 @@ describe('early-escape hint — reconnect', () => {
     await send({ type: 'snapshot', sessions: [session({ state: 'idle', stateSince: 't2' }), boromir()], approvals: [], managers: [] });
 
     // Assert
-    expect(screen.getByTestId('composer-input')).toBeTruthy();
+    expect(screen.getByTestId('terminal')).toBeTruthy();
     expect(hint()).toBeNull();
   });
 

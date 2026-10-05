@@ -9,7 +9,7 @@ import { FakeHandle, FakeHarness } from '../harness/fakeHarness.js';
 import type { Harness, HarnessHandle, HarnessLaunch } from '../harness/harness.js';
 import { EventBus } from '../events/eventBus.js';
 import { makeRepo } from '../git/testRepo.js';
-import { DaemonShuttingDownError, DEFAULT_CLOSE_ESCALATE_MS, DELIVERY_RETRY_MS, MAX_DELIVERY_RETRIES, MAX_PENDING_AGENT_MESSAGES_PER_SENDER, PARKED_RETRY_MS, SessionClosedError, SessionReopenError, SessionService, SESSION_END_EXIT_GRACE_MS, SUBMIT_KEYSTROKE_DELAY_MS, TRANSCRIPT_INTERRUPT_MAX_READ_BYTES, TRANSCRIPT_INTERRUPT_POLL_MS, TRANSCRIPT_INTERRUPT_TIMEOUT_MS, TURN_START_TIMEOUT_MS } from './sessionService.js';
+import { DaemonShuttingDownError, DEFAULT_CLOSE_ESCALATE_MS, DRAFT_IDLE_EXPIRY_MS, DELIVERY_RETRY_MS, MAX_DELIVERY_RETRIES, MAX_PENDING_AGENT_MESSAGES_PER_SENDER, PARKED_RETRY_MS, SessionClosedError, SessionReopenError, SessionService, SESSION_END_EXIT_GRACE_MS, SUBMIT_KEYSTROKE_DELAY_MS, TRANSCRIPT_INTERRUPT_MAX_READ_BYTES, TRANSCRIPT_INTERRUPT_POLL_MS, TRANSCRIPT_INTERRUPT_TIMEOUT_MS, TURN_START_TIMEOUT_MS } from './sessionService.js';
 import { MessageQueue } from './messageQueue.js';
 import { SessionRepository } from './sessionRepository.js';
 import { PERMISSION_MODES, type ServerEvent } from '@openfleet/shared';
@@ -2856,7 +2856,7 @@ describe('SessionService submit-keystroke hostile cases', () => {
     expect(handle.written.filter((w) => w === '\r')).toHaveLength(1);
     expect(events.filter((e) => e.type === 'message.delivered')).toHaveLength(1);
 
-    await vi.advanceTimersByTimeAsync(TURN_START_TIMEOUT_MS); // the turn-start fallback returns the delivery machine to 'ready'
+    await vi.advanceTimersByTimeAsync(DRAFT_IDLE_EXPIRY_MS); // the turn-start fallback returns the delivery machine to 'ready'; the human's unsent 'a' is long abandoned
 
     const result = service.sendMessage({ sessionId: session.id, body: 'next' }); // the next queued message still delivers
     expect(result.status).toBe('delivered');

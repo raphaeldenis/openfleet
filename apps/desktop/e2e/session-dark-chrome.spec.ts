@@ -6,7 +6,6 @@ const token = readE2eAdminToken();
 const headers = { 'content-type': 'application/json', authorization: `Bearer ${token}` };
 
 const DARK_PANEL = 'rgb(34, 34, 32)';
-const DARK_SUNK = 'rgb(39, 39, 37)';
 
 let createdSessionId: string | undefined;
 
@@ -17,7 +16,7 @@ test.afterEach(async ({ request }) => {
 });
 
 for (const viewport of [{ width: 1200, height: 800 }, { width: 1440, height: 900 }]) {
-  test(`the session header and composer sit on the dark panel and sunk tokens under the dark theme at ${viewport.width}×${viewport.height}`, async ({ page, request }) => {
+  test(`the session header sits on the dark panel token under the dark theme at ${viewport.width}×${viewport.height}`, async ({ page, request }) => {
     await page.setViewportSize(viewport);
     await page.addInitScript(([t, a]) => {
       localStorage.setItem('openfleet.adminToken', t);
@@ -31,6 +30,5 @@ for (const viewport of [{ width: 1200, height: 800 }, { width: 1440, height: 900
     await expect(page.getByTestId('session-header')).toBeVisible();
     await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'));
     await expect(page.getByTestId('session-header')).toHaveCSS('background-color', DARK_PANEL);
-    await expect(page.getByTestId('composer-input')).toHaveCSS('background-color', DARK_SUNK);
   });
 }

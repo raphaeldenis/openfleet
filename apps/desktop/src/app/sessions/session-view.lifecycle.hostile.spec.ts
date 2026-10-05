@@ -44,7 +44,7 @@ async function renderAgainstDaemonEvents(api: ReturnType<typeof fakeApi>, initia
 const lifecycleBanner = () => screen.queryByTestId('lifecycle-banner');
 
 describe('SessionViewComponent lifecycle banners — real daemon event order', () => {
-  it('reopen → state starting → session.reopened → REST 200 → state idle: Resuming from click to idle, then the composer', async () => {
+  it('reopen → state starting → session.reopened → REST 200 → state idle: Resuming from click to idle, then the terminal alone', async () => {
     // Arrange
     const reopen = deferred<unknown>();
     const api = fakeApi();
@@ -63,7 +63,7 @@ describe('SessionViewComponent lifecycle banners — real daemon event order', (
 
     await daemon.send({ type: 'session.state', sessionId: 's1', state: 'idle', stateSince: 't3' });
     expect(lifecycleBanner()).toBeNull();
-    expect(screen.getByTestId('composer-input')).toBeTruthy();
+    expect(screen.queryByTestId('session-closed-footer')).toBeNull();
   });
 
   it('reopen → starting → session.closed with exit -2: the Resuming banner gives way to Resume failed with a live Retry', async () => {
