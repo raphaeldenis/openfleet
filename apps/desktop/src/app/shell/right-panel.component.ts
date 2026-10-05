@@ -69,8 +69,8 @@ const PANEL_TABS: readonly PanelTab[] = [
     :host { display: flex; flex: none; min-height: 0; }
     .panel { width: 20rem; display: flex; flex-direction: column; min-height: 0; background: var(--side); border-left: 1px solid var(--line); }
     .head { height: 2.75rem; flex: none; display: flex; align-items: center; gap: .25rem; padding: 0 .5rem; border-bottom: 1px solid var(--line); }
-    .tabs { flex: 1; min-width: 0; display: flex; gap: .125rem; }
-    .tab { display: flex; flex-direction: column; align-items: flex-start; padding: .25rem .5rem; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--mut); font: inherit; font-size: .8125rem; cursor: pointer; }
+    .tabs { flex: 1; min-width: 0; align-self: stretch; display: flex; align-items: stretch; gap: .125rem; }
+    .tab { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 0 .375rem; white-space: nowrap; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--mut); font: inherit; font-size: .8125rem; cursor: pointer; }
     .tab[aria-selected='true'] { color: var(--fg); font-weight: 600; border-bottom-color: var(--accent); }
     .tab[aria-disabled='true'] { cursor: not-allowed; }
     .tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
