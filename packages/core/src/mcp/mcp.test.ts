@@ -365,6 +365,18 @@ describe('MCP', () => {
     expect(sessions.get(parentId)!.state).not.toBe('closed');
   });
 
+  it('send_session_message to an idle child whose human has an unsent draft answers queued with the reason, and does not type over the draft', async () => {
+    const parent = await connect(parentToken);
+    const created = text(await parent.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('draft-target'), name: 'Gimli', emoji: '⚔️' } }));
+    sessions.applyInput(created.id, { kind: 'hook', event: { session_id: created.id, hook_event_name: 'SessionStart' } as never });
+    sessions.writeRaw(created.id, 'half a thought');
+
+    const result = text(await parent.callTool({ name: 'send_session_message', arguments: { target_uuid: created.id, body: 'build is green' } }));
+
+    expect(result).toMatchObject({ status: 'queued', reason: expect.stringContaining('Not delivered yet') });
+    expect(harness.handles[1]!.written).toEqual(['half a thought']);
+  });
+
   it('send_session_message to a closed child still reports success instead of refusing, unlike the REST /messages route\'s 409 — the caller believes delivery is still possible', async () => {
     const parent = await connect(parentToken);
     const created = text(await parent.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('closed-target'), name: 'Gimli', emoji: '⚔️' } }));

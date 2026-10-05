@@ -14,6 +14,7 @@ import { ProjectRepository } from '../projects/projectRepository.js';
 import { HandoffSeed } from '../notes/handoffSeed.js';
 import { NoteRepository } from '../notes/noteRepository.js';
 import { nodeHandoffFileReader } from '../notes/nodeHandoffFileReader.js';
+import { HumanDraft } from './humanDraft.js';
 import { MessageQueue } from './messageQueue.js';
 import { findLatestContextTokens, findResolvedModel, readTranscriptTail } from './resolvedModel.js';
 import { wrapAgentMessage } from './messageEnvelope.js';
@@ -152,6 +153,14 @@ export const MAX_PENDING_AGENT_MESSAGES_PER_SENDER = 20;
 // the next body is typed mid-turn (Claude Code buffers it in the composer). Upgrade path: confirm the turn
 // from the pty output instead of trusting the DB state.
 export const TURN_START_TIMEOUT_MS = 5000;
+// A draft the human left untouched this long is taken as abandoned and stops holding the queue. Ceiling: the abandoned
+// text still sits in the prompt, so the released message is pasted behind it; upgrade path is emptying the prompt first.
+export const DRAFT_IDLE_EXPIRY_MS = 10 * 60_000;
+// After the human's keys emptied the prompt (an Enter that submits, Ctrl-C, Ctrl-U), the queue waits this long before
+// it types, so a turn the Enter started is seen first. Same bound as a late turn-start hook.
+const DRAFT_CLEARED_SETTLE_MS = TURN_START_TIMEOUT_MS;
+export type HeldFor = 'human_draft';
+interface HumanDraftWatch { handle: HarnessHandle; draft: HumanDraft; timer?: ReturnType<typeof setTimeout> }
 // ponytail: fixed retry for a throwing delivery step, then a slow parked retry so a wedged-not-exited pty
 // (which may never produce a state transition) is still retried without a tight loop; add exponential
 // backoff if pty writes fail transiently often enough to matter.
@@ -395,6 +404,8 @@ export class SessionService {
   private readonly outputBuffers = new Map<string, string>();
   private readonly resumeTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly deliveries = new Map<string, Delivery>();
+  // What the human typed into the terminal prompt and has not sent, per live process: nothing is typed on top of it.
+  private readonly humanDrafts = new Map<string, HumanDraftWatch>();
   // Message ids whose '\r' reached the pty but whose markDelivered has not succeeded yet.
   private readonly unrecordedDeliveries = new Map<string, string>();
   // Messages the CLI held for review and the daemon gave up on: a replay of the same message_id must not report them delivered.
@@ -535,7 +546,7 @@ export class SessionService {
   // target returns the already-enqueued message's current status instead of enqueuing a second copy.
   // requireOpen runs first: a closed target is refused outright, before any envelope wrapping, idempotency
   // lookup, or enqueue — a dead session must never end up with something queued behind it (Task 12).
-  sendMessage(input: { sessionId: string; body: string; fromSessionId?: string; messageId?: string }): { status: 'delivered' | 'queued'; messageId: string } {
+  sendMessage(input: { sessionId: string; body: string; fromSessionId?: string; messageId?: string }): { status: 'delivered' | 'queued'; messageId: string; heldFor?: HeldFor } {
     const session = this.requireOpen(input.sessionId);
     const messageId = input.messageId ?? newId();
     // Agent-to-agent messages (message_parent, send_session_message) always carry fromSessionId; a human
@@ -553,7 +564,7 @@ export class SessionService {
         // new send on the floor.
         const isSameSend = existing.sessionId === session.id && existing.fromSessionId === input.fromSessionId && existing.body === body;
         if (isSameSend && this.abandonedMessageIds.has(existing.id)) throw heldForReviewError();
-        if (isSameSend) return { status: existing.status, messageId: existing.id };
+        if (isSameSend) return { status: existing.status, messageId: existing.id, ...this.heldForOf(session.id, existing.status) };
         throw new MessageIdAlreadyUsedError(input.messageId);
       }
     }
@@ -567,7 +578,53 @@ export class SessionService {
     const isHandedToTerminal = phase.name === 'typing' && phase.messageId === message.id;
     if (isHandedToTerminal) return { status: 'delivered', messageId: message.id };
     this.deps.bus.emit({ type: 'message.queued', sessionId: session.id, messageId: message.id });
-    return { status: 'queued', messageId: message.id };
+    return { status: 'queued', messageId: message.id, ...this.heldForOf(session.id, 'queued') };
+  }
+
+  private heldForOf(sessionId: string, status: 'delivered' | 'queued'): { heldFor?: HeldFor } {
+    const isHeldByHumanDraft = status === 'queued' && this.hasUnsentHumanDraft(sessionId);
+    return isHeldByHumanDraft ? { heldFor: 'human_draft' } : {};
+  }
+
+  // The draft belongs to one process: a replaced one starts with an empty prompt.
+  private hasUnsentHumanDraft(sessionId: string): boolean {
+    const watch = this.humanDrafts.get(sessionId);
+    if (!watch) return false;
+    const isOfLiveProcess = this.liveHandle(sessionId) === watch.handle;
+    if (!isOfLiveProcess) this.forgetHumanDraft(sessionId);
+    return isOfLiveProcess && watch.draft.isPresent;
+  }
+
+  private forgetHumanDraft(sessionId: string): void {
+    clearTimeout(this.humanDrafts.get(sessionId)?.timer);
+    this.humanDrafts.delete(sessionId);
+  }
+
+  // Reads the human's keys where they reach the pty. A draft still present is released after DRAFT_IDLE_EXPIRY_MS of silence;
+  // a draft the keys just emptied lets the queue move on once the turn that Enter may have started has been seen.
+  private observeHumanKeys(sessionId: string, handle: HarnessHandle, keys: string): void {
+    const watch = this.humanDraftWatchOf(sessionId, handle);
+    const wasPresent = watch.draft.isPresent;
+    watch.draft.observe(keys, this.now());
+    clearTimeout(watch.timer);
+    const isPresent = watch.draft.isPresent;
+    const isJustEmptied = wasPresent && !isPresent;
+    if (!isPresent && !isJustEmptied) return;
+    const waitMs = isPresent ? DRAFT_IDLE_EXPIRY_MS : DRAFT_CLEARED_SETTLE_MS;
+    watch.timer = setTimeout(() => {
+      watch.draft.clear();
+      this.guarded(sessionId, () => this.advance(sessionId));
+    }, waitMs);
+    watch.timer.unref();
+  }
+
+  private humanDraftWatchOf(sessionId: string, handle: HarnessHandle): HumanDraftWatch {
+    const existing = this.humanDrafts.get(sessionId);
+    if (existing?.handle === handle) return existing;
+    this.forgetHumanDraft(sessionId);
+    const watch: HumanDraftWatch = { handle, draft: new HumanDraft() };
+    this.humanDrafts.set(sessionId, watch);
+    return watch;
   }
 
   // ponytail: Session carries no branch field yet (only a worktree path), so the daemon has nothing to
@@ -788,7 +845,12 @@ export class SessionService {
     // ESC the same way a real new turn would (applyInput cannot tell the two apart), so that ESC is
     // dropped until idle_prompt or the next Stop. Upgrade path: compare the hook's user_prompt (or the
     // transcript's user entries) against the armed watch's turn before disarming.
-    if (input.kind === 'hook' && input.event.hook_event_name === 'UserPromptSubmit') this.disarmInterruptWatch(sessionId);
+    if (input.kind === 'hook' && input.event.hook_event_name === 'UserPromptSubmit') {
+      this.disarmInterruptWatch(sessionId);
+      // The human's own prompt just left the prompt line; a turn the daemon's delivery started says nothing about what the human typed since.
+      const isTurnOfHumanPrompt = this.deliveryOf(sessionId).phase.name === 'ready';
+      if (isTurnOfHumanPrompt) this.forgetHumanDraft(sessionId);
+    }
     const endsUnfinishedTurn = provesTurnEnded(input) && this.unfinishedTurns.has(sessionId);
     if (endsUnfinishedTurn) this.unfinishedTurns.delete(sessionId);
     const state = nextState(session.state, input);
@@ -1069,6 +1131,7 @@ export class SessionService {
   private writeRawChunkAndArm(sessionId: string, handle: HarnessHandle, data: string): void {
     if (data.includes('\x1b')) this.armInterruptWatchIfGenerating(sessionId);
     handle.write(data);
+    this.observeHumanKeys(sessionId, handle, data);
   }
 
   // Arms a one-shot watch the moment a raw write containing the ESC byte lands while the CLI is
@@ -1518,6 +1581,7 @@ export class SessionService {
     this.recordDelivery(sessionId);
     const handle = this.liveHandle(sessionId);
     if (!handle) return;
+    if (this.hasUnsentHumanDraft(sessionId)) return;
     // A daemon line ([pulse]) never lands in the composer of a session waiting on the human's answer.
     const isWaitingOnHuman = this.repo.get(sessionId)?.state === 'waiting_input';
     const message = this.queue.nextPending(sessionId, { skipDaemonLines: isWaitingOnHuman });
@@ -1803,6 +1867,7 @@ export class SessionService {
     this.modelSwitchesAwaitingRelaunch.delete(sessionId);
     this.resolvedModelBeforeSameAliasRelaunch.delete(sessionId);
     this.stopDelivery(sessionId);
+    this.forgetHumanDraft(sessionId);
     this.pendingRelaunches.delete(sessionId);
     this.unfinishedTurns.delete(sessionId);
     this.releaseClearHold(sessionId);
