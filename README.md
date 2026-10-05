@@ -26,7 +26,9 @@ Requires Node >=26 — `nvm use` in this repo picks up Homebrew's Node via `.nvm
     pnpm dev:core          # daemon on 127.0.0.1:7331
     pnpm dev               # daemon + Tauri window
 
-`pnpm e2e` starts its daemon on a fresh `OPENFLEET_HOME` (`$TMPDIR/of-e2e-XXXXXX`, ports 1420 and 7332) created once per run and removed when the run ends, so a database migrated by another branch never leaks into it.
+`pnpm e2e` starts its daemon on a fresh `OPENFLEET_HOME` (`$TMPDIR/of-e2e-XXXXXX`) created once per run and removed when the run ends, so a database migrated by another branch never leaks into it. It picks two free ports at run time (daemon and web), so it is safe to run next to `pnpm dev` on 7331/1420 (and in parallel with another e2e run). `OPENFLEET_E2E_PORTS=<webPort>,<daemonPort>` pins them for a deterministic run. The daemon accepts the e2e web origin through `OPENFLEET_ALLOWED_ORIGINS` (comma-separated `http://localhost:<port>`-style loopback origins; anything else is ignored).
+
+When 7331 is taken, `pnpm dev:core` listens on a free port instead and prints the URL to open the web app on it (`http://localhost:1420/?daemon=http://127.0.0.1:<port>`; only loopback http origins are accepted). An explicit `OPENFLEET_PORT` is never replaced. The Tauri window (`pnpm dev` / `tauri dev`) keeps 7331 and 1420: its dev URL, CSP and daemon probe are fixed, and so is the packaged app, which reuses a daemon on 7331.
 
 Build budget: the production initial bundle measures about 425 kB (warning at 470 kB, error at 600 kB, set in `apps/desktop/angular.json`). Schemas import zod as `import * as z from 'zod'` so the bundler drops its unused locales and JSON-schema code; `import { z } from 'zod'` ships all of it (+330 kB).
 
@@ -80,9 +82,9 @@ The repo has no known violation: `.dependency-cruiser-known-violations.json` (`-
 
 ### Pre-push hook
 
-`pnpm install` installs a husky `pre-push` hook (`scripts/pre-push.sh`) that runs what CI runs: `pnpm arch`, `pnpm typecheck`, `pnpm test`, `pnpm --filter @openfleet/desktop test`, stopping at the first failure. It also re-runs the core tests without `claude` in `PATH` (CI has none; skipped when `claude` is not installed), runs `cargo test` and `cargo clippy -- -D warnings` when the push touches `apps/desktop/src-tauri`, and runs the e2e when it touches `apps/desktop/src`, `packages/core/src/api` or `packages/shared/src` and ports 1420/7332 are free (`OPENFLEET_PREPUSH_E2E=1` forces it, `=0` skips it). `OPENFLEET_PREPUSH_DRYRUN=1 sh scripts/pre-push.sh` lists the steps without running them. It puts `/opt/homebrew/bin` first in `PATH` when present and refuses a Node older than 26.
+`pnpm install` installs a husky `pre-push` hook (`scripts/pre-push.sh`) that runs what CI runs: `pnpm arch`, `pnpm typecheck`, `pnpm test`, `pnpm --filter @openfleet/desktop test`, stopping at the first failure. It also re-runs the core tests without `claude` in `PATH` (CI has none; skipped when `claude` is not installed), runs `cargo test` and `cargo clippy -- -D warnings` when the push touches `apps/desktop/src-tauri`, and runs the e2e when it touches `apps/desktop/src`, `packages/core/src/api` or `packages/shared/src` (on free ports, whatever your dev server holds; `OPENFLEET_PREPUSH_E2E=1` forces it, `=0` skips it). `OPENFLEET_PREPUSH_DRYRUN=1 sh scripts/pre-push.sh` lists the steps without running them. It puts `/opt/homebrew/bin` first in `PATH` when present and refuses a Node older than 26.
 
-The e2e runs automatically when the pushed range touches `apps/desktop/src`, `packages/core/src/api` or `packages/shared/src` and ports 1420 and 7332 are free; `OPENFLEET_PREPUSH_E2E=1 git push` forces it (fails on busy ports), `OPENFLEET_PREPUSH_E2E=0` skips it.
+The e2e runs automatically when the pushed range touches `apps/desktop/src`, `packages/core/src/api` or `packages/shared/src`, on free ports picked at run time; `OPENFLEET_PREPUSH_E2E=1 git push` forces it, `OPENFLEET_PREPUSH_E2E=0` skips it.
 
 Cost: the claude-free step runs the core tests a second time (about 35 s more). Cargo is skipped with a notice when it is not installed, and the first push that touches `src-tauri` may download the Node sidecar (network) and bundle the daemon.
 

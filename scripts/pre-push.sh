@@ -2,10 +2,9 @@
 # Runs the checks CI runs (.github/workflows/ci.yml) so a red CI is caught before the push.
 # Invoked by .husky/pre-push (git passes the pushed refs on stdin); also runnable by hand: sh scripts/pre-push.sh
 # OPENFLEET_PREPUSH_DRYRUN=1 prints the steps without running them.
-# OPENFLEET_PREPUSH_E2E=1 forces the e2e (fails on busy ports), =0 skips it.
+# OPENFLEET_PREPUSH_E2E=1 forces the e2e, =0 skips it. The e2e picks free ports itself, so a running dev server never blocks it.
 
 REQUIRED_NODE_MAJOR=26
-E2E_PORTS="1420 7332"
 TAURI_DIR=apps/desktop/src-tauri
 TAURI_MANIFEST=$TAURI_DIR/Cargo.toml
 
@@ -32,18 +31,6 @@ assert_compatible_node() {
   node_major=$(node -p "process.versions.node.split('.')[0]")
   [ "$node_major" -ge "$REQUIRED_NODE_MAJOR" ] ||
     fail "node $(node -v) at $(command -v node) is too old; Angular needs Node >= $REQUIRED_NODE_MAJOR (as in CI). Put a newer node first in PATH."
-}
-
-busy_e2e_port_holders() {
-  for port in $E2E_PORTS; do
-    lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | awk -v port="$port" 'NR > 1 { print "port " port " held by " $1 " (pid " $2 ")" }' | sort -u
-  done
-}
-
-assert_e2e_ports_free() {
-  busy_holders=$(busy_e2e_port_holders)
-  [ -z "$busy_holders" ] ||
-    fail "e2e needs ports $E2E_PORTS but: $(echo "$busy_holders" | tr '\n' ';') — free them or set OPENFLEET_PREPUSH_E2E=0"
 }
 
 is_planned() {
@@ -83,20 +70,11 @@ run_cargo_checks() {
 
 run_e2e_when_decided() {
   case "$(decide_e2e "$e2e_touched")" in
-    force)
-      assert_e2e_ports_free
+    force | auto)
       run_step "e2e" pnpm e2e
       ;;
-    auto)
-      busy_holders=$(busy_e2e_port_holders)
-      if [ -n "$busy_holders" ]; then
-        echo "pre-push: e2e skipped — $(echo "$busy_holders" | tr '\n' ';') (force with OPENFLEET_PREPUSH_E2E=1 once free)"
-      else
-        run_step "e2e" pnpm e2e
-      fi
-      ;;
     *)
-      echo "pre-push: e2e skipped — the push does not touch apps/desktop/src, packages/core/src/api or packages/shared/src (force with OPENFLEET_PREPUSH_E2E=1, needs free ports $E2E_PORTS)"
+      echo "pre-push: e2e skipped — the push does not touch apps/desktop/src, packages/core/src/api or packages/shared/src (force with OPENFLEET_PREPUSH_E2E=1)"
       ;;
   esac
 }

@@ -1,23 +1,27 @@
 import { defineConfig } from '@playwright/test';
 import { E2E_FLAG_ENV, E2E_FLAG_ON } from '../../packages/shared/src/e2e';
+import { E2E_API_ENV, E2E_WEB_URL_ENV, resolveE2ePorts } from '../../scripts/e2e/e2ePorts';
 import { ensureE2eHome } from '../../scripts/e2e/e2eHome';
 
 const e2eHome = ensureE2eHome();
+const { webPort, daemonPort } = resolveE2ePorts();
+const daemonUrl = process.env[E2E_API_ENV]!;
+const webUrl = process.env[E2E_WEB_URL_ENV]!;
 
 export default defineConfig({
   testDir: './e2e',
-  use: { baseURL: 'http://localhost:1420' },
+  use: { baseURL: webUrl },
   webServer: [
     {
       command: 'pnpm --filter @openfleet/core exec tsx src/main.ts',
       cwd: '../..',
-      url: 'http://127.0.0.1:7332/health',
+      url: `${daemonUrl}/health`,
       reuseExistingServer: false,
-      env: { OPENFLEET_HOME: e2eHome, OPENFLEET_PORT: '7332', [E2E_FLAG_ENV]: E2E_FLAG_ON },
+      env: { OPENFLEET_HOME: e2eHome, OPENFLEET_PORT: String(daemonPort), OPENFLEET_ALLOWED_ORIGINS: webUrl, [E2E_FLAG_ENV]: E2E_FLAG_ON },
     },
     {
-      command: 'pnpm start',
-      url: 'http://localhost:1420',
+      command: `pnpm exec ng serve --port ${webPort}`,
+      url: webUrl,
       reuseExistingServer: false,
     },
   ],
