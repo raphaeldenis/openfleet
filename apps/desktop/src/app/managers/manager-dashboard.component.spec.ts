@@ -242,6 +242,66 @@ describe('ManagerDashboardComponent', () => {
     expect(screen.queryByTestId('manager-dashboard-pulse-message')).toBeNull();
   });
 
+  describe('a reopen still in flight when the user opens another closed manager', () => {
+    const closedManagerA = { ...MANAGER_SESSION, id: 'm1', state: 'closed' };
+    const closedManagerB = { ...MANAGER_SESSION, id: 'm2', name: 'Second', state: 'closed' };
+    const managerBView = { ...MANAGER_VIEW, sessionId: 'm2' };
+
+    async function renderTwoClosedManagersWithHeldReopens() {
+      const paramMap$ = new BehaviorSubject(convertToParamMap({ id: 'm1' }));
+      const heldReopens: { sessionId: string; settle: (outcome: { rejectWith?: Error }) => void }[] = [];
+      const api = {
+        getManagerProfile: vi.fn().mockResolvedValue({ manager: MANAGER_VIEW, scapeImport: 'not_imported' }),
+        listProjects: vi.fn().mockResolvedValue({ items: [] }),
+        reopenSession: vi.fn((sessionId: string) => new Promise<void>((resolve, reject) => {
+          heldReopens.push({ sessionId, settle: ({ rejectWith }) => (rejectWith ? reject(rejectWith) : resolve()) });
+        })),
+      };
+      const view = await render(ManagerDashboardComponent, {
+        providers: [
+          provideRouter([]),
+          { provide: ActivatedRoute, useValue: { paramMap: paramMap$ } },
+          { provide: FleetApiService, useValue: api },
+          { provide: FleetEventsService, useValue: fakeEvents({ sessions: [closedManagerA, closedManagerB], managers: [MANAGER_VIEW, managerBView] }) },
+        ],
+      });
+      const heldReopenOf = (sessionId: string) => heldReopens.find((held) => held.sessionId === sessionId)!;
+      const settleReopen = async (sessionId: string, outcome: { rejectWith?: Error } = {}) => {
+        heldReopenOf(sessionId).settle(outcome);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        await view.fixture.whenStable();
+      };
+      const openManager = async (id: string) => {
+        paramMap$.next(convertToParamMap({ id }));
+        await view.fixture.whenStable();
+      };
+      return { api, settleReopen, openManager };
+    }
+
+    it('user still sees the second manager reopen as in progress when the first reopen completes', async () => {
+      const { api, settleReopen, openManager } = await renderTwoClosedManagersWithHeldReopens();
+      await userEvent.click(screen.getByTestId('manager-dashboard-reopen'));
+      await openManager('m2');
+      await userEvent.click(screen.getByTestId('manager-dashboard-reopen'));
+      expect(api.reopenSession).toHaveBeenCalledWith('m2', expect.anything());
+
+      await settleReopen('m1');
+
+      expect(screen.getByTestId('manager-dashboard-reopen')).toBeDisabled();
+      expect(screen.getByTestId('manager-dashboard-resume')).toBeDisabled();
+    });
+
+    it('user never reads the refusal of the first manager reopen on the second manager', async () => {
+      const { settleReopen, openManager } = await renderTwoClosedManagersWithHeldReopens();
+      await userEvent.click(screen.getByTestId('manager-dashboard-reopen'));
+      await openManager('m2');
+
+      await settleReopen('m1', { rejectWith: new Error('POST /api/sessions/m1/reopen → 409') });
+
+      expect(screen.queryByRole('alert')).toBeNull();
+    });
+  });
+
   it('lists each child in the table with its name and state', async () => {
     const fake = fakeEvents({ sessions: [MANAGER_SESSION, CHILD_SESSION], managers: [MANAGER_VIEW] });
     await render(ManagerDashboardComponent, {
