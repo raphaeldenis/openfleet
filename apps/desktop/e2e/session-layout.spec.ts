@@ -53,6 +53,41 @@ for (const viewport of viewports) {
   }
 }
 
+const VERTICAL_TOLERANCE_PX = 1;
+const ONE_TERMINAL_ROW_PX = 24;
+
+async function verticalGapsAroundTerminal(page: Page) {
+  return page.evaluate(() => {
+    const sessionView = document.querySelector('of-session-view')!.getBoundingClientRect();
+    const terminalHost = document.querySelector('[data-testid="terminal"]')!.getBoundingClientRect();
+    const renderedScreen = document.querySelector('[data-testid="terminal"] .xterm-screen')!.getBoundingClientRect();
+    return {
+      aboveHost: terminalHost.top - sessionView.top,
+      belowHost: sessionView.bottom - terminalHost.bottom,
+      unusedByRows: terminalHost.bottom - renderedScreen.bottom,
+    };
+  });
+}
+
+for (const viewport of viewports) {
+  for (const panel of panelStates) {
+    test(`the terminal fills the session view top to bottom with the ${panel.name} right panel at ${viewport.width}×${viewport.height}`, async ({ page, request }) => {
+      await page.setViewportSize(viewport);
+      await signInAsAdmin(page);
+      const session = await fakeSessions.create(request, { name: 'Vertical' });
+      await session.hooks.announceIdle();
+
+      await openSessionWithPanel(page, { sessionId: session.id, isPanelOpen: panel.isOpen });
+
+      await expect.poll(async () => (await verticalGapsAroundTerminal(page)).aboveHost).toBeLessThanOrEqual(VERTICAL_TOLERANCE_PX);
+      const gaps = await verticalGapsAroundTerminal(page);
+      expect(gaps.belowHost).toBeLessThanOrEqual(VERTICAL_TOLERANCE_PX);
+      expect(gaps.unusedByRows).toBeLessThan(ONE_TERMINAL_ROW_PX);
+      await expect(page.getByTestId('right-panel-session-toggle')).toBeVisible();
+    });
+  }
+}
+
 test('the shell stays unscrolled after the terminal takes focus', async ({ page, request }) => {
   await page.setViewportSize(viewports[0]!);
   await signInAsAdmin(page);

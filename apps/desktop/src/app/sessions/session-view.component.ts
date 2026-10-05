@@ -48,19 +48,18 @@ type LifecycleBanner = { kind: 'resuming' } | { kind: 'strip'; strip: LifecycleS
             </div>
           }
         }
-        <div class="terminal-tab-bar" data-testid="terminal-tab-bar">
-          <of-session-actions
-            [sessionId]="s.id"
-            [state]="s.state"
-            [stateSince]="s.stateSince"
-            [sessionName]="s.name"
-            [closeVisible]="false"
-            [isCompact]="true"
-          />
-          <span class="tab-bar-spacer"></span>
-          <of-right-panel-session-toggle />
-        </div>
         <div class="terminal-area">
+          <div class="terminal-overlay-controls" data-testid="terminal-tab-bar">
+            <of-session-actions
+              [sessionId]="s.id"
+              [state]="s.state"
+              [stateSince]="s.stateSince"
+              [sessionName]="s.name"
+              [closeVisible]="false"
+              [isCompact]="true"
+            />
+            <of-right-panel-session-toggle />
+          </div>
           <of-terminal [sessionId]="s.id" />
           @if (pendingApproval(); as approval) {
             <of-permission-gate-card [approval]="approval" />
@@ -95,9 +94,13 @@ type LifecycleBanner = { kind: 'resuming' } | { kind: 'strip'; strip: LifecycleS
   styles: `
     :host { display: flex; flex: 1; min-width: 0; min-height: 0; }
     .session-view { flex: 1; min-width: 0; display: flex; flex-direction: column; height: 100%; min-height: 0; }
-    .terminal-area { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: .625rem; padding: .5rem; }
-    .terminal-tab-bar { flex: none; display: flex; align-items: center; gap: .5rem; padding: .25rem .5rem; background: var(--term-bg); color: var(--term-fg); }
-    .tab-bar-spacer { flex: 1; }
+    .terminal-area { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; gap: .625rem; padding: 0 .5rem; }
+    .terminal-overlay-controls {
+      position: absolute; top: .5rem; right: 1rem; z-index: 2; display: flex; align-items: center; gap: .5rem;
+      color: var(--term-fg); opacity: .35; pointer-events: none;
+    }
+    .terminal-overlay-controls:hover, .terminal-overlay-controls:focus-within { opacity: 1; }
+    .terminal-overlay-controls > * { pointer-events: auto; }
     .closed-card {
       display: flex; align-items: center; gap: .75rem; margin: 0 1rem 1rem; padding: .75rem 1rem;
       border: 1px solid var(--line-2); border-radius: .5rem; background: var(--panel); font-size: .8125rem; --closed-color: var(--state-closed);
