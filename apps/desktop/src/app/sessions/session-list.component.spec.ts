@@ -4,6 +4,7 @@ import { signal } from '@angular/core';
 import { provideRouter, Router } from '@angular/router';
 import { describe, expect, it, vi } from 'vitest';
 import { SessionListComponent } from './session-list.component';
+import { SHOW_CLOSED_STORAGE_KEY } from './session-filter';
 import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
 
@@ -43,8 +44,10 @@ describe('SessionListComponent state overdue chip', () => {
 
   it('user sees "state overdue" on the sidebar row of each open session that has no state, and not on a closed one', async () => {
     const fake = fakeEvents({ sessions, workingStatesReported: true });
+    localStorage.setItem(SHOW_CLOSED_STORAGE_KEY, '1');
 
     await render(SessionListComponent, { providers: [provideRouter([]), { provide: FleetEventsService, useValue: fake }] });
+    localStorage.clear();
 
     expect(within(screen.getByTestId('session-m1')).getByTestId('overdue-chip')).toBeTruthy();
     expect(within(screen.getByTestId('session-c1')).getByTestId('overdue-chip')).toBeTruthy();
