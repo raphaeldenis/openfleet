@@ -66,6 +66,18 @@ describe('the Project field of the New session form', () => {
     expect(api.listProjects).toHaveBeenCalledTimes(1);
   });
 
+  it('preselects the project named by the projectId query parameter and creates the session in it', async () => {
+    const api = fakeApi();
+    await renderForm(api, { projectId: ARMADA.id });
+    await waitForProjectsToLoad();
+
+    await fillSessionFields();
+    await userEvent.click(submitButton());
+
+    expect(projectSelect().value).toBe(ARMADA.id);
+    expect(api.createSession.mock.calls[0]![0]).toMatchObject({ projectId: ARMADA.id });
+  });
+
   it('creates a session without a project id when the user keeps "No project"', async () => {
     const api = fakeApi();
     await renderForm(api);

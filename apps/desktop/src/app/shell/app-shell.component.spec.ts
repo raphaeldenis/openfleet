@@ -117,10 +117,19 @@ describe('AppShellComponent', () => {
     expect(notes.getAttribute('href')).toBe('/notes');
   });
 
+  it('renders Project home as a real link to the project home screen', async () => {
+    const { root } = await setUp();
+
+    const projectHome = root.querySelector('[data-testid="nav-project"]') as HTMLAnchorElement;
+
+    expect(projectHome.tagName).toBe('A');
+    expect(projectHome).not.toHaveAttribute('aria-disabled');
+    expect(projectHome.getAttribute('href')).toBe('/project');
+  });
+
   it('gives each disabled section the phase text from the backlog (Capitaine correction 2026-09-27)', async () => {
     const { root } = await setUp();
 
-    expect(root.querySelector('[data-testid="nav-project"]')).toHaveTextContent('Available in phase 3');
     expect(root.querySelector('[data-testid="nav-audit"]')).toHaveTextContent('Available in phase 4');
     expect(root.querySelector('[data-testid="nav-toolkit"]')).toHaveTextContent('Available in phase 4');
     expect(root.querySelector('[data-testid="nav-mgrprofile"]')).toHaveTextContent('Available in phase 4');
