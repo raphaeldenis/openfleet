@@ -7,7 +7,6 @@ import { FleetEventsService } from '../core/fleet-events.service';
 import { StatePanelComponent } from './state-panel.component';
 import { NOW_ISO, fakeWorkingStateEvents, minutesBeforeNow, sessionOf, stateOf } from './working-state-fixtures';
 
-const toggle = () => screen.getByTestId('state-panel-toggle');
 const body = () => screen.queryByTestId('state-panel-body');
 
 async function renderPanel(options: Parameters<typeof fakeWorkingStateEvents>[0] = {}, session: Session = sessionOf()) {
@@ -19,10 +18,8 @@ async function renderPanel(options: Parameters<typeof fakeWorkingStateEvents>[0]
   return { ...view, events };
 }
 
-async function renderOpenPanel(state: Partial<WorkingState> = {}, session: Session = sessionOf()) {
-  const view = await renderPanel({ states: [stateOf(state)] }, session);
-  await userEvent.click(toggle());
-  return view;
+async function renderPanelWith(state: Partial<WorkingState> = {}, session: Session = sessionOf()) {
+  return renderPanel({ states: [stateOf(state)] }, session);
 }
 
 const SECTION_KEYS = ['plan', 'todo', 'remaining', 'questionsForHuman', 'internalQuestions', 'blockers'] as const;
@@ -35,34 +32,31 @@ describe('StatePanelComponent', () => {
   });
   afterEach(() => vi.useRealTimers());
 
-  it('user finds the state panel collapsed, so the terminal keeps the room', async () => {
-    await renderPanel({ states: [stateOf({ plan: ['ship it'] })] });
+  it('user finds the state panel titled "State", with its sections showing without any click', async () => {
+    await renderPanelWith({ plan: ['ship it'] });
 
-    expect(toggle()).toHaveAttribute('aria-expanded', 'false');
-    expect(body()).toBeNull();
+    expect(screen.getByTestId('state-panel')).toHaveTextContent('State');
+    expect(body()).not.toBeNull();
+    expect(screen.getByTestId('state-section-plan')).toHaveTextContent('ship it');
   });
 
-  it('user of a screen reader is never pointed at a body that does not exist while the panel is collapsed', async () => {
-    await renderPanel({ states: [stateOf({ plan: ['ship it'] })] });
+  it('user finds no toggle to open or close the state panel', async () => {
+    await renderPanelWith({ plan: ['ship it'] });
 
-    const controlledId = toggle().getAttribute('aria-controls');
-
-    expect(controlledId === null || document.getElementById(controlledId) !== null).toBe(true);
+    expect(screen.queryByTestId('state-panel-toggle')).toBeNull();
+    expect(screen.queryByRole('button', { name: /state/i })).toBeNull();
+    expect(screen.queryByRole('button')).toBeNull();
   });
 
-  it('user of a screen reader is pointed at the body once the panel is open', async () => {
-    await renderOpenPanel({ plan: ['ship it'] });
+  it('user of a screen reader finds the body as a named region', async () => {
+    await renderPanelWith({ plan: ['ship it'] });
 
-    const controlledId = toggle().getAttribute('aria-controls');
-
-    expect(controlledId).not.toBeNull();
-    expect(document.getElementById(controlledId as string)).toBe(body());
+    expect(screen.getByRole('region', { name: 'Working state' })).toBe(body());
   });
 
-  it('user can open the panel and read the six sections in order with their items', async () => {
-    await renderOpenPanel({ plan: ['ship the panel'], todo: ['write tests', 'write code'], blockers: ['waiting on design'] });
+  it('user can read the six sections in order with their items', async () => {
+    await renderPanelWith({ plan: ['ship the panel'], todo: ['write tests', 'write code'], blockers: ['waiting on design'] });
 
-    expect(toggle()).toHaveAttribute('aria-expanded', 'true');
     const headings = SECTION_KEYS.map((key) => within(screen.getByTestId(`state-section-${key}`)).getByTestId('state-section-heading').textContent?.trim());
     expect(headings).toEqual(HEADINGS_IN_ORDER);
     expect(screen.getByTestId('state-section-plan')).toHaveTextContent('ship the panel');
@@ -71,22 +65,13 @@ describe('StatePanelComponent', () => {
   });
 
   it('user sees "(rien)" in each of the six sections when the state is empty', async () => {
-    await renderOpenPanel();
+    await renderPanelWith();
 
     for (const key of SECTION_KEYS) expect(within(screen.getByTestId(`state-section-${key}`)).getByTestId('state-section-empty')).toHaveTextContent('(rien)');
   });
 
-  it('user can close the panel again', async () => {
-    await renderOpenPanel();
-
-    await userEvent.click(toggle());
-
-    expect(body()).toBeNull();
-    expect(toggle()).toHaveAttribute('aria-expanded', 'false');
-  });
-
   it('user sees plain text: markdown and markup in an item are shown as typed', async () => {
-    await renderOpenPanel({ plan: ['**bold** `code` <b>tag</b> [link](http://x)'] });
+    await renderPanelWith({ plan: ['**bold** `code` <b>tag</b> [link](http://x)'] });
 
     const item = within(screen.getByTestId('state-section-plan')).getByTestId('state-item');
     expect(item.textContent?.trim()).toBe('**bold** `code` <b>tag</b> [link](http://x)');
@@ -114,7 +99,6 @@ describe('StatePanelComponent', () => {
 
   it('user sees the panel follow a new state written by the session', async () => {
     const { fixture, events } = await renderPanel({ states: [stateOf({ plan: ['old plan'] })] });
-    await userEvent.click(toggle());
 
     events.workingStates.set(new Map([['s1', stateOf({ plan: ['new plan'] })]]));
     await fixture.whenStable();
@@ -124,29 +108,28 @@ describe('StatePanelComponent', () => {
   });
 
   describe('when the state is overdue', () => {
-    it('user sees the chip and the reason in text, even with the panel collapsed', async () => {
+    it('user sees the chip and the reason in text', async () => {
       await renderPanel({ states: [stateOf({ updatedAt: minutesBeforeNow(45) })] });
 
-      expect(within(toggle()).getByTestId('overdue-chip')).toBeTruthy();
-      expect(within(toggle()).getByTestId('overdue-chip')).toHaveTextContent('state overdue');
+      expect(screen.getByTestId('overdue-chip')).toHaveTextContent('state overdue');
       expect(screen.getByTestId('state-panel-overdue-reason')).toHaveTextContent('Written 45 minutes ago, limit 30 minutes');
     });
 
     it('user sees a "stale" mark when the state was written before the last spawn or close', async () => {
-      await renderOpenPanel({ updatedAt: minutesBeforeNow(2), fleetChangedAt: minutesBeforeNow(1) });
+      await renderPanelWith({ updatedAt: minutesBeforeNow(2), fleetChangedAt: minutesBeforeNow(1) });
 
       expect(screen.getByTestId('state-panel-stale')).toHaveTextContent('stale');
       expect(screen.getByTestId('state-panel-overdue-reason')).toHaveTextContent('Written before the last spawn or close');
     });
 
     it('user sees no "stale" mark on a state that is merely old', async () => {
-      await renderOpenPanel({ updatedAt: minutesBeforeNow(45) });
+      await renderPanelWith({ updatedAt: minutesBeforeNow(45) });
 
       expect(screen.queryByTestId('state-panel-stale')).toBeNull();
     });
 
     it('user sees no chip, no reason and no mark on a fresh state', async () => {
-      await renderOpenPanel({ updatedAt: minutesBeforeNow(1) });
+      await renderPanelWith({ updatedAt: minutesBeforeNow(1) });
 
       expect(screen.queryByTestId('overdue-chip')).toBeNull();
       expect(screen.queryByTestId('state-panel-overdue-reason')).toBeNull();
@@ -157,7 +140,6 @@ describe('StatePanelComponent', () => {
   describe('when there is no state to show', () => {
     it('user reads that no state is recorded yet for an open session', async () => {
       await renderPanel({ states: [] });
-      await userEvent.click(toggle());
 
       expect(screen.getByTestId('state-panel-none')).toHaveTextContent('No state recorded yet');
       expect(screen.queryByTestId('state-section-plan')).toBeNull();
@@ -165,21 +147,18 @@ describe('StatePanelComponent', () => {
 
     it('user reads that the state is not shown for a closed session, not that none exists', async () => {
       await renderPanel({ states: [] }, sessionOf({ state: 'closed' }));
-      await userEvent.click(toggle());
 
       expect(screen.getByTestId('state-panel-none')).toHaveTextContent('State not shown for a closed session');
     });
 
     it('user still reads the last state of a session that closed while the app was open', async () => {
       await renderPanel({ states: [stateOf({ plan: ['last plan'] })] }, sessionOf({ state: 'closed' }));
-      await userEvent.click(toggle());
 
       expect(screen.getByTestId('state-section-plan')).toHaveTextContent('last plan');
     });
 
     it('user reads that this daemon does not report states, not that the session has none', async () => {
       await renderPanel({ states: [], reported: false });
-      await userEvent.click(toggle());
 
       expect(screen.getByTestId('state-panel-none')).toHaveTextContent('State not reported by this daemon');
       expect(screen.queryByTestId('overdue-chip')).toBeNull();
@@ -199,13 +178,12 @@ describe('StatePanelComponent', () => {
 
       expect(screen.getByTestId('state-panel-updated')).toHaveTextContent('updated time unknown');
       expect(screen.getByTestId('state-panel-overdue-reason')).toHaveTextContent('State time unknown');
-      expect(toggle()).not.toHaveTextContent('NaN');
       expect(screen.getByTestId('state-panel')).not.toHaveTextContent('NaN');
     });
 
     it('user reads a 300 character item without a space in full', async () => {
       const unbrokenItem = 'x'.repeat(300);
-      await renderOpenPanel({ plan: [unbrokenItem] });
+      await renderPanelWith({ plan: [unbrokenItem] });
 
       const item = within(screen.getByTestId('state-section-plan')).getByTestId('state-item');
 
@@ -213,54 +191,30 @@ describe('StatePanelComponent', () => {
       expect(item).toBeVisible();
     });
 
-    it('user can reach a state of 120 items from the keyboard, all items present', async () => {
+    it('user finds all the items of a state of 120 items', async () => {
       const twentyItems = (label: string) => Array.from({ length: 20 }, (_, index) => `${label} ${index}`);
-      await renderOpenPanel({
+      await renderPanelWith({
         plan: twentyItems('plan'), todo: twentyItems('todo'), remaining: twentyItems('remaining'),
         questionsForHuman: twentyItems('question'), internalQuestions: twentyItems('internal'), blockers: twentyItems('blocker'),
       });
 
       expect(screen.getAllByTestId('state-item')).toHaveLength(120);
-      body()!.focus();
-      expect(body()).toHaveFocus();
     });
   });
 
   describe('with the keyboard', () => {
-    it('user can open and close the panel with Enter on the toggle', async () => {
-      await renderPanel({ states: [stateOf()] });
-      toggle().focus();
+    it('user pressing Escape inside the panel changes nothing', async () => {
+      await renderPanelWith({ plan: ['a'] });
 
-      await userEvent.keyboard('{Enter}');
+      await userEvent.keyboard('{Escape}');
+
       expect(body()).not.toBeNull();
-      await userEvent.keyboard('{Enter}');
-
-      expect(body()).toBeNull();
-    });
-
-    it('user can press Escape inside the open panel to close it and land back on the toggle', async () => {
-      await renderOpenPanel({ plan: ['a'] });
-      body()!.focus();
-
-      await userEvent.keyboard('{Escape}');
-
-      expect(body()).toBeNull();
-      expect(toggle()).toHaveFocus();
-    });
-
-    it('user pressing Escape on a closed panel changes nothing', async () => {
-      await renderPanel({ states: [stateOf()] });
-      toggle().focus();
-
-      await userEvent.keyboard('{Escape}');
-
-      expect(body()).toBeNull();
-      expect(toggle()).toHaveFocus();
+      expect(screen.getByTestId('state-section-plan')).toHaveTextContent('a');
     });
   });
 
   describe('when the user switches to another session', () => {
-    it('user finds the panel of the new session closed, with its own state', async () => {
+    it('user finds the panel showing the state of the new session', async () => {
       const first = sessionOf({ id: 's1' });
       const second = sessionOf({ id: 's2', name: 'Legolas' });
       const shown = signal(first);
@@ -269,14 +223,11 @@ describe('StatePanelComponent', () => {
         bindings: [inputBinding('session', shown)],
         providers: [{ provide: FleetEventsService, useValue: events }],
       });
-      await userEvent.click(toggle());
       expect(screen.getByTestId('state-section-plan')).toHaveTextContent('first plan');
 
       shown.set(second);
       await fixture.whenStable();
 
-      expect(body()).toBeNull();
-      await userEvent.click(toggle());
       expect(screen.getByTestId('state-section-plan')).toHaveTextContent('second plan');
     });
   });

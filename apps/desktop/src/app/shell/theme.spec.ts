@@ -2,7 +2,7 @@ import { Component, signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { provideRouter, type Routes } from '@angular/router';
 import { RouterTestingHarness } from '@angular/router/testing';
-import { screen } from '@testing-library/angular/zoneless';
+import { screen, within } from '@testing-library/angular/zoneless';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { silentWorkingStateSignals } from '../working-state/working-state-fixtures';
@@ -28,11 +28,6 @@ async function mountShell(): Promise<RouterTestingHarness> {
     ],
   });
   return RouterTestingHarness.create('');
-}
-
-function openPalette(harness: RouterTestingHarness): void {
-  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }));
-  harness.detectChanges();
 }
 
 describe('Theme', () => {
@@ -69,7 +64,7 @@ describe('Theme', () => {
     expect(rootTheme()).toBe('dark');
   });
 
-  it('switches the root theme from the top-bar toggle', async () => {
+  it('switches the root theme from the sidebar footer toggle', async () => {
     stubSystemPrefersDark(false);
     const harness = await mountShell();
 
@@ -106,15 +101,12 @@ describe('Theme', () => {
     expect(rootTheme()).toBe('dark');
   });
 
-  it('lists a theme toggle in the command palette that switches the theme and closes the palette', async () => {
+  it('offers the toggle in the sidebar footer, next to the settings gear', async () => {
     stubSystemPrefersDark(false);
-    const harness = await mountShell();
-    openPalette(harness);
+    await mountShell();
 
-    screen.getByRole('button', { name: /Toggle theme/ }).click();
-    harness.detectChanges();
+    const footerToggle = within(screen.getByTestId('sidebar-footer')).getByTestId('theme-toggle');
 
-    expect(rootTheme()).toBe('dark');
-    expect(screen.queryByRole('dialog', { name: 'Command palette' })).toBeNull();
+    expect(footerToggle).toHaveTextContent('☀ Light');
   });
 });

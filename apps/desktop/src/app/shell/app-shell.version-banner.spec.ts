@@ -188,28 +188,27 @@ describe('AppShellComponent version mismatch banner', () => {
     expect(screen.getByTestId('stub-settings')).toBeInTheDocument();
   });
 
-  describe('the daemon status pill', () => {
-    it('reads "Daemon <version>" with the differing-versions tooltip when the versions differ', async () => {
+  describe('without any permanent daemon status', () => {
+    it('shows no daemon status pill and no "Connected" text while the versions differ', async () => {
       const { daemonAnswersBootCheckWith } = await openShell({ appVersion: '1.2.0' });
 
       await daemonAnswersBootCheckWith({ version: '0.9.2' });
 
-      const [topBarPill] = screen.getAllByTestId('daemon-status');
-      expect(topBarPill).toHaveTextContent('Daemon 0.9.2');
-      expect(topBarPill).toHaveAttribute('title', 'Daemon and app versions differ — restart the daemon');
+      expect(screen.queryByTestId('daemon-status')).not.toBeInTheDocument();
+      expect(screen.queryByText(/Connected/)).not.toBeInTheDocument();
     });
 
-    it('keeps reading "Connected" when the versions match', async () => {
+    it('shows no daemon status pill and no "Connected" text when the versions match', async () => {
       const { daemonAnswersBootCheckWith } = await openShell({ appVersion: '1.2.0' });
 
       await daemonAnswersBootCheckWith({ version: '1.2.0' });
 
-      const [topBarPill] = screen.getAllByTestId('daemon-status');
-      expect(topBarPill).toHaveTextContent('Connected');
+      expect(screen.queryByTestId('daemon-status')).not.toBeInTheDocument();
+      expect(screen.queryByText(/Connected/)).not.toBeInTheDocument();
     });
   });
 
-  describe('stacking under the top bar', () => {
+  describe('stacking of the banners', () => {
     const stuckDatabase = { id: '3f9a1c2e', code: 'db_stuck', message: 'The database is stuck.', since: '2026-09-30T10:00:00.000Z' };
 
     it('puts the mismatch banner above the degraded banner and the reconnecting banner, as the design does', async () => {

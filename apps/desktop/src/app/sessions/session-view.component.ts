@@ -8,10 +8,9 @@ import { FleetEventsService } from '../core/fleet-events.service';
 import { SessionRequestsService } from '../core/session-requests';
 import { PermissionGateCardComponent } from './permission-gate-card.component';
 import { type LifecycleStrip, closedSessionPresentationFor } from './closed-session-presentation';
-import { SessionHeaderComponent } from './session-header.component';
+import { SessionActionsComponent } from './session-actions.component';
 import { TerminalComponent } from './terminal.component';
 import { RightPanelSessionToggleComponent } from './right-panel-session-toggle.component';
-import { StatePanelComponent } from '../working-state/state-panel.component';
 
 const REOPEN_FRESH_UNAVAILABLE_REASON = 'Not available yet — the daemon cannot relaunch a session without its previous conversation.';
 
@@ -20,12 +19,10 @@ type LifecycleBanner = { kind: 'resuming' } | { kind: 'strip'; strip: LifecycleS
 @Component({
   selector: 'of-session-view',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [SessionHeaderComponent, StatePanelComponent, TerminalComponent, PermissionGateCardComponent,RightPanelSessionToggleComponent, CopyDetailsButtonComponent],
+  imports: [SessionActionsComponent, TerminalComponent, PermissionGateCardComponent, RightPanelSessionToggleComponent, CopyDetailsButtonComponent],
   template: `
     @if (session(); as s) {
       <div class="session-view" data-testid="session-view">
-        <of-session-header [session]="s" />
-        <of-state-panel [session]="s" />
         <div class="lifecycle-live-region" data-testid="lifecycle-live-region" aria-live="polite">
           @if (lifecycleBanner()?.kind === 'resuming') {
             <div class="lifecycle-banner" data-testid="lifecycle-banner" data-variant="resuming">
@@ -52,6 +49,15 @@ type LifecycleBanner = { kind: 'resuming' } | { kind: 'strip'; strip: LifecycleS
           }
         }
         <div class="terminal-tab-bar" data-testid="terminal-tab-bar">
+          <of-session-actions
+            [sessionId]="s.id"
+            [state]="s.state"
+            [stateSince]="s.stateSince"
+            [sessionName]="s.name"
+            [closeVisible]="false"
+            [isCompact]="true"
+          />
+          <span class="tab-bar-spacer"></span>
           <of-right-panel-session-toggle />
         </div>
         <div class="terminal-area">
@@ -90,7 +96,8 @@ type LifecycleBanner = { kind: 'resuming' } | { kind: 'strip'; strip: LifecycleS
     :host { display: flex; flex: 1; min-width: 0; min-height: 0; }
     .session-view { flex: 1; min-width: 0; display: flex; flex-direction: column; height: 100%; min-height: 0; }
     .terminal-area { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: .625rem; padding: .5rem; }
-    .terminal-tab-bar { flex: none; display: flex; align-items: center; justify-content: flex-end; padding: .25rem .5rem; background: var(--term-bg); color: var(--term-fg); }
+    .terminal-tab-bar { flex: none; display: flex; align-items: center; gap: .5rem; padding: .25rem .5rem; background: var(--term-bg); color: var(--term-fg); }
+    .tab-bar-spacer { flex: 1; }
     .closed-card {
       display: flex; align-items: center; gap: .75rem; margin: 0 1rem 1rem; padding: .75rem 1rem;
       border: 1px solid var(--line-2); border-radius: .5rem; background: var(--panel); font-size: .8125rem; --closed-color: var(--state-closed);

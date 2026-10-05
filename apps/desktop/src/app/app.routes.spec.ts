@@ -39,6 +39,8 @@ function configureTestBed() {
 }
 
 describe('app.routes', () => {
+  afterEach(() => localStorage.clear());
+
   it("renders the app shell with an empty state at ''", async () => {
     await configureTestBed();
     const harness = await RouterTestingHarness.create('');
@@ -122,11 +124,15 @@ describe('app.routes', () => {
   it('user picking a different session while already on a session view sees the new session, not the old one (zoneless router-input-binding regression)', async () => {
     await configureTestBed();
     const harness = await RouterTestingHarness.create('/session/s1');
-    expect((harness.routeNativeElement?.querySelector('[data-testid="session-name-input"]') as HTMLInputElement)?.value).toBe('Gimli');
+    const openPanelButton = harness.routeNativeElement?.querySelector('[data-testid="right-panel-rail"]') as HTMLButtonElement | null;
+    openPanelButton?.click();
+    await harness.fixture.whenStable();
+    const shownName = () => (harness.routeNativeElement?.querySelector('[data-testid="session-name-input"]') as HTMLInputElement | null)?.value;
+    await vi.waitFor(() => expect(shownName()).toBe('Gimli'));
 
     await harness.navigateByUrl('/session/s2');
 
-    expect((harness.routeNativeElement?.querySelector('[data-testid="session-name-input"]') as HTMLInputElement)?.value).toBe('Legolas');
+    await vi.waitFor(() => expect(shownName()).toBe('Legolas'));
   });
 
   it("user opening a crafted '/new?…' link creates a session without the prompt, the mode and the pre-fills the link tried to inject", async () => {

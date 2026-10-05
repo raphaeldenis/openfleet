@@ -1,7 +1,7 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import { readE2eAdminToken } from '../../../scripts/e2e/e2eHome';
+import { api } from './support/daemon';
 
-const api = 'http://127.0.0.1:7332';
 const token = readE2eAdminToken();
 
 const MINIMUM_TEXT_CONTRAST = 4.5;
@@ -63,17 +63,14 @@ async function openSessionUnderTheme(page: Page, request: APIRequestContext, the
   await page.addInitScript(([adminToken, apiUrl, chosenTheme]) => {
     localStorage.setItem('openfleet.adminToken', adminToken);
     localStorage.setItem('openfleet.apiUrl', apiUrl);
+    localStorage.setItem('openfleet.rightPanel.open', 'true');
     document.documentElement.setAttribute('data-theme', chosenTheme);
   }, [token, api, theme satisfies Theme]);
   const created = await request.post(`${api}/api/sessions`, { headers, data: { directory: '/tmp', name: 'Danger contrast', emoji: '🛑', harness: 'fake' } });
   createdSessionId = (await created.json()).id;
   await page.goto(`/session/${createdSessionId}`);
   await page.evaluate((chosenTheme) => document.documentElement.setAttribute('data-theme', chosenTheme), theme);
-  await expect(page.getByTestId('session-header')).toBeVisible();
-  const detailsToggle = page.getByTestId('session-header-toggle');
-  const areDetailsCollapsed = (await detailsToggle.getAttribute('aria-expanded')) === 'false';
-  if (areDetailsCollapsed) await detailsToggle.click();
-  await expect(detailsToggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.getByTestId('session-details')).toBeVisible();
 }
 
 async function resolveTokenFillColor(page: Page, tokenName: string): Promise<string> {

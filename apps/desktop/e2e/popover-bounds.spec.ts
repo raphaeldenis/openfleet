@@ -3,50 +3,48 @@ import { e2eHomePath } from '../../../scripts/e2e/e2eHome';
 import { signInAsAdmin, useFakeSessions } from './support/daemon';
 
 const fakeSessions = useFakeSessions();
-const OUTLET_MARGIN = 8;
+const BOUNDARY_MARGIN = 8;
 const VIEWPORTS = [{ width: 1200, height: 800 }, { width: 1440, height: 900 }];
 
-async function expectInsideOutlet({ panel, outlet }: { panel: Locator; outlet: Locator }): Promise<void> {
+async function expectInsideBoundary({ panel, boundary }: { panel: Locator; boundary: Locator }): Promise<void> {
   await expect(panel).toBeVisible();
   await expect.poll(async () => {
     const panelBox = await panel.boundingBox();
-    const outletBox = await outlet.boundingBox();
-    if (!panelBox || !outletBox) return false;
-    const isLeftInside = panelBox.x >= outletBox.x + OUTLET_MARGIN - 1;
-    const isRightInside = panelBox.x + panelBox.width <= outletBox.x + outletBox.width - OUTLET_MARGIN + 1;
+    const boundaryBox = await boundary.boundingBox();
+    if (!panelBox || !boundaryBox) return false;
+    const isLeftInside = panelBox.x >= boundaryBox.x + BOUNDARY_MARGIN - 1;
+    const isRightInside = panelBox.x + panelBox.width <= boundaryBox.x + boundaryBox.width - BOUNDARY_MARGIN + 1;
     return isLeftInside && isRightInside;
   }).toBe(true);
-  expect(await outlet.evaluate((element) => element.scrollLeft)).toBe(0);
+  expect(await boundary.evaluate((element) => element.scrollLeft)).toBe(0);
 }
 
 for (const viewport of VIEWPORTS) {
   for (const theme of ['light', 'dark'] as const) {
-    test(`permission and bypass stay inside the outlet at ${viewport.width}px in ${theme}`, async ({ page, request }) => {
+    test(`permission and bypass stay inside the right panel at ${viewport.width}px in ${theme}`, async ({ page, request }) => {
       await page.setViewportSize(viewport);
       const session = await fakeSessions.create(request, { name: 'Popover bounds', directory: e2eHomePath() });
       await session.hooks.announceIdle();
       await signInAsAdmin(page, { theme });
       await page.goto(`/session/${session.id}`);
-      await page.getByTestId('session-header-toggle').click();
       const trigger = page.getByTestId('permission-mode-trigger');
-      const outlet = page.getByTestId('app-outlet');
-      await expect(page.getByTestId('session-header-toggle')).toHaveAttribute('aria-expanded', 'true');
+      const rightPanel = page.getByTestId('right-panel');
       await expect(trigger).toBeVisible();
-      const headerBoxBefore = await page.getByTestId('session-header').boundingBox();
+      const detailsBoxBefore = await page.getByTestId('session-details').boundingBox();
 
       await trigger.click();
 
       const permissionPanel = page.getByRole('listbox', { name: 'Permission mode' }).locator('..');
-      await expectInsideOutlet({ panel: permissionPanel, outlet });
+      await expectInsideBoundary({ panel: permissionPanel, boundary: rightPanel });
       await page.getByRole('option', { name: /bypassPermissions/ }).click();
       const confirmation = page.getByRole('alertdialog', { name: 'Turn off permission checks' });
-      await expectInsideOutlet({ panel: confirmation, outlet });
+      await expectInsideBoundary({ panel: confirmation, boundary: rightPanel });
       await expect(page.getByRole('button', { name: 'Keep asking' })).toBeFocused();
       await page.keyboard.press('Tab');
       await expect(page.getByRole('button', { name: 'Turn off checks' })).toBeFocused();
       await page.keyboard.press('Shift+Tab');
       await expect(page.getByRole('button', { name: 'Keep asking' })).toBeFocused();
-      expect(await page.getByTestId('session-header').boundingBox()).toEqual(headerBoxBefore);
+      expect(await page.getByTestId('session-details').boundingBox()).toEqual(detailsBoxBefore);
       await page.keyboard.press('Escape');
       await expect(confirmation).toHaveCount(0);
       await expect(trigger).toBeFocused();

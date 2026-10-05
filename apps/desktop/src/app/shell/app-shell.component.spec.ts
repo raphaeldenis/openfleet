@@ -3,7 +3,7 @@ import { RouterTestingHarness } from '@angular/router/testing';
 import { Component, signal } from '@angular/core';
 import { provideRouter, withComponentInputBinding, Router, type Routes } from '@angular/router';
 import { screen } from '@testing-library/angular/zoneless';
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AppShellComponent } from './app-shell.component';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
@@ -12,20 +12,6 @@ import { VersionsService } from '../core/versions.service';
 import type { DaemonIssue, WorkingState } from '@openfleet/shared';
 import { silentWorkingStateSignals, stateOf } from '../working-state/working-state-fixtures';
 import { InboxComponent } from '../inbox/inbox.component';
-
-// jsdom doesn't block focus() inside an inert subtree the way the WHATWG spec requires real
-// browsers to: without this shim, a focus() call fired before Angular's change detection removes
-// `inert` silently "succeeds" here while landing on <body> for real — the exact bug QA caught.
-const nativeFocus = HTMLElement.prototype.focus;
-beforeAll(() => {
-  HTMLElement.prototype.focus = function focusUnlessInert(this: HTMLElement, options?: FocusOptions): void {
-    if (this.closest('[inert]')) return;
-    nativeFocus.call(this, options);
-  };
-});
-afterAll(() => {
-  HTMLElement.prototype.focus = nativeFocus;
-});
 
 @Component({
   selector: 'stub-home',
@@ -221,19 +207,29 @@ describe('AppShellComponent', () => {
     expect(root.querySelector('[data-testid="stub-session"]')).toBeTruthy();
   });
 
-  it('shows the daemon as connected in the top bar when FleetEventsService.connected is true', async () => {
+  it('shows no permanent connection indicator while the daemon is connected', async () => {
     const { root } = await setUp({ connected: true });
 
-    const status = root.querySelector('[data-testid="app-topbar"] [data-testid="daemon-status"]');
-    expect(status).toHaveTextContent('Connected');
+    expect(root).not.toHaveTextContent('Connected');
+    expect(root.querySelector('[data-testid=daemon-status]')).toBeNull();
+    expect(screen.queryByTestId('banner')).toBeNull();
   });
 
-  it('shows the daemon as reconnecting, with no crash and no dead end, when the socket drops', async () => {
+  it('shows the reconnecting banner, with no crash and no dead end, when the socket drops', async () => {
     const { root } = await setUp({ connected: false });
 
-    const status = root.querySelector('[data-testid="app-topbar"] [data-testid="daemon-status"]');
-    expect(status).toHaveTextContent('Reconnecting');
+    expect(root.querySelector('[data-testid="banner"]')).toHaveTextContent('Reconnecting to daemon');
+  });
+
+  it('removes the reconnecting banner once the socket is back', async () => {
+    const { harness, root } = await setUp({ connected: false });
+    const events = TestBed.inject(FleetEventsService) as unknown as { connected: ReturnType<typeof signal<boolean>> };
     expect(root.querySelector('[data-testid="banner"]')).toHaveTextContent('Reconnecting');
+
+    events.connected.set(true);
+    harness.detectChanges();
+
+    expect(root.querySelector('[data-testid="banner"]')).toBeNull();
   });
 
   describe('degraded daemon banner', () => {
@@ -411,87 +407,6 @@ describe('AppShellComponent', () => {
     });
   });
 
-  it('shows a not-tracked spend placeholder in the top bar with its tooltip', async () => {
-    const { root } = await setUp();
-
-    const spend = root.querySelector('[data-testid="spend-today"]') as HTMLElement;
-    expect(spend).toHaveTextContent('—');
-    expect(spend).toHaveAttribute('title', 'Cost tracking is not implemented yet');
-  });
-
-  it('shows the daemon address, connection state and a not-tracked limits placeholder in the status bar', async () => {
-    const { root } = await setUp();
-
-    const statusBar = root.querySelector('[data-testid="app-statusbar"]') as HTMLElement;
-    expect(statusBar).toHaveTextContent('127.0.0.1:7331');
-    expect(statusBar.querySelector('[data-testid="daemon-status"]')).toBeTruthy();
-    const limits = statusBar.querySelector('[data-testid="status-limits"]') as HTMLElement;
-    expect(limits).toHaveTextContent('—');
-    expect(limits).toHaveAttribute('title', 'Provider limits are not tracked yet');
-  });
-
-  it('opens the command palette from the search slot, listing Pages only', async () => {
-    const { harness, root } = await setUp();
-
-    (root.querySelector('[data-testid="open-palette"]') as HTMLElement).click();
-    await harness.fixture.whenStable();
-
-    expect(root.querySelector('[data-testid="command-palette"]')).toBeTruthy();
-    expect(root.querySelector('[data-testid="palette-item-sessions"]')).toBeTruthy();
-    expect(root.querySelector('[data-testid="palette-item-inbox"]')).toBeTruthy();
-    expect(root.querySelector('[data-testid="palette-item-components"]')).toBeTruthy();
-  });
-
-  it('toggles the command palette open with ⌘K from anywhere in the shell', async () => {
-    const { harness, root } = await setUp();
-
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }));
-    await harness.fixture.whenStable();
-
-    expect(root.querySelector('[data-testid="command-palette"]')).toBeTruthy();
-  });
-
-  it('closes the command palette with Escape', async () => {
-    const { harness, root } = await setUp();
-    (root.querySelector('[data-testid="open-palette"]') as HTMLElement).click();
-    await harness.fixture.whenStable();
-    expect(root.querySelector('[data-testid="command-palette"]')).toBeTruthy();
-
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-    await harness.fixture.whenStable();
-
-    expect(root.querySelector('[data-testid="command-palette"]')).toBeFalsy();
-  });
-
-  it('closes the palette when ⌘K is pressed again while it is already open', async () => {
-    const { harness, root } = await setUp();
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }));
-    await harness.fixture.whenStable();
-    expect(root.querySelector('[data-testid="command-palette"]')).toBeTruthy();
-
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }));
-    await harness.fixture.whenStable();
-
-    expect(root.querySelector('[data-testid="command-palette"]')).toBeFalsy();
-  });
-
-  it('moves focus into the command palette when it opens and returns it to the search slot when it closes, so a keyboard-only user is never dropped', async () => {
-    const { harness, root } = await setUp();
-    const trigger = root.querySelector('[data-testid="open-palette"]') as HTMLElement;
-    trigger.focus();
-
-    trigger.click();
-    await harness.fixture.whenStable();
-
-    const palette = root.querySelector('[data-testid="command-palette"]') as HTMLElement;
-    expect(palette.contains(document.activeElement)).toBe(true);
-
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-    await harness.fixture.whenStable();
-
-    expect(document.activeElement).toBe(trigger);
-  });
-
   it('gives the Sessions region and the Helm list independent scroll areas so neither can grow over the other', async () => {
     const { root } = await setUp();
     const sessions = root.querySelector('[data-testid="app-nav"] .sessions') as HTMLElement;
@@ -631,115 +546,6 @@ describe('AppShellComponent', () => {
     expect(getComputedStyle(outlet).overflowY).toBe('auto');
   });
 
-  it('restores focus to the element that opened the palette, not always the search trigger, when it closes', async () => {
-    const { harness, root } = await setUp();
-    const inbox = root.querySelector('[data-testid="nav-inbox"]') as HTMLElement;
-    inbox.focus();
-
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }));
-    await harness.fixture.whenStable();
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-    await harness.fixture.whenStable();
-
-    expect(document.activeElement).toBe(inbox);
-  });
-
-  it('falls back to the search trigger when the palette opener no longer exists in the DOM', async () => {
-    const { harness, root } = await setUp();
-    const inbox = root.querySelector('[data-testid="nav-inbox"]') as HTMLElement;
-    inbox.focus();
-
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }));
-    await harness.fixture.whenStable();
-
-    inbox.remove();
-
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-    await harness.fixture.whenStable();
-
-    const trigger = root.querySelector('[data-testid="open-palette"]') as HTMLElement;
-    expect(document.activeElement).toBe(trigger);
-  });
-
-  it('falls back to the search trigger when picking a palette item destroys the outlet opener via navigation', async () => {
-    const { harness, root } = await setUp();
-    const opener = root.querySelector('[data-testid="stub-home-opener"]') as HTMLElement;
-    opener.focus();
-
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }));
-    await harness.fixture.whenStable();
-    (root.querySelector('[data-testid="palette-item-inbox"]') as HTMLElement).click();
-    await harness.fixture.whenStable();
-
-    const trigger = root.querySelector('[data-testid="open-palette"]') as HTMLElement;
-    expect(document.activeElement).toBe(trigger);
-  });
-
-  it('keeps a reopened palette showing when a stale navigation from the closed opening resolves late', async () => {
-    const { harness, root } = await setUp();
-    const router = TestBed.inject(Router);
-    let resolveStaleNavigation!: (value: boolean) => void;
-    const staleNavigation = new Promise<boolean>((resolve) => (resolveStaleNavigation = resolve));
-    vi.spyOn(router, 'navigate').mockReturnValue(staleNavigation);
-    const firstOpener = root.querySelector('[data-testid="nav-inbox"]') as HTMLElement;
-    firstOpener.focus();
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }));
-    await harness.fixture.whenStable();
-    (root.querySelector('[data-testid="palette-item-inbox"]') as HTMLElement).click();
-    await harness.fixture.whenStable();
-
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-    await harness.fixture.whenStable();
-    expect(root.querySelector('[data-testid="command-palette"]')).toBeFalsy();
-
-    const secondOpener = root.querySelector('[data-testid="nav-components"]') as HTMLElement;
-    secondOpener.focus();
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }));
-    await harness.fixture.whenStable();
-    expect(root.querySelector('[data-testid="command-palette"]')).toBeTruthy();
-
-    resolveStaleNavigation(true);
-    await staleNavigation;
-    await harness.fixture.whenStable();
-
-    expect(root.querySelector('[data-testid="command-palette"]')).toBeTruthy();
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-    await harness.fixture.whenStable();
-    expect(document.activeElement).toBe(secondOpener);
-  });
-
-  it('falls back to the search trigger when ⌘K opens the palette with nothing focused beforehand', async () => {
-    const { harness, root } = await setUp();
-    (document.activeElement as HTMLElement | null)?.blur();
-    expect(document.activeElement).toBe(document.body);
-
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }));
-    await harness.fixture.whenStable();
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-    await harness.fixture.whenStable();
-
-    const trigger = root.querySelector('[data-testid="open-palette"]') as HTMLElement;
-    expect(document.activeElement).toBe(trigger);
-  });
-
-  it('makes the rest of the shell inert to assistive tech while the palette is open, and reachable again once it closes', async () => {
-    const { harness, root } = await setUp();
-
-    (root.querySelector('[data-testid="open-palette"]') as HTMLElement).click();
-    await harness.fixture.whenStable();
-
-    const body = root.querySelector('.body') as HTMLElement;
-    const statusBar = root.querySelector('[data-testid="app-statusbar"]') as HTMLElement;
-    expect(body).toHaveAttribute('inert');
-    expect(statusBar).toHaveAttribute('inert');
-
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-    await harness.fixture.whenStable();
-
-    expect(body).not.toHaveAttribute('inert');
-    expect(statusBar).not.toHaveAttribute('inert');
-  });
-
   it('never lets a disabled nav item navigate, by click or by keyboard, since it renders as inert text rather than a link', async () => {
     const { harness, root } = await setUp();
     const router = TestBed.inject(Router);
@@ -755,14 +561,41 @@ describe('AppShellComponent', () => {
     expect(router.url).toBe('/');
   });
 
-  it('has no Panel button in the top bar', async () => {
+  it('has no top bar, no status bar and no search trigger', async () => {
     const { root } = await setUp();
-    const topbar = root.querySelector('[data-testid="app-topbar"]') as HTMLElement;
 
-    const topbarButtonLabels = Array.from(topbar.querySelectorAll('button')).map((button) => button.textContent);
+    expect(root.querySelector('[data-testid="app-topbar"]')).toBeNull();
+    expect(root.querySelector('[data-testid="app-statusbar"]')).toBeNull();
+    expect(screen.queryByRole('button', { name: /search|command palette/i })).toBeNull();
+  });
 
-    expect(topbarButtonLabels.some((label) => label?.includes('Panel'))).toBe(false);
-    expect(topbar.querySelector('[aria-controls="right-panel"]')).toBeNull();
+  it('opens no command palette on ⌘K', async () => {
+    const { harness, root } = await setUp();
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }));
+    await harness.fixture.whenStable();
+
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(root.querySelector('[data-testid="command-palette"]')).toBeNull();
+  });
+
+  it('opens Settings on ⌘,', async () => {
+    const { harness } = await setUp();
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: ',', metaKey: true, bubbles: true }));
+    await harness.fixture.whenStable();
+
+    expect(TestBed.inject(Router).url).toBe('/settings');
+    expect(screen.getByTestId('stub-settings')).toBeInTheDocument();
+  });
+
+  it('puts the theme toggle in the sidebar footer, beside the settings gear', async () => {
+    const { root } = await setUp();
+
+    const footer = root.querySelector('[data-testid="app-nav"] [data-testid="sidebar-footer"]') as HTMLElement;
+
+    expect(footer.querySelector('[data-testid="theme-toggle"]')).toBeTruthy();
+    expect(footer.querySelector('[data-testid="settings-gear"]')).toBeTruthy();
   });
 
   it('keeps the right panel closed until the rail button opens it beside the session view', async () => {

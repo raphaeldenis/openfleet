@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { readE2eAdminToken } from '../../../scripts/e2e/e2eHome';
+import { api } from './support/daemon';
 
-const api = 'http://127.0.0.1:7332';
 const token = readE2eAdminToken();
 const headers = { 'content-type': 'application/json', authorization: `Bearer ${token}` };
 
@@ -16,19 +16,20 @@ test.afterEach(async ({ request }) => {
 });
 
 for (const viewport of [{ width: 1200, height: 800 }, { width: 1440, height: 900 }]) {
-  test(`the session header sits on the dark panel token under the dark theme at ${viewport.width}×${viewport.height}`, async ({ page, request }) => {
+  test(`the session details sit on the dark panel token under the dark theme at ${viewport.width}×${viewport.height}`, async ({ page, request }) => {
     await page.setViewportSize(viewport);
     await page.addInitScript(([t, a]) => {
       localStorage.setItem('openfleet.adminToken', t);
       localStorage.setItem('openfleet.apiUrl', a);
+      localStorage.setItem('openfleet.rightPanel.open', 'true');
     }, [token, api]);
     const created = await request.post(`${api}/api/sessions`, { headers, data: { directory: '/tmp', name: 'Dark chrome', emoji: '🌙', harness: 'fake' } });
     createdSessionId = (await created.json()).id;
 
     await page.goto(`/session/${createdSessionId}`);
 
-    await expect(page.getByTestId('session-header')).toBeVisible();
+    await expect(page.getByTestId('session-details')).toBeVisible();
     await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'));
-    await expect(page.getByTestId('session-header')).toHaveCSS('background-color', DARK_PANEL);
+    await expect(page.getByTestId('session-details')).toHaveCSS('background-color', DARK_PANEL);
   });
 }

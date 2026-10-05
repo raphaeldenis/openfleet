@@ -19,7 +19,10 @@ import { SESSION_TODOS_SOURCE } from './todos/session-todos-source';
 })
 class HostComponent {}
 
-const showRightPanel = () => userEvent.click(screen.getByRole('button', { name: 'Show the right panel' }));
+async function showRightPanel(): Promise<void> {
+  await userEvent.click(screen.getByRole('button', { name: 'Show the right panel' }));
+  await userEvent.click(screen.getByTestId('right-panel-tab-todos'));
+}
 
 const routes: Routes = [
   { path: '', pathMatch: 'full', component: HostComponent },

@@ -38,7 +38,7 @@ const unavailableReasonOf = (target: HandoffTarget): string =>
   template: `
     <div class="session-actions" data-testid="session-actions" [attr.inert]="confirmingClose() ? '' : null">
       @if (!closed()) {
-        @if (busy()) {
+        @if (interruptVisible() && busy()) {
           <button
             type="button"
             class="of-btn of-btn--secondary interrupt"
@@ -138,7 +138,8 @@ export class SessionActionsComponent {
   readonly stateSince = input.required<string>();
   readonly sessionName = input.required<string>();
   readonly closeVisible = input(true);
-  /** Draws Interrupt on the 24px line the collapsed header uses. */
+  readonly interruptVisible = input(true);
+  /** Draws Interrupt on the 24px line the terminal tab bar uses. */
   readonly isCompact = input(false);
   private readonly api = inject(FleetApiService);
   private readonly earlyEscapeHint = inject(EarlyEscapeHintService);
@@ -157,7 +158,12 @@ export class SessionActionsComponent {
   protected readonly isModelSwitchDeferred = computed(() => this.pendingSwitches.pendingOf(this.sessionId(), 'model')?.status === 'deferred');
   private readonly closeError = computed(() => this.requests.errorOf(this.sessionId(), 'close'));
   private readonly interruptError = computed(() => this.requests.errorOf(this.sessionId(), 'interrupt'));
-  protected readonly error = computed(() => this.closeError() ?? this.interruptError());
+  /** Each instance reports the failure of the control it shows, so a failure appears once on screen. */
+  protected readonly error = computed(() => {
+    const shownCloseError = this.closeVisible() ? this.closeError() : null;
+    const shownInterruptError = this.interruptVisible() ? this.interruptError() : null;
+    return shownCloseError ?? shownInterruptError;
+  });
   protected readonly confirmingClose = signal(false);
   protected readonly writeHandoff = signal(false);
   private readonly handoffTargetState = signal<HandoffTargetState>({ status: 'loading' });
@@ -172,6 +178,7 @@ export class SessionActionsComponent {
     return null;
   });
   protected readonly handoffNotice = computed(() => {
+    if (!this.closeVisible()) return null;
     const failure = this.handoffFailure();
     const concernsThisSession = failure?.sessionId === this.sessionId();
     return failure && concernsThisSession ? `Closed. The handoff was not written: ${failure.message}` : null;

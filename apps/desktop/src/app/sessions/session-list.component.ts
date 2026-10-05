@@ -4,6 +4,7 @@ import { Router, RouterLink } from '@angular/router';
 import { MANAGER_ROLE, type Session } from '@openfleet/shared';
 import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
+import { WatchedSession } from '../core/watched-session';
 import { childrenOfInList, closedSessionCountOf, groupByProject, readShowClosedPreference, rootsOfSessionList, writeShowClosedPreference } from './session-filter';
 import { StateChipComponent } from '../design/state-chip.component';
 import { showInvisibleControlsAsEscapes } from '../core/bidi-escapes';
@@ -43,6 +44,7 @@ import { OverdueChipComponent } from '../working-state/overdue-chip.component';
           class="row"
           [class.child]="!!session.parentId"
           [class.closed]="session.state === 'closed'"
+          [attr.aria-current]="session.id === watchedSessionId() ? 'true' : null"
           [attr.data-testid]="'session-' + session.id"
           [attr.aria-label]="visibleNameOf(session) + ' — ' + session.state"
           (click)="onSessionClick(session)"
@@ -88,6 +90,8 @@ import { OverdueChipComponent } from '../working-state/overdue-chip.component';
     .show-closed { align-self: flex-start; margin: .25rem .75rem }
     .group-title h3 { margin: 0; padding: .4rem .75rem .125rem; font-size: .6875rem; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--mut) }
     .empty { padding: .4rem .75rem; font-size: .75rem; color: var(--mut) }
+    .row:hover { background: var(--hover) }
+    .row[aria-current='true'] { background: var(--active); box-shadow: inset 2px 0 0 var(--accent); font-weight: 500 }
     .row.closed { opacity: .5 }
     .row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
     .row .name { flex: 1 1 6rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
@@ -99,6 +103,7 @@ import { OverdueChipComponent } from '../working-state/overdue-chip.component';
 export class SessionListComponent {
   readonly events = inject(FleetEventsService);
   private readonly router = inject(Router);
+  protected readonly watchedSessionId = inject(WatchedSession).id;
   readonly selected = output<string>();
 
   private readonly api = inject(FleetApiService);

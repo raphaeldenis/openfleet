@@ -1,4 +1,4 @@
-import { render, screen, waitFor, fireEvent } from '@testing-library/angular/zoneless';
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
 import { inputBinding, signal } from '@angular/core';
 import { Subject } from 'rxjs';
@@ -8,7 +8,7 @@ import { SessionViewComponent } from './session-view.component';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { settleRequests } from '../testing/session-view.testing';
-import { fakeWorkingStateEvents, silentWorkingStateSignals, stateOf } from '../working-state/working-state-fixtures';
+import { silentWorkingStateSignals } from '../working-state/working-state-fixtures';
 
 function session(patch: Partial<Session> = {}): Session {
   return {
@@ -43,75 +43,97 @@ function fakeApi() {
   };
 }
 
-describe('SessionViewComponent State panel', () => {
-  const eventsWithStates = (sessions: Session[], states: ReturnType<typeof stateOf>[]) => ({ ...fakeEvents(sessions), ...fakeWorkingStateEvents({ sessions, states }) });
-
-  it('user finds the State panel between the header and the terminal, collapsed', async () => {
-    await render(SessionViewComponent, {
+describe('SessionViewComponent chrome', () => {
+  const renderViewOf = (sessionPatch: Partial<Session> = {}) =>
+    render(SessionViewComponent, {
       bindings: [inputBinding('sessionId', () => 's1')],
-      providers: [{ provide: FleetApiService, useValue: fakeApi() }, { provide: FleetEventsService, useValue: eventsWithStates([session()], [stateOf({ plan: ['ship it'] })]) }],
+      providers: [{ provide: FleetApiService, useValue: fakeApi() }, { provide: FleetEventsService, useValue: fakeEvents([session(sessionPatch)]) }],
     });
 
-    const panel = screen.getByTestId('state-panel');
-    expect(screen.getByTestId('session-header').compareDocumentPosition(panel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(panel.compareDocumentPosition(screen.getByTestId('terminal')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(screen.queryByTestId('state-panel-body')).toBeNull();
+  it('user finds no session header above the terminal: no identity row, no Details toggle', async () => {
+    await renderViewOf();
+
+    expect(screen.queryByTestId('session-header')).toBeNull();
+    expect(screen.queryByTestId('session-name-input')).toBeNull();
+    expect(screen.queryByTestId('session-header-details-toggle')).toBeNull();
+    expect(screen.queryByRole('button', { name: /details/i })).toBeNull();
   });
 
-  it('user can read the session state without leaving the session view', async () => {
-    await render(SessionViewComponent, {
-      bindings: [inputBinding('sessionId', () => 's1')],
-      providers: [{ provide: FleetApiService, useValue: fakeApi() }, { provide: FleetEventsService, useValue: eventsWithStates([session()], [stateOf({ plan: ['ship it'] })]) }],
-    });
+  it('user finds no State panel row in the session view, its state lives in the right panel', async () => {
+    await renderViewOf();
 
-    await userEvent.click(screen.getByTestId('state-panel-toggle'));
-
-    expect(screen.getByTestId('state-section-plan')).toHaveTextContent('ship it');
+    expect(screen.queryByTestId('state-panel')).toBeNull();
+    expect(screen.queryByTestId('state-panel-toggle')).toBeNull();
   });
 
-  it('user picking another session finds its State panel closed and showing its own state', async () => {
-    const shownSessionId = signal('s1');
-    const sessions = [session({ id: 's1' }), session({ id: 's2', name: 'Legolas' })];
-    const events = eventsWithStates(sessions, [stateOf({ sessionId: 's1', plan: ['first plan'] }), stateOf({ sessionId: 's2', plan: ['second plan'] })]);
+  it('user finds the terminal tab bar above the terminal', async () => {
+    await renderViewOf();
+
+    const tabBar = screen.getByTestId('terminal-tab-bar');
+    expect(tabBar.compareDocumentPosition(screen.getByTestId('terminal')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('user finds Interrupt in the terminal tab bar while the session is generating', async () => {
+    await renderViewOf({ state: 'generating' });
+
+    expect(within(screen.getByTestId('terminal-tab-bar')).getByTestId('session-interrupt')).toBeTruthy();
+  });
+
+  it.each(['idle', 'waiting_permission', 'starting'] as const)('user finds no Interrupt while the session is %s', async (state) => {
+    await renderViewOf({ state });
+
+    expect(screen.queryByTestId('session-interrupt')).toBeNull();
+  });
+
+  it('user finds no Interrupt and no Close on a closed session, only the closed footer', async () => {
+    await renderViewOf({ state: 'closed', exitCode: 0 });
+
+    expect(screen.queryByTestId('session-interrupt')).toBeNull();
+    expect(screen.queryByTestId('session-close')).toBeNull();
+    expect(screen.getByTestId('session-closed-footer')).toBeTruthy();
+  });
+
+  it('user finds Interrupt leave the tab bar when the generating turn ends', async () => {
+    const events = fakeEvents([session({ state: 'generating' })]);
     const { fixture } = await render(SessionViewComponent, {
-      bindings: [inputBinding('sessionId', shownSessionId)],
+      bindings: [inputBinding('sessionId', () => 's1')],
       providers: [{ provide: FleetApiService, useValue: fakeApi() }, { provide: FleetEventsService, useValue: events }],
     });
-    await userEvent.click(screen.getByTestId('state-panel-toggle'));
-    expect(screen.getByTestId('state-section-plan')).toHaveTextContent('first plan');
+    expect(screen.getByTestId('session-interrupt')).toBeTruthy();
 
-    shownSessionId.set('s2');
+    events.sessions.set([{ ...session({ state: 'idle', stateSince: 't2' }), closeReason: undefined }]);
     await fixture.whenStable();
 
-    expect(screen.queryByTestId('state-panel-body')).toBeNull();
-    await userEvent.click(screen.getByTestId('state-panel-toggle'));
-    expect(screen.getByTestId('state-section-plan')).toHaveTextContent('second plan');
+    expect(screen.queryByTestId('session-interrupt')).toBeNull();
   });
 
-  it('user keeps the State panel open while the same session goes from idle to generating', async () => {
-    const events = eventsWithStates([session({ state: 'idle' })], [stateOf({ plan: ['ship it'] })]);
-    const { fixture } = await render(SessionViewComponent, {
-      bindings: [inputBinding('sessionId', () => 's1')],
-      providers: [{ provide: FleetApiService, useValue: fakeApi() }, { provide: FleetEventsService, useValue: events }],
-    });
-    await userEvent.click(screen.getByTestId('state-panel-toggle'));
-
-    events.sessions.set([session({ state: 'generating', stateSince: 't2' })]);
-    await fixture.whenStable();
-
-    expect(screen.getByTestId('state-panel-toggle')).toHaveAttribute('aria-expanded', 'true');
-    expect(screen.getByTestId('state-section-plan')).toHaveTextContent('ship it');
-  });
-
-  it('user still finds the State panel on a closed session', async () => {
+  it('user pressing Interrupt in the tab bar sends Escape to the session', async () => {
+    const api = fakeApi();
     await render(SessionViewComponent, {
       bindings: [inputBinding('sessionId', () => 's1')],
-      providers: [{ provide: FleetApiService, useValue: fakeApi() }, { provide: FleetEventsService, useValue: eventsWithStates([session({ state: 'closed', exitCode: 0 })], []) }],
+      providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: fakeEvents([session({ state: 'generating' })]) }],
     });
 
-    expect(screen.getByTestId('state-panel')).toBeTruthy();
+    await userEvent.click(screen.getByTestId('session-interrupt'));
+
+    expect(api.sendInput).toHaveBeenCalledWith('s1', '\x1b');
+  });
+
+  it('user sees a failed Interrupt once, in the tab bar', async () => {
+    const api = fakeApi();
+    api.sendInput = vi.fn().mockRejectedValue(new Error('network'));
+    await render(SessionViewComponent, {
+      bindings: [inputBinding('sessionId', () => 's1')],
+      providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: fakeEvents([session({ state: 'generating' })]) }],
+    });
+
+    await userEvent.click(screen.getByTestId('session-interrupt'));
+
+    expect(await within(screen.getByTestId('terminal-tab-bar')).findByTestId('session-action-error')).toBeTruthy();
+    expect(screen.getAllByTestId('session-action-error')).toHaveLength(1);
   });
 });
+
 
 describe('SessionViewComponent right panel toggle', () => {
   it('user finds the right panel toggle on the bar above the terminal and presses it', async () => {
@@ -132,12 +154,12 @@ describe('SessionViewComponent right panel toggle', () => {
 });
 
 describe('SessionViewComponent', () => {
-  it('renders the header and terminal for an open session', async () => {
+  it('renders the terminal and no header for an open session', async () => {
     await render(SessionViewComponent, {
       bindings: [inputBinding('sessionId', () => 's1')],
       providers: [{ provide: FleetApiService, useValue: fakeApi() }, { provide: FleetEventsService, useValue: fakeEvents([session()]) }],
     });
-    expect(screen.getByTestId('session-header')).toBeTruthy();
+    expect(screen.queryByTestId('session-header')).toBeNull();
     expect(screen.getByTestId('terminal')).toBeTruthy();
   });
 
@@ -295,17 +317,12 @@ describe('SessionViewComponent', () => {
     expect(screen.getByTestId('session-closed-footer')).toHaveAttribute('data-variant', 'error');
   });
 
-  it('agrees with the header about an undefined exit code instead of showing it as both a clean and a failed close', async () => {
-    // Arrange — an undefined exitCode is neither known-clean nor known-failed, so the header
-    // (session-header.component.ts) shows a bare "closed" and the banner must not call it an error.
+  it('does not call a close with an undefined exit code an error', async () => {
     await render(SessionViewComponent, {
       bindings: [inputBinding('sessionId', () => 's1')],
       providers: [{ provide: FleetApiService, useValue: fakeApi() }, { provide: FleetEventsService, useValue: fakeEvents([session({ state: 'closed', exitCode: undefined })]) }],
     });
 
-    // Assert — neither a clean nor a failed close: the header shows no exit number, the banner stays non-error
-    expect(screen.getByTestId('session-exit-code')).toHaveTextContent('closed');
-    expect(screen.getByTestId('session-exit-code')).not.toHaveTextContent('exit');
     expect(screen.getByTestId('session-closed-footer')).toHaveAttribute('data-variant', 'neutral');
   });
 
@@ -317,14 +334,6 @@ describe('SessionViewComponent', () => {
     expect(screen.getByTestId('terminal')).toBeTruthy();
     expect(screen.queryByTestId('composer-input')).toBeNull();
     expect(screen.queryByTestId('composer-send')).toBeNull();
-  });
-
-  it('offers Interrupt in the header while the session is generating', async () => {
-    await render(SessionViewComponent, {
-      bindings: [inputBinding('sessionId', () => 's1')],
-      providers: [{ provide: FleetApiService, useValue: fakeApi() }, { provide: FleetEventsService, useValue: fakeEvents([session({ state: 'generating' })]) }],
-    });
-    expect(screen.getByTestId('session-interrupt')).toBeTruthy();
   });
 
   describe('resume lifecycle banners', () => {

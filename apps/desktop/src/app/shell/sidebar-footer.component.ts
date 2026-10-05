@@ -1,15 +1,18 @@
-import { ChangeDetectionStrategy, Component } from '@angular/core';
+import { ChangeDetectionStrategy, Component, inject } from '@angular/core';
 import { RouterLink, RouterLinkActive } from '@angular/router';
+import { ThemeService } from '../core/theme.service';
+import { ThemeToggleButtonComponent } from '../design/theme-toggle-button.component';
 
-/** Sidebar footer: who you are, and the only visible entry to Settings (the gear, also ⌘, and the palette). */
+/** Sidebar footer: who you are, the theme toggle, and the only visible entry to Settings (the gear, also ⌘,). */
 @Component({
   selector: 'of-sidebar-footer',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, RouterLinkActive],
+  imports: [RouterLink, RouterLinkActive, ThemeToggleButtonComponent],
   template: `
     <footer class="footer" data-testid="sidebar-footer">
       <span class="avatar" aria-hidden="true">YO</span>
       <span class="name">You</span>
+      <of-theme-toggle-button [theme]="themeService.theme()" (toggled)="themeService.toggle()" />
       <button
         type="button"
         class="gear"
@@ -33,4 +36,6 @@ import { RouterLink, RouterLinkActive } from '@angular/router';
     .gear[aria-pressed='true'] { border-color: var(--accent); background: var(--accent-bg); color: var(--accent); }
   `,
 })
-export class SidebarFooterComponent {}
+export class SidebarFooterComponent {
+  protected readonly themeService = inject(ThemeService);
+}

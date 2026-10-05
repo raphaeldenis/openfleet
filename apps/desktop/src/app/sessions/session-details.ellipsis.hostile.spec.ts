@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { inputBinding, signal } from '@angular/core';
 import { describe, expect, it, vi } from 'vitest';
 import type { Session } from '@openfleet/shared';
-import { SessionHeaderComponent } from './session-header.component';
+import { SessionDetailsComponent } from './session-details.component';
 import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
 
@@ -17,9 +17,9 @@ function baseSession(patch: Partial<Session> = {}): Session {
   } as Session;
 }
 
-async function renderHeader(session: ReturnType<typeof signal<Session>>) {
+async function renderDetails(session: ReturnType<typeof signal<Session>>) {
   const api = { updateModel: vi.fn(), updatePermissionMode: vi.fn(), closeSession: vi.fn(), sendInput: vi.fn(), renameSession: vi.fn().mockResolvedValue({}) };
-  await render(SessionHeaderComponent, {
+  await render(SessionDetailsComponent, {
     bindings: [inputBinding('session', session)],
     providers: [
       { provide: FleetApiService, useValue: api },
@@ -31,10 +31,10 @@ async function renderHeader(session: ReturnType<typeof signal<Session>>) {
 
 const nameField = () => screen.getByTestId('session-name-input') as HTMLInputElement;
 
-describe('SessionHeaderComponent long-name ellipsis', () => {
+describe('SessionDetailsComponent long-name ellipsis', () => {
   it('renames with the whole edited long name, not the visible fragment', async () => {
     // Arrange
-    const { api } = await renderHeader(signal(baseSession({ name: LONG_NAME })));
+    const { api } = await renderDetails(signal(baseSession({ name: LONG_NAME })));
 
     // Act
     await userEvent.click(nameField());
@@ -48,7 +48,7 @@ describe('SessionHeaderComponent long-name ellipsis', () => {
   it('follows the session on a switch: the tooltip is the NEW session\'s full name, never the previous one', async () => {
     // Arrange
     const session = signal(baseSession({ id: 's1', name: LONG_NAME }));
-    await renderHeader(session);
+    await renderDetails(session);
     expect(nameField()).toHaveAttribute('title', LONG_NAME);
 
     // Act
@@ -62,7 +62,7 @@ describe('SessionHeaderComponent long-name ellipsis', () => {
 
   it('keeps the tooltip in step with a rename landing over the wire', async () => {
     const session = signal(baseSession({ name: LONG_NAME }));
-    await renderHeader(session);
+    await renderDetails(session);
 
     session.set(baseSession({ name: 'Short' }));
 
@@ -70,7 +70,7 @@ describe('SessionHeaderComponent long-name ellipsis', () => {
   });
 
   it('names the name field "Session name" for assistive tech, not with the session name itself', async () => {
-    await renderHeader(signal(baseSession({ name: LONG_NAME })));
+    await renderDetails(signal(baseSession({ name: LONG_NAME })));
 
     expect(screen.getByRole('textbox', { name: /session name/i })).toBeTruthy();
   });

@@ -19,7 +19,7 @@ const AVAILABILITY_BY_SECTION: Readonly<Record<string, string>> = {
 };
 
 // Order and labels mirror the Helm section of specs/design/OpenFleet.dc.html's `navDef` array.
-// Settings is deliberately absent: it opens from the sidebar footer gear, ⌘, and the palette.
+// Settings is deliberately absent: it opens from the sidebar footer gear and ⌘,.
 // A null route means the backend this section needs hasn't landed yet — it still renders,
 // disabled, with the phase text from AVAILABILITY_BY_SECTION explaining when it will.
 const HELM_SECTIONS: ReadonlyArray<{ key: string; glyph: string; label: string; route: string | null }> = [
@@ -42,20 +42,3 @@ export const HELM_NAV_ITEMS: readonly NavItem[] = HELM_SECTIONS.map((section) =>
   ...section,
   availability: section.route ? null : (AVAILABILITY_BY_SECTION[section.key] ?? 'Not yet available'),
 }));
-
-export interface PalettePage {
-  readonly key: string;
-  readonly icon: string;
-  readonly label: string;
-  readonly route: string;
-}
-
-// "Pages only ... no fake actions" — every entry here is a route that exists today.
-export const PALETTE_PAGES: readonly PalettePage[] = [
-  { key: 'sessions', icon: '🗂', label: 'Sessions', route: '/' },
-  { key: 'inbox', icon: '◫', label: 'Inbox', route: '/inbox' },
-  { key: 'notes', icon: '¶', label: 'Notes', route: '/notes' },
-  { key: 'tables', icon: '▦', label: 'Tables', route: '/tables' },
-  { key: 'settings', icon: '⚙', label: 'Settings', route: '/settings' },
-  { key: 'components', icon: '◈', label: 'Components', route: '/components' },
-];

@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { ChangeDetectionStrategy, Component, signal } from '@angular/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ServerEvent, Session, SessionState } from '@openfleet/shared';
+import { SessionTabComponent } from './session-tab.component';
 import { SessionViewComponent } from './session-view.component';
 import { FleetApiService } from '../core/fleet-api.service';
 import {
@@ -14,7 +15,6 @@ import {
   expectSwitchBusy,
   expectSwitchFree,
   expectValueInForceIsSelected,
-  leaveSessionHeadersOpen,
   noteOf,
   requestSwitch,
   settleRequests,
@@ -23,14 +23,12 @@ import {
 } from '../testing/session-view.testing';
 
 /**
- * QE (P2-U2e) — the session view as a user meets it: the real header, selectors and actions, fed the
+ * QE (P2-U2e) — the session view as a user meets it: the real session details (selectors, Close) beside the view with its Interrupt, fed the
  * daemon's own events by the real FleetEventsService reducer, with REST replies the test settles by hand.
  * Every assertion is on what is on screen or which request left the client.
  */
 
 type SwitchReply = { status: 'relaunching' | 'deferred' };
-
-beforeEach(() => leaveSessionHeadersOpen());
 
 function session(patch: Partial<Session> = {}): Session {
   return {
@@ -58,8 +56,8 @@ function fakeApi() {
 @Component({
   selector: 'of-view-host',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [SessionViewComponent],
-  template: `@if (visible()) { <of-session-view [sessionId]="sessionId()" /> }`,
+  imports: [SessionViewComponent, SessionTabComponent],
+  template: `@if (visible()) { <of-session-view [sessionId]="sessionId()" /><of-session-tab [sessionId]="sessionId()" /> }`,
 })
 class ViewHostComponent {
   readonly sessionId = signal('s1');

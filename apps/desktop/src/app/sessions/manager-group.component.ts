@@ -3,6 +3,7 @@ import { Router } from '@angular/router';
 import { MANAGER_ROLE, type ManagerView, type Session } from '@openfleet/shared';
 import { showInvisibleControlsAsEscapes } from '../core/bidi-escapes';
 import { FleetEventsService } from '../core/fleet-events.service';
+import { WatchedSession } from '../core/watched-session';
 import { StateChipComponent } from '../design/state-chip.component';
 import { countdownLabel, countdownSecondsUntil } from '../managers/manager-countdown';
 
@@ -31,6 +32,7 @@ const EMPTY_MESSAGE = 'No managers yet';
                 type="button"
                 class="row"
                 [class.closed]="row.session.state === 'closed'"
+                [attr.aria-current]="row.session.id === watchedSessionId() ? 'true' : null"
                 [attr.data-testid]="'manager-row-' + row.session.id"
                 [attr.aria-label]="visibleNameOf(row.session) + ' — ' + row.session.state"
                 (click)="open(row.session)"
@@ -60,6 +62,8 @@ const EMPTY_MESSAGE = 'No managers yet';
       padding: .4rem .6rem; cursor: pointer; width: 100%; border: none; background: none;
       font: inherit; color: var(--fg); text-align: left; min-width: 0;
     }
+    .row:hover { background: var(--hover) }
+    .row[aria-current='true'] { background: var(--active); box-shadow: inset 2px 0 0 var(--accent); font-weight: 500 }
     .row.closed { opacity: .5 }
     .row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
     .row .name { flex: 1 1 6rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
@@ -69,6 +73,7 @@ const EMPTY_MESSAGE = 'No managers yet';
 export class ManagerGroupComponent {
   private readonly events = inject(FleetEventsService);
   private readonly router = inject(Router);
+  protected readonly watchedSessionId = inject(WatchedSession).id;
   private readonly now = signal(Date.now());
 
   constructor() {

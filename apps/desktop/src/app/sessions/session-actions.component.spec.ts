@@ -1,6 +1,6 @@
-import { render, screen, waitFor, fireEvent } from '@testing-library/angular/zoneless';
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
-import { ErrorHandler, inputBinding, signal } from '@angular/core';
+import { Component, ErrorHandler, inputBinding, signal } from '@angular/core';
 import type { Provider } from '@angular/core';
 import { afterAll, beforeAll, describe, expect, it, onTestFinished, vi } from 'vitest';
 import type { SessionState } from '@openfleet/shared';
@@ -77,6 +77,59 @@ describe('SessionActionsComponent', () => {
     });
     expect(screen.queryByTestId('session-close')).toBeNull();
     expect(screen.queryByTestId('session-interrupt')).toBeNull();
+  });
+
+  it('hides Interrupt while the session is generating when interruptVisible is false, and keeps Close', async () => {
+    await render(SessionActionsComponent, {
+      bindings: [...bindingsFor('generating'), inputBinding('interruptVisible', () => false)],
+      providers: [{ provide: FleetApiService, useValue: { closeSession: vi.fn(), sendInput: vi.fn() } }],
+    });
+
+    expect(screen.queryByTestId('session-interrupt')).toBeNull();
+    expect(screen.getByTestId('session-close')).toBeTruthy();
+  });
+
+  describe('two instances for one session, one showing Interrupt and one showing Close', () => {
+    @Component({
+      selector: 'of-actions-pair-host',
+      imports: [SessionActionsComponent],
+      template: `
+        <div data-testid="interrupt-instance">
+          <of-session-actions sessionId="s1" state="generating" stateSince="t1" sessionName="Gimli" [closeVisible]="false" />
+        </div>
+        <div data-testid="close-instance">
+          <of-session-actions sessionId="s1" state="generating" stateSince="t1" sessionName="Gimli" [interruptVisible]="false" />
+        </div>
+      `,
+    })
+    class ActionsPairHostComponent {}
+
+    const renderPair = (api: Api) => render(ActionsPairHostComponent, { providers: [{ provide: FleetApiService, useValue: api }] });
+
+    it('shows a failing Interrupt only under the instance that shows Interrupt', async () => {
+      const api = { closeSession: vi.fn(), sendInput: vi.fn().mockRejectedValue(new Error('network')) };
+      await renderPair(api);
+
+      await userEvent.click(screen.getByTestId('session-interrupt'));
+
+      const interruptInstance = screen.getByTestId('interrupt-instance');
+      expect(await within(interruptInstance).findByTestId('session-action-error')).toBeTruthy();
+      expect(within(screen.getByTestId('close-instance')).queryByTestId('session-action-error')).toBeNull();
+      expect(screen.getAllByTestId('session-action-error')).toHaveLength(1);
+    });
+
+    it('shows a failing Close only under the instance that shows Close', async () => {
+      const api = { closeSession: vi.fn().mockRejectedValue(new Error('network')), sendInput: vi.fn() };
+      await renderPair(api);
+
+      await userEvent.click(screen.getByTestId('session-close'));
+      await userEvent.click(screen.getByTestId('close-confirm-submit'));
+
+      const closeInstance = screen.getByTestId('close-instance');
+      expect(await within(closeInstance).findByTestId('session-action-error')).toBeTruthy();
+      expect(within(screen.getByTestId('interrupt-instance')).queryByTestId('session-action-error')).toBeNull();
+      expect(screen.getAllByTestId('session-action-error')).toHaveLength(1);
+    });
   });
 
   describe('Close', () => {
