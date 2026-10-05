@@ -3,6 +3,8 @@ import { FitAddon } from '@xterm/addon-fit';
 import { Terminal } from '@xterm/xterm';
 import type { Subscription } from 'rxjs';
 import { FleetEventsService } from '../core/fleet-events.service';
+import { ThemeService } from '../core/theme.service';
+import { terminalThemeFromTokens } from './terminal-theme';
 
 @Component({
   selector: 'of-terminal',
@@ -30,6 +32,7 @@ export class TerminalComponent implements OnDestroy {
   readonly sessionId = input.required<string>();
   private readonly host = viewChild.required<ElementRef<HTMLDivElement>>('host');
   private readonly events = inject(FleetEventsService);
+  private readonly theme = inject(ThemeService);
   protected readonly connected = this.events.connected;
   terminal?: Terminal;
   private outputSub?: Subscription;
@@ -65,11 +68,18 @@ export class TerminalComponent implements OnDestroy {
       const isConnected = this.events.connected();
       if (this.terminal) this.terminal.options.disableStdin = !isConnected;
     });
+
+    effect(() => {
+      this.theme.theme();
+      untracked(() => {
+        if (this.terminal) this.terminal.options.theme = terminalThemeFromTokens();
+      });
+    });
   }
 
   private attach(sessionId: string): void {
     const isConnected = untracked(() => this.events.connected());
-    const terminal = new Terminal({ cursorBlink: true, fontFamily: 'Menlo, monospace', fontSize: 13, scrollback: 5000, disableStdin: !isConnected });
+    const terminal = new Terminal({ cursorBlink: true, fontFamily: 'Menlo, monospace', fontSize: 13, scrollback: 5000, disableStdin: !isConnected, theme: terminalThemeFromTokens() });
     terminal.loadAddon(this.fit);
     terminal.open(this.host().nativeElement);
     terminal.onData((data) => this.events.sendInput(sessionId, data));

@@ -5,6 +5,7 @@ import { FleetApiService } from '../core/fleet-api.service';
 import { SessionRequestsService } from '../core/session-requests';
 import { ErrorLineComponent } from '../design/error-line.component';
 import { StateChipComponent } from '../design/state-chip.component';
+import { closedSessionPresentationFor } from './closed-session-presentation';
 import { ModelSelectorComponent } from './model-selector.component';
 import { PermissionModePickerComponent } from './permission-mode-picker.component';
 import { SessionActionsComponent } from './session-actions.component';
@@ -45,7 +46,7 @@ import { exitCodeLabel } from './session-close-status';
         <of-error-line role="alert" data-testid="session-rename-error">{{ error }}</of-error-line>
       }
       <div class="facts-row">
-        <of-state-chip [state]="session().state" [since]="session().stateSince" />
+        <of-state-chip [state]="session().state" [since]="runningSince()" />
         @if (session().state === 'closed') {
           <span class="exit-code" data-testid="session-exit-code">{{ exitCodeLabel(session().exitCode) }}</span>
         }
@@ -71,6 +72,11 @@ import { exitCodeLabel } from './session-close-status';
         >
           Write handoff
         </button>
+        @if (isResumeOffered()) {
+          <button type="button" class="of-btn of-btn--primary" data-testid="session-details-resume" [disabled]="isResuming()" (click)="resume()">
+            ↻ Resume
+          </button>
+        }
         <of-session-actions
           [sessionId]="session().id"
           [state]="session().state"
@@ -122,6 +128,15 @@ export class SessionDetailsComponent {
   });
 
   private readonly sessionId = computed(() => this.session().id);
+  /** A closed session is not running, so its chip shows no timer. */
+  protected readonly runningSince = computed(() => (this.session().state === 'closed' ? undefined : this.session().stateSince));
+  protected readonly isResuming = computed(() => this.requests.isBusy(this.sessionId(), 'resume'));
+  protected readonly isResumeOffered = computed(() => {
+    const { state, exitCode, closeReason } = this.session();
+    if (state !== 'closed') return false;
+    const resumeRequestError = this.requests.errorOf(this.sessionId(), 'resume') ?? undefined;
+    return closedSessionPresentationFor({ exitCode, reason: closeReason, resumeRequestError }).isResumeOffered;
+  });
   protected readonly isHandoffOpen = signal(false);
   protected readonly handoffPanelId = computed(() => `session-handoff-panel-${this.sessionId()}`);
   private readonly handoffButton = viewChild<ElementRef<HTMLButtonElement>>('handoffButton');
@@ -133,6 +148,12 @@ export class SessionDetailsComponent {
       this.sessionId();
       untracked(() => this.isHandoffOpen.set(false));
     });
+  }
+
+  protected async resume(): Promise<void> {
+    const sessionId = this.sessionId();
+    const resumeErrorFor = (error: unknown) => copyFor(error, { action: 'resume' }).text;
+    await this.requests.run({ sessionId, kind: 'resume', message: resumeErrorFor, action: () => this.api.reopenSession(sessionId) });
   }
 
   protected toggleHandoff(): void {
