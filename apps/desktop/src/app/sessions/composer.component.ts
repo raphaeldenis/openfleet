@@ -6,11 +6,12 @@ import { BannerComponent } from '../design/banner.component';
 import { ErrorLineComponent } from '../design/error-line.component';
 import { AnsweredRepliesStore } from '../working-state/answered-replies.store';
 import { ReplyDraftStore } from './reply-draft.store';
+import { REPLY_DELIVERED_COPY } from './reply-delivered-copy';
 
-interface PendingMessage { id: string; deliveredImmediately: boolean }
+interface PendingMessage { id: string; body: string; deliveredImmediately: boolean }
 
-const IDLE_PLACEHOLDER = 'Message this session…';
-const WORKING_ON_REPLY_PLACEHOLDER = 'Reply delivered — this session is working on it';
+const IDLE_PLACEHOLDER = 'Message this session · Enter sends, Shift+Enter for a new line';
+const WORKING_ON_REPLY_PLACEHOLDER = REPLY_DELIVERED_COPY;
 const BUSY_PLACEHOLDER = 'This session is busy — your message is delivered on the next idle turn';
 
 @Component({
@@ -70,8 +71,9 @@ export class ComposerComponent {
 
   constructor() {
     effect(() => {
-      const isReplyDelivered = this.status() === 'sent';
-      if (isReplyDelivered) untracked(() => this.answeredReplies.markReplyDelivered(this.sessionId(), new Date().toISOString()));
+      const deliveredBody = this.status() === 'sent' ? this.pending()?.body : undefined;
+      if (deliveredBody === undefined) return;
+      untracked(() => this.answeredReplies.markReplyDelivered(this.sessionId(), { at: new Date().toISOString(), replyText: deliveredBody }));
     });
 
     // A route param change reuses this component instance, so a session switch must not leak
@@ -115,7 +117,7 @@ export class ComposerComponent {
       const result = await this.api.sendMessage(sessionIdAtSend, body, messageId);
       this.replies.confirmSent(sessionIdAtSend);
       this.replies.clearSentText(sessionIdAtSend, draftAtSend);
-      if (this.sessionId() === sessionIdAtSend) this.pending.set({ id: result.messageId, deliveredImmediately: result.status === 'delivered' });
+      if (this.sessionId() === sessionIdAtSend) this.pending.set({ id: result.messageId, body, deliveredImmediately: result.status === 'delivered' });
     } catch (error) {
       if (this.sessionId() === sessionIdAtSend) this.pending.set(null);
       this.replies.markFailed(sessionIdAtSend, copyFor(error, { action: 'send' }).text);

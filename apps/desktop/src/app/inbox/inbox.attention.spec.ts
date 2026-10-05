@@ -2,7 +2,7 @@ import { signal } from '@angular/core';
 import { provideRouter } from '@angular/router';
 import { render, screen, waitFor, within } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Session, WorkingState } from '@openfleet/shared';
 import { TestBed } from '@angular/core/testing';
 import { FleetApiService } from '../core/fleet-api.service';
@@ -26,6 +26,7 @@ async function openQuestionsTab() {
   await userEvent.click(screen.getByTestId('inbox-tab-questions'));
 }
 
+const DELIVERY_ACKNOWLEDGEMENT_MS = 2500;
 const cards = () => screen.queryAllByTestId('inbox-attention-card');
 const answeredEntries = () => screen.queryAllByTestId('inbox-answered-entry');
 
@@ -176,13 +177,140 @@ describe('InboxComponent questions from agents', () => {
       const asking = [stateOf({ sessionId: 's1', questionsForHuman: ['which port?'] })];
       const replyField = () => within(cards()[0]).getByTestId('composer-input');
 
-      async function replyFromCard(view: Awaited<ReturnType<typeof renderInbox>>, text = 'rien') {
+      type RenderedInbox = Awaited<ReturnType<typeof renderInbox>>;
+
+      afterEach(() => vi.useRealTimers());
+
+      async function replyFromCard(view: RenderedInbox, text = 'rien') {
         const user = userEvent.setup({ delay: null });
         await openQuestionsTab();
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
         await user.type(replyField(), text);
         await user.click(within(cards()[0]).getByTestId('composer-send'));
         await view.fixture.whenStable();
       }
+
+      function closeApp(view: RenderedInbox) {
+        view.fixture.destroy();
+        TestBed.resetTestingModule();
+        vi.useRealTimers();
+      }
+
+      async function waitForDeliveryAcknowledgementToEnd(view: RenderedInbox) {
+        await vi.advanceTimersByTimeAsync(DELIVERY_ACKNOWLEDGEMENT_MS);
+        await view.fixture.whenStable();
+      }
+
+      it('user sees the idle reply field say that Enter sends and Shift+Enter starts a new line', async () => {
+        await renderInbox([agent('s1', { state: 'idle' })], asking);
+        await openQuestionsTab();
+
+        expect(within(cards()[0]).getByTestId('composer-input')).toHaveAttribute('placeholder', expect.stringMatching(/Enter sends.*Shift\+Enter.*new line/));
+      });
+
+      it('user sees "Reply delivered" on the card, with no reply field, right after the reply reaches the session', async () => {
+        const view = await renderInbox([agent('s1')], asking);
+        await replyFromCard(view);
+
+        expect(cards()).toHaveLength(1);
+        expect(within(cards()[0]).getByTestId('inbox-attention-delivered')).toHaveTextContent('Reply delivered — this session is working on it');
+        expect(within(cards()[0]).queryByTestId('composer-input')).toBeNull();
+      });
+
+      it('user sees the badge, the tab count and the page count drop at delivery while the card stays', async () => {
+        const view = await renderInbox([agent('s1')], asking);
+        await replyFromCard(view);
+
+        expect(cards()).toHaveLength(1);
+        expect(screen.queryByTestId('inbox-count')).toBeNull();
+        expect(screen.queryByTestId('inbox-tab-count-questions')).toBeNull();
+      });
+
+      it('user sees the delivered card move to Answered after the acknowledgement ends', async () => {
+        const view = await renderInbox([agent('s1')], asking);
+        await replyFromCard(view);
+
+        await waitForDeliveryAcknowledgementToEnd(view);
+
+        expect(cards()).toHaveLength(0);
+        expect(screen.getByTestId('inbox-answered-toggle')).toHaveTextContent('Answered (1)');
+      });
+
+      it('user sees the card ask again, without the delivered line, when the agent re-asks during the acknowledgement', async () => {
+        const view = await renderInbox([agent('s1')], asking);
+        await replyFromCard(view);
+
+        view.events.workingStates.set(new Map([['s1', stateOf({ sessionId: 's1', questionsForHuman: ['and the host?'] })]]));
+        await view.fixture.whenStable();
+
+        expect(within(cards()[0]).queryByTestId('inbox-attention-delivered')).toBeNull();
+        expect(within(cards()[0]).getByTestId('composer-input')).toBeTruthy();
+        expect(screen.getByTestId('inbox-count')).toHaveTextContent('1');
+      });
+
+      it('user sees no delivered line on a card of a reply sent before the Inbox opened', async () => {
+        const view = await renderInbox([agent('s1')], asking);
+        await replyFromCard(view);
+        closeApp(view);
+
+        await renderInbox([agent('s1')], asking);
+        await openQuestionsTab();
+
+        expect(cards()).toHaveLength(0);
+      });
+
+      it('user reads the reply that was sent in the Answered entry, trimmed', async () => {
+        const user = userEvent.setup({ delay: null });
+        const view = await renderInbox([agent('s1')], asking);
+        await replyFromCard(view, '  use 8080  ');
+        await waitForDeliveryAcknowledgementToEnd(view);
+
+        await user.click(screen.getByTestId('inbox-answered-toggle'));
+        await view.fixture.whenStable();
+
+        expect(within(answeredEntries()[0]).getByTestId('inbox-answered-reply').textContent).toContain('use 8080');
+        expect(within(answeredEntries()[0]).getByTestId('inbox-answered-reply').textContent).not.toMatch(/\s{2}use/);
+      });
+
+      it('user reads at most 500 characters of a long reply in the Answered entry', async () => {
+        const user = userEvent.setup({ delay: null });
+        const view = await renderInbox([agent('s1')], asking);
+        await replyFromCard(view, 'x'.repeat(800));
+        await waitForDeliveryAcknowledgementToEnd(view);
+
+        await user.click(screen.getByTestId('inbox-answered-toggle'));
+        await view.fixture.whenStable();
+
+        const shown = within(answeredEntries()[0]).getByTestId('inbox-answered-reply').textContent ?? '';
+        expect(shown.match(/x/g)).toHaveLength(500);
+      });
+
+      it('user still reads the reply in the Answered entry after reloading the app', async () => {
+        const user = userEvent.setup({ delay: null });
+        const view = await renderInbox([agent('s1')], asking);
+        await replyFromCard(view, 'use 8080');
+        closeApp(view);
+
+        const reloaded = await renderInbox([agent('s1')], asking);
+        await openQuestionsTab();
+        await user.click(screen.getByTestId('inbox-answered-toggle'));
+        await reloaded.fixture.whenStable();
+
+        expect(within(answeredEntries()[0]).getByTestId('inbox-answered-reply')).toHaveTextContent('use 8080');
+      });
+
+      it('user sees an Answered entry stored before replies were kept without a reply line', async () => {
+        const user = userEvent.setup({ delay: null });
+        localStorage.setItem('openfleet.answeredReplies', JSON.stringify({ s1: { deliveredAt: new Date().toISOString(), answeredLines: ['which port?'] } }));
+        const view = await renderInbox([agent('s1')], asking);
+        await openQuestionsTab();
+
+        await user.click(screen.getByTestId('inbox-answered-toggle'));
+        await view.fixture.whenStable();
+
+        expect(answeredEntries()).toHaveLength(1);
+        expect(within(answeredEntries()[0]).queryByTestId('inbox-answered-reply')).toBeNull();
+      });
 
       it('user sees no busy notice on the card of an idle session', async () => {
         await renderInbox([agent('s1', { state: 'idle' })], asking);
@@ -205,7 +333,7 @@ describe('InboxComponent questions from agents', () => {
         await replyFromCard(view);
 
         view.events.sessions.set([agent('s1', { state: 'generating' })]);
-        await view.fixture.whenStable();
+        await waitForDeliveryAcknowledgementToEnd(view);
 
         expect(screen.queryByPlaceholderText(/busy/i)).toBeNull();
         expect(cards()).toHaveLength(0);
@@ -215,6 +343,7 @@ describe('InboxComponent questions from agents', () => {
         const user = userEvent.setup({ delay: null });
         const view = await renderInbox([agent('s1')], asking);
         await replyFromCard(view);
+        await waitForDeliveryAcknowledgementToEnd(view);
 
         expect(cards()).toHaveLength(0);
         expect(screen.getByTestId('inbox-questions-empty')).toBeTruthy();
@@ -243,7 +372,7 @@ describe('InboxComponent questions from agents', () => {
         await replyFromCard(view);
 
         view.events.workingStates.set(new Map([['s1', stateOf({ sessionId: 's1', questionsForHuman: ['which port?'], plan: ['carry on'], updatedAt: new Date(Date.now() + 60_000).toISOString() })]]));
-        await view.fixture.whenStable();
+        await waitForDeliveryAcknowledgementToEnd(view);
 
         expect(cards()).toHaveLength(0);
         expect(screen.queryByTestId('inbox-count')).toBeNull();
@@ -267,8 +396,7 @@ describe('InboxComponent questions from agents', () => {
       it('user still sees the card answered after reloading the app', async () => {
         const view = await renderInbox([agent('s1')], asking);
         await replyFromCard(view);
-        view.fixture.destroy();
-        TestBed.resetTestingModule();
+        closeApp(view);
 
         await renderInbox([agent('s1')], asking);
         await openQuestionsTab();
@@ -281,8 +409,7 @@ describe('InboxComponent questions from agents', () => {
       it('user sees the card come back when the agent asks a different question after the reload', async () => {
         const view = await renderInbox([agent('s1')], asking);
         await replyFromCard(view);
-        view.fixture.destroy();
-        TestBed.resetTestingModule();
+        closeApp(view);
 
         await renderInbox([agent('s1')], [stateOf({ sessionId: 's1', questionsForHuman: ['and the host?'] })]);
         await openQuestionsTab();
@@ -331,7 +458,7 @@ describe('InboxComponent questions from agents', () => {
         expect(within(cards()[0]).getByTestId('composer-status')).toHaveTextContent('queued');
 
         view.events.deliveredMessageIds.set(new Set(['m9']));
-        await view.fixture.whenStable();
+        await waitForDeliveryAcknowledgementToEnd(view);
 
         expect(cards()).toHaveLength(0);
         expect(screen.getByTestId('inbox-answered-toggle')).toHaveTextContent('Answered (1)');

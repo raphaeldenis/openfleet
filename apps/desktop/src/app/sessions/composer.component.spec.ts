@@ -264,7 +264,7 @@ describe('ComposerComponent', () => {
       providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: fakeEvents() }],
     });
     expect(screen.getByTestId('composer-send')).toHaveTextContent('Send');
-    expect(screen.getByTestId('composer-input')).toHaveAttribute('placeholder', 'Message this session…');
+    expect(screen.getByTestId('composer-input')).toHaveAttribute('placeholder', 'Message this session · Enter sends, Shift+Enter for a new line');
   });
 
   it('reads "Queue" and explains the message queues for the next idle turn while the session is busy', async () => {
