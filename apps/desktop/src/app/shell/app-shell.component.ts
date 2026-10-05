@@ -21,6 +21,7 @@ import { VersionsService } from '../core/versions.service';
 import { BannerComponent } from '../design/banner.component';
 import { CopyDetailsButtonComponent } from '../design/copy-details-button.component';
 import { ThemeToggleButtonComponent } from '../design/theme-toggle-button.component';
+import { ManagerGroupComponent } from '../sessions/manager-group.component';
 import { SessionListComponent } from '../sessions/session-list.component';
 import { attentionItemsOf, inboxCountLabelOf } from '../working-state/attention-items';
 import { contextNoticesOf } from '../working-state/context-notices';
@@ -35,12 +36,13 @@ const RUNNING_STATES = new Set(['generating', 'starting']);
 @Component({
   selector: 'of-app-shell',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, RouterLinkActive, RouterOutlet, SessionListComponent, DaemonStatusComponent, CommandPaletteComponent, BannerComponent, CopyDetailsButtonComponent, RightPanelComponent, SidebarFooterComponent, ThemeToggleButtonComponent],
+  imports: [RouterLink, RouterLinkActive, RouterOutlet, SessionListComponent, ManagerGroupComponent, DaemonStatusComponent, CommandPaletteComponent, BannerComponent, CopyDetailsButtonComponent, RightPanelComponent, SidebarFooterComponent, ThemeToggleButtonComponent],
   template: `
     <div class="shell" data-testid="app-shell">
       <div class="body" [attr.inert]="paletteOpen() ? '' : null">
         <nav class="sidebar" data-testid="app-nav">
           <div class="brand">OpenFleet</div>
+          <of-manager-group />
           <section class="sessions">
             <div class="section-title"><span>Sessions</span><span class="mono">{{ runningCount() }} running</span></div>
             <of-session-list (selected)="onSessionSelected($event)" />
