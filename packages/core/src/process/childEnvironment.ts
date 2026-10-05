@@ -85,9 +85,33 @@ function scrub(parentEnv: NodeJS.ProcessEnv, alsoDrops: (name: string) => boolea
   );
 }
 
-/** Env for a claude CLI this daemon launches: keeps the user's own git config variables. */
+// The CLI draws into the embedded xterm.js, not into the terminal that launched the daemon. Variables
+// naming that host terminal make the CLI assume its keyboard and escape-sequence capabilities (for
+// instance the kitty keyboard protocol), which xterm.js does not implement. COLORTERM stays: it
+// describes color depth, which xterm.js does support.
+const HOST_TERMINAL_IDENTITY_NAMES = new Set([
+  'TERM_PROGRAM',
+  'TERM_PROGRAM_VERSION',
+  'TERM_SESSION_ID',
+  'LC_TERMINAL',
+  'LC_TERMINAL_VERSION',
+  'VTE_VERSION',
+  'WT_SESSION',
+  'TMUX',
+  'STY',
+  '__CFBundleIdentifier',
+]);
+const HOST_TERMINAL_IDENTITY_PREFIXES = ['KITTY_', 'GHOSTTY_', 'WEZTERM_', 'ITERM_', 'ALACRITTY_'];
+
+function isHostTerminalIdentity(name: string): boolean {
+  const isExactIdentityName = HOST_TERMINAL_IDENTITY_NAMES.has(name);
+  const hasIdentityPrefix = HOST_TERMINAL_IDENTITY_PREFIXES.some((prefix) => name.startsWith(prefix));
+  return isExactIdentityName || hasIdentityPrefix;
+}
+
+/** Env for a claude CLI this daemon launches: keeps the user's own git config variables, drops the launching terminal's identity. */
 export function childEnvironmentForClaudeCli(parentEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  return scrub(parentEnv, () => false);
+  return scrub(parentEnv, isHostTerminalIdentity);
 }
 
 /** Env for a git subprocess the daemon runs itself: also strips config-injection and trace vars. */
