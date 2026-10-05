@@ -24,7 +24,7 @@ test('Project home shows the project, its docs folder and its sessions, and star
     await expect(page.getByRole('region', { name: 'Sessions' }).getByRole('link', { name: new RegExp(sessionName) })).toBeVisible();
     await expect(page.getByRole('group', { name: 'Counts' })).toContainText('Notes');
 
-    await page.getByRole('link', { name: 'New session', exact: true }).click();
+    await page.getByTestId('project-home').getByRole('link', { name: 'New session', exact: true }).click();
 
     await expect(page).toHaveURL(new RegExp(`/new\\?projectId=${project.id}`));
     await expect(page.getByTestId('new-session-project').locator('option:checked')).toHaveText(projectName);
