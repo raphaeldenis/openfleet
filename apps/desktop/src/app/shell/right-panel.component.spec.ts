@@ -21,6 +21,11 @@ class HostComponent {}
 
 const routes: Routes = [
   { path: '', pathMatch: 'full', component: HostComponent },
+  { path: 'inbox', component: HostComponent },
+  { path: 'notes', component: HostComponent },
+  { path: 'tables', component: HostComponent },
+  { path: 'project', component: HostComponent },
+  { path: 'settings', component: HostComponent },
   { path: 'session/:sessionId', component: HostComponent },
   { path: 'manager/:id', component: HostComponent },
 ];
@@ -57,8 +62,11 @@ function todosOf(sessionId: string): SessionTodos {
 
 interface SetUpOptions { url?: string; storage?: Storage; sessions?: { id: string; state: string }[]; connected?: boolean }
 
+const SELECTED_SESSION_URL = '/session/s1';
+const closedPreference = () => memoryStorage({ [OPEN_KEY]: 'false' });
+
 async function setUp(options: SetUpOptions = {}) {
-  vi.stubGlobal('localStorage', options.storage ?? memoryStorage());
+  vi.stubGlobal('localStorage', options.storage ?? closedPreference());
   const source = new InMemorySessionTodosSource();
   const events = { sessions: signal(options.sessions ?? []), connected: signal(options.connected ?? true), ...silentWorkingStateSignals() };
   TestBed.configureTestingModule({
@@ -68,7 +76,7 @@ async function setUp(options: SetUpOptions = {}) {
       { provide: SESSION_TODOS_SOURCE, useValue: source },
     ],
   });
-  const harness = await RouterTestingHarness.create(options.url ?? '/');
+  const harness = await RouterTestingHarness.create(options.url ?? SELECTED_SESSION_URL);
   harness.fixture.autoDetectChanges();
   return { source, events, harness };
 }
@@ -84,13 +92,70 @@ describe('RightPanelComponent', () => {
   beforeEach(() => vi.unstubAllGlobals());
   afterEach(() => vi.unstubAllGlobals());
 
+  describe('presence', () => {
+    it.each(['/', '/inbox', '/notes', '/tables', '/project', '/settings'])('has no panel, rail button or shortcut on %s', async (url) => {
+      const { harness } = await setUp({ url, storage: memoryStorage({ [OPEN_KEY]: 'true' }) });
+
+      pressShortcut();
+      await harness.fixture.whenStable();
+
+      expect(panel()).toBeNull();
+      expect(showButton()).toBeNull();
+      expect(hideButton()).toBeNull();
+    });
+
+    it.each(['/session/s1', '/manager/m1'])('is present on %s', async (url) => {
+      await setUp({ url, storage: memoryStorage({ [OPEN_KEY]: 'true' }) });
+
+      expect(panel()).not.toBeNull();
+    });
+
+    it('offers the rail button on a selected manager when the panel is closed, and opens from it', async () => {
+      await setUp({ url: '/manager/m1' });
+
+      await userEvent.click(showButton()!);
+
+      expect(panel()).not.toBeNull();
+    });
+
+    it('disappears when the selection is left and comes back in the state it was left', async () => {
+      const { harness } = await setUp({ storage: memoryStorage() });
+      await userEvent.click(screen.getByTestId('right-panel-tab-todos'));
+      await userEvent.click(hideButton()!);
+
+      await harness.navigateByUrl('/inbox');
+      expect(showButton()).toBeNull();
+      await harness.navigateByUrl('/session/s2');
+
+      expect(panel()).toBeNull();
+      await userEvent.click(showButton()!);
+      expect(screen.getByTestId('right-panel-tab-todos').getAttribute('aria-selected')).toBe('true');
+    });
+
+    it('stays open across the selection being left and picked again', async () => {
+      const { harness } = await setUp({ storage: memoryStorage() });
+
+      await harness.navigateByUrl('/inbox');
+      await harness.navigateByUrl('/manager/m1');
+
+      expect(panel()).not.toBeNull();
+    });
+  });
+
   describe('open state', () => {
-    it('is closed by default', async () => {
+    it('is closed when the user closed it', async () => {
       await setUp();
 
       expect(panel()).toBeNull();
       expect(showButton()?.getAttribute('aria-expanded')).toBe('false');
       expect(sessionToggle().getAttribute('aria-pressed')).toBe('false');
+    });
+
+    it('is open for a user who never chose, since it holds the identity and actions of the selection', async () => {
+      await setUp({ storage: memoryStorage() });
+
+      expect(panel()).not.toBeNull();
+      expect(sessionToggle().getAttribute('aria-pressed')).toBe('true');
     });
 
     it('opens from the rail button and closes from the panel header button', async () => {
@@ -154,12 +219,21 @@ describe('RightPanelComponent', () => {
     });
 
     it('remembers that it was opened', async () => {
-      const storage = memoryStorage();
+      const storage = closedPreference();
       await setUp({ storage });
 
       await userEvent.click(showButton()!);
 
       expect(storage.getItem(OPEN_KEY)).toBe('true');
+    });
+
+    it('remembers that it was closed', async () => {
+      const storage = memoryStorage();
+      await setUp({ storage });
+
+      await userEvent.click(hideButton()!);
+
+      expect(storage.getItem(OPEN_KEY)).toBe('false');
     });
 
     it('starts open when it was left open', async () => {
@@ -168,13 +242,13 @@ describe('RightPanelComponent', () => {
       expect(panel()).not.toBeNull();
     });
 
-    it('starts closed and still toggles when storage is unavailable', async () => {
+    it('starts open and still toggles when storage is unavailable', async () => {
       await setUp({ storage: throwingStorage() });
-      expect(panel()).toBeNull();
-
-      await userEvent.click(showButton()!);
-
       expect(panel()).not.toBeNull();
+
+      await userEvent.click(hideButton()!);
+
+      expect(panel()).toBeNull();
     });
 
     it('toggles with Option+Cmd+B', async () => {
@@ -267,12 +341,12 @@ describe('RightPanelComponent', () => {
   describe('tabs', () => {
     const openPanel = () => setUp({ storage: memoryStorage({ [OPEN_KEY]: 'true' }) });
 
-    it('lists Session, Sessions, Usage and Todos with Todos selected while no session is watched', async () => {
+    it('lists Session, Sessions, Usage and Todos with Session selected', async () => {
       await openPanel();
 
       const tabs = within(screen.getByRole('tablist', { name: 'Right panel' })).getAllByRole('tab');
       expect(tabs.map((tab) => tab.getAttribute('data-testid'))).toEqual(['right-panel-tab-session', 'right-panel-tab-sessions', 'right-panel-tab-usage', 'right-panel-tab-todos']);
-      expect(tabs.map((tab) => tab.getAttribute('aria-selected'))).toEqual(['false', 'false', 'false', 'true']);
+      expect(tabs.map((tab) => tab.getAttribute('aria-selected'))).toEqual(['true', 'false', 'false', 'false']);
     });
 
     it('selects the Session tab by default while a session is watched', async () => {
@@ -311,7 +385,7 @@ describe('RightPanelComponent', () => {
       await userEvent.click(screen.getByTestId('right-panel-tab-usage'));
 
       expect(screen.getByTestId('right-panel-tab-usage').getAttribute('aria-selected')).toBe('false');
-      expect(screen.getByTestId('right-panel-tab-todos').getAttribute('aria-selected')).toBe('true');
+      expect(screen.getByTestId('right-panel-tab-session').getAttribute('aria-selected')).toBe('true');
       expect(screen.getByRole('tabpanel')).not.toBeNull();
     });
 
@@ -329,8 +403,9 @@ describe('RightPanelComponent', () => {
       expect(document.activeElement).toBe(screen.getByTestId('right-panel-tab-session'));
     });
 
-    it('labels the tabpanel by the Todos tab', async () => {
+    it('labels the tabpanel by the selected tab', async () => {
       await openPanel();
+      await userEvent.click(screen.getByTestId('right-panel-tab-todos'));
 
       expect(screen.getByRole('tabpanel', { name: /Todos/ })).not.toBeNull();
     });
@@ -363,12 +438,6 @@ describe('RightPanelComponent', () => {
 
       expect(screen.queryAllByTestId('todo-item')).toHaveLength(0);
       expect(screen.getByTestId('todos-empty')).not.toBeNull();
-    });
-
-    it('asks to select a session on a route without one', async () => {
-      await setUp({ url: '/', storage: memoryStorage({ [OPEN_KEY]: 'true' }) });
-
-      expect(screen.getByTestId('todos-no-session')).not.toBeNull();
     });
 
     it('marks the list read-only when the watched session is closed', async () => {

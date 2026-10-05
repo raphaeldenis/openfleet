@@ -137,7 +137,7 @@ describe('SessionViewComponent chrome', () => {
 
 describe('SessionViewComponent right panel toggle', () => {
   it('user finds the right panel toggle on the bar above the terminal and presses it', async () => {
-    vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => undefined });
+    vi.stubGlobal('localStorage', { getItem: () => 'false', setItem: () => undefined });
     await render(SessionViewComponent, {
       bindings: [inputBinding('sessionId', () => 's1')],
       providers: [{ provide: FleetApiService, useValue: fakeApi() }, { provide: FleetEventsService, useValue: fakeEvents([session()]) }],

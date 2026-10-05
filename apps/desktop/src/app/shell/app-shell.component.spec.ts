@@ -58,7 +58,7 @@ function fakeEvents(overrides: ShellOverrides = {}) {
   };
 }
 
-async function setUp(overrides: ShellOverrides = {}) {
+async function setUp(overrides: ShellOverrides = {}, url = '') {
   TestBed.configureTestingModule({
     providers: [
       provideRouter(testRoutes, withComponentInputBinding()),
@@ -66,7 +66,7 @@ async function setUp(overrides: ShellOverrides = {}) {
       { provide: SESSION_TODOS_SOURCE, useValue: new InMemorySessionTodosSource() },
     ],
   });
-  const harness = await RouterTestingHarness.create('');
+  const harness = await RouterTestingHarness.create(url);
   return { harness, root: harness.routeNativeElement as HTMLElement };
 }
 
@@ -599,17 +599,28 @@ describe('AppShellComponent', () => {
   });
 
   it('keeps the right panel closed until the rail button opens it beside the session view', async () => {
-    vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => undefined });
-    const { harness, root } = await setUp();
+    vi.stubGlobal('localStorage', { getItem: () => 'false', setItem: () => undefined });
+    const { harness, root } = await setUp({}, '/session/s1');
     const rail = root.querySelector('[aria-label="Show the right panel"]') as HTMLElement;
     expect(root.querySelector('[data-testid="right-panel"]')).toBeNull();
 
     rail.click();
     await harness.fixture.whenStable();
 
-    const panel = root.querySelector('[data-testid="right-panel"]') as HTMLElement;
-    expect(panel).not.toBeNull();
-    expect(panel.querySelector('[data-testid="todos-no-session"]')).not.toBeNull();
+    expect(root.querySelector('[data-testid="right-panel"]')).not.toBeNull();
+    vi.unstubAllGlobals();
+  });
+
+  it.each(['true', 'false'])('gives the panel to the selected session only and the whole width to every other page, whatever the remembered open state (%s)', async (rememberedOpen) => {
+    vi.stubGlobal('localStorage', { getItem: () => rememberedOpen, setItem: () => undefined });
+    const { harness, root } = await setUp({}, '/session/s1');
+    const hasPanelChrome = () => root.querySelector('[data-testid="right-panel"], [data-testid="right-panel-rail"]') !== null;
+    expect(hasPanelChrome()).toBe(true);
+
+    for (const otherPage of ['/inbox', '/settings', '/']) {
+      await harness.navigateByUrl(otherPage);
+      expect(hasPanelChrome(), otherPage).toBe(false);
+    }
     vi.unstubAllGlobals();
   });
 });
