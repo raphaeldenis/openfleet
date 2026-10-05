@@ -78,6 +78,15 @@ export interface QueuedMessage {
   deliveredAt?: string;
 }
 
+/** A queued message the daemon does not type because the human has an unsent draft in the terminal prompt. */
+export interface HeldMessage {
+  messageId: string;
+  fromSessionId?: string;
+  body: string;
+  createdAt: string;
+  heldFor: 'human_draft';
+}
+
 export interface Approval {
   id: string;
   sessionId: string;

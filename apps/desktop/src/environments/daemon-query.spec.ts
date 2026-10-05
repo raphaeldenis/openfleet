@@ -1,14 +1,20 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { adoptDaemonUrlFromQuery } from './environment.js';
 
 const STORAGE_KEY = 'openfleet.apiUrl';
 const queryFor = (daemonUrl: string) => `?daemon=${encodeURIComponent(daemonUrl)}`;
 
 describe('adoptDaemonUrlFromQuery', () => {
-  beforeEach(() => { localStorage.clear(); });
-  afterEach(() => { localStorage.clear(); });
+  beforeEach(() => {
+    localStorage.clear();
+    vi.stubGlobal('confirm', vi.fn().mockReturnValue(true));
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    localStorage.clear();
+  });
 
-  it.each(['http://127.0.0.1:7500', 'http://localhost:7500', 'http://[::1]:7500'])('stores the loopback daemon %s so the app talks to it', (loopbackDaemon) => {
+  it.each(['http://127.0.0.1:7500', 'http://localhost:7500', 'http://[::1]:7500'])('stores the confirmed loopback daemon %s so the app talks to it', (loopbackDaemon) => {
     adoptDaemonUrlFromQuery(queryFor(loopbackDaemon));
 
     expect(localStorage.getItem(STORAGE_KEY)).toBe(loopbackDaemon);
