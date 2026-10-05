@@ -81,11 +81,11 @@ describe('ComposerComponent', () => {
       providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: fakeEvents() }],
     });
     await userEvent.type(screen.getByRole('textbox', { name: 'Message this session' }), 'first');
-    await userEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Send answer' }));
     await waitFor(() => expect(screen.getByTestId('composer-status')).toHaveTextContent('queued'));
 
     await userEvent.type(screen.getByRole('textbox', { name: 'Message this session' }), 'second');
-    await userEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Send answer' }));
 
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/could not send/i));
     expect(screen.queryByTestId('composer-status')).toBeNull();
@@ -100,14 +100,14 @@ describe('ComposerComponent', () => {
     });
     await userEvent.type(screen.getByRole('textbox', { name: 'Message this session' }), 'go');
 
-    await userEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Send answer' }));
     await fixture.whenStable();
 
     expect(screen.getByRole('button', { name: 'Sending…' })).toHaveAttribute('aria-busy', 'true');
 
     resolveSend({ status: 'delivered', messageId: 'm1' });
 
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).not.toHaveAttribute('aria-busy', 'true'));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send answer' })).not.toHaveAttribute('aria-busy', 'true'));
   });
 
   it('drops a send response for a session the composer has since navigated away from', async () => {
@@ -257,24 +257,26 @@ describe('ComposerComponent', () => {
     expect(api.sendMessage).not.toHaveBeenCalled();
   });
 
-  it('reads "Send" and shows the default placeholder when the session is idle', async () => {
+  it('reads "Send answer", shows the default placeholder and no mid-turn note when the session is idle', async () => {
     const api = { sendMessage: vi.fn() };
     await render(ComposerComponent, {
       bindings: [inputBinding('sessionId', () => 's1')],
       providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: fakeEvents() }],
     });
-    expect(screen.getByTestId('composer-send')).toHaveTextContent('Send');
-    expect(screen.getByTestId('composer-input')).toHaveAttribute('placeholder', 'Message this session · Enter sends, Shift+Enter for a new line');
+    expect(screen.getByTestId('composer-send')).toHaveTextContent('Send answer');
+    expect(screen.getByTestId('composer-input')).toHaveAttribute('placeholder', 'Your answer goes to the session as a message · Enter sends, Shift+Enter for a new line');
+    expect(screen.queryByTestId('composer-busy-note')).toBeNull();
   });
 
-  it('reads "Queue" and explains the message queues for the next idle turn while the session is busy', async () => {
+  it('reads "Queue", keeps the default placeholder and notes the message is delivered next turn while the session is busy', async () => {
     const api = { sendMessage: vi.fn() };
     await render(ComposerComponent, {
       bindings: [inputBinding('sessionId', () => 's1'), inputBinding('busy', () => true)],
       providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: fakeEvents() }],
     });
     expect(screen.getByTestId('composer-send')).toHaveTextContent('Queue');
-    expect(screen.getByTestId('composer-input')).toHaveAttribute('placeholder', expect.stringMatching(/busy.*next idle turn/i));
+    expect(screen.getByTestId('composer-input')).toHaveAttribute('placeholder', 'Your answer goes to the session as a message · Enter sends, Shift+Enter for a new line');
+    expect(screen.getByTestId('composer-busy-note')).toHaveTextContent('This session is mid-turn — your message is delivered next turn.');
   });
 
   it('does not leak a typed draft into the next session shown in the same composer slot after navigating', async () => {

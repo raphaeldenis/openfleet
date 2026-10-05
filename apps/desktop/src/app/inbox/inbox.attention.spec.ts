@@ -22,8 +22,8 @@ async function renderInbox(sessions: Session[], states: WorkingState[], approval
   return { ...view, events, api };
 }
 
-async function openQuestionsTab() {
-  await userEvent.click(screen.getByTestId('inbox-tab-questions'));
+async function showOnlyQuestions() {
+  await userEvent.click(screen.getByTestId('inbox-filter-questions'));
 }
 
 const DELIVERY_ACKNOWLEDGEMENT_MS = 2500;
@@ -44,7 +44,7 @@ describe('InboxComponent questions from agents', () => {
       ],
     );
 
-    await openQuestionsTab();
+    await showOnlyQuestions();
 
     expect(cards().map((card) => within(card).getByTestId('inbox-attention-session').textContent?.trim())).toEqual(['Agent s1', 'Agent s2']);
   });
@@ -52,7 +52,7 @@ describe('InboxComponent questions from agents', () => {
   it('user reads the questions and the blockers of a session on its card, each on its own line', async () => {
     await renderInbox([agent('s1')], [stateOf({ sessionId: 's1', questionsForHuman: ['which port?', 'which region?'], blockers: ['no token'] })]);
 
-    await openQuestionsTab();
+    await showOnlyQuestions();
 
     const card = cards()[0];
     expect(within(card).getAllByTestId('inbox-attention-question').map((line) => line.textContent?.trim())).toEqual(['which port?', 'which region?']);
@@ -63,7 +63,7 @@ describe('InboxComponent questions from agents', () => {
   it('user sees markdown in a question as typed', async () => {
     await renderInbox([agent('s1')], [stateOf({ sessionId: 's1', questionsForHuman: ['use **port** `8080`?'] })]);
 
-    await openQuestionsTab();
+    await showOnlyQuestions();
 
     const line = within(cards()[0]).getByTestId('inbox-attention-question');
     expect(line.textContent?.trim()).toBe('use **port** `8080`?');
@@ -73,24 +73,48 @@ describe('InboxComponent questions from agents', () => {
   it('user sees a card with only blockers show no questions block, and the other way round', async () => {
     await renderInbox([agent('s1'), agent('s2')], [stateOf({ sessionId: 's1', blockers: ['no token'] }), stateOf({ sessionId: 's2', questionsForHuman: ['which port?'] })]);
 
-    await openQuestionsTab();
+    await showOnlyQuestions();
 
     const [blockedCard, askingCard] = cards();
     expect(within(blockedCard).queryByTestId('inbox-attention-question')).toBeNull();
     expect(within(askingCard).queryByTestId('inbox-attention-blocker')).toBeNull();
   });
 
-  it('user sees a count on the Questions tab, and none when nothing is waiting', async () => {
-    await renderInbox([agent('s1'), agent('s2')], [stateOf({ sessionId: 's1', blockers: ['a'] }), stateOf({ sessionId: 's2', questionsForHuman: ['b'] })]);
+  it('user sees every waiting question and gate in one list under All, and only the questions under Questions', async () => {
+    const approval = { id: 'a1', sessionId: 's1', toolName: 'Bash', toolInput: {}, status: 'pending', createdAt: 't' };
+    await renderInbox([agent('s1'), agent('s2')], [stateOf({ sessionId: 's2', questionsForHuman: ['b'] })], [approval]);
 
-    expect(within(screen.getByTestId('inbox-tab-questions')).getByTestId('inbox-tab-count-questions')).toHaveTextContent('2');
-    expect(within(screen.getByTestId('inbox-tab-gates')).queryByTestId('inbox-tab-count-questions')).toBeNull();
+    expect(screen.getAllByTestId('inbox-gate-card')).toHaveLength(1);
+    expect(cards()).toHaveLength(1);
+    expect(screen.getByTestId('inbox-filter-all')).toHaveAttribute('aria-pressed', 'true');
+
+    await showOnlyQuestions();
+
+    expect(screen.queryByTestId('inbox-gate-card')).toBeNull();
+    expect(cards()).toHaveLength(1);
+    expect(screen.getByTestId('inbox-filter-questions')).toHaveAttribute('aria-pressed', 'true');
   });
 
-  it('user sees no count on the Questions tab when no session needs attention', async () => {
-    await renderInbox([agent('s1')], [stateOf({ sessionId: 's1', plan: ['a'] })]);
+  it('user sees on each filter pill how many items it holds', async () => {
+    const approval = { id: 'a1', sessionId: 's1', toolName: 'Bash', toolInput: {}, status: 'pending', createdAt: 't' };
+    await renderInbox([agent('s1'), agent('s2')], [stateOf({ sessionId: 's1', blockers: ['a'] }), stateOf({ sessionId: 's2', questionsForHuman: ['b'] })], [approval]);
 
-    expect(screen.queryByTestId('inbox-tab-count-questions')).toBeNull();
+    expect(screen.getByTestId('inbox-filter-all')).toHaveTextContent('3');
+    expect(screen.getByTestId('inbox-filter-questions')).toHaveTextContent('2');
+  });
+
+  it('user sees no pill that cannot work yet, and no Mark all as read', async () => {
+    await renderInbox([agent('s1')], [stateOf({ sessionId: 's1', blockers: ['a'] })]);
+
+    for (const key of ['unread', 'mine', 'blocked', 'recent']) expect(screen.queryByTestId(`inbox-filter-${key}`)).toBeNull();
+    expect(screen.queryByRole('button', { name: /mark all as read/i })).toBeNull();
+  });
+
+  it('user sees no tabs and no Governance proposals notice', async () => {
+    await renderInbox([agent('s1')], [stateOf({ sessionId: 's1', blockers: ['a'] })]);
+
+    expect(screen.queryByRole('tab')).toBeNull();
+    expect(screen.queryByText(/governance proposals/i)).toBeNull();
   });
 
   it('user sees the page count add up gates and sessions needing attention', async () => {
@@ -101,19 +125,19 @@ describe('InboxComponent questions from agents', () => {
 
   it('user sees a card leave the Inbox when the agent empties both sections', async () => {
     const { events, fixture } = await renderInbox([agent('s1')], [stateOf({ sessionId: 's1', questionsForHuman: ['which port?'], blockers: ['no token'] })]);
-    await openQuestionsTab();
+    await showOnlyQuestions();
     expect(cards()).toHaveLength(1);
 
     events.workingStates.set(new Map([['s1', stateOf({ sessionId: 's1', questionsForHuman: [], blockers: [], plan: ['carry on'] })]]));
     await fixture.whenStable();
 
     expect(cards()).toHaveLength(0);
-    expect(screen.getByTestId('inbox-questions-empty')).toBeTruthy();
+    expect(screen.getByTestId('inbox-empty')).toHaveTextContent('Nothing needs you');
   });
 
   it('user still sees a card while one of the two sections has a line left', async () => {
     const { events, fixture } = await renderInbox([agent('s1')], [stateOf({ sessionId: 's1', questionsForHuman: ['which port?'], blockers: ['no token'] })]);
-    await openQuestionsTab();
+    await showOnlyQuestions();
 
     events.workingStates.set(new Map([['s1', stateOf({ sessionId: 's1', questionsForHuman: [], blockers: ['no token'] })]]));
     await fixture.whenStable();
@@ -124,7 +148,7 @@ describe('InboxComponent questions from agents', () => {
 
   it('user sees a card leave the Inbox when its session closes', async () => {
     const { events, fixture } = await renderInbox([agent('s1')], [stateOf({ sessionId: 's1', blockers: ['no token'] })]);
-    await openQuestionsTab();
+    await showOnlyQuestions();
 
     events.sessions.set([agent('s1', { state: 'closed' })]);
     await fixture.whenStable();
@@ -134,7 +158,7 @@ describe('InboxComponent questions from agents', () => {
 
   it('user sees a card appear when a session writes a question while the Inbox is open', async () => {
     const { events, fixture } = await renderInbox([agent('s1')], []);
-    await openQuestionsTab();
+    await showOnlyQuestions();
     expect(cards()).toHaveLength(0);
 
     events.workingStates.set(new Map([['s1', stateOf({ sessionId: 's1', questionsForHuman: ['which port?'] })]]));
@@ -146,14 +170,14 @@ describe('InboxComponent questions from agents', () => {
   describe('linking to the session', () => {
     it('user can follow the card to the terminal of a plain session', async () => {
       await renderInbox([agent('s1')], [stateOf({ sessionId: 's1', blockers: ['a'] })]);
-      await openQuestionsTab();
+      await showOnlyQuestions();
 
       expect(within(cards()[0]).getByTestId('inbox-attention-session')).toHaveAttribute('href', '/session/s1');
     });
 
     it('user can follow the card of a manager to its dashboard', async () => {
       await renderInbox([agent('m1', { role: 'manager' })], [stateOf({ sessionId: 'm1', blockers: ['a'] })]);
-      await openQuestionsTab();
+      await showOnlyQuestions();
 
       expect(within(cards()[0]).getByTestId('inbox-attention-session')).toHaveAttribute('href', '/manager/m1');
     });
@@ -163,7 +187,7 @@ describe('InboxComponent questions from agents', () => {
     it('user can answer from the card: the reply is sent as a message to that session', async () => {
       const user = userEvent.setup({ delay: null });
       const { api } = await renderInbox([agent('s1'), agent('s2')], [stateOf({ sessionId: 's1', questionsForHuman: ['which port?'] }), stateOf({ sessionId: 's2', blockers: ['no token'] })]);
-      await openQuestionsTab();
+      await showOnlyQuestions();
       const secondCard = cards()[1];
 
       await user.type(within(secondCard).getByTestId('composer-input'), 'use the staging token');
@@ -183,7 +207,7 @@ describe('InboxComponent questions from agents', () => {
 
       async function replyFromCard(view: RenderedInbox, text = 'rien') {
         const user = userEvent.setup({ delay: null });
-        await openQuestionsTab();
+        await showOnlyQuestions();
         vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
         await user.type(replyField(), text);
         await user.click(within(cards()[0]).getByTestId('composer-send'));
@@ -203,9 +227,25 @@ describe('InboxComponent questions from agents', () => {
 
       it('user sees the idle reply field say that Enter sends and Shift+Enter starts a new line', async () => {
         await renderInbox([agent('s1', { state: 'idle' })], asking);
-        await openQuestionsTab();
+        await showOnlyQuestions();
 
-        expect(within(cards()[0]).getByTestId('composer-input')).toHaveAttribute('placeholder', expect.stringMatching(/Enter sends.*Shift\+Enter.*new line/));
+        expect(within(cards()[0]).getByTestId('composer-input')).toHaveAttribute('placeholder', expect.stringMatching(/^Your answer goes to the session as a message · Enter sends, Shift\+Enter for a new line$/));
+      });
+
+      it('user sees the Answered section as a labelled toggle with a caret and the hint that it comes back if the agent asks again', async () => {
+        const user = userEvent.setup({ delay: null });
+        const view = await renderInbox([agent('s1')], asking);
+        await replyFromCard(view);
+        await waitForDeliveryAcknowledgementToEnd(view);
+        const toggle = screen.getByTestId('inbox-answered-toggle');
+
+        expect(toggle).toHaveTextContent('▸');
+        expect(toggle).toHaveTextContent('comes back here if the agent asks again');
+
+        await user.click(toggle);
+        await view.fixture.whenStable();
+
+        expect(toggle).toHaveTextContent('▾');
       });
 
       it('user sees "Reply delivered" on the card, with no reply field, right after the reply reaches the session', async () => {
@@ -223,7 +263,7 @@ describe('InboxComponent questions from agents', () => {
 
         expect(cards()).toHaveLength(1);
         expect(screen.queryByTestId('inbox-count')).toBeNull();
-        expect(screen.queryByTestId('inbox-tab-count-questions')).toBeNull();
+        expect(screen.getByTestId('inbox-filter-questions')).toHaveTextContent('0');
       });
 
       it('user sees the delivered card move to Answered after the acknowledgement ends', async () => {
@@ -254,7 +294,7 @@ describe('InboxComponent questions from agents', () => {
         closeApp(view);
 
         await renderInbox([agent('s1')], asking);
-        await openQuestionsTab();
+        await showOnlyQuestions();
 
         expect(cards()).toHaveLength(0);
       });
@@ -292,7 +332,7 @@ describe('InboxComponent questions from agents', () => {
         closeApp(view);
 
         const reloaded = await renderInbox([agent('s1')], asking);
-        await openQuestionsTab();
+        await showOnlyQuestions();
         await user.click(screen.getByTestId('inbox-answered-toggle'));
         await reloaded.fixture.whenStable();
 
@@ -303,7 +343,7 @@ describe('InboxComponent questions from agents', () => {
         const user = userEvent.setup({ delay: null });
         localStorage.setItem('openfleet.answeredReplies', JSON.stringify({ s1: { deliveredAt: new Date().toISOString(), answeredLines: ['which port?'] } }));
         const view = await renderInbox([agent('s1')], asking);
-        await openQuestionsTab();
+        await showOnlyQuestions();
 
         await user.click(screen.getByTestId('inbox-answered-toggle'));
         await view.fixture.whenStable();
@@ -314,17 +354,17 @@ describe('InboxComponent questions from agents', () => {
 
       it('user sees no busy notice on the card of an idle session', async () => {
         await renderInbox([agent('s1', { state: 'idle' })], asking);
-        await openQuestionsTab();
+        await showOnlyQuestions();
 
-        expect(within(cards()[0]).queryByPlaceholderText(/busy/i)).toBeNull();
-        expect(within(cards()[0]).getByTestId('composer-send')).toHaveTextContent('Send');
+        expect(within(cards()[0]).queryByTestId('composer-busy-note')).toBeNull();
+        expect(within(cards()[0]).getByTestId('composer-send')).toHaveTextContent('Send answer');
       });
 
       it('user sees the busy notice and Queue on the card of a session that is mid-turn', async () => {
         await renderInbox([agent('s1', { state: 'generating' })], asking);
-        await openQuestionsTab();
+        await showOnlyQuestions();
 
-        expect(within(cards()[0]).getByPlaceholderText(/busy/i)).toBeTruthy();
+        expect(within(cards()[0]).getByTestId('composer-busy-note')).toHaveTextContent('mid-turn');
         expect(within(cards()[0]).getByTestId('composer-send')).toHaveTextContent('Queue');
       });
 
@@ -335,7 +375,7 @@ describe('InboxComponent questions from agents', () => {
         view.events.sessions.set([agent('s1', { state: 'generating' })]);
         await waitForDeliveryAcknowledgementToEnd(view);
 
-        expect(screen.queryByPlaceholderText(/busy/i)).toBeNull();
+        expect(screen.queryByTestId('composer-busy-note')).toBeNull();
         expect(cards()).toHaveLength(0);
       });
 
@@ -346,7 +386,7 @@ describe('InboxComponent questions from agents', () => {
         await waitForDeliveryAcknowledgementToEnd(view);
 
         expect(cards()).toHaveLength(0);
-        expect(screen.getByTestId('inbox-questions-empty')).toBeTruthy();
+        expect(screen.getByTestId('inbox-empty')).toBeTruthy();
         expect(answeredEntries()).toHaveLength(0);
 
         await user.click(screen.getByTestId('inbox-answered-toggle'));
@@ -362,7 +402,7 @@ describe('InboxComponent questions from agents', () => {
 
       it('user sees no Answered section while nothing has been answered', async () => {
         await renderInbox([agent('s1')], asking);
-        await openQuestionsTab();
+        await showOnlyQuestions();
 
         expect(screen.queryByTestId('inbox-answered-toggle')).toBeNull();
       });
@@ -399,7 +439,7 @@ describe('InboxComponent questions from agents', () => {
         closeApp(view);
 
         await renderInbox([agent('s1')], asking);
-        await openQuestionsTab();
+        await showOnlyQuestions();
 
         expect(cards()).toHaveLength(0);
         expect(screen.queryByTestId('inbox-count')).toBeNull();
@@ -412,7 +452,7 @@ describe('InboxComponent questions from agents', () => {
         closeApp(view);
 
         await renderInbox([agent('s1')], [stateOf({ sessionId: 's1', questionsForHuman: ['and the host?'] })]);
-        await openQuestionsTab();
+        await showOnlyQuestions();
 
         expect(cards()).toHaveLength(1);
       });
@@ -424,7 +464,7 @@ describe('InboxComponent questions from agents', () => {
         await replyFromCard(view);
 
         expect(screen.queryByTestId('inbox-count')).toBeNull();
-        expect(screen.queryByTestId('inbox-tab-count-questions')).toBeNull();
+        expect(screen.getByTestId('inbox-filter-questions')).toHaveTextContent('0');
       });
 
       it('user sees the card ask again, counted, when the agent writes a new question', async () => {
@@ -479,7 +519,7 @@ describe('InboxComponent questions from agents', () => {
     it('user keeps a reply typed in one card apart from the other cards', async () => {
       const user = userEvent.setup({ delay: null });
       await renderInbox([agent('s1'), agent('s2')], [stateOf({ sessionId: 's1', blockers: ['a'] }), stateOf({ sessionId: 's2', blockers: ['b'] })]);
-      await openQuestionsTab();
+      await showOnlyQuestions();
 
       await user.type(within(cards()[0]).getByTestId('composer-input'), 'first');
 
@@ -496,86 +536,39 @@ describe('InboxComponent questions from agents', () => {
         let resolveSend: (value: unknown) => void = () => {};
         let rejectSend: (reason: unknown) => void = () => {};
         view.api.sendMessage.mockImplementation(() => new Promise((resolve, reject) => { resolveSend = resolve; rejectSend = reject; }));
-        await openQuestionsTab();
+        await showOnlyQuestions();
         return { user, ...view, resolveSend: (value: unknown) => resolveSend(value), rejectSend: (reason: unknown) => rejectSend(reason) };
       }
 
-      type Rendered = Awaited<ReturnType<typeof renderWithDeferredSend>>;
-
-      async function showTab({ user, fixture }: Pick<Rendered, 'user' | 'fixture'>, tab: 'gates' | 'questions') {
-        await user.click(screen.getByTestId(`inbox-tab-${tab}`));
-        await fixture.whenStable();
-      }
-
-      async function visitGatesAndComeBack(rendered: Pick<Rendered, 'user' | 'fixture'>) {
-        await showTab(rendered, 'gates');
-        await showTab(rendered, 'questions');
-      }
-
-      it('user finds the reply again after looking at the Gates tab', async () => {
+      it('user finds the reply again after switching the filter to All and back', async () => {
         const rendered = await renderWithDeferredSend();
         await rendered.user.type(replyField(), 'use staging');
-        await rendered.fixture.whenStable();
 
-        await visitGatesAndComeBack(rendered);
+        await rendered.user.click(screen.getByTestId('inbox-filter-all'));
+        await showOnlyQuestions();
 
         expect(replyField()).toHaveValue('use staging');
       });
 
-      it('user cannot send the same reply twice by leaving the tab and coming back while it is on its way', async () => {
-        const rendered = await renderWithDeferredSend();
-        await rendered.user.type(replyField(), 'use staging');
-        await rendered.user.click(sendButton());
-
-        await visitGatesAndComeBack(rendered);
-        await rendered.user.click(sendButton());
-
-        expect(rendered.api.sendMessage).toHaveBeenCalledTimes(1);
-        expect(sendButton()).toHaveAttribute('aria-disabled', 'true');
-      });
-
-      it('user finds an empty reply field after a reply was delivered while looking at the Gates tab', async () => {
-        const rendered = await renderWithDeferredSend();
-        await rendered.user.type(replyField(), 'use staging');
-        await rendered.user.click(sendButton());
-        await rendered.fixture.whenStable();
-        await showTab(rendered, 'gates');
-
-        rendered.resolveSend({ status: 'delivered', messageId: 'm1' });
-        await rendered.fixture.whenStable();
-        await showTab(rendered, 'questions');
-
-        expect(replyField()).toHaveValue('');
-      });
-
-      it('user sees the failure and keeps the reply when the send fails while looking at the Gates tab', async () => {
-        const rendered = await renderWithDeferredSend();
-        const { user, fixture, rejectSend } = rendered;
+      it('user sees the failure on the card and keeps the reply when the send fails', async () => {
+        const { user, fixture, rejectSend } = await renderWithDeferredSend();
         await user.type(replyField(), 'use staging');
         await user.click(sendButton());
         await fixture.whenStable();
-        await showTab(rendered, 'gates');
 
         rejectSend(new Error('boom'));
         await fixture.whenStable();
 
-        await waitFor(() => expect(screen.getByTestId('inbox-reply-failure')).toHaveAttribute('role', 'alert'));
-        expect(screen.getByTestId('inbox-reply-failure')).toHaveTextContent('Agent s1');
-        expect(screen.getByTestId('inbox-reply-failure-draft')).toHaveTextContent('use staging');
-        await showTab(rendered, 'questions');
+        await waitFor(() => expect(screen.getByTestId('composer-send-error')).toBeTruthy());
         expect(replyField()).toHaveValue('use staging');
-        expect(screen.getByTestId('composer-send-error')).toBeTruthy();
         expect(screen.queryByTestId('inbox-reply-failure')).toBeNull();
       });
 
       it('draws the Dismiss of the failure notice as a compact secondary action', async () => {
-        const rendered = await renderWithDeferredSend();
-        const { user, fixture, rejectSend } = rendered;
+        const { user, fixture, events, rejectSend } = await renderWithDeferredSend();
         await user.type(replyField(), 'use staging');
         await user.click(sendButton());
-        await fixture.whenStable();
-        await showTab(rendered, 'gates');
-
+        events.sessions.set([agent('s1', { state: 'closed' })]);
         rejectSend(new Error('boom'));
         await fixture.whenStable();
 
@@ -626,7 +619,7 @@ describe('InboxComponent questions from agents', () => {
     it('user can press Escape in the reply field to leave it, and nothing is sent', async () => {
       const user = userEvent.setup({ delay: null });
       const { api } = await renderInbox([agent('s1')], [stateOf({ sessionId: 's1', questionsForHuman: ['which port?'] })]);
-      await openQuestionsTab();
+      await showOnlyQuestions();
       const reply = within(cards()[0]).getByTestId('composer-input');
       await user.click(reply);
       await user.keyboard('half a thought');
@@ -642,7 +635,7 @@ describe('InboxComponent questions from agents', () => {
     it('user pressing Escape in the reply field lands on the session link of that card, not on the page body', async () => {
       const user = userEvent.setup({ delay: null });
       await renderInbox([agent('s1')], [stateOf({ sessionId: 's1', questionsForHuman: ['which port?'] })]);
-      await openQuestionsTab();
+      await showOnlyQuestions();
       await user.click(within(cards()[0]).getByTestId('composer-input'));
 
       await user.keyboard('{Escape}');
@@ -669,21 +662,21 @@ describe('InboxComponent questions from agents', () => {
         expect(screen.getByTestId('inbox-reply-failure-dismiss')).toHaveFocus();
       });
 
-      it('user dismissing the last failed reply lands on the selected Inbox tab, not on the page body', async () => {
+      it('user dismissing the last failed reply lands on the selected filter pill, not on the page body', async () => {
         const { user, fixture } = await renderWithFailedReplies(['s1']);
 
         await user.click(screen.getByTestId('inbox-reply-failure-dismiss'));
         await fixture.whenStable();
 
-        expect(screen.getByRole('tab', { selected: true })).toHaveFocus();
+        expect(screen.getByTestId('inbox-filter-all')).toHaveFocus();
       });
     });
 
     it('user can reach the session link, the reply field and Send with Tab, in that order', async () => {
       const user = userEvent.setup({ delay: null });
       await renderInbox([agent('s1')], [stateOf({ sessionId: 's1', questionsForHuman: ['which port?'] })]);
-      await openQuestionsTab();
-      screen.getByTestId('inbox-tab-questions').focus();
+      await showOnlyQuestions();
+      screen.getByTestId('inbox-filter-questions').focus();
 
       await user.tab();
       expect(within(cards()[0]).getByTestId('inbox-attention-session')).toHaveFocus();
@@ -698,7 +691,7 @@ describe('InboxComponent questions from agents', () => {
     it('user reads a session name of 500 characters without a space in full inside its card', async () => {
       const longName = 'N'.repeat(500);
       await renderInbox([agent('s1', { name: longName })], [stateOf({ sessionId: 's1', blockers: ['a'] })]);
-      await openQuestionsTab();
+      await showOnlyQuestions();
 
       const name = within(cards()[0]).getByTestId('inbox-attention-session');
 
@@ -709,7 +702,7 @@ describe('InboxComponent questions from agents', () => {
     it('user reads a 300 character question and blocker without a space in full inside its card', async () => {
       const unbroken = 'x'.repeat(300);
       await renderInbox([agent('s1')], [stateOf({ sessionId: 's1', questionsForHuman: [unbroken], blockers: [unbroken] })]);
-      await openQuestionsTab();
+      await showOnlyQuestions();
 
       expect(within(cards()[0]).getByTestId('inbox-attention-question')).toHaveTextContent(unbroken);
       expect(within(cards()[0]).getByTestId('inbox-attention-blocker')).toHaveTextContent(unbroken);
@@ -718,7 +711,7 @@ describe('InboxComponent questions from agents', () => {
     it('user sees every one of 120 sessions needing attention, none dropped', async () => {
       const sessions = Array.from({ length: 120 }, (_, index) => agent(`s${index}`));
       await renderInbox(sessions, sessions.map((session) => stateOf({ sessionId: session.id, blockers: ['stuck'] })));
-      await openQuestionsTab();
+      await showOnlyQuestions();
 
       await waitFor(() => expect(cards()).toHaveLength(120));
       expect(screen.getByTestId('inbox-count')).toHaveTextContent('99+');
@@ -726,7 +719,7 @@ describe('InboxComponent questions from agents', () => {
 
     it('user sees a bidirectional control in a session name shown as an escape, not applied', async () => {
       await renderInbox([agent('s1', { name: `safe${String.fromCharCode(0x202e)}evil` })], [stateOf({ sessionId: 's1', blockers: ['a'] })]);
-      await openQuestionsTab();
+      await showOnlyQuestions();
 
       expect(within(cards()[0]).getByTestId('inbox-attention-session')).toHaveTextContent('safe<U+202E>evil');
     });
@@ -734,7 +727,7 @@ describe('InboxComponent questions from agents', () => {
     it('user sees a bidirectional control in a question or a blocker shown as an escape, not applied', async () => {
       const rightToLeftOverride = String.fromCharCode(0x202e);
       await renderInbox([agent('s1')], [stateOf({ sessionId: 's1', questionsForHuman: [`approve${rightToLeftOverride}txt.exe?`], blockers: [`stuck${rightToLeftOverride}on`] })]);
-      await openQuestionsTab();
+      await showOnlyQuestions();
 
       const card = cards()[0];
       expect(within(card).getByTestId('inbox-attention-question')).toHaveTextContent('approve<U+202E>txt.exe?');
@@ -744,7 +737,7 @@ describe('InboxComponent questions from agents', () => {
     it('user still reads a question written in Hebrew as it was written', async () => {
       const hebrew = 'איזה פורט?';
       await renderInbox([agent('s1')], [stateOf({ sessionId: 's1', questionsForHuman: [hebrew] })]);
-      await openQuestionsTab();
+      await showOnlyQuestions();
 
       expect(within(cards()[0]).getByTestId('inbox-attention-question').textContent?.trim()).toBe(hebrew);
     });
@@ -752,7 +745,7 @@ describe('InboxComponent questions from agents', () => {
     it('user keeps every character of a question with zero-width characters', async () => {
       const withZeroWidth = `a${String.fromCharCode(0x200b)}b${String.fromCharCode(0xfeff)}c`;
       await renderInbox([agent('s1')], [stateOf({ sessionId: 's1', questionsForHuman: [withZeroWidth] })]);
-      await openQuestionsTab();
+      await showOnlyQuestions();
 
       expect(within(cards()[0]).getByTestId('inbox-attention-question').textContent?.trim()).toBe(withZeroWidth);
     });
@@ -768,7 +761,7 @@ describe('InboxComponent questions from agents', () => {
     it('user sees zero-width and bidirectional controls in a session name shown as escapes', async () => {
       const name = `Le${String.fromCharCode(0x200b)}ad${String.fromCharCode(0x202e)}x`;
       await renderInbox([agent('s1', { name })], [stateOf({ sessionId: 's1', blockers: ['a'] })]);
-      await openQuestionsTab();
+      await showOnlyQuestions();
 
       expect(within(cards()[0]).getByTestId('inbox-attention-session')).toHaveTextContent('Le<U+200B>ad<U+202E>x');
     });
@@ -776,7 +769,7 @@ describe('InboxComponent questions from agents', () => {
     it('user keeps a reply typed in a card when another session starts asking above it', async () => {
       const user = userEvent.setup({ delay: null });
       const { events, fixture } = await renderInbox([agent('s1'), agent('s2')], [stateOf({ sessionId: 's2', blockers: ['b'] })]);
-      await openQuestionsTab();
+      await showOnlyQuestions();
       await user.type(within(cards()[0]).getByTestId('composer-input'), 'half a reply');
 
       events.workingStates.set(new Map([['s1', stateOf({ sessionId: 's1', blockers: ['a'] })], ['s2', stateOf({ sessionId: 's2', blockers: ['b'], plan: ['refreshed'] })]]));
@@ -790,7 +783,7 @@ describe('InboxComponent questions from agents', () => {
     it('user sees the same card once when the same snapshot is replayed', async () => {
       const state = stateOf({ sessionId: 's1', questionsForHuman: ['which port?'] });
       const { events, fixture } = await renderInbox([agent('s1')], [state]);
-      await openQuestionsTab();
+      await showOnlyQuestions();
 
       events.workingStates.set(new Map([['s1', { ...state }]]));
       events.workingStates.set(new Map([['s1', { ...state }]]));

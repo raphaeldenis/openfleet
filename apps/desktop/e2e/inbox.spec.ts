@@ -51,12 +51,22 @@ test('an issue card keeps Copy details and Dismiss compact, and Dismiss keeps th
   await expect(page.getByTestId('inbox').locator(':focus')).toHaveCount(1);
 });
 
-test('the Inbox opens on Gates and the governance tab says it is still to come', async ({ page }) => {
+test('the Inbox is one list opened on All, with a Questions filter and no tabs', async ({ page, request }) => {
+  const session = await fakeSessions.create(request, { name: 'Gate keeper' });
+  await session.hooks.announceIdle();
   await page.goto('/inbox');
-  await expect(page.getByRole('tab', { name: 'Gates' })).toHaveAttribute('aria-selected', 'true');
+  const decision = session.hooks.requestPermission({ command: 'ls' });
+  const gateCard = page.getByTestId('inbox-gate-card').filter({ hasText: 'ls' });
+  await expect(page.getByTestId('inbox-filter-all')).toHaveAttribute('aria-pressed', 'true');
+  await expect(gateCard).toBeVisible();
+  await expect(page.getByRole('tab')).toHaveCount(0);
 
-  await page.getByRole('tab', { name: 'Governance proposals' }).click();
+  await page.getByTestId('inbox-filter-questions').click();
 
-  await expect(page.getByRole('tab', { name: 'Governance proposals' })).toHaveAttribute('aria-selected', 'true');
-  await expect(page.getByTestId('inbox-proposals-coming')).toHaveText('Governance proposals are coming with phase 4 tables/governance.');
+  await expect(page.getByTestId('inbox-filter-questions')).toHaveAttribute('aria-pressed', 'true');
+  await expect(gateCard).toHaveCount(0);
+
+  await page.getByTestId('inbox-filter-all').click();
+  await gateCard.getByRole('button', { name: 'Deny' }).click();
+  expect(await decision).toBe('deny');
 });
