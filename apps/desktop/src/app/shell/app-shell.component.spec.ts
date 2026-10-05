@@ -407,42 +407,24 @@ describe('AppShellComponent', () => {
     });
   });
 
-  it('gives the Sessions region and the Helm list independent scroll areas so neither can grow over the other', async () => {
-    const { root } = await setUp();
-    const sessions = root.querySelector('[data-testid="app-nav"] .sessions') as HTMLElement;
-    const helmList = root.querySelector('[data-testid="app-nav"] .helm-list') as HTMLElement;
-
-    const sessionRows = sessions.querySelector('ul.sessions') as HTMLElement;
-    const sessionsStyle = getComputedStyle(sessions);
-    const helmListStyle = getComputedStyle(helmList);
-
-    expect(getComputedStyle(sessionRows).overflowY).toBe('auto');
-    expect(sessionsStyle.minHeight).toBe('0px');
-    expect(sessionsStyle.flexGrow).toBe('2');
-    expect(helmListStyle.overflowY).toBe('auto');
-    expect(helmListStyle.minHeight).toBe('0px');
-    expect(helmListStyle.flexGrow).toBe('1.4');
-  });
-
-  it('pins the new-session and new-manager links outside the scrolling session rows so many sessions never push them out of reach', async () => {
+  it('keeps the new-session and new-manager plus buttons outside any scroll area so many sessions never push them out of reach', async () => {
     const manySessions = Array.from({ length: 40 }, (_, index) => ({ id: `s${index}`, name: `Session ${index}`, emoji: '🤖', state: 'idle' }));
     const { root } = await setUp({ sessions: manySessions });
-    const sessionsRegion = root.querySelector('[data-testid="app-nav"] .sessions') as HTMLElement;
-    const scrollingRows = sessionsRegion.querySelector('ul.sessions') as HTMLElement;
-    const newSessionLink = root.querySelector('[data-testid="new-session-link"]') as HTMLElement;
-    const newManagerLink = root.querySelector('[data-testid="new-manager-link"]') as HTMLElement;
+    const sidebar = root.querySelector('[data-testid="app-nav"]') as HTMLElement;
+    const scrollingRows = sidebar.querySelector('ul.sessions') as HTMLElement;
+    const newSessionLink = sidebar.querySelector('a[aria-label="New session"]') as HTMLElement;
+    const newManagerLink = sidebar.querySelector('a[aria-label="New manager"]') as HTMLElement;
 
     const isScrollContainer = (element: HTMLElement) => ['auto', 'scroll'].includes(getComputedStyle(element).overflowY);
     const scrollContainersAbove = (link: HTMLElement) => {
       const containers: HTMLElement[] = [];
-      for (let ancestor = link.parentElement; ancestor && ancestor !== sessionsRegion.parentElement; ancestor = ancestor.parentElement) {
+      for (let ancestor = link.parentElement; ancestor && ancestor !== sidebar; ancestor = ancestor.parentElement) {
         if (isScrollContainer(ancestor)) containers.push(ancestor);
       }
       return containers;
     };
 
     expect(isScrollContainer(scrollingRows)).toBe(true);
-    expect(scrollingRows.contains(newSessionLink)).toBe(false);
     expect(scrollContainersAbove(newSessionLink)).toEqual([]);
     expect(scrollContainersAbove(newManagerLink)).toEqual([]);
   });

@@ -119,7 +119,7 @@ describe('SessionListComponent project groups', () => {
     await renderList({ sessions, projects: [{ id: 'ccm', name: 'CCM' }] });
 
     const headings = await screen.findAllByRole('heading', { level: 3 });
-    expect(headings.map((h) => h.textContent?.trim())).toEqual(['CCM', 'No project']);
+    expect(headings.map((h) => h.textContent?.trim())).toEqual(['⌂ CCM', 'No project']);
   });
 
   it('user sees no group heading when no session belongs to a project', async () => {

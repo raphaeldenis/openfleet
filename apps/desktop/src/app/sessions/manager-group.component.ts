@@ -11,9 +11,11 @@ interface ManagerRow {
   readonly session: Session;
   readonly view: ManagerView | undefined;
   readonly countdown: string;
+  readonly countdownTip: string;
 }
 
 const EMPTY_MESSAGE = 'No managers yet';
+const NO_PULSE_LABEL = '—';
 
 @Component({
   selector: 'of-manager-group',
@@ -21,7 +23,6 @@ const EMPTY_MESSAGE = 'No managers yet';
   imports: [StateChipComponent],
   template: `
     <section class="managers" data-testid="manager-group">
-      <h3 class="group-title">Managers</h3>
       @if (rows().length === 0) {
         <p class="empty">${EMPTY_MESSAGE}</p>
       } @else {
@@ -42,7 +43,7 @@ const EMPTY_MESSAGE = 'No managers yet';
                   <of-state-chip [state]="row.session.state" />
                   @if (row.view; as view) {
                     <span [attr.data-testid]="'manager-row-' + row.session.id + '-children'" title="Children">{{ view.childrenCount }}/{{ view.childrenCap }}</span>
-                    <span [attr.data-testid]="'manager-row-' + row.session.id + '-countdown'" title="Next pulse">{{ row.countdown }}</span>
+                    <span [attr.data-testid]="'manager-row-' + row.session.id + '-countdown'" [title]="row.countdownTip">◎ {{ row.countdown }}</span>
                   }
                 </span>
               </button>
@@ -53,8 +54,7 @@ const EMPTY_MESSAGE = 'No managers yet';
     </section>
   `,
   styles: `
-    .managers { border-bottom: 1px solid var(--line); padding-bottom: .25rem }
-    .group-title { margin: 0; display: flex; align-items: center; height: 1.875rem; padding: 0 .75rem; font-size: .6875rem; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--mut) }
+    .managers { padding-bottom: .25rem }
     ul { list-style: none; padding: 0; margin: 0 }
     .empty { margin: 0; padding: .25rem .75rem .5rem; font-size: .75rem; color: var(--mut) }
     .row {
@@ -90,8 +90,10 @@ export class ManagerGroupComponent {
       .map((session) => {
         const view = views.find((candidate) => candidate.sessionId === session.id);
         const isClosed = session.state === 'closed';
-        const countdown = isClosed || !view ? 'closed' : countdownLabel(countdownSecondsUntil(view.nextPulseAt, now));
-        return { session, view, countdown };
+        const hasNoPulse = isClosed || !view;
+        const countdown = hasNoPulse ? NO_PULSE_LABEL : countdownLabel(countdownSecondsUntil(view.nextPulseAt, now));
+        const countdownTip = hasNoPulse ? 'No pulse — manager closed' : `Next pulse in ${countdown}`;
+        return { session, view, countdown, countdownTip };
       });
   });
 
