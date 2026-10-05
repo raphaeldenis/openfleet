@@ -4,6 +4,7 @@ import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { BannerComponent } from '../design/banner.component';
 import { ErrorLineComponent } from '../design/error-line.component';
+import { AnsweredRepliesStore } from '../working-state/answered-replies.store';
 import { ReplyDraftStore } from './reply-draft.store';
 
 interface PendingMessage { id: string; deliveredImmediately: boolean }
@@ -53,6 +54,7 @@ export class ComposerComponent {
   private readonly api = inject(FleetApiService);
   private readonly events = inject(FleetEventsService);
   private readonly replies = inject(ReplyDraftStore);
+  private readonly answeredReplies = inject(AnsweredRepliesStore);
   protected readonly draft = computed(() => this.replies.draftOf(this.sessionId()));
   private readonly pending = signal<PendingMessage | null>(null);
   protected readonly sendError = computed(() => this.replies.failureOf(this.sessionId()) ?? null);
@@ -69,7 +71,7 @@ export class ComposerComponent {
   constructor() {
     effect(() => {
       const isReplyDelivered = this.status() === 'sent';
-      if (isReplyDelivered) this.replies.markReplyDelivered(untracked(this.sessionId), new Date().toISOString());
+      if (isReplyDelivered) untracked(() => this.answeredReplies.markReplyDelivered(this.sessionId(), new Date().toISOString()));
     });
 
     // A route param change reuses this component instance, so a session switch must not leak

@@ -13,14 +13,11 @@ import { showBidiControlsAsEscapes, showInvisibleControlsAsEscapes } from '../co
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [KindBadgeComponent, RouterLink, ComposerComponent],
   template: `
-    <article class="card" [class.card--answered]="item().isAnswered" data-testid="inbox-attention-card" (keydown.escape)="returnFocusToSessionLink()">
+    <article class="card" data-testid="inbox-attention-card" (keydown.escape)="returnFocusToSessionLink()">
       <span class="avatar" aria-hidden="true">{{ item().session.emoji }}</span>
       <div class="body">
         <div class="meta">
           <of-kind-badge kind="question" />
-          @if (item().isAnswered) {
-            <span class="answered" data-testid="inbox-attention-answered">Reply delivered</span>
-          }
           <a #sessionLink class="session-link" data-testid="inbox-attention-session" [routerLink]="sessionRoute()">{{ sessionName() }}</a>
           <span class="age" data-testid="inbox-attention-age">{{ ageLabel() }}</span>
         </div>
@@ -45,8 +42,6 @@ import { showBidiControlsAsEscapes, showInvisibleControlsAsEscapes } from '../co
   styles: `
     :host { display: block; min-width: 0; }
     .card { display: flex; gap: .75rem; min-width: 0; padding: .875rem 1rem; border: 1px solid var(--line); border-radius: .625rem; background: var(--panel); }
-    .card--answered { opacity: .6; }
-    .answered { font-size: .6875rem; color: var(--mut); }
     .avatar { display: flex; align-items: center; justify-content: center; flex: none; width: 2rem; height: 2rem; border-radius: .5rem; border: 1px solid var(--line); background: var(--sunk); }
     .body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: .5rem; }
     .meta { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; min-width: 0; }

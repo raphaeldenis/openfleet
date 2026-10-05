@@ -2,7 +2,7 @@ import { signal } from '@angular/core';
 import { provideRouter } from '@angular/router';
 import { render, screen, waitFor, within } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Session, WorkingState } from '@openfleet/shared';
 import { TestBed } from '@angular/core/testing';
 import { FleetApiService } from '../core/fleet-api.service';
@@ -27,8 +27,11 @@ async function openQuestionsTab() {
 }
 
 const cards = () => screen.queryAllByTestId('inbox-attention-card');
+const answeredEntries = () => screen.queryAllByTestId('inbox-answered-entry');
 
 describe('InboxComponent questions from agents', () => {
+  beforeEach(() => localStorage.clear());
+
   it('user sees one card per open session that asks the human something or reports a blocker', async () => {
     await renderInbox(
       [agent('s1'), agent('s2'), agent('s3'), agent('s4'), agent('s5', { state: 'closed' })],
@@ -197,22 +200,94 @@ describe('InboxComponent questions from agents', () => {
         expect(within(cards()[0]).getByTestId('composer-send')).toHaveTextContent('Queue');
       });
 
-      it('user sees no busy notice once the session starts working on the reply it just received', async () => {
+      it('user sees no busy notice anywhere once the session starts working on the reply it just received', async () => {
         const view = await renderInbox([agent('s1', { state: 'idle' })], asking);
         await replyFromCard(view);
 
         view.events.sessions.set([agent('s1', { state: 'generating' })]);
         await view.fixture.whenStable();
 
-        expect(within(cards()[0]).queryByPlaceholderText(/busy/i)).toBeNull();
-        expect(within(cards()[0]).getByTestId('composer-status')).toHaveTextContent('sent');
+        expect(screen.queryByPlaceholderText(/busy/i)).toBeNull();
+        expect(cards()).toHaveLength(0);
       });
 
-      it('user sees the card marked as answered once the reply is delivered', async () => {
+      it('user sees the answered card leave the list and wait, collapsed, in the Answered section', async () => {
+        const user = userEvent.setup({ delay: null });
         const view = await renderInbox([agent('s1')], asking);
         await replyFromCard(view);
 
-        expect(within(cards()[0]).getByTestId('inbox-attention-answered')).toHaveTextContent('Reply delivered');
+        expect(cards()).toHaveLength(0);
+        expect(screen.getByTestId('inbox-questions-empty')).toBeTruthy();
+        expect(answeredEntries()).toHaveLength(0);
+
+        await user.click(screen.getByTestId('inbox-answered-toggle'));
+        await view.fixture.whenStable();
+
+        expect(screen.getByTestId('inbox-answered-toggle')).toHaveTextContent('Answered (1)');
+        const [entry] = answeredEntries();
+        expect(within(entry).getByTestId('inbox-answered-session')).toHaveTextContent('Agent s1');
+        expect(within(entry).getByTestId('inbox-answered-question')).toHaveTextContent('which port?');
+        expect(within(entry).getByTestId('inbox-answered-status')).toHaveTextContent('Reply delivered');
+        expect(within(entry).getByTestId('inbox-answered-time').textContent?.trim()).not.toBe('');
+      });
+
+      it('user sees no Answered section while nothing has been answered', async () => {
+        await renderInbox([agent('s1')], asking);
+        await openQuestionsTab();
+
+        expect(screen.queryByTestId('inbox-answered-toggle')).toBeNull();
+      });
+
+      it('user still sees the answered question after the agent rewrites its state with the same question', async () => {
+        const view = await renderInbox([agent('s1')], asking);
+        await replyFromCard(view);
+
+        view.events.workingStates.set(new Map([['s1', stateOf({ sessionId: 's1', questionsForHuman: ['which port?'], plan: ['carry on'], updatedAt: new Date(Date.now() + 60_000).toISOString() })]]));
+        await view.fixture.whenStable();
+
+        expect(cards()).toHaveLength(0);
+        expect(screen.queryByTestId('inbox-count')).toBeNull();
+        expect(screen.getByTestId('inbox-answered-toggle')).toHaveTextContent('Answered (1)');
+      });
+
+      it('user sees the card come back when the agent asks the same question again after clearing it', async () => {
+        const view = await renderInbox([agent('s1')], asking);
+        await replyFromCard(view);
+
+        view.events.workingStates.set(new Map([['s1', stateOf({ sessionId: 's1', questionsForHuman: [] })]]));
+        await view.fixture.whenStable();
+        view.events.workingStates.set(new Map([['s1', stateOf({ sessionId: 's1', questionsForHuman: ['which port?'] })]]));
+        await view.fixture.whenStable();
+
+        expect(cards()).toHaveLength(1);
+        expect(screen.getByTestId('inbox-count')).toHaveTextContent('1');
+        expect(screen.queryByTestId('inbox-answered-toggle')).toBeNull();
+      });
+
+      it('user still sees the card answered after reloading the app', async () => {
+        const view = await renderInbox([agent('s1')], asking);
+        await replyFromCard(view);
+        view.fixture.destroy();
+        TestBed.resetTestingModule();
+
+        await renderInbox([agent('s1')], asking);
+        await openQuestionsTab();
+
+        expect(cards()).toHaveLength(0);
+        expect(screen.queryByTestId('inbox-count')).toBeNull();
+        expect(screen.getByTestId('inbox-answered-toggle')).toHaveTextContent('Answered (1)');
+      });
+
+      it('user sees the card come back when the agent asks a different question after the reload', async () => {
+        const view = await renderInbox([agent('s1')], asking);
+        await replyFromCard(view);
+        view.fixture.destroy();
+        TestBed.resetTestingModule();
+
+        await renderInbox([agent('s1')], [stateOf({ sessionId: 's1', questionsForHuman: ['and the host?'] })]);
+        await openQuestionsTab();
+
+        expect(cards()).toHaveLength(1);
       });
 
       it('user no longer sees an answered card counted as needing attention', async () => {
@@ -225,28 +300,41 @@ describe('InboxComponent questions from agents', () => {
         expect(screen.queryByTestId('inbox-tab-count-questions')).toBeNull();
       });
 
-      it('user sees the card ask again, unmarked and counted, when the agent writes a new question', async () => {
+      it('user sees the card ask again, counted, when the agent writes a new question', async () => {
         const view = await renderInbox([agent('s1')], asking);
         await replyFromCard(view);
 
         view.events.workingStates.set(new Map([['s1', stateOf({ sessionId: 's1', questionsForHuman: ['and the host?'], updatedAt: new Date(Date.now() + 60_000).toISOString() })]]));
         await view.fixture.whenStable();
 
-        expect(within(cards()[0]).queryByTestId('inbox-attention-answered')).toBeNull();
+        expect(cards()).toHaveLength(1);
+        expect(within(cards()[0]).getByTestId('inbox-attention-question')).toHaveTextContent('and the host?');
         expect(screen.getByTestId('inbox-count')).toHaveTextContent('1');
+        expect(screen.queryByTestId('inbox-answered-toggle')).toBeNull();
       });
 
-      it('user sees a reply to a busy session stay unanswered while queued, and answered once it is delivered', async () => {
+      it('user sees the card ask again when the agent keeps the answered question and adds a new one', async () => {
+        const view = await renderInbox([agent('s1')], asking);
+        await replyFromCard(view);
+
+        view.events.workingStates.set(new Map([['s1', stateOf({ sessionId: 's1', questionsForHuman: ['which port?', 'and the host?'] })]]));
+        await view.fixture.whenStable();
+
+        expect(cards()).toHaveLength(1);
+      });
+
+      it('user sees a reply to a busy session stay on the list while queued, and answered once it is delivered', async () => {
         const view = await renderInbox([agent('s1', { state: 'generating' })], asking);
         view.api.sendMessage.mockResolvedValue({ status: 'queued', messageId: 'm9' });
         await replyFromCard(view);
-        expect(within(cards()[0]).queryByTestId('inbox-attention-answered')).toBeNull();
+        expect(cards()).toHaveLength(1);
         expect(within(cards()[0]).getByTestId('composer-status')).toHaveTextContent('queued');
 
         view.events.deliveredMessageIds.set(new Set(['m9']));
         await view.fixture.whenStable();
 
-        expect(within(cards()[0]).getByTestId('inbox-attention-answered')).toBeTruthy();
+        expect(cards()).toHaveLength(0);
+        expect(screen.getByTestId('inbox-answered-toggle')).toHaveTextContent('Answered (1)');
       });
 
       it('user sees the card still asking, with the failure, when the reply fails', async () => {
@@ -255,7 +343,8 @@ describe('InboxComponent questions from agents', () => {
         await replyFromCard(view);
 
         expect(screen.getByTestId('composer-send-error')).toBeTruthy();
-        expect(within(cards()[0]).queryByTestId('inbox-attention-answered')).toBeNull();
+        expect(cards()).toHaveLength(1);
+        expect(screen.queryByTestId('inbox-answered-toggle')).toBeNull();
         expect(screen.getByTestId('inbox-count')).toHaveTextContent('1');
       });
     });
