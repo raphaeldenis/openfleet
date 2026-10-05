@@ -7,6 +7,8 @@ import { showInvisibleControlsAsEscapes } from '../core/bidi-escapes';
 import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { ErrorLineComponent } from '../design/error-line.component';
+import { moveFocusWithinListbox } from '../design/listbox-keyboard';
+import { PopoverComponent } from '../design/popover.component';
 import { StateChipComponent } from '../design/state-chip.component';
 import { ProjectFormComponent } from './project-form.component';
 
@@ -16,6 +18,7 @@ type CountState = { status: 'loading' } | { status: 'ready'; total: number } | {
 
 interface CountSource {
   readonly label: string;
+  readonly route: string;
   readonly read: (api: FleetApiService, projectId: string) => Promise<number>;
 }
 
@@ -24,9 +27,9 @@ const NO_DOCS_FOLDER = 'No docs folder';
 const PROJECTS_LOAD_FAILED = "Couldn't load your projects.";
 
 const COUNT_SOURCES: readonly CountSource[] = [
-  { label: 'Notes', read: async (api, projectId) => (await api.listNotes(projectId, { limit: 1, offset: 0 })).total },
-  { label: 'Tables', read: async (api, projectId) => (await api.listDataStores(projectId)).total },
-  { label: 'Handoffs', read: async (api, projectId) => (await api.listHandoffs(projectId)).total },
+  { label: 'Notes', route: '/notes', read: async (api, projectId) => (await api.listNotes(projectId, { limit: 1, offset: 0 })).total },
+  { label: 'Tables', route: '/tables', read: async (api, projectId) => (await api.listDataStores(projectId)).total },
+  { label: 'Handoffs', route: '/notes', read: async (api, projectId) => (await api.listHandoffs(projectId)).total },
 ];
 
 const LOADING_COUNTS: readonly CountState[] = COUNT_SOURCES.map(() => ({ status: 'loading' }));
@@ -51,76 +54,89 @@ function rememberLastVisitedProjectId(projectId: string): void {
 @Component({
   selector: 'of-project-home',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [ErrorLineComponent, ProjectFormComponent, RouterLink, StateChipComponent],
+  imports: [ErrorLineComponent, PopoverComponent, ProjectFormComponent, RouterLink, StateChipComponent],
   template: `
     <div class="home" data-testid="project-home">
       @switch (view()) {
         @case ('loading') {
-          <p class="note" role="status">Loading projects…</p>
+          <div class="skeleton" role="status" aria-label="Loading projects">
+            <span class="skeleton-block skeleton-title"></span>
+            <div class="skeleton-tiles"><span class="skeleton-block skeleton-tile"></span><span class="skeleton-block skeleton-tile"></span><span class="skeleton-block skeleton-tile"></span></div>
+            <span class="skeleton-block skeleton-card"></span>
+          </div>
         }
         @case ('redirecting') {
           <p class="note" role="status">Opening your project…</p>
         }
         @case ('failed') {
-          <div class="note">
+          <div class="centred">
             <of-error-line role="alert">${PROJECTS_LOAD_FAILED}</of-error-line>
             <button type="button" class="of-btn of-btn--secondary" (click)="loadProjects()">Retry</button>
           </div>
         }
         @case ('empty') {
-          <h1>No projects yet</h1>
-          <p class="note">Create one to keep handoffs and notes together.</p>
-          @if (isCreatingProject()) {
-            <div class="card">
-              <of-project-form (saved)="openCreatedProject($event)" (cancelled)="isCreatingProject.set(false)" />
-            </div>
-          } @else {
-            <div><button type="button" class="of-btn of-btn--primary" (click)="isCreatingProject.set(true)">Create a project</button></div>
-          }
+          <div class="centred">
+            <h1>No projects yet</h1>
+            <p class="note">Create one to keep handoffs and notes together.</p>
+            @if (isCreatingProject()) {
+              <div class="card creation">
+                <of-project-form (saved)="openCreatedProject($event)" (cancelled)="isCreatingProject.set(false)" />
+              </div>
+            } @else {
+              <button type="button" class="of-btn of-btn--primary" (click)="isCreatingProject.set(true)">Create a project</button>
+            }
+          </div>
         }
         @case ('missing') {
-          <h1>Project not found</h1>
-          <of-error-line role="alert">This project no longer exists.</of-error-line>
-          @if (projects().length > 0) {
-            <a class="of-btn of-btn--secondary" routerLink="/project">Open another project</a>
-          }
+          <div class="centred">
+            <h1>Project not found</h1>
+            <of-error-line role="alert">This project no longer exists.</of-error-line>
+            @if (firstProject(); as first) {
+              <a class="of-btn of-btn--secondary" [routerLink]="['/project', first.id]">Open {{ first.name }}</a>
+            }
+          </div>
         }
         @case ('project') {
           @if (project(); as current) {
             <header class="header">
               <h1>{{ current.name }}</h1>
               @if (projects().length > 1) {
-                <select class="of-input switcher" aria-label="Project" (change)="switchTo($event)">
-                  @for (candidate of projects(); track candidate.id) {
-                    <option [value]="candidate.id" [selected]="candidate.id === current.id">{{ candidate.name }}</option>
-                  }
-                </select>
+                <of-popover #switcher triggerTestId="project-switcher" triggerLabel="Switch project" width="12rem">
+                  <span popoverTrigger class="switcher-current"><span class="switcher-prefix">Project</span> {{ current.name }}</span>
+                  <ng-template>
+                    <div role="listbox" aria-label="Projects" #listbox (keydown)="moveFocusWithinListbox($event, listbox)">
+                      @for (candidate of projects(); track candidate.id) {
+                        <button
+                          type="button"
+                          role="option"
+                          class="project-option"
+                          [attr.aria-selected]="candidate.id === current.id"
+                          [attr.tabindex]="candidate.id === current.id ? 0 : -1"
+                          [attr.data-initial-focus]="candidate.id === current.id ? '' : null"
+                          (click)="switchTo({ projectId: candidate.id, popover: switcher })"
+                        >
+                          <span class="check" aria-hidden="true">{{ candidate.id === current.id ? '✓' : '' }}</span>
+                          <span class="project-option-name">{{ candidate.name }}</span>
+                        </button>
+                      }
+                    </div>
+                  </ng-template>
+                </of-popover>
               }
             </header>
 
-            <nav class="actions" aria-label="Quick actions">
-              <a class="of-btn of-btn--primary" routerLink="/new" [queryParams]="{ projectId: current.id }">New session in this project</a>
-              <a class="of-btn of-btn--secondary" routerLink="/notes" [queryParams]="{ projectId: current.id }">Notes</a>
-              <a class="of-btn of-btn--secondary" routerLink="/tables" [queryParams]="{ projectId: current.id }">Tables</a>
-            </nav>
-
-            <section class="card" aria-labelledby="overview-title">
-              <h2 id="overview-title" class="card-title">Overview</h2>
-              <dl class="counts">
-                @for (source of countSources; track source.label; let index = $index) {
-                  <div class="count">
-                    <dt>{{ source.label }}</dt>
-                    <dd>
-                      @switch (counts()[index].status) {
-                        @case ('ready') { <span class="total">{{ readyTotalOf(index) }}</span> }
-                        @case ('failed') { <of-error-line>Couldn't load</of-error-line> }
-                        @default { <span class="pending">…</span> }
-                      }
-                    </dd>
-                  </div>
-                }
-              </dl>
-            </section>
+            <div class="tiles" role="group" aria-label="Counts">
+              @for (source of countSources; track source.label; let index = $index) {
+                <a class="tile" [routerLink]="source.route" [queryParams]="{ projectId: current.id }">
+                  <span class="tile-label">{{ source.label }}</span>
+                  @switch (counts()[index].status) {
+                    @case ('ready') { <span class="total">{{ readyTotalOf(index) }}</span> }
+                    @case ('failed') { <of-error-line>Couldn't load</of-error-line> }
+                    @default { <span class="pending">…</span> }
+                  }
+                </a>
+              }
+            </div>
 
             <section class="card" aria-labelledby="docs-folder-title">
               <div class="card-head">
@@ -137,31 +153,60 @@ function rememberLastVisitedProjectId(projectId: string): void {
               }
             </section>
 
-            <section class="card" aria-labelledby="managers-title">
-              <h2 id="managers-title" class="card-title">Managers</h2>
-              @if (managers().length === 0) {
-                <p class="note">No managers in this project yet</p>
-              } @else {
-                <ul class="rows">
-                  @for (manager of managers(); track manager.id) {
-                    <li><a class="row" [routerLink]="['/manager', manager.id]"><span class="name">{{ manager.emoji }} {{ visibleNameOf(manager) }}</span><of-state-chip [state]="manager.state" /></a></li>
-                  }
-                </ul>
-              }
-            </section>
+            <div class="lists">
+              <section class="card list" aria-labelledby="managers-title">
+                <div class="list-head">
+                  <h2 id="managers-title" class="card-title">Managers</h2>
+                  <span class="list-count" data-testid="list-count">{{ managers().length }}</span>
+                </div>
+                @if (managers().length === 0) {
+                  <p class="note">No managers in this project.</p>
+                } @else {
+                  <ul class="rows">
+                    @for (manager of managers(); track manager.id) {
+                      <li>
+                        <a class="row" [routerLink]="['/manager', manager.id]">
+                          <span class="emoji-tile" aria-hidden="true">{{ manager.emoji }}</span>
+                          <span class="name">{{ visibleNameOf(manager) }}</span>
+                          <of-state-chip [state]="manager.state" />
+                          <span class="meta">{{ manager.model }}</span>
+                        </a>
+                      </li>
+                    }
+                  </ul>
+                }
+              </section>
 
-            <section class="card" aria-labelledby="sessions-title">
-              <h2 id="sessions-title" class="card-title">Sessions</h2>
-              @if (workerSessions().length === 0) {
-                <p class="note">No sessions in this project yet</p>
-              } @else {
-                <ul class="rows">
-                  @for (session of workerSessions(); track session.id) {
-                    <li><a class="row" [routerLink]="['/session', session.id]"><span class="name">{{ session.emoji }} {{ visibleNameOf(session) }}</span><of-state-chip [state]="session.state" /></a></li>
-                  }
-                </ul>
-              }
-            </section>
+              <section class="card list" aria-labelledby="sessions-title">
+                <div class="list-head">
+                  <h2 id="sessions-title" class="card-title">Sessions</h2>
+                  <span class="list-count" data-testid="list-count">{{ workerSessions().length }}</span>
+                </div>
+                @if (workerSessions().length === 0) {
+                  <p class="note">No sessions in this project.</p>
+                } @else {
+                  <ul class="rows">
+                    @for (session of workerSessions(); track session.id) {
+                      <li>
+                        <a class="row" [routerLink]="['/session', session.id]">
+                          <span class="emoji-tile" aria-hidden="true">{{ session.emoji }}</span>
+                          <span class="name">{{ visibleNameOf(session) }}</span>
+                          <of-state-chip [state]="session.state" />
+                          <span class="meta">{{ session.model }}</span>
+                        </a>
+                      </li>
+                    }
+                  </ul>
+                }
+              </section>
+            </div>
+
+            <nav class="actions" aria-label="Quick actions">
+              <a class="of-btn of-btn--primary" routerLink="/new" [queryParams]="{ projectId: current.id }">New session</a>
+              <a class="of-btn of-btn--secondary" routerLink="/notes" [queryParams]="{ projectId: current.id }">Notes</a>
+              <a class="of-btn of-btn--secondary" routerLink="/tables" [queryParams]="{ projectId: current.id }">Tables</a>
+              <span class="actions-hint">New session preselects {{ current.name }} · Notes and Tables open filtered on it</span>
+            </nav>
           }
         }
       }
@@ -169,30 +214,55 @@ function rememberLastVisitedProjectId(projectId: string): void {
   `,
   styles: `
     :host { display: block; flex: 1; overflow: auto; }
-    .home { display: flex; flex-direction: column; gap: 1rem; max-width: 56rem; padding: 1.25rem 1.5rem; }
-    h1 { margin: 0; font-size: 1.125rem; font-weight: 600; }
+    .home { display: flex; flex-direction: column; gap: 1rem; max-width: 52rem; margin: 0 auto; padding: 1.5rem 1.5rem 3rem; font-size: .8125rem; }
+    h1 { margin: 0; font-size: 1.25rem; font-weight: 600; }
     .header { display: flex; align-items: center; gap: .75rem; flex-wrap: wrap; }
-    .switcher { width: auto; min-width: 10rem; }
-    .actions { display: flex; flex-wrap: wrap; gap: .5rem; }
+    .header h1 { flex: 1; min-width: 0; }
+    .switcher-current { font-family: var(--sans, inherit); font-size: .75rem; font-weight: 500; }
+    .switcher-prefix { color: var(--mut); font-weight: 400; }
+    .project-option { display: flex; align-items: center; gap: .5rem; width: 100%; height: 1.75rem; padding: 0 .5rem; border: 0; border-radius: .375rem; background: transparent; color: var(--fg); font: inherit; font-size: .75rem; text-align: left; cursor: pointer; }
+    .project-option[aria-selected='true'], .project-option:hover { background: var(--hover); }
+    .project-option:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+    .check { width: .75rem; }
+    .project-option-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .tiles { display: flex; flex-wrap: wrap; gap: .75rem; }
+    .tile { flex: 1 1 10rem; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: .375rem; padding: .75rem .875rem; border: 1px solid var(--line); border-radius: .625rem; background: var(--panel); color: var(--fg); text-decoration: none; }
+    .tile:hover { border-color: var(--line-2); }
+    .tile:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+    .tile-label { font-size: .6875rem; color: var(--mut); }
+    .total { font-family: var(--mono); font-size: 1.25rem; font-weight: 500; letter-spacing: -.02em; color: var(--fg); }
+    .pending { color: var(--mut); }
+    .lists { display: flex; flex-wrap: wrap; gap: 1rem; align-items: flex-start; }
+    .list { flex: 1 1 18rem; min-width: 0; }
+    .list-head { display: flex; align-items: center; gap: .5rem; padding: .625rem .875rem; border-bottom: 1px solid var(--line); }
+    .list-count { font-size: .6875rem; color: var(--mut); }
+    .actions { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+    .actions-hint { font-size: .6875rem; color: var(--mut); }
     .note { margin: 0; font-size: .75rem; color: var(--mut); display: flex; align-items: center; gap: .5rem; }
+    .centred { display: flex; flex-direction: column; align-items: center; gap: .5rem; padding: 2rem 0; text-align: center; }
+    .centred h1 { font-size: .8125rem; }
+    .creation { width: 100%; max-width: 28rem; padding: .875rem; text-align: left; }
     .card { border: 1px solid var(--line); border-radius: .625rem; background: var(--panel); }
     .card-head { display: flex; align-items: center; gap: .5rem; padding: .625rem .875rem; }
-    .card-title { margin: 0; flex: 1; font-size: .875rem; font-weight: 600; padding: .625rem .875rem 0; }
-    .card-head .card-title { padding: 0; }
-    .card > .note { padding: .5rem .875rem .75rem; }
-    .card-body { padding: .75rem .875rem; border-top: 1px solid var(--line); }
-    .path { min-width: 0; max-width: 22rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: .6875rem; color: var(--mut); }
-    .counts { display: flex; flex-wrap: wrap; gap: .5rem; margin: 0; padding: .625rem .875rem .875rem; }
-    .count { flex: 1 1 8rem; display: flex; flex-direction: column; gap: .25rem; padding: .5rem .625rem; border: 1px solid var(--line); border-radius: .5rem; background: var(--sunk); }
-    .count dt { font-size: .6875rem; color: var(--mut); }
-    .count dd { margin: 0; }
-    .total { font-family: var(--mono); font-size: 1.25rem; font-weight: 500; color: var(--fg); }
-    .pending { color: var(--mut); }
+    .card-title { margin: 0; flex: 1; font-size: .8125rem; font-weight: 600; }
+    .card-head .card-title { flex: none; }
+    .card > .note { padding: .75rem .875rem; }
+    .card-body { padding: .75rem .875rem; border-top: 1px solid var(--line); background: var(--sunk); }
+    .path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: .75rem; color: var(--mut); }
     .rows { list-style: none; margin: 0; padding: 0; }
-    .row { display: flex; align-items: center; justify-content: space-between; gap: .5rem; padding: .4375rem .875rem; border-top: 1px solid var(--line); color: var(--fg); text-decoration: none; font-size: .75rem; }
+    .rows li:not(:last-child) { border-bottom: 1px solid var(--line); }
+    .row { display: flex; align-items: center; gap: .625rem; padding: .5rem .875rem; color: var(--fg); text-decoration: none; font-size: .8125rem; }
     .row:hover { background: var(--hover); }
     .row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-    .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+    .emoji-tile { display: flex; flex: none; align-items: center; justify-content: center; width: 1.5rem; height: 1.5rem; border: 1px solid var(--line); border-radius: .375rem; background: var(--sunk); }
+    .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+    .meta { font-family: var(--mono); font-size: .6875rem; color: var(--mut); }
+    .skeleton { display: flex; flex-direction: column; gap: .75rem; }
+    .skeleton-block { display: block; border-radius: .625rem; background: var(--sunk); }
+    .skeleton-title { width: 12rem; height: 1.5rem; border-radius: .25rem; }
+    .skeleton-tiles { display: flex; gap: .75rem; }
+    .skeleton-tile { flex: 1; height: 4.5rem; }
+    .skeleton-card { height: 6rem; }
   `,
 })
 export class ProjectHomeComponent {
@@ -211,6 +281,8 @@ export class ProjectHomeComponent {
   protected readonly isEditingDocsFolder = signal(false);
   private readonly loadStatus = signal<'loading' | 'ready' | 'failed'>('loading');
 
+  protected readonly moveFocusWithinListbox = moveFocusWithinListbox;
+  protected readonly firstProject = computed(() => this.projects()[0]);
   protected readonly project = computed(() => this.projects().find((candidate) => candidate.id === this.requestedProjectId()));
   private readonly projectId = computed(() => this.project()?.id);
 
@@ -258,9 +330,9 @@ export class ProjectHomeComponent {
     return showInvisibleControlsAsEscapes(session.name);
   }
 
-  protected switchTo(event: Event): void {
-    const chosenProjectId = (event.target as HTMLSelectElement).value;
-    void this.router.navigate(['/project', chosenProjectId]);
+  protected switchTo({ projectId, popover }: { projectId: string; popover: PopoverComponent }): void {
+    popover.close();
+    void this.router.navigate(['/project', projectId]);
   }
 
   protected openCreatedProject(created: Project): void {

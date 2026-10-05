@@ -22,9 +22,9 @@ test('Project home shows the project, its docs folder and its sessions, and star
     await expect(page.getByRole('heading', { level: 1, name: projectName })).toBeVisible();
     await expect(page.getByRole('region', { name: 'Docs folder' })).toContainText(docsFolder);
     await expect(page.getByRole('region', { name: 'Sessions' }).getByRole('link', { name: new RegExp(sessionName) })).toBeVisible();
-    await expect(page.getByRole('region', { name: 'Overview' })).toContainText('Notes');
+    await expect(page.getByRole('group', { name: 'Counts' })).toContainText('Notes');
 
-    await page.getByRole('link', { name: 'New session in this project' }).click();
+    await page.getByRole('link', { name: 'New session', exact: true }).click();
 
     await expect(page).toHaveURL(new RegExp(`/new\\?projectId=${project.id}`));
     await expect(page.getByTestId('new-session-project').locator('option:checked')).toHaveText(projectName);
@@ -45,7 +45,8 @@ test('the Project home nav item opens a project page, and the switcher moves to 
   await expect(page).toHaveURL(/\/project\/[0-9a-f-]+$/);
   await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
 
-  await page.getByRole('combobox', { name: 'Project' }).selectOption({ label: otherName });
+  await page.getByRole('button', { name: 'Switch project' }).click();
+  await page.getByRole('option', { name: otherName }).click();
 
   await expect(page.getByRole('heading', { level: 1, name: otherName })).toBeVisible();
   await expect(page.getByRole('region', { name: 'Docs folder' })).toContainText('No docs folder');
