@@ -12,12 +12,12 @@ export const adminHeaders = { 'content-type': 'application/json', authorization:
 
 const CORS_HEADERS = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': '*' };
 
-/** The right panel starts open, the way a user who works with a session's details keeps it, unless `rightPanel` says otherwise. */
-export async function signInAsAdmin(page: Page, { theme, rightPanel = 'open' }: { theme?: 'light' | 'dark'; rightPanel?: 'open' | 'closed' } = {}): Promise<void> {
+/** The right panel of a selected session or manager starts open, the way a user who works with its details keeps it, unless `rightPanel` says otherwise; 'unchosen' leaves the choice to the app's default. */
+export async function signInAsAdmin(page: Page, { theme, rightPanel = 'open' }: { theme?: 'light' | 'dark'; rightPanel?: 'open' | 'closed' | 'unchosen' } = {}): Promise<void> {
   await page.addInitScript(([adminToken, apiUrl, chosenTheme, rightPanelChoice]) => {
     localStorage.setItem('openfleet.adminToken', adminToken);
     localStorage.setItem('openfleet.apiUrl', apiUrl);
-    localStorage.setItem('openfleet.rightPanel.open', String(rightPanelChoice === 'open'));
+    if (rightPanelChoice !== 'unchosen') localStorage.setItem('openfleet.rightPanel.open', String(rightPanelChoice === 'open'));
     if (chosenTheme) localStorage.setItem('openfleet.theme', chosenTheme);
   }, [token, api, theme ?? '', rightPanel] as const);
 }

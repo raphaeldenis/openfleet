@@ -38,7 +38,7 @@ describe('Right panel wired to the daemon', () => {
   let getSessionTodos: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
-    vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => undefined });
+    vi.stubGlobal('localStorage', { getItem: () => 'false', setItem: () => undefined });
     getSessionTodos = vi.fn((sessionId: string) => Promise.resolve(todosOf(sessionId, [`Todo of ${sessionId}`])));
     TestBed.configureTestingModule({
       providers: [

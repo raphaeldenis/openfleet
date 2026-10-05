@@ -7,7 +7,6 @@ import {
   afterNextRender,
   computed,
   inject,
-  signal,
   viewChild,
 } from '@angular/core';
 import { FleetEventsService } from '../core/fleet-events.service';
@@ -33,12 +32,12 @@ const PANEL_TABS: readonly PanelTab[] = [
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [SessionTabComponent, TodosTabComponent],
   template: `
-    @if (!state.open()) {
+    @if (hasSelection() && !state.open()) {
       <button type="button" class="edge-button rail" data-testid="right-panel-rail" #rail
               aria-controls="right-panel" aria-keyshortcuts="Alt+Meta+B" aria-label="Show the right panel"
               aria-expanded="false" [attr.title]="railTitle" (click)="state.toggle()">‹</button>
     }
-    @if (state.open()) {
+    @if (hasSelection() && state.open()) {
       <aside class="panel" id="right-panel" data-testid="right-panel" aria-label="Right panel" (keydown.escape)="collapse()">
         <header class="head">
           <div class="tabs" role="tablist" aria-label="Right panel" #tabList (keydown)="onTabKeydown($event)">
@@ -96,16 +95,16 @@ export class RightPanelComponent {
   protected readonly tabs = PANEL_TABS;
   protected readonly comingSoon = COMING_SOON;
   protected readonly watchedSessionId = inject(WatchedSession).id;
-  private readonly chosenKey = signal<string | undefined>(undefined);
-  /** Until the user picks a tab, a watched session opens on its Session tab and everything else on Todos. */
-  protected readonly activeKey = computed(() => this.chosenKey() ?? (this.watchedSessionId() ? 'session' : 'todos'));
+  /** The panel exists only while a session or manager is selected. */
+  protected readonly hasSelection = computed(() => this.watchedSessionId() !== undefined);
+  protected readonly activeKey = computed(() => this.state.chosenTabKey() ?? 'session');
   protected readonly watchedSessionClosed = computed(() => {
     const watchedId = this.watchedSessionId();
     return this.events.sessions().some((session) => session.id === watchedId && session.state === 'closed');
   });
 
   activate(tab: PanelTab): void {
-    if (tab.enabled) this.chosenKey.set(tab.key);
+    if (tab.enabled) this.state.chosenTabKey.set(tab.key);
   }
 
   collapse(): void {
@@ -133,7 +132,7 @@ export class RightPanelComponent {
   onShortcut(event: KeyboardEvent): void {
     // `key` is a symbol under Option on macOS, so the physical key is matched.
     const isOptionCommandB = event.altKey && event.metaKey && !event.ctrlKey && event.code === 'KeyB';
-    if (!isOptionCommandB || event.repeat) return;
+    if (!isOptionCommandB || event.repeat || !this.hasSelection()) return;
     const isBehindAModal = this.host.nativeElement.closest('[inert]') !== null;
     if (isBehindAModal) return;
     event.preventDefault();
