@@ -90,7 +90,8 @@ type LifecycleBanner = { kind: 'resuming' } | { kind: 'strip'; strip: LifecycleS
     }
   `,
   styles: `
-    .session-view { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+    :host { display: flex; flex: 1; min-width: 0; min-height: 0; }
+    .session-view { flex: 1; min-width: 0; display: flex; flex-direction: column; height: 100%; min-height: 0; }
     .terminal-area { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: .625rem; padding: .5rem; }
     .terminal-tab-bar { flex: none; display: flex; align-items: center; justify-content: flex-end; padding: .25rem .5rem; background: var(--term-bg); color: var(--term-fg); }
     .closed-card {
