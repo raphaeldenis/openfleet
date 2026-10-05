@@ -1,7 +1,7 @@
 import { accessSync, closeSync, constants, existsSync, lstatSync, openSync, readSync, realpathSync, statSync, type Stats } from 'node:fs';
 import { basename, dirname, isAbsolute, join, normalize, sep } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import { MANAGER_ROLE, MAX_MISSION_BYTES, OpenFleetError, type ReopenMode, type ErrorCode, type ErrorEnvelope, type PermissionMode, type Session, type SessionCloseReason, type SessionSpec } from '@openfleet/shared';
+import { MANAGER_ROLE, MAX_MISSION_BYTES, OpenFleetError, type HeldMessage, type ReopenMode, type ErrorCode, type ErrorEnvelope, type PermissionMode, type Session, type SessionCloseReason, type SessionSpec } from '@openfleet/shared';
 import { carryLoggedRef, rememberLoggedRef } from '../errors/loggedRef.js';
 import { EventBus } from '../events/eventBus.js';
 import { createWorktree } from '../git/worktrees.js';
@@ -153,8 +153,9 @@ export const MAX_PENDING_AGENT_MESSAGES_PER_SENDER = 20;
 // the next body is typed mid-turn (Claude Code buffers it in the composer). Upgrade path: confirm the turn
 // from the pty output instead of trusting the DB state.
 export const TURN_START_TIMEOUT_MS = 5000;
-// A draft the human left untouched this long is taken as abandoned and stops holding the queue. Ceiling: the abandoned
-// text still sits in the prompt, so the released message is pasted behind it; upgrade path is emptying the prompt first.
+// A draft the human left untouched this long is announced as abandoned (message.held). The queue keeps holding: typing into a
+// prompt that may still hold text would submit the human's draft together with the message. The human empties the prompt
+// (Enter, Ctrl-C) or discards / releases the held message through the API.
 export const DRAFT_IDLE_EXPIRY_MS = 10 * 60_000;
 // After the human's keys emptied the prompt (an Enter that submits, Ctrl-C, Ctrl-U), the queue waits this long before
 // it types, so a turn the Enter started is seen first. Same bound as a late turn-start hook.
@@ -610,12 +611,40 @@ export class SessionService {
     const isPresent = watch.draft.isPresent;
     const isJustEmptied = wasPresent && !isPresent;
     if (!isPresent && !isJustEmptied) return;
-    const waitMs = isPresent ? DRAFT_IDLE_EXPIRY_MS : DRAFT_CLEARED_SETTLE_MS;
-    watch.timer = setTimeout(() => {
-      watch.draft.clear();
-      this.guarded(sessionId, () => this.advance(sessionId));
-    }, waitMs);
+    const onTimer = isPresent ? () => this.announceAbandonedDraft(sessionId) : () => this.guarded(sessionId, () => this.advance(sessionId));
+    watch.timer = setTimeout(onTimer, isPresent ? DRAFT_IDLE_EXPIRY_MS : DRAFT_CLEARED_SETTLE_MS);
     watch.timer.unref();
+  }
+
+  // The messages stay queued behind the draft; the human learns they wait (never their body) and can discard or release them.
+  private announceAbandonedDraft(sessionId: string): void {
+    const heldMessages = this.heldMessagesOf(sessionId);
+    const now = this.now();
+    for (const message of heldMessages) {
+      this.deps.bus.emit({ type: 'message.held', sessionId, messageId: message.messageId, ageMs: now - Date.parse(message.createdAt), heldFor: message.heldFor });
+    }
+  }
+
+  heldMessagesOf(sessionId: string): HeldMessage[] {
+    if (!this.hasUnsentHumanDraft(sessionId)) return [];
+    return this.queue.listQueued(sessionId).map((message) => ({
+      messageId: message.id, fromSessionId: message.fromSessionId, body: message.body, createdAt: message.createdAt, heldFor: 'human_draft' as const,
+    }));
+  }
+
+  /** Drops a message held behind the human's draft. False when the message is not held for this session. */
+  discardHeldMessage(sessionId: string, messageId: string): boolean {
+    const isHeld = this.heldMessagesOf(sessionId).some((message) => message.messageId === messageId);
+    return isHeld && this.queue.discardQueued({ sessionId, messageId });
+  }
+
+  /** Stops treating the prompt as holding a draft, so the held messages are typed behind whatever text it still holds. False when the message is not held for this session. */
+  releaseHeldMessage(sessionId: string, messageId: string): boolean {
+    const isHeld = this.heldMessagesOf(sessionId).some((message) => message.messageId === messageId);
+    if (!isHeld) return false;
+    this.forgetHumanDraft(sessionId);
+    this.guarded(sessionId, () => this.advance(sessionId));
+    return true;
   }
 
   private humanDraftWatchOf(sessionId: string, handle: HarnessHandle): HumanDraftWatch {

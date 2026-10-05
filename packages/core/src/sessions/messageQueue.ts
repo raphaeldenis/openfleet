@@ -33,6 +33,16 @@ export class MessageQueue {
     if (!row) return undefined;
     return { id: row.id, sessionId: row.session_id, fromSessionId: row.from_session_id ?? undefined, body: row.body, status: row.status, createdAt: row.created_at };
   }
+  listQueued(sessionId: string): QueuedMessage[] {
+    const rows = this.db.prepare(`SELECT id, session_id, from_session_id, body, created_at FROM message_queue WHERE session_id = ? AND status = 'queued' ORDER BY created_at`).all(sessionId) as
+      { id: string; session_id: string; from_session_id: string | null; body: string; created_at: string }[];
+    return rows.map((row) => ({ id: row.id, sessionId: row.session_id, fromSessionId: row.from_session_id ?? undefined, body: row.body, status: 'queued', createdAt: row.created_at }));
+  }
+  // True when the message was still queued for the session and is now gone.
+  discardQueued(input: { sessionId: string; messageId: string }): boolean {
+    const result = this.db.prepare(`DELETE FROM message_queue WHERE id = ? AND session_id = ? AND status = 'queued'`).run(input.messageId, input.sessionId);
+    return Number(result.changes) > 0;
+  }
   markDelivered(id: string): void {
     this.db.prepare(`UPDATE message_queue SET status = 'delivered', delivered_at = ? WHERE id = ?`).run(new Date().toISOString(), id);
   }

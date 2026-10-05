@@ -34,6 +34,7 @@ export type ServerEvent =
   | { type: 'session.reopened'; sessionId: string }
   | { type: 'session.relaunching'; sessionId: string }
   | { type: 'message.queued'; sessionId: string; messageId: string }
+  | { type: 'message.held'; sessionId: string; messageId: string; ageMs: number; heldFor: 'human_draft' }
   | { type: 'message.delivered'; sessionId: string; messageId: string }
   | { type: 'approval.created'; approval: Approval }
   | { type: 'approval.resolved'; approval: Approval }
