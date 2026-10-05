@@ -60,8 +60,13 @@ async function openAt(url: string, { api = fakeApi(), sessions = [] as unknown[]
   return { api, harness, router: TestBed.inject(Router) };
 }
 
-const switcher = () => screen.getByRole<HTMLSelectElement>('combobox', { name: 'Project' });
-const countOf = (label: string) => within(screen.getByRole('region', { name: 'Overview' })).getByText(label).closest('div')!;
+const switcherButton = () => screen.getByRole('button', { name: 'Switch project' });
+const openSwitcher = () => userEvent.click(switcherButton());
+const chooseProject = async (name: string) => {
+  await openSwitcher();
+  await userEvent.click(screen.getByRole('option', { name }));
+};
+const countOf = (label: string) => within(screen.getByRole('group', { name: 'Counts' })).getByRole('link', { name: new RegExp(`^${label}`) });
 
 beforeEach(() => {
   const storage = new Map<string, string>();
@@ -77,7 +82,7 @@ describe('the project home page', () => {
 
       await openAt('/project', { api: fakeApi({ listProjects: never }) });
 
-      expect(screen.getByRole('status')).toHaveTextContent('Loading projects…');
+      expect(screen.getByRole('status', { name: 'Loading projects' })).toBeInTheDocument();
     });
 
     it('user is told the projects could not load and retries from the page', async () => {
@@ -160,23 +165,53 @@ describe('the project home page', () => {
       expect(await screen.findByRole('alert')).toHaveTextContent('This project no longer exists.');
     });
 
+    it('user opens the first project from the not found page', async () => {
+      await openAt('/project/ghost');
+
+      const link = await screen.findByRole('link', { name: 'Open Fleet' });
+
+      expect(link).toHaveAttribute('href', '/project/p-fleet');
+    });
+
     it('user sees no switcher when there is a single project', async () => {
       await openAt('/project/p-fleet', { api: fakeApi({ projects: [FLEET] }) });
       await screen.findByRole('heading', { level: 1, name: 'Fleet' });
 
-      expect(screen.queryByRole('combobox', { name: 'Project' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Switch project' })).toBeNull();
+    });
+
+    it('user sees the current project in the switcher and every project in its menu', async () => {
+      await openAt('/project/p-fleet');
+      await screen.findByRole('heading', { level: 1, name: 'Fleet' });
+
+      expect(switcherButton()).toHaveTextContent('Project');
+      expect(switcherButton()).toHaveTextContent('Fleet');
+      await openSwitcher();
+
+      expect(screen.getByRole('option', { name: 'Fleet' })).toHaveAttribute('aria-selected', 'true');
+      expect(screen.getByRole('option', { name: 'Armada' })).toHaveAttribute('aria-selected', 'false');
+    });
+
+    it('user closes the switcher menu with Escape and the focus returns to the switcher', async () => {
+      await openAt('/project/p-fleet');
+      await screen.findByRole('heading', { level: 1, name: 'Fleet' });
+      await openSwitcher();
+
+      await userEvent.keyboard('{Escape}');
+
+      expect(screen.queryByRole('option', { name: 'Armada' })).toBeNull();
+      expect(switcherButton()).toHaveFocus();
     });
 
     it('user switches project and sees the other project page', async () => {
       const { router } = await openAt('/project/p-fleet');
       await screen.findByRole('heading', { level: 1, name: 'Fleet' });
-      expect(switcher().value).toBe('p-fleet');
 
-      await userEvent.selectOptions(switcher(), 'Armada');
+      await chooseProject('Armada');
 
       await waitFor(() => expect(router.url).toBe('/project/p-armada'));
       expect(await screen.findByRole('heading', { level: 1, name: 'Armada' })).toBeInTheDocument();
-      expect(switcher().value).toBe('p-armada');
+      expect(switcherButton()).toHaveTextContent('Armada');
     });
 
     it('user sees the counts of the project switched to, not of the previous one', async () => {
@@ -184,7 +219,7 @@ describe('the project home page', () => {
       await openAt('/project/p-fleet', { api });
       await waitFor(() => expect(countOf('Notes')).toHaveTextContent('12'));
 
-      await userEvent.selectOptions(switcher(), 'Armada');
+      await chooseProject('Armada');
 
       await waitFor(() => expect(countOf('Notes')).toHaveTextContent('3'));
     });
@@ -236,7 +271,44 @@ describe('the project home page', () => {
     });
   });
 
+  describe('the layout', () => {
+    it('user sees the counts directly under the heading, with no Overview card', async () => {
+      await openAt('/project/p-fleet');
+      await screen.findByRole('heading', { level: 1, name: 'Fleet' });
+
+      expect(screen.queryByRole('region', { name: 'Overview' })).toBeNull();
+      expect(screen.queryByRole('heading', { name: 'Overview' })).toBeNull();
+    });
+
+    it('user reads the page in order: counts, docs folder, managers and sessions, then the quick actions', async () => {
+      await openAt('/project/p-fleet');
+      await screen.findByRole('heading', { level: 1, name: 'Fleet' });
+
+      const inPageOrder = [
+        countOf('Notes'),
+        screen.getByRole('region', { name: 'Docs folder' }),
+        screen.getByRole('region', { name: 'Managers' }),
+        screen.getByRole('region', { name: 'Sessions' }),
+        screen.getByRole('navigation', { name: 'Quick actions' }),
+      ];
+
+      inPageOrder.slice(1).forEach((element, index) => {
+        const isAfterPrevious = inPageOrder[index]!.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING;
+        expect(isAfterPrevious).toBeTruthy();
+      });
+    });
+  });
+
   describe('the counts', () => {
+    it('user opens the notes, the tables or the handoffs of the project from their count', async () => {
+      await openAt('/project/p-fleet');
+      await screen.findByRole('heading', { level: 1, name: 'Fleet' });
+
+      expect(countOf('Notes')).toHaveAttribute('href', '/notes?projectId=p-fleet');
+      expect(countOf('Tables')).toHaveAttribute('href', '/tables?projectId=p-fleet');
+      expect(countOf('Handoffs')).toHaveAttribute('href', '/notes?projectId=p-fleet');
+    });
+
     it('user sees how many notes, tables and handoffs the project has', async () => {
       await openAt('/project/p-fleet');
 
@@ -295,11 +367,23 @@ describe('the project home page', () => {
       expect(within(sessionsRegion).getByTestId('state-chip')).toHaveAttribute('data-state', 'generating');
     });
 
+    it('user sees how many managers and sessions the project has and the model of each', async () => {
+      await openAt('/project/p-fleet', { sessions: [manager({ model: 'opus' }), worker({ model: 'haiku' }), worker({ id: 's2', name: 'Boromir', model: 'sonnet' })] });
+
+      const managers = await screen.findByRole('region', { name: 'Managers' });
+      const sessionsRegion = screen.getByRole('region', { name: 'Sessions' });
+
+      expect(within(managers).getByTestId('list-count')).toHaveTextContent('1');
+      expect(within(sessionsRegion).getByTestId('list-count')).toHaveTextContent('2');
+      expect(within(managers).getByRole('link', { name: /Capitaine/ })).toHaveTextContent('opus');
+      expect(within(sessionsRegion).getByRole('link', { name: /Gimli/ })).toHaveTextContent('haiku');
+    });
+
     it('user is told there is no manager and no session yet', async () => {
       await openAt('/project/p-fleet');
 
-      expect(await within(await screen.findByRole('region', { name: 'Managers' })).findByText('No managers in this project yet')).toBeInTheDocument();
-      expect(within(screen.getByRole('region', { name: 'Sessions' })).getByText('No sessions in this project yet')).toBeInTheDocument();
+      expect(await within(await screen.findByRole('region', { name: 'Managers' })).findByText('No managers in this project.')).toBeInTheDocument();
+      expect(within(screen.getByRole('region', { name: 'Sessions' })).getByText('No sessions in this project.')).toBeInTheDocument();
     });
   });
 
@@ -308,7 +392,7 @@ describe('the project home page', () => {
       await openAt('/project/p-fleet');
       const actions = await screen.findByRole('navigation', { name: 'Quick actions' });
 
-      expect(within(actions).getByRole('link', { name: 'New session in this project' })).toHaveAttribute('href', '/new?projectId=p-fleet');
+      expect(within(actions).getByRole('link', { name: 'New session' })).toHaveAttribute('href', '/new?projectId=p-fleet');
       expect(within(actions).getByRole('link', { name: 'Notes' })).toHaveAttribute('href', '/notes?projectId=p-fleet');
       expect(within(actions).getByRole('link', { name: 'Tables' })).toHaveAttribute('href', '/tables?projectId=p-fleet');
     });
