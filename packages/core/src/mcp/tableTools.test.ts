@@ -3,6 +3,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import type { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { startServer } from '../api/server.js';
+import { SCAPE_TOOL_RENAMES } from '../import/scape/scapeToolNames.js';
 import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
 import { ApprovalService } from '../governance/approvalService.js';
@@ -679,6 +680,18 @@ describe('update_data_store_row', () => {
 
     expect(result.isError).toBe(true);
     expect(errorTextOf(result)).toMatch(/no project/i);
+  });
+});
+
+describe('Scape tool renames of the manager mission import', () => {
+  it('only point at tools the server registers', async () => {
+    const client = await connect(scopedToken);
+    const { tools } = await client.listTools();
+    const registeredToolNames = new Set(tools.map((tool) => tool.name));
+
+    const renamedToUnregisteredTool = Object.values(SCAPE_TOOL_RENAMES).filter((openFleetToolName) => !registeredToolNames.has(openFleetToolName));
+
+    expect(renamedToUnregisteredTool).toEqual([]);
   });
 });
 
