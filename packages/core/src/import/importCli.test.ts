@@ -2,7 +2,8 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { runImportCli } from './importCli.js';
-import { anArgus, writeArguses } from './scape/scapeArguses.testkit.js';
+import { claudeMemoryFolderOf } from './scape/claudeProjectDirectory.js';
+import { anArgus, LEAD_ARGUS_ID, writeArguses } from './scape/scapeArguses.testkit.js';
 import { buildScapeFixture, type ScapeFixture } from './scape/scapeFixture.testkit.js';
 
 describe('runImportCli', () => {
@@ -155,5 +156,45 @@ describe('runImportCli', () => {
 
     expect(result.exitCode).toBe(2);
     expect(result.output).toContain('INVALID_ARGUMENTS');
+  });
+
+  describe('the Claude memory of the managers', () => {
+    const writeAlphaMemoryIn = (claudeDirectory: string) => {
+      const memoryFolder = claudeMemoryFolderOf({ claudeDir: claudeDirectory, workingDirectory: join(fixture.scapeDir, 'argus', LEAD_ARGUS_ID) });
+      mkdirSync(memoryFolder, { recursive: true });
+      writeFileSync(join(memoryFolder, 'MEMORY.md'), 'synthetic memory');
+    };
+    const alphaMemoryFileIn = (claudeDirectory: string) => join(claudeMemoryFolderOf({ claudeDir: claudeDirectory, workingDirectory: join(home, 'managers', 'Alpha') }), 'MEMORY.md');
+
+    beforeEach(() => writeArguses(fixture, [anArgus({ name: 'Alpha' })]));
+
+    it('copies it within the .claude folder of the user home by default', () => {
+      const claudeDirectory = join(homeDirectory, '.claude');
+      writeAlphaMemoryIn(claudeDirectory);
+
+      runImportCli(argv(), { homeDirectory, env: {} });
+
+      expect(existsSync(alphaMemoryFileIn(claudeDirectory))).toBe(true);
+    });
+
+    it('reads the Scape side from --scape-claude-dir and writes into --claude-dir', () => {
+      const scapeSide = join(fixture.workDir, 'scape-side-claude');
+      const targetSide = join(fixture.workDir, 'target-claude');
+      writeAlphaMemoryIn(scapeSide);
+
+      runImportCli(argv('--claude-dir', targetSide, '--scape-claude-dir', scapeSide), { homeDirectory, env: {} });
+
+      expect(existsSync(alphaMemoryFileIn(targetSide))).toBe(true);
+    });
+
+    it('writes nothing under the Claude folder on --dry-run', () => {
+      const claudeDirectory = join(homeDirectory, '.claude');
+      writeAlphaMemoryIn(claudeDirectory);
+
+      const result = runImportCli(argv('--dry-run'), { homeDirectory, env: {} });
+
+      expect(existsSync(alphaMemoryFileIn(claudeDirectory))).toBe(false);
+      expect(result.output).toContain('| memories | 1 | 1 |');
+    });
   });
 });
