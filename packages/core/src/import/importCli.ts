@@ -18,6 +18,8 @@ const FLAGS = {
   'scape-dir': { type: 'string' },
   'report-dir': { type: 'string' },
   'state-dir': { type: 'string' },
+  'claude-dir': { type: 'string' },
+  'scape-claude-dir': { type: 'string' },
   'allow-reimport': { type: 'boolean' },
   help: { type: 'boolean' },
 } as const;
@@ -26,7 +28,7 @@ const REIMPORT_NOTE =
   'A re-import compares each record with what the last import wrote: a Scape change is applied to a record OpenFleet left alone; a record edited or deleted in OpenFleet is a conflict and is kept (a deleted one is never written again); a record removed in Scape is reported and kept. Run --dry-run first to see the outcome per entity.';
 
 const USAGE = [
-  'usage: import scape --home <OPENFLEET_HOME> [--dry-run] [--project <name>] [--scape-dir <dir>] [--report-dir <dir>] [--state-dir <dir>] [--allow-reimport]',
+  'usage: import scape --home <OPENFLEET_HOME> [--dry-run] [--project <name>] [--scape-dir <dir>] [--report-dir <dir>] [--state-dir <dir>] [--claude-dir <dir>] [--scape-claude-dir <dir>] [--allow-reimport]',
   '',
   '  --home            the OpenFleet home holding openfleet.db (defaults to $OPENFLEET_HOME)',
   '  --dry-run         prints what would be written; writes nothing',
@@ -34,6 +36,8 @@ const USAGE = [
   '  --scape-dir       the Scape home to read (default ~/.scape; only snapshots of it are opened)',
   '  --report-dir      where import-report.md goes (default: the home)',
   '  --state-dir       the folder of the Scape manager state files <manager name>.md that seed the working states (default ~/Documents/scape-team/state)',
+  '  --claude-dir      the Claude config folder that receives each manager\'s auto-memory, under projects/<manager folder>/memory (default ~/.claude)',
+  '  --scape-claude-dir  the Claude config folder that holds the Scape managers\' memory (default: --claude-dir)',
   '  --allow-reimport  runs a real import although the target already holds imported projects (a dry run never needs it)',
   '',
   REIMPORT_NOTE,
@@ -72,6 +76,8 @@ function importOptionsFrom({ values, positionals }: ParsedFlags, environment: Cl
     projectName: values.project,
     reportDir: values['report-dir'],
     ...stateFolderOptionsOf(values['state-dir'], environment.homeDirectory),
+    claudeDir: values['claude-dir'] ?? join(environment.homeDirectory, '.claude'),
+    scapeClaudeDir: values['scape-claude-dir'],
     refuseReimport: !allowsReimport,
   };
   return { options, allowsReimport };

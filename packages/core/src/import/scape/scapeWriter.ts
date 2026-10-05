@@ -4,6 +4,7 @@ import { countOutcome, type EntityName, type ImportReport } from './importReport
 import { ACTOR_LABEL_PREFIX, IMPORT_AUTHOR } from './scapeMappers.js';
 import type { ImportPlan, PlannedRecord } from './scapePlan.js';
 import { writeManagers } from './scapeManagersWriter.js';
+import { writeMemories, type MemoryWriteContext } from './scapeMemoriesWriter.js';
 import { writeWorkingStates } from './scapeWorkingStatesWriter.js';
 import { ImportLedger, type LedgerKind } from './scapeLedger.js';
 import { reportRemovedInScape } from './scapeRemovals.js';
@@ -162,6 +163,8 @@ function writeHistory(input: { db: DatabaseSync; ledger: ImportLedger; plan: Imp
 export interface WritePlanOptions {
   /** True when the plan covers every Scape project: only then does a record missing from the plan mean it was removed in Scape. */
   coversEveryProject: boolean;
+  /** Absent when the run does not cover the Claude memory. */
+  memories?: MemoryWriteContext;
 }
 
 /** The whole write phase, ledger included, is one transaction, each entity family a savepoint inside it: any failure undoes the run. */
@@ -176,6 +179,10 @@ export function writePlan(db: DatabaseSync, plan: ImportPlan, report: ImportRepo
     inTransaction(db, 'importScapeHistory', () => writeHistory({ db, ledger, plan, report, blockedStores, rowOutcomes }));
     const managerOutcomes = inTransaction(db, 'importScapeManagers', () => writeManagers(db, plan, report));
     inTransaction(db, 'importScapeWorkingStates', () => writeWorkingStates(db, plan, report, managerOutcomes));
+    if (options.memories !== undefined) {
+      const context = options.memories;
+      inTransaction(db, 'importScapeMemories', () => writeMemories({ db, plan, report, managerOutcomes, context }));
+    }
     if (options.coversEveryProject) reportRemovedInScape({ ledger, plan, report });
     beforeCommit(managerOutcomes);
   });

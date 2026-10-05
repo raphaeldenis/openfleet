@@ -58,6 +58,32 @@ separately from an empty table. The report also identifies display formats
 (`url`, `longText`, `rank`, `datetime`) and view settings such as kanban
 `columnOrder` that OpenFleet does not preserve; cell values remain imported.
 
+## Claude memory of the managers
+
+Each imported manager boots with the Claude auto-memory of its Scape Argus. The
+Claude CLI keeps that memory per working directory, in
+`<claude dir>/projects/<cwd with every non-alphanumeric character replaced by "-">/memory`.
+The importer reads the Scape side folder (the cwd is `<scape dir>/argus/<Argus id>`)
+and copies it to the folder of the new cwd, which is the session directory stored
+for the manager (`<home>/managers/<folder>`).
+
+- `--claude-dir` is the Claude config folder that receives the memory (default `~/.claude`).
+- `--scape-claude-dir` is the one that holds the Scape memory (default: `--claude-dir`). Give both for a rehearsal that reads the real `~/.claude` and writes a scratch folder.
+- Only the regular `*.md` files directly in `memory/` are copied (MEMORY.md and the topic files). Links, sub-folders and other files are not copied; a link is reported as not converted.
+- Size caps: 256 KiB per file and 2 MiB per manager (files taken in name order). A file over a cap is skipped whole, never truncated, and reported as not converted. A cwd whose Claude folder name exceeds 200 characters is not converted either: the Claude CLI hashes such names.
+- A file never overwrites a different one. Same content is already present; a different file the import did not write, a file edited in OpenFleet since the last import, or a file deleted there is a conflict and is left alone. A Scape change to a file OpenFleet left alone is applied (updated).
+- A second run writes nothing. `--dry-run` reads only and creates no folder. The Scape side is never written. A failed run removes the files and folders it created and restores the files it overwrote.
+- The report carries the entity `memories` (one count per file) and never prints a memory text.
+
+A home that already holds the imported managers takes the memories alone with
+`--allow-reimport`: every other family is already present and nothing else is written.
+
+Cutover command, after the dry runs:
+
+```sh
+pnpm --filter @openfleet/core import:scape --home "$HOME/.openfleet" --claude-dir "$HOME/.claude" --report-dir "$HOME/Documents/superpowers/openfleet" --allow-reimport
+```
+
 ## Lexical to Markdown policy
 
 Ordinary text keeps its authored Markdown characters, including `*`, `_`,
