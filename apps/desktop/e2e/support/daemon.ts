@@ -5,7 +5,8 @@ import { readE2eAdminToken } from '../../../../scripts/e2e/e2eHome';
  * Black-box helpers shared by the screen-family specs. They talk to the daemon the Playwright config boots with
  * OPENFLEET_E2E=1 (fake harness, `fake-output`, `fake-exit` and `fail-next-pulses` routes) on a per-run temp home.
  */
-export const api = 'http://127.0.0.1:7332';
+const DEFAULT_DAEMON_URL = 'http://127.0.0.1:7332';
+export const api = process.env['OPENFLEET_E2E_API'] ?? DEFAULT_DAEMON_URL;
 const token = readE2eAdminToken();
 export const adminHeaders = { 'content-type': 'application/json', authorization: `Bearer ${token}` };
 
