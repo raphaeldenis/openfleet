@@ -12,7 +12,6 @@ import { FleetEventsService, silentBlockKey } from '../core/fleet-events.service
 import { VersionsService } from '../core/versions.service';
 import { ErrorLineComponent } from '../design/error-line.component';
 import { KindBadgeComponent } from '../design/kind-badge.component';
-import { focusTabAt, nextTabIndex } from '../design/tablist-keyboard';
 import { AnsweredRepliesStore } from '../working-state/answered-replies.store';
 import { answeredItemsOf, attentionItemsOf, inboxCountLabelOf, itemsNeedingYouOf } from '../working-state/attention-items';
 import { contextNoticeCopyOf, contextNoticesOf } from '../working-state/context-notices';
@@ -20,32 +19,22 @@ import { AttentionCardComponent } from './attention-card.component';
 import { minutesWaiting, silentBlockCopyOf, silentBlockDetailsMessageOf } from './silent-block-copy';
 import { showBidiControlsAsEscapes, showInvisibleControlsAsEscapes } from '../core/bidi-escapes';
 
-type InboxTab = 'gates' | 'questions' | 'proposals';
-type FilterKey = 'all' | 'unread' | 'mine' | 'blocked' | 'recent';
+type FilterKey = 'all' | 'questions';
 
 interface FilterOption {
   readonly key: FilterKey;
   readonly label: string;
-  readonly disabled: boolean;
+  readonly showsGates: boolean;
+  readonly showsQuestions: boolean;
 }
 
 const DELIVERED_REPLY_SHOWN_MS = 2500;
-const NEEDS_BACKEND_SUPPORT = 'needs backend support';
 
-// Only "All" runs against real data (the backend has no read-tracking, assignee or blocking
-// flag on Approval yet) — the rest stay visible but inert rather than faking client-side heuristics.
+// Only the filters the backend data can serve are listed: it has no read-tracking, assignee or
+// blocking flag yet, so Unread, Mine, Blocked and Recent join this list when it does.
 const FILTERS: readonly FilterOption[] = [
-  { key: 'all', label: 'All', disabled: false },
-  { key: 'unread', label: 'Unread', disabled: true },
-  { key: 'mine', label: 'Mine', disabled: true },
-  { key: 'blocked', label: 'Blocked', disabled: true },
-  { key: 'recent', label: 'Recent', disabled: true },
-];
-
-const TABS: readonly { readonly key: InboxTab; readonly label: string }[] = [
-  { key: 'gates', label: 'Gates' },
-  { key: 'questions', label: 'Questions from agents' },
-  { key: 'proposals', label: 'Governance proposals' },
+  { key: 'all', label: 'All', showsGates: true, showsQuestions: true },
+  { key: 'questions', label: 'Questions', showsGates: false, showsQuestions: true },
 ];
 
 interface FormattedInput {
@@ -79,20 +68,17 @@ function formatInput(toolInput: unknown): FormattedInput {
     <section class="inbox" data-testid="inbox">
       <header class="title-row" data-testid="inbox-title-row">
         <h1 class="title" tabindex="-1" data-testid="inbox-title">Inbox @if (pendingCount(); as pending) {<span class="count" data-testid="inbox-count" role="img" [attr.aria-label]="pending.ariaLabel">{{ pending.text }}</span>}</h1>
-        @if (tab() === 'gates') {
-          <div class="filters" data-testid="inbox-filters">
-            @for (filter of filters; track filter.key) {
-              <button
-                type="button"
-                class="filter-chip"
-                [class.active]="filter.key === 'all'"
-                [disabled]="filter.disabled"
-                [title]="filter.disabled ? needsBackendSupport : null"
-                [attr.data-testid]="'inbox-filter-' + filter.key"
-              >{{ filter.label }}</button>
-            }
-          </div>
-        }
+        <div class="filters" data-testid="inbox-filters">
+          @for (filter of filters; track filter.key) {
+            <button
+              type="button"
+              class="filter-chip"
+              [attr.aria-pressed]="filter.key === activeFilterKey()"
+              [attr.data-testid]="'inbox-filter-' + filter.key"
+              (click)="activeFilterKey.set(filter.key)"
+            >{{ filter.label }} <span class="filter-count">{{ filterCounts()[filter.key] }}</span></button>
+          }
+        </div>
       </header>
       @for (failure of unseenReplyFailures(); track failure.sessionId) {
         <div class="reply-failure" role="alert" data-testid="inbox-reply-failure">
@@ -136,27 +122,8 @@ function formatInput(toolInput: unknown): FormattedInput {
           }
         </ul>
       }
-      <nav class="tabs" role="tablist" aria-label="Inbox sections" (keydown)="onTabKeydown($event)">
-        @for (entry of tabs; track entry.key) {
-          <button
-            type="button"
-            role="tab"
-            class="tab"
-            [class.active]="tab() === entry.key"
-            [id]="'inbox-tab-' + entry.key"
-            [attr.aria-selected]="tab() === entry.key"
-            [attr.aria-controls]="tabPanelId"
-            [attr.tabindex]="tab() === entry.key ? 0 : -1"
-            [attr.data-testid]="'inbox-tab-' + entry.key"
-            (click)="tab.set(entry.key)"
-          >{{ entry.label }}@if (entry.key === 'questions' && attentionItemsNeedingYou().length > 0) { <span class="tab-count" data-testid="inbox-tab-count-questions">{{ attentionItemsNeedingYou().length }}</span>}</button>
-        }
-      </nav>
-
-      <div class="tabpanel" role="tabpanel" [id]="tabPanelId" [attr.aria-labelledby]="'inbox-tab-' + tab()">
-      @switch (tab()) {
-        @case ('gates') {
-          <div class="gate-list" data-testid="inbox-gate-list">
+      <div class="gate-list" data-testid="inbox-list">
+          @if (activeFilter().showsGates) {
             @for (item of items(); track item.id) {
               <article class="gate-card" data-testid="inbox-gate-card">
                 <span class="avatar" data-testid="inbox-gate-avatar">{{ item.sessionEmoji }}</span>
@@ -177,29 +144,22 @@ function formatInput(toolInput: unknown): FormattedInput {
                   }
                 </div>
               </article>
-            } @empty {
-              @if (issues().length === 0 && contextNotices().length === 0) {
-                <div class="empty" data-testid="inbox-empty">
-                  <span class="empty-title">Nothing needs you</span>
-                  <span>Gates, questions, budget incidents and manager proposals show up here.</span>
-                </div>
-              }
             }
-          </div>
-        }
-        @case ('questions') {
-          <div class="gate-list" data-testid="inbox-attention-list">
+          }
+          @if (activeFilter().showsQuestions) {
             @for (item of attentionCards(); track item.session.id) {
               <of-attention-card [item]="item" [isReplyDelivered]="item.isAnswered" />
-            } @empty {
-              <div class="empty" data-testid="inbox-questions-empty">
-                <span class="empty-title">No agent is waiting on you</span>
-                <span>A session that asks a question or reports a blocker in its state shows up here.</span>
-              </div>
             }
-            @if (answeredEntries().length > 0) {
+          }
+          @if (isListEmpty()) {
+            <div class="empty" data-testid="inbox-empty">
+              <span class="empty-title">Nothing needs you</span>
+              <span>Questions, gates and proposals show up here.</span>
+            </div>
+          }
+          @if (answeredEntries().length > 0) {
               <section class="answered">
-                <button type="button" class="answered-toggle" data-testid="inbox-answered-toggle" [attr.aria-expanded]="isAnsweredSectionOpen()" (click)="isAnsweredSectionOpen.set(!isAnsweredSectionOpen())">Answered ({{ answeredEntries().length }})</button>
+                <button type="button" class="answered-toggle" data-testid="inbox-answered-toggle" [attr.aria-expanded]="isAnsweredSectionOpen()" (click)="isAnsweredSectionOpen.set(!isAnsweredSectionOpen())"><span class="answered-caret" aria-hidden="true">{{ isAnsweredSectionOpen() ? '▾' : '▸' }}</span>Answered ({{ answeredEntries().length }})<span class="answered-hint">comes back here if the agent asks again</span></button>
                 @if (isAnsweredSectionOpen()) {
                   <ul class="answered-list">
                     @for (entry of answeredEntries(); track entry.sessionId) {
@@ -223,13 +183,7 @@ function formatInput(toolInput: unknown): FormattedInput {
                   </ul>
                 }
               </section>
-            }
-          </div>
-        }
-        @case ('proposals') {
-          <p class="coming" data-testid="inbox-proposals-coming">Governance proposals are coming with phase 4 tables/governance.</p>
-        }
-      }
+          }
       </div>
     </section>
   `,
@@ -246,24 +200,21 @@ function formatInput(toolInput: unknown): FormattedInput {
     .issue { display: flex; flex-direction: column; gap: .375rem; min-width: 0; padding: .625rem .875rem; border: 1px solid var(--line); border-radius: .625rem; background: var(--panel); }
     .issue-copy { margin: 0; overflow-wrap: anywhere; }
     .issue-dismiss { flex: none; }
-    .tabs { display: flex; gap: .25rem; border-bottom: 1px solid var(--line); }
-    .tab { height: 1.875rem; padding: 0 .75rem; border: 0; border-bottom: 1px solid transparent; background: transparent; color: var(--mut); cursor: pointer; font: inherit; }
-    .tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-    .tab.active { color: var(--fg); border-bottom-color: var(--accent); }
-    .tab-count { display: inline-flex; min-width: 1rem; height: 1rem; padding: 0 .25rem; margin-left: .25rem; border-radius: .5rem; background: var(--sunk); color: var(--fg); font-size: .6875rem; font-weight: 600; align-items: center; justify-content: center; }
-    .answered { display: flex; flex-direction: column; gap: .5rem; padding-top: .5rem; }
-    .answered-toggle { align-self: flex-start; padding: 0; border: 0; background: transparent; color: var(--mut); cursor: pointer; font: inherit; }
-    .answered-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-    .answered-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .5rem; }
-    .answered-entry { display: flex; flex-direction: column; gap: .25rem; min-width: 0; padding: .5rem .875rem; border: 1px solid var(--line); border-radius: .625rem; background: var(--panel); opacity: .7; }
+    .answered { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: .625rem; background: var(--panel); overflow: hidden; }
+    .answered-toggle { display: flex; align-items: center; gap: .5rem; height: 2.25rem; padding: 0 .875rem; border: 0; background: transparent; color: var(--fg); cursor: pointer; font: inherit; font-weight: 600; text-align: left; }
+    .answered-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+    .answered-caret { width: .75rem; color: var(--mut); }
+    .answered-hint { margin-left: auto; font-size: .6875rem; font-weight: 400; color: var(--mut); }
+    .answered-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+    .answered-entry { display: flex; flex-direction: column; gap: .25rem; min-width: 0; padding: .625rem .875rem; border-top: 1px solid var(--line); }
     .answered-status { font-size: .6875rem; color: var(--mut); }
     .answered-lines { margin: 0; padding: 0 0 0 1rem; overflow-wrap: anywhere; }
     .answered-reply { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
-    .tabpanel { display: flex; flex-direction: column; gap: .75rem; }
     .filters { display: flex; flex-wrap: wrap; gap: .375rem; }
-    .filter-chip { height: 1.625rem; padding: 0 .625rem; border: 1px solid var(--line); border-radius: 1rem; background: var(--panel); color: var(--fg); font-size: .75rem; cursor: pointer; }
-    .filter-chip.active { background: var(--active); }
-    .filter-chip:disabled { color: var(--mut); cursor: not-allowed; }
+    .filter-chip { display: flex; align-items: center; gap: .375rem; height: 1.625rem; padding: 0 .625rem; border: 1px solid var(--line); border-radius: 1rem; background: var(--panel); color: var(--fg); font-size: .75rem; cursor: pointer; white-space: nowrap; }
+    .filter-chip[aria-pressed='true'] { background: var(--active); }
+    .filter-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .filter-count { color: var(--mut); }
     .gate-list { display: flex; flex-direction: column; gap: .5rem; min-width: 0; }
     .gate-card { display: flex; gap: .75rem; min-width: 0; padding: .875rem 1rem; border: 1px solid var(--line); border-radius: .625rem; background: var(--panel); }
     .avatar { display: flex; align-items: center; justify-content: center; flex: none; width: 2rem; height: 2rem; border-radius: .5rem; border: 1px solid var(--line); background: var(--sunk); }
@@ -279,7 +230,6 @@ function formatInput(toolInput: unknown): FormattedInput {
     .actions { display: flex; gap: .5rem; }
     .empty { display: flex; flex-direction: column; align-items: center; gap: .375rem; padding: 4rem 1rem; color: var(--mut); }
     .empty-title { color: var(--fg); font-weight: 500; }
-    .coming { color: var(--mut); padding: 1rem 0; }
   `,
 })
 export class InboxComponent {
@@ -291,10 +241,8 @@ export class InboxComponent {
   private readonly injector = inject(Injector);
   private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
   protected readonly filters = FILTERS;
-  protected readonly needsBackendSupport = NEEDS_BACKEND_SUPPORT;
-  protected readonly tabs = TABS;
-  protected readonly tabPanelId = 'inbox-tabpanel';
-  protected readonly tab = signal<InboxTab>('gates');
+  protected readonly activeFilterKey = signal<FilterKey>('all');
+  protected readonly activeFilter = computed(() => FILTERS.find((filter) => filter.key === this.activeFilterKey()) ?? FILTERS[0]);
   private readonly now = signal(Date.now());
   private readonly pendingIds = signal<ReadonlySet<string>>(new Set());
   private readonly errorsById = signal<Readonly<Record<string, string>>>({});
@@ -400,10 +348,10 @@ export class InboxComponent {
     });
   }
 
-  /** Failed replies whose card is not on screen: the session closed, left the list, or another tab is open. */
+  /** Failed replies whose card is not on screen: the session closed or left the list. */
   protected readonly unseenReplyFailures = computed(() => {
     const sessionsById = this.sessionsById();
-    const cardSessionIds = new Set(this.tab() === 'questions' ? this.attentionItemsNeedingYou().map((item) => item.session.id) : []);
+    const cardSessionIds = new Set(this.attentionItemsNeedingYou().map((item) => item.session.id));
     return this.replies
       .failedSessionIds()
       .filter((sessionId) => !cardSessionIds.has(sessionId))
@@ -469,8 +417,8 @@ export class InboxComponent {
   private focusNextAfterDismiss(): void {
     const host: HTMLElement = this.host.nativeElement;
     const nextDismiss = host.querySelector<HTMLElement>('[data-testid="inbox-reply-failure-dismiss"]');
-    const selectedTab = host.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
-    (nextDismiss ?? selectedTab)?.focus();
+    const pressedFilter = host.querySelector<HTMLElement>('[aria-pressed="true"]');
+    (nextDismiss ?? pressedFilter)?.focus();
   }
 
   protected readonly pendingCount = computed(() => {
@@ -487,14 +435,18 @@ export class InboxComponent {
     })),
   );
 
-  protected onTabKeydown(event: KeyboardEvent): void {
-    const currentIndex = TABS.findIndex((entry) => entry.key === this.tab());
-    const targetIndex = nextTabIndex(event, { currentIndex, tabCount: TABS.length, orientation: 'horizontal' });
-    if (targetIndex === undefined) return;
-    event.preventDefault();
-    this.tab.set(TABS[targetIndex].key);
-    focusTabAt(event.currentTarget as HTMLElement, targetIndex);
-  }
+  protected readonly filterCounts = computed((): Readonly<Record<FilterKey, number>> => {
+    const gateCount = this.items().length;
+    const questionCount = this.attentionItemsNeedingYou().length;
+    return { all: gateCount + questionCount, questions: questionCount };
+  });
+
+  protected readonly isListEmpty = computed(() => {
+    const { showsGates, showsQuestions } = this.activeFilter();
+    const shownCardCount = (showsGates ? this.items().length : 0) + (showsQuestions ? this.attentionCards().length : 0);
+    const hasNoIssueOrNotice = this.issues().length === 0 && this.contextNotices().length === 0;
+    return shownCardCount === 0 && hasNoIssueOrNotice;
+  });
 
   async decide(id: string, behavior: 'allow' | 'deny'): Promise<void> {
     if (this.pendingIds().has(id)) return;

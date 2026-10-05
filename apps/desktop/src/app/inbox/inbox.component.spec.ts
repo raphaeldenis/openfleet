@@ -168,7 +168,7 @@ describe('InboxComponent', () => {
       await renderWithUnbrokenToken();
 
       // Assert — mutation caught: removing `min-width:0` on `.gate-list` or `.gate-card`
-      expect(getComputedStyle(screen.getByTestId('inbox-gate-list')).minWidth).toBe('0px');
+      expect(getComputedStyle(screen.getByTestId('inbox-list')).minWidth).toBe('0px');
       expect(getComputedStyle(screen.getByTestId('inbox-gate-card')).minWidth).toBe('0px');
     });
 
@@ -221,42 +221,27 @@ describe('InboxComponent', () => {
     expect(within(titleRow).getByTestId('inbox-filters')).toBeTruthy();
   });
 
-  it('shows the All filter enabled, and Unread/Mine/Blocked/Recent disabled with a "needs backend support" tooltip', async () => {
+  it('shows the gate under All with its count, and hides it under Questions', async () => {
+    // Arrange
+    await render(InboxComponent, { providers: [{ provide: FleetApiService, useValue: { decide: vi.fn() } }, { provide: FleetEventsService, useValue: fakeEvents() }] });
+    expect(screen.getByTestId('inbox-filter-all')).toHaveTextContent('1');
+    expect(screen.getByTestId('inbox-gate-card')).toBeTruthy();
+
+    // Act
+    await userEvent.click(screen.getByTestId('inbox-filter-questions'));
+
+    // Assert
+    expect(screen.queryByTestId('inbox-gate-card')).toBeNull();
+    expect(screen.getByTestId('inbox-empty')).toHaveTextContent('Questions, gates and proposals show up here.');
+  });
+
+  it('shows the empty state with the mockup copy when nothing needs the human', async () => {
     // Arrange & Act
-    await render(InboxComponent, { providers: [{ provide: FleetApiService, useValue: { decide: vi.fn() } }, { provide: FleetEventsService, useValue: fakeEvents() }] });
+    await render(InboxComponent, { providers: [{ provide: FleetApiService, useValue: { decide: vi.fn() } }, { provide: FleetEventsService, useValue: { ...fakeEvents(), approvals: signal([]) } }] });
 
     // Assert
-    expect((screen.getByTestId('inbox-filter-all') as HTMLButtonElement).disabled).toBe(false);
-    for (const key of ['unread', 'mine', 'blocked', 'recent']) {
-      const button = screen.getByTestId(`inbox-filter-${key}`) as HTMLButtonElement;
-      expect(button.disabled).toBe(true);
-      expect(button.title).toMatch(/needs backend support/i);
-    }
-  });
-
-  it('switching to the Questions tab shows an empty state when no agent asks or is blocked, and renders zero fake items', async () => {
-    // Arrange
-    await render(InboxComponent, { providers: [{ provide: FleetApiService, useValue: { decide: vi.fn() } }, { provide: FleetEventsService, useValue: fakeEvents() }] });
-
-    // Act
-    await userEvent.click(screen.getByTestId('inbox-tab-questions'));
-
-    // Assert
-    expect(screen.getByTestId('inbox-questions-empty')).toBeTruthy();
-    expect(screen.queryByTestId('inbox-attention-card')).toBeNull();
-    expect(screen.queryByTestId('inbox-gate-card')).toBeNull();
-  });
-
-  it('switching to the Proposals tab shows the "coming" notice and renders zero fake items', async () => {
-    // Arrange
-    await render(InboxComponent, { providers: [{ provide: FleetApiService, useValue: { decide: vi.fn() } }, { provide: FleetEventsService, useValue: fakeEvents() }] });
-
-    // Act
-    await userEvent.click(screen.getByTestId('inbox-tab-proposals'));
-
-    // Assert
-    expect(screen.getByTestId('inbox-proposals-coming')).toBeTruthy();
-    expect(screen.queryByTestId('inbox-gate-card')).toBeNull();
+    expect(screen.getByTestId('inbox-empty')).toHaveTextContent('Nothing needs you');
+    expect(screen.getByTestId('inbox-empty')).toHaveTextContent('Questions, gates and proposals show up here.');
   });
 
   describe('background failures', () => {
@@ -460,7 +445,7 @@ describe('InboxComponent', () => {
 
     // Assert
     expect(empty).toHaveTextContent('Nothing needs you');
-    expect(empty).toHaveTextContent('Gates, questions, budget incidents and manager proposals show up here.');
+    expect(empty).toHaveTextContent('Questions, gates and proposals show up here.');
     expect(screen.queryByTestId('inbox-count')).toBeNull();
     expect(screen.queryByTestId('inbox-gate-card')).toBeNull();
   });
@@ -590,64 +575,15 @@ describe('InboxComponent', () => {
     }
   });
 
-  it('exposes the tab buttons with the ARIA tab role and aria-selected so assistive tech can navigate them', async () => {
+  it('exposes the filter pills as toggle buttons whose pressed state follows the chosen filter', async () => {
     // Arrange & Act
     await render(InboxComponent, { providers: [{ provide: FleetApiService, useValue: { decide: vi.fn() } }, { provide: FleetEventsService, useValue: fakeEvents() }] });
-    const gatesTab = screen.getByTestId('inbox-tab-gates');
-    const questionsTab = screen.getByTestId('inbox-tab-questions');
+    const allPill = screen.getByTestId('inbox-filter-all');
+    const questionsPill = screen.getByTestId('inbox-filter-questions');
 
     // Assert
-    expect(gatesTab.getAttribute('role')).toBe('tab');
-    expect(gatesTab.getAttribute('aria-selected')).toBe('true');
-    expect(questionsTab.getAttribute('aria-selected')).toBe('false');
-  });
-
-  it('links each tab to a labelled tabpanel and keeps only the selected tab in the tab order', async () => {
-    // Arrange & Act
-    await render(InboxComponent, { providers: [{ provide: FleetApiService, useValue: { decide: vi.fn() } }, { provide: FleetEventsService, useValue: fakeEvents() }] });
-    const gatesTab = screen.getByTestId('inbox-tab-gates');
-    const panel = screen.getByRole('tabpanel');
-
-    // Assert
-    expect(gatesTab.getAttribute('aria-controls')).toBe(panel.id);
-    expect(panel.getAttribute('aria-labelledby')).toBe(gatesTab.id);
-    expect(gatesTab.getAttribute('tabindex')).toBe('0');
-    expect(screen.getByTestId('inbox-tab-questions').getAttribute('tabindex')).toBe('-1');
-  });
-
-  it('moves selection and focus between tabs with the arrow keys, wrapping around', async () => {
-    // Arrange
-    await render(InboxComponent, { providers: [{ provide: FleetApiService, useValue: { decide: vi.fn() } }, { provide: FleetEventsService, useValue: fakeEvents() }] });
-    const gatesTab = screen.getByTestId('inbox-tab-gates');
-    gatesTab.focus();
-
-    // Act & Assert
-    await userEvent.keyboard('{ArrowRight}');
-    expect(screen.getByTestId('inbox-tab-questions').getAttribute('aria-selected')).toBe('true');
-    expect(document.activeElement).toBe(screen.getByTestId('inbox-tab-questions'));
-    expect(screen.getByTestId('inbox-questions-empty')).toBeTruthy();
-
-    await userEvent.keyboard('{ArrowLeft}');
-    expect(gatesTab.getAttribute('aria-selected')).toBe('true');
-    expect(document.activeElement).toBe(gatesTab);
-
-    await userEvent.keyboard('{ArrowLeft}');
-    expect(screen.getByTestId('inbox-tab-proposals').getAttribute('aria-selected')).toBe('true');
-    expect(document.activeElement).toBe(screen.getByTestId('inbox-tab-proposals'));
-  });
-
-  it('leaves a modified arrow key to the browser: not swallowed, no tab change', async () => {
-    // Arrange
-    await render(InboxComponent, { providers: [{ provide: FleetApiService, useValue: { decide: vi.fn() } }, { provide: FleetEventsService, useValue: fakeEvents() }] });
-    const gatesTab = screen.getByTestId('inbox-tab-gates');
-    const modifiedArrow = new KeyboardEvent('keydown', { key: 'ArrowRight', altKey: true, bubbles: true, cancelable: true });
-
-    // Act
-    gatesTab.dispatchEvent(modifiedArrow);
-
-    // Assert
-    expect(modifiedArrow.defaultPrevented).toBe(false);
-    expect(gatesTab.getAttribute('aria-selected')).toBe('true');
+    expect(allPill.getAttribute('aria-pressed')).toBe('true');
+    expect(questionsPill.getAttribute('aria-pressed')).toBe('false');
   });
 
   describe('bidi control characters', () => {

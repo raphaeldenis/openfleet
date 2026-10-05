@@ -10,9 +10,9 @@ import { REPLY_DELIVERED_COPY } from './reply-delivered-copy';
 
 interface PendingMessage { id: string; body: string; deliveredImmediately: boolean }
 
-const IDLE_PLACEHOLDER = 'Message this session · Enter sends, Shift+Enter for a new line';
+const DEFAULT_PLACEHOLDER = 'Your answer goes to the session as a message · Enter sends, Shift+Enter for a new line';
 const WORKING_ON_REPLY_PLACEHOLDER = REPLY_DELIVERED_COPY;
-const BUSY_PLACEHOLDER = 'This session is busy — your message is delivered on the next idle turn';
+const BUSY_NOTE = 'This session is mid-turn — your message is delivered next turn.';
 
 @Component({
   selector: 'of-composer',
@@ -33,6 +33,9 @@ const BUSY_PLACEHOLDER = 'This session is busy — your message is delivered on 
           [placeholder]="placeholder()"
         ></textarea>
         <button type="button" class="of-btn of-btn--primary" data-testid="composer-send" [attr.aria-disabled]="isSending() ? 'true' : null" [attr.aria-busy]="isSending()" (click)="send()">{{ sendLabel() }}</button>
+        @if (busy()) {
+          <span class="status" data-testid="composer-busy-note">{{ busyNote }}</span>
+        }
         @if (status(); as status) {
           <span class="status" data-testid="composer-status">{{ status }}</span>
         }
@@ -62,11 +65,12 @@ export class ComposerComponent {
   protected readonly isSending = computed(() => this.replies.isSending(this.sessionId()));
   protected readonly sendLabel = computed(() => {
     if (this.isSending()) return 'Sending…';
-    return this.busy() ? 'Queue' : 'Send';
+    return this.busy() ? 'Queue' : 'Send answer';
   });
+  protected readonly busyNote = BUSY_NOTE;
   protected readonly placeholder = computed(() => {
-    if (!this.busy()) return IDLE_PLACEHOLDER;
-    return this.status() === 'sent' ? WORKING_ON_REPLY_PLACEHOLDER : BUSY_PLACEHOLDER;
+    const isWorkingOnDeliveredReply = this.busy() && this.status() === 'sent';
+    return isWorkingOnDeliveredReply ? WORKING_ON_REPLY_PLACEHOLDER : DEFAULT_PLACEHOLDER;
   });
 
   constructor() {
