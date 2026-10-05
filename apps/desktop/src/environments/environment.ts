@@ -27,6 +27,26 @@ function normalizeStoredApiUrl(rawApiUrl: string): string | null {
   return `${url.origin}${pathWithoutTrailingSlash}`;
 }
 
+function parseLoopbackDaemonOrigin(rawDaemonUrl: string): string | null {
+  const url = parseUrl(rawDaemonUrl);
+  if (!url) return null;
+  const isPlainHttp = url.protocol === 'http:';
+  const isLoopbackDaemon = LOOPBACK_HOSTNAMES.has(url.hostname);
+  const hasExplicitPort = url.port !== '';
+  const isBareOrigin = url.origin === rawDaemonUrl;
+  const isAcceptable = isPlainHttp && isLoopbackDaemon && hasExplicitPort && isBareOrigin;
+  return isAcceptable ? url.origin : null;
+}
+
+/** Stores the daemon named by `?daemon=<loopback http origin>` as the daemon the app talks to; anything else in that parameter is ignored. */
+export function adoptDaemonUrlFromQuery(search: string): void {
+  const requestedDaemonUrl = new URLSearchParams(search).get('daemon');
+  if (requestedDaemonUrl === null) return;
+  const daemonOrigin = parseLoopbackDaemonOrigin(requestedDaemonUrl);
+  if (!daemonOrigin) return;
+  globalThis.localStorage?.setItem('openfleet.apiUrl', daemonOrigin);
+}
+
 export const environment = {
   get apiUrl(): string {
     const storedApiUrl = globalThis.localStorage?.getItem('openfleet.apiUrl');

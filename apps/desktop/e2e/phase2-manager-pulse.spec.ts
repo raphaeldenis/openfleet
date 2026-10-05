@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { readE2eAdminToken } from '../../../scripts/e2e/e2eHome';
 
-const api = 'http://127.0.0.1:7332';
+import { api } from './support/daemon';
 const token = readE2eAdminToken();
 const headers = { 'content-type': 'application/json', authorization: `Bearer ${token}` };
 
