@@ -13,7 +13,7 @@ import { VersionsService } from '../core/versions.service';
 import { ErrorLineComponent } from '../design/error-line.component';
 import { KindBadgeComponent } from '../design/kind-badge.component';
 import { focusTabAt, nextTabIndex } from '../design/tablist-keyboard';
-import { attentionItemsOf, inboxCountLabelOf } from '../working-state/attention-items';
+import { attentionItemsOf, inboxCountLabelOf, itemsNeedingYouOf } from '../working-state/attention-items';
 import { contextNoticeCopyOf, contextNoticesOf } from '../working-state/context-notices';
 import { AttentionCardComponent } from './attention-card.component';
 import { minutesWaiting, silentBlockCopyOf, silentBlockDetailsMessageOf } from './silent-block-copy';
@@ -147,7 +147,7 @@ function formatInput(toolInput: unknown): FormattedInput {
             [attr.tabindex]="tab() === entry.key ? 0 : -1"
             [attr.data-testid]="'inbox-tab-' + entry.key"
             (click)="tab.set(entry.key)"
-          >{{ entry.label }}@if (entry.key === 'questions' && attentionItems().length > 0) { <span class="tab-count" data-testid="inbox-tab-count-questions">{{ attentionItems().length }}</span>}</button>
+          >{{ entry.label }}@if (entry.key === 'questions' && attentionItemsNeedingYou().length > 0) { <span class="tab-count" data-testid="inbox-tab-count-questions">{{ attentionItemsNeedingYou().length }}</span>}</button>
         }
       </nav>
 
@@ -299,7 +299,8 @@ export class InboxComponent {
     return gates;
   });
 
-  protected readonly attentionItems = computed(() => attentionItemsOf(this.events.sessions(), this.events.workingStates()));
+  protected readonly attentionItems = computed(() => attentionItemsOf(this.events.sessions(), this.events.workingStates(), this.replies.deliveredReplyTimeBySessionId()));
+  protected readonly attentionItemsNeedingYou = computed(() => itemsNeedingYouOf(this.attentionItems()));
 
   /** Failed replies whose card is not on screen: the session closed, left the list, or another tab is open. */
   protected readonly unseenReplyFailures = computed(() => {
@@ -375,7 +376,7 @@ export class InboxComponent {
   }
 
   protected readonly pendingCount = computed(() => {
-    const count = this.events.approvals().length + this.attentionItems().length + this.contextNotices().length;
+    const count = this.events.approvals().length + this.attentionItemsNeedingYou().length + this.contextNotices().length;
     return count > 0 ? inboxCountLabelOf(count) : undefined;
   });
 
