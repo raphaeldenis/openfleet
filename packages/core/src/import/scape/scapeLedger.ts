@@ -2,12 +2,12 @@ import { createHash } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import type { EntityName } from './importReport.js';
 
-export const LEDGER_KINDS = ['project', 'note', 'note_version', 'playbook_archive', 'data_store', 'column', 'view', 'row', 'history', 'manager', 'working_state'] as const;
+export const LEDGER_KINDS = ['project', 'note', 'note_version', 'playbook_archive', 'data_store', 'column', 'view', 'row', 'history', 'manager', 'working_state', 'memory_file'] as const;
 export type LedgerKind = (typeof LEDGER_KINDS)[number];
 
 export const ENTITY_OF_LEDGER_KIND: Record<LedgerKind, EntityName> = {
   project: 'projects', note: 'notes', note_version: 'noteVersions', playbook_archive: 'playbooks', data_store: 'dataStores',
-  column: 'columns', view: 'views', row: 'rows', history: 'history', manager: 'managers', working_state: 'workingStates',
+  column: 'columns', view: 'views', row: 'rows', history: 'history', manager: 'managers', working_state: 'workingStates', memory_file: 'memories',
 };
 
 type HashableValue = string | number | null;

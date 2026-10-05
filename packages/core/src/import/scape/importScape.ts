@@ -5,6 +5,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { emptyReport, hasChanges, renderImportReport, type ImportReport } from './importReport.js';
 import { prepareManagerFolders, type PreparedManagerFolders } from './managerFolders.js';
 import { ScapeImportError } from './scapeImportError.js';
+import { MemoryFilesJournal } from './scapeMemoriesWriter.js';
 import { buildImportPlan, type ImportPlan } from './scapePlan.js';
 import { ScapeSource } from './scapeSource.js';
 import { backUpCommittedState, openDryRunTarget, openWritableTarget, type TargetDatabase, type UpsertOutcome } from './scapeTarget.js';
@@ -35,6 +36,10 @@ export interface ImportScapeOptions {
   stateDir?: string;
   /** The folder the state folder must be inside, with no link between the two; defaults to the parent of the state folder, so that only the folder itself must not be a link. */
   stateRoot?: string;
+  /** The Claude config folder (`~/.claude`) that receives each manager's auto-memory; none given, no memory is read or copied. */
+  claudeDir?: string;
+  /** The Claude config folder that holds the memory of the Scape managers; defaults to `claudeDir`. */
+  scapeClaudeDir?: string;
 }
 
 const managersRootOf = (options: ImportScapeOptions) => options.managersRoot ?? join(options.home, MANAGERS_FOLDER_NAME);
@@ -48,7 +53,8 @@ function writeReportFile(report: ImportReport, directory: string): string {
 
 function planFromScape(source: ScapeSource, options: ImportScapeOptions): ImportPlan {
   try {
-    return buildImportPlan(source, { projectName: options.projectName, superpowersRoot: options.superpowersRoot, managersRoot: managersRootOf(options), stateDir: options.stateDir, stateRoot: options.stateRoot });
+    const memorySource = options.claudeDir === undefined ? undefined : { scapeDir: options.scapeDir, scapeClaudeDir: options.scapeClaudeDir ?? options.claudeDir };
+    return buildImportPlan(source, { projectName: options.projectName, superpowersRoot: options.superpowersRoot, managersRoot: managersRootOf(options), stateDir: options.stateDir, stateRoot: options.stateRoot, memorySource });
   } catch (cause) {
     if (cause instanceof ScapeImportError) throw cause;
     throw new ScapeImportError({ code: 'SCAPE_SOURCE_UNREADABLE', message: `the Scape data cannot be read: ${(cause as Error).message}`, cause });
@@ -86,14 +92,17 @@ function writeToTarget(plan: ImportPlan, options: ImportScapeOptions): ImportRep
     preparedFolders = prepareManagerFolders({ managersRoot: managersRootOf(options), directories: foldersOfManagersKept(plan, managerOutcomes), forbiddenRoot: options.scapeDir });
     mustBackUpBeforeCommit();
   };
+  const memoryFilesJournal = new MemoryFilesJournal();
+  const memories = options.claudeDir === undefined ? undefined : { claudeDir: options.claudeDir, dryRun, journal: memoryFilesJournal };
   let target: TargetDatabase | undefined;
   try {
     target = dryRun ? openDryRunTarget({ home: options.home, scratchRoot }) : openWritableTarget(options.home);
     if (options.refuseReimport && !dryRun) assertNoProjectImportedYet(target.db, plan);
-    writePlan(target.db, plan, report, { coversEveryProject: options.projectName === undefined }, prepareFoldersBeforeCommit);
+    writePlan(target.db, plan, report, { coversEveryProject: options.projectName === undefined, memories }, prepareFoldersBeforeCommit);
     return report;
   } catch (cause) {
     preparedFolders?.rollback();
+    memoryFilesJournal.rollback();
     if (cause instanceof ScapeImportError) throw cause;
     throw new ScapeImportError({ code: 'IMPORT_WRITE_FAILED', message: `the import could not write to ${options.home}: ${(cause as Error).message}`, cause });
   } finally {
