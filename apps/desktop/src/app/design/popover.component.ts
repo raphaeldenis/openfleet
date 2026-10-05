@@ -33,6 +33,7 @@ function nextIndexInCycle({ currentIndex, count, isBackwards }: { currentIndex: 
     '(keydown.escape)': 'closeOnEscape($event)',
     '(keydown)': 'trapTabInsideAlertDialog($event)',
     '(window:resize)': 'positionPanel()',
+    '[class.popover--fill]': 'fillsRow()',
   },
   template: `
     <button
@@ -76,6 +77,10 @@ function nextIndexInCycle({ currentIndex, count, isBackwards }: { currentIndex: 
       border-color: var(--state-error);
       background: color-mix(in oklch, var(--state-error) 12%, transparent);
     }
+    :host(.popover--fill) { flex: 1; min-width: 0; }
+    :host(.popover--fill) .trigger { flex: 1; min-width: 0; height: 1.75rem; font-size: .75rem; background: var(--sunk); }
+    :host(.popover--fill) .caret { margin-left: auto; }
+    :host(.popover--fill) .panel { top: 2rem; }
     .trigger[aria-disabled='true'] { cursor: not-allowed; opacity: .7; }
     .trigger:focus-visible, .panel:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
     .caret { color: var(--faint); }
@@ -101,6 +106,8 @@ export class PopoverComponent {
   readonly isAlertDialog = input(false);
   readonly panelLabel = input<string>();
   readonly disabled = input(false);
+  /** Stretches the trigger to the width of its row, as a form field. */
+  readonly fillsRow = input(false);
 
   protected readonly content = contentChild.required(TemplateRef);
   private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);

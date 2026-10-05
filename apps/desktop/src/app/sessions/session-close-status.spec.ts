@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { closeStatusFor, exitCodeLabel } from './session-close-status';
+import { closeStatusFor } from './session-close-status';
 
 const SIGTERM_EXIT_CODE = 143;
 const SIGKILL_EXIT_CODE = 137;
@@ -13,13 +13,5 @@ describe('the close status of an exit code', () => {
     { label: 'no exit code', exitCode: undefined, kind: 'unknown' },
   ] as const)('is $kind for $label', ({ exitCode, kind }) => {
     expect(closeStatusFor(exitCode).kind).toBe(kind);
-  });
-
-  it.each([
-    { exitCode: 0, label: 'closed · exit 0' },
-    { exitCode: 1, label: 'closed · exit 1' },
-    { exitCode: undefined, label: 'closed' },
-  ])('is labelled "$label" for exit code $exitCode', ({ exitCode, label }) => {
-    expect(exitCodeLabel(exitCode)).toBe(label);
   });
 });

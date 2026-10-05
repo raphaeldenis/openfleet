@@ -16,35 +16,36 @@ test('the sidebar footer toggle switches the chrome between the light and dark p
   await page.goto('/');
   const sidebar = page.getByTestId('app-nav');
   const toggle = page.getByTestId('sidebar-footer').getByTestId('theme-toggle');
-  await expect(toggle).toHaveText('☀ Light');
+  await expect(toggle).toHaveText('☀');
+  await expect(toggle).not.toContainText('Light');
   await expect(sidebar).toHaveCSS('background-color', LIGHT_SIDEBAR);
 
   await toggle.click();
 
-  await expect(toggle).toHaveText('☾ Dark');
+  await expect(toggle).toHaveText('☾');
   await expect(sidebar).toHaveCSS('background-color', DARK_SIDEBAR);
 });
 
-test('the toggle names the current theme and is pressed exactly while the theme is dark', async ({ page }) => {
+test('the icon-only toggle names the current theme and is pressed exactly while the theme is dark', async ({ page }) => {
   await page.addInitScript(([t, a]) => {
     localStorage.setItem('openfleet.adminToken', t);
     localStorage.setItem('openfleet.apiUrl', a);
     localStorage.setItem('openfleet.theme', 'light');
   }, [token, api]);
   await page.goto('/');
-  const lightToggle = page.getByRole('button', { name: '☀ Light' });
+  const lightToggle = page.getByRole('button', { name: 'Light theme' });
   await expect(lightToggle).toHaveAttribute('aria-pressed', 'false');
   await expect(lightToggle).toHaveAttribute('title', 'Switch to dark theme');
 
   await lightToggle.click();
 
-  const darkToggle = page.getByRole('button', { name: '☾ Dark' });
+  const darkToggle = page.getByRole('button', { name: 'Dark theme' });
   await expect(darkToggle).toHaveAttribute('aria-pressed', 'true');
   await expect(darkToggle).toHaveAttribute('title', 'Switch to light theme');
 
   await darkToggle.click();
 
-  await expect(page.getByRole('button', { name: '☀ Light' })).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.getByRole('button', { name: 'Light theme' })).toHaveAttribute('aria-pressed', 'false');
 });
 
 test('the shell shows no top bar, no status bar, no search trigger and no connection chip while the daemon answers', async ({ page }) => {

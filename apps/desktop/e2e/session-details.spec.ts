@@ -30,6 +30,25 @@ test('the Session tab of the right panel shows the identity, the state and every
   await expect(page.getByTestId('session-close')).toBeVisible();
 });
 
+test('the Session tab stacks three cards of the same width: identity, labelled facts, then State', async ({ page, request }) => {
+  const session = await fakeSessions.create(request, { name: 'Cards', model: 'sonnet' });
+  await session.hooks.announceIdle();
+
+  await page.goto(`/session/${session.id}`);
+
+  const [identity, facts, state] = await Promise.all(['session-details-identity', 'session-facts', 'state-panel'].map(async (testId) => {
+    await expect(page.getByTestId(testId)).toBeVisible();
+    return page.getByTestId(testId).boundingBox();
+  }));
+  expect(identity!.y + identity!.height).toBeLessThanOrEqual(facts!.y);
+  expect(facts!.y + facts!.height).toBeLessThanOrEqual(state!.y);
+  expect(facts!.width).toBeCloseTo(identity!.width, 0);
+  expect(state!.width).toBeCloseTo(identity!.width, 0);
+  const factsCard = page.getByTestId('session-facts');
+  for (const label of ['Harness', 'Directory', 'Model', 'Permission']) await expect(factsCard.getByText(label, { exact: true })).toBeVisible();
+  await expect(page.getByTestId('session-harness')).toHaveText('fake');
+});
+
 test('the session view has no header of its own: the sidebar names the session and the right panel holds its details', async ({ page, request }) => {
   const session = await fakeSessions.create(request, { name: 'Headerless' });
   await session.hooks.announceIdle();

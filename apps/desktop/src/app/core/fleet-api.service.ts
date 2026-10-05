@@ -1,9 +1,9 @@
 import { Injectable } from '@angular/core';
-import { DIAGNOSTICS_PATH, isErrorEnvelope } from '@openfleet/shared';
+import { DIAGNOSTICS_PATH, WorkingStateSectionsSchema, isErrorEnvelope } from '@openfleet/shared';
 import type {
   Approval, CloseHandoffResult, CloseSessionRequest, CreateNoteRequest, CreateProjectRequest, DataStore, DataStoreDetail, DiagnosticsDocument, DsRow, DsRowHistoryEntry, DsView, ErrorEnvelope, HandoffPreview, HandoffSummary, HandoffTarget, HarnessId, NoteSummary,
   ManagerProfile, ManagerView, NoteVersionSummary, NoteView, OrderTerm, Page, PermissionMode, Project, ReopenMode, RestoreNoteRequest, Session, SessionSpec, SessionTodos,
-  UpdateManager, UpdateNoteRequest, UpdateProjectRequest, WhereClause,
+  UpdateManager, UpdateNoteRequest, UpdateProjectRequest, WhereClause, WorkingState,
 } from '@openfleet/shared';
 import { environment } from '../../environments/environment';
 import { parseCloseHandoffResult, parseHandoffPreview, parseHandoffTarget } from './handoff-response-parser';
@@ -146,6 +146,21 @@ export class FleetApiService {
     const todos = parseSessionTodos(await this.call<unknown>(path));
     if (!todos) throw new ApiError(200, `GET ${path} → unreadable todo list`);
     return todos;
+  }
+  /** The last working state the session wrote, kept after it closes; undefined when it never wrote one. */
+  async getWorkingState(id: string): Promise<WorkingState | undefined> {
+    const path = `/api/sessions/${encodeURIComponent(id)}/working-state`;
+    const body = await this.call<unknown>(path).catch((error: unknown) => {
+      const hasNeverWrittenState = error instanceof ApiError && error.code === 'no_state';
+      if (hasNeverWrittenState) return undefined;
+      throw error;
+    });
+    if (body === undefined) return undefined;
+    const sections = WorkingStateSectionsSchema.safeParse(body);
+    const { sessionId, updatedAt, fleetChangedAt } = body as Partial<WorkingState>;
+    const hasStamps = typeof sessionId === 'string' && typeof updatedAt === 'string';
+    if (!sections.success || !hasStamps) throw new ApiError(200, `GET ${path} → unreadable working state`);
+    return { ...sections.data, sessionId, updatedAt, ...(typeof fleetChangedAt === 'string' ? { fleetChangedAt } : {}) };
   }
   async getHandoffPreview(id: string): Promise<HandoffPreview> {
     const path = `/api/sessions/${encodeURIComponent(id)}/handoff-preview`;

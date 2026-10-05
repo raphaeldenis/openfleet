@@ -3,19 +3,23 @@ import { render, screen, within } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Session, WorkingState } from '@openfleet/shared';
+import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { StatePanelComponent } from './state-panel.component';
 import { NOW_ISO, fakeWorkingStateEvents, minutesBeforeNow, sessionOf, stateOf } from './working-state-fixtures';
 
 const body = () => screen.queryByTestId('state-panel-body');
 
-async function renderPanel(options: Parameters<typeof fakeWorkingStateEvents>[0] = {}, session: Session = sessionOf()) {
+const neverWrittenState = () => vi.fn().mockResolvedValue(undefined);
+
+async function renderPanel(options: Parameters<typeof fakeWorkingStateEvents>[0] = {}, session: Session = sessionOf(), getWorkingState = neverWrittenState()) {
   const events = fakeWorkingStateEvents({ sessions: [session], ...options });
   const view = await render(StatePanelComponent, {
     bindings: [inputBinding('session', () => session)],
-    providers: [{ provide: FleetEventsService, useValue: events }],
+    providers: [{ provide: FleetEventsService, useValue: events }, { provide: FleetApiService, useValue: { getWorkingState } }],
   });
-  return { ...view, events };
+  await view.fixture.whenStable();
+  return { ...view, events, getWorkingState };
 }
 
 async function renderPanelWith(state: Partial<WorkingState> = {}, session: Session = sessionOf()) {
@@ -108,18 +112,21 @@ describe('StatePanelComponent', () => {
   });
 
   describe('when the state is overdue', () => {
-    it('user sees the chip and the reason in text', async () => {
+    it('user sees an amber callout inside the State card that says why, in one sentence', async () => {
       await renderPanel({ states: [stateOf({ updatedAt: minutesBeforeNow(45) })] });
 
-      expect(screen.getByTestId('overdue-chip')).toHaveTextContent('state overdue');
-      expect(screen.getByTestId('state-panel-overdue-reason')).toHaveTextContent('Written 45 minutes ago, limit 30 minutes');
+      const callout = screen.getByRole('status');
+
+      expect(screen.getByTestId('state-panel')).toContainElement(callout);
+      expect(callout).toHaveTextContent('! state overdue — written 45 minutes ago, limit 30 minutes');
+      expect(screen.queryByTestId('overdue-chip')).toBeNull();
     });
 
     it('user sees a "stale" mark when the state was written before the last spawn or close', async () => {
       await renderPanelWith({ updatedAt: minutesBeforeNow(2), fleetChangedAt: minutesBeforeNow(1) });
 
       expect(screen.getByTestId('state-panel-stale')).toHaveTextContent('stale');
-      expect(screen.getByTestId('state-panel-overdue-reason')).toHaveTextContent('Written before the last spawn or close');
+      expect(screen.getByTestId('state-panel-overdue-reason')).toHaveTextContent('written before the last spawn or close');
     });
 
     it('user sees no "stale" mark on a state that is merely old', async () => {
@@ -128,10 +135,10 @@ describe('StatePanelComponent', () => {
       expect(screen.queryByTestId('state-panel-stale')).toBeNull();
     });
 
-    it('user sees no chip, no reason and no mark on a fresh state', async () => {
+    it('user sees no callout, no reason and no mark on a fresh state', async () => {
       await renderPanelWith({ updatedAt: minutesBeforeNow(1) });
 
-      expect(screen.queryByTestId('overdue-chip')).toBeNull();
+      expect(screen.queryByTestId('state-panel-overdue')).toBeNull();
       expect(screen.queryByTestId('state-panel-overdue-reason')).toBeNull();
       expect(screen.queryByTestId('state-panel-stale')).toBeNull();
     });
@@ -145,16 +152,40 @@ describe('StatePanelComponent', () => {
       expect(screen.queryByTestId('state-section-plan')).toBeNull();
     });
 
-    it('user reads that the state is not shown for a closed session, not that none exists', async () => {
+    it('user reads that a closed session never recorded a state', async () => {
       await renderPanel({ states: [] }, sessionOf({ state: 'closed' }));
 
-      expect(screen.getByTestId('state-panel-none')).toHaveTextContent('State not shown for a closed session');
+      expect(screen.getByTestId('state-panel-none')).toHaveTextContent('No state was recorded before this session closed.');
+    });
+
+    it('user reads that the last state of a closed session could not be read', async () => {
+      const unreachable = vi.fn().mockRejectedValue(new Error('offline'));
+
+      await renderPanel({ states: [] }, sessionOf({ state: 'closed' }), unreachable);
+
+      expect(screen.getByTestId('state-panel-none')).toHaveTextContent('The last state could not be read.');
     });
 
     it('user still reads the last state of a session that closed while the app was open', async () => {
       await renderPanel({ states: [stateOf({ plan: ['last plan'] })] }, sessionOf({ state: 'closed' }));
 
       expect(screen.getByTestId('state-section-plan')).toHaveTextContent('last plan');
+    });
+
+    it('user reads the last state of a session that was already closed when the app opened, as read-only', async () => {
+      const lastState = stateOf({ plan: ['last words'], updatedAt: new Date(2026, 9, 5, 14, 2).toISOString() });
+      const { getWorkingState } = await renderPanel({ states: [] }, sessionOf({ state: 'closed' }), vi.fn().mockResolvedValue(lastState));
+
+      expect(getWorkingState).toHaveBeenCalledWith('s1');
+      expect(screen.getByTestId('state-section-plan')).toHaveTextContent('last words');
+      expect(screen.getByTestId('state-panel-updated').textContent).toMatch(/^last state · read-only · 14[:.]02$/);
+      expect(screen.queryByTestId('state-panel-overdue')).toBeNull();
+    });
+
+    it('user does not make the daemon read the state of a session that is still open', async () => {
+      const { getWorkingState } = await renderPanel({ states: [stateOf()] });
+
+      expect(getWorkingState).not.toHaveBeenCalled();
     });
 
     it('user reads that this daemon does not report states, not that the session has none', async () => {
@@ -177,7 +208,7 @@ describe('StatePanelComponent', () => {
       await renderPanel({ states: [stateOf({ updatedAt: 'not a date' })] });
 
       expect(screen.getByTestId('state-panel-updated')).toHaveTextContent('updated time unknown');
-      expect(screen.getByTestId('state-panel-overdue-reason')).toHaveTextContent('State time unknown');
+      expect(screen.getByTestId('state-panel-overdue-reason')).toHaveTextContent('state time unknown');
       expect(screen.getByTestId('state-panel')).not.toHaveTextContent('NaN');
     });
 

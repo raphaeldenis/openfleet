@@ -25,6 +25,7 @@ const ANNOUNCE_ROLE: Record<BannerVariant, 'alert' | 'status'> = {
     <div
       data-testid="banner"
       [attr.data-variant]="variant()"
+      [attr.data-layout]="layout()"
       [attr.role]="role()"
       [attr.aria-live]="role() === 'status' ? 'polite' : null"
       [style.--banner-color]="'var(' + colorVar() + ')'"
@@ -46,10 +47,18 @@ const ANNOUNCE_ROLE: Record<BannerVariant, 'alert' | 'status'> = {
     .title { color: var(--banner-color); font-weight: 600; }
     .banner[data-variant='error'] .title, .banner[data-variant='mismatch'] .title { color: var(--fg); }
     .glyph { color: var(--banner-color); }
+    .banner[data-layout='strip'] {
+      padding: .5rem 1rem; border: 0; border-bottom: 1px solid var(--line); border-radius: 0;
+      background: color-mix(in oklch, var(--banner-color) 10%, var(--panel)); font-size: .8125rem; color: var(--fg);
+    }
+    .banner[data-layout='strip'] .title { color: var(--fg); white-space: nowrap; }
+    .banner[data-layout='strip'] .description { text-wrap: pretty; }
   `,
 })
 export class BannerComponent {
   readonly variant = input.required<BannerVariant>();
+  /** A card is a bordered box inside a page; a strip runs flat across the full width of the area it tops. */
+  readonly layout = input<'card' | 'strip'>('card');
   /** A symbol drawn in the banner colour before the title, such as "!". */
   readonly glyph = input<string>('');
   readonly title = input.required<string>();

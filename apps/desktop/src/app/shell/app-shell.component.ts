@@ -71,6 +71,7 @@ const RUNNING_STATES = new Set(['generating', 'starting']);
             <of-banner
               data-testid="version-mismatch-banner"
               variant="mismatch"
+              layout="strip"
               glyph="!"
               title="Version mismatch"
               [description]="mismatch.description"
@@ -83,6 +84,7 @@ const RUNNING_STATES = new Set(['generating', 'starting']);
             <of-banner
               data-testid="degraded-banner"
               variant="error"
+              layout="strip"
               title="The daemon hit a problem and is running degraded"
               [description]="state.description"
             >
@@ -92,6 +94,7 @@ const RUNNING_STATES = new Set(['generating', 'starting']);
           @if (!events.connected()) {
             <of-banner
               variant="reconnecting"
+              layout="strip"
               title="↻ Reconnecting to daemon"
               description="Sessions keep running; the UI shows the last known state."
             />

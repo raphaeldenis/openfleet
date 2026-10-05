@@ -49,6 +49,39 @@ test('the permission popover lists the six modes with bypassPermissions last and
   await expect(page.getByText('Changing the mode applies on the next turn (harness restarts if it must).')).toBeVisible();
 });
 
+test('the permission popover is one column: each mode name sits over its description, and bypassPermissions carries an inline "!"', async ({ page, request }) => {
+  const session = await fakeSessions.create(request, { name: 'One column' });
+  await session.hooks.announceIdle();
+  await openSessionWithDetails(page, session.id);
+  await page.getByRole('button', { name: /^Permission mode: / }).click();
+
+  const bypass = page.getByRole('option', { name: /bypassPermissions/ });
+  const name = bypass.getByText('bypassPermissions');
+  const description = bypass.getByText('Every tool runs without a check — only in a sandbox.');
+
+  await expect(bypass).toHaveText(/bypassPermissions\s*!/);
+  const [nameBox, descriptionBox] = [await name.boundingBox(), await description.boundingBox()];
+  expect(descriptionBox!.y).toBeGreaterThanOrEqual(nameBox!.y + nameBox!.height - 1);
+  const optionBoxes = await page.getByRole('listbox', { name: 'Permission mode' }).getByRole('option').evaluateAll((options) => options.map((option) => option.getBoundingClientRect().left));
+  expect(new Set(optionBoxes).size).toBe(1);
+});
+
+test('the permission trigger fills the value column of its row, and the popover marks the mode in force with a check', async ({ page, request }) => {
+  const session = await fakeSessions.create(request, { name: 'Check mark', permissionMode: 'plan' });
+  await session.hooks.announceIdle();
+  await openSessionWithDetails(page, session.id);
+  const trigger = page.getByRole('button', { name: /^Permission mode: / });
+
+  await expect(trigger).toHaveText(/^plan/);
+  const row = page.getByTestId('session-facts').locator('.fact').filter({ hasText: 'Permission' });
+  const [rowBox, triggerBox] = [await row.boundingBox(), await trigger.boundingBox()];
+  expect(triggerBox!.x + triggerBox!.width).toBeGreaterThan(rowBox!.x + rowBox!.width - 2);
+  await trigger.click();
+
+  await expect(page.getByRole('option', { name: /^plan/ })).toContainText('✓');
+  await expect(page.getByRole('option', { name: /^manual/ })).not.toContainText('✓');
+});
+
 test('choosing bypassPermissions asks for a confirmation whose safe answer has the focus and changes nothing', async ({ page, request }) => {
   const session = await fakeSessions.create(request, { name: 'Bypass declined' });
   await session.hooks.announceIdle();
