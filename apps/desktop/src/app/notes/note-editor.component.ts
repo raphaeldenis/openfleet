@@ -1,6 +1,7 @@
 import { NgTemplateOutlet } from '@angular/common';
 import { ChangeDetectionStrategy, Component, ElementRef, computed, input, output, signal, viewChild } from '@angular/core';
 import { countRenderCost, parseMarkdownBlocks, takeWithinRenderBudget } from './markdown-blocks';
+import { MarkdownTableComponent } from './markdown-table.component';
 import { displayTitleOf } from './note-title';
 import type { NoteView } from '@openfleet/shared';
 
@@ -8,7 +9,7 @@ const NODES_PER_CHUNK = 2000;
 
 @Component({
   selector: 'of-note-editor',
-  imports: [NgTemplateOutlet],
+  imports: [NgTemplateOutlet, MarkdownTableComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <header class="header">
@@ -78,6 +79,9 @@ const NODES_PER_CHUNK = 2000;
           }
           @case ('code') {
             <pre data-testid="note-editor-code-block">{{ block.text }}</pre>
+          }
+          @case ('table') {
+            <of-markdown-table [header]="block.header" [rows]="block.rows" [alignments]="block.alignments" />
           }
         }
       }
