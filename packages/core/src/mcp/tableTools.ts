@@ -2,8 +2,9 @@ import { AutoValueSchema, ColumnTypeSchema, OrderTermSchema, SelectOptionSchema,
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { RowNotFoundError, StoreNotFoundError, UnknownColumnReferenceError, type DataStoreRepository, type RowActor } from '../stores/dataStoreRepository.js';
-import type { DataStoreService } from '../stores/dataStoreService.js';
+import { InvalidColumnDefinitionError, type DataStoreService } from '../stores/dataStoreService.js';
 import { guardedFor, refuse, truncateToByteBudget } from './toolResults.js';
+import { cellsKeyedByColumnId } from './rowValues.js';
 import { columnarRowView, columnView, rowView, storeView } from './toolViews.js';
 
 // Task 15 caps (see the plan's Review Focus #3 and Lead amendment on P3-T11): a batch write is capped so
@@ -53,12 +54,18 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
   });
 
   server.registerTool('add_data_store_column', {
-    description: 'Add a typed column to a data store; a select column needs at least one option; auto_value "created_at" (date column only) makes the daemon fill the column with its own clock at insert and refuse any update',
-    inputSchema: { store: z.string().min(1), display_name: z.string().min(1), column_type: ColumnTypeSchema, options: z.array(SelectOptionSchema).optional(), auto_value: AutoValueSchema.optional() },
-  }, async ({ store, display_name, column_type, options, auto_value }) => {
+    description: 'Add a typed column to a data store; natural_key true (text column only) makes it the column whose value names a row for update_data_store_row key; a select column needs at least one option; auto_value "created_at" (date column only) makes the daemon fill the column with its own clock at insert and refuse any update',
+    inputSchema: { store: z.string().min(1), display_name: z.string().min(1), column_type: ColumnTypeSchema, options: z.array(SelectOptionSchema).optional(), auto_value: AutoValueSchema.optional(), natural_key: z.boolean().optional() },
+  }, async ({ store, display_name, column_type, options, auto_value, natural_key }) => {
     const scope = requireProject();
     if (!scope) return refuse('project_not_found', 'this session has no project');
-    return guarded(() => columnView(stores.addColumn(store, { ...scope, displayName: display_name, columnType: column_type, options, autoValue: auto_value })));
+    return guarded(() => {
+      const isNaturalKeyOnNonText = natural_key === true && column_type !== 'text';
+      if (isNaturalKeyOnNonText) throw new InvalidColumnDefinitionError('The natural key must be a text column of this data store');
+      const column = stores.addColumn(store, { ...scope, displayName: display_name, columnType: column_type, options, autoValue: auto_value });
+      if (natural_key === true) stores.setNaturalKey(store, { ...scope, columnId: column.id });
+      return columnView(column);
+    });
   });
 
   server.registerTool('insert_data_store_rows', {
@@ -87,6 +94,27 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
     return guarded(() => {
       const updated = stores.updateRows(store, { ...scope, items, actor: agentActor(caller) });
       return { ids: updated.map((row) => row.id), count: updated.length };
+    });
+  });
+
+  server.registerTool('update_data_store_row', {
+    description: 'Change cells of one row, addressed by exactly one of row_id (every queried row carries its id) or key (the value of the store\'s natural key column, see describe_data_store). '
+      + 'store is its id or display name. values is keyed by column id or display name (any case); a select cell takes an option label (any case) or id. '
+      + 'All-or-nothing: an unknown column or an invalid value changes nothing. Returns the id of the row',
+    inputSchema: { store: z.string().min(1), row_id: z.string().min(1).optional(), key: z.string().min(1).optional(), values: z.record(z.string(), z.unknown()) },
+  }, async ({ store, row_id, key, values }) => {
+    const scope = requireProject();
+    if (!scope) return refuse('project_not_found', 'this session has no project');
+    const isAddressedByExactlyOne = (row_id === undefined) !== (key === undefined);
+    if (!isAddressedByExactlyOne) return refuse('invalid_body', 'pass exactly one of row_id or key');
+    if (Object.keys(values).length === 0) return refuse('invalid_body', 'values must name at least one column');
+    return guarded(() => {
+      const ownStore = storeRepo.findStore(store)?.projectId === scope.projectId ? storeRepo.findStore(store) : storeRepo.findStoreByName(scope.projectId, store);
+      if (!ownStore) throw new StoreNotFoundError(store);
+      const rowId = row_id ?? stores.findRowByNaturalKey(ownStore.id, { ...scope, key: key! }).id;
+      const patch = cellsKeyedByColumnId(storeRepo.listColumns(ownStore.id), values);
+      const [updated] = stores.updateRows(ownStore.id, { ...scope, items: [{ rowId, patch }], actor: agentActor(caller) });
+      return { id: updated!.id };
     });
   });
 

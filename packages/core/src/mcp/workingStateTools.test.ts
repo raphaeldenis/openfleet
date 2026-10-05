@@ -64,7 +64,7 @@ async function startFleet({ maxBytes = DEFAULT_MAX_BYTES, clock = () => DAEMON_N
   const workingStates = new WorkingStateService({ db, clock, stateRoot, maxBytes });
   const server = await startServer({
     host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable: DEFAULT_MODEL_TABLE, modelConfigPath: '/tmp/of-unused/config.json',
-    mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable: DEFAULT_MODEL_TABLE, stores, storeRepo, notes, noteRepo, docs, workingStates, worktreesRoot: '/tmp/of-wt' }),
+    mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable: DEFAULT_MODEL_TABLE, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: '/tmp/of-wt' }),
   });
   const lead = await sessions.create({ directory: '/tmp', name: 'Lead', harness: 'fake', emoji: '🧭' });
   return { server, db, sessions, workingStates, stateRoot, harness, leadToken: harness.launches[0]!.mcpToken, leadId: lead.id };

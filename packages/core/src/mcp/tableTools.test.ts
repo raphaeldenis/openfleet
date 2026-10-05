@@ -67,7 +67,7 @@ beforeEach(async () => {
 
   server = await startServer({
     host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath: '/tmp/of-unused/config.json',
-    mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, worktreesRoot: '/tmp/of-wt', stores, storeRepo, notes, noteRepo, docs, workingStates: new WorkingStateService({ db, clock: () => new Date().toISOString(), stateRoot: '/tmp/of-unused/state', maxBytes: 6144 }) }),
+    mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, worktreesRoot: '/tmp/of-wt', stores, storeRepo, notes, noteRepo, docs, projects, workingStates: new WorkingStateService({ db, clock: () => new Date().toISOString(), stateRoot: '/tmp/of-unused/state', maxBytes: 6144 }) }),
   });
 
   const scoped = await sessions.create({ directory: '/tmp', name: 'Gimli', harness: 'fake', emoji: '⛏️' });
@@ -96,8 +96,8 @@ describe('table tools', () => {
       'add_data_store_column', 'append_to_note', 'close_session', 'create_data_store', 'create_data_store_view', 'create_note', 'create_session',
       'create_worktree', 'delete_data_store_row', 'delete_data_store_view', 'delete_note', 'describe_data_store', 'get_argus_status', 'get_note',
       'get_note_version', 'get_session_status', 'get_working_state', 'insert_data_store_rows', 'list_children', 'list_data_store_views', 'list_note_versions',
-      'list_notes', 'list_row_changes', 'list_sessions', 'message_parent', 'move_note', 'pulse_now', 'query_data_store', 'restore_note_version',
-      'search_notes', 'send_session_message', 'update_data_store_rows', 'update_data_store_view', 'update_note', 'update_note_section',
+      'list_notes', 'list_project_folders', 'list_projects', 'list_row_changes', 'list_sessions', 'message_parent', 'move_note', 'pulse_now', 'query_data_store',
+      'restore_note_version', 'search_notes', 'send_session_message', 'update_data_store_row', 'update_data_store_rows', 'update_data_store_view', 'update_note', 'update_note_section',
       'update_session', 'update_working_state',
     ]);
   });
@@ -481,5 +481,235 @@ describe('daemon-set date columns', () => {
     const inserted = text(await client.callTool({ name: 'insert_data_store_rows', arguments: { store: storeId, rows: [{}, { [tsId]: FUTURE_TIME }] } }));
 
     expect(inserted.ignored).toEqual([tsId]);
+  });
+});
+
+describe('update_data_store_row', () => {
+  const errorTextOf = (result: unknown) => (result as { content: { text: string }[] }).content[0]!.text;
+
+  async function backlogWithTwoRows(client: Client) {
+    const store = await createStore(client, 'backlog');
+    await client.callTool({ name: 'add_data_store_column', arguments: { store: store.id, display_name: 'id', column_type: 'text', natural_key: true } });
+    await client.callTool({ name: 'add_data_store_column', arguments: { store: store.id, display_name: 'title', column_type: 'text' } });
+    await client.callTool({
+      name: 'add_data_store_column',
+      arguments: { store: store.id, display_name: 'status', column_type: 'select', options: [{ id: 'opt-todo', label: 'todo' }, { id: 'opt-done', label: 'Done' }] },
+    });
+    const described = text(await client.callTool({ name: 'describe_data_store', arguments: { store: store.id } }));
+    const [idColumn, titleColumn, statusColumn] = described.columns;
+    const { ids } = text(await client.callTool({
+      name: 'insert_data_store_rows',
+      arguments: { store: store.id, rows: [{ [idColumn.id]: 'IT-1', [titleColumn.id]: 'first' }, { [idColumn.id]: 'IT-2', [titleColumn.id]: 'second' }] },
+    }));
+    const dataOf = async (rowId: string) =>
+      text(await client.callTool({ name: 'query_data_store', arguments: { store: store.id } })).rows.find((row: { id: string }) => row.id === rowId).data;
+    return { storeId: store.id as string, idColumnId: idColumn.id as string, titleColumnId: titleColumn.id as string, statusColumnId: statusColumn.id as string, firstRowId: ids[0] as string, secondRowId: ids[1] as string, described, dataOf };
+  }
+
+  it('is one of the tools an agent can list', async () => {
+    const client = await connect(scopedToken);
+
+    const { tools } = await client.listTools();
+
+    expect(tools.map((tool) => tool.name)).toContain('update_data_store_row');
+  });
+
+  it('changes the cells named by column display name, in any case, of the row given by row_id, and leaves the other cells alone', async () => {
+    const client = await connect(scopedToken);
+    const { storeId, firstRowId, idColumnId, titleColumnId, dataOf } = await backlogWithTwoRows(client);
+
+    const result = text(await client.callTool({ name: 'update_data_store_row', arguments: { store: storeId, row_id: firstRowId, values: { TITLE: 'renamed' } } }));
+
+    expect(result).toEqual({ id: firstRowId });
+    expect(await dataOf(firstRowId)).toEqual({ [idColumnId]: 'IT-1', [titleColumnId]: 'renamed' });
+  });
+
+  it('accepts the column id in place of its display name', async () => {
+    const client = await connect(scopedToken);
+    const { storeId, firstRowId, titleColumnId, dataOf } = await backlogWithTwoRows(client);
+
+    await client.callTool({ name: 'update_data_store_row', arguments: { store: storeId, row_id: firstRowId, values: { [titleColumnId]: 'by id' } } });
+
+    expect((await dataOf(firstRowId))[titleColumnId]).toBe('by id');
+  });
+
+  it('finds the row by the value of the natural key column', async () => {
+    const client = await connect(scopedToken);
+    const { storeId, secondRowId, titleColumnId, dataOf } = await backlogWithTwoRows(client);
+
+    const result = text(await client.callTool({ name: 'update_data_store_row', arguments: { store: storeId, key: 'IT-2', values: { title: 'by key' } } }));
+
+    expect(result).toEqual({ id: secondRowId });
+    expect((await dataOf(secondRowId))[titleColumnId]).toBe('by key');
+  });
+
+  it('finds the store by its display name', async () => {
+    const client = await connect(scopedToken);
+    const { firstRowId, titleColumnId, dataOf } = await backlogWithTwoRows(client);
+
+    await client.callTool({ name: 'update_data_store_row', arguments: { store: 'BACKLOG', row_id: firstRowId, values: { title: 'by store name' } } });
+
+    expect((await dataOf(firstRowId))[titleColumnId]).toBe('by store name');
+  });
+
+  it('records the change in the row history as the calling agent', async () => {
+    const client = await connect(scopedToken);
+    const { storeId, firstRowId, titleColumnId } = await backlogWithTwoRows(client);
+
+    await client.callTool({ name: 'update_data_store_row', arguments: { store: storeId, row_id: firstRowId, values: { title: 'renamed' } } });
+
+    const [latest] = storeRepo.rowHistory(firstRowId, { projectId: 'p1' });
+    expect(latest).toMatchObject({ actorKind: 'agent', actorLabel: '⛏️ Gimli', change: { [titleColumnId]: { from: 'first', to: 'renamed' } } });
+  });
+
+  it('turns the label of a select option, in any case, into its id, and keeps an id as it is', async () => {
+    const client = await connect(scopedToken);
+    const { storeId, firstRowId, secondRowId, statusColumnId, dataOf } = await backlogWithTwoRows(client);
+
+    await client.callTool({ name: 'update_data_store_row', arguments: { store: storeId, row_id: firstRowId, values: { status: 'done' } } });
+    await client.callTool({ name: 'update_data_store_row', arguments: { store: storeId, row_id: secondRowId, values: { status: 'opt-todo' } } });
+
+    expect((await dataOf(firstRowId))[statusColumnId]).toBe('opt-done');
+    expect((await dataOf(secondRowId))[statusColumnId]).toBe('opt-todo');
+  });
+
+  it('refuses a select value that is neither an option label nor an id, and writes nothing', async () => {
+    const client = await connect(scopedToken);
+    const { storeId, firstRowId, titleColumnId, dataOf } = await backlogWithTwoRows(client);
+
+    const result = await client.callTool({ name: 'update_data_store_row', arguments: { store: storeId, row_id: firstRowId, values: { title: 'changed', status: 'blocked' } } });
+
+    expect(result.isError).toBe(true);
+    expect((await dataOf(firstRowId))[titleColumnId]).toBe('first');
+  });
+
+  it('refuses an unknown column name and writes nothing, even for the valid cells', async () => {
+    const client = await connect(scopedToken);
+    const { storeId, firstRowId, titleColumnId, dataOf } = await backlogWithTwoRows(client);
+
+    const result = await client.callTool({ name: 'update_data_store_row', arguments: { store: storeId, row_id: firstRowId, values: { title: 'changed', nope: 'x' } } });
+
+    expect(result.isError).toBe(true);
+    expect(errorTextOf(result)).toMatch(/nope/);
+    expect((await dataOf(firstRowId))[titleColumnId]).toBe('first');
+  });
+
+  it.each([
+    ['both row_id and key', { row_id: 'r', key: 'IT-1' }],
+    ['neither row_id nor key', {}],
+  ])('refuses %s', async (_description, address) => {
+    const client = await connect(scopedToken);
+    const { storeId } = await backlogWithTwoRows(client);
+
+    const result = await client.callTool({ name: 'update_data_store_row', arguments: { store: storeId, values: { title: 'x' }, ...address } });
+
+    expect(result.isError).toBe(true);
+    expect(errorTextOf(result)).toMatch(/^error invalid_body: .*exactly one of row_id or key/);
+  });
+
+  it('refuses empty values', async () => {
+    const client = await connect(scopedToken);
+    const { storeId, firstRowId } = await backlogWithTwoRows(client);
+
+    const result = await client.callTool({ name: 'update_data_store_row', arguments: { store: storeId, row_id: firstRowId, values: {} } });
+
+    expect(result.isError).toBe(true);
+    expect(errorTextOf(result)).toMatch(/at least one/);
+  });
+
+  it('answers "row not found" for a key no row holds', async () => {
+    const client = await connect(scopedToken);
+    const { storeId } = await backlogWithTwoRows(client);
+
+    const result = await client.callTool({ name: 'update_data_store_row', arguments: { store: storeId, key: 'IT-404', values: { title: 'x' } } });
+
+    expect(result.isError).toBe(true);
+    expect(errorTextOf(result)).toMatch(/row not found|does not exist/);
+  });
+
+  it('refuses a key held by several rows and changes none', async () => {
+    const client = await connect(scopedToken);
+    const { storeId, idColumnId, firstRowId, titleColumnId, dataOf } = await backlogWithTwoRows(client);
+    await client.callTool({ name: 'insert_data_store_rows', arguments: { store: storeId, rows: [{ [idColumnId]: 'IT-1' }] } });
+
+    const result = await client.callTool({ name: 'update_data_store_row', arguments: { store: storeId, key: 'IT-1', values: { title: 'x' } } });
+
+    expect(result.isError).toBe(true);
+    expect(errorTextOf(result)).toMatch(/several rows/i);
+    expect((await dataOf(firstRowId))[titleColumnId]).toBe('first');
+  });
+
+  it('refuses a key on a store that has no natural key', async () => {
+    const client = await connect(scopedToken);
+    const store = await createStore(client, 'plain');
+
+    const result = await client.callTool({ name: 'update_data_store_row', arguments: { store: store.id, key: 'IT-1', values: { title: 'x' } } });
+
+    expect(result.isError).toBe(true);
+    expect(errorTextOf(result)).toMatch(/no natural key/);
+  });
+
+  it('cannot reach a row of a store of another project, and says what it says for a row that does not exist', async () => {
+    const owner = await connect(scopedToken);
+    const { storeId, firstRowId } = await backlogWithTwoRows(owner);
+    const stranger = await connect(otherToken);
+
+    const foreign = await stranger.callTool({ name: 'update_data_store_row', arguments: { store: storeId, row_id: firstRowId, values: { title: 'x' } } });
+    const missing = await stranger.callTool({ name: 'update_data_store_row', arguments: { store: 'does-not-exist', row_id: firstRowId, values: { title: 'x' } } });
+
+    expect(foreign.isError).toBe(true);
+    expect(errorTextOf(foreign)).toBe(errorTextOf(missing));
+  });
+
+  it('refuses a row id that belongs to another store of the same project', async () => {
+    const client = await connect(scopedToken);
+    const { firstRowId } = await backlogWithTwoRows(client);
+    const otherStore = await createStore(client, 'other');
+    await client.callTool({ name: 'add_data_store_column', arguments: { store: otherStore.id, display_name: 'title', column_type: 'text' } });
+
+    const result = await client.callTool({ name: 'update_data_store_row', arguments: { store: otherStore.id, row_id: firstRowId, values: { title: 'x' } } });
+
+    expect(result.isError).toBe(true);
+  });
+
+  it('refuses a session that has no project', async () => {
+    const client = await connect(unscopedToken);
+
+    const result = await client.callTool({ name: 'update_data_store_row', arguments: { store: 'x', row_id: 'r', values: { title: 'x' } } });
+
+    expect(result.isError).toBe(true);
+    expect(errorTextOf(result)).toMatch(/no project/i);
+  });
+});
+
+describe('natural key columns', () => {
+  it('add_data_store_column natural_key makes the column the store natural key, and describe_data_store reports it', async () => {
+    const client = await connect(scopedToken);
+    const store = await createStore(client);
+
+    const column = text(await client.callTool({ name: 'add_data_store_column', arguments: { store: store.id, display_name: 'id', column_type: 'text', natural_key: true } }));
+
+    const described = text(await client.callTool({ name: 'describe_data_store', arguments: { store: store.id } }));
+    expect(described.naturalKeyColumnId).toBe(column.id);
+  });
+
+  it('describe_data_store has no naturalKeyColumnId on a store without one', async () => {
+    const client = await connect(scopedToken);
+    const store = await createStore(client);
+
+    const described = text(await client.callTool({ name: 'describe_data_store', arguments: { store: store.id } }));
+
+    expect(described).not.toHaveProperty('naturalKeyColumnId');
+  });
+
+  it('refuses a natural key column that is not text, and adds no column', async () => {
+    const client = await connect(scopedToken);
+    const store = await createStore(client);
+
+    const result = await client.callTool({ name: 'add_data_store_column', arguments: { store: store.id, display_name: 'priority', column_type: 'number', natural_key: true } });
+
+    expect(result.isError).toBe(true);
+    expect((result.content as { text: string }[])[0]!.text).toMatch(/^error invalid_body: .*text column/);
+    expect(text(await client.callTool({ name: 'describe_data_store', arguments: { store: store.id } })).columns).toEqual([]);
   });
 });
