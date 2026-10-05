@@ -46,6 +46,7 @@ export function silentWorkingStateSignals() {
     workingStatesReported: signal(false),
     workingStateMaxAgeMinutes: signal<number | undefined>(undefined),
     workingStateMaxBytes: signal<number | undefined>(undefined),
+    deliveredMessageIds: signal<ReadonlySet<string>>(new Set()),
   };
 }
 
