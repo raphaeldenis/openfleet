@@ -20,15 +20,7 @@ export class ReplyDraftStore {
   private readonly failedSends = signal<BySessionId<string>>(new Map());
   private readonly unconfirmedAttempts = new Map<string, { body: string; messageId: string }>();
 
-  private readonly deliveredReplyTimes = signal<BySessionId<string>>(new Map());
-
   readonly failedSessionIds = computed(() => [...this.failedSends().keys()]);
-  /** For each session, when its last reply reached the agent. */
-  readonly deliveredReplyTimeBySessionId = this.deliveredReplyTimes.asReadonly();
-
-  markReplyDelivered(sessionId: string, at: string): void {
-    this.deliveredReplyTimes.update((times) => withEntry(times, sessionId, at));
-  }
 
   draftOf(sessionId: string): string {
     return this.drafts().get(sessionId) ?? '';

@@ -7,7 +7,7 @@ import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
 
 function fakeEvents(delivered: string[] = []) {
-  return { deliveredMessageIds: signal(new Set(delivered)) };
+  return { deliveredMessageIds: signal(new Set(delivered)), workingStates: signal(new Map()) };
 }
 
 describe('ComposerComponent', () => {

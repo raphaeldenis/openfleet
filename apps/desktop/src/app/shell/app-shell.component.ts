@@ -23,7 +23,7 @@ import { CopyDetailsButtonComponent } from '../design/copy-details-button.compon
 import { ThemeToggleButtonComponent } from '../design/theme-toggle-button.component';
 import { ManagerGroupComponent } from '../sessions/manager-group.component';
 import { SessionListComponent } from '../sessions/session-list.component';
-import { ReplyDraftStore } from '../sessions/reply-draft.store';
+import { AnsweredRepliesStore } from '../working-state/answered-replies.store';
 import { attentionItemsOf, inboxCountLabelOf, itemsNeedingYouOf } from '../working-state/attention-items';
 import { contextNoticesOf } from '../working-state/context-notices';
 import { CommandPaletteComponent } from './command-palette.component';
@@ -171,7 +171,7 @@ const RUNNING_STATES = new Set(['generating', 'starting']);
 export class AppShellComponent {
   protected readonly events = inject(FleetEventsService);
   protected readonly versions = inject(VersionsService);
-  private readonly replies = inject(ReplyDraftStore);
+  private readonly answeredReplies = inject(AnsweredRepliesStore);
   protected readonly themeService = inject(ThemeService);
   private readonly router = inject(Router);
   private readonly injector = inject(Injector);
@@ -181,7 +181,7 @@ export class AppShellComponent {
   protected readonly paletteEpoch = signal(0);
   protected readonly runningCount = computed(() => this.events.sessions().filter((s) => RUNNING_STATES.has(s.state)).length);
   protected readonly inboxBadge = computed(() => {
-    const attentionItems = attentionItemsOf(this.events.sessions(), this.events.workingStates(), this.replies.deliveredReplyTimeBySessionId());
+    const attentionItems = attentionItemsOf(this.events.sessions(), this.events.workingStates(), this.answeredReplies.answeredReplyBySessionId());
     const attentionCount = itemsNeedingYouOf(attentionItems).length;
     const contextNoticeCount = contextNoticesOf(this.events.sessions()).length;
     const itemsNeedingYou = this.events.approvals().length + attentionCount + contextNoticeCount;

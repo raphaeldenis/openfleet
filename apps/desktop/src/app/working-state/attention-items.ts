@@ -5,31 +5,51 @@ export interface AttentionItem {
   readonly questions: readonly string[];
   readonly blockers: readonly string[];
   readonly updatedAt: string;
-  /** True while the agent has not rewritten its state since the human's reply reached it. */
+  /** True while every line the agent shows is one the human's delivered reply already answered. */
   readonly isAnswered: boolean;
+  /** When the reply that answered the lines reached the agent; undefined while unanswered. */
+  readonly answeredAt: string | undefined;
+}
+
+/** What the human replied to: the lines the agent showed when the reply was delivered. */
+export interface AnsweredReply {
+  readonly deliveredAt: string;
+  readonly answeredLines: readonly string[];
 }
 
 const MAX_SHOWN_COUNT = 99;
+
+/** The questions and blockers the agent shows the human, trimmed so a rewrite with the same words compares equal. */
+export function linesAskedOf(state: WorkingState): string[] {
+  return [...state.questionsForHuman, ...state.blockers].map((line) => line.trim());
+}
 
 /** The open sessions whose state asks the human something or reports a blocker, in session order. */
 export function attentionItemsOf(
   sessions: readonly Session[],
   states: ReadonlyMap<string, WorkingState>,
-  deliveredReplyTimeBySessionId: ReadonlyMap<string, string> = new Map(),
+  answeredReplyBySessionId: ReadonlyMap<string, AnsweredReply> = new Map(),
 ): AttentionItem[] {
   return sessions.flatMap((session) => {
     const state = states.get(session.id);
     const isClosed = session.state === 'closed';
-    const needsHuman = state !== undefined && (state.questionsForHuman.length > 0 || state.blockers.length > 0);
-    if (isClosed || !state || !needsHuman) return [];
-    const deliveredReplyTime = deliveredReplyTimeBySessionId.get(session.id);
-    const isAnswered = deliveredReplyTime !== undefined && Date.parse(state.updatedAt) <= Date.parse(deliveredReplyTime);
-    return [{ session, questions: state.questionsForHuman, blockers: state.blockers, updatedAt: state.updatedAt, isAnswered }];
+    if (isClosed || !state) return [];
+    const linesAsked = linesAskedOf(state);
+    const needsHuman = linesAsked.length > 0;
+    if (!needsHuman) return [];
+    const answeredReply = answeredReplyBySessionId.get(session.id);
+    const isAnswered = answeredReply !== undefined && linesAsked.every((line) => answeredReply.answeredLines.includes(line));
+    const answeredAt = isAnswered ? answeredReply.deliveredAt : undefined;
+    return [{ session, questions: state.questionsForHuman, blockers: state.blockers, updatedAt: state.updatedAt, isAnswered, answeredAt }];
   });
 }
 
 export function itemsNeedingYouOf(items: readonly AttentionItem[]): AttentionItem[] {
   return items.filter((item) => !item.isAnswered);
+}
+
+export function answeredItemsOf(items: readonly AttentionItem[]): AttentionItem[] {
+  return items.filter((item) => item.isAnswered);
 }
 
 export function inboxCountLabelOf(count: number): { text: string; ariaLabel: string } {

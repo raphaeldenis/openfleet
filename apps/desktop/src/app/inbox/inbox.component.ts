@@ -13,7 +13,8 @@ import { VersionsService } from '../core/versions.service';
 import { ErrorLineComponent } from '../design/error-line.component';
 import { KindBadgeComponent } from '../design/kind-badge.component';
 import { focusTabAt, nextTabIndex } from '../design/tablist-keyboard';
-import { attentionItemsOf, inboxCountLabelOf, itemsNeedingYouOf } from '../working-state/attention-items';
+import { AnsweredRepliesStore } from '../working-state/answered-replies.store';
+import { answeredItemsOf, attentionItemsOf, inboxCountLabelOf, itemsNeedingYouOf } from '../working-state/attention-items';
 import { contextNoticeCopyOf, contextNoticesOf } from '../working-state/context-notices';
 import { AttentionCardComponent } from './attention-card.component';
 import { minutesWaiting, silentBlockCopyOf, silentBlockDetailsMessageOf } from './silent-block-copy';
@@ -187,13 +188,37 @@ function formatInput(toolInput: unknown): FormattedInput {
         }
         @case ('questions') {
           <div class="gate-list" data-testid="inbox-attention-list">
-            @for (item of attentionItems(); track item.session.id) {
+            @for (item of attentionItemsNeedingYou(); track item.session.id) {
               <of-attention-card [item]="item" />
             } @empty {
               <div class="empty" data-testid="inbox-questions-empty">
                 <span class="empty-title">No agent is waiting on you</span>
                 <span>A session that asks a question or reports a blocker in its state shows up here.</span>
               </div>
+            }
+            @if (answeredEntries().length > 0) {
+              <section class="answered">
+                <button type="button" class="answered-toggle" data-testid="inbox-answered-toggle" [attr.aria-expanded]="isAnsweredSectionOpen()" (click)="isAnsweredSectionOpen.set(!isAnsweredSectionOpen())">Answered ({{ answeredEntries().length }})</button>
+                @if (isAnsweredSectionOpen()) {
+                  <ul class="answered-list">
+                    @for (entry of answeredEntries(); track entry.sessionId) {
+                      <li class="answered-entry" data-testid="inbox-answered-entry">
+                        <div class="gate-meta">
+                          <span class="avatar" aria-hidden="true">{{ entry.sessionEmoji }}</span>
+                          <a class="session-label session-link" data-testid="inbox-answered-session" [routerLink]="entry.sessionRoute">{{ entry.sessionName }}</a>
+                          <span class="answered-status" data-testid="inbox-answered-status">Reply delivered</span>
+                          <span class="age" data-testid="inbox-answered-time">{{ entry.timeLabel }}</span>
+                        </div>
+                        <ul class="answered-lines">
+                          @for (line of entry.lines; track $index) {
+                            <li data-testid="inbox-answered-question">{{ line }}</li>
+                          }
+                        </ul>
+                      </li>
+                    }
+                  </ul>
+                }
+              </section>
             }
           </div>
         }
@@ -222,6 +247,13 @@ function formatInput(toolInput: unknown): FormattedInput {
     .tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
     .tab.active { color: var(--fg); border-bottom-color: var(--accent); }
     .tab-count { display: inline-flex; min-width: 1rem; height: 1rem; padding: 0 .25rem; margin-left: .25rem; border-radius: .5rem; background: var(--sunk); color: var(--fg); font-size: .6875rem; font-weight: 600; align-items: center; justify-content: center; }
+    .answered { display: flex; flex-direction: column; gap: .5rem; padding-top: .5rem; }
+    .answered-toggle { align-self: flex-start; padding: 0; border: 0; background: transparent; color: var(--mut); cursor: pointer; font: inherit; }
+    .answered-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .answered-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .5rem; }
+    .answered-entry { display: flex; flex-direction: column; gap: .25rem; min-width: 0; padding: .5rem .875rem; border: 1px solid var(--line); border-radius: .625rem; background: var(--panel); opacity: .7; }
+    .answered-status { font-size: .6875rem; color: var(--mut); }
+    .answered-lines { margin: 0; padding: 0 0 0 1rem; overflow-wrap: anywhere; }
     .tabpanel { display: flex; flex-direction: column; gap: .75rem; }
     .filters { display: flex; flex-wrap: wrap; gap: .375rem; }
     .filter-chip { height: 1.625rem; padding: 0 .625rem; border: 1px solid var(--line); border-radius: 1rem; background: var(--panel); color: var(--fg); font-size: .75rem; cursor: pointer; }
@@ -249,6 +281,7 @@ export class InboxComponent {
   readonly events = inject(FleetEventsService);
   private readonly api = inject(FleetApiService);
   private readonly replies = inject(ReplyDraftStore);
+  private readonly answeredReplies = inject(AnsweredRepliesStore);
   private readonly versions = inject(VersionsService);
   private readonly injector = inject(Injector);
   private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
@@ -299,13 +332,25 @@ export class InboxComponent {
     return gates;
   });
 
-  protected readonly attentionItems = computed(() => attentionItemsOf(this.events.sessions(), this.events.workingStates(), this.replies.deliveredReplyTimeBySessionId()));
+  private readonly attentionItems = computed(() => attentionItemsOf(this.events.sessions(), this.events.workingStates(), this.answeredReplies.answeredReplyBySessionId()));
   protected readonly attentionItemsNeedingYou = computed(() => itemsNeedingYouOf(this.attentionItems()));
+  protected readonly isAnsweredSectionOpen = signal(false);
+
+  protected readonly answeredEntries = computed(() =>
+    answeredItemsOf(this.attentionItems()).map((item) => ({
+      sessionId: item.session.id,
+      sessionEmoji: item.session.emoji,
+      sessionName: showInvisibleControlsAsEscapes(item.session.name),
+      sessionRoute: [item.session.role === MANAGER_ROLE ? '/manager' : '/session', item.session.id],
+      timeLabel: timeLabelOf(item.answeredAt ?? item.updatedAt),
+      lines: [...item.questions, ...item.blockers].map(showBidiControlsAsEscapes),
+    })),
+  );
 
   /** Failed replies whose card is not on screen: the session closed, left the list, or another tab is open. */
   protected readonly unseenReplyFailures = computed(() => {
     const sessionsById = this.sessionsById();
-    const cardSessionIds = new Set(this.tab() === 'questions' ? this.attentionItems().map((item) => item.session.id) : []);
+    const cardSessionIds = new Set(this.tab() === 'questions' ? this.attentionItemsNeedingYou().map((item) => item.session.id) : []);
     return this.replies
       .failedSessionIds()
       .filter((sessionId) => !cardSessionIds.has(sessionId))
