@@ -1,12 +1,17 @@
 export interface InlineSegment { text: string; isCode: boolean; isBold: boolean }
 
+/** A table cell is a list of lines: a `<br>` in the cell starts a new line. */
+export type TableCell = InlineSegment[][];
+export type TableAlignment = 'left' | 'right' | 'center' | null;
+
 export type MarkdownBlock =
   | { type: 'heading'; level: 1 | 2 | 3; segments: InlineSegment[] }
   | { type: 'paragraph'; segments: InlineSegment[] }
   | { type: 'list'; items: InlineSegment[][] }
   | { type: 'ordered-list'; start: number; items: InlineSegment[][] }
   | { type: 'quote'; blocks: MarkdownBlock[] }
-  | { type: 'code'; text: string };
+  | { type: 'code'; text: string }
+  | { type: 'table'; alignments: TableAlignment[]; header: TableCell[]; rows: TableCell[][] };
 
 const HEADING = /^(#{1,3}) +(\S.*)$/;
 const LIST_ITEM = /^[-*] +(.*)$/;
@@ -25,9 +30,14 @@ const BLANK_TEXT = new RegExp(`^[\\s${ZERO_WIDTH_CHARACTERS}]*$`);
 const WHITESPACE = /^\s$/;
 const PUNCTUATION = /^[\p{P}\p{S}]$/u;
 const MAX_QUOTE_DEPTH = 3;
+const TABLE_PIPE = '|';
+const UNESCAPED_TABLE_PIPE = /(?<!\\)\|/;
+const ESCAPED_TABLE_PIPE = /\\\|/g;
+const TABLE_DELIMITER_CELL = /^:?-+:?$/;
+const TABLE_LINE_BREAK = /<br\s*\/?>/i;
 
-// ponytail: headings 1-3, paragraphs, bullet and numbered lists, quotes (3 levels), fenced code, inline code and bold only;
-// no italics, links or tables. Add `marked` if notes need them.
+// ponytail: headings 1-3, paragraphs, bullet and numbered lists, quotes (3 levels), fenced code, GFM tables, inline code and bold only;
+// no italics or links. Add `marked` if notes need them.
 export function parseMarkdownBlocks(markdown: string): MarkdownBlock[] {
   return parseLines(markdown.split(LINE_BREAK));
 }
@@ -83,8 +93,15 @@ function parseLines(lines: string[], quoteDepth = 0): MarkdownBlock[] {
       continue;
     }
 
+    if (startsTableAt(lines, index)) {
+      const { table, next } = collectTable(lines, index, canOpenQuote);
+      blocks.push(table);
+      index = next;
+      continue;
+    }
+
     const paragraphLines: string[] = [];
-    while (index < lines.length && startsParagraphContinuation(lines[index]!, canOpenQuote)) {
+    while (index < lines.length && startsParagraphContinuation(lines[index]!, canOpenQuote) && !startsTableAt(lines, index)) {
       paragraphLines.push(lines[index]!);
       index += 1;
     }
@@ -103,6 +120,51 @@ function collectListItems(lines: string[], from: number, itemPattern: RegExp): {
     items.push(inlineSegments(match[1]!));
   }
   return { items, next };
+}
+
+function startsTableAt(lines: string[], index: number): boolean {
+  const headerLine = lines[index]!;
+  const delimiterLine = lines[index + 1];
+  if (delimiterLine === undefined) return false;
+  const bothLinesHavePipes = headerLine.includes(TABLE_PIPE) && delimiterLine.includes(TABLE_PIPE);
+  if (!bothLinesHavePipes) return false;
+  const delimiterCells = tableRowCells(delimiterLine);
+  const isDelimiterRow = delimiterCells.every((cell) => TABLE_DELIMITER_CELL.test(cell));
+  const hasHeaderColumnCount = tableRowCells(headerLine).length === delimiterCells.length;
+  return isDelimiterRow && hasHeaderColumnCount;
+}
+
+function collectTable(lines: string[], from: number, canOpenQuote: boolean): { table: MarkdownBlock; next: number } {
+  const header = tableRowCells(lines[from]!).map(tableCell);
+  const alignments = tableRowCells(lines[from + 1]!).map(alignmentOf);
+  const rows: TableCell[][] = [];
+  let next = from + 2;
+  for (; next < lines.length && startsParagraphContinuation(lines[next]!, canOpenQuote); next += 1) {
+    const cells = tableRowCells(lines[next]!);
+    rows.push(header.map((_, column) => tableCell(cells[column] ?? '')));
+  }
+  return { table: { type: 'table', alignments, header, rows }, next };
+}
+
+/** Splits a table row on its unescaped pipes, ignoring the optional outer pipes; `\|` reads as a literal pipe. */
+function tableRowCells(line: string): string[] {
+  const trimmed = line.trim();
+  const withoutLeadingPipe = trimmed.startsWith(TABLE_PIPE) ? trimmed.slice(1) : trimmed;
+  const endsWithUnescapedPipe = withoutLeadingPipe.endsWith(TABLE_PIPE) && !withoutLeadingPipe.endsWith(`\\${TABLE_PIPE}`);
+  const withoutOuterPipes = endsWithUnescapedPipe ? withoutLeadingPipe.slice(0, -1) : withoutLeadingPipe;
+  return withoutOuterPipes.split(UNESCAPED_TABLE_PIPE).map((cell) => cell.trim().replace(ESCAPED_TABLE_PIPE, TABLE_PIPE));
+}
+
+function tableCell(cellText: string): TableCell {
+  return cellText.split(TABLE_LINE_BREAK).map((lineText) => inlineSegments(lineText.trim()));
+}
+
+function alignmentOf(delimiterCell: string): TableAlignment {
+  const isLeft = delimiterCell.startsWith(':');
+  const isRight = delimiterCell.endsWith(':');
+  if (isLeft && isRight) return 'center';
+  if (isLeft) return 'left';
+  return isRight ? 'right' : null;
 }
 
 function startsParagraphContinuation(line: string, canOpenQuote: boolean): boolean {
@@ -228,9 +290,16 @@ export function renderCost(block: MarkdownBlock): number {
       return 1 + block.items.reduce((total, item) => total + 1 + countStyledRuns(item), 0);
     case 'code':
       return 1 + countLines(block.text);
+    case 'table':
+      return 1 + tableRowCost(block.header) + block.rows.reduce((total, row) => total + tableRowCost(row), 0);
     default:
       return 1;
   }
+}
+
+function tableRowCost(cells: readonly TableCell[]): number {
+  const cellCosts = cells.map((cell) => 1 + cell.reduce((total, line) => total + countStyledRuns(line), 0));
+  return 1 + cellCosts.reduce((total, cost) => total + cost, 0);
 }
 
 function countLines(text: string): number {
@@ -290,9 +359,26 @@ function trimToBudget(block: MarkdownBlock, budget: number): MarkdownBlock | nul
       const text = takeLines(block.text, budget);
       return block.text !== '' && text === '' ? null : { ...block, text };
     }
+    case 'table': {
+      const remainingForRows = budget - tableRowCost(block.header);
+      const isHeaderCutOffFromItsTable = remainingForRows < 0;
+      return isHeaderCutOffFromItsTable ? null : { ...block, rows: takeTableRows(block.rows, remainingForRows) };
+    }
     default:
       return block;
   }
+}
+
+function takeTableRows(rows: readonly TableCell[][], budget: number): TableCell[][] {
+  const kept: TableCell[][] = [];
+  let remaining = budget;
+  for (const row of rows) {
+    const cost = tableRowCost(row);
+    if (cost > remaining) break;
+    remaining -= cost;
+    kept.push(row);
+  }
+  return kept;
 }
 
 function takeListItems(items: readonly InlineSegment[][], budget: number): InlineSegment[][] {

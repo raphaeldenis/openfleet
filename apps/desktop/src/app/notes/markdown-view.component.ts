@@ -1,13 +1,14 @@
 import { NgTemplateOutlet } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, input, signal } from '@angular/core';
 import { countRenderCost, parseMarkdownBlocks, takeWithinRenderBudget } from './markdown-blocks';
+import { MarkdownTableComponent } from './markdown-table.component';
 
 const NODES_PER_CHUNK = 2000;
 
-/** Renders markdown as read-only text: headings, paragraphs, lists, quotes, code. A long document shows in chunks. */
+/** Renders markdown as read-only text: headings, paragraphs, lists, quotes, code, tables. A long document shows in chunks. */
 @Component({
   selector: 'of-markdown-view',
-  imports: [NgTemplateOutlet],
+  imports: [NgTemplateOutlet, MarkdownTableComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="doc">
@@ -49,6 +50,9 @@ const NODES_PER_CHUNK = 2000;
           }
           @case ('code') {
             <pre>{{ block.text }}</pre>
+          }
+          @case ('table') {
+            <of-markdown-table [header]="block.header" [rows]="block.rows" [alignments]="block.alignments" />
           }
         }
       }
