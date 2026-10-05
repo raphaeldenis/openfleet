@@ -296,7 +296,11 @@ export class DataStoreService {
     const data = this.withDaemonSetCells(this.daemonSetColumns(columns), input.data, at);
     this.validateCells(columns, data);
     this.assertRowCapacity(storeId, 1);
-    return this.guarded(() => this.repo.insertRow(storeId, { id: this.newId(), data, actor: input.actor, at }));
+    return this.inTransaction(() => {
+      const rowId = this.newId();
+      this.refuseNaturalKeyHeldByAnotherRow(storeId, rowId, data);
+      return this.repo.insertRow(storeId, { id: rowId, data, actor: input.actor, at });
+    });
   }
 
   updateRow(storeId: string, rowId: string, input: Scope & { patch: Record<string, unknown>; actor: RowActor }): DsRow {
@@ -332,7 +336,11 @@ export class DataStoreService {
     });
     for (const { data } of stampedRows) this.validateCells(columns, data);
     this.assertRowCapacity(storeId, input.items.length);
-    return this.inTransaction(() => stampedRows.map(({ data, at }) => this.repo.insertRow(storeId, { id: this.newId(), data, actor: input.actor, at })));
+    return this.inTransaction(() => stampedRows.map(({ data, at }) => {
+      const rowId = this.newId();
+      this.refuseNaturalKeyHeldByAnotherRow(storeId, rowId, data);
+      return this.repo.insertRow(storeId, { id: rowId, data, actor: input.actor, at });
+    }));
   }
 
   /**

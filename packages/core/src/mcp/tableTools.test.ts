@@ -303,7 +303,7 @@ describe('table tools', () => {
     }));
 
     expect(result.rows.map((r: { data: Record<string, unknown> }) => r.data[priorityId])).toEqual([2]);
-    expect(result).toMatchObject({ truncated: false, count: 1 });
+    expect(result).toMatchObject({ truncated: true, count: 1 });
   });
 
   it('query_data_store stops adding rows once the serialized result would exceed 1 MiB and flags truncated', async () => {
@@ -621,7 +621,7 @@ describe('update_data_store_row', () => {
   it('refuses a key held by several rows and changes none', async () => {
     const client = await connect(scopedToken);
     const { storeId, idColumnId, firstRowId, titleColumnId, dataOf } = await backlogWithTwoRows(client);
-    stores.insertRow(storeId, { projectId: 'p1', data: { [idColumnId]: 'IT-1' }, actor: { kind: 'human', label: 'test' } });
+    storeRepo.insertRow(storeId, { id: 'legacy-duplicate', at: '2026-01-01T00:00:00.000Z', data: { [idColumnId]: 'IT-1' }, actor: { kind: 'human', label: 'test' } });
 
     const result = await client.callTool({ name: 'update_data_store_row', arguments: { store: storeId, key: 'IT-1', values: { title: 'x' } } });
 

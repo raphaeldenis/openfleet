@@ -1,18 +1,16 @@
-import { AutoValueSchema, ColumnTypeSchema, SelectOptionSchema, type DataStore, type DsColumn, type Session } from '@openfleet/shared';
+import { AggregateSchema, ScapeAggregateSchema, AutoValueSchema, ColumnTypeSchema, SelectOptionSchema, type Aggregate, type ScapeAggregate, type DataStore, type DsColumn, type Session } from '@openfleet/shared';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { RowNotFoundError, StoreNotFoundError, UnknownColumnReferenceError, type DataStoreRepository, type RowActor } from '../stores/dataStoreRepository.js';
 import { InvalidColumnDefinitionError, SAVE_MODES, type DataStoreService } from '../stores/dataStoreService.js';
-import { guardedFor, refusalReasonOf, refuse, truncateToByteBudget } from './toolResults.js';
+import { guardedFor, refusalReasonOf, refuse } from './toolResults.js';
+import { queryPage } from './queryPage.js';
 import { cellsKeyedByColumnId, coerceFilterValue, columnLookupFor, requireColumn } from './rowValues.js';
 import { writeRowByRow, type RowBatchReport } from './rowBatch.js';
-import { AggregateSchema, aggregatedRows } from './queryAggregation.js';
+import { aggregatedRows } from './queryAggregation.js';
 import { orderTermsOf, QueryOrderTermSchema, QueryWhereClauseSchema, whereClausesOf } from './queryArguments.js';
 import { cellReaderFor, columnarRowView, columnView, rowView, storeView } from './toolViews.js';
 
-// Task 15 caps (see the plan's Review Focus #3 and Lead amendment on P3-T11): a batch write is capped so
-// one call can't hold the outer transaction open indefinitely, and a query defaults to a page an agent can
-// actually read rather than dumping a whole store.
 const MAX_BATCH_ROWS = 500;
 const MAX_QUERY_LIMIT = 1000;
 const DEFAULT_QUERY_LIMIT = 100;
@@ -52,14 +50,18 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
   });
 
   server.registerTool('describe_data_store', {
-    description: 'A data store\'s id, display name, and its columns in order (id, displayName, columnType, options when a select column, autoValue when set)',
-    inputSchema: { store: z.string().min(1) },
-  }, async ({ store }) => {
+    description: 'Describe a store schema, natural key and rowCount. Without store, discover every store with its schema in the caller project; optional project must be the caller project id.',
+    inputSchema: { store: z.string().min(1).optional(), project: z.string().min(1).optional() },
+  }, async ({ store, project }) => {
     const scope = requireProject();
     if (!scope) return refuse('project_not_found', 'this session has no project');
+    if (project !== undefined && project !== scope.projectId) return refuse('project_not_found', 'this session cannot describe another project');
     return guarded(() => {
-      const dataStore = ownStoreOf(store, scope);
-      return { ...storeView(dataStore), columns: storeRepo.listColumns(dataStore.id).map(columnView) };
+      const describeStore = (dataStore: DataStore) => ({
+        ...storeView(dataStore), columns: storeRepo.listColumns(dataStore.id).map(columnView), rowCount: storeRepo.countRows(dataStore.id),
+      });
+      if (store === undefined) return { stores: storeRepo.listStores(scope.projectId).map(describeStore) };
+      return describeStore(ownStoreOf(store, scope));
     });
   });
 
@@ -196,48 +198,57 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
   });
 
   server.registerTool('query_data_store', {
-    description: `Filter, sort and limit a store's rows (limit ≤ ${MAX_QUERY_LIMIT}, default ${DEFAULT_QUERY_LIMIT}); the result is also cut off past ${MAX_QUERY_RESULT_BYTES} bytes, with \`truncated: true\` when that happened. `
+    description: `Filter, sort and page a store's rows (limit ≤ ${MAX_QUERY_LIMIT}, default ${DEFAULT_QUERY_LIMIT}, offset default 0). Returns total matching rows or groups, next_offset for the next page, and truncated when the limit or ${MAX_QUERY_RESULT_BYTES}-byte budget cuts off results. `
       + 'By default each row is {id, data keyed by column id, updatedAt}. format "columnar" returns {columns, names, rows: [[rowId, updatedAt, ...one cell per data column]], truncated, count} instead (an empty cell is null): '
       + 'columns lists id, updatedAt (unless dropped) then the data column ids, names labels the same positions, so columns[k] and names[k] describe row[k]. '
       + 'columns (ids or display names, names match case-insensitively) keeps only those data columns in both formats: names resolve to ids, an id wins over a name, duplicates are dropped, order is preserved, and an empty list keeps NO data columns (columnar rows are [rowId, updatedAt] or [rowId] with include_updated_at false, rows format has data: {}); '
-      + 'select is another name for columns (pass one of them). store is its id or display name. '
+      + 'select accepts column names (another name for columns; pass one) or aggregate objects [{agg:"count", column?, as?}]. store is its id or display name. '
       + 'where [{column, op, value}] and order_by [{column, dir}] name a column by id or display name (any case; columnId stays accepted); op is eq, ne (or neq), gt, gte, lt, lte, contains, or in (value is a list). '
       + 'A select column compares by option label (any case) or id, a numeric string is read as a number, and a select cell is returned as its option label. '
       + 'group_by [column, ...] and aggregates [{op, column?, as?}] return one row per group instead of the rows: {group columns by display name, then each aggregate under its alias} '
-      + '(op count, sum, avg, min, max; count without column counts the rows, count with a column its non-empty cells; sum and avg need a number column; the alias defaults to count or op_ColumnName; with no aggregate the rows are counted; limit caps the groups; not combinable with format, select or columns). '
+      + '(op count, sum, avg, min, max; count without column counts the rows, count with a column its non-empty cells of any type; sum and avg need a number column; min/max need text, number or date; non-finite results are refused; the alias defaults to count or op_ColumnName; with no aggregate the rows are counted; limit and offset page groups; not combinable with format or a column projection). '
       + 'include_updated_at false drops updatedAt from every row. Unknown arguments are ignored',
     inputSchema: {
       store: z.string().min(1),
       where: z.array(QueryWhereClauseSchema).optional(),
       order_by: z.array(QueryOrderTermSchema).optional(),
       limit: z.number().int().min(0).max(MAX_QUERY_LIMIT).optional(),
+      offset: z.number().int().min(0).optional(),
       format: z.enum(['rows', 'columnar']).optional(),
       columns: z.array(z.string().min(1)).optional(),
-      select: z.array(z.string().min(1)).optional(),
+      select: z.union([z.array(z.string().min(1)), z.array(ScapeAggregateSchema)]).optional(),
       group_by: z.array(z.string().min(1)).optional(),
       aggregates: z.array(AggregateSchema).optional(),
       include_updated_at: z.boolean().optional(),
     },
-  }, async ({ store, where, order_by, limit, format, columns, select, group_by, aggregates, include_updated_at }) => {
+  }, async ({ store, where, order_by, limit, offset, format, columns, select, group_by, aggregates, include_updated_at }) => {
     const scope = requireProject();
     if (!scope) return refuse('project_not_found', 'this session has no project');
     if (columns !== undefined && select !== undefined) return refuse('invalid_body', 'pass either select or columns, not both');
-    const requestedColumns = columns ?? select;
-    const isAggregation = group_by !== undefined || aggregates !== undefined;
+    const aggregateSelect = select?.filter((entry): entry is ScapeAggregate => typeof entry !== 'string');
+    const hasAggregateSelect = aggregateSelect !== undefined && aggregateSelect.length > 0;
+    if (hasAggregateSelect && aggregates !== undefined) return refuse('invalid_body', 'pass aggregate select or aggregates, not both');
+    const selectedColumns = hasAggregateSelect ? undefined : select as string[] | undefined;
+    const requestedColumns = columns ?? selectedColumns;
+    const selectedAggregates: Aggregate[] | undefined = hasAggregateSelect ? aggregateSelect.map(({ agg, ...entry }) => ({ op: agg, ...entry })) : aggregates;
+    const isAggregation = group_by !== undefined || selectedAggregates !== undefined;
     const shapesRowsItself = format !== undefined || requestedColumns !== undefined;
     if (isAggregation && shapesRowsItself) return refuse('invalid_body', 'group_by and aggregates return one row per group, so they cannot be combined with format, select or columns');
     return guarded(() => {
       const ownStore = ownStoreOf(store, scope);
       const storeColumns = storeRepo.listColumns(ownStore.id);
       const cellOf = cellReaderFor(storeColumns);
-      const rows = stores.query(ownStore.id, {
-        ...scope, where: whereClausesOf(storeColumns, where ?? []), orderBy: orderTermsOf(storeColumns, order_by ?? []), limit: isAggregation ? undefined : limit ?? DEFAULT_QUERY_LIMIT,
+      const matchingRows = stores.query(ownStore.id, {
+        ...scope, where: whereClausesOf(storeColumns, where ?? []), orderBy: orderTermsOf(storeColumns, order_by ?? []),
       });
+      const pageOffset = offset ?? 0;
+      const pageLimit = limit ?? DEFAULT_QUERY_LIMIT;
       if (isAggregation) {
-        const groups = aggregatedRows({ columns: storeColumns, rows, groupBy: group_by ?? [], aggregates: aggregates ?? [], cellOf }).slice(0, limit ?? DEFAULT_QUERY_LIMIT);
-        const { items, truncated } = truncateToByteBudget(groups, MAX_QUERY_RESULT_BYTES);
-        return { rows: items, truncated, count: items.length };
+        const allGroups = aggregatedRows({ columns: storeColumns, rows: matchingRows, groupBy: group_by ?? [], aggregates: selectedAggregates ?? [], cellOf });
+        const groups = allGroups.slice(pageOffset, pageOffset + pageLimit);
+        return queryPage({ rows: groups, total: allGroups.length, offset: pageOffset, maxBytes: MAX_QUERY_RESULT_BYTES });
       }
+      const rows = matchingRows.slice(pageOffset, pageOffset + pageLimit);
       const includeUpdatedAt = include_updated_at ?? true;
       const isColumnar = format === 'columnar';
       if (isColumnar) {
@@ -245,14 +256,12 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
         const columnIds = dataColumns.map((column) => column.id);
         const leadingHeaders = includeUpdatedAt ? ['id', 'updatedAt'] : ['id'];
         const header = { columns: [...leadingHeaders, ...columnIds], names: [...leadingHeaders, ...dataColumns.map((column) => column.displayName)] };
-        const envelopeBytes = Buffer.byteLength(JSON.stringify({ ...header, rows: [], truncated: false, count: rows.length }), 'utf8');
         const columnarRows = rows.map((row) => columnarRowView(row, { columnIds, includeUpdatedAt, cellOf }));
-        const { items, truncated } = truncateToByteBudget(columnarRows, MAX_QUERY_RESULT_BYTES - envelopeBytes, { bytesBetweenItems: 1 });
-        return { ...header, rows: items, truncated, count: items.length };
+        return queryPage({ rows: columnarRows, header, total: matchingRows.length, offset: pageOffset, maxBytes: MAX_QUERY_RESULT_BYTES });
       }
       const columnIds = requestedColumns ? resolveColumns(ownStore.id, requestedColumns).map((column) => column.id) : undefined;
-      const { items, truncated } = truncateToByteBudget(rows.map((row) => rowView(row, { columnIds, includeUpdatedAt, cellOf })), MAX_QUERY_RESULT_BYTES);
-      return { rows: items, truncated, count: items.length };
+      const resultRows = rows.map((row) => rowView(row, { columnIds, includeUpdatedAt, cellOf }));
+      return queryPage({ rows: resultRows, total: matchingRows.length, offset: pageOffset, maxBytes: MAX_QUERY_RESULT_BYTES });
     });
   });
 

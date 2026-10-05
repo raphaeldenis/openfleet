@@ -51,6 +51,22 @@ const insertRows = async (storeId: string, columns: { name: DsColumn; qty: DsCol
     projectId: 'p1', rows: rows.map(([name, qty]) => ({ [columns.name.id]: name, [columns.qty.id]: qty })),
   }));
 
+it('refuses existing and batch natural-key collisions without inserting any rows', async () => {
+  const { store, name } = seedStore();
+  stores.setNaturalKey(store.id, { projectId: 'p1', columnId: name.id });
+  const rowsPath = `/api/data-stores/${store.id}/rows`;
+  await call('POST', rowsPath, { projectId: 'p1', rows: [{ [name.id]: 'A' }] });
+
+  const existingCollision = await call('POST', rowsPath, { projectId: 'p1', rows: [{ [name.id]: 'B' }, { [name.id]: 'A' }] });
+  const batchCollision = await call('POST', rowsPath, { projectId: 'p1', rows: [{ [name.id]: 'C' }, { [name.id]: 'C' }] });
+
+  expect(existingCollision.status).toBe(400);
+  expect(batchCollision.status).toBe(400);
+  expect(await json(existingCollision)).toMatchObject({ error: 'constraint_violation' });
+  const remaining = await json(await call('GET', `${rowsPath}?projectId=p1`));
+  expect(remaining.total).toBe(1);
+});
+
 beforeEach(async () => {
   const db = openDatabase(':memory:');
   const bus = new EventBus();

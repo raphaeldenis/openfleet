@@ -4,6 +4,12 @@ export const COLUMN_TYPES = ['text', 'number', 'date', 'select', 'json'] as cons
 export const ColumnTypeSchema = z.enum(COLUMN_TYPES);
 export type ColumnType = z.infer<typeof ColumnTypeSchema>;
 
+export const AGGREGATE_OPS = ['count', 'sum', 'avg', 'min', 'max'] as const;
+export const AggregateSchema = z.object({ op: z.enum(AGGREGATE_OPS), column: z.string().min(1).optional(), as: z.string().min(1).optional() });
+export const ScapeAggregateSchema = AggregateSchema.omit({ op: true }).extend({ agg: AggregateSchema.shape.op });
+export type Aggregate = z.infer<typeof AggregateSchema>;
+export type ScapeAggregate = z.infer<typeof ScapeAggregateSchema>;
+
 export const SelectOptionSchema = z.object({ id: z.string().min(1), label: z.string().min(1) });
 export type SelectOption = z.infer<typeof SelectOptionSchema>;
 

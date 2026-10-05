@@ -1,14 +1,9 @@
-import type { DsColumn, DsRow } from '@openfleet/shared';
-import { z } from 'zod';
+import type { Aggregate, DsColumn, DsRow } from '@openfleet/shared';
 import { InvalidQueryError } from '../stores/dataStoreService.js';
 import { requireColumn } from './rowValues.js';
 import type { CellReader } from './toolViews.js';
 
-const AGGREGATE_OPS = ['count', 'sum', 'avg', 'min', 'max'] as const;
-type AggregateOp = (typeof AGGREGATE_OPS)[number];
-
-export const AggregateSchema = z.object({ op: z.enum(AGGREGATE_OPS), column: z.string().min(1).optional(), as: z.string().min(1).optional() });
-export type Aggregate = z.infer<typeof AggregateSchema>;
+type AggregateOp = Aggregate['op'];
 
 interface ResolvedAggregate { op: AggregateOp; column: DsColumn | undefined; alias: string }
 
@@ -23,7 +18,8 @@ function resolveAggregate(columns: DsColumn[], aggregate: Aggregate): ResolvedAg
   const needsNumberColumn = op === 'sum' || op === 'avg';
   if (needsNumberColumn && column?.columnType !== 'number') throw new InvalidQueryError(`${op} needs a number column; "${column!.displayName}" is ${column!.columnType}`);
   const isOrderable = column === undefined || ['number', 'date', 'text'].includes(column.columnType);
-  if (!isOrderable) throw new InvalidQueryError(`${op} needs a number, date or text column; "${column!.displayName}" is ${column!.columnType}`);
+  const needsOrderableColumn = op === 'min' || op === 'max';
+  if (needsOrderableColumn && !isOrderable) throw new InvalidQueryError(`${op} needs a number, date or text column; "${column!.displayName}" is ${column!.columnType}`);
   const defaultAlias = column === undefined ? op : `${op}_${column.displayName}`;
   return { op, column, alias: aggregate.as ?? defaultAlias };
 }
@@ -31,13 +27,26 @@ function resolveAggregate(columns: DsColumn[], aggregate: Aggregate): ResolvedAg
 const isBefore = (column: DsColumn, a: unknown, b: unknown): boolean =>
   column.columnType === 'date' ? Date.parse(a as string) < Date.parse(b as string) : (a as number | string) < (b as number | string);
 
+function finiteAggregate(value: number, op: AggregateOp): number {
+  if (!Number.isFinite(value)) throw new InvalidQueryError(`${op} produces a non-finite result`);
+  return value;
+}
+
+function averageOf(cells: number[]): number {
+  const scale = cells.reduce((largest, cell) => Math.max(largest, Math.abs(cell)), 0);
+  if (scale === 0) return 0;
+  const normalizedSum = cells.reduce((total, cell) => total + cell / scale, 0);
+  const normalizedMean = normalizedSum / cells.length;
+  return finiteAggregate(normalizedMean * scale, 'avg');
+}
+
 function valueOf({ op, column }: ResolvedAggregate, rows: DsRow[]): unknown {
   if (op === 'count' && column === undefined) return rows.length;
   const cells = rows.map((row) => row.data[column!.id]).filter((cell) => !isEmptyCell(cell));
   if (op === 'count') return cells.length;
-  if (op === 'sum') return (cells as number[]).reduce((total, cell) => total + cell, 0);
+  if (op === 'sum') return finiteAggregate((cells as number[]).reduce((total, cell) => total + cell, 0), op);
   if (cells.length === 0) return null;
-  if (op === 'avg') return (cells as number[]).reduce((total, cell) => total + cell, 0) / cells.length;
+  if (op === 'avg') return averageOf(cells as number[]);
   const keepsCandidate = op === 'min' ? (candidate: unknown, kept: unknown) => isBefore(column!, candidate, kept) : (candidate: unknown, kept: unknown) => isBefore(column!, kept, candidate);
   return cells.reduce((kept, candidate) => (keepsCandidate(candidate, kept) ? candidate : kept));
 }
@@ -52,9 +61,12 @@ export function aggregatedRows(input: { columns: DsColumn[]; rows: DsRow[]; grou
   const aggregates = (input.aggregates.length > 0 ? input.aggregates : [COUNT_OF_ROWS]).map((aggregate) => resolveAggregate(columns, aggregate));
 
   const rowsByGroupKey = new Map<string, DsRow[]>();
+  if (groupColumns.length === 0) rowsByGroupKey.set('[]', []);
   for (const row of rows) {
     const groupKey = JSON.stringify(groupColumns.map((column) => row.data[column.id] ?? null));
-    rowsByGroupKey.set(groupKey, [...(rowsByGroupKey.get(groupKey) ?? []), row]);
+    const groupRows = rowsByGroupKey.get(groupKey) ?? [];
+    groupRows.push(row);
+    rowsByGroupKey.set(groupKey, groupRows);
   }
 
   return [...rowsByGroupKey.values()].map((groupRows) => ({
