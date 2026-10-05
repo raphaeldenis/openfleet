@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, effect, inject, input, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, effect, inject, input, signal, untracked } from '@angular/core';
 import { copyFor } from '../core/error-copy';
 import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
@@ -9,6 +9,7 @@ import { ReplyDraftStore } from './reply-draft.store';
 interface PendingMessage { id: string; deliveredImmediately: boolean }
 
 const IDLE_PLACEHOLDER = 'Message this session…';
+const WORKING_ON_REPLY_PLACEHOLDER = 'Reply delivered — this session is working on it';
 const BUSY_PLACEHOLDER = 'This session is busy — your message is delivered on the next idle turn';
 
 @Component({
@@ -60,9 +61,17 @@ export class ComposerComponent {
     if (this.isSending()) return 'Sending…';
     return this.busy() ? 'Queue' : 'Send';
   });
-  protected readonly placeholder = computed(() => (this.busy() ? BUSY_PLACEHOLDER : IDLE_PLACEHOLDER));
+  protected readonly placeholder = computed(() => {
+    if (!this.busy()) return IDLE_PLACEHOLDER;
+    return this.status() === 'sent' ? WORKING_ON_REPLY_PLACEHOLDER : BUSY_PLACEHOLDER;
+  });
 
   constructor() {
+    effect(() => {
+      const isReplyDelivered = this.status() === 'sent';
+      if (isReplyDelivered) this.replies.markReplyDelivered(untracked(this.sessionId), new Date().toISOString());
+    });
+
     // A route param change reuses this component instance, so a session switch must not leak
     // the previous session's delivery status into the one now shown (drafts and errors are keyed by session).
     effect(() => {

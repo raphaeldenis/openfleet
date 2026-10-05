@@ -5,19 +5,31 @@ export interface AttentionItem {
   readonly questions: readonly string[];
   readonly blockers: readonly string[];
   readonly updatedAt: string;
+  /** True while the agent has not rewritten its state since the human's reply reached it. */
+  readonly isAnswered: boolean;
 }
 
 const MAX_SHOWN_COUNT = 99;
 
 /** The open sessions whose state asks the human something or reports a blocker, in session order. */
-export function attentionItemsOf(sessions: readonly Session[], states: ReadonlyMap<string, WorkingState>): AttentionItem[] {
+export function attentionItemsOf(
+  sessions: readonly Session[],
+  states: ReadonlyMap<string, WorkingState>,
+  deliveredReplyTimeBySessionId: ReadonlyMap<string, string> = new Map(),
+): AttentionItem[] {
   return sessions.flatMap((session) => {
     const state = states.get(session.id);
     const isClosed = session.state === 'closed';
     const needsHuman = state !== undefined && (state.questionsForHuman.length > 0 || state.blockers.length > 0);
     if (isClosed || !state || !needsHuman) return [];
-    return [{ session, questions: state.questionsForHuman, blockers: state.blockers, updatedAt: state.updatedAt }];
+    const deliveredReplyTime = deliveredReplyTimeBySessionId.get(session.id);
+    const isAnswered = deliveredReplyTime !== undefined && Date.parse(state.updatedAt) <= Date.parse(deliveredReplyTime);
+    return [{ session, questions: state.questionsForHuman, blockers: state.blockers, updatedAt: state.updatedAt, isAnswered }];
   });
+}
+
+export function itemsNeedingYouOf(items: readonly AttentionItem[]): AttentionItem[] {
+  return items.filter((item) => !item.isAnswered);
 }
 
 export function inboxCountLabelOf(count: number): { text: string; ariaLabel: string } {

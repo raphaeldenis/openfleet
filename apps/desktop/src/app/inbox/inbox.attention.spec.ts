@@ -169,6 +169,97 @@ describe('InboxComponent questions from agents', () => {
       expect(api.sendMessage).toHaveBeenCalledWith('s2', 'use the staging token', expect.stringMatching(/^[0-9a-f-]{36}$/));
     });
 
+    describe('feedback after a reply', () => {
+      const asking = [stateOf({ sessionId: 's1', questionsForHuman: ['which port?'] })];
+      const replyField = () => within(cards()[0]).getByTestId('composer-input');
+
+      async function replyFromCard(view: Awaited<ReturnType<typeof renderInbox>>, text = 'rien') {
+        const user = userEvent.setup({ delay: null });
+        await openQuestionsTab();
+        await user.type(replyField(), text);
+        await user.click(within(cards()[0]).getByTestId('composer-send'));
+        await view.fixture.whenStable();
+      }
+
+      it('user sees no busy notice on the card of an idle session', async () => {
+        await renderInbox([agent('s1', { state: 'idle' })], asking);
+        await openQuestionsTab();
+
+        expect(within(cards()[0]).queryByPlaceholderText(/busy/i)).toBeNull();
+        expect(within(cards()[0]).getByTestId('composer-send')).toHaveTextContent('Send');
+      });
+
+      it('user sees the busy notice and Queue on the card of a session that is mid-turn', async () => {
+        await renderInbox([agent('s1', { state: 'generating' })], asking);
+        await openQuestionsTab();
+
+        expect(within(cards()[0]).getByPlaceholderText(/busy/i)).toBeTruthy();
+        expect(within(cards()[0]).getByTestId('composer-send')).toHaveTextContent('Queue');
+      });
+
+      it('user sees no busy notice once the session starts working on the reply it just received', async () => {
+        const view = await renderInbox([agent('s1', { state: 'idle' })], asking);
+        await replyFromCard(view);
+
+        view.events.sessions.set([agent('s1', { state: 'generating' })]);
+        await view.fixture.whenStable();
+
+        expect(within(cards()[0]).queryByPlaceholderText(/busy/i)).toBeNull();
+        expect(within(cards()[0]).getByTestId('composer-status')).toHaveTextContent('sent');
+      });
+
+      it('user sees the card marked as answered once the reply is delivered', async () => {
+        const view = await renderInbox([agent('s1')], asking);
+        await replyFromCard(view);
+
+        expect(within(cards()[0]).getByTestId('inbox-attention-answered')).toHaveTextContent('Reply delivered');
+      });
+
+      it('user no longer sees an answered card counted as needing attention', async () => {
+        const view = await renderInbox([agent('s1')], asking);
+        expect(screen.getByTestId('inbox-count')).toHaveTextContent('1');
+
+        await replyFromCard(view);
+
+        expect(screen.queryByTestId('inbox-count')).toBeNull();
+        expect(screen.queryByTestId('inbox-tab-count-questions')).toBeNull();
+      });
+
+      it('user sees the card ask again, unmarked and counted, when the agent writes a new question', async () => {
+        const view = await renderInbox([agent('s1')], asking);
+        await replyFromCard(view);
+
+        view.events.workingStates.set(new Map([['s1', stateOf({ sessionId: 's1', questionsForHuman: ['and the host?'], updatedAt: new Date(Date.now() + 60_000).toISOString() })]]));
+        await view.fixture.whenStable();
+
+        expect(within(cards()[0]).queryByTestId('inbox-attention-answered')).toBeNull();
+        expect(screen.getByTestId('inbox-count')).toHaveTextContent('1');
+      });
+
+      it('user sees a reply to a busy session stay unanswered while queued, and answered once it is delivered', async () => {
+        const view = await renderInbox([agent('s1', { state: 'generating' })], asking);
+        view.api.sendMessage.mockResolvedValue({ status: 'queued', messageId: 'm9' });
+        await replyFromCard(view);
+        expect(within(cards()[0]).queryByTestId('inbox-attention-answered')).toBeNull();
+        expect(within(cards()[0]).getByTestId('composer-status')).toHaveTextContent('queued');
+
+        view.events.deliveredMessageIds.set(new Set(['m9']));
+        await view.fixture.whenStable();
+
+        expect(within(cards()[0]).getByTestId('inbox-attention-answered')).toBeTruthy();
+      });
+
+      it('user sees the card still asking, with the failure, when the reply fails', async () => {
+        const view = await renderInbox([agent('s1')], asking);
+        view.api.sendMessage.mockRejectedValue(new Error('boom'));
+        await replyFromCard(view);
+
+        expect(screen.getByTestId('composer-send-error')).toBeTruthy();
+        expect(within(cards()[0]).queryByTestId('inbox-attention-answered')).toBeNull();
+        expect(screen.getByTestId('inbox-count')).toHaveTextContent('1');
+      });
+    });
+
     it('user keeps a reply typed in one card apart from the other cards', async () => {
       const user = userEvent.setup({ delay: null });
       await renderInbox([agent('s1'), agent('s2')], [stateOf({ sessionId: 's1', blockers: ['a'] }), stateOf({ sessionId: 's2', blockers: ['b'] })]);
