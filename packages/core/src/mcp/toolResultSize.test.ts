@@ -605,18 +605,18 @@ describe('MCP tool results are compact', () => {
         expect(everyColumn.names.slice(2)).toEqual(['title', 'points', 'due', 'extra', 'status']);
       });
 
-      it('agent is told which columns it sent are unknown, as columns and not as ids, while where and order_by keep the existing id error', async () => {
+      it('agent is told which columns it sent are unknown, as columns, in columns, where and order_by alike', async () => {
         const { storeId } = await seedMixedTypeTable(1);
 
         const columnar = await columnarQuery({ store: storeId, columns: ['title', 'no such column', 'Nope'] });
         const asObjects = await call('query_data_store', { store: storeId, columns: ['no such column'] });
-        const badWhere = await call('query_data_store', { store: storeId, where: [{ columnId: 'Title', op: 'eq', value: 'x' }] });
+        const badWhere = await call('query_data_store', { store: storeId, where: [{ columnId: 'Nope', op: 'eq', value: 'x' }] });
 
         expect(columnar.isError).toBe(true);
         expect(rawText(columnar)).toBe('error invalid_body: Unknown columns: no such column, Nope (retry: never)');
         expect(asObjects.isError).toBe(true);
         expect(rawText(asObjects)).toBe('error invalid_body: Unknown columns: no such column (retry: never)');
-        expect(rawText(badWhere)).toBe('error invalid_body: Unknown column ids: Title (retry: never)');
+        expect(rawText(badWhere)).toBe('error invalid_body: Unknown columns: Nope (retry: never)');
       });
 
       it('agent keeps the existing store error when the store does not exist, with or without the new arguments', async () => {
@@ -748,7 +748,7 @@ describe('MCP tool results are compact', () => {
         expect(description).toContain('columnar rows are [rowId, updatedAt] or [rowId] with include_updated_at false');
         expect(description).toContain('rows format has data: {}');
         expect(description).toContain('columns lists id, updatedAt (unless dropped) then the data column ids, names labels the same positions');
-        expect(description).toContain('where and order_by take column ids only');
+        expect(description).toContain('name a column by id or display name');
         expect(description).toContain('names resolve to ids');
         expect(description).toContain('an id wins over a name');
         expect(description).toContain('duplicates are dropped');

@@ -38,6 +38,14 @@ export class UnknownColumnReferenceError extends UnknownColumnError {
   }
 }
 
+/** A display name that several columns of the store carry, so it cannot say which one is meant. */
+export class AmbiguousColumnReferenceError extends UnknownColumnError {
+  constructor(reference: string, columnIds: string[]) {
+    super([reference]);
+    this.message = `Column "${reference}" is ambiguous: it names ${columnIds.length} columns; use the column id (${columnIds.join(', ')})`;
+  }
+}
+
 interface ViewRow { id: string; store_id: string; display_name: string; view_type: ViewType; config_json: string; sort_order: number }
 interface StoreRow { id: string; project_id: string; display_name: string; natural_key_column_id: string | null; created_at: string; updated_at: string }
 interface ColumnRow { id: string; store_id: string; display_name: string; column_type: ColumnType; options_json: string | null; sort_order: number; auto_value: AutoValue | null }

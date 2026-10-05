@@ -16,8 +16,9 @@ import { FileBackedNoteError, NoteNotFoundError, NoteTooLargeError, StaleRevisio
 import {
   DaemonShuttingDownError, MessageIdAlreadyUsedError, SessionClosedError, SessionReopenError, TooManyPendingMessagesError, UnknownHarnessError,
 } from '../sessions/sessionService.js';
-import { DuplicateNameError, RowNotFoundError, StoreNotFoundError, UnknownColumnError, UnknownColumnReferenceError } from '../stores/dataStoreRepository.js';
+import { AmbiguousColumnReferenceError, DuplicateNameError, RowNotFoundError, StoreNotFoundError, UnknownColumnError, UnknownColumnReferenceError } from '../stores/dataStoreRepository.js';
 import {
+  CellValueRejectedError, NaturalKeyConflictError, NaturalKeyMissingError, NaturalKeyNotFoundError, NaturalKeyNotUniqueError, NaturalKeyOnSeveralRowsError,
   ConstraintError, DaemonSetColumnError, DuplicateIdError, InvalidActorError, InvalidCellValueError, InvalidColumnDefinitionError, InvalidNameError, InvalidQueryError, NoNaturalKeyError, AmbiguousNaturalKeyError,
   InvalidViewConfigError, ReferencedRecordMissingError, StoreHasRowsError, StoreRowCapError, ViewNotFoundError,
 } from '../stores/dataStoreService.js';
@@ -74,6 +75,13 @@ const domainErrorCodes: [string, () => unknown, ErrorCode][] = [
   ['InvalidQueryError', () => new InvalidQueryError('x'), 'invalid_body'],
   ['NoNaturalKeyError', () => new NoNaturalKeyError(), 'invalid_body'],
   ['AmbiguousNaturalKeyError', () => new AmbiguousNaturalKeyError(), 'invalid_body'],
+  ['NaturalKeyMissingError', () => new NaturalKeyMissingError(), 'invalid_body'],
+  ['NaturalKeyNotFoundError', () => new NaturalKeyNotFoundError('A'), 'invalid_body'],
+  ['NaturalKeyOnSeveralRowsError', () => new NaturalKeyOnSeveralRowsError(2), 'invalid_body'],
+  ['NaturalKeyConflictError', () => new NaturalKeyConflictError('A'), 'constraint_violation'],
+  ['NaturalKeyNotUniqueError', () => new NaturalKeyNotUniqueError(), 'constraint_violation'],
+  ['CellValueRejectedError', () => new CellValueRejectedError('c1', 'not an option'), 'invalid_body'],
+  ['AmbiguousColumnReferenceError', () => new AmbiguousColumnReferenceError('title', ['c1', 'c2']), 'invalid_body'],
   ['UnknownColumnError', () => new UnknownColumnError(['c1']), 'invalid_body'],
   ['UnknownColumnReferenceError', () => new UnknownColumnReferenceError(['c1']), 'invalid_body'],
   ['ReferencedRecordMissingError', () => new ReferencedRecordMissingError('parent row missing'), 'constraint_violation'],

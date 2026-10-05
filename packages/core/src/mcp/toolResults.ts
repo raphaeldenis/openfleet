@@ -78,6 +78,9 @@ function toolWordingOf(error: unknown): ToolWording | undefined {
   return undefined;
 }
 
+/** What the store refused about a request, in the words an agent reads; undefined when the error is no refusal of the request (a failed write, a bug). */
+export const refusalReasonOf = (error: unknown): string | undefined => toolWordingOf(error)?.message;
+
 /**
  * The envelope an agent reads: the shared mapping, with the words the tools have always used for the typed errors above.
  * A failed data-store write keeps its safe message on the internal envelope: the id and the log line come from the mapping.

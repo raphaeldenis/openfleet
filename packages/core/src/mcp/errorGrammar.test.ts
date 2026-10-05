@@ -232,10 +232,10 @@ describe('MCP error grammar', () => {
 
   it('keeps the safe message "The write failed" for a failed data-store write and tells the agent to retry later', async () => {
     const store = jsonOf(await call(world.lead, 'create_data_store', { display_name: 'backlog' }));
-    vi.spyOn(world.stores, 'insertRows').mockImplementation(() => { throw new DataStoreWriteError('The write failed', { cause: new Error('SQLITE_IOERR disk I/O') }); });
+    vi.spyOn(world.stores, 'saveRow').mockImplementation(() => { throw new DataStoreWriteError('The write failed', { cause: new Error('SQLITE_IOERR disk I/O') }); });
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
-    const { text, retry, ref } = parsedError(await call(world.lead, 'insert_data_store_rows', { store: store.id, rows: [] }));
+    const { text, retry, ref } = parsedError(await call(world.lead, 'insert_data_store_rows', { store: store.id, rows: [{}] }));
 
     expect(text).toContain('The write failed');
     expect(text).not.toContain('SQLITE_IOERR');
