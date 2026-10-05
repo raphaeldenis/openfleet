@@ -1,4 +1,4 @@
-export const ENTITY_NAMES = ['projects', 'notes', 'noteVersions', 'playbooks', 'dataStores', 'columns', 'views', 'rows', 'history', 'managers', 'workingStates'] as const;
+export const ENTITY_NAMES = ['projects', 'notes', 'noteVersions', 'playbooks', 'dataStores', 'columns', 'views', 'rows', 'history', 'managers', 'workingStates', 'memories'] as const;
 export type EntityName = (typeof ENTITY_NAMES)[number];
 
 export interface EntityCounts {
@@ -110,6 +110,9 @@ export function renderImportReport(report: ImportReport): string {
     '',
     '## Working states',
     `${report.mergedStateSections} section(s) of the state files were merged into a working state section under a line carrying their heading. Not converted: a state file with an item cut, items dropped for the item limit or the size cap, or a manager whose own record was left as it is.`,
+    '',
+    '## Claude memory',
+    'Counts are memory files (MEMORY.md and the topic files), copied to the Claude memory folder of the manager working directory. Not converted: a link, a file over the per-file or per-manager size cap, a memory folder that is a link, or a working directory whose Claude folder name the Claude CLI hashes.',
     '',
     '## Projects without a docs folder',
     ...bulletList(report.projectsWithoutDocsFolder),
