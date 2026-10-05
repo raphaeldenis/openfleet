@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/angular/zoneless';
+import { fireEvent, render, screen, waitFor } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
 import { inputBinding, signal } from '@angular/core';
 import { describe, expect, it, vi } from 'vitest';
@@ -313,5 +313,60 @@ describe('ComposerComponent', () => {
 
     // Assert
     await waitFor(() => expect(screen.queryByTestId('composer-status')).toBeNull());
+  });
+
+  describe('the Enter key', () => {
+    const renderComposer = async (sendMessage = vi.fn().mockResolvedValue({ status: 'delivered', messageId: 'm1' })) => {
+      await render(ComposerComponent, {
+        bindings: [inputBinding('sessionId', () => 's1')],
+        providers: [{ provide: FleetApiService, useValue: { sendMessage } }, { provide: FleetEventsService, useValue: fakeEvents() }],
+      });
+      return { sendMessage, input: screen.getByTestId('composer-input') as HTMLTextAreaElement };
+    };
+
+    it('sends the draft and adds no newline to it', async () => {
+      const { sendMessage, input } = await renderComposer();
+
+      await userEvent.type(input, 'go{Enter}');
+
+      expect(sendMessage).toHaveBeenCalledWith('s1', 'go', expect.any(String));
+      await waitFor(() => expect(input).toHaveValue(''));
+    });
+
+    it('inserts a newline with Shift held and sends nothing', async () => {
+      const { sendMessage, input } = await renderComposer();
+
+      await userEvent.type(input, 'one{Shift>}{Enter}{/Shift}two');
+
+      expect(input).toHaveValue('one\ntwo');
+      expect(sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('sends nothing while an IME composition is confirming a candidate', async () => {
+      const { sendMessage, input } = await renderComposer();
+      await userEvent.type(input, 'にほん');
+
+      fireEvent.keyDown(input, { key: 'Enter', isComposing: true });
+
+      expect(sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('sends nothing for an empty or whitespace-only draft', async () => {
+      const { sendMessage, input } = await renderComposer();
+
+      await userEvent.type(input, '   {Enter}');
+
+      expect(sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('sends once when pressed again while the first send is still in flight', async () => {
+      const inFlight = new Promise<never>(() => {});
+      const { sendMessage, input } = await renderComposer(vi.fn().mockReturnValue(inFlight));
+
+      await userEvent.type(input, 'go{Enter}');
+      await userEvent.keyboard('{Enter}');
+
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+    });
   });
 });

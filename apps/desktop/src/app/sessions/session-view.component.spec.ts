@@ -152,7 +152,7 @@ describe('SessionViewComponent', () => {
     expect(screen.getByTestId('permission-gate-card')).toBeTruthy();
   });
 
-  it('replaces the composer with a neutral banner and an enabled Resume action when the session closed cleanly', async () => {
+  it('shows a neutral banner and an enabled Resume action when the session closed cleanly', async () => {
     await render(SessionViewComponent, {
       bindings: [inputBinding('sessionId', () => 's1')],
       providers: [{ provide: FleetApiService, useValue: fakeApi() }, { provide: FleetEventsService, useValue: fakeEvents([session({ state: 'closed', exitCode: 0 })]) }],
@@ -309,20 +309,14 @@ describe('SessionViewComponent', () => {
     expect(screen.getByTestId('session-closed-footer')).toHaveAttribute('data-variant', 'neutral');
   });
 
-  it('shows the composer for an open, non-gated session', async () => {
+  it.each(['idle', 'generating'] as const)('offers the terminal as the only input of an open %s session', async (state) => {
     await render(SessionViewComponent, {
       bindings: [inputBinding('sessionId', () => 's1')],
-      providers: [{ provide: FleetApiService, useValue: fakeApi() }, { provide: FleetEventsService, useValue: fakeEvents([session()]) }],
+      providers: [{ provide: FleetApiService, useValue: fakeApi() }, { provide: FleetEventsService, useValue: fakeEvents([session({ state })]) }],
     });
-    expect(screen.getByTestId('composer-input')).toBeTruthy();
-  });
-
-  it('tells the composer the session is busy while it is generating, so it queues instead of sending', async () => {
-    await render(SessionViewComponent, {
-      bindings: [inputBinding('sessionId', () => 's1')],
-      providers: [{ provide: FleetApiService, useValue: fakeApi() }, { provide: FleetEventsService, useValue: fakeEvents([session({ state: 'generating' })]) }],
-    });
-    expect(screen.getByTestId('composer-send')).toHaveTextContent('Queue');
+    expect(screen.getByTestId('terminal')).toBeTruthy();
+    expect(screen.queryByTestId('composer-input')).toBeNull();
+    expect(screen.queryByTestId('composer-send')).toBeNull();
   });
 
   it('offers Interrupt in the header while the session is generating', async () => {

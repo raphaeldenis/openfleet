@@ -10,7 +10,11 @@ import { toManagerView } from '../managers/managerView.js';
 import type { PulseScheduler } from '../managers/pulseScheduler.js';
 import { guardedFor, ok, refuse } from './toolResults.js';
 import { lineageSessionView, managerView, sessionView } from './toolViews.js';
-import type { SessionService } from '../sessions/sessionService.js';
+import type { HeldFor, SessionService } from '../sessions/sessionService.js';
+
+const HELD_REASON_TEXT: Record<HeldFor, string> = {
+  human_draft: 'Not delivered yet: the human has an unsent draft in this session\'s terminal prompt. It is delivered once they send or clear it; do not resend.',
+};
 
 // No longer a pty-write constraint (Task 6h moved delivery to bracketed-paste typing, which handles
 // arbitrarily long bodies) — this is a sane upper bound for agent-to-agent messages, matching the cap
@@ -35,10 +39,10 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
   const { sessions, caller, approvals, managers, pulseScheduler, modelTable } = deps;
   const guarded = guardedFor(caller);
   // Shared by send_session_message and message_parent: both pick a different target session for the same delivery call.
-  const sendMessage = (send: () => { status: 'delivered' | 'queued'; messageId: string }) =>
+  const sendMessage = (send: () => { status: 'delivered' | 'queued'; messageId: string; heldFor?: HeldFor }) =>
     guarded(() => {
-      const { status, messageId } = send();
-      return { status, message_id: messageId };
+      const { status, messageId, heldFor } = send();
+      return { status, message_id: messageId, ...(heldFor && { reason: HELD_REASON_TEXT[heldFor] }) };
     });
   const realPathOrSelf = (directory: string) => (existsSync(directory) ? realpathSync.native(directory) : directory);
   const isSameDirectory = (first: string, second: string): boolean => {
@@ -106,7 +110,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     ok(sessions.list().filter((s) => s.id === caller.id || isDescendant(s)).map(lineageSessionView)),
   );
 
-  server.registerTool('send_session_message', { description: 'Send a message to a child (or your parent). Queued if it is busy, delivered on its next idle turn. Pass back a previous message_id to retry idempotently.', inputSchema: { target_uuid: z.string(), body: z.string().min(1), message_id: z.uuid().optional() } }, async ({ target_uuid, body, message_id }) => {
+  server.registerTool('send_session_message', { description: 'Send a message to a child (or your parent). Queued if it is busy or its human has an unsent draft in the terminal prompt (the result then carries a reason), delivered on its next idle turn. Pass back a previous message_id to retry idempotently.', inputSchema: { target_uuid: z.string(), body: z.string().min(1), message_id: z.uuid().optional() } }, async ({ target_uuid, body, message_id }) => {
     const tooLong = tooLongMessage(body);
     if (tooLong) return refuse('message_too_long', tooLong);
     const target = sessions.get(target_uuid);
