@@ -43,7 +43,7 @@ const worker = (overrides: Record<string, unknown> = {}) => ({ id: 's1', name: '
 @Component({ template: 'elsewhere' })
 class ElsewhereStub {}
 
-async function openAt(url: string, { api = fakeApi(), sessions = [] as unknown[] } = {}) {
+async function openAt(url: string, { api = fakeApi(), sessions = [] as unknown[], managers = [] as unknown[] } = {}) {
   TestBed.configureTestingModule({
     providers: [
       provideRouter([
@@ -52,7 +52,7 @@ async function openAt(url: string, { api = fakeApi(), sessions = [] as unknown[]
         { path: '**', component: ElsewhereStub },
       ]),
       { provide: FleetApiService, useValue: api },
-      { provide: FleetEventsService, useValue: { sessions: signal(sessions), managers: signal([]) } },
+      { provide: FleetEventsService, useValue: { sessions: signal(sessions), managers: signal(managers) } },
     ],
   });
   const harness = await RouterTestingHarness.create();
@@ -377,6 +377,15 @@ describe('the project home page', () => {
       expect(within(sessionsRegion).getByTestId('list-count')).toHaveTextContent('2');
       expect(within(managers).getByRole('link', { name: /Capitaine/ })).toHaveTextContent('opus');
       expect(within(sessionsRegion).getByRole('link', { name: /Gimli/ })).toHaveTextContent('haiku');
+    });
+
+    it('user reads each manager\'s pulse interval and children count next to its model', async () => {
+      const capitaineView = { sessionId: 'm1', pulseSeconds: 300, childrenCap: 8, childrenCount: 2 };
+      await openAt('/project/p-fleet', { sessions: [manager({ model: 'sonnet' })], managers: [capitaineView] });
+
+      const managers = await screen.findByRole('region', { name: 'Managers' });
+
+      expect(within(managers).getByTestId('manager-row-meta')).toHaveTextContent('sonnet · pulse 5 min · 2/8');
     });
 
     it('user is told there is no manager and no session yet', async () => {

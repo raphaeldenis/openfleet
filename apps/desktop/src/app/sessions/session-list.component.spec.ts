@@ -84,16 +84,18 @@ describe('SessionListComponent state overdue chip', () => {
     expect(row).not.toHaveTextContent('state overdue');
   });
 
-  it('user sees the sidebar chip on the same meta line as the state and the cost, not on a line of its own', async () => {
+  it('user sees the sidebar chip on the name line with the cost, not on a line of its own', async () => {
     const fake = fakeEvents({ sessions: [{ id: 'c1', name: 'Gimli', emoji: '⚔️', state: 'generating' }], workingStatesReported: true });
 
     await render(SessionListComponent, { providers: [provideRouter([]), { provide: FleetEventsService, useValue: fake }] });
 
     const row = screen.getByTestId('session-c1');
-    const metaOfChip = within(row).getByTestId('overdue-chip').closest('.meta');
-    const metaOfCost = row.querySelector('[title="Cost tracking is not implemented yet"]')?.closest('.meta');
-    expect(metaOfChip).not.toBeNull();
-    expect(metaOfChip).toBe(metaOfCost);
+    const lineOfChip = within(row).getByTestId('overdue-chip').closest('.title-line');
+    const lineOfCost = row.querySelector('[title="Cost tracking is not implemented yet"]')?.closest('.title-line');
+    const lineOfName = within(row).getByText('Gimli').closest('.title-line');
+    expect(lineOfChip).not.toBeNull();
+    expect(lineOfChip).toBe(lineOfCost);
+    expect(lineOfChip).toBe(lineOfName);
   });
 
   it('user sees no chip on the sidebar when the daemon does not report working states', async () => {
@@ -109,7 +111,8 @@ describe('SessionListComponent', () => {
   it('renders each root session with its emoji, name and state', async () => {
     const fake = fakeEvents({ sessions: [{ id: '1', name: 'Gimli', emoji: '⚔️', state: 'generating' }] });
     await render(SessionListComponent, { providers: [provideRouter([]), { provide: FleetEventsService, useValue: fake }] });
-    expect(screen.getByText('⚔️ Gimli')).toBeTruthy();
+    expect(screen.getByText('⚔️')).toBeTruthy();
+    expect(screen.getByText('Gimli')).toBeTruthy();
     expect(screen.getByText('generating')).toBeTruthy();
   });
 

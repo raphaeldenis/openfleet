@@ -188,7 +188,7 @@ function formatInput(toolInput: unknown): FormattedInput {
     </section>
   `,
   styles: `
-    :host { display: block; flex: 1; min-width: 0; max-width: 54rem; margin: 0 auto; }
+    :host { display: block; flex: 1; min-width: 0; max-width: 54rem; }
     .inbox { display: flex; flex-direction: column; gap: .75rem; padding: 1rem; width: 100%; box-sizing: border-box; }
     .title-row { display: flex; align-items: center; gap: .375rem; flex-wrap: wrap; }
     .title { margin: 0; flex: 1; font-size: 1.25rem; font-weight: 600; }

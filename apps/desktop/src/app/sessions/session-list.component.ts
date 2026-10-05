@@ -57,14 +57,19 @@ import { OverdueChipComponent } from '../working-state/overdue-chip.component';
           [attr.aria-label]="visibleNameOf(session) + ' — ' + session.state"
           (click)="onSessionClick(session)"
         >
-          <span class="name" [attr.title]="visibleNameOf(session)">{{ session.emoji }} {{ visibleNameOf(session) }}</span>
-          <span class="meta">
-            @if (!managerOf(session.id)) {
-              <of-overdue-chip [session]="session" [compact]="true" />
-            }
-            <of-state-chip [state]="session.state" />
-            <span class="rung" title="Model rung">{{ session.model || '—' }}</span>
-            <span class="cost" title="Cost tracking is not implemented yet">—</span>
+          <span class="tile" aria-hidden="true">{{ session.emoji }}</span>
+          <span class="text">
+            <span class="title-line">
+              <span class="name" [attr.title]="visibleNameOf(session)">{{ visibleNameOf(session) }}</span>
+              @if (!managerOf(session.id)) {
+                <of-overdue-chip [session]="session" [compact]="true" />
+              }
+              <span class="cost" title="Cost tracking is not implemented yet">—</span>
+            </span>
+            <span class="detail-line">
+              <of-state-chip [state]="session.state" />
+              <span class="rung" title="Model rung">{{ session.model || '—' }}</span>
+            </span>
           </span>
         </button>
       </li>
@@ -87,10 +92,14 @@ import { OverdueChipComponent } from '../working-state/overdue-chip.component';
     .sessions { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto }
     .children { list-style: none; padding: 0 0 0 1.6rem; margin: 0 0 0 .75rem; border-left: 1px solid var(--line-2); display: flex; flex-direction: column }
     .row {
-      display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .125rem .5rem;
+      display: flex; align-items: center; gap: .5rem;
       padding: .4rem .6rem; cursor: pointer; width: 100%; border: none; background: none;
       font: inherit; color: inherit; text-align: left; min-width: 0;
     }
+    .tile { display: flex; flex: none; align-items: center; justify-content: center; width: 1.5rem; height: 1.5rem; border: 1px solid var(--line); border-radius: .375rem; background: var(--sunk) }
+    .text { display: flex; flex-direction: column; flex: 1; gap: .125rem; min-width: 0 }
+    .title-line { display: flex; align-items: center; gap: .375rem; min-width: 0 }
+    .detail-line { display: flex; align-items: center; gap: .375rem; font-size: .6875rem; color: var(--mut); font-family: var(--mono); --chip-height: 1.125rem; --chip-font-size: .6875rem }
     .show-closed { align-self: flex-start; margin: .25rem .75rem }
     .group-title { display: flex; align-items: center; gap: .375rem; padding: .4rem .75rem .125rem }
     .group-title h3 { flex: 1; min-width: 0; margin: 0; font-size: .6875rem; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--mut) }
@@ -103,8 +112,8 @@ import { OverdueChipComponent } from '../working-state/overdue-chip.component';
     .row[aria-current='true'] { background: var(--active); box-shadow: inset 2px 0 0 var(--accent); font-weight: 500 }
     .row.closed { opacity: .5 }
     .row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
-    .row .name { flex: 1 1 6rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
-    .row .meta { display: flex; flex-wrap: wrap; align-items: center; gap: .125rem .375rem; flex: 0 1 auto; min-width: 0; font-size: .6875rem; color: var(--mut); font-family: var(--mono) }
+    .row .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+    .row .cost { flex: none; font-size: .6875rem; color: var(--mut); font-family: var(--mono) }
   `,
 })
 export class SessionListComponent {

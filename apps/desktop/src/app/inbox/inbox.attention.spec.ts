@@ -257,6 +257,13 @@ describe('InboxComponent questions from agents', () => {
         expect(within(cards()[0]).queryByTestId('composer-input')).toBeNull();
       });
 
+      it('user reads the delivery acknowledgement as a check-marked strip', async () => {
+        const view = await renderInbox([agent('s1')], asking);
+        await replyFromCard(view);
+
+        expect(within(cards()[0]).getByTestId('inbox-attention-delivered')).toHaveTextContent(/^✓\s*Reply delivered/);
+      });
+
       it('user sees the badge, the tab count and the page count drop at delivery while the card stays', async () => {
         const view = await renderInbox([agent('s1')], asking);
         await replyFromCard(view);
