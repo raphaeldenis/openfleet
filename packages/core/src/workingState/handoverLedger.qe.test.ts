@@ -55,9 +55,13 @@ describe('operator settings edge values for handoverPatterns (QE hostile)', () =
   });
 
   it('compiles patterns with the u flag: \\p{L} matches letters, not the text p{L}', () => {
-    const { ledger } = ledgerFor(loadDaemonSettings(configWith(['\\p{L}+-\\d+'])).workingState.handoverPatterns);
+    const handoverPatternBudgetMs = 1000;
+    const settings = loadDaemonSettings(configWith(['\\p{L}+-\\d+']), { handoverPatternBudgetMs });
+    const { db } = ledgerFor();
+    const ledger = new HandoverLedger({ db, clock: () => 't', patterns: settings.workingState.handoverPatterns, handoverPatternBudgetMs });
 
     expect(ledger.record({ sessionId: 's1', prompt: 'p{L}-1 é-2' }).map(({ value }) => value)).toEqual(['é-2']);
+    expect(ledger.list('s1').map(({ value }) => value)).toEqual(['é-2']);
   });
 });
 
@@ -90,6 +94,14 @@ describe('catastrophic custom patterns the heuristic misses (QE ReDoS probe)', (
 
 describe('custom patterns scan bounded lines', () => {
   const customLedger = () => ledgerFor([/TICKET-\d+/g]).ledger;
+
+  it('interrupts a pathological pattern with the default budget and keeps it disabled on later prompts', () => {
+    const { ledger } = ledgerFor([/(a+)+b/g]);
+
+    expect(ledger.record({ sessionId: 's1', prompt: 'a'.repeat(2000) })).toEqual([]);
+    expect(ledger.record({ sessionId: 's1', prompt: 'ab' })).toEqual([]);
+    expect(ledger.list('s1')).toEqual([]);
+  });
 
   it('ignores text past 2000 characters on one line', () => {
     expect(customLedger().record({ sessionId: 's1', prompt: `${'x'.repeat(2000)} TICKET-1` })).toEqual([]);
