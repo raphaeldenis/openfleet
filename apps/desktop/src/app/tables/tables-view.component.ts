@@ -7,6 +7,9 @@ import { TableGridComponent } from './table-grid.component';
 import { isBlank, selectColumnsWithOptions, titleOf } from './table-cells';
 import { NO_VALUE_GROUP_ID, TableKanbanComponent, type KanbanGroup } from './table-kanban.component';
 import { TableListComponent } from './table-list.component';
+import { TableCellEditorComponent } from './table-cell-editor.component';
+import { RowDetailsComponent } from './row-details.component';
+import { canEditCell, type CellEditRequest } from './table-cell-editor-values';
 
 type LoadTarget = 'projects' | 'stores' | 'table';
 interface LoadFailure { target: LoadTarget; reason: string }
@@ -14,6 +17,7 @@ type LoadFailures = Partial<Record<LoadTarget, string>>;
 interface TableLoadOptions { keepsSelection?: boolean }
 type ViewMode = 'grid' | 'kanban';
 interface Mismatch { rowId: string; column: DsColumn }
+interface CellEditing extends CellEditRequest, StoreScope { value: unknown; rowTitle: string; tableRequest: number }
 
 const LOAD_TARGETS_BY_PRIORITY: LoadTarget[] = ['projects', 'stores', 'table'];
 const ROWS_PAGE_LIMIT = 1000;
@@ -34,14 +38,20 @@ const describeCreateFailure = (error: unknown, displayName: string): string => {
   if (code === 'invalid_body') return `The table name is not valid (1 to ${TABLE_NAME_MAX_LENGTH} characters).`;
   return 'Could not create the table.';
 };
+const describeCellFailure = (error: unknown): string => {
+  const code = error instanceof ApiError ? error.code : undefined;
+  if (code === 'constraint_violation') return 'This value conflicts with a table constraint or another row’s natural key.';
+  if (code === 'invalid_body') return 'The daemon refused this value. Check the input and try again.';
+  return describeFailure(error);
+};
 
 @Component({
   selector: 'of-tables-view',
   changeDetection: ChangeDetectionStrategy.OnPush,
   host: { 'data-testid': 'tables-view' },
-  imports: [ErrorLineComponent, TableListComponent, TableGridComponent, TableKanbanComponent, RowHistoryComponent],
+  imports: [ErrorLineComponent, TableListComponent, TableGridComponent, TableKanbanComponent, RowHistoryComponent, TableCellEditorComponent, RowDetailsComponent],
   template: `
-    <div class="toolbar">
+    <div class="toolbar" [attr.inert]="editing() ? '' : null">
       @if (projects().length > 0) {
         <select class="scope of-focus-ring" data-testid="tables-project-scope" aria-label="Project scope" [value]="activeProjectId()" (change)="chooseProject($any($event.target).value)">
           @for (project of projects(); track project.id) {
@@ -59,7 +69,7 @@ const describeCreateFailure = (error: unknown, displayName: string): string => {
     </div>
 
     @if (isCreatingTable()) {
-      <form class="create-table" (submit)="$event.preventDefault(); createTable()">
+      <form class="create-table" [attr.inert]="editing() ? '' : null" (submit)="$event.preventDefault(); createTable()">
         <input class="of-input" data-testid="tables-new-name" aria-label="Table name" [attr.maxlength]="tableNameMaxLength" placeholder="Table name" [value]="newTableName()" (input)="newTableName.set($any($event.target).value)" />
         <button type="submit" class="of-btn of-btn--primary" data-testid="tables-create" [disabled]="newTableName().trim() === ''">Create</button>
         @if (createError(); as message) {
@@ -72,7 +82,7 @@ const describeCreateFailure = (error: unknown, displayName: string): string => {
       <div class="action-error" role="status" data-testid="tables-action-error"><of-error-line [glyph]="false">{{ message }}</of-error-line></div>
     }
 
-    <div class="body">
+    <div class="body" [attr.inert]="editing() ? '' : null">
       <div class="main">
         @if (isViewingMismatchedRows()) {
           <div class="banner" role="region" aria-label="Schema mismatch" data-testid="tables-mismatch-banner">
@@ -123,7 +133,7 @@ const describeCreateFailure = (error: unknown, displayName: string): string => {
             <span>Rows have nothing to show until the table has a column.</span>
           </div>
         } @else if (viewMode() === 'grid') {
-          <of-table-grid [columns]="columns()" [rows]="rows()" [selectedRowId]="selectedRowId()" (rowSelected)="openRow($event)" />
+          <of-table-grid [columns]="columns()" [rows]="rows()" [selectedRowId]="selectedRowId()" [readonly]="mismatches().length > 0" (rowSelected)="openRow($event)" (editRequested)="startEditing($event)" />
         } @else if (kanbanGroups(); as groups) {
           <of-table-kanban [columns]="columns()" [groups]="groups" [config]="activeKanbanView()?.config ?? {}" [selectedRowId]="selectedRowId()" (rowSelected)="openRow($event)" />
         } @else {
@@ -143,14 +153,21 @@ const describeCreateFailure = (error: unknown, displayName: string): string => {
       @if (selectedRowId()) {
         <aside #historyPanel class="history of-focus-ring" tabindex="-1" aria-label="Row history" data-testid="tables-history" (keydown.escape)="closeHistory()">
           <button type="button" class="close of-focus-ring" data-testid="tables-history-close" aria-label="Close history" (click)="closeHistory()">✕</button>
+          @if (selectedRow(); as row) {
+            <of-row-details [row]="row" [columns]="columns()" [readonly]="mismatches().length > 0" (editRequested)="startEditing($event)" />
+          }
           @if (historyFailed()) {
-            <div class="history-error" data-testid="tables-history-error"><of-error-line>The history of this row could not be loaded.</of-error-line></div>
+            <div class="history-error" role="status" data-testid="tables-history-error"><of-error-line>{{ historyRefreshAfterSaveFailed() ? 'Saved; history could not be refreshed.' : 'The history of this row could not be loaded.' }}</of-error-line></div>
+            <button type="button" (click)="retryHistory()">Retry history</button>
           } @else {
             <of-row-history [entries]="history()" [columns]="columns()" [heading]="selectedRowTitle()" />
           }
         </aside>
       }
     </div>
+    @if (editing(); as edit) {
+      <of-table-cell-editor [column]="edit.column" [initialValue]="edit.value" [rowTitle]="edit.rowTitle" [saving]="isSavingCell()" [error]="cellError()" (submitted)="saveCell($event)" (cancelled)="closeEditor()" />
+    }
   `,
   styles: `
     :host { display: flex; flex-direction: column; flex: 1; width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; background: var(--bg) }
@@ -216,6 +233,12 @@ export class TablesViewComponent {
   protected readonly selectedRowId = signal<string | null>(null);
   protected readonly history = signal<DsRowHistoryEntry[]>([]);
   protected readonly historyFailed = signal(false);
+  protected readonly editing = signal<CellEditing | null>(null);
+  protected readonly historyRefreshAfterSaveFailed = signal(false);
+  protected readonly isSavingCell = signal(false);
+  protected readonly cellError = signal<string | null>(null);
+  protected readonly selectedRow = computed(() => this.rows().find((row) => row.id === this.selectedRowId()));
+  private latestHistoryRequest = 0;
   protected readonly tableNameMaxLength = TABLE_NAME_MAX_LENGTH;
   protected readonly actionError = signal<string | null>(null);
   protected readonly isCreatingTable = signal(false);
@@ -249,7 +272,7 @@ export class TablesViewComponent {
   protected readonly hasMoreRows = computed(() => !this.isLoadingTable() && this.loadFailure() === null && this.rows().length < this.rowTotal());
   protected readonly activeStoreName = computed(() => this.stores().find((store) => store.id === this.activeStoreId())?.displayName ?? '');
 
-  private readonly mismatches = computed<Mismatch[]>(() => {
+  protected readonly mismatches = computed<Mismatch[]>(() => {
     const constrainedColumns = selectColumnsWithOptions(this.columns());
     return this.rows().flatMap((row) =>
       constrainedColumns
@@ -304,10 +327,12 @@ export class TablesViewComponent {
   }
 
   protected chooseProject(projectId: string): void {
+    this.closeEditor();
     this.chosenProjectId.set(projectId);
   }
 
   protected openStore(storeId: string): void {
+    this.closeEditor();
     const projectId = this.activeProjectId();
     if (!projectId) return;
     this.actionError.set(null);
@@ -419,18 +444,100 @@ export class TablesViewComponent {
     this.selectedRowId.set(rowId);
     this.history.set([]);
     this.historyFailed.set(false);
+    this.historyRefreshAfterSaveFailed.set(false);
     afterNextRender(() => this.historyPanel()?.nativeElement.focus(), { injector: this.injector });
+    await this.refreshHistory(scope, rowId);
+  }
+
+  protected retryHistory(): void {
+    const scope = this.currentScope();
+    const rowId = this.selectedRowId();
+    if (scope && rowId) void this.refreshHistory(scope, rowId);
+  }
+
+  private async refreshHistory(scope: StoreScope, rowId: string, options: { followsSave?: boolean } = {}): Promise<void> {
+    const request = ++this.latestHistoryRequest;
+    const isCurrentRequest = () => request === this.latestHistoryRequest && !this.hasLeft(scope) && this.selectedRowId() === rowId;
     try {
       const { items } = await this.api.listRowChanges({ ...scope, rowId, limit: HISTORY_PAGE_LIMIT });
-      if (this.selectedRowId() === rowId) this.history.set(items);
+      if (!isCurrentRequest()) return;
+      this.history.set(items);
+      this.historyFailed.set(false);
+      this.historyRefreshAfterSaveFailed.set(false);
     } catch (error) {
-      const isStillSelected = this.selectedRowId() === rowId;
+      if (!isCurrentRequest()) return;
       const hasNoRecordedChanges = error instanceof ApiError && error.status === 404;
-      if (isStillSelected) this.historyFailed.set(!hasNoRecordedChanges);
+      const followsSave = options.followsSave === true;
+      this.historyFailed.set(followsSave || !hasNoRecordedChanges);
+      this.historyRefreshAfterSaveFailed.set(followsSave);
     }
   }
 
+  protected startEditing(request: CellEditRequest): void {
+    const scope = this.currentScope();
+    const row = this.rows().find((candidate) => candidate.id === request.rowId);
+    const isReadonly = !canEditCell(request.column) || this.mismatches().length > 0;
+    if (!scope || !row || isReadonly || this.editing()) return;
+    this.cellError.set(null);
+    this.editing.set({ ...request, ...scope, value: row.data[request.column.id], rowTitle: titleOf(this.columns(), row) || row.id, tableRequest: this.latestTableRequest });
+  }
+
+  protected closeEditor(): void {
+    const edit = this.editing();
+    if (!edit) return;
+    this.editing.set(null);
+    this.isSavingCell.set(false);
+    this.cellError.set(null);
+    afterNextRender(() => {
+      if (edit.trigger.isConnected) {
+        edit.trigger.focus();
+        return;
+      }
+      const rowElements = Array.from(this.host.nativeElement.querySelectorAll<HTMLElement>('[data-row-id]'));
+      const fallback = rowElements.find((element) => element.dataset['rowId'] === edit.rowId) ?? this.historyPanel()?.nativeElement ?? this.host.nativeElement.querySelector<HTMLElement>('button');
+      fallback?.focus();
+    }, { injector: this.injector });
+  }
+
+  protected async saveCell(value: unknown): Promise<void> {
+    const edit = this.editing();
+    if (!edit || this.isSavingCell()) return;
+    if (!this.isCurrentEdit(edit)) {
+      this.closeEditor();
+      return;
+    }
+    const isUnchanged = value === (edit.value ?? null);
+    if (isUnchanged) {
+      this.closeEditor();
+      return;
+    }
+    this.isSavingCell.set(true);
+    this.cellError.set(null);
+    try {
+      const { items } = await this.api.updateRows({ projectId: edit.projectId, storeId: edit.storeId, updates: [{ rowId: edit.rowId, patch: { [edit.column.id]: value } }] });
+      if (!this.isCurrentEdit(edit)) return;
+      const savedRow = items.find((row) => row.id === edit.rowId);
+      if (!savedRow) throw new Error('The saved row is missing from the response.');
+      this.rows.update((rows) => rows.map((row) => row.id === savedRow.id ? savedRow : row));
+      this.closeEditor();
+      if (this.selectedRowId() === edit.rowId) await this.refreshHistory(edit, edit.rowId, { followsSave: true });
+    } catch (error) {
+      if (!this.isCurrentEdit(edit)) return;
+      this.cellError.set(describeCellFailure(error));
+    } finally {
+      const currentEdit = this.editing();
+      if (currentEdit === edit || currentEdit === null) this.isSavingCell.set(false);
+    }
+  }
+
+  private isCurrentEdit(edit: CellEditing): boolean {
+    const isSameEditor = this.editing() === edit;
+    const isSameTableRequest = edit.tableRequest === this.latestTableRequest;
+    return isSameEditor && isSameTableRequest && !this.hasLeft(edit);
+  }
+
   protected closeHistory(): void {
+    this.latestHistoryRequest++;
     const closedRowId = this.selectedRowId();
     this.selectedRowId.set(null);
     const rowElements = Array.from(this.host.nativeElement.querySelectorAll<HTMLElement>('[data-row-id]'));
@@ -499,6 +606,8 @@ export class TablesViewComponent {
   }
 
   private async loadStores(projectId: string): Promise<void> {
+    this.closeEditor();
+    this.latestHistoryRequest++;
     const request = ++this.latestStoresRequest;
     this.latestTableRequest++;
     this.clearFailureOf('stores', 'table');
@@ -520,6 +629,8 @@ export class TablesViewComponent {
   }
 
   private async loadTable({ projectId, storeId }: StoreScope, { keepsSelection = false }: TableLoadOptions = {}): Promise<void> {
+    this.closeEditor();
+    this.latestHistoryRequest++;
     const request = ++this.latestTableRequest;
     this.activeStoreId.set(storeId);
     this.isLoadingTable.set(true);

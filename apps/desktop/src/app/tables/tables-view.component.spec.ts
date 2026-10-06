@@ -69,6 +69,228 @@ const projectsNamed = (...ids: string[]) => ids.map((id) => ({ id, name: `projec
 
 const twoRows = [row('r1', { 'c-title': 'Desktop reconnect', 'c-status': 'doing' }), row('r2', { 'c-title': 'Usage budgets', 'c-status': 'todo' })];
 
+const richColumn: DsColumn = { id: 'rich', storeId: 's1', displayName: 'Details', columnType: 'text', format: 'longText', options: null, sortOrder: 2 };
+const richRow = row('r1', { 'c-title': 'Task', 'c-status': 'todo', rich: 'Original' });
+
+describe('rich cell editing', () => {
+  it.each([
+    { format: 'longText' as const, data: { rich: null } },
+    { format: 'longText' as const, data: {} },
+    { format: 'url' as const, data: { rich: null } },
+    { format: 'url' as const, data: {} },
+  ])('preserves untouched $format values in $data and writes intentional empty text once', async ({ format, data }) => {
+    const nullableRow = row('r1', { 'c-title': 'Task', ...data });
+    const api = fakeApi({ columns: [...columns, { ...richColumn, format }], rows: [nullableRow] });
+    api.updateRows.mockResolvedValueOnce({ items: [row('r1', { ...nullableRow.data, rich: '' })] });
+    await renderView(api);
+    await userEvent.click(await screen.findByRole('button', { name: 'Edit Details in row r1' }));
+    await vi.waitFor(() => expect(screen.getByLabelText('Details')).toHaveFocus());
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(api.updateRows).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Edit Details in row r1' }));
+    const input = screen.getByLabelText('Details');
+    await vi.waitFor(() => expect(input).toHaveFocus());
+    await userEvent.type(input, 'draft');
+    await userEvent.clear(input);
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await vi.waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(api.updateRows).toHaveBeenCalledExactlyOnceWith({ projectId: 'p1', storeId: 's1', updates: [{ rowId: 'r1', patch: { rich: '' } }] });
+  });
+
+  it('closes an editor when an earlier row insertion reloads the table and saves a fresh edit once', async () => {
+    const api = fakeApi({ columns: [...columns, richColumn], rows: [richRow] });
+    const insert = deferred<{ items: DsRow[] }>();
+    api.insertRows.mockReturnValueOnce(insert.promise);
+    api.updateRows.mockResolvedValueOnce({ items: [row('r1', { ...richRow.data, rich: 'Fresh' })] });
+    const { fixture } = await renderView(api);
+    await userEvent.click(await screen.findByRole('button', { name: '+ Row' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Edit Details in row r1' }));
+    await vi.waitFor(() => expect(screen.getByLabelText('Details')).toHaveValue('Original'));
+    await userEvent.type(screen.getByLabelText('Details'), ' stale');
+    insert.resolve({ items: [] });
+    await settle(fixture);
+    await vi.waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(api.updateRows).not.toHaveBeenCalled();
+    await userEvent.click(await screen.findByRole('button', { name: 'Edit Details in row r1' }));
+    const input = screen.getByLabelText('Details');
+    await vi.waitFor(() => expect(input).toHaveValue('Original'));
+    await userEvent.clear(input);
+    await userEvent.type(input, 'Fresh');
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await vi.waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(screen.getByTestId('grid-cell-r1-rich')).toHaveTextContent('Fresh');
+    expect(api.updateRows).toHaveBeenCalledExactlyOnceWith({ projectId: 'p1', storeId: 's1', updates: [{ rowId: 'r1', patch: { rich: 'Fresh' } }] });
+  });
+
+  it('edits kanban details and keeps automatic columns read-only', async () => {
+    const automatic: DsColumn = { ...richColumn, id: 'automatic', displayName: 'Created', columnType: 'date', format: 'datetime', autoValue: 'created_at' };
+    const api = fakeApi({ columns: [...columns, richColumn, automatic], rows: [richRow] });
+    await renderView(api);
+    await userEvent.click(await screen.findByRole('button', { name: '▥ Kanban' }));
+    screen.getByTestId('kanban-card-r1').focus();
+    await userEvent.keyboard(' ');
+    const details = await screen.findByRole('region', { name: 'Row details' });
+    expect(within(details).getByText('Set automatically')).toBeVisible();
+    expect(screen.queryByRole('button', { name: /Edit Created/ })).not.toBeInTheDocument();
+    await userEvent.click(within(details).getByRole('button', { name: 'Edit Details' }));
+    await vi.waitFor(() => expect(screen.getByLabelText('Details')).toHaveValue('Original'));
+    await userEvent.keyboard('{Escape}');
+    expect(screen.getByTestId('tables-history')).toBeVisible();
+  });
+
+  it('preserves loaded pages after saving a cell', async () => {
+    const nextRow = row('r2', { 'c-title': 'Second', rich: 'Other' });
+    const api = fakeApi({ columns: [...columns, richColumn] });
+    api.queryDataStore.mockResolvedValueOnce(page([richRow], 2)).mockResolvedValueOnce(page([nextRow], 2));
+    api.updateRows.mockResolvedValueOnce({ items: [{ ...nextRow, data: { ...nextRow.data, rich: null } }] });
+    await renderView(api);
+    await userEvent.click(await screen.findByRole('button', { name: 'Load more' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Edit Details in row r2' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Clear value' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await vi.waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(screen.getByTestId('grid-row-r1')).toBeVisible();
+    expect(screen.getByTestId('grid-row-r2')).toBeVisible();
+    expect(screen.getByTestId('grid-cell-r2-rich')).not.toHaveTextContent('Other');
+    expect(api.queryDataStore).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([400, 404, 0, 500])('keeps input when PATCH fails with status %s', async (status) => {
+    const api = fakeApi({ columns: [...columns, richColumn], rows: [richRow] });
+    api.updateRows.mockRejectedValueOnce(new ApiError(status, 'Refused', status === 400 ? 'invalid_body' : undefined));
+    await renderView(api);
+    await userEvent.click(await screen.findByRole('button', { name: 'Edit Details in row r1' }));
+    const input = screen.getByLabelText('Details');
+    await vi.waitFor(() => expect(input).toHaveValue('Original'));
+    await userEvent.type(input, ' draft');
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await vi.waitFor(() => expect(screen.getByRole('alert')).not.toBeEmptyDOMElement());
+    expect(input).toHaveValue('Original draft');
+    expect(screen.getByRole('dialog')).toBeVisible();
+  });
+
+  it('ignores a pending save after the project scope changes', async () => {
+    const api = fakeApi({ columns: [...columns, richColumn], rows: [richRow], projects: projectsNamed('p1', 'p2') });
+    const chosenProject = signal('p1');
+    const write = deferred<{ items: DsRow[] }>();
+    api.updateRows.mockReturnValueOnce(write.promise);
+    const { fixture } = await renderView(api, [inputBinding('projectId', () => chosenProject())]);
+    await userEvent.click(await screen.findByRole('button', { name: 'Edit Details in row r1' }));
+    const input = screen.getByLabelText('Details');
+    await vi.waitFor(() => expect(input).toHaveValue('Original'));
+    await userEvent.type(input, ' old scope');
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    chosenProject.set('p2');
+    await settle(fixture);
+    await vi.waitFor(() => expect(api.listDataStores).toHaveBeenLastCalledWith('p2'));
+    write.resolve({ items: [{ ...richRow, data: { ...richRow.data, rich: 'Old response' } }] });
+    await settle(fixture);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getByTestId('grid-cell-r1-rich')).toHaveTextContent('Original');
+    expect(screen.getByTestId('grid-cell-r1-rich')).not.toHaveTextContent('Old response');
+  });
+
+  it('opens from grid without selecting the row, cancels and restores focus without writing', async () => {
+    const api = fakeApi({ columns: [...columns, richColumn], rows: [richRow] });
+    await renderView(api);
+    const editButton = await screen.findByRole('button', { name: 'Edit Details in row r1' });
+    editButton.focus();
+    await userEvent.keyboard('{Enter}');
+    const input = await screen.findByLabelText('Details');
+    await vi.waitFor(() => expect(input).toHaveFocus());
+    expect(api.listRowChanges).not.toHaveBeenCalled();
+    await userEvent.type(input, 'draft');
+    await userEvent.keyboard('{Escape}');
+    await vi.waitFor(() => expect(editButton).toHaveFocus());
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(api.updateRows).not.toHaveBeenCalled();
+  });
+
+  it('keeps input on refused write, retries once and refreshes history independently', async () => {
+    const api = fakeApi({ columns: [...columns, richColumn], rows: [richRow], history: [] });
+    api.updateRows.mockRejectedValueOnce(new ApiError(400, 'Constraint', 'constraint_violation'));
+    api.updateRows.mockResolvedValueOnce({ items: [{ ...richRow, data: { ...richRow.data, rich: 'Updated' } }] });
+    api.listRowChanges.mockResolvedValueOnce({ items: [], total: 0 }).mockRejectedValueOnce(new ApiError(503, 'Offline'));
+    await renderView(api);
+    await userEvent.click(await screen.findByTestId('grid-row-r1'));
+    const details = await screen.findByRole('region', { name: 'Row details' });
+    await userEvent.click(within(details).getByRole('button', { name: 'Edit Details' }));
+    const input = await screen.findByLabelText('Details');
+    await vi.waitFor(() => expect(input).toHaveValue('Original'));
+    await userEvent.clear(input);
+    await userEvent.type(input, 'Updated');
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(await screen.findByText(/conflicts with a table constraint/)).toBeVisible();
+    expect(input).toHaveValue('Updated');
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await vi.waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(screen.getByTestId('grid-cell-r1-rich')).toHaveTextContent('Updated');
+    expect(api.updateRows).toHaveBeenLastCalledWith({ projectId: 'p1', storeId: 's1', updates: [{ rowId: 'r1', patch: { rich: 'Updated' } }] });
+    expect(await screen.findByRole('button', { name: 'Retry history' })).toBeVisible();
+    api.listRowChanges.mockResolvedValueOnce({ items: [historyEntry({ actorKind: 'human', actorLabel: 'You', change: { rich: { from: 'Original', to: 'Updated' } } })], total: 1 });
+    await userEvent.click(screen.getByRole('button', { name: 'Retry history' }));
+    expect(await screen.findByTestId('history-entry-h1')).toHaveTextContent('You');
+    expect(screen.getByTestId('history-entry-h1')).toHaveTextContent('Original → Updated');
+    expect(api.updateRows).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not write an unchanged value and prevents double submission while saving', async () => {
+    const api = fakeApi({ columns: [...columns, richColumn], rows: [richRow] });
+    await renderView(api);
+    await userEvent.click(await screen.findByRole('button', { name: 'Edit Details in row r1' }));
+    await vi.waitFor(() => expect(screen.getByLabelText('Details')).toHaveValue('Original'));
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(api.updateRows).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole('button', { name: 'Edit Details in row r1' }));
+    const input = screen.getByLabelText('Details');
+    await vi.waitFor(() => expect(input).toHaveValue('Original'));
+    await userEvent.type(input, ' draft');
+    const write = deferred<{ items: DsRow[] }>();
+    api.updateRows.mockReturnValueOnce(write.promise);
+    await userEvent.dblClick(screen.getByRole('button', { name: 'Save' }));
+    await userEvent.keyboard('{Control>}{Enter}{/Control}{Escape}');
+    expect(api.updateRows).toHaveBeenCalledOnce();
+    expect(screen.getByRole('dialog')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled();
+    write.resolve({ items: [{ ...richRow, data: { ...richRow.data, rich: 'Original draft' } }] });
+    await vi.waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  it('keeps automatic and schema-mismatch rows read-only in grid and details', async () => {
+    const automatic: DsColumn = { ...richColumn, id: 'automatic', displayName: 'Created', columnType: 'date', format: 'datetime', autoValue: 'created_at' };
+    const api = fakeApi({ columns: [...columns, richColumn, automatic], rows: [{ ...richRow, data: { ...richRow.data, 'c-status': 'missing', automatic: NOW } }] });
+    await renderView(api);
+    await userEvent.click(await screen.findByRole('button', { name: 'View rows' }));
+    expect(screen.queryByRole('button', { name: /Edit/ })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByTestId('grid-row-r1'));
+    expect(await screen.findByText('Set automatically')).toBeVisible();
+    expect(screen.queryByRole('button', { name: /Edit/ })).not.toBeInTheDocument();
+    expect(api.updateRows).not.toHaveBeenCalled();
+  });
+
+  it('discards a history response older than the refresh after saving', async () => {
+    const api = fakeApi({ columns: [...columns, richColumn], rows: [richRow] });
+    const previousHistory = deferred<{ items: DsRowHistoryEntry[]; total: number }>();
+    api.listRowChanges.mockReturnValueOnce(previousHistory.promise).mockResolvedValueOnce({ items: [historyEntry({ id: 'fresh', change: { rich: { from: 'Original', to: 'Fresh' } } })], total: 1 });
+    api.updateRows.mockResolvedValueOnce({ items: [{ ...richRow, data: { ...richRow.data, rich: 'Fresh' } }] });
+    const { fixture } = await renderView(api);
+    await userEvent.click(await screen.findByTestId('grid-row-r1'));
+    await userEvent.click(within(screen.getByRole('region', { name: 'Row details' })).getByRole('button', { name: 'Edit Details' }));
+    const input = screen.getByLabelText('Details');
+    await vi.waitFor(() => expect(input).toHaveValue('Original'));
+    await userEvent.clear(input);
+    await userEvent.type(input, 'Fresh');
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(await screen.findByTestId('history-entry-fresh')).toBeVisible();
+    previousHistory.resolve({ items: [historyEntry({ id: 'old' })], total: 1 });
+    await settle(fixture);
+    expect(screen.queryByTestId('history-entry-old')).not.toBeInTheDocument();
+    expect(screen.getByTestId('history-entry-fresh')).toBeVisible();
+  });
+});
+
 describe('TablesViewComponent', () => {
   describe('project scope', () => {
     it('user sees the tables of the first project by default', async () => {

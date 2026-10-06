@@ -2,6 +2,7 @@ import { ChangeDetectionStrategy, Component, computed, input, output, signal } f
 import type { DsColumn, DsRow } from '@openfleet/shared';
 import { cellText, sortedColumns } from './table-cells';
 import { TableCellComponent } from './table-cell.component';
+import { canEditCell, type CellEditRequest } from './table-cell-editor-values';
 
 const MIN_COLUMN_WIDTH_REM = 8;
 
@@ -33,7 +34,14 @@ const MIN_COLUMN_WIDTH_REM = 8;
           (keydown.arrowup)="focusNeighbour($event, 'previous')"
         >
           @for (column of orderedColumns(); track column.id) {
-            <span class="cell" role="gridcell" [attr.title]="text(column, row)" [attr.data-testid]="'grid-cell-' + row.id + '-' + column.id"><of-table-cell [column]="column" [value]="row.data[column.id]" /></span>
+            <span class="cell" role="gridcell" [attr.title]="text(column, row)" [attr.data-testid]="'grid-cell-' + row.id + '-' + column.id">
+              <span class="cell-content">
+                <of-table-cell [column]="column" [value]="row.data[column.id]" />
+                @if (!readonly() && canEdit(column)) {
+                  <button type="button" [attr.aria-label]="'Edit ' + column.displayName + ' in row ' + row.id" (keydown)="$event.stopPropagation()" (click)="requestEdit($event, row.id, column)">Edit</button>
+                }
+              </span>
+            </span>
           }
         </div>
       }
@@ -50,6 +58,10 @@ const MIN_COLUMN_WIDTH_REM = 8;
     .row.selected { background: var(--accent-bg) }
     .row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
     .cell { flex-grow: 1; flex-shrink: 1; flex-basis: 0%; min-width: 8rem; padding-right: .5rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+    .cell-content { display: flex; align-items: center; gap: .375rem; min-width: 0 }
+    of-table-cell { flex: 1; overflow: hidden; text-overflow: ellipsis }
+    button { flex: none; padding: .125rem .375rem; font: inherit; color: var(--fg); background: var(--sunk); border: .0625rem solid var(--line); border-radius: .25rem; cursor: pointer }
+    button:focus-visible { outline: .125rem solid var(--accent); outline-offset: .125rem }
   `,
 })
 export class TableGridComponent {
@@ -57,6 +69,14 @@ export class TableGridComponent {
   readonly rows = input.required<DsRow[]>();
   readonly selectedRowId = input<string | null>(null);
   readonly rowSelected = output<string>();
+  readonly readonly = input(false);
+  readonly editRequested = output<CellEditRequest>();
+  protected readonly canEdit = canEditCell;
+
+  protected requestEdit(event: MouseEvent, rowId: string, column: DsColumn): void {
+    event.stopPropagation();
+    this.editRequested.emit({ rowId, column, trigger: event.currentTarget as HTMLElement });
+  }
 
   protected readonly focusedRowId = signal<string | null>(null);
   protected readonly tabStopRowId = computed(() => {
