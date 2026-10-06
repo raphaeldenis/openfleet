@@ -33,6 +33,21 @@ assert_compatible_node() {
     fail "node $(node -v) at $(command -v node) is too old; Angular needs Node >= $REQUIRED_NODE_MAJOR (as in CI). Put a newer node first in PATH."
 }
 
+run_advisory_step() {
+  step_name=$1
+  shift
+  if [ "$OPENFLEET_PREPUSH_DRYRUN" = "1" ]; then
+    echo "pre-push: ▷ $step_name (advisory, dry run) — $*"
+    return 0
+  fi
+  echo "pre-push: ▶ $step_name (advisory)"
+  if "$@"; then
+    echo "pre-push: ✔ $step_name (advisory)"
+  else
+    echo "pre-push: warning — $step_name fails (advisory; push continues)"
+  fi
+}
+
 is_planned() {
   printf '%s\n' "$planned_steps" | grep -qx "$1"
 }
@@ -53,19 +68,17 @@ warn_about_uncommitted_test_inputs() {
     echo "pre-push: warning — the tests run on uncommitted changes that CI will not see: $uncommitted_files"
 }
 
-build_tauri_inputs_when_missing() {
-  [ -e "$TAURI_DIR/binaries/node-aarch64-apple-darwin" ] || run_step "fetch node sidecar" node scripts/release/fetch-node.mjs
-  [ -d "$TAURI_DIR/resources/daemon" ] || run_step "bundle daemon" pnpm --filter @openfleet/core bundle
-}
-
 run_cargo_checks() {
   if ! command -v cargo >/dev/null 2>&1; then
-    echo "pre-push: cargo skipped — cargo is not installed (the push touches $TAURI_DIR; CI does not run cargo)"
+    echo "pre-push: cargo skipped — cargo is not installed (CI still runs the Rust checks)"
     return 0
   fi
-  build_tauri_inputs_when_missing
-  run_step "cargo test" cargo test --manifest-path "$TAURI_MANIFEST"
-  run_step "cargo clippy" cargo clippy --manifest-path "$TAURI_MANIFEST" --all-targets -- -D warnings
+  command -v rustup >/dev/null 2>&1 || fail "rustup is required for the CI Rust toolchains"
+  export TAURI_CONFIG='{"bundle":{"externalBin":[],"resources":[]}}'
+  run_step "Rust test toolchain" rustup toolchain install "$TAURI_RUST_VERSION" --profile minimal
+  run_step "Rust clippy toolchain" rustup toolchain install stable --profile minimal --component clippy
+  run_step "cargo test" cargo +"$TAURI_RUST_VERSION" test --locked --manifest-path "$TAURI_MANIFEST" --lib
+  run_advisory_step "cargo clippy" sh scripts/cargo-clippy.sh cargo +stable clippy --locked --manifest-path "$TAURI_MANIFEST" --all-targets
 }
 
 run_e2e_when_decided() {
@@ -80,6 +93,7 @@ run_e2e_when_decided() {
 }
 
 cd "$(dirname "$0")/.." || fail "cannot enter the repository root"
+TAURI_RUST_VERSION=$(awk -F '"' '/^rust-version = / { print $2 }' "$TAURI_MANIFEST")
 . scripts/pre-push-lib.sh
 
 # git exports GIT_DIR & co. to hooks; tests that create temp repos would otherwise act on this one.
