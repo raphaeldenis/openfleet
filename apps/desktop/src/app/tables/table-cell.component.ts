@@ -1,4 +1,5 @@
-import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, input } from '@angular/core';
+import { ExternalLinks } from '../core/external-links.service';
 import type { DsColumn } from '@openfleet/shared';
 import { clickableUrl, displayValue } from './table-cells';
 
@@ -8,7 +9,7 @@ import { clickableUrl, displayValue } from './table-cells';
   template: `
     @if (url(); as href) {
       <a [href]="href" target="_blank" rel="noopener noreferrer" [attr.title]="text()"
-        (click)="$event.stopPropagation()" (keydown)="$event.stopPropagation()">{{ text() }}</a>
+        (click)="openLink(href, $event)" (keydown)="$event.stopPropagation()">{{ text() }}</a>
     } @else {
       <span [class.multiline]="column().format === 'longText'" [attr.title]="text()">{{ text() }}</span>
     }
@@ -24,6 +25,11 @@ import { clickableUrl, displayValue } from './table-cells';
   `,
 })
 export class TableCellComponent {
+  private readonly externalLinks = inject(ExternalLinks);
+  protected openLink(url: string, event: MouseEvent): void {
+    event.stopPropagation();
+    this.externalLinks.open(url, event);
+  }
   readonly column = input.required<DsColumn>();
   readonly value = input.required<unknown>();
   protected readonly text = computed(() => displayValue(this.column(), this.value()));

@@ -2,7 +2,7 @@ import { inputBinding, outputBinding } from '@angular/core';
 import { render, screen } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
 import type { DsColumn, DsRow } from '@openfleet/shared';
-import { expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { TableGridComponent } from './table-grid.component';
 import { TableKanbanComponent } from './table-kanban.component';
 import { RowHistoryComponent } from './row-history.component';
@@ -18,9 +18,22 @@ const row: DsRow = {
   id: 'row', storeId: 'store', createdAt: 'now', updatedAt: 'now',
   data: { title: 'Task', when: '2026-10-06T08:09:10Z', details: 'First line\nSecond line <script>', url: 'https://example.com/task', rank: 2 },
 };
-const localDate = () => new Intl.DateTimeFormat(undefined, {
-  year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', timeZoneName: 'short',
-}).format(new Date(String(row.data['when'])));
+const DateTimeFormat = Intl.DateTimeFormat;
+beforeEach(() => {
+  vi.spyOn(Intl, 'DateTimeFormat').mockImplementation(function (_locale, options) {
+    return new DateTimeFormat('en-GB', { timeZone: 'Europe/Paris', ...options });
+  });
+});
+afterEach(() => vi.restoreAllMocks());
+const localDate = () => '6 Oct 2026, 10:09:10 CEST';
+
+it.each(['2026-10-06T08:09:10Z', '2026-10-06T03:09:10-05:00'])('shows Paris date, time and seconds for %s', async (when) => {
+  await render(TableGridComponent, { bindings: [inputBinding('columns', () => columns), inputBinding('rows', () => [{ ...row, data: { ...row.data, when } }])] });
+  const dateCell = screen.getByTestId('grid-cell-row-when');
+  expect(dateCell).toHaveTextContent('6 Oct 2026');
+  expect(dateCell).toHaveTextContent('10:09:10');
+  expect(dateCell).toHaveTextContent('CEST');
+});
 
 it('shows local datetime, full multiline text and a plain numeric rank in the grid', async () => {
   await render(TableGridComponent, { bindings: [inputBinding('columns', () => columns), inputBinding('rows', () => [row])] });
@@ -39,6 +52,9 @@ it.each(['grid', 'kanban'] as const)('opens web links without selecting their %s
 
   const link = screen.getByRole('link', { name: String(row.data['url']) });
   expect(link).toHaveAttribute('href', row.data['url']);
+  const click = new MouseEvent('click', { bubbles: true, cancelable: true });
+  link.dispatchEvent(click);
+  expect(click.defaultPrevented).toBe(false);
   await userEvent.click(link);
   link.focus();
   await userEvent.keyboard('{Enter}');
@@ -78,5 +94,6 @@ it('uses the same local datetime and text values in row history', async () => {
   ] });
 
   expect(screen.getByTestId('history-entry-history')).toHaveTextContent(localDate());
-  expect(screen.getByTestId('history-entry-history')).toHaveTextContent('First line Second line <script>');
+  expect(screen.getByText(/First line$/)).toBeVisible();
+  expect(screen.getByText('Second line <script>')).toBeVisible();
 });
