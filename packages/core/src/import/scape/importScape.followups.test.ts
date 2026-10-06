@@ -85,10 +85,10 @@ describe('Scape import cutover follow-ups', () => {
 
   it('reports the dropped column formats without dropping cell values or changing column types', () => {
     const formats = [
-      { columnId: TITLE_COLUMN_ID, format: 'url' },
+      { columnId: TITLE_COLUMN_ID, format: 'email' },
       { columnId: STATUS_COLUMN_ID, format: 'longText' },
-      { columnId: PRIORITY_COLUMN_ID, format: 'rank' },
-      { columnId: DUE_COLUMN_ID, format: 'datetime' },
+      { columnId: PRIORITY_COLUMN_ID, format: 'stars' },
+      { columnId: DUE_COLUMN_ID, format: 'relativeDate' },
     ];
     editScapeNotes(fixture, (db) => {
       for (const { columnId, format } of formats) db.prepare('UPDATE data_store_column SET format = ? WHERE id = ?').run(format, columnId);

@@ -101,6 +101,30 @@ beforeEach(async () => {
 });
 afterEach(() => server.close());
 
+it('exposes formats and validates datetime writes atomically while retaining legacy dates', async () => {
+  const { store } = seedStore();
+  const when = stores.addColumn(store.id, { projectId: 'p1', displayName: 'When', columnType: 'date', format: 'datetime' });
+  const legacy = stores.addColumn(store.id, { projectId: 'p1', displayName: 'Day', columnType: 'date' });
+  const details = stores.addColumn(store.id, { projectId: 'p1', displayName: 'Details', columnType: 'text', format: 'longText' });
+  const url = stores.addColumn(store.id, { projectId: 'p1', displayName: 'URL', columnType: 'text', format: 'url' });
+  const path = `/api/data-stores/${store.id}/rows`;
+
+  const schema = await json(await call('GET', `/api/data-stores/${store.id}?projectId=p1`));
+  const invalid = await call('POST', path, { projectId: 'p1', rows: [
+    { [when.id]: '2026-10-06T08:00:00Z' }, { [when.id]: '2026-10-06' },
+  ] });
+  expect(invalid.status).toBe(400);
+  expect((await json(await call('GET', `${path}?projectId=p1`))).total).toBe(0);
+  const values = { [when.id]: '2026-10-06T10:00:00+02:00', [legacy.id]: '2026-10-06', [details.id]: 'One\nTwo', [url.id]: 'plain imported text' };
+  const created = await json(await call('POST', path, { projectId: 'p1', rows: [values] }));
+  const updated = await call('PATCH', path, { projectId: 'p1', updates: [{ rowId: created.items[0].id, patch: { [when.id]: null } }] });
+
+  expect(schema.columns).toContainEqual(expect.objectContaining({ id: when.id, format: 'datetime', columnType: 'date' }));
+  expect(created.items[0].data).toEqual(values);
+  expect(updated.status).toBe(200);
+  expect((await json(updated)).items[0].data[when.id]).toBeNull();
+});
+
 describe('data store REST routes', () => {
   it('hides another project\'s store behind 404 on every :id route', async () => {
     const { store, name, qty } = seedStore();

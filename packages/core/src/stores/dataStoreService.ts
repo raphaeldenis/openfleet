@@ -1,8 +1,8 @@
 import { isDeepStrictEqual } from 'node:util';
 import type { DatabaseSync } from 'node:sqlite';
 import {
-  COLUMN_TYPES, DsViewConfigSchema, OrderTermSchema, SelectOptionSchema, VIEW_TYPES, WhereClauseSchema,
-  type AutoValue, type ColumnType, type DataStore, type DsColumn, type DsRow, type DsView, type DsViewConfig, type OrderTerm, type SelectOption, type ViewType, type WhereClause,
+  COLUMN_TYPES, COLUMN_TYPE_BY_FORMAT, ColumnFormatSchema, DsViewConfigSchema, OrderTermSchema, SelectOptionSchema, VIEW_TYPES, WhereClauseSchema,
+  type AutoValue, type ColumnFormat, type ColumnType, type DataStore, type DsColumn, type DsRow, type DsView, type DsViewConfig, type OrderTerm, type SelectOption, type ViewType, type WhereClause,
 } from '@openfleet/shared';
 import { z } from 'zod';
 import { inTransaction as runInTransaction } from '../db/transaction.js';
@@ -122,7 +122,13 @@ export function isValidCell(column: DsColumn, value: unknown): boolean {
   switch (column.columnType) {
     case 'text': return typeof value === 'string' && !exceedsCellByteCap(value);
     case 'number': return typeof value === 'number' && Number.isFinite(value);
-    case 'date': return typeof value === 'string' && isIsoDate(value);
+    case 'date': {
+      const isDateString = typeof value === 'string' && isIsoDate(value);
+      if (!isDateString) return false;
+      const needsExplicitOffset = column.format === 'datetime';
+      const hasTimeWithExplicitOffset = /T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})$/.test(value);
+      return !needsExplicitOffset || hasTimeWithExplicitOffset;
+    }
     case 'select': return typeof value === 'string' && (column.options ?? []).some((option) => option.id === value);
     case 'json': return survivesJsonRoundTrip(value) && !exceedsCellByteCap(JSON.stringify(value));
   }
@@ -215,14 +221,19 @@ export class DataStoreService {
     return this.guarded(() => this.repo.createStore({ id: this.newId(), projectId: input.projectId, displayName, at: this.clock() }));
   }
 
-  addColumn(storeId: string, input: Scope & { displayName: string; columnType: ColumnType; options?: SelectOption[]; autoValue?: AutoValue }): DsColumn {
+  addColumn(storeId: string, input: Scope & { displayName: string; columnType: ColumnType; format?: ColumnFormat; options?: SelectOption[]; autoValue?: AutoValue }): DsColumn {
     this.authorize(storeId, input.projectId);
     const displayName = normalizeName(input.displayName);
     const options = this.validateColumnDefinition(input.columnType, input.options);
+    if (input.format !== undefined) {
+      const parsedFormat = ColumnFormatSchema.safeParse(input.format);
+      const isCompatibleFormat = parsedFormat.success && COLUMN_TYPE_BY_FORMAT[parsedFormat.data] === input.columnType;
+      if (!isCompatibleFormat) throw new InvalidColumnDefinitionError('The format must match the column type');
+    }
     const isDaemonSetOnNonDate = input.autoValue !== undefined && input.columnType !== 'date';
     if (isDaemonSetOnNonDate) throw new InvalidColumnDefinitionError('Only a date column can take an auto_value');
     return this.guarded(() => this.repo.addColumn(storeId, {
-      id: this.newId(), displayName, columnType: input.columnType, ...(options ? { options } : {}), autoValue: input.autoValue, at: this.clock(),
+      id: this.newId(), displayName, columnType: input.columnType, format: input.format, ...(options ? { options } : {}), autoValue: input.autoValue, at: this.clock(),
     }));
   }
 

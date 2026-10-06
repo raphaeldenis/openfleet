@@ -4,6 +4,13 @@ export const COLUMN_TYPES = ['text', 'number', 'date', 'select', 'json'] as cons
 export const ColumnTypeSchema = z.enum(COLUMN_TYPES);
 export type ColumnType = z.infer<typeof ColumnTypeSchema>;
 
+export const COLUMN_FORMATS = ['datetime', 'longText', 'url', 'rank'] as const;
+export const ColumnFormatSchema = z.enum(COLUMN_FORMATS);
+export type ColumnFormat = z.infer<typeof ColumnFormatSchema>;
+export const COLUMN_TYPE_BY_FORMAT: Record<ColumnFormat, ColumnType> = {
+  datetime: 'date', longText: 'text', url: 'text', rank: 'number',
+};
+
 export const AGGREGATE_OPS = ['count', 'sum', 'avg', 'min', 'max'] as const;
 export const AggregateSchema = z.object({ op: z.enum(AGGREGATE_OPS), column: z.string().min(1).optional(), as: z.string().min(1).optional() });
 export const ScapeAggregateSchema = AggregateSchema.omit({ op: true }).extend({ agg: AggregateSchema.shape.op });
@@ -21,6 +28,7 @@ export interface DsColumn {
   storeId: string;
   displayName: string;
   columnType: ColumnType;
+  format?: ColumnFormat;
   options: SelectOption[] | null;
   sortOrder: number;
   autoValue?: AutoValue;

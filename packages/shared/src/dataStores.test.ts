@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   COLUMN_TYPES,
+  COLUMN_FORMATS,
+  ColumnFormatSchema,
   ColumnTypeSchema,
   DsViewConfigSchema,
   OrderTermSchema,
@@ -14,6 +16,16 @@ import {
   type DsRowHistoryEntry,
   type DsView,
 } from './dataStores.js';
+
+describe('ColumnFormatSchema', () => {
+  it.each(COLUMN_FORMATS)('accepts format %s', (format) => {
+    expect(ColumnFormatSchema.parse(format)).toBe(format);
+  });
+
+  it('rejects an unknown format', () => {
+    expect(ColumnFormatSchema.safeParse('stars').success).toBe(false);
+  });
+});
 
 describe('ColumnTypeSchema', () => {
   it('accepts the five column types', () => {

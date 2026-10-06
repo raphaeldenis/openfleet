@@ -76,6 +76,7 @@ function planStoreColumns(plan: ImportPlan, source: ScapeSource, store: { id: st
       store_id: column.storeId,
       display_name: column.displayName,
       column_type: column.columnType,
+      column_format: column.format,
       options_json: column.options === null ? null : JSON.stringify(column.options),
       sort_order: column.sortOrder,
       created_at: store.createdAt,

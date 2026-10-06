@@ -1,12 +1,14 @@
 import { ChangeDetectionStrategy, Component, computed, input, output, signal } from '@angular/core';
 import type { DsColumn, DsRow } from '@openfleet/shared';
 import { cellText, sortedColumns } from './table-cells';
+import { TableCellComponent } from './table-cell.component';
 
 const MIN_COLUMN_WIDTH_REM = 8;
 
 @Component({
   selector: 'of-table-grid',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [TableCellComponent],
   template: `
     <div class="grid" role="grid" data-testid="table-grid" [style.--grid-min-width]="gridMinWidth()">
       <div class="header" role="row" data-testid="grid-head">
@@ -31,7 +33,7 @@ const MIN_COLUMN_WIDTH_REM = 8;
           (keydown.arrowup)="focusNeighbour($event, 'previous')"
         >
           @for (column of orderedColumns(); track column.id) {
-            <span class="cell" role="gridcell" [attr.title]="text(column, row)" [attr.data-testid]="'grid-cell-' + row.id + '-' + column.id">{{ text(column, row) }}</span>
+            <span class="cell" role="gridcell" [attr.title]="text(column, row)" [attr.data-testid]="'grid-cell-' + row.id + '-' + column.id"><of-table-cell [column]="column" [value]="row.data[column.id]" /></span>
           }
         </div>
       }

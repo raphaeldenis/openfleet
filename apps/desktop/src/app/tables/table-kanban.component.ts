@@ -1,6 +1,7 @@
 import { ChangeDetectionStrategy, Component, input, output } from '@angular/core';
 import type { DsColumn, DsRow, SelectOption } from '@openfleet/shared';
-import { cellText, textColumns, titleOf } from './table-cells';
+import { cellText, sortedColumns, textColumns, titleOf } from './table-cells';
+import { TableCellComponent } from './table-cell.component';
 
 export const NO_VALUE_GROUP_ID = '__no_value__';
 
@@ -12,6 +13,7 @@ export interface KanbanGroup {
 @Component({
   selector: 'of-table-kanban',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [TableCellComponent],
   template: `
     @for (group of groups(); track group.option.id) {
       <section class="column" [attr.data-testid]="'kanban-column-' + group.option.id">
@@ -21,20 +23,32 @@ export interface KanbanGroup {
           <span class="count" [attr.data-testid]="'kanban-count-' + group.option.id">{{ group.rows.length }}</span>
         </header>
         @for (row of group.rows; track row.id) {
-          <button
-            type="button"
+          <div
+            role="button"
+            tabindex="0"
             class="card"
             [attr.data-testid]="'kanban-card-' + row.id"
             [attr.data-row-id]="row.id"
             [attr.aria-pressed]="row.id === selectedRowId()"
             [class.selected]="row.id === selectedRowId()"
             (click)="rowSelected.emit(row.id)"
+            (keydown.enter)="selectFromKeyboard($event, row.id)"
+            (keydown.space)="selectFromKeyboard($event, row.id)"
           >
-            <span class="title">{{ titleOf(row) || untitledLabel }}</span>
+            <span class="title">
+              @if (titleOf(row)) {
+                @if (titleColumn(); as column) {
+                  <of-table-cell [column]="column" [value]="row.data[column.id]" />
+                }
+              } @else { {{ untitledLabel }} }
+            </span>
             @if (detailsOf(row); as details) {
               <span class="details" [attr.title]="details" [attr.data-testid]="'kanban-details-' + row.id">{{ details }}</span>
             }
-          </button>
+            @for (column of formattedDetails(); track column.id) {
+              <span class="details"><of-table-cell [column]="column" [value]="row.data[column.id]" /></span>
+            }
+          </div>
         }
       </section>
     }
@@ -69,9 +83,24 @@ export class TableKanbanComponent {
 
   protected readonly untitledLabel = 'Untitled';
   protected readonly titleOf = (row: DsRow) => titleOf(this.columns(), row);
+  protected readonly titleColumn = () => textColumns(this.columns())[0];
+
+  protected formattedDetails(): DsColumn[] {
+    const [titleColumn] = textColumns(this.columns());
+    return sortedColumns(this.columns()).filter((column) => {
+      const hasFormat = column.format !== undefined;
+      const isTitleColumn = column.id === titleColumn?.id;
+      return hasFormat && !isTitleColumn;
+    });
+  }
+
+  protected selectFromKeyboard(event: Event, rowId: string): void {
+    event.preventDefault();
+    this.rowSelected.emit(rowId);
+  }
 
   protected detailsOf(row: DsRow): string {
     const [, ...detailColumns] = textColumns(this.columns());
-    return detailColumns.map((column) => cellText(column, row)).filter(Boolean).join(' · ');
+    return detailColumns.filter((column) => column.format === undefined).map((column) => cellText(column, row)).filter(Boolean).join(' · ');
   }
 }

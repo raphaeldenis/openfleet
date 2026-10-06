@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from 'node:util';
 import type { DatabaseSync } from 'node:sqlite';
-import type { AutoValue, ColumnType, DataStore, DsColumn, DsRow, DsRowChange, DsRowHistoryEntry, DsView, DsViewConfig, RowActorKind, SelectOption, ViewType } from '@openfleet/shared';
+import type { AutoValue, ColumnFormat, ColumnType, DataStore, DsColumn, DsRow, DsRowChange, DsRowHistoryEntry, DsView, DsViewConfig, RowActorKind, SelectOption, ViewType } from '@openfleet/shared';
 import { inTransaction as runInTransaction } from '../db/transaction.js';
 import { newId } from '../ids.js';
 
@@ -48,7 +48,7 @@ export class AmbiguousColumnReferenceError extends UnknownColumnError {
 
 interface ViewRow { id: string; store_id: string; display_name: string; view_type: ViewType; config_json: string; sort_order: number }
 interface StoreRow { id: string; project_id: string; display_name: string; natural_key_column_id: string | null; created_at: string; updated_at: string }
-interface ColumnRow { id: string; store_id: string; display_name: string; column_type: ColumnType; options_json: string | null; sort_order: number; auto_value: AutoValue | null }
+interface ColumnRow { id: string; store_id: string; display_name: string; column_type: ColumnType; column_format: ColumnFormat | null; options_json: string | null; sort_order: number; auto_value: AutoValue | null }
 interface RowRow { id: string; store_id: string; data_json: string; created_at: string; updated_at: string }
 interface HistoryRow { id: string; row_id: string; actor_kind: RowActorKind; actor_label: string; change_json: string; created_at: string }
 
@@ -60,6 +60,7 @@ const toColumn = (r: ColumnRow): DsColumn => ({
   id: r.id, storeId: r.store_id, displayName: r.display_name, columnType: r.column_type,
   options: r.options_json === null ? null : (JSON.parse(r.options_json) as SelectOption[]), sortOrder: r.sort_order,
   autoValue: r.auto_value ?? undefined,
+  ...(r.column_format === null ? {} : { format: r.column_format }),
 });
 const toView = (r: ViewRow): DsView => ({
   id: r.id, storeId: r.store_id, displayName: r.display_name, viewType: r.view_type,
@@ -112,17 +113,18 @@ export class DataStoreRepository {
     this.db.prepare('UPDATE data_stores SET natural_key_column_id = ?, updated_at = ? WHERE id = ?').run(input.columnId, input.at, storeId);
   }
 
-  addColumn(storeId: string, input: { id: string; displayName: string; columnType: ColumnType; options?: SelectOption[]; autoValue?: AutoValue; at: string }): DsColumn {
+  addColumn(storeId: string, input: { id: string; displayName: string; columnType: ColumnType; format?: ColumnFormat; options?: SelectOption[]; autoValue?: AutoValue; at: string }): DsColumn {
     this.refuseMissingStore(storeId);
     const isNameTaken = this.findColumnByName(storeId, input.displayName) !== undefined;
     if (isNameTaken) throw new DuplicateNameError(input.displayName);
     const { columnCount: nextSortOrder } = this.db.prepare('SELECT COUNT(*) AS columnCount FROM ds_columns WHERE store_id = ?').get(storeId) as { columnCount: number };
     const optionsJson = input.options === undefined ? null : JSON.stringify(input.options);
-    this.db.prepare('INSERT INTO ds_columns (id, store_id, display_name, column_type, options_json, sort_order, created_at, auto_value) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(input.id, storeId, input.displayName, input.columnType, optionsJson, nextSortOrder, input.at, input.autoValue ?? null);
+    this.db.prepare('INSERT INTO ds_columns (id, store_id, display_name, column_type, options_json, sort_order, created_at, auto_value, column_format) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(input.id, storeId, input.displayName, input.columnType, optionsJson, nextSortOrder, input.at, input.autoValue ?? null, input.format ?? null);
     return {
       id: input.id, storeId, displayName: input.displayName, columnType: input.columnType, options: input.options ?? null, sortOrder: nextSortOrder,
       autoValue: input.autoValue,
+      ...(input.format ? { format: input.format } : {}),
     };
   }
 
