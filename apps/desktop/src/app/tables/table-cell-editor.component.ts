@@ -56,6 +56,7 @@ export class TableCellEditorComponent {
   private readonly dialog = viewChild.required<ElementRef<HTMLElement>>('dialog');
   protected readonly draft = signal('');
   protected readonly clearsValue = signal(false);
+  private hasEditedDraft = false;
   protected readonly validationError = signal<string | null>(null);
   protected readonly inputType = computed(() => this.column().format === 'rank' ? 'number' : this.column().format === 'url' ? 'url' : 'text');
   protected readonly help = computed(() => {
@@ -78,6 +79,7 @@ export class TableCellEditorComponent {
   }
 
   protected changeDraft(value: string): void {
+    this.hasEditedDraft = true;
     this.draft.set(value);
     this.clearsValue.set(false);
     this.validationError.set(null);
@@ -90,6 +92,13 @@ export class TableCellEditorComponent {
 
   protected save(): void {
     if (this.saving()) return;
+    const isNullableText = this.column().format === 'longText' || this.column().format === 'url';
+    const isInitialValueMissing = this.initialValue() === null || this.initialValue() === undefined;
+    const preservesInitialValue = isNullableText && isInitialValueMissing && !this.hasEditedDraft && !this.clearsValue();
+    if (preservesInitialValue) {
+      this.submitted.emit(this.initialValue() ?? null);
+      return;
+    }
     const result = this.clearsValue() ? { value: null, error: null } : editedCellValue(this.column(), this.draft());
     this.validationError.set(result.error);
     if (!result.error) this.submitted.emit(result.value);

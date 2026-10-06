@@ -502,6 +502,10 @@ export class TablesViewComponent {
   protected async saveCell(value: unknown): Promise<void> {
     const edit = this.editing();
     if (!edit || this.isSavingCell()) return;
+    if (!this.isCurrentEdit(edit)) {
+      this.closeEditor();
+      return;
+    }
     const isUnchanged = value === (edit.value ?? null);
     if (isUnchanged) {
       this.closeEditor();
@@ -625,6 +629,7 @@ export class TablesViewComponent {
   }
 
   private async loadTable({ projectId, storeId }: StoreScope, { keepsSelection = false }: TableLoadOptions = {}): Promise<void> {
+    this.closeEditor();
     this.latestHistoryRequest++;
     const request = ++this.latestTableRequest;
     this.activeStoreId.set(storeId);
