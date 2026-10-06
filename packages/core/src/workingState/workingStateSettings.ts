@@ -76,10 +76,10 @@ const ConfigFileSchema = z.object({
 });
 
 // The vm timeout interrupts a runaway regex, so a catastrophic pattern refuses the boot instead of freezing it.
-function scansAdversarialTextsWithinBudget(source: string): boolean {
+function scansAdversarialTextsWithinBudget(source: string, handoverPatternBudgetMs: number): boolean {
   const scan = new Script('text.match(new RegExp(source, flags))');
   try {
-    for (const text of SELF_TEST_ADVERSARIAL_TEXTS) scan.runInNewContext({ text, source, flags: HANDOVER_PATTERN_FLAGS }, { timeout: SELF_TEST_BUDGET_MS });
+    for (const text of SELF_TEST_ADVERSARIAL_TEXTS) scan.runInNewContext({ text, source, flags: HANDOVER_PATTERN_FLAGS }, { timeout: handoverPatternBudgetMs });
     return true;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ERR_SCRIPT_EXECUTION_TIMEOUT') return false;
@@ -87,7 +87,7 @@ function scansAdversarialTextsWithinBudget(source: string): boolean {
   }
 }
 
-function compileHandoverPattern(source: string, position: number): RegExp {
+function compileHandoverPattern(source: string, position: number, handoverPatternBudgetMs: number): RegExp {
   const label = `handoverPatterns[${position}] "${source}"`;
   let compiled: RegExp;
   try {
@@ -98,7 +98,8 @@ function compileHandoverPattern(source: string, position: number): RegExp {
   const backtrackingRisk = BACKTRACKING_RISKS.find(({ pattern }) => pattern.test(source));
   if (backtrackingRisk) throw new Error(`${label} risks catastrophic backtracking (${backtrackingRisk.reason})`);
   if (new RegExp(source, 'u').test('')) throw new Error(`${label} matches the empty string`);
-  if (!scansAdversarialTextsWithinBudget(source)) throw new Error(`${label} takes more than ${SELF_TEST_BUDGET_MS} ms to scan a ${SELF_TEST_TEXT_LENGTH}-character adversarial text (catastrophic backtracking)`);
+  const scansWithinBudget = scansAdversarialTextsWithinBudget(source, handoverPatternBudgetMs);
+  if (!scansWithinBudget) throw new Error(`${label} takes more than ${handoverPatternBudgetMs} ms to scan a ${SELF_TEST_TEXT_LENGTH}-character adversarial text (catastrophic backtracking)`);
   return compiled;
 }
 
@@ -114,7 +115,7 @@ function warnAboutUnknownModelAliases(models: ContextNoticeSettings['models']): 
 }
 
 // A malformed value fails the boot loudly, like the model table: a typo must not run every session on a setting nobody chose.
-export function loadDaemonSettings(configPath: string): DaemonSettings {
+export function loadDaemonSettings(configPath: string, { handoverPatternBudgetMs = SELF_TEST_BUDGET_MS }: { handoverPatternBudgetMs?: number } = {}): DaemonSettings {
   const defaults: DaemonSettings = { workingState: DEFAULT_WORKING_STATE_SETTINGS, managers: DEFAULT_MANAGER_SETTINGS, contextNotice: DEFAULT_CONTEXT_NOTICE_SETTINGS };
   if (!existsSync(configPath)) return defaults;
   try {
@@ -124,7 +125,7 @@ export function loadDaemonSettings(configPath: string): DaemonSettings {
     if (misspelledKey) throw new Error(`unknown key "${misspelledKey}", the key is "${misspelledSectionKey(misspelledKey)}"`);
     warnAboutUnknownModelAliases(parsed.contextNotice?.models ?? {});
     const { handoverPatterns, ...scalarSettings } = parsed.workingState ?? {};
-    const compiledPatterns = handoverPatterns?.map(compileHandoverPattern);
+    const compiledPatterns = handoverPatterns?.map((source, position) => compileHandoverPattern(source, position, handoverPatternBudgetMs));
     return {
       workingState: { ...DEFAULT_WORKING_STATE_SETTINGS, ...definedOnly(scalarSettings), ...(compiledPatterns && { handoverPatterns: compiledPatterns }) },
       managers: { ...DEFAULT_MANAGER_SETTINGS, ...definedOnly(parsed.managers ?? {}) },

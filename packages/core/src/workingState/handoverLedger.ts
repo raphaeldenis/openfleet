@@ -28,7 +28,7 @@ export const DEFAULT_HANDOVER_PATTERNS: RegExp[] = [DESIGN_LINK_PATTERN, DOC_PAT
 const TRAILING_PUNCTUATION = /[.,;:!?)\]}>'"`]+$/;
 const LINK_SCHEME = /^https?:\/\//;
 
-export interface HandoverLedgerDeps { db: DatabaseSync; clock: () => string; patterns?: RegExp[] }
+export interface HandoverLedgerDeps { db: DatabaseSync; clock: () => string; patterns?: RegExp[]; handoverPatternBudgetMs?: number }
 
 interface ScanWindow { text: string; offset: number; endsMidToken: boolean }
 interface FoundValue { index: number; value: string }
@@ -89,12 +89,13 @@ export class HandoverLedger {
   private customMatchesWithinBudget(text: string, pattern: RegExp): RawMatch[] {
     const isBlankLine = text === '';
     if (isBlankLine || this.patternsDisabledForTakingTooLong.has(pattern)) return [];
+    const handoverPatternBudgetMs = this.deps.handoverPatternBudgetMs ?? CUSTOM_PATTERN_BUDGET_MS;
     try {
-      return matchWithinBudget(text, pattern);
+      return matchWithinBudget({ text, pattern, handoverPatternBudgetMs });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ERR_SCRIPT_EXECUTION_TIMEOUT') throw error;
       this.patternsDisabledForTakingTooLong.add(pattern);
-      log('warn', `handover pattern ${pattern} took more than ${CUSTOM_PATTERN_BUDGET_MS} ms on a prompt line and is disabled until the daemon restarts`);
+      log('warn', `handover pattern ${pattern} took more than ${handoverPatternBudgetMs} ms on a prompt line and is disabled until the daemon restarts`);
       return [];
     }
   }
@@ -140,9 +141,9 @@ const matchSandbox = createContext({ text: '', source: '', flags: '' });
 
 const nativeMatches = (text: string, pattern: RegExp): RawMatch[] => [...text.matchAll(pattern)].map((match) => ({ index: match.index!, text: match[0] }));
 
-function matchWithinBudget(text: string, pattern: RegExp): RawMatch[] {
+function matchWithinBudget({ text, pattern, handoverPatternBudgetMs }: { text: string; pattern: RegExp; handoverPatternBudgetMs: number }): RawMatch[] {
   Object.assign(matchSandbox, { text, source: pattern.source, flags: pattern.flags });
-  const pairs = matchScript.runInContext(matchSandbox, { timeout: CUSTOM_PATTERN_BUDGET_MS }) as [number, string][];
+  const pairs = matchScript.runInContext(matchSandbox, { timeout: handoverPatternBudgetMs }) as [number, string][];
   return pairs.map(([index, matched]) => ({ index, text: matched }));
 }
 
