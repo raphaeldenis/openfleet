@@ -8,6 +8,50 @@ permissions:
   contents: read
 
 jobs:
+  rust:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    env:
+      TAURI_CONFIG: '{"bundle":{"externalBin":[],"resources":[]}}'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Start Rust job timer
+        run: echo "RUST_JOB_STARTED_AT=$(date +%s)" >> "$GITHUB_ENV"
+      - name: Install Rust toolchains
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal
+          rustup toolchain install stable --profile minimal --component clippy
+          echo "CLIPPY_RUST_VERSION=$(rustc +stable --version | awk '{print $2}')" >> "$GITHUB_ENV"
+          rustc +1.88.0 --version
+          cargo +stable clippy --version
+      - name: Cache Cargo dependencies and build outputs
+        id: cargo-cache
+        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/registry/src
+            ~/.cargo/git/db
+            apps/desktop/src-tauri/target
+          key: rust-${{ runner.os }}-${{ runner.arch }}-1.88.0-${{ env.CLIPPY_RUST_VERSION }}-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}-${{ github.sha }}
+          restore-keys: |
+            rust-${{ runner.os }}-${{ runner.arch }}-1.88.0-${{ env.CLIPPY_RUST_VERSION }}-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}-
+      - name: Test Tauri library with the declared minimum Rust version
+        run: cargo +1.88.0 test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib
+      - name: Lint all Tauri targets with stable Clippy
+        continue-on-error: true
+        run: sh scripts/cargo-clippy.sh cargo +stable clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets
+      - name: Log additional macOS runner time
+        if: always()
+        env:
+          CARGO_CACHE_HIT: ${{ steps.cargo-cache.outputs.cache-hit }}
+        run: |
+          rust_job_seconds=$(($(date +%s) - RUST_JOB_STARTED_AT))
+          rust_job_minutes=$(awk -v seconds="$rust_job_seconds" 'BEGIN { printf "%.2f", seconds / 60 }')
+          echo "Rust job adds ${rust_job_seconds}s (${rust_job_minutes} macOS runner minutes); cache hit: ${CARGO_CACHE_HIT:-false}"
+          echo "Rust job: ${rust_job_seconds}s (${rust_job_minutes} additional macOS runner minutes), cache hit: ${CARGO_CACHE_HIT:-false}. Excludes checkout and post-job cache upload; see the Actions job duration for the total." >> "$GITHUB_STEP_SUMMARY"
+
   test:
     runs-on: macos-latest
     steps:

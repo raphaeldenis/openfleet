@@ -86,11 +86,15 @@ The repo has no known violation: `.dependency-cruiser-known-violations.json` (`-
 
 ### Pre-push hook
 
-`pnpm install` installs a husky `pre-push` hook (`scripts/pre-push.sh`) that runs what CI runs: `pnpm arch`, `pnpm typecheck`, `pnpm test`, `pnpm --filter @openfleet/desktop test`, stopping at the first failure. It also re-runs the core tests without `claude` in `PATH` (CI has none; skipped when `claude` is not installed), runs `cargo test` and `cargo clippy -- -D warnings` when the push touches `apps/desktop/src-tauri`, and runs the e2e when it touches `apps/desktop/src`, `packages/core/src/api` or `packages/shared/src` (on free ports, whatever your dev server holds; `OPENFLEET_PREPUSH_E2E=1` forces it, `=0` skips it). `OPENFLEET_PREPUSH_DRYRUN=1 sh scripts/pre-push.sh` lists the steps without running them. It puts `/opt/homebrew/bin` first in `PATH` when present and refuses a Node older than 26.
+`pnpm install` installs a husky `pre-push` hook (`scripts/pre-push.sh`) that runs what CI runs: `pnpm arch`, `pnpm typecheck`, `pnpm test`, `pnpm --filter @openfleet/desktop test`, stopping at the first failure. It also re-runs the core tests without `claude` in `PATH` (CI has none; skipped when `claude` is not installed), runs blocking `cargo test --lib` with the exact `Cargo.toml` Rust version and advisory `cargo +stable clippy --all-targets` when the push touches `apps/desktop/src-tauri`, and runs the e2e when it touches `apps/desktop/src`, `packages/core/src/api` or `packages/shared/src` (on free ports, whatever your dev server holds; `OPENFLEET_PREPUSH_E2E=1` forces it, `=0` skips it). `OPENFLEET_PREPUSH_DRYRUN=1 sh scripts/pre-push.sh` lists the steps without running them. It puts `/opt/homebrew/bin` first in `PATH` when present and refuses a Node older than 26.
 
 The e2e runs automatically when the pushed range touches `apps/desktop/src`, `packages/core/src/api` or `packages/shared/src`, on free ports picked at run time; `OPENFLEET_PREPUSH_E2E=1 git push` forces it, `OPENFLEET_PREPUSH_E2E=0` skips it.
 
-Cost: the claude-free step runs the core tests a second time (about 35 s more). Cargo is skipped with a notice when it is not installed, and the first push that touches `src-tauri` may download the Node sidecar (network) and bundle the daemon.
+Cost: the claude-free step runs the core tests a second time (about 35 s more). Cargo is skipped locally with a notice when it is not installed; CI always runs it. When Cargo is present, the hook requires rustup and installs the test and stable Clippy toolchains when needed. Both use `--locked` and `TAURI_CONFIG='{"bundle":{"externalBin":[],"resources":[]}}'` to check Rust without packaging the Node sidecar or daemon. Packaging builds still need both inputs.
+
+CI runs Rust in a separate macOS job, in parallel with JavaScript tests and e2e. It caches Cargo downloads and build outputs by OS, architecture, Rust versions and `Cargo.lock`. Each run logs the additional Rust job seconds and runner minutes, plus the cache hit, in its log and job summary; the Actions job duration includes checkout and post-job cache upload too. The declared minimum Rust version is 1.88.0: the committed lock contains dependencies requiring it, so 1.77.2 cannot compile that lock.
+
+Clippy is advisory in both CI and the hook while existing lints remain. `scripts/cargo-clippy.sh` prints its output and the exact diagnostic count, excluding Cargo's target summary lines, and adds the count to the CI summary. On stable Rust 1.98.1, Clippy reports 7 library warnings and 11 library-test warnings (6 duplicates): 12 emitted diagnostics. Cargo tests remain blocking.
 
 #### Hook / CI parity
 
@@ -99,11 +103,12 @@ Cost: the claude-free step runs the core tests a second time (about 35 s more). 
 | `pnpm arch`, `pnpm typecheck`, `pnpm test`, `pnpm --filter @openfleet/desktop test` | always | none |
 | `pnpm --filter @openfleet/desktop build` (production build: budgets, AOT strict templates) | when the push touches `apps/desktop/src`, the files at the root of `apps/desktop` or `packages/shared` (about 5 s) | skipped otherwise |
 | `pnpm e2e` | when the push touches `apps/desktop/src`, `packages/core/src/api` or `packages/shared/src` and the ports are free | CI always runs it |
+| `cargo test --lib`, `cargo +stable clippy --all-targets` (both `--locked`) | when the push touches `apps/desktop/src-tauri`, if Cargo is installed | CI always runs them; both test with the exact declared Rust version, lint on stable and disable bundle inputs; tests block, Clippy is advisory |
 | `pnpm install --frozen-lockfile`, `playwright install` | never | already installed locally |
 | clean clone of the pushed commit | working tree | the hook fails on untracked, non-ignored files under `packages/`, `apps/`, `scripts/` (absent from CI's clone: `git add` them or list them in `.gitignore`) and warns on uncommitted tracked changes |
 | macOS shared runner | your machine | timing-sensitive tests can fail on CI only |
 
-`scripts/ci-hook-parity.test.ts` fails when `ci.yml` runs a `pnpm` command that the hook neither runs nor lists, with a reason, in its `EXCEPTIONS`.
+`scripts/ci-hook-parity.test.ts` fails when `ci.yml` runs a `pnpm` command that the hook neither runs nor lists, with a reason, in its `EXCEPTIONS`. It also checks Cargo command parity, the test toolchain against `rust-version`, stable Clippy arguments and the shared bundle-free configuration.
 
 CI runs on `pull_request` and on pushes to `main`: a branch push with an open PR runs once. A branch pushed without a PR does not run CI; the hook has already run the same checks.
 
