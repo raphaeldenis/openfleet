@@ -19,6 +19,7 @@ export const columnView = (column: DsColumn) => ({
   id: column.id, displayName: column.displayName, columnType: column.columnType,
   ...(column.options ? { options: column.options } : {}),
   ...(column.autoValue ? { autoValue: column.autoValue } : {}),
+  ...(column.format ? { format: column.format } : {}),
 });
 
 /** What an agent reads for a stored cell of a column. */

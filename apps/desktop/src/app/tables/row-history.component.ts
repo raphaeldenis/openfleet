@@ -23,7 +23,12 @@ const formatValue = (value: unknown) => (value === null || value === undefined ?
       <div class="entry" [attr.data-testid]="'history-entry-' + entry.id">
         <div class="body">
           <span>
-            <b class="who">{{ entry.actorLabel }}</b>&ngsp;<of-actor-badge [kind]="entry.actorKind" />&ngsp;<span class="what">{{ describe(entry.change) }}</span>
+            <b class="who">{{ entry.actorLabel }}</b>&ngsp;<of-actor-badge [kind]="entry.actorKind" />&ngsp;<span class="what">
+              @for (line of describeLines(entry.change); track $index) {
+                @if (!$first) {<br />}
+                <span>{{ line }}</span>
+              }
+            </span>
           </span>
           <span class="when">{{ formatWhen(entry.createdAt) }}</span>
         </div>
@@ -63,6 +68,10 @@ export class RowHistoryComponent {
     return Object.entries(fieldChanges)
       .map(([columnId, { from, to }]) => `${this.columnById().get(columnId)?.displayName ?? columnId} ${this.format(columnId, from)} → ${this.format(columnId, to)}`)
       .join(', ');
+  }
+
+  protected describeLines(change: DsRowChange): string[] {
+    return this.describe(change).split('\n');
   }
 
   private format(columnId: string, value: unknown): string {

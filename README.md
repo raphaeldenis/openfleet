@@ -16,6 +16,8 @@ Limits you can hit:
 
 ## Dev
 
+Table columns keep their base type and can carry an optional format: `datetime` for date, `longText` or `url` for text, and `rank` for number. `add_data_store_column` accepts `format`; store descriptions and REST schemas return it. New datetime values require an ISO time with `Z` or an explicit offset and display in the local timezone. URL cells remain text; only HTTP(S) links are clickable. Rank is a plain number. Scape imports preserve these formats, including row history; reimport restores formats lost by an older import when the column has no local edits. Cell editing remains a separate feature.
+
 Requires Node >=26 — `nvm use` in this repo picks up Homebrew's Node via `.nvmrc` (`system`); on a shell where nvm's `default` alias points elsewhere, prefix commands with `PATH="/opt/homebrew/bin:$PATH"` instead of changing the global alias.
 
     pnpm install

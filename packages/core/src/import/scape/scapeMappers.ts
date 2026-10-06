@@ -1,4 +1,5 @@
 import { convertLexicalToMarkdown } from '../lexicalToMarkdown.js';
+import { COLUMN_TYPE_BY_FORMAT, ColumnFormatSchema, type ColumnFormat } from '@openfleet/shared';
 import { ScapeImportError } from './scapeImportError.js';
 import { cellKeyOf, type ScapeColumn, type ScapeNote, type ScapeNoteVersion, type ScapeRow, type ScapeRowChange, type ScapeView } from './scapeSource.js';
 import { scapeNotesDateToIso, unixSecondsToIso } from './scapeTime.js';
@@ -20,6 +21,7 @@ export interface MappedColumn {
   storeId: string;
   displayName: string;
   columnType: OpenFleetColumnType;
+  format: ColumnFormat | null;
   options: SelectOption[] | null;
   sortOrder: number;
   droppedFormat: string | null;
@@ -119,9 +121,12 @@ export function mapColumn(column: ScapeColumn): MappedColumn {
   const isKnownType = ['text', 'number', 'date'].includes(column.columnType);
   if (!isKnownType) throw unreadable(`unsupported Scape column type "${column.columnType}" on column ${column.id}`);
   const columnType = isTextWithOptions ? 'select' : (column.columnType as OpenFleetColumnType);
+  const parsedFormat = ColumnFormatSchema.safeParse(column.format);
+  const isCompatibleFormat = parsedFormat.success && COLUMN_TYPE_BY_FORMAT[parsedFormat.data] === columnType;
+  const format = isCompatibleFormat ? parsedFormat.data : null;
   const hasNativeFormat = column.format === NATIVE_FORMAT_BY_COLUMN_TYPE[columnType];
-  const droppedFormat = hasNativeFormat ? null : column.format || null;
-  return { id: column.id, storeId: column.storeId, displayName: column.displayName, columnType, options: isTextWithOptions ? options : null, sortOrder: column.sortOrder, droppedFormat };
+  const droppedFormat = hasNativeFormat || format !== null ? null : column.format || null;
+  return { id: column.id, storeId: column.storeId, displayName: column.displayName, columnType, format, options: isTextWithOptions ? options : null, sortOrder: column.sortOrder, droppedFormat };
 }
 
 export const columnsByCellKey = (columns: MappedColumn[]): ColumnsByCellKey => new Map(columns.map((column) => [cellKeyOf(column.id), column]));

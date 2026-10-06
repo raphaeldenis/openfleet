@@ -1,4 +1,4 @@
-import { AggregateSchema, ScapeAggregateSchema, AutoValueSchema, ColumnTypeSchema, SelectOptionSchema, type Aggregate, type ScapeAggregate, type DataStore, type DsColumn, type Session } from '@openfleet/shared';
+import { AggregateSchema, ScapeAggregateSchema, AutoValueSchema, ColumnFormatSchema, ColumnTypeSchema, SelectOptionSchema, type Aggregate, type ScapeAggregate, type DataStore, type DsColumn, type Session } from '@openfleet/shared';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { RowNotFoundError, StoreNotFoundError, UnknownColumnReferenceError, type DataStoreRepository, type RowActor } from '../stores/dataStoreRepository.js';
@@ -66,15 +66,16 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
   });
 
   server.registerTool('add_data_store_column', {
-    description: 'Add a typed column to a data store; natural_key true (text column only) makes it the column whose value names a row for update_data_store_row key; a select column needs at least one option; auto_value "created_at" (date column only) makes the daemon fill the column with its own clock at insert and refuse any update',
-    inputSchema: { store: z.string().min(1), display_name: z.string().min(1), column_type: ColumnTypeSchema, options: z.array(SelectOptionSchema).optional(), auto_value: AutoValueSchema.optional(), natural_key: z.boolean().optional() },
-  }, async ({ store, display_name, column_type, options, auto_value, natural_key }) => {
+    description: 'Add a typed column to a data store; optional format is datetime (date, ISO time with explicit offset), longText or url (text), or rank (number). '
+      + 'natural_key true (text column only) makes it the column whose value names a row for update_data_store_row key; a select column needs at least one option; auto_value "created_at" (date column only) makes the daemon fill the column with its own clock at insert and refuse any update',
+    inputSchema: { store: z.string().min(1), display_name: z.string().min(1), column_type: ColumnTypeSchema, format: ColumnFormatSchema.optional(), options: z.array(SelectOptionSchema).optional(), auto_value: AutoValueSchema.optional(), natural_key: z.boolean().optional() },
+  }, async ({ store, display_name, column_type, format, options, auto_value, natural_key }) => {
     const scope = requireProject();
     if (!scope) return refuse('project_not_found', 'this session has no project');
     return guarded(() => {
       const isNaturalKeyOnNonText = natural_key === true && column_type !== 'text';
       if (isNaturalKeyOnNonText) throw new InvalidColumnDefinitionError('The natural key must be a text column of this data store');
-      const column = stores.addColumn(store, { ...scope, displayName: display_name, columnType: column_type, options, autoValue: auto_value });
+      const column = stores.addColumn(store, { ...scope, displayName: display_name, columnType: column_type, format, options, autoValue: auto_value });
       if (natural_key === true) stores.setNaturalKey(store, { ...scope, columnId: column.id });
       return columnView(column);
     });

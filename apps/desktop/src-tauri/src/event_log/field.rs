@@ -575,6 +575,7 @@ const KNOWN_CODES: &[&str] = &[
   "view_not_found", "row_not_found", "manager_not_found", "handoff_not_found", "session_closed", "stale_revision", "file_backed", "file_unreadable",
   "path_escapes_docs_folder", "duplicate_name", "worktree_exists", "not_closed", "directory_missing", "directory_changed", "directory_unreadable",
   "already_resolved", "config_unreadable", "config_read_only", "message_id_reused", "too_many_pending", "children_cap", "outside_lineage", "not_a_manager",
+  "mission_missing", "mission_too_large",
   "directory_in_use", "duplicate_child", "no_parent", "spawn_raced", "store_has_rows", "duplicate_id", "no_docs_folder", "not_file_backed",
   "docs_folder_not_writable", "payload_too_large", "note_too_large", "row_cap", "state_too_large", "daemon_shutting_down", "daemon_degraded",
   "delivery_failed", "message_held_for_review", "harness_exited", "claude_not_found", "git_unavailable", "internal_error", "launch_failed", "resume_timeout",

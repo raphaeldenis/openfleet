@@ -33,6 +33,20 @@ fn read_admin_token(app: tauri::AppHandle) -> Result<String, String> {
 
 const LOG_LINES_IN_REPORT: usize = 50;
 
+#[tauri::command(async)]
+fn open_external_url(url: String) -> Result<(), String> {
+  open_web_url(&url, |target| issue_report::open_with_macos(target.as_ref()))
+}
+
+fn open_web_url(url: &str, open: impl FnOnce(&str) -> std::io::Result<()>) -> Result<(), String> {
+  let parsed = tauri::Url::parse(url).map_err(|_| "invalid web URL".to_string())?;
+  let is_web_url = matches!(parsed.scheme(), "http" | "https") && parsed.host_str().is_some();
+  if !is_web_url {
+    return Err("only HTTP(S) URLs can open in the browser".to_string());
+  }
+  open(parsed.as_str()).map_err(|err| format!("could not open the browser: {err}"))
+}
+
 /// Opens the logs folder in Finder. Takes no argument: the webview cannot choose what is opened.
 #[tauri::command(async)]
 fn reveal_logs(app: tauri::AppHandle) -> Result<(), String> {
@@ -132,7 +146,7 @@ pub fn run() {
         let _ = window.hide();
       }
     })
-    .invoke_handler(tauri::generate_handler![read_admin_token, daemon::daemon_status, reveal_logs, report_issue, read_desktop_log, save_diagnostics_bundle, reveal_diagnostics_bundle])
+    .invoke_handler(tauri::generate_handler![read_admin_token, daemon::daemon_status, reveal_logs, report_issue, open_external_url, read_desktop_log, save_diagnostics_bundle, reveal_diagnostics_bundle])
     .setup(|app| {
       daemon::start(app.handle().clone());
       record_foreign_records_every(FOREIGN_RECORDS_INTERVAL, app.handle().clone());
@@ -176,6 +190,23 @@ fn show_main_window(app: &tauri::AppHandle) {
 
 #[cfg(test)]
 mod tests {
+  #[test]
+  fn web_links_reach_the_browser_and_other_schemes_do_not() {
+    for url in ["https://example.com/task", "http://example.com/task"] {
+      let mut opened = None;
+      let outcome = super::open_web_url(url, |target| {
+        opened = Some(target.to_string());
+        Ok(())
+      });
+      assert_eq!(outcome, Ok(()));
+      assert_eq!(opened.as_deref(), Some(url));
+    }
+    for url in ["javascript:alert(1)", "data:text/html,hello", "file:///tmp/task", "not a URL"] {
+      let outcome = super::open_web_url(url, |_| panic!("unsafe URL reaches the browser"));
+      assert!(outcome.is_err());
+    }
+  }
+
   /// A sync command runs on the main thread unless it is declared `async`, and these two read files and wait on child processes.
   #[test]
   fn the_support_commands_run_off_the_main_thread_and_take_no_webview_argument() {
