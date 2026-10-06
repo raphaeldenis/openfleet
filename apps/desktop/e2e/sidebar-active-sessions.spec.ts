@@ -39,11 +39,31 @@ test('a sidebar row draws the name on a first line and the state chip on a secon
     { row: page.getByTestId(`manager-row-${manager.id}`), name: 'Two lines manager' },
   ]) {
     await expect(row).toBeVisible();
-    const nameBox = await row.getByText(name, { exact: true }).boundingBox();
-    const chipBox = await row.getByTestId('state-chip').boundingBox();
-    const tileBox = await row.getByText(/^(🧪|⚓)$/).boundingBox();
-    expect(chipBox!.y).toBeGreaterThanOrEqual(nameBox!.y + nameBox!.height);
-    expect(tileBox).toMatchObject({ width: 24, height: 24 });
+    const rowName = row.getByText(name, { exact: true });
+    const stateChip = row.getByTestId('state-chip');
+    const emojiTile = row.getByText(/^(🧪|⚓)$/);
+    await expect(rowName).toBeVisible();
+    await expect(stateChip).toBeVisible();
+    await expect(emojiTile).toBeVisible();
+
+    await expect(async () => {
+      const rowLayout = await rowName.or(stateChip).or(emojiTile).evaluateAll((elements, rowName) => {
+        return elements.map((element) => {
+          const isName = element.textContent === rowName;
+          const isStateChip = element.getAttribute('data-testid') === 'state-chip';
+          const isEmojiTile = !isName && !isStateChip;
+          const { y, height, width } = element.getBoundingClientRect();
+          return { isName, isStateChip, isEmojiTile, y, height, width };
+        });
+      }, name);
+      const nameBox = rowLayout.find(({ isName }) => isName);
+      const chipBox = rowLayout.find(({ isStateChip }) => isStateChip);
+      const tileBox = rowLayout.find(({ isEmojiTile }) => isEmojiTile);
+      expect(nameBox).toBeDefined();
+      expect(chipBox).toBeDefined();
+      expect(chipBox!.y).toBeGreaterThanOrEqual(nameBox!.y + nameBox!.height);
+      expect(tileBox).toMatchObject({ width: 24, height: 24 });
+    }).toPass({ timeout: 5000 });
   }
 });
 
