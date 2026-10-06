@@ -83,12 +83,31 @@ export const VIEW_TYPES = ['grid', 'kanban'] as const;
 export const ViewTypeSchema = z.enum(VIEW_TYPES);
 export type ViewType = z.infer<typeof ViewTypeSchema>;
 
+const UniqueIdsSchema = z.array(z.string().min(1)).refine((ids) => new Set(ids).size === ids.length, 'IDs must be unique');
+
 export const DsViewConfigSchema = z.object({
   where: z.array(WhereClauseSchema).optional(),
   orderBy: z.array(OrderTermSchema).optional(),
   groupByColumnId: z.string().min(1).optional(),
+  cardTitleColumnId: z.string().min(1).optional(),
+  cardFields: UniqueIdsSchema.optional(),
+  columnOrder: UniqueIdsSchema.optional(),
+  showUngrouped: z.boolean().optional(),
 });
 export type DsViewConfig = z.infer<typeof DsViewConfigSchema>;
+
+export const NO_VALUE_GROUP_ID = '__no_value__';
+
+export function orderedKanbanOptions(input: { options: SelectOption[]; columnOrder?: string[] }): SelectOption[] {
+  const optionsById = new Map(input.options.map((option) => [option.id, option]));
+  const orderedIds = new Set(input.columnOrder ?? []);
+  const orderedOptions = [...orderedIds].flatMap((id) => {
+    const option = optionsById.get(id);
+    return option ? [option] : [];
+  });
+  const remainingOptions = input.options.filter((option) => !orderedIds.has(option.id));
+  return [...orderedOptions, ...remainingOptions];
+}
 
 export interface DsView {
   id: string;

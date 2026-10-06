@@ -8,7 +8,7 @@ import { importScape } from './importScape.js';
 import {
   buildScapeFixture, CCM_PROJECT_ID, DUE_COLUMN_ID, editScapeDatastore, editScapeNotes,
   KANBAN_VIEW_ID, LEXICAL_NOTE_ID, LOG_STORE_ID, MARKDOWN_NOTE_ID, OPENFLEET_PROJECT_ID, PRIORITY_COLUMN_ID,
-  STATUS_COLUMN_ID, TITLE_COLUMN_ID, type ScapeFixture,
+  STATUS_COLUMN_ID, STATUS_DONE_OPTION_ID, TITLE_COLUMN_ID, type ScapeFixture,
 } from './scapeFixture.testkit.js';
 
 describe('Scape import cutover follow-ups', () => {
@@ -103,13 +103,33 @@ describe('Scape import cutover follow-ups', () => {
     expect(report.counts.rows.written).toBe(3);
   });
 
-  it('names the lost kanban columnOrder in the report', () => {
+  it('preserves supported kanban settings without reporting them as lost', () => {
     const report = run({ dryRun: true });
 
+    expect(report.droppedViewFields).toEqual([]);
+    expect(report.counts.views.notConverted).toBe(0);
+  });
+
+  it('renders the view id and unsupported or partially lost settings in the Markdown report', () => {
+    editScapeNotes(fixture, (db) => {
+      const sourceConfig = {
+        groupByColumnID: STATUS_COLUMN_ID,
+        cardTitleColumnID: 'missing',
+        cardFieldColumnIDs: [PRIORITY_COLUMN_ID, 'missing', PRIORITY_COLUMN_ID],
+        columnOrder: [STATUS_DONE_OPTION_ID, 'missing'],
+        showUngrouped: 'yes',
+        futureSetting: true,
+      };
+      db.prepare('UPDATE data_store_view SET config = ? WHERE id = ?').run(JSON.stringify(sourceConfig), KANBAN_VIEW_ID);
+    });
+
+    const report = run({ dryRun: true });
     const markdown = renderImportReport(report);
-    expect(markdown).toContain(KANBAN_VIEW_ID);
-    expect(markdown).toContain('columnOrder');
-    expect(report.counts.views.notConverted).toBe(1);
+
+    const lostProperties = ['futureSetting', 'cardTitleColumnID', 'cardFieldColumnIDs', 'columnOrder', 'showUngrouped'];
+    for (const property of lostProperties) {
+      expect(markdown).toMatch(new RegExp(`^- ${KANBAN_VIEW_ID}: .*${property}`, 'm'));
+    }
   });
 
   it('does not label native text and select presentation as lost formatting', () => {

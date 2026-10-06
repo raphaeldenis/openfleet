@@ -54,9 +54,12 @@ Archived projects, archived notes and their versions are excluded. Previously
 imported records remain in OpenFleet and appear as removed in Scape on a full
 re-import. Orphan datastore files (including the retired `FDD4ACA0` project)
 are listed but never read. A metadata store without a backing table is listed
-separately from an empty table. The report also identifies display formats
-(`url`, `longText`, `rank`, `datetime`) and view settings such as kanban
-`columnOrder` that OpenFleet does not preserve; cell values remain imported.
+separately from an empty table. Supported rich column formats and kanban title,
+card fields, column order and showUngrouped are preserved. Unsupported or invalid
+view properties remain listed as losses, including partially preserved lists.
+Re-import enriches intact views imported by older versions; local edits remain conflicts.
+Without showUngrouped, core omits ungrouped rows and desktop displays them,
+preserving each surface's historical default. Explicit true/false overrides both.
 
 ## Claude memory of the managers
 

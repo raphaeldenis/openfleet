@@ -543,6 +543,21 @@ describe('TablesViewComponent', () => {
   });
 
   describe('kanban buckets', () => {
+    it('applies saved card settings, partial column order and ungrouped visibility from the same view', async () => {
+      const api = fakeApi({ rows: [...twoRows, row('r3', { 'c-title': 'Ungrouped' })] });
+      api.listViews.mockResolvedValue({ items: [{ id: 'v1', storeId: 's1', displayName: 'Board', viewType: 'kanban', config: {
+        groupByColumnId: 'c-status', cardTitleColumnId: 'c-status', cardFields: [], columnOrder: ['done'], showUngrouped: false,
+      }, sortOrder: 0 }] });
+      await renderView(api);
+      await userEvent.click(await screen.findByTestId('table-pill-s1'));
+      await screen.findByTestId('grid-row-r1');
+      await userEvent.click(screen.getByTestId('tables-toggle-kanban'));
+
+      expect(screen.getAllByTestId(/^kanban-column-/).map((element) => element.getAttribute('data-testid'))).toEqual(['kanban-column-done', 'kanban-column-todo', 'kanban-column-doing']);
+      expect(screen.getByTestId('kanban-card-r1')).toHaveTextContent('in progress');
+      expect(screen.getByTestId('kanban-card-r1')).not.toHaveTextContent('Desktop reconnect');
+      expect(screen.queryByTestId('kanban-card-r3')).toBeNull();
+    });
     const statusAndPriority: DsColumn[] = [
       ...columns,
       { id: 'c-priority', storeId: 's1', displayName: 'Priority', columnType: 'select', sortOrder: 2, options: [{ id: 'p-high', label: 'high' }, { id: 'p-low', label: 'low' }] },

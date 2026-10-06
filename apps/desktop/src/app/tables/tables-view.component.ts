@@ -1,5 +1,5 @@
 import { afterNextRender, ChangeDetectionStrategy, Component, computed, effect, ElementRef, inject, Injector, input, linkedSignal, signal, untracked, viewChild } from '@angular/core';
-import { MAX_ROW_BATCH, type DataStore, type DsColumn, type DsRow, type DsRowHistoryEntry, type DsView, type Project } from '@openfleet/shared';
+import { MAX_ROW_BATCH, orderedKanbanOptions, type DataStore, type DsColumn, type DsRow, type DsRowHistoryEntry, type DsView, type Project } from '@openfleet/shared';
 import { ApiError, FleetApiService, type StoreScope } from '../core/fleet-api.service';
 import { ErrorLineComponent } from '../design/error-line.component';
 import { RowHistoryComponent } from './row-history.component';
@@ -125,7 +125,7 @@ const describeCreateFailure = (error: unknown, displayName: string): string => {
         } @else if (viewMode() === 'grid') {
           <of-table-grid [columns]="columns()" [rows]="rows()" [selectedRowId]="selectedRowId()" (rowSelected)="openRow($event)" />
         } @else if (kanbanGroups(); as groups) {
-          <of-table-kanban [columns]="columns()" [groups]="groups" [selectedRowId]="selectedRowId()" (rowSelected)="openRow($event)" />
+          <of-table-kanban [columns]="columns()" [groups]="groups" [config]="activeKanbanView()?.config ?? {}" [selectedRowId]="selectedRowId()" (rowSelected)="openRow($event)" />
         } @else {
           <div class="message" data-testid="tables-kanban-needs-select">
             <span class="message-title">A kanban needs a select column</span>
@@ -272,20 +272,23 @@ export class TablesViewComponent {
     return `Values in ${columnNames} no longer match the column options for ${rowLabel}. Rows are read-only until fixed.`;
   });
 
+  protected readonly activeKanbanView = computed(() => this.views().find((view) => view.viewType === 'kanban' && view.config.groupByColumnId));
   private readonly groupColumn = computed(() => {
     const selectColumns = selectColumnsWithOptions(this.columns());
-    const kanbanView = this.views().find((view) => view.viewType === 'kanban' && view.config.groupByColumnId);
+    const kanbanView = this.activeKanbanView();
     const viewGroupColumn = selectColumns.find((column) => column.id === kanbanView?.config.groupByColumnId);
     return viewGroupColumn ?? selectColumns[0];
   });
   protected readonly kanbanGroups = computed<KanbanGroup[] | null>(() => {
     const column = this.groupColumn();
     if (!column) return null;
-    const options = column.options ?? [];
+    const config = this.activeKanbanView()?.config;
+    const options = orderedKanbanOptions({ options: column.options ?? [], columnOrder: config?.columnOrder });
     const groups = options.map((option) => ({ option, rows: this.rows().filter((row) => row.data[column.id] === option.id) }));
     const rowsWithoutKnownOption = this.rows().filter((row) => !options.some((option) => option.id === row.data[column.id]));
     const noValueGroup = { option: { id: NO_VALUE_GROUP_ID, label: 'No value' }, rows: rowsWithoutKnownOption };
-    return rowsWithoutKnownOption.length > 0 ? [...groups, noValueGroup] : groups;
+    const showsUngrouped = config?.showUngrouped !== false;
+    return showsUngrouped && rowsWithoutKnownOption.length > 0 ? [...groups, noValueGroup] : groups;
   });
   protected readonly selectedRowTitle = computed(() => {
     const selectedRow = this.rows().find((row) => row.id === this.selectedRowId());

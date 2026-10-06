@@ -1,9 +1,9 @@
 import { ChangeDetectionStrategy, Component, input, output } from '@angular/core';
-import type { DsColumn, DsRow, SelectOption } from '@openfleet/shared';
-import { cellText, sortedColumns, textColumns, titleOf } from './table-cells';
+import { NO_VALUE_GROUP_ID, type DsColumn, type DsRow, type DsViewConfig, type SelectOption } from '@openfleet/shared';
+import { cellText, sortedColumns, textColumns } from './table-cells';
 import { TableCellComponent } from './table-cell.component';
 
-export const NO_VALUE_GROUP_ID = '__no_value__';
+export { NO_VALUE_GROUP_ID };
 
 export interface KanbanGroup {
   option: SelectOption;
@@ -77,16 +77,28 @@ export interface KanbanGroup {
 })
 export class TableKanbanComponent {
   readonly columns = input.required<DsColumn[]>();
+  readonly config = input<DsViewConfig>({});
   readonly groups = input.required<KanbanGroup[]>();
   readonly selectedRowId = input<string | null>(null);
   readonly rowSelected = output<string>();
 
   protected readonly untitledLabel = 'Untitled';
-  protected readonly titleOf = (row: DsRow) => titleOf(this.columns(), row);
-  protected readonly titleColumn = () => textColumns(this.columns())[0];
+  protected readonly titleColumn = () => this.columns().find((column) => column.id === this.config().cardTitleColumnId) ?? textColumns(this.columns())[0];
+  protected readonly titleOf = (row: DsRow) => {
+    const column = this.titleColumn();
+    return column ? cellText(column, row) : '';
+  };
 
   protected formattedDetails(): DsColumn[] {
-    const [titleColumn] = textColumns(this.columns());
+    const titleColumn = this.titleColumn();
+    const cardFields = this.config().cardFields;
+    if (cardFields !== undefined) {
+      const columnsById = new Map(this.columns().map((column) => [column.id, column]));
+      return [...new Set(cardFields)].flatMap((id) => {
+        const column = columnsById.get(id);
+        return column && column.id !== titleColumn?.id ? [column] : [];
+      });
+    }
     return sortedColumns(this.columns()).filter((column) => {
       const hasFormat = column.format !== undefined;
       const isTitleColumn = column.id === titleColumn?.id;
@@ -100,7 +112,8 @@ export class TableKanbanComponent {
   }
 
   protected detailsOf(row: DsRow): string {
-    const [, ...detailColumns] = textColumns(this.columns());
+    if (this.config().cardFields !== undefined) return '';
+    const detailColumns = textColumns(this.columns()).filter((column) => column.id !== this.titleColumn()?.id);
     return detailColumns.filter((column) => column.format === undefined).map((column) => cellText(column, row)).filter(Boolean).join(' · ');
   }
 }

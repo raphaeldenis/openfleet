@@ -33,6 +33,52 @@ const bindings = (extra: ReturnType<typeof outputBinding>[] = []) => [
 ];
 
 describe('TableKanbanComponent', () => {
+  it('renders selected details of every base type in configured order and ignores stale references', async () => {
+    const detailColumns: DsColumn[] = [
+      { id: 'number', storeId: 's1', displayName: 'Number', columnType: 'number', options: null, sortOrder: 2 },
+      { id: 'date', storeId: 's1', displayName: 'Date', columnType: 'date', options: null, sortOrder: 3 },
+      { id: 'select', storeId: 's1', displayName: 'Select', columnType: 'select', options: [option('value', 'Selected label')], sortOrder: 4 },
+      { id: 'json', storeId: 's1', displayName: 'Json', columnType: 'json', options: null, sortOrder: 5 },
+    ];
+    const configuredRow = { ...row('all-types', 'Visible title', 'Hidden owner'), data: {
+      'c-title': 'Visible title', 'c-owner': 'Hidden owner', number: 23, date: '2026-10-06', select: 'value', json: { count: 7 },
+    } };
+    await render(TableKanbanComponent, { bindings: [
+      inputBinding('columns', () => [...columns, ...detailColumns]),
+      inputBinding('groups', () => [{ option: option('todo', 'todo'), rows: [configuredRow] }]),
+      inputBinding('config', () => ({ cardFields: ['json', 'missing', 'select', 'date', 'number'] })),
+    ] });
+    const card = screen.getByTestId('kanban-card-all-types');
+    expect(card).toHaveTextContent('Visible title{"count":7}Selected label2026-10-0623');
+    expect(card).not.toHaveTextContent('Hidden owner');
+  });
+
+  it.each(['{Enter}', ' '])('opens a configured card from the keyboard with %s', async (key) => {
+    const rowSelected = vi.fn();
+    await render(TableKanbanComponent, { bindings: [...bindings([outputBinding('rowSelected', rowSelected)]), inputBinding('config', () => ({ cardFields: [] }))] });
+    screen.getByTestId('kanban-card-r1').focus();
+    await userEvent.keyboard(key);
+    expect(rowSelected).toHaveBeenCalledExactlyOnceWith('r1');
+  });
+  it('shows an explicit numeric title and only selected fields in their configured order', async () => {
+    const numericColumn: DsColumn = { id: 'rank', storeId: 's1', displayName: 'Rank', columnType: 'number', options: null, sortOrder: 2 };
+    const configuredRow = { ...row('configured', 'Hidden title', 'Owner'), data: { 'c-title': 'Hidden title', 'c-owner': 'Owner', rank: 42 } };
+    await render(TableKanbanComponent, { bindings: [
+      inputBinding('columns', () => [...columns, numericColumn]),
+      inputBinding('groups', () => [{ option: option('todo', 'todo'), rows: [configuredRow] }]),
+      inputBinding('config', () => ({ cardTitleColumnId: 'rank', cardFields: ['c-owner', 'rank'] })),
+    ] });
+    const card = screen.getByTestId('kanban-card-configured');
+    expect(card).toHaveTextContent('42Owner');
+    expect(card).not.toHaveTextContent('Hidden title');
+    expect(card.textContent?.match(/42/g)).toHaveLength(1);
+  });
+
+  it('an explicit empty field list hides legacy details', async () => {
+    await render(TableKanbanComponent, { bindings: [...bindings(), inputBinding('config', () => ({ cardFields: [] }))] });
+    expect(screen.getByTestId('kanban-card-r3')).toHaveTextContent('Desktop reconnect');
+    expect(screen.getByTestId('kanban-card-r3')).not.toHaveTextContent('Gimli');
+  });
   it('user sees one column per option, titled with the option label and its card count, an empty one included', async () => {
     await render(TableKanbanComponent, { bindings: bindings() });
 

@@ -1,5 +1,5 @@
 import { convertLexicalToMarkdown } from '../lexicalToMarkdown.js';
-import { COLUMN_TYPE_BY_FORMAT, ColumnFormatSchema, type ColumnFormat } from '@openfleet/shared';
+import { COLUMN_TYPE_BY_FORMAT, ColumnFormatSchema, type ColumnFormat, type DsViewConfig } from '@openfleet/shared';
 import { ScapeImportError } from './scapeImportError.js';
 import { cellKeyOf, type ScapeColumn, type ScapeNote, type ScapeNoteVersion, type ScapeRow, type ScapeRowChange, type ScapeView } from './scapeSource.js';
 import { scapeNotesDateToIso, unixSecondsToIso } from './scapeTime.js';
@@ -189,6 +189,41 @@ export function mapChange(change: ScapeRowChange, columns: ColumnsByCellKey) {
   };
 }
 
+function importedReferenceList(input: { value: unknown; knownIds: Set<string> }): { ids?: string[]; hasLoss: boolean } {
+  if (!Array.isArray(input.value)) return { hasLoss: true };
+  const validIds = input.value.filter((id): id is string => typeof id === 'string' && input.knownIds.has(id));
+  const ids = [...new Set(validIds)];
+  return { ids, hasLoss: ids.length !== input.value.length };
+}
+
+function mapKanbanConfig(source: Record<string, unknown>, columns: MappedColumn[], groupColumn: MappedColumn): { config: DsViewConfig; droppedFields: string[] } {
+  const config: DsViewConfig = { groupByColumnId: groupColumn.id };
+  const supportedFields = new Set(['groupByColumnID', 'cardTitleColumnID', 'cardFieldColumnIDs', 'columnOrder', 'showUngrouped']);
+  const droppedFields = Object.keys(source).filter((key) => !supportedFields.has(key));
+  const columnIds = new Set(columns.map((column) => column.id));
+  if (Object.hasOwn(source, 'cardTitleColumnID')) {
+    const titleId = source.cardTitleColumnID;
+    const isKnownTitle = typeof titleId === 'string' && columnIds.has(titleId);
+    if (isKnownTitle) config.cardTitleColumnId = titleId;
+    else droppedFields.push('cardTitleColumnID');
+  }
+  const referenceProperties = [
+    { sourceKey: 'cardFieldColumnIDs', targetKey: 'cardFields', knownIds: columnIds },
+    { sourceKey: 'columnOrder', targetKey: 'columnOrder', knownIds: new Set((groupColumn.options ?? []).map((option) => option.id)) },
+  ] as const;
+  for (const property of referenceProperties) {
+    if (!Object.hasOwn(source, property.sourceKey)) continue;
+    const mapped = importedReferenceList({ value: source[property.sourceKey], knownIds: property.knownIds });
+    if (mapped.ids !== undefined) config[property.targetKey] = mapped.ids;
+    if (mapped.hasLoss) droppedFields.push(property.sourceKey);
+  }
+  if (Object.hasOwn(source, 'showUngrouped')) {
+    if (typeof source.showUngrouped === 'boolean') config.showUngrouped = source.showUngrouped;
+    else droppedFields.push('showUngrouped');
+  }
+  return { config, droppedFields };
+}
+
 /** Returns undefined for a kanban view whose group-by column is not a select column of the store: it cannot be rendered. */
 export function mapView(view: ScapeView, columns: MappedColumn[]) {
   const scapeConfig = parseJson<Record<string, unknown>>(view.config, `the config of view ${view.id}`);
@@ -197,8 +232,9 @@ export function mapView(view: ScapeView, columns: MappedColumn[]) {
   const groupByColumn = columns.find((column) => column.id === groupByColumnId);
   if (isKanban && groupByColumn?.columnType !== 'select') return undefined;
 
-  const config = isKanban ? { groupByColumnId } : {};
-  const droppedFields = Object.keys(scapeConfig).filter((key) => !(isKanban && key === 'groupByColumnID'));
+  const { config, droppedFields } = isKanban && groupByColumn
+    ? mapKanbanConfig(scapeConfig, columns, groupByColumn)
+    : { config: {}, droppedFields: Object.keys(scapeConfig) };
   const record = {
     store_id: view.storeId,
     display_name: view.name,
