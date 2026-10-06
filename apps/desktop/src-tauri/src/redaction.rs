@@ -451,7 +451,7 @@ fn slash_end(bytes: &[u8], index: usize) -> Option<usize> {
 fn is_the_route_pattern(rest: &str) -> bool {
   let bytes = rest.as_bytes();
   let names_the_placeholder = bytes.get(..":token".len()).is_some_and(|word| word.eq_ignore_ascii_case(b":token"));
-  let placeholder_ends_there = bytes.get(":token".len()).map_or(true, |byte| !is_word_byte(*byte) && *byte != b'-');
+  let placeholder_ends_there = bytes.get(":token".len()).is_none_or(|byte| !is_word_byte(*byte) && *byte != b'-');
   names_the_placeholder && placeholder_ends_there
 }
 
@@ -658,7 +658,7 @@ fn is_a_plain_number(value: &str) -> bool {
   let unsigned = value.strip_prefix('-').unwrap_or(value);
   let (whole, fraction) = unsigned.split_once('.').map_or((unsigned, None), |(whole, fraction)| (whole, Some(fraction)));
   let is_digits = |digits: &str| !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit());
-  is_digits(whole) && fraction.map_or(true, is_digits)
+  is_digits(whole) && fraction.is_none_or(is_digits)
 }
 
 /// The header names the cookie rule matches: `Cookie`, `Set-Cookie`, `X-Cookie`, … but not `mycookie`.
@@ -668,7 +668,7 @@ fn is_a_cookie_header_name(key: &str) -> bool {
   let Some(before_the_word) = lowercase_key.strip_suffix(COOKIE) else {
     return false;
   };
-  before_the_word.bytes().last().map_or(true, |byte| !is_word_byte(byte))
+  before_the_word.bytes().last().is_none_or(|byte| !is_word_byte(byte))
 }
 
 fn is_a_mask(text: &str) -> bool {
@@ -936,7 +936,7 @@ fn is_an_authorization_header_name(key: &str) -> bool {
   let Some(before_the_word) = lowercase_key.strip_suffix(AUTHORIZATION) else {
     return false;
   };
-  before_the_word.bytes().last().map_or(true, |byte| !byte.is_ascii_alphanumeric())
+  before_the_word.bytes().last().is_none_or(|byte| !byte.is_ascii_alphanumeric())
 }
 
 fn is_a_generic_authorization_scheme(scheme: &str) -> bool {

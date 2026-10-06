@@ -192,7 +192,10 @@ fn number_in(digits: &[u8]) -> Option<u32> {
 }
 
 fn days_in_month(year: u16, month: u8) -> u8 {
-  let is_leap_year = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+  let is_four_year_cycle = year.is_multiple_of(4);
+  let is_century = year.is_multiple_of(100);
+  let is_four_hundred_year_cycle = year.is_multiple_of(400);
+  let is_leap_year = (is_four_year_cycle && !is_century) || is_four_hundred_year_cycle;
   match month {
     2 if is_leap_year => 29,
     2 => 28,

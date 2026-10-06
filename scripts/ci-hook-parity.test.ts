@@ -42,6 +42,7 @@ const describeMissing = (missing: CiCommand[]) =>
 
 const tauriManifestPath = 'apps/desktop/src-tauri/Cargo.toml';
 const tauriRustVersion = readRepoFile(tauriManifestPath).match(/^rust-version = "([^"]+)"/m)?.[1];
+const clippyRustVersion = readRepoFile('scripts/pre-push.sh').match(/^CLIPPY_RUST_VERSION=(\d+\.\d+\.\d+)$/m)?.[1];
 
 const ciCargoCommands = (): string[] => {
   const workflowLines = readRepoFile('.github/workflows/ci.yml').split('\n');
@@ -59,37 +60,46 @@ const hookCargoCommands = (): string[] => {
     return command ? [command] : [];
   });
   return cargoCommands.map((command) => {
-    const commandWithToolchain = command.replace('+"$TAURI_RUST_VERSION"', `+${tauriRustVersion}`);
+    const commandWithToolchain = command
+      .replace('+"$TAURI_RUST_VERSION"', `+${tauriRustVersion}`)
+      .replace('+"$CLIPPY_RUST_VERSION"', `+${clippyRustVersion}`);
     return commandWithToolchain.replace('"$TAURI_MANIFEST"', tauriManifestPath);
   });
 };
 
 describe('CI and pre-push hook parity', () => {
-  it('tests the Tauri library with the declared Rust version and lints all targets on stable', () => {
+  it('tests the Tauri library with the declared Rust version and lints all targets on an exact Clippy version', () => {
     expect(tauriRustVersion).toBeDefined();
+    expect(clippyRustVersion).toBeDefined();
     expect(ciCargoCommands()).toEqual([
       `cargo +${tauriRustVersion} test --locked --manifest-path ${tauriManifestPath} --lib`,
-      `cargo +stable clippy --locked --manifest-path ${tauriManifestPath} --all-targets`,
+      `cargo +${clippyRustVersion} clippy --locked --manifest-path ${tauriManifestPath} --all-targets -- -D warnings`,
     ]);
+    expect(readRepoFile('.github/workflows/ci.yml')).toContain(`rustup toolchain install ${clippyRustVersion} --profile minimal --component clippy`);
+    expect(readRepoFile('scripts/pre-push.sh')).toContain('run_step "Rust clippy toolchain" rustup toolchain install "$CLIPPY_RUST_VERSION" --profile minimal --component clippy');
   });
 
-  it('keeps Rust tests blocking and Clippy advisory in both CI and the hook', () => {
+  it('keeps Rust tests and Clippy blocking in both CI and the hook', () => {
     const workflowSteps = readRepoFile('.github/workflows/ci.yml').split(/^ {6}- /m);
     const testStep = workflowSteps.find((step) => step.startsWith('name: Test Tauri library with the declared minimum Rust version\n'));
-    const clippyStep = workflowSteps.find((step) => step.startsWith('name: Lint all Tauri targets with stable Clippy\n'));
+    const clippyStep = workflowSteps.find((step) => step.startsWith('name: Lint all Tauri targets with pinned Clippy\n'));
     const hookSource = readRepoFile('scripts/pre-push.sh');
 
     expect(testStep).toBeDefined();
     expect(testStep).not.toContain('continue-on-error:');
     expect(testStep).not.toMatch(/\|\||\bexit 0\b/);
-    expect(clippyStep).toContain('continue-on-error: true');
-    expect(clippyStep).toContain('run: sh scripts/cargo-clippy.sh cargo +stable clippy');
+    expect(clippyStep).toBeDefined();
+    expect(clippyStep).not.toContain('continue-on-error:');
+    expect(clippyStep).not.toMatch(/\|\||\bexit 0\b/);
+    expect(clippyStep).toContain(`run: sh scripts/cargo-clippy.sh cargo +${clippyRustVersion} clippy`);
     expect(hookSource).toContain('run_step "cargo test" cargo +"$TAURI_RUST_VERSION"');
-    expect(hookSource).toContain('run_advisory_step "cargo clippy" sh scripts/cargo-clippy.sh cargo +stable clippy');
+    expect(hookSource).toContain('run_step "cargo clippy" sh scripts/cargo-clippy.sh cargo +"$CLIPPY_RUST_VERSION" clippy');
+    const hookClippyStep = hookSource.split('\n').find((line) => line.includes('run_step "cargo clippy"'));
+    expect(hookClippyStep).not.toMatch(/\|\||\bexit 0\b/);
   });
 
-  it('reports Clippy warnings without counting target summaries as diagnostics', () => {
-    const fakeClippy = "printf '%s\\n' 'warning: first lint' 'warning: second lint' 'warning: `app` (lib) generated 2 warnings'; exit 1";
+  it('reports Clippy warnings and denied lints without counting compilation summaries as diagnostics', () => {
+    const fakeClippy = "printf '%s\\n' 'warning: first lint' 'error: second lint' 'warning: `app` (lib) generated 1 warning' 'error: could not compile `app` (lib) due to 1 previous error'; exit 1";
 
     const result = spawnSync('sh', ['scripts/cargo-clippy.sh', 'sh', '-c', fakeClippy], {
       cwd: REPO_ROOT,
@@ -98,21 +108,24 @@ describe('CI and pre-push hook parity', () => {
     });
 
     expect(result.status).toBe(1);
-    expect(result.stdout).toContain('Clippy advisory: 2 warning diagnostics; exit code 1');
+    expect(result.stdout).toContain('Clippy blocking: 2 warning or error diagnostics; exit code 1');
   });
 
-  it('continues after a failing advisory hook step', () => {
+  it('aborts the push after a failing Clippy hook step', () => {
     const hookSource = readRepoFile('scripts/pre-push.sh');
-    const advisoryFunction = hookSource.match(/^run_advisory_step\(\) \{[\s\S]*?^\}/m)?.[0];
-    expect(advisoryFunction).toBeDefined();
+    const failFunction = hookSource.match(/^fail\(\) \{[\s\S]*?^\}/m)?.[0];
+    const runStepFunction = hookSource.match(/^run_step\(\) \{[\s\S]*?^\}/m)?.[0];
+    expect(failFunction).toBeDefined();
+    expect(runStepFunction).toBeDefined();
 
-    const result = spawnSync('sh', ['-c', `${advisoryFunction}\nrun_advisory_step "cargo clippy" false`], {
+    const result = spawnSync('sh', ['-c', `${failFunction}\n${runStepFunction}\nrun_step "cargo clippy" false\nprintf 'push continues'`], {
       encoding: 'utf8',
       env: { ...process.env, OPENFLEET_PREPUSH_DRYRUN: '0' },
     });
 
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain('advisory; push continues');
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("failed at step 'cargo clippy' — push aborted");
+    expect(result.stdout).not.toContain('push continues');
   });
 
   it('runs every CI cargo command in the hook with the same toolchains and arguments', () => {
