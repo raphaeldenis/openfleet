@@ -526,11 +526,13 @@ mod tests {
     fn random_events(random: &mut XorShift64Star) -> Vec<DesktopEvent> {
       let text_length = (random.next() % 300) as usize;
       let text = random.bytes(text_length);
-      let maybe_salt = (random.next() % 4 != 0).then(salt);
+      let has_salt = !random.next().is_multiple_of(4);
+      let maybe_salt = has_salt.then(salt);
       let opaque = Opaque::of(&text, maybe_salt.as_ref());
       let some_ts = |random: &mut XorShift64Star| Ts::from_unix_seconds(random.next() % 253_402_300_800);
       let kind = (random.next() % 4000) as i32;
-      let error = if random.next() % 2 == 0 { io::Error::from_raw_os_error(kind) } else { io::Error::new(io::ErrorKind::NotFound, "text") };
+      let has_os_error_code = random.next().is_multiple_of(2);
+      let error = if has_os_error_code { io::Error::from_raw_os_error(kind) } else { io::Error::new(io::ErrorKind::NotFound, "text") };
       let hostile_name = String::from_utf8_lossy(&random.bytes(12)).into_owned();
       let words = [random.next(), random.next(), random.next()];
 
@@ -661,7 +663,8 @@ mod tests {
     }
 
     fn hex_decoded(text: &[u8]) -> Vec<u8> {
-      text.chunks_exact(2).filter_map(|pair| std::str::from_utf8(pair).ok().and_then(|pair| u8::from_str_radix(pair, 16).ok())).collect()
+      let (hex_pairs, _) = text.as_chunks::<2>();
+      hex_pairs.iter().filter_map(|pair| std::str::from_utf8(pair).ok().and_then(|pair| u8::from_str_radix(pair, 16).ok())).collect()
     }
 
     const BASE64_GROUP_ALIGNMENTS: usize = 4;
@@ -703,6 +706,10 @@ mod tests {
 
     #[test]
     fn the_leak_detector_sees_a_secret_in_each_form_it_checks() {
+      assert_eq!(hex_decoded(b""), b"");
+      assert_eq!(hex_decoded(b"41f"), b"A");
+      assert_eq!(hex_decoded(b"41zz42"), b"AB");
+      assert_eq!(hex_decoded(&[0xff, 0xfe, b'4', b'1']), b"A");
       let secret = token("ghp_", 36);
       let base64_of_secret = {
         let encode = |bytes: &[u8]| -> String {

@@ -20,9 +20,9 @@ jobs:
       - name: Install Rust toolchains
         run: |
           rustup toolchain install 1.88.0 --profile minimal
-          rustup toolchain install stable --profile minimal --component clippy
+          rustup toolchain install 1.99.0 --profile minimal --component clippy
           rustc +1.88.0 --version
-          cargo +stable clippy --version
+          cargo +1.99.0 clippy --version
       - name: Restore Cargo dependencies and build outputs
         id: cargo-cache
         uses: actions/cache/restore@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
@@ -38,9 +38,8 @@ jobs:
             rust-${{ runner.os }}-${{ runner.arch }}-1.88.0-
       - name: Test Tauri library with the declared minimum Rust version
         run: cargo +1.88.0 test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib
-      - name: Lint all Tauri targets with stable Clippy
-        continue-on-error: true
-        run: sh scripts/cargo-clippy.sh cargo +stable clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets
+      - name: Lint all Tauri targets with pinned Clippy
+        run: sh scripts/cargo-clippy.sh cargo +1.99.0 clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
       - name: Log additional macOS runner time
         if: always()
         env:

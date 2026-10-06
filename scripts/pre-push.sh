@@ -7,6 +7,7 @@
 REQUIRED_NODE_MAJOR=26
 TAURI_DIR=apps/desktop/src-tauri
 TAURI_MANIFEST=$TAURI_DIR/Cargo.toml
+CLIPPY_RUST_VERSION=1.99.0
 
 fail() {
   echo "pre-push: $1" >&2
@@ -31,21 +32,6 @@ assert_compatible_node() {
   node_major=$(node -p "process.versions.node.split('.')[0]")
   [ "$node_major" -ge "$REQUIRED_NODE_MAJOR" ] ||
     fail "node $(node -v) at $(command -v node) is too old; Angular needs Node >= $REQUIRED_NODE_MAJOR (as in CI). Put a newer node first in PATH."
-}
-
-run_advisory_step() {
-  step_name=$1
-  shift
-  if [ "$OPENFLEET_PREPUSH_DRYRUN" = "1" ]; then
-    echo "pre-push: ▷ $step_name (advisory, dry run) — $*"
-    return 0
-  fi
-  echo "pre-push: ▶ $step_name (advisory)"
-  if "$@"; then
-    echo "pre-push: ✔ $step_name (advisory)"
-  else
-    echo "pre-push: warning — $step_name fails (advisory; push continues)"
-  fi
 }
 
 is_planned() {
@@ -76,9 +62,9 @@ run_cargo_checks() {
   command -v rustup >/dev/null 2>&1 || fail "rustup is required for the CI Rust toolchains"
   export TAURI_CONFIG='{"bundle":{"externalBin":[],"resources":[]}}'
   run_step "Rust test toolchain" rustup toolchain install "$TAURI_RUST_VERSION" --profile minimal
-  run_step "Rust clippy toolchain" rustup toolchain install stable --profile minimal --component clippy
+  run_step "Rust clippy toolchain" rustup toolchain install "$CLIPPY_RUST_VERSION" --profile minimal --component clippy
   run_step "cargo test" cargo +"$TAURI_RUST_VERSION" test --locked --manifest-path "$TAURI_MANIFEST" --lib
-  run_advisory_step "cargo clippy" sh scripts/cargo-clippy.sh cargo +stable clippy --locked --manifest-path "$TAURI_MANIFEST" --all-targets
+  run_step "cargo clippy" sh scripts/cargo-clippy.sh cargo +"$CLIPPY_RUST_VERSION" clippy --locked --manifest-path "$TAURI_MANIFEST" --all-targets -- -D warnings
 }
 
 run_e2e_when_decided() {

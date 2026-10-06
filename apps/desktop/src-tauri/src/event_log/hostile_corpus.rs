@@ -808,7 +808,8 @@ fn leaked_form_in(lines: &[String], secret: &str) -> Option<String> {
 }
 
 fn hex_decoded(text: &[u8]) -> Option<Vec<u8>> {
-  text.chunks_exact(2).map(|pair| std::str::from_utf8(pair).ok().and_then(|pair| u8::from_str_radix(pair, 16).ok())).collect()
+  let (hex_pairs, _) = text.as_chunks::<2>();
+  hex_pairs.iter().map(|pair| std::str::from_utf8(pair).ok().and_then(|pair| u8::from_str_radix(pair, 16).ok())).collect()
 }
 
 fn percent_decoded(text: &[u8]) -> Vec<u8> {
@@ -1056,6 +1057,10 @@ mod tests {
 
     #[test]
     fn detects_encoded_twelve_byte_tails_at_every_alignment() {
+      assert_eq!(hex_decoded(b""), Some(Vec::new()));
+      assert_eq!(hex_decoded(b"41f"), Some(b"A".to_vec()));
+      assert_eq!(hex_decoded(b"41zz42"), None);
+      assert_eq!(hex_decoded(&[0xff, 0xfe, b'4', b'1']), None);
       let secret = "SyntheticSecretValue0123";
       let tail = &secret[secret.len() - WINDOW_BYTES..];
       let mut encodings = vec![hex_of(tail.as_bytes()), percent_encoded(tail, true), json_unicode_escaped(tail)];
