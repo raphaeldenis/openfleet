@@ -11,7 +11,7 @@ import { clickableUrl, displayValue } from './table-cells';
       <a [href]="href" target="_blank" rel="noopener noreferrer" [attr.title]="text()"
         (click)="openLink(href, $event)" (keydown)="$event.stopPropagation()">{{ text() }}</a>
     } @else {
-      <span [class.multiline]="column().format === 'longText'" [attr.title]="text()">{{ text() }}</span>
+      <span [class.multiline]="column().format === 'longText'" [class.expanded]="expanded()" [attr.title]="text()">{{ text() }}</span>
     }
   `,
   styles: `
@@ -22,6 +22,7 @@ import { clickableUrl, displayValue } from './table-cells';
       white-space: pre-wrap; overflow-wrap: anywhere;
       display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden;
     }
+    .multiline.expanded { display: block; overflow: visible }
   `,
 })
 export class TableCellComponent {
@@ -32,6 +33,7 @@ export class TableCellComponent {
   }
   readonly column = input.required<DsColumn>();
   readonly value = input.required<unknown>();
+  readonly expanded = input(false);
   protected readonly text = computed(() => displayValue(this.column(), this.value()));
   protected readonly url = computed(() => clickableUrl(this.column(), this.value()));
 }

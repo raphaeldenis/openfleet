@@ -16,7 +16,9 @@ Limits you can hit:
 
 ## Dev
 
-Table columns keep their base type and can carry an optional format: `datetime` for date, `longText` or `url` for text, and `rank` for number. `add_data_store_column` accepts `format`; store descriptions and REST schemas return it. New datetime values require an ISO time with `Z` or an explicit offset and display in the local timezone. URL cells remain text; only HTTP(S) links are clickable. Rank is a plain number. Scape imports preserve these formats, including row history; reimport restores formats lost by an older import when the column has no local edits. Cell editing remains a separate feature.
+Table columns keep their base type and can carry an optional format: `datetime` for date, `longText` or `url` for text, and `rank` for number. `add_data_store_column` accepts `format`; store descriptions and REST schemas return it. New datetime values require an ISO time with `Z` or an explicit offset and display in the local timezone. URL cells remain text; only HTTP(S) links are clickable. Rank is a plain number. Scape imports preserve these formats, including row history; reimport restores formats lost by an older import when the column has no local edits.
+
+Edit rich cells from their grid Edit button or Row details above the history. Enter saves a single-line input; Ctrl/Command + Enter saves long text. Escape or Cancel discards the draft; Clear value saves an explicit null. Errors keep the input for retry, and successful changes refresh the selected row's history. Automatic columns and schema-mismatch rows stay read-only. Edits patch one cell; concurrent writes to the same cell use the last saved value.
 
 Requires Node >=26 — `nvm use` in this repo picks up Homebrew's Node via `.nvmrc` (`system`); on a shell where nvm's `default` alias points elsewhere, prefix commands with `PATH="/opt/homebrew/bin:$PATH"` instead of changing the global alias.
 
