@@ -103,7 +103,7 @@ export function renderImportReport(report: ImportReport): string {
     ...bulletList(droppedColumnFormats),
     '',
     '## View settings not converted',
-    'OpenFleet keeps the kanban group-by column. Card fields, columnOrder and other source settings listed below are dropped.',
+    'OpenFleet keeps supported kanban grouping, card fields, title, column order and ungrouped settings. Unsupported or invalid source properties listed below are lost in whole or in part.',
     ...bulletList(droppedViewFields),
     '',
     '## Lexical node types not converted',

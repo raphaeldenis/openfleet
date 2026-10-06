@@ -79,6 +79,14 @@ describe('OrderTermSchema', () => {
 });
 
 describe('DsViewConfigSchema', () => {
+  it('preserves explicit card settings and empty detail lists', () => {
+    const config = { cardTitleColumnId: 'title', cardFields: [], columnOrder: ['done'], showUngrouped: false };
+    expect(DsViewConfigSchema.parse(config)).toEqual(config);
+  });
+
+  it.each([{ cardFields: ['a', 'a'] }, { columnOrder: ['a', 'a'] }, { cardFields: [''] }, { showUngrouped: 'yes' }])('rejects malformed card settings %j', (config) => {
+    expect(DsViewConfigSchema.safeParse(config).success).toBe(false);
+  });
   it('accepts an empty config', () => {
     expect(DsViewConfigSchema.parse({})).toEqual({});
   });

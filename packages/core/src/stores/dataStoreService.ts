@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import type { DatabaseSync } from 'node:sqlite';
 import {
-  COLUMN_TYPES, COLUMN_TYPE_BY_FORMAT, ColumnFormatSchema, DsViewConfigSchema, OrderTermSchema, SelectOptionSchema, VIEW_TYPES, WhereClauseSchema,
+  COLUMN_TYPES, COLUMN_TYPE_BY_FORMAT, ColumnFormatSchema, DsViewConfigSchema, NO_VALUE_GROUP_ID, orderedKanbanOptions, OrderTermSchema, SelectOptionSchema, VIEW_TYPES, WhereClauseSchema,
   type AutoValue, type ColumnFormat, type ColumnType, type DataStore, type DsColumn, type DsRow, type DsView, type DsViewConfig, type OrderTerm, type SelectOption, type ViewType, type WhereClause,
 } from '@openfleet/shared';
 import { z } from 'zod';
@@ -420,7 +420,7 @@ export class DataStoreService {
     this.guarded(() => this.repo.deleteView(viewId));
   }
 
-  /** One bucket per select option in option order, empty ones included. Rows with no (or a stale) value are left out. */
+  /** Returns ordered option buckets, including empty ones; ungrouped rows require explicit opt-in. */
   kanbanGroups(viewId: string, input: Scope): KanbanGroup[] {
     const view = this.authorizeView(viewId, input.projectId);
 
@@ -428,7 +428,13 @@ export class DataStoreService {
     if (groupBy?.columnType !== 'select') throw new InvalidViewConfigError('The kanban group-by column must be a select column');
 
     const rows = this.runQuery(view.storeId, { where: view.config.where, orderBy: view.config.orderBy });
-    return (groupBy.options ?? []).map((option) => ({ option, rows: rows.filter((row) => row.data[groupBy.id] === option.id) }));
+    const options = orderedKanbanOptions({ options: groupBy.options ?? [], columnOrder: view.config.columnOrder });
+    const groups = options.map((option) => ({ option, rows: rows.filter((row) => row.data[groupBy.id] === option.id) }));
+    if (view.config.showUngrouped !== true) return groups;
+    const knownOptionIds: ReadonlySet<unknown> = new Set(options.map((option) => option.id));
+    const ungroupedRows = rows.filter((row) => !knownOptionIds.has(row.data[groupBy.id]));
+    if (ungroupedRows.length === 0) return groups;
+    return [...groups, { option: { id: NO_VALUE_GROUP_ID, label: 'No value' }, rows: ungroupedRows }];
   }
 
   /** Refuses a patch that would give a row the natural key value another row of the store holds. */
@@ -479,9 +485,21 @@ export class DataStoreService {
       ...(config.where ?? []).map((clause) => clause.columnId),
       ...(config.orderBy ?? []).map((term) => term.columnId),
       ...(config.groupByColumnId ? [config.groupByColumnId] : []),
+      ...(config.cardTitleColumnId ? [config.cardTitleColumnId] : []),
+      ...(config.cardFields ?? []),
     ]);
     this.assertValidGroupByColumn(storeId, viewType, config);
+    this.assertValidColumnOrder(storeId, config);
     return config;
+  }
+
+  private assertValidColumnOrder(storeId: string, config: DsViewConfig): void {
+    if (config.columnOrder === undefined) return;
+    const groupColumn = this.repo.listColumns(storeId).find((column) => column.id === config.groupByColumnId);
+    if (groupColumn?.columnType !== 'select') throw new InvalidViewConfigError('columnOrder requires a select group-by column');
+    const knownOptionIds = new Set((groupColumn.options ?? []).map((option) => option.id));
+    const hasUnknownOption = config.columnOrder.some((id) => !knownOptionIds.has(id));
+    if (hasUnknownOption) throw new InvalidViewConfigError('columnOrder must reference options of the group-by column');
   }
 
   /** A kanban view is unreadable without a group-by column that is a select column of its own store; other view types don't care. */

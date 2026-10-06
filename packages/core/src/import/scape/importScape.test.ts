@@ -179,13 +179,13 @@ describe('importScape', () => {
       expect(columns[DUE_COLUMN_ID]?.column_type).toBe('date');
     });
 
-    it('remaps the kanban view onto the OpenFleet config and counts the dropped card fields as not converted', () => {
+    it('remaps the complete kanban view onto the OpenFleet config', () => {
       const report = run();
 
       const view = openTarget().prepare('SELECT view_type, display_name, config_json FROM ds_views WHERE id = ?').get(KANBAN_VIEW_ID) as { view_type: string; display_name: string; config_json: string };
       expect(view.view_type).toBe('kanban');
-      expect(JSON.parse(view.config_json)).toEqual({ groupByColumnId: STATUS_COLUMN_ID });
-      expect(report.counts.views).toMatchObject({ expected: 1, written: 1, notConverted: 1 });
+      expect(JSON.parse(view.config_json)).toEqual({ groupByColumnId: STATUS_COLUMN_ID, cardTitleColumnId: TITLE_COLUMN_ID, cardFields: [STATUS_COLUMN_ID, PRIORITY_COLUMN_ID], columnOrder: [STATUS_TODO_OPTION_ID, STATUS_DONE_OPTION_ID], showUngrouped: true });
+      expect(report.counts.views).toMatchObject({ expected: 1, written: 1, notConverted: 0 });
     });
 
     it('renders the imported kanban through the OpenFleet data store service with the rows in their option buckets', () => {
@@ -195,7 +195,7 @@ describe('importScape', () => {
 
       const groups = service.kanbanGroups(KANBAN_VIEW_ID, { projectId: CCM_PROJECT_ID });
 
-      expect(groups.map((group) => [group.option.label, group.rows.map((row) => row.id)])).toEqual([['todo', []], ['done', [BACKLOG_ROW_ID]]]);
+      expect(groups.map((group) => [group.option.label, group.rows.map((row) => row.id)])).toEqual([['todo', []], ['done', [BACKLOG_ROW_ID]], ['No value', ['R0000002-0000-0000-0000-000000000002']]]);
     });
 
     it('imports rows keyed by column id with ISO dates, option ids kept and empty cells left out', () => {
@@ -327,7 +327,7 @@ describe('importScape', () => {
       expect(report.reportPath).toBe(join(home, 'import-report.md'));
       const markdown = readFileSync(report.reportPath!, 'utf8');
       expect(markdown).toContain('| notes | 5 | 5 | 0 | 0 | 0 | 0 | 0 | 0 |');
-      expect(markdown).toContain('| views | 1 | 1 | 0 | 0 | 0 | 0 | 0 | 1 |');
+      expect(markdown).toContain('| views | 1 | 1 | 0 | 0 | 0 | 0 | 0 | 0 |');
       expect(markdown).toContain('ccm-project');
     });
 

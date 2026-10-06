@@ -7,7 +7,7 @@ import { renderImportReport } from './importReport.js';
 import { importScape } from './importScape.js';
 import {
   buildScapeFixture, CCM_PROJECT_ID, DUE_COLUMN_ID, editScapeDatastore, editScapeNotes,
-  KANBAN_VIEW_ID, LEXICAL_NOTE_ID, LOG_STORE_ID, MARKDOWN_NOTE_ID, OPENFLEET_PROJECT_ID, PRIORITY_COLUMN_ID,
+  LEXICAL_NOTE_ID, LOG_STORE_ID, MARKDOWN_NOTE_ID, OPENFLEET_PROJECT_ID, PRIORITY_COLUMN_ID,
   STATUS_COLUMN_ID, TITLE_COLUMN_ID, type ScapeFixture,
 } from './scapeFixture.testkit.js';
 
@@ -103,13 +103,11 @@ describe('Scape import cutover follow-ups', () => {
     expect(report.counts.rows.written).toBe(3);
   });
 
-  it('names the lost kanban columnOrder in the report', () => {
+  it('preserves supported kanban settings without reporting them as lost', () => {
     const report = run({ dryRun: true });
 
-    const markdown = renderImportReport(report);
-    expect(markdown).toContain(KANBAN_VIEW_ID);
-    expect(markdown).toContain('columnOrder');
-    expect(report.counts.views.notConverted).toBe(1);
+    expect(report.droppedViewFields).toEqual([]);
+    expect(report.counts.views.notConverted).toBe(0);
   });
 
   it('does not label native text and select presentation as lost formatting', () => {

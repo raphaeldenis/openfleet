@@ -137,6 +137,37 @@ describe('DataStoreService', () => {
   });
 
   describe('views and kanban', () => {
+    it('persists explicit cards, orders partial columns and opts into ungrouped rows', () => {
+      const { service, store, cols } = backlog();
+      const ungrouped = service.insertRow(store.id, { ...scope, data: {}, actor: human });
+      const config = { groupByColumnId: cols.status, cardTitleColumnId: cols.priority, cardFields: [cols.meta, cols.due], columnOrder: ['done'], showUngrouped: true };
+      const view = service.createView(store.id, { ...scope, displayName: 'board', viewType: 'kanban', config });
+
+      expect(service.listViews(store.id, scope)[0]?.config).toEqual(config);
+      const groups = service.kanbanGroups(view.id, scope);
+      expect(groups.map((group) => group.option.id)).toEqual(['done', 'todo', 'doing', '__no_value__']);
+      expect(groups.at(-1)?.rows.map((row) => row.id)).toEqual([ungrouped.id]);
+      service.updateView(view.id, { ...scope, config: { ...config, showUngrouped: false } });
+      expect(service.kanbanGroups(view.id, scope)).toHaveLength(3);
+    });
+
+    it('rejects invalid references and duplicates without replacing the saved config', () => {
+      const { service, store, cols } = backlog();
+      const config = { groupByColumnId: cols.status };
+      const view = service.createView(store.id, { ...scope, displayName: 'board', viewType: 'kanban', config });
+      const invalidConfigs = [{ cardTitleColumnId: 'foreign' }, { cardFields: ['foreign'] }, { columnOrder: ['foreign'] }, { cardFields: [cols.title, cols.title] }];
+      for (const invalid of invalidConfigs) {
+        expect(() => service.updateView(view.id, { ...scope, config: { ...config, ...invalid } })).toThrow();
+        expect(service.listViews(store.id, scope)[0]?.config).toEqual(config);
+      }
+    });
+
+    it('ignores stale option references on read and preserves the core legacy ungrouped default', () => {
+      const { service, repo, store, cols } = backlog();
+      service.insertRow(store.id, { ...scope, data: {}, actor: human });
+      const view = repo.insertView(store.id, { id: 'legacy', displayName: 'board', viewType: 'kanban', config: { groupByColumnId: cols.status, columnOrder: ['missing', 'done', 'done'] }, at: 't0' });
+      expect(service.kanbanGroups(view.id, scope).map((group) => group.option.id)).toEqual(['done', 'todo', 'doing']);
+    });
     it('buckets rows by select option in option order, empty buckets included', () => {
       const { service, store, cols } = backlog();
       service.insertRow(store.id, { ...scope, data: { [cols.title]: 'a', [cols.status]: 'done' }, actor: human });
