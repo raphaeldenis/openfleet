@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { join } from 'node:path';
 import { createTempDirTracker } from '../tempDirTracker.js';
 import { recentLogLines } from '../logger.js';
-import { afterEach, beforeEach, expect, it } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { applyMigrations } from '../db/migrate.js';
 import { KnowledgeRepository } from './knowledgeRepository.js';
 import { KnowledgeRepoScope } from './knowledgeRepoScope.js';
@@ -55,6 +55,19 @@ it('updates and deletes indexed text through fixture writes', async () => {
   expect((await search({ repo: 'fleet', query: 'different' })).returned).toBe(1);
   db.exec("DELETE FROM knowledge WHERE id = 'a'");
   expect((await search({ repo: 'fleet', query: 'different' })).returned).toBe(0);
+});
+
+it('refreshes indexed terms when only the area changes', async () => {
+  seed({ area: 'oldterm', fact: 'body' });
+
+  db.exec("UPDATE knowledge SET area = 'newterm' WHERE id = 'a'");
+  const newAreaResult = await search({ repo: 'fleet', query: 'newterm' });
+  const oldAreaResult = await search({ repo: 'fleet', query: 'oldterm' });
+
+  expect(newAreaResult.engine).toBe('fts5');
+  expect(newAreaResult.items.map((item) => item.id)).toEqual(['a']);
+  expect(oldAreaResult.engine).toBe('fts5');
+  expect(oldAreaResult.items).toEqual([]);
 });
 
 it('treats FTS operators and quotes as literal user terms', async () => {
@@ -181,6 +194,32 @@ it('propagates a real busy database without degrading to LIKE', async () => {
   } finally {
     first.exec('ROLLBACK');
     second.close(); first.close();
+  }
+});
+
+it.each([10, 266])('propagates FTS I/O error %i without LIKE retrieval or fallback logging', async (errcode) => {
+  seed();
+  const ioFailure = Object.assign(new Error('disk I/O error'), { code: 'ERR_SQLITE_ERROR', errcode });
+  const prepareStatement = db.prepare.bind(db);
+  const previousLogCount = recentLogLines().length;
+  const prepareSpy = vi.spyOn(db, 'prepare').mockImplementation((sql) => {
+    const statement = prepareStatement(sql);
+    const isFtsRetrieval = sql.includes('FROM knowledge_fts');
+    if (isFtsRetrieval) vi.spyOn(statement, 'all').mockImplementation(() => { throw ioFailure; });
+    return statement;
+  });
+
+  try {
+    await expect(search()).rejects.toBe(ioFailure);
+
+    const retrievesLikeMatches = prepareSpy.mock.calls.some(([sql]) => sql.includes('area LIKE'));
+    const fallbackEntries = recentLogLines().slice(previousLogCount)
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((entry) => entry.msg === 'knowledge.search_fallback');
+    expect(retrievesLikeMatches).toBe(false);
+    expect(fallbackEntries).toEqual([]);
+  } finally {
+    vi.restoreAllMocks();
   }
 });
 
