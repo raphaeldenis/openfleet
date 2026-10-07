@@ -43,8 +43,9 @@ export class MessageQueue {
     const result = this.db.prepare(`DELETE FROM message_queue WHERE id = ? AND session_id = ? AND status = 'queued'`).run(input.messageId, input.sessionId);
     return Number(result.changes) > 0;
   }
+  // A daemon line has no sending session. A human's message has none either, so one that starts with [pulse] is dropped as well.
   discardQueuedDaemonLines(sessionId: string): void {
-    this.db.prepare(`DELETE FROM message_queue WHERE session_id = ? AND status = 'queued' AND body LIKE '[pulse]%'`).run(sessionId);
+    this.db.prepare(`DELETE FROM message_queue WHERE session_id = ? AND status = 'queued' AND from_session_id IS NULL AND substr(body, 1, 7) = '[pulse]'`).run(sessionId);
   }
   markDelivered(id: string): void {
     this.db.prepare(`UPDATE message_queue SET status = 'delivered', delivered_at = ? WHERE id = ?`).run(new Date().toISOString(), id);

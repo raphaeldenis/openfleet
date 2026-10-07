@@ -1,4 +1,5 @@
-import { ChangeDetectionStrategy, Component, computed, effect, inject, input, signal, untracked } from '@angular/core';
+import { ChangeDetectionStrategy, Component, type ElementRef, computed, effect, inject, input, signal, untracked, viewChild } from '@angular/core';
+import { MANAGER_ROLE, type Session } from '@openfleet/shared';
 import { detailsTextOf } from '../core/copy-details';
 import { EarlyEscapeHintService } from '../core/early-escape-hint.service';
 import { CopyDetailsButtonComponent } from '../design/copy-details-button.component';
@@ -13,6 +14,8 @@ import { TerminalComponent } from './terminal.component';
 import { RightPanelSessionToggleComponent } from './right-panel-session-toggle.component';
 
 const FRESH_CONFIRM_QUESTION = 'Start a new conversation? The previous one is not resumed.';
+const FRESH_REPLAYS_MISSION = 'Its mission is sent again as the first prompt.';
+const FRESH_REPLAYS_BRIEF = 'Its original brief is sent again as the first prompt when one is stored, otherwise it starts with no prompt.';
 
 type LifecycleBanner = { kind: 'resuming'; isFresh: boolean } | { kind: 'strip'; strip: LifecycleStrip; role: 'alert' | null };
 
@@ -53,7 +56,7 @@ type LifecycleBanner = { kind: 'resuming'; isFresh: boolean } | { kind: 'strip';
             </div>
           }
         }
-        <div class="terminal-area">
+        <div #terminalArea class="terminal-area" tabindex="-1" data-testid="terminal-area">
           <div class="terminal-overlay-controls" data-testid="terminal-tab-bar">
             <of-session-actions
               [sessionId]="s.id"
@@ -82,17 +85,19 @@ type LifecycleBanner = { kind: 'resuming'; isFresh: boolean } | { kind: 'strip';
                   ↻ Resume in worktree
                 </button>
               }
-              <button type="button" class="of-btn of-btn--secondary" data-testid="reopen-fresh-session" [disabled]="resuming()" (click)="askToStartFresh()">
+              <button #reopenFreshButton type="button" class="of-btn of-btn--secondary" data-testid="reopen-fresh-session" [disabled]="resuming()" (click)="askToStartFresh()">
                 Reopen fresh
               </button>
             </span>
-            @if (isConfirmingFresh()) {
-              <div class="fresh-confirm" role="group" aria-label="Confirm a fresh start" data-testid="reopen-fresh-confirm">
-                <span class="fresh-confirm-text" data-testid="reopen-fresh-confirm-text">{{ freshConfirmText() }}</span>
-                <button type="button" class="of-btn of-btn--primary" data-testid="reopen-fresh-confirm-accept" (click)="startFresh(s.id)">Start new conversation</button>
-                <button type="button" class="of-btn of-btn--secondary" data-testid="reopen-fresh-confirm-cancel" (click)="cancelFresh()">Cancel</button>
-              </div>
-            }
+            <div class="fresh-confirm-live-region" aria-live="polite">
+              @if (isConfirmingFresh()) {
+                <div class="fresh-confirm" role="group" aria-label="Confirm a fresh start" data-testid="reopen-fresh-confirm" (keydown.escape)="cancelFresh()">
+                  <span class="fresh-confirm-text" data-testid="reopen-fresh-confirm-text">{{ freshConfirmText() }}</span>
+                  <button type="button" class="of-btn of-btn--primary" data-testid="reopen-fresh-confirm-accept" (click)="startFresh(s.id)">Start new conversation</button>
+                  <button #cancelFreshButton type="button" class="of-btn of-btn--secondary" data-testid="reopen-fresh-confirm-cancel" (click)="cancelFresh()">Cancel</button>
+                </div>
+              }
+            </div>
           </div>
         }
       </div>
@@ -104,6 +109,7 @@ type LifecycleBanner = { kind: 'resuming'; isFresh: boolean } | { kind: 'strip';
     :host { display: flex; flex: 1; min-width: 0; min-height: 0; }
     .session-view { flex: 1; min-width: 0; display: flex; flex-direction: column; height: 100%; min-height: 0; }
     .terminal-area { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; gap: .625rem; padding: 0 .5rem; }
+    .terminal-area:focus { outline: none; }
     .terminal-overlay-controls {
       position: absolute; top: .5rem; right: 1rem; z-index: 2; display: flex; align-items: center; gap: .5rem;
       color: var(--term-fg); opacity: .35; pointer-events: none;
@@ -132,6 +138,8 @@ type LifecycleBanner = { kind: 'resuming'; isFresh: boolean } | { kind: 'strip';
     .lifecycle-title .glyph { color: var(--lifecycle-color); }
     .lifecycle-body { flex: 1; min-width: 0; }
     .closed-card { flex-wrap: wrap; }
+    .fresh-confirm-live-region { flex-basis: 100%; }
+    .fresh-confirm-live-region:empty { display: none; }
     .fresh-confirm { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; flex-basis: 100%; }
     .fresh-confirm-text { flex: 1; min-width: 0; color: var(--fg); }
   `,
@@ -147,16 +155,26 @@ export class SessionViewComponent {
 
   protected readonly session = computed(() => this.events.sessions().find((s) => s.id === this.sessionId()));
 
+  private readonly sessionState = computed(() => this.session()?.state);
+  // Changes with the session shown and with it opening or closing, never with a patch that leaves it as it was.
+  private readonly sessionOfClosedState = computed(() => `${this.sessionId()}:${this.sessionState() === 'closed'}`);
   private readonly confirmingFreshOfSessionId = signal<string | undefined>(undefined);
-  private readonly freshStartOfSessionId = signal<string | undefined>(undefined);
+  // A fresh start the user asked for, until the session has come up (or the launch was refused): only that launch starts a new conversation.
+  private readonly freshStart = signal<{ sessionId: string; hasBeenStarting: boolean } | undefined>(undefined);
+
+  private readonly reopenFreshButton = viewChild<ElementRef<HTMLButtonElement>>('reopenFreshButton');
+  private readonly cancelFreshButton = viewChild<ElementRef<HTMLButtonElement>>('cancelFreshButton');
+  private readonly terminalArea = viewChild<ElementRef<HTMLElement>>('terminalArea');
 
   protected readonly isConfirmingFresh = computed(() => this.confirmingFreshOfSessionId() === this.sessionId());
 
   protected readonly freshConfirmText = computed(() => {
+    const session = this.session();
+    const replayedPrompt = session?.role === MANAGER_ROLE ? FRESH_REPLAYS_MISSION : FRESH_REPLAYS_BRIEF;
     const liveChildrenCount = this.events.sessions().filter((other) => other.parentId === this.sessionId() && other.state !== 'closed').length;
-    if (liveChildrenCount === 0) return FRESH_CONFIRM_QUESTION;
+    if (liveChildrenCount === 0) return `${FRESH_CONFIRM_QUESTION} ${replayedPrompt}`;
     const childrenNoun = liveChildrenCount === 1 ? 'live child keeps' : 'live children keep';
-    return `${FRESH_CONFIRM_QUESTION} ${liveChildrenCount} ${childrenNoun} running.`;
+    return `${FRESH_CONFIRM_QUESTION} ${replayedPrompt} ${liveChildrenCount} ${childrenNoun} running.`;
   });
 
   // The session the user has seen open since it was shown: only its close is news worth an alert,
@@ -174,7 +192,7 @@ export class SessionViewComponent {
     if (!session) return undefined;
     const isReopenRequestInFlight = this.resuming();
     const isClosedSessionRelaunching = session.state === 'starting' && session.closedAt !== undefined;
-    const isFreshStart = this.freshStartOfSessionId() === session.id;
+    const isFreshStart = this.freshStart()?.sessionId === session.id;
     if (isReopenRequestInFlight || isClosedSessionRelaunching) return { kind: 'resuming', isFresh: isFreshStart };
     const strip = this.closedPresentation()?.strip;
     if (!strip) return undefined;
@@ -217,10 +235,28 @@ export class SessionViewComponent {
       const isClosingWhileWatched = untracked(this.watchedOpenSessionId) === session.id;
       this.watchedOpenSessionId.set(isOpen || isClosingWhileWatched ? session.id : undefined);
     });
+    // A question about one session closed in one state never survives a change of session or of state.
+    effect(() => {
+      this.sessionOfClosedState();
+      untracked(() => this.confirmingFreshOfSessionId.set(undefined));
+    });
+    effect(() => this.endFreshStartOnceTheSessionIsUp(this.sessionState()));
+    // Focus enters the question on its safe answer.
+    effect(() => this.cancelFreshButton()?.nativeElement.focus());
+  }
+
+  private endFreshStartOnceTheSessionIsUp(state: Session['state'] | undefined): void {
+    const pending = untracked(this.freshStart);
+    const isPendingForThisSession = pending !== undefined && pending.sessionId === this.sessionId();
+    if (!isPendingForThisSession) return;
+    if (state === 'starting') return this.freshStart.set({ ...pending, hasBeenStarting: true });
+    const isLive = state !== undefined && state !== 'closed';
+    if (isLive || pending.hasBeenStarting) this.freshStart.set(undefined);
   }
 
   async resume(sessionId: string): Promise<void> {
-    this.freshStartOfSessionId.set(undefined);
+    this.confirmingFreshOfSessionId.set(undefined);
+    this.freshStart.set(undefined);
     const reopenErrorFor = (error: unknown) => copyFor(error, { action: 'resume' }).text;
     await this.requests.run({ sessionId, kind: 'resume', message: reopenErrorFor, action: () => this.api.reopenSession(sessionId) });
   }
@@ -231,14 +267,16 @@ export class SessionViewComponent {
 
   protected cancelFresh(): void {
     this.confirmingFreshOfSessionId.set(undefined);
+    this.reopenFreshButton()?.nativeElement.focus();
   }
 
   protected async startFresh(sessionId: string): Promise<void> {
     this.confirmingFreshOfSessionId.set(undefined);
-    this.freshStartOfSessionId.set(sessionId);
+    this.terminalArea()?.nativeElement.focus();
+    this.freshStart.set({ sessionId, hasBeenStarting: false });
     const reopenErrorFor = (error: unknown) => copyFor(error, { action: 'resume' }).text;
     await this.requests.run({ sessionId, kind: 'resume', message: reopenErrorFor, action: () => this.api.reopenSession(sessionId, 'fresh') });
     const isRefused = this.requests.errorOf(sessionId, 'resume') !== null;
-    if (isRefused) this.freshStartOfSessionId.set(undefined);
+    if (isRefused) this.freshStart.set(undefined);
   }
 }
