@@ -396,6 +396,11 @@ export class DataStoreService {
     return this.runQuery(storeId, input);
   }
 
+  pageRows(storeId: string, input: Scope & { limit: number; offset: number }): { rows: DsRow[]; totalRowCount: number } {
+    this.authorize(storeId, input.projectId);
+    return this.guarded(() => this.repo.pageRows(storeId, input));
+  }
+
   createView(storeId: string, input: Scope & { displayName: string; viewType: ViewType; config?: DsViewConfig }): DsView {
     this.authorize(storeId, input.projectId);
     const displayName = normalizeName(input.displayName);

@@ -2,6 +2,8 @@
 
 Scape-compatible session tools include `get_session_card` and `message_argus`; see [session MCP aliases](docs/mcp-session-aliases.md) for fields, target resolution and authorization.
 
+Table MCP reads include `describe_data_store`, `query_data_store`, and `get_data_store`. `get_data_store` returns projected schema and a page of rows ordered by update time descending, then binary row id ascending. It accepts `store`, optional `columns` (ids or display names), `limit` (default 100, 1–1000), and `offset` (default 0). Read `totalRowCount` for the table size and `next_offset` to continue; `truncated` means the 1 MiB JSON budget cut the page. A schema or first row exceeding that budget returns `invalid_body`.
+
 Open-source desktop workspace for fleets of AI coding agents: sessions in git worktrees, manager agents with a pulse, mission notes, tables, triggers and human governance.
 
 Status: phase 1 (foundation). See `docs/` for the phase smoke checklist; design lives in the author's superpowers folder for now.
