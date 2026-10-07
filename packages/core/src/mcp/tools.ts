@@ -2,7 +2,9 @@ import { MANAGER_ROLE, ManagerSpecSchema, ModelIdSchema, PERMISSION_MODES, type 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { existsSync, realpathSync, statSync } from 'node:fs';
 import { z } from 'zod';
-import { createWorktree, isPathWithin, sameGitRepository } from '../git/worktrees.js';
+import { createWorktreeWithHook, postCreateHookOf } from '../git/worktreeCreation.js';
+import { isPathWithin, sameGitRepository } from '../git/worktrees.js';
+import type { ProjectRepository } from '../projects/projectRepository.js';
 import { resolveModel, type ModelTable } from '../models.js';
 import type { ApprovalService } from '../governance/approvalService.js';
 import type { ManagerService } from '../managers/managerService.js';
@@ -45,6 +47,7 @@ export interface RegisterToolsDeps {
   sessions: SessionService;
   caller: Session;
   worktreesRoot: string;
+  projects: Pick<ProjectRepository, 'get'>;
   approvals: ApprovalService;
   managers: ManagerService;
   pulseScheduler: PulseScheduler;
@@ -172,10 +175,11 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     return sendMessage(() => sessions.sendMessage({ sessionId: manager.id, body: message, fromSessionId: caller.id, messageId: message_id }));
   });
 
-  server.registerTool('create_worktree', { description: 'Create an isolated git worktree for a task', inputSchema: { repo_path: z.string(), branch_name: z.string() } }, async ({ repo_path, branch_name }) => {
+  server.registerTool('create_worktree', { description: 'Create an isolated git worktree for a task. If your project configures a post-create script it runs in the new worktree; a failing script never fails the call, it adds a warnings entry (reason timeout, exit_nonzero, not_executable, not_found, unsafe_permissions or spawn_failed)', inputSchema: { repo_path: z.string(), branch_name: z.string() } }, async ({ repo_path, branch_name }) => {
     const isCallersOwnRepo = await sameGitRepository(caller.directory, repo_path);
     if (!isCallersOwnRepo) return refuse('outside_own_repository', 'repo_path must be the git repository of your own session directory');
-    return ok(await createWorktree({ repoPath: repo_path, branchName: branch_name, worktreesRoot: deps.worktreesRoot }));
+    const hook = postCreateHookOf(caller.projectId ? deps.projects.get(caller.projectId) : undefined);
+    return ok(await createWorktreeWithHook({ repoPath: repo_path, branchName: branch_name, worktreesRoot: deps.worktreesRoot, hook }));
   });
 
   server.registerTool('create_session', { description: `Spawn a child coding session in a directory (use create_worktree first). ${COMPACT_SESSION}`, inputSchema: {

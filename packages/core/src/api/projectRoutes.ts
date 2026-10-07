@@ -7,7 +7,11 @@ import { json, queryParams, type Router } from './router.js';
 
 const ListProjectsQuerySchema = pageQuerySchema(MAX_NOTE_PAGE_LIMIT);
 
-const projectOf = ({ id, name, docsFolderPath }: ProjectRecord): Project => ({ id, name, docsFolderPath });
+const projectOf = ({ id, name, docsFolderPath, postCreateHookScript, postCreateHookTimeoutSeconds }: ProjectRecord): Project => ({
+  id, name, docsFolderPath,
+  ...(postCreateHookScript && { postCreateHookScript }),
+  ...(postCreateHookScript && postCreateHookTimeoutSeconds && { postCreateHookTimeoutSeconds }),
+});
 
 export function registerProjectRoutes(router: Router, deps: { projects: ProjectRepository; projectService?: ProjectService }): void {
   router.add('GET', '/api/projects', ({ req, res }) => {

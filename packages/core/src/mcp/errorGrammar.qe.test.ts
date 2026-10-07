@@ -143,6 +143,8 @@ const hostileCallByTool = (w: World): Record<string, { client: Client; args: Rec
   message_parent: { client: w.lead, args: { body: 'hi' }, code: 'no_parent' },
   message_argus: { client: w.lead, args: { message: 'hi' }, code: 'no_parent' },
   create_worktree: { client: w.lead, args: { repo_path: '/nonexistent-repo', branch_name: 'b' }, code: 'outside_own_repository' },
+  list_worktrees: { client: w.lead, args: { repo_path: '/nonexistent-repo' }, code: 'outside_own_repository' },
+  remove_worktree: { client: w.lead, args: { repo_path: '/nonexistent-repo', path: '/nonexistent-worktree' }, code: 'outside_own_repository' },
   create_session: { client: w.lead, args: { directory: '/nonexistent-directory', name: 'n' }, code: 'directory_missing' },
   update_session: { client: w.lead, args: { session_id: w.strangerId, model: 'opus' }, code: 'outside_lineage' },
   get_argus_status: { client: w.lead, args: {} },

@@ -9,9 +9,13 @@ const runExecFile = promisify(execFile);
 // Every hook git triggers (post-checkout, post-commit, …) inherits this env, so a raw
 // process.env pass-through would hand a hook planted in the caller's own repo the daemon's
 // host-identity markers (SCAPE_EDIT_CAP, session ids, …) on the next worktree operation.
-async function run(args: string[], options: { cwd: string; env?: NodeJS.ProcessEnv }): Promise<{ stdout: string; stderr: string }> {
+export interface GitRunOptions { cwd: string; env?: NodeJS.ProcessEnv; timeoutMs?: number; maxBufferBytes?: number }
+
+export async function run(args: string[], options: GitRunOptions): Promise<{ stdout: string; stderr: string }> {
   try {
-    return await runExecFile('git', args, { cwd: options.cwd, env: childEnvironmentForGit(options.env ?? process.env) });
+    return await runExecFile('git', args, {
+      cwd: options.cwd, env: childEnvironmentForGit(options.env ?? process.env), timeout: options.timeoutMs, maxBuffer: options.maxBufferBytes, killSignal: 'SIGKILL',
+    });
   } catch (error) {
     // The caller checked the cwd exists, so a spawn ENOENT means the git binary itself is not on the PATH.
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new WorktreeError('git_unavailable', 'git is not available to the daemon.');
@@ -96,11 +100,20 @@ async function gitCommonDir(cwd: string): Promise<string | undefined> {
 // blind spot for some inputs, so both paths go through the native binding with nothing lexical first.
 export function isPathWithin(candidate: string, root: string): boolean {
   try {
-    const realRoot = realpathSync.native(root);
-    const realCandidate = realpathSync.native(candidate);
-    const relativePath = relative(realRoot, realCandidate);
-    return relativePath === '' || (relativePath !== '..' && !relativePath.startsWith(`..${sep}`) && !isAbsolute(relativePath));
+    return isRelativePathInside(relative(realpathSync.native(root), realpathSync.native(candidate)));
   } catch {
     return false;
   }
 }
+
+/** For a candidate that no longer exists on disk, so no symlink can be followed: only the root is resolved. */
+export function isMissingPathWithin(candidate: string, root: string): boolean {
+  try {
+    return isRelativePathInside(relative(realpathSync.native(root), resolve(candidate)));
+  } catch {
+    return false;
+  }
+}
+
+const isRelativePathInside = (relativePath: string): boolean =>
+  relativePath === '' || (relativePath !== '..' && !relativePath.startsWith(`..${sep}`) && !isAbsolute(relativePath));

@@ -30,6 +30,7 @@ const SHIPPED_MIGRATION_CHECKSUMS: Record<string, string> = {
   '021_data_store_natural_key': 'ce4c6061c7937bc7268709fe0e2368cb62fa7a4f57bd486e09d83cd858857d7d',
   '022_ds_column_format': 'baeb8f999fd83c1a8c5caf9c4dd03ecec53a6dec973a4b877981ad209a5ae438',
   '023_session_seeded_prompt': '0b4155ba2d4336ab0545caa85de96e1beaefef856a807483efab9a154969f8c8',
+  '024_project_post_create_hook': 'd53012513f6587da0e7bd12a2ead5138c32c5224eb0d8fd4a89d26c3b1062a0a',
 };
 
 const migrationVersionsOnDisk = () =>
