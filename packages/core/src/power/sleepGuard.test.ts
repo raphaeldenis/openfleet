@@ -35,6 +35,26 @@ function setup(options: { power?: PowerApi; enabled?: boolean } = {}) {
 }
 
 describe('sleep protection for active sessions', () => {
+  it('reconciles strong recovery before replacing the cohort after another suspension', async () => {
+    vi.useFakeTimers();
+    const { create, hook, sessions, harness } = setup();
+    const recovering = await create('recovering');
+    const closed = await create('closed');
+    hook(recovering.id, 'UserPromptSubmit');
+    hook(closed.id, 'UserPromptSubmit');
+    vi.setSystemTime(Date.now() + 60_000);
+    await vi.advanceTimersByTimeAsync(125_000);
+    expect(sessions.get(recovering.id)?.runtimeAttention?.reason).toBe('post_wake_no_progress');
+    harness.handles[1]!.emitExit(137);
+
+    hook(recovering.id, 'PreToolUse');
+    vi.setSystemTime(Date.now() + 60_000);
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(sessions.get(recovering.id)?.runtimeAttention).toBeUndefined();
+    expect(sessions.get(closed.id)?.runtimeAttention?.reason).toBe('post_wake_process_exited');
+  });
+
   it('holds one assertion from the first generating session until the last child or manager is idle', async () => {
     const { create, hook, held, acquisitions, guard } = setup();
     const manager = await create('manager');

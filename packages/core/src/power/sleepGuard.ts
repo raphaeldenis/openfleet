@@ -94,6 +94,7 @@ export class SleepGuard {
   }
 
   private beginResumeChecks(): void {
+    this.checkProgress(0);
     this.watches.clear();
     for (const session of this.deps.sessions.list()) {
       if (session.state !== 'generating') continue;

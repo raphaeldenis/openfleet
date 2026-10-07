@@ -7,6 +7,7 @@ interface CaffeinateOptions {
   daemonPid?: number;
   platform?: NodeJS.Platform;
   spawn?: typeof spawn;
+  onPowerUnavailable?: () => void;
 }
 
 class CaffeinateAssertion implements PowerAssertion {
@@ -14,16 +15,21 @@ class CaffeinateAssertion implements PowerAssertion {
   private hasFailed = false;
   private releaseRequested = false;
   private escalation: ReturnType<typeof setTimeout> | undefined;
+  private shutdownDeadline: ReturnType<typeof setTimeout> | undefined;
+  private resolveShutdown: () => void = () => undefined;
+  readonly shutdownSettled = new Promise<void>((resolve) => { this.resolveShutdown = resolve; });
   private resolveExit: () => void = () => undefined;
   readonly exited = new Promise<void>((resolve) => { this.resolveExit = resolve; });
 
-  constructor(private readonly helper: ChildProcess, onExit: () => void) {
+  constructor(private readonly helper: ChildProcess, onExit: () => void, private readonly onPowerUnavailable: () => void) {
     const finish = () => {
       if (this.hasEnded) return;
       this.hasEnded = true;
       if (this.escalation) clearTimeout(this.escalation);
+      if (this.shutdownDeadline) clearTimeout(this.shutdownDeadline);
       helper.removeListener('error', handleFailure);
       this.resolveExit();
+      this.resolveShutdown();
       onExit();
     };
     const handleFailure = () => {
@@ -42,8 +48,20 @@ class CaffeinateAssertion implements PowerAssertion {
     this.releaseRequested = true;
     this.signalHelper('SIGTERM');
     if (this.hasEnded) return;
-    this.escalation = setTimeout(() => { if (!this.hasEnded) this.signalHelper('SIGKILL'); }, RELEASE_GRACE_MS);
+    this.escalation = setTimeout(() => this.escalateShutdown(), RELEASE_GRACE_MS);
     this.escalation.unref();
+  }
+
+  private escalateShutdown(): void {
+    if (this.hasEnded) return;
+    this.signalHelper('SIGKILL');
+    if (this.hasEnded) return;
+    this.shutdownDeadline = setTimeout(() => {
+      this.hasFailed = true;
+      this.onPowerUnavailable();
+      this.resolveShutdown();
+    }, RELEASE_GRACE_MS);
+    this.shutdownDeadline.unref();
   }
 
   private signalHelper(signal: NodeJS.Signals): void {
@@ -61,7 +79,7 @@ export class CaffeinatePowerApi implements PowerApi {
   private readonly options: Required<CaffeinateOptions>;
 
   constructor(options: CaffeinateOptions = {}) {
-    this.options = { daemonPid: process.pid, platform: process.platform, spawn, ...options };
+    this.options = { daemonPid: process.pid, platform: process.platform, spawn, onPowerUnavailable: () => undefined, ...options };
   }
 
   acquire(): PowerAssertion {
@@ -69,7 +87,7 @@ export class CaffeinatePowerApi implements PowerApi {
     const helper = this.options.spawn('/usr/bin/caffeinate', ['-i', '-w', String(this.options.daemonPid)], {
       shell: false, detached: false, stdio: 'ignore', windowsHide: true,
     });
-    const assertion = new CaffeinateAssertion(helper, () => this.assertions.delete(assertion));
+    const assertion = new CaffeinateAssertion(helper, () => this.assertions.delete(assertion), this.options.onPowerUnavailable);
     this.assertions.add(assertion);
     return assertion;
   }
@@ -77,6 +95,6 @@ export class CaffeinatePowerApi implements PowerApi {
   async close(): Promise<void> {
     const assertions = [...this.assertions];
     for (const assertion of assertions) assertion.release();
-    await Promise.all(assertions.map((assertion) => assertion.exited));
+    await Promise.all(assertions.map((assertion) => assertion.shutdownSettled));
   }
 }

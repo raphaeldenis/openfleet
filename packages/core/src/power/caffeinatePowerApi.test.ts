@@ -6,9 +6,11 @@ import { CaffeinatePowerApi } from './caffeinatePowerApi.js';
 class FakeHelper extends EventEmitter {
   pid: number | undefined = 123;
   failsTermination = false;
+  failsAllSignals = false;
   readonly signals: NodeJS.Signals[] = [];
   kill(signal: NodeJS.Signals): boolean {
     this.signals.push(signal);
+    if (this.failsAllSignals) return false;
     if (this.failsTermination && signal === 'SIGTERM') {
       this.emit('error', new Error('termination failed'));
       return false;
@@ -19,6 +21,32 @@ class FakeHelper extends EventEmitter {
 }
 
 describe('macOS caffeinate power adapter', () => {
+  it('bounds failed escalation, diagnoses it and retains ownership until the helper closes', async () => {
+    vi.useFakeTimers();
+    try {
+      const helper = new FakeHelper();
+      helper.failsAllSignals = true;
+      const onPowerUnavailable = vi.fn();
+      const power = new CaffeinatePowerApi({ platform: 'darwin', spawn: (() => helper) as unknown as typeof spawn, onPowerUnavailable });
+      power.acquire().release();
+      let closeCompletes = false;
+      const closing = power.close().then(() => { closeCompletes = true; });
+
+      await vi.advanceTimersByTimeAsync(2000);
+
+      expect(closeCompletes).toBe(true);
+      expect(helper.signals).toEqual(['SIGTERM', 'SIGKILL']);
+      expect(onPowerUnavailable).toHaveBeenCalledTimes(1);
+      expect(helper.listenerCount('close')).toBe(1);
+      helper.emit('close', 0);
+      await closing;
+      await power.close();
+      expect(helper.listenerCount('close')).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('ties only an idle-system assertion to the daemon PID and reaps its helper on release', async () => {
     const helper = new FakeHelper();
     const launch = vi.fn(() => helper as unknown as ChildProcess);

@@ -106,12 +106,13 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   const modelTable = readingConfigFile(() => loadModelTable(modelConfigPath));
   const { workingState: workingStateSettings, managers: managerSettings, contextNotice: contextNoticeSettings } = readingConfigFile(() => loadDaemonSettings(modelConfigPath));
   const powerSettings = readingConfigFile(() => loadPowerSettings(modelConfigPath));
-  const powerApi = options.power?.api ?? new CaffeinatePowerApi();
+  const reportPowerUnavailable = () => degraded.mark('power_assertion_unavailable', 'Idle sleep protection is unavailable or its helper cannot be stopped.');
+  const powerApi = options.power?.api ?? new CaffeinatePowerApi({ onPowerUnavailable: reportPowerUnavailable });
   const supportsPowerAssertions = options.power?.api !== undefined || process.platform === 'darwin';
   const sleepGuard = new SleepGuard({ sessions, bus, power: powerApi,
     enabled: supportsPowerAssertions && powerSettings.preventIdleSleepWhileGenerating,
     clock: options.power?.clock ?? Date.now, schedule: options.power?.schedule ?? scheduleOnRealClock,
-    onPowerUnavailable: () => degraded.mark('power_assertion_unavailable', 'Idle sleep protection is unavailable while sessions generate.'),
+    onPowerUnavailable: reportPowerUnavailable,
     onPowerAvailable: () => degraded.clear('power_assertion_unavailable'),
   });
   sleepGuard.observeSessionEvents();

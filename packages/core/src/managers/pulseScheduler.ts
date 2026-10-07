@@ -59,7 +59,7 @@ export class PulseScheduler {
   private readonly queuedWakes = new Map<string, QueuedWake>();
   private readonly managerIdsInFailureStreak = new Set<string>();
   private readonly forcedTickFailuresLeftByManager = new Map<string, number>();
-  private readonly notifiedRuntimeLaunches = new Map<string, string>();
+  private readonly notifiedRuntimeLaunches = new Map<string, RuntimeAttention>();
   private isStopped = false;
 
   constructor(deps: PulseSchedulerDeps) {
@@ -153,11 +153,12 @@ export class PulseScheduler {
     const isCurrentAttention = child?.runtimeAttention?.launchId === attention.launchId;
     if (!isCurrentAttention || !parentId) return;
     if (!this.deps.managers.get(parentId) || !this.isManagerAlive(parentId)) return;
-    const alreadyNotifiesLaunch = this.notifiedRuntimeLaunches.get(childId) === attention.launchId;
-    if (alreadyNotifiesLaunch) return;
+    const previousAttention = this.notifiedRuntimeLaunches.get(childId);
+    const alreadyNotifiesCondition = previousAttention?.launchId === attention.launchId && previousAttention.reason === attention.reason;
+    if (alreadyNotifiesCondition) return;
     try {
       this.queueWakeLine(parentId, { label: childId, exitCode: undefined, runtimeAttention: attention });
-      this.notifiedRuntimeLaunches.set(childId, attention.launchId);
+      this.notifiedRuntimeLaunches.set(childId, attention);
     } catch {
       log('warn', `runtime attention: could not wake manager ${parentId} for child ${childId}`, undefined, { code: 'runtime_attention_notification_failed', sessionId: childId });
     }
@@ -168,7 +169,15 @@ export class PulseScheduler {
   private queueWakeLine(managerId: string, childWakeNotice: ChildWakeNotice): void {
     const queued = this.queuedWakes.get(managerId);
     if (queued) {
-      const grown = { messageId: queued.messageId, listed: [...queued.listed, childWakeNotice].slice(0, MAX_LISTED_CHILD_WAKES), total: queued.total + 1 };
+      const replacementIndex = queued.listed.findIndex((notice) => notice.label === childWakeNotice.label
+        && notice.runtimeAttention?.launchId === childWakeNotice.runtimeAttention?.launchId
+        && childWakeNotice.runtimeAttention !== undefined);
+      const replacesExistingNotice = replacementIndex >= 0;
+      const listed = replacesExistingNotice
+        ? queued.listed.map((notice, index) => index === replacementIndex ? childWakeNotice : notice)
+        : [...queued.listed, childWakeNotice].slice(0, MAX_LISTED_CHILD_WAKES);
+      const total = replacesExistingNotice ? queued.total : queued.total + 1;
+      const grown = { messageId: queued.messageId, listed, total };
       const body = wakeLineOf(grown);
       const isMergedIntoQueuedLine = this.deps.sessions.replaceQueuedMessageBody({ sessionId: managerId, messageId: grown.messageId, body });
       if (isMergedIntoQueuedLine) { this.queuedWakes.set(managerId, grown); return; }

@@ -11,12 +11,12 @@ const cleanups: (() => void | Promise<void>)[] = [];
 beforeEach(() => vi.useFakeTimers());
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); vi.useRealTimers(); });
 
-function setup() {
+function setup(options: { protectionEnabled?: boolean } = {}) {
   const db = openDatabase(':memory:');
   const bus = new EventBus();
   const harness = new FakeHarness();
   const sessions = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://localhost:0', worktreesRoot: '/tmp/of-wt' });
-  const guard = new SleepGuard({ sessions, bus, enabled: false, power: { acquire: () => { throw new Error('disabled'); } }, clock: Date.now,
+  const guard = new SleepGuard({ sessions, bus, enabled: options.protectionEnabled ?? false, power: { acquire: () => ({ release: () => undefined }) }, clock: Date.now,
     schedule: (callback, delayMs) => { const timer = setTimeout(callback, delayMs); return () => clearTimeout(timer); }, onPowerUnavailable: () => undefined });
   guard.start();
   const managers = new ManagerRepository(db);
@@ -30,6 +30,51 @@ function setup() {
 }
 
 describe('manager notification of runtime attention', () => {
+  it('upgrades queued silence to one terminal notice before delivery', async () => {
+    const { sessions, harness, create, hook, registerManager, resume } = setup();
+    const manager = await create('manager');
+    registerManager(manager.id);
+    hook(manager.id, 'PermissionRequest');
+    const child = await create('child', manager.id);
+    hook(child.id, 'UserPromptSubmit');
+    await resume();
+
+    harness.handles[1]!.emitExit(137);
+    expect(sessions.queuedMessageCount(manager.id)).toBe(1);
+    hook(manager.id, 'Stop');
+
+    const notices = harness.handles[0]!.written.filter((body) => body.includes('[pulse]'));
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toContain('post_wake_process_exited');
+    expect(notices[0]).not.toContain('post_wake_no_progress');
+  });
+
+  it.each([true, false])('delivers exactly one terminal notice after delivering silence with protection enabled=%s', async (protectionEnabled) => {
+    const { sessions, harness, create, hook, registerManager, resume, bus } = setup({ protectionEnabled });
+    const manager = await create('manager');
+    registerManager(manager.id);
+    hook(manager.id, 'UserPromptSubmit');
+    const child = await create('child', manager.id);
+    hook(child.id, 'UserPromptSubmit');
+    await resume();
+    hook(manager.id, 'Stop');
+    await vi.advanceTimersByTimeAsync(250);
+    expect(harness.handles[0]!.written.filter((body) => body.includes('[pulse]'))).toHaveLength(1);
+    expect(harness.handles[0]!.written[0]).toContain('post_wake_no_progress');
+    hook(manager.id, 'UserPromptSubmit');
+
+    harness.handles[1]!.emitExit(137);
+    bus.emit({ type: 'session.attention', sessionId: child.id, runtimeAttention: sessions.get(child.id)!.runtimeAttention! });
+    expect(sessions.queuedMessageCount(manager.id)).toBe(1);
+    hook(manager.id, 'Stop');
+    await vi.advanceTimersByTimeAsync(250);
+
+    const notices = harness.handles[0]!.written.filter((body) => body.includes('[pulse]'));
+    expect(notices).toHaveLength(2);
+    expect(notices[1]).toContain('post_wake_process_exited');
+    expect(notices[1]).toContain(child.id);
+  });
+
   it('coalesces two stalled children into one queued message and never types into a permission gate', async () => {
     const { sessions, harness, create, hook, registerManager, resume, bus } = setup();
     const manager = await create('manager');
