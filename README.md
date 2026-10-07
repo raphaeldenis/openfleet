@@ -1,5 +1,7 @@
 # OpenFleet
 
+Scape-compatible session tools include `get_session_card` and `message_argus`; see [session MCP aliases](docs/mcp-session-aliases.md) for fields, target resolution and authorization.
+
 Open-source desktop workspace for fleets of AI coding agents: sessions in git worktrees, manager agents with a pulse, mission notes, tables, triggers and human governance.
 
 Status: phase 1 (foundation). See `docs/` for the phase smoke checklist; design lives in the author's superpowers folder for now.

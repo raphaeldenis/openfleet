@@ -11,6 +11,7 @@ import type { PulseScheduler } from '../managers/pulseScheduler.js';
 import { guardedFor, ok, refuse } from './toolResults.js';
 import { lineageSessionView, managerView, sessionView } from './toolViews.js';
 import type { HeldFor, SessionService } from '../sessions/sessionService.js';
+import { sessionLastMessage } from './sessionLastMessage.js';
 
 const HELD_REASON_TEXT: Record<HeldFor, string> = {
   human_draft: 'Not delivered yet: the human has an unsent draft in this session\'s terminal prompt. It is delivered once they send or clear it; do not resend.',
@@ -38,7 +39,6 @@ export interface RegisterToolsDeps {
 export function registerTools(server: McpServer, deps: RegisterToolsDeps): void {
   const { sessions, caller, approvals, managers, pulseScheduler, modelTable } = deps;
   const guarded = guardedFor(caller);
-  // Shared by send_session_message and message_parent: both pick a different target session for the same delivery call.
   const sendMessage = (send: () => { status: 'delivered' | 'queued'; messageId: string; heldFor?: HeldFor }) =>
     guarded(() => {
       const { status, messageId, heldFor } = send();
@@ -104,6 +104,13 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     return ok(sessionView(target));
   });
 
+  server.registerTool('get_session_card', { description: `Session status plus last_message: the latest assistant transcript text, redacted and capped at 8192 UTF-8 bytes, null when unavailable. ${COMPACT_SESSION}`, inputSchema: { session_id: z.string().optional() } }, async ({ session_id }) => {
+    const target = sessions.get(session_id ?? caller.id);
+    if (!target || !isInLineage(target)) return refuse('outside_lineage', 'session not found or outside your lineage');
+    const lastMessage = sessionLastMessage(sessions.trustedTranscriptFileOf(target.id));
+    return ok({ ...sessionView(target), last_message: lastMessage });
+  });
+
   server.registerTool('list_children', { description: `Sessions you spawned. ${COMPACT_SESSION}; no parentId, they are all yours`, inputSchema: {} }, async () => ok(sessions.list().filter((s) => s.parentId === caller.id).map(sessionView)));
 
   server.registerTool('list_sessions', { description: `You, your children, and every descendant beneath them. ${COMPACT_SESSION}; each session also carries its parentId`, inputSchema: {} }, async () =>
@@ -123,6 +130,31 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     if (tooLong) return refuse('message_too_long', tooLong);
     if (!caller.parentId) return refuse('no_parent', 'this session has no parent');
     return sendMessage(() => sessions.sendMessage({ sessionId: caller.parentId!, body, fromSessionId: caller.id, messageId: message_id }));
+  });
+
+  const normalizedManagerName = (name: string) => name.trim().normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
+  server.registerTool('message_argus', { description: 'Message your parent manager by default, or an authorized parent/direct-child manager by exact id, accent-insensitive name, or unique name prefix. Uses the existing queued delivery and agent envelope; never answers a permission gate. Pass message_id to retry idempotently.', inputSchema: { message: z.string().min(1), target: z.string().trim().min(1).optional(), message_id: z.uuid().optional() } }, async ({ message, target, message_id }) => {
+    const tooLong = tooLongMessage(message);
+    if (tooLong) return refuse('message_too_long', tooLong);
+    if (target === undefined && !caller.parentId) return refuse('no_parent', 'this session has no parent');
+    const isAuthorizedManager = (session: Session) => session.role === MANAGER_ROLE && session.id !== caller.id && isInLineage(session);
+    const authorizedManagers = sessions.list().filter(isAuthorizedManager);
+    const requestedTarget = target ?? caller.parentId!;
+    const exactId = authorizedManagers.find((manager) => manager.id === requestedTarget);
+    const hasInaccessibleParentManager = target === undefined && exactId === undefined;
+    if (hasInaccessibleParentManager) return refuse('outside_lineage', 'target not found or outside your lineage');
+    const requestedName = normalizedManagerName(requestedTarget);
+    const exactNames = authorizedManagers.filter((manager) => normalizedManagerName(manager.name) === requestedName);
+    const prefixMatches = authorizedManagers.filter((manager) => normalizedManagerName(manager.name).startsWith(requestedName));
+    const nameMatches = exactNames.length > 0 ? exactNames : prefixMatches;
+    const matches = exactId ? [exactId] : nameMatches;
+    if (matches.length === 0) return refuse('outside_lineage', 'target not found or outside your lineage');
+    if (matches.length > 1) {
+      const candidates = matches.map(({ id, name }) => ({ id, name }));
+      return refuse('invalid_body', `ambiguous manager: ${JSON.stringify(candidates)}`);
+    }
+    const manager = matches[0]!;
+    return sendMessage(() => sessions.sendMessage({ sessionId: manager.id, body: message, fromSessionId: caller.id, messageId: message_id }));
   });
 
   server.registerTool('create_worktree', { description: 'Create an isolated git worktree for a task', inputSchema: { repo_path: z.string(), branch_name: z.string() } }, async ({ repo_path, branch_name }) => {

@@ -2,11 +2,11 @@ import { MANAGER_ROLE } from '@openfleet/shared';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { startServer } from '../api/server.js';
 import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
@@ -97,14 +97,99 @@ async function connect(token: string) {
 const text = (r: unknown) => JSON.parse(((r as { content: { text: string }[] }).content[0]!).text);
 
 describe('MCP', () => {
+  it('get_session_card returns the latest redacted and bounded assistant message through MCP', async () => {
+    const transcriptFile = join(existingWorktreeDir('transcript'), 'session.jsonl');
+    const assistantEntry = (content: string) => JSON.stringify({ type: 'assistant', message: { content } });
+    const transcriptLines = [assistantEntry('Earlier'), assistantEntry('Bearer abcdefghijklmnop ' + 'é'.repeat(9000)), JSON.stringify({ type: 'user', message: { content: 'Private prompt' } })];
+    writeFileSync(transcriptFile, transcriptLines.join('\n'));
+    const trustedTranscript = vi.spyOn(sessions, 'trustedTranscriptFileOf').mockReturnValue(transcriptFile);
+    const client = await connect(parentToken);
+
+    const card = text(await client.callTool({ name: 'get_session_card', arguments: {} }));
+
+    expect(trustedTranscript).toHaveBeenCalledWith(parentId);
+    expect(card.last_message).toContain('é');
+    expect(card.last_message).not.toContain('abcdefghijklmnop');
+    expect(card.last_message).not.toContain('Private prompt');
+    expect(card.last_message).not.toContain('�');
+    expect(Buffer.byteLength(card.last_message)).toBeLessThanOrEqual(8192);
+  });
+
+  it('message_argus prioritizes exact ids and names over name prefixes', async () => {
+    const manager = await sessions.create({ directory: '/tmp', name: 'Équipe', emoji: '🤖', role: MANAGER_ROLE, parentId, harness: 'fake' });
+    const otherManager = await sessions.create({ directory: '/tmp', name: manager.id, emoji: '🤖', role: MANAGER_ROLE, parentId, harness: 'fake' });
+    await sessions.create({ directory: '/tmp', name: 'Équipe Alpha', emoji: '🤖', role: MANAGER_ROLE, parentId, harness: 'fake' });
+    const client = await connect(parentToken);
+
+    for (const target of [manager.id, 'equipe']) {
+      expect(text(await client.callTool({ name: 'message_argus', arguments: { target, message: 'Report' } }))).toMatchObject({ status: 'queued' });
+    }
+
+    expect(sessions.queuedMessageCount(manager.id)).toBe(2);
+    expect(sessions.queuedMessageCount(otherManager.id)).toBe(0);
+  });
+
+  it('get_session_card adds a nullable last_message to the existing status', async () => {
+    const client = await connect(parentToken);
+    const status = text(await client.callTool({ name: 'get_session_status', arguments: {} }));
+    expect(text(await client.callTool({ name: 'get_session_card', arguments: {} }))).toEqual({ ...status, last_message: null });
+    const outsider = await sessions.create({ directory: '/tmp', name: 'Private', emoji: '🤖', harness: 'fake' });
+    const refused = await client.callTool({ name: 'get_session_card', arguments: { session_id: outsider.id } });
+    expect((refused.content as { text: string }[])[0]!.text).toContain('outside_lineage');
+  });
+
+  it('message_argus resolves authorized manager ids, names and unique prefixes', async () => {
+    const manager = await sessions.create({ directory: '/tmp', name: 'Équipe Alpha', emoji: '🤖', role: MANAGER_ROLE, parentId, harness: 'fake' });
+    const client = await connect(parentToken);
+    for (const target of [manager.id, 'eQUIPE alpha', 'equi']) {
+      expect(text(await client.callTool({ name: 'message_argus', arguments: { target, message: 'Report' } }))).toMatchObject({ status: 'queued', message_id: expect.any(String) });
+    }
+    await sessions.create({ directory: '/tmp', name: 'Équipe Beta', emoji: '🤖', role: MANAGER_ROLE, parentId, harness: 'fake' });
+    const ambiguous = await client.callTool({ name: 'message_argus', arguments: { target: 'equi', message: 'Report' } });
+    expect((ambiguous.content as { text: string }[])[0]!.text).toContain('invalid_body');
+    expect((ambiguous.content as { text: string }[])[0]!.text).toContain(manager.id);
+    const outsider = await sessions.create({ directory: '/tmp', name: 'Secret', emoji: '🤖', role: MANAGER_ROLE, harness: 'fake' });
+    const refused = await client.callTool({ name: 'message_argus', arguments: { target: outsider.id, message: 'Report' } });
+    expect((refused.content as { text: string }[])[0]!.text).toContain('outside_lineage');
+  });
+
+  it('message_argus defaults to the parent manager and enforces the byte cap', async () => {
+    const manager = await sessions.create({ directory: '/tmp', name: 'Manager', emoji: '🤖', role: MANAGER_ROLE, harness: 'fake' });
+    await sessions.create({ directory: '/tmp', name: 'Child', emoji: '🤖', parentId: manager.id, harness: 'fake' });
+    const client = await connect(harness.launches[2]!.mcpToken);
+    expect(text(await client.callTool({ name: 'message_argus', arguments: { message: 'Report' } }))).toMatchObject({ status: 'queued' });
+    const refused = await client.callTool({ name: 'message_argus', arguments: { message: 'é'.repeat(4097) } });
+    expect((refused.content as { text: string }[])[0]!.text).toContain('message_too_long');
+  });
+
+  it('message_argus preserves idempotent agent delivery while a manager waits for permission', async () => {
+    const manager = await sessions.create({ directory: '/tmp', name: 'Gate Manager', emoji: '🤖', role: MANAGER_ROLE, parentId, harness: 'fake' });
+    sessions.applyInput(manager.id, { kind: 'hook', event: { session_id: 'x', hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'example' } } });
+    const client = await connect(parentToken);
+    const first = text(await client.callTool({ name: 'message_argus', arguments: { target: manager.id, message: 'Report' } }));
+    const retry = text(await client.callTool({ name: 'message_argus', arguments: { target: manager.id, message: 'Report', message_id: first.message_id } }));
+    expect(retry).toEqual(first);
+    expect(first.status).toBe('queued');
+    expect(sessions.get(manager.id)!.state).toBe('waiting_permission');
+    expect(harness.handles[1]!.written).toEqual([]);
+  });
+
+  it('message_argus never resolves an omitted target by another manager name', async () => {
+    const caller = await sessions.create({ directory: '/tmp', name: 'Caller', emoji: '🤖', parentId, harness: 'fake' });
+    await sessions.create({ directory: '/tmp', name: parentId, emoji: '🤖', parentId: caller.id, role: MANAGER_ROLE, harness: 'fake' });
+    const client = await connect(harness.launches[1]!.mcpToken);
+    const refused = await client.callTool({ name: 'message_argus', arguments: { message: 'Report' } });
+    expect((refused.content as { text: string }[])[0]!.text).toContain('outside_lineage');
+  });
+
   it('lists the tools', async () => {
     const client = await connect(parentToken);
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
       'add_data_store_column', 'append_to_note', 'close_session', 'create_data_store', 'create_data_store_view', 'create_note', 'create_session',
       'create_worktree', 'delete_data_store_row', 'delete_data_store_view', 'delete_note', 'describe_data_store', 'get_argus_status', 'get_note',
-      'get_note_version', 'get_session_status', 'get_working_state', 'insert_data_store_rows', 'list_children', 'list_data_store_views', 'list_note_versions',
-      'list_notes', 'list_project_folders', 'list_projects', 'list_row_changes', 'list_sessions', 'message_parent', 'move_note', 'pulse_now', 'query_data_store', 'restore_note_version',
+      'get_note_version', 'get_session_card', 'get_session_status', 'get_working_state', 'insert_data_store_rows', 'list_children', 'list_data_store_views', 'list_note_versions',
+      'list_notes', 'list_project_folders', 'list_projects', 'list_row_changes', 'list_sessions', 'message_argus', 'message_parent', 'move_note', 'pulse_now', 'query_data_store', 'restore_note_version',
       'search_notes', 'send_session_message', 'set_data_store_natural_key', 'update_data_store_row', 'update_data_store_rows', 'update_data_store_view', 'update_note', 'update_note_section',
       'update_session', 'update_working_state',
     ]);
