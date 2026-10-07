@@ -136,10 +136,12 @@ const NEVER_REFUSES = ['list_children', 'list_sessions', 'get_argus_status', 'li
 const UNKNOWN = 'missing';
 const hostileCallByTool = (w: World): Record<string, { client: Client; args: Record<string, unknown>; code?: string }> => ({
   get_session_status: { client: w.lead, args: { session_id: w.strangerId }, code: 'outside_lineage' },
+  get_session_card: { client: w.lead, args: { session_id: w.strangerId }, code: 'outside_lineage' },
   list_children: { client: w.lead, args: {} },
   list_sessions: { client: w.lead, args: {} },
   send_session_message: { client: w.lead, args: { target_uuid: randomUUID(), body: 'hi' }, code: 'outside_lineage' },
   message_parent: { client: w.lead, args: { body: 'hi' }, code: 'no_parent' },
+  message_argus: { client: w.lead, args: { message: 'hi' }, code: 'no_parent' },
   create_worktree: { client: w.lead, args: { repo_path: '/nonexistent-repo', branch_name: 'b' }, code: 'outside_own_repository' },
   create_session: { client: w.lead, args: { directory: '/nonexistent-directory', name: 'n' }, code: 'directory_missing' },
   update_session: { client: w.lead, args: { session_id: w.strangerId, model: 'opus' }, code: 'outside_lineage' },
