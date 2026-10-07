@@ -37,8 +37,9 @@ function reportWhenUnavailable(error: unknown): void {
 /**
  * Runs `work` atomically: a transaction of its own (BEGIN IMMEDIATE/COMMIT), or a SAVEPOINT/RELEASE
  * nested inside a caller's transaction, so a batch is all-or-nothing without ending an outer transaction.
- * Rolls back only if a transaction is still active. A failing rollback is logged and never masks the
- * original error; a failed top-level ROLLBACK marks the connection stuck, and every later call retries the
+ * Rolls back only if a transaction is still active. A failing rollback is logged unless failureLogging
+ * is 'silent', and never masks the original
+ * error; a failed top-level ROLLBACK marks the connection stuck, and every later call retries the
  * ROLLBACK first and throws, without running its work, while that keeps failing. The watch hears about the
  * stuck connection the moment the ROLLBACK fails, not when a later call finds it.
  * A failed nested rollback leaves the outer transaction to its owner.

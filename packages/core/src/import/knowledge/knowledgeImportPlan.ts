@@ -181,6 +181,29 @@ function planRejection(input: { sealedMismatch: boolean; success: boolean }): Kn
   return input.success ? null : 'CONFLICT';
 }
 
+export function matchesCurrentKnowledgeSeal(input: { db: DatabaseSync; mappings: KnowledgeMapping[]; snapshotDigest: string }): boolean {
+  return input.mappings.every((mapping) => {
+    const currentSeal = input.db.prepare(`SELECT 1 FROM knowledge_current_seals s
+      JOIN knowledge_import_runs r ON r.id = s.run_id
+      WHERE s.project_id = ? AND s.repo_key = ? AND r.snapshot_digest = ?
+        AND r.mem02_acceptance IS NOT NULL`).get(mapping.project_id, mapping.repo_key, input.snapshotDigest);
+    return currentSeal !== undefined;
+  });
+}
+
+function sealMismatch(input: { repoPlans: RepositoryPlan[]; matchesCurrentSeal: boolean }): boolean {
+  const nativeContentChanges = input.repoPlans.some((repo) => repo.nativeSnapshotChanges);
+  const requiresExactSnapshot = input.repoPlans.some((repo) => repo.requiresExactSnapshot);
+  const requiredSealChanges = requiresExactSnapshot && !input.matchesCurrentSeal;
+  return nativeContentChanges || requiredSealChanges;
+}
+
+function countsReconcile(counts: KnowledgeCounts): boolean {
+  const reconcilesEverySource = counts.source_rows === counts.inserted + counts.updated + counts.unchanged;
+  const retirementCountsMatch = counts.source_active + counts.source_retired === counts.source_rows;
+  return counts.conflicts === 0 && reconcilesEverySource && retirementCountsMatch;
+}
+
 export function buildKnowledgeImportPlan(input: PlanInput): KnowledgeImportPlan {
   assertMappingProjects(input);
   assertMappingRepositories(input.mappings);
@@ -189,15 +212,11 @@ export function buildKnowledgeImportPlan(input: PlanInput): KnowledgeImportPlan 
   const rows = repoPlans.flatMap((repo) => repo.rows);
   const repositories = repoPlans.map((repo) => repo.counts);
   const sealedDigest = snapshotDigest({ ...input, rows });
-  const exactRunExists = input.db.prepare('SELECT 1 FROM knowledge_import_runs WHERE snapshot_digest = ? AND snapshot_id = ? AND mem02_acceptance IS NOT NULL').get(sealedDigest, input.snapshot.snapshot_id) !== undefined;
-  const requiresExactSnapshot = repoPlans.some((repo) => repo.requiresExactSnapshot);
-  const nativeContentChanges = repoPlans.some((repo) => repo.nativeSnapshotChanges);
-  const sealedMismatch = nativeContentChanges || (requiresExactSnapshot && !exactRunExists);
+  const matchesCurrentSeal = matchesCurrentKnowledgeSeal({ db: input.db, mappings: input.mappings, snapshotDigest: sealedDigest });
+  const sealedMismatch = sealMismatch({ repoPlans, matchesCurrentSeal });
   const counts = totalCounts(repositories);
-  const reconcilesEverySource = counts.source_rows === counts.inserted + counts.updated + counts.unchanged;
-  const retirementCountsMatch = counts.source_active + counts.source_retired === counts.source_rows;
-  const success = !sealedMismatch && counts.conflicts === 0 && reconcilesEverySource && retirementCountsMatch;
-  const report: KnowledgeImportReport = { ...counts, success, reason: planRejection({ sealedMismatch, success }), dry_run: input.dryRun, committed: false, repositories };
+  const success = !sealedMismatch && countsReconcile(counts);
+  const report: KnowledgeImportReport = { ...counts, success, reason: planRejection({ sealedMismatch, success }), dry_run: input.dryRun, committed: false, schema_upgraded: false, repositories };
   return { snapshot: input.snapshot, mappings: input.mappings, rows, snapshotDigest: sealedDigest, report, changesAuthority: repoPlans.some((repo) => repo.changesAuthority), createsRepository: repoPlans.some((repo) => repo.createsRepository) };
 }
 

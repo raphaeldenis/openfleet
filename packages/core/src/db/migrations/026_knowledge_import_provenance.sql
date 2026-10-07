@@ -18,3 +18,12 @@ CREATE TABLE knowledge_import_mappings (
 
 CREATE INDEX knowledge_import_mapping_source ON knowledge_import_mappings(source_repo);
 CREATE INDEX knowledge_import_snapshot_digest ON knowledge_import_runs(snapshot_digest);
+
+CREATE TABLE knowledge_current_seals (
+  project_id TEXT NOT NULL,
+  repo_key TEXT NOT NULL,
+  run_id TEXT NOT NULL REFERENCES knowledge_import_runs(id),
+  PRIMARY KEY (project_id, repo_key),
+  FOREIGN KEY (project_id, repo_key)
+    REFERENCES knowledge_repositories(project_id, repo_key)
+) STRICT;

@@ -10,7 +10,7 @@ import { assertNoOtherProcessHolds, openWritableTarget } from '../scape/scapeTar
 import { ScapeImportError } from '../scape/scapeImportError.js';
 import { assertNoSymlink, KnowledgeImportError, parseKnowledgeExport, readKnowledgeJson } from './knowledgeExportSchema.js';
 import { assertMappingProjects, resolveKnowledgeMapping, type KnowledgeMapping } from './knowledgeMapping.js';
-import { assertFinalGate, buildKnowledgeImportPlan, storedFactColumns, type KnowledgeImportPlan } from './knowledgeImportPlan.js';
+import { assertFinalGate, buildKnowledgeImportPlan, matchesCurrentKnowledgeSeal, storedFactColumns, type KnowledgeImportPlan } from './knowledgeImportPlan.js';
 import { assertReportTarget, persistKnowledgeReport, rejectedKnowledgeReport, type KnowledgeImportReport } from './knowledgeImportReport.js';
 
 export interface KnowledgeImportOptions {
@@ -23,13 +23,14 @@ export interface KnowledgeImportOptions {
   mem02Acceptance?: string;
 }
 
-function assertExistingProjects(input: { home: string; mappings: KnowledgeMapping[] }): void {
+function assertExistingProjects(input: { home: string; mappings: KnowledgeMapping[] }): boolean {
   const path = join(input.home, 'openfleet.db');
   if (!existsSync(path)) throw new KnowledgeImportError('UNKNOWN_PROJECT');
   const db = new DatabaseSync(path, { readOnly: true });
   try {
     assertBootableSchema(db, path);
     assertMappingProjects({ db, mappings: input.mappings });
+    return pendingMigrations(db).length > 0;
   } finally { db.close(); }
 }
 
@@ -82,7 +83,9 @@ function writeImport(input: { db: DatabaseSync; plan: KnowledgeImportPlan; final
   const { db, plan } = input;
   if (!plan.report.success) return plan.report;
   const exactRunExists = db.prepare('SELECT 1 FROM knowledge_import_runs WHERE snapshot_digest = ?').get(plan.snapshotDigest) !== undefined;
-  const hasChanges = plan.report.inserted + plan.report.updated > 0 || plan.changesAuthority || plan.createsRepository || !exactRunExists;
+  const currentSealMatches = matchesCurrentKnowledgeSeal({ db, mappings: plan.mappings, snapshotDigest: plan.snapshotDigest });
+  const replacesFinalSeal = input.final && !currentSealMatches;
+  const hasChanges = importNeedsWrites({ plan, exactRunExists, replacesFinalSeal });
   if (!hasChanges) return { ...plan.report, committed: true };
   registerRepositories(input);
   writeImportedRows(input);
@@ -91,7 +94,26 @@ function writeImport(input: { db: DatabaseSync; plan: KnowledgeImportPlan; final
   db.prepare(`INSERT INTO knowledge_import_runs (id, snapshot_id, imported_at, source_rows, inserted, updated, unchanged, retired, snapshot_digest, mem02_acceptance) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(runId, plan.snapshot.snapshot_id, new Date().toISOString(), plan.report.source_rows, plan.report.inserted, plan.report.updated, plan.report.unchanged, plan.report.source_retired, plan.snapshotDigest, mem02Acceptance);
   const recordMapping = db.prepare('INSERT INTO knowledge_import_mappings (run_id, source_repo, project_id, repo_key, canonical_root, git_common_dir) VALUES (?, ?, ?, ?, ?, ?)');
   for (const mapping of plan.mappings) recordMapping.run(runId, mapping.source_repo, mapping.project_id, mapping.repo_key, mapping.canonical_root, mapping.git_common_dir);
+  if (input.final) replaceCurrentSeals({ db, plan, runId });
   return { ...plan.report, committed: true };
+}
+
+function importNeedsWrites(input: { plan: KnowledgeImportPlan; exactRunExists: boolean; replacesFinalSeal: boolean }): boolean {
+  const changesFacts = input.plan.report.inserted + input.plan.report.updated > 0;
+  const changesRegistration = input.plan.changesAuthority || input.plan.createsRepository;
+  const recordsNewSnapshot = !input.exactRunExists;
+  return changesFacts || changesRegistration || recordsNewSnapshot || input.replacesFinalSeal;
+}
+
+function replaceCurrentSeals(input: { db: DatabaseSync; plan: KnowledgeImportPlan; runId: string }): void {
+  const replaceSeal = input.db.prepare(`INSERT INTO knowledge_current_seals (project_id, repo_key, run_id)
+    VALUES (?, ?, ?) ON CONFLICT (project_id, repo_key) DO UPDATE SET run_id = excluded.run_id`);
+  for (const mapping of input.plan.mappings) replaceSeal.run(mapping.project_id, mapping.repo_key, input.runId);
+}
+
+function protectedReportPaths(options: KnowledgeImportOptions): string[] {
+  const targetStatePaths = ['openfleet.db', 'openfleet.db-wal', 'openfleet.db-shm', 'config.json'].map((name) => join(options.home, name));
+  return [options.file, options.mappingFile, ...targetStatePaths];
 }
 
 function refusalReason(error: unknown): KnowledgeImportError['reason'] {
@@ -103,8 +125,7 @@ function refusalReason(error: unknown): KnowledgeImportError['reason'] {
 function assertSeparateReportTarget(options: KnowledgeImportOptions): void {
   if (options.reportFile === undefined) return;
   assertReportTarget(options.reportFile);
-  const targetStatePaths = ['openfleet.db', 'openfleet.db-wal', 'openfleet.db-shm', 'config.json'].map((name) => join(options.home, name));
-  const protectedPaths = [options.file, options.mappingFile, ...targetStatePaths];
+  const protectedPaths = protectedReportPaths(options);
   const reportFile = existsSync(options.reportFile) ? statSync(options.reportFile) : undefined;
   for (const path of protectedPaths) {
     const samePath = resolve(path) === resolve(options.reportFile);
@@ -132,6 +153,7 @@ export async function runKnowledgeOperation(input: { options: KnowledgeImportOpt
   const { options } = input;
   let target: { db: DatabaseSync; dispose(): void } | undefined;
   let report: KnowledgeImportReport | undefined;
+  let schemaUpgraded = false;
   try {
     assertNoSymlink(options.home);
     assertNoSymlink(join(options.home, 'openfleet.db'));
@@ -139,8 +161,9 @@ export async function runKnowledgeOperation(input: { options: KnowledgeImportOpt
     const snapshot = parseKnowledgeExport(readKnowledgeJson(options.file));
     const mappings = await resolveKnowledgeMapping({ mapping: readKnowledgeJson(options.mappingFile), sourceRepos: snapshot.repos.map((repo) => repo.repo) });
     if (options.final) assertFinalGate({ snapshot, acceptance: options.mem02Acceptance });
-    if (!options.dryRun) assertExistingProjects({ home: options.home, mappings });
+    const needsSchemaUpgrade = !options.dryRun && assertExistingProjects({ home: options.home, mappings });
     target = options.dryRun ? openReadOnlyTarget(options.home) : openWritableTarget(options.home, { migrationLogging: 'silent' });
+    schemaUpgraded = needsSchemaUpgrade;
     if (!options.dryRun) retainExclusiveAccess(target.db);
     const db = target.db;
     const planInput = { db, snapshot, mappings, dryRun: options.dryRun, final: options.final };
@@ -156,7 +179,7 @@ export async function runKnowledgeOperation(input: { options: KnowledgeImportOpt
     const savesReport = options.reportFile !== undefined && report.success && !options.dryRun;
     if (savesReport) {
       assertSeparateReportTarget(options);
-      persistKnowledgeReport({ path: options.reportFile!, report });
+      persistKnowledgeReport({ path: options.reportFile!, report: { ...report, schema_upgraded: schemaUpgraded }, protectedPaths: protectedReportPaths(options) });
     }
   } catch (error) {
     report = reportAfterFailure({ report, reason: refusalReason(error), dryRun: options.dryRun });
@@ -164,5 +187,5 @@ export async function runKnowledgeOperation(input: { options: KnowledgeImportOpt
     try { target?.dispose(); }
     catch { report = reportAfterFailure({ report, reason: 'IMPORT_WRITE_FAILED', dryRun: options.dryRun }); }
   }
-  return report;
+  return { ...report, schema_upgraded: schemaUpgraded };
 }

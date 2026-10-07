@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { cpSync, existsSync, linkSync, mkdirSync, readdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, linkSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
@@ -64,7 +64,111 @@ describe('packaged knowledge import', () => {
     const db = new DatabaseSync(join(home, 'openfleet.db'));
     try { return read(db); } finally { db.close(); }
   };
-  const state = () => inspect((db) => ['knowledge_repositories', 'knowledge', 'knowledge_import_entries', 'knowledge_import_runs', 'knowledge_import_mappings'].map((table) => db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()));
+  const state = () => inspect((db) => ['knowledge_repositories', 'knowledge', 'knowledge_import_entries', 'knowledge_import_runs', 'knowledge_import_mappings', 'knowledge_current_seals'].map((table) => db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()));
+
+  it.each(['activation', 'replay'] as const)('R7 refuses the historical final seal during %s', (operation) => {
+    manifest = { snapshot_id: 'final', frozen_at: timestamp, freeze_verified: true };
+    const finalFlags = ['--final', '--mem02-acceptance', 'MEM-02-reviewed'];
+    writeInputs();
+    expect(run(finalFlags).status).toBe(0);
+    manifest.exported_at = '2026-10-07T01:00:00.000Z';
+    writeInputs();
+    expect(run(finalFlags).status).toBe(0);
+    if (operation === 'replay') expect(run(['--activate', '--mem02-acceptance', 'MEM-02-reviewed']).status).toBe(0);
+    const current = state();
+    delete manifest.exported_at;
+    writeInputs();
+
+    const stale = run(operation === 'activation' ? ['--activate', '--mem02-acceptance', 'MEM-02-reviewed'] : []);
+
+    expect(stale.report()).toMatchObject({ reason: 'SEALED_SNAPSHOT_MISMATCH', committed: false });
+    expect(stale.status).toBe(1);
+    expect(state()).toEqual(current);
+    manifest.exported_at = '2026-10-07T01:00:00.000Z';
+    writeInputs();
+    expect(run().status).toBe(0);
+    expect(state()).toEqual(current);
+  });
+
+  it('preserves protected bytes when a hardlink replaces the report at open', () => {
+    writeInputs();
+    const protectedPath = join(home, 'config.json');
+    writeFileSync(protectedPath, 'ProtectedConfigFixture');
+    const protectedBytes = readFileSync(protectedPath);
+    const reportPath = join(workDir, 'report.json');
+    const preloadPath = join(workDir, 'report-open-swap.mjs');
+    writeFileSync(preloadPath, `import fs from 'node:fs';
+import { basename } from 'node:path';
+import { syncBuiltinESMExports } from 'node:module';
+const open = fs.openSync;
+fs.openSync = function(path, ...args) {
+  if (basename(String(path)).startsWith('report.json')) {
+    fs.linkSync(${JSON.stringify(protectedPath)}, path);
+  }
+  return open.call(this, path, ...args);
+};
+syncBuiltinESMExports();`);
+
+    const result = run(['--report-file', reportPath], { preloadPath });
+
+    expect(result.report().committed).toBe(true);
+    expect(readFileSync(protectedPath)).toEqual(protectedBytes);
+    expect(result.report().reason).toBe('REPORT_WRITE_FAILED');
+  });
+
+  it('publishes reports through a new inode without changing existing hardlinks', () => {
+    writeInputs();
+    const reportPath = join(workDir, 'report.json');
+    const oldReportPath = join(workDir, 'old-report.json');
+    writeFileSync(reportPath, 'PreviousReportFixture');
+    linkSync(reportPath, oldReportPath);
+    const previousInode = statSync(reportPath).ino;
+
+    const result = run(['--report-file', reportPath]);
+
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(reportPath, 'utf8'))).toEqual(result.report());
+    expect(statSync(reportPath).ino).not.toBe(previousInode);
+    expect(readFileSync(oldReportPath, 'utf8')).toBe('PreviousReportFixture');
+  });
+
+  it('R1 rolls back facts and the seal when the last ledger statement fails', () => {
+    manifest = { snapshot_id: 'final', frozen_at: timestamp, freeze_verified: true };
+    writeInputs();
+    inspect((db) => db.exec("CREATE TRIGGER fixture_failure BEFORE INSERT ON knowledge_current_seals BEGIN SELECT RAISE(ABORT, 'sensitive ledger failure'); END"));
+    const before = state();
+
+    const result = run(['--final', '--mem02-acceptance', 'MEM-02-reviewed']);
+
+    expect(result.status).toBe(1);
+    expect(result.report()).toMatchObject({ committed: false, reason: 'IMPORT_WRITE_FAILED' });
+    expect(state()).toEqual(before);
+    expect(result.stdout + result.stderr).not.toContain('sensitive ledger failure');
+  });
+
+  it('reports schema_upgraded when row 502 fails on a 025 target', () => {
+    home = join(workDir, 'upgrade-failure-home');
+    mkdirSync(home);
+    const db = new DatabaseSync(join(home, 'openfleet.db'));
+    const directory = new URL('../../db/migrations/', import.meta.url);
+    const migrations = readdirSync(directory).filter((name) => name.endsWith('.sql') && name < '026').sort().map((name) => ({ version: name.replace(/\.sql$/, ''), sql: readFileSync(new URL(name, directory), 'utf8') }));
+    applyMigrations(db, migrations);
+    db.prepare('INSERT INTO projects (id, name, created_at) VALUES (?, ?, ?)').run('project', 'Fixture', timestamp);
+    db.exec("CREATE TRIGGER fixture_failure BEFORE INSERT ON knowledge WHEN new.fact = 'Searchable knowledge 502' BEGIN SELECT RAISE(ABORT, 'sensitive fixture failure'); END");
+    db.close();
+    rows = Array.from({ length: 502 }, (_, index) => sourceRow(String(index + 1)));
+    writeInputs();
+    const domainTables = ['knowledge_repositories', 'knowledge', 'knowledge_import_entries', 'knowledge_import_runs'];
+    const domainState = () => inspect((target) => domainTables.map((table) => target.prepare(`SELECT * FROM ${table}`).all()));
+    const before = domainState();
+
+    const result = run();
+
+    expect(result.status).toBe(1);
+    expect(result.report()).toMatchObject({ committed: false, schema_upgraded: true, reason: 'IMPORT_WRITE_FAILED' });
+    expect(domainState()).toEqual(before);
+    expect(readdirSync(join(home, 'backups')).some((name) => name.endsWith('.db'))).toBe(true);
+  });
 
   it('prints knowledge help before opening databases, listening or writing logs', () => {
     const preloadPath = join(workDir, 'daemon-side-effect-guard.mjs');

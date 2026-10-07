@@ -49,6 +49,10 @@ history detects a source repo remapped completely into another project. Existing
 imported rows without this provenance require explicit operator reconciliation;
 the importer cannot invent their source mapping.
 
+`knowledge_current_seals` references the current final run for each repository.
+Each final import replaces that reference in the same transaction. Historical runs
+do not authorize activation or replay after a newer final import.
+
 The internal SHA-256 digest covers normalized UTC snapshot metadata, sorted
 canonical mapping identities, deterministic fact IDs and fingerprints of masked
 fact/provenance/retirement fields. Sorting uses lexical comparison, independent of
@@ -82,6 +86,13 @@ Use Node 26 or newer and the built daemon entry; the desktop GUI executable does
 not install a standalone `openfleet` command. Quit the target daemon first. All
 paths below are absolute operator-chosen paths; use a fixture home for rehearsal.
 
+Boot the new daemon once so pending schema migrations and their backups complete,
+then stop it before importing. A failed import changes zero knowledge-domain rows.
+A pending schema migration, with its backup, may already have been applied before
+the import transaction; this step is idempotent. The counts-only CLI report includes
+`schema_upgraded: true` when this command upgrades the schema, even when
+`committed: false` reports an import failure.
+
 ```sh
 node /absolute/daemon.mjs import knowledge --file /absolute/snapshot.json --mapping /absolute/mapping.json --home /absolute/fixture-home --dry-run
 node /absolute/daemon.mjs import knowledge --file /absolute/snapshot.json --mapping /absolute/mapping.json --home /absolute/fixture-home --report-file /absolute/docs/rehearsal-report.json
@@ -102,7 +113,8 @@ open policy; ordinary daemon migration logs retain their existing behaviour.
 The offline transaction also suppresses raw rollback diagnostics through a named
 failure policy. Rollback, target-close and report-file failures produce fixed
 rejection reasons; `committed` distinguishes an accepted DB transaction from a run
-that writes no facts.
+that writes no knowledge-domain rows. This guarantee excludes schema migrations
+and migration backups.
 
 After the real freeze and complete export, compare the dry-run counts with the
 operator's export record. Supply the independent accepted MEM-02 delivery reference:
