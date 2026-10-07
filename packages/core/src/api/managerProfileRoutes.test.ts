@@ -164,14 +164,14 @@ describe('POST /api/sessions/:id/reopen with a mode', () => {
     expect(secondConversationId).toBe(firstConversationId);
   });
 
-  it('409s a fresh reopen of a session that is no manager, with the catalogue code', async () => {
+  it('starts a session that is no manager on a new conversation, where it used to refuse it', async () => {
     const plain = await (await postJson('/api/sessions', { directory: '/tmp', name: 'G', harness: 'fake' })).json();
     await postJson(`/api/sessions/${plain.id}/close`, {});
 
     const response = await postJson(`/api/sessions/${plain.id}/reopen`, { mode: 'fresh' });
 
-    expect(response.status).toBe(409);
-    expect((await response.json()).error).toBe('not_a_manager');
+    expect(response.status).toBe(200);
+    expect((await response.json()).state).toBe('starting');
   });
 
   it('400s a mode it does not know', async () => {

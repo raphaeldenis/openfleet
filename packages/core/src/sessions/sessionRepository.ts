@@ -224,6 +224,14 @@ export class SessionRepository {
       this.db.prepare('INSERT OR IGNORE INTO session_cli_ids (cli_session_id, session_id) VALUES (?, ?)').run(cliSessionId, id);
     });
   }
+  // The brief the session was created with, outside Session like cliSessionId: a fresh reopen replays it.
+  seededPrompt(id: string): string | null {
+    const row = this.db.prepare('SELECT seeded_prompt FROM sessions WHERE id = ?').get(id) as { seeded_prompt: string | null } | undefined;
+    return row?.seeded_prompt ?? null;
+  }
+  setSeededPrompt(id: string, seededPrompt: string): void {
+    this.db.prepare('UPDATE sessions SET seeded_prompt = ? WHERE id = ?').run(seededPrompt, id);
+  }
   // Whether a user prompt reached the CLI's current conversation, outside Session like cliSessionId: only such a
   // conversation has a transcript worth resuming, and only its loss is worth announcing.
   isCurrentConversationPrompted(id: string): boolean {

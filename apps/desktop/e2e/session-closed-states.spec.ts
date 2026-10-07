@@ -6,8 +6,6 @@ import { exitFakeCli, sessionStateLabel, signInAsAdmin, useFakeSessions } from '
 
 const fakeSessions = useFakeSessions();
 
-const REOPEN_FRESH_REASON = 'Not available yet — the daemon cannot relaunch a session without its previous conversation.';
-
 const lifecycleStrip = (page: Page) => page.getByTestId('lifecycle-banner');
 const closedCard = (page: Page) => page.getByTestId('session-closed-footer');
 
@@ -18,12 +16,8 @@ async function openSessionThatIsIdle(page: Page, session: { id: string; hooks: {
   await expect(sessionStateLabel(page)).toHaveText('idle');
 }
 
-async function expectReopenFreshUnavailableWithItsReason(page: Page): Promise<void> {
-  const reopenFresh = closedCard(page).getByRole('button', { name: 'Reopen fresh' });
-  await expect(reopenFresh).toHaveAttribute('aria-disabled', 'true');
-  await expect(reopenFresh).toHaveAccessibleDescription(REOPEN_FRESH_REASON);
-  await reopenFresh.hover();
-  await expect(closedCard(page).getByText(REOPEN_FRESH_REASON)).toBeVisible();
+async function expectReopenFreshEnabled(page: Page): Promise<void> {
+  await expect(closedCard(page).getByRole('button', { name: 'Reopen fresh' })).toBeEnabled();
 }
 
 test('an agent that exits with an error closes the session with the error strip, the exit code and both actions', async ({ page, request }) => {
@@ -43,8 +37,22 @@ test('an agent that exits with an error closes the session with the error strip,
   await expect(page.getByTestId('session-closed-title')).toContainText('Closed · exit 1');
   await expect(closedCard(page)).toHaveAttribute('data-variant', 'error');
   await expect(closedCard(page).getByRole('button', { name: /Resume in worktree/ })).toBeEnabled();
-  await expectReopenFreshUnavailableWithItsReason(page);
+  await expectReopenFreshEnabled(page);
   await expect(page.getByTestId('composer-input')).toHaveCount(0);
+});
+
+test('Reopen fresh asks for confirmation, then starts the closed session again on a new conversation', async ({ page, request }) => {
+  const session = await fakeSessions.create(request, { name: 'Start over' });
+  await openSessionThatIsIdle(page, session);
+  await exitFakeCli(request, session.id, { code: 0 });
+  await expect(sessionStateLabel(page)).toHaveText('closed · exit 0');
+
+  await closedCard(page).getByRole('button', { name: 'Reopen fresh' }).click();
+  await expect(page.getByTestId('reopen-fresh-confirm-text')).toContainText('Start a new conversation? The previous one is not resumed.');
+  await page.getByRole('button', { name: 'Start new conversation' }).click();
+
+  await expect(sessionStateLabel(page)).not.toContainText('closed');
+  await expect(closedCard(page)).toHaveCount(0);
 });
 
 test('a session that ends cleanly closes with a neutral card, no strip and the worktree note', async ({ page, request }) => {
@@ -60,7 +68,7 @@ test('a session that ends cleanly closes with a neutral card, no strip and the w
   await expect(closedCard(page)).toHaveAttribute('data-variant', 'neutral');
   await expect(lifecycleStrip(page)).toHaveCount(0);
   await expect(closedCard(page).getByRole('button', { name: /Resume in worktree/ })).toBeEnabled();
-  await expectReopenFreshUnavailableWithItsReason(page);
+  await expectReopenFreshEnabled(page);
 });
 
 test('a closed session keeps showing its last state, read-only, in the State card', async ({ page, request }) => {
@@ -91,7 +99,7 @@ test('a refused resume closes the session as conversation not found, explains it
   await expect(page.getByTestId('session-closed-title')).toHaveText(/Not running/);
   await expect(closedCard(page)).not.toContainText('Worktree kept');
   await expect(closedCard(page).getByRole('button', { name: /Resume in worktree/ })).toHaveCount(0);
-  await expectReopenFreshUnavailableWithItsReason(page);
+  await expectReopenFreshEnabled(page);
 });
 
 test('a resume the daemon refuses shows the Resume failed strip and keeps the resume action', async ({ page, request }) => {

@@ -108,6 +108,8 @@ const DEFAULT_CLEAR_IN_FLIGHT_TIMEOUT_MS = 3000;
 // killing the process inside that window would leave a conversation `--resume` refuses.
 const DEFAULT_CLEAR_FLUSH_GRACE_MS = 500;
 export const NEW_CONVERSATION_NOTICE = '\r\n[OpenFleet] The previous conversation could not be found: started a new one.\r\n';
+const FRESH_START_NOTICE = '\r\n[OpenFleet] Started a new conversation. The previous one was not resumed.\r\n';
+const FRESH_START_WITHOUT_PROMPT_NOTICE = '\r\n[OpenFleet] Started a new conversation with no starting prompt: none is stored for this session.\r\n';
 // A cold real CLI can sit waiting on an auth or trust prompt far longer than a resume ever should, so a
 // first launch gets its own, more generous ceiling instead of sharing resumeTimeoutMs (AUD-06).
 const DEFAULT_FIRST_START_TIMEOUT_MS = 60_000;
@@ -486,6 +488,7 @@ export class SessionService {
     if (existsSync(spec.directory)) this.repo.setDirectoryRealpath(id, realpathSync.native(spec.directory));
     this.warnIfPermissiveSettings(harness, spec.directory);
     if (seededPrompt?.trim()) this.seededPromptBySessionId.set(id, seededPrompt.trim());
+    if (spec.seededPrompt?.trim()) this.repo.setSeededPrompt(id, spec.seededPrompt.trim());
     this.startPendingRecording(id, spec.model);
     let handle: HarnessHandle;
     try {
@@ -735,13 +738,14 @@ export class SessionService {
   // been removed (e.g. its worktree was cleaned up) rather than launching into a missing cwd, whose
   // directory now resolves somewhere else than it did when the session was created, or whose harness fails
   // to launch — the last leaves the session closed rather than reporting a fake success.
-  // `fresh` (managers only) starts a new conversation seeded with the whole mission instead of resuming the stored one.
+  // `fresh` starts a new conversation instead of resuming the stored one: seeded with the whole mission for a manager, with the
+  // brief the session was created with for any other, and with no prompt when none is stored. Its stale pulse lines are dropped.
   reopen(sessionId: string, { mode = 'resume' }: { mode?: ReopenMode } = {}): Session {
     this.assertNotShuttingDown();
     const session = this.require(sessionId);
     if (session.state !== 'closed') throw new SessionReopenError('not_closed', `session ${sessionId} is not closed`);
     const isFresh = mode === 'fresh';
-    if (isFresh) this.assertMissionSeedable(session);
+    if (isFresh && session.role === MANAGER_ROLE) this.assertMissionSeedable(session);
     this.assertDirectoryLaunchable(session);
     // Consumed with the 'starting' transition, like a boot resume: a failed launch then closes the row afresh and no boot retries it.
     const isClosedByShutdown = this.repo.wasClosedByDaemonShutdown(sessionId);
@@ -755,12 +759,12 @@ export class SessionService {
       carryLoggedRef(outcome.failure, launchFailure);
       throw launchFailure;
     }
+    if (isFresh) this.queue.discardQueuedDaemonLines(sessionId);
     this.deps.bus.emit({ type: 'session.reopened', sessionId });
     return this.repo.get(sessionId)!;
   }
 
   private assertMissionSeedable(session: Session): void {
-    if (session.role !== MANAGER_ROLE) throw new SessionReopenError('not_a_manager', `session ${session.id} is not a manager`);
     const mission = this.deps.missionOf?.(session.id)?.trim();
     if (!mission) throw new SessionReopenError('mission_missing', `manager ${session.id} has no mission to start from`);
     const isAboveMaximum = Buffer.byteLength(mission, 'utf8') > MAX_MISSION_BYTES;
@@ -1990,9 +1994,10 @@ export class SessionService {
     this.startPendingRecording(session.id, session.model);
     let handle: HarnessHandle;
     let isNewConversationAnnounced = false;
+    let freshStartNotice: string | undefined;
     try {
       const conversation = isConversationFresh ? { cliSessionId: newId(), isResumed: false, isNewConversationAnnounced: false } : this.conversationToLaunch(session, harness);
-      const seededPrompt = conversation.isResumed ? undefined : this.missionToSeed(session.id);
+      const seededPrompt = conversation.isResumed ? undefined : this.promptToSeed(session);
       handle = harness.start({
         sessionId: session.id,
         cliSessionId: conversation.cliSessionId,
@@ -2007,7 +2012,10 @@ export class SessionService {
         resuming: conversation.isResumed,
       });
       isNewConversationAnnounced = conversation.isNewConversationAnnounced;
-      if (isConversationFresh) this.rememberFreshConversation(session.id, conversation.cliSessionId);
+      if (isConversationFresh) {
+        this.rememberFreshConversation(session.id, conversation.cliSessionId);
+        freshStartNotice = seededPrompt === undefined ? FRESH_START_WITHOUT_PROMPT_NOTICE : FRESH_START_NOTICE;
+      }
     } catch (err) {
       // The launch builder refuses to resume with a missing/invalid session id (it would otherwise open
       // the CLI's interactive picker inside the PTY) — close this one row and keep resuming the rest of
@@ -2024,7 +2032,8 @@ export class SessionService {
     });
     this.watchProcessExit(session.id, handle);
     this.armResumeTimeout(session.id, handle);
-    if (isNewConversationAnnounced) this.announceNewConversation(session.id);
+    if (isNewConversationAnnounced) this.announceNewConversation(session.id, NEW_CONVERSATION_NOTICE);
+    if (freshStartNotice) this.announceNewConversation(session.id, freshStartNotice);
     // The DB write is last: if it throws, the handle is already fully wired (onExit + resume timeout),
     // so resumeAll's catch can close this row via markClosed without leaving an untracked process behind.
     const startingSince = new Date().toISOString();
@@ -2045,6 +2054,20 @@ export class SessionService {
     }
     this.seededPromptBySessionId.set(sessionId, mission);
     return mission;
+  }
+
+  // A manager gets its mission; any other session the brief it was created with, when one is stored and fits on the command line.
+  private promptToSeed(session: Session): string | undefined {
+    if (session.role === MANAGER_ROLE) return this.missionToSeed(session.id);
+    const brief = this.repo.seededPrompt(session.id)?.trim();
+    if (!brief) return undefined;
+    const isAboveMaximum = Buffer.byteLength(brief, 'utf8') > MAX_MISSION_BYTES;
+    if (isAboveMaximum) {
+      log('warn', `session ${session.id}: the brief is above ${MAX_MISSION_BYTES} bytes, it is not given as the first prompt`);
+      return undefined;
+    }
+    this.seededPromptBySessionId.set(session.id, brief);
+    return brief;
   }
 
   // The CLI exits with code 1 on a conversation it has no file for, which would close the session on every
@@ -2075,10 +2098,10 @@ export class SessionService {
   }
 
   // A failing listener (e.g. a WS client on a closing socket) must not undo a launch that already happened.
-  private announceNewConversation(sessionId: string): void {
-    this.appendOutput(sessionId, NEW_CONVERSATION_NOTICE);
+  private announceNewConversation(sessionId: string, notice: string): void {
+    this.appendOutput(sessionId, notice);
     try {
-      this.deps.bus.emit({ type: 'session.output', sessionId, data: NEW_CONVERSATION_NOTICE });
+      this.deps.bus.emit({ type: 'session.output', sessionId, data: notice });
     } catch (err) {
       log('error', `resume: session ${sessionId} started a new conversation, but a session.output listener failed`, err);
     }

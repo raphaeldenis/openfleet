@@ -98,11 +98,13 @@ describe('reopening a closed manager fresh', () => {
     expect(harness.launches).toHaveLength(0);
   });
 
-  it('refuses a session that is no manager', () => {
+  it('starts a session that is no manager on a new conversation instead of refusing it', () => {
     insertClosedSession({ id: 'plain-session', role: null });
 
-    expect(refusalCodeOf(() => sessions.reopen('plain-session', { mode: 'fresh' }))).toBe('not_a_manager');
-    expect(harness.launches).toHaveLength(0);
+    sessions.reopen('plain-session', { mode: 'fresh' });
+
+    expect(lastLaunch().resuming).toBe(false);
+    expect(lastLaunch().cliSessionId).not.toBe(PREVIOUS_CONVERSATION_ID);
   });
 });
 

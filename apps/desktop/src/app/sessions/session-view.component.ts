@@ -12,9 +12,9 @@ import { SessionActionsComponent } from './session-actions.component';
 import { TerminalComponent } from './terminal.component';
 import { RightPanelSessionToggleComponent } from './right-panel-session-toggle.component';
 
-const REOPEN_FRESH_UNAVAILABLE_REASON = 'Not available yet — the daemon cannot relaunch a session without its previous conversation.';
+const FRESH_CONFIRM_QUESTION = 'Start a new conversation? The previous one is not resumed.';
 
-type LifecycleBanner = { kind: 'resuming' } | { kind: 'strip'; strip: LifecycleStrip; role: 'alert' | null };
+type LifecycleBanner = { kind: 'resuming'; isFresh: boolean } | { kind: 'strip'; strip: LifecycleStrip; role: 'alert' | null };
 
 @Component({
   selector: 'of-session-view',
@@ -24,10 +24,15 @@ type LifecycleBanner = { kind: 'resuming' } | { kind: 'strip'; strip: LifecycleS
     @if (session(); as s) {
       <div class="session-view" data-testid="session-view">
         <div class="lifecycle-live-region" data-testid="lifecycle-live-region" aria-live="polite">
-          @if (lifecycleBanner()?.kind === 'resuming') {
+          @if (resumingBanner(); as reopenBanner) {
             <div class="lifecycle-banner" data-testid="lifecycle-banner" data-variant="resuming">
-              <span class="lifecycle-title"><span class="glyph" aria-hidden="true">↻</span> Resuming…</span>
-              <span class="lifecycle-body">Reattaching to the same conversation in the same worktree.</span>
+              @if (reopenBanner.isFresh) {
+                <span class="lifecycle-title"><span class="glyph" aria-hidden="true">↻</span> Starting…</span>
+                <span class="lifecycle-body">Starting a new conversation in the same worktree.</span>
+              } @else {
+                <span class="lifecycle-title"><span class="glyph" aria-hidden="true">↻</span> Resuming…</span>
+                <span class="lifecycle-body">Reattaching to the same conversation in the same worktree.</span>
+              }
             </div>
           }
           @if (isEarlyEscapeHintShown()) {
@@ -77,13 +82,17 @@ type LifecycleBanner = { kind: 'resuming' } | { kind: 'strip'; strip: LifecycleS
                   ↻ Resume in worktree
                 </button>
               }
-              <span class="reopen-fresh">
-                <button type="button" class="of-btn of-btn--secondary" data-testid="reopen-fresh-session" aria-disabled="true" aria-describedby="reopen-fresh-session-reason">
-                  Reopen fresh
-                </button>
-                <span class="reopen-fresh-reason" id="reopen-fresh-session-reason">{{ reopenFreshUnavailableReason }}</span>
-              </span>
+              <button type="button" class="of-btn of-btn--secondary" data-testid="reopen-fresh-session" [disabled]="resuming()" (click)="askToStartFresh()">
+                Reopen fresh
+              </button>
             </span>
+            @if (isConfirmingFresh()) {
+              <div class="fresh-confirm" role="group" aria-label="Confirm a fresh start" data-testid="reopen-fresh-confirm">
+                <span class="fresh-confirm-text" data-testid="reopen-fresh-confirm-text">{{ freshConfirmText() }}</span>
+                <button type="button" class="of-btn of-btn--primary" data-testid="reopen-fresh-confirm-accept" (click)="startFresh(s.id)">Start new conversation</button>
+                <button type="button" class="of-btn of-btn--secondary" data-testid="reopen-fresh-confirm-cancel" (click)="cancelFresh()">Cancel</button>
+              </div>
+            }
           </div>
         }
       </div>
@@ -122,14 +131,9 @@ type LifecycleBanner = { kind: 'resuming' } | { kind: 'strip'; strip: LifecycleS
     .lifecycle-title { flex: none; color: var(--fg); font-weight: 600; font-family: var(--mono); }
     .lifecycle-title .glyph { color: var(--lifecycle-color); }
     .lifecycle-body { flex: 1; min-width: 0; }
-    .reopen-fresh { position: relative; display: inline-flex; flex: none; }
-    .reopen-fresh-reason {
-      position: absolute; right: 0; z-index: 1; width: max-content; max-width: 18rem; padding: .375rem .5rem;
-      border: 1px solid var(--line-2); border-radius: .375rem; background: var(--panel); color: var(--mut);
-      font-size: .6875rem; font-weight: 400; white-space: normal; visibility: hidden;
-    }
-    .closed-card .reopen-fresh-reason { bottom: calc(100% + .25rem); }
-    .reopen-fresh:hover .reopen-fresh-reason, .reopen-fresh:focus-within .reopen-fresh-reason { visibility: visible; }
+    .closed-card { flex-wrap: wrap; }
+    .fresh-confirm { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; flex-basis: 100%; }
+    .fresh-confirm-text { flex: 1; min-width: 0; color: var(--fg); }
   `,
 })
 export class SessionViewComponent {
@@ -143,7 +147,17 @@ export class SessionViewComponent {
 
   protected readonly session = computed(() => this.events.sessions().find((s) => s.id === this.sessionId()));
 
-  protected readonly reopenFreshUnavailableReason = REOPEN_FRESH_UNAVAILABLE_REASON;
+  private readonly confirmingFreshOfSessionId = signal<string | undefined>(undefined);
+  private readonly freshStartOfSessionId = signal<string | undefined>(undefined);
+
+  protected readonly isConfirmingFresh = computed(() => this.confirmingFreshOfSessionId() === this.sessionId());
+
+  protected readonly freshConfirmText = computed(() => {
+    const liveChildrenCount = this.events.sessions().filter((other) => other.parentId === this.sessionId() && other.state !== 'closed').length;
+    if (liveChildrenCount === 0) return FRESH_CONFIRM_QUESTION;
+    const childrenNoun = liveChildrenCount === 1 ? 'live child keeps' : 'live children keep';
+    return `${FRESH_CONFIRM_QUESTION} ${liveChildrenCount} ${childrenNoun} running.`;
+  });
 
   // The session the user has seen open since it was shown: only its close is news worth an alert,
   // a session that was already closed when opened is not.
@@ -160,12 +174,18 @@ export class SessionViewComponent {
     if (!session) return undefined;
     const isReopenRequestInFlight = this.resuming();
     const isClosedSessionRelaunching = session.state === 'starting' && session.closedAt !== undefined;
-    if (isReopenRequestInFlight || isClosedSessionRelaunching) return { kind: 'resuming' };
+    const isFreshStart = this.freshStartOfSessionId() === session.id;
+    if (isReopenRequestInFlight || isClosedSessionRelaunching) return { kind: 'resuming', isFresh: isFreshStart };
     const strip = this.closedPresentation()?.strip;
     if (!strip) return undefined;
     const isFailureJustSeen = strip.variant === 'error' && this.watchedOpenSessionId() === session.id;
     const isAnnounced = strip.isResumeFailure || isFailureJustSeen;
     return { kind: 'strip', strip, role: isAnnounced && strip.variant === 'error' ? 'alert' : null };
+  });
+
+  protected readonly resumingBanner = computed(() => {
+    const banner = this.lifecycleBanner();
+    return banner?.kind === 'resuming' ? banner : undefined;
   });
 
   /** What a user pastes into a bug report for the strip on screen: the session as ref, the close reason as code, no daemon words. */
@@ -200,7 +220,25 @@ export class SessionViewComponent {
   }
 
   async resume(sessionId: string): Promise<void> {
+    this.freshStartOfSessionId.set(undefined);
     const reopenErrorFor = (error: unknown) => copyFor(error, { action: 'resume' }).text;
     await this.requests.run({ sessionId, kind: 'resume', message: reopenErrorFor, action: () => this.api.reopenSession(sessionId) });
+  }
+
+  protected askToStartFresh(): void {
+    this.confirmingFreshOfSessionId.set(this.sessionId());
+  }
+
+  protected cancelFresh(): void {
+    this.confirmingFreshOfSessionId.set(undefined);
+  }
+
+  protected async startFresh(sessionId: string): Promise<void> {
+    this.confirmingFreshOfSessionId.set(undefined);
+    this.freshStartOfSessionId.set(sessionId);
+    const reopenErrorFor = (error: unknown) => copyFor(error, { action: 'resume' }).text;
+    await this.requests.run({ sessionId, kind: 'resume', message: reopenErrorFor, action: () => this.api.reopenSession(sessionId, 'fresh') });
+    const isRefused = this.requests.errorOf(sessionId, 'resume') !== null;
+    if (isRefused) this.freshStartOfSessionId.set(undefined);
   }
 }

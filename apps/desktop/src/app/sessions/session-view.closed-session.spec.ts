@@ -82,7 +82,7 @@ describe('what a closed session shows, per close reason', () => {
     expect(buttons.map((button) => button.textContent?.trim())).toEqual(expectedButtons);
   });
 
-  it.each(CLOSE_SCENARIOS)('for $label: "Reopen fresh" is disabled and says why, "Resume in worktree" is enabled when it is offered', async ({ closes, label }) => {
+  it.each(CLOSE_SCENARIOS)('for $label: "Reopen fresh" and, when it is offered, "Resume in worktree" are enabled', async ({ closes, label }) => {
     // Arrange
     const { daemon } = await renderOpenSession();
 
@@ -92,9 +92,7 @@ describe('what a closed session shows, per close reason', () => {
     // Assert
     await waitFor(() => expect(card()).toBeTruthy());
     if (label !== 'conversation_not_found') expect(screen.getByRole('button', { name: /resume in worktree/i })).toBeEnabled();
-    const reopenFresh = screen.getByRole('button', { name: /reopen fresh/i });
-    expect(reopenFresh).toHaveAttribute('aria-disabled', 'true');
-    expect(reopenFresh).toHaveAccessibleDescription(/not available yet/i);
+    expect(screen.getByRole('button', { name: /reopen fresh/i })).toBeEnabled();
   });
 
   it('for conversation_not_found: does not offer to resume a conversation that is gone', async () => {
@@ -107,7 +105,7 @@ describe('what a closed session shows, per close reason', () => {
     // Assert
     await waitFor(() => expect(card()).toBeTruthy());
     expect(screen.queryByRole('button', { name: /resume in worktree/i })).toBeNull();
-    expect(screen.getByRole('button', { name: /reopen fresh/i })).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByRole('button', { name: /reopen fresh/i })).toBeEnabled();
   });
 
   it('for conversation_not_found: the strip says the transcript is gone, with a semicolon', async () => {
@@ -176,5 +174,106 @@ describe('what a closed session shows, per close reason', () => {
     expect(strip()).not.toHaveTextContent(/timed out/i);
     expect(card()).toHaveTextContent('Not running');
     expect(screen.getByRole('button', { name: /resume in worktree/i })).toBeEnabled();
+  });
+});
+
+describe('reopening a closed session fresh', () => {
+  const closeTheSession = async (daemon: Awaited<ReturnType<typeof renderOpenSession>>['daemon']) => {
+    await daemon.send({ type: 'session.closed', sessionId: 's1', exitCode: 0 });
+    await waitFor(() => expect(card()).toBeTruthy());
+  };
+
+  it('asks for confirmation first and calls nothing before the user confirms', async () => {
+    // Arrange
+    const reopenSession = vi.fn().mockResolvedValue({});
+    const { daemon } = await renderOpenSession(reopenSession);
+    await closeTheSession(daemon);
+
+    // Act
+    await userEvent.click(screen.getByRole('button', { name: /reopen fresh/i }));
+
+    // Assert
+    expect(screen.getByTestId('reopen-fresh-confirm-text')).toHaveTextContent('Start a new conversation? The previous one is not resumed.');
+    expect(reopenSession).not.toHaveBeenCalled();
+  });
+
+  it('reopens the session fresh, once, when the user confirms', async () => {
+    // Arrange
+    const reopenSession = vi.fn().mockResolvedValue({});
+    const { daemon } = await renderOpenSession(reopenSession);
+    await closeTheSession(daemon);
+    await userEvent.click(screen.getByRole('button', { name: /reopen fresh/i }));
+
+    // Act
+    await userEvent.click(screen.getByRole('button', { name: 'Start new conversation' }));
+
+    // Assert
+    expect(reopenSession).toHaveBeenCalledTimes(1);
+    expect(reopenSession).toHaveBeenCalledWith('s1', 'fresh');
+    expect(screen.queryByTestId('reopen-fresh-confirm')).toBeNull();
+  });
+
+  it('reopens nothing when the user cancels', async () => {
+    // Arrange
+    const reopenSession = vi.fn().mockResolvedValue({});
+    const { daemon } = await renderOpenSession(reopenSession);
+    await closeTheSession(daemon);
+    await userEvent.click(screen.getByRole('button', { name: /reopen fresh/i }));
+
+    // Act
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    // Assert
+    expect(reopenSession).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('reopen-fresh-confirm')).toBeNull();
+  });
+
+  it('says how many live children keep running', async () => {
+    // Arrange
+    const { daemon } = await renderOpenSession();
+    const child = (id: string, state: Session['state']) => ({ ...openSession(), id, name: id, parentId: 's1', state }) as Session;
+    await daemon.send({ type: 'session.created', session: child('c1', 'generating') });
+    await daemon.send({ type: 'session.created', session: child('c2', 'idle') });
+    await daemon.send({ type: 'session.created', session: child('c3', 'closed') });
+    await closeTheSession(daemon);
+
+    // Act
+    await userEvent.click(screen.getByRole('button', { name: /reopen fresh/i }));
+
+    // Assert
+    expect(screen.getByTestId('reopen-fresh-confirm-text')).toHaveTextContent('2 live children keep running.');
+  });
+
+  it('says that the daemon refused, on the strip, when the reopen fails', async () => {
+    // Arrange
+    const reopenSession = vi.fn().mockRejectedValue(new ApiError(409, 'boom', 'directory_missing'));
+    const { daemon } = await renderOpenSession(reopenSession);
+    await closeTheSession(daemon);
+    await userEvent.click(screen.getByRole('button', { name: /reopen fresh/i }));
+
+    // Act
+    await userEvent.click(screen.getByRole('button', { name: 'Start new conversation' }));
+
+    // Assert
+    await waitFor(() => expect(strip()).toHaveTextContent('Resume failed'));
+    expect(screen.getByTestId('lifecycle-message')).toHaveTextContent('directory no longer exists');
+    expect(screen.getByRole('button', { name: /reopen fresh/i })).toBeEnabled();
+  });
+
+  it('says it starts a new conversation, not that it reattaches, while the session starts', async () => {
+    // Arrange
+    let resolveReopen: (value: unknown) => void = () => {};
+    const reopenSession = vi.fn(() => new Promise((resolve) => { resolveReopen = resolve; }));
+    const { daemon } = await renderOpenSession(reopenSession);
+    await closeTheSession(daemon);
+    await userEvent.click(screen.getByRole('button', { name: /reopen fresh/i }));
+
+    // Act
+    await userEvent.click(screen.getByRole('button', { name: 'Start new conversation' }));
+
+    // Assert
+    expect(screen.getByTestId('lifecycle-banner')).toHaveTextContent('Starting a new conversation');
+    expect(screen.getByTestId('lifecycle-banner')).not.toHaveTextContent('Reattaching');
+    resolveReopen({});
   });
 });
