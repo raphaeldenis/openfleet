@@ -217,7 +217,7 @@ describe('SessionViewComponent lifecycle banners — accessibility', () => {
   it.each([
     { scenario: 'a failed resume', exitCode: -1 },
     { scenario: 'a clean close', exitCode: 0 },
-  ])('keeps the unavailable "Reopen fresh" of $scenario focusable and describes why it is unavailable', async ({ exitCode }) => {
+  ])('keeps the "Reopen fresh" of $scenario enabled and focusable', async ({ exitCode }) => {
     // Arrange
     await renderAgainstDaemonEvents(fakeApi(), [session({ state: 'closed', exitCode, closedAt: CLOSED_AT })]);
     const reopenFresh = screen.getByTestId('reopen-fresh-session');
@@ -226,13 +226,11 @@ describe('SessionViewComponent lifecycle banners — accessibility', () => {
     reopenFresh.focus();
 
     // Assert
-    expect(reopenFresh).toHaveAttribute('aria-disabled', 'true');
-    expect(reopenFresh).not.toBeDisabled();
+    expect(reopenFresh).toBeEnabled();
     expect(reopenFresh).toHaveFocus();
-    expect(reopenFresh).toHaveAccessibleDescription(/not available yet/i);
   });
 
-  it('does not reopen anything when the unavailable "Reopen fresh" is clicked', async () => {
+  it('does not reopen anything on the click of "Reopen fresh" alone: it waits for the confirmation', async () => {
     // Arrange
     const api = fakeApi();
     await renderAgainstDaemonEvents(api, [session({ state: 'closed', exitCode: 0, closedAt: CLOSED_AT })]);
@@ -242,6 +240,7 @@ describe('SessionViewComponent lifecycle banners — accessibility', () => {
 
     // Assert
     expect(api.reopenSession).not.toHaveBeenCalled();
+    expect(screen.getByTestId('reopen-fresh-confirm')).toBeTruthy();
   });
 
   it('announces a failed resume once, not through two alerts', async () => {

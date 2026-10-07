@@ -62,7 +62,6 @@ const REOPEN_ENTRY_BY_CODE: Record<SessionReopenError['code'], Omit<Entry, 'code
   directory_changed: { message: 'the session directory changed since the session closed.', hint: 'restore the original directory, then reopen the session.' },
   directory_unreadable: { message: 'the session directory cannot be read.', hint: 'fix its permissions, then reopen the session.' },
   launch_failed: { message: 'the session failed to launch.' },
-  not_a_manager: { message: 'only a manager can be reopened fresh from its mission.' },
   mission_missing: { message: 'the manager has no mission to start from.', hint: 'write its mission, then reopen it fresh.' },
   mission_too_large: { message: 'the manager mission is too large to start from.', hint: 'shorten its mission, then reopen it fresh.' },
 };
