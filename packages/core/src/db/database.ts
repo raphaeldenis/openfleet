@@ -2,7 +2,7 @@ import { chmodSync, existsSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { log } from '../logger.js';
-import { BACKUPS_FOLDER_NAME, backUpBeforeMigrating, clearPreUpgradeMarker, pruneBackupsKeepingRecentSchemaVersions, recordPreUpgradeSnapshot } from './backup.js';
+import { BACKUPS_FOLDER_NAME, backUpBeforeMigrating, clearPreUpgradeMarker, pruneBackupsKeepingRecentSchemaVersions, recordPreUpgradeSnapshot, type MigrationLogPolicy } from './backup.js';
 import { applyMigrations, assertBootableSchema, highestAppliedMigration, MigrationFailedError, pendingMigrations, shippedMigrationVersions } from './migrate.js';
 
 export class DatabaseOpenError extends Error {
@@ -30,18 +30,18 @@ interface UpgradeBackup {
   preUpgradeSnapshotName: string;
 }
 
-function backUpWhenMigrationsArePending(db: DatabaseSync, path: string): UpgradeBackup | undefined {
+function backUpWhenMigrationsArePending(db: DatabaseSync, path: string, policy: MigrationLogPolicy): UpgradeBackup | undefined {
   const schemaVersion = highestAppliedMigration(db);
   const holdsAppliedMigrations = schemaVersion !== undefined;
   const hasPendingMigrations = pendingMigrations(db).length > 0;
   if (path === ':memory:' || !holdsAppliedMigrations || !hasPendingMigrations) return undefined;
   try {
     assertBootableSchema(db, path);
-    const backupPath = backUpBeforeMigrating(db, { home: dirname(path), schemaVersion });
-    log('info', `database backed up to ${backupPath} before migrating`);
+    const backupPath = backUpBeforeMigrating(db, { home: dirname(path), schemaVersion, ...policy });
+    if (policy.migrationLogging !== 'silent') log('info', `database backed up to ${backupPath} before migrating`);
     const backupsFolder = dirname(backupPath);
     const knownVersions = shippedMigrationVersions();
-    const preUpgradeSnapshotName = recordPreUpgradeSnapshot(backupsFolder, basename(backupPath), knownVersions, schemaVersion);
+    const preUpgradeSnapshotName = recordPreUpgradeSnapshot(backupsFolder, basename(backupPath), knownVersions, schemaVersion, policy);
     pruneBackupsKeepingRecentSchemaVersions(backupsFolder, { justTakenPath: backupPath, preUpgradeSnapshotName, knownVersions });
     return { backupsFolder, backupPath, preUpgradeSnapshotName };
   } catch (error) {
@@ -72,10 +72,10 @@ function migrateNamingTheBackupOnFailure(db: DatabaseSync, path: string, upgrade
   }
 }
 
-export function openDatabase(path: string): DatabaseSync {
+export function openDatabase(path: string, policy: MigrationLogPolicy = {}): DatabaseSync {
   const db = openFile(path);
   db.exec('PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA recursive_triggers = ON;');
-  const upgradeBackup = backUpWhenMigrationsArePending(db, path);
+  const upgradeBackup = backUpWhenMigrationsArePending(db, path, policy);
   migrateNamingTheBackupOnFailure(db, path, upgradeBackup);
   endTheUpgrade(path, upgradeBackup);
   // The db holds session tokens and message bodies in clear text (MAJ-02); WAL mode already created the

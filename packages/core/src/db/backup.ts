@@ -4,6 +4,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { log } from '../logger.js';
 
 export const BACKUPS_FOLDER_NAME = 'backups';
+export interface MigrationLogPolicy { migrationLogging?: 'default' | 'silent' }
 const SCHEMA_VERSIONS_TO_KEEP = 3;
 const PRE_UPGRADE_MARKER_NAME = 'pre-upgrade.marker';
 const BACKUP_NAME_PATTERN = /^openfleet-(.+)-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z)(?:-(\d+))?\.db$/;
@@ -99,7 +100,7 @@ export function preUpgradeSnapshotName(backupsFolder: string, knownVersions: Rea
 // created through a temp name and renamed into place, so a symlink or stale file under the marker name is
 // replaced, never followed; a marker that cannot be written leaves the hint on this boot's snapshot.
 // Returns the snapshot the upgrade started from: the marked one while it is still valid, else this boot's.
-export function recordPreUpgradeSnapshot(backupsFolder: string, backupName: string, knownVersions: ReadonlySet<string>, databaseSchemaVersion: string): string {
+export function recordPreUpgradeSnapshot(backupsFolder: string, backupName: string, knownVersions: ReadonlySet<string>, databaseSchemaVersion: string, policy: MigrationLogPolicy = {}): string {
   const markedName = preUpgradeSnapshotName(backupsFolder, knownVersions, databaseSchemaVersion);
   if (markedName !== undefined) return markedName;
   const markerPath = join(backupsFolder, PRE_UPGRADE_MARKER_NAME);
@@ -110,7 +111,7 @@ export function recordPreUpgradeSnapshot(backupsFolder: string, backupName: stri
     renameSync(inProgressPath, markerPath);
   } catch (error) {
     removeIfPresent(inProgressPath);
-    log('warn', `pre-upgrade marker not written: ${(error as Error).message}`);
+    if (policy.migrationLogging !== 'silent') log('warn', `pre-upgrade marker not written: ${(error as Error).message}`);
   }
   return backupName;
 }
@@ -177,7 +178,7 @@ export function pruneBackupsKeepingRecentSchemaVersions(backupsFolder: string, o
 // read snapshot, WAL included) does the copy into a .partial name that is renamed once complete, so a
 // crash leaves no file under a backup name. Stale .partial files are ignored, never pruned: add a
 // sweep by age if they ever pile up.
-export function backUpBeforeMigrating(db: DatabaseSync, options: { home: string; schemaVersion: string }): string {
+export function backUpBeforeMigrating(db: DatabaseSync, options: { home: string; schemaVersion: string } & MigrationLogPolicy): string {
   const backupsFolder = join(options.home, BACKUPS_FOLDER_NAME);
   let reservation: ReturnType<typeof reserveBackupPath> | undefined;
   try {
@@ -186,7 +187,7 @@ export function backUpBeforeMigrating(db: DatabaseSync, options: { home: string;
     reservation = reserveBackupPath(backupsFolder, options.schemaVersion);
     db.exec(`VACUUM INTO ${sqlStringLiteral(reservation.inProgressPath)}`);
     renameSync(reservation.inProgressPath, reservation.backupPath);
-    copyConfigAlongside(join(options.home, 'config.json'), reservation.backupPath);
+    copyConfigAlongside(join(options.home, 'config.json'), reservation.backupPath, options);
     return reservation.backupPath;
   } catch (error) {
     if (reservation !== undefined) {
@@ -208,7 +209,7 @@ function readConfigIfPresent(configPath: string): Buffer | undefined {
 
 // The copy is created exclusively (never through a symlink), sealed at 0600 through its own descriptor,
 // then hard-linked to its final name, which fails rather than replaces anything already there.
-function copyConfigAlongside(configPath: string, backupPath: string): void {
+function copyConfigAlongside(configPath: string, backupPath: string, policy: MigrationLogPolicy): void {
   const config = readConfigIfPresent(configPath);
   if (config === undefined) return;
   const configCopyPath = backupPath.replace(/\.db$/, '.config.json');
@@ -226,7 +227,7 @@ function copyConfigAlongside(configPath: string, backupPath: string): void {
     linkSync(inProgressPath, configCopyPath);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-    log('warn', `config copy skipped: ${configCopyPath} or its temp name is already taken`);
+    if (policy.migrationLogging !== 'silent') log('warn', `config copy skipped: ${configCopyPath} or its temp name is already taken`);
   } finally {
     if (createdInProgressFile) removeIfPresent(inProgressPath);
   }

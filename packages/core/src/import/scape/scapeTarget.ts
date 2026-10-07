@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { backUpBeforeMigrating } from '../../db/backup.js';
+import { backUpBeforeMigrating, type MigrationLogPolicy } from '../../db/backup.js';
 import { openDatabase } from '../../db/database.js';
 import { latestShippedMigration } from '../../db/migrate.js';
 import { inTransaction } from '../../db/transaction.js';
@@ -48,7 +48,7 @@ export interface TargetDatabase {
  */
 const isLockedDatabaseError = (error: unknown) => /database (table )?is locked|busy/i.test((error as Error).message);
 
-function assertNoOtherProcessHolds(databasePath: string): void {
+export function assertNoOtherProcessHolds(databasePath: string): void {
   if (!existsSync(databasePath)) return;
   const probe = new DatabaseSync(databasePath);
   try {
@@ -64,11 +64,11 @@ function assertNoOtherProcessHolds(databasePath: string): void {
 }
 
 /** Opens (and migrates) the OpenFleet database of a home, refusing while another process uses it. */
-export function openWritableTarget(home: string): TargetDatabase {
+export function openWritableTarget(home: string, policy: MigrationLogPolicy = {}): TargetDatabase {
   const databasePath = join(home, DATABASE_FILE_NAME);
   assertNoOtherProcessHolds(databasePath);
   mkdirSync(home, { recursive: true, mode: 0o700 });
-  const db = openDatabase(databasePath);
+  const db = openDatabase(databasePath, policy);
   return { db, dispose: () => db.close() };
 }
 
