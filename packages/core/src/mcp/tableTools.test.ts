@@ -95,7 +95,7 @@ describe('table tools', () => {
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
       'add_data_store_column', 'append_to_note', 'close_session', 'create_data_store', 'create_data_store_view', 'create_note', 'create_session',
-      'create_worktree', 'delete_data_store_row', 'delete_data_store_view', 'delete_note', 'describe_data_store', 'get_argus_status', 'get_note',
+      'create_worktree', 'delete_data_store_row', 'delete_data_store_view', 'delete_note', 'describe_data_store', 'get_argus_status', 'get_data_store', 'get_note',
       'get_note_version', 'get_session_card', 'get_session_status', 'get_working_state', 'insert_data_store_rows', 'list_children', 'list_data_store_views', 'list_note_versions',
       'list_notes', 'list_project_folders', 'list_projects', 'list_row_changes', 'list_sessions', 'message_argus', 'message_parent', 'move_note', 'pulse_now', 'query_data_store',
       'restore_note_version', 'search_notes', 'send_session_message', 'set_data_store_natural_key', 'update_data_store_row', 'update_data_store_rows', 'update_data_store_view', 'update_note', 'update_note_section',
@@ -108,6 +108,9 @@ describe('table tools', () => {
     const result = await client.callTool({ name: 'create_data_store', arguments: { display_name: 'x' } });
     expect(result.isError).toBe(true);
     expect((result.content as { text: string }[])[0]!.text).toMatch(/no project/i);
+    const getResult = await client.callTool({ name: 'get_data_store', arguments: { store: 'missing' } });
+    expect(getResult.isError).toBe(true);
+    expect((getResult.content as { text: string }[])[0]!.text).toContain('error project_not_found:');
   });
 
   it('surfaces an unexpected error as "error internal_error" with no internal text, and logs it', async () => {

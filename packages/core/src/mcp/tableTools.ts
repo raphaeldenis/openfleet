@@ -5,6 +5,7 @@ import { RowNotFoundError, StoreNotFoundError, UnknownColumnReferenceError, type
 import { InvalidColumnDefinitionError, SAVE_MODES, type DataStoreService } from '../stores/dataStoreService.js';
 import { guardedFor, refusalReasonOf, refuse } from './toolResults.js';
 import { queryPage } from './queryPage.js';
+import { newestRowsFirst, storePage } from './storePage.js';
 import { cellsKeyedByColumnId, coerceFilterValue, columnLookupFor, requireColumn } from './rowValues.js';
 import { writeRowByRow, type RowBatchReport } from './rowBatch.js';
 import { aggregatedRows } from './queryAggregation.js';
@@ -62,6 +63,26 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
       });
       if (store === undefined) return { stores: storeRepo.listStores(scope.projectId).map(describeStore) };
       return describeStore(ownStoreOf(store, scope));
+    });
+  });
+
+  server.registerTool('get_data_store', {
+    description: 'Read schema and one page of rows from a store by id or display name. columns selects ids or case-insensitive display names (duplicates removed; [] keeps no cells). Rows are {id, data keyed by column id, updatedAt}, newest updatedAt first then binary id ascending; select values use option labels. limit defaults to 100, max 1000; offset defaults to 0. Returns columns, rows, totalRowCount, returned, offset, next_offset (null when exhausted), truncated (only when the 1 MiB JSON output budget cuts the page). An oversized schema or first row is refused with invalid_body; select fewer columns or a smaller limit.',
+    inputSchema: { store: z.string().min(1), columns: z.array(z.string().min(1)).optional(), limit: z.number().int().min(1).max(MAX_QUERY_LIMIT).optional(), offset: z.number().int().min(0).optional() },
+  }, async ({ store, columns, limit, offset }) => {
+    const scope = requireProject();
+    if (!scope) return refuse('project_not_found', 'this session has no project');
+    return guarded(() => {
+      const ownStore = ownStoreOf(store, scope);
+      const projectedColumns = resolveColumns(ownStore.id, columns);
+      const orderedRows = stores.query(ownStore.id, scope).sort(newestRowsFirst);
+      const pageOffset = offset ?? 0;
+      const pageLimit = limit ?? DEFAULT_QUERY_LIMIT;
+      return storePage({
+        columns: projectedColumns.map(columnView), rows: orderedRows.slice(pageOffset, pageOffset + pageLimit), totalRowCount: orderedRows.length,
+        offset: pageOffset, maxBytes: MAX_QUERY_RESULT_BYTES,
+        projection: { columnIds: projectedColumns.map(column => column.id), includeUpdatedAt: true, cellOf: cellReaderFor(projectedColumns) },
+      });
     });
   });
 
