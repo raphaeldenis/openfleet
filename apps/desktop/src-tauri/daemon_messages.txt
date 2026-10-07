@@ -13,3 +13,4 @@ degraded_listener_threw degraded registry: a listener threw
 degraded_mark_failed degraded registry: mark failed
 degraded_clear_failed degraded registry: clear failed
 log_record_unserializable [unserializable log record]
+knowledge_search_fallback knowledge.search_fallback
