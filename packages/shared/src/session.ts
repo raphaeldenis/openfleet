@@ -6,6 +6,13 @@ import { HandoffFileSchema } from './handoff.js';
 export const SESSION_STATES = ['starting', 'generating', 'waiting_permission', 'waiting_input', 'idle', 'closed'] as const;
 export type SessionState = (typeof SESSION_STATES)[number];
 
+export interface RuntimeAttention {
+  launchId: string;
+  reason: 'post_wake_process_exited' | 'post_wake_no_progress' | 'post_wake_health_unknown';
+  detectedAt: string;
+  wakeSource: 'resume_suspected';
+}
+
 export const SESSION_CLOSE_REASONS = ['launch_failed', 'resume_timeout', 'conversation_not_found', 'harness_exit', 'closed_by_user', 'daemon_shutdown'] as const;
 export type SessionCloseReason = (typeof SESSION_CLOSE_REASONS)[number];
 
@@ -61,6 +68,7 @@ export interface Session {
   harness: HarnessId;
   state: SessionState;
   stateSince: string;
+  runtimeAttention?: RuntimeAttention;
   exitCode?: number;
   /** Why the session is closed; absent while it is live, for a close recorded before the reason was stored, and for a reason this version does not know. */
   closeReason?: SessionCloseReason;

@@ -1,7 +1,7 @@
 import type { DaemonIssue } from './daemonIssues.js';
 import type { ErrorEnvelope } from './errors.js';
 import type { ManagerView } from './managers.js';
-import type { Approval, PermissionMode, Session, SessionCloseReason, SessionState } from './session.js';
+import type { Approval, PermissionMode, RuntimeAttention, Session, SessionCloseReason, SessionState } from './session.js';
 import type { SessionTodos, TodoSummary } from './todos.js';
 import type { WorkingState } from './workingState.js';
 
@@ -25,6 +25,7 @@ export type ServerEvent =
   | { type: 'snapshot'; sessions: Session[]; approvals: Approval[]; managers: ManagerView[]; workingStates?: WorkingState[]; workingStateMaxAgeMinutes?: number; workingStateMaxBytes?: number; todoSummaries?: TodoSummary[]; daemonIssues?: DaemonIssue[]; silentBlocks?: SilentBlock[] }
   | { type: 'session.created'; session: Session }
   | { type: 'session.state'; sessionId: string; state: SessionState; stateSince: string }
+  | { type: 'session.attention'; sessionId: string; runtimeAttention: RuntimeAttention | null }
   | { type: 'session.closed'; sessionId: string; exitCode?: number; reason?: SessionCloseReason }
   | { type: 'session.output'; sessionId: string; data: string }
   | { type: 'session.replay'; sessionId: string; data: string }

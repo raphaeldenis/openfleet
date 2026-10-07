@@ -35,6 +35,10 @@ export function registerRestRoutes(router: Router, deps: { sessions: SessionServ
   };
 
   router.add('GET', '/api/sessions', ({ res }) => json(res, 200, deps.sessions.list()));
+  router.add('GET', '/api/sessions/:id', ({ res, params }) => {
+    requireSession(params.id!);
+    json(res, 200, deps.sessions.get(params.id!));
+  });
 
   // AUD-27: the desktop shell calls this, bearer-authenticated like every other /api/ route, right before
   // opening (or reopening) the WS — the ticket it gets back is what actually authorizes that connection.

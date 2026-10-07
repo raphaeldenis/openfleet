@@ -21,7 +21,14 @@ export interface HarnessExit {
   wasConversationNotFound: boolean;
 }
 
+export interface TranscriptCursor {
+  identity: string;
+  offset: number;
+}
+
 export interface HarnessHandle {
+  probeProcess?(): 'alive' | 'exited' | 'unknown';
+  probeTranscriptProgress?(): TranscriptCursor | undefined;
   write(data: string): void;
   // Types a queued message's full body as one paste rather than raw keystrokes (see
   // claudeCli/bracketedPaste.ts): only sessionService.typeNextMessage calls this. Raw input — the

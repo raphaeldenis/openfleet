@@ -96,7 +96,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     return false;
   };
 
-  const COMPACT_SESSION = 'Returns a compact session: id, name, emoji, directory, state, stateSince, model, role, exitCode, closedAt, plus resolvedModel, modelDriftedFrom, worktree and branch when set; permissionMode and harness are not echoed';
+  const COMPACT_SESSION = 'Returns a compact session: id, name, emoji, directory, state, stateSince, model, role, exitCode, closedAt, plus resolvedModel, modelDriftedFrom, worktree, branch and runtimeAttention when set; permissionMode and harness are not echoed';
 
   server.registerTool('get_session_status', { description: `State of your session or one in your lineage. ${COMPACT_SESSION}`, inputSchema: { session_id: z.string().optional() } }, async ({ session_id }) => {
     const target = sessions.get(session_id ?? caller.id);
@@ -245,6 +245,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
       id: child.id, name: child.name, state: child.state, stateSince: child.stateSince,
       pendingPermission: pendingPermissionFor(child.id),
       queuedMessageCount: sessions.queuedMessageCount(child.id),
+      ...(child.runtimeAttention && { runtimeAttention: child.runtimeAttention }),
     }));
     const record = caller.role === MANAGER_ROLE ? managers.get(caller.id) : undefined;
     const manager = record ? managerView(toManagerView(record, children.filter((c) => c.state !== 'closed').length)) : null;

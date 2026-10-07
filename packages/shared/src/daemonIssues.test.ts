@@ -3,8 +3,8 @@ import { DEGRADED_CODES, type DaemonIssue } from './daemonIssues.js';
 import type { ServerEvent } from './events.js';
 
 describe('DEGRADED_CODES', () => {
-  it('lists exactly the five sources of the degraded state', () => {
-    expect([...DEGRADED_CODES].sort()).toEqual(['db_stuck', 'docs_folder_unreadable', 'hook_fail_open', 'uncaught_exception', 'ws_broadcast_failed']);
+  it('lists the known sources of the degraded state', () => {
+    expect([...DEGRADED_CODES].sort()).toEqual(['db_stuck', 'docs_folder_unreadable', 'hook_fail_open', 'power_assertion_unavailable', 'uncaught_exception', 'ws_broadcast_failed']);
   });
 });
 

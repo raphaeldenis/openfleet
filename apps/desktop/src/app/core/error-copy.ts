@@ -274,6 +274,7 @@ const ADVICE_BY_DEGRADED_CODE: Record<DegradedCode, string> = {
   hook_fail_open: ADVICE_OF_SELF_CLEARING_ISSUE,
   ws_broadcast_failed: ADVICE_OF_SELF_CLEARING_ISSUE,
   docs_folder_unreadable: ADVICE_OF_SELF_CLEARING_ISSUE,
+  power_assertion_unavailable: ADVICE_OF_SELF_CLEARING_ISSUE,
 };
 
 const withoutTrailingPeriod = (sentence: string) => sentence.replace(/\.$/, '');
