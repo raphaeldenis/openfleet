@@ -61,7 +61,7 @@ describe('the adopted CLI session ids migration upgrading a database that predat
 
     applyMigrations(db);
 
-    expect(db.prepare('SELECT * FROM sessions ORDER BY id').all()).toEqual(rowsBeforeUpgrade.map((row) => ({ ...row, prompted: row.id === 'cleared' ? 1 : 0, context_notice_tokens: null, close_reason: null })));
+    expect(db.prepare('SELECT * FROM sessions ORDER BY id').all()).toEqual(rowsBeforeUpgrade.map((row) => ({ ...row, prompted: row.id === 'cleared' ? 1 : 0, context_notice_tokens: null, close_reason: null, seeded_prompt: null })));
     expect(db.prepare('SELECT cli_session_id, session_id FROM session_cli_ids').all()).toEqual([
       { cli_session_id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', session_id: 'cleared' },
     ]);

@@ -26,6 +26,10 @@ Limits you can hit:
 - The panel shows up to 100 rows per list while counts cover up to 500 tasks.
 - After a resume, rows rebuilt from history read `from history, not confirmed yet` until the agent names them again or lists its tasks.
 
+## Reopen fresh
+
+`POST /api/sessions/:id/reopen` with `{"mode": "fresh"}` relaunches a closed session of any role on a new conversation, in the same worktree and under the same identity. A manager gets its mission as the first prompt. Any other session gets the brief it was created with, stored as typed in `sessions.seeded_prompt` (plaintext, like the other tables, never returned by REST, WS or MCP). The handoff block merged into a brief at creation is not stored, so it is not replayed. A session created without a brief, or before the column existed, starts with no prompt, and the terminal says so; a stored brief above 64 KiB is not replayed either, and the terminal says that instead. A brief above 64 KiB is refused at creation with `invalid_body`. Only a fresh reopen replays a brief: a plain resume, or a relaunch after a lost conversation, never does for a non-manager. Its queued `[pulse]` lines from the daemon are dropped; messages from agents stay.
+
 ## Dev
 
 Table columns keep their base type and can carry an optional format: `datetime` for date, `longText` or `url` for text, and `rank` for number. `add_data_store_column` accepts `format`; store descriptions and REST schemas return it. New datetime values require an ISO time with `Z` or an explicit offset and display in the local timezone. URL cells remain text; only HTTP(S) links are clickable. Rank is a plain number. Scape imports preserve these formats, including row history; reimport restores formats lost by an older import when the column has no local edits.

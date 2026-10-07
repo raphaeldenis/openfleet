@@ -1,4 +1,5 @@
-import { ChangeDetectionStrategy, Component, computed, effect, inject, input, signal, untracked } from '@angular/core';
+import { ChangeDetectionStrategy, Component, type ElementRef, computed, effect, inject, input, signal, untracked, viewChild } from '@angular/core';
+import { MANAGER_ROLE, type Session } from '@openfleet/shared';
 import { detailsTextOf } from '../core/copy-details';
 import { EarlyEscapeHintService } from '../core/early-escape-hint.service';
 import { CopyDetailsButtonComponent } from '../design/copy-details-button.component';
@@ -12,9 +13,11 @@ import { SessionActionsComponent } from './session-actions.component';
 import { TerminalComponent } from './terminal.component';
 import { RightPanelSessionToggleComponent } from './right-panel-session-toggle.component';
 
-const REOPEN_FRESH_UNAVAILABLE_REASON = 'Not available yet — the daemon cannot relaunch a session without its previous conversation.';
+const FRESH_CONFIRM_QUESTION = 'Start a new conversation? The previous one is not resumed.';
+const FRESH_REPLAYS_MISSION = 'Its mission is sent again as the first prompt.';
+const FRESH_REPLAYS_BRIEF = 'Its original brief is sent again as the first prompt when one is stored, otherwise it starts with no prompt.';
 
-type LifecycleBanner = { kind: 'resuming' } | { kind: 'strip'; strip: LifecycleStrip; role: 'alert' | null };
+type LifecycleBanner = { kind: 'resuming'; isFresh: boolean } | { kind: 'strip'; strip: LifecycleStrip; role: 'alert' | null };
 
 @Component({
   selector: 'of-session-view',
@@ -24,10 +27,15 @@ type LifecycleBanner = { kind: 'resuming' } | { kind: 'strip'; strip: LifecycleS
     @if (session(); as s) {
       <div class="session-view" data-testid="session-view">
         <div class="lifecycle-live-region" data-testid="lifecycle-live-region" aria-live="polite">
-          @if (lifecycleBanner()?.kind === 'resuming') {
+          @if (resumingBanner(); as reopenBanner) {
             <div class="lifecycle-banner" data-testid="lifecycle-banner" data-variant="resuming">
-              <span class="lifecycle-title"><span class="glyph" aria-hidden="true">↻</span> Resuming…</span>
-              <span class="lifecycle-body">Reattaching to the same conversation in the same worktree.</span>
+              @if (reopenBanner.isFresh) {
+                <span class="lifecycle-title"><span class="glyph" aria-hidden="true">↻</span> Starting…</span>
+                <span class="lifecycle-body">Starting a new conversation in the same worktree.</span>
+              } @else {
+                <span class="lifecycle-title"><span class="glyph" aria-hidden="true">↻</span> Resuming…</span>
+                <span class="lifecycle-body">Reattaching to the same conversation in the same worktree.</span>
+              }
             </div>
           }
           @if (isEarlyEscapeHintShown()) {
@@ -48,7 +56,7 @@ type LifecycleBanner = { kind: 'resuming' } | { kind: 'strip'; strip: LifecycleS
             </div>
           }
         }
-        <div class="terminal-area">
+        <div #terminalArea class="terminal-area" tabindex="-1" data-testid="terminal-area">
           <div class="terminal-overlay-controls" data-testid="terminal-tab-bar">
             <of-session-actions
               [sessionId]="s.id"
@@ -77,13 +85,19 @@ type LifecycleBanner = { kind: 'resuming' } | { kind: 'strip'; strip: LifecycleS
                   ↻ Resume in worktree
                 </button>
               }
-              <span class="reopen-fresh">
-                <button type="button" class="of-btn of-btn--secondary" data-testid="reopen-fresh-session" aria-disabled="true" aria-describedby="reopen-fresh-session-reason">
-                  Reopen fresh
-                </button>
-                <span class="reopen-fresh-reason" id="reopen-fresh-session-reason">{{ reopenFreshUnavailableReason }}</span>
-              </span>
+              <button #reopenFreshButton type="button" class="of-btn of-btn--secondary" data-testid="reopen-fresh-session" [disabled]="resuming()" (click)="askToStartFresh()">
+                Reopen fresh
+              </button>
             </span>
+            <div class="fresh-confirm-live-region" aria-live="polite">
+              @if (isConfirmingFresh()) {
+                <div class="fresh-confirm" role="group" aria-label="Confirm a fresh start" data-testid="reopen-fresh-confirm" (keydown.escape)="cancelFresh()">
+                  <span class="fresh-confirm-text" data-testid="reopen-fresh-confirm-text">{{ freshConfirmText() }}</span>
+                  <button type="button" class="of-btn of-btn--primary" data-testid="reopen-fresh-confirm-accept" (click)="startFresh(s.id)">Start new conversation</button>
+                  <button #cancelFreshButton type="button" class="of-btn of-btn--secondary" data-testid="reopen-fresh-confirm-cancel" (click)="cancelFresh()">Cancel</button>
+                </div>
+              }
+            </div>
           </div>
         }
       </div>
@@ -95,6 +109,7 @@ type LifecycleBanner = { kind: 'resuming' } | { kind: 'strip'; strip: LifecycleS
     :host { display: flex; flex: 1; min-width: 0; min-height: 0; }
     .session-view { flex: 1; min-width: 0; display: flex; flex-direction: column; height: 100%; min-height: 0; }
     .terminal-area { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; gap: .625rem; padding: 0 .5rem; }
+    .terminal-area:focus { outline: none; }
     .terminal-overlay-controls {
       position: absolute; top: .5rem; right: 1rem; z-index: 2; display: flex; align-items: center; gap: .5rem;
       color: var(--term-fg); opacity: .35; pointer-events: none;
@@ -122,14 +137,11 @@ type LifecycleBanner = { kind: 'resuming' } | { kind: 'strip'; strip: LifecycleS
     .lifecycle-title { flex: none; color: var(--fg); font-weight: 600; font-family: var(--mono); }
     .lifecycle-title .glyph { color: var(--lifecycle-color); }
     .lifecycle-body { flex: 1; min-width: 0; }
-    .reopen-fresh { position: relative; display: inline-flex; flex: none; }
-    .reopen-fresh-reason {
-      position: absolute; right: 0; z-index: 1; width: max-content; max-width: 18rem; padding: .375rem .5rem;
-      border: 1px solid var(--line-2); border-radius: .375rem; background: var(--panel); color: var(--mut);
-      font-size: .6875rem; font-weight: 400; white-space: normal; visibility: hidden;
-    }
-    .closed-card .reopen-fresh-reason { bottom: calc(100% + .25rem); }
-    .reopen-fresh:hover .reopen-fresh-reason, .reopen-fresh:focus-within .reopen-fresh-reason { visibility: visible; }
+    .closed-card { flex-wrap: wrap; }
+    .fresh-confirm-live-region { flex-basis: 100%; }
+    .fresh-confirm-live-region:empty { display: none; }
+    .fresh-confirm { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; flex-basis: 100%; }
+    .fresh-confirm-text { flex: 1; min-width: 0; color: var(--fg); }
   `,
 })
 export class SessionViewComponent {
@@ -143,7 +155,27 @@ export class SessionViewComponent {
 
   protected readonly session = computed(() => this.events.sessions().find((s) => s.id === this.sessionId()));
 
-  protected readonly reopenFreshUnavailableReason = REOPEN_FRESH_UNAVAILABLE_REASON;
+  private readonly sessionState = computed(() => this.session()?.state);
+  // Changes with the session shown and with it opening or closing, never with a patch that leaves it as it was.
+  private readonly sessionOfClosedState = computed(() => `${this.sessionId()}:${this.sessionState() === 'closed'}`);
+  private readonly confirmingFreshOfSessionId = signal<string | undefined>(undefined);
+  // A fresh start the user asked for, until the session has come up (or the launch was refused): only that launch starts a new conversation.
+  private readonly freshStart = signal<{ sessionId: string; hasBeenStarting: boolean } | undefined>(undefined);
+
+  private readonly reopenFreshButton = viewChild<ElementRef<HTMLButtonElement>>('reopenFreshButton');
+  private readonly cancelFreshButton = viewChild<ElementRef<HTMLButtonElement>>('cancelFreshButton');
+  private readonly terminalArea = viewChild<ElementRef<HTMLElement>>('terminalArea');
+
+  protected readonly isConfirmingFresh = computed(() => this.confirmingFreshOfSessionId() === this.sessionId());
+
+  protected readonly freshConfirmText = computed(() => {
+    const session = this.session();
+    const replayedPrompt = session?.role === MANAGER_ROLE ? FRESH_REPLAYS_MISSION : FRESH_REPLAYS_BRIEF;
+    const liveChildrenCount = this.events.sessions().filter((other) => other.parentId === this.sessionId() && other.state !== 'closed').length;
+    if (liveChildrenCount === 0) return `${FRESH_CONFIRM_QUESTION} ${replayedPrompt}`;
+    const childrenNoun = liveChildrenCount === 1 ? 'live child keeps' : 'live children keep';
+    return `${FRESH_CONFIRM_QUESTION} ${replayedPrompt} ${liveChildrenCount} ${childrenNoun} running.`;
+  });
 
   // The session the user has seen open since it was shown: only its close is news worth an alert,
   // a session that was already closed when opened is not.
@@ -160,12 +192,18 @@ export class SessionViewComponent {
     if (!session) return undefined;
     const isReopenRequestInFlight = this.resuming();
     const isClosedSessionRelaunching = session.state === 'starting' && session.closedAt !== undefined;
-    if (isReopenRequestInFlight || isClosedSessionRelaunching) return { kind: 'resuming' };
+    const isFreshStart = this.freshStart()?.sessionId === session.id;
+    if (isReopenRequestInFlight || isClosedSessionRelaunching) return { kind: 'resuming', isFresh: isFreshStart };
     const strip = this.closedPresentation()?.strip;
     if (!strip) return undefined;
     const isFailureJustSeen = strip.variant === 'error' && this.watchedOpenSessionId() === session.id;
     const isAnnounced = strip.isResumeFailure || isFailureJustSeen;
     return { kind: 'strip', strip, role: isAnnounced && strip.variant === 'error' ? 'alert' : null };
+  });
+
+  protected readonly resumingBanner = computed(() => {
+    const banner = this.lifecycleBanner();
+    return banner?.kind === 'resuming' ? banner : undefined;
   });
 
   /** What a user pastes into a bug report for the strip on screen: the session as ref, the close reason as code, no daemon words. */
@@ -197,10 +235,48 @@ export class SessionViewComponent {
       const isClosingWhileWatched = untracked(this.watchedOpenSessionId) === session.id;
       this.watchedOpenSessionId.set(isOpen || isClosingWhileWatched ? session.id : undefined);
     });
+    // A question about one session closed in one state never survives a change of session or of state.
+    effect(() => {
+      this.sessionOfClosedState();
+      untracked(() => this.confirmingFreshOfSessionId.set(undefined));
+    });
+    effect(() => this.endFreshStartOnceTheSessionIsUp(this.sessionState()));
+    // Focus enters the question on its safe answer.
+    effect(() => this.cancelFreshButton()?.nativeElement.focus());
+  }
+
+  private endFreshStartOnceTheSessionIsUp(state: Session['state'] | undefined): void {
+    const pending = untracked(this.freshStart);
+    const isPendingForThisSession = pending !== undefined && pending.sessionId === this.sessionId();
+    if (!isPendingForThisSession) return;
+    if (state === 'starting') return this.freshStart.set({ ...pending, hasBeenStarting: true });
+    const isLive = state !== undefined && state !== 'closed';
+    if (isLive || pending.hasBeenStarting) this.freshStart.set(undefined);
   }
 
   async resume(sessionId: string): Promise<void> {
+    this.confirmingFreshOfSessionId.set(undefined);
+    this.freshStart.set(undefined);
     const reopenErrorFor = (error: unknown) => copyFor(error, { action: 'resume' }).text;
     await this.requests.run({ sessionId, kind: 'resume', message: reopenErrorFor, action: () => this.api.reopenSession(sessionId) });
+  }
+
+  protected askToStartFresh(): void {
+    this.confirmingFreshOfSessionId.set(this.sessionId());
+  }
+
+  protected cancelFresh(): void {
+    this.confirmingFreshOfSessionId.set(undefined);
+    this.reopenFreshButton()?.nativeElement.focus();
+  }
+
+  protected async startFresh(sessionId: string): Promise<void> {
+    this.confirmingFreshOfSessionId.set(undefined);
+    this.terminalArea()?.nativeElement.focus();
+    this.freshStart.set({ sessionId, hasBeenStarting: false });
+    const reopenErrorFor = (error: unknown) => copyFor(error, { action: 'resume' }).text;
+    await this.requests.run({ sessionId, kind: 'resume', message: reopenErrorFor, action: () => this.api.reopenSession(sessionId, 'fresh') });
+    const isRefused = this.requests.errorOf(sessionId, 'resume') !== null;
+    if (isRefused) this.freshStart.set(undefined);
   }
 }
