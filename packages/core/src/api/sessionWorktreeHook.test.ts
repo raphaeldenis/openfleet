@@ -106,6 +106,16 @@ describe('POST /api/sessions with repoPath and branchName: the project post-crea
     expect(((await res.json()) as { warnings: { reason: string }[] }).warnings).toMatchObject([{ reason: 'timeout' }]);
   }, 20_000);
 
+  it('answers the hook warning too when the session created in a worktree is a manager', async () => {
+    configureHook(aHookScript('echo "setup broke" >&2\nexit 2'));
+
+    const res = await createInWorktree('task/manager-failing', { projectId, manager: { mission: 'Lead the fleet', childrenCap: 2 } });
+
+    expect(res.status).toBe(201);
+    const created = (await res.json()) as Session & { warnings: { reason: string }[] };
+    expect(created.warnings).toMatchObject([{ type: 'post_create_hook_failed', reason: 'exit_nonzero' }]);
+  });
+
   it('does not run the hook of a project the session does not belong to', async () => {
     const marker = join(tempDirs.make('of-session-out-'), 'ran.txt');
     configureHook(aHookScript(`touch "${marker}"`));

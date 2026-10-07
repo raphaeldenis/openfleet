@@ -1,17 +1,19 @@
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { expect, it } from 'vitest';
+import { afterEach, expect, it } from 'vitest';
 import { ProjectRepository } from '../projects/projectRepository.js';
+import { createTempDirTracker } from '../tempDirTracker.js';
 import { applyMigrations } from './migrate.js';
+
+const tempDirs = createTempDirTracker();
+afterEach(() => tempDirs.removeAll());
 
 it('upgrades a database from before the post-create hook: projects keep their data and have no hook configured', () => {
   const directory = new URL('./migrations/', import.meta.url);
   const previousMigrations = readdirSync(directory).filter((name) => name.endsWith('.sql') && name < '024').sort()
     .map((name) => ({ version: name.replace(/\.sql$/, ''), sql: readFileSync(new URL(name, directory), 'utf8') }));
-  const scratchRoot = join(process.cwd(), '.scratch');
-  mkdirSync(scratchRoot, { recursive: true });
-  const databasePath = join(mkdtempSync(join(scratchRoot, 'post-create-hook-upgrade-')), 'openfleet.db');
+  const databasePath = join(tempDirs.make('post-create-hook-upgrade-'), 'openfleet.db');
   let db = new DatabaseSync(databasePath);
   try {
     applyMigrations(db, previousMigrations);

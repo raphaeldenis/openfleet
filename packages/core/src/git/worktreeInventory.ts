@@ -1,7 +1,7 @@
 import { existsSync, realpathSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { OpenFleetError, type RemovedWorktree, type WorktreeRefusalReason } from '@openfleet/shared';
-import { isPathWithin, run } from './worktrees.js';
+import { isMissingPathWithin, isPathWithin, run } from './worktrees.js';
 
 const STATUS_TIMEOUT_MS = 30_000;
 const LISTING_TIMEOUT_MS = 15_000;
@@ -111,7 +111,7 @@ export async function listRepoWorktrees(input: InventoryInput): Promise<RepoWork
       repoPath: mainPath, path: listed.path, branch: listed.branch, head: listed.head, isMain: index === 0, isDetached: listed.isDetached, isLocked: listed.isLocked,
       isPrunable: listed.isPrunable, ...state,
       hasInitializedSubmodules: hasDirectory && await hasInitializedSubmodules(listed.path, input.env),
-      isUnderWorktreesRoot: isPathWithin(listed.path, input.worktreesRoot),
+      isUnderWorktreesRoot: (listed.isPrunable ? isMissingPathWithin : isPathWithin)(listed.path, input.worktreesRoot),
     };
   }));
 }

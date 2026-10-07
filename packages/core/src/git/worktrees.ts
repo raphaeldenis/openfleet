@@ -100,11 +100,20 @@ async function gitCommonDir(cwd: string): Promise<string | undefined> {
 // blind spot for some inputs, so both paths go through the native binding with nothing lexical first.
 export function isPathWithin(candidate: string, root: string): boolean {
   try {
-    const realRoot = realpathSync.native(root);
-    const realCandidate = realpathSync.native(candidate);
-    const relativePath = relative(realRoot, realCandidate);
-    return relativePath === '' || (relativePath !== '..' && !relativePath.startsWith(`..${sep}`) && !isAbsolute(relativePath));
+    return isRelativePathInside(relative(realpathSync.native(root), realpathSync.native(candidate)));
   } catch {
     return false;
   }
 }
+
+/** For a candidate that no longer exists on disk, so no symlink can be followed: only the root is resolved. */
+export function isMissingPathWithin(candidate: string, root: string): boolean {
+  try {
+    return isRelativePathInside(relative(realpathSync.native(root), resolve(candidate)));
+  } catch {
+    return false;
+  }
+}
+
+const isRelativePathInside = (relativePath: string): boolean =>
+  relativePath === '' || (relativePath !== '..' && !relativePath.startsWith(`..${sep}`) && !isAbsolute(relativePath));

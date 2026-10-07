@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { childEnvironmentForGit } from '../process/childEnvironment.js';
 import { createTempDirTracker } from '../tempDirTracker.js';
 import { makeRepo } from './testRepo.js';
-import { listRepoWorktrees, removeWorktree } from './worktreeInventory.js';
+import { listRepoWorktrees, notRemovableReasonOf, removeWorktree } from './worktreeInventory.js';
 import { createWorktree } from './worktrees.js';
 
 const tempDirs = createTempDirTracker();
@@ -78,6 +78,17 @@ describe('listRepoWorktrees', () => {
     rmSync(worktree, { recursive: true, force: true });
 
     expect(await entryFor(fixture, worktree)).toMatchObject({ isPrunable: true });
+  });
+
+  it('keeps a worktree whose directory is gone under the root and not removable because it is missing', async () => {
+    const fixture = aFixture();
+    const worktree = await aWorktree(fixture, 'task/vanished');
+    rmSync(worktree, { recursive: true, force: true });
+
+    const entry = await entryFor(fixture, worktree);
+
+    expect(entry).toMatchObject({ isPrunable: true, isUnderWorktreesRoot: true });
+    expect(notRemovableReasonOf(entry!)).toBe('missing');
   });
 
   it('answers an empty list for a directory that is not a git repository', async () => {
@@ -212,6 +223,65 @@ describe('removeWorktree', () => {
       await expectRefusal(removeWorktree({ ...fixture, worktreePath: elsewhere }), 'outside_root');
 
       expectUntouched(fixture, elsewhere, pathsBefore);
+    });
+
+    it('a worktree whose directory is gone: missing', async () => {
+      const fixture = aFixture();
+      const worktree = await aWorktree(fixture, 'task/vanished');
+      rmSync(worktree, { recursive: true, force: true });
+      const pathsBefore = worktreePathsOf(fixture.repoPath);
+
+      await expectRefusal(removeWorktree({ ...fixture, worktreePath: worktree }), 'missing');
+
+      expect(worktreePathsOf(fixture.repoPath)).toEqual(pathsBefore);
+    });
+
+    it('a worktree outside the root whose directory is gone: outside_root', async () => {
+      const fixture = aFixture();
+      const elsewhere = join(realpathSync(tempDirs.make('of-elsewhere-')), 'handmade');
+      git(fixture.repoPath, 'worktree', 'add', '-b', 'handmade', elsewhere);
+      rmSync(elsewhere, { recursive: true, force: true });
+
+      await expectRefusal(removeWorktree({ ...fixture, worktreePath: elsewhere }), 'outside_root');
+    });
+
+    it('a worktree in a sibling directory that merely shares the root name as a prefix: outside_root', async () => {
+      const parent = realpathSync(tempDirs.make('of-wt-parent-'));
+      const fixture: Fixture = { repoPath: realpathSync(makeRepo()), worktreesRoot: join(parent, 'worktrees') };
+      const lookalikeRoot = `${fixture.worktreesRoot}-evil`;
+      mkdirSync(fixture.worktreesRoot);
+      mkdirSync(lookalikeRoot);
+      const lookalike = join(lookalikeRoot, 'x');
+      git(fixture.repoPath, 'worktree', 'add', '-b', 'lookalike', lookalike);
+      const pathsBefore = worktreePathsOf(fixture.repoPath);
+
+      await expectRefusal(removeWorktree({ ...fixture, worktreePath: lookalike }), 'outside_root');
+
+      expectUntouched(fixture, lookalike, pathsBefore);
+    });
+
+    it('a worktree reached through a symlink placed in the root that points outside: outside_root', async () => {
+      const fixture = aFixture();
+      const elsewhere = join(realpathSync(tempDirs.make('of-elsewhere-')), 'handmade');
+      git(fixture.repoPath, 'worktree', 'add', '-b', 'handmade', elsewhere);
+      const escapeLink = join(fixture.worktreesRoot, 'escape');
+      symlinkSync(elsewhere, escapeLink);
+      const pathsBefore = worktreePathsOf(fixture.repoPath);
+
+      await expectRefusal(removeWorktree({ ...fixture, worktreePath: escapeLink }), 'outside_root');
+
+      expectUntouched(fixture, elsewhere, pathsBefore);
+    });
+
+    it('a worktree whose state cannot be read: status_failed', async () => {
+      const fixture = aFixture();
+      const worktree = await aWorktree(fixture, 'task/unreadable');
+      writeFileSync(join(worktree, '.git'), 'gitdir: /nonexistent/of-broken\n');
+      const pathsBefore = worktreePathsOf(fixture.repoPath);
+
+      await expectRefusal(removeWorktree({ ...fixture, worktreePath: worktree }), 'status_failed');
+
+      expectUntouched(fixture, worktree, pathsBefore);
     });
 
     it('a worktree that holds a submodule: submodules', async () => {
