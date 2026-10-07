@@ -5,6 +5,7 @@ export const sessionView = (session: Session) => ({
   id: session.id, name: session.name, emoji: session.emoji, directory: session.directory, state: session.state, stateSince: session.stateSince,
   model: session.model, resolvedModel: session.resolvedModel, modelDriftedFrom: session.modelDriftedFrom,
   role: session.role, worktree: session.worktree, branch: session.branch, exitCode: session.exitCode, closedAt: session.closedAt,
+  ...(session.runtimeAttention && { runtimeAttention: session.runtimeAttention }),
 });
 
 /** A session inside a lineage listing, where the parent link is what places it in the tree. */

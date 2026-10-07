@@ -4,6 +4,14 @@ Open-source desktop workspace for fleets of AI coding agents: sessions in git wo
 
 Status: phase 1 (foundation). See `docs/` for the phase smoke checklist; design lives in the author's superpowers folder for now.
 
+## Sleep protection
+
+On macOS, the daemon prevents idle system sleep while any live child or manager is `generating`. It shares one `/usr/bin/caffeinate -i -w <daemonPid>` helper across the fleet and releases it when no session generates. The display can sleep; closing the lid, explicit sleep and a critical battery can still suspend the Mac. A silent session that remains `generating` keeps the assertion even when it needs attention, so this can consume battery for a long time.
+
+The daemon checks for long timer interruptions every five seconds. After a possible resume, it gives generating sessions 120 active seconds to show a current hook or advancing transcript. PTY redraws alone are weak evidence. A session without strong progress gets an orthogonal `runtimeAttention` field in REST, WS and MCP; its manager receives a coalesced queued notification. The daemon never kills or restarts a session based on silence. Timer drift is a suspicion, not an OS-confirmed wake, and a long silent tool can trigger an alert.
+
+Set `"power": { "preventIdleSleepWhileGenerating": false }` in the daemon home's `config.json` and restart the daemon to opt out. The default is enabled on macOS and disabled elsewhere. Post-resume health checks remain active when protection is disabled. A helper failure reports `power_assertion_unavailable` through daemon diagnostics. Desktop attention cards and a live settings toggle are a separate increment. See [the sleep guard contract](docs/sleep-guard.md).
+
 ## Todos tab
 
 The daemon reads a session's todo list from the Claude CLI's task tools (`TaskCreate`, `TaskUpdate`, `TaskList`). The `PostToolUse` hook is the primary source: each call updates the list as it happens, and known secret formats are masked before the text leaves the daemon. The session transcript repairs what the hooks missed (daemon restart, dropped hook) with a read window of at most 64 MiB.

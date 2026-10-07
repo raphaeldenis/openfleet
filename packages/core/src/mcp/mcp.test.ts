@@ -30,6 +30,8 @@ import { DataStoreService } from '../stores/dataStoreService.js';
 import { newId } from '../ids.js';
 import { WorkingStateService } from '../workingState/workingStateService.js';
 import { createMcpHandler } from './mcpServer.js';
+import { SleepGuard } from '../power/sleepGuard.js';
+import { FakeClock } from '../power/fakeClock.testkit.js';
 
 const WORKTREES_ROOT = '/tmp/of-wt';
 
@@ -684,6 +686,27 @@ describe('update_session', () => {
 });
 
 describe('get_argus_status, list_sessions, pulse_now', () => {
+  it('exposes post-resume runtime attention through session status, child listings and manager status', async () => {
+    const clock = new FakeClock();
+    const guard = new SleepGuard({ sessions, bus, enabled: false, power: { acquire: () => { throw new Error('disabled'); } }, clock: clock.now, schedule: clock.schedule, onPowerUnavailable: () => undefined });
+    guard.start();
+    const client = await connect(parentToken);
+    try {
+      const child = await sessions.create({ name: 'silent', directory: '/tmp', emoji: '🤖', harness: 'fake', parentId });
+      sessions.applyInput(child.id, { kind: 'hook', event: { session_id: child.id, hook_event_name: 'UserPromptSubmit' } });
+      clock.suspendMs(60_000);
+      clock.advanceActiveMs(125_000);
+
+      const expected = { id: child.id, state: 'generating', runtimeAttention: { reason: 'post_wake_no_progress', wakeSource: 'resume_suspected' } };
+      expect(text(await client.callTool({ name: 'get_session_status', arguments: { session_id: child.id } }))).toMatchObject(expected);
+      expect(text(await client.callTool({ name: 'list_children', arguments: {} }))).toEqual([expect.objectContaining({ id: child.id, runtimeAttention: expect.objectContaining(expected.runtimeAttention) })]);
+      expect(text(await client.callTool({ name: 'get_argus_status', arguments: {} }))).toMatchObject({ children: [expected] });
+    } finally {
+      guard.stop();
+      await client.close();
+    }
+  });
+
   it('get_argus_status reports each child\'s state and pending permission', async () => {
     const client = await connect(parentToken);
     const created = text(await client.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('task-6'), name: 'Gimli' } }));

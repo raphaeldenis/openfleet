@@ -1,7 +1,7 @@
 import { accessSync, closeSync, constants, existsSync, lstatSync, openSync, readSync, realpathSync, statSync, type Stats } from 'node:fs';
 import { basename, dirname, isAbsolute, join, normalize, sep } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import { MANAGER_ROLE, MAX_MISSION_BYTES, OpenFleetError, type HeldMessage, type ReopenMode, type ErrorCode, type ErrorEnvelope, type PermissionMode, type Session, type SessionCloseReason, type SessionSpec } from '@openfleet/shared';
+import { MANAGER_ROLE, MAX_MISSION_BYTES, OpenFleetError, type HeldMessage, type ReopenMode, type ErrorCode, type ErrorEnvelope, type PermissionMode, type RuntimeAttention, type Session, type SessionCloseReason, type SessionSpec } from '@openfleet/shared';
 import { carryLoggedRef, rememberLoggedRef } from '../errors/loggedRef.js';
 import { EventBus } from '../events/eventBus.js';
 import { createWorktree } from '../git/worktrees.js';
@@ -16,6 +16,7 @@ import { NoteRepository } from '../notes/noteRepository.js';
 import { nodeHandoffFileReader } from '../notes/nodeHandoffFileReader.js';
 import { HumanDraft } from './humanDraft.js';
 import { MessageQueue } from './messageQueue.js';
+import { SessionRuntime, type RuntimeProgress } from './sessionRuntime.js';
 import { findLatestContextTokens, findResolvedModel, readTranscriptTail } from './resolvedModel.js';
 import { wrapAgentMessage } from './messageEnvelope.js';
 import { normalizePermissionMode, SessionRepository } from './sessionRepository.js';
@@ -397,6 +398,7 @@ function trimToTail(text: string, maxLength: number): string {
 }
 
 export class SessionService {
+  private readonly runtime: SessionRuntime;
   private readonly repo: SessionRepository;
   private readonly projects: ProjectRepository;
   private readonly handoffSeed: HandoffSeed;
@@ -454,6 +456,7 @@ export class SessionService {
   private readonly seededPromptBySessionId = new Map<string, string>();
 
   constructor(private readonly deps: SessionServiceDeps) {
+    this.runtime = new SessionRuntime(deps.bus);
     this.repo = new SessionRepository(deps.db);
     this.projects = new ProjectRepository(deps.db);
     this.handoffSeed = new HandoffSeed({ notes: new NoteRepository(deps.db), projects: this.projects, files: nodeHandoffFileReader });
@@ -868,6 +871,8 @@ export class SessionService {
 
   applyInput(sessionId: string, input: SessionInput): void {
     const session = this.require(sessionId);
+    const isProgressHook = input.kind === 'hook' && input.event.hook_event_name !== 'Notification';
+    if (isProgressHook && session.state !== 'closed') this.runtime.observeHook(sessionId);
     // The outgoing conversation's SessionEnd carries its old transcript; the SessionStart that follows names the new one.
     const endsOutgoingConversation = input.kind === 'hook' && isClear(input.event);
     if (endsOutgoingConversation) {
@@ -942,6 +947,7 @@ export class SessionService {
   }
 
   private watchProcessExit(sessionId: string, handle: HarnessHandle): void {
+    this.runtime.observeLaunch(sessionId, handle);
     this.launchedAtBySessionId.set(sessionId, this.now());
     handle.onExit((exitCode, { wasConversationNotFound }) => {
       if (activeHandleBySessionId.get(sessionId) !== handle) return; // a stale process we already replaced
@@ -1397,8 +1403,16 @@ export class SessionService {
     for (const id of idsInterruptedByShutdown) this.idsClosingForDaemonShutdown.add(id);
     await Promise.all([...openSessionIds].map((id) => this.close(id, { cause: 'shutdown' })));
   }
-  get(id: string): Session | undefined { return this.repo.get(id); }
-  list(): Session[] { return this.repo.list(); }
+  get(id: string): Session | undefined {
+    const session = this.repo.get(id);
+    return session ? this.runtime.project(session) : undefined;
+  }
+  list(): Session[] { return this.repo.list().map((session) => this.runtime.project(session)); }
+  hasLiveLaunch(id: string): boolean { return this.handles.has(id); }
+  runtimeProgressOf(id: string): RuntimeProgress | undefined {
+    return this.hasLiveLaunch(id) ? this.runtime.progress(id, this.trustedTranscriptFileOf(id)) : undefined;
+  }
+  setRuntimeAttention(id: string, attention: RuntimeAttention | undefined): void { this.runtime.setAttention(id, attention); }
   directoryRealpathOf(id: string): string | null | undefined { return this.repo.directoryRealpath(id); }
   /** Returns true when the prompt is the one the daemon launched the session with; the CLI may append to it. */
   isSeededPrompt(sessionId: string, prompt: string): boolean {

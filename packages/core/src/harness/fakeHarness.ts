@@ -1,5 +1,5 @@
 import { log } from '../logger.js';
-import type { ConversationPresence, Harness, HarnessExit, HarnessHandle, HarnessLaunch } from './harness.js';
+import type { ConversationPresence, Harness, HarnessExit, HarnessHandle, HarnessLaunch, TranscriptCursor } from './harness.js';
 
 const CLI_EXIT_CODE_OF_A_REFUSED_RESUME = 1;
 
@@ -24,6 +24,10 @@ function hasInvisibleCharacters(text: string): boolean {
 }
 
 export class FakeHandle implements HarnessHandle {
+  processState: 'alive' | 'exited' | 'unknown' = 'alive';
+  probeProcess(): 'alive' | 'exited' | 'unknown' { return this.processState; }
+  transcriptCursor: TranscriptCursor | undefined;
+  probeTranscriptProgress(): TranscriptCursor | undefined { return this.transcriptCursor; }
   readonly written: string[] = [];
   readonly resizes: { cols: number; rows: number }[] = [];
   private dataListeners: ((d: string) => void)[] = [];
@@ -149,7 +153,10 @@ export class FakeHandle implements HarnessHandle {
     return () => { this.exitListeners = this.exitListeners.filter((l) => l !== listener); };
   }
   emitData(data: string): void { for (const l of this.dataListeners) l(data); }
-  emitExit(code: number, exit: HarnessExit = { wasConversationNotFound: false }): void { for (const l of this.exitListeners) l(code, exit); }
+  emitExit(code: number, exit: HarnessExit = { wasConversationNotFound: false }): void {
+    this.processState = 'exited';
+    for (const l of this.exitListeners) l(code, exit);
+  }
 }
 
 // What the fake's CLI does after a relaunch: POSTs its SessionStart to the hook URL, like Claude Code's command hook.

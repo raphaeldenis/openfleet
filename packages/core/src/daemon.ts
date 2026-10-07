@@ -16,6 +16,10 @@ import { FakeHarness, postSessionStartHook } from './harness/fakeHarness.js';
 import { newId } from './ids.js';
 import { createNodeGitPort } from './git/nodeGitPort.js';
 import { log } from './logger.js';
+import { CaffeinatePowerApi } from './power/caffeinatePowerApi.js';
+import type { PowerApi } from './power/powerApi.js';
+import { loadPowerSettings } from './power/powerSettings.js';
+import { SleepGuard } from './power/sleepGuard.js';
 import { DAEMON_VERSION } from './version.js';
 import { scapeImportStatusOfManager } from './import/scape/scapeManagerEditStatus.js';
 import { ManagerRepository } from './managers/managerRepository.js';
@@ -75,6 +79,11 @@ export interface DaemonOptions {
   /** The registry the process guards already mark; the daemon makes its own when none is handed over. */
   degraded?: DegradedRegistry;
   claudeConfigPath?: string;
+  power?: {
+    api?: PowerApi;
+    clock?: () => number;
+    schedule?: (callback: () => void, delayMs: number) => () => void;
+  };
 }
 
 // Builds every service from the config and starts serving; a throw at any point refuses the boot, after closing whatever already started.
@@ -96,6 +105,17 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   const modelConfigPath = join(config.home, 'config.json');
   const modelTable = readingConfigFile(() => loadModelTable(modelConfigPath));
   const { workingState: workingStateSettings, managers: managerSettings, contextNotice: contextNoticeSettings } = readingConfigFile(() => loadDaemonSettings(modelConfigPath));
+  const powerSettings = readingConfigFile(() => loadPowerSettings(modelConfigPath));
+  const reportPowerUnavailable = () => degraded.mark('power_assertion_unavailable', 'Idle sleep protection is unavailable or its helper cannot be stopped.');
+  const powerApi = options.power?.api ?? new CaffeinatePowerApi({ onPowerUnavailable: reportPowerUnavailable });
+  const supportsPowerAssertions = options.power?.api !== undefined || process.platform === 'darwin';
+  const sleepGuard = new SleepGuard({ sessions, bus, power: powerApi,
+    enabled: supportsPowerAssertions && powerSettings.preventIdleSleepWhileGenerating,
+    clock: options.power?.clock ?? Date.now, schedule: options.power?.schedule ?? scheduleOnRealClock,
+    onPowerUnavailable: reportPowerUnavailable,
+    onPowerAvailable: () => degraded.clear('power_assertion_unavailable'),
+  });
+  sleepGuard.observeSessionEvents();
   const pulseScheduler = new PulseScheduler({ managers: managerRepository, sessions, bus, describeError });
   const managers = new ManagerService({
     managers: managerRepository, sessions, bus, scheduler: pulseScheduler, heartbeatDefaultSeconds: managerSettings.heartbeatDefaultSeconds,
@@ -141,7 +161,12 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     silentBlocks.stop();
     stopHandoffOnClose();
     docsFolders.stop();
-    await sessions.closeAll();
+    try {
+      await sessions.closeAll();
+    } finally {
+      sleepGuard.stop();
+      await powerApi.close?.();
+    }
     todos.stop();
     await server.close();
   };
@@ -151,6 +176,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     // anyway, so nothing here is worth preserving across a restart (AUD-11).
     sweepStaleSessions(config.sessionsRoot);
     docsFolders.start();
+    sleepGuard.start();
     await sessions.resumeAll();
     pulseScheduler.start();
   } catch (error) {

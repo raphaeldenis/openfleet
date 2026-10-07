@@ -7,6 +7,7 @@ import type { ConversationPresence, Harness, HarnessHandle, HarnessLaunch } from
 import { childEnvironmentForClaudeCli } from '../../process/childEnvironment.js';
 import { log } from '../../logger.js';
 import { frameForPaste } from './bracketedPaste.js';
+import { probeProcess } from './probeProcess.js';
 import { conversationPresence } from './claudeProjects.js';
 import { buildClaudeLaunchConfig } from './launchConfig.js';
 import { findPermissiveSettingsWarning } from './permissiveSettings.js';
@@ -67,6 +68,7 @@ export class ClaudeCliHarness implements Harness {
     });
     const resumeOutput = launch.resuming ? watchForConversationNotFound(process) : undefined;
     return {
+      probeProcess: () => cleanedUp ? 'exited' : probeProcess(process.pid),
       write: (data) => process.write(data),
       typeMessage: (body) => process.write(frameForPaste(body)),
       resize: (cols, rows) => process.resize(cols, rows),

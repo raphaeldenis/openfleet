@@ -4,6 +4,7 @@ import type { DescribeError, SessionService } from '../sessions/sessionService.j
 import type { ManagerRecord, ManagerRepository } from './managerRepository.js';
 import { toManagerView } from './managerView.js';
 import { nextPulseAt } from './pulseTiming.js';
+import type { RuntimeAttention } from '@openfleet/shared';
 
 export const PULSE_MESSAGE = '[pulse] Re-read your mission and continue: check your children, unblock them, record what you did.';
 
@@ -15,20 +16,30 @@ const toSingleLineName = (name: string) => {
   return isTooLong ? `${collapsed.slice(0, MAX_CHILD_NAME_LENGTH)}…` : collapsed;
 };
 
-const MAX_LISTED_CLOSED_CHILDREN = 10;
+const MAX_LISTED_CHILD_WAKES = 10;
 // setTimeout clamps any longer delay to 1 ms.
 const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
 
-interface ClosedChild { name: string; exitCode: number | undefined }
-// The wake line still waiting in a manager's queue: the children it names and how many closed in all.
-interface QueuedWake { messageId: string; listed: ClosedChild[]; total: number }
+interface ChildWakeNotice { label: string; exitCode: number | undefined; runtimeAttention?: RuntimeAttention }
+interface QueuedWake { messageId: string; listed: ChildWakeNotice[]; total: number }
 
 const exitCodeText = (exitCode: number | undefined) => exitCode ?? 'unknown';
 
+const runtimeAttentionWakeLineOf = ({ listed, total }: Pick<QueuedWake, 'listed' | 'total'>) => {
+  const notices = listed.map((child) => child.runtimeAttention
+    ? `${child.label}: ${child.runtimeAttention.reason}`
+    : `"${child.label}" closed (exit ${exitCodeText(child.exitCode)})`);
+  const hiddenCount = total - listed.length;
+  const remainder = hiddenCount > 0 ? `, and ${hiddenCount} more` : '';
+  return `[pulse] Child runtime attention after a possible system resume: ${notices.join(', ')}${remainder}. Check current session status.`;
+};
+
 const wakeLineOf = ({ listed, total }: Pick<QueuedWake, 'listed' | 'total'>) => {
+  const hasRuntimeAttention = listed.some((child) => child.runtimeAttention !== undefined);
+  if (hasRuntimeAttention) return runtimeAttentionWakeLineOf({ listed, total });
   const [onlyChild] = listed;
-  if (total === 1 && onlyChild) return `[pulse] Child "${onlyChild.name}" closed (exit code ${exitCodeText(onlyChild.exitCode)}).`;
-  const listedText = listed.map((child) => `"${child.name}" (exit ${exitCodeText(child.exitCode)})`).join(', ');
+  if (total === 1 && onlyChild) return `[pulse] Child "${onlyChild.label}" closed (exit code ${exitCodeText(onlyChild.exitCode)}).`;
+  const listedText = listed.map((child) => `"${child.label}" (exit ${exitCodeText(child.exitCode)})`).join(', ');
   const unlistedCount = total - listed.length;
   const unlistedText = unlistedCount > 0 ? `, and ${unlistedCount} more` : '';
   return `[pulse] ${total} children closed: ${listedText}${unlistedText}`;
@@ -48,6 +59,7 @@ export class PulseScheduler {
   private readonly queuedWakes = new Map<string, QueuedWake>();
   private readonly managerIdsInFailureStreak = new Set<string>();
   private readonly forcedTickFailuresLeftByManager = new Map<string, number>();
+  private readonly notifiedRuntimeLaunches = new Map<string, RuntimeAttention>();
   private isStopped = false;
 
   constructor(deps: PulseSchedulerDeps) {
@@ -58,6 +70,7 @@ export class PulseScheduler {
       if (event.type === 'session.reopened') this.onSessionReopened(event.sessionId);
       if (event.type === 'session.state') this.restartHeartbeatOfManager(event.sessionId);
       if (event.type === 'session.closed') this.wakeManagerOfClosedChild(event.sessionId, event.exitCode);
+      if (event.type === 'session.attention') this.wakeManagerOfRuntimeAttention(event.sessionId, event.runtimeAttention);
     });
   }
 
@@ -114,6 +127,8 @@ export class PulseScheduler {
   private wakeManagerOfClosedChild(childId: string, exitCode: number | undefined): void {
     if (this.isStopped) return;
     const child = this.deps.sessions.get(childId);
+    const alreadyReportsPostResumeExit = child?.runtimeAttention?.reason === 'post_wake_process_exited';
+    if (alreadyReportsPostResumeExit) return;
     const managerId = child?.parentId;
     if (!child || !managerId) return;
     if (!this.deps.managers.get(managerId)) return;
@@ -121,23 +136,53 @@ export class PulseScheduler {
     // A close the manager asked for is not news to it: the wake line is for a child that ended unannounced.
     if (this.deps.sessions.isClosingByParent(childId)) return;
     try {
-      this.queueWakeLine(managerId, { name: toSingleLineName(child.name), exitCode });
+      this.queueWakeLine(managerId, { label: toSingleLineName(child.name), exitCode });
     } catch (error) {
       log('error', `pulse: could not wake manager ${managerId} after child ${childId} closed`, error);
     }
   }
 
+  private wakeManagerOfRuntimeAttention(childId: string, attention: RuntimeAttention | null): void {
+    if (this.isStopped) return;
+    if (!attention) {
+      this.notifiedRuntimeLaunches.delete(childId);
+      return;
+    }
+    const child = this.deps.sessions.get(childId);
+    const parentId = child?.parentId;
+    const isCurrentAttention = child?.runtimeAttention?.launchId === attention.launchId;
+    if (!isCurrentAttention || !parentId) return;
+    if (!this.deps.managers.get(parentId) || !this.isManagerAlive(parentId)) return;
+    const previousAttention = this.notifiedRuntimeLaunches.get(childId);
+    const alreadyNotifiesCondition = previousAttention?.launchId === attention.launchId && previousAttention.reason === attention.reason;
+    if (alreadyNotifiesCondition) return;
+    try {
+      this.queueWakeLine(parentId, { label: childId, exitCode: undefined, runtimeAttention: attention });
+      this.notifiedRuntimeLaunches.set(childId, attention);
+    } catch {
+      log('warn', `runtime attention: could not wake manager ${parentId} for child ${childId}`, undefined, { code: 'runtime_attention_notification_failed', sessionId: childId });
+    }
+  }
+
   // One queued wake line per manager: a burst of closes grows that line instead of queueing a turn each,
   // so a human message queued behind it waits for one wake turn at most.
-  private queueWakeLine(managerId: string, closedChild: ClosedChild): void {
+  private queueWakeLine(managerId: string, childWakeNotice: ChildWakeNotice): void {
     const queued = this.queuedWakes.get(managerId);
     if (queued) {
-      const grown = { messageId: queued.messageId, listed: [...queued.listed, closedChild].slice(0, MAX_LISTED_CLOSED_CHILDREN), total: queued.total + 1 };
+      const replacementIndex = queued.listed.findIndex((notice) => notice.label === childWakeNotice.label
+        && notice.runtimeAttention?.launchId === childWakeNotice.runtimeAttention?.launchId
+        && childWakeNotice.runtimeAttention !== undefined);
+      const replacesExistingNotice = replacementIndex >= 0;
+      const listed = replacesExistingNotice
+        ? queued.listed.map((notice, index) => index === replacementIndex ? childWakeNotice : notice)
+        : [...queued.listed, childWakeNotice].slice(0, MAX_LISTED_CHILD_WAKES);
+      const total = replacesExistingNotice ? queued.total : queued.total + 1;
+      const grown = { messageId: queued.messageId, listed, total };
       const body = wakeLineOf(grown);
       const isMergedIntoQueuedLine = this.deps.sessions.replaceQueuedMessageBody({ sessionId: managerId, messageId: grown.messageId, body });
       if (isMergedIntoQueuedLine) { this.queuedWakes.set(managerId, grown); return; }
     }
-    const fresh = { listed: [closedChild], total: 1 };
+    const fresh = { listed: [childWakeNotice], total: 1 };
     const { messageId } = this.deps.sessions.sendMessage({ sessionId: managerId, body: wakeLineOf(fresh) });
     this.queuedWakes.set(managerId, { messageId, ...fresh });
   }
@@ -147,6 +192,7 @@ export class PulseScheduler {
     this.queuedWakes.clear();
     this.managerIdsInFailureStreak.clear();
     this.forcedTickFailuresLeftByManager.clear();
+    this.notifiedRuntimeLaunches.clear();
     for (const timer of this.timers.values()) clearTimeout(timer);
     this.timers.clear();
   }
