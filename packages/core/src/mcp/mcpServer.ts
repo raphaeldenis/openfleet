@@ -23,6 +23,8 @@ import { registerTableViewTools } from './tableViewTools.js';
 import { catchingToolErrors } from './toolResults.js';
 import { registerTools } from './tools.js';
 import { registerWorkingStateTools } from './workingStateTools.js';
+import { registerWorktreeTools } from './worktreeTools.js';
+import { WorktreeService } from '../worktrees/worktreeService.js';
 
 /** A view of the server whose every registered handler answers a throw in the error grammar, so nothing reaches the SDK's own error text. */
 function answeringThrowsInGrammar(server: McpServer, caller: Session): McpServer {
@@ -49,6 +51,7 @@ export function createMcpHandler(deps: { sessions: SessionService; approvals: Ap
     registerNoteTools(toolServer, { notes: deps.notes, noteRepo: deps.noteRepo, docs: deps.docs, caller });
     registerNoteVersionTools(toolServer, { notes: deps.notes, noteRepo: deps.noteRepo, docs: deps.docs, caller });
     registerProjectTools(toolServer, { projects: deps.projects, noteRepo: deps.noteRepo, caller });
+    registerWorktreeTools(toolServer, { worktrees: new WorktreeService({ projects: deps.projects, sessions: deps.sessions, worktreesRoot: deps.worktreesRoot }), caller });
     registerWorkingStateTools(toolServer, { workingStates: deps.workingStates, sessions: deps.sessions, caller });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on('close', () => { void transport.close(); void server.close(); });

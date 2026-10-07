@@ -33,6 +33,8 @@ import { registerDiagnosticsRoutes } from './diagnosticsRoutes.js';
 import { registerHandoffRoutes, type HandoffRouteDeps } from './handoffRoutes.js';
 import { registerNoteRoutes } from './noteRoutes.js';
 import { registerProjectRoutes } from './projectRoutes.js';
+import { registerWorktreeRoutes } from './worktreeRoutes.js';
+import type { WorktreeService } from '../worktrees/worktreeService.js';
 import { registerHandoffPickerRoutes } from './handoffPickerRoutes.js';
 import { HandoffSeed } from '../notes/handoffSeed.js';
 import { nodeHandoffFileReader } from '../notes/nodeHandoffFileReader.js';
@@ -56,6 +58,8 @@ export interface ServerDeps {
   stores?: DataStoreService; storeRepo?: DataStoreRepository; projects?: ProjectRepository;
   // Without it the project routes are read-only: no project is created and no docs folder is set.
   projectService?: ProjectService;
+  // Without it the project worktree list and removal routes do not exist.
+  worktrees?: WorktreeService;
   // The working-state route, event and snapshot fields exist only when the daemon hands over the service.
   workingStates?: WorkingStateService; workingStateMaxAgeMinutes?: number;
   // Without it the snapshot reports no silent blocks.
@@ -140,6 +144,7 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; rout
   registerRestRoutes(router, { ...deps, wsTickets });
   if (deps.diagnostics) registerDiagnosticsRoutes(router, deps.diagnostics);
   if (deps.projects) registerProjectRoutes(router, { projects: deps.projects, projectService: deps.projectService });
+  if (deps.worktrees) registerWorktreeRoutes(router, { worktrees: deps.worktrees });
   if (deps.projects && deps.noteRepo) registerHandoffPickerRoutes(router, new HandoffSeed({ projects: deps.projects, notes: deps.noteRepo, files: nodeHandoffFileReader }));
   if (deps.stores && deps.storeRepo) registerDataStoreRoutes(router, { stores: deps.stores, storeRepo: deps.storeRepo });
   if (deps.handoff) registerHandoffRoutes(router, deps.handoff);
