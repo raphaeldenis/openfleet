@@ -1,9 +1,16 @@
-import { maskedSecrets } from '../redact.js';
+import { MASK, maskedSecrets } from '../redact.js';
 import { readTranscriptTail } from '../sessions/resolvedModel.js';
 
 const MAX_LAST_MESSAGE_BYTES = 8192;
 const UTF8_CONTINUATION_MASK = 0xc0;
 const UTF8_CONTINUATION_PREFIX = 0x80;
+const MARKDOWN_CREDENTIAL_VALUE = /\b((?:[\w-]*(?:password|passwd|pwd|secret|token|apikey|authorization|bearer|credential)[\w-]*|api[ _-]+key|private[ _-]+key)[`"'*]*\s*[:=]\s*|bearer\s+)(?:(?:Bearer|Basic)\s+)?(?:`(?:\\[\s\S]|[^`\\])*(?:`|$)|"(?:\\[\s\S]|[^"\\])*(?:"|$)|'(?:\\[\s\S]|[^'\\])*(?:'|$)|[^\s;,`"']+)/gi;
+
+function maskedAssistantText(text: string): string {
+  const withoutControlCharacters = text.replace(/[\p{Cc}\p{Cf}]/gu, '');
+  const withoutMarkdownCredentials = withoutControlCharacters.replace(MARKDOWN_CREDENTIAL_VALUE, `$1${MASK}`);
+  return maskedSecrets(withoutMarkdownCredentials);
+}
 const isRecord = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
 
 function assistantText(line: string): string | undefined {
@@ -33,7 +40,7 @@ export function lastAssistantMessage(tail: string): string | null {
   for (const line of linesNewestFirst) {
     const text = assistantText(line);
     if (!text) continue;
-    const safeText = maskedSecrets(text).replace(/[\p{Cc}\p{Cf}]/gu, ' ');
+    const safeText = maskedAssistantText(text);
     return boundedUtf8Message(safeText);
   }
   return null;

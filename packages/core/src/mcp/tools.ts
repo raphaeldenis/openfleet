@@ -12,6 +12,21 @@ import { guardedFor, ok, refuse } from './toolResults.js';
 import { lineageSessionView, managerView, sessionView } from './toolViews.js';
 import type { HeldFor, SessionService } from '../sessions/sessionService.js';
 import { sessionLastMessage } from './sessionLastMessage.js';
+import { maskedSecrets } from '../redact.js';
+
+const MAX_AMBIGUITY_CANDIDATES = 4;
+const MAX_CANDIDATE_NAME_CHARS = 24;
+
+function managerAmbiguityMessage(matches: Session[]): string {
+  const listedManagers = matches.slice(0, MAX_AMBIGUITY_CANDIDATES);
+  const candidates = listedManagers.map(({ id, name }) => {
+    const safeName = maskedSecrets(name).replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, ' ');
+    const shortenedName = safeName.length > MAX_CANDIDATE_NAME_CHARS ? `${safeName.slice(0, MAX_CANDIDATE_NAME_CHARS - 1)}…` : safeName;
+    return `${id} (${shortenedName})`;
+  });
+  const remainingCount = matches.length - listedManagers.length;
+  return `ambiguous manager: ${candidates.join('; ')}; ${remainingCount} more. Use an exact id or a more specific name.`;
+}
 
 const HELD_REASON_TEXT: Record<HeldFor, string> = {
   human_draft: 'Not delivered yet: the human has an unsent draft in this session\'s terminal prompt. It is delivered once they send or clear it; do not resend.',
@@ -144,14 +159,14 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     const hasInaccessibleParentManager = target === undefined && exactId === undefined;
     if (hasInaccessibleParentManager) return refuse('outside_lineage', 'target not found or outside your lineage');
     const requestedName = normalizedManagerName(requestedTarget);
+    if (!requestedName) return refuse('invalid_body', 'target must contain a manager name or id');
     const exactNames = authorizedManagers.filter((manager) => normalizedManagerName(manager.name) === requestedName);
     const prefixMatches = authorizedManagers.filter((manager) => normalizedManagerName(manager.name).startsWith(requestedName));
     const nameMatches = exactNames.length > 0 ? exactNames : prefixMatches;
     const matches = exactId ? [exactId] : nameMatches;
     if (matches.length === 0) return refuse('outside_lineage', 'target not found or outside your lineage');
     if (matches.length > 1) {
-      const candidates = matches.map(({ id, name }) => ({ id, name }));
-      return refuse('invalid_body', `ambiguous manager: ${JSON.stringify(candidates)}`);
+      return refuse('invalid_body', managerAmbiguityMessage(matches));
     }
     const manager = matches[0]!;
     return sendMessage(() => sessions.sendMessage({ sessionId: manager.id, body: message, fromSessionId: caller.id, messageId: message_id }));

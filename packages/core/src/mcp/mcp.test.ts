@@ -1,4 +1,4 @@
-import { MANAGER_ROLE } from '@openfleet/shared';
+import { MANAGER_ROLE, type Session } from '@openfleet/shared';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { randomUUID } from 'node:crypto';
@@ -97,6 +97,33 @@ async function connect(token: string) {
 const text = (r: unknown) => JSON.parse(((r as { content: { text: string }[] }).content[0]!).text);
 
 describe('MCP', () => {
+  it.each([
+    ['password: `hidden-value`', 'password: ***'],
+    ['password = "hidden-value"', 'password = ***'],
+    ["token: 'hidden-value'", 'token: ***'],
+    ['pass\u200bword: hidden-value', 'password: ***'],
+    ['Bearer abc\u200bdef', 'Bearer ***'],
+    ['Bearer abcdefghijklmnop', 'Bearer ***'],
+    ['authorization: Bearer hidden-value', 'authorization: ***'],
+    ['bearer: `hidden-value`', 'bearer: ***'],
+    ['passwd: "hidden-value"', 'passwd: ***'],
+    ["pwd: 'hidden-value'", 'pwd: ***'],
+    ['secret: hidden-value', 'secret: ***'],
+    ['api key: `hidden-value`', 'api key: ***'],
+    ['apikey: hidden-value', 'apikey: ***'],
+    ['credential: `hidden-value`', 'credential: ***'],
+    ['private key: "hidden-value"', 'private key: ***'],
+  ])('get_session_card masks Markdown credentials: %s', async (message, expectedMessage) => {
+    const transcriptFile = join(existingWorktreeDir('credentials'), 'session.jsonl');
+    writeFileSync(transcriptFile, JSON.stringify({ type: 'assistant', message: { content: `${message}; run \`npm test\`` } }));
+    vi.spyOn(sessions, 'trustedTranscriptFileOf').mockReturnValue(transcriptFile);
+    const client = await connect(parentToken);
+
+    const card = text(await client.callTool({ name: 'get_session_card', arguments: {} }));
+
+    expect(card.last_message).toBe(`${expectedMessage}; run \`npm test\``);
+  });
+
   it('get_session_card returns the latest redacted and bounded assistant message through MCP', async () => {
     const transcriptFile = join(existingWorktreeDir('transcript'), 'session.jsonl');
     const assistantEntry = (content: string) => JSON.stringify({ type: 'assistant', message: { content } });
@@ -151,6 +178,36 @@ describe('MCP', () => {
     const outsider = await sessions.create({ directory: '/tmp', name: 'Secret', emoji: '🤖', role: MANAGER_ROLE, harness: 'fake' });
     const refused = await client.callTool({ name: 'message_argus', arguments: { target: outsider.id, message: 'Report' } });
     expect((refused.content as { text: string }[])[0]!.text).toContain('outside_lineage');
+  });
+
+  it('message_argus keeps a bounded ambiguity list complete through error formatting', async () => {
+    const candidates: Session[] = [];
+    for (let index = 0; index < 8; index += 1) {
+      const manager = await sessions.create({ directory: '/tmp', name: `Alpha ${index} ${'long name '.repeat(20)}`, emoji: '🤖', role: MANAGER_ROLE, parentId, harness: 'fake' });
+      candidates.push(manager);
+    }
+    const client = await connect(parentToken);
+
+    const refused = await client.callTool({ name: 'message_argus', arguments: { target: 'Alpha', message: 'Report' } });
+    const errorMessage = (refused.content as { text: string }[])[0]!.text;
+
+    expect(errorMessage).toContain('invalid_body');
+    const listedCandidates = sessions.list().filter((session) => candidates.some((candidate) => candidate.id === session.id)).slice(0, 4);
+    for (const candidate of listedCandidates) expect(errorMessage).toContain(candidate.id);
+    expect(errorMessage).toContain('4 more');
+    expect(errorMessage).toContain('Alpha');
+    for (const candidate of candidates) expect(sessions.queuedMessageCount(candidate.id)).toBe(0);
+  });
+
+  it.each(['   ', '\u0301'])('message_argus rejects empty target %j without sending', async (target) => {
+    const manager = await sessions.create({ directory: '/tmp', name: 'Manager', emoji: '🤖', role: MANAGER_ROLE, parentId, harness: 'fake' });
+    const client = await connect(parentToken);
+
+    const refused = await client.callTool({ name: 'message_argus', arguments: { target, message: 'Report' } });
+
+    expect(refused.isError).toBe(true);
+    if (target.trim()) expect((refused.content as { text: string }[])[0]!.text).toContain('invalid_body');
+    expect(sessions.queuedMessageCount(manager.id)).toBe(0);
   });
 
   it('message_argus defaults to the parent manager and enforces the byte cap', async () => {
