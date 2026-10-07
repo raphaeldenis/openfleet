@@ -7,7 +7,8 @@ const UTF8_CONTINUATION_PREFIX = 0x80;
 const MARKDOWN_CREDENTIAL_VALUE = /\b((?:[\w-]*(?:password|passwd|pwd|secret|token|apikey|authorization|bearer|credential)[\w-]*|api[ _-]+key|private[ _-]+key)[`"'*]*\s*[:=]\s*|bearer\s+)(?:(?:Bearer|Basic)\s+)?(?:`(?:\\[\s\S]|[^`\\])*(?:`|$)|"(?:\\[\s\S]|[^"\\])*(?:"|$)|'(?:\\[\s\S]|[^'\\])*(?:'|$)|[^\s;,`"']+)/gi;
 
 function maskedAssistantText(text: string): string {
-  const withoutControlCharacters = text.replace(/[\p{Cc}\p{Cf}]/gu, '');
+  const withWhitespaceSeparators = text.replace(/[\n\r\t]+/g, ' ');
+  const withoutControlCharacters = withWhitespaceSeparators.replace(/[\p{Cc}\p{Cf}]/gu, '');
   const withoutMarkdownCredentials = withoutControlCharacters.replace(MARKDOWN_CREDENTIAL_VALUE, `$1${MASK}`);
   return maskedSecrets(withoutMarkdownCredentials);
 }

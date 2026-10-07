@@ -97,6 +97,18 @@ async function connect(token: string) {
 const text = (r: unknown) => JSON.parse(((r as { content: { text: string }[] }).content[0]!).text);
 
 describe('MCP', () => {
+  it('get_session_card separates lines while masking credentials on the second line', async () => {
+    const transcriptFile = join(existingWorktreeDir('multiline-message'), 'session.jsonl');
+    const message = 'Done.\n\r\tNext step: password: `hidden-value`';
+    writeFileSync(transcriptFile, JSON.stringify({ type: 'assistant', message: { content: message } }));
+    vi.spyOn(sessions, 'trustedTranscriptFileOf').mockReturnValue(transcriptFile);
+    const client = await connect(parentToken);
+
+    const card = text(await client.callTool({ name: 'get_session_card', arguments: {} }));
+
+    expect(card.last_message).toBe('Done. Next step: password: ***');
+  });
+
   it.each([
     ['password: `hidden-value`', 'password: ***'],
     ['password = "hidden-value"', 'password = ***'],
