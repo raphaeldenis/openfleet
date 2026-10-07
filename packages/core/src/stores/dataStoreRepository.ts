@@ -216,6 +216,16 @@ export class DataStoreRepository {
     return n;
   }
 
+  pageRows(storeId: string, pagination: { limit: number; offset: number }): { rows: DsRow[]; totalRowCount: number } {
+    return runInTransaction(this.db, 'data_store_read_page', () => {
+      const totalRowCount = this.countRows(storeId);
+      const selectedRows = this.db.prepare(
+        'SELECT * FROM ds_rows WHERE store_id = ? ORDER BY updated_at DESC, id COLLATE BINARY ASC LIMIT ? OFFSET ?',
+      ).all(storeId, pagination.limit, pagination.offset) as unknown as RowRow[];
+      return { rows: selectedRows.map(toRow), totalRowCount };
+    });
+  }
+
   /** Newest first, at most `limit` entries when given, after skipping `offset` newer ones. Authorizes through the entry's own store, so a deleted row's trail stays readable. */
   rowHistory(rowId: string, scope: RowHistoryScope): DsRowHistoryEntry[] {
     const entries = this.db.prepare(

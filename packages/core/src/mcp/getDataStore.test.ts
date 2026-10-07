@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, it } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { startTableToolsKit, type TableToolsKit } from './tableTools.testkit.js';
 
 let kit: TableToolsKit;
@@ -93,4 +93,71 @@ it('conceals foreign stores using the same refusal as a missing store', async ()
   const foreign = await kit.call('get_data_store', { store });
   expect(foreign.text).toContain('error store_not_found:');
   expect(foreign.text).toBe((await kit.call('get_data_store', { store: 'missing' })).text);
+});
+
+it('decodes only the requested row on a ten-thousand-row store', async () => {
+  const { store, column } = await textStore([]);
+  const cellJson = JSON.stringify({ [column.id]: 'cost-probe'.repeat(410) });
+  const insert = kit.db.prepare('INSERT INTO ds_rows (id, store_id, data_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?)');
+  for (let index = 0; index < 10_000; index++) insert.run(`probe-${index}`, store, cellJson, 't0', 't0');
+  const parse = vi.spyOn(JSON, 'parse');
+  try {
+    const page = await kit.call('get_data_store', { store, limit: 1, columns: [] });
+    expect(page.json).toMatchObject({ returned: 1, totalRowCount: 10_000, rows: [{ data: {} }] });
+    const cellDecodes = parse.mock.calls.filter(([json]) => json === cellJson).length;
+    expect(cellDecodes).toBe(1);
+  } finally { parse.mockRestore(); }
+});
+
+it.each(['x', 'é'])('accounts for an exact UTF-8 boundary with %s cells and decimal continuation', async character => {
+  const { store, column, ids } = await textStore(Array.from({ length: 11 }, () => ''));
+  const initial = await kit.call('get_data_store', { store, limit: 10 });
+  const availableBytes = 1024 * 1024 - Buffer.byteLength(initial.text, 'utf8');
+  const characterBytes = Buffer.byteLength(character, 'utf8');
+  const padding = character.repeat(Math.floor(availableBytes / characterBytes)) + 'x'.repeat(availableBytes % characterBytes);
+  const lastRowId = initial.json.rows[9].id as string;
+  expect(ids).toContain(lastRowId);
+  const update = kit.db.prepare('UPDATE ds_rows SET data_json = ? WHERE id = ?');
+  update.run(JSON.stringify({ [column.id]: padding }), lastRowId);
+  const exact = await kit.call('get_data_store', { store, limit: 10 });
+  expect(Buffer.byteLength(exact.text, 'utf8')).toBe(1024 * 1024);
+  expect(exact.json).toMatchObject({ returned: 10, next_offset: 10, truncated: false });
+  update.run(JSON.stringify({ [column.id]: padding + 'x' }), lastRowId);
+  const overflow = await kit.call('get_data_store', { store, limit: 10 });
+  expect(overflow.json).toMatchObject({ returned: 9, next_offset: 9, truncated: true });
+  expect(Buffer.byteLength(overflow.text, 'utf8')).toBeLessThanOrEqual(1024 * 1024);
+});
+
+it('sizes a 900 KB schema once for a thousand-row page', async () => {
+  const { store, column } = await textStore(Array.from({ length: 1000 }, () => ''));
+  const displayName = 'x'.repeat(900_000);
+  kit.db.prepare('UPDATE ds_columns SET display_name = ? WHERE id = ?').run(displayName, column.id);
+  const stringify = vi.spyOn(JSON, 'stringify');
+  try {
+    const page = await kit.call('get_data_store', { store, limit: 1000 });
+    expect(page.json).toMatchObject({ returned: 1000, truncated: false, next_offset: null });
+    expect(page.json.columns[0].displayName).toBe(displayName);
+    const schemaSerializations = stringify.mock.calls.filter(([value]) => {
+      if (Array.isArray(value)) return value.some(item => item?.displayName === displayName);
+      return value?.columns?.some((item: { displayName: string }) => item.displayName === displayName);
+    }).length;
+    expect(schemaSerializations).toBeLessThanOrEqual(2);
+  } finally { stringify.mockRestore(); }
+});
+
+it('accepts an exact-budget empty schema page and refuses one additional byte', async () => {
+  const { store, column } = await textStore([]);
+  const initial = await kit.call('get_data_store', { store });
+  const availableBytes = 1024 * 1024 - Buffer.byteLength(initial.text, 'utf8');
+  const displayName = column.displayName + 'x'.repeat(availableBytes);
+  const update = kit.db.prepare('UPDATE ds_columns SET display_name = ? WHERE id = ?');
+  update.run(displayName, column.id);
+  const exact = await kit.call('get_data_store', { store });
+  expect(exact.isError).toBe(false);
+  expect(Buffer.byteLength(exact.text, 'utf8')).toBe(1024 * 1024);
+  expect(exact.json).toMatchObject({ returned: 0, next_offset: null, truncated: false });
+  update.run(displayName + 'x', column.id);
+  const oversized = await kit.call('get_data_store', { store });
+  expect(oversized.isError).toBe(true);
+  expect(oversized.text).toMatch(/error invalid_body:.*fewer columns.*smaller limit/);
 });

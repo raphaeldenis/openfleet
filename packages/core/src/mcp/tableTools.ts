@@ -5,7 +5,7 @@ import { RowNotFoundError, StoreNotFoundError, UnknownColumnReferenceError, type
 import { InvalidColumnDefinitionError, SAVE_MODES, type DataStoreService } from '../stores/dataStoreService.js';
 import { guardedFor, refusalReasonOf, refuse } from './toolResults.js';
 import { queryPage } from './queryPage.js';
-import { newestRowsFirst, storePage } from './storePage.js';
+import { storePage } from './storePage.js';
 import { cellsKeyedByColumnId, coerceFilterValue, columnLookupFor, requireColumn } from './rowValues.js';
 import { writeRowByRow, type RowBatchReport } from './rowBatch.js';
 import { aggregatedRows } from './queryAggregation.js';
@@ -75,11 +75,11 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
     return guarded(() => {
       const ownStore = ownStoreOf(store, scope);
       const projectedColumns = resolveColumns(ownStore.id, columns);
-      const orderedRows = stores.query(ownStore.id, scope).sort(newestRowsFirst);
       const pageOffset = offset ?? 0;
       const pageLimit = limit ?? DEFAULT_QUERY_LIMIT;
+      const page = stores.pageRows(ownStore.id, { ...scope, offset: pageOffset, limit: pageLimit });
       return storePage({
-        columns: projectedColumns.map(columnView), rows: orderedRows.slice(pageOffset, pageOffset + pageLimit), totalRowCount: orderedRows.length,
+        columns: projectedColumns.map(columnView), rows: page.rows, totalRowCount: page.totalRowCount,
         offset: pageOffset, maxBytes: MAX_QUERY_RESULT_BYTES,
         projection: { columnIds: projectedColumns.map(column => column.id), includeUpdatedAt: true, cellOf: cellReaderFor(projectedColumns) },
       });
