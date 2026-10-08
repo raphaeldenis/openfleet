@@ -211,7 +211,7 @@ describe('buildClaudeLaunchConfig', () => {
     expect(() => buildClaudeLaunchConfig({ ...launch, model }, tokenFilePaths)).toThrow();
   });
 
-  it.each(['claude-haiku-4-5', 'claude-haiku-4-5-20251001', 'claude-sonnet-5', 'claude-opus-5-5', 'claude-opus-5-5[1m]', 'claude-fable-5-1'])(
+  it.each(['claude-haiku-5-5', 'claude-sonnet-5', 'claude-opus-5-5', 'claude-opus-5-5[1m]', 'claude-fable-5-1'])(
     'passes --model %s through for every real id in the model table',
     (model) => {
       const config = buildClaudeLaunchConfig({ ...launch, model }, tokenFilePaths);

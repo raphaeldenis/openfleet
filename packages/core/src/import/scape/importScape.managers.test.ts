@@ -75,7 +75,7 @@ describe('importScape: managers', () => {
     it.each([
       ['claude-opus-5-5', 'opus'],
       ['claude-sonnet-5-5', 'sonnet'],
-      ['claude-haiku-4-5-20251001', 'haiku'],
+      ['claude-haiku-5-5', 'haiku'],
       ['claude-fable-5-1', 'fable'],
       ['sonnet', 'sonnet'],
       ['opus', 'opus'],

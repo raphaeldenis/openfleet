@@ -148,7 +148,7 @@ const REAL_REQUEST_SCENARIOS: Scenario[] = [
   { name: 'a decision on an unknown approval', expected: { status: 404, error: 'not_found' }, act: () => call('POST', '/api/approvals/some-id/decide', { behavior: 'allow' }) },
   { name: 'a models save onto an unreadable config', expected: { status: 409, error: 'config_unreadable' }, act: () => {
     writeFileSync(join(scratch, 'config.json'), '{ not json');
-    return call('PUT', '/api/models', { haiku: 'claude-haiku-4-5-20251001' });
+    return call('PUT', '/api/models', { haiku: 'claude-haiku-5-5' });
   } },
   { name: 'a note in an unknown project', expected: { status: 404, error: 'project_not_found' }, act: () => call('POST', '/api/notes', { projectId: 'ghost', title: 'T', bodyMd: 'b' }) },
   { name: 'an unknown note', expected: { status: 404, error: 'not_found' }, act: () => call('GET', '/api/notes/ghost?projectId=p1') },

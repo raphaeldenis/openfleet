@@ -4,6 +4,7 @@ import { closeSync, existsSync, fchmodSync, fsyncSync, openSync, readFileSync, r
 import { dirname } from 'node:path';
 import { z } from 'zod';
 import { readableConfigReason } from './configReason.js';
+import { log } from './logger.js';
 
 export interface ModelTable { haiku: string; sonnet: string; opus: string; fable: string }
 
@@ -23,8 +24,7 @@ export const KNOWN_MODELS: readonly string[] = [
   'fable',
   'opus[1m]',
   'sonnet[1m]',
-  'claude-haiku-4-5',
-  'claude-haiku-4-5-20251001',
+  'claude-haiku-5-5',
   'claude-sonnet-5',
   'claude-sonnet-5-5',
   'claude-opus-5-5',
@@ -62,9 +62,18 @@ export function loadModelTable(configPath: string): ModelTable {
   // launch every future session on the wrong model.
   try {
     const parsed = ModelConfigFileSchema.parse(JSON.parse(readFileSync(configPath, 'utf8')));
-    return { ...DEFAULT_MODEL_TABLE, ...parsed.models };
+    const modelTable = { ...DEFAULT_MODEL_TABLE, ...parsed.models };
+    warnAboutUnknownStoredModels(modelTable);
+    return modelTable;
   } catch (error) {
     throw new Error(`invalid model table config at ${configPath}: ${readableConfigReason(error)}`);
+  }
+}
+
+function warnAboutUnknownStoredModels(modelTable: ModelTable): void {
+  const unknownModels = Object.entries(modelTable).filter(([, modelId]) => !KNOWN_MODELS.includes(modelId));
+  for (const [rung, modelId] of unknownModels) {
+    log('warn', 'stored model is not in the known model list; check availability and update the model settings before launching', undefined, { rung, modelId });
   }
 }
 

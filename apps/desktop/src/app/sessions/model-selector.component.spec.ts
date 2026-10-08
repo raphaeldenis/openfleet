@@ -509,7 +509,7 @@ describe('ModelSelectorComponent', () => {
       // Arrange — same instance reused across a `session/:sessionId` route param change (no destroy/recreate)
       const sessionId = signal('s1');
       const api = { updateModel: vi.fn().mockResolvedValue({ status: 'relaunching' }) };
-      const events = { sessions: signal([{ id: 's1', name: 'Gimli', emoji: '⚔️', model: 'claude-sonnet-5', state: 'idle' }, { id: 's2', name: 'Legolas', emoji: '🏹', model: 'claude-haiku-4-5', state: 'idle' }]), approvals: signal([]), managers: signal([]) };
+      const events = { sessions: signal([{ id: 's1', name: 'Gimli', emoji: '⚔️', model: 'claude-sonnet-5', state: 'idle' }, { id: 's2', name: 'Legolas', emoji: '🏹', model: 'claude-haiku-5-5', state: 'idle' }]), approvals: signal([]), managers: signal([]) };
       await render(ModelSelectorComponent, {
         bindings: [inputBinding('sessionId', sessionId)],
         providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: events }],
@@ -548,7 +548,7 @@ describe('ModelSelectorComponent', () => {
       const events = {
         sessions: signal([
           { id: 's1', name: 'Gimli', emoji: '⚔️', model: 'claude-sonnet-5', state: 'generating' },
-          { id: 's2', name: 'Legolas', emoji: '🏹', model: 'claude-haiku-4-5', state: 'idle' },
+          { id: 's2', name: 'Legolas', emoji: '🏹', model: 'claude-haiku-5-5', state: 'idle' },
         ]),
         approvals: signal([]),
         managers: signal([]),

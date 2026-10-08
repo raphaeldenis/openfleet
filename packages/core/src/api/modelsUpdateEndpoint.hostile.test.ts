@@ -163,7 +163,7 @@ describe('PUT /api/models — concurrency and round trip', () => {
   });
 
   it('writes a file a daemon restart reads back as exactly the table it served', async () => {
-    await putModels({ opus: '  claude-opus-9  ', haiku: 'claude-haiku-4-5-20251001' });
+    await putModels({ opus: '  claude-opus-9  ', haiku: 'claude-haiku-5-5' });
 
     expect(loadModelTable(configPath)).toEqual(await getModels());
   });
