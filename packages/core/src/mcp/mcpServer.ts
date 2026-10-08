@@ -16,6 +16,7 @@ import type { DataStoreService } from '../stores/dataStoreService.js';
 import { DAEMON_VERSION } from '../version.js';
 import type { WorkingStateService } from '../workingState/workingStateService.js';
 import { registerNoteTools } from './noteTools.js';
+import { registerKnowledgeTools, type KnowledgeToolSearchPort } from './knowledgeTools.js';
 import { registerNoteVersionTools } from './noteVersionTools.js';
 import { registerProjectTools } from './projectTools.js';
 import { registerTableTools } from './tableTools.js';
@@ -36,7 +37,7 @@ function answeringThrowsInGrammar(server: McpServer, caller: Session): McpServer
   });
 }
 
-export function createMcpHandler(deps: { sessions: SessionService; approvals: ApprovalService; managers: ManagerService; pulseScheduler: PulseScheduler; modelTable: ModelTable; stores: DataStoreService; storeRepo: DataStoreRepository; notes: NoteService; noteRepo: NoteRepository; docs: DocsFolderService; projects: ProjectRepository; workingStates: WorkingStateService; worktreesRoot: string }) {
+export function createMcpHandler(deps: { knowledgeSearch: KnowledgeToolSearchPort; sessions: SessionService; approvals: ApprovalService; managers: ManagerService; pulseScheduler: PulseScheduler; modelTable: ModelTable; stores: DataStoreService; storeRepo: DataStoreRepository; notes: NoteService; noteRepo: NoteRepository; docs: DocsFolderService; projects: ProjectRepository; workingStates: WorkingStateService; worktreesRoot: string }) {
   return async (req: IncomingMessage, res: ServerResponse, body: unknown): Promise<void> => {
     const token = (req.headers.authorization ?? '').replace(/^Bearer /, '');
     const caller = deps.sessions.byMcpToken(token);
@@ -46,6 +47,7 @@ export function createMcpHandler(deps: { sessions: SessionService; approvals: Ap
     const server = new McpServer({ name: 'openfleet', version: DAEMON_VERSION });
     const toolServer = answeringThrowsInGrammar(server, caller);
     registerTools(toolServer, { ...deps, caller });
+    registerKnowledgeTools(toolServer, { knowledgeSearch: deps.knowledgeSearch, caller });
     registerTableTools(toolServer, { stores: deps.stores, storeRepo: deps.storeRepo, caller });
     registerTableViewTools(toolServer, { stores: deps.stores, storeRepo: deps.storeRepo, caller });
     registerNoteTools(toolServer, { notes: deps.notes, noteRepo: deps.noteRepo, docs: deps.docs, caller });

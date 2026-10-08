@@ -26,6 +26,9 @@ import { ManagerRepository } from './managers/managerRepository.js';
 import { ManagerService } from './managers/managerService.js';
 import { PulseScheduler } from './managers/pulseScheduler.js';
 import { createMcpHandler } from './mcp/mcpServer.js';
+import { KnowledgeRepository } from './knowledge/knowledgeRepository.js';
+import { KnowledgeRepoScope } from './knowledge/knowledgeRepoScope.js';
+import { KnowledgeSearchService } from './knowledge/knowledgeSearchService.js';
 import { loadModelTable } from './models.js';
 import { DocsFolderService } from './notes/docsFolderService.js';
 import { registerHandoffOnClose } from './notes/handoffService.js';
@@ -123,6 +126,9 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     scapeImportStatusOf: (sessionId) => scapeImportStatusOfManager(db, sessionId),
   });
   const storeRepo = new DataStoreRepository(db);
+  const knowledgeRepository = new KnowledgeRepository(db);
+  const knowledgeService = new KnowledgeSearchService({ search: knowledgeRepository, scope: new KnowledgeRepoScope({ repositories: knowledgeRepository }) });
+  const knowledgeSearch = { search: knowledgeService.search.bind(knowledgeService) };
   const stores = new DataStoreService({ repo: storeRepo, db, clock: () => new Date().toISOString(), newId });
   const projects = new ProjectRepository(db);
   const noteRepo = new NoteRepository(db);
@@ -147,7 +153,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   // fast process hitting a port nothing is serving yet.
   const diagnostics = () => buildDiagnosticsDocument({ db, degraded, listSessions: () => sessions.list(), port: config.port, e2eEnabled: config.e2eEnabled });
   const worktrees = new WorktreeService({ projects, sessions, worktreesRoot: config.worktreesRoot });
-  const server = await startServer({ ...config, e2eRoutes: config.e2eEnabled, degraded, diagnostics, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, stores, storeRepo, projects, projectService, worktrees, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });
+  const server = await startServer({ ...config, e2eRoutes: config.e2eEnabled, degraded, diagnostics, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, stores, storeRepo, projects, projectService, worktrees, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, mcp: createMcpHandler({ knowledgeSearch, sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });
   log('info', `openfleet core listening on ${server.url} (version: ${DAEMON_VERSION}, home: ${config.home})`);
 
   const unwatchDatabase = watchDatabaseHealth(degraded);

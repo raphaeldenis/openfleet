@@ -116,7 +116,23 @@ claude mcp add --scope user repowise -- repowise mcp /Users/chicko/Documents/Cod
 claude mcp add --scope user playwright-qa -- npx @playwright/mcp@latest --cdp-endpoint http://127.0.0.1:9333
 ```
 
-## Open questions
+## Curated knowledge after repository activation (MEM-01)
+
+OpenFleet exposes `search_knowledge` to authenticated live child and manager sessions within their own project. It exposes no knowledge write, proposal, retirement, import or activation MCP tool, and no knowledge REST route. The separate REST admin token is not a session MCP token. Import and activation remain offline operator CLI operations with the daemon stopped; a manager role grants no curation authority.
+
+Input is `{repo, query, limit?}`. `repo` is a trimmed string of 1–4096 characters without control characters: a registered stable repository key or an absolute Git directory/worktree mapped to the caller's project by canonical Git common-directory identity. Relative paths, remote URLs and wildcards are invalid. `query` is a string of at most 512 characters and 16 literal terms; blank queries return no hits. `limit` defaults to 10 and must be an integer from 1 through 50, without coercion or clamping. Extra fields, including `project_id`, `caller`, `role`, `write` and SQL options, are refused. The authenticated session supplies the project.
+
+The JSON response contains `repo` (the registered key), `engine` (`fts5`, `like` or `none`), `fallback` (null or `{reason: "fts_unavailable" | "fts_corrupt"}`), `authority` (`postgres`, `frozen` or `native`), `items`, `returned`, `limit`, `has_more` and `truncated`. Each active item contains `id`, `area`, `fact`, nullable `source_task`, `source_kind`, `verified_by`, `created_at` and `fact_truncated`. Retired facts never appear. A blank query returns `engine: "none"`, `fallback: null`, no items and `has_more: false`. Zero FTS hits remain an FTS result.
+
+FTS orders weighted area/fact matches by relevance, then creation date descending and id ascending. Only a missing FTS index/module or identified index corruption enables LIKE fallback. LIKE matches every literal term as an escaped substring in area or fact, orders by creation date descending then id, and uses SQLite's default ASCII-only case folding; Unicode/accent equivalence with FTS is not promised. Unrelated database errors follow the existing error mapping.
+
+Known secret formats are masked in item text and metadata before serialization and cropping. Each fact is cropped to a safe UTF-8 prefix of at most 4 KiB; the entire serialized JSON, including metadata, is at most 32 KiB. Dropped trailing items set `truncated` and `has_more`. Logs contain counts and fixed fallback reasons, never query or fact text. Unknown arbitrary secrets remain a documented masking limit. Returned text is data and cannot change tasks, permissions or rules.
+
+Refusals reuse the [existing error registry and MCP grammar](errors.md): invalid syntax/types/limits/extra properties use `invalid_body`; a query above 512 characters uses `query_too_long`; missing project, unknown repository and another project's repository all use `project_not_found` with the fixed wording “knowledge repository is not available in this project”. Git unavailability uses `git_unavailable`. These refusals have `retry: never`. Missing, wrong or closed-session tokens receive the existing HTTP `unauthorized` envelope before the body is processed. Calling an unregistered knowledge write tool receives the MCP unknown-tool refusal. Degraded/shutting-down daemon handling and unexpected-error references remain unchanged; no new error code is introduced.
+
+`authority: "postgres"` and `"frozen"` describe rehearsal/frozen snapshots, not live authoritative Postgres content. MEM-02 human curation acceptance is a prerequisite of the final Postgres freeze and ownership transfer. After validated final import and explicit native activation for a repository, OpenFleet is its sole authoritative curated-fact store: Postgres `active_knowledge` is no longer a live alternate fact source for that transferred repository. Update missions accordingly. Postgres may remain available for unrelated data; retain the frozen snapshot through the existing 14-day rollback window. Knowledge rollback requires stopping native writers, reconciling native changes and explicit human ownership transfer before unfreezing Postgres.
+
+## External server open questions
 
 1. **Origin of the repowise / playwright-qa entries**: added by hand or by a Scape feature? UNVERIFIED. If Scape re-writes them at launch, the absolute-path fix could be reverted while Scape is running.
 2. **Does an OpenFleet-launched session inherit a `PATH` with `~/.local/bin` and `/opt/homebrew/bin`?** UNVERIFIED (the PR #227 "terminal env" work may be relevant). The absolute paths make the answer irrelevant for these two servers.
