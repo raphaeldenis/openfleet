@@ -19,6 +19,7 @@ export interface DatabaseWatch {
 
 let databaseWatch: DatabaseWatch | undefined;
 const errorsAlreadyReported = new WeakSet<object>();
+export interface TransactionFailureLogPolicy { failureLogging?: 'default' | 'silent' }
 
 /** Installs the one watch; the returned function removes it unless a newer watch replaced it. */
 export function setDatabaseWatch(watch: DatabaseWatch): () => void {
@@ -36,16 +37,17 @@ function reportWhenUnavailable(error: unknown): void {
 /**
  * Runs `work` atomically: a transaction of its own (BEGIN IMMEDIATE/COMMIT), or a SAVEPOINT/RELEASE
  * nested inside a caller's transaction, so a batch is all-or-nothing without ending an outer transaction.
- * Rolls back only if a transaction is still active. A failing rollback is logged and never masks the
- * original error; a failed top-level ROLLBACK marks the connection stuck, and every later call retries the
+ * Rolls back only if a transaction is still active. A failing rollback is logged unless failureLogging
+ * is 'silent', and never masks the original
+ * error; a failed top-level ROLLBACK marks the connection stuck, and every later call retries the
  * ROLLBACK first and throws, without running its work, while that keeps failing. The watch hears about the
  * stuck connection the moment the ROLLBACK fails, not when a later call finds it.
  * A failed nested rollback leaves the outer transaction to its owner.
  * All production code goes through `inTransaction`: a raw BEGIN outside it is a bug.
  * `name` must be distinct per call site so nested savepoints never collide.
  */
-export function inTransaction<T>(db: DatabaseSync, name: string, work: () => T): T {
-  recoverStuckTransaction(db);
+export function inTransaction<T>(db: DatabaseSync, name: string, work: () => T, policy: TransactionFailureLogPolicy = {}): T {
+  recoverStuckTransaction(db, policy);
   const isNested = db.isTransaction;
   try {
     db.exec(isNested ? `SAVEPOINT ${name}` : 'BEGIN IMMEDIATE');
@@ -60,18 +62,18 @@ export function inTransaction<T>(db: DatabaseSync, name: string, work: () => T):
     return result;
   } catch (error) {
     reportWhenUnavailable(error);
-    if (db.isTransaction) rollBackKeepingOriginalError(db, { name, isNested });
+    if (db.isTransaction) rollBackKeepingOriginalError(db, { name, isNested }, policy);
     throw error;
   }
 }
 
 /** Retries the ROLLBACK of a stuck connection; throws while it still fails. Does nothing on a healthy connection. */
-export function recoverStuckTransaction(db: DatabaseSync): void {
+export function recoverStuckTransaction(db: DatabaseSync, policy: TransactionFailureLogPolicy = {}): void {
   if (!connectionsStuckInTransaction.has(db)) return;
   try {
     if (db.isTransaction) db.exec('ROLLBACK');
   } catch (rollbackError) {
-    log('error', 'refusing to run: connection is stuck in a transaction', rollbackError);
+    if (policy.failureLogging !== 'silent') log('error', 'refusing to run: connection is stuck in a transaction', rollbackError);
     const stuck = new StuckConnectionError(rollbackError);
     databaseWatch?.unavailable(stuck);
     throw stuck;
@@ -79,7 +81,7 @@ export function recoverStuckTransaction(db: DatabaseSync): void {
   connectionsStuckInTransaction.delete(db);
 }
 
-function rollBackKeepingOriginalError(db: DatabaseSync, { name, isNested }: { name: string; isNested: boolean }): void {
+function rollBackKeepingOriginalError(db: DatabaseSync, { name, isNested }: { name: string; isNested: boolean }, policy: TransactionFailureLogPolicy): void {
   try {
     if (isNested) {
       // ROLLBACK TO alone leaves the savepoint marker open on the stack; RELEASE pops it, the safe idiom.
@@ -89,7 +91,7 @@ function rollBackKeepingOriginalError(db: DatabaseSync, { name, isNested }: { na
       db.exec('ROLLBACK');
     }
   } catch (rollbackError) {
-    log('error', 'transaction rollback failed', rollbackError);
+    if (policy.failureLogging !== 'silent') log('error', 'transaction rollback failed', rollbackError);
     if (isNested) return;
     connectionsStuckInTransaction.add(db);
     databaseWatch?.unavailable(new StuckConnectionError(rollbackError));

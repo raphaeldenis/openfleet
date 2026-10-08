@@ -1,5 +1,13 @@
 # Scape import at cutover
 
+Knowledge snapshot import uses the same packaged entry before daemon boot:
+`node /absolute/daemon.mjs import knowledge --file /absolute/snapshot.json --mapping /absolute/mapping.json --home /absolute/target-home --dry-run`.
+The separate offline `--activate` operation transfers ownership only after a sealed
+final import. Final import and activation require `--mem02-acceptance` referencing
+an independently accepted MEM-02 delivery. See
+[the knowledge cutover runbook](../../../../docs/knowledge-cutover.md) for the export
+contract, freeze proof, report files and rollback ownership.
+
 The core bundle accepts `import scape` before starting the daemon. Quit
 OpenFleet before a real import. The importer refuses a target used by a running
 daemon. Use Node 26 or newer.

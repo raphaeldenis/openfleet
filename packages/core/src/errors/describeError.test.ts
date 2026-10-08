@@ -26,6 +26,7 @@ import { DocsFolderNotWritableError, InvalidDocsFolderError, NoteIsNotFileBacked
 import { HandoffNotFoundError, SessionHasNoProjectError, SessionNotFoundForHandoffError } from '../notes/handoffService.js';
 import { SectionError } from '../notes/noteSections.js';
 import { WorktreeError } from '../git/worktrees.js';
+import { KnowledgeImportError } from '../import/knowledge/knowledgeExportSchema.js';
 import { WorkingStateTooLargeError } from '../workingState/workingStateService.js';
 import { describeError } from './describeError.js';
 
@@ -107,6 +108,7 @@ const domainErrorCodes: [string, () => unknown, ErrorCode][] = [
   ['a SQLite foreign key failure', foreignKeyError, 'project_not_found'],
   ['the stuck-connection error', () => new StuckConnectionError(new Error('disk I/O error')), 'db_stuck'],
   ['an OpenFleetError', () => new OpenFleetError('outside_lineage', 'not your child.'), 'outside_lineage'],
+  ['KnowledgeImportError', () => new KnowledgeImportError('INVALID_EXPORT'), 'internal_error'],
 ];
 
 describe('describeError: every Error subclass of core is mapped or internal on purpose', () => {

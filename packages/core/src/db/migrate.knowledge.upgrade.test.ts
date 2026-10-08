@@ -12,7 +12,8 @@ it('upgrades 024 to knowledge storage while preserving existing projects', () =>
     applyMigrations(db, previousMigrations);
     db.exec("INSERT INTO projects (id, name, created_at) VALUES ('project', 'Fleet', 'now')");
 
-    applyMigrations(db);
+    const knowledgeMigration = { version: '025_knowledge', sql: readFileSync(new URL('025_knowledge.sql', directory), 'utf8') };
+    applyMigrations(db, [...previousMigrations, knowledgeMigration]);
     db.exec("INSERT INTO knowledge_repositories (project_id, repo_key, canonical_root, git_common_dir) VALUES ('project', 'fleet', '/fleet', '/fleet/.git')");
     db.exec("INSERT INTO knowledge (id, project_id, repo_key, area, fact, created_at) VALUES ('fact', 'project', 'fleet', 'architecture', 'hexagonal', 'now')");
 
@@ -40,7 +41,7 @@ it('enforces durable knowledge scope, authority, retirement and import ledger co
     db.exec("INSERT INTO knowledge (id, project_id, repo_key, area, fact, created_at, retired_at) VALUES ('a', 'p', 'fleet', 'area', 'fact', 'now', 'now')");
     db.exec("INSERT INTO knowledge_import_entries VALUES ('p', 'fleet', 'source', 'a', 'fingerprint', 'snapshot')");
     expect(() => db.exec("INSERT INTO knowledge_import_entries VALUES ('p', 'fleet', 'second', 'a', 'fingerprint', 'snapshot')")).toThrow();
-    expect(() => db.exec("INSERT INTO knowledge_import_runs VALUES ('run', 'snapshot', 'now', -1, 0, 0, 0, 0)")).toThrow();
+    expect(() => db.exec("INSERT INTO knowledge_import_runs (id, snapshot_id, imported_at, source_rows, inserted, updated, unchanged, retired) VALUES ('run', 'snapshot', 'now', -1, 0, 0, 0, 0)")).toThrow();
     expect(() => db.exec("DELETE FROM projects WHERE id = 'p'")).toThrow();
     expect(db.prepare('SELECT id FROM active_knowledge').all()).toEqual([]);
   } finally { db.close(); }
