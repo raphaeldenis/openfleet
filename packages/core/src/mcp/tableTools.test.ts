@@ -23,6 +23,7 @@ import { WorkingStateService } from '../workingState/workingStateService.js';
 import { DataStoreRepository } from '../stores/dataStoreRepository.js';
 import { DataStoreService } from '../stores/dataStoreService.js';
 import { createMcpHandler } from './mcpServer.js';
+import { knowledgeSearchFor } from './knowledgeTools.testkit.js';
 
 let server: Awaited<ReturnType<typeof startServer>>;
 let db: DatabaseSync;
@@ -68,7 +69,7 @@ beforeEach(async () => {
 
   server = await startServer({
     host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath: '/tmp/of-unused/config.json',
-    mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, worktreesRoot: '/tmp/of-wt', stores, storeRepo, notes, noteRepo, docs, projects, workingStates: new WorkingStateService({ db, clock: () => new Date().toISOString(), stateRoot: '/tmp/of-unused/state', maxBytes: 6144 }) }),
+    mcp: createMcpHandler({ knowledgeSearch: knowledgeSearchFor(db), sessions, approvals, managers, pulseScheduler, modelTable, worktreesRoot: '/tmp/of-wt', stores, storeRepo, notes, noteRepo, docs, projects, workingStates: new WorkingStateService({ db, clock: () => new Date().toISOString(), stateRoot: '/tmp/of-unused/state', maxBytes: 6144 }) }),
   });
 
   const scoped = await sessions.create({ directory: '/tmp', name: 'Gimli', harness: 'fake', emoji: '⛏️' });
@@ -98,7 +99,7 @@ describe('table tools', () => {
       'create_worktree', 'delete_data_store_row', 'delete_data_store_view', 'delete_note', 'describe_data_store', 'get_argus_status', 'get_data_store', 'get_note',
       'get_note_version', 'get_session_card', 'get_session_status', 'get_working_state', 'insert_data_store_rows', 'list_children', 'list_data_store_views', 'list_note_versions',
       'list_notes', 'list_project_folders', 'list_projects', 'list_row_changes', 'list_sessions', 'list_worktrees', 'message_argus', 'message_parent', 'move_note', 'pulse_now', 'query_data_store',
-      'remove_worktree', 'restore_note_version', 'search_notes', 'send_session_message', 'set_data_store_natural_key', 'update_data_store_row', 'update_data_store_rows', 'update_data_store_view', 'update_note', 'update_note_section',
+      'remove_worktree', 'restore_note_version', 'search_knowledge', 'search_notes', 'send_session_message', 'set_data_store_natural_key', 'update_data_store_row', 'update_data_store_rows', 'update_data_store_view', 'update_note', 'update_note_section',
       'update_session', 'update_working_state',
     ]);
   });

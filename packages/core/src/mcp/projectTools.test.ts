@@ -23,6 +23,7 @@ import { DataStoreRepository } from '../stores/dataStoreRepository.js';
 import { DataStoreService } from '../stores/dataStoreService.js';
 import { WorkingStateService } from '../workingState/workingStateService.js';
 import { createMcpHandler } from './mcpServer.js';
+import { knowledgeSearchFor } from './knowledgeTools.testkit.js';
 
 const MAX_NOTES_PER_FOLDER = 200;
 const SECRET_DOCS_FOLDER = '/Users/someone/secret-docs';
@@ -73,7 +74,7 @@ beforeEach(async () => {
 
   server = await startServer({
     host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath: '/tmp/of-unused/config.json',
-    mcp: createMcpHandler({
+    mcp: createMcpHandler({ knowledgeSearch: knowledgeSearchFor(db),
       sessions, approvals, managers, pulseScheduler, modelTable, worktreesRoot: '/tmp/of-wt', stores, storeRepo, notes, noteRepo, docs, projects,
       workingStates: new WorkingStateService({ db, clock: () => new Date().toISOString(), stateRoot: '/tmp/of-unused/state', maxBytes: 6144 }),
     }),

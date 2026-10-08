@@ -30,6 +30,7 @@ import { DataStoreRepository } from '../stores/dataStoreRepository.js';
 import { DataStoreService } from '../stores/dataStoreService.js';
 import { WorkingStateService } from '../workingState/workingStateService.js';
 import { createMcpHandler } from './mcpServer.js';
+import { knowledgeSearchFor } from './knowledgeTools.testkit.js';
 
 // A hook the git boundary runs after each repository comparison: it lets a test change the world while create_session awaits git.
 const gitBoundary = vi.hoisted(() => ({ afterRepositoryCheck: undefined as undefined | (() => Promise<void> | void) }));
@@ -103,7 +104,7 @@ beforeEach(async () => {
   const workingStates = new WorkingStateService({ db, clock: () => new Date().toISOString(), stateRoot: '/tmp/of-unused/state', maxBytes: 6144 });
   server = await startServer({
     host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath: '/tmp/of-unused/config.json',
-    mcp: createMcpHandler({ sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: WORKTREES_ROOT }),
+    mcp: createMcpHandler({ knowledgeSearch: knowledgeSearchFor(db), sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: WORKTREES_ROOT }),
   });
 
   const repo = makeRepo();
@@ -157,6 +158,7 @@ const hostileCallByTool = (w: World): Record<string, { client: Client; args: Rec
   move_note: { client: w.lead, args: { note: UNKNOWN, folder: null }, code: 'note_not_found' },
   list_notes: { client: w.stranger, args: {}, code: 'project_not_found' },
   search_notes: { client: w.lead, args: { query: 'x'.repeat(MAX_QUERY_CHARS + 1) }, code: 'query_too_long' },
+  search_knowledge: { client: w.lead, args: { repo: 'missing', query: 'x'.repeat(MAX_QUERY_CHARS + 1) }, code: 'query_too_long' },
   append_to_note: { client: w.lead, args: { note: UNKNOWN, content: 'c' }, code: 'note_not_found' },
   update_note_section: { client: w.lead, args: { note: UNKNOWN, heading: 'h', content: 'c', expected_rev: 1 }, code: 'note_not_found' },
   get_note_version: { client: w.lead, args: { note: UNKNOWN, rev: 1 }, code: 'note_not_found' },
