@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FleetApiService } from '../core/fleet-api.service';
 import { SettingsComponent } from './settings.component';
 
-const MODEL_TABLE = { haiku: 'claude-haiku-4-5', sonnet: 'claude-sonnet-5', opus: 'claude-opus-5-5', fable: 'claude-fable-5-1' };
+const MODEL_TABLE = { haiku: 'claude-haiku-5-5', sonnet: 'claude-sonnet-5', opus: 'claude-opus-5-5', fable: 'claude-fable-5-1' };
 const ADMIN_TOKEN = 'sekrit-token-3f9a';
 
 async function renderSettings(models: () => Promise<unknown> = () => Promise.resolve(MODEL_TABLE)) {
@@ -73,7 +73,7 @@ describe('SettingsComponent — tab bar', () => {
 
     await openModelsTab();
 
-    expect(screen.getByTestId('model-trigger-haiku')).toHaveTextContent('claude-haiku-4-5');
+    expect(screen.getByTestId('model-trigger-haiku')).toHaveTextContent('claude-haiku-5-5');
     expect(models).toHaveBeenCalledTimes(1);
   });
 
@@ -249,7 +249,7 @@ describe('SettingsComponent — Models tab', () => {
   });
 
   it('shows a dash, never an empty cell, for a rung the daemon did not send', async () => {
-    await renderSettings(() => Promise.resolve({ haiku: 'claude-haiku-4-5' }));
+    await renderSettings(() => Promise.resolve({ haiku: 'claude-haiku-5-5' }));
     await openModelsTab();
     await screen.findByTestId('model-row-haiku');
 

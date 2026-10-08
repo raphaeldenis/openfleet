@@ -3,8 +3,8 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SettingsComponent } from './settings.component';
 
-const MODEL_TABLE = { haiku: 'claude-haiku-4-5', sonnet: 'claude-sonnet-5', opus: 'claude-opus-5-5', fable: 'claude-fable-5-1' };
-const AVAILABLE_MODELS = ['claude-haiku-4-5', 'claude-haiku-4-5-20251001', 'claude-sonnet-5', 'claude-opus-5-5', 'claude-fable-5-1'];
+const MODEL_TABLE = { haiku: 'claude-haiku-5-5', sonnet: 'claude-sonnet-5', opus: 'claude-opus-5-5', fable: 'claude-fable-5-1' };
+const AVAILABLE_MODELS = ['claude-haiku-5-5', 'claude-sonnet-5', 'claude-opus-5-5', 'claude-fable-5-1'];
 
 interface FakeDaemon {
   table?: Record<string, string>;
@@ -98,10 +98,10 @@ describe('SettingsComponent', () => {
   it('sends one PUT to the models endpoint carrying only the rung that was changed', async () => {
     const { putRequests } = await renderSettings();
 
-    await chooseModelId('opus', 'claude-haiku-4-5-20251001');
+    await chooseModelId('opus', 'claude-haiku-5-5');
 
     await screen.findByText(/saved opus/i);
-    expect(putRequests()).toEqual([{ pathname: '/api/models', body: { opus: 'claude-haiku-4-5-20251001' } }]);
+    expect(putRequests()).toEqual([{ pathname: '/api/models', body: { opus: 'claude-haiku-5-5' } }]);
   });
 
   it('tells the user a change reaches new sessions only and running sessions keep their model', async () => {

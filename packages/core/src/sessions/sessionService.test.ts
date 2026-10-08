@@ -1183,19 +1183,19 @@ describe('SessionService.updateModel hostile cases', () => {
     service.applyInput(session.id, hook(session.id, { hook_event_name: 'UserPromptSubmit' }));
 
     const first = service.updateModel(session.id, 'claude-opus-5-5');
-    const second = service.updateModel(session.id, 'claude-haiku-4-5');
+    const second = service.updateModel(session.id, 'claude-haiku-5-5');
     await vi.advanceTimersByTimeAsync(0);
 
     expect(first.status).toBe('deferred');
     expect(second.status).toBe('deferred');
-    expect(service.get(session.id)!.model).toBe('claude-haiku-4-5');
+    expect(service.get(session.id)!.model).toBe('claude-haiku-5-5');
     expect(harness.launches).toHaveLength(1); // still generating, no relaunch yet
 
     service.applyInput(session.id, hook(session.id, { hook_event_name: 'Stop' }));
     await vi.advanceTimersByTimeAsync(0);
 
     expect(harness.launches).toHaveLength(2); // exactly one relaunch, not two
-    expect(harness.launches[1]!.model).toBe('claude-haiku-4-5'); // the second call's model wins, not the first
+    expect(harness.launches[1]!.model).toBe('claude-haiku-5-5'); // the second call's model wins, not the first
   });
 
   it('a model switch requested while already relaunching is deferred, and forces a second, redundant relaunch once the resumed session goes idle', async () => {
@@ -1209,13 +1209,13 @@ describe('SessionService.updateModel hostile cases', () => {
     expect(first.status).toBe('relaunching');
     expect(harness.launches).toHaveLength(1); // kill escalation hasn't resolved yet
 
-    const second = service.updateModel(session.id, 'claude-haiku-4-5');
+    const second = service.updateModel(session.id, 'claude-haiku-5-5');
     expect(second.status).toBe('deferred'); // the 'relaunching' phase is never treated as 'ready'
-    expect(service.get(session.id)!.model).toBe('claude-haiku-4-5');
+    expect(service.get(session.id)!.model).toBe('claude-haiku-5-5');
 
     await vi.advanceTimersByTimeAsync(DEFAULT_CLOSE_ESCALATE_MS + 1); // force-kills the old process, first relaunch completes
     expect(harness.launches).toHaveLength(2);
-    expect(harness.launches[1]!.model).toBe('claude-haiku-4-5'); // already picked up the second call's model
+    expect(harness.launches[1]!.model).toBe('claude-haiku-5-5'); // already picked up the second call's model
     expect(service.get(session.id)!.state).toBe('starting'); // not deliverable yet: the deferred second relaunch has not fired
 
     service.applyInput(session.id, hook(session.id, { hook_event_name: 'SessionStart' }));
@@ -1225,7 +1225,7 @@ describe('SessionService.updateModel hostile cases', () => {
     // deferred flag survives the first relaunch's completion and fires a THIRD launch regardless, as soon as
     // the resumed session becomes deliverable again — a redundant CLI restart, not a correctness bug.
     expect(harness.launches).toHaveLength(3);
-    expect(harness.launches[2]!.model).toBe('claude-haiku-4-5');
+    expect(harness.launches[2]!.model).toBe('claude-haiku-5-5');
   });
 
   it('when the resumed process never reports back, the relaunch times out to closed, still recording the new model and leaving queued messages queued', async () => {

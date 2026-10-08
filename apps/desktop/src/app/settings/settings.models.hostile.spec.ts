@@ -5,8 +5,8 @@ import { SettingsComponent } from './settings.component';
 
 // Hostile black-box specs for the editable model rungs: what the user sees and what the component sends.
 
-const MODEL_TABLE = { haiku: 'claude-haiku-4-5', sonnet: 'claude-sonnet-5', opus: 'claude-opus-5-5', fable: 'claude-fable-5-1' };
-const AVAILABLE_MODELS = ['claude-haiku-4-5', 'claude-sonnet-5', 'claude-opus-5-5', 'claude-fable-5-1', 'claude-opus-9'];
+const MODEL_TABLE = { haiku: 'claude-haiku-5-5', sonnet: 'claude-sonnet-5', opus: 'claude-opus-5-5', fable: 'claude-fable-5-1' };
+const AVAILABLE_MODELS = ['claude-haiku-5-5', 'claude-sonnet-5', 'claude-opus-5-5', 'claude-fable-5-1', 'claude-opus-9'];
 
 type SavedTable = { models: Record<string, string> };
 
@@ -93,7 +93,7 @@ describe('SettingsComponent models — saving under stress', () => {
 
     expect(screen.queryByRole('listbox')).toBeNull();
     expect(putBodies()).toHaveLength(1);
-    expect(await findTrigger('haiku')).toHaveTextContent('claude-haiku-4-5');
+    expect(await findTrigger('haiku')).toHaveTextContent('claude-haiku-5-5');
     firstSave.resolve({ models: { ...MODEL_TABLE, opus: 'claude-opus-9' } });
   });
 
@@ -116,7 +116,7 @@ describe('SettingsComponent models — saving under stress', () => {
   });
 
   it('puts the dash back on a rung the daemon never sent when its first save fails', async () => {
-    await renderSettings({ table: { haiku: 'claude-haiku-4-5', sonnet: 'claude-sonnet-5', opus: 'claude-opus-5-5' }, saveModels: () => Promise.reject(new Error('500')) });
+    await renderSettings({ table: { haiku: 'claude-haiku-5-5', sonnet: 'claude-sonnet-5', opus: 'claude-opus-5-5' }, saveModels: () => Promise.reject(new Error('500')) });
     expect(await findTrigger('fable')).toHaveTextContent('—');
 
     await chooseModelId('fable', 'claude-fable-5-1');

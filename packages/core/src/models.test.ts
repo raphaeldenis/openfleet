@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ModelIdSchema } from '@openfleet/shared';
 import { DEFAULT_MODEL_TABLE, listAvailableModels, loadModelTable, resolveModel } from './models.js';
+import { recentLogLines } from './logger.js';
 
 const RUNG_ALIASES = ['haiku', 'sonnet', 'opus', 'fable'];
 
@@ -51,6 +52,15 @@ describe('model id charset', () => {
 });
 
 describe('available models', () => {
+  it('offers Haiku 5.5 and excludes the retired Haiku 4.5 ids', async () => {
+    const available = await listAvailableModels();
+
+    expect(available).toContain('claude-haiku-5-5');
+    expect(available).not.toContain('claude-haiku-4-5');
+    expect(available).not.toContain('claude-haiku-4-5-20251001');
+    expect(new Set(available).size).toBe(available.length);
+  });
+
   it('lists the four aliases first', async () => {
     const available = await listAvailableModels();
 
@@ -74,6 +84,24 @@ describe('available models', () => {
 });
 
 describe('loadModelTable', () => {
+  it.each(['claude-haiku-4-5', 'claude-haiku-4-5-20251001', 'synthetic-unknown-model'])('warns visibly before a stored unavailable model %s reaches launch resolution', (modelId) => {
+    const home = mkdtempSync(join(tmpdir(), 'of-models-'));
+    const configPath = join(home, 'config.json');
+    writeFileSync(configPath, JSON.stringify({ models: { haiku: modelId } }));
+    const previousLogCount = recentLogLines().length;
+
+    const table = loadModelTable(configPath);
+
+    expect(resolveModel(table, 'haiku')).toBe(modelId);
+    const newLogs = recentLogLines().slice(previousLogCount).map((line) => JSON.parse(line));
+    expect(newLogs).toContainEqual(expect.objectContaining({
+      level: 'warn',
+      msg: 'stored model is not in the known model list; check availability and update the model settings before launching',
+      rung: 'haiku',
+      modelId,
+    }));
+  });
+
   it('falls back to the default table when no config file exists', () => {
     const home = mkdtempSync(join(tmpdir(), 'of-models-'));
     expect(loadModelTable(join(home, 'config.json'))).toEqual(DEFAULT_MODEL_TABLE);
