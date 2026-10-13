@@ -25,7 +25,7 @@ import {
 } from '../sessions/sessionService.js';
 import { DuplicateNameError, RowNotFoundError, StoreNotFoundError, UnknownColumnError } from '../stores/dataStoreRepository.js';
 import {
-  ConstraintError, DaemonSetColumnError, DuplicateIdError, InvalidActorError, InvalidCellValueError, InvalidColumnDefinitionError, InvalidNameError, InvalidQueryError,
+  ColumnIsNaturalKeyError, ColumnOrderMismatchError, ColumnUsedByViewError, ConstraintError, DaemonSetColumnError, DuplicateIdError, OptionsHeldByRowsError, InvalidActorError, InvalidCellValueError, InvalidColumnDefinitionError, InvalidNameError, InvalidQueryError,
   InvalidViewConfigError, StoreHasRowsError, StoreRowCapError, ViewNotFoundError,
 } from '../stores/dataStoreService.js';
 
@@ -127,6 +127,10 @@ const RULES: Rule[] = [
   when(RowNotFoundError, () => ({ code: 'not_found', message: 'the row does not exist.' })),
   when(ViewNotFoundError, asIs('view_not_found')),
   when(DuplicateNameError, asIs('duplicate_name')),
+  when(ColumnOrderMismatchError, asDetail('invalid_body', 'the column order is not a permutation of the columns.')),
+  when(ColumnIsNaturalKeyError, asDetail('constraint_violation', 'the column is the natural key.')),
+  when(ColumnUsedByViewError, asDetail('constraint_violation', 'a view uses the column.')),
+  when(OptionsHeldByRowsError, asDetail('constraint_violation', 'rows still hold the removed options.')),
   when(ConstraintError, asDetail('constraint_violation', 'the change breaks a constraint.')),
   when(StoreRowCapError, asIs('row_cap')),
   when(DaemonSetColumnError, asDetail('invalid_body', 'the column is set by the daemon.')),

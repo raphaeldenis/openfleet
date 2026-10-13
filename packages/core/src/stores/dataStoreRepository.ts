@@ -168,6 +168,35 @@ export class DataStoreRepository {
     return rows.map(toColumn);
   }
 
+  /** Sets the display name and options of a column; its id, type and position stay. */
+  updateColumn(storeId: string, input: { columnId: string; displayName: string; options: SelectOption[] | null }): DsColumn {
+    const sameNameColumn = this.findColumnByName(storeId, input.displayName);
+    if (sameNameColumn && sameNameColumn.id !== input.columnId) throw new DuplicateNameError(input.displayName);
+    const optionsJson = input.options === null ? null : JSON.stringify(input.options);
+    this.db.prepare('UPDATE ds_columns SET display_name = ?, options_json = ? WHERE id = ? AND store_id = ?')
+      .run(input.displayName, optionsJson, input.columnId, storeId);
+    return this.listColumns(storeId).find((column) => column.id === input.columnId)!;
+  }
+
+  /** Removes the column, strips its cell from every row (one history entry per row that held a value) and closes the gap in the column order. */
+  deleteColumn(storeId: string, input: { columnId: string; actor: RowActor; at: string }): void {
+    this.inTransaction(() => {
+      for (const row of this.listRows(storeId)) this.clearCell(row, input);
+      this.db.prepare('DELETE FROM ds_columns WHERE id = ? AND store_id = ?').run(input.columnId, storeId);
+      this.reorderColumns(storeId, this.listColumns(storeId).map((column) => column.id));
+    });
+  }
+
+  /** Writes sort_order 0..n-1 following `columnIds`; the caller (service) has checked it is a permutation of the store's columns. */
+  reorderColumns(storeId: string, columnIds: string[]): DsColumn[] {
+    this.inTransaction(() => {
+      columnIds.forEach((columnId, position) => {
+        this.db.prepare('UPDATE ds_columns SET sort_order = ? WHERE id = ? AND store_id = ?').run(position, columnId, storeId);
+      });
+    });
+    return this.listColumns(storeId);
+  }
+
   insertRow(storeId: string, input: { id: string; data: Record<string, unknown>; actor: RowActor; at: string }): DsRow {
     const data = normalizeCells(input.data);
     this.inTransaction(() => {
@@ -276,6 +305,14 @@ export class DataStoreRepository {
   findRowStoreId(rowId: string): string | undefined {
     const row = this.db.prepare('SELECT store_id FROM ds_rows WHERE id = ?').get(rowId) as { store_id: string } | undefined;
     return row?.store_id;
+  }
+
+  private clearCell(row: DsRow, input: { columnId: string; actor: RowActor; at: string }): void {
+    const holdsCell = Object.hasOwn(row.data, input.columnId);
+    if (!holdsCell) return;
+    const { [input.columnId]: from, ...remainingData } = row.data;
+    this.db.prepare('UPDATE ds_rows SET data_json = ?, updated_at = ? WHERE id = ? AND store_id = ?').run(JSON.stringify(remainingData), input.at, row.id, row.storeId);
+    this.recordChange({ storeId: row.storeId, rowId: row.id, actor: input.actor, at: input.at, change: { [input.columnId]: { from, to: null } } });
   }
 
   private refuseMissingStore(storeId: string): void {

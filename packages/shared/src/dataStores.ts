@@ -17,7 +17,7 @@ export const ScapeAggregateSchema = AggregateSchema.omit({ op: true }).extend({ 
 export type Aggregate = z.infer<typeof AggregateSchema>;
 export type ScapeAggregate = z.infer<typeof ScapeAggregateSchema>;
 
-export const SelectOptionSchema = z.object({ id: z.string().min(1), label: z.string().min(1) });
+export const SelectOptionSchema = z.object({ id: z.string().min(1), label: z.string().min(1), color: z.string().min(1).optional() });
 export type SelectOption = z.infer<typeof SelectOptionSchema>;
 
 export const AutoValueSchema = z.enum(['created_at']);
@@ -126,6 +126,22 @@ export const MAX_ROW_BATCH = 500;
 export const MAX_HISTORY_LIMIT = 500;
 
 export const MAX_STORE_NAME_CHARS = 200;
+
+export const OptionReplacementSchema = SelectOptionSchema.partial({ id: true }).strict();
+export type OptionReplacement = z.infer<typeof OptionReplacementSchema>;
+
+export const ColumnChangesSchema = z.object({
+  name: z.string().trim().min(1).max(MAX_STORE_NAME_CHARS).optional(),
+  naturalKey: z.boolean().optional(),
+  options: z.array(OptionReplacementSchema).optional(),
+}).strict();
+export type ColumnChanges = z.infer<typeof ColumnChangesSchema>;
+
+export const UpdateColumnRequestSchema = ColumnChangesSchema.extend({ projectId: z.string().min(1) });
+export type UpdateColumnRequest = z.infer<typeof UpdateColumnRequestSchema>;
+
+export const ReorderColumnsRequestSchema = z.object({ projectId: z.string().min(1), columnIds: z.array(z.string().min(1)) });
+export type ReorderColumnsRequest = z.infer<typeof ReorderColumnsRequestSchema>;
 
 export const CreateDataStoreRequestSchema = z.object({ projectId: z.string().min(1), displayName: z.string().min(1).max(MAX_STORE_NAME_CHARS) });
 export type CreateDataStoreRequest = z.infer<typeof CreateDataStoreRequestSchema>;

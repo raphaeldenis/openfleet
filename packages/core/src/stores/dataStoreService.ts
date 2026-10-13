@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from 'node:util';
 import type { DatabaseSync } from 'node:sqlite';
 import {
   COLUMN_TYPES, COLUMN_TYPE_BY_FORMAT, ColumnFormatSchema, DsViewConfigSchema, NO_VALUE_GROUP_ID, orderedKanbanOptions, OrderTermSchema, SelectOptionSchema, VIEW_TYPES, WhereClauseSchema,
-  type AutoValue, type ColumnFormat, type ColumnType, type DataStore, type DsColumn, type DsRow, type DsView, type DsViewConfig, type OrderTerm, type SelectOption, type ViewType, type WhereClause,
+  type AutoValue, type ColumnChanges, type ColumnFormat, type ColumnType, type DataStore, type DsColumn, type DsRow, type DsView, type DsViewConfig, type OptionReplacement, type OrderTerm, type SelectOption, type ViewType, type WhereClause,
 } from '@openfleet/shared';
 import { z } from 'zod';
 import { inTransaction as runInTransaction } from '../db/transaction.js';
@@ -79,6 +79,26 @@ export class StoreHasRowsError extends Error {
     super(`Data store ${storeId} still has ${rowCount} rows; pass force to delete it with its history`);
   }
 }
+export class ColumnIsNaturalKeyError extends ConstraintError {
+  constructor(columnName: string) {
+    super(`Column "${columnName}" is the natural key of the data store; clear the natural key first`);
+  }
+}
+export class ColumnUsedByViewError extends ConstraintError {
+  constructor(columnName: string, viewName: string) {
+    super(`Column "${columnName}" is used by the view "${viewName}"; update or delete the view first`);
+  }
+}
+export class OptionsHeldByRowsError extends ConstraintError {
+  constructor(optionIds: string[]) {
+    super(`Rows still hold the options being removed (${optionIds.join(', ')}); change those rows first`);
+  }
+}
+export class ColumnOrderMismatchError extends InvalidColumnDefinitionError {
+  constructor(diff: { missingIds: string[]; unknownIds: string[]; repeatedIds: string[] }) {
+    super(`column_ids must list every column exactly once; missing: [${diff.missingIds.join(', ')}], unknown: [${diff.unknownIds.join(', ')}], repeated: [${diff.repeatedIds.join(', ')}]`);
+  }
+}
 export class StoreRowCapError extends Error {
   constructor(readonly storeId: string, readonly cap: number) {
     super(`Data store ${storeId} is at its ${cap}-row cap`);
@@ -146,6 +166,17 @@ function survivesJsonRoundTrip(value: unknown): boolean {
   } catch {
     return false;
   }
+}
+
+function viewConfigReferences(config: DsViewConfig, columnId: string): boolean {
+  const referencedColumnIds = [
+    ...(config.where ?? []).map((clause) => clause.columnId),
+    ...(config.orderBy ?? []).map((term) => term.columnId),
+    ...(config.cardFields ?? []),
+    ...(config.groupByColumnId ? [config.groupByColumnId] : []),
+    ...(config.cardTitleColumnId ? [config.cardTitleColumnId] : []),
+  ];
+  return referencedColumnIds.includes(columnId);
 }
 
 const isEmptyCell = (value: unknown): boolean => value === undefined || value === null;
@@ -219,6 +250,79 @@ export class DataStoreService {
   createStore(input: Scope & { displayName: string }): DataStore {
     const displayName = normalizeName(input.displayName);
     return this.guarded(() => this.repo.createStore({ id: this.newId(), projectId: input.projectId, displayName, at: this.clock() }));
+  }
+
+  /** Renames a column, replaces the options of a select column and sets or clears the store natural key, all or nothing. */
+  updateColumn(storeId: string, input: Scope & { columnId: string; changes: ColumnChanges }): DsColumn {
+    this.authorize(storeId, input.projectId);
+    const column = this.requireColumn(storeId, input.columnId);
+    const { name, options, naturalKey } = input.changes;
+    const displayName = name === undefined ? column.displayName : normalizeName(name);
+    const replacedOptions = options === undefined ? column.options : this.replacedOptions(column, options);
+    this.refuseOptionsStillHeldByRows(storeId, { column, options: replacedOptions });
+    return this.inTransaction(() => {
+      const updatedColumn = this.guarded(() => this.repo.updateColumn(storeId, { columnId: column.id, displayName, options: replacedOptions }));
+      if (naturalKey !== undefined) this.applyNaturalKeyChoice(storeId, { projectId: input.projectId, columnId: column.id, isNaturalKey: naturalKey });
+      return updatedColumn;
+    });
+  }
+
+  /** Removes a column and its cells, recording the cleared cells in each row history. The natural key column and columns used by a view stay. */
+  deleteColumn(storeId: string, input: Scope & { columnId: string; actor: RowActor }): void {
+    this.authorize(storeId, input.projectId);
+    const column = this.requireColumn(storeId, input.columnId);
+    const isNaturalKey = this.repo.findStore(storeId)?.naturalKeyColumnId === column.id;
+    if (isNaturalKey) throw new ColumnIsNaturalKeyError(column.displayName);
+    const usingView = this.repo.listViews(storeId).find((view) => viewConfigReferences(view.config, column.id));
+    if (usingView) throw new ColumnUsedByViewError(column.displayName, usingView.displayName);
+    this.guarded(() => this.repo.deleteColumn(storeId, { columnId: column.id, actor: input.actor, at: this.clock() }));
+  }
+
+  /** Gives the columns the order of `columnIds`, which must list every column of the store exactly once. */
+  reorderColumns(storeId: string, input: Scope & { columnIds: string[] }): DsColumn[] {
+    this.authorize(storeId, input.projectId);
+    const storedIds = this.repo.listColumns(storeId).map((column) => column.id);
+    const missingIds = storedIds.filter((id) => !input.columnIds.includes(id));
+    const unknownIds = input.columnIds.filter((id) => !storedIds.includes(id));
+    const repeatedIds = input.columnIds.filter((id, index) => input.columnIds.indexOf(id) !== index);
+    const isPermutation = [missingIds, unknownIds, repeatedIds].every((ids) => ids.length === 0);
+    if (!isPermutation) throw new ColumnOrderMismatchError({ missingIds, unknownIds, repeatedIds });
+    return this.guarded(() => this.repo.reorderColumns(storeId, input.columnIds));
+  }
+
+  private requireColumn(storeId: string, columnId: string): DsColumn {
+    const column = this.repo.listColumns(storeId).find((storedColumn) => storedColumn.id === columnId);
+    if (!column) throw new UnknownColumnError([columnId]);
+    return column;
+  }
+
+  /** Keeps the id of every replacement matching a current option (by id, else by label); a replacement matching none gets a fresh id. */
+  private replacedOptions(column: DsColumn, replacements: OptionReplacement[]): SelectOption[] {
+    if (column.columnType !== 'select') throw new InvalidColumnDefinitionError('Only a select column takes options; a column cannot change type');
+    const currentOptions = column.options ?? [];
+    const options = replacements.map((replacement) => {
+      const keptOption = replacement.id === undefined
+        ? currentOptions.find((option) => option.label === replacement.label)
+        : currentOptions.find((option) => option.id === replacement.id);
+      const claimsForeignId = replacement.id !== undefined && keptOption === undefined;
+      if (claimsForeignId) throw new InvalidColumnDefinitionError(`Option id ${replacement.id} does not belong to this column`);
+      return { ...replacement, id: keptOption?.id ?? this.newId() };
+    });
+    return this.validateColumnDefinition(column.columnType, options)!;
+  }
+
+  private refuseOptionsStillHeldByRows(storeId: string, input: { column: DsColumn; options: SelectOption[] | null }): void {
+    if (input.column.columnType !== 'select') return;
+    const keptIds = new Set((input.options ?? []).map((option) => option.id));
+    const heldIds = this.repo.listRows(storeId).map((row) => row.data[input.column.id]);
+    const removedIdsHeld = [...new Set(heldIds.filter((id): id is string => typeof id === 'string' && !keptIds.has(id)))];
+    if (removedIdsHeld.length > 0) throw new OptionsHeldByRowsError(removedIdsHeld);
+  }
+
+  private applyNaturalKeyChoice(storeId: string, input: Scope & { columnId: string; isNaturalKey: boolean }): void {
+    if (input.isNaturalKey) return this.setNaturalKey(storeId, input);
+    const isCurrentKey = this.repo.findStore(storeId)?.naturalKeyColumnId === input.columnId;
+    if (isCurrentKey) this.setNaturalKey(storeId, { projectId: input.projectId, columnId: null });
   }
 
   addColumn(storeId: string, input: Scope & { displayName: string; columnType: ColumnType; format?: ColumnFormat; options?: SelectOption[]; autoValue?: AutoValue }): DsColumn {
