@@ -132,6 +132,8 @@ const HANDOFF_TARGET_AVAILABLE_HINT = 'Saved handoffs appear in Notes › handof
               type="button"
               class="of-btn of-btn--secondary"
               data-testid="manager-dashboard-pause"
+              [attr.aria-label]="pauseButtonName()"
+              [attr.aria-pressed]="isPaused()"
               [disabled]="pauseAction.pending()"
               (click)="togglePause()"
             >{{ pauseButtonLabel() }}</button>
@@ -321,6 +323,11 @@ export class ManagerDashboardComponent {
 
   protected readonly pauseButtonLabel = computed(() => (this.isPaused() ? 'Resume pulses' : 'Pause pulses'));
 
+  protected readonly pauseButtonName = computed(() => {
+    const managerName = this.session()?.name;
+    return managerName === undefined ? null : `${this.pauseButtonLabel()} of ${showInvisibleControlsAsEscapes(managerName)}`;
+  });
+
   protected readonly countdownLabelText = computed(() => (this.isPaused() ? 'paused' : countdownLabel(this.countdownSeconds())));
 
   protected readonly fractionElapsed = computed(() => {
@@ -343,12 +350,15 @@ export class ManagerDashboardComponent {
   }
 
   pulseNow(): void {
+    this.pauseAction.message.set(null);
     void this.pulse.run(this.managerId());
   }
 
   protected togglePause(): void {
     const manager = this.manager();
-    if (manager) void this.pauseAction.toggle(manager);
+    if (!manager) return;
+    this.pulse.message.set(null);
+    void this.pauseAction.toggle(manager);
   }
 
   openTerminal(): void {

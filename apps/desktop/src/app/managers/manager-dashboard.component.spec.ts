@@ -5,7 +5,7 @@ import { ActivatedRoute, convertToParamMap, provideRouter, Router } from '@angul
 import { BehaviorSubject, of } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
 import { ManagerDashboardComponent } from './manager-dashboard.component';
-import { FleetApiService } from '../core/fleet-api.service';
+import { ApiError, FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
 
 function activatedRouteFor(id: string) {
@@ -49,13 +49,13 @@ describe('ManagerDashboardComponent state overdue chip', () => {
 });
 
 describe('ManagerDashboardComponent pause control', () => {
-  const renderDashboardOf = (managerView: object, api: object = {}) =>
+  const renderDashboardOf = (managerView: object, api: object = {}, managerSession: object = MANAGER_SESSION) =>
     render(ManagerDashboardComponent, {
       providers: [
         provideRouter([]),
         { provide: ActivatedRoute, useValue: activatedRouteFor('m1') },
         { provide: FleetApiService, useValue: api },
-        { provide: FleetEventsService, useValue: fakeEvents({ sessions: [MANAGER_SESSION], managers: [managerView] }) },
+        { provide: FleetEventsService, useValue: fakeEvents({ sessions: [managerSession], managers: [managerView] }) },
       ],
     });
 
@@ -63,16 +63,52 @@ describe('ManagerDashboardComponent pause control', () => {
     const api = { updateManager: vi.fn().mockResolvedValue({}) };
     await renderDashboardOf(MANAGER_VIEW, api);
 
-    await userEvent.click(screen.getByRole('button', { name: 'Pause pulses' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Pause pulses of Lead' }));
 
     expect(api.updateManager).toHaveBeenCalledWith('m1', { pulseEnabled: false });
+  });
+
+  it('tells whether the pulses are paused through the pressed state of the pause button', async () => {
+    await renderDashboardOf(MANAGER_VIEW);
+
+    expect(screen.getByRole('button', { name: 'Pause pulses of Lead' })).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('offers no pause button for a closed session', async () => {
+    await renderDashboardOf(MANAGER_VIEW, {}, { ...MANAGER_SESSION, state: 'closed' });
+
+    expect(screen.queryByTestId('manager-dashboard-pause')).toBeNull();
+  });
+
+  it('shows the error of a failing pause and lets the user pause again', async () => {
+    const api = { updateManager: vi.fn().mockRejectedValue(new ApiError(500, 'PATCH /api/managers/m1 → 500', 'internal_error')) };
+    await renderDashboardOf(MANAGER_VIEW, api);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Pause pulses of Lead' }));
+
+    expect(screen.getByTestId('manager-dashboard-pulse-message')).toHaveTextContent('The daemon hit an unexpected error');
+    expect(screen.getByRole('button', { name: 'Pause pulses of Lead' })).toBeEnabled();
+  });
+
+  it('shows the pause error instead of the message left by an earlier pulse', async () => {
+    const api = {
+      pulseNow: vi.fn().mockResolvedValue({ coalesced: true }),
+      updateManager: vi.fn().mockRejectedValue(new ApiError(500, 'PATCH /api/managers/m1 → 500', 'internal_error')),
+    };
+    await renderDashboardOf(MANAGER_VIEW, api);
+    await userEvent.click(screen.getByTestId('manager-dashboard-pulse'));
+    expect(screen.getByTestId('manager-dashboard-pulse-message')).toHaveTextContent('Pulse coalesced');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Pause pulses of Lead' }));
+
+    expect(screen.getByTestId('manager-dashboard-pulse-message')).toHaveTextContent('The daemon hit an unexpected error');
   });
 
   it('resumes the pulses of a paused manager from the live controls', async () => {
     const api = { updateManager: vi.fn().mockResolvedValue({}) };
     await renderDashboardOf({ ...MANAGER_VIEW, pulseEnabled: false }, api);
 
-    await userEvent.click(screen.getByRole('button', { name: 'Resume pulses' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Resume pulses of Lead' }));
 
     expect(api.updateManager).toHaveBeenCalledWith('m1', { pulseEnabled: true });
   });

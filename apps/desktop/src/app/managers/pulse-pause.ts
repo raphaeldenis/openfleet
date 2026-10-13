@@ -1,12 +1,8 @@
 import { signal } from '@angular/core';
 import type { ManagerView } from '@openfleet/shared';
-import { ApiError, FleetApiService } from '../core/fleet-api.service';
+import { copyFor } from '../core/error-copy';
+import { FleetApiService } from '../core/fleet-api.service';
 import type { PulseMessage } from './pulse-now';
-
-function describePauseError(error: unknown): string {
-  if (error instanceof ApiError && error.status === 404) return 'Manager not found';
-  return 'Could not reach the server — check your connection';
-}
 
 /** Pauses a running manager or resumes a paused one; the daemon's manager.updated event refreshes the view. */
 export class PulsePauseAction {
@@ -27,7 +23,7 @@ export class PulsePauseAction {
     try {
       await this.api.updateManager(manager.sessionId, { pulseEnabled: !manager.pulseEnabled });
     } catch (error) {
-      this.message.set({ text: describePauseError(error), kind: 'error' });
+      this.message.set({ text: copyFor(error, { action: 'pause_manager' }).text, kind: 'error' });
     } finally {
       this.pending.set(false);
     }

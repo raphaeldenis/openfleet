@@ -105,10 +105,10 @@ describe('ManagerCardComponent links', () => {
 });
 
 describe('ManagerCardComponent pause control', () => {
-  const renderCard = (managerPatch: Partial<ManagerView>, api: Partial<Record<'updateManager' | 'pulseNow', unknown>> = {}) =>
+  const renderCard = (managerPatch: Partial<ManagerView>, api: Partial<Record<'updateManager' | 'pulseNow', unknown>> = {}, managerSession?: Session) =>
     render(ManagerCardComponent, {
-      bindings: [inputBinding('manager', () => manager(managerPatch))],
-      providers: [{ provide: FleetApiService, useValue: api }],
+      bindings: [inputBinding('manager', () => manager(managerPatch)), inputBinding('session', () => managerSession)],
+      providers: [provideRouter([]), { provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: fakeWorkingStateEvents({ sessions: managerSession ? [managerSession] : [] }) }],
     });
 
   it('offers to pause the pulses of a running manager and asks the daemon to pause them', async () => {
@@ -152,13 +152,68 @@ describe('ManagerCardComponent pause control', () => {
     expect(screen.getByTestId('manager-m1-pulse-message')).toHaveTextContent(/paused/i);
   });
 
-  it('shows an error, not a silent failure, when the daemon cannot pause the manager', async () => {
-    const api = { updateManager: vi.fn().mockRejectedValue(new ApiError(404, 'PATCH /api/managers/m1 → 404')) };
+  it('names the manager in the accessible name of the pause button and tells whether the pulses are paused', async () => {
+    await renderCard({ pulseEnabled: true }, {}, session());
+
+    const pauseButton = screen.getByRole('button', { name: 'Pause pulses of Lead' });
+
+    expect(pauseButton).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('names the manager in the accessible name of the resume button and tells that the pulses are paused', async () => {
+    await renderCard({ pulseEnabled: false }, {}, session());
+
+    const resumeButton = screen.getByRole('button', { name: 'Resume pulses of Lead' });
+
+    expect(resumeButton).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('disables the pause button of a closed session', async () => {
+    await renderCard({ pulseEnabled: true }, {}, session({ state: 'closed' }));
+
+    expect(screen.getByTestId('manager-m1-pause')).toBeDisabled();
+  });
+
+  it('says the manager no longer exists when the daemon cannot find the manager to pause', async () => {
+    const api = { updateManager: vi.fn().mockRejectedValue(new ApiError(404, 'PATCH /api/managers/m1 → 404', 'manager_not_found')) };
     await renderCard({ pulseEnabled: true }, api);
 
     await userEvent.click(screen.getByRole('button', { name: 'Pause pulses' }));
 
-    expect(screen.getByTestId('manager-m1-pulse-message')).toHaveTextContent('Manager not found');
+    expect(screen.getByTestId('manager-m1-pulse-message')).toHaveTextContent('That manager no longer exists');
+  });
+
+  it('tells the daemon failed, not that the connection is down, and lets the user pause again, when the daemon answers 500', async () => {
+    const api = { updateManager: vi.fn().mockRejectedValue(new ApiError(500, 'PATCH /api/managers/m1 → 500', 'internal_error')) };
+    await renderCard({ pulseEnabled: true }, api);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Pause pulses' }));
+
+    expect(screen.getByTestId('manager-m1-pulse-message')).toHaveTextContent('The daemon hit an unexpected error');
+    expect(screen.getByRole('button', { name: 'Pause pulses' })).toBeEnabled();
+  });
+
+  it('tells the daemon cannot be reached when the request does not get through', async () => {
+    const api = { updateManager: vi.fn().mockRejectedValue(new TypeError('Failed to fetch')) };
+    await renderCard({ pulseEnabled: true }, api);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Pause pulses' }));
+
+    expect(screen.getByTestId('manager-m1-pulse-message')).toHaveTextContent('check your connection');
+  });
+
+  it('shows the pause error instead of the message left by an earlier pulse', async () => {
+    const api = {
+      pulseNow: vi.fn().mockResolvedValue({ coalesced: true }),
+      updateManager: vi.fn().mockRejectedValue(new ApiError(500, 'PATCH /api/managers/m1 → 500', 'internal_error')),
+    };
+    await renderCard({ pulseEnabled: true }, api);
+    await userEvent.click(screen.getByTestId('manager-m1-pulse'));
+    expect(screen.getByTestId('manager-m1-pulse-message')).toHaveTextContent('Pulse coalesced');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Pause pulses' }));
+
+    expect(screen.getByTestId('manager-m1-pulse-message')).toHaveTextContent('The daemon hit an unexpected error');
   });
 });
 

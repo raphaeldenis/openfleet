@@ -1,5 +1,6 @@
 import { ChangeDetectionStrategy, Component, DestroyRef, computed, inject, input, signal } from '@angular/core';
 import type { ManagerView, Session } from '@openfleet/shared';
+import { showInvisibleControlsAsEscapes } from '../core/bidi-escapes';
 import { FleetApiService } from '../core/fleet-api.service';
 import { PulseRingComponent } from '../design/pulse-ring.component';
 import { OverdueChipComponent } from '../working-state/overdue-chip.component';
@@ -31,6 +32,8 @@ import { PulsePauseAction } from './pulse-pause';
         type="button"
         class="of-btn of-btn--secondary"
         [attr.data-testid]="'manager-' + manager().sessionId + '-pause'"
+        [attr.aria-label]="pauseButtonName()"
+        [attr.aria-pressed]="isPaused()"
         [disabled]="pauseAction.pending() || isSessionClosed()"
         (click)="togglePause()"
       >{{ pauseButtonLabel() }}</button>
@@ -71,6 +74,11 @@ export class ManagerCardComponent {
 
   protected readonly pauseButtonLabel = computed(() => (this.isPaused() ? 'Resume pulses' : 'Pause pulses'));
 
+  protected readonly pauseButtonName = computed(() => {
+    const managerName = this.session()?.name;
+    return managerName === undefined ? null : `${this.pauseButtonLabel()} of ${showInvisibleControlsAsEscapes(managerName)}`;
+  });
+
   protected readonly countdownDisplay = computed(() => {
     if (this.isSessionClosed()) return 'closed';
     if (this.isPaused()) return 'paused';
@@ -89,10 +97,12 @@ export class ManagerCardComponent {
   });
 
   pulseNow(): void {
+    this.pauseAction.message.set(null);
     void this.pulse.run(this.manager().sessionId);
   }
 
   togglePause(): void {
+    this.pulse.message.set(null);
     void this.pauseAction.toggle(this.manager());
   }
 }
