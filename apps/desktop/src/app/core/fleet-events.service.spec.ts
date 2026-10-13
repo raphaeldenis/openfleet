@@ -142,6 +142,43 @@ describe('FleetEventsService', () => {
     });
   });
 
+  describe('notification triggers', () => {
+    const needsInput = { category: 'needsInput', sessionId: 's1', kind: 'permission', promptKey: 's1@t', toolName: 'Bash' };
+
+    async function connectedSocket() {
+      const service = new FleetEventsService();
+      await service.connect();
+      const received: unknown[] = [];
+      service.notificationTriggers.subscribe((trigger) => received.push(trigger));
+      return { socket: FakeWebSocket.instances[0]!, received };
+    }
+
+    it('hands over each trigger the daemon announces, without the event type', async () => {
+      const { socket, received } = await connectedSocket();
+
+      socket.dispatchMessage({ type: 'notification.trigger', category: 'agentFinished', sessionId: 's1' });
+      socket.dispatchMessage({ type: 'notification.trigger', ...needsInput });
+
+      expect(received).toEqual([{ category: 'agentFinished', sessionId: 's1' }, needsInput]);
+    });
+
+    it('hands over nothing when a snapshot arrives, on connect or on reconnect', async () => {
+      const { socket, received } = await connectedSocket();
+
+      socket.dispatchMessage({ type: 'snapshot', sessions: [session('s1', { state: 'waiting_permission' })], approvals: [] });
+
+      expect(received).toEqual([]);
+    });
+
+    it('keeps ignoring an event type it does not know, as an older desktop does for a newer daemon', async () => {
+      const { socket, received } = await connectedSocket();
+
+      socket.dispatchMessage({ type: 'notification.future_kind', sessionId: 's1' });
+
+      expect(received).toEqual([]);
+    });
+  });
+
   describe('silent blocks', () => {
     const block = { sessionId: 's1', waitingSince: '2026-10-04T10:00:00.000Z' };
 
