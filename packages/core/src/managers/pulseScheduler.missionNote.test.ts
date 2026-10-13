@@ -22,13 +22,15 @@ async function anIdleManager({ withMissionNote }: { withMissionNote: boolean }) 
   const manager = await sessions.create({ directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake' });
   sessions.applyInput(manager.id, { kind: 'hook', event: { session_id: manager.id, hook_event_name: 'SessionStart' } as never });
   managers.insert({ sessionId: manager.id, pulseSeconds: PULSE_SECONDS, childrenCap: 1, missionText: 'x', createdAt: CREATED_AT });
-  if (withMissionNote) {
-    new ProjectRepository(db).insert({ id: 'project', name: 'Fleet', docsFolderPath: null, createdAt: CREATED_AT });
-    new NoteRepository(db).insert({ id: MISSION_NOTE_ID, projectId: 'project', title: 'Mission', bodyMd: '# Mission', folder: null, filePath: null, sourceHash: null, rev: 1, shared: false, createdAt: CREATED_AT, updatedAt: CREATED_AT });
-    managers.setMissionNote(manager.id, MISSION_NOTE_ID);
-  }
+  new ProjectRepository(db).insert({ id: 'project', name: 'Fleet', docsFolderPath: null, createdAt: CREATED_AT });
+  new NoteRepository(db).insert({ id: MISSION_NOTE_ID, projectId: 'project', title: 'Mission', bodyMd: '# Mission', folder: null, filePath: null, sourceHash: null, rev: 1, shared: false, createdAt: CREATED_AT, updatedAt: CREATED_AT });
+  const linkMissionNote = () => managers.setMissionNote(manager.id, MISSION_NOTE_ID);
+  if (withMissionNote) linkMissionNote();
   scheduler.onManagerCreated(managers.get(manager.id)!);
-  return { harness };
+  const startBusyTurn = () => sessions.applyInput(manager.id, { kind: 'hook', event: { session_id: manager.id, hook_event_name: 'UserPromptSubmit' } as never });
+  const pulseNow = () => scheduler.pulseNow(manager.id);
+  const hasQueuedPulse = (body: string) => sessions.hasQueuedMessage(manager.id, body);
+  return { harness, linkMissionNote, startBusyTurn, pulseNow, hasQueuedPulse };
 }
 
 const pulseWrittenAfterOneInterval = (harness: FakeHarness) => {
@@ -55,5 +57,29 @@ describe('PulseScheduler: the pulse of a manager with a mission note', () => {
     const pulse = pulseWrittenAfterOneInterval(harness);
 
     expect(pulse).toBe(PULSE_MESSAGE);
+  });
+
+  it('queues the identical pulse text of a busy manager with a mission note only once', async () => {
+    const manager = await anIdleManager({ withMissionNote: true });
+    manager.startBusyTurn();
+
+    const firstPulse = manager.pulseNow();
+    const secondPulse = manager.pulseNow();
+
+    expect(firstPulse).toEqual({ coalesced: false });
+    expect(secondPulse).toEqual({ coalesced: true });
+  });
+
+  it('queues the note-carrying pulse next to a plain pulse still queued when the note gets linked', async () => {
+    const manager = await anIdleManager({ withMissionNote: false });
+    manager.startBusyTurn();
+    manager.pulseNow();
+
+    manager.linkMissionNote();
+    const pulseAfterLinking = manager.pulseNow();
+
+    expect(pulseAfterLinking).toEqual({ coalesced: false });
+    expect(manager.hasQueuedPulse(PULSE_MESSAGE)).toBe(true);
+    expect(manager.hasQueuedPulse(`${PULSE_MESSAGE} Your mission note id is ${MISSION_NOTE_ID}; read it every time you wake with get_note.`)).toBe(true);
   });
 });

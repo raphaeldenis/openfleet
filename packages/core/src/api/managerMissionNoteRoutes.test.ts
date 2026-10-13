@@ -81,6 +81,18 @@ describe('PATCH /api/managers/:id with a mission note', () => {
     expect(profile.manager.missionNoteId).toBeUndefined();
   });
 
+  it('404s a note that does not exist as not_found and changes nothing', async () => {
+    const managerId = await createManagerOfOwnProject();
+
+    const response = await patchJson(`/api/managers/${managerId}`, { missionNoteId: 'note-ghost', childrenCap: 9 });
+
+    expect(response.status).toBe(404);
+    expect(await response.json()).toMatchObject({ error: 'not_found', message: 'the note does not exist.' });
+    const profile = await (await api(`/api/managers/${managerId}`)).json();
+    expect(profile.manager).toMatchObject({ childrenCap: 4 });
+    expect(profile.manager.missionNoteId).toBeUndefined();
+  });
+
   it('unlinks the mission note when given null', async () => {
     const managerId = await createManagerOfOwnProject();
     insertNote({ id: 'note-mission', projectId: OWN_PROJECT_ID });

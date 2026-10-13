@@ -24,6 +24,6 @@ it('upgrades 025 to import provenance without rewriting knowledge or historical 
     expect(() => db.exec("DELETE FROM projects WHERE id = 'p'")).toThrow();
     expect(() => db.exec("DELETE FROM knowledge_import_runs WHERE id = 'historic'")).toThrow();
     expect(db.prepare("SELECT strict FROM pragma_table_list WHERE name = 'knowledge_import_mappings'").get()).toEqual({ strict: 1 });
-    expect(db.prepare("SELECT version FROM schema_migrations WHERE version LIKE '026%'").get()).toEqual({ version: '026_knowledge_import_provenance' });
+    expect(db.prepare("SELECT version FROM schema_migrations WHERE version = '026_knowledge_import_provenance'").get()).toEqual({ version: '026_knowledge_import_provenance' });
   } finally { db.close(); }
 });
