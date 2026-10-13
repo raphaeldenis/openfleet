@@ -1,7 +1,7 @@
 import { accessSync, closeSync, constants, existsSync, lstatSync, openSync, readSync, realpathSync, statSync, type Stats } from 'node:fs';
 import { basename, dirname, isAbsolute, join, normalize, sep } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import { MANAGER_ROLE, MAX_MISSION_BYTES, OpenFleetError, type HeldMessage, type ReopenMode, type ErrorCode, type ErrorEnvelope, type PermissionMode, type RuntimeAttention, type Session, type SessionCloseReason, type SessionSpec, type WorktreeWarning } from '@openfleet/shared';
+import { MANAGER_ROLE, MAX_MISSION_BYTES, OpenFleetError, type HeldMessage, type NotificationTrigger, type ReopenMode, type ErrorCode, type ErrorEnvelope, type PermissionMode, type RuntimeAttention, type Session, type SessionCloseReason, type SessionSpec, type WorktreeWarning } from '@openfleet/shared';
 import { carryLoggedRef, rememberLoggedRef } from '../errors/loggedRef.js';
 import { EventBus } from '../events/eventBus.js';
 import { createWorktreeWithHook, postCreateHookOf } from '../git/worktreeCreation.js';
@@ -20,6 +20,7 @@ import { SessionRuntime, type RuntimeProgress } from './sessionRuntime.js';
 import { findLatestContextTokens, findResolvedModel, readTranscriptTail } from './resolvedModel.js';
 import { wrapAgentMessage } from './messageEnvelope.js';
 import { normalizePermissionMode, SessionRepository } from './sessionRepository.js';
+import { agentFinishedBy, notificationTriggerOf } from './notificationTriggers.js';
 import { canDeliverNow, isClear, nextState, provesTurnEnded, startsClearedConversation, type SessionInput } from './stateMachine.js';
 
 // Injected, not imported: describeError imports this module's error classes, so importing it here would make a cycle.
@@ -933,6 +934,8 @@ export class SessionService {
       if (startsClearedConversationWhileClearSubmitted) this.enter(sessionId, READY);
       // The turn's start was never reported, but its end still releases a relaunch held behind it.
       if (startsClearedConversationWhileClearSubmitted || endsUnfinishedTurn) this.guarded(sessionId, () => this.advance(sessionId));
+      // The recorded state is already idle because the turn's start was never reported: its Stop still finishes the agent, once.
+      if (endsUnfinishedTurn) this.emitNotificationTrigger(agentFinishedBy({ sessionId, input, to: state }));
       return;
     }
     // Only a real state transition proves the (resumed) process is alive; an unrecognized Notification
@@ -959,7 +962,12 @@ export class SessionService {
     const since = new Date().toISOString();
     this.repo.setState(sessionId, state, since);
     this.deps.bus.emit({ type: 'session.state', sessionId, state, stateSince: since });
+    this.emitNotificationTrigger(notificationTriggerOf({ sessionId, input, to: state, at: since }));
     this.guarded(sessionId, () => this.advance(sessionId));
+  }
+
+  private emitNotificationTrigger(trigger: NotificationTrigger | undefined): void {
+    if (trigger) this.deps.bus.emit({ type: 'notification.trigger', ...trigger });
   }
 
   private watchProcessExit(sessionId: string, handle: HarnessHandle): void {

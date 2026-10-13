@@ -21,6 +21,13 @@ export interface SilentBlock {
   waitingSince: string;
 }
 
+export type NeedsInputKind = 'permission' | 'input';
+
+/** What happened to a session that deserves the human's attention. Carries identifiers and a tool name only: never tool input, transcript or prompt text. */
+export type NotificationTrigger =
+  | { category: 'agentFinished'; sessionId: string }
+  | { category: 'needsInput'; sessionId: string; kind: NeedsInputKind; promptKey: string; toolName?: string };
+
 export type ServerEvent =
   | { type: 'snapshot'; sessions: Session[]; approvals: Approval[]; managers: ManagerView[]; workingStates?: WorkingState[]; workingStateMaxAgeMinutes?: number; workingStateMaxBytes?: number; todoSummaries?: TodoSummary[]; daemonIssues?: DaemonIssue[]; silentBlocks?: SilentBlock[] }
   | { type: 'session.created'; session: Session }
@@ -46,4 +53,5 @@ export type ServerEvent =
   | { type: 'manager.updated'; manager: ManagerView }
   | { type: 'error'; sessionId?: string; scope?: ErrorEventScope; error: ErrorEnvelope }
   | { type: 'daemon.issues'; issues: DaemonIssue[] }
-  | { type: 'permission.silent_blocks'; blocks: SilentBlock[] };
+  | { type: 'permission.silent_blocks'; blocks: SilentBlock[] }
+  | ({ type: 'notification.trigger' } & NotificationTrigger);

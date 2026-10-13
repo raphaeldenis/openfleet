@@ -51,6 +51,21 @@ describe('ServerEvent', () => {
     expectTypeOf<Extract<ServerEvent, { type: 'snapshot' }>['todoSummaries']>().toEqualTypeOf<TodoSummary[] | undefined>();
   });
 
+  it('announces an agent finishing with the session id only, and a session needing input with its kind, prompt key and tool name', () => {
+    const finished: ServerEvent = { type: 'notification.trigger', category: 'agentFinished', sessionId: 's1' };
+    const needsPermission: ServerEvent = { type: 'notification.trigger', category: 'needsInput', sessionId: 's1', kind: 'permission', promptKey: 's1@t', toolName: 'Bash' };
+    const needsAnswer: ServerEvent = { type: 'notification.trigger', category: 'needsInput', sessionId: 's1', kind: 'input', promptKey: 's1@t' };
+
+    expect([finished, needsPermission, needsAnswer].map((event) => event.type)).toEqual(['notification.trigger', 'notification.trigger', 'notification.trigger']);
+  });
+
+  it('has no field to carry tool input or transcript text', () => {
+    // @ts-expect-error a trigger names the tool, never its input
+    const leaking: ServerEvent = { type: 'notification.trigger', category: 'needsInput', sessionId: 's1', kind: 'permission', promptKey: 'k', toolInput: { command: 'rm' } };
+
+    expect(leaking.type).toBe('notification.trigger');
+  });
+
   it('announces a session update (rename) with the full updated Session', () => {
     expectTypeOf<Extract<ServerEvent, { type: 'session.updated' }>['session']>().toEqualTypeOf<Session>();
   });

@@ -1,6 +1,6 @@
 import { Injectable, computed, signal } from '@angular/core';
 import { TodoSummarySchema, closeReasonOfExitCode, parseSessionCloseReason } from '@openfleet/shared';
-import type { Approval, DaemonIssue, ErrorEnvelope, ErrorEventScope, ManagerView, ServerEvent, Session, SessionTodos, SilentBlock, TodoSummary, WorkingState } from '@openfleet/shared';
+import type { Approval, DaemonIssue, ErrorEnvelope, ErrorEventScope, ManagerView, NotificationTrigger, ServerEvent, Session, SessionTodos, SilentBlock, TodoSummary, WorkingState } from '@openfleet/shared';
 import { Subject } from 'rxjs';
 import { environment } from '../../environments/environment';
 import { parseSessionTodos } from './session-todos-parser';
@@ -28,6 +28,10 @@ function isBackgroundFailure({ error: envelope, scope }: { error: ErrorEnvelope;
 
 /** Names one prompt of one session: the same prompt keeps its key for as long as it stays undecided. */
 export const silentBlockKey = ({ sessionId, waitingSince }: SilentBlock): string => `${sessionId}@${waitingSince}`;
+
+function notificationTriggerOf({ type: _type, ...trigger }: Extract<ServerEvent, { type: 'notification.trigger' }>): NotificationTrigger {
+  return trigger;
+}
 
 function readableTodoSummaries(received: unknown[] | undefined): TodoSummary[] {
   const results = (received ?? []).map((summary) => TodoSummarySchema.safeParse(summary));
@@ -104,6 +108,8 @@ export class FleetEventsService {
   readonly liveOutputSessionIds = new Subject<string>();
   /** Ids of the sessions the user just typed in through their terminal: the replies the terminal sends by itself are not typing. */
   readonly typedInSessionIds = new Subject<string>();
+  /** What the daemon says deserves the human's attention, as it happens: a snapshot never replays past ones. */
+  readonly notificationTriggers = new Subject<NotificationTrigger>();
   private readonly outputBySession = new Map<string, Subject<string>>();
   private socket?: WebSocket;
   private reconnectDelayMs = INITIAL_RECONNECT_DELAY_MS;
@@ -276,6 +282,7 @@ export class FleetEventsService {
       case 'error': return this.recordBackgroundFailure(event);
       case 'daemon.issues': return this.daemonIssues.set(event.issues);
       case 'permission.silent_blocks': return this.reportSilentBlocks(event.blocks);
+      case 'notification.trigger': return this.notificationTriggers.next(notificationTriggerOf(event));
       default: return;
     }
   }
