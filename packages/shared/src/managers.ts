@@ -19,11 +19,16 @@ export const UpdateManagerSchema = ManagerSpecSchema.partial().extend({
   model: ModelIdSchema.optional(),
   missionNoteId: z.string().min(1).nullable().optional(),
   pinMissionNote: z.boolean().optional(),
+  pulseEnabled: z.boolean().optional(),
 }).refine(
   (update) => Object.values(update).some((value) => value !== undefined),
-  { message: 'pulseSeconds, childrenCap, mission, model, missionNoteId or pinMissionNote is required' },
+  { message: 'pulseSeconds, childrenCap, mission, model, missionNoteId, pinMissionNote or pulseEnabled is required' },
 );
 export type UpdateManager = z.infer<typeof UpdateManagerSchema>;
+
+/** Why a pulse reaches a manager, strongest first: a resume outranks a manual pulse, which outranks the interval. */
+export const PULSE_WAKE_REASONS = ['resume', 'manual', 'interval'] as const;
+export type PulseWakeReason = (typeof PULSE_WAKE_REASONS)[number];
 
 export const REOPEN_MODES = ['resume', 'fresh'] as const;
 export type ReopenMode = (typeof REOPEN_MODES)[number];
@@ -41,6 +46,8 @@ export interface ManagerProfile {
 export interface ManagerView {
   sessionId: string;
   pulseSeconds: number;
+  /** False while the manager is paused: it receives no pulse until it is resumed. */
+  pulseEnabled: boolean;
   childrenCap: number;
   missionText: string;
   lastPulseAt?: string;

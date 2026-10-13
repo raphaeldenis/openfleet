@@ -577,7 +577,7 @@ const KNOWN_CODES: &[&str] = &[
   "outside_own_repository", "unauthorized", "not_found", "project_not_found", "no_state", "session_not_found", "note_not_found", "store_not_found",
   "view_not_found", "row_not_found", "manager_not_found", "handoff_not_found", "session_closed", "stale_revision", "file_backed", "file_unreadable",
   "path_escapes_docs_folder", "duplicate_name", "worktree_exists", "not_closed", "directory_missing", "directory_changed", "directory_unreadable",
-  "already_resolved", "config_unreadable", "config_read_only", "message_id_reused", "too_many_pending", "children_cap", "outside_lineage", "not_a_manager",
+  "already_resolved", "config_unreadable", "config_read_only", "message_id_reused", "too_many_pending", "children_cap", "outside_lineage", "not_a_manager", "manager_paused",
   "mission_missing", "mission_too_large",
   "directory_in_use", "duplicate_child", "no_parent", "spawn_raced", "store_has_rows", "duplicate_id", "no_docs_folder", "not_file_backed",
   "docs_folder_not_writable", "payload_too_large", "note_too_large", "row_cap", "state_too_large", "daemon_shutting_down", "daemon_degraded",

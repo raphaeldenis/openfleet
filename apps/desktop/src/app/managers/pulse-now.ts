@@ -4,6 +4,7 @@ import { ApiError, FleetApiService } from '../core/fleet-api.service';
 export type PulseMessage = { text: string; kind: 'info' | 'error' };
 
 function describePulseError(error: unknown): string {
+  if (error instanceof ApiError && error.code === 'manager_paused') return 'This manager is paused — resume its pulses first';
   if (error instanceof ApiError && error.status === 409) return 'This session is closed';
   if (error instanceof ApiError && error.status === 404) return 'Manager not found';
   return 'Could not reach the server — check your connection';

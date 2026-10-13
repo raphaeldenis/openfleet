@@ -19,7 +19,7 @@ function setup() {
   const bus = new EventBus();
   const sessions = new SessionService({ db, bus, harnesses: [new FakeHarness()], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
   const managerRepo = new ManagerRepository(db);
-  const scheduler = { onManagerCreated: vi.fn(), onManagerUpdated: vi.fn() };
+  const scheduler = { onManagerCreated: vi.fn(), onManagerUpdated: vi.fn(), onPulseEnabledChanged: vi.fn() };
   const noteRepo = new NoteRepository(db);
   const storeRepo = new DataStoreRepository(db);
   const linkTargets = {
@@ -210,7 +210,7 @@ describe('ManagerService.bindLogStore', () => {
 describe('ManagerService links without link targets', () => {
   it('refuses to link anything when no link targets are wired', async () => {
     const world = setup();
-    const unwired = new ManagerService({ managers: world.managerRepo, sessions: world.sessions, bus: world.bus, scheduler: { onManagerCreated: vi.fn(), onManagerUpdated: vi.fn() } });
+    const unwired = new ManagerService({ managers: world.managerRepo, sessions: world.sessions, bus: world.bus, scheduler: { onManagerCreated: vi.fn(), onManagerUpdated: vi.fn(), onPulseEnabledChanged: vi.fn() } });
     const managerId = await aManagerOfTheOwnProject(world);
     insertStore(world, { id: 'store-log', projectId: OWN_PROJECT_ID });
 

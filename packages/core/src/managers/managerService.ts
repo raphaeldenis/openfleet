@@ -3,13 +3,15 @@ import type { EventBus } from '../events/eventBus.js';
 import { NoteNotFoundError } from '../notes/noteService.js';
 import type { SessionService } from '../sessions/sessionService.js';
 import { StoreNotFoundError } from '../stores/dataStoreRepository.js';
-import type { ManagerRecord, ManagerRepository } from './managerRepository.js';
+import { isPulseEnabled, type ManagerRecord, type ManagerRepository } from './managerRepository.js';
 import { DEFAULT_HEARTBEAT_SECONDS } from '../workingState/workingStateSettings.js';
 import { toManagerView } from './managerView.js';
 
 export interface PulseSchedulerLike {
   onManagerCreated(record: ManagerRecord): void;
   onManagerUpdated(record: ManagerRecord): void;
+  /** The manager was paused or resumed: `record.pulseEnabled` tells which. */
+  onPulseEnabledChanged(record: ManagerRecord): void;
 }
 
 /** Tells which project owns a note or a table; undefined for an id that does not exist. */
@@ -61,21 +63,25 @@ export class ManagerService {
   }
 
   /**
-   * Changes the pulse, cap, mission, model, mission note or its pin of a manager; undefined when the session has no manager row.
+   * Changes the pulse, cap, mission, model, mission note, its pin or the pause of a manager; undefined when the session has no manager row.
    * Throws NoteNotFoundError, before changing anything, for a mission note outside the manager's project.
    */
   update(sessionId: string, patch: UpdateManager): ManagerView | undefined {
     if (!this.deps.managers.get(sessionId)) return undefined;
-    const { mission, model, missionNoteId, pinMissionNote, ...cadenceAndCap } = patch;
+    const { mission, model, missionNoteId, pinMissionNote, pulseEnabled, ...cadenceAndCap } = patch;
     const isLinkingNote = typeof missionNoteId === 'string';
     if (isLinkingNote) this.requireNoteOfManagerProject({ managerId: sessionId, noteId: missionNoteId });
     if (model !== undefined) this.deps.sessions.changeModel(sessionId, model);
     this.deps.managers.update(sessionId, { ...cadenceAndCap, missionText: mission });
     if (missionNoteId !== undefined) this.deps.managers.setMissionNote(sessionId, missionNoteId);
     if (pinMissionNote !== undefined) this.deps.managers.setMissionNotePinned(sessionId, pinMissionNote);
+    const wasPulseEnabled = isPulseEnabled(this.deps.managers.get(sessionId)!);
+    if (pulseEnabled !== undefined) this.deps.managers.setPulseEnabled(sessionId, pulseEnabled);
     const updated = this.deps.managers.get(sessionId)!;
     const view = this.announceUpdated(updated);
     this.deps.scheduler.onManagerUpdated(updated);
+    const isPulseEnabledChanged = pulseEnabled !== undefined && pulseEnabled !== wasPulseEnabled;
+    if (isPulseEnabledChanged) this.deps.scheduler.onPulseEnabledChanged(updated);
     return view;
   }
 

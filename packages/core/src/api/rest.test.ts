@@ -664,7 +664,7 @@ describe('REST', () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ pulsed: true });
     await new Promise((resolve) => setTimeout(resolve, 0)); // let the (0ms) submit-keystroke timer fire
-    expect(harness.handles[0]!.written).toEqual(['[pulse] Re-read your mission and continue: check your children, unblock them, record what you did.', '\r']);
+    expect(harness.handles[0]!.written).toEqual(['[pulse] Re-read your mission and continue: check your children, unblock them, record what you did. Wake reason: manual.', '\r']);
   });
 
   it('answers a manual pulse honestly when one is already queued: pulsed false, coalesced true', async () => {

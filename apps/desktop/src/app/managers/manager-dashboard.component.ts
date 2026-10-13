@@ -18,6 +18,7 @@ import { ManagerLinksComponent } from './manager-links.component';
 import { ManagerProfileComponent } from './manager-profile.component';
 import { ManagerReopenAction } from './manager-reopen';
 import { PulseNowAction } from './pulse-now';
+import { PAUSED_COUNTDOWN_PLACEHOLDER, PAUSED_WAKE_LINE, PULSES_PAUSED_HEADER, PulsePauseAction, pauseButtonGlyph } from './pulse-pause';
 
 const REOPEN_EXPLANATION =
   'Reopen starts a fresh conversation seeded with the mission; Resume continues the previous one. Reopening replaces the saved conversation id, so Resume only resumes the latest.';
@@ -116,24 +117,42 @@ const HANDOFF_TARGET_AVAILABLE_HINT = 'Saved handoffs appear in Notes › handof
                 ><div class="cap-bar-fill" [style.width.%]="capacityPercent()"></div></div>
               </div>
               <div class="pulse">
-                <of-pulse-ring [fractionElapsed]="fractionElapsed()" label="Next pulse" />
-                <span data-testid="manager-dashboard-countdown" class="mono">{{ countdownLabelText() }}</span>
+                <of-pulse-ring [fractionElapsed]="fractionElapsed()" [label]="pulseRingLabel()" />
+                <div class="pulse-text">
+                  @if (isPaused()) {
+                    <span data-testid="manager-dashboard-pulse-header" class="pulse-header">{{ pulsesPausedHeader }}</span>
+                  }
+                  <span data-testid="manager-dashboard-countdown" class="mono">{{ countdownLabelText() }}</span>
+                  @if (isPaused()) {
+                    <span data-testid="manager-dashboard-wake" class="paused-wake">{{ pausedWakeLine }}</span>
+                  }
+                </div>
               </div>
             }
             <button
               type="button"
               class="of-btn of-btn--primary"
               data-testid="manager-dashboard-pulse"
-              [disabled]="pulse.pending()"
+              [disabled]="pulse.pending() || isPaused()"
               (click)="pulseNow()"
             >Pulse now</button>
+            <button
+              type="button"
+              class="of-btn of-btn--secondary"
+              [class.of-btn--paused]="isPaused()"
+              [attr.aria-label]="pauseButtonName()"
+              data-testid="manager-dashboard-pause"
+              [attr.aria-pressed]="isPaused()"
+              [disabled]="pauseAction.pending()"
+              (click)="togglePause()"
+            ><span aria-hidden="true">{{ pauseGlyph() }}</span> {{ pauseButtonLabel() }}</button>
             <button
               type="button"
               class="of-btn of-btn--secondary"
               data-testid="manager-dashboard-terminal"
               (click)="openTerminal()"
             >Terminal</button>
-            @if (pulse.message(); as message) {
+            @if (pulse.message() ?? pauseAction.message(); as message) {
               <span
                 data-testid="manager-dashboard-pulse-message"
                 [attr.role]="message.kind === 'error' ? 'alert' : 'status'"
@@ -201,6 +220,9 @@ const HANDOFF_TARGET_AVAILABLE_HINT = 'Saved handoffs appear in Notes › handof
     .cap-bar { height: .375rem; border-radius: .25rem; background: var(--sunk); overflow: hidden }
     .cap-bar-fill { height: 100%; background: var(--accent) }
     .pulse { display: flex; align-items: center; gap: .5rem; font-size: .6875rem }
+    .pulse-text { display: flex; flex-direction: column; line-height: 1.3 }
+    .pulse-header { color: var(--mut) }
+    .paused-wake { color: var(--state-waiting-permission) }
     .mono { font-family: var(--mono) }
     .children { margin: 1.25rem; border: 1px solid var(--line); border-radius: .625rem; background: var(--panel) }
     .section-head { display: flex; align-items: center; padding: .625rem .875rem; border-bottom: 1px solid var(--line) }
@@ -226,6 +248,7 @@ export class ManagerDashboardComponent {
   private readonly events = inject(FleetEventsService);
   private readonly api = inject(FleetApiService);
   protected readonly pulse = new PulseNowAction(this.api);
+  protected readonly pauseAction = new PulsePauseAction(this.api);
   protected readonly reopening = new ManagerReopenAction(this.api);
   private readonly managerId = toSignal(this.route.paramMap.pipe(map((params) => params.get('id') ?? '')), { initialValue: '' });
   private readonly now = signal(Date.now());
@@ -239,6 +262,7 @@ export class ManagerDashboardComponent {
     effect(() => {
       this.managerId();
       this.pulse.reset();
+      this.pauseAction.reset();
       this.reopening.reset();
     });
     // The same reuse must not leave the preview of one manager over another.
@@ -307,12 +331,29 @@ export class ManagerDashboardComponent {
 
   protected readonly isSessionClosed = computed(() => this.session()?.state === 'closed');
 
-  protected readonly countdownLabelText = computed(() => countdownLabel(this.countdownSeconds()));
+  protected readonly isPaused = computed(() => this.manager()?.pulseEnabled === false);
+
+  protected readonly pulsesPausedHeader = PULSES_PAUSED_HEADER;
+
+  protected readonly pausedWakeLine = PAUSED_WAKE_LINE;
+
+  protected readonly pulseRingLabel = computed(() => (this.isPaused() ? PULSES_PAUSED_HEADER : 'Next pulse'));
+
+  protected readonly pauseGlyph = computed(() => pauseButtonGlyph(this.isPaused()));
+
+  protected readonly pauseButtonLabel = computed(() => (this.isPaused() ? 'Resume pulses' : 'Pause pulses'));
+
+  protected readonly pauseButtonName = computed(() => {
+    const managerName = this.session()?.name;
+    return managerName === undefined ? null : `${this.pauseButtonLabel()} of ${showInvisibleControlsAsEscapes(managerName)}`;
+  });
+
+  protected readonly countdownLabelText = computed(() => (this.isPaused() ? PAUSED_COUNTDOWN_PLACEHOLDER : countdownLabel(this.countdownSeconds())));
 
   protected readonly fractionElapsed = computed(() => {
     const manager = this.manager();
     const secondsRemaining = this.countdownSeconds();
-    if (!manager || manager.pulseSeconds <= 0 || secondsRemaining === null) return 0;
+    if (!manager || this.isPaused() || manager.pulseSeconds <= 0 || secondsRemaining === null) return 0;
     return Math.min(1, Math.max(0, 1 - secondsRemaining / manager.pulseSeconds));
   });
 
@@ -329,7 +370,15 @@ export class ManagerDashboardComponent {
   }
 
   pulseNow(): void {
+    this.pauseAction.message.set(null);
     void this.pulse.run(this.managerId());
+  }
+
+  protected togglePause(): void {
+    const manager = this.manager();
+    if (!manager) return;
+    this.pulse.message.set(null);
+    void this.pauseAction.toggle(manager);
   }
 
   openTerminal(): void {

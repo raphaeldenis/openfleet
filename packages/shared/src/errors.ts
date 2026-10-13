@@ -60,6 +60,8 @@ export const ERROR_CODES = {
   children_cap: { kind: 'conflict', retry: 'later' },
   outside_lineage: { kind: 'conflict', retry: 'never' },
   not_a_manager: { kind: 'conflict', retry: 'never' },
+  // Resuming the manager is what lets a pulse through again.
+  manager_paused: { kind: 'conflict', retry: 'never' },
   // Editing the mission on the manager's profile fixes either one: the same reopen then succeeds.
   mission_missing: { kind: 'conflict', retry: 'never' },
   mission_too_large: { kind: 'conflict', retry: 'never' },

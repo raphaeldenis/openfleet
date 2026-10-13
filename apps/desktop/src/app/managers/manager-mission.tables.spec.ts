@@ -14,7 +14,7 @@ const MANAGER_SESSION = {
 };
 
 const profileWithMission = (missionText: string): ManagerProfile => ({
-  manager: { sessionId: 'm1', pulseSeconds: 600, childrenCap: 4, missionText, nextPulseAt: new Date(Date.now() + 60_000).toISOString(), childrenCount: 0 },
+  manager: { sessionId: 'm1', pulseSeconds: 600, pulseEnabled: true, childrenCap: 4, missionText, nextPulseAt: new Date(Date.now() + 60_000).toISOString(), childrenCount: 0 },
   scapeImport: 'not_imported',
 });
 

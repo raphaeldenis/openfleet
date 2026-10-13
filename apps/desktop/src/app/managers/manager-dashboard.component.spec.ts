@@ -5,7 +5,7 @@ import { ActivatedRoute, convertToParamMap, provideRouter, Router } from '@angul
 import { BehaviorSubject, of } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
 import { ManagerDashboardComponent } from './manager-dashboard.component';
-import { FleetApiService } from '../core/fleet-api.service';
+import { ApiError, FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
 
 function activatedRouteFor(id: string) {
@@ -26,7 +26,7 @@ function fakeEvents(overrides: { sessions?: unknown[]; managers?: unknown[]; sna
 }
 
 const MANAGER_SESSION = { id: 'm1', name: 'Lead', emoji: '🧭', role: 'manager', state: 'idle', harness: 'claude-cli' };
-const MANAGER_VIEW = { sessionId: 'm1', pulseSeconds: 1800, childrenCap: 2, missionText: 'x', nextPulseAt: new Date(Date.now() + 42_000).toISOString(), childrenCount: 1 };
+const MANAGER_VIEW = { sessionId: 'm1', pulseSeconds: 1800, pulseEnabled: true, childrenCap: 2, missionText: 'x', nextPulseAt: new Date(Date.now() + 42_000).toISOString(), childrenCount: 1 };
 const CHILD_SESSION = { id: 'c1', name: 'Gimli', emoji: '⚔️', parentId: 'm1', state: 'generating', harness: 'claude-cli' };
 
 describe('ManagerDashboardComponent state overdue chip', () => {
@@ -45,6 +45,118 @@ describe('ManagerDashboardComponent state overdue chip', () => {
     await renderDashboard(fakeEvents({ sessions: [MANAGER_SESSION], managers: [MANAGER_VIEW], workingStatesReported: false }));
 
     expect(screen.queryByTestId('overdue-chip')).toBeNull();
+  });
+});
+
+describe('ManagerDashboardComponent pause control', () => {
+  const renderDashboardOf = (managerView: object, api: object = {}, managerSession: object = MANAGER_SESSION) =>
+    render(ManagerDashboardComponent, {
+      providers: [
+        provideRouter([]),
+        { provide: ActivatedRoute, useValue: activatedRouteFor('m1') },
+        { provide: FleetApiService, useValue: api },
+        { provide: FleetEventsService, useValue: fakeEvents({ sessions: [managerSession], managers: [managerView] }) },
+      ],
+    });
+
+  it('pauses the pulses of a running manager from the live controls', async () => {
+    const api = { updateManager: vi.fn().mockResolvedValue({}) };
+    await renderDashboardOf(MANAGER_VIEW, api);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Pause pulses of Lead' }));
+
+    expect(api.updateManager).toHaveBeenCalledWith('m1', { pulseEnabled: false });
+  });
+
+  it('tells whether the pulses are paused through the pressed state of the pause button', async () => {
+    await renderDashboardOf(MANAGER_VIEW);
+
+    expect(screen.getByRole('button', { name: 'Pause pulses of Lead' })).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('offers no pause button for a closed session', async () => {
+    await renderDashboardOf(MANAGER_VIEW, {}, { ...MANAGER_SESSION, state: 'closed' });
+
+    expect(screen.queryByTestId('manager-dashboard-pause')).toBeNull();
+  });
+
+  it('shows the error of a failing pause and lets the user pause again', async () => {
+    const api = { updateManager: vi.fn().mockRejectedValue(new ApiError(500, 'PATCH /api/managers/m1 → 500', 'internal_error')) };
+    await renderDashboardOf(MANAGER_VIEW, api);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Pause pulses of Lead' }));
+
+    expect(screen.getByTestId('manager-dashboard-pulse-message')).toHaveTextContent('The daemon hit an unexpected error');
+    expect(screen.getByRole('button', { name: 'Pause pulses of Lead' })).toBeEnabled();
+  });
+
+  it('shows the pause error instead of the message left by an earlier pulse', async () => {
+    const api = {
+      pulseNow: vi.fn().mockResolvedValue({ coalesced: true }),
+      updateManager: vi.fn().mockRejectedValue(new ApiError(500, 'PATCH /api/managers/m1 → 500', 'internal_error')),
+    };
+    await renderDashboardOf(MANAGER_VIEW, api);
+    await userEvent.click(screen.getByTestId('manager-dashboard-pulse'));
+    expect(screen.getByTestId('manager-dashboard-pulse-message')).toHaveTextContent('Pulse coalesced');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Pause pulses of Lead' }));
+
+    expect(screen.getByTestId('manager-dashboard-pulse-message')).toHaveTextContent('The daemon hit an unexpected error');
+  });
+
+  it('resumes the pulses of a paused manager from the live controls', async () => {
+    const api = { updateManager: vi.fn().mockResolvedValue({}) };
+    await renderDashboardOf({ ...MANAGER_VIEW, pulseEnabled: false }, api);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Resume pulses of Lead' }));
+
+    expect(api.updateManager).toHaveBeenCalledWith('m1', { pulseEnabled: true });
+  });
+
+  it('says "Pulses paused" and shows a dash instead of counting down, and disables "Pulse now", for a paused manager', async () => {
+    await renderDashboardOf({ ...MANAGER_VIEW, pulseEnabled: false });
+
+    expect(screen.getByTestId('manager-dashboard-pulse-header')).toHaveTextContent('Pulses paused');
+    expect(screen.getByTestId('manager-dashboard-countdown')).toHaveTextContent(/^\s*—\s*$/);
+    expect(screen.getByRole('progressbar', { name: 'Pulses paused' })).toBeTruthy();
+    expect(screen.getByTestId('manager-dashboard-pulse')).toBeDisabled();
+  });
+
+  it('tells a paused manager sends one pulse on resume, without inventing a held-wake count', async () => {
+    await renderDashboardOf({ ...MANAGER_VIEW, pulseEnabled: false });
+
+    const wakeLine = screen.getByTestId('manager-dashboard-wake');
+
+    expect(wakeLine).toHaveTextContent('timer · child message · trigger — one pulse is sent on resume');
+    expect(wakeLine).not.toHaveTextContent(/\d/);
+  });
+
+  it('keeps "Pulse now" available and shows no paused header or wake line for a running manager', async () => {
+    await renderDashboardOf(MANAGER_VIEW);
+
+    expect(screen.getByTestId('manager-dashboard-pulse')).toBeEnabled();
+    expect(screen.queryByTestId('manager-dashboard-pulse-header')).toBeNull();
+    expect(screen.queryByTestId('manager-dashboard-wake')).toBeNull();
+    expect(screen.getByRole('progressbar', { name: 'Next pulse' })).toBeTruthy();
+  });
+
+  it('draws the pause glyph before the label of a running manager', async () => {
+    await renderDashboardOf(MANAGER_VIEW);
+
+    expect(screen.getByTestId('manager-dashboard-pause')).toHaveTextContent('❚❚ Pause pulses');
+  });
+
+  it('draws the resume glyph before the label of a paused manager', async () => {
+    await renderDashboardOf({ ...MANAGER_VIEW, pulseEnabled: false });
+
+    expect(screen.getByTestId('manager-dashboard-pause')).toHaveTextContent('▶ Resume pulses');
+  });
+
+  it('keeps the glyph out of the accessible name of the pause button', async () => {
+    await renderDashboardOf({ ...MANAGER_VIEW, pulseEnabled: false });
+
+    expect(screen.getByRole('button', { name: 'Resume pulses of Lead' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.queryByRole('button', { name: /▶|❚/ })).toBeNull();
   });
 });
 

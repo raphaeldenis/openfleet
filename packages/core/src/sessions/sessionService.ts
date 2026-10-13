@@ -551,11 +551,21 @@ export class SessionService {
 
   // Rewrites a queued message that no delivery has touched yet; false once it is typed, submitted or gone.
   replaceQueuedMessageBody(input: { sessionId: string; messageId: string; body: string }): boolean {
-    const { phase } = this.deliveryOf(input.sessionId);
-    const isBeingDelivered = (phase.name === 'typing' || phase.name === 'typed' || phase.name === 'reviewing') && phase.messageId === input.messageId;
-    const isSubmittedAwaitingRecord = this.unrecordedDeliveries.get(input.sessionId) === input.messageId;
-    if (isBeingDelivered || isSubmittedAwaitingRecord) return false;
+    if (this.isMessageReachingSession(input)) return false;
     return this.queue.replaceQueuedBody(input.messageId, input.body);
+  }
+
+  // Removes a queued message that no delivery has touched yet; false once it is typed, submitted or gone.
+  discardQueuedMessage(input: { sessionId: string; messageId: string }): boolean {
+    if (this.isMessageReachingSession(input)) return false;
+    return this.queue.discardQueued(input);
+  }
+
+  private isMessageReachingSession(input: { sessionId: string; messageId: string }): boolean {
+    const { phase } = this.deliveryOf(input.sessionId);
+    const isBeingDelivered = (phase.name === 'typing' || phase.name === 'typed' || phase.name === 'submitted' || phase.name === 'reviewing') && phase.messageId === input.messageId;
+    const isSubmittedAwaitingRecord = this.unrecordedDeliveries.get(input.sessionId) === input.messageId;
+    return isBeingDelivered || isSubmittedAwaitingRecord;
   }
 
   queuedMessageCount(sessionId: string): number {

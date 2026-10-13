@@ -7,7 +7,7 @@ import { ManagerLinksComponent } from './manager-links.component';
 
 function manager(patch: Partial<ManagerView> = {}): ManagerView {
   return {
-    sessionId: 'm1', pulseSeconds: 1800, childrenCap: 2, missionText: 'x',
+    sessionId: 'm1', pulseSeconds: 1800, pulseEnabled: true, childrenCap: 2, missionText: 'x',
     nextPulseAt: '2026-01-01T00:30:00.000Z', childrenCount: 1,
     ...patch,
   };

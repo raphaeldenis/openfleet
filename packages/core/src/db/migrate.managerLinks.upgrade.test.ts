@@ -29,7 +29,7 @@ describe('the manager links migration upgrading a database that predates it', ()
 
     expect(new ManagerRepository(db).get('lead')).toEqual({
       sessionId: 'lead', pulseSeconds: 1800, childrenCap: 3, missionText: 'Ship it', createdAt: 't0',
-      lastPulseAt: undefined, missionNoteId: undefined, pinMissionNote: false, logStoreId: undefined,
+      lastPulseAt: undefined, missionNoteId: undefined, pinMissionNote: false, logStoreId: undefined, pulseEnabled: true,
     });
     expect(db.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
   });

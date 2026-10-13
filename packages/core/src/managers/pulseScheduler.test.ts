@@ -22,7 +22,9 @@ const freshDatabaseAndBus = () => ({ db: openDatabase(':memory:'), bus: new Even
 const hook = (session_id: string, event: object) => ({ kind: 'hook' as const, event: { session_id, ...event } as never });
 // Counts pulses that have at least started (their body write landed), regardless of whether their
 // separate submit keystroke has fired yet — what these cadence tests actually care about.
-const pulseCount = (written: string[]) => written.filter((entry) => entry === PULSE_MESSAGE).length;
+const pulseCount = (written: string[]) => written.filter((entry) => entry.startsWith(PULSE_MESSAGE)).length;
+const INTERVAL_PULSE = `${PULSE_MESSAGE} Wake reason: interval.`;
+const MANUAL_PULSE = `${PULSE_MESSAGE} Wake reason: manual.`;
 
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
@@ -38,7 +40,7 @@ describe('PulseScheduler', () => {
     vi.advanceTimersByTime(1000);
     vi.advanceTimersByTime(SUBMIT_KEYSTROKE_DELAY_MS);
 
-    expect(harness.handles[0]!.written).toEqual([PULSE_MESSAGE, '\r']);
+    expect(harness.handles[0]!.written).toEqual([INTERVAL_PULSE, '\r']);
   });
 
   it('holds no pulse while the manager is waiting_permission and pulses a full interval after its turn ends', async () => {
@@ -59,7 +61,7 @@ describe('PulseScheduler', () => {
     expect(harness.handles[0]!.written).toEqual([]);
     vi.advanceTimersByTime(1);
     vi.advanceTimersByTime(SUBMIT_KEYSTROKE_DELAY_MS);
-    expect(harness.handles[0]!.written).toEqual([PULSE_MESSAGE, '\r']);
+    expect(harness.handles[0]!.written).toEqual([INTERVAL_PULSE, '\r']);
   });
 
   it('reschedules the next pulse pulseSeconds after the turn the previous one started', async () => {
@@ -106,10 +108,10 @@ describe('PulseScheduler', () => {
     const record = scheduler.pulseNow(manager.id);
 
     expect(record).toBeDefined();
-    expect(harness.handles[0]!.written).toEqual([PULSE_MESSAGE]);
+    expect(harness.handles[0]!.written).toEqual([MANUAL_PULSE]);
 
     vi.advanceTimersByTime(SUBMIT_KEYSTROKE_DELAY_MS); // the first pulse's own submit keystroke lands
-    expect(harness.handles[0]!.written).toEqual([PULSE_MESSAGE, '\r']);
+    expect(harness.handles[0]!.written).toEqual([MANUAL_PULSE, '\r']);
     // A real turn confirms the pulse landed and clears the turn-start guard, so the next scheduled pulse
     // isn't held behind it.
     sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'UserPromptSubmit' }));
@@ -118,9 +120,9 @@ describe('PulseScheduler', () => {
     // The re-arm is anchored to the turn the manual pulse started, not the original schedule: the next
     // pulse lands a full pulseSeconds after that turn ended.
     vi.advanceTimersByTime(999);
-    expect(harness.handles[0]!.written).toEqual([PULSE_MESSAGE, '\r']); // still only one pulse started
+    expect(harness.handles[0]!.written).toEqual([MANUAL_PULSE, '\r']); // still only one pulse started
     vi.advanceTimersByTime(1);
-    expect(harness.handles[0]!.written).toEqual([PULSE_MESSAGE, '\r', PULSE_MESSAGE]);
+    expect(harness.handles[0]!.written).toEqual([MANUAL_PULSE, '\r', INTERVAL_PULSE]);
   });
 
   it('restarting the scheduler on the same db resumes cadence from the persisted lastPulseAt', async () => {
@@ -152,7 +154,7 @@ describe('PulseScheduler', () => {
     expect(harness.handles[1]!.written).toEqual([]); // not yet due again
     vi.advanceTimersByTime(1_000);
     vi.advanceTimersByTime(SUBMIT_KEYSTROKE_DELAY_MS);
-    expect(harness.handles[1]!.written).toEqual([PULSE_MESSAGE, '\r']); // cadence resumed from the persisted lastPulseAt
+    expect(harness.handles[1]!.written).toEqual([INTERVAL_PULSE, '\r']); // cadence resumed from the persisted lastPulseAt
   });
 });
 
@@ -198,7 +200,7 @@ describe('PulseScheduler — hostile cases', () => {
     scheduler.onManagerCreated(managers.get(manager.id)!);
     vi.advanceTimersByTime(1000);
     vi.advanceTimersByTime(SUBMIT_KEYSTROKE_DELAY_MS); // let the timer's own pulse fully land before the manual one
-    expect(harness.handles[0]!.written).toEqual([PULSE_MESSAGE, '\r']);
+    expect(harness.handles[0]!.written).toEqual([INTERVAL_PULSE, '\r']);
 
     const result = scheduler.pulseNow(manager.id);
 
@@ -207,14 +209,14 @@ describe('PulseScheduler — hostile cases', () => {
     // it queues behind it instead of being dropped or deduplicated (still not "coalesced": that flag is
     // about an already-queued [pulse] body, and nothing was queued yet when this one was sent).
     expect(result).toEqual({ coalesced: false });
-    expect(harness.handles[0]!.written).toEqual([PULSE_MESSAGE, '\r']);
+    expect(harness.handles[0]!.written).toEqual([INTERVAL_PULSE, '\r']);
 
     // Once a real turn starts and ends, the queued manual pulse is delivered — not silently lost.
     sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'UserPromptSubmit' }));
     sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'Stop' }));
-    expect(harness.handles[0]!.written).toEqual([PULSE_MESSAGE, '\r', PULSE_MESSAGE]);
+    expect(harness.handles[0]!.written).toEqual([INTERVAL_PULSE, '\r', MANUAL_PULSE]);
     vi.advanceTimersByTime(SUBMIT_KEYSTROKE_DELAY_MS);
-    expect(harness.handles[0]!.written).toEqual([PULSE_MESSAGE, '\r', PULSE_MESSAGE, '\r']);
+    expect(harness.handles[0]!.written).toEqual([INTERVAL_PULSE, '\r', MANUAL_PULSE, '\r']);
   });
 
   it('emits manager.pulsed with the updated lastPulseAt and current childrenCount, not the record from before the pulse', async () => {
@@ -282,7 +284,7 @@ describe('PulseScheduler — hostile cases', () => {
     vi.advanceTimersByTime(0);
     vi.advanceTimersByTime(SUBMIT_KEYSTROKE_DELAY_MS);
 
-    expect(harness.handles[0]!.written).toEqual([PULSE_MESSAGE, '\r']);
+    expect(harness.handles[0]!.written).toEqual([INTERVAL_PULSE, '\r']);
   });
 
   it('a manager record with lastPulseAt in the future (clock skew) waits the full remaining delay instead of firing immediately', async () => {
@@ -297,7 +299,7 @@ describe('PulseScheduler — hostile cases', () => {
     expect(harness.handles[0]!.written).toEqual([]);
     vi.advanceTimersByTime(1);
     vi.advanceTimersByTime(SUBMIT_KEYSTROKE_DELAY_MS);
-    expect(harness.handles[0]!.written).toEqual([PULSE_MESSAGE, '\r']);
+    expect(harness.handles[0]!.written).toEqual([INTERVAL_PULSE, '\r']);
   });
 
   it('coalesces repeated cadence ticks and manual pulses into a single queued pulse while the manager is gated', async () => {
@@ -437,7 +439,7 @@ describe('PulseScheduler — hostile cases', () => {
 
     isPtyBroken = false;
     vi.advanceTimersByTime(PARKED_RETRY_MS);
-    expect(handle.written).toEqual([PULSE_MESSAGE, '\r']);
+    expect(handle.written).toEqual([MANUAL_PULSE, '\r']);
     vi.advanceTimersByTime(TURN_START_TIMEOUT_MS);
 
     expect(scheduler.pulseNow(manager.id)).toEqual({ coalesced: false });

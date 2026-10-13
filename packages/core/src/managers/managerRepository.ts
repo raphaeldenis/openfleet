@@ -12,18 +12,24 @@ export interface ManagerRecord {
   missionNoteId?: string;
   pinMissionNote?: boolean;
   logStoreId?: string;
+  /** Absent on a new record: the manager starts enabled. False while paused. */
+  pulseEnabled?: boolean;
 }
 
 interface Row {
   session_id: string; pulse_seconds: number; children_cap: number; mission_text: string; last_pulse_at: string | null; created_at: string;
-  mission_note_id: string | null; pin_mission_note: number; log_store_id: string | null;
+  mission_note_id: string | null; pin_mission_note: number; log_store_id: string | null; pulse_enabled: number;
 }
 
 const toManager = (r: Row): ManagerRecord => ({
   sessionId: r.session_id, pulseSeconds: r.pulse_seconds, childrenCap: r.children_cap,
   missionText: r.mission_text, lastPulseAt: r.last_pulse_at ?? undefined, createdAt: r.created_at,
   missionNoteId: r.mission_note_id ?? undefined, pinMissionNote: r.pin_mission_note === 1, logStoreId: r.log_store_id ?? undefined,
+  pulseEnabled: r.pulse_enabled === 1,
 });
+
+/** Whether the manager receives pulses: only an explicit false pauses it. */
+export const isPulseEnabled = (record: Pick<ManagerRecord, 'pulseEnabled'>): boolean => record.pulseEnabled !== false;
 
 const definedFieldsOf = <T extends object>(fields: T): Partial<T> => Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined)) as Partial<T>;
 
@@ -73,6 +79,9 @@ export class ManagerRepository {
   }
   setMissionNotePinned(sessionId: string, isPinned: boolean): void {
     this.db.prepare('UPDATE managers SET pin_mission_note = ? WHERE session_id = ?').run(Number(isPinned), sessionId);
+  }
+  setPulseEnabled(sessionId: string, isEnabled: boolean): void {
+    this.db.prepare('UPDATE managers SET pulse_enabled = ? WHERE session_id = ?').run(Number(isEnabled), sessionId);
   }
   /** Binds the table the manager logs its actions in; null unbinds it. */
   setLogStore(sessionId: string, storeId: string | null): void {

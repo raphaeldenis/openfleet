@@ -3,7 +3,7 @@ import { readableDaemonText } from './daemon-text';
 import { ApiError } from './fleet-api.service';
 
 /** What the user was doing when the error came back: it decides the advice ("shorten the mission" vs "shorten the name"). */
-export type ErrorAction = 'generic' | 'send' | 'create_session' | 'create_manager' | 'resume' | 'load_todos' | 'rename' | 'close' | 'load_handoff' | 'save_handoff' | 'save_project' | 'reopen_manager' | 'save_manager';
+export type ErrorAction = 'generic' | 'send' | 'create_session' | 'create_manager' | 'resume' | 'load_todos' | 'rename' | 'close' | 'load_handoff' | 'save_handoff' | 'save_project' | 'reopen_manager' | 'save_manager' | 'pause_manager';
 
 export interface ErrorContext {
   action: ErrorAction;
@@ -73,6 +73,7 @@ const COPY_BY_CODE: Record<ErrorCode, CodeCopy> = {
   too_many_pending: { what: 'Too many messages are waiting for this session' },
   children_cap: { what: 'This manager already runs as many sessions as allowed' },
   outside_lineage: { what: 'That session is outside this manager’s team' },
+  manager_paused: { what: 'This manager is paused', fix: 'resume its pulses first' },
   not_a_manager: { what: 'This session is not a manager' },
   mission_missing: { what: 'This manager has no mission to start from', fix: 'write its mission, then reopen it fresh' },
   mission_too_large: { what: 'This manager’s mission is too large to start from', fix: 'shorten its mission, then reopen it fresh' },
@@ -170,6 +171,7 @@ const COPY_BY_ACTION: Record<ErrorAction, ActionCopy> = {
     invalid_body: { what: 'The daemon rejected these values', fix: 'check the pulse, the children cap and the mission' },
     manager_not_found: { what: 'This manager no longer exists' },
   },
+  pause_manager: {},
   load_todos: {},
   rename: {},
   close: {},
@@ -193,6 +195,7 @@ const FALLBACK_BY_ACTION: Partial<Record<ErrorAction, string>> = {
   resume: GENERIC_REOPEN_ERROR,
   reopen_manager: 'Could not reopen the manager — try again.',
   save_manager: 'The manager was not saved — try again.',
+  pause_manager: 'The pulses were not changed — try again.',
   load_handoff: 'The preview could not be loaded — the daemon did not answer in time.',
   save_handoff: 'The handoff was not written — try again.',
   save_project: 'The project was not saved — try again.',
@@ -205,6 +208,7 @@ const NOT_CONNECTED_BY_ACTION: Partial<Record<ErrorAction, string>> = {
   resume: GENERIC_REOPEN_ERROR,
   reopen_manager: 'Could not reopen the manager — check your connection, then try again.',
   save_manager: 'The manager was not saved — check your connection, then try again.',
+  pause_manager: 'The pulses were not changed — check your connection, then try again.',
   rename: 'Could not rename — check your connection, then try again.',
   close: 'Could not close the session — check your connection, then try again.',
   load_handoff: 'The preview could not be loaded — check your connection, then try again.',

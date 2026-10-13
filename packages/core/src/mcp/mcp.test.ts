@@ -897,6 +897,58 @@ describe('get_argus_status, list_sessions, pulse_now', () => {
     expect(leadHandle.written.some((w) => w.includes('[pulse]'))).toBe(true);
   });
 
+  describe('a manager whose pulses are paused', () => {
+    const setPulsesPaused = (managerId: string, isPaused: boolean) =>
+      fetch(`${server.url}/api/managers/${managerId}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json', authorization: 'Bearer admin' },
+        body: JSON.stringify({ pulseEnabled: !isPaused }),
+      });
+
+    async function aLeadWithItsOwnClient(directoryName: string) {
+      const parentClient = await connect(parentToken);
+      const lead = text(await parentClient.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir(directoryName), name: 'PausedLead', manager: { pulse_seconds: 3600, children_cap: 1, mission: 'x' } } }));
+      sessions.applyInput(lead.id, { kind: 'hook', event: { session_id: 'x', hook_event_name: 'SessionStart' } } as never);
+      const leadToken = harness.launches.find((launch) => launch.sessionId === lead.id)!.mcpToken;
+      const pulsesWritten = () => harness.handles.find((_, index) => harness.launches[index]!.sessionId === lead.id)!.written.filter((entry) => entry.includes('[pulse]'));
+      return { parentClient, leadClient: await connect(leadToken), leadId: lead.id as string, pulsesWritten };
+    }
+
+    it('refuses pulse_now with manager_paused and delivers no pulse', async () => {
+      const { parentClient, leadId, pulsesWritten } = await aLeadWithItsOwnClient('paused-lead-refused');
+      await setPulsesPaused(leadId, true);
+
+      const result = await parentClient.callTool({ name: 'pulse_now', arguments: { session_id: leadId } });
+
+      expect(result.isError).toBe(true);
+      expect((result.content as { text: string }[])[0]!.text).toContain('manager_paused');
+      expect(pulsesWritten()).toEqual([]);
+    });
+
+    it('accepts pulse_now again once resumed', async () => {
+      const { parentClient, leadId } = await aLeadWithItsOwnClient('paused-lead-resumed');
+      await setPulsesPaused(leadId, true);
+      await setPulsesPaused(leadId, false);
+
+      const result = await parentClient.callTool({ name: 'pulse_now', arguments: { session_id: leadId } });
+
+      expect(result.isError).toBeFalsy();
+    });
+
+    it('shows pulseEnabled false then true in the get_argus_status of the manager', async () => {
+      const { leadClient, leadId } = await aLeadWithItsOwnClient('paused-lead-status');
+      const pulseEnabledSeenByLead = async () => text(await leadClient.callTool({ name: 'get_argus_status', arguments: {} })).manager.pulseEnabled;
+
+      await setPulsesPaused(leadId, true);
+      const whilePaused = await pulseEnabledSeenByLead();
+      await setPulsesPaused(leadId, false);
+      const afterResume = await pulseEnabledSeenByLead();
+
+      expect(whilePaused).toBe(false);
+      expect(afterResume).toBe(true);
+    });
+  });
+
   it('pulse_now refuses a manager that is the caller\'s own parent (doc: yourself, or a manager you are parent of)', async () => {
     const managerClient = await connect(parentToken);
     const lead = text(await managerClient.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('lead5'), name: 'Lead5', manager: { pulse_seconds: 3600, children_cap: 1, mission: 'x' } } }));

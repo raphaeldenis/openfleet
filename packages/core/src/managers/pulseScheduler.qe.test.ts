@@ -19,7 +19,7 @@ function setup() {
   return { db, bus, harness, sessions, managers, scheduler };
 }
 const hook = (session_id: string, event: object) => ({ kind: 'hook' as const, event: { session_id, ...event } as never });
-const pulseCount = (written: string[]) => written.filter((entry) => entry === PULSE_MESSAGE).length;
+const pulseCount = (written: string[]) => written.filter((entry) => entry.startsWith(PULSE_MESSAGE)).length;
 const armedTimerCount = (scheduler: PulseScheduler) => (scheduler as unknown as { timers: Map<string, unknown> }).timers.size;
 
 async function addManager(world: ReturnType<typeof setup>, name: string, options: { started?: boolean } = {}) {
