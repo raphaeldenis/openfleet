@@ -8,6 +8,13 @@ import type { RuntimeAttention } from '@openfleet/shared';
 
 export const PULSE_MESSAGE = '[pulse] Re-read your mission and continue: check your children, unblock them, record what you did.';
 
+/** The pulse text of a manager: the plain pulse, plus where to re-read the mission when it lives in a note. */
+export const pulseMessageOf = (record: Pick<ManagerRecord, 'missionNoteId'>): string => {
+  const hasMissionNote = record.missionNoteId !== undefined;
+  if (!hasMissionNote) return PULSE_MESSAGE;
+  return `${PULSE_MESSAGE} Your mission note id is ${record.missionNoteId}; read it every time you wake with get_note.`;
+};
+
 const MAX_CHILD_NAME_LENGTH = 80;
 
 const toSingleLineName = (name: string) => {
@@ -274,8 +281,9 @@ export class PulseScheduler {
     // Goes through the ordinary message queue, exactly like a message from a parent or sibling: if the
     // manager is mid-turn or waiting on a human, the pulse queues and is flushed on its next idle turn —
     // it never interrupts a running tool or answers a permission prompt.
-    const coalesced = this.deps.sessions.hasQueuedMessage(record.sessionId, PULSE_MESSAGE);
-    if (!coalesced) this.deps.sessions.sendMessage({ sessionId: record.sessionId, body: PULSE_MESSAGE });
+    const pulseMessage = pulseMessageOf(record);
+    const coalesced = this.deps.sessions.hasQueuedMessage(record.sessionId, pulseMessage);
+    if (!coalesced) this.deps.sessions.sendMessage({ sessionId: record.sessionId, body: pulseMessage });
     const pulsedAt = new Date().toISOString();
     this.deps.managers.setLastPulseAt(record.sessionId, pulsedAt);
     const updated: ManagerRecord = { ...record, lastPulseAt: pulsedAt };

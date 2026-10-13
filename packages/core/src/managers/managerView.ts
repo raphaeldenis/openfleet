@@ -11,5 +11,8 @@ export function toManagerView(record: ManagerRecord, childrenCount: number): Man
     lastPulseAt: record.lastPulseAt,
     nextPulseAt: nextPulseAt(record),
     childrenCount,
+    missionNoteId: record.missionNoteId,
+    pinMissionNote: record.pinMissionNote === true,
+    logStoreId: record.logStoreId,
   };
 }
