@@ -228,6 +228,10 @@ export class NotesViewComponent {
       const requestedProjectId = this.requestedProjectId();
       untracked(() => this.switchToRequestedProject(requestedProjectId));
     });
+    effect(() => {
+      const requestedNoteId = this.requestedNoteId();
+      untracked(() => this.openRequestedNote(requestedNoteId));
+    });
   }
 
   async loadProjects({ focusAfterLoad = false } = {}): Promise<void> {
@@ -491,6 +495,13 @@ export class NotesViewComponent {
     const isAlreadyCurrent = requestedProjectId === this.projectId();
     if (requestedProjectId === null || !isKnownProject || isAlreadyCurrent) return;
     this.switchProject(requestedProjectId);
+  }
+
+  private openRequestedNote(requestedNoteId: string | null): void {
+    const isNoteListReady = this.notesStatus() === 'ready';
+    const isNoteOfShownProject = this.notes().some((summary) => summary.id === requestedNoteId);
+    if (requestedNoteId === null || !isNoteListReady || !isNoteOfShownProject) return;
+    void this.openNote(requestedNoteId);
   }
 
   private focusListAfterRender(): void {

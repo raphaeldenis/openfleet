@@ -1,5 +1,5 @@
-import { render, screen } from '@testing-library/angular/zoneless';
-import { inputBinding } from '@angular/core';
+import { render, screen, waitFor } from '@testing-library/angular/zoneless';
+import { inputBinding, signal } from '@angular/core';
 import type { DataStore } from '@openfleet/shared';
 import { describe, expect, it, vi } from 'vitest';
 import { FleetApiService } from '../core/fleet-api.service';
@@ -37,6 +37,34 @@ describe('TablesViewComponent opened on a linked table', () => {
     await renderViewLinkedTo('s-from-another-project');
 
     expect(await screen.findByText('“backlog” has no rows')).toBeVisible();
+  });
+
+  it('opens the linked table when the link changes while the view stays on the same project', async () => {
+    const linkedStoreId = signal<string | undefined>(undefined);
+    await render(TablesViewComponent, {
+      providers: [{ provide: FleetApiService, useValue: fakeApiWithTwoEmptyTables() }],
+      bindings: [inputBinding('projectId', () => 'p1'), inputBinding('storeId', linkedStoreId)],
+    });
+    expect(await screen.findByText('“backlog” has no rows')).toBeVisible();
+
+    linkedStoreId.set('s2');
+
+    expect(await screen.findByText('“releases” has no rows')).toBeVisible();
+  });
+
+  it('keeps the open table when the changed link names no table of the project', async () => {
+    const linkedStoreId = signal<string | undefined>(undefined);
+    const api = fakeApiWithTwoEmptyTables();
+    await render(TablesViewComponent, {
+      providers: [{ provide: FleetApiService, useValue: api }],
+      bindings: [inputBinding('projectId', () => 'p1'), inputBinding('storeId', linkedStoreId)],
+    });
+    expect(await screen.findByText('“backlog” has no rows')).toBeVisible();
+
+    linkedStoreId.set('s-from-another-project');
+
+    await waitFor(() => expect(screen.getByText('“backlog” has no rows')).toBeVisible());
+    expect(api.getDataStore).not.toHaveBeenCalledWith(expect.objectContaining({ storeId: 's-from-another-project' }));
   });
 
   it('opens the first table when no table is linked', async () => {

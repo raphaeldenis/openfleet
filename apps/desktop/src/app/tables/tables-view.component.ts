@@ -326,6 +326,17 @@ export class TablesViewComponent {
       const projectId = this.activeProjectId();
       if (projectId) untracked(() => void this.loadStores(projectId));
     });
+    effect(() => {
+      const requestedStoreId = this.storeId();
+      untracked(() => this.openRequestedStore(requestedStoreId));
+    });
+  }
+
+  private openRequestedStore(requestedStoreId: string | undefined): void {
+    const isStoreOfShownProject = this.stores().some((store) => store.id === requestedStoreId);
+    const isAlreadyActive = requestedStoreId === this.activeStoreId();
+    if (requestedStoreId === undefined || !this.hasLoadedStores() || !isStoreOfShownProject || isAlreadyActive) return;
+    this.openStore(requestedStoreId);
   }
 
   protected chooseProject(projectId: string): void {
