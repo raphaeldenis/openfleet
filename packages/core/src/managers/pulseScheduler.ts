@@ -138,6 +138,7 @@ export class PulseScheduler {
     else this.silencePausedManager(record.sessionId);
   }
 
+  // A pulse already typing, typed, submitted or reviewing cannot be discarded: it is delivered even after the pause.
   private silencePausedManager(sessionId: string): void {
     this.clearTimer(sessionId);
     const queuedPulse = this.queuedPulses.get(sessionId);
@@ -149,6 +150,7 @@ export class PulseScheduler {
   }
 
   private pulseResumedManager(record: ManagerRecord): void {
+    // A closed manager stays silent on resume: its reopening re-arms it from its last pulse.
     if (!this.isManagerAlive(record.sessionId)) return;
     try {
       this.clearTimer(record.sessionId);
@@ -336,21 +338,22 @@ export class PulseScheduler {
 
   // Goes through the ordinary message queue, exactly like a message from a parent or sibling: if the manager
   // is mid-turn or waiting on a human, the pulse queues and is flushed on its next idle turn — it never
-  // interrupts a running tool or answers a permission prompt. A pulse still queued takes the new reason in
-  // place of a second pulse, as long as the pulse text is the same one.
+  // interrupts a running tool or answers a permission prompt. A manager has at most one pulse queued: a
+  // pulse still queued takes the new reason (and the current pulse text) in place of a second pulse.
   private queuePulse(record: ManagerRecord, wakeReason: PulseWakeReason): boolean {
     const managerId = record.sessionId;
     const pulseText = pulseMessageOf(record);
     const queued = this.queuedPulses.get(managerId);
-    const isSameTextStillQueued = queued !== undefined && queued.pulseText === pulseText;
-    if (isSameTextStillQueued) {
-      const queuedBody = pulseBodyOf({ pulseText, wakeReasons: queued.wakeReasons });
+    if (queued) {
+      const isSameTextStillQueued = queued.pulseText === pulseText;
       const isReasonAlreadyCarried = queued.wakeReasons.includes(wakeReason);
-      if (isReasonAlreadyCarried && this.deps.sessions.hasQueuedMessage(managerId, queuedBody)) return true;
+      const queuedBody = pulseBodyOf({ pulseText: queued.pulseText, wakeReasons: queued.wakeReasons });
+      const isQueuedPulseUpToDate = isSameTextStillQueued && isReasonAlreadyCarried && this.deps.sessions.hasQueuedMessage(managerId, queuedBody);
+      if (isQueuedPulseUpToDate) return true;
       const wakeReasons = withWakeReason(queued.wakeReasons, wakeReason);
       const body = pulseBodyOf({ pulseText, wakeReasons });
       const isMergedIntoQueuedPulse = this.deps.sessions.replaceQueuedMessageBody({ sessionId: managerId, messageId: queued.messageId, body });
-      if (isMergedIntoQueuedPulse) { this.queuedPulses.set(managerId, { ...queued, wakeReasons }); return true; }
+      if (isMergedIntoQueuedPulse) { this.queuedPulses.set(managerId, { messageId: queued.messageId, pulseText, wakeReasons }); return true; }
     }
     const wakeReasons = [wakeReason];
     const { messageId } = this.deps.sessions.sendMessage({ sessionId: managerId, body: pulseBodyOf({ pulseText, wakeReasons }) });

@@ -70,7 +70,7 @@ describe('PulseScheduler: the pulse of a manager with a mission note', () => {
     expect(secondPulse).toEqual({ coalesced: true });
   });
 
-  it('queues the note-carrying pulse next to a plain pulse still queued when the note gets linked', async () => {
+  it('turns the plain pulse still queued into the note-carrying pulse when the note gets linked', async () => {
     const manager = await anIdleManager({ withMissionNote: false });
     manager.startBusyTurn();
     manager.pulseNow();
@@ -78,8 +78,8 @@ describe('PulseScheduler: the pulse of a manager with a mission note', () => {
     manager.linkMissionNote();
     const pulseAfterLinking = manager.pulseNow();
 
-    expect(pulseAfterLinking).toEqual({ coalesced: false });
-    expect(manager.hasQueuedPulse(`${PULSE_MESSAGE} Wake reason: manual.`)).toBe(true);
+    expect(pulseAfterLinking).toEqual({ coalesced: true });
+    expect(manager.hasQueuedPulse(`${PULSE_MESSAGE} Wake reason: manual.`)).toBe(false);
     expect(manager.hasQueuedPulse(`${PULSE_MESSAGE} Your mission note id is ${MISSION_NOTE_ID}; read it every time you wake with get_note. Wake reason: manual.`)).toBe(true);
   });
 });

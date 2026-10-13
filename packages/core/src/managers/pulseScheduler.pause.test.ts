@@ -2,11 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
 import { FakeHarness } from '../harness/fakeHarness.js';
+import { NoteRepository } from '../notes/noteRepository.js';
+import { ProjectRepository } from '../projects/projectRepository.js';
 import { SessionService, SUBMIT_KEYSTROKE_DELAY_MS } from '../sessions/sessionService.js';
 import { ManagerRepository } from './managerRepository.js';
 import { ManagerService } from './managerService.js';
 import { PulseScheduler } from './pulseScheduler.js';
 
+const MISSION_NOTE_ID = 'note-mission-42';
 const PULSE_SECONDS = 60;
 const PULSE_INTERVAL_MS = PULSE_SECONDS * 1000;
 // Short enough that the next interval lands before a pulse's turn-start guard (5 s) lapses.
@@ -40,7 +43,14 @@ async function aManagerFleet({ pulseSeconds = PULSE_SECONDS }: { pulseSeconds?: 
   const endTurn = () => { hook(manager.id, 'Stop'); vi.advanceTimersByTime(SUBMIT_KEYSTROKE_DELAY_MS); };
   const letIntervalsPass = (count: number) => vi.advanceTimersByTime(pulseSeconds * 1000 * count);
   const sendHumanMessage = () => sessions.sendMessage({ sessionId: manager.id, body: 'human hello' });
-  return { db, bus, sessions, managers, managerId: manager.id, pulsesWritten, humanMessagesWritten, pause, resume, startBusyTurn, endTurn, letIntervalsPass, sendHumanMessage, scheduler, hook };
+  const linkMissionNote = () => {
+    const createdAt = new Date().toISOString();
+    new ProjectRepository(db).insert({ id: 'project', name: 'Fleet', docsFolderPath: null, createdAt });
+    new NoteRepository(db).insert({ id: MISSION_NOTE_ID, projectId: 'project', title: 'Mission', bodyMd: '# Mission', folder: null, filePath: null, sourceHash: null, rev: 1, shared: false, createdAt, updatedAt: createdAt });
+    managers.setMissionNote(manager.id, MISSION_NOTE_ID);
+  };
+  const pulsesWrittenToAnyLaunch = () => harness.handles.flatMap((handle) => handle.written).filter((entry) => entry.startsWith('[pulse]'));
+  return { db, bus, sessions, managers, harness, managerId: manager.id, pulsesWritten, pulsesWrittenToAnyLaunch, humanMessagesWritten, pause, resume, startBusyTurn, endTurn, letIntervalsPass, sendHumanMessage, linkMissionNote, scheduler, hook };
 }
 
 describe('pausing the pulses of a manager', () => {
@@ -100,14 +110,61 @@ describe('pausing the pulses of a manager', () => {
   it('keeps a human message queued behind a busy turn', async () => {
     const fleet = await aManagerFleet();
     fleet.startBusyTurn();
-    fleet.sendHumanMessage();
     fleet.scheduler.pulseNow(fleet.managerId);
+    fleet.sendHumanMessage();
+    expect(fleet.sessions.queuedMessageCount(fleet.managerId)).toBe(2);
 
     fleet.pause();
+    expect(fleet.sessions.queuedMessageCount(fleet.managerId)).toBe(1);
     fleet.endTurn();
 
     expect(fleet.humanMessagesWritten()).toHaveLength(1);
     expect(fleet.pulsesWritten()).toEqual([]);
+    expect(fleet.sessions.queuedMessageCount(fleet.managerId)).toBe(0);
+  });
+
+  it('delivers a pulse already typed into the session when the pause comes', async () => {
+    const fleet = await aManagerFleet();
+    fleet.scheduler.pulseNow(fleet.managerId);
+
+    fleet.pause();
+    vi.advanceTimersByTime(SUBMIT_KEYSTROKE_DELAY_MS);
+
+    expect(fleet.pulsesWritten()).toHaveLength(1);
+  });
+
+  it('sends the in-flight pulse and exactly one resume pulse when the pause is lifted at once', async () => {
+    const fleet = await aManagerFleet();
+    fleet.scheduler.pulseNow(fleet.managerId);
+
+    fleet.pause();
+    fleet.resume();
+    vi.advanceTimersByTime(SUBMIT_KEYSTROKE_DELAY_MS);
+    fleet.hook(fleet.managerId, 'UserPromptSubmit');
+    fleet.endTurn();
+    vi.advanceTimersByTime(PULSE_INTERVAL_MS - SUBMIT_KEYSTROKE_DELAY_MS * 2 - 1);
+
+    expect(fleet.pulsesWritten()).toHaveLength(2);
+    expect(fleet.pulsesWritten()[0]).toContain('Wake reason: manual.');
+    expect(fleet.pulsesWritten()[1]).toContain('Wake reason: resume.');
+  });
+
+  it('sends no resume pulse to a closed manager, and the reopened manager gets its interval pulse', async () => {
+    const fleet = await aManagerFleet();
+    fleet.pause();
+    fleet.harness.handles[0]!.emitExit(0);
+
+    fleet.resume();
+    vi.advanceTimersByTime(SUBMIT_KEYSTROKE_DELAY_MS);
+    const pulsesWhileClosed = fleet.pulsesWrittenToAnyLaunch();
+    fleet.sessions.reopen(fleet.managerId);
+    fleet.hook(fleet.managerId, 'SessionStart');
+    fleet.letIntervalsPass(1);
+    vi.advanceTimersByTime(SUBMIT_KEYSTROKE_DELAY_MS);
+
+    expect(pulsesWhileClosed).toEqual([]);
+    expect(fleet.pulsesWrittenToAnyLaunch()).toHaveLength(1);
+    expect(fleet.pulsesWrittenToAnyLaunch()[0]).toContain('Wake reason: interval.');
   });
 
   it('keeps the pause across a restart: a rebooted scheduler arms no pulse for the paused manager', async () => {
@@ -193,6 +250,37 @@ describe('the wake reason of a pulse', () => {
     expect(manualPulse).toEqual({ coalesced: false });
     expect(fleet.pulsesWritten()).toHaveLength(2);
     expect(fleet.pulsesWritten()[1]).toContain('Wake reason: manual, interval.');
+  });
+
+  it('delivers one pulse carrying the new mission note id and every reason when the note gets linked while a pulse is queued', async () => {
+    const fleet = await aManagerFleet({ pulseSeconds: SHORT_PULSE_SECONDS });
+    fleet.letIntervalsPass(1);
+    vi.advanceTimersByTime(SUBMIT_KEYSTROKE_DELAY_MS);
+    fleet.scheduler.pulseNow(fleet.managerId);
+
+    fleet.linkMissionNote();
+    fleet.letIntervalsPass(1);
+    fleet.hook(fleet.managerId, 'UserPromptSubmit');
+    fleet.endTurn();
+
+    expect(fleet.pulsesWritten()).toHaveLength(2);
+    expect(fleet.pulsesWritten()[1]).toContain(`Your mission note id is ${MISSION_NOTE_ID}`);
+    expect(fleet.pulsesWritten()[1]).toContain('Wake reason: manual, interval.');
+  });
+
+  it('delivers nothing to a manager paused after its queued pulse changed text because a mission note got linked', async () => {
+    const fleet = await aManagerFleet();
+    fleet.startBusyTurn();
+    fleet.scheduler.pulseNow(fleet.managerId);
+    fleet.linkMissionNote();
+    fleet.scheduler.pulseNow(fleet.managerId);
+    expect(fleet.sessions.queuedMessageCount(fleet.managerId)).toBe(1);
+
+    fleet.pause();
+    fleet.endTurn();
+
+    expect(fleet.sessions.queuedMessageCount(fleet.managerId)).toBe(0);
+    expect(fleet.pulsesWritten()).toEqual([]);
   });
 
   it('queues a new pulse once the previous one has been delivered', async () => {
