@@ -17,7 +17,8 @@ export function notificationTriggerOf(transition: StateTransition): Notification
   return agentFinishedBy(transition) ?? needsInputBy(transition);
 }
 
-function agentFinishedBy({ sessionId, input, to }: StateTransition): NotificationTrigger | undefined {
+/** Returns agentFinished for a Stop that ends the turn and leaves the session idle, whether or not the recorded state changed. */
+export function agentFinishedBy({ sessionId, input, to }: Omit<StateTransition, 'at'>): NotificationTrigger | undefined {
   const isStopThatEndsTheTurn = input.kind === 'hook' && input.event.hook_event_name === 'Stop' && !input.turnContinues;
   if (!isStopThatEndsTheTurn || to !== 'idle') return undefined;
   return { category: 'agentFinished', sessionId };

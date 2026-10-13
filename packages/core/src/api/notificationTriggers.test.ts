@@ -2,8 +2,8 @@ import type { DatabaseSync } from 'node:sqlite';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { NotificationTrigger, ServerEvent } from '@openfleet/shared';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { WORKING_STATE_TOOL_NAMES, type NotificationTrigger, type ServerEvent } from '@openfleet/shared';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
 import { ApprovalService } from '../governance/approvalService.js';
@@ -23,17 +23,19 @@ const FAIL_FAST_MS = 1000;
 const APPROVAL_TIMEOUT_MS = 100;
 const SECRET_TOOL_INPUT = 'sk-live-TOOL-INPUT-SECRET';
 const SECRET_TRANSCRIPT_TEXT = 'TRANSCRIPT-SECRET-TEXT';
-const WORKING_STATE_TOOL = 'mcp__openfleet__update_working_state';
+const SECRET_NOTIFICATION_MESSAGE = 'NOTIFICATION-SECRET-MESSAGE';
 
 let db: DatabaseSync;
 let server: Awaited<ReturnType<typeof startServer>>;
 let sessions: SessionService;
 let workingStateSettings: WorkingStateSettings;
+let harness: FakeHarness;
 
 async function startFixture() {
   db = openDatabase(':memory:');
   const bus = new EventBus();
-  sessions = new SessionService({ db, bus, harnesses: [new FakeHarness()], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt' });
+  harness = new FakeHarness();
+  sessions = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt' });
   const approvals = new ApprovalService({ db, bus, timeoutMs: APPROVAL_TIMEOUT_MS });
   const managerRepo = new ManagerRepository(db);
   const pulseScheduler = new PulseScheduler({ managers: managerRepo, sessions, bus });
@@ -84,6 +86,9 @@ async function framesAfterSettling(connection: Connection, markerSessionId: stri
   await failFast(marker, 'the settle marker never reached the client');
   return connection.received;
 }
+
+const countOf = (triggers: NotificationTrigger[], category: NotificationTrigger['category']) => triggers.filter((trigger) => trigger.category === category).length;
+const typedBodies = () => harness.handles.flatMap((handle) => handle.written);
 
 const triggersOf = (frames: ServerEvent[]): NotificationTrigger[] =>
   frames.flatMap((frame) => {
@@ -146,6 +151,44 @@ describe('user is told once when an agent finished its turn', () => {
     expect(await settledTriggers(connection, session.id)).toEqual([{ category: 'agentFinished', sessionId: session.id }]);
   });
 
+  it('announces exactly one agentFinished for the Stop of a turn whose start was never reported, and none for the same Stop replayed', async () => {
+    const session = await createSessionAtIdle();
+    const connection = await connect();
+
+    sessions.sendMessage({ sessionId: session.id, body: 'work started before a daemon restart' });
+    await vi.waitFor(() => expect(typedBodies()).toContain('\r'));
+    await stopTurn(session.id);
+    await stopTurn(session.id);
+
+    expect(await settledTriggers(connection, session.id)).toEqual([{ category: 'agentFinished', sessionId: session.id }]);
+  });
+
+  it('announces one agentFinished for a Stop that ends a turn while the agent waits for permission', async () => {
+    const session = await createSessionAtIdle();
+    const connection = await connect();
+
+    await startTurn(session.id);
+    await notify(session.id, 'permission_prompt');
+    await stopTurn(session.id);
+
+    const triggers = await settledTriggers(connection, session.id);
+    expect(countOf(triggers, 'agentFinished')).toBe(1);
+    expect(countOf(triggers, 'needsInput')).toBe(1);
+  });
+
+  it('announces one agentFinished for a Stop that ends a turn while the agent waits for an answer', async () => {
+    const session = await createSessionAtIdle();
+    const connection = await connect();
+
+    await startTurn(session.id);
+    await notify(session.id, 'agent_needs_input');
+    await stopTurn(session.id);
+
+    const triggers = await settledTriggers(connection, session.id);
+    expect(countOf(triggers, 'agentFinished')).toBe(1);
+    expect(countOf(triggers, 'needsInput')).toBe(1);
+  });
+
   it('announces nothing for a session that is closed', async () => {
     const session = await createSessionAtIdle();
     const connection = await connect();
@@ -184,8 +227,10 @@ describe('user is told once when an agent needs them', () => {
     await new Promise((resolve) => setTimeout(resolve, 5));
     await askPermission(session.id, 'Edit');
 
-    const promptKeys = (await settledTriggers(connection, session.id)).flatMap((trigger) => (trigger.category === 'needsInput' ? [trigger.promptKey] : []));
-    expect(new Set(promptKeys).size).toBe(2);
+    const triggers = await settledTriggers(connection, session.id);
+    const promptKeys = triggers.flatMap((trigger) => (trigger.category === 'needsInput' ? [trigger.promptKey] : []));
+    expect(triggers).toHaveLength(2);
+    expect(promptKeys[0]).not.toBe(promptKeys[1]);
   });
 
   it('announces one needsInput of kind input when the agent asks a question, and none for the idle_prompt reminders that follow', async () => {
@@ -200,12 +245,12 @@ describe('user is told once when an agent needs them', () => {
     expect(await settledTriggers(connection, session.id)).toEqual([expect.objectContaining({ category: 'needsInput', sessionId: session.id, kind: 'input' })]);
   });
 
-  it('announces nothing for a permission request the daemon allows itself without asking the human', async () => {
+  it.each(WORKING_STATE_TOOL_NAMES)('announces nothing for a permission request on %s, which the daemon allows itself', async (workingStateTool) => {
     const session = await createSessionAtIdle();
     const connection = await connect();
 
     await startTurn(session.id);
-    await askPermission(session.id, WORKING_STATE_TOOL);
+    await askPermission(session.id, workingStateTool);
 
     expect(await settledTriggers(connection, session.id)).toEqual([]);
   });
@@ -247,5 +292,17 @@ describe('what an announcement reveals', () => {
     expect(announcements).toContain('Bash');
     expect(announcements).not.toContain(SECRET_TOOL_INPUT);
     expect(announcements).not.toContain(SECRET_TRANSCRIPT_TEXT);
+  });
+
+  it('never carries the text of the Notification that asks for the human', async () => {
+    const session = await createSessionAtIdle();
+    const connection = await connect();
+
+    await startTurn(session.id);
+    await postHook(session.id, { hook_event_name: 'Notification', notification_type: 'agent_needs_input', message: SECRET_NOTIFICATION_MESSAGE });
+
+    const announcements = JSON.stringify(await settledTriggers(connection, session.id));
+    expect(announcements).toContain('needsInput');
+    expect(announcements).not.toContain(SECRET_NOTIFICATION_MESSAGE);
   });
 });
