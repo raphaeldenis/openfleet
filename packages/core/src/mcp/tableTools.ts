@@ -1,4 +1,4 @@
-import { AggregateSchema, ScapeAggregateSchema, AutoValueSchema, ColumnFormatSchema, ColumnTypeSchema, SelectOptionSchema, type Aggregate, type ScapeAggregate, type DataStore, type DsColumn, type Session } from '@openfleet/shared';
+import { AggregateSchema, ScapeAggregateSchema, AutoValueSchema, ColumnFormatSchema, ColumnTypeSchema, OptionReplacementSchema, SelectOptionSchema, type Aggregate, type ScapeAggregate, type DataStore, type DsColumn, type Session } from '@openfleet/shared';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { RowNotFoundError, StoreNotFoundError, UnknownColumnReferenceError, type DataStoreRepository, type RowActor } from '../stores/dataStoreRepository.js';
@@ -115,6 +115,50 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
       const columnId = column === null ? null : requireColumn(storeRepo.listColumns(ownStore.id), column).id;
       stores.setNaturalKey(ownStore.id, { ...scope, columnId });
       return storeView(storeRepo.findStore(ownStore.id)!);
+    });
+  });
+
+  server.registerTool('update_data_store_column', {
+    description: 'Edit a column of a data store (store is its id or display name, column_id an id or display name in any case); its id and type never change. '
+      + 'name renames it. natural_key true makes a text column the natural key of the store, false clears the key when this column holds it. '
+      + 'options (select column only) replaces the whole option list: an entry keeps the id of the current option with the same id, else with the same label, otherwise it gets a new id; '
+      + 'it is refused while a row still holds an option that is dropped. All changes land together or none. Returns the column',
+    inputSchema: { store: z.string().min(1), column_id: z.string().min(1), name: z.string().min(1).optional(), natural_key: z.boolean().optional(), options: z.array(OptionReplacementSchema).optional() },
+  }, async ({ store, column_id, name, natural_key, options }) => {
+    const scope = requireProject();
+    if (!scope) return refuse('project_not_found', 'this session has no project');
+    return guarded(() => {
+      const ownStore = ownStoreOf(store, scope);
+      const column = requireColumn(storeRepo.listColumns(ownStore.id), column_id);
+      return columnView(stores.updateColumn(ownStore.id, { ...scope, columnId: column.id, changes: { name, naturalKey: natural_key, options } }));
+    });
+  });
+
+  server.registerTool('delete_data_store_column', {
+    description: 'Delete a column and its cells from a data store (store is its id or display name, column_id an id or display name). Each row that held a value records the cleared cell in its history. '
+      + 'Refused for the natural key column (clear the key first with set_data_store_natural_key) and for a column a view uses. Returns {deleted: column id}',
+    inputSchema: { store: z.string().min(1), column_id: z.string().min(1) },
+  }, async ({ store, column_id }) => {
+    const scope = requireProject();
+    if (!scope) return refuse('project_not_found', 'this session has no project');
+    return guarded(() => {
+      const ownStore = ownStoreOf(store, scope);
+      const column = requireColumn(storeRepo.listColumns(ownStore.id), column_id);
+      stores.deleteColumn(ownStore.id, { ...scope, columnId: column.id, actor: agentActor(caller) });
+      return { deleted: column.id };
+    });
+  });
+
+  server.registerTool('reorder_data_store_columns', {
+    description: 'Set the column order of a data store (store is its id or display name). column_ids must list every column id of the store exactly once; '
+      + 'otherwise nothing changes and the refusal lists the missing, unknown and repeated ids. Returns the columns in their new order',
+    inputSchema: { store: z.string().min(1), column_ids: z.array(z.string().min(1)) },
+  }, async ({ store, column_ids }) => {
+    const scope = requireProject();
+    if (!scope) return refuse('project_not_found', 'this session has no project');
+    return guarded(() => {
+      const ownStore = ownStoreOf(store, scope);
+      return { columns: stores.reorderColumns(ownStore.id, { ...scope, columnIds: column_ids }).map(columnView) };
     });
   });
 
