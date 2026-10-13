@@ -20,6 +20,7 @@ import { SessionRuntime, type RuntimeProgress } from './sessionRuntime.js';
 import { findLatestContextTokens, findResolvedModel, readTranscriptTail } from './resolvedModel.js';
 import { wrapAgentMessage } from './messageEnvelope.js';
 import { normalizePermissionMode, SessionRepository } from './sessionRepository.js';
+import { notificationTriggerOf } from './notificationTriggers.js';
 import { canDeliverNow, isClear, nextState, provesTurnEnded, startsClearedConversation, type SessionInput } from './stateMachine.js';
 
 // Injected, not imported: describeError imports this module's error classes, so importing it here would make a cycle.
@@ -959,6 +960,8 @@ export class SessionService {
     const since = new Date().toISOString();
     this.repo.setState(sessionId, state, since);
     this.deps.bus.emit({ type: 'session.state', sessionId, state, stateSince: since });
+    const trigger = notificationTriggerOf({ sessionId, input, to: state, at: since });
+    if (trigger) this.deps.bus.emit({ type: 'notification.trigger', ...trigger });
     this.guarded(sessionId, () => this.advance(sessionId));
   }
 
