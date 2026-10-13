@@ -1,5 +1,5 @@
 import {
-  CreateDataStoreRequestSchema, InsertRowsRequestSchema, MAX_HISTORY_LIMIT, MAX_NOTE_PAGE_LIMIT, MAX_ROW_PAGE_LIMIT, OrderTermSchema, UpdateRowsRequestSchema, WhereClauseSchema,
+  CreateDataStoreRequestSchema, InsertRowsRequestSchema, MAX_HISTORY_LIMIT, MAX_NOTE_PAGE_LIMIT, MAX_ROW_PAGE_LIMIT, OrderTermSchema, ReorderColumnsRequestSchema, UpdateColumnRequestSchema, UpdateRowsRequestSchema, WhereClauseSchema,
   pageQuerySchema,
   type DataStore, type DataStoreDetail, type DsRow, type DsRowHistoryEntry, type Page, type RowActorKind,
 } from '@openfleet/shared';
@@ -76,6 +76,22 @@ export function registerDataStoreRoutes(router: Router, { stores, storeRepo }: D
     const matches = stores.query(params.id!, { projectId, where, orderBy });
     const page: Page<DsRow> = { items: matches.slice(offset, offset + limit), total: matches.length, limit, offset };
     json(res, 200, page);
+  });
+
+  router.add('PATCH', '/api/data-stores/:id/columns/:columnId', ({ res, params, body }) => {
+    const { projectId, ...changes } = UpdateColumnRequestSchema.parse(body);
+    json(res, 200, stores.updateColumn(params.id!, { projectId, columnId: params.columnId!, changes }));
+  });
+
+  router.add('DELETE', '/api/data-stores/:id/columns/:columnId', ({ req, res, params }) => {
+    const { projectId } = ProjectScopeSchema.parse(queryParams(req));
+    stores.deleteColumn(params.id!, { projectId, columnId: params.columnId!, actor: REST_ACTOR });
+    json(res, 200, { deleted: params.columnId! });
+  });
+
+  router.add('PUT', '/api/data-stores/:id/columns/order', ({ res, params, body }) => {
+    const { projectId, columnIds } = ReorderColumnsRequestSchema.parse(body);
+    json(res, 200, { items: stores.reorderColumns(params.id!, { projectId, columnIds }) });
   });
 
   router.add('POST', '/api/data-stores/:id/rows', ({ res, params, body }) => {
