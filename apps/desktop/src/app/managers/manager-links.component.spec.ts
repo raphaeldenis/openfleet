@@ -33,6 +33,16 @@ describe('ManagerLinksComponent', () => {
     expect(link).toHaveAttribute('href', '/notes?projectId=p1&noteId=note-mission');
   });
 
+  it('names the manager in the accessible name of both links while their visible text stays short', async () => {
+    await render(ManagerLinksComponent, {
+      providers: [provideRouter([])],
+      bindings: [inputBinding('manager', () => manager({ missionNoteId: 'note-mission', logStoreId: 'store-log' })), inputBinding('managerName', () => 'Lead')],
+    });
+
+    expect(screen.getByRole('link', { name: 'Mission note of Lead' })).toHaveTextContent(/^Mission note$/);
+    expect(screen.getByRole('link', { name: 'Log table of Lead' })).toHaveTextContent(/^Log table$/);
+  });
+
   it('shows no link for a manager with neither a mission note nor a log table', async () => {
     await renderLinks(manager());
 

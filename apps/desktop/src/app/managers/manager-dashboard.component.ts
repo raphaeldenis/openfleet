@@ -53,7 +53,7 @@ const HANDOFF_TARGET_AVAILABLE_HINT = 'Saved handoffs appear in Notes › handof
             @if (manager(); as linkedManager) {
               @if (linkedManager.missionNoteId || linkedManager.logStoreId) {
                 <nav class="links-line" aria-label="Mission note and log table" data-testid="manager-dashboard-links">
-                  <of-manager-links [manager]="linkedManager" [projectId]="session.projectId" />
+                  <of-manager-links [manager]="linkedManager" [projectId]="session.projectId" [managerName]="session.name" />
                 </nav>
               }
             }

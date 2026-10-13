@@ -26,7 +26,7 @@ import { PulseNowAction } from './pulse-now';
         [disabled]="pulse.pending() || isSessionClosed()"
         (click)="pulseNow()"
       >Pulse now</button>
-      <of-manager-links [manager]="manager()" [projectId]="session()?.projectId" />
+      <of-manager-links [manager]="manager()" [projectId]="session()?.projectId" [managerName]="session()?.name" />
       @if (displayedMessage(); as message) {
         <span
           [attr.data-testid]="'manager-' + manager().sessionId + '-pulse-message'"

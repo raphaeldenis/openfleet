@@ -64,7 +64,7 @@ describe('ManagerDashboardComponent', () => {
       providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('m1') }, { provide: FleetEventsService, useValue: fake }],
     });
 
-    const link = within(screen.getByTestId('manager-dashboard-links')).getByRole('link', { name: 'Log table' });
+    const link = within(screen.getByTestId('manager-dashboard-links')).getByRole('link', { name: 'Log table of Lead' });
 
     expect(link).toHaveAttribute('href', '/tables?projectId=p1&storeId=store-log');
   });

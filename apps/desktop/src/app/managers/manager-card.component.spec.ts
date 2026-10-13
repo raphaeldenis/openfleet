@@ -80,9 +80,20 @@ describe('ManagerCardComponent links', () => {
       bindings: [inputBinding('manager', () => manager({ logStoreId: 'store-log' })), inputBinding('session', () => session({ projectId: 'p1' }))],
     });
 
-    const link = within(screen.getByTestId('manager-m1-card')).getByRole('link', { name: 'Log table' });
+    const link = within(screen.getByTestId('manager-m1-card')).getByRole('link', { name: 'Log table of Lead' });
 
     expect(link).toHaveAttribute('href', '/tables?projectId=p1&storeId=store-log');
+  });
+
+  it('names the manager in the accessible name of its mission note link, whose visible text stays short', async () => {
+    await render(ManagerCardComponent, {
+      providers: [provideRouter([])],
+      bindings: [inputBinding('manager', () => manager({ missionNoteId: 'note-mission' })), inputBinding('session', () => session({ projectId: 'p1' }))],
+    });
+
+    const link = within(screen.getByTestId('manager-m1-card')).getByRole('link', { name: 'Mission note of Lead' });
+
+    expect(link).toHaveTextContent(/^Mission note$/);
   });
 
   it('shows no link for a manager that is bound to no table and has no mission note', async () => {
