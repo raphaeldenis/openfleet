@@ -7,7 +7,7 @@ import { OverdueChipComponent } from '../working-state/overdue-chip.component';
 import { countdownLabel, countdownSecondsUntil } from './manager-countdown';
 import { ManagerLinksComponent } from './manager-links.component';
 import { PulseNowAction } from './pulse-now';
-import { PulsePauseAction } from './pulse-pause';
+import { PAUSED_COUNTDOWN_PLACEHOLDER, PULSES_PAUSED_HEADER, PulsePauseAction, pauseButtonGlyph } from './pulse-pause';
 
 @Component({
   selector: 'of-manager-card',
@@ -16,7 +16,10 @@ import { PulsePauseAction } from './pulse-pause';
   template: `
     <div class="card" [attr.data-testid]="'manager-' + manager().sessionId + '-card'">
       <span [attr.data-testid]="'manager-' + manager().sessionId + '-children'">{{ manager().childrenCount }}/{{ manager().childrenCap }}</span>
-      <of-pulse-ring [fractionElapsed]="fractionElapsed()" label="Next pulse" />
+      <of-pulse-ring [fractionElapsed]="fractionElapsed()" [label]="pulseRingLabel()" />
+      @if (isPaused()) {
+        <span [attr.data-testid]="'manager-' + manager().sessionId + '-pulse-header'">{{ pulsesPausedHeader }}</span>
+      }
       <span [attr.data-testid]="'manager-' + manager().sessionId + '-countdown'">{{ countdownDisplay() }}</span>
       @if (session(); as managerSession) {
         <of-overdue-chip [session]="managerSession" />
@@ -31,12 +34,13 @@ import { PulsePauseAction } from './pulse-pause';
       <button
         type="button"
         class="of-btn of-btn--secondary"
+        [class.of-btn--paused]="isPaused()"
         [attr.data-testid]="'manager-' + manager().sessionId + '-pause'"
         [attr.aria-label]="pauseButtonName()"
         [attr.aria-pressed]="isPaused()"
         [disabled]="pauseAction.pending() || isSessionClosed()"
         (click)="togglePause()"
-      >{{ pauseButtonLabel() }}</button>
+      ><span aria-hidden="true">{{ pauseGlyph() }}</span> {{ pauseButtonLabel() }}</button>
       <of-manager-links [manager]="manager()" [projectId]="session()?.projectId" [managerName]="session()?.name" />
       @if (displayedMessage(); as message) {
         <span
@@ -72,6 +76,12 @@ export class ManagerCardComponent {
 
   protected readonly isPaused = computed(() => this.manager().pulseEnabled === false);
 
+  protected readonly pulsesPausedHeader = PULSES_PAUSED_HEADER;
+
+  protected readonly pulseRingLabel = computed(() => (this.isPaused() ? PULSES_PAUSED_HEADER : 'Next pulse'));
+
+  protected readonly pauseGlyph = computed(() => pauseButtonGlyph(this.isPaused()));
+
   protected readonly pauseButtonLabel = computed(() => (this.isPaused() ? 'Resume pulses' : 'Pause pulses'));
 
   protected readonly pauseButtonName = computed(() => {
@@ -81,7 +91,7 @@ export class ManagerCardComponent {
 
   protected readonly countdownDisplay = computed(() => {
     if (this.isSessionClosed()) return 'closed';
-    if (this.isPaused()) return 'paused';
+    if (this.isPaused()) return PAUSED_COUNTDOWN_PLACEHOLDER;
     return countdownLabel(this.countdownSeconds());
   });
 

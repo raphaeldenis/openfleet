@@ -129,18 +129,41 @@ describe('ManagerCardComponent pause control', () => {
     expect(api.updateManager).toHaveBeenCalledWith('m1', { pulseEnabled: true });
   });
 
-  it('says paused instead of counting down, and disables "Pulse now", for a paused manager', async () => {
+  it('says "Pulses paused" and shows a dash instead of counting down, and disables "Pulse now", for a paused manager', async () => {
     await renderCard({ pulseEnabled: false });
 
-    expect(screen.getByTestId('manager-m1-countdown')).toHaveTextContent('paused');
+    expect(screen.getByTestId('manager-m1-pulse-header')).toHaveTextContent('Pulses paused');
+    expect(screen.getByTestId('manager-m1-countdown')).toHaveTextContent(/^\s*—\s*$/);
+    expect(screen.getByRole('progressbar', { name: 'Pulses paused' })).toBeTruthy();
     expect(screen.getByTestId('manager-m1-pulse')).toBeDisabled();
   });
 
   it('keeps counting down and "Pulse now" available for a running manager', async () => {
     await renderCard({ pulseEnabled: true });
 
-    expect(screen.getByTestId('manager-m1-countdown')).not.toHaveTextContent('paused');
+    expect(screen.queryByTestId('manager-m1-pulse-header')).toBeNull();
+    expect(screen.getByRole('progressbar', { name: 'Next pulse' })).toBeTruthy();
+    expect(screen.getByTestId('manager-m1-countdown')).not.toHaveTextContent('—');
     expect(screen.getByTestId('manager-m1-pulse')).toBeEnabled();
+  });
+
+  it('draws the pause glyph before the label of a running manager', async () => {
+    await renderCard({ pulseEnabled: true });
+
+    expect(screen.getByTestId('manager-m1-pause')).toHaveTextContent('❚❚ Pause pulses');
+  });
+
+  it('draws the resume glyph before the label of a paused manager', async () => {
+    await renderCard({ pulseEnabled: false });
+
+    expect(screen.getByTestId('manager-m1-pause')).toHaveTextContent('▶ Resume pulses');
+  });
+
+  it('keeps the glyph out of the accessible name of the pause button', async () => {
+    await renderCard({ pulseEnabled: false }, {}, session());
+
+    expect(screen.getByRole('button', { name: 'Resume pulses of Lead' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.queryByRole('button', { name: /▶|❚/ })).toBeNull();
   });
 
   it('tells the manager is paused, not that its session is closed, when the daemon refuses a pulse because of the pause', async () => {

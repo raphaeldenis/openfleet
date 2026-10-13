@@ -70,7 +70,12 @@ a.of-btn { display: inline-flex; align-items: center; text-decoration: none; }
 .of-btn--secondary { border: 1px solid var(--line-2); background: var(--panel); color: var(--fg); }
 .of-btn--link { border: 0; background: transparent; color: var(--accent); }
 .of-btn--danger { border: 1px solid var(--state-error-fill); background: var(--state-error-fill); color: var(--on-state); }
-.of-btn:disabled, .of-btn[aria-disabled='true'] { border-color: var(--line); background: var(--sunk); color: var(--mut); cursor: not-allowed; }
+.of-btn--paused {
+  border-color: var(--state-waiting-permission);
+  background: color-mix(in oklch, var(--state-waiting-permission) 14%, transparent);
+  color: var(--state-waiting-permission);
+}
+.of-btn:disabled,.of-btn[aria-disabled='true'] { border-color: var(--line); background: var(--sunk); color: var(--mut); cursor: not-allowed; }
 .of-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .of-focus-ring:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 

@@ -113,17 +113,50 @@ describe('ManagerDashboardComponent pause control', () => {
     expect(api.updateManager).toHaveBeenCalledWith('m1', { pulseEnabled: true });
   });
 
-  it('says paused instead of counting down, and disables "Pulse now", for a paused manager', async () => {
+  it('says "Pulses paused" and shows a dash instead of counting down, and disables "Pulse now", for a paused manager', async () => {
     await renderDashboardOf({ ...MANAGER_VIEW, pulseEnabled: false });
 
-    expect(screen.getByTestId('manager-dashboard-countdown')).toHaveTextContent('paused');
+    expect(screen.getByTestId('manager-dashboard-pulse-header')).toHaveTextContent('Pulses paused');
+    expect(screen.getByTestId('manager-dashboard-countdown')).toHaveTextContent(/^\s*—\s*$/);
+    expect(screen.getByRole('progressbar', { name: 'Pulses paused' })).toBeTruthy();
     expect(screen.getByTestId('manager-dashboard-pulse')).toBeDisabled();
   });
 
-  it('keeps "Pulse now" available for a running manager', async () => {
+  it('tells a paused manager sends one pulse on resume, without inventing a held-wake count', async () => {
+    await renderDashboardOf({ ...MANAGER_VIEW, pulseEnabled: false });
+
+    const wakeLine = screen.getByTestId('manager-dashboard-wake');
+
+    expect(wakeLine).toHaveTextContent('timer · child message · trigger — one pulse is sent on resume');
+    expect(wakeLine).not.toHaveTextContent(/\d/);
+  });
+
+  it('keeps "Pulse now" available and shows no paused header or wake line for a running manager', async () => {
     await renderDashboardOf(MANAGER_VIEW);
 
     expect(screen.getByTestId('manager-dashboard-pulse')).toBeEnabled();
+    expect(screen.queryByTestId('manager-dashboard-pulse-header')).toBeNull();
+    expect(screen.queryByTestId('manager-dashboard-wake')).toBeNull();
+    expect(screen.getByRole('progressbar', { name: 'Next pulse' })).toBeTruthy();
+  });
+
+  it('draws the pause glyph before the label of a running manager', async () => {
+    await renderDashboardOf(MANAGER_VIEW);
+
+    expect(screen.getByTestId('manager-dashboard-pause')).toHaveTextContent('❚❚ Pause pulses');
+  });
+
+  it('draws the resume glyph before the label of a paused manager', async () => {
+    await renderDashboardOf({ ...MANAGER_VIEW, pulseEnabled: false });
+
+    expect(screen.getByTestId('manager-dashboard-pause')).toHaveTextContent('▶ Resume pulses');
+  });
+
+  it('keeps the glyph out of the accessible name of the pause button', async () => {
+    await renderDashboardOf({ ...MANAGER_VIEW, pulseEnabled: false });
+
+    expect(screen.getByRole('button', { name: 'Resume pulses of Lead' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.queryByRole('button', { name: /▶|❚/ })).toBeNull();
   });
 });
 
