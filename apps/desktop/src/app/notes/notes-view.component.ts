@@ -193,6 +193,7 @@ export class NotesViewComponent {
   });
 
   private readonly requestedProjectId = computed(() => this.queryParams()?.get('projectId') ?? null);
+  private readonly requestedNoteId = computed(() => this.queryParams()?.get('noteId') ?? null);
   private readonly project = computed(() => this.projects().find((project) => project.id === this.projectId()));
   protected readonly projectName = computed(() => this.project()?.name ?? '');
   protected readonly selectedSummary = computed(() => this.notes().find((summary) => summary.id === this.selectedId()));
@@ -226,6 +227,10 @@ export class NotesViewComponent {
     effect(() => {
       const requestedProjectId = this.requestedProjectId();
       untracked(() => this.switchToRequestedProject(requestedProjectId));
+    });
+    effect(() => {
+      const requestedNoteId = this.requestedNoteId();
+      untracked(() => this.openRequestedNote(requestedNoteId));
     });
   }
 
@@ -266,11 +271,12 @@ export class NotesViewComponent {
       if (request !== this.latestNotesRequest) return;
       this.notes.set(allNotes);
       this.notesStatus.set('ready');
-      const firstNoteId = allNotes[0]?.id;
-      if (firstNoteId) await this.openNote(firstNoteId, { focusEditor: focusAfterLoad });
-      const isFirstNoteMissingOrUnreadable = !firstNoteId || this.noteStatus() === 'error';
+      const requestedNote = allNotes.find((summary) => summary.id === this.requestedNoteId());
+      const noteIdToOpen = requestedNote?.id ?? allNotes[0]?.id;
+      if (noteIdToOpen) await this.openNote(noteIdToOpen, { focusEditor: focusAfterLoad });
+      const isOpenedNoteMissingOrUnreadable = !noteIdToOpen || this.noteStatus() === 'error';
       const isStillCurrent = request === this.latestNotesRequest;
-      if (focusAfterLoad && isFirstNoteMissingOrUnreadable && isStillCurrent) this.focusListAfterRender();
+      if (focusAfterLoad && isOpenedNoteMissingOrUnreadable && isStillCurrent) this.focusListAfterRender();
     } catch (error) {
       if (request !== this.latestNotesRequest) return;
       this.notesError.set(failureOf(error));
@@ -489,6 +495,13 @@ export class NotesViewComponent {
     const isAlreadyCurrent = requestedProjectId === this.projectId();
     if (requestedProjectId === null || !isKnownProject || isAlreadyCurrent) return;
     this.switchProject(requestedProjectId);
+  }
+
+  private openRequestedNote(requestedNoteId: string | null): void {
+    const isNoteListReady = this.notesStatus() === 'ready';
+    const isNoteOfShownProject = this.notes().some((summary) => summary.id === requestedNoteId);
+    if (requestedNoteId === null || !isNoteListReady || !isNoteOfShownProject) return;
+    void this.openNote(requestedNoteId);
   }
 
   private focusListAfterRender(): void {

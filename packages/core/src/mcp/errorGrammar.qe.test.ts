@@ -169,6 +169,7 @@ const hostileCallByTool = (w: World): Record<string, { client: Client; args: Rec
   get_data_store: { client: w.lead, args: { store: UNKNOWN }, code: 'store_not_found' },
   add_data_store_column: { client: w.lead, args: { store: UNKNOWN, display_name: 'c', column_type: 'text' }, code: 'store_not_found' },
   insert_data_store_rows: { client: w.lead, args: { store: UNKNOWN, rows: [{}] }, code: 'store_not_found' },
+  set_argus_log_store: { client: w.child, args: { store_id: UNKNOWN }, code: 'not_a_manager' },
   set_data_store_natural_key: { client: w.lead, args: { store: UNKNOWN, column: 'c' }, code: 'store_not_found' },
   update_data_store_column: { client: w.lead, args: { store: UNKNOWN, column_id: 'c', name: 'n' }, code: 'store_not_found' },
   delete_data_store_column: { client: w.lead, args: { store: UNKNOWN, column_id: 'c' }, code: 'store_not_found' },

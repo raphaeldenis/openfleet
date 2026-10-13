@@ -9,13 +9,20 @@ export interface ManagerRecord {
   missionText: string;
   lastPulseAt?: string;
   createdAt: string;
+  missionNoteId?: string;
+  pinMissionNote?: boolean;
+  logStoreId?: string;
 }
 
-interface Row { session_id: string; pulse_seconds: number; children_cap: number; mission_text: string; last_pulse_at: string | null; created_at: string }
+interface Row {
+  session_id: string; pulse_seconds: number; children_cap: number; mission_text: string; last_pulse_at: string | null; created_at: string;
+  mission_note_id: string | null; pin_mission_note: number; log_store_id: string | null;
+}
 
 const toManager = (r: Row): ManagerRecord => ({
   sessionId: r.session_id, pulseSeconds: r.pulse_seconds, childrenCap: r.children_cap,
   missionText: r.mission_text, lastPulseAt: r.last_pulse_at ?? undefined, createdAt: r.created_at,
+  missionNoteId: r.mission_note_id ?? undefined, pinMissionNote: r.pin_mission_note === 1, logStoreId: r.log_store_id ?? undefined,
 });
 
 const definedFieldsOf = <T extends object>(fields: T): Partial<T> => Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined)) as Partial<T>;
@@ -59,5 +66,16 @@ export class ManagerRepository {
   }
   setLastPulseAt(sessionId: string, at: string): void {
     this.db.prepare('UPDATE managers SET last_pulse_at = ? WHERE session_id = ?').run(at, sessionId);
+  }
+  /** Links the note holding the mission; null unlinks it. */
+  setMissionNote(sessionId: string, noteId: string | null): void {
+    this.db.prepare('UPDATE managers SET mission_note_id = ? WHERE session_id = ?').run(noteId, sessionId);
+  }
+  setMissionNotePinned(sessionId: string, isPinned: boolean): void {
+    this.db.prepare('UPDATE managers SET pin_mission_note = ? WHERE session_id = ?').run(Number(isPinned), sessionId);
+  }
+  /** Binds the table the manager logs its actions in; null unbinds it. */
+  setLogStore(sessionId: string, storeId: string | null): void {
+    this.db.prepare('UPDATE managers SET log_store_id = ? WHERE session_id = ?').run(storeId, sessionId);
   }
 }

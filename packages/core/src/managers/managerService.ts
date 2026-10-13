@@ -1,6 +1,8 @@
 import { MANAGER_ROLE, type ManagerProfile, type ManagerSpec, type ManagerView, type ScapeImportStatus, type Session, type SessionSpec, type UpdateManager } from '@openfleet/shared';
 import type { EventBus } from '../events/eventBus.js';
+import { NoteNotFoundError } from '../notes/noteService.js';
 import type { SessionService } from '../sessions/sessionService.js';
+import { StoreNotFoundError } from '../stores/dataStoreRepository.js';
 import type { ManagerRecord, ManagerRepository } from './managerRepository.js';
 import { DEFAULT_HEARTBEAT_SECONDS } from '../workingState/workingStateSettings.js';
 import { toManagerView } from './managerView.js';
@@ -10,11 +12,19 @@ export interface PulseSchedulerLike {
   onManagerUpdated(record: ManagerRecord): void;
 }
 
+/** Tells which project owns a note or a table; undefined for an id that does not exist. */
+export interface ManagerLinkTargets {
+  noteProjectId(noteId: string): string | undefined;
+  storeProjectId(storeId: string): string | undefined;
+}
+
 export interface ManagerServiceDeps {
   managers: ManagerRepository;
   sessions: SessionService;
   bus: EventBus;
   scheduler: PulseSchedulerLike;
+  /** Absent, every note and table reads as missing: nothing can be linked. */
+  linkTargets?: ManagerLinkTargets;
   heartbeatDefaultSeconds?: number;
   /** Absent, no manager counts as imported. */
   scapeImportStatusOf?: (sessionId: string) => ScapeImportStatus;
@@ -50,17 +60,34 @@ export class ManagerService {
     return this.deps.managers.get(sessionId);
   }
 
-  /** Changes the pulse, cap or mission of a manager; undefined when the session has no manager row. */
+  /**
+   * Changes the pulse, cap, mission, model, mission note or its pin of a manager; undefined when the session has no manager row.
+   * Throws NoteNotFoundError, before changing anything, for a mission note outside the manager's project.
+   */
   update(sessionId: string, patch: UpdateManager): ManagerView | undefined {
     if (!this.deps.managers.get(sessionId)) return undefined;
-    const { mission, model, ...cadenceAndCap } = patch;
+    const { mission, model, missionNoteId, pinMissionNote, ...cadenceAndCap } = patch;
+    const isLinkingNote = typeof missionNoteId === 'string';
+    if (isLinkingNote) this.requireNoteOfManagerProject({ managerId: sessionId, noteId: missionNoteId });
     if (model !== undefined) this.deps.sessions.changeModel(sessionId, model);
     this.deps.managers.update(sessionId, { ...cadenceAndCap, missionText: mission });
+    if (missionNoteId !== undefined) this.deps.managers.setMissionNote(sessionId, missionNoteId);
+    if (pinMissionNote !== undefined) this.deps.managers.setMissionNotePinned(sessionId, pinMissionNote);
     const updated = this.deps.managers.get(sessionId)!;
-    const view = this.view(updated);
-    this.deps.bus.emit({ type: 'manager.updated', manager: view });
+    const view = this.announceUpdated(updated);
     this.deps.scheduler.onManagerUpdated(updated);
     return view;
+  }
+
+  /**
+   * Binds the table the manager logs its actions in; undefined when the session has no manager row.
+   * Throws StoreNotFoundError for a table outside the manager's project.
+   */
+  bindLogStore(sessionId: string, storeId: string): ManagerView | undefined {
+    if (!this.deps.managers.get(sessionId)) return undefined;
+    this.requireStoreOfManagerProject({ managerId: sessionId, storeId });
+    this.deps.managers.setLogStore(sessionId, storeId);
+    return this.announceUpdated(this.deps.managers.get(sessionId)!);
   }
 
   /** The manager as the profile page shows it: its view, and where it stands against a Scape re-import. */
@@ -73,6 +100,28 @@ export class ManagerService {
 
   listViews(): ManagerView[] {
     return this.deps.managers.list().map((record) => this.view(record));
+  }
+
+  private requireNoteOfManagerProject({ managerId, noteId }: { managerId: string; noteId: string }): void {
+    const noteProjectId = this.deps.linkTargets?.noteProjectId(noteId);
+    if (!this.isInProjectOfManager({ managerId, projectId: noteProjectId })) throw new NoteNotFoundError(noteId);
+  }
+
+  private requireStoreOfManagerProject({ managerId, storeId }: { managerId: string; storeId: string }): void {
+    const storeProjectId = this.deps.linkTargets?.storeProjectId(storeId);
+    if (!this.isInProjectOfManager({ managerId, projectId: storeProjectId })) throw new StoreNotFoundError(storeId);
+  }
+
+  private isInProjectOfManager({ managerId, projectId }: { managerId: string; projectId: string | undefined }): boolean {
+    const managerProjectId = this.deps.sessions.get(managerId)?.projectId;
+    const hasKnownOwner = projectId !== undefined && managerProjectId !== undefined;
+    return hasKnownOwner && projectId === managerProjectId;
+  }
+
+  private announceUpdated(record: ManagerRecord): ManagerView {
+    const view = this.view(record);
+    this.deps.bus.emit({ type: 'manager.updated', manager: view });
+    return view;
   }
 
   private view(record: ManagerRecord): ManagerView {

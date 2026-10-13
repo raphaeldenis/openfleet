@@ -14,6 +14,7 @@ import { restoreFocusWhenFree } from '../sessions/handoff/handoff-focus';
 import { HandoffPreviewHostComponent } from '../sessions/handoff/handoff-preview-host.component';
 import { OverdueChipComponent } from '../working-state/overdue-chip.component';
 import { countdownLabel, countdownSecondsUntil } from './manager-countdown';
+import { ManagerLinksComponent } from './manager-links.component';
 import { ManagerProfileComponent } from './manager-profile.component';
 import { ManagerReopenAction } from './manager-reopen';
 import { PulseNowAction } from './pulse-now';
@@ -25,7 +26,7 @@ const HANDOFF_TARGET_AVAILABLE_HINT = 'Saved handoffs appear in Notes › handof
 @Component({
   selector: 'of-manager-dashboard',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [StateChipComponent, PulseRingComponent, OverdueChipComponent, HandoffPreviewHostComponent, ErrorLineComponent, ManagerProfileComponent],
+  imports: [StateChipComponent, PulseRingComponent, OverdueChipComponent, HandoffPreviewHostComponent, ErrorLineComponent, ManagerLinksComponent, ManagerProfileComponent],
   template: `
     @if (!hasSnapshot()) {
       <p class="state-message" data-testid="manager-dashboard-loading">Loading…</p>
@@ -49,6 +50,13 @@ const HANDOFF_TARGET_AVAILABLE_HINT = 'Saved handoffs appear in Notes › handof
               <span> · </span>
               <span data-testid="manager-dashboard-last-activity">last activity {{ lastActivityLabel() }}</span>
             </div>
+            @if (manager(); as linkedManager) {
+              @if (linkedManager.missionNoteId || linkedManager.logStoreId) {
+                <nav class="links-line" aria-label="Mission note and log table" data-testid="manager-dashboard-links">
+                  <of-manager-links [manager]="linkedManager" [projectId]="session.projectId" [managerName]="session.name" />
+                </nav>
+              }
+            }
           </div>
           <div class="actions">
             <button
@@ -187,6 +195,7 @@ const HANDOFF_TARGET_AVAILABLE_HINT = 'Saved handoffs appear in Notes › handof
     .name { font-size: 1rem; font-weight: 600; min-width: 0; overflow-wrap: anywhere }
     .project-name { font-size: .75rem; color: var(--mut) }
     .meta-line { font-size: .75rem; color: var(--mut) }
+    .links-line { display: flex; align-items: center; gap: .625rem; margin-top: .25rem; font-size: .75rem }
     .reopen-hint { font-size: .75rem; color: var(--mut) }
     .cap { display: flex; flex-direction: column; gap: .25rem; width: 8rem; font-size: .6875rem; color: var(--mut) }
     .cap-bar { height: .375rem; border-radius: .25rem; background: var(--sunk); overflow: hidden }

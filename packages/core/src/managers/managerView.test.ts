@@ -22,7 +22,19 @@ describe('toManagerView', () => {
       lastPulseAt: '2026-01-01T00:05:00.000Z',
       nextPulseAt: '2026-01-01T00:06:00.000Z',
       childrenCount: 3,
+      pinMissionNote: false,
     });
+  });
+
+  it('carries the linked mission note, its pin and the log table into the view', () => {
+    const record = {
+      sessionId: 'session-3', pulseSeconds: 30, childrenCap: 1, missionText: 'x', createdAt: '2026-01-01T00:00:00.000Z',
+      missionNoteId: 'note-9', pinMissionNote: true, logStoreId: 'store-7',
+    };
+
+    const view = toManagerView(record, 0);
+
+    expect(view).toMatchObject({ missionNoteId: 'note-9', pinMissionNote: true, logStoreId: 'store-7' });
   });
 
   it('reports childrenCount 0 for a manager with no live children, without inventing a floor or omitting the field', () => {

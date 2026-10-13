@@ -323,6 +323,26 @@ describe('agent reaches every MCP tool family of a booted daemon', () => {
   });
 });
 
+describe('manager links of a booted daemon', () => {
+  const MANAGER_SPEC = { childrenCap: 1, mission: 'x' };
+  const OWN_PROJECT_ID = '11111111-1111-4111-8111-111111111111';
+
+  it('binds a table and links a note of the manager\'s own project', async () => {
+    await bootDaemon();
+    daemon!.db.prepare("INSERT INTO projects (id, name, docs_folder_path, created_at) VALUES (?, 'Own', NULL, 't0')").run(OWN_PROJECT_ID);
+    const lead = await createSession({ name: 'Lead', projectId: OWN_PROJECT_ID, manager: MANAGER_SPEC });
+    const store = (await (await api('/api/data-stores', { method: 'POST', body: JSON.stringify({ projectId: OWN_PROJECT_ID, displayName: 'Log' }) })).json()) as { id: string };
+    const note = (await (await api('/api/notes', { method: 'POST', body: JSON.stringify({ projectId: OWN_PROJECT_ID, title: 'Mission', bodyMd: '# mission' }) })).json()) as { id: string };
+
+    await callMcpTool(lead.id, 'set_argus_log_store', { store_id: store.id });
+    const linked = await api(`/api/managers/${lead.id}`, { method: 'PATCH', body: JSON.stringify({ missionNoteId: note.id }) });
+
+    expect(linked.status).toBe(200);
+    const profile = (await (await api(`/api/managers/${lead.id}`)).json()) as { manager: { logStoreId?: string; missionNoteId?: string } };
+    expect(profile.manager).toMatchObject({ logStoreId: store.id, missionNoteId: note.id });
+  });
+});
+
 describe('manager heartbeat of a booted daemon', () => {
   it('announces a created manager to connected clients', async () => {
     await bootDaemon();

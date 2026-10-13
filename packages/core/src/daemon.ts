@@ -121,17 +121,18 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   });
   sleepGuard.observeSessionEvents();
   const pulseScheduler = new PulseScheduler({ managers: managerRepository, sessions, bus, describeError });
+  const storeRepo = new DataStoreRepository(db);
+  const noteRepo = new NoteRepository(db);
   const managers = new ManagerService({
     managers: managerRepository, sessions, bus, scheduler: pulseScheduler, heartbeatDefaultSeconds: managerSettings.heartbeatDefaultSeconds,
     scapeImportStatusOf: (sessionId) => scapeImportStatusOfManager(db, sessionId),
+    linkTargets: { noteProjectId: (noteId) => noteRepo.getProjectId(noteId), storeProjectId: (storeId) => storeRepo.findStore(storeId)?.projectId },
   });
-  const storeRepo = new DataStoreRepository(db);
   const knowledgeRepository = new KnowledgeRepository(db);
   const knowledgeService = new KnowledgeSearchService({ search: knowledgeRepository, scope: new KnowledgeRepoScope({ repositories: knowledgeRepository }) });
   const knowledgeSearch = { search: knowledgeService.search.bind(knowledgeService) };
   const stores = new DataStoreService({ repo: storeRepo, db, clock: () => new Date().toISOString(), newId });
   const projects = new ProjectRepository(db);
-  const noteRepo = new NoteRepository(db);
   const notes = new NoteService({ repo: noteRepo, db, expandMentions, clock: () => new Date().toISOString(), newId });
   const docs = new DocsFolderService({ notes, noteRepo, projects, fs: nodeDocsFolderFs, clock: () => new Date().toISOString(), degraded, onWatchError: logDocsFolderFailure('watch') });
   const docsFolders = new DocsFolderSupervisor({ projects, docs, onError: ({ projectId, step, error }) => logDocsFolderFailure(step, projectId)(error) });

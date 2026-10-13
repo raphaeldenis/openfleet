@@ -15,6 +15,7 @@ import type { DataStoreRepository } from '../stores/dataStoreRepository.js';
 import type { DataStoreService } from '../stores/dataStoreService.js';
 import { DAEMON_VERSION } from '../version.js';
 import type { WorkingStateService } from '../workingState/workingStateService.js';
+import { registerManagerLinkTools } from './managerLinkTools.js';
 import { registerNoteTools } from './noteTools.js';
 import { registerKnowledgeTools, type KnowledgeToolSearchPort } from './knowledgeTools.js';
 import { registerNoteVersionTools } from './noteVersionTools.js';
@@ -47,6 +48,7 @@ export function createMcpHandler(deps: { knowledgeSearch: KnowledgeToolSearchPor
     const server = new McpServer({ name: 'openfleet', version: DAEMON_VERSION });
     const toolServer = answeringThrowsInGrammar(server, caller);
     registerTools(toolServer, { ...deps, caller });
+    registerManagerLinkTools(toolServer, { managers: deps.managers, caller });
     registerKnowledgeTools(toolServer, { knowledgeSearch: deps.knowledgeSearch, caller });
     registerTableTools(toolServer, { stores: deps.stores, storeRepo: deps.storeRepo, caller });
     registerTableViewTools(toolServer, { stores: deps.stores, storeRepo: deps.storeRepo, caller });

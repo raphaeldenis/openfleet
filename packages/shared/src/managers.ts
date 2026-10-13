@@ -14,10 +14,14 @@ export const ManagerSpecSchema = z.object({
 });
 export type ManagerSpec = z.infer<typeof ManagerSpecSchema>;
 
-/** The fields of a manager that can be edited after it is created: at least one is given. The model belongs to its session. */
-export const UpdateManagerSchema = ManagerSpecSchema.partial().extend({ model: ModelIdSchema.optional() }).refine(
+/** The fields of a manager that can be edited after it is created: at least one is given. The model belongs to its session; a null missionNoteId unlinks the mission note. */
+export const UpdateManagerSchema = ManagerSpecSchema.partial().extend({
+  model: ModelIdSchema.optional(),
+  missionNoteId: z.string().min(1).nullable().optional(),
+  pinMissionNote: z.boolean().optional(),
+}).refine(
   (update) => Object.values(update).some((value) => value !== undefined),
-  { message: 'pulseSeconds, childrenCap, mission or model is required' },
+  { message: 'pulseSeconds, childrenCap, mission, model, missionNoteId or pinMissionNote is required' },
 );
 export type UpdateManager = z.infer<typeof UpdateManagerSchema>;
 
@@ -42,4 +46,9 @@ export interface ManagerView {
   lastPulseAt?: string;
   nextPulseAt: string;
   childrenCount: number;
+  /** The note holding the manager's mission, when one is linked. */
+  missionNoteId?: string;
+  pinMissionNote?: boolean;
+  /** The table the manager logs its actions in, when one is bound. */
+  logStoreId?: string;
 }

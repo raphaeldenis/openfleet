@@ -50,15 +50,17 @@ function fakeOpener(isAvailable = true) {
 async function renderView(options: { api?: ReturnType<typeof fakeApi>; opener?: ReturnType<typeof fakeOpener>; queryParams?: Record<string, string> } = {}) {
   const api = options.api ?? fakeApi();
   const opener = options.opener ?? fakeOpener();
+  const queryParamMap = new BehaviorSubject(convertToParamMap(options.queryParams ?? {}));
   await render(NotesViewComponent, {
     providers: [
       provideRouter([]),
       { provide: FleetApiService, useValue: api },
       { provide: DirectoryOpener, useValue: opener },
-      { provide: ActivatedRoute, useValue: { queryParamMap: new BehaviorSubject(convertToParamMap(options.queryParams ?? {})) } },
+      { provide: ActivatedRoute, useValue: { queryParamMap } },
     ],
   });
-  return { api, opener };
+  const navigateTo = (queryParams: Record<string, string>) => queryParamMap.next(convertToParamMap(queryParams));
+  return { api, opener, navigateTo };
 }
 
 const editorTitle = () => screen.findByTestId('note-editor-title');
@@ -93,6 +95,37 @@ describe('NotesViewComponent', () => {
       expect(await editorTitle()).toHaveTextContent('other-note');
       expect(api.listNotes).toHaveBeenCalledWith('p2', { limit: 200, offset: 0 });
       expect(api.listNotes).not.toHaveBeenCalledWith('p1', expect.anything());
+    });
+
+    it('a noteId in the URL opens that note instead of the first one', async () => {
+      await renderView({ queryParams: { projectId: 'p1', noteId: 'n2' } });
+
+      expect(await editorTitle()).toHaveTextContent('voice');
+    });
+
+    it('a noteId that is not a note of the project opens the first note', async () => {
+      await renderView({ queryParams: { projectId: 'p1', noteId: 'n9' } });
+
+      expect(await editorTitle()).toHaveTextContent('daemon-protocol');
+    });
+
+    it('a noteId that appears in the URL while the project is already shown opens that note', async () => {
+      const { navigateTo } = await renderView({ queryParams: { projectId: 'p1' } });
+      expect(await editorTitle()).toHaveTextContent('daemon-protocol');
+
+      navigateTo({ projectId: 'p1', noteId: 'n2' });
+
+      await waitFor(() => expect(screen.getByTestId('note-editor-title')).toHaveTextContent('voice'));
+    });
+
+    it('a noteId that is not a note of the shown project leaves the open note in place', async () => {
+      const { api, navigateTo } = await renderView({ queryParams: { projectId: 'p1' } });
+      expect(await editorTitle()).toHaveTextContent('daemon-protocol');
+
+      navigateTo({ projectId: 'p1', noteId: 'n9' });
+
+      await waitFor(() => expect(screen.getByTestId('note-editor-title')).toHaveTextContent('daemon-protocol'));
+      expect(api.getNote).not.toHaveBeenCalledWith('p1', 'n9');
     });
 
     it('user can switch project and sees that project’s notes', async () => {
