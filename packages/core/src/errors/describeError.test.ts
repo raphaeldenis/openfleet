@@ -18,7 +18,7 @@ import {
 } from '../sessions/sessionService.js';
 import { AmbiguousColumnReferenceError, DuplicateNameError, RowNotFoundError, StoreNotFoundError, UnknownColumnError, UnknownColumnReferenceError } from '../stores/dataStoreRepository.js';
 import {
-  CellValueRejectedError, NaturalKeyConflictError, NaturalKeyMissingError, NaturalKeyNotFoundError, NaturalKeyNotUniqueError, NaturalKeyOnSeveralRowsError,
+  CellValueRejectedError, ColumnIsNaturalKeyError, ColumnOrderMismatchError, ColumnUsedByViewError, OptionsHeldByRowsError, NaturalKeyConflictError, NaturalKeyMissingError, NaturalKeyNotFoundError, NaturalKeyNotUniqueError, NaturalKeyOnSeveralRowsError,
   ConstraintError, DaemonSetColumnError, DuplicateIdError, InvalidActorError, InvalidCellValueError, InvalidColumnDefinitionError, InvalidNameError, InvalidQueryError, NoNaturalKeyError, AmbiguousNaturalKeyError,
   InvalidViewConfigError, ReferencedRecordMissingError, StoreHasRowsError, StoreRowCapError, ViewNotFoundError,
 } from '../stores/dataStoreService.js';
@@ -81,6 +81,10 @@ const domainErrorCodes: [string, () => unknown, ErrorCode][] = [
   ['NaturalKeyOnSeveralRowsError', () => new NaturalKeyOnSeveralRowsError(2), 'invalid_body'],
   ['NaturalKeyConflictError', () => new NaturalKeyConflictError('A'), 'constraint_violation'],
   ['NaturalKeyNotUniqueError', () => new NaturalKeyNotUniqueError(), 'constraint_violation'],
+  ['ColumnIsNaturalKeyError', () => new ColumnIsNaturalKeyError('Name'), 'constraint_violation'],
+  ['ColumnUsedByViewError', () => new ColumnUsedByViewError('Status', 'Board'), 'constraint_violation'],
+  ['OptionsHeldByRowsError', () => new OptionsHeldByRowsError(['done']), 'constraint_violation'],
+  ['ColumnOrderMismatchError', () => new ColumnOrderMismatchError({ missingIds: ['a'], unknownIds: [], repeatedIds: [] }), 'invalid_body'],
   ['CellValueRejectedError', () => new CellValueRejectedError('c1', 'not an option'), 'invalid_body'],
   ['AmbiguousColumnReferenceError', () => new AmbiguousColumnReferenceError('title', ['c1', 'c2']), 'invalid_body'],
   ['UnknownColumnError', () => new UnknownColumnError(['c1']), 'invalid_body'],

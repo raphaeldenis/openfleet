@@ -126,6 +126,110 @@ it('exposes formats and validates datetime writes atomically while retaining leg
   expect((await json(updated)).items[0].data[when.id]).toBeNull();
 });
 
+describe('column edit REST routes', () => {
+  const columnNames = async (storeId: string) => (await json(await call('GET', `/api/data-stores/${storeId}?projectId=p1`))).columns.map((column: DsColumn) => column.displayName);
+
+  it('renames a column and replaces select options keeping the id of the matching entry', async () => {
+    const { store, name, status } = seedStore();
+
+    const renamed = await call('PATCH', `/api/data-stores/${store.id}/columns/${name.id}`, { projectId: 'p1', name: 'Product' });
+    const reoptioned = await call('PATCH', `/api/data-stores/${store.id}/columns/${status.id}`, { projectId: 'p1', options: [{ label: 'Done', color: 'green' }, { label: 'Later' }] });
+
+    expect(renamed.status).toBe(200);
+    expect(await json(renamed)).toMatchObject({ id: name.id, displayName: 'Product', columnType: 'text' });
+    expect(reoptioned.status).toBe(200);
+    expect((await json(reoptioned)).options).toEqual([{ id: 'done', label: 'Done', color: 'green' }, { id: expect.any(String), label: 'Later' }]);
+  });
+
+  it('refuses options on a text column and an unknown field with 400 and changes nothing', async () => {
+    const { store, name } = seedStore();
+
+    const retyped = await call('PATCH', `/api/data-stores/${store.id}/columns/${name.id}`, { projectId: 'p1', options: [{ label: 'A' }] });
+    const unknownField = await call('PATCH', `/api/data-stores/${store.id}/columns/${name.id}`, { projectId: 'p1', columnType: 'number' });
+
+    expect(retyped.status).toBe(400);
+    expect(unknownField.status).toBe(400);
+    expect(await columnNames(store.id)).toEqual(['name', 'qty', 'status']);
+  });
+
+  it('sets then clears the natural key', async () => {
+    const { store, name } = seedStore();
+
+    await call('PATCH', `/api/data-stores/${store.id}/columns/${name.id}`, { projectId: 'p1', naturalKey: true });
+    const keyed = await json(await call('GET', `/api/data-stores/${store.id}?projectId=p1`));
+    await call('PATCH', `/api/data-stores/${store.id}/columns/${name.id}`, { projectId: 'p1', naturalKey: false });
+    const unkeyed = await json(await call('GET', `/api/data-stores/${store.id}?projectId=p1`));
+
+    expect(keyed.naturalKeyColumnId).toBe(name.id);
+    expect(unkeyed.naturalKeyColumnId).toBeUndefined();
+  });
+
+  it('deletes a column with its cells and refuses the natural key column', async () => {
+    const { store, name, qty } = seedStore();
+    stores.setNaturalKey(store.id, { projectId: 'p1', columnId: name.id });
+    await insertRows(store.id, { name, qty }, [['bolt', 1]]);
+
+    const keyRefusal = await call('DELETE', `/api/data-stores/${store.id}/columns/${name.id}?projectId=p1`);
+    const deleted = await call('DELETE', `/api/data-stores/${store.id}/columns/${qty.id}?projectId=p1`);
+
+    expect(keyRefusal.status).toBe(400);
+    expect(await json(keyRefusal)).toMatchObject({ error: 'constraint_violation', detail: 'Column "name" is the natural key of the data store; clear the natural key first' });
+    expect(deleted.status).toBe(200);
+    expect(await columnNames(store.id)).toEqual(['name', 'status']);
+    expect((await json(await call('GET', `/api/data-stores/${store.id}/rows?projectId=p1`))).items[0].data).toEqual({ [name.id]: 'bolt' });
+  });
+
+  it('answers 400 invalid_body naming the column when PATCH or DELETE targets an unknown column', async () => {
+    const { store } = seedStore();
+    const unknownColumnPath = `/api/data-stores/${store.id}/columns/missing`;
+
+    const patched = await call('PATCH', unknownColumnPath, { projectId: 'p1', name: 'X' });
+    const deleted = await call('DELETE', `${unknownColumnPath}?projectId=p1`);
+
+    for (const response of [patched, deleted]) {
+      expect(response.status).toBe(400);
+      expect(await json(response)).toMatchObject({ error: 'invalid_body', detail: 'Unknown column ids: missing' });
+    }
+    expect(await columnNames(store.id)).toEqual(['name', 'qty', 'status']);
+  });
+
+  it('answers 400 invalid_body when a PATCH changes nothing', async () => {
+    const { store, name } = seedStore();
+
+    const response = await call('PATCH', `/api/data-stores/${store.id}/columns/${name.id}`, { projectId: 'p1' });
+
+    expect(response.status).toBe(400);
+    expect(await json(response)).toMatchObject({ error: 'invalid_body', message: expect.stringContaining('Nothing to update') });
+  });
+
+  it('reorders columns by an exact permutation and refuses anything else', async () => {
+    const { store, name, qty, status } = seedStore();
+    const orderPath = `/api/data-stores/${store.id}/columns/order`;
+
+    const reordered = await call('PUT', orderPath, { projectId: 'p1', columnIds: [status.id, name.id, qty.id] });
+    const partial = await call('PUT', orderPath, { projectId: 'p1', columnIds: [name.id] });
+
+    expect(reordered.status).toBe(200);
+    expect((await json(reordered)).items.map((column: DsColumn) => column.displayName)).toEqual(['status', 'name', 'qty']);
+    expect(partial.status).toBe(400);
+    expect(await columnNames(store.id)).toEqual(['status', 'name', 'qty']);
+  });
+
+  it('hides another project\'s store behind 404 on every column route', async () => {
+    const { store, name } = seedStore();
+    const columnPath = `/api/data-stores/${store.id}/columns/${name.id}`;
+
+    const foreignRoutes = [
+      call('PATCH', columnPath, { projectId: 'p2', name: 'Stolen' }),
+      call('DELETE', `${columnPath}?projectId=p2`),
+      call('PUT', `/api/data-stores/${store.id}/columns/order`, { projectId: 'p2', columnIds: [] }),
+    ];
+
+    for (const response of await Promise.all(foreignRoutes)) expect(response.status).toBe(404);
+    expect(await columnNames(store.id)).toEqual(['name', 'qty', 'status']);
+  });
+});
+
 describe('data store REST routes', () => {
   it('hides another project\'s store behind 404 on every :id route', async () => {
     const { store, name, qty } = seedStore();
