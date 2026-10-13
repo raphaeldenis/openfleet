@@ -56,6 +56,12 @@ describe('the governance queue migration upgrading a database that predates it',
     expect(() => insertProposal(db, { payload_json: '{not json' })).toThrow(/CHECK/);
   });
 
+  it.each(['[]', '"text"', '42', 'null'])('refuses a payload that is JSON but not an object (%s)', (payloadJson) => {
+    const db = upgradedDatabaseWithOneManager();
+
+    expect(() => insertProposal(db, { payload_json: payloadJson })).toThrow(/CHECK/);
+  });
+
   it('refuses a denied proposal without a reason and a pending proposal that carries a decision date', () => {
     const db = upgradedDatabaseWithOneManager();
 

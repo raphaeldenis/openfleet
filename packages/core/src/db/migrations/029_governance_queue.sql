@@ -4,7 +4,7 @@ CREATE TABLE governance_proposals (
   kind TEXT NOT NULL CHECK(kind IN ('law', 'permission', 'resourceAccess')),
   status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'approved', 'denied', 'withdrawn')),
   incident TEXT NOT NULL CHECK(length(trim(incident)) > 0),
-  payload_json TEXT NOT NULL CHECK(json_valid(payload_json)),
+  payload_json TEXT NOT NULL CHECK(json_valid(payload_json) AND json_type(payload_json) = 'object'),
   denial_reason TEXT,
   created_at TEXT NOT NULL,
   decided_at TEXT,
