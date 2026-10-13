@@ -26,7 +26,7 @@ function fakeEvents(overrides: { sessions?: unknown[]; managers?: unknown[]; sna
 }
 
 const MANAGER_SESSION = { id: 'm1', name: 'Lead', emoji: '🧭', role: 'manager', state: 'idle', harness: 'claude-cli' };
-const MANAGER_VIEW = { sessionId: 'm1', pulseSeconds: 1800, childrenCap: 2, missionText: 'x', nextPulseAt: new Date(Date.now() + 42_000).toISOString(), childrenCount: 1 };
+const MANAGER_VIEW = { sessionId: 'm1', pulseSeconds: 1800, pulseEnabled: true, childrenCap: 2, missionText: 'x', nextPulseAt: new Date(Date.now() + 42_000).toISOString(), childrenCount: 1 };
 const CHILD_SESSION = { id: 'c1', name: 'Gimli', emoji: '⚔️', parentId: 'm1', state: 'generating', harness: 'claude-cli' };
 
 describe('ManagerDashboardComponent state overdue chip', () => {
@@ -45,6 +45,49 @@ describe('ManagerDashboardComponent state overdue chip', () => {
     await renderDashboard(fakeEvents({ sessions: [MANAGER_SESSION], managers: [MANAGER_VIEW], workingStatesReported: false }));
 
     expect(screen.queryByTestId('overdue-chip')).toBeNull();
+  });
+});
+
+describe('ManagerDashboardComponent pause control', () => {
+  const renderDashboardOf = (managerView: object, api: object = {}) =>
+    render(ManagerDashboardComponent, {
+      providers: [
+        provideRouter([]),
+        { provide: ActivatedRoute, useValue: activatedRouteFor('m1') },
+        { provide: FleetApiService, useValue: api },
+        { provide: FleetEventsService, useValue: fakeEvents({ sessions: [MANAGER_SESSION], managers: [managerView] }) },
+      ],
+    });
+
+  it('pauses the pulses of a running manager from the live controls', async () => {
+    const api = { updateManager: vi.fn().mockResolvedValue({}) };
+    await renderDashboardOf(MANAGER_VIEW, api);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Pause pulses' }));
+
+    expect(api.updateManager).toHaveBeenCalledWith('m1', { pulseEnabled: false });
+  });
+
+  it('resumes the pulses of a paused manager from the live controls', async () => {
+    const api = { updateManager: vi.fn().mockResolvedValue({}) };
+    await renderDashboardOf({ ...MANAGER_VIEW, pulseEnabled: false }, api);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Resume pulses' }));
+
+    expect(api.updateManager).toHaveBeenCalledWith('m1', { pulseEnabled: true });
+  });
+
+  it('says paused instead of counting down, and disables "Pulse now", for a paused manager', async () => {
+    await renderDashboardOf({ ...MANAGER_VIEW, pulseEnabled: false });
+
+    expect(screen.getByTestId('manager-dashboard-countdown')).toHaveTextContent('paused');
+    expect(screen.getByTestId('manager-dashboard-pulse')).toBeDisabled();
+  });
+
+  it('keeps "Pulse now" available for a running manager', async () => {
+    await renderDashboardOf(MANAGER_VIEW);
+
+    expect(screen.getByTestId('manager-dashboard-pulse')).toBeEnabled();
   });
 });
 

@@ -18,6 +18,7 @@ import { ManagerLinksComponent } from './manager-links.component';
 import { ManagerProfileComponent } from './manager-profile.component';
 import { ManagerReopenAction } from './manager-reopen';
 import { PulseNowAction } from './pulse-now';
+import { PulsePauseAction } from './pulse-pause';
 
 const REOPEN_EXPLANATION =
   'Reopen starts a fresh conversation seeded with the mission; Resume continues the previous one. Reopening replaces the saved conversation id, so Resume only resumes the latest.';
@@ -124,16 +125,23 @@ const HANDOFF_TARGET_AVAILABLE_HINT = 'Saved handoffs appear in Notes › handof
               type="button"
               class="of-btn of-btn--primary"
               data-testid="manager-dashboard-pulse"
-              [disabled]="pulse.pending()"
+              [disabled]="pulse.pending() || isPaused()"
               (click)="pulseNow()"
             >Pulse now</button>
+            <button
+              type="button"
+              class="of-btn of-btn--secondary"
+              data-testid="manager-dashboard-pause"
+              [disabled]="pauseAction.pending()"
+              (click)="togglePause()"
+            >{{ pauseButtonLabel() }}</button>
             <button
               type="button"
               class="of-btn of-btn--secondary"
               data-testid="manager-dashboard-terminal"
               (click)="openTerminal()"
             >Terminal</button>
-            @if (pulse.message(); as message) {
+            @if (pulse.message() ?? pauseAction.message(); as message) {
               <span
                 data-testid="manager-dashboard-pulse-message"
                 [attr.role]="message.kind === 'error' ? 'alert' : 'status'"
@@ -226,6 +234,7 @@ export class ManagerDashboardComponent {
   private readonly events = inject(FleetEventsService);
   private readonly api = inject(FleetApiService);
   protected readonly pulse = new PulseNowAction(this.api);
+  protected readonly pauseAction = new PulsePauseAction(this.api);
   protected readonly reopening = new ManagerReopenAction(this.api);
   private readonly managerId = toSignal(this.route.paramMap.pipe(map((params) => params.get('id') ?? '')), { initialValue: '' });
   private readonly now = signal(Date.now());
@@ -239,6 +248,7 @@ export class ManagerDashboardComponent {
     effect(() => {
       this.managerId();
       this.pulse.reset();
+      this.pauseAction.reset();
       this.reopening.reset();
     });
     // The same reuse must not leave the preview of one manager over another.
@@ -307,12 +317,16 @@ export class ManagerDashboardComponent {
 
   protected readonly isSessionClosed = computed(() => this.session()?.state === 'closed');
 
-  protected readonly countdownLabelText = computed(() => countdownLabel(this.countdownSeconds()));
+  protected readonly isPaused = computed(() => this.manager()?.pulseEnabled === false);
+
+  protected readonly pauseButtonLabel = computed(() => (this.isPaused() ? 'Resume pulses' : 'Pause pulses'));
+
+  protected readonly countdownLabelText = computed(() => (this.isPaused() ? 'paused' : countdownLabel(this.countdownSeconds())));
 
   protected readonly fractionElapsed = computed(() => {
     const manager = this.manager();
     const secondsRemaining = this.countdownSeconds();
-    if (!manager || manager.pulseSeconds <= 0 || secondsRemaining === null) return 0;
+    if (!manager || this.isPaused() || manager.pulseSeconds <= 0 || secondsRemaining === null) return 0;
     return Math.min(1, Math.max(0, 1 - secondsRemaining / manager.pulseSeconds));
   });
 
@@ -330,6 +344,11 @@ export class ManagerDashboardComponent {
 
   pulseNow(): void {
     void this.pulse.run(this.managerId());
+  }
+
+  protected togglePause(): void {
+    const manager = this.manager();
+    if (manager) void this.pauseAction.toggle(manager);
   }
 
   openTerminal(): void {

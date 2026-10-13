@@ -6,6 +6,7 @@ import { OverdueChipComponent } from '../working-state/overdue-chip.component';
 import { countdownLabel, countdownSecondsUntil } from './manager-countdown';
 import { ManagerLinksComponent } from './manager-links.component';
 import { PulseNowAction } from './pulse-now';
+import { PulsePauseAction } from './pulse-pause';
 
 @Component({
   selector: 'of-manager-card',
@@ -23,9 +24,16 @@ import { PulseNowAction } from './pulse-now';
         type="button"
         class="of-btn of-btn--secondary"
         [attr.data-testid]="'manager-' + manager().sessionId + '-pulse'"
-        [disabled]="pulse.pending() || isSessionClosed()"
+        [disabled]="pulse.pending() || isSessionClosed() || isPaused()"
         (click)="pulseNow()"
       >Pulse now</button>
+      <button
+        type="button"
+        class="of-btn of-btn--secondary"
+        [attr.data-testid]="'manager-' + manager().sessionId + '-pause'"
+        [disabled]="pauseAction.pending() || isSessionClosed()"
+        (click)="togglePause()"
+      >{{ pauseButtonLabel() }}</button>
       <of-manager-links [manager]="manager()" [projectId]="session()?.projectId" [managerName]="session()?.name" />
       @if (displayedMessage(); as message) {
         <span
@@ -45,7 +53,9 @@ import { PulseNowAction } from './pulse-now';
 export class ManagerCardComponent {
   readonly manager = input.required<ManagerView>();
   readonly session = input<Session | undefined>(undefined);
-  protected readonly pulse = new PulseNowAction(inject(FleetApiService));
+  private readonly api = inject(FleetApiService);
+  protected readonly pulse = new PulseNowAction(this.api);
+  protected readonly pauseAction = new PulsePauseAction(this.api);
   private readonly now = signal(Date.now());
 
   constructor() {
@@ -57,20 +67,32 @@ export class ManagerCardComponent {
 
   protected readonly countdownSeconds = computed(() => countdownSecondsUntil(this.manager().nextPulseAt, this.now()));
 
-  protected readonly countdownDisplay = computed(() => (this.isSessionClosed() ? 'closed' : countdownLabel(this.countdownSeconds())));
+  protected readonly isPaused = computed(() => this.manager().pulseEnabled === false);
+
+  protected readonly pauseButtonLabel = computed(() => (this.isPaused() ? 'Resume pulses' : 'Pause pulses'));
+
+  protected readonly countdownDisplay = computed(() => {
+    if (this.isSessionClosed()) return 'closed';
+    if (this.isPaused()) return 'paused';
+    return countdownLabel(this.countdownSeconds());
+  });
 
   protected readonly displayedMessage = computed(() =>
-    this.pulse.message() ?? (this.isSessionClosed() ? { text: 'This session is closed', kind: 'info' as const } : null),
+    this.pulse.message() ?? this.pauseAction.message() ?? (this.isSessionClosed() ? { text: 'This session is closed', kind: 'info' as const } : null),
   );
 
   protected readonly fractionElapsed = computed(() => {
     const pulseSeconds = this.manager().pulseSeconds;
     const secondsRemaining = this.countdownSeconds();
-    if (pulseSeconds <= 0 || secondsRemaining === null) return 0;
+    if (this.isPaused() || pulseSeconds <= 0 || secondsRemaining === null) return 0;
     return Math.min(1, Math.max(0, 1 - secondsRemaining / pulseSeconds));
   });
 
   pulseNow(): void {
     void this.pulse.run(this.manager().sessionId);
+  }
+
+  togglePause(): void {
+    void this.pauseAction.toggle(this.manager());
   }
 }
