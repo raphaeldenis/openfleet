@@ -132,6 +132,21 @@ describe('the denied history', () => {
     expect(view.governanceEvictedDenials).toBe(1);
   });
 
+  it('drops, among denials answered at the same instant, the one with the smallest id', () => {
+    const reasons = Array.from({ length: MAX_DENIED_HISTORY_PER_MANAGER }, (_, index) => `reason ${index}`);
+    reasons.forEach((reason, index) => deny(proposeLaw(`Law number ${index}`).proposal.id, reason));
+    const idsInFilingOrder = (fixture.db.prepare('SELECT id FROM governance_proposals ORDER BY rowid').all() as { id: string }[]).map((row) => row.id);
+    fixture.db.prepare("UPDATE governance_proposals SET decided_at = '2000-01-01T00:00:00.000Z'").run();
+    idsInFilingOrder.forEach((id, index) => fixture.db.prepare('UPDATE governance_proposals SET id = ? WHERE id = ?').run(`id-${String(idsInFilingOrder.length - index).padStart(2, '0')}`, id));
+
+    deny(proposeLaw('The denial that overflows').proposal.id, 'overflow');
+
+    const keptReasons = viewOfLead().denied.map((proposal) => proposal.denialReason);
+    const reasonOfSmallestId = reasons.at(-1);
+    expect(keptReasons).not.toContain(reasonOfSmallestId);
+    expect(keptReasons).toHaveLength(MAX_DENIED_HISTORY_PER_MANAGER);
+  });
+
   it('declares nothing while the history holds every denial', () => {
     deny(proposeLaw('Only one').proposal.id);
 
@@ -349,14 +364,21 @@ describe('what a proposal may say', () => {
     expect(code).toBe('invalid_body');
   });
 
-  it('masks a secret written in the incident and in the text before storing it', () => {
-    const secret = 'Bearer abcdef1234567890SECRETvalue';
+  const secret = 'Bearer abcdef1234567890SECRETvalue';
+  const storedProposals = () => JSON.stringify(fixture.db.prepare('SELECT incident, payload_json FROM governance_proposals').all());
 
-    fixture.governanceQueue.proposeLaw({ managerId: leadId(), text: `Never paste ${secret} anywhere`, incident: `the agent printed ${secret}` });
+  it('masks a secret written in the text before storing it', () => {
+    fixture.governanceQueue.proposeLaw({ managerId: leadId(), text: `Never paste ${secret} anywhere`, incident: 'a clean incident' });
 
-    const stored = JSON.stringify(fixture.db.prepare('SELECT incident, payload_json FROM governance_proposals').all());
-    expect(stored).not.toContain('abcdef1234567890SECRETvalue');
-    expect(stored).toContain('***');
+    expect(storedProposals()).not.toContain('abcdef1234567890SECRETvalue');
+    expect(storedProposals()).toContain('***');
+  });
+
+  it('masks a secret written in the incident before storing it', () => {
+    fixture.governanceQueue.proposeLaw({ managerId: leadId(), text: 'A clean law', incident: `the agent printed ${secret}` });
+
+    expect(storedProposals()).not.toContain('abcdef1234567890SECRETvalue');
+    expect(storedProposals()).toContain('***');
   });
 });
 
@@ -372,6 +394,15 @@ describe('a resource access request', () => {
     const tableId = await fixture.createTable(OWN_PROJECT_ID, 'Sales');
 
     expect(refusalCodeOf(() => proposeAccess(tableId, overrides))).toBe('invalid_body');
+    expect(viewOfLead().pending).toEqual([]);
+  });
+
+  it.each([
+    ['a blank resource id', '  '],
+    ['an invisible resource id', '​ㅤ'],
+    ['a resource id past 500 characters', 'r'.repeat(501)],
+  ])('refuses %s', (_label, resourceId) => {
+    expect(refusalCodeOf(() => proposeAccess(resourceId))).toBe('invalid_body');
     expect(viewOfLead().pending).toEqual([]);
   });
 

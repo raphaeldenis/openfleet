@@ -24,7 +24,19 @@ const governanceOf = async (client: Client) => jsonOf(await call(client, 'get_ar
 
 const permission = { action: 'reap worktrees', scope: 'idle worktrees', condition: 'load below 30', exclusions: 'dirty worktrees', incident: 'disk full' };
 const law = { body: 'Never force-push', incident: 'force push on main' };
-const BLANK_INCIDENTS = ['', '  '];
+const INVISIBLE_TEXTS = [
+  ['an empty text', ''],
+  ['spaces', '  '],
+  ['zero-width characters', '​‌‍⁠'],
+  ['a braille blank', '⠀'],
+  ['hangul fillers', 'ㅤᅟ'],
+  ['bidi controls', '‪‮⁦⁩'],
+  ['control characters', '\u0000\u0007\u007f'],
+  ['an ANSI colour sequence', '\u001b[31m\u001b[0m'],
+  ['line and paragraph separators', '  '],
+  ['unicode spaces, newlines and tabs', '   \n\t\r\n'],
+] as const;
+const BLANK_INCIDENTS = INVISIBLE_TEXTS.map(([, text]) => text);
 
 describe('the five governance tools', () => {
   it('are offered to an agent with exactly the input properties of the Scape tools', async () => {
@@ -37,6 +49,16 @@ describe('the five governance tools', () => {
     expect(inputPropertiesOf('request_resource_access')).toEqual(['access', 'incident', 'resource_id', 'resource_type', 'role']);
     expect(inputPropertiesOf('withdraw_proposal')).toEqual(['request_id']);
     expect(inputPropertiesOf('get_argus_governance')).toEqual([]);
+  });
+
+  it('describe the incident the way each Scape tool does', async () => {
+    const tools = (await lead.listTools()).tools;
+
+    const incidentDescriptionOf = (name: string) => (tools.find((tool) => tool.name === name)?.inputSchema.properties?.incident as { description?: string } | undefined)?.description;
+
+    expect(incidentDescriptionOf('propose_law')).toBe('REQUIRED. The triggering incident: a log-table row reference, ticket key, or a one-line description of what went wrong.');
+    expect(incidentDescriptionOf('propose_permission')).toBe('REQUIRED. The triggering incident: log-table row reference, ticket key, or one-line description.');
+    expect(incidentDescriptionOf('request_resource_access')).toBe('REQUIRED. What prompted this request: log-table row, ticket key, or one-line description.');
   });
 
   it('require the very same fields as the Scape tools', async () => {
@@ -78,6 +100,48 @@ describe('an incident that says nothing', () => {
 
     results.forEach((result) => expect(textOf(result)).toMatch(/^error invalid_body: /));
     expect(await governanceOf(lead)).toMatchObject({ pending: [], denied: [], history: [], resourceGrants: [] });
+  });
+});
+
+describe.each(INVISIBLE_TEXTS)('a field made of %s only', (_label, invisibleText) => {
+  const noteRequest = { resource_type: 'note', resource_id: 'a-note', access: 'read', role: 'reference', incident: 'need it' };
+  it.each([
+    ['propose_law', 'body', law],
+    ['propose_permission', 'action', permission],
+    ['propose_permission', 'scope', permission],
+    ['propose_permission', 'condition', permission],
+    ['propose_permission', 'exclusions', permission],
+    ['request_resource_access', 'role', noteRequest],
+    ['request_resource_access', 'resource_id', noteRequest],
+  ])('is refused by %s as its %s (invalid_body) and queues nothing', async (tool, field, validArguments) => {
+    const result = await call(lead, tool, { ...validArguments, [field]: invisibleText });
+
+    expect(textOf(result)).toMatch(/^error invalid_body: /);
+    expect(await governanceOf(lead)).toMatchObject({ pending: [], denied: [], history: [], resourceGrants: [] });
+  });
+});
+
+describe('the text of a proposal', () => {
+  it('is the same proposal whether or not it hides zero-width characters, and shows the clean text', async () => {
+    const first = jsonOf(await call(lead, 'propose_law', law));
+
+    const again = jsonOf(await call(lead, 'propose_law', { body: `Never​ force-push⁠`, incident: law.incident }));
+    const governance = await governanceOf(lead);
+
+    expect(again).toMatchObject({ request_id: first.request_id, deduplicated: true });
+    expect(governance.pending).toEqual([expect.objectContaining({ text: law.body })]);
+  });
+
+  it('keeps the line breaks and tabs of a multi-line law, and drops what is invisible around it', async () => {
+    await call(lead, 'propose_law', { body: '​ Rule one\n\tsub-rule‮\n ', incident: law.incident });
+
+    expect((await governanceOf(lead)).pending).toEqual([expect.objectContaining({ text: 'Rule one\n\tsub-rule' })]);
+  });
+
+  it('shows an incident without its invisible characters', async () => {
+    await call(lead, 'propose_law', { ...law, incident: '​disk‍ full\u001b[31m' });
+
+    expect((await governanceOf(lead)).pending).toEqual([expect.objectContaining({ incident: 'disk full' })]);
   });
 });
 
@@ -141,8 +205,24 @@ describe('propose_law then get_argus_governance', () => {
     expect(textOf(result)).toMatch(/^error governance_queue_full: .*withdraw_proposal.* \(retry: later\)$/);
   });
 
+  it('answers the existing id of a duplicate when the queue is full, without governance_queue_full', async () => {
+    const first = jsonOf(await call(lead, 'propose_law', { ...law, body: 'Law 0' }));
+    for (let index = 1; index < 10; index++) await call(lead, 'propose_law', { ...law, body: `Law ${index}` });
+
+    const again = await call(lead, 'propose_law', { ...law, body: 'Law 0' });
+
+    expect(isError(again)).toBe(false);
+    expect(jsonOf(again)).toMatchObject({ request_id: first.request_id, deduplicated: true });
+  });
+
   it('masks a secret the agent wrote in its incident', async () => {
     await call(lead, 'propose_law', { ...law, incident: 'the agent printed Bearer abcdef1234567890SECRETvalue' });
+
+    expect(JSON.stringify(await governanceOf(lead))).not.toContain('abcdef1234567890SECRETvalue');
+  });
+
+  it('masks a secret the agent wrote in the body of its law', async () => {
+    await call(lead, 'propose_law', { ...law, body: 'Never paste Bearer abcdef1234567890SECRETvalue anywhere' });
 
     expect(JSON.stringify(await governanceOf(lead))).not.toContain('abcdef1234567890SECRETvalue');
   });
@@ -158,6 +238,18 @@ describe('request_resource_access', () => {
 
     expect(textOf(foreign)).toMatch(/^error store_not_found: /);
     expect(textOf(foreign)).toBe(textOf(missing));
+  });
+
+  it.each([
+    ['a role past 80 characters', { role: 'r'.repeat(81) }],
+    ['a resource id past 500 characters', { resource_id: 'i'.repeat(501) }],
+  ])('refuses %s', async (_label, overrides) => {
+    const noteId = await fixture.createNote(OWN_PROJECT_ID, 'Runbook');
+
+    const result = await call(lead, 'request_resource_access', { resource_type: 'note', resource_id: noteId, access: 'read', role: 'reference', incident: 'need it', ...overrides });
+
+    expect(textOf(result)).toMatch(/^error invalid_body: /);
+    expect((await governanceOf(lead)).pending).toEqual([]);
   });
 
   it('refuses an append on a table', async () => {

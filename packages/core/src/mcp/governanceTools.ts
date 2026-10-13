@@ -12,7 +12,9 @@ export interface RegisterGovernanceToolsDeps {
 const PENDING_NOTE = 'Pending: this grants nothing until a human approves it. Laws and permissions in force are the prose of your mission note.';
 const GOVERNANCE_NOTE = 'Laws and permissions in force are the prose of your mission note; this tool never returns them. A pending proposal grants nothing. Resource grants are informative: the server does not enforce them yet. Do not re-propose a denied proposal on the same incident.';
 
-const INCIDENT_FIELD = z.string().describe('REQUIRED. The triggering incident: a log-table row reference, ticket key, or a one-line description of what went wrong.');
+const LAW_INCIDENT_FIELD = z.string().describe('REQUIRED. The triggering incident: a log-table row reference, ticket key, or a one-line description of what went wrong.');
+const PERMISSION_INCIDENT_FIELD = z.string().describe('REQUIRED. The triggering incident: log-table row reference, ticket key, or one-line description.');
+const RESOURCE_ACCESS_INCIDENT_FIELD = z.string().describe('REQUIRED. What prompted this request: log-table row, ticket key, or one-line description.');
 
 const acknowledgement = ({ proposal, deduplicated }: ProposalFiled) => ok({
   request_id: proposal.id, status: 'pending', note: PENDING_NOTE, ...(deduplicated && { deduplicated: true }),
@@ -26,7 +28,7 @@ export function registerGovernanceTools(server: McpServer, deps: RegisterGoverna
 
   server.registerTool('propose_law', {
     description: 'Propose a new LAW — a fixed invariant that CONSTRAINS how you work (e.g. “never repurpose a session to a new branch — close it, open a fresh one”). The human approves or denies it. A pending proposal grants NOTHING: it is awaiting review, not in force. Laws in force are the prose in the mission note. Every proposal must cite its triggering incident — a proposal with no evidence is speculation. Pending queue is capped; if full, withdraw one of your own pending proposals (withdraw_proposal) or wait. Only available to an Argus manager session.',
-    inputSchema: { body: z.string().describe('The proposed law, phrased as a standing rule (“every time you do X it must be Y”).'), incident: INCIDENT_FIELD },
+    inputSchema: { body: z.string().describe('The proposed law, phrased as a standing rule (“every time you do X it must be Y”).'), incident: LAW_INCIDENT_FIELD },
   }, async ({ body, incident }) => acknowledgement(governanceQueue.proposeLaw({ managerId, text: body, incident })));
 
   server.registerTool('propose_permission', {
@@ -36,7 +38,7 @@ export function registerGovernanceTools(server: McpServer, deps: RegisterGoverna
       scope: z.string().describe('REQUIRED bound: what exactly the permission covers.'),
       condition: z.string().describe('REQUIRED bound: when it applies (load, time, state preconditions).'),
       exclusions: z.string().describe('REQUIRED bound: what remains OUTSIDE this permission.'),
-      incident: INCIDENT_FIELD,
+      incident: PERMISSION_INCIDENT_FIELD,
     },
   }, async (fields) => acknowledgement(governanceQueue.proposePermission({ managerId, ...fields })));
 
@@ -47,7 +49,7 @@ export function registerGovernanceTools(server: McpServer, deps: RegisterGoverna
       resource_id: z.string().describe("The target's id (data store UUID, note UUID, playbook id, or integration id)."),
       access: z.string().describe('Requested access level: read | readWrite | append | run (playbook-only) | use (integration-only — call its tools).'),
       role: z.string().describe("Why you need it — the resource's role for you (e.g. work-source, journal, instruction, reference)."),
-      incident: INCIDENT_FIELD,
+      incident: RESOURCE_ACCESS_INCIDENT_FIELD,
     },
   }, async ({ resource_type, resource_id, access, role, incident }) =>
     acknowledgement(governanceQueue.requestResourceAccess({ managerId, resourceType: resource_type, resourceId: resource_id, access, role, incident })));

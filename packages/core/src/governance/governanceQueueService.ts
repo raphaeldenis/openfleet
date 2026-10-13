@@ -46,20 +46,20 @@ export class GovernanceQueueService {
 
   proposeLaw({ managerId, text, incident }: { managerId: string; text: string; incident: string }): ProposalFiled {
     this.requireManager(managerId);
-    return this.file({ managerId, kind: 'law', incident: storedIncident(incident), payload: lawPayloadOf({ text }) });
+    return this.enqueueUnlessDuplicate({ managerId, kind: 'law', incident: storedIncident(incident), payload: lawPayloadOf({ text }) });
   }
 
   proposePermission({ managerId, incident, ...fields }: { managerId: string; action: string; scope: string; condition: string; exclusions: string; incident: string }): ProposalFiled {
     this.requireManager(managerId);
-    return this.file({ managerId, kind: 'permission', incident: storedIncident(incident), payload: permissionPayloadOf(fields) });
+    return this.enqueueUnlessDuplicate({ managerId, kind: 'permission', incident: storedIncident(incident), payload: permissionPayloadOf(fields) });
   }
 
   requestResourceAccess({ managerId, incident, ...fields }: { managerId: string; resourceType: string; resourceId: string; access: string; role: string; incident: string }): ProposalFiled {
     this.requireManager(managerId);
-    const storedIncidentText = storedIncident(incident);
+    const visibleIncident = storedIncident(incident);
     const payload = resourceAccessPayloadOf(fields);
     this.requireResourceOfManagerProject({ managerId, payload });
-    return this.file({ managerId, kind: 'resourceAccess', incident: storedIncidentText, payload });
+    return this.enqueueUnlessDuplicate({ managerId, kind: 'resourceAccess', incident: visibleIncident, payload });
   }
 
   /** The manager takes back a pending proposal of its own. */
@@ -108,7 +108,8 @@ export class GovernanceQueueService {
     if (!this.deps.managers.isManager(sessionId)) throw new OpenFleetError('not_a_manager', 'only a manager can use the governance queue.');
   }
 
-  private file({ managerId, kind, incident, payload }: { managerId: string; kind: ProposalKind; incident: string; payload: ProposalPayload }): ProposalFiled {
+  /** Returns the identical pending proposal of the manager when there is one (a second incident is not recorded, and a full queue does not refuse it); otherwise enqueues the proposal. */
+  private enqueueUnlessDuplicate({ managerId, kind, incident, payload }: { managerId: string; kind: ProposalKind; incident: string; payload: ProposalPayload }): ProposalFiled {
     return inTransaction(this.deps.db, 'governance_file', () => {
       const identicalPending = this.proposals.findPendingTwin({ managerId, kind, payload });
       if (identicalPending) return { proposal: identicalPending, deduplicated: true };
