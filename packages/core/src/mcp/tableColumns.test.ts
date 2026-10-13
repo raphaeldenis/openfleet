@@ -1,3 +1,4 @@
+import type { DsViewConfig, ViewType } from '@openfleet/shared';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { startTableToolsKit, type TableToolsKit } from './tableTools.testkit.js';
 
@@ -31,6 +32,7 @@ describe('update_data_store_column', () => {
     const result = await kit.call('update_data_store_column', { store, column_id, name: 'name' });
 
     expect(result.isError).toBe(true);
+    expect(result.text).toContain('The name "name" is already taken');
     expect(await columnNames(store)).toEqual(['Name', 'Qty']);
   });
 
@@ -71,19 +73,53 @@ describe('update_data_store_column', () => {
     const result = await kit.call('update_data_store_column', { store, column_id: status.id, name: 'State', options: [{ id: 'todo', label: 'To do' }] });
 
     expect(result.isError).toBe(true);
+    expect(result.text).toContain('Rows still hold the options being removed (done)');
     expect((await describeColumns(store))[0]).toMatchObject({ displayName: 'Status', options: [{ id: 'todo' }, { id: 'done' }] });
   });
 
-  it('refuses an option id the column does not own and options repeating a label', async () => {
+  it('refuses an option id the column does not own', async () => {
     const store = await createStore();
     const status = await addColumn(store, { display_name: 'Status', column_type: 'select', options: [{ id: 'todo', label: 'To do' }] });
 
-    const foreignId = await kit.call('update_data_store_column', { store, column_id: status.id, options: [{ id: 'elsewhere', label: 'To do' }] });
-    const repeatedLabel = await kit.call('update_data_store_column', { store, column_id: status.id, options: [{ label: 'To do' }, { label: 'To do' }] });
+    const result = await kit.call('update_data_store_column', { store, column_id: status.id, options: [{ id: 'elsewhere', label: 'To do' }] });
 
-    expect(foreignId.isError).toBe(true);
-    expect(repeatedLabel.isError).toBe(true);
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain('Option id elsewhere does not belong to this column');
     expect((await describeColumns(store))[0]?.options).toEqual([{ id: 'todo', label: 'To do' }]);
+  });
+
+  it('refuses new options that share a label, whatever the case, and changes nothing', async () => {
+    const store = await createStore();
+    const status = await addColumn(store, { display_name: 'Status', column_type: 'select', options: [{ id: 'todo', label: 'To do' }] });
+
+    const identicalLabels = await kit.call('update_data_store_column', { store, column_id: status.id, options: [{ label: 'Blocked' }, { label: 'Blocked' }] });
+    const caseVariantLabels = await kit.call('update_data_store_column', { store, column_id: status.id, options: [{ label: 'Blocked' }, { label: 'blocked' }] });
+
+    expect(identicalLabels.isError).toBe(true);
+    expect(identicalLabels.text).toContain('Option labels must be unique');
+    expect(caseVariantLabels.isError).toBe(true);
+    expect(caseVariantLabels.text).toContain('Option labels must be unique');
+    expect((await describeColumns(store))[0]?.options).toEqual([{ id: 'todo', label: 'To do' }]);
+  });
+
+  it('takes the colors from the replacement list: a matched option without color loses it, with a color keeps the new one', async () => {
+    const store = await createStore();
+    const status = await addColumn(store, { display_name: 'Status', column_type: 'select', options: [{ id: 'todo', label: 'To do', color: 'blue' }, { id: 'done', label: 'Done', color: 'green' }] });
+
+    const result = await kit.call('update_data_store_column', { store, column_id: status.id, options: [{ id: 'todo', label: 'To do' }, { label: 'Done', color: 'purple' }] });
+
+    expect(result.isError).toBe(false);
+    expect(result.json.options).toEqual([{ id: 'todo', label: 'To do' }, { id: 'done', label: 'Done', color: 'purple' }]);
+  });
+
+  it('refuses an update that changes nothing', async () => {
+    const store = await createStore();
+    const { id: column_id } = await addColumn(store, { display_name: 'Name', column_type: 'text' });
+
+    const result = await kit.call('update_data_store_column', { store, column_id });
+
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain('Nothing to update');
   });
 
   it('refuses options on a column of another family than select', async () => {
@@ -93,6 +129,7 @@ describe('update_data_store_column', () => {
     const result = await kit.call('update_data_store_column', { store, column_id, options: [{ label: 'A' }] });
 
     expect(result.isError).toBe(true);
+    expect(result.text).toContain('Only a select column takes options');
     expect((await describeColumns(store))[0]).not.toHaveProperty('options');
   });
 
@@ -129,6 +166,7 @@ describe('update_data_store_column', () => {
     const result = await kit.call('update_data_store_column', { store, column_id, name: 'Product', natural_key: true });
 
     expect(result.isError).toBe(true);
+    expect(result.text).toContain('already share a value');
     expect(await columnNames(store)).toEqual(['Name']);
   });
 
@@ -139,14 +177,17 @@ describe('update_data_store_column', () => {
     const result = await kit.call('update_data_store_column', { store, column_id, natural_key: true });
 
     expect(result.isError).toBe(true);
+    expect(result.text).toContain('The natural key must be a text column');
   });
 
-  it('reads an unknown column as not found', async () => {
+  it('refuses an unknown column naming it', async () => {
     const store = await createStore();
 
     const result = await kit.call('update_data_store_column', { store, column_id: 'missing', name: 'X' });
 
     expect(result.isError).toBe(true);
+    expect(result.text).toContain('invalid_body');
+    expect(result.text).toContain('Unknown columns: missing');
   });
 });
 
@@ -210,12 +251,34 @@ describe('delete_data_store_column', () => {
     expect((await kit.call('get_data_store', { store })).json.rows[0].data).toEqual({ [status.id]: 'To do' });
   });
 
-  it('reads an unknown column as not found', async () => {
+  it('refuses an unknown column naming it', async () => {
     const store = await createStore();
 
     const result = await kit.call('delete_data_store_column', { store, column_id: 'missing' });
 
     expect(result.isError).toBe(true);
+    expect(result.text).toContain('invalid_body');
+    expect(result.text).toContain('Unknown columns: missing');
+  });
+
+  const viewsReferencing: [string, (columnId: string) => { viewType: ViewType; config: DsViewConfig }][] = [
+    ['a where clause', (columnId) => ({ viewType: 'grid', config: { where: [{ columnId, op: 'eq', value: 'todo' }] } })],
+    ['an orderBy term', (columnId) => ({ viewType: 'grid', config: { orderBy: [{ columnId, dir: 'asc' }] } })],
+    ['a cardFields entry', (columnId) => ({ viewType: 'grid', config: { cardFields: [columnId] } })],
+    ['a groupBy column', (columnId) => ({ viewType: 'kanban', config: { groupByColumnId: columnId } })],
+    ['a card title column', (columnId) => ({ viewType: 'grid', config: { cardTitleColumnId: columnId } })],
+  ];
+
+  it.each(viewsReferencing)('refuses a column that %s of a view references', async (_reference, viewFor) => {
+    const store = await createStore();
+    const status = await addColumn(store, { display_name: 'Status', column_type: 'select', options: [{ id: 'todo', label: 'To do' }] });
+    kit.stores.createView(store, { projectId: 'p1', displayName: 'Board', ...viewFor(status.id) });
+
+    const result = await kit.call('delete_data_store_column', { store, column_id: status.id });
+
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain('is used by the view "Board"');
+    expect(await columnNames(store)).toEqual(['Status']);
   });
 });
 

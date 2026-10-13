@@ -255,12 +255,14 @@ export class DataStoreService {
   /** Renames a column, replaces the options of a select column and sets or clears the store natural key, all or nothing. */
   updateColumn(storeId: string, input: Scope & { columnId: string; changes: ColumnChanges }): DsColumn {
     this.authorize(storeId, input.projectId);
-    const column = this.requireColumn(storeId, input.columnId);
     const { name, options, naturalKey } = input.changes;
+    const hasNothingToUpdate = name === undefined && options === undefined && naturalKey === undefined;
+    if (hasNothingToUpdate) throw new InvalidColumnDefinitionError('Nothing to update: pass name, natural_key or options');
+    const column = this.requireColumn(storeId, input.columnId);
     const displayName = name === undefined ? column.displayName : normalizeName(name);
     const replacedOptions = options === undefined ? column.options : this.replacedOptions(column, options);
-    this.refuseOptionsStillHeldByRows(storeId, { column, options: replacedOptions });
     return this.inTransaction(() => {
+      if (options !== undefined) this.refuseOptionsStillHeldByRows(storeId, { column, options: replacedOptions });
       const updatedColumn = this.guarded(() => this.repo.updateColumn(storeId, { columnId: column.id, displayName, options: replacedOptions }));
       if (naturalKey !== undefined) this.applyNaturalKeyChoice(storeId, { projectId: input.projectId, columnId: column.id, isNaturalKey: naturalKey });
       return updatedColumn;
@@ -296,7 +298,7 @@ export class DataStoreService {
     return column;
   }
 
-  /** Keeps the id of every replacement matching a current option (by id, else by label); a replacement matching none gets a fresh id. */
+  /** Keeps the id of every replacement matching a current option (by id, else by label); a replacement matching none gets a fresh id. The list is authoritative: labels and colors come from the replacements only. */
   private replacedOptions(column: DsColumn, replacements: OptionReplacement[]): SelectOption[] {
     if (column.columnType !== 'select') throw new InvalidColumnDefinitionError('Only a select column takes options; a column cannot change type');
     const currentOptions = column.options ?? [];
@@ -308,6 +310,9 @@ export class DataStoreService {
       if (claimsForeignId) throw new InvalidColumnDefinitionError(`Option id ${replacement.id} does not belong to this column`);
       return { ...replacement, id: keptOption?.id ?? this.newId() };
     });
+    const lowercaseLabels = options.map((option) => option.label.toLowerCase());
+    const hasDuplicateLabels = new Set(lowercaseLabels).size !== lowercaseLabels.length;
+    if (hasDuplicateLabels) throw new InvalidColumnDefinitionError('Option labels must be unique, whatever their case');
     return this.validateColumnDefinition(column.columnType, options)!;
   }
 

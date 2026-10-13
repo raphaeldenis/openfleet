@@ -173,9 +173,33 @@ describe('column edit REST routes', () => {
     const deleted = await call('DELETE', `/api/data-stores/${store.id}/columns/${qty.id}?projectId=p1`);
 
     expect(keyRefusal.status).toBe(400);
+    expect(await json(keyRefusal)).toMatchObject({ error: 'constraint_violation', detail: 'Column "name" is the natural key of the data store; clear the natural key first' });
     expect(deleted.status).toBe(200);
     expect(await columnNames(store.id)).toEqual(['name', 'status']);
     expect((await json(await call('GET', `/api/data-stores/${store.id}/rows?projectId=p1`))).items[0].data).toEqual({ [name.id]: 'bolt' });
+  });
+
+  it('answers 400 invalid_body naming the column when PATCH or DELETE targets an unknown column', async () => {
+    const { store } = seedStore();
+    const unknownColumnPath = `/api/data-stores/${store.id}/columns/missing`;
+
+    const patched = await call('PATCH', unknownColumnPath, { projectId: 'p1', name: 'X' });
+    const deleted = await call('DELETE', `${unknownColumnPath}?projectId=p1`);
+
+    for (const response of [patched, deleted]) {
+      expect(response.status).toBe(400);
+      expect(await json(response)).toMatchObject({ error: 'invalid_body', detail: 'Unknown column ids: missing' });
+    }
+    expect(await columnNames(store.id)).toEqual(['name', 'qty', 'status']);
+  });
+
+  it('answers 400 invalid_body when a PATCH changes nothing', async () => {
+    const { store, name } = seedStore();
+
+    const response = await call('PATCH', `/api/data-stores/${store.id}/columns/${name.id}`, { projectId: 'p1' });
+
+    expect(response.status).toBe(400);
+    expect(await json(response)).toMatchObject({ error: 'invalid_body', message: expect.stringContaining('Nothing to update') });
   });
 
   it('reorders columns by an exact permutation and refuses anything else', async () => {

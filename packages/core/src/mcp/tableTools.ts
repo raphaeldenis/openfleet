@@ -122,7 +122,8 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
     description: 'Edit a column of a data store (store is its id or display name, column_id an id or display name in any case); its id and type never change. '
       + 'name renames it. natural_key true makes a text column the natural key of the store, false clears the key when this column holds it. '
       + 'options (select column only) replaces the whole option list: an entry keeps the id of the current option with the same id, else with the same label, otherwise it gets a new id; '
-      + 'it is refused while a row still holds an option that is dropped. All changes land together or none. Returns the column',
+      + 'labels must be unique whatever their case, and labels and colors are taken from the replacement list only (a color left out is cleared, never kept from the old option); '
+      + 'it is refused while a row still holds an option that is dropped. Pass at least one of name, natural_key, options. All changes land together or none. Returns the column',
     inputSchema: { store: z.string().min(1), column_id: z.string().min(1), name: z.string().min(1).optional(), natural_key: z.boolean().optional(), options: z.array(OptionReplacementSchema).optional() },
   }, async ({ store, column_id, name, natural_key, options }) => {
     const scope = requireProject();
