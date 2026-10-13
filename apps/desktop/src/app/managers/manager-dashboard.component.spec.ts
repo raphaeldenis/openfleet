@@ -58,6 +58,26 @@ describe('ManagerDashboardComponent', () => {
     expect(screen.getByTestId('manager-dashboard-cap')).toHaveTextContent('1/2');
   });
 
+  it('links the log table the manager is bound to, on the project of the manager', async () => {
+    const fake = fakeEvents({ sessions: [{ ...MANAGER_SESSION, projectId: 'p1' }], managers: [{ ...MANAGER_VIEW, logStoreId: 'store-log' }] });
+    await render(ManagerDashboardComponent, {
+      providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('m1') }, { provide: FleetEventsService, useValue: fake }],
+    });
+
+    const link = within(screen.getByTestId('manager-dashboard-links')).getByRole('link', { name: 'Log table' });
+
+    expect(link).toHaveAttribute('href', '/tables?projectId=p1&storeId=store-log');
+  });
+
+  it('shows no link row for a manager with neither a mission note nor a log table', async () => {
+    const fake = fakeEvents({ sessions: [MANAGER_SESSION], managers: [MANAGER_VIEW] });
+    await render(ManagerDashboardComponent, {
+      providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('m1') }, { provide: FleetEventsService, useValue: fake }],
+    });
+
+    expect(screen.queryByTestId('manager-dashboard-links')).toBeNull();
+  });
+
   it('gives an unbroken long manager name a tooltip and lets it wrap instead of being clipped', async () => {
     const longName = 'A'.repeat(80);
     const fake = fakeEvents({ sessions: [{ ...MANAGER_SESSION, name: longName }], managers: [MANAGER_VIEW] });

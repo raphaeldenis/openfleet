@@ -95,6 +95,18 @@ describe('NotesViewComponent', () => {
       expect(api.listNotes).not.toHaveBeenCalledWith('p1', expect.anything());
     });
 
+    it('a noteId in the URL opens that note instead of the first one', async () => {
+      await renderView({ queryParams: { projectId: 'p1', noteId: 'n2' } });
+
+      expect(await editorTitle()).toHaveTextContent('voice');
+    });
+
+    it('a noteId that is not a note of the project opens the first note', async () => {
+      await renderView({ queryParams: { projectId: 'p1', noteId: 'n9' } });
+
+      expect(await editorTitle()).toHaveTextContent('daemon-protocol');
+    });
+
     it('user can switch project and sees that project’s notes', async () => {
       await renderView();
       await editorTitle();

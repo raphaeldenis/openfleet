@@ -4,12 +4,13 @@ import { FleetApiService } from '../core/fleet-api.service';
 import { PulseRingComponent } from '../design/pulse-ring.component';
 import { OverdueChipComponent } from '../working-state/overdue-chip.component';
 import { countdownLabel, countdownSecondsUntil } from './manager-countdown';
+import { ManagerLinksComponent } from './manager-links.component';
 import { PulseNowAction } from './pulse-now';
 
 @Component({
   selector: 'of-manager-card',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [PulseRingComponent, OverdueChipComponent],
+  imports: [PulseRingComponent, OverdueChipComponent, ManagerLinksComponent],
   template: `
     <div class="card" [attr.data-testid]="'manager-' + manager().sessionId + '-card'">
       <span [attr.data-testid]="'manager-' + manager().sessionId + '-children'">{{ manager().childrenCount }}/{{ manager().childrenCap }}</span>
@@ -25,6 +26,7 @@ import { PulseNowAction } from './pulse-now';
         [disabled]="pulse.pending() || isSessionClosed()"
         (click)="pulseNow()"
       >Pulse now</button>
+      <of-manager-links [manager]="manager()" [projectId]="session()?.projectId" />
       @if (displayedMessage(); as message) {
         <span
           [attr.data-testid]="'manager-' + manager().sessionId + '-pulse-message'"

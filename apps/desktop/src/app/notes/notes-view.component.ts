@@ -193,6 +193,7 @@ export class NotesViewComponent {
   });
 
   private readonly requestedProjectId = computed(() => this.queryParams()?.get('projectId') ?? null);
+  private readonly requestedNoteId = computed(() => this.queryParams()?.get('noteId') ?? null);
   private readonly project = computed(() => this.projects().find((project) => project.id === this.projectId()));
   protected readonly projectName = computed(() => this.project()?.name ?? '');
   protected readonly selectedSummary = computed(() => this.notes().find((summary) => summary.id === this.selectedId()));
@@ -266,11 +267,12 @@ export class NotesViewComponent {
       if (request !== this.latestNotesRequest) return;
       this.notes.set(allNotes);
       this.notesStatus.set('ready');
-      const firstNoteId = allNotes[0]?.id;
-      if (firstNoteId) await this.openNote(firstNoteId, { focusEditor: focusAfterLoad });
-      const isFirstNoteMissingOrUnreadable = !firstNoteId || this.noteStatus() === 'error';
+      const requestedNote = allNotes.find((summary) => summary.id === this.requestedNoteId());
+      const noteIdToOpen = requestedNote?.id ?? allNotes[0]?.id;
+      if (noteIdToOpen) await this.openNote(noteIdToOpen, { focusEditor: focusAfterLoad });
+      const isOpenedNoteMissingOrUnreadable = !noteIdToOpen || this.noteStatus() === 'error';
       const isStillCurrent = request === this.latestNotesRequest;
-      if (focusAfterLoad && isFirstNoteMissingOrUnreadable && isStillCurrent) this.focusListAfterRender();
+      if (focusAfterLoad && isOpenedNoteMissingOrUnreadable && isStillCurrent) this.focusListAfterRender();
     } catch (error) {
       if (request !== this.latestNotesRequest) return;
       this.notesError.set(failureOf(error));

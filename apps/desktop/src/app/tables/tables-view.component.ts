@@ -213,6 +213,8 @@ const describeCellFailure = (error: unknown): string => {
 export class TablesViewComponent {
   /** Bound from the `projectId` query parameter; overrides the default project. */
   readonly projectId = input<string | undefined>(undefined);
+  /** The table to open first when it belongs to the shown project; the first table of the project otherwise. */
+  readonly storeId = input<string | undefined>(undefined);
 
   private readonly api = inject(FleetApiService);
   private readonly injector = inject(Injector);
@@ -622,7 +624,9 @@ export class TablesViewComponent {
       if (request !== this.latestStoresRequest) return;
       this.stores.set(items);
       this.hasLoadedStores.set(true);
-      if (items[0]) await this.loadTable({ projectId, storeId: items[0].id });
+      const requestedStore = items.find((store) => store.id === this.storeId());
+      const storeToOpen = requestedStore ?? items[0];
+      if (storeToOpen) await this.loadTable({ projectId, storeId: storeToOpen.id });
     } catch (error) {
       if (request === this.latestStoresRequest) this.recordFailure('stores', error);
     }

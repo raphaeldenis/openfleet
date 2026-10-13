@@ -37,6 +37,13 @@ describe('FleetApiService manager routes', () => {
       expect(sentRequest().url).toMatch(/\/api\/managers\/m1$/);
     });
 
+    it('keeps the mission note, its pin and the log table of the manager', async () => {
+      const linked = { ...PROFILE, manager: { ...PROFILE.manager, missionNoteId: 'note-1', pinMissionNote: true, logStoreId: 'store-1' } };
+      answerWith(linked);
+
+      await expect(api.getManagerProfile('m1')).resolves.toEqual(linked);
+    });
+
     it('rejects an answer that is not a manager profile', async () => {
       answerWith({ manager: { sessionId: 'm1' }, scapeImport: 'who knows' });
 

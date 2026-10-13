@@ -1,6 +1,7 @@
 import { render, screen, within } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
 import { inputBinding } from '@angular/core';
+import { provideRouter } from '@angular/router';
 import { describe, expect, it, vi } from 'vitest';
 import type { ManagerView, Session } from '@openfleet/shared';
 import { ManagerCardComponent } from './manager-card.component';
@@ -69,6 +70,25 @@ describe('ManagerCardComponent state overdue chip', () => {
     await renderCard(fakeWorkingStateEvents({ sessions: [] }), undefined);
 
     expect(screen.queryByTestId('overdue-chip')).toBeNull();
+  });
+});
+
+describe('ManagerCardComponent links', () => {
+  it('links the log table the manager is bound to, on the project of the manager', async () => {
+    await render(ManagerCardComponent, {
+      providers: [provideRouter([])],
+      bindings: [inputBinding('manager', () => manager({ logStoreId: 'store-log' })), inputBinding('session', () => session({ projectId: 'p1' }))],
+    });
+
+    const link = within(screen.getByTestId('manager-m1-card')).getByRole('link', { name: 'Log table' });
+
+    expect(link).toHaveAttribute('href', '/tables?projectId=p1&storeId=store-log');
+  });
+
+  it('shows no link for a manager that is bound to no table and has no mission note', async () => {
+    await render(ManagerCardComponent, { bindings: [inputBinding('manager', () => manager())] });
+
+    expect(screen.queryByRole('link')).toBeNull();
   });
 });
 
