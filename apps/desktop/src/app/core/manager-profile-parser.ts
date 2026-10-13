@@ -12,7 +12,7 @@ export function parseManagerProfile(payload: unknown): ManagerProfile | undefine
   const { manager, scapeImport } = payload as Record<string, unknown>;
   const isManagerObject = typeof manager === 'object' && manager !== null;
   if (!isManagerObject) return undefined;
-  const { sessionId, pulseSeconds, childrenCap, missionText, lastPulseAt, nextPulseAt, childrenCount, missionNoteId, pinMissionNote, logStoreId } = manager as Record<string, unknown>;
+  const { sessionId, pulseSeconds, childrenCap, missionText, lastPulseAt, nextPulseAt, childrenCount, missionNoteId, pinMissionNote, logStoreId, pulseEnabled } = manager as Record<string, unknown>;
   const hasManagerFields = isText(sessionId) && isCount(pulseSeconds) && isCount(childrenCap) && isText(missionText) && isText(nextPulseAt) && isCount(childrenCount);
   const hasKnownImportStatus = SCAPE_IMPORT_STATUSES.includes(scapeImport as ScapeImportStatus);
   if (!hasManagerFields || !hasKnownImportStatus) return undefined;
@@ -22,5 +22,5 @@ export function parseManagerProfile(payload: unknown): ManagerProfile | undefine
     ...(typeof pinMissionNote === 'boolean' && { pinMissionNote }),
     ...(isText(logStoreId) && { logStoreId }),
   };
-  return { manager: { sessionId, pulseSeconds, childrenCap, missionText, nextPulseAt, childrenCount, ...lastPulse, ...links }, scapeImport: scapeImport as ScapeImportStatus };
+  return { manager: { sessionId, pulseSeconds, pulseEnabled: pulseEnabled !== false, childrenCap, missionText, nextPulseAt, childrenCount, ...lastPulse, ...links }, scapeImport: scapeImport as ScapeImportStatus };
 }

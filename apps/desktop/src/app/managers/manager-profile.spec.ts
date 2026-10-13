@@ -19,7 +19,7 @@ const sessionOf = (overrides: Record<string, unknown> = {}) => ({
 });
 
 const managerViewOf = (overrides: Partial<ManagerView> = {}): ManagerView => ({
-  sessionId: 'm1', pulseSeconds: 600, childrenCap: 4, missionText: MISSION, nextPulseAt: new Date(Date.now() + 60_000).toISOString(), childrenCount: 0, ...overrides,
+  sessionId: 'm1', pulseSeconds: 600, pulseEnabled: true, childrenCap: 4, missionText: MISSION, nextPulseAt: new Date(Date.now() + 60_000).toISOString(), childrenCount: 0, ...overrides,
 });
 
 const profileOf = (overrides: Partial<ManagerView> = {}, scapeImport: ScapeImportStatus = 'not_imported'): ManagerProfile => ({ manager: managerViewOf(overrides), scapeImport });

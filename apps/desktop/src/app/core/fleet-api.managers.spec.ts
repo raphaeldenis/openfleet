@@ -7,7 +7,7 @@ function fakeResponse(init: { ok: boolean; status: number; json: () => Promise<u
 }
 
 const PROFILE: ManagerProfile = {
-  manager: { sessionId: 'm1', pulseSeconds: 600, childrenCap: 4, missionText: 'Ship it', nextPulseAt: '2026-10-05T10:00:00.000Z', childrenCount: 1 },
+  manager: { sessionId: 'm1', pulseSeconds: 600, pulseEnabled: true, childrenCap: 4, missionText: 'Ship it', nextPulseAt: '2026-10-05T10:00:00.000Z', childrenCount: 1 },
   scapeImport: 'as_imported',
 };
 

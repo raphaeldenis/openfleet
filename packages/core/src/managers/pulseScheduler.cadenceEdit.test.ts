@@ -6,7 +6,7 @@ import { SessionService, SUBMIT_KEYSTROKE_DELAY_MS } from '../sessions/sessionSe
 import { ManagerRepository } from './managerRepository.js';
 import { PULSE_MESSAGE, PulseScheduler } from './pulseScheduler.js';
 
-const pulseCount = (written: string[]) => written.filter((entry) => entry === PULSE_MESSAGE).length;
+const pulseCount = (written: string[]) => written.filter((entry) => entry.startsWith(PULSE_MESSAGE)).length;
 
 async function anIdleManagerPulsingEvery(pulseSeconds: number) {
   const db = openDatabase(':memory:');

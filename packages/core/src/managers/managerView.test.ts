@@ -17,6 +17,7 @@ describe('toManagerView', () => {
     expect(view).toEqual({
       sessionId: 'session-1',
       pulseSeconds: 60,
+      pulseEnabled: true,
       childrenCap: 4,
       missionText: 'Ship it',
       lastPulseAt: '2026-01-01T00:05:00.000Z',
@@ -35,6 +36,16 @@ describe('toManagerView', () => {
     const view = toManagerView(record, 0);
 
     expect(view).toMatchObject({ missionNoteId: 'note-9', pinMissionNote: true, logStoreId: 'store-7' });
+  });
+
+  it('reports a record without a pause flag as enabled and a paused record as disabled', () => {
+    const base = { sessionId: 'session-4', pulseSeconds: 30, childrenCap: 1, missionText: 'x', createdAt: '2026-01-01T00:00:00.000Z' };
+
+    const newManagerView = toManagerView(base, 0);
+    const pausedManagerView = toManagerView({ ...base, pulseEnabled: false }, 0);
+
+    expect(newManagerView.pulseEnabled).toBe(true);
+    expect(pausedManagerView.pulseEnabled).toBe(false);
   });
 
   it('reports childrenCount 0 for a manager with no live children, without inventing a floor or omitting the field', () => {

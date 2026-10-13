@@ -56,7 +56,7 @@ describe('PulseScheduler: the pulse of a manager with a mission note', () => {
 
     const pulse = pulseWrittenAfterOneInterval(harness);
 
-    expect(pulse).toBe(PULSE_MESSAGE);
+    expect(pulse).toBe(`${PULSE_MESSAGE} Wake reason: interval.`);
   });
 
   it('queues the identical pulse text of a busy manager with a mission note only once', async () => {
@@ -79,7 +79,7 @@ describe('PulseScheduler: the pulse of a manager with a mission note', () => {
     const pulseAfterLinking = manager.pulseNow();
 
     expect(pulseAfterLinking).toEqual({ coalesced: false });
-    expect(manager.hasQueuedPulse(PULSE_MESSAGE)).toBe(true);
-    expect(manager.hasQueuedPulse(`${PULSE_MESSAGE} Your mission note id is ${MISSION_NOTE_ID}; read it every time you wake with get_note.`)).toBe(true);
+    expect(manager.hasQueuedPulse(`${PULSE_MESSAGE} Wake reason: manual.`)).toBe(true);
+    expect(manager.hasQueuedPulse(`${PULSE_MESSAGE} Your mission note id is ${MISSION_NOTE_ID}; read it every time you wake with get_note. Wake reason: manual.`)).toBe(true);
   });
 });

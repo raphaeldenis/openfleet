@@ -15,7 +15,7 @@ function setup() {
   const bus = new EventBus();
   const sessions = new SessionService({ db, bus, harnesses: [new FakeHarness()], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
   const managerRepo = new ManagerRepository(db);
-  const scheduler = { onManagerCreated: vi.fn(), onManagerUpdated: vi.fn(), pulseNow: vi.fn(), start: vi.fn(), stop: vi.fn() };
+  const scheduler = { onManagerCreated: vi.fn(), onManagerUpdated: vi.fn(), onPulseEnabledChanged: vi.fn(), pulseNow: vi.fn(), start: vi.fn(), stop: vi.fn() };
   const service = new ManagerService({ managers: managerRepo, sessions, bus, scheduler });
   return { db, bus, sessions, managerRepo, scheduler, service };
 }
@@ -88,7 +88,7 @@ describe('ManagerService.createManagerSession — worktrees', () => {
     const bus = new EventBus();
     const sessions = new SessionService({ db, bus, harnesses: [new FakeHarness()], baseUrl: 'http://127.0.0.1:7331', worktreesRoot });
     const managerRepo = new ManagerRepository(db);
-    const scheduler = { onManagerCreated: vi.fn(), onManagerUpdated: vi.fn(), pulseNow: vi.fn(), start: vi.fn(), stop: vi.fn() };
+    const scheduler = { onManagerCreated: vi.fn(), onManagerUpdated: vi.fn(), onPulseEnabledChanged: vi.fn(), pulseNow: vi.fn(), start: vi.fn(), stop: vi.fn() };
     const service = new ManagerService({ managers: managerRepo, sessions, bus, scheduler });
 
     const session = await service.createManagerSession({

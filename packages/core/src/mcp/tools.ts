@@ -8,6 +8,7 @@ import type { ProjectRepository } from '../projects/projectRepository.js';
 import { resolveModel, type ModelTable } from '../models.js';
 import type { ApprovalService } from '../governance/approvalService.js';
 import type { ManagerService } from '../managers/managerService.js';
+import { isPulseEnabled } from '../managers/managerRepository.js';
 import { toManagerView } from '../managers/managerView.js';
 import type { PulseScheduler } from '../managers/pulseScheduler.js';
 import { guardedFor, ok, refuse } from './toolResults.js';
@@ -310,6 +311,8 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     // never its own parent — pulsing your manager is not "yours to trigger" even though you can message it.
     const isSelfOrOwnManagedChild = target !== undefined && (target.id === caller.id || target.parentId === caller.id);
     if (!target || !isSelfOrOwnManagedChild || target.role !== MANAGER_ROLE) return refuse('not_a_manager', 'target is not a manager in your lineage');
+    const managerRecord = managers.get(targetId);
+    if (managerRecord && !isPulseEnabled(managerRecord)) return refuse('manager_paused', 'the manager is paused: resume its pulses first');
     const record = pulseScheduler.pulseNow(targetId);
     if (!record) return refuse('manager_not_found', 'manager record not found');
     return ok({ pulsed: true });

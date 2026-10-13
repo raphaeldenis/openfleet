@@ -1,10 +1,10 @@
 import type { EventBus } from '../events/eventBus.js';
 import { log } from '../logger.js';
 import type { DescribeError, SessionService } from '../sessions/sessionService.js';
-import type { ManagerRecord, ManagerRepository } from './managerRepository.js';
+import { isPulseEnabled, type ManagerRecord, type ManagerRepository } from './managerRepository.js';
 import { toManagerView } from './managerView.js';
 import { nextPulseAt } from './pulseTiming.js';
-import type { RuntimeAttention } from '@openfleet/shared';
+import { OpenFleetError, PULSE_WAKE_REASONS, type PulseWakeReason, type RuntimeAttention } from '@openfleet/shared';
 
 export const PULSE_MESSAGE = '[pulse] Re-read your mission and continue: check your children, unblock them, record what you did.';
 
@@ -14,6 +14,13 @@ export const pulseMessageOf = (record: Pick<ManagerRecord, 'missionNoteId'>): st
   if (!hasMissionNote) return PULSE_MESSAGE;
   return `${PULSE_MESSAGE} Your mission note id is ${record.missionNoteId}; read it every time you wake with get_note.`;
 };
+
+/** The pulse as the manager reads it: the pulse text, then why it wakes, strongest reason first. */
+export const pulseBodyOf = ({ pulseText, wakeReasons }: { pulseText: string; wakeReasons: readonly PulseWakeReason[] }): string =>
+  `${pulseText} Wake reason: ${wakeReasons.join(', ')}.`;
+
+const withWakeReason = (wakeReasons: readonly PulseWakeReason[], addedReason: PulseWakeReason): PulseWakeReason[] =>
+  PULSE_WAKE_REASONS.filter((reason) => reason === addedReason || wakeReasons.includes(reason));
 
 const MAX_CHILD_NAME_LENGTH = 80;
 
@@ -29,6 +36,7 @@ const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
 
 interface ChildWakeNotice { label: string; exitCode: number | undefined; runtimeAttention?: RuntimeAttention }
 interface QueuedWake { messageId: string; listed: ChildWakeNotice[]; total: number }
+interface QueuedPulse { messageId: string; pulseText: string; wakeReasons: PulseWakeReason[] }
 
 const exitCodeText = (exitCode: number | undefined) => exitCode ?? 'unknown';
 
@@ -64,6 +72,7 @@ export class PulseScheduler {
   private readonly deps: PulseSchedulerDeps;
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly queuedWakes = new Map<string, QueuedWake>();
+  private readonly queuedPulses = new Map<string, QueuedPulse>();
   private readonly managerIdsInFailureStreak = new Set<string>();
   private readonly forcedTickFailuresLeftByManager = new Map<string, number>();
   private readonly notifiedRuntimeLaunches = new Map<string, RuntimeAttention>();
@@ -84,7 +93,8 @@ export class PulseScheduler {
   start(): void {
     this.isStopped = false;
     for (const record of this.deps.managers.list()) {
-      if (this.isManagerAlive(record.sessionId)) this.arm(record);
+      const isRunning = isPulseEnabled(record) && this.isManagerAlive(record.sessionId);
+      if (isRunning) this.arm(record);
     }
   }
 
@@ -111,12 +121,42 @@ export class PulseScheduler {
     this.forcedTickFailuresLeftByManager.set(sessionId, count);
   }
 
+  /** A paused manager and a closed one are never pulsed: the first throws manager_paused, the second answers undefined. */
   pulseNow(sessionId: string): { coalesced: boolean } | undefined {
     const record = this.deps.managers.getWithinBounds(sessionId);
     if (!record) return undefined;
-    if (!this.isManagerAlive(sessionId)) return undefined; // a closed manager is never pulsed
+    if (!this.isManagerAlive(sessionId)) return undefined;
+    if (!isPulseEnabled(record)) throw new OpenFleetError('manager_paused', 'the manager is paused.', { hint: 'resume its pulses first.' });
     this.clearTimer(sessionId);
-    return this.fire(record);
+    return this.fire(record, 'manual');
+  }
+
+  /** A paused manager drops its queued pulses and stops its timer; a resumed one gets one pulse at once. */
+  onPulseEnabledChanged(record: ManagerRecord): void {
+    if (this.isStopped) return;
+    if (isPulseEnabled(record)) this.pulseResumedManager(record);
+    else this.silencePausedManager(record.sessionId);
+  }
+
+  private silencePausedManager(sessionId: string): void {
+    this.clearTimer(sessionId);
+    const queuedPulse = this.queuedPulses.get(sessionId);
+    const queuedWake = this.queuedWakes.get(sessionId);
+    if (queuedPulse) this.deps.sessions.discardQueuedMessage({ sessionId, messageId: queuedPulse.messageId });
+    if (queuedWake) this.deps.sessions.discardQueuedMessage({ sessionId, messageId: queuedWake.messageId });
+    this.queuedPulses.delete(sessionId);
+    this.queuedWakes.delete(sessionId);
+  }
+
+  private pulseResumedManager(record: ManagerRecord): void {
+    if (!this.isManagerAlive(record.sessionId)) return;
+    try {
+      this.clearTimer(record.sessionId);
+      this.fire(record, 'resume');
+    } catch (error) {
+      this.reportTickFailure(record.sessionId, error);
+      this.armAfter(record.sessionId, record.pulseSeconds * 1000);
+    }
   }
 
   // The interval is a heartbeat: any change of a manager's state is a turn starting or ending, whoever
@@ -138,7 +178,8 @@ export class PulseScheduler {
     if (alreadyReportsPostResumeExit) return;
     const managerId = child?.parentId;
     if (!child || !managerId) return;
-    if (!this.deps.managers.get(managerId)) return;
+    const manager = this.deps.managers.get(managerId);
+    if (!manager || !isPulseEnabled(manager)) return;
     if (!this.isManagerAlive(managerId)) return;
     // A close the manager asked for is not news to it: the wake line is for a child that ended unannounced.
     if (this.deps.sessions.isClosingByParent(childId)) return;
@@ -159,7 +200,8 @@ export class PulseScheduler {
     const parentId = child?.parentId;
     const isCurrentAttention = child?.runtimeAttention?.launchId === attention.launchId;
     if (!isCurrentAttention || !parentId) return;
-    if (!this.deps.managers.get(parentId) || !this.isManagerAlive(parentId)) return;
+    const manager = this.deps.managers.get(parentId);
+    if (!manager || !isPulseEnabled(manager) || !this.isManagerAlive(parentId)) return;
     const previousAttention = this.notifiedRuntimeLaunches.get(childId);
     const alreadyNotifiesCondition = previousAttention?.launchId === attention.launchId && previousAttention.reason === attention.reason;
     if (alreadyNotifiesCondition) return;
@@ -197,6 +239,7 @@ export class PulseScheduler {
   stop(): void {
     this.isStopped = true;
     this.queuedWakes.clear();
+    this.queuedPulses.clear();
     this.managerIdsInFailureStreak.clear();
     this.forcedTickFailuresLeftByManager.clear();
     this.notifiedRuntimeLaunches.clear();
@@ -211,14 +254,16 @@ export class PulseScheduler {
 
   private armAfter(sessionId: string, delayMs: number): void {
     this.clearTimer(sessionId);
-    const isOutOfBounds = !this.deps.managers.getWithinBounds(sessionId);
-    if (isOutOfBounds) return; // a legacy row is never armed
+    const record = this.deps.managers.getWithinBounds(sessionId);
+    if (!record) return; // a legacy row is never armed
+    if (!isPulseEnabled(record)) return; // a paused manager is never armed
     this.timers.set(sessionId, setTimeout(() => this.tick(sessionId), Math.min(delayMs, MAX_TIMER_DELAY_MS)));
   }
 
   private tick(sessionId: string): void {
     const record = this.deps.managers.getWithinBounds(sessionId);
     if (!record) return; // manager record removed
+    if (!isPulseEnabled(record)) return; // paused since the timer was armed
     if (!this.isManagerAlive(sessionId)) { this.clearTimer(sessionId); return; } // a closed manager never reschedules itself
     if (!this.isManagerIdle(sessionId)) { this.armAfter(sessionId, record.pulseSeconds * 1000); return; } // a busy manager had its turn: no pulse
     // A timer callback has no caller to catch a throw (e.g. a refused SQLite write): left unguarded, it
@@ -226,7 +271,7 @@ export class PulseScheduler {
     // dead until the next daemon restart. Logged and re-armed instead, so one bad tick doesn't end it.
     try {
       this.throwWhenTickFailureIsForced(sessionId);
-      this.fire(record);
+      this.fire(record, 'interval');
     } catch (error) {
       this.reportTickFailure(sessionId, error);
       // Re-arms a full cadence from now, never via nextPulseAt(record): fire() threw before persisting
@@ -277,13 +322,8 @@ export class PulseScheduler {
   // A pulse cycle happens every pulseSeconds: lastPulseAt always advances to now and manager.pulsed always
   // fires, whether or not the [pulse] message itself gets enqueued — a manager stuck gated for many cycles
   // must not pile up queued pulses, but its cadence (and the next armed deadline) still moves forward.
-  private fire(record: ManagerRecord): { coalesced: boolean } {
-    // Goes through the ordinary message queue, exactly like a message from a parent or sibling: if the
-    // manager is mid-turn or waiting on a human, the pulse queues and is flushed on its next idle turn —
-    // it never interrupts a running tool or answers a permission prompt.
-    const pulseMessage = pulseMessageOf(record);
-    const coalesced = this.deps.sessions.hasQueuedMessage(record.sessionId, pulseMessage);
-    if (!coalesced) this.deps.sessions.sendMessage({ sessionId: record.sessionId, body: pulseMessage });
+  private fire(record: ManagerRecord, wakeReason: PulseWakeReason): { coalesced: boolean } {
+    const coalesced = this.queuePulse(record, wakeReason);
     const pulsedAt = new Date().toISOString();
     this.deps.managers.setLastPulseAt(record.sessionId, pulsedAt);
     const updated: ManagerRecord = { ...record, lastPulseAt: pulsedAt };
@@ -292,6 +332,30 @@ export class PulseScheduler {
     this.arm(updated);
     this.managerIdsInFailureStreak.delete(record.sessionId);
     return { coalesced };
+  }
+
+  // Goes through the ordinary message queue, exactly like a message from a parent or sibling: if the manager
+  // is mid-turn or waiting on a human, the pulse queues and is flushed on its next idle turn — it never
+  // interrupts a running tool or answers a permission prompt. A pulse still queued takes the new reason in
+  // place of a second pulse, as long as the pulse text is the same one.
+  private queuePulse(record: ManagerRecord, wakeReason: PulseWakeReason): boolean {
+    const managerId = record.sessionId;
+    const pulseText = pulseMessageOf(record);
+    const queued = this.queuedPulses.get(managerId);
+    const isSameTextStillQueued = queued !== undefined && queued.pulseText === pulseText;
+    if (isSameTextStillQueued) {
+      const queuedBody = pulseBodyOf({ pulseText, wakeReasons: queued.wakeReasons });
+      const isReasonAlreadyCarried = queued.wakeReasons.includes(wakeReason);
+      if (isReasonAlreadyCarried && this.deps.sessions.hasQueuedMessage(managerId, queuedBody)) return true;
+      const wakeReasons = withWakeReason(queued.wakeReasons, wakeReason);
+      const body = pulseBodyOf({ pulseText, wakeReasons });
+      const isMergedIntoQueuedPulse = this.deps.sessions.replaceQueuedMessageBody({ sessionId: managerId, messageId: queued.messageId, body });
+      if (isMergedIntoQueuedPulse) { this.queuedPulses.set(managerId, { ...queued, wakeReasons }); return true; }
+    }
+    const wakeReasons = [wakeReason];
+    const { messageId } = this.deps.sessions.sendMessage({ sessionId: managerId, body: pulseBodyOf({ pulseText, wakeReasons }) });
+    this.queuedPulses.set(managerId, { messageId, pulseText, wakeReasons });
+    return false;
   }
 
   private clearTimer(sessionId: string): void {
