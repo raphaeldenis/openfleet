@@ -53,6 +53,7 @@ const COPY_BY_CODE: Record<ErrorCode, CodeCopy> = {
   view_not_found: { what: 'That view no longer exists' },
   row_not_found: { what: 'That row no longer exists' },
   manager_not_found: { what: 'That manager no longer exists' },
+  proposal_not_found: { what: 'That proposal no longer exists' },
   handoff_not_found: { what: 'That handoff is no longer in the docs folder', fix: 'pick another handoff or remove it' },
 
   session_closed: { what: 'The session is closed', fix: 'resume it first' },
@@ -71,6 +72,7 @@ const COPY_BY_CODE: Record<ErrorCode, CodeCopy> = {
   config_read_only: { what: 'The configuration is read-only', fix: 'make the file writable' },
   message_id_reused: { what: 'That message id was already used with another text' },
   too_many_pending: { what: 'Too many messages are waiting for this session' },
+  governance_queue_full: { what: 'This manager already has as many pending proposals as allowed', fix: 'answer or withdraw one first' },
   children_cap: { what: 'This manager already runs as many sessions as allowed' },
   outside_lineage: { what: 'That session is outside this manager’s team' },
   manager_paused: { what: 'This manager is paused', fix: 'resume its pulses first' },

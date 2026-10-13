@@ -31,6 +31,7 @@ import { newId } from '../ids.js';
 import { WorkingStateService } from '../workingState/workingStateService.js';
 import { createMcpHandler } from './mcpServer.js';
 import { knowledgeSearchFor } from './knowledgeTools.testkit.js';
+import { governanceQueueFor } from '../governance/governanceQueueFor.testkit.js';
 import { SleepGuard } from '../power/sleepGuard.js';
 import { FakeClock } from '../power/fakeClock.testkit.js';
 
@@ -79,7 +80,7 @@ beforeEach(async () => {
   const noteRepo = new NoteRepository(db);
   const notes = new NoteService({ repo: noteRepo, db, expandMentions, clock: () => new Date().toISOString(), newId });
   const docs = new DocsFolderService({ notes, noteRepo, projects, fs: nodeDocsFolderFs, clock: () => new Date().toISOString() });
-  server = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath: '/tmp/of-unused/config.json', mcp: createMcpHandler({ knowledgeSearch: knowledgeSearchFor(db), sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates: new WorkingStateService({ db, clock: () => new Date().toISOString(), stateRoot: '/tmp/of-unused/state', maxBytes: 6144 }), worktreesRoot: '/tmp/of-wt' }) });
+  server = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath: '/tmp/of-unused/config.json', mcp: createMcpHandler({ knowledgeSearch: knowledgeSearchFor(db), governanceQueue: governanceQueueFor(db), sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates: new WorkingStateService({ db, clock: () => new Date().toISOString(), stateRoot: '/tmp/of-unused/state', maxBytes: 6144 }), worktreesRoot: '/tmp/of-wt' }) });
   const parent = await sessions.create({ directory: '/tmp', name: 'Lead', harness: 'fake', emoji: '🧭' });
   parentId = parent.id;
   parentToken = harness.launches[0]!.mcpToken;
@@ -257,11 +258,11 @@ describe('MCP', () => {
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
       'add_data_store_column', 'append_to_note', 'close_session', 'create_data_store', 'create_data_store_view', 'create_note', 'create_session',
-      'create_worktree', 'delete_data_store_column', 'delete_data_store_row', 'delete_data_store_view', 'delete_note', 'describe_data_store', 'get_argus_status', 'get_data_store', 'get_note',
+      'create_worktree', 'delete_data_store_column', 'delete_data_store_row', 'delete_data_store_view', 'delete_note', 'describe_data_store', 'get_argus_governance', 'get_argus_status', 'get_data_store', 'get_note',
       'get_note_version', 'get_session_card', 'get_session_status', 'get_working_state', 'insert_data_store_rows', 'list_children', 'list_data_store_views', 'list_note_versions',
-      'list_notes', 'list_project_folders', 'list_projects', 'list_row_changes', 'list_sessions', 'list_worktrees', 'message_argus', 'message_parent', 'move_note', 'pulse_now', 'query_data_store', 'remove_worktree', 'reorder_data_store_columns', 'restore_note_version',
+      'list_notes', 'list_project_folders', 'list_projects', 'list_row_changes', 'list_sessions', 'list_worktrees', 'message_argus', 'message_parent', 'move_note', 'propose_law', 'propose_permission', 'pulse_now', 'query_data_store', 'remove_worktree', 'reorder_data_store_columns', 'request_resource_access', 'restore_note_version',
       'search_knowledge', 'search_notes', 'send_session_message', 'set_argus_log_store', 'set_data_store_natural_key', 'update_data_store_column', 'update_data_store_row', 'update_data_store_rows', 'update_data_store_view', 'update_note', 'update_note_section',
-      'update_session', 'update_working_state',
+      'update_session', 'update_working_state', 'withdraw_proposal',
     ]);
   });
 

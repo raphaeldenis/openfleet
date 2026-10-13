@@ -1,0 +1,84 @@
+import { z } from 'zod';
+
+export const MAX_PENDING_PROPOSALS_PER_MANAGER = 10;
+export const MAX_DENIED_HISTORY_PER_MANAGER = 20;
+export const MAX_AUDIT_HISTORY_PER_MANAGER = 50;
+
+export const MAX_LAW_TEXT_CHARS = 2000;
+export const MAX_PERMISSION_FIELD_CHARS = 500;
+export const MAX_INCIDENT_CHARS = 1000;
+export const MAX_ROLE_CHARS = 80;
+export const MAX_DENIAL_REASON_CHARS = 500;
+
+export const PROPOSAL_KINDS = ['law', 'permission', 'resourceAccess'] as const;
+export type ProposalKind = (typeof PROPOSAL_KINDS)[number];
+
+export const PROPOSAL_STATUSES = ['pending', 'approved', 'denied', 'withdrawn'] as const;
+export type ProposalStatus = (typeof PROPOSAL_STATUSES)[number];
+
+export const RESOURCE_TYPES = ['dataStore', 'note', 'playbook', 'integration'] as const;
+export type ResourceType = (typeof RESOURCE_TYPES)[number];
+
+export const RESOURCE_ACCESSES = ['read', 'readWrite', 'append', 'run', 'use'] as const;
+export type ResourceAccess = (typeof RESOURCE_ACCESSES)[number];
+
+/** The accesses a kind of resource can be granted. */
+export const ACCESSES_BY_RESOURCE_TYPE: Readonly<Record<ResourceType, readonly ResourceAccess[]>> = {
+  dataStore: ['read', 'readWrite'],
+  note: ['read', 'readWrite', 'append'],
+  playbook: ['run'],
+  integration: ['use'],
+};
+
+/** The resource types a grant can name today: OpenFleet has no playbook or integration registry yet. */
+export const GRANTABLE_RESOURCE_TYPES = ['dataStore', 'note'] as const satisfies readonly ResourceType[];
+
+export const LawPayloadSchema = z.object({ text: z.string() });
+export const PermissionPayloadSchema = z.object({ action: z.string(), scope: z.string(), condition: z.string(), exclusions: z.string() });
+export const ResourceAccessPayloadSchema = z.object({
+  resourceType: z.enum(RESOURCE_TYPES), resourceId: z.string(), access: z.enum(RESOURCE_ACCESSES), role: z.string(),
+});
+
+export type LawPayload = z.infer<typeof LawPayloadSchema>;
+export type PermissionPayload = z.infer<typeof PermissionPayloadSchema>;
+export type ResourceAccessPayload = z.infer<typeof ResourceAccessPayloadSchema>;
+
+export const PAYLOAD_SCHEMA_BY_KIND = {
+  law: LawPayloadSchema,
+  permission: PermissionPayloadSchema,
+  resourceAccess: ResourceAccessPayloadSchema,
+} as const satisfies Record<ProposalKind, z.ZodType>;
+
+export type ProposalPayload = LawPayload | PermissionPayload | ResourceAccessPayload;
+
+export interface GovernanceProposalView {
+  id: string;
+  managerId: string;
+  kind: ProposalKind;
+  status: ProposalStatus;
+  incident: string;
+  payload: ProposalPayload;
+  denialReason?: string;
+  createdAt: string;
+  decidedAt?: string;
+}
+
+export interface ResourceGrantView {
+  id: string;
+  resourceType: ResourceType;
+  resourceId: string;
+  role: string;
+  access: ResourceAccess;
+  grantedAt: string;
+  proposalId?: string;
+}
+
+/** What a manager sees of its own governance: grants are informative until the server enforces them. */
+export interface ManagerGovernanceView {
+  resourceGrants: ResourceGrantView[];
+  pending: GovernanceProposalView[];
+  denied: GovernanceProposalView[];
+  /** Approved and withdrawn proposals, newest first. */
+  history: GovernanceProposalView[];
+  governanceEvictedDenials: number;
+}

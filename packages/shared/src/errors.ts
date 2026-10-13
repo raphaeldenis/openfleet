@@ -39,6 +39,8 @@ export const ERROR_CODES = {
   row_not_found: { kind: 'not_found' },
   manager_not_found: { kind: 'not_found' },
   handoff_not_found: { kind: 'not_found' },
+  // The id of another manager's proposal reads exactly like an id nobody proposed.
+  proposal_not_found: { kind: 'not_found' },
 
   // A conflict retries `never` unless a reload (stale_revision) or waiting (file_unreadable, too_many_pending, children_cap) can change the answer.
   session_closed: { kind: 'conflict', retry: 'never' },
@@ -58,6 +60,8 @@ export const ERROR_CODES = {
   message_id_reused: { kind: 'conflict', retry: 'never' },
   too_many_pending: { kind: 'conflict', retry: 'later' },
   children_cap: { kind: 'conflict', retry: 'later' },
+  // A human answering, or the manager withdrawing a proposal of its own, frees a place: the same call then succeeds.
+  governance_queue_full: { kind: 'conflict', retry: 'later' },
   outside_lineage: { kind: 'conflict', retry: 'never' },
   not_a_manager: { kind: 'conflict', retry: 'never' },
   // Resuming the manager is what lets a pulse through again.

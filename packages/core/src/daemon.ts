@@ -8,6 +8,7 @@ import { buildDiagnosticsDocument } from './diagnostics/diagnosticsDocument.js';
 import { describeError } from './errors/describeError.js';
 import { EventBus } from './events/eventBus.js';
 import { ApprovalService } from './governance/approvalService.js';
+import { GovernanceQueueService } from './governance/governanceQueueService.js';
 import { loadPermissionSettings } from './governance/permissionSettings.js';
 import { SilentBlockDetector } from './governance/silentBlockDetector.js';
 import { ClaudeCliHarness } from './harness/claudeCli/claudeCliHarness.js';
@@ -76,6 +77,7 @@ export interface Daemon {
   server: Awaited<ReturnType<typeof startServer>>;
   db: ReturnType<typeof openDatabase>;
   degraded: DegradedRegistry;
+  governanceQueue: GovernanceQueueService;
   close: () => Promise<void>;
 }
 
@@ -128,6 +130,11 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     scapeImportStatusOf: (sessionId) => scapeImportStatusOfManager(db, sessionId),
     linkTargets: { noteProjectId: (noteId) => noteRepo.getProjectId(noteId), storeProjectId: (storeId) => storeRepo.findStore(storeId)?.projectId },
   });
+  const governanceQueue = new GovernanceQueueService({
+    db, clock: () => new Date().toISOString(), newId,
+    managers: { isManager: (sessionId) => managerRepository.get(sessionId) !== undefined, projectIdOf: (sessionId) => sessions.get(sessionId)?.projectId },
+    linkTargets: { noteProjectId: (noteId) => noteRepo.getProjectId(noteId), storeProjectId: (storeId) => storeRepo.findStore(storeId)?.projectId },
+  });
   const knowledgeRepository = new KnowledgeRepository(db);
   const knowledgeService = new KnowledgeSearchService({ search: knowledgeRepository, scope: new KnowledgeRepoScope({ repositories: knowledgeRepository }) });
   const knowledgeSearch = { search: knowledgeService.search.bind(knowledgeService) };
@@ -154,7 +161,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   // fast process hitting a port nothing is serving yet.
   const diagnostics = () => buildDiagnosticsDocument({ db, degraded, listSessions: () => sessions.list(), port: config.port, e2eEnabled: config.e2eEnabled });
   const worktrees = new WorktreeService({ projects, sessions, worktreesRoot: config.worktreesRoot });
-  const server = await startServer({ ...config, e2eRoutes: config.e2eEnabled, degraded, diagnostics, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, stores, storeRepo, projects, projectService, worktrees, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, mcp: createMcpHandler({ knowledgeSearch, sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });
+  const server = await startServer({ ...config, e2eRoutes: config.e2eEnabled, degraded, diagnostics, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, stores, storeRepo, projects, projectService, worktrees, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, mcp: createMcpHandler({ knowledgeSearch, governanceQueue, sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });
   log('info', `openfleet core listening on ${server.url} (version: ${DAEMON_VERSION}, home: ${config.home})`);
 
   const unwatchDatabase = watchDatabaseHealth(degraded);
@@ -193,5 +200,5 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     throw error;
   }
 
-  return { server, db, degraded, close };
+  return { server, db, degraded, governanceQueue, close };
 }
