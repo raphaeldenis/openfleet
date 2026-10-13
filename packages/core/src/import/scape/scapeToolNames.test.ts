@@ -9,6 +9,13 @@ describe('rewriteScapeToolReferences', () => {
     expect(renamedCount).toBe(2);
   });
 
+  it('renames the log table tool of an imported manager mission to the OpenFleet tool', () => {
+    const { text, unmappedToolNames } = rewriteScapeToolReferences('Bind your log with mcp__scape__set_argus_log_store.');
+
+    expect(text).toBe('Bind your log with mcp__openfleet__set_argus_log_store.');
+    expect(unmappedToolNames).toEqual([]);
+  });
+
   it('leaves a tool name without the Scape prefix as it is', () => {
     const original = 'Call message_parent, create_session and mcp__repowise__get_overview.';
 
