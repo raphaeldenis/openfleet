@@ -101,7 +101,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   const baseUrl = `http://${config.host}:${config.port}`;
   const claudeCliHarness = new ClaudeCliHarness(config.sessionsRoot, process.env, options.claudeConfigPath);
   const harnesses = config.e2eEnabled ? [claudeCliHarness, new FakeHarness({ reportSessionStart: postSessionStartHook })] : [claudeCliHarness];
-  if (config.e2eEnabled) log('warn', 'e2e test surface enabled (OPENFLEET_E2E=1): fake harness and fake-output route are registered');
+  if (config.e2eEnabled) log('warn', 'e2e test surface enabled (OPENFLEET_E2E=1): fake harness, fake-output route and fake-propose-law route are registered');
   const managerRepository = new ManagerRepository(db);
   const sessions = new SessionService({ db, bus, harnesses, baseUrl, worktreesRoot: config.worktreesRoot, describeError, missionOf: (sessionId) => managerRepository.get(sessionId)?.missionText });
   const approvals = new ApprovalService({ db, bus });

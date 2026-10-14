@@ -9,6 +9,9 @@ import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { ManagerDashboardComponent } from './manager-dashboard.component';
 
+const emptyGovernance = { resourceGrants: [], pending: [], denied: [], history: [], governanceEvictedDenials: 0 };
+const governanceApi = { getManagerGovernance: () => Promise.resolve(emptyGovernance) };
+
 const MANAGER_SESSION = {
   id: 'm1', name: 'Capitaine', emoji: '🧭', role: 'manager', state: 'closed', harness: 'claude-cli', model: 'sonnet', projectId: 'p-fleet', stateSince: new Date().toISOString(),
 };
@@ -20,12 +23,13 @@ const profileWithMission = (missionText: string): ManagerProfile => ({
 
 async function renderMissionPanelShowing(missionText: string): Promise<void> {
   const api = {
+    ...governanceApi,
     getManagerProfile: vi.fn().mockResolvedValue(profileWithMission(missionText)),
     listProjects: vi.fn().mockResolvedValue({ items: [{ id: 'p-fleet', name: 'Fleet', docsFolderPath: null }], total: 1, limit: 200, offset: 0 }),
     models: vi.fn().mockResolvedValue({}),
   };
   const events = {
-    sessions: signal([MANAGER_SESSION]), approvals: signal([]), managers: signal([profileWithMission(missionText).manager]), snapshotReceived: signal(true),
+    sessions: signal([MANAGER_SESSION]), approvals: signal([]), proposals: signal([]), managers: signal([profileWithMission(missionText).manager]), snapshotReceived: signal(true),
     workingStates: signal(new Map()), workingStatesReported: signal(false), workingStateMaxAgeMinutes: signal<number | undefined>(30), workingStateMaxBytes: signal<number | undefined>(6144),
   };
   await render(ManagerDashboardComponent, {

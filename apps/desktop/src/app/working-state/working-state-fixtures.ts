@@ -1,5 +1,5 @@
 import { signal } from '@angular/core';
-import type { DaemonIssue, Session, SilentBlock, WorkingState } from '@openfleet/shared';
+import type { DaemonIssue, GovernanceProposalView, Session, SilentBlock, WorkingState } from '@openfleet/shared';
 
 export const NOW_ISO = '2026-09-30T10:00:00.000Z';
 const MINUTE_MS = 60_000;
@@ -38,6 +38,7 @@ export function stateOf(patch: Partial<WorkingState> = {}): WorkingState {
 export function silentWorkingStateSignals() {
   return {
     daemonIssues: signal<DaemonIssue[]>([]),
+    proposals: signal<GovernanceProposalView[]>([]),
     backgroundFailures: signal<unknown[]>([]),
     dismissBackgroundFailure: () => undefined,
     silentBlocks: signal<SilentBlock[]>([]),

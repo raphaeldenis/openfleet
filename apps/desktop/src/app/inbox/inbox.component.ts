@@ -13,19 +13,23 @@ import { VersionsService } from '../core/versions.service';
 import { ErrorLineComponent } from '../design/error-line.component';
 import { KindBadgeComponent } from '../design/kind-badge.component';
 import { AnsweredRepliesStore } from '../working-state/answered-replies.store';
-import { answeredItemsOf, attentionItemsOf, inboxCountLabelOf, itemsNeedingYouOf } from '../working-state/attention-items';
+import { answeredItemsOf, attentionItemsOf, itemsNeedingYouOf } from '../working-state/attention-items';
 import { contextNoticeCopyOf, contextNoticesOf } from '../working-state/context-notices';
 import { AttentionCardComponent } from './attention-card.component';
+import { GovernanceApprovedTexts } from './governance-approved-texts.store';
+import { GovernanceProposalsComponent } from './governance-proposals.component';
+import { InboxNeedingYou } from './inbox-needing-you';
 import { minutesWaiting, silentBlockCopyOf, silentBlockDetailsMessageOf } from './silent-block-copy';
 import { showBidiControlsAsEscapes, showInvisibleControlsAsEscapes } from '../core/bidi-escapes';
 
-type FilterKey = 'all' | 'questions';
+type FilterKey = 'all' | 'questions' | 'governance';
 
 interface FilterOption {
   readonly key: FilterKey;
   readonly label: string;
   readonly showsGates: boolean;
   readonly showsQuestions: boolean;
+  readonly showsProposals: boolean;
 }
 
 const DELIVERED_REPLY_SHOWN_MS = 2500;
@@ -33,8 +37,9 @@ const DELIVERED_REPLY_SHOWN_MS = 2500;
 // Only the filters the backend data can serve are listed: it has no read-tracking, assignee or
 // blocking flag yet, so Unread, Mine, Blocked and Recent join this list when it does.
 const FILTERS: readonly FilterOption[] = [
-  { key: 'all', label: 'All', showsGates: true, showsQuestions: true },
-  { key: 'questions', label: 'Questions', showsGates: false, showsQuestions: true },
+  { key: 'all', label: 'All', showsGates: true, showsQuestions: true, showsProposals: true },
+  { key: 'questions', label: 'Questions', showsGates: false, showsQuestions: true, showsProposals: false },
+  { key: 'governance', label: 'Governance', showsGates: false, showsQuestions: false, showsProposals: true },
 ];
 
 interface FormattedInput {
@@ -63,7 +68,7 @@ function formatInput(toolInput: unknown): FormattedInput {
 @Component({
   selector: 'of-inbox',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [ErrorLineComponent, KindBadgeComponent,AttentionCardComponent, CopyDetailsButtonComponent, RouterLink],
+  imports: [ErrorLineComponent, KindBadgeComponent,AttentionCardComponent, CopyDetailsButtonComponent, GovernanceProposalsComponent, RouterLink],
   template: `
     <section class="inbox" data-testid="inbox">
       <header class="title-row" data-testid="inbox-title-row">
@@ -150,6 +155,9 @@ function formatInput(toolInput: unknown): FormattedInput {
             @for (item of attentionCards(); track item.session.id) {
               <of-attention-card [item]="item" [isReplyDelivered]="item.isAnswered" />
             }
+          }
+          @if (activeFilter().showsProposals) {
+            <of-governance-proposals (noCardLeft)="focusGovernanceFilter()" />
           }
           @if (isListEmpty()) {
             <div class="empty" data-testid="inbox-empty">
@@ -238,6 +246,7 @@ export class InboxComponent {
   private readonly replies = inject(ReplyDraftStore);
   private readonly answeredReplies = inject(AnsweredRepliesStore);
   private readonly versions = inject(VersionsService);
+  private readonly approvedTexts = inject(GovernanceApprovedTexts).texts;
   private readonly injector = inject(Injector);
   private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
   protected readonly filters = FILTERS;
@@ -421,10 +430,11 @@ export class InboxComponent {
     (nextDismiss ?? pressedFilter)?.focus();
   }
 
-  protected readonly pendingCount = computed(() => {
-    const count = this.events.approvals().length + this.attentionItemsNeedingYou().length + this.contextNotices().length;
-    return count > 0 ? inboxCountLabelOf(count) : undefined;
-  });
+  protected readonly pendingCount = inject(InboxNeedingYou).label;
+
+  protected focusGovernanceFilter(): void {
+    this.host.nativeElement.querySelector<HTMLElement>('[data-testid="inbox-filter-governance"]')?.focus();
+  }
 
   readonly items = computed(() =>
     this.gates().map((gate) => ({
@@ -438,12 +448,14 @@ export class InboxComponent {
   protected readonly filterCounts = computed((): Readonly<Record<FilterKey, number>> => {
     const gateCount = this.items().length;
     const questionCount = this.attentionItemsNeedingYou().length;
-    return { all: gateCount + questionCount, questions: questionCount };
+    const proposalCount = this.events.proposals().length;
+    return { all: gateCount + questionCount + proposalCount, questions: questionCount, governance: proposalCount };
   });
 
   protected readonly isListEmpty = computed(() => {
-    const { showsGates, showsQuestions } = this.activeFilter();
-    const shownCardCount = (showsGates ? this.items().length : 0) + (showsQuestions ? this.attentionCards().length : 0);
+    const { showsGates, showsQuestions, showsProposals } = this.activeFilter();
+    const proposalCardCount = this.events.proposals().length + this.approvedTexts().length;
+    const shownCardCount = (showsGates ? this.items().length : 0) + (showsQuestions ? this.attentionCards().length : 0) + (showsProposals ? proposalCardCount : 0);
     const hasNoIssueOrNotice = this.issues().length === 0 && this.contextNotices().length === 0;
     return shownCardCount === 0 && hasNoIssueOrNotice;
   });

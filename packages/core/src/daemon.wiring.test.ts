@@ -81,7 +81,7 @@ describe('operator gets every daemon feature when the daemon boots from its conf
 
     await bootDaemon(undefined, { e2e: true });
 
-    const e2eWarnings = warn.mock.calls.filter(([line]) => String(line).includes('e2e test surface enabled (OPENFLEET_E2E=1): fake harness and fake-output route are registered'));
+    const e2eWarnings = warn.mock.calls.filter(([line]) => String(line).includes('e2e test surface enabled (OPENFLEET_E2E=1): fake harness, fake-output route and fake-propose-law route are registered'));
     expect(e2eWarnings).toHaveLength(1);
   });
 

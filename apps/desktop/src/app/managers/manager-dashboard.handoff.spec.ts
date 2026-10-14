@@ -9,6 +9,9 @@ import { ManagerDashboardComponent } from './manager-dashboard.component';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
 
+const emptyGovernance = { resourceGrants: [], pending: [], denied: [], history: [], governanceEvictedDenials: 0 };
+const governanceApi = { getManagerGovernance: () => Promise.resolve(emptyGovernance) };
+
 const MANAGER_SESSION = { id: 'm1', name: 'Lead', emoji: '🧭', role: 'manager', state: 'idle', harness: 'claude-cli' };
 const OTHER_MANAGER_SESSION = { ...MANAGER_SESSION, id: 'm2', name: 'Second' };
 const MANAGER_VIEW = { sessionId: 'm1', pulseSeconds: 1800, childrenCap: 2, missionText: 'x', nextPulseAt: new Date(Date.now() + 42_000).toISOString(), childrenCount: 0 };
@@ -44,6 +47,7 @@ async function renderDashboard({ session = MANAGER_SESSION, getHandoffPreview = 
       {
         provide: FleetApiService,
         useValue: {
+          ...governanceApi,
           pulseNow: vi.fn(), getHandoffPreview,
           getManagerProfile: vi.fn().mockResolvedValue({ manager: MANAGER_VIEW, scapeImport: 'not_imported' }),
           listProjects: vi.fn().mockResolvedValue({ items: [], total: 0, limit: 200, offset: 0 }),
@@ -52,7 +56,7 @@ async function renderDashboard({ session = MANAGER_SESSION, getHandoffPreview = 
       {
         provide: FleetEventsService,
         useValue: {
-          sessions, approvals: signal([]), managers: signal([MANAGER_VIEW]), snapshotReceived: signal(true), workingStates: signal(new Map()),
+          sessions, approvals: signal([]), proposals: signal([]), managers: signal([MANAGER_VIEW]), snapshotReceived: signal(true), workingStates: signal(new Map()),
           workingStatesReported: signal(false), workingStateMaxAgeMinutes: signal<number | undefined>(30), workingStateMaxBytes: signal<number | undefined>(6144),
         },
       },

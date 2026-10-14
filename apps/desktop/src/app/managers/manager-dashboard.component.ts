@@ -14,6 +14,7 @@ import { restoreFocusWhenFree } from '../sessions/handoff/handoff-focus';
 import { HandoffPreviewHostComponent } from '../sessions/handoff/handoff-preview-host.component';
 import { OverdueChipComponent } from '../working-state/overdue-chip.component';
 import { countdownLabel, countdownSecondsUntil } from './manager-countdown';
+import { ManagerGovernanceComponent } from './manager-governance.component';
 import { ManagerLinksComponent } from './manager-links.component';
 import { ManagerProfileComponent } from './manager-profile.component';
 import { ManagerReopenAction } from './manager-reopen';
@@ -27,7 +28,7 @@ const HANDOFF_TARGET_AVAILABLE_HINT = 'Saved handoffs appear in Notes › handof
 @Component({
   selector: 'of-manager-dashboard',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [StateChipComponent, PulseRingComponent, OverdueChipComponent, HandoffPreviewHostComponent, ErrorLineComponent, ManagerLinksComponent, ManagerProfileComponent],
+  imports: [StateChipComponent, PulseRingComponent, OverdueChipComponent, HandoffPreviewHostComponent, ErrorLineComponent, ManagerGovernanceComponent, ManagerLinksComponent, ManagerProfileComponent],
   template: `
     @if (!hasSnapshot()) {
       <p class="state-message" data-testid="manager-dashboard-loading">Loading…</p>
@@ -184,8 +185,8 @@ const HANDOFF_TARGET_AVAILABLE_HINT = 'Saved handoffs appear in Notes › handof
             }
           </section>
 
-          <p class="notice" data-testid="manager-dashboard-governance-notice">Journal and proposals are coming once notes/governance land.</p>
         }
+        <of-manager-governance [managerId]="session.id" [projectId]="session.projectId" />
       } @else {
         <div class="state-block" data-testid="manager-dashboard-not-manager">
           <span class="state-headline">This session is not a manager</span>
@@ -234,7 +235,6 @@ const HANDOFF_TARGET_AVAILABLE_HINT = 'Saved handoffs appear in Notes › handof
     .col-state { flex: 1 }
     .col-cost { width: 4rem; text-align: right }
     .empty { padding: 2rem; text-align: center; color: var(--mut) }
-    .notice { margin: 0 1.25rem 1.25rem; color: var(--mut); font-size: .8125rem }
     .state-message { padding: 2rem; text-align: center; color: var(--mut) }
     .state-block { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .375rem; padding: 4rem 1rem; text-align: center; color: var(--mut) }
     .state-headline { color: var(--fg); font-weight: 600 }

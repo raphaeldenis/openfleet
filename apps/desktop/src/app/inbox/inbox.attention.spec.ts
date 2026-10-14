@@ -110,7 +110,7 @@ describe('InboxComponent questions from agents', () => {
     expect(screen.queryByRole('button', { name: /mark all as read/i })).toBeNull();
   });
 
-  it('user sees no tabs and no Governance proposals notice', async () => {
+  it('user sees filter pills rather than ARIA tabs, and no Governance proposals notice', async () => {
     await renderInbox([agent('s1')], [stateOf({ sessionId: 's1', blockers: ['a'] })]);
 
     expect(screen.queryByRole('tab')).toBeNull();
@@ -773,7 +773,7 @@ describe('InboxComponent questions from agents', () => {
       const user = userEvent.setup({ delay: null });
       await renderInbox([agent('s1')], [stateOf({ sessionId: 's1', questionsForHuman: ['which port?'] })]);
       await showOnlyQuestions();
-      screen.getByTestId('inbox-filter-questions').focus();
+      screen.getByTestId('inbox-filter-governance').focus();
 
       await user.tab();
       expect(within(cards()[0]).getByTestId('inbox-attention-session')).toHaveFocus();

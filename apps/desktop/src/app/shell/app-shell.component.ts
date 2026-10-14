@@ -9,11 +9,9 @@ import { FleetEventsService } from '../core/fleet-events.service';
 import { VersionsService } from '../core/versions.service';
 import { BannerComponent } from '../design/banner.component';
 import { CopyDetailsButtonComponent } from '../design/copy-details-button.component';
+import { InboxNeedingYou } from '../inbox/inbox-needing-you';
 import { ManagerGroupComponent } from '../sessions/manager-group.component';
 import { SessionListComponent } from '../sessions/session-list.component';
-import { AnsweredRepliesStore } from '../working-state/answered-replies.store';
-import { attentionItemsOf, inboxCountLabelOf, itemsNeedingYouOf } from '../working-state/attention-items';
-import { contextNoticesOf } from '../working-state/context-notices';
 import { HELM_NAV_ITEMS } from './nav-items';
 import { RightPanelComponent } from './right-panel.component';
 import { SidebarFooterComponent } from './sidebar-footer.component';
@@ -135,19 +133,12 @@ const RUNNING_STATES = new Set(['generating', 'starting']);
 export class AppShellComponent {
   protected readonly events = inject(FleetEventsService);
   protected readonly versions = inject(VersionsService);
-  private readonly answeredReplies = inject(AnsweredRepliesStore);
   private readonly router = inject(Router);
   protected readonly navItems = HELM_NAV_ITEMS;
   protected readonly daemonAddress = environment.daemonAddress;
   protected readonly runningCount = computed(() => this.events.sessions().filter((s) => RUNNING_STATES.has(s.state)).length);
   protected readonly managerCount = computed(() => String(this.events.sessions().filter((s) => s.role === MANAGER_ROLE).length));
-  protected readonly inboxBadge = computed(() => {
-    const attentionItems = attentionItemsOf(this.events.sessions(), this.events.workingStates(), this.answeredReplies.answeredReplyBySessionId());
-    const attentionCount = itemsNeedingYouOf(attentionItems).length;
-    const contextNoticeCount = contextNoticesOf(this.events.sessions()).length;
-    const itemsNeedingYou = this.events.approvals().length + attentionCount + contextNoticeCount;
-    return itemsNeedingYou > 0 ? inboxCountLabelOf(itemsNeedingYou) : undefined;
-  });
+  protected readonly inboxBadge = inject(InboxNeedingYou).label;
   /** Issues inform rather than ask for a decision, so they get a dot and stay out of the count of items needing you. */
   protected readonly hasBackgroundFailures = computed(() => this.events.backgroundFailures().length > 0);
   protected readonly degraded = computed(() => {
