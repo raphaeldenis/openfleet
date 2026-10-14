@@ -28,7 +28,7 @@ test('a pending proposal shows in the Inbox, counts, and leaves with the count w
   await expect(card).toContainText('Incident for Never deploy on Friday');
   await expect(page.getByTestId('inbox-count')).toHaveText('1');
 
-  await card.getByRole('button', { name: 'Approve proposal from Governor' }).click();
+  await card.getByRole('button', { name: 'Approve law proposal from Governor: Never deploy on Friday' }).click();
 
   await expect(card).toHaveCount(0);
   await expect(page.getByTestId('inbox-count')).toHaveCount(0);
@@ -43,7 +43,7 @@ test('a denial needs a reason: the button stays inactive until one is typed, the
   const card = page.getByTestId('governance-card').filter({ hasText: 'Deploy any time' });
   await expect(card).toBeVisible();
 
-  await card.getByRole('button', { name: 'Deny proposal from Governor' }).click();
+  await card.getByRole('button', { name: 'Deny law proposal from Governor: Deploy any time' }).click();
 
   const confirm = card.getByRole('button', { name: 'Confirm denial' });
   await expect(confirm).toBeDisabled();
