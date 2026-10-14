@@ -12,6 +12,11 @@ import { GovernanceQueueService } from './governance/governanceQueueService.js';
 import { loadPermissionSettings } from './governance/permissionSettings.js';
 import { SilentBlockDetector } from './governance/silentBlockDetector.js';
 import { ClaudeCliHarness } from './harness/claudeCli/claudeCliHarness.js';
+import { ClaudePolicyHooks } from './harness/claudeCli/claudePolicyHooks.js';
+import { defaultCommandPolicySettings, type CommandPolicySettings, type PolicyEvaluate } from './policy/commandPolicySettings.js';
+import { evaluateCommandPolicy } from './policy/policyEvaluator.js';
+import { RefusalRepeatGuard } from './policy/refusalRepeatGuard.js';
+import { SqliteDenialJournal } from './policy/sqliteDenialJournal.js';
 import { sweepStaleSessions } from './harness/claudeCli/tokenFiles.js';
 import { FakeHarness, postSessionStartHook } from './harness/fakeHarness.js';
 import { newId } from './ids.js';
@@ -85,6 +90,8 @@ export interface DaemonOptions {
   /** The registry the process guards already mark; the daemon makes its own when none is handed over. */
   degraded?: DegradedRegistry;
   claudeConfigPath?: string;
+  /** The injection point of the command policy: the settings the daemon enforces and the evaluator that applies them. */
+  commandPolicy?: { settings?: CommandPolicySettings; evaluate?: PolicyEvaluate };
   power?: {
     api?: PowerApi;
     clock?: () => number;
@@ -154,6 +161,14 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   const silentBlocks = new SilentBlockDetector({ thresholdMinutes: silentBlockMinutes, schedule: scheduleOnRealClock, onChange: (blocks) => bus.emit({ type: 'permission.silent_blocks', blocks }) });
   bus.subscribe((event) => silentBlocks.handle(event));
   const handoffSettings = loadHandoffSettings(modelConfigPath);
+  const commandPolicySettings = options.commandPolicy?.settings ?? defaultCommandPolicySettings();
+  const commandPolicy = new ClaudePolicyHooks({
+    settings: () => commandPolicySettings,
+    evaluate: options.commandPolicy?.evaluate ?? evaluateCommandPolicy,
+    sessions, isManager: (sessionId) => managerRepository.get(sessionId) !== undefined, bus, degraded,
+    journal: new SqliteDenialJournal({ db, clock: () => new Date().toISOString() }),
+    repeatGuard: new RefusalRepeatGuard({ clock: Date.now, settings: () => commandPolicySettings.unattended.escalateAfterRepeats }),
+  });
   const handoff = createHandoffRouteDeps({ sessions, managers, workingStates, todos, docs, projects, git: createNodeGitPort(), settings: handoffSettings, clock: () => new Date().toISOString() });
   const stopHandoffOnClose = registerHandoffOnClose(bus, handoff.handoffs, { writeOnClose: handoffSettings.writeOnClose, onError: (error) => log('warn', `automatic handoff not written: ${describeError(error).error}`) });
 
@@ -161,7 +176,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   // fast process hitting a port nothing is serving yet.
   const diagnostics = () => buildDiagnosticsDocument({ db, degraded, listSessions: () => sessions.list(), port: config.port, e2eEnabled: config.e2eEnabled });
   const worktrees = new WorktreeService({ projects, sessions, worktreesRoot: config.worktreesRoot });
-  const server = await startServer({ ...config, e2eRoutes: config.e2eEnabled, degraded, diagnostics, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, stores, storeRepo, projects, projectService, worktrees, governanceQueue, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, mcp: createMcpHandler({ knowledgeSearch, governanceQueue, sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });
+  const server = await startServer({ ...config, e2eRoutes: config.e2eEnabled, degraded, commandPolicy, diagnostics, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, stores, storeRepo, projects, projectService, worktrees, governanceQueue, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, mcp: createMcpHandler({ knowledgeSearch, governanceQueue, sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });
   log('info', `openfleet core listening on ${server.url} (version: ${DAEMON_VERSION}, home: ${config.home})`);
 
   const unwatchDatabase = watchDatabaseHealth(degraded);

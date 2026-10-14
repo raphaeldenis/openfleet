@@ -4,6 +4,7 @@ import type { TodoTracker } from '../todos/todoTracker.js';
 import type { ContextNotice } from '../workingState/contextNotice.js';
 import type { SessionStartContext, SessionStartRequest } from '../workingState/sessionStartContext.js';
 import type { ApprovalService } from '../governance/approvalService.js';
+import type { ClaudePolicyHooks } from '../harness/claudeCli/claudePolicyHooks.js';
 import { log } from '../logger.js';
 import type { DegradedRegistry } from '../process/degradedRegistry.js';
 import type { SessionService } from '../sessions/sessionService.js';
@@ -36,7 +37,7 @@ function trackTodosFailingOpen(todos: TodoTracker | undefined, sessionId: string
   }
 }
 
-export function hooksHandler(deps: { sessions: SessionService; approvals: ApprovalService; stopRefusal?: StopRefusal; sessionStartContext?: SessionStartContext; handoverLedger?: HandoverLedger; contextNotice?: ContextNotice; todos?: TodoTracker; degraded?: DegradedRegistry }): Handler {
+export function hooksHandler(deps: { sessions: SessionService; approvals: ApprovalService; stopRefusal?: StopRefusal; sessionStartContext?: SessionStartContext; handoverLedger?: HandoverLedger; contextNotice?: ContextNotice; todos?: TodoTracker; degraded?: DegradedRegistry; commandPolicy?: ClaudePolicyHooks }): Handler {
   const decideStopRefusalFailingOpen = (sessionId: string, stopHookActive: boolean): StopHookOutput | undefined =>
     failingOpen(deps.degraded, 'stop refusal check failed, letting the turn end', () => deps.stopRefusal?.decide({ sessionId, stopHookActive }));
 
@@ -66,6 +67,11 @@ export function hooksHandler(deps: { sessions: SessionService; approvals: Approv
 
     const todoCall = parsed.data.hook_event_name === 'PostToolUse' ? narrowTodoHookCall(parsed.data) : undefined;
     const event = withoutTodoPayload(parsed.data);
+    if (event.hook_event_name === 'PermissionRequest') {
+      const refusal = deps.commandPolicy?.onPermissionRequest(session, event);
+      if (refusal) return json(res, 200, refusal);
+    }
+    const preToolUseAnswer = event.hook_event_name === 'PreToolUse' ? deps.commandPolicy?.onPreToolUse(session, event) : undefined;
     const stopRefusal = event.hook_event_name === 'Stop' ? decideStopRefusalFailingOpen(session.id, event.stop_hook_active === true) : undefined;
     const previousTranscriptPath = deps.sessions.transcriptPathOf(session.id);
     const sessionStartContext = event.hook_event_name === 'SessionStart' ? buildSessionStartContextFailingOpen({ sessionId: session.id, source: event.source, previousTranscriptPath }) : undefined;
@@ -77,6 +83,7 @@ export function hooksHandler(deps: { sessions: SessionService; approvals: Approv
     if (stopRefusal) return json(res, 200, stopRefusal);
     if (sessionStartContext) return json(res, 200, sessionStartContext);
     if (handoverReminderOutput) return json(res, 200, handoverReminderOutput);
+    if (preToolUseAnswer) return json(res, 200, preToolUseAnswer);
     if (event.hook_event_name !== 'PermissionRequest') return json(res, 200, {});
 
     const isWorkingStateTool = (WORKING_STATE_TOOL_NAMES as readonly string[]).includes(event.tool_name);

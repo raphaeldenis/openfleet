@@ -1,4 +1,5 @@
 import * as z from 'zod';
+import type { PolicyEnforcement } from './commandPolicy.js';
 import { ManagerSpecSchema } from './managers.js';
 import { ModelIdSchema } from './models.js';
 import { HandoffFileSchema } from './handoff.js';
@@ -66,6 +67,8 @@ export interface Session {
   role?: string;
   permissionMode?: PermissionMode;
   harness: HarnessId;
+  /** How the command policy reaches this session's harness. Absent from a daemon that predates the policy. */
+  policyEnforcement?: PolicyEnforcement;
   state: SessionState;
   stateSince: string;
   runtimeAttention?: RuntimeAttention;

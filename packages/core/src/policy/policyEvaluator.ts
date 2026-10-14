@@ -18,6 +18,12 @@ function profileNameFor(role: string | undefined, policy: CommandPolicyDocument)
   return mapping === undefined ? DEFAULT_PROFILE : mapping[1];
 }
 
+/** Names the profile a role is judged by: the mapped one, or `default` when the role maps to nothing that exists. */
+export function profileNameOf(role: string | undefined, policy: CommandPolicyDocument): string {
+  const mappedName = profileNameFor(role, policy);
+  return hasProfile(policy.profiles, mappedName) ? mappedName : DEFAULT_PROFILE;
+}
+
 function ruleIdsOfProfile(profiles: Record<string, PolicyProfile>, name: string, visited: Set<string>): string[] {
   if (visited.has(name) || !hasProfile(profiles, name)) return [];
   visited.add(name);

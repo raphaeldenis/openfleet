@@ -134,3 +134,29 @@ export type PolicyVerdict =
   | { decision: 'allow'; allowedBy?: string; observed?: ObservedRefusal; degraded?: 'limit_exceeded' }
   | { decision: 'deny'; ruleId: string; reason: string; alternative: string }
   | { decision: 'ask'; ruleId: string; reason: string };
+
+/** How a harness applies the command policy: through its hooks, through its own CLI, through shims, or not at all. */
+export const POLICY_ENFORCEMENTS = ['hook', 'native', 'shim', 'none'] as const;
+export type PolicyEnforcement = (typeof POLICY_ENFORCEMENTS)[number];
+
+export type DenialSource = 'policy' | 'cli_ask';
+/** `observed` is a refusal the policy only watched: the session was let through. */
+export type DenialOutcome = 'denied' | 'observed';
+
+/** One line of the journal of refused commands. */
+export interface DeniedCommand {
+  id: string;
+  sessionId: string;
+  managerId: string;
+  role?: string;
+  profile: string;
+  harness: HarnessId;
+  ruleId: string;
+  decisionSource: DenialSource;
+  outcome: DenialOutcome;
+  toolName: string;
+  commandExcerpt: string;
+  alternative?: string;
+  actor: PolicyActor;
+  createdAt: string;
+}

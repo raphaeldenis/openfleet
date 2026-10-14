@@ -1439,9 +1439,13 @@ export class SessionService {
   }
   get(id: string): Session | undefined {
     const session = this.repo.get(id);
-    return session ? this.runtime.project(session) : undefined;
+    return session ? this.projected(session) : undefined;
   }
-  list(): Session[] { return this.repo.list().map((session) => this.runtime.project(session)); }
+  list(): Session[] { return this.repo.list().map((session) => this.projected(session)); }
+  private projected(session: Session): Session {
+    const policyEnforcement = this.deps.harnesses.find((harness) => harness.id === session.harness)?.policyEnforcement ?? 'none';
+    return { ...this.runtime.project(session), policyEnforcement };
+  }
   hasLiveLaunch(id: string): boolean { return this.handles.has(id); }
   runtimeProgressOf(id: string): RuntimeProgress | undefined {
     return this.hasLiveLaunch(id) ? this.runtime.progress(id, this.trustedTranscriptFileOf(id)) : undefined;
