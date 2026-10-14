@@ -16,6 +16,8 @@ const MODE_OPTIONS: ReadonlyArray<ModeOption> = [
   { mode: 'off', label: 'Off', consequence: 'Switches the rules of the profiles off. Permission dialogs of unattended sessions are still refused: the switch below decides that.' },
 ];
 
+const MODE_OFF_WITH_DIALOGS_UNREFUSED = 'Switches the rules of the profiles off. Permission dialogs of unattended sessions go to the approval flow too: nothing stops a child session on a prompt nobody sees.';
+
 const ASK_BECOMES_DENY_CONSEQUENCES = {
   on: 'A child session that the CLI would ask about gets an immediate refusal with an alternative, so it never waits on a prompt nobody sees. A manager keeps its approval cards.',
   off: 'Permission dialogs of child sessions go back to the approval flow. A child may then sit on a prompt nobody sees until the safety net alerts its manager after 30 seconds. Turn this off to roll back, not as a setting to keep.',
@@ -53,14 +55,14 @@ const DEGRADED_ISSUE_CODE = 'hook_fail_open';
           <of-settings-row name="Refuse permission dialogs nobody can answer" detail="Child sessions only · independent of the mode">
             <button
               type="button" role="switch" class="value switch" data-testid="policy-ask-becomes-deny"
-              aria-label="Refuse permission dialogs nobody can answer"
+              aria-label="Refuse permission dialogs nobody can answer" [attr.data-warning]="view.unattended.askBecomesDeny ? null : '1'"
               [attr.aria-checked]="view.unattended.askBecomesDeny" aria-describedby="policy-ask-consequence"
               (click)="state.setAskBecomesDeny(!view.unattended.askBecomesDeny)"
             >{{ view.unattended.askBecomesDeny ? 'On' : 'Off' }}</button>
           </of-settings-row>
         </div>
-        <p class="hint" id="policy-mode-consequence" data-testid="policy-mode-consequence">{{ modeConsequenceOf(view.mode) }}</p>
-        <p class="hint" id="policy-ask-consequence" data-testid="policy-ask-consequence">{{ view.unattended.askBecomesDeny ? askConsequences.on : askConsequences.off }}</p>
+        <p class="hint" id="policy-mode-consequence" data-testid="policy-mode-consequence">{{ modeConsequenceOf({ mode: view.mode, askBecomesDeny: view.unattended.askBecomesDeny }) }}</p>
+        <p class="hint" id="policy-ask-consequence" data-testid="policy-ask-consequence" [attr.data-warning]="view.unattended.askBecomesDeny ? null : '1'">{{ view.unattended.askBecomesDeny ? askConsequences.on : askConsequences.off }}</p>
         <p class="hint status" role="status" data-testid="policy-save-status">{{ state.saveStatusMessage() }}</p>
         @if (failedSave(); as failure) {
           <p class="error" role="alert" data-testid="policy-save-error"><of-error-line>{{ failure }}</of-error-line></p>
@@ -75,7 +77,7 @@ const DEGRADED_ISSUE_CODE = 'hook_fail_open';
         </p>
 
         @if (view.issues.length > 0) {
-          <p class="error" role="status" data-testid="policy-file-issues"><of-error-line>Parts of command-policy.json are ignored: {{ view.issues.join(' · ') }}</of-error-line></p>
+          <p class="error" role="status" data-testid="policy-file-issues"><of-error-line>Parts of command-policy.json are ignored: {{ view.issues.join(' · ') }}. Saving here rewrites the file without them and keeps a copy.</of-error-line></p>
         }
 
         <h2 class="of-section-title">Rules</h2>
@@ -88,7 +90,7 @@ const DEGRADED_ISSUE_CODE = 'hook_fail_open';
             <tbody>
               @for (rule of view.rules; track rule.id) {
                 <tr [attr.data-testid]="'policy-rule-' + rule.id" [attr.data-enabled]="rule.enabled ? '1' : '0'">
-                  <th scope="row" class="rule-name"><span class="mono">{{ rule.id }}</span><span class="reason">{{ rule.reason }}</span></th>
+                  <th scope="row" class="rule-name"><div class="rule-name-lines"><span class="mono">{{ rule.id }}</span><span class="reason">{{ rule.reason }}</span></div></th>
                   <td class="mono">{{ rule.profiles.length > 0 ? rule.profiles.join(', ') : '—' }}</td>
                   <td><span class="of-badge decision" [attr.data-decision]="rule.decision">{{ rule.decision }}</span></td>
                   <td class="alternative">{{ rule.alternative ?? '—' }}</td>
@@ -101,7 +103,7 @@ const DEGRADED_ISSUE_CODE = 'hook_fail_open';
                       >{{ rule.enabled ? 'Disable' : 'Enable' }}</button>
                       <span class="state-text">{{ rule.enabled ? 'Enabled' : 'Disabled' }}</span>
                     } @else {
-                      <span class="state-text">Custom · edit command-policy.json</span>
+                      <span class="state-text">Custom · edit command-policy.json, then restart the daemon to apply</span>
                     }
                   </td>
                 </tr>
@@ -114,7 +116,7 @@ const DEGRADED_ISSUE_CODE = 'hook_fail_open';
         <form class="try" (submit)="tryCommand($event)" data-testid="policy-try">
           <div class="of-field">
             <label class="of-label" for="policy-try-command">Command to try</label>
-            <input #commandInput id="policy-try-command" class="of-input mono" autocomplete="off" spellcheck="false" aria-describedby="policy-try-hint" data-testid="policy-try-command" (input)="triedCommand.set(commandInput.value)" />
+            <input #commandInput id="policy-try-command" class="of-input mono" autocomplete="off" spellcheck="false" aria-describedby="policy-try-hint" data-testid="policy-try-command" (input)="tryCommandEdited(commandInput.value)" />
           </div>
           <div class="try-options">
             <div class="of-field">
@@ -129,7 +131,7 @@ const DEGRADED_ISSUE_CODE = 'hook_fail_open';
                 }
               </select>
             </div>
-            <button type="submit" class="of-btn of-btn--secondary try-button" data-testid="policy-try-button" [disabled]="!canTry()">Try it</button>
+            <button type="submit" class="of-btn of-btn--secondary try-button" data-testid="policy-try-button" [disabled]="!hasTriedCommand()" [attr.aria-disabled]="state.isTrying()">Try it</button>
           </div>
           <p class="hint" id="policy-try-hint">The command is judged, never run, and nothing is journaled.</p>
         </form>
@@ -146,7 +148,7 @@ const DEGRADED_ISSUE_CODE = 'hook_fail_open';
         </div>
 
         <div class="section-head">
-          <h2 class="of-section-title">Recent refusals</h2>
+          <h2 class="of-section-title" tabindex="-1" data-testid="policy-denials-title">Recent refusals</h2>
           <button type="button" class="of-btn of-btn--compact of-btn--secondary" data-testid="policy-denials-refresh" (click)="state.loadDenials()">Refresh</button>
         </div>
         @if (state.hasFailedToLoadDenials()) {
@@ -171,7 +173,7 @@ const DEGRADED_ISSUE_CODE = 'hook_fail_open';
             }
           </ul>
           @if (state.nextDenialsCursor()) {
-            <button type="button" class="of-btn of-btn--secondary more" data-testid="policy-denials-more" (click)="state.loadMoreDenials()">Load more</button>
+            <button type="button" class="of-btn of-btn--secondary more" data-testid="policy-denials-more" (click)="loadMoreDenials()">Load more</button>
           }
         }
       } @else {
@@ -191,8 +193,11 @@ const DEGRADED_ISSUE_CODE = 'hook_fail_open';
     .mode[data-selected='1'] { border-color: var(--accent); background: var(--accent-bg); }
     .mode:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: .125rem; }
     .mode input { margin: 0; accent-color: var(--accent); }
+    .mode input:focus-visible { outline: none; }
     .switch[aria-checked='true'] { border-color: var(--accent); background: var(--accent-bg); }
-    .status:empty { position: absolute; }
+    .switch[data-warning='1'] { border-color: var(--state-waiting-permission); color: var(--state-waiting-permission); }
+    #policy-ask-consequence[data-warning='1'] { padding-left: .5rem; border-left: 2px solid var(--state-waiting-permission); }
+    .status { min-height: 1lh; }
     .degradation { margin: 0; padding: .5rem .75rem; border: 1px solid var(--line); border-radius: .5rem; background: var(--panel); font-size: .75rem; color: var(--mut); }
     .degradation[data-degraded='1'] { border-color: var(--state-waiting-permission); color: var(--fg); }
     h2 { margin: .5rem 0 0; }
@@ -202,7 +207,8 @@ const DEGRADED_ISSUE_CODE = 'hook_fail_open';
     thead th { font-weight: 600; color: var(--mut); }
     tbody tr:last-child > * { border-bottom: 0; }
     tbody tr[data-enabled='0'] { color: var(--mut); }
-    .rule-name { display: flex; flex-direction: column; gap: .125rem; font-weight: 400; }
+    .rule-name { font-weight: 400; }
+    .rule-name-lines { display: flex; flex-direction: column; gap: .125rem; }
     .reason { color: var(--mut); overflow-wrap: anywhere; }
     .alternative { color: var(--mut); overflow-wrap: anywhere; min-width: 10rem; }
     .decision[data-decision='deny'] { background: color-mix(in oklch, var(--state-error) 14%, transparent); color: var(--fg); }
@@ -246,7 +252,8 @@ export class CommandPolicySettingsComponent {
   protected readonly triedCommand = signal('');
   protected readonly triedRole = signal('');
   protected readonly triedPresence = signal<TriedPresence>('unattended');
-  protected readonly canTry = computed(() => this.triedCommand().trim() !== '' && !this.state.isTrying());
+  protected readonly hasTriedCommand = computed(() => this.triedCommand().trim() !== '');
+  protected readonly canTry = computed(() => this.hasTriedCommand() && !this.state.isTrying());
   protected readonly degradedCount = computed(() => this.events.daemonIssues().find((issue) => issue.code === DEGRADED_ISSUE_CODE)?.count ?? 0);
   protected readonly failedSave = computed(() => {
     const save = this.state.saveState();
@@ -257,13 +264,25 @@ export class CommandPolicySettingsComponent {
     void this.state.load();
   }
 
-  protected modeConsequenceOf(mode: PolicyMode): string {
+  protected modeConsequenceOf({ mode, askBecomesDeny }: { mode: PolicyMode; askBecomesDeny: boolean }): string {
+    if (mode === 'off' && !askBecomesDeny) return MODE_OFF_WITH_DIALOGS_UNREFUSED;
     return MODE_OPTIONS.find((option) => option.mode === mode)?.consequence ?? '';
   }
 
   protected async chooseMode(mode: PolicyMode): Promise<void> {
     await this.state.setMode(mode);
     this.showSavedModeInRadios();
+  }
+
+  protected tryCommandEdited(command: string): void {
+    this.triedCommand.set(command);
+    this.state.clearTryResult();
+  }
+
+  protected async loadMoreDenials(): Promise<void> {
+    await this.state.loadMoreDenials();
+    const isLastPage = this.state.nextDenialsCursor() === undefined;
+    if (isLastPage) this.host.nativeElement.querySelector<HTMLElement>('[data-testid="policy-denials-title"]')?.focus();
   }
 
   protected tryCommand(event: Event): void {
@@ -276,10 +295,13 @@ export class CommandPolicySettingsComponent {
     return sessionId.slice(0, SHORT_SESSION_ID_LENGTH);
   }
 
-  /** A refused save leaves the previous mode in force: the radios go back to it. */
+  /** A refused save leaves the previous mode in force: the radios, and the focus a keyboard user had on one of them, go back to it. */
   private showSavedModeInRadios(): void {
+    if (this.state.isSaving()) return;
     const savedMode = this.state.view()?.mode;
-    const radios = this.host.nativeElement.querySelectorAll<HTMLInputElement>('input[name="command-policy-mode"]');
+    const radios = [...this.host.nativeElement.querySelectorAll<HTMLInputElement>('input[name="command-policy-mode"]')];
     radios.forEach((radio) => (radio.checked = radio.value === savedMode));
+    const focusedRadio = radios.find((radio) => radio === document.activeElement);
+    if (focusedRadio && focusedRadio.value !== savedMode) radios.find((radio) => radio.checked)?.focus();
   }
 }

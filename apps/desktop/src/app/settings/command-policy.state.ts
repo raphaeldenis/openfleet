@@ -21,7 +21,7 @@ export interface TryOutcome {
 type SaveState =
   | { kind: 'idle' }
   | { kind: 'saving' }
-  | { kind: 'saved'; what: string }
+  | { kind: 'saved'; what: string; previousFileKeptAs?: string }
   | { kind: 'failed'; cause: string };
 
 const POLICY_FILE_NAME = 'command-policy.json';
@@ -75,13 +75,15 @@ export class CommandPolicyState {
   readonly tryOutcome = signal<TryOutcome | null>(null);
   readonly tryFailure = signal<string | null>(null);
   readonly isTrying = signal(false);
+  private latestRequestedMode: PolicyMode | undefined;
 
   readonly isSaving = computed(() => this.saveState().kind === 'saving');
   readonly saveStatusMessage = computed(() => {
     const state = this.saveState();
     if (state.kind === 'saving') return 'Saving…';
-    if (state.kind === 'saved') return `✓ Saved: ${state.what}. Applies to the next command of every session.`;
-    return '';
+    if (state.kind !== 'saved') return '';
+    const keptCopy = state.previousFileKeptAs === undefined ? '' : ` The previous file is kept as ${state.previousFileKeptAs}.`;
+    return `✓ Saved: ${state.what}. Applies to the next command of every session.${keptCopy}`;
   });
 
   async load(): Promise<void> {
@@ -114,8 +116,25 @@ export class CommandPolicyState {
     }
   }
 
-  setMode(mode: PolicyMode): Promise<void> {
-    return this.save((saved) => ({ ...saved, mode }), `mode ${mode}`);
+  /** While a save is in flight a new request is remembered and only the last one is saved afterwards; the call that started the chain resolves when it ends. */
+  async setMode(mode: PolicyMode): Promise<void> {
+    if (this.isSaving()) {
+      this.latestRequestedMode = mode;
+      return;
+    }
+    let modeToSave: PolicyMode | undefined = mode;
+    while (modeToSave !== undefined) {
+      this.latestRequestedMode = undefined;
+      const requestedMode = modeToSave;
+      await this.save((saved) => ({ ...saved, mode: requestedMode }), `mode ${requestedMode}`);
+      const isAlreadyInForce = this.latestRequestedMode === this.view()?.mode;
+      modeToSave = isAlreadyInForce ? undefined : this.latestRequestedMode;
+    }
+  }
+
+  clearTryResult(): void {
+    this.tryOutcome.set(null);
+    this.tryFailure.set(null);
   }
 
   setAskBecomesDeny(askBecomesDeny: boolean): Promise<void> {
@@ -150,8 +169,9 @@ export class CommandPolicyState {
     const saved = this.view()?.override ?? { version: 1 as const };
     this.saveState.set({ kind: 'saving' });
     try {
-      this.view.set(await this.api.save(change(saved)));
-      this.saveState.set({ kind: 'saved', what });
+      const savedView = await this.api.save(change(saved));
+      this.view.set(savedView);
+      this.saveState.set({ kind: 'saved', what, ...(savedView.previousFileKeptAs === undefined ? {} : { previousFileKeptAs: savedView.previousFileKeptAs }) });
     } catch (failure) {
       this.saveState.set({ kind: 'failed', cause: describeSaveFailure(failure) });
     }

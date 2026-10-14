@@ -161,7 +161,30 @@ describe('Settings → Command policy', () => {
     const row = await screen.findByTestId('policy-rule-my-rule');
 
     expect(within(row).queryByRole('button')).toBeNull();
-    expect(within(row).getByText('Custom · edit command-policy.json')).toBeInTheDocument();
+    expect(within(row).getByText('Custom · edit command-policy.json, then restart the daemon to apply')).toBeInTheDocument();
+  });
+
+  it('keeps the name cell of a rule a plain table cell, not a flex box', async () => {
+    await renderCommandPolicy();
+
+    const nameCell = within(await screen.findByTestId('policy-rule-no-forced-recursive-rm')).getByRole('rowheader');
+
+    expect(getComputedStyle(nameCell).display).not.toBe('flex');
+    expect(nameCell).toHaveTextContent('rm -rf asks for a confirmation nobody sees.');
+  });
+
+  it('says where the previous hand-edited file went after a save that dropped parts of it', async () => {
+    await renderCommandPolicy({ save: (override) => Promise.resolve({ ...policyView({ override: override as CommandPolicyView['override'] }), previousFileKeptAs: 'command-policy.json.bak-2026-10-14T10-00-00-000Z' }) });
+
+    await userEvent.click(await modeRadio('Enforce'));
+
+    expect(await screen.findByTestId('policy-save-status')).toHaveTextContent('The previous file is kept as command-policy.json.bak-2026-10-14T10-00-00-000Z.');
+  });
+
+  it('tells that saving rewrites the file without the ignored parts and keeps a copy', async () => {
+    await renderCommandPolicy({ view: policyView({ issues: ['rule no-yarn: too long'] }) });
+
+    expect(await screen.findByTestId('policy-file-issues')).toHaveTextContent('Saving here rewrites the file without them and keeps a copy.');
   });
 
   it('keeps the previous mode on screen and says nothing changed when the file is read-only', async () => {
@@ -204,6 +227,59 @@ describe('Settings → Command policy', () => {
     expect(row).toHaveTextContent(hostile);
     expect(screen.getByTestId('policy-denials').querySelector('img')).toBeNull();
     expect(document.title).not.toBe('pwned');
+  });
+});
+
+describe('Settings → Command policy → quick keyboard changes of the mode', () => {
+  const viewSavedAs = (override: unknown): CommandPolicyView => policyView({ mode: (override as { mode: CommandPolicyView['mode'] }).mode, override: override as CommandPolicyView['override'] });
+
+  it('sends only the last of several quick arrow presses once the save in flight is done, and ends on the focused mode', async () => {
+    let finishFirstSave!: () => void;
+    const firstSaveIsFinishable = new Promise<void>((resolve) => { finishFirstSave = resolve; });
+    const { saves } = await renderCommandPolicy({ view: policyView({ mode: 'observe' }), save: async (override) => { await firstSaveIsFinishable; return viewSavedAs(override); } });
+    (await modeRadio('Observe')).focus();
+
+    await userEvent.keyboard('{ArrowRight}{ArrowRight}{ArrowRight}');
+    finishFirstSave();
+
+    await waitFor(() => expect(saves).toHaveLength(2));
+    expect(saves.map((saved) => (saved as { mode: string }).mode)).toEqual(['off', 'observe']);
+    await waitFor(() => expect(screen.getByRole('radio', { name: 'Observe' })).toBeChecked());
+    expect(screen.getByRole('radio', { name: 'Observe' })).toHaveFocus();
+  });
+
+  it('puts the focus back on the checked radio when the save of the focused one is refused', async () => {
+    await renderCommandPolicy({ save: () => Promise.reject(new DaemonRefusal(409, 'config_read_only')) });
+    (await modeRadio('Observe')).focus();
+
+    await userEvent.keyboard('{ArrowRight}');
+
+    expect(await screen.findByTestId('policy-save-error')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('radio', { name: 'Observe' })).toHaveFocus());
+    expect(screen.getByRole('radio', { name: 'Observe' })).toBeChecked();
+  });
+});
+
+describe('Settings → Command policy → the ask switch turned off', () => {
+  it('marks the switch and its consequence as a warning only while the dialogs go to the approval flow', async () => {
+    await renderCommandPolicy();
+    const toggle = await askSwitch();
+    expect(toggle).not.toHaveAttribute('data-warning');
+    expect(screen.getByTestId('policy-ask-consequence')).not.toHaveAttribute('data-warning');
+
+    await userEvent.click(toggle);
+
+    await waitFor(() => expect(screen.getByTestId('policy-ask-consequence')).toHaveAttribute('data-warning', '1'));
+    expect(screen.getByRole('switch', { name: 'Refuse permission dialogs nobody can answer' })).toHaveAttribute('data-warning', '1');
+  });
+
+  it('stops saying the dialogs are still refused under mode Off once the switch is off', async () => {
+    await renderCommandPolicy({ view: policyView({ mode: 'off', unattended: { askBecomesDeny: false } }) });
+
+    const consequence = await screen.findByTestId('policy-mode-consequence');
+
+    expect(consequence).not.toHaveTextContent('still refused');
+    expect(consequence).toHaveTextContent('go to the approval flow');
   });
 });
 
@@ -269,6 +345,35 @@ describe('Settings → Command policy → try a command', () => {
     expect(await screen.findByText('Allowed: no-forced-recursive-rm would refuse it, but the policy only observes')).toBeInTheDocument();
   });
 
+  it('clears the verdict as soon as the command is edited, so it never sits under another command', async () => {
+    const refusal: CommandPolicyEvaluateResult = { verdict: { decision: 'deny', ruleId: 'no-forced-recursive-rm', reason: 'rm -rf asks.', alternative: 'Use rm -r.' }, mode: 'enforce', profile: 'dev' };
+    await renderCommandPolicy({ evaluate: () => Promise.resolve(refusal) });
+    await userEvent.type(await screen.findByLabelText('Command to try'), 'rm -rf build{Enter}');
+    expect(await screen.findByText('Refused by no-forced-recursive-rm')).toBeInTheDocument();
+
+    await userEvent.type(screen.getByLabelText('Command to try'), 'x');
+
+    await waitFor(() => expect(screen.queryByText('Refused by no-forced-recursive-rm')).toBeNull());
+  });
+
+  it('keeps the focus on the Try button while the daemon judges, and sends one request only', async () => {
+    let judge!: () => void;
+    const judgement = new Promise<void>((resolve) => { judge = resolve; });
+    const { evaluations } = await renderCommandPolicy({ evaluate: async () => { await judgement; return { verdict: { decision: 'allow' }, mode: 'observe', profile: 'default' }; } });
+    await userEvent.type(await screen.findByLabelText('Command to try'), 'ls');
+    const tryButton = screen.getByRole('button', { name: 'Try it' });
+
+    await userEvent.click(tryButton);
+    await userEvent.click(tryButton);
+
+    expect(tryButton).toHaveFocus();
+    expect(tryButton).toHaveAttribute('aria-disabled', 'true');
+    expect(tryButton).not.toBeDisabled();
+    judge();
+    await waitFor(() => expect(evaluations).toHaveLength(1));
+    await waitFor(() => expect(tryButton).toHaveAttribute('aria-disabled', 'false'));
+  });
+
   it('says the daemon could not judge when the call fails', async () => {
     await renderCommandPolicy({ evaluate: () => Promise.reject(new DaemonRefusal(500, 'internal_error')) });
 
@@ -305,5 +410,13 @@ describe('Settings → Command policy → recent refusals', () => {
 
     expect(await screen.findByText('older command')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
+  });
+
+  it('moves the focus to the title of the list when the last Load more disappears', async () => {
+    await renderCommandPolicy({ denials: [denial()], nextCursor: 'next', moreDenials: [denial({ id: 'd9', commandExcerpt: 'older command' })] });
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Load more' }));
+
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Recent refusals' })).toHaveFocus());
   });
 });

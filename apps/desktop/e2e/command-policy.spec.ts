@@ -79,6 +79,31 @@ test('the mode radios answer to the arrow keys', async ({ page }) => {
   await expect(page.getByTestId(POLICY_STATUS)).toContainText('Saved: mode enforce');
 });
 
+test('quick arrow presses end on the focused mode, on the screen and in the daemon', async ({ page, request }) => {
+  await openCommandPolicy(page);
+
+  await modeRadio(page, 'Observe').focus();
+  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('ArrowLeft');
+
+  await expect(modeRadio(page, 'Off')).toBeChecked();
+  await expect(modeRadio(page, 'Off')).toBeFocused();
+  await expect(async () => {
+    expect(((await (await request.get(`${api}/api/command-policy`, { headers: adminHeaders })).json()) as { mode: string }).mode).toBe('off');
+  }).toPass({ timeout: 10_000 });
+});
+
+test('a save does not move the rest of the screen', async ({ page }) => {
+  await openCommandPolicy(page);
+  const healthBanner = page.getByTestId('policy-degraded');
+  const topBefore = (await healthBanner.boundingBox())?.y;
+
+  await modeRadio(page, 'Enforce').check();
+  await expect(page.getByTestId(POLICY_STATUS)).toContainText('Saved: mode enforce');
+
+  expect((await healthBanner.boundingBox())?.y).toBe(topBefore);
+});
+
 test('the ask switch states what turning it off means and gives the dialogs back', async ({ page }) => {
   await openCommandPolicy(page);
 
