@@ -29,7 +29,9 @@ export type DescribeError = (error: unknown, scope: { sessionId?: string; where?
 
 export interface SessionServiceDeps { db: DatabaseSync; bus: EventBus; harnesses: Harness[]; baseUrl: string; worktreesRoot: string; resumeTimeoutMs?: number; firstStartTimeoutMs?: number; submitKeystrokeDelayMs?: number; clearInFlightTimeoutMs?: number; clearFlushGraceMs?: number; sessionEndExitGraceMs?: number; now?: () => number; describeError?: DescribeError; env?: NodeJS.ProcessEnv;
   /** The mission of a manager session (none for another session): handed over as the first prompt of a conversation the manager starts from nothing. */
-  missionOf?: (sessionId: string) => string | undefined }
+  missionOf?: (sessionId: string) => string | undefined;
+  /** False when the command policy neither judges commands nor converts permission dialogs: the sessions then report no enforcement at all. */
+  isCommandPolicyActive?: () => boolean }
 
 // `failure`: the typed error that made a launch fail; announced in place of the generic launch_failed when it is not internal.
 interface SessionClosure { exitCode?: number; reason?: SessionCloseReason; failure?: unknown }
@@ -1443,8 +1445,9 @@ export class SessionService {
   }
   list(): Session[] { return this.repo.list().map((session) => this.projected(session)); }
   private projected(session: Session): Session {
-    const policyEnforcement = this.deps.harnesses.find((harness) => harness.id === session.harness)?.policyEnforcement ?? 'none';
-    return { ...this.runtime.project(session), policyEnforcement };
+    const harnessEnforcement = this.deps.harnesses.find((harness) => harness.id === session.harness)?.policyEnforcement ?? 'none';
+    const isPolicyActive = this.deps.isCommandPolicyActive?.() ?? true;
+    return { ...this.runtime.project(session), policyEnforcement: isPolicyActive ? harnessEnforcement : 'none' };
   }
   hasLiveLaunch(id: string): boolean { return this.handles.has(id); }
   runtimeProgressOf(id: string): RuntimeProgress | undefined {

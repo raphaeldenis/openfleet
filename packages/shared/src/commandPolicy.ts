@@ -1,5 +1,5 @@
 import * as z from 'zod';
-import type { HarnessId } from './session.js';
+import { HARNESSES, type HarnessId } from './session.js';
 
 export const MAX_RULE_TEXT_CHARS = 280;
 const MAX_RULE_ID_CHARS = 80;
@@ -95,10 +95,14 @@ export const CommandPolicyDocumentSchema = z.strictObject({
 });
 export type CommandPolicyDocument = z.infer<typeof CommandPolicyDocumentSchema>;
 
+/** `askBecomesDeny` is the fine switch of the incident: false gives back the permission dialog nobody sees to a child. */
+export const UnattendedOverrideSchema = z.strictObject({ askBecomesDeny: z.boolean().optional() });
+
 /** The user's file: every key is optional because it only states what differs from the delivered document. */
 export const CommandPolicyOverrideSchema = z.strictObject({
   version: z.literal(POLICY_DOCUMENT_VERSION),
   mode: z.enum(POLICY_MODES).optional(),
+  unattended: UnattendedOverrideSchema.optional(),
   disabledRules: z.array(NonEmptyText).optional(),
   rules: z.array(PolicyRuleSchema).optional(),
   profiles: z.record(z.string(), PolicyProfileSchema).optional(),
@@ -138,6 +142,58 @@ export type PolicyVerdict =
 export type DenialSource = 'policy' | 'cli_ask';
 /** `observed` is a refusal the policy only watched: the session was let through. */
 export type DenialOutcome = 'denied' | 'observed';
+
+/** One rule as the settings screen lists it: the delivered rules stay listed when the override disables them. */
+export interface CommandPolicyRuleView {
+  id: string;
+  origin: 'delivered' | 'custom';
+  decision: (typeof RULE_DECISIONS)[number];
+  enabled: boolean;
+  /** The profiles that list the rule, inherited ones included. */
+  profiles: string[];
+  presence: (typeof RULE_PRESENCES)[number];
+  reason: string;
+  alternative?: string;
+}
+
+/** What `GET` and `PUT /api/command-policy` answer: the state the daemon enforces right now and the override that produced it. */
+export interface CommandPolicyView {
+  mode: PolicyMode;
+  unattended: { askBecomesDeny: boolean };
+  rules: CommandPolicyRuleView[];
+  /** The saved override, or null when no file exists. */
+  override: CommandPolicyOverride | null;
+  /** Why parts of the saved file are ignored; empty when the file applies whole. */
+  issues: string[];
+}
+
+const MAX_TRIED_COMMAND_CHARS = 64 * 1024;
+
+/** The body of `POST /api/command-policy/evaluate`: what a session would send, with the defaults of a child nobody watches. */
+export const CommandPolicyEvaluateRequestSchema = z.strictObject({
+  command: z.string().min(1).max(MAX_TRIED_COMMAND_CHARS),
+  role: z.string().min(1).optional(),
+  presence: z.enum(['attended', 'unattended']).default('unattended'),
+  harness: z.enum(HARNESSES).default('claude-cli'),
+  cwd: z.string().min(1).default('/'),
+  toolName: z.string().min(1).default('Bash'),
+  actor: z.enum(['session', 'subagent']).default('session'),
+  model: z.string().min(1).optional(),
+});
+export type CommandPolicyEvaluateRequest = z.input<typeof CommandPolicyEvaluateRequestSchema>;
+
+/** The verdict the policy gives, with the mode it was given in and the profile that judged: nothing is run, nothing is journaled. */
+export interface CommandPolicyEvaluateResult {
+  verdict: PolicyVerdict;
+  mode: PolicyMode;
+  profile: string;
+}
+
+/** One page of the journal, newest first; `nextCursor` is absent on the last page. */
+export interface DeniedCommandPage {
+  items: DeniedCommand[];
+  nextCursor?: string;
+}
 
 /** One line of the journal of refused commands. */
 export interface DeniedCommand {

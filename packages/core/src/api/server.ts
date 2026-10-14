@@ -36,7 +36,10 @@ import { registerNoteRoutes } from './noteRoutes.js';
 import { registerProjectRoutes } from './projectRoutes.js';
 import { registerWorktreeRoutes } from './worktreeRoutes.js';
 import { registerGovernanceE2eRoutes } from './governanceE2eRoutes.js';
+import { registerCommandPolicyRoutes } from './commandPolicyRoutes.js';
 import { registerGovernanceRoutes } from './governanceRoutes.js';
+import type { CommandPolicyService } from '../policy/commandPolicyService.js';
+import type { DenialReader } from '../policy/ports.js';
 import type { GovernanceQueueService } from '../governance/governanceQueueService.js';
 import type { WorktreeService } from '../worktrees/worktreeService.js';
 import { registerHandoffPickerRoutes } from './handoffPickerRoutes.js';
@@ -83,6 +86,8 @@ export interface ServerDeps {
   degraded?: DegradedRegistry;
   // Without it PreToolUse is answered {} and a PermissionRequest always opens an approval, as before the command policy.
   commandPolicy?: CommandPolicyHooks;
+  // Without them the /api/command-policy routes do not exist.
+  commandPolicyAdmin?: { policy: CommandPolicyService; denials: DenialReader };
   // Without it GET /api/diagnostics does not exist.
   diagnostics?: () => DiagnosticsDocument;
   // Without it the todos route, event and snapshot field do not exist and the hooks leave the todo tools alone.
@@ -154,6 +159,7 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; rout
   if (deps.projects) registerProjectRoutes(router, { projects: deps.projects, projectService: deps.projectService });
   if (deps.worktrees) registerWorktreeRoutes(router, { worktrees: deps.worktrees });
   if (deps.governanceQueue) registerGovernanceRoutes(router, { governanceQueue: deps.governanceQueue });
+  if (deps.commandPolicyAdmin) registerCommandPolicyRoutes(router, deps.commandPolicyAdmin);
   if (deps.governanceQueue && deps.e2eRoutes) registerGovernanceE2eRoutes(router, { governanceQueue: deps.governanceQueue });
   if (deps.projects && deps.noteRepo) registerHandoffPickerRoutes(router, new HandoffSeed({ projects: deps.projects, notes: deps.noteRepo, files: nodeHandoffFileReader }));
   if (deps.stores && deps.storeRepo) registerDataStoreRoutes(router, { stores: deps.stores, storeRepo: deps.storeRepo });

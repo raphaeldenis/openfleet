@@ -15,3 +15,4 @@ degraded_clear_failed degraded registry: clear failed
 log_record_unserializable [unserializable log record]
 knowledge_search_fallback knowledge.search_fallback
 stored_model_unknown stored model is not in the known model list; check availability and update the model settings before launching
+command_policy_saved command policy saved
