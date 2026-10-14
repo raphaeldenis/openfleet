@@ -14,8 +14,8 @@ function fakeApi(saved: Project = WITH_HOOK) {
 }
 
 async function renderSetting(project: Project, api = fakeApi()) {
-  const savedProject = vi.fn();
   const current = signal(project);
+  const savedProject = vi.fn((saved: Project) => current.set(saved));
   await render(ProjectHookSettingComponent, {
     bindings: [inputBinding('project', current), outputBinding('saved', savedProject)],
     providers: [{ provide: FleetApiService, useValue: api }],
@@ -103,6 +103,16 @@ describe('the post-create hook setting of a project', () => {
       await openEditor('Set a hook…');
 
       await waitFor(() => expect(scriptField()).toHaveFocus());
+    });
+
+    it('returns the focus to Change… once the hook is saved', async () => {
+      await renderSetting(WITHOUT_HOOK);
+      await openEditor('Set a hook…');
+      await userEvent.type(scriptField(), '/hooks/setup.sh');
+
+      await userEvent.click(saveButton());
+
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Change…' })).toHaveFocus());
     });
 
     it('sends a single request when the user saves twice in a row', async () => {
@@ -208,6 +218,15 @@ describe('the post-create hook setting of a project', () => {
 
       expect(api.updateProject).toHaveBeenCalledExactlyOnceWith('p-fleet', { postCreateHookScript: null });
       await waitFor(() => expect(savedProject).toHaveBeenCalledExactlyOnceWith(WITHOUT_HOOK));
+    });
+
+    it('returns the focus to Set a hook… once the hook is removed', async () => {
+      await renderSetting(WITH_HOOK, fakeApi(WITHOUT_HOOK));
+      await openEditor('Change…');
+
+      await userEvent.click(screen.getByRole('button', { name: 'Remove hook' }));
+
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Set a hook…' })).toHaveFocus());
     });
 
     it('does not offer Remove hook when no hook is set', async () => {

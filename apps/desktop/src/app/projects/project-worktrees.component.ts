@@ -16,6 +16,8 @@ interface Repository {
 
 const SHORT_HEAD_LENGTH = 7;
 
+const folderNameOf = (path: string): string => path.split('/').filter(Boolean).at(-1) ?? path;
+
 const pluralFilesIgnored = (count: number): string => `${count} ignored ${count === 1 ? 'file' : 'files'} deleted`;
 
 /** The worktrees of one project's repositories: why each one stays or goes, and a confirmed removal that never forces. */
@@ -46,12 +48,12 @@ const pluralFilesIgnored = (count: number): string => `${count} ignored ${count 
         @case ('failed') {
           <div class="note">
             <of-error-line role="alert">{{ failedText() }}</of-error-line>
-            <button type="button" class="of-btn of-btn--secondary of-btn--compact" (click)="reload()">Retry</button>
+            <button type="button" class="of-btn of-btn--secondary of-btn--compact" data-retry (click)="reload()">Retry</button>
           </div>
         }
         @default {
           @if (repositories().length === 0) {
-            <p class="note">No worktrees yet. The worktrees of the repositories this project's sessions work in appear here.</p>
+            <p class="note" data-empty tabindex="-1">No worktrees yet. The worktrees of the repositories this project's sessions work in appear here.</p>
           }
           @for (repository of repositories(); track repository.repoPath) {
             <h3 class="repo" [attr.title]="repository.repoPath">{{ visible(repository.repoPath) }}</h3>
@@ -101,7 +103,7 @@ const pluralFilesIgnored = (count: number): string => `${count} ignored ${count 
     .card-title { margin: 0; font-size: .8125rem; font-weight: 600; }
     .count { font-size: .6875rem; color: var(--mut); }
     .note { margin: 0; padding: .75rem .875rem; display: flex; align-items: center; gap: .5rem; font-size: .75rem; color: var(--mut); border-top: 1px solid var(--line); }
-    .banner { margin: 0; padding: .5rem .875rem; font-size: .75rem; border-top: 1px solid var(--line); background: var(--sunk); }
+    .banner { margin: 0; min-width: 0; padding: .5rem .875rem; font-size: .75rem; border-top: 1px solid var(--line); background: var(--sunk); overflow-wrap: anywhere; }
     .banner:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
     .repo { margin: 0; padding: .5rem .875rem; border-top: 1px solid var(--line); background: var(--sunk); font-family: var(--mono); font-size: .75rem; font-weight: 500; overflow-wrap: anywhere; }
     .rows { list-style: none; margin: 0; padding: 0; }
@@ -114,7 +116,7 @@ const pluralFilesIgnored = (count: number): string => `${count} ignored ${count 
     .state, .usage { font-size: .6875rem; color: var(--mut); white-space: nowrap; }
     .refusal { margin: 0; padding: 0 .875rem .4375rem 2.75rem; font-size: .6875rem; color: var(--mut); }
     .confirm { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; padding: .5rem .875rem .5rem 1.5rem; background: color-mix(in oklch, var(--state-error) 8%, var(--panel)); font-size: .75rem; }
-    .confirm-text { flex: 1 1 14rem; min-width: 0; }
+    .confirm-text { flex: 1 1 14rem; min-width: 0; overflow-wrap: anywhere; }
   `,
 })
 export class ProjectWorktreesComponent {
@@ -159,7 +161,7 @@ export class ProjectWorktreesComponent {
   }
 
   protected reload(): void {
-    void this.loadWorktrees({ projectId: this.projectId(), isQuiet: false });
+    void this.loadWorktrees({ projectId: this.projectId(), isQuiet: false, restoresFocus: true });
   }
 
   protected visible(text: string): string {
@@ -167,7 +169,10 @@ export class ProjectWorktreesComponent {
   }
 
   protected nameOf(entry: WorktreeEntry): string {
-    return showInvisibleControlsAsEscapes(entry.branch ?? entry.path);
+    const label = this.branchLabelOf(entry);
+    const isDetached = entry.branch === null;
+    const sharesLabelWithAnotherWorktree = (this.readyItems() ?? []).some((other) => other !== entry && other.branch === null && this.branchLabelOf(other) === label);
+    return isDetached && sharesLabelWithAnotherWorktree ? `${label} (${showInvisibleControlsAsEscapes(folderNameOf(entry.path))})` : label;
   }
 
   protected branchLabelOf(entry: WorktreeEntry): string {
@@ -221,14 +226,16 @@ export class ProjectWorktreesComponent {
     try {
       const removed = await this.api.removeWorktree(projectId, entry.path);
       if (this.projectId() !== projectId) return;
+      const resultText = this.resultTextOf(entry, removed.ignoredFileCount);
       this.dropFromList(entry.path);
       this.confirming.set(undefined);
-      this.removalResult.set(this.resultTextOf(entry, removed.ignoredFileCount));
+      this.removalResult.set(resultText);
       afterNextRender(() => this.resultLine()?.nativeElement.focus(), { injector: this.injector });
     } catch (error) {
       if (this.projectId() !== projectId) return;
       this.confirming.set(undefined);
       this.removalFailure.set(copyFor(error, { action: 'remove_worktree' }).text);
+      afterNextRender(() => this.removeButtonOf(entry.path)?.focus(), { injector: this.injector });
       const daemonAnswered = error instanceof ApiError;
       if (daemonAnswered) void this.loadWorktrees({ projectId, isQuiet: true });
     } finally {
@@ -258,7 +265,7 @@ export class ProjectWorktreesComponent {
   }
 
   /** Only the answer of the latest request for the project on screen is kept; a quiet reload keeps the list while it runs. */
-  private async loadWorktrees({ projectId, isQuiet }: { projectId: string; isQuiet: boolean }): Promise<void> {
+  private async loadWorktrees({ projectId, isQuiet, restoresFocus = false }: { projectId: string; isQuiet: boolean; restoresFocus?: boolean }): Promise<void> {
     const sequence = ++this.loadSequence;
     if (!isQuiet) this.load.set({ status: 'loading' });
     try {
@@ -268,5 +275,11 @@ export class ProjectWorktreesComponent {
       const isStillWanted = sequence === this.loadSequence && !isQuiet;
       if (isStillWanted) this.load.set({ status: 'failed', text: copyFor(error, { action: 'load_worktrees' }).text });
     }
+    const isLatestAnswer = sequence === this.loadSequence;
+    if (restoresFocus && isLatestAnswer) afterNextRender(() => this.firstLandingPoint()?.focus(), { injector: this.injector });
+  }
+
+  private firstLandingPoint(): HTMLElement | undefined {
+    return this.host.nativeElement.querySelector<HTMLElement>('[data-remove], [data-retry], [data-empty]') ?? undefined;
   }
 }

@@ -70,6 +70,24 @@ describe('the worktrees of a project', () => {
       expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     });
 
+    it('puts the focus on the first worktree action once Retry brings the list', async () => {
+      const api = fakeApi();
+      api.listWorktrees.mockRejectedValueOnce(new ApiError(500, 'GET /x'));
+      await renderWorktrees({ api });
+      await userEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+
+      await waitFor(() => expect(removeButtonOf('main')).toHaveFocus());
+    });
+
+    it('keeps the focus on Retry when Retry fails again', async () => {
+      const api = fakeApi();
+      api.listWorktrees.mockRejectedValue(new ApiError(500, 'GET /x'));
+      await renderWorktrees({ api });
+      await userEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Retry' })).toHaveFocus());
+    });
+
     it('user sees an empty state when the project has no worktree', async () => {
       await renderWorktrees({ api: fakeApi({ [FLEET_ID]: [] }) });
 
@@ -109,6 +127,23 @@ describe('the worktrees of a project', () => {
       await renderWorktrees({ api });
 
       expect(await screen.findByText('detached · abc1234')).toBeInTheDocument();
+    });
+
+    it('names the Remove button of a detached worktree by its short head, not by its path', async () => {
+      const api = fakeApi({ [FLEET_ID]: [refused('detached', { branch: null, isDetached: true, head: 'abc1234def5678', path: '/w/detached' })] });
+      await renderWorktrees({ api });
+
+      const button = await screen.findByRole('button', { name: 'Remove worktree detached · abc1234' });
+      expect(button).not.toHaveAccessibleName(/\/w\/detached/);
+    });
+
+    it('keeps the Remove buttons of two detached worktrees at the same commit distinct', async () => {
+      const sameCommit = { branch: null, isDetached: true, head: 'abc1234def5678' };
+      const api = fakeApi({ [FLEET_ID]: [refused('detached', { ...sameCommit, path: '/w/first' }), refused('detached', { ...sameCommit, path: '/w/second' })] });
+      await renderWorktrees({ api });
+
+      expect(await screen.findByRole('button', { name: 'Remove worktree detached · abc1234 (first)' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Remove worktree detached · abc1234 (second)' })).toBeInTheDocument();
     });
 
     it('user sees a worktree whose folder is gone as missing', async () => {
@@ -248,6 +283,17 @@ describe('the worktrees of a project', () => {
       expect(alert).toHaveTextContent('It has uncommitted, staged or untracked files — commit or discard them first.');
       expect(alert).not.toHaveTextContent(/constraint_violation|raw daemon words|400|409/);
       expect(screen.getByText('t1/api')).toBeInTheDocument();
+    });
+
+    it('returns the focus to the Remove button of the same row after a refusal', async () => {
+      const api = fakeApi();
+      api.removeWorktree.mockRejectedValue(refusalError('constraint_violation', 'dirty'));
+      await renderWorktrees({ api });
+      await userEvent.click(await screen.findByRole('button', { name: 'Remove worktree t1/api' }));
+
+      await userEvent.click(confirmButton());
+
+      await waitFor(() => expect(removeButtonOf('t1/api')).toHaveFocus());
     });
 
     it('lists the worktrees again after a refusal so a changed state is visible', async () => {

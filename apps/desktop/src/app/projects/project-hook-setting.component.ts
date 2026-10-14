@@ -179,6 +179,7 @@ export class ProjectHookSettingComponent {
       const project = await this.api.updateProject(this.project().id, patch);
       if (this.hasBeenDestroyed) return;
       this.closeEditor();
+      afterNextRender(() => this.openButton()?.nativeElement.focus(), { injector: this.injector });
       this.saved.emit(project);
     } catch (error) {
       this.saveFailure.set(copyFor(error, { action: 'save_project_hook' }).text);

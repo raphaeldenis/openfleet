@@ -13,7 +13,7 @@ interface Fixture {
   projectId: string;
   projectName: string;
   repo: string;
-  startSession: (name: string) => Promise<{ id: string; branch: string; directory: string }>;
+  startSession: (name: string, branchName?: string) => Promise<{ id: string; branch: string; directory: string }>;
   closeSession: (id: string) => Promise<void>;
 }
 
@@ -31,8 +31,8 @@ async function withProjectWorktrees(request: APIRequestContext, use: (fixture: F
   try {
     await use({
       projectId: project.id, projectName, repo,
-      startSession: async (name) => {
-        const branch = `e2e/${randomUUID().slice(0, 8)}`;
+      startSession: async (name, branchName) => {
+        const branch = branchName ?? `e2e/${randomUUID().slice(0, 8)}`;
         const created = await request.post(`${api}/api/sessions`, { headers: adminHeaders, data: { directory: repo, repoPath: repo, branchName: branch, name, emoji: '🧪', harness: 'fake', projectId: project.id } });
         expect(created.ok()).toBe(true);
         const session = await created.json();
@@ -94,6 +94,31 @@ test('removing a clean worktree asks for a confirmation that names the loss of i
     await expect(rowOf(page, branch)).toHaveCount(0);
     expect(existsSync(directory)).toBe(false);
     expect(git(repo, 'branch', '--list', branch)).toContain(branch);
+  });
+});
+
+test('a branch name of two hundred characters without a space stays inside the card, in the confirmation and in the result banner', async ({ page, request }) => {
+  await withProjectWorktrees(request, async ({ projectId, startSession, closeSession }) => {
+    const longBranch = `long-${'x'.repeat(195)}`;
+    const { id } = await startSession(uniqueName('Worker'), longBranch);
+    await closeSession(id);
+    await signInAsAdmin(page);
+    await page.setViewportSize({ width: 900, height: 800 });
+    await page.goto(`/project/${projectId}`);
+    const card = worktreesCard(page);
+    const overflowOfCard = () => card.evaluate((element) => element.scrollWidth - element.clientWidth);
+
+    await page.getByRole('button', { name: `Remove worktree ${longBranch}` }).click();
+    const confirmation = page.getByRole('group', { name: `Confirm removing ${longBranch}` });
+    await expect(confirmation).toBeVisible();
+    expect(await overflowOfCard()).toBeLessThanOrEqual(0);
+    const confirmationBox = (await confirmation.boundingBox())!;
+    const cancelBox = (await confirmation.getByRole('button', { name: 'Cancel' }).boundingBox())!;
+    expect(cancelBox.x + cancelBox.width).toBeLessThanOrEqual(confirmationBox.x + confirmationBox.width);
+
+    await confirmation.getByRole('button', { name: 'Remove worktree' }).click();
+    await expect(page.getByRole('status', { name: 'Removal result' })).toContainText(`Removed ${longBranch}`);
+    expect(await overflowOfCard()).toBeLessThanOrEqual(0);
   });
 });
 
