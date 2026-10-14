@@ -16,6 +16,7 @@ function fakeEvents(overrides: { sessions?: unknown[]; managers?: unknown[]; sna
   return {
     sessions: signal(overrides.sessions ?? []),
     approvals: signal([]),
+    proposals: signal([]),
     managers: signal(overrides.managers ?? []),
     snapshotReceived: signal(overrides.snapshotReceived ?? true),
     workingStates: signal(new Map()),
@@ -257,7 +258,7 @@ describe('ManagerDashboardComponent', () => {
       providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('s1') }, { provide: FleetEventsService, useValue: fake }],
     });
     expect(screen.getByTestId('manager-dashboard-not-manager')).toBeTruthy();
-    expect(screen.queryByTestId('manager-dashboard-governance-notice')).toBeNull();
+    expect(screen.queryByTestId('manager-governance')).toBeNull();
   });
 
   it('offers to open its terminal on "not a manager", instead of a dead end', async () => {
@@ -326,7 +327,7 @@ describe('ManagerDashboardComponent', () => {
       expect(screen.queryByTestId('manager-dashboard-countdown')).toBeNull();
       expect(screen.queryByRole('heading', { name: 'Children' })).toBeNull();
       expect(screen.queryByText('Children')).toBeNull();
-      expect(screen.queryByTestId('manager-dashboard-governance-notice')).toBeNull();
+      expect(screen.getByRole('heading', { name: 'Governance' })).toBeVisible();
     });
 
     it('user can still reopen, resume or write a handoff for a closed manager', async () => {
@@ -452,7 +453,8 @@ describe('ManagerDashboardComponent', () => {
     await render(ManagerDashboardComponent, {
       providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('m1') }, { provide: FleetEventsService, useValue: fake }],
     });
-    expect(screen.getByTestId('manager-dashboard-governance-notice')).toHaveTextContent('coming');
+    expect(screen.getByRole('heading', { name: 'Governance' })).toBeVisible();
+    expect(screen.queryByText(/coming/i)).toBeNull();
   });
 
   it('disables "Pulse now" while a pulse request is pending, so a slow response cannot be double-fired', async () => {

@@ -46,7 +46,7 @@ function fakeApi(overrides: ApiOverrides = {}) {
 
 async function openProfile({ api = fakeApi(), session = sessionOf() } = {}) {
   const events = {
-    sessions: signal([session]), approvals: signal([]), managers: signal([managerViewOf()]), snapshotReceived: signal(true),
+    sessions: signal([session]), approvals: signal([]), proposals: signal([]), managers: signal([managerViewOf()]), snapshotReceived: signal(true),
     workingStates: signal(new Map()), workingStatesReported: signal(false), workingStateMaxAgeMinutes: signal<number | undefined>(30), workingStateMaxBytes: signal<number | undefined>(6144),
   };
   await render(ManagerDashboardComponent, {

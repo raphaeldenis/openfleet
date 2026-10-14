@@ -34,6 +34,7 @@ import { registerHandoffRoutes, type HandoffRouteDeps } from './handoffRoutes.js
 import { registerNoteRoutes } from './noteRoutes.js';
 import { registerProjectRoutes } from './projectRoutes.js';
 import { registerWorktreeRoutes } from './worktreeRoutes.js';
+import { registerGovernanceE2eRoutes } from './governanceE2eRoutes.js';
 import { registerGovernanceRoutes } from './governanceRoutes.js';
 import type { GovernanceQueueService } from '../governance/governanceQueueService.js';
 import type { WorktreeService } from '../worktrees/worktreeService.js';
@@ -150,6 +151,7 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; rout
   if (deps.projects) registerProjectRoutes(router, { projects: deps.projects, projectService: deps.projectService });
   if (deps.worktrees) registerWorktreeRoutes(router, { worktrees: deps.worktrees });
   if (deps.governanceQueue) registerGovernanceRoutes(router, { governanceQueue: deps.governanceQueue });
+  if (deps.governanceQueue && deps.e2eRoutes) registerGovernanceE2eRoutes(router, { governanceQueue: deps.governanceQueue });
   if (deps.projects && deps.noteRepo) registerHandoffPickerRoutes(router, new HandoffSeed({ projects: deps.projects, notes: deps.noteRepo, files: nodeHandoffFileReader }));
   if (deps.stores && deps.storeRepo) registerDataStoreRoutes(router, { stores: deps.stores, storeRepo: deps.storeRepo });
   if (deps.handoff) registerHandoffRoutes(router, deps.handoff);

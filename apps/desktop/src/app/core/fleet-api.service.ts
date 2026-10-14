@@ -1,7 +1,7 @@
 import { Injectable } from '@angular/core';
 import { DIAGNOSTICS_PATH, WorkingStateSectionsSchema, isErrorEnvelope } from '@openfleet/shared';
 import type {
-  Approval, CloseHandoffResult, CloseSessionRequest, CreateNoteRequest, CreateProjectRequest, DataStore, DataStoreDetail, DiagnosticsDocument, DsRow, DsRowHistoryEntry, DsView, ErrorEnvelope, HandoffPreview, HandoffSummary, HandoffTarget, HarnessId, NoteSummary,
+  Approval, GovernanceProposalView, ManagerGovernanceView, CloseHandoffResult, CloseSessionRequest, CreateNoteRequest, CreateProjectRequest, DataStore, DataStoreDetail, DiagnosticsDocument, DsRow, DsRowHistoryEntry, DsView, ErrorEnvelope, HandoffPreview, HandoffSummary, HandoffTarget, HarnessId, NoteSummary,
   ManagerProfile, ManagerView, NoteVersionSummary, NoteView, OrderTerm, Page, PermissionMode, Project, ReopenMode, RestoreNoteRequest, Session, SessionSpec, SessionTodos,
   UpdateManager, UpdateNoteRequest, UpdateProjectRequest, WhereClause, WorkingState,
 } from '@openfleet/shared';
@@ -12,7 +12,8 @@ import { parseProject } from './project-response-parser';
 import { parseSessionTodos } from './session-todos-parser';
 
 export type PageRequest = Partial<Pick<Page<unknown>, 'limit' | 'offset'>>;
-type NoteChange = Omit<UpdateNoteRequest, 'projectId'>;
+export type ProposalDecision = { decision: 'approve' } | { decision: 'deny'; reason: string };
+type NoteChange =Omit<UpdateNoteRequest, 'projectId'>;
 type NoteRestore = Omit<RestoreNoteRequest, 'projectId'>;
 
 const DAEMON_ANSWER_TIMEOUT_MS = 5000;
@@ -175,6 +176,8 @@ export class FleetApiService {
     return target;
   }
   decide(id: string, behavior: 'allow' | 'deny') { return this.post<Approval>(`/api/approvals/${id}/decide`, { behavior }); }
+  decideProposal(id: string, decision: ProposalDecision) { return this.post<GovernanceProposalView>(`/api/governance/proposals/${encodeURIComponent(id)}/decide`, decision); }
+  getManagerGovernance(managerId: string) { return this.call<ManagerGovernanceView>(`/api/managers/${encodeURIComponent(managerId)}/governance`); }
 
   private noteUrl(noteId: string, suffix = '', query: Record<string, string> = {}): string {
     const queryString = new URLSearchParams(query).toString();
