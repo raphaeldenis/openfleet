@@ -1,0 +1,72 @@
+{
+  "description": "Hook vocabulary of codex-cli 0.162.1 from the app-server JSON schema, plus relevant CLI flags. The stdin payload and deny protocol of a Codex hook are NOT in this schema (UNVERIFIED).",
+  "codexVersion": "0.162.1",
+  "hookEventNames": [
+    "preToolUse",
+    "permissionRequest",
+    "postToolUse",
+    "preCompact",
+    "postCompact",
+    "sessionStart",
+    "sessionEnd",
+    "userPromptSubmit",
+    "subagentStart",
+    "subagentStop",
+    "stop",
+    "interrupt"
+  ],
+  "hookHandlerTypes": [
+    "command",
+    "mcpTool",
+    "prompt",
+    "agent"
+  ],
+  "hookRunStatuses": [
+    "running",
+    "completed",
+    "failed",
+    "blocked",
+    "stopped"
+  ],
+  "hookOutputEntryKinds": [
+    "warning",
+    "stop",
+    "feedback",
+    "context",
+    "error"
+  ],
+  "hookTrustStatuses": [
+    "managed",
+    "untrusted",
+    "trusted",
+    "modified"
+  ],
+  "hookSources": [
+    "system",
+    "user",
+    "project",
+    "mdm",
+    "sessionFlags",
+    "plugin",
+    "cloudRequirements",
+    "cloudManagedConfig",
+    "legacyManagedConfigFile",
+    "legacyManagedConfigMdm",
+    "unknown"
+  ],
+  "cliFlags": {
+    "approvalPolicyValues": [
+      "on-request",
+      "never"
+    ],
+    "neverMeaning": "Never ask for user approval. Execution failures are immediately returned to the model",
+    "bypassHookTrust": "--dangerously-bypass-hook-trust: Run enabled hooks without requiring persisted hook trust for this invocation",
+    "ignoreRules": "--ignore-rules (codex exec): Do not load user or project execpolicy .rules files"
+  },
+  "featureFlags": {
+    "hooks": "stable, enabled",
+    "plugin_hooks": "removed, disabled",
+    "guardian_approval": "stable, enabled",
+    "request_permissions_tool": "under development, disabled"
+  }
+}

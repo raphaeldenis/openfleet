@@ -1,0 +1,30 @@
+{
+  "description": "PreToolUse for a Bash call made by the main session (no agent_id).",
+  "claudeCodeVersion": "2.1.296",
+  "request": {
+    "method": "POST",
+    "url": "/hook",
+    "headers": {
+      "content-type": "application/json",
+      "user-agent": "axios/1.15.2"
+    },
+    "body": {
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "transcript_path": "/home/user/.claude/projects/-tmp-s0-work/00000000-0000-4000-8000-000000000001.jsonl",
+      "cwd": "/tmp/s0/work",
+      "prompt_id": "00000000-0000-4000-8000-000000000002",
+      "permission_mode": "default",
+      "effort": {
+        "level": "medium"
+      },
+      "hook_event_name": "PreToolUse",
+      "tool_name": "Bash",
+      "tool_input": {
+        "command": "sed 's/x/y/' /tmp/s0/outside/notes.txt | grep -n z",
+        "description": "Run sed substitution piped to grep for z"
+      },
+      "tool_use_id": "toolu_REDACTED_1"
+    }
+  },
+  "daemonResponse": {}
+}

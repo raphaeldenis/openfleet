@@ -1,0 +1,33 @@
+{
+  "description": "PreToolUse for the Agent tool call that spawns a sub-agent (made by the main session, no agent_id).",
+  "claudeCodeVersion": "2.1.296",
+  "request": {
+    "method": "POST",
+    "url": "/hook",
+    "headers": {
+      "content-type": "application/json",
+      "user-agent": "axios/1.15.2"
+    },
+    "body": {
+      "session_id": "00000000-0000-4000-8000-000000000003",
+      "transcript_path": "/home/user/.claude/projects/-tmp-s0-work/00000000-0000-4000-8000-000000000003.jsonl",
+      "cwd": "/tmp/s0/work",
+      "prompt_id": "00000000-0000-4000-8000-000000000004",
+      "permission_mode": "default",
+      "effort": {
+        "level": "medium"
+      },
+      "hook_event_name": "PreToolUse",
+      "tool_name": "Agent",
+      "tool_input": {
+        "description": "Run sed and grep pipeline",
+        "prompt": "Use the Bash tool to run exactly this command and report its output: sed s/x/y/ /tmp/s0/outside/notes.txt | grep -n z\n\nDo not modify the command, do not add flags, and do not run any other commands. Report the exact output (or any error message) verbatim, and state the exit status if you can determine it.",
+        "subagent_type": "general-purpose",
+        "model": "haiku",
+        "run_in_background": false
+      },
+      "tool_use_id": "toolu_REDACTED_2"
+    }
+  },
+  "daemonResponse": {}
+}
