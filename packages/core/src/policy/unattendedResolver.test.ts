@@ -38,6 +38,10 @@ describe('the refusal text the session reads', () => {
     expect(refusalTextOf({ ...refusal, isUnwatched: false })).not.toContain('No human is watching');
   });
 
+  it('does not send a session without a parent to message_parent', () => {
+    expect(refusalTextOf({ ...refusal, isUnwatched: false })).not.toMatch(/message_parent|your manager/);
+  });
+
   it('never exceeds the budget, however long the rule texts are', () => {
     const text = refusalTextOf({ ruleId: 'r', reason: 'x'.repeat(2000), alternative: 'y'.repeat(2000), isUnwatched: true });
 

@@ -8,7 +8,7 @@ const ellipsized = (text: string, maxChars: number): string => (text.length <= m
 
 /** Builds what the session reads when a command is refused: the rule, the reason, the alternative and where to turn. */
 export function refusalTextOf({ ruleId, reason, alternative, isUnwatched }: { ruleId: string; reason: string; alternative: string; isUnwatched: boolean }): string {
-  const noticeLines = isUnwatched ? [UNWATCHED_NOTICE, ESCALATION_NOTICE] : [ESCALATION_NOTICE];
+  const noticeLines = isUnwatched ? [UNWATCHED_NOTICE, ESCALATION_NOTICE] : [];
   const noticeChars = noticeLines.join('\n').length + noticeLines.length;
   const headline = `OpenFleet command policy [${ruleId}]: `;
   const alternativeLabel = 'Alternative: ';

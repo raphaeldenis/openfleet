@@ -96,11 +96,13 @@ export class ClaudePolicyHooks implements CommandPolicyHooks {
     return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: this.textOf(session, refusal) } };
   }
 
-  /** Refuses at once what a human would have been asked, when nobody can answer; undefined leaves the call to the approval flow. */
+  /** Allows what a policy allow rule vouches for, refuses at once what a human would have been asked when a child cannot be answered; undefined leaves the call to the approval flow. */
   onPermissionRequest(session: Session, event: Extract<ToolHookEvent, { hook_event_name: 'PermissionRequest' }>): PermissionRequestHookOutput | undefined {
     const isWorkingStateTool = (WORKING_STATE_TOOL_NAMES as readonly string[]).includes(event.tool_name);
     if (isWorkingStateTool) return undefined;
     const verdict = this.evaluateFailingOpen(session, event, 'permission_request');
+    const isExplicitlyAllowed = verdict?.decision === 'allow' && verdict.allowedBy !== undefined;
+    if (isExplicitlyAllowed) return { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } } };
     const policyRefusal = verdict === undefined ? undefined : this.refusalOf(session, verdict);
     const refusal = policyRefusal ?? this.askRefusalOf(session);
     if (refusal === undefined) return undefined;
@@ -134,7 +136,7 @@ export class ClaudePolicyHooks implements CommandPolicyHooks {
   }
 
   private askRefusalOf(session: Session): Refusal | undefined {
-    const isUnwatched = presenceOf(session) === 'unattended' || this.deps.isManager(session.id);
+    const isUnwatched = presenceOf(session) === 'unattended' && !this.deps.isManager(session.id);
     const { askBecomesDeny } = this.deps.settings().unattended;
     return resolveAsk({ isUnwatched, askBecomesDeny }) === 'deny' ? { ...ASK_REFUSAL, source: 'cli_ask' } : undefined;
   }

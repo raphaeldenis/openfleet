@@ -249,14 +249,138 @@ describe('an unattended child receives a permission dialog it could never answer
     expect(answer.hookSpecificOutput?.decision?.behavior).toBe('allow');
   });
 
-  it('treats a manager as unwatched between two pulses: no dialog waits for it either', async () => {
+  it('keeps the approval flow for a manager: an approval is created and the session waits for a decision', async () => {
+    await bootDaemon({ settings: enforcing() });
+    const lead = await createSession({ name: 'Lead', manager: { childrenCap: 1, mission: 'x' } });
+    const socket = await openWsFrames();
+
+    const answered = permissionRequest(lead.id, bash('gh pr merge 1'));
+
+    await vi.waitFor(async () => expect(await pendingApprovals()).toHaveLength(1));
+    await vi.waitFor(() => expect(socket.frames.some((frame) => frame.type === 'session.state' && frame.sessionId === lead.id && frame.state === 'waiting_permission')).toBe(true));
+    const [approval] = (await pendingApprovals()) as { id: string }[];
+    await api(`/api/approvals/${approval!.id}/decide`, { method: 'POST', body: JSON.stringify({ behavior: 'allow' }) });
+    expect((await answered).hookSpecificOutput?.decision?.behavior).toBe('allow');
+    expect(journalRows().filter((row) => row.rule_id === 'unattended-ask-becomes-deny')).toEqual([]);
+    socket.close();
+  });
+
+  it('never converts the permission dialog of a manager into a refusal, even for a manager that is the child of another manager', async () => {
+    await bootDaemon({ settings: enforcing() });
+    const lead = await createSession({ name: 'Lead', manager: { childrenCap: 2, mission: 'x' } });
+    const subLead = await createSession({ name: 'SubLead', parentId: lead.id, manager: { childrenCap: 1, mission: 'y' } });
+
+    const answered = permissionRequest(subLead.id, bash('gh pr merge 1'));
+
+    await vi.waitFor(async () => expect(await pendingApprovals()).toHaveLength(1));
+    const [approval] = (await pendingApprovals()) as { id: string }[];
+    await api(`/api/approvals/${approval!.id}/decide`, { method: 'POST', body: JSON.stringify({ behavior: 'deny' }) });
+    await answered;
+    expect(journalRows().filter((row) => row.rule_id === 'unattended-ask-becomes-deny')).toEqual([]);
+  });
+
+  it('never serves the ask refusal text of a child (message_parent) to a manager: a manager gets no ask refusal at all', async () => {
     await bootDaemon({ settings: enforcing() });
     const lead = await createSession({ name: 'Lead', manager: { childrenCap: 1, mission: 'x' } });
 
-    const answer = await permissionRequest(lead.id, bash('gh pr merge 1'));
+    const answer = await preToolUse(lead.id, { tool_name: 'AskUserQuestion', tool_input: { questions: [] } });
+
+    expect(answer).toEqual({});
+  });
+
+  it('does not send a manager without a parent to message_parent when the policy refuses a tool call', async () => {
+    await bootDaemon({ settings: enforcing({ document: { rules: DEFAULT_COMMAND_POLICY.rules.map((rule) => ({ ...rule, presence: 'any' as const })) } }) });
+    const lead = await createSession({ name: 'Lead', manager: { childrenCap: 1, mission: 'x' } });
+
+    const answer = await preToolUse(lead.id, bash('rm -rf x'));
+
+    expect(answer.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(answer.hookSpecificOutput?.permissionDecisionReason).not.toMatch(/message your manager|No human is watching/);
+  });
+
+  it('still applies the refusal rules of the profile to a manager that has a parent, at the permission dialog', async () => {
+    await bootDaemon({ settings: enforcing() });
+    const lead = await createSession({ name: 'Lead', manager: { childrenCap: 2, mission: 'x' } });
+    const subLead = await createSession({ name: 'SubLead', parentId: lead.id, manager: { childrenCap: 1, mission: 'y' } });
+
+    const answer = await permissionRequest(subLead.id, bash('rm -rf x'));
 
     expect(answer.hookSpecificOutput?.decision?.behavior).toBe('deny');
+    expect(answer.hookSpecificOutput?.decision?.message).toContain('no-forced-recursive-rm');
+  });
+});
+
+describe('a read-only pipeline arrives as a permission dialog', () => {
+  const transcriptPath = '/home/user/.claude/projects/-tmp-work/cli-1.jsonl';
+  const readOnlyPipeline = "sed 's/x/y/' /home/user/.claude/projects/-tmp-work/cli-1/tool-results/f | grep -n z";
+
+  it('is allowed outright for a child: no approval, no refusal in the journal', async () => {
+    await bootDaemon({ settings: enforcing() });
+    const child = await createChildOf((await createSession()).id);
+
+    const answer = await permissionRequest(child.id, bash(readOnlyPipeline), { transcript_path: transcriptPath });
+
+    expect(answer.hookSpecificOutput).toEqual({ hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } });
     expect(await pendingApprovals()).toEqual([]);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(journalRows()).toEqual([]);
+  });
+
+  it('is allowed outright for a manager too, without opening an approval', async () => {
+    await bootDaemon({ settings: enforcing() });
+    const lead = await createSession({ name: 'Lead', manager: { childrenCap: 1, mission: 'x' } });
+
+    const answer = await permissionRequest(lead.id, bash(readOnlyPipeline), { transcript_path: transcriptPath });
+
+    expect(answer.hookSpecificOutput).toEqual({ hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } });
+    expect(await pendingApprovals()).toEqual([]);
+  });
+
+  it('is allowed outright for a session without a parent too', async () => {
+    await bootDaemon({ settings: enforcing() });
+    const human = await createSession();
+
+    const answer = await permissionRequest(human.id, bash(readOnlyPipeline), { transcript_path: transcriptPath });
+
+    expect(answer.hookSpecificOutput).toEqual({ hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } });
+    expect(await pendingApprovals()).toEqual([]);
+  });
+
+  it('is allowed even when the operator turned askBecomesDeny off', async () => {
+    await bootDaemon({ settings: enforcing({ unattended: { askBecomesDeny: false } }) });
+    const child = await createChildOf((await createSession()).id);
+
+    const answer = await permissionRequest(child.id, bash(readOnlyPipeline), { transcript_path: transcriptPath });
+
+    expect(answer.hookSpecificOutput?.decision?.behavior).toBe('allow');
+    expect(await pendingApprovals()).toEqual([]);
+  });
+
+  it('does not vouch for a command no allow rule covers: the child is refused', async () => {
+    await bootDaemon({ settings: enforcing() });
+    const child = await createChildOf((await createSession()).id);
+
+    const answer = await permissionRequest(child.id, bash('gh pr merge 1'), { transcript_path: transcriptPath });
+
+    expect(answer.hookSpecificOutput?.decision?.behavior).toBe('deny');
+  });
+
+  it('never vouches for a sed that writes in place', async () => {
+    await bootDaemon({ settings: enforcing() });
+    const child = await createChildOf((await createSession()).id);
+
+    const answer = await permissionRequest(child.id, bash("sed -i 's/x/y/' /tmp/inside.txt"), { transcript_path: transcriptPath });
+
+    expect(answer.hookSpecificOutput?.decision?.behavior).not.toBe('allow');
+  });
+
+  it('never vouches while the policy is off', async () => {
+    await bootDaemon({ settings: enforcing({ document: { mode: 'off' } }) });
+    const child = await createChildOf((await createSession()).id);
+
+    const answer = await permissionRequest(child.id, bash(readOnlyPipeline), { transcript_path: transcriptPath });
+
+    expect(answer.hookSpecificOutput?.decision?.behavior).toBe('deny');
   });
 });
 

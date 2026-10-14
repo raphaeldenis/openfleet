@@ -90,7 +90,7 @@ describe('QE — a booted daemon serves compact MCP results on the real route', 
     const childHookToken = (daemon.db.prepare('SELECT hook_token FROM sessions WHERE id = ?').get(child.id) as { hook_token: string }).hook_token;
     const hook = (body: object) => fetch(`${daemon.server.url}/hooks/${childHookToken}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ session_id: 'c', ...body }) });
     await hook({ hook_event_name: 'SessionStart' });
-    const pendingDecision = hook({ hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'ls' } });
+    const pendingDecision = hook({ hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'gh pr merge 1' } });
 
     let status: { manager: Record<string, unknown> | null; children: Record<string, unknown>[] } | undefined;
     for (let attempt = 0; attempt < 50; attempt += 1) {
