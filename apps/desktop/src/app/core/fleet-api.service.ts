@@ -3,7 +3,7 @@ import { DIAGNOSTICS_PATH, WorkingStateSectionsSchema, isErrorEnvelope } from '@
 import type {
   Approval, CloseHandoffResult, CloseSessionRequest, CreateNoteRequest, CreateProjectRequest, DataStore, DataStoreDetail, DiagnosticsDocument, DsRow, DsRowHistoryEntry, DsView, ErrorEnvelope, GovernanceProposalView, HandoffPreview, HandoffSummary, HandoffTarget, HarnessId, NoteSummary,
   ManagerGovernanceView, ManagerProfile, ManagerView, NoteVersionSummary, NoteView, OrderTerm, Page, PermissionMode, Project, ReopenMode, RestoreNoteRequest, Session, SessionSpec, SessionTodos,
-  UpdateManager, UpdateNoteRequest, UpdateProjectRequest, WhereClause, WorkingState,
+  RemovedWorktree, UpdateManager, UpdateNoteRequest, UpdateProjectRequest, WhereClause, WorkingState, WorktreeList,
 } from '@openfleet/shared';
 import { environment } from '../../environments/environment';
 import { parseCloseHandoffResult, parseHandoffPreview, parseHandoffTarget } from './handoff-response-parser';
@@ -198,6 +198,15 @@ export class FleetApiService {
     const project = parseProject(payload);
     if (!project) throw new ApiError(200, `${method} ${path} → unreadable project`);
     return project;
+  }
+  async listWorktrees(projectId: string): Promise<WorktreeList> {
+    const path = `/api/projects/${encodeURIComponent(projectId)}/worktrees`;
+    const list = await this.call<WorktreeList | undefined>(path);
+    if (!Array.isArray(list?.items)) throw new ApiError(200, `GET ${path} → unreadable worktree list`);
+    return list;
+  }
+  removeWorktree(projectId: string, worktreePath: string) {
+    return this.call<RemovedWorktree>(`/api/projects/${encodeURIComponent(projectId)}/worktrees${queryString({ path: worktreePath })}`, { method: 'DELETE' });
   }
   listNotes(projectId: string, page: PageRequest = {}) { return this.call<Page<NoteSummary>>(`/api/notes?${new URLSearchParams({ projectId, ...pageParams(page) })}`); }
   getNote(projectId: string, noteId: string) { return this.call<NoteView>(this.noteUrl(noteId, '', { projectId })); }

@@ -121,7 +121,7 @@ describe('copyFor', () => {
   });
 
   describe('the retry of the envelope decides the ending of every action', () => {
-    const ACTIONS = ['generic', 'send', 'create_session', 'create_manager', 'resume', 'rename', 'close', 'load_handoff', 'save_handoff', 'save_project', 'reopen_manager', 'save_manager'] as const;
+    const ACTIONS = ['generic', 'send', 'create_session', 'create_manager', 'resume', 'rename', 'close', 'load_handoff', 'save_handoff', 'save_project', 'reopen_manager', 'save_manager', 'load_worktrees', 'remove_worktree', 'save_project_hook'] as const;
     const RETRIES = ['never', 'later', 'after_refresh'] as const;
     const wordsOfEnvelope = (code: ErrorCode, retry: ErrorEnvelope['retry'], action: (typeof ACTIONS)[number]) => {
       const envelope = envelopeOf(code, { retry, ...(ERROR_CODES[code].kind === 'internal' && { id: '3f9a1c2e' }) });
@@ -139,8 +139,8 @@ describe('copyFor', () => {
         return problems.map((problem) => `${code}: ${problem} — "${text}"`);
       });
 
-    it('covers every code, action and retry once (2448 cases)', () => {
-      expect(ALL_CODES.length * ACTIONS.length * RETRIES.length).toBe(2448);
+    it('covers every code, action and retry once (3060 cases)', () => {
+      expect(ALL_CODES.length * ACTIONS.length * RETRIES.length).toBe(3060);
     });
 
     describe.each(ACTIONS)('the action %s', (action) => {
@@ -238,6 +238,44 @@ describe('copyFor', () => {
 
     it('asks to check the connection when the daemon cannot be reached', () => {
       expect(copyFor(new TypeError('Failed to fetch'), { action: 'save_project' }).text).toBe('The project was not saved — check your connection, then try again.');
+    });
+  });
+
+  describe('the worktree actions', () => {
+    const refusal = (code: ErrorCode, reason: string) => apiErrorOf(envelopeOf(code, { retry: 'never', detail: { reason } }));
+
+    it('names why git or the daemon refused to remove the worktree, in words and without the code', () => {
+      expect(copyFor(refusal('constraint_violation', 'dirty'), { action: 'remove_worktree' }).text).toBe(
+        'It has uncommitted, staged or untracked files — commit or discard them first.',
+      );
+      expect(copyFor(refusal('directory_in_use', 'in_use'), { action: 'remove_worktree' }).text).toBe('A session is working in it — close that session first.');
+    });
+
+    it('says the worktree was not removed when the refusal names no known reason', () => {
+      expect(copyFor(refusal('constraint_violation', 'something_new'), { action: 'remove_worktree' }).text).toBe('The worktree was not removed.');
+    });
+
+    it('says the worktree is gone when the daemon cannot find it', () => {
+      expect(copyFor(apiErrorOf(envelopeOf('not_found')), { action: 'remove_worktree' }).text).toBe('That worktree no longer exists.');
+    });
+
+    it('says the worktree was not removed when the daemon gives no reason', () => {
+      expect(copyFor(new ApiError(500, 'DELETE /x'), { action: 'remove_worktree' }).text).toBe('The worktree was not removed — try again.');
+      expect(copyFor(new TypeError('Failed to fetch'), { action: 'remove_worktree' }).text).toBe('The worktree was not removed — check your connection, then try again.');
+    });
+
+    it('says the worktrees cannot be listed when the daemon gives no reason', () => {
+      expect(copyFor(new ApiError(500, 'GET /x'), { action: 'load_worktrees' }).text).toBe('The worktrees could not be listed — try again.');
+    });
+
+    it('tells the user to give an absolute path to an executable script when the daemon rejects the hook', () => {
+      const { text } = copyFor(apiErrorOf(envelopeOf('invalid_body', { retry: 'never' })), { action: 'save_project_hook' });
+
+      expect(text).toBe('That script cannot be used: give the absolute path of an executable file that only you can write.');
+    });
+
+    it('says the hook was not saved when the daemon gives no reason', () => {
+      expect(copyFor(new ApiError(500, 'PATCH /x'), { action: 'save_project_hook' }).text).toBe('The hook was not saved — try again.');
     });
   });
 

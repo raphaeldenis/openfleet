@@ -60,3 +60,10 @@ It refuses, and leaves everything in place, when the worktree:
 `constraint_violation` answers carry `detail.reason`; the MCP error text names it as `(reason: dirty)`. A path that is not a worktree of the project's repositories answers `not_found` and nothing is deleted.
 
 **Ignored files are not protected.** Files git ignores (`node_modules`, `.env`, build output) do not make a worktree dirty and are deleted with it. `ignoredFileCount` in the result says how many went.
+
+## In the desktop app
+
+The Project home page shows two cards for the open project:
+
+- **Repositories & worktrees** lists every worktree per repository with its branch, full path, state (clean, modified, missing) and the session that uses it. A worktree that cannot be removed shows the reason in words and its Remove button is unavailable. Remove opens a confirmation that names the loss of ignored files and says the branch is kept; the entry disappears when the daemon confirms. A refusal from the daemon is shown in words and the list reloads.
+- **Post-create hook** sets, changes or removes the script and its timeout, with a warning that the script runs as the daemon's user, with no shell, in every new worktree of the project.

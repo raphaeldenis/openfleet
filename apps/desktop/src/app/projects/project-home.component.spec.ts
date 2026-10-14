@@ -32,6 +32,7 @@ function fakeApi(overrides: ApiOverrides = {}) {
     listNotes: vi.fn(overrides.listNotes ?? ((projectId: string) => Promise.resolve({ items: [], total: overrides.noteTotals?.[projectId] ?? 12, limit: 1, offset: 0 }))),
     listDataStores: vi.fn(overrides.listDataStores ?? (() => Promise.resolve(pageOf([{}, {}, {}])))),
     listHandoffs: vi.fn(overrides.listHandoffs ?? (() => Promise.resolve({ items: [], total: 5, limit: 200, offset: 0 }))),
+    listWorktrees: vi.fn((_projectId: string) => Promise.resolve({ items: [] as unknown[], total: 0 })),
     updateProject: vi.fn(),
     createProject: vi.fn(),
   };
@@ -393,6 +394,51 @@ describe('the project home page', () => {
 
       expect(await within(await screen.findByRole('region', { name: 'Managers' })).findByText('No managers in this project.')).toBeInTheDocument();
       expect(within(screen.getByRole('region', { name: 'Sessions' })).getByText('No sessions in this project.')).toBeInTheDocument();
+    });
+  });
+
+  describe('the worktrees and the post-create hook', () => {
+    const worktreeOf = (branch: string, repoPath: string) => ({
+      repoPath, path: `${repoPath}-wt/${branch}`, branch, head: 'abc1234', isMain: false, isDetached: false, isLocked: false, isPrunable: false,
+      isDirty: false, isInUse: false, isUnderWorktreesRoot: true, removable: true,
+    });
+
+    it('user sees the worktrees of the project and the post-create hook setting', async () => {
+      const api = fakeApi();
+      api.listWorktrees.mockImplementation((projectId: string) => Promise.resolve({ items: projectId === 'p-fleet' ? [worktreeOf('fleet-branch', '/src/fleet')] : [], total: 1 }));
+      await openAt('/project/p-fleet', { api });
+
+      const worktrees = await screen.findByRole('region', { name: 'Repositories & worktrees' });
+
+      expect(await within(worktrees).findByText('fleet-branch')).toBeInTheDocument();
+      expect(screen.getByRole('region', { name: 'Post-create hook' })).toBeInTheDocument();
+    });
+
+    it('user switches project and sees the worktrees of the other one only', async () => {
+      const api = fakeApi();
+      api.listWorktrees.mockImplementation((projectId: string) =>
+        Promise.resolve({ items: [worktreeOf(projectId === 'p-fleet' ? 'fleet-branch' : 'armada-branch', '/src/repo')], total: 1 }),
+      );
+      await openAt('/project/p-fleet', { api });
+      expect(await screen.findByText('fleet-branch')).toBeInTheDocument();
+
+      await chooseProject('Armada');
+
+      expect(await screen.findByText('armada-branch')).toBeInTheDocument();
+      expect(screen.queryByText('fleet-branch')).not.toBeInTheDocument();
+    });
+
+    it('user saves a hook and the page shows it', async () => {
+      const api = fakeApi();
+      api.updateProject.mockResolvedValue({ ...FLEET, postCreateHookScript: '/hooks/setup.sh' });
+      await openAt('/project/p-fleet', { api });
+      await userEvent.click(await screen.findByRole('button', { name: 'Set a hook…' }));
+
+      await userEvent.type(screen.getByRole('textbox', { name: 'Script path' }), '/hooks/setup.sh');
+      await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+      expect(await screen.findByText('/hooks/setup.sh')).toBeInTheDocument();
+      expect(api.updateProject).toHaveBeenCalledWith('p-fleet', { postCreateHookScript: '/hooks/setup.sh', postCreateHookTimeoutSeconds: null });
     });
   });
 

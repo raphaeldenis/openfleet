@@ -1,4 +1,5 @@
-import { afterNextRender, ChangeDetectionStrategy, Component, computed, effect, ElementRef, inject, Injector, signal, untracked, viewChild } from '@angular/core';
+import { afterNextRender, ChangeDetectionStrategy, Component, computed, effect, ElementRef, inject, Injector, signal, Type, untracked, viewChild } from '@angular/core';
+import { NgComponentOutlet } from '@angular/common';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { MANAGER_ROLE, type Project, type Session } from '@openfleet/shared';
@@ -55,7 +56,7 @@ function rememberLastVisitedProjectId(projectId: string): void {
 @Component({
   selector: 'of-project-home',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [ErrorLineComponent, PopoverComponent, ProjectFormComponent, RouterLink, StateChipComponent],
+  imports: [ErrorLineComponent, NgComponentOutlet, PopoverComponent, ProjectFormComponent, RouterLink, StateChipComponent],
   template: `
     <div class="home" data-testid="project-home">
       @switch (view()) {
@@ -153,6 +154,10 @@ function rememberLastVisitedProjectId(projectId: string): void {
                 </div>
               }
             </section>
+
+            @if (repositoryCards(); as cards) {
+              <ng-container [ngComponentOutlet]="cards" [ngComponentOutletInputs]="{ project: current, onProjectSaved: replaceProjectOnSave }" />
+            }
 
             <div class="lists">
               <section class="card list" aria-labelledby="managers-title">
@@ -280,6 +285,9 @@ export class ProjectHomeComponent {
   protected readonly counts = signal<readonly CountState[]>(LOADING_COUNTS);
   protected readonly isCreatingProject = signal(false);
   protected readonly isEditingDocsFolder = signal(false);
+  /** The worktrees and hook cards, loaded after the page first shows so they stay out of the initial bundle. */
+  protected readonly repositoryCards = signal<Type<unknown> | undefined>(undefined);
+  protected readonly replaceProjectOnSave = (saved: Project): void => this.replaceProject(saved);
   private readonly loadStatus = signal<'loading' | 'ready' | 'failed'>('loading');
 
   protected readonly moveFocusWithinListbox = moveFocusWithinListbox;
@@ -301,6 +309,7 @@ export class ProjectHomeComponent {
 
   constructor() {
     void this.loadProjects();
+    void import('./project-repository-cards.component').then((module) => this.repositoryCards.set(module.ProjectRepositoryCardsComponent));
     effect(() => {
       const projectId = this.projectId();
       if (projectId === undefined) return;
@@ -350,8 +359,12 @@ export class ProjectHomeComponent {
   }
 
   protected finishEditingDocsFolder(saved: Project): void {
-    this.projects.update((all) => all.map((candidate) => (candidate.id === saved.id ? saved : candidate)));
+    this.replaceProject(saved);
     this.closeDocsFolderEditor();
+  }
+
+  protected replaceProject(saved: Project): void {
+    this.projects.update((all) => all.map((candidate) => (candidate.id === saved.id ? saved : candidate)));
   }
 
   protected closeDocsFolderEditor(): void {
