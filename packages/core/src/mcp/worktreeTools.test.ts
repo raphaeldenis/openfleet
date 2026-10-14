@@ -31,6 +31,7 @@ import { createTempDirTracker } from '../tempDirTracker.js';
 import { WorkingStateService } from '../workingState/workingStateService.js';
 import { createMcpHandler } from './mcpServer.js';
 import { knowledgeSearchFor } from './knowledgeTools.testkit.js';
+import { governanceQueueFor } from '../governance/governanceQueueFor.testkit.js';
 
 const tempDirs = createTempDirTracker();
 
@@ -90,7 +91,7 @@ beforeEach(async () => {
   const modelTable = { ...DEFAULT_MODEL_TABLE };
   server = await startServer({
     host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath: '/tmp/of-unused/config.json',
-    mcp: createMcpHandler({ knowledgeSearch: knowledgeSearchFor(db),
+    mcp: createMcpHandler({ knowledgeSearch: knowledgeSearchFor(db), governanceQueue: governanceQueueFor(db),
       sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, worktreesRoot,
       workingStates: new WorkingStateService({ db, clock: () => new Date().toISOString(), stateRoot: tempDirs.make('of-mcp-state-'), maxBytes: 6144 }),
     }),

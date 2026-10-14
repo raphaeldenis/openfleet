@@ -30,6 +30,7 @@ import { DataStoreService, DataStoreWriteError } from '../stores/dataStoreServic
 import { WorkingStateService } from '../workingState/workingStateService.js';
 import { createMcpHandler } from './mcpServer.js';
 import { knowledgeSearchFor } from './knowledgeTools.testkit.js';
+import { governanceQueueFor } from '../governance/governanceQueueFor.testkit.js';
 
 const WORKTREES_ROOT = '/tmp/of-wt';
 const MCP_ERROR_GRAMMAR = /^error (\w+): .+ \(retry: (never|after_refresh|later)(, ref [0-9a-f]{8})?\)$/;
@@ -94,7 +95,7 @@ beforeEach(async () => {
   const workingStates = new WorkingStateService({ db, clock: () => new Date().toISOString(), stateRoot: '/tmp/of-unused/state', maxBytes: 6144 });
   server = await startServer({
     host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath: '/tmp/of-unused/config.json',
-    mcp: createMcpHandler({ knowledgeSearch: knowledgeSearchFor(db), sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: WORKTREES_ROOT }),
+    mcp: createMcpHandler({ knowledgeSearch: knowledgeSearchFor(db), governanceQueue: governanceQueueFor(db), sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: WORKTREES_ROOT }),
   });
 
   const repo = makeRepo();

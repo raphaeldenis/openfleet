@@ -16,6 +16,13 @@ describe('rewriteScapeToolReferences', () => {
     expect(unmappedToolNames).toEqual([]);
   });
 
+  it.each(['propose_law', 'propose_permission', 'request_resource_access', 'withdraw_proposal', 'get_argus_governance'])('renames the governance tool %s of an imported manager mission', (toolName) => {
+    const { text, unmappedToolNames } = rewriteScapeToolReferences(`Call mcp__scape__${toolName} when a rule is missing.`);
+
+    expect(text).toBe(`Call mcp__openfleet__${toolName} when a rule is missing.`);
+    expect(unmappedToolNames).toEqual([]);
+  });
+
   it('leaves a tool name without the Scape prefix as it is', () => {
     const original = 'Call message_parent, create_session and mcp__repowise__get_overview.';
 

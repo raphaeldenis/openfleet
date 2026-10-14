@@ -31,6 +31,7 @@ import { DataStoreService } from '../stores/dataStoreService.js';
 import { WorkingStateService } from '../workingState/workingStateService.js';
 import { createMcpHandler } from './mcpServer.js';
 import { knowledgeSearchFor } from './knowledgeTools.testkit.js';
+import { governanceQueueFor } from '../governance/governanceQueueFor.testkit.js';
 
 // A hook the git boundary runs after each repository comparison: it lets a test change the world while create_session awaits git.
 const gitBoundary = vi.hoisted(() => ({ afterRepositoryCheck: undefined as undefined | (() => Promise<void> | void) }));
@@ -104,7 +105,7 @@ beforeEach(async () => {
   const workingStates = new WorkingStateService({ db, clock: () => new Date().toISOString(), stateRoot: '/tmp/of-unused/state', maxBytes: 6144 });
   server = await startServer({
     host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath: '/tmp/of-unused/config.json',
-    mcp: createMcpHandler({ knowledgeSearch: knowledgeSearchFor(db), sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: WORKTREES_ROOT }),
+    mcp: createMcpHandler({ knowledgeSearch: knowledgeSearchFor(db), governanceQueue: governanceQueueFor(db), sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: WORKTREES_ROOT }),
   });
 
   const repo = makeRepo();
@@ -170,6 +171,11 @@ const hostileCallByTool = (w: World): Record<string, { client: Client; args: Rec
   add_data_store_column: { client: w.lead, args: { store: UNKNOWN, display_name: 'c', column_type: 'text' }, code: 'store_not_found' },
   insert_data_store_rows: { client: w.lead, args: { store: UNKNOWN, rows: [{}] }, code: 'store_not_found' },
   set_argus_log_store: { client: w.child, args: { store_id: UNKNOWN }, code: 'not_a_manager' },
+  propose_law: { client: w.lead, args: { body: 'b', incident: ' ' }, code: 'not_a_manager' },
+  propose_permission: { client: w.lead, args: { action: 'a', scope: 's', condition: 'c', exclusions: '', incident: 'i' }, code: 'not_a_manager' },
+  request_resource_access: { client: w.lead, args: { resource_type: 'dataStore', resource_id: UNKNOWN, access: 'read', role: 'r', incident: 'i' }, code: 'not_a_manager' },
+  withdraw_proposal: { client: w.lead, args: { request_id: UNKNOWN }, code: 'not_a_manager' },
+  get_argus_governance: { client: w.child, args: {}, code: 'not_a_manager' },
   set_data_store_natural_key: { client: w.lead, args: { store: UNKNOWN, column: 'c' }, code: 'store_not_found' },
   update_data_store_column: { client: w.lead, args: { store: UNKNOWN, column_id: 'c', name: 'n' }, code: 'store_not_found' },
   delete_data_store_column: { client: w.lead, args: { store: UNKNOWN, column_id: 'c' }, code: 'store_not_found' },

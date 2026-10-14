@@ -16,3 +16,4 @@ export * from './errors.js';
 export * from './daemonIssues.js';
 export * from './diagnostics.js';
 export * from './worktrees.js';
+export * from './governance.js';

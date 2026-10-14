@@ -10,6 +10,7 @@ import { expectBestCpuUnder, expectLinearGrowth, cpuMillisecondsToRun } from '..
 import { forceNdjsonLogging } from '../forceNdjsonLogging.testkit.js';
 import { StuckConnectionError } from '../db/transaction.js';
 import { ApprovalError } from '../governance/approvalService.js';
+import { GovernanceQueueFullError, ProposalNotFoundError } from '../governance/governanceErrors.js';
 import { ModelConfigReadOnlyError, ModelConfigUnreadableError } from '../models.js';
 import { NoteFileUnreadableError, PathEscapesDocsFolderError, ProjectNotFoundError } from '../notes/docsFolderService.js';
 import { FileBackedNoteError, NoteNotFoundError, NoteTooLargeError, StaleRevisionError, VersionNotFoundError } from '../notes/noteService.js';
@@ -47,6 +48,8 @@ const domainErrorCodes: [string, () => unknown, ErrorCode][] = [
   ['UnknownHarnessError', () => new UnknownHarnessError('nope'), 'unknown_harness'],
   ['MessageIdAlreadyUsedError', () => new MessageIdAlreadyUsedError('m1'), 'message_id_reused'],
   ['TooManyPendingMessagesError', () => new TooManyPendingMessagesError('s1'), 'too_many_pending'],
+  ['GovernanceQueueFullError', () => new GovernanceQueueFullError(), 'governance_queue_full'],
+  ['ProposalNotFoundError', () => new ProposalNotFoundError(), 'proposal_not_found'],
   ['SessionReopenError not_closed', () => new SessionReopenError('not_closed', 'x'), 'not_closed'],
   ['SessionReopenError directory_missing', () => new SessionReopenError('directory_missing', 'x'), 'directory_missing'],
   ['SessionReopenError directory_changed', () => new SessionReopenError('directory_changed', 'x'), 'directory_changed'],

@@ -15,6 +15,7 @@ import { ManagerService } from '../managers/managerService.js';
 import { PulseScheduler } from '../managers/pulseScheduler.js';
 import { createMcpHandler } from '../mcp/mcpServer.js';
 import { knowledgeSearchFor } from '../mcp/knowledgeTools.testkit.js';
+import { governanceQueueFor } from '../governance/governanceQueueFor.testkit.js';
 import { DEFAULT_MODEL_TABLE } from '../models.js';
 import { DocsFolderService, NoteFileUnreadableError, PathEscapesDocsFolderError } from '../notes/docsFolderService.js';
 import { expandMentions } from '../notes/mentionExpander.js';
@@ -65,7 +66,7 @@ beforeEach(async () => {
   server = await startServer({
     host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath: join(scratch, 'config.json'),
     notes, noteRepo, docs, stores, storeRepo, projects, workingStates, e2eRoutes: true,
-    mcp: createMcpHandler({ knowledgeSearch: knowledgeSearchFor(db), sessions, approvals, managers, pulseScheduler, modelTable, worktreesRoot: '/tmp/of-wt', stores, storeRepo, notes, noteRepo, docs, projects, workingStates }),
+    mcp: createMcpHandler({ knowledgeSearch: knowledgeSearchFor(db), governanceQueue: governanceQueueFor(db), sessions, approvals, managers, pulseScheduler, modelTable, worktreesRoot: '/tmp/of-wt', stores, storeRepo, notes, noteRepo, docs, projects, workingStates }),
   });
 });
 afterEach(async () => {

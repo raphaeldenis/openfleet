@@ -7,9 +7,9 @@ const NOT_PART_OF_AN_IDENTIFIER = '(?<![A-Za-z0-9_])';
 export const SCAPE_TOOL_RENAMES: Readonly<Record<string, string>> = Object.fromEntries([
   'add_data_store_column', 'append_to_note', 'close_session', 'create_data_store', 'create_data_store_view', 'create_note', 'create_session', 'create_worktree',
   'delete_data_store_row', 'delete_data_store_view', 'delete_note', 'describe_data_store', 'get_argus_status', 'get_note', 'get_note_version', 'get_session_status',
-  'get_working_state', 'insert_data_store_rows', 'list_children', 'list_data_store_views', 'list_note_versions', 'list_notes', 'list_project_folders', 'list_projects',
-  'list_row_changes', 'list_sessions', 'message_parent', 'move_note', 'pulse_now', 'query_data_store', 'restore_note_version', 'search_notes', 'send_session_message',
-  'set_argus_log_store', 'update_data_store_row', 'update_data_store_rows', 'update_data_store_view', 'update_note', 'update_note_section', 'update_session', 'update_working_state',
+  'get_argus_governance', 'get_working_state', 'insert_data_store_rows', 'list_children', 'list_data_store_views', 'list_note_versions', 'list_notes', 'list_project_folders', 'list_projects',
+  'list_row_changes', 'list_sessions', 'message_parent', 'move_note', 'propose_law', 'propose_permission', 'pulse_now', 'query_data_store', 'request_resource_access',
+  'restore_note_version', 'search_notes', 'send_session_message', 'set_argus_log_store', 'withdraw_proposal', 'update_data_store_row', 'update_data_store_rows', 'update_data_store_view', 'update_note', 'update_note_section', 'update_session', 'update_working_state',
 ].map((toolName) => [toolName, toolName]));
 
 const PLAYBOOK_ARCHIVE_POINTER = `the "Playbooks (ex-Scape)" note (see ${PLAYBOOK_SHIMS_DOC})`;
