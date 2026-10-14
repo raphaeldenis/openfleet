@@ -58,4 +58,8 @@ export interface ManagerView {
   pinMissionNote?: boolean;
   /** The table the manager logs its actions in, when one is bound. */
   logStoreId?: string;
+  /** Refusals of commands in the manager's lineage that it has not looked at since its last read of `list_denied_commands`. */
+  deniedCommandCount?: number;
+  /** All the refusals recorded in the manager's lineage. */
+  deniedCommandTotal?: number;
 }

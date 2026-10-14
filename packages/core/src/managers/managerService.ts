@@ -5,7 +5,7 @@ import type { SessionService } from '../sessions/sessionService.js';
 import { StoreNotFoundError } from '../stores/dataStoreRepository.js';
 import { isPulseEnabled, type ManagerRecord, type ManagerRepository } from './managerRepository.js';
 import { DEFAULT_HEARTBEAT_SECONDS } from '../workingState/workingStateSettings.js';
-import { toManagerView } from './managerView.js';
+import { toManagerView, type DeniedCommandCounts } from './managerView.js';
 
 export interface PulseSchedulerLike {
   onManagerCreated(record: ManagerRecord): void;
@@ -30,6 +30,8 @@ export interface ManagerServiceDeps {
   heartbeatDefaultSeconds?: number;
   /** Absent, no manager counts as imported. */
   scapeImportStatusOf?: (sessionId: string) => ScapeImportStatus;
+  /** Absent, no manager has any refused command. */
+  deniedCommandCountsOf?: (managerId: string) => DeniedCommandCounts;
 }
 
 export class ManagerService {
@@ -132,6 +134,6 @@ export class ManagerService {
 
   private view(record: ManagerRecord): ManagerView {
     const childrenCount = this.deps.sessions.list().filter((s) => s.parentId === record.sessionId && s.state !== 'closed').length;
-    return toManagerView(record, childrenCount);
+    return toManagerView(record, childrenCount, this.deps.deniedCommandCountsOf?.(record.sessionId));
   }
 }

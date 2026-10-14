@@ -8,7 +8,7 @@ import type { DenialDraft, DenialJournal, DenialQuery, DenialReader } from './po
 
 export const MAX_COMMAND_EXCERPT_CHARS = 200;
 
-interface DenialRow {
+export interface DenialRow {
   rowid: number;
   id: string;
   session_id: string;
@@ -26,7 +26,7 @@ interface DenialRow {
   created_at: string;
 }
 
-function denialOf(row: DenialRow): DeniedCommand {
+export function denialOf(row: DenialRow): DeniedCommand {
   return {
     id: row.id,
     sessionId: row.session_id,

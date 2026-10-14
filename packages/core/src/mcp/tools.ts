@@ -15,6 +15,7 @@ import { lineageSessionView, managerView, sessionView } from './toolViews.js';
 import type { HeldFor, SessionService } from '../sessions/sessionService.js';
 import { sessionLastMessage } from './sessionLastMessage.js';
 import { maskedSecrets } from '../redact.js';
+import type { ManagerDenials } from '../policy/managerDenials.js';
 
 const MAX_AMBIGUITY_CANDIDATES = 4;
 const MAX_CANDIDATE_NAME_CHARS = 24;
@@ -52,6 +53,7 @@ export interface RegisterToolsDeps {
   managers: ManagerService;
   pulseScheduler: PulseScheduler;
   modelTable: ModelTable;
+  managerDenials?: Pick<ManagerDenials, 'countsOf'>;
 }
 
 export function registerTools(server: McpServer, deps: RegisterToolsDeps): void {
@@ -299,7 +301,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
       ...(child.runtimeAttention && { runtimeAttention: child.runtimeAttention }),
     }));
     const record = caller.role === MANAGER_ROLE ? managers.get(caller.id) : undefined;
-    const manager = record ? managerView(toManagerView(record, children.filter((c) => c.state !== 'closed').length)) : null;
+    const manager = record ? managerView(toManagerView(record, children.filter((c) => c.state !== 'closed').length, deps.managerDenials?.countsOf(record.sessionId))) : null;
     return ok({ manager, children });
   });
 
