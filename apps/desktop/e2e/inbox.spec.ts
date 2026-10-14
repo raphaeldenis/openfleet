@@ -55,8 +55,9 @@ test('the Inbox is one list opened on All, with a Questions filter and no tabs',
   const session = await fakeSessions.create(request, { name: 'Gate keeper' });
   await session.hooks.announceIdle();
   await page.goto('/inbox');
-  const decision = session.hooks.requestPermission({ command: 'ls' });
-  const gateCard = page.getByTestId('inbox-gate-card').filter({ hasText: 'ls' });
+  const commandNeedingApproval = 'gh pr merge 1';
+  const decision = session.hooks.requestPermission({ command: commandNeedingApproval });
+  const gateCard = page.getByTestId('inbox-gate-card').filter({ hasText: commandNeedingApproval });
   await expect(page.getByTestId('inbox-filter-all')).toHaveAttribute('aria-pressed', 'true');
   await expect(gateCard).toBeVisible();
   await expect(page.getByRole('tab')).toHaveCount(0);
