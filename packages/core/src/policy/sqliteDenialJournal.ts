@@ -2,6 +2,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { DeniedCommand, DeniedCommandPage } from '@openfleet/shared';
 import { newId } from '../ids.js';
 import { redactedText } from '../logger.js';
+import { maskedCommandSecrets } from './commandSecrets.js';
 import { decodeDenialCursor, encodeDenialCursor } from './denialCursor.js';
 import type { DenialDraft, DenialJournal, DenialQuery, DenialReader } from './ports.js';
 
@@ -59,7 +60,7 @@ export class SqliteDenialJournal implements DenialJournal, DenialReader {
       decisionSource: draft.decisionSource,
       outcome: draft.outcome,
       toolName: draft.toolName,
-      commandExcerpt: redactedText(draft.command).slice(0, MAX_COMMAND_EXCERPT_CHARS),
+      commandExcerpt: redactedText(maskedCommandSecrets(draft.command)).slice(0, MAX_COMMAND_EXCERPT_CHARS),
       ...(draft.alternative === undefined ? {} : { alternative: draft.alternative }),
       actor: draft.actor,
       createdAt: this.deps.clock(),

@@ -325,6 +325,29 @@ describe('the list of refusals', () => {
     expect(page.nextCursor).toBeUndefined();
   });
 
+  it('never lets a secret of a refused command reach the journal, the API or the command.denied frame', async () => {
+    await bootDaemon();
+    await putPolicy({ version: 1, mode: 'enforce' });
+    const child = await createChildOf((await createSession()).id);
+    const { ticket } = (await (await call('/api/ws-ticket', { method: 'POST' })).json()) as { ticket: string };
+    const socket = new WebSocket(`${daemon!.server.url.replace('http', 'ws')}/ws?ticket=${ticket}`);
+    const frames: string[] = [];
+    socket.addEventListener('message', (message) => frames.push(String(message.data)));
+    await new Promise((resolve) => socket.addEventListener('open', resolve, { once: true }));
+
+    await preToolUse(child.id, 'rm -rf s5 --password hunter2plain');
+    await preToolUse(child.id, 'PASSWORD=hunter2plain rm -rf s6 --token=hunter2plain');
+    await vi.waitFor(() => expect(frames.filter((frame) => frame.includes('command.denied'))).toHaveLength(2));
+    socket.close();
+
+    const journalText = JSON.stringify(journalRows());
+    const apiText = JSON.stringify(await denials());
+    expect(journalText).not.toContain('hunter2plain');
+    expect(apiText).not.toContain('hunter2plain');
+    expect(frames.join('\n')).not.toContain('hunter2plain');
+    expect((await denials()).items.map((denial) => denial.commandExcerpt)).toEqual(['PASSWORD=*** rm -rf s6 --token=***', 'rm -rf s5 --password ***']);
+  });
+
   it('pages through refusals recorded in the same millisecond without a gap or a repeat', async () => {
     await bootDaemon();
     await refuseNTimes(5);
