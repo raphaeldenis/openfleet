@@ -1,0 +1,166 @@
+{
+  "description": "Output of codex execpolicy check against test.rules (codex-cli 0.162.1).",
+  "codexVersion": "0.162.1",
+  "results": [
+    {
+      "command": "codex execpolicy check --rules test.rules -- rm -rf build",
+      "exitCode": 0,
+      "stdout": {
+        "matchedRules": [
+          {
+            "prefixRuleMatch": {
+              "matchedPrefix": [
+                "rm",
+                "-rf"
+              ],
+              "decision": "forbidden",
+              "justification": "rm -rf is refused; use rm -r on a path inside the worktree"
+            }
+          }
+        ],
+        "decision": "forbidden"
+      }
+    },
+    {
+      "command": "codex execpolicy check --rules test.rules -- rm -fr build",
+      "exitCode": 0,
+      "stdout": {
+        "matchedRules": [
+          {
+            "prefixRuleMatch": {
+              "matchedPrefix": [
+                "rm",
+                "-fr"
+              ],
+              "decision": "forbidden",
+              "justification": "rm -fr is refused"
+            }
+          }
+        ],
+        "decision": "forbidden"
+      }
+    },
+    {
+      "command": "codex execpolicy check --rules test.rules -- rm -r build",
+      "exitCode": 0,
+      "stdout": {
+        "matchedRules": []
+      }
+    },
+    {
+      "command": "codex execpolicy check --rules test.rules -- git clean -fd",
+      "exitCode": 0,
+      "stdout": {
+        "matchedRules": [
+          {
+            "prefixRuleMatch": {
+              "matchedPrefix": [
+                "git",
+                "clean",
+                "-fd"
+              ],
+              "decision": "forbidden",
+              "justification": "git clean -f is refused; use git clean -n"
+            }
+          }
+        ],
+        "decision": "forbidden"
+      }
+    },
+    {
+      "command": "codex execpolicy check --rules test.rules -- git status",
+      "exitCode": 0,
+      "stdout": {
+        "matchedRules": [
+          {
+            "prefixRuleMatch": {
+              "matchedPrefix": [
+                "git",
+                "status"
+              ],
+              "decision": "allow",
+              "justification": "read-only git status"
+            }
+          }
+        ],
+        "decision": "allow"
+      }
+    },
+    {
+      "command": "codex execpolicy check --rules test.rules -- git push origin main",
+      "exitCode": 0,
+      "stdout": {
+        "matchedRules": [
+          {
+            "prefixRuleMatch": {
+              "matchedPrefix": [
+                "git",
+                "push"
+              ],
+              "decision": "prompt",
+              "justification": "push needs a human"
+            }
+          }
+        ],
+        "decision": "prompt"
+      }
+    },
+    {
+      "command": "codex execpolicy check --rules test.rules -- sh -c rm -rf x",
+      "exitCode": 0,
+      "stdout": {
+        "matchedRules": [
+          {
+            "prefixRuleMatch": {
+              "matchedPrefix": [
+                "sh",
+                "-c"
+              ],
+              "decision": "forbidden",
+              "justification": "sh -c is refused"
+            }
+          }
+        ],
+        "decision": "forbidden"
+      }
+    },
+    {
+      "command": "codex execpolicy check --rules test.rules -- bash -lc rm -rf x",
+      "exitCode": 0,
+      "stdout": {
+        "matchedRules": [
+          {
+            "prefixRuleMatch": {
+              "matchedPrefix": [
+                "bash",
+                "-lc"
+              ],
+              "decision": "forbidden",
+              "justification": "bash -lc is refused"
+            }
+          }
+        ],
+        "decision": "forbidden"
+      }
+    },
+    {
+      "command": "codex execpolicy check --rules test.rules -- touch .git/hooks/pre-commit",
+      "exitCode": 0,
+      "stdout": {
+        "matchedRules": [
+          {
+            "prefixRuleMatch": {
+              "matchedPrefix": [
+                "touch",
+                ".git/hooks/pre-commit"
+              ],
+              "decision": "forbidden",
+              "justification": "writing inside .git is refused"
+            }
+          }
+        ],
+        "decision": "forbidden"
+      }
+    }
+  ]
+}

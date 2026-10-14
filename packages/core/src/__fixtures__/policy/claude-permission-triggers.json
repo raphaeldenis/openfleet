@@ -1,0 +1,106 @@
+{
+  "description": "Bash commands run with claude -p (working directory /tmp/s0/work, default permission mode, PreToolUse answered {}): which ones made the CLI emit a PermissionRequest.",
+  "claudeCodeVersion": "2.1.296",
+  "runs": [
+    {
+      "scenario": "incident command: sed substitution piped to grep, file outside the working directory",
+      "observations": [
+        {
+          "command": "sed 's/x/y/' /tmp/s0/outside/notes.txt | grep -n z",
+          "permissionRequestEmitted": true,
+          "modelSawToolResult": {
+            "isError": true,
+            "content": "This Bash command contains multiple operations. The following part requires approval: sed 's/x/y/' /tmp/s0/outside/notes.txt"
+          }
+        }
+      ]
+    },
+    {
+      "scenario": "sed substitution piped to grep on the CLI own tool-results file (after a large Bash output was persisted)",
+      "observations": [
+        {
+          "command": "seq 1 80000",
+          "permissionRequestEmitted": false,
+          "modelSawToolResult": {
+            "isError": false,
+            "content": "<persisted-output>\nOutput too large (457.9KB). Full output saved to: /home/user/.claude/projects/-tmp-s0-work/00000000-0000-4000-8000-000000000005/tool-results/REDACTED.txt\n\nPreview (first 2KB):\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n31\n32\n33\n34\n35\n36\n37\n38\n"
+          }
+        },
+        {
+          "command": "sed 's/1/y/' /home/user/.claude/projects/-tmp-s0-work/00000000-0000-4000-8000-000000000005/tool-results/REDACTED.txt | grep -n 79999",
+          "permissionRequestEmitted": true,
+          "modelSawToolResult": {
+            "isError": true,
+            "content": "This Bash command contains multiple operations. The following part requires approval: sed 's/1/y/' /home/user/.claude/projects/-tmp-s0-work/00000000-0000-4000-8000-000000000005/tool-results/REDACTED.txt"
+          }
+        }
+      ]
+    },
+    {
+      "scenario": "sed substitution on a file INSIDE the working directory; grep and cat on files outside it",
+      "observations": [
+        {
+          "command": "sed 's/x/y/' inside.txt | grep -n z",
+          "permissionRequestEmitted": true,
+          "modelSawToolResult": {
+            "isError": true,
+            "content": "This Bash command contains multiple operations. The following part requires approval: sed 's/x/y/' inside.txt"
+          }
+        },
+        {
+          "command": "grep -n z /tmp/s0/outside/notes.txt",
+          "permissionRequestEmitted": true,
+          "modelSawToolResult": {
+            "isError": true,
+            "content": "grep in '/tmp/s0/outside/notes.txt' was blocked. For security, Claude Code may only search for patterns in files from the allowed working directories for this session: '/tmp/s0/work'."
+          }
+        },
+        {
+          "command": "cat /tmp/s0/outside/notes.txt",
+          "permissionRequestEmitted": true,
+          "modelSawToolResult": {
+            "isError": true,
+            "content": "cat in '/tmp/s0/outside/notes.txt' was blocked. For security, Claude Code may only concatenate files from the allowed working directories for this session: '/tmp/s0/work'."
+          }
+        }
+      ]
+    },
+    {
+      "scenario": "grep, cat, sed -n 1p inside the working directory; sed -n 1p outside it",
+      "observations": [
+        {
+          "command": "grep -n z inside.txt",
+          "permissionRequestEmitted": false,
+          "modelSawToolResult": {
+            "isError": false,
+            "content": "3:gamma z line"
+          }
+        },
+        {
+          "command": "cat inside.txt",
+          "permissionRequestEmitted": false,
+          "modelSawToolResult": {
+            "isError": false,
+            "content": "alpha x line\nbeta\ngamma z line"
+          }
+        },
+        {
+          "command": "sed -n 1p inside.txt",
+          "permissionRequestEmitted": false,
+          "modelSawToolResult": {
+            "isError": false,
+            "content": "alpha x line"
+          }
+        },
+        {
+          "command": "sed -n 1p /tmp/s0/outside/notes.txt",
+          "permissionRequestEmitted": true,
+          "modelSawToolResult": {
+            "isError": true,
+            "content": "sed in '/tmp/s0/outside/notes.txt' was blocked. For security, Claude Code may only edit files in the allowed working directories for this session: '/tmp/s0/work'."
+          }
+        }
+      ]
+    }
+  ]
+}

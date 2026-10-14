@@ -1,0 +1,56 @@
+{
+  "description": "Hook responses returned by the daemon and the tool_result text the model received for each, observed with claude -p.",
+  "claudeCodeVersion": "2.1.296",
+  "cases": [
+    {
+      "hookEvent": "PreToolUse",
+      "daemonResponse": {
+        "hookSpecificOutput": {
+          "hookEventName": "PreToolUse",
+          "permissionDecision": "deny",
+          "permissionDecisionReason": "OpenFleet command policy [no-forced-recursive-rm]: rm -rf asks for a confirmation nobody sees.\nAlternative: use `rm -r <path>`.\nNo human is watching this session; rephrase and continue."
+        }
+      },
+      "modelSawToolResult": {
+        "isError": true,
+        "content": "PreToolUse:Bash hook error: OpenFleet command policy [no-forced-recursive-rm]: rm -rf asks for a confirmation nobody sees.\nAlternative: use `rm -r <path>`.\nNo human is watching this session; rephrase and continue."
+      }
+    },
+    {
+      "hookEvent": "PreToolUse",
+      "daemonResponse": {
+        "decision": "block",
+        "reason": "OpenFleet command policy [legacy-block]: refused via top-level decision block.\nAlternative: use something else."
+      },
+      "modelSawToolResult": {
+        "isError": true,
+        "content": "PreToolUse:Bash hook error: OpenFleet command policy [legacy-block]: refused via top-level decision block.\nAlternative: use something else."
+      }
+    },
+    {
+      "hookEvent": "PermissionRequest",
+      "daemonResponse": {
+        "hookSpecificOutput": {
+          "hookEventName": "PermissionRequest",
+          "decision": {
+            "behavior": "deny",
+            "message": "OpenFleet command policy [unattended-ask]: no human is watching, command refused instead of asked.\nAlternative: read files inside your worktree."
+          }
+        }
+      },
+      "modelSawToolResult": {
+        "isError": true,
+        "content": "OpenFleet command policy [unattended-ask]: no human is watching, command refused instead of asked.\nAlternative: read files inside your worktree."
+      }
+    },
+    {
+      "hookEvent": "PreToolUse",
+      "actor": "subagent",
+      "daemonResponse": "same as the first case",
+      "modelSawToolResult": {
+        "isError": true,
+        "content": "PreToolUse:Bash hook error: OpenFleet command policy [no-forced-recursive-rm]: rm -rf asks for a confirmation nobody sees.\nAlternative: use `rm -r <path>`.\nNo human is watching this session; rephrase and continue."
+      }
+    }
+  ]
+}

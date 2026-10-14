@@ -1,0 +1,42 @@
+prefix_rule(
+    pattern = ["rm", "-rf"],
+    decision = "forbidden",
+    justification = "rm -rf is refused; use rm -r on a path inside the worktree",
+    match = [["rm", "-rf", "build"]],
+    not_match = [["rm", "-r", "build"]],
+)
+prefix_rule(
+    pattern = ["rm", "-fr"],
+    decision = "forbidden",
+    justification = "rm -fr is refused",
+)
+prefix_rule(
+    pattern = ["git", "clean", ["-f", "-fd", "-fdx", "-xfd"]],
+    decision = "forbidden",
+    justification = "git clean -f is refused; use git clean -n",
+)
+prefix_rule(
+    pattern = ["sh", "-c"],
+    decision = "forbidden",
+    justification = "sh -c is refused",
+)
+prefix_rule(
+    pattern = ["bash", "-lc"],
+    decision = "forbidden",
+    justification = "bash -lc is refused",
+)
+prefix_rule(
+    pattern = ["touch", ".git/hooks/pre-commit"],
+    decision = "forbidden",
+    justification = "writing inside .git is refused",
+)
+prefix_rule(
+    pattern = ["git", "status"],
+    decision = "allow",
+    justification = "read-only git status",
+)
+prefix_rule(
+    pattern = ["git", "push"],
+    decision = "prompt",
+    justification = "push needs a human",
+)
