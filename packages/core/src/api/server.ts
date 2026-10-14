@@ -34,6 +34,8 @@ import { registerHandoffRoutes, type HandoffRouteDeps } from './handoffRoutes.js
 import { registerNoteRoutes } from './noteRoutes.js';
 import { registerProjectRoutes } from './projectRoutes.js';
 import { registerWorktreeRoutes } from './worktreeRoutes.js';
+import { registerGovernanceRoutes } from './governanceRoutes.js';
+import type { GovernanceQueueService } from '../governance/governanceQueueService.js';
 import type { WorktreeService } from '../worktrees/worktreeService.js';
 import { registerHandoffPickerRoutes } from './handoffPickerRoutes.js';
 import { HandoffSeed } from '../notes/handoffSeed.js';
@@ -60,6 +62,8 @@ export interface ServerDeps {
   projectService?: ProjectService;
   // Without it the project worktree list and removal routes do not exist.
   worktrees?: WorktreeService;
+  // Without it the governance routes do not exist and the snapshot carries no proposals.
+  governanceQueue?: GovernanceQueueService;
   // The working-state route, event and snapshot fields exist only when the daemon hands over the service.
   workingStates?: WorkingStateService; workingStateMaxAgeMinutes?: number;
   // Without it the snapshot reports no silent blocks.
@@ -145,6 +149,7 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; rout
   if (deps.diagnostics) registerDiagnosticsRoutes(router, deps.diagnostics);
   if (deps.projects) registerProjectRoutes(router, { projects: deps.projects, projectService: deps.projectService });
   if (deps.worktrees) registerWorktreeRoutes(router, { worktrees: deps.worktrees });
+  if (deps.governanceQueue) registerGovernanceRoutes(router, { governanceQueue: deps.governanceQueue });
   if (deps.projects && deps.noteRepo) registerHandoffPickerRoutes(router, new HandoffSeed({ projects: deps.projects, notes: deps.noteRepo, files: nodeHandoffFileReader }));
   if (deps.stores && deps.storeRepo) registerDataStoreRoutes(router, { stores: deps.stores, storeRepo: deps.storeRepo });
   if (deps.handoff) registerHandoffRoutes(router, deps.handoff);

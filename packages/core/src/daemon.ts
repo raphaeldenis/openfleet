@@ -131,7 +131,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     linkTargets: { noteProjectId: (noteId) => noteRepo.getProjectId(noteId), storeProjectId: (storeId) => storeRepo.findStore(storeId)?.projectId },
   });
   const governanceQueue = new GovernanceQueueService({
-    db, clock: () => new Date().toISOString(), newId,
+    db, bus, clock: () => new Date().toISOString(), newId,
     managers: { isManager: (sessionId) => managerRepository.get(sessionId) !== undefined, projectIdOf: (sessionId) => sessions.get(sessionId)?.projectId },
     linkTargets: { noteProjectId: (noteId) => noteRepo.getProjectId(noteId), storeProjectId: (storeId) => storeRepo.findStore(storeId)?.projectId },
   });
@@ -161,7 +161,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   // fast process hitting a port nothing is serving yet.
   const diagnostics = () => buildDiagnosticsDocument({ db, degraded, listSessions: () => sessions.list(), port: config.port, e2eEnabled: config.e2eEnabled });
   const worktrees = new WorktreeService({ projects, sessions, worktreesRoot: config.worktreesRoot });
-  const server = await startServer({ ...config, e2eRoutes: config.e2eEnabled, degraded, diagnostics, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, stores, storeRepo, projects, projectService, worktrees, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, mcp: createMcpHandler({ knowledgeSearch, governanceQueue, sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });
+  const server = await startServer({ ...config, e2eRoutes: config.e2eEnabled, degraded, diagnostics, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, stores, storeRepo, projects, projectService, worktrees, governanceQueue, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, mcp: createMcpHandler({ knowledgeSearch, governanceQueue, sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });
   log('info', `openfleet core listening on ${server.url} (version: ${DAEMON_VERSION}, home: ${config.home})`);
 
   const unwatchDatabase = watchDatabaseHealth(degraded);

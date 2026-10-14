@@ -1,4 +1,4 @@
-import { SESSION_CLOSE_REASONS, type DaemonIssue, type ErrorEnvelope } from '@openfleet/shared';
+import { SESSION_CLOSE_REASONS, type DaemonIssue, type ErrorEnvelope, type GovernanceProposalView } from '@openfleet/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { closedSessionPresentationFor } from '../sessions/closed-session-presentation';
 import { FleetEventsService, silentBlockKey } from './fleet-events.service';
@@ -1109,6 +1109,88 @@ describe('FleetEventsService daemon issues and background failures', () => {
       socket.dispatchMessage(snapshotOf());
 
       expect(closeReasonOf('s1')).toBeUndefined();
+    });
+  });
+
+  describe('governance proposals', () => {
+    const proposal = (id: string, patch: Partial<GovernanceProposalView> = {}): GovernanceProposalView => ({
+      id, managerId: 'm1', kind: 'law', status: 'pending', incident: 'force push on main', payload: { text: `Law ${id}` }, createdAt: '2026-10-14T10:00:00.000Z', ...patch,
+    });
+    const snapshotWith = (proposals?: GovernanceProposalView[]) => ({ type: 'snapshot', sessions: [], approvals: [], ...(proposals && { proposals }) });
+
+    it('holds no proposal before any snapshot', () => {
+      expect(service.proposals()).toEqual([]);
+    });
+
+    it('seeds the pending proposals from the snapshot', () => {
+      socket.dispatchMessage(snapshotWith([proposal('p1'), proposal('p2')]));
+
+      expect(service.proposals().map(({ id }) => id)).toEqual(['p1', 'p2']);
+    });
+
+    it('holds none for a daemon whose snapshot reports none', () => {
+      socket.dispatchMessage(snapshotWith([proposal('p1')]));
+
+      socket.dispatchMessage(snapshotWith());
+
+      expect(service.proposals()).toEqual([]);
+    });
+
+    it('replaces the list on a later snapshot instead of merging it', () => {
+      socket.dispatchMessage(snapshotWith([proposal('p1')]));
+
+      socket.dispatchMessage(snapshotWith([proposal('p2')]));
+
+      expect(service.proposals().map(({ id }) => id)).toEqual(['p2']);
+    });
+
+    it('appends a proposal announced by governance.proposed', () => {
+      socket.dispatchMessage(snapshotWith([proposal('p1')]));
+
+      socket.dispatchMessage({ type: 'governance.proposed', proposal: proposal('p2') });
+
+      expect(service.proposals().map(({ id }) => id)).toEqual(['p1', 'p2']);
+    });
+
+    it('does not duplicate a proposal governance.proposed announces twice', () => {
+      socket.dispatchMessage({ type: 'governance.proposed', proposal: proposal('p1') });
+
+      socket.dispatchMessage({ type: 'governance.proposed', proposal: proposal('p1') });
+
+      expect(service.proposals()).toHaveLength(1);
+    });
+
+    it.each(['approved', 'denied', 'withdrawn'] as const)('drops a proposal governance.resolved announces as %s', (status) => {
+      socket.dispatchMessage(snapshotWith([proposal('p1'), proposal('p2')]));
+
+      socket.dispatchMessage({ type: 'governance.resolved', proposal: proposal('p1', { status, decidedAt: '2026-10-14T11:00:00.000Z' }) });
+
+      expect(service.proposals().map(({ id }) => id)).toEqual(['p2']);
+    });
+
+    it('does not bring back a resolved proposal when its governance.proposed is replayed', () => {
+      socket.dispatchMessage(snapshotWith([proposal('p1')]));
+      socket.dispatchMessage({ type: 'governance.resolved', proposal: proposal('p1', { status: 'approved', decidedAt: '2026-10-14T11:00:00.000Z' }) });
+
+      socket.dispatchMessage({ type: 'governance.proposed', proposal: proposal('p1', { status: 'approved', decidedAt: '2026-10-14T11:00:00.000Z' }) });
+
+      expect(service.proposals()).toEqual([]);
+    });
+
+    it('ignores an unknown governance event', () => {
+      socket.dispatchMessage(snapshotWith([proposal('p1')]));
+
+      socket.dispatchMessage({ type: 'governance.archived', proposal: proposal('p1') });
+
+      expect(service.proposals().map(({ id }) => id)).toEqual(['p1']);
+    });
+
+    it('ignores a governance.resolved for a proposal it does not hold', () => {
+      socket.dispatchMessage(snapshotWith([proposal('p1')]));
+
+      socket.dispatchMessage({ type: 'governance.resolved', proposal: proposal('unknown', { status: 'approved' }) });
+
+      expect(service.proposals().map(({ id }) => id)).toEqual(['p1']);
     });
   });
 });

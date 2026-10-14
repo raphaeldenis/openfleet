@@ -1,5 +1,6 @@
 import type { DaemonIssue } from './daemonIssues.js';
 import type { ErrorEnvelope } from './errors.js';
+import type { GovernanceProposalView } from './governance.js';
 import type { ManagerView } from './managers.js';
 import type { Approval, PermissionMode, RuntimeAttention, Session, SessionCloseReason, SessionState } from './session.js';
 import type { SessionTodos, TodoSummary } from './todos.js';
@@ -29,7 +30,7 @@ export type NotificationTrigger =
   | { category: 'needsInput'; sessionId: string; kind: NeedsInputKind; promptKey: string; toolName?: string };
 
 export type ServerEvent =
-  | { type: 'snapshot'; sessions: Session[]; approvals: Approval[]; managers: ManagerView[]; workingStates?: WorkingState[]; workingStateMaxAgeMinutes?: number; workingStateMaxBytes?: number; todoSummaries?: TodoSummary[]; daemonIssues?: DaemonIssue[]; silentBlocks?: SilentBlock[] }
+  | { type: 'snapshot'; sessions: Session[]; approvals: Approval[]; proposals?: GovernanceProposalView[]; managers: ManagerView[]; workingStates?: WorkingState[]; workingStateMaxAgeMinutes?: number; workingStateMaxBytes?: number; todoSummaries?: TodoSummary[]; daemonIssues?: DaemonIssue[]; silentBlocks?: SilentBlock[] }
   | { type: 'session.created'; session: Session }
   | { type: 'session.state'; sessionId: string; state: SessionState; stateSince: string }
   | { type: 'session.attention'; sessionId: string; runtimeAttention: RuntimeAttention | null }
@@ -46,6 +47,8 @@ export type ServerEvent =
   | { type: 'message.delivered'; sessionId: string; messageId: string }
   | { type: 'approval.created'; approval: Approval }
   | { type: 'approval.resolved'; approval: Approval }
+  | { type: 'governance.proposed'; proposal: GovernanceProposalView }
+  | { type: 'governance.resolved'; proposal: GovernanceProposalView }
   | { type: 'session.working_state'; state: WorkingState }
   | { type: 'session.todos'; todos: SessionTodos }
   | { type: 'manager.created'; manager: ManagerView }

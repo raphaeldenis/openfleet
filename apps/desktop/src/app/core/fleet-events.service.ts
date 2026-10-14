@@ -1,6 +1,6 @@
 import { Injectable, computed, signal } from '@angular/core';
 import { TodoSummarySchema, closeReasonOfExitCode, parseSessionCloseReason } from '@openfleet/shared';
-import type { Approval, DaemonIssue, ErrorEnvelope, ErrorEventScope, ManagerView, NotificationTrigger, ServerEvent, Session, SessionTodos, SilentBlock, TodoSummary, WorkingState } from '@openfleet/shared';
+import type { Approval, DaemonIssue, ErrorEnvelope, ErrorEventScope, GovernanceProposalView, ManagerView, NotificationTrigger, ServerEvent, Session, SessionTodos, SilentBlock, TodoSummary, WorkingState } from '@openfleet/shared';
 import { Subject } from 'rxjs';
 import { environment } from '../../environments/environment';
 import { parseSessionTodos } from './session-todos-parser';
@@ -71,6 +71,8 @@ export class FleetEventsService {
   readonly sessions = signal<Session[]>([]);
   readonly approvals = signal<Approval[]>([]);
   readonly managers = signal<ManagerView[]>([]);
+  /** The governance proposals still awaiting a human decision; empty for a daemon that reports none. */
+  readonly proposals = signal<GovernanceProposalView[]>([]);
   readonly workingStates = signal<ReadonlyMap<string, WorkingState>>(new Map());
   // A daemon that predates working states sends no list: a missing state then means "not reported", never "overdue".
   readonly workingStatesReported = signal(false);
@@ -242,6 +244,7 @@ export class FleetEventsService {
         this.sessions.set(event.sessions.map((session) => withReadableCloseReason(withoutStaleClosure(session))));
         this.approvals.set(event.approvals);
         this.managers.set(event.managers ?? []);
+        this.proposals.set(event.proposals ?? []);
         this.workingStates.set(new Map((event.workingStates ?? []).map((state) => [state.sessionId, state])));
         this.workingStatesReported.set(event.workingStates !== undefined);
         this.workingStateMaxAgeMinutes.set(event.workingStateMaxAgeMinutes);
@@ -276,6 +279,8 @@ export class FleetEventsService {
       case 'message.delivered': return this.markMessageDelivered(event.messageId);
       case 'approval.created': return this.upsertApproval(event.approval);
       case 'approval.resolved': return this.approvals.update((all) => all.filter((a) => a.id !== event.approval.id));
+      case 'governance.proposed': return this.upsertProposal(event.proposal);
+      case 'governance.resolved': return this.proposals.update((all) => all.filter((p) => p.id !== event.proposal.id));
       case 'manager.created': return this.upsertManager(event.manager);
       case 'manager.pulsed': return this.upsertManager(event.manager);
       case 'manager.updated': return this.upsertManager(event.manager);
@@ -351,6 +356,12 @@ export class FleetEventsService {
 
   private upsertApproval(approval: Approval): void {
     this.approvals.update((all) => (all.some((a) => a.id === approval.id) ? all.map((a) => (a.id === approval.id ? approval : a)) : [...all, approval]));
+  }
+
+  private upsertProposal(proposal: GovernanceProposalView): void {
+    const isStillAwaitingDecision = proposal.status === 'pending';
+    if (!isStillAwaitingDecision) return;
+    this.proposals.update((all) => (all.some((p) => p.id === proposal.id) ? all.map((p) => (p.id === proposal.id ? proposal : p)) : [...all, proposal]));
   }
 
   private upsertManager(manager: ManagerView): void {
