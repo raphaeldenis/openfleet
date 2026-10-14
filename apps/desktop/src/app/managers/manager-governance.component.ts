@@ -2,9 +2,11 @@ import { ChangeDetectionStrategy, Component, computed, effect, inject, input, si
 import { RouterLink } from '@angular/router';
 import type { GovernanceProposalView, ManagerGovernanceView, ResourceAccessPayload } from '@openfleet/shared';
 import { showBidiControlsAsEscapes } from '../core/bidi-escapes';
+import { copyFor } from '../core/error-copy';
 import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
-import { proposalDetailsOf } from '../inbox/governance-details';
+import { ErrorLineComponent } from '../design/error-line.component';
+import { STATUS_LABELS, accessLabelOf, proposalDetailsOf } from '../inbox/governance-details';
 import { GovernanceResourceNames } from '../inbox/governance-resource-names.service';
 
 const GRANTS_NOT_ENFORCED_LABEL = 'informational: not enforced yet';
@@ -13,17 +15,23 @@ const GRANTS_NOT_ENFORCED_LABEL = 'informational: not enforced yet';
 @Component({
   selector: 'of-manager-governance',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink],
+  imports: [ErrorLineComponent, RouterLink],
   template: `
     <section class="governance" aria-labelledby="manager-governance-title" data-testid="manager-governance">
       <h2 class="title" id="manager-governance-title">Governance</h2>
+      @if (loadError(); as message) {
+        <p role="alert" data-testid="manager-governance-error"><of-error-line [glyph]="false">{{ message }}</of-error-line></p>
+      }
       @if (view(); as view) {
         @if (isEmpty()) {
           <p class="muted">No proposal yet.</p>
         }
         @if (pending().length > 0) {
           <div data-testid="manager-governance-pending">
-            <h3 class="subtitle">Pending <a class="link" routerLink="/inbox">Decide in the Inbox</a></h3>
+            <div class="subtitle-row">
+              <h3 class="subtitle">Pending</h3>
+              <a class="link" routerLink="/inbox">Decide in the Inbox</a>
+            </div>
             <ul class="entries">
               @for (entry of pending(); track entry.id) {
                 <li class="entry"><span class="summary">{{ entry.summary }}</span><span class="incident">Incident: {{ entry.incident }}</span></li>
@@ -59,11 +67,13 @@ const GRANTS_NOT_ENFORCED_LABEL = 'informational: not enforced yet';
             <h3 class="subtitle">Resource grants <span class="muted">(${GRANTS_NOT_ENFORCED_LABEL})</span></h3>
             <ul class="entries">
               @for (grant of grants(); track grant.id) {
-                <li class="entry"><span class="summary">{{ grant.resourceName }}</span><span class="status">{{ grant.access }} as {{ grant.role }}</span></li>
+                <li class="entry"><span class="summary">{{ grant.resourceName }}</span><span class="status">{{ grant.accessLabel }} as {{ grant.role }}</span></li>
               }
             </ul>
           </div>
         }
+      } @else if (!loadError()) {
+        <p class="muted">Loading…</p>
       }
     </section>
   `,
@@ -73,7 +83,8 @@ const GRANTS_NOT_ENFORCED_LABEL = 'informational: not enforced yet';
     .title { margin: 0; font-size: 1rem; font-weight: 600; }
     .subtitle { margin: 0 0 .25rem; font-size: .75rem; font-weight: 600; color: var(--mut); }
     .muted { margin: 0; font-size: .75rem; color: var(--mut); font-weight: 400; }
-    .link { margin-left: .5rem; color: var(--accent); font-weight: 400; }
+    .subtitle-row { display: flex; align-items: baseline; gap: .5rem; }
+    .link { font-size: .75rem; color: var(--accent); font-weight: 400; }
     .link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
     .entries { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .375rem; }
     .entry { display: flex; flex-direction: column; gap: .125rem; min-width: 0; }
@@ -88,26 +99,43 @@ export class ManagerGovernanceComponent {
   private readonly events = inject(FleetEventsService);
   private readonly resourceNames = inject(GovernanceResourceNames);
   protected readonly view = signal<ManagerGovernanceView | undefined>(undefined);
+  protected readonly loadError = signal<string | undefined>(undefined);
   private loadCount = 0;
+
+  /** Changes only when the pending proposals of this very manager change. */
+  private readonly pendingProposalIdsOfManager = computed(() =>
+    this.events.proposals().filter((proposal) => proposal.managerId === this.managerId()).map((proposal) => proposal.id).join(','),
+  );
 
   constructor() {
     effect(() => {
+      this.managerId();
+      untracked(() => this.forgetWhatWasShown());
+    });
+    effect(() => {
       const managerId = this.managerId();
-      this.events.proposals();
+      this.pendingProposalIdsOfManager();
       untracked(() => void this.load(managerId));
     });
   }
 
+  private forgetWhatWasShown(): void {
+    this.view.set(undefined);
+    this.loadError.set(undefined);
+  }
+
   private async load(managerId: string): Promise<void> {
     const loadNumber = ++this.loadCount;
+    const isStale = () => loadNumber !== this.loadCount;
     try {
       const view = await this.api.getManagerGovernance(managerId);
-      const isStale = loadNumber !== this.loadCount;
-      if (isStale) return;
+      if (isStale()) return;
       this.requestResourceNamesOf(view);
       this.view.set(view);
-    } catch {
-      // The section keeps what it last showed.
+      this.loadError.set(undefined);
+    } catch (error) {
+      if (isStale()) return;
+      this.loadError.set(copyFor(error, { action: 'generic' }).text);
     }
   }
 
@@ -130,7 +158,7 @@ export class ManagerGovernanceComponent {
       summary: this.summaryOf(proposal),
       incident: showBidiControlsAsEscapes(proposal.incident),
       reason: showBidiControlsAsEscapes(proposal.denialReason ?? ''),
-      status: proposal.status,
+      status: STATUS_LABELS[proposal.status],
     };
   }
 
@@ -141,7 +169,7 @@ export class ManagerGovernanceComponent {
     (this.view()?.resourceGrants ?? []).map((grant) => ({
       id: grant.id,
       resourceName: showBidiControlsAsEscapes(this.resourceNames.nameOf({ projectId: this.projectId(), ...grant })),
-      access: grant.access,
+      accessLabel: accessLabelOf(grant.access),
       role: showBidiControlsAsEscapes(grant.role),
     })),
   );

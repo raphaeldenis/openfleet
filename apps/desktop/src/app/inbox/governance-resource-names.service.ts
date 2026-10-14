@@ -22,7 +22,7 @@ export class GovernanceResourceNames {
     return this.namesByKey().get(keyOf(resource)) ?? resource.resourceId;
   }
 
-  /** Starts looking the name up once; a failed lookup leaves the id shown. */
+  /** Starts looking the name up once; a failed lookup leaves the id shown and the next request tries again. */
   request(resource: ResourceRef): void {
     const key = keyOf(resource);
     const isAlreadyRequested = this.requestedKeys.has(key);
@@ -30,7 +30,7 @@ export class GovernanceResourceNames {
     this.requestedKeys.add(key);
     void this.fetchName({ ...resource, projectId: resource.projectId })
       .then((name) => this.namesByKey.update((names) => new Map(names).set(key, name)))
-      .catch(() => undefined);
+      .catch(() => this.requestedKeys.delete(key));
   }
 
   private async fetchName({ projectId, resourceType, resourceId }: ResourceRef & { projectId: string }): Promise<string> {

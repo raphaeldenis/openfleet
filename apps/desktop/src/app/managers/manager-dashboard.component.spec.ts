@@ -8,6 +8,9 @@ import { ManagerDashboardComponent } from './manager-dashboard.component';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
 
+const emptyGovernance = { resourceGrants: [], pending: [], denied: [], history: [], governanceEvictedDenials: 0 };
+const governanceApi = { getManagerGovernance: () => Promise.resolve(emptyGovernance) };
+
 function activatedRouteFor(id: string) {
   return { paramMap: of(convertToParamMap({ id })) };
 }
@@ -33,7 +36,7 @@ const CHILD_SESSION = { id: 'c1', name: 'Gimli', emoji: '⚔️', parentId: 'm1'
 describe('ManagerDashboardComponent state overdue chip', () => {
   const renderDashboard = (fake: ReturnType<typeof fakeEvents>) =>
     render(ManagerDashboardComponent, {
-      providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('m1') }, { provide: FleetEventsService, useValue: fake }],
+      providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('m1') }, { provide: FleetEventsService, useValue: fake }, { provide: FleetApiService, useValue: governanceApi }],
     });
 
   it('user sees "state overdue" in the header of a manager that has no state', async () => {
@@ -55,7 +58,7 @@ describe('ManagerDashboardComponent pause control', () => {
       providers: [
         provideRouter([]),
         { provide: ActivatedRoute, useValue: activatedRouteFor('m1') },
-        { provide: FleetApiService, useValue: api },
+        { provide: FleetApiService, useValue: { ...governanceApi, ...api } },
         { provide: FleetEventsService, useValue: fakeEvents({ sessions: [managerSession], managers: [managerView] }) },
       ],
     });
@@ -165,7 +168,7 @@ describe('ManagerDashboardComponent', () => {
   it('shows the manager name, state and children cap headroom', async () => {
     const fake = fakeEvents({ sessions: [MANAGER_SESSION, CHILD_SESSION], managers: [MANAGER_VIEW] });
     await render(ManagerDashboardComponent, {
-      providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('m1') }, { provide: FleetEventsService, useValue: fake }],
+      providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('m1') }, { provide: FleetEventsService, useValue: fake }, { provide: FleetApiService, useValue: governanceApi }],
     });
     expect(screen.getByTestId('manager-dashboard-name')).toHaveTextContent('Lead');
     expect(screen.getByTestId('manager-dashboard-cap')).toHaveTextContent('1/2');
@@ -174,7 +177,7 @@ describe('ManagerDashboardComponent', () => {
   it('links the log table the manager is bound to, on the project of the manager', async () => {
     const fake = fakeEvents({ sessions: [{ ...MANAGER_SESSION, projectId: 'p1' }], managers: [{ ...MANAGER_VIEW, logStoreId: 'store-log' }] });
     await render(ManagerDashboardComponent, {
-      providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('m1') }, { provide: FleetEventsService, useValue: fake }],
+      providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('m1') }, { provide: FleetEventsService, useValue: fake }, { provide: FleetApiService, useValue: governanceApi }],
     });
 
     const link = within(screen.getByTestId('manager-dashboard-links')).getByRole('link', { name: 'Log table of Lead' });
@@ -185,7 +188,7 @@ describe('ManagerDashboardComponent', () => {
   it('shows no link row for a manager with neither a mission note nor a log table', async () => {
     const fake = fakeEvents({ sessions: [MANAGER_SESSION], managers: [MANAGER_VIEW] });
     await render(ManagerDashboardComponent, {
-      providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('m1') }, { provide: FleetEventsService, useValue: fake }],
+      providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('m1') }, { provide: FleetEventsService, useValue: fake }, { provide: FleetApiService, useValue: governanceApi }],
     });
 
     expect(screen.queryByTestId('manager-dashboard-links')).toBeNull();
@@ -195,7 +198,7 @@ describe('ManagerDashboardComponent', () => {
     const longName = 'A'.repeat(80);
     const fake = fakeEvents({ sessions: [{ ...MANAGER_SESSION, name: longName }], managers: [MANAGER_VIEW] });
     await render(ManagerDashboardComponent, {
-      providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('m1') }, { provide: FleetEventsService, useValue: fake }],
+      providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('m1') }, { provide: FleetEventsService, useValue: fake }, { provide: FleetApiService, useValue: governanceApi }],
     });
 
     const name = screen.getByTestId('manager-dashboard-name');
@@ -210,7 +213,7 @@ describe('ManagerDashboardComponent', () => {
       managers: [MANAGER_VIEW],
     });
     await render(ManagerDashboardComponent, {
-      providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('m1') }, { provide: FleetEventsService, useValue: fake }],
+      providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('m1') }, { provide: FleetEventsService, useValue: fake }, { provide: FleetApiService, useValue: governanceApi }],
     });
 
     const name = screen.getByTestId('manager-dashboard-name');
@@ -222,7 +225,7 @@ describe('ManagerDashboardComponent', () => {
   it('shows a loading state before the snapshot has arrived, instead of a blank screen', async () => {
     const fake = fakeEvents({ snapshotReceived: false });
     await render(ManagerDashboardComponent, {
-      providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('m1') }, { provide: FleetEventsService, useValue: fake }],
+      providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('m1') }, { provide: FleetEventsService, useValue: fake }, { provide: FleetApiService, useValue: governanceApi }],
     });
     expect(screen.getByTestId('manager-dashboard-loading')).toBeTruthy();
     expect(screen.queryByTestId('manager-dashboard-not-found')).toBeNull();
@@ -231,7 +234,7 @@ describe('ManagerDashboardComponent', () => {
   it('shows "session not found" once the snapshot has loaded but no session matches the id', async () => {
     const fake = fakeEvents({ sessions: [], snapshotReceived: true });
     await render(ManagerDashboardComponent, {
-      providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('missing-id') }, { provide: FleetEventsService, useValue: fake }],
+      providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('missing-id') }, { provide: FleetEventsService, useValue: fake }, { provide: FleetApiService, useValue: governanceApi }],
     });
     expect(screen.getByTestId('manager-dashboard-not-found')).toBeTruthy();
   });
@@ -239,7 +242,7 @@ describe('ManagerDashboardComponent', () => {
   it('offers a "Back to sessions" action on "session not found", instead of a dead end', async () => {
     const fake = fakeEvents({ sessions: [], snapshotReceived: true });
     const { fixture } = await render(ManagerDashboardComponent, {
-      providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('missing-id') }, { provide: FleetEventsService, useValue: fake }],
+      providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('missing-id') }, { provide: FleetEventsService, useValue: fake }, { provide: FleetApiService, useValue: governanceApi }],
     });
     const router = fixture.debugElement.injector.get(Router);
     const navigateSpy = vi.spyOn(router, 'navigate').mockResolvedValue(true);
@@ -255,7 +258,7 @@ describe('ManagerDashboardComponent', () => {
     const plainSession = { id: 's1', name: 'Gimli', emoji: '⚔️', state: 'idle', harness: 'claude-cli' };
     const fake = fakeEvents({ sessions: [plainSession] });
     await render(ManagerDashboardComponent, {
-      providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('s1') }, { provide: FleetEventsService, useValue: fake }],
+      providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('s1') }, { provide: FleetEventsService, useValue: fake }, { provide: FleetApiService, useValue: governanceApi }],
     });
     expect(screen.getByTestId('manager-dashboard-not-manager')).toBeTruthy();
     expect(screen.queryByTestId('manager-governance')).toBeNull();
@@ -265,7 +268,7 @@ describe('ManagerDashboardComponent', () => {
     const plainSession = { id: 's1', name: 'Gimli', emoji: '⚔️', state: 'idle', harness: 'claude-cli' };
     const fake = fakeEvents({ sessions: [plainSession] });
     const { fixture } = await render(ManagerDashboardComponent, {
-      providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('s1') }, { provide: FleetEventsService, useValue: fake }],
+      providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('s1') }, { provide: FleetEventsService, useValue: fake }, { provide: FleetApiService, useValue: governanceApi }],
     });
     const router = fixture.debugElement.injector.get(Router);
     const navigateSpy = vi.spyOn(router, 'navigate').mockResolvedValue(true);
@@ -281,7 +284,7 @@ describe('ManagerDashboardComponent', () => {
     const staleManagerView = { ...MANAGER_VIEW, childrenCount: 0 };
     const fake = fakeEvents({ sessions: [MANAGER_SESSION], managers: [staleManagerView] });
     const { fixture } = await render(ManagerDashboardComponent, {
-      providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('m1') }, { provide: FleetEventsService, useValue: fake }],
+      providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('m1') }, { provide: FleetEventsService, useValue: fake }, { provide: FleetApiService, useValue: governanceApi }],
     });
     expect(screen.getByTestId('manager-dashboard-cap')).toHaveTextContent('0/2');
 
@@ -301,7 +304,7 @@ describe('ManagerDashboardComponent', () => {
         providers: [
           provideRouter([]),
           { provide: ActivatedRoute, useValue: activatedRouteFor('m1') },
-          { provide: FleetApiService, useValue: profileApi },
+          { provide: FleetApiService, useValue: { ...governanceApi, ...profileApi } },
           { provide: FleetEventsService, useValue: fakeEvents({ sessions: [session, CHILD_SESSION], managers: [MANAGER_VIEW] }) },
         ],
       });
@@ -348,7 +351,7 @@ describe('ManagerDashboardComponent', () => {
     const { fixture } = await render(ManagerDashboardComponent, {
       providers: [provideRouter([]), 
         { provide: ActivatedRoute, useValue: { paramMap: paramMap$ } },
-        { provide: FleetApiService, useValue: api },
+        { provide: FleetApiService, useValue: { ...governanceApi, ...api } },
         { provide: FleetEventsService, useValue: fake },
       ],
     });
@@ -381,7 +384,7 @@ describe('ManagerDashboardComponent', () => {
         providers: [
           provideRouter([]),
           { provide: ActivatedRoute, useValue: { paramMap: paramMap$ } },
-          { provide: FleetApiService, useValue: api },
+          { provide: FleetApiService, useValue: { ...governanceApi, ...api } },
           { provide: FleetEventsService, useValue: fakeEvents({ sessions: [closedManagerA, closedManagerB], managers: [MANAGER_VIEW, managerBView] }) },
         ],
       });
@@ -425,7 +428,7 @@ describe('ManagerDashboardComponent', () => {
   it('lists each child in the table with its name and state', async () => {
     const fake = fakeEvents({ sessions: [MANAGER_SESSION, CHILD_SESSION], managers: [MANAGER_VIEW] });
     await render(ManagerDashboardComponent, {
-      providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('m1') }, { provide: FleetEventsService, useValue: fake }],
+      providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('m1') }, { provide: FleetEventsService, useValue: fake }, { provide: FleetApiService, useValue: governanceApi }],
     });
     const row = screen.getByTestId('manager-dashboard-child-c1');
     expect(row).toHaveTextContent('Gimli');
@@ -438,7 +441,7 @@ describe('ManagerDashboardComponent', () => {
     await render(ManagerDashboardComponent, {
       providers: [provideRouter([]), 
         { provide: ActivatedRoute, useValue: activatedRouteFor('m1') },
-        { provide: FleetApiService, useValue: api },
+        { provide: FleetApiService, useValue: { ...governanceApi, ...api } },
         { provide: FleetEventsService, useValue: fake },
       ],
     });
@@ -451,7 +454,7 @@ describe('ManagerDashboardComponent', () => {
   it('shows an explicit notice instead of a silently missing journal/proposals section', async () => {
     const fake = fakeEvents({ sessions: [MANAGER_SESSION], managers: [MANAGER_VIEW] });
     await render(ManagerDashboardComponent, {
-      providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('m1') }, { provide: FleetEventsService, useValue: fake }],
+      providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('m1') }, { provide: FleetEventsService, useValue: fake }, { provide: FleetApiService, useValue: governanceApi }],
     });
     expect(screen.getByRole('heading', { name: 'Governance' })).toBeVisible();
     expect(screen.queryByText(/coming/i)).toBeNull();
@@ -464,7 +467,7 @@ describe('ManagerDashboardComponent', () => {
     await render(ManagerDashboardComponent, {
       providers: [provideRouter([]), 
         { provide: ActivatedRoute, useValue: activatedRouteFor('m1') },
-        { provide: FleetApiService, useValue: api },
+        { provide: FleetApiService, useValue: { ...governanceApi, ...api } },
         { provide: FleetEventsService, useValue: fake },
       ],
     });
@@ -481,7 +484,7 @@ describe('ManagerDashboardComponent', () => {
     await render(ManagerDashboardComponent, {
       providers: [provideRouter([]), 
         { provide: ActivatedRoute, useValue: activatedRouteFor('m1') },
-        { provide: FleetApiService, useValue: api },
+        { provide: FleetApiService, useValue: { ...governanceApi, ...api } },
         { provide: FleetEventsService, useValue: fake },
       ],
     });
@@ -497,7 +500,7 @@ describe('ManagerDashboardComponent', () => {
     await render(ManagerDashboardComponent, {
       providers: [provideRouter([]), 
         { provide: ActivatedRoute, useValue: activatedRouteFor('m1') },
-        { provide: FleetApiService, useValue: api },
+        { provide: FleetApiService, useValue: { ...governanceApi, ...api } },
         { provide: FleetEventsService, useValue: fake },
       ],
     });
@@ -515,7 +518,7 @@ describe('ManagerDashboardComponent', () => {
     const managerSessionWithModel = { ...MANAGER_SESSION, model: 'opus', stateSince: new Date(Date.now() - 3 * 3600_000).toISOString() };
     const fake = fakeEvents({ sessions: [managerSessionWithModel], managers: [MANAGER_VIEW] });
     await render(ManagerDashboardComponent, {
-      providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('m1') }, { provide: FleetEventsService, useValue: fake }],
+      providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('m1') }, { provide: FleetEventsService, useValue: fake }, { provide: FleetApiService, useValue: governanceApi }],
     });
 
     const meta = screen.getByTestId('manager-dashboard-meta');
@@ -527,7 +530,7 @@ describe('ManagerDashboardComponent', () => {
   it('opens the manager\'s own session terminal when "Terminal" is clicked', async () => {
     const fake = fakeEvents({ sessions: [MANAGER_SESSION], managers: [MANAGER_VIEW] });
     const { fixture } = await render(ManagerDashboardComponent, {
-      providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('m1') }, { provide: FleetEventsService, useValue: fake }],
+      providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('m1') }, { provide: FleetEventsService, useValue: fake }, { provide: FleetApiService, useValue: governanceApi }],
     });
     const router = fixture.debugElement.injector.get(Router);
     const navigateSpy = vi.spyOn(router, 'navigate').mockResolvedValue(true);
@@ -541,7 +544,7 @@ describe('ManagerDashboardComponent', () => {
     const managerView = { ...MANAGER_VIEW, nextPulseAt: new Date(Date.now() + 580_000).toISOString() };
     const fake = fakeEvents({ sessions: [MANAGER_SESSION], managers: [managerView] });
     await render(ManagerDashboardComponent, {
-      providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('m1') }, { provide: FleetEventsService, useValue: fake }],
+      providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('m1') }, { provide: FleetEventsService, useValue: fake }, { provide: FleetApiService, useValue: governanceApi }],
     });
     expect(screen.getByTestId('manager-dashboard-countdown')).toHaveTextContent('9:40');
   });
@@ -549,7 +552,7 @@ describe('ManagerDashboardComponent', () => {
   it('shows the children cap as a mini capacity meter next to the N/cap count', async () => {
     const fake = fakeEvents({ sessions: [MANAGER_SESSION, CHILD_SESSION], managers: [MANAGER_VIEW] });
     await render(ManagerDashboardComponent, {
-      providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('m1') }, { provide: FleetEventsService, useValue: fake }],
+      providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('m1') }, { provide: FleetEventsService, useValue: fake }, { provide: FleetApiService, useValue: governanceApi }],
     });
 
     const meter = screen.getByRole('meter', { name: /1 of 2 children/i });

@@ -1,4 +1,4 @@
-e2e_surface_enabled e2e test surface enabled (OPENFLEET_E2E=1): fake harness and fake-output route are registered
+e2e_surface_enabled e2e test surface enabled (OPENFLEET_E2E=1): fake harness, fake-output route and fake-propose-law route are registered
 pulse_error_event_not_broadcast pulse: the error event could not be broadcast
 working_state_temp_file_not_removed working state temporary file not removed
 claude_not_executable claude is not executable in any PATH directory of the daemon

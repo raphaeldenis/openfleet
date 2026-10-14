@@ -9,6 +9,9 @@ import { ApiError, FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { ManagerDashboardComponent } from './manager-dashboard.component';
 
+const emptyGovernance = { resourceGrants: [], pending: [], denied: [], history: [], governanceEvictedDenials: 0 };
+const governanceApi = { getManagerGovernance: () => Promise.resolve(emptyGovernance) };
+
 const FLEET: Project = { id: 'p-fleet', name: 'Fleet', docsFolderPath: null };
 const TEN_MINUTES_AGO = new Date(Date.now() - 10 * 60_000).toISOString();
 
@@ -35,6 +38,7 @@ interface ApiOverrides {
 
 function fakeApi(overrides: ApiOverrides = {}) {
   return {
+    ...governanceApi,
     getManagerProfile: overrides.getManagerProfile ?? vi.fn().mockResolvedValue(profileOf()),
     updateManager: overrides.updateManager ?? vi.fn().mockResolvedValue(managerViewOf()),
     reopenSession: overrides.reopenSession ?? vi.fn().mockResolvedValue({}),

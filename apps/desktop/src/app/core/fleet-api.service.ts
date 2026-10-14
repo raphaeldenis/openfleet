@@ -1,8 +1,8 @@
 import { Injectable } from '@angular/core';
 import { DIAGNOSTICS_PATH, WorkingStateSectionsSchema, isErrorEnvelope } from '@openfleet/shared';
 import type {
-  Approval, GovernanceProposalView, ManagerGovernanceView, CloseHandoffResult, CloseSessionRequest, CreateNoteRequest, CreateProjectRequest, DataStore, DataStoreDetail, DiagnosticsDocument, DsRow, DsRowHistoryEntry, DsView, ErrorEnvelope, HandoffPreview, HandoffSummary, HandoffTarget, HarnessId, NoteSummary,
-  ManagerProfile, ManagerView, NoteVersionSummary, NoteView, OrderTerm, Page, PermissionMode, Project, ReopenMode, RestoreNoteRequest, Session, SessionSpec, SessionTodos,
+  Approval, CloseHandoffResult, CloseSessionRequest, CreateNoteRequest, CreateProjectRequest, DataStore, DataStoreDetail, DiagnosticsDocument, DsRow, DsRowHistoryEntry, DsView, ErrorEnvelope, GovernanceProposalView, HandoffPreview, HandoffSummary, HandoffTarget, HarnessId, NoteSummary,
+  ManagerGovernanceView, ManagerProfile, ManagerView, NoteVersionSummary, NoteView, OrderTerm, Page, PermissionMode, Project, ReopenMode, RestoreNoteRequest, Session, SessionSpec, SessionTodos,
   UpdateManager, UpdateNoteRequest, UpdateProjectRequest, WhereClause, WorkingState,
 } from '@openfleet/shared';
 import { environment } from '../../environments/environment';
@@ -13,7 +13,7 @@ import { parseSessionTodos } from './session-todos-parser';
 
 export type PageRequest = Partial<Pick<Page<unknown>, 'limit' | 'offset'>>;
 export type ProposalDecision = { decision: 'approve' } | { decision: 'deny'; reason: string };
-type NoteChange =Omit<UpdateNoteRequest, 'projectId'>;
+type NoteChange = Omit<UpdateNoteRequest, 'projectId'>;
 type NoteRestore = Omit<RestoreNoteRequest, 'projectId'>;
 
 const DAEMON_ANSWER_TIMEOUT_MS = 5000;

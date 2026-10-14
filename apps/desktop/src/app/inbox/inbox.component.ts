@@ -13,10 +13,12 @@ import { VersionsService } from '../core/versions.service';
 import { ErrorLineComponent } from '../design/error-line.component';
 import { KindBadgeComponent } from '../design/kind-badge.component';
 import { AnsweredRepliesStore } from '../working-state/answered-replies.store';
-import { answeredItemsOf, attentionItemsOf, inboxCountLabelOf, itemsNeedingYouOf } from '../working-state/attention-items';
+import { answeredItemsOf, attentionItemsOf, itemsNeedingYouOf } from '../working-state/attention-items';
 import { contextNoticeCopyOf, contextNoticesOf } from '../working-state/context-notices';
 import { AttentionCardComponent } from './attention-card.component';
+import { GovernanceApprovedTexts } from './governance-approved-texts.store';
 import { GovernanceProposalsComponent } from './governance-proposals.component';
+import { InboxNeedingYou } from './inbox-needing-you';
 import { minutesWaiting, silentBlockCopyOf, silentBlockDetailsMessageOf } from './silent-block-copy';
 import { showBidiControlsAsEscapes, showInvisibleControlsAsEscapes } from '../core/bidi-escapes';
 
@@ -155,7 +157,7 @@ function formatInput(toolInput: unknown): FormattedInput {
             }
           }
           @if (activeFilter().showsProposals) {
-            <of-governance-proposals />
+            <of-governance-proposals (noCardLeft)="focusGovernanceFilter()" />
           }
           @if (isListEmpty()) {
             <div class="empty" data-testid="inbox-empty">
@@ -244,6 +246,7 @@ export class InboxComponent {
   private readonly replies = inject(ReplyDraftStore);
   private readonly answeredReplies = inject(AnsweredRepliesStore);
   private readonly versions = inject(VersionsService);
+  private readonly approvedTexts = inject(GovernanceApprovedTexts).texts;
   private readonly injector = inject(Injector);
   private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
   protected readonly filters = FILTERS;
@@ -427,10 +430,11 @@ export class InboxComponent {
     (nextDismiss ?? pressedFilter)?.focus();
   }
 
-  protected readonly pendingCount = computed(() => {
-    const count = this.events.approvals().length + this.events.proposals().length + this.attentionItemsNeedingYou().length + this.contextNotices().length;
-    return count > 0 ? inboxCountLabelOf(count) : undefined;
-  });
+  protected readonly pendingCount = inject(InboxNeedingYou).label;
+
+  protected focusGovernanceFilter(): void {
+    this.host.nativeElement.querySelector<HTMLElement>('[data-testid="inbox-filter-governance"]')?.focus();
+  }
 
   readonly items = computed(() =>
     this.gates().map((gate) => ({
@@ -450,7 +454,8 @@ export class InboxComponent {
 
   protected readonly isListEmpty = computed(() => {
     const { showsGates, showsQuestions, showsProposals } = this.activeFilter();
-    const shownCardCount = (showsGates ? this.items().length : 0) + (showsQuestions ? this.attentionCards().length : 0) + (showsProposals ? this.events.proposals().length : 0);
+    const proposalCardCount = this.events.proposals().length + this.approvedTexts().length;
+    const shownCardCount = (showsGates ? this.items().length : 0) + (showsQuestions ? this.attentionCards().length : 0) + (showsProposals ? proposalCardCount : 0);
     const hasNoIssueOrNotice = this.issues().length === 0 && this.contextNotices().length === 0;
     return shownCardCount === 0 && hasNoIssueOrNotice;
   });
