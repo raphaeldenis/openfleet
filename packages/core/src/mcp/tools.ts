@@ -1,4 +1,4 @@
-import { MANAGER_ROLE, ManagerSpecSchema, ModelIdSchema, PERMISSION_MODES, type Approval, type ManagerSpec, type Session } from '@openfleet/shared';
+import { MANAGER_ROLE, ManagerSpecSchema, ModelIdSchema, PERMISSION_MODES, type Approval, type Session } from '@openfleet/shared';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { existsSync, realpathSync, statSync } from 'node:fs';
 import { z } from 'zod';
@@ -186,7 +186,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     directory: z.string(), name: z.string().refine((name) => name.trim().length > 0, 'name must not be blank'), emoji: z.string().optional(), model: ModelIdSchema.optional(),
     seeded_prompt: z.string().optional(), role: z.string().optional(), permission_mode: z.enum(PERMISSION_MODES).optional(),
     allow_duplicate: z.boolean().optional(),
-    manager: z.object({ pulse_seconds: ManagerSpecSchema.shape.pulseSeconds, children_cap: z.number().int().positive(), mission: z.string().min(1) }).optional(),
+    manager: z.object({ pulse_seconds: ManagerSpecSchema.shape.pulseSeconds, children_cap: ManagerSpecSchema.shape.childrenCap, mission: z.string().min(1) }).optional(),
   } }, async (input) => {
     // A parentless caller is a human-launched root session (Raphaël's own Lead/Capitaine), always trusted to
     // bootstrap a manager; an MCP-spawned child needs the manager role itself — see Task 7 report deviation.
@@ -277,7 +277,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     };
 
     const child = input.manager
-      ? await managers.createManagerSession({ ...spec, role: MANAGER_ROLE, manager: { pulseSeconds: input.manager.pulse_seconds, childrenCap: input.manager.children_cap, mission: input.manager.mission } as ManagerSpec })
+      ? await managers.createManagerSession({ ...spec, role: MANAGER_ROLE, manager: { pulseSeconds: input.manager.pulse_seconds, childrenCap: input.manager.children_cap, mission: input.manager.mission } })
       : await sessions.create(spec);
     return ok(sessionView(child));
   });

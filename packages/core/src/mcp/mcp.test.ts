@@ -668,6 +668,67 @@ describe('create_session guardrails', () => {
     expect(second.isError).toBe(true);
   });
 
+  describe('the children cap carried by the manager card', () => {
+    const rowCounts = () => ({
+      managers: (db.prepare('SELECT COUNT(*) AS n FROM managers').get() as { n: number }).n,
+      sessions: (db.prepare('SELECT COUNT(*) AS n FROM sessions').get() as { n: number }).n,
+    });
+    const lowerCap = (managerId: string, childrenCap: number) =>
+      fetch(`${server.url}/api/managers/${managerId}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json', authorization: 'Bearer admin' },
+        body: JSON.stringify({ childrenCap }),
+      });
+
+    it.each([0, -1, 1.5, 65, '3', null])('refuses a manager created with a children_cap of %j, readably, and inserts nothing', async (childrenCap) => {
+      const parentClient = await connect(parentToken);
+      const before = rowCounts();
+
+      const result = await parentClient.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir(`cap-refused-${String(childrenCap)}`), name: 'CapRefused', manager: { pulse_seconds: 60, children_cap: childrenCap, mission: 'x' } } });
+
+      expect(result.isError).toBe(true);
+      expect((result.content as { text: string }[])[0]!.text).toContain('children_cap');
+      expect(rowCounts()).toEqual(before);
+    });
+
+    it.each([1, 3, 64])('accepts a children_cap of %s and exposes it in get_argus_status', async (childrenCap) => {
+      const parentClient = await connect(parentToken);
+      const lead = text(await parentClient.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir(`cap-accepted-${childrenCap}`), name: 'CapAccepted', manager: { pulse_seconds: 60, children_cap: childrenCap, mission: 'x' } } }));
+      const leadClient = await connect(harness.launches.find((launch) => launch.sessionId === lead.id)!.mcpToken);
+
+      const status = text(await leadClient.callTool({ name: 'get_argus_status', arguments: {} }));
+
+      expect(status.manager.childrenCap).toBe(childrenCap);
+    });
+
+    it('keeps live children when the cap drops below them, refuses the next spawn with children_cap, and accepts it once enough children closed', async () => {
+      const parentClient = await connect(parentToken);
+      const lead = text(await parentClient.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('cap-lowered'), name: 'CapLowered', manager: { pulse_seconds: 60, children_cap: 3, mission: 'x' } } }));
+      const leadClient = await connect(harness.launches.find((launch) => launch.sessionId === lead.id)!.mcpToken);
+      const firstChild = text(await leadClient.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('cap-lowered-1'), name: 'LoweredChild1' } }));
+      const secondChild = text(await leadClient.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('cap-lowered-2'), name: 'LoweredChild2' } }));
+      const liveChildren = () => sessions.list().filter((s) => s.parentId === lead.id && s.state !== 'closed');
+
+      const lowering = await lowerCap(lead.id, 1);
+      const refusedSpawn = await leadClient.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('cap-lowered-3'), name: 'LoweredChild3' } });
+      const childrenAfterRefusal = liveChildren().length;
+      await leadClient.callTool({ name: 'close_session', arguments: { session_id: firstChild.id } });
+      const spawnWhileStillAtCap = await leadClient.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('cap-lowered-4'), name: 'LoweredChild4' } });
+
+      expect(lowering.ok).toBe(true);
+      expect(refusedSpawn.isError).toBe(true);
+      expect((refusedSpawn.content as { text: string }[])[0]!.text).toContain('children_cap');
+      expect(childrenAfterRefusal).toBe(2);
+      expect(spawnWhileStillAtCap.isError).toBe(true);
+      expect(liveChildren()).toHaveLength(1);
+
+      await leadClient.callTool({ name: 'close_session', arguments: { session_id: secondChild.id } });
+      const spawnUnderCap = await leadClient.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('cap-lowered-5'), name: 'LoweredChild5' } });
+
+      expect(spawnUnderCap.isError).toBeFalsy();
+    });
+  });
+
   it('a manager created without pulse_seconds gets the default heartbeat', async () => {
     const managerClient = await connect(parentToken);
 

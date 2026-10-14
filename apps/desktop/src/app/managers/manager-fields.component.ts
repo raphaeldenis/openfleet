@@ -1,9 +1,10 @@
 import { ChangeDetectionStrategy, Component, computed, ElementRef, input, model, OnInit, signal, viewChild } from '@angular/core';
 import { ControlContainer, FormsModule, NgForm } from '@angular/forms';
+import { MAX_CHILDREN_CAP } from '@openfleet/shared';
 import { ErrorLineComponent } from '../design/error-line.component';
 
 const PULSE_SECONDS_BOUNDS = { min: 1, max: 86_400 };
-const CHILDREN_CAP_BOUNDS = { min: 1, max: 64 };
+const CHILDREN_CAP_BOUNDS = { min: 1, max: MAX_CHILDREN_CAP };
 const MISSION_MAX_BYTES = 64 * 1024;
 
 interface PulsePreset {
@@ -79,10 +80,10 @@ function utf8ByteLength(text: string): number {
             [attr.aria-describedby]="childrenCapDescriptionIds()"
           />
           <button type="button" class="step" data-testid="manager-children-cap-increase" aria-label="Increase children cap" title="Increase" [disabled]="isChildrenCapAtMaximum() || isLocked()" (click)="stepChildrenCap(1)">+</button>
-          <span id="manager-children-cap-bounds" class="hint">1 – 64</span>
+          <span id="manager-children-cap-bounds" class="hint">{{ childrenCapBounds.min }} – {{ childrenCapBounds.max }}</span>
         </div>
         @if (isChildrenCapAtMaximum() && !childrenCapError()) {
-          <span id="manager-children-cap-maximum" role="status" data-testid="manager-children-cap-maximum" class="maximum"><span class="maximum-icon" aria-hidden="true">!</span> 64 is the daemon maximum</span>
+          <span id="manager-children-cap-maximum" role="status" data-testid="manager-children-cap-maximum" class="maximum"><span class="maximum-icon" aria-hidden="true">!</span> {{ childrenCapBounds.max }} is the daemon maximum</span>
         }
         @if (childrenCapError(); as error) {
           <of-error-line id="manager-children-cap-error" role="alert" data-testid="manager-children-cap-error">{{ error }}</of-error-line>
