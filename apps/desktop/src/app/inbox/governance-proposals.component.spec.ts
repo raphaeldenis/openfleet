@@ -188,22 +188,26 @@ describe('GovernanceProposalsComponent', () => {
       await waitFor(() => expect(screen.queryByTestId('governance-card')).toBeNull());
     });
 
-    it('sends one request for a double click on Approve', async () => {
+    it('sends one request for two clicks on Approve before the screen redraws', async () => {
       const decideProposal = vi.fn().mockReturnValue(new Promise(() => undefined));
       await setup([lawProposal()], { apiPatch: { decideProposal } });
+      const approve = screen.getByRole('button', { name: lawName('Approve', 'Never deploy on Friday') });
 
-      await userEvent.dblClick(screen.getByRole('button', { name: lawName('Approve', 'Never deploy on Friday') }));
+      approve.click();
+      approve.click();
 
       expect(decideProposal).toHaveBeenCalledTimes(1);
     });
 
-    it('sends one request for a double click on Confirm denial', async () => {
+    it('sends one request for two clicks on Confirm denial before the screen redraws', async () => {
       const decideProposal = vi.fn().mockReturnValue(new Promise(() => undefined));
       await setup([lawProposal()], { apiPatch: { decideProposal } });
       await userEvent.click(screen.getByRole('button', { name: lawName('Deny', 'Never deploy on Friday') }));
       await userEvent.type(screen.getByRole('textbox', { name: 'Reason for denying' }), 'Too broad');
+      const confirm = screen.getByRole('button', { name: 'Confirm denial' });
 
-      await userEvent.dblClick(screen.getByRole('button', { name: 'Confirm denial' }));
+      confirm.click();
+      confirm.click();
 
       expect(decideProposal).toHaveBeenCalledTimes(1);
     });

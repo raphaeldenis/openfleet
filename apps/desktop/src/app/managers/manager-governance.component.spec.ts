@@ -8,6 +8,7 @@ import { FleetEventsService } from '../core/fleet-events.service';
 import { connectToScriptedDaemon } from '../inbox/governance-events-harness';
 import { ManagerGovernanceComponent } from './manager-governance.component';
 
+const ASYNC_SETTLE_MS = 50;
 const RIGHT_TO_LEFT_OVERRIDE = String.fromCharCode(0x202e);
 const HOSTILE_MARKUP = '<img src=x onerror="window.pwned=1"> **bold**';
 
@@ -118,10 +119,12 @@ describe('ManagerGovernanceComponent', () => {
       await waitFor(() => expect(api.getManagerGovernance).toHaveBeenCalledTimes(1));
 
       proposeOnDaemon(proposal({ id: 'other', managerId: 'm2' }));
+      await new Promise((resolve) => setTimeout(resolve, ASYNC_SETTLE_MS));
+      expect(api.getManagerGovernance).toHaveBeenCalledTimes(1);
+
       proposeOnDaemon(proposal({ id: 'mine' }));
 
       await waitFor(() => expect(api.getManagerGovernance).toHaveBeenCalledTimes(2));
-      expect(api.getManagerGovernance).toHaveBeenCalledTimes(2);
     });
 
     it('reads again when a snapshot replaces the pending proposals of this manager', async () => {
