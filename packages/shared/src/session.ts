@@ -1,5 +1,4 @@
 import * as z from 'zod';
-import type { PolicyEnforcement } from './commandPolicy.js';
 import { ManagerSpecSchema } from './managers.js';
 import { ModelIdSchema } from './models.js';
 import { HandoffFileSchema } from './handoff.js';
@@ -27,6 +26,10 @@ export const parseSessionCloseReason = (value: unknown): SessionCloseReason | un
 
 export const HARNESSES =['claude-cli', 'fake'] as const;
 export type HarnessId = (typeof HARNESSES)[number];
+
+/** How a harness applies the command policy: through its hooks, through its own CLI, through shims, or not at all. */
+export const POLICY_ENFORCEMENTS = ['hook', 'native', 'shim', 'none'] as const;
+export type PolicyEnforcement = (typeof POLICY_ENFORCEMENTS)[number];
 
 export const PERMISSION_MODES = ['manual', 'acceptEdits', 'plan', 'auto', 'bypassPermissions', 'dontAsk'] as const;
 export type PermissionMode = (typeof PERMISSION_MODES)[number];

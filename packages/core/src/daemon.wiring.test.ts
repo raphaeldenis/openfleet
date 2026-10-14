@@ -7,7 +7,8 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { loadConfig, type Config } from './config.js';
-import { startDaemon, type Daemon } from './daemon.js';
+import { startDaemon, type Daemon, type DaemonOptions } from './daemon.js';
+import { defaultCommandPolicySettings } from './policy/commandPolicySettings.js';
 import { openDatabase } from './db/database.js';
 import { makeRepo } from './git/testRepo.js';
 import { ManagerRepository } from './managers/managerRepository.js';
@@ -21,14 +22,14 @@ let daemon: Daemon | undefined;
 let adminToken: string;
 let bootedConfig: Config;
 
-async function bootDaemon(configJson?: object, { seedPreviousRun, e2e = true }: { seedPreviousRun?: (config: Config) => void; e2e?: boolean } = {}): Promise<Daemon> {
+async function bootDaemon(configJson?: object, { seedPreviousRun, e2e = true, commandPolicy }: { seedPreviousRun?: (config: Config) => void; e2e?: boolean; commandPolicy?: DaemonOptions['commandPolicy'] } = {}): Promise<Daemon> {
   const home = tempDirs.make('of-daemon-wiring-');
   if (configJson) writeFileSync(join(home, 'config.json'), JSON.stringify(configJson));
   const config = loadConfig({ OPENFLEET_HOME: home, OPENFLEET_PORT: '0', ...(e2e ? { [E2E_FLAG_ENV]: E2E_FLAG_ON } : {}) });
   seedPreviousRun?.(config);
   bootedConfig = config;
   adminToken = config.adminToken;
-  daemon = await startDaemon(config);
+  daemon = await startDaemon(config, { commandPolicy });
   return daemon;
 }
 afterEach(async () => { vi.restoreAllMocks(); await daemon?.close(); daemon = undefined; tempDirs.removeAll(); });
@@ -307,8 +308,9 @@ describe('agent reaches every MCP tool family of a booted daemon', () => {
     expect(child.model).toBe('claude-opus-from-config');
   });
 
-  it('shows the pending permission of a child to its parent', async () => {
-    await bootDaemon();
+  it('shows the pending permission of a child to its parent (when the operator keeps the approval flow for unwatched sessions)', async () => {
+    const settings = defaultCommandPolicySettings();
+    await bootDaemon(undefined, { commandPolicy: { settings: { ...settings, unattended: { ...settings.unattended, askBecomesDeny: false } } } });
     const parent = await createSession();
     const child = await callMcpTool<{ id: string }>(parent.id, 'create_session', { directory: childDirectoryUnderWorktreesRoot('worker'), name: 'Worker' });
     const hookAnswer = postHook(child.id, { hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: {} });

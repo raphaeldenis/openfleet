@@ -1,4 +1,13 @@
-import type { DenialOutcome, DenialSource, DeniedCommand, HarnessId, PolicyActor } from '@openfleet/shared';
+import type { DenialOutcome, DenialSource, DeniedCommand, HarnessId, PermissionRequestHookOutput, PolicyActor, PreToolUseHookOutput, Session } from '@openfleet/shared';
+import type { ClaudeHookEvent } from '@openfleet/shared';
+
+type ToolHookEvent<Name extends 'PreToolUse' | 'PermissionRequest'> = Extract<ClaudeHookEvent, { hook_event_name: Name }>;
+
+/** What the hook handler asks of a harness's policy hooks; an undefined answer means "no opinion". */
+export interface CommandPolicyHooks {
+  onPreToolUse(session: Session, event: ToolHookEvent<'PreToolUse'>): PreToolUseHookOutput | undefined;
+  onPermissionRequest(session: Session, event: ToolHookEvent<'PermissionRequest'>): PermissionRequestHookOutput | undefined;
+}
 
 /** What the policy knows about a refusal before the journal gives it an id and a date. */
 export interface DenialDraft {

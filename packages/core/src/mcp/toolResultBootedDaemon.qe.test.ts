@@ -6,6 +6,7 @@ import { E2E_FLAG_ENV, E2E_FLAG_ON } from '@openfleet/shared';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { loadConfig, type Config } from '../config.js';
 import { startDaemon, type Daemon } from '../daemon.js';
+import { defaultCommandPolicySettings } from '../policy/commandPolicySettings.js';
 import { ProjectRepository } from '../projects/projectRepository.js';
 import { createTempDirTracker } from '../tempDirTracker.js';
 
@@ -41,7 +42,8 @@ async function bootRootSession() {
 beforeEach(async () => {
   const home = tempDirs.make('of-qe-token01-');
   config = loadConfig({ OPENFLEET_HOME: home, OPENFLEET_PORT: '0', [E2E_FLAG_ENV]: E2E_FLAG_ON });
-  daemon = await startDaemon(config);
+  const settings = defaultCommandPolicySettings();
+  daemon = await startDaemon(config, { commandPolicy: { settings: { ...settings, unattended: { ...settings.unattended, askBecomesDeny: false } } } });
 });
 afterEach(async () => { await daemon.close(); tempDirs.removeAll(); });
 
@@ -182,7 +184,7 @@ describe('QE — a booted daemon serves compact MCP results on the real route', 
 
     const sessions = (await (await adminApi('/api/sessions')).json()) as { name: string }[];
 
-    expect(keysOf(sessions.find((session) => session.name === 'Kid')!)).toEqual(['createdAt', 'directory', 'emoji', 'harness', 'id', 'name', 'parentId', 'permissionMode', 'state', 'stateSince']);
+    expect(keysOf(sessions.find((session) => session.name === 'Kid')!)).toEqual(['createdAt', 'directory', 'emoji', 'harness', 'id', 'name', 'parentId', 'permissionMode', 'policyEnforcement', 'state', 'stateSince']);
   });
 
   it('REST keeps its full row and row history shapes while MCP is compact: an operator still gets storeId and createdAt on rows, and rowId and id on changes', async () => {

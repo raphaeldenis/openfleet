@@ -21,6 +21,14 @@ describe('the fields a Claude hook carries about who is calling', () => {
     expect(parsed).toMatchObject({ permission_suggestions: suggestions });
   });
 
+  it('drops any claim about presence or parenthood: the daemon alone knows who watches a session', () => {
+    const parsed = ClaudeHookEventSchema.parse({ ...subagentPreToolUse, presence: 'attended', parent_id: null, parentId: null });
+
+    expect(parsed).not.toHaveProperty('presence');
+    expect(parsed).not.toHaveProperty('parent_id');
+    expect(parsed).not.toHaveProperty('parentId');
+  });
+
   it('accepts a payload that carries none of them', () => {
     const parsed = ClaudeHookEventSchema.safeParse({ session_id: 's', hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: {} });
 

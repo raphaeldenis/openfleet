@@ -8,7 +8,7 @@ import { log } from '../../logger.js';
 import type { DegradedRegistry } from '../../process/degradedRegistry.js';
 import type { CommandPolicySettings, PolicyEvaluate } from '../../policy/commandPolicySettings.js';
 import { profileNameOf } from '../../policy/policyEvaluator.js';
-import type { DenialDraft, DenialJournal } from '../../policy/ports.js';
+import type { CommandPolicyHooks, DenialDraft, DenialJournal } from '../../policy/ports.js';
 import { refusalTextOf } from '../../policy/refusalText.js';
 import type { RefusalRepeatGuard } from '../../policy/refusalRepeatGuard.js';
 import { resolveAsk } from '../../policy/unattendedResolver.js';
@@ -83,7 +83,7 @@ function toPolicyRequest(session: Session, event: ToolHookEvent, source: PolicyS
 }
 
 /** Answers the PreToolUse and PermissionRequest hooks of a Claude session from the command policy. An undefined answer means "no opinion". */
-export class ClaudePolicyHooks {
+export class ClaudePolicyHooks implements CommandPolicyHooks {
   constructor(private readonly deps: ClaudePolicyHooksDeps) {}
 
   onPreToolUse(session: Session, event: Extract<ToolHookEvent, { hook_event_name: 'PreToolUse' }>): PreToolUseHookOutput | undefined {

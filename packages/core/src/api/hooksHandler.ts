@@ -4,7 +4,7 @@ import type { TodoTracker } from '../todos/todoTracker.js';
 import type { ContextNotice } from '../workingState/contextNotice.js';
 import type { SessionStartContext, SessionStartRequest } from '../workingState/sessionStartContext.js';
 import type { ApprovalService } from '../governance/approvalService.js';
-import type { ClaudePolicyHooks } from '../harness/claudeCli/claudePolicyHooks.js';
+import type { CommandPolicyHooks } from '../policy/ports.js';
 import { log } from '../logger.js';
 import type { DegradedRegistry } from '../process/degradedRegistry.js';
 import type { SessionService } from '../sessions/sessionService.js';
@@ -37,7 +37,7 @@ function trackTodosFailingOpen(todos: TodoTracker | undefined, sessionId: string
   }
 }
 
-export function hooksHandler(deps: { sessions: SessionService; approvals: ApprovalService; stopRefusal?: StopRefusal; sessionStartContext?: SessionStartContext; handoverLedger?: HandoverLedger; contextNotice?: ContextNotice; todos?: TodoTracker; degraded?: DegradedRegistry; commandPolicy?: ClaudePolicyHooks }): Handler {
+export function hooksHandler(deps: { sessions: SessionService; approvals: ApprovalService; stopRefusal?: StopRefusal; sessionStartContext?: SessionStartContext; handoverLedger?: HandoverLedger; contextNotice?: ContextNotice; todos?: TodoTracker; degraded?: DegradedRegistry; commandPolicy?: CommandPolicyHooks }): Handler {
   const decideStopRefusalFailingOpen = (sessionId: string, stopHookActive: boolean): StopHookOutput | undefined =>
     failingOpen(deps.degraded, 'stop refusal check failed, letting the turn end', () => deps.stopRefusal?.decide({ sessionId, stopHookActive }));
 
