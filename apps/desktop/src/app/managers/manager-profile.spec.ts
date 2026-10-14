@@ -133,6 +133,25 @@ describe('the manager profile', () => {
     });
   });
 
+  describe('when more children are active than the cap allows', () => {
+    it('user reads how many are active against the cap', async () => {
+      const api = fakeApi({ getManagerProfile: vi.fn().mockResolvedValue(profileOf({ childrenCap: 2, childrenCount: 3 })) });
+
+      await openProfile({ api });
+
+      expect(await screen.findByText('3 active > cap 2')).toBeInTheDocument();
+    });
+
+    it.each([{ childrenCount: 2 }, { childrenCount: 1 }])('user reads no excess note with $childrenCount active children under a cap of 2', async ({ childrenCount }) => {
+      const api = fakeApi({ getManagerProfile: vi.fn().mockResolvedValue(profileOf({ childrenCap: 2, childrenCount })) });
+
+      await openProfile({ api });
+
+      await screen.findByRole('region', { name: 'Profile' });
+      expect(screen.queryByText(/active > cap/)).not.toBeInTheDocument();
+    });
+  });
+
   describe('where the mission stands against a Scape re-import', () => {
     it('user is told an edited mission will not be overwritten by a re-import', async () => {
       await openProfile({ api: fakeApi({ getManagerProfile: vi.fn().mockResolvedValue(profileOf({}, 'edited_in_openfleet')) }) });

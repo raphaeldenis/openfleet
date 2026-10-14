@@ -4,7 +4,7 @@ import { ModelIdSchema } from './models.js';
 export const MANAGER_ROLE = 'manager';
 
 const ONE_DAY_SECONDS = 86400;
-const MAX_CHILDREN_CAP = 64;
+export const MAX_CHILDREN_CAP = 64;
 export const MAX_MISSION_BYTES = 64 * 1024;
 
 export const ManagerSpecSchema = z.object({

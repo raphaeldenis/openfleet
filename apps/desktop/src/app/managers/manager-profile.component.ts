@@ -38,7 +38,11 @@ const IMPORT_LINE_BY_STATUS: Record<ScapeImportStatus, string | undefined> = {
           <section aria-label="Profile">
             <dl class="facts">
               <div class="fact"><dt>Pulse interval</dt><dd>{{ pulseLabel() }}</dd></div>
-              <div class="fact"><dt>Children cap</dt><dd>{{ current.manager.childrenCap }}</dd></div>
+              <div class="fact"><dt>Children cap</dt><dd>{{ current.manager.childrenCap }}</dd>
+                @if (current.manager.childrenCount > current.manager.childrenCap) {
+                  <span class="excess" role="status">{{ current.manager.childrenCount }} active > cap {{ current.manager.childrenCap }}</span>
+                }
+              </div>
               <div class="fact"><dt>Model</dt><dd>{{ session().model || notKnown }}</dd></div>
             </dl>
           </section>
@@ -85,6 +89,7 @@ const IMPORT_LINE_BY_STATUS: Record<ScapeImportStatus, string | undefined> = {
     .facts { display: flex; flex-wrap: wrap; gap: .75rem; margin: 0 }
     .fact { flex: 1 1 9rem; display: flex; flex-direction: column; gap: .25rem; padding: .625rem .875rem; border: 1px solid var(--line); border-radius: .625rem; background: var(--panel) }
     .fact dt { font-size: .6875rem; color: var(--mut) }
+    .excess { font-size: .6875rem; color: var(--mut) }
     .fact dd { margin: 0; font-family: var(--mono); font-size: 1rem; overflow-wrap: anywhere }
   `,
 })
