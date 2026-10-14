@@ -2,17 +2,24 @@ import type { EventBus } from '../events/eventBus.js';
 import { log } from '../logger.js';
 import type { DescribeError, SessionService } from '../sessions/sessionService.js';
 import { isPulseEnabled, type ManagerRecord, type ManagerRepository } from './managerRepository.js';
-import { toManagerView } from './managerView.js';
+import { toManagerView, type DeniedCommandCounts } from './managerView.js';
 import { nextPulseAt } from './pulseTiming.js';
 import { OpenFleetError, PULSE_WAKE_REASONS, type PulseWakeReason, type RuntimeAttention } from '@openfleet/shared';
 
 export const PULSE_MESSAGE = '[pulse] Re-read your mission and continue: check your children, unblock them, record what you did.';
 
-/** The pulse text of a manager: the plain pulse, plus where to re-read the mission when it lives in a note. */
-export const pulseMessageOf = (record: Pick<ManagerRecord, 'missionNoteId'>): string => {
+const unseenRefusalsLineOf = (unseenRefusalCount: number): string => {
+  const noun = unseenRefusalCount === 1 ? 'command refusal' : 'command refusals';
+  return `${unseenRefusalCount} ${noun} since your last look — call list_denied_commands.`;
+};
+
+/** The pulse text of a manager: the plain pulse, where to re-read the mission when it lives in a note, and how many command refusals it has not looked at. */
+export const pulseMessageOf = (record: Pick<ManagerRecord, 'missionNoteId'>, { unseenRefusalCount = 0 }: { unseenRefusalCount?: number } = {}): string => {
   const hasMissionNote = record.missionNoteId !== undefined;
-  if (!hasMissionNote) return PULSE_MESSAGE;
-  return `${PULSE_MESSAGE} Your mission note id is ${record.missionNoteId}; read it every time you wake with get_note.`;
+  const hasUnseenRefusals = unseenRefusalCount > 0;
+  const missionLine = hasMissionNote ? ` Your mission note id is ${record.missionNoteId}; read it every time you wake with get_note.` : '';
+  const refusalsLine = hasUnseenRefusals ? ` ${unseenRefusalsLineOf(unseenRefusalCount)}` : '';
+  return `${PULSE_MESSAGE}${missionLine}${refusalsLine}`;
 };
 
 /** The pulse as the manager reads it: the pulse text, then why it wakes, strongest reason first. */
@@ -66,6 +73,8 @@ export interface PulseSchedulerDeps {
   bus: EventBus;
   /** Absent, a failing tick is only logged: no error event reaches the clients. */
   describeError?: DescribeError;
+  /** Absent, no manager has any refused command. */
+  deniedCommandCountsOf?: (managerId: string) => DeniedCommandCounts;
 }
 
 export class PulseScheduler {
@@ -330,7 +339,7 @@ export class PulseScheduler {
     this.deps.managers.setLastPulseAt(record.sessionId, pulsedAt);
     const updated: ManagerRecord = { ...record, lastPulseAt: pulsedAt };
     const childrenCount = this.deps.sessions.list().filter((s) => s.parentId === record.sessionId && s.state !== 'closed').length;
-    this.deps.bus.emit({ type: 'manager.pulsed', manager: toManagerView(updated, childrenCount) });
+    this.deps.bus.emit({ type: 'manager.pulsed', manager: toManagerView(updated, childrenCount, this.deps.deniedCommandCountsOf?.(record.sessionId)) });
     this.arm(updated);
     this.managerIdsInFailureStreak.delete(record.sessionId);
     return { coalesced };
@@ -342,7 +351,8 @@ export class PulseScheduler {
   // pulse still queued takes the new reason (and the current pulse text) in place of a second pulse.
   private queuePulse(record: ManagerRecord, wakeReason: PulseWakeReason): boolean {
     const managerId = record.sessionId;
-    const pulseText = pulseMessageOf(record);
+    const unseenRefusalCount = this.deps.deniedCommandCountsOf?.(managerId).deniedCommandCount ?? 0;
+    const pulseText = pulseMessageOf(record, { unseenRefusalCount });
     const queued = this.queuedPulses.get(managerId);
     if (queued) {
       const isSameTextStillQueued = queued.pulseText === pulseText;

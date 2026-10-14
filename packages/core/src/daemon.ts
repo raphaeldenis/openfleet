@@ -19,6 +19,8 @@ import { createFileCommandPolicyFile } from './policy/fileCommandPolicyFile.js';
 import { evaluateCommandPolicy } from './policy/policyEvaluator.js';
 import { RefusalRepeatGuard } from './policy/refusalRepeatGuard.js';
 import { SqliteDenialJournal } from './policy/sqliteDenialJournal.js';
+import { ManagerDenials } from './policy/managerDenials.js';
+import { descendantSessionIdsOf } from './managers/lineage.js';
 import { sweepStaleSessions } from './harness/claudeCli/tokenFiles.js';
 import { FakeHarness, postSessionStartHook } from './harness/fakeHarness.js';
 import type { Harness } from './harness/harness.js';
@@ -144,11 +146,13 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     onPowerAvailable: () => degraded.clear('power_assertion_unavailable'),
   });
   sleepGuard.observeSessionEvents();
-  const pulseScheduler = new PulseScheduler({ managers: managerRepository, sessions, bus, describeError });
+  const managerDenials = new ManagerDenials({ db, lineageSessionIdsOf: (managerId) => descendantSessionIdsOf(sessions.list(), managerId) });
+  const deniedCommandCountsOf = (managerId: string) => managerDenials.countsOf(managerId);
+  const pulseScheduler = new PulseScheduler({ managers: managerRepository, sessions, bus, describeError, deniedCommandCountsOf });
   const storeRepo = new DataStoreRepository(db);
   const noteRepo = new NoteRepository(db);
   const managers = new ManagerService({
-    managers: managerRepository, sessions, bus, scheduler: pulseScheduler, heartbeatDefaultSeconds: managerSettings.heartbeatDefaultSeconds,
+    managers: managerRepository, sessions, bus, scheduler: pulseScheduler, heartbeatDefaultSeconds: managerSettings.heartbeatDefaultSeconds, deniedCommandCountsOf,
     scapeImportStatusOf: (sessionId) => scapeImportStatusOfManager(db, sessionId),
     linkTargets: { noteProjectId: (noteId) => noteRepo.getProjectId(noteId), storeProjectId: (storeId) => storeRepo.findStore(storeId)?.projectId },
   });
@@ -214,7 +218,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   // fast process hitting a port nothing is serving yet.
   const diagnostics = () => buildDiagnosticsDocument({ db, degraded, listSessions: () => sessions.list(), port: config.port, e2eEnabled: config.e2eEnabled });
   const worktrees = new WorktreeService({ projects, sessions, worktreesRoot: config.worktreesRoot });
-  const server = await startServer({ ...config, e2eRoutes: config.e2eEnabled, degraded, commandPolicy, commandPolicyAdmin: { policy: commandPolicyService, denials: denialJournal }, diagnostics, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, stores, storeRepo, projects, projectService, worktrees, governanceQueue, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, mcp: createMcpHandler({ knowledgeSearch, governanceQueue, sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });
+  const server = await startServer({ ...config, e2eRoutes: config.e2eEnabled, degraded, commandPolicy, commandPolicyAdmin: { policy: commandPolicyService, denials: denialJournal }, diagnostics, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, stores, storeRepo, projects, projectService, worktrees, governanceQueue, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, mcp: createMcpHandler({ managerDenials, knowledgeSearch, governanceQueue, sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });
   log('info', `openfleet core listening on ${server.url} (version: ${DAEMON_VERSION}, home: ${config.home})`);
 
   const unwatchDatabase = watchDatabaseHealth(degraded);

@@ -24,6 +24,8 @@ describe('toManagerView', () => {
       nextPulseAt: '2026-01-01T00:06:00.000Z',
       childrenCount: 3,
       pinMissionNote: false,
+      deniedCommandCount: 0,
+      deniedCommandTotal: 0,
     });
   });
 
