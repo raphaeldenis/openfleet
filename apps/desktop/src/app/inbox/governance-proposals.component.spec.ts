@@ -1,5 +1,7 @@
 import { render, screen, waitFor, within } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
+import { outputBinding } from '@angular/core';
+import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import type { GovernanceProposalView, ManagerView, ResourceAccess, Session } from '@openfleet/shared';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -38,9 +40,10 @@ interface SetupOptions {
   readonly apiPatch?: Record<string, unknown>;
   readonly sessions?: Session[];
   readonly managers?: ManagerView[];
+  readonly onNoCardLeft?: () => void;
 }
 
-async function setup(proposals: GovernanceProposalView[], { apiPatch = {}, sessions = [managerSession], managers = [managerView] }: SetupOptions = {}) {
+async function setup(proposals: GovernanceProposalView[], { apiPatch = {}, sessions = [managerSession], managers = [managerView], onNoCardLeft = () => undefined }: SetupOptions = {}) {
   const daemon = await connectToScriptedDaemon({ sessions, managers, proposals });
   const api = {
     decideProposal: vi.fn().mockResolvedValue({}),
@@ -48,14 +51,24 @@ async function setup(proposals: GovernanceProposalView[], { apiPatch = {}, sessi
     getDataStore: vi.fn().mockResolvedValue({ id: 'res-uuid-1', displayName: 'Release table' }),
     ...apiPatch,
   };
-  await render(GovernanceProposalsComponent, { providers: [provideRouter([]), { provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: daemon.events }] });
-  return { ...daemon, api };
+  const { fixture } = await render(GovernanceProposalsComponent, {
+    bindings: [outputBinding('noCardLeft', onNoCardLeft)],
+    providers: [provideRouter([]), { provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: daemon.events }],
+  });
+  return { ...daemon, api, fixture };
 }
 
 const lawName = (verb: string, excerpt: string) => `${verb} law proposal from Lloyd: ${excerpt}`;
 const cardTexts = () => screen.getAllByTestId('governance-card').map((card) => card.textContent ?? '');
+const liveRegion = () => screen.getByRole('status', { name: 'Governance queue' });
+const ALREADY_DECIDED_NOTICE_MS = 8_000;
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  sessionStorage.clear();
+});
 
 describe('GovernanceProposalsComponent', () => {
   it('shows a pending law with its manager, type, text, incident and age', async () => {
@@ -280,6 +293,203 @@ describe('GovernanceProposalsComponent', () => {
     });
   });
 
+  describe('approved text kept for the human', () => {
+    const approveLaw = async (lawText = 'Never deploy on Friday') => {
+      const proposal = lawProposal({ payload: { text: lawText } });
+      const view = await setup([proposal]);
+      await userEvent.click(screen.getByRole('button', { name: /^Approve law proposal/ }));
+      view.resolveOnDaemon(proposal);
+      await screen.findByTestId('governance-approved');
+      return view;
+    };
+
+    const reloadThePage = async (view: Awaited<ReturnType<typeof setup>>) => {
+      view.fixture.destroy();
+      TestBed.resetTestingModule();
+      return setup([]);
+    };
+
+    it('shows the approved law again after the page is reloaded', async () => {
+      const view = await approveLaw();
+
+      await reloadThePage(view);
+
+      const approved = screen.getByTestId('governance-approved');
+      expect(approved).toHaveTextContent('Approved for Lloyd');
+      expect(approved).toHaveTextContent('Never deploy on Friday');
+      expect(screen.getByText('Copy this into the Laws section of the mission note.')).toBeVisible();
+      expect(screen.getByRole('link', { name: 'Open the mission note of Lloyd' }).getAttribute('href')).toContain('noteId=mission-1');
+    });
+
+    it('does not show an approved text again after it was dismissed and the page reloaded', async () => {
+      const view = await approveLaw();
+      await userEvent.click(screen.getByRole('button', { name: /^Dismiss law proposal/ }));
+
+      await reloadThePage(view);
+
+      expect(screen.queryByTestId('governance-approved')).toBeNull();
+    });
+
+    it('tells a permission to be copied into the mission note where the standing permissions are written', async () => {
+      const proposal = permissionProposal();
+      const { resolveOnDaemon } = await setup([proposal]);
+      await userEvent.click(screen.getByRole('button', { name: /^Approve permission proposal/ }));
+
+      resolveOnDaemon(proposal);
+
+      expect(await screen.findByText('Copy this into the mission note, where your standing permissions are written.')).toBeVisible();
+      expect(screen.queryByText('Copy this into the Laws section of the mission note.')).toBeNull();
+    });
+
+    it('keeps the permission instruction after the page is reloaded', async () => {
+      const proposal = permissionProposal();
+      const view = await setup([proposal]);
+      await userEvent.click(screen.getByRole('button', { name: /^Approve permission proposal/ }));
+      view.resolveOnDaemon(proposal);
+      await screen.findByTestId('governance-approved');
+
+      await reloadThePage(view);
+
+      expect(screen.getByText('Copy this into the mission note, where your standing permissions are written.')).toBeVisible();
+    });
+
+    it('ignores stored text that does not have the expected shape', async () => {
+      sessionStorage.setItem('openfleet.governance.approved-texts.v1', JSON.stringify({ version: 1, items: [{ proposalId: 'x', text: 42, extra: true }] }));
+
+      await setup([]);
+
+      expect(screen.queryByTestId('governance-approved')).toBeNull();
+    });
+
+    it('ignores stored text that is not JSON', async () => {
+      sessionStorage.setItem('openfleet.governance.approved-texts.v1', '{not json');
+
+      await setup([]);
+
+      expect(screen.queryByTestId('governance-approved')).toBeNull();
+    });
+
+    it('keeps at most the 20 latest approved texts across a reload', async () => {
+      const stored = Array.from({ length: 25 }, (_, index) => ({
+        proposalId: `p${index}`, managerName: 'Lloyd', kind: 'law', typeLabel: 'law', excerpt: `Law ${index}`, text: `Law ${index}`, noteQuery: null,
+      }));
+      sessionStorage.setItem('openfleet.governance.approved-texts.v1', JSON.stringify({ version: 1, items: stored }));
+      const view = await setup([]);
+      const proposal = lawProposal({ id: 'newest', payload: { text: 'Newest law' } });
+      view.proposeOnDaemon(proposal);
+      await userEvent.click(await screen.findByRole('button', { name: /^Approve law proposal/ }));
+      view.resolveOnDaemon(proposal);
+      await screen.findByText('Newest law');
+
+      await reloadThePage(view);
+
+      expect(screen.getAllByTestId('governance-approved')).toHaveLength(20);
+      expect(screen.getByText('Newest law')).toBeVisible();
+    });
+
+    it('still shows the approved text when the browser refuses any storage', async () => {
+      const refuse = () => { throw new Error('denied'); };
+      vi.stubGlobal('sessionStorage', { getItem: refuse, setItem: refuse, removeItem: refuse, clear: refuse });
+      const proposal = lawProposal();
+      const { resolveOnDaemon } = await setup([proposal]);
+      await userEvent.click(screen.getByRole('button', { name: /^Approve law proposal/ }));
+
+      resolveOnDaemon(proposal);
+
+      expect(await screen.findByText('Copy this into the Laws section of the mission note.')).toBeVisible();
+    });
+
+    it('moves the focus to the next approved text when one is dismissed', async () => {
+      const lawA = lawProposal({ id: 'a', payload: { text: 'Law A' }, createdAt: '2026-10-14T10:00:00.000Z' });
+      const lawB = lawProposal({ id: 'b', payload: { text: 'Law B' }, createdAt: '2026-10-14T10:01:00.000Z' });
+      const { resolveOnDaemon } = await setup([lawA, lawB]);
+      await userEvent.click(screen.getByRole('button', { name: lawName('Approve', 'Law A') }));
+      resolveOnDaemon(lawA);
+      await userEvent.click(await screen.findByRole('button', { name: lawName('Approve', 'Law B') }));
+      resolveOnDaemon(lawB);
+      await waitFor(() => expect(screen.getAllByTestId('governance-approved')).toHaveLength(2));
+
+      await userEvent.click(screen.getByRole('button', { name: lawName('Dismiss', 'Law A') }));
+
+      await waitFor(() => expect(within(screen.getByTestId('governance-approved')).getByRole('link', { name: 'Open the mission note of Lloyd' })).toHaveFocus());
+    });
+
+    it('hands the focus back to the Inbox when the last approved text is dismissed', async () => {
+      const onNoCardLeft = vi.fn();
+      const proposal = lawProposal();
+      const { resolveOnDaemon, fixture } = await setup([proposal], { onNoCardLeft });
+      await userEvent.click(screen.getByRole('button', { name: /^Approve law proposal/ }));
+      resolveOnDaemon(proposal);
+      const dismiss = await screen.findByRole('button', { name: /^Dismiss law proposal/ });
+      await fixture.whenStable();
+      onNoCardLeft.mockClear();
+
+      await userEvent.click(dismiss);
+
+      await waitFor(() => expect(onNoCardLeft).toHaveBeenCalledTimes(1));
+    });
+  });
+
+  describe('a decision lost to another decider', () => {
+    const alreadyResolved = () => new ApiError(409, 'POST → 409', 'already_resolved');
+
+    async function approveAfterSomeoneElseDecided() {
+      const decideProposal = vi.fn().mockRejectedValue(alreadyResolved());
+      const view = await setup([lawProposal()], { apiPatch: { decideProposal } });
+      const user = userEvent.setup({ delay: null });
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      await user.click(screen.getByRole('button', { name: lawName('Approve', 'Never deploy on Friday') }));
+      await view.fixture.whenStable();
+      return { ...view, user };
+    }
+
+    it('says in the live region that it was decided elsewhere, naming the manager and the type', async () => {
+      await approveAfterSomeoneElseDecided();
+
+      expect(liveRegion()).toHaveTextContent('Already decided elsewhere');
+      expect(liveRegion()).toHaveTextContent('law proposal from Lloyd');
+    });
+
+    it('still tells it once the daemon has taken the card away', async () => {
+      const proposal = lawProposal();
+      const view = await approveAfterSomeoneElseDecided();
+
+      view.resolveOnDaemon(proposal, 'denied');
+      await view.fixture.whenStable();
+
+      expect(screen.queryByTestId('governance-card')).toBeNull();
+      expect(liveRegion()).toHaveTextContent('Already decided elsewhere');
+    });
+
+    it('lets the message go by itself after a few seconds', async () => {
+      const view = await approveAfterSomeoneElseDecided();
+
+      await vi.advanceTimersByTimeAsync(ALREADY_DECIDED_NOTICE_MS);
+      await view.fixture.whenStable();
+
+      expect(liveRegion()).not.toHaveTextContent('Already decided elsewhere');
+    });
+
+    it('lets the message go at the next action', async () => {
+      const view = await approveAfterSomeoneElseDecided();
+
+      await view.user.click(screen.getByRole('button', { name: lawName('Deny', 'Never deploy on Friday') }));
+      await view.fixture.whenStable();
+
+      expect(liveRegion()).not.toHaveTextContent('Already decided elsewhere');
+    });
+
+    it('says nothing of the kind for another failure', async () => {
+      const decideProposal = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
+      await setup([lawProposal()], { apiPatch: { decideProposal } });
+
+      await userEvent.click(screen.getByRole('button', { name: lawName('Approve', 'Never deploy on Friday') }));
+      await screen.findByText(/Can’t reach the OpenFleet daemon/);
+
+      expect(liveRegion()).not.toHaveTextContent('Already decided elsewhere');
+    });
+  });
+
   describe('hostile text', () => {
     it('renders hostile proposal text as inert plain text', async () => {
       await setup([lawProposal({ payload: { text: HOSTILE_MARKUP } })]);
@@ -393,15 +603,51 @@ describe('GovernanceProposalsComponent', () => {
       await waitFor(() => expect(screen.getByRole('button', { name: lawName('Approve', 'Law B') })).toHaveFocus());
     });
 
-    it('moves the focus to the action button of the next card when a denial is cancelled', async () => {
+    describe('cancelling a denial', () => {
       const lawA = lawProposal({ id: 'a', payload: { text: 'Law A' }, createdAt: '2026-10-14T10:00:00.000Z' });
       const lawB = lawProposal({ id: 'b', payload: { text: 'Law B' }, createdAt: '2026-10-14T10:01:00.000Z' });
-      await setup([lawA, lawB]);
-      await userEvent.click(screen.getByRole('button', { name: lawName('Deny', 'Law A') }));
 
-      await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+      it('gives the focus back to the Deny button of the same card when Cancel is pressed', async () => {
+        await setup([lawA, lawB]);
+        await userEvent.click(screen.getByRole('button', { name: lawName('Deny', 'Law A') }));
 
-      await waitFor(() => expect(screen.getByRole('button', { name: lawName('Approve', 'Law B') })).toHaveFocus());
+        await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+        await waitFor(() => expect(screen.getByRole('button', { name: lawName('Deny', 'Law A') })).toHaveFocus());
+      });
+
+      it('closes the denial form and gives the focus back to the Deny button of the same card when Escape is pressed in the reason', async () => {
+        await setup([lawA, lawB]);
+        await userEvent.click(screen.getByRole('button', { name: lawName('Deny', 'Law A') }));
+        await userEvent.type(screen.getByRole('textbox', { name: 'Reason for denying' }), 'Too broad');
+
+        await userEvent.keyboard('{Escape}');
+
+        await waitFor(() => expect(screen.getByRole('button', { name: lawName('Deny', 'Law A') })).toHaveFocus());
+        expect(screen.queryByRole('textbox', { name: 'Reason for denying' })).toBeNull();
+      });
+
+      it('forgets the draft reason of the card whose denial was cancelled with Escape', async () => {
+        const { api } = await setup([lawA, lawB]);
+        await userEvent.click(screen.getByRole('button', { name: lawName('Deny', 'Law A') }));
+        await userEvent.type(screen.getByRole('textbox', { name: 'Reason for denying' }), 'Too broad');
+        await userEvent.keyboard('{Escape}');
+
+        await userEvent.click(await screen.findByRole('button', { name: lawName('Deny', 'Law A') }));
+
+        expect(screen.getByRole('textbox', { name: 'Reason for denying' })).toHaveValue('');
+        expect(api.decideProposal).not.toHaveBeenCalled();
+      });
+
+      it('closes the denial form when Escape is pressed on its Cancel button', async () => {
+        await setup([lawA, lawB]);
+        await userEvent.click(screen.getByRole('button', { name: lawName('Deny', 'Law A') }));
+        screen.getByRole('button', { name: 'Cancel' }).focus();
+
+        await userEvent.keyboard('{Escape}');
+
+        await waitFor(() => expect(screen.getByRole('button', { name: lawName('Deny', 'Law A') })).toHaveFocus());
+      });
     });
 
     it('leaves the focus alone when the card that leaves is not the one in use', async () => {

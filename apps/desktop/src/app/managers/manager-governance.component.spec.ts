@@ -1,5 +1,6 @@
 import { render, screen, waitFor, within } from '@testing-library/angular/zoneless';
 import { inputBinding, signal } from '@angular/core';
+import userEvent from '@testing-library/user-event';
 import { provideRouter } from '@angular/router';
 import type { GovernanceProposalView, ManagerGovernanceView, ResourceGrantView } from '@openfleet/shared';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -74,6 +75,62 @@ describe('ManagerGovernanceComponent', () => {
     expect(within(history).getByText('Approved')).toBeVisible();
     expect(within(history).getByText('Withdrawn')).toBeVisible();
     expect(within(history).queryByText('approved')).toBeNull();
+  });
+
+  it('shows how long ago each proposal of the history was decided', async () => {
+    const fiveMinutesAgo = new Date(Date.now() - 5 * 60_000).toISOString();
+    await renderSection({ history: [proposal({ id: 'h1', status: 'approved', decidedAt: fiveMinutesAgo })] });
+
+    const history = await screen.findByTestId('manager-governance-history');
+
+    expect(within(history).getByText('5 min ago')).toBeVisible();
+  });
+
+  describe('long lists', () => {
+    const deniedProposals = (count: number) =>
+      Array.from({ length: count }, (_, index) => proposal({ id: `d${index}`, status: 'denied', denialReason: 'No', payload: { text: `Denied law ${index}` } }));
+    const historyProposals = (count: number) =>
+      Array.from({ length: count }, (_, index) => proposal({ id: `h${index}`, status: 'approved', payload: { text: `Approved law ${index}` } }));
+
+    it('shows the 5 first denials and offers to show all 20 of 21 refusals once one is evicted', async () => {
+      await renderSection({ denied: deniedProposals(20), governanceEvictedDenials: 1 });
+
+      const denied = await screen.findByTestId('manager-governance-denied');
+
+      expect(within(denied).getAllByRole('listitem')).toHaveLength(5);
+      expect(within(denied).getByRole('button', { name: 'Show all 20' })).toHaveAttribute('aria-expanded', 'false');
+    });
+
+    it('shows every denial, then folds them back, with the button', async () => {
+      await renderSection({ denied: deniedProposals(20) });
+      const denied = await screen.findByTestId('manager-governance-denied');
+
+      await userEvent.click(within(denied).getByRole('button', { name: 'Show all 20' }));
+
+      expect(within(denied).getAllByRole('listitem')).toHaveLength(20);
+      expect(within(denied).getByRole('button', { name: 'Show fewer' })).toHaveAttribute('aria-expanded', 'true');
+
+      await userEvent.click(within(denied).getByRole('button', { name: 'Show fewer' }));
+
+      expect(within(denied).getAllByRole('listitem')).toHaveLength(5);
+    });
+
+    it('folds the history after 5 entries, apart from the denials', async () => {
+      await renderSection({ denied: deniedProposals(3), history: historyProposals(8) });
+      const history = await screen.findByTestId('manager-governance-history');
+
+      expect(within(history).getAllByRole('listitem')).toHaveLength(5);
+      expect(within(history).getByRole('button', { name: 'Show all 8' })).toBeVisible();
+      expect(within(screen.getByTestId('manager-governance-denied')).queryByRole('button')).toBeNull();
+    });
+
+    it('offers no button for exactly 5 entries', async () => {
+      await renderSection({ history: historyProposals(5) });
+      const history = await screen.findByTestId('manager-governance-history');
+
+      expect(within(history).getAllByRole('listitem')).toHaveLength(5);
+      expect(within(history).queryByRole('button')).toBeNull();
+    });
   });
 
   it('labels the grants in force as informational, with the resolved resource name and a readable access', async () => {

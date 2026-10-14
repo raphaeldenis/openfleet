@@ -5,11 +5,14 @@ import { showBidiControlsAsEscapes } from '../core/bidi-escapes';
 import { copyFor } from '../core/error-copy';
 import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
+import { compactElapsedLabel, elapsedSecondsSince } from '../design/elapsed-time';
 import { ErrorLineComponent } from '../design/error-line.component';
+import { tickingNow } from '../working-state/working-state-freshness';
 import { STATUS_LABELS, accessLabelOf, proposalDetailsOf } from '../inbox/governance-details';
 import { GovernanceResourceNames } from '../inbox/governance-resource-names.service';
 
 const GRANTS_NOT_ENFORCED_LABEL = 'informational: not enforced yet';
+const COLLAPSED_ENTRY_COUNT = 5;
 
 /** The governance of one manager: what waits for a human, what was refused and why, what was decided, and the grants on record. */
 @Component({
@@ -43,10 +46,13 @@ const GRANTS_NOT_ENFORCED_LABEL = 'informational: not enforced yet';
           <div data-testid="manager-governance-denied">
             <h3 class="subtitle">Denied</h3>
             <ul class="entries">
-              @for (entry of denied(); track entry.id) {
+              @for (entry of shownDenied(); track entry.id) {
                 <li class="entry"><span class="summary">{{ entry.summary }}</span><span class="incident">Reason: {{ entry.reason }}</span></li>
               }
             </ul>
+            @if (denied().length > collapsedEntryCount) {
+              <button type="button" class="link toggle" [attr.aria-expanded]="isDeniedExpanded()" (click)="isDeniedExpanded.set(!isDeniedExpanded())">{{ isDeniedExpanded() ? 'Show fewer' : 'Show all ' + denied().length }}</button>
+            }
           </div>
         }
         @if (view.governanceEvictedDenials > 0) {
@@ -56,10 +62,21 @@ const GRANTS_NOT_ENFORCED_LABEL = 'informational: not enforced yet';
           <div data-testid="manager-governance-history">
             <h3 class="subtitle">History</h3>
             <ul class="entries">
-              @for (entry of history(); track entry.id) {
-                <li class="entry"><span class="summary">{{ entry.summary }}</span><span class="status">{{ entry.status }}</span></li>
+              @for (entry of shownHistory(); track entry.id) {
+                <li class="entry">
+                  <span class="summary">{{ entry.summary }}</span>
+                  <span class="status-row">
+                    <span class="pill" [attr.data-status]="entry.statusKey">{{ entry.status }}</span>
+                    @if (entry.ageLabel; as age) {
+                      <span class="status">{{ age }} ago</span>
+                    }
+                  </span>
+                </li>
               }
             </ul>
+            @if (history().length > collapsedEntryCount) {
+              <button type="button" class="link toggle" [attr.aria-expanded]="isHistoryExpanded()" (click)="isHistoryExpanded.set(!isHistoryExpanded())">{{ isHistoryExpanded() ? 'Show fewer' : 'Show all ' + history().length }}</button>
+            }
           </div>
         }
         @if (grants().length > 0) {
@@ -89,6 +106,11 @@ const GRANTS_NOT_ENFORCED_LABEL = 'informational: not enforced yet';
     .entries { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .375rem; }
     .entry { display: flex; flex-direction: column; gap: .125rem; min-width: 0; }
     .summary { white-space: pre-wrap; overflow-wrap: anywhere; }
+    .toggle { align-self: flex-start; margin-top: .25rem; padding: 0; border: 0; background: none; cursor: pointer; font: inherit; font-size: .75rem; }
+    .status-row { display: flex; align-items: center; gap: .5rem; }
+    .pill { padding: 0 .5rem; border-radius: .375rem; font-family: var(--mono); font-size: .75rem; font-weight: 500; color: var(--fg); }
+    .pill[data-status='approved'] { background: color-mix(in oklch, var(--state-idle) 14%, transparent); }
+    .pill[data-status='withdrawn'] { background: color-mix(in oklch, var(--state-closed) 14%, transparent); }
     .incident, .status { font-size: .75rem; color: var(--mut); white-space: pre-wrap; overflow-wrap: anywhere; }
   `,
 })
@@ -100,6 +122,10 @@ export class ManagerGovernanceComponent {
   private readonly resourceNames = inject(GovernanceResourceNames);
   protected readonly view = signal<ManagerGovernanceView | undefined>(undefined);
   protected readonly loadError = signal<string | undefined>(undefined);
+  protected readonly isDeniedExpanded = signal(false);
+  protected readonly isHistoryExpanded = signal(false);
+  protected readonly collapsedEntryCount = COLLAPSED_ENTRY_COUNT;
+  private readonly now = tickingNow();
   private loadCount = 0;
 
   /** Changes only when the pending proposals of this very manager change. */
@@ -159,12 +185,16 @@ export class ManagerGovernanceComponent {
       incident: showBidiControlsAsEscapes(proposal.incident),
       reason: showBidiControlsAsEscapes(proposal.denialReason ?? ''),
       status: STATUS_LABELS[proposal.status],
+      statusKey: proposal.status,
+      ageLabel: compactElapsedLabel(elapsedSecondsSince(proposal.decidedAt ?? proposal.createdAt, this.now())),
     };
   }
 
   protected readonly pending = computed(() => (this.view()?.pending ?? []).map((proposal) => this.entryOf(proposal)));
   protected readonly denied = computed(() => (this.view()?.denied ?? []).map((proposal) => this.entryOf(proposal)));
   protected readonly history = computed(() => (this.view()?.history ?? []).map((proposal) => this.entryOf(proposal)));
+  protected readonly shownDenied = computed(() => (this.isDeniedExpanded() ? this.denied() : this.denied().slice(0, COLLAPSED_ENTRY_COUNT)));
+  protected readonly shownHistory = computed(() => (this.isHistoryExpanded() ? this.history() : this.history().slice(0, COLLAPSED_ENTRY_COUNT)));
   protected readonly grants = computed(() =>
     (this.view()?.resourceGrants ?? []).map((grant) => ({
       id: grant.id,

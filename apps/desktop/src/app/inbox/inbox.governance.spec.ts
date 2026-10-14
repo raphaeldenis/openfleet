@@ -37,7 +37,10 @@ async function renderInbox(proposals: GovernanceProposalView[]) {
 
 const approveLaw = async (id: string) => userEvent.click(screen.getByRole('button', { name: `Approve law proposal from Lloyd: Law ${id}` }));
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  sessionStorage.clear();
+});
 
 describe('InboxComponent governance proposals', () => {
   it('user sees a pending proposal with its incident, and the Inbox count rises by one', async () => {
@@ -154,14 +157,14 @@ describe('InboxComponent governance proposals', () => {
       await waitFor(() => expect(screen.getByTestId('inbox-filter-governance')).toHaveFocus());
     });
 
-    it('moves the focus to the Governance filter when the denial of the only card is cancelled', async () => {
+    it('gives the focus back to the Deny button of the only card when its denial is cancelled', async () => {
       await renderInbox([proposal('p1')]);
       await userEvent.click(screen.getByTestId('inbox-filter-governance'));
       await userEvent.click(screen.getByRole('button', { name: 'Deny law proposal from Lloyd: Law p1' }));
 
       await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
 
-      await waitFor(() => expect(screen.getByTestId('inbox-filter-governance')).toHaveFocus());
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Deny law proposal from Lloyd: Law p1' })).toHaveFocus());
     });
   });
 });
