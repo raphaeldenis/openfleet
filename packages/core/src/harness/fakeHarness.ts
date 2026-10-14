@@ -174,6 +174,7 @@ export async function postSessionStartHook({ hookUrl, sessionId }: HarnessLaunch
 
 export class FakeHarness implements Harness {
   readonly id = 'fake' as const;
+  readonly policyEnforcement = 'hook' as const;
   readonly handles: FakeHandle[] = [];
   readonly launches: HarnessLaunch[] = [];
   // Test-only: conversations the fake CLI lost (a transcript removed by its retention).

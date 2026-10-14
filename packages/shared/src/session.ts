@@ -27,6 +27,10 @@ export const parseSessionCloseReason = (value: unknown): SessionCloseReason | un
 export const HARNESSES =['claude-cli', 'fake'] as const;
 export type HarnessId = (typeof HARNESSES)[number];
 
+/** How a harness applies the command policy: through its hooks, through its own CLI, through shims, or not at all. */
+export const POLICY_ENFORCEMENTS = ['hook', 'native', 'shim', 'none'] as const;
+export type PolicyEnforcement = (typeof POLICY_ENFORCEMENTS)[number];
+
 export const PERMISSION_MODES = ['manual', 'acceptEdits', 'plan', 'auto', 'bypassPermissions', 'dontAsk'] as const;
 export type PermissionMode = (typeof PERMISSION_MODES)[number];
 
@@ -66,6 +70,8 @@ export interface Session {
   role?: string;
   permissionMode?: PermissionMode;
   harness: HarnessId;
+  /** How the command policy reaches this session's harness. Absent from a daemon that predates the policy. */
+  policyEnforcement?: PolicyEnforcement;
   state: SessionState;
   stateSince: string;
   runtimeAttention?: RuntimeAttention;

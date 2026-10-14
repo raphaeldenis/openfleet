@@ -1,3 +1,4 @@
+import type { DeniedCommand } from './commandPolicy.js';
 import type { DaemonIssue } from './daemonIssues.js';
 import type { ErrorEnvelope } from './errors.js';
 import type { GovernanceProposalView } from './governance.js';
@@ -57,4 +58,5 @@ export type ServerEvent =
   | { type: 'error'; sessionId?: string; scope?: ErrorEventScope; error: ErrorEnvelope }
   | { type: 'daemon.issues'; issues: DaemonIssue[] }
   | { type: 'permission.silent_blocks'; blocks: SilentBlock[] }
+  | { type: 'command.denied'; denial: DeniedCommand }
   | ({ type: 'notification.trigger' } & NotificationTrigger);

@@ -16,6 +16,7 @@ import { markDirectoryTrusted } from './trustDirectory.js';
 
 export class ClaudeCliHarness implements Harness {
   readonly id = 'claude-cli' as const;
+  readonly policyEnforcement = 'hook' as const;
 
   constructor(
     private readonly sessionsRoot: string = join(homedir(), '.openfleet', 'sessions'),

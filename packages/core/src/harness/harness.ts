@@ -1,4 +1,4 @@
-import type { HarnessId, PermissionMode } from '@openfleet/shared';
+import type { HarnessId, PermissionMode, PolicyEnforcement } from '@openfleet/shared';
 
 export interface HarnessLaunch {
   sessionId: string;
@@ -46,6 +46,8 @@ export type ConversationPresence = 'present' | 'missing' | 'unknown';
 
 export interface Harness {
   readonly id: HarnessId;
+  /** How the command policy reaches this harness; a harness that does not say is not covered. */
+  readonly policyEnforcement?: PolicyEnforcement;
   start(launch: HarnessLaunch): HarnessHandle;
   // Whether a resume of this conversation can succeed: the CLI refuses (exit 1) a conversation it has no file for.
   // A harness that cannot tell omits it and its conversations are assumed to exist.

@@ -10,6 +10,7 @@ import type { ModelTable } from '../models.js';
 import type { DocsFolderService } from '../notes/docsFolderService.js';
 import type { NoteRepository } from '../notes/noteRepository.js';
 import type { NoteService } from '../notes/noteService.js';
+import type { CommandPolicyHooks } from '../policy/ports.js';
 import type { DegradedRegistry } from '../process/degradedRegistry.js';
 import { DAEMON_VERSION } from '../version.js';
 import { PortInUseError } from '../errors/portInUseError.js';
@@ -80,6 +81,8 @@ export interface ServerDeps {
   contextNotice?: ContextNotice;
   // Without it the daemon reports no degraded state: /health says ok and the snapshot carries no daemonIssues.
   degraded?: DegradedRegistry;
+  // Without it PreToolUse is answered {} and a PermissionRequest always opens an approval, as before the command policy.
+  commandPolicy?: CommandPolicyHooks;
   // Without it GET /api/diagnostics does not exist.
   diagnostics?: () => DiagnosticsDocument;
   // Without it the todos route, event and snapshot field do not exist and the hooks leave the todo tools alone.
