@@ -3,6 +3,8 @@ import {
   PAYLOAD_SCHEMA_BY_KIND, type GovernanceProposalView, type ProposalKind, type ProposalPayload, type ProposalStatus, type ResourceAccess, type ResourceGrantView, type ResourceType,
 } from '@openfleet/shared';
 
+const NEWEST_ANSWER_FIRST = 'decided_at DESC, rowid DESC';
+
 interface ProposalRow {
   id: string; manager_id: string; kind: ProposalKind; status: ProposalStatus; incident: string; payload_json: string;
   denial_reason: string | null; created_at: string; decided_at: string | null;
@@ -87,17 +89,17 @@ export class ProposalRepository {
   }
 
   deniedOf(managerId: string): GovernanceProposalView[] {
-    return this.listOf({ managerId, statuses: ['denied'], order: 'decided_at DESC, id DESC' });
+    return this.listOf({ managerId, statuses: ['denied'], order: NEWEST_ANSWER_FIRST });
   }
 
   auditHistoryOf(managerId: string): GovernanceProposalView[] {
-    return this.listOf({ managerId, statuses: ['approved', 'withdrawn'], order: 'decided_at DESC, id DESC' });
+    return this.listOf({ managerId, statuses: ['approved', 'withdrawn'], order: NEWEST_ANSWER_FIRST });
   }
 
-  /** Deletes the oldest answers of the given statuses beyond the newest `keep`; answers decided at the same instant are ranked by id. Returns how many it deleted. */
+  /** Deletes the oldest answers of the given statuses beyond the newest `keep`; answers decided at the same instant are ranked by filing order. Returns how many it deleted. */
   evictOldestBeyond({ managerId, statuses, keep }: { managerId: string; statuses: readonly ProposalStatus[]; keep: number }): number {
     const { changes } = this.db.prepare(`DELETE FROM governance_proposals WHERE id IN (
-      SELECT id FROM governance_proposals WHERE manager_id = ? AND status IN (${placeholdersFor(statuses)}) ORDER BY decided_at DESC, id DESC LIMIT -1 OFFSET ?)`)
+      SELECT id FROM governance_proposals WHERE manager_id = ? AND status IN (${placeholdersFor(statuses)}) ORDER BY ${NEWEST_ANSWER_FIRST} LIMIT -1 OFFSET ?)`)
       .run(managerId, ...statuses, keep);
     return Number(changes);
   }

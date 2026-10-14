@@ -132,7 +132,7 @@ describe('the denied history', () => {
     expect(view.governanceEvictedDenials).toBe(1);
   });
 
-  it('drops, among denials answered at the same instant, the one with the smallest id', () => {
+  it('drops, among denials answered at the same instant, the one filed first, whatever the ids', () => {
     const reasons = Array.from({ length: MAX_DENIED_HISTORY_PER_MANAGER }, (_, index) => `reason ${index}`);
     reasons.forEach((reason, index) => deny(proposeLaw(`Law number ${index}`).proposal.id, reason));
     const idsInFilingOrder = (fixture.db.prepare('SELECT id FROM governance_proposals ORDER BY rowid').all() as { id: string }[]).map((row) => row.id);
@@ -142,9 +142,21 @@ describe('the denied history', () => {
     deny(proposeLaw('The denial that overflows').proposal.id, 'overflow');
 
     const keptReasons = viewOfLead().denied.map((proposal) => proposal.denialReason);
-    const reasonOfSmallestId = reasons.at(-1);
-    expect(keptReasons).not.toContain(reasonOfSmallestId);
+    const reasonOfFirstFiled = reasons[0];
+    const reasonOfLastFiled = reasons.at(-1);
+    expect(keptReasons).not.toContain(reasonOfFirstFiled);
+    expect(keptReasons).toContain(reasonOfLastFiled);
     expect(keptReasons).toHaveLength(MAX_DENIED_HISTORY_PER_MANAGER);
+  });
+
+  it('lists, among denials answered at the same instant, the one filed last first', () => {
+    const reasons = ['first filed', 'second filed', 'third filed'];
+    reasons.forEach((reason, index) => deny(proposeLaw(`Law number ${index}`).proposal.id, reason));
+    const idsInFilingOrder = (fixture.db.prepare('SELECT id FROM governance_proposals ORDER BY rowid').all() as { id: string }[]).map((row) => row.id);
+    fixture.db.prepare("UPDATE governance_proposals SET decided_at = '2000-01-01T00:00:00.000Z'").run();
+    idsInFilingOrder.forEach((id, index) => fixture.db.prepare('UPDATE governance_proposals SET id = ? WHERE id = ?').run(`id-${reasons.length - index}`, id));
+
+    expect(viewOfLead().denied.map((proposal) => proposal.denialReason)).toEqual(['third filed', 'second filed', 'first filed']);
   });
 
   it('declares nothing while the history holds every denial', () => {
