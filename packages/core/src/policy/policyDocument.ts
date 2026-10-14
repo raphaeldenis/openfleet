@@ -1,5 +1,5 @@
 import {
-  CommandPolicyOverrideSchema, POLICY_DOCUMENT_VERSION, POLICY_MODES, PolicyProfileSchema, PolicyRuleSchema,
+  CommandPolicyOverrideSchema, POLICY_DOCUMENT_VERSION, POLICY_MODES, PolicyProfileSchema, PolicyRuleSchema, UnattendedOverrideSchema,
   type CommandPolicyDocument, type CommandPolicyOverride, type PolicyMode, type PolicyProfile, type PolicyRule,
 } from '@openfleet/shared';
 import * as z from 'zod';
@@ -90,8 +90,13 @@ function parseRoleMappings(raw: unknown, issues: PolicyDocumentIssue[]): Record<
   return mappings;
 }
 
+const OVERRIDE_KEYS = new Set(['version', 'mode', 'unattended', 'disabledRules', 'rules', 'profiles', 'roleToProfile']);
+
 function parseOverride(override: Record<string, unknown>): ParsedOverride {
   const issues: PolicyDocumentIssue[] = [];
+  for (const key of Object.keys(override).filter((candidate) => !OVERRIDE_KEYS.has(candidate))) {
+    issues.push({ scope: 'field', field: key, message: 'unknown key' });
+  }
   const mode = parseField(override.mode, ModeSchema, 'mode', issues);
   const disabledRules = parseField(override.disabledRules, RuleIdListSchema, 'disabledRules', issues) ?? [];
   const rules = parseRules(override.rules, issues);
@@ -115,6 +120,27 @@ function mergeRoleMappings(delivered: CommandPolicyDocument, parsed: ParsedOverr
     else parsed.issues.push({ scope: 'field', field: 'roleToProfile', message: `${role}: unknown profile ${profile}` });
   }
   return merged;
+}
+
+/** The override reduced to the parts that apply: what `resolveCommandPolicy` reports as an issue is left out, so the result always passes the strict validation. */
+export function validPartsOfOverride({ delivered, override }: { delivered: CommandPolicyDocument; override: Record<string, unknown> }): CommandPolicyOverride {
+  const isVersionSupported = override.version === POLICY_DOCUMENT_VERSION;
+  if (!isVersionSupported) return { version: POLICY_DOCUMENT_VERSION };
+  const parsed = parseOverride(override);
+  const isStatedAndValid = (field: string): boolean =>
+    override[field] !== undefined && !parsed.issues.some((issue) => issue.scope === 'field' && issue.field === field);
+  const knownProfiles = { ...delivered.profiles, ...parsed.profiles };
+  const roleToProfile = Object.fromEntries(Object.entries(parsed.roleToProfile).filter(([, profile]) => Object.hasOwn(knownProfiles, profile)));
+  const unattended = UnattendedOverrideSchema.safeParse(override.unattended);
+  return {
+    version: POLICY_DOCUMENT_VERSION,
+    ...(parsed.mode === undefined ? {} : { mode: parsed.mode }),
+    ...(unattended.success && override.unattended !== undefined ? { unattended: unattended.data } : {}),
+    ...(isStatedAndValid('disabledRules') ? { disabledRules: parsed.disabledRules } : {}),
+    ...(isStatedAndValid('rules') ? { rules: parsed.rules } : {}),
+    ...(isStatedAndValid('profiles') ? { profiles: parsed.profiles } : {}),
+    ...(isStatedAndValid('roleToProfile') ? { roleToProfile } : {}),
+  };
 }
 
 /**

@@ -32,7 +32,7 @@ describe('Settings → About', () => {
 
     const tabNames = screen.getAllByRole('tab').map((tab) => tab.textContent?.trim());
 
-    expect(tabNames).toEqual(['General', 'Models', 'Daemon', 'Diagnostics', 'About']);
+    expect(tabNames).toEqual(['General', 'Models', 'Command policy', 'Daemon', 'Diagnostics', 'About']);
   });
 
   async function renderOnRouteTab(tab: string) {

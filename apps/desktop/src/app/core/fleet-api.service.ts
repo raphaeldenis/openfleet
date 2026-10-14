@@ -57,7 +57,8 @@ export class FleetApiService {
     return { items, total: items.length, limit: LIST_PAGE_LIMIT, offset: 0 };
   }
   // ponytail: fetch over HttpClient — no interceptors needed yet
-  private async call<T>(path: string, init: RequestInit = {}): Promise<T> {
+  /** The authenticated request every call above is made of, for the services that live in a lazy chunk of their own. */
+  async call<T>(path: string, init: RequestInit = {}): Promise<T> {
     const requestTimeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
     const abortsOnCallerOrTimeout = init.signal ? AbortSignal.any([init.signal, requestTimeout]) : requestTimeout;
     const response = await fetch(`${environment.apiUrl}${path}`, {

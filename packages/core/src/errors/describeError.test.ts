@@ -12,6 +12,7 @@ import { StuckConnectionError } from '../db/transaction.js';
 import { ApprovalError } from '../governance/approvalService.js';
 import { GovernanceQueueFullError, ProposalNotFoundError } from '../governance/governanceErrors.js';
 import { ModelConfigReadOnlyError, ModelConfigUnreadableError } from '../models.js';
+import { CommandPolicyFileReadOnlyError, CommandPolicyFileUnreadableError } from '../policy/commandPolicyErrors.js';
 import { NoteFileUnreadableError, PathEscapesDocsFolderError, ProjectNotFoundError } from '../notes/docsFolderService.js';
 import { FileBackedNoteError, NoteNotFoundError, NoteTooLargeError, StaleRevisionError, VersionNotFoundError } from '../notes/noteService.js';
 import {
@@ -59,6 +60,8 @@ const domainErrorCodes: [string, () => unknown, ErrorCode][] = [
   ['ApprovalError already_resolved', () => new ApprovalError('already_resolved', 'x'), 'already_resolved'],
   ['ModelConfigUnreadableError', () => new ModelConfigUnreadableError('x'), 'config_unreadable'],
   ['ModelConfigReadOnlyError', () => new ModelConfigReadOnlyError('x'), 'config_read_only'],
+  ['CommandPolicyFileUnreadableError', () => new CommandPolicyFileUnreadableError('x'), 'config_unreadable'],
+  ['CommandPolicyFileReadOnlyError', () => new CommandPolicyFileReadOnlyError('x'), 'config_read_only'],
   ['NoteNotFoundError', () => new NoteNotFoundError('n1'), 'not_found'],
   ['VersionNotFoundError', () => new VersionNotFoundError(3), 'not_found'],
   ['StaleRevisionError', () => new StaleRevisionError(12), 'stale_revision'],

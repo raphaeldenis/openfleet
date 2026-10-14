@@ -13,12 +13,15 @@ import { loadPermissionSettings } from './governance/permissionSettings.js';
 import { SilentBlockDetector } from './governance/silentBlockDetector.js';
 import { ClaudeCliHarness } from './harness/claudeCli/claudeCliHarness.js';
 import { ClaudePolicyHooks } from './harness/claudeCli/claudePolicyHooks.js';
+import { CommandPolicyService } from './policy/commandPolicyService.js';
 import { defaultCommandPolicySettings, type CommandPolicySettings, type PolicyEvaluate } from './policy/commandPolicySettings.js';
+import { createFileCommandPolicyFile } from './policy/fileCommandPolicyFile.js';
 import { evaluateCommandPolicy } from './policy/policyEvaluator.js';
 import { RefusalRepeatGuard } from './policy/refusalRepeatGuard.js';
 import { SqliteDenialJournal } from './policy/sqliteDenialJournal.js';
 import { sweepStaleSessions } from './harness/claudeCli/tokenFiles.js';
 import { FakeHarness, postSessionStartHook } from './harness/fakeHarness.js';
+import type { Harness } from './harness/harness.js';
 import { newId } from './ids.js';
 import { createNodeGitPort } from './git/nodeGitPort.js';
 import { log } from './logger.js';
@@ -61,6 +64,7 @@ import { StopRefusal } from './workingState/stopRefusal.js';
 import { WorkingStateService } from './workingState/workingStateService.js';
 import { loadDaemonSettings } from './workingState/workingStateSettings.js';
 
+const COMMAND_POLICY_FILE_NAME = 'command-policy.json';
 const REFUSED_BOOT_CLOSE_TIMEOUT_MS = 5000;
 const ISSUE_EXPIRY_SWEEP_MS = 30_000;
 
@@ -83,6 +87,7 @@ export interface Daemon {
   db: ReturnType<typeof openDatabase>;
   degraded: DegradedRegistry;
   governanceQueue: GovernanceQueueService;
+  harnesses: Harness[];
   close: () => Promise<void>;
 }
 
@@ -110,7 +115,17 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   const harnesses = config.e2eEnabled ? [claudeCliHarness, new FakeHarness({ reportSessionStart: postSessionStartHook })] : [claudeCliHarness];
   if (config.e2eEnabled) log('warn', 'e2e test surface enabled (OPENFLEET_E2E=1): fake harness, fake-output route and fake-propose-law route are registered');
   const managerRepository = new ManagerRepository(db);
-  const sessions = new SessionService({ db, bus, harnesses, baseUrl, worktreesRoot: config.worktreesRoot, describeError, missionOf: (sessionId) => managerRepository.get(sessionId)?.missionText });
+  const evaluatePolicy = options.commandPolicy?.evaluate ?? evaluateCommandPolicy;
+  const commandPolicyService = new CommandPolicyService({
+    base: options.commandPolicy?.settings ?? defaultCommandPolicySettings(),
+    file: createFileCommandPolicyFile(join(config.home, COMMAND_POLICY_FILE_NAME)),
+    evaluate: evaluatePolicy,
+  });
+  const isCommandPolicyActive = () => {
+    const { document, unattended } = commandPolicyService.settings();
+    return document.mode !== 'off' || unattended.askBecomesDeny;
+  };
+  const sessions = new SessionService({ db, bus, harnesses, baseUrl, worktreesRoot: config.worktreesRoot, describeError, missionOf: (sessionId) => managerRepository.get(sessionId)?.missionText, isCommandPolicyActive });
   const approvals = new ApprovalService({ db, bus });
   // A row still 'pending' from before this boot has no live waiter any more (AUD-07): the pre-restart
   // process that would have decided it is gone with the old daemon.
@@ -157,17 +172,40 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   const handoverLedger = new HandoverLedger({ db, clock: () => new Date().toISOString(), patterns: workingStateSettings.handoverPatterns });
   const contextNotice = new ContextNotice({ sessions, managers: managerRepository, settings: contextNoticeSettings });
   const todos = new TodoTracker({ sessions, bus });
-  const { silentBlockMinutes } = loadPermissionSettings(modelConfigPath);
-  const silentBlocks = new SilentBlockDetector({ thresholdMinutes: silentBlockMinutes, schedule: scheduleOnRealClock, onChange: (blocks) => bus.emit({ type: 'permission.silent_blocks', blocks }) });
+  const { silentBlockMinutes, unattendedSilentBlockSeconds } = loadPermissionSettings(modelConfigPath);
+  const isManager = (sessionId: string) => managerRepository.get(sessionId) !== undefined;
+  /** A child whose permission dialogs become refusals: nobody ever answers a dialog it opens, so it must not wait on one for long. */
+  const isChildNobodyWatches = (sessionId: string) => {
+    const hasParent = sessions.get(sessionId)?.parentId !== undefined;
+    return hasParent && !isManager(sessionId) && commandPolicyService.settings().unattended.askBecomesDeny;
+  };
+  const tellManagerOfSilentBlock = ({ sessionId, wasUnwatched }: { sessionId: string; wasUnwatched: boolean }) => {
+    const session = sessions.get(sessionId);
+    const manager = session?.parentId;
+    if (!wasUnwatched || session === undefined || manager === undefined) return;
+    const body = `[OpenFleet] ${session.name} (${session.id}) has waited more than ${unattendedSilentBlockSeconds} seconds on a permission prompt nobody can answer. Look at it, or close and relaunch it.`;
+    try {
+      sessions.sendMessage({ sessionId: manager, body });
+    } catch (error) {
+      log('warn', `silent block: the manager could not be told: ${describeError(error).error}`, sessionId);
+    }
+  };
+  const silentBlocks = new SilentBlockDetector({
+    thresholdMinutes: silentBlockMinutes,
+    unattended: { thresholdSeconds: unattendedSilentBlockSeconds, appliesTo: isChildNobodyWatches },
+    schedule: scheduleOnRealClock,
+    onChange: (blocks) => bus.emit({ type: 'permission.silent_blocks', blocks }),
+    onRaised: tellManagerOfSilentBlock,
+  });
   bus.subscribe((event) => silentBlocks.handle(event));
   const handoffSettings = loadHandoffSettings(modelConfigPath);
-  const commandPolicySettings = options.commandPolicy?.settings ?? defaultCommandPolicySettings();
+  const denialJournal = new SqliteDenialJournal({ db, clock: () => new Date().toISOString() });
   const commandPolicy = new ClaudePolicyHooks({
-    settings: () => commandPolicySettings,
-    evaluate: options.commandPolicy?.evaluate ?? evaluateCommandPolicy,
-    sessions, isManager: (sessionId) => managerRepository.get(sessionId) !== undefined, bus, degraded,
-    journal: new SqliteDenialJournal({ db, clock: () => new Date().toISOString() }),
-    repeatGuard: new RefusalRepeatGuard({ clock: Date.now, settings: () => commandPolicySettings.unattended.escalateAfterRepeats }),
+    settings: () => commandPolicyService.settings(),
+    evaluate: evaluatePolicy,
+    sessions, isManager, bus, degraded,
+    journal: denialJournal,
+    repeatGuard: new RefusalRepeatGuard({ clock: Date.now, settings: () => commandPolicyService.settings().unattended.escalateAfterRepeats }),
   });
   const handoff = createHandoffRouteDeps({ sessions, managers, workingStates, todos, docs, projects, git: createNodeGitPort(), settings: handoffSettings, clock: () => new Date().toISOString() });
   const stopHandoffOnClose = registerHandoffOnClose(bus, handoff.handoffs, { writeOnClose: handoffSettings.writeOnClose, onError: (error) => log('warn', `automatic handoff not written: ${describeError(error).error}`) });
@@ -176,7 +214,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   // fast process hitting a port nothing is serving yet.
   const diagnostics = () => buildDiagnosticsDocument({ db, degraded, listSessions: () => sessions.list(), port: config.port, e2eEnabled: config.e2eEnabled });
   const worktrees = new WorktreeService({ projects, sessions, worktreesRoot: config.worktreesRoot });
-  const server = await startServer({ ...config, e2eRoutes: config.e2eEnabled, degraded, commandPolicy, diagnostics, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, stores, storeRepo, projects, projectService, worktrees, governanceQueue, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, mcp: createMcpHandler({ knowledgeSearch, governanceQueue, sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });
+  const server = await startServer({ ...config, e2eRoutes: config.e2eEnabled, degraded, commandPolicy, commandPolicyAdmin: { policy: commandPolicyService, denials: denialJournal }, diagnostics, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, stores, storeRepo, projects, projectService, worktrees, governanceQueue, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, mcp: createMcpHandler({ knowledgeSearch, governanceQueue, sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });
   log('info', `openfleet core listening on ${server.url} (version: ${DAEMON_VERSION}, home: ${config.home})`);
 
   const unwatchDatabase = watchDatabaseHealth(degraded);
@@ -215,5 +253,5 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     throw error;
   }
 
-  return { server, db, degraded, governanceQueue, close };
+  return { server, db, degraded, governanceQueue, harnesses, close };
 }

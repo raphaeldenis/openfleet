@@ -1,4 +1,4 @@
-import type { DenialOutcome, DenialSource, DeniedCommand, HarnessId, PermissionRequestHookOutput, PolicyActor, PreToolUseHookOutput, Session } from '@openfleet/shared';
+import type { DenialOutcome, DenialSource, DeniedCommand, DeniedCommandPage, HarnessId, PermissionRequestHookOutput, PolicyActor, PreToolUseHookOutput, Session } from '@openfleet/shared';
 import type { ClaudeHookEvent } from '@openfleet/shared';
 
 type ToolHookEvent<Name extends 'PreToolUse' | 'PermissionRequest'> = Extract<ClaudeHookEvent, { hook_event_name: Name }>;
@@ -28,4 +28,18 @@ export interface DenialDraft {
 
 export interface DenialJournal {
   record(draft: DenialDraft): DeniedCommand;
+}
+
+export interface DenialQuery {
+  managerId?: string;
+  /** Only the entries recorded at or after this instant (ISO 8601). */
+  since?: string;
+  limit: number;
+  /** The `nextCursor` of the previous page. */
+  cursor?: string;
+}
+
+/** The newest-first reading of the journal that the human screens use. */
+export interface DenialReader {
+  list(query: DenialQuery): DeniedCommandPage;
 }

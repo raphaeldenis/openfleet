@@ -12,6 +12,7 @@ import { shortId } from '../ids.js';
 import { loggedRefOf } from './loggedRef.js';
 import { log } from '../logger.js';
 import { ModelConfigReadOnlyError, ModelConfigUnreadableError } from '../models.js';
+import { CommandPolicyFileReadOnlyError, CommandPolicyFileUnreadableError } from '../policy/commandPolicyErrors.js';
 import { escapedForRegExp, isSecretEntry, MASK, maskedSecrets, maskingCutCredential } from '../redact.js';
 import { WorktreeError } from '../git/worktrees.js';
 import {
@@ -117,6 +118,8 @@ const RULES: Rule[] = [
   when(ProposalNotFoundError, asIs('proposal_not_found')),
   when(ModelConfigUnreadableError, asDetail('config_unreadable', 'the model config cannot be read.')),
   when(ModelConfigReadOnlyError, asDetail('config_read_only', 'the model config is read-only.')),
+  when(CommandPolicyFileUnreadableError, asDetail('config_unreadable', 'the command policy file cannot be read.')),
+  when(CommandPolicyFileReadOnlyError, asDetail('config_read_only', 'the command policy file is read-only.')),
 
   // A not-found message never echoes the id: a foreign note, store or row answers byte for byte like a missing one.
   when(NoteNotFoundError, () => ({ code: 'not_found', message: 'the note does not exist.' })),

@@ -24,7 +24,8 @@ export function profileNameOf(role: string | undefined, policy: CommandPolicyDoc
   return hasProfile(policy.profiles, mappedName) ? mappedName : DEFAULT_PROFILE;
 }
 
-function ruleIdsOfProfile(profiles: Record<string, PolicyProfile>, name: string, visited: Set<string>): string[] {
+/** Lists the rule ids a profile applies, the ones it inherits through `extends` first. */
+export function ruleIdsOfProfile(profiles: Record<string, PolicyProfile>, name: string, visited: Set<string> = new Set()): string[] {
   if (visited.has(name) || !hasProfile(profiles, name)) return [];
   visited.add(name);
   const profile = profiles[name] as PolicyProfile;
