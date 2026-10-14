@@ -446,6 +446,14 @@ describe('REST', () => {
     expect(res.headers.get('access-control-allow-methods')).toContain('PATCH');
   });
 
+  it('answers a worktree removal CORS preflight, since the desktop shell sends DELETE cross-origin', async () => {
+    const res = await fetch(`${server.url}/api/projects/whatever/worktrees?path=%2Ftmp`, {
+      method: 'OPTIONS',
+      headers: { origin: 'http://localhost:1420', 'access-control-request-method': 'DELETE', 'access-control-request-headers': 'authorization,content-type' },
+    });
+    expect(res.headers.get('access-control-allow-methods')).toContain('DELETE');
+  });
+
   it.each(PERMISSION_MODES)('changes the permission mode to "%s" and reports relaunching or deferred', async (mode) => {
     const created = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
     const res = await api(`/api/sessions/${created.id}/permission-mode`, { method: 'POST', body: JSON.stringify({ mode }) });

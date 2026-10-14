@@ -1,9 +1,10 @@
 import { ERROR_CODES, HTTP_STATUS_BY_KIND, retryOf, type DaemonIssue, type DegradedCode, type ErrorCode, type ErrorEnvelope, type ErrorRetry } from '@openfleet/shared';
 import { readableDaemonText } from './daemon-text';
 import { ApiError } from './fleet-api.service';
+import { REFUSAL_COPY_BY_REASON, refusalReasonOf } from './worktree-refusal';
 
 /** What the user was doing when the error came back: it decides the advice ("shorten the mission" vs "shorten the name"). */
-export type ErrorAction = 'generic' | 'send' | 'create_session' | 'create_manager' | 'resume' | 'load_todos' | 'rename' | 'close' | 'load_handoff' | 'save_handoff' | 'save_project' | 'reopen_manager' | 'save_manager' | 'pause_manager';
+export type ErrorAction = 'generic' | 'send' | 'create_session' | 'create_manager' | 'resume' | 'load_todos' | 'rename' | 'close' | 'load_handoff' | 'save_handoff' | 'save_project' | 'reopen_manager' | 'save_manager' | 'pause_manager' | 'load_worktrees' | 'remove_worktree' | 'save_project_hook';
 
 export interface ErrorContext {
   action: ErrorAction;
@@ -186,6 +187,16 @@ const COPY_BY_ACTION: Record<ErrorAction, ActionCopy> = {
     docs_folder_not_writable: { what: 'That folder is not writable', fix: 'fix its permissions' },
     path_escapes_docs_folder: { what: 'That folder contains a link that leads outside it', fix: 'pick a folder without one' },
   },
+  save_project_hook: {
+    invalid_body: { what: 'That script cannot be used: give the absolute path of an executable file that only you can write' },
+    project_not_found: { what: 'That project no longer exists' },
+  },
+  load_worktrees: {},
+  remove_worktree: {
+    not_found: { what: 'That worktree no longer exists' },
+    constraint_violation: { what: 'The worktree was not removed' },
+    directory_in_use: { what: 'The worktree was not removed' },
+  },
 };
 
 const FALLBACK_BY_ACTION: Partial<Record<ErrorAction, string>> = {
@@ -201,6 +212,9 @@ const FALLBACK_BY_ACTION: Partial<Record<ErrorAction, string>> = {
   load_handoff: 'The preview could not be loaded — the daemon did not answer in time.',
   save_handoff: 'The handoff was not written — try again.',
   save_project: 'The project was not saved — try again.',
+  save_project_hook: 'The hook was not saved — try again.',
+  load_worktrees: 'The worktrees could not be listed — try again.',
+  remove_worktree: 'The worktree was not removed — try again.',
 };
 
 const NOT_CONNECTED_BY_ACTION: Partial<Record<ErrorAction, string>> = {
@@ -216,6 +230,9 @@ const NOT_CONNECTED_BY_ACTION: Partial<Record<ErrorAction, string>> = {
   load_handoff: 'The preview could not be loaded — check your connection, then try again.',
   save_handoff: 'The handoff was not written — check your connection, then try again.',
   save_project: 'The project was not saved — check your connection, then try again.',
+  save_project_hook: 'The hook was not saved — check your connection, then try again.',
+  load_worktrees: 'The worktrees could not be listed — check your connection, then try again.',
+  remove_worktree: 'The worktree was not removed — check your connection, then try again.',
 };
 
 const isKnownCode = (code: string | undefined): code is ErrorCode => code !== undefined && Object.hasOwn(ERROR_CODES, code);
@@ -249,11 +266,18 @@ function withRef(text: string, envelope: ErrorEnvelope | undefined): ErrorCopy {
   return ref ? { text: `${text} (ref ${ref})`, ref } : { text };
 }
 
+/** A refused removal says why when the daemon names a reason; every other failure reads the entry of the action, then of the code. */
+function copyOfKnownCode({ action, code, envelope }: { action: ErrorAction; code: ErrorCode; envelope: ErrorEnvelope | undefined }): CodeCopy {
+  const refusalReason = action === 'remove_worktree' ? refusalReasonOf(envelope) : undefined;
+  if (refusalReason) return REFUSAL_COPY_BY_REASON[refusalReason];
+  return COPY_BY_ACTION[action][code] ?? COPY_BY_CODE[code];
+}
+
 function copyOfFailure(failure: Failure, { action }: ErrorContext): ErrorCopy {
   const { envelope } = failure;
   const code = isKnownCode(failure.code) ? failure.code : undefined;
   const retry = retryOfFailure(failure, code);
-  if (code) return withRef(WORDS_OF_RETRY[retry](COPY_BY_ACTION[action][code] ?? COPY_BY_CODE[code]), envelope);
+  if (code) return withRef(WORDS_OF_RETRY[retry](copyOfKnownCode({ action, code, envelope })), envelope);
   if (envelope) return withRef(copyOfUnknownCode(envelope), envelope);
   if (action === 'load_todos') return { text: LOAD_TODOS_FAILED_BY_RETRY[retry] };
   return { text: FALLBACK_BY_ACTION[action] ?? FALLBACK_BY_RETRY[retry] };
