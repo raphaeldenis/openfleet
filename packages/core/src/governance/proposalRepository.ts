@@ -84,6 +84,13 @@ export class ProposalRepository {
     return changes === 1;
   }
 
+  /** Every manager's proposals in `status`: pending ones oldest filing first, answered ones newest answer first; the rowid breaks equal timestamps. */
+  allWithStatus(status: ProposalStatus): GovernanceProposalView[] {
+    const order = status === 'pending' ? 'created_at, rowid' : NEWEST_ANSWER_FIRST;
+    const rows = this.db.prepare(`SELECT * FROM governance_proposals WHERE status = ? ORDER BY ${order}`).all(status) as unknown as ProposalRow[];
+    return rows.map(toView);
+  }
+
   pendingOf(managerId: string): GovernanceProposalView[] {
     return this.listOf({ managerId, statuses: ['pending'], order: 'created_at, rowid' });
   }

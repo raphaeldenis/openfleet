@@ -1,9 +1,10 @@
 import type { DatabaseSync } from 'node:sqlite';
 import {
   MAX_AUDIT_HISTORY_PER_MANAGER, MAX_DENIED_HISTORY_PER_MANAGER, MAX_PENDING_PROPOSALS_PER_MANAGER, OpenFleetError,
-  type GovernanceProposalView, type ManagerGovernanceView, type ProposalKind, type ProposalPayload, type ResourceAccessPayload,
+  type GovernanceProposalView, type ManagerGovernanceView, type ProposalKind, type ProposalPayload, type ProposalStatus, type ResourceAccessPayload,
 } from '@openfleet/shared';
 import { inTransaction } from '../db/transaction.js';
+import type { EventBus } from '../events/eventBus.js';
 import type { ManagerLinkTargets } from '../managers/managerService.js';
 import { NoteNotFoundError } from '../notes/noteService.js';
 import { StoreNotFoundError } from '../stores/dataStoreRepository.js';
@@ -19,6 +20,7 @@ export interface ManagerDirectory {
 
 export interface GovernanceQueueDeps {
   db: DatabaseSync;
+  bus: Pick<EventBus, 'emit'>;
   clock: () => string;
   newId: () => string;
   managers: ManagerDirectory;
@@ -65,7 +67,7 @@ export class GovernanceQueueService {
   /** The manager takes back a pending proposal of its own. */
   withdraw({ managerId, proposalId }: { managerId: string; proposalId: string }): GovernanceProposalView {
     this.requireManager(managerId);
-    return inTransaction(this.deps.db, 'governance_withdraw', () => {
+    const withdrawn = inTransaction(this.deps.db, 'governance_withdraw', () => {
       const current = this.proposals.find(proposalId);
       const isOwnProposal = current?.managerId === managerId;
       if (!isOwnProposal) throw new ProposalNotFoundError();
@@ -73,10 +75,28 @@ export class GovernanceQueueService {
       this.evictOldestAudit(managerId);
       return this.proposals.find(proposalId)!;
     });
+    this.deps.bus.emit({ type: 'governance.resolved', proposal: withdrawn });
+    return withdrawn;
   }
 
   /** A human approves or denies a pending proposal; approving a resource access records its grant in the same transaction. */
   decide(decision: Decision): GovernanceProposalView {
+    const answered = this.recordDecision(decision);
+    this.deps.bus.emit({ type: 'governance.resolved', proposal: answered });
+    return answered;
+  }
+
+  /** The proposals of every manager in the given status, oldest filing first. */
+  listByStatus(status: ProposalStatus): GovernanceProposalView[] {
+    return this.proposals.allWithStatus(status);
+  }
+
+  /** True when the session is a manager: the governance view of any other session does not exist. */
+  isManager(sessionId: string): boolean {
+    return this.deps.managers.isManager(sessionId);
+  }
+
+  private recordDecision(decision: Decision): GovernanceProposalView {
     const denialReason = decision.decision === 'deny' ? storedDenialReason(decision.reason) : undefined;
     return inTransaction(this.deps.db, 'governance_decide', () => {
       const { proposalId } = decision;
@@ -110,7 +130,7 @@ export class GovernanceQueueService {
 
   /** Returns the identical pending proposal of the manager when there is one (a second incident is not recorded, and a full queue does not refuse it); otherwise enqueues the proposal. */
   private enqueueUnlessDuplicate({ managerId, kind, incident, payload }: { managerId: string; kind: ProposalKind; incident: string; payload: ProposalPayload }): ProposalFiled {
-    return inTransaction(this.deps.db, 'governance_file', () => {
+    const filed = inTransaction(this.deps.db, 'governance_file', () => {
       const identicalPending = this.proposals.findPendingTwin({ managerId, kind, payload });
       if (identicalPending) return { proposal: identicalPending, deduplicated: true };
       const isQueueFull = this.proposals.countPending(managerId) >= MAX_PENDING_PROPOSALS_PER_MANAGER;
@@ -119,6 +139,8 @@ export class GovernanceQueueService {
       this.proposals.insert({ id, managerId, kind, incident, payload, createdAt: this.deps.clock() });
       return { proposal: this.proposals.find(id)!, deduplicated: false };
     });
+    if (!filed.deduplicated) this.deps.bus.emit({ type: 'governance.proposed', proposal: filed.proposal });
+    return filed;
   }
 
   /** Answers a pending proposal; a proposal already answered reads as already_resolved, an unknown one as not found. */
