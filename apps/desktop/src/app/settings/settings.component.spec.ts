@@ -55,12 +55,12 @@ describe('SettingsComponent', () => {
     vi.unstubAllGlobals();
   });
 
-  it('offers the General, Models, Daemon, Diagnostics and About sections, General first', async () => {
+  it('offers the General, Models, Command policy, Daemon, Diagnostics and About sections, General first', async () => {
     await renderSettings();
 
     const tabNames = screen.getAllByRole('tab').map((tab) => tab.textContent?.trim());
 
-    expect(tabNames).toEqual(['General', 'Models', 'Daemon', 'Diagnostics', 'About']);
+    expect(tabNames).toEqual(['General', 'Models', 'Command policy', 'Daemon', 'Diagnostics', 'About']);
   });
 
   it('shows one row per rung, each showing its current model id', async () => {

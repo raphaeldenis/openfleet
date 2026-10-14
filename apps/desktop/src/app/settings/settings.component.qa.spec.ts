@@ -133,6 +133,9 @@ describe('SettingsComponent — tab bar', () => {
     expect(document.activeElement).toBe(modelsTab());
 
     await userEvent.keyboard('{ArrowDown}');
+    expect(screen.getByRole('tab', { name: 'Command policy' })).toHaveAttribute('aria-selected', 'true');
+
+    await userEvent.keyboard('{ArrowDown}');
     expect(daemonTab()).toHaveAttribute('aria-selected', 'true');
 
     await userEvent.keyboard('{ArrowDown}');

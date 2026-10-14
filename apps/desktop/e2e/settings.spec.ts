@@ -1,7 +1,7 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { signInAsAdmin } from './support/daemon';
 
-const SECTIONS = ['General', 'Models', 'Daemon', 'Diagnostics', 'About'];
+const SECTIONS = ['General', 'Models', 'Command policy', 'Daemon', 'Diagnostics', 'About'];
 
 interface UnavailableRow { testId: string; value: string; reason: string }
 
@@ -25,7 +25,7 @@ async function openSettings(page: Page): Promise<void> {
 const sectionList = (page: Page): Locator => page.getByRole('tablist', { name: 'Settings sections' });
 const sectionTab = (page: Page, name: string): Locator => sectionList(page).getByRole('tab', { name, exact: true });
 
-test('Settings has five sections and the gear shows it is pressed while Settings is open', async ({ page }) => {
+test('Settings has six sections and the gear shows it is pressed while Settings is open', async ({ page }) => {
   await signInAsAdmin(page);
   await page.goto('/');
   const gear = page.getByRole('button', { name: 'Settings' });

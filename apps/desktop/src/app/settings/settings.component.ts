@@ -3,17 +3,19 @@ import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { ActivatedRoute } from '@angular/router';
 import { focusTabAt, nextTabIndex } from '../design/tablist-keyboard';
 import { AboutSettingsComponent } from './about-settings.component';
+import { CommandPolicySettingsComponent } from './command-policy-settings.component';
 import { DaemonSettingsComponent } from './daemon-settings.component';
 import { DiagnosticsSettingsComponent } from './diagnostics-settings.component';
 import { GeneralSettingsComponent } from './general-settings.component';
 import { ModelRungsState } from './model-rungs.state';
 import { ModelsSettingsComponent } from './models-settings.component';
 
-type SettingsTab = 'general' | 'models' | 'daemon' | 'diagnostics' | 'about';
+type SettingsTab = 'general' | 'models' | 'command-policy' | 'daemon' | 'diagnostics' | 'about';
 
 const SETTINGS_TABS: ReadonlyArray<{ key: SettingsTab; label: string }> = [
   { key: 'general', label: 'General' },
   { key: 'models', label: 'Models' },
+  { key: 'command-policy', label: 'Command policy' },
   { key: 'daemon', label: 'Daemon' },
   { key: 'diagnostics', label: 'Diagnostics' },
   { key: 'about', label: 'About' },
@@ -21,7 +23,7 @@ const SETTINGS_TABS: ReadonlyArray<{ key: SettingsTab; label: string }> = [
 
 @Component({
   selector: 'of-settings',
-  imports: [GeneralSettingsComponent, ModelsSettingsComponent, DaemonSettingsComponent, DiagnosticsSettingsComponent, AboutSettingsComponent],
+  imports: [GeneralSettingsComponent, ModelsSettingsComponent, CommandPolicySettingsComponent, DaemonSettingsComponent, DiagnosticsSettingsComponent, AboutSettingsComponent],
   providers: [ModelRungsState],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
@@ -45,6 +47,10 @@ const SETTINGS_TABS: ReadonlyArray<{ key: SettingsTab; label: string }> = [
         @switch (activeTab()) {
           @case ('general') { <of-general-settings /> }
           @case ('models') { <of-models-settings /> }
+          @case ('command-policy') {
+            @defer (on immediate) { <of-command-policy-settings /> }
+            @loading { <p class="loading" role="status" aria-busy="true">Loading the command policy…</p> }
+          }
           @case ('daemon') { <of-daemon-settings /> }
           @case ('diagnostics') { <of-diagnostics-settings /> }
           @case ('about') { <of-about-settings /> }
@@ -60,6 +66,7 @@ const SETTINGS_TABS: ReadonlyArray<{ key: SettingsTab; label: string }> = [
     .tab.active { background: var(--active); }
     .tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
     .content { flex: 1; min-width: 0; overflow: auto; padding: 1.25rem 1.5rem 3rem; }
+    .loading { margin: 0; font-size: .75rem; color: var(--mut); }
   `,
 })
 export class SettingsComponent {
