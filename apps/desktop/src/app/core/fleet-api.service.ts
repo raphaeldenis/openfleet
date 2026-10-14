@@ -1,7 +1,7 @@
 import { Injectable } from '@angular/core';
 import { DIAGNOSTICS_PATH, WorkingStateSectionsSchema, isErrorEnvelope } from '@openfleet/shared';
 import type {
-  Approval, CloseHandoffResult, CloseSessionRequest, CommandPolicyEvaluateRequest, CommandPolicyEvaluateResult, CommandPolicyOverride, CommandPolicyView, CreateNoteRequest, CreateProjectRequest, DataStore, DataStoreDetail, DeniedCommandPage, DiagnosticsDocument, DsRow, DsRowHistoryEntry, DsView, ErrorEnvelope, GovernanceProposalView, HandoffPreview, HandoffSummary, HandoffTarget, HarnessId, NoteSummary,
+  Approval, CloseHandoffResult, CloseSessionRequest, CreateNoteRequest, CreateProjectRequest, DataStore, DataStoreDetail, DiagnosticsDocument, DsRow, DsRowHistoryEntry, DsView, ErrorEnvelope, GovernanceProposalView, HandoffPreview, HandoffSummary, HandoffTarget, HarnessId, NoteSummary,
   ManagerGovernanceView, ManagerProfile, ManagerView, NoteVersionSummary, NoteView, OrderTerm, Page, PermissionMode, Project, ReopenMode, RestoreNoteRequest, Session, SessionSpec, SessionTodos,
   UpdateManager, UpdateNoteRequest, UpdateProjectRequest, WhereClause, WorkingState,
 } from '@openfleet/shared';
@@ -57,7 +57,8 @@ export class FleetApiService {
     return { items, total: items.length, limit: LIST_PAGE_LIMIT, offset: 0 };
   }
   // ponytail: fetch over HttpClient — no interceptors needed yet
-  private async call<T>(path: string, init: RequestInit = {}): Promise<T> {
+  /** The authenticated request every call above is made of, for the services that live in a lazy chunk of their own. */
+  async call<T>(path: string, init: RequestInit = {}): Promise<T> {
     const requestTimeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
     const abortsOnCallerOrTimeout = init.signal ? AbortSignal.any([init.signal, requestTimeout]) : requestTimeout;
     const response = await fetch(`${environment.apiUrl}${path}`, {
@@ -114,10 +115,6 @@ export class FleetApiService {
   models() { return this.call<Record<string, string>>('/api/models'); }
   availableModels() { return this.call<{ models: string[] }>('/api/models/available'); }
   saveModels(patch: Record<string, string>) { return this.put<{ models: Record<string, string> }>('/api/models', patch); }
-  commandPolicy() { return this.call<CommandPolicyView>('/api/command-policy'); }
-  saveCommandPolicy(override: CommandPolicyOverride) { return this.put<CommandPolicyView>('/api/command-policy', override); }
-  tryCommandPolicy(request: CommandPolicyEvaluateRequest) { return this.post<CommandPolicyEvaluateResult>('/api/command-policy/evaluate', request); }
-  commandPolicyDenials({ cursor }: { cursor?: string } = {}) { return this.call<DeniedCommandPage>(`/api/command-policy/denials${queryString({ ...(cursor === undefined ? {} : { cursor }) })}`); }
   createSession(spec: Partial<SessionSpec> & { directory: string; name: string; repoPath?: string; branchName?: string }) { return this.post<Session>('/api/sessions', spec); }
   createManagerSession(spec: { directory: string; name: string; emoji?: string; model?: string; harness?: HarnessId; permissionMode?: PermissionMode; projectId?: string; pulseSeconds?: number; childrenCap: number; mission: string }) {
     return this.post<Session>('/api/sessions', {

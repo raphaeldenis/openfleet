@@ -1,6 +1,7 @@
 import { computed, inject, Injectable, signal } from '@angular/core';
 import type { CommandPolicyEvaluateResult, CommandPolicyOverride, CommandPolicyView, DeniedCommand, PolicyMode } from '@openfleet/shared';
-import { ApiError, FleetApiService } from '../core/fleet-api.service';
+import { ApiError } from '../core/fleet-api.service';
+import { CommandPolicyApi } from './command-policy.api';
 
 export type TriedPresence = 'unattended' | 'attended';
 
@@ -63,7 +64,7 @@ export function describeTryResult(result: CommandPolicyEvaluateResult): TryOutco
 /** The command policy as the daemon holds it, the refusals it journaled, and the saves and tries made from the screen. Lives as long as the section. */
 @Injectable()
 export class CommandPolicyState {
-  private readonly api = inject(FleetApiService);
+  private readonly api = inject(CommandPolicyApi);
 
   readonly view = signal<CommandPolicyView | null>(null);
   readonly hasFailedToLoad = signal(false);
@@ -84,7 +85,7 @@ export class CommandPolicyState {
   });
 
   async load(): Promise<void> {
-    const [viewResult] = await Promise.all([this.api.commandPolicy().then((view) => ({ view }), () => undefined), this.loadDenials()]);
+    const [viewResult] = await Promise.all([this.api.view().then((view) => ({ view }), () => undefined), this.loadDenials()]);
     if (viewResult) this.view.set(viewResult.view);
     else this.hasFailedToLoad.set(true);
   }
@@ -92,7 +93,7 @@ export class CommandPolicyState {
   /** Replaces the list with its newest page. */
   async loadDenials(): Promise<void> {
     try {
-      const page = await this.api.commandPolicyDenials();
+      const page = await this.api.denials();
       this.denials.set(page.items);
       this.nextDenialsCursor.set(page.nextCursor);
       this.hasFailedToLoadDenials.set(false);
@@ -105,7 +106,7 @@ export class CommandPolicyState {
     const cursor = this.nextDenialsCursor();
     if (cursor === undefined) return;
     try {
-      const page = await this.api.commandPolicyDenials({ cursor });
+      const page = await this.api.denials({ cursor });
       this.denials.update((shown) => [...shown, ...page.items]);
       this.nextDenialsCursor.set(page.nextCursor);
     } catch {
@@ -134,7 +135,7 @@ export class CommandPolicyState {
     this.tryFailure.set(null);
     try {
       const trimmedRole = role.trim();
-      const result = await this.api.tryCommandPolicy({ command, presence, ...(trimmedRole === '' ? {} : { role: trimmedRole }) });
+      const result = await this.api.tryCommand({ command, presence, ...(trimmedRole === '' ? {} : { role: trimmedRole }) });
       this.tryOutcome.set(describeTryResult(result));
     } catch {
       this.tryOutcome.set(null);
@@ -149,7 +150,7 @@ export class CommandPolicyState {
     const saved = this.view()?.override ?? { version: 1 as const };
     this.saveState.set({ kind: 'saving' });
     try {
-      this.view.set(await this.api.saveCommandPolicy(change(saved)));
+      this.view.set(await this.api.save(change(saved)));
       this.saveState.set({ kind: 'saved', what });
     } catch (failure) {
       this.saveState.set({ kind: 'failed', cause: describeSaveFailure(failure) });
