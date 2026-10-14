@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import * as z from 'zod';
 
 export const MAX_PENDING_PROPOSALS_PER_MANAGER = 10;
 export const MAX_DENIED_HISTORY_PER_MANAGER = 20;
