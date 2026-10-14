@@ -1,18 +1,21 @@
 import {
   CommandPolicyOverrideSchema, OpenFleetError, UnattendedOverrideSchema,
-  type CommandPolicyDocument, type CommandPolicyEvaluateResult, type CommandPolicyOverride, type CommandPolicyRuleView, type CommandPolicyView, type PolicyRequest, type PolicyRule,
+  type CommandPolicyDocument, type CommandPolicyEvaluateResult, type CommandPolicyRuleView, type CommandPolicyView, type PolicyRequest, type PolicyRule,
 } from '@openfleet/shared';
+import { isDeepStrictEqual } from 'node:util';
 import { readableConfigReason } from '../configReason.js';
 import { log } from '../logger.js';
 import { CommandPolicyFileUnreadableError } from './commandPolicyErrors.js';
 import type { CommandPolicySettings, PolicyEvaluate } from './commandPolicySettings.js';
-import { resolveCommandPolicy, type PolicyDocumentIssue } from './policyDocument.js';
+import { resolveCommandPolicy, validPartsOfOverride, type PolicyDocumentIssue } from './policyDocument.js';
 import { profileNameOf, ruleIdsOfProfile } from './policyEvaluator.js';
 
 /** Where the override lives: the text of the file, or nothing when there is none. A write replaces the whole file or fails whole. */
 export interface PolicyFile {
   read(): string | undefined;
   write(contents: string): void;
+  /** Copies the current file next to itself under a new name and returns that name. */
+  keepCopy(): string;
 }
 
 export interface CommandPolicyServiceDeps {
@@ -76,7 +79,7 @@ export class CommandPolicyService {
       mode: document.mode,
       unattended: { askBecomesDeny: unattended.askBecomesDeny },
       rules: this.ruleViews(),
-      override: this.saved === undefined ? null : (this.saved as unknown as CommandPolicyOverride),
+      override: this.saved === undefined ? null : validPartsOfOverride({ delivered: this.deps.base.document, override: this.saved }),
       issues: this.issues,
     };
   }
@@ -92,7 +95,8 @@ export class CommandPolicyService {
     const override = CommandPolicyOverrideSchema.parse(raw);
     const { issues } = resolveCommandPolicy({ delivered: this.deps.base.document, override });
     if (issues.length > 0) throw new OpenFleetError('invalid_body', 'the command policy is invalid.', { detail: issues.map(describeIssue) });
-    this.refuseToOverwriteAnUnreadableFile();
+    const onDisk = this.refuseToOverwriteAnUnreadableFile();
+    const previousFileKeptAs = this.keepHandEditedFile(onDisk);
 
     this.deps.file.write(`${JSON.stringify(override, null, 2)}\n`);
 
@@ -101,7 +105,7 @@ export class CommandPolicyService {
     this.saved = override;
     this.issues = remainingIssues;
     log('info', 'command policy saved', undefined, { mode: settings.document.mode, askBecomesDeny: settings.unattended.askBecomesDeny, disabledRules: override.disabledRules?.length ?? 0, addedRules: override.rules?.length ?? 0 });
-    return this.view();
+    return { ...this.view(), ...(previousFileKeptAs === undefined ? {} : { previousFileKeptAs }) };
   }
 
   private loadSavedOverride(): LoadedOverride {
@@ -116,9 +120,18 @@ export class CommandPolicyService {
     }
   }
 
-  private refuseToOverwriteAnUnreadableFile(): void {
-    const { issues } = parseSavedOverride(this.deps.file.read());
-    if (issues.length > 0) throw new CommandPolicyFileUnreadableError(issues.join('; '));
+  private refuseToOverwriteAnUnreadableFile(): LoadedOverride {
+    const onDisk = parseSavedOverride(this.deps.file.read());
+    if (onDisk.issues.length > 0) throw new CommandPolicyFileUnreadableError(onDisk.issues.join('; '));
+    return onDisk;
+  }
+
+  /** A file the daemon did not write, or one with parts it ignores, is copied aside before the save replaces it. */
+  private keepHandEditedFile({ saved: onDisk }: LoadedOverride): string | undefined {
+    if (onDisk === undefined) return undefined;
+    const hasPartsTheDaemonIgnores = !isDeepStrictEqual(onDisk, validPartsOfOverride({ delivered: this.deps.base.document, override: onDisk }));
+    const wasEditedSinceTheDaemonRead = !isDeepStrictEqual(onDisk, this.saved);
+    return hasPartsTheDaemonIgnores || wasEditedSinceTheDaemonRead ? this.deps.file.keepCopy() : undefined;
   }
 
   private mergeOverride({ saved, issues }: LoadedOverride): { settings: CommandPolicySettings; issues: string[] } {

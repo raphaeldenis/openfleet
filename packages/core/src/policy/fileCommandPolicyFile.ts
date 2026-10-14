@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { closeSync, existsSync, fchmodSync, fsyncSync, openSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { CommandPolicyFileReadOnlyError } from './commandPolicyErrors.js';
 import type { PolicyFile } from './commandPolicyService.js';
 
@@ -42,6 +42,18 @@ export function createFileCommandPolicyFile(path: string): PolicyFile {
   return {
     read() {
       return existsSync(path) ? readFileSync(path, 'utf8') : undefined;
+    },
+    keepCopy() {
+      const targetPath = realpathSync(path);
+      const copyName = `${basename(path)}.bak-${new Date().toISOString().replaceAll(/[:.]/g, '-')}`;
+      const copyPath = join(dirname(targetPath), copyName);
+      try {
+        writeNewFileDurably({ path: copyPath, contents: readFileSync(targetPath, 'utf8'), mode: NEW_FILE_MODE });
+      } catch (error) {
+        if (isUnwritable(error)) throw new CommandPolicyFileReadOnlyError('the command policy file cannot be copied');
+        throw error;
+      }
+      return copyName;
     },
     write(contents) {
       const fileExists = existsSync(path);

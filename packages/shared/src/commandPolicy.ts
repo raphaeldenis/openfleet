@@ -161,10 +161,12 @@ export interface CommandPolicyView {
   mode: PolicyMode;
   unattended: { askBecomesDeny: boolean };
   rules: CommandPolicyRuleView[];
-  /** The saved override, or null when no file exists. */
+  /** The valid parts of the saved override, or null when no file exists: saving it back is always accepted. */
   override: CommandPolicyOverride | null;
   /** Why parts of the saved file are ignored; empty when the file applies whole. */
   issues: string[];
+  /** Only on the answer of a save: the name the hand-edited file was kept under, next to the new one. */
+  previousFileKeptAs?: string;
 }
 
 const MAX_TRIED_COMMAND_CHARS = 64 * 1024;

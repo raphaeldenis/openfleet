@@ -16,6 +16,7 @@ class MemoryPolicyFile implements PolicyFile {
     this.writes.push(contents);
     this.contents = contents;
   }
+  keepCopy() { return 'command-policy.json.bak-test'; }
 }
 
 const serviceOver = (file: PolicyFile) => new CommandPolicyService({ base: defaultCommandPolicySettings(), file, evaluate: evaluateCommandPolicy });
