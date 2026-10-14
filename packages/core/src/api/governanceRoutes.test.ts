@@ -22,6 +22,7 @@ const governanceOf = (client: Client) => call(client, 'get_argus_governance');
 const proposeLaw = async (client: Client, body = 'Never force-push') => (await call(client, 'propose_law', { body, incident: 'force push on main' })).request_id as string;
 const decide = (proposalId: string, body: unknown, headers: Record<string, string> = {}) =>
   fixture.api(`/api/governance/proposals/${proposalId}/decide`, { method: 'POST', body: JSON.stringify(body), headers });
+const sessionTokenOf = (sessionId: string) => (fixture.db.prepare('SELECT mcp_token FROM sessions WHERE id = ?').get(sessionId) as { mcp_token: string }).mcp_token;
 const errorOf = async (response: Response) => (await response.json()) as { error: string; kind: string };
 
 async function openClient(): Promise<{ frames: Record<string, any>[] }> {
@@ -202,12 +203,93 @@ describe('POST /api/governance/proposals/:id/decide', () => {
     expect(response.status).toBe(401);
   });
 
-  it('has no decision route under /mcp', () => {
-    const decisionRoutes = fixture.daemon.server.routes.filter(({ path }) => path.includes('decide'));
+  it('takes no decision when the session token posts to a decide path under /mcp', async () => {
+    const lawId = await proposeLaw(lead);
 
-    expect(decisionRoutes.filter(({ path }) => path.startsWith('/mcp'))).toEqual([]);
-    expect(decisionRoutes.map(({ path }) => path)).toContain('/api/governance/proposals/:id/decide');
+    const response = await fetch(`${fixture.daemon.server.url}/mcp/governance/proposals/${lawId}/decide`, {
+      method: 'POST', body: JSON.stringify({ decision: 'approve' }),
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${sessionTokenOf(fixture.lead.id)}` },
+    });
+
+    expect(response.status).toBe(404);
+    expect((await governanceOf(lead)).pending).toHaveLength(1);
   });
+
+  it.each([['a number', 123], ['null', null], ['an object', { text: 'x' }]])('refuses a denial whose reason is %s with 400 invalid_body', async (_label, reason) => {
+    const lawId = await proposeLaw(lead);
+
+    const response = await decide(lawId, { decision: 'deny', reason });
+
+    expect(response.status).toBe(400);
+    expect((await errorOf(response)).error).toBe('invalid_body');
+    expect((await governanceOf(lead)).pending).toHaveLength(1);
+  });
+
+  it('answers 400 invalid_body, not 404, to a denial without reason on an unknown id: the body is checked before the proposal is looked up', async () => {
+    const response = await decide('no-such-proposal', { decision: 'deny' });
+
+    expect(response.status).toBe(400);
+    expect((await errorOf(response)).error).toBe('invalid_body');
+  });
+
+  it('lets exactly one of two concurrent decisions win: one 200, one 409 already_resolved', async () => {
+    const lawId = await proposeLaw(lead);
+    const { frames } = await openClient();
+
+    const responses = await Promise.all([decide(lawId, { decision: 'approve' }), decide(lawId, { decision: 'deny', reason: 'no' })]);
+    await settle();
+
+    expect(responses.map(({ status }) => status).sort()).toEqual([200, 409]);
+    const loser = responses.find(({ status }) => status === 409)!;
+    expect((await errorOf(loser)).error).toBe('already_resolved');
+    expect(frames.filter((frame) => frame.type === 'governance.resolved')).toHaveLength(1);
+  });
+
+  it('keeps a resource access pending, and silent on the WebSocket, when its resource has disappeared', async () => {
+    const noteId = await fixture.createNote(OWN_PROJECT_ID, 'Runbook');
+    const { request_id } = await call(lead, 'request_resource_access', { resource_type: 'note', resource_id: noteId, access: 'read', role: 'reference', incident: 'need it' });
+    fixture.db.prepare('DELETE FROM notes WHERE id = ?').run(noteId);
+    const { frames } = await openClient();
+
+    const response = await decide(request_id, { decision: 'approve' });
+    await settle();
+
+    expect(response.status).toBe(404);
+    expect((await errorOf(response)).error).toBe('not_found');
+    expect((await governanceOf(lead)).pending).toHaveLength(1);
+    expect(frames.filter((frame) => frame.type.startsWith('governance.'))).toEqual([]);
+    const { frames: laterFrames } = await openClient();
+    const snapshot = laterFrames.find((frame) => frame.type === 'snapshot')!;
+    expect(snapshot.proposals.map((proposal: { id: string }) => proposal.id)).toEqual([request_id]);
+  });
+});
+
+describe('the admin token protects every governance route', () => {
+  const protectedRoutes = [
+    { label: 'GET /api/governance/proposals', method: 'GET', path: () => '/api/governance/proposals' },
+    { label: 'GET /api/managers/:id/governance', method: 'GET', path: () => `/api/managers/${fixture.lead.id}/governance` },
+    { label: 'POST /api/governance/proposals/:id/decide', method: 'POST', path: () => '/api/governance/proposals/any-id/decide' },
+  ];
+  const credentials = [
+    { label: 'the session MCP token', authorization: () => `Bearer ${sessionTokenOf(fixture.lead.id)}` },
+    { label: 'no authorization header', authorization: () => undefined },
+    { label: 'an empty authorization header', authorization: () => '' },
+  ];
+
+  for (const route of protectedRoutes) {
+    it.each(credentials)(`refuses ${route.label} with $label: 401 unauthorized`, async ({ authorization }) => {
+      const headers: Record<string, string> = { 'content-type': 'application/json' };
+      const header = authorization();
+      if (header !== undefined) headers.authorization = header;
+
+      const response = await fetch(`${fixture.daemon.server.url}${route.path()}`, {
+        method: route.method, headers, body: route.method === 'POST' ? JSON.stringify({ decision: 'approve' }) : undefined,
+      });
+
+      expect(response.status).toBe(401);
+      expect((await errorOf(response)).error).toBe('unauthorized');
+    });
+  }
 });
 
 describe('GET /api/managers/:id/governance', () => {
@@ -296,6 +378,39 @@ describe('governance events over the WebSocket', () => {
     await decide(lawId, { decision: 'deny' });
     await settle();
 
+    expect(frames.filter((frame) => frame.type.startsWith('governance.'))).toEqual([]);
+  });
+
+  it('sends governance.proposed before governance.resolved on the same client', async () => {
+    const { frames } = await openClient();
+
+    const lawId = await proposeLaw(lead);
+    await decide(lawId, { decision: 'approve' });
+    await waitForFrame(frames, (frame) => frame.type === 'governance.resolved');
+
+    expect(frames.map((frame) => frame.type).filter((type) => type.startsWith('governance.'))).toEqual(['governance.proposed', 'governance.resolved']);
+  });
+
+  it('broadcasts nothing when the queue is full', async () => {
+    for (let index = 0; index < 10; index += 1) await proposeLaw(lead, `Law ${index}`);
+    const { frames } = await openClient();
+
+    const refusal = await lead.callTool({ name: 'propose_law', arguments: { body: 'One too many', incident: 'x' } }) as { isError?: boolean };
+    await settle();
+
+    expect(refusal.isError).toBe(true);
+    expect(frames.filter((frame) => frame.type.startsWith('governance.'))).toEqual([]);
+  });
+
+  it("broadcasts nothing when a manager withdraws another manager's proposal", async () => {
+    const siblingLawId = await proposeLaw(siblingLead, 'Sibling law');
+    const { frames } = await openClient();
+
+    const refusal = await lead.callTool({ name: 'withdraw_proposal', arguments: { request_id: siblingLawId } }) as { isError?: boolean };
+    await settle();
+
+    expect(refusal.isError).toBe(true);
+    expect((await governanceOf(siblingLead)).pending).toHaveLength(1);
     expect(frames.filter((frame) => frame.type.startsWith('governance.'))).toEqual([]);
   });
 

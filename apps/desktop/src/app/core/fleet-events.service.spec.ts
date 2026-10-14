@@ -1113,7 +1113,7 @@ describe('FleetEventsService daemon issues and background failures', () => {
   });
 
   describe('governance proposals', () => {
-    const proposal =(id: string, patch: Partial<GovernanceProposalView> = {}): GovernanceProposalView => ({
+    const proposal = (id: string, patch: Partial<GovernanceProposalView> = {}): GovernanceProposalView => ({
       id, managerId: 'm1', kind: 'law', status: 'pending', incident: 'force push on main', payload: { text: `Law ${id}` }, createdAt: '2026-10-14T10:00:00.000Z', ...patch,
     });
     const snapshotWith = (proposals?: GovernanceProposalView[]) => ({ type: 'snapshot', sessions: [], approvals: [], ...(proposals && { proposals }) });
@@ -1166,6 +1166,23 @@ describe('FleetEventsService daemon issues and background failures', () => {
       socket.dispatchMessage({ type: 'governance.resolved', proposal: proposal('p1', { status, decidedAt: '2026-10-14T11:00:00.000Z' }) });
 
       expect(service.proposals().map(({ id }) => id)).toEqual(['p2']);
+    });
+
+    it('does not bring back a resolved proposal when its governance.proposed is replayed', () => {
+      socket.dispatchMessage(snapshotWith([proposal('p1')]));
+      socket.dispatchMessage({ type: 'governance.resolved', proposal: proposal('p1', { status: 'approved', decidedAt: '2026-10-14T11:00:00.000Z' }) });
+
+      socket.dispatchMessage({ type: 'governance.proposed', proposal: proposal('p1', { status: 'approved', decidedAt: '2026-10-14T11:00:00.000Z' }) });
+
+      expect(service.proposals()).toEqual([]);
+    });
+
+    it('ignores an unknown governance event', () => {
+      socket.dispatchMessage(snapshotWith([proposal('p1')]));
+
+      socket.dispatchMessage({ type: 'governance.archived', proposal: proposal('p1') });
+
+      expect(service.proposals().map(({ id }) => id)).toEqual(['p1']);
     });
 
     it('ignores a governance.resolved for a proposal it does not hold', () => {

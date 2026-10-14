@@ -359,6 +359,8 @@ export class FleetEventsService {
   }
 
   private upsertProposal(proposal: GovernanceProposalView): void {
+    const isStillAwaitingDecision = proposal.status === 'pending';
+    if (!isStillAwaitingDecision) return;
     this.proposals.update((all) => (all.some((p) => p.id === proposal.id) ? all.map((p) => (p.id === proposal.id ? proposal : p)) : [...all, proposal]));
   }
 

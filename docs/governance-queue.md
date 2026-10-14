@@ -10,7 +10,9 @@ Only the human decides, with the daemon admin token. Every route below sits unde
 |---|---|---|
 | `GET /api/governance/proposals?status=` | The proposals of every manager in that status. `status` is `pending` (default), `approved`, `denied` or `withdrawn`. Pending ones come oldest first, answered ones newest answer first. | `invalid_body` (400) for another status |
 | `GET /api/managers/:id/governance` | The governance view of one manager: `resourceGrants`, `pending`, `denied`, `history`, `governanceEvictedDenials`. | `manager_not_found` (404) for an unknown id or a session that is not a manager |
-| `POST /api/governance/proposals/:id/decide` | The answered proposal. Body: `{ "decision": "approve" }` or `{ "decision": "deny", "reason": "…" }`. | `invalid_body` (400): unknown decision, or a denial whose `reason` is missing, blank or longer than 500 characters; `proposal_not_found` (404); `already_resolved` (409); `store_not_found` / `note_not_found` (404) when approving an access whose resource no longer exists |
+| `POST /api/governance/proposals/:id/decide` | The answered proposal. Body: `{ "decision": "approve" }` or `{ "decision": "deny", "reason": "…" }`. | `invalid_body` (400): unknown decision, or a denial whose `reason` is missing, blank or longer than 500 characters; `proposal_not_found` (404); `already_resolved` (409); `not_found` (404) when approving an access whose resource no longer exists |
+
+An invalid decision body (for example a denial without a reason) is refused with 400 `invalid_body` before the proposal is looked up, so an unknown or already resolved id with an invalid body answers 400, not 404 or 409.
 
 Approving a `resourceAccess` records exactly one grant (a new approval for the same manager and resource replaces the role and the access). Approving a `law` or a `permission` changes the proposal status only. Grants are informative: the server does not enforce them yet.
 
