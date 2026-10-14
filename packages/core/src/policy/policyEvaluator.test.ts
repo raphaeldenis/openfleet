@@ -98,6 +98,21 @@ describe('the delivered policy refuses what nobody could confirm', () => {
     expect(decisionOf('R=-rf; rm $R x')).toBe('allow');
     expect(decisionOf('F=-f; rm -r $F x')).toBe('allow');
   });
+
+  // Known limit: a script piped into a shell is not analyzable, so the rm it carries stays invisible to the rules.
+  it('allows a script piped into sh (documented limit, not covered)', () => {
+    expect(decisionOf("echo 'rm -rf x' | sh")).toBe('allow');
+  });
+
+  // Known limit: sudo is not unwrapped (it needs a password without a terminal), so the rm behind it stays invisible.
+  it('allows rm -rf behind sudo (documented limit, not covered)', () => {
+    expect(decisionOf('sudo rm -rf x')).toBe('allow');
+  });
+
+  // Known limit: doas is not unwrapped (it needs a password without a terminal), so the rm behind it stays invisible.
+  it('allows rm -rf behind doas (documented limit, not covered)', () => {
+    expect(decisionOf('doas rm -rf x')).toBe('allow');
+  });
 });
 
 describe('commands that run another command', () => {
