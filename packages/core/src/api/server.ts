@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { HTTP_STATUS_BY_KIND, OpenFleetError, type DiagnosticsDocument } from '@openfleet/shared';
+import { HTTP_STATUS_BY_KIND, OpenFleetError, type DiagnosticsDocument, type ManagerBaseView } from '@openfleet/shared';
 import type { EventBus } from '../events/eventBus.js';
 import type { ApprovalService } from '../governance/approvalService.js';
 import { tokensMatch } from '../ids.js';
@@ -31,6 +31,7 @@ import type { StopRefusal } from '../workingState/stopRefusal.js';
 import type { SilentBlockDetector } from '../governance/silentBlockDetector.js';
 import { hooksHandler } from './hooksHandler.js';
 import { registerDiagnosticsRoutes } from './diagnosticsRoutes.js';
+import { registerManagerBaseRoutes } from './managerBaseRoutes.js';
 import { registerHandoffRoutes, type HandoffRouteDeps } from './handoffRoutes.js';
 import { registerNoteRoutes } from './noteRoutes.js';
 import { registerProjectRoutes } from './projectRoutes.js';
@@ -90,6 +91,8 @@ export interface ServerDeps {
   commandPolicyAdmin?: { policy: CommandPolicyService; denials: DenialReader };
   // Without it GET /api/diagnostics does not exist.
   diagnostics?: () => DiagnosticsDocument;
+  // Without it GET /api/manager-base does not exist.
+  managerBase?: ManagerBaseView;
   // Without it the todos route, event and snapshot field do not exist and the hooks leave the todo tools alone.
   todos?: TodoTracker;
   // Without it the test-only routes (fake-output) do not exist.
@@ -156,6 +159,7 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; rout
   });
   registerRestRoutes(router, { ...deps, wsTickets });
   if (deps.diagnostics) registerDiagnosticsRoutes(router, deps.diagnostics);
+  if (deps.managerBase) registerManagerBaseRoutes(router, deps.managerBase);
   if (deps.projects) registerProjectRoutes(router, { projects: deps.projects, projectService: deps.projectService });
   if (deps.worktrees) registerWorktreeRoutes(router, { worktrees: deps.worktrees });
   if (deps.governanceQueue) registerGovernanceRoutes(router, { governanceQueue: deps.governanceQueue });
