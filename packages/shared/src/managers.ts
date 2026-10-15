@@ -43,6 +43,13 @@ export interface ManagerProfile {
   scapeImport: ScapeImportStatus;
 }
 
+/** One whole read of the manager base: which version and sha the manager read, and when. */
+export interface ManagerBaseRead {
+  version: number;
+  sha: string;
+  readAt: string;
+}
+
 export interface ManagerView {
   sessionId: string;
   pulseSeconds: number;
@@ -56,6 +63,10 @@ export interface ManagerView {
   /** The note holding the manager's mission, when one is linked. */
   missionNoteId?: string;
   pinMissionNote?: boolean;
+  /** The version of the manager base this daemon ships. */
+  baseVersion?: number;
+  /** The whole manager base the manager last read; absent while it never read it. */
+  baseRead?: ManagerBaseRead;
   /** The table the manager logs its actions in, when one is bound. */
   logStoreId?: string;
   /** Refusals of commands in the manager's lineage that it has not looked at since its last read of `list_denied_commands`. */

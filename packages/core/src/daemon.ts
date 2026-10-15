@@ -151,11 +151,11 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   sleepGuard.observeSessionEvents();
   const managerDenials = new ManagerDenials({ db, lineageSessionIdsOf: (managerId) => descendantSessionIdsOf(sessions.list(), managerId) });
   const deniedCommandCountsOf = (managerId: string) => managerDenials.countsOf(managerId);
-  const pulseScheduler = new PulseScheduler({ managers: managerRepository, sessions, bus, describeError, deniedCommandCountsOf });
+  const pulseScheduler = new PulseScheduler({ managers: managerRepository, sessions, bus, describeError, deniedCommandCountsOf, managerBase: shippedManagerBase });
   const storeRepo = new DataStoreRepository(db);
   const noteRepo = new NoteRepository(db);
   const managers = new ManagerService({
-    managers: managerRepository, sessions, bus, scheduler: pulseScheduler, heartbeatDefaultSeconds: managerSettings.heartbeatDefaultSeconds, deniedCommandCountsOf,
+    managers: managerRepository, sessions, bus, scheduler: pulseScheduler, heartbeatDefaultSeconds: managerSettings.heartbeatDefaultSeconds, deniedCommandCountsOf, currentBase: shippedManagerBase,
     scapeImportStatusOf: (sessionId) => scapeImportStatusOfManager(db, sessionId),
     linkTargets: { noteProjectId: (noteId) => noteRepo.getProjectId(noteId), storeProjectId: (storeId) => storeRepo.findStore(storeId)?.projectId },
   });
@@ -175,7 +175,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   const projectService = new ProjectService({ projects, docs, clock: () => new Date().toISOString(), newId, onDocsFolderSet: (projectId) => docsFolders.watchProject(projectId) });
   const workingStates = new WorkingStateService({ db, clock: () => new Date().toISOString(), stateRoot: config.stateRoot, maxBytes: workingStateSettings.maxBytes });
   const stopRefusal = new StopRefusal({ db, workingStates, settings: workingStateSettings, clock: () => new Date().toISOString() });
-  const sessionStartContext = new SessionStartContext({ db, workingStates, settings: workingStateSettings, clock: () => new Date().toISOString() });
+  const sessionStartContext = new SessionStartContext({ db, workingStates, settings: workingStateSettings, clock: () => new Date().toISOString(), managerBase: shippedManagerBase });
   const handoverLedger = new HandoverLedger({ db, clock: () => new Date().toISOString(), patterns: workingStateSettings.handoverPatterns });
   const contextNotice = new ContextNotice({ sessions, managers: managerRepository, settings: contextNoticeSettings });
   const todos = new TodoTracker({ sessions, bus });

@@ -25,7 +25,7 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 | `invalid_request` | 400 | 10 |
 | `unauthorized` | 401 | 1 |
 | `not_found` | 404 | 11 |
-| `conflict` | 409 | 32 |
+| `conflict` | 409 | 35 |
 | `too_large` | 413 | 4 |
 | `unavailable` | 503 | 6 |
 | `internal` | 500 | 4 |
@@ -96,6 +96,9 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 | `manager_paused` | 409 | `never` |
 | `mission_missing` | 409 | `never` |
 | `mission_too_large` | 409 | `never` |
+| `base_not_read` | 409 | `never` |
+| `findings_required` | 409 | `never` |
+| `verdict_stale` | 409 | `never` |
 | `directory_in_use` | 409 | `never` |
 | `duplicate_child` | 409 | `never` |
 | `no_parent` | 409 | `never` |

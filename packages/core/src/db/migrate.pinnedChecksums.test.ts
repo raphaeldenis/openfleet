@@ -38,6 +38,7 @@ const SHIPPED_MIGRATION_CHECKSUMS: Record<string, string> = {
   '029_governance_queue': '502a14be48995ce1947b9c48aee1cdd651c3b4902a718784fc42cda5c237b6c2',
   '030_denied_commands': '49a2833117da03c65dc71fe8effafaeb0a9bbad82895081bc23e97fbd5b1f914',
   '031_denial_read_cursors': 'd527bab337e294282942d66084bed6b5e7016e9d04d403c4d57dda4f4dc9bd46',
+  '032_manager_base_read': '119945c3275b79b4b218938577ce7e89c528c833162be81396ecfd23dc2acff7',
 };
 
 const migrationVersionsOnDisk = () =>

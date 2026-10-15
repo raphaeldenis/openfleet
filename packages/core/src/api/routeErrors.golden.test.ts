@@ -2,7 +2,7 @@ import { request } from 'node:http';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ERROR_CODES, HTTP_STATUS_BY_KIND, retryOf, type ErrorCode } from '@openfleet/shared';
+import { ERROR_CODES, HTTP_STATUS_BY_KIND, OpenFleetError, retryOf, type ErrorCode } from '@openfleet/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
@@ -23,7 +23,7 @@ import { nodeDocsFolderFs } from '../notes/nodeDocsFolderFs.js';
 import { NoteRepository } from '../notes/noteRepository.js';
 import { NoteTooLargeError, NoteService, StaleRevisionError } from '../notes/noteService.js';
 import { ProjectRepository } from '../projects/projectRepository.js';
-import { DaemonShuttingDownError, SessionService } from '../sessions/sessionService.js';
+import { DaemonShuttingDownError, SessionReopenError, SessionService } from '../sessions/sessionService.js';
 import { DataStoreRepository } from '../stores/dataStoreRepository.js';
 import { ConstraintError, DataStoreService, StoreRowCapError } from '../stores/dataStoreService.js';
 import { WorkingStateService } from '../workingState/workingStateService.js';
@@ -177,6 +177,10 @@ const THROWN_ERROR_SCENARIOS: { name: string; thrown: () => unknown; expected: E
   { name: 'an unreadable note file', thrown: () => new NoteFileUnreadableError('/Users/someone/docs/a.md', new Error('EACCES')), expected: { status: 409, error: 'file_unreadable' } },
   { name: 'a stale revision', thrown: () => new StaleRevisionError(7), expected: { status: 409, error: 'stale_revision', currentRev: 7 } },
   { name: 'a daemon that shuts down', thrown: () => new DaemonShuttingDownError(), expected: { status: 503, error: 'daemon_shutting_down' } },
+  { name: 'a fresh reopen of a manager whose mission is too large', thrown: () => new SessionReopenError('mission_too_large', 'mission too large'), expected: { status: 409, error: 'mission_too_large' } },
+  { name: 'a spawn by a manager that has not read the base', thrown: () => new OpenFleetError('base_not_read', 'read the manager base first.'), expected: { status: 409, error: 'base_not_read' } },
+  { name: 'a pull request without the findings of its ticket', thrown: () => new OpenFleetError('findings_required', 'the findings are missing.'), expected: { status: 409, error: 'findings_required' } },
+  { name: 'a verdict on a commit that is no longer the head', thrown: () => new OpenFleetError('verdict_stale', 'the verdict is for an older commit.'), expected: { status: 409, error: 'verdict_stale' } },
 ];
 
 describe('golden: every error answer of a real request keeps its wire value and gains the envelope', () => {

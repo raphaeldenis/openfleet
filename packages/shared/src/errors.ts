@@ -69,6 +69,10 @@ export const ERROR_CODES = {
   // Editing the mission on the manager's profile fixes either one: the same reopen then succeeds.
   mission_missing: { kind: 'conflict', retry: 'never' },
   mission_too_large: { kind: 'conflict', retry: 'never' },
+  // Reading the manager base (base_not_read), recording the missing findings (findings_required) or reviewing the new head (verdict_stale) is what lets the same call succeed.
+  base_not_read: { kind: 'conflict', retry: 'never' },
+  findings_required: { kind: 'conflict', retry: 'never' },
+  verdict_stale: { kind: 'conflict', retry: 'never' },
   directory_in_use: { kind: 'conflict', retry: 'never' },
   duplicate_child: { kind: 'conflict', retry: 'never' },
   no_parent: { kind: 'conflict', retry: 'never' },

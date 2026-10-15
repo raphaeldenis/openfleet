@@ -25,7 +25,11 @@ export function registerManagerBaseTools(server: McpServer, deps: RegisterManage
     const sectionList = sections.map(({ id, title, type, bytes: sectionBytes }) => ({ id, title, type, bytes: sectionBytes }));
     const identity = { version, sha, bytes, sections: sectionList };
 
-    if (section === undefined) return ok({ ...identity, body });
+    const isWholeRead = section === undefined;
+    if (isWholeRead) {
+      managers.recordBaseRead(caller.id);
+      return ok({ ...identity, body });
+    }
 
     const requestedSection = sections.find(({ id }) => id === section);
     if (!requestedSection) return refuse('invalid_body', `unknown section "${section}"`, `Valid section ids: ${sections.map(({ id }) => id).join(', ')}.`);

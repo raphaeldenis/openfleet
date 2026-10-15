@@ -2,7 +2,7 @@ import type { EventBus } from '../events/eventBus.js';
 import { log } from '../logger.js';
 import type { DescribeError, SessionService } from '../sessions/sessionService.js';
 import { isPulseEnabled, type ManagerRecord, type ManagerRepository } from './managerRepository.js';
-import { toManagerView, type DeniedCommandCounts } from './managerView.js';
+import { toManagerView, type DeniedCommandCounts, type ManagerBaseIdentity } from './managerView.js';
 import { nextPulseAt } from './pulseTiming.js';
 import { OpenFleetError, PULSE_WAKE_REASONS, type PulseWakeReason, type RuntimeAttention } from '@openfleet/shared';
 
@@ -13,13 +13,21 @@ const unseenRefusalsLineOf = (unseenRefusalCount: number): string => {
   return `${unseenRefusalCount} ${noun} since your last look — call list_denied_commands.`;
 };
 
-/** The pulse text of a manager: the plain pulse, where to re-read the mission when it lives in a note, and how many command refusals it has not looked at. */
-export const pulseMessageOf = (record: Pick<ManagerRecord, 'missionNoteId'>, { unseenRefusalCount = 0 }: { unseenRefusalCount?: number } = {}): string => {
+const BASE_SHA_PREFIX_LENGTH = 8;
+
+const baseLineOf = ({ version, sha }: ManagerBaseIdentity): string => `Base v${version} (${sha.slice(0, BASE_SHA_PREFIX_LENGTH)}).`;
+
+/** The pulse text of a manager: the plain pulse, where to re-read the mission when it lives in a note, the manager base it follows, and how many command refusals it has not looked at. */
+export const pulseMessageOf = (
+  record: Pick<ManagerRecord, 'missionNoteId'>,
+  { unseenRefusalCount = 0, managerBase }: { unseenRefusalCount?: number; managerBase?: ManagerBaseIdentity } = {},
+): string => {
   const hasMissionNote = record.missionNoteId !== undefined;
   const hasUnseenRefusals = unseenRefusalCount > 0;
   const missionLine = hasMissionNote ? ` Your mission note id is ${record.missionNoteId}; read it every time you wake with get_note.` : '';
+  const baseLine = managerBase ? ` ${baseLineOf(managerBase)}` : '';
   const refusalsLine = hasUnseenRefusals ? ` ${unseenRefusalsLineOf(unseenRefusalCount)}` : '';
-  return `${PULSE_MESSAGE}${missionLine}${refusalsLine}`;
+  return `${PULSE_MESSAGE}${missionLine}${baseLine}${refusalsLine}`;
 };
 
 /** The pulse as the manager reads it: the pulse text, then why it wakes, strongest reason first. */
@@ -75,6 +83,8 @@ export interface PulseSchedulerDeps {
   describeError?: DescribeError;
   /** Absent, no manager has any refused command. */
   deniedCommandCountsOf?: (managerId: string) => DeniedCommandCounts;
+  /** The manager base this daemon ships. Absent, the pulse names no base. */
+  managerBase?: ManagerBaseIdentity;
 }
 
 export class PulseScheduler {
@@ -339,7 +349,7 @@ export class PulseScheduler {
     this.deps.managers.setLastPulseAt(record.sessionId, pulsedAt);
     const updated: ManagerRecord = { ...record, lastPulseAt: pulsedAt };
     const childrenCount = this.deps.sessions.list().filter((s) => s.parentId === record.sessionId && s.state !== 'closed').length;
-    this.deps.bus.emit({ type: 'manager.pulsed', manager: toManagerView(updated, childrenCount, this.deps.deniedCommandCountsOf?.(record.sessionId)) });
+    this.deps.bus.emit({ type: 'manager.pulsed', manager: toManagerView(updated, childrenCount, this.deps.deniedCommandCountsOf?.(record.sessionId), this.deps.managerBase) });
     this.arm(updated);
     this.managerIdsInFailureStreak.delete(record.sessionId);
     return { coalesced };
@@ -352,7 +362,7 @@ export class PulseScheduler {
   private queuePulse(record: ManagerRecord, wakeReason: PulseWakeReason): boolean {
     const managerId = record.sessionId;
     const unseenRefusalCount = this.deps.deniedCommandCountsOf?.(managerId).deniedCommandCount ?? 0;
-    const pulseText = pulseMessageOf(record, { unseenRefusalCount });
+    const pulseText = pulseMessageOf(record, { unseenRefusalCount, managerBase: this.deps.managerBase });
     const queued = this.queuedPulses.get(managerId);
     if (queued) {
       const isSameTextStillQueued = queued.pulseText === pulseText;
