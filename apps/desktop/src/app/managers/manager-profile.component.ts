@@ -4,6 +4,7 @@ import { FleetApiService } from '../core/fleet-api.service';
 import { ErrorLineComponent } from '../design/error-line.component';
 import { compactElapsedLabel } from '../design/elapsed-time';
 import { MarkdownViewComponent } from '../notes/markdown-view.component';
+import { baseLineOf } from './manager-base-line';
 import { ManagerProfileEditorComponent } from './manager-profile-editor.component';
 
 type LoadStatus = 'loading' | 'failed' | 'ready';
@@ -44,6 +45,9 @@ const IMPORT_LINE_BY_STATUS: Record<ScapeImportStatus, string | undefined> = {
                 }
               </div>
               <div class="fact"><dt>Model</dt><dd>{{ session().model || notKnown }}</dd></div>
+              @if (baseLine(); as line) {
+                <div class="fact"><dt>Manager base</dt><dd class="base-line">{{ line }}</dd></div>
+              }
             </dl>
           </section>
 
@@ -91,6 +95,7 @@ const IMPORT_LINE_BY_STATUS: Record<ScapeImportStatus, string | undefined> = {
     .fact dt { font-size: .6875rem; color: var(--mut) }
     .excess { font-size: .6875rem; color: var(--mut) }
     .fact dd { margin: 0; font-family: var(--mono); font-size: 1rem; overflow-wrap: anywhere }
+    .fact dd.base-line { font-size: .75rem }
   `,
 })
 export class ManagerProfileComponent {
@@ -103,6 +108,10 @@ export class ManagerProfileComponent {
   protected readonly profile = signal<ManagerProfile | undefined>(undefined);
 
   protected readonly importLine = computed(() => IMPORT_LINE_BY_STATUS[this.profile()?.scapeImport ?? 'not_imported']);
+  protected readonly baseLine = computed(() => {
+    const manager = this.profile()?.manager;
+    return manager && baseLineOf(manager);
+  });
   protected readonly pulseLabel = computed(() => {
     const pulseSeconds = this.profile()?.manager.pulseSeconds;
     return pulseSeconds === undefined ? NOT_KNOWN : compactElapsedLabel(pulseSeconds);

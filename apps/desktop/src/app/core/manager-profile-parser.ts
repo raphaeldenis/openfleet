@@ -1,4 +1,4 @@
-import type { ManagerProfile, ScapeImportStatus } from '@openfleet/shared';
+import type { ManagerBaseRead, ManagerProfile, ScapeImportStatus } from '@openfleet/shared';
 
 const SCAPE_IMPORT_STATUSES: readonly ScapeImportStatus[] = ['not_imported', 'as_imported', 'edited_in_openfleet'];
 
@@ -22,5 +22,13 @@ export function parseManagerProfile(payload: unknown): ManagerProfile | undefine
     ...(typeof pinMissionNote === 'boolean' && { pinMissionNote }),
     ...(isText(logStoreId) && { logStoreId }),
   };
-  return { manager: { sessionId, pulseSeconds, pulseEnabled: pulseEnabled !== false, childrenCap, missionText, nextPulseAt, childrenCount, ...lastPulse, ...links }, scapeImport: scapeImport as ScapeImportStatus };
+  const { baseVersion, baseRead } = manager as Record<string, unknown>;
+  const base = { ...(isCount(baseVersion) && { baseVersion }), ...(isBaseRead(baseRead) && { baseRead: { version: baseRead.version, sha: baseRead.sha, readAt: baseRead.readAt } }) };
+  return { manager: { sessionId, pulseSeconds, pulseEnabled: pulseEnabled !== false, childrenCap, missionText, nextPulseAt, childrenCount, ...lastPulse, ...links, ...base }, scapeImport: scapeImport as ScapeImportStatus };
+}
+
+function isBaseRead(value: unknown): value is ManagerBaseRead {
+  if (typeof value !== 'object' || value === null) return false;
+  const { version, sha, readAt } = value as Record<string, unknown>;
+  return isCount(version) && isText(sha) && isText(readAt);
 }
