@@ -19,6 +19,7 @@ const SECTION_COUNT = 10;
 // and a new line here; editing a line below means a shipped version was edited, which is never allowed.
 const RELEASED_BASE_SHAS: Record<number, string> = {
   1: '4ee6ed1d031e912d825972627a8e759ea881218bcd33f4f9609e6c066daa56a6',
+  2: 'fe4afd8ff81625b6ff76711c059222f817472fe3c2a4f6e0daa291c13a7a077c',
 };
 
 const tempDirs = createTempDirTracker();
@@ -71,7 +72,15 @@ describe('the shipped manager base', () => {
 
   it('cites only tools the real daemon registers', () => {
     expect(registeredToolNames.has('get_argus_status')).toBe(true);
-    expect(registeredToolNames.has('get_manager_base')).toBe(false);
+    expect(registeredToolNames.has('get_manager_base')).toBe(true);
+  });
+
+  it('tells the manager to read the base with get_manager_base, whole, after a reset and on a version change', () => {
+    const source = shippedSource();
+
+    expect(source).toContain('`get_manager_base`');
+    expect(source).toMatch(/Read this base again with `get_manager_base`, whole\./);
+    expect(source).toMatch(/again after every reset \(§4\) or when its version changes/);
   });
 });
 
@@ -93,7 +102,7 @@ describe('the delivery lint', () => {
   });
 
   it('fails when the base cites a tool the daemon does not register', () => {
-    expect(lint(`${shippedSource()}\nCall \`get_manager_base\` first.\n`)).toEqual([expect.stringContaining('get_manager_base')]);
+    expect(lint(`${shippedSource()}\nCall \`get_unicorn_status\` first.\n`)).toEqual([expect.stringContaining('get_unicorn_status')]);
   });
 
   it('fails when the body is over 8192 bytes', () => {
