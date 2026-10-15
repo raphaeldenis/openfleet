@@ -169,7 +169,7 @@ async function fetchAllPages<T>(fetchPage: (request: PageRequest) => Promise<Pag
     .action-failure-reason { flex: 1; color: var(--mut) }
     .note-updated { flex: none; display: flex; align-items: center; gap: .75rem; padding: .5rem 1.25rem; background: var(--sunk); border-bottom: 1px solid var(--line); font-size: .75rem }
     .note-updated-title { color: var(--fg); font-weight: 600 }
-    .note-updated-icon { color: var(--s-gen) }
+    .note-updated-icon { color: var(--state-generating) }
     .no-project { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .5rem; color: var(--mut) }
     .no-project-headline { color: var(--fg); font-weight: 500 }
   `,
