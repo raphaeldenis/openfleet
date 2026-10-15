@@ -10,6 +10,8 @@ export interface ManagerBaseSection {
   title: string;
   type: ManagerBaseSectionType;
   bytes: number;
+  /** The heading and the lines of the section. */
+  text: string;
 }
 
 export interface ManagerBase {
@@ -51,7 +53,7 @@ function sectionsOf(body: string): ManagerBaseSection[] {
     const match = SECTION_HEADING.exec(heading);
     if (!match) throw new Error(`the manager base heading "${heading}" is not "## §<n> <title> [invariant|default]"`);
     const text = lines.slice(start, end).join('\n').trim();
-    return { id: match[1]!, title: match[2]!, type: match[3] as ManagerBaseSectionType, bytes: utf8Bytes(text) };
+    return { id: match[1]!, title: match[2]!, type: match[3] as ManagerBaseSectionType, bytes: utf8Bytes(text), text };
   });
 }
 
