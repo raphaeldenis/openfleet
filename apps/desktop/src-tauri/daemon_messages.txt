@@ -16,3 +16,4 @@ log_record_unserializable [unserializable log record]
 knowledge_search_fallback knowledge.search_fallback
 stored_model_unknown stored model is not in the known model list; check availability and update the model settings before launching
 command_policy_saved command policy saved
+restore_without_expected_rev restore without expected_rev

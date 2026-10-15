@@ -96,6 +96,9 @@ const describedOpenFleetError = (error: OpenFleetError): Entry =>
     ? { code: error.code, message: UNEXPECTED_ENTRY.message }
     : { code: error.code, message: error.message, hint: error.options.hint, detail: error.options.detail };
 
+const staleRevisionDetailOf = ({ currentRev, conflictingSections }: StaleRevisionError) =>
+  (conflictingSections.length > 0 ? { currentRev, conflictingSections } : { currentRev });
+
 const RULES: Rule[] = [
   when(OpenFleetError, describedOpenFleetError),
   when(PayloadTooLargeError, asIs('payload_too_large')),
@@ -124,7 +127,7 @@ const RULES: Rule[] = [
   // A not-found message never echoes the id: a foreign note, store or row answers byte for byte like a missing one.
   when(NoteNotFoundError, () => ({ code: 'not_found', message: 'the note does not exist.' })),
   when(VersionNotFoundError, () => ({ code: 'not_found', message: 'the note version does not exist.' })),
-  when(StaleRevisionError, (error) => ({ code: 'stale_revision', message: error.message, hint: 'reload the note, then save again.', detail: { currentRev: error.currentRev } })),
+  when(StaleRevisionError, (error) => ({ code: 'stale_revision', message: error.message, hint: 'reload the note, then save again.', detail: staleRevisionDetailOf(error) })),
   when(FileBackedNoteError, asIs('file_backed')),
   when(NoteFileUnreadableError, () => ({ code: 'file_unreadable', message: 'the note file cannot be read.', hint: 'restore the docs folder or the file permissions, then retry.' })),
   when(PathEscapesDocsFolderError, () => ({ code: 'path_escapes_docs_folder', message: 'the path escapes the docs folder.' })),

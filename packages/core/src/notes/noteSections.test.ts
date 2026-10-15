@@ -1,6 +1,41 @@
 import { describe, expect, it } from 'vitest';
 import { expectBestCpuUnder } from '../__testing__/linearGrowth.js';
-import { appendSection, getSection, listSections, replaceSection } from './noteSections.js';
+import { appendSection, getSection, listSections, planStaleSectionWrite, replaceSection } from './noteSections.js';
+
+describe('planStaleSectionWrite', () => {
+  const base = '## Mission\nm1\n\n## Expertise\ne1';
+
+  it('merges the write onto the current body when the target section is unchanged', () => {
+    const current = '## Mission\nm2\n\n## Expertise\ne1';
+
+    const plan = planStaleSectionWrite({ baseBodyMd: base, currentBodyMd: current, heading: 'Expertise', content: 'e2' });
+
+    expect(plan).toEqual({ outcome: 'merge', bodyMd: '## Mission\nm2\n\n## Expertise\ne2' });
+  });
+
+  it('reports the target when its content changed', () => {
+    const current = '## Mission\nm1\n\n## Expertise\nother';
+
+    const plan = planStaleSectionWrite({ baseBodyMd: base, currentBodyMd: current, heading: 'Expertise', content: 'e2' });
+
+    expect(plan).toEqual({ outcome: 'conflict', conflictingSections: ['Expertise'] });
+  });
+
+  it('reports the target when it was deleted, created or is ambiguous', () => {
+    const deleted = '## Mission\nm1';
+    const duplicated = `${base}\n\n## Expertise\ne1`;
+
+    expect(planStaleSectionWrite({ baseBodyMd: base, currentBodyMd: deleted, heading: 'Expertise', content: 'x' }).outcome).toBe('conflict');
+    expect(planStaleSectionWrite({ baseBodyMd: deleted, currentBodyMd: base, heading: 'Expertise', content: 'x' }).outcome).toBe('conflict');
+    expect(planStaleSectionWrite({ baseBodyMd: duplicated, currentBodyMd: duplicated, heading: 'Expertise', content: 'x' }).outcome).toBe('conflict');
+  });
+
+  it('reports the target when the body has no sections', () => {
+    const plan = planStaleSectionWrite({ baseBodyMd: 'text', currentBodyMd: 'text more', heading: 'Expertise', content: 'x' });
+
+    expect(plan).toEqual({ outcome: 'conflict', conflictingSections: ['Expertise'] });
+  });
+});
 
 describe('listSections', () => {
   it('lists each ## heading with its 0-based first and last line', () => {

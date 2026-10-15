@@ -93,6 +93,37 @@ export function replaceSection(bodyMd: string, heading: string, newContent: stri
   return ensureStructure(replaced, parsed, sectionIndex, outlineOf(parsed.headings));
 }
 
+export interface StaleSectionWriteInput {
+  baseBodyMd: string;
+  currentBodyMd: string;
+  heading: string;
+  content: string;
+}
+
+export type StaleSectionWritePlan =
+  | { outcome: 'merge'; bodyMd: string }
+  | { outcome: 'conflict'; conflictingSections: string[] };
+
+/**
+ * Decides what a section write made against an older body (`baseBodyMd`) does to the current body:
+ * it merges when the target section exists exactly once in both and holds the same content, and
+ * reports the target as conflicting in every other case (changed, deleted, created, ambiguous).
+ */
+export function planStaleSectionWrite({ baseBodyMd, currentBodyMd, heading, content }: StaleSectionWriteInput): StaleSectionWritePlan {
+  const wantedHeading = requireSingleLineHeading(heading);
+  const isUniqueInBase = countSectionsTitled(baseBodyMd, wantedHeading) === 1;
+  const isUniqueInCurrent = countSectionsTitled(currentBodyMd, wantedHeading) === 1;
+  const hasSameContent = getSection(baseBodyMd, wantedHeading) === getSection(currentBodyMd, wantedHeading);
+  const isTargetUntouched = isUniqueInBase && isUniqueInCurrent && hasSameContent;
+  if (!isTargetUntouched) return { outcome: 'conflict', conflictingSections: [wantedHeading] };
+  return { outcome: 'merge', bodyMd: replaceSection(currentBodyMd, wantedHeading, content) };
+}
+
+function countSectionsTitled(bodyMd: string, heading: string): number {
+  const wantedHeading = comparableHeading(heading);
+  return listSections(bodyMd).filter((section) => comparableHeading(section.heading) === wantedHeading).length;
+}
+
 /**
  * Appends `content` at the end of the first section titled `heading`, or in a new `##` section at the end of the body.
  * Existing bytes stay as they are; the appended text uses the first line break of the body.
