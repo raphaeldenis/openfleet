@@ -23,6 +23,15 @@ export interface SilentBlock {
   waitingSince: string;
 }
 
+/** Where a note write came from: an agent's tool, the REST API, the note's file on disk, or a restore of an older version (over either API). */
+export type NoteChangeSource = 'mcp' | 'rest' | 'file' | 'restore';
+
+/** A note changed. Identifiers and the new revision only: never a title or a body, a client reads the note itself to learn more. */
+export type NoteChangeEvent =
+  | { type: 'note.created'; noteId: string; projectId: string; rev: number }
+  | { type: 'note.updated'; noteId: string; projectId: string; rev: number; source: NoteChangeSource }
+  | { type: 'note.deleted'; noteId: string; projectId: string };
+
 export type NeedsInputKind = 'permission' | 'input';
 
 /** What happened to a session that deserves the human's attention. Carries identifiers and a tool name only: never tool input, transcript or prompt text. */
@@ -59,4 +68,5 @@ export type ServerEvent =
   | { type: 'daemon.issues'; issues: DaemonIssue[] }
   | { type: 'permission.silent_blocks'; blocks: SilentBlock[] }
   | { type: 'command.denied'; denial: DeniedCommand }
-  | ({ type: 'notification.trigger' } & NotificationTrigger);
+  | ({ type: 'notification.trigger' } & NotificationTrigger)
+  | NoteChangeEvent;

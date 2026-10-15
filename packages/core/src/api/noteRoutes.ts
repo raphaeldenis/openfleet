@@ -1,6 +1,6 @@
 import {
   CreateNoteRequestSchema, MAX_NOTE_PAGE_LIMIT, NoteFolderSchema, OpenFleetError, RestoreNoteRequestSchema, UpdateNoteRequestSchema, pageQuerySchema, queryInteger,
-  type Note, type NoteSummary, type NoteVersionSummary, type NoteView, type Page,
+  type Note, type NoteChangeSource, type NoteSummary, type NoteVersionSummary, type NoteView, type Page,
 } from '@openfleet/shared';
 import { z } from 'zod';
 import type { DocsFolderService } from '../notes/docsFolderService.js';
@@ -45,16 +45,16 @@ export function registerNoteRoutes(router: Router, { notes, noteRepo, docs }: No
     if (noteRepo.getProjectId(id) !== projectId) throw new NoteNotFoundError(id);
   }
 
-  function commitBody(current: Note, bodyMd: string, expectedRev: number): Note {
-    const write = { bodyMd, expectedRev, author: REST_AUTHOR };
+  function commitBody(current: Note, { bodyMd, expectedRev, source }: { bodyMd: string; expectedRev: number; source: NoteChangeSource }): Note {
+    const write = { bodyMd, expectedRev, source, author: REST_AUTHOR };
     return current.filePath ? docs.writeThrough(current.id, write) : notes.update(current.id, write);
   }
 
   function applyPatch(current: Note, { title, bodyMd, expectedRev }: { title?: string; bodyMd?: string; expectedRev: number }): Note {
-    const write = { expectedRev, author: REST_AUTHOR };
+    const write = { expectedRev, source: 'rest' as const, author: REST_AUTHOR };
     if (title !== undefined && bodyMd !== undefined) return notes.updateBodyAndTitle(current.id, { ...write, title, bodyMd });
     if (title !== undefined) return notes.rename(current.id, { ...write, title });
-    return commitBody(current, bodyMd!, expectedRev);
+    return commitBody(current, { ...write, bodyMd: bodyMd! });
   }
 
   router.add('GET', '/api/notes',({ req, res }) => {
@@ -105,6 +105,6 @@ export function registerNoteRoutes(router: Router, { notes, noteRepo, docs }: No
     const current = requireOwnNote(projectId, params.id!);
     const target = noteRepo.getVersion(current.id, rev);
     if (!target) throw new VersionNotFoundError(rev);
-    json(res, 200, viewOf(commitBody(current, target.bodyMd, expectedRev)));
+    json(res, 200, viewOf(commitBody(current, { bodyMd: target.bodyMd, expectedRev, source: 'restore' })));
   });
 }

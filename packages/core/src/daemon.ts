@@ -168,7 +168,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   const knowledgeSearch = { search: knowledgeService.search.bind(knowledgeService) };
   const stores = new DataStoreService({ repo: storeRepo, db, clock: () => new Date().toISOString(), newId });
   const projects = new ProjectRepository(db);
-  const notes = new NoteService({ repo: noteRepo, db, expandMentions, clock: () => new Date().toISOString(), newId });
+  const notes = new NoteService({ repo: noteRepo, db, expandMentions, clock: () => new Date().toISOString(), newId, publishChange: (event) => bus.emit(event) });
   const docs = new DocsFolderService({ notes, noteRepo, projects, fs: nodeDocsFolderFs, clock: () => new Date().toISOString(), degraded, onWatchError: logDocsFolderFailure('watch') });
   const docsFolders = new DocsFolderSupervisor({ projects, docs, onError: ({ projectId, step, error }) => logDocsFolderFailure(step, projectId)(error) });
   const projectService = new ProjectService({ projects, docs, clock: () => new Date().toISOString(), newId, onDocsFolderSet: (projectId) => docsFolders.watchProject(projectId) });
