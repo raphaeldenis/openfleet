@@ -16,6 +16,7 @@ describe('the packaged core entry', () => {
     const coreModules = fileURLToPath(new URL('../../node_modules', import.meta.url));
     symlinkSync(coreModules, join(fixture.workDir, 'node_modules'), 'dir');
     cpSync(fileURLToPath(new URL('../db/migrations', import.meta.url)), join(fixture.workDir, 'migrations'), { recursive: true });
+    cpSync(fileURLToPath(new URL('../../templates', import.meta.url)), join(fixture.workDir, 'templates'), { recursive: true });
     await build({
       entryPoints: [fileURLToPath(new URL('../main.ts', import.meta.url))],
       outfile: bundlePath,

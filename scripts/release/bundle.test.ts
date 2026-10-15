@@ -10,6 +10,7 @@ import { describeUnsupportedNode } from './bundle-daemon.mjs';
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), 'bundle-daemon.mjs');
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SOURCE_MIGRATIONS = join(REPO_ROOT, 'packages/core/src/db/migrations');
+const SOURCE_TEMPLATES = join(REPO_ROOT, 'packages/core/templates');
 const SOURCE_NODE_PTY_PREBUILDS = join(REPO_ROOT, 'packages/core/node_modules/node-pty/prebuilds');
 
 const TEST_VERSION = '9.9.9';
@@ -35,7 +36,7 @@ const writeTauriConf = (folder: string, version: string) => {
 };
 
 const MARKER_NAME = '.openfleet-daemon-bundle';
-const BUNDLE_ENTRIES = ['daemon.bundle.mjs', 'daemon.mjs', 'migrations', 'node_modules'];
+const BUNDLE_ENTRIES = ['daemon.bundle.mjs', 'daemon.mjs', 'migrations', 'node_modules', 'templates'];
 
 const runBundle = (arguments_: string[], env?: NodeJS.ProcessEnv) => spawnSync(process.execPath, [SCRIPT, ...arguments_], { encoding: 'utf8', cwd: tmpdir(), env });
 const bundleInto = (out: string) => runBundle(['--target', ARM64_TARGET, '--out', out, '--tauri-conf', tauriConf]);
@@ -80,6 +81,12 @@ describe('bundle layout', () => {
     expect(shipped).toEqual(sqlFilesIn(SOURCE_MIGRATIONS));
     for (const name of shipped) {
       expect(readFileSync(join(arm64Out, 'migrations', name)).equals(readFileSync(join(SOURCE_MIGRATIONS, name)))).toBe(true);
+    }
+  });
+
+  it('copies the manager base and its sha byte for byte', () => {
+    for (const name of ['base.md', 'base.sha256']) {
+      expect(readFileSync(join(arm64Out, 'templates/manager', name)).equals(readFileSync(join(SOURCE_TEMPLATES, 'manager', name)))).toBe(true);
     }
   });
 
@@ -572,6 +579,8 @@ describe('the bundled daemon', () => {
 
     const url = await waitForListeningUrl(daemon);
     const health = await (await fetch(`${url}/health`)).json();
+    const adminToken = readFileSync(join(home, 'admin.token'), 'utf8').trim();
+    const managerBase = await (await fetch(`${url}/api/manager-base`, { headers: { authorization: `Bearer ${adminToken}` } })).json();
     const database = new DatabaseSync(join(home, 'openfleet.db'), { readOnly: true });
     const appliedCount = (database.prepare('SELECT count(*) AS count FROM schema_migrations').get() as { count: number }).count;
     database.close();
@@ -580,6 +589,8 @@ describe('the bundled daemon', () => {
 
     expect(health).toEqual({ ok: true, version: TEST_VERSION, status: 'ok', issues: 0 });
     expect(appliedCount).toBe(sqlFilesIn(SOURCE_MIGRATIONS).length);
+    expect(managerBase.sha).toBe(readFileSync(join(SOURCE_TEMPLATES, 'manager/base.sha256'), 'utf8').trim());
+    expect(managerBase.sections).toHaveLength(10);
     expect(exitCode).toBe(0);
   }, BOOT_TIMEOUT_MS);
 });

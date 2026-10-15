@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Bundles the daemon into a self-contained folder: daemon.mjs (launcher), daemon.bundle.mjs, migrations/ and node_modules/node-pty.
+// Bundles the daemon into a self-contained folder: daemon.mjs (launcher), daemon.bundle.mjs, migrations/, templates/ and node_modules/node-pty.
 // A non-empty --out is only cleared when it holds this script's .openfleet-daemon-bundle marker; an older unmarked bundle folder is refused once and must be removed by hand.
 // Usage: node scripts/release/bundle-daemon.mjs [--target aarch64-apple-darwin|x86_64-apple-darwin] [--out <dir>] [--tauri-conf <file>] [--node-pty-dir <dir>]
 import { chmodSync, closeSync, cpSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -22,7 +22,7 @@ const LAUNCHER_NAME = 'daemon.mjs';
 const BUNDLE_NAME = 'daemon.bundle.mjs';
 const MARKER_NAME = '.openfleet-daemon-bundle';
 const MARKER_FORMAT_VERSION = 1;
-const BUNDLE_ENTRIES = [LAUNCHER_NAME, BUNDLE_NAME, 'migrations', 'node_modules'];
+const BUNDLE_ENTRIES = [LAUNCHER_NAME, BUNDLE_NAME, 'migrations', 'templates', 'node_modules'];
 const MINIMUM_NODE_MAJOR = 26;
 
 const NODE_PTY_PREBUILDS_BY_TARGET = {
@@ -234,6 +234,7 @@ export async function bundleDaemon({ target, out, tauriConf, nodePtyDir }) {
   writeFileSync(join(out, BUNDLE_NAME), bundleContents);
   writeFileSync(join(out, LAUNCHER_NAME), buildLauncherSource());
   cpSync(join(CORE_ROOT, 'src/db/migrations'), join(out, 'migrations'), { recursive: true });
+  cpSync(join(CORE_ROOT, 'templates'), join(out, 'templates'), { recursive: true });
   copyNodePty({ nodePtyFolder, prebuildFolder, out });
   return { out, version, target };
 }
