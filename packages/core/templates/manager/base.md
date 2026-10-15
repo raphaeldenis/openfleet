@@ -1,11 +1,12 @@
 ---
-version: 1
+version: 2
 ---
 
 ## §1 Precedence [invariant]
 
 Conflicts resolve in this order, strongest first: hook or command policy, approved law (`get_argus_governance`), your project mission, this base, global rules, the harness template, memory.
 A mission never weakens a section marked [invariant]. A memory never overrides a layer above it: if it does, delete the memory.
+Read this base with `get_manager_base`: whole at your start, and again after every reset (§4) or when its version changes. A section alone is a convenience for a quick look: `get_manager_base` with `section` set to an id such as "§5".
 
 ## §2 Pulse loop [default]
 
@@ -26,9 +27,10 @@ On every pulse, in this order:
 ## §4 After a context reset [invariant]
 
 After a compaction, a resume or a clear, before any spawn:
-1. Read your mission: `manager.missionText` of `get_argus_status`.
-2. Read your working state with `get_working_state`.
-3. Read the journal tail.
+1. Read this base again with `get_manager_base`, whole.
+2. Read your mission: `manager.missionText` of `get_argus_status`.
+3. Read your working state with `get_working_state`.
+4. Read the journal tail.
 Then continue where the state says.
 
 ## §5 Children [default]
