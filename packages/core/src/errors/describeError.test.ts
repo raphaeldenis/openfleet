@@ -174,6 +174,14 @@ describe('describeError: T3 domain classes', () => {
     expect({ kind: envelope.kind, retry: envelope.retry }).toEqual({ kind: 'conflict', retry: 'after_refresh' });
   });
 
+  it('adds the conflicting section titles to the stale_revision detail, and nothing when there are none', () => {
+    const withSections = describeError(new StaleRevisionError(12, ['Mission', 'Expertise']));
+    const withoutSections = describeError(new StaleRevisionError(12));
+
+    expect(withSections.detail).toEqual({ currentRev: 12, conflictingSections: ['Mission', 'Expertise'] });
+    expect(withoutSections.detail).toEqual({ currentRev: 12 });
+  });
+
   it('honours a retry override of the code', () => {
     expect(describeError(new TooManyPendingMessagesError('s1')).retry).toBe('later');
   });

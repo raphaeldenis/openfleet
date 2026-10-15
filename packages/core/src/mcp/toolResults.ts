@@ -70,10 +70,16 @@ const CALLER_SAFE_ERRORS = [
 const STALE_REVISION_HINT = 'Reload the note, then write again.';
 const WRITE_FAILED_MESSAGE = 'The write failed.';
 
+function staleRevisionMessageOf({ currentRev, conflictingSections }: StaleRevisionError): string {
+  const staleSentence = `the note revision is stale, current rev: ${currentRev}.`;
+  if (conflictingSections.length === 0) return staleSentence;
+  return `${staleSentence} Conflicting sections: ${conflictingSections.join(', ')}.`;
+}
+
 function toolWordingOf(error: unknown): ToolWording | undefined {
   const fixed = FIXED_WORDING.find(([ErrorClass]) => error instanceof ErrorClass);
   if (fixed) return fixed[1];
-  if (error instanceof StaleRevisionError) return { message: `the note revision is stale, current rev: ${error.currentRev}.`, hint: STALE_REVISION_HINT };
+  if (error instanceof StaleRevisionError) return { message: staleRevisionMessageOf(error), hint: STALE_REVISION_HINT };
   if (CALLER_SAFE_ERRORS.some((safeError) => error instanceof safeError)) return { message: (error as Error).message };
   return undefined;
 }

@@ -11,7 +11,7 @@ const MAX_APPEND_ATTEMPTS = 4;
 const SAVEPOINT_NAME = 'note_service_write';
 
 export class StaleRevisionError extends Error {
-  constructor(public readonly currentRev: number) {
+  constructor(public readonly currentRev: number, public readonly conflictingSections: string[] = []) {
     super(`note revision is stale; current revision is ${currentRev}`);
   }
 }
