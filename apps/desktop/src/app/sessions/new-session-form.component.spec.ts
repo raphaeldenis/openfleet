@@ -8,7 +8,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { NewSessionFormComponent } from './new-session-form.component';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
 
-const MISSION_MAX_BYTES = 64 * 1024;
+const MISSION_MAX_BYTES = 8192;
 
 function fakeApi(overrides: Record<string, unknown> = {}) {
   return {
@@ -331,6 +331,61 @@ describe('NewSessionFormComponent', () => {
     });
   });
 
+  describe('the size of the mission', () => {
+    it('user sees the size of the mission in KB under the field, 0.0 while it is empty', async () => {
+      await renderForm(fakeApi(), { mode: 'manager' });
+
+      expect(screen.getByTestId('manager-mission-size')).toHaveTextContent('0.0 / 8 KB');
+    });
+
+    it('user sees 7.2 / 8 KB for a mission of 7373 bytes, with no error', async () => {
+      await renderForm(fakeApi(), { mode: 'manager' });
+
+      await pasteMission('a'.repeat(7373));
+
+      expect(screen.getByTestId('manager-mission-size')).toHaveTextContent('7.2 / 8 KB');
+      expect(screen.queryByTestId('manager-mission-error')).toBeNull();
+    });
+
+    it('user counts bytes, not characters: 4097 letters é are over the limit', async () => {
+      await renderForm(fakeApi(), { mode: 'manager' });
+
+      await pasteMission('é'.repeat(4097));
+
+      expect(screen.getByTestId('manager-mission-error')).toHaveTextContent('at most 8 KB');
+    });
+
+    it('user can submit a mission of exactly 8192 bytes', async () => {
+      const api = fakeApi();
+      await renderForm(api, { mode: 'manager' });
+      await fillSessionFields({ name: 'Lead' });
+      await pasteMission('a'.repeat(8192));
+
+      await userEvent.click(submitButton());
+
+      expect(screen.queryByTestId('manager-mission-error')).toBeNull();
+      expect(api.createManagerSession).toHaveBeenCalledTimes(1);
+    });
+
+    it('user cannot submit a mission of 8193 bytes: a blocking error shows and no call is sent', async () => {
+      const api = fakeApi();
+      await renderForm(api, { mode: 'manager' });
+      await fillSessionFields({ name: 'Lead' });
+      await pasteMission('a'.repeat(8193));
+
+      await userEvent.click(submitButton());
+
+      expect(screen.getByTestId('manager-mission-error')).toHaveTextContent('Mission must be at most 8 KB');
+      expect(api.createManagerSession).not.toHaveBeenCalled();
+    });
+
+    it('user sees no legacy banner on a new manager', async () => {
+      await renderForm(fakeApi(), { mode: 'manager' });
+
+      expect(screen.queryByTestId('manager-mission-legacy')).toBeNull();
+    });
+  });
+
   describe('switching between session and manager', () => {
     it('user can switch to manager mode and sees the pulse, children cap and mission fields', async () => {
       await renderForm(fakeApi());
@@ -468,7 +523,7 @@ describe('NewSessionFormComponent', () => {
         await waitFor(() => expect(screen.getByTestId('manager-mission-error')).toBeTruthy());
       });
 
-      it('the "at most 65536 bytes" error is still shown after toggling to session and back', async () => {
+      it('the "at most 8 KB" error is still shown after toggling to session and back', async () => {
         await renderForm(fakeApi(), { mode: 'manager' });
         await pasteMission('a'.repeat(MISSION_MAX_BYTES + 1));
         expect(screen.getByTestId('manager-mission-error')).toHaveTextContent('at most');
@@ -589,8 +644,8 @@ describe('NewSessionFormComponent', () => {
       const api = fakeApi();
       await renderForm(api, { mode: 'manager' });
       await fillSessionFields({ name: 'Lead' });
-      const threeByteCharacter = '€';
-      await pasteMission(threeByteCharacter.repeat(MISSION_MAX_BYTES / 3 + 1));
+      const twoByteCharacter = 'é';
+      await pasteMission(twoByteCharacter.repeat(MISSION_MAX_BYTES / 2 + 1));
 
       await userEvent.click(submitButton());
 

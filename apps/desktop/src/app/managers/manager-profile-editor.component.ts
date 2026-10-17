@@ -17,7 +17,7 @@ const LIVE_MISSION_NOTE =
   imports: [FormsModule, ErrorLineComponent, ManagerFieldsComponent],
   template: `
     <form class="of-form" (ngSubmit)="save()" novalidate [attr.aria-busy]="isSaving() || null">
-      <of-manager-fields [isLocked]="isSaving()" [(pulseSeconds)]="pulseSeconds" [(childrenCap)]="childrenCap" [(mission)]="mission" [(isMissionTouched)]="isMissionTouched" />
+      <of-manager-fields [isLocked]="isSaving()" [storedMission]="manager().missionText" [(pulseSeconds)]="pulseSeconds" [(childrenCap)]="childrenCap" [(mission)]="mission" [(isMissionTouched)]="isMissionTouched" />
       <p class="note">${LIVE_MISSION_NOTE}</p>
       <div class="of-field">
         <label class="of-label" for="manager-model">Model</label>

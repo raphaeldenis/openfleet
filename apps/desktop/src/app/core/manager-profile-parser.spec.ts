@@ -6,6 +6,17 @@ const aProfile = (managerPatch: Record<string, unknown> = {}) => ({
   manager: { sessionId: 'm1', pulseSeconds: 600, childrenCap: 2, missionText: 'Ship', nextPulseAt: '2026-10-15T12:00:00.000Z', childrenCount: 0, ...managerPatch },
 });
 
+describe('parseManagerProfile: the legacy mission flag', () => {
+  it('keeps the flag a daemon reports', () => {
+    expect(parseManagerProfile(aProfile({ legacyMission: true }))?.manager.legacyMission).toBe(true);
+  });
+
+  it('reports no flag for a daemon that does not know it, or a flag that is not a boolean', () => {
+    expect(parseManagerProfile(aProfile())?.manager.legacyMission).toBeUndefined();
+    expect(parseManagerProfile(aProfile({ legacyMission: 'yes' }))?.manager.legacyMission).toBeUndefined();
+  });
+});
+
 describe('parseManagerProfile: the manager base', () => {
   it('keeps the version of the shipped base and the read of the manager', () => {
     const baseRead = { version: 2, sha: 'abc', readAt: '2026-10-15T12:00:00.000Z' };

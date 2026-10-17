@@ -1,8 +1,9 @@
-import { MANAGER_ROLE, type ManagerProfile, type ManagerSpec, type ManagerView, type ScapeImportStatus, type Session, type SessionSpec, type UpdateManager } from '@openfleet/shared';
+import { isMissionWritable, MANAGER_ROLE, MAX_MISSION_DELTA_BYTES, OpenFleetError, type ManagerProfile, type ManagerSpec, type ManagerView, type ScapeImportStatus, type Session, type SessionSpec, type UpdateManager } from '@openfleet/shared';
 import type { EventBus } from '../events/eventBus.js';
 import { NoteNotFoundError } from '../notes/noteService.js';
 import type { SessionService } from '../sessions/sessionService.js';
 import { StoreNotFoundError } from '../stores/dataStoreRepository.js';
+import { managerFirstPromptOf } from './managerFirstPrompt.js';
 import { isPulseEnabled, type ManagerRecord, type ManagerRepository } from './managerRepository.js';
 import { DEFAULT_HEARTBEAT_SECONDS } from '../workingState/workingStateSettings.js';
 import { toManagerView, type DeniedCommandCounts, type ManagerBaseIdentity } from './managerView.js';
@@ -45,7 +46,8 @@ export class ManagerService {
   }
 
   async createManagerSession(spec: SessionSpec & { manager: ManagerSpec; repoPath?: string; branchName?: string }): Promise<Session> {
-    const managerSpec = { ...spec, role: MANAGER_ROLE, seededPrompt: spec.seededPrompt ?? spec.manager.mission };
+    this.requireMissionWritable({ mission: spec.manager.mission });
+    const managerSpec = { ...spec, role: MANAGER_ROLE, seededPrompt: spec.seededPrompt ?? managerFirstPromptOf(spec.manager.mission) };
     const hasRepo = spec.repoPath !== undefined && spec.branchName !== undefined;
     const session = hasRepo
       ? await this.deps.sessions.createInWorktree({ ...managerSpec, repoPath: spec.repoPath!, branchName: spec.branchName! })
@@ -72,8 +74,10 @@ export class ManagerService {
    * Throws NoteNotFoundError, before changing anything, for a mission note outside the manager's project.
    */
   update(sessionId: string, patch: UpdateManager): ManagerView | undefined {
-    if (!this.deps.managers.get(sessionId)) return undefined;
+    const stored = this.deps.managers.get(sessionId);
+    if (!stored) return undefined;
     const { mission, model, missionNoteId, pinMissionNote, pulseEnabled, ...cadenceAndCap } = patch;
+    if (mission !== undefined) this.requireMissionWritable({ mission, storedMission: stored.missionText });
     const isLinkingNote = typeof missionNoteId === 'string';
     if (isLinkingNote) this.requireNoteOfManagerProject({ managerId: sessionId, noteId: missionNoteId });
     if (model !== undefined) this.deps.sessions.changeModel(sessionId, model);
@@ -129,6 +133,11 @@ export class ManagerService {
 
   listViews(): ManagerView[] {
     return this.deps.managers.list().map((record) => this.view(record));
+  }
+
+  private requireMissionWritable({ mission, storedMission }: { mission: string; storedMission?: string }): void {
+    if (isMissionWritable({ mission, storedMission })) return;
+    throw new OpenFleetError('mission_too_large', `the mission is above ${MAX_MISSION_DELTA_BYTES} bytes: keep the project delta, the manager base holds the rest`);
   }
 
   private requireNoteOfManagerProject({ managerId, noteId }: { managerId: string; noteId: string }): void {

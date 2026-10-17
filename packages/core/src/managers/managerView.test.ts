@@ -20,6 +20,7 @@ describe('toManagerView', () => {
       pulseEnabled: true,
       childrenCap: 4,
       missionText: 'Ship it',
+      legacyMission: false,
       lastPulseAt: '2026-01-01T00:05:00.000Z',
       nextPulseAt: '2026-01-01T00:06:00.000Z',
       childrenCount: 3,
