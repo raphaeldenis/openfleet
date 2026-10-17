@@ -36,14 +36,14 @@ export function registerNoteVersionTools(server: McpServer, deps: RegisterNoteVe
     for (let attempt = 0; attempt < MAX_MERGE_ATTEMPTS; attempt++) {
       const current = requireOwnNote(projectId, note);
       const isOnExpectedRev = current.rev === expectedRev;
-      if (isOnExpectedRev) return noteSummary(writeBody(current, replaceSection(current.bodyMd, heading, content), expectedRev));
+      if (isOnExpectedRev) return noteSummary(writeBody(current, { bodyMd: replaceSection(current.bodyMd, heading, content), expectedRev }));
 
       const base = noteRepo.getVersion(note, expectedRev);
       if (!base) throw new StaleRevisionError(current.rev);
       const plan = planStaleSectionWrite({ baseBodyMd: base.bodyMd, currentBodyMd: current.bodyMd, heading, content });
       if (plan.outcome === 'conflict') throw new StaleRevisionError(current.rev, plan.conflictingSections);
       try {
-        return { ...noteSummary(writeBody(current, plan.bodyMd, current.rev)), merged: true };
+        return { ...noteSummary(writeBody(current, { bodyMd: plan.bodyMd, expectedRev: current.rev })), merged: true };
       } catch (error) {
         if (!(error instanceof StaleRevisionError)) throw error;
         lastRefusal = error;
@@ -109,7 +109,7 @@ export function registerNoteVersionTools(server: McpServer, deps: RegisterNoteVe
       const isMissingExpectedRev = expected_rev === undefined;
       if (isMissingExpectedRev && REQUIRE_EXPECTED_REV_ON_RESTORE) throw new OpenFleetError('invalid_body', 'expected_rev is required to restore a note version.', { hint: MISSING_EXPECTED_REV_HINT });
       if (isMissingExpectedRev) log('warn', 'restore without expected_rev', undefined, { noteId: current.id, sessionId: deps.caller.id });
-      const restored = noteSummary(writeBody(current, target.bodyMd, expected_rev ?? current.rev));
+      const restored = noteSummary(writeBody(current, { bodyMd: target.bodyMd, expectedRev: expected_rev ?? current.rev, source: 'restore' }));
       return isMissingExpectedRev ? { ...restored, warning: MISSING_EXPECTED_REV_WARNING } : restored;
     });
   });

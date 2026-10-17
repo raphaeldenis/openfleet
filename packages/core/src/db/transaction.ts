@@ -49,22 +49,68 @@ function reportWhenUnavailable(error: unknown): void {
 export function inTransaction<T>(db: DatabaseSync, name: string, work: () => T, policy: TransactionFailureLogPolicy = {}): T {
   recoverStuckTransaction(db, policy);
   const isNested = db.isTransaction;
+  const afterCommitQueue = afterCommitQueueOf(db);
+  const queuedActionsOnEntry = afterCommitQueue.actions.length;
   try {
     db.exec(isNested ? `SAVEPOINT ${name}` : 'BEGIN IMMEDIATE');
   } catch (error) {
     reportWhenUnavailable(error);
     throw error;
   }
+  afterCommitQueue.depth += 1;
+  let result: T;
   try {
-    const result = work();
+    result = work();
     db.exec(isNested ? `RELEASE ${name}` : 'COMMIT');
     if (!isNested) databaseWatch?.writeSucceeded();
-    return result;
   } catch (error) {
+    afterCommitQueue.actions.length = queuedActionsOnEntry;
     reportWhenUnavailable(error);
     if (db.isTransaction) rollBackKeepingOriginalError(db, { name, isNested }, policy);
     throw error;
+  } finally {
+    afterCommitQueue.depth -= 1;
   }
+  if (!isNested) runQueuedActions(afterCommitQueue);
+  return result;
+}
+
+interface AfterCommitQueue {
+  /** How many `inTransaction` calls are open on the connection. */
+  depth: number;
+  actions: (() => void)[];
+}
+
+const afterCommitQueues = new WeakMap<DatabaseSync, AfterCommitQueue>();
+
+function afterCommitQueueOf(db: DatabaseSync): AfterCommitQueue {
+  const existing = afterCommitQueues.get(db);
+  if (existing) return existing;
+  const created: AfterCommitQueue = { depth: 0, actions: [] };
+  afterCommitQueues.set(db, created);
+  return created;
+}
+
+/** A failing action is logged and never stops the others nor reaches the writer: its write is already committed. */
+function runQueuedActions(queue: AfterCommitQueue): void {
+  for (const action of queue.actions.splice(0)) runReportingFailure(action);
+}
+
+function runReportingFailure(action: () => void): void {
+  try {
+    action();
+  } catch (error) {
+    log('error', 'an after-commit action failed', error);
+  }
+}
+
+/**
+ * Runs `action` once the outermost transaction of `db` has committed: at once when none is open, never when it rolls back.
+ * Savepoints that roll back drop only the actions registered inside them.
+ */
+export function afterCommit(db: DatabaseSync, action: () => void): void {
+  if (!db.isTransaction) return runReportingFailure(action);
+  afterCommitQueueOf(db).actions.push(action);
 }
 
 /** Retries the ROLLBACK of a stuck connection; throws while it still fails. Does nothing on a healthy connection. */

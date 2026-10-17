@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
-import type { Note, NoteFolder } from '@openfleet/shared';
-import { inTransaction as runInTransaction, recoverStuckTransaction } from '../db/transaction.js';
+import type { Note, NoteChangeEvent, NoteChangeSource, NoteFolder } from '@openfleet/shared';
+import { afterCommit, inTransaction as runInTransaction, recoverStuckTransaction } from '../db/transaction.js';
 import { expandMentionBlocks, expandMentions, type MentionLookup } from './mentionExpander.js';
 import type { NoteRepository, NoteUpdateResult } from './noteRepository.js';
 import { appendSection, replaceSection } from './noteSections.js';
@@ -9,6 +9,7 @@ export const MAX_BODY_BYTES = 1024 * 1024;
 // One first try plus three retries after a stale CAS (decision 2); a fourth loss means real contention, not luck.
 const MAX_APPEND_ATTEMPTS = 4;
 const SAVEPOINT_NAME = 'note_service_write';
+const DEFAULT_CHANGE_SOURCE: NoteChangeSource = 'mcp';
 
 export class StaleRevisionError extends Error {
   constructor(public readonly currentRev: number, public readonly conflictingSections: string[] = []) {
@@ -47,6 +48,13 @@ export interface NoteServiceDeps {
   expandMentionBlocks?: typeof expandMentionBlocks;
   clock: () => string;
   newId: () => string;
+  /** Hears each committed write, once, after its transaction (and every transaction around it) has committed. */
+  publishChange?: (event: NoteChangeEvent) => void;
+}
+
+/** Where a revisioned write comes from, announced with its `note.updated` event. */
+interface WriteOrigin {
+  source?: NoteChangeSource;
 }
 
 export interface CreateNoteInput {
@@ -63,39 +71,39 @@ export interface CreateFileBackedNoteInput extends CreateNoteInput {
   sourceHash: string;
 }
 
-export interface UpdateFileBackedNoteInput {
+export interface UpdateFileBackedNoteInput extends WriteOrigin {
   bodyMd: string;
   sourceHash: string;
   expectedRev: number;
   author: string;
 }
 
-export interface UpdateNoteInput {
+export interface UpdateNoteInput extends WriteOrigin {
   bodyMd: string;
   expectedRev: number;
   author: string;
 }
 
-export interface UpdateSectionInput {
+export interface UpdateSectionInput extends WriteOrigin {
   heading: string;
   content: string;
   expectedRev: number;
   author: string;
 }
 
-export interface AppendNoteInput {
+export interface AppendNoteInput extends WriteOrigin {
   content: string;
   heading?: string;
   author: string;
 }
 
-export interface RenameNoteInput {
+export interface RenameNoteInput extends WriteOrigin {
   title: string;
   expectedRev: number;
   author: string;
 }
 
-export interface MoveNoteInput {
+export interface MoveNoteInput extends WriteOrigin {
   expectedRev?: number;
   author: string;
 }
@@ -129,8 +137,10 @@ export class NoteService {
   private readonly expandMentionBlocks: typeof expandMentionBlocks;
   private readonly clock: () => string;
   private readonly newId: () => string;
+  private readonly publishChange: (event: NoteChangeEvent) => void;
 
   constructor(deps: NoteServiceDeps) {
+    this.publishChange = deps.publishChange ?? (() => undefined);
     this.repo = deps.repo;
     this.db = deps.db;
     this.expandMentions = deps.expandMentions;
@@ -155,11 +165,7 @@ export class NoteService {
       createdAt: now,
       updatedAt: now,
     };
-    return this.inTransaction(() => {
-      this.repo.insert(note);
-      this.insertVersionRow(note, input.author, now);
-      return note;
-    });
+    return this.insertAnnouncingCreation(note, input.author, now);
   }
 
   /** Inserts a note that is file-backed from creation: `filePath`/`sourceHash` are set in the same INSERT, never patched in after. */
@@ -179,24 +185,31 @@ export class NoteService {
       createdAt: now,
       updatedAt: now,
     };
+    return this.insertAnnouncingCreation(note, input.author, now);
+  }
+
+  /** Removes the note with its versions and search entry; returns false, announcing nothing, when it does not exist. */
+  delete(id: string): boolean {
     return this.inTransaction(() => {
-      this.repo.insert(note);
-      this.insertVersionRow(note, input.author, now);
-      return note;
+      const note = this.repo.get(id);
+      if (!note) return false;
+      this.repo.delete(id);
+      this.announce({ type: 'note.deleted', noteId: note.id, projectId: note.projectId });
+      return true;
     });
   }
 
   /** Same CAS write as `update`, but commits `sourceHash` alongside `bodyMd` in the one UPDATE (Review Focus 5). */
   updateFileBacked(id: string, input: UpdateFileBackedNoteInput): Note {
     assertWithinBodyCap(input.bodyMd);
-    return this.writeThroughCas(id, input.author, (updatedAt) =>
+    return this.writeThroughCas(id, input, (updatedAt) =>
       this.repo.updateFileBacked(id, { bodyMd: input.bodyMd, sourceHash: input.sourceHash, expectedRev: input.expectedRev, updatedAt }));
   }
 
   update(id: string, input: UpdateNoteInput): Note {
     assertWithinBodyCap(input.bodyMd);
     this.assertNotFileBacked(id);
-    return this.writeThroughCas(id, input.author, (updatedAt) =>
+    return this.writeThroughCas(id, input, (updatedAt) =>
       this.repo.update(id, { bodyMd: input.bodyMd, expectedRev: input.expectedRev, updatedAt }));
   }
 
@@ -205,7 +218,7 @@ export class NoteService {
     this.assertNotFileBacked(id);
     const newBodyMd = replaceSection(current.bodyMd, input.heading, input.content);
     assertWithinBodyCap(newBodyMd);
-    return this.writeThroughCas(id, input.author, (updatedAt) =>
+    return this.writeThroughCas(id, input, (updatedAt) =>
       this.repo.update(id, { bodyMd: newBodyMd, expectedRev: input.expectedRev, updatedAt }));
   }
 
@@ -222,7 +235,7 @@ export class NoteService {
 
   rename(id: string, input: RenameNoteInput): Note {
     this.assertNotFileBacked(id);
-    return this.writeThroughCas(id, input.author, (updatedAt) =>
+    return this.writeThroughCas(id, input, (updatedAt) =>
       this.repo.rename(id, { title: input.title, expectedRev: input.expectedRev, updatedAt }));
   }
 
@@ -230,7 +243,7 @@ export class NoteService {
   updateBodyAndTitle(id: string, input: UpdateNoteInput & { title: string }): Note {
     assertWithinBodyCap(input.bodyMd);
     this.assertNotFileBacked(id);
-    return this.writeThroughCas(id, input.author, (updatedAt) =>
+    return this.writeThroughCas(id, input, (updatedAt) =>
       this.repo.updateBodyAndTitle(id, { bodyMd: input.bodyMd, title: input.title, expectedRev: input.expectedRev, updatedAt }));
   }
 
@@ -239,7 +252,7 @@ export class NoteService {
     this.assertNotFileBacked(id);
     return this.inTransaction(() => {
       const expectedRev = input.expectedRev ?? this.require(id).rev;
-      return this.writeThroughCas(id, input.author, (updatedAt) =>
+      return this.writeThroughCas(id, input, (updatedAt) =>
         this.repo.move(id, { folder, expectedRev, updatedAt }));
     });
   }
@@ -300,19 +313,39 @@ export class NoteService {
       if (result.outcome === 'not_found') throw new NoteNotFoundError(id);
       if (result.outcome === 'stale_revision') return { applied: false, currentRev: result.currentRev };
       this.insertVersionRow(result.note, input.author, updatedAt);
+      this.announceUpdate(result.note, input);
       return { applied: true, note: result.note };
     });
   }
 
-  private writeThroughCas(id: string, author: string, performCas: (updatedAt: string) => NoteUpdateResult): Note {
+  private writeThroughCas(id: string, write: { author: string } & WriteOrigin, performCas: (updatedAt: string) => NoteUpdateResult): Note {
     return this.inTransaction(() => {
       const updatedAt = this.clock();
       const result = performCas(updatedAt);
       if (result.outcome === 'not_found') throw new NoteNotFoundError(id);
       if (result.outcome === 'stale_revision') throw new StaleRevisionError(result.currentRev);
-      this.insertVersionRow(result.note, author, updatedAt);
+      this.insertVersionRow(result.note, write.author, updatedAt);
+      this.announceUpdate(result.note, write);
       return result.note;
     });
+  }
+
+  private insertAnnouncingCreation(note: Note, author: string, createdAt: string): Note {
+    return this.inTransaction(() => {
+      this.repo.insert(note);
+      this.insertVersionRow(note, author, createdAt);
+      this.announce({ type: 'note.created', noteId: note.id, projectId: note.projectId, rev: note.rev });
+      return note;
+    });
+  }
+
+  private announceUpdate(note: Note, { source = DEFAULT_CHANGE_SOURCE }: WriteOrigin): void {
+    this.announce({ type: 'note.updated', noteId: note.id, projectId: note.projectId, rev: note.rev, source });
+  }
+
+  /** Hands the event to the listener once every transaction around the write has committed; a rollback drops it. */
+  private announce(event: NoteChangeEvent): void {
+    afterCommit(this.db, () => this.publishChange(event));
   }
 
   private insertVersionRow(note: Note, author: string, createdAt: string): void {

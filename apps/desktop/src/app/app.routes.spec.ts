@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { provideRouter, withComponentInputBinding } from '@angular/router';
 import { RouterTestingHarness } from '@angular/router/testing';
 import { signal } from '@angular/core';
+import { Subject } from 'rxjs';
 import { routes } from './app.routes';
 import { FleetEventsService } from './core/fleet-events.service';
 import { silentWorkingStateSignals } from './working-state/working-state-fixtures';
@@ -26,6 +27,7 @@ function configureTestBed() {
           connected: signal(true),
           snapshotReceived: signal(true),
           reconnectCount: signal(0),
+          noteChanges: new Subject(),
           deliveredMessageIds: signal(new Set()),
           output: () => ({ subscribe: () => ({ unsubscribe: () => {} }) }),
           sendInput: () => {},

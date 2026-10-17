@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { dirname, isAbsolute, join } from 'node:path';
-import { NOTE_FOLDERS, type Note, type NoteFolder } from '@openfleet/shared';
+import { NOTE_FOLDERS, type Note, type NoteChangeSource, type NoteFolder } from '@openfleet/shared';
 import type { DegradedRegistry } from '../process/degradedRegistry.js';
 import { ProjectNotFoundError } from '../projects/projectErrors.js';
 import type { ProjectRecord, ProjectRepository } from '../projects/projectRepository.js';
@@ -93,6 +93,7 @@ export interface WriteThroughInput {
   bodyMd: string;
   expectedRev: number;
   author: string;
+  source?: NoteChangeSource;
 }
 
 export interface ReconcileReport {
@@ -280,6 +281,7 @@ export class DocsFolderService {
           sourceHash: sha256(input.bodyMd),
           expectedRev: input.expectedRev,
           author: input.author,
+          source: input.source,
         });
         this.asDocsFolderFailure(targetPath, () => this.deps.fs.renameSync(tempPath, targetPath));
         return note;
@@ -420,6 +422,7 @@ export class DocsFolderService {
       sourceHash: sha256(diskBodyMd),
       expectedRev: note.rev,
       author: EXTERNAL_EDIT_AUTHOR,
+      source: 'file',
     });
   }
 

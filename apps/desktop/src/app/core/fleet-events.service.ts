@@ -1,6 +1,6 @@
 import { Injectable, computed, signal } from '@angular/core';
 import { TodoSummarySchema, closeReasonOfExitCode, parseSessionCloseReason } from '@openfleet/shared';
-import type { Approval, DaemonIssue, ErrorEnvelope, ErrorEventScope, GovernanceProposalView, ManagerView, NotificationTrigger, ServerEvent, Session, SessionTodos, SilentBlock, TodoSummary, WorkingState } from '@openfleet/shared';
+import type { Approval, DaemonIssue, ErrorEnvelope, ErrorEventScope, GovernanceProposalView, ManagerView, NoteChangeEvent, NotificationTrigger, ServerEvent, Session, SessionTodos, SilentBlock, TodoSummary, WorkingState } from '@openfleet/shared';
 import { Subject } from 'rxjs';
 import { environment } from '../../environments/environment';
 import { parseSessionTodos } from './session-todos-parser';
@@ -112,6 +112,8 @@ export class FleetEventsService {
   readonly typedInSessionIds = new Subject<string>();
   /** What the daemon says deserves the human's attention, as it happens: a snapshot never replays past ones. */
   readonly notificationTriggers = new Subject<NotificationTrigger>();
+  /** Notes that changed, as it happens: a signal to read the note again, never replayed by a snapshot and never carrying a title or a body. */
+  readonly noteChanges = new Subject<NoteChangeEvent>();
   private readonly outputBySession = new Map<string, Subject<string>>();
   private socket?: WebSocket;
   private reconnectDelayMs = INITIAL_RECONNECT_DELAY_MS;
@@ -288,6 +290,9 @@ export class FleetEventsService {
       case 'daemon.issues': return this.daemonIssues.set(event.issues);
       case 'permission.silent_blocks': return this.reportSilentBlocks(event.blocks);
       case 'notification.trigger': return this.notificationTriggers.next(notificationTriggerOf(event));
+      case 'note.created':
+      case 'note.updated':
+      case 'note.deleted': return this.noteChanges.next(event);
       default: return;
     }
   }

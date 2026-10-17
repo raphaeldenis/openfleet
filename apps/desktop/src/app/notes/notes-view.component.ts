@@ -1,7 +1,8 @@
-import { ChangeDetectionStrategy, Component, Injector, afterNextRender, computed, effect, inject, signal, untracked, viewChild } from '@angular/core';
-import { toSignal } from '@angular/core/rxjs-interop';
+import { ChangeDetectionStrategy, Component, DestroyRef, Injector, afterNextRender, computed, effect, inject, signal, untracked, viewChild } from '@angular/core';
+import { takeUntilDestroyed, toSignal } from '@angular/core/rxjs-interop';
 import { ActivatedRoute } from '@angular/router';
 import { ApiError, FleetApiService, type PageRequest } from '../core/fleet-api.service';
+import { FleetEventsService } from '../core/fleet-events.service';
 import { ErrorLineComponent } from '../design/error-line.component';
 import { DirectoryOpener } from './directory-opener';
 import { ageLabel } from './note-age';
@@ -11,7 +12,7 @@ import { NO_FAILURE, failureOf, type Failure } from './note-failure';
 import { NoteHistoryComponent } from './note-history.component';
 import { NoteListComponent } from './note-list.component';
 import { NoteStatePanelComponent } from './note-state-panel.component';
-import type { NoteSummary, NoteVersionSummary, NoteView, Page, Project } from '@openfleet/shared';
+import type { NoteChangeEvent, NoteSummary, NoteVersionSummary, NoteView, Page, Project } from '@openfleet/shared';
 
 type LoadStatus = 'loading' | 'ready' | 'error';
 
@@ -46,6 +47,15 @@ const NEW_NOTE_TITLE = 'Untitled note';
 const CONCURRENT_EDITOR = 'Another editor';
 const PAGE_LIMIT = 200;
 const RESTORE_FAILURE_TITLE = 'Couldn’t restore the version';
+const QUIET_PERIOD_BEFORE_REFRESH_MS = 300;
+const LONGEST_WAIT_BEFORE_REFRESH_MS = 2000;
+
+/** What the events received since the last refresh say about the open note. */
+interface OpenNoteSignal {
+  noteId: string;
+  newestRevSeen: number;
+  wasDeleted: boolean;
+}
 
 const isStaleRevision = (error: unknown) => error instanceof ApiError && error.code === 'stale_revision';
 
@@ -120,6 +130,11 @@ async function fetchAllPages<T>(fetchPage: (request: PageRequest) => Promise<Pag
         />
       } @else if (note(); as openNote) {
         <of-note-editor [note]="openNote" [historyOpen]="historyOpen()" (historyToggle)="toggleHistory()">
+          @if (isUpdateNoticeShown()) {
+            <div class="note-updated" role="status" data-testid="note-updated-notice">
+              <span class="note-updated-title"><span class="note-updated-icon" aria-hidden="true">↻</span> This note was updated</span>
+            </div>
+          }
           @for (conflict of conflicts(); track conflict.id) {
             <of-note-conflict-banner [ours]="conflict.ours" [theirs]="conflict.theirs" [restoreRev]="conflict.restoreRev" (resolve)="resolveConflict($event)" />
           }
@@ -152,6 +167,9 @@ async function fetchAllPages<T>(fetchPage: (request: PageRequest) => Promise<Pag
     .action-failure { flex: none; display: flex; align-items: center; gap: .75rem; padding: .5rem 1.25rem; border-bottom: 1px solid var(--line); font-size: .75rem }
     .action-failure-title { font-weight: 600 }
     .action-failure-reason { flex: 1; color: var(--mut) }
+    .note-updated { flex: none; display: flex; align-items: center; gap: .75rem; padding: .5rem 1.25rem; background: var(--sunk); border-bottom: 1px solid var(--line); font-size: .75rem }
+    .note-updated-title { color: var(--fg); font-weight: 600 }
+    .note-updated-icon { color: var(--state-generating) }
     .no-project { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .5rem; color: var(--mut) }
     .no-project-headline { color: var(--fg); font-weight: 500 }
   `,
@@ -216,13 +234,25 @@ export class NotesViewComponent {
     return hasProject && isNoteListReady && !this.isCreating();
   });
 
+  private readonly fleetEvents = inject(FleetEventsService);
+  private readonly isUpdateNoticeVisible = signal(false);
+  protected readonly isUpdateNoticeShown = this.isUpdateNoticeVisible.asReadonly();
+
   private latestNotesRequest = 0;
   private latestVersionsRequest = 0;
   private noteSession = 0;
   private latestCreation = 0;
   private offeredConflictCount = 0;
+  private latestQuietRefresh = 0;
+  private quietPeriodTimer: ReturnType<typeof setTimeout> | undefined;
+  private longestWaitTimer: ReturnType<typeof setTimeout> | undefined;
+  private openNoteSignal: OpenNoteSignal | null = null;
+  private mustRefreshOpenNote = false;
 
   constructor() {
+    inject(DestroyRef).onDestroy(() => this.cancelPendingRefresh());
+    this.fleetEvents.noteChanges.pipe(takeUntilDestroyed()).subscribe((change) => this.receiveNoteChange(change));
+    this.refreshWhenConnectionComesBack();
     void this.loadProjects();
     effect(() => {
       const requestedProjectId = this.requestedProjectId();
@@ -490,6 +520,93 @@ export class NotesViewComponent {
     this.noteStatus.set('error');
   }
 
+  private refreshWhenConnectionComesBack(): void {
+    let lastSeenReconnectCount = this.fleetEvents.reconnectCount();
+    effect(() => {
+      const reconnectCount = this.fleetEvents.reconnectCount();
+      const hasReconnected = reconnectCount !== lastSeenReconnectCount;
+      lastSeenReconnectCount = reconnectCount;
+      if (hasReconnected) untracked(() => this.scheduleRefresh({ openNoteToo: true }));
+    });
+  }
+
+  private receiveNoteChange(change: NoteChangeEvent): void {
+    const isOfShownProject = change.projectId === this.projectId();
+    if (!isOfShownProject) return;
+    if (change.noteId === this.selectedId()) this.rememberOpenNoteSignal(change);
+    this.scheduleRefresh({ openNoteToo: false });
+  }
+
+  private rememberOpenNoteSignal(change: NoteChangeEvent): void {
+    const previous = this.openNoteSignal?.noteId === change.noteId ? this.openNoteSignal : null;
+    const newestRevSeen = change.type === 'note.deleted' ? (previous?.newestRevSeen ?? 0) : Math.max(previous?.newestRevSeen ?? 0, change.rev);
+    this.openNoteSignal = { noteId: change.noteId, newestRevSeen, wasDeleted: change.type === 'note.deleted' || (previous?.wasDeleted ?? false) };
+  }
+
+  /** Waits for a quiet moment, but never longer than a fixed delay, so a burst of events costs one reload. */
+  private scheduleRefresh({ openNoteToo }: { openNoteToo: boolean }): void {
+    this.mustRefreshOpenNote ||= openNoteToo;
+    clearTimeout(this.quietPeriodTimer);
+    this.quietPeriodTimer = setTimeout(() => this.refreshQuietly(), QUIET_PERIOD_BEFORE_REFRESH_MS);
+    this.longestWaitTimer ??= setTimeout(() => this.refreshQuietly(), LONGEST_WAIT_BEFORE_REFRESH_MS);
+  }
+
+  private cancelPendingRefresh(): void {
+    clearTimeout(this.quietPeriodTimer);
+    clearTimeout(this.longestWaitTimer);
+    this.longestWaitTimer = undefined;
+  }
+
+  /** Reloads the list and, when the events call for it, the open note, without a loading state: what the reader sees stays until the fresh copy arrives. */
+  private async refreshQuietly(): Promise<void> {
+    this.cancelPendingRefresh();
+    const projectId = this.projectId();
+    const openNoteSignal = this.openNoteSignal;
+    const mustRefreshOpenNote = this.mustRefreshOpenNote;
+    this.openNoteSignal = null;
+    this.mustRefreshOpenNote = false;
+    if (projectId === null || this.notesStatus() !== 'ready') return;
+    const refresh = ++this.latestQuietRefresh;
+    await Promise.all([
+      this.refreshListQuietly(projectId),
+      this.refreshOpenNoteQuietly({ projectId, openNoteSignal, mustRefreshOpenNote, refresh }),
+    ]);
+  }
+
+  private async refreshListQuietly(projectId: string): Promise<void> {
+    const listRequest = this.latestNotesRequest;
+    try {
+      const allNotes = await fetchAllPages((page) => this.api.listNotes(projectId, page));
+      const isStillTheListShown = listRequest === this.latestNotesRequest && projectId === this.projectId();
+      if (isStillTheListShown) this.notes.set(allNotes);
+    } catch {
+      // the list on screen stays; the next event or reconnection tries again
+    }
+  }
+
+  private async refreshOpenNoteQuietly({ projectId, openNoteSignal, mustRefreshOpenNote, refresh }: { projectId: string; openNoteSignal: OpenNoteSignal | null; mustRefreshOpenNote: boolean; refresh: number }): Promise<void> {
+    const openNote = this.note();
+    if (openNote === null) return;
+    const isSignalForOpenNote = openNoteSignal?.noteId === openNote.id;
+    const isNewerRevisionAnnounced = isSignalForOpenNote && openNoteSignal.newestRevSeen > openNote.rev;
+    const isDeletionAnnounced = isSignalForOpenNote && openNoteSignal.wasDeleted;
+    if (!mustRefreshOpenNote && !isNewerRevisionAnnounced && !isDeletionAnnounced) return;
+    const session = this.noteSession;
+    const isStale = () => !this.isCurrentSession(session) || refresh !== this.latestQuietRefresh;
+    try {
+      const freshNote = await this.api.getNote(projectId, openNote.id);
+      if (isStale()) return;
+      const isNewerThanShown = freshNote.rev > (this.note()?.rev ?? freshNote.rev);
+      if (!isNewerThanShown) return;
+      this.note.set(freshNote);
+      this.isUpdateNoticeVisible.set(true);
+      await this.reloadVersionsWhenOpen();
+    } catch (error) {
+      const isNoteGone = error instanceof ApiError && error.status === 404;
+      if (isNoteGone && !isStale()) this.showNoteError(error);
+    }
+  }
+
   private switchToRequestedProject(requestedProjectId: string | null): void {
     const isKnownProject = this.projects().some((project) => project.id === requestedProjectId);
     const isAlreadyCurrent = requestedProjectId === this.projectId();
@@ -524,6 +641,8 @@ export class NotesViewComponent {
     this.versionsError.set(NO_FAILURE);
     this.actionFailure.set(null);
     this.isRestoring.set(false);
+    this.isUpdateNoticeVisible.set(false);
+    this.openNoteSignal = null;
     return ++this.noteSession;
   }
 }
