@@ -4,8 +4,8 @@ import { gitOutput, ticketOfBranch } from './worktreeGit.js';
 export type FindingsGateEnforcement = 'observe' | 'enforce';
 
 /**
- * The gate ships observing: a refusal is journaled and the command passes. It stays so until MT-7b delivers the tool
- * through which QE, QA and the reviewer write their lines; without it nobody can open the gate by writing findings.
+ * The gate ships observing: a refusal is journaled and the command passes. It stays so until a `gh pr create --head`
+ * run from another directory is judged on the head branch instead of the current directory.
  */
 export const FINDINGS_GATE_ENFORCEMENT: FindingsGateEnforcement = 'observe';
 
