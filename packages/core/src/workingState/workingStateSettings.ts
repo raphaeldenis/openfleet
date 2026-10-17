@@ -4,6 +4,8 @@ import { z } from 'zod';
 import { readableConfigReason } from '../configReason.js';
 import { log } from '../logger.js';
 import { KNOWN_MODELS } from '../models.js';
+import type { FindingsGateEnforcement } from '../review/findingsGate.js';
+import { DEFAULT_TICKET_PATTERN } from '../review/worktreeGit.js';
 
 export const DEFAULT_WORKING_STATE_MAX_BYTES = 6144;
 const MIN_WORKING_STATE_MAX_BYTES = 1024;
@@ -50,11 +52,23 @@ export interface ContextNoticeSettings extends ContextNoticeThresholds {
 /** `handoverPatterns` is unset when the operator keeps the built-in patterns. */
 export interface WorkingStateSettings { maxBytes: number; enforce: boolean; maxAgeMinutes: number; handoverPatterns?: RegExp[] }
 export interface ManagerSettings { heartbeatDefaultSeconds: number }
-export interface DaemonSettings { workingState: WorkingStateSettings; managers: ManagerSettings; contextNotice: ContextNoticeSettings }
+/** `enforcement` is unset when the operator keeps the shipped FINDINGS_GATE_ENFORCEMENT. */
+export interface FindingsGateSettings { ticketPattern: string; enforcement?: FindingsGateEnforcement }
+export interface DaemonSettings { workingState: WorkingStateSettings; managers: ManagerSettings; contextNotice: ContextNoticeSettings; findingsGate: FindingsGateSettings }
 
 const DEFAULT_WORKING_STATE_SETTINGS: WorkingStateSettings = { maxBytes: DEFAULT_WORKING_STATE_MAX_BYTES, enforce: true, maxAgeMinutes: DEFAULT_WORKING_STATE_MAX_AGE_MINUTES };
 const DEFAULT_MANAGER_SETTINGS: ManagerSettings = { heartbeatDefaultSeconds: DEFAULT_HEARTBEAT_SECONDS };
 const DEFAULT_CONTEXT_NOTICE_SETTINGS: ContextNoticeSettings = { firstAt: DEFAULT_CONTEXT_NOTICE_FIRST_AT, every: DEFAULT_CONTEXT_NOTICE_EVERY, roles: { manager: true }, models: {} };
+const DEFAULT_FINDINGS_GATE_SETTINGS: FindingsGateSettings = { ticketPattern: DEFAULT_TICKET_PATTERN };
+const MAX_TICKET_PATTERN_LENGTH = 200;
+
+const isCompilableRegularExpression = (source: string) => {
+  try {
+    return new RegExp(source) instanceof RegExp;
+  } catch {
+    return false;
+  }
+};
 
 const ContextNoticeTokensSchema = z.number().int().min(MIN_CONTEXT_NOTICE_TOKENS).max(MAX_CONTEXT_NOTICE_TOKENS);
 const ContextNoticeThresholdsSchema = z.object({ firstAt: ContextNoticeTokensSchema.optional(), every: ContextNoticeTokensSchema.optional() }).strict();
@@ -72,6 +86,10 @@ const ConfigFileSchema = z.object({
   contextNotice: ContextNoticeThresholdsSchema.extend({
     roles: z.object({ manager: z.boolean().optional(), child: z.boolean().optional(), plain: z.boolean().optional() }).strict().optional(),
     models: z.record(z.string().min(1), ContextNoticeThresholdsSchema).optional(),
+  }).strict().optional(),
+  findingsGate: z.object({
+    ticketPattern: z.string().min(1).max(MAX_TICKET_PATTERN_LENGTH).refine(isCompilableRegularExpression, { message: 'findingsGate.ticketPattern is not a valid regular expression' }).optional(),
+    enforcement: z.enum(['observe', 'enforce']).optional(),
   }).strict().optional(),
 });
 
@@ -105,7 +123,7 @@ function compileHandoverPattern(source: string, position: number, handoverPatter
 
 const definedOnly = <T extends object>(values: T): Partial<T> => Object.fromEntries(Object.entries(values).filter(([, value]) => value !== undefined)) as Partial<T>;
 
-const SECTION_KEYS = ['workingState', 'managers', 'contextNotice'];
+const SECTION_KEYS = ['workingState', 'managers', 'contextNotice', 'findingsGate'];
 const spelledLoosely = (key: string) => key.toLowerCase().replace(/s$/, '');
 const misspelledSectionKey = (key: string) => SECTION_KEYS.find((section) => key !== section && spelledLoosely(key) === spelledLoosely(section));
 
@@ -116,7 +134,7 @@ function warnAboutUnknownModelAliases(models: ContextNoticeSettings['models']): 
 
 // A malformed value fails the boot loudly, like the model table: a typo must not run every session on a setting nobody chose.
 export function loadDaemonSettings(configPath: string, { handoverPatternBudgetMs = SELF_TEST_BUDGET_MS }: { handoverPatternBudgetMs?: number } = {}): DaemonSettings {
-  const defaults: DaemonSettings = { workingState: DEFAULT_WORKING_STATE_SETTINGS, managers: DEFAULT_MANAGER_SETTINGS, contextNotice: DEFAULT_CONTEXT_NOTICE_SETTINGS };
+  const defaults: DaemonSettings = { workingState: DEFAULT_WORKING_STATE_SETTINGS, managers: DEFAULT_MANAGER_SETTINGS, contextNotice: DEFAULT_CONTEXT_NOTICE_SETTINGS, findingsGate: DEFAULT_FINDINGS_GATE_SETTINGS };
   if (!existsSync(configPath)) return defaults;
   try {
     const rawConfig = JSON.parse(readFileSync(configPath, 'utf8'));
@@ -130,8 +148,9 @@ export function loadDaemonSettings(configPath: string, { handoverPatternBudgetMs
       workingState: { ...DEFAULT_WORKING_STATE_SETTINGS, ...definedOnly(scalarSettings), ...(compiledPatterns && { handoverPatterns: compiledPatterns }) },
       managers: { ...DEFAULT_MANAGER_SETTINGS, ...definedOnly(parsed.managers ?? {}) },
       contextNotice: { ...DEFAULT_CONTEXT_NOTICE_SETTINGS, ...definedOnly(parsed.contextNotice ?? {}) },
+      findingsGate: { ...DEFAULT_FINDINGS_GATE_SETTINGS, ...definedOnly(parsed.findingsGate ?? {}) },
     };
   } catch (error) {
-    throw new Error(`invalid workingState/managers/contextNotice config at ${configPath}: ${readableConfigReason(error)}`);
+    throw new Error(`invalid workingState/managers/contextNotice/findingsGate config at ${configPath}: ${readableConfigReason(error)}`);
   }
 }

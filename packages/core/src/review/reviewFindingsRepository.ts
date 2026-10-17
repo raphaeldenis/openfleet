@@ -16,6 +16,12 @@ export interface ReviewFinding {
   createdAt: string;
 }
 
+/** The steps a human may waive; the adversarial review is never one of them. */
+export type SkippableStep = Exclude<FindingStep, 'adversarial'>;
+export const SKIPPABLE_STEPS: readonly SkippableStep[] = ['qe', 'qa', 'ponytail'];
+
+export interface StepSkip { ticket: string; step: SkippableStep; reason: string; createdAt: string }
+
 interface Row {
   ticket: string; step: FindingStep; severity: FindingSeverity; claim: string; reasons_json: string; sha: string;
   author_session_id: string; manager_session_id: string | null; created_at: string;
@@ -39,6 +45,21 @@ export class ReviewFindingsRepository {
   record(finding: ReviewFinding): void {
     this.db.prepare(`INSERT INTO review_findings (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(finding.ticket, finding.step, finding.severity, finding.claim, JSON.stringify(finding.reasons), finding.sha, finding.authorSessionId, finding.managerSessionId, finding.createdAt);
+  }
+
+  /** Every line of a ticket, oldest first. */
+  linesOf({ ticket }: { ticket: string }): ReviewFinding[] {
+    const rows = this.db.prepare(`SELECT ${COLUMNS} FROM review_findings WHERE ticket = ? ORDER BY id`).all(ticket) as unknown as Row[];
+    return rows.map(toFinding);
+  }
+
+  recordSkip(skip: StepSkip): void {
+    this.db.prepare('INSERT INTO review_step_skips (ticket, step, reason, created_at) VALUES (?, ?, ?, ?)').run(skip.ticket, skip.step, skip.reason, skip.createdAt);
+  }
+
+  skipsOf({ ticket }: { ticket: string }): StepSkip[] {
+    const rows = this.db.prepare('SELECT ticket, step, reason, created_at AS createdAt FROM review_step_skips WHERE ticket = ? ORDER BY id').all(ticket);
+    return rows.map((row) => ({ ...row }) as unknown as StepSkip);
   }
 
   adversarialLinesOf({ ticket }: { ticket: string }): ReviewFinding[] {

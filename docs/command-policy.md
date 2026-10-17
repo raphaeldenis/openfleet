@@ -53,4 +53,21 @@ A manager reads the refusals of its own lineage (its children and every descenda
 
 **Safety net.** A child that stays in `waiting_permission` longer than `permissions.unattendedSilentBlockSeconds` (config.json, default 30, 1 to 3600) raises `permission.silent_blocks` and the daemon queues a message to its manager. It never types into the terminal. The net applies to a child whose dialogs are refused (`askBecomesDeny` true); a session a person watches, a manager, and a child on the approval flow keep `permissions.silentBlockMinutes`.
 
+## Command policy: the findings gate on `gh pr create`
+
+The delivered rule `findings-gate-pr-create` (profile `default`, so every role) matches a `gh pr create` command. The rule only recognises the call; the answer comes from the findings gate, which the Claude hook consults for that rule alone. It reads the branch and the head commit of the session directory (the `cwd` of the hook), takes the ticket from the branch name and opens when the ticket has:
+
+| Step | Needs | Bound to the head commit |
+|---|---|---|
+| `qe`, `qa` | a `go` or `clean` line, or a logged skip | yes |
+| `ponytail` | a line at any commit of the branch, or a logged skip | no |
+| `adversarial` | a `go` line (the latest line at the head decides); never skippable | yes |
+
+A new commit therefore closes the gate again. A branch with no ticket is refused with "name the branch with the ticket".
+
+- **Mode.** The gate ships `observe` (`FINDINGS_GATE_ENFORCEMENT`): a closed gate journals the refusal with `outcome: observed` and the command passes. `findingsGate.enforcement: "enforce"` in `config.json` (read at boot) makes it refuse with `findings_required`, the ticket, the missing steps and the endpoint to log a skip, and journal `denied`. It stays `observe` until MT-7b delivers the tool through which QE, QA and the reviewer write their lines. Policy mode `off`, or disabling the rule, switches the gate off.
+- **Ticket pattern.** `findingsGate.ticketPattern` in `config.json` (default `[A-Z][A-Z0-9]+-\d+`, a JavaScript regular expression matched against the branch name; an invalid one refuses the boot). `report_ship_verdict` reads the same pattern.
+- **Skips.** `POST /api/review-findings/skips { ticket, step, reason }` (`step` is `qe`, `qa` or `ponytail`; the reason is required) and `GET /api/review-findings/skips?ticket=` live under `/api` behind the admin token. No MCP tool creates a skip, and a session token gets `401`. Each skip is a row of `review_step_skips` with its reason and date, and an info log line.
+- **What the analyzer sees.** `gh pr create` is found as a simple command in a sequence (`&&`, `;`), in a pipeline, in `$(...)` and in a subshell. It is also found behind `bash -c "..."`, `env VAR=1`, `xargs` and `eval` (pinned by `findingsGateRule.test.ts`). It is **not** found inside a script file (`bash ./open-pr.sh`), nor when the pull request is created outside OpenFleet (`git push` then the GitHub web page, `gh api`). The gate protects the visible command path of an OpenFleet session, nothing more. It judges the current directory of the command (`cwd` of the hook): a `gh pr create --head <branch>` or `--repo` run from a directory other than the ticket worktree (the Lead creating its pull requests from its Argus directory) reads as an unreadable branch. That has no effect while the gate observes; reading `--head` and `-R` has to be handled before switching to `enforce`.
+
 **Settings screen.** Settings → Command policy shows the mode (three states), the ask switch with what turning it off means, the rule list with a switch per delivered rule, a "Try a command" box (calls `evaluate`), the recent refusals and the number of times the policy engine failed open.

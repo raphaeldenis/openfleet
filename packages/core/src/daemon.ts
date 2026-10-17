@@ -20,6 +20,7 @@ import { evaluateCommandPolicy } from './policy/policyEvaluator.js';
 import { RefusalRepeatGuard } from './policy/refusalRepeatGuard.js';
 import { SqliteDenialJournal } from './policy/sqliteDenialJournal.js';
 import { ManagerDenials } from './policy/managerDenials.js';
+import { FINDINGS_GATE_ENFORCEMENT, FindingsGate, type FindingsGateEnforcement } from './review/findingsGate.js';
 import { ReviewFindingsRepository } from './review/reviewFindingsRepository.js';
 import { descendantSessionIdsOf } from './managers/lineage.js';
 import type { BaseNotReadEnforcement } from './managers/baseReadGuard.js';
@@ -102,6 +103,8 @@ export interface DaemonOptions {
   claudeConfigPath?: string;
   /** Overrides BASE_NOT_READ_ENFORCEMENT: 'refuse' turns the base_not_read warning of a spawn into a refusal. */
   baseNotReadEnforcement?: BaseNotReadEnforcement;
+  /** Overrides FINDINGS_GATE_ENFORCEMENT and the findingsGate.enforcement setting: 'enforce' turns the observed refusal of gh pr create into a findings_required refusal. */
+  findingsGateEnforcement?: FindingsGateEnforcement;
   /** Replaces the base this build ships, so a test can boot a daemon that ships a newer version. */
   managerBase?: ManagerBase;
   /** The injection point of the command policy: the settings the daemon enforces and the evaluator that applies them. */
@@ -143,7 +146,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   approvals.expireAllPending('daemon restarted');
   const modelConfigPath = join(config.home, 'config.json');
   const modelTable = readingConfigFile(() => loadModelTable(modelConfigPath));
-  const { workingState: workingStateSettings, managers: managerSettings, contextNotice: contextNoticeSettings } = readingConfigFile(() => loadDaemonSettings(modelConfigPath));
+  const { workingState: workingStateSettings, managers: managerSettings, contextNotice: contextNoticeSettings, findingsGate: findingsGateSettings } = readingConfigFile(() => loadDaemonSettings(modelConfigPath));
   const powerSettings = readingConfigFile(() => loadPowerSettings(modelConfigPath));
   const reportPowerUnavailable = () => degraded.mark('power_assertion_unavailable', 'Idle sleep protection is unavailable or its helper cannot be stopped.');
   const powerApi = options.power?.api ?? new CaffeinatePowerApi({ onPowerUnavailable: reportPowerUnavailable });
@@ -212,11 +215,16 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   });
   bus.subscribe((event) => silentBlocks.handle(event));
   const handoffSettings = loadHandoffSettings(modelConfigPath);
+  const reviewFindings = new ReviewFindingsRepository(db);
+  const findingsGate = {
+    gate: new FindingsGate({ findings: reviewFindings, ticketPattern: findingsGateSettings.ticketPattern }),
+    enforcement: options.findingsGateEnforcement ?? findingsGateSettings.enforcement ?? FINDINGS_GATE_ENFORCEMENT,
+  };
   const denialJournal = new SqliteDenialJournal({ db, clock: () => new Date().toISOString() });
   const commandPolicy = new ClaudePolicyHooks({
     settings: () => commandPolicyService.settings(),
     evaluate: evaluatePolicy,
-    sessions, isManager, bus, degraded,
+    sessions, isManager, bus, degraded, findingsGate,
     journal: denialJournal,
     repeatGuard: new RefusalRepeatGuard({ clock: Date.now, settings: () => commandPolicyService.settings().unattended.escalateAfterRepeats }),
   });
@@ -227,7 +235,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   // fast process hitting a port nothing is serving yet.
   const diagnostics = () => buildDiagnosticsDocument({ db, degraded, listSessions: () => sessions.list(), port: config.port, e2eEnabled: config.e2eEnabled });
   const worktrees = new WorktreeService({ projects, sessions, worktreesRoot: config.worktreesRoot });
-  const server = await startServer({ ...config, e2eRoutes: config.e2eEnabled, degraded, commandPolicy, commandPolicyAdmin: { policy: commandPolicyService, denials: denialJournal }, diagnostics, managerBase, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, stores, storeRepo, projects, projectService, worktrees, governanceQueue, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, mcp: createMcpHandler({ reviewFindings: new ReviewFindingsRepository(db), managerBase: shippedManagerBase, baseNotReadEnforcement: options.baseNotReadEnforcement, managerDenials, knowledgeSearch, governanceQueue, sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });
+  const server = await startServer({ ...config, e2eRoutes: config.e2eEnabled, degraded, commandPolicy, commandPolicyAdmin: { policy: commandPolicyService, denials: denialJournal }, diagnostics, managerBase, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, stores, storeRepo, projects, projectService, worktrees, governanceQueue, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, reviewFindings, mcp: createMcpHandler({ reviewFindings, ticketPattern: findingsGateSettings.ticketPattern, managerBase: shippedManagerBase, baseNotReadEnforcement: options.baseNotReadEnforcement, managerDenials, knowledgeSearch, governanceQueue, sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });
   log('info', `openfleet core listening on ${server.url} (version: ${DAEMON_VERSION}, home: ${config.home})`);
 
   const unwatchDatabase = watchDatabaseHealth(degraded);

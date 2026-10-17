@@ -5,7 +5,8 @@ type ToolHookEvent<Name extends 'PreToolUse' | 'PermissionRequest'> = Extract<Cl
 
 /** What the hook handler asks of a harness's policy hooks; an undefined answer means "no opinion". */
 export interface CommandPolicyHooks {
-  onPreToolUse(session: Session, event: ToolHookEvent<'PreToolUse'>): PreToolUseHookOutput | undefined;
+  /** Answers at once, or with a promise when the call waits on the findings gate (gh pr create). */
+  onPreToolUse(session: Session, event: ToolHookEvent<'PreToolUse'>): PreToolUseHookOutput | undefined | Promise<PreToolUseHookOutput | undefined>;
   onPermissionRequest(session: Session, event: ToolHookEvent<'PermissionRequest'>): PermissionRequestHookOutput | undefined;
 }
 
