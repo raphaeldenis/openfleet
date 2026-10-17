@@ -23,11 +23,17 @@ const WHITESPACE_AND_CONTROL_CHARACTERS = /[\s\u0000-\u001F\u007F-\u009F]+/g;
 const NO_STATE_LINE = 'no state recorded: rebuild it before anything else';
 const NO_LIVE_CHILD_LINE = 'No live child.';
 
-export interface SessionStartContextDeps { db: DatabaseSync; workingStates: WorkingStateService; settings: WorkingStateSettings; clock: () => string }
+export interface SessionStartContextDeps {
+  db: DatabaseSync; workingStates: WorkingStateService; settings: WorkingStateSettings; clock: () => string;
+  /** The manager base this daemon ships. Absent, a manager's context names no base. */
+  managerBase?: { version: number; sha: string };
+}
+
+const BASE_SHA_PREFIX_LENGTH = 8;
 
 export interface SessionStartRequest { sessionId: string; source: string | undefined; previousTranscriptPath: string | undefined }
 
-interface FixedBlocks { firstLine: string; missionBlock: string | undefined; stateBlock: string; transcriptBlock: string | undefined }
+interface FixedBlocks { firstLine: string; baseLine: string | undefined; missionBlock: string | undefined; stateBlock: string; transcriptBlock: string | undefined }
 
 interface LiveChildRow { name: string; state: string; model: string | null; directory: string; branch: string | null }
 
@@ -67,6 +73,7 @@ export class SessionStartContext {
     if (fullPreviewMission?.oversizeWarning) log('warn', `session ${sessionId}: ${fullPreviewMission.oversizeWarning}`);
     const fixedBlocks = {
       firstLine: [this.firstLine(source, state), fullPreviewMission?.oversizeWarning].filter((part) => part !== undefined).join(' '),
+      baseLine: isManager ? this.baseLine() : undefined,
       missionBlock: fullPreviewMission?.text,
       stateBlock: this.stateBlock(state),
       transcriptBlock: hasPreviousTranscript ? `# Previous transcript (path only)\n${toSingleLine(previousTranscriptPath)}` : undefined,
@@ -74,6 +81,12 @@ export class SessionStartContext {
     const missionBlockOf = isManager ? (maxPreviewBytes: number) => missionOf(maxPreviewBytes).text : undefined;
     const additionalContext = this.assembleWithinBudget({ fixedBlocks, childLines: this.liveChildLines(sessionId), missionBlockOf });
     return { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext } };
+  }
+
+  private baseLine(): string | undefined {
+    const { managerBase } = this.deps;
+    if (!managerBase) return undefined;
+    return `Base v${managerBase.version} sha ${managerBase.sha.slice(0, BASE_SHA_PREFIX_LENGTH)}: read it whole with get_manager_base before any spawn.`;
   }
 
   private missionTextOf(sessionId: string): string | undefined {
@@ -138,6 +151,7 @@ export class SessionStartContext {
     const listing = childLines.length === 0 ? [NO_LIVE_CHILD_LINE] : [...childLines.slice(0, shownCount), ...(hiddenCount > 0 ? [`and ${hiddenCount} more`] : [])];
     const blocks = [
       fixedBlocks.firstLine,
+      fixedBlocks.baseLine,
       fixedBlocks.missionBlock,
       PRECEDENCE_LINE,
       DATA_STATEMENT_LINE,

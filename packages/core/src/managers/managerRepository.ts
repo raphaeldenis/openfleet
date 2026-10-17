@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
-import { ManagerSpecSchema } from '@openfleet/shared';
+import { ManagerSpecSchema, type ManagerBaseRead } from '@openfleet/shared';
 import { log } from '../logger.js';
 
 export interface ManagerRecord {
@@ -14,18 +14,27 @@ export interface ManagerRecord {
   logStoreId?: string;
   /** Absent on a new record: the manager starts enabled. False while paused. */
   pulseEnabled?: boolean;
+  /** The whole manager base the manager last read; absent while it never read it. */
+  baseRead?: ManagerBaseRead;
 }
 
 interface Row {
   session_id: string; pulse_seconds: number; children_cap: number; mission_text: string; last_pulse_at: string | null; created_at: string;
   mission_note_id: string | null; pin_mission_note: number; log_store_id: string | null; pulse_enabled: number;
+  base_version_read: number | null; base_sha_read: string | null; base_read_at: string | null;
 }
+
+const baseReadOf = (r: Row): ManagerBaseRead | undefined => {
+  const hasRead = r.base_version_read !== null && r.base_sha_read !== null && r.base_read_at !== null;
+  return hasRead ? { version: r.base_version_read!, sha: r.base_sha_read!, readAt: r.base_read_at! } : undefined;
+};
 
 const toManager = (r: Row): ManagerRecord => ({
   sessionId: r.session_id, pulseSeconds: r.pulse_seconds, childrenCap: r.children_cap,
   missionText: r.mission_text, lastPulseAt: r.last_pulse_at ?? undefined, createdAt: r.created_at,
   missionNoteId: r.mission_note_id ?? undefined, pinMissionNote: r.pin_mission_note === 1, logStoreId: r.log_store_id ?? undefined,
   pulseEnabled: r.pulse_enabled === 1,
+  baseRead: baseReadOf(r),
 });
 
 /** Whether the manager receives pulses: only an explicit false pauses it. */
@@ -82,6 +91,10 @@ export class ManagerRepository {
   }
   setPulseEnabled(sessionId: string, isEnabled: boolean): void {
     this.db.prepare('UPDATE managers SET pulse_enabled = ? WHERE session_id = ?').run(Number(isEnabled), sessionId);
+  }
+  /** Remembers the manager base the manager just read whole. */
+  recordBaseRead(sessionId: string, { version, sha, readAt }: ManagerBaseRead): void {
+    this.db.prepare('UPDATE managers SET base_version_read = ?, base_sha_read = ?, base_read_at = ? WHERE session_id = ?').run(version, sha, readAt, sessionId);
   }
   /** Binds the table the manager logs its actions in; null unbinds it. */
   setLogStore(sessionId: string, storeId: string | null): void {

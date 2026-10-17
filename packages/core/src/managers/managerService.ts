@@ -5,7 +5,7 @@ import type { SessionService } from '../sessions/sessionService.js';
 import { StoreNotFoundError } from '../stores/dataStoreRepository.js';
 import { isPulseEnabled, type ManagerRecord, type ManagerRepository } from './managerRepository.js';
 import { DEFAULT_HEARTBEAT_SECONDS } from '../workingState/workingStateSettings.js';
-import { toManagerView, type DeniedCommandCounts } from './managerView.js';
+import { toManagerView, type DeniedCommandCounts, type ManagerBaseIdentity } from './managerView.js';
 
 export interface PulseSchedulerLike {
   onManagerCreated(record: ManagerRecord): void;
@@ -32,6 +32,9 @@ export interface ManagerServiceDeps {
   scapeImportStatusOf?: (sessionId: string) => ScapeImportStatus;
   /** Absent, no manager has any refused command. */
   deniedCommandCountsOf?: (managerId: string) => DeniedCommandCounts;
+  /** The manager base this daemon ships. Absent, the views report no base and a read cannot be recorded. */
+  currentBase?: ManagerBaseIdentity;
+  clock?: () => string;
 }
 
 export class ManagerService {
@@ -98,6 +101,15 @@ export class ManagerService {
     return this.announceUpdated(this.deps.managers.get(sessionId)!);
   }
 
+  /** Remembers that the manager read the whole current base, and announces it; undefined when the session has no manager row or no base is shipped. */
+  recordBaseRead(sessionId: string): ManagerView | undefined {
+    const { currentBase, clock = () => new Date().toISOString() } = this.deps;
+    const hasManagerRow = this.deps.managers.get(sessionId) !== undefined;
+    if (!currentBase || !hasManagerRow) return undefined;
+    this.deps.managers.recordBaseRead(sessionId, { version: currentBase.version, sha: currentBase.sha, readAt: clock() });
+    return this.announceUpdated(this.deps.managers.get(sessionId)!);
+  }
+
   /** The manager as the profile page shows it: its view, and where it stands against a Scape re-import. */
   profile(sessionId: string): ManagerProfile | undefined {
     const record = this.deps.managers.get(sessionId);
@@ -134,6 +146,6 @@ export class ManagerService {
 
   private view(record: ManagerRecord): ManagerView {
     const childrenCount = this.deps.sessions.list().filter((s) => s.parentId === record.sessionId && s.state !== 'closed').length;
-    return toManagerView(record, childrenCount, this.deps.deniedCommandCountsOf?.(record.sessionId));
+    return toManagerView(record, childrenCount, this.deps.deniedCommandCountsOf?.(record.sessionId), this.deps.currentBase);
   }
 }

@@ -8,7 +8,9 @@ import type { ProjectRepository } from '../projects/projectRepository.js';
 import { resolveModel, type ModelTable } from '../models.js';
 import type { ApprovalService } from '../governance/approvalService.js';
 import type { ManagerService } from '../managers/managerService.js';
-import { toManagerView } from '../managers/managerView.js';
+import { baseReadVerdictOf } from '../managers/baseReadGuard.js';
+import { toManagerView, type ManagerBaseIdentity } from '../managers/managerView.js';
+import { log } from '../logger.js';
 import type { PulseScheduler } from '../managers/pulseScheduler.js';
 import { guardedFor, ok, refuse } from './toolResults.js';
 import { lineageSessionView, managerView, sessionView } from './toolViews.js';
@@ -54,10 +56,16 @@ export interface RegisterToolsDeps {
   pulseScheduler: PulseScheduler;
   modelTable: ModelTable;
   managerDenials?: Pick<ManagerDenials, 'countsOf'>;
+  /** The manager base this daemon ships. Absent, spawning is not checked against it and the manager view reports no base. */
+  managerBase?: ManagerBaseIdentity;
 }
 
+const BASE_NOT_READ_WARNING_MESSAGE = 'You have not read the current manager base (get_manager_base, whole). Read it now: a later release refuses spawns until you do.';
+
+const baseNotReadWarning = { code: 'base_not_read', message: BASE_NOT_READ_WARNING_MESSAGE } as const;
+
 export function registerTools(server: McpServer, deps: RegisterToolsDeps): void {
-  const { sessions, caller, approvals, managers, pulseScheduler, modelTable } = deps;
+  const { sessions, caller, approvals, managers, pulseScheduler, modelTable, managerBase } = deps;
   const guarded = guardedFor(caller);
   const sendMessage = (send: () => { status: 'delivered' | 'queued'; messageId: string; heldFor?: HeldFor }) =>
     guarded(() => {
@@ -253,6 +261,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     const lateDuplicateRefusal = refuseLiveDuplicate();
     if (lateDuplicateRefusal) return lateDuplicateRefusal;
 
+    const warnings: (typeof baseNotReadWarning)[] = [];
     if (caller.role === MANAGER_ROLE) {
       const record = managers.get(caller.id);
       // Synchronous check against a synchronous DB read, with no `await` between here and the insert
@@ -264,6 +273,13 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
       // a deleted record) is capped at 0 rather than treated as unlimited — defence in depth.
       const childrenCap = record ? record.childrenCap : 0;
       if (activeChildren >= childrenCap) return refuse('children_cap', `children cap reached (${activeChildren}/${childrenCap})`);
+
+      const baseReadVerdict = record && managerBase ? baseReadVerdictOf({ record, currentBase: managerBase }) : 'allow';
+      if (baseReadVerdict === 'refuse') return refuse('base_not_read', BASE_NOT_READ_WARNING_MESSAGE, 'Call get_manager_base without section, then spawn again.');
+      if (baseReadVerdict === 'warn') {
+        log('warn', `manager ${caller.id} spawns a session without having read the current manager base`, undefined, { code: 'base_not_read', sessionId: caller.id });
+        warnings.push(baseNotReadWarning);
+      }
     }
 
     const resolvedModel = input.model ? resolveModel(modelTable, input.model) : undefined;
@@ -281,7 +297,8 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     const child = input.manager
       ? await managers.createManagerSession({ ...spec, role: MANAGER_ROLE, manager: { pulseSeconds: input.manager.pulse_seconds, childrenCap: input.manager.children_cap, mission: input.manager.mission } })
       : await sessions.create(spec);
-    return ok(sessionView(child));
+    const hasWarnings = warnings.length > 0;
+    return ok(hasWarnings ? { ...sessionView(child), warnings } : sessionView(child));
   });
 
   server.registerTool('update_session', { description: "Change the model of yourself or one of your children (a rung name like 'opus' or an exact model id)", inputSchema: { session_id: z.string().optional(), model: ModelIdSchema } }, async ({ session_id, model }) => {
@@ -301,7 +318,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
       ...(child.runtimeAttention && { runtimeAttention: child.runtimeAttention }),
     }));
     const record = caller.role === MANAGER_ROLE ? managers.get(caller.id) : undefined;
-    const manager = record ? managerView(toManagerView(record, children.filter((c) => c.state !== 'closed').length, deps.managerDenials?.countsOf(record.sessionId))) : null;
+    const manager = record ? managerView(toManagerView(record, children.filter((c) => c.state !== 'closed').length, deps.managerDenials?.countsOf(record.sessionId), managerBase)) : null;
     return ok({ manager, children });
   });
 

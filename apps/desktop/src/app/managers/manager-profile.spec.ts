@@ -133,6 +133,50 @@ describe('the manager profile', () => {
     });
   });
 
+  describe('which manager base the manager has read', () => {
+    const READ_AT = '2026-10-15T12:00:00.000Z';
+    const baseLineOf = () => factOf('Manager base');
+
+    it('user reads that the current base is not read yet', async () => {
+      await openProfile({ api: fakeApi({ getManagerProfile: vi.fn().mockResolvedValue(profileOf({ baseVersion: 2 })) }) });
+      await screen.findByRole('region', { name: 'Profile' });
+
+      expect(baseLineOf()).toHaveTextContent('Base v2, not read');
+    });
+
+    it('user reads the version of the base and the day it was read', async () => {
+      const baseRead = { version: 2, sha: 'a'.repeat(64), readAt: READ_AT };
+      await openProfile({ api: fakeApi({ getManagerProfile: vi.fn().mockResolvedValue(profileOf({ baseVersion: 2, baseRead })) }) });
+      await screen.findByRole('region', { name: 'Profile' });
+
+      expect(baseLineOf()).toHaveTextContent(/^Manager baseBase v2, read on .*2026/);
+    });
+
+    it('user reads the new version as not read when the manager read an older one', async () => {
+      const baseRead = { version: 2, sha: 'a'.repeat(64), readAt: READ_AT };
+      await openProfile({ api: fakeApi({ getManagerProfile: vi.fn().mockResolvedValue(profileOf({ baseVersion: 3, baseRead })) }) });
+      await screen.findByRole('region', { name: 'Profile' });
+
+      expect(baseLineOf()).toHaveTextContent('Base v3, not read');
+      expect(baseLineOf()).not.toHaveTextContent('read on');
+    });
+
+    it('user finds no control on the base line: it only informs', async () => {
+      await openProfile({ api: fakeApi({ getManagerProfile: vi.fn().mockResolvedValue(profileOf({ baseVersion: 2 })) }) });
+      await screen.findByRole('region', { name: 'Profile' });
+
+      expect(within(baseLineOf()).queryByRole('button')).toBeNull();
+      expect(within(baseLineOf()).queryByRole('link')).toBeNull();
+    });
+
+    it('user sees no base line from a daemon that does not report the base', async () => {
+      await openProfile();
+      await screen.findByRole('region', { name: 'Profile' });
+
+      expect(screen.queryByText('Manager base')).toBeNull();
+    });
+  });
+
   describe('when more children are active than the cap allows', () => {
     it('user reads how many are active against the cap', async () => {
       const api = fakeApi({ getManagerProfile: vi.fn().mockResolvedValue(profileOf({ childrenCap: 2, childrenCount: 3 })) });

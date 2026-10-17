@@ -9,7 +9,12 @@ export interface DeniedCommandCounts {
 
 export const NO_DENIED_COMMANDS: DeniedCommandCounts = { deniedCommandCount: 0, deniedCommandTotal: 0 };
 
-export function toManagerView(record: ManagerRecord, childrenCount: number, deniedCommands: DeniedCommandCounts = NO_DENIED_COMMANDS): ManagerView {
+export interface ManagerBaseIdentity {
+  version: number;
+  sha: string;
+}
+
+export function toManagerView(record: ManagerRecord, childrenCount: number, deniedCommands: DeniedCommandCounts = NO_DENIED_COMMANDS, currentBase?: ManagerBaseIdentity): ManagerView {
   return {
     sessionId: record.sessionId,
     pulseSeconds: record.pulseSeconds,
@@ -22,6 +27,8 @@ export function toManagerView(record: ManagerRecord, childrenCount: number, deni
     missionNoteId: record.missionNoteId,
     pinMissionNote: record.pinMissionNote === true,
     logStoreId: record.logStoreId,
+    ...(currentBase && { baseVersion: currentBase.version }),
+    ...(record.baseRead && { baseRead: record.baseRead }),
     ...deniedCommands,
   };
 }
