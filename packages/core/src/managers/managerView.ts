@@ -24,6 +24,7 @@ export function toManagerView(record: ManagerRecord, childrenCount: number, deni
     lastPulseAt: record.lastPulseAt,
     nextPulseAt: nextPulseAt(record),
     childrenCount,
+    childrenHeadroom: Math.max(0, record.childrenCap - childrenCount),
     missionNoteId: record.missionNoteId,
     pinMissionNote: record.pinMissionNote === true,
     logStoreId: record.logStoreId,

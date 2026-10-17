@@ -23,6 +23,7 @@ describe('toManagerView', () => {
       lastPulseAt: '2026-01-01T00:05:00.000Z',
       nextPulseAt: '2026-01-01T00:06:00.000Z',
       childrenCount: 3,
+      childrenHeadroom: 1,
       pinMissionNote: false,
       deniedCommandCount: 0,
       deniedCommandTotal: 0,
@@ -48,6 +49,14 @@ describe('toManagerView', () => {
 
     expect(newManagerView.pulseEnabled).toBe(true);
     expect(pausedManagerView.pulseEnabled).toBe(false);
+  });
+
+  it('reports a childrenHeadroom of 0, never a negative one, when more children live than the cap allows', () => {
+    const record = { sessionId: 'session-5', pulseSeconds: 30, childrenCap: 2, missionText: 'x', createdAt: '2026-01-01T00:00:00.000Z' };
+
+    const view = toManagerView(record, 3);
+
+    expect(view.childrenHeadroom).toBe(0);
   });
 
   it('reports childrenCount 0 for a manager with no live children, without inventing a floor or omitting the field', () => {

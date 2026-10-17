@@ -60,6 +60,8 @@ export interface ManagerView {
   lastPulseAt?: string;
   nextPulseAt: string;
   childrenCount: number;
+  /** The places left under the cap: the cap minus the live children, never negative. */
+  childrenHeadroom?: number;
   /** The note holding the manager's mission, when one is linked. */
   missionNoteId?: string;
   pinMissionNote?: boolean;

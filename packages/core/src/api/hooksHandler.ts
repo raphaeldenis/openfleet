@@ -6,6 +6,7 @@ import type { SessionStartContext, SessionStartRequest } from '../workingState/s
 import type { ApprovalService } from '../governance/approvalService.js';
 import type { CommandPolicyHooks } from '../policy/ports.js';
 import { log } from '../logger.js';
+import type { ManagerService } from '../managers/managerService.js';
 import type { DegradedRegistry } from '../process/degradedRegistry.js';
 import type { SessionService } from '../sessions/sessionService.js';
 import { handoverReminder, type HandoverLedger } from '../workingState/handoverLedger.js';
@@ -37,12 +38,21 @@ function trackTodosFailingOpen(todos: TodoTracker | undefined, sessionId: string
   }
 }
 
-export function hooksHandler(deps: { sessions: SessionService; approvals: ApprovalService; stopRefusal?: StopRefusal; sessionStartContext?: SessionStartContext; handoverLedger?: HandoverLedger; contextNotice?: ContextNotice; todos?: TodoTracker; degraded?: DegradedRegistry; commandPolicy?: CommandPolicyHooks }): Handler {
+/** A conversation that starts, restarts or resumes has the base only if it reads it again; a manager that never read it is unaffected. */
+const SESSION_START_SOURCES_THAT_RESET_THE_BASE_READ = ['startup', 'compact', 'clear', 'resume'];
+
+export function hooksHandler(deps: { managers?: Pick<ManagerService, 'forgetBaseRead'>; sessions: SessionService; approvals: ApprovalService; stopRefusal?: StopRefusal; sessionStartContext?: SessionStartContext; handoverLedger?: HandoverLedger; contextNotice?: ContextNotice; todos?: TodoTracker; degraded?: DegradedRegistry; commandPolicy?: CommandPolicyHooks }): Handler {
   const decideStopRefusalFailingOpen = (sessionId: string, stopHookActive: boolean): StopHookOutput | undefined =>
     failingOpen(deps.degraded, 'stop refusal check failed, letting the turn end', () => deps.stopRefusal?.decide({ sessionId, stopHookActive }));
 
   const buildSessionStartContextFailingOpen = (request: SessionStartRequest): ContextHookOutput | undefined =>
     failingOpen(deps.degraded, 'session start context failed, injecting nothing', () => deps.sessionStartContext?.build(request));
+
+  const forgetBaseReadFailingOpen = (sessionId: string, source: string | undefined): void =>
+    failingOpen(deps.degraded, 'manager base read reset failed, changing nothing', () => {
+      const startsFreshContext = source !== undefined && SESSION_START_SOURCES_THAT_RESET_THE_BASE_READ.includes(source);
+      if (startsFreshContext) deps.managers?.forgetBaseRead(sessionId);
+    });
 
   const recordHandoversFailingOpen = (request: { sessionId: string; prompt: string | undefined }): ContextHookOutput | undefined =>
     failingOpen(deps.degraded, 'handover recording failed, recording nothing', () => {
@@ -74,6 +84,7 @@ export function hooksHandler(deps: { sessions: SessionService; approvals: Approv
     const preToolUseAnswer = event.hook_event_name === 'PreToolUse' ? deps.commandPolicy?.onPreToolUse(session, event) : undefined;
     const stopRefusal = event.hook_event_name === 'Stop' ? decideStopRefusalFailingOpen(session.id, event.stop_hook_active === true) : undefined;
     const previousTranscriptPath = deps.sessions.transcriptPathOf(session.id);
+    if (event.hook_event_name === 'SessionStart') forgetBaseReadFailingOpen(session.id, event.source);
     const sessionStartContext = event.hook_event_name === 'SessionStart' ? buildSessionStartContextFailingOpen({ sessionId: session.id, source: event.source, previousTranscriptPath }) : undefined;
     const isDaemonSeededPrompt = event.hook_event_name === 'UserPromptSubmit' && event.prompt !== undefined && deps.sessions.isSeededPrompt(session.id, event.prompt);
     const handoverReminderOutput = event.hook_event_name === 'UserPromptSubmit' && !isDaemonSeededPrompt ? recordHandoversFailingOpen({ sessionId: session.id, prompt: event.prompt }) : undefined;
