@@ -18,6 +18,7 @@ import type { HeldFor, SessionService } from '../sessions/sessionService.js';
 import { sessionLastMessage } from './sessionLastMessage.js';
 import { maskedSecrets } from '../redact.js';
 import type { ManagerDenials } from '../policy/managerDenials.js';
+import type { ReviewFindingsRepository } from '../review/reviewFindingsRepository.js';
 
 const MAX_AMBIGUITY_CANDIDATES = 4;
 const MAX_CANDIDATE_NAME_CHARS = 24;
@@ -56,6 +57,8 @@ export interface RegisterToolsDeps {
   pulseScheduler: PulseScheduler;
   modelTable: ModelTable;
   managerDenials?: Pick<ManagerDenials, 'countsOf'>;
+  /** The review findings the ship gate reads; absent, get_argus_status lists no blocked ticket. */
+  reviewFindings?: Pick<ReviewFindingsRepository, 'latestAdversarialLinePerTicketOf'>;
   /** The manager base this daemon ships. Absent, spawning is not checked against it and the manager view reports no base. */
   managerBase?: ManagerBaseIdentity;
   /** Whether a spawn without the current base is refused or only warned; absent, the shipped BASE_NOT_READ_ENFORCEMENT applies. */
@@ -321,7 +324,10 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     }));
     const record = caller.role === MANAGER_ROLE ? managers.get(caller.id) : undefined;
     const manager = record ? managerView(toManagerView(record, children.filter((c) => c.state !== 'closed').length, deps.managerDenials?.countsOf(record.sessionId), managerBase)) : null;
-    return ok({ manager, children });
+    const blockedTickets = (deps.reviewFindings?.latestAdversarialLinePerTicketOf(caller.id) ?? [])
+      .filter((line) => line.severity === 'no-go')
+      .map(({ ticket, sha, reasons }) => ({ ticket, sha, reasons }));
+    return ok({ manager, children, blockedTickets });
   });
 
   server.registerTool('pulse_now', { description: 'Trigger an immediate pulse for a manager (yourself, or a manager you are the parent of)', inputSchema: { session_id: z.string().optional() } }, async ({ session_id }) => {
