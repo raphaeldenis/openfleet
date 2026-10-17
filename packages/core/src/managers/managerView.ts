@@ -1,4 +1,4 @@
-import type { ManagerView } from '@openfleet/shared';
+import { isLegacyMission, type ManagerView } from '@openfleet/shared';
 import { isPulseEnabled, type ManagerRecord } from './managerRepository.js';
 import { nextPulseAt } from './pulseTiming.js';
 
@@ -21,6 +21,7 @@ export function toManagerView(record: ManagerRecord, childrenCount: number, deni
     pulseEnabled: isPulseEnabled(record),
     childrenCap: record.childrenCap,
     missionText: record.missionText,
+    legacyMission: isLegacyMission(record.missionText),
     lastPulseAt: record.lastPulseAt,
     nextPulseAt: nextPulseAt(record),
     childrenCount,

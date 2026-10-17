@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MANAGER_ROLE, ManagerSpecSchema } from './managers.js';
+import { isLegacyMission, isMissionWritable, MANAGER_ROLE, ManagerRecordBoundsSchema, ManagerSpecSchema, MAX_MISSION_DELTA_BYTES } from './managers.js';
 
 describe('ManagerSpecSchema', () => {
   it('requires a positive pulseSeconds, a positive childrenCap and a non-empty mission', () => {
@@ -65,5 +65,53 @@ describe('ManagerSpecSchema trust-boundary bounds', () => {
   it('rejects a mission over 64 KiB', () => {
     const oversizedMission = 'x'.repeat(65 * 1024);
     expect(() => ManagerSpecSchema.parse({ ...validSpec, mission: oversizedMission })).toThrow();
+  });
+});
+
+describe('ManagerRecordBoundsSchema', () => {
+  const validRecord = { pulseSeconds: 60, childrenCap: 1, mission: 'x' };
+
+  it('keeps a legacy mission of 30 KB within the bounds of a stored row', () => {
+    expect(ManagerRecordBoundsSchema.safeParse({ ...validRecord, mission: 'x'.repeat(30 * 1024) }).success).toBe(true);
+  });
+
+  it('rejects a stored mission over 64 KiB', () => {
+    expect(ManagerRecordBoundsSchema.safeParse({ ...validRecord, mission: 'x'.repeat(65 * 1024) }).success).toBe(false);
+  });
+});
+
+describe('isMissionWritable', () => {
+  const missionOfBytes = (bytes: number) => 'x'.repeat(bytes);
+
+  it('accepts a mission of exactly 8192 bytes for a new manager', () => {
+    expect(isMissionWritable({ mission: missionOfBytes(MAX_MISSION_DELTA_BYTES) })).toBe(true);
+  });
+
+  it('refuses a mission of 8193 bytes for a new manager', () => {
+    expect(isMissionWritable({ mission: missionOfBytes(MAX_MISSION_DELTA_BYTES + 1) })).toBe(false);
+  });
+
+  it('counts bytes, not characters: 4097 two-byte letters are 8194 bytes', () => {
+    expect(isMissionWritable({ mission: 'é'.repeat(4097) })).toBe(false);
+    expect(isMissionWritable({ mission: 'é'.repeat(4096) })).toBe(true);
+  });
+
+  it('counts an emoji as four bytes', () => {
+    expect(isMissionWritable({ mission: '😀'.repeat(2048) })).toBe(true);
+    expect(isMissionWritable({ mission: '😀'.repeat(2049) })).toBe(false);
+  });
+
+  it('lets a stored mission above the limit shrink or stay the same size, never grow', () => {
+    const storedMission = missionOfBytes(30_000);
+    expect(isMissionWritable({ mission: missionOfBytes(20_000), storedMission })).toBe(true);
+    expect(isMissionWritable({ mission: missionOfBytes(30_000), storedMission })).toBe(true);
+    expect(isMissionWritable({ mission: missionOfBytes(30_001), storedMission })).toBe(false);
+  });
+});
+
+describe('isLegacyMission', () => {
+  it('flags a mission above 8192 bytes and only that', () => {
+    expect(isLegacyMission('x'.repeat(MAX_MISSION_DELTA_BYTES))).toBe(false);
+    expect(isLegacyMission('x'.repeat(MAX_MISSION_DELTA_BYTES + 1))).toBe(true);
   });
 });

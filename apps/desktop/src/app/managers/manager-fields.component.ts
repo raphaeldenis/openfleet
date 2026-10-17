@@ -1,11 +1,11 @@
 import { ChangeDetectionStrategy, Component, computed, ElementRef, input, model, OnInit, signal, viewChild } from '@angular/core';
 import { ControlContainer, FormsModule, NgForm } from '@angular/forms';
-import { MAX_CHILDREN_CAP } from '@openfleet/shared';
+import { isLegacyMission, isMissionWritable, MAX_CHILDREN_CAP, MAX_MISSION_DELTA_BYTES } from '@openfleet/shared';
 import { ErrorLineComponent } from '../design/error-line.component';
 
 const PULSE_SECONDS_BOUNDS = { min: 1, max: 86_400 };
 const CHILDREN_CAP_BOUNDS = { min: 1, max: MAX_CHILDREN_CAP };
-const MISSION_MAX_BYTES = 64 * 1024;
+const BYTES_PER_KB = 1024;
 
 interface PulsePreset {
   label: string;
@@ -38,6 +38,10 @@ function pulseSecondsRangeError(value: number): string {
 
 function utf8ByteLength(text: string): number {
   return new TextEncoder().encode(text).length;
+}
+
+function kilobytesLabelOf(bytes: number): string {
+  return (bytes / BYTES_PER_KB).toFixed(1);
 }
 
 @Component({
@@ -95,8 +99,12 @@ function utf8ByteLength(text: string): number {
       <textarea
         #missionInput id="manager-mission" class="of-input of-input--textarea" data-testid="manager-mission" name="mission" [readonly]="isLocked()" [ngModel]="mission()"
         (ngModelChange)="onMissionChange($event)" placeholder="Mission" [attr.aria-invalid]="missionError() ? 'true' : null"
-        [attr.aria-describedby]="missionError() ? 'manager-mission-error' : null"
+        [attr.aria-describedby]="missionDescriptionIds() || null"
       ></textarea>
+      <span id="manager-mission-size" class="hint mission-size" data-testid="manager-mission-size">{{ missionSizeLabel() }}</span>
+      @if (showsLegacyBanner()) {
+        <span id="manager-mission-legacy" role="status" data-testid="manager-mission-legacy" class="maximum"><span class="maximum-icon" aria-hidden="true">!</span> Legacy mission: reduce it to the delta</span>
+      }
       @if (missionError(); as error) {
         <of-error-line id="manager-mission-error" role="alert" data-testid="manager-mission-error">{{ error }}</of-error-line>
       }
@@ -118,6 +126,7 @@ function utf8ByteLength(text: string): number {
     .step { flex: none; width: 2rem; height: 2rem; border: 1px solid var(--line); border-radius: .375rem; background: var(--panel); color: var(--fg); font: inherit; cursor: pointer }
     .step:disabled { color: var(--mut); cursor: not-allowed }
     .hint { font-size: .6875rem; color: var(--mut); white-space: nowrap }
+    .mission-size { align-self: flex-end }
     .maximum { font-size: .75rem; color: var(--fg) }
     .maximum-icon { font-weight: 700; color: var(--state-waiting-permission) }
   `,
@@ -132,6 +141,8 @@ export class ManagerFieldsComponent implements OnInit {
   readonly childrenCap = model(2);
   readonly mission = model('');
   readonly isMissionTouched = model(false);
+  /** The mission as the daemon stores it: a stored mission above the delta limit may shrink, never grow. Absent for a new manager. */
+  readonly storedMission = input<string | undefined>(undefined);
   private readonly pulseSecondsInput = viewChild<ElementRef<HTMLInputElement>>('pulseSecondsInput');
   private readonly childrenCapInput = viewChild<ElementRef<HTMLInputElement>>('childrenCapInput');
   private readonly missionInput = viewChild<ElementRef<HTMLTextAreaElement>>('missionInput');
@@ -150,6 +161,10 @@ export class ManagerFieldsComponent implements OnInit {
   });
   readonly hasInvalidNumbers = computed(() => this.pulseSecondsError() !== '' || this.childrenCapError() !== '');
   protected readonly missionError = signal('');
+  protected readonly isStoredMissionLegacy = computed(() => this.storedMission() !== undefined && isLegacyMission(this.storedMission()!));
+  protected readonly showsLegacyBanner = computed(() => this.isStoredMissionLegacy() && isLegacyMission(this.mission()));
+  protected readonly missionSizeLabel = computed(() => `${kilobytesLabelOf(utf8ByteLength(this.mission()))} / ${MAX_MISSION_DELTA_BYTES / BYTES_PER_KB} KB`);
+  protected readonly missionDescriptionIds = computed(() => [this.showsLegacyBanner() ? 'manager-mission-legacy' : '', this.missionError() ? 'manager-mission-error' : ''].filter(Boolean).join(' '));
 
   ngOnInit(): void {
     if (this.isMissionTouched()) this.validateMission();
@@ -198,8 +213,12 @@ export class ManagerFieldsComponent implements OnInit {
 
   private validateMission(): void {
     const isMissionMissing = this.mission().trim() === '';
-    const isMissionWithinByteLimit = utf8ByteLength(this.mission()) <= MISSION_MAX_BYTES;
-    if (isMissionMissing) this.missionError.set('A manager needs a mission');
-    else this.missionError.set(isMissionWithinByteLimit ? '' : `Mission must be at most ${MISSION_MAX_BYTES} bytes`);
+    if (isMissionMissing) return this.missionError.set('A manager needs a mission');
+    const isMissionWritableAsIs = isMissionWritable({ mission: this.mission(), storedMission: this.storedMission() });
+    if (isMissionWritableAsIs) return this.missionError.set('');
+    const growsALegacyMission = this.isStoredMissionLegacy();
+    this.missionError.set(growsALegacyMission
+      ? `A legacy mission can only shrink: keep it at ${kilobytesLabelOf(utf8ByteLength(this.storedMission()!))} KB or less`
+      : `Mission must be at most ${MAX_MISSION_DELTA_BYTES / BYTES_PER_KB} KB`);
   }
 }

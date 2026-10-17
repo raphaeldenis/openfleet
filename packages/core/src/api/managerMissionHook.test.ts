@@ -58,8 +58,12 @@ const sessionStarted = async (sessionId: string, source: string) => {
   });
   return ((await response.json()) as HookAnswer).hookSpecificOutput?.additionalContext ?? '';
 };
-const aManagerWithMission = async (mission: string) =>
-  (await managers.createManagerSession({ directory: scratchRoot, name: 'Boss', harness: 'fake', emoji: '🤖', manager: { childrenCap: 3, mission } })).id;
+// A mission above the delta limit is stored the way an import stores it: the write path refuses it.
+const aManagerWithMission = async (mission: string) => {
+  const { id } = await managers.createManagerSession({ directory: scratchRoot, name: 'Boss', harness: 'fake', emoji: '🤖', manager: { childrenCap: 3, mission: 'seed' } });
+  db.prepare('UPDATE managers SET mission_text = ? WHERE session_id = ?').run(mission, id);
+  return id;
+};
 const spawnChildWithLongDirectory = (parentId: string, index: number) =>
   sessions.create({ directory: `/tmp/${'d'.repeat(180)}`, name: `Child-${String(index).padStart(2, '0')}`, harness: 'fake', emoji: '🧒', parentId });
 

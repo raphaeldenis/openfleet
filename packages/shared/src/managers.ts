@@ -6,12 +6,33 @@ export const MANAGER_ROLE = 'manager';
 const ONE_DAY_SECONDS = 86400;
 export const MAX_CHILDREN_CAP = 64;
 export const MAX_MISSION_BYTES = 64 * 1024;
+/** The size a mission written today may have, in UTF-8 bytes: the project delta on top of the manager base. */
+export const MAX_MISSION_DELTA_BYTES = 8192;
 
-export const ManagerSpecSchema = z.object({
+const missionBytesOf = (mission: string): number => new TextEncoder().encode(mission).length;
+
+/** Whether a mission of this size is a legacy one: bigger than a delta, stored before the limit existed. */
+export const isLegacyMission = (mission: string): boolean => missionBytesOf(mission) > MAX_MISSION_DELTA_BYTES;
+
+/** Whether a mission may be written: it fits the delta, or it is no bigger than the mission it replaces (a legacy mission shrinks, never grows). */
+export const isMissionWritable = ({ mission, storedMission }: { mission: string; storedMission?: string }): boolean => {
+  const missionBytes = missionBytesOf(mission);
+  const fitsTheDelta = missionBytes <= MAX_MISSION_DELTA_BYTES;
+  const isNoBiggerThanStored = storedMission !== undefined && missionBytes <= missionBytesOf(storedMission);
+  return fitsTheDelta || isNoBiggerThanStored;
+};
+
+const managerFieldsWithMissionUpTo = (maxMissionBytes: number) => ({
   pulseSeconds: z.number().int().min(1).max(ONE_DAY_SECONDS).optional(),
   childrenCap: z.number().int().min(1).max(MAX_CHILDREN_CAP),
-  mission: z.string().min(1).refine((mission) => new TextEncoder().encode(mission).length <= MAX_MISSION_BYTES, { message: `mission must be at most ${MAX_MISSION_BYTES} bytes` }),
+  mission: z.string().min(1).refine((mission) => missionBytesOf(mission) <= maxMissionBytes, { message: `mission must be at most ${maxMissionBytes} bytes` }),
 });
+
+/** What a stored manager row must satisfy to be listed and pulsed: a legacy mission up to 64 KiB stays within the bounds. */
+export const ManagerRecordBoundsSchema = z.object(managerFieldsWithMissionUpTo(MAX_MISSION_BYTES));
+
+/** What a manager write carries: the 64 KiB is the transport envelope; the delta limit and the shrink rule are applied by the manager service against the stored mission. */
+export const ManagerSpecSchema = z.object(managerFieldsWithMissionUpTo(MAX_MISSION_BYTES));
 export type ManagerSpec = z.infer<typeof ManagerSpecSchema>;
 
 /** The fields of a manager that can be edited after it is created: at least one is given. The model belongs to its session; a null missionNoteId unlinks the mission note. */
@@ -57,6 +78,8 @@ export interface ManagerView {
   pulseEnabled: boolean;
   childrenCap: number;
   missionText: string;
+  /** True while the mission is above the delta limit: it may shrink, never grow. Absent from an older daemon. */
+  legacyMission?: boolean;
   lastPulseAt?: string;
   nextPulseAt: string;
   childrenCount: number;

@@ -295,6 +295,63 @@ describe('the manager profile', () => {
       expect(api.updateManager).not.toHaveBeenCalled();
     });
 
+    describe('a legacy mission of 30 KB', () => {
+      const LEGACY_BYTES = 30_000;
+      const legacyApi = () => fakeApi({ getManagerProfile: vi.fn().mockResolvedValue(profileOf({ missionText: 'l'.repeat(LEGACY_BYTES), legacyMission: true })) });
+      const replaceMission = async (text: string) => {
+        const missionField = screen.getByRole('textbox', { name: 'Mission' });
+        await userEvent.clear(missionField);
+        await userEvent.click(missionField);
+        await userEvent.paste(text);
+      };
+
+      it('user is told to reduce it to the delta, and sees its size', async () => {
+        await openEditor(legacyApi());
+
+        expect(screen.getByTestId('manager-mission-legacy')).toHaveTextContent('Legacy mission: reduce it to the delta');
+        expect(screen.getByTestId('manager-mission-size')).toHaveTextContent('29.3 / 8 KB');
+        expect(screen.queryByTestId('manager-mission-error')).toBeNull();
+      });
+
+      it('user can save a shorter legacy mission of 20 KB, while the banner stays', async () => {
+        const api = await openEditor(legacyApi());
+
+        await replaceMission('l'.repeat(20_000));
+        await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+        await waitFor(() => expect(api.updateManager).toHaveBeenCalledWith('m1', { mission: 'l'.repeat(20_000) }));
+        expect(screen.getByTestId('manager-mission-legacy')).toBeInTheDocument();
+      });
+
+      it('user cannot make it grow to 31 KB: a blocking error shows and no call is sent', async () => {
+        const api = await openEditor(legacyApi());
+
+        await replaceMission('l'.repeat(31_000));
+        await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+        expect(screen.getByTestId('manager-mission-error')).toHaveTextContent('can only shrink');
+        expect(api.updateManager).not.toHaveBeenCalled();
+      });
+
+      it('user sees the banner go away once the mission is back at 8192 bytes', async () => {
+        await openEditor(legacyApi());
+
+        await replaceMission('l'.repeat(8192));
+
+        expect(screen.queryByTestId('manager-mission-legacy')).toBeNull();
+        expect(screen.queryByTestId('manager-mission-error')).toBeNull();
+      });
+
+      it('user can save another field without touching the legacy mission', async () => {
+        const api = await openEditor(legacyApi());
+
+        await userEvent.click(screen.getByRole('button', { name: 'Increase children cap' }));
+        await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+        await waitFor(() => expect(api.updateManager).toHaveBeenCalledWith('m1', { childrenCap: 5 }));
+      });
+    });
+
     it('user sees the daemon refusal when the save fails, keeps the form, and saves again', async () => {
       const updateManager = vi.fn().mockRejectedValueOnce(apiFailure('invalid_body', 400)).mockResolvedValue(managerViewOf({ childrenCap: 5 }));
       const getManagerProfile = vi.fn().mockResolvedValueOnce(profileOf()).mockResolvedValue(profileOf({ childrenCap: 5 }));
