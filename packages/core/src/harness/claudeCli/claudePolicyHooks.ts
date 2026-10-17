@@ -7,7 +7,9 @@ import {
 import { log } from '../../logger.js';
 import type { DegradedRegistry } from '../../process/degradedRegistry.js';
 import type { CommandPolicySettings, PolicyEvaluate } from '../../policy/commandPolicySettings.js';
+import { FINDINGS_GATE_RULE_ID } from '../../policy/defaultCommandPolicy.js';
 import { profileNameOf } from '../../policy/policyEvaluator.js';
+import type { FindingsGate, FindingsGateEnforcement, GateAnswer } from '../../review/findingsGate.js';
 import type { CommandPolicyHooks, DenialDraft, DenialJournal } from '../../policy/ports.js';
 import { refusalTextOf } from '../../policy/refusalText.js';
 import type { RefusalRepeatGuard } from '../../policy/refusalRepeatGuard.js';
@@ -34,9 +36,18 @@ export interface ClaudePolicyHooksDeps {
   degraded?: Pick<DegradedRegistry, 'recordHookFailOpen'>;
   /** Runs the work that must not delay the hook answer; the daemon uses the next turn of the event loop. */
   afterAnswer?: (work: () => void) => void;
+  /** Absent, a call matched by the findings gate rule is judged by the policy alone. */
+  findingsGate?: { gate: Pick<FindingsGate, 'check'>; enforcement: FindingsGateEnforcement };
 }
 
 interface Refusal { ruleId: string; reason: string; alternative: string; source: DenialDraft['decisionSource'] }
+
+/** The rule matched the call, refusing or only observing: either way the findings gate has the last word. */
+const isFindingsGateVerdict = (verdict: PolicyVerdict): boolean => {
+  const isRefusedByTheRule = verdict.decision === 'deny' && verdict.ruleId === FINDINGS_GATE_RULE_ID;
+  const isObservedByTheRule = verdict.decision === 'allow' && verdict.observed?.ruleId === FINDINGS_GATE_RULE_ID;
+  return isRefusedByTheRule || isObservedByTheRule;
+};
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 
@@ -86,9 +97,11 @@ function toPolicyRequest(session: Session, event: ToolHookEvent, source: PolicyS
 export class ClaudePolicyHooks implements CommandPolicyHooks {
   constructor(private readonly deps: ClaudePolicyHooksDeps) {}
 
-  onPreToolUse(session: Session, event: Extract<ToolHookEvent, { hook_event_name: 'PreToolUse' }>): PreToolUseHookOutput | undefined {
+  onPreToolUse(session: Session, event: Extract<ToolHookEvent, { hook_event_name: 'PreToolUse' }>): PreToolUseHookOutput | undefined | Promise<PreToolUseHookOutput | undefined> {
     const verdict = this.evaluateFailingOpen(session, event, 'pre_tool_use');
     if (verdict === undefined) return undefined;
+    const waitsOnFindingsGate = this.deps.findingsGate !== undefined && isFindingsGateVerdict(verdict);
+    if (waitsOnFindingsGate) return this.answerFindingsGate(session, event);
     if (verdict.decision === 'allow') return this.answerAllowed(session, event, verdict);
     const refusal = this.refusalOf(session, verdict);
     if (refusal === undefined) return undefined;
@@ -103,11 +116,34 @@ export class ClaudePolicyHooks implements CommandPolicyHooks {
     const verdict = this.evaluateFailingOpen(session, event, 'permission_request');
     const isExplicitlyAllowed = verdict?.decision === 'allow' && verdict.allowedBy !== undefined;
     if (isExplicitlyAllowed) return { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } } };
-    const policyRefusal = verdict === undefined ? undefined : this.refusalOf(session, verdict);
+    const isFindingsGateCall = verdict !== undefined && isFindingsGateVerdict(verdict);
+    const policyRefusal = verdict === undefined || isFindingsGateCall ? undefined : this.refusalOf(session, verdict);
     const refusal = policyRefusal ?? this.askRefusalOf(session);
     if (refusal === undefined) return undefined;
     this.recordAfterAnswering(session, event, { ...refusal, outcome: 'denied' });
     return { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'deny', message: this.textOf(session, refusal) } } };
+  }
+
+  /** Opens the call when the ticket has its findings; otherwise refuses it, or only journals the refusal while the gate observes. */
+  private async answerFindingsGate(session: Session, event: Extract<ToolHookEvent, { hook_event_name: 'PreToolUse' }>): Promise<PreToolUseHookOutput | undefined> {
+    const { gate, enforcement } = this.deps.findingsGate!;
+    const answer = await this.checkFailingOpen(session, () => gate.check({ directory: event.cwd ?? session.directory }));
+    if (answer === undefined || answer.isOpen) return undefined;
+    const refusal: Refusal = { ruleId: FINDINGS_GATE_RULE_ID, reason: answer.reason, alternative: answer.alternative, source: 'policy' };
+    const isObserving = enforcement === 'observe';
+    this.recordAfterAnswering(session, event, { ...refusal, outcome: isObserving ? 'observed' : 'denied' });
+    if (isObserving) return undefined;
+    return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: this.textOf(session, refusal) } };
+  }
+
+  private async checkFailingOpen(session: Session, check: () => Promise<GateAnswer>): Promise<GateAnswer | undefined> {
+    try {
+      return await check();
+    } catch (error) {
+      log('warn', `findings gate check failed, letting the call through: ${error instanceof Error ? error.message : String(error)}`, session.id);
+      this.deps.degraded?.recordHookFailOpen();
+      return undefined;
+    }
   }
 
   private answerAllowed(session: Session, event: ToolHookEvent, verdict: Extract<PolicyVerdict, { decision: 'allow' }>): PreToolUseHookOutput | undefined {

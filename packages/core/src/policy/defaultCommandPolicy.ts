@@ -97,6 +97,18 @@ const allowReadOnlyPipelines: PolicyRule = {
   reason: 'A pipeline that only reads files inside the working directories needs no confirmation.',
 };
 
+export const FINDINGS_GATE_RULE_ID = 'findings-gate-pr-create';
+
+/** Matches the call only: whether the ticket has its findings is the FindingsGate's answer, given by the hook that sees this rule. */
+const findingsGatePrCreate: PolicyRule = {
+  id: FINDINGS_GATE_RULE_ID,
+  tools: ['Bash'],
+  decision: 'deny',
+  when: { commandPrefix: [['gh', 'pr', 'create']] },
+  reason: 'findings_required: the ticket of this branch lacks the findings that open a pull request.',
+  alternative: 'Have QE, QA and the delivery review report on the head commit, or ask your manager for a logged step skip.',
+};
+
 const noGitPublish: PolicyRule = {
   id: 'no-git-publish',
   tools: ['Bash'],
@@ -130,7 +142,7 @@ export const DEFAULT_COMMAND_POLICY: CommandPolicyDocument = {
   mode: 'enforce',
   profiles: {
     default: {
-      rules: [noForcedRecursiveRm.id, noForcedGitClean.id, noWriteIntoGitDir.id, noFindDeleteOnBroadPaths.id, noHumanQuestionsUnattended.id, allowReadOnlyPipelines.id],
+      rules: [noForcedRecursiveRm.id, noForcedGitClean.id, noWriteIntoGitDir.id, noFindDeleteOnBroadPaths.id, noHumanQuestionsUnattended.id, findingsGatePrCreate.id, allowReadOnlyPipelines.id],
     },
     dev: { extends: 'default', rules: [delegateHeavyCommands.id] },
     qe: { extends: 'default', rules: [], mode: 'observe' },
@@ -140,6 +152,6 @@ export const DEFAULT_COMMAND_POLICY: CommandPolicyDocument = {
   roleToProfile: { DEV: 'dev', QE: 'qe', QA: 'qa', ADV: 'review', REVIEW: 'review' },
   rules: [
     noForcedRecursiveRm, noForcedGitClean, noWriteIntoGitDir, noFindDeleteOnBroadPaths, noHumanQuestionsUnattended,
-    delegateHeavyCommands, allowReadOnlyPipelines, noGitPublish, noGitMutations, noFileWrites,
+    findingsGatePrCreate, delegateHeavyCommands, allowReadOnlyPipelines, noGitPublish, noGitMutations, noFileWrites,
   ],
 };

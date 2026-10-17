@@ -59,7 +59,7 @@ function answeringThrowsInGrammar(server: McpServer, caller: Session): McpServer
   });
 }
 
-export function createMcpHandler(deps: { reviewFindings?: ReviewFindingsRepository; managerBase?: ManagerBase; baseNotReadEnforcement?: BaseNotReadEnforcement; managerDenials?: ManagerDenials;knowledgeSearch: KnowledgeToolSearchPort; governanceQueue: GovernanceQueueService; sessions: SessionService; approvals: ApprovalService; managers: ManagerService; pulseScheduler: PulseScheduler; modelTable: ModelTable; stores: DataStoreService; storeRepo: DataStoreRepository; notes: NoteService; noteRepo: NoteRepository; docs: DocsFolderService; projects: ProjectRepository; workingStates: WorkingStateService; worktreesRoot: string }) {
+export function createMcpHandler(deps: { reviewFindings?: ReviewFindingsRepository; ticketPattern?: string;managerBase?: ManagerBase; baseNotReadEnforcement?: BaseNotReadEnforcement; managerDenials?: ManagerDenials;knowledgeSearch: KnowledgeToolSearchPort; governanceQueue: GovernanceQueueService; sessions: SessionService; approvals: ApprovalService; managers: ManagerService; pulseScheduler: PulseScheduler; modelTable: ModelTable; stores: DataStoreService; storeRepo: DataStoreRepository; notes: NoteService; noteRepo: NoteRepository; docs: DocsFolderService; projects: ProjectRepository; workingStates: WorkingStateService; worktreesRoot: string }) {
   return async (req: IncomingMessage, res: ServerResponse, body: unknown): Promise<void> => {
     const token = (req.headers.authorization ?? '').replace(/^Bearer /, '');
     const caller = deps.sessions.byMcpToken(token);
@@ -71,7 +71,7 @@ export function createMcpHandler(deps: { reviewFindings?: ReviewFindingsReposito
     const isReviewer = caller.role === REVIEWER_ROLE;
     const toolServer = isReviewer ? registeringOnly(answeringServer, REVIEWER_TOOL_NAMES) : answeringServer;
     registerTools(toolServer, { ...deps, caller });
-    if (deps.reviewFindings) registerShipVerdictTools(toolServer, { reviewFindings: deps.reviewFindings, managers: deps.managers, sessions: deps.sessions, caller });
+    if (deps.reviewFindings) registerShipVerdictTools(toolServer, { reviewFindings: deps.reviewFindings, managers: deps.managers, sessions: deps.sessions, caller, ...(deps.ticketPattern === undefined ? {} : { ticketPattern: deps.ticketPattern }) });
     registerManagerLinkTools(toolServer, { managers: deps.managers, caller });
     if (deps.managerBase) registerManagerBaseTools(toolServer, { managerBase: deps.managerBase, managers: deps.managers, caller });
     if (deps.managerDenials) registerDeniedCommandTools(toolServer, { managerDenials: deps.managerDenials, sessions: deps.sessions, caller });

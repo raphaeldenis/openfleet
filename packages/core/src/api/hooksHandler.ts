@@ -81,7 +81,7 @@ export function hooksHandler(deps: { managers?: Pick<ManagerService, 'forgetBase
       const refusal = deps.commandPolicy?.onPermissionRequest(session, event);
       if (refusal) return json(res, 200, refusal);
     }
-    const preToolUseAnswer = event.hook_event_name === 'PreToolUse' ? deps.commandPolicy?.onPreToolUse(session, event) : undefined;
+    const preToolUseAnswer = event.hook_event_name === 'PreToolUse' ? await deps.commandPolicy?.onPreToolUse(session, event) : undefined;
     const stopRefusal = event.hook_event_name === 'Stop' ? decideStopRefusalFailingOpen(session.id, event.stop_hook_active === true) : undefined;
     const previousTranscriptPath = deps.sessions.transcriptPathOf(session.id);
     if (event.hook_event_name === 'SessionStart') forgetBaseReadFailingOpen(session.id, event.source);
