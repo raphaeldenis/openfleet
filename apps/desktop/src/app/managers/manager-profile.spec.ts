@@ -141,7 +141,7 @@ describe('the manager profile', () => {
       await openProfile({ api: fakeApi({ getManagerProfile: vi.fn().mockResolvedValue(profileOf({ baseVersion: 2 })) }) });
       await screen.findByRole('region', { name: 'Profile' });
 
-      expect(baseLineOf()).toHaveTextContent('Base v2, non lue');
+      expect(baseLineOf()).toHaveTextContent('Base v2, not read');
     });
 
     it('user reads the version of the base and the day it was read', async () => {
@@ -149,7 +149,7 @@ describe('the manager profile', () => {
       await openProfile({ api: fakeApi({ getManagerProfile: vi.fn().mockResolvedValue(profileOf({ baseVersion: 2, baseRead })) }) });
       await screen.findByRole('region', { name: 'Profile' });
 
-      expect(baseLineOf()).toHaveTextContent(/^Manager baseBase v2, lue le .*2026/);
+      expect(baseLineOf()).toHaveTextContent(/^Manager baseBase v2, read on .*2026/);
     });
 
     it('user reads the new version as not read when the manager read an older one', async () => {
@@ -157,8 +157,8 @@ describe('the manager profile', () => {
       await openProfile({ api: fakeApi({ getManagerProfile: vi.fn().mockResolvedValue(profileOf({ baseVersion: 3, baseRead })) }) });
       await screen.findByRole('region', { name: 'Profile' });
 
-      expect(baseLineOf()).toHaveTextContent('Base v3, non lue');
-      expect(baseLineOf()).not.toHaveTextContent('lue le');
+      expect(baseLineOf()).toHaveTextContent('Base v3, not read');
+      expect(baseLineOf()).not.toHaveTextContent('read on');
     });
 
     it('user finds no control on the base line: it only informs', async () => {

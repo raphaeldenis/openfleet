@@ -17,7 +17,7 @@ test('a manager that never read the base shows the current version as not read, 
 
   await openProfile(page, manager.id);
 
-  await expect(baseFact(page)).toContainText(`Base v${version}, non lue`);
+  await expect(baseFact(page)).toContainText(`Base v${version}, not read`);
   await expect(baseFact(page).getByRole('button')).toHaveCount(0);
   await expect(baseFact(page).getByRole('link')).toHaveCount(0);
 });
@@ -29,7 +29,7 @@ for (const theme of ['light', 'dark'] as const) {
     const { version, sha } = await (await request.get(`${api}/api/manager-base`, { headers: adminHeaders })).json();
 
     await openProfile(page, manager.id);
-    await expect(baseFact(page)).toContainText('non lue');
+    await expect(baseFact(page)).toContainText('not read');
     await page.screenshot({ path: `mt2-base-line-unread-${theme}.png`, fullPage: true });
 
     await interceptDaemonGet(page, `/api/managers/${manager.id}`, async (route) => {
@@ -37,7 +37,7 @@ for (const theme of ['light', 'dark'] as const) {
       await fulfillWithJson(route, 200, { ...real, manager: { ...real.manager, baseRead: { version, sha, readAt: READ_AT } } });
     });
     await openProfile(page, manager.id);
-    await expect(baseFact(page)).toContainText(`Base v${version}, lue le`);
+    await expect(baseFact(page)).toContainText(`Base v${version}, read on`);
     await page.screenshot({ path: `mt2-base-line-read-${theme}.png`, fullPage: true });
   });
 }
