@@ -22,7 +22,7 @@ import { SqliteDenialJournal } from './policy/sqliteDenialJournal.js';
 import { ManagerDenials } from './policy/managerDenials.js';
 import { descendantSessionIdsOf } from './managers/lineage.js';
 import type { BaseNotReadEnforcement } from './managers/baseReadGuard.js';
-import { loadManagerBase, managerBaseView } from './managers/managerBase.js';
+import { loadManagerBase, managerBaseView, type ManagerBase } from './managers/managerBase.js';
 import { sweepStaleSessions } from './harness/claudeCli/tokenFiles.js';
 import { FakeHarness, postSessionStartHook } from './harness/fakeHarness.js';
 import type { Harness } from './harness/harness.js';
@@ -101,6 +101,8 @@ export interface DaemonOptions {
   claudeConfigPath?: string;
   /** Overrides BASE_NOT_READ_ENFORCEMENT: 'refuse' turns the base_not_read warning of a spawn into a refusal. */
   baseNotReadEnforcement?: BaseNotReadEnforcement;
+  /** Replaces the base this build ships, so a test can boot a daemon that ships a newer version. */
+  managerBase?: ManagerBase;
   /** The injection point of the command policy: the settings the daemon enforces and the evaluator that applies them. */
   commandPolicy?: { settings?: CommandPolicySettings; evaluate?: PolicyEvaluate };
   power?: {
@@ -114,7 +116,7 @@ export interface DaemonOptions {
 // `claudeConfigPath` redirects the folder trust writes of the claude CLI harness; the default is the user's ~/.claude.json.
 export async function startDaemon(config: Config, options: DaemonOptions = {}): Promise<Daemon> {
   const { degraded = createDegradedRegistry() } = options;
-  const shippedManagerBase = loadManagerBase();
+  const shippedManagerBase = options.managerBase ?? loadManagerBase();
   const managerBase = managerBaseView(shippedManagerBase);
   const db = openDatabase(config.dbPath);
   const bus = new EventBus();
