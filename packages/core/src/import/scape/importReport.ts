@@ -1,3 +1,5 @@
+import type { ManagerMissionReport } from './managerMissionReport.js';
+
 export const ENTITY_NAMES = ['projects', 'notes', 'noteVersions', 'playbooks', 'dataStores', 'columns', 'views', 'rows', 'history', 'managers', 'workingStates', 'memories'] as const;
 export type EntityName = (typeof ENTITY_NAMES)[number];
 
@@ -37,6 +39,8 @@ export interface ImportReport extends SourceLosses {
   missionToolReferences: { renamed: number; pointedAtPlaybookShims: number; withoutEquivalent: Record<string, number> };
   /** Sections of the manager state files that are no working state section and were folded into one under their heading. */
   mergedStateSections: number;
+  /** One line per imported manager: what its mission holds that the shared manager base owns. Read-only: no mission is rewritten. */
+  managerMissions: ManagerMissionReport[];
   reportPath?: string;
 }
 
@@ -60,6 +64,7 @@ export const emptyReport = (input: { dryRun: boolean }): ImportReport => ({
   pendingPlaybookMentions: 0,
   missionToolReferences: { renamed: 0, pointedAtPlaybookShims: 0, withoutEquivalent: {} },
   mergedStateSections: 0,
+  managerMissions: [],
 });
 
 const countsRow = (name: EntityName, counts: EntityCounts) =>
@@ -69,6 +74,33 @@ export const hasChanges = (report: ImportReport): boolean =>
   ENTITY_NAMES.some((name) => report.counts[name].written + report.counts[name].updated > 0);
 
 const bulletList = (items: string[]) => (items.length === 0 ? ['none'] : items.map((item) => `- ${item}`));
+
+const yesOrNo = (flag: boolean) => (flag ? 'yes' : 'no');
+
+function missionFindingsOf(mission: ManagerMissionReport): string[] {
+  const { name } = mission;
+  return [
+    ...mission.numberedChildrenCaps.map((line) => `${name} — number of children: ${line}`),
+    ...mission.exactModelIds.map((modelId) => `${name} — exact model id: ${modelId}`),
+    ...mission.humanQaPhrases.map((line) => `${name} — QA for the human: ${line}`),
+    ...mission.baseSectionDuplicates.map(({ sectionId, heading }) => `${name} — repeats ${sectionId} of the base: ${heading}`),
+  ];
+}
+
+function managerMissionsSection(missions: ManagerMissionReport[]): string[] {
+  const rows = missions.map((mission) => `| ${mission.name} | ${mission.bytes} | ${yesOrNo(mission.isLegacyMission)} |`);
+  return [
+    '## Manager missions',
+    'What each imported mission holds that the shared manager base owns. Nothing is rewritten: the missions are imported as they are.',
+    '',
+    '| manager | bytes | legacy mission (over 8192 bytes) |',
+    '| --- | --- | --- |',
+    ...rows,
+    '',
+    ...bulletList(missions.flatMap(missionFindingsOf)),
+    '',
+  ];
+}
 
 export function renderImportReport(report: ImportReport): string {
   const unconvertedNodeTypes = Object.entries(report.unconvertedNodeTypes).map(([type, count]) => `${type}: ${count}`);
@@ -116,6 +148,7 @@ export function renderImportReport(report: ImportReport): string {
     `${report.missionToolReferences.renamed} reference(s) renamed to the OpenFleet tool, ${report.missionToolReferences.pointedAtPlaybookShims} playbook tool reference(s) pointed at docs/playbook-shims.md. Left as they are, no OpenFleet equivalent:`,
     ...bulletList(toolsWithoutEquivalent),
     '',
+    ...managerMissionsSection(report.managerMissions),
     '## Working states',
     `${report.mergedStateSections} section(s) of the state files were merged into a working state section under a line carrying their heading. Not converted: a state file with an item cut, items dropped for the item limit or the size cap, or a manager whose own record was left as it is.`,
     '',

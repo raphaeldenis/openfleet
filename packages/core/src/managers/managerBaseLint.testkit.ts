@@ -1,10 +1,6 @@
-const MAX_BASE_BYTES = 8192;
+import { BACKTICKED_TOOL_NAME, CHILDREN_COUNT_PHRASES, EXACT_MODEL_ID, HUMAN_QA_PHRASES } from './managerContentPatterns.js';
 
-const HUMAN_QA_PHRASES = /(QA|tests?|testing)\b.{0,40}\b(is|are)\b.{0,20}\bhuman|travail de l'humain|human'?s job/i;
-// A section id such as "§5 Children" is not a count.
-const CHILDREN_COUNT_PHRASES = [/(?<!§)\b\d+\s+(children|enfants)\b/i, /cap\s*(of|=|:)\s*\d/i];
-const EXACT_MODEL_ID = /claude-(opus|sonnet|haiku|fable)-/;
-const BACKTICKED_TOOL_NAME = /`([a-z]+(?:_[a-z]+)+)`/g;
+const MAX_BASE_BYTES = 8192;
 
 export interface ManagerBaseLintInput {
   /** The whole delivered file. */
