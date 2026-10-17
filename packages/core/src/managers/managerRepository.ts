@@ -96,6 +96,10 @@ export class ManagerRepository {
   recordBaseRead(sessionId: string, { version, sha, readAt }: ManagerBaseRead): void {
     this.db.prepare('UPDATE managers SET base_version_read = ?, base_sha_read = ?, base_read_at = ? WHERE session_id = ?').run(version, sha, readAt, sessionId);
   }
+  /** Forgets the manager base the manager read: it has not read any since. */
+  clearBaseRead(sessionId: string): void {
+    this.db.prepare('UPDATE managers SET base_version_read = NULL, base_sha_read = NULL, base_read_at = NULL WHERE session_id = ?').run(sessionId);
+  }
   /** Binds the table the manager logs its actions in; null unbinds it. */
   setLogStore(sessionId: string, storeId: string | null): void {
     this.db.prepare('UPDATE managers SET log_store_id = ? WHERE session_id = ?').run(storeId, sessionId);

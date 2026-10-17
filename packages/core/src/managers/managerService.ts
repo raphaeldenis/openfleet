@@ -110,6 +110,15 @@ export class ManagerService {
     return this.announceUpdated(this.deps.managers.get(sessionId)!);
   }
 
+  /** Forgets that the manager read the base, because its context was reset, and announces it; undefined when the session has no manager row or had read nothing. */
+  forgetBaseRead(sessionId: string): ManagerView | undefined {
+    const record = this.deps.managers.get(sessionId);
+    const hadRead = record?.baseRead !== undefined;
+    if (!hadRead) return undefined;
+    this.deps.managers.clearBaseRead(sessionId);
+    return this.announceUpdated(this.deps.managers.get(sessionId)!);
+  }
+
   /** The manager as the profile page shows it: its view, and where it stands against a Scape re-import. */
   profile(sessionId: string): ManagerProfile | undefined {
     const record = this.deps.managers.get(sessionId);

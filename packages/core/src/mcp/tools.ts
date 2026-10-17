@@ -8,7 +8,7 @@ import type { ProjectRepository } from '../projects/projectRepository.js';
 import { resolveModel, type ModelTable } from '../models.js';
 import type { ApprovalService } from '../governance/approvalService.js';
 import type { ManagerService } from '../managers/managerService.js';
-import { baseReadVerdictOf } from '../managers/baseReadGuard.js';
+import { baseReadVerdictOf, type BaseNotReadEnforcement } from '../managers/baseReadGuard.js';
 import { toManagerView, type ManagerBaseIdentity } from '../managers/managerView.js';
 import { log } from '../logger.js';
 import type { PulseScheduler } from '../managers/pulseScheduler.js';
@@ -58,6 +58,8 @@ export interface RegisterToolsDeps {
   managerDenials?: Pick<ManagerDenials, 'countsOf'>;
   /** The manager base this daemon ships. Absent, spawning is not checked against it and the manager view reports no base. */
   managerBase?: ManagerBaseIdentity;
+  /** Whether a spawn without the current base is refused or only warned; absent, the shipped BASE_NOT_READ_ENFORCEMENT applies. */
+  baseNotReadEnforcement?: BaseNotReadEnforcement;
 }
 
 const BASE_NOT_READ_WARNING_MESSAGE = 'You have not read the current manager base (get_manager_base, whole). Read it now: a later release refuses spawns until you do.';
@@ -274,7 +276,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
       const childrenCap = record ? record.childrenCap : 0;
       if (activeChildren >= childrenCap) return refuse('children_cap', `children cap reached (${activeChildren}/${childrenCap})`);
 
-      const baseReadVerdict = record && managerBase ? baseReadVerdictOf({ record, currentBase: managerBase }) : 'allow';
+      const baseReadVerdict = record && managerBase ? baseReadVerdictOf({ record, currentBase: managerBase, enforcement: deps.baseNotReadEnforcement }): 'allow';
       if (baseReadVerdict === 'refuse') return refuse('base_not_read', BASE_NOT_READ_WARNING_MESSAGE, 'Call get_manager_base without section, then spawn again.');
       if (baseReadVerdict === 'warn') {
         log('warn', `manager ${caller.id} spawns a session without having read the current manager base`, undefined, { code: 'base_not_read', sessionId: caller.id });
