@@ -28,7 +28,8 @@ export interface FindingsGateDeps {
 export class FindingsGate {
   constructor(private readonly deps: FindingsGateDeps) {}
 
-  async check({ directory }: { directory: string }): Promise<GateAnswer> {    const branch = await gitOutput(['rev-parse', '--abbrev-ref', 'HEAD'], directory);
+  async check({ directory }: { directory: string }): Promise<GateAnswer> {
+    const branch = await gitOutput(['rev-parse', '--abbrev-ref', 'HEAD'], directory);
     const head = await gitOutput(['rev-parse', 'HEAD'], directory);
     if (branch === undefined || head === undefined) return this.closed({ reason: 'findings_required: the branch and head of this directory cannot be read.', alternative: 'Run gh pr create from the worktree of your ticket.' });
 
