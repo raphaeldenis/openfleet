@@ -49,7 +49,7 @@ export function registerNoteTools(server: McpServer, deps: RegisterNoteToolsDeps
   }, async ({ note, body_md, expected_rev }) => {
     const scope = requireProject();
     if (!scope) return refuse('project_not_found', 'this session has no project');
-    return guarded(() => noteSummary(writeBody(requireOwnNote(scope.projectId, note), body_md, expected_rev)));
+    return guarded(() => noteSummary(writeBody(requireOwnNote(scope.projectId, note), { bodyMd: body_md, expectedRev: expected_rev })));
   });
 
   server.registerTool('delete_note', {
@@ -61,7 +61,7 @@ export function registerNoteTools(server: McpServer, deps: RegisterNoteToolsDeps
     return guarded(() => {
       const current = requireOwnNote(scope.projectId, note);
       if (current.filePath) throw new FileBackedNoteError(note);
-      noteRepo.delete(note);
+      notes.delete(note);
       return { deleted: note };
     });
   });

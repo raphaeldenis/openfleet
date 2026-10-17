@@ -1,4 +1,4 @@
-import type { Note, Session } from '@openfleet/shared';
+import type { Note, NoteChangeSource, Session } from '@openfleet/shared';
 import type { DocsFolderService } from '../notes/docsFolderService.js';
 import { NoteNotFoundError, type NoteService } from '../notes/noteService.js';
 import type { NoteRepository } from '../notes/noteRepository.js';
@@ -26,8 +26,8 @@ export function createNoteToolSupport({ notes, noteRepo, docs, caller }: NoteToo
   }
 
   /** The one CAS write every body-changing tool commits through: same body, same rev check, file-backed or not. */
-  function writeBody(current: Note, bodyMd: string, expectedRev: number): Note {
-    const write = { bodyMd, expectedRev, author: author() };
+  function writeBody(current: Note, { bodyMd, expectedRev, source = 'mcp' }: { bodyMd: string; expectedRev: number; source?: NoteChangeSource }): Note {
+    const write = { bodyMd, expectedRev, source, author: author() };
     return current.filePath ? docs.writeThrough(current.id, write) : notes.update(current.id, write);
   }
 

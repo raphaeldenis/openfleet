@@ -1,4 +1,5 @@
 import { signal } from '@angular/core';
+import { Subject } from 'rxjs';
 import { TestBed } from '@angular/core/testing';
 import { provideRouter, Router, withComponentInputBinding } from '@angular/router';
 import { RouterTestingHarness } from '@angular/router/testing';
@@ -21,6 +22,7 @@ function stubFleetEvents() {
     connected: signal(true),
     snapshotReceived: signal(true),
     reconnectCount: signal(0),
+    noteChanges: new Subject(),
     deliveredMessageIds: signal(new Set()),
     output: () => ({ subscribe: () => ({ unsubscribe: () => {} }) }),
     sendInput: () => {},
