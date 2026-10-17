@@ -2,7 +2,9 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
+import { loadManagerBase } from '../../managers/managerBase.js';
 import { emptyReport, hasChanges, renderImportReport, type ImportReport } from './importReport.js';
+import { reportManagerMission, type ManagerMissionReport } from './managerMissionReport.js';
 import { prepareManagerFolders, type PreparedManagerFolders } from './managerFolders.js';
 import { ScapeImportError } from './scapeImportError.js';
 import { MemoryFilesJournal } from './scapeMemoriesWriter.js';
@@ -77,10 +79,15 @@ function foldersOfManagersKept(plan: ImportPlan, outcomes: Map<string, UpsertOut
   return plan.managers.filter((manager) => MANAGER_OUTCOMES_NEEDING_A_FOLDER.includes(outcomes.get(manager.id)!)).map((manager) => manager.session.directory);
 }
 
+function managerMissionsOf(plan: ImportPlan): ManagerMissionReport[] {
+  const baseSections = loadManagerBase().sections;
+  return plan.managers.map((manager) => reportManagerMission({ managerId: manager.id, name: manager.session.name, missionText: manager.manager.missionText }, baseSections));
+}
+
 function writeToTarget(plan: ImportPlan, options: ImportScapeOptions): ImportReport {
   const dryRun = options.dryRun ?? false;
   const scratchRoot = options.scratchRoot ?? tmpdir();
-  const report = { ...emptyReport({ dryRun }), ...plan.sourceLosses };
+  const report = { ...emptyReport({ dryRun }), ...plan.sourceLosses, managerMissions: managerMissionsOf(plan) };
   const databaseExistedBefore = existsSync(join(options.home, DATABASE_FILE_NAME));
   const mustBackUpBeforeCommit = () => {
     const isOverwritingAnExistingDatabase = !dryRun && databaseExistedBefore && hasChanges(report);

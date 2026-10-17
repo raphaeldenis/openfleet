@@ -21,6 +21,7 @@ const FLAGS = {
   'claude-dir': { type: 'string' },
   'scape-claude-dir': { type: 'string' },
   'allow-reimport': { type: 'boolean' },
+  json: { type: 'boolean' },
   help: { type: 'boolean' },
 } as const;
 
@@ -38,6 +39,7 @@ const USAGE = [
   '  --state-dir       the folder of the Scape manager state files <manager name>.md that seed the working states (default ~/Documents/scape-team/state)',
   '  --claude-dir      the Claude config folder that receives each manager\'s auto-memory, under projects/<manager folder>/memory (default ~/.claude)',
   '  --scape-claude-dir  the Claude config folder that holds the Scape managers\' memory (default: --claude-dir)',
+  '  --json            prints the report as JSON instead of text (a dry run: nothing is written)',
   '  --allow-reimport  runs a real import although the target already holds imported projects (a dry run never needs it)',
   '',
   REIMPORT_NOTE,
@@ -92,6 +94,7 @@ export function runImportCli(argv: string[], environment: CliEnvironment): CliRe
     if (flags.values.help) return { exitCode: EXIT_OK, output: USAGE };
     const { options, allowsReimport } = importOptionsFrom(flags, environment);
     const report = importScape(options);
+    if (flags.values.json) return { exitCode: EXIT_OK, output: `${JSON.stringify(report, null, 2)}\n` };
     const warning = allowsReimport && !report.dryRun ? `Re-import: ${REIMPORT_NOTE} Check the report for the conflicts, the records deleted in OpenFleet and the records removed in Scape.\n` : '';
     const summary = report.dryRun ? renderImportReport(report) : `Import written. Report: ${report.reportPath}\n`;
     return { exitCode: EXIT_OK, output: `${warning}${summary}` };
