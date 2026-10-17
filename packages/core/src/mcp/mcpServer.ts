@@ -12,6 +12,7 @@ import type { DocsFolderService } from '../notes/docsFolderService.js';
 import type { NoteRepository } from '../notes/noteRepository.js';
 import type { NoteService } from '../notes/noteService.js';
 import type { ProjectRepository } from '../projects/projectRepository.js';
+import type { ReviewFindingsRepository } from '../review/reviewFindingsRepository.js';
 import type { SessionService } from '../sessions/sessionService.js';
 import type { DataStoreRepository } from '../stores/dataStoreRepository.js';
 import type { DataStoreService } from '../stores/dataStoreService.js';
@@ -27,6 +28,7 @@ import { registerNoteTools } from './noteTools.js';
 import { registerKnowledgeTools, type KnowledgeToolSearchPort } from './knowledgeTools.js';
 import { registerNoteVersionTools } from './noteVersionTools.js';
 import { registerProjectTools } from './projectTools.js';
+import { REVIEWER_ROLE, registerShipVerdictTools } from './shipVerdictTools.js';
 import { registerTableTools } from './tableTools.js';
 import { registerTableViewTools } from './tableViewTools.js';
 import { catchingToolErrors } from './toolResults.js';
@@ -34,6 +36,18 @@ import { registerTools } from './tools.js';
 import { registerWorkingStateTools } from './workingStateTools.js';
 import { registerWorktreeTools } from './worktreeTools.js';
 import { WorktreeService } from '../worktrees/worktreeService.js';
+
+/** The only tools a reviewer sees: it reports to its manager and writes nothing else. */
+const REVIEWER_TOOL_NAMES: ReadonlySet<string> = new Set(['report_ship_verdict', 'message_parent']);
+
+/** A view of the server that registers only the tools allowed; every other registration is skipped. */
+function registeringOnly(server: McpServer, allowedToolNames: ReadonlySet<string>): McpServer {
+  const registerAllowedTool = (name: string, ...rest: unknown[]) =>
+    allowedToolNames.has(name) ? (server.registerTool as (...args: unknown[]) => unknown).call(server, name, ...rest) : undefined;
+  return new Proxy(server, {
+    get: (target, property) => (property === 'registerTool' ? registerAllowedTool : Reflect.get(target, property, target)),
+  });
+}
 
 /** A view of the server whose every registered handler answers a throw in the error grammar, so nothing reaches the SDK's own error text. */
 function answeringThrowsInGrammar(server: McpServer, caller: Session): McpServer {
@@ -45,7 +59,7 @@ function answeringThrowsInGrammar(server: McpServer, caller: Session): McpServer
   });
 }
 
-export function createMcpHandler(deps: { managerBase?: ManagerBase; baseNotReadEnforcement?: BaseNotReadEnforcement; managerDenials?: ManagerDenials;knowledgeSearch: KnowledgeToolSearchPort; governanceQueue: GovernanceQueueService; sessions: SessionService; approvals: ApprovalService; managers: ManagerService; pulseScheduler: PulseScheduler; modelTable: ModelTable; stores: DataStoreService; storeRepo: DataStoreRepository; notes: NoteService; noteRepo: NoteRepository; docs: DocsFolderService; projects: ProjectRepository; workingStates: WorkingStateService; worktreesRoot: string }) {
+export function createMcpHandler(deps: { reviewFindings?: ReviewFindingsRepository; managerBase?: ManagerBase; baseNotReadEnforcement?: BaseNotReadEnforcement; managerDenials?: ManagerDenials;knowledgeSearch: KnowledgeToolSearchPort; governanceQueue: GovernanceQueueService; sessions: SessionService; approvals: ApprovalService; managers: ManagerService; pulseScheduler: PulseScheduler; modelTable: ModelTable; stores: DataStoreService; storeRepo: DataStoreRepository; notes: NoteService; noteRepo: NoteRepository; docs: DocsFolderService; projects: ProjectRepository; workingStates: WorkingStateService; worktreesRoot: string }) {
   return async (req: IncomingMessage, res: ServerResponse, body: unknown): Promise<void> => {
     const token = (req.headers.authorization ?? '').replace(/^Bearer /, '');
     const caller = deps.sessions.byMcpToken(token);
@@ -53,8 +67,11 @@ export function createMcpHandler(deps: { managerBase?: ManagerBase; baseNotReadE
 
     // ponytail: one McpServer per request (stateless); pool them if profiling says so
     const server = new McpServer({ name: 'openfleet', version: DAEMON_VERSION });
-    const toolServer = answeringThrowsInGrammar(server, caller);
+    const answeringServer = answeringThrowsInGrammar(server, caller);
+    const isReviewer = caller.role === REVIEWER_ROLE;
+    const toolServer = isReviewer ? registeringOnly(answeringServer, REVIEWER_TOOL_NAMES) : answeringServer;
     registerTools(toolServer, { ...deps, caller });
+    if (deps.reviewFindings) registerShipVerdictTools(toolServer, { reviewFindings: deps.reviewFindings, managers: deps.managers, sessions: deps.sessions, caller });
     registerManagerLinkTools(toolServer, { managers: deps.managers, caller });
     if (deps.managerBase) registerManagerBaseTools(toolServer, { managerBase: deps.managerBase, managers: deps.managers, caller });
     if (deps.managerDenials) registerDeniedCommandTools(toolServer, { managerDenials: deps.managerDenials, sessions: deps.sessions, caller });
