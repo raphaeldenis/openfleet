@@ -103,7 +103,7 @@ export interface DaemonOptions {
   claudeConfigPath?: string;
   /** Overrides BASE_NOT_READ_ENFORCEMENT: 'refuse' turns the base_not_read warning of a spawn into a refusal. */
   baseNotReadEnforcement?: BaseNotReadEnforcement;
-  /** Overrides FINDINGS_GATE_ENFORCEMENT and the findingsGate.enforcement setting: 'enforce' turns the observed refusal of gh pr create into a findings_required refusal. */
+  /** Overrides FINDINGS_GATE_ENFORCEMENT and the findingsGate.enforcement setting: 'observe' journals the findings_required refusal of gh pr create and lets the command pass. */
   findingsGateEnforcement?: FindingsGateEnforcement;
   /** Replaces the base this build ships, so a test can boot a daemon that ships a newer version. */
   managerBase?: ManagerBase;
