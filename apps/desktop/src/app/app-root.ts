@@ -33,7 +33,7 @@ export class AppRoot {
   private async startNotifications(): Promise<void> {
     const [{ NotificationDispatcher }, { DockBadgeService }] = await Promise.all([
       import('./core/notification-dispatcher.service'),
-      import('./core/dock-badge.service'),
+      import('./inbox/dock-badge.service'),
     ]);
     if (this.isDestroyed) return;
     this.injector.get(NotificationDispatcher);

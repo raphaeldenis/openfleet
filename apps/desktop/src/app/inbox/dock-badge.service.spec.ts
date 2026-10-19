@@ -2,11 +2,11 @@ import { signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import type { Approval } from '@openfleet/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { FleetEventsService } from '../core/fleet-events.service';
+import { NativeNotifications } from '../core/native-notifications.service';
+import { NotificationPrefsStore } from '../core/notification-prefs.store';
 import { silentWorkingStateSignals, sessionOf } from '../working-state/working-state-fixtures';
 import { DockBadgeService } from './dock-badge.service';
-import { FleetEventsService } from './fleet-events.service';
-import { NativeNotifications } from './native-notifications.service';
-import { NotificationPrefsStore } from './notification-prefs.store';
 
 const STORAGE_KEY = 'openfleet.notifications.v1';
 const approval = (id: string) => ({ id, sessionId: 's1' }) as unknown as Approval;
