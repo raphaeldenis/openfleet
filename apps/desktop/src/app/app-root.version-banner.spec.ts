@@ -2,6 +2,7 @@ import { signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { provideRouter, Router, withComponentInputBinding } from '@angular/router';
 import { screen } from '@testing-library/angular/zoneless';
+import { Subject } from 'rxjs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AppRoot } from './app-root';
 import { routes } from './app.routes';
@@ -28,13 +29,14 @@ async function bootAppOn({ appVersion }: { appVersion: string }) {
       { provide: APP_VERSION_READER, useValue: () => Promise.resolve(appVersion) },
       {
         provide: FleetEventsService,
-        useValue: { connect: vi.fn(), sessions: signal([]), approvals: signal([]), managers: signal([]), connected: signal(true), snapshotReceived: signal(true), ...silentWorkingStateSignals() },
+        useValue: { connect: vi.fn(), sessions: signal([]), approvals: signal([]), managers: signal([]), notificationTriggers: new Subject(), connected: signal(true), snapshotReceived: signal(true), ...silentWorkingStateSignals() },
       },
     ],
   });
   await TestBed.inject(Router).navigateByUrl('/inbox');
   const fixture = TestBed.createComponent(AppRoot);
   fixture.detectChanges();
+  await fixture.componentInstance.notificationsStarted;
   await fixture.whenStable();
 }
 

@@ -1,6 +1,8 @@
 import { signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { provideRouter, Router, withComponentInputBinding } from '@angular/router';
+import type { NotificationTrigger } from '@openfleet/shared';
+import { Subject } from 'rxjs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppRoot } from './app-root';
 import { routes } from './app.routes';
@@ -15,10 +17,13 @@ function stubDaemonUp() {
   vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(response)));
 }
 
-function openAppWithBannerClicks() {
+async function openAppWithBannerClicks() {
   let clickBanner: (route: string) => void = () => undefined;
+  const triggers = new Subject<NotificationTrigger>();
   const notifications = {
     isAvailable: true,
+    show: vi.fn(async () => 'delivered' as const),
+    setDockBadge: vi.fn(async () => undefined),
     onBannerClick: vi.fn(async (handler: (route: string) => void) => {
       clickBanner = handler;
       return () => undefined;
@@ -30,14 +35,15 @@ function openAppWithBannerClicks() {
       { provide: NativeNotifications, useValue: notifications },
       {
         provide: FleetEventsService,
-        useValue: { connect: vi.fn(), sessions: signal([]), approvals: signal([]), managers: signal([]), connected: signal(true), snapshotReceived: signal(true), ...silentWorkingStateSignals() },
+        useValue: { connect: vi.fn(), sessions: signal([]), approvals: signal([]), managers: signal([]), notificationTriggers: triggers, connected: signal(true), snapshotReceived: signal(true), ...silentWorkingStateSignals() },
       },
     ],
   });
   const router = TestBed.inject(Router);
   const fixture = TestBed.createComponent(AppRoot);
   fixture.detectChanges();
-  return { router, fixture, clickBanner: (route: string) => clickBanner(route) };
+  await fixture.componentInstance.notificationsStarted;
+  return { router, fixture, notifications, triggers, clickBanner: (route: string) => clickBanner(route) };
 }
 
 describe('AppRoot banner click', () => {
@@ -45,11 +51,21 @@ describe('AppRoot banner click', () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it('user clicking a system banner lands on the route the banner carried', async () => {
-    const { router, clickBanner } = openAppWithBannerClicks();
+    const { router, clickBanner } = await openAppWithBannerClicks();
     await router.navigateByUrl('/inbox');
 
     clickBanner('/session/abc');
 
     await vi.waitFor(() => expect(router.url).toBe('/session/abc'));
+  });
+
+  it('user whose agent finished while the app was running gets a system banner, with the Dock badge cleared', async () => {
+    const { notifications, triggers } = await openAppWithBannerClicks();
+    TestBed.tick();
+    expect(notifications.setDockBadge).toHaveBeenCalledWith(0);
+
+    triggers.next({ category: 'agentFinished', sessionId: 's1' });
+
+    await vi.waitFor(() => expect(notifications.show).toHaveBeenCalledWith(expect.objectContaining({ body: 'Finished', route: '/session/s1' })));
   });
 });
