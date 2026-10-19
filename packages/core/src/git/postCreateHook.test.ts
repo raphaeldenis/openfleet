@@ -101,9 +101,10 @@ describe('runPostCreateHook', () => {
     const pidFile = join(tempDirs.make('of-hook-out-'), 'child.pid');
     const script = aScript(`sleep 30 &\necho $! > "${pidFile}"\nwait`);
 
-    const warning = await runPostCreateHook({ ...hookInput(script), timeoutMs: 300 });
+    const warning = await runPostCreateHook({ ...hookInput(script), timeoutMs: 1_000 });
 
     expect(warning).toMatchObject({ type: 'post_create_hook_failed', reason: 'timeout' });
+    expect(await waitUntil(() => existsSync(pidFile), 3_000)).toBe(true);
     const childPid = Number(readFileSync(pidFile, 'utf8').trim());
     expect(await waitUntil(() => !isProcessAlive(childPid), 3_000)).toBe(true);
   });
