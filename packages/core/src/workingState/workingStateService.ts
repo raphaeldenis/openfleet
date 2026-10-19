@@ -22,12 +22,22 @@ export interface WorkingStateUpdate { updatedAt: string; mirrorWarning?: string 
 
 type UpdateListener = (state: WorkingState) => void;
 
+/** An update that asks the human at least one question the previous state did not hold. */
+export interface QuestionsAsked { sessionId: string; askedAt: string; newQuestionCount: number }
+type QuestionsAskedListener = (asked: QuestionsAsked) => void;
+
+const newQuestionsOf = (alreadyAsked: readonly string[], nowAsked: readonly string[]): string[] => {
+  const known = new Set(alreadyAsked);
+  return [...new Set(nowAsked)].filter((question) => !known.has(question));
+};
+
 export interface FleetChange { name: string; kind: 'spawned' | 'closed' | 'reopened'; changedAt: string }
 
 interface StateRow { sections_json: string; updated_at: string }
 
 export class WorkingStateService {
   private readonly listeners = new Set<UpdateListener>();
+  private readonly questionsAskedListeners = new Set<QuestionsAskedListener>();
 
   constructor(private readonly deps: WorkingStateServiceDeps) {}
 
@@ -41,6 +51,7 @@ export class WorkingStateService {
     const bytes = Buffer.byteLength(renderWorkingState(sections), 'utf8');
     if (bytes > this.deps.maxBytes) throw new WorkingStateTooLargeError(bytes, this.deps.maxBytes);
 
+    const questionsAlreadyAsked = this.get(sessionId)?.questionsForHuman ?? [];
     const updatedAt = this.deps.clock();
     this.deps.db.prepare(`INSERT INTO session_working_states (session_id, sections_json, updated_at) VALUES (?, ?, ?)
       ON CONFLICT(session_id) DO UPDATE SET sections_json = excluded.sections_json, updated_at = excluded.updated_at`)
@@ -49,6 +60,7 @@ export class WorkingStateService {
     const mirrorWarning = this.writeMirror(sessionId, sections);
     const state = this.get(sessionId)!;
     this.notifyListeners(state);
+    this.notifyQuestionsAsked({ sessionId, askedAt: updatedAt, newQuestionCount: newQuestionsOf(questionsAlreadyAsked, sections.questionsForHuman).length });
     return mirrorWarning ? { updatedAt, mirrorWarning } : { updatedAt };
   }
 
@@ -88,6 +100,23 @@ export class WorkingStateService {
   onUpdate(listener: UpdateListener): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  /** Calls back once per update that adds a question the previous state did not hold: never for a removed, reordered or unchanged question. */
+  onQuestionsAsked(listener: QuestionsAskedListener): () => void {
+    this.questionsAskedListeners.add(listener);
+    return () => this.questionsAskedListeners.delete(listener);
+  }
+
+  private notifyQuestionsAsked(asked: QuestionsAsked): void {
+    if (asked.newQuestionCount === 0) return;
+    for (const listener of this.questionsAskedListeners) {
+      try {
+        listener(asked);
+      } catch (error) {
+        log('warn', `questions asked listener failed for session ${asked.sessionId}`, error);
+      }
+    }
   }
 
   private notifyListeners(state: WorkingState): void {
