@@ -60,6 +60,7 @@ async function openAppAt(url: string) {
   await router.navigateByUrl(url);
   const fixture = TestBed.createComponent(AppRoot);
   fixture.detectChanges();
+  await fixture.componentInstance.notificationsStarted;
   return { router, fixture };
 }
 
@@ -121,6 +122,7 @@ describe('AppRoot boot redirect', () => {
     await router.navigateByUrl(DEEP_LINK);
     const fixture = TestBed.createComponent(AppRoot);
     fixture.detectChanges();
+    await fixture.componentInstance.notificationsStarted;
     await vi.waitFor(() => expect(router.url).toBe('/onboarding'));
     await letTimePass(0, fixture);
 
@@ -141,6 +143,7 @@ describe('AppRoot boot redirect', () => {
     await router.navigateByUrl(DEEP_LINK);
     const fixture = TestBed.createComponent(AppRoot);
     fixture.detectChanges();
+    await fixture.componentInstance.notificationsStarted;
     await vi.waitFor(() => expect(router.url).toBe('/onboarding'));
     await letTimePass(0, fixture);
 
@@ -195,6 +198,7 @@ describe('AppRoot boot redirect', () => {
 
     const fixture = TestBed.createComponent(AppRoot);
     fixture.detectChanges();
+    await fixture.componentInstance.notificationsStarted;
     await letTimePass(HEALTH_POLL_INTERVAL_MS * 3, fixture);
 
     expect(navigationsAfterBoot).toEqual([]);

@@ -18,14 +18,17 @@ export class AppRoot {
   private readonly versions = inject(VersionsService);
   private readonly router = inject(Router);
   private readonly injector = inject(Injector);
-  private isDestroyed = false;
   private readonly location = inject(Location);
+  private isDestroyed = false;
+
+  /** Settles once banners and the Dock badge are loaded and listening. */
+  readonly notificationsStarted: Promise<void>;
 
   constructor() {
     void inject(FleetEventsService).connect();
     inject(DestroyRef).onDestroy(() => (this.isDestroyed = true));
     void inject(NativeNotifications).onBannerClick((route) => void this.router.navigateByUrl(route));
-    void this.startNotifications();
+    this.notificationsStarted = this.startNotifications();
     void this.sendToOnboardingWhenDaemonIsUnreachable();
   }
 

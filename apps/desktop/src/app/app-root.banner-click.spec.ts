@@ -17,7 +17,7 @@ function stubDaemonUp() {
   vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(response)));
 }
 
-function openAppWithBannerClicks() {
+async function openAppWithBannerClicks() {
   let clickBanner: (route: string) => void = () => undefined;
   const triggers = new Subject<NotificationTrigger>();
   const notifications = {
@@ -42,6 +42,7 @@ function openAppWithBannerClicks() {
   const router = TestBed.inject(Router);
   const fixture = TestBed.createComponent(AppRoot);
   fixture.detectChanges();
+  await fixture.componentInstance.notificationsStarted;
   return { router, fixture, notifications, triggers, clickBanner: (route: string) => clickBanner(route) };
 }
 
@@ -50,7 +51,7 @@ describe('AppRoot banner click', () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it('user clicking a system banner lands on the route the banner carried', async () => {
-    const { router, clickBanner } = openAppWithBannerClicks();
+    const { router, clickBanner } = await openAppWithBannerClicks();
     await router.navigateByUrl('/inbox');
 
     clickBanner('/session/abc');
@@ -59,8 +60,9 @@ describe('AppRoot banner click', () => {
   });
 
   it('user whose agent finished while the app was running gets a system banner, with the Dock badge cleared', async () => {
-    const { notifications, triggers } = openAppWithBannerClicks();
-    await vi.waitFor(() => expect(notifications.setDockBadge).toHaveBeenCalledWith(0));
+    const { notifications, triggers } = await openAppWithBannerClicks();
+    TestBed.tick();
+    expect(notifications.setDockBadge).toHaveBeenCalledWith(0);
 
     triggers.next({ category: 'agentFinished', sessionId: 's1' });
 

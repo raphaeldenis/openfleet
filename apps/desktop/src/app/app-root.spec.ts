@@ -35,6 +35,7 @@ describe('AppRoot', () => {
 
     const fixture = TestBed.createComponent(AppRoot);
     fixture.detectChanges();
+    await fixture.componentInstance.notificationsStarted;
     const router = TestBed.inject(Router);
     await router.navigateByUrl('/manager/m1');
     fixture.detectChanges();

@@ -36,6 +36,7 @@ async function bootAppOn({ appVersion }: { appVersion: string }) {
   await TestBed.inject(Router).navigateByUrl('/inbox');
   const fixture = TestBed.createComponent(AppRoot);
   fixture.detectChanges();
+  await fixture.componentInstance.notificationsStarted;
   await fixture.whenStable();
 }
 
