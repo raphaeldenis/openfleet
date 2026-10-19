@@ -29,6 +29,7 @@ import { registerKnowledgeTools, type KnowledgeToolSearchPort } from './knowledg
 import { registerNoteVersionTools } from './noteVersionTools.js';
 import { registerProjectTools } from './projectTools.js';
 import { REVIEWER_ROLE, registerShipVerdictTools } from './shipVerdictTools.js';
+import { registerStepFindingTools } from './stepFindingTools.js';
 import { registerTableTools } from './tableTools.js';
 import { registerTableViewTools } from './tableViewTools.js';
 import { catchingToolErrors } from './toolResults.js';
@@ -72,6 +73,7 @@ export function createMcpHandler(deps: { reviewFindings?: ReviewFindingsReposito
     const toolServer = isReviewer ? registeringOnly(answeringServer, REVIEWER_TOOL_NAMES) : answeringServer;
     registerTools(toolServer, { ...deps, caller });
     if (deps.reviewFindings) registerShipVerdictTools(toolServer, { reviewFindings: deps.reviewFindings, managers: deps.managers, sessions: deps.sessions, caller, ...(deps.ticketPattern === undefined ? {} : { ticketPattern: deps.ticketPattern }) });
+    if (deps.reviewFindings) registerStepFindingTools(toolServer, { reviewFindings: deps.reviewFindings, managers: deps.managers, caller, ...(deps.ticketPattern === undefined ? {} : { ticketPattern: deps.ticketPattern }) });
     registerManagerLinkTools(toolServer, { managers: deps.managers, caller });
     if (deps.managerBase) registerManagerBaseTools(toolServer, { managerBase: deps.managerBase, managers: deps.managers, caller });
     if (deps.managerDenials) registerDeniedCommandTools(toolServer, { managerDenials: deps.managerDenials, sessions: deps.sessions, caller });
