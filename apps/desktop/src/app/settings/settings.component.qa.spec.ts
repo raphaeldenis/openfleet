@@ -12,6 +12,7 @@ async function renderSettings(models: () => Promise<unknown> = () => Promise.res
   const api = {
     models: modelsSpy,
     availableModels: vi.fn(() => Promise.resolve({ models: Object.values(MODEL_TABLE) })),
+    call: vi.fn(() => Promise.reject(new Error('command policy is not under test here'))),
     saveModels: vi.fn((patch: Record<string, string>) => Promise.resolve({ models: { ...MODEL_TABLE, ...patch } })),
   };
   const view = await render(SettingsComponent, { providers: [{ provide: FleetApiService, useValue: api }] });

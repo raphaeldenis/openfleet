@@ -3,6 +3,7 @@ import { TestBed } from '@angular/core/testing';
 import { NavigationEnd, provideRouter, Router, type Routes, withComponentInputBinding } from '@angular/router';
 import { screen } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
+import { Subject } from 'rxjs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppRoot } from './app-root';
 import { routes } from './app.routes';
@@ -47,7 +48,7 @@ function configureAppRoot(appRoutes: Routes = routes) {
       provideRouter(appRoutes, withComponentInputBinding()),
       {
         provide: FleetEventsService,
-        useValue: { connect: vi.fn(), sessions: signal([]), approvals: signal([]), managers: signal([]), connected: signal(true), snapshotReceived: signal(true), ...silentWorkingStateSignals() },
+        useValue: { connect: vi.fn(), sessions: signal([]), approvals: signal([]), managers: signal([]), notificationTriggers: new Subject(), connected: signal(true), snapshotReceived: signal(true), ...silentWorkingStateSignals() },
       },
     ],
   });
