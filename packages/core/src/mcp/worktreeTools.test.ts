@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -116,6 +116,27 @@ describe('create_worktree and the project post-create hook', () => {
 
     expect(isError(result)).toBe(false);
     expect(jsonOf(result)).toEqual({ path: join(worktreesRoot, 'task-plain'), branch: 'task/plain' });
+  });
+
+  it('gives the new worktree the git hooks directory of the repository', async () => {
+    git(repoPath, 'config', 'core.hooksPath', '.husky/_');
+    mkdirSync(join(repoPath, '.husky', '_'), { recursive: true });
+    writeFileSync(join(repoPath, '.husky', '_', 'pre-push'), '#!/bin/sh\n');
+
+    const result = await createWorktreeTool('task/hooks');
+
+    expect(jsonOf(result)).toEqual({ path: join(worktreesRoot, 'task-hooks'), branch: 'task/hooks' });
+    expect(existsSync(join(worktreesRoot, 'task-hooks', '.husky', '_', 'pre-push'))).toBe(true);
+  });
+
+  it('still creates the worktree and reports hooks_path_missing when the repository has no hooks directory to give', async () => {
+    git(repoPath, 'config', 'core.hooksPath', '.husky/_');
+
+    const result = await createWorktreeTool('task/no-hooks');
+
+    expect(isError(result)).toBe(false);
+    expect(jsonOf<{ warnings: unknown[] }>(result).warnings).toEqual([{ type: 'hooks_path_missing', hooksPath: '.husky/_' }]);
+    expect(existsSync(join(worktreesRoot, 'task-no-hooks', '.git'))).toBe(true);
   });
 
   it('runs the project hook inside the new worktree and answers no warning when it succeeds', async () => {

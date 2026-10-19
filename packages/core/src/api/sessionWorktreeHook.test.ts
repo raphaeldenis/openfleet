@@ -1,4 +1,5 @@
-import { chmodSync, existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Session } from '@openfleet/shared';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -12,6 +13,7 @@ import { ManagerRepository } from '../managers/managerRepository.js';
 import { ManagerService } from '../managers/managerService.js';
 import { PulseScheduler } from '../managers/pulseScheduler.js';
 import { DEFAULT_MODEL_TABLE } from '../models.js';
+import { childEnvironmentForGit } from '../process/childEnvironment.js';
 import { ProjectRepository } from '../projects/projectRepository.js';
 import { SessionService } from '../sessions/sessionService.js';
 import { createTempDirTracker } from '../tempDirTracker.js';
@@ -31,6 +33,7 @@ const call = (method: string, path: string, body?: unknown) =>
   fetch(`${server.url}${path}`, { method, headers: { 'content-type': 'application/json', authorization: `Bearer ${ADMIN_TOKEN}` }, body: body === undefined ? undefined : JSON.stringify(body) });
 const createInWorktree = (branchName: string, extra: Record<string, unknown> = { projectId }) =>
   call('POST', '/api/sessions', { directory: '/tmp', name: `Task ${branchName}`, harness: 'fake', emoji: '🤖', repoPath, branchName, ...extra });
+const git = (cwd: string, ...args: string[]): string => execFileSync('git', args, { cwd, env: childEnvironmentForGit(process.env), encoding: 'utf8' });
 function aHookScript(body: string): string {
   const path = join(tempDirs.make('of-session-hook-'), 'hook.sh');
   writeFileSync(path, `#!/bin/sh\n${body}\n`);
@@ -68,6 +71,31 @@ describe('POST /api/sessions with repoPath and branchName: the project post-crea
 
     expect(res.status).toBe(201);
     expect(await res.json()).not.toHaveProperty('warnings');
+  });
+
+  it('gives the new worktree the git hooks directory of the repository', async () => {
+    git(repoPath, 'config', 'core.hooksPath', '.husky/_');
+    mkdirSync(join(repoPath, '.husky', '_'), { recursive: true });
+    writeFileSync(join(repoPath, '.husky', '_', 'pre-push'), '#!/bin/sh\n');
+
+    const res = await createInWorktree('task/hooks');
+
+    expect(res.status).toBe(201);
+    const session = (await res.json()) as Session;
+    expect(session).not.toHaveProperty('warnings');
+    expect(existsSync(join(session.directory, '.husky', '_', 'pre-push'))).toBe(true);
+  });
+
+  it('starts the session and answers hooks_path_missing when the repository has no hooks directory to give', async () => {
+    git(repoPath, 'config', 'core.hooksPath', '.husky/_');
+
+    const res = await createInWorktree('task/no-hooks');
+
+    expect(res.status).toBe(201);
+    const created = (await res.json()) as Session & { warnings: unknown[] };
+    expect(created.warnings).toEqual([{ type: 'hooks_path_missing', hooksPath: '.husky/_' }]);
+    const stored = (await (await call('GET', `/api/sessions/${created.id}`)).json()) as Session;
+    expect(stored).not.toHaveProperty('warnings');
   });
 
   it('runs the hook in the new worktree before the session starts and adds no warning when it succeeds', async () => {

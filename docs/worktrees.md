@@ -1,6 +1,22 @@
-# Worktrees: post-create hook, listing and removal
+# Worktrees: git hooks, post-create hook, listing and removal
 
 OpenFleet creates a git worktree per task (`create_worktree`, or `POST /api/sessions` with `repoPath` and `branchName`) under `<OPENFLEET_HOME>/worktrees`. This page covers what runs after creation and how worktrees are listed and removed.
+
+## Git hooks directory
+
+When the repository sets `core.hooksPath` to a relative path (husky: `.husky/_`), git looks for the hooks in that path inside each worktree. A generated, untracked directory such as `.husky/_` does not exist in a fresh worktree, and git then runs no hook at all, without any error: a push skips the pre-push checks.
+
+Right after creating the worktree, before the post-create hook, OpenFleet copies the repository's hooks directory into it. No `pnpm install` is needed.
+
+- Nothing is copied when the repository has no `core.hooksPath`, when the path is absolute or contains `..`, when the directory is a symbolic link or resolves outside the repository, or when the worktree already has it. Symbolic links inside the directory are not copied.
+- When the repository sets `core.hooksPath` but has no such directory (nobody ran `pnpm install` there), or the copy fails, the worktree is still created and the result carries a warning:
+
+  ```json
+  { "path": "...", "branch": "task/x", "warnings": [{ "type": "hooks_path_missing", "hooksPath": ".husky/_" }] }
+  ```
+
+  It sits in the same `warnings` list as the post-create hook warnings, hooks warning first.
+- Worktrees that OpenFleet did not create (Scape, `git worktree add`) are not covered: check with `test -f .husky/_/pre-push` or run `pnpm install` in them.
 
 ## Post-create hook
 
@@ -20,7 +36,7 @@ A project can name one script that runs in every worktree created for one of its
 
   The values are data: quote them in the script.
 - At the timeout the script and every process it started are killed.
-- A failing hook never fails the creation. The result carries `warnings` only when something went wrong:
+- A failing hook never fails the creation. The result carries `warnings` only when something went wrong (a failing hook adds the following entry to the list):
 
   ```json
   { "path": "...", "branch": "task/x", "warnings": [{ "type": "post_create_hook_failed", "reason": "exit_nonzero", "exitCode": 3, "outputTail": "..." }] }

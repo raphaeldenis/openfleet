@@ -1,14 +1,23 @@
 export const POST_CREATE_HOOK_FAILURE_REASONS = ['timeout', 'exit_nonzero', 'not_executable', 'not_found', 'unsafe_permissions', 'spawn_failed'] as const;
 export type PostCreateHookFailureReason = (typeof POST_CREATE_HOOK_FAILURE_REASONS)[number];
 
-/** What went wrong after a worktree was created; the worktree itself exists whatever the warning says. */
-export interface WorktreeWarning {
+export interface PostCreateHookWarning {
   type: 'post_create_hook_failed';
   reason: PostCreateHookFailureReason;
   exitCode?: number;
   /** The redacted tail of the script's stdout and stderr. */
   outputTail?: string;
 }
+
+/** The repository configures a git hooks directory (`core.hooksPath`) that the new worktree could not receive: git runs no hook there, so a push is not checked. */
+export interface HooksPathMissingWarning {
+  type: 'hooks_path_missing';
+  /** The relative `core.hooksPath` of the repository. */
+  hooksPath: string;
+}
+
+/** What went wrong after a worktree was created; the worktree itself exists whatever the warning says. */
+export type WorktreeWarning = PostCreateHookWarning | HooksPathMissingWarning;
 
 /** Why a worktree cannot be removed; `in_use` is answered as `directory_in_use`, every other reason as `constraint_violation` with `detail.reason`. */
 export const WORKTREE_REFUSAL_REASONS = ['main', 'detached', 'locked', 'dirty', 'in_use', 'outside_root', 'submodules', 'status_failed', 'missing', 'removal_refused'] as const;

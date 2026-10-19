@@ -128,7 +128,7 @@ Clippy is blocking in both CI and the hook: all Tauri targets run with `-D warni
 
 CI runs on `pull_request` and on pushes to `main`: a branch push with an open PR runs once. A branch pushed without a PR does not run CI; the hook has already run the same checks.
 
-`git push --no-verify` is the only bypass. The hook path is shared by all worktrees through the common `.git/config`; each worktree needs one `pnpm install` (or `pnpm prepare`) to generate its untracked `.husky/_`.
+`git push --no-verify` is the only bypass. The hook path is shared by all worktrees through the common `.git/config`, but the `.husky/_` it points to is generated and untracked: a worktree without it runs no hook, and a push passes unchecked. Worktrees created by OpenFleet (`create_worktree`, `POST /api/sessions` with `repoPath` and `branchName`) receive a copy of the main checkout's `.husky/_`, with a `hooks_path_missing` warning when there is none to copy. A worktree created any other way (Scape, `git worktree add`) needs one `pnpm install` (or `pnpm prepare`) to generate it; check with `test -f .husky/_/pre-push`.
 
 ### Autonomous Claude Code sessions (local opt-in only)
 
