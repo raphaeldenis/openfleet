@@ -1,5 +1,6 @@
 import type { FlagGroups, PolicyRequest, RulePredicate } from '@openfleet/shared';
 import type { SimpleCommand } from './commandAnalyzer.js';
+import { argsWithoutLeadingRepoOptions } from './ghPrCreate.js';
 import { globMatches } from './pathGlob.js';
 import { isPlainReadWithin } from './readOnlyAccess.js';
 import { parseSearchArguments } from './searchArguments.js';
@@ -60,7 +61,8 @@ function hasFlagGroups(command: SimpleCommand, groups: FlagGroups): boolean {
 }
 
 function startsWithWords(command: SimpleCommand, sequence: string[]): boolean {
-  const words = [command.program, ...command.args];
+  const args = command.program === 'gh' ? argsWithoutLeadingRepoOptions(command.args) : command.args;
+  const words = [command.program, ...args];
   return sequence.length <= words.length && sequence.every((alternatives, index) => alternatives.split('|').includes(words[index] as string));
 }
 
