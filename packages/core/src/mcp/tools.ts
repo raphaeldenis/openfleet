@@ -296,7 +296,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
 
     const spec = {
       directory: realDirectory, name: input.name, emoji: input.emoji ?? '🤖', model: resolvedModel,
-      seededPrompt: input.seeded_prompt, role: input.role, parentId: caller.id, harness: caller.harness, permissionMode,
+      seededPrompt: input.seeded_prompt, role: input.role, parentId: caller.id, harness: caller.harness, permissionMode, projectId: caller.projectId,
     };
 
     const child = input.manager

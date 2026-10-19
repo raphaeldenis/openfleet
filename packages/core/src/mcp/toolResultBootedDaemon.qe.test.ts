@@ -184,7 +184,7 @@ describe('QE — a booted daemon serves compact MCP results on the real route', 
 
     const sessions = (await (await adminApi('/api/sessions')).json()) as { name: string }[];
 
-    expect(keysOf(sessions.find((session) => session.name === 'Kid')!)).toEqual(['createdAt', 'directory', 'emoji', 'harness', 'id', 'name', 'parentId', 'permissionMode', 'policyEnforcement', 'state', 'stateSince']);
+    expect(keysOf(sessions.find((session) => session.name === 'Kid')!)).toEqual(['createdAt', 'directory', 'emoji', 'harness', 'id', 'name', 'parentId', 'permissionMode', 'policyEnforcement', 'projectId', 'state', 'stateSince']);
   });
 
   it('REST keeps its full row and row history shapes while MCP is compact: an operator still gets storeId and createdAt on rows, and rowId and id on changes', async () => {
