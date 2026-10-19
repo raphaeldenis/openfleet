@@ -9,6 +9,7 @@ mod issue_report;
 #[cfg(test)]
 mod linear_growth;
 mod log_file;
+mod notifications;
 mod panic_hook;
 mod path_repair;
 mod redaction;
@@ -21,8 +22,20 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Mutex;
 use tauri::Manager;
 
-#[cfg(target_os = "macos")]
 const MAIN_WINDOW_LABEL: &str = "main";
+
+/// Raises a system banner. A refused permission or a platform without banners is an outcome, not an error.
+#[tauri::command(async)]
+fn show_native_notification(request: notifications::NotificationRequest) -> Result<notifications::NotificationOutcome, String> {
+  notifications::show_notification(&notifications::MacNotificationCenter, &request)
+}
+
+/// Shows `count` on the Dock tile; zero clears it.
+#[tauri::command]
+fn set_dock_badge(app: tauri::AppHandle, count: u32) -> Result<(), String> {
+  let window = app.get_webview_window(MAIN_WINDOW_LABEL).ok_or_else(|| "the main window is not available".to_string())?;
+  window.set_badge_count(notifications::dock_badge_of(count)).map_err(|err| err.to_string())
+}
 
 #[tauri::command]
 fn read_admin_token(app: tauri::AppHandle) -> Result<String, String> {
@@ -146,8 +159,10 @@ pub fn run() {
         let _ = window.hide();
       }
     })
-    .invoke_handler(tauri::generate_handler![read_admin_token, daemon::daemon_status, reveal_logs, report_issue, open_external_url, read_desktop_log, save_diagnostics_bundle, reveal_diagnostics_bundle])
+    .invoke_handler(tauri::generate_handler![read_admin_token, daemon::daemon_status, reveal_logs, report_issue, open_external_url, read_desktop_log, save_diagnostics_bundle, reveal_diagnostics_bundle, show_native_notification, set_dock_badge])
     .setup(|app| {
+      #[cfg(target_os = "macos")]
+      focus_window_and_send_route_on_banner_click(app.handle().clone());
       daemon::start(app.handle().clone());
       record_foreign_records_every(FOREIGN_RECORDS_INTERVAL, app.handle().clone());
       Ok(())
@@ -171,6 +186,16 @@ pub fn run() {
       tauri::RunEvent::Reopen { .. } => show_main_window(app),
       _ => {}
     }
+  });
+}
+
+/// A clicked banner brings the main window forward and tells the webview which route to open.
+#[cfg(target_os = "macos")]
+fn focus_window_and_send_route_on_banner_click(app: tauri::AppHandle) {
+  use tauri::Emitter;
+  notifications::install_click_handler(move |clicked| {
+    show_main_window(&app);
+    let _ = app.emit(notifications::CLICK_EVENT_NAME, clicked);
   });
 }
 

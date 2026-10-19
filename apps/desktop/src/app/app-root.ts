@@ -3,6 +3,7 @@ import { Component, inject } from '@angular/core';
 import { Router, RouterOutlet } from '@angular/router';
 import { FleetApiService } from './core/fleet-api.service';
 import { FleetEventsService } from './core/fleet-events.service';
+import { NativeNotifications } from './core/native-notifications.service';
 import { VersionsService } from './core/versions.service';
 
 @Component({
@@ -20,6 +21,7 @@ export class AppRoot {
 
   constructor() {
     void inject(FleetEventsService).connect();
+    void inject(NativeNotifications).onBannerClick((route) => void this.router.navigateByUrl(route));
     void this.sendToOnboardingWhenDaemonIsUnreachable();
   }
 
