@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { accessSync, constants, realpathSync, statSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
-import type { PostCreateHookFailureReason, WorktreeWarning } from '@openfleet/shared';
+import type { PostCreateHookFailureReason, PostCreateHookWarning } from '@openfleet/shared';
 import { maskedSecrets } from '../redact.js';
 
 export interface PostCreateHookInput {
@@ -57,7 +57,7 @@ function readableTail(tail: Buffer, wasCut: boolean): string {
   return maskedSecrets(withoutControlCharacters).slice(-MAX_OUTPUT_TAIL_BYTES);
 }
 
-const failure = (reason: PostCreateHookFailureReason, extra: Partial<WorktreeWarning> = {}): WorktreeWarning => ({ type: 'post_create_hook_failed', reason, ...extra });
+const failure = (reason: PostCreateHookFailureReason, extra: Partial<PostCreateHookWarning> = {}): PostCreateHookWarning => ({ type: 'post_create_hook_failed', reason, ...extra });
 
 const killProcessGroup = (pid: number, signal: NodeJS.Signals): void => {
   try {
@@ -73,11 +73,11 @@ const killProcessGroup = (pid: number, signal: NodeJS.Signals): void => {
  * user, is refused when it is not an absolute, executable file writable by its owner only, and is killed with its whole process
  * group at the timeout. It never throws.
  */
-export async function runPostCreateHook(input: PostCreateHookInput, options: { env?: NodeJS.ProcessEnv } = {}): Promise<WorktreeWarning | undefined> {
+export async function runPostCreateHook(input: PostCreateHookInput, options: { env?: NodeJS.ProcessEnv } = {}): Promise<PostCreateHookWarning | undefined> {
   const unrunnableReason = unrunnableReasonOf(input.script);
   if (unrunnableReason) return failure(unrunnableReason);
 
-  return new Promise<WorktreeWarning | undefined>((resolve) => {
+  return new Promise<PostCreateHookWarning | undefined>((resolve) => {
     let tail = Buffer.alloc(0);
     let wasCut = false;
     let timedOut = false;
@@ -88,7 +88,7 @@ export async function runPostCreateHook(input: PostCreateHookInput, options: { e
       cwd: input.worktreePath, env: hookEnvironment(input, options.env ?? process.env), shell: false, detached: true, stdio: ['ignore', 'pipe', 'pipe'],
     });
 
-    const finish = (warning: WorktreeWarning | undefined): void => {
+    const finish = (warning: PostCreateHookWarning | undefined): void => {
       if (isFinished) return;
       isFinished = true;
       clearTimeout(timeoutTimer);
@@ -97,7 +97,7 @@ export async function runPostCreateHook(input: PostCreateHookInput, options: { e
       resolve(warning);
     };
     const outputTail = () => readableTail(tail.subarray(-MAX_OUTPUT_TAIL_BYTES), wasCut || tail.length > MAX_OUTPUT_TAIL_BYTES);
-    const warningFromExit = (): WorktreeWarning | undefined => {
+    const warningFromExit = (): PostCreateHookWarning | undefined => {
       if (timedOut) return failure('timeout', { outputTail: outputTail() });
       if (exit?.code === 0) return undefined;
       return failure('exit_nonzero', { ...(exit?.code != null && { exitCode: exit.code }), outputTail: outputTail() });
