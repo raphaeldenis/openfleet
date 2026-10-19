@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { loadConfig, type Config } from '../config.js';
 import { startDaemon, type Daemon } from '../daemon.js';
 import { makeRepo } from '../git/testRepo.js';
+import { ManagerRepository } from '../managers/managerRepository.js';
 import { FINDINGS_GATE_RULE_ID } from '../policy/defaultCommandPolicy.js';
 import { defaultCommandPolicySettings } from '../policy/commandPolicySettings.js';
 import { childEnvironmentForGit } from '../process/childEnvironment.js';
@@ -42,6 +43,7 @@ const headOf = (directory: string) => git(directory, 'rev-parse', 'HEAD');
 
 const bootChildIn = async (directory: string) => {
   const parent = (await (await adminApi('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'Boss', harness: 'fake', emoji: '🤖' }) })).json()) as { id: string };
+  new ManagerRepository(daemon!.db).insert({ sessionId: parent.id, pulseSeconds: 3600, childrenCap: 8, missionText: 'm', createdAt: '2026-10-19T10:00:00.000Z' });
   const child = (await (await adminApi('/api/sessions', { method: 'POST', body: JSON.stringify({ directory, name: 'Worker', harness: 'fake', emoji: '🤖', parentId: parent.id, role: 'DEV' }) })).json()) as { id: string };
   return child.id;
 };

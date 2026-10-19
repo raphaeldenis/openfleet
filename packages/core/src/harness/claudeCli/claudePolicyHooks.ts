@@ -125,8 +125,10 @@ export class ClaudePolicyHooks implements CommandPolicyHooks {
     return { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'deny', message: this.textOf(session, refusal) } } };
   }
 
-  /** Opens the call when the ticket has its findings; otherwise refuses it, or only journals the refusal while the gate observes. */
+  /** Opens the call when the ticket has its findings; otherwise refuses it, or only journals the refusal while the gate observes. A session not run by a manager is not judged. */
   private async answerFindingsGate(session: Session, event: Extract<ToolHookEvent, { hook_event_name: 'PreToolUse' }>): Promise<PreToolUseHookOutput | undefined> {
+    const isRunByManager = session.parentId !== undefined && this.deps.isManager(session.parentId);
+    if (!isRunByManager) return undefined;
     const { gate, enforcement } = this.deps.findingsGate!;
     const directory = event.cwd ?? session.directory;
     const creations = pullRequestCreationsOf(commandOf(event.tool_input) ?? '');

@@ -4,10 +4,11 @@ import { gitOutput, ticketOfBranch } from './worktreeGit.js';
 export type FindingsGateEnforcement = 'observe' | 'enforce';
 
 /**
- * The gate ships observing: a refusal is journaled and the command passes. `gh pr create --head` is judged on the
- * named branch; a `cd X &&` or `git -C X` before the command is not followed.
+ * The gate ships enforcing: a refusal is journaled as denied and the command is blocked; `findingsGate.enforcement: 'observe'`
+ * journals it and lets the command pass. `gh pr create --head` is judged on the named branch; a `cd X &&` or `git -C X`
+ * before the command is not followed.
  */
-export const FINDINGS_GATE_ENFORCEMENT: FindingsGateEnforcement = 'observe';
+export const FINDINGS_GATE_ENFORCEMENT: FindingsGateEnforcement = 'enforce';
 
 export const SKIP_ENDPOINT = '/api/review-findings/skips';
 

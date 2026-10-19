@@ -55,7 +55,7 @@ async function bootLead() {
   return { lead, leadClient: await connectAs(lead.id) };
 }
 
-/** The lead spawns, in the DEV's worktree, a child of the given role. */
+/** The lead spawns, in the DEV's worktree, a child of the given role; `runnerId` is the DEV that runs gh pr create under the lead. */
 async function bootTeam(branch = 'CCM-123-steps') {
   const { lead, leadClient } = await bootLead();
   const devDirectory = worktreeOnBranch(branch);
@@ -63,7 +63,8 @@ async function bootTeam(branch = 'CCM-123-steps') {
     const child = parsed(await leadClient.callTool({ name: 'create_session', arguments: { directory: devDirectory, name: role, role, allow_duplicate: true } }));
     return { id: child.id as string, client: await connectAs(child.id) };
   };
-  return { lead, leadClient, devDirectory, spawn };
+  const runner = await spawn('dev');
+  return { lead, leadClient, devDirectory, spawn, runnerId: runner.id };
 }
 
 const reportStep = (client: Client, report: { step: string; severity: string; claims: string[]; sha: string }) => client.callTool({ name: 'report_step_finding', arguments: report });
@@ -76,14 +77,14 @@ const runGhPrCreate = async (sessionId: string, directory: string) =>
     body: JSON.stringify({ hook_event_name: 'PreToolUse', session_id: 'cli-1', cwd: directory, tool_name: 'Bash', tool_input: { command: 'gh pr create --fill' } }),
   })).json()) as { hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string } };
 
-async function bootDaemon(enforcement: 'observe' | 'enforce' = 'observe') {
+async function bootDaemon(enforcement?: 'observe' | 'enforce') {
   const home = tempDirs.make('of-step-finding-');
   config = loadConfig({ OPENFLEET_HOME: home, OPENFLEET_PORT: '0', [E2E_FLAG_ENV]: E2E_FLAG_ON });
   const settings = defaultCommandPolicySettings();
-  daemon = await startDaemon(config, { commandPolicy: { settings: { ...settings, unattended: { ...settings.unattended, askBecomesDeny: false } } }, findingsGateEnforcement: enforcement });
+  daemon = await startDaemon(config, { commandPolicy: { settings: { ...settings, unattended: { ...settings.unattended, askBecomesDeny: false } } }, ...(enforcement === undefined ? {} : { findingsGateEnforcement: enforcement }) });
 }
 
-beforeEach(async () => { await bootDaemon(); });
+beforeEach(async () => { await bootDaemon('observe'); });
 afterEach(async () => { await daemon.close(); tempDirs.removeAll(); });
 
 describe('QE — report_step_finding on a booted daemon', () => {
@@ -210,7 +211,7 @@ describe('QE — who may write a step finding', () => {
 
   it('a session without role cannot write', async () => {
     const { leadClient, devDirectory } = await bootTeam();
-    const plain = parsed(await leadClient.callTool({ name: 'create_session', arguments: { directory: devDirectory, name: 'Plain' } }));
+    const plain = parsed(await leadClient.callTool({ name: 'create_session', arguments: { directory: devDirectory, name: 'Plain', allow_duplicate: true } }));
 
     const result = await reportStep(await connectAs(plain.id), { step: 'qe', severity: 'clean', claims: [], sha: headOf(devDirectory) });
 
@@ -284,9 +285,9 @@ describe('QE — the findings gate reads what the roles report', () => {
     const team = await bootEnforcing();
     await reportAllAtHead(team);
 
-    const opened = await runGhPrCreate(team.lead.id, team.devDirectory);
+    const opened = await runGhPrCreate(team.runnerId, team.devDirectory);
     commitIn(team.devDirectory);
-    const closed = await runGhPrCreate(team.lead.id, team.devDirectory);
+    const closed = await runGhPrCreate(team.runnerId, team.devDirectory);
 
     expect(opened).toEqual({});
     expect(closed.hookSpecificOutput?.permissionDecision).toBe('deny');
@@ -298,9 +299,9 @@ describe('QE — the findings gate reads what the roles report', () => {
     const sha = headOf(team.devDirectory);
 
     await reportStep(qe.client, { step: 'qe', severity: 'findings', claims: ['regression on the stream'], sha });
-    const closed = await runGhPrCreate(team.lead.id, team.devDirectory);
+    const closed = await runGhPrCreate(team.runnerId, team.devDirectory);
     await reportStep(qe.client, { step: 'qe', severity: 'clean', claims: [], sha });
-    const reopened = await runGhPrCreate(team.lead.id, team.devDirectory);
+    const reopened = await runGhPrCreate(team.runnerId, team.devDirectory);
 
     expect(closed.hookSpecificOutput?.permissionDecisionReason).toContain('qe');
     expect(reopened).toEqual({});
@@ -312,20 +313,43 @@ describe('QE — the findings gate reads what the roles report', () => {
 
     await reportStep(qa.client, { step: 'qa', severity: 'findings', claims: ['the card is empty'], sha: headOf(team.devDirectory) });
 
-    expect((await runGhPrCreate(team.lead.id, team.devDirectory)).hookSpecificOutput?.permissionDecisionReason).toContain('qa');
+    expect((await runGhPrCreate(team.runnerId, team.devDirectory)).hookSpecificOutput?.permissionDecisionReason).toContain('qa');
   });
 
   it('stays open on a ponytail findings: the ponytail step is informative', async () => {
     const team = await bootEnforcing();
     await reportAllAtHead(team, { ponytailSeverity: 'findings' });
 
-    expect(await runGhPrCreate(team.lead.id, team.devDirectory)).toEqual({});
+    expect(await runGhPrCreate(team.runnerId, team.devDirectory)).toEqual({});
   });
 
-  it('ships observing: the gate is not enforcing by default', async () => {
-    const team = await bootTeam();
-    await Promise.resolve();
+  it('opens on a clean ponytail as well', async () => {
+    const team = await bootEnforcing();
+    await reportAllAtHead(team, { ponytailSeverity: 'clean' });
 
-    expect(await runGhPrCreate(team.lead.id, team.devDirectory)).toEqual({});
+    expect(await runGhPrCreate(team.runnerId, team.devDirectory)).toEqual({});
+  });
+
+  it('ships enforcing: with no option the Lead is refused without findings and opened by the reported ones', async () => {
+    await daemon.close();
+    tempDirs.removeAll();
+    await bootDaemon();
+    const team = await bootTeam();
+
+    const refused = await runGhPrCreate(team.runnerId, team.devDirectory);
+    await reportAllAtHead(team, { ponytailSeverity: 'clean' });
+    const opened = await runGhPrCreate(team.runnerId, team.devDirectory);
+
+    expect(refused.hookSpecificOutput?.permissionDecisionReason).toContain('findings_required');
+    expect(opened).toEqual({});
+  });
+
+  it('observes when the daemon is told to observe', async () => {
+    await daemon.close();
+    tempDirs.removeAll();
+    await bootDaemon('observe');
+    const team = await bootTeam();
+
+    expect(await runGhPrCreate(team.runnerId, team.devDirectory)).toEqual({});
   });
 });

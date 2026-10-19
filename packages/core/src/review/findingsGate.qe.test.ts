@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { loadConfig, type Config } from '../config.js';
 import { startDaemon, type Daemon, type DaemonOptions } from '../daemon.js';
 import { makeRepo } from '../git/testRepo.js';
+import { ManagerRepository } from '../managers/managerRepository.js';
 import { FINDINGS_GATE_ENFORCEMENT } from './findingsGate.js';
 import { FINDINGS_GATE_RULE_ID } from '../policy/defaultCommandPolicy.js';
 import { defaultCommandPolicySettings } from '../policy/commandPolicySettings.js';
@@ -38,12 +39,17 @@ const worktreeOnBranch = (branch: string) => {
 const headOf = (directory: string) => git(directory, 'rev-parse', 'HEAD');
 const commitIn = (directory: string) => git(directory, 'commit', '--allow-empty', '-m', 'next');
 
-const bootChildIn = async (directory: string) => {
+const bootChildIn = async (directory: string, { parentIsManager = true }: { parentIsManager?: boolean } = {}) => {
   const parent = (await (await adminApi('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'Boss', harness: 'fake', emoji: '🤖' }) })).json()) as { id: string };
+  if (parentIsManager) new ManagerRepository(daemon!.db).insert({ sessionId: parent.id, pulseSeconds: 3600, childrenCap: 8, missionText: 'm', createdAt: '2026-10-19T10:00:00.000Z' });
   const child = (await (await adminApi('/api/sessions', { method: 'POST', body: JSON.stringify({ directory, name: 'Worker', harness: 'fake', emoji: '🤖', parentId: parent.id, role: 'DEV' }) })).json()) as { id: string };
   return child.id;
 };
-const hookTokenOf = (sessionId: string) => (daemon!.db.prepare('SELECT hook_token FROM sessions WHERE id = ?').get(sessionId) as { hook_token: string }).hook_token;
+const bootRootIn = async (directory: string) => {
+  const root = (await (await adminApi('/api/sessions', { method: 'POST', body: JSON.stringify({ directory, name: 'Solo', harness: 'fake', emoji: '🤖' }) })).json()) as { id: string };
+  return root.id;
+};
+const hookTokenOf =(sessionId: string) => (daemon!.db.prepare('SELECT hook_token FROM sessions WHERE id = ?').get(sessionId) as { hook_token: string }).hook_token;
 const runCommand = async (sessionId: string, directory: string, command: string) =>
   (await (await fetch(`${daemon!.server.url}/hooks/${hookTokenOf(sessionId)}`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
@@ -214,13 +220,68 @@ describe('QE — the findings gate on gh pr create, enforcing', () => {
   });
 });
 
-describe('QE — the findings gate, observing (the shipped mode)', () => {
-  it('ships observing', () => {
-    expect(FINDINGS_GATE_ENFORCEMENT).toBe('observe');
+describe('QE — the findings gate, enforcing (the shipped mode)', () => {
+  it('ships enforcing', () => {
+    expect(FINDINGS_GATE_ENFORCEMENT).toBe('enforce');
   });
 
-  it('lets the command pass and journals the would-be refusal as observed', async () => {
+  it('refuses with the ticket, the missing steps and the endpoint, journals denied and blocks the command, with no option and no setting', async () => {
     await bootDaemon();
+    const directory = worktreeOnBranch('CCM-7-gate');
+    const sessionId = await bootChildIn(directory);
+
+    const answer = await openPullRequest(sessionId, directory);
+
+    expect(answer.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(answer.hookSpecificOutput?.permissionDecisionReason).toContain('findings_required');
+    expect(answer.hookSpecificOutput?.permissionDecisionReason).toContain('CCM-7');
+    expect(answer.hookSpecificOutput?.permissionDecisionReason).toContain('qe, qa, ponytail, adversarial go');
+    expect(answer.hookSpecificOutput?.permissionDecisionReason).toContain('/api/review-findings/skips');
+    expect(await journaledGateRows()).toEqual([{ ruleId: FINDINGS_GATE_RULE_ID, outcome: 'denied' }]);
+  });
+
+  it('refuses a branch without ticket for a session run by a manager', async () => {
+    await bootDaemon();
+    const directory = worktreeOnBranch('plain-branch');
+    const sessionId = await bootChildIn(directory);
+
+    const answer = await openPullRequest(sessionId, directory);
+
+    expect(answer.hookSpecificOutput?.permissionDecisionReason).toContain('names no ticket');
+  });
+
+  it('does not judge a session without parent: the command passes and nothing is journaled', async () => {
+    await bootDaemon();
+    const directory = worktreeOnBranch('plain-branch');
+    const sessionId = await bootRootIn(directory);
+
+    expect(await openPullRequest(sessionId, directory)).toEqual({});
+    expect(await journaledGateRows()).toEqual([]);
+  });
+
+  it('does not judge a session whose parent is not a manager', async () => {
+    await bootDaemon();
+    const directory = worktreeOnBranch('CCM-7-gate');
+    const sessionId = await bootChildIn(directory, { parentIsManager: false });
+
+    expect(await openPullRequest(sessionId, directory)).toEqual({});
+    expect(await journaledGateRows()).toEqual([]);
+  });
+
+  it('opens by default once the steps are reported at the head', async () => {
+    await bootDaemon();
+    const directory = worktreeOnBranch('CCM-7-gate');
+    const sessionId = await bootChildIn(directory);
+    allStepsOpenAt('CCM-7', headOf(directory));
+
+    expect(await openPullRequest(sessionId, directory)).toEqual({});
+    expect(await journaledGateRows()).toEqual([]);
+  });
+});
+
+describe('QE — the findings gate, observing (by option or by setting)', () => {
+  it('lets the command pass and journals the would-be refusal as observed', async () => {
+    await bootDaemon({ enforcement: 'observe' });
     const directory = worktreeOnBranch('CCM-7-gate');
     const sessionId = await bootChildIn(directory);
 
@@ -231,7 +292,7 @@ describe('QE — the findings gate, observing (the shipped mode)', () => {
   });
 
   it('journals nothing when the gate is open', async () => {
-    await bootDaemon();
+    await bootDaemon({ enforcement: 'observe' });
     const directory = worktreeOnBranch('CCM-7-gate');
     const sessionId = await bootChildIn(directory);
     allStepsOpenAt('CCM-7', headOf(directory));
@@ -241,7 +302,7 @@ describe('QE — the findings gate, observing (the shipped mode)', () => {
   });
 
   it('also observes a branch without ticket', async () => {
-    await bootDaemon();
+    await bootDaemon({ enforcement: 'observe' });
     const directory = worktreeOnBranch('plain-branch');
     const sessionId = await bootChildIn(directory);
 
@@ -249,14 +310,21 @@ describe('QE — the findings gate, observing (the shipped mode)', () => {
     expect(await journaledGateRows()).toEqual([{ ruleId: FINDINGS_GATE_RULE_ID, outcome: 'observed' }]);
   });
 
-  it('is switched to enforce by the findingsGate.enforcement setting', async () => {
-    await bootDaemon({ configJson: { findingsGate: { enforcement: 'enforce' } } });
+  it('is switched to observe by the findingsGate.enforcement setting', async () => {
+    await bootDaemon({ configJson: { findingsGate: { enforcement: 'observe' } } });
     const directory = worktreeOnBranch('CCM-7-gate');
     const sessionId = await bootChildIn(directory);
 
-    const answer = await openPullRequest(sessionId, directory);
+    expect(await openPullRequest(sessionId, directory)).toEqual({});
+    expect(await journaledGateRows()).toEqual([{ ruleId: FINDINGS_GATE_RULE_ID, outcome: 'observed' }]);
+  });
 
-    expect(answer.hookSpecificOutput?.permissionDecision).toBe('deny');
+  it('lets the daemon option enforce over a setting that observes', async () => {
+    await bootDaemon({ enforcement: 'enforce', configJson: { findingsGate: { enforcement: 'observe' } } });
+    const directory = worktreeOnBranch('CCM-7-gate');
+    const sessionId = await bootChildIn(directory);
+
+    expect((await openPullRequest(sessionId, directory)).hookSpecificOutput?.permissionDecision).toBe('deny');
   });
 });
 
@@ -274,6 +342,20 @@ describe('QE — step_skipped, a human act', () => {
     expect(created.status).toBe(201);
     expect(listed.items).toEqual([expect.objectContaining({ ticket: 'CCM-7', step: 'qa', reason: 'no browser on this project', createdAt: expect.any(String) })]);
     expect(await openPullRequest(sessionId, directory)).toEqual({});
+  });
+
+  it('opens qe, qa and ponytail by skips alone but still asks for the adversarial go', async () => {
+    const { directory, sessionId } = await bootInEnforce();
+    await skip({ ticket: 'CCM-7', step: 'qe', reason: 'no suite' });
+    await skip({ ticket: 'CCM-7', step: 'qa', reason: 'no browser' });
+    await skip({ ticket: 'CCM-7', step: 'ponytail', reason: 'trivial' });
+
+    const closed = await openPullRequest(sessionId, directory);
+    line('CCM-7', 'adversarial', 'go', headOf(directory));
+    const opened = await openPullRequest(sessionId, directory);
+
+    expect(closed.hookSpecificOutput?.permissionDecisionReason).toContain('lacks adversarial go.');
+    expect(opened).toEqual({});
   });
 
   it('never skips the adversarial review', async () => {
