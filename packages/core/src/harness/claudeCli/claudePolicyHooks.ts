@@ -8,6 +8,7 @@ import { log } from '../../logger.js';
 import type { DegradedRegistry } from '../../process/degradedRegistry.js';
 import type { CommandPolicySettings, PolicyEvaluate } from '../../policy/commandPolicySettings.js';
 import { FINDINGS_GATE_RULE_ID } from '../../policy/defaultCommandPolicy.js';
+import { pullRequestCreationsOf } from '../../policy/ghPrCreate.js';
 import { profileNameOf } from '../../policy/policyEvaluator.js';
 import type { FindingsGate, FindingsGateEnforcement, GateAnswer } from '../../review/findingsGate.js';
 import type { CommandPolicyHooks, DenialDraft, DenialJournal } from '../../policy/ports.js';
@@ -127,7 +128,13 @@ export class ClaudePolicyHooks implements CommandPolicyHooks {
   /** Opens the call when the ticket has its findings; otherwise refuses it, or only journals the refusal while the gate observes. */
   private async answerFindingsGate(session: Session, event: Extract<ToolHookEvent, { hook_event_name: 'PreToolUse' }>): Promise<PreToolUseHookOutput | undefined> {
     const { gate, enforcement } = this.deps.findingsGate!;
-    const answer = await this.checkFailingOpen(session, () => gate.check({ directory: event.cwd ?? session.directory }));
+    const directory = event.cwd ?? session.directory;
+    const creations = pullRequestCreationsOf(commandOf(event.tool_input) ?? '');
+    const judgedCreations = creations.length === 0 ? [{}] : creations;
+    const answer = await this.checkFailingOpen(session, async () => {
+      const answers = await Promise.all(judgedCreations.map(({ headBranch }) => gate.check({ directory, ...(headBranch === undefined ? {} : { headBranch }) })));
+      return answers.find((candidate) => !candidate.isOpen) ?? { isOpen: true };
+    });
     if (answer === undefined || answer.isOpen) return undefined;
     const refusal: Refusal = { ruleId: FINDINGS_GATE_RULE_ID, reason: answer.reason, alternative: answer.alternative, source: 'policy' };
     const isObserving = enforcement === 'observe';
