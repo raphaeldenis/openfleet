@@ -24,7 +24,7 @@ function unreadableAnswerOf(headBranch: string | undefined): { reason: string; a
   };
 }
 
-const isPassing =(line: ReviewFinding) => line.severity !== 'no-go';
+const isPassing = (line: ReviewFinding) => line.severity !== 'no-go';
 const latestOf = (lines: ReviewFinding[]) => lines.at(-1);
 
 export interface FindingsGateDeps {
