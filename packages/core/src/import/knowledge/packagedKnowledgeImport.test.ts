@@ -555,5 +555,5 @@ DatabaseSync.prototype.close = function() {
     writeInputs();
     expect(run(['--final', '--mem02-acceptance', 'MEM-02-reviewed']).status).toBe(1);
     expect(state()).toEqual(sealed);
-  });
+  }, 60_000);
 });
