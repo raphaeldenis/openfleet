@@ -12,3 +12,23 @@ export class ProposalNotFoundError extends Error {
     super('the proposal does not exist.');
   }
 }
+
+export class LawNotFoundError extends Error {
+  constructor() {
+    super('the law does not exist.');
+  }
+}
+
+/** The law changed since the caller read it. */
+export class LawRevisionConflictError extends Error {
+  constructor(readonly currentRev: number) {
+    super('the law changed since it was read.');
+  }
+}
+
+/** A withdrawn law is history: it is neither edited nor withdrawn again. */
+export class LawWithdrawnError extends Error {
+  constructor() {
+    super('the law is withdrawn.');
+  }
+}

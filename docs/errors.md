@@ -24,8 +24,8 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 | --- | --- | --- |
 | `invalid_request` | 400 | 10 |
 | `unauthorized` | 401 | 1 |
-| `not_found` | 404 | 11 |
-| `conflict` | 409 | 35 |
+| `not_found` | 404 | 12 |
+| `conflict` | 409 | 37 |
 | `too_large` | 413 | 4 |
 | `unavailable` | 503 | 6 |
 | `internal` | 500 | 4 |
@@ -68,6 +68,7 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 | `manager_not_found` | 404 | `never` |
 | `handoff_not_found` | 404 | `never` |
 | `proposal_not_found` | 404 | `never` |
+| `law_not_found` | 404 | `never` |
 
 ### conflict
 
@@ -91,6 +92,8 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 | `too_many_pending` | 409 | `later` |
 | `children_cap` | 409 | `later` |
 | `governance_queue_full` | 409 | `later` |
+| `law_revision_conflict` | 409 | `after_refresh` |
+| `law_withdrawn` | 409 | `never` |
 | `outside_lineage` | 409 | `never` |
 | `not_a_manager` | 409 | `never` |
 | `manager_paused` | 409 | `never` |

@@ -10,7 +10,7 @@ import { expectBestCpuUnder, expectLinearGrowth, cpuMillisecondsToRun } from '..
 import { forceNdjsonLogging } from '../forceNdjsonLogging.testkit.js';
 import { StuckConnectionError } from '../db/transaction.js';
 import { ApprovalError } from '../governance/approvalService.js';
-import { GovernanceQueueFullError, ProposalNotFoundError } from '../governance/governanceErrors.js';
+import { GovernanceQueueFullError, LawNotFoundError, LawRevisionConflictError, LawWithdrawnError, ProposalNotFoundError } from '../governance/governanceErrors.js';
 import { ModelConfigReadOnlyError, ModelConfigUnreadableError } from '../models.js';
 import { CommandPolicyFileReadOnlyError, CommandPolicyFileUnreadableError } from '../policy/commandPolicyErrors.js';
 import { NoteFileUnreadableError, PathEscapesDocsFolderError, ProjectNotFoundError } from '../notes/docsFolderService.js';
@@ -51,6 +51,9 @@ const domainErrorCodes: [string, () => unknown, ErrorCode][] = [
   ['TooManyPendingMessagesError', () => new TooManyPendingMessagesError('s1'), 'too_many_pending'],
   ['GovernanceQueueFullError', () => new GovernanceQueueFullError(), 'governance_queue_full'],
   ['ProposalNotFoundError', () => new ProposalNotFoundError(), 'proposal_not_found'],
+  ['LawNotFoundError', () => new LawNotFoundError(), 'law_not_found'],
+  ['LawRevisionConflictError', () => new LawRevisionConflictError(3), 'law_revision_conflict'],
+  ['LawWithdrawnError', () => new LawWithdrawnError(), 'law_withdrawn'],
   ['SessionReopenError not_closed', () => new SessionReopenError('not_closed', 'x'), 'not_closed'],
   ['SessionReopenError directory_missing', () => new SessionReopenError('directory_missing', 'x'), 'directory_missing'],
   ['SessionReopenError directory_changed', () => new SessionReopenError('directory_changed', 'x'), 'directory_changed'],

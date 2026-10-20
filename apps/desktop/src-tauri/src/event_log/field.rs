@@ -582,7 +582,7 @@ const KNOWN_CODES: &[&str] = &[
   "directory_in_use", "duplicate_child", "no_parent", "spawn_raced", "store_has_rows", "duplicate_id", "no_docs_folder", "not_file_backed",
   "docs_folder_not_writable", "payload_too_large", "note_too_large", "row_cap", "state_too_large", "daemon_shutting_down", "daemon_degraded",
   "delivery_failed", "message_held_for_review", "harness_exited", "claude_not_found", "git_unavailable", "internal_error", "launch_failed", "resume_timeout",
-  "db_stuck", "proposal_not_found", "governance_queue_full",
+  "db_stuck", "proposal_not_found", "governance_queue_full", "law_not_found", "law_revision_conflict", "law_withdrawn",
 ];
 
 const OTHER_CODE: &str = "other";

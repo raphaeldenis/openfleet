@@ -10,6 +10,10 @@ const DecisionBodySchema = z.discriminatedUnion('decision', [
   z.object({ decision: z.literal('deny'), reason: z.string().optional() }),
 ]);
 
+const ExpectedRevisionSchema = z.int().min(1);
+const EditLawBodySchema = z.object({ text: z.string(), expectedRevision: ExpectedRevisionSchema });
+const WithdrawLawBodySchema = z.object({ expectedRevision: ExpectedRevisionSchema });
+
 /** The human side of the governance queue: every route sits under /api, behind the admin token; none sits under /mcp. */
 export function registerGovernanceRoutes(router: Router, deps: { governanceQueue: GovernanceQueueService }): void {
   const { governanceQueue } = deps;
@@ -28,5 +32,15 @@ export function registerGovernanceRoutes(router: Router, deps: { governanceQueue
   router.add('POST', '/api/governance/proposals/:id/decide', ({ res, params, body }) => {
     const decision = DecisionBodySchema.parse(body);
     json(res, 200, governanceQueue.decide({ proposalId: params.id!, ...decision }));
+  });
+
+  router.add('PATCH', '/api/governance/laws/:id', ({ res, params, body }) => {
+    const { text, expectedRevision } = EditLawBodySchema.parse(body);
+    json(res, 200, governanceQueue.editLaw({ lawId: params.id!, text, expectedRevision }));
+  });
+
+  router.add('POST', '/api/governance/laws/:id/withdraw', ({ res, params, body }) => {
+    const { expectedRevision } = WithdrawLawBodySchema.parse(body);
+    json(res, 200, governanceQueue.withdrawLaw({ lawId: params.id!, expectedRevision }));
   });
 }

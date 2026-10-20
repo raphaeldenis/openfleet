@@ -1,7 +1,7 @@
 import type { DeniedCommand } from './commandPolicy.js';
 import type { DaemonIssue } from './daemonIssues.js';
 import type { ErrorEnvelope } from './errors.js';
-import type { GovernanceProposalView } from './governance.js';
+import type { GovernanceProposalView, LawView } from './governance.js';
 import type { ManagerView } from './managers.js';
 import type { Approval, PermissionMode, RuntimeAttention, Session, SessionCloseReason, SessionState } from './session.js';
 import type { SessionTodos, TodoSummary } from './todos.js';
@@ -65,6 +65,9 @@ export type ServerEvent =
   | { type: 'approval.resolved'; approval: Approval }
   | { type: 'governance.proposed'; proposal: GovernanceProposalView }
   | { type: 'governance.resolved'; proposal: GovernanceProposalView }
+  | { type: 'law.created'; law: LawView }
+  | { type: 'law.updated'; law: LawView }
+  | { type: 'law.withdrawn'; law: LawView }
   | { type: 'session.working_state'; state: WorkingState }
   | { type: 'session.todos'; todos: SessionTodos }
   | { type: 'manager.created'; manager: ManagerView }
