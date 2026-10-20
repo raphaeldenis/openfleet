@@ -3,7 +3,7 @@ import { ActivatedRoute, convertToParamMap, provideRouter } from '@angular/route
 import { render, screen, waitFor } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
 import type { ManagerProfile, ManagerView, Page, Project } from '@openfleet/shared';
-import { of } from 'rxjs';
+import { EMPTY, of } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
@@ -40,7 +40,7 @@ function fakeApi({ profile = profileOf(), updateManager = vi.fn().mockResolvedVa
 async function openProfile(api = fakeApi()) {
   const liveManagers = signal<ManagerView[]>([managerViewOf()]);
   const events = {
-    sessions: signal([sessionOf()]), approvals: signal([]), proposals: signal([]), managers: liveManagers, snapshotReceived: signal(true),
+    sessions: signal([sessionOf()]), approvals: signal([]), proposals: signal([]), lawChanges: EMPTY, managers: liveManagers, snapshotReceived: signal(true),
     workingStates: signal(new Map()), workingStatesReported: signal(false), workingStateMaxAgeMinutes: signal<number | undefined>(30), workingStateMaxBytes: signal<number | undefined>(6144),
   };
   await render(ManagerDashboardComponent, {
