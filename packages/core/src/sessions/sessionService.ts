@@ -21,6 +21,7 @@ import { findLatestContextTokens, findResolvedModel, readTranscriptTail } from '
 import { wrapAgentMessage } from './messageEnvelope.js';
 import { normalizePermissionMode, SessionRepository } from './sessionRepository.js';
 import { agentFinishedBy, notificationTriggerOf } from './notificationTriggers.js';
+import { ToolCompletionLedger } from './toolCompletionLedger.js';
 import { canDeliverNow, isClear, nextState, provesTurnEnded, startsClearedConversation, type SessionInput } from './stateMachine.js';
 
 // Injected, not imported: describeError imports this module's error classes, so importing it here would make a cycle.
@@ -428,6 +429,7 @@ export class SessionService {
   // it, never TURN_START_TIMEOUT_MS, so a relaunch cannot kill a CLI that may be generating. Ceiling: with
   // every hook lost, a pending relaunch (and the queue behind it) waits for the next Stop.
   private readonly unfinishedTurns = new Set<string>();
+  private readonly toolCompletions = new ToolCompletionLedger();
   private readonly relaunches = new Map<string, Promise<void>>();
   // Last transcript_path any hook reported for this session — the only way an ESC-armed watch below
   // knows which file to tail.
@@ -924,6 +926,8 @@ export class SessionService {
       this.repo.setCurrentConversationPrompted(sessionId, true);
     }
     this.recordResolvedModelIfPending(sessionId);
+    // Judged before the same-state early return below: a tool run rarely changes the session state.
+    this.emitNotificationTrigger(this.toolCompletions.judge(sessionId, input));
     // A new prompt means the previous turn is over from the user's side even when 'generating' ->
     // 'generating' is a no-op transition below (the CLI hadn't reported the previous turn's end yet): an
     // interrupt watch still armed for that turn must not survive to misjudge this one.
@@ -1977,6 +1981,7 @@ export class SessionService {
     this.forgetHumanDraft(sessionId);
     this.pendingRelaunches.delete(sessionId);
     this.unfinishedTurns.delete(sessionId);
+    this.toolCompletions.forget(sessionId);
     this.releaseClearHold(sessionId);
     this.clearStartedAt.delete(sessionId);
     const isClosingForShutdown = this.idsClosingForDaemonShutdown.delete(sessionId);

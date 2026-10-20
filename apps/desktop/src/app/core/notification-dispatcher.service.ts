@@ -9,7 +9,11 @@ const BURST_WINDOW_MS = 500;
 const INBOX_ROUTE = '/inbox';
 const MAX_REMEMBERED_PROMPTS = 500;
 
-type TriggerCategory = NotificationTrigger['category'];
+const SHOWN_CATEGORIES = ['agentFinished', 'needsInput'] as const;
+type TriggerCategory = (typeof SHOWN_CATEGORIES)[number];
+type ShownTrigger = Extract<NotificationTrigger, { category: TriggerCategory }>;
+
+const isShown = (trigger: NotificationTrigger): trigger is ShownTrigger => (SHOWN_CATEGORIES as readonly string[]).includes(trigger.category);
 
 const PREF_OF_CATEGORY: Record<TriggerCategory, 'agentFinished' | 'needsInput'> = {
   agentFinished: 'agentFinished',
@@ -24,7 +28,7 @@ const BURST_SUMMARY_OF_CATEGORY: Record<TriggerCategory, (count: number) => stri
 const sessionRouteOf = (session: Session | undefined, sessionId: string): string =>
   session?.role === MANAGER_ROLE ? `/manager/${sessionId}` : `/session/${sessionId}`;
 
-function bodyOf(trigger: NotificationTrigger): string {
+function bodyOf(trigger: ShownTrigger): string {
   if (trigger.category === 'agentFinished') return 'Finished';
   return trigger.kind === 'permission' ? 'Waiting for permission' : 'Waiting for your input';
 }
@@ -37,7 +41,7 @@ export class NotificationDispatcher {
   private readonly prefs = inject(NotificationPrefsStore);
   private readonly router = inject(Router);
   private readonly refusedByTheSystem = signal(false);
-  private readonly pendingByCategory = new Map<TriggerCategory, NotificationTrigger[]>();
+  private readonly pendingByCategory = new Map<TriggerCategory, ShownTrigger[]>();
   private readonly announcedPromptKeys = new Set<string>();
 
   /** True once the system refused to show banners for this app. */
@@ -48,6 +52,7 @@ export class NotificationDispatcher {
   }
 
   private receive(trigger: NotificationTrigger): void {
+    if (!isShown(trigger)) return;
     if (this.isSilenced(trigger)) return;
     if (this.isAlreadyAnnounced(trigger)) return;
     const burst = this.pendingByCategory.get(trigger.category);
@@ -59,7 +64,7 @@ export class NotificationDispatcher {
     setTimeout(() => this.flush(trigger.category), BURST_WINDOW_MS);
   }
 
-  private isSilenced(trigger: NotificationTrigger): boolean {
+  private isSilenced(trigger: ShownTrigger): boolean {
     const choices = this.prefs.prefs();
     const { enabled, muted } = choices;
     const isCategoryOn = choices[PREF_OF_CATEGORY[trigger.category]];
@@ -67,7 +72,7 @@ export class NotificationDispatcher {
     return !enabled || muted || !isCategoryOn || isAppInFrontOnThatSession;
   }
 
-  private isAlreadyAnnounced(trigger: NotificationTrigger): boolean {
+  private isAlreadyAnnounced(trigger: ShownTrigger): boolean {
     if (trigger.category !== 'needsInput') return false;
     const promptKey = `${trigger.sessionId}@${trigger.promptKey}`;
     if (this.announcedPromptKeys.has(promptKey)) return true;
@@ -87,7 +92,7 @@ export class NotificationDispatcher {
     void this.show(banner);
   }
 
-  private bannerOf(trigger: NotificationTrigger): NativeNotification {
+  private bannerOf(trigger: ShownTrigger): NativeNotification {
     const session = this.sessionOf(trigger.sessionId);
     const title = session ? `${session.emoji} ${session.name}` : 'OpenFleet';
     return { title, body: bodyOf(trigger), route: this.routeOf(trigger.sessionId) };

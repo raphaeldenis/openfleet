@@ -12,6 +12,7 @@ import type { EventBus } from '../events/eventBus.js';
 import { log } from '../logger.js';
 import type { ManagerService } from '../managers/managerService.js';
 import type { DegradedRegistry } from '../process/degradedRegistry.js';
+import { chatMessageBy } from '../sessions/notificationTriggers.js';
 import { SessionClosedError, type SessionService } from '../sessions/sessionService.js';
 import { DEFAULT_WORKING_STATE_MAX_AGE_MINUTES } from '../workingState/workingStateSettings.js';
 import type { TodoTracker } from '../todos/todoTracker.js';
@@ -132,6 +133,11 @@ export function createWsHandler(deps: { bus: EventBus; sessions: SessionService;
     if (state) broadcast({ type: 'session.working_state', state });
   };
   deps.workingStates?.onUpdate((state) => broadcast({ type: 'session.working_state', state }));
+  deps.workingStates?.onQuestionsAsked((asked) => {
+    const isClosed = deps.sessions.get(asked.sessionId)?.state === 'closed';
+    const trigger = isClosed ? undefined : chatMessageBy(asked);
+    if (trigger) broadcast({ type: 'notification.trigger', ...trigger });
+  });
   deps.todos?.onUpdate((todos) => broadcast({ type: 'session.todos', todos }));
   // A child spawned, closed or reopened moves its parent's fleetChangedAt, so the parent's state goes out again.
   deps.bus.subscribe((event) => {

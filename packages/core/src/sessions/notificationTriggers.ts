@@ -1,5 +1,7 @@
-import { WORKING_STATE_TOOL_NAMES, type NotificationTrigger, type SessionState } from '@openfleet/shared';
+import { TODO_TOOL_NAMES, WORKING_STATE_TOOL_NAMES, type NotificationTrigger, type SessionState } from '@openfleet/shared';
 import type { SessionInput } from './stateMachine.js';
+
+const DAEMON_OWNED_TOOL_NAMES = [...WORKING_STATE_TOOL_NAMES, ...TODO_TOOL_NAMES];
 
 export interface StateTransition {
   sessionId: string;
@@ -22,6 +24,22 @@ export function agentFinishedBy({ sessionId, input, to }: Omit<StateTransition, 
   const isStopThatEndsTheTurn = input.kind === 'hook' && input.event.hook_event_name === 'Stop' && !input.turnContinues;
   if (!isStopThatEndsTheTurn || to !== 'idle') return undefined;
   return { category: 'agentFinished', sessionId };
+}
+
+/** Returns toolCompletion for a PostToolUse of a top-level agent that names its tool run, unless the tool belongs to OpenFleet itself. */
+export function toolCompletionBy({ sessionId, input }: { sessionId: string; input: SessionInput }): NotificationTrigger | undefined {
+  if (input.kind !== 'hook' || input.event.hook_event_name !== 'PostToolUse') return undefined;
+  const { tool_name: toolName, tool_use_id: toolUseId, agent_id: agentId } = input.event;
+  const isRunBySubAgent = agentId !== undefined;
+  const isDaemonOwnedTool = (DAEMON_OWNED_TOOL_NAMES as readonly string[]).includes(toolName);
+  if (isRunBySubAgent || isDaemonOwnedTool || !toolUseId) return undefined;
+  return { category: 'toolCompletion', sessionId, toolUseId, toolName };
+}
+
+/** Returns chatMessage for the questions an agent newly asks the human; none when the update asks nothing new. */
+export function chatMessageBy({ sessionId, askedAt, newQuestionCount }: { sessionId: string; askedAt: string; newQuestionCount: number }): NotificationTrigger | undefined {
+  if (newQuestionCount === 0) return undefined;
+  return { category: 'chatMessage', sessionId, questionKey: `${sessionId}@${askedAt}`, questionCount: newQuestionCount };
 }
 
 function needsInputBy({ sessionId, input, to, at }: StateTransition): NotificationTrigger | undefined {

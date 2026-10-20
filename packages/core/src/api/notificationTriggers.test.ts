@@ -24,11 +24,14 @@ const APPROVAL_TIMEOUT_MS = 100;
 const SECRET_TOOL_INPUT = 'sk-live-TOOL-INPUT-SECRET';
 const SECRET_TRANSCRIPT_TEXT = 'TRANSCRIPT-SECRET-TEXT';
 const SECRET_NOTIFICATION_MESSAGE = 'NOTIFICATION-SECRET-MESSAGE';
+const SECRET_QUESTION_TEXT = 'QUESTION-SECRET-TEXT';
+const SECRET_TOOL_RESPONSE = 'TOOL-RESPONSE-SECRET';
 
 let db: DatabaseSync;
 let server: Awaited<ReturnType<typeof startServer>>;
 let sessions: SessionService;
 let workingStateSettings: WorkingStateSettings;
+let workingStates: WorkingStateService;
 let harness: FakeHarness;
 
 async function startFixture() {
@@ -42,7 +45,7 @@ async function startFixture() {
   const managers = new ManagerService({ managers: managerRepo, sessions, bus, scheduler: pulseScheduler });
   workingStateSettings = { maxBytes: 8192, enforce: false, maxAgeMinutes: 30 };
   const clock = () => new Date().toISOString();
-  const workingStates = new WorkingStateService({ db, clock, stateRoot: mkdtempSync(join(tmpdir(), 'of-notif-mirror-')), maxBytes: workingStateSettings.maxBytes });
+  workingStates = new WorkingStateService({ db, clock, stateRoot: mkdtempSync(join(tmpdir(), 'of-notif-mirror-')), maxBytes: workingStateSettings.maxBytes });
   const stopRefusal = new StopRefusal({ db, workingStates, settings: workingStateSettings, clock });
   const sessionStartContext = new SessionStartContext({ db, workingStates, settings: workingStateSettings, clock });
   server = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable: DEFAULT_MODEL_TABLE, modelConfigPath: '/tmp/of-unused/config.json', workingStates, stopRefusal, sessionStartContext });
@@ -58,6 +61,11 @@ const startTurn = (sessionId: string) => postHook(sessionId, { hook_event_name: 
 const stopTurn = (sessionId: string, extra: Record<string, unknown> = {}) => postHook(sessionId, { hook_event_name: 'Stop', ...extra });
 const notify = (sessionId: string, notificationType: string) => postHook(sessionId, { hook_event_name: 'Notification', notification_type: notificationType });
 const askPermission = (sessionId: string, toolName: string, toolInput: unknown = { command: 'ls' }) => postHook(sessionId, { hook_event_name: 'PermissionRequest', tool_name: toolName, tool_input: toolInput });
+const toolRan = (sessionId: string, toolName: string, toolUseId: string | undefined, extra: Record<string, unknown> = {}) =>
+  postHook(sessionId, { hook_event_name: 'PostToolUse', tool_name: toolName, ...(toolUseId && { tool_use_id: toolUseId }), tool_input: { command: SECRET_TOOL_INPUT }, tool_response: SECRET_TOOL_RESPONSE, ...extra });
+const toolAboutToRun = (sessionId: string, toolName: string, toolUseId: string, extra: Record<string, unknown> = {}) =>
+  postHook(sessionId, { hook_event_name: 'PreToolUse', tool_name: toolName, tool_use_id: toolUseId, tool_input: {}, ...extra });
+const agentStateAsking = (questionsForHuman: string[]) => ({ plan: [], todo: [], remaining: [], questionsForHuman, internalQuestions: [], blockers: [] });
 const createSessionAtIdle = async (name = 'Builder') => {
   const session = await sessions.create({ directory: '/tmp', name, harness: 'fake', emoji: '🛠' });
   await postHook(session.id, { hook_event_name: 'SessionStart', source: 'startup' });
@@ -266,7 +274,166 @@ describe('user is told once when an agent needs them', () => {
   });
 });
 
+describe('user is told once per tool run of a top-level agent', () => {
+  it('announces one toolCompletion carrying the tool name for a PostToolUse, and nothing again for the same tool_use_id replayed', async () => {
+    const session = await createSessionAtIdle();
+    const connection = await connect();
+
+    await startTurn(session.id);
+    await toolRan(session.id, 'Bash', 'toolu_1');
+    await toolRan(session.id, 'Bash', 'toolu_1');
+
+    expect(await settledTriggers(connection, session.id)).toEqual([{ category: 'toolCompletion', sessionId: session.id, toolUseId: 'toolu_1', toolName: 'Bash' }]);
+  });
+
+  it('announces one toolCompletion per distinct tool_use_id, and still one for a top-level PreToolUse that precedes its PostToolUse', async () => {
+    const session = await createSessionAtIdle();
+    const connection = await connect();
+
+    await startTurn(session.id);
+    await toolAboutToRun(session.id, 'Read', 'toolu_1');
+    await toolRan(session.id, 'Read', 'toolu_1');
+    await toolRan(session.id, 'Edit', 'toolu_2');
+
+    const triggers = await settledTriggers(connection, session.id);
+    expect(triggers.map((trigger) => trigger.category === 'toolCompletion' && trigger.toolUseId)).toEqual(['toolu_1', 'toolu_2']);
+  });
+
+  it('announces nothing for a tool run by a sub-agent', async () => {
+    const session = await createSessionAtIdle();
+    const connection = await connect();
+
+    await startTurn(session.id);
+    await toolRan(session.id, 'Bash', 'toolu_sub', { agent_id: 'agent-1', agent_type: 'general-purpose' });
+
+    expect(await settledTriggers(connection, session.id)).toEqual([]);
+  });
+
+  it('announces nothing for a PostToolUse that lacks agent_id when its PreToolUse named a sub-agent', async () => {
+    const session = await createSessionAtIdle();
+    const connection = await connect();
+
+    await startTurn(session.id);
+    await toolAboutToRun(session.id, 'Bash', 'toolu_sub', { agent_id: 'agent-1', agent_type: 'general-purpose' });
+    await toolRan(session.id, 'Bash', 'toolu_sub');
+
+    expect(await settledTriggers(connection, session.id)).toEqual([]);
+  });
+
+  it('announces nothing for a PostToolUse without a tool_use_id', async () => {
+    const session = await createSessionAtIdle();
+    const connection = await connect();
+
+    await startTurn(session.id);
+    await toolRan(session.id, 'Bash', undefined);
+
+    expect(await settledTriggers(connection, session.id)).toEqual([]);
+  });
+
+  it.each([...WORKING_STATE_TOOL_NAMES, 'TodoWrite', 'TaskUpdate'])('announces nothing for the daemon-owned tool %s', async (daemonOwnedTool) => {
+    const session = await createSessionAtIdle();
+    const connection = await connect();
+
+    await startTurn(session.id);
+    await toolRan(session.id, daemonOwnedTool, 'toolu_own');
+
+    expect(await settledTriggers(connection, session.id)).toEqual([]);
+  });
+
+  it('announces nothing for a session that is closed', async () => {
+    const session = await createSessionAtIdle();
+    const connection = await connect();
+
+    await startTurn(session.id);
+    await sessions.close(session.id);
+    await toolRan(session.id, 'Bash', 'toolu_late');
+
+    expect(await settledTriggers(connection, session.id)).toEqual([]);
+  });
+});
+
+describe('user is told once when an agent asks them a new question', () => {
+  const askQuestions = (sessionId: string, questions: string[]) => workingStates.update(sessionId, agentStateAsking(questions));
+  const chatMessagesOf = (triggers: NotificationTrigger[]) => triggers.filter((trigger) => trigger.category === 'chatMessage');
+
+  it('announces one chatMessage with the question count for a new question, and nothing for the same state sent again', async () => {
+    const session = await createSessionAtIdle();
+    const connection = await connect();
+
+    askQuestions(session.id, ['Which database?']);
+    askQuestions(session.id, ['Which database?']);
+
+    const triggers = await settledTriggers(connection, session.id);
+    expect(triggers).toEqual([{ category: 'chatMessage', sessionId: session.id, questionKey: expect.stringMatching(new RegExp(`^${session.id}@`)), questionCount: 1 }]);
+  });
+
+  it('announces one chatMessage counting only the questions that are new, when the agent adds one to an old one', async () => {
+    const session = await createSessionAtIdle();
+    askQuestions(session.id, ['Which database?']);
+    const connection = await connect();
+
+    askQuestions(session.id, ['Which database?', 'Which region?', 'Which tenant?']);
+
+    expect(chatMessagesOf(await settledTriggers(connection, session.id))).toEqual([expect.objectContaining({ questionCount: 2 })]);
+  });
+
+  it('announces a new chatMessage for a question whose text changed', async () => {
+    const session = await createSessionAtIdle();
+    askQuestions(session.id, ['Which database?']);
+    const connection = await connect();
+
+    askQuestions(session.id, ['Which database engine?']);
+
+    expect(chatMessagesOf(await settledTriggers(connection, session.id))).toHaveLength(1);
+  });
+
+  it('announces nothing when a question is answered and removed, reordered or a non-question section changes', async () => {
+    const session = await createSessionAtIdle();
+    askQuestions(session.id, ['Which database?', 'Which region?']);
+    const connection = await connect();
+
+    askQuestions(session.id, ['Which region?', 'Which database?']);
+    askQuestions(session.id, ['Which region?']);
+    workingStates.update(session.id, { ...agentStateAsking(['Which region?']), plan: ['a new plan'] });
+    askQuestions(session.id, []);
+
+    expect(chatMessagesOf(await settledTriggers(connection, session.id))).toEqual([]);
+  });
+
+  it('announces again a question that was removed and later asked anew', async () => {
+    const session = await createSessionAtIdle();
+    askQuestions(session.id, ['Which database?']);
+    askQuestions(session.id, []);
+    const connection = await connect();
+
+    askQuestions(session.id, ['Which database?']);
+
+    expect(chatMessagesOf(await settledTriggers(connection, session.id))).toHaveLength(1);
+  });
+
+  it('announces nothing for a session that is closed', async () => {
+    const session = await createSessionAtIdle();
+    const connection = await connect();
+
+    await sessions.close(session.id);
+    askQuestions(session.id, ['Which database?']);
+
+    expect(chatMessagesOf(await settledTriggers(connection, session.id))).toEqual([]);
+  });
+});
+
 describe('a client that connects later', () => {
+  it('receives no announcement of tool runs and questions from before it connected', async () => {
+    const session = await createSessionAtIdle();
+    await startTurn(session.id);
+    await toolRan(session.id, 'Bash', 'toolu_old');
+    workingStates.update(session.id, agentStateAsking(['Which database?']));
+
+    const lateConnection = await connect();
+
+    expect(await settledTriggers(lateConnection, session.id)).toEqual([]);
+  });
+
   it('receives no announcement of what happened before it connected', async () => {
     const session = await createSessionAtIdle();
     await startTurn(session.id);
@@ -292,6 +459,21 @@ describe('what an announcement reveals', () => {
     expect(announcements).toContain('Bash');
     expect(announcements).not.toContain(SECRET_TOOL_INPUT);
     expect(announcements).not.toContain(SECRET_TRANSCRIPT_TEXT);
+  });
+
+  it('never carries the tool input, the tool response nor the text of a question', async () => {
+    const session = await createSessionAtIdle();
+    const connection = await connect();
+
+    await startTurn(session.id);
+    await toolRan(session.id, 'Bash', 'toolu_1');
+    workingStates.update(session.id, agentStateAsking([SECRET_QUESTION_TEXT]));
+
+    const triggers = await settledTriggers(connection, session.id);
+    const announcements = JSON.stringify(triggers);
+    expect(triggers).toHaveLength(2);
+    expect(announcements).toContain('Bash');
+    for (const secret of [SECRET_TOOL_INPUT, SECRET_TOOL_RESPONSE, SECRET_QUESTION_TEXT]) expect(announcements).not.toContain(secret);
   });
 
   it('never carries the text of the Notification that asks for the human', async () => {

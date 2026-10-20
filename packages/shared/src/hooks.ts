@@ -7,6 +7,7 @@ const base = {
 };
 
 // Who is calling: present on tool hooks only, and agent_id/agent_type only when a sub-agent makes the call.
+// UNVERIFIED: that a real PostToolUse carries agent_id; the notification pipeline also remembers sub-agent ids seen on PreToolUse.
 const toolCaller = {
   agent_id: z.string().optional(),
   agent_type: z.string().optional(),
@@ -22,7 +23,7 @@ export const ClaudeHookEventSchema = z.discriminatedUnion('hook_event_name', [
   z.object({ ...base, hook_event_name: z.literal('SessionEnd'), reason: z.string().optional() }),
   z.object({ ...base, hook_event_name: z.literal('UserPromptSubmit'), user_prompt: z.string().optional(), prompt: z.string().optional() }),
   z.object({ ...base, ...toolCaller, hook_event_name: z.literal('PreToolUse'), tool_name: z.string(), tool_input: z.unknown(), tool_use_id: z.string().optional() }),
-  z.object({ ...base, hook_event_name: z.literal('PostToolUse'), tool_name: z.string(), tool_use_id: z.string().optional(), tool_input: z.unknown().optional(), tool_response: z.unknown().optional() }),
+  z.object({ ...base, ...toolCaller, hook_event_name: z.literal('PostToolUse'), tool_name: z.string(), tool_use_id: z.string().optional(), tool_input: z.unknown().optional(), tool_response: z.unknown().optional() }),
   z.object({ ...base, ...toolCaller, hook_event_name: z.literal('PermissionRequest'), tool_name: z.string(), tool_input: z.unknown(), permission_suggestions: z.array(z.unknown()).optional() }),
   z.object({ ...base, hook_event_name: z.literal('Notification'), notification_type: z.string(), message: z.string().optional() }),
   z.object({ ...base, hook_event_name: z.literal('Stop'), last_assistant_message: z.string().optional(), stop_hook_active: z.boolean().optional() }),

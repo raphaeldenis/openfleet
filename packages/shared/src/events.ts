@@ -34,10 +34,16 @@ export type NoteChangeEvent =
 
 export type NeedsInputKind = 'permission' | 'input';
 
-/** What happened to a session that deserves the human's attention. Carries identifiers and a tool name only: never tool input, transcript or prompt text. */
+/**
+ * What happened to a session that deserves the human's attention. Carries identifiers, a tool name and a question count only:
+ * never tool input or response, transcript, prompt or question text.
+ * A client ignores a category it does not know.
+ */
 export type NotificationTrigger =
   | { category: 'agentFinished'; sessionId: string }
-  | { category: 'needsInput'; sessionId: string; kind: NeedsInputKind; promptKey: string; toolName?: string };
+  | { category: 'needsInput'; sessionId: string; kind: NeedsInputKind; promptKey: string; toolName?: string }
+  | { category: 'toolCompletion'; sessionId: string; toolUseId: string; toolName: string }
+  | { category: 'chatMessage'; sessionId: string; questionKey: string; questionCount: number };
 
 export type ServerEvent =
   | { type: 'snapshot'; sessions: Session[]; approvals: Approval[]; proposals?: GovernanceProposalView[]; managers: ManagerView[]; workingStates?: WorkingState[]; workingStateMaxAgeMinutes?: number; workingStateMaxBytes?: number; todoSummaries?: TodoSummary[]; daemonIssues?: DaemonIssue[]; silentBlocks?: SilentBlock[] }

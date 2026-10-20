@@ -59,6 +59,22 @@ describe('ServerEvent', () => {
     expect([finished, needsPermission, needsAnswer].map((event) => event.type)).toEqual(['notification.trigger', 'notification.trigger', 'notification.trigger']);
   });
 
+  it('announces a finished tool run with its tool_use_id and tool name, and a new question with its key and count', () => {
+    const toolRan: ServerEvent = { type: 'notification.trigger', category: 'toolCompletion', sessionId: 's1', toolUseId: 'toolu_1', toolName: 'Bash' };
+    const asked: ServerEvent = { type: 'notification.trigger', category: 'chatMessage', sessionId: 's1', questionKey: 's1@t', questionCount: 2 };
+
+    expect([toolRan, asked].map((event) => event.type)).toEqual(['notification.trigger', 'notification.trigger']);
+  });
+
+  it('has no field to carry the text of a question nor the input of a tool run', () => {
+    // @ts-expect-error a question announcement counts questions, never quotes one
+    const quotingQuestion: ServerEvent = { type: 'notification.trigger', category: 'chatMessage', sessionId: 's1', questionKey: 'k', questionCount: 1, question: 'Which database?' };
+    // @ts-expect-error a tool announcement names the tool, never its input
+    const leakingTool: ServerEvent = { type: 'notification.trigger', category: 'toolCompletion', sessionId: 's1', toolUseId: 'u', toolName: 'Bash', toolInput: { command: 'rm' } };
+
+    expect([quotingQuestion, leakingTool]).toHaveLength(2);
+  });
+
   it('has no field to carry tool input or transcript text', () => {
     // @ts-expect-error a trigger names the tool, never its input
     const leaking: ServerEvent = { type: 'notification.trigger', category: 'needsInput', sessionId: 's1', kind: 'permission', promptKey: 'k', toolInput: { command: 'rm' } };
