@@ -80,9 +80,8 @@ for (const viewport of viewports) {
       await openSessionWithPanel(page, { sessionId: session.id, isPanelOpen: panel.isOpen });
 
       await expect.poll(async () => (await verticalGapsAroundTerminal(page)).aboveHost).toBeLessThanOrEqual(VERTICAL_TOLERANCE_PX);
-      const gaps = await verticalGapsAroundTerminal(page);
-      expect(gaps.belowHost).toBeLessThanOrEqual(VERTICAL_TOLERANCE_PX);
-      expect(gaps.unusedByRows).toBeLessThan(ONE_TERMINAL_ROW_PX);
+      await expect.poll(async () => (await verticalGapsAroundTerminal(page)).belowHost).toBeLessThanOrEqual(VERTICAL_TOLERANCE_PX);
+      await expect.poll(async () => (await verticalGapsAroundTerminal(page)).unusedByRows).toBeLessThan(ONE_TERMINAL_ROW_PX);
       await expect(page.getByTestId('right-panel-session-toggle')).toBeVisible();
     });
   }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cpuMillisecondsOfAsync, cpuMillisecondsToRun, expectBestCpuUnder, expectLinearGrowth, linearGrowthProblems, type MillisecondsAtSize } from './linearGrowth.js';
+import { cpuMillisecondsToRun, expectBestCpuUnder, expectBestCpuUnderAsync, expectLinearGrowth, linearGrowthProblems, type MillisecondsAtSize } from './linearGrowth.js';
 
 const budget = { smallSize: 1000, largeSize: 4000 };
 const linearCost: MillisecondsAtSize = (size) => size / 10;
@@ -120,9 +120,9 @@ describe('expectBestCpuUnder', () => {
   }, 30_000);
 
   it('does not count time spent waiting, only CPU time', async () => {
-    const cpuMilliseconds = await cpuMillisecondsOfAsync(() => new Promise((resolve) => setTimeout(resolve, 200)));
+    const waitOf100Milliseconds = () => new Promise((resolve) => setTimeout(resolve, 100));
 
-    expect(cpuMilliseconds).toBeLessThan(50);
+    await expect(expectBestCpuUnderAsync(waitOf100Milliseconds, 50)).resolves.toBeUndefined();
   });
 });
 

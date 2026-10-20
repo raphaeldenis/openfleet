@@ -1,11 +1,14 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createTempDirTracker } from '../tempDirTracker.js';
 import { runPostCreateHook } from './postCreateHook.js';
 
 const tempDirs = createTempDirTracker();
-afterEach(() => tempDirs.removeAll());
+afterEach(() => {
+  vi.useRealTimers();
+  tempDirs.removeAll();
+});
 
 const aWorktreeDirectory = () => realpathSync(tempDirs.make('of-hook-wt-'));
 
@@ -28,6 +31,12 @@ const isProcessAlive = (pid: number): boolean => {
     return false;
   }
 };
+
+/** The pid the script has written to the file, or 0 while the script has not written it yet. */
+function backgroundPidWrittenTo(pidFile: string): number {
+  const written = existsSync(pidFile) ? readFileSync(pidFile, 'utf8').trim() : '';
+  return Number(written) || 0;
+}
 
 async function waitUntil(condition: () => boolean, withinMs: number): Promise<boolean> {
   const deadline = Date.now() + withinMs;
@@ -100,12 +109,17 @@ describe('runPostCreateHook', () => {
   it('answers timeout and kills the script together with the background processes it started', async () => {
     const pidFile = join(tempDirs.make('of-hook-out-'), 'child.pid');
     const script = aScript(`sleep 30 &\necho $! > "${pidFile}"\nwait`);
+    const neverReachedTimeoutMs = 600_000;
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
 
-    const warning = await runPostCreateHook({ ...hookInput(script), timeoutMs: 1_000 });
+    const hookAnswer = runPostCreateHook({ ...hookInput(script), timeoutMs: neverReachedTimeoutMs });
+    await vi.waitFor(() => expect(backgroundPidWrittenTo(pidFile)).toBeGreaterThan(0), { timeout: 30_000 });
+    const childPid = backgroundPidWrittenTo(pidFile);
+    vi.advanceTimersByTime(neverReachedTimeoutMs);
+    const warning = await hookAnswer;
+    vi.useRealTimers();
 
     expect(warning).toMatchObject({ type: 'post_create_hook_failed', reason: 'timeout' });
-    expect(await waitUntil(() => existsSync(pidFile), 3_000)).toBe(true);
-    const childPid = Number(readFileSync(pidFile, 'utf8').trim());
     expect(await waitUntil(() => !isProcessAlive(childPid), 3_000)).toBe(true);
   });
 
