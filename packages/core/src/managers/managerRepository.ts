@@ -86,6 +86,10 @@ export class ManagerRepository {
   setMissionNote(sessionId: string, noteId: string | null): void {
     this.db.prepare('UPDATE managers SET mission_note_id = ? WHERE session_id = ?').run(noteId, sessionId);
   }
+  /** Whether any manager, in bounds or not, links the note as its mission. */
+  isMissionNote(noteId: string): boolean {
+    return this.db.prepare('SELECT 1 FROM managers WHERE mission_note_id = ? LIMIT 1').get(noteId) !== undefined;
+  }
   setMissionNotePinned(sessionId: string, isPinned: boolean): void {
     this.db.prepare('UPDATE managers SET pin_mission_note = ? WHERE session_id = ?').run(Number(isPinned), sessionId);
   }

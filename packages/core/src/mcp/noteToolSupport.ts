@@ -1,4 +1,4 @@
-import type { Note, NoteChangeSource, Session } from '@openfleet/shared';
+import { OpenFleetError, type Note, type NoteChangeSource, type Session } from '@openfleet/shared';
 import type { DocsFolderService } from '../notes/docsFolderService.js';
 import { NoteNotFoundError, type NoteService } from '../notes/noteService.js';
 import type { NoteRepository } from '../notes/noteRepository.js';
@@ -8,10 +8,15 @@ export interface NoteToolDeps {
   noteRepo: NoteRepository;
   docs: DocsFolderService;
   caller: Session;
+  /** Tells whether a manager links the note as its mission. */
+  isMissionNote: (noteId: string) => boolean;
 }
 
+const MISSION_NOTE_WRITE_REFUSAL = 'this note is linked as the mission of a manager: agents cannot write it.';
+const MISSION_NOTE_WRITE_HINT = 'Ask a human to edit the mission note, or keep your own notes in another note.';
+
 /** What every note tool shares: the caller's project scope, ownership lookup, the CAS write path, attribution and the public note shape. */
-export function createNoteToolSupport({ notes, noteRepo, docs, caller }: NoteToolDeps) {
+export function createNoteToolSupport({ notes, noteRepo, docs, caller, isMissionNote }: NoteToolDeps) {
   const author = () => `${caller.emoji} ${caller.name}`;
 
   function requireProject(): { projectId: string } | undefined {
@@ -22,6 +27,13 @@ export function createNoteToolSupport({ notes, noteRepo, docs, caller }: NoteToo
   function requireOwnNote(projectId: string, id: string): Note {
     const note = noteRepo.get(id);
     if (!note || note.projectId !== projectId) throw new NoteNotFoundError(id);
+    return note;
+  }
+
+  /** The lookup every note-writing tool starts from: an own note, and one no manager links as its mission. */
+  function requireWritableNote(projectId: string, id: string): Note {
+    const note = requireOwnNote(projectId, id);
+    if (isMissionNote(note.id)) throw new OpenFleetError('unauthorized', MISSION_NOTE_WRITE_REFUSAL, { hint: MISSION_NOTE_WRITE_HINT });
     return note;
   }
 
@@ -56,5 +68,5 @@ export function createNoteToolSupport({ notes, noteRepo, docs, caller }: NoteToo
     };
   };
 
-  return { author, requireProject, requireOwnNote, writeBody, noteSummary, noteView, noteMentionBlocksView };
+  return { author, requireProject, requireOwnNote, requireWritableNote, writeBody, noteSummary, noteView, noteMentionBlocksView };
 }

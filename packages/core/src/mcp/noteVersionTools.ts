@@ -20,7 +20,7 @@ const MAX_MERGE_ATTEMPTS = 4;
 export function registerNoteVersionTools(server: McpServer, deps: RegisterNoteVersionToolsDeps): void {
   const { notes, noteRepo } = deps;
   const guarded = guardedFor(deps.caller);
-  const { author, requireProject, requireOwnNote, writeBody, noteSummary } = createNoteToolSupport(deps);
+  const { author, requireProject, requireOwnNote, requireWritableNote, writeBody, noteSummary } = createNoteToolSupport(deps);
 
   function requireVersion(noteId: string, rev: number) {
     const version = noteRepo.getVersion(noteId, rev);
@@ -34,7 +34,7 @@ export function registerNoteVersionTools(server: McpServer, deps: RegisterNoteVe
   function writeSectionAgainstExpectedRev(projectId: string, { note, heading, content, expectedRev }: SectionWrite) {
     let lastRefusal: StaleRevisionError | undefined;
     for (let attempt = 0; attempt < MAX_MERGE_ATTEMPTS; attempt++) {
-      const current = requireOwnNote(projectId, note);
+      const current = requireWritableNote(projectId, note);
       const isOnExpectedRev = current.rev === expectedRev;
       if (isOnExpectedRev) return noteSummary(writeBody(current, { bodyMd: replaceSection(current.bodyMd, heading, content), expectedRev }));
 
@@ -59,7 +59,7 @@ export function registerNoteVersionTools(server: McpServer, deps: RegisterNoteVe
     const scope = requireProject();
     if (!scope) return refuse('project_not_found', 'this session has no project');
     return guarded(() => {
-      requireOwnNote(scope.projectId, note);
+      requireWritableNote(scope.projectId, note);
       return noteSummary(notes.append(note, { content, author: author() }));
     });
   });
@@ -104,7 +104,7 @@ export function registerNoteVersionTools(server: McpServer, deps: RegisterNoteVe
     const scope = requireProject();
     if (!scope) return refuse('project_not_found', 'this session has no project');
     return guarded(() => {
-      const current = requireOwnNote(scope.projectId, note);
+      const current = requireWritableNote(scope.projectId, note);
       const target = requireVersion(note, rev);
       const isMissingExpectedRev = expected_rev === undefined;
       if (isMissingExpectedRev && REQUIRE_EXPECTED_REV_ON_RESTORE) throw new OpenFleetError('invalid_body', 'expected_rev is required to restore a note version.', { hint: MISSING_EXPECTED_REV_HINT });

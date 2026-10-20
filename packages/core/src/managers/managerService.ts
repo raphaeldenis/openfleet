@@ -131,6 +131,11 @@ export class ManagerService {
     return { manager: this.view(record), scapeImport };
   }
 
+  /** Whether any manager links the note as its mission. */
+  isMissionNote(noteId: string): boolean {
+    return this.deps.managers.isMissionNote(noteId);
+  }
+
   listViews(): ManagerView[] {
     return this.deps.managers.list().map((record) => this.view(record));
   }
