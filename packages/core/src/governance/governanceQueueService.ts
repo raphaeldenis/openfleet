@@ -1,16 +1,16 @@
 import type { DatabaseSync } from 'node:sqlite';
 import {
   HUMAN_ACTOR, MAX_AUDIT_HISTORY_PER_MANAGER, MAX_DENIED_HISTORY_PER_MANAGER, MAX_PENDING_PROPOSALS_PER_MANAGER, OpenFleetError,
-  type GovernanceProposalView, type LawPayload, type ManagerGovernanceWithLawsView, type ProposalKind, type ProposalPayload, type ProposalStatus, type ResourceAccessPayload,
+  type GovernanceProposalView, type LawPayload, type LawView, type ManagerGovernanceWithLawsView, type ProposalKind, type ProposalPayload, type ProposalStatus, type ResourceAccessPayload,
 } from '@openfleet/shared';
 import { inTransaction } from '../db/transaction.js';
 import type { EventBus } from '../events/eventBus.js';
 import type { ManagerLinkTargets } from '../managers/managerService.js';
 import { NoteNotFoundError } from '../notes/noteService.js';
 import { StoreNotFoundError } from '../stores/dataStoreRepository.js';
-import { GovernanceQueueFullError, ProposalNotFoundError } from './governanceErrors.js';
+import { GovernanceQueueFullError, LawNotFoundError, LawRevisionConflictError, LawWithdrawnError, ProposalNotFoundError } from './governanceErrors.js';
 import { LawRepository } from './lawRepository.js';
-import { lawPayloadOf, permissionPayloadOf, resourceAccessPayloadOf, storedDenialReason, storedIncident } from './proposalInput.js';
+import { lawPayloadOf, permissionPayloadOf, resourceAccessPayloadOf, storedDenialReason, storedIncident, storedLawText } from './proposalInput.js';
 import { ProposalRepository } from './proposalRepository.js';
 
 /** Who is a manager, and in which project it works. */
@@ -33,6 +33,13 @@ export interface ProposalFiled {
   proposal: GovernanceProposalView;
   /** True when an identical proposal was already pending: it is returned instead of a new one. */
   deduplicated: boolean;
+}
+
+export interface LawEdit {
+  lawId: string;
+  text: string;
+  /** The revision the human read: the edit applies only if the law is still at it. */
+  expectedRevision: number;
 }
 
 export type Decision = { proposalId: string; decision: 'approve' | 'deny'; reason?: string };
@@ -86,10 +93,44 @@ export class GovernanceQueueService {
   /** A human approves or denies a pending proposal; approving a resource access records its grant in the same transaction. */
   decide(decision: Decision): GovernanceProposalView {
     const reason = decision.reason === undefined ? undefined : storedDenialReason(decision.reason);
-    const answered = this.recordDecision(decision);
+    const { answered, enactedLaw } = this.recordDecision(decision);
     this.deps.bus.emit({ type: 'governance.resolved', proposal: answered });
+    if (enactedLaw) this.deps.bus.emit({ type: 'law.created', law: enactedLaw });
     this.deps.notifyDecision?.({ proposal: answered, reason });
     return answered;
+  }
+
+  /** A human replaces the text of an active law; the revision the human read must still be the current one. */
+  editLaw({ lawId, text, expectedRevision }: LawEdit): LawView {
+    const newText = storedLawText(text);
+    const edited = this.changeLaw({
+      lawId,
+      change: () => this.laws.replaceTextIfRevision({ lawId, expectedRevision, text: newText, updatedBy: HUMAN_ACTOR, updatedAt: this.deps.clock() }),
+    });
+    this.deps.bus.emit({ type: 'law.updated', law: edited });
+    return edited;
+  }
+
+  /** A human withdraws an active law; the withdrawal is final and a second one is refused as law_withdrawn. */
+  withdrawLaw({ lawId, expectedRevision }: { lawId: string; expectedRevision: number }): LawView {
+    const withdrawn = this.changeLaw({
+      lawId,
+      change: () => this.laws.withdrawIfRevision({ lawId, expectedRevision, withdrawnBy: HUMAN_ACTOR, withdrawnAt: this.deps.clock() }),
+    });
+    this.deps.bus.emit({ type: 'law.withdrawn', law: withdrawn });
+    return withdrawn;
+  }
+
+  /** Runs a change that only takes effect on an active law at the expected revision; otherwise explains why it did not. */
+  private changeLaw({ lawId, change }: { lawId: string; change: () => boolean }): LawView {
+    return inTransaction(this.deps.db, 'governance_change_law', () => {
+      const wasChanged = change();
+      if (wasChanged) return this.laws.find(lawId)!;
+      const law = this.laws.find(lawId);
+      if (!law) throw new LawNotFoundError();
+      if (law.status === 'withdrawn') throw new LawWithdrawnError();
+      throw new LawRevisionConflictError(law.revision);
+    });
   }
 
   /** The proposals of every manager in the given status, oldest filing first. */
@@ -102,7 +143,7 @@ export class GovernanceQueueService {
     return this.deps.managers.isManager(sessionId);
   }
 
-  private recordDecision(decision: Decision): GovernanceProposalView {
+  private recordDecision(decision: Decision): { answered: GovernanceProposalView; enactedLaw?: LawView } {
     const denialReason = decision.decision === 'deny' ? storedDenialReason(decision.reason) : undefined;
     return inTransaction(this.deps.db, 'governance_decide', () => {
       const { proposalId } = decision;
@@ -111,12 +152,12 @@ export class GovernanceQueueService {
       const answered = this.proposals.find(proposalId)!;
       if (status === 'denied') {
         this.evictOldestDenials(answered.managerId);
-        return answered;
+        return { answered };
       }
       this.recordGrantOfApproved(answered);
-      this.recordLawOfApproved(answered);
+      const enactedLaw = this.recordLawOfApproved(answered);
       this.evictOldestAudit(answered.managerId);
-      return answered;
+      return { answered, enactedLaw };
     });
   }
 
@@ -168,12 +209,12 @@ export class GovernanceQueueService {
   }
 
   /** An approved law proposal enacts one law; its text is the proposal text. */
-  private recordLawOfApproved(approved: GovernanceProposalView): void {
-    if (approved.kind !== 'law') return;
+  private recordLawOfApproved(approved: GovernanceProposalView): LawView | undefined {
+    if (approved.kind !== 'law') return undefined;
     const { text } = approved.payload as LawPayload;
-    this.laws.insertOfApprovedProposal({
-      id: this.deps.newId(), managerId: approved.managerId, text, approvedBy: HUMAN_ACTOR, proposalId: approved.id, approvedAt: approved.decidedAt!,
-    });
+    const id = this.deps.newId();
+    this.laws.insertOfApprovedProposal({ id, managerId: approved.managerId, text, approvedBy: HUMAN_ACTOR, proposalId: approved.id, approvedAt: approved.decidedAt! });
+    return this.laws.find(id)!;
   }
 
   private evictOldestAudit(managerId: string): void {

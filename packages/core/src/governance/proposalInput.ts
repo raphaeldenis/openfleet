@@ -34,6 +34,8 @@ export const storedDenialReason = (reason: string | undefined): string => {
   return requiredText({ field: 'reason', value: reason, maxChars: MAX_DENIAL_REASON_CHARS });
 };
 
+export const storedLawText = (text: string): string => storedText({ field: 'text', value: text, maxChars: MAX_LAW_TEXT_CHARS });
+
 export const lawPayloadOf = ({ text }: { text: string }): LawPayload => ({ text: storedText({ field: 'body', value: text, maxChars: MAX_LAW_TEXT_CHARS }) });
 
 const storedPermissionField = (field: keyof PermissionPayload, value: string) => storedText({ field, value, maxChars: MAX_PERMISSION_FIELD_CHARS });

@@ -43,6 +43,25 @@ export class LawRepository {
       .run(law.id, law.managerId, law.text, law.approvedAt, law.approvedAt, law.approvedBy, law.approvedBy, law.proposalId);
   }
 
+  find(lawId: string): LawView | undefined {
+    const row = this.db.prepare('SELECT * FROM laws WHERE id = ?').get(lawId) as unknown as LawRow | undefined;
+    return row && toView(row);
+  }
+
+  /** Replaces the text of an active law at the expected revision; false when the law is no longer active at that revision. */
+  replaceTextIfRevision({ lawId, expectedRevision, text, updatedBy, updatedAt }: { lawId: string; expectedRevision: number; text: string; updatedBy: string; updatedAt: string }): boolean {
+    const { changes } = this.db.prepare(`UPDATE laws SET text = ?, revision = revision + 1, updated_at = ?, updated_by = ?
+      WHERE id = ? AND revision = ? AND status = 'active'`).run(text, updatedAt, updatedBy, lawId, expectedRevision);
+    return changes > 0;
+  }
+
+  /** Withdraws an active law at the expected revision; false when the law is no longer active at that revision. */
+  withdrawIfRevision({ lawId, expectedRevision, withdrawnBy, withdrawnAt }: { lawId: string; expectedRevision: number; withdrawnBy: string; withdrawnAt: string }): boolean {
+    const { changes } = this.db.prepare(`UPDATE laws SET status = 'withdrawn', revision = revision + 1, updated_at = ?, updated_by = ?, withdrawn_at = ?, withdrawn_by = ?
+      WHERE id = ? AND revision = ? AND status = 'active'`).run(withdrawnAt, withdrawnBy, withdrawnAt, withdrawnBy, lawId, expectedRevision);
+    return changes > 0;
+  }
+
   /** Every law of the manager, active and withdrawn, oldest first. */
   allOf(managerId: string): LawView[] {
     const rows = this.db.prepare('SELECT * FROM laws WHERE manager_id = ? ORDER BY created_at, rowid').all(managerId) as unknown as LawRow[];

@@ -6,6 +6,7 @@ import { of } from 'rxjs';
 import { describe, vi } from 'vitest';
 import { itRendersImportedMarkdownTables } from '../../testing/markdown-tables.testing';
 import { FleetApiService } from '../core/fleet-api.service';
+import { EMPTY } from 'rxjs';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { ManagerDashboardComponent } from './manager-dashboard.component';
 
@@ -29,7 +30,7 @@ async function renderMissionPanelShowing(missionText: string): Promise<void> {
     models: vi.fn().mockResolvedValue({}),
   };
   const events = {
-    sessions: signal([MANAGER_SESSION]), approvals: signal([]), proposals: signal([]), managers: signal([profileWithMission(missionText).manager]), snapshotReceived: signal(true),
+    sessions: signal([MANAGER_SESSION]), approvals: signal([]), proposals: signal([]), lawChanges: EMPTY, managers: signal([profileWithMission(missionText).manager]), snapshotReceived: signal(true),
     workingStates: signal(new Map()), workingStatesReported: signal(false), workingStateMaxAgeMinutes: signal<number | undefined>(30), workingStateMaxBytes: signal<number | undefined>(6144),
   };
   await render(ManagerDashboardComponent, {

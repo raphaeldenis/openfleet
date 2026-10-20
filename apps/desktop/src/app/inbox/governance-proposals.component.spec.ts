@@ -266,38 +266,38 @@ describe('GovernanceProposalsComponent', () => {
   });
 
   describe('approved law', () => {
-    it('tells how to copy it into the mission note, with a link that opens that note', async () => {
+    it('leaves nothing to copy into the mission note: the law lives in the daemon', async () => {
       const proposal = lawProposal();
-      const { resolveOnDaemon } = await setup([proposal]);
+      const { resolveOnDaemon, api, fixture } = await setup([proposal]);
 
       await userEvent.click(screen.getByRole('button', { name: lawName('Approve', 'Never deploy on Friday') }));
       resolveOnDaemon(proposal);
+      await waitFor(() => expect(screen.queryByTestId('governance-card')).toBeNull());
+      await fixture.whenStable();
 
-      expect(await screen.findByText('Copy this into the Laws section of the mission note.')).toBeVisible();
-      const link = screen.getByRole('link', { name: 'Open the mission note of Lloyd' });
-      expect(link.getAttribute('href')).toContain('/notes');
-      expect(link.getAttribute('href')).toContain('noteId=mission-1');
+      expect(api.decideProposal).toHaveBeenCalledWith('prop-law', { decision: 'approve' });
+      expect(screen.queryByText(/Copy this into/)).toBeNull();
+      expect(screen.queryByTestId('governance-approved')).toBeNull();
+      expect(screen.queryByRole('link', { name: 'Open the mission note of Lloyd' })).toBeNull();
     });
 
-    it('offers no button that writes into the note, and a Dismiss that removes the instruction', async () => {
+    it('keeps nothing of the approved law in the session storage', async () => {
       const proposal = lawProposal();
-      const { resolveOnDaemon } = await setup([proposal]);
+      const { resolveOnDaemon, fixture } = await setup([proposal]);
+
       await userEvent.click(screen.getByRole('button', { name: lawName('Approve', 'Never deploy on Friday') }));
       resolveOnDaemon(proposal);
-      await screen.findByText('Copy this into the Laws section of the mission note.');
+      await fixture.whenStable();
 
-      expect(screen.queryByRole('button', { name: /add to (the )?note/i })).toBeNull();
-      await userEvent.click(screen.getByRole('button', { name: lawName('Dismiss', 'Never deploy on Friday') }));
-
-      expect(screen.queryByText('Copy this into the Laws section of the mission note.')).toBeNull();
+      expect(sessionStorage.getItem('openfleet.governance.approved-texts.v1')).toBeNull();
     });
   });
 
   describe('approved text kept for the human', () => {
-    const approveLaw = async (lawText = 'Never deploy on Friday') => {
-      const proposal = lawProposal({ payload: { text: lawText } });
+    const approvePermission = async () => {
+      const proposal = permissionProposal();
       const view = await setup([proposal]);
-      await userEvent.click(screen.getByRole('button', { name: /^Approve law proposal/ }));
+      await userEvent.click(screen.getByRole('button', { name: /^Approve permission proposal/ }));
       view.resolveOnDaemon(proposal);
       await screen.findByTestId('governance-approved');
       return view;
@@ -309,25 +309,49 @@ describe('GovernanceProposalsComponent', () => {
       return setup([]);
     };
 
-    it('shows the approved law again after the page is reloaded', async () => {
-      const view = await approveLaw();
+    it('shows the approved permission again after the page is reloaded', async () => {
+      const view = await approvePermission();
 
       await reloadThePage(view);
 
       const approved = screen.getByTestId('governance-approved');
       expect(approved).toHaveTextContent('Approved for Lloyd');
-      expect(approved).toHaveTextContent('Never deploy on Friday');
-      expect(screen.getByText('Copy this into the Laws section of the mission note.')).toBeVisible();
+      expect(approved).toHaveTextContent('git tag');
       expect(screen.getByRole('link', { name: 'Open the mission note of Lloyd' }).getAttribute('href')).toContain('noteId=mission-1');
     });
 
     it('does not show an approved text again after it was dismissed and the page reloaded', async () => {
-      const view = await approveLaw();
-      await userEvent.click(screen.getByRole('button', { name: /^Dismiss law proposal/ }));
+      const view = await approvePermission();
+      await userEvent.click(screen.getByRole('button', { name: /^Dismiss permission proposal/ }));
 
       await reloadThePage(view);
 
       expect(screen.queryByTestId('governance-approved')).toBeNull();
+    });
+
+    it('ignores the law texts an older version left in the session storage, and keeps the permission ones', async () => {
+      const storedItem = (kind: string, id: string) => ({ proposalId: id, managerName: 'Lloyd', kind, typeLabel: kind, excerpt: id, text: `Text of ${id}`, noteQuery: null });
+      sessionStorage.setItem('openfleet.governance.approved-texts.v1', JSON.stringify({ version: 1, items: [storedItem('law', 'old-law'), storedItem('permission', 'old-permission')] }));
+
+      await setup([]);
+
+      expect(screen.getAllByTestId('governance-approved')).toHaveLength(1);
+      expect(screen.getByText('Text of old-permission')).toBeVisible();
+      expect(screen.queryByText('Text of old-law')).toBeNull();
+      expect(screen.queryByText('Copy this into the Laws section of the mission note.')).toBeNull();
+    });
+
+    it('does not rewrite the stored law texts of an older version', async () => {
+      const law = { proposalId: 'old-law', managerName: 'Lloyd', kind: 'law', typeLabel: 'law', excerpt: 'x', text: 'Text of old-law', noteQuery: null };
+      sessionStorage.setItem('openfleet.governance.approved-texts.v1', JSON.stringify({ version: 1, items: [law] }));
+      const proposal = permissionProposal();
+      const { resolveOnDaemon } = await setup([proposal]);
+
+      await userEvent.click(screen.getByRole('button', { name: /^Approve permission proposal/ }));
+      resolveOnDaemon(proposal);
+      await screen.findByTestId('governance-approved');
+
+      expect(sessionStorage.getItem('openfleet.governance.approved-texts.v1')).not.toContain('old-law');
     });
 
     it('tells a permission to be copied into the mission note where the standing permissions are written', async () => {
@@ -371,56 +395,56 @@ describe('GovernanceProposalsComponent', () => {
 
     it('keeps at most the 20 latest approved texts across a reload', async () => {
       const stored = Array.from({ length: 25 }, (_, index) => ({
-        proposalId: `p${index}`, managerName: 'Lloyd', kind: 'law', typeLabel: 'law', excerpt: `Law ${index}`, text: `Law ${index}`, noteQuery: null,
+        proposalId: `p${index}`, managerName: 'Lloyd', kind: 'permission', typeLabel: 'permission', excerpt: `Permission ${index}`, text: `Permission ${index}`, noteQuery: null,
       }));
       sessionStorage.setItem('openfleet.governance.approved-texts.v1', JSON.stringify({ version: 1, items: stored }));
       const view = await setup([]);
-      const proposal = lawProposal({ id: 'newest', payload: { text: 'Newest law' } });
+      const proposal = { ...permissionProposal({ action: 'newest action' }), id: 'newest' };
       view.proposeOnDaemon(proposal);
-      await userEvent.click(await screen.findByRole('button', { name: /^Approve law proposal/ }));
+      await userEvent.click(await screen.findByRole('button', { name: /^Approve permission proposal/ }));
       view.resolveOnDaemon(proposal);
-      await screen.findByText('Newest law');
+      await screen.findByText(/newest action/);
 
       await reloadThePage(view);
 
       expect(screen.getAllByTestId('governance-approved')).toHaveLength(20);
-      expect(screen.getByText('Newest law')).toBeVisible();
+      expect(screen.getByText(/newest action/)).toBeVisible();
     });
 
     it('still shows the approved text when the browser refuses any storage', async () => {
       const refuse = () => { throw new Error('denied'); };
       vi.stubGlobal('sessionStorage', { getItem: refuse, setItem: refuse, removeItem: refuse, clear: refuse });
-      const proposal = lawProposal();
+      const proposal = permissionProposal();
       const { resolveOnDaemon } = await setup([proposal]);
-      await userEvent.click(screen.getByRole('button', { name: /^Approve law proposal/ }));
+      await userEvent.click(screen.getByRole('button', { name: /^Approve permission proposal/ }));
 
       resolveOnDaemon(proposal);
 
-      expect(await screen.findByText('Copy this into the Laws section of the mission note.')).toBeVisible();
+      expect(await screen.findByText('Copy this into the mission note, where your standing permissions are written.')).toBeVisible();
     });
 
     it('moves the focus to the next approved text when one is dismissed', async () => {
-      const lawA = lawProposal({ id: 'a', payload: { text: 'Law A' }, createdAt: '2026-10-14T10:00:00.000Z' });
-      const lawB = lawProposal({ id: 'b', payload: { text: 'Law B' }, createdAt: '2026-10-14T10:01:00.000Z' });
-      const { resolveOnDaemon } = await setup([lawA, lawB]);
-      await userEvent.click(screen.getByRole('button', { name: lawName('Approve', 'Law A') }));
-      resolveOnDaemon(lawA);
-      await userEvent.click(await screen.findByRole('button', { name: lawName('Approve', 'Law B') }));
-      resolveOnDaemon(lawB);
+      const permissionA = { ...permissionProposal({ action: 'action A' }), id: 'a', createdAt: '2026-10-14T10:00:00.000Z' };
+      const permissionB = { ...permissionProposal({ action: 'action B' }), id: 'b', createdAt: '2026-10-14T10:01:00.000Z' };
+      const { resolveOnDaemon } = await setup([permissionA, permissionB]);
+      await userEvent.click(screen.getByRole('button', { name: /^Approve permission proposal from Lloyd: action A/ }));
+      resolveOnDaemon(permissionA);
+      await userEvent.click(await screen.findByRole('button', { name: /^Approve permission proposal from Lloyd: action B/ }));
+      resolveOnDaemon(permissionB);
       await waitFor(() => expect(screen.getAllByTestId('governance-approved')).toHaveLength(2));
 
-      await userEvent.click(screen.getByRole('button', { name: lawName('Dismiss', 'Law A') }));
+      await userEvent.click(screen.getByRole('button', { name: /^Dismiss permission proposal from Lloyd: action A/ }));
 
       await waitFor(() => expect(within(screen.getByTestId('governance-approved')).getByRole('link', { name: 'Open the mission note of Lloyd' })).toHaveFocus());
     });
 
     it('hands the focus back to the Inbox when the last approved text is dismissed', async () => {
       const onNoCardLeft = vi.fn();
-      const proposal = lawProposal();
+      const proposal = permissionProposal();
       const { resolveOnDaemon, fixture } = await setup([proposal], { onNoCardLeft });
-      await userEvent.click(screen.getByRole('button', { name: /^Approve law proposal/ }));
+      await userEvent.click(screen.getByRole('button', { name: /^Approve permission proposal/ }));
       resolveOnDaemon(proposal);
-      const dismiss = await screen.findByRole('button', { name: /^Dismiss law proposal/ });
+      const dismiss = await screen.findByRole('button', { name: /^Dismiss permission proposal/ });
       await fixture.whenStable();
       onNoCardLeft.mockClear();
 
@@ -531,10 +555,10 @@ describe('GovernanceProposalsComponent', () => {
       expect(card.querySelector('img, a[href^="http"], strong, script')).toBeNull();
     });
 
-    it('renders a hostile approved law as inert plain text', async () => {
-      const proposal = lawProposal({ payload: { text: HOSTILE_MARKUP } });
+    it('renders a hostile approved permission as inert plain text', async () => {
+      const proposal = permissionProposal({ action: HOSTILE_MARKUP });
       const { resolveOnDaemon } = await setup([proposal]);
-      await userEvent.click(screen.getByRole('button', { name: /^Approve law proposal/ }));
+      await userEvent.click(screen.getByRole('button', { name: /^Approve permission proposal/ }));
       resolveOnDaemon(proposal);
 
       const approved = await screen.findByTestId('governance-approved');

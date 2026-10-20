@@ -114,6 +114,8 @@ export class FleetEventsService {
   readonly notificationTriggers = new Subject<NotificationTrigger>();
   /** Notes that changed, as it happens: a signal to read the note again, never replayed by a snapshot and never carrying a title or a body. */
   readonly noteChanges = new Subject<NoteChangeEvent>();
+  /** A law was enacted, edited or withdrawn: the views that show the laws of its manager read them again. */
+  readonly lawChanges = new Subject<Extract<ServerEvent, { type: 'law.created' | 'law.updated' | 'law.withdrawn' }>>();
   private readonly outputBySession = new Map<string, Subject<string>>();
   private socket?: WebSocket;
   private reconnectDelayMs = INITIAL_RECONNECT_DELAY_MS;
@@ -283,6 +285,9 @@ export class FleetEventsService {
       case 'approval.resolved': return this.approvals.update((all) => all.filter((a) => a.id !== event.approval.id));
       case 'governance.proposed': return this.upsertProposal(event.proposal);
       case 'governance.resolved': return this.proposals.update((all) => all.filter((p) => p.id !== event.proposal.id));
+      case 'law.created':
+      case 'law.updated':
+      case 'law.withdrawn': return this.lawChanges.next(event);
       case 'manager.created': return this.upsertManager(event.manager);
       case 'manager.pulsed': return this.upsertManager(event.manager);
       case 'manager.updated': return this.upsertManager(event.manager);

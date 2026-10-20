@@ -2,7 +2,7 @@ import { render, screen, waitFor, within } from '@testing-library/angular/zonele
 import { inputBinding, signal } from '@angular/core';
 import userEvent from '@testing-library/user-event';
 import { provideRouter } from '@angular/router';
-import type { GovernanceProposalView, ManagerGovernanceView, ResourceGrantView } from '@openfleet/shared';
+import type { GovernanceProposalView, ManagerGovernanceWithLawsView, ResourceGrantView } from '@openfleet/shared';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
@@ -17,10 +17,10 @@ const proposal = (patch: Partial<GovernanceProposalView>): GovernanceProposalVie
   id: 'p', managerId: 'm1', kind: 'law', status: 'pending', incident: 'An incident', payload: { text: 'A law' }, createdAt: '2026-10-13T10:00:00.000Z', ...patch,
 });
 
-const emptyView: ManagerGovernanceView = { resourceGrants: [], pending: [], denied: [], history: [], governanceEvictedDenials: 0 };
+const emptyView: ManagerGovernanceWithLawsView = { laws: [], resourceGrants: [], pending: [], denied: [], history: [], governanceEvictedDenials: 0 };
 const grant = (patch: Partial<ResourceGrantView> = {}): ResourceGrantView => ({ id: 'g1', resourceType: 'note', resourceId: 'n-1', role: 'reader', access: 'read', grantedAt: 't', ...patch });
 
-async function renderSection(view: Partial<ManagerGovernanceView>, apiPatch: Record<string, unknown> = {}) {
+async function renderSection(view: Partial<ManagerGovernanceWithLawsView>, apiPatch: Record<string, unknown> = {}) {
   const getManagerGovernance = vi.fn().mockResolvedValue({ ...emptyView, ...view });
   return renderSectionWith({ getManagerGovernance, ...apiPatch });
 }
@@ -195,10 +195,10 @@ describe('ManagerGovernanceComponent', () => {
   });
 
   describe('when the manager shown changes', () => {
-    const viewOfA: ManagerGovernanceView = { ...emptyView, pending: [proposal({ id: 'pa', managerId: 'a', payload: { text: 'Law of A' } })] };
+    const viewOfA: ManagerGovernanceWithLawsView = { ...emptyView, pending: [proposal({ id: 'pa', managerId: 'a', payload: { text: 'Law of A' } })] };
 
     it('never shows the governance of the previous manager while the next one loads', async () => {
-      const loadOfB = new Promise<ManagerGovernanceView>(() => undefined);
+      const loadOfB = new Promise<ManagerGovernanceWithLawsView>(() => undefined);
       const getManagerGovernance = vi.fn((id: string) => (id === 'a' ? Promise.resolve(viewOfA) : loadOfB));
       const { managerId } = await renderSectionWith({ getManagerGovernance });
       managerId.set('a');

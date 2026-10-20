@@ -18,7 +18,7 @@ const proposal = (id: string, patch: Partial<GovernanceProposalView> = {}): Gove
 
 const approvalGate = { id: 'a1', sessionId: 'm1', toolName: 'Bash', toolInput: {}, status: 'pending', createdAt: 't' };
 const manager = sessionOf({ id: 'm1', name: 'Lloyd', role: 'manager', projectId: 'p1' });
-const COPY_INSTRUCTION = 'Copy this into the Laws section of the mission note.';
+const COPY_INSTRUCTION = 'Copy this into the mission note, where your standing permissions are written.';
 
 @Component({ selector: 'stub-elsewhere', template: '<span data-testid="stub-elsewhere">elsewhere</span>' })
 class StubElsewhereComponent {}
@@ -88,51 +88,63 @@ describe('InboxComponent governance proposals', () => {
     expect(screen.queryByTestId('inbox-count')).toBeNull();
   });
 
-  describe('after the last pending law is approved', () => {
-    async function approveTheOnlyLaw() {
-      const onlyLaw = proposal('p1');
-      const connected = await renderInbox([onlyLaw]);
-      await approveLaw('p1');
-      connected.resolveOnDaemon(onlyLaw);
+  it('user is told that nothing needs them as soon as the last pending law is approved: there is no text to copy', async () => {
+    const onlyLaw = proposal('p1');
+    const { resolveOnDaemon } = await renderInbox([onlyLaw]);
+
+    await approveLaw('p1');
+    resolveOnDaemon(onlyLaw);
+
+    expect(await screen.findByTestId('inbox-empty')).toBeVisible();
+    expect(screen.queryByText(/Copy this into/)).toBeNull();
+  });
+
+  describe('after the last pending permission is approved', () => {
+    const permission = proposal('p1', { kind: 'permission', payload: { action: 'git tag', scope: 'release branches', condition: 'CI is green', exclusions: 'hotfix branches' } });
+
+    async function approveTheOnlyPermission() {
+      const connected = await renderInbox([permission]);
+      await userEvent.click(screen.getByRole('button', { name: 'Approve permission proposal from Lloyd: git tag' }));
+      connected.resolveOnDaemon(permission);
       await screen.findByText(COPY_INSTRUCTION);
       return connected;
     }
 
     it('user is not told that nothing needs them while the text to copy is still there', async () => {
-      await approveTheOnlyLaw();
+      await approveTheOnlyPermission();
 
       expect(screen.queryByTestId('inbox-empty')).toBeNull();
       expect(screen.queryByText('Nothing needs you')).toBeNull();
     });
 
     it('user sees the empty state once the approved text is dismissed', async () => {
-      await approveTheOnlyLaw();
+      await approveTheOnlyPermission();
 
-      await userEvent.click(screen.getByRole('button', { name: 'Dismiss law proposal from Lloyd: Law p1' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Dismiss permission proposal from Lloyd: git tag' }));
 
       expect(screen.getByTestId('inbox-empty')).toBeVisible();
       expect(screen.queryByText(COPY_INSTRUCTION)).toBeNull();
     });
 
     it('user finds the text to copy again after switching to Questions and back to Governance', async () => {
-      await approveTheOnlyLaw();
+      await approveTheOnlyPermission();
 
       await userEvent.click(screen.getByTestId('inbox-filter-questions'));
       expect(screen.queryByText(COPY_INSTRUCTION)).toBeNull();
       await userEvent.click(screen.getByTestId('inbox-filter-governance'));
 
       expect(await screen.findByText(COPY_INSTRUCTION)).toBeVisible();
-      expect(screen.getByText('Law p1')).toBeVisible();
+      expect(screen.getByText(/git tag/)).toBeVisible();
     });
 
     it('user finds the text to copy again after leaving the Inbox and coming back', async () => {
-      const onlyLaw = proposal('p1');
+      const onlyLaw = permission;
       const connected = await connect([onlyLaw]);
       TestBed.configureTestingModule({
         providers: [provideRouter([{ path: 'inbox', component: InboxComponent }, { path: 'elsewhere', component: StubElsewhereComponent }]), ...connected.providers],
       });
       const harness = await RouterTestingHarness.create('/inbox');
-      await approveLaw('p1');
+      await userEvent.click(screen.getByRole('button', { name: 'Approve permission proposal from Lloyd: git tag' }));
       connected.resolveOnDaemon(onlyLaw);
       await screen.findByText(COPY_INSTRUCTION);
 

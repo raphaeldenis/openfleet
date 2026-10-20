@@ -7,7 +7,7 @@ import { resolveHome } from '../config.js';
 import { isDatabaseUnavailableError } from '../db/databaseFailure.js';
 import { StuckConnectionError } from '../db/transaction.js';
 import { ApprovalError } from '../governance/approvalService.js';
-import { GovernanceQueueFullError, ProposalNotFoundError } from '../governance/governanceErrors.js';
+import { GovernanceQueueFullError, LawNotFoundError, LawRevisionConflictError, LawWithdrawnError, ProposalNotFoundError } from '../governance/governanceErrors.js';
 import { shortId } from '../ids.js';
 import { loggedRefOf } from './loggedRef.js';
 import { log } from '../logger.js';
@@ -119,6 +119,11 @@ const RULES: Rule[] = [
     code: 'governance_queue_full', message: error.message, hint: 'Withdraw a pending proposal of your own with withdraw_proposal (ids are in get_argus_governance), or wait for a human to answer.',
   })),
   when(ProposalNotFoundError, asIs('proposal_not_found')),
+  when(LawNotFoundError, asIs('law_not_found')),
+  when(LawRevisionConflictError, (error) => ({
+    code: 'law_revision_conflict', message: error.message, hint: 'Reload the law, then try again.', detail: { currentRev: error.currentRev },
+  })),
+  when(LawWithdrawnError, asIs('law_withdrawn')),
   when(ModelConfigUnreadableError, asDetail('config_unreadable', 'the model config cannot be read.')),
   when(ModelConfigReadOnlyError, asDetail('config_read_only', 'the model config is read-only.')),
   when(CommandPolicyFileUnreadableError, asDetail('config_unreadable', 'the command policy file cannot be read.')),

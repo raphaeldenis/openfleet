@@ -1,6 +1,8 @@
 import { ChangeDetectionStrategy, Component, computed, effect, inject, input, signal, untracked } from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { RouterLink } from '@angular/router';
-import type { GovernanceProposalView, ManagerGovernanceView, ResourceAccessPayload } from '@openfleet/shared';
+import { filter } from 'rxjs';
+import type { GovernanceProposalView, ManagerGovernanceWithLawsView, ResourceAccessPayload } from '@openfleet/shared';
 import { showBidiControlsAsEscapes } from '../core/bidi-escapes';
 import { copyFor } from '../core/error-copy';
 import { FleetApiService } from '../core/fleet-api.service';
@@ -10,6 +12,7 @@ import { ErrorLineComponent } from '../design/error-line.component';
 import { tickingNow } from '../working-state/working-state-freshness';
 import { STATUS_LABELS, accessLabelOf, proposalDetailsOf } from '../inbox/governance-details';
 import { GovernanceResourceNames } from '../inbox/governance-resource-names.service';
+import { ManagerLawsComponent } from './manager-laws.component';
 
 const GRANTS_NOT_ENFORCED_LABEL = 'informational: not enforced yet';
 const COLLAPSED_ENTRY_COUNT = 5;
@@ -18,7 +21,7 @@ const COLLAPSED_ENTRY_COUNT = 5;
 @Component({
   selector: 'of-manager-governance',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [ErrorLineComponent, RouterLink],
+  imports: [ErrorLineComponent, ManagerLawsComponent, RouterLink],
   template: `
     <section class="governance" aria-labelledby="manager-governance-title" data-testid="manager-governance">
       <h2 class="title" id="manager-governance-title">Governance</h2>
@@ -26,6 +29,7 @@ const COLLAPSED_ENTRY_COUNT = 5;
         <p role="alert" data-testid="manager-governance-error"><of-error-line [glyph]="false">{{ message }}</of-error-line></p>
       }
       @if (view(); as view) {
+        <of-manager-laws [laws]="laws()" (reloadRequested)="reload()" />
         @if (isEmpty()) {
           <p class="muted">No proposal yet.</p>
         }
@@ -120,7 +124,7 @@ export class ManagerGovernanceComponent {
   private readonly api = inject(FleetApiService);
   private readonly events = inject(FleetEventsService);
   private readonly resourceNames = inject(GovernanceResourceNames);
-  protected readonly view = signal<ManagerGovernanceView | undefined>(undefined);
+  protected readonly view = signal<ManagerGovernanceWithLawsView | undefined>(undefined);
   protected readonly loadError = signal<string | undefined>(undefined);
   protected readonly isDeniedExpanded = signal(false);
   protected readonly isHistoryExpanded = signal(false);
@@ -143,6 +147,14 @@ export class ManagerGovernanceComponent {
       this.pendingProposalIdsOfManager();
       untracked(() => void this.load(managerId));
     });
+    this.events.lawChanges.pipe(
+      filter(({ law }) => law.managerId === this.managerId()),
+      takeUntilDestroyed(),
+    ).subscribe(() => this.reload());
+  }
+
+  protected reload(): void {
+    void this.load(this.managerId());
   }
 
   private forgetWhatWasShown(): void {
@@ -165,7 +177,7 @@ export class ManagerGovernanceComponent {
     }
   }
 
-  private requestResourceNamesOf(view: ManagerGovernanceView): void {
+  private requestResourceNamesOf(view: ManagerGovernanceWithLawsView): void {
     const projectId = this.projectId();
     view.resourceGrants.forEach((grant) => this.resourceNames.request({ projectId, ...grant }));
     [...view.pending, ...view.denied, ...view.history]
@@ -190,6 +202,8 @@ export class ManagerGovernanceComponent {
     };
   }
 
+  /** A daemon that predates laws sends none: the section then shows no law. */
+  protected readonly laws = computed(() => this.view()?.laws ?? []);
   protected readonly pending = computed(() => (this.view()?.pending ?? []).map((proposal) => this.entryOf(proposal)));
   protected readonly denied = computed(() => (this.view()?.denied ?? []).map((proposal) => this.entryOf(proposal)));
   protected readonly history = computed(() => (this.view()?.history ?? []).map((proposal) => this.entryOf(proposal)));
@@ -206,7 +220,7 @@ export class ManagerGovernanceComponent {
 
   protected readonly isEmpty = computed(() => {
     const view = this.view();
-    const hasNothingToShow = view !== undefined && [view.pending, view.denied, view.history, view.resourceGrants].every((list) => list.length === 0);
+    const hasNothingToShow = view !== undefined && [this.laws(), view.pending, view.denied, view.history, view.resourceGrants].every((list) => list.length === 0);
     return hasNothingToShow && view.governanceEvictedDenials === 0;
   });
 }

@@ -1,6 +1,6 @@
 import { Injectable, signal } from '@angular/core';
 
-export type ApprovedKind = 'law' | 'permission';
+export type ApprovedKind = 'permission';
 
 export interface ApprovedText {
   readonly proposalId: string;
@@ -31,11 +31,14 @@ function parseNoteQuery(value: unknown): { ok: true; query: ApprovedText['noteQu
   return { ok: true, query: { projectId: typeof projectId === 'string' ? projectId : undefined, noteId } };
 }
 
+/** A text of a law is not kept any more (the daemon holds the laws): an older version's one is skipped, not an error. */
+const isLawOfOlderVersion = (value: unknown): boolean => isRecord(value) && value['kind'] === 'law';
+
 function parseApprovedText(value: unknown): ApprovedText | undefined {
   if (!isRecord(value) || !hasExactlyKeys(value, APPROVED_TEXT_KEYS)) return undefined;
   const { proposalId, managerName, kind, typeLabel, excerpt, text } = value;
   const areAllTextsStrings = [proposalId, managerName, typeLabel, excerpt, text].every((field) => typeof field === 'string');
-  const isKindKnown = kind === 'law' || kind === 'permission';
+  const isKindKnown = kind === 'permission';
   const noteQuery = parseNoteQuery(value['noteQuery']);
   if (!areAllTextsStrings || !isKindKnown || !noteQuery.ok) return undefined;
   return { proposalId, managerName, kind, typeLabel, excerpt, text, noteQuery: noteQuery.query } as ApprovedText;
@@ -45,7 +48,7 @@ function readStoredTexts(): readonly ApprovedText[] {
   try {
     const stored: unknown = JSON.parse(sessionStorage.getItem(STORAGE_KEY) ?? 'null');
     if (!isRecord(stored) || stored['version'] !== STORAGE_VERSION || !Array.isArray(stored['items'])) return [];
-    const items = stored['items'].map(parseApprovedText);
+    const items = stored['items'].filter((item) => !isLawOfOlderVersion(item)).map(parseApprovedText);
     const isEveryItemValid = items.every((item) => item !== undefined);
     return isEveryItemValid ? (items as ApprovedText[]).slice(-MAX_REMEMBERED_TEXTS) : [];
   } catch {

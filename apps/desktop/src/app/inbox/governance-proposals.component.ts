@@ -15,7 +15,6 @@ import { GovernanceResourceNames } from './governance-resource-names.service';
 
 const REASON_REQUIRED_HINT = `A reason is required (1 to ${MAX_DENIAL_REASON_CHARS} characters).`;
 const COPY_INSTRUCTION_BY_KIND: Record<ApprovedKind, string> = {
-  law: 'Copy this into the Laws section of the mission note.',
   permission: 'Copy this into the mission note, where your standing permissions are written.',
 };
 const ALREADY_DECIDED_NOTICE_MS = 8_000;
@@ -315,11 +314,11 @@ export class GovernanceProposalsComponent {
   }
 
   private rememberApprovedText(proposal: GovernanceProposalView): void {
-    if (proposal.kind === 'resourceAccess') return;
+    if (proposal.kind !== 'permission') return;
     const missionNoteId = this.managersById().get(proposal.managerId)?.missionNoteId;
     const noteQuery = missionNoteId === undefined ? undefined : { projectId: this.projectIdOf(proposal.managerId), noteId: missionNoteId };
     const details = this.detailsOf(proposal);
-    const text = details.map(({ label, value }) => (proposal.kind === 'law' ? value : `${label}: ${value}`)).join('\n');
+    const text = details.map(({ label, value }) => `${label}: ${value}`).join('\n');
     this.approvedTextsStore.remember({
       proposalId: proposal.id,
       managerName: this.managerNameOf(proposal.managerId),

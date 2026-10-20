@@ -28,6 +28,7 @@ function configureTestBed() {
           snapshotReceived: signal(true),
           reconnectCount: signal(0),
           noteChanges: new Subject(),
+          lawChanges: new Subject(),
           deliveredMessageIds: signal(new Set()),
           output: () => ({ subscribe: () => ({ unsubscribe: () => {} }) }),
           sendInput: () => {},

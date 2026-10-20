@@ -41,6 +41,7 @@ export const ERROR_CODES = {
   handoff_not_found: { kind: 'not_found' },
   // The id of another manager's proposal reads exactly like an id nobody proposed.
   proposal_not_found: { kind: 'not_found' },
+  law_not_found: { kind: 'not_found' },
 
   // A conflict retries `never` unless a reload (stale_revision) or waiting (file_unreadable, too_many_pending, children_cap) can change the answer.
   session_closed: { kind: 'conflict', retry: 'never' },
@@ -62,6 +63,10 @@ export const ERROR_CODES = {
   children_cap: { kind: 'conflict', retry: 'later' },
   // A human answering, or the manager withdrawing a proposal of its own, frees a place: the same call then succeeds.
   governance_queue_full: { kind: 'conflict', retry: 'later' },
+  // The law moved since the human opened it: reloading it shows the current text and revision.
+  law_revision_conflict: { kind: 'conflict', retry: 'after_refresh' },
+  // A withdrawn law is history: it is neither edited nor withdrawn again.
+  law_withdrawn: { kind: 'conflict', retry: 'never' },
   outside_lineage: { kind: 'conflict', retry: 'never' },
   not_a_manager: { kind: 'conflict', retry: 'never' },
   // Resuming the manager is what lets a pulse through again.

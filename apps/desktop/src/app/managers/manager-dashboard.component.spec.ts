@@ -6,6 +6,7 @@ import { BehaviorSubject, of } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
 import { ManagerDashboardComponent } from './manager-dashboard.component';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
+import { EMPTY } from 'rxjs';
 import { FleetEventsService } from '../core/fleet-events.service';
 
 const emptyGovernance = { resourceGrants: [], pending: [], denied: [], history: [], governanceEvictedDenials: 0 };
@@ -20,6 +21,7 @@ function fakeEvents(overrides: { sessions?: unknown[]; managers?: unknown[]; sna
     sessions: signal(overrides.sessions ?? []),
     approvals: signal([]),
     proposals: signal([]),
+    lawChanges: EMPTY,
     managers: signal(overrides.managers ?? []),
     snapshotReceived: signal(overrides.snapshotReceived ?? true),
     workingStates: signal(new Map()),

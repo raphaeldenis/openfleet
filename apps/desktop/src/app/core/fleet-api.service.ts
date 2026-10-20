@@ -2,7 +2,7 @@ import { Injectable } from '@angular/core';
 import { DIAGNOSTICS_PATH, WorkingStateSectionsSchema, isErrorEnvelope } from '@openfleet/shared';
 import type {
   Approval, CloseHandoffResult, CloseSessionRequest, CreateNoteRequest, CreateProjectRequest, DataStore, DataStoreDetail, DiagnosticsDocument, DsRow, DsRowHistoryEntry, DsView, ErrorEnvelope, GovernanceProposalView, HandoffPreview, HandoffSummary, HandoffTarget, HarnessId, NoteSummary,
-  ManagerGovernanceView, ManagerProfile, ManagerView, NoteVersionSummary, NoteView, OrderTerm, Page, PermissionMode, Project, ReopenMode, RestoreNoteRequest, Session, SessionSpec, SessionTodos,
+  LawView, ManagerGovernanceWithLawsView, ManagerProfile, ManagerView, NoteVersionSummary, NoteView, OrderTerm, Page, PermissionMode, Project, ReopenMode, RestoreNoteRequest, Session, SessionSpec, SessionTodos,
   RemovedWorktree, UpdateManager, UpdateNoteRequest, UpdateProjectRequest, WhereClause, WorkingState, WorktreeList,
 } from '@openfleet/shared';
 import { environment } from '../../environments/environment';
@@ -178,7 +178,13 @@ export class FleetApiService {
   }
   decide(id: string, behavior: 'allow' | 'deny') { return this.post<Approval>(`/api/approvals/${id}/decide`, { behavior }); }
   decideProposal(id: string, decision: ProposalDecision) { return this.post<GovernanceProposalView>(`/api/governance/proposals/${encodeURIComponent(id)}/decide`, decision); }
-  getManagerGovernance(managerId: string) { return this.call<ManagerGovernanceView>(`/api/managers/${encodeURIComponent(managerId)}/governance`); }
+  getManagerGovernance(managerId: string) { return this.call<ManagerGovernanceWithLawsView>(`/api/managers/${encodeURIComponent(managerId)}/governance`); }
+  editLaw({ lawId, text, expectedRevision }: { lawId: string; text: string; expectedRevision: number }) {
+    return this.patch<LawView>(`/api/governance/laws/${encodeURIComponent(lawId)}`, { text, expectedRevision });
+  }
+  withdrawLaw({ lawId, expectedRevision }: { lawId: string; expectedRevision: number }) {
+    return this.post<LawView>(`/api/governance/laws/${encodeURIComponent(lawId)}/withdraw`, { expectedRevision });
+  }
 
   private noteUrl(noteId: string, suffix = '', query: Record<string, string> = {}): string {
     const queryString = new URLSearchParams(query).toString();
