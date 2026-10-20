@@ -6,6 +6,7 @@ import type { ManagerProfile, ManagerView, Page, Project, ScapeImportStatus } fr
 import { of } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
+import { EMPTY } from 'rxjs';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { ManagerDashboardComponent } from './manager-dashboard.component';
 
@@ -50,7 +51,7 @@ function fakeApi(overrides: ApiOverrides = {}) {
 
 async function openProfile({ api = fakeApi(), session = sessionOf() } = {}) {
   const events = {
-    sessions: signal([session]), approvals: signal([]), proposals: signal([]), managers: signal([managerViewOf()]), snapshotReceived: signal(true),
+    sessions: signal([session]), approvals: signal([]), proposals: signal([]), lawChanges: EMPTY, managers: signal([managerViewOf()]), snapshotReceived: signal(true),
     workingStates: signal(new Map()), workingStatesReported: signal(false), workingStateMaxAgeMinutes: signal<number | undefined>(30), workingStateMaxBytes: signal<number | undefined>(6144),
   };
   await render(ManagerDashboardComponent, {

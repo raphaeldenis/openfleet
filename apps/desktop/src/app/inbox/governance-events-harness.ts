@@ -1,4 +1,4 @@
-import type { GovernanceProposalView, ManagerView, Session } from '@openfleet/shared';
+import type { GovernanceProposalView, LawView, ManagerView, Session } from '@openfleet/shared';
 import { vi } from 'vitest';
 import { FleetEventsService } from '../core/fleet-events.service';
 
@@ -47,6 +47,7 @@ export async function connectToScriptedDaemon(initial: DaemonSnapshot = {}) {
     events,
     sendSnapshot,
     proposeOnDaemon: (proposal: GovernanceProposalView) => dispatch({ type: 'governance.proposed', proposal }),
+    lawEventOnDaemon: (type: 'law.created' | 'law.updated' | 'law.withdrawn', law: LawView) => dispatch({ type, law }),
     resolveOnDaemon: (proposal: GovernanceProposalView, status: 'approved' | 'denied' | 'withdrawn' = 'approved') =>
       dispatch({ type: 'governance.resolved', proposal: { ...proposal, status, decidedAt: new Date().toISOString() } }),
   };

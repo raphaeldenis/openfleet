@@ -32,7 +32,7 @@ test('a pending proposal shows in the Inbox, counts, and leaves with the count w
 
   await expect(card).toHaveCount(0);
   await expect(page.getByTestId('inbox-count')).toHaveCount(0);
-  await expect(page.getByText('Copy this into the Laws section of the mission note.')).toBeVisible();
+  await expect(page.getByText(/Copy this into/)).toHaveCount(0);
   await expect(page.getByRole('button', { name: /add to (the )?note/i })).toHaveCount(0);
 });
 
