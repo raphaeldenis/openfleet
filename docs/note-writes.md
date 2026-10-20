@@ -2,6 +2,12 @@
 
 Every body-changing note write is a compare-and-set on the note's `rev`. A refused write answers `stale_revision` and carries the current rev.
 
+## Mission notes are read-only for agents
+
+A note that any manager links as its mission (`managers.mission_note_id`) refuses every write made by an agent session, manager included: `update_note`, `update_note_section`, `append_to_note`, `move_note`, `delete_note` and `restore_note_version`, file-backed or not. The reply is `unauthorized` with the hint to ask a human to edit the mission note; nothing is changed.
+
+The note is recognised by its link, never by its id: unlinking it makes it writable again, and while two managers link it, it stays protected. Reads (`get_note`, `get_note_version`, `list_note_versions`) and `create_note` are unaffected, and so are a manager's journal table and its other notes. The human keeps every right through the app and the admin REST API.
+
 ## `update_note_section`
 
 `expected_rev` is required. When it is the current rev, the section is replaced.

@@ -81,8 +81,9 @@ export function createMcpHandler(deps: { reviewFindings?: ReviewFindingsReposito
     registerKnowledgeTools(toolServer, { knowledgeSearch: deps.knowledgeSearch, caller });
     registerTableTools(toolServer, { stores: deps.stores, storeRepo: deps.storeRepo, caller });
     registerTableViewTools(toolServer, { stores: deps.stores, storeRepo: deps.storeRepo, caller });
-    registerNoteTools(toolServer, { notes: deps.notes, noteRepo: deps.noteRepo, docs: deps.docs, caller });
-    registerNoteVersionTools(toolServer, { notes: deps.notes, noteRepo: deps.noteRepo, docs: deps.docs, caller });
+    const noteToolDeps = { notes: deps.notes, noteRepo: deps.noteRepo, docs: deps.docs, caller, isMissionNote: (noteId: string) => deps.managers.isMissionNote(noteId) };
+    registerNoteTools(toolServer, noteToolDeps);
+    registerNoteVersionTools(toolServer, noteToolDeps);
     registerProjectTools(toolServer, { projects: deps.projects, noteRepo: deps.noteRepo, caller });
     registerWorktreeTools(toolServer, { worktrees: new WorktreeService({ projects: deps.projects, sessions: deps.sessions, worktreesRoot: deps.worktreesRoot }), caller });
     registerWorkingStateTools(toolServer, { workingStates: deps.workingStates, sessions: deps.sessions, caller });

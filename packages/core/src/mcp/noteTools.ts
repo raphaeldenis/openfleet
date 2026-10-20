@@ -13,7 +13,7 @@ export type RegisterNoteToolsDeps = NoteToolDeps;
 export function registerNoteTools(server: McpServer, deps: RegisterNoteToolsDeps): void {
   const { notes, noteRepo } = deps;
   const guarded = guardedFor(deps.caller);
-  const { author, requireProject, requireOwnNote, writeBody, noteSummary, noteView, noteMentionBlocksView } =createNoteToolSupport(deps);
+  const { author, requireProject, requireOwnNote, requireWritableNote, writeBody, noteSummary, noteView, noteMentionBlocksView } =createNoteToolSupport(deps);
 
   server.registerTool('create_note', {
     description: 'Create a note in your project; returns id, title, folder, rev, shared and fileBacked, not the body',
@@ -49,7 +49,7 @@ export function registerNoteTools(server: McpServer, deps: RegisterNoteToolsDeps
   }, async ({ note, body_md, expected_rev }) => {
     const scope = requireProject();
     if (!scope) return refuse('project_not_found', 'this session has no project');
-    return guarded(() => noteSummary(writeBody(requireOwnNote(scope.projectId, note), { bodyMd: body_md, expectedRev: expected_rev })));
+    return guarded(() => noteSummary(writeBody(requireWritableNote(scope.projectId, note), { bodyMd: body_md, expectedRev: expected_rev })));
   });
 
   server.registerTool('delete_note', {
@@ -59,7 +59,7 @@ export function registerNoteTools(server: McpServer, deps: RegisterNoteToolsDeps
     const scope = requireProject();
     if (!scope) return refuse('project_not_found', 'this session has no project');
     return guarded(() => {
-      const current = requireOwnNote(scope.projectId, note);
+      const current = requireWritableNote(scope.projectId, note);
       if (current.filePath) throw new FileBackedNoteError(note);
       notes.delete(note);
       return { deleted: note };
@@ -73,7 +73,7 @@ export function registerNoteTools(server: McpServer, deps: RegisterNoteToolsDeps
     const scope = requireProject();
     if (!scope) return refuse('project_not_found', 'this session has no project');
     return guarded(() => {
-      requireOwnNote(scope.projectId, note);
+      requireWritableNote(scope.projectId, note);
       return noteSummary(notes.move(note, folder, { expectedRev: expected_rev, author: author() }));
     });
   });
